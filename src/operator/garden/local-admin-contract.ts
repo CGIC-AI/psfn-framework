@@ -35,6 +35,7 @@ import { ValuesJournalStore } from '../../faculties/values/store.js';
 import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
 import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import { ReflectionDailyJournalStore } from '../../persistence/journals/reflection-substrate.js';
+import { createSessionHmacBoundaryService } from '../../persistence/journals/hmac-boundary.js';
 import {
   resolveConfiguredCompanionDataDir,
   resolveConfiguredSystemDataDir,
@@ -53,6 +54,7 @@ import {
 import { readLastActiveSession } from '../../system/lifecycle/notifications.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { EventBus } from '../../shared/event-bus.js';
+import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import { FatigueLedger } from '../../shared/telemetry/fatigue-ledger.js';
 import type { ChannelGroupMemoryConfig } from '../../system/config/group-memory-config.js';
@@ -80,6 +82,7 @@ import {
 } from './services/audit-history-service.js';
 import { registerAuditTimelineSources } from './services/audit-event-collector.js';
 import { AdminChargeLedgerDataService } from './services/charge-ledger-service.js';
+import { AdminChargeCostReconciliationDataService } from './services/charge-cost-reconciliation-service.js';
 import { AdminConcernDataService } from './services/concern-service.js';
 import { AdminContactsDataService } from './services/contacts-service.js';
 import { createContactRelationshipScoreReader } from '../../core/contacts/trust-drift-signals.js';
@@ -119,8 +122,17 @@ import { AdminShardFoldReviewDataService } from './services/shard-fold-review-se
 import { AdminWikiDataService } from './services/wiki-service.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
 import type { GatewayCredentialPresenceResult } from '../../boundary/gateway/protocol.js';
+import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-store-ports.js';
+import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
+import type { IcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
+import { AdminIcpAutonomyDataService } from './services/icp-autonomy-service.js';
+import {
+  AdminSharedWorkspaceService,
+  type SharedWorkspaceCredentials,
+} from './services/shared-workspace-service.js';
 
 export interface InProcessGardenAdminContractOptions {
+  env?: NodeJS.ProcessEnv;
   apiBaseUrl?: string;
   apiHost?: string;
   apiPort?: number;
@@ -161,8 +173,16 @@ export interface InProcessGardenAdminContractOptions {
    * enrollment routes are simply not mounted. Biometrics never enter core.
    */
   hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort | null;
+  /** Shared runtime charge ledger; supplying it avoids duplicate event subscribers. */
+  chargeLedger?: RunChargeLedger;
   /** Runtime log directory for bounded diagnostics reads. Defaults to /app/logs when absent. */
   logsDir?: string;
+  effectiveSchedulerConfig?: import('../../system/config/scheduler-config.js').SchedulerRuntimeConfig;
+  icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
+  icpAdminProjectionStore?: IcpAdminProjectionStore | null;
+  icpRuntimeEnablement?: IcpAutonomyRuntimeEnablement | null;
+  /** Distinct authenticated principals for governed shared-workspace writes. */
+  sharedWorkspaceCredentials?: SharedWorkspaceCredentials;
 }
 
 export function createInProcessGardenAdminContract(
@@ -190,13 +210,23 @@ export function createInProcessGardenAdminContract(
     resolveReflectionJournalPath(companionDataDir),
   );
   const northStarStore = new NorthStarStore(resolveNorthStarPath(companionDataDir));
-  const chargeLedger = new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
+  const chargeLedger = options.chargeLedger
+    ?? new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
   const fatigueLedger = new FatigueLedger(resolveFatigueLedgerPath(companionDataDir), options.eventBus);
   const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
+  const auditOpaqueIdKeyring = createSessionHmacBoundaryService({
+    env: options.env,
+    credentialVault: options.config.credentialVault,
+  }).requireKeyring('Session HMAC keyring is required for Garden audit history opaque IDs.');
+  const modelUsage = modelUsageStore
+    ? new AdminModelUsageDataService(modelUsageStore)
+    : null;
   const auditHistory = new AdminAuditHistoryDataService({
     gardenStore: new GardenAuditHistoryJsonlStore(join(options.config.dataDir, 'garden-audit-history.jsonl')),
     gatewayReader: resolveGatewayAuditReader(options.config),
     chargeLedger,
+    scopeId: options.config.companionId ?? companionDataDir,
+    opaqueIdKeyring: auditOpaqueIdKeyring,
   });
   registerAuditTimelineSources({
     eventBus: options.eventBus,
@@ -251,7 +281,21 @@ export function createInProcessGardenAdminContract(
     config: options.config,
     configStore,
     ...(options.getCredentialPresence ? { getCredentialPresence: options.getCredentialPresence } : {}),
+    ...(options.effectiveSchedulerConfig
+      ? { effectiveSchedulerConfig: options.effectiveSchedulerConfig }
+      : {}),
   });
+  const icpAutonomy = options.icpRuntimeEnablement && options.effectiveSchedulerConfig
+    ? new AdminIcpAutonomyDataService({
+      localCompanionId: options.config.companionId,
+      candidateStore: options.icpInitiationCandidateStore ?? null,
+      projectionStore: options.icpAdminProjectionStore ?? null,
+      runtimeEnablement: options.icpRuntimeEnablement,
+      settingsService,
+      operatorLeaseTtlMs:
+        options.effectiveSchedulerConfig.icpAutonomy.availability.operatorLeaseTtlMs,
+    })
+    : null;
 
   // ── Intake quarantine approval queue (htm9.11 Cognitive Security tab) ──
   // Reads the same companion-data quarantine file the gateway/agent screening
@@ -287,6 +331,7 @@ export function createInProcessGardenAdminContract(
     // Fresh store per decision: CogSecEventStore snapshots the file at
     // construction and the gateway writes the same file concurrently.
     cogSecEvents: () => new CogSecEventStore(resolveCogSecEventsPath(companionDataDir)),
+    onQueueChanged: () => emitGardenQueueChanged(options.eventBus, 'intake-quarantine'),
   });
 
   // ── Drift review cards (htm9.14/htm9.15 Cognitive Security tab) ──
@@ -309,6 +354,7 @@ export function createInProcessGardenAdminContract(
       scheduler: options.scheduler,
       shardManager: options.shardManager,
       eventBus: options.eventBus,
+      modelUsageService: modelUsage,
       adaptiveToolsService: adaptiveTools,
       resolveLastActiveSessionId,
     }),
@@ -322,7 +368,14 @@ export function createInProcessGardenAdminContract(
     }),
     auditHistory,
     charges: new AdminChargeLedgerDataService(chargeLedger, fatigueLedger, options.config.chargePolicy?.fatigue ?? null),
-    modelUsage: modelUsageStore ? new AdminModelUsageDataService(modelUsageStore, options.modelDiscovery) : null,
+    chargeCosts: modelUsageStore && options.config.companionId
+      ? new AdminChargeCostReconciliationDataService(
+          chargeLedger,
+          modelUsageStore,
+          options.config.companionId,
+        )
+      : null,
+    modelUsage,
     observerEvalSidecar: createObserverEvalSidecarAdminService({
       config: options.config,
       runtime: options.observerEvalSidecar ?? null,
@@ -403,6 +456,7 @@ export function createInProcessGardenAdminContract(
       ? createAdminPendingContactsService({
         pendingApprovals: options.pendingContactApprovals,
         contactStore: options.contactStore ?? null,
+        onQueueChanged: () => emitGardenQueueChanged(options.eventBus, 'contact-approvals'),
       })
       : null,
     rooms: createAdminRoomsService({
@@ -421,12 +475,21 @@ export function createInProcessGardenAdminContract(
       ? createAdminGraphProposalsService({
         proposalStore: options.socialGraphProposals,
         contactStore: options.contactStore ?? null,
+        onQueueChanged: () => emitGardenQueueChanged(options.eventBus, 'graph-proposals'),
       })
       : null,
     concerns: options.concernStore
       ? new AdminConcernDataService(options.concernStore)
       : null,
     settings: settingsService,
+    sharedWorkspace: options.config.sharedWorkspacePath
+      ? new AdminSharedWorkspaceService(
+        options.config.sharedWorkspacePath,
+        options.sharedWorkspaceCredentials ?? (() => {
+          throw new Error('Shared workspace is configured without authenticated principal credentials');
+        })(),
+      )
+      : null,
     intakeQuarantine,
     driftReviews,
     identity: new AdminIdentityDataService({
@@ -460,6 +523,7 @@ export function createInProcessGardenAdminContract(
     scheduler: schedulerService,
     subsystemHealth,
     toolConformance,
+    icpAutonomy,
     skills: options.skillsRuntime ?? null,
     confirmations: options.confirmationQueueApi ?? null,
     values: valuesJournal,

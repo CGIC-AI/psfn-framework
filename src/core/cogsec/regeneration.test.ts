@@ -118,7 +118,7 @@ describe('applyCogSecRegeneration', () => {
     const compaction = sessionStore.getCompactionSummaries(channelId)[0];
     expect(compaction).toBeDefined();
 
-    sessionStore.applyCogSecTombstones({
+    await sessionStore.applyCogSecTombstones({
       channelId,
       caseId,
       eventStore,
@@ -127,7 +127,7 @@ describe('applyCogSecRegeneration', () => {
       actor: 'test',
       timestamp: Date.parse('2026-07-01T00:01:00.000Z'),
     });
-    sessionStore.applyCogSecCompactionInvalidations({
+    await sessionStore.applyCogSecCompactionInvalidations({
       channelId,
       caseId,
       compactionIds: [compaction!.id],

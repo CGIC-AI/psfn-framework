@@ -1,18 +1,59 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
 import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
+import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
 import { GatewayClient } from './client.js';
-import type { NdjsonConnection } from './transport.js';
+import { GatewayErrors } from './protocol.js';
+import type {
+  GatewayRpcSerializedTransportStats,
+  NdjsonConnection,
+} from './transport.js';
+import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
+import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { runWithChargeContext } from '../../shared/telemetry/run-charge.js';
+import { makeTestChargePolicyConfig } from '../../test-support/charge-policy.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
+
+const TEST_COMPANION_ID = createCompanionId('companion');
+const TEST_GATEWAY_ROUTING = {
+  gateway: { schemaVersion: 1 as const, companionId: TEST_COMPANION_ID },
+};
 
 /** Create a mock NdjsonConnection that captures sent messages */
-function createMockConnection() {
+function createMockConnection(options: { heartbeatResults?: boolean[] } = {}) {
   const emitter = new EventEmitter();
   const sent: unknown[] = [];
+  let heartbeatCount = 0;
+  let destroyed = false;
+  const transportStats: GatewayRpcSerializedTransportStats = {
+    frameCount: 0,
+    serializedBytes: 0,
+    rpcCallCount: 0,
+    byMethod: {},
+  };
 
   const conn = {
     send(data: unknown): boolean {
       sent.push(data);
+      const serializedBytes = Buffer.byteLength(JSON.stringify(data), 'utf8');
+      transportStats.frameCount += 1;
+      transportStats.serializedBytes += serializedBytes;
+      const method = (data as { method?: unknown } | null)?.method;
+      if (typeof method === 'string') {
+        transportStats.rpcCallCount += 1;
+        const methodStats = transportStats.byMethod[method] ?? { callCount: 0, serializedBytes: 0 };
+        methodStats.callCount += 1;
+        methodStats.serializedBytes += serializedBytes;
+        transportStats.byMethod[method] = methodStats;
+      }
       return true;
+    },
+    sendHeartbeat(): boolean {
+      heartbeatCount += 1;
+      return options.heartbeatResults?.shift() ?? true;
+    },
+    onHeartbeat(handler: () => void): void {
+      emitter.on('heartbeat', handler);
     },
     onMessage(handler: (message: unknown) => void): void {
       emitter.on('message', handler);
@@ -21,10 +62,16 @@ function createMockConnection() {
       emitter.on(event, handler);
     },
     destroy(): void {
+      if (destroyed) return;
+      destroyed = true;
+      emitter.emit('close');
       emitter.removeAllListeners();
     },
     get destroyed(): boolean {
-      return false;
+      return destroyed;
+    },
+    get serializedTransportStats(): GatewayRpcSerializedTransportStats {
+      return structuredClone(transportStats);
     },
     // Emit a message to the client as if received from the gateway
     _emit(message: unknown): void {
@@ -41,6 +88,12 @@ function createMockConnection() {
   return {
     conn: conn as unknown as NdjsonConnection,
     sent,
+    get heartbeatCount(): number {
+      return heartbeatCount;
+    },
+    get destroyed(): boolean {
+      return destroyed;
+    },
     _emit: conn._emit,
     _emitClose: conn._emitClose,
     _emitError: conn._emitError,
@@ -58,6 +111,265 @@ describe('GatewayClient streaming', () => {
   beforeEach(() => {
     conn = createMockConnection();
     client = new GatewayClient(conn.conn, 1024);
+  });
+
+  it('sends screened inline image bytes in only the intake frame and references them in the main call', async () => {
+    const imageBase64 = 'A'.repeat(4096);
+    const requestScope = 'turn-inline-retained';
+    const screened = client.screenImageIntake({
+      imageBase64,
+      mimeType: 'image/png',
+      originRef: 'discord:channel:message:attachment:0',
+      requestScope,
+    });
+    const screenRequest = conn.sent[0] as { id: number; method: string };
+    expect(screenRequest.method).toBe('intake.screen_image');
+    conn._emit({
+      jsonrpc: '2.0',
+      id: screenRequest.id,
+      result: {
+        kind: 'screened',
+        mode: 'enforce',
+        flagged: false,
+        withheld: false,
+        retainedImage: {
+          handle: 'retained-handle-1',
+          requestScope,
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    });
+    await screened;
+
+    const streamPromise = client.stream({
+      systemPrompt: 'system',
+      correlation: { turnId: requestScope, callType: 'chat', purpose: 'chat' },
+      messages: [{
+        role: 'user',
+        content: [{ type: 'image', data: imageBase64, mimeType: 'image/png' }],
+      }] as any,
+    });
+    const llmRequest = conn.sent[1] as {
+      id: number;
+      method: string;
+      params: { messages: unknown[] };
+    };
+    expect(llmRequest.method).toBe('llm.chat');
+    expect(llmRequest.params.messages).toEqual([{
+      role: 'user',
+      content: [{ type: 'gateway_image_ref', handle: 'retained-handle-1' }],
+    }]);
+    expect(JSON.stringify(llmRequest)).not.toContain(imageBase64);
+    expect(conn.sent.filter(frame => JSON.stringify(frame).includes(imageBase64))).toHaveLength(1);
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: llmRequest.id,
+      result: {
+        content: 'saw image',
+        toolCalls: [],
+        model: 'vision-model',
+        inputTokens: 10,
+        outputTokens: 2,
+        stopReason: 'stop',
+      },
+    });
+    await expect(streamPromise).resolves.toMatchObject({ content: 'saw image' });
+    expect(client.getSerializedTransportStats()).toMatchObject({
+      frameCount: 2,
+      rpcCallCount: 2,
+      byMethod: {
+        'intake.screen_image': { callCount: 1 },
+        'llm.chat': { callCount: 1 },
+      },
+    });
+    expect(client.getSerializedTransportStats().serializedBytes).toBe(
+      conn.sent.reduce(
+        (total, frame) => total + Buffer.byteLength(JSON.stringify(frame), 'utf8'),
+        0,
+      ),
+    );
+  });
+
+  it('explicitly resends inline bytes once when the gateway reports a retention miss', async () => {
+    const imageBase64 = 'A'.repeat(4096);
+    const requestScope = 'turn-inline-miss';
+    const screened = client.screenImageIntake({
+      imageBase64,
+      mimeType: 'image/png',
+      originRef: 'discord:channel:message:attachment:0',
+      requestScope,
+    });
+    const screenRequest = conn.sent[0] as { id: number };
+    conn._emit({
+      jsonrpc: '2.0',
+      id: screenRequest.id,
+      result: {
+        kind: 'screened',
+        mode: 'enforce',
+        flagged: false,
+        withheld: false,
+        retainedImage: {
+          handle: 'expired-handle',
+          requestScope,
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    });
+    await screened;
+
+    const streamPromise = client.stream({
+      systemPrompt: 'system',
+      correlation: { turnId: requestScope, callType: 'chat', purpose: 'chat' },
+      messages: [{
+        role: 'user',
+        content: [{ type: 'image', data: imageBase64, mimeType: 'image/png' }],
+      }] as any,
+    });
+    const referencedRequest = conn.sent[1] as { id: number };
+    conn._emit({
+      jsonrpc: '2.0',
+      id: referencedRequest.id,
+      error: {
+        code: GatewayErrors.INLINE_IMAGE_RETENTION_MISS,
+        message: 'Gateway inline image retention miss; explicit inline image byte resend is required.',
+      },
+    });
+
+    await vi.waitFor(() => expect(conn.sent).toHaveLength(3));
+    const resendRequest = conn.sent[2] as { id: number; method: string; params: unknown };
+    expect(resendRequest.method).toBe('llm.chat');
+    expect(JSON.stringify(resendRequest.params)).toContain(imageBase64);
+    conn._emit({
+      jsonrpc: '2.0',
+      id: resendRequest.id,
+      result: {
+        content: 'saw resent image',
+        toolCalls: [],
+        model: 'vision-model',
+        inputTokens: 10,
+        outputTokens: 2,
+        stopReason: 'stop',
+      },
+    });
+    await expect(streamPromise).resolves.toMatchObject({ content: 'saw resent image' });
+  });
+
+  it('keeps inline bytes on the wire when a retained handle belongs to another turn scope', async () => {
+    const imageBase64 = 'B'.repeat(4096);
+    const screened = client.screenImageIntake({
+      imageBase64,
+      mimeType: 'image/jpeg',
+      originRef: 'discord:channel:message:attachment:0',
+      requestScope: 'turn-a',
+    });
+    const screenRequest = conn.sent[0] as { id: number };
+    conn._emit({
+      jsonrpc: '2.0',
+      id: screenRequest.id,
+      result: {
+        kind: 'screened',
+        mode: 'enforce',
+        flagged: false,
+        withheld: false,
+        retainedImage: {
+          handle: 'turn-a-handle',
+          requestScope: 'turn-a',
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    });
+    await screened;
+
+    const streamPromise = client.stream({
+      systemPrompt: 'system',
+      correlation: { turnId: 'turn-b', callType: 'chat', purpose: 'chat' },
+      messages: [{
+        role: 'user',
+        content: [{ type: 'image', data: imageBase64, mimeType: 'image/jpeg' }],
+      }] as any,
+    });
+    const llmRequest = conn.sent[1] as { id: number; params: unknown };
+    expect(JSON.stringify(llmRequest.params)).toContain(imageBase64);
+    expect(JSON.stringify(llmRequest.params)).not.toContain('turn-a-handle');
+    conn._emit({
+      jsonrpc: '2.0',
+      id: llmRequest.id,
+      result: {
+        content: 'scope isolated',
+        toolCalls: [],
+        model: 'vision-model',
+        inputTokens: 10,
+        outputTokens: 2,
+        stopReason: 'stop',
+      },
+    });
+    await expect(streamPromise).resolves.toMatchObject({ content: 'scope isolated' });
+  });
+
+  it('uses retained references for complete and explicitly resends bytes on a miss', async () => {
+    const imageBase64 = 'C'.repeat(4096);
+    const requestScope = 'turn-complete-miss';
+    const screened = client.screenImageIntake({
+      imageBase64,
+      mimeType: 'image/png',
+      originRef: 'discord:channel:message:attachment:0',
+      requestScope,
+    });
+    const screenRequest = conn.sent[0] as { id: number };
+    conn._emit({
+      jsonrpc: '2.0',
+      id: screenRequest.id,
+      result: {
+        kind: 'screened',
+        mode: 'enforce',
+        flagged: false,
+        withheld: false,
+        retainedImage: {
+          handle: 'complete-handle',
+          requestScope,
+          expiresAt: Date.now() + 60_000,
+        },
+      },
+    });
+    await screened;
+
+    const completePromise = client.complete({
+      systemPrompt: 'system',
+      correlation: { turnId: requestScope, callType: 'background', purpose: 'vision' },
+      messages: [{
+        role: 'user',
+        content: [{ type: 'image', data: imageBase64, mimeType: 'image/png' }],
+      }] as any,
+    }, 'vision');
+    const referencedRequest = conn.sent[1] as { id: number; params: unknown };
+    expect(JSON.stringify(referencedRequest.params)).toContain('complete-handle');
+    expect(JSON.stringify(referencedRequest.params)).not.toContain(imageBase64);
+    conn._emit({
+      jsonrpc: '2.0',
+      id: referencedRequest.id,
+      error: {
+        code: GatewayErrors.INLINE_IMAGE_RETENTION_MISS,
+        message: 'Gateway inline image retention miss; explicit inline image byte resend is required.',
+      },
+    });
+
+    await vi.waitFor(() => expect(conn.sent).toHaveLength(3));
+    const resendRequest = conn.sent[2] as { id: number; method: string; params: unknown };
+    expect(resendRequest.method).toBe('llm.complete');
+    expect(JSON.stringify(resendRequest.params)).toContain(imageBase64);
+    conn._emit({
+      jsonrpc: '2.0',
+      id: resendRequest.id,
+      result: {
+        content: 'complete saw resent image',
+        model: 'vision-model',
+        inputTokens: 10,
+        outputTokens: 2,
+        stopReason: 'stop',
+      },
+    });
+    await expect(completePromise).resolves.toMatchObject({ content: 'complete saw resent image' });
   });
 
   it('routes chunks to the correct handler by requestId', async () => {
@@ -239,6 +551,170 @@ describe('GatewayClient streaming', () => {
     });
   });
 
+  it('propagates private completion telemetry without source correlation', async () => {
+    const completion = client.complete(
+      { systemPrompt: 'private', messages: [{ role: 'user', content: 'work' }] },
+      'background',
+      {
+        correlation: {
+          ...COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
+          turnId: 'source-turn',
+          requestId: 'source-request',
+          channelId: 'source-channel',
+        },
+      },
+    );
+    const req = conn.sent[0] as { id: number; params: Record<string, unknown> };
+
+    expect(req.params).toMatchObject({
+      purpose: 'background',
+      originStage: 'companion_private.background',
+      telemetryVisibility: 'companion_private',
+    });
+    expect(req.params).not.toHaveProperty('turnId');
+    expect(req.params).not.toHaveProperty('requestId');
+    expect(req.params).not.toHaveProperty('channelId');
+
+    conn._emit({
+      id: req.id,
+      jsonrpc: '2.0',
+      result: {
+        content: 'done',
+        toolCalls: [],
+        model: 'test',
+        inputTokens: 10,
+        outputTokens: 5,
+        stopReason: 'end',
+      },
+    });
+    await expect(completion).resolves.toMatchObject({ content: 'done' });
+  });
+
+  it('preserves caller-owned accounting identity on llm.chat RPC requests', async () => {
+    void client.stream(
+      {
+        systemPrompt: 'test',
+        messages: [{ role: 'user', content: 'hi' }],
+        accounting: {
+          logicalCallId: 'llm:caller-operation',
+          attempt: 3,
+          retryOwner: 'caller',
+        },
+      },
+      { onText: () => {} },
+    );
+
+    const req = conn.sent[0] as { params: Record<string, unknown> };
+    expect(req.params).toMatchObject({
+      accounting: {
+        logicalCallId: 'llm:caller-operation',
+        attempt: 3,
+        retryOwner: 'caller',
+      },
+    });
+
+    void client.complete({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'summarize' }],
+      accounting: {
+        logicalCallId: 'llm:caller-completion',
+        attempt: 8,
+        retryOwner: 'caller',
+      },
+    }, 'summary');
+    const completionReq = conn.sent[1] as { params: Record<string, unknown> };
+    expect(completionReq.params).toMatchObject({
+      accounting: {
+        logicalCallId: 'llm:caller-completion',
+        attempt: 8,
+        retryOwner: 'caller',
+      },
+    });
+  });
+
+  it('preserves canonical ICP attribution on gateway model requests', () => {
+    const icpCorrelation: IcpConversationCorrelation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      localCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      peerCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerContactId: 'contact-a',
+      channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7082',
+      messageId: 'message-1',
+      requestId: 'request-1',
+      chargeLane: 'companion_social',
+      surface: 'companion_dm',
+      costPurpose: 'tool',
+      costOriginStage: 'reply',
+      fatigueDecision: 'allow',
+    };
+
+    void client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'hi' }],
+      correlation: {
+        callType: 'tool',
+        purpose: 'tool.continuation',
+        icpCorrelation,
+      },
+    });
+
+    const request = conn.sent[0] as { method: string; params: Record<string, unknown> };
+    expect(request).toMatchObject({
+      method: 'llm.chat',
+      params: {
+        companionId: icpCorrelation.localCompanionId,
+        conversationId: icpCorrelation.conversationId,
+        rootInitiationId: icpCorrelation.rootInitiationId,
+        icpCorrelation,
+      },
+    });
+  });
+
+  it('does not overwrite the canonical ICP charge lane with the active behavioral run lane', async () => {
+    const icpCorrelation: IcpConversationCorrelation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      localCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      peerCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerContactId: 'contact-a',
+      channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7082',
+      messageId: 'message-1',
+      requestId: 'request-1',
+      chargeLane: 'companion_social',
+      surface: 'companion_dm',
+      costPurpose: 'tool',
+      costOriginStage: 'reply',
+      fatigueDecision: 'allow',
+    };
+
+    await runWithChargeContext({
+      chargePolicy: makeTestChargePolicyConfig(),
+      lane: 'interactive',
+      runId: 'interactive-icp-turn',
+    }, async () => {
+      void client.stream({
+        systemPrompt: 'test',
+        messages: [{ role: 'user', content: 'hi' }],
+        correlation: {
+          callType: 'tool',
+          purpose: 'tool.continuation',
+          icpCorrelation,
+        },
+      });
+
+      const request = conn.sent[0] as { params: Record<string, unknown> };
+      expect(request.params).toMatchObject({
+        chargeLane: 'companion_social',
+        icpCorrelation,
+      });
+    });
+  });
+
   it('cleans up chunk handler after stream error', async () => {
     const chunks: string[] = [];
 
@@ -268,6 +744,190 @@ describe('GatewayClient streaming', () => {
     // After error, handler should be cleaned up
     conn._emit({ method: 'llm.chunk', params: { requestId, text: 'after-error' } });
     expect(chunks).toEqual(['before-error']);
+  });
+
+  it('bridges gateway budget-block telemetry before rejecting the model call', async () => {
+    const onModelBudgetBlocked = vi.fn();
+    client = new GatewayClient(conn.conn, 1024, { onModelBudgetBlocked });
+    const streamPromise = client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'blocked' }],
+    });
+    const request = conn.sent[0] as { id: number };
+    const event = {
+      timestampMs: 1_752_500_000_000,
+      reason: 'daily_budget_exceeded',
+      purpose: 'chat',
+      provider: 'openrouter',
+      model: 'test-model',
+      service: 'chat',
+      process: 'agent.turn.prompt',
+      estimatedRequestCostUsd: 0.1,
+      budget: {
+        dayKey: '2025-07-14',
+        monthKey: '2025-07',
+        dailySpentUsd: 1,
+        dailyLimitUsd: 1,
+        monthlySpentUsd: 2,
+        monthlyLimitUsd: 10,
+        dailyUnknownCostAttempts: 0,
+        monthlyUnknownCostAttempts: 0,
+      },
+    };
+    conn._emit({
+      id: request.id,
+      jsonrpc: '2.0',
+      error: {
+        code: GatewayErrors.MODEL_BUDGET_BLOCKED,
+        message: 'budget blocked',
+        data: event,
+      },
+    });
+
+    await expect(streamPromise).rejects.toThrow('budget blocked');
+    expect(onModelBudgetBlocked).toHaveBeenCalledWith(event);
+  });
+
+  it('decodes a strict ICP cost block without accepting partner-identifying extensions', async () => {
+    const streamPromise = client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'blocked' }],
+    });
+    const request = conn.sent[0] as { id: number };
+    const event = {
+      timestampMs: 1_752_500_000_000,
+      outcome: 'blocked',
+      reason: 'hard_limit_exceeded',
+      logicalCallId: 'logical-1',
+      attempt: 1,
+      conversationId: '33333333-3333-4333-8333-333333333333',
+      rootInitiationId: '44444444-4444-4444-8444-444444444444',
+      localCompanionId: '11111111-1111-4111-8111-111111111111',
+      costPurpose: 'conversation_turn',
+      costOriginStage: 'reply',
+      provider: 'openrouter',
+      model: 'test/model',
+      routingPurpose: 'chat',
+      projectedRequestCostUsd: 0.5,
+      replayed: false,
+    };
+    conn._emit({
+      id: request.id,
+      jsonrpc: '2.0',
+      error: {
+        code: GatewayErrors.ICP_CONVERSATION_COST_BLOCKED,
+        message: 'cost blocked',
+        data: event,
+      },
+    });
+    await expect(streamPromise).rejects.toMatchObject({
+      code: 'icp_conversation_cost_blocked',
+      event,
+    });
+
+    const malformedPromise = client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'blocked again' }],
+    });
+    const malformedRequest = conn.sent[1] as { id: number };
+    conn._emit({
+      id: malformedRequest.id,
+      jsonrpc: '2.0',
+      error: {
+        code: GatewayErrors.ICP_CONVERSATION_COST_BLOCKED,
+        message: 'opaque malformed block',
+        data: { ...event, peerContactId: 'must-not-cross' },
+      },
+    });
+    await expect(malformedPromise).rejects.not.toMatchObject({
+      code: 'icp_conversation_cost_blocked',
+    });
+
+    const mismatchedProjectionPromise = client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'blocked with mismatched projection' }],
+    });
+    const mismatchedProjectionRequest = conn.sent[2] as { id: number };
+    conn._emit({
+      id: mismatchedProjectionRequest.id,
+      jsonrpc: '2.0',
+      error: {
+        code: GatewayErrors.ICP_CONVERSATION_COST_BLOCKED,
+        message: 'opaque mismatched projection block',
+        data: {
+          ...event,
+          projection: {
+            conversationId: '55555555-5555-4555-8555-555555555555',
+            rootInitiationId: event.rootInitiationId,
+            actualCostUsd: 0.5,
+            pendingProjectedCostUsd: 0,
+            projectedTotalCostUsd: 0.5,
+            warningThresholdUsd: 0.4,
+            hardLimitUsd: 0.5,
+            remainingToHardLimitUsd: 0,
+            actualAttemptCount: 1,
+            unknownCostAttemptCount: 0,
+            pendingReservationCount: 0,
+            staleReservationCount: 0,
+            settledReservationCount: 1,
+            attributedCompanionCount: 1,
+            enforcementState: 'hard_stop',
+          },
+        },
+      },
+    });
+    await expect(mismatchedProjectionPromise).rejects.not.toMatchObject({
+      code: 'icp_conversation_cost_blocked',
+    });
+  });
+
+  it.each([
+    ['empty budget', { budget: {} }],
+    ['bogus reason', { reason: 'invented_budget_reason' }],
+    ['non-finite value', { estimatedRequestCostUsd: Number.POSITIVE_INFINITY }],
+    ['unknown field', { shadowBudget: true }],
+  ])('does not bridge malformed gateway budget telemetry with %s', async (_label, override) => {
+    const onModelBudgetBlocked = vi.fn();
+    client = new GatewayClient(conn.conn, 1024, { onModelBudgetBlocked });
+    const streamPromise = client.stream({
+      systemPrompt: 'test',
+      messages: [{ role: 'user', content: 'blocked' }],
+    });
+    const request = conn.sent[0] as { id: number };
+    const validBudget = {
+      dayKey: '2025-07-14',
+      monthKey: '2025-07',
+      dailySpentUsd: 1,
+      dailyLimitUsd: 1,
+      monthlySpentUsd: 2,
+      monthlyLimitUsd: 10,
+      dailyUnknownCostAttempts: 0,
+      monthlyUnknownCostAttempts: 0,
+    };
+    const event = {
+      timestampMs: 1_752_500_000_000,
+      reason: 'daily_budget_exceeded',
+      purpose: 'chat',
+      provider: 'openrouter',
+      model: 'test-model',
+      service: 'chat',
+      process: 'agent.turn.prompt',
+      estimatedRequestCostUsd: 0.1,
+      budget: validBudget,
+      ...override,
+    };
+    conn._emit({
+      id: request.id,
+      jsonrpc: '2.0',
+      error: {
+        code: GatewayErrors.MODEL_BUDGET_BLOCKED,
+        message: 'budget blocked',
+        data: event,
+      },
+    });
+
+    await expect(streamPromise).rejects.toThrow('budget blocked');
+    expect(onModelBudgetBlocked).not.toHaveBeenCalled();
   });
 
   it('routes model discovery calls through gateway RPC', async () => {
@@ -352,6 +1012,56 @@ describe('GatewayClient streaming', () => {
       Array.from(value).every((entry, index) => Math.abs(entry - [0.7, 0.8, 0.9][index]!) < 1e-5)
     ));
   });
+
+  it('self-stamps tenant and request attribution on gateway embedding calls', async () => {
+    const attributedClient = new GatewayClient(conn.conn, 1024, { companionId: 'companion-a' });
+    const batchPromise = runWithRequestContext({
+      sessionId: 'session-1',
+      requestId: 'request-1',
+      channelId: 'shard:shard-1',
+      channelType: 'api',
+      callType: 'memory',
+      purpose: 'embedding',
+      chargeLane: 'shard',
+      chargeSurface: 'externalEmbedding',
+      chargeEventId: 'charge-event-1',
+      chargeRunId: 'run-1',
+      chargeRootRunId: 'root-run-1',
+      shardId: 'shard-1',
+      workloadType: 'shard',
+      workloadId: 'shard-1',
+    }, async () => await attributedClient.embedBatch(['alpha']));
+    const request = conn.sent[0] as {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(request).toMatchObject({
+      method: 'llm.embed',
+      params: {
+        companionId: 'companion-a',
+        sessionId: 'session-1',
+        requestId: 'request-1',
+        channelId: 'shard:shard-1',
+        channelType: 'api',
+        chargeLane: 'shard',
+        chargeSurface: 'externalEmbedding',
+        chargeEventId: 'charge-event-1',
+        chargeRunId: 'run-1',
+        chargeRootRunId: 'root-run-1',
+        shardId: 'shard-1',
+        workloadType: 'shard',
+        workloadId: 'shard-1',
+        texts: ['alpha'],
+      },
+    });
+    conn._emit({
+      id: request.id,
+      jsonrpc: '2.0',
+      result: { embeddings: [[0.1, 0.2]] },
+    });
+    await expect(batchPromise).resolves.toHaveLength(1);
+  });
 });
 
 describe('GatewayClient authenticated identification', () => {
@@ -415,6 +1125,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
           authorName: 'TestUser',
           content: 'hello voice',
           timestamp: '2025-01-01T00:00:00.000Z',
+          routing: TEST_GATEWAY_ROUTING,
         },
       },
     });
@@ -436,6 +1147,186 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect(response.result.content).toBe('voice response');
     expect(response.result.model).toBe('test-model');
     expect(response.result.durationMs).toBe(500);
+  });
+
+  it('fails closed when voice.handleMessage omits validated gateway routing', async () => {
+    const handler = vi.fn();
+    client.onHandleMessage(handler);
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 43,
+      method: 'voice.handleMessage',
+      params: {
+        message: {
+          id: 'voice-unrouted',
+          channelId: 'discord-voice:123',
+          channelType: 'discord',
+          authorId: 'user-1',
+          authorName: 'TestUser',
+          content: 'hello voice',
+          timestamp: '2025-01-01T00:00:00.000Z',
+          routing: {},
+        },
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 20));
+    expect(handler).not.toHaveBeenCalled();
+    expect(conn.sent).toContainEqual(expect.objectContaining({
+      id: 43,
+      error: expect.objectContaining({
+        message: expect.stringContaining('routing.gateway'),
+      }),
+    }));
+  });
+
+  it('fails closed when reverse-message routing targets another companion', async () => {
+    const boundConn = createMockConnection();
+    const boundClient = new GatewayClient(boundConn.conn, 1024, {
+      companionId: createCompanionId('companion-alpha'),
+    });
+    const handler = vi.fn();
+    boundClient.onHandleMessage(handler);
+
+    boundConn._emit({
+      jsonrpc: '2.0',
+      id: 44,
+      method: 'voice.handleMessage',
+      params: {
+        message: {
+          id: 'voice-misrouted',
+          channelId: 'discord-voice:123',
+          channelType: 'discord',
+          authorId: 'user-1',
+          authorName: 'TestUser',
+          content: 'hello voice',
+          timestamp: '2025-01-01T00:00:00.000Z',
+          routing: {
+            gateway: { schemaVersion: 1, companionId: 'companion-beta' },
+          },
+        },
+      },
+    });
+
+    await new Promise(r => setTimeout(r, 20));
+    expect(handler).not.toHaveBeenCalled();
+    expect(boundConn.sent).toContainEqual(expect.objectContaining({
+      id: 44,
+      error: expect.objectContaining({
+        message: expect.stringContaining('does not match this gateway client binding'),
+      }),
+    }));
+    boundClient.destroy();
+  });
+
+  it('rejects an unrouted voice.stream.start before ACK or stream-state creation', async () => {
+    client.onHandleMessage(vi.fn());
+    const message = {
+      id: 'voice-stream-unrouted',
+      channelId: 'discord-voice:123',
+      channelType: 'discord',
+      authorId: 'user-1',
+      authorName: 'TestUser',
+      content: '',
+      timestamp: '2025-01-01T00:00:00.000Z',
+    };
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 45,
+      method: 'voice.stream.start',
+      params: {
+        correlationId: 'corr-unrouted',
+        streamId: 'stream-unrouted',
+        sequence: 0,
+        message: { ...message, routing: {} },
+      },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(getRpcResponse(conn.sent, 45)).toMatchObject({
+      error: { message: expect.stringContaining('routing.gateway') },
+    });
+
+    // Reusing the same key succeeds once the envelope is valid, proving the
+    // rejected frame was never ACKed or inserted into voiceStreams.
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 46,
+      method: 'voice.stream.start',
+      params: {
+        correlationId: 'corr-unrouted',
+        streamId: 'stream-unrouted',
+        sequence: 0,
+        message: { ...message, routing: TEST_GATEWAY_ROUTING },
+      },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(getRpcResponse(conn.sent, 46)).toMatchObject({
+      result: { accepted: true, sequence: 0 },
+    });
+  });
+
+  it('rejects a cross-companion voice.stream.start before ACK or stream-state creation', async () => {
+    const boundConn = createMockConnection();
+    const boundClient = new GatewayClient(boundConn.conn, 1024, {
+      companionId: createCompanionId('companion-alpha'),
+    });
+    boundClient.onHandleMessage(vi.fn());
+    const message = {
+      id: 'voice-stream-misrouted',
+      channelId: 'discord-voice:123',
+      channelType: 'discord',
+      authorId: 'user-1',
+      authorName: 'TestUser',
+      content: '',
+      timestamp: '2025-01-01T00:00:00.000Z',
+    };
+
+    boundConn._emit({
+      jsonrpc: '2.0',
+      id: 47,
+      method: 'voice.stream.start',
+      params: {
+        correlationId: 'corr-misrouted',
+        streamId: 'stream-misrouted',
+        sequence: 0,
+        message: {
+          ...message,
+          routing: { gateway: { schemaVersion: 1, companionId: 'companion-beta' } },
+        },
+      },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(getRpcResponse(boundConn.sent, 47)).toMatchObject({
+      error: { message: expect.stringContaining('does not match this gateway client binding') },
+    });
+
+    boundConn._emit({
+      jsonrpc: '2.0',
+      id: 48,
+      method: 'voice.stream.start',
+      params: {
+        correlationId: 'corr-misrouted',
+        streamId: 'stream-misrouted',
+        sequence: 0,
+        message: {
+          ...message,
+          routing: {
+            gateway: { schemaVersion: 1, companionId: 'companion-alpha' },
+          },
+        },
+      },
+    });
+    await new Promise(r => setTimeout(r, 20));
+
+    expect(getRpcResponse(boundConn.sent, 48)).toMatchObject({
+      result: { accepted: true, sequence: 0 },
+    });
+    boundClient.destroy();
   });
 
   it('handles voice.stream.start/chunk/end reverse RPC flow', async () => {
@@ -463,6 +1354,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
           authorName: 'Voice User',
           content: '',
           timestamp: '2025-01-01T00:00:00.000Z',
+          routing: TEST_GATEWAY_ROUTING,
         },
       },
     });
@@ -535,6 +1427,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
           authorName: 'Voice User',
           content: '',
           timestamp: '2025-01-01T00:00:00.000Z',
+          routing: TEST_GATEWAY_ROUTING,
         },
       },
     });
@@ -598,6 +1491,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
           authorName: 'Voice User',
           content: '',
           timestamp: '2025-01-01T00:00:00.000Z',
+          routing: TEST_GATEWAY_ROUTING,
         },
       },
     });
@@ -699,6 +1593,50 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     expect((messages[0] as any).content).toBe('test notification');
   });
 
+  it('owns rejected async companion notification handlers without an unhandled rejection', async () => {
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+
+    try {
+      client.onCompanionMessage(async () => {
+        throw new Error('durable dedupe lookup failed');
+      });
+
+      conn._emit({
+        method: 'companion.message',
+        params: {
+          message: {
+            id: 'companion-async-rejection',
+            channelId: 'companion-dm:comp-a:comp-b',
+            content: 'test notification',
+          },
+        },
+      });
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('accepts only coarse Garden queue-change notifications', () => {
+    const queues: string[] = [];
+    client.onGardenQueueChanged((queue) => queues.push(queue));
+
+    conn._emit({
+      method: 'garden.queue.changed',
+      params: { queue: 'confirmations', entryId: 'must-not-cross' },
+    });
+    conn._emit({
+      method: 'garden.queue.changed',
+      params: { queue: 'unknown-queue' },
+    });
+
+    expect(queues).toEqual(['confirmations']);
+  });
+
   it('routes companion delivery failure notifications to their observe-only handler', () => {
     const failures: unknown[] = [];
     client.onCompanionDeliveryFailure((failure) => failures.push(failure));
@@ -719,6 +1657,53 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
       reportingCompanionId: 'comp-b',
       reason: 'processing_failed',
     })]);
+  });
+
+  it('stamps correlated companion retries with a deterministic transport message id', async () => {
+    const correlation: IcpConversationCorrelation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      localCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      peerCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerContactId: 'contact-a',
+      channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7082',
+      messageId: 'companion-initiation-source',
+      requestId: 'companion-initiation-source',
+      chargeLane: 'companion_social',
+      surface: 'companion_dm',
+      costPurpose: 'conversation_turn',
+      costOriginStage: 'reply',
+      fatigueDecision: 'allow',
+    };
+    const sendPromise = client.companionSend(
+      correlation.channelId,
+      'durable reply',
+      'Selene',
+      correlation,
+    );
+    const request = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };
+
+    expect(request).toMatchObject({
+      method: 'companion.message.send',
+      params: {
+        messageId: `companion-reply-${correlation.localCompanionId}-${correlation.turnId}`,
+        correlation,
+        replyToMessageId: correlation.messageId,
+      },
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: request.id,
+      result: {
+        channelId: correlation.channelId,
+        messageId: request.params.messageId,
+        deliveredTo: [correlation.peerCompanionId],
+        skippedOffline: [],
+      },
+    });
+    await expect(sendPromise).resolves.toMatchObject({ messageId: request.params.messageId });
   });
 
   it('sends structured companion failure reports through the gateway RPC', async () => {
@@ -1271,7 +2256,7 @@ describe('GatewayClient beads RPC wrappers', () => {
 });
 
 describe('GatewayClient keepalive', () => {
-  it('emits lightweight keepalive RPC frames while idle', async () => {
+  it('emits transport heartbeats without JSON-RPC frames while idle', async () => {
     vi.useFakeTimers();
     const conn = createMockConnection();
     const client = new GatewayClient(conn.conn, 1024, { keepaliveIntervalMs: 1_000 });
@@ -1280,22 +2265,13 @@ describe('GatewayClient keepalive', () => {
       expect(conn.sent).toHaveLength(0);
 
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(conn.sent).toHaveLength(1);
+      expect(conn.heartbeatCount).toBe(1);
+      expect(conn.sent).toHaveLength(0);
+      expect(conn.conn.serializedTransportStats.rpcCallCount).toBe(0);
 
-      const keepaliveReq = conn.sent[0] as { id: number; method: string; params: Record<string, unknown> };
-      expect(keepaliveReq.method).toBe('discord.typing');
-      expect(keepaliveReq.params).toEqual({ channelId: 'internal:gateway-keepalive' });
-
-      conn._emit({
-        jsonrpc: '2.0',
-        id: keepaliveReq.id,
-        result: { success: true },
-      });
       await vi.advanceTimersByTimeAsync(1_000);
-
-      expect(conn.sent).toHaveLength(2);
-      const secondKeepaliveReq = conn.sent[1] as { method: string };
-      expect(secondKeepaliveReq.method).toBe('discord.typing');
+      expect(conn.heartbeatCount).toBe(2);
+      expect(conn.sent).toHaveLength(0);
     } finally {
       client.destroy();
       vi.useRealTimers();
@@ -1309,19 +2285,32 @@ describe('GatewayClient keepalive', () => {
 
     try {
       await vi.advanceTimersByTimeAsync(500);
-      expect(conn.sent).toHaveLength(1);
-
-      const keepaliveReq = conn.sent[0] as { id: number };
-      conn._emit({
-        jsonrpc: '2.0',
-        id: keepaliveReq.id,
-        result: { success: true },
-      });
+      expect(conn.heartbeatCount).toBe(1);
 
       client.destroy();
       await vi.advanceTimersByTimeAsync(2_000);
 
-      expect(conn.sent).toHaveLength(1);
+      expect(conn.heartbeatCount).toBe(1);
+    } finally {
+      client.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it('disconnects within one interval when the transport heartbeat cannot be sent', async () => {
+    vi.useFakeTimers();
+    const conn = createMockConnection({ heartbeatResults: [false] });
+    const client = new GatewayClient(conn.conn, 1024, { keepaliveIntervalMs: 1_000 });
+    const onDisconnect = vi.fn();
+    client.onDisconnect(onDisconnect);
+
+    try {
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(conn.heartbeatCount).toBe(1);
+      expect(conn.destroyed).toBe(true);
+      expect(onDisconnect).toHaveBeenCalledOnce();
+      expect(onDisconnect).toHaveBeenCalledWith({ source: 'close' });
     } finally {
       client.destroy();
       vi.useRealTimers();

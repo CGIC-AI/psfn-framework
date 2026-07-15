@@ -7,7 +7,11 @@ import type {
   ChargePolicyRuntimeLane,
   ChargePolicySurface,
 } from '../contracts/charge-policy.js';
-import { hydrateRunChargeRollingWindowFromEvents } from './run-charge.js';
+import {
+  hydrateRunChargeRollingWindowFromEvents,
+  RUN_CHARGE_ROLLING_WINDOW_MS,
+  type RunChargeRollingWindowSnapshot,
+} from './run-charge.js';
 
 export interface RunChargeLedgerMetadata {
   provider?: string;
@@ -33,6 +37,8 @@ export interface RunChargeLedgerQuery {
   untilMs?: number;
   runId?: string;
 }
+
+export type RunChargeReconciliationQuery = Pick<RunChargeLedgerQuery, 'sinceMs' | 'untilMs'>;
 
 export interface RunChargeBreakdown {
   key: string;
@@ -215,6 +221,16 @@ function createLedgerEntry(event: RunChargeEvent): RunChargeLedgerEntry {
   };
 }
 
+function durableEventBinding(event: RunChargeEvent): string {
+  const {
+    timestampMs: _timestampMs,
+    spentAfter: _spentAfter,
+    remainingAfter: _remainingAfter,
+    ...binding
+  } = event;
+  return JSON.stringify(binding);
+}
+
 function assertLedgerEntry(value: unknown, lineNumber: number): asserts value is RunChargeLedgerEntry {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new Error(`Invalid charge ledger entry at line ${lineNumber}: expected object`);
@@ -232,6 +248,11 @@ function assertLedgerEntry(value: unknown, lineNumber: number): asserts value is
   const event = entry.event;
   if (!event || typeof event !== 'object' || Array.isArray(event)) {
     throw new Error(`Invalid charge ledger entry at line ${lineNumber}: missing event`);
+  }
+  const eventId = normalizeOptionalString(entry.eventId);
+  const nestedEventId = normalizeOptionalString(event.eventId);
+  if (nestedEventId && nestedEventId !== eventId) {
+    throw new Error(`Invalid charge ledger entry at line ${lineNumber}: eventId does not match event.eventId`);
   }
   if (normalizePositiveFiniteNumber(event.timestampMs) === undefined) {
     throw new Error(`Invalid charge ledger entry at line ${lineNumber}: missing event timestamp`);
@@ -265,6 +286,37 @@ function readLedgerEntries(path: string): RunChargeLedgerEntry[] {
       assertLedgerEntry(parsed, index + 1);
       return withEventIdentity(parsed);
     });
+}
+
+/**
+ * Fresh read-only deployment balance for authorities running outside the
+ * agent process. The JSONL ledger remains canonical; every decision rereads
+ * it so a gateway cannot authorize from stale process-local charge state.
+ */
+export function readRunChargeRollingWindowFromLedger(
+  path: string,
+  nowMs = Date.now(),
+): RunChargeRollingWindowSnapshot {
+  const cutoffMs = nowMs - RUN_CHARGE_ROLLING_WINDOW_MS;
+  const seenEventIds = new Set<string>();
+  const spentByLane: Partial<Record<ChargePolicyRuntimeLane, number>> = {};
+  let entryCount = 0;
+  for (const entry of readLedgerEntries(path)) {
+    const event = entry.event;
+    if (event.timestampMs < cutoffMs || event.timestampMs > nowMs || event.amount <= 0) {
+      continue;
+    }
+    const eventId = event.eventId.trim() || entry.eventId;
+    if (seenEventIds.has(eventId)) continue;
+    seenEventIds.add(eventId);
+    addRecordAmount(spentByLane, event.lane, event.amount);
+    entryCount += 1;
+  }
+  return {
+    windowMs: RUN_CHARGE_ROLLING_WINDOW_MS,
+    spentByLane,
+    entryCount,
+  };
 }
 
 // Rows persisted before RunChargeEvent carried its own eventId reuse the
@@ -487,10 +539,44 @@ export class RunChargeLedger {
   }
 
   recordChargeEvent(event: RunChargeEvent): RunChargeLedgerEntry {
+    return this.commitChargeEvent(event).entry;
+  }
+
+  commitChargeEvent(event: RunChargeEvent): {
+    outcome: 'recorded' | 'replayed';
+    entry: RunChargeLedgerEntry;
+  } {
     const entry = createLedgerEntry(event);
+    const existing = this.entries.find(candidate => candidate.eventId === entry.eventId);
+    if (existing) {
+      if (durableEventBinding(existing.event) !== durableEventBinding(entry.event)) {
+        throw new Error(`Charge ledger event identity collision for ${entry.eventId}`);
+      }
+      return {
+        outcome: 'replayed',
+        entry: {
+          ...existing,
+          event: cloneChargeEvent(existing.event),
+          ...(existing.metadata ? { metadata: { ...existing.metadata } } : {}),
+        },
+      };
+    }
     appendJsonLine(this.path, entry);
     this.entries.push(entry);
-    return entry;
+    return { outcome: 'recorded', entry };
+  }
+
+  probeChargeEvent(event: RunChargeEvent): 'absent' | 'replayed' {
+    const eventId = normalizeOptionalString(event.eventId);
+    if (!eventId) {
+      throw new Error('Charge ledger probe requires an event identity');
+    }
+    const existing = this.entries.find(candidate => candidate.eventId === eventId);
+    if (!existing) return 'absent';
+    if (durableEventBinding(existing.event) !== durableEventBinding(event)) {
+      throw new Error(`Charge ledger event identity collision for ${eventId}`);
+    }
+    return 'replayed';
   }
 
   listEntries(query: RunChargeLedgerQuery = {}): RunChargeLedgerEntry[] {
@@ -499,6 +585,18 @@ export class RunChargeLedger {
       .filter(entry => matchesQuery(entry, query))
       .sort((left, right) => right.event.timestampMs - left.event.timestampMs)
       .slice(0, limit)
+      .map(entry => ({
+        ...entry,
+        event: cloneChargeEvent(entry.event),
+        ...(entry.metadata ? { metadata: { ...entry.metadata } } : {}),
+      }));
+  }
+
+  /** Complete internal read for aggregate reconciliation; unlike listEntries, this is not display-limited. */
+  listReconciliationEntries(query: RunChargeReconciliationQuery = {}): RunChargeLedgerEntry[] {
+    return this.entries
+      .filter(entry => matchesQuery(entry, query))
+      .sort((left, right) => left.event.timestampMs - right.event.timestampMs || left.eventId.localeCompare(right.eventId))
       .map(entry => ({
         ...entry,
         event: cloneChargeEvent(entry.event),

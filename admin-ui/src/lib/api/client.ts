@@ -67,13 +67,43 @@ async function throwIfNotOk(res: Response): Promise<void> {
 }
 
 export async function apiGet<T>(path: string): Promise<T> {
+  // `no-cache` (not `no-store`) lets the browser revalidate against its HTTP
+  // cache via If-None-Match. When the server answers 304 the browser
+  // transparently serves the cached body, so polled reads skip re-downloading
+  // byte-identical payloads over the WAN while still always seeing fresh data.
   const res = await fetch(API_BASE + path, {
-    cache: 'no-store',
+    cache: 'no-cache',
     headers: { ...authHeaders(), Accept: 'application/json' },
     credentials: 'include',
   });
   await throwIfNotOk(res);
   return res.json();
+}
+
+export interface ApiDownload {
+  blob: Blob;
+  filename: string | null;
+}
+
+export async function apiDownload(path: string): Promise<ApiDownload> {
+  const res = await fetch(API_BASE + path, {
+    cache: 'no-store',
+    headers: authHeaders(),
+    credentials: 'include',
+  });
+  await throwIfNotOk(res);
+  const disposition = res.headers.get('content-disposition') ?? '';
+  const encodedFilename = disposition.match(/filename\*=UTF-8''([^;]+)/iu)?.[1];
+  const plainFilename = disposition.match(/filename="?([^";]+)"?/iu)?.[1];
+  let filename: string | null = plainFilename?.trim() || null;
+  if (encodedFilename) {
+    try {
+      filename = decodeURIComponent(encodedFilename.trim());
+    } catch {
+      filename = encodedFilename.trim();
+    }
+  }
+  return { blob: await res.blob(), filename };
 }
 
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {

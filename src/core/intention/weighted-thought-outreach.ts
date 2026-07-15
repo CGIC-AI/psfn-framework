@@ -36,6 +36,7 @@ import {
   type WeightedThoughtLifecycleConfig,
 } from './weighted-thoughts.js';
 import type { WeightedThoughtStorePort } from './weighted-thought-store-port.js';
+import type { IcpInitiationSourceResult } from '../icp/initiation-source-runtime.js';
 
 export const WEIGHTED_THOUGHT_OUTREACH_GATE_LANE = 'weighted_thought_outreach';
 
@@ -165,7 +166,19 @@ export interface WeightedThoughtOutreachDeps {
   quietHours?: ProactiveQuietHoursConfig | null;
   channelPolicy: OutreachChannelPolicy;
   nudgeEvaluator: NudgeEvaluator;
+  icpCandidateAdapter?: IcpWeightedThoughtCandidateAdapter;
   contactId?: string;
+}
+
+export interface IcpWeightedThoughtCandidateAdapter {
+  /** Non-companion preserves the human lane; blocked is a terminal fail-closed source check. */
+  submit(input: {
+    thought: ThoughtWeight;
+  }): Promise<
+    | { kind: 'not_companion' }
+    | { kind: 'blocked'; reason: 'recursive_trigger' | 'stale_provenance' | 'ambiguous_contact' }
+    | { kind: 'submitted'; result: IcpInitiationSourceResult }
+  >;
 }
 
 export interface OutreachActionProduced {
@@ -188,6 +201,7 @@ export interface WeightedThoughtOutreachRunResult {
   declined: Array<{ thoughtId: string; reason?: string; dampenedWeight: number }>;
   blocked: Array<{ thoughtId: string; reason: string; channelId?: string }>;
   deferred: Array<{ thoughtId: string; reason: string; nextEligibleAtMs: number }>;
+  icpCandidates: Array<{ thoughtId: string; result: IcpInitiationSourceResult }>;
 }
 
 /**
@@ -223,6 +237,7 @@ export async function runWeightedThoughtOutreachOnce(
     declined: [],
     blocked: [],
     deferred: [],
+    icpCandidates: [],
   };
   if (!gate.open) {
     // Zero LLM: nothing is near threshold.
@@ -232,6 +247,46 @@ export async function runWeightedThoughtOutreachOnce(
   for (const view of top) {
     if (result.produced.length >= limit) break;
     if (view.weight < deps.nudgeThreshold) break; // top is sorted desc
+
+    // Companion-targeted thoughts converge on the ICP candidate broker before
+    // the legacy human channel resolver or nudge evaluator. The adapter returns
+    // not_companion for human contacts, preserving the existing path exactly.
+    if (deps.icpCandidateAdapter && view.thought.contactId) {
+      const adapterResult = await deps.icpCandidateAdapter.submit({ thought: view.thought });
+      if (adapterResult.kind === 'blocked') {
+        const dampened = applyDeclineDampening(view.thought, deps.lifecycleConfig, nowMs);
+        await deps.store.save(dampened);
+        result.declined.push({
+          thoughtId: view.thought.id,
+          reason: adapterResult.reason,
+          dampenedWeight: dampened.accumulatedWeight,
+        });
+        continue;
+      }
+      if (adapterResult.kind === 'submitted') {
+        const icpResult = adapterResult.result;
+        result.icpCandidates.push({ thoughtId: view.thought.id, result: icpResult });
+        if (icpResult.status === 'consumed' || icpResult.status === 'permitted') {
+          await deps.store.save(markThoughtAccepted(view.thought, nowMs));
+        } else if (icpResult.outcome !== 'deduped' && (
+          icpResult.status === 'deferred'
+          || icpResult.status === 'declined'
+          || icpResult.status === 'rejected'
+        )) {
+          const dampened = applyDeclineDampening(view.thought, deps.lifecycleConfig, nowMs);
+          await deps.store.save(dampened);
+          result.declined.push({
+            thoughtId: view.thought.id,
+            reason: icpResult.reasonCode ?? icpResult.outcome,
+            dampenedWeight: dampened.accumulatedWeight,
+          });
+        }
+        // Deferral/decline/rejection all dampen the durable motivation. A new
+        // reinforcement may reopen it; scheduler ticks alone do not repeatedly
+        // ask for consent or create unanswered invitations.
+        continue;
+      }
+    }
 
     // 1. Deterministic channel resolution (fail-closed, provenance-driven).
     const channel = await resolveOutreachChannel(view.thought, deps.channelPolicy);

@@ -1168,8 +1168,8 @@ describe('MemoryRetriever trust-gated filtering', () => {
         similarity: 0.94,
         importance: 0.85,
         salience: 0.85,
-        extractedAt: now - 90 * 24 * 60 * 60 * 1000,
-        lastAccessed: now - 90 * 24 * 60 * 60 * 1000,
+        extractedAt: now - 14 * 24 * 60 * 60 * 1000,
+        lastAccessed: now - 14 * 24 * 60 * 60 * 1000,
         accessCount: 1,
       }),
       makeMemory({
@@ -1178,7 +1178,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
         similarity: 0.88,
         importance: 0.85,
         salience: 0.85,
-        extractedAt: now - 90 * 24 * 60 * 60 * 1000,
+        extractedAt: now - 14 * 24 * 60 * 60 * 1000,
         lastAccessed: now - 2 * 60 * 60 * 1000,
         accessCount: 14,
       }),
@@ -1203,8 +1203,8 @@ describe('MemoryRetriever trust-gated filtering', () => {
         similarity: 0.92,
         importance: 0.85,
         salience: 0.85,
-        extractedAt: now - 100 * 24 * 60 * 60 * 1000,
-        lastAccessed: now - 80 * 24 * 60 * 60 * 1000,
+        extractedAt: now - 21 * 24 * 60 * 60 * 1000,
+        lastAccessed: now - 14 * 24 * 60 * 60 * 1000,
         accessCount: 6,
       }),
       makeMemory({
@@ -1213,7 +1213,7 @@ describe('MemoryRetriever trust-gated filtering', () => {
         similarity: 0.9,
         importance: 0.85,
         salience: 0.85,
-        extractedAt: now - 100 * 24 * 60 * 60 * 1000,
+        extractedAt: now - 21 * 24 * 60 * 60 * 1000,
         lastAccessed: now - 60 * 60 * 1000,
         accessCount: 6,
       }),
@@ -1757,13 +1757,14 @@ describe('MemoryRetriever basic behavior', () => {
         text: 'I declined helping bypass paywalls and cracking paid subscriptions.',
         type: 'boundary',
         importance: 0.98,
-        salience: 0.95,
+        salience: 0.475,
         extractedAt: now - 120 * 24 * 60 * 60 * 1000,
         lastAccessed: now - 120 * 24 * 60 * 60 * 1000,
+        salienceDecayAnchorAt: now,
         sourceRef: 'api:session-1|operation:extract',
         tags: ['boundary', 'refusal', 'paywall', 'bypass'],
         sensitivity: 'public',
-        similarity: 0.62,
+        similarity: 0.95,
       }),
       makeMemory({
         id: 'session1-semantic',
@@ -2996,7 +2997,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
     expect(telemetry.returnedCount).toBe(1);
   });
 
-  it('allows participated group memories in the participant DM and blocks non-participated rooms', async () => {
+  it('allows participated group memories in the primary partner DM and blocks unparticipated rooms', async () => {
     const { contactStore, vegaId } = makeRoomVisibilityContactStore();
     contactStore.recordChannelActivity(vegaId, 'discord', GROUP_ROOM_X, 'invite_only');
     const dmMemory = makeMemory({
@@ -3092,7 +3093,7 @@ describe('MemoryRetriever room-scoped visibility', () => {
     expect(telemetry.returnedCount).toBe(1);
   });
 
-  it('fails closed for DM access when room participation proof is missing', async () => {
+  it('allows the primary partner subject memory when origin-channel proof is missing', async () => {
     const { contactStore, vegaId } = makeRoomVisibilityContactStore();
     const blockedGroupMemory = makeMemory({
       id: 'group-x-memory',
@@ -3120,17 +3121,15 @@ describe('MemoryRetriever room-scoped visibility', () => {
       vegaId,
     );
 
-    expect(result).not.toContain('private server migration plan');
-    expect(result).toContain('Memory context note:');
-    expect(result).toContain('room visibility boundary');
+    expect(result).toContain('Room X discussed a private server migration plan.');
 
     const telemetry = latestRetrievalTelemetry(eventBus);
-    expect(telemetry.roomVisibilityRejectedCount).toBe(1);
-    expect(telemetry.withheldReasonCounts).toMatchObject({
-      'room_visibility.blocked': 1,
+    expect(telemetry.roomVisibilityRejectedCount).toBe(0);
+    expect(telemetry.withheldReasonCounts).not.toMatchObject({
+      'room_visibility.blocked': expect.any(Number),
     });
-    expect(telemetry.reason).toBe('trust_filtered');
-    expect(telemetry.returnedCount).toBe(0);
+    expect(telemetry.reason).toBe('ok');
+    expect(telemetry.returnedCount).toBe(1);
   });
 
   it('withholds same-room memories from retired logical sessions while allowing fresh-route memories', async () => {

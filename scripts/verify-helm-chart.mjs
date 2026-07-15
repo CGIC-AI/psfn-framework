@@ -114,6 +114,7 @@ for (const envName of [
   'COMPANION_DATA_DIR',
   'WORKSPACE_PATH',
   'POSTGRES_DATABASE_URL',
+  'POSTGRES_DATABASE_URL_FILE',
   'PSFN_REDIS_URL',
   'LITELLM_BASE_URL',
   'GATEWAY_RPC_ENDPOINT',
@@ -128,10 +129,47 @@ assertIncludes(rendered, 'mountPath: /app/workspace', 'workspace PVC mount');
 assertIncludes(rendered, 'mountPath: /app/models/transformers', 'model cache PVC mount');
 assertIncludes(rendered, 'runAsUser: 999', 'numeric non-root user');
 assertIncludes(rendered, 'runAsGroup: 999', 'numeric non-root group');
-assertIncludes(rendered, 'CREATE EXTENSION IF NOT EXISTS vector;', 'pgvector init SQL');
+const postgresInit = findDocumentByKindName(rendered, 'ConfigMap', 'psfn-postgres-init');
+assertIncludes(
+  postgresInit,
+  'CREATE EXTENSION IF NOT EXISTS vector;',
+  'pgvector init SQL',
+);
+assertIncludes(
+  postgresInit,
+  "'CREATE DATABASE %I OWNER %I',\n      'psfn_restore_verify',\n      'psfn'",
+  'Postgres restore-verify database and owner init SQL',
+);
+assertIncludes(
+  postgresInit,
+  "WHERE datname = 'psfn_restore_verify'",
+  'Postgres restore-verify idempotency guard',
+);
+assertIncludes(
+  postgresInit,
+  '\\gexec',
+  'Postgres restore-verify guarded command execution',
+);
 assertIncludes(rendered, 'kind: NetworkPolicy', 'network policy render');
 assertNotIncludes(rendered, 'ALLOW_AGENT_OUTBOUND_NETWORK', 'agent network isolation');
 assertNotIncludes(rendered, 'name: psfn-model-prefetch', 'disabled model prefetch Job');
+
+const customPostgresRendered = render([
+  '--set-string',
+  'postgres.auth.database=companion',
+  '--set-string',
+  'postgres.auth.username=companion_owner',
+]);
+const customPostgresInit = findDocumentByKindName(
+  customPostgresRendered,
+  'ConfigMap',
+  'psfn-postgres-init',
+);
+assertIncludes(
+  customPostgresInit,
+  "'CREATE DATABASE %I OWNER %I',\n      'companion_restore_verify',\n      'companion_owner'",
+  'custom Postgres restore-verify database and owner init SQL',
+);
 
 const appSecret = findDocument(rendered, 'psfn-app');
 assertIncludes(appSecret, 'kind: Secret', 'app secret kind');
@@ -156,7 +194,11 @@ assertNotIncludes(rendered, 'psfn-companion-ui-test', 'default disabled companio
 
 const gatewayDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-gateway');
 assertIncludes(gatewayDeployment, 'name: wait-for-postgres', 'gateway Postgres startup wait init container');
-assertIncludes(gatewayDeployment, 'pg_isready -d "$POSTGRES_DATABASE_URL"', 'gateway Postgres startup wait command');
+assertIncludes(
+  gatewayDeployment,
+  'pg_isready -d "$(cat "$POSTGRES_DATABASE_URL_FILE")"',
+  'gateway Postgres startup wait command',
+);
 assertIncludes(gatewayDeployment, 'name: psfn-postgres', 'gateway Postgres startup wait secret name');
 assertIncludes(gatewayDeployment, 'key: postgres-database-url', 'gateway Postgres startup wait secret key');
 assertIncludes(gatewayDeployment, 'name: LITELLM_BASE_URL', 'gateway LiteLLM endpoint env');
@@ -174,9 +216,24 @@ assertIncludes(gatewayDeployment, 'subPath: state', 'gateway CogSec state PVC su
 
 const agentDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-agent');
 assertIncludes(agentDeployment, 'name: wait-for-postgres', 'agent Postgres startup wait init container');
-assertIncludes(agentDeployment, 'pg_isready -d "$POSTGRES_DATABASE_URL"', 'agent Postgres startup wait command');
-assertIncludes(agentDeployment, 'name: psfn-postgres', 'agent Postgres startup wait secret name');
+assertIncludes(
+  agentDeployment,
+  'pg_isready -d "$(cat "$POSTGRES_DATABASE_URL_FILE")"',
+  'agent Postgres startup wait command',
+);
+assertIncludes(agentDeployment, 'secretName: psfn-postgres', 'agent Postgres startup wait secret name');
 assertIncludes(agentDeployment, 'key: postgres-database-url', 'agent Postgres startup wait secret key');
+assertIncludes(agentDeployment, 'name: POSTGRES_DATABASE_URL_FILE', 'agent Postgres credential file env');
+assertIncludes(
+  agentDeployment,
+  'value: "/var/run/secrets/psfn-postgres/database-url"',
+  'agent Postgres credential file path',
+);
+assertNotIncludes(
+  agentDeployment,
+  '- name: POSTGRES_DATABASE_URL\n',
+  'agent raw Postgres credential env',
+);
 assertIncludes(agentDeployment, 'name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN', 'agent isolated session-integrity proof env');
 assertIncludes(agentDeployment, 'key: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN', 'agent isolated session-integrity proof Secret key');
 assertIncludes(agentDeployment, 'name: GATEWAY_COMPANION_AUTH_TOKEN', 'agent companion role proof env');
@@ -209,6 +266,13 @@ for (const [name, value] of [
 }
 assertNotIncludes(agentDeployment, 'LITELLM_BASE_URL', 'agent LiteLLM endpoint env');
 assertNotIncludes(agentDeployment, 'LITELLM_API_KEY', 'agent LiteLLM credential env');
+
+const gardenCredentialBoundaryDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-garden');
+assertNotIncludes(
+  gardenCredentialBoundaryDeployment,
+  '- name: POSTGRES_DATABASE_URL\n',
+  'Garden raw Postgres credential env',
+);
 
 const workloadImageOverrides = [
   ['agent', 'a'],

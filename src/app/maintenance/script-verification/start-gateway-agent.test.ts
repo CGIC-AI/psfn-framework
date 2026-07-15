@@ -53,6 +53,8 @@ describe('start-gateway-agent launcher supervision', () => {
         '',
         'acquire_launcher_lock',
         '',
+        'provision_companion_fleet',
+        '',
         'echo "[${MODE_LABEL}] verifying startup owner files..."',
       ].join('\n'),
     );
@@ -76,6 +78,74 @@ describe('start-gateway-agent launcher supervision', () => {
         '  exec "$0" "$@"',
       ].join('\n'),
     );
+  });
+
+  it('prevents a concurrent launcher from mutating fleet workspaces', () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'psfn-launcher-concurrent-'));
+    const scriptsDir = join(workDir, 'scripts');
+    const systemDir = join(scriptsDir, 'system');
+    const tsxDir = join(workDir, 'node_modules/.bin');
+    const fakeBinDir = join(workDir, 'fake-bin');
+    const runtimeDir = join(workDir, 'runtime');
+    const markerPath = join(workDir, 'provision-invocations.txt');
+    mkdirSync(systemDir, { recursive: true });
+    mkdirSync(tsxDir, { recursive: true });
+    mkdirSync(fakeBinDir, { recursive: true });
+    mkdirSync(runtimeDir, { recursive: true });
+    writeFileSync(
+      join(scriptsDir, 'start-gateway-agent.sh'),
+      readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8'),
+      { mode: 0o755 },
+    );
+    writeFileSync(join(systemDir, 'runtime-env.sh'), readFileSync(runtimeEnvPath, 'utf8'));
+    const fakeTsx = join(tsxDir, 'tsx');
+    writeFileSync(fakeTsx, [
+      '#!/usr/bin/env bash',
+      'case "$1" in',
+      '  scripts/resolve-companion-fleet.ts)',
+      `    printf '11111111-1111-4111-8111-111111111111\\t${workDir}/data\\t${workDir}/card.json\\tcompanion_a\\t${workDir}/workspace\\tproof-a\\tproof-b\\t${runtimeDir}/garden.sock\\t-\\n'`,
+      '    ;;',
+      '  scripts/provision-companion-fleet.ts)',
+      `    printf 'provisioned\\n' >> '${markerPath}'`,
+      '    ;;',
+      '  scripts/verify-startup-owner-files.ts) exit 0 ;;',
+      '  *) sleep 30 ;;',
+      'esac',
+    ].join('\n'), { mode: 0o755 });
+    const fakeNode = join(fakeBinDir, 'node');
+    writeFileSync(fakeNode, [
+      '#!/usr/bin/env bash',
+      'if [ "$1" = "-p" ]; then printf "22\\n"; else printf "v22.0.0\\n"; fi',
+    ].join('\n'), { mode: 0o755 });
+
+    try {
+      const output = execFileSync('bash', ['-lc', [
+        'set -euo pipefail',
+        'export PSFN_SKIP_DOTENV=true PSFN_MULTI_COMPANION=1',
+        `export PATH=${JSON.stringify(`${fakeBinDir}:/usr/bin:/bin`)}`,
+        `export GATEWAY_SOCKET=${JSON.stringify(join(runtimeDir, 'gateway.sock'))}`,
+        './scripts/start-gateway-agent.sh >first.out 2>&1 &',
+        'first_pid=$!',
+        `for _ in $(seq 1 100); do [ -f ${JSON.stringify(markerPath)} ] && break; sleep 0.05; done`,
+        `test -f ${JSON.stringify(markerPath)}`,
+        'set +e',
+        './scripts/start-gateway-agent.sh >second.out 2>&1',
+        'second_status=$?',
+        'set -e',
+        'kill -TERM "$first_pid"',
+        'wait "$first_pid"',
+        `printf 'second_status=%s provisions=%s\\n' "$second_status" "$(wc -l < ${JSON.stringify(markerPath)})"`,
+        'grep "launcher lock held" second.out',
+      ].join('\n')], {
+        cwd: workDir,
+        encoding: 'utf8',
+        timeout: 10000,
+      });
+      expect(output).toContain('second_status=1 provisions=1');
+      expect(output).toContain('launcher lock held');
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
   });
 
   it('normalizes expected SIGTERM shutdown to exit 0 after cleanup', () => {
@@ -211,6 +281,104 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(agentAllowlist).not.toMatch(/\n\s*OPENROUTER_API_KEY\s*\\/);
     expect(agentAllowlist).not.toMatch(/\n\s*LITELLM_API_KEY\s*\\/);
     expect(agentAllowlist).not.toMatch(/\n\s*FAL_API_KEY\s*\\/);
+    expect(agentAllowlist).not.toMatch(/\n\s*POSTGRES_DATABASE_URL\s*\\/);
+    expect(agentAllowlist).toMatch(/\n\s*POSTGRES_DATABASE_URL_FD\s*\\/);
+  });
+
+  it('hands the local split database credential to the agent outside its environment', () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'psfn-launcher-postgres-credential-'));
+    const scriptsDir = join(workDir, 'scripts');
+    const systemDir = join(scriptsDir, 'system');
+    const tsxDir = join(workDir, 'node_modules/.bin');
+    const fakeBinDir = join(workDir, 'fake-bin');
+    mkdirSync(systemDir, { recursive: true });
+    mkdirSync(tsxDir, { recursive: true });
+    mkdirSync(fakeBinDir, { recursive: true });
+
+    const launcherPath = join(scriptsDir, 'start-gateway-agent.sh');
+    writeFileSync(launcherPath, readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8'), 'utf8');
+    chmodSync(launcherPath, 0o755);
+    writeFileSync(join(systemDir, 'runtime-env.sh'), readFileSync(runtimeEnvPath, 'utf8'), 'utf8');
+
+    const fakeTsxPath = join(tsxDir, 'tsx');
+    writeFileSync(
+      fakeTsxPath,
+      [
+        '#!/usr/bin/env bash',
+        'case "$1" in',
+        '  scripts/verify-startup-owner-files.ts) exit 0 ;;',
+        '  scripts/resolve-single-companion-auth.ts) printf "v1.agent-proof\\tv1.worker-proof\\n"; exit 0 ;;',
+        '  src/app/gateway/main.ts)',
+        '    python3 - "$GATEWAY_SOCKET" <<\'PY\'',
+        'import os, socket, sys, time',
+        'path = sys.argv[1]',
+        'os.makedirs(os.path.dirname(path), exist_ok=True)',
+        'server = socket.socket(socket.AF_UNIX)',
+        'server.bind(path)',
+        'server.listen(1)',
+        'time.sleep(30)',
+        'PY',
+        '    ;;',
+        '  src/app/agent/main.ts)',
+        '    env | sort > agent.env',
+        '    cat "/proc/self/fd/${POSTGRES_DATABASE_URL_FD:-999}" > agent.database-url 2>/dev/null || true',
+        '    kill -TERM "$PPID"',
+        '    sleep 2',
+        '    ;;',
+        '  *) sleep 30 ;;',
+        'esac',
+      ].join('\n'),
+      'utf8',
+    );
+    chmodSync(fakeTsxPath, 0o755);
+
+    const fakeNodePath = join(fakeBinDir, 'node');
+    writeFileSync(
+      fakeNodePath,
+      [
+        '#!/usr/bin/env bash',
+        'if [ "$1" = "-p" ]; then',
+        '  printf "22\\n"',
+        'else',
+        '  printf "v22.22.3\\n"',
+        'fi',
+      ].join('\n'),
+      'utf8',
+    );
+    chmodSync(fakeNodePath, 0o755);
+
+    try {
+      const output = execFileSync(
+        'bash',
+        [
+          '-lc',
+          [
+            'set -euo pipefail',
+            'export PSFN_SKIP_DOTENV=true',
+            `export PATH=${JSON.stringify(`${fakeBinDir}:/usr/bin:/bin`)}`,
+            `export XDG_RUNTIME_DIR=${JSON.stringify(join(workDir, 'runtime'))}`,
+            `export GATEWAY_SOCKET=${JSON.stringify(join(workDir, 'runtime/gateway.sock'))}`,
+            'export POSTGRES_DATABASE_URL=postgresql://psfn:split-secret@postgres/psfn',
+            'set +e',
+            './scripts/start-gateway-agent.sh >launcher.out 2>&1',
+            'status=$?',
+            'set -e',
+            'printf "status=%s\\n" "$status"',
+          ].join('\n'),
+        ],
+        { cwd: workDir, encoding: 'utf8', timeout: 15000 },
+      );
+
+      expect(output).toContain('status=0');
+      const agentEnv = readFileSync(join(workDir, 'agent.env'), 'utf8');
+      expect(agentEnv).not.toContain('POSTGRES_DATABASE_URL=');
+      expect(agentEnv).not.toContain('split-secret');
+      expect(agentEnv).toMatch(/^POSTGRES_DATABASE_URL_FD=[0-9]+$/m);
+      expect(readFileSync(join(workDir, 'agent.database-url'), 'utf8').trim())
+        .toBe('postgresql://psfn:split-secret@postgres/psfn');
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
   });
 
   it('does not inject npm run split as an unsafe lifecycle restart command', () => {
@@ -346,6 +514,17 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     expect(launcher).toContain('failed to resolve companion fleet from companions.json; refusing to start');
   });
 
+  it('keeps fleet resolution and dry-run mutation-free, then provisions only under the launcher lock', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    const dryRunExit = launcher.indexOf('if [ "${DRY_RUN_MODE}" -eq 1 ]; then');
+    const lock = launcher.lastIndexOf('\nacquire_launcher_lock\n');
+    const provision = launcher.lastIndexOf('\nprovision_companion_fleet\n');
+    expect(dryRunExit).toBeGreaterThan(0);
+    expect(dryRunExit).toBeLessThan(lock);
+    expect(lock).toBeLessThan(provision);
+    expect(launcher).toContain('./node_modules/.bin/tsx scripts/provision-companion-fleet.ts');
+  });
+
   it('passes the companion-scoped and topology env through the scrubbed allowlist', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     expect(launcher).toContain('COMPANION_PG_SCHEMA \\');
@@ -436,16 +615,19 @@ describe('start-gateway-agent multi-companion supervisor', () => {
       expect(output).toBe(
         [
           `11111111-1111-4111-8111-111111111111\t${workDir}/alpha\t${workDir}/alpha/card.json\tcompanion_alpha`
+          + `\t${workDir}/workspaces/personal/11111111-1111-4111-8111-111111111111`
           + `\t${deriveCompanionAuthToken('11111111-1111-4111-8111-111111111111', 'agent', keyring)}`
           + `\t${deriveCompanionAuthToken('11111111-1111-4111-8111-111111111111', 'internal_session_integrity', keyring)}`
           + `\t${socketDir}/garden-admin-11111111-1111-4111-8111-111111111111.sock\t10061`,
           `22222222-2222-4222-8222-222222222222\t${workDir}/beta\t${workDir}/beta/card.json\tcompanion_beta`
+          + `\t${workDir}/workspaces/personal/22222222-2222-4222-8222-222222222222`
           + `\t${deriveCompanionAuthToken('22222222-2222-4222-8222-222222222222', 'agent', keyring)}`
           + `\t${deriveCompanionAuthToken('22222222-2222-4222-8222-222222222222', 'internal_session_integrity', keyring)}`
           + `\t${socketDir}/garden-admin-22222222-2222-4222-8222-222222222222.sock\t-`,
           '',
         ].join('\n'),
       );
+      expect(existsSync(join(workDir, 'workspaces'))).toBe(false);
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
@@ -483,6 +665,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
           PSFN_MULTI_COMPANION: '1',
+          PSFN_RUNTIME_ROOT: workDir,
           SYSTEM_DATA_DIR: systemDataDir,
           COMPANION_DATA_DIR: companionDataDir,
           ADMIN_TRANSPORT_MODE: 'network',
@@ -605,6 +788,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
       expect(output).not.toContain('starting operator');
       expect(output).not.toContain('test-session-secret');
       expect(output).not.toMatch(/v1\.[a-f0-9]{64}/u);
+      expect(existsSync(join(workDir, 'workspaces'))).toBe(false);
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }

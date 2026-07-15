@@ -18,6 +18,8 @@ import type {
 import type { CompletionHandoffRecord } from './contracts/completion-handoff.js';
 import type { PlaceKind } from './contracts/places-registry.js';
 import type { SatelliteTelemetryAuthContext } from './contracts/satellite-registry.js';
+import type { IcpInitiationCandidateStatus } from './contracts/icp-autonomy.js';
+import type { IcpConversationCostBreakerEvent } from './telemetry/model-usage.js';
 import type {
   CompanionApprovalRequestedPayload,
   CompanionApprovalResolvedPayload,
@@ -90,7 +92,61 @@ export interface DeterministicGateEvent {
   channelId?: string;
 }
 
+export const GARDEN_QUEUE_NAMES = [
+  'confirmations',
+  'contact-approvals',
+  'graph-proposals',
+  'intake-quarantine',
+] as const;
+
+export type GardenQueueName = typeof GARDEN_QUEUE_NAMES[number];
+
+export function isGardenQueueName(value: unknown): value is GardenQueueName {
+  return typeof value === 'string'
+    && (GARDEN_QUEUE_NAMES as readonly string[]).includes(value);
+}
+
 export interface EventMap {
+  'icp.availability.changed': {
+    companionId: string;
+    action: 'published' | 'cleared';
+    state?: import('./contracts/icp-autonomy.js').IcpAvailabilityState;
+    source?: import('./contracts/icp-autonomy.js').IcpAvailabilitySource;
+    revision: number;
+    expiresAtMs?: number;
+    timestamp: number;
+  };
+  'icp.initiation.gate': {
+    candidateId: string;
+    senderCompanionId: string;
+    recipientCompanionId: string;
+    channelId: string;
+    outcome: 'open' | 'closed';
+    reasonCode?: import('./contracts/icp-autonomy.js').IcpAutonomyReasonCode;
+    reasonClass?: 'deferrable' | 'terminal';
+    timestamp: number;
+  };
+  /** Content-free companion-local candidate lifecycle projection. */
+  'icp.initiation.candidate.lifecycle': {
+    candidateId: string;
+    localCompanionId: string;
+    peerCompanionId: string;
+    source: import('./contracts/icp-autonomy.js').IcpInitiationSource;
+    previousStatus: IcpInitiationCandidateStatus | null;
+    status: IcpInitiationCandidateStatus;
+    reasonCode?: import('./contracts/icp-autonomy.js').IcpAutonomyReasonCode;
+    timestamp: number;
+  };
+  'icp.permit.lifecycle': {
+    candidateId: string;
+    conversationId: string;
+    senderCompanionId: string;
+    recipientCompanionId: string;
+    channelId: string;
+    action: 'issued' | 'consumed' | 'revoked' | 'expired' | 'replayed' | 'mismatch' | 'not_found';
+    reasonCode?: import('./contracts/icp-autonomy.js').IcpAutonomyReasonCode;
+    timestamp: number;
+  };
   'message.received': { message: SubstrateMessage } & EventCorrelationFields;
   'message.sent': { response: AgentResponse } & EventCorrelationFields;
   'agent.turn.start': { message: SubstrateMessage } & EventCorrelationFields;
@@ -123,7 +179,7 @@ export interface EventMap {
       | 'post_turn_appraisal'
       | 'background_continuation'
       | 'maintenance_reflection';
-    chargeLane: 'interactive' | 'background' | 'maintenance' | 'subagent' | 'shard';
+    chargeLane: 'interactive' | 'companion_social' | 'background' | 'maintenance' | 'subagent' | 'shard';
     phase:
       | 'queued'
       | 'deduplicated'
@@ -320,6 +376,13 @@ export interface EventMap {
     deduped: number;
     watermarkAdvancedToMs: number;
     runAtMs: number;
+    timestamp: number;
+  };
+  /** Authenticated Garden refresh hint. Never carries queue entries, ids, or content. */
+  'garden.queue.changed': {
+    queue: GardenQueueName;
+    /** Gateway-internal owner used only to route the hint to one companion. */
+    companionId?: string;
     timestamp: number;
   };
   'agent.tools.adaptive.decision': AdaptiveToolDecisionTelemetry & EventCorrelationFields;
@@ -758,6 +821,7 @@ export interface EventMap {
   'intention.nudge.declined': { thoughtId: string; reason?: string; dampenedWeight: number; timestamp: number };
   'intention.nudge.blocked': { thoughtId: string; reason: string; channelId?: string; nextEligibleAtMs?: number; timestamp: number };
   'model.budget.blocked': ModelBudgetBlockedEvent;
+  'icp.conversation.cost.decision': IcpConversationCostBreakerEvent;
   'channel.voice.start': { guildId: string; channelId: string; userId: string };
   'channel.voice.end': { guildId: string; channelId: string; userId: string; reason: string };
   'channel.voice.transcript.partial': {
@@ -961,16 +1025,31 @@ export interface EventMap {
   // fire at the confirmation-queue choke points (gateway process); artifact
   // events fire when generated media is persisted post-turn (agent process);
   // tool activity re-emits on the gateway bus after crossing the RPC boundary.
-  'companion.approval.requested': { payload: CompanionApprovalRequestedPayload; timestamp: number };
-  'companion.approval.resolved': { payload: CompanionApprovalResolvedPayload; timestamp: number };
+  'companion.approval.requested': {
+    companionId: string;
+    payload: CompanionApprovalRequestedPayload;
+    timestamp: number;
+  };
+  'companion.approval.resolved': {
+    companionId: string;
+    payload: CompanionApprovalResolvedPayload;
+    timestamp: number;
+  };
   'companion.artifact.created': {
     payload: CompanionArtifactCreatedPayload;
     /** In-process preview source; stripped before anything leaves for the hub. */
     preview?: CompanionArtifactPreviewSource;
     channelId?: string;
+    /** Authenticated gateway connection identity; never accepted from event JSON. */
+    companionId?: string;
     timestamp: number;
   };
-  'companion.tool.activity': { payload: CompanionToolActivityPayload; channelId?: string; timestamp: number };
+  'companion.tool.activity': {
+    payload: CompanionToolActivityPayload;
+    channelId?: string;
+    companionId?: string;
+    timestamp: number;
+  };
   'external.telemetry.ingested': { event: ExternalTelemetryEvent } & EventCorrelationFields;
   'agent.perception.bridge.telemetry': PerceptionBridgeTelemetryEvent & EventCorrelationFields;
   'module.install': {

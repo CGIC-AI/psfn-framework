@@ -45,6 +45,7 @@ import type { PendingFollowUpStorePort } from '../intention/pending-follow-up-st
 import type { CareReminderStorePort } from '../intention/care-reminders.js';
 import type { ScheduledPromptStorePort } from './scheduled-prompt-store-port.js';
 import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
+import type { IcpIntentionCandidateAdapter } from '../icp/intention-candidate-adapter.js';
 import type { InternalState } from '../self-model/state.js';
 import type { MemoryExtractor } from '../agent/contracts.js';
 import type { PromptRegistryStatePort } from '../identity/prompt-state-port.js';
@@ -115,6 +116,7 @@ export interface HeartbeatRuntimeOptions {
     canonicalContactKey?: string;
     sourceMessageId: string;
     formationVAD?: { valence: number; arousal: number; dominance: number };
+    originIcpRootInitiationId?: string;
   }) => Promise<void> | void;
   onIntentionFollowUpDecision?: (input: {
     decision: IntentionActionDecision;
@@ -122,6 +124,7 @@ export interface HeartbeatRuntimeOptions {
     channelType: SubstrateMessage['channelType'];
     canonicalContactKey?: string;
     sourceMessageId: string;
+    originIcpRootInitiationId?: string;
   }) => Promise<string | undefined> | string | undefined;
   getPendingFollowUpsForResurfacing?: (input: {
     channelId: string;
@@ -135,6 +138,10 @@ export interface HeartbeatRuntimeOptions {
   onIntentionFollowUpActivated?: (input: {
     pendingFollowUpId: string;
     activationReason?: string;
+  }) => Promise<boolean | void | undefined> | boolean | void | undefined;
+  onIntentionFollowUpDampened?: (input: {
+    pendingFollowUpId: string;
+    dampeningReason: string;
   }) => Promise<boolean | void | undefined> | boolean | void | undefined;
   onIntentionReminderDecision?: (input: {
     decision: IntentionActionDecision;
@@ -163,6 +170,7 @@ export interface HeartbeatRuntimeOptions {
     nextDueAt?: string;
   } | undefined;
   pendingFollowUpStore?: PendingFollowUpStorePort | null;
+  icpIntentionCandidateAdapter?: IcpIntentionCandidateAdapter | null;
   careReminderStore?: CareReminderStorePort | null;
   scheduledPromptStore?: ScheduledPromptStorePort | null;
   onBehavioralPatternOutcome?: (input: {

@@ -16,6 +16,7 @@
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import GardenPageHeader from '$lib/components/garden/GardenPageHeader.svelte';
   import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
+  import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import type {
     AdminChatBootstrapResponse,
@@ -150,7 +151,10 @@
   let debugWebSocket: WebSocket | null = null;
 
   // Health check
-  let healthInterval: ReturnType<typeof setInterval> | undefined;
+  const healthPoller = createVisibilityAwarePoller({
+    refresh: checkConnection,
+    intervalMs: 30_000,
+  });
 
   // Abort controller for streaming
   let abortController: AbortController | null = null;
@@ -326,7 +330,7 @@
 
   async function loadSessionHistory(sessionId: string) {
     try {
-      const data = await getSessionMessages(sessionId);
+      const data = await getSessionMessages(sessionId, { messagesOnly: true });
       if (data.messages && data.messages.length > 0) {
         const loaded: ChatMessage[] = [];
         for (const entry of data.messages) {
@@ -496,10 +500,9 @@ ${context}`;
         roomUnavailableReason = e instanceof Error ? e.message : 'Model roster unavailable';
       }
 
-      await checkConnection();
+      healthPoller.start();
       // Load existing session history
       await loadSessionHistory(bootstrap.defaultSessionId);
-      healthInterval = setInterval(checkConnection, 30_000);
       connectDebugStream();
     } catch (e) {
       error = e instanceof Error ? e.message : 'Failed to load chat bootstrap';
@@ -510,7 +513,7 @@ ${context}`;
   });
 
   onDestroy(() => {
-    if (healthInterval) clearInterval(healthInterval);
+    healthPoller.stop();
     disconnectDebugStream();
     if (abortController) abortController.abort();
   });

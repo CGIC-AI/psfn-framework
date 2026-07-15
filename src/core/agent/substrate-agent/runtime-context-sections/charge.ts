@@ -29,6 +29,7 @@ const CHARGE_SURFACE_PROMPT_LABELS: Record<ChargePolicySurface, string> = {
   shardLaunch: 'shard launch',
   externalModelConsult: 'external model consult',
   moaRoundBase: 'multi-model deliberation round',
+  companionSocialContinuation: 'autonomous companion social continuation after soft allowance',
 };
 
 const ANALYSIS_WORKBENCH_EXTENSION_SURFACE: ChargePolicySurface = 'analysisWorkbenchExtensionBand';
@@ -60,6 +61,7 @@ function formatChargeAmount(value: number): string {
 export function buildChargePromptVariables(input: {
   chargePolicy: ChargePolicyConfig | null;
   chargeSnapshot: RunChargeSnapshot | undefined;
+  laneOverride?: ChargePolicyRuntimeLane;
   analysisWorkbenchAvailable?: boolean;
 }): Record<string, string> {
   const chargePolicy = input.chargePolicy;
@@ -74,11 +76,16 @@ export function buildChargePromptVariables(input: {
   }
 
   const snapshot = input.chargeSnapshot;
-  const lane = snapshot?.lane && isChargePolicyRuntimeLane(snapshot.lane)
-    ? snapshot.lane
-    : 'interactive';
+  const lane = input.laneOverride && isChargePolicyRuntimeLane(input.laneOverride)
+    ? input.laneOverride
+    : snapshot?.lane && isChargePolicyRuntimeLane(snapshot.lane)
+      ? snapshot.lane
+      : 'interactive';
   const quota = chargePolicy.runChargeQuotaByLane[lane];
-  const spent = snapshot?.quotaSpentByLane[lane] ?? 0;
+  const spent = Math.max(
+    snapshot?.quotaSpentByLane[lane] ?? 0,
+    snapshot?.rollingWindow.spentByLane[lane] ?? 0,
+  );
   const remaining = Math.max(0, quota - spent);
   const costedSurfaces = CHARGE_POLICY_SURFACE_VALUES
     .map(surface => ({

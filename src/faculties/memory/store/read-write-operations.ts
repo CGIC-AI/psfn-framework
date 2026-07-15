@@ -55,10 +55,10 @@ export function insertMemory(
 
   const insertMem = db.prepare(`
     INSERT INTO l2_memories (id, text, type, importance, confidence, emotional_valence, formation_vad,
-      salience, source_ref, source_type, provenance_json, extracted_at, last_accessed, access_count, superseded_by, tags,
+      salience, salience_decay_anchor_at, source_ref, source_type, provenance_json, extracted_at, last_accessed, access_count, superseded_by, tags,
       scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs, retention_class, sensitivity,
       consent_flags, contact_id, deleted_at, deleted_by, delete_reason)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
 
   const insertVec = db.prepare(`
@@ -76,6 +76,7 @@ export function insertMemory(
       memory.emotionalValence,
       memory.formationVAD ? JSON.stringify(memory.formationVAD) : null,
       memory.salience,
+      memory.salienceDecayAnchorAt ?? memory.lastAccessed,
       memory.sourceRef,
       normalizeMemorySourceType(memory.sourceType, inferMemorySourceTypeFromSourceRef(memory.sourceRef)),
       JSON.stringify(normalizeMemoryProvenance(memory.provenance) ?? {}),
@@ -157,6 +158,10 @@ export function updateMemory(
   if (updates.lastAccessed !== undefined) {
     setClauses.push('last_accessed = ?');
     values.push(updates.lastAccessed);
+  }
+  if (updates.salience !== undefined || updates.lastAccessed !== undefined) {
+    setClauses.push('salience_decay_anchor_at = ?');
+    values.push(updates.lastAccessed ?? Date.now());
   }
   if (updates.accessCount !== undefined) {
     setClauses.push('access_count = ?');
@@ -780,14 +785,14 @@ export function bulkUpdateSalience(
 
   const stmt = db.prepare(`
     UPDATE l2_memories
-    SET salience = ?
+    SET salience = ?, salience_decay_anchor_at = ?
     WHERE id = ? AND deleted_at IS NULL AND superseded_by IS NULL
   `);
 
   let count = 0;
   const transaction = db.transaction(() => {
     for (const update of normalizedUpdates) {
-      const result = stmt.run(update.salience, update.id);
+      const result = stmt.run(update.salience, update.salienceDecayAnchorAt, update.id);
       if (result.changes > 0) count++;
     }
   });

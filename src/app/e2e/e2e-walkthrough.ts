@@ -18,12 +18,12 @@ import {
   composeIdentity,
   composeMemoryStoreAsync,
   composeSessionRuntimeAsync,
-  createEmbeddingProviderFromEnv,
   composeSubstrateAgent,
   wireMemoryRuntime,
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
 import { createScriptedE2ELLMProvider } from './test-llm-provider.js';
+import { createProviderRuntimeServices } from '../../system/config/provider-runtime-factory.js';
 
 const CHANNEL = 'walkthrough:orientation';
 let activeCompanionName = 'Companion';
@@ -73,7 +73,7 @@ async function main(): Promise<void> {
     const { sessionStore, sessionManager } = sessionComposition;
 
     // Embeddings
-    const embeddingProvider = createEmbeddingProviderFromEnv();
+    const embeddingProvider = createProviderRuntimeServices({ config }).embeddingProvider;
 
     const memoryStore = await composeMemoryStoreAsync(config, embeddingProvider.dims);
 

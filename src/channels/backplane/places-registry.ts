@@ -66,7 +66,7 @@ function parsePlaceKind(value: unknown, fieldName: string): PlaceKind {
 }
 
 /**
- * Optional room-privacy field (psfn-framework-s10rm). Absent means `public`;
+ * Optional room-privacy field (bead s10rm). Absent means `public`;
  * an unknown *value* fails closed at parse time so a typo can never silently
  * demote a private room to public delivery.
  *

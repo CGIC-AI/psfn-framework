@@ -23,6 +23,7 @@ import type {
   WikiSemanticSearchFn,
   WikiSemanticSearchResult,
 } from './types.js';
+import type { RetrievalQueryEmbeddingProvenance } from '../../shared/retrieval-query-embedding.js';
 
 const log = createComponentLogger('WikiRuntime');
 
@@ -42,6 +43,7 @@ export interface WikiRuntimeDeps {
   databaseUrl?: string;
   /** Embedding provider (the gateway) used for chunk + query embeddings. */
   embedding?: EmbeddingProviderPort;
+  embeddingProvenance?: RetrievalQueryEmbeddingProvenance;
   eventBus?: Pick<EventBus, 'emit'>;
   /** Live config accessor for wiki retrieval settings (caps, thresholds, enable). */
   getConfig?: () => WikiRetrievalConfigLike;
@@ -175,6 +177,7 @@ export async function wireWikiRuntime(
         projection: activeProjection,
         ...(sharedProjection ? { sharedProjection } : {}),
         embedding,
+        ...(deps.embeddingProvenance ? { embeddingProvenance: deps.embeddingProvenance } : {}),
         ...(deps.eventBus ? { eventBus: deps.eventBus } : {}),
         getSettings: () => resolveWikiRetrievalSettings(getConfig()),
         ...(deps.getMultiCompanion ? { getMultiCompanion: deps.getMultiCompanion } : {}),

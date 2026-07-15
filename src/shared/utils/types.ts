@@ -6,6 +6,29 @@ export function isObjectRecord(value: unknown): value is Record<string, unknown>
   return typeof value === 'object' && value !== null;
 }
 
+/** Lowercase RFC-4122 UUID (versions 1-5). */
+export const RFC_4122_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+export function isRfc4122Uuid(value: unknown): value is string {
+  return typeof value === 'string' && RFC_4122_UUID_PATTERN.test(value);
+}
+
+/** Fail closed when an external object contains fields outside its contract. */
+export function assertNoUnknownKeys(
+  value: Record<string, unknown>,
+  allowedKeys: readonly string[],
+  fieldPath: string,
+  options: { errorPrefix?: string } = {},
+): void {
+  const allowed = new Set(allowedKeys);
+  const unknown = Object.keys(value).filter(key => !allowed.has(key)).sort();
+  if (unknown.length > 0) {
+    const prefix = options.errorPrefix ? `${options.errorPrefix}: ` : '';
+    throw new Error(`${prefix}${fieldPath} contains unknown keys: ${unknown.join(', ')}`);
+  }
+}
+
 export interface NormalizeStringArrayOptions {
   errorPrefix?: string;
 }

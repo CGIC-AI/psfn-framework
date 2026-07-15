@@ -1,6 +1,6 @@
 #!/usr/bin/env tsx
 
-// CLI for the wiki bulk directory import (psfn-framework-vinz.27). Imports a
+// CLI for the wiki bulk directory import (bead vinz.27). Imports a
 // directory of Markdown files into either a companion's personal wiki or a
 // site's shared-world scope.
 //

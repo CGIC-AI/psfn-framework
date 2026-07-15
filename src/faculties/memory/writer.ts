@@ -33,6 +33,7 @@ import {
   normalizeMemoryTags,
   resolveConsentRedactionBehavior,
 } from './types.js';
+import { calculateEffectiveMemorySalience } from './decay.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
 import {
@@ -483,7 +484,7 @@ export class MemoryWriter {
         salience: Math.min(
           1,
           Math.max(
-            existing.salience + MEMORY_CONFIG.salienceBumpOnAccess,
+            calculateEffectiveMemorySalience(existing) + MEMORY_CONFIG.salienceBumpOnAccess,
             targetSalience,
           ),
         ),

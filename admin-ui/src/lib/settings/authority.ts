@@ -96,17 +96,17 @@ export function resolveSettingAuthority(
 ): SettingAuthorityInfo {
   const fallback = defaultAuthority(data, schema, key);
 
-  if (key === 'maintenanceIntervalMs') {
+  if (key === 'salienceDecayIntervalMs') {
     const scheduler = (data?.editors?.scheduler as SchedulerEditorConfig | undefined) ?? {};
     const effectiveMs = asInteger(scheduler.salienceDecayIntervalMs)
-      ?? asInteger(asRecord(data?.config)?.maintenanceIntervalMs);
+      ?? asInteger(asRecord(data?.config)?.salienceDecayIntervalMs);
     return {
       sourceLabel: fallback.sourceLabel,
       ...(effectiveMs !== undefined ? { effectiveValue: `${effectiveMs.toLocaleString()} ms` } : {}),
       detail:
-        'Authoritative source: scheduler.json > salienceDecayIntervalMs. Saving here writes scheduler.json, and the runtime mirror updates from that file.',
+        'Authoritative source: scheduler.json > salienceDecayIntervalMs. Saving here writes scheduler.json, and the runtime uses that dedicated cadence.',
       precedence:
-        'scheduler.json wins. The runtime maintenanceIntervalMs value shown in admin is a mirror, not an independently owned knob.',
+        'scheduler.json wins. Compression-guideline review runs on the bundled heartbeat and does not share this cadence.',
     };
   }
 

@@ -11,12 +11,48 @@ import {
   normalizeToolObservation,
 } from '../../../core/session/tool-observation.js';
 import { SessionStore } from '../../../persistence/sessions/store.js';
+import { createFilesystemSessionArchivePort } from '../../../persistence/journals/journal/port.js';
 import { createSqliteTranscriptProjection } from '../../../persistence/sessions/transcript-projection.js';
 import { createTurnId } from '../../../core/turns/id.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../../faculties/memory/types.js';
-import { AdminSessionDataService } from './session-service.js';
+import type { TurnRecord } from '../../../shared/contracts/runtime.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
+import type { Contact } from '../../../core/contacts/types.js';
+import { AdminSessionDataService, AdminSessionTurnNotFoundError } from './session-service.js';
+
+function makeTurnRecord(channelId: string, turnId: string): TurnRecord {
+  return {
+    schemaVersion: 1,
+    turnId,
+    requestId: `req-${turnId}`,
+    channelId,
+    channelType: 'api',
+    startedAt: 1_700_000_000_000,
+    completedAt: 1_700_000_000_050,
+    status: 'completed',
+    userMessage: {
+      role: 'user',
+      content: 'hi',
+      timestamp: 1_700_000_000_010,
+      authorId: 'user-1',
+      authorName: 'User',
+    },
+    assistantMessage: {
+      role: 'assistant',
+      content: 'hello',
+      timestamp: 1_700_000_000_025,
+    },
+    toolCalls: [],
+    extractedMemoryIds: [],
+    concernDeltaRefs: [],
+    contactDeltaRefs: [],
+    versionPointers: {
+      model: 'test-model',
+    },
+  };
+}
 
 function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
   return {
@@ -62,6 +98,125 @@ describe('AdminSessionDataService', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
+  it('lists bounded session rows without loading contacts or changing payload size with contact count', async () => {
+    store.append({
+      channelId: 'api:bounded-list',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_700_000_000_001,
+      authorId: 'user-1',
+    });
+
+    const makeContact = (index: number): Contact => ({
+      id: `contact-${index}`,
+      displayName: `Contact ${index}`,
+      trustLevel: 'regular',
+      relationshipType: 'acquaintance',
+      firstSeen: '2026-01-01T00:00:00.000Z',
+      lastSeen: '2026-01-01T00:00:00.000Z',
+      notes: `private-${index}`,
+    });
+    const emptyListAll = vi.fn(async () => [] as Contact[]);
+    const largeListAll = vi.fn(async () => Array.from({ length: 1_000 }, (_, index) => makeContact(index)));
+    const createService = (listAll: typeof emptyListAll | typeof largeListAll) => new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+      contactStore: { listAll } as unknown as ContactStorePort,
+    });
+
+    const emptyContactsPayload = await createService(emptyListAll).listSessions();
+    const largeContactsPayload = await createService(largeListAll).listSessions();
+
+    expect(emptyListAll).not.toHaveBeenCalled();
+    expect(largeListAll).not.toHaveBeenCalled();
+    expect(Buffer.byteLength(JSON.stringify(largeContactsPayload)))
+      .toBe(Buffer.byteLength(JSON.stringify(emptyContactsPayload)));
+    expect(largeContactsPayload.channels).toEqual([{
+      sessionId: 'api:bounded-list',
+      channelId: 'api:bounded-list',
+      messageCount: 1,
+      lastActivityAt: 1_700_000_000_001,
+    }]);
+  });
+
+  it('lists session routes without recursively issuing a session-list request', async () => {
+    store.append({
+      channelId: 'api:route-list',
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_700_000_000_002,
+    });
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+    const listSessions = vi.spyOn(service, 'listSessions');
+
+    const result = await service.listSessionRoutes();
+
+    expect(listSessions).not.toHaveBeenCalled();
+    expect(result.channels).toEqual([{
+      sessionId: 'api:route-list',
+      channelId: 'api:route-list',
+      messageCount: 1,
+      lastActivityAt: 1_700_000_000_002,
+    }]);
+  });
+
+  it('resolves linked contact display detail only for the selected session without exposing private fields', async () => {
+    const sessionId = 'api:selected-detail';
+    store.append({
+      channelId: sessionId,
+      role: 'user',
+      content: 'hello',
+      timestamp: 1_700_000_000_003,
+      authorId: 'user-42',
+    });
+    const linkedContact: Contact = {
+      id: 'contact-42',
+      displayName: 'Selected Person',
+      trustLevel: 'trusted',
+      relationshipType: 'friend',
+      firstSeen: '2026-01-01T00:00:00.000Z',
+      lastSeen: '2026-01-02T00:00:00.000Z',
+      notes: 'private operator notes must not cross this endpoint',
+      channels: [{
+        channel: 'api',
+        userId: 'user-42',
+        privacyLevel: 'private',
+        linkedAt: '2026-01-01T00:00:00.000Z',
+      }],
+    };
+    const listAll = vi.fn(async () => [linkedContact]);
+    const getByChannelIdentity = vi.fn(async () => linkedContact);
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+      contactStore: { listAll, getByChannelIdentity } as unknown as ContactStorePort,
+    });
+
+    const detail = await service.getSessionDetail(sessionId);
+
+    expect(listAll).toHaveBeenCalledOnce();
+    expect(getByChannelIdentity).toHaveBeenCalledWith('api', 'user-42');
+    expect(detail).toEqual({
+      channel: {
+        sessionId,
+        channelId: sessionId,
+        messageCount: 1,
+        lastActivityAt: 1_700_000_000_003,
+        linkedContactId: 'contact-42',
+        linkedContactName: 'Selected Person',
+      },
+    });
+    expect(JSON.stringify(detail)).not.toContain('private operator notes');
+    expect(JSON.stringify(detail)).not.toContain('trustLevel');
+    expect(JSON.stringify(detail)).not.toContain('privacyLevel');
+  });
+
   it('returns newest message page by default and older pages by beforeId cursor', () => {
     const channelId = 'api:paginated-session';
     for (let index = 1; index <= 250; index += 1) {
@@ -78,6 +233,8 @@ describe('AdminSessionDataService', () => {
       sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
       eventBus: new EventBus(),
     });
+    const beforeSpy = vi.spyOn(store, 'getEntriesBefore');
+    const rangeSpy = vi.spyOn(store, 'getEntriesInRange');
 
     const firstPage = service.getSessionMessages(channelId);
     expect(firstPage.messages).toHaveLength(100);
@@ -107,6 +264,12 @@ describe('AdminSessionDataService', () => {
       totalMessages: 250,
       returnedMessages: 100,
     });
+    expect(beforeSpy).toHaveBeenLastCalledWith(
+      channelId,
+      firstPage.pagination.nextBeforeId,
+      101,
+    );
+    expect(rangeSpy).not.toHaveBeenCalled();
 
     const terminalPage = service.getSessionMessages(channelId, {
       limit: 100,
@@ -123,6 +286,59 @@ describe('AdminSessionDataService', () => {
       totalMessages: 250,
       returnedMessages: 50,
     });
+    expect(beforeSpy).toHaveBeenCalledTimes(2);
+    expect(rangeSpy).not.toHaveBeenCalled();
+  });
+
+  it('serves messages-only older pages through bounded archive reads without full replay', () => {
+    const channelId = 'api:bounded-older-page';
+    for (let index = 1; index <= 250; index += 1) {
+      store.append({
+        channelId,
+        role: index % 2 === 0 ? 'assistant' : 'user',
+        content: `Message ${index}`,
+        timestamp: 1_700_000_000_000 + index,
+      });
+    }
+
+    const archivePort = createFilesystemSessionArchivePort();
+    const boundedReadSpy = vi.spyOn(archivePort, 'readJournalEntriesBefore');
+    const fullReadSpy = vi.spyOn(archivePort, 'readJournalFile');
+    const reloadedStore = new SessionStore(dir, { sessionArchivePort: archivePort });
+    boundedReadSpy.mockClear();
+    fullReadSpy.mockClear();
+    const compactionSpy = vi.spyOn(reloadedStore, 'getCompactionSummaries');
+    const rangeSpy = vi.spyOn(reloadedStore, 'getEntriesInRange');
+    const service = new AdminSessionDataService({
+      sessionStore: reloadedStore,
+      sessionManager: new SessionManager(reloadedStore, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    const page = service.getSessionMessages(channelId, {
+      limit: 100,
+      beforeId: 151,
+      messagesOnly: true,
+    });
+
+    expect(page.messages).toHaveLength(100);
+    expect(page.messages[0]?.content).toBe('Message 51');
+    expect(page.messages[99]?.content).toBe('Message 150');
+    expect(page.pagination).toMatchObject({
+      beforeId: 151,
+      nextBeforeId: page.messages[0]?.id,
+      hasMoreOlder: true,
+      totalMessages: 250,
+      returnedMessages: 100,
+    });
+    expect(boundedReadSpy).toHaveBeenCalledWith(expect.anything(), {
+      beforeId: 151,
+      messageLimit: 101,
+      includeBoundaryEntry: true,
+    });
+    expect(fullReadSpy).not.toHaveBeenCalled();
+    expect(compactionSpy).not.toHaveBeenCalled();
+    expect(rangeSpy).not.toHaveBeenCalled();
   });
 
   it('searches session messages scoped to the requested session only', async () => {
@@ -203,6 +419,67 @@ describe('AdminSessionDataService', () => {
     expect(light.turns).toEqual([]);
     expect(light.compactionAuditViews).toEqual([]);
     expect(light.roleEnvelopePreviews).toEqual([]);
+  });
+
+  it('drops turns and previews but keeps compaction audits when includeTurns is false', () => {
+    const channelId = 'api:include-turns';
+    const firstMessageId = store.append({
+      channelId,
+      role: 'user',
+      content: 'first message',
+      timestamp: 1_700_000_000_001,
+    });
+    store.append({
+      channelId,
+      role: 'assistant',
+      content: 'second message',
+      timestamp: 1_700_000_000_002,
+    });
+    store.insertCompaction(channelId, 'summary of early rows', firstMessageId);
+    store.appendTurnRecord(makeTurnRecord(channelId, createTurnId()));
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    const full = service.getSessionMessages(channelId);
+    expect(full.turns.length).toBeGreaterThan(0);
+    expect(full.compactionAuditViews.length).toBeGreaterThan(0);
+
+    const lean = service.getSessionMessages(channelId, { includeTurns: false });
+    expect(lean.messages).toHaveLength(2);
+    expect(lean.turns).toEqual([]);
+    expect(lean.roleEnvelopePreviews).toEqual([]);
+    // Compaction summaries survive so the session browser keeps its banner.
+    expect(lean.compactionAuditViews.length).toBeGreaterThan(0);
+  });
+
+  it('serves a single turn via getSessionTurnDetail and fails closed for unknown turns', () => {
+    const channelId = 'api:turn-detail';
+    store.append({ channelId, role: 'user', content: 'hi', timestamp: 1_700_000_000_001 });
+    store.append({ channelId, role: 'assistant', content: 'hello', timestamp: 1_700_000_000_002 });
+    const turnId = createTurnId();
+    const otherTurnId = createTurnId();
+    store.appendTurnRecord(makeTurnRecord(channelId, otherTurnId));
+    store.appendTurnRecord(makeTurnRecord(channelId, turnId));
+
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+
+    const detail = service.getSessionTurnDetail(channelId, turnId);
+    expect(detail.sessionId).toBe(channelId);
+    expect(detail.channelId).toBe(channelId);
+    expect(detail.turn.record.turnId).toBe(turnId);
+
+    expect(() => service.getSessionTurnDetail(channelId, 'turn-does-not-exist'))
+      .toThrow(AdminSessionTurnNotFoundError);
+    expect(() => service.getSessionTurnDetail(channelId, '   '))
+      .toThrow(AdminSessionTurnNotFoundError);
   });
 
   it('previews and applies CogSec remediation without exposing sealed content in safe event logs', async () => {

@@ -3,16 +3,43 @@
 export type DashboardCostWindow = 'today' | 'week' | 'month';
 
 export interface DashboardCostWindowUsage {
-  turns: number;
-  llmCalls: number;
-  toolCalls: number;
+  calls: number;
+  successfulCalls: number;
+  failedCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+  providerCostUsd: number;
   estimatedCostUsd: number;
+  effectiveCostUsd: number;
 }
 
-export interface DashboardCostWindowTotals {
-  today: DashboardCostWindowUsage;
-  week: DashboardCostWindowUsage;
-  month: DashboardCostWindowUsage;
+export type DashboardModelUsageState = 'fresh' | 'stale' | 'unavailable';
+
+export interface DashboardModelUsageFreshness {
+  state: DashboardModelUsageState;
+  source: 'postgres_model_usage';
+  refreshedAtMs: number | null;
+  dataThroughMs: number | null;
+  latestEventAtMs: number | null;
+  refreshIntervalMs: number;
+  message?: string;
+}
+
+export interface DashboardModelUsageProjection {
+  selected: DashboardCostWindow;
+  usage: DashboardCostWindowUsage | null;
+  freshness: DashboardModelUsageFreshness;
+}
+
+export interface DashboardTransientSessionTelemetry {
+  source: 'live_event_bus';
+  turnsSinceOperatorStart: number;
+  lastTtftMs: number | null;
+  averageTtftMs: number | null;
+  activeSessionContextPressure: DashboardSessionContextPressure;
 }
 
 export interface DashboardSessionContextPressure {
@@ -34,22 +61,8 @@ export interface DashboardStats {
   sessionCount: number;
   schedulerTasks: number;
   activeShards: number;
-  sessionUsage: {
-    turns: number;
-    inputTokens: number;
-    outputTokens: number;
-    cacheReadTokens: number;
-    llmCalls: number;
-    toolCalls: number;
-    lastTtftMs: number | null;
-    averageTtftMs: number | null;
-    activeSessionContextPressure: DashboardSessionContextPressure;
-    estimatedCostUsd: number;
-    costWindows: {
-      selected: DashboardCostWindow;
-      byWindow: DashboardCostWindowTotals;
-    };
-  };
+  modelUsage: DashboardModelUsageProjection;
+  transientSessionTelemetry: DashboardTransientSessionTelemetry;
   toolStatus: DashboardToolStatus[];
   recentAnalysisWorkbenchTraces: AnalysisWorkbenchTraceView[];
 }
@@ -93,7 +106,8 @@ export type AdminAuditActionType =
   | 'settings_change'
   | 'confirmation'
   | 'charge_decision'
-  | 'gateway_policy';
+  | 'gateway_policy'
+  | 'autonomy_control';
 export type AdminAuditDecision = 'allowed' | 'denied' | 'needs_approval';
 export type AdminAuditTimeRange = '15m' | '1h' | '24h' | '7d' | '30d' | 'all';
 export type AdminAuditActor = 'operator' | 'companion';
@@ -121,6 +135,15 @@ export interface AdminAuditHistoryEntry extends AdminAuditTimelineEntry {
   raw?: Record<string, unknown>;
 }
 
+export interface AdminAuditHistoryListEntry extends AdminAuditTimelineEntry {
+  source: AdminAuditHistorySource;
+}
+
+export interface AdminAuditHistoryDetailData {
+  entry: AdminAuditHistoryListEntry;
+  raw: Record<string, unknown> | null;
+}
+
 export interface AdminAuditHistoryFilters extends AdminAuditTimelineFilters {
   source: AdminAuditHistorySource | 'all';
   query?: string;
@@ -137,7 +160,7 @@ export interface AdminAuditHistoryPagination {
 }
 
 export interface AdminAuditHistoryData {
-  entries: AdminAuditHistoryEntry[];
+  entries: AdminAuditHistoryListEntry[];
   filters: AdminAuditHistoryFilters;
   pagination: AdminAuditHistoryPagination;
   sources: {
@@ -192,7 +215,7 @@ export interface CompactionAuditView {
 
 export interface EnvInfo {
   salienceFloor: number;
-  maintenanceIntervalMs: number;
+  salienceDecayIntervalMs: number;
   discordToken: string;
   apiKey: string;
   adminToken: string;

@@ -75,5 +75,8 @@ export function resolveRuntimeSchedulerConfig(
         relevanceFloor: persisted.weightedThoughtOutreach.lifecycle.relevanceFloor,
       },
     },
+    ...(persisted.introspectionAudit
+      ? { introspectionAudit: { ...persisted.introspectionAudit } }
+      : {}),
   };
 }

@@ -8,14 +8,21 @@ import type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
 import type {
   ChargePolicyRuntimeLane,
   ChargePolicySurface,
+  FatigueContinuationEvidence,
   FatiguePolicyChannelSetting,
   FatiguePolicyIntent,
   FatiguePolicyRelationshipClass,
   FatiguePolicyState,
+  FatigueRegulationState,
 } from './charge-policy.js';
 import type { SatelliteRoutingMetadata } from './satellite-registry.js';
 import type { GatewayRoutingEnvelope } from '../routing/envelope.js';
 import type { IntakeEnvelopeSnapshot } from './intake-envelope.js';
+import type {
+  IcpConversationCorrelation,
+  IcpInitiationSource,
+} from './icp-autonomy.js';
+import type { PlacePrivacy } from './places-registry.js';
 import type {
   CompanionTouchRegion,
   CompanionTouchStimulusKind,
@@ -31,6 +38,17 @@ export type ChannelType = typeof CHANNEL_TYPES[number];
 export type { TurnID } from '../../core/turns/types.js';
 export type { ModelContextBudgetConfig } from '../context-budget-contracts.js';
 
+export type RuntimeFallbackStrategy =
+  | 'runtime_nonfabricating_notice'
+  | 'runtime_datetime_contradiction_refusal';
+
+export interface RuntimeFallbackProvenance {
+  schemaVersion: 1;
+  authoredBy: 'runtime';
+  model: 'runtime-fallback';
+  strategy: RuntimeFallbackStrategy;
+}
+
 export interface TurnRecordMessage {
   role: 'user' | 'assistant' | 'system';
   content: string;
@@ -39,6 +57,9 @@ export interface TurnRecordMessage {
   sourceMessageId?: string;
   authorId?: string;
   authorName?: string;
+  /** Gateway-authoritative parent message for direct reply lineage. */
+  replyToMessageId?: string;
+  runtimeFallbackProvenance?: RuntimeFallbackProvenance;
 }
 
 export interface TurnRecordToolCall {
@@ -68,11 +89,9 @@ export interface TurnRecordVersionPointers {
 }
 
 /**
- * Durable satellite/place origin recorded on a turn for long-lived history.
- * Sourced from the message's satellite routing metadata (`placeId` is the
- * static foreign key into `places.json` established by the satellite→place
- * binding). Fail-closed: the field is absent unless the turn actually carried a
- * bound `placeId`; nothing is fabricated for non-satellite turns.
+ * Durable room/satellite place origin recorded on a turn for long-lived
+ * history. Fail-closed: the field is absent unless authoritative routing
+ * carried a non-empty placeId.
  */
 export interface TurnRecordLocation {
   /** Static place binding carried onto the turn (`SatelliteConfig.placeId`). */
@@ -81,17 +100,48 @@ export interface TurnRecordLocation {
   satelliteId?: string;
 }
 
+/**
+ * Write-time privacy decision for later introspection auditing. The audit
+ * runner never infers eligibility from legacy transcript text: only an
+ * explicitly public, non-DM turn may expose verbatim content. Every other
+ * shape is retained as emotional-signal-only and cannot be replayed.
+ */
+export interface TurnRecordAuditPrivacy {
+  schemaVersion: 1;
+  contentMode: 'verbatim_public' | 'emotional_signal_only';
+  channelPrivacy?: ChannelPrivacy;
+  contentSensitivity: 'non_intimate' | 'intimate' | 'ambiguous';
+  /** Present only when the companion classified this exact current turn. */
+  contentSensitivityActor?: {
+    kind: 'companion';
+    turnId: TurnID;
+    requestId: string;
+  };
+  reason:
+    | 'explicit_public_non_dm'
+    | 'direct_message'
+    | 'non_public_channel'
+    | 'intimate_content'
+    | 'missing_or_ambiguous_content_sensitivity'
+    | 'missing_or_ambiguous_privacy';
+}
+
 export interface TurnRecord {
   schemaVersion: 1;
   turnId: TurnID;
   requestId: string;
+  /** Logical session that owned the turn; distinct from the exact source channel. */
+  sessionId?: string;
   channelId: string;
   channelType: ChannelType;
   startedAt: number;
   completedAt: number;
   status: 'completed' | 'failed';
-  /** Durable satellite/place origin; absent on non-satellite (or unbound) turns. */
+  /** Durable room/satellite place origin; absent on unbound turns. */
   location?: TurnRecordLocation;
+  auditPrivacy?: TurnRecordAuditPrivacy;
+  /** Gateway/session disclosure classification captured for this turn. */
+  channelPrivacy?: ChannelPrivacy;
   userMessage: TurnRecordMessage;
   assistantMessage?: TurnRecordMessage;
   toolCalls: TurnRecordToolCall[];
@@ -104,6 +154,8 @@ export interface TurnRecord {
   observability?: import('../../core/turns/observability.js').TurnObservabilityRecord;
   versionPointers: TurnRecordVersionPointers;
   provenanceRefs: string[];
+  /** Same-cluster autonomous-conversation lineage, when this is an ICP turn. */
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 export interface WyomingShardDelegationHint {
@@ -148,6 +200,15 @@ export interface LLMModelHint extends ModelControlKnobs {
   pin?: boolean;
 }
 
+export interface LLMCallAccountingContext {
+  /** Stable identity shared by every physical attempt of one caller operation. */
+  logicalCallId: string;
+  /** One-based physical attempt number within the logical call. */
+  attempt: number;
+  /** The upstream caller owns retry/fallback sequencing for this operation. */
+  retryOwner?: 'caller';
+}
+
 export interface MessageModelOverride extends ModelControlKnobs {
   provider: string;
   model: string;
@@ -190,14 +251,40 @@ export type ObservabilityCallType =
   | 'background'
   | 'scheduled';
 
+export type TelemetryVisibility = 'operator_visible' | 'companion_private';
+export const COMPANION_PRIVATE_BACKGROUND_PURPOSE = 'companion_private.background';
+
 export interface LLMRequestMetadata {
+  companionId?: string;
+  sessionId?: string;
   turnId?: string;
   requestId?: string;
   channelId?: string;
+  channelType?: ChannelType;
   toolName?: string;
   toolCallId?: string;
   originType?: ObservabilityCallType;
   originStage?: string;
+  /**
+   * Controls whether per-call telemetry may appear on operator surfaces.
+   * Companion-private work still contributes to aggregate cost accounting.
+   */
+  telemetryVisibility?: TelemetryVisibility;
+  service?: string;
+  process?: string;
+  chargeLane?: ChargePolicyRuntimeLane;
+  chargeSurface?: ChargePolicySurface;
+  /** Exact immutable charge event that bought this provider work, when one is active. */
+  chargeEventId?: string;
+  chargeRunId?: string;
+  chargeRootRunId?: string;
+  chargeParentRunId?: string;
+  shardId?: string;
+  subagentId?: string;
+  conversationId?: string;
+  rootInitiationId?: string;
+  workloadType?: string;
+  workloadId?: string;
 }
 
 /**
@@ -228,6 +315,8 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
   viewerChannelPrivacy?: ChannelPrivacy;
   viewerIsDirectMessage?: boolean;
   embodimentContext?: EmbodimentPresenceMetadata;
+  /** Preserved across the turn, its nested model/tool calls, and post-turn work. */
+  icpCorrelation?: IcpConversationCorrelation;
 }
 
 export interface GeneratedMessageProvenanceMetadata {
@@ -250,8 +339,36 @@ export type ReflectionScopeHint =
   | { kind: 'dm'; contactId: string; displayName?: string }
   | { kind: 'group'; roomId: string; roomName?: string };
 
+/** Trusted, process-local ICP continuation intent. Never inferred from peer prose. */
+export const ICP_CONTINUATION_TASK_KINDS = [
+  'work',
+  'research',
+  'problem_solving',
+] as const;
+export type IcpContinuationTaskKind = typeof ICP_CONTINUATION_TASK_KINDS[number];
+
+export function isIcpContinuationTaskKind(
+  value: unknown,
+): value is IcpContinuationTaskKind {
+  return typeof value === 'string'
+    && ICP_CONTINUATION_TASK_KINDS.includes(value as IcpContinuationTaskKind);
+}
+
+/**
+ * Private, scheduler-authored origin for a local autonomy candidate turn.
+ * This never crosses the gateway candidate projection and is never inferred
+ * from candidate motivation or model prose.
+ */
+export interface IcpAutonomyCandidateOrigin {
+  candidateId: string;
+  rootInitiationId: string;
+  source: IcpInitiationSource;
+  provenanceRef: string;
+  continuationTaskKind?: IcpContinuationTaskKind;
+}
+
 export interface MessageRoutingMetadata {
-  source?: 'wyoming' | 'discord' | 'api' | 'psfn-amica' | 'satellite' | 'companion' | 'unknown';
+  source?: 'wyoming' | 'discord' | 'telegram' | 'api' | 'terminal' | 'psfn-amica' | 'satellite' | 'companion' | 'unknown';
   /**
    * Transport-level response disposition. `observe` messages are recorded as
    * context but must not trigger model response generation or channel egress.
@@ -270,6 +387,11 @@ export interface MessageRoutingMetadata {
   gateway?: GatewayRoutingMetadata;
   wyoming?: WyomingRoutingMetadata;
   satellite?: SatelliteRoutingMetadata;
+  /** Gateway-authoritative location-room classification for companion turns. */
+  room?: {
+    placeId: string;
+    privacy: PlacePrivacy;
+  };
   broadcast?: BroadcastRoutingMetadata;
   channelPrivacy?: ChannelPrivacy;
   modelOverride?: MessageModelOverride;
@@ -300,6 +422,27 @@ export interface MessageRoutingMetadata {
    * leaves the existing DM/internal reflection binding byte-identical.
    */
   reflectionScope?: ReflectionScopeHint;
+  /**
+   * Fully-bound ICP lineage for an ordinary companion-channel turn. The
+   * gateway and target-turn entrypoint validate this before it reaches the
+   * prompt/runtime. It is metadata, never a parallel dispatch path.
+   */
+  icpCorrelation?: IcpConversationCorrelation;
+  /** Durable lineage carried by generated follow-up turns outside a live ICP channel turn. */
+  originIcpRootInitiationId?: string;
+  /**
+   * Internal target-turn trigger: participates in prompt assembly but is not
+   * persisted as partner/system transcript speech. Only valid with a strict
+   * `icpCorrelation` on a companion channel.
+   */
+  privateTurnTrigger?: true;
+  /**
+   * Scheduler-owned structured intent for a private ICP target turn. This is
+   * valid only with `privateTurnTrigger` and a bound ICP correlation.
+   */
+  icpContinuationTaskKind?: IcpContinuationTaskKind;
+  /** Exact private candidate lineage for a non-recursive local autonomy turn. */
+  icpAutonomyCandidate?: IcpAutonomyCandidateOrigin;
   workerExecution?: {
     lane: string;
     profileClass: string;
@@ -329,6 +472,8 @@ export interface SubstrateMessage {
   timestamp: Date;
   /** True for direct/private messages (e.g. Discord DMs). Adapters set this explicitly. */
   isDirectMessage?: boolean;
+  /** Gateway-authoritative parent message id when this message is a reply. */
+  replyToMessageId?: string;
   /** Optional transport/runtime routing hints (e.g. Wyoming session policy decisions). */
   routing?: MessageRoutingMetadata;
 }
@@ -398,6 +543,7 @@ export type FatigueBudgetReason =
   | 'machine_intelligence_response'
   | 'overcharge_recent_human_participation'
   | 'overcharge_work_intent_wrapup'
+  | 'overcharge_explicit_peer_invitation'
   | 'peer_not_machine_intelligence'
   | 'triggering_author_not_machine_intelligence';
 
@@ -491,6 +637,20 @@ export interface FatigueRecordedEventMetadata {
   hardState: FatigueBudgetHardState;
 }
 
+export interface FatigueSocialRegulationMetadata {
+  state: FatigueRegulationState;
+  chargeLane: Extract<ChargePolicyRuntimeLane, 'interactive' | 'companion_social'>;
+  relationshipPressure: number;
+  rootNormalSpent: number;
+  rootOverchargeSpent: number;
+  contributingEventCount: number;
+  marginalChargeUnits: number;
+  closeoutReserveRemainingBefore: number;
+  closeoutReserveRemainingAfterProjected: number;
+  continuationEvidence: FatigueContinuationEvidence[];
+  rootInitiationId?: string;
+}
+
 export interface FatigueEnforcementMetadata {
   schemaVersion: 1;
   decision: FatigueEnforcementDecision;
@@ -512,7 +672,30 @@ export interface FatigueEnforcementMetadata {
   peer: FatigueBudgetPeerSnapshot;
   triggeringAuthor: FatigueBudgetActorSnapshot;
   budget: FatigueEnforcementBudgetMetadata;
+  socialRegulation: FatigueSocialRegulationMetadata;
   recordedEvent?: FatigueRecordedEventMetadata;
+}
+
+/**
+ * Durable write-ahead description of the one fatigue spend owned by a turn.
+ * ICP recovery can replay this operation without re-evaluating policy or
+ * charging the same stable turn twice.
+ */
+export interface FatiguePendingSpendMetadata {
+  schemaVersion: 1;
+  timestampMs: number;
+  decision: FatigueBudgetDecision;
+  reason: FatigueBudgetReason;
+  amount: number;
+  scope: FatigueBudgetScopeSnapshot;
+  peer: FatigueBudgetPeerSnapshot;
+  triggeringAuthor: FatigueBudgetActorSnapshot;
+  limits: {
+    softLimit: number;
+    hardLimit: number;
+    overchargeLimit: number;
+  };
+  correlation: Partial<CorrelationMetadata>;
 }
 
 export interface FatigueBudgetScopeSnapshot {
@@ -527,6 +710,10 @@ export interface ResponseMetadata {
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
+  turnId?: TurnID;
+  requestId?: string;
+  icpCorrelation?: IcpConversationCorrelation;
+  runtimeFallbackProvenance?: RuntimeFallbackProvenance;
   noReply?: IntentionalNoReplyMetadata;
   internalState?: import('../../core/self-model/state.js').InternalState;
   internalStateSnapshotRef?: string;
@@ -561,6 +748,7 @@ export interface ResponseMetadata {
     provenanceRefs: string[];
   };
   fatigue?: FatigueEnforcementMetadata;
+  fatiguePendingSpend?: FatiguePendingSpendMetadata;
 }
 
 export interface IntentionalNoReplyMetadata {
@@ -706,6 +894,7 @@ export interface LLMContext {
   messages: ContextMessage[];
   tools?: ToolSchema[];
   modelHint?: LLMModelHint;
+  accounting?: LLMCallAccountingContext;
   correlation?: CorrelationMetadata;
   manifest?: ContextManifest;
   systemPromptSections?: PromptSectionTelemetry[];
@@ -733,6 +922,7 @@ export interface LLMUsageDetails {
   cacheWrite: number;
   totalTokens: number;
   cost?: LLMUsageCostDetails;
+  costEvidenceConflict?: { fields: string[] };
   raw?: Record<string, unknown>;
 }
 
@@ -855,7 +1045,14 @@ export interface LLMProviderObservability {
   backendBaseUrl?: string;
   systemRole: LLMSystemRoleCapabilityMetadata;
   promptCaching: LLMPromptCacheObservability;
-  providerWireMessages: LLMProviderWireMessage[];
+  /**
+   * Flattened provider wire capture. Live captures always carry it; SLIM
+   * persisted turn snapshots omit it when the view is byte-derivable from the
+   * canonical PromptPlan (bead hgw3.3). Consumers must preserve absence —
+   * never coerce a missing capture to [] (the Garden read path treats absence
+   * as "derive from the plan" and an empty array as "captured empty").
+   */
+  providerWireMessages?: LLMProviderWireMessage[];
 }
 
 export interface ToolCall {
@@ -956,6 +1153,8 @@ export interface ModelRegistryTuningMetadata extends ModelControlKnobs {
 export interface ModelRegistryCostMetadata {
   inputPer1MUsd?: number;
   outputPer1MUsd?: number;
+  cacheReadPer1MUsd?: number;
+  cacheWritePer1MUsd?: number;
   currency?: string;
   [key: string]: unknown;
 }
@@ -1010,9 +1209,10 @@ export interface ModelRegistryEntry {
 /**
  * Registry-wide provider prompt-caching policy (models.json owner, E2.4).
  *
- * `enabled` is the master switch and seeds OFF: the operator flips it to true
- * after verifying cache engagement on a test channel. When disabled, no
- * provider request carries any cache parameter (zero wire change). When
+ * `enabled` is the master switch and seeds ON (the shipped models.seed.json
+ * default): the operator can flip it to false to fully disable provider
+ * caching. When disabled, no provider request carries any cache parameter
+ * (zero wire change). When
  * enabled, per-provider serializers engage the mechanism the pi-ai layer
  * actually supports (Anthropic cache_control breakpoints at PromptPlan
  * boundaries, OpenRouter anthropic cache_control passthrough, OpenAI
@@ -1036,22 +1236,6 @@ export interface CanonicalModelRegistry {
   promptCaching?: ModelRegistryPromptCachingPolicy;
 }
 
-export interface ModelUsageLedgerRecord {
-  id: string;
-  timestampMs: number;
-  dayKey: string;
-  monthKey: string;
-  provider: string;
-  model: string;
-  slotKey?: string;
-  purpose: string;
-  service: string;
-  process: string;
-  inputTokens: number;
-  outputTokens: number;
-  estimatedCostUsd: number;
-}
-
 export interface ModelBudgetWindowSnapshot {
   dayKey: string;
   monthKey: string;
@@ -1059,12 +1243,16 @@ export interface ModelBudgetWindowSnapshot {
   dailyLimitUsd: number;
   monthlySpentUsd: number;
   monthlyLimitUsd: number;
+  dailyUnknownCostAttempts: number;
+  monthlyUnknownCostAttempts: number;
 }
 
 export type ModelBudgetBlockReason =
   | 'daily_budget_exceeded'
   | 'monthly_budget_exceeded'
-  | 'missing_cost_metadata';
+  | 'missing_cost_metadata'
+  | 'accounting_unavailable'
+  | 'unknown_historical_cost';
 
 export interface ModelBudgetBlockedEvent extends Partial<CorrelationMetadata> {
   timestampMs: number;

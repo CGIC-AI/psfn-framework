@@ -1051,6 +1051,7 @@ export class AgentApiBackend {
       authorId: params.authorId,
       authorName: params.authorName,
       content: params.content,
+      ...(params.channelPrivacy === 'public' ? { isDirectMessage: false } : {}),
       ...(params.attachments && params.attachments.length > 0 ? { attachments: params.attachments } : {}),
       ...(hasRouting ? { routing } : {}),
       timestamp: new Date(),

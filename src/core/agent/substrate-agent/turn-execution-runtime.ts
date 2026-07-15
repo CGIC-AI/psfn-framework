@@ -1,8 +1,12 @@
-import type { Agent, AgentMessage } from '../../../boundary/pi-agent/index.js';
+import type { Agent, AgentMessage, AgentTool } from '../../../boundary/pi-agent/index.js';
 import type { AssistantMessage } from '@mariozechner/pi-ai';
 import { classifyBroadcastDraft } from '../../../system/trust/broadcast-safety.js';
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
 import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
+import type {
+  DurableRunChargeProbe,
+  DurableRunChargeRecorder,
+} from '../../../shared/telemetry/run-charge.js';
 import type { ComposeContext } from '../../identity/prompt-types.js';
 import type { ImageVisionReviewer } from '../../../primitives/images/types.js';
 import type { VisionIntakeImageScreenerPort } from './vision-attachments.js';
@@ -16,6 +20,7 @@ import {
 } from '../../self-model/metacognition.js';
 import {
   buildInternalStateSnapshotRef,
+  cloneInternalState,
   type InternalState,
 } from '../../self-model/state.js';
 import type { SkillsRuntime } from '../../../faculties/skills/runtime.js';
@@ -24,13 +29,14 @@ import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { SatellitePresencePort } from '../satellite-adapter-port.js';
 import type { CompanionPresenceTurnPort } from '../companion-presence-runtime.js';
-import type { AgentResponse, CorrelationMetadata, FatigueEnforcementMetadata, InferredPostTurnAction, MessagePromptOverride, MessagePromptOverrideMode, ObservabilityCallType, ResponseStyle, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
+import type { AgentResponse, CorrelationMetadata, FatigueEnforcementMetadata, FatiguePendingSpendMetadata, InferredPostTurnAction, MessagePromptOverride, MessagePromptOverrideMode, ObservabilityCallType, ResponseStyle, SubstrateMessage, TurnID, TurnRecord, TurnUsage } from '../../../shared/contracts/runtime.js';
 import type { CoreSubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../shared/context-budget.js';
 import { isTemporalContextBudgetTurn } from '../../../shared/context-budget.js';
 import type { ObserverEvalSidecarRuntime } from '../../eval/observer-sidecar/types.js';
 import type { ContextManifest } from '../../session/context-manifest.js';
-import { createTurnId } from '../../turns/id.js';
+import { backfillLegacyTurnId, createTurnId, parseTurnId } from '../../turns/id.js';
+import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import type { TurnObservabilityRecord } from '../../turns/observability.js';
 import type {
   TurnPromptSnapshot,
@@ -43,6 +49,10 @@ import type { EventBridge } from '../event-bridge.js';
 import type { RuntimeMode } from '../tool-wiring-validator.js';
 import type { LLMProviderPort, MemoryExtractor, MemoryProvider, WikiRetrievalPort } from '../contracts.js';
 import type { FatigueBudgetPort } from '../fatigue/fatigue-budget.js';
+import type {
+  IcpFatigueRegulationReservationPort,
+  IcpFatigueReservationOutcome,
+} from '../fatigue/regulation-reservation.js';
 import {
   attachRecordedFatigueEvent,
   evaluateFatigueForTurn,
@@ -79,7 +89,11 @@ import {
   rejectsMissingImageAttachmentClaim,
 } from '../../../primitives/images/attachment-claim-guard.js';
 import { stripLeadingHistoryStamps } from '../../../shared/utils/history-stamp-hygiene.js';
-import { invokeAgentForTurn, type AgentInvocationMutableState } from './turn-execution/agent-invocation.js';
+import {
+  invokeAgentForTurn,
+  type AgentInvocationMutableState,
+  type AgentInvocationResult,
+} from './turn-execution/agent-invocation.js';
 import { createTurnExecutionObservability } from './turn-execution/observability.js';
 import { assembleTurnPrompt } from './turn-execution/prompt-assembly.js';
 import type { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
@@ -89,10 +103,21 @@ import {
   collectTurnResponseAttachments,
   schedulePostTurnWork,
 } from './turn-execution/post-turn-scheduling.js';
+import {
+  invokeWithCompanionSocialCharge,
+  projectFatiguePendingSpendCorrelation,
+  reserveIcpFatigueRegulation,
+  resumeIcpFatigueRegulation,
+} from './turn-execution/icp-fatigue-regulation.js';
 import { hasVisionTurnInputs } from './vision-attachments.js';
 import type { SessionEntry } from '../../session/types.js';
+import {
+  resolveSessionEntryActorKind,
+  type SessionActorKind,
+} from '../../session/turn-provenance.js';
 import type { ConversationScopeSpeaker } from '../../session/conversation-scope.js';
 import type { IntakeFirewallMode } from '../../../system/config/intake-policy-config.js';
+import { parseIcpRecoveryResponse } from '../../session/icp-delivery-recovery.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -108,7 +133,10 @@ function cloneComputedInternalStateForResponse(internalState: InternalState): In
 export interface TurnExecutionRuntime {
   eventBus: EventBus;
   costTelemetry: CostTelemetryPort;
+  durableChargeRecorder?: DurableRunChargeRecorder | null;
+  durableChargeProbe?: DurableRunChargeProbe | null;
   fatigueBudget?: FatigueBudgetPort | null;
+  fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   satellitePresence: SatellitePresencePort;
   /**
    * Cross-companion presence (sprint 10, W5a). Absent/null (single-companion,
@@ -239,6 +267,7 @@ export interface TurnExecutionRuntime {
     trustLevel: TrustLevel,
     continuityUserId?: string,
     contentOverride?: string,
+    actorKind?: SessionActorKind,
   ) => number | null;
   recordSystemMessage: (
     message: SubstrateMessage,
@@ -340,6 +369,7 @@ export interface TurnExecutionRuntime {
     correlation: CorrelationMetadata,
   ) => AutoloadTurnOutcome;
   getAdaptiveToolRuntimeState: () => AdaptiveToolRuntimeState;
+  getActiveTurnTools: () => readonly AgentTool<any>[];
   applyActiveToolsToAgentForTurn: (
     message: SubstrateMessage,
     taskKind: string | undefined,
@@ -372,6 +402,8 @@ export interface TurnExecutionRuntime {
     trustLevel: TrustLevel,
     continuityUserId?: string,
     emotionSnapshot?: import('../../emotion/state.js').EmotionStateSnapshot | null,
+    recoveryResponse?: AgentResponse,
+    runtimeFallbackProvenance?: import('../../../shared/contracts/runtime.js').RuntimeFallbackProvenance,
   ) => number | null;
   buildTurnToolSummary: (turnMessages: AgentMessage[]) => TurnToolSummary;
   inferPostTurnActions: (context: {
@@ -433,7 +465,21 @@ export interface TurnExecutionRuntime {
     turnId: TurnID;
     completedAt: number;
     canonicalContactKey?: string;
+    icpCorrelation?: import('../../../shared/contracts/icp-autonomy.js').IcpConversationCorrelation;
   }) => Promise<void>;
+}
+
+/**
+ * Delivery barrier for a private ICP target turn. The finalizer owns transport
+ * and durable delivery-state recording. Post-turn work cannot begin until it
+ * resolves successfully.
+ */
+export interface TurnDeliveryLifecycle {
+  /** Durable response from an earlier attempt whose transport failed after generation. */
+  recoveredResponse?: AgentResponse;
+  /** The deterministic inbound envelope was already durably written before a process crash. */
+  sourceAlreadyPersisted?: true;
+  finalizeDelivery(response: AgentResponse): Promise<void>;
 }
 
 function summarizeFatigue(metadata: FatigueEnforcementMetadata): Record<string, unknown> {
@@ -452,6 +498,7 @@ function summarizeFatigue(metadata: FatigueEnforcementMetadata): Record<string, 
     overchargeBlockedReasons: metadata.overchargeBlockedReasons,
     scope: metadata.scope,
     budget: metadata.budget,
+    socialRegulation: metadata.socialRegulation,
   };
 }
 
@@ -462,6 +509,7 @@ function evaluateRuntimeFatigue(input: {
   channelType: string | undefined;
   channelMeta: ChannelMeta;
   taskKind: string | undefined;
+  explicitPeerInvitation: boolean;
   turnCorrelationBase: CorrelationMetadata;
   timestampMs: number;
 }): FatigueTurnDecision | null {
@@ -482,6 +530,7 @@ function evaluateRuntimeFatigue(input: {
     channelType: input.channelType,
     channelMeta: input.channelMeta,
     taskKind: input.taskKind,
+    explicitPeerInvitation: input.explicitPeerInvitation,
     recentHumanParticipation: resolveRecentHumanParticipationForFatigue({
       runtime: input.runtime,
       message: input.message,
@@ -533,7 +582,7 @@ function resolveRecentHumanParticipationForFatigue(input: {
   }
 
   for (const entry of input.runtime.sessionManager.getRecentMessages(input.sessionChannelId, 32)) {
-    if (entry.role !== 'user') {
+    if (entry.role !== 'user' || resolveSessionEntryActorKind(entry) !== 'human') {
       continue;
     }
     if (entry.authorId && entry.authorId === input.message.authorId) {
@@ -549,6 +598,10 @@ function resolveRecentHumanParticipationForFatigue(input: {
       ? { latestMessageAgeMs: input.nowMs - latestHumanTimestampMs }
       : {}),
   };
+}
+
+function resolveSessionActorKind(authorContext: ResolvedAuthorContext): SessionActorKind {
+  return authorContext.actorKind;
 }
 
 function emitFatigueDecision(input: {
@@ -589,6 +642,13 @@ function buildSuppressedFatigueResponse(input: {
       outputTokens: 0,
       durationMs: input.completedAt - input.startTime,
       fatigue: input.fatigue,
+      ...(input.message.routing?.icpCorrelation
+        ? {
+            turnId: input.message.routing.icpCorrelation.turnId as TurnID,
+            requestId: input.message.routing.icpCorrelation.requestId,
+            icpCorrelation: input.message.routing.icpCorrelation,
+          }
+        : {}),
     },
   };
 }
@@ -596,9 +656,70 @@ function buildSuppressedFatigueResponse(input: {
 export async function handleMessageForTurn(
   runtime: TurnExecutionRuntime,
   message: SubstrateMessage,
+  deliveryLifecycle?: TurnDeliveryLifecycle,
 ): Promise<AgentResponse> {
   const requestId = message.id;
-  const turnId = createTurnId();
+  const recoveredResponse = deliveryLifecycle?.recoveredResponse
+    ? parseIcpRecoveryResponse(deliveryLifecycle.recoveredResponse, {
+        label: 'Recovered turn response',
+        expectedChannelId: message.channelId,
+        expectedSourceMessageId: message.id,
+      })
+    : undefined;
+  const privateIcpCorrelation = message.routing?.privateTurnTrigger === true
+    ? parseIcpConversationCorrelation(message.routing.icpCorrelation)
+    : null;
+  if (privateIcpCorrelation && !deliveryLifecycle) {
+    throw new Error('Private ICP target turn requires a delivery finalizer');
+  }
+  if (!privateIcpCorrelation && deliveryLifecycle && !message.routing?.icpCorrelation) {
+    throw new Error('Delivery finalization is restricted to ICP channel turns');
+  }
+  if (recoveredResponse && !message.routing?.icpCorrelation) {
+    throw new Error('Recovered delivery requires durable ICP correlation');
+  }
+  if (privateIcpCorrelation) {
+    if (message.channelType !== 'companion'
+      || message.authorId !== 'system:icp-initiation'
+      || privateIcpCorrelation.localCompanionId !== resolveCompanionIdFromConfig(runtime.config)
+      || privateIcpCorrelation.channelId !== message.channelId
+      || privateIcpCorrelation.requestId !== requestId
+      || privateIcpCorrelation.messageId !== requestId) {
+      throw new Error('Private ICP target turn is not bound to this runtime message');
+    }
+  }
+  const recoveredCorrelation = recoveredResponse
+    ? parseIcpConversationCorrelation(recoveredResponse.metadata.icpCorrelation)
+    : null;
+  if (recoveredCorrelation) {
+    const localCompanionId = resolveCompanionIdFromConfig(runtime.config);
+    if (recoveredCorrelation.localCompanionId !== localCompanionId
+      || (!privateIcpCorrelation && recoveredCorrelation.peerCompanionId !== message.authorId)
+      || recoveredCorrelation.channelId !== message.channelId
+      || recoveredCorrelation.messageId !== message.id
+      || recoveredResponse?.channelId !== message.channelId) {
+      throw new Error('Recovered ICP delivery is not bound to the recorded local turn');
+    }
+  }
+  const inboundIcpCorrelation = !privateIcpCorrelation && !recoveredCorrelation
+    && message.routing?.icpCorrelation
+    ? parseIcpConversationCorrelation(message.routing.icpCorrelation)
+    : null;
+  const deterministicReplyTurnId = inboundIcpCorrelation
+    ? backfillLegacyTurnId([
+        'icp-reply',
+        resolveCompanionIdFromConfig(runtime.config),
+        message.channelId,
+        message.id,
+      ].join(':'))
+    : null;
+  const turnId = privateIcpCorrelation || recoveredCorrelation
+    ? parseTurnId(
+        (privateIcpCorrelation ?? recoveredCorrelation)!.turnId,
+        'ICP delivery turn correlation.turnId',
+      )
+    : deterministicReplyTurnId ?? createTurnId();
+  if (!turnId) throw new Error('Private ICP target turn requires a UUIDv7 turnId');
   const deferredContinuationId = parseDeferredToolHandoffActionId(message.id);
   const taskKind = runtime.resolveTaskKind(message);
   const turnBudgetCharacteristics = runtime.buildTurnBudgetCharacteristics(message, taskKind);
@@ -615,7 +736,7 @@ export async function handleMessageForTurn(
     ...(taskKind ? { taskKind } : {}),
     ...(deferredContinuationId ? { deferredContinuationId } : {}),
   });
-  const turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
+  let turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
   await runtime.awaitPostTurnDrain({
     channelId: message.channelId,
     turnId,
@@ -628,7 +749,14 @@ export async function handleMessageForTurn(
     message.channelId,
   );
   const focusMemoryScopeQuery = runtime.sessionManager.getActiveFocusMemoryScopeQuery(message.channelId);
-  const deferSessionEntryPersistence = hasVisionTurnInputs(message);
+  const hasDeferredVisionPersistence = hasVisionTurnInputs(message);
+  // A fresh inbound companion correlation is not trusted until it has been
+  // bound to the resolved canonical peer below. Keep it out of L0 until that
+  // validation succeeds so a rejected envelope cannot poison actor history.
+  const deferSessionEntryPersistence = hasDeferredVisionPersistence
+    || inboundIcpCorrelation !== null;
+  const skipSessionEntryPersistence = recoveredResponse !== undefined
+    || deliveryLifecycle?.sourceAlreadyPersisted === true;
   const observability = createTurnExecutionObservability({
     runtime,
     message,
@@ -646,6 +774,7 @@ export async function handleMessageForTurn(
     turnCorrelationBase,
     observability,
     deferSessionEntryPersistence,
+    skipSessionEntryPersistence,
   });
   const {
     authorContext,
@@ -663,6 +792,45 @@ export async function handleMessageForTurn(
     canonicalContactKey,
     conversationScope,
   } = identityState;
+  const inboundIcpOrigin = message.routing?.icpCorrelation;
+  const explicitPeerInvitation = privateIcpCorrelation === null
+    && inboundIcpOrigin?.costOriginStage === 'initiation';
+  if (recoveredCorrelation) {
+    if (!canonicalContactKey || recoveredCorrelation.peerContactId !== canonicalContactKey) {
+      throw new Error('Recovered ICP delivery peer does not match the resolved canonical contact');
+    }
+    message.routing = {
+      ...message.routing,
+      icpCorrelation: recoveredCorrelation,
+    };
+    turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
+  } else if (inboundIcpOrigin && !privateIcpCorrelation) {
+    const localCompanionId = resolveCompanionIdFromConfig(runtime.config);
+    if (inboundIcpOrigin.localCompanionId !== message.authorId
+      || inboundIcpOrigin.peerCompanionId !== localCompanionId
+      || inboundIcpOrigin.channelId !== message.channelId
+      || !canonicalContactKey
+      || authorContext.actorKind !== 'machine_intelligence'
+      || !authorContext.speakingWithIsMachineIntelligence) {
+      throw new Error('Inbound ICP initiation correlation does not match recipient identity/contact routing');
+    }
+    const recipientCorrelation = parseIcpConversationCorrelation({
+      ...inboundIcpOrigin,
+      localCompanionId,
+      peerCompanionId: message.authorId,
+      peerContactId: canonicalContactKey,
+      turnId,
+      messageId: message.id,
+      requestId,
+      costOriginStage: 'reply',
+      fatigueDecision: 'not_evaluated',
+    });
+    message.routing = {
+      ...message.routing,
+      icpCorrelation: recipientCorrelation,
+    };
+    turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
+  }
   let promptMode: MessagePromptOverrideMode = 'default';
   let fullPrompt = '';
   let contextMessageCount = 0;
@@ -678,6 +846,10 @@ export async function handleMessageForTurn(
   let internalStateSnapshotRef: string | undefined;
   let persistedUserMessageContent: string | undefined;
   let fatigueDecision: FatigueTurnDecision | null = null;
+  let durableFatigueReservation: NonNullable<SubstrateMessage['routing']>['icpCorrelation'] | null = null;
+  let recoveredFatigueReservationOutcome: IcpFatigueReservationOutcome | null = null;
+  let durableDeliveryFinalized = false;
+  let durableRecoveryResponsePersisted = recoveredResponse !== undefined;
   const invocationState: AgentInvocationMutableState = {
     turnMessages,
     turnStartMessageIndex: null,
@@ -699,22 +871,86 @@ export async function handleMessageForTurn(
       trustLevel,
       continuitySubjectKey,
       contentOverride,
+      resolveSessionActorKind(authorContext),
     );
   };
+  if (inboundIcpCorrelation
+    && !hasDeferredVisionPersistence
+    && !skipSessionEntryPersistence
+    && userSessionEntryId == null) {
+    userSessionEntryId = recordDeferredSessionEntry();
+  }
 
   try {
     const channelType = runtime.resolveChannelType(message);
-    fatigueDecision = evaluateRuntimeFatigue({
-      runtime,
-      message,
-      authorContext,
-      channelType,
-      channelMeta,
-      taskKind,
-      turnCorrelationBase,
-      timestampMs: startTime,
-    });
+    if (recoveredResponse?.metadata.fatiguePendingSpend) {
+      if (!message.routing?.icpCorrelation
+        || !runtime.fatigueRegulationReservations
+        || !runtime.config.chargePolicy) {
+        throw new Error('Recovered ICP fatigue spend requires its durable reservation runtime');
+      }
+      recoveredFatigueReservationOutcome = await resumeIcpFatigueRegulation({
+        correlation: message.routing.icpCorrelation,
+        pendingSpend: recoveredResponse.metadata.fatiguePendingSpend,
+        reservationPort: runtime.fatigueRegulationReservations,
+        fatiguePolicy: runtime.config.chargePolicy.fatigue,
+      });
+      durableFatigueReservation = message.routing.icpCorrelation;
+    }
+    fatigueDecision = recoveredResponse
+      ? null
+      : evaluateRuntimeFatigue({
+          runtime,
+          message,
+          authorContext,
+          channelType,
+          channelMeta,
+          taskKind,
+          explicitPeerInvitation,
+          turnCorrelationBase,
+          timestampMs: startTime,
+        });
     if (fatigueDecision) {
+      if (message.routing?.icpCorrelation) {
+        const finalFatigueDecision = fatigueDecision.metadata.decision === 'suppressed_hard_exhausted'
+          ? 'suppress'
+          : fatigueDecision.metadata.decision === 'overcharge_charged'
+            ? 'allow_overcharge'
+            : 'allow';
+        message.routing = {
+          ...message.routing,
+          icpCorrelation: {
+            ...message.routing.icpCorrelation,
+            fatigueDecision: finalFatigueDecision,
+            chargeLane: fatigueDecision.metadata.socialRegulation.chargeLane,
+          },
+        };
+        turnCorrelationBase = {
+          ...turnCorrelationBase,
+          icpCorrelation: message.routing.icpCorrelation,
+          chargeLane: message.routing.icpCorrelation.chargeLane,
+        };
+      }
+      if (fatigueDecision.shouldRecordSpend && message.routing?.icpCorrelation) {
+        const reconciliation = await reserveIcpFatigueRegulation({
+          correlation: message.routing.icpCorrelation,
+          fatigueDecision,
+          multiCompanion: runtime.config.multiCompanion === true,
+          reservationPort: runtime.fatigueRegulationReservations,
+          fatiguePolicy: runtime.config.chargePolicy!.fatigue,
+        });
+        fatigueDecision = reconciliation.fatigueDecision;
+        durableFatigueReservation = reconciliation.durableReservation;
+        message.routing = {
+          ...message.routing,
+          icpCorrelation: reconciliation.correlation,
+        };
+        turnCorrelationBase = {
+          ...turnCorrelationBase,
+          icpCorrelation: reconciliation.correlation,
+          chargeLane: reconciliation.correlation.chargeLane,
+        };
+      }
       emitFatigueDecision({
         runtime,
         message,
@@ -732,6 +968,7 @@ export async function handleMessageForTurn(
         model: responseModel,
         fatigue: fatigueDecision.metadata,
       });
+      await deliveryLifecycle?.finalizeDelivery(suppressedResponse);
       observability.emitObservedTurnStage('end', {
         durationMs: completedAt - startTime,
         ttftMs: 0,
@@ -739,37 +976,38 @@ export async function handleMessageForTurn(
         outputTokens: 0,
         fatigue: summarizeFatigue(fatigueDecision.metadata),
       });
-      runtime.sessionManager.recordTurn(
-        runtime.buildTurnRecord({
-          message,
-          turnId,
-          requestId,
-          startedAt: startTime,
-          completedAt,
-          userSessionEntryId,
-          assistantSessionEntryId,
-          response: suppressedResponse,
-          turnMessages: [],
-          promptMode,
-          promptText: fullPrompt,
-          contextMessageCount,
-          memoryContextChars,
-          trustLevel,
-          speakerRole,
-          canonicalContactKey,
-          retrievalProvenanceRefs: [],
-          turnObservability: {
-            stages: observability.getObservedTurnStages(),
-            retrievals: observability.getObservedTurnRetrievals(),
-            ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
-          },
-        }),
-      );
+      const suppressedTurnRecord = runtime.buildTurnRecord({
+        message,
+        turnId,
+        requestId,
+        startedAt: startTime,
+        completedAt,
+        userSessionEntryId,
+        assistantSessionEntryId,
+        response: suppressedResponse,
+        turnMessages: [],
+        promptMode,
+        promptText: fullPrompt,
+        contextMessageCount,
+        memoryContextChars,
+        trustLevel,
+        speakerRole,
+        canonicalContactKey,
+        retrievalProvenanceRefs: [],
+        turnObservability: {
+          stages: observability.getObservedTurnStages(),
+          retrievals: observability.getObservedTurnRetrievals(),
+          ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
+        },
+      });
       await runtime.eventBus.emit('agent.turn.end', {
         message,
         response: suppressedResponse,
         ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.end'),
       });
+      // Suppression still follows the ordinary completion contract: only
+      // publish the durable completed-turn marker after its awaited end event.
+      runtime.sessionManager.recordTurn(suppressedTurnRecord);
       return suppressedResponse;
     }
     runtime.ensureModel(message);
@@ -889,9 +1127,40 @@ export async function handleMessageForTurn(
     });
     // Shadow/enforce carry the marker for observation. Off bypasses the async
     // canary context entirely so gateway client calls remain byte-identical.
-    const invocationResult = canaryToken
-      ? await runWithCanaryContext(canaryToken, invokeWithPaidDeliverableTracking)
-      : await invokeWithPaidDeliverableTracking();
+    const recoveredInvocationResult: AgentInvocationResult | null = recoveredResponse
+      ? {
+          firstTokenAt: startTime,
+          turnMessages: [],
+          turnUsage: {
+            inputTokens: recoveredResponse.metadata.inputTokens,
+            outputTokens: recoveredResponse.metadata.outputTokens,
+            cacheReadTokens: 0,
+            llmCalls: 1,
+            toolCalls: 0,
+            contextUtilization: 0,
+          },
+          responseModel: recoveredResponse.metadata.model,
+          responseText: recoveredResponse.content,
+          fallbackDiagnostics: recoveredResponse.metadata.diagnostics,
+          runtimeContradictionDiagnostics: recoveredResponse.metadata.diagnostics?.runtimeContradiction
+            ? { runtimeContradiction: recoveredResponse.metadata.diagnostics.runtimeContradiction }
+            : undefined,
+          turnIntent: null,
+        }
+      : null;
+    const invokeWithCanary = () => canaryToken
+      ? runWithCanaryContext(canaryToken, invokeWithPaidDeliverableTracking)
+      : invokeWithPaidDeliverableTracking();
+    const invocationResult = recoveredInvocationResult ?? await invokeWithCompanionSocialCharge({
+      chargePolicy: runtime.config.chargePolicy,
+      correlation: turnCorrelationBase,
+      fatigue: fatigueDecision?.metadata,
+      invoke: invokeWithCanary,
+      recordChargeEvent: runtime.durableChargeRecorder,
+      probeChargeEvent: runtime.durableChargeProbe,
+      turnId,
+      withCorrelationPurpose: runtime.withCorrelationPurpose,
+    });
     pendingPaidDeliverables = scopedPendingPaidDeliverables;
     turnMessages = invocationResult.turnMessages;
     responseModel = invocationResult.responseModel;
@@ -904,14 +1173,15 @@ export async function handleMessageForTurn(
       turnUsage,
       fallbackDiagnostics,
       runtimeContradictionDiagnostics,
+      runtimeFallbackProvenance,
       turnIntent,
     } = invocationResult;
     // Fail-safe strip of mimicked history stamps (psfn-framework-2x37.10),
-    // applied where the model's turn text is accepted so persistence
-    // (recordAssistantMessage), channel dispatch (AgentResponse.content), and
-    // TTS all see clean output.
+    // applied where the model's turn text is accepted so persistence,
+    // channel dispatch, and TTS all see clean output.
     const responseText = stripLeadingHistoryStamps(invocationResult.responseText);
-    const noReplyDecision = runtime.consumeIntentionalNoReplyDecision(turnId);
+    const noReplyDecision = recoveredResponse?.metadata.noReply
+      ?? runtime.consumeIntentionalNoReplyDecision(turnId);
     // Intentional silence is only honored when no user-facing reply was
     // authored. A no_reply issued during internal follow-up continuation
     // (whisper/system-note steps drained into this run) must not suppress the
@@ -936,7 +1206,8 @@ export async function handleMessageForTurn(
       });
     }
     let safeResponseText = honorNoReply ? '' : responseText;
-    let broadcastSafetyMeta: AgentResponse['metadata']['broadcastSafety'] | undefined;
+    let broadcastSafetyMeta: AgentResponse['metadata']['broadcastSafety'] | undefined =
+      recoveredResponse?.metadata.broadcastSafety;
 
     if (contextEnvelope.broadcast) {
       const visibilityScope = broadcastVisibilityScope ?? 'public_only';
@@ -993,24 +1264,29 @@ export async function handleMessageForTurn(
     }
 
     const retrievalProvenanceRefs = observability.getRetrievalProvenanceRefs();
-    const internalState = await runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
-      message,
-      responseText,
-      trustLevel,
-      canonicalContactKey,
-      emotionSnapshot: preTurnState.emotionSnapshot,
-      toolCallCount: turnUsage.toolCalls,
-      sessionChannelId: emotionSessionId,
-      conversationScope,
-    });
-    internalStateSnapshotRef = buildInternalStateSnapshotRef(internalState);
-    const metacognitiveFlags = runtime.emotionSelfModelRuntime.computeMetacognitiveFlagsForTurn({
-      internalState,
-      responseText,
-      toolCallCount: turnUsage.toolCalls,
-      sessionChannelId: emotionSessionId,
-      retrievalProvenanceRefs,
-    });
+    const internalState = recoveredResponse?.metadata.internalState
+      ? cloneInternalState(recoveredResponse.metadata.internalState)
+      : await runtime.emotionSelfModelRuntime.computeInternalStateForTurn({
+          message,
+          responseText,
+          trustLevel,
+          canonicalContactKey,
+          emotionSnapshot: preTurnState.emotionSnapshot,
+          toolCallCount: turnUsage.toolCalls,
+          sessionChannelId: emotionSessionId,
+          conversationScope,
+        });
+    internalStateSnapshotRef = recoveredResponse?.metadata.internalStateSnapshotRef
+      ?? buildInternalStateSnapshotRef(internalState);
+    const metacognitiveFlags = recoveredResponse?.metadata.metacognitiveFlags
+      ? cloneMetacognitiveFlags(recoveredResponse.metadata.metacognitiveFlags)
+      : runtime.emotionSelfModelRuntime.computeMetacognitiveFlagsForTurn({
+          internalState,
+          responseText,
+          toolCallCount: turnUsage.toolCalls,
+          sessionChannelId: emotionSessionId,
+          retrievalProvenanceRefs,
+        });
     runtime.setCurrentSelfModelState(
       internalState,
       internalStateSnapshotRef,
@@ -1026,7 +1302,9 @@ export async function handleMessageForTurn(
     );
     const responseAttachments = honorNoReply
       ? []
-      : await collectTurnResponseAttachments({
+      : recoveredResponse?.attachments
+        ? [...recoveredResponse.attachments]
+        : await collectTurnResponseAttachments({
           runtime,
           turnMessages,
           paidDeliverables: pendingPaidDeliverables,
@@ -1085,26 +1363,6 @@ export async function handleMessageForTurn(
       }
     }
 
-    if (!broadcastSafetyMeta?.approvalRequired && !honorNoReply) {
-      assistantSessionEntryId = runtime.recordAssistantMessage(
-        message,
-        turnId,
-        requestId,
-        safeResponseText,
-        trustLevel,
-        continuitySubjectKey,
-        preTurnState.emotionSnapshot,
-      );
-    }
-
-    if (runtime.skillsRuntime) {
-      const toolSummary = runtime.buildTurnToolSummary(turnMessages);
-      const nudge = runtime.evaluateReflectionNudge(toolSummary);
-      if (nudge) {
-        runtime.sessionManager.appendSystemNote(message.channelId, nudge);
-      }
-    }
-
     const completedAt = Date.now();
     const responseDiagnostics: NonNullable<AgentResponse['metadata']['diagnostics']> = {};
     if (fallbackDiagnostics?.fallback) {
@@ -1113,7 +1371,86 @@ export async function handleMessageForTurn(
     if (runtimeContradictionDiagnostics?.runtimeContradiction) {
       responseDiagnostics.runtimeContradiction = runtimeContradictionDiagnostics.runtimeContradiction;
     }
-    let responseFatigueMetadata = fatigueDecision?.metadata;
+    let responseFatigueMetadata = recoveredResponse?.metadata.fatigue ?? fatigueDecision?.metadata;
+    const fatiguePendingSpend: FatiguePendingSpendMetadata | undefined = fatigueDecision?.shouldRecordSpend
+      ? {
+          schemaVersion: 1,
+          timestampMs: fatigueDecision.evaluation.timestampMs,
+          decision: fatigueDecision.evaluation.decision,
+          reason: fatigueDecision.evaluation.reason,
+          amount: fatigueDecision.evaluation.amount,
+          scope: { ...fatigueDecision.evaluation.scope },
+          peer: { ...fatigueDecision.evaluation.peer },
+          triggeringAuthor: { ...fatigueDecision.evaluation.triggeringAuthor },
+          limits: {
+            softLimit: fatigueDecision.evaluation.stateAfter.softLimit,
+            hardLimit: fatigueDecision.evaluation.stateAfter.allowance,
+            overchargeLimit: fatigueDecision.evaluation.stateAfter.overchargeAllowance,
+          },
+          correlation: projectFatiguePendingSpendCorrelation(
+            runtime.withCorrelationPurpose(
+              turnCorrelationBase,
+              'agent.fatigue.record',
+            ),
+          ),
+        }
+      : recoveredResponse?.metadata.fatiguePendingSpend;
+    const buildGeneratedResponse = (): AgentResponse => ({
+      content: safeResponseText,
+      channelId: message.channelId,
+      ...(responseAttachments.length > 0 ? { attachments: responseAttachments } : {}),
+      metadata: {
+        model: responseModel,
+        inputTokens: turnUsage.inputTokens,
+        outputTokens: turnUsage.outputTokens,
+        durationMs: completedAt - startTime,
+        turnId,
+        requestId,
+        ...(runtimeFallbackProvenance ? { runtimeFallbackProvenance } : {}),
+        ...(message.routing?.icpCorrelation
+          ? { icpCorrelation: message.routing.icpCorrelation }
+          : {}),
+        internalState: cloneComputedInternalStateForResponse(internalState),
+        internalStateSnapshotRef,
+        metacognitiveFlags: cloneMetacognitiveFlags(metacognitiveFlags),
+        ...(retrievalProvenanceRefs.length > 0 ? { retrievalProvenanceRefs } : {}),
+        ...(Object.keys(responseDiagnostics).length > 0 ? { diagnostics: responseDiagnostics } : {}),
+        ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
+        ...(responseFatigueMetadata ? { fatigue: responseFatigueMetadata } : {}),
+        ...(fatiguePendingSpend ? { fatiguePendingSpend } : {}),
+        ...(honorNoReply ? { noReply: noReplyDecision } : {}),
+      },
+    });
+
+    if (!recoveredResponse
+      && !broadcastSafetyMeta?.approvalRequired
+      && honorNoReply
+      && message.routing?.icpCorrelation) {
+      if (!deliveryLifecycle) {
+        throw new Error('Intentional ICP no-reply requires durable delivery recovery');
+      }
+      await deliveryLifecycle.finalizeDelivery(buildGeneratedResponse());
+      durableRecoveryResponsePersisted = true;
+    }
+
+    if (!recoveredResponse && !broadcastSafetyMeta?.approvalRequired && !honorNoReply) {
+      const durableRecoveryResponse = message.routing?.icpCorrelation
+        ? buildGeneratedResponse()
+        : undefined;
+      assistantSessionEntryId = runtime.recordAssistantMessage(
+        message,
+        turnId,
+        requestId,
+        safeResponseText,
+        trustLevel,
+        continuitySubjectKey,
+        preTurnState.emotionSnapshot,
+        durableRecoveryResponse,
+        runtimeFallbackProvenance,
+      );
+      durableRecoveryResponsePersisted = durableRecoveryResponse !== undefined;
+    }
+
     if (fatigueDecision?.shouldRecordSpend) {
       if (!runtime.fatigueBudget) {
         throw new Error('Fatigue spend recording requires fatigueBudget');
@@ -1128,6 +1465,7 @@ export async function handleMessageForTurn(
             policyBaseState: fatigueDecision.metadata.policyBaseState,
             overchargePermitted: fatigueDecision.metadata.overchargePermitted,
             overchargeReasons: fatigueDecision.metadata.overchargeReasons,
+            socialRegulation: fatigueDecision.metadata.socialRegulation,
             responseChars: responseText.length,
             model: responseModel,
           },
@@ -1147,26 +1485,73 @@ export async function handleMessageForTurn(
         decision: responseFatigueMetadata.decision,
         ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.fatigue.recorded'),
       });
+    } else if (recoveredResponse?.metadata.fatiguePendingSpend) {
+      if (!runtime.fatigueBudget || !responseFatigueMetadata) {
+        throw new Error('Recovered fatigue spend requires budget runtime and enforcement metadata');
+      }
+      const fatigueEvent = runtime.fatigueBudget.recordPendingSpend(
+        recoveredResponse.metadata.fatiguePendingSpend,
+        {
+          correlation: runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.fatigue.record'),
+          details: {
+            recovery: true,
+            responseChars: responseText.length,
+            model: responseModel,
+          },
+        },
+      );
+      responseFatigueMetadata = attachRecordedFatigueEvent(responseFatigueMetadata, fatigueEvent);
     }
-    const agentResponse: AgentResponse = {
-      content: safeResponseText,
-      channelId: message.channelId,
-      ...(responseAttachments.length > 0 ? { attachments: responseAttachments } : {}),
-      metadata: {
-        model: responseModel,
-        inputTokens: turnUsage.inputTokens,
-        outputTokens: turnUsage.outputTokens,
-        durationMs: completedAt - startTime,
-        internalState: cloneComputedInternalStateForResponse(internalState),
-        internalStateSnapshotRef,
-        metacognitiveFlags: cloneMetacognitiveFlags(metacognitiveFlags),
-        ...(retrievalProvenanceRefs.length > 0 ? { retrievalProvenanceRefs } : {}),
-        ...(Object.keys(responseDiagnostics).length > 0 ? { diagnostics: responseDiagnostics } : {}),
-        ...(broadcastSafetyMeta ? { broadcastSafety: broadcastSafetyMeta } : {}),
-        ...(responseFatigueMetadata ? { fatigue: responseFatigueMetadata } : {}),
-        ...(honorNoReply ? { noReply: noReplyDecision } : {}),
-      },
-    };
+    const agentResponse: AgentResponse = recoveredResponse
+      ? {
+          ...recoveredResponse,
+          metadata: {
+            ...recoveredResponse.metadata,
+            ...(responseFatigueMetadata ? { fatigue: responseFatigueMetadata } : {}),
+          },
+        }
+      : buildGeneratedResponse();
+    if (runtime.fatigueRegulationReservations
+      && message.routing?.icpCorrelation
+      && durableFatigueReservation
+      && responseFatigueMetadata) {
+      await runtime.fatigueRegulationReservations.prepareDelivery({
+        correlation: message.routing.icpCorrelation,
+        fatigue: responseFatigueMetadata,
+        ...(recoveredFatigueReservationOutcome === 'delivered'
+          || recoveredFatigueReservationOutcome === 'no_reply'
+          ? { recoveredOutcome: recoveredFatigueReservationOutcome }
+          : {}),
+      });
+    }
+    await deliveryLifecycle?.finalizeDelivery(agentResponse);
+    durableDeliveryFinalized = true;
+    if (runtime.fatigueRegulationReservations
+      && message.routing?.icpCorrelation
+      && (durableFatigueReservation || recoveredResponse?.metadata.fatiguePendingSpend)
+      && responseFatigueMetadata) {
+      await runtime.fatigueRegulationReservations.finalize({
+        correlation: message.routing.icpCorrelation,
+        outcome: honorNoReply ? 'no_reply' : 'delivered',
+        finalizedAtMs: Date.now(),
+        fatigue: responseFatigueMetadata,
+      });
+      durableFatigueReservation = null;
+    }
+
+    const postTurnAlreadyScheduled = recoveredResponse !== undefined
+      && runtime.sessionManager.hasRecordedTurn(message.channelId, turnId);
+    if (postTurnAlreadyScheduled) {
+      return agentResponse;
+    }
+
+    if (runtime.skillsRuntime) {
+      const toolSummary = runtime.buildTurnToolSummary(turnMessages);
+      const nudge = runtime.evaluateReflectionNudge(toolSummary);
+      if (nudge) {
+        runtime.sessionManager.appendSystemNote(message.channelId, nudge);
+      }
+    }
     await schedulePostTurnWork({
       runtime,
       message,
@@ -1210,6 +1595,36 @@ export async function handleMessageForTurn(
 
     return agentResponse;
   } catch (error) {
+    if (!durableDeliveryFinalized
+      && !durableRecoveryResponsePersisted
+      && durableFatigueReservation
+      && runtime.fatigueRegulationReservations
+      && fatigueDecision) {
+      try {
+        await runtime.fatigueRegulationReservations.finalize({
+          correlation: durableFatigueReservation,
+          outcome: 'failed',
+          finalizedAtMs: Date.now(),
+          fatigue: fatigueDecision.metadata,
+        });
+      } catch (finalizeError) {
+        log.error('Failed to release durable ICP fatigue reservation after turn failure', {
+          turnId,
+          error: toErrorMessage(finalizeError),
+        });
+      }
+    }
+    if (durableFatigueReservation && runtime.fatigueRegulationReservations) {
+      try {
+        await runtime.fatigueRegulationReservations.handoff(durableFatigueReservation);
+      } catch (handoffError) {
+        log.error('Failed to hand off durable ICP fatigue reservation after turn failure', {
+          turnId,
+          error: toErrorMessage(handoffError),
+        });
+      }
+      durableFatigueReservation = null;
+    }
     const err = error instanceof Error ? error : new Error(String(error));
     const observedFailureTurnMessages = invocationState.turnMessages.length > 0
       ? invocationState.turnMessages

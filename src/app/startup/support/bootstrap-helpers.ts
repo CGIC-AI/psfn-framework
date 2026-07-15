@@ -227,7 +227,7 @@ export function hydrateCanonicalStartupConfig(
     nodeEnv: env.NODE_ENV,
     runtimeRootDir: env.PSFN_RUNTIME_ROOT,
     legacyDataDir: env.DATA_DIR,
-    workspacePath: env.WORKSPACE_PATH,
+    workspacePath: config.workspacePath ?? env.WORKSPACE_PATH,
     logsDir: env.PSFN_LOGS_DIR,
     tempDir: env.PSFN_TEMP_DIR,
     backupsDir: env.BACKUP_ROOT_DIR,
@@ -316,8 +316,17 @@ export function hydrateCanonicalStartupConfig(
         relevanceFloor: persistedScheduler.weightedThoughtOutreach.lifecycle.relevanceFloor,
       },
     },
+    icpAutonomy: {
+      enabled: persistedScheduler.icpAutonomy.enabled,
+      candidate: { ...persistedScheduler.icpAutonomy.candidate },
+      permit: { ...persistedScheduler.icpAutonomy.permit },
+      availability: { ...persistedScheduler.icpAutonomy.availability },
+    },
+    ...(persistedScheduler.introspectionAudit
+      ? { introspectionAudit: { ...persistedScheduler.introspectionAudit } }
+      : {}),
   };
-  config.maintenanceIntervalMs = schedulerConfig.salienceDecayIntervalMs;
+  config.salienceDecayIntervalMs = schedulerConfig.salienceDecayIntervalMs;
   const chargePolicyConfig = configStore.loadStartupChargePolicy();
   config.chargePolicy = chargePolicyConfig;
 

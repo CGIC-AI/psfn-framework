@@ -37,6 +37,12 @@
 // context, not a triggered turn. No auto-greeting is dispatched on arrival;
 // a free-time/outreach lane choosing to speak into a room is future work.
 
+import {
+  createCompanionId,
+  parseCompanionId,
+  type CompanionId,
+} from '../routing/companion-id.js';
+
 export const COMPANION_CHANNEL_TYPE = 'companion';
 
 export const COMPANION_ROOM_CHANNEL_PREFIX = 'companion-room:';
@@ -44,19 +50,18 @@ export const COMPANION_DM_CHANNEL_PREFIX = 'companion-dm:';
 
 export type ParsedCompanionChannel =
   | { kind: 'room'; placeId: string }
-  | { kind: 'dm'; participants: [string, string] };
+  | { kind: 'dm'; participants: [CompanionId, CompanionId] };
 
-function isValidIdSegment(value: string): boolean {
-  // Companion ids are UUIDs and place ids follow the places-registry token
-  // grammar; neither contains ':'. Reject anything empty or colon-bearing so
-  // channel-id parsing stays unambiguous.
+function isValidRoomPlaceId(value: string): boolean {
+  // Place ids follow the places-registry token grammar and never contain ':'.
+  // Companion participants use the canonical CompanionId parser below.
   return value.length > 0 && !value.includes(':') && value.trim() === value;
 }
 
 /** Canonical room channelId for a place's conversation venue. */
 export function composeCompanionRoomChannelId(placeId: string): string {
   const normalized = placeId.trim();
-  if (!isValidIdSegment(normalized)) {
+  if (!isValidRoomPlaceId(normalized)) {
     throw new Error(`Invalid companion room placeId: ${JSON.stringify(placeId)}`);
   }
   return `${COMPANION_ROOM_CHANNEL_PREFIX}${normalized}`;
@@ -67,14 +72,12 @@ export function composeCompanionRoomChannelId(placeId: string): string {
  * normalized (lexicographic sort) so both sides derive the same channelId —
  * one channel, one fatigue budget, regardless of who addresses whom.
  */
-export function composeCompanionDmChannelId(companionA: string, companionB: string): string {
-  const a = companionA.trim();
-  const b = companionB.trim();
-  if (!isValidIdSegment(a) || !isValidIdSegment(b)) {
-    throw new Error(
-      `Invalid companion DM participant ids: ${JSON.stringify(companionA)}, ${JSON.stringify(companionB)}`,
-    );
-  }
+export function composeCompanionDmChannelId(
+  companionA: CompanionId,
+  companionB: CompanionId,
+): string {
+  const a = createCompanionId(companionA, 'companion DM participant A');
+  const b = createCompanionId(companionB, 'companion DM participant B');
   if (a === b) {
     throw new Error(`Companion DM requires two distinct participants, got ${JSON.stringify(a)} twice`);
   }
@@ -92,7 +95,7 @@ export function composeCompanionDmChannelId(companionA: string, companionB: stri
 export function parseCompanionChannelId(channelId: string): ParsedCompanionChannel | null {
   if (channelId.startsWith(COMPANION_ROOM_CHANNEL_PREFIX)) {
     const placeId = channelId.slice(COMPANION_ROOM_CHANNEL_PREFIX.length);
-    if (!isValidIdSegment(placeId)) return null;
+    if (!isValidRoomPlaceId(placeId)) return null;
     return { kind: 'room', placeId };
   }
   if (channelId.startsWith(COMPANION_DM_CHANNEL_PREFIX)) {
@@ -100,9 +103,17 @@ export function parseCompanionChannelId(channelId: string): ParsedCompanionChann
     const parts = rest.split(':');
     if (parts.length !== 2) return null;
     const [a, b] = parts;
-    if (!isValidIdSegment(a) || !isValidIdSegment(b)) return null;
-    if (a === b || a > b) return null;
-    return { kind: 'dm', participants: [a, b] };
+    const companionA = parseCompanionId(a);
+    const companionB = parseCompanionId(b);
+    // Channel IDs are canonical wire values: parsing may never trim or repair
+    // a participant token because that would create multiple spellings of one
+    // fatigue budget.
+    if (!companionA || !companionB || companionA !== a || companionB !== b) return null;
+    if (companionA === companionB || companionA > companionB) return null;
+    return {
+      kind: 'dm',
+      participants: [companionA, companionB],
+    };
   }
   return null;
 }

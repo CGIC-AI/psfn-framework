@@ -123,6 +123,81 @@ describe('weighted-thought outreach initiation', () => {
     expect(persisted!.nudgeState).toBe('accepted');
   });
 
+  it('routes a companion-targeted thought through the ICP candidate adapter without the legacy nudge or outbound action', async () => {
+    const thought = {
+      ...strongThought('wt-peer'),
+      contactId: 'peer-contact',
+    };
+    const store = makeStore(thought);
+    const evaluator = acceptEvaluator('forbidden legacy message');
+    const submit = vi.fn().mockResolvedValue({
+      kind: 'submitted',
+      result: {
+        outcome: 'sent',
+        candidateId: '11111111-1111-4111-8111-111111111111',
+        status: 'consumed',
+      },
+    });
+    const result = await runWeightedThoughtOutreachOnce(baseDeps(store, evaluator, {
+      icpCandidateAdapter: { submit },
+    }), T0);
+
+    expect(submit).toHaveBeenCalledOnce();
+    expect(evaluator.evaluate).not.toHaveBeenCalled();
+    expect(result.produced).toEqual([]);
+    expect(result.icpCandidates).toHaveLength(1);
+    expect((await store.getById('wt-peer'))?.nudgeState).toBe('accepted');
+  });
+
+  it('dampens a companion thought rejected for missing causal lineage without human fallback', async () => {
+    const thought = { ...strongThought('wt-peer-blocked'), contactId: 'peer-contact' };
+    const store = makeStore(thought);
+    const evaluator = acceptEvaluator('forbidden legacy message');
+    const submit = vi.fn().mockResolvedValue({
+      kind: 'blocked',
+      reason: 'recursive_trigger',
+    });
+
+    const result = await runWeightedThoughtOutreachOnce(baseDeps(store, evaluator, {
+      icpCandidateAdapter: { submit },
+    }), T0);
+
+    expect(submit).toHaveBeenCalledOnce();
+    expect(evaluator.evaluate).not.toHaveBeenCalled();
+    expect(result.produced).toEqual([]);
+    expect(result.declined).toEqual([
+      expect.objectContaining({ thoughtId: 'wt-peer-blocked', reason: 'recursive_trigger' }),
+    ]);
+    expect((await store.getById('wt-peer-blocked'))?.nudgeState).toBe('declined');
+  });
+
+  it('does not repeat ICP consent or dampening on unreinforced scheduler ticks', async () => {
+    const thought = { ...strongThought('wt-peer-deferred'), contactId: 'peer-contact' };
+    const store = makeStore(thought);
+    const evaluator = acceptEvaluator('forbidden legacy message');
+    const submit = vi.fn().mockResolvedValue({
+      kind: 'submitted',
+      result: {
+        outcome: 'deferred',
+        candidateId: '11111111-1111-4111-8111-111111111111',
+        status: 'deferred',
+        reasonCode: 'peer_busy',
+      },
+    });
+    const deps = baseDeps(store, evaluator, { icpCandidateAdapter: { submit } });
+
+    await runWeightedThoughtOutreachOnce(deps, T0);
+    const once = (await store.getById('wt-peer-deferred'))!;
+    await runWeightedThoughtOutreachOnce(deps, T0 + 1_000);
+    const twice = (await store.getById('wt-peer-deferred'))!;
+
+    expect(submit).toHaveBeenCalledOnce();
+    expect(evaluator.evaluate).not.toHaveBeenCalled();
+    expect(twice.nudgeState).toBe('declined');
+    expect(twice.declineCount).toBe(once.declineCount);
+    expect(twice.accumulatedWeight).toBe(once.accumulatedWeight);
+  });
+
   it('produced action flows through the existing dispatcher policy gates (approve + deny)', async () => {
     const store = makeStore(strongThought());
     const result = await runWeightedThoughtOutreachOnce(baseDeps(store, acceptEvaluator('ping')), T0);

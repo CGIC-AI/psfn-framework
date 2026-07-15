@@ -13,7 +13,12 @@ import type { AgentTool, StreamFn } from '../../boundary/pi-agent/index.js';
 import type { UserMessage } from '@mariozechner/pi-ai';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createEventBusCostTelemetryPort } from '../../shared/telemetry/cost-telemetry-port.js';
-import { getRunChargeContext, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
+import {
+  getRunChargeContext,
+  runWithChargeContext,
+  type DurableRunChargeProbe,
+  type DurableRunChargeRecorder,
+} from '../../shared/telemetry/run-charge.js';
 import { createMemoryAppCache } from '../../shared/cache/memory-cache.js';
 import type { AppCache } from '../../shared/cache/types.js';
 import type { SessionManager } from '../session/manager.js';
@@ -23,10 +28,11 @@ import {
   INTENTION_FOLLOW_UP_AUTHOR_ID,
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
 } from '../intention/appraisal.js';
-import type { AgentResponse, CorrelationMetadata, ModelBudgetBlockedEvent, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, CorrelationMetadata, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
+import { resolveIcpAutonomyCandidateSchedulerOrigin } from '../icp/candidate-scheduler-origin.js';
 import type { ContactTrackingGate } from '../contacts/tracking-gate.js';
 import type { ImageVisionReviewer } from '../../primitives/images/types.js';
 import type { VisionIntakeImageScreenerPort } from './substrate-agent/vision-attachments.js';
@@ -49,12 +55,15 @@ import {
 import { createActiveEmanationSatellitePresencePort } from './satellite-adapter-port.js';
 import { installAgentToolSchedulerPatch } from '../../boundary/pi-agent/agent-loop-patch.js';
 import { PromptCacheTurnRuntime } from './substrate-agent/turn-execution/prompt-cache-runtime.js';
+import { TurnRunReservation } from './substrate-agent/turn-run-reservation.js';
+import { TurnQueueIngressCoordinator } from './substrate-agent/turn-queue-ingress.js';
 import { convertToLlm, type InternalWhisperMessage } from './messages.js';
 import { MESSAGE_CLASSES } from './message-classes.js';
 import { createEventBridge, type EventBridge } from './event-bridge.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { SkillsRuntime } from '../../faculties/skills/runtime.js';
 import { ReflectionNudgeTracker } from '../../faculties/skills/reflection-nudge.js';
+import type { IntrospectionTurnSensitivityDecisions } from '../../faculties/introspection/turn-sensitivity.js';
 import type { ToolCategory } from './tool-registrar.js';
 import {
   gateToolWithCapabilities,
@@ -79,6 +88,7 @@ import {
 } from './tool-wiring-validator.js';
 import {
   type ExtendedToolAutoloadPolicy,
+  type ExtendedToolTurnClass,
 } from './extended-tool-autoload-policy.js';
 import type {
   AdaptiveLoadedExtendedToolState,
@@ -157,6 +167,7 @@ import {
 } from './substrate-agent/background-continuation-runtime.js';
 import {
   handleMessageForTurn,
+  type TurnDeliveryLifecycle,
 } from './substrate-agent/turn-execution-runtime.js';
 import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
 import { CompletionNoticeBuffer } from './completion-notices.js';
@@ -182,6 +193,7 @@ import { createResponseControlTool } from './no-reply-tool.js';
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 import type { ObserverEvalSidecarRuntime } from '../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from './fatigue/fatigue-budget.js';
+import type { IcpFatigueRegulationReservationPort } from './fatigue/regulation-reservation.js';
 import type { RuntimeServiceHealthStatus } from '../../operator/tool-health/types.js';
 import type { IntakeFirewallMode } from '../../system/config/intake-policy-config.js';
 
@@ -221,7 +233,7 @@ export interface SelfModelRuntimeWiring {
 
 export interface SubstrateAgentOptions {
   streamFn?: StreamFn;
-  streamRuntimeOptions?: Omit<SubstrateStreamRuntimeOptions, 'onBudgetBlocked' | 'transport'>;
+  streamRuntimeOptions?: Omit<SubstrateStreamRuntimeOptions, 'transport'>;
   characterName?: string;
   characterPromptVariables?: Record<string, string>;
   characterPromptVariablesProvider?: () => Record<string, string>;
@@ -230,6 +242,7 @@ export interface SubstrateAgentOptions {
   selfModelRuntime?: SelfModelRuntimeWiring;
   observerEvalSidecar?: ObserverEvalSidecarRuntime;
   fatigueBudget?: FatigueBudgetPort | null;
+  fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   streamTransport?: SubstrateStreamTransport;
   appCache?: AppCache;
   /** Contact-tracking policy gate (E3.4). Absent gate behaves as 'auto' everywhere. */
@@ -262,6 +275,8 @@ export class SubstrateAgent {
   private readonly appCache: AppCache;
   private reflectionNudge = new ReflectionNudgeTracker();
   private readonly promptCacheRuntime = new PromptCacheTurnRuntime();
+  private readonly turnRunReservation = new TurnRunReservation();
+  private readonly turnQueueIngress: TurnQueueIngressCoordinator;
   readonly completionNotices = new CompletionNoticeBuffer();
   private readonly turnSupportRuntime: TurnSupportRuntime;
   private readonly toolRuntimeFacade: ToolRuntimeFacade;
@@ -269,6 +284,9 @@ export class SubstrateAgent {
   private selfModelRuntimeRequired = false;
   private readonly emotionSelfModelRuntime: EmotionSelfModelRuntime;
   private readonly fatigueBudget: FatigueBudgetPort | null;
+  private readonly fatigueRegulationReservations: IcpFatigueRegulationReservationPort | null;
+  private durableChargeRecorder: DurableRunChargeRecorder | null = null;
+  private durableChargeProbe: DurableRunChargeProbe | null = null;
   private currentInternalState: InternalState | null = null;
   private currentInternalStateSnapshotRef: string | null = null;
   private currentMetacognitiveFlags: MetacognitiveFlag[] = [];
@@ -466,6 +484,7 @@ export class SubstrateAgent {
     this.selfModelRuntimeRequired = options?.selfModelRuntime?.requireWiring ?? false;
     this.observerEvalSidecar = options?.observerEvalSidecar ?? null;
     this.fatigueBudget = options?.fatigueBudget ?? null;
+    this.fatigueRegulationReservations = options?.fatigueRegulationReservations ?? null;
     this.contactTrackingGate = options?.contactTrackingGate ?? null;
     this.placesRegistryConfig = options?.placesRegistryConfig;
     this.virtualRoomFollower = createVirtualRoomFollower({
@@ -497,16 +516,6 @@ export class SubstrateAgent {
     });
     this.emotionSelfModelRuntime.assertEmotionRuntimeConfigured();
 
-    const emitBudgetBlocked = (event: ModelBudgetBlockedEvent) => {
-      this.eventBus.emit('model.budget.blocked', event).catch((error) => {
-        log.error('Failed to emit stream budget blocked telemetry', {
-          error: toErrorMessage(error),
-          provider: event.provider,
-          model: event.model,
-          reason: event.reason,
-        });
-      });
-    };
     const defaultStreamTransport = options?.streamTransport ?? {
       stream: this.llmClient.stream.bind(this.llmClient),
     };
@@ -515,10 +524,17 @@ export class SubstrateAgent {
       streamFn: options?.streamFn ?? createSubstrateStreamFn(config, {
         ...(options?.streamRuntimeOptions ?? {}),
         transport: defaultStreamTransport,
-        onBudgetBlocked: emitBudgetBlocked,
       }),
       convertToLlm,
     });
+    this.turnQueueIngress = new TurnQueueIngressCoordinator({
+      agent: this.agent,
+      resolveOwner: () => this.turnRunReservation.getCurrentOwnerAttribution(),
+      runFreshOrdinary: async (message) => {
+        await this.handleMessageUnderReservation(message);
+      },
+    });
+    this.agent.subscribe((event) => this.turnQueueIngress.observeAgentEvent(event));
     this.turnSupportRuntime = new TurnSupportRuntime({
       eventBus: this.eventBus,
       sessionManager: this.sessionManager,
@@ -558,6 +574,7 @@ export class SubstrateAgent {
       },
     }, {
       resolvePromptCacheBoundaries: (systemPrompt) => this.promptCacheRuntime.resolveBoundariesFor(systemPrompt),
+      resolveTurnTools: () => this.toolRuntimeFacade.resolveOwnedTurnTools(),
     });
 
     this.installRuntimeHooks();
@@ -798,8 +815,16 @@ export class SubstrateAgent {
     return this.toolRuntimeFacade.getAdaptiveToolRuntimeState();
   }
 
+  getActiveTurnTools(): readonly AgentTool<any>[] {
+    return this.toolRuntimeFacade.getActiveTurnTools();
+  }
+
   getToolCatalogSnapshot(): RuntimeToolCatalogSnapshot {
     return this.toolRuntimeFacade.getToolCatalogSnapshot();
+  }
+
+  getExtendedToolTurnClass(toolName: string): ExtendedToolTurnClass {
+    return this.toolRuntimeFacade.classifyExtendedToolForTurn(toolName);
   }
 
   getToolHealthStatusByName(): ReadonlyMap<string, RuntimeServiceHealthStatus> {
@@ -854,11 +879,32 @@ export class SubstrateAgent {
   /**
    * Inject a steering message mid-run. Delivered after current tool execution,
    * remaining tool calls are skipped, and the message is added to context
-   * before the next LLM call. No-op if agent isn't streaming.
+   * before the next LLM call. When no ordinary run can accept it, the message
+   * starts a fresh ordinary turn under its own reservation owner.
+   * Input arriving during an exclusive candidate turn is deferred as a fresh
+   * ordinary turn so it cannot steer the candidate-owned provider loop.
    */
   async steer(message: SubstrateMessage): Promise<void> {
-    if (!this.agent.state.isStreaming) return;
+    return this.turnRunReservation.runIngress({
+      kind: 'queued-ingress',
+      sourceId: message.id,
+      ingress: 'steer',
+    }, async ({ deferredFromExclusive }) => {
+      // Claim the fresh-ordinary FIFO slot synchronously, before author
+      // resolution, so concurrent idle inputs cannot invert arrival order.
+      const slot = this.turnQueueIngress.reserveFreshOrdinarySlot();
+      try {
+        if (!deferredFromExclusive && await this.trySteerActiveRun(message)) return;
+        await slot.run(message);
+      } finally {
+        slot.dispose();
+      }
+    });
+  }
+
+  private async trySteerActiveRun(message: SubstrateMessage): Promise<boolean> {
     const authorContext = await this.resolveAuthorContext(message);
+    if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
     this.turnSupportRuntime.recordUserMessage(
       message,
       createTurnId(),
@@ -872,6 +918,7 @@ export class SubstrateAgent {
       timestamp: Date.now(),
     } satisfies UserMessage);
     log.debug('Steered message', { channelId: message.channelId, content: message.content.slice(0, 80) });
+    return true;
   }
 
   /**
@@ -880,22 +927,53 @@ export class SubstrateAgent {
    *
    * Intention appraisal follow-ups are injected as internal Whisper notes to self
    * and are never persisted into the external session journal.
+   * Input arriving during an exclusive candidate turn is deferred as a fresh
+   * ordinary turn rather than entering the candidate follow-up queue.
    */
   async followUp(message: SubstrateMessage): Promise<void> {
+    return this.turnRunReservation.runIngress({
+      kind: 'queued-ingress',
+      sourceId: message.id,
+      ingress: 'follow-up',
+    }, async ({ deferredFromExclusive }) => {
+      // Claim the fresh-ordinary FIFO slot synchronously, before author
+      // resolution, so concurrent idle inputs cannot invert arrival order.
+      const slot = this.turnQueueIngress.reserveFreshOrdinarySlot();
+      try {
+        if (!deferredFromExclusive && await this.tryQueueFollowUpOnActiveOrdinaryRun(message)) return;
+        if (message.authorId === INTENTION_FOLLOW_UP_AUTHOR_ID) {
+          this.turnQueueIngress.deferInternalFollowUp(this.createInternalWhisperMessage(message));
+          return;
+        }
+        await slot.run(message);
+      } finally {
+        slot.dispose();
+      }
+    });
+  }
+
+  private createInternalWhisperMessage(message: SubstrateMessage): InternalWhisperMessage {
+    return {
+      role: 'custom',
+      type: 'internalWhisper',
+      messageClass: MESSAGE_CLASSES.internalWhisper,
+      content: message.content,
+      speakerName: message.authorName.trim() || INTENTION_FOLLOW_UP_AUTHOR_NAME,
+      timestamp: Date.now(),
+    };
+  }
+
+  private async tryQueueFollowUpOnActiveOrdinaryRun(
+    message: SubstrateMessage,
+  ): Promise<boolean> {
     if (message.authorId === INTENTION_FOLLOW_UP_AUTHOR_ID) {
-      this.agent.followUp({
-        role: 'custom',
-        type: 'internalWhisper',
-        messageClass: MESSAGE_CLASSES.internalWhisper,
-        content: message.content,
-        speakerName: message.authorName.trim() || INTENTION_FOLLOW_UP_AUTHOR_NAME,
-        timestamp: Date.now(),
-      } satisfies InternalWhisperMessage);
+      if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
+      this.agent.followUp(this.createInternalWhisperMessage(message));
       log.debug('Queued follow-up', {
         channelId: message.channelId,
         internalKind: 'whisper',
       });
-      return;
+      return true;
     }
 
     const isSystemOriginated = message.authorId.startsWith('system:');
@@ -903,6 +981,10 @@ export class SubstrateAgent {
     const systemContent = isSystemOriginated
       ? formatAttributedSystemContent(message.content, message.authorName)
       : message.content;
+    const authorContext: ResolvedAuthorContext | null = isSystemOriginated
+      ? null
+      : await this.resolveAuthorContext(message);
+    if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
     if (isSystemOriginated) {
       this.turnSupportRuntime.recordSystemMessage(
         message,
@@ -911,7 +993,9 @@ export class SubstrateAgent {
         systemContent,
       );
     } else {
-      const authorContext = await this.resolveAuthorContext(message);
+      if (!authorContext) {
+        throw new Error('External follow-up requires resolved ordinary author context');
+      }
       this.turnSupportRuntime.recordUserMessage(
         message,
         turnId,
@@ -937,6 +1021,7 @@ export class SubstrateAgent {
       channelId: message.channelId,
       systemOriginated: isSystemOriginated,
     });
+    return true;
   }
 
   /**
@@ -945,6 +1030,14 @@ export class SubstrateAgent {
    * in later turns but must not itself trigger a reply.
    */
   async observeMessage(message: SubstrateMessage): Promise<void> {
+    return this.turnRunReservation.runIngress({
+      kind: 'queued-ingress',
+      sourceId: message.id,
+      ingress: 'observation',
+    }, () => this.observeMessageUnderReservation(message));
+  }
+
+  private async observeMessageUnderReservation(message: SubstrateMessage): Promise<void> {
     await this.sessionManager.awaitPendingAutoCompaction(message.channelId);
 
     const turnId = createTurnId();
@@ -1007,9 +1100,12 @@ export class SubstrateAgent {
     });
   }
 
-  /** Wait for the agent to finish all pending work (prompt + steering + follow-ups) */
-  waitForIdle(): Promise<void> {
-    return this.agent.waitForIdle();
+  /** Wait for the model engine and every owned outer turn callback to settle. */
+  async waitForIdle(): Promise<void> {
+    await Promise.all([
+      this.agent.waitForIdle(),
+      this.turnRunReservation.waitForIdle(),
+    ]);
   }
 
   setActiveConcernProvider(provider: ActiveConcernContextProvider | null): void {
@@ -1022,6 +1118,15 @@ export class SubstrateAgent {
 
   setBehavioralPatternProvider(provider: BehavioralPatternContextProvider | null): void {
     this.behavioralPatternProvider = provider;
+  }
+
+  /** Late-wired by the agent entrypoint before any message callback is exposed. */
+  setDurableChargeRecorder(
+    recorder: DurableRunChargeRecorder,
+    probe: DurableRunChargeProbe,
+  ): void {
+    this.durableChargeRecorder = recorder;
+    this.durableChargeProbe = probe;
   }
 
   setSelfModelRuntimeRequired(required: boolean): void {
@@ -1043,6 +1148,12 @@ export class SubstrateAgent {
 
   setInternalStateStore(store: InternalStateStorePort | null): void {
     this.internalStateStore = store;
+  }
+
+  setIntrospectionTurnSensitivityDecisions(
+    decisions: IntrospectionTurnSensitivityDecisions | null,
+  ): void {
+    this.turnSupportRuntime.setIntrospectionTurnSensitivityDecisions(decisions);
   }
 
   /** Restores a validated persisted snapshot as the current running state (startup rehydration). */
@@ -1095,14 +1206,34 @@ export class SubstrateAgent {
 
   /** Abort the current prompt, cancelling streaming and tool execution */
   abort(): void {
+    this.turnRunReservation.assertActiveRunMutationAllowed('abort');
     this.agent.abort();
   }
 
-  async handleMessage(message: SubstrateMessage): Promise<AgentResponse> {
+  async handleMessage(
+    message: SubstrateMessage,
+    deliveryLifecycle?: TurnDeliveryLifecycle,
+  ): Promise<AgentResponse> {
+    return this.turnRunReservation.runShared(
+      { kind: 'ordinary-turn', sourceId: message.id },
+      () => {
+        this.turnQueueIngress.enqueuePendingInternalFollowUpsForOrdinaryRun();
+        return this.handleMessageUnderReservation(message, deliveryLifecycle);
+      },
+    );
+  }
+
+  private async handleMessageUnderReservation(
+    message: SubstrateMessage,
+    deliveryLifecycle?: TurnDeliveryLifecycle,
+  ): Promise<AgentResponse> {
     const run = async (): Promise<AgentResponse> => handleMessageForTurn(createTurnExecutionRuntimeAdapter({
       eventBus: this.eventBus,
       costTelemetry: createEventBusCostTelemetryPort(this.eventBus),
+      durableChargeRecorder: this.durableChargeRecorder,
+      durableChargeProbe: this.durableChargeProbe,
       fatigueBudget: this.fatigueBudget,
+      fatigueRegulationReservations: this.fatigueRegulationReservations,
       satellitePresence: this.satellitePresencePort,
       companionPresence: this.companionPresence,
       llmClient: this.llmClient,
@@ -1299,30 +1430,92 @@ export class SubstrateAgent {
           this.getUserFacingBoundaryIndex(),
         ),
       },
-    }), message);
+    }), message, deliveryLifecycle);
 
-    // htm9.3: expose the message's intake envelopes to the egress tool guard
-    // for the duration of this turn (cleared in finally — never leaks into
-    // the next turn).
-    this.currentTurnIntakeEnvelopes = message.routing?.intakeEnvelopes ?? [];
-    try {
-      if (!this.config.chargePolicy || getRunChargeContext()) {
-        return await run();
+    return this.toolRuntimeFacade.runWithTurnToolContext(message, async () => {
+      // htm9.3: expose the message's intake envelopes to the egress tool guard
+      // for the duration of this turn (cleared in finally — never leaks into
+      // the next turn).
+      this.currentTurnIntakeEnvelopes = message.routing?.intakeEnvelopes ?? [];
+      try {
+        if (!this.config.chargePolicy || getRunChargeContext()) {
+          return await run();
+        }
+
+        return await runWithChargeContext({
+          chargePolicy: this.config.chargePolicy,
+          eventBus: this.eventBus,
+          lane: 'interactive',
+          runId: message.id,
+          correlation: {
+            requestId: message.id,
+            channelId: message.channelId,
+          },
+        }, run);
+      } finally {
+        this.currentTurnIntakeEnvelopes = [];
       }
+    });
+  }
 
-      return await runWithChargeContext({
-        chargePolicy: this.config.chargePolicy,
-        eventBus: this.eventBus,
-        lane: 'interactive',
-        runId: message.id,
-        correlation: {
-          requestId: message.id,
-          channelId: message.channelId,
-        },
-      }, run);
-    } finally {
-      this.currentTurnIntakeEnvelopes = [];
-    }
+  async handleIcpAutonomyCandidateTurn(message: SubstrateMessage): Promise<AgentResponse> {
+    return this.turnRunReservation.runExclusive({
+      kind: 'candidate-turn',
+      sourceId: message.id,
+    }, async () => {
+      this.turnQueueIngress.assertCandidateQueueEmpty();
+      const candidateOrigin = resolveIcpAutonomyCandidateSchedulerOrigin(message);
+      if (!candidateOrigin) {
+        throw new Error('Trusted ICP autonomy candidate turn requires a validated scheduler origin');
+      }
+      return this.toolRuntimeFacade.runWithIcpAutonomyCandidateNotifyScope(
+        message,
+        () => this.handleMessageUnderReservation(message),
+      );
+    });
+  }
+
+  /** Restart-safe recovery for a sender-side target-channel initiation turn. */
+  findRecordedIcpInitiation(
+    channelId: string,
+    sourceMessageId: string,
+  ): {
+    content: string;
+    correlation: import('../../shared/contracts/icp-autonomy.js').IcpConversationCorrelation;
+    recoveryResponse: AgentResponse;
+  } | null {
+    return this.sessionManager.findRecordedIcpInitiation(channelId, sourceMessageId);
+  }
+
+  findIcpDeliveryObservation(
+    channelId: string,
+    sourceMessageId: string,
+  ): import('../session/icp-delivery-recovery.js').IcpDeliveryObservation | null {
+    return this.sessionManager.findIcpDeliveryObservation(channelId, sourceMessageId);
+  }
+
+  /** Durable recipient envelope used to bind restart replay to original L0 truth. */
+  findRecordedCompanionSourceMessage(
+    channelId: string,
+    sourceMessageId: string,
+  ): import('../session/icp-delivery-recovery.js').RecordedCompanionSourceMessage | null {
+    return this.sessionManager.findRecordedCompanionSourceMessage(channelId, sourceMessageId);
+  }
+
+  /** Durable recipient-side source-id check; survives agent process restart. */
+  hasRecordedSourceMessage(channelId: string, sourceMessageId: string): boolean {
+    return this.sessionManager.hasRecordedSourceMessage(channelId, sourceMessageId);
+  }
+
+  /**
+   * Records local transport truth in the channel journal's hidden system lane.
+   * It never becomes peer speech and therefore cannot imply a failed send was
+   * mutually witnessed.
+   */
+  recordIcpDeliveryObservation(
+    observation: import('../session/icp-delivery-recovery.js').IcpDeliveryObservation,
+  ): void {
+    this.sessionManager.recordIcpDeliveryObservation(observation);
   }
 
   // ── Private helpers ──

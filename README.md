@@ -72,7 +72,7 @@ Most AI companion frameworks treat conversations as throwaway. PSFN treats every
 - **Discord**: Full adapter with typing indicators, per-channel serialization, voice support (Deepgram STT + provider-pluggable streaming TTS: ElevenLabs or Echo)
 - **Telegram**: Polling and webhook modes, allowlist-aware inbound handling, thread and attachment support, long-running tool status updates
 - **OpenAI-Compatible API**: `/v1/chat/completions` with SSE streaming for WebUI integration
-- **WebSocket Voice Runtime**: Transport primitives for browser/app clients using `voice-wire-v1` session frames
+- **WebSocket Voice Runtime**: Transport primitives for browser/app clients using `voice-wire-v2` JSON control frames and binary audio frames
 - **Satellite Hub endpoints**: external Satellite Hub runtimes own endpoint transports such as Wyoming/OpenHome; PSFN exposes the registered satellite claim and config-pull boundary
 - **Satellite Hub PWA Client**: `companion-ui/` is a standalone mobile-first PWA client for the Satellite Hub websocket protocol
 - **Admin GUI (the Garden)**: Svelte 5 SPA on the admin host root (`/`, `/memory`, `/charge-budget`, `/episodic-memory`, `/settings`, etc.) when `admin-ui/build` is present, with pages for memory, L0.1 episodes, sessions, contacts, contact approvals, rooms, graph proposals, wiki, scheduler, settings, prompts, model discovery, charge budget, chat, subsystem health, telemetry, and a Cognitive Security tab (quarantine approvals, firewall policy and source lists, drift review cards, remediation)

@@ -12,9 +12,11 @@ import {
   decisionsToPostTurnActionCandidates,
   isBackgroundAppraisalChannel,
   normalizeIntentionFollowUpActionPayload,
+  normalizeIntentionOutboundMessageActionPayload,
   normalizeIntentionReminderActionPayload,
   buildPostTurnAppraisalTranscript,
   sessionEntriesToIntentionMessages,
+  pendingFollowUpsToPostTurnActionCandidates,
   toInferredPostTurnActions,
   type IntentionActionDecision,
 } from './appraisal.js';
@@ -208,6 +210,55 @@ describe('IntentionAppraisal', () => {
     expect(second[0]?.followUp?.content).toContain('check-in');
     expect(complete).toHaveBeenCalledTimes(1);
     expect(complete.mock.calls[0]?.[1]).toBe('background');
+  });
+
+  it('carries typed ICP lineage into post-turn appraisal model spend', async () => {
+    const localCompanionId = '11111111-1111-4111-8111-111111111111';
+    const peerCompanionId = '22222222-2222-4222-8222-222222222222';
+    const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
+    const icpCorrelation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: localCompanionId,
+      localCompanionId,
+      peerCompanionId,
+      peerContactId: 'contact-peer',
+      channelId,
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
+      messageId: 'companion-message-1',
+      requestId: 'companion-message-1',
+      chargeLane: 'companion_social' as const,
+      surface: 'companion_dm' as const,
+      costPurpose: 'conversation_turn' as const,
+      costOriginStage: 'reply' as const,
+      fatigueDecision: 'allow' as const,
+    };
+    const { provider, complete } = makeProvider([
+      '{"decisions":[{"type":"noop","priority":"low","reason":"nothing due","timing":"none"}]}',
+    ]);
+    const appraisal = new IntentionAppraisal({ llmProvider: provider });
+
+    await appraisal.evaluate({
+      sessionId: channelId,
+      icpCorrelation,
+      currentEmotion: makeEmotionSnapshot(),
+      recentMessages: [{ role: 'user', content: 'A peer message.' }],
+      triggerOverride: 'motivation',
+      motivationSignals: ['social_need'],
+    });
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete.mock.calls[0]?.[0].correlation).toMatchObject({
+      purpose: 'intention.appraisal',
+      icpCorrelation: {
+        ...icpCorrelation,
+        requestId: expect.stringContaining('intention-appraisal:'),
+        costPurpose: 'sidecar',
+        costOriginStage: 'post_turn',
+      },
+    });
+    expect(complete.mock.calls[0]?.[0].correlation?.icpCorrelation?.requestId)
+      .toBe(complete.mock.calls[0]?.[0].correlation?.requestId);
   });
 
   it('triggers immediately on emotional shift', async () => {
@@ -946,6 +997,67 @@ describe('intention appraisal action mapping', () => {
       authorName: INTENTION_FOLLOW_UP_AUTHOR_NAME,
       content: 'Checking in.',
     });
+  });
+
+  it('preserves durable ICP lineage through resurface and a later non-ICP external decision', () => {
+    const rootInitiationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const [resurfaced] = pendingFollowUpsToPostTurnActionCandidates([{
+      id: 'follow-up-icp',
+      content: 'Reconsider checking in with the peer.',
+      priority: 'medium',
+      timing: 'immediate',
+      createdAt: '2026-07-13T20:00:00.000Z',
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      contactId: 'peer-contact',
+      originIcpRootInitiationId: rootInitiationId,
+    }]);
+    expect(normalizeIntentionFollowUpActionPayload(resurfaced.payload)).toMatchObject({
+      originIcpRootInitiationId: rootInitiationId,
+    });
+
+    const [outbound] = decisionsToPostTurnActionCandidates([{
+      type: 'followUp',
+      priority: 'medium',
+      reason: 'The resurfaced intention still wants to reach the peer.',
+      timing: 'immediate',
+      followUp: {
+        content: 'How are you doing?',
+        delivery: 'external',
+        pendingFollowUpId: 'follow-up-icp',
+      },
+    }], {
+      message: {
+        id: 'generated-follow-up-turn',
+        channelId: 'api:test',
+        channelType: 'api',
+        routing: { originIcpRootInitiationId: rootInitiationId },
+      },
+    });
+    expect(normalizeIntentionOutboundMessageActionPayload(outbound.payload)).toMatchObject({
+      originIcpRootInitiationId: rootInitiationId,
+    });
+  });
+
+  it('rejects malformed durable ICP lineage instead of relabeling it independent', () => {
+    expect(() => decisionsToPostTurnActionCandidates([], {
+      message: {
+        id: 'generated-follow-up-turn',
+        channelId: 'api:test',
+        channelType: 'api',
+        routing: { originIcpRootInitiationId: 'not-a-root' },
+      },
+    })).toThrow(/malformed ICP root lineage/i);
+    expect(normalizeIntentionFollowUpActionPayload({
+      channelId: 'api:test',
+      channelType: 'api',
+      authorId: 'system:intention',
+      authorName: 'Whisper',
+      content: 'Check in',
+      originIcpRootInitiationId: 'not-a-root',
+    })).toBeNull();
   });
 });
 

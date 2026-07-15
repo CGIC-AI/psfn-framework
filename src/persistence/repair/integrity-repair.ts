@@ -2,22 +2,20 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
-  readdirSync,
   readFileSync,
-  renameSync,
-  writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import type { SessionHmacKeyring } from '../journals/journal-utils.js';
 import {
   parseJournalText,
-  readJournalFirstEntry,
   resolveJournalIntegrityChainCandidates,
   signJournalEntry,
   verifyJournalEntryIntegrity,
 } from '../journals/journal-utils.js';
-import { buildIndexEntry, saveChannelIndex } from '../sessions/store/channel-index.js';
-import { isSessionJournalFilename } from '../sessions/store/channel-filenames.js';
+import { createFilesystemSessionArchivePort } from '../journals/journal/port.js';
+import { primeChannelIndexFromDisk } from '../sessions/store/channel-index.js';
+import { discoverSessionFileChains } from '../sessions/store/session-file-chains.js';
+import { withSessionJournalWriteLock } from '../sessions/store/session-journal-write-lock.js';
 import { CHANNEL_INDEX_FILENAME } from '../sessions/store-primitives.js';
 
 export interface SessionIntegrityRepairCounts {
@@ -46,87 +44,109 @@ function ensureBackup(filePath: string, backupDir: string, repoRoot: string): vo
   copyFileSync(filePath, backupPath);
 }
 
-function writeTextAtomic(filePath: string, content: string): void {
-  mkdirSync(dirname(filePath), { recursive: true });
-  const tempPath = `${filePath}.${process.pid}.${Date.now()}.tmp`;
-  writeFileSync(tempPath, content, 'utf-8');
-  renameSync(tempPath, filePath);
-}
-
-function rewriteJournalFile(
-  filePath: string,
+function rewriteJournalChainUnderLock(
+  filePaths: readonly string[],
   keyring: SessionHmacKeyring,
   backupDir: string,
   repoRoot: string,
-): number {
-  const raw = readFileSync(filePath, 'utf-8');
-  const parsed = parseJournalText(raw);
-  if (parsed.quarantined.length > 0) {
-    throw new Error(`Refusing to rewrite malformed journal file: ${filePath}`);
-  }
-
-  const originalEntries = parsed.entries;
+  archivePort: ReturnType<typeof createFilesystemSessionArchivePort>,
+  renewLease: () => void,
+): { modifiedEntries: number; modifiedFiles: number } {
+  const originalEntriesByFile = filePaths.map((filePath) => {
+    const parsed = parseJournalText(readFileSync(filePath, 'utf-8'));
+    renewLease();
+    if (parsed.quarantined.length > 0) {
+      throw new Error(`Refusing to rewrite malformed journal file: ${filePath}`);
+    }
+    return parsed.entries;
+  });
   let modifiedEntries = 0;
   let previousHmacCandidates: Array<string | null> = [null];
-  for (const entry of originalEntries) {
-    let verified = false;
-    const candidateList = previousHmacCandidates.length > 0 ? previousHmacCandidates : [null];
-    const nextCandidates: Array<string | null> = [];
-    for (const previousHmac of candidateList) {
-      const verification = verifyJournalEntryIntegrity(entry, keyring, previousHmac);
-      if (verification.verified) {
-        verified = true;
-      }
-      for (const candidate of resolveJournalIntegrityChainCandidates(verification, previousHmac)) {
-        if (!nextCandidates.some(existing => existing === candidate)) {
-          nextCandidates.push(candidate);
+  for (const entries of originalEntriesByFile) {
+    for (const entry of entries) {
+      renewLease();
+      let verified = false;
+      const candidateList = previousHmacCandidates.length > 0 ? previousHmacCandidates : [null];
+      const nextCandidates: Array<string | null> = [];
+      for (const previousHmac of candidateList) {
+        const verification = verifyJournalEntryIntegrity(entry, keyring, previousHmac);
+        if (verification.verified) verified = true;
+        for (const candidate of resolveJournalIntegrityChainCandidates(verification, previousHmac)) {
+          if (!nextCandidates.some(existing => existing === candidate)) {
+            nextCandidates.push(candidate);
+          }
         }
       }
+      if (!verified) modifiedEntries += 1;
+      previousHmacCandidates = nextCandidates.length > 0 ? nextCandidates : [null];
     }
-    if (!verified) {
-      modifiedEntries += 1;
-    }
-    previousHmacCandidates = nextCandidates.length > 0 ? nextCandidates : [null];
   }
-  if (modifiedEntries <= 0) return 0;
+  if (modifiedEntries <= 0) return { modifiedEntries: 0, modifiedFiles: 0 };
 
-  ensureBackup(filePath, backupDir, repoRoot);
+  for (const filePath of filePaths) {
+    ensureBackup(filePath, backupDir, repoRoot);
+    renewLease();
+  }
 
   let previousHmac: string | null = null;
-  const rewritten = originalEntries.map((entry) => {
+  const rewrittenByFile = originalEntriesByFile.map(entries => entries.map((entry) => {
+    renewLease();
     const { _hmac, _hmacKeyVersion, ...unsigned } = entry;
     const signed = signJournalEntry(unsigned, keyring, previousHmac);
     previousHmac = signed._hmac ?? null;
     return signed;
-  });
+  }));
+  const firstEntry = originalEntriesByFile.find(entries => entries.length > 0)?.[0];
+  if (!firstEntry) {
+    throw new Error(`Cannot rewrite an empty L0 journal chain: ${filePaths[0]}`);
+  }
+  const archives = filePaths.map(filePath => archivePort.openArchive(
+    firstEntry.channelId,
+    filePath,
+  ));
+  archivePort.rewriteJournalChain(archives, rewrittenByFile, renewLease);
+  return { modifiedEntries, modifiedFiles: filePaths.length };
+}
 
-  writeTextAtomic(filePath, `${rewritten.map(item => JSON.stringify(item)).join('\n')}\n`);
-  return modifiedEntries;
+function rewriteJournalChain(
+  filePaths: readonly string[],
+  keyring: SessionHmacKeyring,
+  backupDir: string,
+  repoRoot: string,
+): { modifiedEntries: number; modifiedFiles: number } {
+  const rootPath = filePaths[0];
+  if (!rootPath) return { modifiedEntries: 0, modifiedFiles: 0 };
+  const archivePort = createFilesystemSessionArchivePort();
+  return withSessionJournalWriteLock(rootPath, (renewLease) => {
+    archivePort.recoverJournalChainRewrite(rootPath);
+    return rewriteJournalChainUnderLock(
+      filePaths,
+      keyring,
+      backupDir,
+      repoRoot,
+      archivePort,
+      renewLease,
+    );
+  });
 }
 
 function rebuildSessionChannelIndex(sessionsDir: string): void {
-  const channelIndex = new Map<string, ReturnType<typeof buildIndexEntry>>();
-  const warnAboutQuarantinedEntries = () => {};
-
-  for (const filename of readdirSync(sessionsDir).sort()) {
-    if (!isSessionJournalFilename(filename)) continue;
-    const filePath = join(sessionsDir, filename);
-    const channelId = readJournalFirstEntry(filePath)?.channelId;
-    if (!channelId) continue;
-    const entry = buildIndexEntry(channelId, filePath, warnAboutQuarantinedEntries);
-    channelIndex.set(channelId, entry);
-  }
-
-  saveChannelIndex(join(sessionsDir, CHANNEL_INDEX_FILENAME), channelIndex);
+  primeChannelIndexFromDisk({
+    sessionsDir,
+    channelIndexPath: join(sessionsDir, CHANNEL_INDEX_FILENAME),
+    channelIndex: new Map(),
+    warnAboutQuarantinedEntries: () => {},
+  });
 }
 
 export function runSessionIntegrityRepair(params: RepairParams): SessionIntegrityRepairReport {
   mkdirSync(params.backupDir, { recursive: true });
 
-  const journalFiles = readdirSync(params.sessionsDir)
-    .filter(isSessionJournalFilename)
-    .sort()
-    .map(filename => join(params.sessionsDir, filename));
+  const discovered = discoverSessionFileChains(params.sessionsDir);
+  if (discovered.incompleteChains.length > 0) {
+    throw new Error(`Refusing integrity repair with incomplete L0 chains: ${JSON.stringify(discovered.incompleteChains)}`);
+  }
+  const journalFiles = discovered.chains.flatMap(chain => chain.filePaths);
 
   const journalReport: SessionIntegrityRepairCounts = {
     scannedFiles: journalFiles.length,
@@ -134,11 +154,15 @@ export function runSessionIntegrityRepair(params: RepairParams): SessionIntegrit
     modifiedEntries: 0,
   };
 
-  for (const filePath of journalFiles) {
-    const modifiedEntries = rewriteJournalFile(filePath, params.keyring, params.backupDir, params.repoRoot);
-    if (modifiedEntries <= 0) continue;
-    journalReport.modifiedFiles += 1;
-    journalReport.modifiedEntries += modifiedEntries;
+  for (const chain of discovered.chains) {
+    const modified = rewriteJournalChain(
+      chain.filePaths,
+      params.keyring,
+      params.backupDir,
+      params.repoRoot,
+    );
+    journalReport.modifiedFiles += modified.modifiedFiles;
+    journalReport.modifiedEntries += modified.modifiedEntries;
   }
 
   rebuildSessionChannelIndex(params.sessionsDir);

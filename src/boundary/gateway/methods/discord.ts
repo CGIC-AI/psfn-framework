@@ -5,6 +5,7 @@ import type {
 } from '../protocol.js';
 import type { AuditedMethodDescriptor, GatewayMethodRuntime } from './types.js';
 import { registerAuditedDescriptors } from './register.js';
+import { materializeGatewayAttachment } from '../attachment-materialization.js';
 
 const discordDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
@@ -21,9 +22,10 @@ const discordDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'discord.sendMedia',
     handler: async (params: DiscordSendMediaParams, runtime) => {
+      const media = materializeGatewayAttachment(params.media, runtime.workspacePath);
       await runtime.discordAdapter.outbound.sendMedia?.(
         { channelId: params.channelId },
-        params.media,
+        media,
       );
       return { success: true };
     },

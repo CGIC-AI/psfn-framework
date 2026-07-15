@@ -192,9 +192,11 @@ describe('TelegramAdapter', () => {
 
     expect(handled).toHaveLength(2);
     expect(handled[0].isDirectMessage).toBe(true);
+    expect(handled[0].routing).toMatchObject({ source: 'telegram', channelPrivacy: 'private' });
     expect(handled[0].channelId).toBe('telegram:111');
     expect(handled[0].content).toBe('hello from dm');
     expect(handled[1].isDirectMessage).toBe(false);
+    expect(handled[1].routing).toMatchObject({ source: 'telegram', channelPrivacy: 'invite_only' });
     expect(handled[1].channelId).toBe('telegram:-900/thread/7');
     expect(handled[1].content).toBe('run-skill now please');
 

@@ -146,6 +146,7 @@ const TEST_CHARGE_POLICY = {
   schemaVersion: 1,
   runChargeQuotaByLane: {
     interactive: 24,
+    companion_social: 12,
     background: 16,
     maintenance: 0,
     subagent: 6,
@@ -165,6 +166,7 @@ const TEST_CHARGE_POLICY = {
     shardLaunch: 8,
     externalModelConsult: 1,
     moaRoundBase: 1,
+    companionSocialContinuation: 1,
   },
   surfaceRationales: {
     paidImageGeneration: 'External image generation spends paid provider credits.',
@@ -173,6 +175,7 @@ const TEST_CHARGE_POLICY = {
     shardLaunch: 'Launching a shard consumes worker coordination overhead.',
     externalModelConsult: 'Consulting an external model uses a paid API boundary.',
     moaRoundBase: 'Each MOA round carries coordination overhead even before model spend.',
+    companionSocialContinuation: 'Autonomous companion continuation spends relationship-sensitive social budget.',
   },
   moa: {
     perRoundMultiplierByReferenceModelClass: {
@@ -515,17 +518,21 @@ describe('runtime subject identity', () => {
 
   it('H3: derives provenance from speaker role and channel origin', () => {
     // Live human speaker → 'human' regardless of channel.
-    expect(resolveRequesterProvenance({ speakerRole: 'user' }, { channelId: 'discord:dm:alice' }))
+    expect(resolveRequesterProvenance({ speakerRole: 'user', actorKind: 'human' }, { channelId: 'discord:dm:alice' }))
       .toBe('human');
-    expect(resolveRequesterProvenance({ speakerRole: 'user' }, { channelId: 'internal:heartbeat' }))
+    expect(resolveRequesterProvenance({ speakerRole: 'user', actorKind: 'human' }, { channelId: 'internal:heartbeat' }))
       .toBe('human');
+    expect(resolveRequesterProvenance(
+      { speakerRole: 'user', actorKind: 'machine_intelligence' },
+      { channelId: 'discord:dm:peer' },
+    )).toBe('system');
     // System speaker on an internal channel → scheduler-driven self-directed.
-    expect(resolveRequesterProvenance({ speakerRole: 'system' }, { channelId: 'internal:heartbeat' }))
+    expect(resolveRequesterProvenance({ speakerRole: 'system', actorKind: 'system' }, { channelId: 'internal:heartbeat' }))
       .toBe('self_directed');
-    expect(resolveRequesterProvenance({ speakerRole: 'system' }, { channelId: 'internal:reflection:whisper' }))
+    expect(resolveRequesterProvenance({ speakerRole: 'system', actorKind: 'system' }, { channelId: 'internal:reflection:whisper' }))
       .toBe('self_directed');
     // System speaker off an internal channel → system-injected turn.
-    expect(resolveRequesterProvenance({ speakerRole: 'system' }, { channelId: 'discord:group:ops' }))
+    expect(resolveRequesterProvenance({ speakerRole: 'system', actorKind: 'system' }, { channelId: 'discord:group:ops' }))
       .toBe('system');
   });
 
@@ -938,6 +945,72 @@ describe('runtime subject identity', () => {
     expect(rendered).not.toContain('Use analysis_workbench only');
   });
 
+  it('renders the reconciled social lane before a post-allowance ICP prompt', async () => {
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
+    const rendered = await runWithChargeContext({
+      chargePolicy: TEST_CHARGE_POLICY,
+      lane: 'interactive',
+      runId: 'outer-interactive-icp-turn',
+    }, async () => renderPromptOwnedRuntimeLayers({
+      message: makeMessage({
+        channelId,
+        channelType: 'companion',
+        authorId: peerCompanionId,
+        authorName: 'Peer MI',
+        isDirectMessage: true,
+        routing: {
+          source: 'companion',
+          icpCorrelation: {
+            conversationId: '44444444-4444-4444-8444-444444444444',
+            rootInitiationId: '99999999-9999-4999-8999-999999999999',
+            initiatedByCompanionId: peerCompanionId,
+            localCompanionId,
+            peerCompanionId,
+            peerContactId: 'contact-peer',
+            channelId,
+            turnId: '77777777-7777-4777-8777-777777777778',
+            messageId: 'message-icp-social',
+            requestId: 'request-icp-social',
+            chargeLane: 'companion_social',
+            surface: 'companion_dm',
+            costPurpose: 'conversation_turn',
+            costOriginStage: 'reply',
+            fatigueDecision: 'allow',
+          },
+        },
+      }),
+      resolvedUserName: 'Peer MI',
+      trustLevel: 'trusted',
+      channelType: 'companion',
+      responseStyle: 'concise',
+      now: new Date('2026-03-17T12:00:00Z'),
+      templateVariables: {},
+      modelId: 'test-model',
+      capabilityTier: 'autonomous',
+      activeToolCounts: {
+        core: 6,
+        promoted: 0,
+        extendedLoaded: 0,
+        autoload: 0,
+        deferred: 0,
+        total: 6,
+      },
+      extendedTools: [],
+      coreToolNames: new Set<string>(),
+      loadedExtended: new Map(),
+      classifyExtendedToolForTurn: () => 'overlay',
+      promotedExtendedToolNames: new Set(),
+      config: { chargePolicy: TEST_CHARGE_POLICY },
+    }));
+
+    expect(rendered).toContain(
+      'You have 12 of 12 run-charge units left for the companion_social lane/window.',
+    );
+    expect(rendered).not.toContain('left for the interactive lane/window');
+  });
+
   it('renders satellite endpoint capability context for registered mobile speech turns', () => {
     const message = makeMessage({
       channelId: 'satellite:android-mobile:weekend-walk',
@@ -1098,11 +1171,98 @@ describe('runtime subject identity', () => {
     );
     expect(authorContext).toMatchObject({
       speakerRole: 'user',
+      actorKind: 'machine_intelligence',
       speakingWithIsMachineIntelligence: true,
       canonicalContactKey: 'contact-nova',
       relationshipType: 'ai_companion',
       trustLevel: 'regular', // contact-owned, not special-cased
       resolvedUserName: 'Nova',
+    });
+  });
+
+  it.each([
+    ['operator override', async () => 'override_preserved' as const],
+    ['marker store failure', async () => { throw new Error('marker unavailable'); }],
+  ])('keeps gateway-observed companion provenance machine-intelligence after %s', async (_label, mark) => {
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage({
+        channelId: 'companion-room:living_room',
+        channelType: 'companion',
+        authorId: 'comp-nova-uuid',
+        authorName: 'Nova',
+        routing: { source: 'companion', authorIsMachineIntelligence: true },
+      }),
+      contactStore: {
+        resolveChannelIdentity: () => ({
+          id: 'contact-nova',
+          displayName: 'Nova',
+          trustLevel: 'regular',
+          relationshipType: 'ai_companion',
+          firstSeen: '2026-07-08T12:00:00Z',
+          lastSeen: '2026-07-08T12:00:00Z',
+        }),
+        markMachineIntelligenceFromObservation: mark,
+        getConversationChannelPrivacy: () => undefined,
+        recordChannelActivity: () => undefined,
+      } as never,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+    });
+
+    expect(authorContext).toMatchObject({
+      actorKind: 'machine_intelligence',
+      speakingWithIsMachineIntelligence: true,
+      canonicalContactKey: 'contact-nova',
+    });
+  });
+
+  it('keeps observed companion provenance machine-intelligence when contact resolution fails', async () => {
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage({
+        channelId: 'companion-room:living_room',
+        channelType: 'companion',
+        authorId: 'comp-nova-uuid',
+        authorName: 'Nova',
+        routing: { source: 'companion', authorIsMachineIntelligence: true },
+      }),
+      contactStore: {
+        resolveChannelIdentity: () => { throw new Error('contact database unavailable'); },
+      } as never,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+    });
+
+    expect(authorContext).toMatchObject({
+      actorKind: 'machine_intelligence',
+      speakingWithIsMachineIntelligence: true,
+    });
+    expect(authorContext.canonicalContactKey).toBeUndefined();
+  });
+
+  it('keeps observed companion provenance machine-intelligence in approval-mode fallback', async () => {
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage({
+        channelId: 'companion-room:living_room',
+        channelType: 'companion',
+        authorId: 'comp-nova-uuid',
+        authorName: 'Nova',
+        routing: { source: 'companion', authorIsMachineIntelligence: true },
+      }),
+      contactStore: {
+        getByChannelIdentity: () => { throw new Error('approval lookup unavailable'); },
+      } as never,
+      contactTracking: {
+        resolveMode: () => 'approval',
+        reportUntrackedSpeaker: vi.fn(),
+      } as never,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+    });
+
+    expect(authorContext).toMatchObject({
+      actorKind: 'machine_intelligence',
+      speakingWithIsMachineIntelligence: true,
+      trustLevel: 'public',
     });
   });
 

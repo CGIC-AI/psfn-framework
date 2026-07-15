@@ -183,6 +183,7 @@ function sessionMatchesIdentity(
 }
 
 export async function getLinkedContactForSession(options: {
+  sessionId?: string;
   channelId: string;
   contacts: Contact[];
   sessionStore: SessionStore;
@@ -198,7 +199,7 @@ export async function getLinkedContactForSession(options: {
   if (!contactStore || contacts.length === 0) return undefined;
 
   const channelType = normalizeSessionChannelType(channelId);
-  const lastEntry = sessionStore.getLastEntry(channelId);
+  const lastEntry = sessionStore.getLastEntry(options.sessionId ?? channelId);
   if (channelType !== 'session' && lastEntry?.authorId) {
     const contactByAuthor = await contactStore.getByChannelIdentity(channelType, lastEntry.authorId);
     if (contactByAuthor) return contactByAuthor;

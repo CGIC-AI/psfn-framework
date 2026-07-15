@@ -151,6 +151,8 @@ export interface AdminIntakeQuarantineServiceDeps {
   now?: () => number;
   /** Confirm-token lifetime; default 2 minutes. */
   confirmTokenTtlMs?: number;
+  /** Coarse invalidation signal after a decision is durably applied. */
+  onQueueChanged?: () => void;
 }
 
 const DEFAULT_CONFIRM_TOKEN_TTL_MS = 2 * 60_000;
@@ -495,6 +497,8 @@ export function createAdminIntakeQuarantineService(
         status: 'applied',
         appliedAt: new Date(atMs).toISOString(),
       });
+
+      deps.onQueueChanged?.();
 
       return {
         ok: true,

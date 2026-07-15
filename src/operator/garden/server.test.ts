@@ -337,6 +337,7 @@ async function createHarness(options: {
 
   const port = await allocatePort();
   const services = createInProcessGardenAdminContract({
+    env: { GATEWAY_SESSION_HMAC_KEY: 'garden-server-test-session-hmac-key' },
     memoryStore,
     sessionStore,
     sessionManager,
@@ -664,6 +665,17 @@ describe('AdminServer Garden routing', () => {
 
       const apiRes = await request(harness.port, 'GET', '/api/admin/dashboard');
       expect(apiRes.status).toBe(401);
+
+      const reconciliationRes = await request(harness.port, 'GET', '/api/admin/charge-costs');
+      expect(reconciliationRes.status).toBe(401);
+      const authorizedReconciliation = await request(
+        harness.port,
+        'GET',
+        '/api/admin/charge-costs',
+        undefined,
+        bearerHeaders,
+      );
+      expect(authorizedReconciliation.status).toBe(503);
     });
 
     it('keeps login page reachable and sets auth cookie on successful login', async () => {

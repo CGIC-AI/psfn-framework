@@ -103,11 +103,9 @@ byte-identical to a pre-scope document. The non-personal scope is
 `shared_world:<siteId>`: world knowledge tied to a place-registry site, shared
 across the companions on a cluster.
 
-- **Personal wiki is intended to be per-companion and companion-writable.** It
-  lives under that companion's `WORKSPACE_PATH/knowledge/wiki/`. This is already
-  true in single-companion mode, but current fleet wiring forwards one shared
-  `WORKSPACE_PATH` to all agents; do not claim fleet isolation for workspace
-  files until Personal Workspace wiring lands.
+- **Personal wiki is per-companion and companion-writable.** It lives under
+  that companion's canonical `WORKSPACE_PATH/knowledge/wiki/`; fleet launcher
+  and gateway policy bind the same isolated root to the authenticated companion.
 - **Shared-world wiki is operator-owned.** Companions read the shared scope and
   *propose* entries through the normal wiki pass; they never write it directly.
   The personal `WikiStore` rejects any non-personal write fail-closed
@@ -333,6 +331,8 @@ The memory system is actively maintained by runtime jobs:
 ### Background memory lanes (E5.2/E5.3, JSON-owned)
 
 Background memory work is split into three lanes. Every cadence, threshold, and window is owned by `scheduler.json` (schema-guarded, fail closed on missing or invalid config); nothing is hardcoded.
+
+Salience retrieval is cadence-independent: ranking computes effective salience lazily from each memory's `lastAccessed` timestamp, while the scheduler-owned persistence sweep runs from `salienceDecayIntervalMs` (default 3,600,000 ms / hourly) to enforce floors and durably refresh stored values. Compression-guideline review is a separately gated step in the bundled heartbeat and does not share the salience-decay cadence. Context compaction itself remains threshold-driven by `compactionThresholdPct`; it has no timer cadence.
 
 **Near-turn lane (`nearTurnMemory`)** — lightweight, deterministic, zero LLM spend (the lane holds no LLM provider at all). It keeps only extraction trigger evaluation (the existing per-turn and observed-group extraction wiring), active-memory review refresh (stale-memory maintenance reviews), and concern-candidate derivation (the intention appraisal path). Cadence keys:
 

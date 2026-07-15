@@ -19,6 +19,7 @@ export const ADMIN_AUDIT_ACTION_TYPES: AdminAuditActionType[] = [
   'confirmation',
   'charge_decision',
   'gateway_policy',
+  'autonomy_control',
 ];
 
 export const ADMIN_AUDIT_DECISIONS: AdminAuditDecision[] = [

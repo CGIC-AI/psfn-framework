@@ -20,6 +20,20 @@ afterEach(() => {
 });
 
 describe('admin api client errors', () => {
+  it('uses browser conditional revalidation for GET requests', async () => {
+    mockFetch(new Response(JSON.stringify({ channels: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }));
+
+    await expect(apiGet('/api/admin/sessions')).resolves.toEqual({ channels: [] });
+
+    expect(fetch).toHaveBeenCalledWith('/api/admin/sessions', expect.objectContaining({
+      cache: 'no-cache',
+      credentials: 'include',
+    }));
+  });
+
   it('preserves JSON error envelopes in ApiError', async () => {
     mockFetch(new Response(JSON.stringify({
       error: {

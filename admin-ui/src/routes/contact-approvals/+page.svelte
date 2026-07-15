@@ -8,6 +8,7 @@
     type ContactApprovalEntry,
   } from '$lib/api/endpoints/contact-approvals';
   import { pushToast } from '$lib/stores/toast.svelte';
+  import { createGardenQueueRefresh } from '$lib/polling/garden-queue-refresh';
 
   // ── State ──
   let entries = $state<ContactApprovalEntry[]>([]);
@@ -64,16 +65,18 @@
     }
   }
 
-  // ── Auto-refresh every 15s ──
-  let refreshInterval: ReturnType<typeof setInterval> | undefined;
+  const queueRefresh = createGardenQueueRefresh({
+    queue: 'contact-approvals',
+    refresh: loadData,
+    intervalMs: 15_000,
+  });
 
   onMount(() => {
-    loadData();
-    refreshInterval = setInterval(loadData, 15_000);
+    queueRefresh.start();
   });
 
   onDestroy(() => {
-    if (refreshInterval) clearInterval(refreshInterval);
+    queueRefresh.stop();
   });
 </script>
 

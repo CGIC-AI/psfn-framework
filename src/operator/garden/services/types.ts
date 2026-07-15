@@ -42,6 +42,7 @@ export type {
 } from './types/wiki.js';
 
 export type {
+  AdminChargeCostReconciliationService,
   AdminChargeLedgerService,
   AdminModelUsageService,
 } from './types/runtime-telemetry.js';
@@ -69,6 +70,20 @@ export type {
   AdminAdaptiveToolsData,
   AdminAdaptiveToolsService,
 } from './types/tools.js';
+
+export type {
+  AdminIcpAutonomyData,
+  AdminIcpAutonomyService,
+  AdminIcpAvailabilityView,
+  AdminIcpCandidateCancelInput,
+  AdminIcpCandidateView,
+  AdminIcpCostView,
+  AdminIcpEpisodeView,
+  AdminIcpFatigueView,
+  AdminIcpMutationResult,
+  AdminIcpPermitView,
+  AdminIcpReasonCount,
+} from './types/icp-autonomy.js';
 
 export type {
   AdminMemoryContactSummary,
@@ -146,7 +161,9 @@ export type {
 } from './types/continuity.js';
 
 export type {
+  AdminSessionListRow,
   AdminSessionListData,
+  AdminSessionDetailData,
   AdminSessionRouteView,
   AdminSessionRouteListData,
   AdminSessionRouteResetInput,
@@ -166,6 +183,7 @@ export type {
   AdminSessionMessagePaginationData,
   AdminSessionService,
   AdminSessionTurnData,
+  AdminSessionTurnDetailData,
 } from './types/sessions.js';
 
 export type {

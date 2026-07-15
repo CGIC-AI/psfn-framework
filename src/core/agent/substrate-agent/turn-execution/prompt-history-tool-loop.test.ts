@@ -118,4 +118,89 @@ describe('scheduled prompt history', () => {
       expect.objectContaining({ role: 'toolResult', toolCallId: 'call-1' }),
     ]));
   });
+
+  it('keeps provider catalog and tool execution bound to the current turn resolver', async () => {
+    const providerToolNames: string[][] = [];
+    const notifyExecute = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'companion handoff queued' }],
+      details: {},
+    }));
+    const externalExecute = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'external dispatch' }],
+      details: {},
+    }));
+    const concurrency = {
+      class: 'exclusive' as const,
+      maxParallel: 1,
+      exclusivityKeyPolicy: 'category_tool_name' as const,
+      interruptibility: 'cooperative' as const,
+      eligibility: { foreground: true, background: true },
+    };
+    const turnNotify = {
+      name: 'notify',
+      label: 'notify',
+      description: 'Candidate companion send only.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      execute: notifyExecute,
+      wiringMeta: { concurrency },
+    };
+    const globalExternal = {
+      name: 'external_escape',
+      label: 'external_escape',
+      description: 'Must not enter this turn.',
+      parameters: { type: 'object', properties: {}, additionalProperties: false },
+      execute: externalExecute,
+      wiringMeta: { concurrency },
+    };
+    const messages = [
+      assistantMessage([{
+        type: 'toolCall',
+        id: 'call-notify',
+        name: 'notify',
+        arguments: {},
+      }], 'toolUse'),
+      assistantMessage([{ type: 'text', text: 'done' }], 'stop'),
+    ];
+    let streamIndex = 0;
+    let agent!: Agent;
+    const streamFn = vi.fn(async (_model: unknown, context: { tools?: Array<{ name: string }> }) => {
+      providerToolNames.push((context.tools ?? []).map(tool => tool.name));
+      if (streamIndex === 0) {
+        agent.state.tools = [globalExternal as never];
+      }
+      const finalMessage = structuredClone(messages[streamIndex] ?? messages.at(-1));
+      streamIndex += 1;
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield { type: 'start', partial: structuredClone(finalMessage) };
+          yield { type: 'done' };
+        },
+        result: async () => structuredClone(finalMessage),
+      };
+    });
+    const model: Model<'openai-completions'> = {
+      id: 'test-model',
+      name: 'Test Model',
+      api: 'openai-completions',
+      provider: 'test',
+      baseUrl: 'http://127.0.0.1.invalid',
+      reasoning: false,
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 4096,
+      maxTokens: 1024,
+    };
+    agent = new Agent({ initialState: { model }, streamFn: streamFn as never });
+    const turnTools = [turnNotify as never];
+    installAgentToolSchedulerPatch(agent, { maxParallelToolCalls: 1 }, {
+      resolveTurnTools: () => turnTools,
+    });
+    agent.state.tools = [globalExternal as never];
+
+    await agent.prompt(userMessage('run the candidate action', 1));
+
+    expect(providerToolNames).toEqual([['notify'], ['notify']]);
+    expect(notifyExecute).toHaveBeenCalledOnce();
+    expect(externalExecute).not.toHaveBeenCalled();
+  });
 });

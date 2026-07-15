@@ -67,6 +67,7 @@ export interface IntentionAppraisalHooks {
     canonicalContactKey?: string;
     sourceMessageId: string;
     formationVAD?: ActiveConcernVAD;
+    originIcpRootInitiationId?: string;
   }): Promise<void>;
   onIntentionFollowUpDecision(input: {
     decision: IntentionActionDecision;
@@ -74,6 +75,7 @@ export interface IntentionAppraisalHooks {
     channelType: ChannelType;
     canonicalContactKey?: string;
     sourceMessageId: string;
+    originIcpRootInitiationId?: string;
   }): Promise<string | undefined>;
   getPendingFollowUpsForResurfacing(input: {
     channelId: string;
@@ -87,6 +89,10 @@ export interface IntentionAppraisalHooks {
   onIntentionFollowUpActivated(input: {
     pendingFollowUpId: string;
     activationReason?: string;
+  }): Promise<boolean>;
+  onIntentionFollowUpDampened(input: {
+    pendingFollowUpId: string;
+    dampeningReason: string;
   }): Promise<boolean>;
 }
 
@@ -165,6 +171,7 @@ export function createIntentionAppraisalHooks(
       canonicalContactKey,
       sourceMessageId,
       formationVAD,
+      originIcpRootInitiationId,
     }) => {
       if (decision.type !== 'concern') {
         return;
@@ -178,6 +185,7 @@ export function createIntentionAppraisalHooks(
         ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
         ...(expiresAt ? { expiresAt } : {}),
         ...(formationVAD ? { formationVAD } : {}),
+        ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
         sourceMessageId,
       });
     },
@@ -187,6 +195,7 @@ export function createIntentionAppraisalHooks(
       channelType,
       canonicalContactKey,
       sourceMessageId,
+      originIcpRootInitiationId,
     }) => {
       if (decision.type !== 'followUp') {
         return undefined;
@@ -206,6 +215,7 @@ export function createIntentionAppraisalHooks(
         ...(decision.dueAt ? { dueAt: normalizeFutureIsoTimestamp(decision.dueAt) } : {}),
         ...(canonicalContactKey ? { contactId: canonicalContactKey } : {}),
         sourceMessageId,
+        ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
         ...(decision.followUp?.contextSummary
           ? { contextSummary: decision.followUp.contextSummary }
           : {}),
@@ -258,6 +268,18 @@ export function createIntentionAppraisalHooks(
         ...(activationReason ? { activationReason } : {}),
       });
       return activated !== null;
+    },
+    onIntentionFollowUpDampened: async ({
+      pendingFollowUpId,
+      dampeningReason,
+    }) => {
+      if (!pendingFollowUpStore?.dampen) {
+        throw new Error('PendingFollowUpStorePort dampening is required for follow-up disposition');
+      }
+      const dampened = await pendingFollowUpStore.dampen(pendingFollowUpId, {
+        dampeningReason,
+      });
+      return dampened !== null;
     },
   };
 }

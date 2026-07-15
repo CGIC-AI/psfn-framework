@@ -160,6 +160,7 @@ describe('resolveGatewayBootstrapInput', () => {
       fleetCompanionIds: [],
       channelRouting: {},
       discordAccounts: {},
+      personalWorkspaceByCompanionId: {},
     });
 
     const flagOn = resolveGatewayBootstrapInput({
@@ -168,11 +169,14 @@ describe('resolveGatewayBootstrapInput', () => {
         multiCompanion: true,
         companionFleet: {
           persistenceRoot: '/runtime',
+          workspacesRoot: '/runtime/workspaces',
+          sharedWorkspacePath: '/runtime/workspaces/shared',
           companions: [{
             companionId: 'comp-a',
             companionDataDir: '/runtime/comp-a',
             characterCardPath: '/runtime/comp-a/companion.json',
             postgresSchema: 'companion_a',
+            personalWorkspacePath: '/runtime/workspaces/personal/comp-a',
           }],
         },
       },
@@ -184,6 +188,10 @@ describe('resolveGatewayBootstrapInput', () => {
       fleetCompanionIds: ['comp-a'],
       channelRouting: {},
       discordAccounts: {},
+      personalWorkspaceByCompanionId: {
+        'comp-a': '/runtime/workspaces/personal/comp-a',
+      },
+      sharedWorkspacePath: '/runtime/workspaces/shared',
     });
   });
 

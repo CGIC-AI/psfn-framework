@@ -37,17 +37,27 @@ import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-
 import { assertSatellitePlaceBindings, loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
 import { GatewayCompanionChannelLane } from '../../boundary/gateway/companion-channels.js';
 import { PostgresCompanionPresenceStore } from '../../persistence/postgres/companion-presence-store.js';
+import { PostgresIcpSharedAutonomyStore } from '../../persistence/postgres/icp-shared-autonomy-store.js';
+import { PostgresIcpInitiationPolicyAuthority } from '../../persistence/postgres/icp-initiation-policy-authority.js';
+import { PostgresIcpFatigueRegulationReservationStore } from '../../persistence/postgres/icp-fatigue-regulation-reservation-store.js';
+import { IcpFatigueInitiationCapacityAuthority } from '../../core/agent/fatigue/initiation-capacity.js';
+import { readRunChargeRollingWindowFromLedger } from '../../shared/telemetry/charge-ledger.js';
+import { RootBoundIcpInitiationCausalityAuthority } from '../../boundary/gateway/icp-initiation-causality-authority.js';
 import { CompanionEventRelay } from '../../channels/backplane/companion-relay/relay.js';
 import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import {
   ensurePersonalFilesLayout,
   resolveCogSecEventsPath,
   resolveContactBlockListPath,
-  resolveGeneratedImagesDir,
+  resolveChargeLedgerPath,
+  resolvePersonalImagesDir,
 } from '../../persistence/layout.js';
+import { provisionFleetWorkspaces } from '../../persistence/workspaces/provisioning.js';
+import { migrateLegacyWorkspaceForFleet } from '../../persistence/workspaces/legacy-workspace-migration.js';
 import { ContactBlockListStore } from '../../core/cogsec/contact-block-list.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { createGatewayContactBlockGate } from '../../boundary/gateway/contact-block-gate.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -149,7 +159,16 @@ async function main(): Promise<void> {
   if (bootstrap.gatewayRpcEndpoint.kind === 'unix') {
     mkdirSync(dirname(bootstrap.gatewayRpcEndpoint.socketPath), { recursive: true });
   }
-  ensurePersonalFilesLayout(bootstrap.workspaceRoot);
+  if (config.companionFleet) {
+    migrateLegacyWorkspaceForFleet({
+      fleet: config.companionFleet,
+      legacyWorkspacePath: process.env.WORKSPACE_PATH,
+      env: process.env,
+    });
+    provisionFleetWorkspaces(config.companionFleet);
+  } else {
+    ensurePersonalFilesLayout(bootstrap.workspaceRoot);
+  }
   if (bootstrap.workspaceRoot !== bootstrap.gitRepoRoot) {
     log.info('Gateway workspace and git roots diverge', {
       workspaceRoot: bootstrap.workspaceRoot,
@@ -210,6 +229,9 @@ async function main(): Promise<void> {
   // the fleet manifest. Flag-off, none of this exists and companion sends fail
   // closed at the RPC surface.
   let companionPresenceStore: PostgresCompanionPresenceStore | null = null;
+  let icpAutonomyStore: PostgresIcpSharedAutonomyStore | null = null;
+  let icpFatigueRegulationStore: PostgresIcpFatigueRegulationReservationStore | null = null;
+  let icpInitiationPolicyAuthority: PostgresIcpInitiationPolicyAuthority | null = null;
   let companionChannelLane: GatewayCompanionChannelLane | undefined;
   if (config.multiCompanion === true) {
     const databaseUrl = config.postgresDatabaseUrl?.trim();
@@ -219,11 +241,44 @@ async function main(): Promise<void> {
     if (!config.companionFleet) {
       throw new Error('Multi-companion inter-companion channels require the companions.json fleet manifest');
     }
+    const fleetCompanionIds = config.companionFleet.companions.map((entry) => entry.companionId);
+    const fleetByCompanionId = new Map(
+      config.companionFleet.companions.map(entry => [entry.companionId, entry]),
+    );
     companionPresenceStore = await PostgresCompanionPresenceStore.connect(databaseUrl);
+    icpAutonomyStore = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
+      knownCompanionIds: fleetCompanionIds,
+    });
+    icpFatigueRegulationStore =
+      await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
+    icpInitiationPolicyAuthority = new PostgresIcpInitiationPolicyAuthority(databaseUrl, {
+      fleet: config.companionFleet.companions,
+      quietHours: startupHydration.schedulerConfig.episodicProcessing,
+      capacityAuthority: new IcpFatigueInitiationCapacityAuthority(
+        icpFatigueRegulationStore,
+        startupHydration.chargePolicyConfig,
+        {
+          read: ({ senderCompanionId, nowMs }) => {
+            const fleetEntry = fleetByCompanionId.get(createCompanionId(
+              senderCompanionId,
+              'ICP social charge balance senderCompanionId',
+            ));
+            if (!fleetEntry) {
+              throw new Error('ICP social charge balance requires a known fleet sender');
+            }
+            return readRunChargeRollingWindowFromLedger(
+              resolveChargeLedgerPath(fleetEntry.companionDataDir),
+              nowMs,
+            );
+          },
+        },
+      ),
+      causalityAuthority: new RootBoundIcpInitiationCausalityAuthority(),
+    });
     companionChannelLane = new GatewayCompanionChannelLane({
       placesRegistry: placesRegistryConfig,
       presence: companionPresenceStore,
-      fleetCompanionIds: new Set(config.companionFleet.companions.map((entry) => entry.companionId)),
+      fleetCompanionIds: new Set(fleetCompanionIds),
     });
     log.info('Inter-companion channel lane enabled', {
       fleetSize: config.companionFleet.companions.length,
@@ -235,6 +290,8 @@ async function main(): Promise<void> {
     discordAdapter: discord,
     ...(discordAccountDocks ? { discordAccountDocks } : {}),
     ...(companionChannelLane ? { companionChannels: companionChannelLane } : {}),
+    ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
+    ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),
   });
   const {
     apiHost,
@@ -294,7 +351,14 @@ async function main(): Promise<void> {
   // `companion.event.publish` and are re-published on the same bus.
   const companionRelay = new CompanionEventRelay({
     eventBus,
-    previewRoots: [resolveGeneratedImagesDir(startupHydration.companionDataDir)],
+    ...(config.companionFleet
+      ? {
+        previewRootByCompanionId: Object.fromEntries(config.companionFleet.companions.map(companion => [
+          companion.companionId,
+          resolvePersonalImagesDir(companion.personalWorkspacePath),
+        ])),
+      }
+      : { previewRoots: [resolvePersonalImagesDir(bootstrap.workspaceRoot)] }),
   });
 
   const apiServer = await startOptionalGatewayApiServer({
@@ -343,6 +407,9 @@ async function main(): Promise<void> {
         { step: 'stop voice surfaces', action: () => voiceSurfaces.stop() },
         { step: 'stop gateway server', action: () => gateway.stop() },
         { step: 'close companion presence reader', action: async () => { await companionPresenceStore?.close(); } },
+        { step: 'close ICP autonomy store', action: async () => { await icpAutonomyStore?.close(); } },
+        { step: 'close ICP fatigue regulation store', action: async () => { await icpFatigueRegulationStore?.close(); } },
+        { step: 'close ICP initiation policy authority', action: async () => { await icpInitiationPolicyAuthority?.close(); } },
         { step: 'stop channel adapters', action: () => stopGatewayChannelSurfaces(channelSurfaces) },
         { step: 'dispose intake screening', action: () => privilegedCore.intakeScreening.dispose() },
       ], log);

@@ -7,7 +7,7 @@ describe('createSandboxBrokerExecutionPort', () => {
       workspacePath: process.cwd(),
       policy: {
         enabled: false,
-        allowlist: ['node'],
+        allowlist: ['printf'],
         allowedCwd: [process.cwd()],
       },
     });
@@ -15,13 +15,13 @@ describe('createSandboxBrokerExecutionPort', () => {
     expect(port).toBeNull();
   });
 
-  it('executes allowlisted commands through the broker boundary', async () => {
+  it('keeps the broker metadata but fails closed without OS filesystem confinement', async () => {
     const port = createSandboxBrokerExecutionPort({
       workspacePath: process.cwd(),
       brokerId: 'test-broker',
       policy: {
         enabled: true,
-        allowlist: ['node'],
+        allowlist: ['printf'],
         allowedCwd: [process.cwd()],
       },
     });
@@ -46,16 +46,8 @@ describe('createSandboxBrokerExecutionPort', () => {
     });
     expect(port?.codeExecutionBoundary.reason).toContain('child process');
 
-    const result = await port?.shellExec('node', ['-e', 'process.stdout.write("ok")'], {});
-
-    expect(result).toMatchObject({
-      command: 'node',
-      args: ['-e', 'process.stdout.write("ok")'],
-      exitCode: 0,
-      stdout: 'ok',
-      stderr: '',
-      timedOut: false,
-    });
+    await expect(port?.shellExec('printf', ['ok'], {}))
+      .rejects.toThrow('no OS-enforced filesystem confinement');
   });
 
   it('fails closed when the brokered command is not allowlisted', async () => {
@@ -68,7 +60,8 @@ describe('createSandboxBrokerExecutionPort', () => {
       },
     });
 
-    await expect(port?.shellExec('node', ['-v'], {})).rejects.toThrow('not allowlisted');
+    await expect(port?.shellExec('node', ['-v'], {}))
+      .rejects.toThrow('no OS-enforced filesystem confinement');
   });
 
   it('does not inherit agent process secrets into brokered child commands', async () => {
@@ -77,19 +70,14 @@ describe('createSandboxBrokerExecutionPort', () => {
       workspacePath: process.cwd(),
       policy: {
         enabled: true,
-        allowlist: ['node'],
+        allowlist: ['printenv'],
         allowedCwd: [process.cwd()],
       },
     });
 
     try {
-      const result = await port?.shellExec(
-        'node',
-        ['-e', 'process.stdout.write(process.env.SANDBOX_BROKER_SECRET ?? "missing")'],
-        {},
-      );
-
-      expect(result?.stdout).toBe('missing');
+      await expect(port?.shellExec('printenv', ['SANDBOX_BROKER_SECRET'], {}))
+        .rejects.toThrow('no OS-enforced filesystem confinement');
     } finally {
       delete process.env.SANDBOX_BROKER_SECRET;
     }

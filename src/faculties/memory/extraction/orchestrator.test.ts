@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   ExtractionIntegrityError,
+  resolveExtractionChannelVisibility,
   runExtractionOrchestration,
   type ExtractionRunOptions,
 } from './orchestrator.js';
@@ -16,6 +17,35 @@ interface PendingChunkCompletion {
   resolve: (content: string) => void;
   reject: (error: Error) => void;
 }
+
+describe('resolveExtractionChannelVisibility', () => {
+  const entry = (channelVisibility?: string) => ({
+    id: 1,
+    channelId: 'companion-room:den',
+    role: 'user' as const,
+    content: 'room line',
+    timestamp: 1,
+    ...(channelVisibility ? { channelVisibility } : {}),
+  });
+
+  it('uses persisted public/private room visibility instead of the channel-id default', () => {
+    expect(resolveExtractionChannelVisibility(
+      'companion-room:living_room',
+      [entry('public')],
+    )).toBe('public');
+    expect(resolveExtractionChannelVisibility(
+      'companion-room:den',
+      [entry('private')],
+    )).toBe('private');
+  });
+
+  it('fails closed to the most restrictive persisted visibility in a mixed batch', () => {
+    expect(resolveExtractionChannelVisibility(
+      'companion-room:den',
+      [entry('public'), entry('invite_only'), entry('private')],
+    )).toBe('private');
+  });
+});
 
 function buildOptions(overrides: Partial<ExtractionRunOptions> = {}): ExtractionRunOptions {
   const recoveredEntries = [
@@ -120,6 +150,43 @@ async function waitForCondition(description: string, condition: () => boolean): 
 }
 
 describe('runExtractionOrchestration fail-closed errors', () => {
+  it('propagates typed ICP lineage into extraction completion correlation', async () => {
+    const complete = vi.fn().mockResolvedValue({ content: '<response></response>' });
+    const icpCorrelation = {
+      conversationId: '44444444-4444-4444-8444-444444444444',
+      rootInitiationId: '99999999-9999-4999-8999-999999999999',
+      initiatedByCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      localCompanionId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      peerCompanionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      peerContactId: 'contact-nova',
+      channelId: 'companion-dm:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      turnId: '018f22a2-52b8-7a3a-8c16-25b7b14f7081',
+      messageId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
+      requestId: 'icp-initiation:33333333-3333-4333-8333-333333333333',
+      chargeLane: 'companion_social' as const,
+      surface: 'companion_dm' as const,
+      costPurpose: 'conversation_turn' as const,
+      costOriginStage: 'initiation' as const,
+      fatigueDecision: 'not_evaluated' as const,
+    };
+    await runExtractionOrchestration(buildOptions({
+      icpCorrelation,
+      llmClient: { complete } as ExtractionRunOptions['llmClient'],
+    }));
+
+    expect(complete.mock.calls[0]?.[0].correlation).toMatchObject({
+      requestId: 'memory-extraction:api:test:manual',
+      icpCorrelation: {
+        ...icpCorrelation,
+        requestId: 'memory-extraction:api:test:manual',
+        costPurpose: 'extraction',
+        costOriginStage: 'post_turn',
+      },
+    });
+    expect(complete.mock.calls[0]?.[0].correlation?.icpCorrelation?.requestId)
+      .toBe(complete.mock.calls[0]?.[0].correlation?.requestId);
+  });
+
   it('emits concern candidate context from accepted extraction material', async () => {
     const emitConcernCandidates = vi.fn().mockResolvedValue(undefined);
     const options = buildOptions({

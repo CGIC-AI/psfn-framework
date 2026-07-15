@@ -34,12 +34,15 @@ export interface RunChargeLineageProvenance {
 export interface RunChargeSnapshot {
   lineage: RunChargeLineage;
   lane: ChargePolicyRuntimeLane;
+  surface?: ChargePolicySurface;
+  chargeEventId?: string;
   spentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
   directSpentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
   foldedSpentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
   foldBacks: RunChargeLineageProvenance[];
   orphanedChildren: RunChargeLineageProvenance[];
   quotaSpentByLane: Partial<Record<ChargePolicyRuntimeLane, number>>;
+  rollingWindow: RunChargeRollingWindowSnapshot;
 }
 
 export interface RunChargeRollingWindowSnapshot {
@@ -99,12 +102,17 @@ export interface ChargeSurfaceInspection {
 }
 
 const runChargeStorage = new AsyncLocalStorage<RunChargeContextState>();
+const activeChargeSurfaceStorage = new AsyncLocalStorage<{
+  surface: ChargePolicySurface;
+  chargeEventId: string;
+}>();
 export const RUN_CHARGE_ROLLING_WINDOW_MS = 24 * 60 * 60_000;
 
 interface RollingChargeWindowEntry {
   eventId: string;
   timestampMs: number;
   lane: ChargePolicyRuntimeLane;
+  surface: ChargePolicySurface;
   amount: number;
 }
 
@@ -181,6 +189,7 @@ function recordRollingChargeEvent(event: RunChargeEvent): void {
     eventId,
     timestampMs: event.timestampMs,
     lane: event.lane,
+    surface: event.surface,
     amount: event.amount,
   });
 }
@@ -330,6 +339,7 @@ function resolveCorrelation(
 }
 
 function createChargeEvent(input: {
+  eventId?: string;
   amount: number;
   correlation?: Partial<CorrelationMetadata>;
   details?: Record<string, unknown>;
@@ -341,7 +351,7 @@ function createChargeEvent(input: {
   quota: number;
 }): RunChargeEvent {
   return {
-    eventId: randomUUID(),
+    eventId: input.eventId?.trim() || randomUUID(),
     timestampMs: input.timestampMs,
     lane: input.lane,
     surface: input.surface,
@@ -433,16 +443,35 @@ export function getRunChargeSnapshot(): RunChargeSnapshot | undefined {
   if (!context) {
     return undefined;
   }
+  const activeCharge = activeChargeSurfaceStorage.getStore();
   return {
     lineage: { ...context.lineage },
     lane: context.lane,
+    ...(activeCharge
+      ? { surface: activeCharge.surface, chargeEventId: activeCharge.chargeEventId }
+      : {}),
     spentByLane: cloneSpentByLane(context.account.spentByLane),
     directSpentByLane: cloneSpentByLane(context.account.directSpentByLane),
     foldedSpentByLane: cloneSpentByLane(context.account.foldedSpentByLane),
     foldBacks: context.account.foldBacks.map(cloneLineageProvenance),
     orphanedChildren: context.account.orphanedChildren.map(cloneLineageProvenance),
     quotaSpentByLane: cloneSpentByLane(context.quotaAccount.spentByLane),
+    rollingWindow: getRunChargeRollingWindowSnapshot(),
   };
+}
+
+/** Charge one surface and keep its attribution active for the provider work it buys. */
+export function runWithChargedSurface<T>(
+  surface: ChargePolicySurface,
+  input: RunChargeChargeInput,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const event = chargeSurface(surface, input);
+  if (!event) return fn();
+  return activeChargeSurfaceStorage.run({
+    surface: event.surface,
+    chargeEventId: event.eventId,
+  }, fn);
 }
 
 export function runWithChargeContext<T>(
@@ -524,5 +553,89 @@ export function chargeSurface(
 
   recordRollingChargeEvent(event);
   void eventBus?.emit('agent.charge', event);
+  return event;
+}
+
+export type DurableRunChargeCommitOutcome = 'recorded' | 'replayed';
+export type DurableRunChargeProbeOutcome = 'absent' | 'replayed';
+
+export type DurableRunChargeRecorder = (
+  event: RunChargeEvent,
+) => DurableRunChargeCommitOutcome | void | Promise<DurableRunChargeCommitOutcome | void>;
+
+export type DurableRunChargeProbe = (
+  event: RunChargeEvent,
+) => DurableRunChargeProbeOutcome | Promise<DurableRunChargeProbeOutcome>;
+
+/**
+ * Persist a charge before exposing it to the in-memory quota account or the
+ * caller's consequential work. A stable event identity makes a restart replay
+ * idempotent: an already-hydrated event is the proof that the durable barrier
+ * completed and must not be charged a second time.
+ */
+export async function chargeSurfaceDurably(
+  surface: ChargePolicySurface,
+  input: RunChargeChargeInput & {
+    eventId: string;
+    probeChargeEvent: DurableRunChargeProbe;
+    recordChargeEvent: DurableRunChargeRecorder;
+  },
+): Promise<RunChargeEvent | null> {
+  const eventId = input.eventId.trim();
+  if (!eventId) {
+    throw new Error('Durable charge eventId is required');
+  }
+  const context = getRunChargeContext();
+  const inspection = inspectChargeSurface(surface, input);
+  if (!inspection) return null;
+  const lineage = {
+    runId: input.runId?.trim() || context?.lineage.runId || resolveBaseRunId(context),
+    rootRunId: input.rootRunId?.trim() || context?.lineage.rootRunId
+      || context?.lineage.parentRunId || input.runId?.trim() || resolveBaseRunId(context),
+    ...(input.parentRunId?.trim()
+      ? { parentRunId: input.parentRunId.trim() }
+      : context?.lineage.parentRunId
+        ? { parentRunId: context.lineage.parentRunId }
+        : {}),
+  } satisfies RunChargeLineage;
+  const event = createChargeEvent({
+    eventId,
+    amount: inspection.amount,
+    correlation: {
+      ...(context?.correlation ?? {}),
+      ...(input.correlation ?? {}),
+    },
+    details: input.details,
+    lane: inspection.lane,
+    lineage,
+    surface,
+    spentAfter: inspection.rollingWindowSpentAfter,
+    timestampMs: Date.now(),
+    quota: inspection.quota,
+  });
+
+  // The append-only ledger is the durable idempotency authority. Probe the
+  // full event binding before quota rejection so a committed retry remains a
+  // replay even after its rolling-window entry has aged out and current quota
+  // has subsequently filled. Unknown identities still fail before append.
+  const probeOutcome = await input.probeChargeEvent(event);
+  if (probeOutcome === 'replayed') {
+    return null;
+  }
+  if (!inspection.allowed) {
+    throw createChargeQuotaExceededError(inspection);
+  }
+
+  const commitOutcome = await input.recordChargeEvent(event);
+  if (commitOutcome === 'replayed') {
+    return null;
+  }
+  if (context) {
+    addSpentByLane(context.account.spentByLane, inspection.lane, inspection.amount);
+    addSpentByLane(context.account.directSpentByLane, inspection.lane, inspection.amount);
+    addSpentByLane(context.quotaAccount.spentByLane, inspection.lane, inspection.amount);
+  }
+  recordRollingChargeEvent(event);
+  void (input.eventBus ?? context?.eventBus)?.emit('agent.charge', event);
   return event;
 }

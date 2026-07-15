@@ -62,7 +62,10 @@ function makeAction(id: string, pendingFollowUpId: string) {
   };
 }
 
-function wire(pendingFollowUps: readonly PendingFollowUp[]) {
+function wire(
+  pendingFollowUps: readonly PendingFollowUp[],
+  linkedCandidateStatus: 'deferred' | null = null,
+) {
   const tempDir = mkdtempSync(join(tmpdir(), 'psfn-intention-follow-up-gate-'));
   TEMP_DIRS.push(tempDir);
   const eventBus = new EventBus();
@@ -110,6 +113,10 @@ function wire(pendingFollowUps: readonly PendingFollowUp[]) {
       } as any,
       pendingFollowUpStore: pendingFollowUpStore as any,
       onIntentionFollowUpActivated,
+      icpIntentionCandidateAdapter: {
+        submit: vi.fn(),
+        getLinkedCandidateStatus: vi.fn().mockResolvedValue(linkedCandidateStatus),
+      } as any,
     },
   );
 
@@ -170,6 +177,25 @@ describe('heartbeat intention follow-up activation gating', () => {
       expect(harness.followUp).toHaveBeenCalledWith(expect.objectContaining({
         content: 'Follow-up pending-due-1',
       }));
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('does not generically activate a follow-up owned by a deferred ICP candidate', async () => {
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
+    try {
+      const harness = wire([
+        makePendingFollowUp({
+          id: 'pending-icp-deferred',
+          dueAt: '2023-11-14T22:12:00.000Z',
+        }),
+      ], 'deferred');
+
+      await harness.handler(makeAction('action-icp-deferred', 'pending-icp-deferred'));
+
+      expect(harness.onIntentionFollowUpActivated).not.toHaveBeenCalled();
+      expect(harness.followUp).not.toHaveBeenCalled();
     } finally {
       nowSpy.mockRestore();
     }

@@ -467,7 +467,7 @@ export interface CaptureTurnSessionContextParams {
   /** Exact just-recorded turn entry to remove before merging or summarizing. */
   excludeSessionEntryId?: number;
   /**
-   * Presence-windowed room content gate (psfn-framework-s10rm). Absent or
+   * Presence-windowed room content gate (bead s10rm). Absent or
    * `unwindowed` keeps every surface byte-identical; `windowed`/`closed`
    * restricts EVERY served room surface (history entries, compaction
    * summaries, orientation scan, wake-return artifacts, room-origin
@@ -506,7 +506,7 @@ export async function captureTurnSessionContext(
     estimatedCount: historyBudget.estimatedCount,
     maxHistorySpanMs,
   });
-  // Presence-window gate (psfn-framework-s10rm): on a windowed private room,
+  // Presence-window gate (bead s10rm): on a windowed private room,
   // nothing recorded before the recipient's current join (`since`) may be
   // served — including a companion's OWN earlier windows (a rejoin opens a
   // NEW window; earlier windows live on in extracted memory, not here).
@@ -618,6 +618,9 @@ export async function captureTurnSessionContext(
     channelId: params.channelId,
     recentEntries: recent.map(cloneSessionEntry),
     sourceEntryCount: Math.max(0, collected.sourceCount - excludedSessionEntryCount),
+    ...(collected.storeWindowMaxEntryId !== undefined
+      ? { storeWindowMaxEntryId: collected.storeWindowMaxEntryId }
+      : {}),
     ...(roomWindowGated
       ? {
         roomWindowFloorMs: roomWindowFloor,

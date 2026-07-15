@@ -6,6 +6,7 @@ import type { GatewayRpcConnection } from './transport.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import type { GatewayMultiCompanionConfig } from './multi-companion.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
+import { EventBus } from '../../shared/event-bus.js';
 import {
   FleetStatusServer,
   buildFleetStatusPayload,
@@ -94,6 +95,7 @@ function createMinimalOptions(
     policyConfig: { workspacePath: '/workspace' },
     sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
     wyomingShardRouting: { enabled: false },
+    eventBus: new EventBus(),
     ...(multiCompanion ? { multiCompanion } : {}),
   };
 }
@@ -156,6 +158,10 @@ function multiCompanion(
     fleetCompanionIds: [COMPANION_A, COMPANION_B],
     channelRouting,
     discordAccounts: {},
+    personalWorkspaceByCompanionId: {
+      [COMPANION_A]: `/workspace/${COMPANION_A}`,
+      [COMPANION_B]: `/workspace/${COMPANION_B}`,
+    },
   };
 }
 

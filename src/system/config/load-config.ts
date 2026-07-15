@@ -10,6 +10,7 @@ import {
 import { RUNTIME_LAYOUT_MODE, resolveCompanionStateDir, resolveRuntimePathLayout } from '../../persistence/layout.js';
 import { assertValidPostgresSchemaName } from '../../persistence/postgres.js';
 import { parseOptionalStringEnv } from '../../shared/utils/env.js';
+import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 import type {
   CanonicalModelRegistry,
   ImportProcessingRouteMode,
@@ -22,6 +23,7 @@ import {
   type CapabilityTier,
   createDefaultCompositionalPolicyConfig,
   createDefaultObserverEvalSidecarSettings,
+  createDefaultSessionTailCacheSettings,
   DEFAULT_MOOD_CONGRUENCE_WEIGHT,
   type PersistenceBackend,
   DEFAULT_UI_THEME_ID,
@@ -43,6 +45,7 @@ import {
   GATEWAY_COMPANION_AUTH_TOKEN_ENV,
   GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN_ENV,
 } from '../../boundary/gateway/companion-auth.js';
+import { resolveRuntimeCredentialFromEnvironment } from '../../boundary/custody/runtime-credential-source.js';
 
 const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
   chat: 'primary',
@@ -57,7 +60,8 @@ const DEFAULT_MODEL_ROLE_ASSIGNMENTS: ModelRoleAssignments = {
   import_processing: 'extraction',
 };
 const DEFAULT_EXTRACTION_INTERVAL = 5;
-const DEFAULT_MAINTENANCE_INTERVAL_MS = 300_000;
+const DEFAULT_MAINTENANCE_INTERVAL_MS = 3_600_000;
+const DEFAULT_SALIENCE_DECAY_INTERVAL_MS = 3_600_000;
 const DEFAULT_EXTRACTION_THRESHOLD_PCT = 30;
 const DEFAULT_COMPACTION_THRESHOLD_PCT = 70;
 const DEFAULT_OBSERVATION_MASKING_WINDOW = 1;
@@ -93,15 +97,18 @@ const DEFAULT_SESSION_MIRROR_ACTIVE_WINDOW_MS = 1_800_000;
 const DEFAULT_THINK_MAX_TOKENS = 76_000;
 const DEFAULT_THINK_MAX_WALL_TIME_MS = 300_000;
 const DEFAULT_THINK_MAX_SUB_QUERIES = 24;
+const POSTGRES_DATABASE_URL_ENV = 'POSTGRES_DATABASE_URL';
+const POSTGRES_DATABASE_URL_FILE_ENV = 'POSTGRES_DATABASE_URL_FILE';
+const POSTGRES_DATABASE_URL_FD_ENV = 'POSTGRES_DATABASE_URL_FD';
 type LoadConfigMode = 'gateway' | 'agent' | 'operator';
 
 function isNodeTlsVerificationGloballyDisabled(value: string | undefined): boolean {
   return value?.trim() === '0';
 }
 
-function requireCompanionId(env: NodeJS.ProcessEnv): string {
+function requireCompanionId(env: NodeJS.ProcessEnv): CompanionId {
   const companionId = parseOptionalStringEnv(env.COMPANION_ID);
-  if (companionId) return companionId;
+  if (companionId) return createCompanionId(companionId, 'COMPANION_ID');
   throw new Error(
     'COMPANION_ID is required. Set an explicit deployment identity in .env before startup.',
   );
@@ -291,7 +298,13 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     seedDir: parseOptionalStringEnv(env.CONFIG_DIR),
   });
   const companionFleet = rawCompanionFleet
-    ? resolveCompanionFleetPaths(rawCompanionFleet, runtimePathLayout.runtimeRootDir)
+    ? resolveCompanionFleetPaths(rawCompanionFleet, runtimePathLayout.runtimeRootDir, [
+      { label: 'systemDataDir', path: runtimePathLayout.systemDataDir },
+      { label: 'companionDataDir', path: runtimePathLayout.companionDataDir },
+      { label: 'logsDir', path: runtimePathLayout.logsDir },
+      { label: 'tempDir', path: runtimePathLayout.tempDir },
+      { label: 'backupsDir', path: runtimePathLayout.backupsDir },
+    ])
     : undefined;
   const companionRuntimeIdentity = companionFleet
     ? resolveCompanionRuntimeIdentity({
@@ -300,6 +313,8 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
       companionDataDir: configuredCompanionDataDir,
       characterCardPath: configuredCharacterCardPath,
       postgresSchema: configuredPostgresSchema,
+      workspacePath: env.WORKSPACE_PATH,
+      requireWorkspaceBinding: mode !== 'gateway',
     })
     : undefined;
   const companionDataDir = companionRuntimeIdentity?.companionDataDir ?? configuredCompanionDataDir;
@@ -324,8 +339,17 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
   const databasePath = env.DATABASE_PATH
     ?? `${resolveCompanionStateDir(companionDataDir)}/${databaseBasename}.db`;
   const persistenceBackend = parsePersistenceBackendEnv(env.PERSISTENCE_BACKEND);
-  const postgresDatabaseUrl = parseOptionalStringEnv(env.POSTGRES_DATABASE_URL);
-  if (!postgresDatabaseUrl && mode !== 'operator') {
+  const postgresDatabaseUrl = mode === 'agent'
+    ? resolveRuntimeCredentialFromEnvironment(env, {
+      description: 'PostgreSQL database URL',
+      inlineEnvName: POSTGRES_DATABASE_URL_ENV,
+      fileEnvName: POSTGRES_DATABASE_URL_FILE_ENV,
+      fdEnvName: POSTGRES_DATABASE_URL_FD_ENV,
+    })
+    : mode === 'gateway'
+      ? parseOptionalStringEnv(env[POSTGRES_DATABASE_URL_ENV])
+      : undefined;
+  if (!postgresDatabaseUrl && mode === 'gateway') {
     throw new Error('POSTGRES_DATABASE_URL is required for runtime persistence');
   }
 
@@ -351,7 +375,8 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     ...(gatewaySessionIntegrityAuthToken ? { gatewaySessionIntegrityAuthToken } : {}),
     systemDataDir: runtimePathLayout.systemDataDir,
     companionDataDir,
-    workspacePath: runtimePathLayout.workspacePath,
+    workspacePath: companionRuntimeIdentity?.personalWorkspacePath ?? runtimePathLayout.workspacePath,
+    ...(companionFleet ? { sharedWorkspacePath: companionFleet.sharedWorkspacePath } : {}),
     dataDir,
     databasePath,
     persistenceBackend,
@@ -370,6 +395,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     sessionMirrorChannelOverrides: {},
     extractionInterval: DEFAULT_EXTRACTION_INTERVAL,
     maintenanceIntervalMs: DEFAULT_MAINTENANCE_INTERVAL_MS,
+    salienceDecayIntervalMs: DEFAULT_SALIENCE_DECAY_INTERVAL_MS,
     defaultContextWindow,
     extractionThresholdPct: DEFAULT_EXTRACTION_THRESHOLD_PCT,
     compactionThresholdPct: DEFAULT_COMPACTION_THRESHOLD_PCT,
@@ -454,6 +480,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     embeddingApiDims: undefined,
     compositionalPolicy: createDefaultCompositionalPolicyConfig(),
     observerEvalSidecar: createDefaultObserverEvalSidecarSettings(),
+    sessionTailCache: createDefaultSessionTailCacheSettings(),
     webFetchAllowHttp: false,
     webFetchAllowInternalNetwork: false,
     homeAssistantEnabled: false,

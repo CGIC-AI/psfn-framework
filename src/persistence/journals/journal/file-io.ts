@@ -7,6 +7,7 @@ import {
   readFileSync,
   readSync,
   renameSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -16,16 +17,26 @@ import { appendJsonLine } from '../../jsonl.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../../core/turns/id.js';
 import type {
+  JournalBoundedReadStats,
   JournalFileMetadata,
   QuarantinedJournalEntry,
+  ReadJournalBeforeOptions,
+  ReadJournalBeforeResult,
   ReadJournalFileOptions,
   ReadJournalResult,
   ReadJournalTailOptions,
   ReadJournalTailResult,
   ScanJournalMetadataOptions,
 } from './types.js';
+import {
+  listNumberedJsonlSegments,
+  readJsonlLineAtOrAfter,
+  readJsonlLineBefore,
+  scanJsonlFileBackward,
+} from '../../jsonl-segments.js';
 
 const DEFAULT_JOURNAL_SCAN_CHUNK_BYTES = 64 * 1024;
+const JOURNAL_SEGMENT_READ_RETRIES = 3;
 
 function resolveJournalMessageTurnId(entry: JournalEntry): string {
   if (entry.type !== 'message') {
@@ -169,7 +180,7 @@ function scanJournalLinesForward(
   return stoppedEarly;
 }
 
-function scanJournalLinesBackward(
+export function scanJournalLinesBackward(
   filePath: string,
   onLine: (line: string) => boolean | void,
 ): boolean {
@@ -181,7 +192,9 @@ function scanJournalLinesBackward(
 
     const buffer = Buffer.allocUnsafe(DEFAULT_JOURNAL_SCAN_CHUNK_BYTES);
     let position = fileSize;
-    let remainder = '';
+    // Keep the incomplete leading line as bytes. Decoding each chunk on its
+    // own corrupts a UTF-8 code point split across the 64 KiB boundary.
+    let remainder = Buffer.alloc(0);
 
     while (position > 0) {
       const bytesToRead = Math.min(DEFAULT_JOURNAL_SCAN_CHUNK_BYTES, position);
@@ -190,20 +203,27 @@ function scanJournalLinesBackward(
       const bytesRead = readSync(fd, buffer, 0, bytesToRead, position);
       if (bytesRead <= 0) break;
 
-      const chunk = buffer.toString('utf8', 0, bytesRead);
-      const parts = (chunk + remainder).split('\n');
-      remainder = parts.shift() ?? '';
-
-      for (let index = parts.length - 1; index >= 0; index--) {
-        if (onLine(parts[index])) {
+      const chunk = Buffer.from(buffer.subarray(0, bytesRead));
+      const combined = remainder.length > 0
+        ? Buffer.concat([chunk, remainder])
+        : chunk;
+      let lineEnd = combined.length;
+      let leadingBytes = combined.length;
+      for (let index = combined.length - 1; index >= 0; index--) {
+        if (combined[index] !== 0x0a) continue;
+        const line = combined.subarray(index + 1, lineEnd).toString('utf8');
+        if (onLine(line)) {
           stoppedEarly = true;
           return stoppedEarly;
         }
+        lineEnd = index;
+        leadingBytes = index;
       }
+      remainder = Buffer.from(combined.subarray(0, leadingBytes));
     }
 
     if (remainder.length > 0) {
-      if (onLine(remainder)) {
+      if (onLine(remainder.toString('utf8'))) {
         stoppedEarly = true;
       }
     }
@@ -245,6 +265,23 @@ export function quarantineSidecarPath(filePath: string): string {
   return `${filePath}.quarantine`;
 }
 
+export function listJournalArchivePaths(filePath: string): string[] {
+  const paths = listNumberedJsonlSegments(filePath)
+    .sort((left, right) => left.segmentNumber - right.segmentNumber)
+    .map(segment => segment.path);
+  if (existsSync(filePath)) paths.push(filePath);
+  return paths;
+}
+
+export function fingerprintJournalArchive(filePath: string): string | null {
+  const paths = listJournalArchivePaths(filePath);
+  if (paths.length === 0) return null;
+  return paths.map((path) => {
+    const stats = statSync(path);
+    return [path, stats.dev, stats.ino, stats.size, stats.mtimeMs, stats.ctimeMs].join(':');
+  }).join('|');
+}
+
 export function persistQuarantinedEntries(
   filePath: string,
   quarantined: QuarantinedJournalEntry[],
@@ -265,51 +302,65 @@ export function readJournalFile(
   filePath: string,
   options: ReadJournalFileOptions = {},
 ): ReadJournalResult {
-  if (!existsSync(filePath)) {
+  const archivePaths = listJournalArchivePaths(filePath);
+  if (archivePaths.length === 0) {
     return { entries: [], maxId: 0, quarantined: [] };
   }
-  const raw = readFileSync(filePath, 'utf-8');
-  const parsed = parseJournalText(raw);
-  if (options.persistQuarantine !== false) {
-    try {
-      persistQuarantinedEntries(filePath, parsed.quarantined);
-    } catch (err) {
-      // Quarantine sidecar write failure should never block journal loading.
-      if (typeof process !== 'undefined' && process.env.LOG_LEVEL === 'debug') {
-        console.debug('[Journal] Quarantine sidecar write failed', String(err));
+
+  const result: ReadJournalResult = { entries: [], maxId: 0, quarantined: [] };
+  for (const path of archivePaths) {
+    const parsed = parseJournalText(readFileSync(path, 'utf-8'));
+    result.entries.push(...parsed.entries);
+    result.maxId = Math.max(result.maxId, parsed.maxId);
+    result.quarantined.push(...parsed.quarantined);
+    if (options.persistQuarantine !== false) {
+      try {
+        persistQuarantinedEntries(path, parsed.quarantined);
+      } catch (err) {
+        // Quarantine sidecar write failure should never block journal loading.
+        if (typeof process !== 'undefined' && process.env.LOG_LEVEL === 'debug') {
+          console.debug('[Journal] Quarantine sidecar write failed', String(err));
+        }
       }
     }
   }
-  return parsed;
+  return result;
 }
 
 export function readJournalFirstEntry(filePath: string): JournalEntry | null {
-  if (!existsSync(filePath)) return null;
-
-  let first: JournalEntry | null = null;
-  scanJournalLinesForward(filePath, (line) => {
-    if (line.trim().length === 0) return false;
-    try {
-      first = parseJournalLine(line);
+  for (const path of listJournalArchivePaths(filePath)) {
+    let first: JournalEntry | null = null;
+    const foundEntry = scanJournalLinesForward(path, (line) => {
+      if (line.trim().length === 0) return false;
+      try {
+        first = parseJournalLine(line);
+      } catch {
+        first = null;
+      }
+      // The first nonblank physical row is boundary authority. A malformed
+      // row cannot authorize skipping forward to a later parseable id.
       return true;
-    } catch {
-      return false;
-    }
-  });
-
-  return first;
+    });
+    if (foundEntry) return first;
+  }
+  return null;
 }
 
 export function scanJournalFileMetadata(
   filePath: string,
   options: ScanJournalMetadataOptions = {},
 ): JournalFileMetadata {
-  if (!existsSync(filePath)) {
+  const parsed = readJournalFile(filePath, { persistQuarantine: options.persistQuarantine });
+  if (parsed.entries.length === 0 && parsed.quarantined.length === 0) {
     return {
       entryCount: 0,
+      minId: 0,
       maxId: 0,
       messageCount: 0,
+      compactionCount: 0,
+      turnTombstoneCount: 0,
       activeTurnTombstoneCount: 0,
+      activeTurnTombstoneIds: [],
       lastTimestamp: 0,
       lastHmac: null,
       lastEntry: null,
@@ -319,62 +370,43 @@ export function scanJournalFileMetadata(
   }
 
   let entryCount = 0;
+  let minId = Number.POSITIVE_INFINITY;
   let maxId = 0;
+  let compactionCount = 0;
+  let turnTombstoneCount = 0;
   const messageCountsByTurn = new Map<string, number>();
   const activeTurnTombstones = new Set<string>();
   let lastTimestamp = 0;
   let lastHmac: string | null = null;
   let lastEntry: JournalEntry | null = null;
   let lastExtractionCoveredUpTo = 0;
-  const quarantined: QuarantinedJournalEntry[] = [];
+  const quarantined = parsed.quarantined;
 
-  scanJournalLinesForward(filePath, (line, lineNumber) => {
-    if (line.trim().length === 0) return false;
-
-    try {
-      const entry = parseJournalLine(line);
-      entryCount += 1;
-      maxId = Math.max(maxId, entry.id);
-      if (entry.type === 'message') {
-        const turnId = resolveJournalMessageTurnId(entry);
-        messageCountsByTurn.set(turnId, (messageCountsByTurn.get(turnId) ?? 0) + 1);
-      } else if (entry.type === 'tombstone' && entry.tombstoneTargetType === 'turn') {
-        const turnId = parseTurnId(entry.tombstoneTargetId, 'tombstoneTargetId');
-        if (turnId) {
-          if (entry.tombstoneAction === 'redact') {
-            activeTurnTombstones.add(turnId);
-          } else if (entry.tombstoneAction === 'restore') {
-            activeTurnTombstones.delete(turnId);
-          }
+  for (const entry of parsed.entries) {
+    entryCount += 1;
+    minId = Math.min(minId, entry.id);
+    maxId = Math.max(maxId, entry.id);
+    if (entry.type === 'message') {
+      const turnId = resolveJournalMessageTurnId(entry);
+      messageCountsByTurn.set(turnId, (messageCountsByTurn.get(turnId) ?? 0) + 1);
+    } else if (entry.type === 'compaction') {
+      compactionCount += 1;
+    } else if (entry.type === 'tombstone' && entry.tombstoneTargetType === 'turn') {
+      turnTombstoneCount += 1;
+      const turnId = parseTurnId(entry.tombstoneTargetId, 'tombstoneTargetId');
+      if (turnId) {
+        if (entry.tombstoneAction === 'redact') {
+          activeTurnTombstones.add(turnId);
+        } else if (entry.tombstoneAction === 'restore') {
+          activeTurnTombstones.delete(turnId);
         }
       }
-      lastTimestamp = entry.timestamp;
-      lastEntry = entry;
-      if (typeof entry._hmac === 'string') {
-        lastHmac = entry._hmac;
-      }
-      if (entry.type === 'marker' && entry.marker === 'extraction' && typeof entry.coveredUpTo === 'number') {
-        lastExtractionCoveredUpTo = Math.max(lastExtractionCoveredUpTo, entry.coveredUpTo);
-      }
-      return false;
-    } catch (error) {
-      quarantined.push({
-        lineNumber,
-        error: toErrorMessage(error),
-        raw: line,
-      });
-      return false;
     }
-  });
-
-  if (options.persistQuarantine !== false) {
-    try {
-      persistQuarantinedEntries(filePath, quarantined);
-    } catch (err) {
-      // Quarantine sidecar write failure should never block journal loading.
-      if (typeof process !== 'undefined' && process.env.LOG_LEVEL === 'debug') {
-        console.debug('[Journal] Quarantine sidecar write failed', String(err));
-      }
+    lastTimestamp = entry.timestamp;
+    lastEntry = entry;
+    if (typeof entry._hmac === 'string') lastHmac = entry._hmac;
+    if (entry.type === 'marker' && entry.marker === 'extraction' && typeof entry.coveredUpTo === 'number') {
+      lastExtractionCoveredUpTo = Math.max(lastExtractionCoveredUpTo, entry.coveredUpTo);
     }
   }
 
@@ -386,9 +418,13 @@ export function scanJournalFileMetadata(
 
   return {
     entryCount,
+    minId: Number.isFinite(minId) ? minId : 0,
     maxId,
     messageCount,
+    compactionCount,
+    turnTombstoneCount,
     activeTurnTombstoneCount: activeTurnTombstones.size,
+    activeTurnTombstoneIds: [...activeTurnTombstones].sort(),
     lastTimestamp,
     lastHmac,
     lastEntry,
@@ -402,7 +438,8 @@ export function readJournalTailEntries(
   options: ReadJournalTailOptions,
 ): ReadJournalTailResult {
   const messageLimit = Math.max(0, Math.floor(options.messageLimit));
-  if (!existsSync(filePath) || messageLimit <= 0) {
+  const archivePaths = listJournalArchivePaths(filePath);
+  if (archivePaths.length === 0 || messageLimit <= 0) {
     return {
       entries: [],
       quarantined: [],
@@ -416,40 +453,331 @@ export function readJournalTailEntries(
   let messageCount = 0;
   let needBoundaryEntry = false;
 
-  const truncated = scanJournalLinesBackward(filePath, (line) => {
-    if (line.trim().length === 0) return false;
+  let truncated = false;
+  for (let index = archivePaths.length - 1; index >= 0 && !truncated; index -= 1) {
+    truncated = scanJournalLinesBackward(archivePaths[index], (line) => {
+      if (line.trim().length === 0) return false;
 
-    try {
-      const entry = parseJournalLine(line);
-      parsedDescending.push(entry);
+      try {
+        const entry = parseJournalLine(line);
+        parsedDescending.push(entry);
 
-      if (needBoundaryEntry) {
-        return true;
-      }
-
-      if (entry.type === 'message') {
-        messageCount += 1;
-        if (messageCount >= messageLimit) {
-          if (!includeBoundaryEntry) return true;
-          needBoundaryEntry = true;
+        if (needBoundaryEntry) return true;
+        if (entry.type === 'message') {
+          messageCount += 1;
+          if (messageCount >= messageLimit) {
+            if (!includeBoundaryEntry) return true;
+            needBoundaryEntry = true;
+          }
         }
+        return false;
+      } catch (error) {
+        quarantined.push({ lineNumber: -1, error: toErrorMessage(error), raw: line });
+        return false;
       }
-      return false;
-    } catch (error) {
-      quarantined.push({
-        lineNumber: -1,
-        error: toErrorMessage(error),
-        raw: line,
-      });
-      return false;
-    }
-  });
+    });
+  }
 
   return {
     entries: parsedDescending.reverse(),
     quarantined,
     truncated,
   };
+}
+
+export function readJournalMatchingEntriesBackward(
+  filePath: string,
+  options: import('./types.js').ReadJournalMatchingOptions,
+): import('./types.js').ReadJournalMatchingResult {
+  const limit = Math.max(0, Math.floor(options.limit));
+  const archivePaths = listJournalArchivePaths(filePath);
+  if (archivePaths.length === 0 || limit <= 0) return { matches: [], quarantined: [] };
+
+  const matches: import('./types.js').JournalBackwardMatch[] = [];
+  const quarantined: QuarantinedJournalEntry[] = [];
+  const state: { awaitingBoundary: JournalEntry | null } = { awaitingBoundary: null };
+
+  let stopped = false;
+  for (let index = archivePaths.length - 1; index >= 0 && !stopped; index -= 1) {
+    stopped = scanJournalLinesBackward(archivePaths[index], (line) => {
+      if (line.trim().length === 0) return false;
+      let entry: JournalEntry;
+      try {
+        entry = parseJournalLine(line);
+      } catch (error) {
+        quarantined.push({ lineNumber: -1, error: toErrorMessage(error), raw: line });
+        if (state.awaitingBoundary) {
+          matches.push({ entry: state.awaitingBoundary, previousHmac: null });
+          state.awaitingBoundary = null;
+        }
+        return matches.length >= limit;
+      }
+
+      if (state.awaitingBoundary) {
+        matches.push({
+          entry: state.awaitingBoundary,
+          previousHmac: typeof entry._hmac === 'string' ? entry._hmac : null,
+        });
+        state.awaitingBoundary = null;
+        if (matches.length >= limit) return true;
+      }
+      if (options.stopAfter?.(entry)) return true;
+      if (options.matches(entry)) state.awaitingBoundary = entry;
+      return false;
+    });
+  }
+
+  if (state.awaitingBoundary && matches.length < limit) {
+    matches.push({ entry: state.awaitingBoundary, previousHmac: null });
+  }
+  return { matches, quarantined };
+}
+function appendQuarantinedLine(
+  target: QuarantinedJournalEntry[],
+  line: string,
+  error: unknown,
+): void {
+  const quarantined = {
+    lineNumber: -1,
+    error: toErrorMessage(error),
+    raw: line,
+  } satisfies QuarantinedJournalEntry;
+  if (target.some(existing => existing.raw === quarantined.raw && existing.error === quarantined.error)) {
+    return;
+  }
+  target.push(quarantined);
+}
+
+function readJournalEntriesBeforeOnce(
+  filePath: string,
+  beforeId: number,
+  messageLimit: number,
+  includeBoundaryEntry: boolean,
+  chunkBytes: number,
+  stats: JournalBoundedReadStats | undefined,
+  trustSeekEntry: ReadJournalBeforeOptions['trustSeekEntry'],
+  previousFileHmac: string | null,
+): ReadJournalBeforeResult {
+  const parsedDescending: JournalEntry[] = [];
+  const quarantined: QuarantinedJournalEntry[] = [];
+  const seekFileIdentities = new Set<string>();
+  const scannedFileIdentities = new Set<string>();
+  const seekChunkBytes = Math.max(chunkBytes, 1024);
+  let messageCount = 0;
+  let needBoundaryEntry = false;
+  let truncated = false;
+
+  const readSeekEntry = (
+    path: string,
+    offset: number,
+    previousPath: string | undefined,
+  ): { entry: JournalEntry; startOffset: number; endOffset: number } | null => {
+    const row = readJsonlLineAtOrAfter(path, offset, {
+      chunkBytes: seekChunkBytes,
+      stats,
+      scannedFileIdentities: seekFileIdentities,
+    });
+    if (!row || row.line.trim().length === 0) return null;
+
+    let entry: JournalEntry;
+    try {
+      entry = parseJournalLine(row.line);
+    } catch (error) {
+      appendQuarantinedLine(quarantined, row.line, error);
+      return null;
+    }
+    if (!trustSeekEntry) {
+      return { entry, startOffset: row.startOffset, endOffset: row.endOffset };
+    }
+
+    const previousRow = row.startOffset > 0
+      ? readJsonlLineBefore(path, row.startOffset, {
+        chunkBytes: seekChunkBytes,
+        stats,
+        scannedFileIdentities: seekFileIdentities,
+      })
+      : previousPath
+        ? readJsonlLineBefore(previousPath, statSync(previousPath).size, {
+          chunkBytes: seekChunkBytes,
+          stats,
+          scannedFileIdentities: seekFileIdentities,
+        })
+        : null;
+    let previousHmac = previousFileHmac;
+    if (previousRow?.line.trim()) {
+      try {
+        const previousEntry = parseJournalLine(previousRow.line);
+        previousHmac = typeof previousEntry._hmac === 'string' ? previousEntry._hmac : null;
+      } catch (error) {
+        appendQuarantinedLine(quarantined, previousRow.line, error);
+        return null;
+      }
+    }
+    try {
+      return trustSeekEntry(entry, previousHmac)
+        ? { entry, startOffset: row.startOffset, endOffset: row.endOffset }
+        : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const findCursorOffset = (path: string, previousPath: string | undefined): number | null => {
+    const fileSize = statSync(path).size;
+    let low = 0;
+    let high = fileSize;
+    while (high - low > seekChunkBytes) {
+      const midpoint = low + Math.floor((high - low) / 2);
+      const sampled = readSeekEntry(path, midpoint, previousPath);
+      if (!sampled) {
+        high = midpoint;
+        continue;
+      }
+      if (sampled.entry.id < beforeId) {
+        low = Math.max(low + 1, sampled.endOffset);
+      } else {
+        high = midpoint;
+      }
+    }
+
+    let offset = low;
+    while (offset < fileSize) {
+      const candidate = readSeekEntry(path, offset, previousPath);
+      if (!candidate) return null;
+      if (candidate.entry.id >= beforeId) return candidate.startOffset;
+      if (candidate.endOffset <= offset) return null;
+      offset = candidate.endOffset;
+    }
+    return fileSize;
+  };
+
+  const scanCandidate = (path: string, endOffset?: number): boolean => {
+    const stopped = scanJsonlFileBackward(path, {
+      chunkBytes,
+      stats,
+      scannedFileIdentities,
+      ...(endOffset === undefined ? {} : { endOffset }),
+    }, (line) => {
+      if (line.trim().length === 0) return false;
+      let entry: JournalEntry;
+      try {
+        entry = parseJournalLine(line);
+      } catch (error) {
+        appendQuarantinedLine(quarantined, line, error);
+        return false;
+      }
+      if (entry.id >= beforeId) return false;
+
+      parsedDescending.push(entry);
+      if (needBoundaryEntry) return true;
+      if (entry.type !== 'message') return false;
+
+      messageCount += 1;
+      if (messageCount < messageLimit) return false;
+      if (!includeBoundaryEntry) return true;
+      needBoundaryEntry = true;
+      return false;
+    });
+    return stopped;
+  };
+
+  const archivePaths = listNumberedJsonlSegments(filePath)
+    .sort((left, right) => left.segmentNumber - right.segmentNumber)
+    .map(segment => segment.path);
+  if (existsSync(filePath)) archivePaths.push(filePath);
+  const nonEmptyPaths = archivePaths.filter(path => statSync(path).size > 0);
+
+  let candidateIndex = -1;
+  let low = 0;
+  let high = nonEmptyPaths.length - 1;
+  let segmentSeekTrusted = true;
+  while (low <= high) {
+    const midpoint = low + Math.floor((high - low) / 2);
+    const sampled = readSeekEntry(
+      nonEmptyPaths[midpoint],
+      0,
+      midpoint > 0 ? nonEmptyPaths[midpoint - 1] : undefined,
+    );
+    if (!sampled) {
+      segmentSeekTrusted = false;
+      break;
+    }
+    if (sampled.entry.id < beforeId) {
+      candidateIndex = midpoint;
+      low = midpoint + 1;
+    } else {
+      high = midpoint - 1;
+    }
+  }
+
+  if (segmentSeekTrusted && candidateIndex >= 0) {
+    for (let index = candidateIndex; index >= 0 && !truncated; index -= 1) {
+      const candidateSize = statSync(nonEmptyPaths[index]).size;
+      const cursorOffset = index === candidateIndex && candidateSize > 256 * 1024
+        ? findCursorOffset(nonEmptyPaths[index], index > 0 ? nonEmptyPaths[index - 1] : undefined)
+        : candidateSize;
+      truncated = scanCandidate(
+        nonEmptyPaths[index],
+        cursorOffset ?? candidateSize,
+      );
+    }
+  } else if (!segmentSeekTrusted) {
+    // An unauthenticated or malformed boundary is never skip authority.
+    for (let index = nonEmptyPaths.length - 1; index >= 0 && !truncated; index -= 1) {
+      truncated = scanCandidate(nonEmptyPaths[index]);
+    }
+  }
+
+  return {
+    entries: parsedDescending.reverse(),
+    quarantined,
+    truncated,
+  };
+}
+
+/**
+ * Read the message window immediately before an entry id without loading the
+ * complete archive. The active file and hgw3-style numbered sealed siblings
+ * are walked newest-first. Newer segments cost only their first valid entry;
+ * the containing/older segments are scanned backward until the requested
+ * messages plus one HMAC boundary entry are found.
+ */
+export function readJournalEntriesBefore(
+  filePath: string,
+  options: ReadJournalBeforeOptions,
+): ReadJournalBeforeResult {
+  const beforeId = Number.isFinite(options.beforeId)
+    ? Math.max(0, Math.floor(options.beforeId))
+    : 0;
+  const messageLimit = Number.isFinite(options.messageLimit)
+    ? Math.max(0, Math.floor(options.messageLimit))
+    : 0;
+  if (beforeId <= 0 || messageLimit <= 0) {
+    return { entries: [], quarantined: [], truncated: false };
+  }
+  const requestedChunkBytes = options.scanChunkBytes ?? DEFAULT_JOURNAL_SCAN_CHUNK_BYTES;
+  const chunkBytes = Number.isFinite(requestedChunkBytes)
+    ? Math.max(1, Math.floor(requestedChunkBytes))
+    : DEFAULT_JOURNAL_SCAN_CHUNK_BYTES;
+
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return readJournalEntriesBeforeOnce(
+        filePath,
+        beforeId,
+        messageLimit,
+        options.includeBoundaryEntry !== false,
+        chunkBytes,
+        options.stats,
+        options.trustSeekEntry,
+        options.previousFileHmac ?? null,
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || attempt >= JOURNAL_SEGMENT_READ_RETRIES) {
+        throw error;
+      }
+    }
+  }
 }
 
 export function appendJournalEntry(filePath: string, entry: JournalEntry): void {
@@ -465,6 +793,12 @@ export function writeJournalFileAtomic(filePath: string, entries: readonly Journ
   try {
     writeFileSync(tmpPath, payload, 'utf-8');
     renameSync(tmpPath, filePath);
+    // Rewrites operate on the complete logical archive. Once the replacement
+    // active file is durable, retired sealed siblings must not remain visible
+    // or canonical replay would duplicate pre-rewrite content.
+    for (const segment of listNumberedJsonlSegments(filePath)) {
+      unlinkSync(segment.path);
+    }
   } catch (error) {
     try {
       unlinkSync(tmpPath);

@@ -852,7 +852,12 @@ describe('GatewayServer', () => {
   describe('requestAgentVoiceStream', () => {
     it('streams start/chunk/end and returns final response', async () => {
       const methods: string[] = [];
-      const { server } = await setupServerConnection(createMinimalOptions(), (msg, emit) => {
+      const workspace = mkdtempSync(join(tmpdir(), 'psfn-voice-attachment-workspace-'));
+      const imagePath = join(workspace, 'image.png');
+      writeFileSync(imagePath, 'streamed-image');
+      const options = createMinimalOptions();
+      options.policyConfig.workspacePath = workspace;
+      const { server } = await setupServerConnection(options, (msg, emit) => {
         if (!msg.id || typeof msg.method !== 'string') return;
         methods.push(msg.method);
         if (msg.method === 'voice.stream.start' || msg.method === 'voice.stream.chunk') {
@@ -878,6 +883,12 @@ describe('GatewayServer', () => {
               channelId: 'discord-voice:123',
               model: 'voice-model',
               durationMs: 321,
+              attachments: [{
+                url: 'https://images.example.test/streamed.png',
+                contentType: 'image/png',
+                name: 'streamed.png',
+                localPath: imagePath,
+              }],
               correlationId: msg.params.correlationId,
               streamId: msg.params.streamId,
               droppedChunks: msg.params.metadata?.droppedChunks ?? 0,
@@ -886,20 +897,106 @@ describe('GatewayServer', () => {
         }
       });
 
-      const result = await server.requestAgentVoiceStream(
-        makeVoiceMessage('hello world from voice'),
-        { chunkSize: 5 },
-      );
+      try {
+        const result = await server.requestAgentVoiceStream(
+          makeVoiceMessage('hello world from voice'),
+          { chunkSize: 5 },
+        );
 
-      expect(result).toEqual({
-        content: 'voice response',
-        channelId: 'discord-voice:123',
-        model: 'voice-model',
-        durationMs: 321,
+        expect(result).toEqual({
+          content: 'voice response',
+          channelId: 'discord-voice:123',
+          model: 'voice-model',
+          durationMs: 321,
+          attachments: [{
+            url: 'https://images.example.test/streamed.png',
+            contentType: 'image/png',
+            name: 'streamed.png',
+            dataBase64: Buffer.from('streamed-image').toString('base64'),
+          }],
+        });
+        expect(methods[0]).toBe('voice.stream.start');
+        expect(methods[methods.length - 1]).toBe('voice.stream.end');
+        expect(methods.filter(m => m === 'voice.stream.chunk').length).toBeGreaterThan(1);
+      } finally {
+        rmSync(workspace, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects a streamed attachment path outside the routed Personal Workspace', async () => {
+      const workspace = mkdtempSync(join(tmpdir(), 'psfn-voice-own-workspace-'));
+      const peerWorkspace = mkdtempSync(join(tmpdir(), 'psfn-voice-peer-workspace-'));
+      const peerPath = join(peerWorkspace, 'peer.png');
+      writeFileSync(peerPath, 'peer-image');
+      const options = createMinimalOptions();
+      options.policyConfig.workspacePath = workspace;
+      const { server } = await setupServerConnection(options, (msg, emit) => {
+        if (!msg.id || typeof msg.method !== 'string') return;
+        if (msg.method === 'voice.stream.start' || msg.method === 'voice.stream.chunk') {
+          emit({
+            jsonrpc: '2.0', id: msg.id,
+            result: {
+              correlationId: msg.params.correlationId,
+              streamId: msg.params.streamId,
+              sequence: msg.params.sequence,
+              accepted: true,
+              queueDepth: 0,
+            },
+          });
+        } else if (msg.method === 'voice.stream.end') {
+          emit({
+            jsonrpc: '2.0', id: msg.id,
+            result: {
+              content: 'voice response', channelId: 'discord-voice:123', model: 'voice-model', durationMs: 1,
+              correlationId: msg.params.correlationId, streamId: msg.params.streamId, droppedChunks: 0,
+              attachments: [{
+                url: 'https://images.example.test/peer.png', contentType: 'image/png',
+                name: 'peer.png', localPath: peerPath,
+              }],
+            },
+          });
+        }
       });
-      expect(methods[0]).toBe('voice.stream.start');
-      expect(methods[methods.length - 1]).toBe('voice.stream.end');
-      expect(methods.filter(m => m === 'voice.stream.chunk').length).toBeGreaterThan(1);
+      try {
+        await expect(server.requestAgentVoiceStream(makeVoiceMessage('peer attempt')))
+          .rejects.toThrow(/outside its authenticated root/);
+      } finally {
+        rmSync(workspace, { recursive: true, force: true });
+        rmSync(peerWorkspace, { recursive: true, force: true });
+      }
+    });
+
+    it('rejects a fallback handle-path attachment outside the routed Personal Workspace', async () => {
+      const workspace = mkdtempSync(join(tmpdir(), 'psfn-voice-own-workspace-'));
+      const peerWorkspace = mkdtempSync(join(tmpdir(), 'psfn-voice-peer-workspace-'));
+      const peerPath = join(peerWorkspace, 'peer.png');
+      writeFileSync(peerPath, 'peer-image');
+      const options = createMinimalOptions();
+      options.policyConfig.workspacePath = workspace;
+      const { server } = await setupServerConnection(options, (msg, emit) => {
+        if (!msg.id || typeof msg.method !== 'string') return;
+        if (msg.method === 'voice.stream.start') {
+          emit({ jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'Method not found' } });
+        } else if (msg.method === 'voice.handleMessage') {
+          emit({
+            jsonrpc: '2.0', id: msg.id,
+            result: {
+              content: 'fallback response', channelId: 'discord-voice:123', model: 'voice-model', durationMs: 1,
+              attachments: [{
+                url: 'https://images.example.test/peer.png', contentType: 'image/png',
+                name: 'peer.png', localPath: peerPath,
+              }],
+            },
+          });
+        }
+      });
+      try {
+        await expect(server.requestAgentVoiceStream(makeVoiceMessage('fallback peer attempt')))
+          .rejects.toThrow(/outside its authenticated root/);
+      } finally {
+        rmSync(workspace, { recursive: true, force: true });
+        rmSync(peerWorkspace, { recursive: true, force: true });
+      }
     });
 
     it('marks Wyoming shard delegation ineligible by default-safe policy', async () => {

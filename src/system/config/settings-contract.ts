@@ -140,7 +140,7 @@ export const SETTINGS_OWNER_FILE_BY_FIELD = new Map<string, string>([
   ['modelCatalog', MODELS_FILE_NAME],
   ['modelRoleAssignments', MODELS_FILE_NAME],
   ['modelRoster', MODELS_FILE_NAME],
-  ['maintenanceIntervalMs', SCHEDULER_FILE_NAME],
+  ['salienceDecayIntervalMs', SCHEDULER_FILE_NAME],
   ['episodicProcessingEnabled', SCHEDULER_FILE_NAME],
   ['episodicProcessingRestWindowStartLocalTime', SCHEDULER_FILE_NAME],
   ['episodicProcessingRestWindowEndLocalTime', SCHEDULER_FILE_NAME],
@@ -160,7 +160,7 @@ const SETTINGS_OWNER_SUBSYSTEM_BY_FIELD = new Map<string, SettingsSubsystemId>([
   ['modelCatalog', 'models'],
   ['modelRoleAssignments', 'models'],
   ['modelRoster', 'models'],
-  ['maintenanceIntervalMs', 'scheduler'],
+  ['salienceDecayIntervalMs', 'scheduler'],
   ['episodicProcessingEnabled', 'scheduler'],
   ['episodicProcessingRestWindowStartLocalTime', 'scheduler'],
   ['episodicProcessingRestWindowEndLocalTime', 'scheduler'],
@@ -213,7 +213,7 @@ const SETTINGS_INTEGER_FIELDS = new Set<string>([
   'sessionMirrorActiveWindowMs',
   'continuityMessageLimit',
   'extractionInterval',
-  'maintenanceIntervalMs',
+  'salienceDecayIntervalMs',
   'episodicProcessingInactivityThresholdMinutes',
   'extractionThresholdPct',
   'compactionThresholdPct',
@@ -258,6 +258,7 @@ const SETTINGS_OBJECT_FIELDS = new Set<string>([
   'groupMemory',
   'emotionScoping',
   'observerEvalSidecar',
+  'sessionTailCache',
   'imageWorkflows',
   'modelCatalog',
   'modelRoleAssignments',
@@ -297,7 +298,7 @@ const BASE_ENUM_VALUES_BY_FIELD = new Map<string, readonly string[]>([
 ]);
 
 const EXTRA_NUMERIC_RANGES = new Map<string, { min?: number; max?: number }>([
-  ['maintenanceIntervalMs', { min: 1_000 }],
+  ['salienceDecayIntervalMs', { min: 1_000 }],
   ['episodicProcessingInactivityThresholdMinutes', { min: 1 }],
   ['moodCongruenceWeight', { min: 0, max: 1 }],
   ['memoryExtractionEmotionalIntensityWeight', { min: 0, max: 1 }],

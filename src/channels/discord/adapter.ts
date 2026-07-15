@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import {
   Client,
   Events,
@@ -49,6 +48,7 @@ import {
 import { fetchRemoteResource } from '../backplane/safe-remote-fetch.js';
 import type { IntakeEnvelopeSnapshot } from '../../shared/contracts/intake-envelope.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import { classifyChannelEnvelope } from '../../system/trust/policy.js';
 import {
   DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE,
   extractDiscordDocumentAttachmentCandidates,
@@ -403,9 +403,20 @@ export class DiscordAdapter implements ChannelAdapterPort {
 
     const fileName = media.name.trim() || 'attachment';
     const localPath = media.localPath?.trim();
-    const file = localPath && existsSync(localPath)
-      ? localPath
-      : await this.fetchRemoteMediaAttachment(media.url, fileName);
+    if (localPath) {
+      throw new Error('Discord refuses unmaterialized localPath attachments');
+    }
+    const dataBase64 = media.dataBase64?.trim();
+    let file: { attachment: Buffer; name: string };
+    if (dataBase64) {
+      const bytes = Buffer.from(dataBase64, 'base64');
+      if (bytes.length > DISCORD_OUTBOUND_MEDIA_MAX_BYTES || bytes.toString('base64') !== dataBase64) {
+        throw new Error('Discord media attachment dataBase64 is invalid or oversized');
+      }
+      file = { attachment: bytes, name: fileName };
+    } else {
+      file = await this.fetchRemoteMediaAttachment(media.url, fileName);
+    }
 
     await (channel as TextChannel).send({
       files: [file],
@@ -422,8 +433,8 @@ export class DiscordAdapter implements ChannelAdapterPort {
     }
 
     // SSRF-guarded, timeout-bounded, byte-capped fetch (Sprint-10 6ny2).
-    // Locally generated media never reaches this path — sendMediaInternal
-    // prefers media.localPath when the file exists.
+    // Gateway-materialized local media arrives as bounded inline bytes. Only
+    // remote-only attachments reach this fetch path.
     const response = await fetchRemoteResource(mediaUrl, {
       maxBytes: DISCORD_OUTBOUND_MEDIA_MAX_BYTES,
     });
@@ -840,6 +851,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
     const resolvedContent = content === '(empty message)' && attachments.length > 0
       ? '(image attachment)'
       : content;
+    const channelPrivacy = classifyChannelEnvelope(msg.channelId, { isDirectMessage }).privacy;
     return {
       id: msg.id,
       channelId: msg.channelId,
@@ -853,6 +865,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
       routing: {
         source: 'discord',
         responseMode: respondToMessage ? 'respond' : 'observe',
+        channelPrivacy,
         // Provenance-honest MI marker from Discord's bot/app metadata. Only ever
         // set true for bot-authored messages so a human author never triggers
         // machine-intelligence auto-tagging. Consumed by author-context

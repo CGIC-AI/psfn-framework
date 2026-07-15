@@ -5,6 +5,7 @@ import { sessionEntryToMessage } from '../../../core/agent/messages.js';
 import { MESSAGE_CLASSES } from '../../../core/agent/message-classes.js';
 import { resolveValidatedCrossChannelContinuityProvenance } from '../../../core/session/cross-channel-continuity-port.js';
 import type { SessionManager } from '../../../core/session/manager.js';
+import { mergeAuthenticatedJournalWithSessionTail } from '../../../core/session/manager/session-tail-read-store.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { CompactionSummary } from '../../../core/session/types.js';
 import { CogSecEventStore } from '../../../core/cogsec/events.js';
@@ -52,10 +53,15 @@ import type {
   AdminSessionRouteResetData,
   AdminSessionRouteResetInput,
   AdminSessionMessageOntologyView,
+  AdminSessionMessagePaginationOptions,
+  AdminSessionDetailData,
+  AdminSessionListRow,
   AdminSessionListData,
   AdminSessionMessagesData,
   AdminSessionSearchData,
   AdminSessionService,
+  AdminSessionTurnData,
+  AdminSessionTurnDetailData,
 } from './types.js';
 import {
   resolveCogSecEventsPath,
@@ -83,6 +89,25 @@ const COGSEC_CASE_TYPES: ReadonlySet<CogSecCaseType> = new Set([
   'unknown',
 ]);
 const COGSEC_SEVERITIES: ReadonlySet<CogSecSeverity> = new Set(['low', 'medium', 'high', 'critical']);
+
+/**
+ * Thrown by getSessionTurnDetail when the requested turn is not in the recent
+ * turn window (or the turnId is blank). The session route maps this to a 404
+ * instead of a 500 so a stale/expired turn expand degrades cleanly.
+ */
+export class AdminSessionTurnNotFoundError extends Error {
+  constructor(public readonly sessionId: string, public readonly turnId: string) {
+    super(`Turn "${turnId}" not found for session "${sessionId}"`);
+    this.name = 'AdminSessionTurnNotFoundError';
+  }
+}
+
+export class AdminSessionNotFoundError extends Error {
+  constructor(public readonly sessionId: string) {
+    super(`Session "${sessionId}" not found`);
+    this.name = 'AdminSessionNotFoundError';
+  }
+}
 
 function resolveMessageClass(value: unknown): AdminSessionMessageOntologyView['messageClass'] {
   return typeof value === 'string' && Object.values(MESSAGE_CLASSES).includes(value as never)
@@ -220,7 +245,7 @@ function previewCounts(preview: CogSecLineagePreview): AdminCogSecPreviewCounts 
 
 function makeCompactionInvalidator(sessionStore: SessionStore) {
   return {
-    invalidateCompactionSummaries: (input: {
+    invalidateCompactionSummaries: async (input: {
       caseId: string;
       compactionSummaries: readonly CogSecLineageCompactionRef[];
     }) => {
@@ -232,7 +257,7 @@ function makeCompactionInvalidator(sessionStore: SessionStore) {
         bySession.set(summary.logicalSessionId, ids);
       }
       for (const [channelId, compactionIds] of bySession.entries()) {
-        const result = sessionStore.applyCogSecCompactionInvalidations({
+        const result = await sessionStore.applyCogSecCompactionInvalidations({
           channelId,
           caseId: input.caseId,
           compactionIds,
@@ -459,44 +484,54 @@ export class AdminSessionDataService implements AdminSessionService {
     };
   }
 
-  async listSessions(): Promise<AdminSessionListData> {
+  private listSessionRows(): AdminSessionListRow[] {
     const channels = this.deps.sessionStore.listChannels();
     const activityBySessionId = new Map(
       this.deps.sessionStore
         .listSessionsByRecentActivity(Number.MAX_SAFE_INTEGER)
         .map(summary => [summary.sessionId, summary]),
     );
-    const contacts = this.deps.contactStore ? await this.deps.contactStore.listAll() : [];
-    return {
-      channels: await Promise.all(channels.map(async (channel) => {
-        const sessionActivity = activityBySessionId.get(channel.sessionId);
-        const channelWithActivity = (
-          typeof sessionActivity?.lastActivityAt === 'number' && Number.isFinite(sessionActivity.lastActivityAt)
-        )
-          ? { ...channel, lastActivityAt: sessionActivity.lastActivityAt }
-          : channel;
+    return channels.map((channel) => {
+      const sessionActivity = activityBySessionId.get(channel.sessionId);
+      return (
+        typeof sessionActivity?.lastActivityAt === 'number' && Number.isFinite(sessionActivity.lastActivityAt)
+      )
+        ? { ...channel, lastActivityAt: sessionActivity.lastActivityAt }
+        : channel;
+    });
+  }
 
-        const linkedContact = await getLinkedContactForSession({
-          channelId: channel.channelId,
-          contacts,
-          sessionStore: this.deps.sessionStore,
-          contactStore: this.deps.contactStore,
-        });
-        if (!linkedContact) return channelWithActivity;
-        return {
-          ...channelWithActivity,
-          linkedContactId: linkedContact.id,
-          linkedContactName: linkedContact.displayName,
-        };
-      })),
+  async listSessions(): Promise<AdminSessionListData> {
+    return { channels: this.listSessionRows() };
+  }
+
+  async getSessionDetail(sessionId: string): Promise<AdminSessionDetailData> {
+    const channel = this.listSessionRows().find(candidate => candidate.sessionId === sessionId);
+    if (!channel) throw new AdminSessionNotFoundError(sessionId);
+
+    const contacts = this.deps.contactStore ? await this.deps.contactStore.listAll() : [];
+    const linkedContact = await getLinkedContactForSession({
+      sessionId: channel.sessionId,
+      channelId: channel.channelId,
+      contacts,
+      sessionStore: this.deps.sessionStore,
+      contactStore: this.deps.contactStore,
+    });
+    return {
+      channel: linkedContact
+        ? {
+            ...channel,
+            linkedContactId: linkedContact.id,
+            linkedContactName: linkedContact.displayName,
+          }
+        : channel,
     };
   }
 
   async listSessionRoutes(): Promise<AdminSessionRouteListData> {
-    const sessions = await this.listSessions();
     return {
       routes: this.deps.sessionManager.listSessionRoutes(),
-      channels: sessions.channels,
+      channels: this.listSessionRows(),
     };
   }
 
@@ -561,16 +596,21 @@ export class AdminSessionDataService implements AdminSessionService {
       safeAgentSummary: draft.safeSummary,
     });
 
-    const tombstones = draft.affectedMessageRanges.map(range => this.deps.sessionStore.applyCogSecTombstones({
-      channelId: range.logicalSessionId ?? draft.sourceChannelId,
-      caseId: draft.caseId,
-      eventStore,
-      forensicArchive,
-      ...(range.messageIds ? { messageIds: range.messageIds } : {}),
-      ...(range.startEntryId !== undefined ? { startEntryId: range.startEntryId } : {}),
-      ...(range.endEntryId !== undefined ? { endEntryId: range.endEntryId } : {}),
-      actor: draft.actor,
-    }));
+    const tombstones = [];
+    for (const range of draft.affectedMessageRanges) {
+      // Sequential on purpose: each rewrite fences the shared session tail
+      // (epoch bump) before and after touching the journal.
+      tombstones.push(await this.deps.sessionStore.applyCogSecTombstones({
+        channelId: range.logicalSessionId ?? draft.sourceChannelId,
+        caseId: draft.caseId,
+        eventStore,
+        forensicArchive,
+        ...(range.messageIds ? { messageIds: range.messageIds } : {}),
+        ...(range.startEntryId !== undefined ? { startEntryId: range.startEntryId } : {}),
+        ...(range.endEntryId !== undefined ? { endEntryId: range.endEntryId } : {}),
+        actor: draft.actor,
+      }));
+    }
 
     const eventAfterTombstones = eventStore.getEvent(draft.caseId);
     if (!eventAfterTombstones) {
@@ -667,19 +707,59 @@ export class AdminSessionDataService implements AdminSessionService {
     };
   }
 
-  getSessionMessages(sessionId: string, options: {
-    limit?: number;
-    beforeId?: number | null;
-    messagesOnly?: boolean;
-  } = {}): AdminSessionMessagesData {
+  /**
+   * Garden's newest-page read path. Authenticate the current bounded journal
+   * window first, then let the shared tail fill only ids newer than that
+   * window. The latest authenticated message id is also the cross-process
+   * freshness checkpoint: a behind tail is rejected and repopulated even when
+   * this SessionStore's process-local index predates another writer's append.
+   * Redis-disabled/degraded/missing/behind tails return `null` from the store
+   * and fall through to the canonical journal reader. Cursor pages stay
+   * canonical because a bounded hot tail cannot prove it covers older ranges.
+   */
+  async getSessionMessagesForAdminRead(
+    sessionId: string,
+    options: AdminSessionMessagePaginationOptions = {},
+  ): Promise<AdminSessionMessagesData> {
+    const beforeId = normalizeBeforeId(options.beforeId);
+    if (beforeId !== null) {
+      return this.getSessionMessages(sessionId, options);
+    }
+
+    const pageLimit = normalizePageLimit(options.limit);
+    const authenticatedJournalMessages = this.deps.sessionStore.getRecent(sessionId, pageLimit);
+    const expectedMinEntryId = authenticatedJournalMessages.at(-1)?.id ?? null;
+    const tailMessages = await this.deps.sessionStore.fetchSessionTailWindow(sessionId, {
+      ...(expectedMinEntryId !== null ? { expectedMinEntryId } : {}),
+    });
+    const authenticatedMessages = tailMessages
+      ? mergeAuthenticatedJournalWithSessionTail(authenticatedJournalMessages, tailMessages).slice(-pageLimit)
+      : authenticatedJournalMessages;
+    return this.buildSessionMessages(sessionId, options, authenticatedMessages);
+  }
+
+  getSessionMessages(
+    sessionId: string,
+    options: AdminSessionMessagePaginationOptions = {},
+  ): AdminSessionMessagesData {
+    return this.buildSessionMessages(sessionId, options);
+  }
+
+  private buildSessionMessages(
+    sessionId: string,
+    options: AdminSessionMessagePaginationOptions,
+    firstPageMessages?: readonly SessionEntry[],
+  ): AdminSessionMessagesData {
     const limit = normalizePageLimit(options.limit);
     const beforeId = normalizeBeforeId(options.beforeId);
     const totalMessages = this.deps.sessionStore.count(sessionId);
     const olderThanCursor = beforeId === null
       ? null
-      : this.deps.sessionStore.getEntriesInRange(sessionId, 0, beforeId - 1);
+      : this.deps.sessionStore.getEntriesBefore(sessionId, beforeId, limit + 1);
     const messages = olderThanCursor === null
-      ? this.deps.sessionStore.getRecent(sessionId, limit)
+      ? (firstPageMessages
+          ? firstPageMessages.slice(-limit)
+          : this.deps.sessionStore.getRecent(sessionId, limit))
       : olderThanCursor.slice(-limit);
     const hasMoreOlder = olderThanCursor === null
       ? totalMessages > messages.length
@@ -694,15 +774,19 @@ export class AdminSessionDataService implements AdminSessionService {
     // (legacy 'semi_private'/'broadcast' records map onto ChannelPrivacy).
     const currentVisibility: ChannelPrivacy = decodeStoredChannelVisibility(messages[0]?.channelVisibility)
       ?? classifyChannelDisclosure(channelId).channelPrivacy;
-    const roleEnvelopePreviews = options.messagesOnly
-      ? []
-      : messages.flatMap((entry) => {
+    // messagesOnly drops everything heavy (turns, previews, compaction).
+    // includeTurns=false keeps compaction summaries but drops the up-to-50 full
+    // turn snapshots and role-envelope previews; the session browser uses it so
+    // its initial page stays small and pulls per-turn detail on demand.
+    const includeTurnDetail = !options.messagesOnly && options.includeTurns !== false;
+    const roleEnvelopePreviews = includeTurnDetail
+      ? messages.flatMap((entry) => {
         const preview = resolveSessionEntryRoleEnvelopePreview(entry);
         return preview ? [{ sessionEntryId: entry.id, preview }] : [];
-      });
-    const turns = options.messagesOnly
-      ? []
-      : this.deps.sessionStore
+      })
+      : [];
+    const turns = includeTurnDetail
+      ? this.deps.sessionStore
         .getRecentTurnRecords(sessionId, DEFAULT_ADMIN_TURN_LIMIT)
         .map((record) => {
           const turnData = this.turnObservability.buildTurnData(record);
@@ -715,7 +799,8 @@ export class AdminSessionDataService implements AdminSessionService {
               turnData.snapshot?.sessionContext?.continuityEntries ?? [],
             ),
           };
-        });
+        })
+      : [];
     const compactionAuditViews = options.messagesOnly
       ? []
       : this.deps.sessionStore
@@ -740,6 +825,43 @@ export class AdminSessionDataService implements AdminSessionService {
       compactionAuditViews,
       turns,
     };
+  }
+
+  /**
+   * Lazily resolve a single turn's full snapshot detail, bounded to one turn so
+   * the session browser can pull turn data on expand without shipping the
+   * up-to-50 snapshots the list endpoint would otherwise attach. Searches the
+   * same recent-turn window the list uses; a turnId outside that window (or an
+   * unknown one) fails closed with AdminSessionTurnNotFoundError so the route
+   * can answer 404 rather than silently returning an empty turn.
+   */
+  getSessionTurnDetail(sessionId: string, turnId: string): AdminSessionTurnDetailData {
+    const normalizedTurnId = turnId.trim();
+    if (!normalizedTurnId) {
+      throw new AdminSessionTurnNotFoundError(sessionId, turnId);
+    }
+    const record = this.deps.sessionStore
+      .getRecentTurnRecords(sessionId, DEFAULT_ADMIN_TURN_LIMIT)
+      .find(candidate => candidate.turnId === normalizedTurnId);
+    if (!record) {
+      throw new AdminSessionTurnNotFoundError(sessionId, normalizedTurnId);
+    }
+    // Decode channel visibility from a single recent entry (bounded read),
+    // mirroring the list endpoint's fallback to channel-disclosure policy.
+    const recentEntry = this.deps.sessionStore.getRecent(sessionId, 1).at(0);
+    const currentVisibility: ChannelPrivacy = decodeStoredChannelVisibility(recentEntry?.channelVisibility)
+      ?? classifyChannelDisclosure(record.channelId).channelPrivacy;
+    const turnData = this.turnObservability.buildTurnData(record);
+    const turn: AdminSessionTurnData = {
+      ...turnData,
+      continuityProvenance: buildContinuityProvenanceViews(
+        record.turnId,
+        record.channelId,
+        currentVisibility,
+        turnData.snapshot?.sessionContext?.continuityEntries ?? [],
+      ),
+    };
+    return { sessionId, channelId: record.channelId, turn };
   }
 }
 

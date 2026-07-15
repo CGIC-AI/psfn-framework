@@ -17,6 +17,7 @@ import {
 } from '../types.js';
 import { normalizeRetrievalModes } from './modes.js';
 import type { ScoredMemory } from './types.js';
+import { calculateEffectiveMemorySalience } from '../decay.js';
 
 export const SCORE_GUARANTEE_MIN_K = 3;
 export const SCORE_GUARANTEE_FLOOR = 0.01;
@@ -46,6 +47,7 @@ const PREFERENCE_CATEGORY_CONTEXT_HINTS: ReadonlyArray<readonly [string, RegExp]
 interface RetrievalScoreComponents {
   score: number;
   baseScore: number;
+  effectiveSalience: number;
   evidenceSupport: number;
   contradictionPenaltyMultiplier: number;
   explicitlyQueried: boolean;
@@ -167,13 +169,14 @@ export function computeRetrievalScore(
   const scopeMatchStrength = computeMemoryScopeMatchStrength(memory, options?.scopeQuery);
   const scopeBoost = 1 + (scopeMatchStrength * 0.35);
   const accessReinforcementBoost = deriveAccessReinforcement(memory);
+  const effectiveSalience = calculateEffectiveMemorySalience(memory, now);
   const rawBaseScore = (
     memory.similarity *
     recencyBoost *
     sameDayEvidenceBoost *
     emotionalWeight *
     memory.importance *
-    memory.salience *
+    effectiveSalience *
     moodCongruenceFactor *
     typePriorityBoost *
     boundarySimilarityBoost *
@@ -209,6 +212,7 @@ export function computeRetrievalScore(
   return {
     score,
     baseScore,
+    effectiveSalience,
     evidenceSupport: evidence.support,
     contradictionPenaltyMultiplier,
     explicitlyQueried,

@@ -17,6 +17,7 @@ import {
   createDefaultCompositionalPolicyConfig,
   createDefaultObserverEvalSidecarLeverSettings,
   createDefaultObserverEvalSidecarSettings,
+  createDefaultSessionTailCacheSettings,
   type SubstrateConfig,
 } from './config/runtime-config-contracts.js';
 import { createDefaultGroupMemorySettings } from './config/group-memory-config.js';
@@ -44,6 +45,7 @@ function makeConfig(): SubstrateConfig {
     primaryMaxTokens: 16384,
     extractionMaxTokens: 8192,
     maintenanceIntervalMs: 300_000,
+    salienceDecayIntervalMs: 300_000,
     defaultContextWindow: 128_000,
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
@@ -333,10 +335,10 @@ describe('settings', () => {
       );
 
       expect(() => saveSettings(tempDir, {
-        maintenanceIntervalMs: 120_000,
+        salienceDecayIntervalMs: 120_000,
         capabilityTier: 'autonomous',
       })).toThrow(
-        'Refusing to save non-runtime keys to settings.json: maintenanceIntervalMs, capabilityTier',
+        'Refusing to save non-runtime keys to settings.json: salienceDecayIntervalMs, capabilityTier',
       );
     });
 
@@ -561,6 +563,43 @@ describe('settings', () => {
           },
         } as any,
       })).toThrow(/lever tracking requires observerEvalSidecar\.persistence\.enabled=true/);
+    });
+
+    it('normalizes session tail cache settings as a JSON-owned structured object', () => {
+      const normalized = normalizeEditableSettings({
+        sessionTailCache: {
+          enabled: true,
+          maxEntriesPerChannel: 256,
+        } as any,
+      });
+      expect(normalized.sessionTailCache).toEqual({
+        enabled: true,
+        maxEntriesPerChannel: 256,
+      });
+    });
+
+    it('fails closed on malformed session tail cache settings', () => {
+      expect(() => normalizeEditableSettings({
+        sessionTailCache: 'enabled' as any,
+      })).toThrow(/sessionTailCache/);
+      expect(() => normalizeEditableSettings({
+        sessionTailCache: {
+          enabled: 'sometimes',
+          maxEntriesPerChannel: 512,
+        } as any,
+      })).toThrow(/sessionTailCache\.enabled/);
+      expect(() => normalizeEditableSettings({
+        sessionTailCache: {
+          enabled: true,
+          maxEntriesPerChannel: 0,
+        } as any,
+      })).toThrow(/sessionTailCache\.maxEntriesPerChannel/);
+      expect(() => normalizeEditableSettings({
+        sessionTailCache: {
+          ...createDefaultSessionTailCacheSettings(),
+          maxEntriesPerChannel: 1_000_000,
+        } as any,
+      })).toThrow(/sessionTailCache\.maxEntriesPerChannel/);
     });
 
     it('normalizes group memory settings as a JSON-owned structured object', () => {
@@ -1539,6 +1578,7 @@ describe('settings', () => {
       expect(persisted).toEqual(expected);
       expect(loaded).toEqual(expected);
       expect(persisted.primaryModel).toBeUndefined();
+      expect(persisted.salienceDecayIntervalMs).toBeUndefined();
       expect(persisted.maintenanceIntervalMs).toBeUndefined();
       expect(persisted.capabilityTier).toBeUndefined();
     });

@@ -2,6 +2,7 @@ import {
   DEFAULT_MOOD_CONGRUENCE_WEIGHT,
   DEFAULT_UI_THEME_ID,
   createDefaultObserverEvalSidecarSettings,
+  createDefaultSessionTailCacheSettings,
   type SubstrateConfig,
 } from '../config/runtime-config-contracts.js';
 import {
@@ -167,12 +168,15 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     sessionRestartBehavior:
       config.sessionRestartBehavior ?? 'reuse_latest_session',
     extractionInterval: config.extractionInterval,
-    maintenanceIntervalMs: config.maintenanceIntervalMs,
+    salienceDecayIntervalMs: config.salienceDecayIntervalMs,
     extractionThresholdPct: config.extractionThresholdPct,
     compactionThresholdPct: config.compactionThresholdPct,
     observationMaskingWindow: config.observationMaskingWindow ?? 1,
     compactionEmotionalSalienceThresholdPct:
       config.compactionEmotionalSalienceThresholdPct ?? 75,
+    sessionTailCache: structuredClone(
+      config.sessionTailCache ?? createDefaultSessionTailCacheSettings(),
+    ),
   } satisfies SnapshotSection<
     | 'sessionHistoryBudgetPct'
     | 'memoryRetrievalBudgetPct'
@@ -191,11 +195,12 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     | 'continuityMessageLimit'
     | 'sessionRestartBehavior'
     | 'extractionInterval'
-    | 'maintenanceIntervalMs'
+    | 'salienceDecayIntervalMs'
     | 'extractionThresholdPct'
     | 'compactionThresholdPct'
     | 'observationMaskingWindow'
     | 'compactionEmotionalSalienceThresholdPct'
+    | 'sessionTailCache'
   >;
 }
 
@@ -540,6 +545,11 @@ function applyCoreSettings(
   if ('sessionMirrorChannelOverrides' in settings) {
     config.sessionMirrorChannelOverrides = structuredClone(
       settings.sessionMirrorChannelOverrides ?? {},
+    );
+  }
+  if ('sessionTailCache' in settings) {
+    config.sessionTailCache = structuredClone(
+      settings.sessionTailCache ?? createDefaultSessionTailCacheSettings(),
     );
   }
   if ('groupMemory' in settings) {

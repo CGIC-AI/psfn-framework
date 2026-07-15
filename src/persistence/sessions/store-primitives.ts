@@ -7,6 +7,7 @@ import {
   type SessionHmacKeyring,
 } from '../journals/journal-utils.js';
 import type { SessionArchivePort } from '../journals/journal/port.js';
+import type { SessionTailCachePort } from './session-tail-cache-port.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
@@ -24,13 +25,19 @@ export interface ChannelCache {
   channelId: string;
   entries: import('../../core/session/types.js').SessionEntry[];
   compactions: import('../../core/session/types.js').CompactionSummary[];
+  /** Physical archives known to contain at least one compaction entry. */
+  compactionArchivePaths: Set<string>;
   turnTombstones: Set<string>;
   activeTurnTombstoneCount: number;
   nextId: number;
   lastHmac: string | null;
   lastExtractionCoveredUpTo: number;
   lastJournalEntry: JournalEntry | null;
+  /** Ordered physical JSONL files that form this one logical session. */
+  archivePaths: string[];
+  /** Active (last) archive path; retained as the write-path convenience pointer. */
   resolvedPath: string;
+  archiveFingerprint: string | null;
   messageCount: number;
   lastTimestamp: number;
   lastMessageTimestamp: number;
@@ -49,9 +56,15 @@ export interface CachedRecentEntries {
 
 export interface ChannelIndexEntry {
   channelId?: string;
+  /** Active (last) file in `filenames`. */
   filename: string;
+  /** Ordered physical JSONL files that form this one logical session. */
+  filenames: string[];
   messageCount?: number;
   activeTurnTombstoneCount?: number;
+  activeTurnTombstoneIds?: string[];
+  archiveFingerprint?: string;
+  compactionFilenames?: string[];
   lastTimestamp?: number;
   lastMessageTimestamp?: number;
   lastMessageRole?: SessionEntryRole | null;
@@ -76,6 +89,12 @@ export interface SessionStoreOptions {
   transcriptProjection?: TranscriptProjectionPort | null;
   transcriptSearch?: TranscriptSearchPort | null;
   turnRecordStore?: TurnRecordStorePort | null;
+  /**
+   * Optional bounded hot session tail shared across processes
+   * (psfn-framework-hgw3.5). Null/absent keeps reads and writes byte-identical
+   * to the file-only path.
+   */
+  tailCache?: SessionTailCachePort | null;
 }
 
 export interface SessionIntegrityProvider {
@@ -142,7 +161,13 @@ export interface LegacyChatImportManifestFilter {
 }
 
 export const CHANNEL_INDEX_FILENAME = '_channel_index.json';
-export const CHANNEL_INDEX_VERSION = 3;
+export const CHANNEL_INDEX_VERSION = 5;
+/**
+ * L0 journals roll at a fixed byte threshold. This is deliberately not a
+ * mutable runtime setting: the storage contract and its verification costs
+ * are byte-denominated, and every deployment should share the same bound.
+ */
+export const L0_SESSION_FILE_MAX_BYTES = 16 * 1024 * 1024;
 export const IMPORT_MANIFEST_SCHEMA_VERSION = 1;
 export function normalizeOptionalNonNegativeNumber(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
@@ -283,8 +308,13 @@ export function parseImportManifestLine(line: string): LegacyChatImportManifest 
 export function channelIndexEntryEquals(left: ChannelIndexEntry | undefined, right: ChannelIndexEntry): boolean {
   if (!left) return false;
   return left.filename === right.filename
+    && left.filenames.length === right.filenames.length
+    && left.filenames.every((filename, index) => filename === right.filenames[index])
     && left.messageCount === right.messageCount
     && left.activeTurnTombstoneCount === right.activeTurnTombstoneCount
+    && JSON.stringify(left.activeTurnTombstoneIds ?? []) === JSON.stringify(right.activeTurnTombstoneIds ?? [])
+    && left.archiveFingerprint === right.archiveFingerprint
+    && JSON.stringify(left.compactionFilenames ?? []) === JSON.stringify(right.compactionFilenames ?? [])
     && left.lastTimestamp === right.lastTimestamp
     && left.lastMessageTimestamp === right.lastMessageTimestamp
     && left.lastMessageRole === right.lastMessageRole

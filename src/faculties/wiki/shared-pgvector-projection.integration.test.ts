@@ -135,6 +135,10 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
           { version: 1, name: 'shared-schema-baseline' },
           { version: 2, name: 'companion-presence' },
           { version: 3, name: 'shared-wiki-chunks' },
+          { version: 4, name: 'icp-autonomy-control-plane' },
+          { version: 5, name: 'icp-autonomy-invalidation-fences' },
+          { version: 6, name: 'icp-fatigue-turn-reservations' },
+          { version: 7, name: 'icp-fatigue-delivery-fence' },
         ]);
 
         // Idempotent re-provisioning (advisory-lock serialized).
@@ -142,7 +146,7 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
         const ledgerAgain = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(ledgerAgain.rows[0]?.count).toBe('3');
+        expect(ledgerAgain.rows[0]?.count).toBe('7');
       } finally {
         await pool.end();
         await store.close();

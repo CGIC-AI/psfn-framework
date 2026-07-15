@@ -408,14 +408,14 @@ function createVoiceHooksProbe(): {
   probe: {
     opened: string[];
     closed: Array<{ id: string; reason: VoiceWebSocketCloseReason }>;
-    messages: string[];
+    messages: Array<string | Uint8Array>;
   };
   hooks: VoiceWebSocketRuntimeHooks;
 } {
   const probe = {
     opened: [] as string[],
     closed: [] as Array<{ id: string; reason: VoiceWebSocketCloseReason }>,
-    messages: [] as string[],
+    messages: [] as Array<string | Uint8Array>,
   };
 
   return {
@@ -918,6 +918,7 @@ describe('ApiServer', () => {
 
       const call = (mockAgent.handleMessage as any).mock.calls[0][0] as SubstrateMessage;
       expect(call.routing?.channelPrivacy).toBe('public');
+      expect(call.isDirectMessage).toBe(false);
     });
 
     it('rejects the retired broadcast privacy header fail-closed (E3.3: broadcast is a channel-owned flag)', async () => {
@@ -2093,6 +2094,13 @@ describe('ApiServer', () => {
       ws.send('voice-frame-1');
       await waitFor(() => voice.probe.messages.includes('voice-frame-1'));
 
+      const binaryFrame = new Uint8Array([0, 1, 2, 253, 254, 255]);
+      ws.send(binaryFrame, { binary: true });
+      await waitFor(() => voice.probe.messages.some(message => (
+        message instanceof Uint8Array
+        && Buffer.from(message).equals(Buffer.from(binaryFrame))
+      )));
+
       ws.close();
       await waitFor(() => voice.probe.closed.length === 1);
 
@@ -2559,6 +2567,7 @@ describe('ApiServer with auth', () => {
     expect(call.routing?.source).toBe('satellite');
     expect(call.routing?.canonicalContactId).toBe('contact-primary-user');
     expect(call.routing?.channelPrivacy).toBe('private');
+    expect(call.isDirectMessage).toBeUndefined();
     expect(call.routing?.satellite).toMatchObject({
       satelliteId: 'android-phone',
       endpointId: 'companion-app',
@@ -2749,7 +2758,7 @@ describe('ApiServer with auth', () => {
     const ws = await openWebSocketWithProtocols(
       port,
       '/v1/voice/ws',
-      ['voice-wire-v1', toAuthSubprotocol('test-secret-key')],
+      ['voice-wire-v2', toAuthSubprotocol('test-secret-key')],
     );
     ws.close();
   });

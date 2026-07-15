@@ -33,6 +33,8 @@ export interface IntakeScreenImageParams {
   /** Attachment index on the carrying message (envelope subject). */
   subjectIndex?: number;
   canonicalContactId?: string;
+  /** Turn/request scope that the retained bytes may be resolved within. */
+  requestScope?: string;
 }
 
 function invalidParams(detail: string): JSONRPCErrorException {
@@ -59,6 +61,10 @@ function validateParams(params: unknown): IntakeScreenImageParams {
     throw invalidParams('exactly one of imageUrl or imageBase64 is required');
   }
   const mimeType = typeof record.mimeType === 'string' ? record.mimeType.trim() : '';
+  const requestScope = typeof record.requestScope === 'string' ? record.requestScope.trim() : '';
+  if (record.requestScope !== undefined && (!requestScope || requestScope.length > 512)) {
+    throw invalidParams('requestScope must be a non-empty string of at most 512 characters');
+  }
   if (imageBase64) {
     if (!mimeType || !mimeType.toLowerCase().startsWith('image/')) {
       throw invalidParams('imageBase64 requires an image/* mimeType');
@@ -85,6 +91,7 @@ function validateParams(params: unknown): IntakeScreenImageParams {
     ...(typeof record.canonicalContactId === 'string' && record.canonicalContactId.trim()
       ? { canonicalContactId: record.canonicalContactId.trim() }
       : {}),
+    ...(requestScope ? { requestScope } : {}),
   };
 }
 
@@ -103,7 +110,7 @@ const INTAKE_IMAGE_METHODS: ReadonlyArray<
           reason: 'vision intake screening is not composed on this gateway',
         };
       }
-      return await runtime.visionIntake.screenImage({
+      const result = await runtime.visionIntake.screenImage({
         image: {
           ...(params.imageUrl ? { url: params.imageUrl } : {}),
           ...(params.imageBase64 ? { dataBase64: params.imageBase64 } : {}),
@@ -116,6 +123,21 @@ const INTAKE_IMAGE_METHODS: ReadonlyArray<
           ? { canonicalContactId: params.canonicalContactId }
           : {}),
       });
+      if (
+        result.kind !== 'screened'
+        || result.withheld
+        || !params.imageBase64
+        || !params.mimeType
+        || !params.requestScope
+      ) {
+        return result;
+      }
+      const retainedImage = runtime.inlineImageRetention?.retain({
+        requestScope: params.requestScope,
+        dataBase64: params.imageBase64,
+        mimeType: params.mimeType,
+      });
+      return retainedImage ? { ...result, retainedImage } : result;
     },
     summary: (rawParams: unknown) => {
       const record = (typeof rawParams === 'object' && rawParams !== null)

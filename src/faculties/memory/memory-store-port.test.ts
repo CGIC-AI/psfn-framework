@@ -405,6 +405,7 @@ class InMemoryMemoryStorePort implements MemoryStorePort {
       this.memories.set(update.id, {
         ...memory,
         salience: update.salience,
+        salienceDecayAnchorAt: update.salienceDecayAnchorAt,
       });
       count += 1;
     }

@@ -1,6 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import {
+  resetActiveTimezone,
+  setActiveTimezone,
+} from '../../../shared/time/active-timezone.js';
 import { VaultAutoPublisher } from './auto-publish.js';
 import type { VaultOperations } from './ops.js';
+
+const ORIGINAL_TZ = process.env.TZ;
 
 function createMockOps(): VaultOperations & { write: ReturnType<typeof vi.fn> } {
   return {
@@ -12,6 +18,19 @@ function createMockOps(): VaultOperations & { write: ReturnType<typeof vi.fn> } 
 }
 
 describe('VaultAutoPublisher', () => {
+  beforeEach(() => {
+    setActiveTimezone('America/New_York');
+  });
+
+  afterEach(() => {
+    resetActiveTimezone();
+    if (ORIGINAL_TZ === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = ORIGINAL_TZ;
+    }
+  });
+
   it('publishes a musing reflection with correct frontmatter', async () => {
     const ops = createMockOps();
     const publisher = new VaultAutoPublisher(ops);
@@ -34,7 +53,7 @@ describe('VaultAutoPublisher', () => {
     expect(content).toContain('---');
     expect(content).toContain('template: musing');
     expect(content).toContain('mode: agent');
-    expect(content).toContain('date: 2026-03-02T14:30:00.000Z');
+    expect(content).toContain('date: 2026-03-02T09:30:00.000-05:00');
     expect(content).toContain('A quiet thought about the day.');
   });
 
@@ -69,9 +88,26 @@ describe('VaultAutoPublisher', () => {
     });
 
     const [name, content, opts] = ops.write.mock.calls[0];
-    expect(name).toBe('2026-03-02 08h15 Emotional Check');
+    expect(name).toBe('2026-03-02 03h15 Emotional Check');
     expect(opts.folder).toBe('Reflections/emotional/');
     expect(content).toContain('mode: deliberation');
+  });
+
+  it('uses the active calendar day and local timestamp for late-evening reflections', async () => {
+    const ops = createMockOps();
+    const publisher = new VaultAutoPublisher(ops);
+
+    await publisher.publishReflection({
+      templateId: 'daily-review',
+      templateName: 'Daily Review',
+      reflection: 'The evening still belongs to Monday.',
+      mode: 'agent',
+      createdAt: new Date('2026-03-03T04:30:00.000Z'),
+    });
+
+    const [name, content] = ops.write.mock.calls[0];
+    expect(name).toBe('2026-03-02 23h30 Daily Review');
+    expect(content).toContain('date: 2026-03-02T23:30:00.000-05:00');
   });
 
   it('maps template IDs to correct folders', async () => {

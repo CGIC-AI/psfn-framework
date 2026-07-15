@@ -193,7 +193,11 @@ describe('notify tool', () => {
     };
 
     expect(tool.wiringMeta).toEqual({
-      requiredGatewayMethods: ['discord.send', 'notify.ntfy'],
+      requiredGatewayMethods: [
+        'discord.send',
+        'notify.ntfy',
+        'companion.initiation.permit.prepare_handoff',
+      ],
       requiredServices: ['ntfy'],
     });
   });

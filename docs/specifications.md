@@ -2,7 +2,7 @@
 
 This document is the compact contract for how the live runtime is supposed to behave. When this file disagrees with code, prefer the code in the order listed below.
 
-Last updated: 2026-07-12.
+Last updated: 2026-07-14.
 
 ## Source Of Truth Order
 
@@ -37,6 +37,17 @@ Supported until beta:
 - Startup owner-file hydration for currently supported legacy owner data. Hydration may seed missing owner files on first boot, migrate or warn on existing owner-file drift, and load model/provider registries with the existing migration paths, but it must not restore `.env` as mutable-settings authority.
 - Existing companion persistence migrations for legacy continuity files, session channel filenames, SQLite database placement, contact `discord_user_id` identity rows, and the `core_memory.json` orientation filename. These paths are read/migration support only, not permission to add new parallel artifact names.
 - Tool-surface migration aliases documented in `docs/tool-surface.md`. They preserve model-facing continuity while unified tools roll out, and should be removed after canonical actions have stable adoption.
+- One-time legacy Personal Workspace assignment during the multi-companion alpha
+  cutover. If legacy `WORKSPACE_PATH` contains data, startup stops and prints its
+  deterministic tree digest. An operator must select exactly one configured
+  companion with `PSFN_LEGACY_WORKSPACE_COMPANION_ID` and approve the exact
+  digest with `PSFN_LEGACY_WORKSPACE_SHA256`; migration copies without merging
+  or overwriting and retains the source. Validation is the immutable migration
+  receipt plus exact source-tree integrity and verification that every migrated
+  source entry remains unchanged at the destination; later provisioned Personal
+  Workspace files are allowed. Remove this startup migration
+  and both env inputs before beta after every live installation has a verified
+  receipt.
 
 Out of boundary:
 
@@ -105,23 +116,27 @@ documents, journal, personal knowledge base, authored skills, modules,
 experiments, downloads, images, and other personal durable files. It is not a
 runtime-state root and not a general shared-files root.
 
-The target multi-companion layout has one validated Personal Workspace per
+The multi-companion layout has one validated Personal Workspace per
 companion plus an installation-owned **Shared Companion Workspace** for
 explicitly published collaboration artifacts and common reference material. The
 shared-world wiki remains a narrower, site-scoped operator-owned knowledge
 surface—not a general shared filesystem.
 
-Current fleet wiring has no per-entry workspace path and forwards one inherited
-`WORKSPACE_PATH` to all fleet agents. This means personal workspace isolation is
-not shipped under multi-companion yet. Do not add a `SHARED_WORKSPACE_PATH` env
-setting, derive paths ad hoc, or claim workspace tenancy until the owner-file,
-path-containment, gateway-policy, backup, and tests contracts land together.
+Fleet wiring deterministically derives personal roots from the runtime root and
+companion UUID, provisions them before process startup, and injects exactly one
+resolved Personal Workspace into each agent and Garden. The authenticated
+gateway connection selects the same root for filesystem, shell, image, beads,
+and channel attachment surfaces. There is no `SHARED_WORKSPACE_PATH` env setting
+or manifest override.
 
-When implemented, personal and shared workspace roots must be canonicalized,
+Personal and shared workspace roots are canonicalized,
 non-overlapping with each other and with system/companion/runtime roots, and
-contained beneath the configured runtime root. Shared writes require explicit
-actor and provenance records, review policy, atomic writes, containment checks,
-and CogSec screening before shared material can reach prompts, wikis, or memory.
+contained beneath the configured runtime root. Garden-mediated shared writes
+derive proposer, reviewer, and CogSec principals from three distinct
+credentials; body identity claims are rejected. Publication requires provenance,
+a revision-bound CogSec artifact, independent review, a crash-recoverable
+transaction, and containment checks. Shared material does not automatically reach prompts,
+wikis, memory, skills, or modules.
 
 ## Artifact Ownership
 
@@ -167,6 +182,35 @@ Both gateway and agent startup run canonical hydration through `hydrateCanonical
 - loads model and provider registries with legacy migration support
 - loads trust-policy, scheduler, capability, charge-policy, backup, skills, and channel config
 - warns on legacy drift instead of silently re-authorizing `.env`
+
+## Same-Cluster Inter-Companion Autonomy
+
+- Autonomous initiation is same-cluster only, disabled by default, and started
+  only when `scheduler.json > icpAutonomy.enabled` is true. Its strict owner
+  block also owns candidate TTL/retry, permit TTL, and operator availability
+  lease TTL. There is no env shadow or compatibility reader.
+- `charge-policy.json` owns companion-social quota and continuation cost,
+  fatigue/social/overcharge reserve, structured continuation-evidence switches,
+  and the ICP conversation cost breaker. Existing `trust-policy.json`,
+  `channels.json`, capability tier, contact block/trust, and gateway policy
+  remain independent mandatory gates.
+- Candidate motivation and peer-contact binding stay companion-local. Shared
+  arbitration stores only content-free availability, episode, provenance, and
+  permit control state. Permits are short-lived, single-use, candidate-bound,
+  recovery-safe, and invalidated when operator DND or emergency disable fences a
+  participant.
+- Peer-visible content is authored by the target ordinary channel turn. The
+  source handoff never accepts message content, and ICP-correlated turns cannot
+  recursively initiate another channel.
+- Garden `/autonomy` exposes only bounded/redacted local-participant
+  control-plane state and effective/on-disk/restart owner semantics. Unrelated
+  peer↔peer lifecycle, provenance, reason, fatigue, cost, and derived counts are
+  excluded. Audited local controls are
+  revision-checked candidate cancellation, operator DND, and one-way live
+  emergency disable plus persisted owner disable.
+- Not shipped: cross-cluster communication, fleet-wide/cross-companion control,
+  message puppeteering, private transcript/reasoning inspection, and any Garden
+  exposure of chain-of-thought.
 
 ## Security And Fail-Closed Posture
 

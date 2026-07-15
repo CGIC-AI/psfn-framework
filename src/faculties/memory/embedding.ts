@@ -15,6 +15,19 @@ import {
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import type { RetrievalQueryEmbeddingProvenance } from '../../shared/retrieval-query-embedding.js';
+import type { LLMUsageDetails } from '../../shared/contracts/runtime.js';
+import { normalizeLLMUsageDetails } from '../../primitives/llm/client-response-helpers.js';
+import { isRecord } from '../../shared/utils/types.js';
+import {
+  extractGatewayProviderCostEvidence,
+  extractGatewayProviderCostEvidenceFromHeaders,
+} from '../../boundary/gateway/llm-cost-capture.js';
+import {
+  mergeProviderCostEvidenceConflicts,
+  reconcileProviderCostEvidence,
+} from '../../shared/telemetry/provider-cost-evidence.js';
+import { ProviderResponseValidationError } from '../../shared/telemetry/provider-attempt-error.js';
 
 export type EmbeddingProviderKind = 'ollama' | 'transformers' | 'api';
 
@@ -45,6 +58,11 @@ interface FeatureExtractionPipelineType {
 export interface EmbeddingRuntimeProvider extends EmbeddingProviderPort {
   readonly kind: EmbeddingProviderKind;
   readonly model: string;
+}
+
+export interface EmbeddingBatchWithUsageResult {
+  embeddings: Float32Array[];
+  usageDetails?: LLMUsageDetails;
 }
 
 export interface EmbeddingConfig {
@@ -407,6 +425,28 @@ export class ApiEmbeddingProvider extends HttpEmbeddingProvider {
   }
 
   protected async embedInternal(texts: string[], options: EmbedOptions): Promise<Float32Array[]> {
+    return (await this.requestEmbeddings(texts, options)).embeddings;
+  }
+
+  async embedBatchWithUsage(
+    texts: string[],
+    options: EmbedOptions = {},
+  ): Promise<EmbeddingBatchWithUsageResult> {
+    if (texts.length === 0) return { embeddings: [] };
+    const result = await this.requestEmbeddings(texts, options);
+    if (result.embeddings.length !== texts.length) {
+      throw new ProviderResponseValidationError(
+        `${this.kind} embedding response count mismatch: expected ${texts.length}, got ${result.embeddings.length}`,
+        result.usageDetails,
+      );
+    }
+    return result;
+  }
+
+  private async requestEmbeddings(
+    texts: string[],
+    options: EmbedOptions,
+  ): Promise<EmbeddingBatchWithUsageResult> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
     if (this.config.apiKey) {
       headers.Authorization = `Bearer ${this.config.apiKey}`;
@@ -427,8 +467,58 @@ export class ApiEmbeddingProvider extends HttpEmbeddingProvider {
       throw new Error(`API embedding error ${response.status}: ${body}`);
     }
 
+    const providerCostFromHeaders = extractGatewayProviderCostEvidenceFromHeaders(response.headers);
     const json = await response.json() as unknown;
-    return toFloat32Embeddings(json);
+    const normalizedUsage = isRecord(json) && Object.hasOwn(json, 'usage')
+      ? normalizeLLMUsageDetails(json.usage, 0, 0)
+      : undefined;
+    const providerCostFromBody = extractGatewayProviderCostEvidence(json, 'body');
+    const providerCostReconciliation = mergeProviderCostEvidenceConflicts(
+      reconcileProviderCostEvidence({
+        bodyUsage: normalizedUsage?.cost,
+        ...providerCostFromBody.providerCostEvidence,
+        ...providerCostFromHeaders.providerCostEvidence,
+      }, {
+        input: normalizedUsage?.input ?? 0,
+        output: normalizedUsage?.output ?? 0,
+        cacheRead: normalizedUsage?.cacheRead ?? 0,
+        cacheWrite: normalizedUsage?.cacheWrite ?? 0,
+      }),
+      providerCostFromBody.providerCostEvidenceConflict,
+      providerCostFromHeaders.providerCostEvidenceConflict,
+    );
+    const providerCost = providerCostReconciliation.providerCost;
+    const { cost: _quarantinedCost, raw: normalizedRaw, ...normalizedUsageWithoutCost } = normalizedUsage
+      ?? normalizeLLMUsageDetails(undefined, 0, 0);
+    const hasProviderCostObservation = Object.keys(providerCostReconciliation.providerCostEvidence).length > 0
+      || providerCostReconciliation.providerCostEvidenceConflict !== undefined;
+    const usageDetails = normalizedUsage || hasProviderCostObservation
+      ? {
+          ...normalizedUsageWithoutCost,
+          ...(providerCost ? { cost: providerCost } : {}),
+          ...(hasProviderCostObservation
+            ? {
+                raw: {
+                  ...(normalizedRaw ?? {}),
+                  providerCostEvidence: providerCostReconciliation.providerCostEvidence,
+                  ...(providerCostReconciliation.providerCostEvidenceConflict
+                    ? { providerCostEvidenceConflict: providerCostReconciliation.providerCostEvidenceConflict }
+                    : {}),
+                },
+              }
+            : {}),
+        }
+      : undefined;
+    let embeddings: Float32Array[];
+    try {
+      embeddings = toFloat32Embeddings(json);
+    } catch (error) {
+      throw new ProviderResponseValidationError(
+        error instanceof Error ? error.message : String(error),
+        usageDetails,
+      );
+    }
+    return { embeddings, ...(usageDetails ? { usageDetails } : {}) };
   }
 }
 
@@ -474,6 +564,30 @@ function resolveEmbeddingProviderKind(
   throw new Error(
     `Unsupported EMBEDDING_PROVIDER "${value}". Expected one of: ollama, transformers, api.`,
   );
+}
+
+export function resolveEmbeddingProviderProvenanceFromConfig(
+  config: EmbeddingProviderRuntimeConfig,
+  actualDimensions?: number,
+): RetrievalQueryEmbeddingProvenance {
+  const provider = resolveEmbeddingProviderKind(config.embeddingProvider);
+  const model = (provider === 'transformers'
+    ? config.transformersModel ?? config.embeddingModel
+    : provider === 'api'
+      ? config.embeddingApiModel ?? config.embeddingModel
+      : config.embeddingModel)?.trim();
+  const dimensions = toPositiveInteger(
+    provider === 'api' ? config.embeddingApiDims ?? config.embeddingDims : config.embeddingDims,
+  );
+  if (!model || !dimensions) {
+    throw new Error(`Embedding provenance requires provider, model, and dimensions for ${provider}`);
+  }
+  if (actualDimensions !== undefined && actualDimensions !== dimensions) {
+    throw new Error(
+      `Embedding provenance dimension mismatch: settings declare ${dimensions}, provider exposes ${actualDimensions}`,
+    );
+  }
+  return { provider, model, dimensions };
 }
 
 function resolveOllamaProvider(env: NodeJS.ProcessEnv): OllamaEmbeddingProvider {

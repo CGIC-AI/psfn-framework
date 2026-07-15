@@ -19,14 +19,13 @@ import type {
   AdminGraphProposalMutationResult,
   AdminGraphProposalsService,
 } from './services/graph-proposals-service.js';
+import { ADMIN_POLLED_QUEUE_JSON_HEADERS } from './routes/shared.js';
 
 interface AdminApiRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   match: RouteMatcher;
   handle: (req: IncomingMessage, res: ServerResponse, params: RouteParams) => void;
 }
-
-const ADMIN_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
 
 function parseAdjustedType(body: string): string | undefined {
   const trimmed = body.trim();
@@ -72,7 +71,7 @@ export function buildAdminGraphProposalRoutes(options: {
       match: exactPath('/api/admin/graph-proposals'),
       handle: (_req, res) => {
         graphProposalsService.listGraphProposals().then(
-          (data) => sendJson(res, 200, data, ADMIN_DYNAMIC_JSON_HEADERS),
+          (data) => sendJson(res, 200, data, ADMIN_POLLED_QUEUE_JSON_HEADERS),
           (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
         );
       },

@@ -308,10 +308,15 @@ export function detectCompressionFailureSignal(responseText: string): Compressio
 export class CompressionGuidelineStore {
   private readonly filePath: string;
   private readonly now: () => number;
+  private changeRevision = 0;
 
   constructor(filePath: string, options: CompressionGuidelineStoreOptions = {}) {
     this.filePath = filePath;
     this.now = options.now ?? Date.now;
+  }
+
+  getChangeRevision(): number {
+    return this.changeRevision;
   }
 
   load(): CompressionGuidelineRecord {
@@ -344,6 +349,7 @@ export class CompressionGuidelineStore {
       throw new Error('Compression guideline record is malformed');
     }
     writeJsonAtomic(this.filePath, normalized);
+    this.changeRevision += 1;
     return normalized;
   }
 }
@@ -351,10 +357,15 @@ export class CompressionGuidelineStore {
 export class CompressionFailureLogStore {
   private readonly filePath: string;
   private readonly now: () => number;
+  private changeRevision = 0;
 
   constructor(filePath: string, options: CompressionFailureLogStoreOptions = {}) {
     this.filePath = filePath;
     this.now = options.now ?? Date.now;
+  }
+
+  getChangeRevision(): number {
+    return this.changeRevision;
   }
 
   append(input: CompressionFailureLogAppendInput): CompressionFailureLogEntry {
@@ -392,6 +403,7 @@ export class CompressionFailureLogStore {
     };
 
     appendJsonLine(this.filePath, entry);
+    this.changeRevision += 1;
     return entry;
   }
 
@@ -467,6 +479,8 @@ export class CompressionGuidelineRuntime {
   private readonly trajectoryMaxAgeMs: number;
   private readonly latestTrajectories = new Map<string, CompressionCompactionTrajectory>();
   private readonly loggedSourceMessages = new Set<string>();
+  private lastPeriodicGuidelineRevision: number | null = null;
+  private lastPeriodicFailureRevision: number | null = null;
 
   constructor(
     guidelineStore: CompressionGuidelineStore,
@@ -566,12 +580,27 @@ export class CompressionGuidelineRuntime {
   }
 
   async runPeriodicGuidelineUpdate(llmProvider: LLMProviderPort): Promise<CompressionGuidelineUpdateResult> {
+    const guidelineRevision = this.guidelineStore.getChangeRevision();
+    const failureRevision = this.failureLogStore.getChangeRevision();
+    if (
+      this.lastPeriodicGuidelineRevision === guidelineRevision
+      && this.lastPeriodicFailureRevision === failureRevision
+    ) {
+      return {
+        status: 'skipped',
+        reviewedFailureCount: 0,
+        reason: 'no_new_failures',
+      };
+    }
+
     const current = this.guidelineStore.load();
     const failures = this.failureLogStore.listSince(
       current.lastReviewedFailureAt ?? 0,
       { limit: this.failureReviewLimit },
     );
     if (failures.length === 0) {
+      this.lastPeriodicGuidelineRevision = guidelineRevision;
+      this.lastPeriodicFailureRevision = failureRevision;
       return {
         status: 'skipped',
         reviewedFailureCount: 0,
@@ -579,6 +608,8 @@ export class CompressionGuidelineRuntime {
       };
     }
     if (failures.length < this.minimumFailuresForUpdate) {
+      this.lastPeriodicGuidelineRevision = guidelineRevision;
+      this.lastPeriodicFailureRevision = failureRevision;
       return {
         status: 'skipped',
         reviewedFailureCount: failures.length,
@@ -642,6 +673,8 @@ export class CompressionGuidelineRuntime {
         ...current,
         lastReviewedFailureAt: reviewedFailureAt,
       });
+      this.lastPeriodicGuidelineRevision = this.guidelineStore.getChangeRevision();
+      this.lastPeriodicFailureRevision = failureRevision;
       return {
         status: 'skipped',
         reviewedFailureCount: failures.length,
@@ -656,6 +689,8 @@ export class CompressionGuidelineRuntime {
       lastReviewedFailureAt: reviewedFailureAt,
     };
     const saved = this.guidelineStore.save(next);
+    this.lastPeriodicGuidelineRevision = this.guidelineStore.getChangeRevision();
+    this.lastPeriodicFailureRevision = failureRevision;
     return {
       status: 'updated',
       reviewedFailureCount: failures.length,

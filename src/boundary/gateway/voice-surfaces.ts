@@ -57,6 +57,7 @@ export function createDiscordReverseRpcVoiceModule(): GatewayVoiceModule {
         return {
           content: result.content,
           channelId: result.channelId,
+          ...(result.attachments ? { attachments: result.attachments } : {}),
           metadata: {
             model: result.model,
             inputTokens: 0,

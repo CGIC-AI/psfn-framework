@@ -441,6 +441,7 @@ const testConfig: SubstrateConfig = {
   primaryMaxTokens: 16384,
   extractionMaxTokens: 8192,
   maintenanceIntervalMs: 300_000,
+  salienceDecayIntervalMs: 300_000,
   defaultContextWindow: 128_000,
   extractionThresholdPct: 30,
   compactionThresholdPct: 70,
@@ -720,6 +721,7 @@ describe('AdminServer JSON API routes', () => {
 
     port = await allocatePort();
     const services = createInProcessGardenAdminContract({
+      env: { GATEWAY_SESSION_HMAC_KEY: 'garden-api-routes-test-session-hmac-key' },
       memoryStore,
       episodicStore,
       sessionStore,
@@ -1052,115 +1054,33 @@ describe('AdminServer JSON API routes', () => {
     expect(allMemories.some(memory => memory.text === 'Do not promote this review candidate.')).toBe(false);
   });
 
-  it('returns period-bounded dashboard cost windows and honors costWindow selection', async () => {
-    type UsageSample = {
-      timestampMs: number;
-      llmCalls: number;
-      toolCalls: number;
-      estimatedCostUsd?: number;
-    };
-
-    const nowMs = Date.now();
-    const samples: UsageSample[] = [
-      { timestampMs: nowMs - (1 * 60 * 60 * 1000), llmCalls: 2, toolCalls: 1, estimatedCostUsd: 0.1111 },
-      { timestampMs: nowMs - (3 * 24 * 60 * 60 * 1000), llmCalls: 1, toolCalls: 2, estimatedCostUsd: 0.2222 },
-      { timestampMs: nowMs - (15 * 24 * 60 * 60 * 1000), llmCalls: 4, toolCalls: 3, estimatedCostUsd: 0.3333 },
-      { timestampMs: nowMs - (45 * 24 * 60 * 60 * 1000), llmCalls: 9, toolCalls: 9, estimatedCostUsd: 0.9999 },
-      { timestampMs: Number.NaN, llmCalls: 8, toolCalls: 8, estimatedCostUsd: 0.7777 },
-      { timestampMs: nowMs - (2 * 60 * 60 * 1000), llmCalls: 3, toolCalls: 0 },
-    ];
-
-    for (const [index, sample] of samples.entries()) {
-      await eventBus.emit('agent.turn.usage', {
-        message: {
-          id: `dashboard-cost-${index}`,
-          channelId: 'api-session',
-          channelType: 'api',
-          authorId: 'operator',
-          authorName: 'Operator',
-          content: 'dashboard cost sample',
-          timestamp: new Date(sample.timestampMs),
-        },
-        usage: {
-          inputTokens: 100,
-          outputTokens: 50,
-          cacheReadTokens: 10,
-          llmCalls: sample.llmCalls,
-          toolCalls: sample.toolCalls,
-          contextUtilization: 10,
-          estimatedCostUsd: sample.estimatedCostUsd,
-        },
-      });
-    }
-
-    const now = new Date(nowMs);
-    const dayStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-    const weekOffsetDays = (now.getUTCDay() + 6) % 7;
-    const weekStartMs = dayStartMs - (weekOffsetDays * 86_400_000);
-    const monthStartMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
-
-    const expected = {
-      today: { turns: 0, llmCalls: 0, toolCalls: 0, estimatedCostUsd: 0 },
-      week: { turns: 0, llmCalls: 0, toolCalls: 0, estimatedCostUsd: 0 },
-      month: { turns: 0, llmCalls: 0, toolCalls: 0, estimatedCostUsd: 0 },
-    };
-
-    for (const sample of samples) {
-      if (!Number.isFinite(sample.timestampMs) || sample.timestampMs < monthStartMs) {
-        continue;
-      }
-      expected.month.turns += 1;
-      expected.month.llmCalls += sample.llmCalls;
-      expected.month.toolCalls += sample.toolCalls;
-      expected.month.estimatedCostUsd += sample.estimatedCostUsd ?? 0;
-
-      if (sample.timestampMs >= weekStartMs) {
-        expected.week.turns += 1;
-        expected.week.llmCalls += sample.llmCalls;
-        expected.week.toolCalls += sample.toolCalls;
-        expected.week.estimatedCostUsd += sample.estimatedCostUsd ?? 0;
-      }
-
-      if (sample.timestampMs >= dayStartMs) {
-        expected.today.turns += 1;
-        expected.today.llmCalls += sample.llmCalls;
-        expected.today.toolCalls += sample.toolCalls;
-        expected.today.estimatedCostUsd += sample.estimatedCostUsd ?? 0;
-      }
-    }
-
+  it('returns no-store dashboard responses and visibly unavailable durable usage without Postgres', async () => {
     const res = await request(port, 'GET', '/api/admin/dashboard?costWindow=week', undefined, authHeaders);
+
     expect(res.status).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
     const payload = JSON.parse(res.body) as {
       stats: {
-        sessionUsage: {
-          costWindows: {
-            selected: string;
-            byWindow: {
-              today: { turns: number; llmCalls: number; toolCalls: number; estimatedCostUsd: number };
-              week: { turns: number; llmCalls: number; toolCalls: number; estimatedCostUsd: number };
-              month: { turns: number; llmCalls: number; toolCalls: number; estimatedCostUsd: number };
-            };
+        modelUsage: {
+          selected: string;
+          usage: unknown;
+          freshness: {
+            state: string;
+            source: string;
+            refreshedAtMs: number | null;
           };
         };
       };
     };
-
-    expect(payload.stats.sessionUsage.costWindows.selected).toBe('week');
-    expect(payload.stats.sessionUsage.costWindows.byWindow.today.turns).toBe(expected.today.turns);
-    expect(payload.stats.sessionUsage.costWindows.byWindow.today.llmCalls).toBe(expected.today.llmCalls);
-    expect(payload.stats.sessionUsage.costWindows.byWindow.today.toolCalls).toBe(expected.today.toolCalls);
-    expect(payload.stats.sessionUsage.costWindows.byWindow.today.estimatedCostUsd).toBeCloseTo(expected.today.estimatedCostUsd, 8);
-
-    expect(payload.stats.sessionUsage.costWindows.byWindow.week.turns).toBe(expected.week.turns);
-    expect(payload.stats.sessionUsage.costWindows.byWindow.week.llmCalls).toBe(expected.week.llmCalls);
-    expect(payload.stats.sessionUsage.costWindows.byWindow.week.toolCalls).toBe(expected.week.toolCalls);
-    expect(payload.stats.sessionUsage.costWindows.byWindow.week.estimatedCostUsd).toBeCloseTo(expected.week.estimatedCostUsd, 8);
-
-    expect(payload.stats.sessionUsage.costWindows.byWindow.month.turns).toBe(expected.month.turns);
-    expect(payload.stats.sessionUsage.costWindows.byWindow.month.llmCalls).toBe(expected.month.llmCalls);
-    expect(payload.stats.sessionUsage.costWindows.byWindow.month.toolCalls).toBe(expected.month.toolCalls);
-    expect(payload.stats.sessionUsage.costWindows.byWindow.month.estimatedCostUsd).toBeCloseTo(expected.month.estimatedCostUsd, 8);
+    expect(payload.stats.modelUsage).toMatchObject({
+      selected: 'week',
+      usage: null,
+      freshness: {
+        state: 'unavailable',
+        source: 'postgres_model_usage',
+        refreshedAtMs: null,
+      },
+    });
   });
 
   it('returns active-session context pressure and fails closed when active-session telemetry is missing', async () => {
@@ -1191,7 +1111,7 @@ describe('AdminServer JSON API routes', () => {
     expect(res.status).toBe(200);
     let payload = JSON.parse(res.body) as {
       stats: {
-        sessionUsage: {
+        transientSessionTelemetry: {
           activeSessionContextPressure: {
             sessionId: string | null;
             utilizationPct: number;
@@ -1200,7 +1120,7 @@ describe('AdminServer JSON API routes', () => {
         };
       };
     };
-    expect(payload.stats.sessionUsage.activeSessionContextPressure).toEqual({
+    expect(payload.stats.transientSessionTelemetry.activeSessionContextPressure).toEqual({
       sessionId: 'discord:active-session',
       utilizationPct: 61.7,
       hasTelemetry: true,
@@ -1211,7 +1131,7 @@ describe('AdminServer JSON API routes', () => {
     expect(res.status).toBe(200);
     payload = JSON.parse(res.body) as {
       stats: {
-        sessionUsage: {
+        transientSessionTelemetry: {
           activeSessionContextPressure: {
             sessionId: string | null;
             utilizationPct: number;
@@ -1220,7 +1140,7 @@ describe('AdminServer JSON API routes', () => {
         };
       };
     };
-    expect(payload.stats.sessionUsage.activeSessionContextPressure).toEqual({
+    expect(payload.stats.transientSessionTelemetry.activeSessionContextPressure).toEqual({
       sessionId: 'discord:no-telemetry',
       utilizationPct: 0,
       hasTelemetry: false,
@@ -1230,6 +1150,7 @@ describe('AdminServer JSON API routes', () => {
   it('rejects invalid dashboard costWindow query values', async () => {
     const res = await request(port, 'GET', '/api/admin/dashboard?costWindow=all-time', undefined, authHeaders);
     expect(res.status).toBe(400);
+    expect(res.headers['cache-control']).toBe('no-store');
     const payload = JSON.parse(res.body) as { error: string };
     expect(payload.error).toContain('Invalid costWindow query parameter');
   });
@@ -3418,7 +3339,7 @@ describe('AdminServer JSON API routes', () => {
         sessionHistoryBudgetPct: number;
         sessionRestartBehavior: string;
         primaryModel?: string;
-        maintenanceIntervalMs?: number;
+        salienceDecayIntervalMs?: number;
         capabilityTier?: string;
       };
       editors: {
@@ -3436,7 +3357,7 @@ describe('AdminServer JSON API routes', () => {
     expect(settingsPayload.config.sessionHistoryBudgetPct).toBe(testConfig.sessionHistoryBudgetPct);
     expect(settingsPayload.config.sessionRestartBehavior).toBe('reuse_latest_session');
     expect(settingsPayload.config.primaryModel).toBeUndefined();
-    expect(settingsPayload.config.maintenanceIntervalMs).toBeUndefined();
+    expect(settingsPayload.config.salienceDecayIntervalMs).toBeUndefined();
     expect(settingsPayload.config.capabilityTier).toBeUndefined();
     const persistedModels = JSON.parse(readFileSync(join(tempDir, 'models.json'), 'utf8')) as {
       schemaVersion: number;
@@ -3446,7 +3367,7 @@ describe('AdminServer JSON API routes', () => {
     const persistedPrimaryModel = persistedModels.models.find((entry) => entry.id === 'primary')?.identity?.model;
     expect(typeof persistedPrimaryModel).toBe('string');
     expect(settingsPayload.editors.models.modelCatalog.primary.model).toBe(persistedPrimaryModel);
-    expect(settingsPayload.editors.scheduler.salienceDecayIntervalMs).toBe(testConfig.maintenanceIntervalMs);
+    expect(settingsPayload.editors.scheduler.salienceDecayIntervalMs).toBe(testConfig.salienceDecayIntervalMs);
     expect(settingsPayload.editors.capabilities.tier).toBe(testConfig.capabilityTier);
 
     const settingsPatchRes = await request(
@@ -3484,7 +3405,7 @@ describe('AdminServer JSON API routes', () => {
             provider: 'openrouter',
           },
         },
-        maintenanceIntervalMs: 240000,
+        salienceDecayIntervalMs: 240000,
         capabilityTier: 'custom',
         customTokens: ['identity.read', 'git.read'],
       }),
@@ -3498,7 +3419,7 @@ describe('AdminServer JSON API routes', () => {
     };
     expect(ownerPatchPayload.ok).toBe(false);
     expect(ownerPatchPayload.message).toContain('primaryModel is owned by models.json');
-    expect(ownerPatchPayload.message).toContain('maintenanceIntervalMs is owned by scheduler.json');
+    expect(ownerPatchPayload.message).toContain('salienceDecayIntervalMs is owned by scheduler.json');
     expect(ownerPatchPayload.message).toContain('capabilityTier is owned by capability-tier.json');
     expect(ownerPatchPayload.validationErrors).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -3512,8 +3433,8 @@ describe('AdminServer JSON API routes', () => {
         code: 'wrong_owner',
       }),
       expect.objectContaining({
-        field: 'maintenanceIntervalMs',
-        message: 'maintenanceIntervalMs is owned by scheduler.json; edit that canonical config instead',
+        field: 'salienceDecayIntervalMs',
+        message: 'salienceDecayIntervalMs is owned by scheduler.json; edit that canonical config instead',
         code: 'wrong_owner',
       }),
       expect.objectContaining({
@@ -4064,14 +3985,14 @@ describe('AdminServer JSON API routes', () => {
 
     expect(afterPayload.config).toEqual(expect.objectContaining(patch));
     expect(afterPayload.config.primaryModel).toBeUndefined();
-    expect(afterPayload.config.maintenanceIntervalMs).toBeUndefined();
+    expect(afterPayload.config.salienceDecayIntervalMs).toBeUndefined();
     expect(afterPayload.config.capabilityTier).toBeUndefined();
     expect(afterPayload.editors).toEqual(beforePayload.editors);
 
     const persistedSettings = JSON.parse(readFileSync(join(tempDir, 'settings.json'), 'utf8')) as Record<string, unknown>;
     expect(persistedSettings).toEqual(expect.objectContaining(patch));
     expect(persistedSettings.primaryModel).toBeUndefined();
-    expect(persistedSettings.maintenanceIntervalMs).toBeUndefined();
+    expect(persistedSettings.salienceDecayIntervalMs).toBeUndefined();
     expect(persistedSettings.capabilityTier).toBeUndefined();
   });
 
@@ -4261,7 +4182,7 @@ describe('AdminServer JSON API routes', () => {
       const modelCatalogField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'modelCatalog');
       const modelRoleAssignmentsField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'modelRoleAssignments');
       const modelRosterField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'modelRoster');
-      const maintenanceIntervalMsField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'maintenanceIntervalMs');
+      const salienceDecayIntervalMsField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'salienceDecayIntervalMs');
       const capabilityTierField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'capabilityTier');
       const compositionalPolicyField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'compositionalPolicy');
       const sttProviderField = getNamedSchemaEntry(schemaRoot, ['fields', 'fieldSchemas'], 'sttProvider');
@@ -4283,7 +4204,7 @@ describe('AdminServer JSON API routes', () => {
       expect(readStringMetadata(modelCatalogField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
       expect(readStringMetadata(modelRoleAssignmentsField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
       expect(readStringMetadata(modelRosterField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');
-      expect(readOwnerFiles(maintenanceIntervalMsField)).toContain('scheduler.json');
+      expect(readOwnerFiles(salienceDecayIntervalMsField)).toContain('scheduler.json');
       expect(readOwnerFiles(capabilityTierField)).toContain('capability-tier.json');
       expect(readOwnerFiles(compositionalPolicyField)).toContain('settings.json');
       expect(readStringMetadata(compositionalPolicyField, ['type', 'kind', 'valueType', 'inputType'])).toBe('object');

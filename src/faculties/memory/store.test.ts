@@ -871,6 +871,25 @@ describe('MemoryStore', () => {
           consent_flags TEXT NOT NULL DEFAULT '{}'
         );
       `);
+      legacyDb.prepare(`
+        INSERT INTO l2_memories (
+          id, text, type, importance, confidence, emotional_valence, salience,
+          source_ref, extracted_at, last_accessed, access_count, tags
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        'legacy-existing',
+        'Legacy memory awaiting an anchor',
+        'semantic',
+        0.7,
+        0.9,
+        0,
+        0.8,
+        'legacy:test',
+        1_700_000_000_000,
+        1_700_000_000_100,
+        1,
+        '[]',
+      );
 
       const migratedStore = new MemoryStore(legacyDb);
       const columns = legacyDb.prepare('PRAGMA table_info(l2_memories)')
@@ -883,6 +902,9 @@ describe('MemoryStore', () => {
       expect(columns.some(column => column.name === 'scope_ref_kind')).toBe(true);
       expect(columns.some(column => column.name === 'scope_ref_id')).toBe(true);
       expect(columns.some(column => column.name === 'scope_tags')).toBe(true);
+      expect(columns.some(column => column.name === 'salience_decay_anchor_at')).toBe(true);
+      expect(migratedStore.getById('legacy-existing')?.salienceDecayAnchorAt)
+        .toBe(1_700_000_000_100);
 
       const emb = makeEmbedding(1);
       migratedStore.insertMemory(
@@ -1143,13 +1165,15 @@ describe('MemoryStore', () => {
       store.insertMemory(makeMemory('m3', 'C', { salience: 0.6 }), makeEmbedding(3));
 
       const count = store.bulkUpdateSalience([
-        { id: 'm1', salience: 0.2 },
-        { id: 'm2', salience: 0.35 },
+        { id: 'm1', salience: 0.2, salienceDecayAnchorAt: 1_700_000_000_100 },
+        { id: 'm2', salience: 0.35, salienceDecayAnchorAt: 1_700_000_000_200 },
       ]);
 
       expect(count).toBe(2);
       expect(store.getById('m1')?.salience).toBe(0.2);
+      expect(store.getById('m1')?.salienceDecayAnchorAt).toBe(1_700_000_000_100);
       expect(store.getById('m2')?.salience).toBe(0.35);
+      expect(store.getById('m2')?.salienceDecayAnchorAt).toBe(1_700_000_000_200);
       expect(store.getById('m3')?.salience).toBe(0.6);
     });
 
@@ -1166,8 +1190,8 @@ describe('MemoryStore', () => {
       `);
 
       expect(() => store.bulkUpdateSalience([
-        { id: 'm1', salience: 0.2 },
-        { id: 'm2', salience: 0.35 },
+        { id: 'm1', salience: 0.2, salienceDecayAnchorAt: 1_700_000_000_100 },
+        { id: 'm2', salience: 0.35, salienceDecayAnchorAt: 1_700_000_000_200 },
       ])).toThrow('simulated salience failure');
       expect(store.getById('m1')?.salience).toBe(0.8);
       expect(store.getById('m2')?.salience).toBe(0.7);

@@ -438,10 +438,11 @@ function inferAddressMode(
 
 function isReplyToUser(entry: SessionEntry): boolean {
   const metadata = parseEntryMetadata(entry);
+  const turn = isRecord(metadata?.turn) ? metadata.turn : undefined;
   return Boolean(
     normalizeOptionalMetadataString(metadata?.replyToAuthorId)
     || normalizeOptionalMetadataString(metadata?.referencedMessageAuthorId)
-    || normalizeOptionalMetadataString(metadata?.replyToMessageId)
+    || normalizeOptionalMetadataString(turn?.replyToMessageId)
     || normalizeOptionalMetadataString(metadata?.referencedMessageId),
   );
 }

@@ -2,12 +2,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DiscoveredModel } from '../../../primitives/llm/discovery.js';
 import type { GatewayMethodRuntime } from './types.js';
 import { registerLLMMethods } from './llm.js';
+import type { ModelUsageEventInput } from '../../../shared/telemetry/model-usage.js';
+import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
+import { IcpConversationCostBreakerError } from '../../../primitives/llm/icp-conversation-cost-breaker.js';
+import { GatewayErrors } from '../protocol.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function createHarness() {
+function createHarness(options: {
+  embeddingService?: GatewayMethodRuntime['embeddingService'] & {
+    embedBatchWithUsage?: (texts: string[]) => Promise<unknown>;
+  };
+  usageEvents?: ModelUsageEventInput[];
+  authorizeIcpConversationCorrelation?: GatewayMethodRuntime['authorizeIcpConversationCorrelation'];
+} = {}) {
   const methods = new Map<string, (params: any) => Promise<any>>();
   const stream = vi.fn(async () => ({
     content: 'streamed',
@@ -75,11 +85,18 @@ function createHarness() {
       stream,
       complete,
     } as any,
-    embeddingService: {
+    embeddingService: options.embeddingService ?? {
       embed: vi.fn(),
       embedBatch: vi.fn(async () => []),
       dims: 1,
     } as any,
+    ...(options.usageEvents ? {
+      modelUsageRecorder: {
+        async recordUsageEvent(event: ModelUsageEventInput) {
+          options.usageEvents?.push(event);
+        },
+      },
+    } : {}),
     modelDiscovery,
     discordAdapter: {} as any,
     policyConfig: { workspacePath: process.cwd() },
@@ -96,6 +113,9 @@ function createHarness() {
     })),
     sendNtfy: vi.fn(async () => ({ status: 'debounced', topic: 'noop' })),
     nextStreamRequestId: () => 'gw-1',
+    ...(options.authorizeIcpConversationCorrelation
+      ? { authorizeIcpConversationCorrelation: options.authorizeIcpConversationCorrelation }
+      : {}),
     audited: (_method, handler) => handler,
     approvalBoundary: {
       gate: (_options) => async (params) => _options.handler(params),
@@ -150,6 +170,33 @@ describe('registerLLMMethods', () => {
     })).rejects.toThrow('non-empty shard identifier');
   });
 
+  it('propagates private telemetry generically and strips source identifiers', async () => {
+    const harness = createHarness();
+
+    await harness.invoke('llm.complete', {
+      model: '',
+      provider: '',
+      messages: [{ role: 'user', content: 'private work' }],
+      systemPrompt: 'private',
+      purpose: 'background',
+      turnId: 'source-turn',
+      requestId: 'source-request',
+      channelId: 'source-channel',
+      originStage: 'revealing.private.operation',
+      telemetryVisibility: 'companion_private',
+    });
+
+    const correlation = harness.complete.mock.calls[0]?.[0].correlation;
+    expect(correlation).toEqual({
+      requestId: 'companion-private',
+      callType: 'background',
+      purpose: 'companion_private.background',
+      originType: 'background',
+      originStage: 'companion_private.background',
+      telemetryVisibility: 'companion_private',
+    });
+  });
+
   it('preserves model knob fields from llm.chat params into provider context hints', async () => {
     const harness = createHarness();
 
@@ -186,6 +233,150 @@ describe('registerLLMMethods', () => {
       frequencyPenalty: 0.12,
       repetitionPenalty: 1.03,
     });
+  });
+
+  it('preserves validated caller-owned accounting identity into the provider context', async () => {
+    const harness = createHarness();
+
+    await harness.invoke('llm.chat', {
+      model: 'z-ai/glm-5',
+      provider: 'openrouter',
+      pin: true,
+      messages: [{ role: 'user', content: 'hello' }],
+      systemPrompt: 'system',
+      accounting: {
+        logicalCallId: 'llm:caller-operation',
+        attempt: 4,
+        retryOwner: 'caller',
+      },
+    });
+
+    expect(harness.stream.mock.calls[0]?.[0]).toMatchObject({
+      accounting: {
+        logicalCallId: 'llm:caller-operation',
+        attempt: 4,
+        retryOwner: 'caller',
+      },
+    });
+
+    await harness.invoke('llm.complete', {
+      model: 'z-ai/glm-5',
+      provider: 'openrouter',
+      pin: true,
+      messages: [{ role: 'user', content: 'summarize' }],
+      systemPrompt: 'system',
+      purpose: 'summary',
+      accounting: {
+        logicalCallId: 'llm:caller-completion',
+        attempt: 9,
+        retryOwner: 'caller',
+      },
+    });
+    expect(harness.complete.mock.calls[0]?.[0]).toMatchObject({
+      accounting: {
+        logicalCallId: 'llm:caller-completion',
+        attempt: 9,
+        retryOwner: 'caller',
+      },
+    });
+  });
+
+  it('requires durable gateway episode authorization for nested ICP cost correlation', async () => {
+    const correlation: IcpConversationCorrelation = {
+      conversationId: '33333333-3333-4333-8333-333333333333',
+      rootInitiationId: '44444444-4444-4444-8444-444444444444',
+      initiatedByCompanionId: '11111111-1111-4111-8111-111111111111',
+      localCompanionId: '11111111-1111-4111-8111-111111111111',
+      peerCompanionId: '22222222-2222-4222-8222-222222222222',
+      peerContactId: 'contact-b',
+      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      turnId: 'turn-1',
+      messageId: 'message-1',
+      requestId: 'request-1',
+      chargeLane: 'companion_social',
+      surface: 'companion_dm',
+      costPurpose: 'summary',
+      costOriginStage: 'post_turn',
+      fatigueDecision: 'not_evaluated',
+    };
+    const authorizeIcpConversationCorrelation = vi.fn(async value => value);
+    const harness = createHarness({ authorizeIcpConversationCorrelation });
+
+    await harness.invoke('llm.complete', {
+      model: 'z-ai/glm-5',
+      provider: 'openrouter',
+      messages: [{ role: 'user', content: 'summary' }],
+      systemPrompt: 'system',
+      purpose: 'summary',
+      icpCorrelation: correlation,
+    });
+    expect(authorizeIcpConversationCorrelation).toHaveBeenCalledWith(correlation);
+    expect(harness.complete.mock.calls[0]?.[0]).toMatchObject({
+      correlation: {
+        companionId: correlation.localCompanionId,
+        conversationId: correlation.conversationId,
+        rootInitiationId: correlation.rootInitiationId,
+        icpCorrelation: correlation,
+      },
+    });
+
+    await expect(createHarness().invoke('llm.complete', {
+      model: 'z-ai/glm-5',
+      provider: 'openrouter',
+      messages: [{ role: 'user', content: 'forged summary' }],
+      systemPrompt: 'system',
+      purpose: 'summary',
+      icpCorrelation: correlation,
+    })).rejects.toMatchObject({ code: -32011 });
+  });
+
+  it('exposes a typed ICP pre-call block over JSON-RPC', async () => {
+    const harness = createHarness();
+    const event = {
+      timestampMs: 123,
+      outcome: 'blocked' as const,
+      reason: 'hard_limit_exceeded' as const,
+      logicalCallId: 'logical-1',
+      attempt: 1,
+      conversationId: '33333333-3333-4333-8333-333333333333',
+      rootInitiationId: '44444444-4444-4444-8444-444444444444',
+      localCompanionId: '11111111-1111-4111-8111-111111111111',
+      costPurpose: 'conversation_turn' as const,
+      costOriginStage: 'reply' as const,
+      provider: 'openrouter',
+      model: 'test/model',
+      routingPurpose: 'chat',
+      projectedRequestCostUsd: 0.5,
+      replayed: false,
+    };
+    harness.stream.mockRejectedValueOnce(new IcpConversationCostBreakerError(event));
+
+    await expect(harness.invoke('llm.chat', {
+      model: 'test/model',
+      provider: 'openrouter',
+      messages: [{ role: 'user', content: 'blocked' }],
+      systemPrompt: 'system',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.ICP_CONVERSATION_COST_BLOCKED,
+      data: event,
+    });
+  });
+
+  it('rejects malformed caller-owned accounting identity before provider transport', async () => {
+    const harness = createHarness();
+
+    await expect(harness.invoke('llm.chat', {
+      model: 'z-ai/glm-5',
+      provider: 'openrouter',
+      messages: [{ role: 'user', content: 'hello' }],
+      systemPrompt: 'system',
+      accounting: {
+        logicalCallId: '',
+        attempt: 0,
+        retryOwner: 'caller',
+      },
+    })).rejects.toThrow('accounting.logicalCallId');
+    expect(harness.stream).not.toHaveBeenCalled();
   });
 
   it('returns reasoning and provider observability from llm.chat', async () => {
@@ -310,7 +501,6 @@ describe('registerLLMMethods', () => {
           cacheRead: 0,
           cacheWrite: 0,
           totalTokens: 12,
-          cost: { total: 0 },
         },
         stopReason: 'stop',
       };
@@ -332,5 +522,123 @@ describe('registerLLMMethods', () => {
         currency: 'USD',
       },
     });
+  });
+
+  it('awaits canonical embedding usage persistence with provider token and cost evidence', async () => {
+    const usageEvents: ModelUsageEventInput[] = [];
+    const embeddingService = {
+      kind: 'api',
+      model: 'text-embedding-3-small',
+      dims: 3,
+      embed: vi.fn(),
+      embedBatch: vi.fn(async () => []),
+      embedBatchWithUsage: vi.fn(async () => ({
+        embeddings: [new Float32Array([1, 2, 3])],
+        usageDetails: {
+          input: 7,
+          output: 0,
+          cacheRead: 2,
+          cacheWrite: 0,
+          totalTokens: 9,
+          cost: { total: 0.000009, currency: 'USD' },
+          raw: { prompt_tokens: 9, total_tokens: 9 },
+        },
+      })),
+    };
+    const harness = createHarness({ embeddingService, usageEvents });
+
+    await expect(harness.invoke('llm.embed', {
+      texts: ['first'],
+      companionId: 'companion-a',
+      sessionId: 'session-1',
+      channelId: 'shard:shard-1',
+      channelType: 'api',
+      chargeLane: 'shard',
+      chargeSurface: 'externalEmbedding',
+      chargeEventId: 'charge-event-1',
+      chargeRunId: 'run-1',
+      chargeRootRunId: 'root-run-1',
+      shardId: 'shard-1',
+      workloadType: 'shard',
+      workloadId: 'shard-1',
+    })).resolves.toEqual({
+      embeddings: [[1, 2, 3]],
+    });
+
+    expect(embeddingService.embedBatchWithUsage).toHaveBeenCalledWith(['first']);
+    expect(embeddingService.embedBatch).not.toHaveBeenCalled();
+    expect(usageEvents).toMatchObject([{
+      attempt: 1,
+      status: 'success',
+      settlement: 'complete',
+      callKind: 'embedding',
+      attribution: {
+        companionId: 'companion-a',
+        sessionId: 'session-1',
+        channelId: 'shard:shard-1',
+        channelType: 'api',
+        chargeLane: 'shard',
+        chargeSurface: 'externalEmbedding',
+        chargeEventId: 'charge-event-1',
+        chargeRunId: 'run-1',
+        chargeRootRunId: 'root-run-1',
+        shardId: 'shard-1',
+        workloadType: 'shard',
+        workloadId: 'shard-1',
+      },
+      provider: 'api',
+      model: 'text-embedding-3-small',
+      inputTokens: 7,
+      outputTokens: 0,
+      cacheReadTokens: 2,
+      cacheWriteTokens: 0,
+      totalTokens: 9,
+      providerCost: { total: 0.000009, currency: 'USD' },
+      metadata: expect.objectContaining({
+        rawUsage: { prompt_tokens: 9, total_tokens: 9 },
+      }),
+    }]);
+  });
+
+  it('records direct gateway embedding cost conflicts as partially settled', async () => {
+    const usageEvents: ModelUsageEventInput[] = [];
+    const embeddingService = {
+      kind: 'api',
+      model: 'text-embedding-3-small',
+      dims: 3,
+      embed: vi.fn(),
+      embedBatch: vi.fn(async () => []),
+      embedBatchWithUsage: vi.fn(async () => ({
+        embeddings: [new Float32Array([1, 2, 3])],
+        usageDetails: {
+          input: 7,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 7,
+          raw: {
+            providerCostEvidence: {
+              bodyUsage: { total: 0.1, currency: 'USD' },
+              headers: { total: 0.2, currency: 'USD' },
+            },
+            providerCostEvidenceConflict: { fields: ['total'] },
+          },
+        },
+      })),
+    };
+    const harness = createHarness({ embeddingService, usageEvents });
+
+    await harness.invoke('llm.embed', { texts: ['first'] });
+
+    expect(usageEvents).toMatchObject([{
+      status: 'success',
+      settlement: 'partial',
+      inputTokens: 7,
+      metadata: expect.objectContaining({
+        rawUsage: expect.objectContaining({
+          providerCostEvidenceConflict: { fields: ['total'] },
+        }),
+      }),
+    }]);
   });
 });

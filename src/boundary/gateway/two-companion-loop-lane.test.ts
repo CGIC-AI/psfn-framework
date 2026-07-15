@@ -7,6 +7,7 @@ import type { GatewayMultiCompanionConfig } from './multi-companion.js';
 import { GatewayCompanionChannelLane } from './companion-channels.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
+import { EventBus } from '../../shared/event-bus.js';
 import type {
   FatigueBudgetEvent,
   SubstrateMessage,
@@ -169,6 +170,10 @@ function createServerOptions(lane: GatewayCompanionChannelLane): GatewayServerOp
     fleetCompanionIds: ['comp-nova', 'comp-selene'],
     channelRouting: {},
     discordAccounts: {},
+    personalWorkspaceByCompanionId: {
+      'comp-nova': '/workspace/comp-nova',
+      'comp-selene': '/workspace/comp-selene',
+    },
   };
   return {
     socketPath: '/tmp/test.sock',
@@ -183,6 +188,8 @@ function createServerOptions(lane: GatewayCompanionChannelLane): GatewayServerOp
     wyomingShardRouting: { enabled: false },
     multiCompanion: multiCompanionConfig,
     companionChannels: lane,
+    companionChannelNow: () => NOW,
+    eventBus: new EventBus(),
   };
 }
 
@@ -286,10 +293,10 @@ class LaneAgent {
     if (decision.suppressModel || !this.replyEnabled) {
       return; // suppressed model call => empty content => nothing is sent
     }
-    this.send(message.channelId, 'just carrying on chatting');
+    this.send(message.channelId, 'just carrying on chatting', message.id);
   }
 
-  send(channelId: string, content: string): void {
+  send(channelId: string, content: string, replyToMessageId?: string): void {
     this.connection._emit({
       jsonrpc: '2.0',
       id: ++this.rpcCounter,
@@ -299,6 +306,7 @@ class LaneAgent {
         content,
         authorName: this.displayName,
         companionId: this.companionId,
+        ...(replyToMessageId ? { replyToMessageId } : {}),
       },
     });
   }
@@ -338,8 +346,8 @@ async function setupLoopHarness(): Promise<{
     placesRegistry: PLACES,
     presence: {
       listByPlace: async () => [
-        { companionId: 'comp-nova', updatedAt: FRESH },
-        { companionId: 'comp-selene', updatedAt: FRESH },
+        { companionId: 'comp-nova', updatedAt: FRESH, since: FRESH },
+        { companionId: 'comp-selene', updatedAt: FRESH, since: FRESH },
       ],
     },
     fleetCompanionIds: new Set(['comp-nova', 'comp-selene']),

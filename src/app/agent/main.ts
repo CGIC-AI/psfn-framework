@@ -11,6 +11,7 @@ import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';
 import { attachCompanionEventForwarder } from '../../channels/backplane/companion-relay/agent-forwarder.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
+import { resolveDocumentIngestLimits } from '../../faculties/file-ingest/index.js';
 import { EpisodicSynthesizer } from '../../faculties/memory/episodic/index.js';
 import { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/sleep-consolidation.js';
 import { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
@@ -121,6 +122,7 @@ import {
 } from '../../faculties/introspection/model-runtime.js';
 import { IntrospectionAuditRuntime } from '../../faculties/introspection/runtime.js';
 import { registerIntrospectionAuditTask } from '../../faculties/introspection/scheduler-lane.js';
+import { registerToolUsageEvaluatorTask } from '../../core/agent/tool-surface/usage-evaluator-scheduler-lane.js';
 import { createTurnRecordIntrospectionSource } from '../../faculties/introspection/source.js';
 import {
   createLLMValuesConsistencyEvaluator,
@@ -443,7 +445,12 @@ async function main(): Promise<void> {
     log.info('No persisted internal state snapshot found; starting fresh');
   }
 
-  const { scheduler, postTurnActions } = buildAgentSchedulerRuntime({
+  const {
+    scheduler,
+    postTurnActions,
+    backgroundMaintenance,
+    compressionGuidelineEvolution,
+  } = buildAgentSchedulerRuntime({
     eventBus,
     eligibilityGate,
     config,
@@ -569,6 +576,7 @@ async function main(): Promise<void> {
       await moduleLoader.applyRegistryMutation(mutation);
     },
     executionPort: sandboxExecutionPort,
+    compressionGuidelineEvolution,
   });
 
   // Memory write/import tools — intentional memory creation
@@ -578,6 +586,24 @@ async function main(): Promise<void> {
   // htm9.3: direct memory-write tools gate at the memory_write sink (explicit
   // unscreened path until envelopes flow into tool params).
   memoryWriter.intakeSinkGateProvider = () => sessionManager.intakeSinkGate;
+  // Durable tool-usage evaluator lane (psfn-framework-b0yl.5): closes the LOD
+  // loop by aggregating ACTUAL per-tool invocations from the durable turn-record
+  // stream (every catalog tool, per-companion) to feed presentation ordering +
+  // operator-visible pin suggestions. Opt-in via scheduler.json (registers only
+  // when enabled); registered here so it can use the real MemoryWriter for its
+  // autonomous-action suggestion records and the session store's turn records.
+  if (schedulerConfig.toolUsageEvaluator) {
+    registerToolUsageEvaluatorTask({
+      scheduler,
+      agent: agentLoop,
+      turnRecordAccess: {
+        listChannelKeys: () => sessionStore.listChannels().map(channel => channel.sessionId),
+        readRecentTurnRecords: (channelKey, limit) => sessionStore.getRecentTurnRecords(channelKey, limit),
+      },
+      getMemoryWriter: () => memoryWriter,
+      config: schedulerConfig.toolUsageEvaluator,
+    });
+  }
   const episodicStore = companionEpisodicStore;
   // Episodic lane tuning is JSON-owned (scheduler.json episodeSynthesis /
   // sleepConsolidation / arcFormation) — no hardcoded cadences or windows.
@@ -587,6 +613,7 @@ async function main(): Promise<void> {
   const episodicSynthesizer = new EpisodicSynthesizer(episodicStore, sessionManager, {
     transcriptMessageLimit: schedulerConfig.episodeSynthesis.transcriptMessageLimit,
     maxEpisodesPerRun: schedulerConfig.episodeSynthesis.maxEpisodesPerRun,
+    maxPriorCandidates: schedulerConfig.episodeSynthesis.maxPriorCandidates,
     gapSplitMinutes: schedulerConfig.episodeSynthesis.gapSplitMinutes,
     maxEntriesPerEpisode: schedulerConfig.episodeSynthesis.maxEntriesPerEpisode,
     minConversationalEntries: schedulerConfig.episodeSynthesis.minConversationalEntries,
@@ -616,6 +643,8 @@ async function main(): Promise<void> {
     adjacencyGapMs: schedulerConfig.sleepConsolidation.adjacencyGapMinutes * MINUTE_MS,
     maxRefinementsPerRun: schedulerConfig.sleepConsolidation.maxRefinementsPerRun,
     maxConsolidationsPerRun: schedulerConfig.sleepConsolidation.maxConsolidationsPerRun,
+    transcriptMessageLimit: schedulerConfig.sleepConsolidation.transcriptMessageLimit,
+    maxTranscriptCharsPerEpisode: schedulerConfig.sleepConsolidation.maxTranscriptCharsPerEpisode,
     personaPreamble,
     // Fail-closed consolidation failures are typed events, never silence.
     onConsolidationFailure: (failure) => {
@@ -682,6 +711,10 @@ async function main(): Promise<void> {
     memoryStore,
     episodicStore,
     contactStore,
+    // Same config authority the MemoryWriter and retrieval faculty resolve
+    // from, so the action=timeline tool path honors operator-set timeline
+    // knobs instead of compiled defaults (zet.2).
+    memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
   });
   log.info('Context feedback runtime deferred (Phase VI): background context-scoring LLM calls disabled');
 
@@ -796,6 +829,8 @@ async function main(): Promise<void> {
     documentIngest: {
       personalFilesDir: pathSnapshot.workspaceRoot,
       intakeScreening,
+      // Owner-file backed ingest caps (zet.7).
+      limits: resolveDocumentIngestLimits(config),
     },
   });
   gateway.onApiChatCompletion((params) => apiBackend.handleChatCompletion(params));
@@ -1269,6 +1304,7 @@ async function main(): Promise<void> {
       memoryMaintenanceStore: memoryStore,
       episodicDiagnosticsStore: episodicStore,
       postTurnActions,
+      backgroundMaintenance,
       episodicProcessingRestWindow: schedulerConfig.episodicProcessing,
       driftVelocityReview,
       secondArrowReview,

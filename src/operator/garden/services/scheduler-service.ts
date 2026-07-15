@@ -4,7 +4,7 @@ import { isRecord } from '../../../shared/utils/types.js';
 // Provides task CRUD and reflection template management.
 
 import type { Scheduler } from '../../../core/scheduler/scheduler.js';
-import { AMBIENT_PRESENCE_TASK_ID } from '../../../core/scheduler/ambient-presence.js';
+import { BACKGROUND_MAINTENANCE_TASK_ID } from '../../../core/scheduler/background-maintenance.js';
 import {
   HeartbeatPolicyStore,
   resolveConsolidatedReflectionTemplateId,
@@ -18,6 +18,7 @@ import type {
   RecurringCadence,
   RecurringCadenceTimezone,
   ScheduledTask,
+  ScheduledTaskOperation,
   TaskType,
 } from '../../../core/scheduler/types.js';
 import type { WakeWindowSnapshot } from '../../../core/scheduler/temporal-wakeup.js';
@@ -227,6 +228,9 @@ function readCadenceFromTask(task: ScheduledTask): AdminTaskCadence | undefined 
 export interface AdminScheduledTask {
   id: string;
   name: string;
+  description?: string;
+  scheduleSource?: string;
+  operations?: ScheduledTaskOperation[];
   type: TaskType;
   intervalMs: number;
   runAt?: number;
@@ -258,6 +262,9 @@ function toAdminTask(task: ScheduledTask): AdminScheduledTask {
   return {
     id: task.id,
     name: task.name,
+    description: task.description,
+    scheduleSource: task.scheduleSource,
+    operations: task.operations?.map(operation => ({ ...operation })),
     type: task.type,
     intervalMs: task.intervalMs,
     runAt: task.runAt,
@@ -278,7 +285,13 @@ export class AdminSchedulerService {
 
   constructor(
     private readonly scheduler: Scheduler,
-    private readonly dataDir: string,
+    /**
+     * Companion data root. Both the heartbeat policy and the reflection-
+     * metacognition journal are per-companion state and must resolve under
+     * companionDataDir so they match the runtime and never collide across a
+     * multi-companion fleet (psfn-framework-dnll.4).
+     */
+    private readonly companionDataDir: string,
     /**
      * Live habit wake-window snapshot provider (E7.2). Recomputes the effective
      * morning wake slot + data sufficiency on demand so the Garden read surface
@@ -287,9 +300,9 @@ export class AdminSchedulerService {
      */
     private readonly wakeWindowProvider?: (() => WakeWindowSnapshot | null) | null,
   ) {
-    this.policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(dataDir));
+    this.policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(companionDataDir));
     this.reflectionMetacognitionJournal = new ReflectionMetacognitionJournalStore(
-      resolveReflectionMetacognitionJournalPath(dataDir),
+      resolveReflectionMetacognitionJournalPath(companionDataDir),
     );
   }
 
@@ -384,6 +397,14 @@ export class AdminSchedulerService {
     const task = this.scheduler.getTask(id);
     if (!task) {
       return { ok: false, message: `Task "${id}" not found` };
+    }
+    if (task.scheduleSource) {
+      return {
+        ok: false,
+        message:
+          `Task "${id}" is read-only because its schedule is owned by ${task.scheduleSource}; `
+          + 'edit the canonical owner in Settings and restart to apply it',
+      };
     }
     const previousCadence = readCadenceFromTask(task) ?? { kind: 'relative' };
 
@@ -552,12 +573,19 @@ export class AdminSchedulerService {
     if (!task) {
       return { ok: false, message: `Task "${id}" not found` };
     }
+    if (task.scheduleSource) {
+      return {
+        ok: false,
+        message:
+          `Task "${id}" is read-only because its schedule is owned by ${task.scheduleSource}; `
+          + 'edit the canonical owner in Settings and restart to apply it',
+      };
+    }
 
     // Protect core system tasks
     const protectedTasks = new Set([
       'heartbeat',
-      AMBIENT_PRESENCE_TASK_ID,
-      'salience-decay',
+      BACKGROUND_MAINTENANCE_TASK_ID,
       'maintenance',
     ]);
     if (protectedTasks.has(id)) {

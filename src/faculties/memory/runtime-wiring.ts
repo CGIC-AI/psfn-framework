@@ -1,5 +1,6 @@
 import type { ToolRegistrar } from '../../core/agent/tool-registrar.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
+import type { MemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
 import type { MemoryStorePort } from './memory-store-port.js';
 import type { EpisodicTimelineStore } from './retrieval/episodic.js';
 import type { MemoryWriter } from './writer.js';
@@ -20,6 +21,12 @@ export function registerMemoryTools(
     memoryStore: MemoryStorePort;
     episodicStore?: EpisodicTimelineStore | null;
     contactStore?: ContactStorePort | null;
+    /**
+     * Live retrieval policy authority (zet.2) so the `action=timeline` tool
+     * path applies operator-set timeline knobs. A resolver is preferred so
+     * late-bound runtime config edits are honored per call.
+     */
+    memoryRetrievalPolicy?: MemoryRetrievalPolicy | (() => MemoryRetrievalPolicy | undefined);
   },
 ): void {
   const sharedBackgroundProvider = options.contactStore
@@ -31,6 +38,9 @@ export function registerMemoryTools(
   target.registerTool(createMemoryTool(options.writer, options.memoryStore, {
     episodicStore: options.episodicStore ?? null,
     sharedBackgroundProvider,
+    ...(options.memoryRetrievalPolicy !== undefined
+      ? { memoryRetrievalPolicy: options.memoryRetrievalPolicy }
+      : {}),
   }), 'core');
   target.registerTool(createScratchpadTool(options.memoryStore), 'core');
 }

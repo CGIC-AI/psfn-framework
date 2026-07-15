@@ -18,6 +18,7 @@ import {
   saveProvidersConfig,
 } from './providers-config.js';
 import {
+  DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
   SCHEDULER_FILE_NAME,
   loadSchedulerConfig,
   saveSchedulerConfig,
@@ -287,7 +288,16 @@ describe('subsystem config round-trip', () => {
     const expected = {
       tickIntervalMs: 1_500,
       heartbeatIntervalMs: 9_000,
-      salienceDecayIntervalMs: 12_000,
+      backgroundMaintenance: {
+        intervalMs: 12_000,
+        ambientPresence: {
+          minIdleMinutes: 180,
+          minNoteIntervalMinutes: 360,
+        },
+        concernGrooming: {
+          maxActiveConcerns: 7,
+        },
+      },
       artifactLifecycle: {
         scratchpadRetentionDays: 14,
         generatedMediaRetentionDays: 30,
@@ -332,6 +342,7 @@ describe('subsystem config round-trip', () => {
         minConversationalEntries: 2,
         minSingleEntryChars: 120,
         topicSegmentationEnabled: false,
+        maxPriorCandidates: 24,
       },
       sleepConsolidation: {
         reviewWindowDays: 60,
@@ -339,6 +350,8 @@ describe('subsystem config round-trip', () => {
         adjacencyGapMinutes: 45,
         maxRefinementsPerRun: 8,
         maxConsolidationsPerRun: 6,
+        transcriptMessageLimit: 200,
+        maxTranscriptCharsPerEpisode: 6000,
       },
       arcFormation: {
         passIntervalDays: 6,
@@ -348,7 +361,6 @@ describe('subsystem config round-trip', () => {
         maxEpisodesPerRun: 60,
       },
       socialGraphBuilder: {
-        intervalMs: 1_800_000,
         coPresenceMinSessions: 3,
         coPresenceWindowMinutes: 1440,
         scanMemoryLimit: 500,
@@ -432,6 +444,7 @@ describe('subsystem config round-trip', () => {
           relevanceFloor: 0.05,
         },
       },
+      icpAutonomy: DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
     };
 
     expect(saveSchedulerConfig(dataDir, expected)).toEqual(expected);

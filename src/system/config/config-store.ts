@@ -98,7 +98,18 @@ export interface ConfigStorePort {
 }
 
 export interface OwnerFileConfigStoreOptions {
+  /** System-owned config root (systemDataDir). Roots the cluster-global owner files. */
   dataDir: string;
+  /**
+   * Companion-owned config root (companionDataDir). Roots the per-companion
+   * owner files — capability-tier.json (bead dnll.2) and scheduler.json (bead
+   * dnll.3). When
+   * omitted it resolves to {@link OwnerFileConfigStoreOptions.dataDir}, matching
+   * the legacy shared-root layout where systemDataDir === companionDataDir. This
+   * mirrors `resolveConfiguredCompanionDataDir` and is NOT a config fallback:
+   * the underlying loader still fails closed on a missing per-companion file.
+   */
+  companionDataDir?: string;
   seedDir?: string;
   defaultContextWindow?: number;
 }
@@ -111,6 +122,9 @@ export function createOwnerFileConfigStore(
     ...loadOptions,
     defaultContextWindow: options.defaultContextWindow,
   };
+  // capability-tier.json (dnll.2) and scheduler.json (dnll.3) are per-companion
+  // owner files; route them at the companion root, not the shared system root.
+  const companionDataDir = options.companionDataDir ?? options.dataDir;
 
   return {
     loadRuntimeSettings: () => loadSettings(options.dataDir, loadOptions),
@@ -119,10 +133,10 @@ export function createOwnerFileConfigStore(
     saveModels: (nextConfig) => saveModelsConfig(options.dataDir, nextConfig, modelLoadOptions),
     loadProviders: () => loadProvidersConfig(options.dataDir, loadOptions),
     saveProviders: (nextConfig) => saveProvidersConfig(options.dataDir, nextConfig),
-    loadScheduler: () => loadSchedulerConfig(options.dataDir, loadOptions),
-    saveScheduler: (nextConfig) => saveSchedulerConfig(options.dataDir, nextConfig),
-    loadCapabilityTier: () => loadCapabilityTierConfig(options.dataDir, loadOptions),
-    saveCapabilityTier: (nextConfig) => saveCapabilityTierConfig(options.dataDir, nextConfig),
+    loadScheduler: () => loadSchedulerConfig(companionDataDir, loadOptions),
+    saveScheduler: (nextConfig) => saveSchedulerConfig(companionDataDir, nextConfig),
+    loadCapabilityTier: () => loadCapabilityTierConfig(companionDataDir, loadOptions),
+    saveCapabilityTier: (nextConfig) => saveCapabilityTierConfig(companionDataDir, nextConfig),
     loadChargePolicy: () => loadChargePolicyConfig(options.dataDir, loadOptions),
     saveChargePolicy: (nextConfig) => saveChargePolicyConfig(options.dataDir, nextConfig),
     loadChannels: (env, overrides) => loadRuntimeChannelsConfig(
@@ -154,9 +168,9 @@ export function createOwnerFileConfigStore(
       seedDir: options.seedDir,
     }),
     loadStartupTrustPolicy: () => loadStartupTrustPolicyOwnerFile(options.dataDir, options.seedDir),
-    loadStartupScheduler: () => loadStartupSchedulerOwnerFile(options.dataDir, options.seedDir),
+    loadStartupScheduler: () => loadStartupSchedulerOwnerFile(companionDataDir, options.seedDir),
     loadStartupCapabilityTier: () => loadStartupCapabilityTierOwnerFile(
-      options.dataDir,
+      companionDataDir,
       options.seedDir,
     ),
     loadStartupChargePolicy: () => loadStartupChargePolicyOwnerFile(

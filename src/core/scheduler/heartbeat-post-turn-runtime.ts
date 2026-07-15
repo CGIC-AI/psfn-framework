@@ -47,9 +47,9 @@ import {
 } from './heartbeat-post-turn-runtime/scheduler-lanes.js';
 
 export {
-  CONTACT_TRUST_DRIFT_REVIEW_TASK_ID,
-  DRIFT_VELOCITY_REVIEW_TASK_ID,
-  SLEEPTIME_REST_WINDOW_TASK_ID,
+  CONTACT_TRUST_DRIFT_REVIEW_OPERATION_ID,
+  DRIFT_VELOCITY_REVIEW_OPERATION_ID,
+  SLEEPTIME_REST_WINDOW_OPERATION_ID,
 } from './heartbeat-post-turn-runtime/scheduler-lanes.js';
 
 const log = createComponentLogger('HeartbeatPostTurn');

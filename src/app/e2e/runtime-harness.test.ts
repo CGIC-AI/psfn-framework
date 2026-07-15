@@ -48,10 +48,14 @@ describe('createIsolatedE2ERuntime', () => {
       expect(runtime.config.dataDir).toBe(runtime.systemDataDir);
       expect(runtime.systemDataDir).not.toBe(ambientDataDir);
       expect(runtime.companionDataDir).not.toBe(ambientDataDir);
-      expect(existsSync(join(runtime.systemDataDir, 'scheduler.json'))).toBe(true);
+      // scheduler.json is a per-companion owner file (dnll.3): the harness copies
+      // it to the isolated companion root, not the shared system root or the
+      // ambient invalid DATA_DIR.
+      expect(existsSync(join(runtime.companionDataDir, 'scheduler.json'))).toBe(true);
+      expect(existsSync(join(runtime.systemDataDir, 'scheduler.json'))).toBe(false);
 
       const scheduler = JSON.parse(
-        readFileSync(join(runtime.systemDataDir, 'scheduler.json'), 'utf8'),
+        readFileSync(join(runtime.companionDataDir, 'scheduler.json'), 'utf8'),
       ) as { artifactLifecycle?: unknown };
       expect(typeof scheduler.artifactLifecycle).toBe('object');
     } finally {

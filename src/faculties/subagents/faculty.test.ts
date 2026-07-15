@@ -195,6 +195,38 @@ describe('SubagentFaculty', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  // Wiring proof (bead zet.7): an operator-set subagentMaxConcurrent in the
+  // owner file reaches the live concurrency cap. Composition passes the full
+  // SubstrateConfig as deps.config, and the spawn() concurrency_limit block is
+  // covered by the existing behavior tests against the same resolved field.
+  it('resolves the concurrency cap from owner-file settings (zet.7)', () => {
+    const base = {
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      parentSystemPrompt: 'test prompt',
+    };
+
+    const fromSettings = new SubagentFaculty({
+      ...base,
+      config: { ...TEST_CONFIG, subagentMaxConcurrent: 3 },
+    });
+    expect(fromSettings.maxConcurrentTasks).toBe(3);
+
+    const explicitOverride = new SubagentFaculty({
+      ...base,
+      config: { ...TEST_CONFIG, subagentMaxConcurrent: 9 },
+      maxConcurrent: 2,
+    });
+    expect(explicitOverride.maxConcurrentTasks).toBe(2);
+
+    // Compiled default preserved exactly when the setting is absent.
+    const compiledDefault = new SubagentFaculty({ ...base, config: TEST_CONFIG });
+    expect(compiledDefault.maxConcurrentTasks).toBe(8);
+  });
+
   it('executes bounded subagent tasks with an independent registry and lifecycle', async () => {
     mockSubagentContent = 'task completed';
     const faculty = new SubagentFaculty({

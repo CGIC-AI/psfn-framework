@@ -55,6 +55,13 @@ describe('start-gateway-agent launcher supervision', () => {
         '',
         'provision_companion_fleet',
         '',
+        'echo "[${MODE_LABEL}] migrating legacy scheduler owner if needed..."',
+        'if [ -x "./node_modules/.bin/tsx" ]; then',
+        '  ./node_modules/.bin/tsx src/app/maintenance/migrate-scheduler-owner.ts --apply',
+        'else',
+        '  npm run --silent migrate:scheduler-owner -- --apply',
+        'fi',
+        '',
         'echo "[${MODE_LABEL}] verifying startup owner files..."',
       ].join('\n'),
     );
@@ -108,6 +115,7 @@ describe('start-gateway-agent launcher supervision', () => {
       '  scripts/provision-companion-fleet.ts)',
       `    printf 'provisioned\\n' >> '${markerPath}'`,
       '    ;;',
+      '  src/app/maintenance/migrate-scheduler-owner.ts) exit 0 ;;',
       '  scripts/verify-startup-owner-files.ts) exit 0 ;;',
       '  *) sleep 30 ;;',
       'esac',
@@ -169,6 +177,7 @@ describe('start-gateway-agent launcher supervision', () => {
       [
         '#!/usr/bin/env bash',
         'case "$1" in',
+        '  src/app/maintenance/migrate-scheduler-owner.ts) exit 0 ;;',
         '  scripts/verify-startup-owner-files.ts) exit 0 ;;',
         '  scripts/resolve-single-companion-auth.ts) printf "v1.agent-proof\\tv1.worker-proof\\n"; exit 0 ;;',
         '  *) sleep 30 ;;',
@@ -319,6 +328,7 @@ describe('start-gateway-agent launcher supervision', () => {
       [
         '#!/usr/bin/env bash',
         'case "$1" in',
+        '  src/app/maintenance/migrate-scheduler-owner.ts) exit 0 ;;',
         '  scripts/verify-startup-owner-files.ts) exit 0 ;;',
         `  scripts/resolve-single-companion-auth.ts) printf "v1.${'a'.repeat(64)}\\tv1.${'b'.repeat(64)}\\n"; exit 0 ;;`,
         '  src/app/gateway/main.ts)',

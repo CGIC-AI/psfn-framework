@@ -27,6 +27,7 @@ import {
   screenDocumentIngestSummary,
   toDocumentAttachmentCandidate,
   type DocumentAttachmentCandidate,
+  type DocumentIngestLimits,
   type DocumentResourceFetch,
 } from '../../faculties/file-ingest/index.js';
 import {
@@ -97,6 +98,8 @@ interface TelegramAdapterOptions {
    * URL-policy-checked, byte-capped fetch.
    */
   remoteFetch?: DocumentResourceFetch;
+  /** Owner-file backed document ingest caps (zet.7); absent → compiled defaults. */
+  documentIngestLimits?: DocumentIngestLimits;
 }
 
 interface TelegramApiResponse<T> {
@@ -319,6 +322,7 @@ export class TelegramAdapter implements ChannelAdapterPort {
   private personalFilesDir: string | null;
   private intakeScreening: IntakeScreeningService | null;
   private remoteFetch: DocumentResourceFetch;
+  private documentIngestLimits: DocumentIngestLimits | null;
   private consecutivePollFailures = 0;
   private attemptedPollingConflictRecovery = false;
   private statusUnsubscribers: Array<() => void> = [];
@@ -339,6 +343,7 @@ export class TelegramAdapter implements ChannelAdapterPort {
     this.personalFilesDir = options.personalFilesDir ?? null;
     this.intakeScreening = options.intakeScreening ?? null;
     this.remoteFetch = options.remoteFetch ?? fetchRemoteResource;
+    this.documentIngestLimits = options.documentIngestLimits ?? null;
 
     for (const entry of telegramConfig.allowedUsers) {
       const normalized = normalizeAllowlistEntry(entry);
@@ -1557,6 +1562,8 @@ export class TelegramAdapter implements ChannelAdapterPort {
         authorId: input.message.from ? String(input.message.from.id) : 'unknown',
         createdAt: new Date(input.message.date * 1000),
         fetchResource: this.createDocumentFetchPort(),
+        // Owner-file backed ingest caps (zet.7).
+        ...(this.documentIngestLimits ? { limits: this.documentIngestLimits } : {}),
       });
       let intakeEnvelopes: IntakeEnvelopeSnapshot[] = [];
       // htm9.2: screen accepted parsed text before it lands in

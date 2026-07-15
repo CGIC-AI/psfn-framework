@@ -89,7 +89,6 @@ export function validateObsidianCliPathSetting(value: string): string {
 export interface SettingsDomainSplit {
   runtime: EditableSettings;
   models: EditableSettings;
-  salienceDecayIntervalMs?: number;
   capabilityTier?: CapabilityTier;
   legacyKeys: string[];
 }
@@ -137,8 +136,11 @@ export interface EditableSettings {
   sessionRestartBehavior?: SessionRestartBehavior;
   memoryRetrievalLimit?: number;
   extractionInterval?: number;
+  /** Retired owner key; accepted only so validation can reject it explicitly. */
   salienceDecayIntervalMs?: number;
-  /** Removed runtime mirror; scheduler.json > salienceDecayIntervalMs is canonical. */
+  /** Garden projection owned by scheduler.json > backgroundMaintenance.intervalMs. */
+  backgroundMaintenanceIntervalMs?: number;
+  /** Removed runtime mirror; scheduler.json is canonical. */
   maintenanceIntervalMs?: number;
   extractionThresholdPct?: number;
   compactionThresholdPct?: number;
@@ -167,6 +169,8 @@ export interface EditableSettings {
   analysisWorkbenchMaxTokens?: number;
   analysisWorkbenchMaxWallTimeMs?: number;
   analysisWorkbenchMaxSubQueries?: number;
+  analysisWorkbenchExecutionTimeoutMs?: number;
+  analysisWorkbenchOutputTruncation?: number;
   retryMaxAttempts?: number;
   retryBaseDelayMs?: number;
   openRouterProviderOrder?: string[];
@@ -192,6 +196,21 @@ export interface EditableSettings {
   sessionTailCache?: SessionTailCacheSettings;
   wyomingShardRouting?: SubstrateConfig['wyomingShardRouting'];
   shardToolsets?: SubstrateConfig['shardToolsets'];
+  // Tier 2 tuning knobs (zet.7): compositional-cognition concurrency limits
+  subagentMaxConcurrent?: number;
+  shardMaxConcurrent?: number;
+  shardHeartbeatStaleAfterMs?: number;
+  shardHeartbeatDisconnectAfterMs?: number;
+  // Tier 2 tuning knobs (zet.7): document attachment ingest caps
+  documentIngestMaxBytes?: number;
+  documentIngestTextMaxBytes?: number;
+  documentIngestPromptChars?: number;
+  documentIngestSidecarChars?: number;
+  // Tier 2 tuning knobs (zet.7): image generation polling limits
+  imageFalTimeoutMs?: number;
+  imageFalPollIntervalMs?: number;
+  imageComfyTimeoutMs?: number;
+  imageComfyPollIntervalMs?: number;
   webFetchAllowHttp?: boolean;
   webFetchDomainAllowlist?: string[];
   webFetchAllowInternalNetwork?: boolean;
@@ -230,6 +249,9 @@ export interface EditableSettings {
   deepgramListenEndpoint?: string;
   elevenLabsModelId?: string;
   elevenLabsEndpointBase?: string;
+  voiceSessionTimeoutMs?: number;
+  voiceMaxFrameBytes?: number;
+  voiceMaxPendingFrames?: number;
 
   // Channel configuration (non-secret — bot tokens stay in .env)
   discordTriggerWords?: string;
@@ -277,7 +299,6 @@ export const RUNTIME_SETTINGS_KEYS = [
   'continuityMessageLimit',
   'sessionRestartBehavior',
   'extractionInterval',
-  'salienceDecayIntervalMs',
   'extractionThresholdPct',
   'compactionThresholdPct',
   'observationMaskingWindow',
@@ -305,6 +326,8 @@ export const RUNTIME_SETTINGS_KEYS = [
   'analysisWorkbenchMaxTokens',
   'analysisWorkbenchMaxWallTimeMs',
   'analysisWorkbenchMaxSubQueries',
+  'analysisWorkbenchExecutionTimeoutMs',
+  'analysisWorkbenchOutputTruncation',
   'retryMaxAttempts',
   'retryBaseDelayMs',
   'openRouterProviderOrder',
@@ -360,6 +383,9 @@ export const RUNTIME_SETTINGS_KEYS = [
   'deepgramListenEndpoint',
   'elevenLabsModelId',
   'elevenLabsEndpointBase',
+  'voiceSessionTimeoutMs',
+  'voiceMaxFrameBytes',
+  'voiceMaxPendingFrames',
   // Channels
   'discordTriggerWords',
   'discordTriggerReactions',
@@ -368,6 +394,19 @@ export const RUNTIME_SETTINGS_KEYS = [
   'telegramAuthorizedUsers',
   'wyomingShardRouting',
   'shardToolsets',
+  // Tier 2 tuning knobs (zet.7)
+  'subagentMaxConcurrent',
+  'shardMaxConcurrent',
+  'shardHeartbeatStaleAfterMs',
+  'shardHeartbeatDisconnectAfterMs',
+  'documentIngestMaxBytes',
+  'documentIngestTextMaxBytes',
+  'documentIngestPromptChars',
+  'documentIngestSidecarChars',
+  'imageFalTimeoutMs',
+  'imageFalPollIntervalMs',
+  'imageComfyTimeoutMs',
+  'imageComfyPollIntervalMs',
   // Obsidian vault
   'obsidianVaultName',
   'obsidianCliPath',

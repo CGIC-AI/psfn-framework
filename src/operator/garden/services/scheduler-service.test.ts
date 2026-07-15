@@ -28,6 +28,9 @@ function makeTask(overrides: Partial<ScheduledTask> & { id: string; name: string
   if (overrides.lastError !== undefined) task.lastError = overrides.lastError;
   if (overrides.lastErrorAt !== undefined) task.lastErrorAt = overrides.lastErrorAt;
   if (overrides.lastDeniedReason !== undefined) task.lastDeniedReason = overrides.lastDeniedReason;
+  if (overrides.description !== undefined) task.description = overrides.description;
+  if (overrides.scheduleSource !== undefined) task.scheduleSource = overrides.scheduleSource;
+  if (overrides.operations !== undefined) task.operations = overrides.operations;
   return task;
 }
 
@@ -206,6 +209,35 @@ describe('AdminSchedulerService', () => {
     });
   });
 
+  it('makes owner-file-backed tasks fully read-only in the runtime scheduler surface', () => {
+    const { scheduler, tasks } = createSchedulerStub([
+      makeTask({
+        id: 'owner-backed-probe',
+        name: 'Owner-backed Probe',
+        scheduleSource: 'scheduler.json > backgroundMaintenance.intervalMs',
+      }),
+    ]);
+    const service = new AdminSchedulerService(scheduler, tempDir);
+    const expected = {
+      ok: false,
+      message:
+        'Task "owner-backed-probe" is read-only because its schedule is owned by '
+        + 'scheduler.json > backgroundMaintenance.intervalMs; '
+        + 'edit the canonical owner in Settings and restart to apply it',
+    };
+
+    expect(service.updateTask('owner-backed-probe', { intervalMs: 60_000 })).toEqual(expected);
+    expect(service.updateTask('owner-backed-probe', { cadence: { kind: 'relative' } })).toEqual(expected);
+    expect(service.updateTask('owner-backed-probe', { enabled: false })).toEqual(expected);
+    expect(service.updateTask('owner-backed-probe', { name: 'Runtime Alias' })).toEqual(expected);
+    expect(service.removeTask('owner-backed-probe')).toEqual(expected);
+    expect(tasks.get('owner-backed-probe')).toMatchObject({
+      name: 'Owner-backed Probe',
+      intervalMs: 3_600_000,
+      state: 'idle',
+    });
+  });
+
   it('includes scheduler runtime outcome metadata in full data', () => {
     const { scheduler } = createSchedulerStub([
       makeTask({
@@ -227,6 +259,39 @@ describe('AdminSchedulerService', () => {
       lastOutcome: 'failed',
       lastError: 'Task failed during test',
       lastErrorAt: 1_700_000_010_000,
+    });
+  });
+
+  it('exposes the bundled task description, canonical cadence owner, and exact operation manifest', () => {
+    const { scheduler } = createSchedulerStub([
+      makeTask({
+        id: 'background-maintenance',
+        name: 'Bundled Background Maintenance',
+        description: 'Runs only the operations listed here.',
+        scheduleSource: 'scheduler.json > backgroundMaintenance.intervalMs',
+        operations: [
+          {
+            id: 'salience-decay',
+            name: 'Memory Salience Decay',
+            description: 'Apply durable-memory decay.',
+          },
+          {
+            id: 'ambient-presence',
+            name: 'Ambient Presence',
+            description: 'Check quiet-time presence eligibility.',
+          },
+        ],
+      }),
+    ]);
+    const service = new AdminSchedulerService(scheduler, tempDir);
+
+    expect(service.getFullData().tasks[0]).toMatchObject({
+      description: 'Runs only the operations listed here.',
+      scheduleSource: 'scheduler.json > backgroundMaintenance.intervalMs',
+      operations: [
+        { id: 'salience-decay', name: 'Memory Salience Decay' },
+        { id: 'ambient-presence', name: 'Ambient Presence' },
+      ],
     });
   });
 });

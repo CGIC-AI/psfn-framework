@@ -63,7 +63,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   compactionEmotionalSalienceThresholdPct: { sectionId: 'memory', surface: 'advanced' },
   compactionThresholdPct: { sectionId: 'sessions', surface: 'advanced' },
   observationMaskingWindow: { sectionId: 'sessions', surface: 'advanced' },
-  salienceDecayIntervalMs: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
+  backgroundMaintenanceIntervalMs: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   episodicProcessingEnabled: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   episodicProcessingRestWindowStartLocalTime: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
   episodicProcessingRestWindowEndLocalTime: { sectionId: 'sessions', surface: 'custom', editorId: 'scheduler' },
@@ -73,6 +73,10 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   sessionTailCache: { sectionId: 'sessions', surface: 'advanced' },
   activeTimezone: { sectionId: 'sessions', surface: 'advanced' },
   compositionalPolicy: { sectionId: 'compositional', surface: 'advanced' },
+  subagentMaxConcurrent: { sectionId: 'compositional', surface: 'advanced' },
+  shardMaxConcurrent: { sectionId: 'compositional', surface: 'advanced' },
+  shardHeartbeatStaleAfterMs: { sectionId: 'compositional', surface: 'advanced' },
+  shardHeartbeatDisconnectAfterMs: { sectionId: 'compositional', surface: 'advanced' },
   memoryExtractionMinImportance: { sectionId: 'extraction-tuning', surface: 'advanced' },
   memoryExtractionMinConfidence: { sectionId: 'extraction-tuning', surface: 'advanced' },
   memoryExtractionMinNovelty: { sectionId: 'extraction-tuning', surface: 'advanced' },
@@ -109,11 +113,17 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   analysisWorkbenchMaxTokens: { sectionId: 'analysis-workbench', surface: 'advanced' },
   analysisWorkbenchMaxWallTimeMs: { sectionId: 'analysis-workbench', surface: 'advanced' },
   analysisWorkbenchMaxSubQueries: { sectionId: 'analysis-workbench', surface: 'advanced' },
+  analysisWorkbenchExecutionTimeoutMs: { sectionId: 'analysis-workbench', surface: 'advanced' },
+  analysisWorkbenchOutputTruncation: { sectionId: 'analysis-workbench', surface: 'advanced' },
   observerEvalSidecar: { sectionId: 'analysis-workbench', surface: 'advanced' },
   capabilityTier: { sectionId: 'trust', surface: 'custom', editorId: 'capabilities' },
   customTokens: { sectionId: 'trust', surface: 'custom', editorId: 'capabilities' },
   retryMaxAttempts: { sectionId: 'llm', surface: 'advanced' },
   retryBaseDelayMs: { sectionId: 'llm', surface: 'advanced' },
+  documentIngestMaxBytes: { sectionId: 'import', surface: 'advanced' },
+  documentIngestTextMaxBytes: { sectionId: 'import', surface: 'advanced' },
+  documentIngestPromptChars: { sectionId: 'import', surface: 'advanced' },
+  documentIngestSidecarChars: { sectionId: 'import', surface: 'advanced' },
   importProcessingRouteMode: { sectionId: 'import', surface: 'advanced' },
   importProcessingStrictPolicy: { sectionId: 'import', surface: 'advanced' },
   importProcessingLocalEndpointUrl: { sectionId: 'import', surface: 'advanced' },
@@ -140,6 +150,9 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   deepgramListenEndpoint: { sectionId: 'voice', surface: 'advanced' },
   elevenLabsModelId: { sectionId: 'voice', surface: 'advanced' },
   elevenLabsEndpointBase: { sectionId: 'voice', surface: 'advanced' },
+  voiceSessionTimeoutMs: { sectionId: 'voice', surface: 'advanced' },
+  voiceMaxFrameBytes: { sectionId: 'voice', surface: 'advanced' },
+  voiceMaxPendingFrames: { sectionId: 'voice', surface: 'advanced' },
   obsidianVaultName: { sectionId: 'obsidian', surface: 'advanced' },
   obsidianCliPath: { sectionId: 'obsidian', surface: 'advanced' },
   obsidianAutoPublish: { sectionId: 'obsidian', surface: 'advanced' },
@@ -155,6 +168,10 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   chatApiBaseUrl: { sectionId: 'channels', surface: 'advanced' },
   comfyUiBaseUrl: { sectionId: 'channels', surface: 'advanced' },
   imageWorkflows: { sectionId: 'channels', surface: 'advanced' },
+  imageFalTimeoutMs: { sectionId: 'channels', surface: 'advanced' },
+  imageFalPollIntervalMs: { sectionId: 'channels', surface: 'advanced' },
+  imageComfyTimeoutMs: { sectionId: 'channels', surface: 'advanced' },
+  imageComfyPollIntervalMs: { sectionId: 'channels', surface: 'advanced' },
   moaEnabled: { sectionId: 'channels', surface: 'advanced' },
   moaReferenceModels: { sectionId: 'channels', surface: 'advanced' },
   moaAggregatorModel: { sectionId: 'channels', surface: 'advanced' },
@@ -172,6 +189,12 @@ function collectSectionFields(sectionId: GardenSettingsSectionId): string[] {
 function collectCustomEditorFields(editorId: GardenSettingsCustomEditorId): string[] {
   return Object.entries(SETTINGS_GARDEN_FIELD_EXPOSURE)
     .filter(([, exposure]) => 'editorId' in exposure && exposure.editorId === editorId)
+    .map(([fieldKey]) => fieldKey);
+}
+
+function collectAdvancedSectionFields(sectionId: GardenSettingsSectionId): string[] {
+  return Object.entries(SETTINGS_GARDEN_FIELD_EXPOSURE)
+    .filter(([, exposure]) => exposure.sectionId === sectionId && exposure.surface === 'advanced')
     .map(([fieldKey]) => fieldKey);
 }
 
@@ -197,6 +220,40 @@ export const SETTINGS_GARDEN_CUSTOM_EDITOR_FIELDS: Record<GardenSettingsCustomEd
   models: collectCustomEditorFields('models'),
   scheduler: collectCustomEditorFields('scheduler'),
   capabilities: collectCustomEditorFields('capabilities'),
+};
+
+/**
+ * Per-section field keys that the generic Garden "All Fields" advanced editor is
+ * responsible for rendering: only fields whose `surface` is `'advanced'`.
+ *
+ * This deliberately excludes `surface: 'custom'` fields (e.g. `modelCatalog`,
+ * `capabilityTier`, `salienceDecayIntervalMs`, the `episodicProcessing*` slots),
+ * which are owned by dedicated custom editors / owner files and must not be
+ * offered as generic runtime-settings inputs — the runtime settings write path
+ * rejects them with a `wrong_owner` validation error.
+ *
+ * Unlike {@link SETTINGS_GARDEN_SECTION_FIELDS} (which lists every field mapped
+ * to a section regardless of surface), this projection is what lets the advanced
+ * editor surface every advanced field a section owns even when that field is not
+ * yet present in the persisted runtime settings, so admins can discover and edit
+ * settings that are still on their built-in defaults.
+ */
+export const SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS: Record<GardenSettingsSectionId, string[]> = {
+  models: collectAdvancedSectionFields('models'),
+  budget: collectAdvancedSectionFields('budget'),
+  memory: collectAdvancedSectionFields('memory'),
+  sessions: collectAdvancedSectionFields('sessions'),
+  compositional: collectAdvancedSectionFields('compositional'),
+  'extraction-tuning': collectAdvancedSectionFields('extraction-tuning'),
+  profile: collectAdvancedSectionFields('profile'),
+  'analysis-workbench': collectAdvancedSectionFields('analysis-workbench'),
+  trust: collectAdvancedSectionFields('trust'),
+  llm: collectAdvancedSectionFields('llm'),
+  import: collectAdvancedSectionFields('import'),
+  fetch: collectAdvancedSectionFields('fetch'),
+  voice: collectAdvancedSectionFields('voice'),
+  obsidian: collectAdvancedSectionFields('obsidian'),
+  channels: collectAdvancedSectionFields('channels'),
 };
 
 export function listGardenSettingsFieldExposureKeys(): string[] {

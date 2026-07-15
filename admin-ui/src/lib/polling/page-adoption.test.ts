@@ -33,4 +33,11 @@ describe('visibility-aware page adoption', () => {
     expect(routeSource('shards/+page.svelte')).toContain('tickInterval = setInterval(');
     expect(routeSource('telemetry/LazyPageContent.svelte')).toContain('uptimeInterval = setInterval(');
   });
+
+  it('renders owner-backed scheduler tasks as read-only instead of runtime-mutable', () => {
+    const source = routeSource('scheduler/+page.svelte');
+    expect(source).toContain('{#if task.scheduleSource}');
+    expect(source).toContain('Read-only · restart after Settings edits');
+    expect(source).toContain('{#if !task.scheduleSource && !isProtected(task.id)}');
+  });
 });

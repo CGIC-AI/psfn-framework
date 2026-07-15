@@ -60,7 +60,10 @@ import {
   ShardContextPackHelper,
 } from './context-pack.js';
 import { ShardToolSyncHelper } from './tool-sync.js';
+import type { CompressionGuidelineEvolutionPort } from '../../core/session/compression-guideline-evolution.js';
+import { createComponentLogger } from '../../shared/logger.js';
 
+const log = createComponentLogger('ShardManager');
 const DEFAULT_MAX_CONCURRENT = 5;
 const DEFAULT_MAX_TURNS = 1;
 const DEFAULT_SHARD_HEARTBEAT_STALE_AFTER_MS = 60_000;
@@ -146,6 +149,7 @@ export interface ShardManagerDeps {
   artifactReturnPort?: ArtifactReturnPort;
   satellitePresencePort?: SatellitePresencePort;
   foldReviewController?: ShardFoldReviewController | null;
+  compressionGuidelineEvolution?: CompressionGuidelineEvolutionPort | null;
 }
 
 export interface SatelliteDelegationRequest {
@@ -189,13 +193,15 @@ export class ShardManager implements ShardExecutionPort {
 
   constructor(deps: ShardManagerDeps) {
     this.deps = deps;
-    this.maxConcurrent = deps.maxConcurrent ?? DEFAULT_MAX_CONCURRENT;
+    // Owner-file settings (zet.7): explicit deps override wins (tests/embedding),
+    // then the operator's settings.json value, then the compiled default.
+    this.maxConcurrent = deps.maxConcurrent ?? deps.config.shardMaxConcurrent ?? DEFAULT_MAX_CONCURRENT;
     this.heartbeatStaleAfterMs = normalizeHeartbeatStaleAfterMs(
-      deps.heartbeatStaleAfterMs,
+      deps.heartbeatStaleAfterMs ?? deps.config.shardHeartbeatStaleAfterMs,
       DEFAULT_SHARD_HEARTBEAT_STALE_AFTER_MS,
     );
     this.heartbeatDisconnectAfterMs = normalizeHeartbeatDisconnectAfterMs(
-      deps.heartbeatDisconnectAfterMs,
+      deps.heartbeatDisconnectAfterMs ?? deps.config.shardHeartbeatDisconnectAfterMs,
       this.heartbeatStaleAfterMs,
       this.heartbeatStaleAfterMs * DEFAULT_SHARD_HEARTBEAT_DISCONNECT_MULTIPLIER,
     );
@@ -219,6 +225,21 @@ export class ShardManager implements ShardExecutionPort {
       contextPackHelper: this.contextPackHelper,
     });
     this.installAuditHooks();
+  }
+
+  /** Resolved concurrency cap on active shards (owner-file backed, zet.7). */
+  get maxConcurrentShards(): number {
+    return this.maxConcurrent;
+  }
+
+  /** Resolved heartbeat stale threshold in ms (owner-file backed, zet.7). */
+  get heartbeatStaleThresholdMs(): number {
+    return this.heartbeatStaleAfterMs;
+  }
+
+  /** Resolved heartbeat disconnect threshold in ms (owner-file backed, zet.7). */
+  get heartbeatDisconnectThresholdMs(): number {
+    return this.heartbeatDisconnectAfterMs;
   }
 
   async spawn(shardConfig: ShardConfig): Promise<ShardResult> {
@@ -554,6 +575,26 @@ export class ShardManager implements ShardExecutionPort {
         };
 
         const response = await agentLoop.handleMessage(turnMessage);
+        try {
+          await this.deps.compressionGuidelineEvolution?.captureAndReview({
+            sessionManager,
+            message: turnMessage,
+            response,
+          });
+        } catch (error) {
+          log.error('Shard compression-guideline evolution failed', {
+            shardId,
+            channelId,
+            sourceMessageId: turnMessage.id,
+            error: toErrorMessage(error),
+          });
+          this.auditTrail?.append('shard.compression_guideline.review_failed', {
+            shardId,
+            channelId,
+            sourceMessageId: turnMessage.id,
+            error: toErrorMessage(error),
+          });
+        }
         const shardArtifactReturn = this.artifactReturnPort.collectArtifactReturn({
           lineage,
           turnIndex: turn + 1,

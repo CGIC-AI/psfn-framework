@@ -7,6 +7,7 @@ import { Agent, type AgentTool } from '../../boundary/pi-agent/index.js';
 import { Type } from '@sinclair/typebox';
 import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
+import { SessionManager } from '../../core/session/manager.js';
 import { runWithRequestContext } from '../../primitives/llm/request-context.js';
 import {
   getRunChargeSnapshot,
@@ -27,14 +28,25 @@ import type { LLMResponse } from '../../shared/contracts/runtime.js';
 import { createTurnId } from '../../core/turns/id.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 import { resetCompletionHandoffDedupeForTests } from '../../core/agent/completion-handoff.js';
+import { createCompressionGuidelineEvolution } from '../../core/session/compression-guideline-evolution.js';
+import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
+import {
+  resolveCompressionFailureLogPath,
+  resolveCompressionGuidelinePath,
+} from '../../persistence/layout.js';
 
 // ── Mock pi-agent-core Agent ──
 // We mock Agent.prototype.prompt so it doesn't actually call the LLM.
 // Per-test customization via module-level variables.
 
 let mockShardContent = 'shard response';
+let mockShardContents: string[] = [];
 let mockShardDelayMs = 0;
 let mockShardError: Error | null = null;
+
+function nextMockShardContent(): string {
+  return mockShardContents.shift() ?? mockShardContent;
+}
 
 const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async function (this: Agent) {
   recordAgentRunConfig(this);
@@ -42,7 +54,7 @@ const promptSpy = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async f
   if (mockShardDelayMs > 0) await new Promise(r => setTimeout(r, mockShardDelayMs));
   this.state.messages.push({
     role: 'assistant',
-    content: [{ type: 'text' as const, text: mockShardContent }],
+    content: [{ type: 'text' as const, text: nextMockShardContent() }],
     api: '' as any,
     provider: '' as any,
     model: '',
@@ -78,7 +90,7 @@ function restoreDefaultPromptMock(): void {
     if (mockShardDelayMs > 0) await new Promise(r => setTimeout(r, mockShardDelayMs));
     this.state.messages.push({
       role: 'assistant',
-      content: [{ type: 'text' as const, text: mockShardContent }],
+      content: [{ type: 'text' as const, text: nextMockShardContent() }],
       api: '' as any,
       provider: '' as any,
       model: '',
@@ -245,6 +257,7 @@ describe('ShardManager', () => {
     eventBus = new EventBus();
     // Reset per-test mock state
     mockShardContent = 'shard response';
+    mockShardContents = [];
     mockShardDelayMs = 0;
     mockShardError = null;
     promptSpy.mockClear();
@@ -256,6 +269,144 @@ describe('ShardManager', () => {
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
     resetRunChargeRollingWindowForTests();
+  });
+
+  // Wiring proof (bead zet.7): operator-set shard concurrency/heartbeat
+  // settings in the owner file reach the live resolved limits. Composition
+  // passes the full SubstrateConfig as deps.config; spawn-blocking and stale
+  // eviction against these same resolved fields are covered by the existing
+  // behavior tests ("enforces concurrency limit", stale-eviction test).
+  it('resolves concurrency and heartbeat limits from owner-file settings (zet.7)', () => {
+    const base = {
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      parentSystemPrompt: 'test',
+    };
+
+    const fromSettings = new ShardManager({
+      ...base,
+      config: {
+        ...TEST_CONFIG,
+        shardMaxConcurrent: 2,
+        shardHeartbeatStaleAfterMs: 30_000,
+        shardHeartbeatDisconnectAfterMs: 90_000,
+      },
+    });
+    expect(fromSettings.maxConcurrentShards).toBe(2);
+    expect(fromSettings.heartbeatStaleThresholdMs).toBe(30_000);
+    expect(fromSettings.heartbeatDisconnectThresholdMs).toBe(90_000);
+
+    // Explicit deps override wins over the owner-file value.
+    const explicitOverride = new ShardManager({
+      ...base,
+      config: { ...TEST_CONFIG, shardMaxConcurrent: 9 },
+      maxConcurrent: 1,
+    });
+    expect(explicitOverride.maxConcurrentShards).toBe(1);
+
+    // Compiled defaults preserved exactly when the settings are absent:
+    // maxConcurrent 5, stale 60s, disconnect = stale x 3.
+    const compiledDefault = new ShardManager({ ...base, config: TEST_CONFIG });
+    expect(compiledDefault.maxConcurrentShards).toBe(5);
+    expect(compiledDefault.heartbeatStaleThresholdMs).toBe(60_000);
+    expect(compiledDefault.heartbeatDisconnectThresholdMs).toBe(180_000);
+  });
+
+  it('uses the shard-owned compaction trajectory to capture confusion and review once', async () => {
+    const shardConfig: SubstrateConfig = {
+      ...TEST_CONFIG,
+      dataDir: dir,
+      defaultContextWindow: 1_000,
+      modelRoster: {
+        chat: { model: 'test-model', provider: 'test', maxTokens: 512, contextWindow: 1_000 },
+      },
+    };
+    const llmProvider: LLMProviderPort = {
+      stream: vi.fn(async () => ({
+        content: '',
+        toolCalls: [],
+        model: 'test-model',
+        inputTokens: 0,
+        outputTokens: 0,
+        stopReason: 'end_turn',
+      })),
+      complete: vi.fn(async (request) => ({
+        content: request.correlation?.purpose === 'session.compression_guideline.update'
+          ? '{"updatedGuideline":"Preserve task lineage and the active thread explicitly."}'
+          : 'Summary of the pre-shard trajectory.',
+        toolCalls: [],
+        model: 'test-model',
+        inputTokens: 0,
+        outputTokens: 0,
+        stopReason: 'end_turn',
+      })),
+    };
+    const eligibilityGate = createEligibilityGate(() => ({
+      getTier: () => 'autonomous',
+      getGrantedTokens: () => new Set(['memory.write'] as const),
+      has: token => token === 'memory.write',
+    }));
+    const trajectorySeeder = new SessionManager(sessionStore, shardConfig, eventBus);
+    let seeded = false;
+    eventBus.on('agent.turn.start', ({ message }) => {
+      if (seeded || !message.channelId.startsWith('shard:')) return;
+      seeded = true;
+      for (let index = 0; index < 12; index += 1) {
+        trajectorySeeder.recordUserMessage(
+          message.channelId,
+          `Original shard evidence ${index} ${'A'.repeat(400)}`,
+          'user-1',
+          'User',
+        );
+        trajectorySeeder.recordAssistantMessage(
+          message.channelId,
+          `Shard analysis ${index} ${'B'.repeat(400)}`,
+        );
+      }
+    });
+    mockShardContents = [
+      'Initial shard answer.',
+      'Which thread are we on?',
+      'Could you remind me what we were discussing?',
+    ];
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider,
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: shardConfig,
+      parentSystemPrompt: 'Test shard prompt',
+      compressionGuidelineEvolution: createCompressionGuidelineEvolution({
+        eligibilityGate,
+        llmProvider,
+      }),
+    });
+
+    await manager.spawn({
+      name: 'trajectory-review',
+      task: 'Carry a long analysis thread.',
+      maxTurns: 3,
+    });
+
+    const failures = readFileSync(resolveCompressionFailureLogPath(dir), 'utf8')
+      .trim()
+      .split('\n')
+      .map(line => JSON.parse(line) as { channelId: string; originalContext: string });
+    expect(failures).toHaveLength(2);
+    expect(failures.every(failure => failure.channelId.startsWith('shard:'))).toBe(true);
+    expect(failures[0]?.originalContext).toContain('Original shard evidence');
+    expect(JSON.parse(readFileSync(resolveCompressionGuidelinePath(dir), 'utf8'))).toMatchObject({
+      version: 2,
+      guideline: 'Preserve task lineage and the active thread explicitly.',
+    });
+    expect(llmProvider.complete).toHaveBeenCalledTimes(3);
+    expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([request]) => request.correlation?.purpose === 'session.compression_guideline.update',
+    )).toHaveLength(1);
   });
 
   it('spawns a shard and returns result', async () => {

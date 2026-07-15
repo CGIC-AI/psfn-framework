@@ -850,6 +850,152 @@ describe('tool-call-scheduler', () => {
     });
   });
 
+  it('reprompts an unknown tool name with a corrective result and telemetry', async () => {
+    const memory = makeTool(
+      'memory',
+      async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} }),
+      { concurrency: makeConcurrencyMeta('exclusive') },
+    );
+    const telemetry = vi.fn();
+
+    const result = await executeToolCallsWithScheduler(
+      [memory],
+      makeAssistantMessage(['memroy']),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1, onTelemetry: telemetry },
+    );
+
+    expect(result.toolResults).toHaveLength(1);
+    const message = result.toolResults[0] as ToolResultMessage;
+    expect(message.isError).toBe(true);
+    expect(message.content[0]?.text).toContain('"memroy" is not an available tool.');
+    expect(message.content[0]?.text).toContain('Did you mean "memory"?');
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.correction.reprompt',
+      expect.objectContaining({
+        toolName: 'memroy',
+        defectClass: 'unknown_tool',
+        suggestedTool: 'memory',
+      }),
+    );
+  });
+
+  it('reprompts a retired first-party tool alias toward its canonical replacement', async () => {
+    const fs = makeTool(
+      'fs',
+      async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} }),
+      { concurrency: makeConcurrencyMeta('exclusive') },
+    );
+    const telemetry = vi.fn();
+
+    const result = await executeToolCallsWithScheduler(
+      [fs],
+      makeAssistantMessage(['fs_read']),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1, onTelemetry: telemetry },
+    );
+
+    const message = result.toolResults[0] as ToolResultMessage;
+    expect(message.isError).toBe(true);
+    expect(message.content[0]?.text).toContain('Call "fs" with action="read"');
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.correction.reprompt',
+      expect.objectContaining({ defectClass: 'unknown_tool', suggestedTool: 'fs' }),
+    );
+  });
+
+  it('reprompts malformed non-object arguments with a corrective result and telemetry', async () => {
+    const execute = vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} }));
+    const memory = makeTool('memory', execute, { concurrency: makeConcurrencyMeta('exclusive') });
+    const telemetry = vi.fn();
+
+    const assistantMessage = {
+      role: 'assistant',
+      content: [{ type: 'toolCall', id: 'call-1', name: 'memory', arguments: '"broken json' }],
+      stopReason: 'stop',
+    };
+
+    const result = await executeToolCallsWithScheduler(
+      [memory],
+      assistantMessage,
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1, onTelemetry: telemetry },
+    );
+
+    const message = result.toolResults[0] as ToolResultMessage;
+    expect(execute).not.toHaveBeenCalled();
+    expect(message.isError).toBe(true);
+    expect(message.content[0]?.text).toContain('malformed arguments (a JSON string)');
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.correction.reprompt',
+      expect.objectContaining({ toolName: 'memory', defectClass: 'malformed_arguments' }),
+    );
+  });
+
+  it('reprompts schema-invalid arguments and preserves the validation detail', async () => {
+    const execute = vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }], details: {} }));
+    const memory = makeTool('memory', execute, { concurrency: makeConcurrencyMeta('exclusive') });
+    memory.parameters = Type.Object({ action: Type.Literal('write'), content: Type.String() });
+    const telemetry = vi.fn();
+
+    const result = await executeToolCallsWithScheduler(
+      [memory],
+      makeAssistantToolCalls([{ name: 'memory', arguments: { action: 'write' } }]),
+      undefined,
+      { stream: { push: () => undefined } },
+      { maxParallelToolCalls: 1, onTelemetry: telemetry },
+    );
+
+    const message = result.toolResults[0] as ToolResultMessage;
+    expect(execute).not.toHaveBeenCalled();
+    expect(message.isError).toBe(true);
+    expect(message.content[0]?.text).toContain('Validation failed for tool "memory":');
+    expect(message.content[0]?.text).toContain('call "memory" again with a complete JSON object');
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.correction.reprompt',
+      expect.objectContaining({ toolName: 'memory', defectClass: 'schema_invalid' }),
+    );
+  });
+
+  it('emits recovered telemetry when a reprompted tool succeeds later in the same loop', async () => {
+    const execute = vi.fn(async (_id: string, params: { action: string; content?: string }) => {
+      if (params.action === 'write' && !params.content) {
+        throw new Error('unreachable: schema blocks this');
+      }
+      return { content: [{ type: 'text', text: 'written' }], details: {} };
+    });
+    const memory = makeTool('memory', execute, { concurrency: makeConcurrencyMeta('exclusive') });
+    memory.parameters = Type.Object({ action: Type.Literal('write'), content: Type.String() });
+    const guard = createToolCallExecutionGuard();
+    const telemetry = vi.fn();
+    const options = { maxParallelToolCalls: 1, guard, onTelemetry: telemetry };
+
+    const failed = await executeToolCallsWithScheduler(
+      [memory],
+      makeAssistantToolCalls([{ name: 'memory', arguments: { action: 'write' } }]),
+      undefined,
+      { stream: { push: () => undefined } },
+      options,
+    );
+    const recovered = await executeToolCallsWithScheduler(
+      [memory],
+      makeAssistantToolCalls([{ name: 'memory', arguments: { action: 'write', content: 'body' } }]),
+      undefined,
+      { stream: { push: () => undefined } },
+      options,
+    );
+
+    expect((failed.toolResults[0] as ToolResultMessage).isError).toBe(true);
+    expect((recovered.toolResults[0] as ToolResultMessage).isError).toBe(false);
+    expect(telemetry).toHaveBeenCalledWith(
+      'agent.tools.correction.recovered',
+      expect.objectContaining({ toolName: 'memory' }),
+    );
+  });
+
   it('emits cancelled telemetry when execution aborts before a tool call runs', async () => {
     const telemetry = vi.fn();
     const controller = new AbortController();

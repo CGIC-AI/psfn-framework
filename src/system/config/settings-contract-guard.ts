@@ -1,5 +1,6 @@
 import {
   buildSettingsContractData,
+  ownerFileScope,
   type SettingsContractData,
   type SettingsSubsystemId,
 } from './settings-contract.js';
@@ -67,6 +68,15 @@ export function verifySettingsContractGuard(
     if (!ownerFile) {
       errors.push(`Subsystem "${subsystemId}" is missing ownerFile metadata.`);
       continue;
+    }
+    // Per-companion vs cluster-global rooting must match the owner-file registry
+    // (dnll.2). Catches a relocated owner file whose subsystem scope drifted.
+    const expectedScope = ownerFileScope(ownerFile);
+    if (subsystem.scope !== expectedScope) {
+      errors.push(
+        `Subsystem "${subsystemId}" owner file "${ownerFile}" is rooted `
+        + `${expectedScope} but its contract scope is "${subsystem.scope}".`,
+      );
     }
     const previousOwner = ownerFiles.get(ownerFile);
     if (previousOwner && previousOwner !== subsystemId) {

@@ -158,6 +158,8 @@ export function buildReplConfig(config: SubstrateConfig): REPLConfig {
   if (config.analysisWorkbenchMaxTokens !== undefined) replConfig.budget.maxTokens = config.analysisWorkbenchMaxTokens;
   if (config.analysisWorkbenchMaxWallTimeMs !== undefined) replConfig.budget.maxWallTimeMs = config.analysisWorkbenchMaxWallTimeMs;
   if (config.analysisWorkbenchMaxSubQueries !== undefined) replConfig.budget.maxSubQueries = config.analysisWorkbenchMaxSubQueries;
+  if (config.analysisWorkbenchExecutionTimeoutMs !== undefined) replConfig.executionTimeoutMs = config.analysisWorkbenchExecutionTimeoutMs;
+  if (config.analysisWorkbenchOutputTruncation !== undefined) replConfig.outputTruncation = config.analysisWorkbenchOutputTruncation;
   return replConfig;
 }
 

@@ -18,6 +18,7 @@ import {
   type TtftBenchmarkMethodology,
   type TtftBenchmarkSample,
 } from './ttft-benchmark.js';
+import { makeContextManifestFixture } from '../../test-support/context-manifest.js';
 
 const TEST_SYSTEM_PROMPT = 'You are Companion.';
 const STREAM_CHUNKS = ['Mock', ' response', ' from', ' Companion'];
@@ -95,6 +96,7 @@ function makeMockSessionManager(): SessionManager {
     recordAssistantMessage: vi.fn().mockReturnValue(103),
     recordSystemMessage: vi.fn().mockReturnValue(104),
     recordTurn: vi.fn(),
+    findSourceRecordedTurn: vi.fn().mockReturnValue(null),
     appendSystemNote: vi.fn(),
     awaitPendingAutoCompaction: vi.fn().mockResolvedValue(undefined),
     hasPendingAutoCompaction: vi.fn(() => false),
@@ -106,11 +108,13 @@ function makeMockSessionManager(): SessionManager {
       compactionSummaryTexts: [],
       focusKnowledgeTexts: [],
       continuityEntries: [],
+      storeWindowMaxEntryId: 101,
       versionPointer: 'mock-session-context',
     })),
     buildContext: vi.fn().mockResolvedValue({
       systemPrompt: TEST_SYSTEM_PROMPT,
       messages: [{ role: 'user', content: 'Hello' }],
+      manifest: makeContextManifestFixture(),
     }),
     getRecentMessages: vi.fn().mockReturnValue([]),
     getRoleEnvelopeRefsForEntries: vi.fn().mockReturnValue([]),
@@ -174,6 +178,11 @@ function makeStreamingLLMProvider(activeProbe: { current: TransportTurnProbe | n
       probe.streamStartedAt ??= performance.now();
 
       await Promise.resolve();
+      callbacks?.onFirstOutput?.({
+        kind: 'text',
+        monotonicAtMs: performance.now(),
+        timestampMs: Date.now(),
+      });
       for (const chunk of STREAM_CHUNKS) {
         probe.transportTextDeltas += 1;
         probe.firstTransportTextAt ??= performance.now();
@@ -227,6 +236,7 @@ describe('TTFT benchmark', () => {
       makeMockSessionManager(),
       TEST_SYSTEM_PROMPT,
       config,
+      { backgroundWorkDisabled: true },
     );
 
     const samples: TtftBenchmarkSample[] = [];

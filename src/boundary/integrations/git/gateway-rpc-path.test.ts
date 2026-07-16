@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GatewayServer, type GatewayServerOptions } from '../../gateway/server.js';
 import { GatewayClient } from '../../gateway/client.js';
 import { createGatewayOpsPortFromClient } from '../../gateway/gateway-ops-port.js';
+import { EventBus } from '../../../shared/event-bus.js';
 import { GatewayGitOps } from './gateway-ops.js';
 import { GitOps } from './ops.js';
 
@@ -37,6 +38,7 @@ function createServerOptions(
       },
     } as any,
     gitOps,
+    eventBus: new EventBus(),
     policyConfig: {
       workspacePath: process.cwd(),
     },

@@ -10,8 +10,16 @@ import type { LLMProviderObservability, ModelSlot } from '../../shared/contracts
 import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import type { RuntimeStatusMetadata } from '../../system/lifecycle/runtime-mode.js';
+import { RUNTIME_MODE, type RuntimeMode, type RuntimeStatusMetadata } from '../../system/lifecycle/runtime-mode.js';
 import type { ApiServerConfig } from '../../channels/api/server.js';
+
+// Runtime topologies where the Discord transport is owned by the gateway/host
+// process rather than this agent container. Health reporting treats Discord as
+// delegated (not-applicable) in these modes instead of a permanent 'degraded'.
+const DISCORD_DELEGATING_RUNTIME_MODES: readonly RuntimeMode[] = [
+  RUNTIME_MODE.SPLIT,
+  RUNTIME_MODE.GATEWAY_AGENT,
+];
 
 export interface AgentApiSurfaceBindings {
   apiHost?: string;
@@ -101,11 +109,27 @@ export function buildApiHealthChecks(
         meta,
       };
     },
-    discord: () => ({
-      status: 'degraded',
-      detail: 'Discord transport runs outside the agent container',
-      meta: options.runtimeStatusMeta,
-    }),
+    discord: () => {
+      // Discord transport runs in the gateway/host process, not the agent
+      // container. In these split runtime topologies the agent cannot observe
+      // it, so report it as delegated (not-applicable) instead of permanently
+      // poisoning aggregate health with a placeholder 'degraded'. If a future
+      // co-located topology owns the transport in this process, it will not be
+      // listed as delegating and falls through to the honest degraded
+      // placeholder rather than masking a real outage.
+      if (DISCORD_DELEGATING_RUNTIME_MODES.includes(options.runtimeStatusMeta.activeMode)) {
+        return {
+          status: 'healthy',
+          detail: 'Discord transport is delegated to the gateway (not applicable to the agent container)',
+          meta: { ...options.runtimeStatusMeta, delegated: true },
+        };
+      }
+      return {
+        status: 'degraded',
+        detail: 'Discord transport runs outside the agent container',
+        meta: options.runtimeStatusMeta,
+      };
+    },
     embeddings: async () => {
       const baseMeta = {
         dims: options.gateway.dims,

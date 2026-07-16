@@ -25,6 +25,12 @@ import type {
   AdminAuditActor,
   AdminAuditDecision,
 } from './types.js';
+import { assertGardenRouteDeclarationsCovered } from '../../boundary/fleet-auth/garden-route-capabilities.js';
+import {
+  GardenRequestTargetError,
+  parseCanonicalGardenRequestPath,
+  validateGardenRequestMetadata,
+} from '../../boundary/fleet-auth/request-capability-target.js';
 
 const log = createComponentLogger('GardenAdminTransport');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -125,6 +131,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       withBody: (req, res, cb) => this.withBody(req, res, cb),
       appendAuditTimelineEntry,
     });
+    assertGardenRouteDeclarationsCovered(this.routes);
     this.telemetryTransport = new AdminServerTelemetryTransport(
       config.eventBus,
       () => true,
@@ -306,10 +313,33 @@ export class GardenAdminTransportServer implements Lifecycle {
       return;
     }
 
-    const requestPath = new URL(req.url ?? '/', 'http://localhost').pathname;
+    let requestPath: string;
+    try {
+      requestPath = parseCanonicalGardenRequestPath(req.url ?? '/').canonicalPath;
+    } catch {
+      sendText(res, 400, 'Invalid request target');
+      return;
+    }
 
     if ((req.method ?? 'GET') === 'GET' && requestPath === HEALTH_PROBE_PATH) {
       sendJson(res, 200, { status: 'ok', mode: this.config.endpoint.mode });
+      return;
+    }
+
+    try {
+      requestPath = validateGardenRequestMetadata({
+        rawTarget: req.url ?? '/',
+        method: req.method ?? 'GET',
+        headers: req.headers,
+      }).canonicalPath;
+    } catch (error) {
+      if (error instanceof GardenRequestTargetError && error.code === 'authority_forbidden') {
+        sendJson(res, 403, { error: 'Cross-tenant authority selector is forbidden' });
+      } else if (error instanceof GardenRequestTargetError && error.code === 'route_not_declared') {
+        sendText(res, 404, `Not found: ${requestPath}`);
+      } else {
+        sendText(res, 400, 'Invalid request target');
+      }
       return;
     }
 

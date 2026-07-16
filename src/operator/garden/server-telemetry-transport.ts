@@ -8,7 +8,10 @@ import {
   sanitizeTurnStageTelemetry,
 } from '../../core/turns/observability.js';
 import { resolveTelemetryCorrelation } from './telemetry-correlation.js';
-import { parseRequestUrl } from './request-url.js';
+import {
+  GardenRequestTargetError,
+  validateGardenRequestMetadata,
+} from '../../boundary/fleet-auth/request-capability-target.js';
 
 const TELEMETRY_WEBSOCKET_PATH = '/api/admin/events';
 
@@ -132,8 +135,22 @@ export class AdminServerTelemetryTransport {
   }
 
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
-    const url = parseRequestUrl(req);
-    if (url.pathname !== TELEMETRY_WEBSOCKET_PATH) {
+    let target;
+    try {
+      target = validateGardenRequestMetadata({
+        rawTarget: req.url ?? '/',
+        method: 'WS',
+        headers: req.headers,
+      });
+    } catch (error) {
+      const status = error instanceof GardenRequestTargetError && error.code === 'route_not_declared'
+        ? '404 Not Found'
+        : '400 Bad Request';
+      socket.write(`HTTP/1.1 ${status}\r\n\r\n`);
+      socket.destroy();
+      return;
+    }
+    if (target.canonicalPath !== TELEMETRY_WEBSOCKET_PATH || target.canonicalQuery) {
       socket.write('HTTP/1.1 404 Not Found\\r\\n\\r\\n');
       socket.destroy();
       return;

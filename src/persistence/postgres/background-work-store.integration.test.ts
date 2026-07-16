@@ -536,6 +536,52 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
+  it('runs role-bound migrations without database CREATE and never creates a missing tenant schema', async () => {
+    const database = await harness.createDatabase();
+    const adminPool = createPostgresPool(database.databaseUrl, { max: 1 });
+    const tenantSchema = 'background_work_tenant';
+    const tenantRole = 'background_work_tenant_role';
+    const missingSchema = 'background_work_missing_tenant';
+    const missingRole = 'background_work_missing_role';
+    let store: PostgresBackgroundWorkStore | undefined;
+    try {
+      await adminPool.query(`CREATE ROLE "${tenantRole}" NOLOGIN NOINHERIT`);
+      await adminPool.query(`CREATE SCHEMA "${tenantSchema}" AUTHORIZATION "${tenantRole}"`);
+      await adminPool.query(`GRANT "${tenantRole}" TO CURRENT_USER`);
+      const privileges = await adminPool.query<{ can_create_database_objects: boolean }>(`
+        SELECT has_database_privilege($1, current_database(), 'CREATE')
+          AS can_create_database_objects
+      `, [tenantRole]);
+      expect(privileges.rows[0]?.can_create_database_objects).toBe(false);
+
+      store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+        schema: tenantSchema,
+        role: tenantRole,
+      });
+      await store.enqueue(makeInput('tenant-session', 'tenant-turn'));
+      expect(await store.get(createBackgroundWorkIdentity({
+        logicalSessionId: 'tenant-session',
+        turnId: 'tenant-turn',
+        kind: 'memory_extraction',
+      }).jobId)).not.toBeNull();
+
+      await adminPool.query(`CREATE ROLE "${missingRole}" NOLOGIN NOINHERIT`);
+      await adminPool.query(`GRANT "${missingRole}" TO CURRENT_USER`);
+      await expect(PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+        schema: missingSchema,
+        role: missingRole,
+      })).rejects.toThrow();
+      const missing = await adminPool.query<{ exists: boolean }>(
+        'SELECT to_regnamespace($1) IS NOT NULL AS exists',
+        [missingSchema],
+      );
+      expect(missing.rows[0]?.exists).toBe(false);
+    } finally {
+      await store?.close();
+      await adminPool.end();
+    }
+  });
+
   it('atomically rolls back the TurnRecord handoff after failures at job 1 and job 4', async () => {
     const database = await harness.createDatabase();
     for (const failAt of [1, 4]) {

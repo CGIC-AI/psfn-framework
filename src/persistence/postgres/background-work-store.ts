@@ -286,7 +286,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
       role: options.role,
     });
     try {
-      const migrationStatements = options.schema === undefined
+      const migrationStatements = options.schema === undefined || options.role !== undefined
         ? POSTGRES_BACKGROUND_WORK_MIGRATIONS
         : [
           `CREATE SCHEMA IF NOT EXISTS "${assertValidPostgresSchemaName(options.schema)}"`,

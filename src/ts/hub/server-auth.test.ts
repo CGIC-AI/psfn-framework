@@ -9,6 +9,7 @@ import { RealtimeHubServer } from "./server.js";
 import type { HubConfig } from "../shared/env.js";
 import type { HubToClientMessage } from "../shared/protocol.js";
 import { createHubDeviceAssertionIssuer } from "./device-assertion.js";
+import type { PsfnChannelContext } from "./embodied-session.js";
 import {
   createHubDeviceRegistryAuthority,
   type HubDeviceIdentity,
@@ -264,6 +265,57 @@ test("authenticated realtime interruption detaches stalled TTS before admitting 
     tts.releaseFirst();
     socket.close();
     await new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    await server.close();
+  }
+});
+
+test("stale authenticated connection fencing cannot detach an overlapping reconnect", async () => {
+  const authority = createHubDeviceRegistryAuthority(() => registry());
+  let observedAuthority: PsfnChannelContext["deviceAuthority"];
+  const captureAgent: FrameworkAgentAdapter = {
+    async *streamReply(input) {
+      observedAuthority = input.channel?.deviceAuthority;
+      yield "current";
+      return "current";
+    },
+    async close() {},
+  };
+  const server = new RealtimeHubServer(config({ deviceRegistry: authority }), { agent: captureAgent });
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const first = new WebSocket(`ws://127.0.0.1:${address.port}`);
+  let second: WebSocket | undefined;
+  const firstMessages: HubToClientMessage[] = [];
+  const secondMessages: HubToClientMessage[] = [];
+  first.on("message", raw => firstMessages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+
+  try {
+    await new Promise<void>(resolve => first.once("open", resolve));
+    sendAuthenticatedHello(first);
+    await waitFor(() => firstMessages.some(message => message.type === "hello.ack"));
+
+    const current = new WebSocket(`ws://127.0.0.1:${address.port}`);
+    second = current;
+    current.on("message", raw => secondMessages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+    await new Promise<void>(resolve => current.once("open", resolve));
+    sendAuthenticatedHello(current);
+    await waitFor(() => secondMessages.some(message => message.type === "hello.ack"));
+
+    first.send(JSON.stringify({ type: "ping", sentAt: "2026-07-15T00:00:00.000Z" }));
+    await new Promise<void>(resolve => first.once("close", () => resolve()));
+    assert.equal(firstMessages.some(message => message.type === "pong"), false);
+
+    second.send(JSON.stringify({ type: "user.text", text: "current authority" }));
+    await waitFor(() => observedAuthority !== undefined);
+    assert.equal(observedAuthority?.deviceId, "office-device");
+    assert.equal(observedAuthority?.enrollmentVersion, 1);
+    await waitFor(() => secondMessages.some(message => (
+      message.type === "message" && message.data.final === true
+    )));
+  } finally {
+    first.close();
+    second?.close();
     await server.close();
   }
 });

@@ -51,6 +51,7 @@ import {
   canUseApprovals,
   DEFAULT_REALTIME_CAPABILITIES,
   EmbodiedSessionRegistry,
+  type SatelliteAttachmentOwnership,
 } from "./embodied-session.js";
 import { SessionStore } from "./session-store.js";
 import {
@@ -234,6 +235,7 @@ class RealtimeConnection {
   private claimIdentity: PsfnChannelContext["claimIdentity"];
   private authenticated: boolean;
   private authenticatedDevice: HubDeviceIdentity | null = null;
+  private attachmentOwnership: SatelliteAttachmentOwnership | null = null;
   private unsubscribeCompanion: (() => void) | null = null;
 
   constructor(
@@ -939,7 +941,11 @@ class RealtimeConnection {
         userText: transcript,
         conversationId: this.sessionId,
         history: this.sessions.getHistory(this.sessionId),
-        channel: this.embodiedSessions.getContext(this.sessionId, this.satelliteId),
+        channel: this.embodiedSessions.getContext(
+          this.sessionId,
+          this.satelliteId,
+          this.requireAttachmentOwnership(),
+        ),
         signal: replyAbortController.signal,
       });
       for await (const delta of stream) {
@@ -1100,7 +1106,10 @@ class RealtimeConnection {
   private async cleanup(): Promise<void> {
     this.unsubscribeCompanion?.();
     this.unsubscribeCompanion = null;
-    this.embodiedSessions.detachSatellite(this.sessionId, this.satelliteId);
+    if (this.attachmentOwnership) {
+      this.embodiedSessions.detachSatellite(this.sessionId, this.satelliteId, this.attachmentOwnership);
+      this.attachmentOwnership = null;
+    }
     await this.cancelReply("connection_closed");
     this.activeTurn = null;
     if (this.sttSession) {
@@ -1116,10 +1125,18 @@ class RealtimeConnection {
         this.deviceRegistry,
         this.authenticatedDevice,
       );
+      this.embodiedSessions.getContext(
+        this.sessionId,
+        this.satelliteId,
+        this.requireAttachmentOwnership(),
+      );
       return true;
     } catch (error) {
       console.warn("Active Hub device enrollment fenced:", error);
-      this.embodiedSessions.detachSatellite(this.sessionId, this.satelliteId);
+      if (this.attachmentOwnership) {
+        this.embodiedSessions.detachSatellite(this.sessionId, this.satelliteId, this.attachmentOwnership);
+        this.attachmentOwnership = null;
+      }
       await this.cancelReply("device_enrollment_fenced");
       await this.send({
         type: "error-event",
@@ -1154,6 +1171,14 @@ class RealtimeConnection {
     });
     this.channelId = attachment.session.channelId;
     this.capabilities = attachment.satellite.capabilities;
+    this.attachmentOwnership = attachment.ownership;
+  }
+
+  private requireAttachmentOwnership(): SatelliteAttachmentOwnership {
+    if (!this.attachmentOwnership) {
+      throw new Error("Realtime connection has no current embodied-session attachment");
+    }
+    return this.attachmentOwnership;
   }
 }
 

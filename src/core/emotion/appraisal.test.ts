@@ -4,6 +4,10 @@ import type { CompletionPurpose, LLMContext, LLMResponse } from '../../shared/co
 import { EmotionAppraisal } from './appraisal.js';
 import type { EmotionStateSnapshot } from './state.js';
 import { InternalStateComputer } from '../self-model/state.js';
+import {
+  buildSystemPromptCacheBoundaries,
+  verifySystemPromptCacheBoundaries,
+} from '../../primitives/llm/prompt-cache.js';
 
 function makeSnapshot(
   overrides?: Partial<EmotionStateSnapshot>,
@@ -281,5 +285,73 @@ describe('EmotionAppraisal', () => {
     const prompt = complete.mock.calls[0]?.[0].messages[0]?.content as string;
     expect(prompt).toContain('[Internal State Signals]');
     expect(prompt).toContain('Cognitive: certainty=');
+  });
+
+  it('carries a companion-scoped static-prefix cache plan when companionId is set (d8vq.5)', async () => {
+    // A pre-normalized custom system prompt so the appraisal's whitespace
+    // collapse is a no-op and the boundaries are byte-predictable.
+    const systemPrompt = 'You write a private first-person emotion appraisal.';
+    const { provider, complete } = makeMockProvider(['Cache-plan appraisal summary']);
+    const appraisal = new EmotionAppraisal({
+      llmProvider: provider,
+      turnCadence: 1,
+      vadDeltaThreshold: 1.5,
+      companionId: '  companion-purrsephone  ',
+      systemPrompt,
+    });
+
+    const result = await appraisal.maybeAppraise({
+      sessionId: 'session-cache',
+      currentEmotion: makeSnapshot(),
+      recentMessages: [{ role: 'user', content: 'hello' }],
+    });
+    expect(result.appraised).toBe(true);
+
+    const context = complete.mock.calls[0]?.[0] as {
+      systemPrompt: string;
+      promptCacheBoundaries?: unknown;
+    };
+    // The whole (static) system prompt is the cacheable prefix: both boundaries
+    // are the full length, and the plan verifies against the sent prompt.
+    const expected = buildSystemPromptCacheBoundaries({
+      staticPrefixText: systemPrompt,
+      sessionStablePrefixText: systemPrompt,
+    });
+    expect(context.systemPrompt).toBe(systemPrompt);
+    expect(context.promptCacheBoundaries).toEqual(expected);
+    expect(expected.staticPrefixChars).toBe(systemPrompt.length);
+    expect(expected.sessionStablePrefixChars).toBe(systemPrompt.length);
+    expect(
+      verifySystemPromptCacheBoundaries(context.systemPrompt, expected),
+    ).toBe(true);
+
+    // Companion identity is folded into the correlation (outer cache scope),
+    // trimmed to the normalized value.
+    expect(complete.mock.calls[0]?.[2]).toMatchObject({
+      correlation: { companionId: 'companion-purrsephone' },
+    });
+  });
+
+  it('offers no cache plan and no companion scope when companionId is absent (d8vq.5 fail-closed)', async () => {
+    const { provider, complete } = makeMockProvider(['No-plan appraisal summary']);
+    const appraisal = new EmotionAppraisal({
+      llmProvider: provider,
+      turnCadence: 1,
+      vadDeltaThreshold: 1.5,
+    });
+
+    const result = await appraisal.maybeAppraise({
+      sessionId: 'session-no-companion',
+      currentEmotion: makeSnapshot(),
+      recentMessages: [{ role: 'user', content: 'hello' }],
+    });
+    expect(result.appraised).toBe(true);
+
+    const context = complete.mock.calls[0]?.[0] as { promptCacheBoundaries?: unknown };
+    expect(context.promptCacheBoundaries).toBeUndefined();
+    const options = complete.mock.calls[0]?.[2] as {
+      correlation?: { companionId?: unknown };
+    };
+    expect(options.correlation?.companionId).toBeUndefined();
   });
 });

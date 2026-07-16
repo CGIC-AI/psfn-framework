@@ -105,6 +105,13 @@ export interface EmotionSelfModelRuntimeOptions {
    * trends accumulate in-memory only for the process lifetime.
    */
   participantTrendStore?: ParticipantTrendStorePort | null;
+  /**
+   * Companion identity, threaded to the internally-constructed EmotionAppraisal
+   * as its prompt-cache outer isolation scope (d8vq.5). Optional so tests and
+   * minimal runtimes keep working; when absent, appraisal offers no cache plan
+   * (fail-closed).
+   */
+  companionId?: string;
   getActiveConcernProvider: () => ActiveConcernContextProvider | null;
   getPendingFollowUpProvider: () => PendingFollowUpContextProvider | null;
   getContactStore: () => ContactStorePort | null;
@@ -194,6 +201,7 @@ export class EmotionSelfModelRuntime {
       ?? ((this.emotionState && this.emotionObserver)
         ? new EmotionAppraisal({
           llmProvider: options.llmProvider,
+          ...(options.companionId ? { companionId: options.companionId } : {}),
           ...(options.onEmotionAppraisalGateEvent
             ? { onGateEvent: options.onEmotionAppraisalGateEvent }
             : {}),

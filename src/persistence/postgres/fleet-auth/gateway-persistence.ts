@@ -65,6 +65,8 @@ import { GatewayFleetAuthChildAssertionBroker } from '../../../boundary/gateway/
 import { PostgresChildAssertionAuthority } from './child-assertion-authority.js';
 import type { PrimaryEmbodimentAuthorityPort } from '../../../boundary/fleet-auth/primary-embodiment.js';
 import { PostgresPrimaryEmbodimentStore } from './primary-embodiment-store.js';
+import type { FleetPortalAuthorizationBatchPort } from '../../../boundary/gateway/fleet-portal-authorization.js';
+import { createPostgresFleetPortalAuthorization } from './portal-authorization-store.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -75,6 +77,7 @@ import { PostgresPrimaryEmbodimentStore } from './primary-embodiment-store.js';
 export interface GatewayFleetAuthPersistence {
   authorityFloors: FleetAuthAuthorityFloorStore;
   broker: GatewayFleetAuthBroker;
+  portalAuthorization: FleetPortalAuthorizationBatchPort;
   requestCapabilities: GatewayRequestCapabilitySigner;
   requestCapabilityVerifier: RequestCapabilityVerifier;
   requestCapabilityReplay: RequestCapabilityReplayPort;
@@ -411,6 +414,13 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       knownCompanionIds,
       providerRevocationAuthority: accountAuthority,
     });
+    const portalAuthorization = createPostgresFleetPortalAuthorization({
+      pool,
+      sessionPepper: secrets.sessionPepper,
+      config,
+      knownCompanionIds,
+      providerRevocationAuthority: accountAuthority,
+    });
     let discordEvidence: DiscordEvidenceRuntime | undefined;
     let discordEvidenceLifecycle: DiscordEvidenceLifecycleCoordinator | undefined;
     if (config.discordEvidenceMappings.length > 0) {
@@ -453,6 +463,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
     return {
       authorityFloors,
       broker,
+      portalAuthorization,
       requestCapabilities,
       requestCapabilityVerifier,
       requestCapabilityReplay,

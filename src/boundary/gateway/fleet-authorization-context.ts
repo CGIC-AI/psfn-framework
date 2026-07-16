@@ -2,6 +2,7 @@ import {
   FLEET_AUTH_ACTIONS,
   type FleetAuthAction,
   type FleetAuthConfig,
+  type FleetAuthRole,
 } from '../../system/config/fleet-auth-config.js';
 import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import { fleetAuthRoleAllowsAction } from '../fleet-auth/role-action-policy.js';
@@ -385,6 +386,72 @@ function deny(reasonCode: FleetAuthorizationDenialReason): FleetAuthorizationEva
   return { decision: 'deny', reasonCode };
 }
 
+function denySession(reasonCode: FleetAuthorizationDenialReason): FleetAuthorizationSessionEvaluation {
+  return { decision: 'deny', reasonCode };
+}
+
+export type FleetAuthorizationSessionEvaluation =
+  | {
+      decision: 'allow';
+      session: FleetAuthorizationSnapshot['sessions'][number];
+      subject: FleetAuthorizationSnapshot['providerSubjects'][number];
+    }
+  | { decision: 'deny'; reasonCode: FleetAuthorizationDenialReason };
+
+/**
+ * Evaluate the principal/session/provider portion shared by exact companion
+ * authorization and the portal's one-shot fleet batch. Contact-authority
+ * fencing is companion-local and is therefore checked by the exact companion
+ * evaluator after this shared session decision.
+ */
+export function evaluateFleetAuthorizationSessionSnapshot(input: {
+  snapshot: FleetAuthorizationSnapshot;
+  now: Date;
+}): FleetAuthorizationSessionEvaluation {
+  const { snapshot, now } = input;
+  if (snapshot.sessions.length === 0) return denySession('session_absent');
+  if (snapshot.sessions.length !== 1) return denySession('session_ambiguous');
+  const session = snapshot.sessions[0]!;
+  if (session.audience !== 'fleet') return denySession('wrong_audience');
+  if (session.revokedAt !== null) return denySession('session_revoked');
+  if (session.replacedBy !== null) return denySession('session_replaced');
+  if (session.idleExpiresAt.getTime() <= now.getTime()
+    || session.absoluteExpiresAt.getTime() <= now.getTime()) return denySession('session_expired');
+  if (session.principal.mergedIntoPrincipalId !== null) return denySession('principal_merged');
+  if (session.principal.tombstoned) return denySession('principal_tombstoned');
+  if (session.principal.status !== 'active') return denySession('principal_not_active');
+  if (session.principal.restoreState !== 'live') return denySession('principal_not_live');
+  if (session.authnVersion !== session.principal.authnVersion) {
+    return denySession('session_authn_stale');
+  }
+  if (session.authzVersion !== session.principal.authzVersion) {
+    return denySession('session_authz_stale');
+  }
+  if (session.bindingVersion !== session.principal.bindingVersion) {
+    return denySession('binding_version_stale');
+  }
+  if (session.grantVersion !== session.principal.grantVersion) {
+    return denySession('grant_version_stale');
+  }
+  if (session.policyVersion !== session.principal.policyVersion) {
+    return denySession('policy_version_stale');
+  }
+  if (session.globalAuthEpoch !== snapshot.authority.globalAuthEpoch) {
+    return denySession('session_epoch_stale');
+  }
+
+  const exactSubjects = snapshot.providerSubjects.filter(subject => (
+    subject.provider === session.provider && subject.subjectId === session.providerSubjectId
+  ));
+  if (exactSubjects.length === 0) return denySession('provider_subject_absent');
+  if (exactSubjects.length !== 1) return denySession('provider_subject_ambiguous');
+  const subject = exactSubjects[0]!;
+  if (subject.tombstoned) return denySession('provider_subject_tombstoned');
+  if (subject.restoreState !== 'live') return denySession('provider_subject_not_live');
+  if (subject.state !== 'active') return denySession('provider_subject_not_active');
+  return { decision: 'allow', session, subject };
+}
+
 export function evaluateFleetAuthorizationSnapshot(input: {
   request: FleetAuthorizationRequest;
   snapshot: FleetAuthorizationSnapshot;
@@ -392,37 +459,10 @@ export function evaluateFleetAuthorizationSnapshot(input: {
   now: Date;
 }): FleetAuthorizationEvaluation {
   const { request, snapshot, now } = input;
-  if (snapshot.sessions.length === 0) return deny('session_absent');
-  if (snapshot.sessions.length !== 1) return deny('session_ambiguous');
-  const session = snapshot.sessions[0]!;
-  if (session.audience !== 'fleet') return deny('wrong_audience');
-  if (session.revokedAt !== null) return deny('session_revoked');
-  if (session.replacedBy !== null) return deny('session_replaced');
-  if (session.idleExpiresAt.getTime() <= now.getTime()
-    || session.absoluteExpiresAt.getTime() <= now.getTime()) return deny('session_expired');
-  if (session.principal.mergedIntoPrincipalId !== null) return deny('principal_merged');
-  if (session.principal.tombstoned) return deny('principal_tombstoned');
-  if (session.principal.status !== 'active') return deny('principal_not_active');
-  if (session.principal.restoreState !== 'live') return deny('principal_not_live');
-  if (session.authnVersion !== session.principal.authnVersion) return deny('session_authn_stale');
-  if (session.authzVersion !== session.principal.authzVersion) return deny('session_authz_stale');
-  if (session.bindingVersion !== session.principal.bindingVersion) {
-    return deny('binding_version_stale');
-  }
-  if (session.grantVersion !== session.principal.grantVersion) return deny('grant_version_stale');
-  if (session.policyVersion !== session.principal.policyVersion) return deny('policy_version_stale');
-  if (session.globalAuthEpoch !== snapshot.authority.globalAuthEpoch) return deny('session_epoch_stale');
-
-  const exactSubjects = snapshot.providerSubjects.filter(subject => (
-    subject.provider === session.provider && subject.subjectId === session.providerSubjectId
-  ));
-  if (exactSubjects.length === 0) return deny('provider_subject_absent');
-  if (exactSubjects.length !== 1) return deny('provider_subject_ambiguous');
-  const subject = exactSubjects[0]!;
-  if (subject.tombstoned) return deny('provider_subject_tombstoned');
+  const sessionEvaluation = evaluateFleetAuthorizationSessionSnapshot({ snapshot, now });
+  if (sessionEvaluation.decision === 'deny') return sessionEvaluation;
+  const { session, subject } = sessionEvaluation;
   if (subject.contactAuthorityFenced) return deny('contact_authority_fenced');
-  if (subject.restoreState !== 'live') return deny('provider_subject_not_live');
-  if (subject.state !== 'active') return deny('provider_subject_not_active');
 
   const exactCompanions = snapshot.companions.filter(companion => (
     companion.companionId === request.companionId

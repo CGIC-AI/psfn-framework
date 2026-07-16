@@ -135,6 +135,7 @@ function hubDeviceAssertionToken(input: {
   companionId: string;
   sessionId: string;
   jti: string;
+  placeId?: string;
 }): string {
   const nowSeconds = Math.floor(Date.now() / 1000);
   const encodedHeader = Buffer.from(JSON.stringify({
@@ -148,7 +149,7 @@ function hubDeviceAssertionToken(input: {
     device_id: 'office-device',
     enrollment_version: 7,
     enrollment_assurance: 'device_credential',
-    place_id: 'office',
+    place_id: input.placeId ?? 'office',
     aud: 'https://fleet.example.test',
     companion_id: input.companionId,
     session_id: input.sessionId,
@@ -394,7 +395,7 @@ describe('gateway fleet-auth lifecycle publication', () => {
     }
   }, TIMEOUT_MS);
 
-  it('binds Hub assertion replay consumption to the exact expected session', async () => {
+  it('binds Hub assertion replay to the session and durably audits sanitized mutation denial', async () => {
     const context = await freshContext();
     const persistence = await startEnabled(context);
     const auditPool = createPostgresPool(context.runtimeUrl, { max: 1 });
@@ -443,6 +444,48 @@ describe('gateway fleet-auth lifecycle publication', () => {
         replay_count: '1',
         mismatch_count: '0',
       }]);
+
+      const mutatedAssertion = hubDeviceAssertionToken({
+        companionId,
+        sessionId: sessionA,
+        jti,
+        placeId: 'kitchen',
+      });
+      await expect(persistence.verifyAndConsumeHubDeviceAssertion(mutatedAssertion, {
+        ...expected,
+        sessionId: sessionA,
+      })).rejects.toThrow(/mutated replay/i);
+      const mutatedAudit = await auditPool.query<{
+        actor_context: Record<string, unknown>;
+        decision: string;
+        decision_context: Record<string, unknown>;
+      }>(`
+        SELECT actor_context, decision, decision_context
+        FROM fleet_auth.authorization_audit_events
+        WHERE action = 'hub_device_assertion.verify'
+          AND reason_code = 'mutated_replay'
+      `);
+      expect(mutatedAudit.rows).toEqual([{
+        actor_context: { kind: 'hub_device_assertion' },
+        decision: 'deny',
+        decision_context: expect.objectContaining({
+          schemaVersion: 1,
+          jtiDigest: createHash('sha256').update(jti).digest('hex'),
+          acceptedAssertionDigest: createHash('sha256').update(assertion).digest('hex'),
+          mutatedAssertionDigest: createHash('sha256').update(mutatedAssertion).digest('hex'),
+        }),
+      }]);
+      const serializedAudit = JSON.stringify(mutatedAudit.rows);
+      expect(serializedAudit).not.toContain('office');
+      expect(serializedAudit).not.toContain('kitchen');
+      expect(serializedAudit).not.toContain(sessionA);
+      expect(serializedAudit).not.toContain(companionId);
+      expect(serializedAudit).not.toContain('psfn-satellite-hub');
+      expect(serializedAudit).not.toContain('hub-gateway-startup-test');
+      expect(serializedAudit).not.toContain('https://fleet.example.test');
+      expect(serializedAudit).not.toContain(assertion);
+      expect(serializedAudit).not.toContain(assertion.split('.')[2]!);
+      expect(serializedAudit).not.toContain(mutatedAssertion.split('.')[2]!);
     } finally {
       await auditPool.end();
       await persistence.close();

@@ -1,4 +1,4 @@
-import { createPrivateKey, generateKeyPairSync, sign } from 'node:crypto';
+import { createHash, createPrivateKey, generateKeyPairSync, sign } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
@@ -81,9 +81,11 @@ function signTokenObjects(header: Record<string, unknown>, claims: Record<string
 class ReplayStore implements HubDeviceAssertionReplayStore {
   readonly seen = new Map<string, string>();
   lastExpiresAt: Date | undefined;
+  lastAuditContext: Parameters<HubDeviceAssertionReplayStore['consume']>[0]['auditContext'] | undefined;
 
-  async consume(input: { issuer: string; jti: string; assertionDigest: string; expiresAt: Date }) {
+  async consume(input: Parameters<HubDeviceAssertionReplayStore['consume']>[0]) {
     this.lastExpiresAt = input.expiresAt;
+    this.lastAuditContext = input.auditContext;
     const key = `${input.issuer}\0${input.jti}`;
     const previous = this.seen.get(key);
     if (previous === undefined) {
@@ -140,6 +142,18 @@ describe('Hub device assertion trust boundary', () => {
     await expect(verifyAndConsumeHubDeviceAssertion({
       token: token(), config: config(), expected, replayStore, nowSeconds: NOW,
     })).resolves.toEqual(first);
+    const digest = (value: string): string => createHash('sha256').update(value).digest('hex');
+    expect(replayStore.lastAuditContext).toEqual({
+      issuerDigest: digest('psfn-satellite-hub'),
+      keyIdDigest: digest('hub-2026-07'),
+      audienceDigest: digest('https://fleet.example.test'),
+      companionIdDigest: digest(COMPANION_ID),
+      deviceIdDigest: digest('office-device'),
+      sessionIdDigest: digest('realtime:office-device:session'),
+      enrollmentVersionDigest: digest('7'),
+      jtiDigest: digest(JTI),
+    });
+    expect(Object.keys(replayStore.lastAuditContext ?? {})).not.toContain('placeId');
   });
 
   it('retains the replay fence through the verifier clock-skew acceptance window', async () => {

@@ -220,7 +220,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         `SELECT version, checksum FROM ${FLEET_AUTH_SCHEMA_NAME}.schema_migrations ORDER BY version`,
       );
       expect(ledger.rows.map(row => row.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
       ]);
       expect(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum))).toBe(true);
 
@@ -362,25 +362,57 @@ describe('fleet_auth Postgres authority boundary', () => {
     }
   }, TIMEOUT_MS);
 
-  it('atomically consumes one Hub assertion and distinguishes replay from mutated reuse', async () => {
+  it('keeps one sanitized durable audit after mutated Hub replay expiry cleanup', async () => {
     const db = await freshDatabase();
     await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
     const pool = createPostgresPool(db.runtimeUrl, { max: 8, allowExitOnIdle: true });
+    const migration = createPostgresPool(db.migrationUrl, { max: 1, allowExitOnIdle: true });
     const store = new PostgresHubDeviceAssertionReplayStore(pool);
+    const digest = (value: string): string => createHash('sha256').update(value).digest('hex');
+    const context = {
+      keyId: 'hub-2026-07',
+      audience: 'https://fleet.example.test',
+      companionId: '11111111-1111-4111-8111-111111111111',
+      sessionId: 'realtime:office-device:session',
+    };
+    const jti = randomUUID();
     const input = {
       issuer: 'psfn-satellite-hub',
-      jti: randomUUID(),
+      jti,
       assertionDigest: 'a'.repeat(64),
       deviceId: 'office-device',
       enrollmentVersion: 7,
       expiresAt: new Date(Date.now() + 30_000),
+      auditContext: {
+        issuerDigest: digest('psfn-satellite-hub'),
+        keyIdDigest: digest(context.keyId),
+        audienceDigest: digest(context.audience),
+        companionIdDigest: digest(context.companionId),
+        deviceIdDigest: digest('office-device'),
+        sessionIdDigest: digest(context.sessionId),
+        enrollmentVersionDigest: digest('7'),
+        jtiDigest: digest(jti),
+      },
     };
     try {
       const outcomes = await Promise.all(Array.from({ length: 8 }, () => store.consume(input)));
       expect(outcomes.filter(result => result.outcome === 'consumed')).toHaveLength(1);
       expect(outcomes.filter(result => result.outcome === 'replayed')).toHaveLength(7);
-      await expect(store.consume({ ...input, assertionDigest: 'b'.repeat(64) }))
-        .resolves.toEqual({ outcome: 'mismatch' });
+      const exactRetryAudit = await pool.query<{ count: string }>(`
+        SELECT COUNT(*)::text AS count
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+        WHERE action = 'hub_device_assertion.verify'
+      `);
+      expect(exactRetryAudit.rows[0]?.count).toBe('0');
+
+      const mutated = { ...input, assertionDigest: 'b'.repeat(64) };
+      const mutatedOutcomes = await Promise.all(
+        Array.from({ length: 8 }, () => store.consume(mutated)),
+      );
+      expect(mutatedOutcomes).toEqual(
+        Array.from({ length: 8 }, () => ({ outcome: 'mismatch' })),
+      );
+      await expect(store.consume(mutated)).resolves.toEqual({ outcome: 'mismatch' });
       const audit = await pool.query<{
         assertion_digest: string;
         replay_count: string;
@@ -398,12 +430,121 @@ describe('fleet_auth Postgres authority boundary', () => {
         assertion_digest: input.assertionDigest,
         replay_count: '7',
         last_replayed_at: expect.any(Date),
-        mismatch_count: '1',
+        mismatch_count: '9',
         last_mismatch_digest: 'b'.repeat(64),
         last_mismatch_at: expect.any(Date),
       })]);
+
+      await pool.query(`
+        UPDATE ${FLEET_AUTH_SCHEMA_NAME}.hub_device_assertion_replays
+        SET consumed_at = clock_timestamp() - interval '2 seconds',
+            expires_at = clock_timestamp() - interval '1 second'
+        WHERE issuer = $1 AND jti = $2
+      `, [input.issuer, input.jti]);
+      await store.consume({
+        ...input,
+        jti: randomUUID(),
+        assertionDigest: 'c'.repeat(64),
+        expiresAt: new Date(Date.now() + 30_000),
+      });
+
+      const durableAudit = await pool.query<{
+        actor_context: Record<string, unknown>;
+        action: string;
+        resource: string;
+        decision: string;
+        reason_code: string;
+        companion_id: string | null;
+        principal_id: string | null;
+        authority_generation: string;
+        global_auth_epoch: string;
+        correlation_id: string;
+        decision_context: Record<string, unknown>;
+        replay_count: string;
+      }>(`
+        SELECT audit.actor_context, audit.action, audit.resource, audit.decision,
+               audit.reason_code, audit.companion_id, audit.principal_id,
+               audit.authority_generation, audit.global_auth_epoch,
+               audit.correlation_id, audit.decision_context,
+               (SELECT COUNT(*)::text
+                FROM ${FLEET_AUTH_SCHEMA_NAME}.hub_device_assertion_replays
+                WHERE issuer = $1 AND jti = $2) AS replay_count
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events AS audit
+        WHERE audit.action = 'hub_device_assertion.verify'
+          AND audit.reason_code = 'mutated_replay'
+      `, [input.issuer, input.jti]);
+      expect(durableAudit.rows).toEqual([{
+        actor_context: { kind: 'hub_device_assertion' },
+        action: 'hub_device_assertion.verify',
+        resource: 'hub-device-assertion-replay',
+        decision: 'deny',
+        reason_code: 'mutated_replay',
+        companion_id: null,
+        principal_id: null,
+        authority_generation: '1',
+        global_auth_epoch: '1',
+        correlation_id: expect.stringMatching(/^[0-9a-f]{64}$/),
+        decision_context: {
+          schemaVersion: 1,
+          issuerDigest: digest(input.issuer),
+          keyIdDigest: digest(context.keyId),
+          audienceDigest: digest(context.audience),
+          companionIdDigest: digest(context.companionId),
+          deviceIdDigest: digest(input.deviceId),
+          sessionIdDigest: digest(context.sessionId),
+          enrollmentVersionDigest: digest(String(input.enrollmentVersion)),
+          jtiDigest: digest(input.jti),
+          acceptedAssertionDigest: input.assertionDigest,
+          mutatedAssertionDigest: mutated.assertionDigest,
+        },
+        replay_count: '0',
+      }]);
+      expect(JSON.stringify(durableAudit.rows)).not.toContain(input.deviceId);
+      expect(JSON.stringify(durableAudit.rows)).not.toContain(context.sessionId);
+
+      const rejectedJti = randomUUID();
+      const rejectedInput = {
+        ...input,
+        jti: rejectedJti,
+        assertionDigest: 'd'.repeat(64),
+        auditContext: {
+          ...input.auditContext,
+          jtiDigest: digest(rejectedJti),
+        },
+      };
+      await store.consume(rejectedInput);
+      await migration.query(`
+        CREATE FUNCTION ${FLEET_AUTH_SCHEMA_NAME}.reject_hub_mutated_replay_audit_insert()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        BEGIN
+          IF NEW.action = 'hub_device_assertion.verify' THEN
+            RAISE EXCEPTION 'forced mutated-replay audit failure' USING ERRCODE = '42501';
+          END IF;
+          RETURN NEW;
+        END;
+        $$;
+        CREATE TRIGGER reject_hub_mutated_replay_audit_insert
+          BEFORE INSERT ON ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+          FOR EACH ROW EXECUTE FUNCTION ${FLEET_AUTH_SCHEMA_NAME}.reject_hub_mutated_replay_audit_insert();
+      `);
+      await expect(store.consume({ ...rejectedInput, assertionDigest: 'e'.repeat(64) }))
+        .rejects.toThrow(/forced mutated-replay audit failure/);
+      const failedAudit = await pool.query<{
+        mismatch_count: string;
+        audit_count: string;
+      }>(`
+        SELECT replay.mismatch_count,
+               (SELECT COUNT(*)::text
+                FROM ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+                WHERE decision_context->>'jtiDigest' = $2) AS audit_count
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.hub_device_assertion_replays AS replay
+        WHERE replay.issuer = $1 AND replay.jti = $3
+      `, [rejectedInput.issuer, rejectedInput.auditContext.jtiDigest, rejectedInput.jti]);
+      expect(failedAudit.rows).toEqual([{ mismatch_count: '0', audit_count: '0' }]);
     } finally {
-      await pool.end();
+      await Promise.all([pool.end(), migration.end()]);
     }
   }, TIMEOUT_MS);
 
@@ -819,6 +960,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         .resolves.toBeUndefined();
 
       const runtime = createPostgresPool(db.runtimeUrl, { max: 1 });
+      const backup = createPostgresPool(db.backupUrl, { max: 1 });
       try {
         await expect(runtime.query(
           `DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_tombstones`,
@@ -826,8 +968,15 @@ describe('fleet_auth Postgres authority boundary', () => {
         await expect(runtime.query(
           `TRUNCATE ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events`,
         )).rejects.toThrow(/permission denied/);
+        await expect(backup.query(
+          `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+           SET action = 'rewritten'`,
+        )).rejects.toThrow(/permission denied/);
+        await expect(backup.query(
+          `DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events`,
+        )).rejects.toThrow(/permission denied/);
       } finally {
-        await runtime.end();
+        await Promise.all([runtime.end(), backup.end()]);
       }
     } finally {
       await migration.end();
@@ -876,6 +1025,14 @@ describe('fleet_auth Postgres authority boundary', () => {
          SET action = 'rewritten' WHERE event_id = $1`,
         [auditId],
       )).rejects.toThrow(/permission denied|append-only/);
+      await expect(runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+          (event_id, actor_context, action, resource, decision, reason_code,
+           authority_generation, global_auth_epoch, correlation_id, decision_context)
+         VALUES ($1, '{"kind":"browser"}'::jsonb, 'hub_device_assertion.verify',
+                 'raw-assertion', 'deny', 'mutated_replay', 1, 1, $2, '{}'::jsonb)`,
+        [randomUUID(), 'c'.repeat(64)],
+      )).rejects.toThrow(/authorization_audit_hub_mutated_replay_shape/);
 
       await expect(runtime.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials
@@ -1306,6 +1463,8 @@ describe('fleet_auth Postgres authority boundary', () => {
     const principalId = randomUUID();
     const bindingId = randomUUID();
     const grantId = randomUUID();
+    const hubReplayJti = randomUUID();
+    const hubReplayDigest = (value: string): string => createHash('sha256').update(value).digest('hex');
     const keyA = {
       credentialIdHash: 'a'.repeat(64),
       publicKeyVerifier: 'verifier-a',
@@ -1375,6 +1534,27 @@ describe('fleet_auth Postgres authority boundary', () => {
                  'pending', 1)`,
         [keyA.credentialIdHash, principalId],
       );
+      const hubReplayStore = new PostgresHubDeviceAssertionReplayStore(sourceRuntime);
+      const hubReplayInput = {
+        issuer: 'psfn-satellite-hub',
+        jti: hubReplayJti,
+        assertionDigest: 'c'.repeat(64),
+        deviceId: 'office-device',
+        enrollmentVersion: 7,
+        expiresAt: new Date(Date.now() + 30_000),
+        auditContext: {
+          issuerDigest: hubReplayDigest('psfn-satellite-hub'),
+          keyIdDigest: hubReplayDigest('hub-2026-07'),
+          audienceDigest: hubReplayDigest('https://fleet.example.test'),
+          companionIdDigest: hubReplayDigest('11111111-1111-4111-8111-111111111111'),
+          deviceIdDigest: hubReplayDigest('office-device'),
+          sessionIdDigest: hubReplayDigest('realtime:office-device:session'),
+          enrollmentVersionDigest: hubReplayDigest('7'),
+          jtiDigest: hubReplayDigest(hubReplayJti),
+        },
+      };
+      await hubReplayStore.consume(hubReplayInput);
+      await hubReplayStore.consume({ ...hubReplayInput, assertionDigest: 'd'.repeat(64) });
       const backup = await runFleetAuthConsistentBackup({
         databaseUrl: source.backupUrl,
         roles: ROLES,
@@ -1485,6 +1665,34 @@ describe('fleet_auth Postgres authority boundary', () => {
           [principalId],
         );
         expect(principal.rows[0]).toEqual({ status: 'quarantined', restore_state: 'quarantined' });
+        const restoredHubReplayAudit = await targetRuntime.query<{
+          audit_count: string;
+          replay_count: string;
+          decision_context: Record<string, unknown> | null;
+        }>(`
+          SELECT
+            (SELECT COUNT(*)::text
+             FROM ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+             WHERE action = 'hub_device_assertion.verify'
+               AND reason_code = 'mutated_replay'
+               AND decision_context->>'jtiDigest' = $1) AS audit_count,
+            (SELECT COUNT(*)::text
+             FROM ${FLEET_AUTH_SCHEMA_NAME}.hub_device_assertion_replays) AS replay_count,
+            (SELECT decision_context
+             FROM ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+             WHERE action = 'hub_device_assertion.verify'
+               AND reason_code = 'mutated_replay'
+               AND decision_context->>'jtiDigest' = $1) AS decision_context
+        `, [hubReplayDigest(hubReplayJti)]);
+        expect(restoredHubReplayAudit.rows).toEqual([{
+          audit_count: '1',
+          replay_count: '0',
+          decision_context: expect.objectContaining({
+            acceptedAssertionDigest: 'c'.repeat(64),
+            mutatedAssertionDigest: 'd'.repeat(64),
+            jtiDigest: hubReplayDigest(hubReplayJti),
+          }),
+        }]);
         const restoredCompanion = await targetRuntime.query<{
           lifecycle: string;
           restore_state: string;

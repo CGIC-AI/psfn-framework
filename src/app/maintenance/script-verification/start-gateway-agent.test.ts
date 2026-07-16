@@ -285,6 +285,7 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(agentAllowlist).toContain('GATEWAY_SOCKET');
     expect(agentAllowlist).toContain('SYSTEM_DATA_DIR');
     expect(agentAllowlist).toContain('COMPANION_DATA_DIR');
+    expect(agentAllowlist).toContain('PSFN_FLEET_AUTH \\');
     expect(agentAllowlist).not.toMatch(/\n\s*API_KEY\s*\\/);
     expect(agentAllowlist).not.toMatch(/\n\s*ADMIN_TOKEN\s*\\/);
     expect(agentAllowlist).not.toMatch(/\n\s*OPENROUTER_API_KEY\s*\\/);
@@ -609,6 +610,7 @@ describe('start-gateway-agent multi-companion supervisor', () => {
       launcher.indexOf('launch_background()'),
     );
     expect(operatorAllowlist).toContain('ADMIN_TOKEN \\');
+    expect(operatorAllowlist).toContain('PSFN_FLEET_AUTH \\');
     for (const secret of [
       'OPENROUTER_API_KEY',
       'LITELLM_API_KEY',

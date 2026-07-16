@@ -55,6 +55,12 @@ import {
   INTAKE_POLICY_FILE_NAME,
   INTAKE_POLICY_SEED_FILE_NAME,
 } from './intake-policy-config.js';
+import {
+  FLEET_AUTH_FILE_NAME,
+  FLEET_AUTH_SEED_FILE_NAME,
+  isFleetAuthEnabled,
+  resolveFleetAuthOwnerFile,
+} from './fleet-auth-config.js';
 
 export interface StartupOwnerFileLoadOptions {
   dataDir: string;
@@ -75,6 +81,8 @@ export interface StartupOwnerFileLoadOptions {
    * consulted. Controls the fail-closed direction for the companions owner file.
    */
   multiCompanion?: boolean;
+  /** Optional fleet-auth topology flag; strict flag/file matrix when omitted. */
+  fleetAuth?: boolean;
 }
 
 export interface StartupOwnerFileState {
@@ -297,6 +305,17 @@ export function verifyStartupOwnerFiles(
       dataPath: join(options.dataDir, INTAKE_POLICY_FILE_NAME),
       seedPath: join(seedDir, INTAKE_POLICY_SEED_FILE_NAME),
       run: () => loadStartupIntakePolicyOwnerFile(options.dataDir, options.seedDir),
+    },
+    {
+      label: 'fleet-auth',
+      dataPath: join(options.dataDir, FLEET_AUTH_FILE_NAME),
+      seedPath: join(seedDir, FLEET_AUTH_SEED_FILE_NAME),
+      run: () => resolveFleetAuthOwnerFile({
+        dataDir: options.dataDir,
+        enabled: options.fleetAuth ?? isFleetAuthEnabled(),
+        processMode: 'gateway',
+        seedDir: options.seedDir,
+      }),
     },
   ];
 

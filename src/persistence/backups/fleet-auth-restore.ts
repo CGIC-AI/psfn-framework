@@ -1,0 +1,747 @@
+import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import type { PoolClient } from 'pg';
+import {
+  assertNoUnknownKeys,
+  isCanonicalIsoTimestamp,
+  isRecord,
+} from '../../shared/utils/types.js';
+import { createPostgresPool } from '../postgres.js';
+import {
+  type FleetAuthAuthorityFloor,
+  FleetAuthAuthorityFloorStore,
+} from '../postgres/fleet-auth/authority-floor.js';
+import { reconcileFleetAuthAuthorityStateInTransaction } from '../postgres/fleet-auth/gateway-persistence.js';
+import {
+  FLEET_AUTH_SCHEMA_NAME,
+  assertFleetAuthBackupRestorePrivileges,
+  type FleetAuthDatabaseRoles,
+} from '../postgres/fleet-auth/schema.js';
+
+const RESTORE_LOCK_CLASS = 0x5053464e;
+const RESTORE_LOCK_ID = 0x52535452;
+const DISCORD_SUBJECT_PATTERN = /^[1-9][0-9]{16,19}$/u;
+
+type SnapshotRow = Record<string, unknown>;
+
+interface FleetAuthDurableSnapshot {
+  authorityState: SnapshotRow[];
+  humanPrincipals: SnapshotRow[];
+  providerSubjects: SnapshotRow[];
+  providerSubjectHistory: SnapshotRow[];
+  providerSubjectTombstones: SnapshotRow[];
+  principalContactBindings: SnapshotRow[];
+  principalRoleGrants: SnapshotRow[];
+  passkeyCredentials: SnapshotRow[];
+  authorizationAuditEvents: SnapshotRow[];
+}
+
+interface FleetAuthSnapshot {
+  schemaVersion: 2;
+  capturedAt: string;
+  postgresSnapshot: string;
+  authorityLineageId: string;
+  durable: FleetAuthDurableSnapshot;
+}
+
+export interface VerifiedFleetAuthBackupManifest {
+  authorityLineageId: string;
+  capturedAt: string;
+  postgresSnapshot: string;
+  artifacts: ReadonlyArray<{
+    kind: 'companion' | 'shared' | 'fleet_auth' | 'fleet_auth_config';
+    path: string;
+    runtimeRoles?: readonly string[];
+  }>;
+}
+
+export interface VerifiedFleetAuthRestoreOptions {
+  manifestPath: string;
+  manifest: VerifiedFleetAuthBackupManifest;
+  databaseUrl: string;
+  roles: FleetAuthDatabaseRoles;
+  authorityFloors: FleetAuthAuthorityFloorStore;
+  activationGeneration: number;
+  restoredAt?: string;
+}
+
+export interface FleetAuthRestoreResult {
+  importedRows: number;
+  authorityGeneration: number;
+  restoreCheckpoint: number;
+}
+
+const SNAPSHOT_COLLECTION_KEYS = [
+  'authorityState',
+  'humanPrincipals',
+  'providerSubjects',
+  'providerSubjectHistory',
+  'providerSubjectTombstones',
+  'principalContactBindings',
+  'principalRoleGrants',
+  'passkeyCredentials',
+  'authorizationAuditEvents',
+] as const;
+
+const ROW_KEYS = {
+  authorityState: [
+    'singleton', 'authority_generation', 'global_auth_epoch', 'restore_checkpoint',
+    'authority_lineage_id',
+    'activation_generation', 'updated_at',
+  ],
+  humanPrincipals: [
+    'principal_id', 'status', 'authn_version', 'authz_version', 'authority_generation',
+    'restore_state', 'created_at', 'updated_at',
+  ],
+  providerSubjects: [
+    'provider', 'subject_id', 'principal_id', 'state', 'metadata', 'authority_generation',
+    'restore_state', 'created_at', 'updated_at',
+  ],
+  providerSubjectHistory: [
+    'event_id', 'provider', 'subject_id', 'principal_id', 'state', 'event_type',
+    'authority_generation', 'payload', 'recorded_at',
+  ],
+  providerSubjectTombstones: [
+    'provider', 'subject_id', 'prior_principal_id', 'authority_generation', 'revoked_at',
+    'reason_digest',
+  ],
+  principalContactBindings: [
+    'binding_id', 'principal_id', 'companion_id', 'contact_id', 'state',
+    'verification_provenance', 'version', 'authority_generation', 'restore_state',
+    'created_at', 'updated_at',
+  ],
+  principalRoleGrants: [
+    'grant_id', 'principal_id', 'companion_id', 'role', 'lifecycle', 'version',
+    'authority_generation', 'restore_state', 'created_at', 'updated_at',
+  ],
+  passkeyCredentials: [
+    'credential_id_hash', 'principal_id', 'expected_provider',
+    'expected_provider_subject_id', 'rp_id', 'public_key_projection',
+    'credential_generation', 'state', 'sign_count', 'backup_eligible', 'backup_state',
+    'authority_floor_generation', 'restore_state', 'imported_at', 'updated_at',
+  ],
+  authorizationAuditEvents: [
+    'event_id', 'actor_context', 'action', 'resource', 'decision', 'reason_code',
+    'companion_id', 'principal_id', 'authority_generation', 'global_auth_epoch',
+    'correlation_id', 'occurred_at',
+  ],
+} as const;
+
+function assertExactKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+  field: string,
+): void {
+  assertNoUnknownKeys(value, keys, field, {
+    errorPrefix: 'Invalid fleet auth snapshot',
+  });
+  for (const key of keys) {
+    if (!Object.hasOwn(value, key)) {
+      throw new Error(`Invalid fleet auth snapshot: ${field}.${key} is required`);
+    }
+  }
+}
+
+function parseCollection(
+  value: unknown,
+  field: keyof FleetAuthDurableSnapshot,
+  rowKeys: readonly string[],
+): SnapshotRow[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`Invalid fleet auth snapshot: durable.${field} must be an array`);
+  }
+  return value.map((row, index) => {
+    if (!isRecord(row)) {
+      throw new Error(`Invalid fleet auth snapshot: durable.${field}[${index}] must be an object`);
+    }
+    assertExactKeys(row, rowKeys, `durable.${field}[${index}]`);
+    return row;
+  });
+}
+
+function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest): FleetAuthSnapshot {
+  let value: unknown;
+  try {
+    value = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    throw new Error(`Fleet auth snapshot is unavailable: ${String(error)}`);
+  }
+  if (!isRecord(value)) throw new Error('Invalid fleet auth snapshot: root must be an object');
+  assertExactKeys(
+    value,
+    ['schemaVersion', 'capturedAt', 'postgresSnapshot', 'authorityLineageId', 'durable'],
+    'root',
+  );
+  if (value.schemaVersion !== 2
+    || !isCanonicalIsoTimestamp(value.capturedAt)
+    || value.capturedAt !== manifest.capturedAt
+    || typeof value.postgresSnapshot !== 'string'
+    || value.postgresSnapshot !== manifest.postgresSnapshot
+    || typeof value.authorityLineageId !== 'string'
+    || !/^[0-9a-f]{64}$/u.test(value.authorityLineageId)
+    || value.authorityLineageId !== manifest.authorityLineageId
+    || !isRecord(value.durable)) {
+    throw new Error('Invalid fleet auth snapshot: root does not match its verified manifest');
+  }
+  const durable = value.durable;
+  assertExactKeys(durable, SNAPSHOT_COLLECTION_KEYS, 'durable');
+  const parsed: FleetAuthDurableSnapshot = {
+    authorityState: parseCollection(durable.authorityState, 'authorityState', ROW_KEYS.authorityState),
+    humanPrincipals: parseCollection(durable.humanPrincipals, 'humanPrincipals', ROW_KEYS.humanPrincipals),
+    providerSubjects: parseCollection(durable.providerSubjects, 'providerSubjects', ROW_KEYS.providerSubjects),
+    providerSubjectHistory: parseCollection(
+      durable.providerSubjectHistory,
+      'providerSubjectHistory',
+      ROW_KEYS.providerSubjectHistory,
+    ),
+    providerSubjectTombstones: parseCollection(
+      durable.providerSubjectTombstones,
+      'providerSubjectTombstones',
+      ROW_KEYS.providerSubjectTombstones,
+    ),
+    principalContactBindings: parseCollection(
+      durable.principalContactBindings,
+      'principalContactBindings',
+      ROW_KEYS.principalContactBindings,
+    ),
+    principalRoleGrants: parseCollection(
+      durable.principalRoleGrants,
+      'principalRoleGrants',
+      ROW_KEYS.principalRoleGrants,
+    ),
+    passkeyCredentials: parseCollection(
+      durable.passkeyCredentials,
+      'passkeyCredentials',
+      ROW_KEYS.passkeyCredentials,
+    ),
+    authorizationAuditEvents: parseCollection(
+      durable.authorizationAuditEvents,
+      'authorizationAuditEvents',
+      ROW_KEYS.authorizationAuditEvents,
+    ),
+  };
+  if (parsed.authorityState.length !== 1) {
+    throw new Error('Invalid fleet auth snapshot: authorityState must contain its singleton row');
+  }
+  if (parsed.authorityState[0]?.singleton !== true) {
+    throw new Error('Invalid fleet auth snapshot: authorityState singleton marker is invalid');
+  }
+  if (parsed.authorityState[0]?.authority_lineage_id !== value.authorityLineageId) {
+    throw new Error('Invalid fleet auth snapshot: authority lineage does not match its manifest');
+  }
+  return {
+    schemaVersion: 2,
+    capturedAt: value.capturedAt,
+    postgresSnapshot: value.postgresSnapshot,
+    authorityLineageId: value.authorityLineageId,
+    durable: parsed,
+  };
+}
+
+function requiredString(row: SnapshotRow, key: string, field: string): string {
+  const value = row[key];
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`Invalid fleet auth snapshot: ${field}.${key} must be a non-empty string`);
+  }
+  return value;
+}
+
+function jsonObject(row: SnapshotRow, key: string, field: string): string {
+  const value = row[key];
+  if (!isRecord(value)) {
+    throw new Error(`Invalid fleet auth snapshot: ${field}.${key} must be an object`);
+  }
+  return JSON.stringify(value);
+}
+
+function providerSubjectResource(row: SnapshotRow, field: string): string {
+  const provider = requiredString(row, 'provider', field);
+  const subjectId = requiredString(row, 'subject_id', field);
+  if (provider !== 'discord' || !DISCORD_SUBJECT_PATTERN.test(subjectId)) {
+    throw new Error(`Invalid fleet auth snapshot: ${field} has an invalid provider subject`);
+  }
+  return `${provider}:${subjectId}`;
+}
+
+function parseStateInteger(value: string, field: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`Invalid target fleet_auth authority_state.${field}`);
+  }
+  return parsed;
+}
+
+async function assertTargetNotAhead(
+  client: PoolClient,
+  floor: FleetAuthAuthorityFloor,
+): Promise<void> {
+  const result = await client.query<{
+    authority_lineage_id: string | null;
+    authority_generation: string;
+    restore_checkpoint: string;
+    activation_generation: string;
+  }>(`
+    SELECT authority_lineage_id, authority_generation, restore_checkpoint, activation_generation
+    FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+    WHERE singleton = TRUE
+    FOR UPDATE
+  `);
+  const state = result.rows.at(0);
+  if (!state) throw new Error('Target fleet_auth authority_state singleton is missing');
+  if (state.authority_lineage_id !== null
+    && state.authority_lineage_id !== floor.trustedHost.lineageId) {
+    throw new Error('Target fleet_auth authority lineage does not match the trusted-host floor');
+  }
+  if (parseStateInteger(state.authority_generation, 'authority_generation')
+      > floor.trustedHost.authorityGeneration
+    || parseStateInteger(state.restore_checkpoint, 'restore_checkpoint')
+      > floor.trustedHost.restoreCheckpoint
+    || parseStateInteger(state.activation_generation, 'activation_generation')
+      > floor.trustedHost.activationGeneration) {
+    throw new Error('Target fleet_auth authority is ahead of its non-restored trusted-host floor');
+  }
+}
+
+async function insertOrAssertCompatibleConflict(options: {
+  client: PoolClient;
+  insertSql: string;
+  insertValues: readonly unknown[];
+  compatibilitySql: string;
+  compatibilityValues: readonly unknown[];
+  description: string;
+}): Promise<number> {
+  const inserted = await options.client.query(options.insertSql, [...options.insertValues]);
+  if ((inserted.rowCount ?? 0) > 0) return inserted.rowCount ?? 0;
+  const compatible = await options.client.query<{ compatible: boolean }>(
+    options.compatibilitySql,
+    [...options.compatibilityValues],
+  );
+  if (compatible.rows.at(0)?.compatible !== true) {
+    throw new Error(`Fleet auth restore found a conflicting durable ${options.description}`);
+  }
+  return 0;
+}
+
+async function importDurableRows(
+  client: PoolClient,
+  durable: FleetAuthDurableSnapshot,
+  floor: FleetAuthAuthorityFloor,
+  floors: FleetAuthAuthorityFloorStore,
+  restoredAt: string,
+): Promise<number> {
+  let importedRows = 0;
+  const record = async (query: Promise<number>): Promise<void> => {
+    importedRows += await query;
+  };
+
+  for (const row of durable.humanPrincipals) {
+    const values = [
+      row.principal_id, row.authn_version, row.authz_version,
+      floor.trustedHost.authorityGeneration, row.created_at, restoredAt,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+          (principal_id, status, authn_version, authz_version, authority_generation,
+           restore_state, created_at, updated_at)
+        VALUES ($1, 'quarantined', $2, $3, $4, 'quarantined', $5, $6)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+          WHERE principal_id = $1
+            AND authn_version >= $2::bigint
+            AND authz_version >= $3::bigint
+            AND authority_generation <= $4::bigint
+            AND created_at <= $5::timestamptz
+          FOR UPDATE
+        ) AS compatible
+      `,
+      compatibilityValues: values.slice(0, 5),
+      description: 'human principal',
+    }));
+  }
+
+  for (const [index, row] of durable.providerSubjects.entries()) {
+    const resource = providerSubjectResource(row, `durable.providerSubjects[${index}]`);
+    const permanentlyTombstoned = floors.isAccountAuthorityTombstoned(
+      'provider_subject',
+      resource,
+      floor,
+    );
+    const state = permanentlyTombstoned
+      ? 'revoked'
+      : 'quarantined';
+    const values = [
+      row.provider, row.subject_id, row.principal_id, state,
+      jsonObject(row, 'metadata', `durable.providerSubjects[${index}]`),
+      floor.trustedHost.authorityGeneration, row.created_at, restoredAt,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+          (provider, subject_id, principal_id, state, metadata, authority_generation,
+           restore_state, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6, 'quarantined', $7, $8)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+          WHERE provider = $1 AND subject_id = $2
+            AND principal_id = $3::uuid
+            AND $4::text IN ('revoked', 'quarantined')
+            AND metadata = $5::jsonb
+            AND authority_generation <= $6::bigint
+            AND created_at <= $7::timestamptz
+          FOR UPDATE
+        ) AS compatible
+      `,
+      compatibilityValues: values.slice(0, 7),
+      description: 'provider subject',
+    }));
+    if (permanentlyTombstoned) {
+      const tombstoneValues = [
+        row.provider, row.subject_id, row.principal_id,
+        floor.trustedHost.authorityGeneration, restoredAt,
+        createHash('sha256').update('trusted-host-authority-floor').digest('hex'),
+      ];
+      await record(insertOrAssertCompatibleConflict({
+        client,
+        insertSql: `
+          INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_tombstones
+            (provider, subject_id, prior_principal_id, authority_generation, revoked_at, reason_digest)
+          VALUES ($1, $2, $3, $4, $5, $6)
+          ON CONFLICT DO NOTHING
+        `,
+        insertValues: tombstoneValues,
+        compatibilitySql: `
+          SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_tombstones
+          WHERE provider = $1 AND subject_id = $2 AND prior_principal_id = $3::uuid
+        ) AS compatible
+        `,
+        compatibilityValues: tombstoneValues.slice(0, 3),
+        description: 'trusted-host provider tombstone',
+      }));
+    }
+  }
+
+  for (const [index, row] of durable.providerSubjectHistory.entries()) {
+    providerSubjectResource(row, `durable.providerSubjectHistory[${index}]`);
+    const values = [
+      row.event_id, row.provider, row.subject_id, row.principal_id, row.state,
+      row.event_type, row.authority_generation,
+      jsonObject(row, 'payload', `durable.providerSubjectHistory[${index}]`), row.recorded_at,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_history
+          (event_id, provider, subject_id, principal_id, state, event_type,
+           authority_generation, payload, recorded_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_history
+          WHERE event_id = $1::uuid AND provider = $2 AND subject_id = $3
+            AND principal_id = $4::uuid AND state = $5 AND event_type = $6
+            AND authority_generation = $7::bigint AND payload = $8::jsonb
+            AND recorded_at = $9::timestamptz
+        ) AS compatible
+      `,
+      compatibilityValues: values.slice(0, 9),
+      description: 'provider subject history event',
+    }));
+  }
+
+  for (const [index, row] of durable.providerSubjectTombstones.entries()) {
+    providerSubjectResource(row, `durable.providerSubjectTombstones[${index}]`);
+    const values = [
+      row.provider, row.subject_id, row.prior_principal_id,
+      floor.trustedHost.authorityGeneration, row.revoked_at, row.reason_digest,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_tombstones
+          (provider, subject_id, prior_principal_id, authority_generation, revoked_at, reason_digest)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_tombstones
+          WHERE provider = $1 AND subject_id = $2 AND prior_principal_id = $3::uuid
+            AND $4::bigint >= 1
+            AND authority_generation >= $7::bigint
+            AND revoked_at >= $5::timestamptz
+            AND (revoked_at > $5::timestamptz OR reason_digest = $6)
+        ) AS compatible
+      `,
+      compatibilityValues: [...values, row.authority_generation],
+      description: 'provider subject tombstone',
+    }));
+  }
+
+  for (const row of durable.principalContactBindings) {
+    const bindingId = requiredString(row, 'binding_id', 'durable.principalContactBindings');
+    const state = floors.isAccountAuthorityTombstoned('contact_binding', bindingId, floor)
+      ? 'revoked'
+      : 'quarantined';
+    const values = [
+      row.binding_id, row.principal_id, row.companion_id, row.contact_id, state,
+      jsonObject(row, 'verification_provenance', 'durable.principalContactBindings'),
+      row.version, floor.trustedHost.authorityGeneration, row.created_at, restoredAt,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+          (binding_id, principal_id, companion_id, contact_id, state,
+           verification_provenance, version, authority_generation, restore_state,
+           created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, 'quarantined', $9, $10)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+          WHERE (binding_id = $1::uuid
+              OR (principal_id = $2::uuid AND companion_id = $3::uuid AND contact_id = $4))
+            AND binding_id = $1::uuid AND principal_id = $2::uuid
+            AND companion_id = $3::uuid AND contact_id = $4
+            AND $5::text IN ('revoked', 'quarantined')
+            AND verification_provenance = $6::jsonb
+            AND version >= $7::bigint AND authority_generation <= $8::bigint
+            AND created_at <= $9::timestamptz
+          FOR UPDATE
+        ) AS compatible
+      `,
+      compatibilityValues: values.slice(0, 9),
+      description: 'principal contact binding',
+    }));
+  }
+
+  for (const row of durable.principalRoleGrants) {
+    const grantId = requiredString(row, 'grant_id', 'durable.principalRoleGrants');
+    const lifecycle = floors.isAccountAuthorityTombstoned('role_grant', grantId, floor)
+      ? 'revoked'
+      : 'quarantined';
+    const values = [
+      row.grant_id, row.principal_id, row.companion_id, row.role, lifecycle,
+      row.version, floor.trustedHost.authorityGeneration, row.created_at, restoredAt,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+          (grant_id, principal_id, companion_id, role, lifecycle, version,
+           authority_generation, restore_state, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'quarantined', $8, $9)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+          WHERE grant_id = $1::uuid AND principal_id = $2::uuid
+            AND companion_id = $3::uuid AND role = $4
+            AND $5::text IN ('revoked', 'quarantined')
+            AND version >= $6::bigint AND authority_generation <= $7::bigint
+            AND created_at <= $8::timestamptz
+          FOR UPDATE
+        ) AS compatible
+      `,
+      compatibilityValues: values.slice(0, 8),
+      description: 'principal role grant',
+    }));
+  }
+
+  for (const row of durable.passkeyCredentials) {
+    const values = [
+      row.credential_id_hash, row.principal_id, row.expected_provider,
+      row.expected_provider_subject_id, row.rp_id, row.public_key_projection,
+      row.credential_generation, row.sign_count, row.backup_eligible, row.backup_state,
+      Math.max(1, floor.passkeys.generation), restoredAt,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials
+          (credential_id_hash, principal_id, expected_provider,
+           expected_provider_subject_id, rp_id, public_key_projection,
+           credential_generation, state, sign_count, backup_eligible, backup_state,
+           authority_floor_generation, restore_state, imported_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, 'quarantined', $8, $9, $10,
+                $11, 'quarantined', $12, $12)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials
+          WHERE credential_id_hash = $1 AND principal_id = $2::uuid
+            AND expected_provider = $3 AND expected_provider_subject_id = $4
+            AND rp_id = $5 AND public_key_projection = $6
+            AND credential_generation >= $7::bigint AND sign_count >= $8::bigint
+            AND backup_eligible = $9::boolean AND backup_state = $10::boolean
+            AND $11::bigint >= 1 AND $12::timestamptz IS NOT NULL
+            AND authority_floor_generation >= $13::bigint
+          FOR UPDATE
+        ) AS compatible
+      `,
+      compatibilityValues: [...values, row.authority_floor_generation],
+      description: 'passkey projection',
+    }));
+  }
+
+  for (const [index, row] of durable.authorizationAuditEvents.entries()) {
+    const values = [
+      row.event_id,
+      jsonObject(row, 'actor_context', `durable.authorizationAuditEvents[${index}]`),
+      row.action, row.resource, row.decision, row.reason_code, row.companion_id,
+      row.principal_id, row.authority_generation, row.global_auth_epoch,
+      row.correlation_id, row.occurred_at,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+          (event_id, actor_context, action, resource, decision, reason_code,
+           companion_id, principal_id, authority_generation, global_auth_epoch,
+           correlation_id, occurred_at)
+        VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+          WHERE event_id = $1::uuid AND actor_context = $2::jsonb
+            AND action = $3 AND resource = $4 AND decision = $5
+            AND reason_code IS NOT DISTINCT FROM $6::text
+            AND companion_id IS NOT DISTINCT FROM $7::uuid
+            AND principal_id IS NOT DISTINCT FROM $8::uuid
+            AND authority_generation = $9::bigint AND global_auth_epoch = $10::bigint
+            AND correlation_id IS NOT DISTINCT FROM $11::text
+            AND occurred_at = $12::timestamptz
+        ) AS compatible
+      `,
+      compatibilityValues: values,
+      description: 'authorization audit event',
+    }));
+  }
+  return importedRows;
+}
+
+/**
+ * Restore only the dedicated fleet_auth artifact after the coordinator has
+ * verified the complete same-snapshot manifest family. The non-restored floor
+ * advances before database mutation. Any later failure therefore leaves
+ * authority over-fenced and startup reconciliation retries the quarantine.
+ */
+async function executeVerifiedFleetAuthSnapshot(
+  options: VerifiedFleetAuthRestoreOptions,
+  verificationOnly: boolean,
+): Promise<FleetAuthRestoreResult> {
+  if (!Number.isSafeInteger(options.activationGeneration) || options.activationGeneration < 1) {
+    throw new Error('Fleet auth restore activation generation must be an integer >= 1');
+  }
+  const restoredAt = options.restoredAt ?? new Date().toISOString();
+  if (!isCanonicalIsoTimestamp(restoredAt)) {
+    throw new Error('Fleet auth restoredAt must be an ISO timestamp');
+  }
+  const artifact = options.manifest.artifacts.find(candidate => candidate.kind === 'fleet_auth');
+  if (!artifact) throw new Error('Verified fleet auth backup has no fleet_auth artifact');
+  const snapshot = parseSnapshot(
+    resolve(dirname(resolve(options.manifestPath)), artifact.path),
+    options.manifest,
+  );
+  const currentFloor = options.authorityFloors.read();
+  if (snapshot.authorityLineageId !== currentFloor.trustedHost.lineageId) {
+    throw new Error(
+      'Fleet auth backup authority lineage does not match the non-restored trusted-host floor',
+    );
+  }
+  const restoredTombstones = snapshot.durable.providerSubjectTombstones.map((row, index) => ({
+    kind: 'provider_subject' as const,
+    resourceId: providerSubjectResource(
+      row,
+      `durable.providerSubjectTombstones[${index}]`,
+    ),
+  }));
+
+  await assertFleetAuthBackupRestorePrivileges(options.databaseUrl, options.roles);
+  const pool = createPostgresPool(options.databaseUrl, {
+    applicationName: 'fleet-auth-consistent-restore',
+    max: 1,
+  });
+  let client: PoolClient | undefined;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    await client.query(
+      'SELECT pg_advisory_xact_lock($1::integer, $2::integer)',
+      [RESTORE_LOCK_CLASS, RESTORE_LOCK_ID],
+    );
+    await assertTargetNotAhead(client, currentFloor);
+    const preparedFloor = options.authorityFloors.prepareRestore({
+      activationGeneration: options.activationGeneration,
+      restoredTombstones,
+      at: restoredAt,
+    });
+    const importedRows = await importDurableRows(
+      client,
+      snapshot.durable,
+      preparedFloor,
+      options.authorityFloors,
+      restoredAt,
+    );
+    await reconcileFleetAuthAuthorityStateInTransaction(
+      client,
+      preparedFloor,
+      randomUUID(),
+    );
+    await client.query(verificationOnly ? 'ROLLBACK' : 'COMMIT');
+    return {
+      importedRows,
+      authorityGeneration: preparedFloor.trustedHost.authorityGeneration,
+      restoreCheckpoint: preparedFloor.trustedHost.restoreCheckpoint,
+    };
+  } catch (error) {
+    await client?.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    client?.release();
+    await pool.end();
+  }
+}
+
+export async function restoreVerifiedFleetAuthSnapshot(
+  options: VerifiedFleetAuthRestoreOptions,
+): Promise<FleetAuthRestoreResult> {
+  return await executeVerifiedFleetAuthSnapshot(options, false);
+}
+
+/**
+ * Exercise the complete fleet-auth import and reconciliation transaction
+ * without publishing it. Callers must supply an isolated scratch database and
+ * a cloned non-restored authority floor.
+ */
+export async function verifyVerifiedFleetAuthSnapshotRestore(
+  options: VerifiedFleetAuthRestoreOptions,
+): Promise<FleetAuthRestoreResult> {
+  return await executeVerifiedFleetAuthSnapshot(options, true);
+}

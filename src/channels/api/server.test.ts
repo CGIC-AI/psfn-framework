@@ -22,6 +22,8 @@ import type {
   VoiceWebSocketCloseReason,
   VoiceWebSocketRuntimeHooks,
 } from './voice-websocket.js';
+import { FleetAuthHttpRoutes } from './server/fleet-auth-routes.js';
+import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
 
 // ── Helpers ──
 
@@ -2271,6 +2273,76 @@ describe('ApiServer startup auth guard', () => {
     await expect(server.start()).rejects.toThrow(
       'ALLOW_INSECURE_LOCAL_API=true requires API_HOST to be loopback',
     );
+  });
+
+  it('rejects bootstrap-only mode unless gateway-owned fleet auth routes are installed', async () => {
+    const eventBus = new EventBus();
+    const server = createApiServer({
+      port: await allocatePort(),
+      agentLoop: createMockAgentLoop(eventBus),
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      fleetAuthBootstrapOnly: true,
+    });
+    await expect(server.start()).rejects.toThrow(/fleet auth bootstrap routes/i);
+  });
+});
+
+describe('ApiServer fleet-auth bootstrap-only boundary', () => {
+  let server: ApiServer;
+  let port: number;
+
+  beforeEach(async () => {
+    const eventBus = new EventBus();
+    port = await allocatePort();
+    const broker = {
+      beginLogin: vi.fn(async () => ({
+        authorizationUrl: 'https://discord.com/oauth2/authorize?state=opaque',
+        initiatingBrowserToken: 'p'.repeat(43),
+        expiresAt: new Date(Date.now() + 300_000),
+      })),
+    } as unknown as GatewayFleetAuthBroker;
+    server = createApiServer({
+      port,
+      agentLoop: createMockAgentLoop(eventBus),
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'legacy-api-key',
+      allowInsecureWithoutAuth: true,
+      fleetAuthBootstrapOnly: true,
+      fleetAuthHttpRoutes: new FleetAuthHttpRoutes({
+        broker,
+        canonicalOrigin: 'https://fleet.example.test',
+        callbackPath: '/auth/discord/callback',
+      }),
+    });
+    await server.start();
+  });
+
+  afterEach(async () => {
+    await stopServer(server);
+  });
+
+  it('exposes login bootstrap but rejects ordinary HTTP through API-key and insecure-local paths', async () => {
+    const login = await request(port, 'GET', '/v1/fleet-auth/login?return_to=%2Ffleet');
+    expect(login.status).toBe(302);
+    expect(login.headers.location).toContain('discord.com/oauth2/authorize');
+
+    const apiKeyAttempt = await request(port, 'GET', '/v1/models', undefined, {
+      Authorization: 'Bearer legacy-api-key',
+    });
+    expect(apiKeyAttempt.status).toBe(503);
+    expect(JSON.parse(apiKeyAttempt.body).error.type).toBe('fleet_auth_principal_resolver_unavailable');
+
+    const insecureAttempt = await request(port, 'GET', '/v1/models');
+    expect(insecureAttempt.status).toBe(503);
+    expect(JSON.parse(insecureAttempt.body).error.type).toBe('fleet_auth_principal_resolver_unavailable');
+  });
+
+  it('rejects all voice WebSocket upgrades even when a legacy API key is presented', async () => {
+    await expect(openWebSocketExpectStatus(port, '/v1/voice/ws', {
+      Authorization: 'Bearer legacy-api-key',
+    })).resolves.toBe(404);
   });
 });
 

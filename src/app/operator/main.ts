@@ -11,6 +11,7 @@ import {
   resolveAdminTransportClientEndpoint,
 } from '../../operator/garden/transport-paths.js';
 import { GardenOperatorSurface } from '../../operator/garden/operator-surface.js';
+import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import { createGatewayOperatorConfirmationClient } from '../startup/support/gateway-operator-confirmation-client.js';
 
 const log = createComponentLogger('OperatorSurface');
@@ -20,6 +21,11 @@ ensureActiveTimezone();
 
 async function main(): Promise<void> {
   const config = hydrateJsonBackedRuntimeConfig(loadOperatorConfig());
+  assertFleetAuthLegacySurfacesUnavailable({
+    fleetAuthEnabled: config.fleetAuthVerifier !== undefined,
+    processMode: 'operator',
+    env: process.env,
+  });
   if (config.multiCompanion === true) {
     assertCompanionAdminTransportIsolation(config.companionId ?? '', process.env);
   }

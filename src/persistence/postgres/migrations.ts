@@ -35,6 +35,8 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
     deleted_at BIGINT,
     deleted_by TEXT,
     delete_reason TEXT,
+    authorization_revision BIGINT NOT NULL DEFAULT 1,
+    subject_evidence_digest TEXT,
     embedding VECTOR
   );
   `,
@@ -56,6 +58,10 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS deleted_at BIGINT;`,
   `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS deleted_by TEXT;`,
   `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS delete_reason TEXT;`,
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS authorization_revision BIGINT NOT NULL DEFAULT 1;`,
+  `ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS subject_evidence_digest TEXT;`,
+  `ALTER TABLE l2_memories DROP CONSTRAINT IF EXISTS l2_memories_subject_evidence_digest_check;`,
+  `ALTER TABLE l2_memories ADD CONSTRAINT l2_memories_subject_evidence_digest_check CHECK (subject_evidence_digest IS NULL OR subject_evidence_digest ~ '^[a-f0-9]{64}$');`,
   `
   DO $$
   BEGIN
@@ -94,6 +100,111 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_provenance_refs_gin ON l2_memories USING GIN (provenance_refs);`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_provenance_json_gin ON l2_memories USING GIN (provenance_json);`,
   `CREATE INDEX IF NOT EXISTS idx_l2_memories_consent_flags_gin ON l2_memories USING GIN (consent_flags);`,
+  `
+  CREATE TABLE IF NOT EXISTS l2_memory_subject_classifications (
+    memory_id TEXT PRIMARY KEY REFERENCES l2_memories(id) ON DELETE CASCADE,
+    subject_class TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'invalidated',
+    classifier_version INTEGER NOT NULL,
+    memory_revision BIGINT NOT NULL,
+    evidence_digest TEXT NOT NULL,
+    evidence_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    room_id TEXT,
+    unbound_person_label_hash TEXT,
+    reason_class TEXT NOT NULL,
+    classified_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL,
+    CHECK (subject_class IN (
+      'single_contact', 'multiple_contacts', 'shared_room', 'companion_private',
+      'unbound_person', 'unattributed', 'ambiguous'
+    )),
+    CHECK (status IN ('current', 'invalidated')),
+    CHECK (classifier_version > 0),
+    CHECK (memory_revision > 0),
+    CHECK (evidence_digest ~ '^[a-f0-9]{64}$'),
+    CHECK (jsonb_typeof(evidence_json) = 'array'),
+    CHECK (unbound_person_label_hash IS NULL OR unbound_person_label_hash ~ '^[a-f0-9]{64}$'),
+    CHECK (subject_class <> 'shared_room' OR room_id IS NOT NULL),
+    CHECK (subject_class <> 'unbound_person' OR unbound_person_label_hash IS NOT NULL)
+  );
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS l2_memory_subject_contacts (
+    memory_id TEXT NOT NULL REFERENCES l2_memory_subject_classifications(memory_id) ON DELETE CASCADE,
+    contact_id TEXT NOT NULL,
+    PRIMARY KEY (memory_id, contact_id)
+  );
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS l2_memory_subject_backfill_checkpoints (
+    classifier_version INTEGER PRIMARY KEY,
+    cursor_memory_id TEXT,
+    completed BOOLEAN NOT NULL DEFAULT FALSE,
+    processed_count BIGINT NOT NULL DEFAULT 0,
+    updated_at BIGINT NOT NULL,
+    CHECK (classifier_version > 0),
+    CHECK (processed_count >= 0)
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_l2_memory_subject_classifications_policy ON l2_memory_subject_classifications(status, classifier_version, subject_class, memory_revision);`,
+  `CREATE INDEX IF NOT EXISTS idx_l2_memory_subject_contacts_contact ON l2_memory_subject_contacts(contact_id, memory_id);`,
+  `
+  CREATE OR REPLACE FUNCTION psfn_prepare_memory_subject_evidence_change()
+  RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+  BEGIN
+    IF TG_OP = 'UPDATE' AND (
+      NEW.text IS DISTINCT FROM OLD.text
+      OR NEW.type IS DISTINCT FROM OLD.type
+      OR NEW.source_ref IS DISTINCT FROM OLD.source_ref
+      OR NEW.source_type IS DISTINCT FROM OLD.source_type
+      OR NEW.provenance_json IS DISTINCT FROM OLD.provenance_json
+      OR NEW.provenance_refs IS DISTINCT FROM OLD.provenance_refs
+      OR NEW.contact_id IS DISTINCT FROM OLD.contact_id
+      OR NEW.scope_ref_kind IS DISTINCT FROM OLD.scope_ref_kind
+      OR NEW.scope_ref_id IS DISTINCT FROM OLD.scope_ref_id
+      OR NEW.scope_ref_label IS DISTINCT FROM OLD.scope_ref_label
+      OR NEW.scope_tags IS DISTINCT FROM OLD.scope_tags
+      OR NEW.tags IS DISTINCT FROM OLD.tags
+      OR NEW.embedding IS DISTINCT FROM OLD.embedding
+      OR NEW.deleted_at IS DISTINCT FROM OLD.deleted_at
+      OR NEW.superseded_by IS DISTINCT FROM OLD.superseded_by
+    ) THEN
+      NEW.authorization_revision := OLD.authorization_revision + 1;
+      NEW.subject_evidence_digest := NULL;
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+  `,
+  `DROP TRIGGER IF EXISTS trg_l2_memories_prepare_subject_evidence_change ON l2_memories;`,
+  `
+  CREATE TRIGGER trg_l2_memories_prepare_subject_evidence_change
+  BEFORE UPDATE ON l2_memories
+  FOR EACH ROW EXECUTE FUNCTION psfn_prepare_memory_subject_evidence_change();
+  `,
+  `
+  CREATE OR REPLACE FUNCTION psfn_invalidate_memory_subject_projection()
+  RETURNS trigger
+  LANGUAGE plpgsql
+  AS $$
+  BEGIN
+    IF TG_OP = 'INSERT' OR NEW.subject_evidence_digest IS NULL THEN
+      UPDATE l2_memory_subject_classifications
+      SET status = 'invalidated', updated_at = (EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::BIGINT
+      WHERE memory_id = NEW.id;
+    END IF;
+    RETURN NEW;
+  END
+  $$;
+  `,
+  `DROP TRIGGER IF EXISTS trg_l2_memories_invalidate_subject_projection ON l2_memories;`,
+  `
+  CREATE TRIGGER trg_l2_memories_invalidate_subject_projection
+  AFTER INSERT OR UPDATE ON l2_memories
+  FOR EACH ROW EXECUTE FUNCTION psfn_invalidate_memory_subject_projection();
+  `,
   `CREATE TABLE IF NOT EXISTS l2_memory_delete_versions (
     delete_id TEXT PRIMARY KEY,
     memory_id TEXT NOT NULL REFERENCES l2_memories(id) ON DELETE CASCADE,

@@ -81,6 +81,8 @@ export interface MemoryProvenance {
   sourceAuthorId?: string;
   sourceSpeakerName?: string;
   subjectContactId?: string;
+  /** Explicitly attributed co-subjects. Room participation alone never populates this field. */
+  subjectContactIds?: string[];
   subjectName?: string;
   addressMode?: GroupMemoryAddressMode;
   routingReason?: string;
@@ -390,6 +392,13 @@ function normalizePositiveIntegerArray(value: unknown): number[] {
     .sort((left, right) => left - right);
 }
 
+function normalizeOptionalStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.flatMap(item => (
+    typeof item === 'string' && item.trim() ? [item.trim()] : []
+  )))].sort();
+}
+
 export function normalizeMemorySourceType(
   value: unknown,
   fallback: MemorySourceType = 'unknown',
@@ -439,6 +448,10 @@ export function normalizeMemoryProvenance(value: unknown): MemoryProvenance | un
     ...(normalizeOptionalString(record.subjectName) ? { subjectName: normalizeOptionalString(record.subjectName) } : {}),
     ...(normalizeOptionalString(record.routingReason) ? { routingReason: normalizeOptionalString(record.routingReason) } : {}),
   };
+  const subjectContactIds = normalizeOptionalStringArray(record.subjectContactIds);
+  if (subjectContactIds.length > 0) {
+    provenance.subjectContactIds = subjectContactIds;
+  }
   const addressMode = normalizeOptionalString(record.addressMode);
   if (addressMode && GROUP_MEMORY_ADDRESS_MODES.includes(addressMode as GroupMemoryAddressMode)) {
     provenance.addressMode = addressMode as GroupMemoryAddressMode;

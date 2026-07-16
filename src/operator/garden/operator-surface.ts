@@ -22,6 +22,7 @@ import {
 } from './transport-client.js';
 import type { GardenAdminTransportClientEndpoint } from './transport-paths.js';
 import { validateAdminAuthStartupPolicy } from './auth-policy.js';
+import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import { parseAdminJsonBody } from './request-body.js';
 import { parseConfirmationResolveRequest } from './confirmation-resolve-request.js';
 import type { ConfirmationOperatorAuthContext } from './admin-contract.js';
@@ -96,6 +97,16 @@ export class GardenOperatorSurface implements Lifecycle {
   }
 
   async start(): Promise<void> {
+    assertFleetAuthLegacySurfacesUnavailable({
+      fleetAuthEnabled: this.config.config.fleetAuthVerifier !== undefined
+        || this.config.config.fleetAuth !== undefined,
+      processMode: 'operator',
+      env: {
+        ADMIN_PORT: String(this.config.port),
+        ...(this.config.token ? { ADMIN_TOKEN: this.config.token } : {}),
+        ...(this.config.allowInsecureWithoutToken ? { ADMIN_ALLOW_INSECURE: 'true' } : {}),
+      },
+    });
     const host = this.config.host ?? '127.0.0.1';
     validateAdminAuthStartupPolicy({
       host,

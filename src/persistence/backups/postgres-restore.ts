@@ -10,6 +10,48 @@ import {
 
 const execFileAsync = promisify(execFile);
 const PSQL_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+const POSTGRES_DESTINATION_ROUTING_PARAMETERS = new Set([
+  'dbname',
+  'host',
+  'hostaddr',
+  'port',
+  'service',
+]);
+
+export function resolvePostgresUrlDatabaseName(
+  databaseUrl: string,
+  context: string,
+): string {
+  let url: URL;
+  try {
+    url = new URL(databaseUrl);
+  } catch {
+    throw new Error(`${context} requires a PostgreSQL URL`);
+  }
+  if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') {
+    throw new Error(`${context} database URL must use postgres:// or postgresql://`);
+  }
+  if (url.hash) {
+    throw new Error(`${context} database URL must not contain a fragment`);
+  }
+  for (const name of url.searchParams.keys()) {
+    if (POSTGRES_DESTINATION_ROUTING_PARAMETERS.has(name)) {
+      throw new Error(
+        `${context} database URL must not contain destination-routing parameter ${name}`,
+      );
+    }
+  }
+  let databaseName: string;
+  try {
+    databaseName = decodeURIComponent(url.pathname.replace(/^\//u, ''));
+  } catch {
+    throw new Error(`${context} database URL contains malformed percent encoding`);
+  }
+  if (!databaseName || databaseName.includes('/')) {
+    throw new Error(`${context} database URL must name exactly one database in its path`);
+  }
+  return databaseName;
+}
 
 /** Core tables the decant scenario depends on; presence is asserted, counts are reported. */
 export const DEFAULT_RESTORE_CRITICAL_TABLES = [
@@ -293,8 +335,7 @@ export async function verifyPostgresDumpRestore(
 export function deriveRestoreVerifyDatabaseUrl(databaseUrl: string): string | null {
   try {
     const url = new URL(databaseUrl);
-    const databaseName = url.pathname.replace(/^\//, '').trim();
-    if (!databaseName) return null;
+    const databaseName = resolvePostgresUrlDatabaseName(databaseUrl, 'Restore verification');
     url.pathname = `/${databaseName}_restore_verify`;
     return url.toString();
   } catch {

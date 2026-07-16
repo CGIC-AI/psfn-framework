@@ -43,6 +43,10 @@ import {
   type ResolvedCorrelationMetadata,
 } from '../../../primitives/llm/correlation.js';
 import { deriveChildIcpConversationCostCorrelation } from '../../../shared/contracts/icp-autonomy.js';
+import {
+  createSubjectAuthorizedMemoryStore,
+  memorySubjectAccessContextFromCorrelation,
+} from '../../../faculties/memory/subject-authorized-store.js';
 
 const LLM_TIMEOUT_BUFFER_MS = 25;
 const LLM_TIMEOUT_REASON = 'llm timeout';
@@ -736,8 +740,14 @@ export async function runRLMLoop(
   }, sharedState.budgetRef, { memoryCeilingBytes });
 
   // Gather context metadata for system prompt
-  const stats = deps.memoryStore
-    ? await deps.memoryStore.getStats()
+  const subjectMemoryStore = deps.memoryStore
+    ? createSubjectAuthorizedMemoryStore(
+      deps.memoryStore,
+      () => memorySubjectAccessContextFromCorrelation(getRequestContext()),
+    )
+    : null;
+  const stats = subjectMemoryStore
+    ? await subjectMemoryStore.getStats()
     : null;
   const metadata: AnalysisWorkbenchContextMetadata = {
     memoryCount: stats?.total ?? 0,

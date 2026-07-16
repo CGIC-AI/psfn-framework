@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { assertValidPostgresSchemaName } from '../postgres.js';
+import { assertValidPostgresSchemaName, createPostgresPool } from '../postgres.js';
 import {
   createSanitizedPostgresChildEnv,
   redactPostgresCredential,
@@ -9,6 +9,10 @@ import {
 
 const execFileAsync = promisify(execFile);
 const RESTORE_CONTROL_SCHEMA = 'restore_control';
+const FLEET_RESTORE_ADVISORY_LOCK = {
+  classId: 0x5053464e,
+  objectId: 0x46525354,
+} as const;
 
 export interface FleetRestoreDatabaseOperation {
   operationId: string;
@@ -20,6 +24,76 @@ export type FleetRestoreDatabaseMarkerState = 'absent' | 'prepared' | 'committed
 export interface FleetRestoreMarkerPostgresOptions {
   databaseUrl: string;
   psqlBinary?: string;
+}
+
+/** Hold one database-scoped session lock across the complete family restore. */
+export async function withFleetRestoreDatabaseLock<T>(
+  postgres: FleetRestoreMarkerPostgresOptions,
+  handler: () => Promise<T>,
+): Promise<T> {
+  const pool = createPostgresPool(postgres.databaseUrl, {
+    applicationName: 'fleet-restore-family-lock',
+    max: 1,
+  });
+  let client: Awaited<ReturnType<typeof pool.connect>>;
+  try {
+    client = await pool.connect();
+  } catch (connectError) {
+    try {
+      await pool.end();
+    } catch (endError) {
+      throw new AggregateError(
+        [connectError, endError],
+        'Fleet restore database advisory lock connection and cleanup failed',
+      );
+    }
+    throw connectError;
+  }
+  let acquired = false;
+  let primaryError: unknown;
+  let result: T | undefined;
+  try {
+    await client.query('SELECT pg_advisory_lock($1::integer, $2::integer)', [
+      FLEET_RESTORE_ADVISORY_LOCK.classId,
+      FLEET_RESTORE_ADVISORY_LOCK.objectId,
+    ]);
+    acquired = true;
+    result = await handler();
+  } catch (error) {
+    primaryError = error;
+  }
+  let releaseError: unknown;
+  try {
+    if (acquired) {
+      const unlocked = await client.query<{ unlocked: boolean }>(
+        'SELECT pg_advisory_unlock($1::integer, $2::integer) AS unlocked',
+        [FLEET_RESTORE_ADVISORY_LOCK.classId, FLEET_RESTORE_ADVISORY_LOCK.objectId],
+      );
+      if (unlocked.rows.at(0)?.unlocked !== true) {
+        throw new Error('Fleet restore database advisory lock was not held at release');
+      }
+    }
+  } catch (error) {
+    releaseError = error;
+  } finally {
+    client.release();
+    try {
+      await pool.end();
+    } catch (error) {
+      releaseError = releaseError
+        ? new AggregateError([releaseError, error], 'Fleet restore database lock release failed')
+        : error;
+    }
+  }
+  if (primaryError && releaseError) {
+    throw new AggregateError(
+      [primaryError, releaseError],
+      'Fleet restore failed and its database advisory lock could not be released cleanly',
+    );
+  }
+  if (primaryError) throw primaryError;
+  if (releaseError) throw releaseError;
+  return result as T;
 }
 
 function validateOperation(operation: FleetRestoreDatabaseOperation): void {

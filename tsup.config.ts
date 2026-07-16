@@ -9,6 +9,7 @@ export default defineConfig({
     'cert-manager-main': 'src/app/cert-manager/main.ts',
     'migrate-scheduler-owner': 'src/app/maintenance/migrate-scheduler-owner.ts',
     'create-passkey-ceremony': 'src/app/maintenance/create-passkey-ceremony.ts',
+    'create-provider-recovery': 'src/app/maintenance/create-provider-recovery.ts',
     'migrate-system-owner-fleet': 'src/app/maintenance/migrate-system-owner-fleet.ts',
     'system-owner-fleet-snapshot': 'src/app/maintenance/system-owner-fleet-snapshot.ts',
     'owner-upgrade-readiness-probe': 'src/app/maintenance/owner-upgrade-readiness-probe.ts',

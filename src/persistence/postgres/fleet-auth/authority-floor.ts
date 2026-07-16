@@ -729,6 +729,97 @@ export class FleetAuthAuthorityFloorStore {
     });
   }
 
+  recoverProviderAuthority(input: {
+    principalId: string;
+    currentProviderSubjectId: string;
+    expectedNewProviderSubjectId: string;
+    credentialIdHash: string;
+    credentialGeneration: number;
+    credentialFloorGeneration: number;
+    expectedAuthorityGeneration: number;
+    reasonDigest: string;
+    at: string;
+  }): FleetAuthAuthorityFloor {
+    assertUuid(input.principalId, 'recoverProviderAuthority.principalId');
+    assertTimestamp(input.at, 'recoverProviderAuthority.at');
+    assertInteger(
+      input.credentialGeneration,
+      'recoverProviderAuthority.credentialGeneration',
+      1,
+    );
+    assertInteger(
+      input.credentialFloorGeneration,
+      'recoverProviderAuthority.credentialFloorGeneration',
+      1,
+    );
+    assertInteger(
+      input.expectedAuthorityGeneration,
+      'recoverProviderAuthority.expectedAuthorityGeneration',
+      1,
+    );
+    if (!PROVIDER_SUBJECT_PATTERN.test(input.currentProviderSubjectId)
+      || !PROVIDER_SUBJECT_PATTERN.test(input.expectedNewProviderSubjectId)
+      || input.currentProviderSubjectId === input.expectedNewProviderSubjectId
+      || !HASH_PATTERN.test(input.credentialIdHash)
+      || !HASH_PATTERN.test(input.reasonDigest)) {
+      throw new Error('Provider recovery authority binding is invalid');
+    }
+    return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
+      const current = this.read();
+      if (current.trustedHost.authorityGeneration !== input.expectedAuthorityGeneration
+        || current.passkeys.generation !== input.credentialFloorGeneration) {
+        throw new Error('Provider recovery authority floor changed before publication');
+      }
+      const credentialIndex = current.passkeys.credentials.findIndex(entry => (
+        entry.status === 'current'
+          && timingSafeStringEqual(entry.credentialIdHash, input.credentialIdHash)
+          && entry.principalId === input.principalId
+          && entry.expectedProviderSubjectId === input.currentProviderSubjectId
+          && entry.generation === input.credentialGeneration
+      ));
+      if (credentialIndex < 0) {
+        throw new Error('Provider recovery passkey authority is not exact and current');
+      }
+      const accountGeneration = current.trustedHost.authorityGeneration + 1;
+      const passkeyGeneration = current.passkeys.generation + 1;
+      const credentials = [...current.passkeys.credentials];
+      credentials[credentialIndex] = {
+        ...credentials[credentialIndex]!,
+        expectedProviderSubjectId: input.expectedNewProviderSubjectId,
+        generation: passkeyGeneration,
+      };
+      const resourceHash = digest(`discord:${input.currentProviderSubjectId}`);
+      const next: FleetAuthAuthorityFloor = {
+        ...current,
+        trustedHost: {
+          ...current.trustedHost,
+          authorityGeneration: accountGeneration,
+          revocationCheckpoint: current.trustedHost.revocationCheckpoint + 1,
+          tombstones: [
+            ...current.trustedHost.tombstones.filter(entry => (
+              entry.kind !== 'provider_subject' || entry.resourceHash !== resourceHash
+            )),
+            {
+              kind: 'provider_subject',
+              resourceHash,
+              generation: accountGeneration,
+              revokedAt: input.at,
+              reasonHash: digest(input.reasonDigest),
+            },
+          ],
+        },
+        passkeys: {
+          ...current.passkeys,
+          generation: passkeyGeneration,
+          credentials,
+        },
+        updatedAt: input.at,
+      };
+      this.write(next);
+      return next;
+    });
+  }
+
   beginCompanionAuthorityReadd(input: {
     companionId: string;
     decisionId: string;

@@ -61,6 +61,7 @@ import { dispatchCompanionUiPrimaryEmbodiment } from '../../boundary/gateway/com
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
 import type { FleetJitStepUpCoordinator } from '../../boundary/fleet-auth/jit-step-up.js';
 import type { TrustedHostPasskeyCeremonyService } from '../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
+import type { TrustedHostProviderRecoveryService } from '../../boundary/fleet-auth/trusted-host-provider-recovery.js';
 import {
   GatewayHubDeviceIngressService,
   type HubDeviceHumanAttachmentPort,
@@ -113,6 +114,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   fleetAuthBroker?: GatewayFleetAuthBroker;
   fleetAuthJitStepUp?: FleetJitStepUpCoordinator;
   fleetAuthPasskeyCeremonies?: TrustedHostPasskeyCeremonyService;
+  fleetAuthProviderRecovery?: TrustedHostProviderRecoveryService;
   fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
   fleetAuthRequestCapabilities?: GatewayRequestCapabilitySigner;
   fleetAuthRequestCapabilityVerifier?: RequestCapabilityVerifier;
@@ -747,6 +749,9 @@ export async function startOptionalGatewayApiServer(
             ...(options.fleetAuthJitStepUp ? { jitStepUp: options.fleetAuthJitStepUp } : {}),
             ...(options.fleetAuthPasskeyCeremonies
               ? { passkeyCeremonies: options.fleetAuthPasskeyCeremonies }
+              : {}),
+            ...(options.fleetAuthProviderRecovery
+              ? { providerRecovery: options.fleetAuthProviderRecovery }
               : {}),
             trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
             ...(fleetSsoCompanionUi ? {

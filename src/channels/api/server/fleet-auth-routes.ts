@@ -21,6 +21,8 @@ import {
 } from './fleet-auth-passkey-routes.js';
 import type { TrustedHostPasskeyCeremonyService } from '../../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
 import { FleetAuthorizationDeniedError } from '../../../boundary/gateway/fleet-authorization-context.js';
+import type { TrustedHostProviderRecoveryService } from '../../../boundary/fleet-auth/trusted-host-provider-recovery.js';
+import { FleetAuthProviderRecoveryHttpRoutes } from './fleet-auth-provider-recovery-routes.js';
 
 const LOGIN_PATH = '/v1/fleet-auth/login';
 export const FLEET_AUTH_LIFECYCLE_OAUTH_PATH = '/v1/fleet-auth/lifecycle/oauth';
@@ -128,6 +130,7 @@ export class FleetAuthHttpRoutes {
   private readonly trustProxy: boolean;
   private readonly jitRoutes?: FleetAuthJitHttpRoutes;
   private readonly passkeyRoutes?: FleetAuthPasskeyHttpRoutes;
+  private readonly providerRecoveryRoutes?: FleetAuthProviderRecoveryHttpRoutes;
   private readonly companionUi?: Readonly<{
     companionId: string;
     guestMode: 'disabled' | 'explicit';
@@ -139,6 +142,7 @@ export class FleetAuthHttpRoutes {
     callbackPath: string;
     jitStepUp?: FleetJitStepUpCoordinator;
     passkeyCeremonies?: TrustedHostPasskeyCeremonyService;
+    providerRecovery?: TrustedHostProviderRecoveryService;
     trustProxy?: boolean;
     companionUi?: Readonly<{
       companionId: string;
@@ -158,12 +162,16 @@ export class FleetAuthHttpRoutes {
         broker: options.broker,
       })
       : undefined;
+    this.providerRecoveryRoutes = options.providerRecovery
+      ? new FleetAuthProviderRecoveryHttpRoutes(options.providerRecovery)
+      : undefined;
     this.companionUi = options.companionUi;
   }
 
   matches(method: string | undefined, path: string): boolean {
     return (this.jitRoutes?.matches(method, path) ?? false)
       || (this.passkeyRoutes?.matches(method, path) ?? false)
+      || (this.providerRecoveryRoutes?.matches(method, path) ?? false)
       || (method === 'GET' && (
         path === LOGIN_PATH || path === CSRF_PATH || path === STATUS_PATH || path === this.callbackPath
       ))
@@ -356,6 +364,17 @@ export class FleetAuthHttpRoutes {
       }
       if (this.passkeyRoutes?.matches(request.method, url.pathname)) {
         await this.passkeyRoutes.handle({
+          request,
+          response,
+          path: url.pathname,
+          token,
+          csrfToken,
+          requestOrigin: mutationOrigin(request),
+        });
+        return;
+      }
+      if (this.providerRecoveryRoutes?.matches(request.method, url.pathname)) {
+        await this.providerRecoveryRoutes.handle({
           request,
           response,
           path: url.pathname,

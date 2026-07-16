@@ -31,6 +31,7 @@ import { fleetAuthLifecycleDecisionFingerprint } from './authority-lifecycle-fin
 import type { CompanionAuthorityLineageFloor } from './authority-floor.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
+import { lockAndConsumeProviderRecoveryCeremony } from './authority-lifecycle-provider-recovery.js';
 
 interface AuthorityRow {
   authority_generation: string;
@@ -168,6 +169,9 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
       await this.consumeReceipts(client, decision);
       await this.lockAndValidateClaims(client, decision);
       await this.lockAndValidateActorSession(client, decision);
+      if (decision.action === 'provider.recover') {
+        await lockAndConsumeProviderRecoveryCeremony(client, decision);
+      }
       const mutation = await prepareLifecycleMutation(client, decision);
       await this.lockAffectedPrincipals(client, mutation.affectedPrincipalIds);
       const principalIds = [...new Set([
@@ -216,11 +220,23 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
           companionLineage.entry.companionReadd.decisionId,
         );
       } else if (mutation.revocations.length > 0) {
-        const fenced = await this.accountAuthority.fenceMany({
-          resources: mutation.revocations,
-          reasonDigest: decision.reasonDigest,
-          at: decision.decidedAt,
-        });
+        const fenced = decision.action === 'provider.recover'
+          ? await this.accountAuthority.recoverProvider({
+              principalId: decision.target.principalId,
+              currentProviderSubjectId: decision.unavailableProvider.subjectId,
+              expectedNewProviderSubjectId: decision.newProvider.subjectId,
+              credentialIdHash: decision.recovery.credentialIdHash,
+              credentialGeneration: decision.recovery.credentialGeneration,
+              credentialFloorGeneration: decision.recovery.credentialFloorGeneration,
+              expectedAuthorityGeneration: decision.authorityGeneration,
+              reasonDigest: decision.reasonDigest,
+              at: decision.decidedAt,
+            })
+          : await this.accountAuthority.fenceMany({
+              resources: mutation.revocations,
+              reasonDigest: decision.reasonDigest,
+              at: decision.decidedAt,
+            });
         authorityGeneration = fenced.authorityGeneration;
         if (authorityGeneration !== decision.authorityGeneration + 1) {
           throw new FleetAuthLifecycleDeniedError('non_restored_authority_race');
@@ -324,7 +340,7 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
       }
       throw error instanceof FleetAuthLifecycleDeniedError
         ? error
-        : new FleetAuthLifecycleDeniedError(reasonCode);
+        : new FleetAuthLifecycleDeniedError(reasonCode, { cause: error });
     } finally {
       if (decisionLockHeld) {
         await releaseLifecycleDecisionLock(client, decision.decisionId);

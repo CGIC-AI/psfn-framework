@@ -93,6 +93,84 @@ export async function prepareProviderLifecycleMutation(
     };
   }
 
+  if (decision.action === 'provider.recover') {
+    const current = await client.query<{
+      state: string;
+      restore_state: string;
+      authority_generation: string;
+    }>(`
+      SELECT state, restore_state, authority_generation
+      FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+      WHERE provider = 'discord' AND subject_id = $1 AND principal_id = $2
+      FOR UPDATE
+    `, [decision.unavailableProvider.subjectId, targetId]);
+    const currentRow = requireOneLifecycleRow(current.rows, 'recovery_current_provider_mismatch');
+    if (currentRow.state !== 'active' || currentRow.restore_state !== 'live'
+      || currentRow.authority_generation
+        !== String(decision.unavailableProvider.authorityGeneration)) {
+      denyLifecycleMutation('recovery_current_provider_stale');
+    }
+    const companionAuthority = await client.query<{ present: boolean }>(`
+      SELECT EXISTS (
+        SELECT 1
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants AS role_grant
+        JOIN ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state AS companion
+          ON companion.companion_id = role_grant.companion_id
+        WHERE role_grant.principal_id = $1 AND role_grant.companion_id = $2
+          AND role_grant.lifecycle = 'active' AND role_grant.restore_state = 'live'
+          AND companion.lifecycle = 'active' AND companion.restore_state = 'live'
+      ) AS present
+    `, [targetId, decision.companionId]);
+    if (companionAuthority.rows.at(0)?.present !== true) {
+      denyLifecycleMutation('recovery_companion_authority_unavailable');
+    }
+    await assertProviderAvailable(client, decision.newProvider.subjectId);
+    return {
+      affectedPrincipalIds: [targetId],
+      bumps: mergeLifecycleBumps([[targetId, { authn: true }]]),
+      revocations: [{
+        kind: 'provider_subject',
+        resourceId: `discord:${decision.unavailableProvider.subjectId}`,
+      }],
+      apply: async authorityGeneration => {
+        await revokeExactProviderSubject(client, {
+          principalId: targetId,
+          subjectId: decision.unavailableProvider.subjectId,
+          authorityGeneration,
+          reasonDigest: decision.reasonDigest,
+          at: decision.decidedAt,
+          eventType: 'recovered',
+          payload: { decisionId: decision.decisionId },
+        });
+        await client.query(`
+          INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+            (provider, subject_id, principal_id, state, metadata, authority_generation,
+             created_at, updated_at)
+          VALUES ('discord', $1, $2, 'active', $3::jsonb, $4, $5, $5)
+        `, [
+          decision.newProvider.subjectId,
+          targetId,
+          JSON.stringify({ proofDigest: decision.newProvider.proofDigest }),
+          authorityGeneration,
+          decision.decidedAt,
+        ]);
+        await client.query(`
+          INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_history
+            (event_id, provider, subject_id, principal_id, state, event_type,
+             authority_generation, payload, recorded_at)
+          VALUES ($1, 'discord', $2, $3, 'active', 'recovered', $4, $5::jsonb, $6)
+        `, [
+          randomUUID(),
+          decision.newProvider.subjectId,
+          targetId,
+          authorityGeneration,
+          JSON.stringify({ decisionId: decision.decisionId, source: 'trusted_host_recovery' }),
+          decision.decidedAt,
+        ]);
+      },
+    };
+  }
+
   await lockCurrentLifecycleProvider(
     client,
     decision.target,

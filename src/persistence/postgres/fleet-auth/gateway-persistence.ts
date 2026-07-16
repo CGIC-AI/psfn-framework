@@ -72,6 +72,8 @@ import type { FleetPortalAuthorizationBatchPort } from '../../../boundary/gatewa
 import { createPostgresFleetPortalAuthorization } from './portal-authorization-store.js';
 import { TrustedHostPasskeyCeremonyService } from '../../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
 import { PostgresTrustedHostPasskeyCeremonyStore } from './trusted-host-passkey-ceremony-store.js';
+import { TrustedHostProviderRecoveryService } from '../../../boundary/fleet-auth/trusted-host-provider-recovery.js';
+import { PostgresTrustedHostProviderRecoveryStore } from './trusted-host-provider-recovery-store.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -90,6 +92,7 @@ export interface GatewayFleetAuthPersistence {
   primaryEmbodiments: PrimaryEmbodimentAuthorityPort;
   jitStepUp: FleetJitStepUpCoordinator;
   passkeyCeremonies: TrustedHostPasskeyCeremonyService;
+  providerRecovery: TrustedHostProviderRecoveryService;
   authorityLifecycle: GatewayFleetAuthAuthorityLifecycleStore;
   contactLifecycleAuthority: GatewayContactLifecycleAuthorityPort;
   discordEvidence?: DiscordEvidenceRuntime;
@@ -251,6 +254,17 @@ export function createGatewayAccountAuthorityFencePort(
         fencedFloor.trustedHost.authorityGeneration,
       );
       return { authorityGeneration: fencedFloor.trustedHost.authorityGeneration };
+    },
+    recoverProvider: async input => {
+      const recoveredFloor = authorityFloors.recoverProviderAuthority({
+        ...input,
+        at: input.at.toISOString(),
+      });
+      observedAuthorityGeneration = Math.max(
+        observedAuthorityGeneration,
+        recoveredFloor.trustedHost.authorityGeneration,
+      );
+      return { authorityGeneration: recoveredFloor.trustedHost.authorityGeneration };
     },
     beginCompanionReadd: async input => {
       const lineage = authorityFloors.beginCompanionAuthorityReadd({
@@ -438,6 +452,55 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       pool: authorityPool,
       accountAuthority,
     });
+    const providerRecovery = new TrustedHostProviderRecoveryService({
+      canonicalOrigin: config.canonicalOrigin,
+      rpId: new URL(config.canonicalOrigin).hostname,
+      ttlMs: config.ttls.stepUpChallengeMs,
+      store: new PostgresTrustedHostProviderRecoveryStore({
+        authorityPool,
+        sessionPepper: secrets.sessionPepper,
+        tokenEncryptionKey: secrets.tokenEncryptionKey,
+        providerRevocationAuthority: accountAuthority,
+        passkeyAuthority: authorityFloors,
+      }),
+      authority: authorityFloors,
+      webAuthn,
+      execute: async input => {
+        const result = await authorityLifecycle.execute({
+          verification: 'gateway_verified',
+          action: 'provider.recover',
+          decisionId: input.decisionId,
+          ceremonyId: input.ceremonyId,
+          actor: input.principal,
+          actorSession: input.actorSession,
+          target: input.principal,
+          companionId: input.companionId,
+          unavailableProvider: {
+            provider: 'discord',
+            subjectId: input.currentProviderSubjectId,
+            authorityGeneration: input.currentProviderAuthorityGeneration,
+          },
+          newProvider: input.newProvider,
+          recovery: {
+            oneTimeCredential: input.oneTimeCredential,
+            confirmation: 'provider.recover',
+            webAuthnReceipt: input.webAuthnReceipt,
+            credentialIdHash: input.credentialIdHash,
+            credentialGeneration: input.credentialGeneration,
+            credentialFloorGeneration: input.completedCredentialFloorGeneration,
+          },
+          authorityGeneration: input.authorityGeneration,
+          globalAuthEpoch: input.globalAuthEpoch,
+          reasonDigest: input.reasonDigest,
+          decidedAt: input.decidedAt,
+        });
+        return {
+          decisionId: result.decisionId,
+          authorityGeneration: result.authorityGeneration,
+          globalAuthEpoch: result.globalAuthEpoch,
+        };
+      },
+    });
     const contactLifecycleAuthority = new PostgresContactLifecycleAuthorityStore({
       pool: authorityPool,
       accountAuthority,
@@ -516,6 +579,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       primaryEmbodiments,
       jitStepUp,
       passkeyCeremonies,
+      providerRecovery,
       authorityLifecycle,
       contactLifecycleAuthority,
       ...(discordEvidence ? { discordEvidence } : {}),

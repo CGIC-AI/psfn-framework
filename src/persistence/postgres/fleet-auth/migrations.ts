@@ -1446,6 +1446,102 @@ ALTER TABLE trusted_host_ceremonies
   );
 `;
 
+const TRUSTED_HOST_PROVIDER_RECOVERY_SQL = `
+ALTER TABLE oauth_transactions
+  DROP CONSTRAINT oauth_transaction_lifecycle_purpose_exact,
+  ADD CONSTRAINT oauth_transaction_lifecycle_purpose_exact CHECK (
+    lifecycle_action IS NULL OR (
+      (lifecycle_action IN ('binding.activate', 'provider.add')
+        AND lifecycle_proof_role = 'new'
+        AND kind = 'provider_link')
+      OR (lifecycle_action = 'provider.relink'
+        AND lifecycle_proof_role = 'new'
+        AND kind = 'recovery')
+      OR (lifecycle_action = 'provider.replace'
+        AND lifecycle_proof_role IN ('current', 'new')
+        AND kind = 'provider_replace')
+      OR (lifecycle_action = 'provider.recover'
+        AND lifecycle_proof_role = 'new'
+        AND kind = 'recovery')
+      OR (lifecycle_action = 'provider.unlink'
+        AND lifecycle_proof_role = 'current'
+        AND kind = 'recovery')
+      OR (lifecycle_action = 'principal.merge'
+        AND lifecycle_proof_role IN ('canonical', 'source')
+        AND kind = 'recovery')
+    )
+  );
+
+ALTER TABLE trusted_host_ceremonies
+  DROP CONSTRAINT trusted_host_ceremonies_kind_check,
+  DROP CONSTRAINT trusted_host_ceremonies_protocol_version_check,
+  DROP CONSTRAINT trusted_host_ceremonies_passkey_v1_exact,
+  ADD COLUMN recovery_receipt_digest TEXT CHECK (
+    recovery_receipt_digest IS NULL OR recovery_receipt_digest ~ '^[0-9a-f]{64}$'
+  ),
+  ADD COLUMN recovery_credential_id_hash TEXT CHECK (
+    recovery_credential_id_hash IS NULL OR recovery_credential_id_hash ~ '^[0-9a-f]{64}$'
+  ),
+  ADD COLUMN recovery_credential_generation BIGINT CHECK (
+    recovery_credential_generation IS NULL OR recovery_credential_generation >= 1
+  ),
+  ADD CONSTRAINT trusted_host_ceremonies_kind_check CHECK (kind IN (
+    'first_owner', 'account_reapproval', 'companion_reapproval',
+    'passkey_enrollment', 'passkey_recovery', 'provider_recovery'
+  )),
+  ADD CONSTRAINT trusted_host_ceremonies_protocol_version_check CHECK (
+    protocol_version IN (0, 1, 2)
+  ),
+  ADD CONSTRAINT trusted_host_ceremonies_protocol_exact CHECK (
+    (protocol_version = 0
+      AND webauthn_challenge_digest IS NULL
+      AND webauthn_challenge_ciphertext IS NULL
+      AND exact_origin IS NULL
+      AND rp_id IS NULL
+      AND credential_floor_generation IS NULL
+      AND prior_credential_id_hash IS NULL
+      AND confirmed_at IS NULL
+      AND recovery_receipt_digest IS NULL
+      AND recovery_credential_id_hash IS NULL
+      AND recovery_credential_generation IS NULL)
+    OR
+    (protocol_version = 1
+      AND kind IN ('first_owner', 'passkey_enrollment', 'passkey_recovery')
+      AND webauthn_challenge_digest IS NOT NULL
+      AND webauthn_challenge_ciphertext IS NOT NULL
+      AND exact_origin IS NOT NULL
+      AND rp_id IS NOT NULL
+      AND credential_floor_generation IS NOT NULL
+      AND confirmed_at IS NOT NULL
+      AND recovery_receipt_digest IS NULL
+      AND recovery_credential_id_hash IS NULL
+      AND recovery_credential_generation IS NULL
+      AND (
+        (kind = 'passkey_recovery' AND prior_credential_id_hash IS NOT NULL)
+        OR (kind <> 'passkey_recovery' AND prior_credential_id_hash IS NULL)
+      ))
+    OR
+    (protocol_version = 2
+      AND kind = 'provider_recovery'
+      AND expected_companion_id IS NOT NULL
+      AND expected_contact_id IS NULL
+      AND exact_origin IS NOT NULL
+      AND rp_id IS NOT NULL
+      AND credential_floor_generation IS NOT NULL
+      AND prior_credential_id_hash IS NOT NULL
+      AND confirmed_at IS NOT NULL
+      AND ((webauthn_challenge_digest IS NULL AND webauthn_challenge_ciphertext IS NULL)
+        OR (webauthn_challenge_digest IS NOT NULL AND webauthn_challenge_ciphertext IS NOT NULL))
+      AND ((recovery_receipt_digest IS NULL
+          AND recovery_credential_id_hash IS NULL
+          AND recovery_credential_generation IS NULL)
+        OR (webauthn_challenge_digest IS NOT NULL
+          AND recovery_receipt_digest IS NOT NULL
+          AND recovery_credential_id_hash IS NOT NULL
+          AND recovery_credential_generation IS NOT NULL)))
+  );
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
@@ -1480,4 +1576,5 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 23, name: 'request_capability_replay_ledger', sql: REQUEST_CAPABILITY_REPLAY_SQL },
   { version: 24, name: 'primary_embodiment_authority', sql: PRIMARY_EMBODIMENT_AUTHORITY_SQL },
   { version: 25, name: 'jit_step_up_authority', sql: JIT_STEP_UP_AUTHORITY_SQL },
+  { version: 26, name: 'trusted_host_provider_recovery', sql: TRUSTED_HOST_PROVIDER_RECOVERY_SQL },
 ] as const;

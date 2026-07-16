@@ -324,7 +324,7 @@ export class WebSocketVoiceRuntime {
       // it locally with ZERO model invocations — it must never reach
       // onAssistantStream/onAssistantTurn. Detection is exact/local (no
       // classifier, no model call).
-      const controlIntent = classifyVoiceControlIntent(transcript);
+      const controlIntent = this.classifySessionControlIntent(state, transcript);
       if (controlIntent) {
         await this.handleControlIntent(state, controlIntent);
         this.throwIfInterrupted(state);
@@ -402,6 +402,51 @@ export class WebSocketVoiceRuntime {
       type: 'ack',
       ackType: 'interrupt',
     });
+  }
+
+  /**
+   * psfn-framework-d8vq.1: classify the session's finalized speech as a
+   * transport control. A single STT session can emit more than one `final`
+   * (each pushed to `finalTranscripts`). Two verdicts combine, safe-direction:
+   *
+   *  - The joined transcript is classified first (unchanged from mmo9.7.5). It
+   *    is authoritative for single-final controls and for one control phrase
+   *    split across finals ("hold" + "on" -> "hold on").
+   *  - The per-final scan is authoritative ONLY when the session is
+   *    control-only: EVERY non-empty final independently classifies as a control
+   *    intent (e.g. ["stop"], ["stop","stop"], ["repeat","stop"]). This closes
+   *    the multi-final hole for stacked/consecutive controls without ever
+   *    swallowing content. When the finals' intents differ, the LAST final wins
+   *    — the user's most recent wish.
+   *
+   * If ANY final is non-control content the per-final scan is abandoned and the
+   * joined verdict stands. Deliberate, safe consequence: a genuine
+   * content-then-"stop" multi-final session (e.g. ["don't","stop"],
+   * ["tell me about cats","stop"]) goes to the model rather than being silently
+   * dropped — the same safe-direction limitation documented in mmo9.7.5. We
+   * never swallow mixed content. Detection stays exact/local — no classifier,
+   * no model call.
+   */
+  private classifySessionControlIntent(
+    state: RuntimeSessionState,
+    transcript: string,
+  ): VoiceControlIntent | null {
+    const combined = classifyVoiceControlIntent(transcript);
+    if (combined) return combined;
+
+    const finals = state.finalTranscripts.filter((text) => text.trim().length > 0);
+    if (finals.length === 0) return null;
+
+    let controlOnly: VoiceControlIntent | null = null;
+    for (const finalTranscript of finals) {
+      const intent = classifyVoiceControlIntent(finalTranscript);
+      // A single non-control final means the session carries content — defer
+      // entirely to the joined verdict (null here) rather than swallow it.
+      if (!intent) return null;
+      controlOnly = intent; // last-wins across a control-only session.
+    }
+
+    return controlOnly;
   }
 
   /**

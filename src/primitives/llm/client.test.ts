@@ -5262,6 +5262,40 @@ describe('LLMClient autonomous spend accounting (mmo9.7.3)', () => {
     }));
   });
 
+  it('attributes the declared work-spec lane across the provider seam (psfn-framework-d8vq.2: spec.lane in == lane out)', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), { usageRecorder });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'extracted' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 20, output: 6 },
+      stopReason: 'stop',
+    });
+
+    const spec = buildLLMWorkSpec({
+      purpose: 'extraction',
+      durable: true,
+      correlation: {
+        companionId: 'companion-x',
+        callType: 'background',
+        originStage: 'memory.extraction',
+      },
+    });
+    expect(spec.lane).toBe('maintenance_reflection');
+
+    // The serving-side provider (the gateway's LLMClient) receives the work spec
+    // exactly as the RPC handler forwards it and must attribute the declared lane.
+    await completeWithWorkSpec(
+      client,
+      { systemPrompt: 'System', messages: [{ role: 'user', content: 'Extract' }] },
+      spec,
+    );
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    const attribution = usageRecorder.recordUsageEvent.mock.calls[0]?.[0]?.attribution;
+    expect(attribution?.runtimeLaneClass).toBe(spec.lane);
+  });
+
   it('fails closed when a declared autonomous (work-spec) call has no usageRecorder', async () => {
     const client = new LLMClient(makeConfig());
     mocks.completeSimple.mockResolvedValue({

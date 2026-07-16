@@ -1,7 +1,14 @@
 import { isRecord } from '../../shared/utils/types.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
-import type { CompletionPurpose, ContextMessage, CorrelationMetadata, LLMResponse } from '../../shared/contracts/runtime.js';
+import { buildSystemPromptCacheBoundaries } from '../../primitives/llm/prompt-cache.js';
+import type {
+  CompletionPurpose,
+  ContextMessage,
+  CorrelationMetadata,
+  LLMResponse,
+  LLMSystemPromptCacheBoundaries,
+} from '../../shared/contracts/runtime.js';
 import {
   deriveChildIcpConversationCostCorrelation,
   type IcpConversationCorrelation,
@@ -99,6 +106,15 @@ export interface EmotionAppraisalConfig {
   maxMessageChars?: number;
   maxSummaryChars?: number;
   systemPrompt?: string;
+  /**
+   * Companion identity — the MANDATORY outer prompt-cache isolation scope
+   * (d8vq.5). The appraisal system prompt is 100% prefix-stable, so it is
+   * marked cacheable via a static-prefix cache plan; but that plan is only
+   * built when a companionId is present, because the provider affinity token
+   * fails closed without it (two companions' caches cannot be proven disjoint).
+   * Threaded from runtime config the same way turn-support-runtime does.
+   */
+  companionId?: string;
   /** Typed gate telemetry sink (jpvd.4); wired to the event bus by composition. */
   onGateEvent?: (event: DeterministicGateEvent) => void;
 }
@@ -321,6 +337,14 @@ interface CompletionProviderWithOptions extends LLMProviderPort {
 interface LLMContextLike {
   systemPrompt: string;
   messages: ContextMessage[];
+  /**
+   * Static-prefix cache plan boundaries for `systemPrompt` (d8vq.5). The LLM
+   * client verifies the prefix hashes against the serialized system prompt and
+   * only then places provider cache breakpoints — and only when the existing
+   * models.json promptCaching policy is enabled (no new flag, fail-closed on a
+   * byte mismatch, e.g. an OAuth identity prefix).
+   */
+  promptCacheBoundaries?: LLMSystemPromptCacheBoundaries;
 }
 
 export class EmotionAppraisal {
@@ -332,6 +356,15 @@ export class EmotionAppraisal {
   private readonly maxMessageChars: number;
   private readonly maxSummaryChars: number;
   private readonly systemPrompt: string;
+  /**
+   * Static-prefix cache plan for the (immutable, fully prefix-stable) system
+   * prompt (d8vq.5). Precomputed once because `systemPrompt` never varies
+   * turn-over-turn: the whole prompt is the static cacheable region, so both
+   * the static and session-stable boundaries are the full prompt length.
+   */
+  private readonly systemPromptCacheBoundaries: LLMSystemPromptCacheBoundaries;
+  /** Normalized companion identity (outer cache scope); undefined fails closed. */
+  private readonly companionId: string | undefined;
   private readonly onGateEvent: ((event: DeterministicGateEvent) => void) | null;
   private readonly appraisalGate: DeterministicGateDefinition;
   private readonly sessionState = new Map<string, SessionAppraisalState>();
@@ -378,6 +411,17 @@ export class EmotionAppraisal {
     this.systemPrompt = normalizedPrompt && normalizedPrompt.length > 0
       ? normalizedPrompt
       : APPRAISAL_SYSTEM_PROMPT;
+    // The system prompt carries no per-turn interpolation (the moment-specific
+    // VAD/state/conversation lives entirely in the user message via
+    // buildPrompt), so the entire prompt is the static, byte-stable prefix.
+    // Both boundaries are the full length: static == session-stable == whole.
+    this.systemPromptCacheBoundaries = buildSystemPromptCacheBoundaries({
+      staticPrefixText: this.systemPrompt,
+      sessionStablePrefixText: this.systemPrompt,
+    });
+    this.companionId = typeof config.companionId === 'string' && config.companionId.trim().length > 0
+      ? config.companionId.trim()
+      : undefined;
   }
 
   getChain(sessionIdRaw: string): EmotionAppraisalEntry[] {
@@ -451,6 +495,13 @@ export class EmotionAppraisal {
     const trigger: EmotionAppraisalTrigger = shouldTriggerVadShift ? 'vad_shift' : 'periodic';
     const context: LLMContextLike = {
       systemPrompt: this.systemPrompt,
+      // Fail closed: only attach the static-prefix cache plan when the
+      // companion (outer isolation scope) is known. Without it the provider
+      // affinity token cannot be proven disjoint across companions, so no plan
+      // is offered (d8vq.5).
+      ...(this.companionId
+        ? { promptCacheBoundaries: this.systemPromptCacheBoundaries }
+        : {}),
       messages: [
         {
           role: 'user',
@@ -468,6 +519,10 @@ export class EmotionAppraisal {
       durable: false,
       ...(input.preemptionProtected ? { preemptionProtected: true } : {}),
       correlation: {
+        // Companion identity is the outer prompt-cache isolation scope; the
+        // client's affinity resolver folds it into the provider cache token
+        // (fail-closed when absent) (d8vq.5).
+        ...(this.companionId ? { companionId: this.companionId } : {}),
         ...(input.icpCorrelation
           ? { requestId: `${input.icpCorrelation.requestId}:emotion-appraisal` }
           : {}),

@@ -23,6 +23,8 @@ import {
   SUBAGENT_WORK_SPEC_PURPOSE,
 } from './work-spec.js';
 import { assertWorkSpecLaneParity } from '../../primitives/llm/work-spec.js';
+import { resolveAutonomousModelCallLane } from '../../primitives/llm/model-call-lane.js';
+import { COMPANION_PRIVATE_BACKGROUND_PURPOSE } from '../../shared/contracts/runtime.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import { resetCompletionHandoffDedupeForTests } from '../../core/agent/completion-handoff.js';
 import {
@@ -279,6 +281,33 @@ describe('SubagentFaculty', () => {
     });
     expect(entries[0]?.content).toBe('[SYSTEM: SubagentTask] inspect runtime state');
     expect(entries[1]?.content).toBe('task completed');
+  });
+
+  it('spawns a subagent whose context correlation carries companion_private (d8vq.4)', async () => {
+    // The spawn gate (assertWorkSpecLaneParity) must reconcile — not throw
+    // non-retryably — for a work spec built from a companion_private context.
+    mockSubagentContent = 'private task completed';
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    const workSpec = buildSubagentWorkSpec({
+      correlation: { telemetryVisibility: 'companion_private', channelId: 'api:parent' },
+    });
+
+    const task = await faculty.spawn({ name: 'private-inspect', task: 'inspect privately', workSpec });
+    expect(task.subagentId).toMatch(/^subagent-/);
+
+    const result = await faculty.wait(task.subagentId);
+    expect(result.outcome).toBe('completed');
+    expect(result.workerLane).toBe('subagent');
+    expect(result.content).toBe('private task completed');
   });
 
   it.each<{
@@ -1000,6 +1029,30 @@ describe('subagent work spec seam (mmo9.7.7)', () => {
     expect(seeded.maxOutputTokens).toBe(4096);
     expect(seeded.correlation?.channelId).toBe('api:parent');
     expect(() => assertWorkSpecLaneParity(seeded)).not.toThrow();
+  });
+
+  it('collapses a companion_private context correlation to a background-safe spec (d8vq.4)', () => {
+    // Regression: a context correlation carrying companion_private telemetry
+    // visibility drives the single lane resolver's private short-circuit, which
+    // would override a stamped originStage. The builder adopts the canonical
+    // collapsed telemetry shape so the stored correlation agrees with that
+    // short-circuit and the spawn gate reconciles instead of throwing.
+    const spec = buildSubagentWorkSpec({
+      correlation: { telemetryVisibility: 'companion_private', channelId: 'api:parent', requestId: 'req-1' },
+    });
+    expect(spec.purpose).toBe(SUBAGENT_WORK_SPEC_PURPOSE);
+    expect(spec.correlation?.telemetryVisibility).toBe('companion_private');
+    // Origin/purpose are collapsed to the canonical background-safe value, not the
+    // subagent 'subagent.turn' stamp (which the private short-circuit would drop).
+    expect(spec.correlation?.callType).toBe('background');
+    expect(spec.correlation?.originStage).toBe(COMPANION_PRIVATE_BACKGROUND_PURPOSE);
+    expect(spec.correlation?.purpose).toBe(COMPANION_PRIVATE_BACKGROUND_PURPOSE);
+    // Parity holds by construction — the spawn gate never throws.
+    expect(() => assertWorkSpecLaneParity(spec)).not.toThrow();
+    // The declared lane is invariant to the private short-circuit: deriving from
+    // the stored correlation with the private flag stripped lands on the same lane.
+    const { telemetryVisibility: _dropped, ...withoutPrivate } = spec.correlation ?? {};
+    expect(resolveAutonomousModelCallLane(spec.purpose, withoutPrivate)).toBe(spec.lane);
   });
 
   it('threads the work spec onto stream calls that carry no spec of their own', async () => {

@@ -3,7 +3,6 @@ import {
   constants,
   fstatSync,
   fsyncSync,
-  fsyncSync,
   lstatSync,
   mkdirSync,
   openSync,

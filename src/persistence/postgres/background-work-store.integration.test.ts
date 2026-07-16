@@ -19,7 +19,7 @@ import {
 } from '../../core/agent/background-work/supervisor.js';
 import type { BackgroundWorkSupervisorTuning } from '../../core/agent/background-work/config.js';
 import { EventBus } from '../../shared/event-bus.js';
-import { createPostgresPool } from '../postgres.js';
+import { createPostgresPool, ensurePostgresSchemaExists } from '../postgres.js';
 import {
   DEFAULT_POSTGRES_TEST_IMAGE,
   startPostgresTestHarness,
@@ -1870,8 +1870,9 @@ describe('PostgresBackgroundWorkStore', () => {
     };
 
     try {
+      await ensurePostgresSchemaExists(inspectionPool, 'companion_a');
       await inspectionPool.query(`
-        CREATE TABLE cross_turn_derived_effects (
+        CREATE TABLE companion_a.cross_turn_derived_effects (
           id BIGSERIAL PRIMARY KEY,
           content TEXT NOT NULL
         )
@@ -1905,7 +1906,7 @@ describe('PostgresBackgroundWorkStore', () => {
         },
         async (entries) => {
           await inspectionPool.query(
-            'INSERT INTO cross_turn_derived_effects (content) VALUES ($1)',
+            'INSERT INTO companion_a.cross_turn_derived_effects (content) VALUES ($1)',
             [entries.map(entry => entry.content).join('|')],
           );
         },
@@ -1921,14 +1922,14 @@ describe('PostgresBackgroundWorkStore', () => {
         () => consumer.getRecent(logicalSessionId, 10),
         async (entries) => {
           await inspectionPool.query(
-            'INSERT INTO cross_turn_derived_effects (content) VALUES ($1)',
+            'INSERT INTO companion_a.cross_turn_derived_effects (content) VALUES ($1)',
             [entries.map(entry => entry.content).join('|')],
           );
         },
       );
 
       const effects = await inspectionPool.query<{ content: string }>(
-        'SELECT content FROM cross_turn_derived_effects ORDER BY id',
+        'SELECT content FROM companion_a.cross_turn_derived_effects ORDER BY id',
       );
       expect(effects.rows).toHaveLength(1);
       expect(effects.rows[0]?.content).not.toContain(privateOlderContent);
@@ -2057,8 +2058,9 @@ describe('PostgresBackgroundWorkStore', () => {
     const failedContent = 'FAILED ICP A MUST NOT ENTER THE PROJECTED POST-TURN SINK';
 
     try {
+      await ensurePostgresSchemaExists(inspectionPool, 'companion_a');
       await inspectionPool.query(`
-        CREATE TABLE projected_background_effects (
+        CREATE TABLE companion_a.projected_background_effects (
           id BIGSERIAL PRIMARY KEY,
           content TEXT NOT NULL
         )
@@ -2137,7 +2139,7 @@ describe('PostgresBackgroundWorkStore', () => {
           effectEntered.resolve();
           await allowEffect.promise;
           await inspectionPool.query(
-            'INSERT INTO projected_background_effects (content) VALUES ($1)',
+            'INSERT INTO companion_a.projected_background_effects (content) VALUES ($1)',
             [entries.map(entry => entry.content).join('|')],
           );
         },
@@ -2200,7 +2202,7 @@ describe('PostgresBackgroundWorkStore', () => {
       expect(changedSnapshotEffectRan).toBe(false);
 
       const effects = await inspectionPool.query<{ content: string }>(
-        'SELECT content FROM projected_background_effects ORDER BY id',
+        'SELECT content FROM companion_a.projected_background_effects ORDER BY id',
       );
       expect(effects.rows).toEqual([{
         content: 'successful B input|successful B output',
@@ -2275,8 +2277,9 @@ describe('PostgresBackgroundWorkStore', () => {
     };
 
     try {
+      await ensurePostgresSchemaExists(inspectionPool, 'companion_a');
       await inspectionPool.query(`
-        CREATE TABLE empty_snapshot_memory_effects (
+        CREATE TABLE companion_a.empty_snapshot_memory_effects (
           id BIGSERIAL PRIMARY KEY,
           content TEXT NOT NULL
         )
@@ -2312,7 +2315,7 @@ describe('PostgresBackgroundWorkStore', () => {
       });
       const processFact = vi.fn(async (fact: { text: string }) => {
         await inspectionPool.query(
-          'INSERT INTO empty_snapshot_memory_effects (content) VALUES ($1)',
+          'INSERT INTO companion_a.empty_snapshot_memory_effects (content) VALUES ($1)',
           [fact.text],
         );
         return { action: 'created', memory: { id: 'memory-from-empty-snapshot' } };
@@ -2369,7 +2372,7 @@ describe('PostgresBackgroundWorkStore', () => {
       expect(complete).not.toHaveBeenCalled();
       expect(processFact).not.toHaveBeenCalled();
       const effects = await inspectionPool.query<{ content: string }>(
-        'SELECT content FROM empty_snapshot_memory_effects ORDER BY id',
+        'SELECT content FROM companion_a.empty_snapshot_memory_effects ORDER BY id',
       );
       expect(effects.rows).toEqual([]);
       expect(consumer.getRecent(logicalSessionId, 10).map(entry => entry.content))

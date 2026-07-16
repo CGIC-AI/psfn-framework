@@ -26,6 +26,13 @@ interface CompletionResponse {
   chunks(): AsyncIterable<Uint8Array>;
 }
 
+class KnownHttpResponseReadError extends Error {
+  constructor(readonly status: number, cause: unknown) {
+    super(`PSFN chat completion failed (${status}): response body unavailable`, { cause });
+    this.name = "KnownHttpResponseReadError";
+  }
+}
+
 type PsfnChatMessageContent =
   | string
   | Array<
@@ -104,6 +111,9 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
     });
     const channelMetadata = buildChannelMetadata(channel, satelliteClaim);
     const headers = this.buildHeaders(channel, satelliteClaim, channelMetadata);
+    const hasAuthenticatedReplayProtection = Boolean(
+      channel.deviceAuthority && headers["X-PSFN-Hub-Device-Assertion"],
+    );
     const body = JSON.stringify({
       model: this.runtime.model,
       stream: false,
@@ -175,11 +185,21 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
         if (externalSignal?.aborted) {
           throw cancelled();
         }
+        if (error instanceof KnownHttpResponseReadError) {
+          attempts.push({
+            attempt,
+            status: "error",
+            elapsedMs: Date.now() - attemptStart,
+            httpStatus: error.status,
+          });
+          emit("failed");
+          throw error;
+        }
         if (isAbortError(error)) {
           attempts.push({ attempt, status: "timeout", elapsedMs: Date.now() - attemptStart });
           continue;
         }
-        if (isRetryableTransportLoss(error)) {
+        if (hasAuthenticatedReplayProtection && isRetryableTransportLoss(error)) {
           attempts.push({ attempt, status: "error", elapsedMs: Date.now() - attemptStart });
           continue;
         }
@@ -281,7 +301,12 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
       if (response.ok) {
         return response;
       }
-      const responseText = await response.text();
+      let responseText: string;
+      try {
+        responseText = await response.text();
+      } catch (error) {
+        throw new KnownHttpResponseReadError(response.status, error);
+      }
       if (!isAgentBusyResponse(response.status, responseText) || attempt >= maxRetries) {
         return responseFromText(response.status, responseText);
       }

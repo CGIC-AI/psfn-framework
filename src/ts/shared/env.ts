@@ -295,6 +295,9 @@ export function loadHubConfig(projectRoot: string): HubConfig {
     optional("HUB_DEVICE_REGISTRY_PATH")
       ? resolveExistingFile(projectRoot, required("HUB_DEVICE_REGISTRY_PATH"), "HUB_DEVICE_REGISTRY_PATH")
       : undefined,
+    control
+      ? { reservedCredentials: [{ label: "HUB_CONTROL_TOKEN", credential: control.token }] }
+      : undefined,
   );
   const deviceAssertionIssuer = loadHubDeviceAssertionIssuer(projectRoot, deviceRegistry !== null);
   if (homeAssistant && !deviceRegistry) {

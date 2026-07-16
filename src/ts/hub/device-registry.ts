@@ -47,6 +47,18 @@ export interface HubDeviceRegistryAuthority {
   readCurrent(): HubDeviceRegistry;
 }
 
+export interface HubDeviceRegistryAuthorityOptions {
+  reservedCredentials?: readonly {
+    label: string;
+    credential: string;
+  }[];
+}
+
+interface ReservedCredentialDigest {
+  label: string;
+  credentialSha256: string;
+}
+
 export function loadHubDeviceRegistry(filePath: string | undefined): HubDeviceRegistry | null {
   if (!filePath) return null;
   const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
@@ -62,20 +74,25 @@ export function loadHubDeviceRegistry(filePath: string | undefined): HubDeviceRe
 
 export function loadHubDeviceRegistryAuthority(
   filePath: string | undefined,
+  options: HubDeviceRegistryAuthorityOptions = {},
 ): HubDeviceRegistryAuthority | null {
   if (!filePath) return null;
-  loadRequiredHubDeviceRegistry(filePath);
-  return Object.freeze({
-    readCurrent: () => loadRequiredHubDeviceRegistry(filePath),
-  });
+  return createHubDeviceRegistryAuthority(() => loadRequiredHubDeviceRegistry(filePath), options);
 }
 
 export function createHubDeviceRegistryAuthority(
   readCurrent: () => HubDeviceRegistry,
+  options: HubDeviceRegistryAuthorityOptions = {},
 ): HubDeviceRegistryAuthority {
-  validateRegistry(readCurrent());
+  const reservedCredentials = normalizeReservedCredentials(options.reservedCredentials ?? []);
+  const readValidated = (): HubDeviceRegistry => {
+    const registry = validateRegistry(readCurrent());
+    assertNoReservedCredentialCollision(registry, reservedCredentials);
+    return registry;
+  };
+  readValidated();
   return Object.freeze({
-    readCurrent: () => validateRegistry(readCurrent()),
+    readCurrent: readValidated,
   });
 }
 
@@ -180,6 +197,34 @@ function validateRegistry(registry: HubDeviceRegistry): HubDeviceRegistry {
   assertUnique(devices, "satelliteId/endpointId", device => `${device.satelliteId}/${device.endpointId}`);
   assertUnique(devices, "credentialSha256", device => device.credentialSha256);
   return { schemaVersion: 1, devices };
+}
+
+function normalizeReservedCredentials(
+  credentials: readonly { label: string; credential: string }[],
+): ReservedCredentialDigest[] {
+  return credentials.map(({ label, credential }) => {
+    if (!label.trim()) throw new Error("Reserved Hub credential label must be non-empty");
+    if (!credential) throw new Error(`${label.trim()} must be non-empty`);
+    return {
+      label: label.trim(),
+      credentialSha256: createHash("sha256").update(credential, "utf8").digest("hex"),
+    };
+  });
+}
+
+function assertNoReservedCredentialCollision(
+  registry: HubDeviceRegistry,
+  reservedCredentials: readonly ReservedCredentialDigest[],
+): void {
+  for (const reserved of reservedCredentials) {
+    const reservedDigest = Buffer.from(reserved.credentialSha256, "hex");
+    if (registry.devices.some(device => timingSafeEqual(
+      Buffer.from(device.credentialSha256, "hex"),
+      reservedDigest,
+    ))) {
+      throw new Error(`${reserved.label} must not match a registered device credential`);
+    }
+  }
 }
 
 function requiredPositiveInteger(value: unknown, field: string): number {

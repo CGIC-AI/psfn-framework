@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import type { HubControlConfig } from "../../shared/env.js";
 import {
   authenticateHubDevice,
+  createHubDeviceRegistryAuthority,
   type HubDeviceIdentity,
   type HubDeviceRegistryAuthority,
 } from "../device-registry.js";
@@ -47,15 +48,17 @@ interface HomeAssistantPrincipal {
 export class HomeAssistantControlServer {
   private readonly server: http.Server;
   private readonly idempotency = new Map<string, IdempotencyEntry>();
+  private readonly deviceRegistry: HubDeviceRegistryAuthority;
 
   constructor(
     private readonly config: HubControlConfig,
     private readonly client: HomeAssistantClient,
-    private readonly deviceRegistry: HubDeviceRegistryAuthority,
+    deviceRegistry: HubDeviceRegistryAuthority,
   ) {
-    if (authenticateHubDevice(deviceRegistry.readCurrent(), config.token)) {
-      throw new Error("HUB_CONTROL_TOKEN must not match a registered device credential");
-    }
+    this.deviceRegistry = createHubDeviceRegistryAuthority(
+      () => deviceRegistry.readCurrent(),
+      { reservedCredentials: [{ label: "HUB_CONTROL_TOKEN", credential: config.token }] },
+    );
     this.server = http.createServer((request, response) => {
       void this.handle(request, response).catch((error) => {
         this.writeError(response, error);

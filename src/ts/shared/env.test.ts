@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createPrivateKey } from "node:crypto";
+import { createHash, createPrivateKey } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -294,6 +294,22 @@ test("loadHubConfig loads paired Home Assistant and private control config", () 
     updated.devices[0]!.enrollmentVersion = 2;
     fs.writeFileSync(registryPath, JSON.stringify(updated));
     assert.equal(config.deviceRegistry?.readCurrent().devices[0]?.enrollmentVersion, 2);
+
+    updated.devices[0]!.credentialSha256 = createHash("sha256")
+      .update("0123456789abcdef")
+      .digest("hex");
+    fs.writeFileSync(registryPath, JSON.stringify(updated));
+    assert.throws(
+      () => config.deviceRegistry?.readCurrent(),
+      /HUB_CONTROL_TOKEN must not match a registered device credential/,
+    );
+
+    updated.devices[0]!.credentialSha256 = createHash("sha256")
+      .update("replacement-device-credential")
+      .digest("hex");
+    updated.devices[0]!.enrollmentVersion = 3;
+    fs.writeFileSync(registryPath, JSON.stringify(updated));
+    assert.equal(config.deviceRegistry?.readCurrent().devices[0]?.enrollmentVersion, 3);
   });
 });
 

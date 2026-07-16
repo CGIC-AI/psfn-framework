@@ -16,6 +16,7 @@ import {
 
 const CONTROL_TOKEN = "hub-control-test-token";
 const DEVICE_TOKEN = "office-device-test-token";
+const RELOADED_DEVICE_TOKEN = "office-device-reloaded-token";
 const DEVICE_REGISTRY: HubDeviceRegistry = {
   schemaVersion: 1,
   devices: [{
@@ -175,6 +176,63 @@ test("private control server authenticates, validates, and deduplicates service 
     await mock.close();
   }
 });
+
+test("live device registry rejects a control-token collision before gateway authorization and accepts a valid reload", async () => {
+  const mock = await MockHomeAssistant.start();
+  const client = new HomeAssistantClient(configFor(mock.baseUrl));
+  let currentRegistry = DEVICE_REGISTRY;
+  const authority = createHubDeviceRegistryAuthority(() => currentRegistry);
+  const control = new HomeAssistantControlServer({
+    bindHost: "127.0.0.1",
+    port: 0,
+    token: CONTROL_TOKEN,
+    maxBodyBytes: 4096,
+  }, client, authority);
+  client.start();
+  await control.start();
+  try {
+    await waitFor(() => client.health().status === "ready");
+    const address = control.address() as AddressInfo;
+    const baseUrl = `http://127.0.0.1:${address.port}`;
+    const body = {
+      requestId: "hot-reload:collision",
+      domain: "light",
+      service: "turn_on",
+      entityIds: ["light.office"],
+    };
+
+    currentRegistry = registryWithCredential(CONTROL_TOKEN, 2);
+    const collision = await post(baseUrl, "/internal/v1/home-assistant/call-service", body);
+    assert.equal(collision.status, 500);
+    assert.match(await collision.text(), /HUB_CONTROL_TOKEN must not match a registered device credential/);
+    assert.equal(mock.serviceCallCount, 0, "a colliding device credential must never act as the gateway principal");
+
+    currentRegistry = registryWithCredential(RELOADED_DEVICE_TOKEN, 3);
+    const validReload = await post(
+      baseUrl,
+      "/internal/v1/home-assistant/call-service",
+      { ...body, requestId: "hot-reload:valid" },
+      RELOADED_DEVICE_TOKEN,
+    );
+    assert.equal(validReload.status, 200);
+    assert.equal(mock.serviceCallCount, 1);
+  } finally {
+    await control.close();
+    await client.close();
+    await mock.close();
+  }
+});
+
+function registryWithCredential(credential: string, enrollmentVersion: number): HubDeviceRegistry {
+  return {
+    schemaVersion: 1,
+    devices: [{
+      ...DEVICE_REGISTRY.devices[0]!,
+      credentialSha256: createHash("sha256").update(credential).digest("hex"),
+      enrollmentVersion,
+    }],
+  };
+}
 
 function configFor(baseUrl: string): HomeAssistantConfig {
   return {

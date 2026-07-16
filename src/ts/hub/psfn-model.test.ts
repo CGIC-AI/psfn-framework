@@ -374,6 +374,35 @@ test("authenticated recovery retries byte-identical request bytes after a consum
   }
 });
 
+test("unauthenticated transport loss does not retry without replay protection", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw new TypeError("fetch failed without an authenticated replay assertion");
+    }
+    return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"must not recover"}}]}');
+  };
+  const adapter = new PsfnModelAdapter(
+    buildRuntimeConfig({ textReplyDeadlineMs: 250, textAttemptTimeoutMs: 100 }),
+  );
+
+  try {
+    await assert.rejects(
+      drainReply(adapter, {
+        inputMode: "text",
+        userText: "do not replay me",
+        conversationId: "unauthenticated-transport-loss",
+      }),
+      /without an authenticated replay assertion/,
+    );
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("authenticated recovery retries an ECONNRESET-equivalent transport loss", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
@@ -447,6 +476,42 @@ test("authenticated recovery does not retry deterministic auth denials or arbitr
       );
       assert.equal(calls, 1, `${scenario.name} must not retry`);
     }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("authenticated recovery does not retry a known 401 whose body read loses transport", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return {
+        ok: false,
+        status: 401,
+        text: async () => { throw new TypeError("terminated while reading the denied response"); },
+      } as unknown as Response;
+    }
+    return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"must not recover"}}]}');
+  };
+  const adapter = new PsfnModelAdapter(
+    authenticatedAssertionRuntime({ textReplyDeadlineMs: 250, textAttemptTimeoutMs: 100 }),
+    undefined,
+    authenticatedRegistryAuthority(),
+  );
+
+  try {
+    await assert.rejects(
+      drainReply(adapter, {
+        inputMode: "text",
+        userText: "do not replay a denied request",
+        conversationId: authenticatedChannel().sessionId,
+        channel: authenticatedChannel(),
+      }),
+      /401/,
+    );
+    assert.equal(calls, 1);
   } finally {
     globalThis.fetch = originalFetch;
   }

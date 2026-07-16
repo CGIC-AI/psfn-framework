@@ -1,9 +1,9 @@
 import type { AgentMessage } from '../../../../boundary/pi-agent/index.js';
 import type { LLMProviderWireMessage, LLMSystemPromptTransport } from '../../../../shared/contracts/runtime.js';
 import { isObjectRecord as isRecord } from '../../../../shared/utils/types.js';
-import { contextMessagesToPiMessages } from '../../../../primitives/llm/message-conversion.js';
 import { convertToLlm } from '../../messages.js';
-import { serializePromptPlanForProvider, type PromptPlan } from './prompt-plan.js';
+import { deriveProviderWireMessagesForPromptProjection } from '../../../../shared/contracts/prompt-projection.js';
+import type { PromptPlan } from './prompt-plan.js';
 
 function serializeMessageContent(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -62,12 +62,5 @@ export function deriveProviderWireMessagesForTurnSnapshot(input: {
   transport: LLMSystemPromptTransport;
   currentTurnInput: string | undefined;
 }): LLMProviderWireMessage[] {
-  const seededWireMessages = serializePromptPlanForProvider(input.plan, input.transport).providerWireMessages;
-  const historyMessages = contextMessagesToPiMessages(input.plan.messages);
-  const currentPromptMessage: AgentMessage = {
-    role: 'user',
-    content: input.currentTurnInput ?? '',
-    timestamp: 0,
-  };
-  return rebuildProviderWireMessagesForPrompt(seededWireMessages, historyMessages, currentPromptMessage);
+  return deriveProviderWireMessagesForPromptProjection(input);
 }

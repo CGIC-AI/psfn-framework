@@ -6,7 +6,6 @@ import type {
   AdminPromptSectionTelemetry,
   AdminSessionTurnData,
   AdminTurnPromptContextMessage,
-  AdminTurnProviderWireMessage,
   AdminTurnSnapshotData,
   AdminTurnStageTelemetry,
 } from '../types';
@@ -15,8 +14,7 @@ import {
   parsePersistedTurnSnapshot,
   parsePersistedTurnSnapshotEventData,
 } from './turn-snapshot-parser';
-import { serializePromptPlanForProvider } from '../../../../src/core/agent/substrate-agent/turn-execution/prompt-plan.js';
-import type { Role } from '../../../../src/shared/contracts/runtime.js';
+import { projectTurnSnapshotPrompt } from '../../../../src/shared/contracts/prompt-projection.js';
 
 export const PROMPT_MONITOR_STAGE_ORDER = [
   'trust',
@@ -487,209 +485,17 @@ function hasToolResultPayload(toolCall: AdminSessionTurnData['record']['toolCall
     || record.details !== undefined;
 }
 
-function clonePromptContextMessagesForLoom(
-  messages: AdminTurnPromptContextMessage[] | undefined,
-): AdminPromptLoomData['generatedPrompt']['contextMessages'] {
-  return (messages?.map(clonePromptContextMessage) ?? []) as AdminPromptLoomData['generatedPrompt']['contextMessages'];
-}
-
 function clonePromptSectionsForLoom(
   sections: AdminPromptSectionTelemetry[] | undefined,
 ): AdminPromptLoomData['generatedPrompt']['inputSections'] {
   return (sections?.map(clonePromptSection) ?? []) as AdminPromptLoomData['generatedPrompt']['inputSections'];
 }
 
-function cloneProviderMessagesForLoom(
-  messages: AdminTurnProviderWireMessage[] | undefined,
-): AdminPromptLoomData['providerPayload']['providerMessages'] {
-  return messages?.map(message => ({ ...message })) ?? [];
-}
-
-function toCanonicalProviderPlan(plan: AdminPromptPlanData) {
-  return {
-    blocks: plan.blocks,
-    messages: plan.messages.map(message => ({
-      role: requireCanonicalPromptRole(message.role),
-      content: message.content,
-    })),
-  };
-}
-
-function requireCanonicalPromptRole(role: string): Role {
-  switch (role) {
-    case 'user':
-    case 'assistant':
-    case 'system':
-      return role;
-    default:
-      throw new Error(`PromptPlan message carries unsupported role ${JSON.stringify(role)}`);
-  }
-}
-
-function resolveProviderMessages(
-  snapshot: AdminTurnSnapshotData | null,
-): AdminPromptLoomData['providerPayload']['providerMessages'] {
-  const embedded = snapshot?.promptContext?.providerObservability?.providerWireMessages;
-  if (embedded !== undefined) {
-    return cloneProviderMessagesForLoom(embedded);
-  }
-  const plan = snapshot?.plan;
-  const transport = snapshot?.promptContext?.providerObservability?.systemRole.transport;
-  if (!plan || !transport) return [];
-  const serialized = serializePromptPlanForProvider(toCanonicalProviderPlan(plan), transport);
-  // The persistence read derivation uses this same serialized plan history,
-  // followed by the captured current-turn user input.
-  return [
-    ...serialized.providerWireMessages.map(message => ({ ...message })),
-    {
-      role: 'user',
-      source: 'message',
-      content: snapshot.promptContext?.currentTurnInput ?? '',
-    },
-  ];
-}
-
-function resolveActiveTools(
-  snapshot: AdminTurnSnapshotData | null,
-): AdminPromptLoomData['providerPayload']['activeTools'] {
-  const embedded = snapshot?.toolContext?.activeTools;
-  const tools = embedded !== undefined
-    ? embedded
-    : snapshot?.plan?.toolDefinitions ?? [];
-  return tools.map(tool => ({
-    ...tool,
-    inputSchema: cloneJsonObject(tool.inputSchema),
-  }));
-}
-
-function getPlanBlockText(
-  plan: AdminPromptPlanData | undefined,
-  id: string,
-): string | null {
-  return plan?.blocks.find(block => block.id === id)?.renderedText ?? null;
-}
-
-function joinPlanBlockTexts(blocks: readonly AdminPromptPlanBlock[]): string {
-  return blocks
-    .map(block => block.renderedText.trim())
-    .filter(text => text.length > 0)
-    .join('\n\n');
-}
-
-const DATETIME_ANCHOR_BLOCK_ID = 'runtime.current_datetime';
-
-/**
- * Mirror of stripCurrentDatetimePromptBlocks (turn-execution/prompt-plan.ts):
- * stale datetime anchors are stripped fail-closed before the plan's own
- * ordered anchor block is appended last. Kept regex-identical so the live-bus
- * fallback serialization matches the server projection byte-for-byte.
- */
-function stripCurrentDatetimeBlocksView(text: string): string {
-  return text
-    .replace(/<runtime\.current_datetime(?:\s+[^>]*)?>\s*[\s\S]*?<\/runtime\.current_datetime>/g, '')
-    .replace(/<current_datetime>\s*[\s\S]*?<\/current_datetime>/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-/** Mirror of serializePromptPlanSystemPrompt for the live-bus fallback. */
-function serializePlanSystemPromptView(plan: AdminPromptPlanData): string {
-  const anchorBlock = plan.blocks.find(block => block.id === DATETIME_ANCHOR_BLOCK_ID);
-  const body = stripCurrentDatetimeBlocksView(
-    joinPlanBlockTexts(plan.blocks.filter(block => block.id !== DATETIME_ANCHOR_BLOCK_ID)),
-  );
-  const anchor = anchorBlock?.renderedText.trim() ?? '';
-  if (!anchor) return body;
-  return body ? `${body}\n\n${anchor}` : anchor;
-}
-
-interface PromptLoomPlanStrings {
-  renderedStaticPrefix: string | null;
-  renderedDynamicSuffix: string | null;
-  runtimeContext: string | null;
-  memoryContextBlock: string | null;
-  scratchpadContext: string | null;
-  assembledPrompt: string | null;
-  finalSystemPrompt: string | null;
-  contextMessages: AdminPromptLoomData['generatedPrompt']['contextMessages'];
-}
-
-/**
- * Live-event fallback mirror of the server-side plan derivation (E2.2): the
- * snapshot's PromptPlan is the source of truth for prompt strings; the legacy
- * promptContext string fields exist only on historical records.
- */
-function derivePromptLoomPlanStrings(
-  snapshot: AdminTurnSnapshotData | undefined | null,
-): PromptLoomPlanStrings {
-  const plan = snapshot?.plan;
-  if (plan) {
-    return {
-      renderedStaticPrefix: getPlanBlockText(plan, 'static_prefix') ?? '',
-      renderedDynamicSuffix: getPlanBlockText(plan, 'dynamic_suffix') ?? '',
-      runtimeContext: getPlanBlockText(plan, 'runtime.context') ?? '',
-      memoryContextBlock: getPlanBlockText(plan, 'memory.retrieval') ?? '',
-      scratchpadContext: getPlanBlockText(plan, 'runtime.scratchpad') ?? '',
-      assembledPrompt: joinPlanBlockTexts(
-        plan.blocks.filter(block => block.layer === 'prompt_stack' || block.layer === 'runtime'),
-      ),
-      finalSystemPrompt: serializePlanSystemPromptView(plan),
-      contextMessages: clonePromptContextMessagesForLoom(plan.messages),
-    };
-  }
-  const promptContext = snapshot?.promptContext;
-  return {
-    renderedStaticPrefix: promptContext?.renderedStaticPrefix ?? null,
-    renderedDynamicSuffix: promptContext?.renderedDynamicSuffix ?? null,
-    runtimeContext: promptContext?.runtimeContext ?? null,
-    memoryContextBlock: promptContext?.memoryContextBlock ?? null,
-    scratchpadContext: promptContext?.scratchpadContext ?? null,
-    assembledPrompt: promptContext?.assembledPrompt ?? null,
-    finalSystemPrompt: promptContext?.finalSystemPrompt ?? null,
-    contextMessages: clonePromptContextMessagesForLoom(promptContext?.messages),
-  };
-}
-
-/** Live-bus fallback matching the server's canonical Provider Wire projection. */
-function buildProviderWireFromSnapshot(
-  snapshot: AdminTurnSnapshotData | null,
-  planStrings: PromptLoomPlanStrings,
-): AdminPromptLoomData['providerWire'] {
-  const plan = snapshot?.plan ?? null;
-  const transport = snapshot?.promptContext?.providerObservability?.systemRole.transport ?? null;
-  const captured = snapshot?.promptContext?.providerObservability?.capturedWirePayload;
-  if (plan && transport) {
-    const payload = serializePromptPlanForProvider(toCanonicalProviderPlan(plan), transport);
-    return {
-      source: 'prompt_plan',
-      legacy: false,
-      systemRoleTransport: transport,
-      systemPrompt: payload.systemPrompt,
-      messages: payload.providerWireMessages.map(message => ({ ...message })),
-      toolDefinitions: plan.toolDefinitions.map(tool => ({
-        ...tool,
-        inputSchema: cloneJsonObject(tool.inputSchema),
-      })),
-      ...(captured ? { capturedWirePayload: cloneJsonSafe(captured) } : {}),
-    };
-  }
-  return {
-    source: 'recorded_snapshot',
-    legacy: plan === null,
-    systemRoleTransport: transport,
-    systemPrompt: planStrings.finalSystemPrompt,
-    messages: resolveProviderMessages(snapshot),
-    toolDefinitions: resolveActiveTools(snapshot),
-    // Raw-wire view captured as-sent (bead hgw3-80f6); clone so live-bus mutation
-    // cannot reach back into the observed snapshot. Preserve absence.
-    ...(captured ? { capturedWirePayload: cloneJsonSafe(captured) } : {}),
-  };
-}
-
 function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
   const snapshot = turn.snapshot;
   const promptContext = snapshot?.promptContext;
-  const planStrings = derivePromptLoomPlanStrings(snapshot);
+  const projection = projectTurnSnapshotPrompt(snapshot);
+  const planStrings = projection.strings;
   const response = promptContext?.response ?? null;
   const renderedChatOutput = response?.content ?? turn.record?.assistantMessage?.content ?? null;
   const historicalHits = collectHistoricalSnapshotHits(snapshot);
@@ -698,7 +504,7 @@ function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
     source: 'turn_snapshot',
     snapshotCapturedAt: snapshot?.capturedAt ?? null,
     plan: (snapshot?.plan ? cloneJsonSafe(snapshot.plan) : null) as AdminPromptLoomData['plan'],
-    providerWire: buildProviderWireFromSnapshot(snapshot, planStrings),
+    providerWire: projection.providerWire,
     historicalSnapshot: {
       label: HISTORICAL_SNAPSHOT_LABEL,
       removedPromptLayerIds: [...new Set(historicalHits.map(hit => hit.layerId))],
@@ -719,8 +525,8 @@ function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
     },
     providerPayload: {
       finalSystemPrompt: planStrings.finalSystemPrompt,
-      providerMessages: resolveProviderMessages(snapshot),
-      activeTools: resolveActiveTools(snapshot),
+      providerMessages: projection.providerMessages,
+      activeTools: projection.activeTools,
     },
     providerResult: {
       response: response ? { ...response } : null,

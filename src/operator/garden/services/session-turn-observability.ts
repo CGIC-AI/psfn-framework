@@ -12,28 +12,16 @@ import type {
   AdminContinuityProvenanceView,
   AdminPromptLoomData,
   AdminPromptLoomHistoricalSnapshotHit,
-  AdminPromptLoomProviderWireData,
   AdminSessionTurnData,
   AdminTurnRetrievalTelemetry,
   AdminTurnSnapshotData,
   AdminTurnStageTelemetry,
 } from './types.js';
 import type {
-  ContextMessage,
-  LLMCapturedProviderWirePayload,
-  LLMProviderWireMessage,
   PromptSectionTelemetry,
-  ToolSchema,
   TurnRecord,
 } from '../../../shared/contracts/runtime.js';
-import {
-  getPromptPlanBlockText,
-  renderPromptPlanAssembledPrompt,
-  serializePromptPlanForProvider,
-  serializePromptPlanSystemPrompt,
-  type PromptPlan,
-} from '../../../core/agent/substrate-agent/turn-execution/prompt-plan.js';
-import { deriveProviderWireMessagesForTurnSnapshot } from '../../../core/agent/substrate-agent/turn-execution/prompt-invocation-history.js';
+import { projectTurnSnapshotPrompt } from '../../../shared/contracts/prompt-projection.js';
 
 /**
  * Truncation-point inventory (bead u9jo.2).
@@ -115,72 +103,6 @@ function buildRecordedRoleEnvelopeRefs(record: AdminSessionTurnData['record']): 
     .map(ref => ref.trim());
 }
 
-/**
- * Reconstruct the provider wire messages from the canonical PromptPlan the same
- * way the runtime did at write time. Delegates to the runtime's own
- * `deriveProviderWireMessagesForTurnSnapshot` — the SAME function the persist
- * path uses to decide whether the embedded copy is byte-derivable (bead
- * hgw3.3) — so the read-time projection cannot drift from the write-time
- * slimming decision.
- *
- * Returns [] when the plan or the recorded system-role transport is unavailable
- * (nothing canonical to derive from).
- */
-function deriveProviderWireMessages(snapshot: AdminTurnSnapshotData | null): LLMProviderWireMessage[] {
-  const plan = snapshot?.plan ?? null;
-  const transport = snapshot?.promptContext?.providerObservability?.systemRole.transport ?? null;
-  if (!plan || !transport) return [];
-  return deriveProviderWireMessagesForTurnSnapshot({
-    plan,
-    transport,
-    currentTurnInput: snapshot?.promptContext?.currentTurnInput,
-  });
-}
-
-/**
- * Fail-closed guard for content-addressed tool definitions (bead hgw3.3): the
- * persistence read path resolves `toolDefinitionsRef` back into inline
- * `plan.toolDefinitions` before a record ever reaches Garden. A plan that
- * still carries an unresolved ref here means a reader bypassed the resolving
- * store — surface that loudly instead of rendering a silent empty tool list.
- */
-function requireResolvedPlanToolDefinitions(plan: PromptPlan): ToolSchema[] {
-  if (!Array.isArray(plan.toolDefinitions)) {
-    const danglingRef = (plan as unknown as Record<string, unknown>).toolDefinitionsRef;
-    throw new Error(
-      typeof danglingRef === 'string'
-        ? `Turn snapshot plan carries unresolved toolDefinitionsRef "${danglingRef}"; records must be read through the resolving turn-record store`
-        : 'Turn snapshot plan is missing toolDefinitions',
-    );
-  }
-  return plan.toolDefinitions;
-}
-
-/**
- * FAT-RECORD READ PATH (schema tolerance, not a legacy shim): when the snapshot
- * embedded the provider wire messages verbatim, prefer that byte-for-byte so
- * historical records keep rendering exactly as captured. SLIM records that no
- * longer persist the duplicated copy derive it from the canonical plan.
- */
-function resolveProviderMessages(snapshot: AdminTurnSnapshotData | null): AdminPromptLoomData['providerPayload']['providerMessages'] {
-  const embedded = snapshot?.promptContext?.providerObservability?.providerWireMessages;
-  const messages = embedded ?? deriveProviderWireMessages(snapshot);
-  return messages.map(message => ({ ...message }));
-}
-
-/**
- * FAT-RECORD READ PATH: prefer the embedded `toolContext.activeTools` verbatim.
- * SLIM records fall back to `plan.toolDefinitions` — byte-identical to
- * activeTools at write time (agent-invocation.ts binds the same array to both).
- */
-function resolveActiveTools(snapshot: AdminTurnSnapshotData | null): AdminPromptLoomData['providerPayload']['activeTools'] {
-  const tools = snapshot?.toolContext?.activeTools
-    ?? (snapshot?.plan ? requireResolvedPlanToolDefinitions(snapshot.plan) : []);
-  return tools.map(tool => ({
-    ...tool,
-    inputSchema: cloneUnknownValue(tool.inputSchema),
-  }));
-}
 
 /**
  * Derive a Final System Sections view from the canonical plan blocks. NOTE: the
@@ -288,120 +210,10 @@ function collectHistoricalSnapshotHits(
 }
 
 function hasToolResultPayload(toolCall: TurnRecord['toolCalls'][number]): boolean {
-  const record = toolCall as Record<string, unknown>;
+  const record = toolCall as unknown as Record<string, unknown>;
   return typeof record.resultText === 'string'
     || typeof record.isError === 'boolean'
     || record.details !== undefined;
-}
-
-/**
- * Prompt-string fields for records that predate the PromptPlan snapshot
- * (E2.2). Historical persisted turn records stored these strings on
- * promptContext; current records carry the plan and the strings are derived
- * from it. This shape exists ONLY to keep historical turns viewable.
- */
-interface HistoricalPromptContextRecordFields {
-  renderedStaticPrefix?: string;
-  renderedDynamicSuffix?: string;
-  runtimeContext?: string;
-  memoryContextBlock?: string;
-  scratchpadContext?: string;
-  assembledPrompt?: string;
-  finalSystemPrompt?: string;
-  messages?: ContextMessage[];
-}
-
-interface PromptLoomPromptStrings {
-  renderedStaticPrefix: string | null;
-  renderedDynamicSuffix: string | null;
-  runtimeContext: string | null;
-  memoryContextBlock: string | null;
-  scratchpadContext: string | null;
-  assembledPrompt: string | null;
-  finalSystemPrompt: string | null;
-  contextMessages: ContextMessage[];
-}
-
-function derivePromptLoomPromptStrings(
-  snapshot: AdminTurnSnapshotData | null,
-): PromptLoomPromptStrings {
-  const plan = snapshot?.plan;
-  if (plan) {
-    // The persisted snapshot IS the plan: every prompt string the Loom shows
-    // is derived from the same ordered blocks that shipped to the provider.
-    return {
-      renderedStaticPrefix: getPromptPlanBlockText(plan, 'static_prefix'),
-      renderedDynamicSuffix: getPromptPlanBlockText(plan, 'dynamic_suffix'),
-      runtimeContext: getPromptPlanBlockText(plan, 'runtime.context'),
-      memoryContextBlock: getPromptPlanBlockText(plan, 'memory.retrieval'),
-      scratchpadContext: getPromptPlanBlockText(plan, 'runtime.scratchpad'),
-      assembledPrompt: renderPromptPlanAssembledPrompt(plan),
-      finalSystemPrompt: serializePromptPlanSystemPrompt(plan),
-      contextMessages: plan.messages.map(message => cloneUnknownValue(message)),
-    };
-  }
-  const historical = (snapshot?.promptContext ?? null) as HistoricalPromptContextRecordFields | null;
-  return {
-    renderedStaticPrefix: historical?.renderedStaticPrefix ?? null,
-    renderedDynamicSuffix: historical?.renderedDynamicSuffix ?? null,
-    runtimeContext: historical?.runtimeContext ?? null,
-    memoryContextBlock: historical?.memoryContextBlock ?? null,
-    scratchpadContext: historical?.scratchpadContext ?? null,
-    assembledPrompt: historical?.assembledPrompt ?? null,
-    finalSystemPrompt: historical?.finalSystemPrompt ?? null,
-    contextMessages: historical?.messages?.map(message => cloneUnknownValue(message)) ?? [],
-  };
-}
-
-/**
- * Provider Wire projection. Two views (bead hgw3-80f6):
- *  - `capturedWirePayload`: the RAW body captured as-sent via pi-ai `onPayload`
- *    — the byte-identical wire truth (tools included, counted once, cache_control
- *    and provider transforms intact). Present whenever the turn streamed through
- *    the agent loop and its capture survived the persist/resolve round-trip.
- *  - `messages`/`systemPrompt`/`toolDefinitions`: the CLEANED-by-blocks view. For
- *    plan-backed turns this is the pure serialization of the persisted plan; for
- *    legacy pre-plan records it falls back to the recorded provider-wire capture.
- */
-function resolveCapturedWirePayload(
-  snapshot: AdminTurnSnapshotData | null,
-): LLMCapturedProviderWirePayload | undefined {
-  const captured = snapshot?.promptContext?.providerObservability?.capturedWirePayload;
-  if (!captured) return undefined;
-  return {
-    ...captured,
-    ...(captured.body !== undefined ? { body: cloneUnknownValue(captured.body) } : {}),
-  };
-}
-
-function buildProviderWireData(
-  snapshot: AdminTurnSnapshotData | null,
-  legacyFinalSystemPrompt: string | null,
-): AdminPromptLoomProviderWireData {
-  const plan = snapshot?.plan ?? null;
-  const transport = snapshot?.promptContext?.providerObservability?.systemRole.transport ?? null;
-  const capturedWirePayload = resolveCapturedWirePayload(snapshot);
-  if (plan && transport) {
-    const payload = serializePromptPlanForProvider(plan, transport);
-    return {
-      source: 'prompt_plan',
-      legacy: false,
-      systemRoleTransport: transport,
-      systemPrompt: payload.systemPrompt,
-      messages: payload.providerWireMessages.map(message => ({ ...message })),
-      toolDefinitions: requireResolvedPlanToolDefinitions(plan).map(tool => cloneUnknownValue(tool)),
-      ...(capturedWirePayload ? { capturedWirePayload } : {}),
-    };
-  }
-  return {
-    source: 'recorded_snapshot',
-    legacy: plan === null,
-    systemRoleTransport: transport,
-    systemPrompt: legacyFinalSystemPrompt,
-    messages: resolveProviderMessages(snapshot),
-    toolDefinitions: resolveActiveTools(snapshot),
-    ...(capturedWirePayload ? { capturedWirePayload } : {}),
-  };
 }
 
 export function buildPromptLoomData(
@@ -413,12 +225,13 @@ export function buildPromptLoomData(
   const renderedChatOutput = response?.content ?? record.assistantMessage?.content ?? null;
   const finalSystemSections = resolveFinalSystemSections(snapshot);
   const historicalHits = collectHistoricalSnapshotHits(snapshot, finalSystemSections);
-  const promptStrings = derivePromptLoomPromptStrings(snapshot);
+  const projection = projectTurnSnapshotPrompt(snapshot);
+  const promptStrings = projection.strings;
   return {
     source: 'turn_snapshot',
     snapshotCapturedAt: snapshot?.capturedAt ?? null,
     plan: snapshot?.plan ? cloneUnknownValue(snapshot.plan) : null,
-    providerWire: buildProviderWireData(snapshot, promptStrings.finalSystemPrompt),
+    providerWire: projection.providerWire,
     historicalSnapshot: {
       label: HISTORICAL_SNAPSHOT_LABEL,
       removedPromptLayerIds: [...new Set(historicalHits.map(hit => hit.layerId))],
@@ -439,8 +252,8 @@ export function buildPromptLoomData(
     },
     providerPayload: {
       finalSystemPrompt: promptStrings.finalSystemPrompt,
-      providerMessages: resolveProviderMessages(snapshot),
-      activeTools: resolveActiveTools(snapshot),
+      providerMessages: projection.providerMessages,
+      activeTools: projection.activeTools,
     },
     providerResult: {
       response: response ? { ...response } : null,

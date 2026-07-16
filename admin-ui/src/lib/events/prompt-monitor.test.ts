@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { TurnID } from '../../../../src/shared/contracts/runtime.js';
+import { buildPromptLoomData } from '../../../../src/operator/garden/services/session-turn-observability.js';
 import type {
   AdminPromptPlanData,
   AdminSessionTurnData,
@@ -872,6 +873,74 @@ function buildPlanFixture(seed: {
     },
   };
 }
+
+function selectSharedPromptProjection(
+  loom: ReturnType<typeof resolvePromptMonitorPromptLoom>,
+): unknown {
+  return {
+    generatedPrompt: {
+      renderedStaticPrefix: loom.generatedPrompt.renderedStaticPrefix,
+      renderedDynamicSuffix: loom.generatedPrompt.renderedDynamicSuffix,
+      runtimeContext: loom.generatedPrompt.runtimeContext,
+      memoryContextBlock: loom.generatedPrompt.memoryContextBlock,
+      scratchpadContext: loom.generatedPrompt.scratchpadContext,
+      assembledPrompt: loom.generatedPrompt.assembledPrompt,
+      contextMessages: loom.generatedPrompt.contextMessages,
+    },
+    providerWire: loom.providerWire,
+    providerPayload: loom.providerPayload,
+  };
+}
+
+test('live event fallback and replay read path project slim and explicit-empty snapshots byte-identically', () => {
+  for (const embedded of ['omitted', 'empty'] as const) {
+    const turn = buildTurn({
+      turnId: `turn-parity-${embedded}`,
+      channelId: 'api:monitor',
+      promptVersionPointer: `prompt-parity-${embedded}`,
+      completedAt: embedded === 'omitted' ? 6_000 : 6_100,
+      ttftMs: 25,
+      promptDurationMs: 125,
+    });
+    assert.ok(turn.snapshot);
+    assert.ok(turn.snapshot.promptContext?.providerObservability);
+    assert.ok(turn.snapshot.toolContext);
+    const plan = buildPlanFixture({ includeScratchpad: true, includeSessionContext: true });
+    plan.toolDefinitions = [{
+      name: 'parity_tool',
+      description: 'Projected by both paths.',
+      inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+    }];
+    turn.snapshot.plan = plan;
+    turn.snapshot.promptContext.currentTurnInput = 'current parity input';
+    if (embedded === 'omitted') {
+      delete turn.snapshot.promptContext.providerObservability.providerWireMessages;
+      delete turn.snapshot.toolContext.activeTools;
+    } else {
+      turn.snapshot.promptContext.providerObservability.providerWireMessages = [];
+      turn.snapshot.toolContext.activeTools = [];
+    }
+
+    const replayLoom = buildPromptLoomData(turn.record, turn.snapshot);
+    const liveTurns = mergePromptMonitorEvent([], {
+      type: 'agent.turn.snapshot',
+      timestamp: turn.snapshot.capturedAt,
+      correlation: {
+        channelId: turn.snapshot.channelId,
+        turnId: turn.snapshot.turnId,
+      },
+      data: { snapshot: turn.snapshot },
+    });
+    assert.equal(liveTurns.length, 1);
+    const liveLoom = resolvePromptMonitorPromptLoom(liveTurns[0]!);
+
+    assert.equal(
+      JSON.stringify(selectSharedPromptProjection(liveLoom)),
+      JSON.stringify(selectSharedPromptProjection(replayLoom)),
+      `${embedded} projection diverged`,
+    );
+  }
+});
 
 test('diffPromptPlanBlocks: quiet consecutive pair diffs only the turn-volatile blocks', () => {
   const before = buildPlanFixture({

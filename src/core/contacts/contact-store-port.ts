@@ -94,6 +94,11 @@ export type MachineIntelligenceObservationMarkResult =
   | 'not_found';
 
 export interface ContactStorePort {
+  /** Exact current companion-owned Discord/contact authority for fleet activation. */
+  readVerifiedDiscordContactAuthority(
+    contactId: string,
+    providerSubjectId: string,
+  ): Awaitable<import('../../shared/contracts/contact-authority-snapshot.js').VerifiedDiscordContactAuthoritySnapshot | undefined>;
   /** Prepare or exactly resume one companion-local contact authority saga. */
   prepareContactLifecycleIntent(input: unknown): Awaitable<ContactLifecyclePrepareOutcome>;
   /** Append one exact gateway result and advance the durable companion phase. */

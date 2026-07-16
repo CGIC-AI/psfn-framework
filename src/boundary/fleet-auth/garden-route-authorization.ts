@@ -63,6 +63,21 @@ const pageIds = (patterns: readonly string[]): string[] => ids(['GET', 'HEAD'], 
 
 const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
+    action: 'contacts.bind', area: 'contacts',
+    routeIds: ids('POST', ['/v1/fleet-auth/lifecycle/binding/complete']),
+    assurance: 'webauthn_uv', confirmation: 'explicit',
+  },
+  {
+    action: 'provider.link', area: 'identity',
+    routeIds: ids('POST', ['/v1/fleet-auth/lifecycle/provider/complete']),
+    assurance: 'webauthn_uv', confirmation: 'explicit',
+  },
+  {
+    action: 'roles.manage', area: 'identity',
+    routeIds: ids('POST', ['/v1/fleet-auth/lifecycle/role/complete']),
+    assurance: 'webauthn_uv', confirmation: 'explicit',
+  },
+  {
     action: 'public.read', area: 'garden_ui', routeIds: [
       ...ids('GET', ['/health']),
       ...ids(['GET', 'HEAD'], ['/_app/*assetPath']),

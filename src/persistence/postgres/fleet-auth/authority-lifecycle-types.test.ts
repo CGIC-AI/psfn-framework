@@ -30,6 +30,9 @@ function provider(subjectId: string) {
 
 function providerReplace(): VerifiedFleetAuthLifecycleDecision {
   const target = principal();
+  const companionId = randomUUID();
+  const contactId = 'contact-provider-replacement';
+  const newProvider = provider('223456789012345678');
   return {
     verification: 'gateway_verified',
     action: 'provider.replace',
@@ -50,8 +53,22 @@ function providerReplace(): VerifiedFleetAuthLifecycleDecision {
     target,
     authorityGeneration: 1,
     globalAuthEpoch: 1,
+    companionId,
+    contactId,
     currentProvider: provider('123456789012345678'),
-    newProvider: provider('223456789012345678'),
+    newProvider,
+    contactAuthority: {
+      schemaVersion: 1,
+      contactId,
+      channel: 'discord',
+      providerSubjectId: newProvider.subjectId,
+      identityVersion: 2,
+      verificationId: randomUUID(),
+      verificationDigest: 'b'.repeat(64),
+      contactAuthorityVersion: 3,
+      ownershipState: 'verified',
+      restoreState: 'live',
+    },
     reasonDigest: DIGEST,
     decidedAt: new Date('2026-07-16T12:00:00.000Z'),
   };

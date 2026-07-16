@@ -1149,6 +1149,30 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     await expect(requestPromise).resolves.toEqual({ ok: true });
   });
 
+  it('routes an explicit companion authority read only to that authenticated agent', async () => {
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({ api: 'comp-b' }),
+    });
+    const connA = await connect();
+    const connB = await connect();
+    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connB, 'comp-b', 2);
+
+    const requestPromise = server.requestCompanionAgent(
+      'comp-a',
+      'contact.authority.snapshot',
+      { contactId: 'contact-one', providerSubjectId: '123456789012345679' },
+    );
+    await new Promise(r => setTimeout(r, 10));
+
+    expect(methodFrames(connB, 'contact.authority.snapshot')).toHaveLength(0);
+    const requestFrame = methodFrames(connA, 'contact.authority.snapshot')[0];
+    expect(requestFrame).toBeDefined();
+    connA._emit({ jsonrpc: '2.0', id: requestFrame.id, result: null });
+    await expect(requestPromise).resolves.toBeNull();
+  });
+
   it('routes voice/channel streams by message channelType to exactly the routed companion', async () => {
     const routed = { messages: [] as any[] };
     const { server, connect } = await setupServer({

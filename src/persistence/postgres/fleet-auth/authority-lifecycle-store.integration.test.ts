@@ -23,6 +23,7 @@ import {
   type ActorSessionAuthorityClaim,
   type PrincipalAuthorityClaim,
   type VerifiedFleetAuthLifecycleDecision,
+  type VerifiedProviderProof,
 } from './authority-lifecycle-types.js';
 import {
   createGatewayAccountAuthorityFencePort,
@@ -269,6 +270,39 @@ function baseDecision(
   };
 }
 
+function providerContactScope(
+  seeded: { companionId: string; targetContactId: string },
+  newProvider: VerifiedProviderProof,
+) {
+  return {
+    companionId: seeded.companionId,
+    contactId: seeded.targetContactId,
+    contactAuthority: {
+      schemaVersion: 1 as const,
+      contactId: seeded.targetContactId,
+      channel: 'discord' as const,
+      providerSubjectId: newProvider.subjectId,
+      identityVersion: 2,
+      verificationId: randomUUID(),
+      verificationDigest: 'b'.repeat(64),
+      contactAuthorityVersion: 3,
+      ownershipState: 'verified' as const,
+      restoreState: 'live' as const,
+    },
+  };
+}
+
+async function promoteProviderLifecycleTargetToOwner(
+  pool: import('pg').Pool,
+  seeded: { targetGrantId: string },
+): Promise<void> {
+  await pool.query(`
+    UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+    SET role = 'owner'
+    WHERE grant_id = $1
+  `, [seeded.targetGrantId]);
+}
+
 async function seedOwnerAndTarget(pool: import('pg').Pool) {
   if (!harness) throw new Error('Postgres harness unavailable');
   const actorId = randomUUID();
@@ -415,19 +449,24 @@ describe('gateway fleet-auth authority lifecycle store', () => {
     const context = await freshContext();
     try {
       const seeded = await seedOwnerAndTarget(context.pool);
+      await promoteProviderLifecycleTargetToOwner(context.pool, seeded);
+      const callerForgedProvider = providerProof('423456789012345678');
       const callerForged = {
         ...baseDecision('provider.add', claim(seeded.targetId), claim(seeded.targetId)),
-        newProvider: providerProof('423456789012345678'),
+        ...providerContactScope(seeded, callerForgedProvider),
+        newProvider: callerForgedProvider,
       } satisfies VerifiedFleetAuthLifecycleDecision;
       await expect(context.store.execute(callerForged)).rejects.toMatchObject({
         reasonCode: 'provider_callback_proof_invalid',
       });
 
       const currentCallback = randomUUID();
+      const replacementProvider = providerProof('423456789012345678');
       const replacement = {
         ...baseDecision('provider.replace', claim(seeded.targetId), claim(seeded.targetId)),
+        ...providerContactScope(seeded, replacementProvider),
         currentProvider: providerProof('223456789012345678', currentCallback),
-        newProvider: providerProof('423456789012345678'),
+        newProvider: replacementProvider,
       } satisfies VerifiedFleetAuthLifecycleDecision;
       await seedDecisionProviderProofs(context.pool, replacement);
       const outcomes = await Promise.allSettled([
@@ -466,15 +505,18 @@ describe('gateway fleet-auth authority lifecycle store', () => {
     const context = await freshContext();
     try {
       const seeded = await seedOwnerAndTarget(context.pool);
+      const seededReplacement = providerProof('423456789012345678');
       const seededPurpose = {
         ...baseDecision('provider.replace', claim(seeded.targetId), claim(seeded.targetId)),
+        ...providerContactScope(seeded, seededReplacement),
         currentProvider: providerProof('223456789012345678'),
-        newProvider: providerProof('423456789012345678'),
+        newProvider: seededReplacement,
       } satisfies VerifiedFleetAuthLifecycleDecision;
       await seedDecisionProviderProofs(context.pool, seededPurpose);
 
       const crossAction = {
         ...baseDecision('provider.add', claim(seeded.targetId), claim(seeded.targetId)),
+        ...providerContactScope(seeded, seededPurpose.newProvider),
         ceremonyId: seededPurpose.ceremonyId,
         newProvider: seededPurpose.newProvider,
       } satisfies VerifiedFleetAuthLifecycleDecision;
@@ -491,19 +533,23 @@ describe('gateway fleet-auth authority lifecycle store', () => {
         reasonCode: 'provider_callback_proof_invalid',
       });
 
+      const wrongRoleProvider = providerProof('523456789012345678');
       const wrongRole = {
         ...seededPurpose,
+        ...providerContactScope(seeded, wrongRoleProvider),
         decisionId: randomUUID(),
         currentProvider: seededPurpose.newProvider,
-        newProvider: providerProof('523456789012345678'),
+        newProvider: wrongRoleProvider,
       } satisfies VerifiedFleetAuthLifecycleDecision;
       await expect(context.store.execute(wrongRole)).rejects.toMatchObject({
         reasonCode: 'provider_callback_proof_invalid',
       });
 
+      const wrongSessionProvider = providerProof('623456789012345678');
       const wrongSession = {
         ...baseDecision('provider.add', claim(seeded.targetId), claim(seeded.targetId)),
-        newProvider: providerProof('623456789012345678'),
+        ...providerContactScope(seeded, wrongSessionProvider),
+        newProvider: wrongSessionProvider,
       } satisfies VerifiedFleetAuthLifecycleDecision;
       await seedDecisionProviderProofs(context.pool, wrongSession);
       const otherSession = await seedActorSession(
@@ -548,6 +594,18 @@ describe('gateway fleet-auth authority lifecycle store', () => {
         contactId: 'new-contact',
         bindingId,
         newProvider: providerProof('523456789012345678'),
+        contactAuthority: {
+          schemaVersion: 1,
+          contactId: 'new-contact',
+          channel: 'discord',
+          providerSubjectId: '523456789012345678',
+          identityVersion: 2,
+          verificationId: randomUUID(),
+          verificationDigest: 'c'.repeat(64),
+          contactAuthorityVersion: 3,
+          ownershipState: 'verified',
+          restoreState: 'live',
+        },
       } satisfies VerifiedFleetAuthLifecycleDecision;
       const result = await executeDecision(context, decision);
       expect(result.target).toMatchObject({
@@ -572,9 +630,12 @@ describe('gateway fleet-auth authority lifecycle store', () => {
     const context = await freshContext();
     try {
       const seeded = await seedOwnerAndTarget(context.pool);
+      await promoteProviderLifecycleTargetToOwner(context.pool, seeded);
+      const addedProvider = providerProof('623456789012345678');
       const add = {
         ...baseDecision('provider.add', claim(seeded.targetId), claim(seeded.targetId)),
-        newProvider: providerProof('623456789012345678'),
+        ...providerContactScope(seeded, addedProvider),
+        newProvider: addedProvider,
       } satisfies VerifiedFleetAuthLifecycleDecision;
       const added = await executeDecision(context, add);
       await seedActorSession(
@@ -583,13 +644,15 @@ describe('gateway fleet-auth authority lifecycle store', () => {
         '223456789012345678',
         added.globalAuthEpoch,
       );
+      const relinkProvider = providerProof('723456789012345678');
       const relink = {
         ...baseDecision('provider.relink', added.target, added.target),
+        ...providerContactScope(seeded, relinkProvider),
         decisionId: randomUUID(),
         ceremonyId: randomUUID(),
         authorityGeneration: added.authorityGeneration,
         globalAuthEpoch: added.globalAuthEpoch,
-        newProvider: providerProof('723456789012345678'),
+        newProvider: relinkProvider,
       } satisfies VerifiedFleetAuthLifecycleDecision;
       await executeDecision(context, relink);
       const subjects = await context.pool.query<{ subject_id: string; state: string }>(`

@@ -1,8 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
+import { startOptionalGatewayApiServer } from './api-surface.js';
 
 describe('gateway fleet authorization context wiring', () => {
-  it('passes exact manifest companion IDs without enabling public principal authentication', () => {
+  it('passes exact manifest companion IDs and enables only the complete principal composition', () => {
     const mainSource = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
     const apiSurfaceSource = readFileSync(new URL('./api-surface.ts', import.meta.url), 'utf8');
     const manifestGuard = mainSource.indexOf('if (config.fleetAuth && !config.companionFleet)');
@@ -17,8 +18,9 @@ describe('gateway fleet authorization context wiring', () => {
     );
     expect(mainSource).toContain('.map(companion => companion.companionId) ?? [];');
     expect(mainSource).toContain('knownCompanionIds: fleetAuthKnownCompanionIds,');
-    expect(mainSource).toContain('principalAuthenticationWired: false,');
-    expect(apiSurfaceSource).toContain('principalAuthenticationWired: false,');
+    expect(mainSource).toContain('principalAuthenticationWired: true,');
+    expect(apiSurfaceSource).toContain('const principalAuthenticationWired =');
+    expect(apiSurfaceSource).toContain('if (fleetAuthBootstrapOnly && !principalAuthenticationWired)');
     expect(mainSource).toContain('hubDeviceAssertionVerifier: fleetAuthPersistence,');
     expect(mainSource).toContain('primaryEmbodiments: fleetAuthPersistence.primaryEmbodiments,');
     expect(apiSurfaceSource).toContain('new GatewayHubDeviceIngressService({');
@@ -40,5 +42,16 @@ describe('gateway fleet authorization context wiring', () => {
     expect(persistenceSource).toContain('requestCapabilities,');
     expect(configSource).toContain('requestCapabilities: {');
     expect(configSource).toContain('keys: config.verifierKeys.map(key => ({ ...key })),');
+  });
+
+  it('fails before listen when fleet auth is enabled with partial principal composition', async () => {
+    await expect(startOptionalGatewayApiServer({
+      apiPort: 8443,
+      config: { fleetAuth: {} },
+      env: {},
+      fleetAuthBroker: {},
+    } as unknown as Parameters<typeof startOptionalGatewayApiServer>[0])).rejects.toThrow(
+      'Fleet-auth principal composition is incomplete; refusing to expose the gateway API',
+    );
   });
 });

@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import {
   FleetAuthBrokerError,
@@ -229,7 +229,9 @@ export async function completeFirstOwnerAuthority(
     const result = await client.query<{ result: unknown }>(`
       SELECT ${FLEET_AUTH_FIRST_OWNER_FUNCTION_NAME}(
         $1::uuid, $2::uuid, $3::text, $4::uuid, $5::text,
-        $6::uuid, $7::uuid, $8::uuid, $9::timestamptz
+        $6::bigint, $7::bigint, $8::uuid, $9::text,
+        $10::uuid, $11::uuid, $12::uuid, $13::timestamptz,
+        $14::text, $15::text, $16::text, $17::text, $18::text
       ) AS result
     `, [
       input.ceremonyId,
@@ -237,10 +239,19 @@ export async function completeFirstOwnerAuthority(
       input.providerSubjectId,
       input.companionId,
       input.contactId,
+      input.contactAuthority.contactAuthorityVersion,
+      input.contactAuthority.identityVersion,
+      input.contactAuthority.verificationId,
+      input.contactAuthority.verificationDigest,
       randomUUID(),
       randomUUID(),
       randomUUID(),
       input.now,
+      createHash('sha256').update(input.ceremonyId).digest('hex'),
+      createHash('sha256').update(input.providerSubjectId).digest('hex'),
+      createHash('sha256').update(input.companionId).digest('hex'),
+      createHash('sha256').update(input.contactId).digest('hex'),
+      createHash('sha256').update(input.contactAuthority.verificationId).digest('hex'),
     ]);
     const completion = result.rows.at(0)?.result;
     if (!isRecord(completion)
@@ -275,6 +286,60 @@ export async function completeFirstOwnerAuthority(
     return session;
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);
+    try {
+      const authority = await client.query<{
+        authority_generation: string;
+        global_auth_epoch: string;
+      }>(`
+        SELECT authority_generation, global_auth_epoch
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+        WHERE singleton = TRUE
+      `);
+      const row = authority.rows.at(0);
+      if (!row) throw new Error('fleet_auth authority is missing during first-owner denial audit');
+      const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
+      await client.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+          (event_id, actor_context, action, resource, decision, reason_code,
+           companion_id, principal_id, authority_generation, global_auth_epoch,
+           occurred_at, decision_id, ceremony_id, decision_context)
+        VALUES ($1, $2::jsonb, 'authority.first_owner', 'first-owner-exact-tuple',
+                'deny', 'first_owner_denied', $3, $4, $5, $6,
+                clock_timestamp(), $1, $7, $8::jsonb)
+      `, [
+        randomUUID(),
+        JSON.stringify({ kind: 'trusted_host', id: 'first_owner' }),
+        input.companionId,
+        input.principalId,
+        row.authority_generation,
+        row.global_auth_epoch,
+        input.ceremonyId,
+        JSON.stringify({
+          schemaVersion: 1,
+          provider: 'discord',
+          providerSubjectDigest: sha256(input.providerSubjectId),
+          companionDigest: sha256(input.companionId),
+          contactDigest: sha256(input.contactId),
+          role: 'owner',
+          ceremonyDigest: sha256(input.ceremonyId),
+          contactAuthorityVersion: input.contactAuthority.contactAuthorityVersion,
+          identityVersion: input.contactAuthority.identityVersion,
+          verificationIdDigest: sha256(input.contactAuthority.verificationId),
+          verificationDigest: input.contactAuthority.verificationDigest,
+          authorityGeneration: Number(row.authority_generation),
+          globalAuthEpoch: Number(row.global_auth_epoch),
+          decision: 'deny',
+        }),
+      ]);
+    } catch (auditError) {
+      const failure = new FleetAuthBrokerError(
+        'first_owner_denial_audit_failed',
+        503,
+        'First-owner denial audit could not be persisted',
+      );
+      failure.cause = auditError;
+      throw failure;
+    }
     if (!(error instanceof FleetAuthBrokerError)
       && isRecord(error) && error.code === '42501') {
       throw new FleetAuthBrokerError(

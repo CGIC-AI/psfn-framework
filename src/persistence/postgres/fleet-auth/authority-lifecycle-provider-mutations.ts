@@ -50,6 +50,47 @@ export async function lockCurrentLifecycleProvider(
   }
 }
 
+async function lockProviderCompanionContactScope(
+  client: PoolClient,
+  decision: Extract<
+    VerifiedFleetAuthLifecycleDecision,
+    { action: 'provider.add' | 'provider.relink' | 'provider.replace' }
+  >,
+): Promise<void> {
+  const companion = await client.query<{ lifecycle: string; restore_state: string }>(`
+    SELECT lifecycle, restore_state
+    FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+    WHERE companion_id = $1
+    FOR UPDATE
+  `, [decision.companionId]);
+  const companionRow = requireOneLifecycleRow(
+    companion.rows,
+    'provider_companion_authority_missing',
+  );
+  if (companionRow.lifecycle !== 'active' || companionRow.restore_state !== 'live') {
+    denyLifecycleMutation('provider_companion_authority_unavailable');
+  }
+  const binding = await client.query<{ state: string; restore_state: string }>(`
+    SELECT state, restore_state
+    FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+    WHERE principal_id = $1 AND companion_id = $2 AND contact_id = $3
+    FOR UPDATE
+  `, [decision.target.principalId, decision.companionId, decision.contactId]);
+  const bindingRow = requireOneLifecycleRow(binding.rows, 'provider_contact_binding_missing');
+  if (bindingRow.state !== 'active' || bindingRow.restore_state !== 'live') {
+    denyLifecycleMutation('provider_contact_binding_unavailable');
+  }
+  const owner = await client.query<{ role: string; lifecycle: string; restore_state: string }>(`
+    SELECT role, lifecycle, restore_state
+    FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+    WHERE principal_id = $1 AND companion_id = $2 AND role = 'owner'
+    FOR UPDATE
+  `, [decision.actor.principalId, decision.companionId]);
+  if (!owner.rows.some(row => row.lifecycle === 'active' && row.restore_state === 'live')) {
+    denyLifecycleMutation('provider_actor_not_companion_owner');
+  }
+}
+
 export async function prepareProviderLifecycleMutation(
   client: PoolClient,
   decision: Extract<VerifiedFleetAuthLifecycleDecision, { action: `provider.${string}` }>,
@@ -57,6 +98,9 @@ export async function prepareProviderLifecycleMutation(
   const targetId = decision.target.principalId;
   if (decision.actor.principalId !== targetId) {
     denyLifecycleMutation('provider_actor_target_mismatch');
+  }
+  if (decision.action !== 'provider.unlink') {
+    await lockProviderCompanionContactScope(client, decision);
   }
   if (decision.action === 'provider.add' || decision.action === 'provider.relink') {
     await assertProviderAvailable(client, decision.newProvider.subjectId);

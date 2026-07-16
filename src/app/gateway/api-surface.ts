@@ -58,6 +58,7 @@ import { dispatchCompanionUiPrimaryEmbodiment } from '../../boundary/gateway/com
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
 import type { FleetJitStepUpCoordinator } from '../../boundary/fleet-auth/jit-step-up.js';
 import type { TrustedHostPasskeyCeremonyService } from '../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
+import type { GatewayFleetAuthLifecycleCeremonyService } from '../../boundary/fleet-auth/lifecycle-ceremony.js';
 import {
   GatewayHubDeviceIngressService,
   type HubDeviceHumanAttachmentPort,
@@ -95,6 +96,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
     | 'resolveOperatorApproval'
     | 'listOperatorConfirmations'
     | 'getFleetConnectionSnapshot'
+    | 'requestCompanionAgent'
   >;
   channelsConfig?: RuntimeChannelsConfig;
   satelliteRegistry?: SatelliteRegistryConfig;
@@ -110,6 +112,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   fleetAuthBroker?: GatewayFleetAuthBroker;
   fleetAuthJitStepUp?: FleetJitStepUpCoordinator;
   fleetAuthPasskeyCeremonies?: TrustedHostPasskeyCeremonyService;
+  fleetAuthLifecycleCeremonies?: GatewayFleetAuthLifecycleCeremonyService;
   fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
   fleetAuthRequestCapabilities?: GatewayRequestCapabilitySigner;
   fleetAuthRequestCapabilityVerifier?: RequestCapabilityVerifier;
@@ -387,11 +390,27 @@ export async function startOptionalGatewayApiServer(
 
   const env = options.env ?? process.env;
   const fleetAuthBootstrapOnly = options.config.fleetAuth !== undefined;
+  const principalAuthenticationWired = options.fleetAuthBroker !== undefined
+    && options.fleetAuthJitStepUp !== undefined
+    && options.fleetAuthPasskeyCeremonies !== undefined
+    && options.fleetAuthLifecycleCeremonies !== undefined
+    && options.fleetAuthChildAssertions !== undefined
+    && options.fleetAuthRequestCapabilities !== undefined
+    && options.fleetAuthRequestCapabilityVerifier !== undefined
+    && options.fleetAuthRequestCapabilityReplay !== undefined
+    && options.fleetPortalAuthorization !== undefined
+    && options.primaryEmbodiments !== undefined
+    && options.hubDeviceAssertionVerifier !== undefined;
+  if (fleetAuthBootstrapOnly && !principalAuthenticationWired) {
+    throw new Error(
+      'Fleet-auth principal composition is incomplete; refusing to expose the gateway API',
+    );
+  }
   assertFleetAuthLegacySurfacesUnavailable({
     fleetAuthEnabled: options.config.fleetAuth !== undefined,
     processMode: 'gateway',
     env: { ...env, API_PORT: String(options.apiPort) },
-    principalAuthenticationWired: false,
+    principalAuthenticationWired,
     fleetAuthBootstrapRoutesWired: options.fleetAuthBroker !== undefined,
   });
   const allowInsecureWithoutAuth = !fleetAuthBootstrapOnly
@@ -678,6 +697,9 @@ export async function startOptionalGatewayApiServer(
             ...(options.fleetAuthJitStepUp ? { jitStepUp: options.fleetAuthJitStepUp } : {}),
             ...(options.fleetAuthPasskeyCeremonies
               ? { passkeyCeremonies: options.fleetAuthPasskeyCeremonies }
+              : {}),
+            ...(options.fleetAuthLifecycleCeremonies
+              ? { lifecycleCeremonies: options.fleetAuthLifecycleCeremonies }
               : {}),
             trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
           }),

@@ -1,7 +1,11 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { CredentialVaultPort } from '../../../boundary/custody/credential-vault.js';
-import { GatewayFleetAuthBroker } from '../../../boundary/gateway/fleet-auth-broker.js';
+import {
+  FleetAuthBrokerError,
+  GatewayFleetAuthBroker,
+  type VerifiedFirstOwnerAssurance,
+} from '../../../boundary/gateway/fleet-auth-broker.js';
 import type { FleetAuthConfig } from '../../../system/config/fleet-auth-config.js';
 import { resolveGatewayFleetAuthSecrets } from '../../../system/config/fleet-auth-config.js';
 import { createPostgresPool } from '../../postgres.js';
@@ -72,6 +76,11 @@ import type { FleetPortalAuthorizationBatchPort } from '../../../boundary/gatewa
 import { createPostgresFleetPortalAuthorization } from './portal-authorization-store.js';
 import { TrustedHostPasskeyCeremonyService } from '../../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
 import { PostgresTrustedHostPasskeyCeremonyStore } from './trusted-host-passkey-ceremony-store.js';
+import {
+  GatewayFleetAuthLifecycleCeremonyService,
+  type FleetContactAuthorityPort,
+  type FleetLifecycleCeremonyDenialAuditPort,
+} from '../../../boundary/fleet-auth/lifecycle-ceremony.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -92,6 +101,9 @@ export interface GatewayFleetAuthPersistence {
   passkeyCeremonies: TrustedHostPasskeyCeremonyService;
   authorityLifecycle: GatewayFleetAuthAuthorityLifecycleStore;
   contactLifecycleAuthority: GatewayContactLifecycleAuthorityPort;
+  createLifecycleCeremonies(
+    contactAuthority: FleetContactAuthorityPort,
+  ): GatewayFleetAuthLifecycleCeremonyService;
   discordEvidence?: DiscordEvidenceRuntime;
   discordEvidenceLifecycle?: DiscordEvidenceLifecycleCoordinator;
   reapproveAccountAuthority(
@@ -111,6 +123,93 @@ export interface GatewayFleetAuthPersistence {
     input: Parameters<HubDeviceHumanAttachmentPort['fenceDevice']>[0],
   ): ReturnType<HubDeviceHumanAttachmentPort['fenceDevice']>;
   close(): Promise<void>;
+}
+
+async function auditFirstOwnerContactAuthorityDenial(
+  pool: Pool,
+  input: VerifiedFirstOwnerAssurance,
+  reasonCode: 'contact_authority_unavailable' | 'contact_authority_mismatch',
+): Promise<void> {
+  const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
+  const eventId = randomUUID();
+  const result = await pool.query(`
+    INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+      (event_id, actor_context, action, resource, decision, reason_code,
+       companion_id, principal_id, authority_generation, global_auth_epoch,
+       occurred_at, decision_id, ceremony_id, decision_context)
+    SELECT $1, $2::jsonb, 'authority.first_owner', 'first-owner-contact-authority',
+           'deny', $3, $4, $5, authority_generation, global_auth_epoch,
+           clock_timestamp(), $1, $6, $7::jsonb
+    FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+    WHERE singleton = TRUE
+  `, [
+    eventId,
+    JSON.stringify({ kind: 'trusted_host', id: 'first_owner' }),
+    reasonCode,
+    input.companionId,
+    input.principalId,
+    input.ceremonyId,
+    JSON.stringify({
+      schemaVersion: 1,
+      ceremonyDigest: sha256(input.ceremonyId),
+      principalDigest: sha256(input.principalId),
+      providerSubjectDigest: sha256(input.providerSubjectId),
+      companionDigest: sha256(input.companionId),
+      contactDigest: sha256(input.contactId),
+      decision: 'deny',
+      reasonCode,
+    }),
+  ]);
+  if (result.rowCount !== 1) {
+    throw new FleetAuthBrokerError(
+      'first_owner_denial_audit_failed',
+      503,
+      'First-owner contact-authority denial audit could not be persisted',
+    );
+  }
+}
+
+async function auditLifecycleCeremonyDenial(
+  pool: Pool,
+  input: Parameters<FleetLifecycleCeremonyDenialAuditPort['record']>[0],
+): Promise<void> {
+  const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
+  const eventId = randomUUID();
+  const request = input.request;
+  const result = await pool.query(`
+    INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+      (event_id, actor_context, action, resource, decision, reason_code,
+       companion_id, principal_id, authority_generation, global_auth_epoch,
+       occurred_at, decision_id, ceremony_id, reason_digest, decision_context)
+    SELECT $1, $2::jsonb, $3, 'lifecycle-ceremony', 'deny', $4,
+           $5, NULL, authority_generation, global_auth_epoch,
+           clock_timestamp(), $1, $6, $7, $8::jsonb
+    FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+    WHERE singleton = TRUE
+  `, [
+    eventId,
+    JSON.stringify({ kind: 'fleet_gateway', id: 'lifecycle_ceremony' }),
+    request.action,
+    input.reasonCode,
+    request.companionId,
+    request.ceremonyId,
+    sha256(request.reason),
+    JSON.stringify({
+      schemaVersion: 1,
+      action: request.action,
+      ceremonyDigest: sha256(request.ceremonyId),
+      companionDigest: sha256(request.companionId),
+      requestDigest: sha256(JSON.stringify(request)),
+      ...('targetPrincipalId' in request
+        ? { targetPrincipalDigest: sha256(request.targetPrincipalId) }
+        : {}),
+      decision: 'deny',
+      reasonCode: input.reasonCode,
+    }),
+  ]);
+  if (result.rowCount !== 1) {
+    throw new Error('Fleet lifecycle denial audit insert failed');
+  }
 }
 
 function parseStateInteger(value: string, field: string): number {
@@ -449,6 +548,8 @@ export async function initializeGatewayFleetAuthPersistence(options: {
         );
       },
     });
+    let lifecycleContactAuthority: FleetContactAuthorityPort | undefined;
+    let lifecycleCeremoniesCreated = false;
     const authorizationContextResolver = createPostgresFleetAuthorizationContextResolver({
       pool,
       sessionPepper: secrets.sessionPepper,
@@ -490,6 +591,32 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       firstOwnerAssurance: {
         verify: input => passkeyCeremonies.verifyFirstOwner(input),
       },
+      firstOwnerContactAuthority: {
+        verify: async input => {
+          const snapshot = await lifecycleContactAuthority?.read({
+            companionId: input.companionId,
+            contactId: input.contactId,
+            providerSubjectId: input.providerSubjectId,
+          });
+          const denialReason = !snapshot
+            ? 'contact_authority_unavailable' as const
+            : snapshot.contactId !== input.contactId
+                || snapshot.providerSubjectId !== input.providerSubjectId
+              ? 'contact_authority_mismatch' as const
+              : undefined;
+          if (denialReason) {
+            await auditFirstOwnerContactAuthorityDenial(pool, input, denialReason);
+            throw new FleetAuthBrokerError(
+              denialReason === 'contact_authority_unavailable'
+                ? 'first_owner_contact_authority_unavailable'
+                : 'first_owner_binding_mismatch',
+              409,
+              'Exact first-owner contact authority is unavailable',
+            );
+          }
+          return snapshot!;
+        },
+      },
       authorizationContextResolver,
       ...(discordEvidenceLifecycle ? { discordEvidenceLifecycle } : {}),
     });
@@ -518,6 +645,24 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       passkeyCeremonies,
       authorityLifecycle,
       contactLifecycleAuthority,
+      createLifecycleCeremonies: (contactAuthority) => {
+        if (lifecycleCeremoniesCreated) {
+          throw new Error('Fleet lifecycle ceremonies are already composed');
+        }
+        lifecycleCeremoniesCreated = true;
+        lifecycleContactAuthority = contactAuthority;
+        return new GatewayFleetAuthLifecycleCeremonyService({
+          pool,
+          sessionPepper: secrets.sessionPepper,
+          canonicalOrigin: config.canonicalOrigin,
+          lifecycle: authorityLifecycle,
+          jitStepUp,
+          contactAuthority,
+          denialAudit: {
+            record: input => auditLifecycleCeremonyDenial(pool, input),
+          },
+        });
+      },
       ...(discordEvidence ? { discordEvidence } : {}),
       ...(discordEvidenceLifecycle ? { discordEvidenceLifecycle } : {}),
       reapproveAccountAuthority: createGatewayAccountReapprovalAuthority(pool, authorityFloors),

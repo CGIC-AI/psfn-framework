@@ -20,6 +20,8 @@ import {
   FleetAuthPasskeyHttpRoutes,
 } from './fleet-auth-passkey-routes.js';
 import type { TrustedHostPasskeyCeremonyService } from '../../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
+import type { GatewayFleetAuthLifecycleCeremonyService } from '../../../boundary/fleet-auth/lifecycle-ceremony.js';
+import { FleetAuthLifecycleCeremonyHttpRoutes } from './fleet-auth-lifecycle-ceremony-routes.js';
 
 const LOGIN_PATH = '/v1/fleet-auth/login';
 export const FLEET_AUTH_LIFECYCLE_OAUTH_PATH = '/v1/fleet-auth/lifecycle/oauth';
@@ -126,6 +128,7 @@ export class FleetAuthHttpRoutes {
   private readonly trustProxy: boolean;
   private readonly jitRoutes?: FleetAuthJitHttpRoutes;
   private readonly passkeyRoutes?: FleetAuthPasskeyHttpRoutes;
+  private readonly lifecycleCeremonyRoutes?: FleetAuthLifecycleCeremonyHttpRoutes;
 
   constructor(options: {
     broker: GatewayFleetAuthBroker;
@@ -133,6 +136,7 @@ export class FleetAuthHttpRoutes {
     callbackPath: string;
     jitStepUp?: FleetJitStepUpCoordinator;
     passkeyCeremonies?: TrustedHostPasskeyCeremonyService;
+    lifecycleCeremonies?: GatewayFleetAuthLifecycleCeremonyService;
     trustProxy?: boolean;
   }) {
     this.broker = options.broker;
@@ -148,11 +152,15 @@ export class FleetAuthHttpRoutes {
         broker: options.broker,
       })
       : undefined;
+    this.lifecycleCeremonyRoutes = options.lifecycleCeremonies
+      ? new FleetAuthLifecycleCeremonyHttpRoutes(options.lifecycleCeremonies)
+      : undefined;
   }
 
   matches(method: string | undefined, path: string): boolean {
     return (this.jitRoutes?.matches(method, path) ?? false)
       || (this.passkeyRoutes?.matches(method, path) ?? false)
+      || (this.lifecycleCeremonyRoutes?.matches(method, path) ?? false)
       || (method === 'GET' && (path === LOGIN_PATH || path === CSRF_PATH || path === this.callbackPath))
       || (method === 'POST'
         && (path === FLEET_AUTH_LIFECYCLE_OAUTH_PATH || path === REFRESH_PATH
@@ -289,6 +297,17 @@ export class FleetAuthHttpRoutes {
       }
       if (this.passkeyRoutes?.matches(request.method, url.pathname)) {
         await this.passkeyRoutes.handle({
+          request,
+          response,
+          path: url.pathname,
+          token,
+          csrfToken,
+          requestOrigin: mutationOrigin(request),
+        });
+        return;
+      }
+      if (this.lifecycleCeremonyRoutes?.matches(request.method, url.pathname)) {
+        await this.lifecycleCeremonyRoutes.handle({
           request,
           response,
           path: url.pathname,

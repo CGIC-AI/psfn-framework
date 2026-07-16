@@ -390,6 +390,10 @@ async function main(): Promise<void> {
     toolConformanceRunner,
   } = coreRuntime;
 
+  gateway.onContactAuthoritySnapshot(async ({ contactId, providerSubjectId }) => (
+    await contactStore.readVerifiedDiscordContactAuthority(contactId, providerSubjectId)
+  ));
+
   wireCompanionPresenceContext({
     agentLoop,
     presenceRuntime: companionPresenceRuntime,

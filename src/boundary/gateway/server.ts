@@ -1962,6 +1962,29 @@ export class GatewayServer {
     return result as T;
   }
 
+  /** Route one exact authority read to the authenticated companion agent. */
+  async requestCompanionAgent<T = unknown>(
+    companionId: string,
+    method: string,
+    params: unknown,
+    timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
+  ): Promise<T> {
+    const exactCompanionId = createCompanionId(
+      companionId,
+      'Explicit companion agent request companionId',
+    );
+    const client = this.multiCompanion.enabled
+      ? this.requireReadyCompanionRoute('api', exactCompanionId).client
+      : this.resolveReadyRpcClient();
+    const result = await Promise.race([
+      client.request(method, params),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Companion agent request timed out')), timeoutMs),
+      ),
+    ]);
+    return result as T;
+  }
+
   /**
    * Forward a gateway-process timing observation to the owning agent process,
    * where the canonical Garden tracker lives. Multi-companion routing requires

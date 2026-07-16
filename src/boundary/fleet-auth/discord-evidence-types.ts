@@ -83,6 +83,17 @@ export interface DiscordEvidenceLifecycleMutation {
   generation: number;
 }
 
+export type DiscordEvidenceLifecycleMutationOutcome =
+  | { status: 'applied' }
+  | { status: 'retired' };
+
+export type DiscordEvidenceRefreshOutcome =
+  | { status: 'applied'; snapshots: DiscordEvidenceSnapshot[] }
+  | Extract<DiscordEvidenceLifecycleMutationOutcome, { status: 'retired' }>;
+
+export const DISCORD_EVIDENCE_MUTATION_APPLIED = { status: 'applied' } as const;
+export const DISCORD_EVIDENCE_MUTATION_RETIRED = { status: 'retired' } as const;
+
 export interface DiscordPositiveEvidenceLookup {
   principalId: string;
   providerSubjectId: string;
@@ -107,25 +118,25 @@ export interface DiscordEvidenceStorePort {
     providerSubjectId: string;
     mutation: DiscordEvidenceLifecycleMutation;
     snapshots: readonly DiscordEvidenceSnapshot[];
-  }): Promise<void>;
+  }): Promise<DiscordEvidenceLifecycleMutationOutcome>;
   replaceCompanionEvidence(input: {
     principalId: string;
     providerSubjectId: string;
     companionId: string;
     mutation: DiscordEvidenceLifecycleMutation;
     snapshots: readonly DiscordEvidenceSnapshot[];
-  }): Promise<void>;
+  }): Promise<DiscordEvidenceLifecycleMutationOutcome>;
   invalidatePrincipalEvidence(input: {
     principalId: string;
     providerSubjectId: string;
     companionId?: string;
     mutation: DiscordEvidenceLifecycleMutation;
-  }): Promise<void>;
+  }): Promise<DiscordEvidenceLifecycleMutationOutcome>;
   revokePrincipalEvidence(input: {
     principalId: string;
     providerSubjectId: string;
     mutation: DiscordEvidenceLifecycleMutation;
-  }): Promise<void>;
+  }): Promise<DiscordEvidenceLifecycleMutationOutcome>;
   revokeAllEvidence(): Promise<void>;
   loadUsablePositiveEvidence(
     input: DiscordPositiveEvidenceLookup,

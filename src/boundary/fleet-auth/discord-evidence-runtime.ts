@@ -10,8 +10,10 @@ import {
   digestDiscordEvidence,
   type DiscordEvidenceFailureReason,
   type DiscordEvidenceLifecycleMutation,
+  type DiscordEvidenceLifecycleMutationOutcome,
   type DiscordEvidenceObservationPort,
   type DiscordEvidenceProvenance,
+  type DiscordEvidenceRefreshOutcome,
   type DiscordEvidenceSnapshot,
   type DiscordEvidenceStorePort,
   type DiscordEvidenceTarget,
@@ -157,7 +159,7 @@ export class DiscordEvidenceRuntime {
     providerSubjectId: string;
     providerMembershipEvidence: unknown;
     mutation: DiscordEvidenceLifecycleMutation;
-  }): Promise<DiscordEvidenceSnapshot[]> {
+  }): Promise<DiscordEvidenceRefreshOutcome> {
     return await this.refreshEvidence(input);
   }
 
@@ -167,7 +169,7 @@ export class DiscordEvidenceRuntime {
     providerMembershipEvidence: unknown;
     companionId: string;
     mutation: DiscordEvidenceLifecycleMutation;
-  }): Promise<DiscordEvidenceSnapshot[]> {
+  }): Promise<DiscordEvidenceRefreshOutcome> {
     return await this.refreshEvidence(input);
   }
 
@@ -177,7 +179,7 @@ export class DiscordEvidenceRuntime {
     providerMembershipEvidence: unknown;
     companionId?: string;
     mutation: DiscordEvidenceLifecycleMutation;
-  }): Promise<DiscordEvidenceSnapshot[]> {
+  }): Promise<DiscordEvidenceRefreshOutcome> {
     if (!isRfc4122Uuid(input.principalId)) throw new Error('Invalid fleet principal ID');
     if (!DISCORD_SNOWFLAKE_PATTERN.test(input.providerSubjectId)) {
       throw new Error('Invalid Discord provider subject ID');
@@ -186,7 +188,9 @@ export class DiscordEvidenceRuntime {
     const selectedMappings = this.config.discordEvidenceMappings.filter(mapping => (
       input.companionId === undefined || mapping.companionId === input.companionId
     ));
-    if (input.companionId !== undefined && selectedMappings.length === 0) return [];
+    if (input.companionId !== undefined && selectedMappings.length === 0) {
+      return { status: 'applied', snapshots: [] };
+    }
     const mappedGuildCount = new Set(
       this.config.discordEvidenceMappings.map(mapping => mapping.guildId),
     ).size;
@@ -211,8 +215,8 @@ export class DiscordEvidenceRuntime {
         provenance,
         reason: 'incomplete_observation',
       }));
-      await this.replaceSelectedEvidence(input, snapshots);
-      return snapshots;
+      const mutation = await this.replaceSelectedEvidence(input, snapshots);
+      return mutation.status === 'retired' ? mutation : { status: 'applied', snapshots };
     }
     if (providerMembership.status === 'provider_unavailable') {
       const evaluatedAt = this.now();
@@ -229,8 +233,8 @@ export class DiscordEvidenceRuntime {
         provenance,
         reason: 'provider_unavailable',
       }));
-      await this.replaceSelectedEvidence(input, snapshots);
-      return snapshots;
+      const mutation = await this.replaceSelectedEvidence(input, snapshots);
+      return mutation.status === 'retired' ? mutation : { status: 'applied', snapshots };
     }
     const mappingsByCompanion = new Map<string, FleetAuthConfig['discordEvidenceMappings']>();
     for (const mapping of selectedMappings) {
@@ -294,8 +298,8 @@ export class DiscordEvidenceRuntime {
       }
     }
 
-    await this.replaceSelectedEvidence(input, snapshots);
-    return snapshots;
+    const mutation = await this.replaceSelectedEvidence(input, snapshots);
+    return mutation.status === 'retired' ? mutation : { status: 'applied', snapshots };
   }
 
   private async replaceSelectedEvidence(
@@ -306,18 +310,17 @@ export class DiscordEvidenceRuntime {
       mutation: DiscordEvidenceLifecycleMutation;
     },
     snapshots: readonly DiscordEvidenceSnapshot[],
-  ): Promise<void> {
+  ): Promise<DiscordEvidenceLifecycleMutationOutcome> {
     if (input.companionId !== undefined) {
-      await this.store.replaceCompanionEvidence({
+      return await this.store.replaceCompanionEvidence({
         principalId: input.principalId,
         providerSubjectId: input.providerSubjectId,
         companionId: input.companionId,
         mutation: input.mutation,
         snapshots,
       });
-      return;
     }
-    await this.store.replacePrincipalEvidence({
+    return await this.store.replacePrincipalEvidence({
       principalId: input.principalId,
       providerSubjectId: input.providerSubjectId,
       mutation: input.mutation,

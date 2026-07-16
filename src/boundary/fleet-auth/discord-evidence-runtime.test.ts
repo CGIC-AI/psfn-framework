@@ -2,7 +2,10 @@ import { PermissionFlagsBits } from 'discord.js';
 import { describe, expect, it, vi } from 'vitest';
 import type { FleetAuthConfig } from '../../system/config/fleet-auth-config.js';
 import {
+  DISCORD_EVIDENCE_MUTATION_APPLIED,
+  DISCORD_EVIDENCE_MUTATION_RETIRED,
   isUsablePositiveDiscordEvidence,
+  type DiscordEvidenceLifecycleMutationOutcome,
   type DiscordEvidenceSnapshot,
   type DiscordEvidenceStorePort,
 } from './discord-evidence-types.js';
@@ -168,6 +171,7 @@ function providerMembership(roleIds: string[] = [ROLE_A], input: {
 class RecordingStore implements DiscordEvidenceStorePort {
   readonly replacements: DiscordEvidenceSnapshot[][] = [];
   readonly companionReplacements: string[] = [];
+  mutationOutcome: DiscordEvidenceLifecycleMutationOutcome = DISCORD_EVIDENCE_MUTATION_APPLIED;
 
   async activatePrincipalEvidenceLifecycle(): Promise<void> {
     await Promise.resolve();
@@ -175,24 +179,26 @@ class RecordingStore implements DiscordEvidenceStorePort {
 
   async replacePrincipalEvidence(input: {
     snapshots: readonly DiscordEvidenceSnapshot[];
-  }): Promise<void> {
+  }) {
     this.replacements.push([...input.snapshots]);
+    return this.mutationOutcome;
   }
 
   async replaceCompanionEvidence(input: {
     companionId: string;
     snapshots: readonly DiscordEvidenceSnapshot[];
-  }): Promise<void> {
+  }) {
     this.companionReplacements.push(input.companionId);
     this.replacements.push([...input.snapshots]);
+    return this.mutationOutcome;
   }
 
-  async revokePrincipalEvidence(): Promise<void> {
-    await Promise.resolve();
+  async revokePrincipalEvidence() {
+    return DISCORD_EVIDENCE_MUTATION_APPLIED;
   }
 
-  async invalidatePrincipalEvidence(): Promise<void> {
-    await Promise.resolve();
+  async invalidatePrincipalEvidence() {
+    return DISCORD_EVIDENCE_MUTATION_APPLIED;
   }
 
   async revokeAllEvidence(): Promise<void> {
@@ -227,12 +233,14 @@ function runtime(input: {
 }
 
 async function refresh(subject: ReturnType<typeof runtime>): Promise<DiscordEvidenceSnapshot[]> {
-  return await subject.runtime.refreshPrincipalEvidence({
+  const result = await subject.runtime.refreshPrincipalEvidence({
     principalId: PRINCIPAL_ID,
     providerSubjectId: SUBJECT_ID,
     providerMembershipEvidence: subject.providerMembership(),
     mutation: { lifecycleId: LIFECYCLE_ID, generation: 1 },
   });
+  if (result.status !== 'applied') throw new Error('Evidence lifecycle unexpectedly retired');
+  return result.snapshots;
 }
 
 describe('bounded Discord access evidence', () => {
@@ -476,16 +484,31 @@ describe('bounded Discord access evidence', () => {
         { botUserId: companionId === COMPANION_A ? BOT_A : BOT_B },
       ),
     });
-    const evidence = await subject.runtime.refreshCompanionEvidence({
+    const result = await subject.runtime.refreshCompanionEvidence({
       principalId: PRINCIPAL_ID,
       providerSubjectId: SUBJECT_ID,
       providerMembershipEvidence: providerMembership(),
       companionId: COMPANION_A,
       mutation: { lifecycleId: LIFECYCLE_ID, generation: 1 },
     });
+    if (result.status !== 'applied') throw new Error('Evidence lifecycle unexpectedly retired');
+    const evidence = result.snapshots;
     expect(subject.observe.mock.calls.map(([input]) => input.companionId)).toEqual([COMPANION_A]);
     expect(subject.store.companionReplacements).toEqual([COMPANION_A]);
     expect(evidence.map(item => item.companionId)).toEqual([COMPANION_A]);
+  });
+
+  it('propagates terminal store ownership loss without returning computed snapshots', async () => {
+    const subject = runtime({ observe: () => observed([currentTarget()]) });
+    subject.store.mutationOutcome = DISCORD_EVIDENCE_MUTATION_RETIRED;
+
+    await expect(subject.runtime.refreshPrincipalEvidence({
+      principalId: PRINCIPAL_ID,
+      providerSubjectId: SUBJECT_ID,
+      providerMembershipEvidence: providerMembership(),
+      mutation: { lifecycleId: LIFECYCLE_ID, generation: 1 },
+    })).resolves.toBe(DISCORD_EVIDENCE_MUTATION_RETIRED);
+    expect(subject.store.replacements).toHaveLength(1);
   });
 
   it('uses cached positive evidence only for an unexpired exact input/config binding', async () => {

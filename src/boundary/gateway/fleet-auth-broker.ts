@@ -373,12 +373,12 @@ export class GatewayFleetAuthBroker {
     if (!input.reason.trim() || input.reason.length > 512) {
       throw new FleetAuthBrokerError('invalid_revocation_reason', 400);
     }
-    await this.store.revokeProvider({
+    await this.discordEvidence.commitGlobalAuthorityReset(() => this.store.revokeProvider({
       token: input.token,
       csrfToken: input.csrfToken,
       now: this.now(),
       reasonDigest: createHash('sha256').update(input.reason.trim()).digest('hex'),
-    });
+    }));
   }
 
   async completeFirstOwnerBootstrap(input: {

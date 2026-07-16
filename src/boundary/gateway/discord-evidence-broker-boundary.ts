@@ -19,6 +19,7 @@ export interface DiscordEvidenceLifecyclePort {
     idleExpiresAt: Date;
     absoluteExpiresAt: Date;
   }): Promise<DiscordEvidenceLifecycleAdmission>;
+  commitGlobalAuthorityReset(reset: () => Promise<void>): Promise<void>;
 }
 
 interface EvidenceSession {
@@ -90,5 +91,13 @@ export class DiscordEvidenceBrokerBoundary {
   async fenceFirstOwnerActivation<T extends EvidenceSession>(session: T): Promise<T> {
     if (this.mappingsEnabled) await this.admission.deny(session);
     return session;
+  }
+
+  async commitGlobalAuthorityReset(reset: () => Promise<void>): Promise<void> {
+    if (this.lifecycle) {
+      await this.lifecycle.commitGlobalAuthorityReset(reset);
+      return;
+    }
+    await reset();
   }
 }

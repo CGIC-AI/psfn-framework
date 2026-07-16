@@ -239,7 +239,10 @@ describe('Postgres Discord evidence authority denial', () => {
         const results = await Promise.allSettled(
           operations === 'replace-first' ? [replace(), revoke()] : [revoke(), replace()],
         );
-        expect(results.some(result => result.status === 'fulfilled')).toBe(true);
+        expect(results.every(result => result.status === 'fulfilled')).toBe(true);
+        expect(results.some(result => (
+          result.status === 'fulfilled' && result.value.status === 'applied'
+        ))).toBe(true);
         const count = await runtime.query<{ count: string }>(`
           SELECT COUNT(*)::text AS count
           FROM fleet_auth.discord_evidence_snapshots
@@ -251,7 +254,7 @@ describe('Postgres Discord evidence authority denial', () => {
           providerSubjectId: subjectId,
           mutation: { lifecycleId, generation: 3 },
           snapshots: [snapshot(principalId, subjectId)],
-        })).rejects.toMatchObject({ name: 'StaleDiscordEvidenceLifecycleError' });
+        })).resolves.toEqual({ status: 'retired' });
       }
     } finally {
       await Promise.all([runtime.end(), migration.end()]);

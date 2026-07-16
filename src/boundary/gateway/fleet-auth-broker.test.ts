@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { FleetAuthConfig } from '../../system/config/fleet-auth-config.js';
+import type { DiscordEvidenceLifecyclePort } from './discord-evidence-broker-boundary.js';
 import {
   FleetAuthBrokerError,
   GatewayFleetAuthBroker,
@@ -94,6 +95,7 @@ class FakeStore implements FleetAuthBrokerStore {
   session: FleetAuthSessionRecord | null = null;
   principalStatus: 'pending' | 'active' = 'pending';
   lastProviderSubject: string | null = null;
+  providerRevocationError: Error | undefined;
 
   async createOAuthTransaction(input: OAuthTransactionInput): Promise<void> {
     this.transaction = input;
@@ -176,6 +178,7 @@ class FakeStore implements FleetAuthBrokerStore {
     if (!this.session || input.token !== this.session.token || input.csrfToken !== this.session.csrfToken) {
       throw new FleetAuthBrokerError('invalid_session', 401);
     }
+    if (this.providerRevocationError) throw this.providerRevocationError;
     this.session = null;
   }
 
@@ -211,20 +214,7 @@ function makeBroker(
   firstOwnerAssurance?: FirstOwnerAssurancePort,
   options: {
     config?: FleetAuthConfig;
-    discordEvidenceLifecycle?: {
-      recordActiveOAuthSession(input: {
-        principalId: string;
-        providerSubjectId: string;
-        providerMembershipEvidence: unknown;
-        idleExpiresAt: Date;
-        absoluteExpiresAt: Date;
-      }): Promise<{ status: 'admitted' } | { status: 'reauthentication_required' }>;
-      recordSessionRotation(input: {
-        principalId: string;
-        idleExpiresAt: Date;
-        absoluteExpiresAt: Date;
-      }): Promise<{ status: 'admitted' } | { status: 'reauthentication_required' }>;
-    };
+    discordEvidenceLifecycle?: DiscordEvidenceLifecyclePort;
   } = {},
 ) {
   const bytes = Array.from({ length: 16 }, (_, index) => index + 1);
@@ -333,6 +323,7 @@ describe('gateway fleet auth broker', () => {
       discordEvidenceLifecycle: {
         recordActiveOAuthSession,
         recordSessionRotation: vi.fn(async () => ({ status: 'admitted' as const })),
+        commitGlobalAuthorityReset: vi.fn(async reset => await reset()),
       },
     });
     const started = await broker.beginLogin({ returnPath: '/fleet' });
@@ -382,6 +373,7 @@ describe('gateway fleet auth broker', () => {
       discordEvidenceLifecycle: {
         recordActiveOAuthSession,
         recordSessionRotation: vi.fn(async () => ({ status: 'admitted' as const })),
+        commitGlobalAuthorityReset: vi.fn(async reset => await reset()),
       },
     });
     const started = await broker.beginLogin({ returnPath: '/fleet' });
@@ -410,6 +402,7 @@ describe('gateway fleet auth broker', () => {
           throw new Error('injected lifecycle failure containing provider-access-secret');
         }),
         recordSessionRotation: vi.fn(async () => ({ status: 'admitted' as const })),
+        commitGlobalAuthorityReset: vi.fn(async reset => await reset()),
       },
     });
     const started = await broker.beginLogin({ returnPath: '/fleet' });
@@ -555,6 +548,7 @@ describe('gateway fleet auth broker', () => {
       discordEvidenceLifecycle: {
         recordActiveOAuthSession: vi.fn(async () => ({ status: 'admitted' as const })),
         recordSessionRotation,
+        commitGlobalAuthorityReset: vi.fn(async reset => await reset()),
       },
     });
     const started = await broker.beginLogin({ returnPath: '/fleet' });
@@ -572,6 +566,66 @@ describe('gateway fleet auth broker', () => {
     })).rejects.toMatchObject({ code: 'reauthentication_required', status: 401 });
     expect(recordSessionRotation).toHaveBeenCalledOnce();
     expect(store.session).toBeNull();
+  });
+
+  it('retires Discord lifecycle authority only after provider revocation commits', async () => {
+    const retirement = vi.fn();
+    const lifecycle: DiscordEvidenceLifecyclePort = {
+      recordActiveOAuthSession: vi.fn(async () => ({ status: 'admitted' })),
+      recordSessionRotation: vi.fn(async () => ({ status: 'admitted' })),
+      commitGlobalAuthorityReset: vi.fn(async (reset) => {
+        await reset();
+        retirement();
+      }),
+    };
+    const store = new FakeStore();
+    const originalSession: FleetAuthSessionRecord = {
+      recordId: '00000000-0000-4000-8000-000000000101',
+      principalId: '00000000-0000-4000-8000-000000000102',
+      principalStatus: 'active',
+      token: 'a'.repeat(43),
+      csrfToken: 'b'.repeat(43),
+      idleExpiresAt: new Date('2026-07-15T12:30:00.000Z'),
+      absoluteExpiresAt: new Date('2026-07-15T20:00:00.000Z'),
+    };
+    store.session = originalSession;
+    const { broker } = makeBroker(store, vi.fn<typeof fetch>(), undefined, {
+      config: mappedConfig,
+      discordEvidenceLifecycle: lifecycle,
+    });
+
+    await broker.revokeProvider({
+      token: store.session.token,
+      csrfToken: store.session.csrfToken,
+      requestOrigin: mappedConfig.canonicalOrigin,
+      reason: 'operator revocation',
+    });
+    expect(lifecycle.commitGlobalAuthorityReset).toHaveBeenCalledOnce();
+    expect(retirement).toHaveBeenCalledOnce();
+
+    const failedRetirement = vi.fn();
+    const failedLifecycle = {
+      ...lifecycle,
+      commitGlobalAuthorityReset: vi.fn(async (reset: () => Promise<void>) => {
+        await reset();
+        failedRetirement();
+      }),
+    };
+    const failedStore = new FakeStore();
+    failedStore.session = { ...originalSession, token: 'c'.repeat(43), csrfToken: 'd'.repeat(43) };
+    failedStore.providerRevocationError = new Error('transaction rolled back');
+    const failed = makeBroker(failedStore, vi.fn<typeof fetch>(), undefined, {
+      config: mappedConfig,
+      discordEvidenceLifecycle: failedLifecycle,
+    });
+    await expect(failed.broker.revokeProvider({
+      token: failedStore.session.token,
+      csrfToken: failedStore.session.csrfToken,
+      requestOrigin: mappedConfig.canonicalOrigin,
+      reason: 'operator revocation',
+    })).rejects.toThrow('transaction rolled back');
+    expect(failedLifecycle.commitGlobalAuthorityReset).toHaveBeenCalledOnce();
+    expect(failedRetirement).not.toHaveBeenCalled();
   });
 
   it('activates first owner only from gateway-verified exact trusted-host and WebAuthn assurance', async () => {
@@ -637,6 +691,7 @@ describe('gateway fleet auth broker', () => {
       discordEvidenceLifecycle: {
         recordActiveOAuthSession: vi.fn(async () => ({ status: 'admitted' as const })),
         recordSessionRotation: vi.fn(async () => ({ status: 'admitted' as const })),
+        commitGlobalAuthorityReset: vi.fn(async reset => await reset()),
       },
     });
     const started = await broker.beginLogin({ returnPath: '/fleet' });

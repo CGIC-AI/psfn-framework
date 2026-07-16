@@ -87,18 +87,21 @@ function sessionAuthority() {
   };
 }
 
+const appliedRefresh = async () => ({ status: 'applied' as const, snapshots: [] });
+const appliedMutation = async () => ({ status: 'applied' as const });
+
 describe('Discord evidence production lifecycle', () => {
   it('recovers a pre-ready login through the real ready/change hooks and isolates companions', async () => {
     let now = new Date('2026-07-16T12:00:00.000Z');
     const runtime = {
-      refreshPrincipalEvidence: vi.fn(async () => []),
-      refreshCompanionEvidence: vi.fn(async () => []),
+      refreshPrincipalEvidence: vi.fn(appliedRefresh),
+      refreshCompanionEvidence: vi.fn(appliedRefresh),
     };
     const store = {
       activatePrincipalEvidenceLifecycle: vi.fn(async () => undefined),
-      invalidatePrincipalEvidence: vi.fn(async () => undefined),
+      invalidatePrincipalEvidence: vi.fn(appliedMutation),
       revokeAllEvidence: vi.fn(async () => undefined),
-      revokePrincipalEvidence: vi.fn(async () => undefined),
+      revokePrincipalEvidence: vi.fn(appliedMutation),
     };
     const coordinator = new DiscordEvidenceLifecycleCoordinator({
       config: config(),
@@ -180,14 +183,14 @@ describe('Discord evidence production lifecycle', () => {
     let now = new Date('2026-07-16T12:00:00.000Z');
     const timers: Array<{ callback: () => void; delayMs: number }> = [];
     const runtime = {
-      refreshPrincipalEvidence: vi.fn(async () => []),
-      refreshCompanionEvidence: vi.fn(async () => []),
+      refreshPrincipalEvidence: vi.fn(appliedRefresh),
+      refreshCompanionEvidence: vi.fn(appliedRefresh),
     };
     const store = {
       activatePrincipalEvidenceLifecycle: vi.fn(async () => undefined),
-      invalidatePrincipalEvidence: vi.fn(async () => undefined),
+      invalidatePrincipalEvidence: vi.fn(appliedMutation),
       revokeAllEvidence: vi.fn(async () => undefined),
-      revokePrincipalEvidence: vi.fn(async () => undefined),
+      revokePrincipalEvidence: vi.fn(appliedMutation),
     };
     const authority = sessionAuthority();
     const coordinator = new DiscordEvidenceLifecycleCoordinator({
@@ -239,15 +242,15 @@ describe('Discord evidence production lifecycle', () => {
     const authority = sessionAuthority();
     const store = {
       activatePrincipalEvidenceLifecycle: vi.fn(async () => undefined),
-      invalidatePrincipalEvidence: vi.fn(async () => undefined),
+      invalidatePrincipalEvidence: vi.fn(appliedMutation),
       revokeAllEvidence: vi.fn(async () => undefined),
-      revokePrincipalEvidence: vi.fn(async () => undefined),
+      revokePrincipalEvidence: vi.fn(appliedMutation),
     };
     const coordinator = new DiscordEvidenceLifecycleCoordinator({
       config: config(),
       runtime: {
-        refreshPrincipalEvidence: vi.fn(async () => []),
-        refreshCompanionEvidence: vi.fn(async () => []),
+        refreshPrincipalEvidence: vi.fn(appliedRefresh),
+        refreshCompanionEvidence: vi.fn(appliedRefresh),
       },
       store,
       sessionAuthority: authority,
@@ -276,15 +279,15 @@ describe('Discord evidence production lifecycle', () => {
     const authority = sessionAuthority();
     const store = {
       activatePrincipalEvidenceLifecycle: vi.fn(async () => undefined),
-      invalidatePrincipalEvidence: vi.fn(async () => undefined),
+      invalidatePrincipalEvidence: vi.fn(appliedMutation),
       revokeAllEvidence: vi.fn(async () => undefined),
-      revokePrincipalEvidence: vi.fn(async () => undefined),
+      revokePrincipalEvidence: vi.fn(appliedMutation),
     };
     const coordinator = new DiscordEvidenceLifecycleCoordinator({
       config: config([]),
       runtime: {
-        refreshPrincipalEvidence: vi.fn(async () => []),
-        refreshCompanionEvidence: vi.fn(async () => []),
+        refreshPrincipalEvidence: vi.fn(appliedRefresh),
+        refreshCompanionEvidence: vi.fn(appliedRefresh),
       },
       store,
       sessionAuthority: authority,
@@ -304,14 +307,14 @@ describe('Discord evidence production lifecycle', () => {
     let now = new Date('2026-07-16T12:00:00.000Z');
     const timers: Array<() => void> = [];
     const runtime = {
-      refreshPrincipalEvidence: vi.fn(async () => []),
-      refreshCompanionEvidence: vi.fn(async () => []),
+      refreshPrincipalEvidence: vi.fn(appliedRefresh),
+      refreshCompanionEvidence: vi.fn(appliedRefresh),
     };
     const store = {
       activatePrincipalEvidenceLifecycle: vi.fn(async () => undefined),
-      invalidatePrincipalEvidence: vi.fn(async () => undefined),
+      invalidatePrincipalEvidence: vi.fn(appliedMutation),
       revokeAllEvidence: vi.fn(async () => undefined),
-      revokePrincipalEvidence: vi.fn(async () => undefined),
+      revokePrincipalEvidence: vi.fn(appliedMutation),
     };
     const coordinator = new DiscordEvidenceLifecycleCoordinator({
       config: config(),
@@ -352,15 +355,18 @@ describe('Discord evidence production lifecycle', () => {
     let releaseRefresh: (() => void) | undefined;
     const blockedRefresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
     const runtime = {
-      refreshPrincipalEvidence: vi.fn(async () => []),
+      refreshPrincipalEvidence: vi.fn(appliedRefresh),
       refreshCompanionEvidence: vi.fn()
-        .mockImplementationOnce(async () => { await blockedRefresh; return []; }),
+        .mockImplementationOnce(async () => {
+          await blockedRefresh;
+          return { status: 'applied' as const, snapshots: [] };
+        }),
     };
     const store = {
       activatePrincipalEvidenceLifecycle: vi.fn(async () => undefined),
-      invalidatePrincipalEvidence: vi.fn(async () => undefined),
+      invalidatePrincipalEvidence: vi.fn(appliedMutation),
       revokeAllEvidence: vi.fn(async () => undefined),
-      revokePrincipalEvidence: vi.fn(async () => undefined),
+      revokePrincipalEvidence: vi.fn(appliedMutation),
     };
     const coordinator = new DiscordEvidenceLifecycleCoordinator({
       config: config(),
@@ -402,4 +408,5 @@ describe('Discord evidence production lifecycle', () => {
     expect(store.activatePrincipalEvidenceLifecycle).toHaveBeenCalledTimes(2);
     expect(coordinator.retainedMembershipEvidenceCount()).toBe(0);
   });
+
 });

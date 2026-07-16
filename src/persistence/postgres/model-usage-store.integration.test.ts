@@ -131,6 +131,99 @@ describe('PostgresModelUsageStore private telemetry', () => {
   }, INTEGRATION_TIMEOUT_MS);
 });
 
+describe('PostgresModelUsageStore per-lane spend attribution (mmo9.7.3)', () => {
+  it('persists, filters, and aggregates per-companion x lane x model spend', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const database = await harness.createDatabase();
+    const pool = createPostgresPool(database.databaseUrl, {
+      applicationName: 'model-usage-lane-attribution-test',
+      allowExitOnIdle: true,
+      max: 2,
+    });
+    try {
+      const store = new PostgresModelUsageStore(pool, { fleetAggregation: true });
+      await store.recordUsageEvent({
+        logicalCallId: 'a-chat',
+        status: 'success',
+        callKind: 'chat',
+        attribution: {
+          companionId: 'companion-a',
+          callType: 'chat',
+          purpose: 'chat',
+          runtimeLaneClass: 'foreground_chat',
+        },
+        provider: 'litellm',
+        model: 'model-x',
+        inputTokens: 10,
+        outputTokens: 5,
+        providerCostUsd: 0.1,
+      });
+      await store.recordUsageEvent({
+        logicalCallId: 'a-maintenance',
+        status: 'success',
+        callKind: 'completion',
+        attribution: {
+          companionId: 'companion-a',
+          callType: 'background',
+          purpose: 'memory',
+          originStage: 'memory.sleeptime.run',
+          runtimeLaneClass: 'maintenance_reflection',
+        },
+        provider: 'litellm',
+        model: 'model-y',
+        inputTokens: 20,
+        outputTokens: 10,
+        providerCostUsd: 0.4,
+      });
+      await store.recordUsageEvent({
+        logicalCallId: 'b-background',
+        status: 'success',
+        callKind: 'completion',
+        attribution: {
+          companionId: 'companion-b',
+          callType: 'background',
+          purpose: 'background',
+          runtimeLaneClass: 'background_continuation',
+        },
+        provider: 'litellm',
+        model: 'model-x',
+        inputTokens: 30,
+        outputTokens: 15,
+        providerCostUsd: 0.9,
+      });
+
+      // Round-trip: the gate-resolved lane persists and reads back.
+      const all = await store.getUsageData({ limit: 10 });
+      const maintenanceEvent = all.recentEvents.find(event => event.logicalCallId === 'a-maintenance');
+      expect(maintenanceEvent?.attribution.runtimeLaneClass).toBe('maintenance_reflection');
+
+      // Filter by lane returns only the matching autonomous spend.
+      const maintenanceOnly = await store.getUsageData({
+        limit: 10,
+        runtimeLaneClass: 'maintenance_reflection',
+      });
+      expect(maintenanceOnly.totals.calls).toBe(1);
+      expect(maintenanceOnly.recentEvents.map(event => event.logicalCallId)).toEqual(['a-maintenance']);
+
+      // Per-companion x lane aggregation is visible for Garden.
+      const grouped = await store.getUsageData({
+        limit: 10,
+        groupBy: ['companionId', 'runtimeLaneClass'],
+      });
+      const laneGroup = (companionId: string, runtimeLaneClass: string) => grouped.groups.find(
+        group => group.dimensions.companionId === companionId
+          && group.dimensions.runtimeLaneClass === runtimeLaneClass,
+      );
+      expect(laneGroup('companion-a', 'foreground_chat')?.metrics.calls).toBe(1);
+      expect(laneGroup('companion-a', 'maintenance_reflection')?.metrics.totalCostUsd).toBeCloseTo(0.4);
+      expect(laneGroup('companion-b', 'background_continuation')?.metrics.calls).toBe(1);
+      expect(laneGroup('companion-a', 'background_continuation')).toBeUndefined();
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+});
+
 function makeSessionConfig(dataDir: string): SubstrateConfig {
   return {
     primaryModel: 'test-model',

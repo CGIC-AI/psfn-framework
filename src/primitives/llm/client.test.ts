@@ -44,6 +44,7 @@ import {
   LLMClient,
   SensitiveImportRoutePolicyError,
 } from './client.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from './work-spec.js';
 import {
   CircuitOpenError,
   SlidingWindowCircuitBreaker,
@@ -5166,5 +5167,129 @@ describe('LLMClient model budget gates and usage metering', () => {
     await expect(firstPromise).resolves.toMatchObject({ content: 'direct-1-result' });
     await expect(secondPromise).resolves.toMatchObject({ content: 'direct-2-result' });
     expect(transport.complete).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('LLMClient autonomous spend accounting (mmo9.7.3)', () => {
+  beforeEach(() => {
+    mocks.getModel.mockReset();
+    mocks.getModels.mockReset();
+    mocks.getProviders.mockReset();
+    mocks.completeSimple.mockReset();
+    mocks.streamSimple.mockReset();
+    mocks.getEnvApiKey.mockReset();
+
+    mocks.getModel.mockImplementation((provider: string, modelId: string) => ({
+      id: modelId,
+      provider,
+      name: modelId,
+      api: 'openai-completions',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+    }));
+    mocks.getProviders.mockReturnValue(['openrouter']);
+    mocks.getModels.mockImplementation((provider: string) => [
+      'z-ai/glm-5',
+      'deepseek/deepseek-v3.2',
+    ].map(id => ({
+      id,
+      provider,
+      name: id,
+      api: 'openai-completions',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+    })));
+    mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  it('records the gate-resolved runtime lane class and actual model in attribution', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), { usageRecorder });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'extracted' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 20, output: 6 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Extract' }],
+      },
+      'extraction',
+      {
+        disableRetry: true,
+        correlation: {
+          companionId: 'companion-x',
+          callType: 'background',
+          originStage: 'memory.extraction',
+        },
+      },
+    );
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      model: expect.stringContaining('deepseek'),
+      attribution: expect.objectContaining({
+        companionId: 'companion-x',
+        runtimeLaneClass: 'maintenance_reflection',
+        originStage: 'memory.extraction',
+      }),
+    }));
+  });
+
+  it('fails closed when a declared autonomous (work-spec) call has no usageRecorder', async () => {
+    const client = new LLMClient(makeConfig());
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'should never run' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 5, output: 2 },
+      stopReason: 'stop',
+    });
+
+    const spec = buildLLMWorkSpec({
+      purpose: 'extraction',
+      durable: true,
+      correlation: { callType: 'background', originStage: 'memory.extraction' },
+    });
+    expect(spec.lane).toBe('maintenance_reflection');
+
+    await expect(completeWithWorkSpec(
+      client,
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Extract' }],
+      },
+      spec,
+    )).rejects.toThrow(/unaccounted autonomous spend/);
+
+    // The provider is never touched: unaccountable autonomous spend never runs.
+    expect(mocks.completeSimple).not.toHaveBeenCalled();
+  });
+
+  it('leaves the interactive chat path runnable without a usageRecorder', async () => {
+    const client = new LLMClient(makeConfig());
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 8, output: 3 },
+          content: [{ type: 'text', text: 'hello' }],
+        },
+        reason: 'stop',
+      };
+    });
+
+    await expect(client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hi' }],
+    })).resolves.toMatchObject({ content: 'hello' });
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
   });
 });

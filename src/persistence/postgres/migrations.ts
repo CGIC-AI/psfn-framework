@@ -1804,6 +1804,33 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_slot_time ON model_usage_events(companion_id, slot_key, requested_provider, requested_model, recorded_at_ms DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_expensive ON model_usage_events(companion_id, (COALESCE(effective_cost_usd, 0)) DESC, recorded_at_ms DESC, id DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_metadata_gin ON model_usage_events USING GIN (metadata_json);`,
+  // mmo9.7.3: per-companion x lane x model spend attribution. `runtime_lane_class`
+  // records the SINGLE gate-resolved RuntimeLaneClass (worker-lanes.ts
+  // RUNTIME_LANE_CLASSES). Additive to attribution schema v1; existing rows default
+  // to 'unknown'. Keep the CHECK value list in sync with MODEL_USAGE_RUNTIME_LANE_CLASSES.
+  `ALTER TABLE model_usage_events ADD COLUMN IF NOT EXISTS runtime_lane_class TEXT NOT NULL DEFAULT 'unknown';`,
+  `
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'model_usage_events_runtime_lane_class_check'
+        AND conrelid = 'model_usage_events'::regclass
+    ) THEN
+      ALTER TABLE model_usage_events
+        ADD CONSTRAINT model_usage_events_runtime_lane_class_check
+        CHECK (runtime_lane_class IN (
+          'foreground_chat',
+          'post_turn_appraisal',
+          'background_continuation',
+          'maintenance_reflection',
+          'unknown'
+        )) NOT VALID;
+    END IF;
+  END $$;
+  `,
+  `ALTER TABLE model_usage_events VALIDATE CONSTRAINT model_usage_events_runtime_lane_class_check;`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_runtime_lane_class_time ON model_usage_events(companion_id, runtime_lane_class, model, recorded_at_ms DESC);`,
   `
   CREATE TABLE IF NOT EXISTS icp_conversation_cost_reservations (
     logical_call_id TEXT NOT NULL,

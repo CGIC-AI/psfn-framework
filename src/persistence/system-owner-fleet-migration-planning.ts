@@ -15,6 +15,7 @@ import type {
   SystemOwnerFleetMigrationDestinationPlan,
   SystemOwnerFleetMigrationFilePlan,
 } from './system-owner-fleet-migration-receipt.js';
+import { validatePinnedMigrationOwner } from './system-owner-fleet-owner-validation.js';
 
 export type PinnedPlanFile = SystemOwnerFleetMigrationFilePlan & {
   sourceIdentity?: FilesystemIdentity;
@@ -53,6 +54,11 @@ export function inspectPinnedPlanFiles(input: {
       ownerFile,
       `${ownerFile} migration source`,
     );
+    validatePinnedMigrationOwner(
+      input.systemDirectory,
+      ownerFile,
+      `${ownerFile} migration source`,
+    );
     const destinations = input.fleet.map((entry): SystemOwnerFleetMigrationDestinationPlan => {
       const destinationPath = join(entry.companionDataDir, ownerFile);
       const relativePath = relativeDirectoryPath(
@@ -66,7 +72,11 @@ export function inspectPinnedPlanFiles(input: {
         `${ownerFile} migration destination directory`,
         { allowMissing: true },
       );
-      if (!directory) return { ...entry, destinationPath, status: 'missing' };
+      if (!directory) {
+        throw new Error(
+          `Companion ${entry.companionId} migration destination directory is missing: ${entry.companionDataDir}`,
+        );
+      }
       const prior = input.existingDestinationDirectories.get(entry.companionId);
       if (prior) {
         closePinnedDirectory(directory);
@@ -101,29 +111,4 @@ export function inspectPinnedPlanFiles(input: {
       destinations,
     };
   });
-}
-
-export function ensureDestinationDirectories(input: {
-  fleet: readonly FleetReceiptEntry[];
-  persistenceDirectory: PinnedDirectory;
-  plannedDestinationDirectories: Map<string, PinnedDirectory>;
-}): void {
-  for (const entry of input.fleet) {
-    if (input.plannedDestinationDirectories.has(entry.companionId)) continue;
-    const label = `Companion ${entry.companionId} migration destination`;
-    const relativePath = relativeDirectoryPath(
-      input.persistenceDirectory,
-      entry.companionDataDir,
-      label,
-    );
-    const directory = pinRelativeDirectory(
-      input.persistenceDirectory,
-      relativePath,
-      `${label} directory`,
-      { create: true, mode: 0o700 },
-    );
-    if (!directory) throw new Error(`${label} directory is missing`);
-    assertNoUnknownMigrationArtifacts(directory, label);
-    input.plannedDestinationDirectories.set(entry.companionId, directory);
-  }
 }

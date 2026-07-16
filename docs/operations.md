@@ -515,12 +515,22 @@ Production startup should not proceed until the cutover plan is clean.
 
 Fleets created before per-companion owner-file rooting may still have
 `charge-policy.json` or `skills.json` (and potentially the other registered
-per-companion owners) under `SYSTEM_DATA_DIR`. Stop every fleet process, then
-inspect the explicit fan-out plan:
+per-companion owners) under `SYSTEM_DATA_DIR`. Stop every fleet process. Verify
+that every exact `companionDataDir` from `companions.json` is already mounted;
+the migration never creates a missing PVC root. Capture the mechanically
+verified whole-fleet snapshot before inspecting or applying the fan-out:
 
 ```bash
+npm run snapshot:system-owner-fleet -- \
+  --output "$BACKUP_ROOT_DIR/pre-system-owner-fleet-<timestamp>"
 npm run migrate:system-owner-fleet
 ```
+
+The snapshot command writes one cluster/system tree plus one
+`companions/<companion-id>/...` tree for every manifest root. Each tree has a
+per-file digest manifest, and the fleet manifest binds those manifests by
+SHA-256. Any excluded or special file fails capture; a partial family is
+removed and cannot be used as rollback evidence.
 
 The plan prints one `--approve <owner-file>=<sha256>` argument for every
 system-root source it found. Review the enumerated companion destinations and
@@ -532,9 +542,13 @@ npm run migrate:system-owner-fleet -- --apply \
   --approve skills.json=<exact-sha256>
 ```
 
-The supported command validates system-root `charge-policy.json` and
-`skills.json` with their canonical runtime schemas before it creates a receipt,
-destination, or quarantine object. Malformed JSON or schema drift therefore
+The supported command validates `charge-policy.json` and `skills.json` with
+their canonical runtime schemas before it creates or mutates a migration
+object. A new receipt validates the pinned system-root sources. Receipt-bound
+recovery validates the live source while it exists and, after quarantine,
+validates the current owner at every identity-bound exact destination. Valid
+atomic post-migration owner edits are allowed; malformed old receipt state or a
+malformed current owner fails closed. Malformed JSON or schema drift therefore
 leaves the source and every companion root unchanged. Keep
 `bootstrap.seedOwnerFiles=false`; a seed copy is new default state, not
 preserved operator state and cannot certify this migration.
@@ -567,11 +581,23 @@ decoy cannot satisfy the check. `npm run verify:startup-owner-files` is the
 separate repository gate: it validates distributed seeds in a disposable,
 explicit split-root fixture and is never called by the launcher.
 
-Rollback is a whole-fleet restore boundary. Before apply, take and verify one
-backup containing `SYSTEM_DATA_DIR` and every manifest companion-data root. If
-an old release must be restored after charge/skills fan-out, stop every fleet
-process and restore that verified pre-migration backup as one fleet unit, then
-run its startup preflight before reopening traffic. Do not copy the quarantined
+Rollback is a whole-fleet restore boundary. If an old release must be restored
+after charge/skills fan-out, stop every fleet process and provision a fresh,
+empty system-data PVC plus one fresh, empty companion-data PVC for every
+manifest entry. Mount them beneath one fresh runtime root using the original
+relative paths, then rehearse/perform the verified restore:
+
+```bash
+npm run restore:system-owner-fleet-snapshot -- \
+  --manifest "$BACKUP_ROOT_DIR/pre-system-owner-fleet-<timestamp>/system-owner-fleet-snapshot.json" \
+  --restore-runtime-root <fresh-runtime-root>
+```
+
+The restore verifies the whole artifact family before its first write and
+refuses non-empty destinations. If it fails after writing begins, discard the
+entire fresh PVC set; never reuse a partial restore. Point the old release only
+at the successfully restored PVC family, run its startup preflight, and then
+reopen traffic. Do not copy the quarantined
 source back by hand, selectively restore one companion, delete the receipt, or
 reuse a partially migrated root: those actions sever the receipt's provenance
 and can reintroduce a shared owner alongside individuated state. Forward

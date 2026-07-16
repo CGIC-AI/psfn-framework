@@ -49,6 +49,22 @@ function sha256(value: Buffer | string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
+function validSkillsSource(marker: string): Buffer {
+  const value = JSON.parse(readFileSync(join(process.cwd(), 'config', 'skills.seed.json'), 'utf8')) as {
+    disabledSkills: string[];
+  };
+  value.disabledSkills = [marker];
+  return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function validChargeSource(interactiveQuota: number): Buffer {
+  const value = JSON.parse(
+    readFileSync(join(process.cwd(), 'config', 'charge-policy.seed.json'), 'utf8'),
+  ) as { runChargeQuotaByLane: { interactive: number } };
+  value.runChargeQuotaByLane.interactive = interactiveQuota;
+  return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+}
+
 describe('system-owner fleet migration', () => {
   const roots: string[] = [];
 
@@ -64,8 +80,71 @@ describe('system-owner fleet migration', () => {
     const systemDataDir = join(runtimeRoot, 'system-data');
     mkdirSync(systemDataDir);
     const fleet = resolveCompanionFleetPaths(FLEET, runtimeRoot);
+    for (const companion of fleet.companions) {
+      mkdirSync(companion.companionDataDir, { recursive: true });
+    }
     return { runtimeRoot, systemDataDir, fleet };
   }
+
+  it('refuses a missing exact companion root before creating any receipt or migration artifact', () => {
+    const { systemDataDir, fleet } = fixture();
+    const source = validSkillsSource('missing-root');
+    const sourcePath = join(systemDataDir, 'skills.json');
+    const missingRoot = fleet.companions[1].companionDataDir;
+    rmSync(missingRoot, { recursive: true });
+    writeFileSync(sourcePath, source);
+
+    expect(() => buildSystemOwnerFleetMigrationPlan({ systemDataDir, fleet }))
+      .toThrow(/destination directory is missing/);
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': sha256(source) },
+    })).toThrow(/destination directory is missing/);
+
+    expect(readFileSync(sourcePath)).toEqual(source);
+    expect(existsSync(missingRoot)).toBe(false);
+    expect(existsSync(join(systemDataDir, 'migrations'))).toBe(false);
+    for (const companion of fleet.companions) {
+      expect(existsSync(join(companion.companionDataDir, 'skills.json'))).toBe(false);
+      if (existsSync(companion.companionDataDir)) {
+        expect(readdirSync(companion.companionDataDir)).toEqual([]);
+      }
+    }
+  });
+
+  it('revalidates every receipt-bound root before recovery creates quarantine or staging', () => {
+    const { systemDataDir, fleet } = fixture();
+    const source = readFileSync(join(process.cwd(), 'config', 'scheduler.seed.json'));
+    const sourcePath = join(systemDataDir, 'scheduler.json');
+    writeFileSync(sourcePath, source);
+
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'scheduler.json': sha256(source) },
+      faultInjection: (event) => {
+        if (event.stage === 'after_bootstrap_receipt') throw new Error('crash:bootstrap-receipt');
+      },
+    })).toThrow('crash:bootstrap-receipt');
+    const receiptPath = join(systemDataDir, 'migrations', 'system-owner-fleet-reroot.json');
+    const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as {
+      status: string;
+      quarantineDirectoryPath: string;
+    };
+    expect(receipt.status).toBe('bootstrap');
+    expect(existsSync(receipt.quarantineDirectoryPath)).toBe(false);
+
+    rmSync(fleet.companions[1].companionDataDir, { recursive: true });
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'scheduler.json': sha256(source) },
+    })).toThrow(/destination directory does not exist/);
+    expect(readFileSync(sourcePath)).toEqual(source);
+    expect(existsSync(receipt.quarantineDirectoryPath)).toBe(false);
+    expect(readdirSync(fleet.companions[0].companionDataDir)).toEqual([]);
+  });
 
   it('fans exact owner bytes to every configured companion, retires sources, and passes startup verification', () => {
     const { systemDataDir, fleet } = fixture();
@@ -154,7 +233,7 @@ describe('system-owner fleet migration', () => {
   it('refuses changed sources and any pre-existing destination without overwrite or merge', () => {
     const { systemDataDir, fleet } = fixture();
     const sourcePath = join(systemDataDir, 'skills.json');
-    const original = '{"owner":"system"}\n';
+    const original = validSkillsSource('destination-conflict');
     writeFileSync(sourcePath, original);
     const destinationPath = join(fleet.companions[0].companionDataDir, 'skills.json');
     mkdirSync(fleet.companions[0].companionDataDir, { recursive: true });
@@ -165,8 +244,8 @@ describe('system-owner fleet migration', () => {
       fleet,
       expectedSourceDigests: { 'skills.json': sha256(original) },
     })).toThrow(/destination conflicts/);
-    expect(readFileSync(destinationPath, 'utf8')).toBe(original);
-    expect(readFileSync(sourcePath, 'utf8')).toBe(original);
+    expect(readFileSync(destinationPath)).toEqual(original);
+    expect(readFileSync(sourcePath)).toEqual(original);
 
     rmSync(destinationPath);
     expect(() => executeSystemOwnerFleetMigration({
@@ -180,7 +259,7 @@ describe('system-owner fleet migration', () => {
   it('retries a receipt-recorded partial fan-out deterministically and denies later tampering', () => {
     const { systemDataDir, fleet } = fixture();
     const sourcePath = join(systemDataDir, 'charge-policy.json');
-    const source = Buffer.from('{"quota":"individual"}\n');
+    const source = validChargeSource(25);
     const digest = sha256(source);
     writeFileSync(sourcePath, source);
     let verifiedCount = 0;
@@ -201,7 +280,7 @@ describe('system-owner fleet migration', () => {
     expect(existsSync(secondDestination)).toBe(false);
     expect(readFileSync(sourcePath)).toEqual(source);
 
-    writeFileSync(sourcePath, 'changed\n');
+    writeFileSync(sourcePath, validChargeSource(26));
     expect(() => executeSystemOwnerFleetMigration({
       systemDataDir,
       fleet,
@@ -217,7 +296,7 @@ describe('system-owner fleet migration', () => {
     expect(readFileSync(secondDestination)).toEqual(source);
     expect(existsSync(sourcePath)).toBe(false);
 
-    writeFileSync(firstDestination, 'tampered\n');
+    writeFileSync(firstDestination, validChargeSource(27));
     expect(() => executeSystemOwnerFleetMigration({
       systemDataDir,
       fleet,
@@ -248,7 +327,7 @@ describe('system-owner fleet migration', () => {
   ] as const)('recovers deterministically from the %s crash window', (stage) => {
     const { systemDataDir, fleet } = fixture();
     const sourcePath = join(systemDataDir, 'skills.json');
-    const source = Buffer.from('{"enabled":true,"padding":"crash-window"}\n');
+    const source = validSkillsSource(`crash-window-${stage}`);
     const digest = sha256(source);
     writeFileSync(sourcePath, source);
     let injected = false;
@@ -271,7 +350,8 @@ describe('system-owner fleet migration', () => {
       fleet,
       expectedSourceDigests: { 'skills.json': digest },
     });
-    expect(recovered.status).toBe(stage === 'after_final_receipt' ? 'already_completed' : 'migrated');
+    const expectedStatus = stage.startsWith('after_final_') ? 'already_completed' : 'migrated';
+    expect(recovered.status).toBe(expectedStatus);
     expect(existsSync(sourcePath)).toBe(false);
     const completedReceipt = JSON.parse(readFileSync(recovered.receiptPath, 'utf8')) as {
       files: Array<{
@@ -296,7 +376,7 @@ describe('system-owner fleet migration', () => {
 
   it('fsyncs a recovered source quarantine before a second crash and receipt completion', () => {
     const { systemDataDir, fleet } = fixture();
-    const source = Buffer.from('{"enabled":true,"recovered-quarantine-sync":true}\n');
+    const source = validSkillsSource('recovered-quarantine-sync');
     const digest = sha256(source);
     const sourcePath = join(systemDataDir, 'skills.json');
     writeFileSync(sourcePath, source);
@@ -315,7 +395,9 @@ describe('system-owner fleet migration', () => {
       fleet,
       expectedSourceDigests: { 'skills.json': digest },
       faultInjection: (event) => {
-        if (event.stage === 'after_quarantine_sync') throw new Error('crash:after-recovered-sync');
+        if (['after_quarantine_sync'].includes(event.stage)) {
+          throw new Error('crash:after-recovered-sync');
+        }
       },
     })).toThrow('crash:after-recovered-sync');
 
@@ -338,7 +420,7 @@ describe('system-owner fleet migration', () => {
 
   it('denies pre-existing or symlinked migration temp/final/source paths', () => {
     const preexisting = fixture();
-    const source = Buffer.from('{"enabled":true}\n');
+    const source = validSkillsSource('path-denial');
     const digest = sha256(source);
     writeFileSync(join(preexisting.systemDataDir, 'skills.json'), source);
     const firstDir = preexisting.fleet.companions[0].companionDataDir;
@@ -405,7 +487,7 @@ describe('system-owner fleet migration', () => {
 
   it('durably supersedes and preserves an unbound temporary across a second crash', () => {
     const { systemDataDir, fleet } = fixture();
-    const source = Buffer.from('{"enabled":true,"supersede":true}\n');
+    const source = validSkillsSource('supersede');
     const digest = sha256(source);
     writeFileSync(join(systemDataDir, 'skills.json'), source);
 
@@ -454,7 +536,7 @@ describe('system-owner fleet migration', () => {
 
   it('preserves and denies a replacement of an identity-bound partial temporary', () => {
     const { runtimeRoot, systemDataDir, fleet } = fixture();
-    const source = Buffer.from('{"enabled":true,"partial-replacement":true}\n');
+    const source = validSkillsSource('partial-replacement');
     const digest = sha256(source);
     writeFileSync(join(systemDataDir, 'skills.json'), source);
     let interrupted = false;
@@ -489,7 +571,7 @@ describe('system-owner fleet migration', () => {
 
   it('denies unrecorded artifacts introduced into a receipt-owned staging directory', () => {
     const { systemDataDir, fleet } = fixture();
-    const source = Buffer.from('{"enabled":true,"unknown-artifact":true}\n');
+    const source = validSkillsSource('unknown-artifact');
     const digest = sha256(source);
     writeFileSync(join(systemDataDir, 'skills.json'), source);
     expect(() => executeSystemOwnerFleetMigration({
@@ -516,7 +598,7 @@ describe('system-owner fleet migration', () => {
 
   it('keeps system, receipt, and destination writes on pinned directory identities after path swaps', () => {
     const { runtimeRoot, systemDataDir, fleet } = fixture();
-    const source = Buffer.from('{"enabled":true,"pinned":true}\n');
+    const source = validSkillsSource('pinned');
     const digest = sha256(source);
     const sourcePath = join(systemDataDir, 'skills.json');
     writeFileSync(sourcePath, source);
@@ -569,7 +651,7 @@ describe('system-owner fleet migration', () => {
 
   it('rejects receipt and ancestor symlinks without writing through them', () => {
     const receiptDirectoryLink = fixture();
-    const source = Buffer.from('{"enabled":true}\n');
+    const source = validSkillsSource('receipt-links');
     const digest = sha256(source);
     writeFileSync(join(receiptDirectoryLink.systemDataDir, 'skills.json'), source);
     const outsideReceipts = join(receiptDirectoryLink.runtimeRoot, 'outside-receipts');
@@ -600,6 +682,7 @@ describe('system-owner fleet migration', () => {
     writeFileSync(join(destinationAncestorLink.systemDataDir, 'skills.json'), source);
     const outsideCompanions = join(destinationAncestorLink.runtimeRoot, 'outside-companions');
     mkdirSync(outsideCompanions);
+    rmSync(join(destinationAncestorLink.runtimeRoot, 'companions'), { recursive: true });
     symlinkSync(outsideCompanions, join(destinationAncestorLink.runtimeRoot, 'companions'), 'dir');
     expect(() => executeSystemOwnerFleetMigration({
       systemDataDir: destinationAncestorLink.systemDataDir,
@@ -612,8 +695,8 @@ describe('system-owner fleet migration', () => {
   it('preserves and denies a source replacement at the final retirement boundary', () => {
     const { systemDataDir, fleet } = fixture();
     const sourcePath = join(systemDataDir, 'skills.json');
-    const approvedSource = Buffer.from('{"approved":true}\n');
-    const replacement = Buffer.from('{"replacement":true}\n');
+    const approvedSource = validSkillsSource('approved');
+    const replacement = validSkillsSource('replacement');
     const savedApprovedSource = join(systemDataDir, 'approved-source.saved');
     const digest = sha256(approvedSource);
     writeFileSync(sourcePath, approvedSource);

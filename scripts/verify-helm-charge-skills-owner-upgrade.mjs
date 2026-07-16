@@ -138,18 +138,7 @@ function renderHelmStartup(input) {
   if (commands.some(command => command !== commands[0])) {
     throw new Error(`${input.label} app workloads rendered different owner init commands`);
   }
-  return commands[0].replace(
-    'node /app/dist/migrate-scheduler-owner.js',
-    `${join(repoRoot, 'node_modules', '.bin', 'tsx')} `
-      + `${join(repoRoot, 'src', 'app', 'maintenance', 'migrate-scheduler-owner.ts')}`,
-  );
-}
-
-function runRenderedStartup(command, label) {
-  const result = spawnSync('sh', ['-c', command], { cwd: repoRoot, encoding: 'utf8' });
-  if (result.status !== 0) {
-    throw new Error(`${label} rendered Helm startup failed: ${result.stderr}${result.stdout}`);
-  }
+  return commands[0];
 }
 
 function assertMalformedSourceRefused(ownerFile, contents, expectedError) {
@@ -158,6 +147,7 @@ function assertMalformedSourceRefused(ownerFile, contents, expectedError) {
     const systemDataDir = join(runtimeRoot, 'system-data');
     const companionDataDir = join(runtimeRoot, 'companions', 'one');
     mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
     writeFileSync(
       join(systemDataDir, 'companions.json'),
       `${JSON.stringify(fleetManifest([{
@@ -248,6 +238,12 @@ try {
   const approvals = Array.from(legacyOwners, ([ownerFile, contents]) => (
     `${ownerFile}=${sha256(contents)}`
   ));
+  const snapshotDir = join(runtimeRoot, 'backups', 'pre-owner-migration');
+  assertIncludes(
+    runNpm('snapshot:system-owner-fleet', ['--output', snapshotDir], env),
+    '"status": "captured"',
+    'whole-fleet pre-migration snapshot',
+  );
   const dryRun = runNpm('migrate:system-owner-fleet', [], env);
   for (const [ownerFile] of legacyOwners) {
     assertIncludes(dryRun, `--approve ${ownerFile}=`, `${ownerFile} exact approval`);
@@ -314,13 +310,18 @@ try {
     ['first companion', firstCompanionId, firstCompanionDataDir],
     ['second companion', secondCompanionId, secondCompanionDataDir],
   ]) {
-    runRenderedStartup(renderHelmStartup({
+    const renderedStartup = renderHelmStartup({
       label,
       runtimeRoot,
       systemDataDir,
       companionDataDir,
       companionId,
-    }), label);
+    });
+    assertIncludes(
+      renderedStartup,
+      'node /app/dist/migrate-scheduler-owner.js',
+      `${label} exact-image startup command`,
+    );
   }
   for (const [companionDataDir, interactive, maxSkills] of [
     [firstCompanionDataDir, 31, 41],
@@ -348,6 +349,32 @@ try {
     `fleet=2 companionRoots=${firstCompanionDataDir},${secondCompanionDataDir}`,
     'exact multi-companion startup preflight',
   );
+
+  const restoreRoot = join(runtimeRoot, 'fresh-restore');
+  mkdirSync(join(restoreRoot, 'system-data'), { recursive: true });
+  mkdirSync(join(restoreRoot, 'companions', 'one'), { recursive: true });
+  mkdirSync(join(restoreRoot, 'companions', 'two'), { recursive: true });
+  assertIncludes(
+    runNpm('restore:system-owner-fleet-snapshot', [
+      '--manifest', join(snapshotDir, 'system-owner-fleet-snapshot.json'),
+      '--restore-runtime-root', restoreRoot,
+    ], env),
+    '"status": "restored"',
+    'whole-fleet rollback rehearsal',
+  );
+  for (const [ownerFile, contents] of legacyOwners) {
+    if (readFileSync(join(restoreRoot, 'system-data', ownerFile), 'utf8') !== contents) {
+      throw new Error(`${ownerFile} was not restored to the old system owner root`);
+    }
+    for (const companionName of ['one', 'two']) {
+      if (existsSync(join(restoreRoot, 'companions', companionName, ownerFile))) {
+        throw new Error(`${ownerFile} fan-out survived whole-fleet rollback`);
+      }
+    }
+  }
+  if (existsSync(join(restoreRoot, 'system-data', 'migrations'))) {
+    throw new Error('Migration receipt survived whole-fleet rollback');
+  }
 } finally {
   rmSync(runtimeRoot, { recursive: true, force: true });
 }
@@ -371,7 +398,8 @@ for (const [label, guide] of [
   const normalizedGuide = guide.replace(/\s+/gu, ' ');
   assertIncludes(normalizedGuide, 'npm run migrate:system-owner-fleet', `${label} fleet command`);
   assertIncludes(normalizedGuide, 'bootstrap.seedOwnerFiles=false', `${label} seed posture`);
-  assertIncludes(normalizedGuide, 'pre-migration backup', `${label} rollback boundary`);
+  assertIncludes(normalizedGuide, 'npm run snapshot:system-owner-fleet', `${label} snapshot command`);
+  assertIncludes(normalizedGuide, 'npm run restore:system-owner-fleet-snapshot', `${label} restore command`);
 }
 
 console.log('Helm charge/skills owner upgrade verification passed.');

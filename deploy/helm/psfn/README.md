@@ -129,6 +129,8 @@ maintenance environment that mounts the system-data PVC and every exact
 companion-data PVC path from `companions.json`:
 
 ```bash
+npm run snapshot:system-owner-fleet -- \
+  --output "$BACKUP_ROOT_DIR/pre-system-owner-fleet-<timestamp>"
 npm run migrate:system-owner-fleet
 npm run migrate:system-owner-fleet -- --apply \
   --approve charge-policy.json=<exact-sha256> \
@@ -263,8 +265,17 @@ the retired path. The explicit charge/skills transaction instead moves the old
 sources into receipt-owned quarantine. Rolling back to a release that still
 expects those system-root owners therefore requires stopping all releases and
 restoring the verified pre-migration backup of system-data and every companion
-root as one fleet unit; never copy quarantine evidence back by hand or restore
-only one root.
+root as one fleet unit. Provision fresh empty PVCs, then run:
+
+```bash
+npm run restore:system-owner-fleet-snapshot -- \
+  --manifest "$BACKUP_ROOT_DIR/pre-system-owner-fleet-<timestamp>/system-owner-fleet-snapshot.json" \
+  --restore-runtime-root <fresh-runtime-root>
+```
+
+The restore verifies every split artifact before writing and refuses non-empty
+roots. Discard all fresh PVCs after any partial failure; never copy quarantine
+evidence back by hand or restore only one root.
 
 ## Repository Checkout
 

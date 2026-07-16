@@ -27,9 +27,9 @@ import {
 } from './system-owner-fleet-migration-io.js';
 import {
   assertNoUnknownMigrationArtifacts,
-  ensureDestinationDirectories,
   inspectPinnedPlanFiles,
 } from './system-owner-fleet-migration-planning.js';
+import { validateReceiptBoundMigrationOwners } from './system-owner-fleet-owner-validation.js';
 import {
   supersedeUnboundTemporary,
   validateRecordedArtifacts,
@@ -164,11 +164,6 @@ export function executeSystemOwnerFleetMigration(
       }
       if (!receiptDirectory) throw new Error('Unable to pin migration receipt directory');
       assertNoUnknownMigrationArtifacts(receiptDirectory, 'System-owner migration receipt directory');
-      ensureDestinationDirectories({
-        fleet,
-        persistenceDirectory,
-        plannedDestinationDirectories,
-      });
       const operationId = temporaryId();
       assertMigrationArtifactId(operationId);
       const stagingName = stagingDirectoryName(operationId);
@@ -250,6 +245,12 @@ export function executeSystemOwnerFleetMigration(
       receipt.updatedAt = now().toISOString();
       writeReceipt(path, receipt, receiptDirectory);
     };
+    validateReceiptBoundMigrationOwners({
+      receipt,
+      fleet,
+      systemDirectory,
+      persistenceDirectory,
+    });
     const initialized = initializeMigrationDirectories({
       receipt,
       receiptDirectory,

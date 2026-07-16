@@ -1182,7 +1182,7 @@ describe('hydrateCanonicalStartupConfig', () => {
         intervalMs: 123_000,
       },
     });
-    saveChargePolicyConfig(systemDataDir, {
+    saveChargePolicyConfig(companionDataDir, {
       schemaVersion: 1,
       runChargeQuotaByLane: {
         interactive: 30,

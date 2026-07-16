@@ -2100,7 +2100,7 @@ describe('DiscordVoiceRuntime', () => {
         connectorMocks.ttsConnector.synthesizeBuffer.mockResolvedValue(Buffer.from([9, 9, 9]));
       }
 
-      it.each(['stop', 'be quiet', 'wait', 'hold on'])(
+      it.each(['stop', 'be quiet', 'wait wait', 'hold on'])(
         'handles spoken control "%s" locally with zero model invocations',
         async (phrase) => {
           primeUtterance(phrase);
@@ -2173,6 +2173,68 @@ describe('DiscordVoiceRuntime', () => {
         expect(connectorMocks.ttsConnector.synthesizeStream).toHaveBeenCalledTimes(2);
         const replayCall = connectorMocks.ttsConnector.synthesizeStream.mock.calls[1]![0] as { text: string };
         expect(replayCall.text).toBe('the time is noon');
+      });
+
+      it('does not replay a pre-leave utterance after leaveChannel then rejoin (d8vq.1)', async () => {
+        let sttCall = 0;
+        connectorMocks.sttConnector.startStream.mockImplementation(async () => ({
+          transcripts: makeFinalTranscriptStream(sttCall++ === 0 ? 'what time is it' : 'repeat that'),
+          writeAudio: vi.fn(async () => {}),
+          endInput: vi.fn(async () => {}),
+          cancel: vi.fn(async () => {}),
+        }));
+        connectorMocks.ttsConnector.synthesizeStream.mockImplementation(async () => ({
+          audio: makeAudioStream(),
+          cancel: vi.fn(async () => {}),
+        }));
+        connectorMocks.ttsConnector.synthesizeBuffer.mockResolvedValue(Buffer.from([9, 9, 9]));
+
+        const eventBus = new EventBus();
+        const handler = vi.fn(async () => ({
+          content: 'the time is noon',
+          channelId: 'discord-voice:guild-1',
+          metadata: { model: 'test-model', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+        }));
+        const { runtime } = makeRuntimeHarness(eventBus, handler);
+        (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+
+        // First visit: a real reply is spoken and remembered.
+        await (runtime as any).handleUtterance();
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(connectorMocks.ttsConnector.synthesizeStream).toHaveBeenCalledTimes(1);
+        expect((runtime as any).lastAssistantUtterance).toBe('the time is noon');
+
+        // Leave the channel: the remembered utterance must be cleared.
+        await (runtime as any).leaveChannel('leave-rejoin-test');
+        expect((runtime as any).lastAssistantUtterance).toBeNull();
+
+        // Rejoin: restore the transport surface the harness wires up on join.
+        const player = { play: vi.fn(), stop: vi.fn() };
+        (runtime as any).connection = {
+          state: {
+            status: voiceSdkMocks.VoiceConnectionStatus.Ready,
+            subscription: { player },
+          },
+          destroy: vi.fn(),
+          receiver: {
+            subscribe: vi.fn(() => new PassThrough()),
+            speaking: { on: vi.fn(), off: vi.fn() },
+          },
+        };
+        (runtime as any).player = player;
+        (runtime as any).activeChannel = {
+          id: 'channel-1',
+          guild: { id: 'guild-1' },
+          members: new Map([
+            ['user-1', { displayName: 'Voice User', user: { username: 'Voice User', bot: false } }],
+          ]),
+        };
+
+        // Second visit: spoken "repeat that" has nothing to replay — no model
+        // call, no synthesis of the stale pre-leave reply.
+        await (runtime as any).handleUtterance();
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(connectorMocks.ttsConnector.synthesizeStream).toHaveBeenCalledTimes(1);
       });
     });
   });

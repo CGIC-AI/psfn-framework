@@ -562,7 +562,7 @@ describe('startup owner-file loaders', () => {
     expect(result.ok).toBe(false);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain('scheduler.json');
-    expect(result.errors[0]).toContain('artifactLifecycle must be an object');
+    expect(result.errors[0]).toContain('episodicProcessing must be an object');
     expect(result.errors[0]).toContain('PSFN will not overwrite it from seed/example templates');
   });
 

@@ -146,7 +146,7 @@ export async function startPostgresTestHarness(options: PostgresTestHarnessOptio
     allowExitOnIdle: true,
     max: 1,
   });
-  const clientRoot = mkdtempSync(join(tmpdir(), 'psfn-postgres-clients-'));
+  const clientRoot = mkdtempSync(join(tmpdir(), 'postgres-test-clients-'));
   const clientBinaries: PostgresTestClientBinaries = {
     pgDumpBinary: writeDockerPostgresClient(clientRoot, image, 'pg_dump'),
     pgRestoreBinary: writeDockerPostgresClient(clientRoot, image, 'pg_restore'),

@@ -44,7 +44,7 @@ import { validateFleetAuthSchemaAccessContracts } from './fleet-auth-schema-acce
 const execFileAsync = promisify(execFile);
 export const FLEET_AUTH_BACKUP_MANIFEST_NAME = 'fleet-auth-backup-manifest.json';
 export const FLEET_AUTH_SNAPSHOT_NAME = 'fleet-auth.snapshot.json';
-export const FLEET_AUTH_BACKUP_MANIFEST_SCHEMA_VERSION = 4;
+export const FLEET_AUTH_BACKUP_MANIFEST_SCHEMA_VERSION = 5;
 
 export type FleetAuthBackupArtifactKind =
   | 'companion'
@@ -157,7 +157,7 @@ async function captureFleetAuthSnapshot(
   return {
     authorityLineageId,
     value: {
-      schemaVersion: 4,
+      schemaVersion: 5,
       capturedAt,
       postgresSnapshot,
       authorityLineageId,
@@ -173,6 +173,9 @@ async function captureFleetAuthSnapshot(
         principalMergeAliases: await selectJsonRows(client, 'principal_merge_aliases', 'source_principal_id'),
         passkeyCredentials: await selectJsonRows(client, 'passkey_credentials', 'credential_id_hash'),
         authorizationAuditEvents: await selectJsonRows(client, 'authorization_audit_events', 'occurred_at, event_id'),
+        contactAuthorityIntents: await selectJsonRows(client, 'contact_authority_intents', 'created_at, companion_id, intent_id'),
+        contactAuthorityResources: await selectJsonRows(client, 'contact_authority_resources', 'companion_id, intent_id, kind, resource_id'),
+        contactAuthorityReceipts: await selectJsonRows(client, 'contact_authority_receipts', 'created_at, companion_id, intent_id, phase'),
       },
     },
   };

@@ -60,6 +60,7 @@ interface ProviderSubjectRow {
   authority_generation: string;
   restore_state: 'live' | 'quarantined';
   tombstoned: boolean;
+  contact_authority_fenced: boolean;
 }
 
 interface CompanionRow {
@@ -82,6 +83,7 @@ interface BindingRow {
   authority_generation: string;
   restore_state: 'live' | 'quarantined';
   tombstoned: boolean;
+  contact_authority_fenced: boolean;
 }
 
 interface GrantRow {
@@ -373,13 +375,16 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
                  AND tombstone.subject_id = subject.subject_id
              ) OR ${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME}(
                'provider_subject', subject.provider || ':' || subject.subject_id
-             ) AS tombstoned
+             ) AS tombstoned,
+             ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_resource_fenced(
+               $4::uuid, 'provider_subject', subject.subject_id
+             ) AS contact_authority_fenced
       FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects AS subject
       WHERE subject.principal_id = $1
         AND subject.provider = $2
         AND subject.subject_id = $3
       FOR UPDATE OF subject
-    `, [principalId, sessionProvider, sessionProviderSubjectId])
+    `, [principalId, sessionProvider, sessionProviderSubjectId, request.companionId])
       : { rows: [] as ProviderSubjectRow[] };
     const companions = await client.query<CompanionRow>(`
       SELECT companion_id, lifecycle, version, authority_generation, restore_state,
@@ -391,7 +396,10 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
              authority_generation, restore_state,
              ${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME}(
                'contact_binding', binding.binding_id::text
-             ) AS tombstoned
+             ) AS tombstoned,
+             ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_resource_fenced(
+               binding.companion_id, 'contact', binding.contact_id
+             ) AS contact_authority_fenced
       FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings AS binding
       WHERE binding.principal_id = $1 AND binding.companion_id = $2
       ORDER BY binding_id
@@ -430,6 +438,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
         ),
         restoreState: row.restore_state,
         tombstoned: row.tombstoned,
+        contactAuthorityFenced: row.contact_authority_fenced,
       })),
       companions: companions.rows.map(row => ({
         companionId: row.companion_id,
@@ -456,6 +465,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
         ),
         restoreState: row.restore_state,
         tombstoned: row.tombstoned,
+        contactAuthorityFenced: row.contact_authority_fenced,
       })),
       grants: grants.rows.map(row => ({
         grantId: row.grant_id,

@@ -22,6 +22,7 @@ export type AccountAuthorityTombstoneKind =
   | 'role_grant'
   | 'principal'
   | 'companion'
+  | 'contact_authority_fence'
   | 'companion_lineage_floor';
 
 export interface CompanionReaddFloorClaim {
@@ -191,6 +192,7 @@ function assertAccountAuthorityTombstoneKind(
     && value !== 'role_grant'
     && value !== 'principal'
     && value !== 'companion'
+    && value !== 'contact_authority_fence'
     && value !== 'companion_lineage_floor') {
     throw new Error(`Invalid fleet auth authority floor: ${field} is unknown`);
   }

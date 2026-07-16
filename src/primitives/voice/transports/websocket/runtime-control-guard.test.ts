@@ -146,7 +146,7 @@ function sessionEndAck(frames: VoiceWireOutboundFrame[]): VoiceWireOutboundFrame
 }
 
 describe('WebSocketVoiceRuntime deterministic control-intent guard (mmo9.7.5)', () => {
-  it.each(['stop', 'be quiet', 'wait', 'hold on', 'never mind'])(
+  it.each(['stop', 'be quiet', 'wait wait', 'hold on', 'never mind'])(
     'handles spoken control "%s" locally with zero model invocations',
     async (phrase) => {
       const harness = createControlHarness();
@@ -161,6 +161,32 @@ describe('WebSocketVoiceRuntime deterministic control-intent guard (mmo9.7.5)', 
       expect(playbackFrames(harness.outboundFrames)).toHaveLength(0);
     },
   );
+
+  it('guards a control that arrives as the second STT final (d8vq.1 multi-final coverage)', async () => {
+    const harness = createControlHarness();
+
+    // One STT session emitting two finals: earlier content, then a bare "stop".
+    // The joined transcript ("what time is it stop") is not a control, but the
+    // second final is — it must be guarded so ZERO model/synthesis calls fire.
+    await harness.runtime.handleFrame(harness.session, {
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'session.start',
+      sessionId: 'voice-1',
+    });
+    const queue = harness.sttQueues[harness.sttQueues.length - 1]!;
+    queue.push({ type: 'final', text: 'what time is it' });
+    queue.push({ type: 'final', text: 'stop' });
+    await harness.runtime.handleFrame(harness.session, {
+      wire: VOICE_WIRE_PROTOCOL,
+      type: 'session.end',
+      sessionId: 'voice-1',
+    });
+
+    expect(harness.onAssistantTurn).not.toHaveBeenCalled();
+    expect(harness.synthesizeStream).not.toHaveBeenCalled();
+    expect(sessionEndAck(harness.outboundFrames)).toBeDefined();
+    expect(playbackFrames(harness.outboundFrames)).toHaveLength(0);
+  });
 
   it('does not treat ordinary speech containing a control word as a control', async () => {
     const harness = createControlHarness();

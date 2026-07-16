@@ -444,6 +444,10 @@ export class DiscordVoiceRuntime {
     this.activeChannel = null;
     this.activeTurn = null;
     this.activeTurnId = null;
+    // psfn-framework-d8vq.1: the remembered reply is scoped to the channel
+    // session; clear it on leave so a rejoin cannot replay a pre-leave utterance
+    // on a later "repeat" control.
+    this.lastAssistantUtterance = null;
     this.capturing = false;
     this.decryptFailureGeneration = 0;
     this.decryptFailureCount = 0;

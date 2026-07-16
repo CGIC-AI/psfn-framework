@@ -324,7 +324,7 @@ export class WebSocketVoiceRuntime {
       // it locally with ZERO model invocations — it must never reach
       // onAssistantStream/onAssistantTurn. Detection is exact/local (no
       // classifier, no model call).
-      const controlIntent = classifyVoiceControlIntent(transcript);
+      const controlIntent = this.classifySessionControlIntent(state, transcript);
       if (controlIntent) {
         await this.handleControlIntent(state, controlIntent);
         this.throwIfInterrupted(state);
@@ -402,6 +402,33 @@ export class WebSocketVoiceRuntime {
       type: 'ack',
       ackType: 'interrupt',
     });
+  }
+
+  /**
+   * psfn-framework-d8vq.1: classify the session's finalized speech as a
+   * transport control, closing the multi-final coverage hole. A single STT
+   * session can emit more than one `final` (each pushed to `finalTranscripts`).
+   * The combined transcript is checked first — this preserves the existing
+   * single-final behavior and catches a control phrase split across finals
+   * ("hold" + "on" -> "hold on"). If the combined text is not a control, every
+   * individual final is checked so a control that arrives as one of several
+   * finals (e.g. "stop" as the second final after some earlier content) is still
+   * guarded and never leaks to the model. Detection stays exact/local — no
+   * classifier, no model call. First matching final wins (deterministic).
+   */
+  private classifySessionControlIntent(
+    state: RuntimeSessionState,
+    transcript: string,
+  ): VoiceControlIntent | null {
+    const combined = classifyVoiceControlIntent(transcript);
+    if (combined) return combined;
+
+    for (const finalTranscript of state.finalTranscripts) {
+      const intent = classifyVoiceControlIntent(finalTranscript);
+      if (intent) return intent;
+    }
+
+    return null;
   }
 
   /**

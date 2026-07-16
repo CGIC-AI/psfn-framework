@@ -13,6 +13,16 @@
  * still reaches the model. This is intentionally conservative: an unmatched
  * utterance falls through to the normal model turn (fail open toward the model
  * for content, fail closed toward zero-model handling only on an exact match).
+ *
+ * Phrase-set policy (psfn-framework-d8vq.1): bare single words that double as
+ * ordinary semantic verbs — "wait", "pause", "cancel", "again" — are NOT
+ * controls, because a user who says just "wait" or "again" as a complete
+ * conversational turn must still reach the model. Those words are reachable as
+ * controls only in an unambiguous multi-word/deictic form ("wait a second",
+ * "pause that", "cancel that", "say that again"). The core control words
+ * "stop", "interrupt", and "repeat" keep their bare forms — a lone "stop" /
+ * "repeat" in a voice session is overwhelmingly a transport control, not
+ * content.
  */
 
 export type VoiceControlIntent = 'stop' | 'interrupt' | 'repeat';
@@ -31,7 +41,8 @@ const STOP_PHRASES: ReadonlySet<string> = new Set([
   'shush',
   'hush',
   'shut up',
-  'cancel',
+  // 'cancel' (bare) dropped per d8vq.1 — reachable only as the deictic
+  // 'cancel that'; a lone "cancel" is too often conversational.
   'cancel that',
   'enough',
   'thats enough',
@@ -46,12 +57,14 @@ const STOP_PHRASES: ReadonlySet<string> = new Set([
  * distinct intent for telemetry/labeling.
  */
 const INTERRUPT_PHRASES: ReadonlySet<string> = new Set([
-  'wait',
+  // 'wait' and 'pause' (bare) dropped per d8vq.1 — a lone "wait" / "pause" is
+  // often a conversational turn ("wait, tell me more") and must reach the model.
+  // Reachable only in unambiguous multi-word / deictic forms below.
   'wait wait',
   'hold on',
   'hold up',
   'hang on',
-  'pause',
+  'pause that',
   'one moment',
   'one second',
   'just a moment',
@@ -72,7 +85,8 @@ const REPEAT_PHRASES: ReadonlySet<string> = new Set([
   'say again',
   'come again',
   'one more time',
-  'again',
+  // 'again' (bare) dropped per d8vq.1 — "again" alone is conversational
+  // ("again?", "do it again"); reachable via 'say that again' / 'say again' etc.
   'what did you say',
   'what was that',
   'can you repeat that',

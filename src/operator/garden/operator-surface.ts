@@ -31,6 +31,7 @@ import {
   GardenRequestTargetError,
   validateGardenRequestMetadata,
 } from '../../boundary/fleet-auth/request-capability-target.js';
+import { stripBrowserRequestCapabilityHeaders } from '../../boundary/fleet-auth/request-capability-transport.js';
 
 const log = createComponentLogger('GardenOperatorSurface');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -178,6 +179,7 @@ export class GardenOperatorSurface implements Lifecycle {
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    stripBrowserRequestCapabilityHeaders(req.headers);
     let target;
     try {
       target = validateGardenRequestMetadata({

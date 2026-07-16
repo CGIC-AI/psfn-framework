@@ -85,11 +85,14 @@ import {
   type ApiHttpServer,
   type ApiHttpServerTlsConfig,
 } from './server/http.js';
+import { stripBrowserRequestCapabilityHeaders } from '../../boundary/fleet-auth/request-capability-transport.js';
 import {
   resolveApiServerRequestPrincipal,
   validateApiServerAuthConfig,
 } from './server/auth.js';
 import { handleModelsEndpoint } from './server/models.js';
+import { FleetAuthChildAssertionHttpRoute } from './server/fleet-auth-child-assertion-route.js';
+import type { GatewayFleetAuthChildAssertionBroker } from '../../boundary/gateway/fleet-auth-child-assertions.js';
 import {
   handleCompanionApprovalDecision,
   handleCompanionArtifactPreview,
@@ -434,6 +437,8 @@ export interface ApiServerConfig {
   confirmationOperator?: ConfirmationOperatorPort;
   /** Gateway-only OAuth/session routes. Never constructed in operator/agent processes. */
   fleetAuthHttpRoutes?: FleetAuthHttpRoutes;
+  /** Signed-parent-authenticated operator-to-agent child assertion exchange. */
+  fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
   /** Fleet mode: expose browser lifecycle routes plus authenticated Hub device chat only. */
   fleetAuthBootstrapOnly?: boolean;
   /** Fleet-only authenticated Hub/device ingress. Absent fails the device route closed. */
@@ -486,6 +491,7 @@ export class ApiServer implements ChannelAdapterPort {
   private icpAutonomyOperator?: IcpAutonomyOperatorPort;
   private confirmationOperator?: ConfirmationOperatorPort;
   private fleetAuthHttpRoutes?: FleetAuthHttpRoutes;
+  private fleetAuthChildAssertionRoute?: FleetAuthChildAssertionHttpRoute;
   private fleetAuthBootstrapOnly: boolean;
   private hubDeviceIngress?: GatewayHubDeviceIngressService;
   private hubDeviceCompanionId?: string;
@@ -521,6 +527,9 @@ export class ApiServer implements ChannelAdapterPort {
     this.icpAutonomyOperator = config.icpAutonomyOperator;
     this.confirmationOperator = config.confirmationOperator;
     this.fleetAuthHttpRoutes = config.fleetAuthHttpRoutes;
+    this.fleetAuthChildAssertionRoute = config.fleetAuthChildAssertions
+      ? new FleetAuthChildAssertionHttpRoute(config.fleetAuthChildAssertions)
+      : undefined;
     this.fleetAuthBootstrapOnly = config.fleetAuthBootstrapOnly === true;
     this.hubDeviceIngress = config.hubDeviceIngress;
     this.hubDeviceCompanionId = config.hubDeviceCompanionId;
@@ -614,6 +623,7 @@ export class ApiServer implements ChannelAdapterPort {
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    stripBrowserRequestCapabilityHeaders(req.headers);
     if (this.fleetAuthBootstrapOnly) {
       this.voiceWebSocket.rejectUnknownUpgrade(socket);
       return;
@@ -625,6 +635,7 @@ export class ApiServer implements ChannelAdapterPort {
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
+    stripBrowserRequestCapabilityHeaders(req.headers);
     const requestTargetPath = (req.url ?? '/').split('?', 1)[0] ?? '/';
     const fleetAuthCors = this.fleetAuthHttpRoutes
       ?.applyLifecycleCorsPolicy(req, res, requestTargetPath) ?? 'not_applicable';
@@ -634,6 +645,10 @@ export class ApiServer implements ChannelAdapterPort {
 
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
+    if (this.fleetAuthChildAssertionRoute?.matches(req.method, path)) {
+      void this.fleetAuthChildAssertionRoute.handle(req, res);
+      return;
+    }
     if (this.fleetAuthHttpRoutes?.matches(req.method, path)) {
       void this.fleetAuthHttpRoutes.handle(req, res, url);
       return;

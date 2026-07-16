@@ -55,8 +55,13 @@ import type { HubDeviceHumanAttachmentPort } from '../../../boundary/fleet-auth/
 import { PostgresHubDeviceHumanAttachmentStore } from './hub-device-human-attachment-store.js';
 import {
   createGatewayRequestCapabilitySigner,
+  createRequestCapabilityVerifier,
   type GatewayRequestCapabilitySigner,
 } from '../../../boundary/fleet-auth/request-capability.js';
+import type { RequestCapabilityReplayPort } from '../../../boundary/fleet-auth/request-capability-replay.js';
+import { PostgresRequestCapabilityReplayStore } from './request-capability-replay.js';
+import { GatewayFleetAuthChildAssertionBroker } from '../../../boundary/gateway/fleet-auth-child-assertions.js';
+import { PostgresChildAssertionAuthority } from './child-assertion-authority.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -68,6 +73,8 @@ export interface GatewayFleetAuthPersistence {
   authorityFloors: FleetAuthAuthorityFloorStore;
   broker: GatewayFleetAuthBroker;
   requestCapabilities: GatewayRequestCapabilitySigner;
+  requestCapabilityReplay: RequestCapabilityReplayPort;
+  childAssertions: GatewayFleetAuthChildAssertionBroker;
   authorityLifecycle: GatewayFleetAuthAuthorityLifecycleStore;
   contactLifecycleAuthority: GatewayContactLifecycleAuthorityPort;
   discordEvidence?: DiscordEvidenceRuntime;
@@ -321,6 +328,11 @@ export async function initializeGatewayFleetAuthPersistence(options: {
     privateKeyPem: secrets.assertionPrivateKeyPem,
     ttlSeconds: config.ttls.internalAssertionMs / 1_000,
   });
+  const requestCapabilityVerifier = createRequestCapabilityVerifier({
+    issuer: activeRequestCapabilityKey.issuer,
+    maxTtlSeconds: config.ttls.internalAssertionMs / 1_000,
+    keys: config.verifierKeys,
+  });
   await migrateFleetAuthSchema({
     databaseUrl: secrets.database.migrationUrl,
     roles: config.databaseRoles,
@@ -425,10 +437,19 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       pool,
       resolveAuthorizationContext: input => broker.resolveAuthorizationContext(input),
     });
+    const requestCapabilityReplay = new PostgresRequestCapabilityReplayStore(pool);
+    const childAssertions = new GatewayFleetAuthChildAssertionBroker({
+      verifier: requestCapabilityVerifier,
+      signer: requestCapabilities,
+      replay: requestCapabilityReplay,
+      authority: new PostgresChildAssertionAuthority(pool, config, accountAuthority),
+    });
     return {
       authorityFloors,
       broker,
       requestCapabilities,
+      requestCapabilityReplay,
+      childAssertions,
       authorityLifecycle,
       contactLifecycleAuthority,
       ...(discordEvidence ? { discordEvidence } : {}),

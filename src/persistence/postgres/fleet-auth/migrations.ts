@@ -1194,6 +1194,42 @@ CREATE INDEX hub_device_human_attachments_human_session_idx
   WHERE session_record_id IS NOT NULL;
 `;
 
+const REQUEST_CAPABILITY_REPLAY_SQL = `
+CREATE TABLE request_capability_consumptions (
+  issuer TEXT NOT NULL CHECK (length(issuer) BETWEEN 1 AND 128),
+  jti TEXT NOT NULL CHECK (length(jti) BETWEEN 1 AND 256),
+  capability_digest TEXT NOT NULL CHECK (capability_digest ~ '^[0-9a-f]{64}$'),
+  target_digest TEXT NOT NULL CHECK (target_digest ~ '^[0-9a-f]{64}$'),
+  body_digest TEXT NOT NULL CHECK (body_digest ~ '^[0-9a-f]{64}$'),
+  audience_digest TEXT NOT NULL CHECK (audience_digest ~ '^[0-9a-f]{64}$'),
+  companion_digest TEXT NOT NULL CHECK (companion_digest ~ '^[0-9a-f]{64}$'),
+  action_digest TEXT NOT NULL CHECK (action_digest ~ '^[0-9a-f]{64}$'),
+  resource_digest TEXT NOT NULL CHECK (resource_digest ~ '^[0-9a-f]{64}$'),
+  parent_digest TEXT NOT NULL CHECK (parent_digest ~ '^[0-9a-f]{64}$'),
+  decision_digest TEXT NOT NULL CHECK (decision_digest ~ '^[0-9a-f]{64}$'),
+  authority_versions_digest TEXT NOT NULL CHECK (authority_versions_digest ~ '^[0-9a-f]{64}$'),
+  consume_result JSONB NOT NULL CHECK (jsonb_typeof(consume_result) = 'object'),
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  replay_count BIGINT NOT NULL DEFAULT 0 CHECK (replay_count >= 0),
+  last_replayed_at TIMESTAMPTZ,
+  mismatch_count BIGINT NOT NULL DEFAULT 0 CHECK (mismatch_count >= 0),
+  last_mismatch_digest TEXT CHECK (
+    last_mismatch_digest IS NULL OR last_mismatch_digest ~ '^[0-9a-f]{64}$'
+  ),
+  last_mismatch_at TIMESTAMPTZ,
+  PRIMARY KEY (issuer, jti)
+);
+
+CREATE INDEX request_capability_consumptions_expiry_idx
+  ON request_capability_consumptions (expires_at);
+
+CREATE UNIQUE INDEX authorization_audit_request_capability_mutated_replay_unique
+  ON authorization_audit_events (correlation_id)
+  WHERE action = 'request_capability.consume'
+    AND reason_code = 'request_capability_mutated_replay';
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
@@ -1225,4 +1261,5 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
     sql: `${CONTACT_AUTHORITY_FLOOR_KIND_SQL}\n${FLEET_AUTH_CONTACT_AUTHORITY_DDL_SQL}`,
   },
   { version: 22, name: 'hub_device_human_attachment_ledger', sql: HUB_DEVICE_HUMAN_ATTACHMENT_SQL },
+  { version: 23, name: 'request_capability_replay_ledger', sql: REQUEST_CAPABILITY_REPLAY_SQL },
 ] as const;

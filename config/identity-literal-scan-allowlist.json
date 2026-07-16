@@ -1,6 +1,12 @@
 {
   "entries": [
     {
+      "path": "src/boundary/fleet-auth/request-capability-transport.ts",
+      "contains": "x-psfn-",
+      "reason": "Internal request-capability headers use the established project protocol namespace and are stripped at browser-facing listeners.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "admin-ui/src/app.css",
       "contains": "PSFN's Garden",
       "reason": "Legacy UI branding pending follow-up customization epic.",

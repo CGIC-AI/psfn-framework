@@ -6,6 +6,7 @@ import {
   compileOperatorGardenRequestTarget,
   GardenRequestTargetError,
   parseCanonicalGardenRequestPath,
+  validateGardenRequestMetadata,
 } from './request-capability-target.js';
 
 const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
@@ -108,6 +109,21 @@ describe('Garden fleet request capability target', () => {
       body: Buffer.from('{"workspacePath":"/other"}'),
       headers: { 'content-type': 'application/json' },
     })).toThrow(/authority body field/u);
+  });
+
+  it.each(['capability', 'assertion', 'jti', 'parent', 'request_capability', 'token'])(
+    'forbids WebSocket/query authority field %s before route dispatch',
+    (field) => {
+      expect(() => compile(`/api/admin/images/generated?${field}=forged`))
+        .toThrow(/authority selector/u);
+    },
+  );
+
+  it('forbids capability authority in a declared WebSocket query', () => {
+    expect(() => validateGardenRequestMetadata({
+      rawTarget: '/api/admin/events?capability=forged',
+      method: 'WS',
+    })).toThrow(/authority selector/u);
   });
 
   it('rejects body-policy violations', () => {

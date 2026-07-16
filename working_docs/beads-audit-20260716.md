@@ -641,3 +641,9 @@ Repo state: on branch `main` @ `de2ad7331b` (prompt's `402b3ba53e` is stale). `m
 - REFUTED-KEEP: 0
 
 Note: y6q1's embedded audit note claiming "no implementation exists" is stale (dated 2026-06-28); the feature was implemented and wired afterward. lpro/mmo9.7 verified via both child status and independent parent-AC evidence.
+
+## Addendum — small-fix wave (PR #91, merged 2026-07-16)
+
+Operator-directed follow-up: nine few-line no-seam fixes implemented, gated (UBS clean on changed lines; blind Pi review 0 blockers/0 important), merged as PR #91 and closed: x5rt.11, adwu, 68ou, ktvo, e7s0, yszc, o968 (scoped; repo-wide fixture sweep = upx0.4), 36dm, dq9c. Also closed on operator confirmation: 2tlk, b5m (b5m.5 stays deferred). New process beads: 5z6q (agent-tooling epic, six Hermes/Codex orphans reparented), wof1 (regression-test gate), u7h8 (docs update), cwbv (bead naming convention).
+
+Nonblocking review observations (Pi, minors): (1) ready-notification dedupe can suppress a legitimate announcement on a genuine crash-restart under the same image tag within 15 min — accepted trade-off; (2) the 500-char follow-up truncation can split a UTF-16 surrogate pair at the boundary (cosmetic U+FFFD, no crash); (3) beads-gate roots could diverge from gateway only under exotic cwd mismatch, and any divergence is fail-safe; (4) fictional persona names remain in ~20 untouched test files — confirm intentional cast vs purge scope (upx0.4).

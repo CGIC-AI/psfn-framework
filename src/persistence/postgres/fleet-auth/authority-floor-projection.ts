@@ -24,9 +24,16 @@ export async function replaceAccountAuthorityFloorProjection(
       : null;
     await client.query(`
       INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authority_floor_tombstone_projection
-        (kind, resource_hash, authority_generation, companion_lineage_id)
-      VALUES ($1, $2, $3, $4)
-    `, [tombstone.kind, tombstone.resourceHash, tombstone.generation, lineageId]);
+        (kind, resource_hash, authority_generation, companion_lineage_id,
+         companion_readd_decision_id)
+      VALUES ($1, $2, $3, $4, $5)
+    `, [
+      tombstone.kind,
+      tombstone.resourceHash,
+      tombstone.generation,
+      lineageId,
+      tombstone.companionReadd?.decisionId ?? null,
+    ]);
   }
 }
 
@@ -35,20 +42,24 @@ export async function appendAccountAuthorityFloorProjection(
   resources: ReadonlyArray<{ kind: AccountAuthorityTombstoneKind; resourceId: string }>,
   authorityGeneration: number,
   companionLineageId?: string,
+  companionReaddDecisionId?: string,
 ): Promise<void> {
   for (const resource of resources) {
     await client.query(`
       INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authority_floor_tombstone_projection
-        (kind, resource_hash, authority_generation, companion_lineage_id)
-      VALUES ($1, $2, $3, $4)
+        (kind, resource_hash, authority_generation, companion_lineage_id,
+         companion_readd_decision_id)
+      VALUES ($1, $2, $3, $4, $5)
       ON CONFLICT (kind, resource_hash) DO UPDATE
       SET authority_generation = EXCLUDED.authority_generation,
-          companion_lineage_id = EXCLUDED.companion_lineage_id
+          companion_lineage_id = EXCLUDED.companion_lineage_id,
+          companion_readd_decision_id = EXCLUDED.companion_readd_decision_id
     `, [
       resource.kind,
       digest(resource.resourceId),
       authorityGeneration,
       resource.kind === 'companion_lineage_floor' ? companionLineageId : null,
+      resource.kind === 'companion_lineage_floor' ? companionReaddDecisionId : null,
     ]);
   }
 }

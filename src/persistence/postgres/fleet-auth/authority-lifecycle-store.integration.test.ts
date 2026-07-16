@@ -270,16 +270,29 @@ function baseDecision(
 }
 
 async function seedOwnerAndTarget(pool: import('pg').Pool) {
+  if (!harness) throw new Error('Postgres harness unavailable');
   const actorId = randomUUID();
   const targetId = randomUUID();
   const companionId = randomUUID();
   const actorContactId = randomUUID();
   const targetContactId = randomUUID();
-  await pool.query(`
-    INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
-      (companion_id, lifecycle, authority_generation)
-    VALUES ($1, 'active', 1)
-  `, [companionId]);
+  const database = await pool.query<{ current_database: string }>(
+    'SELECT current_database() AS current_database',
+  );
+  const databaseName = database.rows.at(0)?.current_database;
+  if (!databaseName) throw new Error('Lifecycle fixture database identity is unavailable');
+  const ownerUrl = new URL(harness.adminDatabaseUrl);
+  ownerUrl.pathname = `/${databaseName}`;
+  const owner = createPostgresPool(roleUrl(ownerUrl.toString(), ROLES.migration), { max: 1 });
+  try {
+    await owner.query(`
+      INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+        (companion_id, lifecycle, authority_generation)
+      VALUES ($1, 'active', 1)
+    `, [companionId]);
+  } finally {
+    await owner.end();
+  }
   await pool.query(`
     INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
       (principal_id, status, authority_generation)
@@ -914,7 +927,7 @@ describe('gateway fleet-auth authority lifecycle store', () => {
             for (const statement of statements) {
               await attacker.query(statement, [seeded.companionId]);
             }
-          })()).rejects.toThrow(/reapprove_companion_authority/i);
+          })()).rejects.toThrow(/permission denied|reapprove_companion_authority/i);
         } finally {
           await attacker.query('ROLLBACK');
           attacker.release();
@@ -940,6 +953,23 @@ describe('gateway fleet-auth authority lifecycle store', () => {
       await attempt([
         `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
          SET version = version + 1 WHERE companion_id = $1`,
+      ]);
+      await attempt([
+        `DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+         WHERE companion_id = $1`,
+      ]);
+      await attempt([
+        `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+         SET companion_id = gen_random_uuid() WHERE companion_id = $1`,
+      ]);
+      await attempt([
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+           (companion_id, lifecycle, version, authority_generation, restore_state)
+         SELECT gen_random_uuid(), 'active', version, authority_generation, 'live'
+         FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+         WHERE companion_id = $1
+         ON CONFLICT (companion_id) DO UPDATE
+         SET lifecycle = EXCLUDED.lifecycle, restore_state = EXCLUDED.restore_state`,
       ]);
 
       const durable = await context.pool.query<{

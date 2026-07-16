@@ -949,6 +949,11 @@ ALTER TABLE trusted_host_ceremonies
   );
 `;
 
+const COMPANION_RESTORE_PROJECTION_SQL = `
+ALTER TABLE authority_floor_tombstone_projection
+  ADD COLUMN companion_readd_decision_id UUID;
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
@@ -965,4 +970,5 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 13, name: 'atomic_authority_lifecycle', sql: ATOMIC_AUTHORITY_LIFECYCLE_SQL },
   { version: 14, name: 'lifecycle_oauth_purpose', sql: LIFECYCLE_OAUTH_PURPOSE_SQL },
   { version: 15, name: 'companion_authority_lineage', sql: COMPANION_AUTHORITY_LINEAGE_SQL },
+  { version: 16, name: 'companion_restore_projection', sql: COMPANION_RESTORE_PROJECTION_SQL },
 ] as const;

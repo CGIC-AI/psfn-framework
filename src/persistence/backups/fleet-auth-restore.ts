@@ -20,6 +20,7 @@ import {
   assertFleetAuthBackupRestorePrivileges,
   type FleetAuthDatabaseRoles,
 } from '../postgres/fleet-auth/schema.js';
+import { FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME } from '../postgres/fleet-auth/companion-restore-sql.js';
 
 const RESTORE_LOCK_CLASS = 0x5053464e;
 const RESTORE_LOCK_ID = 0x52535452;
@@ -402,6 +403,7 @@ async function importDurableRows(
   floor: FleetAuthAuthorityFloor,
   floors: FleetAuthAuthorityFloorStore,
   restoredAt: string,
+  restoreAuditEventId: string,
 ): Promise<number> {
   let importedRows = 0;
   const record = async (query: Promise<number>): Promise<void> => {
@@ -448,36 +450,42 @@ async function importDurableRows(
   for (const [index, row] of durable.companionAuthorityState.entries()) {
     const lineage = admittedRestoredCompanionLineage(row, index, floor, floors);
     const values = [
-      row.companion_id, row.version, floor.trustedHost.authorityGeneration,
-      lineage.lineageId, lineage.lineageGeneration, lineage.readdDecisionId,
-      row.created_at, restoredAt,
+      row.companion_id,
+      row.version,
+      lineage.lineageId,
+      lineage.lineageGeneration,
+      lineage.readdDecisionId,
+      row.created_at,
+      restoredAt,
+      floor.trustedHost.lineageId,
+      floor.trustedHost.authorityGeneration,
+      floor.trustedHost.restoreCheckpoint,
+      restoreAuditEventId,
     ];
     await record(insertOrAssertCompatibleConflict({
       client,
       insertSql: `
-        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
-          (companion_id, lifecycle, version, authority_generation, restore_state,
-           authority_lineage_id, lineage_generation, readd_decision_id,
-           created_at, updated_at)
-        VALUES ($1, 'quarantined', $2, $3, 'quarantined', $4, $5, $6, $7, $8)
-        ON CONFLICT DO NOTHING
+        SELECT 1
+        WHERE ${FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME}(
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
+        )
       `,
       insertValues: values,
       compatibilitySql: `
         SELECT EXISTS (
           SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
           WHERE companion_id = $1::uuid AND version >= $2::bigint
-            AND authority_generation <= $3::bigint
-            AND ($4::text IS NULL OR (
-              authority_lineage_id = $4
-              AND lineage_generation = $5::bigint
-              AND readd_decision_id = $6::uuid
+            AND authority_generation <= $9::bigint
+            AND ($3::text IS NULL OR (
+              authority_lineage_id = $3
+              AND lineage_generation = $4::bigint
+              AND readd_decision_id = $5::uuid
             ))
-            AND created_at <= $7::timestamptz
+            AND created_at <= $6::timestamptz
           FOR UPDATE
         ) AS compatible
       `,
-      compatibilityValues: values.slice(0, 7),
+      compatibilityValues: values.slice(0, 9),
       description: 'companion authority state',
     }));
   }
@@ -854,17 +862,21 @@ async function executeVerifiedFleetAuthSnapshot(
       restoredTombstones,
       at: restoredAt,
     });
+    // Establish the exact current singleton and floor projection before the
+    // bounded companion importer validates any restored lineage tuple.
+    const restoreAuditEventId = randomUUID();
+    await reconcileFleetAuthAuthorityStateInTransaction(
+      client,
+      preparedFloor,
+      restoreAuditEventId,
+    );
     const importedRows = await importDurableRows(
       client,
       snapshot.durable,
       preparedFloor,
       options.authorityFloors,
       restoredAt,
-    );
-    await reconcileFleetAuthAuthorityStateInTransaction(
-      client,
-      preparedFloor,
-      randomUUID(),
+      restoreAuditEventId,
     );
     await client.query(verificationOnly ? 'ROLLBACK' : 'COMMIT');
     return {

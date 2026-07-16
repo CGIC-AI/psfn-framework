@@ -127,6 +127,7 @@ describe('Ed25519 hop request capabilities', () => {
       decisionId: DECISION_ID,
       jti: JTI,
       targetDigest: compiled.targetDigest,
+      authorizationDigest: compiled.authorizationDigest,
       issuedAt: NOW,
       notBefore: NOW,
       expiresAt: NOW + 30,
@@ -222,13 +223,56 @@ describe('Ed25519 hop request capabilities', () => {
     })).toThrow(/authority versions do not match/u);
   });
 
-  it.each(['jti', 'target_digest', 'body_digest', 'decision_id'])('rejects forged %s claims', (field) => {
+  it.each([
+    'jti', 'target_digest', 'authorization_digest', 'body_digest', 'decision_id',
+  ])('rejects forged %s claims', (field) => {
     const token = signer().signOperator(binding());
     const decoded = parseToken(token);
     decoded.claims[field] = field.endsWith('digest') ? '0'.repeat(64) : 'forged-value';
     const forged = encodeToken({ ...decoded, claims: decoded.claims });
     expect(() => verifier().verifyOperator({ token: forged, ...binding(), nowSeconds: NOW }))
       .toThrow(/signature is invalid/u);
+  });
+
+  it('requires the signed authorization digest and rejects stale or changed route classification', () => {
+    const compiled = target();
+    const token = signer().signOperator(binding(compiled));
+    const decoded = parseToken(token);
+
+    const missingDigestClaims = { ...decoded.claims };
+    delete missingDigestClaims.authorization_digest;
+    const missingDigest = encodeToken({
+      ...decoded,
+      claims: missingDigestClaims,
+      resign: true,
+    });
+    expect(() => verifier().verifyOperator({
+      token: missingDigest,
+      ...binding(compiled),
+      nowSeconds: NOW,
+    })).toThrow(/invalid shape/u);
+
+    const changedDigest = encodeToken({
+      ...decoded,
+      claims: { ...decoded.claims, authorization_digest: '0'.repeat(64) },
+      resign: true,
+    });
+    expect(() => verifier().verifyOperator({
+      token: changedDigest,
+      ...binding(compiled),
+      nowSeconds: NOW,
+    })).toThrow(/request target binding does not match/u);
+
+    const changedClassification = {
+      ...compiled,
+      authorization: { ...compiled.authorization, baseRole: 'owner' as const },
+    };
+    expect(() => signer().signOperator(binding(changedClassification)))
+      .toThrow(/classification does not match/u);
+    expect(() => signer().signOperator(binding({
+      ...compiled,
+      authorizationDigest: '0'.repeat(64),
+    }))).toThrow(/authorization digest does not match/u);
   });
 
   it('rejects malformed, padded-signature, and signed noncanonical encodings', () => {

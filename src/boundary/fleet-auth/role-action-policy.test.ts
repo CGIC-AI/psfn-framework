@@ -69,6 +69,7 @@ describe('canonical fleet role/action policy', () => {
         'values.read',
         'wiki.read',
         'wiki.manage',
+        'privacy.break_glass',
         'devices.manage',
       ],
       owner: ['roles.manage', 'provider.link'],

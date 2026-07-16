@@ -1,8 +1,12 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
-import type { FleetJitStepUpCoordinator } from '../../../boundary/fleet-auth/jit-step-up.js';
 import {
+  FleetJitStepUpError,
+  type FleetJitStepUpCoordinator,
+} from '../../../boundary/fleet-auth/jit-step-up.js';
+import {
+  FLEET_AUTH_JIT_DISCORD_START_PATH,
   FLEET_AUTH_JIT_WEBAUTHN_START_PATH,
   FleetAuthJitHttpRoutes,
 } from './fleet-auth-jit-routes.js';
@@ -185,5 +189,82 @@ describe('FleetAuthJitHttpRoutes', () => {
       requestOrigin: 'https://fleet.example.test',
     })).rejects.toMatchObject({ code: 'invalid_jit_request', status: 400 });
     expect(elevation.startWebAuthn).not.toHaveBeenCalled();
+  });
+
+  it('derives privacy break-glass authority only from one exact confirm target', async () => {
+    const breakGlassBody = {
+      reasonCategory: 'incident_response',
+      reason: 'Contain an active account compromise.',
+    };
+    const startBody = {
+      companionId: '11111111-1111-4111-8111-111111111111',
+      method: 'POST',
+      target: '/api/admin/privacy-break-glass/memory/memory-b/confirm',
+      bodyBase64url: Buffer.from(JSON.stringify(breakGlassBody), 'utf8').toString('base64url'),
+    };
+    const accepted = coordinator();
+    await new FleetAuthJitHttpRoutes(accepted.value).handle({
+      request: request(startBody),
+      response: response(),
+      path: FLEET_AUTH_JIT_WEBAUTHN_START_PATH,
+      token: 'session',
+      csrfToken: 'csrf',
+      requestOrigin: 'https://fleet.example.test',
+    });
+    expect(accepted.startWebAuthn).toHaveBeenCalledWith(expect.objectContaining({
+      binding: expect.objectContaining({
+        target: expect.objectContaining({
+          action: 'privacy.break_glass',
+          authorization: expect.objectContaining({
+            requirements: expect.objectContaining({ assurance: 'privacy_break_glass' }),
+          }),
+        }),
+        subjectScopeDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        purpose: expect.stringContaining('incident_response'),
+        memoryRevision: 1,
+        classifierEvidenceDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+      }),
+    }));
+
+    for (const invalid of [
+      { ...startBody, subjectScopeDigest: 'a'.repeat(64) },
+      { ...startBody, purpose: 'browser authority' },
+      { ...startBody, target: '/api/admin/privacy-break-glass/memory/memory-b/decide' },
+    ]) {
+      const denied = coordinator();
+      await expect(new FleetAuthJitHttpRoutes(denied.value).handle({
+        request: request(invalid),
+        response: response(),
+        path: FLEET_AUTH_JIT_WEBAUTHN_START_PATH,
+        token: 'session',
+        csrfToken: 'csrf',
+        requestOrigin: 'https://fleet.example.test',
+      })).rejects.toMatchObject({ code: 'invalid_jit_request', status: 400 });
+      expect(denied.startWebAuthn).not.toHaveBeenCalled();
+    }
+  });
+
+  it('cannot turn Discord possession into privacy break-glass authority', async () => {
+    const fixture = coordinator();
+    fixture.value.startDiscordPossession = vi.fn().mockRejectedValue(new FleetJitStepUpError(
+      'strong_assurance_required',
+      'Privacy break-glass requires UV WebAuthn',
+    ));
+    await expect(new FleetAuthJitHttpRoutes(fixture.value).handle({
+      request: request({
+        companionId: '11111111-1111-4111-8111-111111111111',
+        method: 'POST',
+        target: '/api/admin/privacy-break-glass/profile/contact-b/confirm',
+        bodyBase64url: Buffer.from(JSON.stringify({
+          reasonCategory: 'safety_intervention',
+          reason: 'Immediate welfare check.',
+        }), 'utf8').toString('base64url'),
+      }),
+      response: response(),
+      path: FLEET_AUTH_JIT_DISCORD_START_PATH,
+      token: 'session',
+      csrfToken: 'csrf',
+      requestOrigin: 'https://fleet.example.test',
+    })).rejects.toMatchObject({ code: 'strong_assurance_required', status: 403 });
   });
 });

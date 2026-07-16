@@ -79,6 +79,25 @@ describe('Garden route capability catalogue', () => {
     });
     expect(resolveGardenRouteCapability('WS', '/api/admin/events')?.capability.authorization)
       .toMatchObject({ action: 'telemetry.read', baseRole: 'admin' });
+    expect(resolveGardenRouteCapability(
+      'POST',
+      '/api/admin/privacy-break-glass/memory/memory-a/confirm',
+    )?.capability).toMatchObject({
+      body: { mode: 'required' },
+      authorization: {
+        action: 'privacy.break_glass',
+        baseRole: 'admin',
+        subjectRelation: 'none',
+        requirements: { assurance: 'privacy_break_glass', confirmation: 'explicit' },
+      },
+    });
+    expect(resolveGardenRouteCapability(
+      'POST',
+      '/api/admin/privacy-break-glass/memory/memory-a/decide',
+    )?.capability.authorization).toMatchObject({
+      action: 'privacy.break_glass',
+      requirements: { assurance: 'oauth', confirmation: 'explicit' },
+    });
   });
 
   it('fails construction for an active route without an exact catalogue declaration', () => {

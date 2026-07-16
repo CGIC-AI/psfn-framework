@@ -35,9 +35,17 @@ import {
 import type { GatewayFleetAuthBroker } from './fleet-auth-broker.js';
 import type {
   FleetJitGrantBinding,
+  FleetJitRequestBinding,
   FleetJitStepUpCoordinator,
 } from '../fleet-auth/jit-step-up.js';
 import { parseMemorySubjectJitRequest } from '../../shared/contracts/memory-subject-jit.js';
+import {
+  isPrivacyBreakGlassConfirmRoute,
+  parsePrivacyBreakGlassConfirmRequest,
+  privacyBreakGlassPurpose,
+  privacyBreakGlassResourceKindForRoute,
+  privacyBreakGlassSubjectScopeDigest,
+} from '../../shared/contracts/privacy-break-glass.js';
 import { createSpiffeCheckServerIdentity } from '../../shared/net/mtls.js';
 import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
@@ -573,7 +581,11 @@ export class GatewayFleetSsoRouter {
     const rawJitGrantId = singleHeader(input.headers[FLEET_JIT_GRANT_HEADER]);
     const isMemoryReveal = target.action === 'memory.jit.self'
       && target.resource.routeId === 'POST /api/admin/memory/:id/reveal';
-    if (!isMemoryReveal && rawJitGrantId !== undefined) {
+    const isPrivacyConfirm = target.action === 'privacy.break_glass'
+      && isPrivacyBreakGlassConfirmRoute(target.resource.routeId)
+      && target.authorization.requirements.assurance === 'privacy_break_glass';
+    const isJitTarget = isMemoryReveal || isPrivacyConfirm;
+    if (!isJitTarget && rawJitGrantId !== undefined) {
       throw new FleetSsoRequestError(404, 'Resource not found');
     }
     const requestId = randomUUID();
@@ -593,13 +605,40 @@ export class GatewayFleetSsoRouter {
     const decisionId = context.provenance.authorizationEventId;
     const versions = authorityVersions(context);
     let consumedJit: FleetJitGrantBinding | undefined;
-    if (isMemoryReveal) {
+    if (isJitTarget) {
       if (!rawJitGrantId || !isRfc4122Uuid(rawJitGrantId) || !this.options.jitStepUp) {
         throw new FleetSsoRequestError(404, 'Resource not found');
       }
-      let jitRequest;
+      let binding: FleetJitRequestBinding;
       try {
-        jitRequest = parseMemorySubjectJitRequest(JSON.parse(input.body.toString('utf8')));
+        if (isMemoryReveal) {
+          const jitRequest = parseMemorySubjectJitRequest(JSON.parse(input.body.toString('utf8')));
+          binding = {
+            target,
+            subjectScopeDigest: jitRequest.subjectScopeDigest,
+            purpose: jitRequest.purpose,
+            memoryRevision: jitRequest.memoryRevision,
+            classifierEvidenceDigest: jitRequest.classifierEvidenceDigest,
+          };
+        } else {
+          const resourceKind = privacyBreakGlassResourceKindForRoute(target.resource.routeId);
+          const resourceId = target.resource.pathParams.id;
+          if (!resourceKind || !resourceId) throw new Error('Privacy resource is incomplete');
+          const request = parsePrivacyBreakGlassConfirmRequest(JSON.parse(input.body.toString('utf8')));
+          binding = {
+            target,
+            subjectScopeDigest: privacyBreakGlassSubjectScopeDigest({
+              companionId: target.companionId,
+              action: target.action,
+              routeId: target.resource.routeId,
+              resourceKind,
+              resourceId,
+            }),
+            purpose: privacyBreakGlassPurpose(request),
+            memoryRevision: 1,
+            classifierEvidenceDigest: target.resourceDigest,
+          };
+        }
       } catch {
         throw new FleetSsoRequestError(404, 'Resource not found');
       }
@@ -608,13 +647,7 @@ export class GatewayFleetSsoRouter {
           grantId: rawJitGrantId,
           token: input.sessionToken,
           requestOrigin: this.options.canonicalOrigin,
-          binding: {
-            target,
-            subjectScopeDigest: jitRequest.subjectScopeDigest,
-            purpose: jitRequest.purpose,
-            memoryRevision: jitRequest.memoryRevision,
-            classifierEvidenceDigest: jitRequest.classifierEvidenceDigest,
-          },
+          binding,
         });
       } catch {
         throw new FleetSsoRequestError(404, 'Resource not found');
@@ -633,7 +666,10 @@ export class GatewayFleetSsoRouter {
       requestId,
       decisionId,
       authContext: consumedJit
-        ? Object.freeze({ ...authContext, sessionAssurance: 'webauthn_uv' as const })
+        ? Object.freeze({
+          ...authContext,
+          sessionAssurance: isPrivacyConfirm ? 'break_glass' as const : 'webauthn_uv' as const,
+        })
         : authContext,
       versions,
     });

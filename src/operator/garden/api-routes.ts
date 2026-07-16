@@ -92,6 +92,8 @@ import type { GroupMemoryBackfillInput } from '../../faculties/memory/extraction
 import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import { buildAdminSharedWorkspaceRoutes } from './api-routes-shared-workspace.js';
 import type { GardenRequestContext } from './garden-request-context.js';
+import { buildAdminPrivacyBreakGlassRoutes } from './routes/privacy-break-glass-routes.js';
+import type { AdminPrivacyBreakGlassService } from './services/privacy-break-glass-service.js';
 
 export type { AdminApiRoute, AuthorizedAdminApiRoute } from './routes/types.js';
 
@@ -272,6 +274,7 @@ export function buildAdminApiRoutes(options: {
   episodicMemoryService?: AdminEpisodicMemoryService | null;
   groupMemoryService?: AdminGroupMemoryService | null;
   memoryService: AdminMemoryService;
+  privacyBreakGlassService?: AdminPrivacyBreakGlassService | null;
   sessionService: AdminSessionService;
   contactsService: AdminContactsService;
   pendingContactsService?: AdminPendingContactsService | null;
@@ -327,6 +330,7 @@ export function buildAdminApiRoutes(options: {
     episodicMemoryService,
     groupMemoryService,
     memoryService,
+    privacyBreakGlassService,
     sessionService,
     contactsService,
     pendingContactsService,
@@ -780,6 +784,11 @@ export function buildAdminApiRoutes(options: {
     },
     ...buildAdminSessionRoutes({ sessionService, withBody }),
     ...buildAdminContactRoutes({ contactsService, withBody }),
+    ...buildAdminPrivacyBreakGlassRoutes({
+      service: privacyBreakGlassService,
+      appendAuditTimelineEntry,
+      withBody,
+    }),
     ...(pendingContactsService
       ? buildAdminContactApprovalRoutes({ pendingContactsService })
       : []),

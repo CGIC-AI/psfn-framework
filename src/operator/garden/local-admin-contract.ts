@@ -105,6 +105,7 @@ import { AdminGroupMemoryDataService } from './services/group-memory-diagnostics
 import { AdminIdentityDataService } from './services/identity-service.js';
 import { AdminImagesDataService } from './services/images-service.js';
 import { AdminMemoryDataService } from './services/memory-service.js';
+import { AdminPrivacyBreakGlassService } from './services/privacy-break-glass-service.js';
 import { AdminModelUsageDataService } from './services/model-usage-service.js';
 import {
   AdminObserverEvalSidecarDataService,
@@ -456,6 +457,10 @@ export function createInProcessGardenAdminContract(
           ...(requestContext ? { requestContext } : {}),
         });
       },
+    }),
+    privacyBreakGlass: new AdminPrivacyBreakGlassService({
+      memoryStore: options.memoryStore,
+      confirmTtlMs: Math.min(options.config.fleetAuth?.ttls.jitGrantMs ?? 120_000, 120_000),
     }),
     sessions: new AdminSessionDataService({
       sessionStore: options.sessionStore,

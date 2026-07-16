@@ -182,6 +182,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       episodicMemoryService: deps.services.episodicMemory,
       groupMemoryService: deps.services.groupMemory,
       memoryService: deps.services.memory,
+      privacyBreakGlassService: deps.services.privacyBreakGlass,
       sessionService: deps.services.sessions,
       contactsService: deps.services.contacts,
       pendingContactsService: deps.services.pendingContacts ?? null,

@@ -10,6 +10,7 @@ import type {
   GardenRouteAuthorization,
   GardenSubjectRelation,
 } from '../../boundary/fleet-auth/garden-route-authorization.js';
+import { privacyBreakGlassResourceKindForRoute } from '../../shared/contracts/privacy-break-glass.js';
 
 export interface GardenRequestResourceContext {
   readonly routeId: string;
@@ -212,7 +213,8 @@ export function gardenRequestServiceBoundaryDenial(
   }
   if (context.resource.area === 'memory'
     && !context.resource.routeId.includes('/api/admin/memory')
-    && !context.resource.routeId.endsWith(' /memory')) {
+    && !context.resource.routeId.endsWith(' /memory')
+    && privacyBreakGlassResourceKindForRoute(context.resource.routeId) !== 'memory') {
     return 'Fleet memory access requires the subject-authorized memory service';
   }
   return null;

@@ -641,6 +641,74 @@ ALTER TABLE hub_device_assertion_replays
     CHECK ((mismatch_count = 0) = (last_mismatch_digest IS NULL AND last_mismatch_at IS NULL));
 `;
 
+const DISCORD_EVIDENCE_COMPLETENESS_SQL = `
+-- Pre-v10 evidence lacks the complete thread/config/reason contract and must
+-- never survive as positive authorization input after this migration.
+TRUNCATE TABLE discord_evidence_snapshots;
+
+ALTER TABLE discord_evidence_snapshots
+  ADD COLUMN thread_id TEXT
+    CHECK (thread_id IS NULL OR thread_id ~ '^[1-9][0-9]{16,19}$'),
+  ADD COLUMN decision_reason TEXT
+    CHECK (decision_reason IS NULL OR decision_reason IN (
+      'bot_absent',
+      'incomplete_observation',
+      'member_specific_deny',
+      'membership_removed',
+      'missing_private_thread_access',
+      'provider_unavailable',
+      'required_role_missing',
+      'stale_observation',
+      'view_channel_denied'
+    )),
+  ADD COLUMN mapping_config_version BIGINT NOT NULL DEFAULT 1
+    CHECK (mapping_config_version >= 1),
+  ADD CONSTRAINT discord_evidence_distinct_thread_parent
+    CHECK (thread_id IS NULL OR (channel_id IS NOT NULL AND thread_id <> channel_id)),
+  ADD CONSTRAINT discord_evidence_positive_consistency
+    CHECK (
+      NOT psfn_evidence_result
+      OR ((
+        discord_permission_result
+        AND NOT member_specific_deny_veto
+        AND decision_reason IS NULL
+      ) IS TRUE)
+    ),
+  ADD CONSTRAINT discord_evidence_positive_inputs
+    CHECK (
+      NOT psfn_evidence_result
+      OR ((
+        jsonb_typeof(permission_inputs -> 'oauthGuildMembership') = 'object'
+        AND jsonb_typeof(permission_inputs -> 'observation') = 'object'
+        AND jsonb_typeof(permission_inputs -> 'target') = 'object'
+        AND provenance ->> 'source' = 'discord_oauth_and_bot_observation'
+        AND provenance ->> 'provider' = 'discord'
+        AND provenance ->> 'providerSubjectId' = provider_subject_id
+        AND provenance ->> 'observationStatus' = 'observed'
+        AND length(provenance ->> 'observedAt') > 0
+        AND length(provenance ->> 'oauthObservedAt') > 0
+        AND length(provenance ->> 'observationId') > 0
+        AND length(provenance ->> 'botUserId') > 0
+      ) IS TRUE)
+    ),
+  ADD CONSTRAINT discord_evidence_denial_reason
+    CHECK (psfn_evidence_result OR decision_reason IS NOT NULL);
+
+CREATE INDEX evidence_exact_input_lookup_idx
+  ON discord_evidence_snapshots (
+    principal_id,
+    companion_id,
+    guild_id,
+    channel_id,
+    thread_id,
+    input_digest,
+    config_digest,
+    mapping_config_version,
+    expires_at
+  )
+  WHERE psfn_evidence_result = TRUE;
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
@@ -651,4 +719,5 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 7, name: 'oauth_initiating_browser_binding', sql: OAUTH_INITIATING_BROWSER_SQL },
   { version: 8, name: 'hub_device_assertion_replay', sql: HUB_DEVICE_ASSERTION_REPLAY_SQL },
   { version: 9, name: 'hub_device_assertion_replay_audit', sql: HUB_DEVICE_ASSERTION_REPLAY_AUDIT_SQL },
+  { version: 10, name: 'discord_evidence_completeness', sql: DISCORD_EVIDENCE_COMPLETENESS_SQL },
 ] as const;

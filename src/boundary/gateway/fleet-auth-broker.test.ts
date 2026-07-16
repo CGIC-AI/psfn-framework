@@ -39,6 +39,13 @@ const config: FleetAuthConfig = {
     backupRestore: 'fleet_auth_backup',
   },
   verifierKeys: [],
+  hubDeviceAssertions: {
+    issuer: 'psfn-satellite-hub',
+    audience: 'https://fleet.example.test',
+    maxTtlSeconds: 60,
+    clockSkewSeconds: 2,
+    keys: [],
+  },
   ttls: {
     oauthTransactionMs: 300_000,
     sessionIdleMs: 1_800_000,
@@ -165,11 +172,21 @@ function makeBroker(
   store = new FakeStore(),
   fetchImpl = vi.fn<typeof fetch>(),
   firstOwnerAssurance?: FirstOwnerAssurancePort,
+  options: {
+    config?: FleetAuthConfig;
+    discordEvidence?: {
+      refreshPrincipalEvidence(input: {
+        principalId: string;
+        providerSubjectId: string;
+        providerMembershipEvidence: unknown;
+      }): Promise<unknown>;
+    };
+  } = {},
 ) {
   const bytes = Array.from({ length: 16 }, (_, index) => index + 1);
   let randomOffset = 0;
   const broker = new GatewayFleetAuthBroker({
-    config,
+    config: options.config ?? config,
     store,
     oauthClientSecret: 'discord-client-secret',
     sessionPepper: 'session-pepper-at-least-thirty-two-bytes',
@@ -184,6 +201,7 @@ function makeBroker(
       return result;
     },
     ...(firstOwnerAssurance ? { firstOwnerAssurance } : {}),
+    ...(options.discordEvidence ? { discordEvidence: options.discordEvidence } : {}),
   });
   return { broker, store, fetchImpl };
 }
@@ -257,6 +275,71 @@ describe('gateway fleet auth broker', () => {
     expect(fetchImpl).toHaveBeenNthCalledWith(2, 'https://discord.com/api/v10/users/@me', expect.objectContaining({
       headers: { Authorization: 'Bearer provider-access-secret' },
     }));
+  });
+
+  it('collects consented current guild roles before refreshing active Discord evidence', async () => {
+    const mappedConfig: FleetAuthConfig = {
+      ...config,
+      provider: { ...config.provider, scopes: ['identify', 'guilds', 'guilds.members.read'] },
+      discordEvidenceMappings: [{
+        guildId: '223456789012345678',
+        channelId: '323456789012345678',
+        companionId: '00000000-0000-4000-8000-000000000201',
+        requiredRoleIds: ['423456789012345678'],
+      }],
+    };
+    const store = new FakeStore();
+    store.principalStatus = 'active';
+    const fetchImpl = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(200, {
+        access_token: 'provider-access-secret',
+        token_type: 'Bearer',
+        expires_in: 3600,
+        scope: 'identify guilds guilds.members.read',
+      }))
+      .mockResolvedValueOnce(response(200, { id: '123456789012345679' }))
+      .mockResolvedValueOnce(response(200, [{ id: '223456789012345678' }]))
+      .mockResolvedValueOnce(response(200, {
+        user: { id: '123456789012345679' },
+        roles: ['423456789012345678'],
+      }));
+    const refreshPrincipalEvidence = vi.fn(async () => undefined);
+    const { broker } = makeBroker(store, fetchImpl, undefined, {
+      config: mappedConfig,
+      discordEvidence: { refreshPrincipalEvidence },
+    });
+    const started = await broker.beginLogin({ returnPath: '/fleet' });
+    expect(new URL(started.authorizationUrl).searchParams.get('scope'))
+      .toBe('identify guilds guilds.members.read');
+    await broker.completeCallback({
+      state: new URL(started.authorizationUrl).searchParams.get('state')!,
+      code: 'one-time-code',
+      requestOrigin: mappedConfig.canonicalOrigin,
+      initiatingBrowserToken: started.initiatingBrowserToken,
+    });
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      3,
+      'https://discord.com/api/v10/users/@me/guilds?limit=200',
+      expect.objectContaining({ headers: { authorization: 'Bearer provider-access-secret' } }),
+    );
+    expect(fetchImpl).toHaveBeenNthCalledWith(
+      4,
+      'https://discord.com/api/v10/users/@me/guilds/223456789012345678/member',
+      expect.objectContaining({ headers: { authorization: 'Bearer provider-access-secret' } }),
+    );
+    expect(refreshPrincipalEvidence).toHaveBeenCalledWith({
+      principalId: '00000000-0000-4000-8000-000000000102',
+      providerSubjectId: '123456789012345679',
+      providerMembershipEvidence: {
+        status: 'observed',
+        providerSubjectId: '123456789012345679',
+        observedAt: '2026-07-15T12:00:00.000Z',
+        guilds: [{
+          guildId: '223456789012345678',
+          roleIds: ['423456789012345678'],
+        }],
+      },
+    });
   });
 
   it('binds callback state to the opaque initiating browser without consuming it on mismatch', async () => {

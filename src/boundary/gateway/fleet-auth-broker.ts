@@ -10,6 +10,7 @@ import { isRecord } from '../../shared/utils/types.js';
 const DISCORD_AUTHORIZE_URL = 'https://discord.com/oauth2/authorize';
 const DISCORD_TOKEN_URL = 'https://discord.com/api/v10/oauth2/token';
 const DISCORD_USER_URL = 'https://discord.com/api/v10/users/@me';
+const DISCORD_GUILDS_URL = 'https://discord.com/api/v10/users/@me/guilds?limit=200';
 const DISCORD_SNOWFLAKE = /^[1-9][0-9]{16,19}$/u;
 const OPAQUE_TOKEN_BYTES = 32;
 const OAUTH_CODE_MAX_LENGTH = 2048;
@@ -157,6 +158,13 @@ export interface GatewayFleetAuthBrokerOptions {
   now?: () => Date;
   randomBytes?: (length: number) => Buffer;
   firstOwnerAssurance?: FirstOwnerAssurancePort;
+  discordEvidence?: {
+    refreshPrincipalEvidence(input: {
+      principalId: string;
+      providerSubjectId: string;
+      providerMembershipEvidence: unknown;
+    }): Promise<unknown>;
+  };
 }
 
 function opaqueToken(randomBytes: (length: number) => Buffer): string {
@@ -211,6 +219,7 @@ export class GatewayFleetAuthBroker {
   private readonly now: () => Date;
   private readonly randomBytes: (length: number) => Buffer;
   private readonly firstOwnerAssurance?: FirstOwnerAssurancePort;
+  private readonly discordEvidence?: GatewayFleetAuthBrokerOptions['discordEvidence'];
 
   constructor(options: GatewayFleetAuthBrokerOptions) {
     this.config = options.config;
@@ -221,6 +230,7 @@ export class GatewayFleetAuthBroker {
     this.now = options.now ?? (() => new Date());
     this.randomBytes = options.randomBytes ?? cryptoRandomBytes;
     this.firstOwnerAssurance = options.firstOwnerAssurance;
+    this.discordEvidence = options.discordEvidence;
   }
 
   async beginLogin(input: { returnPath: string }): Promise<{
@@ -293,6 +303,10 @@ export class GatewayFleetAuthBroker {
     }
     const providerTokens = await this.exchangeCode(input.code, transaction);
     const identity = await this.resolveDiscordIdentity(providerTokens.accessToken);
+    const providerMembershipEvidence = await this.resolveDiscordGuildMembershipEvidence(
+      providerTokens.accessToken,
+      identity.subjectId,
+    );
     if (this.config.provider.tokenCustody === 'encrypted_refresh'
       && providerTokens.refreshToken === undefined) {
       throw new FleetAuthBrokerError(
@@ -324,6 +338,13 @@ export class GatewayFleetAuthBroker {
           }
         : {}),
     });
+    if (session.principalStatus === 'active' && this.discordEvidence) {
+      await this.discordEvidence.refreshPrincipalEvidence({
+        principalId: session.principalId,
+        providerSubjectId: identity.subjectId,
+        providerMembershipEvidence,
+      });
+    }
     return { returnPath: transaction.returnPath, session };
   }
 
@@ -508,6 +529,98 @@ export class GatewayFleetAuthBroker {
       accessToken: body.access_token,
       expiresInSeconds: Number(body.expires_in),
       ...(typeof refreshToken === 'string' ? { refreshToken } : {}),
+    };
+  }
+
+  private async resolveDiscordGuildMembershipEvidence(
+    accessToken: string,
+    providerSubjectId: string,
+  ): Promise<unknown> {
+    const mappedGuildIds = [...new Set(
+      this.config.discordEvidenceMappings.map(mapping => mapping.guildId),
+    )].sort();
+    const observedAt = this.now().toISOString();
+    if (mappedGuildIds.length === 0) {
+      return {
+        status: 'observed',
+        providerSubjectId,
+        observedAt,
+        guilds: [],
+      };
+    }
+    let guildsResponse: Response;
+    try {
+      guildsResponse = await this.fetchImpl(DISCORD_GUILDS_URL, {
+        headers: { authorization: `Bearer ${accessToken}` },
+        redirect: 'error',
+      });
+    } catch {
+      return { status: 'provider_unavailable' };
+    }
+    if (!guildsResponse.ok) return { status: 'provider_unavailable' };
+    let decodedGuilds: unknown;
+    try {
+      decodedGuilds = await guildsResponse.json();
+    } catch {
+      return { status: 'provider_unavailable' };
+    }
+    if (!Array.isArray(decodedGuilds) || decodedGuilds.length > 200) {
+      return { status: 'provider_unavailable' };
+    }
+    const consentedGuildIds = new Set<string>();
+    for (const guild of decodedGuilds) {
+      if (!isRecord(guild) || typeof guild.id !== 'string' || !DISCORD_SNOWFLAKE.test(guild.id)) {
+        return { status: 'provider_unavailable' };
+      }
+      consentedGuildIds.add(guild.id);
+    }
+    const guilds: Array<{ guildId: string; roleIds: string[] }> = [];
+    for (const guildId of mappedGuildIds) {
+      if (!consentedGuildIds.has(guildId)) continue;
+      let memberResponse: Response;
+      try {
+        memberResponse = await this.fetchImpl(
+          `https://discord.com/api/v10/users/@me/guilds/${guildId}/member`,
+          {
+            headers: { authorization: `Bearer ${accessToken}` },
+            redirect: 'error',
+          },
+        );
+      } catch {
+        return { status: 'provider_unavailable' };
+      }
+      if (memberResponse.status === 404) continue;
+      if (!memberResponse.ok) return { status: 'provider_unavailable' };
+      let decodedMember: unknown;
+      try {
+        decodedMember = await memberResponse.json();
+      } catch {
+        return { status: 'provider_unavailable' };
+      }
+      if (!isRecord(decodedMember) || !Array.isArray(decodedMember.roles)
+        || decodedMember.roles.length > 250
+        || !isRecord(decodedMember.user)
+        || decodedMember.user.id !== providerSubjectId) {
+        return { status: 'provider_unavailable' };
+      }
+      const roleIds = decodedMember.roles.map((roleId) => {
+        if (typeof roleId !== 'string' || !DISCORD_SNOWFLAKE.test(roleId)) {
+          throw new FleetAuthBrokerError(
+            'malformed_provider_response',
+            502,
+            'Discord guild membership response was malformed',
+          );
+        }
+        return roleId;
+      }).sort();
+      if (new Set(roleIds).size !== roleIds.length) return { status: 'provider_unavailable' };
+      guilds.push({ guildId, roleIds });
+    }
+    return {
+      status: 'observed',
+      providerSubjectId,
+      observedAt,
+      guilds,
     };
   }
 

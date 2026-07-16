@@ -33,6 +33,9 @@ import {
 } from '../../../boundary/fleet-auth/hub-device-assertion.js';
 import { PostgresHubDeviceAssertionReplayStore } from './hub-device-assertion-replay.js';
 import { FLEET_AUTH_RECONCILE_FUNCTION_NAME } from './authority-reconciliation-sql.js';
+import { DiscordEvidenceRuntime } from '../../../boundary/fleet-auth/discord-evidence-runtime.js';
+import type { DiscordEvidenceObservationPort } from '../../../boundary/fleet-auth/discord-evidence-types.js';
+import { PostgresDiscordEvidenceStore } from './discord-evidence-store.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -43,6 +46,7 @@ import { FLEET_AUTH_RECONCILE_FUNCTION_NAME } from './authority-reconciliation-s
 export interface GatewayFleetAuthPersistence {
   authorityFloors: FleetAuthAuthorityFloorStore;
   broker: GatewayFleetAuthBroker;
+  discordEvidence: DiscordEvidenceRuntime;
   reapproveAccountAuthority(
     request: AccountReapprovalRequest,
   ): Promise<AccountReapprovalResult>;
@@ -191,6 +195,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
   protectedRestoreRoots: readonly string[];
   companionDatabaseUrl?: string;
   lifecycleWitnessRoot: string;
+  discordEvidenceObserver?: DiscordEvidenceObservationPort;
 }): Promise<GatewayFleetAuthPersistence | undefined> {
   const lifecycleWitness = new FleetAuthLifecycleWitnessStore(options.lifecycleWitnessRoot);
   if (!options.config) {
@@ -252,6 +257,14 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       floor.trustedHost.lineageId,
       floor.trustedHost.lastLifecycleTransitionId,
     );
+    const providerRevocationAuthority = createGatewayProviderRevocationAuthorityPort(authorityFloors);
+    const discordEvidence = new DiscordEvidenceRuntime({
+      config,
+      observer: options.discordEvidenceObserver ?? {
+        observe: async () => ({ status: 'bot_absent' }),
+      },
+      store: new PostgresDiscordEvidenceStore(pool, providerRevocationAuthority),
+    });
     const broker = new GatewayFleetAuthBroker({
       config: options.config,
       store: new PostgresFleetAuthBrokerStore({
@@ -259,14 +272,16 @@ export async function initializeGatewayFleetAuthPersistence(options: {
         providerAuthorityPool: authorityPool,
         sessionPepper: secrets.sessionPepper,
         tokenEncryptionKey: secrets.tokenEncryptionKey,
-        providerRevocationAuthority: createGatewayProviderRevocationAuthorityPort(authorityFloors),
+        providerRevocationAuthority,
       }),
       oauthClientSecret: secrets.oauthClientSecret,
       sessionPepper: secrets.sessionPepper,
+      discordEvidence,
     });
     return {
       authorityFloors,
       broker,
+      discordEvidence,
       reapproveAccountAuthority: createGatewayAccountReapprovalAuthority(pool, authorityFloors),
       verifyAndConsumeHubDeviceAssertion: (token, expected) => verifyAndConsumeHubDeviceAssertion({
         token,

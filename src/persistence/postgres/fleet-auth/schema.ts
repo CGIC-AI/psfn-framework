@@ -80,6 +80,7 @@ export const FLEET_AUTH_DURABLE_TABLES = [
 ] as const;
 
 export const FLEET_AUTH_EPHEMERAL_TABLES = [
+  'discord_evidence_lifecycle_fences',
   'discord_evidence_snapshots',
   'oauth_transactions',
   'provider_token_custody',

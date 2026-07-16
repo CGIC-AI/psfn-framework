@@ -77,6 +77,11 @@ export interface DiscordEvidenceSnapshot {
   expiresAt: Date;
 }
 
+export interface DiscordEvidenceLifecycleMutation {
+  lifecycleId: string;
+  generation: number;
+}
+
 export interface DiscordPositiveEvidenceLookup {
   principalId: string;
   providerSubjectId: string;
@@ -91,21 +96,34 @@ export interface DiscordPositiveEvidenceLookup {
 }
 
 export interface DiscordEvidenceStorePort {
+  activatePrincipalEvidenceLifecycle(input: {
+    principalId: string;
+    providerSubjectId: string;
+    lifecycleId: string;
+  }): Promise<void>;
   replacePrincipalEvidence(input: {
     principalId: string;
     providerSubjectId: string;
+    mutation: DiscordEvidenceLifecycleMutation;
     snapshots: readonly DiscordEvidenceSnapshot[];
   }): Promise<void>;
   replaceCompanionEvidence(input: {
     principalId: string;
     providerSubjectId: string;
     companionId: string;
+    mutation: DiscordEvidenceLifecycleMutation;
     snapshots: readonly DiscordEvidenceSnapshot[];
+  }): Promise<void>;
+  invalidatePrincipalEvidence(input: {
+    principalId: string;
+    providerSubjectId: string;
+    companionId?: string;
+    mutation: DiscordEvidenceLifecycleMutation;
   }): Promise<void>;
   revokePrincipalEvidence(input: {
     principalId: string;
     providerSubjectId: string;
-    companionId?: string;
+    mutation: DiscordEvidenceLifecycleMutation;
   }): Promise<void>;
   revokeAllEvidence(): Promise<void>;
   loadUsablePositiveEvidence(

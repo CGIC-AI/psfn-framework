@@ -86,6 +86,8 @@ describe('Discord evidence production lifecycle', () => {
       refreshCompanionEvidence: vi.fn(async () => []),
     };
     const store = {
+      activatePrincipalEvidenceLifecycle: vi.fn(async () => undefined),
+      invalidatePrincipalEvidence: vi.fn(async () => undefined),
       revokeAllEvidence: vi.fn(async () => undefined),
       revokePrincipalEvidence: vi.fn(async () => undefined),
     };
@@ -116,10 +118,11 @@ describe('Discord evidence production lifecycle', () => {
     coordinator.registerCompanionEventSource(COMPANION_A, source);
     discordClient.emit(Events.ClientReady, {});
     await coordinator.drain();
-    expect(store.revokePrincipalEvidence).toHaveBeenLastCalledWith({
+    expect(store.invalidatePrincipalEvidence).toHaveBeenLastCalledWith({
       principalId: PRINCIPAL_ID,
       providerSubjectId: SUBJECT_ID,
       companionId: COMPANION_A,
+      mutation: expect.objectContaining({ generation: expect.any(Number) }),
     });
     expect(runtime.refreshCompanionEvidence).toHaveBeenLastCalledWith(expect.objectContaining({
       companionId: COMPANION_A,
@@ -159,6 +162,8 @@ describe('Discord evidence production lifecycle', () => {
       refreshCompanionEvidence: vi.fn(async () => []),
     };
     const store = {
+      activatePrincipalEvidenceLifecycle: vi.fn(async () => undefined),
+      invalidatePrincipalEvidence: vi.fn(async () => undefined),
       revokeAllEvidence: vi.fn(async () => undefined),
       revokePrincipalEvidence: vi.fn(async () => undefined),
     };
@@ -198,8 +203,110 @@ describe('Discord evidence production lifecycle', () => {
     expect(store.revokePrincipalEvidence).toHaveBeenLastCalledWith({
       principalId: PRINCIPAL_ID,
       providerSubjectId: SUBJECT_ID,
+      mutation: expect.objectContaining({ generation: expect.any(Number) }),
     });
     expect(coordinator.reauthenticationReason(PRINCIPAL_ID, SUBJECT_ID)).toBe('evidence_expired');
     await coordinator.close();
+  });
+
+  it('ignores an old timer after a newer login takes ownership of the same identity', async () => {
+    let now = new Date('2026-07-16T12:00:00.000Z');
+    const timers: Array<() => void> = [];
+    const runtime = {
+      refreshPrincipalEvidence: vi.fn(async () => []),
+      refreshCompanionEvidence: vi.fn(async () => []),
+    };
+    const store = {
+      activatePrincipalEvidenceLifecycle: vi.fn(async () => undefined),
+      invalidatePrincipalEvidence: vi.fn(async () => undefined),
+      revokeAllEvidence: vi.fn(async () => undefined),
+      revokePrincipalEvidence: vi.fn(async () => undefined),
+    };
+    const coordinator = new DiscordEvidenceLifecycleCoordinator({
+      config: config(),
+      runtime,
+      store,
+      now: () => now,
+      setTimer: callback => {
+        timers.push(callback);
+        return timers.length as unknown as ReturnType<typeof setTimeout>;
+      },
+      clearTimer: vi.fn(),
+    });
+    await coordinator.start();
+    const session = {
+      principalId: PRINCIPAL_ID,
+      providerSubjectId: SUBJECT_ID,
+      providerMembershipEvidence: membership(now),
+      idleExpiresAt: new Date('2026-07-16T12:30:00.000Z'),
+      absoluteExpiresAt: new Date('2026-07-16T20:00:00.000Z'),
+    };
+    await coordinator.recordActiveOAuthSession(session);
+    const oldTimer = timers[0];
+    now = new Date('2026-07-16T12:01:00.000Z');
+    await coordinator.recordActiveOAuthSession({
+      ...session,
+      providerMembershipEvidence: membership(now),
+    });
+    oldTimer();
+    await coordinator.drain();
+    expect(runtime.refreshPrincipalEvidence).toHaveBeenCalledTimes(2);
+    expect(store.revokePrincipalEvidence).not.toHaveBeenCalled();
+    expect(coordinator.retainedMembershipEvidenceCount()).toBe(1);
+    await coordinator.close();
+  });
+
+  it('orders an event, session rotation, and close without leaving lifecycle authority', async () => {
+    let releaseRefresh: (() => void) | undefined;
+    const blockedRefresh = new Promise<void>((resolve) => { releaseRefresh = resolve; });
+    const runtime = {
+      refreshPrincipalEvidence: vi.fn(async () => []),
+      refreshCompanionEvidence: vi.fn()
+        .mockImplementationOnce(async () => { await blockedRefresh; return []; }),
+    };
+    const store = {
+      activatePrincipalEvidenceLifecycle: vi.fn(async () => undefined),
+      invalidatePrincipalEvidence: vi.fn(async () => undefined),
+      revokeAllEvidence: vi.fn(async () => undefined),
+      revokePrincipalEvidence: vi.fn(async () => undefined),
+    };
+    const coordinator = new DiscordEvidenceLifecycleCoordinator({
+      config: config(),
+      runtime,
+      store,
+      now: () => new Date('2026-07-16T12:00:00.000Z'),
+      setTimer: vi.fn(() => 1 as unknown as ReturnType<typeof setTimeout>),
+      clearTimer: vi.fn(),
+    });
+    await coordinator.start();
+    await coordinator.recordActiveOAuthSession({
+      principalId: PRINCIPAL_ID,
+      providerSubjectId: SUBJECT_ID,
+      providerMembershipEvidence: membership(new Date('2026-07-16T12:00:00.000Z')),
+      idleExpiresAt: new Date('2026-07-16T12:30:00.000Z'),
+      absoluteExpiresAt: new Date('2026-07-16T20:00:00.000Z'),
+    });
+    const event = coordinator.handleAuthorityChange(COMPANION_A, { kind: 'ready' });
+    const callback = coordinator.recordActiveOAuthSession({
+      principalId: PRINCIPAL_ID,
+      providerSubjectId: SUBJECT_ID,
+      providerMembershipEvidence: membership(new Date('2026-07-16T12:00:00.000Z')),
+      idleExpiresAt: new Date('2026-07-16T12:40:00.000Z'),
+      absoluteExpiresAt: new Date('2026-07-16T20:00:00.000Z'),
+    });
+    const rotation = coordinator.recordSessionRotation({
+      principalId: PRINCIPAL_ID,
+      idleExpiresAt: new Date('2026-07-16T12:45:00.000Z'),
+      absoluteExpiresAt: new Date('2026-07-16T20:00:00.000Z'),
+    });
+    const close = coordinator.close();
+    releaseRefresh?.();
+    await Promise.all([event, callback, rotation, close]);
+    expect(store.invalidatePrincipalEvidence).toHaveBeenCalledBefore(
+      runtime.refreshCompanionEvidence,
+    );
+    expect(store.revokeAllEvidence).toHaveBeenCalledTimes(2);
+    expect(store.activatePrincipalEvidenceLifecycle).toHaveBeenCalledTimes(2);
+    expect(coordinator.retainedMembershipEvidenceCount()).toBe(0);
   });
 });

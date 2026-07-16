@@ -124,9 +124,9 @@ describe('Postgres Discord evidence authority denial', () => {
       sessionAuthorityGenerationIsCurrent: () => true,
     });
     const identities = [
-      { principalId: randomUUID(), subjectId: '100000000000000011' },
-      { principalId: randomUUID(), subjectId: '100000000000000012' },
-      { principalId: randomUUID(), subjectId: '100000000000000013' },
+      { principalId: randomUUID(), subjectId: '100000000000000011', lifecycleId: randomUUID() },
+      { principalId: randomUUID(), subjectId: '100000000000000012', lifecycleId: randomUUID() },
+      { principalId: randomUUID(), subjectId: '100000000000000013', lifecycleId: randomUUID() },
     ];
     try {
       for (const identity of identities) {
@@ -140,9 +140,15 @@ describe('Postgres Discord evidence authority denial', () => {
             (provider, subject_id, principal_id, state, authority_generation)
           VALUES ('discord', $1, $2, 'active', 1)
         `, [identity.subjectId, identity.principalId]);
+        await store.activatePrincipalEvidenceLifecycle({
+          principalId: identity.principalId,
+          providerSubjectId: identity.subjectId,
+          lifecycleId: identity.lifecycleId,
+        });
         await store.replacePrincipalEvidence({
           principalId: identity.principalId,
           providerSubjectId: identity.subjectId,
+          mutation: { lifecycleId: identity.lifecycleId, generation: 1 },
           snapshots: [snapshot(identity.principalId, identity.subjectId)],
         });
       }
@@ -176,6 +182,77 @@ describe('Postgres Discord evidence authority denial', () => {
         WHERE singleton = TRUE
       `);
       await expect(lookup(identities[2]!)).resolves.toBeUndefined();
+    } finally {
+      await Promise.all([runtime.end(), migration.end()]);
+    }
+  }, TIMEOUT_MS);
+
+  it('orders concurrent replace and terminal revoke through the database lifecycle fence', async () => {
+    if (!harness) throw new Error('Postgres harness unavailable');
+    const database = await harness.createDatabase();
+    const admin = createPostgresPool(harness.adminDatabaseUrl, { max: 1 });
+    try {
+      await admin.query(
+        `GRANT CREATE, CONNECT ON DATABASE ${quoteIdentifier(database.databaseName)} TO ${quoteIdentifier(ROLES.migration)}`,
+      );
+    } finally {
+      await admin.end();
+    }
+    const migrationUrl = roleUrl(database.databaseUrl, ROLES.migration);
+    await migrateFleetAuthSchema({ databaseUrl: migrationUrl, roles: ROLES });
+    const runtime = createPostgresPool(roleUrl(database.databaseUrl, ROLES.runtime), { max: 6 });
+    const migration = createPostgresPool(migrationUrl, { max: 1 });
+    const authority = { sessionAuthorityGenerationIsCurrent: () => true };
+    const replaceStore = new PostgresDiscordEvidenceStore(runtime, authority);
+    const revokeStore = new PostgresDiscordEvidenceStore(runtime, authority);
+    try {
+      for (const [index, operations] of ['replace-first', 'revoke-first'].entries()) {
+        const principalId = randomUUID();
+        const subjectId = `10000000000000002${index + 1}`;
+        const lifecycleId = randomUUID();
+        await migration.query(`
+          INSERT INTO fleet_auth.human_principals
+            (principal_id, status, authority_generation)
+          VALUES ($1, 'active', 1)
+        `, [principalId]);
+        await migration.query(`
+          INSERT INTO fleet_auth.provider_subjects
+            (provider, subject_id, principal_id, state, authority_generation)
+          VALUES ('discord', $1, $2, 'active', 1)
+        `, [subjectId, principalId]);
+        await replaceStore.activatePrincipalEvidenceLifecycle({
+          principalId,
+          providerSubjectId: subjectId,
+          lifecycleId,
+        });
+        const replace = () => replaceStore.replacePrincipalEvidence({
+          principalId,
+          providerSubjectId: subjectId,
+          mutation: { lifecycleId, generation: 1 },
+          snapshots: [snapshot(principalId, subjectId)],
+        });
+        const revoke = () => revokeStore.revokePrincipalEvidence({
+          principalId,
+          providerSubjectId: subjectId,
+          mutation: { lifecycleId, generation: 2 },
+        });
+        const results = await Promise.allSettled(
+          operations === 'replace-first' ? [replace(), revoke()] : [revoke(), replace()],
+        );
+        expect(results.some(result => result.status === 'fulfilled')).toBe(true);
+        const count = await runtime.query<{ count: string }>(`
+          SELECT COUNT(*)::text AS count
+          FROM fleet_auth.discord_evidence_snapshots
+          WHERE principal_id = $1 AND provider_subject_id = $2
+        `, [principalId, subjectId]);
+        expect(count.rows[0]?.count).toBe('0');
+        await expect(replaceStore.replacePrincipalEvidence({
+          principalId,
+          providerSubjectId: subjectId,
+          mutation: { lifecycleId, generation: 3 },
+          snapshots: [snapshot(principalId, subjectId)],
+        })).rejects.toMatchObject({ name: 'StaleDiscordEvidenceLifecycleError' });
+      }
     } finally {
       await Promise.all([runtime.end(), migration.end()]);
     }

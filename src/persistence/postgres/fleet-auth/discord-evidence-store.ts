@@ -1,12 +1,17 @@
 import type { Pool, PoolClient } from 'pg';
 import type {
+  DiscordEvidenceLifecycleMutation,
   DiscordEvidenceSnapshot,
   DiscordEvidenceStorePort,
   DiscordPositiveEvidenceLookup,
 } from '../../../boundary/fleet-auth/discord-evidence-types.js';
 import { isUsablePositiveDiscordEvidence } from '../../../boundary/fleet-auth/discord-evidence-types.js';
 import { digestDiscordEvidence } from '../../../boundary/fleet-auth/discord-evidence-types.js';
-import { isCanonicalIsoTimestamp, isRecord } from '../../../shared/utils/types.js';
+import {
+  isCanonicalIsoTimestamp,
+  isRecord,
+  isRfc4122Uuid,
+} from '../../../shared/utils/types.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 
@@ -36,6 +41,29 @@ interface EvidenceRow {
 
 export interface DiscordEvidenceAuthorityGenerationPort {
   sessionAuthorityGenerationIsCurrent(authorityGeneration: number): boolean;
+}
+
+export class StaleDiscordEvidenceLifecycleError extends Error {
+  constructor() {
+    super('Discord evidence lifecycle mutation is stale or revoked');
+    this.name = 'StaleDiscordEvidenceLifecycleError';
+  }
+}
+
+function assertMutation(mutation: DiscordEvidenceLifecycleMutation): void {
+  if (!isRfc4122Uuid(mutation.lifecycleId)
+    || !Number.isSafeInteger(mutation.generation)
+    || mutation.generation < 1) {
+    throw new Error('Invalid Discord evidence lifecycle mutation');
+  }
+}
+
+function lifecycleGeneration(value: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error('Invalid fleet_auth Discord evidence lifecycle generation');
+  }
+  return parsed;
 }
 
 function mappingConfigVersion(value: string): number {
@@ -156,9 +184,51 @@ export class PostgresDiscordEvidenceStore implements DiscordEvidenceStorePort {
     private readonly authorityGeneration: DiscordEvidenceAuthorityGenerationPort,
   ) {}
 
+  async activatePrincipalEvidenceLifecycle(input: {
+    principalId: string;
+    providerSubjectId: string;
+    lifecycleId: string;
+  }): Promise<void> {
+    if (!isRfc4122Uuid(input.lifecycleId)) {
+      throw new Error('Invalid Discord evidence lifecycle identity');
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const authority = await this.lockSubjectAuthority(
+        client,
+        input.principalId,
+        input.providerSubjectId,
+      );
+      if (!authority.eligible) {
+        throw new Error('Discord evidence principal/provider binding is not active and live');
+      }
+      await client.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_lifecycle_fences
+          (principal_id, provider, provider_subject_id, lifecycle_id, state,
+           mutation_generation, global_auth_epoch, updated_at)
+        VALUES ($1, 'discord', $2, $3, 'active', 0, $4, clock_timestamp())
+        ON CONFLICT (principal_id, provider, provider_subject_id) DO UPDATE
+        SET lifecycle_id = EXCLUDED.lifecycle_id,
+            state = 'active',
+            mutation_generation = 0,
+            global_auth_epoch = EXCLUDED.global_auth_epoch,
+            updated_at = clock_timestamp()
+      `, [input.principalId, input.providerSubjectId, input.lifecycleId, authority.globalAuthEpoch]);
+      await this.deleteEvidence(client, input);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async replacePrincipalEvidence(input: {
     principalId: string;
     providerSubjectId: string;
+    mutation: DiscordEvidenceLifecycleMutation;
     snapshots: readonly DiscordEvidenceSnapshot[];
   }): Promise<void> {
     await this.replaceEvidence(input);
@@ -168,6 +238,7 @@ export class PostgresDiscordEvidenceStore implements DiscordEvidenceStorePort {
     principalId: string;
     providerSubjectId: string;
     companionId: string;
+    mutation: DiscordEvidenceLifecycleMutation;
     snapshots: readonly DiscordEvidenceSnapshot[];
   }): Promise<void> {
     if (input.snapshots.some(snapshot => snapshot.companionId !== input.companionId)) {
@@ -176,44 +247,67 @@ export class PostgresDiscordEvidenceStore implements DiscordEvidenceStorePort {
     await this.replaceEvidence(input);
   }
 
-  async revokePrincipalEvidence(input: {
+  async invalidatePrincipalEvidence(input: {
     principalId: string;
     providerSubjectId: string;
     companionId?: string;
+    mutation: DiscordEvidenceLifecycleMutation;
   }): Promise<void> {
-    await this.pool.query(`
-      DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots
-      WHERE principal_id = $1 AND provider = 'discord' AND provider_subject_id = $2
-        AND ($3::uuid IS NULL OR companion_id = $3)
-    `, [input.principalId, input.providerSubjectId, input.companionId ?? null]);
+    await this.mutateAndDelete(input, false);
+  }
+
+  async revokePrincipalEvidence(input: {
+    principalId: string;
+    providerSubjectId: string;
+    mutation: DiscordEvidenceLifecycleMutation;
+  }): Promise<void> {
+    await this.mutateAndDelete(input, true);
   }
 
   async revokeAllEvidence(): Promise<void> {
-    await this.pool.query(`DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots`);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await this.lockAuthorityState(client);
+      await client.query(`
+        UPDATE ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_lifecycle_fences
+        SET state = 'revoked', mutation_generation = mutation_generation + 1,
+            updated_at = clock_timestamp()
+        WHERE state = 'active'
+      `);
+      await client.query(`DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots`);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 
   private async replaceEvidence(input: {
     principalId: string;
     providerSubjectId: string;
     companionId?: string;
+    mutation: DiscordEvidenceLifecycleMutation;
     snapshots: readonly DiscordEvidenceSnapshot[];
   }): Promise<void> {
+    assertMutation(input.mutation);
     for (const snapshot of input.snapshots) {
       assertSnapshot(snapshot, input.principalId, input.providerSubjectId);
     }
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      const globalAuthEpoch = await this.lockActiveSubject(
+      const authority = await this.claimMutation(
         client,
-        input.principalId,
-        input.providerSubjectId,
+        input,
+        false,
       );
-      await client.query(`
-        DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots
-        WHERE principal_id = $1 AND provider = 'discord' AND provider_subject_id = $2
-          AND ($3::uuid IS NULL OR companion_id = $3)
-      `, [input.principalId, input.providerSubjectId, input.companionId ?? null]);
+      if (!authority.eligible) {
+        throw new Error('Discord evidence principal/provider binding is not active and live');
+      }
+      await this.deleteEvidence(client, input);
       for (const snapshot of input.snapshots) {
         await client.query(`
           INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots
@@ -241,7 +335,7 @@ export class PostgresDiscordEvidenceStore implements DiscordEvidenceStorePort {
           snapshot.configDigest,
           snapshot.mappingConfigVersion,
           JSON.stringify(snapshot.provenance),
-          globalAuthEpoch,
+          authority.globalAuthEpoch,
           snapshot.fetchedAt,
           snapshot.expiresAt,
         ]);
@@ -253,6 +347,84 @@ export class PostgresDiscordEvidenceStore implements DiscordEvidenceStorePort {
     } finally {
       client.release();
     }
+  }
+
+  private async mutateAndDelete(input: {
+    principalId: string;
+    providerSubjectId: string;
+    companionId?: string;
+    mutation: DiscordEvidenceLifecycleMutation;
+  }, terminal: boolean): Promise<void> {
+    assertMutation(input.mutation);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await this.claimMutation(client, input, terminal);
+      await this.deleteEvidence(client, input);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  private async deleteEvidence(
+    client: PoolClient,
+    input: { principalId: string; providerSubjectId: string; companionId?: string },
+  ): Promise<void> {
+    await client.query(`
+      DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots
+      WHERE principal_id = $1 AND provider = 'discord' AND provider_subject_id = $2
+        AND ($3::uuid IS NULL OR companion_id = $3)
+    `, [input.principalId, input.providerSubjectId, input.companionId ?? null]);
+  }
+
+  private async claimMutation(
+    client: PoolClient,
+    input: {
+      principalId: string;
+      providerSubjectId: string;
+      mutation: DiscordEvidenceLifecycleMutation;
+    },
+    terminal: boolean,
+  ): Promise<{ globalAuthEpoch: number; eligible: boolean }> {
+    const authority = await this.lockSubjectAuthority(
+      client,
+      input.principalId,
+      input.providerSubjectId,
+    );
+    const fence = await client.query<{
+      lifecycle_id: string;
+      state: string;
+      mutation_generation: string;
+      global_auth_epoch: string;
+    }>(`
+      SELECT lifecycle_id, state, mutation_generation, global_auth_epoch
+      FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_lifecycle_fences
+      WHERE principal_id = $1 AND provider = 'discord' AND provider_subject_id = $2
+      FOR UPDATE
+    `, [input.principalId, input.providerSubjectId]);
+    const current = fence.rows.at(0);
+    if (!current
+      || current.lifecycle_id !== input.mutation.lifecycleId
+      || current.state !== 'active'
+      || lifecycleGeneration(current.mutation_generation) >= input.mutation.generation
+      || Number(current.global_auth_epoch) !== authority.globalAuthEpoch) {
+      throw new StaleDiscordEvidenceLifecycleError();
+    }
+    await client.query(`
+      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_lifecycle_fences
+      SET state = $4, mutation_generation = $3, updated_at = clock_timestamp()
+      WHERE principal_id = $1 AND provider = 'discord' AND provider_subject_id = $2
+    `, [
+      input.principalId,
+      input.providerSubjectId,
+      input.mutation.generation,
+      terminal ? 'revoked' : 'active',
+    ]);
+    return authority;
   }
 
   async loadUsablePositiveEvidence(
@@ -275,6 +447,10 @@ export class PostgresDiscordEvidenceStore implements DiscordEvidenceStorePort {
         ON subject.provider = evidence.provider
        AND subject.subject_id = evidence.provider_subject_id
        AND subject.principal_id = evidence.principal_id
+      JOIN ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_lifecycle_fences AS fence
+        ON fence.principal_id = evidence.principal_id
+       AND fence.provider = evidence.provider
+       AND fence.provider_subject_id = evidence.provider_subject_id
       JOIN ${FLEET_AUTH_SCHEMA_NAME}.authority_state AS authority
         ON authority.singleton = TRUE
       WHERE evidence.principal_id = $1
@@ -293,6 +469,8 @@ export class PostgresDiscordEvidenceStore implements DiscordEvidenceStorePort {
         AND evidence.decision_reason IS NULL
         AND evidence.expires_at > $10
         AND evidence.global_auth_epoch = authority.global_auth_epoch
+        AND fence.state = 'active'
+        AND fence.global_auth_epoch = authority.global_auth_epoch
         AND principal.status = 'active'
         AND principal.restore_state = 'live'
         AND subject.state = 'active'
@@ -320,19 +498,12 @@ export class PostgresDiscordEvidenceStore implements DiscordEvidenceStorePort {
     return isUsablePositiveDiscordEvidence(snapshot, input) ? snapshot : undefined;
   }
 
-  private async lockActiveSubject(
+  private async lockSubjectAuthority(
     client: PoolClient,
     principalId: string,
     providerSubjectId: string,
-  ): Promise<number> {
-    const authority = await client.query<{ global_auth_epoch: string }>(`
-      SELECT global_auth_epoch
-      FROM ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}()
-    `);
-    const epoch = Number(authority.rows.at(0)?.global_auth_epoch);
-    if (!Number.isSafeInteger(epoch) || epoch < 1) {
-      throw new Error('fleet_auth authority_state singleton is missing or invalid');
-    }
+  ): Promise<{ globalAuthEpoch: number; eligible: boolean }> {
+    const globalAuthEpoch = await this.lockAuthorityState(client);
     const subject = await client.query<{ eligible: boolean }>(`
       SELECT (
         principal.status = 'active'
@@ -348,8 +519,19 @@ export class PostgresDiscordEvidenceStore implements DiscordEvidenceStorePort {
         AND subject.principal_id = $2
       FOR UPDATE OF subject, principal
     `, [providerSubjectId, principalId]);
-    if (subject.rows.at(0)?.eligible !== true) {
-      throw new Error('Discord evidence principal/provider binding is not active and live');
+    const row = subject.rows.at(0);
+    if (!row) throw new Error('Discord evidence principal/provider binding does not exist');
+    return { globalAuthEpoch, eligible: row.eligible };
+  }
+
+  private async lockAuthorityState(client: PoolClient): Promise<number> {
+    const authority = await client.query<{ global_auth_epoch: string }>(`
+      SELECT global_auth_epoch
+      FROM ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}()
+    `);
+    const epoch = Number(authority.rows.at(0)?.global_auth_epoch);
+    if (!Number.isSafeInteger(epoch) || epoch < 1) {
+      throw new Error('fleet_auth authority_state singleton is missing or invalid');
     }
     return epoch;
   }

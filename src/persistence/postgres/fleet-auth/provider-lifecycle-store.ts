@@ -107,6 +107,10 @@ export async function revokeProviderAuthority(
       DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots
       WHERE principal_id = $1
     `, [current.principal_id]);
+    await client.query(`
+      DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_lifecycle_fences
+      WHERE principal_id = $1
+    `, [current.principal_id]);
     // Reconcile only after the explicit revocation mutations have run because
     // reconciliation quarantines all remaining durable authority. It still
     // runs inside this transaction and therefore precedes COMMIT.

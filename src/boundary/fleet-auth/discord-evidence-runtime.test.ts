@@ -22,6 +22,7 @@ const ROLE_B = '100000000000000008';
 const BOT_A = '100000000000000009';
 const BOT_B = '100000000000000010';
 const NOW = new Date('2026-07-16T12:00:00.000Z');
+const LIFECYCLE_ID = '44444444-4444-4444-8444-444444444444';
 
 type Mapping = FleetAuthConfig['discordEvidenceMappings'][number];
 
@@ -168,6 +169,10 @@ class RecordingStore implements DiscordEvidenceStorePort {
   readonly replacements: DiscordEvidenceSnapshot[][] = [];
   readonly companionReplacements: string[] = [];
 
+  async activatePrincipalEvidenceLifecycle(): Promise<void> {
+    await Promise.resolve();
+  }
+
   async replacePrincipalEvidence(input: {
     snapshots: readonly DiscordEvidenceSnapshot[];
   }): Promise<void> {
@@ -183,6 +188,10 @@ class RecordingStore implements DiscordEvidenceStorePort {
   }
 
   async revokePrincipalEvidence(): Promise<void> {
+    await Promise.resolve();
+  }
+
+  async invalidatePrincipalEvidence(): Promise<void> {
     await Promise.resolve();
   }
 
@@ -222,6 +231,7 @@ async function refresh(subject: ReturnType<typeof runtime>): Promise<DiscordEvid
     principalId: PRINCIPAL_ID,
     providerSubjectId: SUBJECT_ID,
     providerMembershipEvidence: subject.providerMembership(),
+    mutation: { lifecycleId: LIFECYCLE_ID, generation: 1 },
   });
 }
 
@@ -471,6 +481,7 @@ describe('bounded Discord access evidence', () => {
       providerSubjectId: SUBJECT_ID,
       providerMembershipEvidence: providerMembership(),
       companionId: COMPANION_A,
+      mutation: { lifecycleId: LIFECYCLE_ID, generation: 1 },
     });
     expect(subject.observe.mock.calls.map(([input]) => input.companionId)).toEqual([COMPANION_A]);
     expect(subject.store.companionReplacements).toEqual([COMPANION_A]);

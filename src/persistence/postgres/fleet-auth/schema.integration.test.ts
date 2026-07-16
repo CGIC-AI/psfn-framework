@@ -174,7 +174,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       const ledger = await migration.query<{ version: number; checksum: string }>(
         `SELECT version, checksum FROM ${FLEET_AUTH_SCHEMA_NAME}.schema_migrations ORDER BY version`,
       );
-      expect(ledger.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      expect(ledger.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
       expect(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum))).toBe(true);
 
       const tables = await migration.query<{ table_name: string }>(`
@@ -187,6 +187,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         'authority_state',
         'authorization_audit_events',
         'browser_sessions',
+        'discord_evidence_lifecycle_fences',
         'discord_evidence_snapshots',
         'human_principals',
         'hub_device_assertion_replays',
@@ -215,6 +216,7 @@ describe('fleet_auth Postgres authority boundary', () => {
     const providerSubjectId = '123456789012345678';
     const guildId = '223456789012345678';
     const channelId = '323456789012345678';
+    const lifecycleId = randomUUID();
     const permissionInputs = {
       oauthGuildMembership: { guildId, roleIds: [], observedAt: '2026-07-16T12:00:00.000Z' },
       observation: { status: 'observed', botUserId: '423456789012345678' },
@@ -240,9 +242,15 @@ describe('fleet_auth Postgres authority boundary', () => {
       const store = new PostgresDiscordEvidenceStore(runtime, {
         sessionAuthorityGenerationIsCurrent: generation => generation === 1,
       });
+      await store.activatePrincipalEvidenceLifecycle({
+        principalId,
+        providerSubjectId,
+        lifecycleId,
+      });
       await store.replacePrincipalEvidence({
         principalId,
         providerSubjectId,
+        mutation: { lifecycleId, generation: 1 },
         snapshots: [{
           evidenceId: randomUUID(),
           principalId,
@@ -1107,6 +1115,7 @@ describe('fleet_auth Postgres authority boundary', () => {
            ('browser_sessions', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions)),
            ('oauth_transactions', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions)),
            ('provider_token_custody', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_token_custody)),
+           ('discord_evidence_lifecycle_fences', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_lifecycle_fences)),
            ('discord_evidence_snapshots', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots)),
            ('step_up_challenges', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.step_up_challenges)),
            ('jit_authorization_grants', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.jit_authorization_grants)),

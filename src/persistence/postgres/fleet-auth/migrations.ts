@@ -709,6 +709,26 @@ CREATE INDEX evidence_exact_input_lookup_idx
   WHERE psfn_evidence_result = TRUE;
 `;
 
+const DISCORD_EVIDENCE_LIFECYCLE_FENCE_SQL = `
+CREATE TABLE discord_evidence_lifecycle_fences (
+  principal_id UUID NOT NULL REFERENCES human_principals(principal_id),
+  provider TEXT NOT NULL DEFAULT 'discord' CHECK (provider = 'discord'),
+  provider_subject_id TEXT NOT NULL CHECK (provider_subject_id ~ '^[1-9][0-9]{16,19}$'),
+  lifecycle_id UUID NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('active', 'revoked')),
+  mutation_generation BIGINT NOT NULL CHECK (mutation_generation >= 0),
+  global_auth_epoch BIGINT NOT NULL CHECK (global_auth_epoch >= 1),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  PRIMARY KEY (principal_id, provider, provider_subject_id),
+  FOREIGN KEY (provider, provider_subject_id)
+    REFERENCES provider_subjects(provider, subject_id)
+);
+
+CREATE INDEX discord_evidence_lifecycle_active_idx
+  ON discord_evidence_lifecycle_fences (principal_id, provider_subject_id, lifecycle_id)
+  WHERE state = 'active';
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
@@ -720,4 +740,5 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 8, name: 'hub_device_assertion_replay', sql: HUB_DEVICE_ASSERTION_REPLAY_SQL },
   { version: 9, name: 'hub_device_assertion_replay_audit', sql: HUB_DEVICE_ASSERTION_REPLAY_AUDIT_SQL },
   { version: 10, name: 'discord_evidence_completeness', sql: DISCORD_EVIDENCE_COMPLETENESS_SQL },
+  { version: 11, name: 'discord_evidence_lifecycle_fence', sql: DISCORD_EVIDENCE_LIFECYCLE_FENCE_SQL },
 ] as const;

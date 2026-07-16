@@ -9,6 +9,7 @@ import {
 import {
   digestDiscordEvidence,
   type DiscordEvidenceFailureReason,
+  type DiscordEvidenceLifecycleMutation,
   type DiscordEvidenceObservationPort,
   type DiscordEvidenceProvenance,
   type DiscordEvidenceSnapshot,
@@ -155,6 +156,7 @@ export class DiscordEvidenceRuntime {
     principalId: string;
     providerSubjectId: string;
     providerMembershipEvidence: unknown;
+    mutation: DiscordEvidenceLifecycleMutation;
   }): Promise<DiscordEvidenceSnapshot[]> {
     return await this.refreshEvidence(input);
   }
@@ -164,6 +166,7 @@ export class DiscordEvidenceRuntime {
     providerSubjectId: string;
     providerMembershipEvidence: unknown;
     companionId: string;
+    mutation: DiscordEvidenceLifecycleMutation;
   }): Promise<DiscordEvidenceSnapshot[]> {
     return await this.refreshEvidence(input);
   }
@@ -173,6 +176,7 @@ export class DiscordEvidenceRuntime {
     providerSubjectId: string;
     providerMembershipEvidence: unknown;
     companionId?: string;
+    mutation: DiscordEvidenceLifecycleMutation;
   }): Promise<DiscordEvidenceSnapshot[]> {
     if (!isRfc4122Uuid(input.principalId)) throw new Error('Invalid fleet principal ID');
     if (!DISCORD_SNOWFLAKE_PATTERN.test(input.providerSubjectId)) {
@@ -295,7 +299,12 @@ export class DiscordEvidenceRuntime {
   }
 
   private async replaceSelectedEvidence(
-    input: { principalId: string; providerSubjectId: string; companionId?: string },
+    input: {
+      principalId: string;
+      providerSubjectId: string;
+      companionId?: string;
+      mutation: DiscordEvidenceLifecycleMutation;
+    },
     snapshots: readonly DiscordEvidenceSnapshot[],
   ): Promise<void> {
     if (input.companionId !== undefined) {
@@ -303,6 +312,7 @@ export class DiscordEvidenceRuntime {
         principalId: input.principalId,
         providerSubjectId: input.providerSubjectId,
         companionId: input.companionId,
+        mutation: input.mutation,
         snapshots,
       });
       return;
@@ -310,6 +320,7 @@ export class DiscordEvidenceRuntime {
     await this.store.replacePrincipalEvidence({
       principalId: input.principalId,
       providerSubjectId: input.providerSubjectId,
+      mutation: input.mutation,
       snapshots,
     });
   }

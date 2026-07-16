@@ -12,6 +12,7 @@ import type { BehavioralPatternStorePort } from './behavioral-pattern-store-port
 import type { ConcernStorePort } from './concern-store-port.js';
 import type { PendingFollowUpStorePort } from './pending-follow-up-store-port.js';
 import type { ActiveConcern } from './concerns.js';
+import { MAX_TEXT_CHARS as PENDING_FOLLOW_UP_MAX_TEXT_CHARS } from './pending-follow-ups.js';
 import type { PendingFollowUp } from './pending-follow-ups.js';
 
 type IntentionPostTurnHook = Parameters<
@@ -421,6 +422,36 @@ describe('intention runtime port hooks', () => {
     expect(pendingFollowUpStore.dequeue).toHaveBeenCalledWith('created-follow-up', {
       activationReason: 'post_turn_action',
     });
+  });
+
+  it('bounds over-long follow-up content to the enqueue contract (psfn-framework-ktvo)', async () => {
+    const pendingFollowUpStore = makePendingFollowUpStore();
+    const hooks = createIntentionAppraisalHooks(makeConcernStore(), pendingFollowUpStore);
+
+    const overLongContent = 'x'.repeat(PENDING_FOLLOW_UP_MAX_TEXT_CHARS + 250);
+    const followUpId = await hooks.onIntentionFollowUpDecision({
+      decision: {
+        type: 'followUp',
+        priority: 'medium',
+        reason: 'Long model-authored follow-up must not throw at the enqueue guard.',
+        timing: 'scheduled',
+        followUp: {
+          content: overLongContent,
+          channelType: 'api',
+        },
+      },
+      channelId: 'api:test',
+      channelType: 'api',
+      sourceMessageId: 'msg-follow-up-long',
+    });
+
+    expect(followUpId).toBe('created-follow-up');
+    expect(pendingFollowUpStore.enqueue).toHaveBeenCalledTimes(1);
+    const enqueuedContent = vi.mocked(pendingFollowUpStore.enqueue).mock.calls[0]![0].content;
+    // Bounded to the consumer contract, with a clear truncation marker, so the
+    // fail-closed enqueue guard (normalizeRequiredText → MAX_TEXT_CHARS) accepts it.
+    expect(enqueuedContent.length).toBe(PENDING_FOLLOW_UP_MAX_TEXT_CHARS);
+    expect(enqueuedContent.endsWith('...')).toBe(true);
   });
 
   it('resurfaces only eligible follow-ups for the active channel', async () => {

@@ -5,9 +5,11 @@
     AdminTurnPromptContextMessage,
   } from '$lib/types';
 
+  type DisplayMessage = Omit<AdminTurnPromptContextMessage, 'role'> & { role: string };
+
   interface Props {
     title: string;
-    messages?: AdminTurnPromptContextMessage[];
+    messages?: DisplayMessage[];
     emptyText?: string;
     cacheability?: AdminPromptSectionCacheability | null;
   }

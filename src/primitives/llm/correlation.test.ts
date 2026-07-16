@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   inferCallType,
-  isObservabilityCallType,
   normalizeCorrelationValue,
   resolveCorrelationMetadata,
   toCorrelationLogFields,
 } from './correlation.js';
 import type { CorrelationMetadata } from '../../shared/contracts/runtime.js';
+import { isObservabilityCallType } from '../../shared/contracts/observability-call-types.js';
 
 describe('correlation helpers', () => {
   describe('normalizeCorrelationValue', () => {

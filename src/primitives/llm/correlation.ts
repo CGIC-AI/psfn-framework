@@ -3,27 +3,17 @@ import {
   type CompletionPurpose,
   type CorrelationMetadata,
   type ModelPurpose,
-  type ObservabilityCallType,
 } from '../../shared/contracts/runtime.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
-
-const OBSERVABILITY_CALL_TYPES: ReadonlySet<ObservabilityCallType> = new Set([
-  'chat',
-  'tool',
-  'memory',
-  'summary',
-  'background',
-  'scheduled',
-]);
+import {
+  isObservabilityCallType,
+  type ObservabilityCallType,
+} from '../../shared/contracts/observability-call-types.js';
 
 export interface ResolvedCorrelationMetadata extends CorrelationMetadata {
   requestId: string;
   originType: ObservabilityCallType;
   originStage: string;
-}
-
-export function isObservabilityCallType(value: unknown): value is ObservabilityCallType {
-  return typeof value === 'string' && OBSERVABILITY_CALL_TYPES.has(value as ObservabilityCallType);
 }
 
 export function normalizeCorrelationValue(value: string | undefined): string | undefined {

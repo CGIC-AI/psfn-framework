@@ -7,17 +7,19 @@ import {
   FATIGUE_REGULATION_STATE_VALUES,
 } from '../../shared/contracts/charge-policy.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
-import type {
-  CorrelationMetadata,
-  FatigueBudgetActorSnapshot,
-  FatigueBudgetPeerSnapshot,
-  FatigueBudgetScopeSnapshot,
-  FatigueEnforcementBudgetMetadata,
-  FatigueEnforcementMetadata,
-  FatiguePendingSpendMetadata,
-  FatigueRecordedEventMetadata,
-  FatigueSocialRegulationMetadata,
+import {
+  REQUESTER_PROVENANCE_VALUES,
+  type CorrelationMetadata,
+  type FatigueBudgetActorSnapshot,
+  type FatigueBudgetPeerSnapshot,
+  type FatigueBudgetScopeSnapshot,
+  type FatigueEnforcementBudgetMetadata,
+  type FatigueEnforcementMetadata,
+  type FatiguePendingSpendMetadata,
+  type FatigueRecordedEventMetadata,
+  type FatigueSocialRegulationMetadata,
 } from '../../shared/contracts/runtime.js';
+import { OBSERVABILITY_CALL_TYPES } from '../../shared/contracts/observability-call-types.js';
 import { parseTurnId } from '../turns/id.js';
 import { isChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { TRUST_LEVELS } from '../../system/trust/types.js';
@@ -465,14 +467,14 @@ function parseCorrelation(value: unknown, label: string): Partial<CorrelationMet
   if (raw.originType !== undefined) {
     result.originType = requireEnum(
       raw.originType,
-      ['chat', 'tool', 'memory', 'summary', 'background', 'scheduled'],
+      OBSERVABILITY_CALL_TYPES,
       `${label}.originType`,
     );
   }
   if (raw.callType !== undefined) {
     result.callType = requireEnum(
       raw.callType,
-      ['chat', 'tool', 'memory', 'summary', 'background', 'scheduled'],
+      OBSERVABILITY_CALL_TYPES,
       `${label}.callType`,
     );
   }
@@ -486,7 +488,7 @@ function parseCorrelation(value: unknown, label: string): Partial<CorrelationMet
   if (raw.requesterProvenance !== undefined) {
     result.requesterProvenance = requireEnum(
       raw.requesterProvenance,
-      ['human', 'self_directed', 'system'],
+      REQUESTER_PROVENANCE_VALUES,
       `${label}.requesterProvenance`,
     );
   }

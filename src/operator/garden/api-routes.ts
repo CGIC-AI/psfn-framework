@@ -645,12 +645,12 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/group-memory'),
-      handle: (_req, res) => {
+      handle: (_req, res, _params, context) => {
         if (!groupMemoryService) {
           sendJson(res, 503, { error: GROUP_MEMORY_UNAVAILABLE_ERROR });
           return;
         }
-        groupMemoryService.listGroupMemoryDiagnostics().then(
+        groupMemoryService.listGroupMemoryDiagnostics(context).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
           error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load group memory diagnostics') }),
         );
@@ -685,12 +685,12 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'GET',
       match: prefixedParamPath('/api/admin/group-memory/', 'channelId'),
-      handle: (_req, res, { channelId }) => {
+      handle: (_req, res, { channelId }, context) => {
         if (!groupMemoryService) {
           sendJson(res, 503, { error: GROUP_MEMORY_UNAVAILABLE_ERROR });
           return;
         }
-        groupMemoryService.getGroupMemoryChannelDiagnostics(channelId).then(
+        groupMemoryService.getGroupMemoryChannelDiagnostics(channelId, context).then(
           (diagnostics) => {
             if (!diagnostics) {
               sendJson(res, 404, { error: 'Group memory channel diagnostics not found' });

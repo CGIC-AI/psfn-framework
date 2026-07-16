@@ -125,8 +125,13 @@ export interface AdminGroupMemoryDiagnosticsListData {
 }
 
 export interface AdminGroupMemoryService {
-  listGroupMemoryDiagnostics(): Promise<AdminGroupMemoryDiagnosticsListData>;
-  getGroupMemoryChannelDiagnostics(channelId: string): Promise<AdminGroupMemoryChannelDiagnostics | null>;
+  listGroupMemoryDiagnostics(
+    context?: import('../../garden-request-context.js').GardenRequestContext,
+  ): Promise<AdminGroupMemoryDiagnosticsListData>;
+  getGroupMemoryChannelDiagnostics(
+    channelId: string,
+    context?: import('../../garden-request-context.js').GardenRequestContext,
+  ): Promise<AdminGroupMemoryChannelDiagnostics | null>;
   runGroupMemoryBackfill(
     channelId: string,
     input: GroupMemoryBackfillInput,

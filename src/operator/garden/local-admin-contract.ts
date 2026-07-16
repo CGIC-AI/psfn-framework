@@ -427,6 +427,7 @@ export function createInProcessGardenAdminContract(
       ...(options.channelGroupMemory ? { channelGroupMemory: options.channelGroupMemory } : {}),
       sessionStore: options.sessionStore,
       memoryStore: gardenMemoryStore,
+      fleetMemoryStore: options.memoryStore,
       ...(options.contactStore ? { contactStore: options.contactStore } : {}),
       watermarkStore: new JsonGroupMemoryWatermarkStore(join(companionDataDir, 'group-memory-watermarks.json')),
       ...(options.memoryExtractor ? { memoryExtractor: options.memoryExtractor } : {}),
@@ -467,6 +468,7 @@ export function createInProcessGardenAdminContract(
     contacts: new AdminContactsDataService({
       contactStore: options.contactStore,
       memoryStore: gardenMemoryStore,
+      fleetMemoryStore: options.memoryStore,
       sessionStore: options.sessionStore,
       relationshipScoreReader: options.contactStore
         ? createContactRelationshipScoreReader(options.contactStore)

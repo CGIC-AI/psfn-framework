@@ -28,6 +28,10 @@ const voiceMock = vi.hoisted(() => {
 
 vi.mock('discord.js', () => {
   class MockClient {
+    constructor(readonly options: unknown) {
+      discordMock.createdClients.push(this);
+    }
+
     channels = {
       fetch: vi.fn(async (channelId: string) => {
         const value = discordMock.channelsById.get(channelId);
@@ -41,9 +45,6 @@ vi.mock('discord.js', () => {
     login = vi.fn(async () => 'logged-in');
     destroy = vi.fn();
 
-    constructor() {
-      discordMock.createdClients.push(this);
-    }
   }
 
     return {
@@ -61,11 +62,14 @@ vi.mock('discord.js', () => {
         DirectMessages: 8,
         GuildVoiceStates: 16,
         GuildMessageReactions: 32,
+        GuildMembers: 64,
       },
       Partials: {
         Channel: 'channel',
         Message: 'message',
         Reaction: 'reaction',
+        GuildMember: 'guild-member',
+        ThreadMember: 'thread-member',
       },
     };
   });
@@ -183,6 +187,27 @@ function makeTextChannel(messages: MockDiscordMessage[]) {
 }
 
 describe('DiscordAdapter startup backfill', () => {
+  it('requests privileged member observation only when evidence mappings enable it', () => {
+    const disabled = new DiscordAdapter(makeConfig(), new EventBus());
+    const disabledClient = discordMock.createdClients.at(-1) as {
+      options: { intents: number[]; partials: string[] };
+    };
+    expect(disabledClient.options.intents).not.toContain(64);
+    expect(disabledClient.options.partials).not.toContain('guild-member');
+    expect(disabledClient.options.partials).not.toContain('thread-member');
+
+    const enabled = new DiscordAdapter(makeConfig(), new EventBus(), {
+      enableDiscordEvidenceLifecycle: true,
+    });
+    const enabledClient = discordMock.createdClients.at(-1) as {
+      options: { intents: number[]; partials: string[] };
+    };
+    expect(enabledClient.options.intents).toContain(64);
+    expect(enabledClient.options.partials).toContain('guild-member');
+    expect(enabledClient.options.partials).toContain('thread-member');
+    expect(() => enabled.subscribeDiscordEvidenceLifecycle(() => undefined)).not.toThrow();
+  });
+
   let sessionsDir: string;
   let store: SessionStore;
 

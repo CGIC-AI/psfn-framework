@@ -47,8 +47,8 @@ import { DiscordEvidenceLifecycleCoordinator } from '../../../boundary/fleet-aut
 export interface GatewayFleetAuthPersistence {
   authorityFloors: FleetAuthAuthorityFloorStore;
   broker: GatewayFleetAuthBroker;
-  discordEvidence: DiscordEvidenceRuntime;
-  discordEvidenceLifecycle: DiscordEvidenceLifecycleCoordinator;
+  discordEvidence?: DiscordEvidenceRuntime;
+  discordEvidenceLifecycle?: DiscordEvidenceLifecycleCoordinator;
   reapproveAccountAuthority(
     request: AccountReapprovalRequest,
   ): Promise<AccountReapprovalResult>;
@@ -260,14 +260,6 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       floor.trustedHost.lastLifecycleTransitionId,
     );
     const providerRevocationAuthority = createGatewayProviderRevocationAuthorityPort(authorityFloors);
-    const discordEvidenceStore = new PostgresDiscordEvidenceStore(pool, providerRevocationAuthority);
-    const discordEvidence = new DiscordEvidenceRuntime({
-      config,
-      observer: options.discordEvidenceObserver ?? {
-        observe: async () => ({ status: 'bot_absent' }),
-      },
-      store: discordEvidenceStore,
-    });
     const brokerStore = new PostgresFleetAuthBrokerStore({
       pool,
       providerAuthorityPool: authorityPool,
@@ -275,25 +267,37 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       tokenEncryptionKey: secrets.tokenEncryptionKey,
       providerRevocationAuthority,
     });
-    const discordEvidenceLifecycle = new DiscordEvidenceLifecycleCoordinator({
-      config,
-      runtime: discordEvidence,
-      store: discordEvidenceStore,
-      sessionAuthority: brokerStore,
-    });
-    await discordEvidenceLifecycle.start();
+    let discordEvidence: DiscordEvidenceRuntime | undefined;
+    let discordEvidenceLifecycle: DiscordEvidenceLifecycleCoordinator | undefined;
+    if (config.discordEvidenceMappings.length > 0) {
+      const discordEvidenceStore = new PostgresDiscordEvidenceStore(pool, providerRevocationAuthority);
+      discordEvidence = new DiscordEvidenceRuntime({
+        config,
+        observer: options.discordEvidenceObserver ?? {
+          observe: async () => ({ status: 'bot_absent' }),
+        },
+        store: discordEvidenceStore,
+      });
+      discordEvidenceLifecycle = new DiscordEvidenceLifecycleCoordinator({
+        config,
+        runtime: discordEvidence,
+        store: discordEvidenceStore,
+        sessionAuthority: brokerStore,
+      });
+      await discordEvidenceLifecycle.start();
+    }
     const broker = new GatewayFleetAuthBroker({
       config: options.config,
       store: brokerStore,
       oauthClientSecret: secrets.oauthClientSecret,
       sessionPepper: secrets.sessionPepper,
-      discordEvidenceLifecycle,
+      ...(discordEvidenceLifecycle ? { discordEvidenceLifecycle } : {}),
     });
     return {
       authorityFloors,
       broker,
-      discordEvidence,
-      discordEvidenceLifecycle,
+      ...(discordEvidence ? { discordEvidence } : {}),
+      ...(discordEvidenceLifecycle ? { discordEvidenceLifecycle } : {}),
       reapproveAccountAuthority: createGatewayAccountReapprovalAuthority(pool, authorityFloors),
       verifyAndConsumeHubDeviceAssertion: (token, expected) => verifyAndConsumeHubDeviceAssertion({
         token,
@@ -302,7 +306,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
         replayStore: new PostgresHubDeviceAssertionReplayStore(pool),
       }),
       close: async () => {
-        await discordEvidenceLifecycle.close();
+        await discordEvidenceLifecycle?.close();
         await Promise.all([pool.end(), authorityPool.end()]);
       },
     };

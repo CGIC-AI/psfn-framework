@@ -337,6 +337,29 @@ afterAll(async () => {
 }, TIMEOUT_MS);
 
 describe('gateway fleet-auth lifecycle publication', () => {
+  it('starts Discord evidence authority only when validated mappings enable it', async () => {
+    const context = await freshContext();
+    const featureOff = await startEnabled(context);
+    expect(featureOff.discordEvidence).toBeUndefined();
+    expect(featureOff.discordEvidenceLifecycle).toBeUndefined();
+    await featureOff.close();
+
+    context.config.provider.scopes = ['identify', 'guilds', 'guilds.members.read'];
+    context.config.discordEvidenceMappings = [{
+      guildId: '123456789012345678',
+      channelId: '223456789012345678',
+      companionId: randomUUID(),
+      requiredRoleIds: [],
+    }];
+    const featureOn = await startEnabled(context);
+    try {
+      expect(featureOn.discordEvidence).toBeDefined();
+      expect(featureOn.discordEvidenceLifecycle).toBeDefined();
+    } finally {
+      await featureOn.close();
+    }
+  }, TIMEOUT_MS);
+
   it('binds Hub assertion replay consumption to the exact expected session', async () => {
     const context = await freshContext();
     const persistence = await startEnabled(context);

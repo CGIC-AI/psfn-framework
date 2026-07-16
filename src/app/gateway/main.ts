@@ -339,29 +339,30 @@ async function main(): Promise<void> {
     eligibilityGate,
     intakeScreening: privilegedCore.intakeScreening.screening,
     log,
-    enableDiscordEvidenceLifecycle: fleetAuthPersistence !== undefined,
+    enableDiscordEvidenceLifecycle: fleetAuthPersistence?.discordEvidenceLifecycle !== undefined,
   });
   log.info('Embedding provider initialized', {
     provider: privilegedServices.embeddingProvider.kind,
     dims: privilegedServices.embeddingProvider.dims,
   });
   const { discord, telegram } = channelSurfaces;
-  if (channelSurfaces.discordAccounts) {
+  const discordEvidenceLifecycle = fleetAuthPersistence?.discordEvidenceLifecycle;
+  if (channelSurfaces.discordAccounts && discordEvidenceLifecycle) {
     for (const account of channelSurfaces.discordAccounts) {
       discordEvidenceObservers.register(account.companionId, account.adapter);
-      fleetAuthPersistence?.discordEvidenceLifecycle.registerCompanionEventSource(
+      discordEvidenceLifecycle.registerCompanionEventSource(
         account.companionId,
         account.adapter,
       );
     }
-  } else {
+  } else if (discordEvidenceLifecycle) {
     const singleCompanionId = bootstrap.channelsConfig.discord.companionId
       ?? (config.companionFleet?.companions.length === 1
         ? config.companionFleet.companions.at(0)?.companionId
         : undefined);
     if (singleCompanionId) {
       discordEvidenceObservers.register(singleCompanionId, discord);
-      fleetAuthPersistence?.discordEvidenceLifecycle.registerCompanionEventSource(
+      discordEvidenceLifecycle.registerCompanionEventSource(
         singleCompanionId,
         discord,
       );

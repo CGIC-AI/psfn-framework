@@ -339,27 +339,31 @@ export function createIcpCertificationFixture(input: {
   );
   if (!primaryModel) throw new Error('Certification model owner requires the primary model');
   const costProfile = input.costProfile ?? 'permissive';
+  // The room-continuity scenario requires two distinct conversations in the
+  // same durable fatigue window. Give chat turns a small deterministic cost so
+  // the production per-conversation breaker closes each exchange before the
+  // first one can exhaust relationship pressure and correctly block the next.
+  const boundedRoomContinuity = input.fatigueProfile === 'room_continuity'
+    && costProfile === 'permissive';
   if (costProfile !== 'missing') {
     for (const model of modelEntries) {
       const chatCapable = (model.purposes as Array<{ purpose?: unknown }>).some(
         purpose => purpose.purpose === 'chat',
       );
-      model.cost = chatCapable && costProfile !== 'permissive'
-        ? {
-            inputPer1MUsd: 0,
-            outputPer1MUsd: costProfile === 'lowered_hard' ? 15 : 10,
-            cacheReadPer1MUsd: 0,
-            cacheWritePer1MUsd: 0,
-            currency: 'USD',
-          }
-        : {
-            inputPer1MUsd: 0,
-            outputPer1MUsd: 0,
-            cacheReadPer1MUsd: 0,
-            cacheWritePer1MUsd: 0,
-            currency: 'USD',
-          };
-      if (chatCapable && costProfile !== 'permissive') {
+      let outputPer1MUsd = 0;
+      if (chatCapable) {
+        if (costProfile === 'lowered_hard') outputPer1MUsd = 15;
+        else if (costProfile === 'lowered_warning') outputPer1MUsd = 10;
+        else if (boundedRoomContinuity) outputPer1MUsd = 10;
+      }
+      model.cost = {
+        inputPer1MUsd: 0,
+        outputPer1MUsd,
+        cacheReadPer1MUsd: 0,
+        cacheWritePer1MUsd: 0,
+        currency: 'USD',
+      };
+      if (chatCapable && (costProfile !== 'permissive' || boundedRoomContinuity)) {
         model.capabilities = {
           ...(model.capabilities as Record<string, unknown>),
           maxOutputTokens: 10,

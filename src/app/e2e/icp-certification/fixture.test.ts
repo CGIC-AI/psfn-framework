@@ -117,6 +117,32 @@ describe('ICP certification production-shape fixture', () => {
     }
   });
 
+  it('bounds room-continuity conversations before durable fatigue is exhausted', () => {
+    fixture = createIcpCertificationFixture({
+      databaseUrl: 'postgres://certification:certification@127.0.0.1:5432/certification',
+      fatigueProfile: 'room_continuity',
+    });
+
+    const config = hydrateJsonBackedRuntimeConfig(
+      loadAgentConfig(fixture.companions[0].env),
+      { seedDir: fixture.companions[0].env.CONFIG_DIR },
+    );
+    const chatModels = config.modelRegistry?.models.filter(model => (
+      model.purposes.some(purpose => purpose.purpose === 'chat')
+    ));
+    expect(chatModels).not.toHaveLength(0);
+    expect(chatModels?.every(model => (
+      model.cost?.outputPer1MUsd === 10
+      && model.capabilities?.maxOutputTokens === 10
+    ))).toBe(true);
+    expect(config.chargePolicy?.icpCostBreaker).toMatchObject({
+      enabled: true,
+      warningThresholdUsd: 0.0003,
+      hardLimitUsd: 0.0004,
+      finalCloseoutReserveUsd: 0.0001,
+    });
+  });
+
   it.each([
     ['lowered_warning', 0.0001, 0.0003],
     ['lowered_hard', 0.00015, 0.0002],

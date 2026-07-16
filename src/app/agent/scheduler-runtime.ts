@@ -48,6 +48,10 @@ import {
   type CompressionGuidelineEvolutionPort,
 } from '../../core/session/compression-guideline-evolution.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import {
+  BACKGROUND_WORK_SUPERVISOR_TASK_ID,
+  registerDurableBackgroundWorkSupervisorTask,
+} from '../../core/agent/background-work/scheduler-task.js';
 import type { SchedulerRuntimeConfig } from '../../system/config/scheduler-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
@@ -59,7 +63,7 @@ import {
 } from '../../persistence/layout.js';
 
 const log = createComponentLogger('Agent');
-export const BACKGROUND_WORK_SUPERVISOR_TASK_ID = 'background-work-supervisor';
+export { BACKGROUND_WORK_SUPERVISOR_TASK_ID };
 
 export interface AgentSchedulerRuntime {
   scheduler: Scheduler;
@@ -262,16 +266,10 @@ export function buildAgentSchedulerRuntime(
       eligibilityGate: options.eligibilityGate,
     },
   );
-  if (!options.agentLoop.hasDurableBackgroundWorkSupervisor()) {
-    throw new Error('Agent scheduler requires a durable background work supervisor');
-  }
-  scheduler.register({
-    id: BACKGROUND_WORK_SUPERVISOR_TASK_ID,
-    name: 'Durable Background Work Supervisor',
-    type: 'every',
+  registerDurableBackgroundWorkSupervisorTask({
+    agentLoop: options.agentLoop,
     intervalMs: options.schedulerConfig.tickIntervalMs,
-    handler: () => options.agentLoop.tickBackgroundWork(),
-    state: 'idle',
+    scheduler,
   });
 
   const backgroundMaintenance = new BackgroundMaintenanceRegistry({

@@ -36,6 +36,7 @@ export function buildTurnCorrelation(
   turnId: TurnID,
   requestId: string,
   conversation: TurnConversationAttributionContext,
+  fallbackCompanionId?: string,
 ): CorrelationMetadata {
   const sessionId = conversation.sessionId.trim();
   const rootInitiationId = conversation.rootInitiationId.trim();
@@ -49,9 +50,15 @@ export function buildTurnCorrelation(
     ? message.channelId.slice('subagent:'.length).trim() || undefined
     : undefined;
   const icpCorrelation = message.routing?.icpCorrelation;
+  // Companion identity: the durable ICP episode's local companion wins when
+  // present; otherwise fall back to the substrate agent's own configured
+  // companion id so ordinary human ingress (no icpCorrelation) still carries a
+  // companion scope. Prompt-cache affinity is fail-closed without it.
+  const fallbackId = typeof fallbackCompanionId === 'string' ? fallbackCompanionId.trim() : '';
+  const companionId = icpCorrelation?.localCompanionId ?? (fallbackId || undefined);
   return {
     sessionId,
-    ...(icpCorrelation ? { companionId: icpCorrelation.localCompanionId } : {}),
+    ...(companionId ? { companionId } : {}),
     turnId,
     requestId,
     channelId: message.channelId,

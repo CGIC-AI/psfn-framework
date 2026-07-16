@@ -51,6 +51,10 @@ import { companionUiPromptContent } from '../../boundary/fleet-auth/companion-ui
 import type { RequestCapabilityReplayPort } from '../../boundary/fleet-auth/request-capability-replay.js';
 import { GatewayFleetSsoRouter } from '../../boundary/gateway/fleet-sso-router.js';
 import { resolveFleetSsoGardenUpstreams } from '../../boundary/fleet-auth/fleet-sso-transport.js';
+import type {
+  PrimaryEmbodimentAuthorityPort,
+} from '../../boundary/fleet-auth/primary-embodiment.js';
+import { dispatchCompanionUiPrimaryEmbodiment } from '../../boundary/gateway/companion-ui-primary-embodiment.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
 import {
   GatewayHubDeviceIngressService,
@@ -103,6 +107,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   fleetAuthRequestCapabilities?: GatewayRequestCapabilitySigner;
   fleetAuthRequestCapabilityVerifier?: RequestCapabilityVerifier;
   fleetAuthRequestCapabilityReplay?: RequestCapabilityReplayPort;
+  primaryEmbodiments?: PrimaryEmbodimentAuthorityPort;
   /** Persistence-backed verifier/consumer required by authenticated Hub device ingress. */
   hubDeviceAssertionVerifier?: {
     verifyAndConsumeHubDeviceAssertion(
@@ -468,6 +473,12 @@ export async function startOptionalGatewayApiServer(
             dispatch: async input => {
               const frame = input.compiled.frame;
               const body = frame.body as Record<string, unknown>;
+              const embodiment = await dispatchCompanionUiPrimaryEmbodiment({
+                compiled: input.compiled,
+                attachment: input.attachment,
+                ...(options.primaryEmbodiments ? { authority: options.primaryEmbodiments } : {}),
+              });
+              if (embodiment.handled) return embodiment.result;
               if (frame.resource === 'conversation.status') {
                 return await gatewayApiRuntime.handleHealth();
               }

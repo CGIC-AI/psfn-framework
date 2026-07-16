@@ -141,6 +141,8 @@ function hubDeviceAssertionToken(input: {
   sessionId: string;
   jti: string;
   placeId?: string;
+  deviceId?: string;
+  enrollmentVersion?: number;
   expiresInSeconds?: number;
 }): string {
   const nowSeconds = Math.floor(Date.now() / 1000);
@@ -152,8 +154,8 @@ function hubDeviceAssertionToken(input: {
   })).toString('base64url');
   const encodedClaims = Buffer.from(JSON.stringify({
     iss: 'psfn-satellite-hub',
-    device_id: 'office-device',
-    enrollment_version: 7,
+    device_id: input.deviceId ?? 'office-device',
+    enrollment_version: input.enrollmentVersion ?? 7,
     enrollment_assurance: 'device_credential',
     place_id: input.placeId ?? 'office',
     aud: 'https://fleet.example.test',
@@ -273,7 +275,12 @@ async function seedSession(
 
 async function seedAttachableHuman(
   context: GatewayTestContext,
-  input: { token: string; subjectId: string; companionId?: string },
+  input: {
+    token: string;
+    subjectId: string;
+    companionId?: string;
+    role?: 'owner' | 'admin' | 'member' | 'guest';
+  },
 ): Promise<{ principalId: string; sessionId: string }> {
   const companionId = input.companionId ?? KNOWN_COMPANION_ID;
   const migration = createPostgresPool(context.migrationUrl, { max: 1 });
@@ -309,8 +316,8 @@ async function seedAttachableHuman(
       INSERT INTO fleet_auth.principal_role_grants
         (grant_id, principal_id, companion_id, role, lifecycle,
          version, authority_generation, restore_state)
-      VALUES ($1, $2, $3, 'member', 'active', 1, 1, 'live')
-    `, [randomUUID(), principalId, companionId]);
+      VALUES ($1, $2, $3, $4, 'active', 1, 1, 'live')
+    `, [randomUUID(), principalId, companionId, input.role ?? 'member']);
     await runtime.query(`
       INSERT INTO fleet_auth.browser_sessions
         (record_id, token_digest, csrf_digest, principal_id, provider, provider_subject_id,
@@ -854,6 +861,215 @@ describe('gateway fleet-auth lifecycle publication', () => {
       expect(rawAudit).not.toContain(firstHuman.sessionId);
       expect(rawAudit).not.toContain(secondHuman.sessionId);
       expect(rawAudit).not.toContain(KNOWN_COMPANION_ID);
+    } finally {
+      await auditPool.end();
+      await persistence.close();
+    }
+  }, TIMEOUT_MS);
+
+  it('serializes explicit primary embodiment handoff and never promotes authentication or reconnect', async () => {
+    const context = await freshContext();
+    const persistence = await startEnabled(context);
+    const auditPool = createPostgresPool(context.runtimeUrl, { max: 1 });
+    const tokenA = 'F'.repeat(43);
+    const tokenB = 'G'.repeat(43);
+    await seedAttachableHuman(context, {
+      token: tokenA,
+      subjectId: '123456789012345684',
+      role: 'admin',
+    });
+    await seedAttachableHuman(context, {
+      token: tokenB,
+      subjectId: '123456789012345685',
+      role: 'admin',
+    });
+    const ingress = new GatewayHubDeviceIngressService({
+      verifyAndConsume: (token, binding) => persistence.verifyAndConsumeHubDeviceAssertion(token, binding),
+      enrollmentAuthority: { resolve: async input => input.authenticatedConnection },
+      attachments: {
+        attach: input => persistence.attachHubDeviceHuman(input),
+        fenceDevice: input => persistence.fenceHubDeviceAttachment(input),
+      },
+    });
+    const connectionA = {
+      connectionId: 'primary-display-a-connection',
+      deviceId: 'primary-display-a',
+      enrollmentVersion: 3,
+      enrollmentStatus: 'active' as const,
+      companionId: KNOWN_COMPANION_ID,
+      placeId: 'office',
+      sessionId: 'primary-display-a-session',
+    };
+    const connectionB = {
+      connectionId: 'primary-display-b-connection',
+      deviceId: 'primary-display-b',
+      enrollmentVersion: 5,
+      enrollmentStatus: 'active' as const,
+      companionId: KNOWN_COMPANION_ID,
+      placeId: 'bedroom',
+      sessionId: 'primary-display-b-session',
+    };
+    const assertionA = hubDeviceAssertionToken({
+      companionId: KNOWN_COMPANION_ID,
+      sessionId: connectionA.sessionId,
+      jti: randomUUID(),
+      deviceId: connectionA.deviceId,
+      enrollmentVersion: connectionA.enrollmentVersion,
+      placeId: connectionA.placeId,
+    });
+    const assertionB = hubDeviceAssertionToken({
+      companionId: KNOWN_COMPANION_ID,
+      sessionId: connectionB.sessionId,
+      jti: randomUUID(),
+      deviceId: connectionB.deviceId,
+      enrollmentVersion: connectionB.enrollmentVersion,
+      placeId: connectionB.placeId,
+    });
+    try {
+      const attachedA = await ingress.admit({
+        assertion: assertionA,
+        connection: connectionA,
+        human: { kind: 'fleet_browser_session', sessionToken: tokenA },
+      });
+      const attachedB = await ingress.admit({
+        assertion: assertionB,
+        connection: connectionB,
+        human: { kind: 'fleet_browser_session', sessionToken: tokenB },
+      });
+      await expect(persistence.primaryEmbodiments.read(KNOWN_COMPANION_ID)).resolves.toMatchObject({
+        generation: 0,
+        version: 0,
+        current: null,
+      });
+      await ingress.admit({
+        assertion: assertionA,
+        connection: connectionA,
+        human: { kind: 'fleet_browser_session', sessionToken: tokenA },
+      });
+      expect((await persistence.primaryEmbodiments.read(KNOWN_COMPANION_ID)).current).toBeNull();
+
+      const firstDecisionId = randomUUID();
+      await expect(persistence.primaryEmbodiments.handoff({
+        companionId: KNOWN_COMPANION_ID,
+        attachment: attachedA.attachment,
+        expectedGeneration: 0,
+        decisionId: firstDecisionId,
+        reason: 'user_requested',
+      })).resolves.toMatchObject({
+        generation: 1,
+        version: 1,
+        current: { attachmentId: attachedA.attachment.attachmentId },
+      });
+      const restarted = await startEnabled(context);
+      try {
+        await expect(restarted.primaryEmbodiments.read(KNOWN_COMPANION_ID)).resolves.toMatchObject({
+          generation: 1,
+          current: { attachmentId: attachedA.attachment.attachmentId },
+        });
+      } finally {
+        await restarted.close();
+      }
+      await expect(persistence.primaryEmbodiments.handoff({
+        companionId: KNOWN_COMPANION_ID,
+        attachment: {
+          ...attachedA.attachment,
+          actor: { kind: 'guest', companionId: KNOWN_COMPANION_ID },
+        },
+        expectedGeneration: 1,
+        decisionId: randomUUID(),
+        reason: 'user_requested',
+      })).rejects.toMatchObject({ code: 'human_authority_required' });
+
+      const concurrentInputs = [randomUUID(), randomUUID()].map(decisionId => ({
+        companionId: KNOWN_COMPANION_ID,
+        attachment: attachedB.attachment,
+        expectedGeneration: 1,
+        decisionId,
+        reason: 'device_replacement' as const,
+      }));
+      const concurrent = await Promise.allSettled(
+        concurrentInputs.map(input => persistence.primaryEmbodiments.handoff(input)),
+      );
+      expect(concurrent.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+      expect(concurrent.filter(result => result.status === 'rejected')).toHaveLength(1);
+      expect(concurrent.find(result => result.status === 'rejected')).toMatchObject({
+        reason: { code: 'stale_generation' },
+      });
+      const winnerIndex = concurrent.findIndex(result => result.status === 'fulfilled');
+      const winningDecisionId = concurrentInputs[winnerIndex]!.decisionId;
+      await expect(persistence.primaryEmbodiments.handoff(concurrentInputs[winnerIndex]!))
+        .rejects.toMatchObject({ code: 'decision_replay' });
+
+      const otherCompanionId = randomUUID();
+      const crossCompanionAttachment = {
+        ...attachedA.attachment,
+        deviceActor: {
+          ...attachedA.attachment.deviceActor,
+          principal: {
+            ...attachedA.attachment.deviceActor.principal,
+            companionId: otherCompanionId,
+          },
+        },
+        channel: { ...attachedA.attachment.channel, companionId: otherCompanionId },
+      };
+      await expect(persistence.primaryEmbodiments.handoff({
+        companionId: otherCompanionId,
+        attachment: crossCompanionAttachment,
+        expectedGeneration: 0,
+        decisionId: firstDecisionId,
+        reason: 'recovery',
+      })).rejects.toMatchObject({ code: 'decision_cross_companion' });
+
+      await expect(ingress.admit({
+        assertion: assertionB,
+        connection: connectionB,
+        human: { kind: 'fleet_browser_session', sessionToken: tokenA },
+      })).rejects.toMatchObject({ code: 'human_binding_mismatch' });
+      await expect(persistence.primaryEmbodiments.read(KNOWN_COMPANION_ID)).resolves.toMatchObject({
+        generation: 2,
+        current: { attachmentId: attachedB.attachment.attachmentId },
+      });
+      await ingress.admit({
+        assertion: assertionB,
+        connection: connectionB,
+        human: { kind: 'detach' },
+      });
+      await expect(persistence.primaryEmbodiments.read(KNOWN_COMPANION_ID)).resolves.toMatchObject({
+        generation: 2,
+        current: { attachmentId: attachedB.attachment.attachmentId },
+        lastDecision: { decisionId: winningDecisionId, decision: 'handoff' },
+      });
+
+      await persistence.fenceHubDeviceAttachment({
+        assertionDigest: createHash('sha256').update(assertionB).digest('hex'),
+        connectionId: connectionB.connectionId,
+        reason: 'enrollment_authority_changed',
+      });
+      await expect(persistence.primaryEmbodiments.read(KNOWN_COMPANION_ID)).resolves.toMatchObject({
+        generation: 3,
+        version: 3,
+        current: null,
+        lastDecision: { decision: 'invalidated', reason: 'enrollment_revoked' },
+      });
+      await ingress.admit({
+        assertion: assertionA,
+        connection: connectionA,
+        human: { kind: 'fleet_browser_session', sessionToken: tokenA },
+      });
+      expect((await persistence.primaryEmbodiments.read(KNOWN_COMPANION_ID)).current).toBeNull();
+
+      const audit = JSON.stringify((await auditPool.query(`
+        SELECT actor_context, resource, decision_context
+        FROM fleet_auth.authorization_audit_events
+        WHERE action LIKE 'primary_embodiment.%'
+      `)).rows);
+      expect(audit).not.toContain(connectionA.deviceId);
+      expect(audit).not.toContain(connectionB.deviceId);
+      expect(audit).not.toContain(connectionA.sessionId);
+      expect(audit).not.toContain(connectionB.sessionId);
+      expect(audit).not.toContain(KNOWN_COMPANION_ID);
+      expect(audit).not.toContain(tokenA);
+      expect(audit).not.toContain(tokenB);
     } finally {
       await auditPool.end();
       await persistence.close();

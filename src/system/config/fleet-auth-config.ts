@@ -54,6 +54,7 @@ export const FLEET_AUTH_ACTIONS = [
   'recovery.begin',
   'companion.read',
   'companion.interact',
+  'embodiment.handoff',
   'garden.read',
   'action_pipe.read',
   'action_pipe.manage',

@@ -6,6 +6,7 @@ import type { FleetAuthAction } from '../../system/config/fleet-auth-config.js';
 import type { CompiledGardenRequestTarget } from './request-capability-target.js';
 import type { GardenRouteAuthorization } from './garden-route-authorization.js';
 import { FLEET_AUTH_ACTION_BASE_ROLE } from './role-action-policy.js';
+import { PRIMARY_EMBODIMENT_HANDOFF_REASONS } from './primary-embodiment.js';
 
 export const COMPANION_UI_ACTION_RESOURCES = [
   'conversation.status',
@@ -17,6 +18,8 @@ export const COMPANION_UI_ACTION_RESOURCES = [
   'confirmations.resolve',
   'artifact.preview',
   'tool_activity.subscribe',
+  'embodiment.status',
+  'embodiment.handoff',
 ] as const;
 
 export type CompanionUiActionResource = typeof COMPANION_UI_ACTION_RESOURCES[number];
@@ -37,6 +40,8 @@ const RESOURCE_ACTION: Readonly<Record<CompanionUiActionResource, FleetAuthActio
   'confirmations.resolve': 'confirmations.resolve',
   'artifact.preview': 'artifacts.read',
   'tool_activity.subscribe': 'tool_activity.read',
+  'embodiment.status': 'companion.read',
+  'embodiment.handoff': 'embodiment.handoff',
 });
 
 function physicalCeiling(
@@ -59,6 +64,8 @@ const RESOURCE_PHYSICAL_CEILING: Readonly<Record<CompanionUiActionResource, Read
   'confirmations.resolve': physicalCeiling([], ['approvals']),
   'artifact.preview': physicalCeiling([], ['artifacts']),
   'tool_activity.subscribe': physicalCeiling([], ['tool_activity']),
+  'embodiment.status': physicalCeiling([], []),
+  'embodiment.handoff': physicalCeiling([], []),
 });
 
 const FORBIDDEN_AUTHORITY_FIELDS = new Set([
@@ -79,7 +86,12 @@ export type CompanionUiActionBody =
   | Readonly<{ transcript: string }>
   | Readonly<{ id: string; decision: 'approve' | 'deny' }>
   | Readonly<{ id: string }>
-  | Readonly<{ subscribe: true }>;
+  | Readonly<{ subscribe: true }>
+  | Readonly<{
+    expectedGeneration: number;
+    decisionId: string;
+    reason: typeof PRIMARY_EMBODIMENT_HANDOFF_REASONS[number];
+  }>;
 
 export interface CompanionUiActionFrame {
   readonly schemaVersion: 1;
@@ -147,6 +159,7 @@ function parseBody(resource: CompanionUiActionResource, value: unknown): Compani
   switch (resource) {
     case 'conversation.status':
     case 'confirmations.list':
+    case 'embodiment.status':
       return parseEmptyBody(value);
     case 'conversation.interact':
       if (!hasExactKeys(value, ['content']) || typeof value.content !== 'string'
@@ -183,6 +196,18 @@ function parseBody(resource: CompanionUiActionResource, value: unknown): Compani
     case 'tool_activity.subscribe':
       if (!hasExactKeys(value, ['subscribe']) || value.subscribe !== true) deny();
       return Object.freeze({ subscribe: true as const });
+    case 'embodiment.handoff':
+      if (!hasExactKeys(value, ['expectedGeneration', 'decisionId', 'reason'])
+        || !Number.isSafeInteger(value.expectedGeneration) || Number(value.expectedGeneration) < 0
+        || typeof value.decisionId !== 'string' || !isRfc4122Uuid(value.decisionId)
+        || !PRIMARY_EMBODIMENT_HANDOFF_REASONS.includes(
+          value.reason as typeof PRIMARY_EMBODIMENT_HANDOFF_REASONS[number],
+        )) deny();
+      return Object.freeze({
+        expectedGeneration: Number(value.expectedGeneration),
+        decisionId: value.decisionId,
+        reason: value.reason as typeof PRIMARY_EMBODIMENT_HANDOFF_REASONS[number],
+      });
   }
 }
 
@@ -216,6 +241,7 @@ function authorizationFor(resource: CompanionUiActionResource): GardenRouteAutho
   const area = resource.startsWith('confirmations.') ? 'confirmations'
     : resource === 'artifact.preview' ? 'channel_artifacts'
       : resource === 'tool_activity.subscribe' ? 'telemetry'
+        : resource.startsWith('embodiment.') ? 'companion'
         : 'companion';
   return Object.freeze({
     action,
@@ -224,7 +250,9 @@ function authorizationFor(resource: CompanionUiActionResource): GardenRouteAutho
     subjectRelation: 'current_companion',
     requirements: Object.freeze({
       assurance: 'oauth',
-      confirmation: resource === 'confirmations.resolve' ? 'explicit' : 'none',
+      confirmation: resource === 'confirmations.resolve' || resource === 'embodiment.handoff'
+        ? 'explicit'
+        : 'none',
       approvals: Object.freeze([]),
     }),
     publicAccess: 'never',

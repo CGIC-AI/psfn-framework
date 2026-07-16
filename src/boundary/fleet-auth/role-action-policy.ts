@@ -26,6 +26,7 @@ export const FLEET_AUTH_ACTION_BASE_ROLE: Readonly<Record<FleetAuthAction, Fleet
     'recovery.begin': null,
     'companion.read': 'guest',
     'companion.interact': 'guest',
+    'embodiment.handoff': 'admin',
     'garden.read': 'admin',
     'action_pipe.read': 'admin',
     'action_pipe.manage': 'admin',

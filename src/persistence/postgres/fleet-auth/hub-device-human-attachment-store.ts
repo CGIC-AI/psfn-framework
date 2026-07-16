@@ -224,7 +224,12 @@ export class PostgresHubDeviceHumanAttachmentStore implements HubDeviceHumanAtta
     try {
       await client.query('BEGIN');
       const authority = await this.lockAuthority(client);
-      const fenced = await client.query<{ attachment_id: string; companion_id: string }>(`
+      const fenced = await client.query<{
+        attachment_id: string;
+        companion_id: string;
+        changed: boolean;
+        primary_invalidated: boolean;
+      }>(`
         SELECT * FROM ${FLEET_AUTH_FENCE_HUB_DEVICE_ATTACHMENT_FUNCTION_NAME}($1, $2, $3, $4)
       `, [input.assertionDigest, input.connectionId, input.reason, this.now()]);
       for (const row of fenced.rows) {
@@ -249,6 +254,29 @@ export class PostgresHubDeviceHumanAttachmentStore implements HubDeviceHumanAtta
           authority.globalAuthEpoch,
           this.now(),
         ]);
+        if (row.changed && row.primary_invalidated) {
+          await client.query(`
+            INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events (
+              event_id, actor_context, action, resource, decision, reason_code,
+              authority_generation, global_auth_epoch, occurred_at
+            ) VALUES ($1, $2::jsonb, 'primary_embodiment.invalidate', $3,
+                      'deny', $4, $5, $6, $7)
+          `, [
+            this.randomId(),
+            JSON.stringify({
+              kind: 'primary_embodiment_invalidation',
+              attachmentDigest: digest(row.attachment_id),
+              companionDigest: digest(row.companion_id),
+            }),
+            `primary_embodiment:${digest(row.companion_id)}`,
+            input.reason === 'enrollment_authority_changed'
+              ? 'enrollment_revoked'
+              : 'device_revoked',
+            authority.authorityGeneration,
+            authority.globalAuthEpoch,
+            this.now(),
+          ]);
+        }
       }
       await client.query('COMMIT');
     } catch (error) {

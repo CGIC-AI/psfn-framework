@@ -297,7 +297,23 @@ echo "==> refreshing companion self-management copies (repo checkout + beads)"
 if [[ -n "$SOURCE_CHECKOUT" ]] && remote "test -d ${SOURCE_CHECKOUT}/.git" 2>/dev/null; then
   git bundle create "$BUILD_DIR/repo.bundle" HEAD >/dev/null 2>&1
   scp "$BUILD_DIR/repo.bundle" "${HOST_ALIAS}:/tmp/psfn-repo-refresh.bundle"
-  remote "sudo git -C ${SOURCE_CHECKOUT} fetch /tmp/psfn-repo-refresh.bundle HEAD 2>/dev/null     && sudo git -C ${SOURCE_CHECKOUT} reset --hard FETCH_HEAD >/dev/null     && sudo chown -R 999:999 ${SOURCE_CHECKOUT} && rm -f /tmp/psfn-repo-refresh.bundle"     && echo "    source checkout refreshed to $(git rev-parse --short=8 HEAD)"     || echo "    WARNING: source checkout refresh failed (non-fatal)"
+  # Fail-closed, non-destructive refresh: the checkout is uid/gid 999-owned, so
+  # trust it inline (-c safe.directory=...) rather than writing global Git state.
+  # Fast-forward only — no 'reset --hard' — and refuse to move the branch when
+  # tracked files are dirty or history has diverged, so preserved untracked
+  # content (e.g. vendor/emosim) and local work are never discarded. The temp
+  # bundle is removed on every path via an EXIT trap.
+  remote "set -e
+    BUNDLE=/tmp/psfn-repo-refresh.bundle
+    trap 'rm -f \$BUNDLE' EXIT
+    GIT='sudo git -C ${SOURCE_CHECKOUT} -c safe.directory=${SOURCE_CHECKOUT}'
+    \$GIT fetch \$BUNDLE HEAD
+    if [ -n \"\$(\$GIT status --porcelain --untracked-files=no)\" ]; then
+      echo 'refusing to refresh: tracked changes present in checkout' >&2
+      exit 3
+    fi
+    \$GIT merge --ff-only FETCH_HEAD
+    sudo chown -R 999:999 ${SOURCE_CHECKOUT}"     && echo "    source checkout refreshed to $(git rev-parse --short=8 HEAD)"     || echo "    WARNING: source checkout refresh skipped — not fast-forwardable or has dirty tracked files; branch left unmoved and untracked content preserved. Reconcile manually (git -c safe.directory=${SOURCE_CHECKOUT} fetch + git merge --ff-only)."
 else
   echo "    no source checkout on host; skipping repo refresh"
 fi

@@ -79,9 +79,10 @@ function makeExecution(record: TurnRecord): {
     assertOwned: () => Promise<void>;
     run: (
       effectKey: string,
-      operation: (assertOwned: () => Promise<void>) => Promise<void>,
+      operation: (assertOwned: () => Promise<void>) => Promise<readonly string[] | void>,
     ) => Promise<void>;
   };
+  committedOutputRefs: string[];
   signal: AbortSignal;
 } {
   const payload: MemoryExtractionBackgroundPayload = {
@@ -102,12 +103,17 @@ function makeExecution(record: TurnRecord): {
     placeId: 'living-room',
   };
   const assertOwned = vi.fn(async () => undefined);
+  const committedOutputRefs: string[] = [];
   return {
     payload,
     effects: {
       assertOwned,
-      run: vi.fn(async (_effectKey, operation) => operation(assertOwned)),
+      run: vi.fn(async (_effectKey, operation) => {
+        const refs = await operation(assertOwned);
+        committedOutputRefs.push(...(refs ?? []));
+      }),
     },
+    committedOutputRefs,
     signal: new AbortController().signal,
     job: {
       jobId: 'background-job-1',
@@ -287,6 +293,35 @@ function makeDependencies(input: {
 }
 
 describe('executePostTurnBackgroundWork', () => {
+  it('projects actual durable extraction targets as canonical typed refs', async () => {
+    const record = makeTurnRecord();
+    const execution = makeExecution(record);
+    const recentEntries: SessionEntry[] = [{
+      id: 2,
+      channelId: record.sessionId!,
+      role: 'assistant',
+      content: record.assistantMessage!.content,
+      timestamp: record.completedAt,
+    }];
+    const fixture = makeDependencies({
+      record,
+      recentEntries,
+      maybeExtract: vi.fn(async () => ({
+        memoryIds: ['memory-1'],
+        concernIds: ['concern-1'],
+        contactIds: ['contact-1'],
+      })),
+    });
+
+    await executePostTurnBackgroundWork(execution, fixture.dependencies);
+
+    expect(execution.committedOutputRefs).toEqual([
+      'loom-output:v1:memory:bWVtb3J5LTE',
+      'loom-output:v1:concern:Y29uY2Vybi0x',
+      'loom-output:v1:contact:Y29udGFjdC0x',
+    ]);
+  });
+
   it('runs memory extraction from the exact rechecked cross-turn snapshot', async () => {
     const record = makeTurnRecord();
     const execution = makeExecution(record);

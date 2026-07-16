@@ -137,6 +137,7 @@ import {
   type SharedWorkspaceCredentials,
 } from './services/shared-workspace-service.js';
 import { requireAuditOpaqueIdKeyring } from './audit-opaque-id-keyring.js';
+import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 
 export interface InProcessGardenAdminContractOptions {
   env?: NodeJS.ProcessEnv;
@@ -144,6 +145,7 @@ export interface InProcessGardenAdminContractOptions {
   apiHost?: string;
   apiPort?: number;
   memoryStore: MemoryStorePort;
+  subsystemOutputRefStore?: Pick<BackgroundWorkStorePort, 'getSubsystemOutputProjection'> | null;
   /**
    * Resolve the trusted subject scope for Garden memory access. The resolver
    * must be bound by authenticated runtime authority, never request payloads.
@@ -478,7 +480,9 @@ export function createInProcessGardenAdminContract(
       sessionManager: options.sessionManager,
       eventBus: options.eventBus,
       contactStore: options.contactStore,
+      concernStore: options.concernStore,
       memoryStore: gardenMemoryStore,
+      subsystemOutputRefStore: options.subsystemOutputRefStore,
       config: options.config,
     }),
     contacts: new AdminContactsDataService({

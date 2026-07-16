@@ -167,6 +167,49 @@ describe('resolveMentionOnlyContactForFact', () => {
     expect(resolved!.id).toBe(alex.id);
     expect((await contactStore.listAll()).filter(contact => contact.displayName === 'Alex')).toHaveLength(1);
   });
+
+  it('reports prior-memory relinks when the mention-only contact already exists', async () => {
+    const primary = await contactStore.upsert({
+      displayName: 'Avery',
+      discordUserId: PRIMARY_USER_ID,
+    });
+    const alex = await contactStore.upsert({
+      displayName: 'Alex',
+      relationshipType: 'stranger',
+    });
+    memoryStore.insertMemory({
+      id: 'memory-existing-contact-relink',
+      text: "Avery's sister Alex is visiting this weekend",
+      type: 'relational',
+      importance: 0.8,
+      confidence: 0.9,
+      emotionalValence: 0,
+      salience: 0.7,
+      sourceRef: 'api:mention-contact:prior',
+      extractedAt: 1,
+      lastAccessed: 1,
+      accessCount: 1,
+      tags: ['family'],
+      sensitivity: 'personal',
+      contactId: primary.id,
+    });
+    const onMemoryRelinked = vi.fn();
+
+    await resolveMentionOnlyContactForFact({
+      fact: makeFact("Avery's sister Alex is visiting this weekend", { tags: ['family'] }),
+      channelId: 'api:mention-contact',
+      canonicalContactId: primary.id,
+      canonicalContactName: primary.displayName,
+      companionName: 'Aster',
+      contactStore,
+      memoryStore: memoryStore.asPort(),
+      onMemoryRelinked,
+    });
+
+    expect(onMemoryRelinked).toHaveBeenCalledWith('memory-existing-contact-relink');
+    expect(memoryStore.getMemoriesByContact(alex.id, 10).map(memory => memory.id))
+      .toContain('memory-existing-contact-relink');
+  });
 });
 
 describe('MemoryExtractor mention-only contacts', () => {
@@ -215,6 +258,8 @@ describe('MemoryExtractor mention-only contacts', () => {
     expect(memoryStore.getMemoriesByContact(primary.id, 10).map(memory => memory.text)).toContain(
       "Avery's sister Alex is moving to Seattle",
     );
+    const priorMemoryId = memoryStore.getMemoriesByContact(primary.id, 10)[0]!.id;
+    const recordRelinkedMemory = vi.fn();
 
     const secondWrite = await (extractor as any).processFact(
       makeFact('Alex called before dinner with the family', { tags: ['family'] }),
@@ -225,6 +270,14 @@ describe('MemoryExtractor mention-only contacts', () => {
 	      undefined,
 	      primary.displayName,
 	      'Aster',
+	      undefined,
+	      undefined,
+	      undefined,
+	      undefined,
+	      undefined,
+	      undefined,
+	      undefined,
+	      recordRelinkedMemory,
 	    );
 
     const alexContacts = (await contactStore.listAll()).filter(contact => contact.displayName === 'Alex');
@@ -236,6 +289,7 @@ describe('MemoryExtractor mention-only contacts', () => {
 
     const alexMemories = memoryStore.getMemoriesByContact(alex.id, 10);
     expect(alexMemories.map(memory => memory.text)).toContain("Avery's sister Alex is moving to Seattle");
+    expect(recordRelinkedMemory).toHaveBeenCalledWith(priorMemoryId);
     expect(memoryStore.getMemoriesByContact(primary.id, 10)).toHaveLength(0);
   });
 

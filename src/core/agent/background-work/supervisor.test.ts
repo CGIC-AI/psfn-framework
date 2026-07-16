@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { EventBus } from '../../../shared/event-bus.js';
+import { buildSubsystemOutputRef } from '../../../shared/contracts/subsystem-output-refs.js';
 import {
   runIntentionPostTurnHooks,
   type IntentionPostTurnHookContext,
@@ -137,6 +138,7 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     leaseOwner: string;
     revision: number;
   }>();
+  private subsystemOutputRefs = new Map<string, Set<string>>();
   private foregroundRenewalLoss = false;
   private requeueFailuresRemaining = 0;
 
@@ -402,12 +404,23 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     leaseOwner: string;
     expectedRevision: number;
     nowMs: number;
+    outputRefs?: readonly string[];
   }): Promise<void> {
     if (!await this.assertClaimOwned(input)) throw new Error('effect completion conflict');
     const receipt = this.effects.get(`${input.jobId}:${input.effectKey}`);
     if (!receipt || receipt.leaseOwner !== input.leaseOwner
       || receipt.revision !== input.expectedRevision) throw new Error('effect receipt conflict');
     receipt.state = 'applied';
+    const job = this.jobs.get(input.jobId)!;
+    const key = [
+      job.logicalSessionId,
+      job.sourceChannelId,
+      job.sourceTurnId,
+      job.sourceRequestId,
+    ].join('\u0000');
+    const refs = this.subsystemOutputRefs.get(key) ?? new Set<string>();
+    for (const ref of input.outputRefs ?? []) refs.add(ref);
+    this.subsystemOutputRefs.set(key, refs);
   }
 
   async abandonEffect(input: {
@@ -554,6 +567,38 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     const job = this.jobs.get(jobId);
     return job ? { ...job } : null;
   }
+
+  async listSubsystemOutputRefs(input: {
+    logicalSessionId: string;
+    sourceChannelId: string;
+    sourceTurnId: string;
+    sourceRequestId: string;
+  }): Promise<string[]> {
+    const key = [
+      input.logicalSessionId,
+      input.sourceChannelId,
+      input.sourceTurnId,
+      input.sourceRequestId,
+    ].join('\u0000');
+    return [...(this.subsystemOutputRefs.get(key) ?? [])].sort();
+  }
+  async getSubsystemOutputProjection(input: {
+    logicalSessionId: string;
+    sourceChannelId: string;
+    sourceTurnId: string;
+    sourceRequestId: string;
+  }) {
+    const key = [
+      input.logicalSessionId,
+      input.sourceChannelId,
+      input.sourceTurnId,
+      input.sourceRequestId,
+    ].join('\u0000');
+    return {
+      status: this.subsystemOutputRefs.has(key) ? 'applied' as const : 'pending' as const,
+      outputRefs: [...(this.subsystemOutputRefs.get(key) ?? [])].sort(),
+    };
+  }
   async close(): Promise<void> {}
 
   corrupt(jobId: string, patch: Partial<StoredBackgroundWorkJob>): void {
@@ -645,6 +690,41 @@ async function flush(): Promise<void> {
 }
 
 describe('BackgroundWorkSupervisor', () => {
+  it('commits returned output refs once against the exact source-turn binding', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    const memoryRef = buildSubsystemOutputRef('memory', 'memory-1');
+    const contactRef = buildSubsystemOutputRef('contact', 'contact-1');
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => 1_000,
+      executor: async ({ effects }) => {
+        await effects.run('durable-sink', async (crossBoundary) => {
+          await crossBoundary();
+          return [contactRef, memoryRef, memoryRef];
+        });
+      },
+    });
+    const input = makeInput('session-a', 'turn-a');
+
+    await supervisor.enqueue([input]);
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+
+    await expect(store.listSubsystemOutputRefs({
+      logicalSessionId: input.logicalSessionId,
+      sourceChannelId: input.sourceChannelId,
+      sourceTurnId: input.sourceTurnId,
+      sourceRequestId: input.sourceRequestId,
+    })).resolves.toEqual([contactRef, memoryRef].sort());
+    await expect(store.listSubsystemOutputRefs({
+      logicalSessionId: input.logicalSessionId,
+      sourceChannelId: input.sourceChannelId,
+      sourceTurnId: input.sourceTurnId,
+      sourceRequestId: 'wrong-request',
+    })).resolves.toEqual([]);
+  });
+
   it('runs different sessions concurrently while preserving one active job per session', async () => {
     const store = new MemoryBackgroundWorkStore();
     const slow = deferred();

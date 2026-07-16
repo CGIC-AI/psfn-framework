@@ -83,6 +83,8 @@ export interface ActiveConcern {
   splitFromId?: string;
   /** Originating ICP root preserved across durable concern review/restart. */
   originIcpRootInitiationId?: string;
+  /** Bounded, validated review input retained only while status=candidate. */
+  candidateReviewSnapshot?: unknown;
 }
 
 export interface ActiveConcernCreateInput {
@@ -102,6 +104,7 @@ export interface ActiveConcernCreateInput {
   mergedFromIds?: readonly string[];
   splitFromId?: string;
   originIcpRootInitiationId?: string;
+  candidateReviewSnapshot?: unknown;
   reopenResolved?: boolean;
   createdAt?: string;
   expiresAt?: string;
@@ -144,6 +147,7 @@ export interface ActiveConcernListOptions {
   includeExpired?: boolean;
   asOf?: string;
   limit?: number;
+  offset?: number;
 }
 
 export interface ActiveConcernStoreOptions {
@@ -345,7 +349,10 @@ export function isConcernTerminalStatus(status: ActiveConcernStatus): status is 
 }
 
 export function isConcernAttentionStatus(status: ActiveConcernStatus): boolean {
-  return !isConcernTerminalStatus(status);
+  return status === 'active'
+    || status === 'watching'
+    || status === 'deferred'
+    || status === 'blocked';
 }
 
 function normalizeConcernEvidenceRef(
@@ -534,7 +541,7 @@ export function validateConcernStatusTransition(input: {
   if (!allowed.includes(input.to)) {
     throw new Error(`Invalid active concern transition: ${input.from} -> ${input.to}`);
   }
-  if (isConcernTerminalStatus(input.from) && isConcernAttentionStatus(input.to)) {
+  if (isConcernTerminalStatus(input.from) && !isConcernTerminalStatus(input.to)) {
     const evidenceRefs = normalizeConcernEvidenceRefs(input.evidenceRefs);
     if (evidenceRefs.length === 0) {
       throw new Error(`Reopening ${input.from} concern requires new safe evidence refs`);

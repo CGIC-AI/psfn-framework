@@ -188,6 +188,12 @@ export interface FinalReflectionExtractionInput {
   createdAt: string;
 }
 
+export interface MemoryExtractionOutputs {
+  memoryIds: string[];
+  concernIds: string[];
+  contactIds: string[];
+}
+
 export interface MemoryExtractor {
   maybeExtract(
     channelId: string,
@@ -198,7 +204,7 @@ export interface MemoryExtractor {
     assertEffectAllowed?: () => Promise<void>,
     /** Undefined permits foreground live-history lookup; an empty array is authoritative. */
     recoveredEntries?: readonly SessionEntry[],
-  ): Promise<void>;
+  ): Promise<MemoryExtractionOutputs | void>;
   /**
    * How many most-recent bounded session entries a durable post-turn handler
    * must snapshot for this extractor. Sized to the configured extraction

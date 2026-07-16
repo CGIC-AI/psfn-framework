@@ -8,22 +8,18 @@ import type { AdminPromptPlanBlock } from '$lib/types';
 export type SelectedTurnTab =
   | 'summary'
   | 'blocks'
-  | 'prompt'
   | 'context'
   | 'tools'
   | 'diff'
-  | 'timeline'
-  | 'raw';
+  | 'timing';
 
 export const selectedTurnTabs = [
   { id: 'summary', label: 'Summary', description: 'Route, prompt, timing, and outcome triage' },
-  { id: 'blocks', label: 'Blocks', description: 'Ordered PromptPlan blocks with volatility, cache regions, static-hash timeline, and provider cache telemetry' },
-  { id: 'prompt', label: 'Prompt Assembly', description: 'Prompt-soil layers, runtime additions, assembled prompt, model context, and provider wire' },
-  { id: 'context', label: 'Context & Memory', description: 'Session inputs, memory retrievals, withholds, capture, and metadata' },
+  { id: 'blocks', label: 'Blocks', description: 'Ordered PromptPlan blocks, assembly metadata, cache regions, and provider cache telemetry' },
+  { id: 'context', label: 'Context & Memory', description: 'Model context, session inputs, memory retrievals, withholds, capture, and subsystem outputs' },
   { id: 'tools', label: 'Tools', description: 'Shipped tool definitions (plan-backed), ordering, and turn-policy state' },
   { id: 'diff', label: 'Turn Diff', description: 'Block-level plan diff between this turn and a baseline turn' },
-  { id: 'timeline', label: 'Timeline', description: 'Stage order, elapsed time, and stage payloads' },
-  { id: 'raw', label: 'Raw Events', description: 'Record, snapshot, stage telemetry, and live bus envelopes' },
+  { id: 'timing', label: 'Timing', description: 'Per-subsystem durations, memory retrievals, time to first token, and total elapsed time' },
 ] satisfies Array<{ id: SelectedTurnTab; label: string; description: string }>;
 
 export function regionTokens(blocks: readonly AdminPromptPlanBlock[]): number {
@@ -63,15 +59,6 @@ export function formatBytesDelta(entry: PromptPlanBlockDiffEntry): string {
   if (entry.bytesDelta === 0) return `±0 bytes (${entry.bytesAfter ?? 0} total, content changed)`;
   const sign = entry.bytesDelta > 0 ? '+' : '';
   return `${sign}${entry.bytesDelta} bytes (${entry.bytesBefore ?? 0} → ${entry.bytesAfter ?? 0})`;
-}
-
-export function toTimestamp(value: number | string | undefined): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim().length > 0) {
-    const parsed = Date.parse(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
 }
 
 export function formatDuration(value: number | null): string {
@@ -166,11 +153,6 @@ export function humanizeToken(value: string | null | undefined): string {
     .join(' ');
 }
 
-export function formatCapability(value: boolean | null | undefined): string {
-  if (value == null) return '—';
-  return value ? 'Yes' : 'No';
-}
-
 export function formatStageName(value: string | null | undefined): string {
   return value ? formatPromptMonitorStageLabel(value) : '—';
 }
@@ -192,10 +174,6 @@ export function activeToolCount(currentTurn: PromptMonitorTurn): number {
 
 export function skippedToolCount(currentTurn: PromptMonitorTurn): number {
   return currentTurn.snapshot?.toolContext?.adaptiveSnapshot?.skipped?.length ?? 0;
-}
-
-export function stageFieldCount(stage: PromptMonitorTurn['stages'][number]): number {
-  return Object.entries(stage.data).length;
 }
 
 export function sessionMetadataJson(currentTurn: PromptMonitorTurn): string | null {

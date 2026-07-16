@@ -6,6 +6,7 @@ import type {
   AdminPromptSectionTelemetry,
   AdminSessionTurnData,
   AdminTurnPromptContextMessage,
+  AdminTurnRetrievalTelemetry,
   AdminTurnSnapshotData,
   AdminTurnStageTelemetry,
 } from '../types';
@@ -36,6 +37,7 @@ export interface PromptMonitorTurn {
   snapshot: AdminTurnSnapshotData | null;
   promptLoom: AdminPromptLoomData | null;
   stages: AdminTurnStageTelemetry[];
+  retrievals: AdminTurnRetrievalTelemetry[];
 }
 
 export interface PromptMonitorSnapshotRejection {
@@ -79,6 +81,13 @@ function cloneStage(stage: AdminTurnStageTelemetry): AdminTurnStageTelemetry {
   return {
     ...stage,
     data: cloneJsonObject(stage.data),
+  };
+}
+
+function cloneRetrieval(retrieval: AdminTurnRetrievalTelemetry): AdminTurnRetrievalTelemetry {
+  return {
+    ...retrieval,
+    data: cloneJsonObject(retrieval.data),
   };
 }
 
@@ -319,6 +328,7 @@ function sortTurns(turns: readonly PromptMonitorTurn[]): PromptMonitorTurn[] {
     .map(turn => ({
       ...turn,
       stages: sortStages(turn.stages),
+      retrievals: turn.retrievals.map(cloneRetrieval),
       snapshot: turn.snapshot ? cloneSnapshot(turn.snapshot) : null,
       promptLoom: turn.promptLoom ? clonePromptLoom(turn.promptLoom) : null,
     }));
@@ -407,6 +417,7 @@ function buildTurnFromSession(
     snapshot,
     promptLoom: turn.promptLoom ? clonePromptLoom(turn.promptLoom) : null,
     stages: sortStages(turn.stages),
+    retrievals: turn.retrievals.map(cloneRetrieval),
   };
 }
 
@@ -542,6 +553,27 @@ function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
       output: {
         extractedMemoryIds: [...(turn.record?.extractedMemoryIds ?? [])],
       },
+    },
+    subsystemOutputs: {
+      projectionStatus: (turn.record?.extractedMemoryIds.length ?? 0)
+        + (turn.record?.concernDeltaRefs.length ?? 0)
+        + (turn.record?.contactDeltaRefs.length ?? 0) > 0
+        ? 'pending'
+        : 'not_applicable',
+      contextManifestRef: turn.record?.contextManifestRef ?? null,
+      internalStateSnapshotRef: turn.record?.internalStateSnapshotRef ?? null,
+      memoryWrites: (turn.record?.extractedMemoryIds ?? []).map(ref => ({
+        ref,
+        status: 'not_resolved',
+      })),
+      concernDeltas: (turn.record?.concernDeltaRefs ?? []).map(ref => ({
+        ref,
+        status: 'not_resolved',
+      })),
+      contactDeltas: (turn.record?.contactDeltaRefs ?? []).map(ref => ({
+        ref,
+        status: 'not_resolved',
+      })),
     },
     toolActivity: {
       toolCalls: toolCalls.map(toolCall => cloneJsonSafe(toolCall)),
@@ -764,6 +796,29 @@ function readStageEnvelopeData(
   return cloneStage(stage);
 }
 
+function readRetrievalEnvelopeData(event: GardenEventEnvelope): AdminTurnRetrievalTelemetry | null {
+  if (event.type !== 'memory.retrieval' || typeof event.data !== 'object' || event.data === null) {
+    return null;
+  }
+  const retrieval = event.data as AdminTurnRetrievalTelemetry;
+  if (
+    typeof retrieval.turnId !== 'string'
+    || retrieval.turnId.trim().length === 0
+    || typeof retrieval.channelId !== 'string'
+    || retrieval.channelId.trim().length === 0
+    || typeof retrieval.observedAt !== 'number'
+    || !Number.isFinite(retrieval.observedAt)
+    || typeof retrieval.count !== 'number'
+    || !Number.isFinite(retrieval.count)
+    || typeof retrieval.data !== 'object'
+    || retrieval.data === null
+    || Array.isArray(retrieval.data)
+  ) {
+    return null;
+  }
+  return cloneRetrieval(retrieval);
+}
+
 export function buildPromptMonitorTurns(
   turns: readonly AdminSessionTurnData[],
   options: PromptMonitorIngestionOptions = {},
@@ -778,12 +833,13 @@ export function mergePromptMonitorEvent(
 ): PromptMonitorTurn[] {
   const snapshot = readSnapshotEnvelopeData(event, options);
   const stage = readStageEnvelopeData(event);
-  if (!snapshot && !stage) {
+  const retrieval = readRetrievalEnvelopeData(event);
+  if (!snapshot && !stage && !retrieval) {
     return [...turns];
   }
 
-  const turnId = snapshot?.turnId ?? stage?.turnId;
-  const channelId = snapshot?.channelId ?? stage?.channelId;
+  const turnId = snapshot?.turnId ?? stage?.turnId ?? retrieval?.turnId;
+  const channelId = snapshot?.channelId ?? stage?.channelId ?? retrieval?.channelId;
   if (!turnId || !channelId) {
     return [...turns];
   }
@@ -800,6 +856,9 @@ export function mergePromptMonitorEvent(
           stage,
         ])
         : sortStages(existing.stages),
+      retrievals: retrieval
+        ? [...existing.retrievals, retrieval].map(cloneRetrieval)
+        : existing.retrievals.map(cloneRetrieval),
     }
     : {
       turnId,
@@ -810,10 +869,28 @@ export function mergePromptMonitorEvent(
       snapshot: snapshot,
       promptLoom: null,
       stages: stage ? [stage] : [],
+      retrievals: retrieval ? [retrieval] : [],
     };
 
   const remaining = turns.filter(candidate => candidate.turnId !== turnId);
   return sortTurns([nextTurn, ...remaining]);
+}
+
+/**
+ * Replace a live-bus projection with the canonical backend-resolved turn.
+ * The lazy turn-detail API uses the same resolver as session history, so after
+ * this merge slim live records and API-fetched records share one render path.
+ */
+export function mergePromptMonitorResolvedTurn(
+  turns: readonly PromptMonitorTurn[],
+  resolvedTurn: AdminSessionTurnData,
+  options: PromptMonitorIngestionOptions = {},
+): PromptMonitorTurn[] {
+  const resolved = buildTurnFromSession(resolvedTurn, options);
+  return sortTurns([
+    resolved,
+    ...turns.filter(turn => turn.turnId !== resolved.turnId),
+  ]);
 }
 
 export function formatPromptMonitorStageLabel(stage: string): string {

@@ -1,6 +1,7 @@
 import type {
   FinalReflectionExtractionInput,
   LLMProviderPort,
+  MemoryExtractionOutputs,
 } from '../../core/agent/contracts.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-port.js';
@@ -14,7 +15,6 @@ import type { GroupMemoryWriteCapSettings } from '../../system/config/group-memo
 import type { TurnID } from '../../shared/contracts/runtime.js';
 import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
 import {
   normalizeCostTelemetryPort,
   type CostTelemetryInput,
@@ -151,8 +151,8 @@ export class MemoryExtractor {
   private sessionStore: SessionStore | null;
   private contactStore: ContactStorePort | null;
   private acceptingExtractions = true;
-  private inFlightExtractions = new Set<Promise<void>>();
-  private inFlightByChannel = new Map<string, Promise<void>>();
+  private inFlightExtractions = new Set<Promise<MemoryExtractionOutputs>>();
+  private inFlightByChannel = new Map<string, Promise<MemoryExtractionOutputs>>();
   private inFlightProfileRefreshes = new Set<Promise<void>>();
   private inFlightProfileByContact = new Map<string, Promise<void>>();
   private getFormationVAD: (() => MemoryFormationVAD | undefined) | null = null;
@@ -276,7 +276,7 @@ export class MemoryExtractor {
     // gate-preempted back into the defer loop. fxt1: the granting job id rides
     // alongside so the gateway can re-verify the welfare escalation.
     extractOptions?: { preemptionProtected?: boolean; welfareGrantJobId?: string },
-  ): Promise<void> {
+  ): Promise<MemoryExtractionOutputs | void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping extraction trigger while extractor is draining', { channelId });
       return;
@@ -312,7 +312,7 @@ export class MemoryExtractor {
       });
     }
 
-    await this.trackExtraction(
+    const outputs = await this.trackExtraction(
       channelId,
       trigger.triggerReason,
       canonicalContactId,
@@ -336,6 +336,7 @@ export class MemoryExtractor {
         boundedEntries,
       );
     }
+    return outputs;
   }
 
   /**
@@ -507,9 +508,10 @@ export class MemoryExtractor {
 
   getPendingExtractionPromise(channelId: string): Promise<void> | null {
     const resolvedChannelId = this.resolveExtractionLogicalSessionId(channelId);
-    return this.inFlightByChannel.get(channelId)
+    const pending = this.inFlightByChannel.get(channelId)
       ?? this.inFlightByChannel.get(resolvedChannelId)
       ?? null;
+    return pending ? pending.then(() => undefined) : null;
   }
 
   private trackExtraction(
@@ -526,7 +528,7 @@ export class MemoryExtractor {
     assertPreWriteFence?: () => Promise<void>,
     preemptionProtected?: boolean,
     welfareGrantJobId?: string,
-  ): Promise<void> {
+  ): Promise<MemoryExtractionOutputs> {
     const logicalSessionId = this.resolveExtractionLogicalSessionId(channelId);
     const existing = this.inFlightByChannel.get(logicalSessionId);
     if (existing && scheduling === 'coalesce') {
@@ -604,7 +606,7 @@ export class MemoryExtractor {
     assertPreWriteFence?: () => Promise<void>,
     preemptionProtected?: boolean,
     welfareGrantJobId?: string,
-  ): Promise<void> {
+  ): Promise<MemoryExtractionOutputs> {
     // u5bv.11: A durable, receipt-bound bounded run (assertEffectAllowed present)
     // can be queued behind other same-session work under serialize scheduling. If
     // the extractor began draining while this run waited its turn, fail closed —
@@ -629,7 +631,7 @@ export class MemoryExtractor {
         logicalSessionId,
         triggerReason,
       });
-      return;
+      return { memoryIds: [], concernIds: [], contactIds: [] };
     }
     let cachedFormationVAD: MemoryFormationVAD | undefined;
     let didResolveFormationVAD = false;
@@ -654,7 +656,10 @@ export class MemoryExtractor {
       ? `reflection-journal:${reflectionSource.journalEntryId}`
       : logicalSessionId;
 
-    await runExtractionOrchestration({
+    const mutatedContactIds = new Set<string>();
+    const mutatedMemoryIds = new Set<string>();
+
+    const outputs = await runExtractionOrchestration({
       channelId,
       triggerReason,
       canonicalContactId,
@@ -718,6 +723,8 @@ export class MemoryExtractor {
           placeId,
           assertEffectAllowed,
           reflectionSource,
+          contactId => mutatedContactIds.add(contactId),
+          memoryId => mutatedMemoryIds.add(memoryId),
         )
       ),
       emitExtractionStart: (extractionChannelId, reason, extractionTurnId) => (
@@ -748,6 +755,11 @@ export class MemoryExtractor {
         : {}),
       ...(assertEffectAllowed ? { assertEffectAllowed } : {}),
     });
+    return {
+      ...outputs,
+      memoryIds: [...new Set([...outputs.memoryIds, ...mutatedMemoryIds])],
+      contactIds: [...new Set([...outputs.contactIds, ...mutatedContactIds])],
+    };
   }
 
   private hasInFlightExtraction(channelId: string): boolean {
@@ -831,6 +843,8 @@ export class MemoryExtractor {
     placeId?: string,
     assertEffectAllowed?: () => Promise<void>,
     reflectionSource?: FinalReflectionExtractionInput,
+    recordMutatedContactId?: (contactId: string) => void,
+    recordMutatedMemoryId?: (memoryId: string) => void,
   ): Promise<WriteResult> {
     await assertEffectAllowed?.();
     const selfDirectedMemory = routing?.routingReason === 'self_directed_companion';
@@ -850,6 +864,8 @@ export class MemoryExtractor {
         companionName,
         contactStore: this.contactStore,
         memoryStore: this.memoryStore,
+        ...(recordMutatedContactId ? { onContactCreated: recordMutatedContactId } : {}),
+        ...(recordMutatedMemoryId ? { onMemoryRelinked: recordMutatedMemoryId } : {}),
       });
       if (mentionOnlyContact) {
         factContactId = mentionOnlyContact.id;
@@ -873,13 +889,14 @@ export class MemoryExtractor {
       && factContactId === canonicalContactId
       && !routing?.subjectContactId
     ) {
-      await resolveInterlocutorRelationshipRatchet({
+      const relationshipMutation = await resolveInterlocutorRelationshipRatchet({
         fact,
         interlocutorContactId: canonicalContactId,
         contactStore: this.contactStore,
         canonicalContactName,
         companionName,
       });
+      if (relationshipMutation) recordMutatedContactId?.(canonicalContactId);
     }
 
     if (routing && this.isTelemetryEnabled()) {
@@ -1060,26 +1077,18 @@ export class MemoryExtractor {
     canonicalContactId: string | undefined,
     acceptedFacts: ExtractedFact[],
     recentEntries: SessionEntry[],
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     // Awaited by the orchestrator inside the effect-guarded region so this
     // durable child settles before the parent receipt is applied (u5bv.6 AC3).
-    // It swallows its own failures and never rejects, so awaiting cannot fail
-    // the extraction effect; the emotional update stays best-effort. It always
-    // runs after the durable write boundary is crossed, so a crash mid-update
-    // fails the effect closed rather than replaying and double-counting.
+    // It runs after the durable write boundary is crossed. Any ambiguous or
+    // failed contact write must reject the effect so recovery records
+    // effect_outcome_unknown instead of silently omitting its output ref.
     return persistEmotionalStateFromExtraction({
       canonicalContactId,
       acceptedFacts,
       recentEntries,
       contactStore: this.contactStore,
       telemetryEnabled: this.isTelemetryEnabled(),
-    }).catch((error: unknown) => {
-      log.warn('Failed to persist emotional state from extraction', {
-        canonicalContactId: canonicalContactId ?? null,
-        acceptedFactCount: acceptedFacts.length,
-        recentEntryCount: recentEntries.length,
-        error: toErrorMessage(error),
-      });
     });
   }
 

@@ -44,7 +44,10 @@ import { IcpFatigueInitiationCapacityAuthority } from '../../core/agent/fatigue/
 import { readRunChargeRollingWindowFromLedger } from '../../shared/telemetry/charge-ledger.js';
 import { RootBoundIcpInitiationCausalityAuthority } from '../../boundary/gateway/icp-initiation-causality-authority.js';
 import { CompanionEventRelay } from '../../channels/backplane/companion-relay/relay.js';
-import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
+import {
+  CHARGE_POLICY_FILE_NAME,
+  loadChargePolicyConfig,
+} from '../../system/config/charge-policy-config.js';
 import {
   ensurePersonalFilesLayout,
   resolveCogSecEventsPath,
@@ -169,7 +172,7 @@ async function main(): Promise<void> {
   });
   log.info('Loaded charge policy quotas', {
     runChargeQuotaByLane: startupHydration.chargePolicyConfig.runChargeQuotaByLane,
-    sourcePath: `${startupHydration.pathSnapshot.systemDataDir}/${CHARGE_POLICY_FILE_NAME}`,
+    sourcePath: `${startupHydration.pathSnapshot.companionDataDir}/${CHARGE_POLICY_FILE_NAME}`,
   });
   if (!bootstrap.diagnostics.workspacePathProvided) {
     log.warn('WORKSPACE_PATH not set, defaulting to runtime layout workspace path', {
@@ -377,6 +380,15 @@ async function main(): Promise<void> {
     const fleetByCompanionId = new Map(
       config.companionFleet.companions.map(entry => [entry.companionId, entry]),
     );
+    const chargePolicyByCompanionId = new Map(
+      config.companionFleet.companions.map(entry => [
+        entry.companionId,
+        loadChargePolicyConfig(
+          entry.companionDataDir,
+          env.CONFIG_DIR ? { seedDir: env.CONFIG_DIR } : {},
+        ),
+      ]),
+    );
     companionPresenceStore = await PostgresCompanionPresenceStore.connect(databaseUrl);
     icpAutonomyStore = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
       knownCompanionIds: fleetCompanionIds,
@@ -388,7 +400,18 @@ async function main(): Promise<void> {
       quietHours: startupHydration.schedulerConfig.episodicProcessing,
       capacityAuthority: new IcpFatigueInitiationCapacityAuthority(
         icpFatigueRegulationStore,
-        startupHydration.chargePolicyConfig,
+        {
+          read: ({ senderCompanionId }) => {
+            const policy = chargePolicyByCompanionId.get(createCompanionId(
+              senderCompanionId,
+              'ICP charge policy senderCompanionId',
+            ));
+            if (!policy) {
+              throw new Error('ICP charge policy requires a known fleet sender');
+            }
+            return policy;
+          },
+        },
         {
           read: ({ senderCompanionId, nowMs }) => {
             const fleetEntry = fleetByCompanionId.get(createCompanionId(

@@ -105,8 +105,8 @@ function copyCanonicalOwners(seedDir: string, systemDataDir: string): void {
 }
 
 /**
- * Per-companion owner files (capability-tier.json dnll.2, scheduler.json dnll.3)
- * are rooted at companionDataDir, not the shared systemDataDir. Copy the
+ * Per-companion owner files are rooted at companionDataDir, not the shared
+ * systemDataDir. Copy the
  * fully-configured system-root copies into each companion root so the runtime,
  * which now loads them from companionDataDir, boots. The systemDataDir copies are
  * left in place as the configuration template these are derived from.

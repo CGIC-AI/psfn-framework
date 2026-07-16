@@ -122,8 +122,8 @@ export function createOwnerFileConfigStore(
     ...loadOptions,
     defaultContextWindow: options.defaultContextWindow,
   };
-  // capability-tier.json (dnll.2) and scheduler.json (dnll.3) are per-companion
-  // owner files; route them at the companion root, not the shared system root.
+  // Whole-file per-companion owners are routed at the companion root, not the
+  // shared system root. Their membership is governed by settings-contract.ts.
   const companionDataDir = options.companionDataDir ?? options.dataDir;
 
   return {
@@ -137,8 +137,8 @@ export function createOwnerFileConfigStore(
     saveScheduler: (nextConfig) => saveSchedulerConfig(companionDataDir, nextConfig),
     loadCapabilityTier: () => loadCapabilityTierConfig(companionDataDir, loadOptions),
     saveCapabilityTier: (nextConfig) => saveCapabilityTierConfig(companionDataDir, nextConfig),
-    loadChargePolicy: () => loadChargePolicyConfig(options.dataDir, loadOptions),
-    saveChargePolicy: (nextConfig) => saveChargePolicyConfig(options.dataDir, nextConfig),
+    loadChargePolicy: () => loadChargePolicyConfig(companionDataDir, loadOptions),
+    saveChargePolicy: (nextConfig) => saveChargePolicyConfig(companionDataDir, nextConfig),
     loadChannels: (env, overrides) => loadRuntimeChannelsConfig(
       options.dataDir,
       env,
@@ -174,7 +174,7 @@ export function createOwnerFileConfigStore(
       options.seedDir,
     ),
     loadStartupChargePolicy: () => loadStartupChargePolicyOwnerFile(
-      options.dataDir,
+      companionDataDir,
       options.seedDir,
     ),
     loadStartupIntakePolicy: () => loadStartupIntakePolicyOwnerFile(

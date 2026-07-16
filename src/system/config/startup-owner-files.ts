@@ -274,9 +274,9 @@ export function verifyStartupOwnerFiles(
     },
     {
       label: 'charge-policy',
-      dataPath: join(options.dataDir, CHARGE_POLICY_FILE_NAME),
+      dataPath: join(companionDataDir, CHARGE_POLICY_FILE_NAME),
       seedPath: join(seedDir, CHARGE_POLICY_SEED_FILE_NAME),
-      run: () => loadStartupChargePolicyOwnerFile(options.dataDir, options.seedDir),
+      run: () => loadStartupChargePolicyOwnerFile(companionDataDir, options.seedDir),
     },
     {
       label: 'backup',

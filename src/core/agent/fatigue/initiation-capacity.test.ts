@@ -53,7 +53,7 @@ describe("IcpFatigueInitiationCapacityAuthority", () => {
       .mockResolvedValueOnce({ relationshipPressure: 5.01 });
     const authority = new IcpFatigueInitiationCapacityAuthority(
       { readInitiationPressure },
-      policy,
+      { read: () => policy },
       emptyChargeBalance,
     );
 
@@ -95,7 +95,7 @@ describe("IcpFatigueInitiationCapacityAuthority", () => {
           contributingEpisodeCount: 0,
         }),
       },
-      policy,
+      { read: () => policy },
       emptyChargeBalance,
     );
 
@@ -125,7 +125,7 @@ describe("IcpFatigueInitiationCapacityAuthority", () => {
       });
     const authority = new IcpFatigueInitiationCapacityAuthority(
       { readInitiationPressure: async () => ({ relationshipPressure: 0 }) },
-      policy,
+      { read: () => policy },
       { read },
     );
 
@@ -138,10 +138,47 @@ describe("IcpFatigueInitiationCapacityAuthority", () => {
     const policy = makeTestChargePolicyConfig();
     const authority = new IcpFatigueInitiationCapacityAuthority(
       { readInitiationPressure: async () => ({ relationshipPressure: 0 }) },
-      policy,
+      { read: () => policy },
       { read: async () => { throw new Error("charge ledger unavailable"); } },
     );
 
     await expect(authority.resolve(input())).rejects.toThrow("charge ledger unavailable");
+  });
+
+  it("resolves the policy and ledger against the same sender companion", async () => {
+    const policyA = makeTestChargePolicyConfig();
+    policyA.runChargeQuotaByLane.companion_social = 0;
+    const policyB = makeTestChargePolicyConfig();
+    policyB.runChargeQuotaByLane.companion_social = 4;
+    const readPolicy = vi.fn(({ senderCompanionId }: { senderCompanionId: string }) => {
+      if (senderCompanionId === A) return policyA;
+      if (senderCompanionId === B) return policyB;
+      throw new Error("unknown policy owner");
+    });
+    const readBalance = vi.fn(() => ({
+      windowMs: 24 * 60 * 60_000,
+      spentByLane: {},
+      entryCount: 0,
+    }));
+    const authority = new IcpFatigueInitiationCapacityAuthority(
+      { readInitiationPressure: async () => ({ relationshipPressure: 0 }) },
+      { read: readPolicy },
+      { read: readBalance },
+    );
+    const fromB = input();
+    fromB.senderCompanionId = B;
+    fromB.candidate = {
+      ...fromB.candidate,
+      localCompanionId: B,
+      peerCompanionId: A,
+    };
+    fromB.channelId = `companion-dm:${B}:${A}`;
+
+    await expect(authority.resolve(input())).resolves.toMatchObject({ chargeAllows: false });
+    await expect(authority.resolve(fromB)).resolves.toMatchObject({ chargeAllows: true });
+    expect(readPolicy).toHaveBeenNthCalledWith(1, { senderCompanionId: A });
+    expect(readPolicy).toHaveBeenNthCalledWith(2, { senderCompanionId: B });
+    expect(readBalance).toHaveBeenNthCalledWith(1, { senderCompanionId: A, nowMs: 10_000 });
+    expect(readBalance).toHaveBeenNthCalledWith(2, { senderCompanionId: B, nowMs: 10_000 });
   });
 });

@@ -141,9 +141,8 @@ export function createIsolatedE2ERuntime(
       'backup.json',
       'skills.json',
     ]) {
-      // Per-companion owner files (capability-tier.json dnll.2, scheduler.json
-      // dnll.3) are rooted at companionDataDir; the rest stay cluster-global at
-      // systemDataDir.
+      // Registry-owned per-companion files are rooted at companionDataDir; the
+      // rest stay cluster-global at systemDataDir.
       copyOwnerExample(
         seedDir,
         PER_COMPANION_OWNER_FILES.has(ownerFile) ? companionDataDir : systemDataDir,

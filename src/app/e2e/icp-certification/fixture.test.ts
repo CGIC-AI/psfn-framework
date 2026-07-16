@@ -4,7 +4,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { loadAgentConfig } from '../../../system/config/load-config.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../../system/config/runtime-config.js';
-import { loadSchedulerConfig } from '../../../system/config/scheduler-config.js';
+import {
+  DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG,
+  loadSchedulerConfig,
+} from '../../../system/config/scheduler-config.js';
 import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
@@ -94,6 +97,11 @@ describe('ICP certification production-shape fixture', () => {
         chat: { contextWindow: 4_096, maxTokens: 1_024 },
       },
     });
+    for (const companion of fixture.companions) {
+      expect(loadSchedulerConfig(companion.companionDataDir, {
+        seedDir: companion.env.CONFIG_DIR,
+      }).backgroundWorkWelfare).toEqual(DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG);
+    }
     expect(existsSync(fixture.artifactsPath)).toBe(false);
   });
 

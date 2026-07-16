@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { saveSettings } from '../../../system/settings.js';
 import {
+  DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG,
   loadSchedulerSeedDefaults,
   saveSchedulerConfig,
 } from '../../../system/config/scheduler-config.js';
@@ -147,6 +148,7 @@ describe('resolveStartupPreflightBundle', () => {
         ...loadSchedulerSeedDefaults().backgroundMaintenance,
         intervalMs: 123_000,
       },
+      backgroundWorkWelfare: { ...DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG },
     });
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
@@ -183,6 +185,8 @@ describe('resolveStartupPreflightBundle', () => {
     expect(bundle.startupHydration.pathSnapshot.systemDataDir).toBe(systemDataDir);
     expect(bundle.startupHydration.pathSnapshot.companionDataDir).toBe(companionDataDir);
     expect(bundle.startupHydration.schedulerConfig.backgroundMaintenance.intervalMs).toBe(123_000);
+    expect(bundle.startupHydration.schedulerConfig.backgroundWorkWelfare)
+      .toEqual(DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG);
     expect(config.sessionMessageLimit).toBe(30);
     expect(config.memoryRetrievalLimit).toBe(15);
     expect(config.maintenanceIntervalMs).toBe(300_000);

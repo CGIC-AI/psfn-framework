@@ -51,6 +51,10 @@ describe('agent core runtime builder', () => {
       join(SRC_DIR, '../startup/composition/composition.ts'),
       'utf-8',
     );
+    const icpCertificationAgentSource = readFileSync(
+      join(SRC_DIR, '../e2e/icp-certification/agent-process.ts'),
+      'utf-8',
+    );
     const substrateAgentSource = readFileSync(
       join(SRC_DIR, '../../core/agent/substrate-agent.ts'),
       'utf-8',
@@ -75,6 +79,9 @@ describe('agent core runtime builder', () => {
     );
     expect(compositionSource).toContain(
       'backgroundWorkWelfare: options.backgroundWorkWelfare',
+    );
+    expect(icpCertificationAgentSource).toContain(
+      'backgroundWorkWelfare: startup.schedulerConfig.backgroundWorkWelfare',
     );
     expect(substrateAgentSource).toContain('...backgroundWorkTuning.supervisor');
     expect(substrateAgentSource).toContain('tuning: backgroundWorkTuning.postTurn');

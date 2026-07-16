@@ -354,6 +354,9 @@ export function hydrateCanonicalStartupConfig(
     ...(persistedScheduler.introspectionAudit
       ? { introspectionAudit: { ...persistedScheduler.introspectionAudit } }
       : {}),
+    ...(persistedScheduler.backgroundWorkWelfare
+      ? { backgroundWorkWelfare: { ...persistedScheduler.backgroundWorkWelfare } }
+      : {}),
   };
   const chargePolicyConfig = configStore.loadStartupChargePolicy();
   config.chargePolicy = chargePolicyConfig;

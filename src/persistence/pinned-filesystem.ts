@@ -28,6 +28,10 @@ export interface InspectedPinnedFile extends FilesystemIdentity {
   sha256: string;
 }
 
+export interface ReadPinnedFile extends InspectedPinnedFile {
+  content: Buffer;
+}
+
 const DIRECTORY_OPEN_FLAGS = constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW;
 
 function procDescriptorPath(descriptor: number): string {
@@ -195,6 +199,21 @@ export function inspectPinnedRegularFile(
   label: string,
   options: { fsync?: boolean } = {},
 ): InspectedPinnedFile {
+  const inspected = readPinnedRegularFile(directory, leaf, label, options);
+  return {
+    bytes: inspected.bytes,
+    sha256: inspected.sha256,
+    device: inspected.device,
+    inode: inspected.inode,
+  };
+}
+
+export function readPinnedRegularFile(
+  directory: PinnedDirectory,
+  leaf: string,
+  label: string,
+  options: { fsync?: boolean } = {},
+): ReadPinnedFile {
   const operationPath = pinnedLeafPath(directory, leaf);
   let descriptor: number | null = null;
   try {
@@ -204,11 +223,13 @@ export function inspectPinnedRegularFile(
       throw new Error(`${label} must be a regular file without symlinks: ${resolve(directory.logicalPath, leaf)}`);
     }
     if (options.fsync) fsyncSync(descriptor);
+    const content = readFileSync(descriptor);
     return {
       bytes: Number(stats.size),
-      sha256: createHash('sha256').update(readFileSync(descriptor)).digest('hex'),
+      sha256: createHash('sha256').update(content).digest('hex'),
       device: stats.dev.toString(),
       inode: stats.ino.toString(),
+      content,
     };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
@@ -217,6 +238,19 @@ export function inspectPinnedRegularFile(
     throw error;
   } finally {
     if (descriptor !== null) closeSync(descriptor);
+  }
+}
+
+export function assertPinnedDirectoryAtLogicalPath(
+  directory: PinnedDirectory,
+  label: string,
+): void {
+  let current: PinnedDirectory | undefined;
+  try {
+    current = pinAbsoluteDirectory(directory.logicalPath, label);
+    assertFilesystemIdentity(current.identity, directory.identity, label);
+  } finally {
+    closePinnedDirectory(current);
   }
 }
 

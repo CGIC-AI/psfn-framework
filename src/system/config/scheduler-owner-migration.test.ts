@@ -1,9 +1,13 @@
 import {
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -11,7 +15,11 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadSchedulerConfig, SCHEDULER_FILE_NAME } from './scheduler-config.js';
+import {
+  DEFAULT_BACKGROUND_MAINTENANCE_CONFIG,
+  loadSchedulerConfig,
+  SCHEDULER_FILE_NAME,
+} from './scheduler-config.js';
 import { migrateLegacySchedulerOwner } from './scheduler-owner-migration.js';
 
 const fixturePath = join(
@@ -131,6 +139,66 @@ describe('migrateLegacySchedulerOwner', () => {
     expect(readFileSync(filePath, 'utf8')).toBe(before);
   });
 
+  it('refuses a scheduler owner leaf symlink without importing or replacing its target', () => {
+    const { dataDir, filePath } = prepareOwner();
+    const otherCompanionDir = join(dataDir, 'other-companion');
+    const otherCompanionOwner = join(otherCompanionDir, SCHEDULER_FILE_NAME);
+    mkdirSync(otherCompanionDir);
+    const targetBytes = readFileSync(filePath, 'utf8');
+    writeFileSync(otherCompanionOwner, targetBytes, 'utf8');
+    rmSync(filePath);
+    symlinkSync(otherCompanionOwner, filePath);
+
+    expect(() => migrateLegacySchedulerOwner({ dataDir, apply: true })).toThrow(
+      /regular file without symlinks/,
+    );
+    expect(lstatSync(filePath).isSymbolicLink()).toBe(true);
+    expect(readFileSync(otherCompanionOwner, 'utf8')).toBe(targetBytes);
+  });
+
+  it('refuses a symlinked data-directory ancestor without mutating its scheduler owner', () => {
+    const { dataDir, filePath } = prepareOwner();
+    const realCompanionDir = join(dataDir, 'real-companion');
+    const linkedCompanionDir = join(dataDir, 'linked-companion');
+    mkdirSync(realCompanionDir);
+    const realOwnerPath = join(realCompanionDir, SCHEDULER_FILE_NAME);
+    renameSync(filePath, realOwnerPath);
+    symlinkSync(realCompanionDir, linkedCompanionDir);
+    const before = readFileSync(realOwnerPath, 'utf8');
+
+    expect(() => migrateLegacySchedulerOwner({
+      dataDir: linkedCompanionDir,
+      apply: true,
+    })).toThrow(/directory without symlinks/);
+    expect(readFileSync(realOwnerPath, 'utf8')).toBe(before);
+  });
+
+  it('fails closed and cleans its temporary when the pinned data directory path is swapped', () => {
+    const { dataDir, filePath } = prepareOwner();
+    const movedDataDir = `${dataDir}-moved`;
+    const before = readFileSync(filePath, 'utf8');
+    const replacementBytes = '{"replacement":true}\n';
+
+    try {
+      expect(() => migrateLegacySchedulerOwner({
+        dataDir,
+        apply: true,
+        faultInjection: (stage) => {
+          if (stage !== 'after_file_sync') return;
+          renameSync(dataDir, movedDataDir);
+          mkdirSync(dataDir);
+          writeFileSync(filePath, replacementBytes, 'utf8');
+        },
+      })).toThrow(/changed identity/);
+
+      expect(readFileSync(join(movedDataDir, SCHEDULER_FILE_NAME), 'utf8')).toBe(before);
+      expect(readFileSync(filePath, 'utf8')).toBe(replacementBytes);
+      expect(readdirSync(movedDataDir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+    } finally {
+      rmSync(movedDataDir, { recursive: true, force: true });
+    }
+  });
+
   it('validates then atomically applies once while preserving unrelated owner data', () => {
     const { dataDir, filePath, original } = prepareOwner((owner) => {
       owner.operatorExtension = { note: 'preserve me', enabled: true };
@@ -171,6 +239,43 @@ describe('migrateLegacySchedulerOwner', () => {
     });
     expect(readFileSync(filePath, 'utf8')).toBe(bytesAfterApply);
     expect(statSync(filePath).ino).toBe(inodeAfterApply);
+  });
+
+  it.each([
+    ['after_file_sync', 'legacy'],
+    ['after_publish', 'canonical'],
+    ['after_directory_sync', 'canonical'],
+  ] as const)('publishes through the durable atomic %s boundary', (stage, expectedState) => {
+    const { dataDir, filePath } = prepareOwner();
+    const before = readFileSync(filePath, 'utf8');
+
+    expect(() => migrateLegacySchedulerOwner({
+      dataDir,
+      apply: true,
+      faultInjection: (currentStage) => {
+        if (currentStage === stage) throw new Error(`crash:${stage}`);
+      },
+    })).toThrow(`crash:${stage}`);
+
+    if (expectedState === 'legacy') {
+      expect(readFileSync(filePath, 'utf8')).toBe(before);
+      expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({ status: 'planned' });
+    } else {
+      expect(loadSchedulerConfig(dataDir).backgroundMaintenance.intervalMs).toBe(3_600_000);
+      expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({ status: 'not_needed' });
+    }
+  });
+
+  it('refuses a mixed legacy/canonical owner without changing its bytes', () => {
+    const { dataDir, filePath } = prepareOwner((owner) => {
+      owner.backgroundMaintenance = structuredClone(DEFAULT_BACKGROUND_MAINTENANCE_CONFIG);
+    });
+    const before = readFileSync(filePath, 'utf8');
+
+    expect(() => migrateLegacySchedulerOwner({ dataDir, apply: true })).toThrow(
+      /refuses a mixed shape/,
+    );
+    expect(readFileSync(filePath, 'utf8')).toBe(before);
   });
 
   it('falls back to the legacy social-graph cadence when no salience cadence exists', () => {

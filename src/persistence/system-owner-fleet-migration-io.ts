@@ -300,6 +300,49 @@ export function verifyDestination(
   };
 }
 
+export function verifyCompletedDestinationEvidence(
+  file: FileReceiptEntry,
+  destination: DestinationReceiptEntry,
+  pins: DestinationPins,
+): void {
+  // Completion binds retained evidence, while the canonical owner remains mutable.
+  assertFilesystemIdentity(
+    pins.destinationDirectory.identity,
+    destination.companionDataDirIdentity,
+    `${file.ownerFile} migration destination directory`,
+  );
+  assertFilesystemIdentity(
+    pins.stagingDirectory.identity,
+    requireStagingDirectoryIdentity(destination),
+    `${file.ownerFile} migration staging directory`,
+  );
+  if (!pinnedLeafExists(pins.destinationDirectory, file.ownerFile)) {
+    throw new Error(`Verified destination disappeared for ${file.ownerFile}: ${destination.destinationPath}`);
+  }
+  inspectPinnedRegularFile(
+    pins.destinationDirectory,
+    file.ownerFile,
+    `${file.ownerFile} migration destination`,
+    { fsync: true },
+  );
+  const temporary = inspectPinnedRegularFile(
+    pins.stagingDirectory,
+    basename(destination.temporaryPath),
+    `${file.ownerFile} migration temporary`,
+    { fsync: true },
+  );
+  if (temporary.sha256 !== file.sourceSha256 || temporary.bytes !== file.sourceBytes) {
+    throw new Error(`Migration-owned temporary conflict for ${file.ownerFile}: ${destination.temporaryPath}`);
+  }
+  if (destination.temporaryIdentity) {
+    assertFilesystemIdentity(
+      temporary,
+      destination.temporaryIdentity,
+      `${file.ownerFile} migration temporary`,
+    );
+  }
+}
+
 export function assertSourceUnchanged(
   file: FileReceiptEntry,
   systemDirectory: PinnedDirectory,

@@ -236,8 +236,7 @@ describe('fleet restore against real Postgres', () => {
     const pool = createPostgresPool(databaseUrl, { schema: 'companion_alpha', max: 2 });
     try {
       await admin.query(`
-        CREATE SCHEMA extensions;
-        CREATE EXTENSION vector WITH SCHEMA extensions;
+        CREATE EXTENSION vector WITH SCHEMA public;
         CREATE SCHEMA companion_alpha;
       `);
       const store = await createPostgresMemoryStoreFromPool(pool, 4);

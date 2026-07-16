@@ -33,6 +33,8 @@ const PASSWORDS = {
 const keyPair = generateKeyPairSync('ed25519');
 const publicKeyPem = keyPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
 const privateKeyPem = keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+const hubKeyPair = generateKeyPairSync('ed25519');
+const hubPublicKeyPem = hubKeyPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
 
 interface GatewayTestContext {
   databaseName: string;
@@ -101,7 +103,7 @@ function config(): FleetAuthConfig {
       clockSkewSeconds: 2,
       keys: [{
         kid: 'hub-gateway-startup-test',
-        publicKeyPem,
+        publicKeyPem: hubPublicKeyPem,
         notBefore: '2026-01-01T00:00:00.000Z',
         notAfter: '2099-01-01T00:00:00.000Z',
         status: 'active',
@@ -156,7 +158,7 @@ function hubDeviceAssertionToken(input: {
   const signature = sign(
     null,
     Buffer.from(`${encodedHeader}.${encodedClaims}`, 'ascii'),
-    keyPair.privateKey,
+    hubKeyPair.privateKey,
   ).toString('base64url');
   return `${encodedHeader}.${encodedClaims}.${signature}`;
 }

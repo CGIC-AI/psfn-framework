@@ -15,7 +15,7 @@ import {
   buildRuntimeDiagnosticsSnapshot,
   resetRuntimeDiagnosticsForTests,
 } from '../../shared/diagnostics/runtime-diagnostics.js';
-import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import type { FleetAuthFamilyDatabaseRoles } from '../postgres/fleet-auth/schema.js';
 import { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
 import type { BackupRuntimeConfig } from './config.js';
 import { verifyWorkspaceTreeSnapshot } from './companion-tree.js';
@@ -38,10 +38,11 @@ import {
 } from './service.js';
 import { restoreFleetCompanionSlice } from './fleet-restore.js';
 
-const ROLES: FleetAuthDatabaseRoles = {
+const ROLES: FleetAuthFamilyDatabaseRoles = {
   runtime: 'auth_runtime',
   migration: 'auth_migration',
   backupRestore: 'auth_backup_restore',
+  sharedMigration: 'shared_migration',
 };
 
 const ENCRYPTION: BackupEncryptionRuntimeConfig = {

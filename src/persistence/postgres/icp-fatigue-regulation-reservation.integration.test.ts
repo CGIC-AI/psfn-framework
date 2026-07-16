@@ -10,6 +10,7 @@ import { PostgresIcpSharedAutonomyStore } from "./icp-shared-autonomy-store.js";
 import { PostgresIcpFatigueRegulationReservationStore } from "./icp-fatigue-regulation-reservation-store.js";
 import { createPostgresPool, withPostgresClient } from "../postgres.js";
 import { POSTGRES_SHARED_MIGRATIONS } from "./migrations.js";
+import { bootstrapSharedSchema } from "./shared-schema.js";
 
 const TIMEOUT_MS = 120_000;
 const A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -33,6 +34,13 @@ beforeAll(async () => {
 afterAll(async () => {
   if (harness) await harness.stop();
 }, TIMEOUT_MS);
+
+async function freshDatabaseUrl(): Promise<string> {
+  if (!harness) throw new Error("Postgres integration harness is unavailable");
+  const databaseUrl = (await harness.createDatabase()).databaseUrl;
+  await bootstrapSharedSchema(databaseUrl);
+  return databaseUrl;
+}
 
 function correlation(input: {
   conversationId: string;
@@ -195,6 +203,7 @@ describe("Postgres ICP fatigue regulation reservations", () => {
             await client.query(statement);
           }
         });
+        await bootstrapSharedSchema(databaseUrl);
         const first =
           await PostgresIcpFatigueRegulationReservationStore.connect(databaseUrl);
         await first.close();
@@ -230,7 +239,7 @@ describe("Postgres ICP fatigue regulation reservations", () => {
     async () => {
       if (!harness)
         throw new Error("Postgres integration harness is unavailable");
-      const databaseUrl = (await harness.createDatabase()).databaseUrl;
+      const databaseUrl = await freshDatabaseUrl();
       const episodes = await PostgresIcpSharedAutonomyStore.connect(
         databaseUrl,
         {
@@ -379,7 +388,7 @@ describe("Postgres ICP fatigue regulation reservations", () => {
     async () => {
       if (!harness)
         throw new Error("Postgres integration harness is unavailable");
-      const databaseUrl = (await harness.createDatabase()).databaseUrl;
+      const databaseUrl = await freshDatabaseUrl();
       const episodes = await PostgresIcpSharedAutonomyStore.connect(
         databaseUrl,
         {
@@ -480,7 +489,7 @@ describe("Postgres ICP fatigue regulation reservations", () => {
     async () => {
       if (!harness)
         throw new Error("Postgres integration harness is unavailable");
-      const databaseUrl = (await harness.createDatabase()).databaseUrl;
+      const databaseUrl = await freshDatabaseUrl();
       const episodes = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
         knownCompanionIds: [A, B],
       });
@@ -567,7 +576,7 @@ describe("Postgres ICP fatigue regulation reservations", () => {
     async () => {
       if (!harness)
         throw new Error("Postgres integration harness is unavailable");
-      const databaseUrl = (await harness.createDatabase()).databaseUrl;
+      const databaseUrl = await freshDatabaseUrl();
       const episodes = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
         knownCompanionIds: [A, B],
       });
@@ -623,7 +632,7 @@ describe("Postgres ICP fatigue regulation reservations", () => {
     async () => {
       if (!harness)
         throw new Error("Postgres integration harness is unavailable");
-      const databaseUrl = (await harness.createDatabase()).databaseUrl;
+      const databaseUrl = await freshDatabaseUrl();
       const episodes = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
         knownCompanionIds: [A, B],
       });
@@ -675,7 +684,7 @@ describe("Postgres ICP fatigue regulation reservations", () => {
     async () => {
       if (!harness)
         throw new Error("Postgres integration harness is unavailable");
-      const databaseUrl = (await harness.createDatabase()).databaseUrl;
+      const databaseUrl = await freshDatabaseUrl();
       const episodes = await PostgresIcpSharedAutonomyStore.connect(
         databaseUrl,
         {

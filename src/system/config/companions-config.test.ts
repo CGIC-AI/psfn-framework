@@ -22,18 +22,29 @@ import {
 } from './companions-config.js';
 
 const VALID_FLEET: CompanionsFleetConfig = {
+  postgres: {
+    sharedMigrationRole: 'shared_schema_migration',
+    sharedMigrationDatabaseUrlRef: {
+      kind: 'env',
+      envName: 'SHARED_SCHEMA_MIGRATION_DATABASE_URL',
+    },
+  },
   companions: [
     {
       companionId: '11111111-1111-4111-8111-111111111111',
       companionDataDir: 'companions/flagship',
       characterCardPath: 'companions/flagship/character-card.json',
       postgresSchema: 'companion_flagship',
+      postgresRole: 'companion_flagship_runtime',
+      postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_FLAGSHIP_DATABASE_URL' },
     },
     {
       companionId: '22222222-2222-4222-8222-222222222222',
       companionDataDir: 'companions/aria',
       characterCardPath: 'companions/aria/character-card.json',
       postgresSchema: 'companion_aria',
+      postgresRole: 'companion_aria_runtime',
+      postgresDatabaseUrlRef: { kind: 'env', envName: 'COMPANION_ARIA_DATABASE_URL' },
     },
   ],
 };
@@ -120,6 +131,24 @@ describe('companions owner-file config', () => {
       fleet.companions[1].postgresSchema = fleet.companions[0].postgresSchema;
       expect(() => validateCompanionsConfig(fleet, 'companions.json'))
         .toThrow(/duplicate postgresSchema/);
+    });
+
+    it('rejects reused topology roles and credential references', () => {
+      const duplicateRole = clone(VALID_FLEET);
+      duplicateRole.companions[1].postgresRole = duplicateRole.companions[0].postgresRole;
+      expect(() => validateCompanionsConfig(duplicateRole, 'companions.json'))
+        .toThrow(/duplicate postgresRole/);
+
+      const duplicateCredential = clone(VALID_FLEET);
+      duplicateCredential.companions[1].postgresDatabaseUrlRef =
+        duplicateCredential.companions[0].postgresDatabaseUrlRef;
+      expect(() => validateCompanionsConfig(duplicateCredential, 'companions.json'))
+        .toThrow(/duplicate postgresDatabaseUrlRef/);
+
+      const sharedRole = clone(VALID_FLEET);
+      sharedRole.postgres.sharedMigrationRole = sharedRole.companions[0].postgresRole;
+      expect(() => validateCompanionsConfig(sharedRole, 'companions.json'))
+        .toThrow(/shared migration role must be distinct/);
     });
 
     it('rejects an uppercase postgresSchema', () => {

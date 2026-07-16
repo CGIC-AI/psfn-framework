@@ -11,7 +11,7 @@ import { basename, join, resolve } from 'node:path';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
 import { recordBackupDiagnosticOutcome } from '../../shared/diagnostics/runtime-diagnostics.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import type { FleetAuthFamilyDatabaseRoles } from '../postgres/fleet-auth/schema.js';
 import type { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
 import type { BackupRuntimeConfig } from './config.js';
 import type {
@@ -38,7 +38,7 @@ function sha256(path: string): string {
 
 export interface FleetAuthConsistentBackupCycleOptions {
   backupRestoreDatabaseUrl: string;
-  roles: FleetAuthDatabaseRoles;
+  roles: FleetAuthFamilyDatabaseRoles;
   schemas: ReadonlyArray<{
     kind: 'companion' | 'shared';
     schema: string;
@@ -73,7 +73,7 @@ export interface FleetAuthFamilyRestoreVerificationOptions {
   manifestPath: string;
   fleetManifestPath: string;
   scratchDatabaseUrl: string;
-  roles: FleetAuthDatabaseRoles;
+  roles: FleetAuthFamilyDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
   activationGeneration: number;
   pgRestoreBinary?: string;

@@ -4,13 +4,32 @@ import {
   assertValidPostgresSchemaName,
   createPostgresPool,
 } from '../postgres.js';
-import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import {
+  FLEET_AUTH_SCHEMA_NAME,
+  type FleetAuthFamilyDatabaseRoles,
+} from '../postgres/fleet-auth/schema.js';
+import { parseExactPostgresCredential } from '../../shared/utils/postgres-credential.js';
+import { assertPostgresRolesAreLeastPrivilege } from '../postgres/role-posture.js';
 
 export interface FleetAuthSchemaAccessContract {
   kind: 'companion' | 'shared';
   schema: string;
   ownerRole: string;
   runtimeRoles: readonly string[];
+}
+
+export interface SharedSchemaRoleBoundary {
+  sharedMigration: string;
+  protectedRoles?: readonly string[];
+}
+
+type SchemaAccessRoleBoundary = FleetAuthFamilyDatabaseRoles | SharedSchemaRoleBoundary;
+
+function protectedRolesForBoundary(boundary: SchemaAccessRoleBoundary): string[] {
+  if ('runtime' in boundary) {
+    return [boundary.runtime, boundary.migration, boundary.backupRestore];
+  }
+  return [...(boundary.protectedRoles ?? [])];
 }
 
 function assertValidRoleName(role: string, field: string): string {
@@ -25,30 +44,15 @@ function quoteIdentifier(value: string): string {
   return `"${value}"`;
 }
 
-function assertNoRoleRoutingOverride(databaseUrl: string, context: string): void {
-  let url: URL;
-  try {
-    url = new URL(databaseUrl);
-  } catch {
-    throw new Error(`${context} must be a PostgreSQL URL`);
-  }
-  if (url.protocol !== 'postgres:' && url.protocol !== 'postgresql:') {
-    throw new Error(`${context} must be a PostgreSQL URL`);
-  }
-  for (const field of ['user', 'service']) {
-    if (url.searchParams.has(field)) {
-      throw new Error(`${context} must not use a PostgreSQL role-routing override`);
-    }
-  }
-}
-
 export function validateFleetAuthSchemaAccessContracts(
   contracts: readonly FleetAuthSchemaAccessContract[],
   expectedSchemas: readonly string[],
-  fleetAuthRoles: FleetAuthDatabaseRoles,
+  fleetAuthRoles: SchemaAccessRoleBoundary,
 ): FleetAuthSchemaAccessContract[] {
   const expected = [...expectedSchemas].map(assertValidPostgresSchemaName).sort();
-  const protectedRoles = new Set(Object.values(fleetAuthRoles));
+  const protectedFleetAuthRoles = new Set([
+    ...protectedRolesForBoundary(fleetAuthRoles),
+  ]);
   const validated = contracts.map((contract, index) => {
     const schema = assertValidPostgresSchemaName(contract.schema);
     const ownerRole = assertValidRoleName(
@@ -64,8 +68,8 @@ export function validateFleetAuthSchemaAccessContracts(
     if (new Set(runtimeRoles).size !== runtimeRoles.length) {
       throw new Error(`Fleet auth family restore schema access contract ${index} repeats a runtime role`);
     }
-    const protectedRole = runtimeRoles.find(role => protectedRoles.has(role));
-    if (protectedRole || protectedRoles.has(ownerRole)) {
+    const protectedRole = runtimeRoles.find(role => protectedFleetAuthRoles.has(role));
+    if (protectedRole || protectedFleetAuthRoles.has(ownerRole)) {
       throw new Error(
         `Fleet auth family restore refuses to map protected fleet_auth role ${protectedRole ?? ownerRole} to a tenant schema`,
       );
@@ -97,6 +101,14 @@ export function validateFleetAuthSchemaAccessContracts(
   if (new Set(companionRuntimeRoles).size !== companionRuntimeRoles.length) {
     throw new Error('Fleet auth family restore refuses to map one companion role across sibling schemas');
   }
+  if (companions.some(contract => contract.ownerRole === fleetAuthRoles.sharedMigration)) {
+    throw new Error('Fleet auth family restore shared migration role must not own a companion schema');
+  }
+  if (shared[0].ownerRole !== fleetAuthRoles.sharedMigration) {
+    throw new Error(
+      `Fleet auth family restore shared schema must be owned by configured migration role ${fleetAuthRoles.sharedMigration}`,
+    );
+  }
   const expectedSharedRoles = [...companionRuntimeRoles].sort();
   if (JSON.stringify(shared[0].runtimeRoles) !== JSON.stringify(expectedSharedRoles)) {
     throw new Error('Fleet auth family restore shared access must name every companion runtime role exactly');
@@ -109,47 +121,22 @@ async function assertMappedRolesAreSafe(
   contracts: readonly FleetAuthSchemaAccessContract[],
   expectedOwner: string,
 ): Promise<void> {
-  const runtimeRoles = [...new Set(contracts.flatMap(contract => (
+  const mappedRoles = [...new Set(contracts.flatMap(contract => (
     [contract.ownerRole, ...contract.runtimeRoles]
   )))].sort();
-  const result = await client.query<{
-    rolname: string;
-    rolcanlogin: boolean;
-    rolinherit: boolean;
-    rolsuper: boolean;
-    rolcreaterole: boolean;
-    rolcreatedb: boolean;
-    rolreplication: boolean;
-    rolbypassrls: boolean;
-  }>(`
-    SELECT rolname, rolcanlogin, rolinherit, rolsuper, rolcreaterole, rolcreatedb,
-           rolreplication, rolbypassrls
-    FROM pg_roles
-    WHERE rolname = ANY($1::text[])
-    ORDER BY rolname
-  `, [runtimeRoles]);
-  if (JSON.stringify(result.rows.map(row => row.rolname)) !== JSON.stringify(runtimeRoles)) {
-    throw new Error('Fleet auth family restore schema access mapping names an unknown PostgreSQL role');
-  }
-  const unsafe = result.rows.find(row => !row.rolcanlogin || row.rolinherit
-    || row.rolsuper || row.rolcreaterole
-    || row.rolcreatedb || row.rolreplication || row.rolbypassrls);
-  if (unsafe) {
-    throw new Error(
-      `Fleet auth family restore runtime role ${unsafe.rolname} is not a least-privilege LOGIN role`,
-    );
-  }
-  const memberships = await client.query<{ edge_count: number }>(`
-    SELECT COUNT(*)::integer AS edge_count
-    FROM pg_auth_members AS membership
-    JOIN pg_roles AS granted_role ON granted_role.oid = membership.roleid
-    JOIN pg_roles AS member_role ON member_role.oid = membership.member
-    WHERE granted_role.rolname = ANY($1::text[])
-       OR member_role.rolname = ANY($1::text[])
-  `, [runtimeRoles]);
-  if ((memberships.rows.at(0)?.edge_count ?? 0) > 0) {
-    throw new Error('Fleet auth family restore runtime roles must not participate in role memberships');
-  }
+  await assertFleetAuthRolesAreSafe(client, mappedRoles, expectedOwner);
+}
+
+export async function assertFleetAuthRolesAreSafe(
+  client: PoolClient,
+  mappedRoles: readonly string[],
+  expectedOwner: string,
+): Promise<void> {
+  await assertPostgresRolesAreLeastPrivilege(
+    client,
+    mappedRoles,
+    'Fleet auth family restore mapped authority',
+  );
   const owner = await client.query<{ current_user: string }>('SELECT current_user');
   if (owner.rows.at(0)?.current_user !== expectedOwner) {
     throw new Error(`Fleet auth family restore must authenticate as PostgreSQL role ${expectedOwner}`);
@@ -187,9 +174,10 @@ async function assertSchemaIsolation(
     if (!ownContract) {
       throw new Error(`Fleet auth schema access isolation found unknown role ${row.role_name}`);
     }
-    const expected = row.schema_name === ownContract.schema
+    const expectedUsage = row.schema_name === ownContract.schema
       || row.schema_name === sharedContract.schema;
-    if (row.schema_usage !== expected || row.schema_create !== expected) {
+    const expectedCreate = row.schema_name === ownContract.schema;
+    if (row.schema_usage !== expectedUsage || row.schema_create !== expectedCreate) {
       throw new Error(
         `Fleet auth schema access isolation mismatch for role ${row.role_name} and schema ${row.schema_name}`,
       );
@@ -208,7 +196,8 @@ async function assertNoFleetAuthAccess(
     table_access: boolean;
   }>(`
     SELECT role_name,
-           has_schema_privilege(role_name, 'fleet_auth', 'USAGE') AS schema_usage,
+           CASE WHEN to_regnamespace('fleet_auth') IS NULL THEN FALSE
+                ELSE has_schema_privilege(role_name, 'fleet_auth', 'USAGE') END AS schema_usage,
            EXISTS (
              SELECT 1
              FROM pg_class AS relation
@@ -228,13 +217,94 @@ async function assertNoFleetAuthAccess(
   }
 }
 
+export async function assertSharedMigrationAuthorityIsolation(
+  client: PoolClient,
+  companionSchemas: readonly string[],
+  sharedSchema: string,
+  sharedMigrationRole: string,
+): Promise<void> {
+  const forbiddenSchemas = [...companionSchemas, FLEET_AUTH_SCHEMA_NAME];
+  const access = await client.query<{
+    schema_name: string;
+    schema_usage: boolean;
+    schema_create: boolean;
+    relation_access: boolean;
+  }>(`
+    SELECT schema_name,
+           CASE WHEN to_regnamespace(schema_name) IS NULL THEN FALSE
+                ELSE has_schema_privilege($1, schema_name, 'USAGE') END AS schema_usage,
+           CASE WHEN to_regnamespace(schema_name) IS NULL THEN FALSE
+                ELSE has_schema_privilege($1, schema_name, 'CREATE') END AS schema_create,
+           EXISTS (
+             SELECT 1
+             FROM pg_class AS relation
+             JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+             WHERE namespace.nspname = schema_name
+               AND has_table_privilege(
+                 $1,
+                 relation.oid,
+                 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'
+               )
+           ) AS relation_access
+    FROM unnest($2::text[]) AS schema_name
+    ORDER BY schema_name
+  `, [sharedMigrationRole, forbiddenSchemas]);
+  if (access.rows.some(row => row.schema_usage || row.schema_create || row.relation_access)) {
+    throw new Error(
+      'Shared schema migration role must not access companion schemas or fleet_auth',
+    );
+  }
+
+  const sharedOwnership = await client.query<{
+    schema_owner: string | null;
+    foreign_relation_owner_count: number;
+    foreign_routine_owner_count: number;
+  }>(`
+    SELECT
+      (
+        SELECT owner.rolname
+        FROM pg_namespace AS namespace
+        JOIN pg_roles AS owner ON owner.oid = namespace.nspowner
+        WHERE namespace.nspname = $1
+      ) AS schema_owner,
+      (
+        SELECT COUNT(*)::integer
+        FROM pg_class AS relation
+        JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+        WHERE namespace.nspname = $1
+          AND pg_get_userbyid(relation.relowner) <> $2
+      ) AS foreign_relation_owner_count,
+      (
+        SELECT COUNT(*)::integer
+        FROM pg_proc AS routine
+        JOIN pg_namespace AS namespace ON namespace.oid = routine.pronamespace
+        WHERE namespace.nspname = $1
+          AND pg_get_userbyid(routine.proowner) <> $2
+      ) AS foreign_routine_owner_count
+  `, [sharedSchema, sharedMigrationRole]);
+  const ownership = sharedOwnership.rows.at(0);
+  if (!ownership) throw new Error('Shared schema migration ownership preflight returned no result');
+  if (ownership.schema_owner !== null && ownership.schema_owner !== sharedMigrationRole) {
+    throw new Error(
+      `Shared schema must be owned by configured migration role ${sharedMigrationRole}`,
+    );
+  }
+  if (ownership.foreign_relation_owner_count > 0 || ownership.foreign_routine_owner_count > 0) {
+    throw new Error(
+      `Shared schema objects must be owned only by configured migration role ${sharedMigrationRole}`,
+    );
+  }
+}
+
 export async function resolveFleetAuthSchemaAccessContracts(options: {
   databaseUrl: string;
   companionSchemas: readonly string[];
   sharedSchema: string;
-  roles: FleetAuthDatabaseRoles;
+  roles: FleetAuthFamilyDatabaseRoles;
+  /** Startup-only seam: grants are applied immediately after discovery. */
+  verifyIsolation?: boolean;
 }): Promise<FleetAuthSchemaAccessContract[]> {
-  assertNoRoleRoutingOverride(options.databaseUrl, 'Fleet auth schema access discovery credential');
+  parseExactPostgresCredential(options.databaseUrl, 'Fleet auth schema access discovery credential');
   const companionSchemas = options.companionSchemas.map(assertValidPostgresSchemaName);
   const sharedSchema = assertValidPostgresSchemaName(options.sharedSchema);
   const expectedSchemas = [...companionSchemas, sharedSchema];
@@ -277,7 +347,9 @@ export async function resolveFleetAuthSchemaAccessContracts(options: {
         },
       ], expectedSchemas, options.roles);
       await assertMappedRolesAreSafe(client, contracts, options.roles.backupRestore);
-      await assertSchemaIsolation(client, contracts);
+      if (options.verifyIsolation !== false) {
+        await assertSchemaIsolation(client, contracts);
+      }
       return contracts;
     } finally {
       client.release();
@@ -320,7 +392,7 @@ export async function assertFleetAuthSchemaAccessTargets(options: {
       if (!expectedTarget) throw new Error('Fleet auth family restore could not identify its target database');
       for (const contract of options.contracts) {
         const ownerDatabaseUrl = options.ownerDatabaseUrls[contract.schema];
-        assertNoRoleRoutingOverride(
+        parseExactPostgresCredential(
           ownerDatabaseUrl,
           `Fleet auth family restore owner credential for ${contract.schema}`,
         );
@@ -370,9 +442,11 @@ export async function assertFleetAuthSchemaAccessTargets(options: {
 export async function applyFleetAuthSchemaAccessContracts(options: {
   contracts: readonly FleetAuthSchemaAccessContract[];
   ownerDatabaseUrls: Readonly<Record<string, string>>;
-  backupRole: string;
+  backupRole?: string;
 }): Promise<void> {
-  const backupRole = assertValidRoleName(options.backupRole, 'backupRole');
+  const backupRole = options.backupRole === undefined
+    ? undefined
+    : assertValidRoleName(options.backupRole, 'backupRole');
   for (const contract of options.contracts) {
     const pool = createPostgresPool(options.ownerDatabaseUrls[contract.schema], {
       applicationName: 'fleet-auth-schema-access-restore',
@@ -421,14 +495,37 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
       await client.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM PUBLIC`);
       await client.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM PUBLIC`);
       await client.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${schema} FROM PUBLIC`);
-      await client.query(`GRANT USAGE, CREATE ON SCHEMA ${schema} TO ${grantees}`);
-      await client.query(`GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA ${schema} TO ${grantees}`);
-      await client.query(`GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA ${schema} TO ${grantees}`);
+      await client.query(`REVOKE ALL ON ALL TABLES IN SCHEMA ${schema} FROM ${grantees}`);
+      await client.query(`REVOKE ALL ON ALL SEQUENCES IN SCHEMA ${schema} FROM ${grantees}`);
+      await client.query(`REVOKE ALL ON ALL FUNCTIONS IN SCHEMA ${schema} FROM ${grantees}`);
+      await client.query(`REVOKE ALL ON SCHEMA ${schema} FROM ${grantees}`);
+      if (contract.kind === 'shared') {
+        await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${grantees}`);
+        await client.query(
+          `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${grantees}`,
+        );
+        await client.query(
+          `REVOKE INSERT, UPDATE, DELETE ON ${schema}.shared_schema_migrations FROM ${grantees}`,
+        );
+        await client.query(
+          `GRANT SELECT, USAGE, UPDATE ON ALL SEQUENCES IN SCHEMA ${schema} TO ${grantees}`,
+        );
+      } else {
+        await client.query(`GRANT USAGE, CREATE ON SCHEMA ${schema} TO ${grantees}`);
+        await client.query(`GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA ${schema} TO ${grantees}`);
+        await client.query(`GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA ${schema} TO ${grantees}`);
+      }
       await client.query(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ${schema} TO ${grantees}`);
-      await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${quoteIdentifier(backupRole)}`);
-      await client.query(`GRANT SELECT ON ALL TABLES IN SCHEMA ${schema} TO ${quoteIdentifier(backupRole)}`);
-      await client.query(`GRANT SELECT, USAGE ON ALL SEQUENCES IN SCHEMA ${schema} TO ${quoteIdentifier(backupRole)}`);
-      const allowedGrantees = [contract.ownerRole, backupRole, ...contract.runtimeRoles];
+      if (backupRole) {
+        await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${quoteIdentifier(backupRole)}`);
+        await client.query(`GRANT SELECT ON ALL TABLES IN SCHEMA ${schema} TO ${quoteIdentifier(backupRole)}`);
+        await client.query(`GRANT SELECT, USAGE ON ALL SEQUENCES IN SCHEMA ${schema} TO ${quoteIdentifier(backupRole)}`);
+      }
+      const allowedGrantees = [
+        contract.ownerRole,
+        ...(backupRole ? [backupRole] : []),
+        ...contract.runtimeRoles,
+      ];
       const unexpectedGrantees = await client.query<{ role_name: string }>(`
         WITH acl_grantees AS (
           SELECT acl.grantee
@@ -494,6 +591,16 @@ export async function assertFleetAuthSchemaAccessIsolation(options: {
     try {
       await assertMappedRolesAreSafe(client, options.contracts, options.ownerRole);
       await assertSchemaIsolation(client, options.contracts);
+      const shared = options.contracts.find(contract => contract.kind === 'shared');
+      if (!shared) throw new Error('Fleet auth schema access isolation requires a shared contract');
+      await assertSharedMigrationAuthorityIsolation(
+        client,
+        options.contracts
+          .filter(contract => contract.kind === 'companion')
+          .map(contract => contract.schema),
+        shared.schema,
+        shared.ownerRole,
+      );
     } finally {
       client.release();
     }

@@ -219,6 +219,10 @@ describe('fleet-auth owner-file configuration', () => {
         runtimeDatabaseUrlRef: credential('POSTGRES_DATABASE_URL'),
       },
     }, 'fleet-auth.json')).toThrow(/must not reuse POSTGRES_DATABASE_URL/);
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      databaseRoles: { ...config.databaseRoles, backupRestore: config.databaseRoles.migration },
+    }, 'fleet-auth.json')).toThrow(/three distinct roles/);
   });
 
   it('resolves every private credential only at the gateway and enforces role/database separation', () => {

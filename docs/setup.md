@@ -163,6 +163,11 @@ these process-wiring env vars come into play (documented in full in
   process. Explicit opt-in, not derived from `COMPANION_ID`; unset means the
   `public` schema (single-companion). The supervisor launcher sets this per
   spawned agent from the fleet manifest.
+- `companions.json` also owns the distinct `postgresRole` and
+  `postgresDatabaseUrlRef` for each companion plus the root shared-migration
+  role/reference. Put the referenced secret values in the configured credential
+  vault. The shared migration authority is required by multi-companion topology,
+  independently of `PSFN_FLEET_AUTH`.
 - `PSFN_RUNTIME_ROOT` — canonical persistence root for manifest-relative
   `companionDataDir` and `characterCardPath`. The fleet resolver emits absolute
   paths beneath this root and rejects traversal or symlink escapes.

@@ -16,6 +16,11 @@ import {
   resolveCompanionWorkspaceLayout,
   type ProtectedWorkspaceRoot,
 } from './companion-workspace-layout.js';
+import {
+  envCredential,
+  type CredentialReference,
+} from '../../boundary/custody/credential-vault.js';
+import { assertValidPostgresRoleName } from '../../persistence/postgres.js';
 
 export const COMPANIONS_FILE_NAME = 'companions.json';
 export const COMPANIONS_SEED_FILE_NAME = 'companions.seed.json';
@@ -53,10 +58,24 @@ const COMPANION_ENTRY_KEYS = [
   'companionDataDir',
   'characterCardPath',
   'postgresSchema',
+  'postgresRole',
+  'postgresDatabaseUrlRef',
   'gardenPort',
 ] as const;
 
-const COMPANIONS_ROOT_KEYS = ['companions'] as const;
+const COMPANIONS_ROOT_KEYS = ['postgres', 'companions'] as const;
+const POSTGRES_TOPOLOGY_KEYS = [
+  'sharedMigrationRole',
+  'sharedMigrationDatabaseUrlRef',
+] as const;
+const CREDENTIAL_REFERENCE_KEYS = ['kind', 'envName'] as const;
+
+export interface CompanionFleetPostgresConfig {
+  /** Dedicated owner of every object in the shared schema. */
+  sharedMigrationRole: string;
+  /** Gateway-only credential reference for shared DDL. */
+  sharedMigrationDatabaseUrlRef: CredentialReference;
+}
 
 export interface CompanionFleetEntry {
   /** RFC-4122 UUID identifying the companion across the fleet. */
@@ -67,6 +86,10 @@ export interface CompanionFleetEntry {
   characterCardPath: string;
   /** Lowercase Postgres schema owning this companion's tenant tables. */
   postgresSchema: string;
+  /** Dedicated owner/runtime role for this companion schema. */
+  postgresRole: string;
+  /** Launcher-resolved credential delivered only to this companion agent. */
+  postgresDatabaseUrlRef: CredentialReference;
   /**
    * Optional TCP port for this companion's own Garden operator surface
    * (sprint-10 W4: one Garden per companion). When present the supervisor
@@ -79,6 +102,7 @@ export interface CompanionFleetEntry {
 }
 
 export interface CompanionsFleetConfig {
+  postgres: CompanionFleetPostgresConfig;
   companions: CompanionFleetEntry[];
 }
 
@@ -92,6 +116,7 @@ export interface ResolvedCompanionFleetEntry extends Omit<CompanionFleetEntry, '
 }
 
 export interface ResolvedCompanionsFleetConfig {
+  postgres: CompanionFleetPostgresConfig;
   persistenceRoot: string;
   /** Canonical installation workspace parent beneath the runtime root. */
   workspacesRoot: string;
@@ -160,6 +185,51 @@ function requirePostgresSchema(value: unknown, field: string): string {
   return schema;
 }
 
+function requirePostgresRole(value: unknown, field: string): string {
+  const role = requireNonEmptyString(value, field);
+  try {
+    return assertValidPostgresRoleName(role);
+  } catch {
+    throw new Error(`${COMPANIONS_ERROR_PREFIX}: ${field} must be a safe PostgreSQL role name`);
+  }
+}
+
+function requireCredentialReference(value: unknown, field: string): CredentialReference {
+  if (!isRecord(value)) {
+    throw new Error(`${COMPANIONS_ERROR_PREFIX}: ${field} must be a credential reference`);
+  }
+  assertNoUnknownKeys(value, CREDENTIAL_REFERENCE_KEYS, field, {
+    errorPrefix: COMPANIONS_ERROR_PREFIX,
+  });
+  if (value.kind !== 'env') {
+    throw new Error(`${COMPANIONS_ERROR_PREFIX}: ${field}.kind must be "env"`);
+  }
+  try {
+    return envCredential(requireNonEmptyString(value.envName, `${field}.envName`));
+  } catch {
+    throw new Error(`${COMPANIONS_ERROR_PREFIX}: ${field}.envName is not a valid credential name`);
+  }
+}
+
+function validatePostgresTopology(raw: unknown): CompanionFleetPostgresConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`${COMPANIONS_ERROR_PREFIX}: postgres must be an object`);
+  }
+  assertNoUnknownKeys(raw, POSTGRES_TOPOLOGY_KEYS, 'postgres', {
+    errorPrefix: COMPANIONS_ERROR_PREFIX,
+  });
+  return {
+    sharedMigrationRole: requirePostgresRole(
+      raw.sharedMigrationRole,
+      'postgres.sharedMigrationRole',
+    ),
+    sharedMigrationDatabaseUrlRef: requireCredentialReference(
+      raw.sharedMigrationDatabaseUrlRef,
+      'postgres.sharedMigrationDatabaseUrlRef',
+    ),
+  };
+}
+
 function requireOptionalGardenPort(value: unknown, field: string): number | undefined {
   if (value === undefined) {
     return undefined;
@@ -206,6 +276,11 @@ function validateCompanionEntry(raw: unknown, index: number): CompanionFleetEntr
     companionDataDir: requireRelativePath(raw.companionDataDir, `${label}.companionDataDir`),
     characterCardPath: requireRelativePath(raw.characterCardPath, `${label}.characterCardPath`),
     postgresSchema: requirePostgresSchema(raw.postgresSchema, `${label}.postgresSchema`),
+    postgresRole: requirePostgresRole(raw.postgresRole, `${label}.postgresRole`),
+    postgresDatabaseUrlRef: requireCredentialReference(
+      raw.postgresDatabaseUrlRef,
+      `${label}.postgresDatabaseUrlRef`,
+    ),
     ...(gardenPort !== undefined ? { gardenPort } : {}),
   };
 }
@@ -282,13 +357,41 @@ export function validateCompanionsConfig(raw: unknown, sourcePath: string): Comp
   }
 
   const companions = raw.companions.map((entry, index) => validateCompanionEntry(entry, index));
+  const postgres = validatePostgresTopology(raw.postgres);
 
   assertNoDuplicateField(companions, (entry) => entry.companionId, 'companionId');
   assertNoDuplicateField(companions, (entry) => entry.postgresSchema, 'postgresSchema');
+  assertNoDuplicateField(companions, (entry) => entry.postgresRole, 'postgresRole');
+  assertNoDuplicateField(
+    companions,
+    (entry) => entry.postgresDatabaseUrlRef.envName,
+    'postgresDatabaseUrlRef.envName',
+  );
+  if (companions.some(entry => entry.postgresRole === postgres.sharedMigrationRole)) {
+    throw new Error(
+      `${COMPANIONS_ERROR_PREFIX}: shared migration role must be distinct from every companion role`,
+    );
+  }
+  if (companions.some(entry => (
+    entry.postgresDatabaseUrlRef.envName === postgres.sharedMigrationDatabaseUrlRef.envName
+  ))) {
+    throw new Error(
+      `${COMPANIONS_ERROR_PREFIX}: shared migration credential must be distinct from every companion credential`,
+    );
+  }
+  const reservedCredentialNames = [
+    postgres.sharedMigrationDatabaseUrlRef.envName,
+    ...companions.map(entry => entry.postgresDatabaseUrlRef.envName),
+  ];
+  if (reservedCredentialNames.includes('POSTGRES_DATABASE_URL')) {
+    throw new Error(
+      `${COMPANIONS_ERROR_PREFIX}: topology credentials must not reuse POSTGRES_DATABASE_URL`,
+    );
+  }
   assertNoDuplicateGardenPorts(companions);
   assertNoOverlappingDataDirs(companions);
 
-  return { companions };
+  return { postgres, companions };
 }
 
 export function loadCompanionsConfig(
@@ -436,6 +539,7 @@ export function resolveCompanionFleetPaths(
   }));
 
   return {
+    postgres: fleet.postgres,
     persistenceRoot: resolvedRoot,
     workspacesRoot: workspaceLayout.workspacesRoot,
     sharedWorkspacePath: workspaceLayout.sharedWorkspacePath,

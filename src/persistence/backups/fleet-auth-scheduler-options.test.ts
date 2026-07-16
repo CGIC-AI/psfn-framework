@@ -3,19 +3,27 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
-import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import type { FleetAuthFamilyDatabaseRoles } from '../postgres/fleet-auth/schema.js';
 import type { BackupRuntimeConfig } from './config.js';
 import { buildFleetAuthBackupCycleOptions } from './fleet-scheduler.js';
 import { FleetAuthAuthorityFloorStore } from '../postgres/fleet-auth/authority-floor.js';
 import type { KubernetesHelmBackupConfig } from './kubernetes-helm.js';
 
-const ROLES: FleetAuthDatabaseRoles = {
+const ROLES: FleetAuthFamilyDatabaseRoles = {
   runtime: 'auth_runtime',
   migration: 'auth_migration',
   backupRestore: 'auth_backup_restore',
+  sharedMigration: 'shared_migration',
 };
 
 const FLEET: ResolvedCompanionsFleetConfig = {
+  postgres: {
+    sharedMigrationRole: 'shared_migration',
+    sharedMigrationDatabaseUrlRef: {
+      kind: 'env',
+      envName: 'SHARED_MIGRATION_DATABASE_URL',
+    },
+  },
   persistenceRoot: '/runtime',
   workspacesRoot: '/runtime/workspaces',
   sharedWorkspacePath: '/runtime/workspaces/shared',
@@ -25,6 +33,11 @@ const FLEET: ResolvedCompanionsFleetConfig = {
       companionDataDir: '/runtime/companion-data/11111111-1111-4111-8111-111111111111',
       characterCardPath: '/runtime/companion-data/11111111-1111-4111-8111-111111111111/character.json',
       postgresSchema: 'companion_one',
+      postgresRole: 'companion_one_runtime',
+      postgresDatabaseUrlRef: {
+        kind: 'env',
+        envName: 'COMPANION_ONE_DATABASE_URL',
+      },
       personalWorkspacePath: '/runtime/workspaces/personal/11111111-1111-4111-8111-111111111111',
     },
     {
@@ -32,6 +45,11 @@ const FLEET: ResolvedCompanionsFleetConfig = {
       companionDataDir: '/runtime/companion-data/22222222-2222-4222-8222-222222222222',
       characterCardPath: '/runtime/companion-data/22222222-2222-4222-8222-222222222222/character.json',
       postgresSchema: 'companion_two',
+      postgresRole: 'companion_two_runtime',
+      postgresDatabaseUrlRef: {
+        kind: 'env',
+        envName: 'COMPANION_TWO_DATABASE_URL',
+      },
       personalWorkspacePath: '/runtime/workspaces/personal/22222222-2222-4222-8222-222222222222',
     },
   ],

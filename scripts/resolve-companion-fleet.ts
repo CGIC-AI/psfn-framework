@@ -21,7 +21,7 @@
  *   - Multi-companion topology: one line per companion, fields tab-separated in
  *     the order companionId, companionDataDir, characterCardPath, postgresSchema,
  *     personalWorkspacePath, companionAuthToken, sessionIntegrityAuthToken,
- *     adminTransportSocket, gardenPort. gardenPort is "-" when the companion has
+ *     databaseUrl, adminTransportSocket, gardenPort. gardenPort is "-" when the companion has
  *     no Garden operator surface configured (companions.json gardenPort absent).
  *     Tabs/newlines inside any field are rejected (fail closed) so the launcher
  *     can parse the plan with a plain `IFS=$'\t' read`.
@@ -41,6 +41,8 @@ import {
 import { requireGatewaySessionHmacKeyring } from '../src/boundary/gateway/session-hmac-env.js';
 import { deriveCompanionAuthToken } from '../src/boundary/gateway/companion-auth.js';
 import { resolveConfiguredCompanionFleet } from './companion-fleet-runtime.js';
+import { createCredentialVaultFromEnvironment } from '../src/boundary/custody/credential-vault.js';
+import { resolveCompanionDatabaseTopology } from '../src/system/config/companion-database-config.js';
 
 const FIELD_SEPARATOR = '\t';
 const NO_GARDEN_PORT_SENTINEL = '-';
@@ -58,6 +60,7 @@ function formatPlanLine(
   entry: ResolvedCompanionFleetEntry,
   companionAuthToken: string,
   sessionIntegrityAuthToken: string,
+  databaseUrl: string,
   env: NodeJS.ProcessEnv,
 ): string {
   const adminTransportSocket = resolveCompanionAdminTransportSocketPath(entry.companionId, env);
@@ -69,6 +72,7 @@ function formatPlanLine(
     ['personalWorkspacePath', entry.personalWorkspacePath],
     ['companionAuthToken', companionAuthToken],
     ['sessionIntegrityAuthToken', sessionIntegrityAuthToken],
+    ['databaseUrl', databaseUrl],
     ['adminTransportSocket', adminTransportSocket],
     [
       'gardenPort',
@@ -81,7 +85,7 @@ function formatPlanLine(
   return fields.map(([, value]) => value).join(FIELD_SEPARATOR);
 }
 
-function main(): void {
+async function main(): Promise<void> {
   const env = process.env;
 
   const fleet = resolveConfiguredCompanionFleet(env);
@@ -101,17 +105,36 @@ function main(): void {
   }
 
   const keyring = requireGatewaySessionHmacKeyring(env);
-  const plan = fleet.companions.map((entry) => formatPlanLine(
-    entry,
-    deriveCompanionAuthToken(entry.companionId, 'agent', keyring),
-    deriveCompanionAuthToken(entry.companionId, 'internal_session_integrity', keyring),
-    env,
-  )).join('\n');
+  const gatewayDatabaseUrl = env.POSTGRES_DATABASE_URL?.trim();
+  if (!gatewayDatabaseUrl) {
+    throw new Error('Multi-companion launcher requires POSTGRES_DATABASE_URL for the gateway');
+  }
+  const databaseTopology = resolveCompanionDatabaseTopology({
+    fleet,
+    credentialVault: await createCredentialVaultFromEnvironment(env),
+    gatewayDatabaseUrl,
+  });
+  const databaseByCompanionId = new Map(databaseTopology.companions.map(entry => (
+    [entry.companion.companionId, entry.databaseUrl] as const
+  )));
+  const plan = fleet.companions.map((entry) => {
+    const databaseUrl = databaseByCompanionId.get(entry.companionId);
+    if (!databaseUrl) {
+      throw new Error(`Companion ${entry.companionId} has no resolved database credential`);
+    }
+    return formatPlanLine(
+      entry,
+      deriveCompanionAuthToken(entry.companionId, 'agent', keyring),
+      deriveCompanionAuthToken(entry.companionId, 'internal_session_integrity', keyring),
+      databaseUrl,
+      env,
+    );
+  }).join('\n');
   process.stdout.write(`${plan}\n`);
 }
 
 try {
-  main();
+  await main();
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`[resolve-companion-fleet] ${message}\n`);

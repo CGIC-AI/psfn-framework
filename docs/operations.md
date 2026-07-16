@@ -56,6 +56,11 @@ Manifest-relative data/card paths are resolved to absolute strict subpaths of
 launcher also derives separate role-bound gateway proofs for the agent and its
 session-integrity worker in both single- and multi-companion topologies. These
 proofs are not printed by `--dry-run` and are never passed to Garden operators.
+`companions.json` also names one unique database role and credential reference
+per companion plus the dedicated shared-schema migration role/reference. The
+launcher resolves the references at its gateway boundary and passes only the
+matching database URL to each agent through `POSTGRES_DATABASE_URL_FD`; dry-run
+output redacts all database credentials. Fleet human auth may remain disabled.
 
 The plan derives one canonical Personal Workspace per companion beneath
 `<runtime-root>/workspaces/personal/<uuid>`. It provisions the fleet layout

@@ -66,7 +66,7 @@ import {
 } from '../postgres/fleet-auth/authority-floor.js';
 import {
   assertFleetAuthBackupRestorePrivileges,
-  type FleetAuthDatabaseRoles,
+  type FleetAuthFamilyDatabaseRoles,
 } from '../postgres/fleet-auth/schema.js';
 import {
   restoreFleetAuthSnapshot,
@@ -169,7 +169,7 @@ export interface FleetAuthConsistentFamilyRestoreVerificationOptions {
   manifestPath: string;
   fleetManifestPath: string;
   scratchDatabaseUrl: string;
-  roles: FleetAuthDatabaseRoles;
+  roles: FleetAuthFamilyDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
   activationGeneration: number;
   pgRestoreBinary?: string;
@@ -444,7 +444,7 @@ async function assertFleetAuthFamilyDumpScope(
 export async function restoreFleetAuthConsistentFamily(options: {
   manifestPath: string;
   backupRestoreDatabaseUrl: string;
-  roles: FleetAuthDatabaseRoles;
+  roles: FleetAuthFamilyDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
   activationGeneration: number;
   restoredAt?: string;

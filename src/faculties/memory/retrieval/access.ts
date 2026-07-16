@@ -247,17 +247,17 @@ export function evaluateRetrievalAccessDecision(
 ): RetrievalAccessDecision {
   const companionSelfAccess = options.accessScope === 'companion_self_reflection'
     || options.accessScope === 'companion_self_creation';
-  if (!companionSelfAccess) {
-    const roomDecision = evaluateRoomVisibilityDecision(memory, options);
-    if (roomDecision) return roomDecision;
+  if (companionSelfAccess) return { allowed: true };
 
-    if (violatesHighIntimacyContactScope(memory, options)) {
-      return {
-        allowed: false,
-        rejectionKind: 'contact_scope',
-        withheldReason: 'contact_scope.high_intimacy',
-      };
-    }
+  const roomDecision = evaluateRoomVisibilityDecision(memory, options);
+  if (roomDecision) return roomDecision;
+
+  if (violatesHighIntimacyContactScope(memory, options)) {
+    return {
+      allowed: false,
+      rejectionKind: 'contact_scope',
+      withheldReason: 'contact_scope.high_intimacy',
+    };
   }
 
   const policy = evaluateMemoryPolicy({
@@ -278,9 +278,6 @@ export function evaluateRetrievalAccessDecision(
     || policy.reasonTag === 'visibility.channel_restricted'
     || policy.reasonTag === 'visibility.broadcast_restricted'
   ) {
-    if (companionSelfAccess) {
-      return { allowed: true };
-    }
     return {
       allowed: false,
       rejectionKind: 'sensitivity',

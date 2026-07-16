@@ -103,6 +103,7 @@
     "@mariozechner/pi-ai": "0.73.1",
     "@peculiar/x509": "1.14.3",
     "@redis/client": "6.0.1",
+    "@simplewebauthn/server": "13.3.2",
     "@sinclair/typebox": "0.34.48",
     "@snazzah/davey": "0.1.9",
     "discord.js": "14.26.4",

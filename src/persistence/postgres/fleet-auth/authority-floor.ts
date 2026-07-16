@@ -9,6 +9,13 @@ import {
   isRfc4122Uuid,
 } from '../../../shared/utils/types.js';
 import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
+import type {
+  PasskeyAuthorityCandidate,
+  PasskeyAuthorityEntry,
+  PasskeyAuthorityFloor,
+  PasskeyAuthorityTombstone,
+  PasskeyVerificationResult,
+} from '../../../boundary/fleet-auth/passkey-authority.js';
 import { withCrossProcessWriteLock } from '../../sessions/cross-process-write-lock.js';
 
 export const FLEET_AUTH_AUTHORITY_FLOOR_FILE_NAME = 'fleet-auth-authority-floor.json';
@@ -74,52 +81,12 @@ export interface TrustedHostAuthorityFloor {
   tombstones: AccountAuthorityTombstone[];
 }
 
-export interface PasskeyAuthorityCandidate {
-  credentialIdHash: string;
-  publicKeyVerifier: string;
-  rpId: string;
-  principalId: string;
-  expectedProvider: 'discord';
-  expectedProviderSubjectId: string;
-  signCount: number;
-  backupEligible: boolean;
-  backupState: boolean;
-}
-
-export type PasskeyAuthorityStatus = 'current' | 'revoked' | 'replaced' | 'compromised';
-
-export interface PasskeyAuthorityEntry extends PasskeyAuthorityCandidate {
-  generation: number;
-  status: PasskeyAuthorityStatus;
-  createdAt: string;
-  revokedAt?: string;
-  replacedByCredentialIdHash?: string;
-}
-
-export interface PasskeyAuthorityTombstone {
-  credentialIdHash: string;
-  generation: number;
-  status: Exclude<PasskeyAuthorityStatus, 'current'>;
-  at: string;
-  replacedByCredentialIdHash?: string;
-}
-
-export interface PasskeyAuthorityFloor {
-  generation: number;
-  credentials: PasskeyAuthorityEntry[];
-  tombstones: PasskeyAuthorityTombstone[];
-}
-
 export interface FleetAuthAuthorityFloor {
   schemaVersion: 2;
   trustedHost: TrustedHostAuthorityFloor;
   passkeys: PasskeyAuthorityFloor;
   updatedAt: string;
 }
-
-export type PasskeyVerificationResult =
-  | { allowed: true; generation: number }
-  | { allowed: false; reason: 'not_found' | 'not_current' | 'metadata_mismatch' };
 
 const LOCK_OPTIONS = {
   pollMs: 10,
@@ -641,6 +608,10 @@ export class FleetAuthAuthorityFloorStore {
       throw new Error(`Fleet auth authority floor is unreadable: ${String(error)}`);
     }
     return validateFleetAuthAuthorityFloor(value);
+  }
+
+  readPasskeys(): PasskeyAuthorityFloor {
+    return this.read().passkeys;
   }
 
   open(input: {

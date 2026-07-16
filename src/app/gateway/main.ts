@@ -138,10 +138,18 @@ async function main(): Promise<void> {
     startupHydration.pathSnapshot.workspacePath,
     startupHydration.pathSnapshot.runtimePathLayout.backupsDir,
   ];
+  if (config.fleetAuth && !config.companionFleet) {
+    throw new Error(
+      'Fleet auth is enabled but the resolved config carries no companion fleet — refusing to start without a complete gateway-owned backup family',
+    );
+  }
+  const fleetAuthKnownCompanionIds = config.companionFleet?.companions
+    .map(companion => companion.companionId) ?? [];
   const discordEvidenceObservers = new DiscordEvidenceObserverRegistry();
   const fleetAuthPersistence = await initializeGatewayFleetAuthPersistence({
     config: config.fleetAuth,
     credentialVault: config.credentialVault,
+    knownCompanionIds: fleetAuthKnownCompanionIds,
     ...(config.postgresDatabaseUrl
       ? { companionDatabaseUrl: config.postgresDatabaseUrl }
       : {}),
@@ -149,11 +157,6 @@ async function main(): Promise<void> {
     lifecycleWitnessRoot: startupHydration.pathSnapshot.systemDataDir,
     discordEvidenceObserver: discordEvidenceObservers,
   });
-  if (config.fleetAuth && !config.companionFleet) {
-    throw new Error(
-      'Fleet auth is enabled but the resolved config carries no companion fleet — refusing to start without a complete gateway-owned backup family',
-    );
-  }
   const satelliteRegistryConfig = loadSatelliteRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
   const placesRegistryConfig = loadPlacesRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
   assertSatellitePlaceBindings(satelliteRegistryConfig, placesRegistryConfig);

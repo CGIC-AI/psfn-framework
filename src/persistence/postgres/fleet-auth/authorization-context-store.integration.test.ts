@@ -22,6 +22,7 @@ import {
 } from './gateway-persistence.js';
 import { migrateFleetAuthSchema, type FleetAuthDatabaseRoles } from './schema.js';
 import type { FleetAuthConfig } from '../../../system/config/fleet-auth-config.js';
+import type { ProviderRevocationAuthorityPort } from './oauth-session-store.js';
 
 const TIMEOUT_MS = 120_000;
 const ROLES: FleetAuthDatabaseRoles = {
@@ -115,7 +116,14 @@ function fleetConfig(): FleetAuthConfig {
   };
 }
 
-async function createContextRuntime(): Promise<{
+async function createContextRuntime(options: {
+  now?: () => Date;
+  configureProviderAuthority?: (
+    authority: ProviderRevocationAuthorityPort,
+    floors: FleetAuthAuthorityFloorStore,
+  ) => ProviderRevocationAuthorityPort;
+} = {}): Promise<{
+  databaseName: string;
   runtime: Pool;
   coordinator: Pool;
   migration: Pool;
@@ -135,6 +143,7 @@ async function createContextRuntime(): Promise<{
   const migrationUrl = roleUrl(database.databaseUrl, ROLES.migration);
   await migrateFleetAuthSchema({ databaseUrl: migrationUrl, roles: ROLES });
   const runtime = createPostgresPool(roleUrl(database.databaseUrl, ROLES.runtime), {
+    applicationName: 'fleet-auth-context-resolver-test',
     max: 4,
     allowExitOnIdle: true,
   });
@@ -147,7 +156,10 @@ async function createContextRuntime(): Promise<{
   const floors = new FleetAuthAuthorityFloorStore(floorRoot);
   const floor = floors.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
   await reconcileFleetAuthAuthorityState(coordinator, floor, randomUUID());
-  const authority = createGatewayProviderRevocationAuthorityPort(floors);
+  const baseAuthority = createGatewayProviderRevocationAuthorityPort(floors);
+  const authority = options.configureProviderAuthority
+    ? options.configureProviderAuthority(baseAuthority, floors)
+    : baseAuthority;
   const principalId = randomUUID();
   const now = new Date();
   const seeder = await runtime.connect();
@@ -199,6 +211,7 @@ async function createContextRuntime(): Promise<{
     seeder.release();
   }
   return {
+    databaseName: database.databaseName,
     runtime,
     coordinator,
     migration: createPostgresPool(migrationUrl, { max: 1, allowExitOnIdle: true }),
@@ -209,8 +222,83 @@ async function createContextRuntime(): Promise<{
       config: fleetConfig(),
       knownCompanionIds: [COMPANION_ID],
       providerRevocationAuthority: authority,
+      ...(options.now ? { now: options.now } : {}),
     }),
   };
+}
+
+async function waitForBlockedContextResolution(databaseName: string): Promise<void> {
+  if (!harness) throw new Error('Postgres harness unavailable');
+  const admin = createPostgresPool(harness.adminDatabaseUrl, { max: 1 });
+  try {
+    for (let attempt = 0; attempt < 500; attempt += 1) {
+      const result = await admin.query<{ waiting: number }>(`
+        SELECT COUNT(*)::int AS waiting
+        FROM pg_stat_activity
+        WHERE datname = $1
+          AND application_name = 'fleet-auth-context-resolver-test'
+          AND wait_event_type = 'Lock'
+      `, [databaseName]);
+      if ((result.rows[0]?.waiting ?? 0) > 0) return;
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  } finally {
+    await admin.end();
+  }
+  throw new Error('Timed out waiting for fleet authorization context lock');
+}
+
+async function seedPositiveEvidence(input: {
+  runtime: Pool;
+  principalId: string;
+  expiresAt: Date;
+}): Promise<string> {
+  const evidenceId = randomUUID();
+  const fetchedAt = new Date(input.expiresAt.getTime() - 60_000);
+  const permissionInputs = {
+    oauthGuildMembership: {},
+    observation: {},
+    target: {},
+  };
+  await input.runtime.query(`
+    INSERT INTO fleet_auth.discord_evidence_lifecycle_fences
+      (principal_id, provider, provider_subject_id, lifecycle_id, state,
+       mutation_generation, global_auth_epoch)
+    VALUES ($1, 'discord', $2, $3, 'active', 0, 1)
+  `, [input.principalId, SUBJECT_ID, randomUUID()]);
+  await input.runtime.query(`
+    INSERT INTO fleet_auth.discord_evidence_snapshots
+      (evidence_id, principal_id, provider, provider_subject_id, companion_id,
+       guild_id, channel_id, thread_id, permission_inputs,
+       discord_permission_result, member_specific_deny_veto, psfn_evidence_result,
+       decision_reason, input_digest, config_digest, mapping_config_version,
+       provenance, global_auth_epoch, fetched_at, expires_at)
+    VALUES ($1, $2, 'discord', $3, $4, '223456789012345678',
+            '323456789012345678', NULL,
+            '{"oauthGuildMembership":{},"observation":{},"target":{}}'::jsonb,
+            TRUE, FALSE, TRUE, NULL, $5, $6, 1,
+            $7::jsonb, 1, $8, $9)
+  `, [
+    evidenceId,
+    input.principalId,
+    SUBJECT_ID,
+    COMPANION_ID,
+    digestDiscordEvidence(permissionInputs),
+    digestDiscordEvidenceConfig(fleetConfig()),
+    JSON.stringify({
+      source: 'discord_oauth_and_bot_observation',
+      provider: 'discord',
+      providerSubjectId: SUBJECT_ID,
+      observationStatus: 'observed',
+      observedAt: fetchedAt.toISOString(),
+      oauthObservedAt: fetchedAt.toISOString(),
+      observationId: 'observation-lock-expiry',
+      botUserId: '423456789012345678',
+    }),
+    fetchedAt,
+    input.expiresAt,
+  ]);
+  return evidenceId;
 }
 
 beforeAll(async () => {
@@ -342,6 +430,207 @@ describe('Postgres fleet authorization context snapshot', () => {
     } finally {
       await mutator.query('ROLLBACK').catch(() => undefined);
       mutator.release();
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('captures decision time after an authority lock wait and denies an expired session', async () => {
+    const initialNow = new Date();
+    let decisionNow = initialNow;
+    const {
+      databaseName,
+      runtime,
+      coordinator,
+      migration,
+      resolver,
+    } = await createContextRuntime({ now: () => decisionNow });
+    const blocker = await runtime.connect();
+    let released = false;
+    try {
+      await blocker.query('BEGIN');
+      await blocker.query(`SELECT * FROM ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}()`);
+      const pendingResolution = resolver.resolve({
+        sessionToken: SESSION_TOKEN,
+        audience: 'fleet',
+        companionId: COMPANION_ID,
+        action: 'memory.read.self',
+        correlationId: 'correlation-session-lock-expiry',
+      });
+      await waitForBlockedContextResolution(databaseName);
+      decisionNow = new Date(initialNow.getTime() + 10 * 60_000);
+      await blocker.query('COMMIT');
+      released = true;
+
+      await expect(pendingResolution).rejects.toMatchObject({ code: 'session_expired' });
+      const audit = await runtime.query<{ decision: string; reason_code: string }>(`
+        SELECT decision, reason_code
+        FROM fleet_auth.authorization_audit_events
+        WHERE correlation_id = 'correlation-session-lock-expiry'
+      `);
+      expect(audit.rows).toEqual([{ decision: 'deny', reason_code: 'session_expired' }]);
+    } finally {
+      if (!released) await blocker.query('ROLLBACK').catch(() => undefined);
+      blocker.release();
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('captures decision time after all evidence locks and denies evidence that expired while waiting', async () => {
+    const initialNow = new Date();
+    let decisionNow = initialNow;
+    const {
+      databaseName,
+      runtime,
+      coordinator,
+      migration,
+      resolver,
+      principalId,
+    } = await createContextRuntime({ now: () => decisionNow });
+    const evidenceExpiresAt = new Date(initialNow.getTime() + 30_000);
+    const evidenceId = await seedPositiveEvidence({ runtime, principalId, expiresAt: evidenceExpiresAt });
+    const blocker = await runtime.connect();
+    let released = false;
+    try {
+      await blocker.query('BEGIN');
+      await blocker.query(`SELECT * FROM ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}()`);
+      const pendingResolution = resolver.resolve({
+        sessionToken: SESSION_TOKEN,
+        audience: 'fleet',
+        companionId: COMPANION_ID,
+        action: 'memory.read.self',
+        discordEvidence: { evidenceId },
+        correlationId: 'correlation-evidence-lock-expiry',
+      });
+      await waitForBlockedContextResolution(databaseName);
+      decisionNow = new Date(evidenceExpiresAt.getTime() + 1);
+      await blocker.query('COMMIT');
+      released = true;
+
+      await expect(pendingResolution).rejects.toMatchObject({ code: 'evidence_stale' });
+      const audit = await runtime.query<{ decision: string; reason_code: string }>(`
+        SELECT decision, reason_code
+        FROM fleet_auth.authorization_audit_events
+        WHERE correlation_id = 'correlation-evidence-lock-expiry'
+      `);
+      expect(audit.rows).toEqual([{ decision: 'deny', reason_code: 'evidence_stale' }]);
+    } finally {
+      if (!released) await blocker.query('ROLLBACK').catch(() => undefined);
+      blocker.release();
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('rechecks the non-restored authority after commit and appends a durable stale denial', async () => {
+    let authorityChecks = 0;
+    const {
+      runtime,
+      coordinator,
+      migration,
+      resolver,
+    } = await createContextRuntime({
+      configureProviderAuthority: (authority, floors) => ({
+        sessionAuthorityGenerationIsCurrent: (authorityGeneration) => {
+          authorityChecks += 1;
+          if (authorityChecks === 2) {
+            floors.revokeAccountAuthority({
+              kind: 'provider_subject',
+              resourceId: `discord:${SUBJECT_ID}`,
+              reason: 'post-commit authorization race',
+              at: new Date().toISOString(),
+            });
+          }
+          return authority.sessionAuthorityGenerationIsCurrent(authorityGeneration);
+        },
+        fence: input => authority.fence(input),
+      }),
+    });
+    try {
+      await expect(resolver.resolve({
+        sessionToken: SESSION_TOKEN,
+        audience: 'fleet',
+        companionId: COMPANION_ID,
+        action: 'memory.read.self',
+        correlationId: 'correlation-post-commit-floor',
+      })).rejects.toMatchObject({ code: 'authority_generation_stale' });
+      expect(authorityChecks).toBe(2);
+      const audit = await runtime.query<{
+        decision: string;
+        reason_code: string;
+        actor_context: unknown;
+      }>(`
+        SELECT decision, reason_code, actor_context
+        FROM fleet_auth.authorization_audit_events
+        WHERE correlation_id = 'correlation-post-commit-floor'
+        ORDER BY occurred_at, event_id
+      `);
+      expect(audit.rows).toHaveLength(2);
+      expect(audit.rows).toEqual(expect.arrayContaining([
+        expect.objectContaining({ decision: 'allow', reason_code: 'role_action_allowed' }),
+        expect.objectContaining({ decision: 'deny', reason_code: 'authority_generation_stale' }),
+      ]));
+      expect(JSON.stringify(audit.rows)).not.toContain(SESSION_TOKEN);
+      expect(JSON.stringify(audit.rows)).not.toContain(SUBJECT_ID);
+    } finally {
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('never returns allow when the post-commit stale-authority denial audit fails', async () => {
+    let authorityChecks = 0;
+    const { runtime, coordinator, migration, resolver } = await createContextRuntime({
+      configureProviderAuthority: authority => ({
+        sessionAuthorityGenerationIsCurrent: () => {
+          authorityChecks += 1;
+          return authorityChecks === 1;
+        },
+        fence: input => authority.fence(input),
+      }),
+    });
+    try {
+      await migration.query(`
+        CREATE OR REPLACE FUNCTION fleet_auth.reject_stale_context_denial_audit()
+        RETURNS trigger
+        LANGUAGE plpgsql
+        AS $$
+        BEGIN
+          IF NEW.decision = 'deny' AND NEW.reason_code = 'authority_generation_stale' THEN
+            RAISE EXCEPTION 'injected post-commit stale denial audit failure';
+          END IF;
+          RETURN NEW;
+        END;
+        $$;
+        CREATE TRIGGER reject_stale_context_denial_audit
+          BEFORE INSERT ON fleet_auth.authorization_audit_events
+          FOR EACH ROW EXECUTE FUNCTION fleet_auth.reject_stale_context_denial_audit()
+      `);
+      await expect(resolver.resolve({
+        sessionToken: SESSION_TOKEN,
+        audience: 'fleet',
+        companionId: COMPANION_ID,
+        action: 'memory.read.self',
+        correlationId: 'correlation-post-commit-audit-failure',
+      })).rejects.toThrow(/injected post-commit stale denial audit failure/u);
+      expect(authorityChecks).toBe(2);
+      const audit = await runtime.query<{ decision: string; reason_code: string }>(`
+        SELECT decision, reason_code
+        FROM fleet_auth.authorization_audit_events
+        WHERE correlation_id = 'correlation-post-commit-audit-failure'
+        ORDER BY occurred_at, event_id
+      `);
+      expect(audit.rows).toHaveLength(2);
+      expect(audit.rows).toEqual(expect.arrayContaining([
+        { decision: 'allow', reason_code: 'role_action_allowed' },
+        { decision: 'deny', reason_code: 'authorization_store_error' },
+      ]));
+    } finally {
       await coordinator.end();
       await migration.end();
       await runtime.end();

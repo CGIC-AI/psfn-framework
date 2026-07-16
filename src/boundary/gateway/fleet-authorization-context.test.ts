@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { FleetAuthAction, FleetAuthRole } from '../../system/config/fleet-auth-config.js';
+import {
+  FLEET_AUTH_ACTIONS,
+  FLEET_AUTH_ROLES,
+  type FleetAuthAction,
+  type FleetAuthRole,
+} from '../../system/config/fleet-auth-config.js';
 import {
   evaluateFleetAuthorizationSnapshot,
   parseFleetAuthorizationRequest,
@@ -75,6 +80,12 @@ function snapshot(overrides: Partial<FleetAuthorizationSnapshot> = {}): FleetAut
 function decide(
   candidate = snapshot(),
   action: FleetAuthAction = 'memory.read.self',
+  disabledActionsByRole = {
+    owner: [] as FleetAuthAction[],
+    admin: ['roles.manage'] as FleetAuthAction[],
+    member: ['settings.write', 'roles.manage'] as FleetAuthAction[],
+    guest: ['garden.read', 'settings.read', 'settings.write', 'roles.manage'] as FleetAuthAction[],
+  },
 ) {
   return evaluateFleetAuthorizationSnapshot({
     request: {
@@ -84,12 +95,7 @@ function decide(
       action,
     },
     snapshot: candidate,
-    disabledActionsByRole: {
-      owner: [],
-      admin: ['roles.manage'],
-      member: ['settings.write', 'roles.manage'],
-      guest: ['garden.read', 'settings.read', 'settings.write', 'roles.manage'],
-    },
+    disabledActionsByRole,
     now: NOW,
   });
 }
@@ -170,16 +176,60 @@ describe('fleet authorization context policy', () => {
     })).toEqual({ decision: 'deny', reasonCode: 'role_absent' });
   });
 
+  it('defaults every role/action pair to deny unless the closed code policy explicitly allows it', () => {
+    const explicitlyAllowed: Record<FleetAuthRole, readonly FleetAuthAction[]> = {
+      owner: [
+        'companion.read',
+        'garden.read',
+        'settings.read',
+        'settings.write',
+        'tools.execute',
+        'contacts.bind',
+        'roles.manage',
+        'memory.read.self',
+        'memory.jit.self',
+        'devices.manage',
+        'provider.link',
+      ],
+      admin: [
+        'companion.read',
+        'garden.read',
+        'settings.read',
+        'settings.write',
+        'tools.execute',
+        'contacts.bind',
+        'roles.manage',
+        'memory.read.self',
+        'memory.jit.self',
+        'devices.manage',
+      ],
+      member: ['companion.read', 'memory.read.self', 'memory.jit.self'],
+      guest: ['companion.read'],
+    };
+    const noConfigDisables = { owner: [], admin: [], member: [], guest: [] };
+    for (const role of FLEET_AUTH_ROLES) {
+      for (const action of FLEET_AUTH_ACTIONS) {
+        const candidate = snapshot({ grants: [{ ...snapshot().grants[0]!, role }] });
+        expect(
+          decide(candidate, action, noConfigDisables).decision === 'allow',
+          `${role} ${action}`,
+        ).toBe(explicitlyAllowed[role].includes(action));
+      }
+    }
+  });
+
   it.each([
-    ['owner', 'roles.manage', true],
-    ['admin', 'roles.manage', false],
-    ['member', 'memory.read.self', true],
-    ['member', 'provider.link', false],
-    ['guest', 'companion.read', true],
-    ['guest', 'memory.read.self', false],
-  ] as Array<[FleetAuthRole, FleetAuthAction, boolean]>)('%s action %s is %s', (role, action, allowed) => {
+    ['owner', 'provider.link'],
+    ['admin', 'roles.manage'],
+    ['member', 'memory.read.self'],
+    ['guest', 'companion.read'],
+  ] as Array<[FleetAuthRole, FleetAuthAction]>)('intersects %s action %s with owner-file disables', (role, action) => {
     const candidate = snapshot({ grants: [{ ...snapshot().grants[0]!, role }] });
-    expect(decide(candidate, action).decision === 'allow').toBe(allowed);
+    const disabled = { owner: [], admin: [], member: [], guest: [], [role]: [action] };
+    expect(decide(candidate, action, disabled)).toEqual({
+      decision: 'deny',
+      reasonCode: 'role_action_denied',
+    });
   });
 
   it('treats optional Discord evidence only as a narrowing prerequisite', () => {

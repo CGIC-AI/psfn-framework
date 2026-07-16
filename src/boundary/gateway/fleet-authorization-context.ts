@@ -352,14 +352,30 @@ function deny(reasonCode: FleetAuthorizationDenialReason): FleetAuthorizationEva
 function roleAllowsAction(role: FleetAuthRole, action: FleetAuthAction): boolean {
   switch (role) {
     case 'owner':
-      return true;
-    case 'admin':
-      return action !== 'provider.link';
-    case 'member':
       return action === 'companion.read'
         || action === 'garden.read'
         || action === 'settings.read'
+        || action === 'settings.write'
         || action === 'tools.execute'
+        || action === 'contacts.bind'
+        || action === 'roles.manage'
+        || action === 'memory.read.self'
+        || action === 'memory.jit.self'
+        || action === 'devices.manage'
+        || action === 'provider.link';
+    case 'admin':
+      return action === 'companion.read'
+        || action === 'garden.read'
+        || action === 'settings.read'
+        || action === 'settings.write'
+        || action === 'tools.execute'
+        || action === 'contacts.bind'
+        || action === 'roles.manage'
+        || action === 'memory.read.self'
+        || action === 'memory.jit.self'
+        || action === 'devices.manage';
+    case 'member':
+      return action === 'companion.read'
         || action === 'memory.read.self'
         || action === 'memory.jit.self';
     case 'guest':

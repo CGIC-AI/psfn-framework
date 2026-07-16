@@ -37,6 +37,7 @@ import { DiscordEvidenceRuntime } from '../../../boundary/fleet-auth/discord-evi
 import type { DiscordEvidenceObservationPort } from '../../../boundary/fleet-auth/discord-evidence-types.js';
 import { PostgresDiscordEvidenceStore } from './discord-evidence-store.js';
 import { DiscordEvidenceLifecycleCoordinator } from '../../../boundary/fleet-auth/discord-evidence-lifecycle.js';
+import { createPostgresFleetAuthorizationContextResolver } from './authorization-context.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -194,6 +195,7 @@ export function createGatewayAccountReapprovalAuthority(
 export async function initializeGatewayFleetAuthPersistence(options: {
   config?: FleetAuthConfig;
   credentialVault?: CredentialVaultPort;
+  knownCompanionIds: readonly string[];
   protectedRestoreRoots: readonly string[];
   companionDatabaseUrl?: string;
   lifecycleWitnessRoot: string;
@@ -205,6 +207,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
     return undefined;
   }
   const config = options.config;
+  const knownCompanionIds = [...options.knownCompanionIds];
   if (!options.credentialVault) {
     throw new Error('Fleet auth enabled mode requires the gateway credential vault');
   }
@@ -267,6 +270,13 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       tokenEncryptionKey: secrets.tokenEncryptionKey,
       providerRevocationAuthority,
     });
+    const authorizationContextResolver = createPostgresFleetAuthorizationContextResolver({
+      pool,
+      sessionPepper: secrets.sessionPepper,
+      config,
+      knownCompanionIds,
+      providerRevocationAuthority,
+    });
     let discordEvidence: DiscordEvidenceRuntime | undefined;
     let discordEvidenceLifecycle: DiscordEvidenceLifecycleCoordinator | undefined;
     if (config.discordEvidenceMappings.length > 0) {
@@ -291,6 +301,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       store: brokerStore,
       oauthClientSecret: secrets.oauthClientSecret,
       sessionPepper: secrets.sessionPepper,
+      authorizationContextResolver,
       ...(discordEvidenceLifecycle ? { discordEvidenceLifecycle } : {}),
     });
     return {

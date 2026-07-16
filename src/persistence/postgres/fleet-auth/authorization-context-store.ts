@@ -151,8 +151,8 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
-      const resolvedAt = this.now();
       const snapshot = await this.loadSnapshot(client, request);
+      const resolvedAt = this.now();
       let evaluation = evaluateFleetAuthorizationSnapshot({
         request,
         snapshot,
@@ -186,14 +186,24 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
       });
       await client.query('COMMIT');
       if (evaluation.decision === 'deny') return evaluation;
+      const context = createImmutableFleetAuthorizationContext({
+        request,
+        facts: evaluation.facts,
+        authorizationEventId,
+        resolvedAt,
+      });
+      if (!this.providerRevocationAuthority.sessionAuthorityGenerationIsCurrent(
+        snapshot.authority.authorityGeneration,
+      )) {
+        await this.recordPostCommitAuthorityDenial(client, {
+          request,
+          principalId: evaluation.facts.principalId,
+        });
+        return { decision: 'deny', reasonCode: 'authority_generation_stale' };
+      }
       return {
         decision: 'allow',
-        context: createImmutableFleetAuthorizationContext({
-          request,
-          facts: evaluation.facts,
-          authorizationEventId,
-          resolvedAt,
-        }),
+        context,
       };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
@@ -541,6 +551,34 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
         authorityGeneration: authority.authorityGeneration,
         globalAuthEpoch: authority.globalAuthEpoch,
         correlationId: input.correlationId,
+        occurredAt: this.now(),
+      });
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    }
+  }
+
+  private async recordPostCommitAuthorityDenial(client: PoolClient, input: {
+    request: FleetAuthorizationRequest;
+    principalId: string;
+  }): Promise<void> {
+    try {
+      await client.query('BEGIN');
+      const authority = await this.lockAuthority(client);
+      await this.insertAudit(client, {
+        eventId: randomUUID(),
+        action: input.request.action,
+        resource: `companion:${input.request.companionId}`,
+        decision: 'deny',
+        reasonCode: 'authority_generation_stale' satisfies FleetAuthorizationDenialReason,
+        evidenceRequested: input.request.discordEvidence !== undefined,
+        companionId: input.request.companionId,
+        principalId: input.principalId,
+        authorityGeneration: authority.authorityGeneration,
+        globalAuthEpoch: authority.globalAuthEpoch,
+        correlationId: input.request.correlationId,
         occurredAt: this.now(),
       });
       await client.query('COMMIT');

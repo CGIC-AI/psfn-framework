@@ -9,6 +9,7 @@ import {
 import {
   createGatewayRequestCapabilitySigner,
   createRequestCapabilityVerifier,
+  type RequestCapabilityAuthContext,
   type RequestCapabilityAuthorityVersions,
 } from '../../boundary/fleet-auth/request-capability.js';
 import {
@@ -30,6 +31,20 @@ const VERSIONS: RequestCapabilityAuthorityVersions = {
   bindingVersion: 1,
   grantVersion: 1,
   policyVersion: 1,
+};
+const AUTH_CONTEXT: RequestCapabilityAuthContext = {
+  principalId: '33333333-3333-4333-8333-333333333333',
+  provider: 'discord',
+  providerSubjectId: '12345678901234567',
+  companionId: COMPANION_ID,
+  contactBindingId: '44444444-4444-4444-8444-444444444444',
+  contactId: 'contact-a',
+  operatorGrantId: '55555555-5555-4555-8555-555555555555',
+  role: 'owner',
+  sessionRecordId: '66666666-6666-4666-8666-666666666666',
+  sessionAssurance: 'oauth',
+  authorizationEventId: DECISION_ID,
+  resolvedAt: new Date(NOW * 1_000).toISOString(),
 };
 const keyPair = generateKeyPairSync('ed25519');
 const signer = createGatewayRequestCapabilitySigner({
@@ -60,7 +75,13 @@ function envelope(overrides: Record<string, string> = {}): IncomingMessage {
     companionId: COMPANION_ID,
     body: Buffer.alloc(0),
   });
-  const token = signer.signOperator({ target, requestId: REQUEST_ID, decisionId: DECISION_ID, versions: VERSIONS });
+  const token = signer.signOperator({
+    target,
+    requestId: REQUEST_ID,
+    decisionId: DECISION_ID,
+    authContext: AUTH_CONTEXT,
+    versions: VERSIONS,
+  });
   const verified = verifier.verifyOperator({
     token,
     target,

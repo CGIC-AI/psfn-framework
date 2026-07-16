@@ -28,8 +28,9 @@ import type {
   RequestCapabilityVerifier,
   VerifiedRequestCapability,
 } from '../fleet-auth/request-capability.js';
-import type {
-  FleetAuthorizationContext,
+import {
+  toRequestCapabilityAuthContext,
+  type FleetAuthorizationContext,
 } from './fleet-authorization-context.js';
 import type { GatewayFleetAuthBroker } from './fleet-auth-broker.js';
 import { createSpiffeCheckServerIdentity } from '../../shared/net/mtls.js';
@@ -589,7 +590,13 @@ export class GatewayFleetSsoRouter {
     }
     const decisionId = context.provenance.authorizationEventId;
     const versions = authorityVersions(context);
-    const token = this.options.signer.signOperator({ target, requestId, decisionId, versions });
+    const token = this.options.signer.signOperator({
+      target,
+      requestId,
+      decisionId,
+      authContext: toRequestCapabilityAuthContext(context),
+      versions,
+    });
     if (Buffer.byteLength(token, 'ascii') > MAX_CAPABILITY_HEADER_BYTES) {
       throw new FleetSsoRequestError(503, 'Issued capability exceeds the transport envelope');
     }

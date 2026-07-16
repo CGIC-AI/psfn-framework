@@ -27,6 +27,14 @@ export interface ProactiveOutboundTimeGateInput {
   nowMs?: number;
   earliestSendAtMs?: number;
   quietHours?: ProactiveQuietHoursConfig | null;
+  /**
+   * IANA timezone of the outbound recipient (Contact.timezone). When present
+   * and valid, quiet-hours are evaluated in the recipient's local time — "don't
+   * message people who are sleeping" holds across timezones. Fail-closed: an
+   * absent, empty, or unrecognized zone falls back to the global window's zone
+   * and never throws mid-gate.
+   */
+  contactTimeZone?: string | null;
 }
 
 const MINUTE_MS = 60_000;
@@ -38,6 +46,36 @@ function parseLocalMinute(value: string): number {
 
 function resolveConfiguredTimeZone(timeZone: string): string {
   return timeZone === 'local' ? resolveActiveTimezone() : timeZone;
+}
+
+function isValidTimeZone(timeZone: string): boolean {
+  try {
+    // Constructing a formatter throws RangeError on an unknown IANA zone.
+    new Intl.DateTimeFormat('en-US', { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Quiet-hours evaluation zone: the recipient's Contact.timezone when it is a
+ * valid IANA zone, else the configured global window zone. Never throws — an
+ * invalid contact zone degrades to the global window rather than blocking or
+ * crashing the gate.
+ */
+function resolveQuietHoursTimeZone(
+  configuredTimeZone: string,
+  contactTimeZone: string | null | undefined,
+): string {
+  if (
+    typeof contactTimeZone === 'string'
+    && contactTimeZone.trim() !== ''
+    && isValidTimeZone(contactTimeZone)
+  ) {
+    return contactTimeZone;
+  }
+  return resolveConfiguredTimeZone(configuredTimeZone);
 }
 
 function getLocalMinuteOfDay(nowMs: number, timeZone: string): number {
@@ -125,7 +163,7 @@ export function evaluateProactiveOutboundTimeGate(
     return { allowed: true, sendAtMs: nowMs };
   }
 
-  const timeZone = resolveConfiguredTimeZone(quietHours.timeZone);
+  const timeZone = resolveQuietHoursTimeZone(quietHours.timeZone, input.contactTimeZone);
   const startMinute = parseLocalMinute(quietHours.startLocalTime);
   const endMinute = parseLocalMinute(quietHours.endLocalTime);
   const nextAllowedMs = resolveFirstAllowedOutsideQuietHours(

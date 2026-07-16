@@ -43,6 +43,10 @@ await restoreFleetCompanionSlice({
   companionId,
   destinations: { companionDataDir, personalWorkspacePath },
   postgres: { databaseUrl, pgRestoreBinary, psqlBinary },
+  projectionLifecycle: {
+    invalidate: async () => undefined,
+    backfill: async () => undefined,
+  },
   faultInjection: (stage: FleetRestoreFaultStage, count: number) => {
     if (faultStage === 'after_rollback_marker_removal') {
       if (stage === 'after_tree_publish' && count === 1) {

@@ -38,7 +38,7 @@ import { FLEET_AUTH_RECONCILE_FUNCTION_NAME } from './authority-reconciliation-s
 import { PostgresDiscordEvidenceStore } from './discord-evidence-store.js';
 import { digestDiscordEvidence } from '../../../boundary/fleet-auth/discord-evidence-types.js';
 import {
-  runFleetAuthConsistentBackup,
+  runFleetAuthConsistentBackup as runFleetAuthConsistentBackupProduction,
   restoreFleetAuthSnapshot,
   verifyFleetAuthBackupManifest,
 } from '../../backups/fleet-auth-coordinator.js';
@@ -68,6 +68,21 @@ function roleUrl(databaseUrl: string, role: keyof typeof PASSWORDS): string {
   url.username = role;
   url.password = PASSWORDS[role];
   return url.toString();
+}
+
+function requirePostgresClients() {
+  if (!harness) throw new Error('Postgres integration harness is not available');
+  return harness.clientBinaries;
+}
+
+function runFleetAuthConsistentBackup(
+  options: Parameters<typeof runFleetAuthConsistentBackupProduction>[0],
+) {
+  const clients = requirePostgresClients();
+  return runFleetAuthConsistentBackupProduction({
+    ...options,
+    pgDumpBinary: clients.pgDumpBinary,
+  });
 }
 
 function accountReapprovalScope(input: {
@@ -1211,10 +1226,11 @@ describe('fleet_auth Postgres authority boundary', () => {
       };
       expect(snapshot.postgresSnapshot).toBe(manifest.postgresSnapshot);
       expect(snapshot.durable.providerSubjects[0]?.metadata.version).toBe('before');
-      const companionSql = execFileSync('pg_restore', [
+      const pgRestoreBinary = requirePostgresClients().pgRestoreBinary;
+      const companionSql = execFileSync(pgRestoreBinary, [
         '--data-only', '--file=-', result.schemaDumpPaths.companion_alpha,
       ], { encoding: 'utf8' });
-      const sharedSql = execFileSync('pg_restore', [
+      const sharedSql = execFileSync(pgRestoreBinary, [
         '--data-only', '--file=-', result.schemaDumpPaths.shared,
       ], { encoding: 'utf8' });
       expect(companionSql).toContain('companion-before');

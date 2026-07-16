@@ -42,9 +42,11 @@ import {
   FLEET_CLUSTER_DIR_NAME,
   FLEET_COMPANIONS_DIR_NAME,
   FLEET_GROUP_DIR_NAME,
-  type FleetArtifactIdentity,
-  type FleetBackupUnitOutcome,
 } from './service.js';
+import type {
+  FleetArtifactIdentity,
+  FleetBackupUnitOutcome,
+} from './fleet-backup-contracts.js';
 import {
   executeFleetRestoreTransaction,
   type FleetRestoreFaultInjectionOptions,

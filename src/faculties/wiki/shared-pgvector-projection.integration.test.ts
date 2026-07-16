@@ -18,7 +18,7 @@ import {
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
-import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { WikiPgvectorProjectionStore } from './pgvector-projection.js';
 import {
   createSharedWikiPgvectorProjectionStore,

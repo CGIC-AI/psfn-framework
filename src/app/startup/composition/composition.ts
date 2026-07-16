@@ -75,7 +75,8 @@ import { loadCharacterCard, composeSystemPrompt } from '../../../core/identity/l
 import { resolveCompanionIdFromConfig } from '../../../core/identity/companion-runtime.js';
 import type { RuntimeCompanionId } from '../../../shared/routing/companion-id.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
-import type { LLMProviderPort, EmbeddingProviderPort } from '../../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import type { ShardAuditTrail } from '../../../faculties/shards/manager.js';

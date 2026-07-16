@@ -17,7 +17,7 @@
  * mocking prompt output.
  */
 import { join } from 'node:path';
-import type { EmbeddingProviderPort } from '../../agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import {
   buildDynamicPromptTemplateVariables,
   buildPromptTemplateVariables,

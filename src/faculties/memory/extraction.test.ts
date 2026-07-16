@@ -9,7 +9,8 @@ import { getDefaultTrustPolicy, resetRuntimeTrustPolicy, setRuntimeTrustPolicy }
 import { createTurnId, isTurnId } from '../../core/turns/id.js';
 import { createDefaultGroupMemorySettings } from '../../system/config/group-memory-config.js';
 import { ExtractionDrainRequeueError } from './extraction/drain-signal.js';
-import type { EmbeddingProviderPort, LLMProviderPort } from '../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import { EventBus } from '../../shared/event-bus.js';

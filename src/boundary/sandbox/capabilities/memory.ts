@@ -1,5 +1,6 @@
 import { MemoryWriter } from '../../../faculties/memory/writer.js';
-import type { EmbeddingProviderPort, LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { MemoryType, MemoryRedactionOperation } from '../../../faculties/memory/types.js';

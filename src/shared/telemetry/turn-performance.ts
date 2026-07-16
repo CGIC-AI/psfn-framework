@@ -1,4 +1,3 @@
-import type { EventBus } from '../event-bus.js';
 import type { LLMStreamOutputKind } from '../contracts/runtime.js';
 import { isRecord } from '../utils/types.js';
 
@@ -107,6 +106,10 @@ export interface TurnPerformanceEvent {
     | 'unknown_kind';
   deferReason?: TurnPerformanceDeferReason;
   cancellationOutcome?: 'acknowledged' | 'timed_out' | 'failed';
+}
+
+export interface TurnPerformanceEventEmitter {
+  emit(event: 'agent.turn.performance', payload: TurnPerformanceEvent): Promise<void>;
 }
 
 export type TurnPerformanceEventInput = Omit<
@@ -390,7 +393,7 @@ function requireEnum(value: unknown, allowed: ReadonlySet<string>, field: string
 }
 
 export function emitTurnPerformance(
-  eventBus: EventBus,
+  eventBus: TurnPerformanceEventEmitter,
   input: TurnPerformanceEventInput,
 ): Promise<void> {
   return eventBus.emit('agent.turn.performance', buildTurnPerformanceEvent(input));

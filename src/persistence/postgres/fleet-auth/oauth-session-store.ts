@@ -20,6 +20,7 @@ import {
   consumeOAuthTransaction,
   createOAuthTransaction,
 } from './oauth-transaction-store.js';
+import type { ProviderRevocationAuthorityPort } from './provider-lifecycle-contracts.js';
 
 
 export interface PostgresFleetAuthBrokerStoreOptions {
@@ -28,20 +29,6 @@ export interface PostgresFleetAuthBrokerStoreOptions {
   sessionPepper: string;
   tokenEncryptionKey: string;
   providerRevocationAuthority: ProviderRevocationAuthorityPort;
-}
-
-export interface ProviderRevocationAuthorityPort {
-  /** Deny database-backed sessions whenever non-restored authority is ahead. */
-  sessionAuthorityGenerationIsCurrent(authorityGeneration: number): boolean;
-  fence(input: {
-    provider: 'discord';
-    subjectId: string;
-    reasonDigest: string;
-    at: Date;
-  }): Promise<{
-    authorityGeneration: number;
-    reconcile(client: PoolClient): Promise<{ globalAuthEpoch: number }>;
-  }>;
 }
 
 function safeInteger(value: string, field: string): number {

@@ -23,41 +23,33 @@ import {
   verifyCompanionTreeSnapshot,
   verifyWorkspaceTreeSnapshot,
   type CompanionTreeCaptureResult,
-  type CompanionTreeVerificationResult,
   type WorkspaceTreeCaptureResult,
-  type WorkspaceTreeVerificationResult,
 } from './companion-tree.js';
 import {
   assertEncryptedBackupPackage,
   encryptBackupDirectory,
-  type BackupEncryptionRuntimeConfig,
   type EncryptedBackupPackageResult,
 } from './encryption.js';
 import {
   verifyPostgresDumpRestore,
-  type PostgresRestoreVerificationResult,
 } from './postgres-restore.js';
 import {
   captureSystemConfigSnapshot,
   verifySystemConfigSnapshot,
   type SystemConfigSnapshotCaptureResult,
-  type SystemConfigSnapshotVerificationResult,
 } from './system-config-tree.js';
 import {
   captureKubernetesHelmSnapshot,
   verifyKubernetesHelmSnapshot,
   type KubernetesHelmBackupConfig,
-  type KubernetesHelmSnapshotCaptureResult,
-  type KubernetesHelmSnapshotVerificationResult,
 } from './kubernetes-helm.js';
 import {
   createBackupContentsManifest,
   FLEET_ARTIFACT_IDENTITY_NAME,
   verifyBackupContentsManifest,
-  type BackupContentsManifest,
 } from './backup-contents.js';
 import type { BackupRuntimeConfig } from './config.js';
-import { applyTieredRetention, type TieredRetentionResult } from './retention.js';
+import { applyTieredRetention } from './retention.js';
 import { assertValidPostgresSchemaName } from '../postgres.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import {
@@ -72,135 +64,28 @@ import {
   type FleetAuthConsistentBackupCycleResult,
   type RegisterScheduledFleetAuthBackupTaskOptions,
 } from './fleet-auth-cycle.js';
+import type {
+  BackupPostgresOptions,
+  BackupRunOptions,
+  BackupRunResult,
+  FleetBackupRunOptions,
+  FleetBackupRunResult,
+  FleetBackupUnitKind,
+  FleetBackupUnitOutcome,
+  PostgresDumpVerificationResult,
+} from './fleet-backup-contracts.js';
 
 export type {
   FleetAuthConsistentBackupCycleOptions,
   FleetAuthConsistentBackupCycleResult,
   RegisterScheduledFleetAuthBackupTaskOptions,
 } from './fleet-auth-cycle.js';
-
 const log = createComponentLogger('BackupService');
 const execFileAsync = promisify(execFile);
 const PG_RESTORE_LIST_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
 export const SCHEDULED_BACKUP_TASK_ID = 'scheduled-backup';
 export const SCHEDULED_BACKUP_TASK_NAME = 'Session + database backup';
-
-export interface BackupPostgresOptions {
-  databaseUrl: string;
-  /**
-   * Dedicated scratch database for full restore verification. When set and
-   * verifyRestore is enabled, every cycle restores the dump into this
-   * database and asserts schema, pgvector, and critical-table fidelity.
-   */
-  restoreVerifyDatabaseUrl?: string;
-  /**
-   * When set, only this Postgres schema is dumped (`pg_dump --schema=<schema>`),
-   * yielding a per-schema slice that can be restored into another cluster on its
-   * own. The identifier is strictly validated ({@link assertValidPostgresSchemaName})
-   * before it reaches argv. When absent the whole database is dumped —
-   * byte-identical to the single-companion default.
-   */
-  schema?: string;
-  /** Override the pg_dump binary (defaults to `pg_dump` on PATH). */
-  pgDumpBinary?: string;
-  /** Override the pg_restore binary used for dump verification (defaults to `pg_restore` on PATH). */
-  pgRestoreBinary?: string;
-  /** Override the psql binary used for restore verification (defaults to `psql` on PATH). */
-  psqlBinary?: string;
-}
-
-export interface FleetArtifactIdentity {
-  schemaVersion: 1;
-  kind: 'companion' | 'cluster' | 'group';
-  companionId?: string;
-  postgresSchema?: string;
-  postgresSchemas?: string[];
-}
-
-export interface BackupRunOptions {
-  /** When set, a pg_dump custom-format archive of this database is captured. */
-  postgres?: BackupPostgresOptions;
-  /**
-   * A pg_dump archive already captured by the fleet-auth coordinator under its
-   * exported snapshot. When present, the recovery artifact copies this dump
-   * instead of opening PostgreSQL again. This is intentionally a backup-run
-   * input (not a database credential option): callers must still provide the
-   * schema-scoped postgres metadata used to bind the artifact identity.
-   */
-  preCapturedPostgresDumpPath?: string;
-  /**
-   * When set, the full companion-data file tree is captured with a per-file
-   * hash manifest (sessions and backup targets excluded — sessions are
-   * captured separately).
-   */
-  companionDataDir?: string;
-  /**
-   * Personal workspace root captured as a dedicated workspace-tree snapshot.
-   * This is separate from DATA_DIR/systemDataDir/companionDataDir and includes
-   * durable wiki/reference documents when configured.
-   */
-  workspacePath?: string;
-  /** Additional paths excluded from the workspace-tree capture. */
-  workspaceExcludePaths?: string[];
-  /** Runtime roots that must not overlap workspacePath. */
-  workspaceProtectedPaths?: string[];
-  /** System-data root containing JSON owner files such as settings.json and models.json. */
-  systemDataDir?: string;
-  /** Immutable chart + non-secret deployment provenance for Kubernetes/Helm recovery. */
-  kubernetesHelm?: KubernetesHelmBackupConfig;
-  sessionsDir: string;
-  backupRootDir: string;
-  /** @deprecated Use maxRotatingBackups */
-  retentionCount?: number;
-  maxRotatingBackups?: number;
-  maxWeeklyBackups?: number;
-  maxMonthlyBackups?: number;
-  /** Path to memories.jsonl (L0 memory journal); if set, included in backup. */
-  memoriesJournalPath?: string;
-  /** Path to the current character card JSON; if set, included in backup. */
-  characterCardPath?: string;
-  /** Path to the character card history JSONL; if set, included in backup. */
-  characterCardHistoryPath?: string;
-  /** When non-empty, mirror the completed backup to this directory. */
-  mirrorDir?: string;
-  verifyRestore?: boolean;
-  encryption?: BackupEncryptionRuntimeConfig;
-  /** Artifact-local fleet identity, bound by backup-contents.json. */
-  fleetArtifactIdentity?: FleetArtifactIdentity;
-  now?: () => number;
-}
-
-export interface PostgresDumpVerificationResult {
-  dumpPath: string;
-  tocEntryCount: number;
-}
-
-export interface BackupRunResult {
-  backupDir: string;
-  /** Present when a Postgres pg_dump archive was captured. */
-  postgresDumpPath?: string;
-  postgresDumpCaptured: boolean;
-  sessionSnapshotDir: string;
-  copiedSessionFiles: string[];
-  prunedBackupDirs: string[];
-  postgresDumpVerification?: PostgresDumpVerificationResult;
-  postgresRestoreVerification?: PostgresRestoreVerificationResult;
-  companionTree?: CompanionTreeCaptureResult;
-  companionTreeVerification?: CompanionTreeVerificationResult;
-  workspaceTree?: WorkspaceTreeCaptureResult;
-  workspaceTreeVerification?: WorkspaceTreeVerificationResult;
-  systemConfig?: SystemConfigSnapshotCaptureResult;
-  systemConfigVerification?: SystemConfigSnapshotVerificationResult;
-  kubernetesHelm?: KubernetesHelmSnapshotCaptureResult;
-  kubernetesHelmVerification?: KubernetesHelmSnapshotVerificationResult;
-  backupContents: BackupContentsManifest;
-  backupContentsVerification?: BackupContentsManifest;
-  l0JournalVerification?: { lineCount: number };
-  encryptedBackup?: EncryptedBackupPackageResult;
-  tieredRetention?: TieredRetentionResult;
-  mirrorDir?: string;
-}
 
 export interface RegisterScheduledBackupTaskOptions {
   scheduler: Scheduler;
@@ -813,88 +698,6 @@ export const FLEET_COMPANIONS_DIR_NAME = 'companions';
 export const FLEET_CLUSTER_DIR_NAME = 'cluster';
 export const FLEET_GROUP_DIR_NAME = 'group';
 export const DEFAULT_SHARED_WORLD_SCHEMA = 'shared';
-
-export interface FleetBackupCompanionUnit {
-  /** RFC-4122 companion id; also the per-companion artifact sub-directory name. */
-  companionId: string;
-  /** Postgres schema owning this companion's tenant tables. */
-  postgresSchema: string;
-  /** Absolute path to this companion's data directory. */
-  companionDataDir: string;
-  /** Absolute path to this companion's session JSONL directory. */
-  sessionsDir: string;
-  /** Canonical Personal Workspace captured only in this companion slice. */
-  personalWorkspacePath: string;
-  characterCardPath?: string;
-  characterCardHistoryPath?: string;
-  memoriesJournalPath?: string;
-}
-
-export interface FleetBackupRunOptions {
-  /** Base Postgres connection; the `schema` field is set per unit and ignored here. */
-  postgres: BackupPostgresOptions;
-  /** The fleet enumerated from companions.json (resolved to absolute paths). */
-  companions: FleetBackupCompanionUnit[];
-  /** System-data root captured into the cluster (or group) artifact. */
-  systemDataDir: string;
-  /** Governed Shared Companion Workspace captured only in cluster/group artifacts. */
-  sharedWorkspacePath: string;
-  /** System-level recovery artifact, captured only by cluster/group units. */
-  kubernetesHelm?: KubernetesHelmBackupConfig;
-  /** Shared world schema dumped into the cluster artifact. Defaults to `shared`. */
-  sharedSchema?: string;
-  backupRootDir: string;
-  /**
-   * When true, produce ONE whole-database family artifact instead of per-companion
-   * slices. Requires {@link groupCompanionDataDir}.
-   */
-  groupMode?: boolean;
-  /**
-   * The common companion-data parent (e.g. `.../companion-data`) whose subtree
-   * holds every companion. Captured whole in group mode. Required when
-   * `groupMode` is set.
-   */
-  groupCompanionDataDir?: string;
-  /** Canonical workspaces parent captured whole only in group mode. */
-  groupWorkspacesRoot?: string;
-  maxRotatingBackups?: number;
-  maxWeeklyBackups?: number;
-  maxMonthlyBackups?: number;
-  mirrorDir?: string;
-  verifyRestore?: boolean;
-  encryption?: BackupEncryptionRuntimeConfig;
-  now?: () => number;
-  /**
-   * Same-snapshot archives supplied by the gateway fleet-auth coordinator.
-   * Keys are the exact companion/shared schema names. When present every unit
-   * must consume one of these archives; no unit may fall back to pg_dump.
-   */
-  consistentSnapshotDumpPaths?: Readonly<Record<string, string>>;
-}
-
-export type FleetBackupUnitKind = 'companion' | 'cluster' | 'group';
-
-export interface FleetBackupUnitOutcome {
-  kind: FleetBackupUnitKind;
-  companionId?: string;
-  postgresSchema?: string;
-  /** Exact Postgres schemas contained in a whole-database group artifact. */
-  postgresSchemas?: string[];
-  status: 'success' | 'failure';
-  /** Artifact directory, relative to backupRootDir, when the unit succeeded. */
-  artifactDir?: string;
-  error?: string;
-}
-
-export interface FleetBackupRunResult {
-  mode: 'per-companion' | 'group';
-  backupRootDir: string;
-  fleetManifestPath: string;
-  overallStatus: 'success' | 'failure';
-  units: FleetBackupUnitOutcome[];
-  /** Detailed results for the units that completed successfully. */
-  results: BackupRunResult[];
-}
 
 /**
  * Thrown when at least one unit in a fleet backup failed. The fleet manifest has

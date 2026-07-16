@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import type {
-  EmbeddingProviderPort,
   LLMProviderPort,
 } from '../../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type {
   MemorySearchResult,

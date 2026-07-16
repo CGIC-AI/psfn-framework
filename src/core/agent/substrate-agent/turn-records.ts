@@ -20,7 +20,7 @@ import { buildSessionMetadataWithReflectionTurn } from '../../session/reflection
 import type { SessionActorKind } from '../../session/turn-provenance.js';
 import type { IntrospectionTurnSensitivityDecision } from '../../../faculties/introspection/turn-sensitivity.js';
 import { resolveMessagePlaceId } from './message-location.js';
-import type { TurnSessionIdentity } from './turn-execution-runtime.js';
+import type { TurnSessionIdentity } from './turn-execution/contracts.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const REASONING_PLACEHOLDER_VALUES = new Set(['none', 'null', 'n/a', 'na', 'nil', 'undefined']);

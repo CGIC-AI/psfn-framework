@@ -5,7 +5,7 @@ import { createIntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
 import { validateIntakePolicy } from '../../system/config/intake-policy-config.js';
 import { MemoryCandidacyPolicyError, MemoryWriter, MemoryWritePolicyError } from './writer.js';
 import type { MemoryWriteOptions } from './writer.js';
-import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type { MemoryEvolutionLinkInput, MemoryStorePort } from './memory-store-port.js';
 import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import type { PurrMemory } from './types.js';

@@ -5,7 +5,8 @@ import {
   __retrieval_internals,
 } from './retrieval.js';
 import type { MemoryStorePort, MemorySubjectAuthorizedQuery } from './memory-store-port.js';
-import type { EmbeddingProviderPort, LLMProviderPort } from '../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type { PurrMemory } from './types.js';
 import type { SensitivityLevel } from '../../system/trust/types.js';
 import type { ConsentFlags } from '../../system/trust/types.js';

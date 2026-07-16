@@ -9,7 +9,8 @@ import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { resolvePresenceSubjectId } from '../../core/agent/presence-metadata.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import type { LLMProviderPort, EmbeddingProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
+import type { LLMProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import {
   createActiveEmanationSatellitePresencePort,

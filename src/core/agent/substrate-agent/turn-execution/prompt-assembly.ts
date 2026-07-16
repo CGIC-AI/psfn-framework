@@ -59,7 +59,7 @@ import type { TurnExecutionObservability } from './observability.js';
 
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
-type TurnSessionIdentity = import('../turn-execution-runtime.js').TurnSessionIdentity;
+type TurnSessionIdentity = import('./contracts.js').TurnSessionIdentity;
 
 interface DynamicSuffixRenderSection {
   identifier: string;

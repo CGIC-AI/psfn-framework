@@ -1,4 +1,4 @@
-import type { RuntimeLaneClass } from '../../core/agent/worker-lanes.js';
+import type { RuntimeLaneClass } from './runtime-lanes.js';
 import type { ContextManifest } from '../../core/session/context-manifest.js';
 import type { CompanionPresenceMetadata, EmbodimentPresenceMetadata } from '../../core/agent/presence-metadata.js';
 import type { CredentialReference } from '../../boundary/custody/credential-vault.js';

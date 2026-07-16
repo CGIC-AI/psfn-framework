@@ -4,7 +4,8 @@
 
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import { Worker } from 'node:worker_threads';
-import type { LLMProviderPort, LLMProviderStreamOptions, EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { LLMProviderPort, LLMProviderStreamOptions } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { CHANNEL_TYPES } from '../../shared/contracts/runtime.js';
 import type { Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type {

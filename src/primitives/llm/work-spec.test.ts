@@ -7,11 +7,13 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import { COMPANION_PRIVATE_BACKGROUND_PURPOSE } from '../../shared/contracts/runtime.js';
 import {
-  RUNTIME_LANE_CLASSES,
   resolveRuntimeLaneClassForModelCall,
   type ModelCallRuntimePurpose,
-  type RuntimeLaneClass,
 } from '../../core/agent/worker-lanes.js';
+import {
+  RUNTIME_LANE_CLASSES,
+  type RuntimeLaneClass,
+} from '../../shared/contracts/runtime-lanes.js';
 import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
 import { resolveCorrelationMetadata } from './correlation.js';
 import {

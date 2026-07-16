@@ -7,10 +7,10 @@ import type {
 import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type {
-  EmbeddingProviderPort as EmbeddingService,
   LLMProviderPort as LLMProvider,
   MemoryProvider,
 } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort as EmbeddingService } from '../../shared/contracts/embedding-provider.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import {
   SUBAGENT_WORKER_LANE,

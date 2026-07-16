@@ -130,6 +130,7 @@ import { ParentTurnContinuationBudgetExceededError } from '../turn-limits.js';
 import { parseTurnRecordBackgroundWorkHandoff } from '../background-work/types.js';
 import type { ForegroundWorkLease } from '../background-work/supervisor.js';
 import type { EnqueueBackgroundWorkInput } from '../background-work/types.js';
+import type { TurnSessionIdentity } from './turn-execution/contracts.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -146,11 +147,6 @@ function assertForegroundWorkOwned(lease: ForegroundWorkLease | null): void {
 
 function cloneComputedInternalStateForResponse(internalState: InternalState): InternalState {
   return JSON.parse(JSON.stringify(internalState)) as InternalState;
-}
-
-export interface TurnSessionIdentity {
-  readonly sourceChannelId: string;
-  readonly logicalSessionId: string;
 }
 
 export interface TurnExecutionRuntime {

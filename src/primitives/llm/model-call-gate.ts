@@ -2,9 +2,11 @@ import {
   compareRuntimeLanePriority,
   resolveRuntimeLaneBudgetProfile,
   FOREGROUND_CHAT_RUNTIME_CLASS,
+} from '../../core/agent/worker-lanes.js';
+import {
   RUNTIME_LANE_CLASSES,
   type RuntimeLaneClass,
-} from '../../core/agent/worker-lanes.js';
+} from '../../shared/contracts/runtime-lanes.js';
 
 /**
  * Per-resource admission capacity. `capacity` is the total number of concurrent

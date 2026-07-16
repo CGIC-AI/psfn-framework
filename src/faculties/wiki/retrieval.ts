@@ -1,4 +1,4 @@
-import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { CorrelationMetadata } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -11,6 +11,7 @@ import {
   cloneWikiContextSnapshot,
   resolveWikiContextKey,
   type WikiContextSnapshot,
+  type WikiRetrievalContextClass,
 } from './active-context.js';
 import type {
   RetrievalQueryEmbeddingProvenance,
@@ -29,8 +30,6 @@ const DEFAULT_WIKI_SEARCH_LIMIT = 6;
  */
 export const WIKI_CONTEXT_BLOCK_HEADER =
   '## Reference Wiki (supplemental world knowledge — NOT lived memory)';
-
-export type WikiRetrievalContextClass = 'dm' | 'group' | 'focus';
 
 export interface WikiRetrievalPlan {
   contextClass: WikiRetrievalContextClass;

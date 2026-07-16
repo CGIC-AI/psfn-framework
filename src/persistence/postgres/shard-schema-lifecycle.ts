@@ -4,7 +4,7 @@ import type {
   BackupPostgresOptions,
   BackupRunOptions,
   BackupRunResult,
-} from '../backups/service.js';
+} from '../backups/fleet-backup-contracts.js';
 import { runBackupCycle } from '../backups/service.js';
 import { restorePostgresSchemaSlice } from '../backups/fleet-restore.js';
 import { createPostgresPool, runPostgresMigrations } from '../postgres.js';

@@ -1,9 +1,9 @@
 import type {
   MemoryProvider,
-  EmbeddingProviderPort,
   LLMProviderPort,
   RetrievalVADInput,
 } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { createHash } from 'node:crypto';
 import {
   createTurnRetrievalQueryEmbedding as createTurnRetrievalQueryEmbeddingValue,

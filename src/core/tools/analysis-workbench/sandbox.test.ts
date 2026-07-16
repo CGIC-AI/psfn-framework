@@ -1,7 +1,8 @@
 import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import { REPLSandbox, FinalAnswerSignal } from './sandbox.js';
 import type { SandboxBudgetRef } from './sandbox.js';
-import type { LLMProviderPort, EmbeddingProviderPort } from '../../agent/contracts.js';
+import type { LLMProviderPort } from '../../agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type {
   MemorySearchResult,
   MemorySubjectAuthorizedQuery,

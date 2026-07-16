@@ -4,7 +4,7 @@
 // calling/execution/looping
 // internally — we just configure it and subscribe to events for streaming.
 //
-// Provider interfaces (LLMProviderPort, EmbeddingProviderPort, MemoryProvider,
+// Provider interfaces (LLMProviderPort, MemoryProvider,
 // MemoryExtractor) are re-exported here for callers that import contracts
 // from the SubstrateAgent module.
 
@@ -158,8 +158,8 @@ import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-ru
 import {
   handleMessageForTurn,
   type TurnDeliveryLifecycle,
-  type TurnSessionIdentity,
 } from './substrate-agent/turn-execution-runtime.js';
+import type { TurnSessionIdentity } from './substrate-agent/turn-execution/contracts.js';
 import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
 import { parseTurnRecordBackgroundWorkHandoff } from './background-work/types.js';
 import type { BackgroundWorkRuntimeTuning } from './background-work/config.js';
@@ -204,7 +204,6 @@ const log = createComponentLogger('SubstrateAgent');
 
 export type {
   LLMProviderPort,
-  EmbeddingProviderPort,
   MemoryProvider,
   MemoryExtractor,
   ScratchpadProvider,

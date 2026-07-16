@@ -14,10 +14,8 @@ import {
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
-import {
-  runFleetBackupCycle as runFleetBackupCycleProduction,
-  type FleetBackupCompanionUnit,
-} from './service.js';
+import { runFleetBackupCycle as runFleetBackupCycleProduction } from './service.js';
+import type { FleetBackupCompanionUnit } from './fleet-backup-contracts.js';
 import {
   backfillRestoredMemorySubjectProjections,
   invalidateRestoredMemorySubjectProjections,

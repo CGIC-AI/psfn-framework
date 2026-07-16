@@ -24,8 +24,8 @@ import {
 import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
 import {
   PostgresFleetAuthBrokerStore,
-  type ProviderRevocationAuthorityPort,
 } from './oauth-session-store.js';
+import type { ProviderRevocationAuthorityPort } from './provider-lifecycle-contracts.js';
 import {
   verifyAndConsumeHubDeviceAssertion,
   type HubDeviceAssertionExpectedBinding,

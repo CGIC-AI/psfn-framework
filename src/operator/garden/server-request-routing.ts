@@ -7,6 +7,7 @@ export const GARDEN_PREFIX = '/';
 const GARDEN_CLIENT_ROUTES = new Set([
   '/',
   '/action-pipe',
+  '/autonomy',
   '/channels',
   '/charge-budget',
   '/chat',
@@ -44,6 +45,7 @@ const GARDEN_CLIENT_ROUTES = new Set([
   '/tools',
   '/values',
   '/wiki',
+  '/wishlist',
 ]);
 
 interface AdminRequestRoutingDependencies {

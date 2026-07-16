@@ -11,6 +11,7 @@ import { EventBus } from '../../shared/event-bus.js';
 import { AdminServer } from './server.js';
 import { createInProcessGardenAdminContract } from './local-admin-contract.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
+import type { PurrMemory } from '../../faculties/memory/types.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
 import { PostgresEpisodicStore } from '../../faculties/memory/episodic/postgres-store.js';
 import {
@@ -485,6 +486,22 @@ const testEmbeddingService: EmbeddingProviderPort = {
   embedBatch: async (texts: string[]) => Promise.all(texts.map(text => testEmbeddingService.embed(text))),
 };
 
+const GARDEN_TEST_SUBJECT_ID = 'primary-user';
+
+function insertGardenTestMemory(
+  store: InMemoryMemoryStore,
+  memory: PurrMemory,
+  embedding: Float32Array,
+): void {
+  store.insertMemory({
+    ...memory,
+    provenance: {
+      ...(memory.provenance ?? {}),
+      subjectContactId: GARDEN_TEST_SUBJECT_ID,
+    },
+  }, embedding);
+}
+
 describe('AdminServer JSON API routes', () => {
   let tempDir: string;
   let eventBus: EventBus;
@@ -718,6 +735,9 @@ describe('AdminServer JSON API routes', () => {
     const services = createInProcessGardenAdminContract({
       env: {},
       memoryStore: memoryStorePort,
+      resolveMemorySubjectAccessContext: () => ({
+        viewerContactId: GARDEN_TEST_SUBJECT_ID,
+      }),
       episodicStore,
       sessionStore,
       sessionManager,
@@ -1614,7 +1634,7 @@ describe('AdminServer JSON API routes', () => {
   it('supports memory list filters and detail fetch path for modal', async () => {
     const semanticTimestamp = Date.UTC(2026, 0, 10, 12, 0, 0);
     const episodicTimestamp = Date.UTC(2026, 1, 22, 9, 30, 0);
-    memoryStore.insertMemory({
+    insertGardenTestMemory(memoryStore, {
       id: 'api-mem-1',
       text: 'API semantic memory one',
       type: 'semantic',
@@ -1629,7 +1649,7 @@ describe('AdminServer JSON API routes', () => {
       tags: ['api'],
       sensitivity: 'personal',
     }, new Float32Array([0.1, 0.2, 0.3]));
-    memoryStore.insertMemory({
+    insertGardenTestMemory(memoryStore, {
       id: 'api-mem-2',
       text: 'API episodic memory two',
       type: 'episodic',
@@ -1645,7 +1665,7 @@ describe('AdminServer JSON API routes', () => {
       sensitivity: 'confidential',
       consentFlags: { allowRecall: false },
     }, new Float32Array([0.2, 0.3, 0.4]));
-    memoryStore.insertMemory({
+    insertGardenTestMemory(memoryStore, {
       id: 'api-mem-cf',
       text: 'Context feedback for turn test-turn. Score=0.88 bucket=high.',
       type: 'procedural',
@@ -1767,7 +1787,7 @@ describe('AdminServer JSON API routes', () => {
 
   it('supports preference memory review filters and retention edits', async () => {
     const now = Date.UTC(2026, 2, 1, 10, 0, 0);
-    memoryStore.insertMemory({
+    insertGardenTestMemory(memoryStore, {
       id: 'pref-durable-color',
       text: "V's favorite color is teal.",
       type: 'semantic',
@@ -1783,7 +1803,7 @@ describe('AdminServer JSON API routes', () => {
       retentionClass: 'durable',
       sensitivity: 'personal',
     }, new Float32Array([0.1, 0.3, 0.2]));
-    memoryStore.insertMemory({
+    insertGardenTestMemory(memoryStore, {
       id: 'pref-standard-style',
       text: 'V likes matte stationery.',
       type: 'semantic',
@@ -1799,7 +1819,7 @@ describe('AdminServer JSON API routes', () => {
       retentionClass: 'standard',
       sensitivity: 'personal',
     }, new Float32Array([0.2, 0.4, 0.1]));
-    memoryStore.insertMemory({
+    insertGardenTestMemory(memoryStore, {
       id: 'durable-non-preference',
       text: 'Durable non-preference profile fact.',
       type: 'semantic',
@@ -2292,7 +2312,7 @@ describe('AdminServer JSON API routes', () => {
 
   it('supports memory bulk update/delete and link/unlink endpoints', async () => {
     const now = Date.now();
-    memoryStore.insertMemory({
+    insertGardenTestMemory(memoryStore, {
       id: 'bulk-mem-1',
       text: 'Bulk memory one',
       type: 'semantic',
@@ -2307,7 +2327,7 @@ describe('AdminServer JSON API routes', () => {
       tags: ['bulk'],
       sensitivity: 'personal',
     }, new Float32Array([0.2, 0.1, 0.3]));
-    memoryStore.insertMemory({
+    insertGardenTestMemory(memoryStore, {
       id: 'bulk-mem-2',
       text: 'Bulk memory two',
       type: 'episodic',
@@ -2322,7 +2342,7 @@ describe('AdminServer JSON API routes', () => {
       tags: ['bulk'],
       sensitivity: 'personal',
     }, new Float32Array([0.25, 0.15, 0.35]));
-    memoryStore.insertMemory({
+    insertGardenTestMemory(memoryStore, {
       id: 'bulk-mem-3',
       text: 'Bulk memory three',
       type: 'procedural',
@@ -2412,7 +2432,7 @@ describe('AdminServer JSON API routes', () => {
 
   it('supports managed memory scope browsing, provenance inspection, and repair', async () => {
     const now = Date.now();
-    memoryStore.insertMemory({
+    insertGardenTestMemory(memoryStore, {
       id: 'scope-mem-1',
       text: 'Alpha scoped memory',
       type: 'semantic',
@@ -2430,7 +2450,7 @@ describe('AdminServer JSON API routes', () => {
       provenanceRefs: ['turn:scope-alpha'],
       sensitivity: 'personal',
     }, new Float32Array([0.11, 0.12, 0.13]));
-    memoryStore.insertMemory({
+    insertGardenTestMemory(memoryStore, {
       id: 'scope-mem-2',
       text: 'North star scoped memory',
       type: 'reflection',
@@ -2561,7 +2581,7 @@ describe('AdminServer JSON API routes', () => {
   });
 
   it('fails closed for unknown client memory paths and keeps canonical /api/admin memory data', async () => {
-    memoryStore.insertMemory({
+    insertGardenTestMemory(memoryStore, {
       id: 'ui-memory-1',
       text: 'UI memory one',
       type: 'semantic',
@@ -4322,6 +4342,7 @@ describe('AdminServer JSON API routes', () => {
     }, {
       defaultContextWindow: testConfig.defaultContextWindow,
     });
+    const schedulerBaseline = loadSchedulerConfig(tempDir);
     const expectedScheduler = saveSchedulerConfig(tempDir, {
       tickIntervalMs: 1500,
       heartbeatIntervalMs: 9000,
@@ -4338,6 +4359,7 @@ describe('AdminServer JSON API routes', () => {
           maxActiveConcerns: 7,
         },
       },
+      backgroundWork: schedulerBaseline.backgroundWork,
       artifactLifecycle: {
         scratchpadRetentionDays: 14,
         generatedMediaRetentionDays: 30,
@@ -4380,7 +4402,7 @@ describe('AdminServer JSON API routes', () => {
         maxArcsPerRun: 12,
         maxEpisodesPerRun: 60,
       },
-      icpAutonomy: loadSchedulerConfig(tempDir).icpAutonomy,
+      icpAutonomy: schedulerBaseline.icpAutonomy,
     });
     const expectedSkills = saveSkillsConfig(tempDir, {
       enabled: true,

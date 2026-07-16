@@ -24,7 +24,10 @@ import type { ConcernStorePort } from '../../core/intention/concern-store-port.j
 import type { OutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
-import { createSubjectAuthorizedMemoryStore } from '../../faculties/memory/subject-authorized-store.js';
+import {
+  createSubjectAuthorizedMemoryStore,
+  type MemorySubjectAccessContext,
+} from '../../faculties/memory/subject-authorized-store.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import type { GroupMemoryBackfillExtractorPort } from '../../faculties/memory/extraction/group-backfill.js';
 import type {
@@ -140,6 +143,11 @@ export interface InProcessGardenAdminContractOptions {
   apiHost?: string;
   apiPort?: number;
   memoryStore: MemoryStorePort;
+  /**
+   * Resolve trusted Garden memory subject authority from authenticated runtime
+   * context. Absence deliberately leaves subject-classified memory fail closed.
+   */
+  resolveMemorySubjectAccessContext?: () => MemorySubjectAccessContext;
   episodicStore?: EpisodicStorePort | null;
   sessionStore: SessionStore;
   sessionManager: SessionManager;
@@ -355,7 +363,10 @@ export function createInProcessGardenAdminContract(
   // The legacy admin session proves operator access but carries no subject
   // identity. Fleet-auth must supply that authority before Garden may expose
   // or mutate subject-classified memories.
-  const gardenMemoryStore = createSubjectAuthorizedMemoryStore(options.memoryStore, {});
+  const gardenMemoryStore = createSubjectAuthorizedMemoryStore(
+    options.memoryStore,
+    options.resolveMemorySubjectAccessContext ?? (() => ({})),
+  );
   const driftReviews = createAdminDriftReviewService({
     store: createDriftReviewCardStore(resolveDriftReviewCardsPath(companionDataDir)),
     memoryStore: gardenMemoryStore,

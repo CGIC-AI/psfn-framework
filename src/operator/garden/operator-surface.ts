@@ -27,6 +27,10 @@ import { parseAdminJsonBody } from './request-body.js';
 import { parseConfirmationResolveRequest } from './confirmation-resolve-request.js';
 import type { ConfirmationOperatorAuthContext } from './admin-contract.js';
 import type { GatewayOperatorConfirmationClient } from '../../app/startup/support/gateway-operator-confirmation-client.js';
+import {
+  GardenRequestTargetError,
+  validateGardenRequestMetadata,
+} from '../../boundary/fleet-auth/request-capability-target.js';
 
 const log = createComponentLogger('GardenOperatorSurface');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -174,8 +178,22 @@ export class GardenOperatorSurface implements Lifecycle {
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
-    const path = new URL(req.url ?? '/', 'http://localhost').pathname;
-    if (path !== '/api/admin/events') {
+    let target;
+    try {
+      target = validateGardenRequestMetadata({
+        rawTarget: req.url ?? '/',
+        method: 'WS',
+        headers: req.headers,
+      });
+    } catch (error) {
+      const status = error instanceof GardenRequestTargetError && error.code === 'route_not_declared'
+        ? '404 Not Found'
+        : '400 Bad Request';
+      socket.write(`HTTP/1.1 ${status}\r\n\r\n`);
+      socket.destroy();
+      return;
+    }
+    if (target.canonicalPath !== '/api/admin/events' || target.canonicalQuery) {
       socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
       socket.destroy();
       return;

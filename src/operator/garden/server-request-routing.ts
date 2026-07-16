@@ -1,51 +1,15 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { sendText } from '../../channels/backplane/http/primitives.js';
-import { parseRequestUrl } from './request-url.js';
+import { sendJson, sendText } from '../../channels/backplane/http/primitives.js';
+import { GARDEN_CLIENT_ROUTES } from '../../boundary/fleet-auth/garden-route-capabilities.js';
+import {
+  GardenRequestTargetError,
+  parseCanonicalGardenRequestPath,
+  validateGardenRequestMetadata,
+} from '../../boundary/fleet-auth/request-capability-target.js';
 
 export const GARDEN_PREFIX = '/';
 
-const GARDEN_CLIENT_ROUTES = new Set([
-  '/',
-  '/action-pipe',
-  '/autonomy',
-  '/channels',
-  '/charge-budget',
-  '/chat',
-  '/cognitive-security/approvals',
-  '/cognitive-security/drift',
-  '/cognitive-security/firewall',
-  '/cognitive-security/remediation',
-  '/confirmations',
-  '/contact-approvals',
-  '/contacts',
-  '/enrollment',
-  '/evals/emotion-sidecar',
-  '/episodic-memory',
-  '/graph-proposals',
-  '/identity',
-  '/images',
-  '/memory',
-  '/model-room',
-  '/models',
-  '/places',
-  '/primer',
-  '/prompt-monitor',
-  '/prompts',
-  '/rooms',
-  '/satellites',
-  '/scheduler',
-  '/session-recovery',
-  '/sessions',
-  '/settings',
-  '/shards',
-  '/skills',
-  '/subsystem-health',
-  '/telemetry',
-  '/theme',
-  '/tools',
-  '/values',
-  '/wiki',
-]);
+const GARDEN_CLIENT_ROUTE_SET = new Set<string>(GARDEN_CLIENT_ROUTES);
 
 interface AdminRequestRoutingDependencies {
   token?: string;
@@ -78,10 +42,7 @@ function isGardenClientRoute(method: string | undefined, requestPath: string): b
     return false;
   }
 
-  const normalizedPath = requestPath.length > 1 && requestPath.endsWith('/')
-    ? requestPath.replace(/\/+$/, '')
-    : requestPath;
-  return GARDEN_CLIENT_ROUTES.has(normalizedPath);
+  return GARDEN_CLIENT_ROUTE_SET.has(requestPath);
 }
 
 function isGardenBuildAssetPath(method: string | undefined, requestPath: string): boolean {
@@ -94,12 +55,32 @@ export function handleAdminRequest(
   res: ServerResponse,
   deps: AdminRequestRoutingDependencies,
 ): void {
-  const url = parseRequestUrl(req);
-  const requestPath = url.pathname;
+  let requestPath: string;
+  try {
+    requestPath = validateGardenRequestMetadata({
+      rawTarget: req.url ?? '/',
+      method: req.method ?? 'GET',
+      headers: req.headers,
+    }).canonicalPath;
+  } catch (error) {
+    if (error instanceof GardenRequestTargetError && error.code === 'authority_forbidden') {
+      sendJson(res, 403, { error: 'Cross-tenant authority selector is forbidden' });
+      return;
+    }
+    if (error instanceof GardenRequestTargetError && error.code === 'route_not_declared') {
+      try {
+        deps.sendNotFound(parseCanonicalGardenRequestPath(req.url ?? '/').canonicalPath, res);
+      } catch {
+        sendText(res, 400, 'Invalid request target');
+      }
+      return;
+    }
+    sendText(res, 400, 'Invalid request target');
+    return;
+  }
 
-  // Skip auth for OPTIONS, SvelteKit built assets, health probes, and login page.
-  const skipAuth = req.method === 'OPTIONS'
-    || requestPath.startsWith('/_app/')
+  // Skip auth for SvelteKit built assets, health probes, and login page.
+  const skipAuth = requestPath.startsWith('/_app/')
     || requestPath === '/health'
     || requestPath.startsWith('/health/')
     || requestPath === '/login';

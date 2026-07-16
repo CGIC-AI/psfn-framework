@@ -16,6 +16,7 @@ import type {
   AdminAuditActor,
   AdminAuditDecision,
 } from './types.js';
+import { assertGardenRouteDeclarationsCovered } from '../../boundary/fleet-auth/garden-route-capabilities.js';
 
 export interface AdminRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -68,7 +69,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
     });
   };
 
-  return [
+  const routes: AdminRoute[] = [
     {
       method: 'GET',
       match: exactPath('/login'),
@@ -170,4 +171,6 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       appendAuditTimelineEntry,
     }),
   ];
+  assertGardenRouteDeclarationsCovered(routes);
+  return routes;
 }

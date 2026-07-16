@@ -34,7 +34,7 @@ function normalizePositiveInteger(value: unknown, field: string, min: number, ma
   });
 }
 
-function validateSkillsConfig(raw: unknown, sourcePath: string): SkillsRuntimeConfig {
+export function validateSkillsConfig(raw: unknown, sourcePath: string): SkillsRuntimeConfig {
   if (!isRecord(raw)) {
     throw new Error(`Invalid skills config at ${sourcePath}: expected object`);
   }

@@ -24,11 +24,19 @@ import {
   contextMessagesToPiMessages,
   type PiChatMessage,
 } from '../../../../primitives/llm/message-conversion.js';
+import {
+  PROMPT_PROJECTION_DATETIME_ANCHOR_BLOCK_ID,
+  getPromptProjectionBlockText,
+  renderPromptProjectionAssembledPrompt,
+  serializePromptProjectionForProvider,
+  serializePromptProjectionSystemPrompt,
+  stripCurrentDatetimeProjectionBlocks,
+} from '../../../../shared/contracts/prompt-projection.js';
 
 export const PROMPT_PLAN_SCHEMA_VERSION = 1 as const;
 
 /** Canonical block id for the turn-volatile datetime proximity anchor. */
-export const DATETIME_ANCHOR_BLOCK_ID = 'runtime.current_datetime';
+export const DATETIME_ANCHOR_BLOCK_ID = PROMPT_PROJECTION_DATETIME_ANCHOR_BLOCK_ID;
 
 /**
  * Volatility classes mirror the prompt variable namespace (E2.1):
@@ -127,11 +135,7 @@ export function buildCurrentDatetimeProximityAnchor(
  * block at the end of the plan.
  */
 export function stripCurrentDatetimePromptBlocks(text: string): string {
-  return text
-    .replace(/<runtime\.current_datetime(?:\s+[^>]*)?>\s*[\s\S]*?<\/runtime\.current_datetime>/g, '')
-    .replace(/<current_datetime>\s*[\s\S]*?<\/current_datetime>/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
+  return stripCurrentDatetimeProjectionBlocks(text);
 }
 
 // ── Plan construction ──
@@ -190,13 +194,6 @@ export function createPromptPlan(input: {
 
 // ── Pure serialization ──
 
-function joinBlockTexts(blocks: readonly PromptPlanBlock[]): string {
-  return blocks
-    .map(block => block.renderedText.trim())
-    .filter(text => text.length > 0)
-    .join('\n\n');
-}
-
 export function getPromptPlanBlock(
   plan: Pick<PromptPlan, 'blocks'>,
   id: string,
@@ -205,7 +202,7 @@ export function getPromptPlanBlock(
 }
 
 export function getPromptPlanBlockText(plan: Pick<PromptPlan, 'blocks'>, id: string): string {
-  return getPromptPlanBlock(plan, id)?.renderedText ?? '';
+  return getPromptProjectionBlockText(plan, id);
 }
 
 /**
@@ -214,9 +211,7 @@ export function getPromptPlanBlockText(plan: Pick<PromptPlan, 'blocks'>, id: str
  * prompt for the turn.
  */
 export function renderPromptPlanAssembledPrompt(plan: Pick<PromptPlan, 'blocks'>): string {
-  return joinBlockTexts(
-    plan.blocks.filter(block => block.layer === 'prompt_stack' || block.layer === 'runtime'),
-  );
+  return renderPromptProjectionAssembledPrompt(plan);
 }
 
 /**
@@ -225,15 +220,7 @@ export function renderPromptPlanAssembledPrompt(plan: Pick<PromptPlan, 'blocks'>
  * serialized last as the canonical clock.
  */
 export function serializePromptPlanSystemPrompt(plan: Pick<PromptPlan, 'blocks'>): string {
-  const anchorBlock = getPromptPlanBlock(plan, DATETIME_ANCHOR_BLOCK_ID);
-  const body = stripCurrentDatetimePromptBlocks(
-    joinBlockTexts(plan.blocks.filter(block => block.id !== DATETIME_ANCHOR_BLOCK_ID)),
-  );
-  const anchor = anchorBlock?.renderedText.trim() ?? '';
-  if (!anchor) {
-    return body;
-  }
-  return body ? `${body}\n\n${anchor}` : anchor;
+  return serializePromptProjectionSystemPrompt(plan);
 }
 
 // ── Cache-prefix projection (E2.4) ──
@@ -302,30 +289,13 @@ export function serializePromptPlanForProvider(
   plan: Pick<PromptPlan, 'blocks' | 'messages'>,
   systemRoleTransport: LLMSystemPromptTransport,
 ): SerializedPromptPlanProviderPayload {
-  const systemPrompt = serializePromptPlanSystemPrompt(plan);
+  const projected = serializePromptProjectionForProvider(plan, systemRoleTransport);
   const piMessages = contextMessagesToPiMessages(plan.messages);
-  const providerWireMessages: LLMProviderWireMessage[] = [];
-  if (systemPrompt) {
-    providerWireMessages.push({
-      role: systemRoleTransport === 'openai_developer'
-        ? 'developer'
-        : systemRoleTransport === 'google_system_instruction'
-          ? 'system_instruction'
-          : 'system',
-      source: 'system_prompt',
-      content: systemPrompt,
-    });
-  }
-  for (const providerMessage of piMessages) {
-    providerWireMessages.push({
-      role: providerMessage.role === 'assistant' ? 'assistant' : 'user',
-      source: 'message',
-      content: typeof providerMessage.content === 'string'
-        ? providerMessage.content
-        : JSON.stringify(providerMessage.content),
-    });
-  }
-  return { systemPrompt, piMessages, providerWireMessages };
+  return {
+    systemPrompt: projected.systemPrompt,
+    piMessages,
+    providerWireMessages: projected.providerWireMessages,
+  };
 }
 
 export function clonePromptPlanBlock(block: PromptPlanBlock): PromptPlanBlock {

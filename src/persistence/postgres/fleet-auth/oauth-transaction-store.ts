@@ -3,8 +3,15 @@ import {
   FleetAuthBrokerError,
   type ConsumedOAuthTransaction,
   type FleetAuthBrokerStore,
+  type OAuthCallbackDestination,
   type OAuthTransactionInput,
 } from '../../../boundary/gateway/fleet-auth-broker.js';
+import {
+  lifecycleOAuthKindFor,
+  type LifecycleOAuthAction,
+  type LifecycleOAuthProofRole,
+  type LifecycleOAuthPurpose,
+} from '../../../shared/contracts/fleet-auth-lifecycle-oauth.js';
 import type { FleetAuthSecretCodec } from './oauth-secret-codec.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
@@ -18,6 +25,41 @@ interface OAuthTransactionRow {
   status: 'pending' | 'consumed' | 'expired' | 'revoked';
   expires_at: Date;
   global_auth_epoch: string;
+  lifecycle_ceremony_id: string | null;
+  lifecycle_action: LifecycleOAuthAction | null;
+  lifecycle_proof_role: LifecycleOAuthProofRole | null;
+  initiating_principal_id: string | null;
+  initiating_session_id: string | null;
+}
+
+interface OAuthCallbackDestinationRow extends OAuthTransactionRow {
+  current_global_auth_epoch: string;
+}
+
+function lifecyclePurpose(row: OAuthTransactionRow): LifecycleOAuthPurpose | undefined {
+  const values = [
+    row.lifecycle_ceremony_id,
+    row.lifecycle_action,
+    row.lifecycle_proof_role,
+    row.initiating_principal_id,
+    row.initiating_session_id,
+  ];
+  if (values.every(value => value === null)) return undefined;
+  if (values.some(value => value === null)) {
+    throw new FleetAuthBrokerError('invalid_oauth_state', 400, 'OAuth purpose is incomplete');
+  }
+  const action = row.lifecycle_action!;
+  const proofRole = row.lifecycle_proof_role!;
+  if (lifecycleOAuthKindFor(action, proofRole) !== row.kind) {
+    throw new FleetAuthBrokerError('invalid_oauth_state', 400, 'OAuth purpose is inconsistent');
+  }
+  return {
+    ceremonyId: row.lifecycle_ceremony_id!,
+    action,
+    proofRole,
+    initiatingPrincipalId: row.initiating_principal_id!,
+    initiatingSessionId: row.initiating_session_id!,
+  };
 }
 
 export async function createOAuthTransaction(
@@ -62,6 +104,57 @@ export async function createOAuthTransaction(
   }
 }
 
+export async function resolveOAuthCallbackDestination(
+  pool: Pool,
+  input: Parameters<FleetAuthBrokerStore['resolveOAuthCallbackDestination']>[0],
+): Promise<OAuthCallbackDestination> {
+  const result = await pool.query<OAuthCallbackDestinationRow>(`
+    SELECT transaction.transaction_id, transaction.kind,
+           transaction.pkce_verifier_ciphertext, transaction.callback_uri,
+           transaction.return_path, transaction.status,
+           transaction.expires_at, transaction.global_auth_epoch,
+           transaction.lifecycle_ceremony_id, transaction.lifecycle_action,
+           transaction.lifecycle_proof_role, transaction.initiating_principal_id,
+           transaction.initiating_session_id,
+           authority.global_auth_epoch AS current_global_auth_epoch
+    FROM ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions AS transaction
+    CROSS JOIN ${FLEET_AUTH_SCHEMA_NAME}.authority_state AS authority
+    WHERE authority.singleton = TRUE
+      AND transaction.state_digest = $1
+      AND transaction.initiating_browser_digest = $2
+  `, [input.stateDigest, input.initiatingBrowserDigest]);
+  const transaction = result.rows.at(0);
+  if (!transaction || transaction.status !== 'pending') {
+    throw new FleetAuthBrokerError('invalid_oauth_state', 400, 'OAuth state is invalid or already used');
+  }
+  if (transaction.expires_at.getTime() <= input.now.getTime()) {
+    throw new FleetAuthBrokerError(
+      'expired_oauth_transaction',
+      400,
+      'OAuth transaction has expired',
+    );
+  }
+  if (transaction.current_global_auth_epoch !== transaction.global_auth_epoch) {
+    throw new FleetAuthBrokerError('invalid_oauth_state', 400, 'OAuth authority epoch is stale');
+  }
+
+  const purpose = lifecyclePurpose(transaction);
+  if (transaction.kind === 'login') {
+    if (purpose) {
+      throw new FleetAuthBrokerError('invalid_oauth_state', 400, 'Login OAuth purpose is inconsistent');
+    }
+    return 'login';
+  }
+  if (!purpose || transaction.kind === 'first_owner') {
+    throw new FleetAuthBrokerError(
+      'oauth_transaction_kind_mismatch',
+      400,
+      'OAuth transaction is not routed by the shared callback',
+    );
+  }
+  return 'lifecycle';
+}
+
 export async function consumeOAuthTransaction(
   pool: Pool,
   codec: FleetAuthSecretCodec,
@@ -74,7 +167,10 @@ export async function consumeOAuthTransaction(
       SELECT transaction.transaction_id, transaction.kind,
              transaction.pkce_verifier_ciphertext, transaction.callback_uri,
              transaction.return_path, transaction.status,
-             transaction.expires_at, transaction.global_auth_epoch
+             transaction.expires_at, transaction.global_auth_epoch,
+             transaction.lifecycle_ceremony_id, transaction.lifecycle_action,
+             transaction.lifecycle_proof_role, transaction.initiating_principal_id,
+             transaction.initiating_session_id
       FROM ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions AS transaction
       WHERE transaction.state_digest = $1
         AND transaction.initiating_browser_digest = $2
@@ -113,12 +209,14 @@ export async function consumeOAuthTransaction(
       WHERE transaction_id = $1
     `, [transaction.transaction_id, input.now]);
     await client.query('COMMIT');
+    const purpose = lifecyclePurpose(transaction);
     return {
       transactionId: transaction.transaction_id,
       kind: transaction.kind,
       pkceVerifier: codec.decrypt(transaction.pkce_verifier_ciphertext),
       callbackUri: transaction.callback_uri,
       returnPath: transaction.return_path,
+      ...(purpose ? { lifecyclePurpose: purpose } : {}),
     };
   } catch (error) {
     await client.query('ROLLBACK').catch(() => undefined);

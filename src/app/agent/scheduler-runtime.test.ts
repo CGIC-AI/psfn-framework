@@ -10,10 +10,10 @@ import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.j
 import {
   BACKGROUND_WORK_SUPERVISOR_TASK_ID,
   SHARED_WORLD_WIKI_CARETAKER_OPERATION_ID,
-  registerBackgroundWorkSupervisorTask,
   registerSharedWorldWikiCaretakerOperation,
   registerSalienceDecayOperation,
 } from './scheduler-runtime.js';
+import { registerDurableBackgroundWorkSupervisorTask } from '../../core/agent/background-work/scheduler-task.js';
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -29,36 +29,39 @@ describe('agent scheduler runtime wiring', () => {
   it('registers the durable background supervisor on the existing scheduler', async () => {
     const scheduler = new Scheduler(new EventBus());
     const tickBackgroundWork = vi.fn(async () => undefined);
-    const source = readFileSync(join(SRC_DIR, 'scheduler-runtime.ts'), 'utf-8');
 
-    registerBackgroundWorkSupervisorTask({
-      scheduler,
+    registerDurableBackgroundWorkSupervisorTask({
       agentLoop: {
         hasDurableBackgroundWorkSupervisor: () => true,
         tickBackgroundWork,
       },
       intervalMs: 25,
+      scheduler,
     });
 
     expect(BACKGROUND_WORK_SUPERVISOR_TASK_ID).toBe('background-work-supervisor');
-    expect(scheduler.getTask(BACKGROUND_WORK_SUPERVISOR_TASK_ID)).toMatchObject({
+    const task = scheduler.getTask(BACKGROUND_WORK_SUPERVISOR_TASK_ID);
+    expect(task).toMatchObject({
       intervalMs: 25,
+      type: 'every',
       state: 'idle',
     });
-    await scheduler.tick();
+    await task?.handler();
     expect(tickBackgroundWork).toHaveBeenCalledOnce();
-    expect(source).not.toContain('setInterval(() => options.agentLoop.tickBackgroundWork()');
   });
 
-  it('rejects scheduler registration when durable background ownership is missing', () => {
-    expect(() => registerBackgroundWorkSupervisorTask({
-      scheduler: new Scheduler(new EventBus()),
+  it('rejects background task registration without a durable supervisor', () => {
+    const scheduler = new Scheduler(new EventBus());
+
+    expect(() => registerDurableBackgroundWorkSupervisorTask({
       agentLoop: {
         hasDurableBackgroundWorkSupervisor: () => false,
         tickBackgroundWork: async () => undefined,
       },
-      intervalMs: 25,
+      intervalMs: 250,
+      scheduler,
     })).toThrow('Agent scheduler requires a durable background work supervisor');
+    expect(scheduler.getTask(BACKGROUND_WORK_SUPERVISOR_TASK_ID)).toBeUndefined();
   });
 
   it('registers salience decay as an operation on the shared scheduler-owned cadence', () => {

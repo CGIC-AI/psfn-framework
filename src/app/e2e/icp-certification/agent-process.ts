@@ -25,7 +25,7 @@ import { createCompactionBoundaryStore } from '../../../core/session/manager/com
 import { createIcpDeliveryProjectionStore } from '../../../core/session/manager/icp-delivery-projection-store.js';
 import { countTokens } from '../../../primitives/llm/tokens.js';
 import { Scheduler } from '../../../core/scheduler/scheduler.js';
-import { registerBackgroundWorkSupervisorTask } from '../../agent/scheduler-runtime.js';
+import { registerDurableBackgroundWorkSupervisorTask } from '../../../core/agent/background-work/scheduler-task.js';
 import { wirePostTurnActionRuntime } from '../../startup/composition/post-turn-actions.js';
 import {
   COMPANION_CANDIDATE_QUEUED_TEXT,
@@ -370,7 +370,7 @@ async function main(): Promise<void> {
     ...(weightedThoughtCandidateAdapter ? { icpCandidateAdapter: weightedThoughtCandidateAdapter } : {}),
     channelPolicy: { primaryChannelType: 'discord' },
   });
-  registerBackgroundWorkSupervisorTask({
+  registerDurableBackgroundWorkSupervisorTask({
     scheduler: backgroundScheduler,
     agentLoop: agent,
     intervalMs: 10,

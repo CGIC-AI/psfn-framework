@@ -64,6 +64,7 @@ import { createGatewayContactBlockGate } from '../../boundary/gateway/contact-bl
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { attachGatewayTurnPerformanceForwarder } from '../../boundary/gateway/turn-performance-forwarder.js';
 import { initializeGatewayFleetAuthPersistence } from '../../persistence/postgres/fleet-auth/gateway-persistence.js';
+import { DiscordEvidenceObserverRegistry } from '../../boundary/fleet-auth/discord-evidence-observer-registry.js';
 import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import { resolveGatewayFleetAuthSecrets } from '../../system/config/fleet-auth-config.js';
 import { resolveBackupRuntimeConfig } from '../../persistence/backups/config.js';
@@ -79,6 +80,7 @@ import {
   SCHEDULED_BACKUP_TASK_NAME,
 } from '../../persistence/backups/service.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
+import { createGatewayFleetChargePolicyResolver } from './fleet-charge-policy-resolver.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -136,20 +138,25 @@ async function main(): Promise<void> {
     startupHydration.pathSnapshot.workspacePath,
     startupHydration.pathSnapshot.runtimePathLayout.backupsDir,
   ];
-  const fleetAuthPersistence = await initializeGatewayFleetAuthPersistence({
-    config: config.fleetAuth,
-    credentialVault: config.credentialVault,
-    ...(config.postgresDatabaseUrl
-      ? { companionDatabaseUrl: config.postgresDatabaseUrl }
-      : {}),
-    protectedRestoreRoots: fleetAuthProtectedRestoreRoots,
-    lifecycleWitnessRoot: startupHydration.pathSnapshot.systemDataDir,
-  });
   if (config.fleetAuth && !config.companionFleet) {
     throw new Error(
       'Fleet auth is enabled but the resolved config carries no companion fleet — refusing to start without a complete gateway-owned backup family',
     );
   }
+  const fleetAuthKnownCompanionIds = config.companionFleet?.companions
+    .map(companion => companion.companionId) ?? [];
+  const discordEvidenceObservers = new DiscordEvidenceObserverRegistry();
+  const fleetAuthPersistence = await initializeGatewayFleetAuthPersistence({
+    config: config.fleetAuth,
+    credentialVault: config.credentialVault,
+    knownCompanionIds: fleetAuthKnownCompanionIds,
+    ...(config.postgresDatabaseUrl
+      ? { companionDatabaseUrl: config.postgresDatabaseUrl }
+      : {}),
+    protectedRestoreRoots: fleetAuthProtectedRestoreRoots,
+    lifecycleWitnessRoot: startupHydration.pathSnapshot.systemDataDir,
+    discordEvidenceObserver: discordEvidenceObservers,
+  });
   const satelliteRegistryConfig = loadSatelliteRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
   const placesRegistryConfig = loadPlacesRegistryConfig(startupHydration.pathSnapshot.systemDataDir);
   assertSatellitePlaceBindings(satelliteRegistryConfig, placesRegistryConfig);
@@ -174,13 +181,20 @@ async function main(): Promise<void> {
   });
   log.info('Loaded charge policy quotas', {
     runChargeQuotaByLane: startupHydration.chargePolicyConfig.runChargeQuotaByLane,
-    sourcePath: `${startupHydration.pathSnapshot.systemDataDir}/${CHARGE_POLICY_FILE_NAME}`,
+    sourcePath: `${startupHydration.pathSnapshot.companionDataDir}/${CHARGE_POLICY_FILE_NAME}`,
   });
   if (!bootstrap.diagnostics.workspacePathProvided) {
     log.warn('WORKSPACE_PATH not set, defaulting to runtime layout workspace path', {
       workspacePath: bootstrap.workspacePath,
     });
   }
+
+  const resolveFleetChargePolicy = config.multiCompanion === true && config.companionFleet
+    ? createGatewayFleetChargePolicyResolver({
+      companions: config.companionFleet.companions,
+      ...(env.CONFIG_DIR ? { seedDir: env.CONFIG_DIR } : {}),
+    })
+    : null;
 
   const privilegedCore = await buildGatewayPrivilegedCore({
     config,
@@ -189,6 +203,9 @@ async function main(): Promise<void> {
     startupHydration,
     logger: log,
     onEligibilityDecision: emitEligibilityDecision,
+    ...(resolveFleetChargePolicy
+      ? { icpConversationChargePolicyResolver: resolveFleetChargePolicy }
+      : {}),
   });
   const {
     eventBus,
@@ -245,6 +262,7 @@ async function main(): Promise<void> {
       fleet: config.companionFleet,
       systemDataDir: startupHydration.pathSnapshot.systemDataDir,
       backupRestoreDatabaseUrl: fleetAuthSecrets.database.backupRestoreUrl,
+      schemaOwnerDatabaseUrl: fleetAuthSecrets.database.migrationUrl,
       roles: config.fleetAuth.databaseRoles,
       authorityFloors: fleetAuthPersistence.authorityFloors,
       schemaAccessContracts,
@@ -341,12 +359,35 @@ async function main(): Promise<void> {
     eligibilityGate,
     intakeScreening: privilegedCore.intakeScreening.screening,
     log,
+    enableDiscordEvidenceLifecycle: fleetAuthPersistence?.discordEvidenceLifecycle !== undefined,
   });
   log.info('Embedding provider initialized', {
     provider: privilegedServices.embeddingProvider.kind,
     dims: privilegedServices.embeddingProvider.dims,
   });
   const { discord, telegram } = channelSurfaces;
+  const discordEvidenceLifecycle = fleetAuthPersistence?.discordEvidenceLifecycle;
+  if (channelSurfaces.discordAccounts && discordEvidenceLifecycle) {
+    for (const account of channelSurfaces.discordAccounts) {
+      discordEvidenceObservers.register(account.companionId, account.adapter.discordEvidence);
+      discordEvidenceLifecycle.registerCompanionEventSource(
+        account.companionId,
+        account.adapter.discordEvidence,
+      );
+    }
+  } else if (discordEvidenceLifecycle) {
+    const singleCompanionId = bootstrap.channelsConfig.discord.companionId
+      ?? (config.companionFleet?.companions.length === 1
+        ? config.companionFleet.companions.at(0)?.companionId
+        : undefined);
+    if (singleCompanionId) {
+      discordEvidenceObservers.register(singleCompanionId, discord.discordEvidence);
+      discordEvidenceLifecycle.registerCompanionEventSource(
+        singleCompanionId,
+        discord.discordEvidence,
+      );
+    }
+  }
 
   log.info('Gateway audit persistence backend', {
     persistenceBackend: config.persistenceBackend,
@@ -378,6 +419,9 @@ async function main(): Promise<void> {
     if (!config.companionFleet) {
       throw new Error('Multi-companion inter-companion channels require the companions.json fleet manifest');
     }
+    if (!resolveFleetChargePolicy) {
+      throw new Error('Multi-companion inter-companion channels require fleet charge-policy owners');
+    }
     const fleetCompanionIds = config.companionFleet.companions.map((entry) => entry.companionId);
     const fleetByCompanionId = new Map(
       config.companionFleet.companions.map(entry => [entry.companionId, entry]),
@@ -393,7 +437,9 @@ async function main(): Promise<void> {
       quietHours: startupHydration.schedulerConfig.episodicProcessing,
       capacityAuthority: new IcpFatigueInitiationCapacityAuthority(
         icpFatigueRegulationStore,
-        startupHydration.chargePolicyConfig,
+        {
+          read: ({ senderCompanionId }) => resolveFleetChargePolicy(senderCompanionId),
+        },
         {
           read: ({ senderCompanionId, nowMs }) => {
             const fleetEntry = fleetByCompanionId.get(createCompanionId(
@@ -551,7 +597,12 @@ async function main(): Promise<void> {
       },
       audit: (entry) => gateway.recordCompanionAuditSummary(entry),
     },
-    ...(fleetAuthPersistence ? { fleetAuthBroker: fleetAuthPersistence.broker } : {}),
+    ...(fleetAuthPersistence
+      ? {
+          fleetAuthBroker: fleetAuthPersistence.broker,
+          hubDeviceAssertionVerifier: fleetAuthPersistence,
+        }
+      : {}),
   });
   await voiceSurfaces.start();
   await startGatewayChannelSurfaces(channelSurfaces, bootstrap, log);

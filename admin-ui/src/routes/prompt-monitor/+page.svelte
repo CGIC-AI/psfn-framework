@@ -17,6 +17,7 @@
     PROMPT_MONITOR_STAGE_ORDER,
     resolvePromptMonitorMetrics,
     resolvePromptMonitorSummary,
+    type PromptMonitorSnapshotRejection,
     type PromptMonitorTurn,
   } from '$lib/events/prompt-monitor';
   import type { ChannelInfo } from '$lib/types';
@@ -86,7 +87,9 @@
     error = '';
     try {
       const response = await getSessionMessages(sessionId);
-      turns = buildPromptMonitorTurns(response.turns);
+      turns = buildPromptMonitorTurns(response.turns, {
+        onRejectedSnapshot: surfaceSnapshotRejection,
+      });
       liveEventCount = 0;
 
       if (!options.preserveSelection || !turns.some(turn => turn.turnId === selectedTurnId)) {
@@ -172,11 +175,24 @@
       .join('\n');
   }
 
+  function surfaceSnapshotRejection(rejection: PromptMonitorSnapshotRejection): void {
+    const turnLabel = rejection.turnId ? ` for turn ${rejection.turnId}` : '';
+    error = `Rejected malformed ${rejection.source} turn snapshot${turnLabel}: ${rejection.message}`;
+  }
+
   function handlePromptEvent(event: Parameters<typeof mergePromptMonitorEvent>[1]): void {
     if (!selectedLogicalChannelId || event.correlation.channelId !== selectedLogicalChannelId) {
       return;
     }
-    turns = mergePromptMonitorEvent(turns, event);
+    let rejectedSnapshot = false;
+    const nextTurns = mergePromptMonitorEvent(turns, event, {
+      onRejectedSnapshot(rejection) {
+        rejectedSnapshot = true;
+        surfaceSnapshotRejection(rejection);
+      },
+    });
+    if (rejectedSnapshot) return;
+    turns = nextTurns;
     liveEventCount += 1;
     if (!selectedTurnId) {
       selectedTurnId = turns[0]?.turnId ?? null;

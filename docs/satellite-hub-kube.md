@@ -186,6 +186,14 @@ stream, artifact previews, and approval decisions:
 
 Notes:
 
+- Fleet-auth device turns additionally require a server-owned
+  `hubDeviceEnrollment` on the exact device-facing endpoint, for example
+  `{"deviceId":"office-device","enrollmentVersion":7,"enrollmentStatus":"active"}`.
+  Register a distinct endpoint for each enrolled device relayed by the Hub.
+  The gateway derives the assertion's device/version/status, companion,
+  session, and place expectations from authenticated endpoint/session routing
+  plus this registry entry; request body or browser identity fields never
+  override them. Setting `enrollmentStatus` to `revoked` denies new turns.
 - `claimTypes` must include the overlay's `satelliteHub.identity.claimType`
   (`text-only` for the initial text-only ship; keep `voice-only` listed so the
   voice flip is registry-compatible).

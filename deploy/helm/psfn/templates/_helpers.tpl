@@ -71,6 +71,34 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 {{- end -}}
 
+{{- define "psfn.systemDataClaimName" -}}
+{{- default (printf "%s-system-data" (include "psfn.fullname" .)) .Values.persistence.systemData.existingClaim -}}
+{{- end -}}
+
+{{- define "psfn.companionDataClaimName" -}}
+{{- default (printf "%s-companion-data" (include "psfn.fullname" .)) .Values.persistence.companionData.existingClaim -}}
+{{- end -}}
+
+{{- define "psfn.workspaceClaimName" -}}
+{{- default (printf "%s-workspace" (include "psfn.fullname" .)) .Values.persistence.workspace.existingClaim -}}
+{{- end -}}
+
+{{- define "psfn.runtimeClaimName" -}}
+{{- default (printf "%s-runtime" (include "psfn.fullname" .)) .Values.persistence.runtime.existingClaim -}}
+{{- end -}}
+
+{{- define "psfn.modelCacheClaimName" -}}
+{{- default (printf "%s-model-cache" (include "psfn.fullname" .)) .Values.persistence.modelCache.existingClaim -}}
+{{- end -}}
+
+{{- define "psfn.ownerMigrationImage" -}}
+{{- $root := .root -}}
+{{- $image := .image -}}
+{{- $repository := default $root.Values.psfnAppImage.repository $image.repository -}}
+{{- $digest := default $root.Values.psfnAppImage.digest $image.digest -}}
+{{- printf "%s@%s" $repository $digest -}}
+{{- end -}}
+
 {{- define "psfn.postgresImage" -}}
 {{- $image := .Values.postgres.image -}}
 {{- printf "%s:%s@%s" $image.repository $image.tag $image.digest -}}
@@ -549,6 +577,16 @@ group: cert-manager.io
       optional: true
 {{- end -}}
 
+{{/*
+BEGIN GENERATED PER-COMPANION OWNER FILES
+Source of truth: src/system/config/settings-contract.ts PER_COMPANION_OWNER_FILES.
+Checked by scripts/verify-helm-owner-file-registry.ts; do not edit independently.
+*/}}
+{{- define "psfn.perCompanionOwnerFilePattern" -}}
+capability-tier.json|scheduler.json|charge-policy.json|skills.json
+{{- end -}}
+{{/* END GENERATED PER-COMPANION OWNER FILES */}}
+
 {{- define "psfn.seedInitContainer" -}}
 - name: seed-runtime-files
   image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.agent.image) | quote }}
@@ -650,22 +688,24 @@ group: cert-manager.io
       # files fail closed at startup via loadRequiredJson.
       for src in {{ .Values.runtime.configDir }}/*.seed.json; do
         [ -e "$src" ] || continue
-        base="$(basename "$src" .seed.json)"
-        case "$base" in
-          scheduler|capability-tier)
-            target="{{ .Values.runtime.companionDataDir }}/${base}.json"
+        base="$(basename "$src")"
+        owner_file="${base%.seed.json}.json"
+        case "$owner_file" in
+          {{ include "psfn.perCompanionOwnerFilePattern" . }})
+            target_root={{ .Values.runtime.companionDataDir | quote }}
             ;;
           *)
-            target="{{ .Values.runtime.systemDataDir }}/${base}.json"
+            target_root={{ .Values.runtime.systemDataDir | quote }}
             ;;
         esac
+        target="$target_root/$owner_file"
         if [ ! -e "$target" ]; then
           cp "$src" "$target"
         fi
       done
       {{- end }}
-      for base in scheduler capability-tier; do
-        target="{{ .Values.runtime.companionDataDir }}/${base}.json"
+      for owner_file in {{ include "psfn.perCompanionOwnerFilePattern" . | replace "|" " " }}; do
+        target="{{ .Values.runtime.companionDataDir }}/${owner_file}"
         if [ ! -f "$target" ] || [ -L "$target" ]; then
           echo "Missing required per-companion owner file after bootstrap/migration: $target" >&2
           exit 1
@@ -739,13 +779,13 @@ group: cert-manager.io
 {{- define "psfn.commonVolumes" -}}
 - name: system-data
   persistentVolumeClaim:
-    claimName: {{ include "psfn.fullname" . }}-system-data
+    claimName: {{ include "psfn.systemDataClaimName" . }}
 - name: companion-data
   persistentVolumeClaim:
-    claimName: {{ include "psfn.fullname" . }}-companion-data
+    claimName: {{ include "psfn.companionDataClaimName" . }}
 - name: workspace
   persistentVolumeClaim:
-    claimName: {{ include "psfn.fullname" . }}-workspace
+    claimName: {{ include "psfn.workspaceClaimName" . }}
 - name: postgres-database-url
   secret:
     secretName: {{ include "psfn.databaseUrlSecretName" . }}
@@ -754,11 +794,11 @@ group: cert-manager.io
         path: database-url
 - name: runtime
   persistentVolumeClaim:
-    claimName: {{ include "psfn.fullname" . }}-runtime
+    claimName: {{ include "psfn.runtimeClaimName" . }}
 {{- if .Values.persistence.modelCache.enabled }}
 - name: model-cache
   persistentVolumeClaim:
-    claimName: {{ include "psfn.fullname" . }}-model-cache
+    claimName: {{ include "psfn.modelCacheClaimName" . }}
 {{- end }}
 {{- if .Values.identity.seedStarterCard }}
 - name: identity-seed

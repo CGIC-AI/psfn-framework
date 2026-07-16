@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import type { TurnID } from '../../../../src/shared/contracts/runtime.js';
-import type { AdminPromptPlanData, AdminSessionTurnData } from '../types';
+import { buildPromptLoomData } from '../../../../src/operator/garden/services/session-turn-observability.js';
+import type {
+  AdminPromptPlanData,
+  AdminSessionTurnData,
+  AdminTurnPromptContextSnapshotData,
+} from '../types';
 import {
   buildPromptMonitorTurns,
   buildStaticPrefixHashTimeline,
@@ -157,7 +162,10 @@ function buildTurn(seed: {
           stopReason: 'stop',
           toolCallCount: 0,
         },
-      } as unknown as NonNullable<AdminSessionTurnData['snapshot']>['promptContext'],
+      } as unknown as (
+        NonNullable<AdminSessionTurnData['snapshot']>['promptContext']
+        & AdminTurnPromptContextSnapshotData
+      ),
       toolContext: {
         activeTools: [
           {
@@ -233,38 +241,6 @@ test('buildPromptMonitorTurns preserves newest-first order and summary metrics',
   });
 });
 
-test('buildPromptMonitorTurns derives slim provider wire messages and fails closed without them', () => {
-  const turn = buildTurn({
-    turnId: 'turn-slim-provider-wire',
-    channelId: 'api:monitor',
-    promptVersionPointer: 'prompt-slim-provider-wire',
-    completedAt: 3_000,
-    ttftMs: 30,
-    promptDurationMs: 130,
-  });
-  const fullTurn = buildPromptMonitorTurns([turn])[0];
-  if (!fullTurn) throw new Error('prompt monitor test fixture did not produce a turn');
-  const promptLoom = resolvePromptMonitorPromptLoom(fullTurn);
-  const providerObservability = turn.snapshot?.promptContext?.providerObservability;
-  const expectedProviderWireMessages = providerObservability?.providerWireMessages;
-  if (!providerObservability || !expectedProviderWireMessages) {
-    throw new Error('prompt monitor test fixture is missing provider wire messages');
-  }
-
-  delete providerObservability.providerWireMessages;
-  assert.throws(
-    () => buildPromptMonitorTurns([turn]),
-    /requires embedded or canonically derived wire messages/,
-  );
-
-  turn.promptLoom = promptLoom;
-  const slimTurn = buildPromptMonitorTurns([turn])[0];
-  assert.deepEqual(
-    slimTurn?.snapshot?.promptContext?.providerObservability?.providerWireMessages,
-    expectedProviderWireMessages,
-  );
-});
-
 test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dropping useful fields', () => {
   const proxiedSchema = new Proxy({
     type: 'object',
@@ -286,9 +262,6 @@ test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dro
     promptDurationMs: 140,
   });
 
-  const activeTool = turn.snapshot?.toolContext?.activeTools?.[0];
-  if (!activeTool) throw new Error('prompt monitor test fixture is missing its active tool');
-  activeTool.inputSchema = proxiedSchema;
   turn.promptLoom = {
     source: 'turn_snapshot',
     snapshotCapturedAt: 3_950,
@@ -330,7 +303,7 @@ test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dro
         {
           name: 'contact_lookup',
           description: 'Look up a contact.',
-          inputSchema: proxiedSchema,
+          inputSchema: proxiedSchema as Record<string, unknown>,
         },
       ],
     },
@@ -361,9 +334,9 @@ test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dro
   };
 
   const turns = buildPromptMonitorTurns([turn]);
-  assert.equal(turns[0]?.snapshot?.toolContext?.activeTools[0]?.inputSchema.type, 'object');
+  assert.equal(turns[0]?.snapshot?.toolContext?.activeTools?.[0]?.inputSchema.type, 'object');
   assert.deepEqual(
-    turns[0]?.snapshot?.toolContext?.activeTools[0]?.inputSchema.properties,
+    turns[0]?.snapshot?.toolContext?.activeTools?.[0]?.inputSchema.properties,
     { query: { type: 'string' } },
   );
 
@@ -379,6 +352,94 @@ test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dro
     Object.hasOwn(promptLoom.providerPayload.activeTools[0]?.inputSchema ?? {}, 'uncloneable'),
     false,
   );
+});
+
+test('slim plan-backed snapshots preserve absence and derive canonical wire messages and tools', () => {
+  const turn = buildTurn({
+    turnId: 'turn-slim-snapshot',
+    channelId: 'api:monitor',
+    promptVersionPointer: 'prompt-slim',
+    completedAt: 5_000,
+    ttftMs: 25,
+    promptDurationMs: 125,
+  });
+  const promptContext = turn.snapshot?.promptContext;
+  const providerObservability = promptContext?.providerObservability;
+  const toolContext = turn.snapshot?.toolContext;
+  assert.ok(turn.snapshot);
+  assert.ok(promptContext);
+  assert.ok(providerObservability);
+  assert.ok(toolContext);
+  const plan = buildPlanFixture({});
+  plan.toolDefinitions = [{
+    name: 'plan_tool',
+    description: 'Derived from the canonical plan.',
+    inputSchema: { type: 'object', properties: { value: { type: 'string' } } },
+  }];
+  turn.snapshot.plan = plan;
+  promptContext.currentTurnInput = 'current turn';
+  delete providerObservability.providerWireMessages;
+  delete toolContext.activeTools;
+
+  const [normalized] = buildPromptMonitorTurns([turn]);
+  const normalizedProvider = normalized?.snapshot?.promptContext?.providerObservability;
+  const normalizedToolContext = normalized?.snapshot?.toolContext;
+
+  assert.equal(normalizedProvider?.providerWireMessages, undefined);
+  assert.equal(Object.hasOwn(normalizedProvider ?? {}, 'providerWireMessages'), false);
+  assert.equal(normalizedToolContext?.activeTools, undefined);
+  assert.equal(Object.hasOwn(normalizedToolContext ?? {}, 'activeTools'), false);
+
+  const loom = resolvePromptMonitorPromptLoom(normalized!);
+  assert.equal(loom.providerWire.source, 'prompt_plan');
+  assert.deepEqual(loom.providerPayload.providerMessages.map(message => ({
+    role: message.role,
+    source: message.source,
+    content: message.content,
+  })), [
+    { role: 'system', source: 'system_prompt', content: loom.providerPayload.finalSystemPrompt },
+    { role: 'user', source: 'message', content: 'hello' },
+    { role: 'user', source: 'message', content: 'current turn' },
+  ]);
+  assert.deepEqual(loom.providerPayload.activeTools, plan.toolDefinitions);
+
+  loom.providerPayload.providerMessages[1]!.content = 'mutated view';
+  loom.providerPayload.activeTools[0]!.inputSchema.type = 'mutated';
+  assert.equal(plan.messages[0]?.content, 'hello');
+  assert.equal(plan.toolDefinitions[0]?.inputSchema.type, 'object');
+});
+
+test('explicit empty provider wire messages and active tools do not fall back to the plan', () => {
+  const turn = buildTurn({
+    turnId: 'turn-explicit-empty',
+    channelId: 'api:monitor',
+    promptVersionPointer: 'prompt-empty',
+    completedAt: 5_100,
+    ttftMs: 25,
+    promptDurationMs: 125,
+  });
+  const plan = buildPlanFixture({});
+  plan.toolDefinitions = [{
+    name: 'must_not_appear',
+    description: 'Explicit empty is authoritative.',
+    inputSchema: { type: 'object' },
+  }];
+  assert.ok(turn.snapshot);
+  assert.ok(turn.snapshot.promptContext?.providerObservability);
+  assert.ok(turn.snapshot.toolContext);
+  turn.snapshot.plan = plan;
+  turn.snapshot.promptContext.providerObservability.providerWireMessages = [];
+  turn.snapshot.toolContext.activeTools = [];
+
+  const [normalized] = buildPromptMonitorTurns([turn]);
+  assert.deepEqual(
+    normalized?.snapshot?.promptContext?.providerObservability?.providerWireMessages,
+    [],
+  );
+  assert.deepEqual(normalized?.snapshot?.toolContext?.activeTools, []);
+  const loom = resolvePromptMonitorPromptLoom(normalized!);
+  assert.deepEqual(loom.providerPayload.providerMessages, []);
+  assert.deepEqual(loom.providerPayload.activeTools, []);
 });
 
 test('mergePromptMonitorEvent overlays live snapshots and stages onto the selected turn', () => {
@@ -483,6 +544,12 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
           scope: {
             kind: 'group',
             channelId: 'api:monitor',
+            envelope: {
+              channelPrivacy: 'invite_only',
+              audienceScope: 'few',
+              audienceKnowledge: 'partially_known',
+              broadcast: false,
+            },
             recentSpeakers: [],
             key: 'room:api:monitor',
           },
@@ -697,13 +764,18 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
   // E2.3: the plan and Provider Wire projections survive the live-bus fallback.
   assert.equal(promptLoom.plan?.schemaVersion, 1);
   assert.equal(promptLoom.plan?.blocks.length, 5);
-  assert.equal(promptLoom.providerWire.source, 'recorded_snapshot');
+  assert.equal(promptLoom.providerWire.source, 'prompt_plan');
   assert.equal(promptLoom.providerWire.legacy, false);
   assert.equal(promptLoom.providerWire.systemRoleTransport, 'openai_developer');
   assert.equal(promptLoom.providerWire.systemPrompt, liveFinalSystemPrompt);
   assert.deepEqual(promptLoom.providerWire.messages, [
-    { role: 'developer', source: 'system_prompt', content: 'Live final system prompt' },
+    { role: 'developer', source: 'system_prompt', content: liveFinalSystemPrompt },
     { role: 'user', source: 'message', content: 'earlier' },
+    {
+      role: 'assistant',
+      source: 'message',
+      content: '[{"type":"text","text":"reply"}]',
+    },
   ]);
   const resolvedPlan = resolvePromptMonitorPlan(mergedStages[0]!);
   assert.equal(resolvedPlan?.cachePlan.staticBoundary, 1);
@@ -718,7 +790,7 @@ function buildPlanFixture(seed: {
   datetimeText?: string;
   includeScratchpad?: boolean;
   includeSessionContext?: boolean;
-}): AdminPromptPlanData {
+}): NonNullable<NonNullable<AdminSessionTurnData['snapshot']>['plan']> {
   const blocks: AdminPromptPlanData['blocks'] = [
     {
       id: 'static_prefix',
@@ -786,9 +858,89 @@ function buildPlanFixture(seed: {
     messages: [{ role: 'user', content: 'hello' }],
     toolDefinitions: [],
     cachePlan: { staticBoundary: 1, sessionStableBoundary: 2 },
-    scope: { kind: 'dm', channelId: 'api:dm', recentSpeakers: [], key: 'dm:contact-1' },
+    scope: {
+      kind: 'dm',
+      channelId: 'api:dm',
+      envelope: {
+        channelPrivacy: 'private',
+        audienceScope: 'one',
+        audienceKnowledge: 'all_known',
+        broadcast: false,
+      },
+      recentSpeakers: [],
+      key: 'dm:contact-1',
+      contact: { contactId: 'contact-1' },
+    },
   };
 }
+
+function selectSharedPromptProjection(
+  loom: ReturnType<typeof resolvePromptMonitorPromptLoom>,
+): unknown {
+  return {
+    generatedPrompt: {
+      renderedStaticPrefix: loom.generatedPrompt.renderedStaticPrefix,
+      renderedDynamicSuffix: loom.generatedPrompt.renderedDynamicSuffix,
+      runtimeContext: loom.generatedPrompt.runtimeContext,
+      memoryContextBlock: loom.generatedPrompt.memoryContextBlock,
+      scratchpadContext: loom.generatedPrompt.scratchpadContext,
+      assembledPrompt: loom.generatedPrompt.assembledPrompt,
+      contextMessages: loom.generatedPrompt.contextMessages,
+    },
+    providerWire: loom.providerWire,
+    providerPayload: loom.providerPayload,
+  };
+}
+
+test('live event fallback and replay read path project slim and explicit-empty snapshots byte-identically', () => {
+  for (const embedded of ['omitted', 'empty'] as const) {
+    const turn = buildTurn({
+      turnId: `turn-parity-${embedded}`,
+      channelId: 'api:monitor',
+      promptVersionPointer: `prompt-parity-${embedded}`,
+      completedAt: embedded === 'omitted' ? 6_000 : 6_100,
+      ttftMs: 25,
+      promptDurationMs: 125,
+    });
+    assert.ok(turn.snapshot);
+    assert.ok(turn.snapshot.promptContext?.providerObservability);
+    assert.ok(turn.snapshot.toolContext);
+    const plan = buildPlanFixture({ includeScratchpad: true, includeSessionContext: true });
+    plan.toolDefinitions = [{
+      name: 'parity_tool',
+      description: 'Projected by both paths.',
+      inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
+    }];
+    turn.snapshot.plan = plan;
+    turn.snapshot.promptContext.currentTurnInput = 'current parity input';
+    if (embedded === 'omitted') {
+      delete turn.snapshot.promptContext.providerObservability.providerWireMessages;
+      delete turn.snapshot.toolContext.activeTools;
+    } else {
+      turn.snapshot.promptContext.providerObservability.providerWireMessages = [];
+      turn.snapshot.toolContext.activeTools = [];
+    }
+
+    const replayLoom = buildPromptLoomData(turn.record, turn.snapshot);
+    const liveTurns = mergePromptMonitorEvent([], {
+      type: 'agent.turn.snapshot',
+      timestamp: turn.snapshot.capturedAt,
+      correlation: {
+        channelId: turn.snapshot.channelId,
+        turnId: turn.snapshot.turnId,
+      },
+      data: { snapshot: turn.snapshot },
+    });
+    assert.equal(liveTurns.length, 1);
+    const liveLoom = resolvePromptMonitorPromptLoom(liveTurns[0]!);
+
+    assert.equal(
+      JSON.stringify(selectSharedPromptProjection(liveLoom)),
+      JSON.stringify(selectSharedPromptProjection(replayLoom)),
+      `${embedded} projection diverged`,
+    );
+  }
+});
 
 test('diffPromptPlanBlocks: quiet consecutive pair diffs only the turn-volatile blocks', () => {
   const before = buildPlanFixture({

@@ -241,6 +241,7 @@ export function buildFleetAuthBackupCycleOptions(params: {
   fleet: ResolvedCompanionsFleetConfig;
   systemDataDir: string;
   backupRestoreDatabaseUrl: string;
+  schemaOwnerDatabaseUrl: string;
   roles: FleetAuthDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
   schemaAccessContracts: readonly FleetAuthSchemaAccessContract[];
@@ -254,7 +255,11 @@ export function buildFleetAuthBackupCycleOptions(params: {
   const restoreVerifyDatabaseUrl = params.backupConfig.verifyRestore
     ? deriveRestoreVerifyDatabaseUrl(params.backupRestoreDatabaseUrl)
     : undefined;
-  if (params.backupConfig.verifyRestore && !restoreVerifyDatabaseUrl) {
+  const restoreVerifySchemaOwnerDatabaseUrl = params.backupConfig.verifyRestore
+    ? deriveRestoreVerifyDatabaseUrl(params.schemaOwnerDatabaseUrl)
+    : undefined;
+  if (params.backupConfig.verifyRestore
+    && (!restoreVerifyDatabaseUrl || !restoreVerifySchemaOwnerDatabaseUrl)) {
     throw new Error(
       'Fleet auth verifyRestore requires a derivable dedicated scratch database URL',
     );
@@ -301,6 +306,7 @@ export function buildFleetAuthBackupCycleOptions(params: {
   );
   return {
     backupRestoreDatabaseUrl: params.backupRestoreDatabaseUrl,
+    ...(restoreVerifySchemaOwnerDatabaseUrl ? { restoreVerifySchemaOwnerDatabaseUrl } : {}),
     roles: params.roles,
     schemas: schemaAccessContracts,
     systemDataDir: params.systemDataDir,

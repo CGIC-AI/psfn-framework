@@ -127,6 +127,7 @@ import {
 import {
   IcpConversationCostBreaker,
   IcpConversationCostBreakerError,
+  type IcpConversationChargePolicyResolver,
 } from './icp-conversation-cost-breaker.js';
 
 export {
@@ -180,6 +181,7 @@ export interface LLMClientRuntimeOptions {
   usageBudgetQuery?: ModelUsageBudgetQueryPort;
   icpConversationCostAccounting?: IcpConversationCostAccountingPort;
   onIcpConversationCostDecision?: (event: IcpConversationCostBreakerEvent) => void;
+  icpConversationChargePolicyResolver?: IcpConversationChargePolicyResolver;
   providerCostResolver?: () => ReconciledProviderCostEvidence | undefined;
   circuitBreaker?: SlidingWindowCircuitBreaker;
 }
@@ -246,6 +248,7 @@ export class LLMClient {
       config,
       runtimeOptions.icpConversationCostAccounting,
       runtimeOptions.onIcpConversationCostDecision,
+      runtimeOptions.icpConversationChargePolicyResolver,
     );
     this.providerCostResolver = runtimeOptions.providerCostResolver;
     this.modelCallGate = new ModelCallGate();

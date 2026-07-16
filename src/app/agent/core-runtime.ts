@@ -397,7 +397,10 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
   }), 'core');
 
   const skillsRuntime = wireSkillsRuntime(agentLoop, {
-    dataDir: pathSnapshot.systemDataDir,
+    // skills.json and usage telemetry are per-companion; deployment-provided
+    // skill documents remain rooted at repoRoot, while managed skills remain
+    // contained by this companion's Personal Workspace.
+    dataDir: pathSnapshot.companionDataDir,
     seedDir: process.env.CONFIG_DIR,
     repoRoot: process.cwd(),
     managedRootDir: resolvePersonalSkillsDir(pathSnapshot.workspaceRoot),

@@ -1,5 +1,6 @@
 import type { CorrelationMetadata, ObservabilityCallType } from '../../shared/contracts/runtime.js';
 import type { EventMap, EventName } from '../../shared/event-bus.js';
+import { isObservabilityCallType } from '../../shared/contracts/observability-call-types.js';
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (!value || typeof value !== 'object') return null;
@@ -12,20 +13,8 @@ function readString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-const CALL_TYPES: ReadonlySet<ObservabilityCallType> = new Set([
-  'chat',
-  'tool',
-  'memory',
-  'summary',
-  'background',
-  'scheduled',
-]);
-
 function normalizeCallType(value: string | undefined): ObservabilityCallType | undefined {
-  if (!value) return undefined;
-  return CALL_TYPES.has(value as ObservabilityCallType)
-    ? (value as ObservabilityCallType)
-    : undefined;
+  return isObservabilityCallType(value) ? value : undefined;
 }
 
 function inferTelemetryCallType(eventName: EventName): ObservabilityCallType | undefined {

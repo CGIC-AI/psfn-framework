@@ -106,6 +106,13 @@ import type {
   ConfirmationResolveResult,
 } from '../../system/capabilities/confirmation-queue.js';
 import type { FleetAuthHttpRoutes } from './server/fleet-auth-routes.js';
+import type { GatewayHubDeviceIngressService } from '../../boundary/fleet-auth/hub-device-ingress.js';
+import {
+  extractCanonicalHubDeviceAssertion,
+  HubDeviceIngressRequestError,
+  resolveAuthenticatedHubDeviceConnection,
+  stripHubDeviceDownstreamAuthorityHeaders,
+} from './server/hub-device-ingress.js';
 
 const log = createComponentLogger('ApiServer');
 const API_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
@@ -430,8 +437,12 @@ export interface ApiServerConfig {
   confirmationOperator?: ConfirmationOperatorPort;
   /** Gateway-only OAuth/session routes. Never constructed in operator/agent processes. */
   fleetAuthHttpRoutes?: FleetAuthHttpRoutes;
-  /** Before opl1.6 installs the SSO resolver, expose only fleet-auth bootstrap/session routes. */
+  /** Fleet mode: expose browser lifecycle routes plus authenticated Hub device chat only. */
   fleetAuthBootstrapOnly?: boolean;
+  /** Fleet-only authenticated Hub/device ingress. Absent fails the device route closed. */
+  hubDeviceIngress?: GatewayHubDeviceIngressService;
+  /** Server-owned companion binding for the gateway API surface. */
+  hubDeviceCompanionId?: string;
 }
 
 export class ApiServer implements ChannelAdapterPort {
@@ -480,6 +491,8 @@ export class ApiServer implements ChannelAdapterPort {
   private confirmationOperator?: ConfirmationOperatorPort;
   private fleetAuthHttpRoutes?: FleetAuthHttpRoutes;
   private fleetAuthBootstrapOnly: boolean;
+  private hubDeviceIngress?: GatewayHubDeviceIngressService;
+  private hubDeviceCompanionId?: string;
   private healthChecks: ApiServerHealthChecks;
   private schedulerHealthcheckStaleAfterMs: number;
   private lastSchedulerHealthcheckAtMs: number | null = null;
@@ -517,6 +530,8 @@ export class ApiServer implements ChannelAdapterPort {
     this.confirmationOperator = config.confirmationOperator;
     this.fleetAuthHttpRoutes = config.fleetAuthHttpRoutes;
     this.fleetAuthBootstrapOnly = config.fleetAuthBootstrapOnly === true;
+    this.hubDeviceIngress = config.hubDeviceIngress;
+    this.hubDeviceCompanionId = config.hubDeviceCompanionId;
     this.schedulerHealthcheckStaleAfterMs = parseSchedulerHealthcheckStaleAfterMs(
       config.schedulerHealthcheckStaleAfterMs,
     );
@@ -619,21 +634,17 @@ export class ApiServer implements ChannelAdapterPort {
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
-    if (!applyApiCorsPolicy(req, res, this.corsAllowedOrigins)) return;
+    const requestTargetPath = (req.url ?? '/').split('?', 1)[0] ?? '/';
+    const fleetAuthCors = this.fleetAuthHttpRoutes
+      ?.applyLifecycleCorsPolicy(req, res, requestTargetPath) ?? 'not_applicable';
+    if (fleetAuthCors === 'handled') return;
+    if (fleetAuthCors === 'not_applicable'
+      && !applyApiCorsPolicy(req, res, this.corsAllowedOrigins)) return;
 
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
     if (this.fleetAuthHttpRoutes?.matches(req.method, path)) {
       void this.fleetAuthHttpRoutes.handle(req, res, url);
-      return;
-    }
-    if (this.fleetAuthBootstrapOnly) {
-      sendApiError(
-        res,
-        503,
-        'fleet_auth_principal_resolver_unavailable',
-        'Fleet-auth principal routing is unavailable until the SSO resolver is installed',
-      );
       return;
     }
 
@@ -651,6 +662,20 @@ export class ApiServer implements ChannelAdapterPort {
       ...(this.trustedProxyClientCertToken ? { trustedProxyToken: this.trustedProxyClientCertToken } : {}),
     });
     stripClientCertHeaders(req.headers);
+
+    if (this.fleetAuthBootstrapOnly) {
+      if (req.method === 'POST' && path === '/v1/chat/completions') {
+        void this.handleFleetHubDeviceChat(req, res, clientCert);
+        return;
+      }
+      sendApiError(
+        res,
+        503,
+        'fleet_auth_principal_resolver_unavailable',
+        'Fleet-auth principal routing is unavailable until the SSO resolver is installed',
+      );
+      return;
+    }
 
     const isTelemetryIngest = req.method === 'POST' && path === '/v1/telemetry/ingest';
     const companionRoute = matchCompanionRelayRoute(req.method, path);
@@ -710,6 +735,46 @@ export class ApiServer implements ChannelAdapterPort {
         return;
       }
       sendApiError(res, 404, 'not_found', `No route for ${req.method} ${path}`);
+    }
+  }
+
+  private async handleFleetHubDeviceChat(
+    req: IncomingMessage,
+    res: ServerResponse,
+    clientCert: SatelliteClientCertIdentity | undefined,
+  ): Promise<void> {
+    if (!this.hubDeviceIngress || !this.hubDeviceCompanionId) {
+      sendApiError(res, 503, 'hub_device_ingress_unavailable', 'Hub device authentication is unavailable');
+      return;
+    }
+    const principal = resolveApiServerRequestPrincipal(req, res, {
+      ...(this.satelliteApiKeys.length > 0 ? { satelliteApiKeys: this.satelliteApiKeys } : {}),
+      allowInsecureWithoutAuth: false,
+      isTelemetryIngest: false,
+    });
+    if (!principal) return;
+    try {
+      const assertion = extractCanonicalHubDeviceAssertion(req);
+      const connection = resolveAuthenticatedHubDeviceConnection({
+        req,
+        principal,
+        registry: this.satelliteRegistry,
+        companionId: this.hubDeviceCompanionId,
+        ...(clientCert ? { clientCert } : {}),
+      });
+      stripHubDeviceDownstreamAuthorityHeaders(req);
+      await this.chatCompletions.handle(req, res, principal, clientCert, {
+        assertion,
+        connection,
+        ingress: this.hubDeviceIngress,
+      });
+    } catch (error) {
+      if (error instanceof HubDeviceIngressRequestError) {
+        sendApiError(res, error.status, error.type, error.message);
+        return;
+      }
+      log.error('Hub device ingress request failed');
+      sendApiError(res, 503, 'hub_device_ingress_unavailable', 'Hub device authentication is unavailable');
     }
   }
 

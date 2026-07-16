@@ -33,14 +33,10 @@ import {
   clonePromptPlan,
   type PromptPlan,
 } from '../agent/substrate-agent/turn-execution/prompt-plan.js';
-
-export type TurnObservabilityCallType =
-  | 'chat'
-  | 'tool'
-  | 'memory'
-  | 'summary'
-  | 'background'
-  | 'scheduled';
+import {
+  isObservabilityCallType,
+  type ObservabilityCallType,
+} from '../../shared/contracts/observability-call-types.js';
 
 export type ObservedMemory = Omit<PurrMemory, 'embedding'>;
 
@@ -100,7 +96,7 @@ export interface TurnStageTelemetryRecord {
   turnId: string;
   requestId?: string;
   channelId: string;
-  callType?: TurnObservabilityCallType;
+  callType?: ObservabilityCallType;
   purpose?: string;
   stage: string;
   elapsedMs: number;
@@ -112,7 +108,7 @@ export interface TurnRetrievalTelemetryRecord {
   turnId: string;
   requestId?: string;
   channelId: string;
-  callType?: TurnObservabilityCallType;
+  callType?: ObservabilityCallType;
   purpose?: string;
   count: number;
   reason?: string;
@@ -481,7 +477,7 @@ export function sanitizeTurnStageTelemetry(payload: EventMap['agent.turn.stage']
     turnId,
     ...(typeof requestId === 'string' && requestId.trim().length > 0 ? { requestId: requestId.trim() } : {}),
     channelId,
-    ...(typeof callType === 'string' ? { callType: callType as TurnObservabilityCallType } : {}),
+    ...(isObservabilityCallType(callType) ? { callType } : {}),
     ...(typeof purpose === 'string' && purpose.trim().length > 0 ? { purpose: purpose.trim() } : {}),
     stage,
     elapsedMs,
@@ -521,7 +517,7 @@ export function sanitizeTurnRetrievalTelemetry(
     turnId: normalizedTurnId,
     ...(typeof requestId === 'string' && requestId.trim().length > 0 ? { requestId: requestId.trim() } : {}),
     channelId,
-    ...(typeof callType === 'string' ? { callType: callType as TurnObservabilityCallType } : {}),
+    ...(isObservabilityCallType(callType) ? { callType } : {}),
     ...(typeof purpose === 'string' && purpose.trim().length > 0 ? { purpose: purpose.trim() } : {}),
     count,
     ...(typeof reason === 'string' && reason.trim().length > 0 ? { reason: reason.trim() } : {}),

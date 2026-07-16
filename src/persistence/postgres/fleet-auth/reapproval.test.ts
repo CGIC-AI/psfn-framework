@@ -1,5 +1,10 @@
 import type { Pool } from 'pg';
+import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { FleetAuthAuthorityFloorStore } from './authority-floor.js';
+import { createGatewayAccountReapprovalAuthority } from './gateway-persistence.js';
 import { executeAccountReapproval, type AccountReapprovalRequest } from './reapproval.js';
 
 // A pool that fails loudly if the API ever reaches the database. Input
@@ -26,6 +31,33 @@ function baseRequest(): AccountReapprovalRequest {
 }
 
 describe('executeAccountReapproval input validation', () => {
+  it.each([
+    ['principal', baseRequest().principalId],
+    ['companion', baseRequest().companionId],
+  ] as const)('rejects a restored %s snapshot fenced by non-restored authority', async (
+    kind,
+    resourceId,
+  ) => {
+    const root = mkdtempSync(join(tmpdir(), 'fleet-auth-reapproval-floor-'));
+    chmodSync(root, 0o700);
+    try {
+      const floors = new FleetAuthAuthorityFloorStore(root);
+      floors.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
+      floors.revokeAccountAuthority({
+        kind,
+        resourceId,
+        reason: 'lifecycle revocation',
+        at: '2026-07-15T11:00:00.000Z',
+      });
+      await expect(createGatewayAccountReapprovalAuthority(
+        NEVER_CONNECT_POOL,
+        floors,
+      )(baseRequest())).rejects.toThrow(/permanently tombstoned/i);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects a non-UUID identifier before touching the database', async () => {
     await expect(executeAccountReapproval(NEVER_CONNECT_POOL, {
       ...baseRequest(),

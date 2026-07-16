@@ -139,9 +139,9 @@ const HYDRATION_OWNER_FILES = [
 function writeHydrationOwnerExamples(systemDataDir: string, companionDataDir: string): void {
   for (const ownerFile of HYDRATION_OWNER_FILES) {
     const exampleFile = ownerFile.replace(/\.json$/, '.seed.json');
-    // Per-companion owner files (capability-tier.json dnll.2, scheduler.json
-    // dnll.3) are rooted at companionDataDir; the rest stay cluster-global at
-    // systemDataDir. Registry-driven via PER_COMPANION_OWNER_FILES so future
+    // Per-companion owner files are rooted at companionDataDir; the rest stay
+    // cluster-global at systemDataDir. Registry-driven via
+    // PER_COMPANION_OWNER_FILES so future
     // per-companion relocations inherit the correct seed target automatically.
     const targetDir = PER_COMPANION_OWNER_FILES.has(ownerFile) ? companionDataDir : systemDataDir;
     writeFileSync(
@@ -1197,7 +1197,7 @@ describe('hydrateCanonicalStartupConfig', () => {
         },
       },
     });
-    saveChargePolicyConfig(systemDataDir, {
+    saveChargePolicyConfig(companionDataDir, {
       schemaVersion: 1,
       runChargeQuotaByLane: {
         interactive: 30,

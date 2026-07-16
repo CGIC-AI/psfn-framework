@@ -4,7 +4,7 @@ import {
   realpathSync,
   statSync,
 } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 import type {
   CredentialReference,
   CredentialVaultPort,
@@ -23,6 +23,11 @@ import type {
   HubDeviceAssertionVerifierConfig,
   HubDeviceAssertionVerifierKey,
 } from '../../boundary/fleet-auth/hub-device-assertion.js';
+import {
+  assertBrokerSigningKeyNotTrustedByHub,
+  assertFleetAuthPublicKeyBoundary,
+  canonicalEd25519SpkiFingerprint,
+} from './fleet-auth-key-boundary.js';
 
 export const FLEET_AUTH_ENV_VAR = 'PSFN_FLEET_AUTH';
 export const FLEET_AUTH_FILE_NAME = 'fleet-auth.json';
@@ -485,7 +490,7 @@ function parseMappings(value: unknown): FleetAuthConfig['discordEvidenceMappings
   });
 }
 
-export function validateFleetAuthConfig(value: unknown, _sourcePath: string): FleetAuthConfig {
+export function validateFleetAuthConfig(value: unknown, sourcePath: string): FleetAuthConfig {
   const root = requireRecord(value, 'root');
   requireExactKeys(root, [
     'schemaVersion',
@@ -549,6 +554,14 @@ export function validateFleetAuthConfig(value: unknown, _sourcePath: string): Fl
     fail('provider.scopes must include guilds and guilds.members.read when Discord evidence mappings exist');
   }
 
+  const verifierKeys = parseVerifierKeys(root.verifierKeys);
+  const hubDeviceAssertions = parseHubDeviceAssertions(root.hubDeviceAssertions);
+  assertFleetAuthPublicKeyBoundary({
+    brokerKeys: verifierKeys,
+    hubKeys: hubDeviceAssertions.keys,
+    allowUnsafeTemplateKeys: basename(sourcePath) === FLEET_AUTH_SEED_FILE_NAME,
+  });
+
   return {
     schemaVersion: 1,
     activationGeneration: requireInteger(root.activationGeneration, 'activationGeneration', 1, Number.MAX_SAFE_INTEGER),
@@ -563,8 +576,8 @@ export function validateFleetAuthConfig(value: unknown, _sourcePath: string): Fl
     },
     credentials: parsedCredentials,
     databaseRoles: parseDatabaseRoles(root.databaseRoles),
-    verifierKeys: parseVerifierKeys(root.verifierKeys),
-    hubDeviceAssertions: parseHubDeviceAssertions(root.hubDeviceAssertions),
+    verifierKeys,
+    hubDeviceAssertions,
     ttls: parseTtls(root.ttls),
     rolePolicy: parseRolePolicy(root.rolePolicy),
     discordEvidenceMappings,
@@ -770,9 +783,16 @@ export function resolveGatewayFleetAuthSecrets(options: {
   const activeVerifier = config.verifierKeys.find(key => key.status === 'active')!;
   const configuredPublicKey = createPublicKey(activeVerifier.publicKeyPem)
     .export({ type: 'spki', format: 'pem' }).toString();
-  if (derivedPublicKey !== configuredPublicKey) {
+  if (canonicalEd25519SpkiFingerprint(derivedPublicKey)
+    !== canonicalEd25519SpkiFingerprint(configuredPublicKey)) {
     throw new Error('Fleet auth assertion private signing key does not match the active public verifier key');
   }
+  assertBrokerSigningKeyNotTrustedByHub(derivedPublicKey, config.hubDeviceAssertions.keys);
+  assertFleetAuthPublicKeyBoundary({
+    brokerKeys: config.verifierKeys,
+    hubKeys: config.hubDeviceAssertions.keys,
+    allowUnsafeTemplateKeys: false,
+  });
   const trustedHostRecoveryCredential = resolveRequiredSecret(
     credentialVault,
     config.credentials.trustedHostRecoveryCredentialRef,

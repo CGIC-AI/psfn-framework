@@ -6,12 +6,15 @@ import type {
   AdminPromptSectionTelemetry,
   AdminSessionTurnData,
   AdminTurnPromptContextMessage,
-  AdminTurnProviderObservabilityData,
-  AdminTurnProviderWireMessage,
   AdminTurnSnapshotData,
   AdminTurnStageTelemetry,
 } from '../types';
 import type { GardenEventEnvelope } from './envelope';
+import {
+  parsePersistedTurnSnapshot,
+  parsePersistedTurnSnapshotEventData,
+} from './turn-snapshot-parser';
+import { projectTurnSnapshotPrompt } from '../../../../src/shared/contracts/prompt-projection.js';
 
 export const PROMPT_MONITOR_STAGE_ORDER = [
   'trust',
@@ -33,6 +36,16 @@ export interface PromptMonitorTurn {
   snapshot: AdminTurnSnapshotData | null;
   promptLoom: AdminPromptLoomData | null;
   stages: AdminTurnStageTelemetry[];
+}
+
+export interface PromptMonitorSnapshotRejection {
+  source: 'replay' | 'live';
+  message: string;
+  turnId?: string;
+}
+
+export interface PromptMonitorIngestionOptions {
+  onRejectedSnapshot?: (rejection: PromptMonitorSnapshotRejection) => void;
 }
 
 export interface PromptMonitorMetrics {
@@ -162,231 +175,84 @@ function clonePromptLoom(loom: AdminPromptLoomData): AdminPromptLoomData {
   return cloneJsonSafe(loom);
 }
 
-type SessionTurnSnapshot = NonNullable<AdminSessionTurnData['snapshot']>;
-type SessionProviderObservability = NonNullable<
-  NonNullable<SessionTurnSnapshot['promptContext']>['providerObservability']
->;
-
-function cloneSessionProviderObservability(
-  provider: SessionProviderObservability,
-  derivedProviderWireMessages: readonly AdminTurnProviderWireMessage[] | undefined,
-): AdminTurnProviderObservabilityData {
-  const providerWireMessages = provider.providerWireMessages ?? derivedProviderWireMessages;
-  if (providerWireMessages === undefined) {
-    throw new Error(
-      'Prompt monitor provider observability requires embedded or canonically derived wire messages',
-    );
-  }
+function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
+  const { promptContext, toolContext, ...snapshotFields } = snapshot;
   return {
-    ...provider,
-    systemRole: { ...provider.systemRole },
-    providerWireMessages: providerWireMessages.map(message => ({ ...message })),
-  };
-}
-
-function omitSessionProviderObservability(
-  promptContext: NonNullable<SessionTurnSnapshot['promptContext']>,
-): Omit<typeof promptContext, 'providerObservability'> {
-  const promptContextWithoutProvider = { ...promptContext };
-  delete promptContextWithoutProvider.providerObservability;
-  return promptContextWithoutProvider;
-}
-
-function cloneSnapshot(
-  snapshot: AdminTurnSnapshotData,
-): AdminTurnSnapshotData {
-  return {
-    ...snapshot,
+    ...snapshotFields,
     ...(snapshot.prompt ? { prompt: { ...snapshot.prompt } } : {}),
     ...(snapshot.plan ? { plan: cloneJsonSafe(snapshot.plan) } : {}),
-    ...(snapshot.promptContext
+    ...(promptContext
       ? {
         promptContext: {
-          ...snapshot.promptContext,
-          ...(snapshot.promptContext.messages
-            ? { messages: snapshot.promptContext.messages.map(clonePromptContextMessage) }
+          ...promptContext,
+          ...(promptContext.messages
+            ? { messages: promptContext.messages.map(clonePromptContextMessage) }
             : {}),
-          ...(snapshot.promptContext.inputSections
+          ...(promptContext.inputSections
             ? {
-              inputSections: snapshot.promptContext.inputSections.map(clonePromptSection),
+              inputSections: promptContext.inputSections.map(clonePromptSection),
             }
             : {}),
-          ...(snapshot.promptContext.runtimeContextSections
+          ...(promptContext.runtimeContextSections
             ? {
-              runtimeContextSections: snapshot.promptContext.runtimeContextSections.map(clonePromptSection),
+              runtimeContextSections: promptContext.runtimeContextSections.map(clonePromptSection),
             }
             : {}),
-          ...(snapshot.promptContext.memoryContextSections
+          ...(promptContext.memoryContextSections
             ? {
-              memoryContextSections: snapshot.promptContext.memoryContextSections.map(clonePromptSection),
+              memoryContextSections: promptContext.memoryContextSections.map(clonePromptSection),
             }
             : {}),
-          ...(snapshot.promptContext.finalSystemSections
+          ...(promptContext.finalSystemSections
             ? {
-              finalSystemSections: snapshot.promptContext.finalSystemSections.map(clonePromptSection),
+              finalSystemSections: promptContext.finalSystemSections.map(clonePromptSection),
             }
             : {}),
-          ...(snapshot.promptContext.providerObservability
+          ...(promptContext.providerObservability
             ? {
               providerObservability: {
-                ...snapshot.promptContext.providerObservability,
-                systemRole: { ...snapshot.promptContext.providerObservability.systemRole },
-                providerWireMessages: snapshot.promptContext.providerObservability.providerWireMessages
-                  .map(message => ({ ...message })),
+                ...promptContext.providerObservability,
+                systemRole: { ...promptContext.providerObservability.systemRole },
+                ...(promptContext.providerObservability.providerWireMessages !== undefined
+                  ? {
+                    providerWireMessages: promptContext.providerObservability.providerWireMessages
+                      .map(message => ({ ...message })),
+                  }
+                  : {}),
               },
             }
             : {}),
-          ...(snapshot.promptContext.response
+          ...(promptContext.response
             ? {
               response: {
-                ...snapshot.promptContext.response,
+                ...promptContext.response,
               },
             }
             : {}),
         },
       }
       : {}),
-    ...(snapshot.toolContext
+    ...(toolContext
       ? {
         toolContext: {
-          activeTools: snapshot.toolContext.activeTools.map(tool => ({
-            ...tool,
-            inputSchema: cloneJsonObject(tool.inputSchema),
-          })),
-          ...(snapshot.toolContext.adaptiveSnapshot
+          ...(toolContext.activeTools !== undefined
+            ? {
+              activeTools: toolContext.activeTools.map(tool => ({
+                ...tool,
+                inputSchema: cloneJsonObject(tool.inputSchema),
+              })),
+            }
+            : {}),
+          ...(toolContext.adaptiveSnapshot
             ? {
               adaptiveSnapshot: {
-                ...snapshot.toolContext.adaptiveSnapshot,
-                tools: snapshot.toolContext.adaptiveSnapshot.tools.map(tool => ({ ...tool })),
-                skipped: snapshot.toolContext.adaptiveSnapshot.skipped.map(skip => ({
+                ...toolContext.adaptiveSnapshot,
+                tools: toolContext.adaptiveSnapshot.tools.map(tool => ({ ...tool })),
+                skipped: toolContext.adaptiveSnapshot.skipped.map(skip => ({
                   ...skip,
                   ...(skip.missingTokens ? { missingTokens: [...skip.missingTokens] } : {}),
                 })),
-                counts: { ...snapshot.toolContext.adaptiveSnapshot.counts },
-              },
-            }
-            : {}),
-        },
-      }
-      : {}),
-    ...(snapshot.sessionContext
-      ? {
-        sessionContext: {
-          ...snapshot.sessionContext,
-          recentEntries: [...snapshot.sessionContext.recentEntries],
-          compactionSummaryTexts: [...snapshot.sessionContext.compactionSummaryTexts],
-          focusKnowledgeTexts: [...snapshot.sessionContext.focusKnowledgeTexts],
-          continuityEntries: [...snapshot.sessionContext.continuityEntries],
-        },
-      }
-      : {}),
-    ...(snapshot.memory
-      ? {
-        memory: {
-          ...snapshot.memory,
-          contactEmotionalMemories: [...snapshot.memory.contactEmotionalMemories],
-          semanticCandidates: [...snapshot.memory.semanticCandidates],
-          lexicalCandidates: [...snapshot.memory.lexicalCandidates],
-          proactiveCandidates: [...snapshot.memory.proactiveCandidates],
-          ...(snapshot.memory.withheldSummary
-            ? {
-              withheldSummary: {
-                ...snapshot.memory.withheldSummary,
-                reasonCounts: { ...snapshot.memory.withheldSummary.reasonCounts },
-              },
-            }
-            : {}),
-        },
-      }
-      : {}),
-  };
-}
-
-function cloneSessionSnapshot(
-  snapshot: SessionTurnSnapshot,
-  promptLoom: AdminPromptLoomData | undefined,
-): AdminTurnSnapshotData {
-  const activeTools = snapshot.toolContext?.activeTools
-    ?? snapshot.plan?.toolDefinitions
-    ?? promptLoom?.providerWire.toolDefinitions;
-  if (snapshot.toolContext && activeTools === undefined) {
-    throw new Error(
-      'Prompt monitor tool context requires embedded or canonically derived active tools',
-    );
-  }
-
-  return {
-    turnId: snapshot.turnId,
-    requestId: snapshot.requestId,
-    channelId: snapshot.channelId,
-    capturedAt: snapshot.capturedAt,
-    trustLevel: snapshot.trustLevel,
-    ...(snapshot.canonicalContactKey
-      ? { canonicalContactKey: snapshot.canonicalContactKey }
-      : {}),
-    ...(snapshot.prompt ? { prompt: { ...snapshot.prompt } } : {}),
-    ...(snapshot.plan ? { plan: cloneJsonSafe(snapshot.plan) } : {}),
-    ...(snapshot.promptContext
-      ? {
-        promptContext: {
-          ...cloneJsonSafe(omitSessionProviderObservability(snapshot.promptContext)),
-          ...(snapshot.promptContext.inputSections
-            ? { inputSections: snapshot.promptContext.inputSections.map(clonePromptSection) }
-            : {}),
-          ...(snapshot.promptContext.runtimeContextSections
-            ? {
-              runtimeContextSections: snapshot.promptContext.runtimeContextSections
-                .map(clonePromptSection),
-            }
-            : {}),
-          ...(snapshot.promptContext.memoryContextSections
-            ? {
-              memoryContextSections: snapshot.promptContext.memoryContextSections
-                .map(clonePromptSection),
-            }
-            : {}),
-          ...(snapshot.promptContext.finalSystemSections
-            ? {
-              finalSystemSections: snapshot.promptContext.finalSystemSections
-                .map(clonePromptSection),
-            }
-            : {}),
-          ...(snapshot.promptContext.sectionCacheability
-            ? {
-              sectionCacheability: cloneJsonSafe(snapshot.promptContext.sectionCacheability),
-            }
-            : {}),
-          ...(snapshot.promptContext.providerObservability
-            ? {
-              providerObservability: cloneSessionProviderObservability(
-                snapshot.promptContext.providerObservability,
-                promptLoom?.providerWire.messages,
-              ),
-            }
-            : {}),
-          ...(snapshot.promptContext.response
-            ? { response: { ...snapshot.promptContext.response } }
-            : {}),
-        },
-      }
-      : {}),
-    ...(snapshot.toolContext && activeTools
-      ? {
-        toolContext: {
-          activeTools: activeTools.map(tool => ({
-            ...tool,
-            inputSchema: cloneJsonObject(tool.inputSchema),
-          })),
-          ...(snapshot.toolContext.adaptiveSnapshot
-            ? {
-              adaptiveSnapshot: {
-                ...snapshot.toolContext.adaptiveSnapshot,
-                tools: snapshot.toolContext.adaptiveSnapshot.tools.map(tool => ({ ...tool })),
-                skipped: snapshot.toolContext.adaptiveSnapshot.skipped.map(skip => ({
-                  ...skip,
-                  ...(skip.missingTokens ? { missingTokens: [...skip.missingTokens] } : {}),
-                })),
-                counts: { ...snapshot.toolContext.adaptiveSnapshot.counts },
+                counts: { ...toolContext.adaptiveSnapshot.counts },
               },
             }
             : {}),
@@ -473,14 +339,62 @@ function findStage(
   return turn.stages.find(stage => stage.stage === stageName) ?? null;
 }
 
-function buildTurnFromSession(turn: AdminSessionTurnData): PromptMonitorTurn {
+function reportRejectedSnapshot(
+  options: PromptMonitorIngestionOptions,
+  rejection: PromptMonitorSnapshotRejection,
+): void {
+  try {
+    if (options.onRejectedSnapshot) {
+      options.onRejectedSnapshot(rejection);
+      return;
+    }
+    console.error('Prompt monitor rejected malformed turn snapshot', rejection);
+  } catch (cause) {
+    console.error('Prompt monitor snapshot rejection reporter failed', cause, rejection);
+  }
+}
+
+function parseReplaySnapshot(
+  turn: AdminSessionTurnData,
+  options: PromptMonitorIngestionOptions,
+): AdminTurnSnapshotData | null {
+  if (turn.snapshot === null) return null;
+  const parsed = parsePersistedTurnSnapshot(turn.snapshot);
+  if (!parsed.ok) {
+    reportRejectedSnapshot(options, {
+      source: 'replay',
+      message: parsed.error,
+      turnId: turn.record.turnId,
+    });
+    return null;
+  }
+  if (
+    parsed.value.turnId !== turn.record.turnId
+    || parsed.value.requestId !== turn.record.requestId
+    || parsed.value.channelId !== turn.record.channelId
+  ) {
+    reportRejectedSnapshot(options, {
+      source: 'replay',
+      message: 'snapshot identity does not match its persisted turn record',
+      turnId: turn.record.turnId,
+    });
+    return null;
+  }
+  return parsed.value;
+}
+
+function buildTurnFromSession(
+  turn: AdminSessionTurnData,
+  options: PromptMonitorIngestionOptions,
+): PromptMonitorTurn {
+  const snapshot = parseReplaySnapshot(turn, options);
   const latestStageAt = turn.stages.reduce(
     (latest, stage) => Math.max(latest, stage.observedAt),
     0,
   );
   const latestEventAt = Math.max(
     turn.record.completedAt,
-    turn.snapshot?.capturedAt ?? 0,
+    snapshot?.capturedAt ?? 0,
     latestStageAt,
   );
 
@@ -490,9 +404,7 @@ function buildTurnFromSession(turn: AdminSessionTurnData): PromptMonitorTurn {
     channelId: turn.record.channelId,
     latestEventAt,
     record: { ...turn.record },
-    snapshot: turn.snapshot
-      ? cloneSessionSnapshot(turn.snapshot, turn.promptLoom)
-      : null,
+    snapshot,
     promptLoom: turn.promptLoom ? clonePromptLoom(turn.promptLoom) : null,
     stages: sortStages(turn.stages),
   };
@@ -573,147 +485,17 @@ function hasToolResultPayload(toolCall: AdminSessionTurnData['record']['toolCall
     || record.details !== undefined;
 }
 
-function clonePromptContextMessagesForLoom(
-  messages: AdminTurnPromptContextMessage[] | undefined,
-): AdminPromptLoomData['generatedPrompt']['contextMessages'] {
-  return (messages?.map(clonePromptContextMessage) ?? []) as AdminPromptLoomData['generatedPrompt']['contextMessages'];
-}
-
 function clonePromptSectionsForLoom(
   sections: AdminPromptSectionTelemetry[] | undefined,
 ): AdminPromptLoomData['generatedPrompt']['inputSections'] {
   return (sections?.map(clonePromptSection) ?? []) as AdminPromptLoomData['generatedPrompt']['inputSections'];
 }
 
-function cloneProviderMessagesForLoom(
-  messages: AdminTurnProviderWireMessage[] | undefined,
-): AdminPromptLoomData['providerPayload']['providerMessages'] {
-  return (messages?.map(message => ({ ...message })) ?? []) as AdminPromptLoomData['providerPayload']['providerMessages'];
-}
-
-function getPlanBlockText(
-  plan: AdminPromptPlanData | undefined,
-  id: string,
-): string | null {
-  return plan?.blocks.find(block => block.id === id)?.renderedText ?? null;
-}
-
-function joinPlanBlockTexts(blocks: readonly AdminPromptPlanBlock[]): string {
-  return blocks
-    .map(block => block.renderedText.trim())
-    .filter(text => text.length > 0)
-    .join('\n\n');
-}
-
-const DATETIME_ANCHOR_BLOCK_ID = 'runtime.current_datetime';
-
-/**
- * Mirror of stripCurrentDatetimePromptBlocks (turn-execution/prompt-plan.ts):
- * stale datetime anchors are stripped fail-closed before the plan's own
- * ordered anchor block is appended last. Kept regex-identical so the live-bus
- * fallback serialization matches the server projection byte-for-byte.
- */
-function stripCurrentDatetimeBlocksView(text: string): string {
-  return text
-    .replace(/<runtime\.current_datetime(?:\s+[^>]*)?>\s*[\s\S]*?<\/runtime\.current_datetime>/g, '')
-    .replace(/<current_datetime>\s*[\s\S]*?<\/current_datetime>/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-/** Mirror of serializePromptPlanSystemPrompt for the live-bus fallback. */
-function serializePlanSystemPromptView(plan: AdminPromptPlanData): string {
-  const anchorBlock = plan.blocks.find(block => block.id === DATETIME_ANCHOR_BLOCK_ID);
-  const body = stripCurrentDatetimeBlocksView(
-    joinPlanBlockTexts(plan.blocks.filter(block => block.id !== DATETIME_ANCHOR_BLOCK_ID)),
-  );
-  const anchor = anchorBlock?.renderedText.trim() ?? '';
-  if (!anchor) return body;
-  return body ? `${body}\n\n${anchor}` : anchor;
-}
-
-interface PromptLoomPlanStrings {
-  renderedStaticPrefix: string | null;
-  renderedDynamicSuffix: string | null;
-  runtimeContext: string | null;
-  memoryContextBlock: string | null;
-  scratchpadContext: string | null;
-  assembledPrompt: string | null;
-  finalSystemPrompt: string | null;
-  contextMessages: AdminPromptLoomData['generatedPrompt']['contextMessages'];
-}
-
-/**
- * Live-event fallback mirror of the server-side plan derivation (E2.2): the
- * snapshot's PromptPlan is the source of truth for prompt strings; the legacy
- * promptContext string fields exist only on historical records.
- */
-function derivePromptLoomPlanStrings(
-  snapshot: AdminTurnSnapshotData | undefined | null,
-): PromptLoomPlanStrings {
-  const plan = snapshot?.plan;
-  if (plan) {
-    return {
-      renderedStaticPrefix: getPlanBlockText(plan, 'static_prefix') ?? '',
-      renderedDynamicSuffix: getPlanBlockText(plan, 'dynamic_suffix') ?? '',
-      runtimeContext: getPlanBlockText(plan, 'runtime.context') ?? '',
-      memoryContextBlock: getPlanBlockText(plan, 'memory.retrieval') ?? '',
-      scratchpadContext: getPlanBlockText(plan, 'runtime.scratchpad') ?? '',
-      assembledPrompt: joinPlanBlockTexts(
-        plan.blocks.filter(block => block.layer === 'prompt_stack' || block.layer === 'runtime'),
-      ),
-      finalSystemPrompt: serializePlanSystemPromptView(plan),
-      contextMessages: clonePromptContextMessagesForLoom(plan.messages),
-    };
-  }
-  const promptContext = snapshot?.promptContext;
-  return {
-    renderedStaticPrefix: promptContext?.renderedStaticPrefix ?? null,
-    renderedDynamicSuffix: promptContext?.renderedDynamicSuffix ?? null,
-    runtimeContext: promptContext?.runtimeContext ?? null,
-    memoryContextBlock: promptContext?.memoryContextBlock ?? null,
-    scratchpadContext: promptContext?.scratchpadContext ?? null,
-    assembledPrompt: promptContext?.assembledPrompt ?? null,
-    finalSystemPrompt: promptContext?.finalSystemPrompt ?? null,
-    contextMessages: clonePromptContextMessagesForLoom(promptContext?.messages),
-  };
-}
-
-/**
- * Live-bus fallback Provider Wire view. The recorded provider-wire capture is
- * byte-equal to the plan serialization at runtime (E2.2 single assembly path),
- * so the fallback serves the capture with an explicit 'recorded_snapshot'
- * source marker; the persisted-record path serves the plan-derived wire.
- */
-function buildProviderWireFromSnapshot(
-  snapshot: AdminTurnSnapshotData | null,
-  planStrings: PromptLoomPlanStrings,
-): AdminPromptLoomData['providerWire'] {
-  const plan = snapshot?.plan ?? null;
-  const toolDefinitions = plan
-    ? plan.toolDefinitions.map(tool => ({ ...tool, inputSchema: cloneJsonObject(tool.inputSchema) }))
-    : snapshot?.toolContext?.activeTools.map(tool => ({
-      ...tool,
-      inputSchema: cloneJsonObject(tool.inputSchema),
-    })) ?? [];
-  const captured = snapshot?.promptContext?.providerObservability?.capturedWirePayload;
-  return {
-    source: 'recorded_snapshot',
-    legacy: plan === null,
-    systemRoleTransport: snapshot?.promptContext?.providerObservability?.systemRole?.transport ?? null,
-    systemPrompt: planStrings.finalSystemPrompt,
-    messages: cloneProviderMessagesForLoom(snapshot?.promptContext?.providerObservability?.providerWireMessages),
-    toolDefinitions,
-    // Raw-wire view captured as-sent (bead hgw3-80f6); clone so live-bus mutation
-    // cannot reach back into the observed snapshot. Preserve absence.
-    ...(captured ? { capturedWirePayload: cloneJsonSafe(captured) } : {}),
-  } as AdminPromptLoomData['providerWire'];
-}
-
 function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
   const snapshot = turn.snapshot;
   const promptContext = snapshot?.promptContext;
-  const planStrings = derivePromptLoomPlanStrings(snapshot);
+  const projection = projectTurnSnapshotPrompt(snapshot);
+  const planStrings = projection.strings;
   const response = promptContext?.response ?? null;
   const renderedChatOutput = response?.content ?? turn.record?.assistantMessage?.content ?? null;
   const historicalHits = collectHistoricalSnapshotHits(snapshot);
@@ -722,7 +504,7 @@ function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
     source: 'turn_snapshot',
     snapshotCapturedAt: snapshot?.capturedAt ?? null,
     plan: (snapshot?.plan ? cloneJsonSafe(snapshot.plan) : null) as AdminPromptLoomData['plan'],
-    providerWire: buildProviderWireFromSnapshot(snapshot, planStrings),
+    providerWire: projection.providerWire,
     historicalSnapshot: {
       label: HISTORICAL_SNAPSHOT_LABEL,
       removedPromptLayerIds: [...new Set(historicalHits.map(hit => hit.layerId))],
@@ -743,11 +525,8 @@ function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
     },
     providerPayload: {
       finalSystemPrompt: planStrings.finalSystemPrompt,
-      providerMessages: cloneProviderMessagesForLoom(promptContext?.providerObservability?.providerWireMessages),
-      activeTools: snapshot?.toolContext?.activeTools.map(tool => ({
-        ...tool,
-        inputSchema: cloneJsonObject(tool.inputSchema),
-      })) ?? [],
+      providerMessages: projection.providerMessages,
+      activeTools: projection.activeTools,
     },
     providerResult: {
       response: response ? { ...response } : null,
@@ -941,15 +720,31 @@ export function buildStaticPrefixHashTimeline(
 
 function readSnapshotEnvelopeData(
   event: GardenEventEnvelope,
+  options: PromptMonitorIngestionOptions,
 ): AdminTurnSnapshotData | null {
-  if (event.type !== 'agent.turn.snapshot' || typeof event.data !== 'object' || event.data === null) {
+  if (event.type !== 'agent.turn.snapshot') return null;
+  const parsed = parsePersistedTurnSnapshotEventData(event.data);
+  if (!parsed.ok) {
+    reportRejectedSnapshot(options, {
+      source: 'live',
+      message: parsed.error,
+      ...(event.correlation.turnId ? { turnId: event.correlation.turnId } : {}),
+    });
     return null;
   }
-  const snapshot = (event.data as { snapshot?: AdminTurnSnapshotData }).snapshot;
-  if (!snapshot || typeof snapshot.turnId !== 'string' || typeof snapshot.channelId !== 'string') {
+  if (
+    (event.correlation.turnId && event.correlation.turnId !== parsed.value.turnId)
+    || (event.correlation.requestId && event.correlation.requestId !== parsed.value.requestId)
+    || (event.correlation.channelId && event.correlation.channelId !== parsed.value.channelId)
+  ) {
+    reportRejectedSnapshot(options, {
+      source: 'live',
+      message: 'snapshot identity does not match its WebSocket event correlation',
+      ...(event.correlation.turnId ? { turnId: event.correlation.turnId } : {}),
+    });
     return null;
   }
-  return cloneSnapshot(snapshot);
+  return parsed.value;
 }
 
 function readStageEnvelopeData(
@@ -971,15 +766,17 @@ function readStageEnvelopeData(
 
 export function buildPromptMonitorTurns(
   turns: readonly AdminSessionTurnData[],
+  options: PromptMonitorIngestionOptions = {},
 ): PromptMonitorTurn[] {
-  return sortTurns(turns.map(buildTurnFromSession));
+  return sortTurns(turns.map(turn => buildTurnFromSession(turn, options)));
 }
 
 export function mergePromptMonitorEvent(
   turns: readonly PromptMonitorTurn[],
   event: GardenEventEnvelope,
+  options: PromptMonitorIngestionOptions = {},
 ): PromptMonitorTurn[] {
-  const snapshot = readSnapshotEnvelopeData(event);
+  const snapshot = readSnapshotEnvelopeData(event, options);
   const stage = readStageEnvelopeData(event);
   if (!snapshot && !stage) {
     return [...turns];

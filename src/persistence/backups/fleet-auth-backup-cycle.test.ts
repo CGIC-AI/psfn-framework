@@ -98,7 +98,7 @@ function writeFakeFamily(
   }));
   const manifestPath = join(backupDir, FLEET_AUTH_BACKUP_MANIFEST_NAME);
   writeFileSync(manifestPath, JSON.stringify({
-    schemaVersion: 4,
+    schemaVersion: 5,
     capturedAt: '2026-07-15T15:00:00.000Z',
     postgresSnapshot: '100:200:',
     authorityLineageId: 'a'.repeat(64),
@@ -175,6 +175,8 @@ function makeCycleOptions(
     'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app';
   return {
     backupRestoreDatabaseUrl,
+    restoreVerifySchemaOwnerDatabaseUrl:
+      'postgresql://auth_migration:secret@127.0.0.1:5432/app_restore_verify',
     roles: ROLES,
     schemas: [
       {

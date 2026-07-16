@@ -26,10 +26,13 @@ import {
   type TurnRecordVersionPointers,
 } from '../../shared/contracts/runtime.js';
 import { isChannelPrivacy } from '../../system/trust/context-envelope.js';
+import {
+  isObservabilityCallType,
+  type ObservabilityCallType,
+} from '../../shared/contracts/observability-call-types.js';
 import { sanitizeChannelId } from './store-file-contracts.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../core/turns/id.js';
 import type {
-  TurnObservabilityCallType,
   TurnObservabilityRecord,
   TurnRetrievalTelemetryRecord,
   TurnSnapshotRecord,
@@ -110,14 +113,6 @@ const VALID_BACKGROUND_WORK_KINDS = new Set<TurnRecordBackgroundWorkKind>([
   'emotion_appraisal',
   'auto_compaction',
 ]);
-const VALID_OBSERVABILITY_CALL_TYPES = new Set<TurnObservabilityCallType>([
-  'chat',
-  'tool',
-  'memory',
-  'summary',
-  'background',
-  'scheduled',
-]);
 const VALID_RETRIEVAL_SOURCES = new Set<NonNullable<TurnRetrievalTelemetryRecord['retrievalSource']>>([
   'embedding',
   'lexical_fallback',
@@ -174,13 +169,13 @@ function parseRequiredTimestamp(value: unknown, fieldName: string): number {
   return Math.floor(value);
 }
 
-function parseOptionalCallType(value: unknown, fieldName: string): TurnObservabilityCallType | undefined {
+function parseOptionalCallType(value: unknown, fieldName: string): ObservabilityCallType | undefined {
   const normalized = parseOptionalString(value, fieldName);
   if (!normalized) return undefined;
-  if (!VALID_OBSERVABILITY_CALL_TYPES.has(normalized as TurnObservabilityCallType)) {
+  if (!isObservabilityCallType(normalized)) {
     throw new Error(`TurnRecord field \"${fieldName}\" is invalid: ${normalized}`);
   }
-  return normalized as TurnObservabilityCallType;
+  return normalized;
 }
 
 function parseOptionalRetrievalSource(

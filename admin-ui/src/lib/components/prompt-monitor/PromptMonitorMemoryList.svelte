@@ -20,7 +20,7 @@
   }
 
   function formatMeta(memory: DisplayMemory): string {
-    const parts = [memory.type, memory.sensitivity];
+    const parts: string[] = [memory.type, memory.sensitivity];
     if (hasSimilarity(memory)) {
       parts.push(`sim ${memory.similarity.toFixed(3)}`);
     }

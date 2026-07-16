@@ -34,6 +34,42 @@ Supported until beta:
 
 - Continuous/local shared-root layout through `DATA_DIR`. This is for local development and smoke testing only; production mode forbids shared-root operation.
 - Split-root persistence cutover through `npm run migrate:persistence-layout` and the installer `--migrate-data` path. The cutover tooling may read legacy shared roots, write manifests, and run existing intra-root cleanup, but production startup should stop until the plan is clean.
+- Explicit system-owner fleet re-rooting through
+  `npm run migrate:system-owner-fleet`. This one-time operator command may read
+  only `PER_COMPANION_OWNER_FILES` entries left at `SYSTEM_DATA_DIR`, fan their
+  exact approved bytes to every companion enumerated by `companions.json`, and
+  retire each source only after all destinations verify. Validation is the
+  exact source digest and filesystem identity per file, no-overwrite destination
+  checks, descriptor-pinned receipt/staging/destination directories, durable
+  receipt-owned source quarantine, and the durable schema-v4
+  `migrations/system-owner-fleet-reroot.json` receipt. The bootstrap receipt
+  records unpredictable quarantine, staging, and temporary identifiers before
+  those objects are created; created objects are fsynced and identity-bound
+  before use. Partial retries may resume only an identity-bound exact source
+  prefix. An unbound crash remnant is preserved and durably superseded under a
+  new recorded identifier, while unknown or replaced artifacts fail closed.
+  Retries must match the receipt, its pinned directory identities, and the
+  unchanged fleet. A Helm deployment may invoke the same compiled command only
+  through the explicit `ownerMigration` pre-upgrade hook: the rollout must set
+  `required=true`, disable bootstrap seeding, bind every source digest, mount
+  the exact system, backup, and every manifest companion PVC at its canonical
+  path, capture the whole-fleet snapshot first, and complete the packaged
+  per-companion readiness probes before Helm admits the new revision. Missing
+  claims, wrong paths, image-digest resolution failures, shared companion
+  claims, and an omitted required hook fail the upgrade while the old revision
+  remains deployed. Validate this path with `npm run verify:helm-chart` and
+  `npm run e2e:kube-owner-upgrade`. Remove the command, Helm hook, packaged
+  probe, and receipt reader before beta after
+  every split fleet has a completed receipt (or a plan proving no system-root
+  per-companion owners remain).
+- Explicit scheduler owner-shape migration through
+  `npm run migrate:scheduler-owner -- --data-dir <exact-companion-data-dir>`.
+  This operator-only command may migrate retired scheduler cadence keys in one
+  named companion root; it is never part of launcher startup and may not infer
+  `SYSTEM_DATA_DIR`, `DATA_DIR`, or another companion's root. Validate the
+  resulting `scheduler.json` through the canonical startup-owner preflight.
+  Remove the command before beta after every companion owner has the canonical
+  scheduler shape.
 - Startup owner-file hydration for currently supported legacy owner data. Hydration may seed missing owner files on first boot, migrate or warn on existing owner-file drift, and load model/provider registries with the existing migration paths, but it must not restore `.env` as mutable-settings authority.
 - Helm's one-time per-companion owner and scheduler-schema cutover for
   `scheduler.json` and `capability-tier.json`. The chart init path may copy a legacy regular file

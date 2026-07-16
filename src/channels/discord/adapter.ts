@@ -1,8 +1,6 @@
 import {
-  Client,
   Events,
-  GatewayIntentBits,
-  Partials,
+  type Client,
   type Message,
   type MessageReaction,
   type PartialMessageReaction,
@@ -57,6 +55,7 @@ import {
   extractDiscordImageAttachments,
   extractDiscordInlineImageLinks,
 } from './attachments.js';
+import { createDiscordClient, type DiscordEvidenceAdapterSurface } from './evidence-adapter-surface.js';
 
 const log = createComponentLogger('Discord');
 const rateLimitedDebugLog = createRateLimitedLogEmitter({ windowMs: 60_000 });
@@ -111,6 +110,7 @@ interface DiscordAdapterOptions {
   allowedBotUserIds?: string[];
   personalFilesDir?: string;
   account?: DiscordAdapterAccountBinding;
+  enableDiscordEvidenceLifecycle?: boolean;
   /**
    * Cognition intake firewall (htm9.2): screens parsed document attachment
    * text before it enters <parsed_attachment_text>. Absent when the firewall
@@ -195,6 +195,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
   readonly streaming: ChannelStreamingAdapter;
   readonly threading: ChannelThreadingAdapter;
   readonly prompt: ChannelPromptAdapter;
+  readonly discordEvidence: DiscordEvidenceAdapterSurface;
 
   private client: Client;
   private runtimeConfig: SubstrateConfig;
@@ -274,17 +275,9 @@ export class DiscordAdapter implements ChannelAdapterPort {
         return 'discord_text';
       },
     };
-    this.client = new Client({
-      intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMessages,
-        GatewayIntentBits.MessageContent,
-        GatewayIntentBits.DirectMessages,
-        GatewayIntentBits.GuildVoiceStates,
-        GatewayIntentBits.GuildMessageReactions,
-      ],
-      partials: [Partials.Channel, Partials.Message, Partials.Reaction],
-    });
+    [this.client, this.discordEvidence] = createDiscordClient(
+      Boolean(options.enableDiscordEvidenceLifecycle),
+    );
 
     this.voice = new DiscordVoiceRuntime({
       client: this.client,
@@ -323,6 +316,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
   async init(): Promise<void> {
     if (this.initialized) return;
     this.initialized = true;
+    this.discordEvidence.attach();
 
     this.client.on(Events.MessageCreate, (msg) => {
       this.onDiscordMessage(msg).catch(err => {
@@ -373,6 +367,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
   }
 
   async stop(): Promise<void> {
+    this.discordEvidence.close();
     for (const unsub of this.statusUnsubscribers) unsub();
     this.statusUnsubscribers = [];
     this.clearAllLongRunningTools();

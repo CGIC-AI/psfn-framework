@@ -19,9 +19,9 @@ import {
 import type { RuntimeLaneClass } from '../../shared/contracts/runtime-lanes.js';
 import {
   inferCallType,
-  isObservabilityCallType,
   normalizeCorrelationValue,
 } from './correlation.js';
+import { isObservabilityCallType } from '../../shared/contracts/observability-call-types.js';
 
 /**
  * Mirror of `LLMClient.toRoutingPurpose` for lane derivation. Kept a pure

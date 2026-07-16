@@ -41,34 +41,34 @@ Keep `.env` limited to:
 - Explicit bootstrap overrides such as `CHARACTER_CARD_PATH`
 - Explicit deployment identity such as `COMPANION_ID`
 
-The runtime ignores mutable settings that are owned by JSON files. Do not use `.env` for embeddings, model roster, scheduler cadence, capability tier, channel policy, skills, or trust policy.
+The runtime ignores mutable settings that are owned by JSON files. Do not use `.env` for embeddings, model roster, scheduler cadence, capability tier, channel policy, skills, charge/fatigue policy, or trust policy.
 
 ## What Goes In JSON Owner Files
 
-Mutable cluster-global runtime/admin configuration lives under the system-data
-config domain:
+Mutable runtime/admin configuration lives in canonical JSON owner files.
+
+Cluster-global owner files live under `SYSTEM_DATA_DIR`:
 
 - `settings.json`
 - `models.json`
 - `providers.json`
 - `channels.json`
-- `skills.json`
 - `trust-policy.json`
 - `intake-policy.json`
-- `charge-policy.json`
 - `backup.json`
 
-Two whole owner files are companion-owned and live under the companion-data
-root in split-root deployments:
+Four whole owner files live under each companion's `COMPANION_DATA_DIR`:
 
 - `scheduler.json`
 - `capability-tier.json`
+- `charge-policy.json`
+- `skills.json`
 
 In a local shared-root layout, system-data and companion-data resolve to the
-same directory, so the distinction does not change the path. Production
-split-root and Helm deployments must place these two files under
-`COMPANION_DATA_DIR`; startup deliberately has no fallback to the old
-system-owned path.
+same directory, so the ownership distinction does not change the path.
+Production split-root and Helm deployments must place all four per-companion
+files under `COMPANION_DATA_DIR`; startup does not fall back to system-root
+copies.
 
 Startup verifies the seed-backed owner files before the split runtime comes up. Distributed `config/*.seed.json` files are examples/templates only; PSFN does not silently copy them into runtime state.
 
@@ -105,11 +105,22 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
    cp config/skills.seed.json ./data/skills.json
    ```
 
-   For production split roots, copy `scheduler.seed.json` and
-   `capability-tier.seed.json` to `COMPANION_DATA_DIR`; copy every other file
-   above to `SYSTEM_DATA_DIR`. The Helm chart performs the legacy-to-companion
-   cutover explicitly for existing releases; see
-   [`deploy/helm/psfn/README.md`](../deploy/helm/psfn/README.md#upgrading-releases-created-before-per-companion-owner-files).
+   For production split roots, place the outputs from
+   `scheduler.seed.json`, `capability-tier.seed.json`,
+   `charge-policy.seed.json`, and `skills.seed.json` under
+   `COMPANION_DATA_DIR`; place every other owner file shown above under
+   `SYSTEM_DATA_DIR`. In fleet mode, provision those four files separately for
+   every companion root. Startup rejects a missing per-companion owner and
+   never reads a system-root copy as a fallback.
+
+   For existing Helm releases, the chart's guarded automatic cutover covers
+   only `scheduler.json` and `capability-tier.json`, followed by scheduler
+   schema migration; see
+   [`deploy/helm/psfn/README.md`](../deploy/helm/psfn/README.md#upgrading-releases-created-before-schedulercapability-owner-routing).
+   Existing multi-companion split fleets with registered per-companion owners
+   under `SYSTEM_DATA_DIR` must instead use the digest-approved,
+   receipt-bearing workflow in
+   [`docs/operations.md`](./operations.md#existing-split-fleets-with-shared-per-companion-owners).
 
    The `models.seed.json` template ships `promptCaching.enabled: true`, so new deployments engage provider prompt caching on the byte-stable system-prompt prefix out of the box (Anthropic / OpenRouter→Anthropic get `cache_control` breakpoints; other providers get the stable-prefix benefit plus telemetry, no wire change). Set `promptCaching.enabled: false` in `models.json` to fully disable it. Tune lifetime with `promptCaching.retention` (`none`/`short`/`long`, default `short`) and the session key with `promptCaching.scope` (`channel`/`request`, default `channel`).
 
@@ -200,6 +211,34 @@ the normal agent role. A direct `npm run agent` launch must provide
 `GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN`; in multi-companion mode it must also
 provide the exact fleet tuple and `GATEWAY_COMPANION_AUTH_TOKEN`.
 
+If an existing split fleet still has any registered per-companion owner under
+`SYSTEM_DATA_DIR`—including `scheduler.json`, `capability-tier.json`,
+`charge-policy.json`, or `skills.json`—do not copy the shared system file into
+one companion by hand and do not point `migrate:persistence-layout` at
+`SYSTEM_DATA_DIR`. Stop the fleet and use the digest-approved,
+receipt-bearing `npm run migrate:system-owner-fleet` workflow documented in
+[`docs/operations.md`](./operations.md#existing-split-fleets-with-shared-per-companion-owners).
+Before apply, mount every exact manifest root and run
+`npm run snapshot:system-owner-fleet -- --output <backup-family-dir>`; a missing
+root is a hard preflight failure and is never created by migration. Rehearse an
+old-release rollback only into fresh empty PVC roots with
+`npm run restore:system-owner-fleet-snapshot -- --manifest <family-manifest> --restore-runtime-root <fresh-root>`.
+It enumerates every configured companion and retires the shared source only
+after every exact-byte destination verifies, by moving the approved inode into
+the durable receipt-owned quarantine. Its bootstrap receipt owns unpredictable
+quarantine, staging, and copy identifiers before those objects are created, and
+retries preserve rather than delete unbound or replaced crash remnants. Do not
+remove the quarantine or retained staging artifacts manually; they are part of
+deterministic receipt verification and retry.
+
+For a multi-release Helm upgrade, run that command once from the repo-owned
+maintenance environment with all manifest PVC roots mounted, then require
+`npm run preflight:startup-owner-files` to pass before upgrading any individual
+release. Keep `bootstrap.seedOwnerFiles=false` throughout the upgrade. Rolling
+back to a pre-routing release requires restoring the verified pre-migration
+backup of system-data and every companion-data root together, never copying a
+quarantined shared owner into selected companions.
+
 ### Multi-companion workspaces
 
 Do not set per-companion workspace paths in `companions.json`. The fleet
@@ -271,6 +310,12 @@ Wyoming/OpenHome endpoint transports live in the Satellite Hub repository. Confi
 Satellite authentication has two layers:
 
 - **Per-satellite bearer keys**: set `API_SATELLITE_KEYS` (comma-separated, each >=16 chars). Each key yields a distinct satellite-scoped principal id that the matching `satellites.json` endpoint must list in `auth.apiKeyPrincipalIds`. Satellite keys are only valid on satellite surfaces.
+- **Fleet-auth Hub devices**: each device-facing endpoint must declare a strict
+  `hubDeviceEnrollment` with `deviceId`, positive `enrollmentVersion`, and
+  `enrollmentStatus` (`active` or `revoked`). The authenticated Hub key selects
+  the endpoint; the gateway then binds the signed assertion to this enrollment,
+  the API surface's companion, the authenticated Hub session, and the
+  satellite's optional `placeId` before a turn can enter the agent runtime.
 - **Mutual TLS**: satellite client-cert identity is bound to the API listener's real TLS peer certificate (or to `X-PSFN-Client-Cert-*` headers only behind a trusted proxy presenting `API_TRUSTED_PROXY_CLIENT_CERT_TOKEN`). Certificate issuance, renewal, and revocation run through the cert-manager sidecar (`npm run cert-manager`, `src/app/cert-manager/`) — see [`docs/certificates.md`](./certificates.md) for the full bootstrap.
 
 ## Sanity Checks

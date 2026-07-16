@@ -8,6 +8,11 @@ import {
   FLEET_AUTH_REAPPROVE_FUNCTION_NAME,
 } from './reapproval-sql.js';
 import {
+  FLEET_AUTH_COMPANION_REAPPROVAL_DDL_SQL,
+  FLEET_AUTH_REAPPROVE_COMPANION_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_REAPPROVE_COMPANION_FUNCTION_NAME,
+} from './companion-reapproval-sql.js';
+import {
   FLEET_AUTH_FIRST_OWNER_DDL_SQL,
   FLEET_AUTH_FIRST_OWNER_FUNCTION_ARG_TYPES,
   FLEET_AUTH_FIRST_OWNER_FUNCTION_NAME,
@@ -18,10 +23,37 @@ import {
   FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME,
 } from './authority-state-lock-sql.js';
 import {
+  FLEET_AUTH_LOCK_COMPANION_AUTHORITY_DDL_SQL,
+  FLEET_AUTH_LOCK_COMPANION_AUTHORITY_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_LOCK_COMPANION_AUTHORITY_FUNCTION_NAME,
+} from './companion-authority-lock-sql.js';
+import {
+  FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_DDL_SQL,
+  FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME,
+} from './authority-floor-read-sql.js';
+import {
   FLEET_AUTH_RECONCILIATION_DDL_SQL,
   FLEET_AUTH_RECONCILE_FUNCTION_ARG_TYPES,
   FLEET_AUTH_RECONCILE_FUNCTION_NAME,
 } from './authority-reconciliation-sql.js';
+import {
+  FLEET_AUTH_CONSUME_HUB_REPLAY_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_CONSUME_HUB_REPLAY_FUNCTION_NAME,
+  FLEET_AUTH_HUB_REPLAY_BOUNDARY_DDL_SQL,
+  FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_NAME,
+} from './hub-device-assertion-replay-sql.js';
+import {
+  FLEET_AUTH_COMPANION_RESTORE_DDL_SQL,
+  FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME,
+} from './companion-restore-sql.js';
+import {
+  FLEET_AUTH_CONTACT_AUTHORITY_DDL_SQL,
+  FLEET_AUTH_CONTACT_AUTHORITY_FENCE_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_CONTACT_AUTHORITY_FENCE_FUNCTION_NAME,
+} from './contact-authority-sql.js';
 
 export const FLEET_AUTH_SCHEMA_NAME = 'fleet_auth';
 const MIGRATION_LOCK_CLASS = 0x5053464e;
@@ -73,13 +105,19 @@ export const FLEET_AUTH_DURABLE_TABLES = [
   'provider_subjects',
   'provider_subject_history',
   'provider_subject_tombstones',
+  'companion_authority_state',
   'principal_contact_bindings',
   'principal_role_grants',
+  'principal_merge_aliases',
   'passkey_credentials',
   'authorization_audit_events',
+  'contact_authority_intents',
+  'contact_authority_resources',
+  'contact_authority_receipts',
 ] as const;
 
 export const FLEET_AUTH_EPHEMERAL_TABLES = [
+  'discord_evidence_lifecycle_fences',
   'discord_evidence_snapshots',
   'oauth_transactions',
   'provider_token_custody',
@@ -88,31 +126,54 @@ export const FLEET_AUTH_EPHEMERAL_TABLES = [
   'jit_authorization_grants',
   'trusted_host_ceremonies',
   'hub_device_assertion_replays',
+  'lifecycle_decision_receipts',
 ] as const;
 
 const FLEET_AUTH_MUTABLE_TABLES = [
   'authority_state',
+  'authority_floor_tombstone_projection',
+  'companion_authority_state',
   'human_principals',
   'provider_subjects',
   'principal_contact_bindings',
   'principal_role_grants',
   'passkey_credentials',
+  'contact_authority_intents',
   ...FLEET_AUTH_EPHEMERAL_TABLES,
 ] as const;
 
 const FLEET_AUTH_RUNTIME_MUTABLE_TABLES = FLEET_AUTH_MUTABLE_TABLES.filter(
-  table => table !== 'authority_state',
+  table => table !== 'authority_state'
+    && table !== 'authority_floor_tombstone_projection'
+    && table !== 'companion_authority_state'
+    && table !== 'lifecycle_decision_receipts'
+    && table !== 'contact_authority_intents',
 );
 
 const FLEET_AUTH_IMMUTABLE_TABLES = [
   'provider_subject_history',
   'provider_subject_tombstones',
   'authorization_audit_events',
+  'principal_merge_aliases',
+  'contact_authority_resources',
+  'contact_authority_receipts',
+] as const;
+
+const FLEET_AUTH_RUNTIME_IMMUTABLE_TABLES = FLEET_AUTH_IMMUTABLE_TABLES.filter(
+  table => table !== 'principal_merge_aliases'
+    && table !== 'contact_authority_resources'
+    && table !== 'contact_authority_receipts',
+);
+
+const FLEET_AUTH_RUNTIME_READ_ONLY_TABLES = [
+  'companion_authority_state',
+  'principal_merge_aliases',
 ] as const;
 
 const FLEET_AUTH_INTERNAL_TABLES = [
   'schema_migrations',
   'provider_subject_registry',
+  'companion_restore_import_receipts',
 ] as const;
 
 const TABLE_PRIVILEGES = [
@@ -257,13 +318,22 @@ async function applyRoleGrants(
   await client.query(
     `GRANT SELECT, INSERT, UPDATE, DELETE ON ${FLEET_AUTH_RUNTIME_MUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${runtime}`,
   );
+  // Hub assertion replay keys are serialized and mutated only inside the
+  // schema-owner consume procedure. Ordinary runtime SQL may observe the fence
+  // for diagnostics but cannot replace, delete, or pre-seed it.
+  await client.query(
+    `REVOKE INSERT, UPDATE, DELETE ON ${qualifiedTable('hub_device_assertion_replays')} FROM ${runtime}`,
+  );
   // The restorable database copy of the non-restored authority floor is
   // observable by the broker, never directly mutable by its ordinary SQL
   // credential. Startup/restore reconciliation uses the coordinator role;
   // trusted-host reapproval changes the epoch only inside the constrained
   // SECURITY DEFINER procedure.
   await client.query(
-    `GRANT SELECT ON ${qualifiedTable('authority_state')} TO ${runtime}`,
+    `GRANT SELECT ON ${[
+      qualifiedTable('authority_state'),
+      ...FLEET_AUTH_RUNTIME_READ_ONLY_TABLES.map(qualifiedTable),
+    ].join(', ')} TO ${runtime}`,
   );
   // The runtime broker may invalidate pending trusted-host ceremonies during
   // reconciliation (DELETE) and observe them (SELECT), but it must never author
@@ -277,12 +347,24 @@ async function applyRoleGrants(
     `REVOKE INSERT, UPDATE ON ${qualifiedTable('trusted_host_ceremonies')} FROM ${runtime}`,
   );
   await client.query(
-    `GRANT SELECT, INSERT ON ${FLEET_AUTH_IMMUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${runtime}`,
+    `GRANT SELECT, INSERT ON ${FLEET_AUTH_RUNTIME_IMMUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${runtime}`,
   );
   // The repo-owned coordinator alone restores durable rows and invalidates
   // ephemeral rows. It receives DML but never schema/migration authority.
   await client.query(
     `GRANT SELECT, INSERT, UPDATE, DELETE ON ${FLEET_AUTH_MUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${backup}`,
+  );
+  // Replay rows are ephemeral and never restored. Reconciliation and expiry
+  // cleanup run through schema-owner procedures, so the durable coordinator has
+  // no reason to mutate a live replay fence directly.
+  await client.query(
+    `REVOKE INSERT, UPDATE, DELETE ON ${qualifiedTable('hub_device_assertion_replays')} FROM ${backup}`,
+  );
+  // Companion creation is narrower than ordinary restore DML. The coordinator
+  // retains SELECT/UPDATE for lifecycle reconciliation, while restore INSERT is
+  // exposed only by the bounded schema-owner import procedure.
+  await client.query(
+    `REVOKE INSERT, DELETE ON ${qualifiedTable('companion_authority_state')} FROM ${backup}`,
   );
   await client.query(
     `GRANT SELECT, INSERT ON ${FLEET_AUTH_IMMUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${backup}`,
@@ -297,13 +379,34 @@ async function applyRoleGrants(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_REAPPROVE_FUNCTION_NAME}(${FLEET_AUTH_REAPPROVE_FUNCTION_ARG_TYPES}) TO ${runtime}`,
   );
   await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_REAPPROVE_COMPANION_FUNCTION_NAME}(${FLEET_AUTH_REAPPROVE_COMPANION_FUNCTION_ARG_TYPES}) TO ${runtime}`,
+  );
+  await client.query(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_FIRST_OWNER_FUNCTION_NAME}(${FLEET_AUTH_FIRST_OWNER_FUNCTION_ARG_TYPES}) TO ${runtime}`,
   );
   await client.query(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}(${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_ARG_TYPES}) TO ${runtime}`,
   );
   await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_LOCK_COMPANION_AUTHORITY_FUNCTION_NAME}(${FLEET_AUTH_LOCK_COMPANION_AUTHORITY_FUNCTION_ARG_TYPES}) TO ${runtime}`,
+  );
+  await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME}(${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_ARG_TYPES}) TO ${runtime}`,
+  );
+  await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_CONTACT_AUTHORITY_FENCE_FUNCTION_NAME}(${FLEET_AUTH_CONTACT_AUTHORITY_FENCE_FUNCTION_ARG_TYPES}) TO ${runtime}`,
+  );
+  await client.query(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_RECONCILE_FUNCTION_NAME}(${FLEET_AUTH_RECONCILE_FUNCTION_ARG_TYPES}) TO ${backup}`,
+  );
+  await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_CONSUME_HUB_REPLAY_FUNCTION_NAME}(${FLEET_AUTH_CONSUME_HUB_REPLAY_FUNCTION_ARG_TYPES}) TO ${runtime}`,
+  );
+  await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_NAME}(${FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_ARG_TYPES}) TO ${backup}`,
+  );
+  await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME}(${FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_ARG_TYPES}) TO ${backup}`,
   );
 }
 
@@ -318,9 +421,15 @@ async function applyFleetAuthReapprovalBoundary(
   client: import('pg').PoolClient,
 ): Promise<void> {
   await client.query(FLEET_AUTH_REAPPROVAL_DDL_SQL);
+  await client.query(FLEET_AUTH_COMPANION_REAPPROVAL_DDL_SQL);
   await client.query(FLEET_AUTH_FIRST_OWNER_DDL_SQL);
   await client.query(FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL);
+  await client.query(FLEET_AUTH_LOCK_COMPANION_AUTHORITY_DDL_SQL);
+  await client.query(FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_DDL_SQL);
+  await client.query(FLEET_AUTH_CONTACT_AUTHORITY_DDL_SQL);
   await client.query(FLEET_AUTH_RECONCILIATION_DDL_SQL);
+  await client.query(FLEET_AUTH_HUB_REPLAY_BOUNDARY_DDL_SQL);
+  await client.query(FLEET_AUTH_COMPANION_RESTORE_DDL_SQL);
 }
 
 export async function migrateFleetAuthSchema(options: {
@@ -494,9 +603,18 @@ async function assertExactDml(
   `, [FLEET_AUTH_SCHEMA_NAME, tables, TABLE_PRIVILEGES]);
   const mutable = new Set<string>(FLEET_AUTH_MUTABLE_TABLES);
   const immutable = new Set<string>(FLEET_AUTH_IMMUTABLE_TABLES);
+  const runtimeReadOnly = new Set<string>(FLEET_AUTH_RUNTIME_READ_ONLY_TABLES);
+  const runtimeImmutable = new Set<string>(FLEET_AUTH_RUNTIME_IMMUTABLE_TABLES);
   const expectedPrivileges = (tableName: string): ReadonlySet<string> => {
     if (mutable.has(tableName)) {
-      if (expectedRole === roles.runtime && tableName === 'authority_state') {
+      if (expectedRole === roles.runtime
+        && (tableName === 'lifecycle_decision_receipts'
+          || tableName === 'authority_floor_tombstone_projection'
+          || tableName === 'contact_authority_intents')) {
+        return new Set<string>();
+      }
+      if (expectedRole === roles.runtime
+        && (tableName === 'authority_state' || runtimeReadOnly.has(tableName))) {
         return new Set(['SELECT']);
       }
       // The runtime broker cannot author or tamper with trusted-host ceremonies;
@@ -505,9 +623,23 @@ async function assertExactDml(
       if (expectedRole === roles.runtime && tableName === 'trusted_host_ceremonies') {
         return new Set(['SELECT', 'DELETE']);
       }
+      if (tableName === 'hub_device_assertion_replays'
+        && (expectedRole === roles.runtime || expectedRole === roles.backupRestore)) {
+        return new Set(['SELECT']);
+      }
+      if (expectedRole === roles.backupRestore
+        && tableName === 'companion_authority_state') {
+        return new Set(['SELECT', 'UPDATE']);
+      }
       return new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE']);
     }
     if (immutable.has(tableName)) {
+      if (expectedRole === roles.runtime && runtimeReadOnly.has(tableName)) {
+        return new Set(['SELECT']);
+      }
+      if (expectedRole === roles.runtime && !runtimeImmutable.has(tableName)) {
+        return new Set<string>();
+      }
       return new Set(['SELECT', 'INSERT']);
     }
     return new Set<string>();

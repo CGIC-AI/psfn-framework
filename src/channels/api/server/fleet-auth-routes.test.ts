@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { Socket } from 'node:net';
+import { Readable } from 'node:stream';
 import { TLSSocket } from 'node:tls';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -50,6 +51,14 @@ function request(
   return { method, headers, socket } as IncomingMessage;
 }
 
+function jsonRequest(body: unknown, headers: IncomingMessage['headers']): IncomingMessage {
+  return Object.assign(Readable.from([JSON.stringify(body)]), {
+    method: 'POST',
+    headers,
+    socket: {},
+  }) as unknown as IncomingMessage;
+}
+
 function routes(overrides: Partial<Record<keyof GatewayFleetAuthBroker, unknown>> = {}) {
   const broker = {
     beginLogin: vi.fn(async () => ({
@@ -57,11 +66,17 @@ function routes(overrides: Partial<Record<keyof GatewayFleetAuthBroker, unknown>
       initiatingBrowserToken: 'p'.repeat(43),
       expiresAt: new Date('2099-07-15T12:05:00.000Z'),
     })),
-    completeCallback: vi.fn(async (input: { requestOrigin: string }) => {
+    beginLifecycleOAuth: vi.fn(async () => ({
+      authorizationUrl: 'https://discord.com/oauth2/authorize?state=lifecycle',
+      initiatingBrowserToken: 'q'.repeat(43),
+      expiresAt: new Date('2099-07-15T12:05:00.000Z'),
+    })),
+    completeOAuthCallback: vi.fn(async (input: { requestOrigin: string }) => {
       if (input.requestOrigin !== 'https://fleet.example.test') {
         throw new FleetAuthBrokerError('callback_origin_mismatch', 400);
       }
       return {
+        kind: 'login' as const,
         returnPath: '/fleet',
         session: {
           recordId: 'record',
@@ -125,7 +140,7 @@ describe('gateway-only fleet auth HTTP routes', () => {
       res,
       new URL('https://fleet.example.test/auth/discord/callback?state=opaque&code=code'),
     );
-    expect(broker.completeCallback).toHaveBeenCalledWith(expect.objectContaining({
+    expect(broker.completeOAuthCallback).toHaveBeenCalledWith(expect.objectContaining({
       requestOrigin: 'invalid://callback-origin',
     }));
     expect(res.statusCode).toBe(400);
@@ -148,7 +163,7 @@ describe('gateway-only fleet auth HTTP routes', () => {
     );
     expect(res.statusCode).toBe(303);
     expect(res.headers.get('location')).toBe('/fleet');
-    expect(broker.completeCallback).toHaveBeenCalledWith(expect.objectContaining({
+    expect(broker.completeOAuthCallback).toHaveBeenCalledWith(expect.objectContaining({
       initiatingBrowserToken: 'p'.repeat(43),
     }));
     expect(res.headers.get('set-cookie')).toEqual([
@@ -159,6 +174,129 @@ describe('gateway-only fleet auth HTTP routes', () => {
     ]);
     expect(res.body).toBe('');
     expect(String(res.headers.get('location'))).not.toContain('a'.repeat(43));
+    tlsSocket.destroy();
+  });
+
+  it('clears callback cookies and returns only the stable reauthentication response', async () => {
+    const { handler } = routes({
+      completeOAuthCallback: vi.fn(async () => {
+        throw new FleetAuthBrokerError(
+          'reauthentication_required',
+          401,
+          'Reauthentication is required',
+        );
+      }),
+    });
+    const res = response();
+    const tlsSocket = new TLSSocket(new Socket());
+    await handler.handle(
+      request('GET', {
+        host: 'fleet.example.test',
+        cookie: `__Host-psfn_preauth=${'p'.repeat(43)}`,
+      }, tlsSocket),
+      res,
+      new URL('https://fleet.example.test/auth/discord/callback?state=opaque&code=code'),
+    );
+
+    expect(res.statusCode).toBe(401);
+    expect(res.headers.get('set-cookie')).toEqual([
+      '__Host-psfn_preauth=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax',
+      '__Host-psfn_session=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax',
+    ]);
+    expect(JSON.parse(res.body)).toEqual({
+      error: {
+        type: 'reauthentication_required',
+        message: 'Reauthentication is required',
+      },
+    });
+    expect(res.body).not.toMatch(/provider|subject|token|secret/iu);
+    tlsSocket.destroy();
+  });
+
+  it('starts lifecycle OAuth only through an authenticated origin-and-CSRF-bound mutation', async () => {
+    const { handler, broker } = routes();
+    const res = response();
+    await handler.handle(
+      jsonRequest({
+        returnPath: '/fleet/providers',
+        ceremonyId: '00000000-0000-4000-8000-000000000301',
+        action: 'provider.replace',
+        proofRole: 'new',
+      }, {
+        cookie: `__Host-psfn_session=${'a'.repeat(43)}`,
+        origin: 'https://fleet.example.test',
+        'x-psfn-csrf': 'b'.repeat(43),
+      }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/lifecycle/oauth'),
+    );
+
+    expect(broker.beginLifecycleOAuth).toHaveBeenCalledWith({
+      token: 'a'.repeat(43),
+      csrfToken: 'b'.repeat(43),
+      requestOrigin: 'https://fleet.example.test',
+      returnPath: '/fleet/providers',
+      ceremonyId: '00000000-0000-4000-8000-000000000301',
+      action: 'provider.replace',
+      proofRole: 'new',
+    });
+    expect(res.statusCode).toBe(302);
+    expect(res.headers.get('location')).toBe(
+      'https://discord.com/oauth2/authorize?state=lifecycle',
+    );
+    expect(res.headers.get('set-cookie')).toMatch(
+      /^__Host-psfn_preauth=q{43}; Path=\/; Max-Age=\d+; Secure; HttpOnly; SameSite=Lax$/u,
+    );
+  });
+
+  it('returns a purpose-bound lifecycle proof without creating or exposing a session token', async () => {
+    const callbackTransactionId = '00000000-0000-4000-8000-000000000302';
+    const { handler } = routes({
+      completeOAuthCallback: vi.fn(async () => ({
+        kind: 'lifecycle' as const,
+        returnPath: '/fleet/providers',
+        ceremonyId: '00000000-0000-4000-8000-000000000301',
+        action: 'provider.replace' as const,
+        proofRole: 'new' as const,
+        proof: {
+          provider: 'discord' as const,
+          subjectId: '123456789012345679',
+          callbackTransactionId,
+          proofDigest: 'c'.repeat(64),
+        },
+      })),
+    });
+    const res = response();
+    const tlsSocket = new TLSSocket(new Socket());
+    await handler.handle(
+      request('GET', {
+        host: 'fleet.example.test',
+        cookie: `__Host-psfn_preauth=${'p'.repeat(43)}; __Host-psfn_session=${'a'.repeat(43)}`,
+      }, tlsSocket),
+      res,
+      new URL('https://fleet.example.test/auth/discord/callback?state=opaque&code=code'),
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers.get('set-cookie')).toBe(
+      '__Host-psfn_preauth=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax',
+    );
+    expect(JSON.parse(res.body)).toEqual({
+      kind: 'lifecycle',
+      returnPath: '/fleet/providers',
+      ceremonyId: '00000000-0000-4000-8000-000000000301',
+      action: 'provider.replace',
+      proofRole: 'new',
+      proof: {
+        provider: 'discord',
+        subjectId: '123456789012345679',
+        callbackTransactionId,
+        proofDigest: 'c'.repeat(64),
+      },
+    });
+    expect(res.body).not.toContain('a'.repeat(43));
+    expect(res.body).not.toContain('provider-access-secret');
+    expect(res.headers.get('location')).toBeUndefined();
     tlsSocket.destroy();
   });
 
@@ -196,5 +334,38 @@ describe('gateway-only fleet auth HTTP routes', () => {
     );
     expect(duplicate.statusCode).toBe(401);
     expect(broker.rotateSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the prior session cookie when rotation requires reauthentication', async () => {
+    const { handler } = routes({
+      rotateSession: vi.fn(async () => {
+        throw new FleetAuthBrokerError(
+          'reauthentication_required',
+          401,
+          'Reauthentication is required',
+        );
+      }),
+    });
+    const res = response();
+    await handler.handle(
+      request('POST', {
+        cookie: `__Host-psfn_session=${'a'.repeat(43)}`,
+        origin: 'https://fleet.example.test',
+        'x-psfn-csrf': 'b'.repeat(43),
+      }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/session/refresh'),
+    );
+
+    expect(res.statusCode).toBe(401);
+    expect(res.headers.get('set-cookie')).toBe(
+      '__Host-psfn_session=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax',
+    );
+    expect(JSON.parse(res.body)).toEqual({
+      error: {
+        type: 'reauthentication_required',
+        message: 'Reauthentication is required',
+      },
+    });
   });
 });

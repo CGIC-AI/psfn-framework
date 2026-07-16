@@ -47,7 +47,7 @@ import { loadSettings } from '../../system/settings.js';
 import { saveCapabilityTierConfig } from '../../system/config/capability-tier-config.js';
 import { loadModelsConfig, saveModelsConfig } from '../../system/config/models-config.js';
 import { loadSchedulerConfig, saveSchedulerConfig } from '../../system/config/scheduler-config.js';
-import { saveSkillsConfig } from '../../system/config/skills-config.js';
+import { loadSkillsConfig, saveSkillsConfig } from '../../system/config/skills-config.js';
 import { saveTrustPolicyConfig } from '../../system/config/trust-policy-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
@@ -522,6 +522,7 @@ describe('AdminServer JSON API routes', () => {
   let port: number;
   let refreshModelsSpy: ReturnType<typeof vi.fn>;
   let refreshCapabilitiesSpy: ReturnType<typeof vi.fn>;
+  let invalidateSkillsSpy: ReturnType<typeof vi.fn>;
   const token = 'test-admin-token';
   const authHeaders = {
     Authorization: `Bearer ${token}`,
@@ -532,6 +533,7 @@ describe('AdminServer JSON API routes', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'admin-api-test-'));
     refreshModelsSpy = vi.fn();
     refreshCapabilitiesSpy = vi.fn();
+    invalidateSkillsSpy = vi.fn();
     testConfig.runtimeHooks = {
       refreshModels: refreshModelsSpy,
       refreshCapabilities: refreshCapabilitiesSpy,
@@ -758,7 +760,11 @@ describe('AdminServer JSON API routes', () => {
       toolHealthProvider,
       skillsRuntime: {
         getSnapshot: () => null,
-        invalidate: () => {},
+        listManaged: () => [],
+        createSkill: vi.fn(),
+        updateSkill: vi.fn(),
+        deleteSkill: vi.fn(),
+        invalidate: invalidateSkillsSpy,
       } as any,
     });
     server = new AdminServer({
@@ -789,6 +795,70 @@ describe('AdminServer JSON API routes', () => {
     expect(authorized.status).toBe(200);
     const payload = JSON.parse(authorized.body) as { stats: { memoryTotal: number } };
     expect(payload.stats.memoryTotal).toBeGreaterThanOrEqual(0);
+  });
+
+  it('reads and toggles only the authenticated Garden companion skills owner file', async () => {
+    const companionBDir = join(tempDir, 'companion-b');
+    mkdirSync(companionBDir, { recursive: true });
+    const baseline = loadSkillsConfig(tempDir);
+    saveSkillsConfig(tempDir, {
+      ...baseline,
+      disabledSkills: ['calendar'],
+    });
+    saveSkillsConfig(companionBDir, {
+      ...baseline,
+      disabledSkills: ['email'],
+    });
+    const companionBBefore = readFileSync(join(companionBDir, 'skills.json'), 'utf8');
+
+    const unauthorized = await request(port, 'GET', '/api/admin/skills');
+    expect(unauthorized.status).toBe(401);
+
+    const listed = await request(port, 'GET', '/api/admin/skills', undefined, authHeaders);
+    expect(listed.status).toBe(200);
+    expect(JSON.parse(listed.body)).toMatchObject({
+      snapshot: null,
+      managed: [],
+      disabledSkills: ['calendar'],
+    });
+
+    const toggled = await request(
+      port,
+      'POST',
+      '/api/admin/skills/toggle',
+      JSON.stringify({ name: 'calendar' }),
+      authHeaders,
+    );
+    expect(toggled.status).toBe(200);
+    expect(JSON.parse(toggled.body)).toEqual({
+      ok: true,
+      name: 'calendar',
+      enabled: true,
+    });
+    expect(loadSkillsConfig(tempDir).disabledSkills).toEqual([]);
+    expect(readFileSync(join(companionBDir, 'skills.json'), 'utf8')).toBe(companionBBefore);
+    expect(invalidateSkillsSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed when the current companion skills owner file is missing or malformed', async () => {
+    rmSync(join(tempDir, 'skills.json'));
+
+    const missing = await request(port, 'GET', '/api/admin/skills', undefined, authHeaders);
+    expect(missing.status).toBe(500);
+
+    writeFileSync(join(tempDir, 'skills.json'), '{"enabled":"invalid"}\n', 'utf8');
+    const malformed = await request(
+      port,
+      'POST',
+      '/api/admin/skills/toggle',
+      JSON.stringify({ name: 'calendar' }),
+      authHeaders,
+    );
+    expect(malformed.status).toBe(400);
+    expect(JSON.parse(malformed.body)).toEqual(expect.objectContaining({
+      error: expect.stringContaining('Invalid skills config'),
+    }));
+    expect(invalidateSkillsSpy).not.toHaveBeenCalled();
   });
 
   it('exposes Garden concern management actions', async () => {

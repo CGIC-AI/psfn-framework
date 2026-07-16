@@ -58,6 +58,16 @@ import {
   type ApiDocumentIngestConfig,
 } from './session.js';
 import { SseStreamingTransport } from './streaming.js';
+import {
+  GatewayHubDeviceIngressService,
+  type AuthenticatedHubDeviceConnection,
+} from '../../../boundary/fleet-auth/hub-device-ingress.js';
+import type { HubDevicePrincipalSnapshot } from '../../../shared/contracts/hub-device-ingress.js';
+import {
+  HubDeviceIngressRequestError,
+  sanitizeHubDeviceChatRequest,
+} from './hub-device-ingress.js';
+import { HubDeviceAssertionRejectedError } from '../../../boundary/fleet-auth/hub-device-assertion.js';
 
 const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
 
@@ -120,6 +130,12 @@ export interface ApiChatCompletionsHandlerConfig {
   documentIngest: ApiDocumentIngestConfig | null;
 }
 
+export interface PendingHubDeviceAdmission {
+  assertion: string;
+  connection: AuthenticatedHubDeviceConnection;
+  ingress: GatewayHubDeviceIngressService;
+}
+
 export class ApiChatCompletionsHandler {
   private readonly agentLoop: SubstrateAgent;
   private readonly eventBus: EventBus;
@@ -160,14 +176,37 @@ export class ApiChatCompletionsHandler {
     res: ServerResponse,
     principal: ApiAuthPrincipal,
     clientCert?: SatelliteClientCertIdentity,
+    pendingHubDevice?: PendingHubDeviceAdmission,
   ): Promise<void> {
-    const parsed = await readChatCompletionRequest(req, res, this.logger);
+    let parsed = await readChatCompletionRequest(req, res, this.logger);
     if (!parsed) return;
 
+    let hubDevicePrincipal: HubDevicePrincipalSnapshot | undefined;
+    if (pendingHubDevice) {
+      try {
+        parsed = sanitizeHubDeviceChatRequest(parsed);
+        const admission = await pendingHubDevice.ingress.admit({
+          assertion: pendingHubDevice.assertion,
+          connection: pendingHubDevice.connection,
+        });
+        hubDevicePrincipal = admission.devicePrincipal;
+      } catch (error) {
+        if (error instanceof HubDeviceIngressRequestError) {
+          sendApiError(res, error.status, error.type, error.message);
+        } else if (error instanceof HubDeviceAssertionRejectedError) {
+          sendApiError(res, 401, 'hub_device_assertion_rejected', 'Hub device assertion was rejected');
+        } else {
+          this.logger.error('Hub device assertion verifier unavailable');
+          sendApiError(res, 503, 'hub_device_ingress_unavailable', 'Hub device authentication is temporarily unavailable');
+        }
+        return;
+      }
+    }
+
     if (parsed.stream) {
-      await this.handleStreaming(parsed, req, res, principal, clientCert);
+      await this.handleStreaming(parsed, req, res, principal, clientCert, hubDevicePrincipal);
     } else {
-      await this.handleNonStreaming(parsed, req, res, principal, clientCert);
+      await this.handleNonStreaming(parsed, req, res, principal, clientCert, hubDevicePrincipal);
     }
   }
 
@@ -883,6 +922,7 @@ export class ApiChatCompletionsHandler {
     res: ServerResponse,
     principal: ApiAuthPrincipal,
     clientCert: SatelliteClientCertIdentity | undefined,
+    hubDevicePrincipal: HubDevicePrincipalSnapshot | undefined,
   ): Promise<void> {
     const runtime = this.runtime;
     if (runtime) {
@@ -895,6 +935,7 @@ export class ApiChatCompletionsHandler {
             principal,
             headers: extractRpcHeaders(req),
             ...(clientCert ? { clientCert } : {}),
+            ...(hubDevicePrincipal ? { hubDevicePrincipal } : {}),
             signal,
           }),
         );
@@ -935,6 +976,11 @@ export class ApiChatCompletionsHandler {
       return;
     }
 
+    if (hubDevicePrincipal) {
+      sendApiError(res, 503, 'hub_device_ingress_unavailable', 'Hub device turns require the authenticated gateway runtime');
+      return;
+    }
+
     const turn = await this.startTurn(request, req, res, principal, clientCert);
     if (!turn) return;
 
@@ -972,6 +1018,7 @@ export class ApiChatCompletionsHandler {
     res: ServerResponse,
     principal: ApiAuthPrincipal,
     clientCert: SatelliteClientCertIdentity | undefined,
+    hubDevicePrincipal: HubDevicePrincipalSnapshot | undefined,
   ): Promise<void> {
     const completionId = `chatcmpl-${randomUUID()}`;
     const created = Math.floor(Date.now() / 1000);
@@ -995,6 +1042,7 @@ export class ApiChatCompletionsHandler {
             principal,
             headers: extractRpcHeaders(req),
             ...(clientCert ? { clientCert } : {}),
+            ...(hubDevicePrincipal ? { hubDevicePrincipal } : {}),
             signal,
             onDelta: (text) => {
               transport.writeContent(text);
@@ -1018,6 +1066,11 @@ export class ApiChatCompletionsHandler {
       } finally {
         transport.endIfWritable();
       }
+      return;
+    }
+
+    if (hubDevicePrincipal) {
+      sendApiError(res, 503, 'hub_device_ingress_unavailable', 'Hub device turns require the authenticated gateway runtime');
       return;
     }
 

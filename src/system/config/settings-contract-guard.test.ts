@@ -211,7 +211,7 @@ describe('settings contract guard', () => {
       id: 'chargePolicy',
       ownerFile: 'charge-policy.json',
       mode: 'raw_only',
-      scope: 'global',
+      scope: 'perCompanion',
     });
   });
 

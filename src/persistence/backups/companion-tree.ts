@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   copyFileSync,
+  constants,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -8,9 +9,9 @@ import {
   readdirSync,
   realpathSync,
 } from 'node:fs';
-import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { isStrictSubpath } from '../layout.js';
-import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import { fsyncTreeSync, writeJsonAtomic } from '../../shared/utils/fs.js';
 
 export const COMPANION_TREE_DIR_NAME = 'companion-tree';
 export const COMPANION_TREE_MANIFEST_NAME = 'companion-tree-manifest.json';
@@ -370,6 +371,86 @@ export function verifyTreeSnapshot(
     verifiedFileCount: manifest.files.length,
     totalBytes,
   };
+}
+
+/**
+ * Restore one verified tree capture into a pre-provisioned, empty directory.
+ * The caller must discard that destination if this throws: the no-overwrite
+ * contract makes a partially restored fresh PVC unambiguously unusable.
+ */
+export function restoreTreeSnapshotToEmptyDirectory(input: {
+  backupDir: string;
+  treeDirName: string;
+  manifestName: string;
+  label: string;
+  destinationDir: string;
+}): TreeSnapshotVerificationResult {
+  verifyTreeSnapshot(
+    input.backupDir,
+    input.treeDirName,
+    input.manifestName,
+    input.label,
+  );
+  const destinationDir = resolve(input.destinationDir);
+  if (!existsSync(destinationDir)
+    || !lstatSync(destinationDir).isDirectory()
+    || realpathSync(destinationDir) !== destinationDir) {
+    throw new Error(`${input.label} restore destination must be a pre-existing directory without symlinks: ${destinationDir}`);
+  }
+  if (readdirSync(destinationDir).length > 0) {
+    throw new Error(`${input.label} restore destination must be empty: ${destinationDir}`);
+  }
+
+  const treeDir = join(input.backupDir, input.treeDirName);
+  const manifest = JSON.parse(
+    readFileSync(join(input.backupDir, input.manifestName), 'utf8'),
+  ) as TreeSnapshotManifest;
+  try {
+    for (const entry of manifest.files) {
+      const sourcePath = resolveManifestEntryPath(treeDir, entry.path, input.label);
+      const destinationPath = resolveManifestEntryPath(destinationDir, entry.path, input.label);
+      mkdirSync(dirname(destinationPath), { recursive: true });
+      copyFileSync(sourcePath, destinationPath, constants.COPYFILE_EXCL);
+    }
+    fsyncTreeSync(destinationDir);
+    const expectedPaths = new Set(manifest.files.map(entry => entry.path));
+    const presentPaths: string[] = [];
+    const walk = (relativeDir: string): void => {
+      const current = relativeDir ? join(destinationDir, relativeDir) : destinationDir;
+      for (const entry of readdirSync(current, { withFileTypes: true })) {
+        const relativePath = relativeDir ? join(relativeDir, entry.name) : entry.name;
+        if (entry.isDirectory()) {
+          walk(relativePath);
+        } else {
+          presentPaths.push(toManifestPath(relativePath));
+        }
+      }
+    };
+    walk('');
+    if (presentPaths.some(path => !expectedPaths.has(path))
+      || presentPaths.length !== expectedPaths.size) {
+      throw new Error(`${input.label} restored destination does not match its manifest`);
+    }
+    let totalBytes = 0;
+    for (const entry of manifest.files) {
+      const restoredPath = resolveManifestEntryPath(destinationDir, entry.path, input.label);
+      const actual = hashVerifiedManifestFile(
+        restoredPath,
+        realpathSync(destinationDir),
+        entry.path,
+        input.label,
+      );
+      if (actual.sha256 !== entry.sha256 || actual.sizeBytes !== entry.sizeBytes) {
+        throw new Error(`${input.label} restored destination hash mismatch for ${entry.path}`);
+      }
+      totalBytes += actual.sizeBytes;
+    }
+    return { verifiedFileCount: manifest.files.length, totalBytes };
+  } catch (error) {
+    throw new Error(
+      `${input.label} restore failed; discard the partially restored fresh destination ${destinationDir}: ${String(error)}`,
+    );
+  }
 }
 
 /**

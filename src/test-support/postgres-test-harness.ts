@@ -163,7 +163,7 @@ export async function startPostgresTestHarness(options: PostgresTestHarnessOptio
     allowExitOnIdle: true,
     max: 1,
   });
-  const clientRoot = mkdtempSync(join(tmpdir(), 'postgres-test-clients-'));
+  const clientRoot = mkdtempSync(join(tmpdir(), 'psfn-postgres-clients-'));
   const clientBinaries: PostgresTestClientBinaries = {
     pgDumpBinary: writeDockerPostgresClient(clientRoot, image, 'pg_dump'),
     pgRestoreBinary: writeDockerPostgresClient(clientRoot, image, 'pg_restore'),
@@ -186,7 +186,7 @@ export async function startPostgresTestHarness(options: PostgresTestHarnessOptio
       };
     },
     async stop(): Promise<void> {
-      await adminPool.end();
+      await adminPool.end().catch(() => undefined);
       try {
         runDocker(['stop', containerId]);
       } finally {

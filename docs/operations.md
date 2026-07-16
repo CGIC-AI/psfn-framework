@@ -134,6 +134,18 @@ Use `--dry-run` first. Keep authoritative env and runtime wiring in the deployed
 
 ### Helm upgrade for per-companion scheduler and capability owners
 
+Before this per-release Helm procedure, inspect the fleet-wide owner boundary.
+If `charge-policy.json` or `skills.json` is still under `SYSTEM_DATA_DIR`, stop
+every release and complete the digest-approved
+[`migrate:system-owner-fleet`](#existing-split-fleets-with-shared-per-companion-owners)
+procedure once across every exact root in `companions.json`. The chart mounts
+only one companion root per release, so its init container cannot perform that
+fleet-wide fan-out and intentionally refuses to treat seed files as a
+migration. Run the command from a repo-owned maintenance environment where the
+system-data PVC and every manifest companion-data PVC are mounted at their
+production paths. Do not start any individual Helm upgrade until the fleet
+preflight passes with `bootstrap.seedOwnerFiles=false`.
+
 Releases created before the per-companion ownership cutover have
 `scheduler.json` and `capability-tier.json` under `SYSTEM_DATA_DIR`. Current
 runtime code requires both under `COMPANION_DATA_DIR` and does not fall back to
@@ -211,9 +223,10 @@ Before upgrading each release:
      --wait --timeout 10m
    ```
 
-   This is the complete forward migration for both boundaries. Do not manually
-   rewrite the live scheduler or run an off-chart workaround. Apply it once to
-   every Helm release/companion root when updating the other clusters.
+   This completes the scheduler/capability Helm routing and scheduler-schema
+   boundaries. The separate charge/skills fleet transaction above must already
+   be complete. Do not manually rewrite the live scheduler or run an off-chart
+   workaround. Apply the Helm upgrade once to every release/companion root.
 
 4. Require all app rollouts, normal service smokes, and the owner checks:
 
@@ -222,11 +235,15 @@ Before upgrading each release:
    kubectl -n "$NAMESPACE" rollout status deploy/psfn-gateway --timeout=300s
    kubectl -n "$NAMESPACE" rollout status deploy/psfn-garden --timeout=300s
    kubectl -n "$NAMESPACE" exec deploy/psfn-agent -- sh -c '
-     for file in scheduler.json capability-tier.json; do
+     for file in scheduler.json capability-tier.json charge-policy.json skills.json; do
        test -f "/app/companion-data/$file"
+     done
+     for file in scheduler.json capability-tier.json; do
        test -f "/app/companion-data/.owner-migrations/$file.from-system.sha256" \
          || test ! -f "/app/system-data/$file"
      done
+     test ! -f /app/system-data/charge-policy.json
+     test ! -f /app/system-data/skills.json
    '
    ```
 
@@ -414,7 +431,7 @@ the full self-update → validate → auto/manual rollback flow is
 `src/app/e2e/kube-self-update-e2e.test.ts`, gated behind `PSFN_K3D_E2E` (`npm run
 e2e:kube-self-update`) so normal unit runs need no cluster or docker daemon; it
 provisions and tears down its own disposable k3d cluster and never touches
-any live host, live namespace, or real PVC.
+an operator-managed cluster, live namespaces, or any real PVC.
 
 ## Host-Specific Storage Validation
 
@@ -494,11 +511,126 @@ The cutover tooling:
 
 Production startup should not proceed until the cutover plan is clean.
 
+### Existing split fleets with shared per-companion owners
+
+Fleets created before per-companion owner-file rooting may still have
+`charge-policy.json` or `skills.json` (and potentially the other registered
+per-companion owners) under `SYSTEM_DATA_DIR`. Stop every fleet process. Verify
+that every exact `companionDataDir` from `companions.json` is already mounted;
+the migration never creates a missing PVC root. Capture the mechanically
+verified whole-fleet snapshot before inspecting or applying the fan-out:
+
+```bash
+npm run snapshot:system-owner-fleet -- \
+  --output "$BACKUP_ROOT_DIR/pre-system-owner-fleet-<timestamp>"
+npm run migrate:system-owner-fleet
+```
+
+The snapshot command writes one cluster/system tree plus one
+`companions/<companion-id>/...` tree for every manifest root. Each tree has a
+per-file digest manifest, and the fleet manifest binds those manifests by
+SHA-256. Any excluded or special file fails capture; a partial family is
+removed and cannot be used as rollback evidence.
+
+The plan prints one `--approve <owner-file>=<sha256>` argument for every
+system-root source it found. Review the enumerated companion destinations and
+run the apply command with all printed approvals, for example:
+
+```bash
+npm run migrate:system-owner-fleet -- --apply \
+  --approve charge-policy.json=<exact-sha256> \
+  --approve skills.json=<exact-sha256>
+```
+
+The final Helm chart can rehearse the same transaction as one explicit
+pre-upgrade boundary. Set `ownerMigration.required=true`, keep
+`bootstrap.seedOwnerFiles=false`, bind the exact printed approvals, and list
+the system, backup, and every companion PVC with the same canonical paths used
+by `companions.json`. The hook captures the whole-fleet snapshot before its
+canonical compiled migration init container runs; packaged per-companion probes
+must then prove distinct writable owners before Helm admits the new revision.
+This is not an automatic fallback: the feature is disabled by default, missing
+or duplicated claims and paths fail closed, and it must be removed from values
+after the one-time cutover. `npm run e2e:kube-owner-upgrade` exercises the real
+old-chart install, final-chart upgrade, failure matrix, and fresh-PVC old-chart
+restore.
+
+The supported command validates `charge-policy.json` and `skills.json` with
+their canonical runtime schemas before it creates or mutates a migration
+object. A new receipt validates the pinned system-root sources. Receipt-bound
+recovery validates the live source while it exists and, after quarantine,
+validates the current owner at every identity-bound exact destination. Valid
+atomic post-migration owner edits are allowed; malformed old receipt state or a
+malformed current owner fails closed. Malformed JSON or schema drift therefore
+leaves the source and every companion root unchanged. Keep
+`bootstrap.seedOwnerFiles=false`; a seed copy is new default state, not
+preserved operator state and cannot certify this migration.
+
+The command first durably writes a bootstrap receipt at
+`SYSTEM_DATA_DIR/migrations/system-owner-fleet-reroot.json`. That receipt binds
+unpredictable operation, quarantine, staging, and copy identifiers before any
+quarantine or staging directory is created. Each created directory and copy is
+then fsynced and bound to its filesystem identity in the receipt before use. The
+command copies without overwrite or merge, verifies every destination digest,
+and only then atomically moves the exact source into its receipt-owned quarantine
+directory. Receipt, quarantine, and private destination staging directories are
+descriptor-pinned; symlinked ancestors or identity changes fail closed.
+
+Receipt-recorded staging hard links and any superseded, unbound crash remnants
+are retained so cleanup never becomes a pathname check-then-delete. Do not
+remove them before this alpha migration support is retired. If interrupted,
+repeat the exact apply command: only an identity-bound partial copy that is an
+exact prefix of the approved source is resumed. An unbound copy is durably
+superseded under a new receipt-recorded identifier and preserved for operator
+inspection. Unknown artifacts, replacements, changed sources, a changed fleet,
+pre-existing destinations, or destination tampering are hard conflicts; the
+tool never deletes the evidence or chooses a winner. After
+completion, run
+`npm run preflight:startup-owner-files` in the target runtime environment before
+restarting the fleet. The runtime preflight validates global owners at
+`SYSTEM_DATA_DIR` once and every per-companion owner at each exact root resolved
+from `companions.json`; an owner in another companion root or a system-root
+decoy cannot satisfy the check. `npm run verify:startup-owner-files` is the
+separate repository gate: it validates distributed seeds in a disposable,
+explicit split-root fixture and is never called by the launcher.
+
+Rollback is a whole-fleet restore boundary. If an old release must be restored
+after charge/skills fan-out, stop every fleet process and provision a fresh,
+empty system-data PVC plus one fresh, empty companion-data PVC for every
+manifest entry. Mount them beneath one fresh runtime root using the original
+relative paths, then rehearse/perform the verified restore:
+
+```bash
+npm run restore:system-owner-fleet-snapshot -- \
+  --manifest "$BACKUP_ROOT_DIR/pre-system-owner-fleet-<timestamp>/system-owner-fleet-snapshot.json" \
+  --restore-runtime-root <fresh-runtime-root>
+```
+
+The restore verifies the whole artifact family before its first write and
+refuses non-empty destinations. If it fails after writing begins, discard the
+entire fresh PVC set; never reuse a partial restore. Point the old release only
+at the successfully restored PVC family, run its startup preflight, and then
+reopen traffic. Do not copy the quarantined
+source back by hand, selectively restore one companion, delete the receipt, or
+reuse a partially migrated root: those actions sever the receipt's provenance
+and can reintroduce a shared owner alongside individuated state. Forward
+recovery is to fix the reported conflict and repeat the same digest-approved
+apply command; rollback is the verified all-root backup restore.
+
 ## Migration Boundary Until Beta
 
 The live alpha migration boundary is defined in [`docs/specifications.md`](./specifications.md). Operationally, keep migration support explicit and temporary:
 
 - Use `npm run migrate:persistence-layout` for legacy shared-root data. Do not keep the old shared root mounted as a runtime fallback after cutover.
+- Use `npm run migrate:system-owner-fleet` only for the receipt-bearing alpha
+  fan-out of registered per-companion owner files left in a current split
+  fleet's system root. Do not point the single-companion persistence cutover at
+  `SYSTEM_DATA_DIR` and do not retain a shared fallback reader.
+- Use `npm run migrate:scheduler-owner -- --data-dir <exact-companion-data-dir>`
+  only as an explicit one-companion alpha owner-shape migration. The standard
+  launcher never runs it, and the command refuses to infer a system, shared, or
+  companion root. Run it separately for each intended companion, then run the
+  runtime startup-owner preflight before restarting the fleet.
 - Use continuous/local `DATA_DIR` only for local development and smoke testing. Production must use split roots and fail closed on shared-root or partial split-root wiring.
 - Keep `WORKSPACE_PATH` as one companion's Personal Workspace. It must not
   overlap runtime data roots; live Purrsephone personal files live under
@@ -507,7 +639,9 @@ The live alpha migration boundary is defined in [`docs/specifications.md`](./spe
   not yet a per-companion isolation boundary; see the workspace warning above.
 - Treat owner-file drift warnings as cleanup signals, not as permission to keep `.env` as mutable config authority.
 - Review config, startup, persistence, and tool-surface changes against the live boundary. If a compatibility path is not named there, reject it, make it fail closed, or track it for beta removal before expanding it.
-- When migration-boundary guidance changes, run `npm run verify:settings-contract` and `npm run verify:startup-owner-files` in addition to the affected runtime validation.
+- When migration-boundary guidance changes, run `npm run verify:settings-contract`
+  and `npm run verify:startup-owner-files`, plus
+  `npm run preflight:startup-owner-files` in the affected runtime environment.
 
 ## Persistence Backends
 
@@ -674,7 +808,7 @@ authorization and redaction contracts.
 - Backups are encrypted at rest. `backup.json` declares `encryption.mode: "required"` and an env key reference; the actual key material stays in `PSFN_BACKUP_ENCRYPTION_KEY` or another configured env secret. Startup fails closed when the key is missing.
 - Under the PostgreSQL runtime backend the scheduled backup stages a `pg_dump` custom-format archive (requires `pg_dump`/`pg_restore` on PATH) plus session JSONL, memory mutation ledger, and character-card files; the scheduler refuses to start without a database backup source.
 - The scheduled backup also stages the full companion-data file tree (journals, generated media/selfies, vault notes, prompt and card history, scratchpad) into `companion-tree/` with a per-file sha256 manifest; the walk is exhaustive except for sessions (captured separately), backup targets, and repair snapshots, so new companion-authored file classes can never silently fall out of scope.
-- System-data JSON owner files are staged into `system-config/` with a per-file sha256 manifest. This includes `settings.json`, `models.json`, `providers.json`, `channels.json`, `backup.json`, `skills.json`, `trust-policy.json`, `charge-policy.json`, and `intake-policy.json` when present. `.env`, generated systemd env files, and raw provider/channel secrets are not copied by this system-config snapshot. `capability-tier.json` (dnll.2) and `scheduler.json` (dnll.3) are per-companion owner files rooted at `companionDataDir`, so they are captured by the exhaustive `companion-tree` slice above, not this cluster-global system-config slice.
+- System-data JSON owner files are staged into `system-config/` with a per-file sha256 manifest. This includes `settings.json`, `models.json`, `providers.json`, `channels.json`, `backup.json`, `trust-policy.json`, and `intake-policy.json` when present. `.env`, generated systemd env files, and raw provider/channel secrets are not copied by this system-config snapshot. `capability-tier.json`, `scheduler.json`, `charge-policy.json`, and `skills.json` are per-companion owner files rooted at `companionDataDir`, so they are captured by the exhaustive `companion-tree` slice above, not this cluster-global system-config slice.
 - Helm deployments also stage `helm-recovery/`: the recovery-safe deployable files from the repo-owned `deploy/helm/psfn` chart plus a versioned descriptor containing release name, namespace, Helm revision, an exact chart-content digest, and the effective agent/gateway/Garden image references. Documentation files, live Helm values, rendered manifests, Kubernetes Secret objects, and secret material are deliberately excluded. Real YAML parsing rejects secret-bearing values regardless of quoting, inline-map, or snake-case syntax; unsupported overlays, packed/opaque subcharts, special files, and source/destination overlap fail closed before capture writes anything. The chart has a per-file sha256 manifest and is verified before encryption and again by `verify:backup-restore`.
 - Every snapshot contains `backup-contents.json`, which records whether Helm recovery is `required` or `absent`. In production this marker is inside the authenticated encrypted payload, so deleting the entire Helm subtree cannot make a Kubernetes backup masquerade as a non-Kubernetes backup. Restore operators still re-provision credentials and review deployment-specific overrides rather than replaying stale secrets.
 - The configured Personal Workspace is staged separately into `workspace-tree/` with its own sha256 manifest. This covers its docs, downloads, images, journal/scratchpad files, authored skills/modules, experiments, and canonical `knowledge/wiki/` store. In fleet mode, each companion slice contains only that companion's Personal Workspace; the cluster artifact contains only the governed Shared Companion Workspace. Group mode captures the complete `workspaces/` parent in its one family artifact. Runtime roots, backup targets, VCS metadata, dependency directories, caches, and temp directories are excluded and recorded in the manifest.
@@ -977,7 +1111,11 @@ npm run test:leak-matrix
 - `npm run test:leak-matrix` runs the Context Envelope leak-rate test family (`src/core/session/group-chat-harness/envelope-leak-matrix.test.ts`, E3.6). A documented ~26-row corner matrix (envelope class x sensitivity x trust tier, plus consent/disclosure-boundary/high-intimacy-contact-scope corners) drives the REAL `MemoryRetriever.retrieve` gating pipeline (`evaluateRetrievalAccessDecision` / `evaluateMemoryPolicy`) against synthetic sentinel memories -- not the unit-level gate suite in `src/system/trust/envelope-gating.test.ts` (E3.3), which this suite complements rather than duplicates. Every forbidden corner asserts zero leak of the sentinel text through the assembled output plus the correct withheld reason code (via the label `formatMemoryWithheldReasonLabel` renders); every allowed corner asserts presence, including positive controls for the room->DM-of-member, trust-ceiling, high-intimacy-contact-scope, and consent-granted paths. It reuses the group-chat-harness fixtures and adds a small set of additive fixture variants (a broadcast channel, an anonymous-audience room, and consent-flagged/boundary-tagged/contact-scoped sentinel memories) to `group-chat-harness/fixtures.ts`.
 - `npm run test:prompt-goldens` runs the prompt-shape golden suite (`src/core/session/group-chat-harness/prompt-shape-goldens.test.ts`). Six deterministic golden snapshots under `group-chat-harness/goldens/` freeze the full rendered system prompt plus ordered block list for DM, group, heartbeat, DM-scoped reflection, DM-with-memories, and group-with-withheld-memories turns, and the suite also asserts the frozen static prompt prefix is byte-equal across consecutive turns. A failing golden means the assembled prompt shape changed: never blind re-record. For an intentional shape change, regenerate with `npx vitest run src/core/session/group-chat-harness/prompt-shape-goldens.test.ts -u`, review the golden diff like code, and explain the block-level change in the PR; then run `npm run test:prompt-goldens` twice to prove determinism. The full update procedure is documented in the test file header.
 - `npm run smoke:chat` exercises the split-runtime admin bootstrap and chat completion path; set `PSFN_SMOKE_REPORT_PATH=/tmp/psfn-smoke-report.json` to capture a JSON artifact with the bootstrap, chat, and optional voice checks.
-- `npm run verify:startup-owner-files` is the canonical startup preflight for the split-runtime owner-file contract; `npm run e2e` assumes that preflight has already passed.
+- `npm run verify:startup-owner-files` validates repository seeds against an
+  explicit isolated split-root fixture. `npm run preflight:startup-owner-files`
+  validates the real runtime roots and topology without creating fixtures; the
+  launcher runs it immediately before the gateway. `npm run e2e` uses its own
+  isolated runtime harness.
 - `npm run e2e` uses the isolated split-runtime harness under `src/app/e2e/e2e-test.ts`, with scripted local LLM responses so it does not consume ambient repo owner files or external model credentials.
 - `npm run e2e:voice` exercises the isolated voice round-trip harness on the split runtime.
 - Offline eval, validation, and model-experimentation commands live in the sibling `../psfn-eval-toolkit` repository.

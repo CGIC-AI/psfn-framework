@@ -15,10 +15,28 @@ import { parseAllDocuments } from 'yaml';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const chartDir = resolve(repoRoot, 'deploy/helm/psfn');
+const ownerUpgradeGatePath = resolve(
+  repoRoot,
+  'scripts/verify-helm-charge-skills-owner-upgrade-k3d.mjs',
+);
 const recoveryChartDigest = readFileSync(
   resolve(chartDir, 'recovery-chart.sha256'),
   'utf8',
 ).trim();
+
+function assertRealOwnerUpgradeGate() {
+  const gate = readFileSync(ownerUpgradeGatePath, 'utf8');
+  assertIncludes(gate, 'installOldRelease(', 'owner-upgrade Helm install');
+  assertIncludes(gate, 'upgradeFinal(', 'owner-upgrade Helm upgrade');
+  assertIncludes(gate, 'required: true', 'required owner migration');
+  assertIncludes(
+    gate,
+    'seedOwnerFiles: overrides.seedOwnerFiles ?? false',
+    'owner seeding disabled',
+  );
+  assertNotIncludes(gate, 'renderedStartupCommand(', 'extracted init command surrogate');
+  assertNotIncludes(gate, 'helm-startup-', 'standalone Helm startup Job surrogate');
+}
 
 function render(args = []) {
   return execFileSync('helm', [
@@ -149,6 +167,43 @@ function renderOwnerMigrationFixture(rootDir, seedOwnerFiles) {
   };
 }
 
+function ownerMigrationRenderArgs(companions = [
+  {
+    companionId: 'one',
+    claimName: 'owner-one',
+    mountPath: '/runtime/companions/one',
+    expectedIdentity: 'companion-1',
+  },
+  {
+    companionId: 'two',
+    claimName: 'owner-two',
+    mountPath: '/runtime/companions/two',
+    expectedIdentity: 'companion-2',
+  },
+]) {
+  return [
+    '--set', 'ownerMigration.required=true',
+    '--set', 'ownerMigration.enabled=true',
+    '--set-string', 'ownerMigration.systemDataClaim=owner-system',
+    '--set-string', 'ownerMigration.backupsClaim=owner-backups',
+    '--set-json', `ownerMigration.approvals={"charge-policy.json":"${'a'.repeat(64)}","skills.json":"${'b'.repeat(64)}"}`,
+    '--set-json', `ownerMigration.companions=${JSON.stringify(companions)}`,
+    '--set', 'ownerMigration.verification.enabled=true',
+    '--set', 'ownerMigration.verification.initialChargeQuota=27',
+    '--set', 'ownerMigration.verification.initialMaxLoadedSkills=36',
+    '--set-string', `psfnAppImage.digest=sha256:${'d'.repeat(64)}`,
+    '--set-string', 'persistence.systemData.existingClaim=owner-system',
+    '--set-string', 'persistence.companionData.existingClaim=owner-one',
+    '--set-string', 'persistence.workspace.existingClaim=owner-workspace',
+    '--set-string', 'persistence.runtime.existingClaim=owner-runtime',
+    '--set', 'persistence.modelCache.enabled=false',
+  ];
+}
+
+function renderFleetOwnerUpgradeHook() {
+  return render(ownerMigrationRenderArgs());
+}
+
 function runOwnerMigrationCommand(command, expectedStatus = 0) {
   const result = spawnSync('sh', ['-c', command], {
     cwd: repoRoot,
@@ -210,6 +265,86 @@ function assertServiceSelectorsDoNotSelectPrefetch(rendered, label) {
 }
 
 const rendered = render();
+
+assertRealOwnerUpgradeGate();
+
+const ownerUpgradeRendered = renderFleetOwnerUpgradeHook();
+const ownerUpgradeJob = parseAllDocuments(ownerUpgradeRendered)
+  .map(document => document.toJS())
+  .find(document => (
+    document?.kind === 'Job'
+    && document?.metadata?.labels?.['app.kubernetes.io/component'] === 'owner-migration'
+  ));
+if (!ownerUpgradeJob) throw new Error('ownerMigration.enabled did not render the pre-upgrade Job');
+if (ownerUpgradeJob.metadata.annotations?.['helm.sh/hook'] !== 'pre-upgrade') {
+  throw new Error('owner migration Job is not ordered as a pre-upgrade hook');
+}
+const ownerUpgradeInit = ownerUpgradeJob.spec.template.spec.initContainers;
+if (ownerUpgradeInit.map(container => container.name).join(',')
+    !== 'snapshot-whole-fleet,migrate-system-owner-fleet') {
+  throw new Error('owner migration snapshot/migration init ordering changed');
+}
+if (ownerUpgradeInit[1].command?.[1] !== '/app/dist/migrate-system-owner-fleet.js') {
+  throw new Error('owner migration hook does not use the canonical compiled entrypoint');
+}
+const ownerUpgradeMounts = new Map(
+  ownerUpgradeInit[1].volumeMounts.map(mount => [mount.name, mount.mountPath]),
+);
+for (const [name, path] of [
+  ['system-data', '/runtime/system-data'],
+  ['companion-0', '/runtime/companions/one'],
+  ['companion-1', '/runtime/companions/two'],
+]) {
+  if (ownerUpgradeMounts.get(name) !== path) {
+    throw new Error(`owner migration exact mount changed for ${name}`);
+  }
+}
+if (ownerUpgradeJob.spec.template.spec.containers.length !== 2) {
+  throw new Error('owner migration hook must render two packaged companion probes');
+}
+for (const probe of ownerUpgradeJob.spec.template.spec.containers) {
+  if (probe.command?.[1] !== '/app/dist/owner-upgrade-readiness-probe.js') {
+    throw new Error(`${probe.name} is not the packaged owner readiness probe`);
+  }
+  const ownerMount = probe.volumeMounts.find(mount => mount.name.startsWith('companion-'));
+  if (!ownerMount?.readOnly) {
+    throw new Error(`${probe.name} must observe its companion owner root read-only`);
+  }
+}
+for (const claimName of ['psfn-system-data', 'psfn-companion-data', 'psfn-workspace', 'psfn-runtime']) {
+  if (findDocumentByKindName(ownerUpgradeRendered, 'PersistentVolumeClaim', claimName)) {
+    throw new Error(`existing owner claim was unexpectedly recreated: ${claimName}`);
+  }
+}
+assertRenderFails(
+  ['--set', 'ownerMigration.required=true'],
+  'ownerMigration.required=true requires ownerMigration.enabled=true',
+);
+assertRenderFails(
+  [
+    '--set', 'ownerMigration.required=true',
+    '--set', 'ownerMigration.enabled=true',
+    '--set', 'bootstrap.seedOwnerFiles=true',
+  ],
+  'ownerMigration.enabled=true requires bootstrap.seedOwnerFiles=false',
+);
+assertRenderFails(
+  ownerMigrationRenderArgs([
+    {
+      companionId: 'one',
+      claimName: 'owner-shared',
+      mountPath: '/runtime/companions/one',
+      expectedIdentity: 'companion-1',
+    },
+    {
+      companionId: 'two',
+      claimName: 'owner-shared',
+      mountPath: '/runtime/companions/two',
+      expectedIdentity: 'companion-2',
+    },
+  ]),
+  'ownerMigration companion claimName is duplicated: owner-shared',
+);
 
 for (const spiffe of [
   'spiffe://cluster.local/psfn/gateway/companion',
@@ -585,23 +720,55 @@ assertIncludes(
 );
 assertIncludes(
   seededRender,
+  'capability-tier.json|scheduler.json|charge-policy.json|skills.json)',
+  'per-companion owner-file bootstrap partition',
+);
+assertIncludes(
+  seededRender,
+  'target_root="/app/companion-data"',
+  'per-companion owner-file bootstrap root',
+);
+assertIncludes(
+  seededRender,
+  'target_root="/app/system-data"',
+  'system owner-file bootstrap root',
+);
+assertNotIncludes(
+  seededRender,
+  'target="/app/system-data/${base%.seed.json}.json"',
+  'obsolete all-owner system-data bootstrap target',
+);
+
+for (const [companionId, companionDataDir] of [
+  ['aria', '/app/fleet/companions/aria'],
+  ['beatrix', '/app/fleet/companions/beatrix'],
+]) {
+  const companionRender = render([
+    '--set',
+    'bootstrap.seedOwnerFiles=true',
+    '--set-string',
+    `runtime.companionId=${companionId}`,
+    '--set-string',
+    `runtime.companionDataDir=${companionDataDir}`,
+    '--set-string',
+    `runtime.characterCardPath=${companionDataDir}/companion.json`,
+  ]);
+  assertIncludes(
+    companionRender,
+    `target_root="${companionDataDir}"`,
+    `${companionId} per-companion owner-file bootstrap root`,
+  );
+  assertIncludes(
+    companionRender,
+    'target_root="/app/system-data"',
+    `${companionId} system owner-file bootstrap root`,
+  );
+}
+
+assertIncludes(
+  seededRender,
   'node /app/dist/migrate-scheduler-owner.js',
   'compiled scheduler schema migration before runtime startup',
-);
-assertIncludes(
-  seededRender,
-  'scheduler|capability-tier)',
-  'per-companion owner-file routing registry',
-);
-assertIncludes(
-  seededRender,
-  'target="/app/companion-data/${base}.json"',
-  'per-companion owner-file seeding targets companion-data',
-);
-assertIncludes(
-  seededRender,
-  'target="/app/system-data/${base}.json"',
-  'cluster-global owner-file seeding targets system-data',
 );
 
 const schedulerSeed = readFileSync(resolve(repoRoot, 'config/scheduler.seed.json'), 'utf8');
@@ -613,7 +780,18 @@ const capabilityTierSeed = readFileSync(
   resolve(repoRoot, 'config/capability-tier.seed.json'),
   'utf8',
 );
+const chargePolicySeed = readFileSync(
+  resolve(repoRoot, 'config/charge-policy.seed.json'),
+  'utf8',
+);
+const skillsSeed = readFileSync(resolve(repoRoot, 'config/skills.seed.json'), 'utf8');
 const perCompanionOwners = new Map([
+  ['scheduler.json', schedulerSeed],
+  ['capability-tier.json', capabilityTierSeed],
+  ['charge-policy.json', chargePolicySeed],
+  ['skills.json', skillsSeed],
+]);
+const helmAutoMigratedOwners = new Map([
   ['scheduler.json', schedulerSeed],
   ['capability-tier.json', capabilityTierSeed],
 ]);
@@ -634,6 +812,11 @@ try {
   ]);
   for (const [fileName, contents] of legacyOwners) {
     writeFileSync(join(fixture.systemDataDir, fileName), contents, 'utf8');
+  }
+  for (const [fileName, contents] of perCompanionOwners) {
+    if (!helmAutoMigratedOwners.has(fileName)) {
+      writeFileSync(join(fixture.companionDataDir, fileName), contents, 'utf8');
+    }
   }
 
   // The same shared PVCs are mounted by all three workload init containers.
@@ -722,18 +905,32 @@ try {
   const fixture = renderOwnerMigrationFixture(identicalRoot, false);
   mkdirSync(fixture.systemDataDir, { recursive: true });
   mkdirSync(fixture.companionDataDir, { recursive: true });
-  for (const [fileName, contents] of perCompanionOwners) {
+  for (const [fileName, contents] of helmAutoMigratedOwners) {
     writeFileSync(join(fixture.systemDataDir, fileName), contents, 'utf8');
     writeFileSync(join(fixture.companionDataDir, fileName), contents, 'utf8');
   }
+  for (const [fileName, contents] of perCompanionOwners) {
+    if (!helmAutoMigratedOwners.has(fileName)) {
+      writeFileSync(join(fixture.companionDataDir, fileName), contents, 'utf8');
+    }
+  }
   runOwnerMigrationCommand(fixture.command);
-  for (const fileName of perCompanionOwners.keys()) {
+  for (const fileName of helmAutoMigratedOwners.keys()) {
     if (!existsSync(join(
       fixture.companionDataDir,
       '.owner-migrations',
       `${fileName}.from-system.sha256`,
     ))) {
       throw new Error(`${fileName} identical legacy and target state was not recorded`);
+    }
+  }
+  for (const fileName of perCompanionOwners.keys()) {
+    if (!helmAutoMigratedOwners.has(fileName) && existsSync(join(
+      fixture.companionDataDir,
+      '.owner-migrations',
+      `${fileName}.from-system.sha256`,
+    ))) {
+      throw new Error(`${fileName} target-only state was incorrectly recorded as a migration`);
     }
   }
 } finally {
@@ -773,6 +970,41 @@ try {
   );
 } finally {
   rmSync(missingRoot, { recursive: true, force: true });
+}
+
+const unsupportedLegacyOwnersRoot = mkdtempSync(
+  join(tmpdir(), 'psfn-helm-owner-explicit-fleet-migration-required-'),
+);
+try {
+  const fixture = renderOwnerMigrationFixture(unsupportedLegacyOwnersRoot, false);
+  mkdirSync(fixture.systemDataDir, { recursive: true });
+  mkdirSync(fixture.companionDataDir, { recursive: true });
+  for (const [fileName, contents] of helmAutoMigratedOwners) {
+    writeFileSync(join(fixture.companionDataDir, fileName), contents, 'utf8');
+  }
+  for (const [fileName, contents] of perCompanionOwners) {
+    if (!helmAutoMigratedOwners.has(fileName)) {
+      writeFileSync(join(fixture.systemDataDir, fileName), contents, 'utf8');
+    }
+  }
+
+  const unsupportedLegacyOutput = runOwnerMigrationCommand(fixture.command, 1);
+  assertIncludes(
+    unsupportedLegacyOutput,
+    'Missing required per-companion owner file after bootstrap/migration',
+    'charge/skills legacy system owners require explicit fleet migration',
+  );
+  for (const [fileName, contents] of perCompanionOwners) {
+    if (helmAutoMigratedOwners.has(fileName)) continue;
+    if (readFileSync(join(fixture.systemDataDir, fileName), 'utf8') !== contents) {
+      throw new Error(`${fileName} unsupported legacy source was changed`);
+    }
+    if (existsSync(join(fixture.companionDataDir, fileName))) {
+      throw new Error(`${fileName} was implicitly migrated by the Helm compatibility path`);
+    }
+  }
+} finally {
+  rmSync(unsupportedLegacyOwnersRoot, { recursive: true, force: true });
 }
 
 const missingMarkedTargetRoot = mkdtempSync(

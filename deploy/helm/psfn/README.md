@@ -98,11 +98,17 @@ CHARACTER_CARD_PATH=/app/companion-data/companion.json
 `system-data`, `companion-data`, `workspace`, `runtime`, and `model-cache` are
 PVC-backed. The seed init container creates the runtime directories and, only
 when `bootstrap.seedOwnerFiles=true`, copies `/app/config/*.seed.json` into
-the correct owner root for any missing owner file. Cluster-global owners go to
-`system-data`; `scheduler.json` and `capability-tier.json` go to
-`companion-data`. It never overwrites Garden-edited owner files. A starter
+the canonical root for each missing owner file. Seed-backed cluster-global
+owners go to `system-data`; `scheduler.json`, `capability-tier.json`,
+`charge-policy.json`, and `skills.json` go to this release's
+`companion-data`. It never creates system-data copies of those per-companion
+owners and never overwrites Garden-edited owner files. A starter
 `companion.json` ConfigMap is copied once into `companion-data` only if no
 companion card exists.
+
+This chart renders one companion per release. Each release's `companion-data`
+PVC is that companion's isolated owner root; do not share a companion-data
+claim across releases.
 
 `bootstrap.seedOwnerFiles` defaults to `false`. With it disabled, absent owner
 files fail closed at startup with the runtime's `loadRequiredJson` error rather
@@ -114,10 +120,62 @@ owner file.
 
 Mutable owner JSON stays on PVCs, not in ConfigMaps.
 
-### Upgrading releases created before per-companion owner files
+### Upgrading releases created before per-companion owner routing
 
-`scheduler.json` and `capability-tier.json` used to live under `system-data`.
-Every app workload runs the same idempotent init migration before startup:
+First inspect the fleet-wide owners. If `charge-policy.json` or `skills.json`
+still exists under the shared `SYSTEM_DATA_DIR`, stop every companion release
+and run the digest-approved, receipt-bearing command from the repo-owned
+maintenance environment that mounts the system-data PVC and every exact
+companion-data PVC path from `companions.json`:
+
+```bash
+npm run snapshot:system-owner-fleet -- \
+  --output "$BACKUP_ROOT_DIR/pre-system-owner-fleet-<timestamp>"
+npm run migrate:system-owner-fleet
+npm run migrate:system-owner-fleet -- --apply \
+  --approve charge-policy.json=<exact-sha256> \
+  --approve skills.json=<exact-sha256>
+npm run preflight:startup-owner-files
+```
+
+Review and use the approvals printed by the dry run; do not substitute the
+example digests. The command validates both owner schemas before creating any
+migration state, copies exact bytes to every manifest root, records durable
+provenance, and retires each source only after the full fan-out verifies. An
+ordinary Helm release mounts only its own companion-data PVC and therefore
+cannot infer or safely perform this fleet transaction.
+
+For an orchestrated Helm cutover, set `ownerMigration.required=true` and
+`ownerMigration.enabled=true`, provide the exact digest map under
+`ownerMigration.approvals`, and enumerate every manifest companion with its
+existing PVC and canonical `<runtimeRoot>/companions/...` mount path. Also set
+the chart's normal persistence claims through each `existingClaim` field. The
+pre-upgrade Hook Job captures `snapshotOutputDir`, runs the same compiled
+approval-bound fleet migrator as its next init container, and (when
+`ownerMigration.verification.enabled=true`) runs one packaged probe per
+companion. The probes begin with the exact migrated values, make distinct
+read-only owner and companion-identity observations behind a shared barrier,
+and fail if claims or owner inodes are accidentally shared across companion
+roots. Receipt-recorded recovery hard links within one root remain valid. Helm
+does not admit the new revision until the hook succeeds.
+`ownerMigration.required=true` makes omission of the hook a
+render failure; missing claims, a wrong mount path, or an unavailable immutable
+image fails the old revision closed in place.
+
+Keep `bootstrap.seedOwnerFiles=false`: seeding is not migration. After a
+successful one-time rollout, disable and remove the owner-migration values. The
+full operator and rollback procedure is in
+[`docs/operations.md`](../../../docs/operations.md#existing-split-fleets-with-shared-per-companion-owners).
+
+The chart's guarded automatic legacy cutover covers `scheduler.json` and
+`capability-tier.json`, which used to live under `system-data`. Every app
+workload runs the same idempotent init migration before startup:
+
+The normal per-workload init path deliberately does not migrate legacy
+system-root `charge-policy.json` or `skills.json`; only the explicit whole-fleet
+command or approval-bound pre-upgrade hook above owns that boundary. Current
+releases require both files under `companion-data` and fail closed when the
+fleet procedure is incomplete.
 
 - If the companion-owned target is absent and a legacy system-owned file
   exists, the file is first copied byte-for-byte and a source-hash marker is
@@ -193,10 +251,11 @@ helm upgrade --install "$RELEASE" deploy/helm/psfn \
   --wait --timeout 10m
 ```
 
-This one upgrade handles both historical boundaries in order: system-to-
-companion owner routing, then the scheduler schema conversion. Do not edit the
-PVC JSON by hand or run a separate schema rewrite before Helm. Repeat this
-command for every release/companion root in a multi-release cluster.
+For scheduler/capability, this upgrade handles owner routing and then scheduler
+schema conversion. The charge/skills fleet transaction must already be
+complete. Do not edit PVC JSON by hand or run a separate schema rewrite before
+Helm. Repeat this command for every release/companion root in a multi-release
+cluster.
 
 After the Helm upgrade, require all three app rollouts and verify the new owner
 paths and markers:
@@ -206,18 +265,36 @@ kubectl -n "$NAMESPACE" rollout status deploy/psfn-agent --timeout=300s
 kubectl -n "$NAMESPACE" rollout status deploy/psfn-gateway --timeout=300s
 kubectl -n "$NAMESPACE" rollout status deploy/psfn-garden --timeout=300s
 kubectl -n "$NAMESPACE" exec deploy/psfn-agent -- sh -c '
-  for file in scheduler.json capability-tier.json; do
+  for file in scheduler.json capability-tier.json charge-policy.json skills.json; do
     test -f "/app/companion-data/$file"
+  done
+  for file in scheduler.json capability-tier.json; do
     test -f "/app/companion-data/.owner-migrations/$file.from-system.sha256" \
       || test ! -f "/app/system-data/$file"
   done
+  test ! -f /app/system-data/charge-policy.json
+  test ! -f /app/system-data/skills.json
 '
 ```
 
 The retained system-owned files preserve rollback evidence, but forward
 recovery with the fixed chart is the normal response to the ownership-cutover
 crash loop. Later companion-owned edits are intentionally not mirrored back to
-the retired path.
+the retired path. The explicit charge/skills transaction instead moves the old
+sources into receipt-owned quarantine. Rolling back to a release that still
+expects those system-root owners therefore requires stopping all releases and
+restoring the verified pre-migration backup of system-data and every companion
+root as one fleet unit. Provision fresh empty PVCs, then run:
+
+```bash
+npm run restore:system-owner-fleet-snapshot -- \
+  --manifest "$BACKUP_ROOT_DIR/pre-system-owner-fleet-<timestamp>/system-owner-fleet-snapshot.json" \
+  --restore-runtime-root <fresh-runtime-root>
+```
+
+The restore verifies every split artifact before writing and refuses non-empty
+roots. Discard all fresh PVCs after any partial failure; never copy quarantine
+evidence back by hand or restore only one root.
 
 ## Repository Checkout
 

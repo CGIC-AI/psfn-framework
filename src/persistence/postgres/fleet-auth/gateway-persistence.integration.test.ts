@@ -18,6 +18,10 @@ import {
   type GatewayFleetAuthPersistence,
 } from './gateway-persistence.js';
 import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
+import {
+  GatewayHubDeviceIngressService,
+  InMemoryHubDeviceSessionAdmissionStore,
+} from '../../../boundary/fleet-auth/hub-device-ingress.js';
 
 const TIMEOUT_MS = 120_000;
 const ROLES = {
@@ -33,6 +37,9 @@ const PASSWORDS = {
 const keyPair = generateKeyPairSync('ed25519');
 const publicKeyPem = keyPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
 const privateKeyPem = keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+const hubKeyPair = generateKeyPairSync('ed25519');
+const hubPublicKeyPem = hubKeyPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+const KNOWN_COMPANION_ID = '7f87ee85-9fcc-4520-91a8-b728293eca76';
 
 interface GatewayTestContext {
   databaseName: string;
@@ -101,7 +108,7 @@ function config(): FleetAuthConfig {
       clockSkewSeconds: 2,
       keys: [{
         kid: 'hub-gateway-startup-test',
-        publicKeyPem,
+        publicKeyPem: hubPublicKeyPem,
         notBefore: '2026-01-01T00:00:00.000Z',
         notAfter: '2099-01-01T00:00:00.000Z',
         status: 'active',
@@ -132,6 +139,8 @@ function hubDeviceAssertionToken(input: {
   companionId: string;
   sessionId: string;
   jti: string;
+  placeId?: string;
+  expiresInSeconds?: number;
 }): string {
   const nowSeconds = Math.floor(Date.now() / 1000);
   const encodedHeader = Buffer.from(JSON.stringify({
@@ -145,18 +154,18 @@ function hubDeviceAssertionToken(input: {
     device_id: 'office-device',
     enrollment_version: 7,
     enrollment_assurance: 'device_credential',
-    place_id: 'office',
+    place_id: input.placeId ?? 'office',
     aud: 'https://fleet.example.test',
     companion_id: input.companionId,
     session_id: input.sessionId,
     iat: nowSeconds - 1,
-    exp: nowSeconds + 30,
+    exp: nowSeconds + (input.expiresInSeconds ?? 30),
     jti: input.jti,
   })).toString('base64url');
   const signature = sign(
     null,
     Buffer.from(`${encodedHeader}.${encodedClaims}`, 'ascii'),
-    keyPair.privateKey,
+    hubKeyPair.privateKey,
   ).toString('base64url');
   return `${encodedHeader}.${encodedClaims}.${signature}`;
 }
@@ -211,6 +220,7 @@ async function startEnabled(context: GatewayTestContext): Promise<GatewayFleetAu
   const persistence = await initializeGatewayFleetAuthPersistence({
     config: context.config,
     credentialVault: context.credentialVault,
+    knownCompanionIds: [KNOWN_COMPANION_ID],
     protectedRestoreRoots: context.protectedRestoreRoots,
     lifecycleWitnessRoot: context.systemDataDir,
   });
@@ -233,10 +243,18 @@ async function seedSession(
       ON CONFLICT (principal_id) DO NOTHING
     `, [principalId]);
     await pool.query(`
+      INSERT INTO fleet_auth.provider_subjects
+        (provider, subject_id, principal_id, state, authority_generation)
+      VALUES ('discord', '123456789012345678', $1, 'active', 1)
+      ON CONFLICT (provider, subject_id) DO NOTHING
+    `, [principalId]);
+    await pool.query(`
       INSERT INTO fleet_auth.browser_sessions
         (record_id, token_digest, csrf_digest, principal_id, audience, assurance,
-         authn_version, authz_version, global_auth_epoch, idle_expires_at, absolute_expires_at)
-      VALUES ($1, $2, $3, $4, 'garden', 'oauth', 1, 1, $5,
+         authn_version, authz_version, provider, provider_subject_id,
+         global_auth_epoch, idle_expires_at, absolute_expires_at)
+      VALUES ($1, $2, $3, $4, 'garden', 'oauth', 1, 1,
+              'discord', '123456789012345678', $5,
               clock_timestamp() + interval '5 minutes', clock_timestamp() + interval '1 hour')
     `, [
       sessionId,
@@ -337,7 +355,52 @@ afterAll(async () => {
 }, TIMEOUT_MS);
 
 describe('gateway fleet-auth lifecycle publication', () => {
-  it('binds Hub assertion replay consumption to the exact expected session', async () => {
+  it('composes authorization resolution only for enabled fleet auth', async () => {
+    const context = await freshContext();
+    const enabled = await startEnabled(context);
+    try {
+      await expect(enabled.broker.resolveAuthorizationContext({
+        sessionToken: 'S'.repeat(43),
+        audience: 'fleet',
+        companionId: KNOWN_COMPANION_ID,
+        action: 'memory.read.self',
+      })).rejects.toMatchObject({ code: 'session_absent' });
+    } finally {
+      await enabled.close();
+    }
+
+    const disabled = await initializeGatewayFleetAuthPersistence({
+      knownCompanionIds: [],
+      protectedRestoreRoots: context.protectedRestoreRoots,
+      lifecycleWitnessRoot: context.systemDataDir,
+    });
+    expect(disabled).toBeUndefined();
+  }, TIMEOUT_MS);
+
+  it('starts Discord evidence authority only when validated mappings enable it', async () => {
+    const context = await freshContext();
+    const featureOff = await startEnabled(context);
+    expect(featureOff.discordEvidence).toBeUndefined();
+    expect(featureOff.discordEvidenceLifecycle).toBeUndefined();
+    await featureOff.close();
+
+    context.config.provider.scopes = ['identify', 'guilds', 'guilds.members.read'];
+    context.config.discordEvidenceMappings = [{
+      guildId: '123456789012345678',
+      channelId: '223456789012345678',
+      companionId: randomUUID(),
+      requiredRoleIds: [],
+    }];
+    const featureOn = await startEnabled(context);
+    try {
+      expect(featureOn.discordEvidence).toBeDefined();
+      expect(featureOn.discordEvidenceLifecycle).toBeDefined();
+    } finally {
+      await featureOn.close();
+    }
+  }, TIMEOUT_MS);
+
+  it('binds Hub assertion replay to the session and durably audits sanitized mutation denial', async () => {
     const context = await freshContext();
     const persistence = await startEnabled(context);
     const auditPool = createPostgresPool(context.runtimeUrl, { max: 1 });
@@ -350,6 +413,7 @@ describe('gateway fleet-auth lifecycle publication', () => {
       enrollmentVersion: 7,
       enrollmentStatus: 'active' as const,
       companionId,
+      placeId: 'office',
     };
     try {
       await expect(persistence.verifyAndConsumeHubDeviceAssertion(assertion, {
@@ -386,6 +450,78 @@ describe('gateway fleet-auth lifecycle publication', () => {
         replay_count: '1',
         mismatch_count: '0',
       }]);
+
+      const mutatedAssertion = hubDeviceAssertionToken({
+        companionId,
+        sessionId: sessionA,
+        jti,
+        expiresInSeconds: 29,
+      });
+      await expect(persistence.verifyAndConsumeHubDeviceAssertion(mutatedAssertion, {
+        ...expected,
+        sessionId: sessionA,
+      })).rejects.toThrow(/mutated replay/i);
+      const mutatedAudit = await auditPool.query<{
+        actor_context: Record<string, unknown>;
+        decision: string;
+        decision_context: Record<string, unknown>;
+      }>(`
+        SELECT actor_context, decision, decision_context
+        FROM fleet_auth.authorization_audit_events
+        WHERE action = 'hub_device_assertion.verify'
+          AND reason_code = 'mutated_replay'
+      `);
+      expect(mutatedAudit.rows).toEqual([{
+        actor_context: { kind: 'hub_device_assertion' },
+        decision: 'deny',
+        decision_context: expect.objectContaining({
+          schemaVersion: 1,
+          jtiDigest: createHash('sha256').update(jti).digest('hex'),
+          acceptedAssertionDigest: createHash('sha256').update(assertion).digest('hex'),
+          mutatedAssertionDigest: createHash('sha256').update(mutatedAssertion).digest('hex'),
+        }),
+      }]);
+      const serializedAudit = JSON.stringify(mutatedAudit.rows);
+      expect(serializedAudit).not.toContain('office');
+      expect(serializedAudit).not.toContain(sessionA);
+      expect(serializedAudit).not.toContain(companionId);
+      expect(serializedAudit).not.toContain('psfn-satellite-hub');
+      expect(serializedAudit).not.toContain('hub-gateway-startup-test');
+      expect(serializedAudit).not.toContain('https://fleet.example.test');
+      expect(serializedAudit).not.toContain(assertion);
+      expect(serializedAudit).not.toContain(assertion.split('.')[2]!);
+      expect(serializedAudit).not.toContain(mutatedAssertion.split('.')[2]!);
+
+      const admittedJti = randomUUID();
+      const admittedAssertion = hubDeviceAssertionToken({
+        companionId,
+        sessionId: sessionA,
+        jti: admittedJti,
+      });
+      const sessions = new InMemoryHubDeviceSessionAdmissionStore();
+      const ingress = new GatewayHubDeviceIngressService({
+        verifyAndConsume: (token, binding) => persistence.verifyAndConsumeHubDeviceAssertion(token, binding),
+        sessions,
+      });
+      const connection = {
+        connectionId: 'authenticated-hub-connection',
+        ...expected,
+        sessionId: sessionA,
+      };
+      const concurrent = await Promise.all([
+        ingress.admit({ assertion: admittedAssertion, connection }),
+        ingress.admit({ assertion: admittedAssertion, connection }),
+      ]);
+      expect(concurrent.map(entry => entry.sessionDisposition).sort()).toEqual(['created', 'retry']);
+      await expect(ingress.admit({ assertion: admittedAssertion, connection }))
+        .resolves.toMatchObject({ sessionDisposition: 'retry' });
+      expect(sessions.size).toBe(1);
+      const admissionReplay = await auditPool.query<{ replay_count: string }>(`
+        SELECT replay_count
+        FROM fleet_auth.hub_device_assertion_replays
+        WHERE issuer = $1 AND jti = $2
+      `, ['psfn-satellite-hub', admittedJti]);
+      expect(admissionReplay.rows).toEqual([{ replay_count: '2' }]);
     } finally {
       await auditPool.end();
       await persistence.close();
@@ -500,6 +636,7 @@ describe('gateway fleet-auth lifecycle publication', () => {
     try {
       await waitForBlockedBroker(context);
       const disabled = await initializeGatewayFleetAuthPersistence({
+        knownCompanionIds: [],
         protectedRestoreRoots: context.protectedRestoreRoots,
         lifecycleWitnessRoot: context.systemDataDir,
       });

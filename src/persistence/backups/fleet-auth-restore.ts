@@ -1,23 +1,28 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import type { PoolClient } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import {
   assertNoUnknownKeys,
   isCanonicalIsoTimestamp,
   isRecord,
+  isRfc4122Uuid,
 } from '../../shared/utils/types.js';
+import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
 import { createPostgresPool } from '../postgres.js';
 import {
   type FleetAuthAuthorityFloor,
   FleetAuthAuthorityFloorStore,
 } from '../postgres/fleet-auth/authority-floor.js';
 import { reconcileFleetAuthAuthorityStateInTransaction } from '../postgres/fleet-auth/gateway-persistence.js';
+import { FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_NAME } from '../postgres/fleet-auth/hub-device-assertion-replay-sql.js';
 import {
   FLEET_AUTH_SCHEMA_NAME,
   assertFleetAuthBackupRestorePrivileges,
   type FleetAuthDatabaseRoles,
 } from '../postgres/fleet-auth/schema.js';
+import { FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME } from '../postgres/fleet-auth/companion-restore-sql.js';
+import { parseContactAuthorityLifecycleResult } from '../../shared/contracts/contact-authority-lifecycle.js';
 
 const RESTORE_LOCK_CLASS = 0x5053464e;
 const RESTORE_LOCK_ID = 0x52535452;
@@ -31,17 +36,23 @@ interface FleetAuthDurableSnapshot {
   providerSubjects: SnapshotRow[];
   providerSubjectHistory: SnapshotRow[];
   providerSubjectTombstones: SnapshotRow[];
+  companionAuthorityState: SnapshotRow[];
   principalContactBindings: SnapshotRow[];
   principalRoleGrants: SnapshotRow[];
+  principalMergeAliases: SnapshotRow[];
   passkeyCredentials: SnapshotRow[];
   authorizationAuditEvents: SnapshotRow[];
+  contactAuthorityIntents: SnapshotRow[];
+  contactAuthorityResources: SnapshotRow[];
+  contactAuthorityReceipts: SnapshotRow[];
 }
 
 interface FleetAuthSnapshot {
-  schemaVersion: 2;
+  schemaVersion: 5;
   capturedAt: string;
   postgresSnapshot: string;
   authorityLineageId: string;
+  contentDigest: string;
   durable: FleetAuthDurableSnapshot;
 }
 
@@ -60,6 +71,7 @@ export interface VerifiedFleetAuthRestoreOptions {
   manifestPath: string;
   manifest: VerifiedFleetAuthBackupManifest;
   databaseUrl: string;
+  schemaOwnerDatabaseUrl: string;
   roles: FleetAuthDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
   activationGeneration: number;
@@ -78,10 +90,15 @@ const SNAPSHOT_COLLECTION_KEYS = [
   'providerSubjects',
   'providerSubjectHistory',
   'providerSubjectTombstones',
+  'companionAuthorityState',
   'principalContactBindings',
   'principalRoleGrants',
+  'principalMergeAliases',
   'passkeyCredentials',
   'authorizationAuditEvents',
+  'contactAuthorityIntents',
+  'contactAuthorityResources',
+  'contactAuthorityReceipts',
 ] as const;
 
 const ROW_KEYS = {
@@ -91,7 +108,8 @@ const ROW_KEYS = {
     'activation_generation', 'updated_at',
   ],
   humanPrincipals: [
-    'principal_id', 'status', 'authn_version', 'authz_version', 'authority_generation',
+    'principal_id', 'status', 'authn_version', 'authz_version', 'binding_version',
+    'grant_version', 'policy_version', 'authority_generation',
     'restore_state', 'created_at', 'updated_at',
   ],
   providerSubjects: [
@@ -106,6 +124,11 @@ const ROW_KEYS = {
     'provider', 'subject_id', 'prior_principal_id', 'authority_generation', 'revoked_at',
     'reason_digest',
   ],
+  companionAuthorityState: [
+    'companion_id', 'lifecycle', 'version', 'authority_generation', 'restore_state',
+    'authority_lineage_id', 'lineage_generation', 'readd_decision_id',
+    'created_at', 'updated_at',
+  ],
   principalContactBindings: [
     'binding_id', 'principal_id', 'companion_id', 'contact_id', 'state',
     'verification_provenance', 'version', 'authority_generation', 'restore_state',
@@ -114,6 +137,10 @@ const ROW_KEYS = {
   principalRoleGrants: [
     'grant_id', 'principal_id', 'companion_id', 'role', 'lifecycle', 'version',
     'authority_generation', 'restore_state', 'created_at', 'updated_at',
+  ],
+  principalMergeAliases: [
+    'source_principal_id', 'canonical_principal_id', 'decision_id',
+    'authority_generation', 'reason_digest', 'restore_state', 'created_at',
   ],
   passkeyCredentials: [
     'credential_id_hash', 'principal_id', 'expected_provider',
@@ -124,7 +151,21 @@ const ROW_KEYS = {
   authorizationAuditEvents: [
     'event_id', 'actor_context', 'action', 'resource', 'decision', 'reason_code',
     'companion_id', 'principal_id', 'authority_generation', 'global_auth_epoch',
-    'correlation_id', 'occurred_at',
+    'correlation_id', 'occurred_at', 'decision_id', 'ceremony_id', 'reason_digest',
+    'decision_context',
+  ],
+  contactAuthorityIntents: [
+    'companion_id', 'intent_id', 'schema_version', 'intent_digest', 'action',
+    'contact_id', 'canonical_contact_id', 'provider_subject_id', 'state',
+    'authority_generation', 'restore_state', 'created_at', 'updated_at',
+  ],
+  contactAuthorityResources: [
+    'companion_id', 'intent_id', 'kind', 'resource_id', 'terminal_fence', 'created_at',
+  ],
+  contactAuthorityReceipts: [
+    'companion_id', 'intent_id', 'phase', 'request_digest', 'result',
+    'authority_generation', 'global_auth_epoch', 'audit_event_id', 'restore_state',
+    'created_at',
   ],
 } as const;
 
@@ -162,8 +203,10 @@ function parseCollection(
 
 function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest): FleetAuthSnapshot {
   let value: unknown;
+  let content: string;
   try {
-    value = JSON.parse(readFileSync(path, 'utf8'));
+    content = readFileSync(path, 'utf8');
+    value = JSON.parse(content);
   } catch (error) {
     throw new Error(`Fleet auth snapshot is unavailable: ${String(error)}`);
   }
@@ -173,7 +216,7 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
     ['schemaVersion', 'capturedAt', 'postgresSnapshot', 'authorityLineageId', 'durable'],
     'root',
   );
-  if (value.schemaVersion !== 2
+  if (value.schemaVersion !== 5
     || !isCanonicalIsoTimestamp(value.capturedAt)
     || value.capturedAt !== manifest.capturedAt
     || typeof value.postgresSnapshot !== 'string'
@@ -200,6 +243,11 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
       'providerSubjectTombstones',
       ROW_KEYS.providerSubjectTombstones,
     ),
+    companionAuthorityState: parseCollection(
+      durable.companionAuthorityState,
+      'companionAuthorityState',
+      ROW_KEYS.companionAuthorityState,
+    ),
     principalContactBindings: parseCollection(
       durable.principalContactBindings,
       'principalContactBindings',
@@ -210,6 +258,11 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
       'principalRoleGrants',
       ROW_KEYS.principalRoleGrants,
     ),
+    principalMergeAliases: parseCollection(
+      durable.principalMergeAliases,
+      'principalMergeAliases',
+      ROW_KEYS.principalMergeAliases,
+    ),
     passkeyCredentials: parseCollection(
       durable.passkeyCredentials,
       'passkeyCredentials',
@@ -219,6 +272,21 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
       durable.authorizationAuditEvents,
       'authorizationAuditEvents',
       ROW_KEYS.authorizationAuditEvents,
+    ),
+    contactAuthorityIntents: parseCollection(
+      durable.contactAuthorityIntents,
+      'contactAuthorityIntents',
+      ROW_KEYS.contactAuthorityIntents,
+    ),
+    contactAuthorityResources: parseCollection(
+      durable.contactAuthorityResources,
+      'contactAuthorityResources',
+      ROW_KEYS.contactAuthorityResources,
+    ),
+    contactAuthorityReceipts: parseCollection(
+      durable.contactAuthorityReceipts,
+      'contactAuthorityReceipts',
+      ROW_KEYS.contactAuthorityReceipts,
     ),
   };
   if (parsed.authorityState.length !== 1) {
@@ -231,10 +299,11 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
     throw new Error('Invalid fleet auth snapshot: authority lineage does not match its manifest');
   }
   return {
-    schemaVersion: 2,
+    schemaVersion: 5,
     capturedAt: value.capturedAt,
     postgresSnapshot: value.postgresSnapshot,
     authorityLineageId: value.authorityLineageId,
+    contentDigest: createHash('sha256').update(content).digest('hex'),
     durable: parsed,
   };
 }
@@ -270,6 +339,179 @@ function parseStateInteger(value: string, field: string): number {
     throw new Error(`Invalid target fleet_auth authority_state.${field}`);
   }
   return parsed;
+}
+
+function admittedRestoredCompanionLineage(
+  row: SnapshotRow,
+  index: number,
+  floor: FleetAuthAuthorityFloor,
+  floors: FleetAuthAuthorityFloorStore,
+): { lineageId: string | null; lineageGeneration: number | null; readdDecisionId: string | null } {
+  const field = `durable.companionAuthorityState[${index}]`;
+  const companionId = requiredString(row, 'companion_id', field);
+  if (!isRfc4122Uuid(companionId)) {
+    throw new Error(`Invalid fleet auth snapshot: ${field}.companion_id must be an RFC-4122 UUID`);
+  }
+  const lineageId = row.authority_lineage_id;
+  const lineageGeneration = row.lineage_generation;
+  const readdDecisionId = row.readd_decision_id;
+  if (lineageId === null && lineageGeneration === null && readdDecisionId === null) {
+    return { lineageId: null, lineageGeneration: null, readdDecisionId: null };
+  }
+  if (typeof lineageId !== 'string'
+    || !/^[0-9a-f]{64}$/u.test(lineageId)
+    || typeof lineageGeneration !== 'number'
+    || !Number.isSafeInteger(lineageGeneration)
+    || Number(lineageGeneration) < 1
+    || typeof readdDecisionId !== 'string'
+    || !isRfc4122Uuid(readdDecisionId)) {
+    throw new Error(`Invalid fleet auth snapshot: ${field} has an incomplete companion lineage`);
+  }
+  const lineage = floors.findCompanionAuthorityReadd(companionId, floor);
+  if (!lineage
+    || !floors.companionAuthorityLineageIsCurrent({
+      companionId,
+      lineageId,
+      lineageGeneration: Number(lineageGeneration),
+    }, floor)
+    || !timingSafeStringEqual(lineage.lineageId, lineageId)
+    || lineage.entry.companionReadd.decisionId !== readdDecisionId) {
+    // A snapshot lineage that predates the current permanent floor is retained
+    // only as inert audit history. It cannot populate executable authority.
+    return { lineageId: null, lineageGeneration: null, readdDecisionId: null };
+  }
+  return {
+    lineageId,
+    lineageGeneration: Number(lineageGeneration),
+    readdDecisionId,
+  };
+}
+
+interface CompanionRestoreAdmission {
+  receiptId: string;
+  lineageId: string | null;
+  lineageGeneration: number | null;
+  readdDecisionId: string | null;
+}
+
+interface CompanionRestoreReceiptContext {
+  restoreOperationId: string;
+  manifestDigest: string;
+  snapshotDigest: string;
+  admissions: ReadonlyMap<string, CompanionRestoreAdmission>;
+}
+
+async function issueCompanionRestoreReceipts(options: {
+  owner: PoolClient;
+  target: PoolClient;
+  roles: FleetAuthDatabaseRoles;
+  durable: FleetAuthDurableSnapshot;
+  floor: FleetAuthAuthorityFloor;
+  floors: FleetAuthAuthorityFloorStore;
+  restoredAt: string;
+  restoreOperationId: string;
+  manifestDigest: string;
+  snapshotDigest: string;
+}): Promise<ReadonlyMap<string, CompanionRestoreAdmission>> {
+  const [ownerIdentity, targetIdentity] = await Promise.all([
+    options.owner.query<{
+      current_user: string;
+      current_database: string;
+      schema_owner: string;
+    }>(`
+      SELECT current_user, current_database() AS current_database,
+             owner_role.rolname AS schema_owner
+      FROM pg_namespace AS namespace
+      JOIN pg_roles AS owner_role ON owner_role.oid = namespace.nspowner
+      WHERE namespace.nspname = $1
+    `, [FLEET_AUTH_SCHEMA_NAME]),
+    options.target.query<{ current_database: string; restore_transaction_id: string }>(
+      'SELECT current_database() AS current_database, txid_current()::text AS restore_transaction_id',
+    ),
+  ]);
+  const owner = ownerIdentity.rows.at(0);
+  const target = targetIdentity.rows.at(0);
+  if (!owner || !target
+    || owner.current_user !== options.roles.migration
+    || owner.schema_owner !== options.roles.migration
+    || owner.current_database !== target.current_database) {
+    throw new Error(
+      'Fleet auth restore receipt issuer must be the fleet_auth schema owner in the target database',
+    );
+  }
+
+  const admissions = new Map<string, CompanionRestoreAdmission>();
+  await options.owner.query('BEGIN');
+  try {
+    for (const [index, row] of options.durable.companionAuthorityState.entries()) {
+      const companionId = requiredString(
+        row,
+        'companion_id',
+        `durable.companionAuthorityState[${index}]`,
+      );
+      if (admissions.has(companionId)) {
+        throw new Error('Invalid fleet auth snapshot: duplicate companion authority identity');
+      }
+      const lineage = admittedRestoredCompanionLineage(
+        row,
+        index,
+        options.floor,
+        options.floors,
+      );
+      const admission: CompanionRestoreAdmission = {
+        receiptId: randomUUID(),
+        ...lineage,
+      };
+      await options.owner.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_restore_import_receipts
+          (receipt_id, restore_operation_id, restore_transaction_id,
+           manifest_digest, snapshot_digest,
+           companion_id, version, authority_lineage_id, lineage_generation,
+           readd_decision_id, created_at, imported_at,
+           global_authority_lineage_id, authority_generation, restore_checkpoint)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      `, [
+        admission.receiptId,
+        options.restoreOperationId,
+        target.restore_transaction_id,
+        options.manifestDigest,
+        options.snapshotDigest,
+        companionId,
+        row.version,
+        admission.lineageId,
+        admission.lineageGeneration,
+        admission.readdDecisionId,
+        row.created_at,
+        options.restoredAt,
+        options.floor.trustedHost.lineageId,
+        options.floor.trustedHost.authorityGeneration,
+        options.floor.trustedHost.restoreCheckpoint,
+      ]);
+      admissions.set(companionId, admission);
+    }
+    await options.owner.query('COMMIT');
+    return admissions;
+  } catch (error) {
+    try {
+      await options.owner.query('ROLLBACK');
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        'Fleet auth restore receipt issuance and rollback failed',
+      );
+    }
+    throw error;
+  }
+}
+
+async function deleteOutstandingCompanionRestoreReceipts(
+  ownerPool: Pool,
+  restoreOperationId: string,
+): Promise<void> {
+  await ownerPool.query(`
+    DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_restore_import_receipts
+    WHERE restore_operation_id = $1
+  `, [restoreOperationId]);
 }
 
 async function assertTargetNotAhead(
@@ -329,6 +571,7 @@ async function importDurableRows(
   floor: FleetAuthAuthorityFloor,
   floors: FleetAuthAuthorityFloorStore,
   restoredAt: string,
+  receiptContext: CompanionRestoreReceiptContext,
 ): Promise<number> {
   let importedRows = 0;
   const record = async (query: Promise<number>): Promise<void> => {
@@ -337,16 +580,19 @@ async function importDurableRows(
 
   for (const row of durable.humanPrincipals) {
     const values = [
-      row.principal_id, row.authn_version, row.authz_version,
-      floor.trustedHost.authorityGeneration, row.created_at, restoredAt,
+      row.principal_id, row.authn_version, row.authz_version, row.binding_version,
+      row.grant_version, row.policy_version, floor.trustedHost.authorityGeneration,
+      row.created_at, restoredAt,
     ];
     await record(insertOrAssertCompatibleConflict({
       client,
       insertSql: `
         INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
-          (principal_id, status, authn_version, authz_version, authority_generation,
-           restore_state, created_at, updated_at)
-        VALUES ($1, 'quarantined', $2, $3, $4, 'quarantined', $5, $6)
+          (principal_id, status, authn_version, authz_version, binding_version,
+           grant_version, policy_version, authority_generation, restore_state,
+           created_at, updated_at)
+        VALUES ($1, 'quarantined', $2, $3, $4, $5, $6, $7,
+                'quarantined', $8, $9)
         ON CONFLICT DO NOTHING
       `,
       insertValues: values,
@@ -356,13 +602,162 @@ async function importDurableRows(
           WHERE principal_id = $1
             AND authn_version >= $2::bigint
             AND authz_version >= $3::bigint
-            AND authority_generation <= $4::bigint
-            AND created_at <= $5::timestamptz
+            AND binding_version >= $4::bigint
+            AND grant_version >= $5::bigint
+            AND policy_version >= $6::bigint
+            AND authority_generation <= $7::bigint
+            AND created_at <= $8::timestamptz
           FOR UPDATE
         ) AS compatible
       `,
-      compatibilityValues: values.slice(0, 5),
+      compatibilityValues: values.slice(0, 8),
       description: 'human principal',
+    }));
+  }
+
+  for (const [index, row] of durable.companionAuthorityState.entries()) {
+    const companionId = requiredString(
+      row,
+      'companion_id',
+      `durable.companionAuthorityState[${index}]`,
+    );
+    const admission = receiptContext.admissions.get(companionId);
+    if (!admission) {
+      throw new Error('Fleet auth restore companion receipt admission is unavailable');
+    }
+    const values = [
+      admission.receiptId,
+      receiptContext.restoreOperationId,
+      receiptContext.manifestDigest,
+      receiptContext.snapshotDigest,
+      companionId,
+      row.version,
+      admission.lineageId,
+      admission.lineageGeneration,
+      admission.readdDecisionId,
+      row.created_at,
+      restoredAt,
+      floor.trustedHost.lineageId,
+      floor.trustedHost.authorityGeneration,
+      floor.trustedHost.restoreCheckpoint,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        SELECT 1
+        WHERE ${FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME}(
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+        )
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          WHERE companion_id = $5::uuid AND version >= $6::bigint
+            AND authority_generation <= $13::bigint
+            AND ($7::text IS NULL OR (
+              authority_lineage_id = $7
+              AND lineage_generation = $8::bigint
+              AND readd_decision_id = $9::uuid
+            ))
+            AND created_at <= $10::timestamptz
+          FOR UPDATE
+        ) AS compatible
+      `,
+      compatibilityValues: values.slice(0, 13),
+      description: 'companion authority state',
+    }));
+  }
+
+  for (const row of durable.contactAuthorityIntents) {
+    const values = [
+      row.companion_id, row.intent_id, row.schema_version, row.intent_digest,
+      row.action, row.contact_id, row.canonical_contact_id,
+      row.provider_subject_id, floor.trustedHost.authorityGeneration,
+      row.created_at, restoredAt,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_intents
+          (companion_id, intent_id, schema_version, intent_digest, action,
+           contact_id, canonical_contact_id, provider_subject_id, state,
+           authority_generation, restore_state, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'quarantined', $9,
+                'quarantined', $10, $11)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_intents
+          WHERE companion_id = $1::uuid AND intent_id = $2::uuid
+            AND schema_version = $3::integer AND intent_digest = $4
+            AND action = $5 AND contact_id = $6
+            AND canonical_contact_id IS NOT DISTINCT FROM $7::text
+            AND provider_subject_id IS NOT DISTINCT FROM $8::text
+            AND state = 'quarantined' AND restore_state = 'quarantined'
+            AND authority_generation <= $9::bigint
+            AND created_at <= $10::timestamptz
+        ) AS compatible
+      `,
+      compatibilityValues: values.slice(0, 10),
+      description: 'contact authority intent',
+    }));
+  }
+
+  for (const row of durable.contactAuthorityResources) {
+    const values = [
+      row.companion_id, row.intent_id, row.kind, row.resource_id,
+      row.terminal_fence, row.created_at,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_resources
+          (companion_id, intent_id, kind, resource_id, terminal_fence, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_resources
+          WHERE companion_id = $1::uuid AND intent_id = $2::uuid
+            AND kind = $3 AND resource_id = $4
+            AND terminal_fence = $5::boolean AND created_at = $6::timestamptz
+        ) AS compatible
+      `,
+      compatibilityValues: values,
+      description: 'contact authority resource fence',
+    }));
+  }
+
+  for (const row of durable.principalMergeAliases) {
+    const values = [
+      row.source_principal_id, row.canonical_principal_id, row.decision_id,
+      floor.trustedHost.authorityGeneration, row.reason_digest, row.created_at,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_merge_aliases
+          (source_principal_id, canonical_principal_id, decision_id,
+           authority_generation, reason_digest, restore_state, created_at)
+        VALUES ($1, $2, $3, $4, $5, 'quarantined', $6)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_merge_aliases
+          WHERE source_principal_id = $1::uuid AND canonical_principal_id = $2::uuid
+            AND decision_id = $3::uuid AND authority_generation <= $4::bigint
+            AND reason_digest = $5 AND created_at <= $6::timestamptz
+        ) AS compatible
+      `,
+      compatibilityValues: values,
+      description: 'principal merge alias',
     }));
   }
 
@@ -608,12 +1003,66 @@ async function importDurableRows(
   }
 
   for (const [index, row] of durable.authorizationAuditEvents.entries()) {
+    const actorContext = jsonObject(
+      row,
+      'actor_context',
+      `durable.authorizationAuditEvents[${index}]`,
+    );
+    const decisionContext = jsonObject(
+      row,
+      'decision_context',
+      `durable.authorizationAuditEvents[${index}]`,
+    );
+    const isHubMutatedReplay = row.action === 'hub_device_assertion.verify'
+      || row.reason_code === 'mutated_replay';
+    if (isHubMutatedReplay) {
+      const malformedFields = [
+        actorContext === '{"kind":"hub_device_assertion"}' ? null : 'actor_context',
+        row.action === 'hub_device_assertion.verify' ? null : 'action',
+        row.resource === 'hub-device-assertion-replay' ? null : 'resource',
+        row.decision === 'deny' ? null : 'decision',
+        row.reason_code === 'mutated_replay' ? null : 'reason_code',
+        row.companion_id === null ? null : 'companion_id',
+        row.principal_id === null ? null : 'principal_id',
+        row.decision_id === null ? null : 'decision_id',
+        row.ceremony_id === null ? null : 'ceremony_id',
+        row.reason_digest === null ? null : 'reason_digest',
+      ].filter((field): field is string => field !== null);
+      if (malformedFields.length > 0) {
+        throw new Error(
+          `Invalid fleet auth snapshot: durable.authorizationAuditEvents[${index}] `
+          + `has malformed Hub mutated-replay denial fields: ${malformedFields.join(', ')}`,
+        );
+      }
+      if (typeof row.correlation_id !== 'string'
+        || !/^[0-9a-f]{64}$/u.test(row.correlation_id)) {
+        throw new Error(
+          `Invalid fleet auth snapshot: durable.authorizationAuditEvents[${index}] `
+          + 'has a non-canonical Hub mutated-replay correlation',
+        );
+      }
+      const imported = await client.query<{ imported: boolean }>(`
+        SELECT ${FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_NAME}(
+          $1, $2, $3, $4, $5::jsonb
+        ) AS imported
+      `, [
+        row.event_id,
+        row.authority_generation,
+        row.global_auth_epoch,
+        row.occurred_at,
+        decisionContext,
+      ]);
+      if (imported.rows.at(0)?.imported === true) importedRows += 1;
+      continue;
+    }
     const values = [
       row.event_id,
-      jsonObject(row, 'actor_context', `durable.authorizationAuditEvents[${index}]`),
+      actorContext,
       row.action, row.resource, row.decision, row.reason_code, row.companion_id,
       row.principal_id, row.authority_generation, row.global_auth_epoch,
-      row.correlation_id, row.occurred_at,
+      row.correlation_id, row.occurred_at, row.decision_id, row.ceremony_id,
+      row.reason_digest,
+      decisionContext,
     ];
     await record(insertOrAssertCompatibleConflict({
       client,
@@ -621,8 +1070,10 @@ async function importDurableRows(
         INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
           (event_id, actor_context, action, resource, decision, reason_code,
            companion_id, principal_id, authority_generation, global_auth_epoch,
-           correlation_id, occurred_at)
-        VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+           correlation_id, occurred_at, decision_id, ceremony_id, reason_digest,
+           decision_context)
+        VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                $13, $14, $15, $16::jsonb)
         ON CONFLICT DO NOTHING
       `,
       insertValues: values,
@@ -637,10 +1088,54 @@ async function importDurableRows(
             AND authority_generation = $9::bigint AND global_auth_epoch = $10::bigint
             AND correlation_id IS NOT DISTINCT FROM $11::text
             AND occurred_at = $12::timestamptz
+            AND decision_id IS NOT DISTINCT FROM $13::uuid
+            AND ceremony_id IS NOT DISTINCT FROM $14::uuid
+            AND reason_digest IS NOT DISTINCT FROM $15::text
+            AND decision_context = $16::jsonb
         ) AS compatible
       `,
       compatibilityValues: values,
       description: 'authorization audit event',
+    }));
+  }
+  for (const row of durable.contactAuthorityReceipts) {
+    const result = parseContactAuthorityLifecycleResult(row.result);
+    if (result.intentId !== row.intent_id
+      || result.phase !== row.phase
+      || result.authorityGeneration !== Number(row.authority_generation)
+      || result.globalAuthEpoch !== Number(row.global_auth_epoch)
+      || result.auditEventId !== row.audit_event_id) {
+      throw new Error('Invalid fleet auth snapshot: contact authority receipt tuple mismatch');
+    }
+    const values = [
+      row.companion_id, row.intent_id, row.phase, row.request_digest,
+      JSON.stringify(result), row.authority_generation, row.global_auth_epoch,
+      row.audit_event_id, row.created_at,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_receipts
+          (companion_id, intent_id, phase, request_digest, result,
+           authority_generation, global_auth_epoch, audit_event_id,
+           restore_state, created_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'quarantined', $9)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_receipts
+          WHERE companion_id = $1::uuid AND intent_id = $2::uuid AND phase = $3
+            AND request_digest = $4 AND result = $5::jsonb
+            AND authority_generation = $6::bigint
+            AND global_auth_epoch = $7::bigint
+            AND audit_event_id = $8::uuid AND restore_state = 'quarantined'
+            AND created_at = $9::timestamptz
+        ) AS compatible
+      `,
+      compatibilityValues: values,
+      description: 'contact authority phase receipt',
     }));
   }
   return importedRows;
@@ -669,6 +1164,9 @@ async function executeVerifiedFleetAuthSnapshot(
     resolve(dirname(resolve(options.manifestPath)), artifact.path),
     options.manifest,
   );
+  const manifestDigest = createHash('sha256')
+    .update(readFileSync(resolve(options.manifestPath)))
+    .digest('hex');
   const currentFloor = options.authorityFloors.read();
   if (snapshot.authorityLineageId !== currentFloor.trustedHost.lineageId) {
     throw new Error(
@@ -688,10 +1186,19 @@ async function executeVerifiedFleetAuthSnapshot(
     applicationName: 'fleet-auth-consistent-restore',
     max: 1,
   });
+  const ownerPool = createPostgresPool(options.schemaOwnerDatabaseUrl, {
+    applicationName: 'fleet-auth-restore-receipt-issuer',
+    max: 1,
+  });
+  const restoreOperationId = randomUUID();
   let client: PoolClient | undefined;
+  let transactionOpen = false;
+  let result: FleetAuthRestoreResult | undefined;
+  let failure: unknown;
   try {
     client = await pool.connect();
     await client.query('BEGIN');
+    transactionOpen = true;
     await client.query(
       'SELECT pg_advisory_xact_lock($1::integer, $2::integer)',
       [RESTORE_LOCK_CLASS, RESTORE_LOCK_ID],
@@ -702,31 +1209,98 @@ async function executeVerifiedFleetAuthSnapshot(
       restoredTombstones,
       at: restoredAt,
     });
+    // Establish the exact current singleton and floor projection before the
+    // bounded companion importer validates any restored lineage tuple.
+    const restoreAuditEventId = randomUUID();
+    await reconcileFleetAuthAuthorityStateInTransaction(
+      client,
+      preparedFloor,
+      restoreAuditEventId,
+    );
+    const owner = await ownerPool.connect();
+    let admissions: ReadonlyMap<string, CompanionRestoreAdmission>;
+    try {
+      admissions = await issueCompanionRestoreReceipts({
+        owner,
+        target: client,
+        roles: options.roles,
+        durable: snapshot.durable,
+        floor: preparedFloor,
+        floors: options.authorityFloors,
+        restoredAt,
+        restoreOperationId,
+        manifestDigest,
+        snapshotDigest: snapshot.contentDigest,
+      });
+    } finally {
+      owner.release();
+    }
     const importedRows = await importDurableRows(
       client,
       snapshot.durable,
       preparedFloor,
       options.authorityFloors,
       restoredAt,
-    );
-    await reconcileFleetAuthAuthorityStateInTransaction(
-      client,
-      preparedFloor,
-      randomUUID(),
+      {
+        restoreOperationId,
+        manifestDigest,
+        snapshotDigest: snapshot.contentDigest,
+        admissions,
+      },
     );
     await client.query(verificationOnly ? 'ROLLBACK' : 'COMMIT');
-    return {
+    transactionOpen = false;
+    result = {
       importedRows,
       authorityGeneration: preparedFloor.trustedHost.authorityGeneration,
       restoreCheckpoint: preparedFloor.trustedHost.restoreCheckpoint,
     };
   } catch (error) {
-    await client?.query('ROLLBACK').catch(() => undefined);
-    throw error;
+    failure = error;
+    if (client && transactionOpen) {
+      try {
+        await client.query('ROLLBACK');
+        transactionOpen = false;
+      } catch (rollbackError) {
+        failure = new AggregateError(
+          [error, rollbackError],
+          'Fleet auth restore and database rollback failed',
+        );
+      }
+    }
   } finally {
     client?.release();
-    await pool.end();
+    try {
+      await pool.end();
+    } catch (poolError) {
+      failure = failure
+        ? new AggregateError([failure, poolError], 'Fleet auth restore and pool cleanup failed')
+        : poolError;
+    }
+    try {
+      await deleteOutstandingCompanionRestoreReceipts(ownerPool, restoreOperationId);
+    } catch (cleanupError) {
+      failure = failure
+        ? new AggregateError(
+            [failure, cleanupError],
+            'Fleet auth restore and receipt cleanup failed',
+          )
+        : cleanupError;
+    }
+    try {
+      await ownerPool.end();
+    } catch (ownerPoolError) {
+      failure = failure
+        ? new AggregateError(
+            [failure, ownerPoolError],
+            'Fleet auth restore and schema-owner pool cleanup failed',
+          )
+        : ownerPoolError;
+    }
   }
+  if (failure) throw failure;
+  if (!result) throw new Error('Fleet auth restore completed without a result');
+  return result;
 }
 
 export async function restoreVerifiedFleetAuthSnapshot(

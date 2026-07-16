@@ -43,6 +43,10 @@ import type {
   TelemetryIngestResponse,
 } from './types.js';
 import {
+  isHubDevicePrincipalSnapshot,
+  type HubDevicePrincipalSnapshot,
+} from '../../shared/contracts/hub-device-ingress.js';
+import {
   getLastUserMessage as getChatLastUserMessage,
   getLastUserMessageAttachments,
   getLastUserMessageFileParts,
@@ -139,6 +143,8 @@ export interface AgentApiBackendConfig {
   schedulerHealthcheckStaleAfterMs?: number;
   externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   satelliteRegistry?: SatelliteRegistryConfig;
+  /** This agent process's server-owned companion identity. */
+  companionId?: string;
   sensorIngest?: SensorIngestPort;
   onStreamDelta?: (requestId: string, text: string) => void | Promise<void>;
   /** htm9.9: shared document file-part ingestion; null when not configured. */
@@ -155,6 +161,7 @@ export class AgentApiBackend {
   private readonly schedulerHealthcheckStaleAfterMs: number;
   private readonly externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   private readonly satelliteRegistry: SatelliteRegistryConfig | undefined;
+  private readonly companionId: string | undefined;
   private readonly sensorIngest: SensorIngestPort;
   private readonly documentIngest: ApiDocumentIngestConfig | null;
   private readonly onStreamDelta?: (requestId: string, text: string) => void | Promise<void>;
@@ -176,6 +183,7 @@ export class AgentApiBackend {
     );
     this.externalChannelProfiles = config.externalChannelProfiles ?? {};
     this.satelliteRegistry = config.satelliteRegistry;
+    this.companionId = config.companionId;
     this.sensorIngest = config.sensorIngest ?? createEventBusSensorIngestPort(config.eventBus);
     this.documentIngest = config.documentIngest ?? null;
     this.onStreamDelta = config.onStreamDelta;
@@ -289,6 +297,7 @@ export class AgentApiBackend {
       principal: params.principal,
       headers: params.headers,
       clientCert: params.clientCert,
+      hubDevicePrincipal: params.hubDevicePrincipal,
       timeoutMs: params.timeoutMs,
       performance: params.performance,
       onDelta: params.request.stream && this.onStreamDelta
@@ -304,6 +313,7 @@ export class AgentApiBackend {
       principal: input.principal,
       headers: input.headers,
       clientCert: input.clientCert,
+      hubDevicePrincipal: input.hubDevicePrincipal,
       onDelta: input.onDelta,
       signal: input.signal,
     });
@@ -315,11 +325,19 @@ export class AgentApiBackend {
     principal: ApiAuthPrincipal;
     headers: ApiRpcHeaders;
     clientCert?: SatelliteClientCertIdentity;
+    hubDevicePrincipal?: HubDevicePrincipalSnapshot;
     onDelta?: (text: string) => void | Promise<void>;
     signal?: AbortSignal;
     timeoutMs?: number;
     performance?: ApiChatCompletionRpcParams['performance'];
   }): Promise<ApiChatCompletionRpcResult> {
+    if (params.hubDevicePrincipal && (
+      params.request.provider !== undefined
+      || params.request.system_prompt !== undefined
+      || (params.request.system_prompt_mode !== undefined && params.request.system_prompt_mode !== 'default')
+    )) {
+      return this.fail(400, 'invalid_hub_device_request', 'Hub device turns may not bypass the companion prompt');
+    }
     const overrides = this.parseTurnRoutingOverrides(params.request);
     if (!overrides.ok) {
       return this.fail(400, 'invalid_request', overrides.error);
@@ -338,6 +356,7 @@ export class AgentApiBackend {
       params.headers,
       params.principal,
       params.clientCert,
+      params.hubDevicePrincipal,
     );
     if (!pendingTurn.ok) {
       return pendingTurn.error;
@@ -1182,6 +1201,7 @@ export class AgentApiBackend {
     headers: ApiRpcHeaders,
     principal: ApiAuthPrincipal,
     clientCert: SatelliteClientCertIdentity | undefined,
+    hubDevicePrincipal: HubDevicePrincipalSnapshot | undefined,
   ): Promise<{ ok: true; value: PendingTurn } | { ok: false; error: ApiRpcFailure }> {
     const routingOverrides = this.parseTurnRoutingOverrides(request);
     if (!routingOverrides.ok) {
@@ -1212,7 +1232,7 @@ export class AgentApiBackend {
       };
     }
 
-    const {
+    let {
       channelId,
       channelType,
       authorId,
@@ -1223,14 +1243,45 @@ export class AgentApiBackend {
       satellite,
     } = turnIdentity.value;
 
-    const identityClaim = await this.enforceIdentityClaim(headers, authorId);
-    if (identityClaim !== true) {
-      return { ok: false, error: identityClaim };
+    if (hubDevicePrincipal) {
+      const enrollment = satellite && this.satelliteRegistry?.satellites
+        .find(candidate => candidate.satelliteId === satellite.satelliteId)
+        ?.endpoints.find(candidate => candidate.endpointId === satellite.endpointId)
+        ?.hubDeviceEnrollment;
+      if (!enrollment
+        || !this.companionId
+        || !isHubDevicePrincipalSnapshot(hubDevicePrincipal)
+        || enrollment.enrollmentStatus !== 'active'
+        || hubDevicePrincipal.companionId !== this.companionId
+        || hubDevicePrincipal.deviceId !== enrollment.deviceId
+        || hubDevicePrincipal.enrollmentVersion !== enrollment.enrollmentVersion
+        || hubDevicePrincipal.sessionId !== satellite.sessionId
+        || hubDevicePrincipal.placeId !== satellite.placeId
+        ) {
+        return {
+          ok: false,
+          error: this.fail(403, 'hub_device_principal_mismatch', 'Hub device principal did not match the server registry binding'),
+        };
+      }
+      authorId = `hub-device:${hubDevicePrincipal.deviceId}`;
+      authorName = 'Enrolled Hub device';
+      channelId = `hub-device:${hubDevicePrincipal.deviceId}:${hubDevicePrincipal.sessionId}`;
+      claimedCanonicalContactId = undefined;
+      satellite = { ...satellite, hubDevicePrincipal };
     }
 
-    const canonicalContactId = this.readHeader(headers, 'x-canonical-contact-id', 256) ?? claimedCanonicalContactId;
+    if (!hubDevicePrincipal) {
+      const identityClaim = await this.enforceIdentityClaim(headers, authorId);
+      if (identityClaim !== true) {
+        return { ok: false, error: identityClaim };
+      }
+    }
+
+    const canonicalContactId = hubDevicePrincipal
+      ? undefined
+      : this.readHeader(headers, 'x-canonical-contact-id', 256) ?? claimedCanonicalContactId;
     const resolvedChannelPrivacy = channelPrivacy.value ?? claimedChannelPrivacy;
-    if (source !== 'api') {
+    if (source !== 'api' && !hubDevicePrincipal) {
       if (!canonicalContactId) {
         return {
           ok: false,

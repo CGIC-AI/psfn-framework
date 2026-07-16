@@ -94,7 +94,7 @@ function writeFamily(
   }));
   const manifestPath = join(root, 'fleet-auth-backup-manifest.json');
   writeFileSync(manifestPath, JSON.stringify({
-    schemaVersion: 4,
+    schemaVersion: 5,
     capturedAt: '2026-07-15T15:00:00.000Z',
     postgresSnapshot: '100:200:',
     authorityLineageId: 'a'.repeat(64),
@@ -145,6 +145,7 @@ function restoreOptions(
   return {
     manifestPath,
     backupRestoreDatabaseUrl: 'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app',
+    fleetAuthSchemaOwnerDatabaseUrl: 'postgresql://auth_migration:secret@127.0.0.1:5432/app',
     roles: ROLES,
     authorityFloors: new FleetAuthAuthorityFloorStore(floorRoot),
     activationGeneration: 2,

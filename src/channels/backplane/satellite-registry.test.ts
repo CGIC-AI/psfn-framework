@@ -1174,3 +1174,51 @@ describe('satellite registry unknown-key rejection (H9/T1, 03-M2)', () => {
     })).toThrow(/unknown key\(s\): "sattelites"/);
   });
 });
+
+describe('Hub device enrollment owner binding', () => {
+  function rawEnrollment(deviceId = 'office-device') {
+    return {
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [{
+        satelliteId: 'office', displayName: 'Office', mobility: 'static',
+        endpoints: [{
+          endpointId: 'hub', displayName: 'Hub', claimTypes: ['hub-device'],
+          promptChannelType: 'satellite_hub', auth: { mode: 'api_key' },
+          defaultIdentity: {
+            authorId: 'legacy', authorName: 'Legacy', canonicalContactId: 'legacy-contact',
+            channelPrivacy: 'private',
+          },
+          maxCapabilities: ['text'],
+          hubDeviceEnrollment: { deviceId, enrollmentVersion: 7, enrollmentStatus: 'active' },
+        }],
+      }],
+    };
+  }
+
+  it('normalizes a strict server-owned enrollment', () => {
+    expect(parseSatelliteRegistryConfig(rawEnrollment()).satellites[0]?.endpoints[0]?.hubDeviceEnrollment)
+      .toEqual({ deviceId: 'office-device', enrollmentVersion: 7, enrollmentStatus: 'active' });
+  });
+
+  it('rejects malformed, unknown, and duplicate device enrollment bindings', () => {
+    const malformed = rawEnrollment() as unknown as Record<string, unknown>;
+    const endpoint = ((malformed.satellites as Array<Record<string, unknown>>)[0]!.endpoints as Array<Record<string, unknown>>)[0]!;
+    endpoint.hubDeviceEnrollment = { deviceId: 'office-device', enrollmentVersion: 0, enrollmentStatus: 'active' };
+    expect(() => parseSatelliteRegistryConfig(malformed)).toThrow(/positive integer/);
+
+    const unknown = rawEnrollment() as unknown as Record<string, unknown>;
+    const unknownEndpoint = ((unknown.satellites as Array<Record<string, unknown>>)[0]!.endpoints as Array<Record<string, unknown>>)[0]!;
+    unknownEndpoint.hubDeviceEnrollment = {
+      deviceId: 'office-device', enrollmentVersion: 7, enrollmentStatus: 'active', humanPrincipal: 'forged',
+    };
+    expect(() => parseSatelliteRegistryConfig(unknown)).toThrow(/unknown key.*humanPrincipal/i);
+
+    const duplicate = rawEnrollment();
+    duplicate.satellites.push({
+      ...duplicate.satellites[0]!, satelliteId: 'kitchen',
+      endpoints: [{ ...duplicate.satellites[0]!.endpoints[0]!, endpointId: 'hub-kitchen' }],
+    });
+    expect(() => parseSatelliteRegistryConfig(duplicate)).toThrow(/duplicate Hub deviceId/);
+  });
+});

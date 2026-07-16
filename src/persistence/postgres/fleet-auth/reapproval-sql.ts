@@ -37,8 +37,8 @@
 //      DELETE guard forbids a non-owner from removing a quarantined row.
 //      Backup-restored rows (restore_state='quarantined') and legitimate
 //      provisioning for live principals both pass untouched. Only the schema
-//      owner (the SECURITY DEFINER reapproval procedure) may author the
-//      reactivating shape.
+//      owner (the SECURITY DEFINER account or companion reapproval procedure)
+//      may author the reactivating shape.
 
 export const FLEET_AUTH_REAPPROVE_FUNCTION_NAME = 'fleet_auth.reapprove_account_authority';
 
@@ -57,15 +57,29 @@ DECLARE
   v_lifecycle_column text;
   v_new_lifecycle text;
   v_schema_owner text;
+  v_companion_non_active boolean;
 BEGIN
-  -- Only quarantined restore candidates are fenced. Live rows and rows being
-  -- de-escalated into quarantine are untouched.
-  IF (v_old->>'restore_state') IS DISTINCT FROM 'quarantined' THEN
+  -- A companion UUID is its authority identity, not mutable row metadata.
+  -- Renaming it would free the protected identity for a replacement INSERT.
+  IF TG_TABLE_NAME = 'companion_authority_state'
+     AND (v_new->>'companion_id') IS DISTINCT FROM (v_old->>'companion_id') THEN
+    RAISE EXCEPTION 'companion authority identity is immutable; use fleet_auth.reapprove_companion_authority'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- Every non-active companion row is an activation gate, including legacy
+  -- removed rows whose lineage tuple predates the tuple columns. A null tuple
+  -- must never turn this trigger into an unguarded backup-role update path.
+  v_companion_non_active := TG_TABLE_NAME = 'companion_authority_state'
+    AND (v_old->>'lifecycle') <> 'active';
+  IF (v_old->>'restore_state') IS DISTINCT FROM 'quarantined'
+     AND NOT v_companion_non_active THEN
     RETURN NEW;
   END IF;
 
   v_lifecycle_column := CASE TG_TABLE_NAME
     WHEN 'human_principals' THEN 'status'
+    WHEN 'companion_authority_state' THEN 'lifecycle'
     WHEN 'provider_subjects' THEN 'state'
     WHEN 'principal_contact_bindings' THEN 'state'
     WHEN 'principal_role_grants' THEN 'lifecycle'
@@ -100,12 +114,79 @@ BEGIN
     RETURN NEW;
   END IF;
 
+  IF v_companion_non_active THEN
+    -- A legitimately removed, previously reapproved companion may be re-added
+    -- on a strictly newer projected lineage. This transition remains
+    -- quarantined and is the only non-owner mutation of the protected tuple.
+    IF (v_old->>'restore_state') = 'live'
+       AND (v_old->>'lifecycle') = 'removed'
+       AND (v_new->>'restore_state') = 'live'
+       AND v_new_lifecycle = 'quarantined'
+       AND (v_new->>'version')::bigint = (v_old->>'version')::bigint + 1
+       AND (v_new->>'authority_generation')::bigint =
+          (v_new->>'lineage_generation')::bigint
+       AND (v_new->>'lineage_generation')::bigint >
+          (v_old->>'authority_generation')::bigint
+       AND (v_new->>'authority_lineage_id') IS NOT NULL
+       AND (v_new->>'authority_lineage_id') IS DISTINCT FROM
+          (v_old->>'authority_lineage_id')
+       AND (v_new->>'readd_decision_id') IS NOT NULL
+       AND (v_new->>'readd_decision_id') IS DISTINCT FROM
+          (v_old->>'readd_decision_id')
+       AND EXISTS (
+         SELECT 1
+         FROM fleet_auth.authority_floor_tombstone_projection AS lineage
+         WHERE lineage.kind = 'companion_lineage_floor'
+           AND lineage.resource_hash = encode(
+             sha256(convert_to(v_old->>'companion_id', 'UTF8')), 'hex'
+           )
+           AND lineage.authority_generation =
+             (v_new->>'lineage_generation')::bigint
+           AND lineage.companion_lineage_id = v_new->>'authority_lineage_id'
+           AND lineage.companion_readd_decision_id =
+             (v_new->>'readd_decision_id')::uuid
+       ) AND EXISTS (
+         SELECT 1
+         FROM fleet_auth.authority_floor_tombstone_projection AS removal
+         WHERE removal.kind = 'companion'
+           AND removal.resource_hash = encode(
+             sha256(convert_to(v_old->>'companion_id', 'UTF8')), 'hex'
+           )
+           AND removal.authority_generation <
+             (v_new->>'lineage_generation')::bigint
+       ) THEN
+      RETURN NEW;
+    END IF;
+
+    -- Every other update must preserve the complete non-active authority
+    -- state. In particular, changing quarantined -> removed no longer creates
+    -- an unguarded second hop to active, and a restored lineage cannot shed
+    -- restore quarantine or its exact tuple.
+    IF v_new_lifecycle IS DISTINCT FROM (v_old->>'lifecycle')
+       OR (v_new->>'restore_state') IS DISTINCT FROM (v_old->>'restore_state')
+       OR (v_new->>'authority_generation') IS DISTINCT FROM (v_old->>'authority_generation')
+       OR (v_new->>'version') IS DISTINCT FROM (v_old->>'version')
+       OR (v_new->>'authority_lineage_id') IS DISTINCT FROM (v_old->>'authority_lineage_id')
+       OR (v_new->>'lineage_generation') IS DISTINCT FROM (v_old->>'lineage_generation')
+       OR (v_new->>'readd_decision_id') IS DISTINCT FROM (v_old->>'readd_decision_id') THEN
+      RAISE EXCEPTION 'companion lineage quarantine can only be activated through fleet_auth.reapprove_companion_authority'
+        USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END IF;
+
   IF (v_new->>'restore_state') IS DISTINCT FROM 'quarantined'
      OR v_new_lifecycle NOT IN ('quarantined', 'revoked')
      OR (v_new->>'authority_generation') IS DISTINCT FROM (v_old->>'authority_generation')
      OR (v_new->>'authn_version') IS DISTINCT FROM (v_old->>'authn_version')
      OR (v_new->>'authz_version') IS DISTINCT FROM (v_old->>'authz_version')
-     OR (v_new->>'version') IS DISTINCT FROM (v_old->>'version') THEN
+     OR (v_new->>'binding_version') IS DISTINCT FROM (v_old->>'binding_version')
+     OR (v_new->>'grant_version') IS DISTINCT FROM (v_old->>'grant_version')
+     OR (v_new->>'policy_version') IS DISTINCT FROM (v_old->>'policy_version')
+     OR (v_new->>'version') IS DISTINCT FROM (v_old->>'version')
+     OR (v_new->>'authority_lineage_id') IS DISTINCT FROM (v_old->>'authority_lineage_id')
+     OR (v_new->>'lineage_generation') IS DISTINCT FROM (v_old->>'lineage_generation')
+     OR (v_new->>'readd_decision_id') IS DISTINCT FROM (v_old->>'readd_decision_id') THEN
     RAISE EXCEPTION 'quarantined fleet_auth authority can only be reactivated through fleet_auth.reapprove_account_authority'
       USING ERRCODE = '42501';
   END IF;
@@ -116,6 +197,11 @@ $$;
 DROP TRIGGER IF EXISTS restore_quarantine_activation_guard ON human_principals;
 CREATE TRIGGER restore_quarantine_activation_guard
   BEFORE UPDATE ON human_principals
+  FOR EACH ROW EXECUTE FUNCTION restore_quarantine_activation_guard();
+
+DROP TRIGGER IF EXISTS restore_quarantine_activation_guard ON companion_authority_state;
+CREATE TRIGGER restore_quarantine_activation_guard
+  BEFORE UPDATE ON companion_authority_state
   FOR EACH ROW EXECUTE FUNCTION restore_quarantine_activation_guard();
 
 DROP TRIGGER IF EXISTS restore_quarantine_activation_guard ON provider_subjects;
@@ -153,6 +239,21 @@ DECLARE
   v_schema_owner text;
   v_principal_restore_state text;
 BEGIN
+  SELECT owner_role.rolname INTO v_schema_owner
+  FROM pg_namespace AS namespace
+  JOIN pg_roles AS owner_role ON owner_role.oid = namespace.nspowner
+  WHERE namespace.nspname = 'fleet_auth';
+
+  -- Companion rows may only be authored by a bounded schema-owner procedure.
+  -- This fences ordinary INSERT, UPSERT and COPY even if grants later drift.
+  IF TG_TABLE_NAME = 'companion_authority_state' THEN
+    IF current_user <> v_schema_owner THEN
+      RAISE EXCEPTION 'companion authority can only be inserted through a bounded fleet_auth schema-owner procedure'
+        USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END IF;
+
   v_lifecycle_column := CASE TG_TABLE_NAME
     WHEN 'principal_contact_bindings' THEN 'state'
     WHEN 'principal_role_grants' THEN 'lifecycle'
@@ -171,11 +272,6 @@ BEGIN
      OR v_new_lifecycle NOT IN ('active', 'pending') THEN
     RETURN NEW;
   END IF;
-
-  SELECT owner_role.rolname INTO v_schema_owner
-  FROM pg_namespace AS namespace
-  JOIN pg_roles AS owner_role ON owner_role.oid = namespace.nspowner
-  WHERE namespace.nspname = 'fleet_auth';
 
   -- The SECURITY DEFINER reapproval procedure runs as the schema owner; only
   -- that context may author a live authority row bound to a quarantined
@@ -207,12 +303,6 @@ AS $$
 DECLARE
   v_schema_owner text;
 BEGIN
-  -- Only quarantined restore candidates are fenced from deletion. Deletes of
-  -- live/revoked rows are unaffected.
-  IF (to_jsonb(OLD)->>'restore_state') IS DISTINCT FROM 'quarantined' THEN
-    RETURN OLD;
-  END IF;
-
   SELECT owner_role.rolname INTO v_schema_owner
   FROM pg_namespace AS namespace
   JOIN pg_roles AS owner_role ON owner_role.oid = namespace.nspowner
@@ -222,10 +312,33 @@ BEGIN
     RETURN OLD;
   END IF;
 
+  -- A companion authority identity is never replaceable by ordinary SQL,
+  -- regardless of its current lifecycle or restore state.
+  IF TG_TABLE_NAME = 'companion_authority_state' THEN
+    RAISE EXCEPTION 'companion authority can only be removed through the fleet_auth schema owner context'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- Only quarantined restore candidates are fenced on the other authority
+  -- tables. Deletes of their live/revoked rows are unaffected.
+  IF (to_jsonb(OLD)->>'restore_state') IS DISTINCT FROM 'quarantined' THEN
+    RETURN OLD;
+  END IF;
+
   RAISE EXCEPTION 'quarantined fleet_auth authority row can only be removed through the schema owner context'
     USING ERRCODE = '42501';
 END;
 $$;
+
+DROP TRIGGER IF EXISTS restore_quarantine_insert_guard ON companion_authority_state;
+CREATE TRIGGER restore_quarantine_insert_guard
+  BEFORE INSERT ON companion_authority_state
+  FOR EACH ROW EXECUTE FUNCTION restore_quarantine_insert_guard();
+
+DROP TRIGGER IF EXISTS restore_quarantine_delete_guard ON companion_authority_state;
+CREATE TRIGGER restore_quarantine_delete_guard
+  BEFORE DELETE ON companion_authority_state
+  FOR EACH ROW EXECUTE FUNCTION restore_quarantine_delete_guard();
 
 DROP TRIGGER IF EXISTS restore_quarantine_insert_guard ON principal_contact_bindings;
 CREATE TRIGGER restore_quarantine_insert_guard
@@ -273,6 +386,7 @@ DECLARE
   v_expected_scope jsonb;
   v_ceremony fleet_auth.trusted_host_ceremonies%ROWTYPE;
   v_principal fleet_auth.human_principals%ROWTYPE;
+  v_companion fleet_auth.companion_authority_state%ROWTYPE;
   v_subject fleet_auth.provider_subjects%ROWTYPE;
   v_binding fleet_auth.principal_contact_bindings%ROWTYPE;
   v_grant fleet_auth.principal_role_grants%ROWTYPE;
@@ -335,6 +449,30 @@ BEGIN
     RAISE EXCEPTION 'principal is not a quarantined restore candidate' USING ERRCODE = '42501';
   END IF;
 
+  -- Recheck the database projection of the non-restored authority floor. This
+  -- keeps even direct invocation of the constrained procedure subordinate to
+  -- principal/companion/provider/binding/grant tombstones; the gateway wrapper
+  -- performs the same check against the authoritative file before connecting.
+  IF EXISTS (
+    SELECT 1
+    FROM fleet_auth.authority_floor_tombstone_projection AS tombstone
+    WHERE (tombstone.kind = 'provider_subject'
+      AND tombstone.resource_hash = encode(sha256(convert_to(
+        p_provider || ':' || p_provider_subject_id, 'UTF8'
+      )), 'hex'))
+      OR (tombstone.kind = 'principal'
+        AND tombstone.resource_hash = encode(sha256(convert_to(p_principal_id::text, 'UTF8')), 'hex'))
+      OR (tombstone.kind = 'companion'
+        AND tombstone.resource_hash = encode(sha256(convert_to(p_companion_id::text, 'UTF8')), 'hex'))
+      OR (tombstone.kind = 'contact_binding'
+        AND tombstone.resource_hash = encode(sha256(convert_to(p_binding_id::text, 'UTF8')), 'hex'))
+      OR (tombstone.kind = 'role_grant'
+        AND tombstone.resource_hash = encode(sha256(convert_to(p_role_grant_id::text, 'UTF8')), 'hex'))
+  ) THEN
+    RAISE EXCEPTION 'account authority is tombstoned by the non-restored floor'
+      USING ERRCODE = '42501';
+  END IF;
+
   -- Provider subject binding, not tombstoned.
   SELECT * INTO v_subject
   FROM fleet_auth.provider_subjects
@@ -354,6 +492,24 @@ BEGIN
   END IF;
   IF v_subject.restore_state <> 'quarantined' OR v_subject.state <> 'quarantined' THEN
     RAISE EXCEPTION 'provider subject is not a quarantined restore candidate' USING ERRCODE = '42501';
+  END IF;
+
+  -- The companion is an independent versioned authority resource. A restored
+  -- companion is promoted exactly once with the account; an already-live
+  -- active companion remains unchanged so another restored account can be
+  -- reapproved without spuriously advancing the companion version.
+  SELECT * INTO v_companion
+  FROM fleet_auth.companion_authority_state
+  WHERE companion_id = p_companion_id
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'companion authority not found' USING ERRCODE = '42501';
+  END IF;
+  IF NOT (
+    (v_companion.restore_state = 'quarantined' AND v_companion.lifecycle = 'quarantined')
+    OR (v_companion.restore_state = 'live' AND v_companion.lifecycle = 'active')
+  ) THEN
+    RAISE EXCEPTION 'companion authority is not reapprovable' USING ERRCODE = '42501';
   END IF;
 
   -- Contact binding, exact and conflict-free.
@@ -407,7 +563,7 @@ BEGIN
   -- is intentionally exact: missing or extra fields reject rather than being
   -- ignored by a permissive partial parser.
   v_expected_scope := jsonb_build_object(
-    'schemaVersion', 1,
+    'schemaVersion', 2,
     'principalId', p_principal_id::text,
     'provider', p_provider,
     'providerSubjectId', p_provider_subject_id,
@@ -416,6 +572,9 @@ BEGIN
     'bindingId', p_binding_id::text,
     'roleGrantId', p_role_grant_id::text,
     'role', v_grant.role,
+    'companionVersion', v_companion.version,
+    'bindingVersion', v_binding.version,
+    'roleGrantVersion', v_grant.version,
     'authorityLineageId', v_lineage,
     'authorityGeneration', v_generation,
     'restoreCheckpoint', v_restore_checkpoint
@@ -443,6 +602,13 @@ BEGIN
     RAISE EXCEPTION 'trusted-host ceremony has expired' USING ERRCODE = '42501';
   END IF;
 
+  IF v_companion.restore_state = 'quarantined' THEN
+    UPDATE fleet_auth.companion_authority_state
+    SET lifecycle = 'active', restore_state = 'live', version = version + 1,
+        authority_generation = v_generation, updated_at = v_now
+    WHERE companion_id = p_companion_id;
+  END IF;
+
   UPDATE fleet_auth.provider_subjects
   SET state = 'active', restore_state = 'live',
       authority_generation = v_generation, updated_at = v_now
@@ -451,6 +617,9 @@ BEGIN
   UPDATE fleet_auth.human_principals
   SET status = 'active', restore_state = 'live',
       authn_version = v_new_authn, authz_version = v_new_authz,
+      binding_version = binding_version + 1,
+      grant_version = grant_version + 1,
+      policy_version = policy_version + 1,
       authority_generation = v_generation, updated_at = v_now
   WHERE principal_id = p_principal_id;
 

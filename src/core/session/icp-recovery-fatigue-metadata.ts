@@ -7,19 +7,19 @@ import {
   FATIGUE_REGULATION_STATE_VALUES,
 } from '../../shared/contracts/charge-policy.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
-import type {
-  CorrelationMetadata,
-  FatigueBudgetActorSnapshot,
-  FatigueBudgetPeerSnapshot,
-  FatigueBudgetScopeSnapshot,
-  FatigueEnforcementBudgetMetadata,
-  FatigueEnforcementMetadata,
-  FatiguePendingSpendMetadata,
-  FatigueRecordedEventMetadata,
-  FatigueSocialRegulationMetadata,
-  ObservabilityCallType,
-  RequesterProvenance,
+import {
+  REQUESTER_PROVENANCE_VALUES,
+  type CorrelationMetadata,
+  type FatigueBudgetActorSnapshot,
+  type FatigueBudgetPeerSnapshot,
+  type FatigueBudgetScopeSnapshot,
+  type FatigueEnforcementBudgetMetadata,
+  type FatigueEnforcementMetadata,
+  type FatiguePendingSpendMetadata,
+  type FatigueRecordedEventMetadata,
+  type FatigueSocialRegulationMetadata,
 } from '../../shared/contracts/runtime.js';
+import { OBSERVABILITY_CALL_TYPES } from '../../shared/contracts/observability-call-types.js';
 import { parseTurnId } from '../turns/id.js';
 import { isChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { TRUST_LEVELS } from '../../system/trust/types.js';
@@ -33,20 +33,6 @@ import {
   requireRecord,
   requireString,
 } from './icp-recovery-metadata-validation.js';
-
-const CORRELATION_OBSERVABILITY_CALL_TYPES: readonly ObservabilityCallType[] = [
-  'chat',
-  'tool',
-  'memory',
-  'summary',
-  'background',
-  'scheduled',
-];
-const CORRELATION_REQUESTER_PROVENANCE_VALUES: readonly RequesterProvenance[] = [
-  'human',
-  'self_directed',
-  'system',
-];
 
 function parseScope(value: unknown, label: string): FatigueBudgetScopeSnapshot {
   const raw = requireRecord(value, label);
@@ -481,14 +467,14 @@ function parseCorrelation(value: unknown, label: string): Partial<CorrelationMet
   if (raw.originType !== undefined) {
     result.originType = requireEnum(
       raw.originType,
-      CORRELATION_OBSERVABILITY_CALL_TYPES,
+      OBSERVABILITY_CALL_TYPES,
       `${label}.originType`,
     );
   }
   if (raw.callType !== undefined) {
     result.callType = requireEnum(
       raw.callType,
-      CORRELATION_OBSERVABILITY_CALL_TYPES,
+      OBSERVABILITY_CALL_TYPES,
       `${label}.callType`,
     );
   }
@@ -502,7 +488,7 @@ function parseCorrelation(value: unknown, label: string): Partial<CorrelationMet
   if (raw.requesterProvenance !== undefined) {
     result.requesterProvenance = requireEnum(
       raw.requesterProvenance,
-      CORRELATION_REQUESTER_PROVENANCE_VALUES,
+      REQUESTER_PROVENANCE_VALUES,
       `${label}.requesterProvenance`,
     );
   }

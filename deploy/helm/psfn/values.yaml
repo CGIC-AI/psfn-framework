@@ -73,15 +73,43 @@ runtime:
 
 bootstrap:
   # First-ever-install opt-in ONLY. When true, the seed init container copies
-  # cluster-global owner templates into system-data and per-companion owner
-  # templates (scheduler and capability-tier) into companion-data.
+  # missing cluster-global owners from /app/config/*.seed.json into system-data
+  # and missing per-companion owners (capability-tier.json, scheduler.json,
+  # charge-policy.json, skills.json) into this release's companion-data root.
   # Leave false so absent owner files fail closed at startup with the runtime's
   # loadRequiredJson error instead of silently running on seed defaults. See
   # src/system/config/load-or-seed.ts: "Runtime config must not seed itself".
   # Existing releases are upgraded independently of this flag: the init
   # container moves legacy system-data scheduler/capability values into their
-  # companion-owned paths using a hash-bound, fail-closed migration.
+  # companion-owned paths using a hash-bound, fail-closed migration. Existing
+  # system-data charge-policy/skills owners require the explicit, approval-bound
+  # system-owner fleet migration; this Helm compatibility path does not move them.
   seedOwnerFiles: false
+
+# Explicit, one-rollout compatibility boundary for legacy fleets whose
+# charge-policy.json and skills.json still live under system-data. This is
+# disabled after the approval-bound fan-out succeeds. `required` lets a
+# deployment pipeline fail rendering instead of accidentally omitting the
+# migration hook for a rollout that is known to need it.
+ownerMigration:
+  required: false
+  enabled: false
+  runtimeRoot: /runtime
+  systemDataDir: /runtime/system-data
+  systemDataClaim: ""
+  backupsDir: /backups
+  backupsClaim: ""
+  snapshotOutputDir: /backups/pre-owner-migration
+  activeDeadlineSeconds: 300
+  approvals: {}
+  # Every companion in companions.json must appear exactly once with its
+  # existing claim and exact runtime-root-relative mount path.
+  companions: []
+  verification:
+    enabled: false
+    initialChargeQuota: 1
+    initialMaxLoadedSkills: 1
+    timeoutSeconds: 60
 
 ports:
   gatewayApi: 10053
@@ -187,15 +215,20 @@ persistence:
     - ReadWriteOnce
   systemData:
     size: 2Gi
+    existingClaim: ""
   companionData:
     size: 10Gi
+    existingClaim: ""
   workspace:
     size: 10Gi
+    existingClaim: ""
   runtime:
     size: 10Gi
+    existingClaim: ""
   modelCache:
     enabled: true
     size: 8Gi
+    existingClaim: ""
 
 repositoryCheckout:
   enabled: false

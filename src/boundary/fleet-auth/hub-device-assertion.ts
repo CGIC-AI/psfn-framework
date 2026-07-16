@@ -10,8 +10,25 @@ import {
   isRecord,
   isRfc4122Uuid,
 } from '../../shared/utils/types.js';
+import type {
+  HubDeviceAssertionExpectedBinding,
+  HubDevicePrincipal,
+} from '../../shared/contracts/hub-device-ingress.js';
+
+export type {
+  HubDeviceAssertionExpectedBinding,
+  HubDevicePrincipal,
+} from '../../shared/contracts/hub-device-ingress.js';
 
 export type HubDeviceAssertionKeyStatus = 'active' | 'retiring' | 'revoked';
+
+/** Protocol/configuration rejection safe to classify separately from store outages. */
+export class HubDeviceAssertionRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HubDeviceAssertionRejectedError';
+  }
+}
 
 export interface HubDeviceAssertionVerifierKey {
   kid: string;
@@ -29,14 +46,6 @@ export interface HubDeviceAssertionVerifierConfig {
   keys: HubDeviceAssertionVerifierKey[];
 }
 
-export interface HubDeviceAssertionExpectedBinding {
-  deviceId: string;
-  enrollmentVersion: number;
-  enrollmentStatus: 'active' | 'revoked';
-  companionId: string;
-  sessionId: string;
-}
-
 export interface HubDeviceAssertionReplayStore {
   consume(input: {
     issuer: string;
@@ -45,23 +54,19 @@ export interface HubDeviceAssertionReplayStore {
     deviceId: string;
     enrollmentVersion: number;
     expiresAt: Date;
+    auditContext: HubDeviceAssertionReplayAuditContext;
   }): Promise<{ outcome: 'consumed' | 'replayed' | 'mismatch' }>;
 }
 
-export interface HubDevicePrincipal {
-  kind: 'hub_device';
-  issuer: string;
-  keyId: string;
-  deviceId: string;
-  enrollmentVersion: number;
-  enrollmentAssurance: 'device_credential';
-  placeId?: string;
-  audience: string;
-  companionId: string;
-  sessionId: string;
-  issuedAt: Date;
-  expiresAt: Date;
-  jti: string;
+export interface HubDeviceAssertionReplayAuditContext {
+  issuerDigest: string;
+  keyIdDigest: string;
+  audienceDigest: string;
+  companionIdDigest: string;
+  deviceIdDigest: string;
+  sessionIdDigest: string;
+  enrollmentVersionDigest: string;
+  jtiDigest: string;
 }
 
 const HEADER_KEYS = ['alg', 'typ', 'v', 'kid'] as const;
@@ -129,6 +134,9 @@ export async function verifyAndConsumeHubDeviceAssertion(input: {
   if (claims.session_id !== expectedSessionId) {
     throw new Error('Hub device assertion session binding does not match');
   }
+  if (claims.place_id !== input.expected.placeId) {
+    throw new Error('Hub device assertion place binding does not match');
+  }
   if (claims.enrollment_version !== input.expected.enrollmentVersion) {
     throw new Error('Hub device assertion enrollment version is stale');
   }
@@ -157,6 +165,16 @@ export async function verifyAndConsumeHubDeviceAssertion(input: {
     deviceId: claims.device_id,
     enrollmentVersion: claims.enrollment_version,
     expiresAt: replayFenceExpiresAt,
+    auditContext: {
+      issuerDigest: auditDigest(claims.iss),
+      keyIdDigest: auditDigest(header.kid),
+      audienceDigest: auditDigest(claims.aud),
+      companionIdDigest: auditDigest(claims.companion_id),
+      deviceIdDigest: auditDigest(claims.device_id),
+      sessionIdDigest: auditDigest(claims.session_id),
+      enrollmentVersionDigest: auditDigest(String(claims.enrollment_version)),
+      jtiDigest: auditDigest(claims.jti),
+    },
   });
   if (consumption.outcome === 'mismatch') {
     throw new Error('Hub device assertion mutated replay was rejected');
@@ -177,6 +195,10 @@ export async function verifyAndConsumeHubDeviceAssertion(input: {
     expiresAt,
     jti: claims.jti,
   };
+}
+
+function auditDigest(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
 interface ParsedVerifierConfig extends Omit<HubDeviceAssertionVerifierConfig, 'keys'> {

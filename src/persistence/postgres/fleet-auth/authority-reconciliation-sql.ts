@@ -73,6 +73,9 @@ BEGIN
   UPDATE fleet_auth.human_principals
   SET status = CASE WHEN status = 'revoked' THEN status ELSE 'quarantined' END,
       restore_state = 'quarantined', updated_at = clock_timestamp();
+  UPDATE fleet_auth.companion_authority_state
+  SET lifecycle = CASE WHEN lifecycle = 'removed' THEN lifecycle ELSE 'quarantined' END,
+      restore_state = 'quarantined', updated_at = clock_timestamp();
   UPDATE fleet_auth.provider_subjects
   SET state = CASE WHEN state = 'revoked' THEN state ELSE 'quarantined' END,
       restore_state = 'quarantined', updated_at = clock_timestamp();
@@ -85,15 +88,20 @@ BEGIN
   UPDATE fleet_auth.passkey_credentials
   SET state = CASE WHEN state = 'revoked' THEN state ELSE 'quarantined' END,
       restore_state = 'quarantined', updated_at = clock_timestamp();
+  UPDATE fleet_auth.contact_authority_intents
+  SET state = 'quarantined', restore_state = 'quarantined',
+      updated_at = clock_timestamp();
 
   DELETE FROM fleet_auth.jit_authorization_grants;
   DELETE FROM fleet_auth.step_up_challenges;
   DELETE FROM fleet_auth.oauth_transactions;
   DELETE FROM fleet_auth.browser_sessions;
   DELETE FROM fleet_auth.provider_token_custody;
+  DELETE FROM fleet_auth.discord_evidence_lifecycle_fences;
   DELETE FROM fleet_auth.discord_evidence_snapshots;
   DELETE FROM fleet_auth.trusted_host_ceremonies;
   DELETE FROM fleet_auth.hub_device_assertion_replays;
+  DELETE FROM fleet_auth.lifecycle_decision_receipts;
 
   UPDATE fleet_auth.authority_state
   SET authority_lineage_id = p_authority_lineage_id,

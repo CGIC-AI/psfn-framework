@@ -4,6 +4,10 @@ import {
   type ObservabilityCallType,
 } from '../contracts/runtime.js';
 import {
+  OBSERVABILITY_CALL_TYPES,
+  isObservabilityCallType,
+} from '../contracts/observability-call-types.js';
+import {
   CHARGE_POLICY_RUNTIME_LANE_VALUES,
   CHARGE_POLICY_SURFACE_VALUES,
   type ChargePolicyRuntimeLane,
@@ -16,14 +20,7 @@ import {
 
 export const MODEL_USAGE_UNKNOWN_DIMENSION = 'unknown' as const;
 
-export const MODEL_USAGE_CALL_TYPES = [
-  'chat',
-  'tool',
-  'memory',
-  'summary',
-  'background',
-  'scheduled',
-] as const satisfies readonly ObservabilityCallType[];
+export const MODEL_USAGE_CALL_TYPES = OBSERVABILITY_CALL_TYPES;
 export const MODEL_USAGE_ORIGIN_TYPES = [
   ...MODEL_USAGE_CALL_TYPES,
   MODEL_USAGE_UNKNOWN_DIMENSION,
@@ -156,7 +153,6 @@ export interface ModelUsageAttribution {
   workloadId: string;
 }
 
-const OBSERVABILITY_CALL_TYPES: ReadonlySet<ObservabilityCallType> = new Set(MODEL_USAGE_CALL_TYPES);
 const CHANNEL_TYPE_SET: ReadonlySet<string> = new Set(CHANNEL_TYPES);
 const CHARGE_LANE_SET: ReadonlySet<string> = new Set(CHARGE_POLICY_RUNTIME_LANE_VALUES);
 const RUNTIME_LANE_CLASS_SET: ReadonlySet<string> = new Set(Object.values(RUNTIME_LANE_CLASSES));
@@ -196,6 +192,29 @@ function normalizeEnum<T extends string>(
   return normalized as T;
 }
 
+function normalizeObservabilityCallType(
+  value: unknown,
+  field: string,
+  options: { required: true },
+): ObservabilityCallType;
+function normalizeObservabilityCallType(
+  value: unknown,
+  field: string,
+  options?: { required?: false },
+): ObservabilityCallType | typeof MODEL_USAGE_UNKNOWN_DIMENSION;
+function normalizeObservabilityCallType(
+  value: unknown,
+  field: string,
+  options: { required?: boolean } = {},
+): ObservabilityCallType | typeof MODEL_USAGE_UNKNOWN_DIMENSION {
+  if (value === undefined && !options.required) return MODEL_USAGE_UNKNOWN_DIMENSION;
+  const normalized = normalizeDimension(value, field);
+  if (!isObservabilityCallType(normalized)) {
+    throw new Error(`${field} has unsupported value ${JSON.stringify(normalized)}`);
+  }
+  return normalized;
+}
+
 function deriveWorkerId(channelId: string, prefix: 'shard:' | 'subagent:'): string | undefined {
   if (!channelId.startsWith(prefix)) return undefined;
   const value = channelId.slice(prefix.length).trim();
@@ -226,17 +245,15 @@ export function normalizeModelUsageAttribution(
       'attribution.channelType',
       CHANNEL_TYPE_SET,
     ),
-    callType: normalizeEnum<ObservabilityCallType>(
+    callType: normalizeObservabilityCallType(
       input.callType,
       'attribution.callType',
-      OBSERVABILITY_CALL_TYPES,
       { required: true },
-    ) as ObservabilityCallType,
+    ),
     purpose: normalizeDimension(input.purpose, 'attribution.purpose'),
-    originType: normalizeEnum<ObservabilityCallType>(
+    originType: normalizeObservabilityCallType(
       input.originType,
       'attribution.originType',
-      OBSERVABILITY_CALL_TYPES,
     ),
     originStage: normalizeDimension(input.originStage, 'attribution.originStage'),
     service: normalizeDimension(input.service, 'attribution.service'),

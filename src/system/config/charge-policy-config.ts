@@ -574,7 +574,7 @@ function parseFatiguePolicyConfig(
   };
 }
 
-function validateChargePolicyConfig(
+export function validateChargePolicyConfig(
   raw: unknown,
   sourcePath: string,
 ): ChargePolicyConfig {

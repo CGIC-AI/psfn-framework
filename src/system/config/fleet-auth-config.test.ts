@@ -28,7 +28,7 @@ function credential(envName: string) {
   return { kind: 'env' as const, envName };
 }
 
-function validConfig(publicKeyPem: string): FleetAuthConfig {
+function validConfig(publicKeyPem: string, hubPublicKeyPem: string): FleetAuthConfig {
   return {
     schemaVersion: 1,
     activationGeneration: 1,
@@ -71,7 +71,7 @@ function validConfig(publicKeyPem: string): FleetAuthConfig {
       clockSkewSeconds: 2,
       keys: [{
         kid: 'hub-2026-07',
-        publicKeyPem,
+        publicKeyPem: hubPublicKeyPem,
         notBefore: '2026-07-01T00:00:00.000Z',
         notAfter: '2099-07-01T00:00:00.000Z',
         status: 'active',
@@ -103,11 +103,23 @@ function validConfig(publicKeyPem: string): FleetAuthConfig {
   };
 }
 
+function rewrapPublicKeyPem(publicKeyPem: string): string {
+  const body = publicKeyPem
+    .replace('-----BEGIN PUBLIC KEY-----', '')
+    .replace('-----END PUBLIC KEY-----', '')
+    .replace(/\s/gu, '');
+  const lines = body.match(/.{1,17}/gu);
+  if (!lines) throw new Error('test public key must contain DER bytes');
+  return `-----BEGIN PUBLIC KEY-----\r\n${lines.join('\r\n')}\r\n-----END PUBLIC KEY-----\r\n`;
+}
+
 describe('fleet-auth owner-file configuration', () => {
   const tempDirs: string[] = [];
   const keyPair = generateKeyPairSync('ed25519');
   const publicKeyPem = keyPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
   const privateKeyPem = keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const hubKeyPair = generateKeyPairSync('ed25519');
+  const hubPublicKeyPem = hubKeyPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
 
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
@@ -131,7 +143,7 @@ describe('fleet-auth owner-file configuration', () => {
     expect(() => resolveFleetAuthOwnerFile({ dataDir, enabled: true, processMode: 'gateway' }))
       .toThrow(/enabled but .*fleet-auth\.json.*missing/i);
 
-    writeConfig(dataDir, validConfig(publicKeyPem));
+    writeConfig(dataDir, validConfig(publicKeyPem, hubPublicKeyPem));
     expect(() => resolveFleetAuthOwnerFile({ dataDir, enabled: false, processMode: 'agent' }))
       .toThrow(/present.*PSFN_FLEET_AUTH.*not enabled/i);
     expect(() => isFleetAuthEnabled({ [FLEET_AUTH_ENV_VAR]: 'perhaps' }))
@@ -140,7 +152,7 @@ describe('fleet-auth owner-file configuration', () => {
 
   it('projects the full config only to the gateway and public verifier material elsewhere', () => {
     const dataDir = makeRoot();
-    writeConfig(dataDir, validConfig(publicKeyPem));
+    writeConfig(dataDir, validConfig(publicKeyPem, hubPublicKeyPem));
 
     const gateway = resolveFleetAuthOwnerFile({ dataDir, enabled: true, processMode: 'gateway' });
     const agent = resolveFleetAuthOwnerFile({ dataDir, enabled: true, processMode: 'agent' });
@@ -154,11 +166,11 @@ describe('fleet-auth owner-file configuration', () => {
       enabled: true,
       canonicalOrigin: 'https://fleet.example.test',
       verifierKeys: validateFleetAuthConfig(
-        validConfig(publicKeyPem),
+        validConfig(publicKeyPem, hubPublicKeyPem),
         FLEET_AUTH_FILE_NAME,
       ).verifierKeys,
       hubDeviceAssertions: validateFleetAuthConfig(
-        validConfig(publicKeyPem),
+        validConfig(publicKeyPem, hubPublicKeyPem),
         FLEET_AUTH_FILE_NAME,
       ).hubDeviceAssertions,
     });
@@ -168,7 +180,7 @@ describe('fleet-auth owner-file configuration', () => {
   });
 
   it('rejects unknown keys, unsafe origins, partial mappings, duplicates, and widening vocabulary', () => {
-    const config = validConfig(publicKeyPem);
+    const config = validConfig(publicKeyPem, hubPublicKeyPem);
     expect(() => validateFleetAuthConfig({ ...config, secret: 'inline' }, 'fleet-auth.json'))
       .toThrow(/unknown keys: secret/);
     expect(() => validateFleetAuthConfig({ ...config, canonicalOrigin: 'http://fleet.example.test' }, 'fleet-auth.json'))
@@ -206,7 +218,7 @@ describe('fleet-auth owner-file configuration', () => {
   });
 
   it('rejects invalid verifier rings, private signing keys in public config, and reused credentials', () => {
-    const config = validConfig(publicKeyPem);
+    const config = validConfig(publicKeyPem, hubPublicKeyPem);
     expect(() => validateFleetAuthConfig({
       ...config,
       verifierKeys: [{ ...config.verifierKeys[0], publicKeyPem: privateKeyPem }],
@@ -252,8 +264,122 @@ describe('fleet-auth owner-file configuration', () => {
     }, 'fleet-auth.json')).toThrow(/must not reuse POSTGRES_DATABASE_URL/);
   });
 
+  it('rejects canonical public-key reuse across and within verifier rings', () => {
+    const config = validConfig(publicKeyPem, hubPublicKeyPem);
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      hubDeviceAssertions: {
+        ...config.hubDeviceAssertions,
+        keys: [{
+          ...config.hubDeviceAssertions.keys[0],
+          kid: 'different-hub-kid',
+          publicKeyPem: rewrapPublicKeyPem(publicKeyPem),
+        }],
+      },
+    }, 'fleet-auth.json')).toThrow(/broker and Hub verifier rings must use distinct Ed25519 keys/i);
+
+    const sharedRotation = generateKeyPairSync('ed25519').publicKey
+      .export({ type: 'spki', format: 'pem' }).toString();
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      verifierKeys: [
+        ...config.verifierKeys,
+        {
+          issuer: 'retired-broker-issuer',
+          kid: 'retired-broker-kid',
+          publicKeyPem: sharedRotation,
+          notBefore: '2025-01-01T00:00:00.000Z',
+          notAfter: '2025-02-01T00:00:00.000Z',
+          status: 'revoked',
+        },
+      ],
+      hubDeviceAssertions: {
+        ...config.hubDeviceAssertions,
+        keys: [
+          ...config.hubDeviceAssertions.keys,
+          {
+            kid: 'future-hub-kid',
+            publicKeyPem: rewrapPublicKeyPem(sharedRotation),
+            notBefore: '2028-01-01T00:00:00.000Z',
+            notAfter: '2028-02-01T00:00:00.000Z',
+            status: 'retiring',
+          },
+        ],
+      },
+    }, 'fleet-auth.json')).toThrow(/broker and Hub verifier rings must use distinct Ed25519 keys/i);
+
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      verifierKeys: [
+        ...config.verifierKeys,
+        {
+          ...config.verifierKeys[0],
+          issuer: 'retired-broker-issuer',
+          kid: 'duplicate-broker-key',
+          publicKeyPem: rewrapPublicKeyPem(publicKeyPem),
+          notBefore: '2025-01-01T00:00:00.000Z',
+          notAfter: '2025-02-01T00:00:00.000Z',
+          status: 'revoked',
+        },
+      ],
+    }, 'fleet-auth.json')).toThrow(/broker verifier ring must not contain duplicate Ed25519 keys/i);
+
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      hubDeviceAssertions: {
+        ...config.hubDeviceAssertions,
+        keys: [
+          ...config.hubDeviceAssertions.keys,
+          {
+            ...config.hubDeviceAssertions.keys[0],
+            kid: 'duplicate-hub-key',
+            publicKeyPem: rewrapPublicKeyPem(hubPublicKeyPem),
+            notBefore: '2025-01-01T00:00:00.000Z',
+            notAfter: '2025-02-01T00:00:00.000Z',
+            status: 'revoked',
+          },
+        ],
+      },
+    }, 'fleet-auth.json')).toThrow(/Hub verifier ring must not contain duplicate Ed25519 keys/i);
+  });
+
+  it('preserves distinct broker and Hub key rotations', () => {
+    const config = validConfig(publicKeyPem, hubPublicKeyPem);
+    const retiringBroker = generateKeyPairSync('ed25519').publicKey
+      .export({ type: 'spki', format: 'pem' }).toString();
+    const retiringHub = generateKeyPairSync('ed25519').publicKey
+      .export({ type: 'spki', format: 'pem' }).toString();
+    const validated = validateFleetAuthConfig({
+      ...config,
+      verifierKeys: [
+        ...config.verifierKeys,
+        {
+          ...config.verifierKeys[0],
+          kid: '2026-06-retiring',
+          publicKeyPem: retiringBroker,
+          status: 'retiring',
+        },
+      ],
+      hubDeviceAssertions: {
+        ...config.hubDeviceAssertions,
+        keys: [
+          ...config.hubDeviceAssertions.keys,
+          {
+            ...config.hubDeviceAssertions.keys[0],
+            kid: 'hub-2026-06-retiring',
+            publicKeyPem: retiringHub,
+            status: 'retiring',
+          },
+        ],
+      },
+    }, 'fleet-auth.json');
+
+    expect(validated.verifierKeys).toHaveLength(2);
+    expect(validated.hubDeviceAssertions.keys).toHaveLength(2);
+  });
+
   it('resolves every private credential only at the gateway and enforces role/database separation', () => {
-    const config = validConfig(publicKeyPem);
+    const config = validConfig(publicKeyPem, hubPublicKeyPem);
     const floorRoot = join(makeRoot(), 'authority');
     mkdirSync(floorRoot, { mode: 0o700 });
     chmodSync(floorRoot, 0o700);
@@ -278,6 +404,14 @@ describe('fleet-auth owner-file configuration', () => {
     expect(resolved.database.backupRestoreUrl).toContain('fleet_auth_backup');
     expect(resolved.authorityFloorRoot).toBe(floorRoot);
     expect(resolved.assertionSigningKid).toBe('2026-07-primary');
+
+    const forgedHubTrust = structuredClone(config);
+    forgedHubTrust.hubDeviceAssertions.keys[0].publicKeyPem = publicKeyPem;
+    expect(() => resolveGatewayFleetAuthSecrets({
+      config: forgedHubTrust,
+      credentialVault: createStaticCredentialVault(credentials),
+      protectedRestoreRoots: [],
+    })).toThrow(/broker private signing key must not match any trusted Hub key/i);
 
     expect(() => resolveGatewayFleetAuthSecrets({
       config,
@@ -354,7 +488,7 @@ describe('fleet-auth owner-file configuration', () => {
   });
 
   it('publishes Garden-safe metadata without credential refs or verifier key bytes', () => {
-    const config = validConfig(publicKeyPem);
+    const config = validConfig(publicKeyPem, hubPublicKeyPem);
     const metadata = projectFleetAuthGardenMetadata(config);
     expect(metadata).toMatchObject({
       enabled: true,
@@ -378,10 +512,57 @@ describe('fleet-auth owner-file configuration', () => {
     expect(serialized).not.toContain('clientId');
   });
 
-  it('keeps the distributed example valid without embedding secret values', () => {
+  it('keeps the distributed example schema-readable but rejects every seed key in enabled config', () => {
     const raw = readFileSync(join(process.cwd(), 'config', 'fleet-auth.seed.json'), 'utf8');
-    expect(validateFleetAuthConfig(JSON.parse(raw), 'fleet-auth.seed.json').schemaVersion).toBe(1);
+    const seed = validateFleetAuthConfig(JSON.parse(raw), 'fleet-auth.seed.json');
+    expect(seed.schemaVersion).toBe(1);
     expect(raw).not.toContain('PRIVATE KEY');
     expect(raw).not.toContain('postgres://');
+
+    const dataDir = makeRoot();
+    writeFileSync(join(dataDir, FLEET_AUTH_FILE_NAME), raw);
+    expect(() => resolveFleetAuthOwnerFile({
+      dataDir,
+      enabled: true,
+      processMode: 'gateway',
+    })).toThrow(/replace-before-enable.*must be replaced/i);
+
+    const config = validConfig(publicKeyPem, hubPublicKeyPem);
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      verifierKeys: [{
+        ...config.verifierKeys[0],
+        kid: 'renamed-seed-broker-key',
+        publicKeyPem: seed.verifierKeys[0].publicKeyPem,
+      }],
+    }, FLEET_AUTH_FILE_NAME)).toThrow(/distributed seed or test fixture key must be replaced/i);
+
+    const fixture = JSON.parse(readFileSync(
+      join(process.cwd(), 'test-fixtures/fleet-sso/hub-device-assertion-v1.json'),
+      'utf8',
+    )) as { publicKeyPem: string };
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      hubDeviceAssertions: {
+        ...config.hubDeviceAssertions,
+        keys: [{
+          ...config.hubDeviceAssertions.keys[0],
+          kid: 'renamed-fixture-hub-key',
+          publicKeyPem: fixture.publicKeyPem,
+        }],
+      },
+    }, FLEET_AUTH_FILE_NAME)).toThrow(/distributed seed or test fixture key must be replaced/i);
+
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      verifierKeys: [{ ...config.verifierKeys[0], kid: 'replace-before-enable' }],
+    }, FLEET_AUTH_FILE_NAME)).toThrow(/replace-before-enable.*must be replaced/i);
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      hubDeviceAssertions: {
+        ...config.hubDeviceAssertions,
+        keys: [{ ...config.hubDeviceAssertions.keys[0], kid: 'replace-before-enable' }],
+      },
+    }, FLEET_AUTH_FILE_NAME)).toThrow(/replace-before-enable.*must be replaced/i);
   });
 });

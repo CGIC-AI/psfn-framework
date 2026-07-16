@@ -11,6 +11,7 @@ import type {
   SatelliteEndpointAuthConfig,
   SatelliteEndpointAudioRuntimeConfig,
   SatelliteEndpointConfig,
+  SatelliteHubDeviceEnrollmentConfig,
   SatelliteEndpointRefreshConfig,
   SatelliteEndpointRuntimeConfig,
   SatelliteEndpointTransportConfig,
@@ -404,6 +405,7 @@ function parseEndpointConfig(value: unknown, fieldName: string): SatelliteEndpoi
       'defaultIdentity',
       'maxCapabilities',
       'telemetryScopes',
+      'hubDeviceEnrollment',
       'runtime',
     ],
     fieldName,
@@ -420,6 +422,10 @@ function parseEndpointConfig(value: unknown, fieldName: string): SatelliteEndpoi
   const maxCapabilities = parseCapabilities(value.maxCapabilities, `${fieldName}.maxCapabilities`);
   const telemetryScopes = parseTelemetryScopes(value.telemetryScopes, `${fieldName}.telemetryScopes`);
   const runtime = parseEndpointRuntimeConfig(value.runtime, `${fieldName}.runtime`);
+  const hubDeviceEnrollment = parseHubDeviceEnrollment(
+    value.hubDeviceEnrollment,
+    `${fieldName}.hubDeviceEnrollment`,
+  );
   if (!isRecord(value.defaultIdentity)) {
     throw new Error(`${fieldName}.defaultIdentity must be an object`);
   }
@@ -452,8 +458,30 @@ function parseEndpointConfig(value: unknown, fieldName: string): SatelliteEndpoi
     defaultIdentity,
     maxCapabilities,
     telemetryScopes,
+    ...(hubDeviceEnrollment ? { hubDeviceEnrollment } : {}),
     ...(runtime ? { runtime } : {}),
   };
+}
+
+function parseHubDeviceEnrollment(
+  value: unknown,
+  fieldName: string,
+): SatelliteHubDeviceEnrollmentConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error(`${fieldName} must be an object`);
+  assertNoUnknownKeys(value, ['deviceId', 'enrollmentVersion', 'enrollmentStatus'], fieldName);
+  const deviceId = assertIdToken(
+    parseConfiguredString(value.deviceId, `${fieldName}.deviceId`),
+    `${fieldName}.deviceId`,
+  );
+  const enrollmentVersion = parsePositiveInteger(
+    value.enrollmentVersion,
+    `${fieldName}.enrollmentVersion`,
+  );
+  if (value.enrollmentStatus !== 'active' && value.enrollmentStatus !== 'revoked') {
+    throw new Error(`${fieldName}.enrollmentStatus must be one of: active, revoked`);
+  }
+  return { deviceId, enrollmentVersion, enrollmentStatus: value.enrollmentStatus };
 }
 
 function parseSatelliteConfig(value: unknown, fieldName: string): SatelliteConfig {
@@ -501,6 +529,7 @@ function assertUniqueRegistryBindings(config: SatelliteRegistryConfig): void {
   const satelliteIds = new Set<string>();
   const endpointKeys = new Set<string>();
   const claimKeys = new Set<string>();
+  const hubDeviceIds = new Set<string>();
 
   for (const satellite of config.satellites) {
     if (satelliteIds.has(satellite.satelliteId)) {
@@ -513,6 +542,13 @@ function assertUniqueRegistryBindings(config: SatelliteRegistryConfig): void {
         throw new Error(`satellites.json has duplicate endpoint "${endpointKey}"`);
       }
       endpointKeys.add(endpointKey);
+      if (endpoint.hubDeviceEnrollment) {
+        const { deviceId } = endpoint.hubDeviceEnrollment;
+        if (hubDeviceIds.has(deviceId)) {
+          throw new Error(`satellites.json has duplicate Hub deviceId "${deviceId}"`);
+        }
+        hubDeviceIds.add(deviceId);
+      }
       for (const claimType of endpoint.claimTypes) {
         const claimKey = `${satellite.satelliteId}:${endpoint.endpointId}:${claimType}`;
         if (claimKeys.has(claimKey)) {
@@ -596,6 +632,7 @@ function toSerializableSatelliteRegistry(config: SatelliteRegistryConfig): unkno
         defaultIdentity: endpoint.defaultIdentity,
         maxCapabilities: endpoint.maxCapabilities,
         ...(endpoint.telemetryScopes.length > 0 ? { telemetryScopes: endpoint.telemetryScopes } : {}),
+        ...(endpoint.hubDeviceEnrollment ? { hubDeviceEnrollment: endpoint.hubDeviceEnrollment } : {}),
         ...(endpoint.runtime ? { runtime: endpoint.runtime } : {}),
       })),
     })),

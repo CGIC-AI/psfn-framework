@@ -48,6 +48,10 @@ import {
   type CompressionGuidelineEvolutionPort,
 } from '../../core/session/compression-guideline-evolution.js';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import {
+  BACKGROUND_WORK_SUPERVISOR_TASK_ID,
+  registerDurableBackgroundWorkSupervisorTask,
+} from '../../core/agent/background-work/scheduler-task.js';
 import type { SchedulerRuntimeConfig } from '../../system/config/scheduler-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SharedWorldWikiCaretakerService } from '../../faculties/wiki/shared-world-caretaker.js';
@@ -60,7 +64,7 @@ import {
 } from '../../persistence/layout.js';
 
 const log = createComponentLogger('Agent');
-export const BACKGROUND_WORK_SUPERVISOR_TASK_ID = 'background-work-supervisor';
+export { BACKGROUND_WORK_SUPERVISOR_TASK_ID };
 export const SHARED_WORLD_WIKI_CARETAKER_OPERATION_ID = 'shared-world-wiki-caretaker';
 
 export interface AgentSchedulerRuntime {
@@ -97,24 +101,6 @@ export interface BuildAgentSchedulerRuntimeOptions {
   socialGraphWatermarkStore?: SocialGraphBuilderWatermarkStore | null;
   /** Multi-companion-only operator-owned shared-world projection caretaker. */
   sharedWorldWikiCaretaker?: Pick<SharedWorldWikiCaretakerService, 'cleanupChangedContent'> | null;
-}
-
-export function registerBackgroundWorkSupervisorTask(options: {
-  scheduler: Scheduler;
-  agentLoop: Pick<SubstrateAgent, 'hasDurableBackgroundWorkSupervisor' | 'tickBackgroundWork'>;
-  intervalMs: number;
-}): void {
-  if (!options.agentLoop.hasDurableBackgroundWorkSupervisor()) {
-    throw new Error('Agent scheduler requires a durable background work supervisor');
-  }
-  options.scheduler.register({
-    id: BACKGROUND_WORK_SUPERVISOR_TASK_ID,
-    name: 'Durable Background Work Supervisor',
-    type: 'every',
-    intervalMs: options.intervalMs,
-    handler: () => options.agentLoop.tickBackgroundWork(),
-    state: 'idle',
-  });
 }
 
 export function registerSalienceDecayOperation(input: {
@@ -310,10 +296,10 @@ export function buildAgentSchedulerRuntime(
       eligibilityGate: options.eligibilityGate,
     },
   );
-  registerBackgroundWorkSupervisorTask({
-    scheduler,
+  registerDurableBackgroundWorkSupervisorTask({
     agentLoop: options.agentLoop,
     intervalMs: options.schedulerConfig.tickIntervalMs,
+    scheduler,
   });
 
   const backgroundMaintenance = new BackgroundMaintenanceRegistry({

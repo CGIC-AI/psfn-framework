@@ -1,9 +1,13 @@
 import {
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { spawnSync } from 'node:child_process';
@@ -133,6 +137,66 @@ describe('migrateLegacySchedulerOwner', () => {
       removedPaths: ['salienceDecayIntervalMs', 'socialGraphBuilder.intervalMs'],
     });
     expect(readFileSync(filePath, 'utf8')).toBe(before);
+  });
+
+  it('refuses a scheduler owner leaf symlink without importing or replacing its target', () => {
+    const { dataDir, filePath } = prepareOwner();
+    const otherCompanionDir = join(dataDir, 'other-companion');
+    const otherCompanionOwner = join(otherCompanionDir, SCHEDULER_FILE_NAME);
+    mkdirSync(otherCompanionDir);
+    const targetBytes = readFileSync(filePath, 'utf8');
+    writeFileSync(otherCompanionOwner, targetBytes, 'utf8');
+    rmSync(filePath);
+    symlinkSync(otherCompanionOwner, filePath);
+
+    expect(() => migrateLegacySchedulerOwner({ dataDir, apply: true })).toThrow(
+      /regular file without symlinks/,
+    );
+    expect(lstatSync(filePath).isSymbolicLink()).toBe(true);
+    expect(readFileSync(otherCompanionOwner, 'utf8')).toBe(targetBytes);
+  });
+
+  it('refuses a symlinked data-directory ancestor without mutating its scheduler owner', () => {
+    const { dataDir, filePath } = prepareOwner();
+    const realCompanionDir = join(dataDir, 'real-companion');
+    const linkedCompanionDir = join(dataDir, 'linked-companion');
+    mkdirSync(realCompanionDir);
+    const realOwnerPath = join(realCompanionDir, SCHEDULER_FILE_NAME);
+    renameSync(filePath, realOwnerPath);
+    symlinkSync(realCompanionDir, linkedCompanionDir);
+    const before = readFileSync(realOwnerPath, 'utf8');
+
+    expect(() => migrateLegacySchedulerOwner({
+      dataDir: linkedCompanionDir,
+      apply: true,
+    })).toThrow(/directory without symlinks/);
+    expect(readFileSync(realOwnerPath, 'utf8')).toBe(before);
+  });
+
+  it('fails closed and cleans its temporary when the pinned data directory path is swapped', () => {
+    const { dataDir, filePath } = prepareOwner();
+    const movedDataDir = `${dataDir}-moved`;
+    const before = readFileSync(filePath, 'utf8');
+    const replacementBytes = '{"replacement":true}\n';
+
+    try {
+      expect(() => migrateLegacySchedulerOwner({
+        dataDir,
+        apply: true,
+        faultInjection: (stage) => {
+          if (stage !== 'after_file_sync') return;
+          renameSync(dataDir, movedDataDir);
+          mkdirSync(dataDir);
+          writeFileSync(filePath, replacementBytes, 'utf8');
+        },
+      })).toThrow(/changed identity/);
+
+      expect(readFileSync(join(movedDataDir, SCHEDULER_FILE_NAME), 'utf8')).toBe(before);
+      expect(readFileSync(filePath, 'utf8')).toBe(replacementBytes);
+      expect(readdirSync(movedDataDir).filter(name => name.endsWith('.tmp'))).toEqual([]);
+    } finally {
+      rmSync(movedDataDir, { recursive: true, force: true });
+    }
   });
 
   it('validates then atomically applies once while preserving unrelated owner data', () => {

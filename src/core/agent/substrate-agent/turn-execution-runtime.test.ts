@@ -369,7 +369,7 @@ async function flushAsyncWork() {
 describe('handleMessageForTurn presence canonicalization', () => {
   it('promotes authority-resolved satellite presence into the turn context before author resolution', async () => {
     const eventBus = new EventBus();
-    const buildContext = vi.fn(async () => ({
+    const buildContext = vi.fn<SessionManager['buildContext']>(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
       manifest: undefined,
@@ -491,9 +491,11 @@ describe('handleMessageForTurn presence canonicalization', () => {
     await handleMessageForTurn(runtime, createMessage('msg-moa-charge-config'));
 
     expect(mockedRunMoaTurn).toHaveBeenCalledTimes(1);
-    const moaInput = mockedRunMoaTurn.mock.calls[0]?.[0];
-    const assembledSystemPrompt = buildContext.mock.calls[0]?.[1] ?? '';
-    expect(moaInput?.authoritativeSystemPrompt).toBe(assembledSystemPrompt);
+    const firstMoaCall = mockedRunMoaTurn.mock.calls[0];
+    const firstBuildContextCall = buildContext.mock.calls[0];
+    const [moaInput] = firstMoaCall;
+    const assembledSystemPrompt = firstBuildContextCall[1];
+    expect(moaInput.authoritativeSystemPrompt).toBe(assembledSystemPrompt);
     expect(assembledSystemPrompt).toContain('System prompt');
     expect(moaInput).toMatchObject({
       config: expect.objectContaining({
@@ -504,7 +506,7 @@ describe('handleMessageForTurn presence canonicalization', () => {
         }),
       }),
     });
-    const moaPrompt = moaInput?.prompt ?? '';
+    const moaPrompt = moaInput.prompt;
     expect(moaPrompt).not.toContain('System prompt');
     expect(moaPrompt).toContain('Session memory sentinel');
     expect(moaPrompt).toContain('assistant:\nEarlier assistant reply');

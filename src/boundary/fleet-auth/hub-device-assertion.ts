@@ -45,7 +45,19 @@ export interface HubDeviceAssertionReplayStore {
     deviceId: string;
     enrollmentVersion: number;
     expiresAt: Date;
+    auditContext: HubDeviceAssertionReplayAuditContext;
   }): Promise<{ outcome: 'consumed' | 'replayed' | 'mismatch' }>;
+}
+
+export interface HubDeviceAssertionReplayAuditContext {
+  issuerDigest: string;
+  keyIdDigest: string;
+  audienceDigest: string;
+  companionIdDigest: string;
+  deviceIdDigest: string;
+  sessionIdDigest: string;
+  enrollmentVersionDigest: string;
+  jtiDigest: string;
 }
 
 export interface HubDevicePrincipal {
@@ -157,6 +169,16 @@ export async function verifyAndConsumeHubDeviceAssertion(input: {
     deviceId: claims.device_id,
     enrollmentVersion: claims.enrollment_version,
     expiresAt: replayFenceExpiresAt,
+    auditContext: {
+      issuerDigest: auditDigest(claims.iss),
+      keyIdDigest: auditDigest(header.kid),
+      audienceDigest: auditDigest(claims.aud),
+      companionIdDigest: auditDigest(claims.companion_id),
+      deviceIdDigest: auditDigest(claims.device_id),
+      sessionIdDigest: auditDigest(claims.session_id),
+      enrollmentVersionDigest: auditDigest(String(claims.enrollment_version)),
+      jtiDigest: auditDigest(claims.jti),
+    },
   });
   if (consumption.outcome === 'mismatch') {
     throw new Error('Hub device assertion mutated replay was rejected');
@@ -177,6 +199,10 @@ export async function verifyAndConsumeHubDeviceAssertion(input: {
     expiresAt,
     jti: claims.jti,
   };
+}
+
+function auditDigest(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
 interface ParsedVerifierConfig extends Omit<HubDeviceAssertionVerifierConfig, 'keys'> {

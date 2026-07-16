@@ -27,6 +27,13 @@ import {
   FLEET_AUTH_RECONCILE_FUNCTION_ARG_TYPES,
   FLEET_AUTH_RECONCILE_FUNCTION_NAME,
 } from './authority-reconciliation-sql.js';
+import {
+  FLEET_AUTH_CONSUME_HUB_REPLAY_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_CONSUME_HUB_REPLAY_FUNCTION_NAME,
+  FLEET_AUTH_HUB_REPLAY_BOUNDARY_DDL_SQL,
+  FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_NAME,
+} from './hub-device-assertion-replay-sql.js';
 
 export const FLEET_AUTH_SCHEMA_NAME = 'fleet_auth';
 const MIGRATION_LOCK_CLASS = 0x5053464e;
@@ -281,6 +288,12 @@ async function applyRoleGrants(
   await client.query(
     `GRANT SELECT, INSERT, UPDATE, DELETE ON ${FLEET_AUTH_RUNTIME_MUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${runtime}`,
   );
+  // Hub assertion replay keys are serialized and mutated only inside the
+  // schema-owner consume procedure. Ordinary runtime SQL may observe the fence
+  // for diagnostics but cannot replace, delete, or pre-seed it.
+  await client.query(
+    `REVOKE INSERT, UPDATE, DELETE ON ${qualifiedTable('hub_device_assertion_replays')} FROM ${runtime}`,
+  );
   // The restorable database copy of the non-restored authority floor is
   // observable by the broker, never directly mutable by its ordinary SQL
   // credential. Startup/restore reconciliation uses the coordinator role;
@@ -311,6 +324,12 @@ async function applyRoleGrants(
   await client.query(
     `GRANT SELECT, INSERT, UPDATE, DELETE ON ${FLEET_AUTH_MUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${backup}`,
   );
+  // Replay rows are ephemeral and never restored. Reconciliation and expiry
+  // cleanup run through schema-owner procedures, so the durable coordinator has
+  // no reason to mutate a live replay fence directly.
+  await client.query(
+    `REVOKE INSERT, UPDATE, DELETE ON ${qualifiedTable('hub_device_assertion_replays')} FROM ${backup}`,
+  );
   await client.query(
     `GRANT SELECT, INSERT ON ${FLEET_AUTH_IMMUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${backup}`,
   );
@@ -335,6 +354,12 @@ async function applyRoleGrants(
   await client.query(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_RECONCILE_FUNCTION_NAME}(${FLEET_AUTH_RECONCILE_FUNCTION_ARG_TYPES}) TO ${backup}`,
   );
+  await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_CONSUME_HUB_REPLAY_FUNCTION_NAME}(${FLEET_AUTH_CONSUME_HUB_REPLAY_FUNCTION_ARG_TYPES}) TO ${runtime}`,
+  );
+  await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_NAME}(${FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_ARG_TYPES}) TO ${backup}`,
+  );
 }
 
 /**
@@ -352,6 +377,7 @@ async function applyFleetAuthReapprovalBoundary(
   await client.query(FLEET_AUTH_FIRST_OWNER_DDL_SQL);
   await client.query(FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL);
   await client.query(FLEET_AUTH_RECONCILIATION_DDL_SQL);
+  await client.query(FLEET_AUTH_HUB_REPLAY_BOUNDARY_DDL_SQL);
 }
 
 export async function migrateFleetAuthSchema(options: {
@@ -543,6 +569,10 @@ async function assertExactDml(
       // full DML on every mutable table and never receives reapproval EXECUTE.
       if (expectedRole === roles.runtime && tableName === 'trusted_host_ceremonies') {
         return new Set(['SELECT', 'DELETE']);
+      }
+      if (tableName === 'hub_device_assertion_replays'
+        && (expectedRole === roles.runtime || expectedRole === roles.backupRestore)) {
+        return new Set(['SELECT']);
       }
       return new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE']);
     }

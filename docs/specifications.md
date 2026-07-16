@@ -39,10 +39,13 @@ Supported until beta:
   only `PER_COMPANION_OWNER_FILES` entries left at `SYSTEM_DATA_DIR`, fan their
   exact approved bytes to every companion enumerated by `companions.json`, and
   retire each source only after all destinations verify. Validation is the
-  exact source digest supplied per file, no-overwrite destination checks, and
+  exact source digest and filesystem identity per file, no-overwrite destination
+  checks, descriptor-pinned receipt/staging/destination directories, durable
+  receipt-owned source quarantine, and
   the durable `migrations/system-owner-fleet-reroot.json` receipt recording
-  every source/destination digest. Partial retries must match that receipt and
-  the unchanged fleet. Remove the command and receipt reader before beta after
+  every source/destination digest and identity. Partial retries must match that
+  receipt, its pinned directory identities, and the unchanged fleet. Remove the
+  command and receipt reader before beta after
   every split fleet has a completed receipt (or a plan proving no system-root
   per-companion owners remain).
 - Explicit scheduler owner-shape migration through

@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -125,6 +126,7 @@ describe('system-owner fleet migration', () => {
       status: string;
       files: Array<{
         ownerFile: string;
+        quarantinePath: string;
         sourceSha256: string;
         status: string;
         destinations: Array<{ sha256: string; status: string }>;
@@ -135,6 +137,7 @@ describe('system-owner fleet migration', () => {
     for (const file of receipt.files) {
       expect(file.sourceSha256).toBe(approvals[file.ownerFile]);
       expect(file.status).toBe('retired');
+      expect(readFileSync(file.quarantinePath)).toEqual(sourceBytes.get(file.ownerFile));
       expect(file.destinations).toHaveLength(fleet.companions.length);
       expect(file.destinations.every(destination => (
         destination.sha256 === file.sourceSha256 && destination.status === 'verified'
@@ -230,7 +233,8 @@ describe('system-owner fleet migration', () => {
     'before_receipt_update',
     'after_receipt_update',
     'before_source_retirement',
-    'after_source_unlink',
+    'after_source_quarantine',
+    'after_quarantine_sync',
   ] as const)('recovers deterministically from the %s crash window', (stage) => {
     const { systemDataDir, fleet } = fixture();
     const sourcePath = join(systemDataDir, 'skills.json');
@@ -260,8 +264,13 @@ describe('system-owner fleet migration', () => {
     expect(existsSync(sourcePath)).toBe(false);
     for (const companion of fleet.companions) {
       expect(readFileSync(join(companion.companionDataDir, 'skills.json'))).toEqual(source);
-      expect(readdirSync(companion.companionDataDir)
-        .filter(name => name.includes('system-owner-fleet-reroot'))).toEqual([]);
+      const stagingDirectory = join(
+        companion.companionDataDir,
+        '.system-owner-fleet-reroot-staging',
+      );
+      const stagedFiles = readdirSync(stagingDirectory);
+      expect(stagedFiles).toHaveLength(1);
+      expect(readFileSync(join(stagingDirectory, stagedFiles[0]))).toEqual(source);
     }
   });
 
@@ -272,17 +281,17 @@ describe('system-owner fleet migration', () => {
     writeFileSync(join(preexisting.systemDataDir, 'skills.json'), source);
     const firstDir = preexisting.fleet.companions[0].companionDataDir;
     mkdirSync(firstDir, { recursive: true });
-    const preexistingTemp = join(
+    const preexistingStagingDirectory = join(
       firstDir,
-      '.skills.json.system-owner-fleet-reroot-fixed.tmp',
+      '.system-owner-fleet-reroot-staging',
     );
-    writeFileSync(preexistingTemp, 'attacker-owned');
+    mkdirSync(preexistingStagingDirectory);
     expect(() => executeSystemOwnerFleetMigration({
       systemDataDir: preexisting.systemDataDir,
       fleet: preexisting.fleet,
       expectedSourceDigests: { 'skills.json': digest },
       temporaryId: () => 'fixed',
-    })).toThrow(/Pre-existing migration temporary path conflicts/);
+    })).toThrow(/Pre-existing migration-owned staging directory conflicts/);
 
     const linkedSource = fixture();
     const outsideSource = join(linkedSource.runtimeRoot, 'outside-skills.json');
@@ -330,5 +339,137 @@ describe('system-owner fleet migration', () => {
       fleet: linkedTemp.fleet,
       expectedSourceDigests: { 'skills.json': digest },
     })).toThrow(/regular file without symlinks/);
+  });
+
+  it('keeps system, receipt, and destination writes on pinned directory identities after path swaps', () => {
+    const { runtimeRoot, systemDataDir, fleet } = fixture();
+    const source = Buffer.from('{"enabled":true,"pinned":true}\n');
+    const digest = sha256(source);
+    const sourcePath = join(systemDataDir, 'skills.json');
+    writeFileSync(sourcePath, source);
+    const movedDestination = join(runtimeRoot, 'pinned-destination');
+    const outsideDestination = join(runtimeRoot, 'outside-destination');
+    const movedReceiptDirectory = join(runtimeRoot, 'pinned-receipts');
+    const outsideReceiptDirectory = join(runtimeRoot, 'outside-receipts');
+    const movedSystemDirectory = join(runtimeRoot, 'pinned-system');
+    const outsideSystemDirectory = join(runtimeRoot, 'outside-system');
+    let destinationSwapped = false;
+    let receiptSwapped = false;
+    let systemSwapped = false;
+
+    const result = executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+      faultInjection: (event) => {
+        if (!destinationSwapped && event.stage === 'after_temporary_fsync') {
+          destinationSwapped = true;
+          renameSync(fleet.companions[0].companionDataDir, movedDestination);
+          mkdirSync(outsideDestination);
+          symlinkSync(outsideDestination, fleet.companions[0].companionDataDir, 'dir');
+        }
+        if (!receiptSwapped && event.stage === 'before_receipt_update') {
+          receiptSwapped = true;
+          renameSync(join(systemDataDir, 'migrations'), movedReceiptDirectory);
+          mkdirSync(outsideReceiptDirectory);
+          symlinkSync(outsideReceiptDirectory, join(systemDataDir, 'migrations'), 'dir');
+        }
+        if (!systemSwapped && event.stage === 'before_source_retirement') {
+          systemSwapped = true;
+          renameSync(systemDataDir, movedSystemDirectory);
+          mkdirSync(outsideSystemDirectory);
+          writeFileSync(join(outsideSystemDirectory, 'skills.json'), 'outside-decoy\n');
+          symlinkSync(outsideSystemDirectory, systemDataDir, 'dir');
+        }
+      },
+    });
+
+    expect(result.status).toBe('migrated');
+    expect([destinationSwapped, receiptSwapped, systemSwapped]).toEqual([true, true, true]);
+    expect(readFileSync(join(movedDestination, 'skills.json'))).toEqual(source);
+    expect(existsSync(join(outsideDestination, 'skills.json'))).toBe(false);
+    expect(existsSync(join(movedReceiptDirectory, 'system-owner-fleet-reroot.json'))).toBe(true);
+    expect(existsSync(join(outsideReceiptDirectory, 'system-owner-fleet-reroot.json'))).toBe(false);
+    expect(readFileSync(join(outsideSystemDirectory, 'skills.json'), 'utf8')).toBe('outside-decoy\n');
+    expect(existsSync(join(movedSystemDirectory, 'skills.json'))).toBe(false);
+  });
+
+  it('rejects receipt and ancestor symlinks without writing through them', () => {
+    const receiptDirectoryLink = fixture();
+    const source = Buffer.from('{"enabled":true}\n');
+    const digest = sha256(source);
+    writeFileSync(join(receiptDirectoryLink.systemDataDir, 'skills.json'), source);
+    const outsideReceipts = join(receiptDirectoryLink.runtimeRoot, 'outside-receipts');
+    mkdirSync(outsideReceipts);
+    symlinkSync(outsideReceipts, join(receiptDirectoryLink.systemDataDir, 'migrations'), 'dir');
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir: receiptDirectoryLink.systemDataDir,
+      fleet: receiptDirectoryLink.fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+    })).toThrow(/receipt directory must be a directory without symlinks/);
+    expect(readdirSync(outsideReceipts)).toEqual([]);
+
+    const receiptLeafLink = fixture();
+    writeFileSync(join(receiptLeafLink.systemDataDir, 'skills.json'), source);
+    const migrationsDirectory = join(receiptLeafLink.systemDataDir, 'migrations');
+    const outsideReceipt = join(receiptLeafLink.runtimeRoot, 'outside-receipt.json');
+    mkdirSync(migrationsDirectory);
+    writeFileSync(outsideReceipt, 'outside-receipt\n');
+    symlinkSync(outsideReceipt, join(migrationsDirectory, 'system-owner-fleet-reroot.json'));
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir: receiptLeafLink.systemDataDir,
+      fleet: receiptLeafLink.fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+    })).toThrow(/receipt must be a regular file without symlinks/);
+    expect(readFileSync(outsideReceipt, 'utf8')).toBe('outside-receipt\n');
+
+    const destinationAncestorLink = fixture();
+    writeFileSync(join(destinationAncestorLink.systemDataDir, 'skills.json'), source);
+    const outsideCompanions = join(destinationAncestorLink.runtimeRoot, 'outside-companions');
+    mkdirSync(outsideCompanions);
+    symlinkSync(outsideCompanions, join(destinationAncestorLink.runtimeRoot, 'companions'), 'dir');
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir: destinationAncestorLink.systemDataDir,
+      fleet: destinationAncestorLink.fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+    })).toThrow(/destination directory must be a directory without symlinks/);
+    expect(readdirSync(outsideCompanions)).toEqual([]);
+  });
+
+  it('preserves and denies a source replacement at the final retirement boundary', () => {
+    const { systemDataDir, fleet } = fixture();
+    const sourcePath = join(systemDataDir, 'skills.json');
+    const approvedSource = Buffer.from('{"approved":true}\n');
+    const replacement = Buffer.from('{"replacement":true}\n');
+    const savedApprovedSource = join(systemDataDir, 'approved-source.saved');
+    const digest = sha256(approvedSource);
+    writeFileSync(sourcePath, approvedSource);
+    let replaced = false;
+
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+      faultInjection: (event) => {
+        if (!replaced && event.stage === 'before_source_retirement') {
+          replaced = true;
+          renameSync(sourcePath, savedApprovedSource);
+          writeFileSync(sourcePath, replacement);
+        }
+      },
+    })).toThrow(/Source replacement was preserved in quarantine/);
+    expect(readFileSync(savedApprovedSource)).toEqual(approvedSource);
+    expect(existsSync(sourcePath)).toBe(false);
+    const receipt = JSON.parse(readFileSync(
+      join(systemDataDir, 'migrations', 'system-owner-fleet-reroot.json'),
+      'utf8',
+    )) as { files: Array<{ quarantinePath: string }> };
+    expect(readFileSync(receipt.files[0].quarantinePath)).toEqual(replacement);
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+    })).toThrow(/changed identity/);
+    expect(readFileSync(receipt.files[0].quarantinePath)).toEqual(replacement);
   });
 });

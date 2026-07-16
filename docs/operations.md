@@ -409,11 +409,19 @@ npm run migrate:system-owner-fleet -- --apply \
 
 The command copies without overwrite or merge, records progress at
 `SYSTEM_DATA_DIR/migrations/system-owner-fleet-reroot.json`, verifies every
-destination digest, and only then removes the system-root source. If interrupted,
-repeat the exact apply command: only receipt-recorded, digest-identical partial
-copies are accepted. A changed source, changed fleet, pre-existing destination,
-or destination tamper is a hard conflict requiring operator investigation; the
-tool never chooses a winner. After completion, run
+destination digest, and only then atomically moves the exact source into the
+receipt-owned `.system-owner-fleet-reroot-quarantine` directory. Receipt,
+quarantine, and private destination staging directories are pinned by filesystem
+identity for the operation; symlinked ancestors or identity changes fail closed.
+The receipt-recorded staging hard links are retained so cleanup never becomes a
+pathname check-then-delete; do not remove them before this alpha migration
+support is retired.
+If interrupted, repeat the exact apply command: only receipt-recorded,
+digest-and-inode-identical partial copies or quarantined sources are accepted. A
+changed or replaced source is preserved in quarantine and denied. A changed
+fleet, pre-existing destination, or destination tamper is also a hard conflict
+requiring operator investigation; the tool never chooses a winner. After
+completion, run
 `npm run preflight:startup-owner-files` in the target runtime environment before
 restarting the fleet. The runtime preflight validates global owners at
 `SYSTEM_DATA_DIR` once and every per-companion owner at each exact root resolved

@@ -306,7 +306,7 @@ describe('PostgreSQL least-privilege companion and shard roles', () => {
 describe('PostgreSQL shard schema lifecycle', () => {
   it('uses the same lineage-bound schema for migration, backup, restore, and cleanup', async () => {
     const databaseUrl = await freshDatabaseUrl();
-    const root = mkdtempSync(join(tmpdir(), 'psfn-shard-lifecycle-'));
+    const root = mkdtempSync(join(tmpdir(), 'shard-schema-lifecycle-'));
     const sessionsDir = join(root, 'sessions');
     const backupRootDir = join(root, 'backups');
     mkdirSync(sessionsDir, { recursive: true });
@@ -326,7 +326,7 @@ describe('PostgreSQL shard schema lifecycle', () => {
       await lifecycle.prepare(binding);
       shardExists = true;
       await lifecycle.migrate(binding, POSTGRES_CONTACT_MIGRATIONS);
-      shardPool = lifecycle.openPool(binding, 'psfn-shard-lifecycle-e2e');
+      shardPool = lifecycle.openPool(binding, 'shard-schema-lifecycle-e2e');
       const now = new Date().toISOString();
       await shardPool.query(
         'INSERT INTO contacts (id, display_name, first_seen, last_seen) VALUES ($1, $2, $3, $3)',
@@ -357,7 +357,7 @@ describe('PostgreSQL shard schema lifecycle', () => {
       }
       await lifecycle.restore(binding, postgresDumpPath);
       shardExists = true;
-      shardPool = lifecycle.openPool(binding, 'psfn-shard-lifecycle-restored-e2e');
+      shardPool = lifecycle.openPool(binding, 'shard-schema-lifecycle-restored-e2e');
       expect(await shardPool.query<{ count: string }>(
         'SELECT COUNT(*)::text AS count FROM contacts',
       )).toMatchObject({ rows: [{ count: '1' }] });

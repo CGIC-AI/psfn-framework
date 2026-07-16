@@ -83,7 +83,7 @@ export function createPostgresShardSchemaLifecycle(
   const prepare = async (rawBinding: PostgresShardSchemaBinding): Promise<void> => {
     const binding = assertBinding(rawBinding);
     const admin = createPostgresPool(normalizedDatabaseUrl, {
-      applicationName: 'psfn-shard-schema-provision',
+      applicationName: 'shard-schema-provision',
       allowExitOnIdle: true,
       max: 1,
     });
@@ -119,7 +119,7 @@ export function createPostgresShardSchemaLifecycle(
 
     async migrate(rawBinding, statements) {
       const binding = assertBinding(rawBinding);
-      const pool = openPool(binding, 'psfn-shard-schema-migrate');
+      const pool = openPool(binding, 'shard-schema-migrate');
       try {
         await runPostgresMigrations(pool, statements, { schema: binding.schema });
       } finally {
@@ -174,7 +174,7 @@ export function createPostgresShardSchemaLifecycle(
     async cleanup(rawBinding) {
       const binding = assertBinding(rawBinding);
       const admin = createPostgresPool(normalizedDatabaseUrl, {
-        applicationName: 'psfn-shard-schema-cleanup',
+        applicationName: 'shard-schema-cleanup',
         allowExitOnIdle: true,
         max: 1,
       });

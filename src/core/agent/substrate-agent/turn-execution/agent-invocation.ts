@@ -408,6 +408,7 @@ export async function invokeAgentForTurn(input: {
   message: SubstrateMessage;
   turnSessionIdentity: TurnSessionIdentity;
   context: Awaited<ReturnType<TurnExecutionRuntime['sessionManager']['buildContext']>>;
+  authoritativeSystemPrompt: string;
   providerSystemPrompt: string;
   piMessages: ReturnType<typeof contextMessagesToPiMessages>;
   startTime: number;
@@ -437,6 +438,7 @@ export async function invokeAgentForTurn(input: {
     message,
     turnSessionIdentity,
     context,
+    authoritativeSystemPrompt,
     providerSystemPrompt,
     piMessages,
     startTime,
@@ -519,6 +521,7 @@ export async function invokeAgentForTurn(input: {
         context,
         message,
         prompt: moaProviderPrompt,
+        authoritativeSystemPrompt,
         settings: moaSettings,
         config: runtime.config,
         turnId,

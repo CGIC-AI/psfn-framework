@@ -1173,6 +1173,7 @@ export async function handleMessageForTurn(
           message,
           turnSessionIdentity,
           context: promptAssembly.context,
+          authoritativeSystemPrompt: promptAssembly.fullPrompt,
           providerSystemPrompt: promptAssembly.providerSystemPrompt,
           piMessages: promptAssembly.piMessages,
           startTime,

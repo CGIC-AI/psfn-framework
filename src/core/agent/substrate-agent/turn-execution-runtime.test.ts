@@ -447,6 +447,7 @@ describe('handleMessageForTurn presence canonicalization', () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
+      sessionPromptBlocks: [{ id: 'memory.retrieval', content: 'Session memory sentinel' }],
       messages: [
         { role: 'user', content: 'Earlier request' },
         { role: 'assistant', content: 'Earlier assistant reply' },
@@ -490,7 +491,11 @@ describe('handleMessageForTurn presence canonicalization', () => {
     await handleMessageForTurn(runtime, createMessage('msg-moa-charge-config'));
 
     expect(mockedRunMoaTurn).toHaveBeenCalledTimes(1);
-    expect(mockedRunMoaTurn.mock.calls[0]?.[0]).toMatchObject({
+    const moaInput = mockedRunMoaTurn.mock.calls[0]?.[0];
+    const assembledSystemPrompt = buildContext.mock.calls[0]?.[1] ?? '';
+    expect(moaInput?.authoritativeSystemPrompt).toBe(assembledSystemPrompt);
+    expect(assembledSystemPrompt).toContain('System prompt');
+    expect(moaInput).toMatchObject({
       config: expect.objectContaining({
         chargePolicy: expect.objectContaining({
           runChargeQuotaByLane: expect.objectContaining({
@@ -499,7 +504,9 @@ describe('handleMessageForTurn presence canonicalization', () => {
         }),
       }),
     });
-    const moaPrompt = mockedRunMoaTurn.mock.calls[0]?.[0]?.prompt as string;
+    const moaPrompt = moaInput?.prompt ?? '';
+    expect(moaPrompt).not.toContain('System prompt');
+    expect(moaPrompt).toContain('Session memory sentinel');
     expect(moaPrompt).toContain('assistant:\nEarlier assistant reply');
     expect(moaPrompt.match(/Hello there/g)).toHaveLength(1);
     const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;

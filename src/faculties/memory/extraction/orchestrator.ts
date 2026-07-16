@@ -130,6 +130,14 @@ function createEmptyRejectionBreakdown(): Record<ExtractionRejectionReason, numb
   };
 }
 
+function requireExperientialCompanionName(value: string | undefined): string {
+  const companionName = value?.trim();
+  if (!companionName) {
+    throw new Error('Experiential self-directed extraction requires a companion name');
+  }
+  return companionName;
+}
+
 const CHANNEL_PRIVACY_RESTRICTIVENESS: Record<ChannelPrivacy, number> = {
   public: 0,
   invite_only: 1,
@@ -382,7 +390,11 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
 	    );
     const coveredUpToMessageId = options.resolveCoveredUpToMessageId(options.channelId, recentEntries);
     const participantNames = options.resolveParticipantNames?.(recentEntries, canonicalContactId) ?? {};
-    const companionName = participantNames.companionName ?? options.sessionManager.characterName;
+    const experientialCompanionName = experientialSelfDirected
+      ? requireExperientialCompanionName(
+        participantNames.companionName ?? options.sessionManager.characterName,
+      )
+      : undefined;
     const speakerRouting = experientialSelfDirected
       ? undefined
       : await buildSpeakerRoutingContext(
@@ -414,8 +426,8 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
             userName: participantNames.userName,
           }));
         const namingGuidance = buildExtractionNamingGuidance(participantNames);
-        const selfDirectedGuidance = experientialSelfDirected
-          ? buildExperientialSelfDirectedExtractionGuidance(companionName)
+        const selfDirectedGuidance = experientialCompanionName
+          ? buildExperientialSelfDirectedExtractionGuidance(experientialCompanionName)
           : undefined;
         const taskPrompt = [renderedPrompt, namingGuidance, selfDirectedGuidance]
           .filter((section): section is string => Boolean(section))
@@ -484,11 +496,11 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
         }
         continue;
       }
-      if (experientialSelfDirected) {
+      if (experientialCompanionName) {
         const selfDirected = normalizeExperientialSelfDirectedFact({
           fact: normalized.fact,
           entries: recentEntries,
-          companionName,
+          companionName: experientialCompanionName,
         });
         if (!selfDirected.accepted) {
           participantNameHygieneRejectedCount++;
@@ -651,11 +663,11 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       }
 
       let routing: FactRoutingDecision;
-      if (experientialSelfDirected) {
+      if (experientialCompanionName) {
         const selfDirected = normalizeExperientialSelfDirectedFact({
           fact,
           entries: recentEntries,
-          companionName,
+          companionName: experientialCompanionName,
         });
         if (!selfDirected.accepted) {
           rejectionBreakdown.low_signal++;

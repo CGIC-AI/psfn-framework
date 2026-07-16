@@ -233,6 +233,38 @@ test('buildPromptMonitorTurns preserves newest-first order and summary metrics',
   });
 });
 
+test('buildPromptMonitorTurns derives slim provider wire messages and fails closed without them', () => {
+  const turn = buildTurn({
+    turnId: 'turn-slim-provider-wire',
+    channelId: 'api:monitor',
+    promptVersionPointer: 'prompt-slim-provider-wire',
+    completedAt: 3_000,
+    ttftMs: 30,
+    promptDurationMs: 130,
+  });
+  const fullTurn = buildPromptMonitorTurns([turn])[0];
+  if (!fullTurn) throw new Error('prompt monitor test fixture did not produce a turn');
+  const promptLoom = resolvePromptMonitorPromptLoom(fullTurn);
+  const providerObservability = turn.snapshot?.promptContext?.providerObservability;
+  const expectedProviderWireMessages = providerObservability?.providerWireMessages;
+  if (!providerObservability || !expectedProviderWireMessages) {
+    throw new Error('prompt monitor test fixture is missing provider wire messages');
+  }
+
+  delete providerObservability.providerWireMessages;
+  assert.throws(
+    () => buildPromptMonitorTurns([turn]),
+    /requires embedded or canonically derived wire messages/,
+  );
+
+  turn.promptLoom = promptLoom;
+  const slimTurn = buildPromptMonitorTurns([turn])[0];
+  assert.deepEqual(
+    slimTurn?.snapshot?.promptContext?.providerObservability?.providerWireMessages,
+    expectedProviderWireMessages,
+  );
+});
+
 test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dropping useful fields', () => {
   const proxiedSchema = new Proxy({
     type: 'object',
@@ -254,7 +286,9 @@ test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dro
     promptDurationMs: 140,
   });
 
-  turn.snapshot!.toolContext!.activeTools[0]!.inputSchema = proxiedSchema as Record<string, unknown>;
+  const activeTool = turn.snapshot?.toolContext?.activeTools?.[0];
+  if (!activeTool) throw new Error('prompt monitor test fixture is missing its active tool');
+  activeTool.inputSchema = proxiedSchema;
   turn.promptLoom = {
     source: 'turn_snapshot',
     snapshotCapturedAt: 3_950,
@@ -296,7 +330,7 @@ test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dro
         {
           name: 'contact_lookup',
           description: 'Look up a contact.',
-          inputSchema: proxiedSchema as Record<string, unknown>,
+          inputSchema: proxiedSchema,
         },
       ],
     },

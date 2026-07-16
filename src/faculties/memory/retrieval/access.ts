@@ -136,7 +136,7 @@ function resolveMemorySourceRoom(memory: Pick<PurrMemory, 'provenance' | 'scopeR
 }
 
 function isPrimaryPrivateDmSubject(
-  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'provenance' | 'scopeRef' | 'scopeTags'>,
+  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'tags' | 'provenance' | 'scopeRef' | 'scopeTags'>,
   options: RetrievalParticipantAccessContext,
 ): boolean {
   const canonicalContactId = normalizeContactId(options.canonicalContactId);
@@ -165,7 +165,7 @@ function isPrimaryPrivateDmSubject(
 }
 
 function violatesHighIntimacyContactScope(
-  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'provenance' | 'scopeRef' | 'scopeTags'>,
+  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'tags' | 'provenance' | 'scopeRef' | 'scopeTags'>,
   options: RetrievalParticipantAccessContext,
 ): boolean {
   if (!isHighIntimacySensitivityLevel(memory.sensitivity)) return false;
@@ -185,7 +185,7 @@ function requiresRoomProofWhenSourceMissing(
 }
 
 function evaluateRoomVisibilityDecision(
-  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'provenance' | 'scopeRef' | 'scopeTags'>,
+  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'tags' | 'provenance' | 'scopeRef' | 'scopeTags'>,
   options: RetrievalParticipantAccessContext,
 ): RetrievalAccessDecision | undefined {
   const roomVisibility = options.roomVisibility;

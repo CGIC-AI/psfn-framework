@@ -22,6 +22,7 @@ import type {
 import type {
   PurrMemory,
   MemoryScopeQuery,
+  RetrievalAccessScope,
   RetrievalCallerContext,
   RetrievalModeInput,
 } from './types.js';
@@ -76,6 +77,7 @@ import {
   resolveContactProfileAccess as resolveContactProfileAccessWithDeps,
   resolveRoomVisibilityContext as resolveRoomVisibilityContextWithDeps,
 } from './retrieval/access-context.js';
+import { resolveAuthorizedRetrievalAccessScope } from './retrieval/access-scope.js';
 import {
   cloneActiveMemorySnapshot,
   type ActiveMemoryRefreshLoop,
@@ -734,6 +736,7 @@ export class MemoryRetriever implements MemoryProvider {
   private async resolveContactProfileAccess(
     profile: ContactProfileArtifact | undefined,
     options: {
+      accessScope?: RetrievalAccessScope;
       trustLevel: TrustLevel;
       channelPrivacy: ChannelPrivacy;
       broadcast: boolean;
@@ -875,6 +878,10 @@ export class MemoryRetriever implements MemoryProvider {
     const effectiveRetrievalMode = hasDirectRetrievalContext
       ? retrievalMode
       : turnSnapshot?.retrievalMode;
+    const effectiveAccessScope = resolveAuthorizedRetrievalAccessScope(
+      channelId,
+      effectiveCallerContext?.accessScope,
+    );
     const normalizedScopeQuery = normalizeMemoryScopeQuery(scopeQuery);
     const effectiveBudgetTurn = turnBudgetCharacteristics ?? {
       channelId,
@@ -901,6 +908,7 @@ export class MemoryRetriever implements MemoryProvider {
       : undefined;
     const telemetry: RetrievalTelemetry = {
       channelId,
+      accessScope: effectiveAccessScope,
       count: 0,
       reason: 'ok',
       retrievalSource: 'embedding',
@@ -936,6 +944,7 @@ export class MemoryRetriever implements MemoryProvider {
         ? await productMemoryStore.getContactProfile(canonicalContactId)
         : undefined;
     const profileAccess = await this.resolveContactProfileAccess(rawProfile, {
+      accessScope: effectiveAccessScope,
       trustLevel: effectiveTrust,
       channelPrivacy,
       broadcast,
@@ -999,6 +1008,7 @@ export class MemoryRetriever implements MemoryProvider {
         contactEmotionalSource,
         roomVisibility,
         memories => filterQuarantinedMemories(this.sessionQuarantineFilter, memories).memories,
+        effectiveAccessScope,
       )
       : [];
     telemetry.emotionalContinuityCount = fallbackEmotionalContinuity.length;
@@ -1011,7 +1021,8 @@ export class MemoryRetriever implements MemoryProvider {
           summarizeWithheldMemories(
             contactEmotionalSource,
             {
-            trustLevel: effectiveTrust,
+              accessScope: effectiveAccessScope,
+              trustLevel: effectiveTrust,
             channelPrivacy,
             broadcast,
             channelMeta,
@@ -1114,6 +1125,7 @@ export class MemoryRetriever implements MemoryProvider {
                 summarizeWithheldMemories(
                   [...contactEmotionalSource, ...proactiveSource],
                   {
+                    accessScope: effectiveAccessScope,
                     trustLevel: effectiveTrust,
                     channelPrivacy,
                     broadcast,
@@ -1176,6 +1188,7 @@ export class MemoryRetriever implements MemoryProvider {
           summarizeWithheldMemories(
             [...memories, ...contactEmotionalSource, ...proactiveSource],
             {
+              accessScope: effectiveAccessScope,
               trustLevel: effectiveTrust,
               channelPrivacy,
               broadcast,
@@ -1218,6 +1231,7 @@ export class MemoryRetriever implements MemoryProvider {
           continue;
         }
         const accessDecision = evaluateRetrievalAccessDecision(memory, {
+          accessScope: effectiveAccessScope,
           trustLevel: effectiveTrust,
           channelPrivacy,
           broadcast,
@@ -1467,6 +1481,7 @@ export class MemoryRetriever implements MemoryProvider {
       // without needing debug logging enabled.
       log.info('Retrieval trace', {
         channelId,
+        accessScope: effectiveAccessScope,
         trustLevel: effectiveTrust,
         channelPrivacy,
         retrievalSource: telemetry.retrievalSource,
@@ -1519,6 +1534,7 @@ export class MemoryRetriever implements MemoryProvider {
           turnSnapshot?.contactEmotionalMemories,
           roomVisibility,
           memories => filterQuarantinedMemories(this.sessionQuarantineFilter, memories).memories,
+          effectiveAccessScope,
         )
         : [];
       telemetry.emotionalContinuityCount = emotionalContinuityMemories.length;
@@ -1535,6 +1551,7 @@ export class MemoryRetriever implements MemoryProvider {
         selected,
         {
           contextText,
+          accessScope: effectiveAccessScope,
           trustLevel: effectiveTrust,
           channelPrivacy,
           broadcast,

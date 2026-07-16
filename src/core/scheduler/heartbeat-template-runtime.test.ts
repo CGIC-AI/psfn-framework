@@ -34,6 +34,7 @@ import { HeartbeatPolicyStore } from './heartbeat-policy.js';
 import { Scheduler } from './scheduler.js';
 import { createHeartbeatTemplateRuntime } from './heartbeat-template-runtime.js';
 import { createGroupConversationScope } from '../session/conversation-scope.js';
+import { getRequestContext } from '../../primitives/llm/request-context.js';
 
 describe('createHeartbeatTemplateRuntime reflection metacognition journal', () => {
   let tempDir: string;
@@ -548,7 +549,13 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         };
       }),
     };
-    const handleMessage = vi.fn(async () => ({ content: 'unused' }));
+    const toolGroundingPrompts: string[] = [];
+    const handleMessage = vi.fn(async (message: { content: string }) => {
+      toolGroundingPrompts.push(message.content);
+      return {
+        content: 'Read-only tool grounding found the unresolved recovery follow-up.',
+      };
+    });
 
     const runtime = createHeartbeatTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
@@ -617,14 +624,29 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     });
 
     expect(result.reflection).toContain('still needs an explicit follow-up');
-    expect(handleMessage).not.toHaveBeenCalled();
+    expect(handleMessage).toHaveBeenCalledTimes(1);
+    expect(handleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      channelId: 'internal:reflection:daily-review',
+      routing: expect.objectContaining({
+        workerExecution: expect.objectContaining({
+          lane: 'whisper',
+          profileClass: 'subconscious',
+          failClosed: true,
+        }),
+      }),
+    }));
+    expect(toolGroundingPrompts[0]).toContain('analysis_workbench');
+    expect(toolGroundingPrompts[0]).toContain('read-only introspection helpers');
     expect(capturedPrompts).toHaveLength(3);
     expect(capturedPrompts[0]).toContain('Stage: evidence');
     expect(capturedPrompts[0]).toContain('[Reflection Introspection Policy]');
-    expect(capturedPrompts[0]).toContain('tool_use_mode: prompt_bounded');
-    expect(capturedPrompts[0]).toContain('memory_retrieval_modes: temporal, reflection');
+    expect(capturedPrompts[0]).toContain('tool_use_mode: bounded_read_only_introspection');
+    expect(capturedPrompts[0]).toContain('memory_retrieval_modes: default, temporal');
+    expect(capturedPrompts[0]).toContain('memory_access_scope: companion_self_reflection');
     expect(capturedPrompts[0]).toContain('[Reflection Contact Evidence]');
     expect(capturedPrompts[0]).toContain('We should revisit the recovery plan tomorrow.');
+    expect(capturedPrompts[0]).toContain('[Read-only Tool Grounding]');
+    expect(capturedPrompts[0]).toContain('Read-only tool grounding found the unresolved recovery follow-up.');
     // Character-card persona fields stay out of the reflection input. Identity
     // belongs in the authoritative system stack, not this user message.
     expect(capturedPrompts[0]).not.toContain('PERSONALITY_SENTINEL');
@@ -839,7 +861,9 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         },
       ];
       const eventBus = new EventBus();
+      const memoryRetrievalContexts: Array<ReturnType<typeof getRequestContext>> = [];
       const memoryRetrieve = vi.fn(async (_contextText: string, channelId: string) => {
+        memoryRetrievalContexts.push(getRequestContext());
         await eventBus.emit('memory.retrieval', {
           channelId,
           count: 1,
@@ -1008,7 +1032,8 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       const memoryHeaderSection = getPromptSection(prompt, '[Reflection Memory Retrieval]');
       const recentTailSection = getPromptSection(prompt, '[Recent Session Tail]');
       expect(introspectionPolicySection).toContain('tool_use_mode: bounded_read_only_introspection');
-      expect(introspectionPolicySection).toContain('memory_retrieval_modes: temporal, reflection');
+      expect(introspectionPolicySection).toContain('memory_retrieval_modes: default, temporal');
+      expect(introspectionPolicySection).toContain('memory_access_scope: companion_self_reflection');
       expect(introspectionPolicySection).toContain('overlay_tool_activation: forbidden');
       expect(introspectionPolicySection).toContain('core analysis_workbench tool');
       expect(introspectionPolicySection).toContain('memory_search, session_messages, session_search');
@@ -1023,8 +1048,19 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       expect(memoryRetrieve).toHaveBeenCalled();
       expect(memoryRetrieve.mock.calls[0]?.[1]).toBe(`internal:reflection:${templateId}`);
       expect(memoryRetrieve.mock.calls[0]?.[4]).toBe('contact-1');
-      expect(memoryRetrieve.mock.calls[0]?.[9]).toEqual({ retrievalMode: ['temporal', 'reflection'] });
-      expect(memoryRetrieve.mock.calls[0]?.[10]).toEqual(['temporal', 'reflection']);
+      expect(memoryRetrieve.mock.calls[0]?.[9]).toEqual({
+        accessScope: 'companion_self_reflection',
+        retrievalMode: ['default', 'temporal'],
+      });
+      expect(memoryRetrieve.mock.calls[0]?.[10]).toEqual(['default', 'temporal']);
+      expect(memoryRetrievalContexts[0]).toMatchObject({
+        channelId: `internal:reflection:${templateId}`,
+        callType: 'background',
+        originType: 'background',
+        originStage: 'heartbeat.reflection.memory_retrieval',
+        purpose: 'heartbeat.reflection.memory_retrieval',
+        requesterProvenance: 'self_directed',
+      });
 
       const raw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
       const entry = JSON.parse(raw.split('\n').at(-1) ?? '{}') as {
@@ -1200,15 +1236,17 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     const routingArg = handleMessage.mock.calls[0]?.[0]?.routing ?? {};
     expect(routingArg).not.toHaveProperty('canonicalContactId');
 
-    // Introspection policy drops the DM temporal retrieval binding; contact
-    // evidence grounding is absent entirely.
+    // Introspection policy drops the DM temporal retrieval binding while
+    // retaining the explicit companion-private self scope; contact evidence
+    // grounding is absent entirely.
     const prompt = capturedPrompts[0];
     const introspectionPolicySection = getPromptSection(prompt, '[Reflection Introspection Policy]');
-    expect(introspectionPolicySection).toContain('memory_retrieval_modes: reflection');
-    expect(introspectionPolicySection).not.toContain('memory_retrieval_modes: temporal, reflection');
+    expect(introspectionPolicySection).toContain('memory_retrieval_modes: default');
+    expect(introspectionPolicySection).not.toContain('memory_retrieval_modes: default, temporal');
+    expect(introspectionPolicySection).toContain('memory_access_scope: companion_self_reflection');
     expect(getPromptSection(prompt, '[Reflection Contact Evidence]')).toBe('');
     if (memoryRetrieve.mock.calls.length > 0) {
-      expect(memoryRetrieve.mock.calls[0]?.[10]).toEqual(['reflection']);
+      expect(memoryRetrieve.mock.calls[0]?.[10]).toEqual(['default']);
     }
 
     // Journal provenance must not inherit the single-contact binding.

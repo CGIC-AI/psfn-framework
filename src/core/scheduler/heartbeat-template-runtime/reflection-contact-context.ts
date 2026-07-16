@@ -8,6 +8,7 @@ import {
   type ReflectionContactRecentMessage,
 } from '../../../persistence/journals/reflection-substrate.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
+import { COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE } from '../../../faculties/memory/retrieval/access-scope.js';
 import type { ReflectionTemplate } from '../heartbeat-policy.js';
 import type {
   HeartbeatAgent,
@@ -112,8 +113,9 @@ export async function retrieveReflectionMemoryBlock(input: {
       channelId: input.reflectionChannelId,
       callType: 'background',
       originType: 'background',
-      originStage: 'heartbeat.reflection.memory_retrieval',
-      purpose: 'heartbeat.reflection.memory_retrieval',
+      originStage: COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE,
+      purpose: COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE,
+      requesterProvenance: 'self_directed',
     }, () => input.memoryProvider.retrieve(
       input.queryText,
       input.reflectionChannelId,
@@ -124,7 +126,10 @@ export async function retrieveReflectionMemoryBlock(input: {
       undefined,
       input.currentVAD,
       undefined,
-      { retrievalMode: input.reflectionPolicy.memoryRetrievalModes },
+      {
+        accessScope: input.reflectionPolicy.memoryAccessScope,
+        retrievalMode: input.reflectionPolicy.memoryRetrievalModes,
+      },
       input.reflectionPolicy.memoryRetrievalModes,
     ));
 

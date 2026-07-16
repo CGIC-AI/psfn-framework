@@ -126,6 +126,7 @@ export function resolveActiveMemoryContextIdentity(
     `visibility:${channelVisibility}`,
     `scope:${visibilityScope}`,
     `focus:${serializeScopeQuery(request.scopeQuery)}`,
+    `accessScope:${request.callerContext?.accessScope ?? 'channel_participant'}`,
     `callerMode:${serializeRetrievalModeInput(callerRetrievalMode)}`,
     `mode:${serializeRetrievalModeInput(request.retrievalMode)}`,
     `taskKind:${request.turnBudgetCharacteristics?.taskKind?.trim().toLowerCase() ?? ''}`,

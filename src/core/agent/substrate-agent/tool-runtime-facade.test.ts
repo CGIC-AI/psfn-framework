@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentTool } from '../../../boundary/pi-agent/index.js';
 import { ToolRuntimeFacade } from './tool-runtime-facade.js';
-import { createWorkerExecutionPolicy, SUBAGENT_WORKER_LANE } from '../worker-lanes.js';
+import {
+  createWorkerExecutionPolicy,
+  SUBAGENT_WORKER_LANE,
+  WHISPER_WORKER_LANE,
+} from '../worker-lanes.js';
 import {
   NO_CAPABILITY_REQUIREMENT,
   withCapabilityRequirement,
@@ -34,14 +38,14 @@ function createFacade(
   // pi-agent-core 0.73 replaced Agent.setTools() with assignment to
   // agent.state.tools; the mock records each assignment via setTools so the
   // existing call-style assertions keep working.
-  const setTools = vi.fn();
+  const setTools = vi.fn((_tools: AgentTool<any>[]): void => undefined);
   const agent = {
     setTools,
     state: {
-      get tools(): unknown[] {
-        return (setTools.mock.calls.at(-1)?.[0] as unknown[] | undefined) ?? [];
+      get tools(): AgentTool<any>[] {
+        return setTools.mock.lastCall?.[0] ?? [];
       },
-      set tools(tools: unknown[]) {
+      set tools(tools: AgentTool<any>[]) {
         setTools(tools);
       },
     },
@@ -707,7 +711,7 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       timestamp: new Date('2026-04-23T12:00:00Z'),
     } as never, undefined, 'chat', correlation, { intent: null });
 
-    const tools = agent.setTools.mock.calls.at(-1)?.[0] as Array<{ name: string }>;
+    const tools = agent.state.tools;
     expect(tools.map(tool => tool.name)).toEqual([
       'selfie_create',
       'generate_image',
@@ -775,8 +779,41 @@ describe('ToolRuntimeFacade maintenance core tool policy', () => {
       .filter(([eventName]) => eventName === 'agent.tools.core_guardrail.skipped');
     expect(skippedEvents).toEqual(expect.arrayContaining([
       ['agent.tools.core_guardrail.skipped', expect.objectContaining({ toolName: 'subagent', taskKind: 'reflection' })],
-      ['agent.tools.core_guardrail.skipped', expect.objectContaining({ toolName: 'analysis_workbench', taskKind: 'reflection' })],
+      ['agent.tools.core_guardrail.skipped', expect.objectContaining({
+        toolName: 'analysis_workbench',
+        taskKind: 'reflection',
+        reason: 'analysis_workbench_worker_context_required',
+      })],
     ]));
+  });
+
+  it('keeps analysis_workbench available only to the bounded whisper worker on reflection turns', () => {
+    const { facade, agent, emitTelemetry, correlation } = createFacade('reflection', ['repl.execute']);
+    facade.registerTool(makeTool('session'), 'core');
+    facade.registerTool(makeTool('analysis_workbench'), 'core');
+
+    facade.applyActiveToolsToAgentForTurn({
+      id: 'msg-reflection-worker-1',
+      channelId: 'internal:reflection:daily-review',
+      channelType: 'api',
+      authorId: 'scheduler',
+      authorName: 'Daily Reflection',
+      content: 'Use analysis_workbench for bounded read-only introspection over this evidence set.',
+      routing: {
+        workerExecution: createWorkerExecutionPolicy(WHISPER_WORKER_LANE),
+      },
+      timestamp: new Date('2026-04-23T12:00:00Z'),
+    }, 'reflection', 'background', correlation, { intent: 'reflection' });
+
+    const tools = agent.state.tools;
+    expect(tools.map(tool => tool.name)).toEqual(['session', 'analysis_workbench']);
+    expect(emitTelemetry).not.toHaveBeenCalledWith(
+      'agent.tools.core_guardrail.skipped',
+      expect.objectContaining({
+        toolName: 'analysis_workbench',
+        reason: 'maintenance_turn_allowlist',
+      }),
+    );
   });
 
   it.each(['heartbeat', 'reflection', 'maintenance'] as const)(

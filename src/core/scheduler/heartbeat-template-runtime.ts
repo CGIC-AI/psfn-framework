@@ -759,7 +759,7 @@ export function createHeartbeatTemplateRuntime(
       reflectionPromptContext.substrateContext,
     );
     let reflectionGroundingProvenanceRefs = reflectionPromptBundle?.provenanceRefs ?? [];
-    const reflectionPrompt = formatNarrativePromptInput(
+    let reflectionPrompt = formatNarrativePromptInput(
       template.prompt,
       reflectionPromptBundle,
       formatReflectionIntrospectionPolicyBlock(reflectionPolicy),
@@ -770,8 +770,47 @@ export function createHeartbeatTemplateRuntime(
     let reflectionMode: 'agent' | 'deliberation' = 'agent';
     let persistenceContext = internalStateContext;
     let reflectionProcessId: string | undefined;
+    const reflectionWorkerRouting = {
+      ...(reflectionScopeHint
+        ? { reflectionScope: reflectionScopeHint }
+        : (reflectionCanonicalContactId ? { canonicalContactId: reflectionCanonicalContactId } : {})),
+      workerExecution: createWorkerExecutionPolicy(WHISPER_WORKER_LANE),
+    };
 
     if (shouldUseDeliberation(template)) {
+      const groundingResponse = await agentLoop.handleMessage({
+        id: `reflection-grounding-${template.id}-${Date.now()}`,
+        channelId: reflectionChannelId,
+        channelType: 'terminal',
+        authorId: reflectionScopeHint ? 'scheduler' : (reflectionCanonicalContactId ?? 'scheduler'),
+        authorName: `${template.name} evidence grounding`,
+        content: joinReflectionPromptSections(
+          reflectionPrompt,
+          '[Read-only Tool Grounding Task]\n'
+            + 'Before deliberation, gather only additional evidence that materially helps this private reflection.\n'
+            + '- Use the core analysis_workbench only when deeper retrieval is useful.\n'
+            + '- Inside it, use only the read-only introspection helpers named in the policy above.\n'
+            + '- Do not mutate memory, sessions, settings, schedules, files, or external systems.\n'
+            + '- Return a concise evidence note, not the final reflection.',
+        ),
+        timestamp: new Date(),
+        routing: reflectionWorkerRouting,
+      });
+      const toolGrounding = groundingResponse.content.trim();
+      if (toolGrounding) {
+        reflectionPrompt = joinReflectionPromptSections(
+          reflectionPrompt,
+          `[Read-only Tool Grounding]\n${toolGrounding}`,
+        );
+      }
+      const groundingProvenanceRefs = groundingResponse.metadata?.retrievalProvenanceRefs ?? [];
+      if (groundingProvenanceRefs.length > 0) {
+        reflectionGroundingProvenanceRefs = [...new Set([
+          ...reflectionGroundingProvenanceRefs,
+          ...groundingProvenanceRefs.map(ref => ref.trim()).filter(Boolean),
+        ])];
+      }
+
       const processId = buildReflectionProcessId(`${template.id}-${source}`);
       reflectionProcessId = processId;
       try {
@@ -882,10 +921,7 @@ export function createHeartbeatTemplateRuntime(
         content: reflectionPrompt,
         timestamp: new Date(),
         routing: {
-          ...(reflectionScopeHint
-            ? { reflectionScope: reflectionScopeHint }
-            : (reflectionCanonicalContactId ? { canonicalContactId: reflectionCanonicalContactId } : {})),
-          workerExecution: createWorkerExecutionPolicy(WHISPER_WORKER_LANE),
+          ...reflectionWorkerRouting,
         },
       });
       const normalizedReflection = normalizeTemplateReflectionOutput(template, response.content);

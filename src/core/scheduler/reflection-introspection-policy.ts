@@ -1,5 +1,8 @@
 import type { ReflectionTemplate } from './heartbeat-policy.js';
-import type { RetrievalMode } from '../../faculties/memory/types.js';
+import type {
+  RetrievalAccessScope,
+  RetrievalMode,
+} from '../../faculties/memory/types.js';
 
 export type ReflectionIntrospectionToolUseMode =
   | 'prompt_bounded'
@@ -8,6 +11,7 @@ export type ReflectionIntrospectionToolUseMode =
 export interface ReflectionIntrospectionPolicy {
   toolUseMode: ReflectionIntrospectionToolUseMode;
   memoryRetrievalModes: readonly RetrievalMode[];
+  memoryAccessScope: Extract<RetrievalAccessScope, 'companion_self_reflection'>;
   thinkHelpers: readonly string[];
   allowOverlayToolActivation: false;
 }
@@ -17,20 +21,17 @@ export function resolveReflectionIntrospectionPolicy(input: {
   canonicalContactId?: string;
   reflectionMode: 'agent' | 'deliberation';
 }): ReflectionIntrospectionPolicy {
-  const toolUseMode: ReflectionIntrospectionToolUseMode = input.reflectionMode === 'agent'
-    ? 'bounded_read_only_introspection'
-    : 'prompt_bounded';
+  const toolUseMode: ReflectionIntrospectionToolUseMode = 'bounded_read_only_introspection';
 
   const memoryRetrievalModes: readonly RetrievalMode[] = input.canonicalContactId
-    ? ['temporal', 'reflection']
-    : ['reflection'];
+    ? ['default', 'temporal']
+    : ['default'];
 
   return {
     toolUseMode,
     memoryRetrievalModes,
-    thinkHelpers: toolUseMode === 'bounded_read_only_introspection'
-      ? ['memory_search', 'session_messages', 'session_search']
-      : [],
+    memoryAccessScope: 'companion_self_reflection',
+    thinkHelpers: ['memory_search', 'session_messages', 'session_search'],
     allowOverlayToolActivation: false,
   };
 }
@@ -40,7 +41,10 @@ export function resolveReflectionIntrospectionPolicy(input: {
 // wording changes instead of editing casually.
 // v2: added the R7 null-report line ("nothing surfaced" is an acceptable,
 // weak-evidence outcome) to both tool-use modes.
-export const REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION = 2;
+// v3 (jy6s): scheduled private reflections use explicit companion-self memory
+// scope, retrieve prior reflection memories again, and give deliberation a
+// bounded read-only tool-grounding pass before synthesis.
+export const REFLECTION_INTROSPECTION_POLICY_BLOCK_VERSION = 3;
 
 const NULL_REPORT_GUIDANCE_LINE =
   '- "Nothing surfaced" is an acceptable outcome; record it as open reflection with limited reach, not as evidence that nothing is there.';
@@ -52,6 +56,7 @@ export function formatReflectionIntrospectionPolicyBlock(
     '[Reflection Introspection Policy]',
     `tool_use_mode: ${policy.toolUseMode}`,
     `memory_retrieval_modes: ${policy.memoryRetrievalModes.join(', ')}`,
+    `memory_access_scope: ${policy.memoryAccessScope}`,
     'overlay_tool_activation: forbidden',
   ];
 

@@ -21,6 +21,11 @@ import {
   createSubjectAuthorizedMemoryStore,
   memorySubjectAccessContextFromCorrelation,
 } from '../../../faculties/memory/subject-authorized-store.js';
+import {
+  filterQuarantinedMemories,
+  isMemoryQuarantined,
+  type MemorySessionQuarantineFilter,
+} from '../../../faculties/memory/retrieval/session-quarantine.js';
 
 export interface SessionSearchOptions {
   channelId?: SessionSearchViewerContext['channelId'];
@@ -69,16 +74,25 @@ export interface MemoryCapabilities {
   memory_get_by_id: (id: string) => Promise<Record<string, unknown> | null>;
 }
 
+interface MemoryCapabilitySessionPort {
+  getRecentMessages: SessionManager['getRecentMessages'];
+  appendSystemNote: SessionManager['appendSystemNote'];
+  isSessionRetiredOrQuarantined?: SessionManager['isSessionRetiredOrQuarantined'];
+  getRetiredLogicalSessionIds?: SessionManager['getRetiredLogicalSessionIds'];
+  searchByKeywords?: (query: string, limit?: number) => Promise<SessionSearchHit[]>;
+  searchTranscripts?: (query: string, limit?: number) => Promise<SessionSearchHit[]>;
+}
+
 interface CreateMemoryCapabilitiesOptions {
   llmProvider: LLMProviderPort;
   embeddingService: EmbeddingProviderPort | null;
   memoryStore: MemoryStorePort | null;
-  sessionManager: SessionManager | null;
+  sessionManager: MemoryCapabilitySessionPort | null;
   pushEvidence: (entry: AnalysisWorkbenchEvidence) => void;
 }
 
 function resolveTranscriptSearchPort(
-  sessionManager: SessionManager | null,
+  sessionManager: MemoryCapabilitySessionPort | null,
 ): {
   searchByKeywords: (query: string, limit?: number) => Promise<SessionSearchHit[]>;
 } | null {
@@ -86,20 +100,15 @@ function resolveTranscriptSearchPort(
     return null;
   }
 
-  const candidate = sessionManager as SessionManager & {
-    searchByKeywords?: (query: string, limit?: number) => Promise<SessionSearchHit[]>;
-    searchTranscripts?: (query: string, limit?: number) => Promise<SessionSearchHit[]>;
-  };
-
-  if (typeof candidate.searchByKeywords === 'function') {
+  if (typeof sessionManager.searchByKeywords === 'function') {
     return {
-      searchByKeywords: candidate.searchByKeywords.bind(sessionManager),
+      searchByKeywords: sessionManager.searchByKeywords.bind(sessionManager),
     };
   }
 
-  if (typeof candidate.searchTranscripts === 'function') {
+  if (typeof sessionManager.searchTranscripts === 'function') {
     return {
-      searchByKeywords: candidate.searchTranscripts.bind(sessionManager),
+      searchByKeywords: sessionManager.searchTranscripts.bind(sessionManager),
     };
   }
 
@@ -196,7 +205,26 @@ function createCompatibleMemoryStore(memoryStore: MemoryStorePort | null): Memor
   }) as MemoryStorePort;
 }
 
+function isSelfDirectedReflectionRequest(): boolean {
+  const context = getRequestContext();
+  return context?.requesterProvenance === 'self_directed'
+    && context.channelId?.startsWith('internal:reflection:') === true;
+}
+
 export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOptions): MemoryCapabilities {
+  const sessionManager = options.sessionManager;
+  const isSessionRetiredOrQuarantined = sessionManager?.isSessionRetiredOrQuarantined;
+  const getRetiredLogicalSessionIds = sessionManager?.getRetiredLogicalSessionIds;
+  const sessionQuarantineFilter: MemorySessionQuarantineFilter | null =
+    typeof isSessionRetiredOrQuarantined === 'function'
+    && typeof getRetiredLogicalSessionIds === 'function'
+    ? {
+      isSessionRetiredOrQuarantined: logicalSessionId => (
+        isSessionRetiredOrQuarantined.call(sessionManager, logicalSessionId)
+      ),
+      getRetiredLogicalSessionIds: () => getRetiredLogicalSessionIds.call(sessionManager),
+    }
+    : null;
   const subjectStore = options.memoryStore
     ? createSubjectAuthorizedMemoryStore(
       options.memoryStore,
@@ -212,12 +240,19 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
     query: string,
     limit = 10,
   ): Promise<Array<{ text: string; type: string; importance: number; similarity: number }>> => {
-    if (!options.embeddingService || !memoryStore) {
+    if (
+      !options.embeddingService
+      || !memoryStore
+      || (isSelfDirectedReflectionRequest() && !sessionQuarantineFilter)
+    ) {
       return [];
     }
 
     const embedding = await options.embeddingService.embed(query);
-    const results = await memoryStore.searchByEmbedding(embedding, 0.3, limit);
+    const results = filterQuarantinedMemories(
+      sessionQuarantineFilter,
+      await memoryStore.searchByEmbedding(embedding, 0.3, limit),
+    ).memories;
 
     addEvidence(options.pushEvidence, {
       source: 'memory_search',
@@ -444,12 +479,12 @@ export function createMemoryCapabilities(options: CreateMemoryCapabilitiesOption
   };
 
   const memory_get_by_id = async (id: string): Promise<Record<string, unknown> | null> => {
-    if (!memoryStore) {
+    if (!memoryStore || (isSelfDirectedReflectionRequest() && !sessionQuarantineFilter)) {
       return null;
     }
 
     const memory = await memoryStore.getById(id);
-    if (!memory) {
+    if (!memory || isMemoryQuarantined(sessionQuarantineFilter, memory)) {
       return null;
     }
 

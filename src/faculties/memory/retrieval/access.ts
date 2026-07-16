@@ -8,7 +8,10 @@ import {
   type ChannelMeta,
   type DisclosureBoundaryDirective,
 } from '../../../system/trust/policy.js';
-import type { PurrMemory } from '../types.js';
+import type {
+  PurrMemory,
+  RetrievalAccessScope,
+} from '../types.js';
 import type { ConversationScope } from '../../../core/session/conversation-scope.js';
 import {
   createEmptyMemoryWithheldSummary,
@@ -55,6 +58,7 @@ export interface RetrievalRoomVisibilityContext {
 }
 
 interface RetrievalParticipantAccessContext {
+  accessScope?: RetrievalAccessScope;
   trustLevel: TrustLevel;
   channelPrivacy: ChannelPrivacy;
   broadcast: boolean;
@@ -220,6 +224,7 @@ function evaluateRoomVisibilityDecision(
 export function evaluateRetrievalAccessDecision(
   memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'consentFlags' | 'tags' | 'provenance' | 'scopeRef' | 'scopeTags'>,
   options: {
+    accessScope?: RetrievalAccessScope;
     trustLevel: TrustLevel;
     /** Context Envelope disclosure pair (E3.3 re-key). */
     channelPrivacy: ChannelPrivacy;
@@ -230,15 +235,18 @@ export function evaluateRetrievalAccessDecision(
     roomVisibility?: RetrievalRoomVisibilityContext;
   },
 ): RetrievalAccessDecision {
-  const roomDecision = evaluateRoomVisibilityDecision(memory, options);
-  if (roomDecision) return roomDecision;
+  const companionSelfReflection = options.accessScope === 'companion_self_reflection';
+  if (!companionSelfReflection) {
+    const roomDecision = evaluateRoomVisibilityDecision(memory, options);
+    if (roomDecision) return roomDecision;
 
-  if (violatesHighIntimacyContactScope(memory, options)) {
-    return {
-      allowed: false,
-      rejectionKind: 'contact_scope',
-      withheldReason: 'contact_scope.high_intimacy',
-    };
+    if (violatesHighIntimacyContactScope(memory, options)) {
+      return {
+        allowed: false,
+        rejectionKind: 'contact_scope',
+        withheldReason: 'contact_scope.high_intimacy',
+      };
+    }
   }
 
   const policy = evaluateMemoryPolicy({
@@ -259,6 +267,9 @@ export function evaluateRetrievalAccessDecision(
     || policy.reasonTag === 'visibility.channel_restricted'
     || policy.reasonTag === 'visibility.broadcast_restricted'
   ) {
+    if (companionSelfReflection) {
+      return { allowed: true };
+    }
     return {
       allowed: false,
       rejectionKind: 'sensitivity',
@@ -279,6 +290,7 @@ export function evaluateRetrievalAccessDecision(
 export function summarizeWithheldMemories<T extends Pick<PurrMemory, 'id' | 'sensitivity' | 'contactId' | 'consentFlags' | 'tags' | 'provenance' | 'scopeRef' | 'scopeTags'> & { similarity?: number }>(
   memories: readonly T[],
   options: {
+    accessScope?: RetrievalAccessScope;
     trustLevel: TrustLevel;
     /** Context Envelope disclosure pair (E3.3 re-key). */
     channelPrivacy: ChannelPrivacy;

@@ -41,10 +41,16 @@ Rules:
 - A missing Dolt remote named `origin` is not a problem by itself. Do not run or report `bd dolt push` unless `bd dolt remote list --json` shows an actual configured remote. Historical incident: pushing without a real remote recreated junk `__dolt_remote_info__` / `refs/dolt/*` refs on GitHub that had to be deleted by hand.
 - `.beads/` is intentionally ignored local runtime/export state. Never `git add .beads`, never force-add `.beads/issues.jsonl`, and do not treat ignored `.beads` changes as code dirt.
 - Keep `bd config get export.git-add` at `false`; otherwise `bd` will try to stage ignored `.beads/issues.jsonl` exports and create noisy false warnings.
+- **Remote-lane issues.jsonl sync convention.** Agent lanes that cannot reach the local shared Dolt server (off-machine instances working against `origin`) sync bead state through the committed `.beads/issues.jsonl` snapshot instead — this is why `.gitignore` un-ignores that one file (`!.beads/issues.jsonl`) while ignoring the rest of `.beads/`. Such a lane must `bd import .beads/issues.jsonl` after every `git pull` (upsert semantics) and, after closing its beads, `bd export > .beads/issues.jsonl` then commit and push that file. The "never stage `.beads/issues.jsonl`" rule above is for lanes with direct Dolt access, where Dolt is authoritative and committing the export only creates noise; it does not forbid the remote sync lane from committing that single un-ignored file.
 - Do not create markdown TODO lists or external task trackers.
 - If `bd ready --json` is empty but you are doing user-requested tracked work, create a self-contained issue before editing code.
 - Link discovered follow-up work with `discovered-from:<parent-id>`.
 - Keep issue descriptions self-contained: summary, files, concrete steps, and an example when useful.
+- **Label taxonomy (apply at creation).** Every bead carries two labels — a `kind` and a `system` — set with `bd create ... -l kind:<kind>,system:<system>`:
+  - `kind` ∈ `bug` | `feat` | `chore` | `design` (the scannable category; orthogonal to bd's `-t` type, which stays `bug`/`feature`/`task`/`epic` for workflow).
+  - `system` ∈ `memory` | `session` | `scheduler` | `garden` | `helm-ops` | `agent-tooling` | `metacog` | `emotion` | `channels` | `cogsec` | `persistence` | `voice` | `world` | `docs` | `fleet-auth` | `companion-ui` | `icp` | `shards` | `prompts` | `testing`.
+
+  This makes a bare `bd list` row self-describing and lets triage filter, e.g. `bd list --label kind:bug --label system:memory` (AND) or `bd list --label-pattern 'system:*'`.
 
 ## Source Of Truth
 
@@ -133,6 +139,18 @@ Guardrails:
 ## Live Deployment Boundary
 
 For the live running app in this repo, everything operationally authoritative must live under this repo tree.
+
+**Live authority is k3s, not host systemd.** The live companion runs as the k3s
+deployment in namespace `psfn` (agent, gateway, and Garden workloads from
+`deploy/helm/psfn`), with the system-owned owner files mounted at
+`/app/system-data` from the system-data PVC and all persistent state on
+Kubernetes PVCs. The host `psfn.service` systemd unit and its on-host
+`/var/lib/psfn/runtime/system-data` tree are disabled, non-authoritative legacy
+unless an operator explicitly reactivates them. Before any live owner-file or
+persistence change, discover the running workloads and inspect owner-file hashes
+read-only against the k3s namespace (see `docs/operations.md` → "Live deployment
+authority" for the exact commands); do not mutate the host tree assuming it is
+live.
 
 Rules:
 

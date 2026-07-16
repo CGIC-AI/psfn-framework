@@ -175,3 +175,36 @@ describe('non-conversational session entry classification', () => {
     })).toBe(false);
   });
 });
+
+describe('trimRecentEntriesToTokenBudget stamp-aware budgeting', () => {
+  // Rendered user/system history lines carry a '[<Www> MM-DD-YY HH:mm] ' stamp
+  // (~14 tokens); the primitives-side trim must count that overhead so the
+  // verbatim tail is not selected larger than the assembly-side budget believes
+  // (psfn-framework-2x37.8). Assistant turns render unstamped and incur none.
+  function budgetEntry(id: number, role: 'user' | 'assistant'): SessionEntry {
+    return entry({ id, role, content: 'hello' });
+  }
+
+  it('counts the render-time stamp overhead for stamped (user) roles', async () => {
+    const { trimRecentEntriesToTokenBudget } = await import('./manager-primitives.js');
+    // Six 1-token user messages: raw counting keeps all six under a 20-token
+    // budget, but stamp overhead (~14 tokens each) forces the tail down to the
+    // SESSION_HISTORY_MIN_MESSAGES floor of five, dropping the oldest.
+    const entries = [1, 2, 3, 4, 5, 6].map(id => budgetEntry(id, 'user'));
+
+    const result = trimRecentEntriesToTokenBudget(entries, 20);
+
+    expect(result.map(e => e.id)).toEqual([2, 3, 4, 5, 6]);
+  });
+
+  it('adds no stamp overhead for unstamped assistant turns', async () => {
+    const { trimRecentEntriesToTokenBudget } = await import('./manager-primitives.js');
+    // Same shape as above but assistant turns render unstamped, so all six
+    // 1-token entries fit under the same 20-token budget.
+    const entries = [1, 2, 3, 4, 5, 6].map(id => budgetEntry(id, 'assistant'));
+
+    const result = trimRecentEntriesToTokenBudget(entries, 20);
+
+    expect(result.map(e => e.id)).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+});

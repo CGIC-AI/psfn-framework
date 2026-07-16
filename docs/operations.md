@@ -114,6 +114,44 @@ See "Backups And Integrity" below for the per-companion-slice / cluster-artifact
 
 ## Production Deployment
 
+### Live deployment authority (read this first)
+
+The live companion in this repo runs as a **k3s deployment**, not the host
+systemd unit. The authoritative runtime is the Kubernetes namespace `psfn`
+(the agent, gateway, and Garden workloads rendered from `deploy/helm/psfn`),
+with the system-owned owner files mounted at `/app/system-data` from the
+`<release>-system-data` PVC and all persistent state on Kubernetes PVCs.
+
+The host systemd unit produced by the system-account installer below is
+**disabled, non-authoritative legacy**. Its separate on-host runtime tree at
+`/var/lib/psfn/runtime/system-data` is a stale copy, not live authority, unless
+an operator has explicitly reactivated `psfn.service` on the node. Do not
+conflate the two roots: mutating the host tree does not touch live state, and
+host-systemd diagnostics can misdirect a change onto the wrong root (this
+misdirection is exactly what psfn-framework-brev was filed to correct).
+
+Before any live mutation, discover the running workloads and inspect owner-file
+state read-only (`<release>` is the deployed Helm release name, `psfn` by
+default; `<owner-file>` is a JSON owner file such as `charge-policy.json`):
+
+```bash
+# What is actually running, and which PVCs back it
+kubectl get deploy,pods -n psfn
+kubectl get pvc -n psfn
+
+# Owner-file mount and hashes inside a live agent (read-only)
+kubectl exec -n psfn deploy/<release>-agent -- ls -la /app/system-data
+kubectl exec -n psfn deploy/<release>-agent -- \
+  sh -c 'cd /app/system-data && sha256sum *.json'
+
+# Confirm the host unit is not the live authority on the node
+systemctl status psfn.service   # expected: disabled / inactive
+```
+
+Only after this discovery confirms which root is live should any owner-file or
+persistence change proceed. The installer flow below provisions the non-k3s
+host-systemd path and is not the live deployment.
+
 The repo already contains the system-account installer:
 
 ```bash
@@ -126,7 +164,7 @@ What it does:
 - stages a repo-owned checkout under the service home
 - bundles a Node binary under the app root
 - writes the filtered env file under the deployed checkout at `deployment/systemd/psfn.env`
-- renders the authoritative unit under the deployed checkout at `deployment/systemd/psfn.service`
+- renders the host systemd unit under the deployed checkout at `deployment/systemd/psfn.service` (repo-owned so no shadow copy is authoritative; this host unit is the legacy path, not the live k3s deployment described above)
 - links `/etc/systemd/system/psfn.service` to that repo-owned rendered unit as the only required external pointer
 - can optionally run the persistence cutover before enabling the service
 
@@ -462,6 +500,13 @@ intentional copy required during early boot.
 
 ## Out-of-Process Watchdog Paging
 
+This watchdog targets a **host-systemd** deployment: it checks a
+`systemd --user` service and pages on failure. It is the liveness path for the
+legacy non-k3s host unit, not for the live k3s deployment (see "Live deployment
+authority" above), where Kubernetes owns restart/liveness and the health
+contract is probed against the in-cluster workloads. Only run this watchdog on a
+node where `psfn.service` (or the equivalent user unit) is the intended runtime.
+
 The repo-owned watchdog runner lives at:
 
 ```bash
@@ -510,6 +555,40 @@ The cutover tooling:
 - writes a migration manifest under the backup area
 
 Production startup should not proceed until the cutover plan is clean.
+
+### Owner-file migration framework
+
+Per-companion owner files (`charge-policy.json`, `skills.json`, and the other
+registered per-companion owners) were once rooted under `SYSTEM_DATA_DIR`.
+Current runtime requires each under its companion root with no legacy fallback,
+so re-rooting an existing fleet is a one-time, digest-approved migration built
+from three pieces:
+
+- **CLI** — `npm run migrate:system-owner-fleet`
+  (`src/app/maintenance/migrate-system-owner-fleet.ts`). The default mode is a
+  read-only plan; `--apply` executes; each source is gated by an explicit
+  `--approve <owner-file>=<exact-sha256>` argument so the operator confirms the
+  exact bytes being fanned out. It fans each approved source to every companion
+  enumerated in `companions.json` and retires the source only after all
+  destinations verify. Digests only — the command carries no secrets.
+- **Helm pre-upgrade hook** —
+  `deploy/helm/psfn/templates/owner-migration-upgrade.yaml`, gated by
+  `ownerMigration.enabled`. It runs as a `pre-upgrade` Job that first snapshots
+  the whole fleet, then runs the same compiled `--apply` migration with the
+  bound `--approve` digests, then runs packaged per-companion readiness probes;
+  Helm admits the new revision only after every probe passes. Missing claims,
+  wrong paths, image-digest failures, shared-companion claims, or an omitted
+  required hook fail the upgrade with the old revision left deployed.
+- **Receipts** — the durable schema-v4 receipt lands at
+  `SYSTEM_DATA_DIR/migrations/system-owner-fleet-reroot.json`; retired sources
+  move into receipt-owned quarantine directories under `SYSTEM_DATA_DIR`, and
+  the whole-fleet snapshot lands under the backups area (`BACKUP_ROOT_DIR`). The
+  receipt is what makes the migration crash-recoverable and idempotent on retry.
+
+The supported scope and beta-removal condition are recorded in
+`docs/specifications.md` (Live Alpha Migration Boundary). The exact operator
+procedure — snapshot, plan, approve, apply, and post-migration preflight —
+follows.
 
 ### Existing split fleets with shared per-companion owners
 

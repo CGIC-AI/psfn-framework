@@ -573,6 +573,72 @@ describe('AgentApiBackend direct model completions', () => {
     expect(result.ok).toBe(true);
   });
 
+  it('retries once when a direct completion returns transient empty content', async () => {
+    const complete = vi.fn()
+      .mockResolvedValueOnce({
+        content: '',
+        toolCalls: [],
+        model: 'claude-fable-5',
+        inputTokens: 0,
+        outputTokens: 0,
+        stopReason: 'stop',
+      })
+      .mockResolvedValueOnce({
+        content: 'recovered reply',
+        toolCalls: [],
+        model: 'claude-fable-5',
+        inputTokens: 5,
+        outputTokens: 9,
+        stopReason: 'stop',
+      });
+    const { backend } = createBackend({ complete });
+
+    const result = await backend.handleChatCompletion({
+      requestId: 'req-direct-empty-retry',
+      request: { ...participantRequest, system_prompt_mode: 'none' },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: { 'x-channel-id': 'model-room:room-1:claude-fable' },
+    });
+
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({
+      ok: true,
+      response: {
+        content: 'recovered reply',
+        channelId: 'model-room:room-1:claude-fable',
+        inputTokens: 5,
+        outputTokens: 9,
+      },
+    });
+  });
+
+  it('fails closed with a 502 when direct empty content persists across the retry', async () => {
+    const complete = vi.fn(async () => ({
+      content: '   ',
+      toolCalls: [],
+      model: 'claude-fable-5',
+      inputTokens: 0,
+      outputTokens: 0,
+      stopReason: 'stop',
+    }));
+    const { backend } = createBackend({ complete });
+
+    const result = await backend.handleChatCompletion({
+      requestId: 'req-direct-empty-persist',
+      request: { ...participantRequest, system_prompt_mode: 'none' },
+      principal: { id: 'principal-1', mode: 'api_key' },
+      headers: {},
+    });
+
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.status).toBe(502);
+      expect(result.error.type).toBe('model_error');
+      expect(result.error.message).toContain('returned empty content');
+    }
+  });
+
   it('keeps the companion pipeline when system_prompt_mode=default is explicit', async () => {
     const handleMessage = vi.fn(() => new Promise(() => undefined));
     const { backend, complete } = createBackend({ handleMessage });

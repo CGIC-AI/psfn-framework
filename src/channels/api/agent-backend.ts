@@ -578,46 +578,71 @@ export class AgentApiBackend {
 
     const timeoutMs = this.normalizeChatCompletionTimeoutMs(params.timeoutMs);
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    // A transient provider empty_response (no text, no tool calls) is not a
+    // terminal condition: retry the same candidate once before failing closed,
+    // so a one-off provider blip does not surface as an indistinguishable 502.
+    // Persistent empty content still fails closed with the original diagnostic.
+    const maxAttempts = 2;
     try {
-      const completion = this.llmProvider.complete(context, 'reasoning', {
-        signal: abortController.signal,
-      });
-      const response = timeoutMs === null
-        ? await Promise.race([completion, abortPromise])
-        : await Promise.race([
-          completion,
-          abortPromise,
-          new Promise<never>((_, reject) => {
-            timeoutHandle = setTimeout(() => {
-              reject(new Error('api_chat_completion_timeout'));
-              void this.cancelActiveRequest(
-                params.requestId,
-                activeRequest,
-                'timeout',
-              ).catch(error => log.error('Direct API timeout cancellation reporting failed', {
-                requestId: params.requestId,
-                channelId,
-                error: toErrorMessage(error),
-              }));
-            }, timeoutMs);
-            timeoutHandle.unref();
-          }),
-        ]);
-      if (!response.content || !response.content.trim()) {
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        const completion = this.llmProvider.complete(context, 'reasoning', {
+          signal: abortController.signal,
+        });
+        const response = timeoutMs === null
+          ? await Promise.race([completion, abortPromise])
+          : await Promise.race([
+            completion,
+            abortPromise,
+            new Promise<never>((_, reject) => {
+              timeoutHandle = setTimeout(() => {
+                reject(new Error('api_chat_completion_timeout'));
+                void this.cancelActiveRequest(
+                  params.requestId,
+                  activeRequest,
+                  'timeout',
+                ).catch(error => log.error('Direct API timeout cancellation reporting failed', {
+                  requestId: params.requestId,
+                  channelId,
+                  error: toErrorMessage(error),
+                }));
+              }, timeoutMs);
+              timeoutHandle.unref();
+            }),
+          ]);
+        if (response.content && response.content.trim()) {
+          // Direct completions do not stream; emit the full text as one delta so
+          // SSE clients still receive content.
+          await params.onDelta?.(response.content);
+          return {
+            ok: true,
+            response: {
+              content: response.content,
+              channelId,
+              inputTokens: response.inputTokens,
+              outputTokens: response.outputTokens,
+            },
+          };
+        }
+        if (attempt < maxAttempts) {
+          log.warn('Direct model returned empty content; retrying once', {
+            requestId: params.requestId,
+            channelId,
+            provider: modelOverride.provider,
+            model: modelOverride.model,
+            attempt,
+          });
+          // Cancel the settled attempt's timeout so it cannot fire during retry.
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+            timeoutHandle = undefined;
+          }
+          continue;
+        }
         return this.fail(502, 'model_error', `Direct model ${modelOverride.provider}/${modelOverride.model} returned empty content`);
       }
-      // Direct completions do not stream; emit the full text as one delta so
-      // SSE clients still receive content.
-      await params.onDelta?.(response.content);
-      return {
-        ok: true,
-        response: {
-          content: response.content,
-          channelId,
-          inputTokens: response.inputTokens,
-          outputTokens: response.outputTokens,
-        },
-      };
+      // Unreachable: the loop always returns on success or on the terminal
+      // final-attempt empty. Fail closed if control ever escapes it.
+      return this.fail(502, 'model_error', `Direct model ${modelOverride.provider}/${modelOverride.model} returned empty content`);
     } catch (error) {
       if (error instanceof Error && error.message === 'api_chat_completion_cancelled') {
         return this.fail(499, 'request_cancelled', 'Direct model completion cancelled');

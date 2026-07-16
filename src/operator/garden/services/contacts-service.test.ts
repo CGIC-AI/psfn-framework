@@ -69,6 +69,27 @@ describe('AdminContactsDataService', () => {
     expect(result.mutationAudits).toEqual([]);
   });
 
+  it('returns a fleet profile only on the exact current-subject detail', async () => {
+    const { contactStore, service, profiles } = await createServiceHarness();
+    const current = await contactStore.upsert({ displayName: 'Current Contact' });
+    const other = await contactStore.upsert({ displayName: 'Other Contact' });
+    for (const contact of [current, other]) {
+      profiles.set(contact.id, {
+        contactId: contact.id,
+        summary: `profile-${contact.id}`,
+        sourceMemoryIds: [],
+        confidenceScore: 1,
+        noveltyScore: 0,
+        updatedAt: 1,
+      });
+    }
+
+    await expect(service.getContactDetail(current.id, fleetContext(current.id)))
+      .resolves.toMatchObject({ profile: { contactId: current.id } });
+    await expect(service.getContactDetail(other.id, fleetContext(current.id)))
+      .resolves.toBeNull();
+  });
+
   it('deletes a persisted conversation channel from a contact', async () => {
     const { contactStore, service } = await createServiceHarness();
     const contact = await contactStore.upsert({ displayName: 'Primary User' });

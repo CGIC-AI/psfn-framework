@@ -35,6 +35,7 @@ import type {
 } from './types.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
+import { createSubjectAuthorizedMemoryStore } from '../../../faculties/memory/subject-authorized-store.js';
 
 function requestActor(context: GardenRequestContext | undefined): string {
   return context?.kind === 'fleet_principal'
@@ -132,9 +133,19 @@ export class AdminContactsDataService implements AdminContactsService {
   constructor(private readonly deps: {
     contactStore?: ContactStorePort | null;
     memoryStore: MemoryStorePort;
+    /** Raw product store; fleet requests project it through their immutable subject context. */
+    fleetMemoryStore?: MemoryStorePort;
     sessionStore: SessionStore;
     relationshipScoreReader?: AdminContactRelationshipScoreReader | null;
   }) {}
+
+  private profileStore(context?: GardenRequestContext): MemoryStorePort {
+    if (context?.kind !== 'fleet_principal') return this.deps.memoryStore;
+    return createSubjectAuthorizedMemoryStore(
+      this.deps.fleetMemoryStore ?? this.deps.memoryStore,
+      Object.freeze({ viewerContactId: context.actor.contactId }),
+    );
+  }
 
   private normalizeContactMutationAuditField(value: string | null): ContactMutationAuditField | undefined {
     const trimmed = value?.trim();
@@ -338,7 +349,7 @@ export class AdminContactsDataService implements AdminContactsService {
     ));
     const allowedContactIds = new Set(contacts.map(contact => contact.id));
     const profileMap = new Map(
-      (await this.deps.memoryStore.listContactProfiles())
+      (await this.profileStore(context).listContactProfiles())
         .filter(profile => allowedContactIds.has(profile.contactId))
         .map(profile => [profile.contactId, profile] as const),
     );
@@ -391,7 +402,7 @@ export class AdminContactsDataService implements AdminContactsService {
 
     return {
       contact,
-      profile: await this.deps.memoryStore.getContactProfile(contact.id),
+      profile: await this.profileStore(context).getContactProfile(contact.id),
       relatedChannels,
     };
   }

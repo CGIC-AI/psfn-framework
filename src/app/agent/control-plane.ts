@@ -12,7 +12,11 @@ import {
   createNotifyTool,
   type NotificationPort,
 } from '../../core/tools/ntfy.js';
-import { createRetryableShutdown, runShutdownSequence } from '../startup/support/shutdown-helpers.js';
+import {
+  createRetryableShutdown,
+  runShutdownSequence,
+  runShutdownStep,
+} from '../startup/support/shutdown-helpers.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
@@ -157,48 +161,58 @@ export function buildAgentControlPlane(
     startTime: Date.now(),
   });
 
+  const prepareRestartCommand = createRetryableShutdown(async () => {
+    await runShutdownStep(
+      'stop durable background work supervisor',
+      () => agentLoop.stopBackgroundWork(),
+      log,
+      2,
+      true,
+    );
+  });
+
   const stopFn = createRetryableShutdown(async () => {
-      const timeoutMs = parsePositiveIntEnv(
-        process.env.EXTRACTION_DRAIN_TIMEOUT_MS,
-        DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
-      );
-      await runShutdownSequence([
-        { step: 'unregister deferred companion outreach', action: () => unregisterDeferredCompanionOutreach() },
-        { step: 'unregister ICP initiation candidates', action: () => unregisterIcpInitiationCandidates() },
-        { step: 'unregister gateway disconnect hook', action: () => unregisterGatewayDisconnect() },
-        { step: 'emit system.shutdown event', action: () => eventBus.emit('system.shutdown', {}) },
-        { step: 'stop debug observer', action: () => stopDebugObserver() },
-        { step: 'stop scheduler', action: () => scheduler.stop() },
-        {
-          step: 'stop durable background work supervisor',
-          action: () => agentLoop.stopBackgroundWork(),
-          maxAttempts: 2,
-          failClosed: true,
+    const timeoutMs = parsePositiveIntEnv(
+      process.env.EXTRACTION_DRAIN_TIMEOUT_MS,
+      DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
+    );
+    await runShutdownSequence([
+      { step: 'unregister deferred companion outreach', action: () => unregisterDeferredCompanionOutreach() },
+      { step: 'unregister ICP initiation candidates', action: () => unregisterIcpInitiationCandidates() },
+      { step: 'unregister gateway disconnect hook', action: () => unregisterGatewayDisconnect() },
+      { step: 'emit system.shutdown event', action: () => eventBus.emit('system.shutdown', {}) },
+      { step: 'stop debug observer', action: () => stopDebugObserver() },
+      { step: 'stop scheduler', action: () => scheduler.stop() },
+      {
+        step: 'stop durable background work supervisor',
+        action: prepareRestartCommand,
+        maxAttempts: 1,
+        failClosed: true,
+      },
+      {
+        step: 'drain memory extractor',
+        action: async () => {
+          const drained = await memoryExtractor.stop({ timeoutMs });
+          if (!drained) {
+            log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
+          }
         },
-        {
-          step: 'drain memory extractor',
-          action: async () => {
-            const drained = await memoryExtractor.stop({ timeoutMs });
-            if (!drained) {
-              log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
-            }
-          },
-        },
-        {
-          step: 'write graceful shutdown markers',
-          action: () => writeGracefulShutdownMarkers(),
-        },
-        { step: 'shutdown module loader', action: () => moduleLoader.shutdown() },
-        { step: 'stop API server', action: () => shutdownTargets.apiServer?.stop() },
-        { step: 'stop admin server', action: () => shutdownTargets.adminTransport?.stop() },
-        { step: 'close app cache', action: () => shutdownTargets.appCache?.close?.() },
-        { step: 'close charge ledger', action: () => shutdownTargets.chargeLedger?.close() },
-        { step: 'close ICP fatigue regulation reservations', action: () => shutdownTargets.fatigueRegulationReservations?.close() },
-        { step: 'close session tail cache', action: () => shutdownTargets.sessionTailCache?.close?.() },
-        { step: 'destroy gateway client', action: () => gateway.destroy() },
-        { step: 'close database', action: () => closeDatabase() },
-      ], log);
-      log.info('Stopped');
+      },
+      {
+        step: 'write graceful shutdown markers',
+        action: () => writeGracefulShutdownMarkers(),
+      },
+      { step: 'shutdown module loader', action: () => moduleLoader.shutdown() },
+      { step: 'stop API server', action: () => shutdownTargets.apiServer?.stop() },
+      { step: 'stop admin server', action: () => shutdownTargets.adminTransport?.stop() },
+      { step: 'close app cache', action: () => shutdownTargets.appCache?.close?.() },
+      { step: 'close charge ledger', action: () => shutdownTargets.chargeLedger?.close() },
+      { step: 'close ICP fatigue regulation reservations', action: () => shutdownTargets.fatigueRegulationReservations?.close() },
+      { step: 'close session tail cache', action: () => shutdownTargets.sessionTailCache?.close?.() },
+      { step: 'destroy gateway client', action: () => gateway.destroy() },
+      { step: 'close database', action: () => closeDatabase() },
+    ], log);
+    log.info('Stopped');
   });
 
   agentLoop.registerTool(createSystemTool(
@@ -209,6 +223,7 @@ export function buildAgentControlPlane(
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
       restartContract: lifecycleRuntimeContract.restart,
+      prepareRestartCommand,
       runBuildCommand: async () => {
         await runRepoLifecycleBuildCommand({
           repoRoot: process.cwd(),

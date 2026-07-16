@@ -37,6 +37,7 @@ interface LifecycleToolOptions {
   restartSafeguard?: LifecycleRestartSafeguard;
   getCapabilityTier?: () => CapabilityTier;
   restartContract?: RuntimeRestartContract;
+  prepareRestartCommand?: () => Promise<void>;
   runRestartCommand?: () => Promise<void>;
   runBuildCommand?: () => Promise<void>;
   executionMode?: 'immediate' | 'deferred';
@@ -76,6 +77,12 @@ function resolveLifecycleRestartPlan(options: LifecycleToolOptions): LifecycleRe
   const contract = options.restartContract;
   if (!contract) {
     if (options.runRestartCommand) {
+      if (!options.prepareRestartCommand) {
+        return {
+          supported: false,
+          reason: 'restart strategy command is configured without a durable preparation boundary; current process was left running.',
+        };
+      }
       return {
         supported: true,
         strategy: 'command',
@@ -99,10 +106,10 @@ function resolveLifecycleRestartPlan(options: LifecycleToolOptions): LifecycleRe
   }
 
   if (contract.strategy === 'command') {
-    if (!contract.command || !options.runRestartCommand) {
+    if (!contract.command || !options.runRestartCommand || !options.prepareRestartCommand) {
       return {
         supported: false,
-        reason: 'restart strategy command is configured without an executable restart boundary; current process was left running.',
+        reason: 'restart strategy command is configured without an executable command and durable preparation boundary; current process was left running.',
       };
     }
     return {
@@ -236,7 +243,9 @@ async function runRestartCommandIfRequired(
     return true;
   } catch (err) {
     const errorText = err instanceof Error ? err.message : String(err);
-    log.error('Restart command failed after durable shutdown', { error: errorText });
+    log.error('Restart command failed after durable preparation; runtime remains quiesced with command transport open for explicit retry', {
+      error: errorText,
+    });
     await notifier.notifyShutdown(`${failurePrefix} failed: ${errorText.slice(0, 160)}`);
     return false;
   }
@@ -249,6 +258,33 @@ async function completeDurableShutdownForRestart(
   notifier: LifecycleNotifier,
   failurePrefix: string,
 ): Promise<boolean> {
+  if (plan.requiresRestartCommand) {
+    const prepareRestartCommand = options.prepareRestartCommand;
+    if (!prepareRestartCommand) {
+      log.error('Restart command is missing its durable preparation boundary');
+      await notifier.notifyShutdown(`${failurePrefix} blocked: durable preparation boundary is unavailable`);
+      return false;
+    }
+    try {
+      await prepareRestartCommand();
+    } catch (err) {
+      const errorText = err instanceof Error ? err.message : String(err);
+      log.error('Durable restart preparation failed; aborting restart command', { error: errorText });
+      await notifier.notifyShutdown(`${failurePrefix} blocked: ${errorText.slice(0, 160)}`);
+      return false;
+    }
+
+    const restartCommandReady = await runRestartCommandIfRequired(
+      plan,
+      options,
+      notifier,
+      failurePrefix,
+    );
+    if (!restartCommandReady) {
+      return false;
+    }
+  }
+
   try {
     await stopFn();
   } catch (err) {
@@ -257,7 +293,7 @@ async function completeDurableShutdownForRestart(
     await notifier.notifyShutdown(`${failurePrefix} blocked: ${errorText.slice(0, 160)}`);
     return false;
   }
-  return runRestartCommandIfRequired(plan, options, notifier, failurePrefix);
+  return true;
 }
 
 /**
@@ -543,6 +579,7 @@ export function registerDeferredLifecycleRuntime(input: {
   notifier: LifecycleNotifier;
   stopFn: () => Promise<void>;
   restartContract?: RuntimeRestartContract;
+  prepareRestartCommand?: () => Promise<void>;
   runRestartCommand?: () => Promise<void>;
   runBuildCommand?: () => Promise<void>;
 }): () => void {
@@ -666,6 +703,7 @@ async function executeDeferredRestart(
     notifier: LifecycleNotifier;
     stopFn: () => Promise<void>;
     restartContract?: RuntimeRestartContract;
+    prepareRestartCommand?: () => Promise<void>;
     runRestartCommand?: () => Promise<void>;
   },
 ): Promise<void> {
@@ -707,6 +745,7 @@ async function executeDeferredRebuild(
     notifier: LifecycleNotifier;
     stopFn: () => Promise<void>;
     restartContract?: RuntimeRestartContract;
+    prepareRestartCommand?: () => Promise<void>;
     runRestartCommand?: () => Promise<void>;
     runBuildCommand?: () => Promise<void>;
   },

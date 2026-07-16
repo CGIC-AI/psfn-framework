@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { EventEmitter } from 'node:events';
 import {
   createSystemTool,
   DEFERRED_LIFECYCLE_ACTION_KIND,
@@ -8,6 +9,16 @@ import {
 import type { LifecycleNotifier } from '../../system/lifecycle/notifications.js';
 import { LifecycleRestartSafeguard } from '../../system/capabilities/safeguards.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { GatewayClient } from '../../boundary/gateway/client.js';
+import type {
+  GatewayRpcConnection,
+  GatewayRpcSerializedTransportStats,
+} from '../../boundary/gateway/transport.js';
+import {
+  createRetryableShutdown,
+  runShutdownStep,
+  type ShutdownLogger,
+} from '../../app/startup/support/shutdown-helpers.js';
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -17,6 +28,65 @@ function resultText(result: { content: Array<{ type: string; text: string }> }):
 async function flushDeferredLifecycle(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
   await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+function createRestartCommandGateway(): {
+  client: GatewayClient;
+  isDestroyed: () => boolean;
+} {
+  const emitter = new EventEmitter();
+  let destroyed = false;
+  const emptyStats: GatewayRpcSerializedTransportStats = {
+    frameCount: 0,
+    serializedBytes: 0,
+    rpcCallCount: 0,
+    byMethod: {},
+  };
+  const connection: GatewayRpcConnection = Object.assign(emitter, {
+    send(data: unknown): boolean {
+      if (destroyed) return false;
+      const request = data as { id?: unknown; method?: unknown; params?: unknown };
+      if (request.method === 'shell.exec' && typeof request.id === 'number') {
+        queueMicrotask(() => {
+          emitter.emit('message', {
+            jsonrpc: '2.0',
+            id: request.id,
+            result: {
+              command: 'systemctl',
+              args: ['--user', 'restart', 'psfn.service'],
+              cwd: process.cwd(),
+              exitCode: 0,
+              stdout: '',
+              stderr: '',
+              timedOut: false,
+              truncated: false,
+              durationMs: 1,
+            },
+          });
+        });
+      }
+      return true;
+    },
+    sendHeartbeat: () => !destroyed,
+    onMessage(handler: (message: unknown) => void): void {
+      emitter.on('message', handler);
+    },
+    destroy(): void {
+      if (destroyed) return;
+      destroyed = true;
+      emitter.emit('close');
+    },
+    get destroyed(): boolean {
+      return destroyed;
+    },
+    get serializedTransportStats(): GatewayRpcSerializedTransportStats {
+      return emptyStats;
+    },
+  });
+  return {
+    client: new GatewayClient(connection, 1024, { keepaliveIntervalMs: 60_000 }),
+    isDestroyed: () => destroyed,
+  };
 }
 
 function makeConfig(): SubstrateConfig {
@@ -62,6 +132,7 @@ function makeConfig(): SubstrateConfig {
 describe('system action=restart', () => {
   let mockNotifier: LifecycleNotifier;
   let mockStopFn: ReturnType<typeof vi.fn>;
+  let prepareRestartCommand: ReturnType<typeof vi.fn>;
   let runRestartCommand: ReturnType<typeof vi.fn>;
 
   function makeTool(
@@ -70,6 +141,7 @@ describe('system action=restart', () => {
     return createSystemTool(makeConfig(), {
       notifier: mockNotifier,
       stopFn: mockStopFn,
+      prepareRestartCommand,
       ...options,
     });
   }
@@ -81,6 +153,7 @@ describe('system action=restart', () => {
       notifyShutdown: vi.fn(async () => {}),
     };
     mockStopFn = vi.fn(async () => {});
+    prepareRestartCommand = vi.fn(async () => {});
     runRestartCommand = vi.fn(async () => {});
   });
 
@@ -157,7 +230,7 @@ describe('system action=restart', () => {
     exitSpy.mockRestore();
   });
 
-  it('launches a configured restart command only after durable shutdown', async () => {
+  it('launches a configured restart command after durable preparation and before final shutdown', async () => {
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
@@ -170,16 +243,116 @@ describe('system action=restart', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
 
     expect(mockStopFn).toHaveBeenCalledOnce();
+    expect(prepareRestartCommand).toHaveBeenCalledOnce();
     expect(runRestartCommand).toHaveBeenCalledOnce();
-    expect(mockStopFn.mock.invocationCallOrder[0]!).toBeLessThan(runRestartCommand.mock.invocationCallOrder[0]!);
+    expect(prepareRestartCommand.mock.invocationCallOrder[0]!)
+      .toBeLessThan(runRestartCommand.mock.invocationCallOrder[0]!);
+    expect(runRestartCommand.mock.invocationCallOrder[0]!)
+      .toBeLessThan(mockStopFn.mock.invocationCallOrder[0]!);
     expect(exitSpy).toHaveBeenCalledWith(0);
 
     globalThis.setImmediate = origSetImmediate;
     exitSpy.mockRestore();
   });
 
-  it('does not launch a restart command or exit when durable shutdown fails', async () => {
-    mockStopFn.mockRejectedValueOnce(new Error('durable release failed'));
+  it('allows a later command-strategy restart after two durable preparation failures', async () => {
+    const logger: ShutdownLogger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    };
+    let releaseAttempts = 0;
+    const retryablePreparation = createRetryableShutdown(async () => {
+      await runShutdownStep(
+        'release background claims',
+        async () => {
+          releaseAttempts += 1;
+          if (releaseAttempts <= 2) throw new Error('release unavailable');
+        },
+        logger,
+        2,
+        true,
+      );
+    });
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const origSetImmediate = globalThis.setImmediate;
+    globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
+      void fn();
+      return 0 as any;
+    }) as typeof setImmediate;
+    const tool = makeTool({
+      prepareRestartCommand: retryablePreparation,
+      runRestartCommand,
+    });
+
+    await tool.execute('call-release-fail', { action: 'restart', reason: 'first attempt' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(releaseAttempts).toBe(2);
+    expect(runRestartCommand).not.toHaveBeenCalled();
+    expect(mockStopFn).not.toHaveBeenCalled();
+    expect(exitSpy).not.toHaveBeenCalled();
+
+    await tool.execute('call-release-retry', { action: 'restart', reason: 'retry attempt' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(releaseAttempts).toBe(3);
+    expect(runRestartCommand).toHaveBeenCalledOnce();
+    expect(mockStopFn).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledOnce();
+
+    globalThis.setImmediate = origSetImmediate;
+    exitSpy.mockRestore();
+  });
+
+  it('settles a restart command through a live GatewayClient before destroying its transport', async () => {
+    const events: string[] = [];
+    const gateway = createRestartCommandGateway();
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const origSetImmediate = globalThis.setImmediate;
+    globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
+      void fn();
+      return 0 as any;
+    }) as typeof setImmediate;
+    const tool = createSystemTool(makeConfig(), {
+      notifier: mockNotifier,
+      restartContract: {
+        strategy: 'command',
+        source: 'explicit',
+        command: 'systemctl --user restart psfn.service',
+      },
+      prepareRestartCommand: vi.fn(async () => {
+        events.push('background-released');
+      }),
+      runRestartCommand: vi.fn(async () => {
+        events.push('command-started');
+        await gateway.client.shellExec('systemctl', ['--user', 'restart', 'psfn.service']);
+        events.push('command-settled');
+      }),
+      stopFn: vi.fn(async () => {
+        events.push('final-shutdown');
+        gateway.client.destroy();
+      }),
+    });
+
+    await tool.execute('call-live-gateway', { action: 'restart', reason: 'production transport' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(events).toEqual([
+      'background-released',
+      'command-started',
+      'command-settled',
+      'final-shutdown',
+    ]);
+    expect(gateway.isDestroyed()).toBe(true);
+    expect(exitSpy).toHaveBeenCalledOnce();
+
+    globalThis.setImmediate = origSetImmediate;
+    exitSpy.mockRestore();
+  });
+
+  it('does not launch a restart command, stop transports, or exit when durable preparation fails', async () => {
+    prepareRestartCommand.mockRejectedValueOnce(new Error('durable release failed'));
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
@@ -192,6 +365,7 @@ describe('system action=restart', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
 
     expect(runRestartCommand).not.toHaveBeenCalled();
+    expect(mockStopFn).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     expect(mockNotifier.notifyShutdown).toHaveBeenCalledWith(
       expect.stringContaining('restart blocked: durable release failed'),
@@ -248,10 +422,35 @@ describe('system action=restart', () => {
     expect(runRestartCommand).not.toHaveBeenCalled();
   });
 
-  it('does not exit when the restart command fails after durable shutdown', async () => {
-    runRestartCommand.mockImplementation(async () => {
-      throw new Error('supervisor unavailable');
+  it('fails closed when a command restart has no durable preparation boundary', async () => {
+    const tool = createSystemTool(makeConfig(), {
+      notifier: mockNotifier,
+      stopFn: mockStopFn,
+      restartContract: {
+        strategy: 'command',
+        source: 'explicit',
+        command: 'systemctl --user restart psfn.service',
+      },
+      runRestartCommand,
     });
+
+    const result = await tool.execute('call-missing-preparation', {
+      action: 'restart',
+      reason: 'unsafe command boundary',
+    });
+
+    expect(resultText(result)).toContain('Restart blocked');
+    expect(resultText(result)).toContain('durable preparation boundary');
+    expect((result.details as any).isError).toBe(true);
+    expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
+    expect(runRestartCommand).not.toHaveBeenCalled();
+    expect(mockStopFn).not.toHaveBeenCalled();
+  });
+
+  it('keeps the quiesced command transport open and permits an explicit retry after command failure', async () => {
+    runRestartCommand.mockRejectedValueOnce(new Error('supervisor unavailable'));
+    const durablePreparation = vi.fn(async () => {});
+    const retryablePreparation = createRetryableShutdown(durablePreparation);
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
@@ -265,6 +464,7 @@ describe('system action=restart', () => {
         source: 'explicit',
         command: 'systemctl --user restart psfn.service',
       },
+      prepareRestartCommand: retryablePreparation,
       runRestartCommand,
     });
     const result = await tool.execute('call-command-fail', { action: 'restart', reason: 'supervisor restart' });
@@ -272,8 +472,17 @@ describe('system action=restart', () => {
 
     expect(resultText(result)).toContain('Restart initiated');
     expect(mockNotifier.notifyShutdown).toHaveBeenCalledWith('restart failed: supervisor unavailable');
-    expect(mockStopFn).toHaveBeenCalledOnce();
+    expect(durablePreparation).toHaveBeenCalledOnce();
+    expect(mockStopFn).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
+
+    await tool.execute('call-command-retry', { action: 'restart', reason: 'retry supervisor restart' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(durablePreparation).toHaveBeenCalledOnce();
+    expect(runRestartCommand).toHaveBeenCalledTimes(2);
+    expect(mockStopFn).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledOnce();
 
     globalThis.setImmediate = origSetImmediate;
     exitSpy.mockRestore();
@@ -283,6 +492,7 @@ describe('system action=restart', () => {
 describe('system action=rebuild', () => {
   let mockNotifier: LifecycleNotifier;
   let mockStopFn: ReturnType<typeof vi.fn>;
+  let prepareRestartCommand: ReturnType<typeof vi.fn>;
   let runRestartCommand: ReturnType<typeof vi.fn>;
   let runBuildCommand: ReturnType<typeof vi.fn>;
 
@@ -292,6 +502,7 @@ describe('system action=rebuild', () => {
     return createSystemTool(makeConfig(), {
       notifier: mockNotifier,
       stopFn: mockStopFn,
+      prepareRestartCommand,
       ...options,
     });
   }
@@ -303,6 +514,7 @@ describe('system action=rebuild', () => {
       notifyShutdown: vi.fn(async () => {}),
     };
     mockStopFn = vi.fn(async () => {});
+    prepareRestartCommand = vi.fn(async () => {});
     runRestartCommand = vi.fn(async () => {});
     runBuildCommand = vi.fn(async () => {});
   });
@@ -364,8 +576,8 @@ describe('system action=rebuild', () => {
     exitSpy.mockRestore();
   });
 
-  it('does not launch the rebuild restart command or exit when durable shutdown fails', async () => {
-    mockStopFn.mockRejectedValueOnce(new Error('durable release failed'));
+  it('does not launch the rebuild restart command or close transports when durable preparation fails', async () => {
+    prepareRestartCommand.mockRejectedValueOnce(new Error('durable release failed'));
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
@@ -379,10 +591,39 @@ describe('system action=rebuild', () => {
 
     expect(runBuildCommand).toHaveBeenCalledOnce();
     expect(runRestartCommand).not.toHaveBeenCalled();
+    expect(mockStopFn).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     expect(mockNotifier.notifyShutdown).toHaveBeenCalledWith(
       expect.stringContaining('rebuild restart blocked: durable release failed'),
     );
+
+    globalThis.setImmediate = origSetImmediate;
+    exitSpy.mockRestore();
+  });
+
+  it('runs an immediate rebuild command before preparation and keeps restart transport alive until teardown', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const origSetImmediate = globalThis.setImmediate;
+    globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
+      void fn();
+      return 0 as any;
+    }) as typeof setImmediate;
+
+    const tool = makeTool({ runBuildCommand, runRestartCommand });
+    await tool.execute('call-rebuild-order', { action: 'rebuild', reason: 'ordered rebuild' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(runBuildCommand).toHaveBeenCalledOnce();
+    expect(prepareRestartCommand).toHaveBeenCalledOnce();
+    expect(runRestartCommand).toHaveBeenCalledOnce();
+    expect(mockStopFn).toHaveBeenCalledOnce();
+    expect(runBuildCommand.mock.invocationCallOrder[0]!)
+      .toBeLessThan(prepareRestartCommand.mock.invocationCallOrder[0]!);
+    expect(prepareRestartCommand.mock.invocationCallOrder[0]!)
+      .toBeLessThan(runRestartCommand.mock.invocationCallOrder[0]!);
+    expect(runRestartCommand.mock.invocationCallOrder[0]!)
+      .toBeLessThan(mockStopFn.mock.invocationCallOrder[0]!);
+    expect(exitSpy).toHaveBeenCalledOnce();
 
     globalThis.setImmediate = origSetImmediate;
     exitSpy.mockRestore();
@@ -413,6 +654,7 @@ describe('system action=rebuild', () => {
 describe('createSystemTool', () => {
   let mockNotifier: LifecycleNotifier;
   let mockStopFn: ReturnType<typeof vi.fn>;
+  let prepareRestartCommand: ReturnType<typeof vi.fn>;
   let runRestartCommand: ReturnType<typeof vi.fn>;
   let runBuildCommand: ReturnType<typeof vi.fn>;
 
@@ -423,6 +665,7 @@ describe('createSystemTool', () => {
       notifyShutdown: vi.fn(async () => {}),
     };
     mockStopFn = vi.fn(async () => {});
+    prepareRestartCommand = vi.fn(async () => {});
     runRestartCommand = vi.fn(async () => {});
     runBuildCommand = vi.fn(async () => {});
   });
@@ -445,6 +688,7 @@ describe('createSystemTool', () => {
     const tool = createSystemTool(makeConfig(), {
       notifier: mockNotifier,
       stopFn: mockStopFn,
+      prepareRestartCommand,
       runRestartCommand,
       runBuildCommand,
     });
@@ -497,6 +741,7 @@ describe('createSystemTool', () => {
 describe('deferred lifecycle execution', () => {
   let mockNotifier: LifecycleNotifier;
   let mockStopFn: ReturnType<typeof vi.fn>;
+  let prepareRestartCommand: ReturnType<typeof vi.fn>;
   let runRestartCommand: ReturnType<typeof vi.fn>;
   let runBuildCommand: ReturnType<typeof vi.fn>;
 
@@ -507,6 +752,7 @@ describe('deferred lifecycle execution', () => {
       notifyShutdown: vi.fn(async () => {}),
     };
     mockStopFn = vi.fn(async () => {});
+    prepareRestartCommand = vi.fn(async () => {});
     runRestartCommand = vi.fn(async () => {});
     runBuildCommand = vi.fn(async () => {});
   });
@@ -516,6 +762,7 @@ describe('deferred lifecycle execution', () => {
       notifier: mockNotifier,
       stopFn: mockStopFn,
       executionMode: 'deferred',
+      prepareRestartCommand,
       runRestartCommand,
     });
 
@@ -810,6 +1057,7 @@ describe('deferred lifecycle execution', () => {
       postTurnActions: postTurnActions as any,
       notifier: mockNotifier,
       stopFn: mockStopFn,
+      prepareRestartCommand,
       runRestartCommand,
       runBuildCommand,
     });
@@ -826,15 +1074,20 @@ describe('deferred lifecycle execution', () => {
 
     expect(registerPostTurnActionInferer).toHaveBeenCalledOnce();
     expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('autonomous shakedown restart');
+    expect(prepareRestartCommand).toHaveBeenCalledOnce();
     expect(mockStopFn).toHaveBeenCalledOnce();
     expect(runRestartCommand).toHaveBeenCalledOnce();
+    expect(prepareRestartCommand.mock.invocationCallOrder[0]!)
+      .toBeLessThan(runRestartCommand.mock.invocationCallOrder[0]!);
+    expect(runRestartCommand.mock.invocationCallOrder[0]!)
+      .toBeLessThan(mockStopFn.mock.invocationCallOrder[0]!);
     expect(exitSpy).toHaveBeenCalledWith(0);
 
     exitSpy.mockRestore();
   });
 
-  it('does not exit a deferred restart when durable shutdown fails', async () => {
-    mockStopFn.mockRejectedValueOnce(new Error('durable release failed'));
+  it('does not run or exit a deferred restart when durable preparation fails', async () => {
+    prepareRestartCommand.mockRejectedValueOnce(new Error('durable release failed'));
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     const registerHandler = vi.fn((_kind, _handler) => () => undefined);
     registerDeferredLifecycleRuntime({
@@ -842,6 +1095,7 @@ describe('deferred lifecycle execution', () => {
       postTurnActions: { registerHandler, listQueued: () => [], getStatus: vi.fn() } as any,
       notifier: mockNotifier,
       stopFn: mockStopFn,
+      prepareRestartCommand,
       runRestartCommand,
       runBuildCommand,
     });
@@ -854,6 +1108,7 @@ describe('deferred lifecycle execution', () => {
     await flushDeferredLifecycle();
 
     expect(runRestartCommand).not.toHaveBeenCalled();
+    expect(mockStopFn).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
     exitSpy.mockRestore();
   });
@@ -873,6 +1128,7 @@ describe('deferred lifecycle execution', () => {
       } as any,
       notifier: mockNotifier,
       stopFn: mockStopFn,
+      prepareRestartCommand,
       restartContract: {
         strategy: 'unsupported',
         source: 'none',
@@ -918,6 +1174,7 @@ describe('deferred lifecycle execution', () => {
       } as any,
       notifier: mockNotifier,
       stopFn: mockStopFn,
+      prepareRestartCommand,
       runRestartCommand,
       runBuildCommand,
     });
@@ -941,8 +1198,8 @@ describe('deferred lifecycle execution', () => {
     exitSpy.mockRestore();
   });
 
-  it('does not exit a deferred rebuild when durable shutdown fails', async () => {
-    mockStopFn.mockRejectedValueOnce(new Error('durable release failed'));
+  it('does not run or exit a deferred rebuild when durable preparation fails', async () => {
+    prepareRestartCommand.mockRejectedValueOnce(new Error('durable release failed'));
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     const registerHandler = vi.fn((_kind, _handler) => () => undefined);
     registerDeferredLifecycleRuntime({
@@ -950,6 +1207,7 @@ describe('deferred lifecycle execution', () => {
       postTurnActions: { registerHandler, listQueued: () => [], getStatus: vi.fn() } as any,
       notifier: mockNotifier,
       stopFn: mockStopFn,
+      prepareRestartCommand,
       runRestartCommand,
       runBuildCommand,
     });
@@ -963,7 +1221,43 @@ describe('deferred lifecycle execution', () => {
 
     expect(runBuildCommand).toHaveBeenCalledOnce();
     expect(runRestartCommand).not.toHaveBeenCalled();
+    expect(mockStopFn).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
+    exitSpy.mockRestore();
+  });
+
+  it('runs a deferred rebuild command through preparation, live restart transport, and final teardown', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
+    const registerHandler = vi.fn((_kind, _handler) => () => undefined);
+    registerDeferredLifecycleRuntime({
+      agentLoop: { registerPostTurnActionInferer: vi.fn().mockReturnValue(() => undefined) },
+      postTurnActions: { registerHandler, listQueued: () => [], getStatus: vi.fn() } as any,
+      notifier: mockNotifier,
+      stopFn: mockStopFn,
+      prepareRestartCommand,
+      runRestartCommand,
+      runBuildCommand,
+    });
+    const handler = registerHandler.mock.calls[0]?.[1] as (action: any) => Promise<void>;
+
+    await handler({
+      id: 'action-rebuild-order',
+      payload: { operation: 'rebuild', reason: 'ordered rebuild' },
+    });
+    await flushDeferredLifecycle();
+
+    expect(runBuildCommand).toHaveBeenCalledOnce();
+    expect(prepareRestartCommand).toHaveBeenCalledOnce();
+    expect(runRestartCommand).toHaveBeenCalledOnce();
+    expect(mockStopFn).toHaveBeenCalledOnce();
+    expect(runBuildCommand.mock.invocationCallOrder[0]!)
+      .toBeLessThan(prepareRestartCommand.mock.invocationCallOrder[0]!);
+    expect(prepareRestartCommand.mock.invocationCallOrder[0]!)
+      .toBeLessThan(runRestartCommand.mock.invocationCallOrder[0]!);
+    expect(runRestartCommand.mock.invocationCallOrder[0]!)
+      .toBeLessThan(mockStopFn.mock.invocationCallOrder[0]!);
+    expect(exitSpy).toHaveBeenCalledOnce();
+
     exitSpy.mockRestore();
   });
 
@@ -982,6 +1276,7 @@ describe('deferred lifecycle execution', () => {
       } as any,
       notifier: mockNotifier,
       stopFn: mockStopFn,
+      prepareRestartCommand,
       runRestartCommand,
     });
 

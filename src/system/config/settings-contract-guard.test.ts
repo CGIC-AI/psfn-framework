@@ -266,6 +266,32 @@ describe('settings contract guard', () => {
 });
 
 describe('memory retrieval policy settings compliance', () => {
+  it('exposes strict wiki startup hydration tuning through the Garden memory editor', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.fields.wikiStartupHydration).toEqual({
+      key: 'wikiStartupHydration',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'object',
+      scope: 'global',
+    });
+    expect(SETTINGS_GARDEN_FIELD_EXPOSURE.wikiStartupHydration).toEqual({
+      sectionId: 'memory',
+      surface: 'advanced',
+    });
+    expect(SETTINGS_GARDEN_SECTION_FIELDS.memory).toContain('wikiStartupHydration');
+
+    const seed = JSON.parse(readFileSync('config/settings.seed.json', 'utf-8')) as {
+      wikiStartupHydration?: Record<string, unknown>;
+    };
+    expect(seed.wikiStartupHydration).toEqual({
+      recentSessionLimit: 4,
+      recentMessageLimit: 18,
+      maxContextChars: 6_000,
+    });
+  });
+
   it('surfaces the strict settings.json policy as a Garden memory object editor', () => {
     const contractData = buildSettingsContractData();
 

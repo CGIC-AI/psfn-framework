@@ -9,6 +9,11 @@
   "wikiRetrievalFocusTokenCap": 2000,
   "wikiRetrievalSimilarityThreshold": 0.6,
   "wikiRetrievalGroupSimilarityThreshold": 0.78,
+  "wikiStartupHydration": {
+    "recentSessionLimit": 4,
+    "recentMessageLimit": 18,
+    "maxContextChars": 6000
+  },
   "sessionMirrorEnabled": true,
   "sessionMirrorMaxChars": 220,
   "sessionMirrorActiveWindowMs": 1800000,

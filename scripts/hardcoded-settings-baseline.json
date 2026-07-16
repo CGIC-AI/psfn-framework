@@ -3278,24 +3278,6 @@
       "value": "8_000"
     },
     {
-      "file": "src/faculties/wiki/startup-hydration.ts",
-      "name": "DEFAULT_RECENT_MESSAGE_LIMIT",
-      "value": "18",
-      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-6n8w; wiki startup message volume is mutable runtime policy."
-    },
-    {
-      "file": "src/faculties/wiki/startup-hydration.ts",
-      "name": "DEFAULT_RECENT_SESSION_LIMIT",
-      "value": "4",
-      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-6n8w; wiki startup session volume is mutable runtime policy."
-    },
-    {
-      "file": "src/faculties/wiki/startup-hydration.ts",
-      "name": "MAX_HYDRATION_CONTEXT_CHARS",
-      "value": "6_000",
-      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-6n8w; wiki startup context volume is mutable runtime policy."
-    },
-    {
       "file": "src/faculties/wiki/store.ts",
       "name": "DEFAULT_SEARCH_LIMIT",
       "value": "20"

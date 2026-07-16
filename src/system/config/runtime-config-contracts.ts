@@ -205,6 +205,8 @@ export interface SubstrateConfig {
   wikiRetrievalFocusTokenCap?: number;
   wikiRetrievalSimilarityThreshold?: number;
   wikiRetrievalGroupSimilarityThreshold?: number;
+  /** settings.json-owned startup wiki cache hydration volume. */
+  wikiStartupHydration?: WikiStartupHydrationSettings;
   extractionInterval: number;
   maintenanceIntervalMs: number;
   defaultContextWindow: number;
@@ -404,6 +406,12 @@ export interface SubstrateConfig {
   moaMaxRounds?: number;
   moaMaxTokensPerRound?: number;
   moaTimeoutMs?: number;
+}
+
+export interface WikiStartupHydrationSettings {
+  recentSessionLimit: number;
+  recentMessageLimit: number;
+  maxContextChars: number;
 }
 export const DEFAULT_MOOD_CONGRUENCE_WEIGHT = 0.15;
 export const DEFAULT_UI_THEME_ID = 'garden';

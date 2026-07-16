@@ -53,6 +53,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   wikiRetrievalFocusTokenCap: { sectionId: 'budget', surface: 'advanced' },
   wikiRetrievalSimilarityThreshold: { sectionId: 'budget', surface: 'advanced' },
   wikiRetrievalGroupSimilarityThreshold: { sectionId: 'budget', surface: 'advanced' },
+  wikiStartupHydration: { sectionId: 'memory', surface: 'advanced' },
   sessionMirrorEnabled: { sectionId: 'sessions', surface: 'advanced' },
   sessionMirrorMaxChars: { sectionId: 'sessions', surface: 'advanced' },
   sessionMirrorActiveWindowMs: { sectionId: 'sessions', surface: 'advanced' },

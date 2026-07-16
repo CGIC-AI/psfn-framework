@@ -133,7 +133,10 @@ import {
   ValuesConsistencyFindingStore,
 } from '../../faculties/introspection/values-consistency.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
-import { hydrateStartupContinuity } from './startup-continuity.js';
+import {
+  hydrateStartupContinuity,
+  requireWikiStartupHydrationTuning,
+} from './startup-continuity.js';
 import {
   createOptionalJournalAutoPublisher,
   registerMarkdownJournalTools,
@@ -431,6 +434,9 @@ async function main(): Promise<void> {
     memoryProvider: agentLoop.memoryProvider,
     wikiRetrieval: agentLoop.wikiRetrieval,
     sessionManager,
+    wikiHydrationTuning: requireWikiStartupHydrationTuning(
+      config.wikiStartupHydration,
+    ),
   });
 
   agentLoop.setInternalStateStore(persistenceRuntime.internalStateStore);

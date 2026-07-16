@@ -15,7 +15,7 @@ import {
   SESSION_HISTORY_BUDGET_PCT_RANGE,
 } from '../../shared/context-budget.js';
 import { normalizeCompositionalPolicyConfig } from '../capabilities/compositional-policy.js';
-import { isRecord } from '../../shared/utils/types.js';
+import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
 import { isCapabilityTier } from '../capabilities/tiers.js';
 import {
   OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS,
@@ -657,6 +657,38 @@ function normalizeEndpointAndGardenSettings(
       settings.emotionScoping,
       'emotionScoping',
     );
+  }
+  if ('wikiStartupHydration' in settings) {
+    const value = expectRecord(
+      settings.wikiStartupHydration,
+      'wikiStartupHydration',
+    );
+    assertNoUnknownKeys(
+      value,
+      ['recentSessionLimit', 'recentMessageLimit', 'maxContextChars'],
+      'wikiStartupHydration',
+      { errorPrefix: 'Invalid settings' },
+    );
+    normalized.wikiStartupHydration = {
+      recentSessionLimit: expectIntegerInRange(
+        value.recentSessionLimit,
+        'wikiStartupHydration.recentSessionLimit',
+        1,
+        256,
+      ),
+      recentMessageLimit: expectIntegerInRange(
+        value.recentMessageLimit,
+        'wikiStartupHydration.recentMessageLimit',
+        1,
+        2_048,
+      ),
+      maxContextChars: expectIntegerInRange(
+        value.maxContextChars,
+        'wikiStartupHydration.maxContextChars',
+        256,
+        1_000_000,
+      ),
+    };
   }
 }
 

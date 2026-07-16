@@ -2,7 +2,7 @@ import type { CanonicalModelRegistry, ImportProcessingRouteMode, ModelCatalogEnt
 import type { GroupMemorySettings } from '../config/group-memory-config.js';
 import type { EmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import type { MemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
-import type { CapabilityTier, CompositionalPolicyConfig, SessionRestartBehavior, SessionTailCacheSettings, SubstrateConfig } from '../config/runtime-config-contracts.js';
+import type { CapabilityTier, CompositionalPolicyConfig, SessionRestartBehavior, SessionTailCacheSettings, SubstrateConfig, WikiStartupHydrationSettings } from '../config/runtime-config-contracts.js';
 import type { ImageWorkflowSettings } from '../../primitives/images/types.js';
 
 export const SETTINGS_FILE_NAME = 'settings.json';
@@ -127,6 +127,7 @@ export interface EditableSettings {
   wikiRetrievalFocusTokenCap?: number;
   wikiRetrievalSimilarityThreshold?: number;
   wikiRetrievalGroupSimilarityThreshold?: number;
+  wikiStartupHydration?: WikiStartupHydrationSettings;
   sessionMirrorEnabled?: boolean;
   sessionMirrorMaxChars?: number;
   sessionMirrorActiveWindowMs?: number;
@@ -292,6 +293,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'wikiRetrievalFocusTokenCap',
   'wikiRetrievalSimilarityThreshold',
   'wikiRetrievalGroupSimilarityThreshold',
+  'wikiStartupHydration',
   'sessionMirrorEnabled',
   'sessionMirrorMaxChars',
   'sessionMirrorActiveWindowMs',
@@ -434,6 +436,7 @@ export type RuntimeSettingValue =
   | MemoryRetrievalPolicy
   | ObserverEvalSidecarSettings
   | SessionTailCacheSettings
+  | WikiStartupHydrationSettings
   | ImageWorkflowSettings
   | Record<string, boolean>
   | Partial<Record<'nursery' | 'apprentice' | 'autonomous' | 'custom', string[]>>

@@ -37,4 +37,35 @@ describe('settings owner-file load logging', () => {
     expect(loggerSpies.info).toHaveBeenCalledTimes(1);
     expect(loggerSpies.info).toHaveBeenCalledWith('Loaded saved settings');
   });
+
+  it('strictly validates the settings-owned wiki startup hydration group', () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-settings-wiki-hydration-'));
+    roots.push(root);
+    const invalidRoot = mkdtempSync(join(tmpdir(), 'psfn-settings-wiki-hydration-invalid-'));
+    roots.push(invalidRoot);
+    writeFileSync(join(root, 'settings.json'), JSON.stringify({
+      wikiStartupHydration: {
+        recentSessionLimit: 4,
+        recentMessageLimit: 18,
+        maxContextChars: 6_000,
+      },
+    }), 'utf-8');
+
+    expect(loadSettings(root).wikiStartupHydration).toEqual({
+      recentSessionLimit: 4,
+      recentMessageLimit: 18,
+      maxContextChars: 6_000,
+    });
+
+    writeFileSync(join(invalidRoot, 'settings.json'), JSON.stringify({
+      wikiStartupHydration: {
+        recentSessionLimit: 0,
+        recentMessageLimit: 18,
+        maxContextChars: 6_000,
+        fallbackLimit: 4,
+      },
+    }), 'utf-8');
+
+    expect(() => loadSettings(invalidRoot)).toThrow(/unknown keys: fallbackLimit/u);
+  });
 });

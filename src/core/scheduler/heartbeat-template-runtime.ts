@@ -66,7 +66,6 @@ import {
 } from './reflection-introspection-policy.js';
 import {
   REFLECTION_PROMPT_TOKENS,
-  formatReflectionPersonaBlock,
   joinReflectionPromptSections,
   mergeMetacognitiveFlags,
   mergeReflectionGroundingProvenanceRefs,
@@ -104,8 +103,6 @@ import {
 } from './heartbeat-template-runtime/reflection-novelty-gate.js';
 
 const log = createComponentLogger('HeartbeatTemplates');
-
-export { formatReflectionPersonaBlock } from './heartbeat-template-runtime/prompt-formatting.js';
 
 const DEFERRED_REFLECTION_RUN_TASK_PREFIX = 'reflection-run:deferred:';
 const LEGACY_DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
@@ -264,32 +261,23 @@ export function createHeartbeatTemplateRuntime(
     reflectionBundle: ReflectionPromptSectionBundle | null,
     reflectionPolicyBlock: string,
   ): string => {
-    // E6.2: her full persona leads the reflection (soft framing first), so a
-    // scheduled introspection turn reflects as HER rather than as a context
-    // analyzer. If the operator template places {{reflection_persona}} itself,
-    // we honor that placement; otherwise the persona block leads the prompt.
-    const personaBlock = formatReflectionPersonaBlock(
-      runtimeOptions.characterPromptVariablesProvider?.(),
-    );
-    const promptPlacesPersona = prompt.includes(REFLECTION_PROMPT_TOKENS.persona);
-
+    // Ordinary reflection turns use the same default system-prompt composition
+    // as foreground turns. Keep identity in that authoritative stack instead
+    // of copying character-card persona fields into this user message.
     if (promptUsesReflectionMacros(prompt)) {
       const expandedPrompt = prompt
-        .split(REFLECTION_PROMPT_TOKENS.persona).join(personaBlock)
         .split(REFLECTION_PROMPT_TOKENS.self).join(reflectionBundle?.self ?? '')
         .split(REFLECTION_PROMPT_TOKENS.relational).join(reflectionBundle?.relational ?? '')
         .split(REFLECTION_PROMPT_TOKENS.affect).join(reflectionBundle?.affect ?? '')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
       return joinReflectionPromptSections(
-        promptPlacesPersona ? undefined : personaBlock,
         reflectionPolicyBlock,
         expandedPrompt,
       );
     }
 
     return joinReflectionPromptSections(
-      personaBlock,
       reflectionPolicyBlock,
       prompt,
       reflectionBundle?.relational,

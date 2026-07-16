@@ -567,8 +567,9 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         llmProvider: llmProvider as any,
         characterPromptVariablesProvider: () => ({
           char: 'Purrsephone',
-          personality: 'A warm, wry cloistered gardener who tends what she plants and blesses the weeds among the herbs.',
-          description: 'Steady, earthy, unhurried.',
+          personality: 'PERSONALITY_SENTINEL',
+          description: 'DESCRIPTION_SENTINEL',
+          scenario: 'SCENARIO_SENTINEL',
         }),
         sessionManager: {
           resolveSessionChannelId: (channelId: string) => channelId,
@@ -624,14 +625,12 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(capturedPrompts[0]).toContain('memory_retrieval_modes: temporal, reflection');
     expect(capturedPrompts[0]).toContain('[Reflection Contact Evidence]');
     expect(capturedPrompts[0]).toContain('We should revisit the recovery plan tomorrow.');
-    // E6.2 regression: the scheduled reflection assembles the FULL persona
-    // (first person) plus memory/self-model context, and the persona leads —
-    // soft framing before the introspection policy and task instructions.
-    expect(capturedPrompts[0]).toContain('I am Purrsephone');
-    expect(capturedPrompts[0]).toContain('cloistered gardener who tends what she plants');
+    // Character-card persona fields stay out of the reflection input. Identity
+    // belongs in the authoritative system stack, not this user message.
+    expect(capturedPrompts[0]).not.toContain('PERSONALITY_SENTINEL');
+    expect(capturedPrompts[0]).not.toContain('DESCRIPTION_SENTINEL');
+    expect(capturedPrompts[0]).not.toContain('SCENARIO_SENTINEL');
     expect(capturedPrompts[0]).toContain('trust-filtered contact memory');
-    expect(capturedPrompts[0].indexOf('I am Purrsephone'))
-      .toBeLessThan(capturedPrompts[0].indexOf('[Reflection Introspection Policy]'));
     expect(capturedPrompts[1]).toContain('Stage: synthesis');
     expect(capturedPrompts[2]).toContain('Stage: contradiction');
 
@@ -1792,7 +1791,12 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
       runtimeOptions: {
-        characterPromptVariablesProvider: () => ({ char: 'Purrsephone' }),
+        characterPromptVariablesProvider: () => ({
+          char: 'Purrsephone',
+          personality: 'PERSONALITY_SENTINEL',
+          description: 'DESCRIPTION_SENTINEL',
+          scenario: 'SCENARIO_SENTINEL',
+        }),
         sessionManager: {
           resolveSessionChannelId: (channelId: string) => channelId,
           getRecentMessages: (channelId: string, limit?: number) => (
@@ -1846,6 +1850,9 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(prompt).not.toContain('{{reflection_self}}');
     expect(prompt).not.toContain('{{reflection_relational}}');
     expect(prompt).not.toContain('{{reflection_affect}}');
+    expect(prompt).not.toContain('PERSONALITY_SENTINEL');
+    expect(prompt).not.toContain('DESCRIPTION_SENTINEL');
+    expect(prompt).not.toContain('SCENARIO_SENTINEL');
     expect(internalStateSection).toContain('[What this evidence is]');
     expect(internalStateSection).toContain('private evidence I gather for myself, not the settled truth of who I am');
     expect(internalStateSection).toContain('fallible clues to weigh against what I actually remember, feel, and know');

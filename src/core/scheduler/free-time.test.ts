@@ -202,12 +202,15 @@ describe('evaluateFreeTimeGate', () => {
 // ── Framing ──
 
 describe('free-time framing', () => {
-  it('leads with the full persona and open seed, with no forced-task language', () => {
+  it('uses only free-time framing and the open seed, with no duplicated persona text', () => {
     const prompt = buildFreeTimeFramingPrompt({
-      personaBlock: 'I am Purrsephone, and this is me.',
       seedText: 'You have some time to yourself. You can do nothing if you want.',
     });
-    expect(prompt).toContain('I am Purrsephone');
+    expect(prompt.startsWith('[Free time]\n\n')).toBe(true);
+    expect(prompt).not.toContain('I am Purrsephone');
+    expect(prompt).not.toContain('PERSONALITY_SENTINEL');
+    expect(prompt).not.toContain('DESCRIPTION_SENTINEL');
+    expect(prompt).not.toContain('SCENARIO_SENTINEL');
     expect(prompt).toContain('some time to yourself');
     expect(prompt).toContain(HEARTBEAT_SILENT_REFLECTION_TOKEN);
     expect(prompt).toContain('nothing here is sent to anyone');
@@ -331,7 +334,12 @@ function buildRuntime(options: {
   const transcript = options.freeTimeTranscript ?? [];
 
   let turnIndex = 0;
-  const invokeTurn = vi.fn().mockImplementation(async () => {
+  const invokeTurn = vi.fn(async (_input: {
+    lane: 'quiet_hours' | 'idle';
+    channelId: string;
+    turnIndex: number;
+    content: string;
+  }) => {
     const content = options.turnScript[turnIndex] ?? HEARTBEAT_SILENT_REFLECTION_TOKEN;
     turnIndex += 1;
     return { content };
@@ -351,7 +359,6 @@ function buildRuntime(options: {
     config: options.config ?? freeTimeConfig(),
     restWindow,
     eventBus,
-    resolvePersonaBlock: () => 'I am Purrsephone, and this is me.',
     runBlock: ({ run }) => run(() => 0),
     invokeTurn,
     summarizeActivity: async () => 'I worked on a small poem.',
@@ -451,9 +458,11 @@ describe('registerFreeTimeTasks', () => {
       expect(invokeTurn).toHaveBeenCalled();
       // Every turn ran on an internal free-time channel — structurally unable to leak.
       for (const call of invokeTurn.mock.calls) {
-        const channelId = (call[0] as { channelId: string }).channelId;
+        const turn = call[0];
+        const channelId = turn.channelId;
         expect(channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)).toBe(true);
         expect(isInternalSessionId(channelId)).toBe(true);
+        expect(turn.content).not.toContain('I am Purrsephone');
       }
       // No outbound message was emitted by the block.
       expect(sent).toHaveLength(0);
@@ -645,7 +654,6 @@ describe('registerFreeTimeTasks', () => {
         config: freeTimeConfig(),
         restWindow,
         eventBus,
-        resolvePersonaBlock: () => 'persona',
         runBlock: ({ run }) => run(() => 0),
         invokeTurn,
         now: () => nowMs,

@@ -49,6 +49,8 @@ import { DEFERRED_COMPANION_OUTREACH_ACTION_KIND } from '../tools/notify-compani
 import { createIcpAutonomyCandidateSchedulerMessage } from '../icp/candidate-scheduler-origin.js';
 import { TurnRunReservation } from './substrate-agent/turn-run-reservation.js';
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
+import { PromptComposer } from '../identity/prompt-composer.js';
+import { PromptLayerStore } from '../identity/prompt-store.js';
 
 class SubstrateAgent extends RuntimeSubstrateAgent {
   constructor(...args: ConstructorParameters<typeof RuntimeSubstrateAgent>) {
@@ -3564,6 +3566,80 @@ describe('SubstrateAgent.handleMessage', () => {
       taskKind: 'heartbeat',
     });
   });
+
+  it.each([
+    ['ordinary reflection', 'internal:reflection:daily-review', 'reflection'],
+    ['free time', 'internal:free-time:idle', undefined],
+  ] as const)(
+    'keeps the default composed identity system prompt for %s turns',
+    async (_lane, channelId, taskKind) => {
+      const config = makeConfig();
+      const sessionManager = makeMockSessionManager();
+      const agent = new SubstrateAgent(
+        new EventBus(), makeMockLLMProvider(), sessionManager, 'Base prompt', config,
+      );
+      const promptStoreDir = mkdtempSync(join(tmpdir(), 'substrate-agent-identity-stack-'));
+      const staticIdentityStack = [
+        'CONSTITUTION_SENTINEL',
+        'NORTH_STAR_SENTINEL',
+        'PERSONALITY_SENTINEL',
+        'DESCRIPTION_SENTINEL',
+        'SCENARIO_SENTINEL',
+      ].join('\n');
+      const dynamicIdentityStack = [
+        'VALUES_SENTINEL',
+        'CURRENT_EMOTIONS_SENTINEL',
+      ].join('\n');
+      const identityStack = `${staticIdentityStack}\n${dynamicIdentityStack}`;
+      try {
+        const promptStore = new PromptLayerStore(
+          join(promptStoreDir, 'layers.json'),
+          join(promptStoreDir, 'history.jsonl'),
+        );
+        promptStore.create({
+          type: 'base',
+          name: 'Test identity foundation',
+          identifier: 'main',
+          content: staticIdentityStack,
+        });
+        promptStore.create({
+          type: 'runtime',
+          name: 'Test dynamic identity context',
+          identifier: 'runtimeIdentityContext',
+          content: dynamicIdentityStack,
+        });
+        const promptComposer = new PromptComposer(promptStore, undefined, undefined, {
+          persistLastKnownGood: false,
+        });
+        const composeSplit = vi.spyOn(promptComposer, 'composeSplit');
+        agent.promptComposer = promptComposer;
+
+        await agent.handleMessage(makeMessage({
+          id: `default-prompt-${channelId}`,
+          channelId,
+          channelType: 'terminal',
+          content: 'LANE_USER_PROMPT_WITHOUT_PERSONA',
+        }));
+
+        expect(composeSplit).toHaveBeenCalledWith({
+          channelType: 'internal',
+          taskKind,
+        });
+        const systemPrompt = vi.mocked(sessionManager.buildContext).mock.calls[0]?.[1];
+        expect(typeof systemPrompt).toBe('string');
+        if (typeof systemPrompt !== 'string') {
+          throw new Error('Default prompt composition did not reach context assembly');
+        }
+        for (const identitySection of identityStack.split('\n')) {
+          expect(systemPrompt).toContain(identitySection);
+        }
+        expect(systemPrompt).not.toContain('LANE_USER_PROMPT_WITHOUT_PERSONA');
+        expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
+      } finally {
+        rmSync(promptStoreDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('does not set taskKind for normal discord text turns', async () => {
     const config = makeConfig();

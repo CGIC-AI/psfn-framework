@@ -204,9 +204,9 @@ export function evaluateFreeTimeGate(input: FreeTimeGateInput): GateDecision {
 }
 
 // ── Framing ──
-// The full persona (E6.2) leads; the operator-editable open seed follows as
-// gentle permission; a closing line establishes that nothing is required and
-// how to end the block. No forced-task language anywhere.
+// The operator-editable open seed is gentle permission; a closing line
+// establishes that nothing is required and how to end the block. The ordinary
+// agent loop supplies the authoritative base identity system prompt.
 
 const FREE_TIME_CLOSING = 'There is no task and nothing to prove. When you feel done — or if you '
   + `would simply rather rest — reply with only "${HEARTBEAT_SILENT_REFLECTION_TOKEN}" and the time is `
@@ -214,13 +214,10 @@ const FREE_TIME_CLOSING = 'There is no task and nothing to prove. When you feel 
   + 'through your normal tools; nothing here is sent to anyone.';
 
 export function buildFreeTimeFramingPrompt(input: {
-  personaBlock: string;
   seedText: string;
 }): string {
-  const persona = input.personaBlock.trim();
   const seed = input.seedText.trim();
   return [
-    ...(persona ? [persona] : []),
     '[Free time]',
     seed,
     FREE_TIME_CLOSING,
@@ -376,8 +373,6 @@ export interface FreeTimeRuntimeOptions {
     turnIndex: number;
     content: string;
   }) => Promise<{ content: string }>;
-  /** Full-persona block provider (E6.2 formatReflectionPersonaBlock). */
-  resolvePersonaBlock: () => string;
   /**
    * Shared session summarizer for the "while you were away" note. Wire to
    * summarizeRecentSessionEntries with purpose 'free_time_return' and the
@@ -616,7 +611,6 @@ function makeLaneHandler(
     }
 
     const framingPrompt = buildFreeTimeFramingPrompt({
-      personaBlock: options.resolvePersonaBlock(),
       seedText: options.config.seedText,
     });
 

@@ -665,14 +665,13 @@ describe('Postgres gateway OAuth/session authority', () => {
            expected_contact_id, exact_scope, status, global_auth_epoch,
            created_at, expires_at)
         VALUES ($1, $2, 'first_owner', 'discord', $3, $4, 'owner-contact',
-                '{"role":"owner"}'::jsonb, 'pending', 1, $5, $6)
+                '{"role":"owner"}'::jsonb, 'pending', 1,
+                clock_timestamp(), clock_timestamp() + interval '5 minutes')
       `, [
         ceremonyId,
         'd'.repeat(64),
         PROVIDER_SUBJECT_ID,
         companionId,
-        NOW,
-        new Date(NOW.getTime() + 300_000),
       ]);
       const firstOwnerInput = {
         token: winner.value.token,
@@ -682,10 +681,79 @@ describe('Postgres gateway OAuth/session authority', () => {
         providerSubjectId: PROVIDER_SUBJECT_ID,
         companionId,
         contactId: 'owner-contact',
+        contactAuthority: {
+          schemaVersion: 1 as const,
+          contactId: 'owner-contact',
+          channel: 'discord' as const,
+          providerSubjectId: PROVIDER_SUBJECT_ID,
+          identityVersion: 2,
+          verificationId: randomUUID(),
+          verificationDigest: 'e'.repeat(64),
+          contactAuthorityVersion: 3,
+          ownershipState: 'verified' as const,
+          restoreState: 'live' as const,
+        },
         now: new Date(NOW.getTime() + 2500),
         idleTtlMs: 1_800_000,
         absoluteTtlMs: 28_800_000,
       };
+      const expiringCeremonyId = randomUUID();
+      await migration.query(`
+        INSERT INTO fleet_auth.trusted_host_ceremonies
+          (ceremony_id, nonce_digest, kind, expected_provider,
+           expected_provider_subject_id, expected_companion_id,
+           expected_contact_id, exact_scope, status, global_auth_epoch,
+           created_at, expires_at)
+        VALUES ($1, $2, 'first_owner', 'discord', $3, $4, 'owner-contact',
+                '{"role":"owner"}'::jsonb, 'pending', 1,
+                clock_timestamp(), clock_timestamp() + interval '250 milliseconds')
+      `, [
+        expiringCeremonyId,
+        'c'.repeat(64),
+        PROVIDER_SUBJECT_ID,
+        companionId,
+      ]);
+      const ceremonyLock = await migration.connect();
+      try {
+        await ceremonyLock.query('BEGIN');
+        await ceremonyLock.query(`
+          SELECT ceremony_id
+          FROM fleet_auth.trusted_host_ceremonies
+          WHERE ceremony_id = $1
+          FOR UPDATE
+        `, [expiringCeremonyId]);
+        const blockedCompletion = store.completeFirstOwnerBootstrap({
+          ...firstOwnerInput,
+          ceremonyId: expiringCeremonyId,
+          nextToken: 'expired-owner-token',
+          nextCsrfToken: 'expired-owner-csrf',
+        });
+        await new Promise(resolve => setTimeout(resolve, 400));
+        await ceremonyLock.query('COMMIT');
+        await expect(blockedCompletion).rejects.toMatchObject({ code: 'first_owner_denied' });
+      } finally {
+        await ceremonyLock.query('ROLLBACK').catch(() => undefined);
+        ceremonyLock.release();
+      }
+      const expiredAuthority = await runtime.query<{
+        principal_status: string;
+        ceremony_status: string;
+        deny_audits: string;
+      }>(`
+        SELECT
+          (SELECT status FROM fleet_auth.human_principals WHERE principal_id = $1)
+            AS principal_status,
+          (SELECT status FROM fleet_auth.trusted_host_ceremonies WHERE ceremony_id = $2)
+            AS ceremony_status,
+          (SELECT count(*)::text FROM fleet_auth.authorization_audit_events
+           WHERE ceremony_id = $2 AND action = 'authority.first_owner'
+             AND decision = 'deny') AS deny_audits
+      `, [login.principalId, expiringCeremonyId]);
+      expect(expiredAuthority.rows[0]).toEqual({
+        principal_status: 'pending',
+        ceremony_status: 'pending',
+        deny_audits: '1',
+      });
       await expect(store.completeFirstOwnerBootstrap({
         ...firstOwnerInput,
         companionId: randomUUID(),

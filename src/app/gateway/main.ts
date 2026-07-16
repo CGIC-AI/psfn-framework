@@ -81,6 +81,7 @@ import {
 } from '../../persistence/backups/service.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { createGatewayFleetChargePolicyResolver } from './fleet-charge-policy-resolver.js';
+import { parseVerifiedDiscordContactAuthoritySnapshot } from '../../shared/contracts/contact-authority-snapshot.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -117,7 +118,7 @@ async function main(): Promise<void> {
     fleetAuthEnabled: config.fleetAuth !== undefined,
     processMode: 'gateway',
     env,
-    principalAuthenticationWired: false,
+    principalAuthenticationWired: true,
     fleetAuthBootstrapRoutesWired: config.fleetAuth !== undefined,
   });
   applyGatewayTlsConfig({
@@ -503,6 +504,18 @@ async function main(): Promise<void> {
       ? { contactLifecycleAuthority: fleetAuthPersistence.contactLifecycleAuthority }
       : {}),
   });
+  const fleetAuthLifecycleCeremonies = fleetAuthPersistence?.createLifecycleCeremonies({
+    read: async ({ companionId, contactId, providerSubjectId }) => {
+      const result = await gateway.requestCompanionAgent<unknown>(
+        companionId,
+        'contact.authority.snapshot',
+        { contactId, providerSubjectId },
+      );
+      return result === null
+        ? undefined
+        : parseVerifiedDiscordContactAuthoritySnapshot(result);
+    },
+  });
   const detachTurnPerformanceForwarder = attachGatewayTurnPerformanceForwarder({
     eventBus,
     gateway,
@@ -604,6 +617,7 @@ async function main(): Promise<void> {
           fleetAuthJitStepUp: fleetAuthPersistence.jitStepUp,
           fleetAuthPasskeyCeremonies: fleetAuthPersistence.passkeyCeremonies,
           fleetAuthTrustedHostRecovery: fleetAuthPersistence.trustedHostRecovery,
+          ...(fleetAuthLifecycleCeremonies ? { fleetAuthLifecycleCeremonies } : {}),
           fleetAuthChildAssertions: fleetAuthPersistence.childAssertions,
           fleetAuthRequestCapabilities: fleetAuthPersistence.requestCapabilities,
           fleetAuthRequestCapabilityVerifier: fleetAuthPersistence.requestCapabilityVerifier,

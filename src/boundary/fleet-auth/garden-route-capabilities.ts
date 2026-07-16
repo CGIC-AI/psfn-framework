@@ -128,6 +128,9 @@ const queryPolicies: Readonly<Partial<Record<string, Readonly<Partial<Record<str
   });
 
 const requiredBodyPatterns = new Set([
+  'POST /v1/fleet-auth/lifecycle/binding/complete',
+  'POST /v1/fleet-auth/lifecycle/provider/complete',
+  'POST /v1/fleet-auth/lifecycle/role/complete',
   'POST /login',
   'POST /api/admin/chat/bootstrap',
   'PATCH /api/admin/chat/bootstrap',
@@ -183,6 +186,9 @@ const noBodyMutationPatterns = new Set([
 type RouteTuple = readonly [GardenForwardMethod | readonly GardenForwardMethod[], string];
 
 const fixedRoutes: readonly RouteTuple[] = [
+  ['POST', '/v1/fleet-auth/lifecycle/binding/complete'],
+  ['POST', '/v1/fleet-auth/lifecycle/provider/complete'],
+  ['POST', '/v1/fleet-auth/lifecycle/role/complete'],
   [['GET', 'POST'], '/login'], ['GET', '/health'], ['POST', '/api/admin/logout'],
   ['GET', '/api/admin/action-pipe'], ['GET', '/api/admin/audit/history'],
   ['GET', '/api/admin/charge-costs'], ['GET', '/api/admin/charges'],

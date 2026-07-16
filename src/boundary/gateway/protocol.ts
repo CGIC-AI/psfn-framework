@@ -54,6 +54,10 @@ import type {
 import type { JournalEntry } from '../../core/session/types.js';
 import type { JournalIntegrityVerificationResult } from '../../persistence/journals/journal-utils.js';
 import type {
+  ContactAuthoritySnapshotRequest,
+  VerifiedDiscordContactAuthoritySnapshot,
+} from '../../shared/contracts/contact-authority-snapshot.js';
+import type {
   ApiChatCompletionCancelRpcParams,
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcParams,
@@ -1055,6 +1059,10 @@ export interface VoiceStreamEndResult extends VoiceHandleMessageResult {
 }
 
 export interface AgentMethods {
+  'contact.authority.snapshot': [
+    ContactAuthoritySnapshotRequest,
+    VerifiedDiscordContactAuthoritySnapshot | null,
+  ];
   'voice.handleMessage': [VoiceHandleMessageParams, VoiceHandleMessageResult];
   // mmo9.8.6: inbound transcript-chunking family renamed voice.stream.* ->
   // voice.transcript.*. Both names are registered on the same handlers and kept

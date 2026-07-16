@@ -30,6 +30,7 @@ import { installPostgresContactLifecycleRecoveryOperations } from './contact-lif
 import type { ContactLifecycleGatewayPort } from '../contact-lifecycle-gateway-port.js';
 import { installPostgresContactLifecycleCoordinatorOperations } from './contact-lifecycle-coordinator.js';
 import { installPostgresContactLifecycleMutationCommitOperations } from './contact-lifecycle-mutation-commit.js';
+import { installPostgresContactAuthoritySnapshotOperations } from './contact-authority-snapshot.js';
 import type { ContactLifecycleFaultStage } from './options.js';
 
 export class PostgresContactStore implements ContactStorePort {
@@ -42,6 +43,7 @@ export class PostgresContactStore implements ContactStorePort {
     request: import('../../../shared/contracts/contact-authority-lifecycle.js').ContactAuthorityLifecycleRequest,
   ) => Promise<void> | void) | null;
 
+  declare readVerifiedDiscordContactAuthority: ContactStorePort['readVerifiedDiscordContactAuthority'];
   declare prepareContactLifecycleIntent: ContactStorePort['prepareContactLifecycleIntent'];
   declare recordContactLifecycleGatewayResult: ContactStorePort['recordContactLifecycleGatewayResult'];
   declare claimContactLifecycleRecovery: ContactStorePort['claimContactLifecycleRecovery'];
@@ -148,6 +150,7 @@ export class PostgresContactStore implements ContactStorePort {
 installPostgresContactSharedOperations(PostgresContactStore);
 installPostgresContactSocialGraphOperations(PostgresContactStore);
 installPostgresContactTrustPolicyOperations(PostgresContactStore);
+installPostgresContactAuthoritySnapshotOperations(PostgresContactStore);
 installPostgresContactCrudOperations(PostgresContactStore);
 installPostgresContactLifecycleLedgerOperations(PostgresContactStore);
 installPostgresContactLifecycleRecoveryOperations(PostgresContactStore);

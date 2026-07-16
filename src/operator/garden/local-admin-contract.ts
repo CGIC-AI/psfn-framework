@@ -130,10 +130,7 @@ import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-st
 import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
 import type { IcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
 import { AdminIcpAutonomyDataService } from './services/icp-autonomy-service.js';
-import {
-  AdminSharedWorkspaceService,
-  type SharedWorkspaceCredentials,
-} from './services/shared-workspace-service.js';
+import { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import { requireAuditOpaqueIdKeyring } from './audit-opaque-id-keyring.js';
 
 export interface InProcessGardenAdminContractOptions {
@@ -142,12 +139,8 @@ export interface InProcessGardenAdminContractOptions {
   apiHost?: string;
   apiPort?: number;
   memoryStore: MemoryStorePort;
-  /**
-   * Resolve the trusted subject scope for Garden memory access. The resolver
-   * must be bound by authenticated runtime authority, never request payloads.
-   * Absence intentionally leaves the Garden memory surface fail closed.
-   */
-  resolveMemorySubjectAccessContext?: () => MemorySubjectAccessContext;
+  /** Fixed legacy-mode scope; fleet requests always use signed request context. */
+  legacyMemorySubjectAccessContext?: Readonly<MemorySubjectAccessContext>;
   episodicStore?: EpisodicStorePort | null;
   sessionStore: SessionStore;
   sessionManager: SessionManager;
@@ -192,8 +185,6 @@ export interface InProcessGardenAdminContractOptions {
   icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
   icpAdminProjectionStore?: IcpAdminProjectionStore | null;
   icpRuntimeEnablement?: IcpAutonomyRuntimeEnablement | null;
-  /** Distinct authenticated principals for governed shared-workspace writes. */
-  sharedWorkspaceCredentials?: SharedWorkspaceCredentials;
 }
 
 export function createInProcessGardenAdminContract(
@@ -363,7 +354,7 @@ export function createInProcessGardenAdminContract(
   // or mutate subject-classified memories.
   const gardenMemoryStore = createSubjectAuthorizedMemoryStore(
     options.memoryStore,
-    options.resolveMemorySubjectAccessContext ?? (() => ({})),
+    Object.freeze({ ...(options.legacyMemorySubjectAccessContext ?? {}) }),
   );
   const driftReviews = createAdminDriftReviewService({
     store: createDriftReviewCardStore(resolveDriftReviewCardsPath(companionDataDir)),
@@ -444,14 +435,14 @@ export function createInProcessGardenAdminContract(
       companionAuthorIds: options.companionAuthorIds ?? [],
     }),
     memory: new AdminMemoryDataService({
-      // The legacy admin session key authenticates an operator but carries no
-      // subject identity. Until fleet authority supplies one, Garden memory
-      // product surfaces must fail closed rather than enumerate the corpus.
       memoryStore: gardenMemoryStore,
+      // A fixed subject projection is created from the underlying store by
+      // AdminMemoryDataService for each immutable admitted request.
+      fleetMemoryStore: options.memoryStore,
       contactStore: options.contactStore,
       embeddingService: options.embeddingService,
       resolveCompanionName: () => resolveCompanionNameFromConfig(options.config),
-      appendAuditTimelineEntry: (actionType, decision, narrative, details) => {
+      appendAuditTimelineEntry: (actionType, decision, narrative, details, requestContext) => {
         const joinedDetails = details
           ?.filter((detail): detail is string => typeof detail === 'string' && detail.trim().length > 0)
           .join(' ');
@@ -461,6 +452,7 @@ export function createInProcessGardenAdminContract(
           narrative,
           ...(joinedDetails ? { details: joinedDetails } : {}),
           actor: 'operator',
+          ...(requestContext ? { requestContext } : {}),
         });
       },
     }),
@@ -511,12 +503,7 @@ export function createInProcessGardenAdminContract(
       : null,
     settings: settingsService,
     sharedWorkspace: options.config.sharedWorkspacePath
-      ? new AdminSharedWorkspaceService(
-        options.config.sharedWorkspacePath,
-        options.sharedWorkspaceCredentials ?? (() => {
-          throw new Error('Shared workspace is configured without authenticated principal credentials');
-        })(),
-      )
+      ? new AdminSharedWorkspaceService(options.config.sharedWorkspacePath)
       : null,
     intakeQuarantine,
     driftReviews,

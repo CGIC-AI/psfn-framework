@@ -55,9 +55,10 @@ import type { AdminGraphProposalsService } from './services/graph-proposals-serv
 import type { AdminSubsystemHealthService } from './services/subsystem-health-service.js';
 import type { AdminToolConformanceService } from './services/tool-conformance-service.js';
 import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
+import type { GardenRequestContext } from './garden-request-context.js';
 
 export interface ConfirmationQueueAdminApi {
-  listConfirmationQueue(): Promise<ConfirmationListResult>;
+  listConfirmationQueue(context?: GardenRequestContext): Promise<ConfirmationListResult>;
   /**
    * Resolves an agent-local confirmation (e.g. a card proposal). Operator-only
    * gateway confirmations are never resolved through this agent-hosted surface;
@@ -66,6 +67,7 @@ export interface ConfirmationQueueAdminApi {
    */
   resolveConfirmationQueue(
     params: ConfirmationResolveParams,
+    context?: GardenRequestContext,
   ): Promise<ConfirmationResolveResult>;
 }
 

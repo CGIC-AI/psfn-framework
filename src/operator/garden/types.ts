@@ -116,6 +116,24 @@ export type AdminAuditTimeRange = '15m' | '1h' | '24h' | '7d' | '30d' | 'all';
 export type AdminAuditActor = 'operator' | 'companion';
 export type AdminAuditHistorySource = 'garden' | 'gateway' | 'charge';
 
+export interface AdminAuditRequestAttribution {
+  actor: {
+    kind: 'fleet_principal' | 'legacy_operator' | 'public';
+    principalId?: string;
+    contactId?: string;
+    role?: 'owner' | 'admin' | 'member' | 'guest';
+  };
+  companionId: string | null;
+  requestId: string | null;
+  decisionId: string | null;
+  action: string;
+  routeId: string;
+  resourceScope: string;
+  resourceArea: string;
+  subjectRelation: string;
+  authorityVersions: Record<string, number> | null;
+}
+
 export interface AdminAuditTimelineEntry {
   id: string;
   timestamp: number;
@@ -124,6 +142,7 @@ export interface AdminAuditTimelineEntry {
   narrative: string;
   details?: string;
   actor?: AdminAuditActor;
+  requestAttribution?: AdminAuditRequestAttribution;
 }
 
 export interface AdminAuditTimelineFilters {

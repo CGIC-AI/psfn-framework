@@ -34,6 +34,13 @@ const VERSIONS: RequestCapabilityAuthorityVersions = Object.freeze({
   grantVersion: 13,
   policyVersion: 17,
 });
+const AUTH_CONTEXT = Object.freeze({
+  principalId: 'principal-a', provider: 'discord' as const, providerSubjectId: '12345678901234567',
+  companionId: COMPANION_ID, contactBindingId: 'binding-a', contactId: 'contact-a',
+  operatorGrantId: 'grant-a', role: 'admin' as const, sessionRecordId: 'session-a',
+  sessionAssurance: 'webauthn_uv' as const, authorizationEventId: 'event-a',
+  resolvedAt: '2030-01-01T00:00:00.000Z',
+});
 
 function target(
   rawTarget = '/api/admin/images/generated?favorite=true&q=cat',
@@ -75,7 +82,13 @@ function signer(options: { issuer?: string; kid?: string; now?: number; jti?: st
 }
 
 function binding(compiled = target()) {
-  return { target: compiled, requestId: REQUEST_ID, decisionId: DECISION_ID, versions: VERSIONS };
+  return {
+    target: compiled,
+    requestId: REQUEST_ID,
+    decisionId: DECISION_ID,
+    authContext: { ...AUTH_CONTEXT, companionId: compiled.companionId },
+    versions: VERSIONS,
+  };
 }
 
 function parseToken(token: string) {
@@ -125,6 +138,7 @@ describe('Ed25519 hop request capabilities', () => {
       companionId: COMPANION_ID,
       requestId: REQUEST_ID,
       decisionId: DECISION_ID,
+      authContext: AUTH_CONTEXT,
       jti: JTI,
       action: compiled.action,
       bodyDigest: compiled.bodyDigest,
@@ -228,7 +242,7 @@ describe('Ed25519 hop request capabilities', () => {
   });
 
   it.each([
-    'jti', 'target_digest', 'authorization_digest', 'body_digest', 'decision_id',
+    'jti', 'target_digest', 'authorization_digest', 'body_digest', 'decision_id', 'auth_context',
   ])('rejects forged %s claims', (field) => {
     const token = signer().signOperator(binding());
     const decoded = parseToken(token);
@@ -277,6 +291,20 @@ describe('Ed25519 hop request capabilities', () => {
       ...compiled,
       authorizationDigest: '0'.repeat(64),
     }))).toThrow(/authorization digest does not match/u);
+  });
+
+  it('refuses to sign an actor context for another companion', () => {
+    expect(() => signer().signOperator({
+      ...binding(),
+      authContext: { ...AUTH_CONTEXT, companionId: OTHER_COMPANION_ID },
+    })).toThrow(/authContext\.companionId does not match target/u);
+  });
+
+  it('refuses unknown actor-context fields at the signing boundary', () => {
+    expect(() => signer().signOperator({
+      ...binding(),
+      authContext: { ...AUTH_CONTEXT, browserRole: 'owner' } as typeof AUTH_CONTEXT,
+    })).toThrow(/authContext has an invalid shape/u);
   });
 
   it('rejects malformed, padded-signature, and signed noncanonical encodings', () => {

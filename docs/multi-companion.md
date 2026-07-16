@@ -256,17 +256,16 @@ roots fail startup.
 
 The Shared Companion Workspace is published through authenticated Garden
 routes, not through an environment variable or normal companion filesystem
-tools. Publication uses three distinct credentials
-(`SHARED_WORKSPACE_PROPOSER_TOKEN`, `SHARED_WORKSPACE_REVIEWER_TOKEN`, and
-`SHARED_WORKSPACE_COGSEC_TOKEN`); proposer/reviewer/CogSec identities are
-derived from those credentials and JSON identity assertions are rejected.
-Each secret must contain at least 24 non-whitespace characters and all three
-must differ. A write request supplies only its role's secret in
-`x-companion-shared-workspace-credential`, in addition to normal Garden
-authentication; persisted principal records do not expose credential digests.
-CogSec produces a revision-bound decision artifact before the independent
-reviewer can approve. Publication re-reads under a lock and journals artifact,
-decision, and immutable provenance updates for crash recovery.
+tools. Publication identities come only from the immutable Fleet principal
+context signed into the exact Garden request capability; JSON/header identity
+assertions and reusable shared-workspace credentials are rejected. Proposal,
+CogSec, and independent-review steps each require their exact route-bound
+authorization, and the latter two additionally require UV, explicit
+confirmation, and their conjunctive approval requirements. CogSec and the
+independent reviewer must be distinct authenticated principals. CogSec produces
+a revision-bound decision artifact before the independent reviewer can approve.
+Publication re-reads under a lock and journals artifact, decision, and immutable
+provenance updates for crash recovery.
 
 Authenticated companion connections have only `shared.workspace.list` and
 `shared.workspace.read`; there is no companion write or autoload method.

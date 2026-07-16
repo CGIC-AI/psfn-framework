@@ -39,6 +39,7 @@ const FLEET_CALLER_AUTHORITY_HEADERS = Object.freeze([
   'authorization',
   'cookie',
   'x-contact-id',
+  'x-companion-shared-workspace-credential',
   'x-actor-id',
   'x-authenticated-user',
   'x-forwarded-user',
@@ -149,7 +150,7 @@ function parseParent(value: unknown, companionId: CompanionId): RequestCapabilit
     throw new Error('invalid parent binding');
   }
   return Object.freeze({
-    audience: value.audience,
+    audience: value.audience as RequestCapabilityParentBinding['audience'],
     requestId: value.requestId,
     decisionId: value.decisionId,
     jti: value.jti,

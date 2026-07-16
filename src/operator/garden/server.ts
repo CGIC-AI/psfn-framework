@@ -21,6 +21,10 @@ import {
   resolveGardenAdmissionMode,
   type GardenAdmissionMode,
 } from './garden-admission.js';
+import {
+  createFleetGardenRequestContext,
+  type GardenRequestContext,
+} from './garden-request-context.js';
 
 const log = createComponentLogger('AdminServer');
 const ADMIN_MAX_BODY_SIZE = 65_536; // 64KB
@@ -32,6 +36,7 @@ export class AdminServer implements Lifecycle {
   private token?: string;
   private allowInsecureWithoutToken: boolean;
   private readonly admission: GardenAdmissionMode;
+  private readonly companionId?: string;
   private readonly bufferedFleetBodies = new WeakMap<IncomingMessage, string>();
   private routes: AdminRoute[];
   private transport: AdminServerTransport;
@@ -49,6 +54,7 @@ export class AdminServer implements Lifecycle {
       token: config.token,
     };
     this.admission = resolveGardenAdmissionMode(modeSelection);
+    this.companionId = config.config.companionId;
     this.transport = new AdminServerTransport(log);
     this.telemetryTransport = new AdminServerTelemetryTransport(
       config.eventBus,
@@ -134,6 +140,7 @@ export class AdminServer implements Lifecycle {
     req: IncomingMessage,
     res: ServerResponse,
     token: string | undefined,
+    context?: GardenRequestContext,
   ): void {
     handleAdminRequest(req, res, {
       token,
@@ -141,7 +148,7 @@ export class AdminServer implements Lifecycle {
       isGardenUiEnabled: () => this.transport.isGardenUiEnabled(),
       serveGardenBuildAsset: (path, request, response) => this.transport.serveGardenBuildAsset(path, request, response),
       serveGardenPage: (path, request, response) => this.transport.serveGardenPage(path, request, response),
-      route: (method, path, request, response) => this.route(method, path, request, response),
+      route: (method, path, request, response) => this.route(method, path, request, response, context),
       sendNotFound: (path, response) => this.send404(response, path),
       onRequestError: (path, err) => log.error('Request error', { path, error: String(err) }),
     });
@@ -179,7 +186,11 @@ export class AdminServer implements Lifecycle {
       return;
     }
     this.bufferedFleetBodies.set(req, body.toString('utf8'));
-    this.dispatchRequest(req, res, undefined);
+    const context = createFleetGardenRequestContext({
+      target: admitted.target,
+      verified: admitted.verified,
+    });
+    this.dispatchRequest(req, res, undefined, context);
   }
 
   private async handleFleetUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
@@ -204,8 +215,14 @@ export class AdminServer implements Lifecycle {
     );
   }
 
-  private route(method: string, path: string, req: IncomingMessage, res: ServerResponse): boolean {
-    return dispatchAdminRoute(this.routes, method, path, req, res);
+  private route(
+    method: string,
+    path: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+    context?: GardenRequestContext,
+  ): boolean {
+    return dispatchAdminRoute(this.routes, method, path, req, res, context, this.companionId);
   }
 
   private checkAuth(req: IncomingMessage, res: ServerResponse): boolean {

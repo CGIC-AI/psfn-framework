@@ -31,6 +31,13 @@ const VERSIONS: RequestCapabilityAuthorityVersions = Object.freeze({
   grantVersion: 13,
   policyVersion: 17,
 });
+const AUTH_CONTEXT = Object.freeze({
+  principalId: 'principal-a', provider: 'discord' as const, providerSubjectId: '12345678901234567',
+  companionId: COMPANION_ID, contactBindingId: 'binding-a', contactId: 'contact-a',
+  operatorGrantId: 'grant-a', role: 'admin' as const, sessionRecordId: 'session-a',
+  sessionAssurance: 'webauthn_uv' as const, authorizationEventId: 'event-a',
+  resolvedAt: '2030-01-01T00:00:00.000Z',
+});
 const keyPair = generateKeyPairSync('ed25519');
 const privateKeyPem = keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 const publicKeyPem = keyPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
@@ -132,6 +139,7 @@ describe('discriminated Garden admission', () => {
       target: compiled,
       requestId: REQUEST_ID,
       decisionId: DECISION_ID,
+      authContext: AUTH_CONTEXT,
       versions: VERSIONS,
     });
     const headers: IncomingHttpHeaders = {
@@ -173,6 +181,11 @@ describe('discriminated Garden admission', () => {
       { rawTarget: '/api/admin/dashboard', headers: { cookie: 'psfn_token=legacy' } },
       { rawTarget: '/api/admin/dashboard?token=legacy', headers: {} },
       { rawTarget: '/api/admin/dashboard', headers: { 'x-psfn-role': 'owner' } },
+      { rawTarget: '/api/admin/dashboard', headers: { 'x-root-id': 'forged-root' } },
+      {
+        rawTarget: '/api/admin/dashboard',
+        headers: { 'x-companion-shared-workspace-credential': 'reusable' },
+      },
     ]) {
       const result = await admitFleetGardenRequest({
         admission: mode,
@@ -207,6 +220,7 @@ describe('discriminated Garden admission', () => {
       target: compiled,
       requestId: REQUEST_ID,
       decisionId: DECISION_ID,
+      authContext: AUTH_CONTEXT,
       versions: VERSIONS,
     });
     const parentVerified = verifier.verifyOperator({
@@ -214,6 +228,7 @@ describe('discriminated Garden admission', () => {
       target: compiled,
       requestId: REQUEST_ID,
       decisionId: DECISION_ID,
+      authContext: AUTH_CONTEXT,
       versions: VERSIONS,
     });
     const parent = Object.freeze({
@@ -227,6 +242,7 @@ describe('discriminated Garden admission', () => {
       target: compiled,
       requestId: REQUEST_ID,
       decisionId: DECISION_ID,
+      authContext: AUTH_CONTEXT,
       versions: VERSIONS,
       parent,
     });
@@ -260,6 +276,7 @@ describe('discriminated Garden admission', () => {
       target: compiled,
       requestId: REQUEST_ID,
       decisionId: DECISION_ID,
+      authContext: AUTH_CONTEXT,
       versions: VERSIONS,
     });
     const authorityHeaders = () => ({

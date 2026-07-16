@@ -34,6 +34,20 @@ import type {
   ContactUpdateResult,
 } from './types.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
+
+function requestActor(context: GardenRequestContext | undefined): string {
+  return context?.kind === 'fleet_principal'
+    ? `fleet-principal:${context.actor.principalId}`
+    : 'admin:api';
+}
+
+function isOtherFleetContact(
+  context: GardenRequestContext | undefined,
+  contactId: string,
+): boolean {
+  return context?.kind === 'fleet_principal' && context.actor.contactId !== contactId;
+}
 
 interface ChannelPrivacyUpdate {
   channel: string;
@@ -298,7 +312,10 @@ export class AdminContactsDataService implements AdminContactsService {
     return reader.listContactRelationshipScores(contacts.map(contact => contact.id));
   }
 
-  async listContacts(params?: URLSearchParams): Promise<AdminContactListData> {
+  async listContacts(
+    params?: URLSearchParams,
+    context?: GardenRequestContext,
+  ): Promise<AdminContactListData> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
       return {
@@ -313,20 +330,37 @@ export class AdminContactsDataService implements AdminContactsService {
       };
     }
 
-    const contacts = await contactStore.listAll();
+    const fleetContactId = context?.kind === 'fleet_principal'
+      ? context.actor.contactId
+      : null;
+    const contacts = (await contactStore.listAll()).filter(contact => (
+      !fleetContactId || contact.id === fleetContactId
+    ));
+    const allowedContactIds = new Set(contacts.map(contact => contact.id));
     const profileMap = new Map(
-      (await this.deps.memoryStore.listContactProfiles()).map(profile => [profile.contactId, profile] as const),
+      (await this.deps.memoryStore.listContactProfiles())
+        .filter(profile => allowedContactIds.has(profile.contactId))
+        .map(profile => [profile.contactId, profile] as const),
     );
     const relatedChannelMap = buildRelatedConversationChannelMap({
       contacts,
       sessionStore: this.deps.sessionStore,
     });
-    const socialGraphMap = await this.buildSocialGraphMap(contacts, profileMap);
+    // A social graph necessarily names other contacts. Until its own
+    // co-subject projection exists, a fleet request receives only the exact
+    // current contact and never a graph-derived cross-subject side channel.
+    const socialGraphMap = fleetContactId
+      ? new Map()
+      : await this.buildSocialGraphMap(contacts, profileMap);
     const relationshipScoreMap = await this.buildRelationshipScoreMap(contacts);
 
-    const verifications = await contactStore.listIdentityLinkVerifications(20);
+    const verifications = fleetContactId
+      ? []
+      : await contactStore.listIdentityLinkVerifications(20);
     const mutationAuditQuery = this.parseContactMutationAuditQuery(params);
-    const mutationAudits = await this.listMutationAuditEntries(mutationAuditQuery);
+    const mutationAudits = context?.kind === 'fleet_principal'
+      ? []
+      : await this.listMutationAuditEntries(mutationAuditQuery);
 
     return {
       contacts,
@@ -340,7 +374,11 @@ export class AdminContactsDataService implements AdminContactsService {
     };
   }
 
-  async getContactDetail(contactId: string): Promise<AdminContactDetailData | null> {
+  async getContactDetail(
+    contactId: string,
+    context?: GardenRequestContext,
+  ): Promise<AdminContactDetailData | null> {
+    if (isOtherFleetContact(context, contactId)) return null;
     const contactStore = this.deps.contactStore;
     if (!contactStore) return null;
     const contact = await contactStore.getById(contactId);
@@ -370,7 +408,10 @@ export class AdminContactsDataService implements AdminContactsService {
     return contactStore.updateIdentityProfile(contact.id, displayName, nickname, actor);
   }
 
-  async createContact(body: string): Promise<ContactUpdateResult> {
+  async createContact(body: string, context?: GardenRequestContext): Promise<ContactUpdateResult> {
+    if (context?.kind === 'fleet_principal') {
+      return { ok: false, message: 'Fleet principals cannot create a different contact' };
+    }
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
       return { ok: false, message: 'Contact store not available' };
@@ -422,7 +463,7 @@ export class AdminContactsDataService implements AdminContactsService {
       contactInput.timezone = timezonePayload.timezone;
     }
 
-    const contact = await contactStore.upsert(contactInput, { actor: 'admin:api' });
+    const contact = await contactStore.upsert(contactInput, { actor: requestActor(context) });
 
     return {
       ok: true,
@@ -432,7 +473,8 @@ export class AdminContactsDataService implements AdminContactsService {
     };
   }
 
-  async deleteContact(contactId: string): Promise<ContactUpdateResult> {
+  async deleteContact(contactId: string, context?: GardenRequestContext): Promise<ContactUpdateResult> {
+    if (isOtherFleetContact(context, contactId)) return { ok: false, message: 'Contact not found' };
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
       return { ok: false, message: 'Contact store not available' };
@@ -454,7 +496,14 @@ export class AdminContactsDataService implements AdminContactsService {
     return { ok: true, message: 'Contact deleted' };
   }
 
-  async mergeContacts(targetId: string, body: string): Promise<ContactUpdateResult> {
+  async mergeContacts(
+    targetId: string,
+    body: string,
+    context?: GardenRequestContext,
+  ): Promise<ContactUpdateResult> {
+    if (context?.kind === 'fleet_principal') {
+      return { ok: false, message: 'Fleet contact merging is unavailable' };
+    }
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
       return { ok: false, message: 'Contact store not available' };
@@ -506,7 +555,12 @@ export class AdminContactsDataService implements AdminContactsService {
     };
   }
 
-  async unlinkChannelIdentity(contactId: string, body: string): Promise<ContactUpdateResult> {
+  async unlinkChannelIdentity(
+    contactId: string,
+    body: string,
+    context?: GardenRequestContext,
+  ): Promise<ContactUpdateResult> {
+    if (isOtherFleetContact(context, contactId)) return { ok: false, message: 'Contact not found' };
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
       return { ok: false, message: 'Contact store not available' };
@@ -530,7 +584,7 @@ export class AdminContactsDataService implements AdminContactsService {
       return { ok: false, message: 'Contact not found' };
     }
 
-    if (!await contactStore.unlinkChannelIdentity(contactId, channel, userId, 'admin:api')) {
+    if (!await contactStore.unlinkChannelIdentity(contactId, channel, userId, requestActor(context))) {
       return { ok: false, message: 'Channel identity not found or already unlinked' };
     }
 
@@ -548,7 +602,12 @@ export class AdminContactsDataService implements AdminContactsService {
     };
   }
 
-  async deleteConversationChannel(contactId: string, body: string): Promise<ContactUpdateResult> {
+  async deleteConversationChannel(
+    contactId: string,
+    body: string,
+    context?: GardenRequestContext,
+  ): Promise<ContactUpdateResult> {
+    if (isOtherFleetContact(context, contactId)) return { ok: false, message: 'Contact not found' };
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
       return { ok: false, message: 'Contact store not available' };
@@ -572,7 +631,12 @@ export class AdminContactsDataService implements AdminContactsService {
       return { ok: false, message: 'Contact not found' };
     }
 
-    if (!await contactStore.deleteConversationChannel(contactId, channel, channelId, 'admin:api')) {
+    if (!await contactStore.deleteConversationChannel(
+      contactId,
+      channel,
+      channelId,
+      requestActor(context),
+    )) {
       return { ok: false, message: 'Conversation channel not found on contact' };
     }
 
@@ -590,7 +654,13 @@ export class AdminContactsDataService implements AdminContactsService {
     };
   }
 
-  async updateContact(contactId: string, body: string): Promise<ContactUpdateResult> {
+  async updateContact(
+    contactId: string,
+    body: string,
+    context?: GardenRequestContext,
+  ): Promise<ContactUpdateResult> {
+    if (isOtherFleetContact(context, contactId)) return { ok: false, message: 'Contact not found' };
+    const actor = requestActor(context);
     const contactStore = this.deps.contactStore;
     if (!contactStore) {
       return { ok: false, message: 'Contact store not available' };
@@ -618,7 +688,7 @@ export class AdminContactsDataService implements AdminContactsService {
       if (!displayName) {
         return { ok: false, message: 'displayName cannot be empty' };
       }
-      if (!await this.updateIdentityProfile(contact, displayName, payload.nickname, 'admin:api')) {
+      if (!await this.updateIdentityProfile(contact, displayName, payload.nickname, actor)) {
         return { ok: false, message: 'Unable to update identity profile' };
       }
     }
@@ -627,7 +697,7 @@ export class AdminContactsDataService implements AdminContactsService {
       if (!TRUST_LEVELS.includes(payload.trustLevel)) {
         return { ok: false, message: `Invalid trust level: ${payload.trustLevel}` };
       }
-      if (!await contactStore.setTrustLevel(contactId, payload.trustLevel, 'admin:api')) {
+      if (!await contactStore.setTrustLevel(contactId, payload.trustLevel, actor)) {
         return { ok: false, message: 'Unable to update trust level' };
       }
     }
@@ -636,13 +706,13 @@ export class AdminContactsDataService implements AdminContactsService {
       if (!VALID_RELATIONSHIP_TYPES.includes(payload.relationshipType)) {
         return { ok: false, message: `Invalid relationship type: ${payload.relationshipType}` };
       }
-      if (!await contactStore.updateRelationshipType(contactId, payload.relationshipType, 'admin:api')) {
+      if (!await contactStore.updateRelationshipType(contactId, payload.relationshipType, actor)) {
         return { ok: false, message: 'Unable to update relationship type' };
       }
     }
 
     if (payload.notes !== undefined) {
-      await contactStore.updateNotes(contactId, payload.notes, 'admin:api');
+      await contactStore.updateNotes(contactId, payload.notes, actor);
     }
 
     if (timezonePayload.present) {
@@ -654,7 +724,7 @@ export class AdminContactsDataService implements AdminContactsService {
         id: contactId,
         displayName: currentContact.displayName,
         timezone: timezonePayload.timezone,
-      }, { actor: 'admin:api' });
+      }, { actor });
     }
 
     // Apply channel privacy updates
@@ -673,7 +743,7 @@ export class AdminContactsDataService implements AdminContactsService {
             normalizedChannel,
             normalizedChannelId,
             cp.privacyLevel,
-            'admin:api',
+            actor,
           )
           : normalizedUserId
               ? await contactStore.setChannelPrivacy(
@@ -681,7 +751,7 @@ export class AdminContactsDataService implements AdminContactsService {
                 normalizedChannel,
                 normalizedUserId,
                 cp.privacyLevel,
-                'admin:api',
+                actor,
               )
               : false;
         if (!updated) {
@@ -705,7 +775,7 @@ export class AdminContactsDataService implements AdminContactsService {
         ch.channel.trim(),
         ch.userId.trim(),
         { privacyLevel: ch.privacyLevel },
-        'admin:api',
+        actor,
       );
       if (linkResult === 'identity_conflict') {
         return { ok: false, message: `Identity ${ch.channel}:${ch.userId} is already linked to another contact` };

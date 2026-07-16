@@ -37,6 +37,12 @@ import {
   resolveGardenAdmissionMode,
   type GardenAdmissionMode,
 } from './garden-admission.js';
+import {
+  createFleetGardenRequestContext,
+  createLegacyGardenRequestContext,
+  gardenRequestServiceBoundaryDenial,
+  type GardenRequestContext,
+} from './garden-request-context.js';
 
 const log = createComponentLogger('GardenAdminTransport');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -54,13 +60,31 @@ function dispatchAdminApiRoute(
   path: string,
   req: IncomingMessage,
   res: ServerResponse,
+  context: GardenRequestContext | undefined,
+  companionId: string | undefined,
 ): boolean {
   for (const route of routes) {
     if (route.method !== method) continue;
     const params = route.match(path);
     if (!params) continue;
     bindRequestForResponse(res, req);
-    route.handle(req, res, params);
+    const requestContext = context ?? createLegacyGardenRequestContext({
+      authorization: route.capability.authorization,
+      routeId: route.capability.id,
+      ...(companionId ? { companionId } : {}),
+      pathParams: params,
+      query: validateGardenRequestMetadata({
+        rawTarget: req.url ?? '/',
+        method: req.method ?? method,
+        headers: req.headers,
+      }).query,
+    });
+    const boundaryDenial = gardenRequestServiceBoundaryDenial(requestContext);
+    if (boundaryDenial) {
+      sendJson(res, 403, { error: boundaryDenial });
+      return true;
+    }
+    route.handle(req, res, params, requestContext);
     return true;
   }
   return false;
@@ -72,6 +96,7 @@ export class GardenAdminTransportServer implements Lifecycle {
   private readonly telemetryTransport: AdminServerTelemetryTransport;
   private readonly admission: GardenAdmissionMode;
   private readonly bufferedFleetBodies = new WeakMap<IncomingMessage, string>();
+  private readonly companionId?: string;
 
   constructor(
     private readonly config: GardenAdminTransportServerConfig,
@@ -82,12 +107,14 @@ export class GardenAdminTransportServer implements Lifecycle {
       audience: 'agent' as const,
     };
     this.admission = resolveGardenAdmissionMode(modeSelection);
+    this.companionId = config.config.companionId;
     const appendAuditTimelineEntry = (
       actionType: AdminAuditActionType,
       decision: AdminAuditDecision,
       narrative: string,
       details?: Array<string | null | undefined>,
       actor?: AdminAuditActor,
+      context?: GardenRequestContext,
     ): void => {
       const joinedDetails = details
         ?.filter((detail): detail is string => typeof detail === 'string' && detail.trim().length > 0)
@@ -98,6 +125,7 @@ export class GardenAdminTransportServer implements Lifecycle {
         narrative,
         ...(joinedDetails ? { details: joinedDetails } : {}),
         ...(actor ? { actor } : {}),
+        ...(context ? { requestContext: context } : {}),
       });
     };
     this.routes = buildAdminApiRoutes({
@@ -352,6 +380,7 @@ export class GardenAdminTransportServer implements Lifecycle {
     req: IncomingMessage,
     res: ServerResponse,
     parsedPath?: string,
+    context?: GardenRequestContext,
   ): void {
     let requestPath = parsedPath ?? '/';
 
@@ -379,6 +408,8 @@ export class GardenAdminTransportServer implements Lifecycle {
         requestPath,
         req,
         res,
+        context,
+        this.companionId,
       );
       if (handled) return;
     } catch (error) {
@@ -422,7 +453,11 @@ export class GardenAdminTransportServer implements Lifecycle {
       return;
     }
     this.bufferedFleetBodies.set(req, body.toString('utf8'));
-    this.dispatchRequest(req, res, admitted.target.canonicalPath);
+    const context = createFleetGardenRequestContext({
+      target: admitted.target,
+      verified: admitted.verified,
+    });
+    this.dispatchRequest(req, res, admitted.target.canonicalPath, context);
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {

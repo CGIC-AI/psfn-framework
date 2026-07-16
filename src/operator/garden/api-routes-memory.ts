@@ -13,7 +13,12 @@ import {
 } from './route-matchers.js';
 import { toSanitizedMessage } from './routes/shared.js';
 import type { AdminApiRoute } from './routes/types.js';
-import type { AdminMemoryService, AdminMemorySessionKey } from './services/types.js';
+import type {
+  AdminMemoryService,
+  AdminMemorySessionKey,
+  AdminMemorySessionService,
+} from './services/types.js';
+import type { GardenRequestContext } from './garden-request-context.js';
 
 /**
  * Per-browser admin session cookie keying Garden memory body-gate grants.
@@ -50,6 +55,16 @@ function ensureAdminMemorySessionKey(req: IncomingMessage, res: ServerResponse):
     `${GARDEN_MEMORY_SESSION_COOKIE}=${minted}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`,
   );
   return `cookie:${minted}`;
+}
+
+function bindMemoryRequest(
+  service: AdminMemoryService,
+  context: GardenRequestContext | undefined,
+  legacySessionKey: AdminMemorySessionKey,
+): AdminMemorySessionService {
+  return typeof service.forRequest === 'function'
+    ? service.forRequest(context, legacySessionKey)
+    : service.forSession(legacySessionKey);
 }
 
 function toMemoryType(value: string | null): MemoryType | undefined {
@@ -117,7 +132,7 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/memory'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         const url = parseRequestUrl(req, '/api/admin/memory');
         const typeFilter = toMemoryType(url.searchParams.get('type'));
         if (url.searchParams.get('type') && !typeFilter) {
@@ -148,7 +163,7 @@ export function buildAdminMemoryRoutes(options: {
           sendJson(res, 400, { error: 'startDate must be before or equal to endDate' });
           return;
         }
-        memoryService.forSession(resolveAdminMemorySessionKey(req)).listMemories(url.searchParams).then(
+        bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req)).listMemories(url.searchParams).then(
           (data) => sendJson(res, 200, {
             ...data,
             contactsById: Object.fromEntries(data.contactsById.entries()),
@@ -160,14 +175,14 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/memory/search'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         const url = parseRequestUrl(req, '/api/admin/memory/search');
         const query = url.searchParams.get('q')?.trim() ?? '';
         if (!query) {
           sendJson(res, 400, { error: 'Missing q query parameter' });
           return;
         }
-        memoryService.forSession(resolveAdminMemorySessionKey(req)).searchMemories(query).then(
+        bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req)).searchMemories(query).then(
           result => sendJson(res, 200, {
             ...result,
             contactsById: Object.fromEntries(result.contactsById.entries()),
@@ -180,7 +195,7 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/memory/shared-background'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         const url = parseRequestUrl(req, '/api/admin/memory/shared-background');
         const contactAId = url.searchParams.get('a')?.trim() ?? '';
         const contactBId = url.searchParams.get('b')?.trim() ?? '';
@@ -202,7 +217,14 @@ export function buildAdminMemoryRoutes(options: {
           }
           limit = parsed;
         }
-        memoryService.forSession(resolveAdminMemorySessionKey(req)).sharedBackground(contactAId, contactBId, limit).then(
+        if (context?.kind === 'fleet_principal'
+          && contactAId !== context.actor.contactId
+          && contactBId !== context.actor.contactId) {
+          sendJson(res, 403, { error: 'Shared background requires the current memory subject' });
+          return;
+        }
+        bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req))
+          .sharedBackground(contactAId, contactBId, limit).then(
           (data) => sendJson(res, 200, {
             ...data,
             contactsById: Object.fromEntries(data.contactsById.entries()),
@@ -215,36 +237,48 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/memory/elevation'),
-      handle: (req, res) => {
-        sendJson(res, 200, memoryService.forSession(resolveAdminMemorySessionKey(req)).getBodyElevationStatus());
+      handle: (req, res, _params, context) => {
+        sendJson(res, 200, bindMemoryRequest(memoryService,
+          context,
+          resolveAdminMemorySessionKey(req),
+        ).getBodyElevationStatus());
       },
     },
     {
       method: 'POST',
       match: exactPath('/api/admin/memory/elevation'),
-      handle: (req, res) => {
-        const sessionKey = ensureAdminMemorySessionKey(req, res);
-        sendJson(res, 200, memoryService.forSession(sessionKey).elevateBodyAccess());
+      handle: (req, res, _params, context) => {
+        const sessionKey = context?.kind === 'legacy_token'
+          ? ensureAdminMemorySessionKey(req, res)
+          : null;
+        try {
+          sendJson(res, 200, bindMemoryRequest(memoryService, context, sessionKey).elevateBodyAccess());
+        } catch (error) {
+          sendJson(res, 403, { error: toSanitizedMessage(error, 'Memory elevation denied') });
+        }
       },
     },
     {
       method: 'DELETE',
       match: exactPath('/api/admin/memory/elevation'),
-      handle: (req, res) => {
-        sendJson(res, 200, memoryService.forSession(resolveAdminMemorySessionKey(req)).dropBodyElevation());
+      handle: (req, res, _params, context) => {
+        sendJson(res, 200, bindMemoryRequest(memoryService,
+          context,
+          resolveAdminMemorySessionKey(req),
+        ).dropBodyElevation());
       },
     },
     {
       method: 'GET',
       match: exactPath('/api/admin/memory/scopes'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         const url = parseRequestUrl(req, '/api/admin/memory/scopes');
         const kind = url.searchParams.get('kind');
         if (kind && !['project', 'north_star'].includes(kind.trim().toLowerCase())) {
           sendJson(res, 400, { error: 'Invalid managed memory scope kind' });
           return;
         }
-        memoryService.forSession(resolveAdminMemorySessionKey(req)).listManagedScopes(url.searchParams).then(
+        bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req)).listManagedScopes(url.searchParams).then(
           (data) => sendJson(res, 200, data),
           (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list managed scopes') }),
         );
@@ -253,11 +287,11 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'GET',
       match: paramWithSuffix('/api/admin/memory/scopes/', 'scopeKey', '/detail'),
-      handle: (req, res, { scopeKey }) => {
+      handle: (req, res, { scopeKey }, context) => {
         const separator = scopeKey.indexOf(':');
         const kind = separator >= 0 ? scopeKey.slice(0, separator) : '';
         const id = separator >= 0 ? scopeKey.slice(separator + 1) : '';
-        memoryService.forSession(resolveAdminMemorySessionKey(req)).getManagedScopeDetail(kind, id).then(
+        bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req)).getManagedScopeDetail(kind, id).then(
           (detail) => {
             if (!detail) {
               sendJson(res, 404, { error: 'Managed memory scope not found' });
@@ -274,7 +308,7 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'POST',
       match: exactPath('/api/admin/memory/scope-update'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -303,7 +337,8 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          memoryService.forSession(resolveAdminMemorySessionKey(req)).updateMemoryScope(id, { scopeRef, scopeTags, repair }).then(
+          bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req))
+            .updateMemoryScope(id, { scopeRef, scopeTags, repair }).then(
             (result) => {
               if (!result.ok) {
                 const status = result.message === 'Memory not found' ? 404 : 400;
@@ -321,7 +356,7 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'POST',
       match: exactPath('/api/admin/memory/link'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -338,7 +373,7 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          memoryService.forSession(resolveAdminMemorySessionKey(req)).linkMemories(id1, id2, linkType).then(
+          bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req)).linkMemories(id1, id2, linkType).then(
             (result) => {
               if (!result.ok) {
                 sendJson(res, 400, { error: result.message ?? 'Failed to create link' });
@@ -354,7 +389,7 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'DELETE',
       match: exactPath('/api/admin/memory/link'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -370,7 +405,7 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          memoryService.forSession(resolveAdminMemorySessionKey(req)).unlinkMemories(id1, id2).then(
+          bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req)).unlinkMemories(id1, id2).then(
             (result) => {
               if (!result.ok) {
                 sendJson(res, 404, { error: result.message ?? 'Link not found' });
@@ -387,7 +422,7 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'POST',
       match: exactPath('/api/admin/memory/bulk-delete'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -404,7 +439,7 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          memoryService.forSession(resolveAdminMemorySessionKey(req)).bulkDelete(ids).then(
+          bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req)).bulkDelete(ids).then(
             (result) => {
               if (!result.ok) {
                 sendJson(res, 400, { error: result.message ?? 'Bulk delete failed' });
@@ -420,7 +455,7 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'POST',
       match: exactPath('/api/admin/memory/bulk-update'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -449,7 +484,8 @@ export function buildAdminMemoryRoutes(options: {
             return;
           }
 
-          memoryService.forSession(resolveAdminMemorySessionKey(req)).bulkUpdate(ids, { memoryType, sensitivity, retentionClass }).then(
+          bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req))
+            .bulkUpdate(ids, { memoryType, sensitivity, retentionClass }).then(
             (result) => {
               if (!result.ok) {
                 sendJson(res, 400, { error: result.message ?? 'Bulk update failed' });
@@ -466,9 +502,11 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/memory/', 'id', '/reveal'),
-      handle: (req, res, { id }) => {
-        const sessionKey = ensureAdminMemorySessionKey(req, res);
-        memoryService.forSession(sessionKey).revealMemory(id).then(
+      handle: (req, res, { id }, context) => {
+        const sessionKey = context?.kind === 'legacy_token'
+          ? ensureAdminMemorySessionKey(req, res)
+          : null;
+        bindMemoryRequest(memoryService, context, sessionKey).revealMemory(id).then(
           (detail) => {
             if (!detail) {
               sendJson(res, 404, { error: 'Memory not found' });
@@ -483,8 +521,8 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'GET',
       match: paramWithSuffix('/api/admin/memory/', 'id', '/links'),
-      handle: (req, res, { id }) => {
-        memoryService.forSession(resolveAdminMemorySessionKey(req)).getMemoryLinks(id).then(
+      handle: (req, res, { id }, context) => {
+        bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req)).getMemoryLinks(id).then(
           (links) => sendJson(res, 200, { links }),
           (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load memory links') }),
         );
@@ -493,7 +531,7 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'PATCH',
       match: paramWithSuffix('/api/admin/memory/', 'id', '/patch'),
-      handle: (req, res, { id }) => {
+      handle: (req, res, { id }, context) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -525,7 +563,7 @@ export function buildAdminMemoryRoutes(options: {
           // Fail closed: the body of a redacted high-intimacy memory cannot
           // be edited without an explicit (audited) reveal or elevation --
           // you cannot honestly edit what you cannot see.
-          void memoryService.forSession(resolveAdminMemorySessionKey(req)).getMemoryDetail(id)
+          void bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req)).getMemoryDetail(id)
             .then((detail) => {
               if (!detail) {
                 sendJson(res, 404, { error: 'Memory not found' });
@@ -558,8 +596,8 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'GET',
       match: prefixedParamPath('/api/admin/memory/', 'id'),
-      handle: (req, res, { id }) => {
-        memoryService.forSession(resolveAdminMemorySessionKey(req)).getMemoryDetail(id).then(
+      handle: (req, res, { id }, context) => {
+        bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req)).getMemoryDetail(id).then(
           (detail) => {
             if (!detail) {
               sendJson(res, 404, { error: 'Memory not found' });
@@ -578,8 +616,8 @@ export function buildAdminMemoryRoutes(options: {
     {
       method: 'DELETE',
       match: prefixedParamPath('/api/admin/memory/', 'id'),
-      handle: (req, res, { id }) => {
-        memoryService.forSession(resolveAdminMemorySessionKey(req)).supersedeMemory(id).then(
+      handle: (req, res, { id }, context) => {
+        bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req)).supersedeMemory(id).then(
           (result) => {
             if (!result.ok) {
               sendJson(res, 404, { error: result.message ?? 'Memory not found' });

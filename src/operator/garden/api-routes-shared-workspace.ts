@@ -6,18 +6,12 @@ import { parseAdminJsonBody } from './request-body.js';
 import { parseRequestUrl } from './request-url.js';
 import type { AdminApiRoute } from './routes/types.js';
 import {
-  SHARED_WORKSPACE_CREDENTIAL_HEADER,
   SharedWorkspaceAuthenticationError,
   type AdminSharedWorkspaceService,
 } from './services/shared-workspace-service.js';
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function credentialFromRequest(req: IncomingMessage): string | undefined {
-  const value = req.headers[SHARED_WORKSPACE_CREDENTIAL_HEADER];
-  return Array.isArray(value) ? value[0] : value;
 }
 
 function sendActionError(res: ServerResponse, error: unknown): void {
@@ -67,7 +61,7 @@ export function buildAdminSharedWorkspaceRoutes(options: {
     {
       method: 'POST',
       match: exactPath('/api/admin/shared-workspace/proposals'),
-      handle: (req, res) => options.withBody(req, res, (body) => {
+      handle: (req, res, _params, context) => options.withBody(req, res, (body) => {
         const parsed = parseAdminJsonBody(body);
         if (!parsed.ok || !isRecord(parsed.value)) {
           sendJson(res, 400, { error: parsed.ok ? 'Expected JSON object body' : parsed.error });
@@ -87,7 +81,7 @@ export function buildAdminSharedWorkspaceRoutes(options: {
           return;
         }
         try {
-          sendJson(res, 201, options.service.propose(credentialFromRequest(req), {
+          sendJson(res, 201, options.service.propose(context, {
             artifactPath: value.artifactPath,
             content: value.content,
             mediaType: value.mediaType,
@@ -101,7 +95,7 @@ export function buildAdminSharedWorkspaceRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/shared-workspace/reviews/', 'reviewId', '/cogsec'),
-      handle: (req, res, { reviewId }) => options.withBody(req, res, (body) => {
+      handle: (req, res, { reviewId }, context) => options.withBody(req, res, (body) => {
         const parsed = parseAdminJsonBody(body);
         if (!parsed.ok || !isRecord(parsed.value)) {
           sendJson(res, 400, { error: parsed.ok ? 'Expected JSON object body' : parsed.error });
@@ -118,7 +112,7 @@ export function buildAdminSharedWorkspaceRoutes(options: {
         }
         try {
           sendJson(res, 201, options.service.recordCogSecDecision(
-            credentialFromRequest(req),
+            context,
             {
               reviewId,
               decision: value.decision,
@@ -133,7 +127,7 @@ export function buildAdminSharedWorkspaceRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/shared-workspace/reviews/', 'reviewId', '/decision'),
-      handle: (req, res, { reviewId }) => options.withBody(req, res, (body) => {
+      handle: (req, res, { reviewId }, context) => options.withBody(req, res, (body) => {
         const parsed = parseAdminJsonBody(body);
         if (!parsed.ok || !isRecord(parsed.value)) {
           sendJson(res, 400, { error: parsed.ok ? 'Expected JSON object body' : parsed.error });
@@ -150,7 +144,7 @@ export function buildAdminSharedWorkspaceRoutes(options: {
         }
         try {
           sendJson(res, 200, options.service.review(
-            credentialFromRequest(req),
+            context,
             {
               reviewId,
               decision: value.decision,

@@ -261,7 +261,7 @@ describe('admin session CogSec routes', () => {
       type: 'content_poisoning',
       severity: 'high',
       reason: 'operator-selected contaminated row',
-      actor: 'operator:garden',
+      actor: 'browser-forged-actor',
       cutEpoch: false,
     };
 
@@ -284,7 +284,7 @@ describe('admin session CogSec routes', () => {
       type: 'content_poisoning',
       severity: 'high',
       reason: 'operator-selected contaminated row',
-      actor: 'operator:garden',
+      actor: 'legacy-token:operator',
       cutEpoch: false,
     });
   });

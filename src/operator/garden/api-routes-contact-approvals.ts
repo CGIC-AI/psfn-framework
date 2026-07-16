@@ -16,11 +16,17 @@ import type {
   AdminPendingContactsService,
 } from './services/pending-contacts-service.js';
 import { ADMIN_POLLED_QUEUE_JSON_HEADERS } from './routes/shared.js';
+import type { GardenRequestContext } from './garden-request-context.js';
 
 interface AdminApiRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   match: RouteMatcher;
-  handle: (req: IncomingMessage, res: ServerResponse, params: RouteParams) => void;
+  handle: (
+    req: IncomingMessage,
+    res: ServerResponse,
+    params: RouteParams,
+    context?: GardenRequestContext,
+  ) => void;
 }
 
 export function buildAdminContactApprovalRoutes(options: {
@@ -53,8 +59,8 @@ export function buildAdminContactApprovalRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/contact-approvals'),
-      handle: (_req, res) => {
-        pendingContactsService.listPendingContactApprovals().then(
+      handle: (_req, res, _params, context) => {
+        pendingContactsService.listPendingContactApprovals(context).then(
           (data) => sendJson(res, 200, data, ADMIN_POLLED_QUEUE_JSON_HEADERS),
           (error) => sendJson(res, 500, { error: error instanceof Error ? error.message : String(error) }),
         );
@@ -63,22 +69,22 @@ export function buildAdminContactApprovalRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/contact-approvals/', 'id', '/approve'),
-      handle: (_req, res, { id }) => {
-        handleMutation(res, pendingContactsService.approvePendingContact(id));
+      handle: (_req, res, { id }, context) => {
+        handleMutation(res, pendingContactsService.approvePendingContact(id, context));
       },
     },
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/contact-approvals/', 'id', '/deny'),
-      handle: (_req, res, { id }) => {
-        handleMutation(res, pendingContactsService.denyPendingContact(id));
+      handle: (_req, res, { id }, context) => {
+        handleMutation(res, pendingContactsService.denyPendingContact(id, context));
       },
     },
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/contact-approvals/', 'id', '/reset'),
-      handle: (_req, res, { id }) => {
-        handleMutation(res, pendingContactsService.resetPendingContactDecision(id));
+      handle: (_req, res, { id }, context) => {
+        handleMutation(res, pendingContactsService.resetPendingContactDecision(id, context));
       },
     },
   ];

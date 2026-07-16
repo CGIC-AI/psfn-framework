@@ -39,6 +39,16 @@ const SESSION_PEPPER = 'fleet-context-session-pepper-32-bytes';
 const SESSION_TOKEN = 'S'.repeat(43);
 const SUBJECT_ID = '123456789012345678';
 const COMPANION_ID = '7f87ee85-9fcc-4520-91a8-b728293eca76';
+const CONTACT_ID = 'contact/shared-id';
+const EVIDENCE_IDENTIFIER = '64a1d054-22dd-4e76-9bb3-3ac0d33c63c5';
+const CORRELATION_DIGEST_DOMAIN = 'fleet-authorization:correlation:v1\0';
+
+function digestCorrelation(value: string): string {
+  return createHmac('sha256', SESSION_PEPPER)
+    .update(CORRELATION_DIGEST_DOMAIN)
+    .update(value)
+    .digest('hex');
+}
 
 let harness: PostgresTestHarness | null = null;
 const floorRoots: string[] = [];
@@ -331,7 +341,7 @@ describe('Postgres fleet authorization context snapshot', () => {
         audience: 'fleet',
         companionId: COMPANION_ID,
         action: 'memory.read.self',
-        correlationId: 'correlation-allow',
+        correlationId: SESSION_TOKEN,
       });
       expect(context).toMatchObject({
         principalId,
@@ -341,7 +351,10 @@ describe('Postgres fleet authorization context snapshot', () => {
         operator: { role: 'member', grantVersion: 1 },
         authorization: { action: 'memory.read.self', decision: 'allow' },
         authority: { authorityGeneration: 1, globalAuthEpoch: 1 },
-        provenance: { source: 'gateway_fleet_authorization_snapshot' },
+        provenance: {
+          source: 'gateway_fleet_authorization_snapshot',
+          correlationId: digestCorrelation(SESSION_TOKEN),
+        },
       });
       expect(Object.isFrozen(context)).toBe(true);
       expect(Object.isFrozen(context.contact)).toBe(true);
@@ -376,7 +389,7 @@ describe('Postgres fleet authorization context snapshot', () => {
             provider: 'discord',
             evidenceRequested: false,
           },
-          correlation_id: 'correlation-allow',
+          correlation_id: digestCorrelation(SESSION_TOKEN),
         },
         {
           decision: 'deny',
@@ -393,6 +406,9 @@ describe('Postgres fleet authorization context snapshot', () => {
       expect(JSON.stringify(audit.rows)).not.toContain(SESSION_TOKEN);
       expect(JSON.stringify(audit.rows)).not.toContain('contact/shared-id');
       expect(JSON.stringify(audit.rows)).not.toContain(SUBJECT_ID);
+      expect(digestCorrelation(SESSION_TOKEN)).not.toBe(
+        createHmac('sha256', SESSION_PEPPER).update(SESSION_TOKEN).digest('hex'),
+      );
     } finally {
       await coordinator.end();
       await migration.end();
@@ -426,8 +442,8 @@ describe('Postgres fleet authorization context snapshot', () => {
       const audit = await runtime.query<{ decision: string; reason_code: string }>(`
         SELECT decision, reason_code
         FROM fleet_auth.authorization_audit_events
-        WHERE correlation_id = 'correlation-race'
-      `);
+        WHERE correlation_id = $1
+      `, [digestCorrelation('correlation-race')]);
       expect(audit.rows).toEqual([{ decision: 'deny', reason_code: 'session_authz_stale' }]);
     } finally {
       await mutator.query('ROLLBACK').catch(() => undefined);
@@ -469,8 +485,8 @@ describe('Postgres fleet authorization context snapshot', () => {
       const audit = await runtime.query<{ decision: string; reason_code: string }>(`
         SELECT decision, reason_code
         FROM fleet_auth.authorization_audit_events
-        WHERE correlation_id = 'correlation-session-lock-expiry'
-      `);
+        WHERE correlation_id = $1
+      `, [digestCorrelation('correlation-session-lock-expiry')]);
       expect(audit.rows).toEqual([{ decision: 'deny', reason_code: 'session_expired' }]);
     } finally {
       if (!released) await blocker.query('ROLLBACK').catch(() => undefined);
@@ -516,8 +532,8 @@ describe('Postgres fleet authorization context snapshot', () => {
       const audit = await runtime.query<{ decision: string; reason_code: string }>(`
         SELECT decision, reason_code
         FROM fleet_auth.authorization_audit_events
-        WHERE correlation_id = 'correlation-evidence-lock-expiry'
-      `);
+        WHERE correlation_id = $1
+      `, [digestCorrelation('correlation-evidence-lock-expiry')]);
       expect(audit.rows).toEqual([{ decision: 'deny', reason_code: 'evidence_stale' }]);
     } finally {
       if (!released) await blocker.query('ROLLBACK').catch(() => undefined);
@@ -558,19 +574,20 @@ describe('Postgres fleet authorization context snapshot', () => {
         audience: 'fleet',
         companionId: COMPANION_ID,
         action: 'memory.read.self',
-        correlationId: 'correlation-post-commit-floor',
+        correlationId: CONTACT_ID,
       })).rejects.toMatchObject({ code: 'authority_generation_stale' });
       expect(authorityChecks).toBe(2);
       const audit = await runtime.query<{
         decision: string;
         reason_code: string;
         actor_context: unknown;
+        correlation_id: string;
       }>(`
-        SELECT decision, reason_code, actor_context
+        SELECT decision, reason_code, actor_context, correlation_id
         FROM fleet_auth.authorization_audit_events
-        WHERE correlation_id = 'correlation-post-commit-floor'
+        WHERE correlation_id = $1
         ORDER BY occurred_at, event_id
-      `);
+      `, [digestCorrelation(CONTACT_ID)]);
       expect(audit.rows).toHaveLength(2);
       expect(audit.rows).toEqual(expect.arrayContaining([
         expect.objectContaining({ decision: 'allow', reason_code: 'role_action_allowed' }),
@@ -578,6 +595,9 @@ describe('Postgres fleet authorization context snapshot', () => {
       ]));
       expect(JSON.stringify(audit.rows)).not.toContain(SESSION_TOKEN);
       expect(JSON.stringify(audit.rows)).not.toContain(SUBJECT_ID);
+      expect(JSON.stringify(audit.rows)).not.toContain(CONTACT_ID);
+      expect(new Set(audit.rows.map(row => row.correlation_id)))
+        .toEqual(new Set([digestCorrelation(CONTACT_ID)]));
     } finally {
       await coordinator.end();
       await migration.end();
@@ -624,9 +644,9 @@ describe('Postgres fleet authorization context snapshot', () => {
       const audit = await runtime.query<{ decision: string; reason_code: string }>(`
         SELECT decision, reason_code
         FROM fleet_auth.authorization_audit_events
-        WHERE correlation_id = 'correlation-post-commit-audit-failure'
+        WHERE correlation_id = $1
         ORDER BY occurred_at, event_id
-      `);
+      `, [digestCorrelation('correlation-post-commit-audit-failure')]);
       expect(audit.rows).toHaveLength(2);
       expect(audit.rows).toEqual(expect.arrayContaining([
         { decision: 'allow', reason_code: 'role_action_allowed' },
@@ -654,14 +674,23 @@ describe('Postgres fleet authorization context snapshot', () => {
         audience: 'fleet',
         companionId: COMPANION_ID,
         action: 'memory.read.self',
-        correlationId: 'correlation-ambiguous',
+        correlationId: EVIDENCE_IDENTIFIER,
       })).rejects.toMatchObject({ code: 'binding_ambiguous' });
-      const audit = await runtime.query<{ decision: string; reason_code: string }>(`
-        SELECT decision, reason_code
+      const audit = await runtime.query<{
+        decision: string;
+        reason_code: string;
+        correlation_id: string;
+      }>(`
+        SELECT decision, reason_code, correlation_id
         FROM fleet_auth.authorization_audit_events
-        WHERE correlation_id = 'correlation-ambiguous'
-      `);
-      expect(audit.rows).toEqual([{ decision: 'deny', reason_code: 'binding_ambiguous' }]);
+        WHERE correlation_id = $1
+      `, [digestCorrelation(EVIDENCE_IDENTIFIER)]);
+      expect(audit.rows).toEqual([{
+        decision: 'deny',
+        reason_code: 'binding_ambiguous',
+        correlation_id: digestCorrelation(EVIDENCE_IDENTIFIER),
+      }]);
+      expect(JSON.stringify(audit.rows)).not.toContain(EVIDENCE_IDENTIFIER);
     } finally {
       await coordinator.end();
       await migration.end();
@@ -780,17 +809,23 @@ describe('Postgres fleet authorization context snapshot', () => {
         audience: 'fleet',
         companionId: COMPANION_ID,
         action: 'memory.read.self',
-        correlationId: 'correlation-audit-failure',
+        correlationId: SUBJECT_ID,
       })).rejects.toThrow(/injected authorization allow audit failure/u);
-      const audit = await runtime.query<{ decision: string; reason_code: string }>(`
-        SELECT decision, reason_code
+      const audit = await runtime.query<{
+        decision: string;
+        reason_code: string;
+        correlation_id: string;
+      }>(`
+        SELECT decision, reason_code, correlation_id
         FROM fleet_auth.authorization_audit_events
-        WHERE correlation_id = 'correlation-audit-failure'
-      `);
+        WHERE correlation_id = $1
+      `, [digestCorrelation(SUBJECT_ID)]);
       expect(audit.rows).toEqual([{
         decision: 'deny',
         reason_code: 'authorization_store_error',
+        correlation_id: digestCorrelation(SUBJECT_ID),
       }]);
+      expect(JSON.stringify(audit.rows)).not.toContain(SUBJECT_ID);
     } finally {
       await coordinator.end();
       await migration.end();

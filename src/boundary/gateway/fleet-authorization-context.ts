@@ -538,6 +538,7 @@ export function createImmutableFleetAuthorizationContext(input: {
   facts: FleetAuthorizationFacts;
   authorizationEventId: string;
   resolvedAt: Date;
+  correlationDigest?: string;
 }): FleetAuthorizationContext {
   const context: FleetAuthorizationContext = {
     principalId: input.facts.principalId,
@@ -563,7 +564,7 @@ export function createImmutableFleetAuthorizationContext(input: {
       source: 'gateway_fleet_authorization_snapshot',
       authorizationEventId: input.authorizationEventId,
       resolvedAt: input.resolvedAt.toISOString(),
-      ...(input.request.correlationId ? { correlationId: input.request.correlationId } : {}),
+      ...(input.correlationDigest ? { correlationId: input.correlationDigest } : {}),
     }),
   };
   return Object.freeze(context);

@@ -290,4 +290,20 @@ describe('fleet authorization request parsing', () => {
     expect(parseFleetAuthorizationRequest(input, new Set([COMPANION_ID])))
       .toMatchObject({ ok: false, reasonCode });
   });
+
+  it('fails closed without retaining a malformed caller correlation in denial audit input', () => {
+    const parsed = parseFleetAuthorizationRequest(
+      { ...valid, correlationId: 'session-secret\nidentifier' },
+      new Set([COMPANION_ID]),
+    );
+    expect(parsed).toEqual({
+      ok: false,
+      reasonCode: 'malformed_request',
+      audit: {
+        action: 'memory.read.self',
+        companionId: COMPANION_ID,
+        evidenceRequested: true,
+      },
+    });
+  });
 });

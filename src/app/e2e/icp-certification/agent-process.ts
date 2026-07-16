@@ -25,6 +25,7 @@ import { createCompactionBoundaryStore } from '../../../core/session/manager/com
 import { createIcpDeliveryProjectionStore } from '../../../core/session/manager/icp-delivery-projection-store.js';
 import { countTokens } from '../../../primitives/llm/tokens.js';
 import { Scheduler } from '../../../core/scheduler/scheduler.js';
+import { registerDurableBackgroundWorkSupervisorTask } from '../../../core/agent/background-work/scheduler-task.js';
 import { wirePostTurnActionRuntime } from '../../startup/composition/post-turn-actions.js';
 import {
   COMPANION_CANDIDATE_QUEUED_TEXT,
@@ -327,6 +328,15 @@ async function main(): Promise<void> {
   const scheduler = new Scheduler(startup.eventBus, { tickIntervalMs: 10 }, {
     eligibilityGate: startup.eligibilityGate,
   });
+  const backgroundWorkScheduler = new Scheduler(startup.eventBus, { tickIntervalMs: 10 }, {
+    eligibilityGate: startup.eligibilityGate,
+  });
+  registerDurableBackgroundWorkSupervisorTask({
+    agentLoop: agent,
+    intervalMs: 10,
+    scheduler: backgroundWorkScheduler,
+  });
+  backgroundWorkScheduler.start();
   const postTurnActions = wirePostTurnActionRuntime({
     eventBus: startup.eventBus,
     scheduler,
@@ -876,6 +886,7 @@ async function main(): Promise<void> {
           return;
         }
         await agent.waitForIdle();
+        await backgroundWorkScheduler.stop();
         await agent.stopBackgroundWork();
         unregisterInitiationCandidates();
         sourceWiring.unregisterCoLocationThoughtAdapter();

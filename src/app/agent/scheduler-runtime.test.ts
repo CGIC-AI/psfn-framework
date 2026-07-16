@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { BackgroundMaintenanceRegistry } from '../../core/scheduler/background-maintenance.js';
@@ -11,6 +11,7 @@ import {
   BACKGROUND_WORK_SUPERVISOR_TASK_ID,
   registerSalienceDecayOperation,
 } from './scheduler-runtime.js';
+import { registerDurableBackgroundWorkSupervisorTask } from '../../core/agent/background-work/scheduler-task.js';
 
 const SRC_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -23,13 +24,40 @@ describe('agent scheduler runtime wiring', () => {
     expect(source).toContain('restWindow: options.schedulerConfig.episodicProcessing');
   });
 
-  it('registers the durable background supervisor on the existing scheduler', () => {
-    const source = readFileSync(join(SRC_DIR, 'scheduler-runtime.ts'), 'utf-8');
+  it('registers the durable background supervisor on the existing scheduler', async () => {
+    const scheduler = new Scheduler(new EventBus());
+    const tickBackgroundWork = vi.fn(async () => undefined);
 
     expect(BACKGROUND_WORK_SUPERVISOR_TASK_ID).toBe('background-work-supervisor');
-    expect(source).toContain('if (!options.agentLoop.hasDurableBackgroundWorkSupervisor())');
-    expect(source).toContain('handler: () => options.agentLoop.tickBackgroundWork()');
-    expect(source).not.toContain('setInterval(() => options.agentLoop.tickBackgroundWork()');
+    registerDurableBackgroundWorkSupervisorTask({
+      agentLoop: {
+        hasDurableBackgroundWorkSupervisor: () => true,
+        tickBackgroundWork,
+      },
+      intervalMs: 250,
+      scheduler,
+    });
+    const task = scheduler.getTask(BACKGROUND_WORK_SUPERVISOR_TASK_ID);
+    expect(task).toMatchObject({
+      intervalMs: 250,
+      type: 'every',
+    });
+    await task?.handler();
+    expect(tickBackgroundWork).toHaveBeenCalledOnce();
+  });
+
+  it('rejects background task registration without a durable supervisor', () => {
+    const scheduler = new Scheduler(new EventBus());
+
+    expect(() => registerDurableBackgroundWorkSupervisorTask({
+      agentLoop: {
+        hasDurableBackgroundWorkSupervisor: () => false,
+        tickBackgroundWork: async () => undefined,
+      },
+      intervalMs: 250,
+      scheduler,
+    })).toThrow('Agent scheduler requires a durable background work supervisor');
+    expect(scheduler.getTask(BACKGROUND_WORK_SUPERVISOR_TASK_ID)).toBeUndefined();
   });
 
   it('registers salience decay as an operation on the shared scheduler-owned cadence', () => {

@@ -1089,7 +1089,7 @@ export interface LLMPromptCacheObservability {
   retention?: PromptCacheRetention;
   scope?: PromptCacheScope;
   sessionId?: string;
-  reason?: 'disabled' | 'missing_channel_id';
+  reason?: 'disabled' | 'missing_channel_id' | 'missing_companion_id';
   /** Mechanism actually applied to the provider request (E2.4). */
   mechanism?: PromptCacheMechanism;
   /** cache_control breakpoints applied to the serialized system prompt. */

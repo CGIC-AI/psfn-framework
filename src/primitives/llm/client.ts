@@ -78,7 +78,10 @@ import {
   resolveConfiguredLiteLLMBaseUrl,
 } from '../../system/config/providers-config.js';
 import type { LLMProviderPort, LLMProviderStreamOptions } from '../../core/agent/contracts.js';
-import { resolveRuntimeLaneClassForModelCall } from '../../core/agent/worker-lanes.js';
+import {
+  FOREGROUND_CHAT_RUNTIME_CLASS,
+  resolveRuntimeLaneClassForModelCall,
+} from '../../core/agent/worker-lanes.js';
 import { ModelCallGate, ModelCallPreemptedError, type ModelCallGateCapacity } from './model-call-gate.js';
 import { clampVisionCompletionMaxTokens } from './vision-limits.js';
 import type {
@@ -610,6 +613,31 @@ export class LLMClient {
   }
 
   /**
+   * mmo9.7.3: fail closed for autonomous spend. An autonomous call is a declared
+   * `LLMWorkSpec` call (the sanctioned `completeWithWorkSpec` entry every
+   * non-chat model call in src/core and src/faculties routes through) whose
+   * gate-resolved lane is non-interactive (anything other than foreground chat).
+   * Such spend MUST be accountable, so a missing `usageRecorder` is a hard,
+   * non-retryable error rather than silently unattributed spend. Interactive
+   * (foreground_chat) work and legacy non-work-spec calls keep their prior
+   * behavior. This runs BEFORE any provider I/O so an unaccountable autonomous
+   * call never spends.
+   */
+  private assertAutonomousCallAccountable(
+    purpose: RoutingPurpose,
+    correlation: ResolvedCorrelationMetadata | undefined,
+    hasWorkSpec: boolean,
+  ): void {
+    if (this.usageRecorder || !hasWorkSpec) return;
+    const runtimeLaneClass = this.resolveModelCallRuntimeClass(purpose, correlation);
+    if (runtimeLaneClass === FOREGROUND_CHAT_RUNTIME_CLASS) return;
+    throw markErrorAsNonRetryable(new Error(
+      `Autonomous model call (runtime lane "${runtimeLaneClass}", purpose "${purpose}") has no `
+      + 'usageRecorder configured: refusing to run unaccounted autonomous spend',
+    ));
+  }
+
+  /**
    * mmo9.7.1 / Law 12.4: reconcile a declared `LLMWorkSpec` against this call.
    * Fails closed (non-retryable) if the spec's purpose disagrees with the call
    * purpose or its declared lane disagrees with the SINGLE admission lane the
@@ -891,6 +919,10 @@ export class LLMClient {
     const companionPrivate = correlation?.telemetryVisibility === 'companion_private';
     const service = this.resolveBudgetService(purpose, correlation);
     const process = this.resolveBudgetProcess(purpose, correlation);
+    // mmo9.7.3: attribute the SINGLE gate-resolved runtime lane class for this
+    // call (no second lane resolver). This is the per-lane spend dimension and is
+    // always available, even for autonomous calls with no run-charge snapshot.
+    const runtimeLaneClass = this.resolveModelCallRuntimeClass(purpose, correlation);
     const chargeSnapshot = getRunChargeSnapshot();
     const capturedProviderCost = this.providerCostResolver?.();
     const accountingRates = resolveModelUsageCostRates(this.config, candidate, purpose);
@@ -1017,6 +1049,7 @@ export class LLMClient {
         ...(!companionPrivate && correlation?.requestId ? { requestId: correlation.requestId } : {}),
         ...(!companionPrivate && correlation?.toolName ? { toolName: correlation.toolName } : {}),
         ...(!companionPrivate && correlation?.toolCallId ? { toolCallId: correlation.toolCallId } : {}),
+        runtimeLaneClass,
         ...(chargeSnapshot?.lane
           ? { chargeLane: chargeSnapshot.lane }
           : (correlation?.chargeLane ? { chargeLane: correlation.chargeLane } : {})),
@@ -1102,6 +1135,7 @@ export class LLMClient {
     if (streamWorkSpec) {
       this.validateWorkSpecForCall(streamPurpose, streamRoutingPurpose, streamWorkSpec, correlation);
     }
+    this.assertAutonomousCallAccountable(streamRoutingPurpose, correlation, Boolean(streamWorkSpec));
     const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext, correlation);
     const accountingInputTokens = estimatedInputTokens ?? this.estimateBudgetInputTokens(piContext);
     const modelHint = mergeModelHints(context.modelHint, undefined);
@@ -1583,6 +1617,7 @@ export class LLMClient {
     if (options.workSpec) {
       this.validateWorkSpecForCall(purpose, routingPurpose, options.workSpec, correlation);
     }
+    this.assertAutonomousCallAccountable(routingPurpose, correlation, Boolean(options.workSpec));
     const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext, correlation);
     const modelHint = mergeModelHints(context.modelHint, options.modelHint);
     const externalAccounting = normalizeLLMCallAccountingContext(context.accounting);

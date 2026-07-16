@@ -143,6 +143,13 @@ export function resolveCorrelationMetadata(
     : normalizeCorrelationValue(merged.rootInitiationId);
   const workloadType = normalizeCorrelationValue(merged.workloadType);
   const workloadId = normalizeCorrelationValue(merged.workloadId);
+  // Canonical ingress-resolved subject contact (never model supplied). Carried
+  // through so prompt-cache affinity derivation can bind it as a contact-scope
+  // discriminator; dropping it would leave cross-contact isolation to the
+  // channel id alone.
+  const viewerMemorySubjectContactId = normalizeCorrelationValue(
+    (merged as { viewerMemorySubjectContactId?: string }).viewerMemorySubjectContactId,
+  );
 
   const inferredCallType = inferCallType(purpose, channelId);
   const originType = isObservabilityCallType(merged.originType)
@@ -184,6 +191,7 @@ export function resolveCorrelationMetadata(
     ...(rootInitiationId ? { rootInitiationId } : {}),
     ...(workloadType ? { workloadType } : {}),
     ...(workloadId ? { workloadId } : {}),
+    ...(viewerMemorySubjectContactId ? { viewerMemorySubjectContactId } : {}),
     ...(icpCorrelation ? { icpCorrelation } : {}),
   };
 }

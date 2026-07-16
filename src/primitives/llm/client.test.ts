@@ -44,6 +44,7 @@ import {
   LLMClient,
   SensitiveImportRoutePolicyError,
 } from './client.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from './work-spec.js';
 import {
   CircuitOpenError,
   SlidingWindowCircuitBreaker,
@@ -167,10 +168,26 @@ function makeConfig(overrides: Partial<SubstrateConfig> = {}): SubstrateConfig {
 
 const tempDirs: string[] = [];
 
-// Mirrors client-prompt-cache's provider-facing session token: raw channel /
-// request ids are hashed before they reach provider adapters.
-function providerCacheSessionId(raw: string): string {
-  return `psfnpc-${createHash('sha256').update(raw).digest('hex').slice(0, 16)}`;
+// Mirrors client-prompt-cache's provider-facing affinity token: the mandatory
+// companion scope, the canonical subject contact, the scope label and the
+// inner (channel / request) id are length-prefixed, domain-separated and
+// hashed before they reach provider adapters. Cross-companion / cross-contact
+// tokens can never collide.
+function providerCacheSessionId(
+  companionId: string,
+  inner: string,
+  opts: { scope?: 'channel' | 'request'; contactId?: string } = {},
+): string {
+  const scope = opts.scope ?? 'channel';
+  const contactId = opts.contactId ?? '';
+  const material = [
+    'psfnpc.v2',
+    `companion:${companionId.length}:${companionId}`,
+    `contact:${contactId.length}:${contactId}`,
+    `scope:${scope}`,
+    `inner:${inner.length}:${inner}`,
+  ].join('\u0000');
+  return `psfnpc-${createHash('sha256').update(material).digest('hex').slice(0, 24)}`;
 }
 
 afterEach(() => {
@@ -1714,6 +1731,7 @@ describe('LLMClient prompt caching', () => {
         systemPrompt: 'System prompt',
         messages: [{ role: 'user', content: 'Hi' }],
         correlation: {
+          companionId: 'companion-cache-1',
           requestId: 'req-cache-1',
           channelId: 'discord:cache-channel',
           callType: 'summary',
@@ -1733,7 +1751,7 @@ describe('LLMClient prompt caching', () => {
     expect(model.api).toBe('openai-responses');
     expect(requestOptions).toMatchObject({
       cacheRetention: 'long',
-      sessionId: providerCacheSessionId('discord:cache-channel'),
+      sessionId: providerCacheSessionId('companion-cache-1', 'discord:cache-channel'),
     });
     expect(response.providerObservability).toMatchObject({
       backendApi: 'openai-responses',
@@ -1743,7 +1761,7 @@ describe('LLMClient prompt caching', () => {
         strategy: 'openai_responses',
         retention: 'long',
         scope: 'channel',
-        sessionId: providerCacheSessionId('discord:cache-channel'),
+        sessionId: providerCacheSessionId('companion-cache-1', 'discord:cache-channel'),
       },
     });
   });
@@ -1789,6 +1807,7 @@ describe('LLMClient prompt caching', () => {
         systemPrompt: 'System prompt',
         messages: [{ role: 'user', content: 'Hi' }],
         correlation: {
+          companionId: 'companion-cache-2',
           requestId: 'req-cache-2',
           callType: 'summary',
           originType: 'summary',
@@ -1887,6 +1906,7 @@ describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
         messages: [{ role: 'user', content: 'Hi' }],
         ...(options.boundaries === false ? {} : { promptCacheBoundaries: makeBoundaries() }),
         correlation: {
+          companionId: 'companion-e24-1',
           requestId: 'req-e24-1',
           channelId: 'discord:e24-channel',
           callType: 'summary',
@@ -1910,7 +1930,7 @@ describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
     const { response, requestOptions } = await runComplete('anthropic/claude-sonnet-4.5');
 
     expect(requestOptions.cacheRetention).toBe('short');
-    expect(requestOptions.sessionId).toBe(providerCacheSessionId('discord:e24-channel'));
+    expect(requestOptions.sessionId).toBe(providerCacheSessionId('companion-e24-1', 'discord:e24-channel'));
     expect(typeof requestOptions.onPayload).toBe('function');
 
     // Exercise the transformer against the completions payload shape pi-ai builds.
@@ -1939,7 +1959,7 @@ describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
         mechanism: 'openrouter_cache_control_passthrough',
         retention: 'short',
         scope: 'channel',
-        sessionId: providerCacheSessionId('discord:e24-channel'),
+        sessionId: providerCacheSessionId('companion-e24-1', 'discord:e24-channel'),
         boundaries: {
           staticPrefixChars: STATIC_PREFIX.length,
           sessionStablePrefixChars: SESSION_STABLE_PREFIX.length,
@@ -1953,7 +1973,7 @@ describe('LLMClient model-agnostic prompt caching (E2.4)', () => {
     const { response, requestOptions } = await runComplete('z-ai/glm-5');
 
     expect(requestOptions.cacheRetention).toBe('short');
-    expect(requestOptions.sessionId).toBe(providerCacheSessionId('discord:e24-channel'));
+    expect(requestOptions.sessionId).toBe(providerCacheSessionId('companion-e24-1', 'discord:e24-channel'));
     // Wire capture (bead hgw3-80f6) always attaches a pass-through onPayload, but
     // with no cache transformer chained it leaves the payload byte-identical.
     expect(typeof requestOptions.onPayload).toBe('function');
@@ -5166,5 +5186,129 @@ describe('LLMClient model budget gates and usage metering', () => {
     await expect(firstPromise).resolves.toMatchObject({ content: 'direct-1-result' });
     await expect(secondPromise).resolves.toMatchObject({ content: 'direct-2-result' });
     expect(transport.complete).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('LLMClient autonomous spend accounting (mmo9.7.3)', () => {
+  beforeEach(() => {
+    mocks.getModel.mockReset();
+    mocks.getModels.mockReset();
+    mocks.getProviders.mockReset();
+    mocks.completeSimple.mockReset();
+    mocks.streamSimple.mockReset();
+    mocks.getEnvApiKey.mockReset();
+
+    mocks.getModel.mockImplementation((provider: string, modelId: string) => ({
+      id: modelId,
+      provider,
+      name: modelId,
+      api: 'openai-completions',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+    }));
+    mocks.getProviders.mockReturnValue(['openrouter']);
+    mocks.getModels.mockImplementation((provider: string) => [
+      'z-ai/glm-5',
+      'deepseek/deepseek-v3.2',
+    ].map(id => ({
+      id,
+      provider,
+      name: id,
+      api: 'openai-completions',
+      input: ['text'],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128_000,
+      maxTokens: 8192,
+    })));
+    mocks.getEnvApiKey.mockReturnValue(undefined);
+  });
+
+  it('records the gate-resolved runtime lane class and actual model in attribution', async () => {
+    const usageRecorder = { recordUsageEvent: vi.fn(async () => undefined) };
+    const client = new LLMClient(makeConfig(), { usageRecorder });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'extracted' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 20, output: 6 },
+      stopReason: 'stop',
+    });
+
+    await client.complete(
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Extract' }],
+      },
+      'extraction',
+      {
+        disableRetry: true,
+        correlation: {
+          companionId: 'companion-x',
+          callType: 'background',
+          originStage: 'memory.extraction',
+        },
+      },
+    );
+
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledTimes(1);
+    expect(usageRecorder.recordUsageEvent).toHaveBeenCalledWith(expect.objectContaining({
+      model: expect.stringContaining('deepseek'),
+      attribution: expect.objectContaining({
+        companionId: 'companion-x',
+        runtimeLaneClass: 'maintenance_reflection',
+        originStage: 'memory.extraction',
+      }),
+    }));
+  });
+
+  it('fails closed when a declared autonomous (work-spec) call has no usageRecorder', async () => {
+    const client = new LLMClient(makeConfig());
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'should never run' }],
+      model: 'deepseek/deepseek-v3.2',
+      usage: { input: 5, output: 2 },
+      stopReason: 'stop',
+    });
+
+    const spec = buildLLMWorkSpec({
+      purpose: 'extraction',
+      durable: true,
+      correlation: { callType: 'background', originStage: 'memory.extraction' },
+    });
+    expect(spec.lane).toBe('maintenance_reflection');
+
+    await expect(completeWithWorkSpec(
+      client,
+      {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'Extract' }],
+      },
+      spec,
+    )).rejects.toThrow(/unaccounted autonomous spend/);
+
+    // The provider is never touched: unaccountable autonomous spend never runs.
+    expect(mocks.completeSimple).not.toHaveBeenCalled();
+  });
+
+  it('leaves the interactive chat path runnable without a usageRecorder', async () => {
+    const client = new LLMClient(makeConfig());
+    mocks.streamSimple.mockImplementation(async function* () {
+      yield {
+        type: 'done',
+        message: {
+          model: 'z-ai/glm-5',
+          usage: { input: 8, output: 3 },
+          content: [{ type: 'text', text: 'hello' }],
+        },
+        reason: 'stop',
+      };
+    });
+
+    await expect(client.stream({
+      systemPrompt: 'System',
+      messages: [{ role: 'user', content: 'Hi' }],
+    })).resolves.toMatchObject({ content: 'hello' });
+    expect(mocks.streamSimple).toHaveBeenCalledTimes(1);
   });
 });

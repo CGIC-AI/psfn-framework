@@ -599,6 +599,7 @@ export class SubstrateAgent {
         this.config,
         this.agent.state.model as { contextWindow?: unknown } | undefined,
       ),
+      companionId: this.config.companionId,
     });
     this.toolRuntimeFacade = new ToolRuntimeFacade({
       config: this.config,

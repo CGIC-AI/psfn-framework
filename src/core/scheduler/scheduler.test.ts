@@ -861,6 +861,74 @@ describe('Scheduler', () => {
       }
     });
 
+    it('re-arms on register() alone so a near-term one-shot fires without an explicit requestWake', async () => {
+      vi.useFakeTimers();
+      try {
+        const bus = new EventBus();
+        const adaptive = new Scheduler(bus, {
+          tickIntervalMs: CEILING_MS,
+          heartbeatIntervalMs: 30 * 60_000,
+        });
+
+        adaptive.start();
+
+        const fn = vi.fn();
+        adaptive.register({
+          id: 'auto-wake-one-shot',
+          name: 'Auto Wake One Shot',
+          type: 'one-shot',
+          intervalMs: 0,
+          runAt: Date.now() + 250,
+          handler: fn,
+          state: 'idle',
+        });
+        // No explicit requestWake here — register() must re-arm the adaptive wake
+        // itself, or this would only fire at the 60s ceiling.
+        await vi.advanceTimersByTimeAsync(300);
+        expect(fn).toHaveBeenCalledOnce();
+
+        await adaptive.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('re-arms on updateTask() when a one-shot is moved to a nearer due time', async () => {
+      vi.useFakeTimers();
+      try {
+        const bus = new EventBus();
+        const adaptive = new Scheduler(bus, {
+          tickIntervalMs: CEILING_MS,
+          heartbeatIntervalMs: 30 * 60_000,
+        });
+
+        const fn = vi.fn();
+        // Registered before start with a far-future runAt: the armed wake is the
+        // coarse ceiling, not this task.
+        adaptive.register({
+          id: 'reschedule-one-shot',
+          name: 'Reschedule One Shot',
+          type: 'one-shot',
+          intervalMs: 0,
+          runAt: Date.now() + 10 * CEILING_MS,
+          handler: fn,
+          state: 'idle',
+        });
+
+        adaptive.start();
+
+        // Move it to fire soon. updateTask() must re-arm the adaptive wake.
+        adaptive.updateTask('reschedule-one-shot', { runAt: Date.now() + 250 });
+
+        await vi.advanceTimersByTimeAsync(300);
+        expect(fn).toHaveBeenCalledOnce();
+
+        await adaptive.stop();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('arms exactly one wake when idle and re-arms one at the coarse boundary (no busy loop)', async () => {
       vi.useFakeTimers();
       try {

@@ -16,8 +16,12 @@ const SCAN_ROOTS = [join(SRC_ROOT, 'core'), join(SRC_ROOT, 'faculties')];
 // Files that legitimately reference `.complete(` without being an autonomous
 // leaf call site:
 //  - contracts.ts defines the LLMProviderPort adapter (forwarding definition).
+//  - subagents/work-spec.ts is a forwarding provider decorator (mmo9.7.7) that
+//    THREADS the work spec onto the wrapped provider's calls — it adds the spec
+//    rather than omitting it, the same role as the contracts.ts adapter.
 const ALLOWLIST = new Set<string>([
   'core/agent/contracts.ts',
+  'faculties/subagents/work-spec.ts',
 ]);
 
 function listTsFiles(root: string): string[] {

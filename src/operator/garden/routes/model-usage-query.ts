@@ -16,6 +16,7 @@ import {
   MODEL_USAGE_CHARGE_SURFACES,
   MODEL_USAGE_GROUP_DIMENSIONS,
   MODEL_USAGE_ORIGIN_TYPES,
+  MODEL_USAGE_RUNTIME_LANE_CLASSES,
 } from '../../../shared/telemetry/model-usage-attribution.js';
 import { resolveModelUsageRange } from '../../../shared/telemetry/model-usage-range.js';
 
@@ -60,6 +61,7 @@ const ENUM_FIELDS: Readonly<Record<string, readonly string[]>> = {
   callType: MODEL_USAGE_CALL_TYPES,
   originType: MODEL_USAGE_ORIGIN_TYPES,
   channelType: MODEL_USAGE_CHANNEL_TYPES,
+  runtimeLaneClass: MODEL_USAGE_RUNTIME_LANE_CLASSES,
   chargeLane: MODEL_USAGE_CHARGE_LANES,
   chargeSurface: MODEL_USAGE_CHARGE_SURFACES,
   status: MODEL_USAGE_STATUSES,

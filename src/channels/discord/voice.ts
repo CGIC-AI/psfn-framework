@@ -116,6 +116,11 @@ export class DiscordVoiceRuntime {
   private connectionGeneration = 0;
   private connectionStateListener: ((oldState: VoiceConnection['state'], newState: VoiceConnection['state']) => void) | null = null;
   private activeTurn: ActiveVoiceTurn | null = null;
+  /**
+   * psfn-framework-mmo9.7.5: last spoken assistant utterance, replayed locally
+   * on a deterministic "repeat" control intent without a model turn.
+   */
+  private lastAssistantUtterance: string | null = null;
   private decryptFailureGeneration = 0;
   private decryptFailureCount = 0;
   private decryptRecoveryAttempts: number[] = [];

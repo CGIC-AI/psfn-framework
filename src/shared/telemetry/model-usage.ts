@@ -13,6 +13,7 @@ import type {
   ModelUsageChargeLane,
   ModelUsageChargeSurface,
   ModelUsageGroupDimension,
+  ModelUsageRuntimeLaneClass,
 } from './model-usage-attribution.js';
 
 export {
@@ -22,12 +23,14 @@ export {
   MODEL_USAGE_CHARGE_SURFACES,
   MODEL_USAGE_GROUP_DIMENSIONS,
   MODEL_USAGE_ORIGIN_TYPES,
+  MODEL_USAGE_RUNTIME_LANE_CLASSES,
   MODEL_USAGE_UNKNOWN_DIMENSION,
 } from './model-usage-attribution.js';
 export type {
   ModelUsageAttribution,
   ModelUsageAttributionInput,
   ModelUsageGroupDimension,
+  ModelUsageRuntimeLaneClass,
 } from './model-usage-attribution.js';
 
 export const MODEL_USAGE_CALL_KINDS = [
@@ -201,6 +204,7 @@ export interface ModelUsageQuery {
   turnId?: string;
   requestId?: string;
   toolCallId?: string;
+  runtimeLaneClass?: ModelUsageRuntimeLaneClass;
   chargeLane?: ModelUsageChargeLane;
   chargeSurface?: ModelUsageChargeSurface;
   chargeEventId?: string;

@@ -22,6 +22,75 @@ type CacheControlMechanism = Extract<
 export interface PromptCacheCorrelation {
   requestId?: string;
   channelId?: string;
+  /**
+   * Companion identity — the MANDATORY outer cache-isolation scope. Without it
+   * two companions' affinity tokens cannot be proven disjoint, so the
+   * derivation fails closed (no token, cache not engaged for session-keyed
+   * providers). This is the load-bearing cross-companion invariant.
+   */
+  companionId?: string;
+  /**
+   * Canonical ingress-resolved subject contact
+   * (`CorrelationMetadata.viewerMemorySubjectContactId`, never model supplied).
+   * Folded into the affinity token as defense in depth so contact-private
+   * content that reaches the cacheable prefix can never share a cache entry
+   * across contacts, even in the (pathological) case of a shared channel id.
+   */
+  viewerMemorySubjectContactId?: string;
+}
+
+/**
+ * Why a channel/request-scoped affinity token could not be derived. The token
+ * is fail-closed: a missing outer (companion) or inner (channel/request) scope
+ * yields no token rather than a boundary-crossing one.
+ */
+export type PromptCacheScopeFailure = 'missing_companion_id' | 'missing_channel_id';
+
+function trimmedScopeValue(value: string | undefined): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * Resolve the provider affinity/cache token, or a structured failure reason.
+ *
+ * Structural cross-companion / cross-contact isolation (fail-closed):
+ * - `companionId` is the mandatory OUTER scope. Absent → `missing_companion_id`
+ *   (no token): two companions can never be proven to have disjoint tokens
+ *   without it.
+ * - the INNER scope is the channel id ('channel' scope) or request id
+ *   ('request' scope); the channel id already encodes the conversation
+ *   (`dm:<contactId>` / `room:<id>`). Absent → `missing_channel_id`.
+ * - the canonical subject contact is folded in as defense in depth.
+ *
+ * Fields are length-prefixed and domain-separated before hashing so no two
+ * distinct (companion, contact, scope, inner) tuples can ever collide onto one
+ * token. Providers receive only the hash — raw internal / channel / contact
+ * identifiers never leave the process — and equal tuples still map to a stable
+ * affinity token so caching works within a scope.
+ */
+export function resolvePromptCacheAffinity(
+  scope: PromptCacheScope,
+  correlation: PromptCacheCorrelation | undefined,
+): { sessionId: string } | { failure: PromptCacheScopeFailure } {
+  const companionId = trimmedScopeValue(correlation?.companionId);
+  if (!companionId) return { failure: 'missing_companion_id' };
+  const inner = scope === 'request'
+    ? trimmedScopeValue(correlation?.requestId)
+    : trimmedScopeValue(correlation?.channelId);
+  if (!inner) return { failure: 'missing_channel_id' };
+  const contactId = trimmedScopeValue(correlation?.viewerMemorySubjectContactId) ?? '';
+  const material = [
+    'psfnpc.v2',
+    `companion:${companionId.length}:${companionId}`,
+    `contact:${contactId.length}:${contactId}`,
+    `scope:${scope}`,
+    `inner:${inner.length}:${inner}`,
+  ].join('\u0000');
+  return {
+    sessionId: `psfnpc-${createHash('sha256').update(material).digest('hex').slice(0, 24)}`,
+  };
 }
 
 export interface PromptCacheRequestOptions<PayloadModel = unknown> {
@@ -49,14 +118,8 @@ function resolveSessionIdForScope(
   scope: PromptCacheScope,
   correlation: PromptCacheCorrelation | undefined,
 ): string | undefined {
-  const raw = scope === 'request'
-    ? correlation?.requestId
-    : correlation?.channelId;
-  if (!raw) return undefined;
-  // Providers receive this as an affinity/cache key (e.g. Mistral x-affinity,
-  // OpenAI prompt_cache_key). Hash so raw internal/channel identifiers never
-  // leave the process; equal inputs still map to a stable affinity token.
-  return `psfnpc-${createHash('sha256').update(raw).digest('hex').slice(0, 16)}`;
+  const resolved = resolvePromptCacheAffinity(scope, correlation);
+  return 'sessionId' in resolved ? resolved.sessionId : undefined;
 }
 
 function supportsCacheControlBreakpoints(
@@ -102,15 +165,15 @@ export function buildPromptCacheObservability(
     };
   }
 
-  const sessionId = resolvePromptCacheSessionId(input);
-  if (!sessionId) {
+  const affinity = resolvePromptCacheAffinity(scope, input.correlation);
+  if ('failure' in affinity) {
     return {
       configured: true,
       engaged: false,
       strategy: input.promptCacheStrategy,
       retention,
       scope,
-      reason: 'missing_channel_id',
+      reason: affinity.failure,
     };
   }
 
@@ -120,7 +183,7 @@ export function buildPromptCacheObservability(
     strategy: input.promptCacheStrategy,
     retention,
     scope,
-    sessionId,
+    sessionId: affinity.sessionId,
   };
 }
 

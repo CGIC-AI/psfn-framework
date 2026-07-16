@@ -149,7 +149,7 @@ describe('AdminGroupMemoryDataService', () => {
     const settings = makeSettings();
     const entries = [
       makeEntry(1, 'alice', 'Alice', 'Lyra, remember I prefer jasmine tea.'),
-      makeEntry(2, 'bob', 'Bob', 'My brother Vega is helping with moderation.'),
+      makeEntry(2, 'bob', 'Bob', 'My brother Dave is helping with moderation.'),
       makeEntry(3, 'alice', 'Alice', 'lol'),
     ];
     const contacts = [

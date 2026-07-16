@@ -92,9 +92,9 @@ describe('satellite registry admin API route', () => {
                 clientCertSubject: 'CN=amica-browser',
               },
               defaultIdentity: {
-                authorId: 'vega',
-                authorName: 'Vega',
-                canonicalContactId: 'contact-vega',
+                authorId: 'primary-user',
+                authorName: 'Primary User',
+                canonicalContactId: 'contact-primary-user',
                 channelPrivacy: 'private',
               },
               maxCapabilities: ['text', 'audio_input', 'speech_to_text', 'audio_output', 'text_to_speech', 'vision'],

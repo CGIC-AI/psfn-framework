@@ -549,6 +549,16 @@ group: cert-manager.io
       optional: true
 {{- end -}}
 
+{{/*
+BEGIN GENERATED PER-COMPANION OWNER FILES
+Source of truth: src/system/config/settings-contract.ts PER_COMPANION_OWNER_FILES.
+Checked by scripts/verify-helm-owner-file-registry.ts; do not edit independently.
+*/}}
+{{- define "psfn.perCompanionOwnerFilePattern" -}}
+capability-tier.json|scheduler.json|charge-policy.json|skills.json
+{{- end -}}
+{{/* END GENERATED PER-COMPANION OWNER FILES */}}
+
 {{- define "psfn.seedInitContainer" -}}
 - name: seed-runtime-files
   image: {{ include "psfn.image" (dict "root" . "image" .Values.workloads.agent.image) | quote }}
@@ -575,7 +585,16 @@ group: cert-manager.io
       for src in {{ .Values.runtime.configDir }}/*.seed.json; do
         [ -e "$src" ] || continue
         base="$(basename "$src")"
-        target="{{ .Values.runtime.systemDataDir }}/${base%.seed.json}.json"
+        owner_file="${base%.seed.json}.json"
+        case "$owner_file" in
+          {{ include "psfn.perCompanionOwnerFilePattern" . }})
+            target_root={{ .Values.runtime.companionDataDir | quote }}
+            ;;
+          *)
+            target_root={{ .Values.runtime.systemDataDir | quote }}
+            ;;
+        esac
+        target="$target_root/$owner_file"
         if [ ! -e "$target" ]; then
           cp "$src" "$target"
         fi

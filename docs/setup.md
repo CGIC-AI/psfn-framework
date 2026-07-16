@@ -45,18 +45,20 @@ The runtime ignores mutable settings that are owned by JSON files. Do not use `.
 
 ## What Goes In JSON Owner Files
 
-Mutable runtime/admin configuration lives under the system-data config domain:
+Mutable runtime/admin configuration lives in canonical JSON owner files.
+Cluster-global owners live under `SYSTEM_DATA_DIR`; the four files marked below
+live under each companion's `COMPANION_DATA_DIR`:
 
 - `settings.json`
 - `models.json`
 - `providers.json`
-- `scheduler.json`
-- `capability-tier.json`
+- `scheduler.json` (per companion)
+- `capability-tier.json` (per companion)
 - `channels.json`
-- `skills.json`
+- `skills.json` (per companion)
 - `trust-policy.json`
 - `intake-policy.json`
-- `charge-policy.json`
+- `charge-policy.json` (per companion)
 - `backup.json`
 
 Startup verifies the seed-backed owner files before the split runtime comes up. Distributed `config/*.seed.json` files are examples/templates only; PSFN does not silently copy them into runtime state.
@@ -77,7 +79,7 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
    PSFN_BACKUP_ENCRYPTION_KEY=<long random secret>
    ```
 
-2. Intentionally copy the example owner files into the system data directory and edit them for this deployment:
+2. Intentionally copy the example owner files into the shared local data directory and edit them for this deployment:
 
    ```bash
    cp config/settings.seed.json ./data/settings.json
@@ -91,6 +93,13 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
    cp config/backup.seed.json ./data/backup.json
    cp config/skills.seed.json ./data/skills.json
    ```
+
+   For production split roots, copy `scheduler.json`,
+   `capability-tier.json`, `charge-policy.json`, and `skills.json` to
+   `COMPANION_DATA_DIR` instead. In fleet mode repeat those four files for every
+   companion root; the remaining owner files are copied once to
+   `SYSTEM_DATA_DIR`. Startup rejects a missing per-companion file and never
+   falls back to a system-root decoy.
 
    The `models.seed.json` template ships `promptCaching.enabled: true`, so new deployments engage provider prompt caching on the byte-stable system-prompt prefix out of the box (Anthropic / OpenRouter→Anthropic get `cache_control` breakpoints; other providers get the stable-prefix benefit plus telemetry, no wire change). Set `promptCaching.enabled: false` in `models.json` to fully disable it. Tune lifetime with `promptCaching.retention` (`none`/`short`/`long`, default `short`) and the session key with `promptCaching.scope` (`channel`/`request`, default `channel`).
 

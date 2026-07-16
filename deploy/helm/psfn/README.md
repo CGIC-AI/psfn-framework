@@ -98,9 +98,17 @@ CHARACTER_CARD_PATH=/app/companion-data/companion.json
 `system-data`, `companion-data`, `workspace`, `runtime`, and `model-cache` are
 PVC-backed. The seed init container creates the runtime directories and, only
 when `bootstrap.seedOwnerFiles=true`, copies `/app/config/*.seed.json` into
-`system-data` for any missing owner file. It never overwrites Garden-edited
-owner files. A starter `companion.json` ConfigMap is copied once into
-`companion-data` only if no companion card exists.
+the correct root for any missing owner file. Cluster-global owners go to
+`system-data`; `capability-tier.json`, `scheduler.json`, `charge-policy.json`,
+and `skills.json` go to this release's `companion-data`. It never creates a
+system-data decoy for those per-companion files and never overwrites
+Garden-edited owner files. A starter `companion.json` ConfigMap is copied once
+into `companion-data` only if no companion card exists.
+
+This chart renders one companion per release. For a fleet installed as multiple
+releases, set each release's `runtime.companionDataDir` to its intended isolated
+root; the same bootstrap partition seeds every release's per-companion owners
+there while the cluster-global owners remain in `runtime.systemDataDir`.
 
 `bootstrap.seedOwnerFiles` defaults to `false`. With it disabled, absent owner
 files fail closed at startup with the runtime's `loadRequiredJson` error rather

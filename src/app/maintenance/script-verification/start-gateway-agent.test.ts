@@ -1,12 +1,124 @@
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import { deriveCompanionAuthToken } from '../../../boundary/gateway/companion-auth.js';
+import { PER_COMPANION_OWNER_FILES } from '../../../system/config/settings-contract.js';
 
 const repoRoot = process.cwd();
 const runtimeEnvPath = join(repoRoot, 'scripts/system/runtime-env.sh');
+
+const startupOwnerSeeds = [
+  ['settings.seed.json', 'settings.json'],
+  ['models.seed.json', 'models.json'],
+  ['providers.seed.json', 'providers.json'],
+  ['trust-policy.seed.json', 'trust-policy.json'],
+  ['scheduler.seed.json', 'scheduler.json'],
+  ['capability-tier.seed.json', 'capability-tier.json'],
+  ['charge-policy.seed.json', 'charge-policy.json'],
+  ['backup.seed.json', 'backup.json'],
+  ['skills.seed.json', 'skills.json'],
+  ['intake-policy.seed.json', 'intake-policy.json'],
+] as const;
+
+function seedStartupOwnerRoots(systemDataDir: string, companionDataDirs: readonly string[]): void {
+  mkdirSync(systemDataDir, { recursive: true });
+  for (const companionDataDir of companionDataDirs) {
+    mkdirSync(companionDataDir, { recursive: true });
+  }
+  for (const [seedFile, ownerFile] of startupOwnerSeeds) {
+    const roots = PER_COMPANION_OWNER_FILES.has(ownerFile)
+      ? companionDataDirs
+      : [systemDataDir];
+    for (const root of roots) {
+      copyFileSync(join(repoRoot, 'config', seedFile), join(root, ownerFile));
+    }
+  }
+}
+
+function makeRealPreflightLauncher(): {
+  gatewayStartedPath: string;
+  run(env: NodeJS.ProcessEnv): { output: string; status: number };
+  workDir: string;
+} {
+  const workDir = mkdtempSync(join(tmpdir(), 'psfn-launcher-real-preflight-'));
+  const scriptsDir = join(workDir, 'scripts');
+  const systemScriptsDir = join(scriptsDir, 'system');
+  const tsxDir = join(workDir, 'node_modules/.bin');
+  const fakeBinDir = join(workDir, 'fake-bin');
+  const gatewayStartedPath = join(workDir, 'gateway-started');
+  mkdirSync(systemScriptsDir, { recursive: true });
+  mkdirSync(tsxDir, { recursive: true });
+  mkdirSync(fakeBinDir, { recursive: true });
+  copyFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), join(scriptsDir, 'start-gateway-agent.sh'));
+  chmodSync(join(scriptsDir, 'start-gateway-agent.sh'), 0o755);
+  copyFileSync(runtimeEnvPath, join(systemScriptsDir, 'runtime-env.sh'));
+  const realTsxCli = join(repoRoot, 'node_modules/tsx/dist/cli.mjs');
+  writeFileSync(join(tsxDir, 'tsx'), [
+    '#!/usr/bin/env bash',
+    'case "$1" in',
+    '  scripts/preflight-startup-owner-files.ts)',
+    `    exec ${JSON.stringify(process.execPath)} ${JSON.stringify(realTsxCli)} ${JSON.stringify(join(repoRoot, 'scripts/preflight-startup-owner-files.ts'))}`,
+    '    ;;',
+    '  scripts/resolve-companion-fleet.ts)',
+    `    exec ${JSON.stringify(process.execPath)} ${JSON.stringify(realTsxCli)} ${JSON.stringify(join(repoRoot, 'scripts/resolve-companion-fleet.ts'))}`,
+    '    ;;',
+    '  scripts/provision-companion-fleet.ts) exit 0 ;;',
+    '  scripts/resolve-single-companion-auth.ts) printf "v1.agent-proof\\tv1.worker-proof\\n" ;;',
+    '  src/app/gateway/main.ts)',
+    `    printf "started\\n" > ${JSON.stringify(gatewayStartedPath)}`,
+    '    exit 23',
+    '    ;;',
+    '  *) exit 97 ;;',
+    'esac',
+  ].join('\n'), { mode: 0o755 });
+  writeFileSync(join(fakeBinDir, 'node'), [
+    '#!/usr/bin/env bash',
+    'if [ "$1" = "-p" ]; then printf "22\\n"; else printf "v22.0.0\\n"; fi',
+  ].join('\n'), { mode: 0o755 });
+
+  return {
+    gatewayStartedPath,
+    workDir,
+    run(env) {
+      const output = execFileSync('bash', ['-lc', [
+        'set +e',
+        './scripts/start-gateway-agent.sh >launcher.out 2>&1',
+        'status=$?',
+        'set -e',
+        'cat launcher.out',
+        'printf "\\nlauncher_status=%s\\n" "$status"',
+      ].join('\n')], {
+        cwd: workDir,
+        encoding: 'utf8',
+        timeout: 20_000,
+        env: {
+          PATH: `${fakeBinDir}:/usr/bin:/bin`,
+          HOME: process.env.HOME,
+          PSFN_SKIP_DOTENV: 'true',
+          XDG_RUNTIME_DIR: join(workDir, 'run'),
+          GATEWAY_SOCKET: join(workDir, 'run', 'gateway.sock'),
+          CONFIG_DIR: join(repoRoot, 'config'),
+          COMPANION_ID: 'verification-companion',
+          POSTGRES_DATABASE_URL: 'postgres://verification:verification@127.0.0.1/verification',
+          ...env,
+        },
+      });
+      const match = /launcher_status=(\d+)/u.exec(output);
+      return { output, status: Number(match?.[1] ?? -1) };
+    },
+  };
+}
 
 describe('start-gateway-agent launcher supervision', () => {
   it('has valid bash syntax', () => {
@@ -60,18 +172,27 @@ describe('start-gateway-agent launcher supervision', () => {
     );
     expect(launcher).not.toContain('migrate-scheduler-owner');
     expect(launcher).not.toContain('migrate:scheduler-owner');
+    expect(launcher).not.toContain('scripts/verify-startup-owner-files.ts');
+    expect(launcher).not.toContain('npm run verify:startup-owner-files');
     expect(launcher).toContain(
       [
         'echo "[${MODE_LABEL}] verifying startup owner files..."',
         'if [ -x "./node_modules/.bin/tsx" ]; then',
-        '  ./node_modules/.bin/tsx scripts/verify-startup-owner-files.ts',
+        '  ./node_modules/.bin/tsx scripts/preflight-startup-owner-files.ts',
         'else',
-        '  npm run verify:startup-owner-files',
+        '  npm run preflight:startup-owner-files',
         'fi',
         '',
         'echo "[${MODE_LABEL}] starting gateway..."',
       ].join('\n'),
     );
+    const runtimePreflight = readFileSync(
+      join(repoRoot, 'scripts/preflight-startup-owner-files.ts'),
+      'utf8',
+    );
+    const gateway = readFileSync(join(repoRoot, 'src/app/gateway/main.ts'), 'utf8');
+    expect(runtimePreflight).toContain('const config = loadConfig();');
+    expect(gateway).toContain('const config = loadConfig();');
     expect(launcher).toContain(
       [
         'echo "[${MODE_LABEL}] lifecycle restart requested; stopping children and re-execing launcher"',
@@ -94,6 +215,106 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(migration).not.toContain('SYSTEM_DATA_DIR');
     expect(migration).not.toContain('process.env.DATA_DIR');
   });
+
+  it('runs the real runtime preflight against legal no-root defaults used by the gateway', () => {
+    const launcher = makeRealPreflightLauncher();
+    const systemDataDir = join(launcher.workDir, 'data');
+    const companionDataDir = join(launcher.workDir, 'companion');
+    seedStartupOwnerRoots(systemDataDir, [companionDataDir]);
+    try {
+      const result = launcher.run({});
+      expect(result.output).toContain('system=./data companion=./companion');
+      expect(readFileSync(launcher.gatewayStartedPath, 'utf8')).toBe('started\n');
+    } finally {
+      rmSync(launcher.workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('runs the real runtime preflight against the gateway explicit split roots', () => {
+    const launcher = makeRealPreflightLauncher();
+    const systemDataDir = join(launcher.workDir, 'explicit-system');
+    const companionDataDir = join(launcher.workDir, 'explicit-companion');
+    seedStartupOwnerRoots(systemDataDir, [companionDataDir]);
+    try {
+      const result = launcher.run({ SYSTEM_DATA_DIR: systemDataDir, COMPANION_DATA_DIR: companionDataDir });
+      expect(result.output).toContain(`system=${systemDataDir} companion=${companionDataDir}`);
+      expect(readFileSync(launcher.gatewayStartedPath, 'utf8')).toBe('started\n');
+    } finally {
+      rmSync(launcher.workDir, { recursive: true, force: true });
+    }
+  });
+
+  it('runs the real runtime preflight across every gateway-resolved fleet root', () => {
+    const launcher = makeRealPreflightLauncher();
+    const runtimeRoot = join(launcher.workDir, 'runtime');
+    const systemDataDir = join(runtimeRoot, 'system-data');
+    const companionA = join(runtimeRoot, 'companions/a');
+    const companionB = join(runtimeRoot, 'companions/b');
+    const companionAId = '11111111-1111-4111-8111-111111111111';
+    seedStartupOwnerRoots(systemDataDir, [companionA, companionB]);
+    writeFileSync(join(systemDataDir, 'companions.json'), `${JSON.stringify({
+      companions: [
+        {
+          companionId: companionAId,
+          companionDataDir: 'companions/a',
+          characterCardPath: 'companions/a/card.json',
+          postgresSchema: 'companion_a',
+        },
+        {
+          companionId: '22222222-2222-4222-8222-222222222222',
+          companionDataDir: 'companions/b',
+          characterCardPath: 'companions/b/card.json',
+          postgresSchema: 'companion_b',
+        },
+      ],
+    }, null, 2)}\n`, 'utf8');
+    try {
+      const result = launcher.run({
+        PSFN_MULTI_COMPANION: '1',
+        PSFN_RUNTIME_ROOT: runtimeRoot,
+        SYSTEM_DATA_DIR: systemDataDir,
+        COMPANION_DATA_DIR: companionA,
+        COMPANION_ID: companionAId,
+        COMPANION_PG_SCHEMA: 'companion_a',
+        CHARACTER_CARD_PATH: join(companionA, 'card.json'),
+        GATEWAY_SESSION_HMAC_KEY: 'test-session-secret',
+      });
+      expect(result.output).toContain(
+        `system=${systemDataDir} fleet=2 companionRoots=${companionA},${companionB}`,
+      );
+      expect(readFileSync(launcher.gatewayStartedPath, 'utf8')).toBe('started\n');
+    } finally {
+      rmSync(launcher.workDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['missing', 'malformed'] as const)(
+    'refuses launcher startup when the real companion owner is %s despite a system decoy',
+    (failureMode) => {
+      const launcher = makeRealPreflightLauncher();
+      const systemDataDir = join(launcher.workDir, 'explicit-system');
+      const companionDataDir = join(launcher.workDir, 'explicit-companion');
+      seedStartupOwnerRoots(systemDataDir, [companionDataDir]);
+      copyFileSync(
+        join(repoRoot, 'config/scheduler.seed.json'),
+        join(systemDataDir, 'scheduler.json'),
+      );
+      if (failureMode === 'missing') {
+        rmSync(join(companionDataDir, 'scheduler.json'));
+      } else {
+        writeFileSync(join(companionDataDir, 'scheduler.json'), '{"tickIntervalMs":"invalid"}\n', 'utf8');
+      }
+      try {
+        const result = launcher.run({ SYSTEM_DATA_DIR: systemDataDir, COMPANION_DATA_DIR: companionDataDir });
+        expect(result.status).not.toBe(0);
+        expect(result.output).toContain('Runtime startup owner-file preflight failed');
+        expect(result.output).toContain(join(companionDataDir, 'scheduler.json'));
+        expect(existsSync(launcher.gatewayStartedPath)).toBe(false);
+      } finally {
+        rmSync(launcher.workDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('prevents a concurrent launcher from mutating fleet workspaces', () => {
     const workDir = mkdtempSync(join(tmpdir(), 'psfn-launcher-concurrent-'));
@@ -124,7 +345,7 @@ describe('start-gateway-agent launcher supervision', () => {
       `    printf 'provisioned\\n' >> '${markerPath}'`,
       '    ;;',
       '  src/app/maintenance/migrate-scheduler-owner.ts) exit 97 ;;',
-      '  scripts/verify-startup-owner-files.ts) exit 0 ;;',
+      '  scripts/preflight-startup-owner-files.ts) exit 0 ;;',
       '  *) sleep 30 ;;',
       'esac',
     ].join('\n'), { mode: 0o755 });
@@ -186,7 +407,7 @@ describe('start-gateway-agent launcher supervision', () => {
         '#!/usr/bin/env bash',
         'case "$1" in',
         '  src/app/maintenance/migrate-scheduler-owner.ts) exit 97 ;;',
-        '  scripts/verify-startup-owner-files.ts) exit 0 ;;',
+        '  scripts/preflight-startup-owner-files.ts) exit 0 ;;',
         '  scripts/resolve-single-companion-auth.ts) printf "v1.agent-proof\\tv1.worker-proof\\n"; exit 0 ;;',
         '  *) sleep 30 ;;',
         'esac',
@@ -338,7 +559,7 @@ describe('start-gateway-agent launcher supervision', () => {
         '#!/usr/bin/env bash',
         'case "$1" in',
         '  src/app/maintenance/migrate-scheduler-owner.ts) exit 97 ;;',
-        '  scripts/verify-startup-owner-files.ts) exit 0 ;;',
+        '  scripts/preflight-startup-owner-files.ts) exit 0 ;;',
         `  scripts/resolve-single-companion-auth.ts) printf "v1.${'a'.repeat(64)}\\tv1.${'b'.repeat(64)}\\n"; exit 0 ;;`,
         '  src/app/gateway/main.ts)',
         '    python3 - "$GATEWAY_SOCKET" <<\'PY\'',
@@ -480,7 +701,7 @@ describe('start-gateway-agent launcher supervision', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     expect(launcher).toContain('psfn_require_node_major 22');
     expect(launcher.indexOf('psfn_require_node_major 22')).toBeLessThan(
-      launcher.indexOf('scripts/verify-startup-owner-files.ts'),
+      launcher.indexOf('scripts/preflight-startup-owner-files.ts'),
     );
   });
 

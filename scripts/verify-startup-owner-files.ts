@@ -1,10 +1,8 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { loadConfig } from '../src/system/config/load-config.js';
-import {
-  verifyStartupFleetOwnerFiles,
-  verifyStartupOwnerFiles,
-} from '../src/system/config/startup-owner-files.js';
+import { PER_COMPANION_OWNER_FILES } from '../src/system/config/settings-contract.js';
+import { verifyStartupOwnerFiles } from '../src/system/config/startup-owner-files.js';
 
 const OWNER_FILE_SEEDS = [
   ['settings.seed.json', 'settings.json'],
@@ -19,98 +17,38 @@ const OWNER_FILE_SEEDS = [
   ['intake-policy.seed.json', 'intake-policy.json'],
 ] as const;
 
-function unquoteEnvValue(value: string): string {
-  const trimmed = value.trim();
-  if (
-    (trimmed.startsWith('"') && trimmed.endsWith('"'))
-    || (trimmed.startsWith("'") && trimmed.endsWith("'"))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  return trimmed;
-}
-
-function loadDotenvPreservingExisting(filePath: string): void {
-  if (!existsSync(filePath)) return;
-  const lines = readFileSync(filePath, 'utf8').split(/\r?\n/);
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-    const withoutExport = trimmed.startsWith('export ') ? trimmed.slice('export '.length).trim() : trimmed;
-    const separatorIndex = withoutExport.indexOf('=');
-    if (separatorIndex <= 0) continue;
-    const key = withoutExport.slice(0, separatorIndex).trim();
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
-    if (process.env[key] !== undefined) continue;
-    process.env[key] = unquoteEnvValue(withoutExport.slice(separatorIndex + 1));
-  }
-}
-
-function seedVerificationEnvDefault(key: string, value: string): void {
-  if (process.env[key]?.trim()) return;
-  process.env[key] = value;
-}
-
-function hasExplicitRuntimeDataRoot(): boolean {
-  return Boolean(
-    process.env.DATA_DIR?.trim()
-    || process.env.SYSTEM_DATA_DIR?.trim()
-    || process.env.COMPANION_DATA_DIR?.trim()
-    || process.env.PSFN_RUNTIME_ROOT?.trim(),
-  );
-}
-
-function createOwnerFileFixtureDataDir(seedDir: string): string {
-  mkdirSync(resolve('tmp'), { recursive: true });
-  const dataDir = mkdtempSync(join(resolve('tmp'), 'verify-startup-owner-files-'));
-  for (const [seedFile, ownerFile] of OWNER_FILE_SEEDS) {
-    copyFileSync(join(seedDir, seedFile), join(dataDir, ownerFile));
-  }
-  return dataDir;
-}
-
-loadDotenvPreservingExisting(process.env.PSFN_DOTENV_FILE?.trim() || '.env');
-seedVerificationEnvDefault('COMPANION_ID', 'verification-companion');
-seedVerificationEnvDefault('POSTGRES_DATABASE_URL', 'postgres://postgres:postgres@127.0.0.1:5432/psfn_verify');
-
-const seedDir = process.env.CONFIG_DIR?.trim() || './config';
-const fixtureDataDir = hasExplicitRuntimeDataRoot()
-  ? undefined
-  : createOwnerFileFixtureDataDir(seedDir);
+const seedDir = resolve(process.env.CONFIG_DIR?.trim() || 'config');
+const fixtureRoot = mkdtempSync(join(tmpdir(), 'psfn-owner-seed-verification-'));
+const systemDataDir = join(fixtureRoot, 'system-data');
+const companionDataDir = join(fixtureRoot, 'companion-data');
+mkdirSync(systemDataDir, { recursive: true });
+mkdirSync(companionDataDir, { recursive: true });
 
 try {
-  if (fixtureDataDir) {
-    process.env.DATA_DIR = fixtureDataDir;
+  for (const [seedFile, ownerFile] of OWNER_FILE_SEEDS) {
+    const ownerRoot = PER_COMPANION_OWNER_FILES.has(ownerFile)
+      ? companionDataDir
+      : systemDataDir;
+    copyFileSync(join(seedDir, seedFile), join(ownerRoot, ownerFile));
   }
 
-  const config = loadConfig();
-  const commonOptions = {
-    dataDir: config.dataDir,
+  const result = verifyStartupOwnerFiles({
+    dataDir: systemDataDir,
+    companionDataDir,
     seedDir,
-    defaultContextWindow: config.defaultContextWindow,
-  };
-  const result = config.companionFleet
-    ? verifyStartupFleetOwnerFiles({
-      ...commonOptions,
-      fleet: config.companionFleet,
-    })
-    : verifyStartupOwnerFiles({
-      ...commonOptions,
-      companionDataDir: config.companionDataDir ?? config.dataDir,
-      multiCompanion: false,
-    });
-
+    defaultContextWindow: 128_000,
+    multiCompanion: false,
+    fleetAuth: false,
+  });
   if (!result.ok) {
-    console.error('Startup owner-file validation failed:');
+    process.stderr.write('Repository owner-file seed validation failed:\n');
     for (const error of result.errors) {
-      console.error(`- ${error}`);
+      process.stderr.write(`- ${error}\n`);
     }
     process.exitCode = 1;
   } else {
-    console.log('Startup owner-file validation passed.');
+    process.stdout.write('Repository owner-file seed validation passed in an isolated split fixture.\n');
   }
 } finally {
-  if (fixtureDataDir) {
-    rmSync(fixtureDataDir, { recursive: true, force: true });
-  }
+  rmSync(fixtureRoot, { recursive: true, force: true });
 }

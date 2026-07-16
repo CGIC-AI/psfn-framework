@@ -65,6 +65,7 @@
     "smoke:discord:dm-voice": "node scripts/discord-dm-voice-smoke.mjs",
     "walkthrough": "tsx src/app/e2e/e2e-walkthrough.ts",
     "lint": "eslint .",
+    "preflight:startup-owner-files": "tsx scripts/preflight-startup-owner-files.ts",
     "verify:startup-owner-files": "tsx scripts/verify-startup-owner-files.ts",
     "resolve:companion-fleet": "tsx scripts/resolve-companion-fleet.ts",
     "provision:companion-fleet": "tsx scripts/provision-companion-fleet.ts",

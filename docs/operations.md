@@ -414,10 +414,13 @@ repeat the exact apply command: only receipt-recorded, digest-identical partial
 copies are accepted. A changed source, changed fleet, pre-existing destination,
 or destination tamper is a hard conflict requiring operator investigation; the
 tool never chooses a winner. After completion, run
-`npm run verify:startup-owner-files` once before restarting the fleet. The
-canonical preflight validates global owners at `SYSTEM_DATA_DIR` once and every
-per-companion owner at each exact root resolved from `companions.json`; an owner
-in another companion root or a system-root decoy cannot satisfy the check.
+`npm run preflight:startup-owner-files` in the target runtime environment before
+restarting the fleet. The runtime preflight validates global owners at
+`SYSTEM_DATA_DIR` once and every per-companion owner at each exact root resolved
+from `companions.json`; an owner in another companion root or a system-root
+decoy cannot satisfy the check. `npm run verify:startup-owner-files` is the
+separate repository gate: it validates distributed seeds in a disposable,
+explicit split-root fixture and is never called by the launcher.
 
 ## Migration Boundary Until Beta
 
@@ -432,7 +435,7 @@ The live alpha migration boundary is defined in [`docs/specifications.md`](./spe
   only as an explicit one-companion alpha owner-shape migration. The standard
   launcher never runs it, and the command refuses to infer a system, shared, or
   companion root. Run it separately for each intended companion, then run the
-  startup-owner preflight before restarting the fleet.
+  runtime startup-owner preflight before restarting the fleet.
 - Use continuous/local `DATA_DIR` only for local development and smoke testing. Production must use split roots and fail closed on shared-root or partial split-root wiring.
 - Keep `WORKSPACE_PATH` as one companion's Personal Workspace. It must not
   overlap runtime data roots; live Purrsephone personal files live under
@@ -441,7 +444,9 @@ The live alpha migration boundary is defined in [`docs/specifications.md`](./spe
   not yet a per-companion isolation boundary; see the workspace warning above.
 - Treat owner-file drift warnings as cleanup signals, not as permission to keep `.env` as mutable config authority.
 - Review config, startup, persistence, and tool-surface changes against the live boundary. If a compatibility path is not named there, reject it, make it fail closed, or track it for beta removal before expanding it.
-- When migration-boundary guidance changes, run `npm run verify:settings-contract` and `npm run verify:startup-owner-files` in addition to the affected runtime validation.
+- When migration-boundary guidance changes, run `npm run verify:settings-contract`
+  and `npm run verify:startup-owner-files`, plus
+  `npm run preflight:startup-owner-files` in the affected runtime environment.
 
 ## Persistence Backends
 
@@ -911,7 +916,11 @@ npm run test:leak-matrix
 - `npm run test:leak-matrix` runs the Context Envelope leak-rate test family (`src/core/session/group-chat-harness/envelope-leak-matrix.test.ts`, E3.6). A documented ~26-row corner matrix (envelope class x sensitivity x trust tier, plus consent/disclosure-boundary/high-intimacy-contact-scope corners) drives the REAL `MemoryRetriever.retrieve` gating pipeline (`evaluateRetrievalAccessDecision` / `evaluateMemoryPolicy`) against synthetic sentinel memories -- not the unit-level gate suite in `src/system/trust/envelope-gating.test.ts` (E3.3), which this suite complements rather than duplicates. Every forbidden corner asserts zero leak of the sentinel text through the assembled output plus the correct withheld reason code (via the label `formatMemoryWithheldReasonLabel` renders); every allowed corner asserts presence, including positive controls for the room->DM-of-member, trust-ceiling, high-intimacy-contact-scope, and consent-granted paths. It reuses the group-chat-harness fixtures and adds a small set of additive fixture variants (a broadcast channel, an anonymous-audience room, and consent-flagged/boundary-tagged/contact-scoped sentinel memories) to `group-chat-harness/fixtures.ts`.
 - `npm run test:prompt-goldens` runs the prompt-shape golden suite (`src/core/session/group-chat-harness/prompt-shape-goldens.test.ts`). Six deterministic golden snapshots under `group-chat-harness/goldens/` freeze the full rendered system prompt plus ordered block list for DM, group, heartbeat, DM-scoped reflection, DM-with-memories, and group-with-withheld-memories turns, and the suite also asserts the frozen static prompt prefix is byte-equal across consecutive turns. A failing golden means the assembled prompt shape changed: never blind re-record. For an intentional shape change, regenerate with `npx vitest run src/core/session/group-chat-harness/prompt-shape-goldens.test.ts -u`, review the golden diff like code, and explain the block-level change in the PR; then run `npm run test:prompt-goldens` twice to prove determinism. The full update procedure is documented in the test file header.
 - `npm run smoke:chat` exercises the split-runtime admin bootstrap and chat completion path; set `PSFN_SMOKE_REPORT_PATH=/tmp/psfn-smoke-report.json` to capture a JSON artifact with the bootstrap, chat, and optional voice checks.
-- `npm run verify:startup-owner-files` is the canonical startup preflight for the split-runtime owner-file contract; `npm run e2e` assumes that preflight has already passed.
+- `npm run verify:startup-owner-files` validates repository seeds against an
+  explicit isolated split-root fixture. `npm run preflight:startup-owner-files`
+  validates the real runtime roots and topology without creating fixtures; the
+  launcher runs it immediately before the gateway. `npm run e2e` uses its own
+  isolated runtime harness.
 - `npm run e2e` uses the isolated split-runtime harness under `src/app/e2e/e2e-test.ts`, with scripted local LLM responses so it does not consume ambient repo owner files or external model credentials.
 - `npm run e2e:voice` exercises the isolated voice round-trip harness on the split runtime.
 - Offline eval, validation, and model-experimentation commands live in the sibling `../psfn-eval-toolkit` repository.

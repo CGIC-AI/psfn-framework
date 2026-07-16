@@ -2082,5 +2082,98 @@ describe('DiscordVoiceRuntime', () => {
         (runtime as any).emitVoiceError(new Error('test error'));
       }).not.toThrow();
     });
+
+    // psfn-framework-mmo9.7.5: spoken transport controls (stop / interrupt /
+    // repeat) must be handled locally with ZERO model-handler invocations.
+    describe('deterministic control-intent guard (mmo9.7.5)', () => {
+      function primeUtterance(text: string): void {
+        connectorMocks.sttConnector.startStream.mockResolvedValue({
+          transcripts: makeFinalTranscriptStream(text),
+          writeAudio: vi.fn(async () => {}),
+          endInput: vi.fn(async () => {}),
+          cancel: vi.fn(async () => {}),
+        });
+        connectorMocks.ttsConnector.synthesizeStream.mockImplementation(async () => ({
+          audio: makeAudioStream(),
+          cancel: vi.fn(async () => {}),
+        }));
+        connectorMocks.ttsConnector.synthesizeBuffer.mockResolvedValue(Buffer.from([9, 9, 9]));
+      }
+
+      it.each(['stop', 'be quiet', 'wait', 'hold on'])(
+        'handles spoken control "%s" locally with zero model invocations',
+        async (phrase) => {
+          primeUtterance(phrase);
+          const eventBus = new EventBus();
+          const handler = vi.fn(async () => ({
+            content: 'should never run',
+            channelId: 'discord-voice:guild-1',
+            metadata: { model: 'test-model', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+          }));
+          const { runtime } = makeRuntimeHarness(eventBus, handler);
+          (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+
+          await (runtime as any).handleUtterance();
+
+          expect(handler).not.toHaveBeenCalled();
+          // stop/interrupt speak nothing back — no synthesis at all.
+          expect(connectorMocks.ttsConnector.synthesizeStream).not.toHaveBeenCalled();
+        },
+      );
+
+      it('does not treat ordinary speech containing a control word as a control', async () => {
+        primeUtterance('stop by the store on your way home');
+        const eventBus = new EventBus();
+        const handler = vi.fn(async () => ({
+          content: 'sure thing',
+          channelId: 'discord-voice:guild-1',
+          metadata: { model: 'test-model', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+        }));
+        const { runtime } = makeRuntimeHarness(eventBus, handler);
+        (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+
+        await (runtime as any).handleUtterance();
+
+        // Ordinary content still reaches the model exactly once.
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(handler.mock.calls[0]![0].content).toBe('stop by the store on your way home');
+      });
+
+      it('replays the last spoken reply on "repeat" with zero model invocations', async () => {
+        let sttCall = 0;
+        connectorMocks.sttConnector.startStream.mockImplementation(async () => ({
+          transcripts: makeFinalTranscriptStream(sttCall++ === 0 ? 'what time is it' : 'repeat that'),
+          writeAudio: vi.fn(async () => {}),
+          endInput: vi.fn(async () => {}),
+          cancel: vi.fn(async () => {}),
+        }));
+        connectorMocks.ttsConnector.synthesizeStream.mockImplementation(async () => ({
+          audio: makeAudioStream(),
+          cancel: vi.fn(async () => {}),
+        }));
+        connectorMocks.ttsConnector.synthesizeBuffer.mockResolvedValue(Buffer.from([9, 9, 9]));
+
+        const eventBus = new EventBus();
+        const handler = vi.fn(async () => ({
+          content: 'the time is noon',
+          channelId: 'discord-voice:guild-1',
+          metadata: { model: 'test-model', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+        }));
+        const { runtime } = makeRuntimeHarness(eventBus, handler);
+        (runtime as any).decodeOpusToPcmStream = vi.fn(() => makePcmStream(40_000));
+
+        // First turn: a real reply, spoken and remembered.
+        await (runtime as any).handleUtterance();
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(connectorMocks.ttsConnector.synthesizeStream).toHaveBeenCalledTimes(1);
+
+        // Second turn: spoken "repeat that" replays the last reply, NO model call.
+        await (runtime as any).handleUtterance();
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(connectorMocks.ttsConnector.synthesizeStream).toHaveBeenCalledTimes(2);
+        const replayCall = connectorMocks.ttsConnector.synthesizeStream.mock.calls[1]![0] as { text: string };
+        expect(replayCall.text).toBe('the time is noon');
+      });
+    });
   });
 });

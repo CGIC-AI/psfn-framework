@@ -10,6 +10,7 @@ import {
   parseFleetAuthorizationRequest,
   type FleetAuthorizationSnapshot,
 } from './fleet-authorization-context.js';
+import { FLEET_AUTH_DEFAULT_ROLE_ACTION_POLICY } from '../fleet-auth/role-action-policy.js';
 
 const PRINCIPAL_ID = '05a5ea76-075b-4c3c-9555-a87b9e0052e5';
 const SESSION_ID = '61dd3958-12ae-494a-87ba-b3cd91975e44';
@@ -249,35 +250,6 @@ describe('fleet authorization context policy', () => {
   });
 
   it('defaults every role/action pair to deny unless the closed code policy explicitly allows it', () => {
-    const explicitlyAllowed: Record<FleetAuthRole, readonly FleetAuthAction[]> = {
-      owner: [
-        'companion.read',
-        'garden.read',
-        'settings.read',
-        'settings.write',
-        'tools.execute',
-        'contacts.bind',
-        'roles.manage',
-        'memory.read.self',
-        'memory.jit.self',
-        'devices.manage',
-        'provider.link',
-      ],
-      admin: [
-        'companion.read',
-        'garden.read',
-        'settings.read',
-        'settings.write',
-        'tools.execute',
-        'contacts.bind',
-        'roles.manage',
-        'memory.read.self',
-        'memory.jit.self',
-        'devices.manage',
-      ],
-      member: ['companion.read', 'memory.read.self', 'memory.jit.self'],
-      guest: ['companion.read'],
-    };
     const noConfigDisables = { owner: [], admin: [], member: [], guest: [] };
     for (const role of FLEET_AUTH_ROLES) {
       for (const action of FLEET_AUTH_ACTIONS) {
@@ -285,7 +257,7 @@ describe('fleet authorization context policy', () => {
         expect(
           decide(candidate, action, noConfigDisables).decision === 'allow',
           `${role} ${action}`,
-        ).toBe(explicitlyAllowed[role].includes(action));
+        ).toBe(FLEET_AUTH_DEFAULT_ROLE_ACTION_POLICY[role].includes(action));
       }
     }
   });

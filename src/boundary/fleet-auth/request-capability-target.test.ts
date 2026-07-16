@@ -26,7 +26,7 @@ describe('Garden fleet request capability target', () => {
     expect(first.resourceDigest).not.toBe(changed.resourceDigest);
     expect(first.targetDigest).not.toBe(changed.targetDigest);
     expect(first.companionId).toBe(companionId);
-    expect(first.action).toBe('garden.read');
+    expect(first.action).toBe('images.read');
     expect(first.resource).toMatchObject({
       scope: 'personal_workspace',
       area: 'images',
@@ -66,7 +66,7 @@ describe('Garden fleet request capability target', () => {
     expect(operator).toEqual(gateway);
     expect(agent).toEqual(gateway);
     expect(operator.body).toBe(body);
-    expect(agent.action).toBe('tools.execute');
+    expect(agent.action).toBe('images.manage');
     expect(agent.resource.routeId).toBe('PATCH /api/admin/images/generated/:id');
   });
 

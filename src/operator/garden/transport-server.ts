@@ -12,7 +12,7 @@ import {
   verifyPeerCertificateSpiffeUri,
 } from '../../shared/net/mtls.js';
 import { bindRequestForResponse, readBodyWithLimit, sendJson, sendText } from '../../channels/backplane/http/primitives.js';
-import type { AdminApiRoute } from './api-routes.js';
+import type { AuthorizedAdminApiRoute } from './api-routes.js';
 import { buildAdminApiRoutes } from './api-routes.js';
 import type { GardenAdminDomainServices } from './admin-contract.js';
 import { AdminServerTelemetryTransport } from './server-telemetry-transport.js';
@@ -43,7 +43,7 @@ export interface GardenAdminTransportServerConfig {
 }
 
 function dispatchAdminApiRoute(
-  routes: readonly AdminApiRoute[],
+  routes: readonly AuthorizedAdminApiRoute[],
   method: string,
   path: string,
   req: IncomingMessage,
@@ -62,7 +62,7 @@ function dispatchAdminApiRoute(
 
 export class GardenAdminTransportServer implements Lifecycle {
   private readonly server: HttpServer | HttpsServer;
-  private readonly routes: AdminApiRoute[];
+  private readonly routes: AuthorizedAdminApiRoute[];
   private readonly telemetryTransport: AdminServerTelemetryTransport;
 
   constructor(

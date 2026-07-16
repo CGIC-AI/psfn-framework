@@ -39,7 +39,8 @@ import { buildAdminIntakeQuarantineRoutes } from './routes/intake-quarantine-rou
 import type { AdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
 import { buildAdminDriftReviewRoutes } from './routes/drift-review-routes.js';
 import type { AdminDriftReviewService } from './services/drift-review-service.js';
-import type { AdminApiRoute } from './routes/types.js';
+import type { AdminApiRoute, AuthorizedAdminApiRoute } from './routes/types.js';
+import { compileGardenRouteDeclarations } from '../../boundary/fleet-auth/garden-route-capabilities.js';
 import type {
   AdminActionPipeService,
   AdminAdaptiveToolsService,
@@ -91,7 +92,7 @@ import type { GroupMemoryBackfillInput } from '../../faculties/memory/extraction
 import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import { buildAdminSharedWorkspaceRoutes } from './api-routes-shared-workspace.js';
 
-export type { AdminApiRoute } from './routes/types.js';
+export type { AdminApiRoute, AuthorizedAdminApiRoute } from './routes/types.js';
 
 const ADMIN_MODELS_API_PATH = '/api/admin/models';
 const ADMIN_MODELS_REFRESH_API_PATH = '/api/admin/models/refresh';
@@ -306,7 +307,7 @@ export function buildAdminApiRoutes(options: {
     actor?: AdminAuditActor,
   ) => void;
   withBody: (req: IncomingMessage, res: ServerResponse, cb: (body: string) => void) => void;
-}): AdminApiRoute[] {
+}): AuthorizedAdminApiRoute[] {
   const {
     config,
     dashboardService,
@@ -419,7 +420,7 @@ export function buildAdminApiRoutes(options: {
     });
   };
 
-  return [
+  return compileGardenRouteDeclarations([
     ...(sharedWorkspaceService
       ? buildAdminSharedWorkspaceRoutes({ service: sharedWorkspaceService, withBody })
       : []),
@@ -1129,5 +1130,5 @@ export function buildAdminApiRoutes(options: {
         });
       },
     },
-  ];
+  ] satisfies AdminApiRoute[]);
 }

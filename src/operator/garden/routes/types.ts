@@ -5,12 +5,15 @@ import type {
   AdminAuditActor,
   AdminAuditDecision,
 } from '../types.js';
+import type { AuthorizedGardenRoute } from '../../../boundary/fleet-auth/garden-route-capabilities.js';
 
 export interface AdminApiRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   match: RouteMatcher;
   handle: (req: IncomingMessage, res: ServerResponse, params: RouteParams) => void;
 }
+
+export type AuthorizedAdminApiRoute = AuthorizedGardenRoute<AdminApiRoute>;
 
 export type AdminBodyReader = (
   req: IncomingMessage,

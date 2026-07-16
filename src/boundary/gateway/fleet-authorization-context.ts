@@ -2,9 +2,9 @@ import {
   FLEET_AUTH_ACTIONS,
   type FleetAuthAction,
   type FleetAuthConfig,
-  type FleetAuthRole,
 } from '../../system/config/fleet-auth-config.js';
 import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
+import { fleetAuthRoleAllowsAction } from '../fleet-auth/role-action-policy.js';
 
 export type FleetAuthorizationDenialReason =
   | 'malformed_request'
@@ -385,44 +385,6 @@ function deny(reasonCode: FleetAuthorizationDenialReason): FleetAuthorizationEva
   return { decision: 'deny', reasonCode };
 }
 
-function roleAllowsAction(role: FleetAuthRole, action: FleetAuthAction): boolean {
-  switch (role) {
-    case 'owner': {
-      const allowedActions: readonly FleetAuthAction[] = [
-        'companion.read',
-        'garden.read',
-        'settings.read',
-        'settings.write',
-        'tools.execute',
-        'contacts.bind',
-        'roles.manage',
-        'memory.read.self',
-        'memory.jit.self',
-        'devices.manage',
-        'provider.link',
-      ];
-      return allowedActions.includes(action);
-    }
-    case 'admin':
-      return action === 'companion.read'
-        || action === 'garden.read'
-        || action === 'settings.read'
-        || action === 'settings.write'
-        || action === 'tools.execute'
-        || action === 'contacts.bind'
-        || action === 'roles.manage'
-        || action === 'memory.read.self'
-        || action === 'memory.jit.self'
-        || action === 'devices.manage';
-    case 'member':
-      return action === 'companion.read'
-        || action === 'memory.read.self'
-        || action === 'memory.jit.self';
-    case 'guest':
-      return action === 'companion.read';
-  }
-}
-
 export function evaluateFleetAuthorizationSnapshot(input: {
   request: FleetAuthorizationRequest;
   snapshot: FleetAuthorizationSnapshot;
@@ -507,7 +469,7 @@ export function evaluateFleetAuthorizationSnapshot(input: {
   if (activeGrants.length !== 1) return deny('role_ambiguous');
   const grant = activeGrants[0]!;
   if (grant.tombstoned) return deny('role_tombstoned');
-  if (!roleAllowsAction(grant.role, request.action)
+  if (!fleetAuthRoleAllowsAction(grant.role, request.action)
     || input.disabledActionsByRole[grant.role].includes(request.action)) {
     return deny('role_action_denied');
   }

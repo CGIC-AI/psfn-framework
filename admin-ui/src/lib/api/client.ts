@@ -80,6 +80,35 @@ export async function apiGet<T>(path: string): Promise<T> {
   return res.json();
 }
 
+export type ApiConditionalGetResult =
+  | { kind: 'not_modified'; etag: string | null }
+  | { kind: 'data'; data: unknown; etag: string | null };
+
+/**
+ * Explicit conditional read for IndexedDB-owned local-first resources. The
+ * response body stays out of the browser HTTP cache so there is one durable
+ * client authority, while the server's existing ETag still avoids unchanged
+ * payload transfer.
+ */
+export async function apiGetConditional(
+  path: string,
+  etag?: string,
+): Promise<ApiConditionalGetResult> {
+  const headers: Record<string, string> = { ...authHeaders(), Accept: 'application/json' };
+  if (etag !== undefined) headers['If-None-Match'] = etag;
+  const res = await fetch(API_BASE + path, {
+    cache: 'no-store',
+    headers,
+    credentials: 'include',
+  });
+  if (res.status === 304) {
+    return { kind: 'not_modified', etag: res.headers.get('etag') };
+  }
+  await throwIfNotOk(res);
+  const data: unknown = await res.json();
+  return { kind: 'data', data, etag: res.headers.get('etag') };
+}
+
 export interface ApiDownload {
   blob: Blob;
   filename: string | null;

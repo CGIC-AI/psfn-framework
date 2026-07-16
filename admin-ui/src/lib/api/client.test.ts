@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, apiGet, apiPostForm } from './client';
+import { ApiError, apiGet, apiGetConditional, apiPostForm } from './client';
 
 function mockFetch(response: Response): void {
   vi.stubGlobal('fetch', vi.fn(async () => response));
@@ -31,6 +31,23 @@ describe('admin api client errors', () => {
     expect(fetch).toHaveBeenCalledWith('/api/admin/sessions', expect.objectContaining({
       cache: 'no-cache',
       credentials: 'include',
+    }));
+  });
+
+  it('sends an explicit ETag and surfaces an unchanged conditional response', async () => {
+    mockFetch(new Response(null, {
+      status: 304,
+      headers: { etag: '"sessions-v1"' },
+    }));
+
+    await expect(apiGetConditional('/api/admin/sessions', '"sessions-v1"')).resolves.toEqual({
+      kind: 'not_modified',
+      etag: '"sessions-v1"',
+    });
+    expect(fetch).toHaveBeenCalledWith('/api/admin/sessions', expect.objectContaining({
+      cache: 'no-store',
+      credentials: 'include',
+      headers: expect.objectContaining({ 'If-None-Match': '"sessions-v1"' }),
     }));
   });
 

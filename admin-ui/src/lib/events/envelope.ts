@@ -75,6 +75,17 @@ export function normalizeGardenEventEnvelope(value: unknown): GardenEventEnvelop
   };
 }
 
+export function normalizeGardenWebSocketMessage(value: unknown): GardenEventEnvelope | null {
+  if (typeof value !== 'string') return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return null;
+  }
+  return normalizeGardenEventEnvelope(parsed);
+}
+
 export function matchesGardenEventFilter(
   event: GardenEventEnvelope,
   filter?: GardenEventFilter,

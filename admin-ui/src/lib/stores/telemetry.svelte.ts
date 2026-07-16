@@ -4,6 +4,8 @@ import {
   connectGardenEventBus,
   disconnectGardenEventBus,
   getTelemetryEvents,
+  getGardenEventCacheError,
+  hydrateGardenEventBus,
   isGardenEventBusConnected,
   isGardenEventBusPaused,
   pauseGardenEventBus,
@@ -12,6 +14,14 @@ import {
 
 export function getEvents(): TelemetryEvent[] {
   return getTelemetryEvents();
+}
+
+export function getTelemetryCacheError(): string | null {
+  return getGardenEventCacheError();
+}
+
+export function hydrateTelemetryCache(): Promise<void> {
+  return hydrateGardenEventBus();
 }
 
 export function isConnected(): boolean {

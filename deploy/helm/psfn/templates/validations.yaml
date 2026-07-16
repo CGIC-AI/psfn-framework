@@ -220,6 +220,15 @@ never back a ClusterIssuer. */ -}}
 {{- if not (trim .Values.ingress.gateway.tls.secretName) -}}
 {{- fail "fleetAuth.enabled=true requires ingress.gateway.tls.secretName" -}}
 {{- end -}}
+{{- if not .Values.networkPolicy.enabled -}}
+{{- fail "fleetAuth.enabled=true requires networkPolicy.enabled=true" -}}
+{{- end -}}
+{{- if .Values.hostPorts.gatewayApi.enabled -}}
+{{- fail "fleetAuth.enabled=true forbids hostPorts.gatewayApi.enabled=true" -}}
+{{- end -}}
+{{- if or (ne .Values.ingress.gateway.path "/") (ne .Values.ingress.gateway.pathType "Prefix") -}}
+{{- fail "fleetAuth.enabled=true requires ingress.gateway.path=/ and pathType=Prefix" -}}
+{{- end -}}
 {{- end -}}
 {{- if .Values.companionUiTest.enabled -}}
 {{- if ne .Values.companionUiTest.service.type "ClusterIP" -}}

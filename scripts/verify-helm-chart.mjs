@@ -1440,7 +1440,7 @@ assertRenderFails([
   'companionUiTest.service.type=NodePort',
 ], 'companionUiTest.service.type must be ClusterIP');
 
-const unifiedOriginRendered = render([
+const fleetAuthRequiredValues = [
   '--set',
   'fleetAuth.enabled=true',
   '--set-string',
@@ -1449,6 +1449,9 @@ const unifiedOriginRendered = render([
   'ingress.gateway.tls.enabled=true',
   '--set-string',
   'ingress.gateway.tls.secretName=psfn-public-origin-tls',
+];
+const unifiedOriginRendered = render([
+  ...fleetAuthRequiredValues,
   '--set',
   'companionUiTest.enabled=true',
   '--set',
@@ -1460,6 +1463,7 @@ const unifiedOriginRendered = render([
 ]);
 const unifiedGateway = findDocumentByKindName(unifiedOriginRendered, 'Deployment', 'psfn-gateway');
 for (const envName of [
+  'PSFN_FLEET_AUTH',
   'FLEET_SSO_TRUST_PROXY',
   'FLEET_SSO_GARDEN_HOST',
   'FLEET_SSO_GARDEN_TLS_CA_PATH',
@@ -1473,13 +1477,25 @@ for (const envName of [
   assertIncludes(unifiedGateway, `name: ${envName}`, `unified-origin gateway ${envName}`);
 }
 assertNotIncludes(unifiedGateway, 'name: ADMIN_TOKEN', 'fleet-on gateway legacy admin credential');
+assertNotIncludes(unifiedGateway, 'name: ADMIN_ALLOW_INSECURE', 'fleet-on gateway insecure admin mode');
+assertNotIncludes(unifiedGateway, 'name: FLEET_STATUS_PORT', 'raw fleet status is not a public workload');
+assertNotIncludes(unifiedGateway, 'hostPort:', 'fleet-on gateway has no direct node listener');
 assertIncludes(unifiedGateway, 'secretName: psfn-gateway-sso-client-tls', 'gateway SSO client certificate');
+
+const unifiedGatewayService = findDocumentByKindName(
+  unifiedOriginRendered,
+  'Service',
+  'psfn-gateway',
+);
+assertIncludes(unifiedGatewayService, 'type: ClusterIP', 'fleet-on gateway internal Service');
+assertNotIncludes(unifiedGatewayService, 'type: NodePort', 'fleet-on gateway direct NodePort');
 
 const unifiedGarden = findDocumentByKindName(unifiedOriginRendered, 'Deployment', 'psfn-garden');
 assertIncludes(unifiedGarden, 'name: https-garden', 'fleet-on Garden TLS listener');
 assertIncludes(unifiedGarden, 'name: FLEET_SSO_GARDEN_TLS_EXPECTED_PEER_SPIFFE_URI', 'Garden gateway SPIFFE check');
 assertIncludes(unifiedGarden, 'secretName: psfn-garden-sso-server-tls', 'Garden SSO server certificate');
 assertNotIncludes(unifiedGarden, 'name: ADMIN_TOKEN', 'fleet-on Garden legacy admin credential');
+assertNotIncludes(unifiedGarden, 'hostPort:', 'fleet-on Garden has no direct node listener');
 
 for (const directIngress of ['psfn-garden', 'psfn-companion-ui-test']) {
   if (findDocumentByKindName(unifiedOriginRendered, 'Ingress', directIngress)) {
@@ -1492,7 +1508,29 @@ if (unifiedIngresses.length !== 1
   throw new Error('fleet-on browser topology must render the Gateway as the sole Ingress');
 }
 assertIncludes(unifiedIngresses[0], 'secretName: "psfn-public-origin-tls"', 'canonical origin TLS Secret');
+assertIncludes(unifiedIngresses[0], 'host: "psfn-gateway.local"', 'canonical origin host');
+assertIncludes(unifiedIngresses[0], 'path: "/"', 'canonical origin root path');
+assertIncludes(unifiedIngresses[0], 'pathType: Prefix', 'canonical origin root path type');
+assertIncludes(unifiedIngresses[0], 'name: psfn-gateway', 'canonical origin gateway backend');
+assertIncludes(unifiedIngresses[0], 'name: http-api', 'canonical origin gateway API port');
 assertNotIncludes(unifiedOriginRendered, 'hostPort: 3001', 'fleet-on direct Garden hostPort');
+const unifiedGardenService = findDocumentByKindName(
+  unifiedOriginRendered,
+  'Service',
+  'psfn-garden',
+);
+assertIncludes(unifiedGardenService, 'type: ClusterIP', 'fleet-on Garden internal Service');
+assertNotIncludes(unifiedGardenService, 'type: NodePort', 'fleet-on Garden direct NodePort');
+const unifiedGatewayPolicy = findDocumentByKindName(
+  unifiedOriginRendered,
+  'NetworkPolicy',
+  'psfn-gateway',
+);
+assertIncludes(
+  unifiedGatewayPolicy,
+  'app.kubernetes.io/name: traefik',
+  'fleet-on gateway admits only the configured ingress controller browser hop',
+);
 const unifiedGardenPolicy = findDocumentByKindName(
   unifiedOriginRendered,
   'NetworkPolicy',
@@ -1544,6 +1582,22 @@ assertRenderFails(
     '--set', 'ingress.gateway.tls.enabled=true',
   ],
   'fleetAuth.enabled=true requires ingress.gateway.tls.secretName',
+);
+assertRenderFails(
+  [...fleetAuthRequiredValues, '--set', 'networkPolicy.enabled=false'],
+  'fleetAuth.enabled=true requires networkPolicy.enabled=true',
+);
+assertRenderFails(
+  [...fleetAuthRequiredValues, '--set', 'hostPorts.gatewayApi.enabled=true'],
+  'fleetAuth.enabled=true forbids hostPorts.gatewayApi.enabled=true',
+);
+assertRenderFails(
+  [...fleetAuthRequiredValues, '--set-string', 'ingress.gateway.path=/fleet'],
+  'fleetAuth.enabled=true requires ingress.gateway.path=/ and pathType=Prefix',
+);
+assertRenderFails(
+  [...fleetAuthRequiredValues, '--set-string', 'ingress.gateway.pathType=Exact'],
+  'fleetAuth.enabled=true requires ingress.gateway.path=/ and pathType=Prefix',
 );
 
 const prefetchRendered = render([

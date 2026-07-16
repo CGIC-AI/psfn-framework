@@ -510,6 +510,23 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(launcher).toContain('ADMIN_ALLOW_INSECURE|ADMIN_TOKEN)');
   });
 
+  it('keeps proxy trust and the raw loopback status listener gateway-owned', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    const agentAllowlist = launcher.slice(
+      launcher.indexOf('build_agent_env()'),
+      launcher.indexOf('# Operator processes receive only'),
+    );
+    const operatorAllowlist = launcher.slice(
+      launcher.indexOf('build_operator_env()'),
+      launcher.indexOf('launch_background()'),
+    );
+    for (const childAllowlist of [agentAllowlist, operatorAllowlist]) {
+      expect(childAllowlist).not.toMatch(/\n\s*FLEET_SSO_TRUST_PROXY\s*\\/u);
+      expect(childAllowlist).not.toMatch(/\n\s*FLEET_STATUS_(?:HOST|PORT)\s*\\/u);
+    }
+    expect(agentAllowlist).not.toMatch(/\n\s*ADMIN_(?:ALLOW_INSECURE|TOKEN)\s*\\/u);
+  });
+
   it('launches the agent with a non-secret environment allowlist', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     const agentAllowlist = launcher.slice(

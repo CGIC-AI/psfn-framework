@@ -9,6 +9,7 @@ import {
 } from '../../../test-support/postgres-test-harness.js';
 import { resolveChargeLedgerPath } from '../../../persistence/layout.js';
 import { createPostgresPool } from '../../../persistence/postgres.js';
+import { derivePostgresTenantRole } from '../../../persistence/postgres/tenancy.js';
 import { readRunChargeRollingWindowFromLedger } from '../../../shared/telemetry/charge-ledger.js';
 import {
   CERTIFICATION_COMPANION_A,
@@ -253,6 +254,47 @@ describe('ICP certification real process harness', () => {
       expect(isolatedContacts.rows).toEqual([
         { schema_name: CERTIFICATION_SCHEMA_A, peer_count: '1' },
         { schema_name: CERTIFICATION_SCHEMA_B, peer_count: '1' },
+      ]);
+      const tenantBoundaries = await pool.query<{
+        extension_schema: string | null;
+        login_is_member: boolean;
+        role_name: string;
+        schema_name: string;
+        schema_owner: string;
+      }>(`
+        SELECT namespace.nspname AS schema_name,
+          owner.rolname AS schema_owner,
+          expected.role_name,
+          pg_has_role(current_user, expected.role_name, 'MEMBER') AS login_is_member,
+          extension_namespace.nspname AS extension_schema
+        FROM (VALUES ($1::text, $2::text), ($3::text, $4::text))
+          AS expected(schema_name, role_name)
+        JOIN pg_namespace namespace ON namespace.nspname = expected.schema_name
+        JOIN pg_roles owner ON owner.oid = namespace.nspowner
+        LEFT JOIN pg_extension extension ON extension.extname = 'vector'
+        LEFT JOIN pg_namespace extension_namespace ON extension_namespace.oid = extension.extnamespace
+        ORDER BY namespace.nspname
+      `, [
+        CERTIFICATION_SCHEMA_A,
+        derivePostgresTenantRole(CERTIFICATION_SCHEMA_A),
+        CERTIFICATION_SCHEMA_B,
+        derivePostgresTenantRole(CERTIFICATION_SCHEMA_B),
+      ]);
+      expect(tenantBoundaries.rows).toEqual([
+        {
+          extension_schema: 'extensions',
+          login_is_member: true,
+          role_name: derivePostgresTenantRole(CERTIFICATION_SCHEMA_A),
+          schema_name: CERTIFICATION_SCHEMA_A,
+          schema_owner: derivePostgresTenantRole(CERTIFICATION_SCHEMA_A),
+        },
+        {
+          extension_schema: 'extensions',
+          login_is_member: true,
+          role_name: derivePostgresTenantRole(CERTIFICATION_SCHEMA_B),
+          schema_name: CERTIFICATION_SCHEMA_B,
+          schema_owner: derivePostgresTenantRole(CERTIFICATION_SCHEMA_B),
+        },
       ]);
     } finally {
       await pool.end();

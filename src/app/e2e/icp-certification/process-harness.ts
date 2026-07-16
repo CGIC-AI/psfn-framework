@@ -20,6 +20,11 @@ import { PostgresIcpFatigueRegulationReservationStore } from '../../../persisten
 import { PostgresIcpInitiationPolicyAuthority } from '../../../persistence/postgres/icp-initiation-policy-authority.js';
 import { PostgresIcpSharedAutonomyStore } from '../../../persistence/postgres/icp-shared-autonomy-store.js';
 import { PostgresModelUsageStore } from '../../../persistence/postgres/model-usage-store.js';
+import {
+  assertPostgresTenantAccessProvisioned,
+  planPostgresTenantAccess,
+  provisionPostgresTenantAccess,
+} from '../../../persistence/postgres/tenancy.js';
 import { loadChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import { loadAgentConfig } from '../../../system/config/load-config.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../../system/config/runtime-config.js';
@@ -384,6 +389,40 @@ async function waitForDestroyed(connection: GatewayRpcConnection): Promise<void>
   });
 }
 
+async function provisionCertificationTenantBoundaries(
+  databaseUrl: string,
+  fixture: IcpCertificationFixture,
+): Promise<void> {
+  const pool = createPostgresPool(databaseUrl, {
+    applicationName: 'psfn-icp-certification-tenant-provisioning',
+    max: 1,
+  });
+  try {
+    const login = await pool.query<{ runtime_login_role: string }>(
+      'SELECT current_user::text AS runtime_login_role',
+    );
+    const runtimeLoginRole = login.rows.at(0)?.runtime_login_role;
+    if (!runtimeLoginRole) {
+      throw new Error('ICP certification could not resolve the disposable PostgreSQL login role');
+    }
+    for (const companion of fixture.companions) {
+      const plan = planPostgresTenantAccess({
+        schema: companion.postgresSchema,
+        approvedSharedSchema: 'shared',
+        approvedSharedAccess: 'read_write',
+      });
+      await provisionPostgresTenantAccess(pool, {
+        plan,
+        runtimeLoginRole,
+        relocateExtensions: ['vector'],
+      });
+      await assertPostgresTenantAccessProvisioned(pool, plan);
+    }
+  } finally {
+    await pool.end();
+  }
+}
+
 export async function startIcpCertificationProcessHarness(input: {
   databaseUrl: string;
   fixture: IcpCertificationFixture;
@@ -426,6 +465,7 @@ export async function startIcpCertificationProcessHarness(input: {
     knownCompanionIds: companionIds,
   });
   const fatigue = await PostgresIcpFatigueRegulationReservationStore.connect(input.databaseUrl);
+  await provisionCertificationTenantBoundaries(input.databaseUrl, input.fixture);
   const chargePolicy = loadChargePolicyConfig(input.fixture.systemDataDir);
   const fleet = input.fixture.companions.map(companion => ({
     companionId: companion.companionId,

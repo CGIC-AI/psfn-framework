@@ -1,17 +1,24 @@
 import {
+  closeSync,
   constants,
-  copyFileSync,
-  existsSync,
+  fstatSync,
+  fsyncSync,
+  linkSync,
   lstatSync,
-  mkdirSync,
+  openSync,
   readFileSync,
-  unlinkSync,
+  writeSync,
 } from 'node:fs';
-import { createHash } from 'node:crypto';
-import { dirname, join, resolve } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { ResolvedCompanionsFleetConfig } from '../system/config/companions-config.js';
 import { PER_COMPANION_OWNER_FILES } from '../system/config/settings-contract.js';
-import { writeJsonAtomic } from '../shared/utils/fs.js';
+import {
+  ensureDirectoryDurableSync,
+  fsyncDirectorySync,
+  unlinkDurableSync,
+  writeFileDurableAtomicSync,
+} from '../shared/utils/fs.js';
 import { isRecord } from '../shared/utils/types.js';
 import { resolveCanonicalPathInsideRoot } from '../system/config/companion-workspace-layout.js';
 
@@ -31,6 +38,7 @@ interface FleetReceiptEntry {
 
 interface DestinationReceiptEntry extends FleetReceiptEntry {
   destinationPath: string;
+  temporaryPath: string;
   sha256: string;
   status: DestinationStatus;
   verifiedAt?: string;
@@ -47,7 +55,7 @@ interface FileReceiptEntry {
 }
 
 interface SystemOwnerFleetMigrationReceipt {
-  schemaVersion: 1;
+  schemaVersion: 2;
   migration: 'system-owner-fleet-reroot';
   status: 'in_progress' | 'completed';
   systemDataDir: string;
@@ -99,21 +107,43 @@ export interface SystemOwnerFleetMigrationOptions {
     companionId: string;
     destinationPath: string;
   }) => void;
-}
-
-function hashFile(path: string): string {
-  return createHash('sha256').update(readFileSync(path)).digest('hex');
+  faultInjection?: (input: {
+    stage:
+      | 'during_temporary_copy'
+      | 'after_temporary_fsync'
+      | 'after_publish'
+      | 'after_publish_directory_sync'
+      | 'before_receipt_update'
+      | 'after_receipt_update'
+      | 'before_source_retirement'
+      | 'after_source_unlink';
+    ownerFile: string;
+    companionId?: string;
+    path: string;
+  }) => void;
+  temporaryId?: () => string;
 }
 
 function inspectRegularFile(path: string, label: string): { bytes: number; sha256: string } {
-  const stats = lstatSync(path);
-  if (stats.isSymbolicLink() || !stats.isFile()) {
-    throw new Error(`${label} must be a regular file without symlinks: ${path}`);
+  let descriptor: number | null = null;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    const stats = fstatSync(descriptor);
+    if (!stats.isFile()) {
+      throw new Error(`${label} must be a regular file without symlinks: ${path}`);
+    }
+    return {
+      bytes: stats.size,
+      sha256: createHash('sha256').update(readFileSync(descriptor)).digest('hex'),
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ELOOP') {
+      throw new Error(`${label} must be a regular file without symlinks: ${path}`);
+    }
+    throw error;
+  } finally {
+    if (descriptor !== null) closeSync(descriptor);
   }
-  return {
-    bytes: stats.size,
-    sha256: hashFile(path),
-  };
 }
 
 function receiptPath(systemDataDir: string): string {
@@ -154,6 +184,7 @@ function isFleetEntry(value: unknown): value is FleetReceiptEntry {
 function isDestinationEntry(value: unknown): value is DestinationReceiptEntry {
   return isFleetEntry(value)
     && typeof value.destinationPath === 'string'
+    && typeof value.temporaryPath === 'string'
     && typeof value.sha256 === 'string'
     && SHA256_PATTERN.test(value.sha256)
     && (value.status === 'pending' || value.status === 'verified')
@@ -179,7 +210,7 @@ function isFileEntry(value: unknown): value is FileReceiptEntry {
 function loadReceipt(path: string): SystemOwnerFleetMigrationReceipt {
   const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
   if (!isRecord(value)
-    || value.schemaVersion !== 1
+    || value.schemaVersion !== 2
     || value.migration !== 'system-owner-fleet-reroot'
     || (value.status !== 'in_progress' && value.status !== 'completed')
     || typeof value.systemDataDir !== 'string'
@@ -196,8 +227,7 @@ function loadReceipt(path: string): SystemOwnerFleetMigrationReceipt {
 }
 
 function writeReceipt(path: string, receipt: SystemOwnerFleetMigrationReceipt): void {
-  mkdirSync(dirname(path), { recursive: true });
-  writeJsonAtomic(path, receipt);
+  writeFileDurableAtomicSync(path, `${JSON.stringify(receipt, null, 2)}\n`);
 }
 
 function assertReceiptIdentity(
@@ -246,6 +276,11 @@ function assertReceiptContents(
       if (destination.companionId !== expected.companionId
         || resolve(destination.companionDataDir) !== expected.companionDataDir
         || resolve(destination.destinationPath) !== expected.destinationPath
+        || dirname(resolve(destination.temporaryPath)) !== dirname(expected.destinationPath)
+        || !basename(destination.temporaryPath).startsWith(
+          `.${basename(expected.destinationPath)}.system-owner-fleet-reroot-`,
+        )
+        || !basename(destination.temporaryPath).endsWith('.tmp')
         || destination.sha256 !== file.sourceSha256
         || (destination.status === 'verified' && !destination.verifiedAt)) {
         throw new Error(`System-owner fleet migration receipt destination mismatch for ${file.ownerFile}`);
@@ -262,7 +297,7 @@ function assertReceiptContents(
   }
 
   for (const ownerFile of registeredOwnerFiles) {
-    if (!receiptOwnerFiles.includes(ownerFile) && existsSync(join(systemDataDir, ownerFile))) {
+    if (!receiptOwnerFiles.includes(ownerFile) && lstatPathExists(join(systemDataDir, ownerFile))) {
       throw new Error(`Untracked system-root per-companion owner file appeared after receipt creation: ${ownerFile}`);
     }
   }
@@ -299,7 +334,7 @@ export function buildSystemOwnerFleetMigrationPlan(input: {
   const systemDataDir = resolve(input.systemDataDir);
   const fleet = fleetEntries(input.fleet);
   const path = receiptPath(systemDataDir);
-  if (existsSync(path)) {
+  if (lstatPathExists(path)) {
     const receipt = loadReceipt(path);
     assertReceiptIdentity(receipt, systemDataDir, fleet);
     assertReceiptContents(receipt, systemDataDir, fleet);
@@ -310,7 +345,7 @@ export function buildSystemOwnerFleetMigrationPlan(input: {
 
   const files = [...PER_COMPANION_OWNER_FILES].map((ownerFile): SystemOwnerFleetMigrationFilePlan => {
     const sourcePath = join(systemDataDir, ownerFile);
-    if (!existsSync(sourcePath)) {
+    if (!lstatPathExists(sourcePath)) {
       return {
         ownerFile,
         sourcePath,
@@ -322,7 +357,7 @@ export function buildSystemOwnerFleetMigrationPlan(input: {
     const destinations = fleet.map((entry): SystemOwnerFleetMigrationDestinationPlan => {
       const destinationPath = join(entry.companionDataDir, ownerFile);
       assertDestinationContained(input.fleet.persistenceRoot, destinationPath, ownerFile);
-      if (!existsSync(destinationPath)) {
+      if (!lstatPathExists(destinationPath)) {
         return { ...entry, destinationPath, status: 'missing' };
       }
       const existing = inspectRegularFile(destinationPath, `${ownerFile} migration destination`);
@@ -357,13 +392,141 @@ export function buildSystemOwnerFleetMigrationPlan(input: {
   };
 }
 
+function buildTemporaryPath(destinationPath: string, temporaryId: string): string {
+  if (!/^[a-zA-Z0-9-]+$/u.test(temporaryId)) {
+    throw new Error('System-owner fleet migration temporary id is invalid');
+  }
+  return join(
+    dirname(destinationPath),
+    `.${basename(destinationPath)}.system-owner-fleet-reroot-${temporaryId}.tmp`,
+  );
+}
+
+function lstatPathExists(path: string): boolean {
+  try {
+    lstatSync(path);
+    return true;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+    throw error;
+  }
+}
+
+function removeOwnedTemporary(path: string): void {
+  const stats = lstatSync(path);
+  if (stats.isSymbolicLink() || !stats.isFile()) {
+    throw new Error(`Migration-owned temporary path is not a regular file: ${path}`);
+  }
+  unlinkDurableSync(path);
+}
+
+function writeAll(descriptor: number, bytes: Buffer): void {
+  let offset = 0;
+  while (offset < bytes.length) {
+    const written = writeSync(descriptor, bytes, offset, bytes.length - offset);
+    if (written <= 0) throw new Error('Temporary owner-file copy made no write progress');
+    offset += written;
+  }
+}
+
+function copySourceToTemporary(input: {
+  file: FileReceiptEntry;
+  destination: DestinationReceiptEntry;
+  faultInjection?: SystemOwnerFleetMigrationOptions['faultInjection'];
+}): void {
+  const { file, destination } = input;
+  if (lstatPathExists(destination.temporaryPath)) {
+    const existing = inspectRegularFile(
+      destination.temporaryPath,
+      `${file.ownerFile} migration temporary`,
+    );
+    if (existing.sha256 === file.sourceSha256 && existing.bytes === file.sourceBytes) {
+      return;
+    }
+    removeOwnedTemporary(destination.temporaryPath);
+  }
+
+  const sourceDescriptor = openSync(
+    file.sourcePath,
+    constants.O_RDONLY | constants.O_NOFOLLOW,
+  );
+  let temporaryDescriptor: number | null = null;
+  try {
+    temporaryDescriptor = openSync(
+      destination.temporaryPath,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
+      0o600,
+    );
+    const sourceBytes = readFileSync(sourceDescriptor);
+    const split = sourceBytes.length > 1 ? Math.ceil(sourceBytes.length / 2) : sourceBytes.length;
+    if (split > 0) writeAll(temporaryDescriptor, sourceBytes.subarray(0, split));
+    input.faultInjection?.({
+      stage: 'during_temporary_copy',
+      ownerFile: file.ownerFile,
+      companionId: destination.companionId,
+      path: destination.temporaryPath,
+    });
+    if (split < sourceBytes.length) writeAll(temporaryDescriptor, sourceBytes.subarray(split));
+    fsyncSync(temporaryDescriptor);
+    input.faultInjection?.({
+      stage: 'after_temporary_fsync',
+      ownerFile: file.ownerFile,
+      companionId: destination.companionId,
+      path: destination.temporaryPath,
+    });
+  } finally {
+    if (temporaryDescriptor !== null) closeSync(temporaryDescriptor);
+    closeSync(sourceDescriptor);
+  }
+  assertSourceUnchanged(file);
+  const temporary = inspectRegularFile(
+    destination.temporaryPath,
+    `${file.ownerFile} migration temporary`,
+  );
+  if (temporary.sha256 !== file.sourceSha256 || temporary.bytes !== file.sourceBytes) {
+    throw new Error(`Temporary copy verification failed for ${file.ownerFile}`);
+  }
+}
+
+function publishDestination(input: {
+  file: FileReceiptEntry;
+  destination: DestinationReceiptEntry;
+  persistenceRoot: string;
+  faultInjection?: SystemOwnerFleetMigrationOptions['faultInjection'];
+}): void {
+  const { file, destination } = input;
+  assertDestinationContained(input.persistenceRoot, destination.destinationPath, file.ownerFile);
+  ensureDirectoryDurableSync(dirname(destination.destinationPath));
+
+  if (!lstatPathExists(destination.destinationPath)) {
+    copySourceToTemporary({ file, destination, faultInjection: input.faultInjection });
+    linkSync(destination.temporaryPath, destination.destinationPath);
+    input.faultInjection?.({
+      stage: 'after_publish',
+      ownerFile: file.ownerFile,
+      companionId: destination.companionId,
+      path: destination.destinationPath,
+    });
+  }
+
+  verifyDestination(file, destination, input.persistenceRoot);
+  fsyncDirectorySync(dirname(destination.destinationPath));
+  input.faultInjection?.({
+    stage: 'after_publish_directory_sync',
+    ownerFile: file.ownerFile,
+    companionId: destination.companionId,
+    path: destination.destinationPath,
+  });
+  if (lstatPathExists(destination.temporaryPath)) removeOwnedTemporary(destination.temporaryPath);
+}
+
 function verifyDestination(
   file: FileReceiptEntry,
   destination: DestinationReceiptEntry,
   persistenceRoot: string,
 ): void {
   assertDestinationContained(persistenceRoot, destination.destinationPath, file.ownerFile);
-  if (!existsSync(destination.destinationPath)) {
+  if (!lstatPathExists(destination.destinationPath)) {
     throw new Error(
       `Verified destination disappeared for ${file.ownerFile}: ${destination.destinationPath}`,
     );
@@ -378,10 +541,19 @@ function verifyDestination(
         + `expected ${file.sourceSha256}, found ${inspected.sha256}`,
     );
   }
+  const descriptor = openSync(
+    destination.destinationPath,
+    constants.O_RDONLY | constants.O_NOFOLLOW,
+  );
+  try {
+    fsyncSync(descriptor);
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 function assertSourceUnchanged(file: FileReceiptEntry): void {
-  if (!existsSync(file.sourcePath)) {
+  if (!lstatPathExists(file.sourcePath)) {
     throw new Error(`Migration source disappeared before retirement: ${file.sourcePath}`);
   }
   const source = inspectRegularFile(file.sourcePath, `${file.ownerFile} migration source`);
@@ -397,7 +569,7 @@ function verifyCompletedReceipt(
   persistenceRoot: string,
 ): void {
   for (const file of receipt.files) {
-    if (file.status !== 'retired' || existsSync(file.sourcePath)) {
+    if (file.status !== 'retired' || lstatPathExists(file.sourcePath)) {
       throw new Error(`Completed migration receipt has a live or unretired source: ${file.sourcePath}`);
     }
     for (const destination of file.destinations) {
@@ -418,7 +590,7 @@ export function executeSystemOwnerFleetMigration(
   const now = options.now ?? (() => new Date());
   let receipt: SystemOwnerFleetMigrationReceipt;
 
-  if (existsSync(path)) {
+  if (lstatPathExists(path)) {
     receipt = loadReceipt(path);
     assertReceiptIdentity(receipt, systemDataDir, fleet);
     assertReceiptContents(receipt, systemDataDir, fleet);
@@ -451,8 +623,9 @@ export function executeSystemOwnerFleetMigration(
     } => file.status === 'ready');
     requireExpectedDigests(sourceFiles, options.expectedSourceDigests);
     const startedAt = now().toISOString();
+    const temporaryId = options.temporaryId ?? randomUUID;
     receipt = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       migration: 'system-owner-fleet-reroot',
       status: 'in_progress',
       systemDataDir,
@@ -465,13 +638,20 @@ export function executeSystemOwnerFleetMigration(
         sourceSha256: file.sourceSha256,
         sourceBytes: file.sourceBytes,
         status: 'pending',
-        destinations: file.destinations.map(destination => ({
-          companionId: destination.companionId,
-          companionDataDir: destination.companionDataDir,
-          destinationPath: destination.destinationPath,
-          sha256: file.sourceSha256,
-          status: 'pending',
-        })),
+        destinations: file.destinations.map(destination => {
+          const temporaryPath = buildTemporaryPath(destination.destinationPath, temporaryId());
+          if (lstatPathExists(temporaryPath)) {
+            throw new Error(`Pre-existing migration temporary path conflicts: ${temporaryPath}`);
+          }
+          return {
+            companionId: destination.companionId,
+            companionDataDir: destination.companionDataDir,
+            destinationPath: destination.destinationPath,
+            temporaryPath,
+            sha256: file.sourceSha256,
+            status: 'pending',
+          };
+        }),
       })),
     };
     writeReceipt(path, receipt);
@@ -479,7 +659,7 @@ export function executeSystemOwnerFleetMigration(
 
   for (const file of receipt.files) {
     if (file.status === 'retired') {
-      if (existsSync(file.sourcePath)) {
+      if (lstatPathExists(file.sourcePath)) {
         throw new Error(`Retired migration source reappeared: ${file.sourcePath}`);
       }
       for (const destination of file.destinations) {
@@ -489,7 +669,7 @@ export function executeSystemOwnerFleetMigration(
     }
 
     const allRecordedVerified = file.destinations.every(destination => destination.status === 'verified');
-    if (!existsSync(file.sourcePath)) {
+    if (!lstatPathExists(file.sourcePath)) {
       if (!allRecordedVerified) {
         throw new Error(`Migration source disappeared before every destination verified: ${file.sourcePath}`);
       }
@@ -511,21 +691,29 @@ export function executeSystemOwnerFleetMigration(
         continue;
       }
       assertSourceUnchanged(file);
-      if (existsSync(destination.destinationPath)) {
-        // Only an in-progress receipt can authorize deterministic recovery of
-        // a copy that landed before its receipt update.
-        verifyDestination(file, destination, options.fleet.persistenceRoot);
-      } else {
-        mkdirSync(dirname(destination.destinationPath), { recursive: true });
-        copyFileSync(file.sourcePath, destination.destinationPath, constants.COPYFILE_EXCL);
-        assertSourceUnchanged(file);
-        verifyDestination(file, destination, options.fleet.persistenceRoot);
-      }
+      publishDestination({
+        file,
+        destination,
+        persistenceRoot: options.fleet.persistenceRoot,
+        faultInjection: options.faultInjection,
+      });
+      options.faultInjection?.({
+        stage: 'before_receipt_update',
+        ownerFile: file.ownerFile,
+        companionId: destination.companionId,
+        path: destination.destinationPath,
+      });
       destination.status = 'verified';
       const verifiedAt = now().toISOString();
       destination.verifiedAt = verifiedAt;
       receipt.updatedAt = verifiedAt;
       writeReceipt(path, receipt);
+      options.faultInjection?.({
+        stage: 'after_receipt_update',
+        ownerFile: file.ownerFile,
+        companionId: destination.companionId,
+        path: destination.destinationPath,
+      });
       options.afterDestinationVerified?.({
         ownerFile: file.ownerFile,
         companionId: destination.companionId,
@@ -537,7 +725,17 @@ export function executeSystemOwnerFleetMigration(
     for (const destination of file.destinations) {
       verifyDestination(file, destination, options.fleet.persistenceRoot);
     }
-    unlinkSync(file.sourcePath);
+    options.faultInjection?.({
+      stage: 'before_source_retirement',
+      ownerFile: file.ownerFile,
+      path: file.sourcePath,
+    });
+    unlinkDurableSync(file.sourcePath);
+    options.faultInjection?.({
+      stage: 'after_source_unlink',
+      ownerFile: file.ownerFile,
+      path: file.sourcePath,
+    });
     file.status = 'retired';
     const retiredAt = now().toISOString();
     file.retiredAt = retiredAt;

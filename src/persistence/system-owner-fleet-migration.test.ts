@@ -5,7 +5,10 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
+  symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -217,5 +220,115 @@ describe('system-owner fleet migration', () => {
       fleet,
       expectedSourceDigests: { 'charge-policy.json': digest },
     })).toThrow(/Destination conflict/);
+  });
+
+  it.each([
+    'during_temporary_copy',
+    'after_temporary_fsync',
+    'after_publish',
+    'after_publish_directory_sync',
+    'before_receipt_update',
+    'after_receipt_update',
+    'before_source_retirement',
+    'after_source_unlink',
+  ] as const)('recovers deterministically from the %s crash window', (stage) => {
+    const { systemDataDir, fleet } = fixture();
+    const sourcePath = join(systemDataDir, 'skills.json');
+    const source = Buffer.from('{"enabled":true,"padding":"crash-window"}\n');
+    const digest = sha256(source);
+    writeFileSync(sourcePath, source);
+    let injected = false;
+
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+      faultInjection: (event) => {
+        if (!injected && event.stage === stage) {
+          injected = true;
+          throw new Error(`crash:${stage}`);
+        }
+      },
+    })).toThrow(`crash:${stage}`);
+    expect(injected).toBe(true);
+
+    expect(executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+    }).status).toBe('migrated');
+    expect(existsSync(sourcePath)).toBe(false);
+    for (const companion of fleet.companions) {
+      expect(readFileSync(join(companion.companionDataDir, 'skills.json'))).toEqual(source);
+      expect(readdirSync(companion.companionDataDir)
+        .filter(name => name.includes('system-owner-fleet-reroot'))).toEqual([]);
+    }
+  });
+
+  it('denies pre-existing or symlinked migration temp/final/source paths', () => {
+    const preexisting = fixture();
+    const source = Buffer.from('{"enabled":true}\n');
+    const digest = sha256(source);
+    writeFileSync(join(preexisting.systemDataDir, 'skills.json'), source);
+    const firstDir = preexisting.fleet.companions[0].companionDataDir;
+    mkdirSync(firstDir, { recursive: true });
+    const preexistingTemp = join(
+      firstDir,
+      '.skills.json.system-owner-fleet-reroot-fixed.tmp',
+    );
+    writeFileSync(preexistingTemp, 'attacker-owned');
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir: preexisting.systemDataDir,
+      fleet: preexisting.fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+      temporaryId: () => 'fixed',
+    })).toThrow(/Pre-existing migration temporary path conflicts/);
+
+    const linkedSource = fixture();
+    const outsideSource = join(linkedSource.runtimeRoot, 'outside-skills.json');
+    writeFileSync(outsideSource, source);
+    symlinkSync(outsideSource, join(linkedSource.systemDataDir, 'skills.json'));
+    expect(() => buildSystemOwnerFleetMigrationPlan({
+      systemDataDir: linkedSource.systemDataDir,
+      fleet: linkedSource.fleet,
+    })).toThrow(/regular file without symlinks/);
+
+    const linkedFinal = fixture();
+    writeFileSync(join(linkedFinal.systemDataDir, 'skills.json'), source);
+    const outsideFinal = join(linkedFinal.runtimeRoot, 'outside-final.json');
+    writeFileSync(outsideFinal, source);
+    mkdirSync(linkedFinal.fleet.companions[0].companionDataDir, { recursive: true });
+    symlinkSync(outsideFinal, join(linkedFinal.fleet.companions[0].companionDataDir, 'skills.json'));
+    expect(() => buildSystemOwnerFleetMigrationPlan({
+      systemDataDir: linkedFinal.systemDataDir,
+      fleet: linkedFinal.fleet,
+    })).toThrow(/symlink/);
+
+    const linkedTemp = fixture();
+    writeFileSync(join(linkedTemp.systemDataDir, 'skills.json'), source);
+    let interrupted = false;
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir: linkedTemp.systemDataDir,
+      fleet: linkedTemp.fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+      faultInjection: (event) => {
+        if (!interrupted && event.stage === 'during_temporary_copy') {
+          interrupted = true;
+          throw new Error('partial-temp');
+        }
+      },
+    })).toThrow('partial-temp');
+    const receipt = JSON.parse(readFileSync(
+      join(linkedTemp.systemDataDir, 'migrations', 'system-owner-fleet-reroot.json'),
+      'utf8',
+    )) as { files: Array<{ destinations: Array<{ temporaryPath: string }> }> };
+    const ownedTemp = receipt.files[0].destinations[0].temporaryPath;
+    unlinkSync(ownedTemp);
+    symlinkSync(outsideFinal, ownedTemp);
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir: linkedTemp.systemDataDir,
+      fleet: linkedTemp.fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+    })).toThrow(/regular file without symlinks/);
   });
 });

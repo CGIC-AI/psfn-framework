@@ -19,6 +19,7 @@ import type {
   AdminMemorySessionService,
 } from './services/types.js';
 import type { GardenRequestContext } from './garden-request-context.js';
+import { parseMemorySubjectJitRequest } from '../../shared/contracts/memory-subject-jit.js';
 
 /**
  * Per-browser admin session cookie keying Garden memory body-gate grants.
@@ -217,10 +218,8 @@ export function buildAdminMemoryRoutes(options: {
           }
           limit = parsed;
         }
-        if (context?.kind === 'fleet_principal'
-          && contactAId !== context.actor.contactId
-          && contactBId !== context.actor.contactId) {
-          sendJson(res, 403, { error: 'Shared background requires the current memory subject' });
+        if (context?.kind === 'fleet_principal') {
+          sendJson(res, 403, { error: 'Shared background requires an explicit co-subject authorization' });
           return;
         }
         bindMemoryRequest(memoryService, context, resolveAdminMemorySessionKey(req))
@@ -506,16 +505,40 @@ export function buildAdminMemoryRoutes(options: {
         const sessionKey = context?.kind === 'legacy_token'
           ? ensureAdminMemorySessionKey(req, res)
           : null;
-        bindMemoryRequest(memoryService, context, sessionKey).revealMemory(id).then(
-          (detail) => {
-            if (!detail) {
-              sendJson(res, 404, { error: 'Memory not found' });
+        withBody(req, res, (body) => {
+          let jitRequest;
+          if (context?.kind === 'fleet_principal') {
+            const parsed = parseAdminJsonBody(body);
+            if (!parsed.ok) {
+              sendJson(res, 400, { error: parsed.error });
               return;
             }
-            sendJson(res, 200, detail);
-          },
-          (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to reveal memory') }),
-        );
+            try {
+              jitRequest = parseMemorySubjectJitRequest(parsed.value);
+            } catch {
+              sendJson(res, 400, { error: 'Invalid memory subject JIT request' });
+              return;
+            }
+          }
+          const service = bindMemoryRequest(memoryService, context, sessionKey);
+          const revealed = jitRequest
+            ? service.revealMemory(id, jitRequest)
+            : service.revealMemory(id);
+          revealed.then(
+            (detail) => {
+              if (!detail) {
+                sendJson(res, 404, { error: 'Memory not found' });
+                return;
+              }
+              sendJson(res, 200, detail);
+            },
+            (error) => sendJson(
+              res,
+              context?.kind === 'fleet_principal' ? 403 : 500,
+              { error: toSanitizedMessage(error, 'Failed to reveal memory') },
+            ),
+          );
+        });
       },
     },
     {

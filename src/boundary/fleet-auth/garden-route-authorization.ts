@@ -294,7 +294,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
       ...ids('GET', ['/api/admin/memory/elevation']),
       ...ids('POST', ['/api/admin/memory/elevation', '/api/admin/memory/:id/reveal']),
       ...ids('DELETE', ['/api/admin/memory/elevation']),
-    ], subjectRelation: 'self', assurance: 'webauthn_uv', confirmation: 'explicit',
+    ], subjectRelation: 'self_or_co_subject', assurance: 'webauthn_uv', confirmation: 'explicit',
   },
   {
     action: 'memory.manage', area: 'memory', routeIds: [

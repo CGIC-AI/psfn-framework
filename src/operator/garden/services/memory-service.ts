@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { EmbeddingProviderPort } from '../../../core/agent/contracts.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import { DEFAULT_COMPANION_NAME } from '../../../core/identity/companion-naming.js';
@@ -19,12 +19,16 @@ import {
 } from '../../../faculties/memory/types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../system/trust/types.js';
+import { isHighIntimacySensitivityLevel } from '../../../system/trust/types.js';
 import {
   collectSharedBackgroundUnion,
   SHARED_BACKGROUND_DEFAULT_LIMIT,
   SHARED_BACKGROUND_MAX_LIMIT,
 } from '../../../faculties/memory/retrieval/shared-background.js';
-import { AdminMemoryBodyGate } from './memory-body-gate.js';
+import {
+  AdminMemoryBodyGate,
+  type FleetMemoryBodyAuthorizationContext,
+} from './memory-body-gate.js';
 import {
   buildManagedScopeEvidence,
   buildManagedScopeRepairPreview,
@@ -53,6 +57,11 @@ import type {
 } from './types.js';
 import { createSubjectAuthorizedMemoryStore } from '../../../faculties/memory/subject-authorized-store.js';
 import type { GardenRequestContext } from '../garden-request-context.js';
+import type { FleetGardenRequestContext } from '../garden-request-context.js';
+import {
+  parseMemorySubjectJitRequest,
+  type MemorySubjectJitRequest,
+} from '../../../shared/contracts/memory-subject-jit.js';
 
 const log = createComponentLogger('AdminMemoryService');
 
@@ -225,19 +234,25 @@ export class AdminMemoryDataService implements AdminMemoryService {
       ),
     }, this.bodyGate, context);
     const service = scoped.forSession(sessionKey);
-    if (context.action !== 'memory.jit.self') return service;
-    // OPL1.10 owns strong subject JIT. A UV capability classifies the request,
-    // but cannot itself mint or exercise a privacy-body reveal grant.
-    return Object.freeze({
+    const fleetSafeService: AdminMemorySessionService = Object.freeze({
       ...service,
       getBodyElevationStatus: () => ({ elevated: false, ttlMs: 0 }),
       elevateBodyAccess: () => {
-        throw new Error('Strong memory subject JIT is unavailable');
+        throw new Error('Session-wide memory JIT is unavailable for fleet principals');
       },
       dropBodyElevation: () => ({ elevated: false, ttlMs: 0 }),
       revealMemory: async () => {
-        throw new Error('Strong memory subject JIT is unavailable');
+        throw new Error('Memory reveal requires an exact consumed subject JIT grant');
       },
+    });
+    if (context.action !== 'memory.jit.self') return fleetSafeService;
+    if (context.resource.routeId !== 'POST /api/admin/memory/:id/reveal'
+      || context.subjectRelation !== 'self_or_co_subject') {
+      return fleetSafeService;
+    }
+    return Object.freeze({
+      ...fleetSafeService,
+      revealMemory: (id, jitRequest) => scoped.revealFleetMemory(context, id, jitRequest),
     });
   }
 
@@ -261,8 +276,58 @@ export class AdminMemoryDataService implements AdminMemoryService {
       getBodyElevationStatus: () => this.getBodyElevationStatus(sessionKey),
       elevateBodyAccess: () => this.elevateBodyAccess(sessionKey),
       dropBodyElevation: () => this.dropBodyElevation(sessionKey),
-      revealMemory: id => this.revealMemory(sessionKey, id),
+      revealMemory: (id, jitRequest) => this.revealMemory(sessionKey, id, jitRequest),
     };
+  }
+
+  private fleetBodyContext(
+    context: FleetGardenRequestContext,
+    memoryId?: string,
+  ): Omit<FleetMemoryBodyAuthorizationContext,
+    'action' | 'resourceMemoryId' | 'assurance' | 'requestExpiresAtSeconds'>
+    & Partial<Pick<FleetMemoryBodyAuthorizationContext,
+      'action' | 'resourceMemoryId' | 'assurance' | 'requestExpiresAtSeconds'>> {
+    return {
+      principalId: context.actor.principalId,
+      browserSessionId: context.actor.sessionRecordId,
+      companionId: context.resource.companionId ?? '',
+      viewerContactId: context.actor.contactId,
+      viewerRelation: 'self',
+      authorityGeneration: context.versions.authorityGeneration,
+      globalAuthEpoch: context.versions.globalAuthEpoch,
+      sessionAuthnVersion: context.versions.sessionAuthnVersion,
+      sessionAuthzVersion: context.versions.sessionAuthzVersion,
+      bindingVersion: context.versions.bindingVersion,
+      grantVersion: context.versions.grantVersion,
+      policyVersion: context.versions.policyVersion,
+      ...(memoryId ? {
+        action: 'memory.jit.self' as const,
+        resourceMemoryId: memoryId,
+        assurance: context.actor.sessionAssurance === 'webauthn_uv'
+          ? 'webauthn_uv' as const
+          : undefined,
+        requestExpiresAtSeconds: context.expiresAt,
+      } : {}),
+    };
+  }
+
+  private async toRequestMemoryView(
+    sessionKey: AdminMemorySessionKey,
+    memory: PurrMemory,
+  ): Promise<AdminMemoryDetailData['memory']> {
+    if (this.requestContext?.kind !== 'fleet_principal') {
+      return this.bodyGate.toAdminView(sessionKey, memory);
+    }
+    if (!isHighIntimacySensitivityLevel(memory.sensitivity)) return memory;
+    const classification = await this.deps.memoryStore.getMemorySubjectClassification(memory.id);
+    if (!classification) {
+      throw new Error('Memory subject projection changed during Garden view construction');
+    }
+    return this.bodyGate.toFleetAdminView(
+      this.fleetBodyContext(this.requestContext),
+      memory,
+      classification,
+    );
   }
 
   private resolveCompanionName(): string {
@@ -292,6 +357,11 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const contactStore = this.deps.contactStore;
     if (!contactStore) return new Map();
     const map = new Map<string, { id: string; displayName: string }>();
+    if (this.requestContext?.kind === 'fleet_principal') {
+      const contact = await contactStore.getById(this.requestContext.actor.contactId);
+      if (contact) map.set(contact.id, { id: contact.id, displayName: contact.displayName });
+      return map;
+    }
     for (const contact of await contactStore.listAll()) {
       map.set(contact.id, { id: contact.id, displayName: contact.displayName });
     }
@@ -373,7 +443,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const memories = result.memories;
     const total = result.total;
     return {
-      memories: memories.map(memory => this.bodyGate.toAdminView(sessionKey, memory)),
+      memories: await Promise.all(memories.map(memory => this.toRequestMemoryView(sessionKey, memory))),
       contactsById: await this.buildContactSummaryMap(),
       privacySummary: buildPrivacySummary(result.privacySummary, total, memories.length),
       pagination: {
@@ -394,7 +464,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       ? (await this.buildContactSummaryMap()).get(memory.contactId)
       : undefined;
     return {
-      memory: this.bodyGate.toAdminView(sessionKey, memory),
+      memory: await this.toRequestMemoryView(sessionKey, memory),
       linkedContact,
       scopeAssignments: this.buildScopeAssignments(memory),
       scopeRepair: this.buildScopeRepair(memory),
@@ -428,7 +498,11 @@ export class AdminMemoryDataService implements AdminMemoryService {
     return status;
   }
 
-  async revealMemory(sessionKey: AdminMemorySessionKey, id: string): Promise<AdminMemoryDetailData | null> {
+  async revealMemory(
+    sessionKey: AdminMemorySessionKey,
+    id: string,
+    _jitRequest?: MemorySubjectJitRequest,
+  ): Promise<AdminMemoryDetailData | null> {
     const memory = await this.deps.memoryStore.getById(id);
     if (!memory) {
       this.appendAudit(
@@ -450,6 +524,71 @@ export class AdminMemoryDataService implements AdminMemoryService {
       );
     }
     return this.getMemoryDetail(sessionKey, id);
+  }
+
+  private async revealFleetMemory(
+    context: FleetGardenRequestContext,
+    id: string,
+    rawJitRequest: MemorySubjectJitRequest | undefined,
+  ): Promise<AdminMemoryDetailData | null> {
+    const signedMemoryId = typeof context.resource.pathParams.id === 'string'
+      ? context.resource.pathParams.id.trim()
+      : undefined;
+    const normalizedId = id.trim();
+    if (!rawJitRequest || !normalizedId || signedMemoryId !== normalizedId
+      || context.actor.sessionAssurance !== 'webauthn_uv') {
+      throw new Error('Memory reveal requires exact user-verifying subject JIT authority');
+    }
+    const jitRequest = parseMemorySubjectJitRequest(rawJitRequest);
+    const classification = await this.deps.memoryStore.getMemorySubjectClassification(normalizedId);
+    if (!classification) return null;
+    const exactStore = createSubjectAuthorizedMemoryStore(
+      this.deps.fleetMemoryStore ?? this.deps.memoryStore,
+      Object.freeze({
+        viewerContactId: context.actor.contactId,
+        grantBindings: Object.freeze([{
+          memoryId: normalizedId,
+          memoryRevision: jitRequest.memoryRevision,
+          classifierVersion: jitRequest.classifierVersion,
+          evidenceDigest: classification.evidenceDigest,
+        }]),
+      }),
+    );
+    const memory = await exactStore.getById(normalizedId);
+    if (!memory) return null;
+    const bodyContext = this.fleetBodyContext(context, normalizedId);
+    if (bodyContext.action !== 'memory.jit.self'
+      || bodyContext.resourceMemoryId === undefined
+      || bodyContext.assurance !== 'webauthn_uv'
+      || bodyContext.requestExpiresAtSeconds === undefined) {
+      throw new Error('Memory reveal request authority is incomplete');
+    }
+    const view = this.bodyGate.toFleetJitView(
+      bodyContext as FleetMemoryBodyAuthorizationContext,
+      jitRequest,
+      memory,
+      classification,
+    );
+    this.appendAudit(
+      'memory_access',
+      'allowed',
+      'Fleet principal exercised a subject-scoped memory reveal grant.',
+      [
+        `purposeDigest=${createHash('sha256').update(jitRequest.purpose, 'utf8').digest('hex')}`,
+        `memoryRevision=${jitRequest.memoryRevision}`,
+        `classifierVersion=${jitRequest.classifierVersion}`,
+      ],
+    );
+    const linkedContact = memory.contactId
+      ? (await this.buildContactSummaryMap()).get(memory.contactId)
+      : undefined;
+    return {
+      memory: view,
+      linkedContact,
+      scopeAssignments: this.buildScopeAssignments(memory),
+      scopeRepair: this.buildScopeRepair(memory),
+      elevation: { elevated: false, ttlMs: 0 },
+    };
   }
 
   async listManagedScopes(params?: URLSearchParams): Promise<AdminMemoryScopeListData> {
@@ -513,16 +652,16 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const scope = parseManagedScopeParams(kind, id);
     if (!scope) return null;
 
-    const memories = (await this.listManagedScopeMemories())
+    const matchedMemories = (await this.listManagedScopeMemories())
       .filter(memory => collectManagedScopeDescriptors(memory).some(descriptor => (
         descriptor.kind === scope.kind && descriptor.id === scope.id
       )))
-      .sort(compareMemoryRecency)
-      .map(memory => ({
-        memory: this.bodyGate.toAdminView(sessionKey, memory),
+      .sort(compareMemoryRecency);
+    const memories = await Promise.all(matchedMemories.map(async memory => ({
+        memory: await this.toRequestMemoryView(sessionKey, memory),
         evidence: buildManagedScopeEvidence(memory, scope),
         repair: this.buildScopeRepair(memory),
-      }));
+      })));
 
     if (memories.length === 0) return null;
 
@@ -565,7 +704,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       .filter(memory => !isInternalMemoryArtifact(memory));
     return {
       query,
-      results: results.map(memory => this.bodyGate.toAdminView(sessionKey, memory)),
+      results: await Promise.all(results.map(memory => this.toRequestMemoryView(sessionKey, memory))),
       contactsById: await this.buildContactSummaryMap(),
       privacySummary: buildPrivacySummary(privacySummary, results.length, results.length),
       elevation: this.bodyGate.status(sessionKey),
@@ -602,12 +741,12 @@ export class AdminMemoryDataService implements AdminMemoryService {
       { memoryStore: this.deps.memoryStore, contactStore },
       { contactAId, contactBId },
     );
-    const items = union.candidates.slice(0, effectiveLimit).map(candidate => ({
+    const items = await Promise.all(union.candidates.slice(0, effectiveLimit).map(async candidate => ({
       // Body redaction inherited from the E3.5 admin body gate.
-      memory: this.bodyGate.toAdminView(sessionKey, candidate.memory),
+      memory: await this.toRequestMemoryView(sessionKey, candidate.memory),
       sources: candidate.sources,
       score: candidate.score,
-    }));
+    })));
 
     return {
       contactAId: union.contactAId,
@@ -715,7 +854,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
 
     return {
       ok: true,
-      memory: this.bodyGate.toAdminView(sessionKey, updated),
+      memory: await this.toRequestMemoryView(sessionKey, updated),
       scopeAssignments: this.buildScopeAssignments(updated),
       scopeRepair: this.buildScopeRepair(updated),
     };

@@ -10,7 +10,7 @@ import {
 import { once } from 'node:events';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   createGatewayRequestCapabilitySigner,
   createRequestCapabilityVerifier,
@@ -91,7 +91,9 @@ function context(
     }),
     operator: Object.freeze({ grantId: randomUUID(), role, grantVersion: 1 }),
     session: Object.freeze({
-      recordId: randomUUID(),
+      recordId: companionId === COMPANION_A
+        ? 'aaaaaaaa-0000-4000-8000-000000000001'
+        : 'bbbbbbbb-0000-4000-8000-000000000001',
       audience: 'fleet',
       assurance: 'oauth',
       authnVersion: 1,
@@ -197,6 +199,45 @@ function get(
   });
 }
 
+function post(
+  port: number,
+  path: string,
+  session: string,
+  body: string,
+  headerOverrides: IncomingHttpHeaders = {},
+): Promise<{ status: number; headers: IncomingHttpHeaders; body: string }> {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest({
+      hostname: '127.0.0.1',
+      port,
+      method: 'POST',
+      path,
+      headers: {
+        host: 'fleet.example.test',
+        cookie: `__Host-psfn_session=${session}`,
+        origin: CANONICAL_ORIGIN,
+        'content-type': 'application/json',
+        'content-length': String(Buffer.byteLength(body)),
+        'x-forwarded-host': 'fleet.example.test',
+        'x-forwarded-proto': 'https',
+        'x-forwarded-port': '443',
+        'x-forwarded-for': '198.51.100.9',
+        ...headerOverrides,
+      },
+    }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on('data', chunk => chunks.push(Buffer.from(chunk)));
+      response.on('end', () => resolve({
+        status: response.statusCode ?? 0,
+        headers: response.headers,
+        body: Buffer.concat(chunks).toString('utf8'),
+      }));
+    });
+    request.once('error', reject);
+    request.end(body);
+  });
+}
+
 describe('unified Fleet SSO two-companion process boundary', () => {
   const servers: Server[] = [];
   const children: ChildProcess[] = [];
@@ -253,6 +294,14 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       }],
     });
     let revokedA = false;
+    const consumeGrant = vi.fn(async () => ({
+      grantId: '99999999-9999-4999-8999-999999999999',
+      principalId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      browserSessionId: 'aaaaaaaa-0000-4000-8000-000000000001',
+      assurance: 'webauthn_uv' as const,
+      credentialFloorGeneration: 2,
+      expiresAt: new Date((NOW_SECONDS + 300) * 1_000),
+    }));
     const router = new GatewayFleetSsoRouter({
       canonicalOrigin: CANONICAL_ORIGIN,
       trustProxy: true,
@@ -286,6 +335,7 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       replay: {
         consume: async input => ({ outcome: 'consumed', result: input.consumeResult }),
       },
+      jitStepUp: { consumeGrant },
       portalProjection: {
         resolve: async () => ({
           schemaVersion: 1,
@@ -318,6 +368,63 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     expect(payloadA.forwarded.cookie).toBeUndefined();
     expect(payloadA.forwarded.authorization).toBeUndefined();
     expect(payloadA.forwarded.capability).toBeTypeOf('string');
+
+    const revealBody = JSON.stringify({
+      subjectScopeDigest: 'a'.repeat(64),
+      purpose: 'Review my own memory',
+      memoryRevision: 3,
+      classifierVersion: 1,
+      classifierEvidenceDigest: 'b'.repeat(64),
+    });
+    const revealPath = '/api/admin/memory/memory-a/reveal';
+    const reveal = await post(
+      edgePort,
+      `/companions/${COMPANION_A}/garden${revealPath}`,
+      SESSION_A,
+      revealBody,
+      { 'x-psfn-jit-grant': '99999999-9999-4999-8999-999999999999' },
+    );
+    expect(reveal.status).toBe(200);
+    expect(consumeGrant).toHaveBeenCalledWith(expect.objectContaining({
+      grantId: '99999999-9999-4999-8999-999999999999',
+      token: SESSION_A,
+      requestOrigin: CANONICAL_ORIGIN,
+      binding: expect.objectContaining({
+        subjectScopeDigest: 'a'.repeat(64),
+        purpose: 'Review my own memory',
+        memoryRevision: 3,
+        classifierEvidenceDigest: 'b'.repeat(64),
+      }),
+    }));
+    const revealPayload = JSON.parse(reveal.body);
+    const revealMetadata = validateGardenRequestMetadata({
+      rawTarget: revealPath,
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: Buffer.from(revealBody),
+    });
+    const revealedCapability = verifier.verifyOperatorTransport({
+      token: String(revealPayload.forwarded.capability),
+      companionId: COMPANION_A,
+      method: revealMetadata.method,
+      canonicalRequestTarget: revealMetadata.canonicalRequestTarget,
+      action: revealMetadata.action,
+      authorizationDigest: digestGardenRouteAuthorization(revealMetadata.authorization),
+      bodyLength: Buffer.byteLength(revealBody),
+      requestId: String(revealPayload.forwarded.requestId),
+      decisionId: String(revealPayload.forwarded.decisionId),
+      nowSeconds: NOW_SECONDS,
+    });
+    expect(revealedCapability.authContext.sessionAssurance).toBe('webauthn_uv');
+
+    const missingGrant = await post(
+      edgePort,
+      `/companions/${COMPANION_A}/garden${revealPath}`,
+      SESSION_A,
+      revealBody,
+    );
+    expect(missingGrant.status).toBe(404);
+    expect(consumeGrant).toHaveBeenCalledTimes(1);
 
     const metadata = validateGardenRequestMetadata({ rawTarget: resourcePath, method: 'GET' });
     expect(() => verifier.verifyOperatorTransport({
@@ -378,7 +485,7 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       SESSION_A,
     );
     expect(revoked.status).toBe(404);
-    expect(await getHitCount(workloadA.port)).toEqual({ hits: 1, pid: workloadA.pid });
+    expect(await getHitCount(workloadA.port)).toEqual({ hits: 2, pid: workloadA.pid });
   });
 
   it('certifies disjoint portal projections, stateless links, outages, and raw-status separation', async () => {

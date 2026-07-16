@@ -465,6 +465,7 @@ export async function startOptionalGatewayApiServer(
         verifier: options.fleetAuthRequestCapabilityVerifier,
         replay: options.fleetAuthRequestCapabilityReplay,
         portalProjection: fleetPortalProjection,
+        ...(options.fleetAuthJitStepUp ? { jitStepUp: options.fleetAuthJitStepUp } : {}),
         upstreams: resolveFleetSsoGardenUpstreams({
           ...(options.config.companionFleet ? { fleet: options.config.companionFleet } : {}),
           ...(options.config.companionId ? { companionId: options.config.companionId } : {}),

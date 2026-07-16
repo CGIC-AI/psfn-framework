@@ -33,9 +33,15 @@ import {
   type FleetAuthorizationContext,
 } from './fleet-authorization-context.js';
 import type { GatewayFleetAuthBroker } from './fleet-auth-broker.js';
+import type {
+  FleetJitGrantBinding,
+  FleetJitStepUpCoordinator,
+} from '../fleet-auth/jit-step-up.js';
+import { parseMemorySubjectJitRequest } from '../../shared/contracts/memory-subject-jit.js';
 import { createSpiffeCheckServerIdentity } from '../../shared/net/mtls.js';
 import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
+import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
 import type { FleetSsoGardenUpstream } from '../fleet-auth/fleet-sso-transport.js';
 import {
   FLEET_PORTAL_API_PATH,
@@ -51,6 +57,7 @@ const FLEET_LOGIN_PATH = '/fleet/login';
 const COMPANION_PREFIX = '/companions/';
 const GARDEN_MARKER = '/garden';
 const COMPANION_UI_PREFIX = '/companion-ui';
+export const FLEET_JIT_GRANT_HEADER = 'x-psfn-jit-grant';
 const FORWARDED_HEADERS = Object.freeze([
   'forwarded',
   'x-forwarded-for',
@@ -107,6 +114,7 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
   readonly verifier: RequestCapabilityVerifier;
   readonly replay: RequestCapabilityReplayPort;
   readonly portalProjection: Pick<GatewayFleetPortalProjection, 'resolve'>;
+  readonly jitStepUp?: Pick<FleetJitStepUpCoordinator, 'consumeGrant'>;
   readonly upstreams: readonly FleetSsoGardenUpstream[];
   readonly companionUi?: {
     readonly companionId: CompanionId;
@@ -562,6 +570,12 @@ export class GatewayFleetSsoRouter {
       headers: targetHeaders,
       body: input.body,
     });
+    const rawJitGrantId = singleHeader(input.headers[FLEET_JIT_GRANT_HEADER]);
+    const isMemoryReveal = target.action === 'memory.jit.self'
+      && target.resource.routeId === 'POST /api/admin/memory/:id/reveal';
+    if (!isMemoryReveal && rawJitGrantId !== undefined) {
+      throw new FleetSsoRequestError(404, 'Resource not found');
+    }
     const requestId = randomUUID();
     let context: FleetAuthorizationContext;
     try {
@@ -578,11 +592,49 @@ export class GatewayFleetSsoRouter {
     }
     const decisionId = context.provenance.authorizationEventId;
     const versions = authorityVersions(context);
+    let consumedJit: FleetJitGrantBinding | undefined;
+    if (isMemoryReveal) {
+      if (!rawJitGrantId || !isRfc4122Uuid(rawJitGrantId) || !this.options.jitStepUp) {
+        throw new FleetSsoRequestError(404, 'Resource not found');
+      }
+      let jitRequest;
+      try {
+        jitRequest = parseMemorySubjectJitRequest(JSON.parse(input.body.toString('utf8')));
+      } catch {
+        throw new FleetSsoRequestError(404, 'Resource not found');
+      }
+      try {
+        consumedJit = await this.options.jitStepUp.consumeGrant({
+          grantId: rawJitGrantId,
+          token: input.sessionToken,
+          requestOrigin: this.options.canonicalOrigin,
+          binding: {
+            target,
+            subjectScopeDigest: jitRequest.subjectScopeDigest,
+            purpose: jitRequest.purpose,
+            memoryRevision: jitRequest.memoryRevision,
+            classifierEvidenceDigest: jitRequest.classifierEvidenceDigest,
+          },
+        });
+      } catch {
+        throw new FleetSsoRequestError(404, 'Resource not found');
+      }
+      if (!timingSafeStringEqual(consumedJit.principalId, context.principalId)
+        || !timingSafeStringEqual(consumedJit.browserSessionId, context.session.recordId)
+        || consumedJit.assurance !== 'webauthn_uv'
+        || consumedJit.expiresAt.getTime()
+          <= (this.options.nowSeconds ? this.options.nowSeconds() * 1_000 : Date.now())) {
+        throw new FleetSsoRequestError(404, 'Resource not found');
+      }
+    }
+    const authContext = toRequestCapabilityAuthContext(context);
     const token = this.options.signer.signOperator({
       target,
       requestId,
       decisionId,
-      authContext: toRequestCapabilityAuthContext(context),
+      authContext: consumedJit
+        ? Object.freeze({ ...authContext, sessionAssurance: 'webauthn_uv' as const })
+        : authContext,
       versions,
     });
     if (Buffer.byteLength(token, 'ascii') > MAX_CAPABILITY_HEADER_BYTES) {

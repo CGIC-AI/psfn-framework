@@ -15,6 +15,7 @@ import type {
   MemorySubjectAuthorizedWrite,
 } from '../faculties/memory/memory-store-port.js';
 import { classifyMemorySubject } from '../faculties/memory/subject-classification.js';
+import { isInternalMemoryArtifact } from '../faculties/memory/internal-artifacts.js';
 import type { MemoryScopeQuery, PurrMemory } from '../faculties/memory/types.js';
 
 type Awaitable<T> = T | Promise<T>;
@@ -98,6 +99,8 @@ function isAuthorized(
   ) {
     return false;
   }
+  if (!authorization.allowedSubjectClasses.includes('companion_private')
+    && isInternalMemoryArtifact(memory)) return false;
 
   const viewerIsSubject = classification.subjectContactIds.some(contactId => (
     authorization.viewerContactIds.includes(contactId)

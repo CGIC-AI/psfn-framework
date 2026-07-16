@@ -151,4 +151,59 @@ describe('subject-authorized memory store', () => {
     });
     expect(rawWrite).not.toHaveBeenCalled();
   });
+
+  it('limits fleet subjects to current single-contact self/co-subjects and preserves exact JIT bindings', async () => {
+    const binding = {
+      memoryId: 'visible',
+      memoryRevision: 4,
+      classifierVersion: 1,
+      evidenceDigest: 'a'.repeat(64),
+    };
+    const queryAuthorizedMemorySubjects = vi.fn(async (input: MemorySubjectAuthorizedQuery) => ({
+      memories: input.selector.kind === 'detail' ? [memory('visible', 'private')] : [],
+      total: 1,
+    }));
+    const store = createSubjectAuthorizedMemoryStore({
+      queryAuthorizedMemorySubjects,
+    } as unknown as MemoryStorePort, {
+      viewerContactId: 'contact-self',
+      viewerCoSubjectContactIds: ['contact-co'],
+      grantBindings: [binding],
+    });
+
+    await expect(store.getById('visible')).resolves.toMatchObject({ id: 'visible' });
+    expect(queryAuthorizedMemorySubjects).toHaveBeenCalledWith({
+      authorization: {
+        action: 'detail',
+        viewerContactIds: ['contact-co', 'contact-self'],
+        allowedSubjectClasses: ['single_contact'],
+        allowedViewerRelations: ['self'],
+        classifierVersion: 1,
+        grantBindings: [binding],
+      },
+      selector: { kind: 'detail', memoryId: 'visible' },
+    });
+  });
+
+  it('filters every linked endpoint through the same subject SQL primitive', async () => {
+    const visibleIds = new Set(['source', 'allowed']);
+    const rawLinks = [
+      { id1: 'source', id2: 'allowed', linkType: 'supports' },
+      { id1: 'source', id2: 'other-subject', linkType: 'supports' },
+    ];
+    const queryAuthorizedMemorySubjects = vi.fn(async (input: MemorySubjectAuthorizedQuery) => {
+      const id = input.selector.kind === 'detail' ? input.selector.memoryId : '';
+      const visible = visibleIds.has(id);
+      return { memories: visible ? [memory(id, id)] : [], total: visible ? 1 : 0 };
+    });
+    const getLinkedMemories = vi.fn(async () => rawLinks);
+    const store = createSubjectAuthorizedMemoryStore({
+      queryAuthorizedMemorySubjects,
+      getLinkedMemories,
+    } as unknown as MemoryStorePort, { viewerContactId: 'contact-self' });
+
+    await expect(store.getLinkedMemories('source')).resolves.toEqual([rawLinks[0]]);
+    await expect(store.getLinkedMemories('other-subject')).resolves.toEqual([]);
+    expect(getLinkedMemories).toHaveBeenCalledTimes(1);
+  });
 });

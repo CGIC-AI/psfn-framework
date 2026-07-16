@@ -41,6 +41,13 @@ import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.
 import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
 import type { GatewayFleetAuthChildAssertionBroker } from '../../boundary/gateway/fleet-auth-child-assertions.js';
+import type {
+  GatewayRequestCapabilitySigner,
+  RequestCapabilityVerifier,
+} from '../../boundary/fleet-auth/request-capability.js';
+import type { RequestCapabilityReplayPort } from '../../boundary/fleet-auth/request-capability-replay.js';
+import { GatewayFleetSsoRouter } from '../../boundary/gateway/fleet-sso-router.js';
+import { resolveFleetSsoGardenUpstreams } from '../../boundary/fleet-auth/fleet-sso-transport.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
 import {
   GatewayHubDeviceIngressService,
@@ -50,6 +57,7 @@ import type {
   HubDeviceAssertionExpectedBinding,
   HubDevicePrincipal,
 } from '../../shared/contracts/hub-device-ingress.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
 
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const GATEWAY_API_REQUEST_TIMEOUT_MS = 240_000;
@@ -88,6 +96,9 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   /** Present only in gateway fleet-auth mode; owns all browser OAuth/session authority. */
   fleetAuthBroker?: GatewayFleetAuthBroker;
   fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
+  fleetAuthRequestCapabilities?: GatewayRequestCapabilitySigner;
+  fleetAuthRequestCapabilityVerifier?: RequestCapabilityVerifier;
+  fleetAuthRequestCapabilityReplay?: RequestCapabilityReplayPort;
   /** Persistence-backed verifier/consumer required by authenticated Hub device ingress. */
   hubDeviceAssertionVerifier?: {
     verifyAndConsumeHubDeviceAssertion(
@@ -110,6 +121,32 @@ function resolveGatewayHubDeviceCompanionId(options: StartOptionalGatewayApiServ
   if (fleet.length === 1) return fleet[0]!.companionId;
   if (!options.config.companionFleet && options.config.companionId) return options.config.companionId;
   throw new Error('Fleet Hub device ingress requires one server-owned API companion binding');
+}
+
+function resolveFleetSsoCompanionUi(
+  config: SubstrateConfig,
+  env: NodeJS.ProcessEnv,
+): { companionId: ReturnType<typeof createCompanionId>; origin: URL } | undefined {
+  const rawOrigin = env.FLEET_SSO_COMPANION_UI_ORIGIN?.trim();
+  if (!rawOrigin) return undefined;
+  const fleet = config.companionFleet?.companions
+    ?? (config.companionId ? [{ companionId: config.companionId }] : []);
+  const rawCompanionId = env.FLEET_SSO_COMPANION_UI_COMPANION_ID?.trim()
+    || (fleet.length === 1 ? fleet[0]!.companionId : undefined);
+  if (!rawCompanionId || !fleet.some(entry => entry.companionId === rawCompanionId)) {
+    throw new Error(
+      'Fleet SSO Companion UI requires one exact registered FLEET_SSO_COMPANION_UI_COMPANION_ID',
+    );
+  }
+  const origin = new URL(rawOrigin);
+  if (origin.origin !== rawOrigin || origin.protocol !== 'http:' || origin.username
+    || origin.password || origin.pathname !== '/' || origin.search || origin.hash) {
+    throw new Error('FLEET_SSO_COMPANION_UI_ORIGIN must be one exact internal HTTP origin');
+  }
+  return {
+    companionId: createCompanionId(rawCompanionId, 'Fleet SSO Companion UI companion binding'),
+    origin,
+  };
 }
 
 /**
@@ -372,6 +409,31 @@ export async function startOptionalGatewayApiServer(
       })
     : undefined;
   const apiTlsConfig = resolveApiHttpServerTlsConfig(env);
+  const fleetSsoCompanionUi = options.config.fleetAuth
+    ? resolveFleetSsoCompanionUi(options.config, env)
+    : undefined;
+  const fleetSsoRouter = options.config.fleetAuth && options.fleetAuthBroker
+    && options.fleetAuthRequestCapabilities
+    && options.fleetAuthRequestCapabilityVerifier && options.fleetAuthRequestCapabilityReplay
+    ? new GatewayFleetSsoRouter({
+        canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
+        trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
+        broker: options.fleetAuthBroker,
+        signer: options.fleetAuthRequestCapabilities,
+        verifier: options.fleetAuthRequestCapabilityVerifier,
+        replay: options.fleetAuthRequestCapabilityReplay,
+        upstreams: resolveFleetSsoGardenUpstreams({
+          ...(options.config.companionFleet ? { fleet: options.config.companionFleet } : {}),
+          ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
+          ...(options.adminPort ? { gardenPort: options.adminPort } : {}),
+          env,
+        }),
+        ...(fleetSsoCompanionUi ? { companionUi: fleetSsoCompanionUi } : {}),
+      })
+    : undefined;
+  if (fleetAuthBootstrapOnly && !fleetSsoRouter) {
+    throw new Error('Fleet authentication requires the complete unified-origin router wiring');
+  }
   const corsAllowedOrigins = resolveApiCorsAllowedOrigins({
     explicitAllowlist: parseCommaSeparatedEnv(env.API_CORS_ALLOWLIST),
     adminHost: options.adminHost,
@@ -445,6 +507,7 @@ export async function startOptionalGatewayApiServer(
     ...(apiTlsConfig ? { tls: apiTlsConfig } : {}),
     allowInsecureWithoutAuth,
     fleetAuthBootstrapOnly,
+    ...(fleetSsoRouter ? { fleetSsoRouter } : {}),
     ...(options.fleetAuthChildAssertions
       ? { fleetAuthChildAssertions: options.fleetAuthChildAssertions }
       : {}),
@@ -481,6 +544,7 @@ export async function startOptionalGatewayApiServer(
             broker: options.fleetAuthBroker,
             canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
             callbackPath: options.config.fleetAuth.callbackPath,
+            trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
           }),
         }
       : {}),

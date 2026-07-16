@@ -115,6 +115,7 @@ import {
   resolveAuthenticatedHubDeviceConnection,
   stripHubDeviceDownstreamAuthorityHeaders,
 } from './server/hub-device-ingress.js';
+import type { GatewayFleetSsoRouter } from '../../boundary/gateway/fleet-sso-router.js';
 
 const log = createComponentLogger('ApiServer');
 const API_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
@@ -439,6 +440,8 @@ export interface ApiServerConfig {
   fleetAuthHttpRoutes?: FleetAuthHttpRoutes;
   /** Signed-parent-authenticated operator-to-agent child assertion exchange. */
   fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
+  /** Unified browser origin; the only fleet-mode route to Garden processes. */
+  fleetSsoRouter?: GatewayFleetSsoRouter;
   /** Fleet mode: expose browser lifecycle routes plus authenticated Hub device chat only. */
   fleetAuthBootstrapOnly?: boolean;
   /** Fleet-only authenticated Hub/device ingress. Absent fails the device route closed. */
@@ -492,6 +495,7 @@ export class ApiServer implements ChannelAdapterPort {
   private confirmationOperator?: ConfirmationOperatorPort;
   private fleetAuthHttpRoutes?: FleetAuthHttpRoutes;
   private fleetAuthChildAssertionRoute?: FleetAuthChildAssertionHttpRoute;
+  private fleetSsoRouter?: GatewayFleetSsoRouter;
   private fleetAuthBootstrapOnly: boolean;
   private hubDeviceIngress?: GatewayHubDeviceIngressService;
   private hubDeviceCompanionId?: string;
@@ -530,6 +534,7 @@ export class ApiServer implements ChannelAdapterPort {
     this.fleetAuthChildAssertionRoute = config.fleetAuthChildAssertions
       ? new FleetAuthChildAssertionHttpRoute(config.fleetAuthChildAssertions)
       : undefined;
+    this.fleetSsoRouter = config.fleetSsoRouter;
     this.fleetAuthBootstrapOnly = config.fleetAuthBootstrapOnly === true;
     this.hubDeviceIngress = config.hubDeviceIngress;
     this.hubDeviceCompanionId = config.hubDeviceCompanionId;
@@ -624,6 +629,10 @@ export class ApiServer implements ChannelAdapterPort {
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     stripBrowserRequestCapabilityHeaders(req.headers);
+    if (this.fleetSsoRouter?.matches(req.url ?? '/')) {
+      this.fleetSsoRouter.handleUpgrade(req, socket, head);
+      return;
+    }
     if (this.fleetAuthBootstrapOnly) {
       this.voiceWebSocket.rejectUnknownUpgrade(socket);
       return;
@@ -636,6 +645,10 @@ export class ApiServer implements ChannelAdapterPort {
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     stripBrowserRequestCapabilityHeaders(req.headers);
+    if (this.fleetSsoRouter?.matches(req.url ?? '/')) {
+      void this.fleetSsoRouter.handle(req, res);
+      return;
+    }
     const requestTargetPath = (req.url ?? '/').split('?', 1)[0] ?? '/';
     const fleetAuthCors = this.fleetAuthHttpRoutes
       ?.applyLifecycleCorsPolicy(req, res, requestTargetPath) ?? 'not_applicable';

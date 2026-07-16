@@ -13,6 +13,7 @@ import {
 import { GardenOperatorSurface } from '../../operator/garden/operator-surface.js';
 import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import { createGatewayOperatorConfirmationClient } from '../startup/support/gateway-operator-confirmation-client.js';
+import { resolveFleetSsoGardenTls } from '../../boundary/fleet-auth/fleet-sso-transport.js';
 
 const log = createComponentLogger('OperatorSurface');
 const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
@@ -25,6 +26,7 @@ async function main(): Promise<void> {
     fleetAuthEnabled: config.fleetAuthVerifier !== undefined,
     processMode: 'operator',
     env: process.env,
+    principalAuthenticationWired: config.fleetAuthVerifier !== undefined,
   });
   if (config.multiCompanion === true) {
     assertCompanionAdminTransportIsolation(config.companionId ?? '', process.env);
@@ -38,6 +40,9 @@ async function main(): Promise<void> {
   // confirmations directly against the gateway, so the credential never
   // traverses the agent (x5rt.10).
   const operatorConfirmationBaseUrl = process.env.GATEWAY_OPERATOR_API_BASE_URL?.trim();
+  const fleetSsoTls = config.fleetAuthVerifier
+    ? resolveFleetSsoGardenTls(process.env)
+    : undefined;
   const surface = new GardenOperatorSurface({
     port: adminPort,
     host: process.env.ADMIN_HOST || undefined,
@@ -45,6 +50,7 @@ async function main(): Promise<void> {
     allowInsecureWithoutToken: isExplicitTrue(process.env.ADMIN_ALLOW_INSECURE),
     config,
     transportEndpoint: resolveAdminTransportClientEndpoint(process.env),
+    ...(fleetSsoTls ? { fleetSsoTls } : {}),
     ...(operatorConfirmationBaseUrl
       ? {
           operatorConfirmationResolver:

@@ -26,6 +26,10 @@ interface AdminRequestRoutingDependencies {
   ) => boolean;
   sendNotFound: (path: string, res: ServerResponse) => void;
   onRequestError: (path: string, err: unknown) => void;
+  /** Assertion headers arrived only over the authenticated gateway hop. */
+  trustedRequestCapability?: boolean;
+  /** Fleet mode authenticates assets, health, and every Garden surface. */
+  requireAuthForPublicRoutes?: boolean;
 }
 
 function isGardenClientRoute(method: string | undefined, requestPath: string): boolean {
@@ -56,13 +60,14 @@ export function handleAdminRequest(
   res: ServerResponse,
   deps: AdminRequestRoutingDependencies,
 ): void {
-  stripBrowserRequestCapabilityHeaders(req.headers);
+  const metadataHeaders = deps.trustedRequestCapability ? { ...req.headers } : req.headers;
+  stripBrowserRequestCapabilityHeaders(metadataHeaders);
   let requestPath: string;
   try {
     requestPath = validateGardenRequestMetadata({
       rawTarget: req.url ?? '/',
       method: req.method ?? 'GET',
-      headers: req.headers,
+      headers: metadataHeaders,
     }).canonicalPath;
   } catch (error) {
     if (error instanceof GardenRequestTargetError && error.code === 'authority_forbidden') {
@@ -82,12 +87,14 @@ export function handleAdminRequest(
   }
 
   // Skip auth for SvelteKit built assets, health probes, and login page.
-  const skipAuth = requestPath.startsWith('/_app/')
+  const skipAuth = deps.requireAuthForPublicRoutes !== true && (
+    requestPath.startsWith('/_app/')
     || requestPath === '/health'
     || requestPath.startsWith('/health/')
-    || requestPath === '/login';
+    || requestPath === '/login'
+  );
 
-  if (!skipAuth && deps.token && !deps.checkAuth(req, res)) return;
+  if (!skipAuth && (deps.token || deps.requireAuthForPublicRoutes) && !deps.checkAuth(req, res)) return;
 
   try {
     const handled = deps.route(req.method ?? 'GET', requestPath, req, res);

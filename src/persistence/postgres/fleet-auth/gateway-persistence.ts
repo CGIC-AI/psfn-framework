@@ -57,6 +57,7 @@ import {
   createGatewayRequestCapabilitySigner,
   createRequestCapabilityVerifier,
   type GatewayRequestCapabilitySigner,
+  type RequestCapabilityVerifier,
 } from '../../../boundary/fleet-auth/request-capability.js';
 import type { RequestCapabilityReplayPort } from '../../../boundary/fleet-auth/request-capability-replay.js';
 import { PostgresRequestCapabilityReplayStore } from './request-capability-replay.js';
@@ -73,6 +74,7 @@ export interface GatewayFleetAuthPersistence {
   authorityFloors: FleetAuthAuthorityFloorStore;
   broker: GatewayFleetAuthBroker;
   requestCapabilities: GatewayRequestCapabilitySigner;
+  requestCapabilityVerifier: RequestCapabilityVerifier;
   requestCapabilityReplay: RequestCapabilityReplayPort;
   childAssertions: GatewayFleetAuthChildAssertionBroker;
   authorityLifecycle: GatewayFleetAuthAuthorityLifecycleStore;
@@ -448,6 +450,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       authorityFloors,
       broker,
       requestCapabilities,
+      requestCapabilityVerifier,
       requestCapabilityReplay,
       childAssertions,
       authorityLifecycle,

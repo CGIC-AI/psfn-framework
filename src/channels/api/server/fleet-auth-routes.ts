@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { TLSSocket } from 'node:tls';
 import {
   FleetAuthBrokerError,
   type GatewayFleetAuthBroker,
@@ -11,6 +10,7 @@ import {
   isLifecycleOAuthProofRole,
 } from '../../../shared/contracts/fleet-auth-lifecycle-oauth.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import { resolveFleetSsoBrowserOrigin } from '../../../boundary/gateway/fleet-sso-router.js';
 
 const LOGIN_PATH = '/v1/fleet-auth/login';
 export const FLEET_AUTH_LIFECYCLE_OAUTH_PATH = '/v1/fleet-auth/lifecycle/oauth';
@@ -54,12 +54,16 @@ function requireSingleQuery(url: URL, name: string): string | undefined {
   return values.length === 1 ? values[0] ?? undefined : undefined;
 }
 
-function requestCallbackOrigin(request: IncomingMessage, canonicalOrigin: string): string {
-  const expected = new URL(canonicalOrigin);
-  const host = singleHeader(request.headers.host);
-  const tls = request.socket instanceof TLSSocket;
-  if (!tls || host !== expected.host) return 'invalid://callback-origin';
-  return `https://${host}`;
+function requestCallbackOrigin(
+  request: IncomingMessage,
+  canonicalOrigin: string,
+  trustProxy: boolean,
+): string {
+  try {
+    return resolveFleetSsoBrowserOrigin(request, { canonicalOrigin, trustProxy });
+  } catch {
+    return 'invalid://callback-origin';
+  }
 }
 
 function mutationOrigin(request: IncomingMessage): string {
@@ -111,15 +115,18 @@ export class FleetAuthHttpRoutes {
   private readonly broker: GatewayFleetAuthBroker;
   private readonly canonicalOrigin: string;
   private readonly callbackPath: string;
+  private readonly trustProxy: boolean;
 
   constructor(options: {
     broker: GatewayFleetAuthBroker;
     canonicalOrigin: string;
     callbackPath: string;
+    trustProxy?: boolean;
   }) {
     this.broker = options.broker;
     this.canonicalOrigin = options.canonicalOrigin;
     this.callbackPath = options.callbackPath;
+    this.trustProxy = options.trustProxy === true;
   }
 
   matches(method: string | undefined, path: string): boolean {
@@ -206,7 +213,7 @@ export class FleetAuthHttpRoutes {
         const completed = await this.broker.completeOAuthCallback({
           state,
           code,
-          requestOrigin: requestCallbackOrigin(request, this.canonicalOrigin),
+          requestOrigin: requestCallbackOrigin(request, this.canonicalOrigin, this.trustProxy),
           initiatingBrowserToken: readOpaqueCookie(request, PREAUTH_COOKIE_NAME) ?? '',
         });
         if (completed.kind === 'login') {
@@ -237,7 +244,7 @@ export class FleetAuthHttpRoutes {
       if (request.method === 'GET' && url.pathname === CSRF_PATH) {
         const csrfToken = await this.broker.issueCsrf({
           token,
-          requestOrigin: requestCallbackOrigin(request, this.canonicalOrigin),
+          requestOrigin: requestCallbackOrigin(request, this.canonicalOrigin, this.trustProxy),
         });
         sendJson(response, 200, { csrfToken }, { 'Cache-Control': 'no-store' });
         return;

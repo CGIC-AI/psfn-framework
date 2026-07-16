@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import type { Duplex } from 'node:stream';
+import type { TLSSocket } from 'node:tls';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -32,6 +35,17 @@ import {
   validateGardenRequestMetadata,
 } from '../../boundary/fleet-auth/request-capability-target.js';
 import { stripBrowserRequestCapabilityHeaders } from '../../boundary/fleet-auth/request-capability-transport.js';
+import { createRequestCapabilityVerifier, type RequestCapabilityVerifier } from '../../boundary/fleet-auth/request-capability.js';
+import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
+import {
+  requireMtlsPeerFileConfig,
+  verifyPeerCertificateSpiffeUri,
+  type RequiredMtlsPeerFileConfig,
+} from '../../shared/net/mtls.js';
+import {
+  authenticateGardenFleetSsoRequest,
+  GardenFleetSsoAuthenticationError,
+} from './fleet-sso-auth.js';
 
 const log = createComponentLogger('GardenOperatorSurface');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -54,6 +68,8 @@ export interface GardenOperatorSurfaceConfig {
    * from this surface and stay pending (fail closed).
    */
   operatorConfirmationResolver?: GatewayOperatorConfirmationClient;
+  /** Required for a non-loopback fleet-auth Garden listener. */
+  fleetSsoTls?: RequiredMtlsPeerFileConfig;
 }
 
 /**
@@ -86,14 +102,35 @@ interface GardenOperatorHealthPayload {
 }
 
 export class GardenOperatorSurface implements Lifecycle {
-  private readonly server: Server;
+  private readonly server: Server | HttpsServer;
   private readonly transport: AdminServerTransport;
   private readonly proxy: GardenAdminTransportProxy;
+  private readonly fleetVerifier?: RequestCapabilityVerifier;
+  private readonly companionId?: CompanionId;
 
   constructor(private readonly config: GardenOperatorSurfaceConfig) {
     this.transport = new AdminServerTransport(log);
     this.proxy = new GardenAdminTransportProxy(config.transportEndpoint);
-    this.server = createServer((req, res) => this.handleRequest(req, res));
+    if (config.config.fleetAuthVerifier) {
+      if (!config.config.companionId) {
+        throw new Error('Fleet-auth Garden requires its server-owned companion identity');
+      }
+      this.companionId = createCompanionId(config.config.companionId, 'Fleet-auth Garden companionId');
+      this.fleetVerifier = createRequestCapabilityVerifier(
+        config.config.fleetAuthVerifier.requestCapabilities,
+      );
+    }
+    const handler = (req: IncomingMessage, res: ServerResponse) => this.handleRequest(req, res);
+    this.server = config.fleetSsoTls
+      ? createHttpsServer({
+          ca: readFileSync(config.fleetSsoTls.caPath),
+          cert: readFileSync(config.fleetSsoTls.certPath),
+          key: readFileSync(config.fleetSsoTls.keyPath),
+          requestCert: true,
+          rejectUnauthorized: true,
+          minVersion: 'TLSv1.3',
+        }, handler)
+      : createServer(handler);
     this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
   }
 
@@ -111,16 +148,27 @@ export class GardenOperatorSurface implements Lifecycle {
         ...(this.config.token ? { ADMIN_TOKEN: this.config.token } : {}),
         ...(this.config.allowInsecureWithoutToken ? { ADMIN_ALLOW_INSECURE: 'true' } : {}),
       },
+      principalAuthenticationWired: this.fleetVerifier !== undefined,
     });
     const host = this.config.host ?? '127.0.0.1';
-    validateAdminAuthStartupPolicy({
-      host,
-      port: this.config.port,
-      token: this.config.token,
-      allowInsecureWithoutToken: this.config.allowInsecureWithoutToken,
-      componentLabel: 'Garden operator surface',
-      logger: log,
-    });
+    if (this.fleetVerifier) {
+      const loopback = host === '127.0.0.1' || host === '::1' || host === 'localhost';
+      if (!loopback && !this.config.fleetSsoTls) {
+        throw new Error('Non-loopback fleet-auth Garden requires HTTPS mTLS with SPIFFE authorization');
+      }
+      if (this.config.fleetSsoTls) {
+        requireMtlsPeerFileConfig(this.config.fleetSsoTls, 'Fleet SSO Garden server TLS');
+      }
+    } else {
+      validateAdminAuthStartupPolicy({
+        host,
+        port: this.config.port,
+        token: this.config.token,
+        allowInsecureWithoutToken: this.config.allowInsecureWithoutToken,
+        componentLabel: 'Garden operator surface',
+        logger: log,
+      });
+    }
 
     return await new Promise((resolve, reject) => {
       const onError = (error: NodeJS.ErrnoException) => {
@@ -161,9 +209,13 @@ export class GardenOperatorSurface implements Lifecycle {
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
+    if (!this.authorizeFleetPeer(req)) {
+      sendText(res, 403, 'Forbidden');
+      return;
+    }
     handleAdminRequest(req, res, {
       token: this.config.token,
-      checkAuth: (request, response) => checkAdminRequestAuth(request, response, this.config.token),
+      checkAuth: (request, response) => this.checkRequestAuth(request, response),
       isGardenUiEnabled: () => this.transport.isGardenUiEnabled(),
       serveGardenBuildAsset: (path, request, response) => this.transport.serveGardenBuildAsset(path, request, response),
       serveGardenPage: (path, request, response) => this.transport.serveGardenPage(path, request, response),
@@ -175,17 +227,25 @@ export class GardenOperatorSurface implements Lifecycle {
           error: toErrorMessage(error),
         });
       },
+      trustedRequestCapability: this.fleetVerifier !== undefined,
+      requireAuthForPublicRoutes: this.fleetVerifier !== undefined,
     });
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
-    stripBrowserRequestCapabilityHeaders(req.headers);
+    if (!this.authorizeFleetPeer(req)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
+    const metadataHeaders = this.fleetVerifier ? { ...req.headers } : req.headers;
+    stripBrowserRequestCapabilityHeaders(metadataHeaders);
     let target;
     try {
       target = validateGardenRequestMetadata({
         rawTarget: req.url ?? '/',
         method: 'WS',
-        headers: req.headers,
+        headers: metadataHeaders,
       });
     } catch (error) {
       const status = error instanceof GardenRequestTargetError && error.code === 'route_not_declared'
@@ -201,13 +261,70 @@ export class GardenOperatorSurface implements Lifecycle {
       return;
     }
 
-    if (!checkAdminUpgradeAuth(req, this.config.token)) {
+    if (this.fleetVerifier && this.companionId) {
+      try {
+        authenticateGardenFleetSsoRequest({
+          request: req,
+          metadata: target,
+          companionId: this.companionId,
+          verifier: this.fleetVerifier,
+        });
+      } catch {
+        socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+        socket.destroy();
+        return;
+      }
+    } else if (!checkAdminUpgradeAuth(req, this.config.token)) {
       socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
       socket.destroy();
       return;
     }
 
     this.proxy.handleTelemetryUpgrade(req, socket, head);
+  }
+
+  private authorizeFleetPeer(req: IncomingMessage): boolean {
+    if (!this.fleetVerifier) return true;
+    if (!this.config.fleetSsoTls) {
+      const address = req.socket.remoteAddress;
+      return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+    }
+    const socket = req.socket as TLSSocket;
+    if (!socket.authorized) return false;
+    const certificate = socket.getPeerCertificate();
+    return Object.keys(certificate).length > 0
+      && verifyPeerCertificateSpiffeUri(
+        certificate,
+        this.config.fleetSsoTls.expectedPeerSpiffeUri,
+      ) === null;
+  }
+
+  private checkRequestAuth(req: IncomingMessage, res: ServerResponse): boolean {
+    if (!this.fleetVerifier || !this.companionId) {
+      return checkAdminRequestAuth(req, res, this.config.token);
+    }
+    const headers = { ...req.headers };
+    stripBrowserRequestCapabilityHeaders(headers);
+    try {
+      const metadata = validateGardenRequestMetadata({
+        rawTarget: req.url ?? '/',
+        method: req.method ?? 'GET',
+        headers,
+      });
+      authenticateGardenFleetSsoRequest({
+        request: req,
+        metadata,
+        companionId: this.companionId,
+        verifier: this.fleetVerifier,
+      });
+      return true;
+    } catch (error) {
+      if (!(error instanceof GardenFleetSsoAuthenticationError)) {
+        log.warn('Rejected malformed fleet SSO Garden request');
+      }
+      sendText(res, 401, 'Unauthorized');
+      return false;
+    }
   }
 
   private route(

@@ -694,6 +694,14 @@ const gardenDeployment = findDocumentByKindName(rendered, 'Deployment', 'psfn-ga
 assertNotIncludes(gardenDeployment, 'name: wait-for-postgres', 'Garden direct Postgres startup wait');
 assertIncludes(gardenDeployment, 'name: workspace', 'Garden workspace PVC volume mount');
 assertIncludes(gardenDeployment, 'mountPath: /app/workspace', 'Garden workspace PVC mount path');
+assertIncludes(gardenDeployment, 'name: ADMIN_TOKEN', 'fleet-off internal Garden legacy credential');
+assertNotIncludes(gardenDeployment, 'FLEET_SSO_GARDEN_TLS_', 'fleet-off Garden SSO TLS wiring');
+const gardenService = findDocumentByKindName(rendered, 'Service', 'psfn-garden');
+assertIncludes(gardenService, 'type: ClusterIP', 'fleet-off Garden internal-only Service');
+if (findDocumentByKindName(rendered, 'Ingress', 'psfn-garden')) {
+  throw new Error('fleet-off Garden must not render a direct privileged Ingress');
+}
+assertNotIncludes(rendered, 'hostPort: 3001', 'fleet-off direct Garden hostPort');
 
 // Owner-file seeding is fail-closed by default: the seed init container creates
 // runtime dirs and the companion.json bootstrap, but must NOT copy *.seed.json
@@ -1383,8 +1391,6 @@ const companionUiRendered = render([
   'companionUiTest.image.tag=0.1.0-kube-abcdef012345',
   '--set-string',
   `companionUiTest.image.digest=${companionUiDigest}`,
-  '--set',
-  'ingress.companionUiTest.enabled=true',
 ]);
 
 const companionUiDeployment = findDocumentByKindName(companionUiRendered, 'Deployment', 'psfn-companion-ui-test');
@@ -1398,20 +1404,19 @@ assertNotIncludes(companionUiDeployment, 'POSTGRES_DATABASE_URL', 'companion-ui 
 assertNotIncludes(companionUiDeployment, 'secretKeyRef', 'companion-ui test has no secret references');
 
 const companionUiService = findDocumentByKindName(companionUiRendered, 'Service', 'psfn-companion-ui-test');
+assertIncludes(companionUiService, 'type: ClusterIP', 'companion-ui test internal-only Service');
 assertIncludes(companionUiService, 'name: http-ui', 'companion-ui test Service port name');
 assertIncludes(companionUiService, 'port: 8080', 'companion-ui test Service port value');
 assertIncludes(companionUiService, 'targetPort: http-ui', 'companion-ui test Service target port');
 
 const companionUiIngress = findDocumentByKindName(companionUiRendered, 'Ingress', 'psfn-companion-ui-test');
-assertIncludes(companionUiIngress, 'path: "/companion-ui/"', 'companion-ui canonical Ingress path');
-assertIncludes(companionUiIngress, 'name: http-ui', 'companion-ui test Ingress service port');
+if (companionUiIngress) throw new Error('companion-ui must not render a direct browser Ingress');
 
 const companionUiPolicy = findDocumentByKindName(companionUiRendered, 'NetworkPolicy', 'psfn-companion-ui-test');
-assertIncludes(companionUiPolicy, 'app.kubernetes.io/name: traefik', 'companion-ui test ingress controller policy');
+assertIncludes(companionUiPolicy, 'component: gateway', 'companion-ui test gateway-only ingress policy');
 assertIncludes(companionUiPolicy, 'port: 8080', 'companion-ui test policy ingress port');
 assertIncludes(companionUiPolicy, 'egress: []', 'companion-ui test policy denies all egress');
 assertNotIncludes(companionUiPolicy, '0.0.0.0/0', 'companion-ui test policy has no broad egress');
-assertNotIncludes(companionUiPolicy, 'component: gateway', 'companion-ui test policy has no gateway egress');
 
 const companionUiDigestOnlyRendered = render([
   '--set',
@@ -1432,8 +1437,114 @@ assertRenderFails([
   '--set-string',
   `companionUiTest.image.digest=${companionUiDigest}`,
   '--set',
-  'ingress.companionUiTest.path=/companion',
-], 'ingress.companionUiTest.path must be exactly /companion-ui/');
+  'companionUiTest.service.type=NodePort',
+], 'companionUiTest.service.type must be ClusterIP');
+
+const unifiedOriginRendered = render([
+  '--set',
+  'fleetAuth.enabled=true',
+  '--set-string',
+  'runtime.companionId=11111111-1111-4111-8111-111111111111',
+  '--set',
+  'ingress.gateway.tls.enabled=true',
+  '--set-string',
+  'ingress.gateway.tls.secretName=psfn-public-origin-tls',
+  '--set',
+  'companionUiTest.enabled=true',
+  '--set',
+  'companionUiTest.image.repository=localhost/psfn-companion-ui',
+  '--set-string',
+  `companionUiTest.image.digest=${companionUiDigest}`,
+  '--set-string',
+  'fleetAuth.companionUiCompanionId=11111111-1111-4111-8111-111111111111',
+]);
+const unifiedGateway = findDocumentByKindName(unifiedOriginRendered, 'Deployment', 'psfn-gateway');
+for (const envName of [
+  'FLEET_SSO_TRUST_PROXY',
+  'FLEET_SSO_GARDEN_HOST',
+  'FLEET_SSO_GARDEN_TLS_CA_PATH',
+  'FLEET_SSO_GARDEN_TLS_CERT_PATH',
+  'FLEET_SSO_GARDEN_TLS_KEY_PATH',
+  'FLEET_SSO_GARDEN_TLS_EXPECTED_PEER_SPIFFE_URI',
+  'FLEET_SSO_GARDEN_TLS_SERVER_NAME',
+  'FLEET_SSO_COMPANION_UI_ORIGIN',
+  'FLEET_SSO_COMPANION_UI_COMPANION_ID',
+]) {
+  assertIncludes(unifiedGateway, `name: ${envName}`, `unified-origin gateway ${envName}`);
+}
+assertNotIncludes(unifiedGateway, 'name: ADMIN_TOKEN', 'fleet-on gateway legacy admin credential');
+assertIncludes(unifiedGateway, 'secretName: psfn-gateway-sso-client-tls', 'gateway SSO client certificate');
+
+const unifiedGarden = findDocumentByKindName(unifiedOriginRendered, 'Deployment', 'psfn-garden');
+assertIncludes(unifiedGarden, 'name: https-garden', 'fleet-on Garden TLS listener');
+assertIncludes(unifiedGarden, 'name: FLEET_SSO_GARDEN_TLS_EXPECTED_PEER_SPIFFE_URI', 'Garden gateway SPIFFE check');
+assertIncludes(unifiedGarden, 'secretName: psfn-garden-sso-server-tls', 'Garden SSO server certificate');
+assertNotIncludes(unifiedGarden, 'name: ADMIN_TOKEN', 'fleet-on Garden legacy admin credential');
+
+for (const directIngress of ['psfn-garden', 'psfn-companion-ui-test']) {
+  if (findDocumentByKindName(unifiedOriginRendered, 'Ingress', directIngress)) {
+    throw new Error(`${directIngress} must not render a direct browser Ingress`);
+  }
+}
+const unifiedIngresses = findDocumentsByKind(unifiedOriginRendered, 'Ingress');
+if (unifiedIngresses.length !== 1
+  || !unifiedIngresses[0].includes('\n  name: psfn-gateway\n')) {
+  throw new Error('fleet-on browser topology must render the Gateway as the sole Ingress');
+}
+assertIncludes(unifiedIngresses[0], 'secretName: "psfn-public-origin-tls"', 'canonical origin TLS Secret');
+assertNotIncludes(unifiedOriginRendered, 'hostPort: 3001', 'fleet-on direct Garden hostPort');
+const unifiedGardenPolicy = findDocumentByKindName(
+  unifiedOriginRendered,
+  'NetworkPolicy',
+  'psfn-garden',
+);
+assertIncludes(unifiedGardenPolicy, 'component: gateway', 'fleet-on Garden gateway-only ingress');
+assertNotIncludes(unifiedGardenPolicy, 'app.kubernetes.io/name: traefik', 'Garden direct ingress controller');
+const unifiedUiPolicy = findDocumentByKindName(
+  unifiedOriginRendered,
+  'NetworkPolicy',
+  'psfn-companion-ui-test',
+);
+assertIncludes(unifiedUiPolicy, 'component: gateway', 'fleet-on Companion UI gateway-only ingress');
+const gardenSsoCertificate = findDocumentByKindName(
+  unifiedOriginRendered,
+  'Certificate',
+  'psfn-garden-sso-server',
+);
+assertIncludes(
+  gardenSsoCertificate,
+  'spiffe://cluster.local/psfn/garden/11111111-1111-4111-8111-111111111111',
+  'Garden SSO SPIFFE SAN',
+);
+const gatewaySsoCertificate = findDocumentByKindName(
+  unifiedOriginRendered,
+  'Certificate',
+  'psfn-gateway-sso-client',
+);
+assertIncludes(
+  gatewaySsoCertificate,
+  'spiffe://cluster.local/psfn/gateway/11111111-1111-4111-8111-111111111111',
+  'Gateway SSO SPIFFE SAN',
+);
+assertRenderFails(
+  ['--set', 'fleetAuth.enabled=true'],
+  'fleetAuth.enabled=true requires runtime.companionId to be one lowercase RFC4122 UUID',
+);
+assertRenderFails(
+  [
+    '--set', 'fleetAuth.enabled=true',
+    '--set-string', 'runtime.companionId=11111111-1111-4111-8111-111111111111',
+  ],
+  'fleetAuth.enabled=true requires ingress.gateway.tls.enabled=true',
+);
+assertRenderFails(
+  [
+    '--set', 'fleetAuth.enabled=true',
+    '--set-string', 'runtime.companionId=11111111-1111-4111-8111-111111111111',
+    '--set', 'ingress.gateway.tls.enabled=true',
+  ],
+  'fleetAuth.enabled=true requires ingress.gateway.tls.secretName',
+);
 
 const prefetchRendered = render([
   '--set',

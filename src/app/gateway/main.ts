@@ -601,6 +601,9 @@ async function main(): Promise<void> {
       ? {
           fleetAuthBroker: fleetAuthPersistence.broker,
           fleetAuthChildAssertions: fleetAuthPersistence.childAssertions,
+          fleetAuthRequestCapabilities: fleetAuthPersistence.requestCapabilities,
+          fleetAuthRequestCapabilityVerifier: fleetAuthPersistence.requestCapabilityVerifier,
+          fleetAuthRequestCapabilityReplay: fleetAuthPersistence.requestCapabilityReplay,
           hubDeviceAssertionVerifier: fleetAuthPersistence,
         }
       : {}),

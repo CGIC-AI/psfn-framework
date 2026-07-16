@@ -20,6 +20,8 @@ import {
   FleetAuthPasskeyHttpRoutes,
 } from './fleet-auth-passkey-routes.js';
 import type { TrustedHostPasskeyCeremonyService } from '../../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
+import type { GatewayTrustedHostGardenRecoveryService } from '../../../boundary/gateway/trusted-host-garden-recovery.js';
+import { FleetAuthRecoveryHttpRoutes } from './fleet-auth-recovery-routes.js';
 
 const LOGIN_PATH = '/v1/fleet-auth/login';
 export const FLEET_AUTH_LIFECYCLE_OAUTH_PATH = '/v1/fleet-auth/lifecycle/oauth';
@@ -126,6 +128,7 @@ export class FleetAuthHttpRoutes {
   private readonly trustProxy: boolean;
   private readonly jitRoutes?: FleetAuthJitHttpRoutes;
   private readonly passkeyRoutes?: FleetAuthPasskeyHttpRoutes;
+  private readonly recoveryRoutes?: FleetAuthRecoveryHttpRoutes;
 
   constructor(options: {
     broker: GatewayFleetAuthBroker;
@@ -133,6 +136,7 @@ export class FleetAuthHttpRoutes {
     callbackPath: string;
     jitStepUp?: FleetJitStepUpCoordinator;
     passkeyCeremonies?: TrustedHostPasskeyCeremonyService;
+    trustedHostRecovery?: GatewayTrustedHostGardenRecoveryService;
     trustProxy?: boolean;
   }) {
     this.broker = options.broker;
@@ -148,11 +152,15 @@ export class FleetAuthHttpRoutes {
         broker: options.broker,
       })
       : undefined;
+    this.recoveryRoutes = options.trustedHostRecovery
+      ? new FleetAuthRecoveryHttpRoutes(options.trustedHostRecovery)
+      : undefined;
   }
 
   matches(method: string | undefined, path: string): boolean {
     return (this.jitRoutes?.matches(method, path) ?? false)
       || (this.passkeyRoutes?.matches(method, path) ?? false)
+      || (this.recoveryRoutes?.matches(method, path) ?? false)
       || (method === 'GET' && (path === LOGIN_PATH || path === CSRF_PATH || path === this.callbackPath))
       || (method === 'POST'
         && (path === FLEET_AUTH_LIFECYCLE_OAUTH_PATH || path === REFRESH_PATH
@@ -212,6 +220,10 @@ export class FleetAuthHttpRoutes {
     response.setHeader('Referrer-Policy', 'no-referrer');
     const isCallback = request.method === 'GET' && url.pathname === this.callbackPath;
     try {
+      if (this.recoveryRoutes?.matches(request.method, url.pathname)) {
+        await this.recoveryRoutes.handle(request, response, url);
+        return;
+      }
       if (request.method === 'GET' && url.pathname === LOGIN_PATH) {
         const returnPath = requireSingleQuery(url, 'return_to');
         if (!returnPath || [...url.searchParams.keys()].some(key => key !== 'return_to')) {

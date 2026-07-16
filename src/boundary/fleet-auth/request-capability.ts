@@ -26,6 +26,28 @@ import {
 } from './garden-route-capabilities.js';
 import type { CompiledGardenRequestTarget } from './request-capability-target.js';
 import { resolveCompanionUiActionClassification } from './companion-ui-action.js';
+import {
+  createGatewayTrustedHostRecoveryCapabilitySigner,
+  createTrustedHostRecoveryCapabilityVerifier,
+  type GatewayTrustedHostRecoveryCapabilitySigner,
+  type TrustedHostRecoveryCapabilityVerifier,
+} from './recovery-request-capability.js';
+
+export {
+  compileTrustedHostRecoveryTarget,
+  trustedHostRecoveryResource,
+  TRUSTED_HOST_RECOVERY_ACTION,
+  TRUSTED_HOST_RECOVERY_CONSUME_ROUTE,
+  TrustedHostRecoveryCapabilityRejectedError,
+} from './recovery-request-capability.js';
+export type {
+  TrustedHostRecoveryAuthorityFloor,
+  TrustedHostRecoveryCapabilitySignInput,
+  TrustedHostRecoveryCapabilityVerifyInput,
+  TrustedHostRecoveryResource,
+  TrustedHostRecoveryTarget,
+  VerifiedTrustedHostRecoveryCapability,
+} from './recovery-request-capability.js';
 
 const HEADER_KEYS = ['alg', 'typ', 'v', 'kid'] as const;
 const OPERATOR_CLAIM_KEYS = [
@@ -171,7 +193,8 @@ export interface RequestCapabilityVerifierConfig {
   readonly keys: readonly RequestCapabilityVerifierKey[];
 }
 
-export interface GatewayRequestCapabilitySigner {
+export interface GatewayRequestCapabilitySigner
+  extends GatewayTrustedHostRecoveryCapabilitySigner {
   signOperator(input: RequestCapabilitySignInput): string;
   signAgent(input: RequestCapabilitySignInput & {
     readonly parent: RequestCapabilityParentBinding;
@@ -191,7 +214,7 @@ export interface RequestCapabilityVerifyInput extends Omit<RequestCapabilitySign
   readonly nowSeconds?: number;
 }
 
-export interface RequestCapabilityVerifier {
+export interface RequestCapabilityVerifier extends TrustedHostRecoveryCapabilityVerifier {
   verifyOperator(input: RequestCapabilityVerifyInput): VerifiedRequestCapability;
   /**
    * Verify the signed gateway-to-operator envelope at the mTLS/loopback hop.
@@ -715,6 +738,7 @@ export function createGatewayRequestCapabilitySigner(input: {
   readonly nowSeconds?: () => number;
   readonly generateJti?: () => string;
 }): GatewayRequestCapabilitySigner {
+  const recoverySigner = createGatewayTrustedHostRecoveryCapabilitySigner(input);
   const issuer = requireStableId(input.issuer, 'signer issuer');
   const kid = requireStableId(input.kid, 'signer key id');
   if (!Number.isSafeInteger(input.ttlSeconds) || input.ttlSeconds < 1 || input.ttlSeconds > 60) {
@@ -754,6 +778,7 @@ export function createGatewayRequestCapabilitySigner(input: {
     return `${signingInput}.${signature}`;
   };
   return Object.freeze({
+    signRecovery: recoverySigner.signRecovery,
     signOperator: (signInput: RequestCapabilitySignInput) => issue(
       signInput,
       `operator:${signInput.target.companionId}`,
@@ -1074,6 +1099,7 @@ function assertClaimsBinding(
 export function createRequestCapabilityVerifier(
   config: RequestCapabilityVerifierConfig,
 ): RequestCapabilityVerifier {
+  const recoveryVerifier = createTrustedHostRecoveryCapabilityVerifier(config);
   const parsedConfig = parseVerifierConfig(config);
   const verifyToken = (
     token: string,
@@ -1156,6 +1182,7 @@ export function createRequestCapabilityVerifier(
     return verifiedCapability(claims, key);
   };
   return Object.freeze({
+    verifyRecovery: recoveryVerifier.verifyRecovery,
     verifyOperator: (input: RequestCapabilityVerifyInput) => verifyExpected(input, 'operator'),
     verifyOperatorTransport: (input: RequestCapabilityTransportVerifyInput) => {
       requireUuid(input.companionId, 'transport companionId');

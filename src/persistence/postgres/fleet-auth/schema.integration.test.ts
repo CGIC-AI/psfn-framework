@@ -562,6 +562,112 @@ describe('fleet_auth Postgres authority boundary', () => {
     }
   }, TIMEOUT_MS);
 
+  it('atomically consumes exact trusted-host recovery capabilities and fences authority advances', async () => {
+    const db = await freshDatabase();
+    await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
+    const runtime = createPostgresPool(db.runtimeUrl, { max: 8, allowExitOnIdle: true });
+    const backup = createPostgresPool(db.backupUrl, { max: 1, allowExitOnIdle: true });
+    const store = new PostgresRequestCapabilityReplayStore(runtime);
+    const hash = (value: string): string => createHash('sha256').update(value).digest('hex');
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    const audience = `recovery:${companionId}` as const;
+    const decisionId = randomUUID();
+    const expiresAt = new Date((Math.floor(Date.now() / 1_000) + 30) * 1_000);
+    const consumeResult = {
+      schemaVersion: 1 as const,
+      kind: 'trusted_host_garden_recovery_receipt' as const,
+      decision: 'allow' as const,
+      outcome: 'recovery_ready' as const,
+      requestId: randomUUID(),
+      decisionId,
+      targetDigest: '2'.repeat(64),
+      audience,
+      companionId,
+      action: 'recovery.begin' as const,
+      resourceDigest: '3'.repeat(64),
+      reasonDigest: '4'.repeat(64),
+      credentialId: '5'.repeat(64),
+      authorityFloorDigest: '6'.repeat(64),
+      expiresAt: Math.floor(expiresAt.getTime() / 1_000),
+    };
+    const input = {
+      issuer: 'fleet-auth',
+      jti: randomUUID(),
+      capabilityDigest: '1'.repeat(64),
+      targetDigest: consumeResult.targetDigest,
+      bodyDigest: '7'.repeat(64),
+      audienceDigest: hash(audience),
+      companionDigest: hash(companionId),
+      actionDigest: hash('recovery.begin'),
+      resourceDigest: consumeResult.resourceDigest,
+      parentDigest: hash('trusted_host_garden_recovery:v1'),
+      decisionDigest: hash(decisionId),
+      authorityVersionsDigest: consumeResult.authorityFloorDigest,
+      authorityFloor: {
+        authorityGeneration: 1,
+        activationGeneration: 1,
+        restoreCheckpoint: 0,
+      },
+      expiresAt,
+      consumeResult,
+    };
+    try {
+      const outcomes = await Promise.all(
+        Array.from({ length: 8 }, () => store.consumeRecovery(input)),
+      );
+      expect(outcomes.filter(outcome => outcome.outcome === 'consumed')).toHaveLength(1);
+      expect(outcomes.filter(outcome => outcome.outcome === 'replayed')).toHaveLength(7);
+      expect(outcomes.map(outcome => 'result' in outcome ? outcome.result : undefined))
+        .toEqual(Array.from({ length: 8 }, () => consumeResult));
+
+      await expect(store.consumeRecovery({
+        ...input,
+        bodyDigest: '8'.repeat(64),
+      })).resolves.toEqual({ outcome: 'mismatch' });
+
+      await backup.query(`
+        UPDATE ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+        SET authority_generation = authority_generation + 1,
+            global_auth_epoch = global_auth_epoch + 1
+        WHERE singleton = TRUE
+      `);
+      await expect(store.consumeRecovery({
+        ...input,
+        jti: randomUUID(),
+        capabilityDigest: '9'.repeat(64),
+      })).resolves.toEqual({ outcome: 'authority_changed' });
+
+      const audit = await runtime.query<{
+        reason_code: string;
+        decision_context: Record<string, unknown>;
+      }>(`
+        SELECT reason_code, decision_context
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+        WHERE action = 'trusted_host_recovery.consume'
+        ORDER BY occurred_at
+      `);
+      expect(audit.rows).toHaveLength(10);
+      expect(audit.rows.map(row => row.reason_code)).toEqual([
+        'trusted_host_recovery_consumed',
+        ...Array.from({ length: 7 }, () => 'trusted_host_recovery_replayed'),
+        'trusted_host_recovery_mismatch',
+        'trusted_host_recovery_authority_changed',
+      ]);
+      expect(audit.rows.at(-1)?.decision_context).toEqual(expect.objectContaining({
+        action: 'recovery.begin',
+        outcome: 'authority_changed',
+        targetDigest: input.targetDigest,
+        resourceDigest: input.resourceDigest,
+        reasonDigest: consumeResult.reasonDigest,
+        credentialId: consumeResult.credentialId,
+        authorityFloorDigest: input.authorityVersionsDigest,
+      }));
+      expect(JSON.stringify(audit.rows)).not.toContain('trusted-host-independent-recovery-secret');
+    } finally {
+      await Promise.all([runtime.end(), backup.end()]);
+    }
+  }, TIMEOUT_MS);
+
   it('freshly reauthorizes child assertions against the exact parent and current authority', async () => {
     const db = await freshDatabase();
     await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });

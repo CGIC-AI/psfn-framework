@@ -29,6 +29,10 @@ import type {
   AdminSessionMessagesData as CanonicalAdminSessionMessagesData,
   RuntimePromptUpdateResult as CanonicalRuntimePromptUpdateResult,
 } from '../../../../src/operator/garden/services/types.js';
+import type {
+  LLMProviderWireMessage,
+  LLMSystemPromptTransport,
+} from '../../../../src/shared/contracts/runtime.js';
 
 export type {
   CredentialReference,
@@ -478,13 +482,13 @@ export interface AdminPromptSectionTelemetry {
 }
 
 export interface AdminTurnProviderWireMessage {
-  role: string;
-  source: string;
+  role: LLMProviderWireMessage['role'];
+  source: LLMProviderWireMessage['source'];
   content: string;
 }
 
 export interface AdminTurnProviderSystemRoleData {
-  transport: string;
+  transport: LLMSystemPromptTransport;
   supportsSystemRole: boolean;
   supportsDeveloperRole: boolean;
   usesOutOfBandSystemPrompt: boolean;
@@ -529,7 +533,8 @@ export interface AdminTurnProviderObservabilityData {
   backendBaseUrl?: string;
   systemRole: AdminTurnProviderSystemRoleData;
   promptCaching?: AdminTurnPromptCachingObservabilityData;
-  providerWireMessages: AdminTurnProviderWireMessage[];
+  /** Absent on slim records when the PromptPlan can reproduce it byte-for-byte. */
+  providerWireMessages?: AdminTurnProviderWireMessage[];
   capturedWirePayload?: AdminTurnCapturedWirePayloadData;
 }
 
@@ -606,7 +611,8 @@ export interface AdminAdaptiveToolSnapshotData {
 }
 
 export interface AdminTurnToolContextSnapshotData {
-  activeTools: AdminTurnToolSchema[];
+  /** Absent on slim records when identical to PromptPlan.toolDefinitions. */
+  activeTools?: AdminTurnToolSchema[];
   adaptiveSnapshot?: AdminAdaptiveToolSnapshotData;
 }
 
@@ -643,7 +649,7 @@ export interface AdminPromptPlanBlock {
 }
 
 export interface AdminPromptPlanData {
-  schemaVersion: number;
+  schemaVersion: 1;
   blocks: AdminPromptPlanBlock[];
   variables: Record<string, string>;
   messages: AdminTurnPromptContextMessage[];

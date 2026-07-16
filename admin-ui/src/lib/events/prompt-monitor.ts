@@ -6,14 +6,13 @@ import type {
   AdminPromptSectionTelemetry,
   AdminSessionTurnData,
   AdminTurnPromptContextMessage,
-  AdminTurnPromptContextSnapshotData,
-  AdminTurnProviderObservabilityData,
   AdminTurnProviderWireMessage,
   AdminTurnSnapshotData,
   AdminTurnStageTelemetry,
-  AdminTurnToolContextSnapshotData,
 } from '../types';
 import type { GardenEventEnvelope } from './envelope';
+import { serializePromptPlanForProvider } from '../../../../src/core/agent/substrate-agent/turn-execution/prompt-plan.js';
+import type { Role } from '../../../../src/shared/contracts/runtime.js';
 
 export const PROMPT_MONITOR_STAGE_ORDER = [
   'trust',
@@ -63,26 +62,6 @@ export interface PromptMonitorSummary {
   latestPromptVersionPointer: string | null;
   latestStaticHash: string | null;
 }
-
-/**
- * Snapshot shape accepted at the Garden event/API boundary. Slim persisted
- * snapshots may omit derivable wire messages and tools; the UI view model
- * normalizes those collections while the server-projected promptLoom remains
- * authoritative for plan-derived provider payloads.
- */
-type PersistedTurnSnapshot = Omit<
-  AdminTurnSnapshotData,
-  'promptContext' | 'toolContext'
-> & {
-  promptContext?: Omit<AdminTurnPromptContextSnapshotData, 'providerObservability'> & {
-    providerObservability?: Omit<AdminTurnProviderObservabilityData, 'providerWireMessages'> & {
-      providerWireMessages?: AdminTurnProviderWireMessage[];
-    };
-  };
-  toolContext?: Omit<AdminTurnToolContextSnapshotData, 'activeTools'> & {
-    activeTools?: AdminTurnToolContextSnapshotData['activeTools'];
-  };
-};
 
 function cloneStage(stage: AdminTurnStageTelemetry): AdminTurnStageTelemetry {
   return {
@@ -184,7 +163,7 @@ function clonePromptLoom(loom: AdminPromptLoomData): AdminPromptLoomData {
   return cloneJsonSafe(loom);
 }
 
-function cloneSnapshot(snapshot: PersistedTurnSnapshot): AdminTurnSnapshotData {
+function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
   const { promptContext, toolContext, ...snapshotFields } = snapshot;
   return {
     ...snapshotFields,
@@ -222,8 +201,12 @@ function cloneSnapshot(snapshot: PersistedTurnSnapshot): AdminTurnSnapshotData {
               providerObservability: {
                 ...promptContext.providerObservability,
                 systemRole: { ...promptContext.providerObservability.systemRole },
-                providerWireMessages: (promptContext.providerObservability.providerWireMessages ?? [])
-                  .map(message => ({ ...message })),
+                ...(promptContext.providerObservability.providerWireMessages !== undefined
+                  ? {
+                    providerWireMessages: promptContext.providerObservability.providerWireMessages
+                      .map(message => ({ ...message })),
+                  }
+                  : {}),
               },
             }
             : {}),
@@ -240,10 +223,14 @@ function cloneSnapshot(snapshot: PersistedTurnSnapshot): AdminTurnSnapshotData {
     ...(toolContext
       ? {
         toolContext: {
-          activeTools: (toolContext.activeTools ?? []).map(tool => ({
-            ...tool,
-            inputSchema: cloneJsonObject(tool.inputSchema),
-          })),
+          ...(toolContext.activeTools !== undefined
+            ? {
+              activeTools: toolContext.activeTools.map(tool => ({
+                ...tool,
+                inputSchema: cloneJsonObject(tool.inputSchema),
+              })),
+            }
+            : {}),
           ...(toolContext.adaptiveSnapshot
             ? {
               adaptiveSnapshot: {
@@ -453,7 +440,64 @@ function clonePromptSectionsForLoom(
 function cloneProviderMessagesForLoom(
   messages: AdminTurnProviderWireMessage[] | undefined,
 ): AdminPromptLoomData['providerPayload']['providerMessages'] {
-  return (messages?.map(message => ({ ...message })) ?? []) as AdminPromptLoomData['providerPayload']['providerMessages'];
+  return messages?.map(message => ({ ...message })) ?? [];
+}
+
+function toCanonicalProviderPlan(plan: AdminPromptPlanData) {
+  return {
+    blocks: plan.blocks,
+    messages: plan.messages.map(message => ({
+      role: requireCanonicalPromptRole(message.role),
+      content: message.content,
+    })),
+  };
+}
+
+function requireCanonicalPromptRole(role: string): Role {
+  switch (role) {
+    case 'user':
+    case 'assistant':
+    case 'system':
+      return role;
+    default:
+      throw new Error(`PromptPlan message carries unsupported role ${JSON.stringify(role)}`);
+  }
+}
+
+function resolveProviderMessages(
+  snapshot: AdminTurnSnapshotData | null,
+): AdminPromptLoomData['providerPayload']['providerMessages'] {
+  const embedded = snapshot?.promptContext?.providerObservability?.providerWireMessages;
+  if (embedded !== undefined) {
+    return cloneProviderMessagesForLoom(embedded);
+  }
+  const plan = snapshot?.plan;
+  const transport = snapshot?.promptContext?.providerObservability?.systemRole.transport;
+  if (!plan || !transport) return [];
+  const serialized = serializePromptPlanForProvider(toCanonicalProviderPlan(plan), transport);
+  // The persistence read derivation uses this same serialized plan history,
+  // followed by the captured current-turn user input.
+  return [
+    ...serialized.providerWireMessages.map(message => ({ ...message })),
+    {
+      role: 'user',
+      source: 'message',
+      content: snapshot.promptContext?.currentTurnInput ?? '',
+    },
+  ];
+}
+
+function resolveActiveTools(
+  snapshot: AdminTurnSnapshotData | null,
+): AdminPromptLoomData['providerPayload']['activeTools'] {
+  const embedded = snapshot?.toolContext?.activeTools;
+  const tools = embedded !== undefined
+    ? embedded
+    : snapshot?.plan?.toolDefinitions ?? [];
+  return tools.map(tool => ({
+    ...tool,
+    inputSchema: cloneJsonObject(tool.inputSchema),
+  }));
 }
 
 function getPlanBlockText(
@@ -544,35 +588,40 @@ function derivePromptLoomPlanStrings(
   };
 }
 
-/**
- * Live-bus fallback Provider Wire view. The recorded provider-wire capture is
- * byte-equal to the plan serialization at runtime (E2.2 single assembly path),
- * so the fallback serves the capture with an explicit 'recorded_snapshot'
- * source marker; the persisted-record path serves the plan-derived wire.
- */
+/** Live-bus fallback matching the server's canonical Provider Wire projection. */
 function buildProviderWireFromSnapshot(
   snapshot: AdminTurnSnapshotData | null,
   planStrings: PromptLoomPlanStrings,
 ): AdminPromptLoomData['providerWire'] {
   const plan = snapshot?.plan ?? null;
-  const toolDefinitions = plan
-    ? plan.toolDefinitions.map(tool => ({ ...tool, inputSchema: cloneJsonObject(tool.inputSchema) }))
-    : snapshot?.toolContext?.activeTools.map(tool => ({
-      ...tool,
-      inputSchema: cloneJsonObject(tool.inputSchema),
-    })) ?? [];
+  const transport = snapshot?.promptContext?.providerObservability?.systemRole.transport ?? null;
   const captured = snapshot?.promptContext?.providerObservability?.capturedWirePayload;
+  if (plan && transport) {
+    const payload = serializePromptPlanForProvider(toCanonicalProviderPlan(plan), transport);
+    return {
+      source: 'prompt_plan',
+      legacy: false,
+      systemRoleTransport: transport,
+      systemPrompt: payload.systemPrompt,
+      messages: payload.providerWireMessages.map(message => ({ ...message })),
+      toolDefinitions: plan.toolDefinitions.map(tool => ({
+        ...tool,
+        inputSchema: cloneJsonObject(tool.inputSchema),
+      })),
+      ...(captured ? { capturedWirePayload: cloneJsonSafe(captured) } : {}),
+    };
+  }
   return {
     source: 'recorded_snapshot',
     legacy: plan === null,
-    systemRoleTransport: snapshot?.promptContext?.providerObservability?.systemRole?.transport ?? null,
+    systemRoleTransport: transport,
     systemPrompt: planStrings.finalSystemPrompt,
-    messages: cloneProviderMessagesForLoom(snapshot?.promptContext?.providerObservability?.providerWireMessages),
-    toolDefinitions,
+    messages: resolveProviderMessages(snapshot),
+    toolDefinitions: resolveActiveTools(snapshot),
     // Raw-wire view captured as-sent (bead hgw3-80f6); clone so live-bus mutation
     // cannot reach back into the observed snapshot. Preserve absence.
     ...(captured ? { capturedWirePayload: cloneJsonSafe(captured) } : {}),
-  } as AdminPromptLoomData['providerWire'];
+  };
 }
 
 function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
@@ -608,11 +657,8 @@ function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
     },
     providerPayload: {
       finalSystemPrompt: planStrings.finalSystemPrompt,
-      providerMessages: cloneProviderMessagesForLoom(promptContext?.providerObservability?.providerWireMessages),
-      activeTools: snapshot?.toolContext?.activeTools.map(tool => ({
-        ...tool,
-        inputSchema: cloneJsonObject(tool.inputSchema),
-      })) ?? [],
+      providerMessages: resolveProviderMessages(snapshot),
+      activeTools: resolveActiveTools(snapshot),
     },
     providerResult: {
       response: response ? { ...response } : null,
@@ -810,7 +856,7 @@ function readSnapshotEnvelopeData(
   if (event.type !== 'agent.turn.snapshot' || typeof event.data !== 'object' || event.data === null) {
     return null;
   }
-  const snapshot = (event.data as { snapshot?: PersistedTurnSnapshot }).snapshot;
+  const snapshot = (event.data as { snapshot?: AdminTurnSnapshotData }).snapshot;
   if (!snapshot || typeof snapshot.turnId !== 'string' || typeof snapshot.channelId !== 'string') {
     return null;
   }

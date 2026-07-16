@@ -39,11 +39,24 @@ prefix drift.
 
 The affinity token was derived from the **channel/request id only**
 (`psfnpc-sha256(channelId)`), with **no companion binding**. In a fleet where
-several companions share one Discord channel *and* one provider organisation,
+several companions share one channel *and* one provider organisation,
 `sha256("discord:guild-42:general")` is identical for all of them → their
-`prompt_cache_key`s collide → the provider may **share one cache entry across
-companions**. That is a cross-tenant cache-sharing vulnerability, not a
-theoretical one.
+affinity keys collide.
+
+Scope this honestly by mechanism:
+
+- **Key-only-affinity providers** (OpenAI `prompt_cache_key`, Mistral
+  `x-affinity`) are the **real exposure class**: the provider groups cache
+  lookups by the key you supply, so colliding keys across companions could let
+  one companion's cached prefix serve another. This is the vector the fix
+  closes.
+- **The shipped default (OpenRouter)** ignores the affinity token entirely and
+  routes cache behaviour to the backend, so this collision was **not live** on
+  the current default provider — the hardening is pre-emptive for the day a
+  key-affinity provider is enabled.
+- **Byte-prefix providers** (Anthropic `cache_control`) key on literal prefix
+  bytes; a "collision" only ever means identical bytes, which cannot leak
+  content across companions regardless of the token.
 
 ---
 
@@ -51,9 +64,11 @@ theoretical one.
 
 ### The invariant
 
-> A cacheable cache entry can never be shared across a companion boundary, nor
-> across a contact boundary where contact-scoped content enters the cacheable
-> prefix. This is **structural** (enforced by the derivation), not policy.
+> A cacheable cache entry can never be shared across a **companion** boundary
+> (structural, enforced by the mandatory companion scope). Cross-**contact**
+> isolation is enforced structurally by the channel/request inner scope and is
+> further hardened as **defense in depth** by the subject-contact scope — the
+> latter only bites where `viewerMemorySubjectContactId` is populated.
 
 ### How each mechanism enforces it
 
@@ -73,8 +88,13 @@ psfnpc.v2 \0 companion:<len>:<companionId> \0 contact:<len>:<contactId>
   encodes the conversation — `dm:<contactId>` / `room:<id>`) or the request id
   (`request` scope). Absent → `{ failure: 'missing_channel_id' }`.
 - `viewerMemorySubjectContactId` (the canonical, ingress-resolved subject
-  contact, **never model-supplied**) is folded in as defense in depth so two
-  contacts sharing a channel id can never collapse onto one token.
+  contact, **never model-supplied**) is folded in as **defense in depth**.
+  Where it is unpopulated (shared rooms today do not always set it), two
+  contacts fold to the same empty contact scope and cross-contact isolation
+  rests on the channel/request inner scope alone; realizing the stronger
+  per-contact guarantee requires populating this field at ingress. Note that
+  byte-prefix providers cannot leak content across identical bytes regardless,
+  so the residual case is a missed partition, not a leak.
 
 Length-prefixing + per-field labels make the pre-image **injective**: two
 distinct `(companion, contact, scope, inner)` tuples cannot hash to the same
@@ -225,11 +245,13 @@ privacy seam is now safe to rely on when caching is enabled.
 
 - **Keep chat/reflection caching as-is** (already wired). It is the main payoff
   (~45% system-prompt input savings by turn 10) and is now companion/contact
-  fail-closed. Recommend the operator run the **live validation on one companion**
-  (`psfn-framework-9hyv`) before broadening across the fleet — specifically to
-  confirm `companionId` is populated on every chat correlation (if absent, the
-  hardened derivation fails closed and silently forgoes the affinity token; the
-  content-hash cache still works, but the session-keyed path would not engage).
+  fail-closed. The substrate agent now threads its configured `companionId` onto
+  every chat-turn correlation (`buildTurnCorrelation` fallback; ICP
+  `localCompanionId` still wins), so ordinary human ingress carries a companion
+  scope and the session-keyed path engages rather than failing closed.
+  Recommend the operator run the **live validation on one companion**
+  (`psfn-framework-9hyv`) before broadening across the fleet to confirm the
+  realized economics.
 - **Consider wiring appraisal** to a `static` cachePlan block (its system prompt
   is already 100% stable) as a cheap, self-contained follow-up — 78–84% savings
   on that lane. File as a separate bead if pursued.
@@ -241,10 +263,10 @@ privacy seam is now safe to rely on when caching is enabled.
 
 ### Risks
 
-- If `companionId` is *not* reliably present on some background/summary
-  correlations, those lanes lose the affinity token (fail-closed, safe) — a cost
-  regression, not a correctness/leak one. Live validation should confirm
-  population.
+- Chat/reflection correlations now carry `companionId`. Some background/summary
+  correlations may still lack it; those lanes lose the affinity token
+  (fail-closed, safe) — a cost regression, not a correctness/leak one, and only
+  on key-affinity providers. Live validation should confirm which lanes engage.
 - Content-hash caching across companions with byte-identical static prefixes is
   harmless (no data crosses; only recomputation is skipped), but the affinity
   token is now companion-scoped regardless, closing the session-keyed vector.

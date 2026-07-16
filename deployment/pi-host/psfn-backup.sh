@@ -16,7 +16,9 @@
 # PSFN_PRUNE_DRY_RUN=1 (skips backup creation, prints the prune plan only).
 set -euo pipefail
 
-ENV_FILE=/etc/psfn-backup.env
+# Override only for retention dry-run testing against scratch fixtures; the
+# systemd unit always uses the default root-owned path.
+ENV_FILE=${PSFN_BACKUP_ENV_FILE:-/etc/psfn-backup.env}
 [ -r "$ENV_FILE" ] || { echo "missing $ENV_FILE; refusing to guess backup paths" >&2; exit 1; }
 # shellcheck disable=SC1090
 . "$ENV_FILE"
@@ -77,12 +79,17 @@ mapfile -t ALL < <(
     [[ "$name" =~ ^auto(-kube)?-[0-9]{8}T[0-9]{6}$ ]] || continue
     stamp=${name#auto-kube-}; stamp=${stamp#auto-}
     echo "$stamp $name"
-  done | sort -r | awk '{print $2}'
+  done | LC_ALL=C sort -r | awk '{print $2}'
 )
 
 if [ "${#ALL[@]}" -eq 0 ]; then
   echo "retention: no parseable backup dirs found; nothing to prune"
 else
+  # Additive tiers, matching src/persistence/backups/retention.ts: higher tiers
+  # (monthly > weekly > daily) claim shared snapshots first, and a dir already
+  # protected by a higher tier is skipped WITHOUT consuming the lower tier's
+  # slot. Rotating runs last and protects the N most-recent dirs not already
+  # protected, so promotions extend total coverage instead of overlapping it.
   declare -A KEEP SEEN_DAY SEEN_WEEK SEEN_MONTH
   rot=0 day=0 week=0 month=0
   for name in "${ALL[@]}"; do
@@ -90,19 +97,22 @@ else
     ymd=${stamp:0:8}
     ym=${stamp:0:6}
     wk=$(date -d "${stamp:0:8}" +%G-%V 2>/dev/null) || continue
-    if [ "$rot" -lt "$KEEP_ROTATING" ]; then KEEP[$name]="rotating"; rot=$((rot+1)); fi
-    if [ -z "${SEEN_DAY[$ymd]:-}" ]; then
-      SEEN_DAY[$ymd]=1
-      if [ "$day" -lt "$KEEP_DAILY" ]; then KEEP[$name]="${KEEP[$name]:-}${KEEP[$name]:+,}daily"; day=$((day+1)); fi
+    if [ -z "${SEEN_MONTH[$ym]:-}" ]; then
+      SEEN_MONTH[$ym]=1
+      if [ "$month" -lt "$KEEP_MONTHLY" ] && [ -z "${KEEP[$name]:-}" ]; then KEEP[$name]="monthly"; month=$((month+1)); fi
     fi
     if [ -z "${SEEN_WEEK[$wk]:-}" ]; then
       SEEN_WEEK[$wk]=1
-      if [ "$week" -lt "$KEEP_WEEKLY" ]; then KEEP[$name]="${KEEP[$name]:-}${KEEP[$name]:+,}weekly"; week=$((week+1)); fi
+      if [ "$week" -lt "$KEEP_WEEKLY" ] && [ -z "${KEEP[$name]:-}" ]; then KEEP[$name]="weekly"; week=$((week+1)); fi
     fi
-    if [ -z "${SEEN_MONTH[$ym]:-}" ]; then
-      SEEN_MONTH[$ym]=1
-      if [ "$month" -lt "$KEEP_MONTHLY" ]; then KEEP[$name]="${KEEP[$name]:-}${KEEP[$name]:+,}monthly"; month=$((month+1)); fi
+    if [ -z "${SEEN_DAY[$ymd]:-}" ]; then
+      SEEN_DAY[$ymd]=1
+      if [ "$day" -lt "$KEEP_DAILY" ] && [ -z "${KEEP[$name]:-}" ]; then KEEP[$name]="daily"; day=$((day+1)); fi
     fi
+  done
+  for name in "${ALL[@]}"; do
+    [ "$rot" -ge "$KEEP_ROTATING" ] && break
+    if [ -z "${KEEP[$name]:-}" ]; then KEEP[$name]="rotating"; rot=$((rot+1)); fi
   done
 
   # Hard invariants: keep set non-empty and the newest dir is in it.

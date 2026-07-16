@@ -49,6 +49,7 @@ import {
   verifyBackupContentsManifest,
 } from './backup-contents.js';
 import type { BackupRuntimeConfig } from './config.js';
+import { DEFAULT_BACKUP_DAILY_COUNT } from './config.js';
 import { applyTieredRetention } from './retention.js';
 import { assertValidPostgresSchemaName } from '../postgres.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
@@ -489,11 +490,11 @@ export async function runBackupCycle(
     const maxRotating = options.maxRotatingBackups
       ?? options.retentionCount
       ?? 9;
-    // Low-level fallback only: a caller that omits the daily tier gets no daily
-    // protection (pre-daily-tier behavior). The production path always supplies
-    // an explicit value from BackupRuntimeConfig, where an absent owner-file key
-    // resolves to DEFAULT_BACKUP_DAILY_COUNT.
-    const maxDaily = options.maxDailyBackups ?? 0;
+    // Symmetric with the other tiers: an omitted daily count falls back to the
+    // documented default rather than silently disabling the tier. Protection is
+    // additive, so a defaulted daily tier only ever retains more, never prunes
+    // a backup an explicit caller expected to keep.
+    const maxDaily = options.maxDailyBackups ?? DEFAULT_BACKUP_DAILY_COUNT;
     const maxWeekly = options.maxWeeklyBackups ?? 2;
     const maxMonthly = options.maxMonthlyBackups ?? 1;
 

@@ -262,6 +262,7 @@ describe('runBackupCycle', () => {
       sessionsDir,
       backupRootDir,
       maxRotatingBackups: 2,
+      maxDailyBackups: 0,
       maxWeeklyBackups: 0,
       maxMonthlyBackups: 0,
       now: () => Date.UTC(2026, 1, 26, 10, 11, 12, 123),

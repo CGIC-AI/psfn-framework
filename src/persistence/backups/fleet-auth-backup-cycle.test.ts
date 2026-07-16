@@ -124,6 +124,7 @@ function makeConfig(
   return {
     intervalMs: 60_000,
     maxRotatingBackups: 1,
+    maxDailyBackups: 0,
     maxWeeklyBackups: 0,
     maxMonthlyBackups: 0,
     rootDir,

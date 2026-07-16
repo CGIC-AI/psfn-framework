@@ -16,12 +16,19 @@ export interface TieredRetentionResult {
   monthlyCount: number;
 }
 
-/** ISO timestamp directory names are YYYYMMDDTHHMMSSFFFZ format — sortable as strings. */
+/**
+ * ISO timestamp directory names are YYYYMMDDTHHMMSSFFFZ format — sortable as
+ * strings. Only timestamp-shaped names participate in retention: anything else
+ * (operator inspection copies, future structural subdirs) is invisible to the
+ * tier math AND to pruning, so a stray directory can neither hijack the
+ * newest-survives invariant via lexicographic ordering nor be deleted.
+ */
 function listBackupDirectories(rootDir: string): string[] {
   if (!existsSync(rootDir)) return [];
   return readdirSync(rootDir, { withFileTypes: true })
     .filter(entry => entry.isDirectory())
     .map(entry => entry.name)
+    .filter(name => parseDirDate(name) !== null)
     .sort((a, b) => a.localeCompare(b));
 }
 

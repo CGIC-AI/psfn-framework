@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { applyTieredRetention, type TieredRetentionOptions } from './retention.js';
@@ -193,5 +193,35 @@ describe('applyTieredRetention daily tier', () => {
     // 2 monthly + 2 weekly + 2 daily = 6 distinct protected dirs.
     expect(result.keptBackupDirs).toHaveLength(6);
     expect(result.keptBackupDirs.map(p => basename(p))).toContain('20260303T010000000Z');
+  });
+
+  it('ignores non-timestamp directories: never prunes them, never lets them displace the newest backup', () => {
+    // A stray directory sorting lexicographically after every timestamp would,
+    // without name filtering, be treated as "newest" — hijacking both the
+    // fail-closed floor and the rotating tier, and exposing the genuine newest
+    // backup to pruning.
+    const root = makeBackupRoot([
+      '20260301T010000000Z',
+      '20260301T130000000Z',
+      '20260302T130000000Z', // genuine newest
+      'zzz-operator-inspect',
+    ]);
+
+    const result = applyTieredRetention(root, {
+      maxRotatingBackups: 1,
+      maxDailyBackups: 0,
+      maxWeeklyBackups: 0,
+      maxMonthlyBackups: 0,
+    });
+
+    const kept = result.keptBackupDirs.map(p => basename(p));
+    const pruned = result.prunedBackupDirs.map(p => basename(p));
+    // The genuine newest survives via the rotating slot and the stray dir is
+    // untouched — absent from both kept and pruned (it exists but is invisible
+    // to retention).
+    expect(kept).toEqual(['20260302T130000000Z']);
+    expect(pruned).not.toContain('zzz-operator-inspect');
+    expect(pruned).toEqual(['20260301T010000000Z', '20260301T130000000Z']);
+    expect(existsSync(join(root, 'zzz-operator-inspect'))).toBe(true);
   });
 });

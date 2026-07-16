@@ -57,6 +57,7 @@ import type {
 import { dispatchCompanionUiPrimaryEmbodiment } from '../../boundary/gateway/companion-ui-primary-embodiment.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
 import type { FleetJitStepUpCoordinator } from '../../boundary/fleet-auth/jit-step-up.js';
+import type { TrustedHostPasskeyCeremonyService } from '../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
 import {
   GatewayHubDeviceIngressService,
   type HubDeviceHumanAttachmentPort,
@@ -105,6 +106,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   /** Present only in gateway fleet-auth mode; owns all browser OAuth/session authority. */
   fleetAuthBroker?: GatewayFleetAuthBroker;
   fleetAuthJitStepUp?: FleetJitStepUpCoordinator;
+  fleetAuthPasskeyCeremonies?: TrustedHostPasskeyCeremonyService;
   fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
   fleetAuthRequestCapabilities?: GatewayRequestCapabilitySigner;
   fleetAuthRequestCapabilityVerifier?: RequestCapabilityVerifier;
@@ -658,6 +660,9 @@ export async function startOptionalGatewayApiServer(
             canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
             callbackPath: options.config.fleetAuth.callbackPath,
             ...(options.fleetAuthJitStepUp ? { jitStepUp: options.fleetAuthJitStepUp } : {}),
+            ...(options.fleetAuthPasskeyCeremonies
+              ? { passkeyCeremonies: options.fleetAuthPasskeyCeremonies }
+              : {}),
             trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
           }),
         }

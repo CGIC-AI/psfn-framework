@@ -70,6 +70,8 @@ import { FleetJitStepUpCoordinator } from '../../../boundary/fleet-auth/jit-step
 import { PostgresFleetJitStepUpStore } from './jit-step-up-store.js';
 import type { FleetPortalAuthorizationBatchPort } from '../../../boundary/gateway/fleet-portal-authorization.js';
 import { createPostgresFleetPortalAuthorization } from './portal-authorization-store.js';
+import { TrustedHostPasskeyCeremonyService } from '../../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
+import { PostgresTrustedHostPasskeyCeremonyStore } from './trusted-host-passkey-ceremony-store.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -87,6 +89,7 @@ export interface GatewayFleetAuthPersistence {
   childAssertions: GatewayFleetAuthChildAssertionBroker;
   primaryEmbodiments: PrimaryEmbodimentAuthorityPort;
   jitStepUp: FleetJitStepUpCoordinator;
+  passkeyCeremonies: TrustedHostPasskeyCeremonyService;
   authorityLifecycle: GatewayFleetAuthAuthorityLifecycleStore;
   contactLifecycleAuthority: GatewayContactLifecycleAuthorityPort;
   discordEvidence?: DiscordEvidenceRuntime;
@@ -417,6 +420,20 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       webAuthn,
       readCredentialFloorGeneration: () => authorityFloors.readPasskeys().generation,
     });
+    const passkeyCeremonies = new TrustedHostPasskeyCeremonyService({
+      canonicalOrigin: config.canonicalOrigin,
+      rpId: new URL(config.canonicalOrigin).hostname,
+      ttlMs: config.ttls.stepUpChallengeMs,
+      store: new PostgresTrustedHostPasskeyCeremonyStore({
+        authorityPool,
+        sessionPepper: secrets.sessionPepper,
+        tokenEncryptionKey: secrets.tokenEncryptionKey,
+        providerRevocationAuthority: accountAuthority,
+        passkeyAuthority: authorityFloors,
+      }),
+      authority: authorityFloors,
+      webAuthn,
+    });
     const authorityLifecycle = new GatewayFleetAuthAuthorityLifecycleStore({
       pool: authorityPool,
       accountAuthority,
@@ -470,6 +487,9 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       store: brokerStore,
       oauthClientSecret: secrets.oauthClientSecret,
       sessionPepper: secrets.sessionPepper,
+      firstOwnerAssurance: {
+        verify: input => passkeyCeremonies.verifyFirstOwner(input),
+      },
       authorizationContextResolver,
       ...(discordEvidenceLifecycle ? { discordEvidenceLifecycle } : {}),
     });
@@ -495,6 +515,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       childAssertions,
       primaryEmbodiments,
       jitStepUp,
+      passkeyCeremonies,
       authorityLifecycle,
       contactLifecycleAuthority,
       ...(discordEvidence ? { discordEvidence } : {}),

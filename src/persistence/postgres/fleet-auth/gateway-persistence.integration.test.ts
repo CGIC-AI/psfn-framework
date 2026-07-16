@@ -13,6 +13,7 @@ import {
 } from '../../../test-support/postgres-test-harness.js';
 import { createPostgresPool } from '../../postgres.js';
 import {
+  createGatewayAccountAuthorityFencePort,
   initializeGatewayFleetAuthPersistence,
   reconcileFleetAuthAuthorityState,
   type GatewayFleetAuthPersistence,
@@ -22,6 +23,8 @@ import {
   GatewayHubDeviceIngressService,
   InMemoryHubDeviceSessionAdmissionStore,
 } from '../../../boundary/fleet-auth/hub-device-ingress.js';
+import { TrustedHostPasskeyCeremonyService } from '../../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
+import { PostgresTrustedHostPasskeyCeremonyStore } from './trusted-host-passkey-ceremony-store.js';
 
 const TIMEOUT_MS = 120_000;
 const ROLES = {
@@ -429,6 +432,137 @@ afterAll(async () => {
 }, TIMEOUT_MS);
 
 describe('gateway fleet-auth lifecycle publication', () => {
+  it('enrolls a trusted-host OAuth+UV passkey as floor authority and revokes the source session', async () => {
+    const context = await freshContext();
+    const persistence = await startEnabled(context);
+    const runtime = createPostgresPool(context.runtimeUrl, { max: 1 });
+    const authorityPool = createPostgresPool(
+      roleUrl(context.migrationUrl, ROLES.backupRestore),
+      { max: 1 },
+    );
+    const token = 'T'.repeat(43);
+    const csrfToken = 'C'.repeat(43);
+    const principalId = randomUUID();
+    const sessionId = randomUUID();
+    const providerSubjectId = '123456789012345678';
+    try {
+      await runtime.query(`
+        INSERT INTO fleet_auth.human_principals
+          (principal_id, status, authority_generation)
+        VALUES ($1, 'active', 1)
+      `, [principalId]);
+      await runtime.query(`
+        INSERT INTO fleet_auth.provider_subjects
+          (provider, subject_id, principal_id, state, authority_generation)
+        VALUES ('discord', $1, $2, 'active', 1)
+      `, [providerSubjectId, principalId]);
+      await runtime.query(`
+        INSERT INTO fleet_auth.browser_sessions
+          (record_id, token_digest, csrf_digest, principal_id, audience, assurance,
+           authn_version, authz_version, binding_version, grant_version, policy_version,
+           provider, provider_subject_id, global_auth_epoch,
+           idle_expires_at, absolute_expires_at)
+        VALUES ($1, $2, $3, $4, 'fleet', 'oauth', 1, 1, 1, 1, 1,
+                'discord', $5, 1,
+                clock_timestamp() + interval '5 minutes',
+                clock_timestamp() + interval '1 hour')
+      `, [
+        sessionId,
+        createHmac('sha256', 's'.repeat(32)).update(token).digest('hex'),
+        createHmac('sha256', 's'.repeat(32)).update(csrfToken).digest('hex'),
+        principalId,
+        providerSubjectId,
+      ]);
+      const accountAuthority = createGatewayAccountAuthorityFencePort(
+        persistence.authorityFloors,
+      );
+      const service = new TrustedHostPasskeyCeremonyService({
+        canonicalOrigin: context.config.canonicalOrigin,
+        rpId: 'fleet.example.test',
+        ttlMs: 60_000,
+        store: new PostgresTrustedHostPasskeyCeremonyStore({
+          authorityPool,
+          sessionPepper: 's'.repeat(32),
+          tokenEncryptionKey: 't'.repeat(32),
+          providerRevocationAuthority: accountAuthority,
+          passkeyAuthority: persistence.authorityFloors,
+        }),
+        authority: persistence.authorityFloors,
+        webAuthn: {
+          startRegistration: async input => ({ ...input, kind: 'registration' }),
+          finishRegistration: async () => ({
+            credentialIdHash: 'a'.repeat(64),
+            publicKeyVerifier: 'AQID',
+            rpId: 'fleet.example.test',
+            principalId,
+            expectedProvider: 'discord',
+            expectedProviderSubjectId: providerSubjectId,
+            signCount: 0,
+            backupEligible: false,
+            backupState: false,
+          }),
+        },
+      });
+      const created = await service.create({
+        kind: 'passkey_enrollment',
+        expectedProviderSubjectId: providerSubjectId,
+      });
+      await expect(service.startRegistration({
+        nonce: created.nonce,
+        kind: 'passkey_enrollment',
+        token,
+        csrfToken,
+        requestOrigin: context.config.canonicalOrigin,
+      })).resolves.toMatchObject({
+        ceremonyId: created.ceremonyId,
+        kind: 'passkey_enrollment',
+      });
+      await expect(service.finishRegistration({
+        nonce: created.nonce,
+        kind: 'passkey_enrollment',
+        token,
+        csrfToken,
+        requestOrigin: context.config.canonicalOrigin,
+        response: { id: 'opaque-registration' },
+      })).resolves.toEqual({
+        credentialIdHash: 'a'.repeat(64),
+        credentialFloorGeneration: 1,
+      });
+
+      expect(persistence.authorityFloors.readPasskeys()).toMatchObject({
+        generation: 1,
+        credentials: [expect.objectContaining({
+          credentialIdHash: 'a'.repeat(64),
+          principalId,
+          status: 'current',
+        })],
+      });
+      const state = await runtime.query<{
+        epoch: string;
+        revoked: boolean;
+        ceremony_status: string;
+        projection_state: string;
+      }>(`
+        SELECT authority.global_auth_epoch AS epoch,
+               session.revoked_at IS NOT NULL AS revoked,
+               ceremony.status AS ceremony_status,
+               passkey.state AS projection_state
+        FROM fleet_auth.authority_state AS authority
+        JOIN fleet_auth.browser_sessions AS session ON session.record_id = $1
+        JOIN fleet_auth.trusted_host_ceremonies AS ceremony ON ceremony.ceremony_id = $2
+        JOIN fleet_auth.passkey_credentials AS passkey ON passkey.credential_id_hash = $3
+      `, [sessionId, created.ceremonyId, 'a'.repeat(64)]);
+      expect(state.rows[0]).toEqual({
+        epoch: '2',
+        revoked: true,
+        ceremony_status: 'consumed',
+        projection_state: 'quarantined',
+      });
+    } finally {
+      await Promise.all([runtime.end(), authorityPool.end(), persistence.close()]);
+    }
+  }, TIMEOUT_MS);
+
   it('composes authorization resolution only for enabled fleet auth', async () => {
     const context = await freshContext();
     const enabled = await startEnabled(context);

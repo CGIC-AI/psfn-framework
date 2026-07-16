@@ -16,6 +16,10 @@ import {
   FleetAuthJitHttpRoutes,
 } from './fleet-auth-jit-routes.js';
 import type { FleetJitStepUpCoordinator } from '../../../boundary/fleet-auth/jit-step-up.js';
+import {
+  FleetAuthPasskeyHttpRoutes,
+} from './fleet-auth-passkey-routes.js';
+import type { TrustedHostPasskeyCeremonyService } from '../../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
 
 const LOGIN_PATH = '/v1/fleet-auth/login';
 export const FLEET_AUTH_LIFECYCLE_OAUTH_PATH = '/v1/fleet-auth/lifecycle/oauth';
@@ -121,12 +125,14 @@ export class FleetAuthHttpRoutes {
   private readonly callbackPath: string;
   private readonly trustProxy: boolean;
   private readonly jitRoutes?: FleetAuthJitHttpRoutes;
+  private readonly passkeyRoutes?: FleetAuthPasskeyHttpRoutes;
 
   constructor(options: {
     broker: GatewayFleetAuthBroker;
     canonicalOrigin: string;
     callbackPath: string;
     jitStepUp?: FleetJitStepUpCoordinator;
+    passkeyCeremonies?: TrustedHostPasskeyCeremonyService;
     trustProxy?: boolean;
   }) {
     this.broker = options.broker;
@@ -136,10 +142,17 @@ export class FleetAuthHttpRoutes {
     this.jitRoutes = options.jitStepUp
       ? new FleetAuthJitHttpRoutes(options.jitStepUp)
       : undefined;
+    this.passkeyRoutes = options.passkeyCeremonies
+      ? new FleetAuthPasskeyHttpRoutes({
+        ceremonies: options.passkeyCeremonies,
+        broker: options.broker,
+      })
+      : undefined;
   }
 
   matches(method: string | undefined, path: string): boolean {
     return (this.jitRoutes?.matches(method, path) ?? false)
+      || (this.passkeyRoutes?.matches(method, path) ?? false)
       || (method === 'GET' && (path === LOGIN_PATH || path === CSRF_PATH || path === this.callbackPath))
       || (method === 'POST'
         && (path === FLEET_AUTH_LIFECYCLE_OAUTH_PATH || path === REFRESH_PATH
@@ -265,6 +278,17 @@ export class FleetAuthHttpRoutes {
       }
       if (this.jitRoutes?.matches(request.method, url.pathname)) {
         await this.jitRoutes.handle({
+          request,
+          response,
+          path: url.pathname,
+          token,
+          csrfToken,
+          requestOrigin: mutationOrigin(request),
+        });
+        return;
+      }
+      if (this.passkeyRoutes?.matches(request.method, url.pathname)) {
+        await this.passkeyRoutes.handle({
           request,
           response,
           path: url.pathname,

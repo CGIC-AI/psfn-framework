@@ -317,7 +317,7 @@ describe('Postgres schema tenancy plumbing', () => {
             },
           } as never,
           runtime: source.runtime,
-          resolveOriginActivationSource: () => 'extended_loaded',
+          resolveOriginCatalogSource: () => 'extended',
           isExecutionAuthorized: () => true,
         });
         const candidateActions = inferIcpInitiationCandidateActions({
@@ -359,7 +359,7 @@ describe('Postgres schema tenancy plumbing', () => {
           ],
           turnId: 'generated-follow-up-turn' as never,
           completedAt: Date.parse('2026-07-13T20:01:00.000Z'),
-        }, 'extended_loaded');
+        }, 'extended');
         if (!handler || !candidateActions[0]) throw new Error('candidate action handler is missing');
 
         await expect(handler({

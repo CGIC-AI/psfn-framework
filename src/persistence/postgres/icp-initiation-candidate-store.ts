@@ -115,7 +115,7 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
 
   static async connect(
     databaseUrl: string,
-    options: { schema: string },
+    options: { schema: string; role?: string },
   ): Promise<PostgresIcpInitiationCandidateStore> {
     if (typeof options.schema !== 'string' || options.schema.trim().length === 0) {
       throw new Error('ICP initiation candidate store requires a companion-local Postgres schema');
@@ -124,6 +124,7 @@ export class PostgresIcpInitiationCandidateStore implements IcpInitiationCandida
       applicationName: 'psfn-icp-initiation-candidates',
       allowExitOnIdle: true,
       schema: options.schema,
+      role: options.role,
     });
     try {
       await ensurePostgresSchemaExists(pool, options.schema);

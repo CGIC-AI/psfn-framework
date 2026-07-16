@@ -193,7 +193,7 @@ describe('Postgres schema tenancy plumbing', () => {
       try {
         const searchPath = await pool.query<{ search_path: string }>('SHOW search_path');
         // Set via the libpq `options` param, Postgres reports it without spaces.
-        expect(searchPath.rows[0]?.search_path.replace(/\s/g, '')).toBe('companion_a,public');
+        expect(searchPath.rows[0]?.search_path.replace(/\s/g, '')).toBe('companion_a,extensions');
 
         await runPostgresMigrations(pool, POSTGRES_CONTACT_MIGRATIONS, { schema: 'companion_a' });
 

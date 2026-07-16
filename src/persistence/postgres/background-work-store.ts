@@ -276,13 +276,14 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
 
   static async connect(
     databaseUrl: string,
-    options: { schema?: string } = {},
+    options: { schema?: string; role?: string } = {},
   ): Promise<PostgresBackgroundWorkStore> {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-background-work',
       allowExitOnIdle: true,
       max: 8,
       schema: options.schema,
+      role: options.role,
     });
     try {
       const migrationStatements = options.schema === undefined

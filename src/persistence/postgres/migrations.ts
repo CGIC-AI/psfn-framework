@@ -1,9 +1,30 @@
+const POSTGRES_VECTOR_EXTENSION_MIGRATION = `
+  DO $$
+  DECLARE
+    target_schema TEXT := CASE WHEN current_schema() = 'public' THEN 'public' ELSE 'extensions' END;
+    installed_schema TEXT;
+  BEGIN
+    SELECT namespace.nspname INTO installed_schema
+    FROM pg_extension extension
+    JOIN pg_namespace namespace ON namespace.oid = extension.extnamespace
+    WHERE extension.extname = 'vector';
+
+    IF target_schema = 'extensions' AND to_regnamespace('extensions') IS NULL THEN
+      RAISE EXCEPTION 'Tenant migrations require the explicitly provisioned extensions schema';
+    END IF;
+    IF installed_schema IS NULL THEN
+      EXECUTE format('CREATE EXTENSION vector WITH SCHEMA %I', target_schema);
+    ELSIF installed_schema <> target_schema THEN
+      RAISE EXCEPTION 'pgvector is installed in schema %, expected %', installed_schema, target_schema;
+    END IF;
+  END
+  $$;
+`;
+
 export const POSTGRES_MEMORY_MIGRATIONS = [
-  // Companion pools pin search_path to `<companion>, public`. Extension types
-  // must live in public so the first companion to migrate cannot strand the
-  // singleton pgvector extension inside its private schema and break every
-  // subsequently-starting companion.
-  `CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;`,
+  // Tenant search paths exclude public. Deployment provisioning creates the
+  // explicit extension schema before runtime migrations begin.
+  POSTGRES_VECTOR_EXTENSION_MIGRATION,
   `
   CREATE TABLE IF NOT EXISTS l2_memories (
     id TEXT PRIMARY KEY,
@@ -630,7 +651,7 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
 // the canonical files at any time. Projection loss never corrupts the archive;
 // it only degrades semantic search until rebuilt.
 export const POSTGRES_WIKI_PROJECTION_MIGRATIONS = [
-  `CREATE EXTENSION IF NOT EXISTS vector;`,
+  POSTGRES_VECTOR_EXTENSION_MIGRATION,
   `
   CREATE TABLE IF NOT EXISTS wiki_document_chunks (
     document_id TEXT NOT NULL,
@@ -2468,9 +2489,9 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
 // W5b world-info leak surface, enforced fail-closed in the schema itself.
 export const POSTGRES_SHARED_WIKI_MIGRATIONS: readonly string[] = [
   // Deterministic extension placement: shared migrations run with search_path
-  // pinned to `shared, public`, and shared/per-companion chains alike resolve
-  // vector types through `public`.
-  `CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;`,
+  // pinned to `shared, extensions`, and shared/per-companion chains alike
+  // resolve vector types without exposing legacy public tenant objects.
+  POSTGRES_VECTOR_EXTENSION_MIGRATION,
   `
   CREATE TABLE IF NOT EXISTS shared_wiki_chunks (
     site_id TEXT NOT NULL,

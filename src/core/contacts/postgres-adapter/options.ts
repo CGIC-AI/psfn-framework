@@ -6,5 +6,5 @@ export interface PostgresContactStoreOptions {
   exportDir?: string;
   /** Optional per-companion Postgres schema; pins the pool's search_path. */
   schema?: string;
+  role?: string;
 }
-

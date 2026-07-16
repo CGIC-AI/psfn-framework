@@ -6,12 +6,13 @@ export { queryOne, queryRows };
 
 export function createIntentionPostgresPool(
   databaseUrl: string,
-  options: { applicationName?: string; schema?: string } = {},
+  options: { applicationName?: string; schema?: string; role?: string } = {},
 ): Pool {
   return createPostgresPool(databaseUrl, {
     applicationName: options.applicationName ?? 'psfn-intention',
     allowExitOnIdle: true,
     schema: options.schema,
+    role: options.role,
   });
 }
 

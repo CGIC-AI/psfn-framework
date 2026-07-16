@@ -800,7 +800,9 @@ describe('postgres memory store unit coverage', () => {
 
   it('keeps the supported postgres migration on l2_memories.embedding and omits the dead embeddings table', () => {
     const migrationSql = postgresMemoryMigrationSql();
-    expect(migrationSql).toContain('CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;');
+    expect(migrationSql).toContain("current_schema() = 'public'");
+    expect(migrationSql).toContain("CREATE EXTENSION vector WITH SCHEMA %I");
+    expect(migrationSql).toContain('expected %');
     expect(migrationSql).toContain('embedding VECTOR');
     expect(migrationSql).toContain("source_type TEXT NOT NULL DEFAULT 'unknown'");
     expect(migrationSql).toContain("provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb");

@@ -34,6 +34,7 @@ import {
   resolveCompressionFailureLogPath,
   resolveCompressionGuidelinePath,
 } from '../../persistence/layout.js';
+import type { PostgresShardSchemaLifecycle } from '../../persistence/postgres/shard-schema-lifecycle.js';
 
 // ── Mock pi-agent-core Agent ──
 // We mock Agent.prototype.prompt so it doesn't actually call the LLM.
@@ -448,6 +449,82 @@ describe('ShardManager', () => {
         isDirectMessage: false,
       }),
       }));
+  });
+
+  it('prepares and cleans one lineage-bound Postgres schema for a multi-companion shard', async () => {
+    const binding = {
+      parentCompanionId: 'companion-test',
+      parentSchema: 'companion_alpha',
+      shardId: 'derived-by-test',
+      schema: 'companion_alpha_shard_0123456789012345678901234567890123456789',
+      role: 'psfn_companion_alpha_shard_test',
+    } as const;
+    const derive = vi.fn((_parentCompanionId: string, _parentSchema: string, shardId: string) => ({
+      ...binding,
+      shardId,
+    }));
+    const prepare = vi.fn(async () => undefined);
+    const cleanup = vi.fn(async () => ({
+      schema: binding.schema,
+      role: binding.role,
+      droppedObjectCount: 3,
+      dropped: true as const,
+    }));
+    const lifecycle = {
+      derive,
+      prepare,
+      cleanup,
+      openPool: vi.fn(),
+      migrate: vi.fn(),
+      backup: vi.fn(),
+      restore: vi.fn(),
+    } as unknown as PostgresShardSchemaLifecycle;
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: {
+        ...TEST_CONFIG,
+        multiCompanion: true,
+        postgresSchema: 'companion_alpha',
+      },
+      parentSystemPrompt: 'You are a helpful assistant.',
+      shardPostgresLifecycle: lifecycle,
+    });
+
+    const result = await manager.spawn({ name: 'postgres-bound', task: 'Use isolated state' });
+
+    expect(derive).toHaveBeenCalledWith(
+      'companion-test',
+      'companion_alpha',
+      result.shardId,
+    );
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({
+      shardId: result.shardId,
+      schema: binding.schema,
+    }));
+    expect(cleanup).toHaveBeenCalledWith(expect.objectContaining({
+      shardId: result.shardId,
+      schema: binding.schema,
+    }));
+  });
+
+  it('rejects multi-companion shard construction without a Postgres lifecycle', () => {
+    expect(() => new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: {
+        ...TEST_CONFIG,
+        multiCompanion: true,
+        postgresSchema: 'companion_alpha',
+      },
+      parentSystemPrompt: 'test',
+    })).toThrow('requires a Postgres shard schema lifecycle');
   });
 
   it('emits a structured completion handoff for shard results with source context', async () => {

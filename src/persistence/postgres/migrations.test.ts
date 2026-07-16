@@ -218,8 +218,11 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain("CHECK (scope = 'shared_world:' || site_id)");
     expect(sql).toContain('CREATE INDEX IF NOT EXISTS idx_shared_wiki_chunks_site ON shared_wiki_chunks(site_id)');
     expect(sql).toContain('CREATE INDEX IF NOT EXISTS idx_shared_wiki_chunks_scope ON shared_wiki_chunks(scope)');
-    // Deterministic pgvector placement for the shared chain.
-    expect(sql).toContain('CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;');
+    // Deterministic pgvector placement for public flag-off or the explicit
+    // extensions schema under tenant/shared search paths.
+    expect(sql).toContain("current_schema() = 'public'");
+    expect(sql).toContain("CREATE EXTENSION vector WITH SCHEMA %I");
+    expect(sql).toContain('expected %');
     // Ledger discipline: table before its version registration.
     expect(sql.indexOf('CREATE TABLE IF NOT EXISTS shared_wiki_chunks')).toBeLessThan(
       sql.indexOf("VALUES (3, 'shared-wiki-chunks')"),

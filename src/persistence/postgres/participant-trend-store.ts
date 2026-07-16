@@ -24,12 +24,13 @@ export class PostgresParticipantTrendStore implements ParticipantTrendStorePort 
 
   static async connect(
     databaseUrl: string,
-    options: { schema?: string } = {},
+    options: { schema?: string; role?: string } = {},
   ): Promise<PostgresParticipantTrendStore> {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-participant-trends',
       allowExitOnIdle: true,
       schema: options.schema,
+      role: options.role,
     });
     await ensurePostgresSchema(pool, POSTGRES_PARTICIPANT_TREND_MIGRATIONS);
     return new PostgresParticipantTrendStore(pool);

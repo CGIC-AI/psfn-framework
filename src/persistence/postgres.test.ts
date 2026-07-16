@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assertValidPostgresSchemaName,
   createPostgresPool,
+  POSTGRES_EXTENSION_SCHEMA_NAME,
   POSTGRES_SCHEMA_NAME_MAX_LENGTH,
 } from './postgres.js';
 
@@ -58,7 +59,7 @@ describe('createPostgresPool schema pinning', () => {
     try {
       // pg exposes the resolved client config under pool.options.
       expect((pool.options as { options?: string }).options).toBe(
-        '-c search_path=companion_a,public',
+        `-c search_path=companion_a,${POSTGRES_EXTENSION_SCHEMA_NAME}`,
       );
     } finally {
       await pool.end();
@@ -76,5 +77,24 @@ describe('createPostgresPool schema pinning', () => {
 
   it('fails closed at pool creation on an invalid schema (no unvalidated identifier reaches pg)', () => {
     expect(() => createPostgresPool(CONNECTION_STRING, { schema: 'public,secret' })).toThrow();
+  });
+
+  it('pins a validated least-privilege role before the tenant-only search path', async () => {
+    const pool = createPostgresPool(CONNECTION_STRING, {
+      schema: 'companion_a',
+      role: 'psfn_companion_a',
+    });
+    try {
+      expect((pool.options as { options?: string }).options).toBe(
+        `-c role=psfn_companion_a -c search_path=companion_a,${POSTGRES_EXTENSION_SCHEMA_NAME}`,
+      );
+    } finally {
+      await pool.end();
+    }
+  });
+
+  it('rejects a role without an explicit tenant schema', () => {
+    expect(() => createPostgresPool(CONNECTION_STRING, { role: 'psfn_companion_a' }))
+      .toThrow('requires an explicit tenant schema');
   });
 });

@@ -28,6 +28,7 @@ import { loadPlacesRegistryConfig } from '../../channels/backplane/places-regist
 import { SharedWorldWikiProposalStore } from './shared-world-caretaker-store.js';
 import { SharedWorldWikiProposalService } from './shared-world-caretaker.js';
 import { PersonalProjectLibrary } from './personal-projects.js';
+import { derivePostgresTenantRole } from '../../persistence/postgres/tenancy.js';
 
 const log = createComponentLogger('WikiRuntime');
 
@@ -110,6 +111,9 @@ export async function wireWikiRuntime(
       projection = await createWikiPgvectorProjectionStore(deps.databaseUrl, deps.embedding, {
         ...(deps.eventBus ? { eventBus: deps.eventBus } : {}),
         ...(deps.postgresSchema ? { schema: deps.postgresSchema } : {}),
+        ...(deps.postgresSchema && deps.getMultiCompanion?.() === true
+          ? { role: derivePostgresTenantRole(deps.postgresSchema) }
+          : {}),
       });
     } catch (error) {
       log.warn('Wiki pgvector projection unavailable; semantic search disabled, text search still works', {

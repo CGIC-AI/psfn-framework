@@ -3,6 +3,7 @@ import { parseAdminJsonBody } from '../request-body.js';
 import { exactPath, prefixedParamPath } from '../route-matchers.js';
 import type { AdminSettingsService } from '../services/types.js';
 import type { AdminAuditDecision } from '../types.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 import { toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
 
@@ -15,21 +16,37 @@ export function buildAdminSettingsRoutes(options: {
   withBody: AdminBodyReader;
 }): AdminApiRoute[] {
   const { settingsService, appendAuditTimelineEntry, withBody } = options;
+  const getSettingsData = (context?: GardenRequestContext) => context
+    ? settingsService.getSettingsData(context)
+    : settingsService.getSettingsData();
+  const getSettingsContractData = (context?: GardenRequestContext) => context
+    ? settingsService.getSettingsContractData(context)
+    : settingsService.getSettingsContractData();
+  const getSubConfigJson = (key: string, context?: GardenRequestContext) => context
+    ? settingsService.getSubConfigJson(key, context)
+    : settingsService.getSubConfigJson(key);
+  const saveSubConfigJson = (key: string, json: string, context?: GardenRequestContext) => context
+    ? settingsService.saveSubConfigJson(key, json, context)
+    : settingsService.saveSubConfigJson(key, json);
+  const updateSettings = (body: string, context?: GardenRequestContext) => context
+    ? settingsService.updateSettings(body, context)
+    : settingsService.updateSettings(body);
 
   const appendSettingsMutationAudit = (
     decision: AdminAuditDecision,
     narrative: string,
     details: Array<string | null | undefined> = [],
+    context?: GardenRequestContext,
   ): void => {
-    appendAuditTimelineEntry?.('settings_change', decision, narrative, details, 'operator');
+    appendAuditTimelineEntry?.('settings_change', decision, narrative, details, 'operator', context);
   };
 
   return [
     {
       method: 'GET',
       match: exactPath(ADMIN_SETTINGS_API_PATH),
-      handle: (_req, res) => {
-        settingsService.getSettingsData().then(
+      handle: (_req, res, _params, context) => {
+        getSettingsData(context).then(
           data => sendJson(res, 200, data),
           error => sendJson(res, 500, { error: String(error) }),
         );
@@ -38,15 +55,15 @@ export function buildAdminSettingsRoutes(options: {
     {
       method: 'GET',
       match: exactPath(`${ADMIN_SETTINGS_API_PATH}/schema`),
-      handle: (_req, res) => {
-        sendJson(res, 200, settingsService.getSettingsContractData());
+      handle: (_req, res, _params, context) => {
+        sendJson(res, 200, getSettingsContractData(context));
       },
     },
     {
       method: 'GET',
       match: exactPath(ADMIN_SETTINGS_MODELS_API_PATH),
-      handle: (_req, res) => {
-        const modelsJson = settingsService.getSubConfigJson('models');
+      handle: (_req, res, _params, context) => {
+        const modelsJson = getSubConfigJson('models', context);
         if (modelsJson === null) {
           sendJson(res, 500, { error: 'models.json config store unavailable' });
           return;
@@ -65,7 +82,7 @@ export function buildAdminSettingsRoutes(options: {
     {
       method: 'POST',
       match: exactPath(ADMIN_SETTINGS_MODELS_API_PATH),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         withBody(req, res, (body) => {
           const params = new URLSearchParams(body);
           const configJson = params.get('configJson');
@@ -81,12 +98,13 @@ export function buildAdminSettingsRoutes(options: {
             return;
           }
 
-          const result = settingsService.saveSubConfigJson('models', configJson);
+          const result = saveSubConfigJson('models', configJson, context);
           if (!result.ok) {
             appendSettingsMutationAudit(
               'denied',
               'Operator models.json update failed.',
               [`message=${toSanitizedMessage(result.message, 'models.json save failed')}`],
+              context,
             );
             sendJson(res, 400, {
               error: result.message,
@@ -98,6 +116,8 @@ export function buildAdminSettingsRoutes(options: {
           appendSettingsMutationAudit(
             'allowed',
             'Operator updated models.json via /api/admin/settings/models.',
+            [],
+            context,
           );
           sendJson(res, 200, { ok: true, message: 'models.json saved' });
         });
@@ -106,13 +126,15 @@ export function buildAdminSettingsRoutes(options: {
     {
       method: 'PATCH',
       match: exactPath(ADMIN_SETTINGS_API_PATH),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
             appendSettingsMutationAudit(
               'denied',
               'Operator settings update via /api/admin/settings failed: invalid JSON payload.',
+              [],
+              context,
             );
             sendJson(res, 400, { error: parsed.error });
             return;
@@ -120,13 +142,14 @@ export function buildAdminSettingsRoutes(options: {
           const changedFields = parsed.value && typeof parsed.value === 'object' && !Array.isArray(parsed.value)
             ? Object.keys(parsed.value as Record<string, unknown>).sort()
             : [];
-          const result = settingsService.updateSettings(JSON.stringify(parsed.value));
+          const result = updateSettings(JSON.stringify(parsed.value), context);
           if (!result.ok) {
             const safeMessage = toSanitizedMessage(result.message, 'Settings update failed');
             appendSettingsMutationAudit(
               'denied',
               `Operator settings update via /api/admin/settings failed: ${safeMessage}`,
               [changedFields.length > 0 ? `fields=${changedFields.join(',')}` : null],
+              context,
             );
             sendJson(res, 400, {
               error: safeMessage,
@@ -139,6 +162,7 @@ export function buildAdminSettingsRoutes(options: {
             'allowed',
             'Operator updated runtime settings via /api/admin/settings.',
             [changedFields.length > 0 ? `fields=${changedFields.join(',')}` : null],
+            context,
           );
           sendJson(res, 200, result);
         });
@@ -148,8 +172,8 @@ export function buildAdminSettingsRoutes(options: {
     {
       method: 'GET',
       match: prefixedParamPath(`${ADMIN_SETTINGS_API_PATH}/`, 'key'),
-      handle: (_req, res, params) => {
-        const raw = settingsService.getSubConfigJson(params.key);
+      handle: (_req, res, params, context) => {
+        const raw = getSubConfigJson(params.key, context);
         if (raw === null) {
           sendJson(res, 404, { error: `Unknown settings subsystem: ${params.key}` });
           return;
@@ -161,7 +185,7 @@ export function buildAdminSettingsRoutes(options: {
     {
       method: 'POST',
       match: prefixedParamPath(`${ADMIN_SETTINGS_API_PATH}/`, 'key'),
-      handle: (req, res, params) => {
+      handle: (req, res, params, context) => {
         withBody(req, res, (body) => {
           const formParams = new URLSearchParams(body);
           const configJson = formParams.get('configJson');
@@ -169,12 +193,13 @@ export function buildAdminSettingsRoutes(options: {
             sendJson(res, 400, { error: 'Missing configJson form field' });
             return;
           }
-          const result = settingsService.saveSubConfigJson(params.key, configJson);
+          const result = saveSubConfigJson(params.key, configJson, context);
           if (!result.ok) {
             appendSettingsMutationAudit(
               'denied',
               `Operator ${params.key} owner-file update failed.`,
               [`message=${toSanitizedMessage(result.message, 'owner-file save failed')}`],
+              context,
             );
             sendJson(res, 400, { error: result.message });
             return;
@@ -182,6 +207,8 @@ export function buildAdminSettingsRoutes(options: {
           appendSettingsMutationAudit(
             'allowed',
             `Operator updated ${params.key} owner file via /api/admin/settings/${params.key}.`,
+            [],
+            context,
           );
           res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
           res.end(result.message);
@@ -192,8 +219,8 @@ export function buildAdminSettingsRoutes(options: {
     {
       method: 'GET',
       match: prefixedParamPath('/api/settings/', 'key'),
-      handle: (_req, res, params) => {
-        const raw = settingsService.getSubConfigJson(params.key);
+      handle: (_req, res, params, context) => {
+        const raw = getSubConfigJson(params.key, context);
         if (raw === null) {
           sendJson(res, 404, { error: `Unknown settings subsystem: ${params.key}` });
           return;
@@ -205,7 +232,7 @@ export function buildAdminSettingsRoutes(options: {
     {
       method: 'POST',
       match: prefixedParamPath('/api/settings/', 'key'),
-      handle: (req, res, params) => {
+      handle: (req, res, params, context) => {
         withBody(req, res, (body) => {
           const formParams = new URLSearchParams(body);
           const configJson = formParams.get('configJson');
@@ -213,12 +240,13 @@ export function buildAdminSettingsRoutes(options: {
             sendJson(res, 400, { error: 'Missing configJson form field' });
             return;
           }
-          const result = settingsService.saveSubConfigJson(params.key, configJson);
+          const result = saveSubConfigJson(params.key, configJson, context);
           if (!result.ok) {
             appendSettingsMutationAudit(
               'denied',
               `Operator ${params.key} owner-file update failed.`,
               [`message=${toSanitizedMessage(result.message, 'owner-file save failed')}`],
+              context,
             );
             sendJson(res, 400, { error: result.message });
             return;
@@ -226,6 +254,8 @@ export function buildAdminSettingsRoutes(options: {
           appendSettingsMutationAudit(
             'allowed',
             `Operator updated ${params.key} owner file via /api/settings/${params.key}.`,
+            [],
+            context,
           );
           res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
           res.end(result.message);

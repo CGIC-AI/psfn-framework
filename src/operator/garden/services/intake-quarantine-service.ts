@@ -43,6 +43,7 @@ import type { IntakeSourceListName } from '../../../system/config/intake-policy-
 import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { AdminSettingsService } from './types/settings.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 
 export const INTAKE_QUARANTINE_SOURCE_LIST_ACTIONS = ['always_allow', 'always_deny'] as const;
 export type AdminIntakeQuarantineSourceListAction =
@@ -128,13 +129,14 @@ export type AdminIntakeQuarantineResolveResult =
   | { ok: false; status: number; message: string };
 
 export interface AdminIntakeQuarantineService {
-  listItems(): { items: AdminIntakeQuarantineItemView[] };
-  getItem(id: string): AdminIntakeQuarantineItemDetail | undefined;
+  listItems(context?: GardenRequestContext): { items: AdminIntakeQuarantineItemView[] };
+  getItem(id: string, context?: GardenRequestContext): AdminIntakeQuarantineItemDetail | undefined;
   /** Step 1 of the server-side double-confirm: issue the confirm token. */
-  beginDecision(request: AdminIntakeQuarantineDecisionRequest): AdminIntakeQuarantineBeginResult;
+  beginDecision(request: AdminIntakeQuarantineDecisionRequest, context?: GardenRequestContext): AdminIntakeQuarantineBeginResult;
   /** Step 2: consume the token and execute the decision. */
   resolveDecision(
     request: AdminIntakeQuarantineDecisionRequest & { confirmToken: string; reason: string },
+    context?: GardenRequestContext,
   ): AdminIntakeQuarantineResolveResult;
 }
 
@@ -161,11 +163,25 @@ const MAX_REASON_CHARS = 1024;
 
 interface PendingConfirmToken {
   token: string;
+  authorityBinding: string;
   action: IntakeQuarantineDecisionAction;
   sourceList?: AdminIntakeQuarantineSourceListAction;
   contentSha256?: string;
   sourceListsFingerprint: string;
   expiresAtMs: number;
+}
+
+function decisionAuthorityBinding(context: GardenRequestContext | undefined): string {
+  if (!context || context.kind === 'legacy_token') return 'legacy-token:operator';
+  if (context.kind !== 'fleet_principal') return context.kind;
+  return JSON.stringify({
+    principalId: context.actor.principalId,
+    contactId: context.actor.contactId,
+    companionId: context.resource.companionId,
+    sessionRecordId: context.actor.sessionRecordId,
+    role: context.actor.role,
+    versions: context.versions,
+  });
 }
 
 function deriveFlywheelTarget(
@@ -267,8 +283,8 @@ export function createAdminIntakeQuarantineService(
    * invalidates the confirmation (a strict superset of "any change to that
    * source" — fail closed).
    */
-  const sourceListsFingerprint = (): string => {
-    const lists = deps.settingsService.getIntakeSourceLists();
+  const sourceListsFingerprint = (context?: GardenRequestContext): string => {
+    const lists = deps.settingsService.getIntakeSourceLists(context);
     const canonical = (['trustedSites', 'deniedSites', 'trustedPeople', 'deniedPeople'] as const)
       .map((name) => `${name}:${lists[name].map((entry) => entry.pattern).sort().join(',')}`)
       .join(';');
@@ -332,7 +348,7 @@ export function createAdminIntakeQuarantineService(
       };
     },
 
-    beginDecision(request): AdminIntakeQuarantineBeginResult {
+    beginDecision(request, context): AdminIntakeQuarantineBeginResult {
       const entry = deps.store.getById(request.id);
       if (!entry) {
         return { ok: false, status: 404, message: `Quarantine item not found: ${request.id}` };
@@ -344,12 +360,13 @@ export function createAdminIntakeQuarantineService(
       const token = randomBytes(32).toString('hex');
       pendingConfirms.set(entry.id, {
         token,
+        authorityBinding: decisionAuthorityBinding(context),
         action: request.action,
         ...(request.sourceList !== undefined ? { sourceList: request.sourceList } : {}),
         ...(entry.envelope.contentRef.sha256 !== undefined
           ? { contentSha256: entry.envelope.contentRef.sha256 }
           : {}),
-        sourceListsFingerprint: sourceListsFingerprint(),
+        sourceListsFingerprint: sourceListsFingerprint(context),
         expiresAtMs: atMs + tokenTtlMs,
       });
 
@@ -368,7 +385,10 @@ export function createAdminIntakeQuarantineService(
       };
     },
 
-    resolveDecision(request): AdminIntakeQuarantineResolveResult {
+    resolveDecision(request, context): AdminIntakeQuarantineResolveResult {
+      const requestActor = context?.kind === 'fleet_principal'
+        ? `fleet-principal:${context.actor.principalId}`
+        : OPERATOR_ACTOR;
       const reason = request.reason.trim();
       if (!reason || reason.length > MAX_REASON_CHARS) {
         return {
@@ -392,6 +412,13 @@ export function createAdminIntakeQuarantineService(
       if (atMs > pending.expiresAtMs) {
         return { ok: false, status: 403, message: 'Confirm token expired; request a fresh confirmation' };
       }
+      if (pending.authorityBinding !== decisionAuthorityBinding(context)) {
+        return {
+          ok: false,
+          status: 403,
+          message: 'Confirm token belongs to a different authority snapshot; request a fresh confirmation',
+        };
+      }
       if (pending.action !== request.action
         || (pending.sourceList ?? null) !== (request.sourceList ?? null)) {
         return {
@@ -400,7 +427,7 @@ export function createAdminIntakeQuarantineService(
           message: 'Confirm token was issued for a different decision; request a fresh confirmation',
         };
       }
-      if (pending.sourceListsFingerprint !== sourceListsFingerprint()) {
+      if (pending.sourceListsFingerprint !== sourceListsFingerprint(context)) {
         return {
           ok: false,
           status: 409,
@@ -427,7 +454,7 @@ export function createAdminIntakeQuarantineService(
       let flywheelMessage = '';
       if (request.sourceList && validated.target) {
         const list = flywheelListFor(validated.target, request.sourceList);
-        const existing = deps.settingsService.getIntakeSourceLists()[list]
+        const existing = deps.settingsService.getIntakeSourceLists(context)[list]
           .some((listEntry) => listEntry.pattern === validated.target?.pattern);
         if (existing) {
           flywheelMessage = `; sourceLists.${list} already contains '${validated.target.pattern}'`;
@@ -437,7 +464,7 @@ export function createAdminIntakeQuarantineService(
             list,
             pattern: validated.target.pattern,
             note: `garden-flywheel: quarantine ${request.action} for envelope ${entry.id}`,
-          });
+          }, context);
           if (!mutation.ok) {
             return {
               ok: false,
@@ -463,7 +490,7 @@ export function createAdminIntakeQuarantineService(
         severity,
         status: 'applying',
         sourceChannelId: entry.sourceChannelId ?? 'garden:intake-quarantine',
-        actor: OPERATOR_ACTOR,
+        actor: requestActor,
         actions: [],
         safeAgentSummary: `Operator ${decisionPhrase} `
           + `(${entry.envelope.sourceClass}, envelope ${entry.id})`,
@@ -477,7 +504,7 @@ export function createAdminIntakeQuarantineService(
         decided = deps.store.applyDecision({
           id: entry.id,
           action: request.action,
-          actor: OPERATOR_ACTOR,
+          actor: requestActor,
           reason,
           atMs,
         });

@@ -55,6 +55,19 @@ export interface GatewayChildAssertionExchangeResult {
   readonly parent: RequestCapabilityParentBinding;
 }
 
+function authorityVersionsMatch(
+  left: RequestCapabilityAuthorityVersions,
+  right: RequestCapabilityAuthorityVersions,
+): boolean {
+  return left.authorityGeneration === right.authorityGeneration
+    && left.globalAuthEpoch === right.globalAuthEpoch
+    && left.sessionAuthnVersion === right.sessionAuthnVersion
+    && left.sessionAuthzVersion === right.sessionAuthzVersion
+    && left.bindingVersion === right.bindingVersion
+    && left.grantVersion === right.grantVersion
+    && left.policyVersion === right.policyVersion;
+}
+
 export class GatewayChildAssertionDeniedError extends Error {
   readonly status = 403;
 
@@ -113,6 +126,12 @@ export class GatewayFleetAuthChildAssertionBroker {
       childTarget: input.child.target,
     });
     if (authority.decision === 'deny') throw new GatewayChildAssertionDeniedError();
+    if (!authorityVersionsMatch(authority.versions, verified.versions)) {
+      // Reauthorization observed a fence/version transition. The gateway must
+      // issue a fresh operator decision and actor snapshot; carrying the old
+      // subject into a child would make revocation races authorization wins.
+      throw new GatewayChildAssertionDeniedError();
+    }
 
     const parent = Object.freeze({
       audience: verified.audience as `operator:${string}`,
@@ -125,6 +144,7 @@ export class GatewayFleetAuthChildAssertionBroker {
       target: input.child.target,
       requestId: input.child.requestId,
       decisionId: authority.decisionId,
+      authContext: verified.authContext,
       versions: authority.versions,
       parent,
     });

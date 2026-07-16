@@ -1242,7 +1242,9 @@ export class AdminSettingsDataService implements AdminSettingsService {
   // ── Intake source lists (htm9.13; the htm9.11 Garden tab builds on these) ──
 
   /** Current trusted/denied site and people lists from intake-policy.json. */
-  getIntakeSourceLists(): IntakeSourceListsConfig {
+  getIntakeSourceLists(
+    _context?: import('../garden-request-context.js').GardenRequestContext,
+  ): IntakeSourceListsConfig {
     return this.deps.configStore.loadIntakePolicy().sourceLists;
   }
 
@@ -1251,7 +1253,10 @@ export class AdminSettingsDataService implements AdminSettingsService {
    * owner-file path: pattern normalization, duplicate/contradiction checks,
    * and full config re-validation all fail closed before the save.
    */
-  mutateIntakeSourceList(input: AdminIntakeSourceListMutationInput): ConfigUpdateResult {
+  mutateIntakeSourceList(
+    input: AdminIntakeSourceListMutationInput,
+    _context?: import('../garden-request-context.js').GardenRequestContext,
+  ): ConfigUpdateResult {
     try {
       const current = this.deps.configStore.loadIntakePolicy();
       const next = applyIntakeSourceListMutation(current, {

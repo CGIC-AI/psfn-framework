@@ -18,6 +18,7 @@ import type {
   PendingContactApprovalEntry,
   PendingContactApprovalStore,
 } from '../../../core/contacts/pending-contact-approvals.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 
 export interface AdminPendingContactApprovalView {
   id: string;
@@ -41,10 +42,10 @@ export type AdminPendingContactMutationResult =
   | { ok: false; message: string };
 
 export interface AdminPendingContactsService {
-  listPendingContactApprovals(): Promise<AdminPendingContactListData>;
-  approvePendingContact(id: string): Promise<AdminPendingContactMutationResult>;
-  denyPendingContact(id: string): Promise<AdminPendingContactMutationResult>;
-  resetPendingContactDecision(id: string): Promise<AdminPendingContactMutationResult>;
+  listPendingContactApprovals(context?: GardenRequestContext): Promise<AdminPendingContactListData>;
+  approvePendingContact(id: string, context?: GardenRequestContext): Promise<AdminPendingContactMutationResult>;
+  denyPendingContact(id: string, context?: GardenRequestContext): Promise<AdminPendingContactMutationResult>;
+  resetPendingContactDecision(id: string, context?: GardenRequestContext): Promise<AdminPendingContactMutationResult>;
 }
 
 function toView(entry: PendingContactApprovalEntry): AdminPendingContactApprovalView {

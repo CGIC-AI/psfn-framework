@@ -21,11 +21,22 @@ import {
   compileGardenRouteDeclarations,
   type AuthorizedGardenRoute,
 } from '../../boundary/fleet-auth/garden-route-capabilities.js';
+import { validateGardenRequestMetadata } from '../../boundary/fleet-auth/request-capability-target.js';
+import {
+  createLegacyGardenRequestContext,
+  gardenRequestServiceBoundaryDenial,
+  type GardenRequestContext,
+} from './garden-request-context.js';
 
 interface AdminRouteDeclaration {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   match: RouteMatcher;
-  handle: (req: IncomingMessage, res: ServerResponse, params: RouteParams) => void;
+  handle: (
+    req: IncomingMessage,
+    res: ServerResponse,
+    params: RouteParams,
+    context: GardenRequestContext,
+  ) => void;
 }
 
 export type AdminRoute = AuthorizedGardenRoute<AdminRouteDeclaration>;
@@ -44,13 +55,31 @@ export function dispatchAdminRoute(
   path: string,
   req: IncomingMessage,
   res: ServerResponse,
+  context?: GardenRequestContext,
+  companionId?: string,
 ): boolean {
   for (const route of routes) {
     if (route.method !== method) continue;
     const params = route.match(path);
     if (!params) continue;
     bindRequestForResponse(res, req);
-    route.handle(req, res, params);
+    const requestContext = context ?? createLegacyGardenRequestContext({
+      authorization: route.capability.authorization,
+      routeId: route.capability.id,
+      ...(companionId ? { companionId } : {}),
+      pathParams: params,
+      query: validateGardenRequestMetadata({
+        rawTarget: req.url ?? '/',
+        method: req.method ?? method,
+        headers: req.headers,
+      }).query,
+    });
+    const boundaryDenial = gardenRequestServiceBoundaryDenial(requestContext);
+    if (boundaryDenial) {
+      sendJson(res, 403, { error: boundaryDenial });
+      return true;
+    }
+    route.handle(req, res, params, requestContext);
     return true;
   }
   return false;
@@ -63,6 +92,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
     narrative: string,
     details?: Array<string | null | undefined>,
     actor?: AdminAuditActor,
+    context?: GardenRequestContext,
   ): void => {
     const joinedDetails = details
       ?.filter((detail): detail is string => typeof detail === 'string' && detail.trim().length > 0)
@@ -73,6 +103,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       narrative,
       ...(joinedDetails ? { details: joinedDetails } : {}),
       ...(actor ? { actor } : {}),
+      ...(context ? { requestContext: context } : {}),
     });
   };
 

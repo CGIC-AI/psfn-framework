@@ -40,6 +40,13 @@ const FLEET_AUTHORITY_VERSIONS = Object.freeze({
   grantVersion: 13,
   policyVersion: 17,
 });
+const FLEET_AUTH_CONTEXT = Object.freeze({
+  principalId: 'principal-a', provider: 'discord' as const, providerSubjectId: '12345678901234567',
+  companionId: FLEET_COMPANION_ID, contactBindingId: 'binding-a', contactId: 'contact-a',
+  operatorGrantId: 'grant-a', role: 'admin' as const, sessionRecordId: 'session-a',
+  sessionAssurance: 'webauthn_uv' as const, authorizationEventId: 'event-a',
+  resolvedAt: '2030-01-01T00:00:00.000Z',
+});
 
 function request(
   port: number,
@@ -463,6 +470,7 @@ describe('AdminServer Garden routing', () => {
           target,
           requestId,
           decisionId,
+          authContext: FLEET_AUTH_CONTEXT,
           versions: FLEET_AUTHORITY_VERSIONS,
         });
         const admitted = await request(

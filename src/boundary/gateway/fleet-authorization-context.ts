@@ -6,6 +6,7 @@ import {
 } from '../../system/config/fleet-auth-config.js';
 import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import { fleetAuthRoleAllowsAction } from '../fleet-auth/role-action-policy.js';
+import type { RequestCapabilityAuthContext } from '../fleet-auth/request-capability.js';
 
 export type FleetAuthorizationDenialReason =
   | 'malformed_request'
@@ -614,4 +615,24 @@ export function createImmutableFleetAuthorizationContext(input: {
     }),
   };
   return Object.freeze(context);
+}
+
+/** Select the exact signed actor projection used by Garden request capabilities. */
+export function toRequestCapabilityAuthContext(
+  context: FleetAuthorizationContext,
+): RequestCapabilityAuthContext {
+  return Object.freeze({
+    principalId: context.principalId,
+    provider: context.providerSubject.provider,
+    providerSubjectId: context.providerSubject.subjectId,
+    companionId: context.companionId,
+    contactBindingId: context.contact.bindingId,
+    contactId: context.contact.contactId,
+    operatorGrantId: context.operator.grantId,
+    role: context.operator.role,
+    sessionRecordId: context.session.recordId,
+    sessionAssurance: context.session.assurance,
+    authorizationEventId: context.provenance.authorizationEventId,
+    resolvedAt: context.provenance.resolvedAt,
+  });
 }

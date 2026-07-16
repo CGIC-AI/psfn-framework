@@ -10,6 +10,7 @@ import {
   GardenAuditHistoryJsonlStore,
   type GatewayAuditHistoryReader,
 } from './audit-history-service.js';
+import type { FleetGardenRequestContext } from '../garden-request-context.js';
 
 const TEST_OPAQUE_ID_KEYRING = {
   activeVersion: 'v1',
@@ -29,6 +30,35 @@ function makeTempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'psfn-garden-audit-history-'));
   tempDirs.push(dir);
   return dir;
+}
+
+function fleetRequestContext(): FleetGardenRequestContext {
+  const authorization = Object.freeze({
+    action: 'settings.write' as const,
+    baseRole: 'admin' as const,
+    resource: Object.freeze({ scope: 'personal_workspace' as const, area: 'personal_settings' as const }),
+    subjectRelation: 'current_companion' as const,
+    requirements: Object.freeze({ assurance: 'webauthn_uv' as const, confirmation: 'explicit' as const,
+      approvals: Object.freeze([]) }),
+    publicAccess: 'never' as const,
+    recoveryAccess: 'forbidden' as const,
+  });
+  return Object.freeze({
+    kind: 'fleet_principal', requestId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    decisionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', authorizationEventId: 'event-a',
+    resolvedAt: '2030-01-01T00:00:00.000Z', issuedAt: 1, expiresAt: 2,
+    versions: Object.freeze({ authorityGeneration: 2, globalAuthEpoch: 3, sessionAuthnVersion: 5,
+      sessionAuthzVersion: 7, bindingVersion: 11, grantVersion: 13, policyVersion: 17 }),
+    actor: Object.freeze({ kind: 'fleet_principal', principalId: 'principal-a', provider: 'discord',
+      providerSubjectId: '12345678901234567', contactId: 'contact-a', contactBindingId: 'binding-a',
+      role: 'admin', operatorGrantId: 'grant-a', sessionRecordId: 'session-a',
+      sessionAssurance: 'webauthn_uv' }),
+    action: 'settings.write',
+    resource: Object.freeze({ routeId: 'PATCH /api/admin/settings', scope: 'personal_workspace',
+      area: 'personal_settings', companionId: '11111111-1111-4111-8111-111111111111',
+      pathParams: Object.freeze({}), query: Object.freeze({}) }),
+    subjectRelation: 'current_companion', authorization,
+  });
 }
 
 function makeChargeEvent(overrides: Partial<RunChargeEvent> = {}): RunChargeEvent {
@@ -135,6 +165,36 @@ describe('GardenAuditHistoryJsonlStore', () => {
 });
 
 describe('AdminAuditHistoryDataService', () => {
+  it('persists immutable request actor, decision, resource, and version attribution', async () => {
+    const service = new AdminAuditHistoryDataService({
+      gardenStore: new GardenAuditHistoryJsonlStore(join(makeTempDir(), 'garden-audit-history.jsonl')),
+      gatewayReader: null,
+      chargeLedger: null,
+      scopeId: 'companion-a',
+      opaqueIdKeyring: TEST_OPAQUE_ID_KEYRING,
+      now: () => 1_700_000_000_500,
+    });
+    service.appendGardenEntry({
+      actionType: 'settings_change',
+      decision: 'allowed',
+      narrative: 'Trusted request changed settings.',
+      actor: 'operator',
+      requestContext: fleetRequestContext(),
+    });
+
+    const data = await service.getAuditHistory({ source: 'garden', timeRange: 'all' });
+    expect(data.entries[0]?.requestAttribution).toMatchObject({
+      actor: { kind: 'fleet_principal', principalId: 'principal-a', contactId: 'contact-a', role: 'admin' },
+      companionId: '11111111-1111-4111-8111-111111111111',
+      requestId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      decisionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      action: 'settings.write',
+      routeId: 'PATCH /api/admin/settings',
+      subjectRelation: 'current_companion',
+      authorityVersions: { authorityGeneration: 2, sessionAuthzVersion: 7, policyVersion: 17 },
+    });
+  });
+
   it('merges persisted Garden audit, gateway audit, and charge ledger history with paging', async () => {
     const dir = makeTempDir();
     const gardenStore = new GardenAuditHistoryJsonlStore(join(dir, 'garden-audit-history.jsonl'));

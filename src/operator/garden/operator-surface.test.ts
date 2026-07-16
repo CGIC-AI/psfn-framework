@@ -48,6 +48,13 @@ const FLEET_VERSIONS: RequestCapabilityAuthorityVersions = Object.freeze({
   grantVersion: 13,
   policyVersion: 17,
 });
+const FLEET_AUTH_CONTEXT = Object.freeze({
+  principalId: 'principal-a', provider: 'discord' as const, providerSubjectId: '12345678901234567',
+  companionId: FLEET_COMPANION_ID, contactBindingId: 'binding-a', contactId: 'contact-a',
+  operatorGrantId: 'grant-a', role: 'admin' as const, sessionRecordId: 'session-a',
+  sessionAssurance: 'webauthn_uv' as const, authorizationEventId: 'event-a',
+  resolvedAt: '2030-01-01T00:00:00.000Z',
+});
 const fleetVerifierConfig = {
   issuer: 'fleet-auth',
   maxTtlSeconds: 30,
@@ -874,6 +881,7 @@ async function createHarness(options: CreateHarnessOptions = {}): Promise<Harnes
             target,
             requestId,
             decisionId: parentContext.decisionId,
+            authContext: verifiedParent.authContext,
             versions: parentContext.versions,
             parent,
           });
@@ -945,7 +953,13 @@ function fleetOperatorHeaders(
     kid: 'active',
     privateKeyPem: fleetPrivateKeyPem,
     ttlSeconds,
-  }).signOperator({ target, requestId, decisionId, versions: FLEET_VERSIONS });
+  }).signOperator({
+    target,
+    requestId,
+    decisionId,
+    authContext: FLEET_AUTH_CONTEXT,
+    versions: FLEET_VERSIONS,
+  });
   return {
     ...buildGardenCapabilityHeaders({
       token,
@@ -1072,6 +1086,11 @@ describe('Garden operator surface', () => {
       expect(networkHarness.services.settings.saveSubConfigJson).toHaveBeenCalledWith(
         'providers',
         providersJson,
+        expect.objectContaining({
+          kind: 'legacy_token',
+          action: 'settings.write',
+          resource: expect.objectContaining({ routeId: 'POST /api/admin/settings/:key' }),
+        }),
       );
 
       const ws = await openWebSocket(networkHarness.port, '/api/admin/events');

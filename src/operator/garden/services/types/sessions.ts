@@ -32,6 +32,7 @@ import type {
   AdminSessionRoleEnvelopePreview,
   AdminContinuityProvenanceView,
 } from './continuity.js';
+import type { GardenRequestContext } from '../../garden-request-context.js';
 
 export type AdminSessionListRow = Pick<
   ChannelInfo,
@@ -213,8 +214,8 @@ export interface AdminSessionTurnDetailData {
 }
 
 export interface AdminSessionService {
-  listSessions(): Promise<AdminSessionListData>;
-  getSessionDetail(sessionId: string): Promise<AdminSessionDetailData>;
+  listSessions(context?: GardenRequestContext): Promise<AdminSessionListData>;
+  getSessionDetail(sessionId: string, context?: GardenRequestContext): Promise<AdminSessionDetailData>;
   /**
    * Garden transport read path. The newest page may use the optional shared
    * session tail; older cursor pages stay on the canonical bounded reader.
@@ -222,20 +223,21 @@ export interface AdminSessionService {
   getSessionMessagesForAdminRead(
     sessionId: string,
     options?: AdminSessionMessagePaginationOptions,
+    context?: GardenRequestContext,
   ): Promise<AdminSessionMessagesData>;
   /**
    * Canonical reader used by non-transport callers and fallback. Async because
    * it resolves persisted retrieved-memory candidate refs against the live
    * memory store at read time (bead psfn-framework-jsi9).
    */
-  getSessionMessages(sessionId: string, options?: AdminSessionMessagePaginationOptions): Promise<AdminSessionMessagesData>;
-  getSessionTurnDetail(sessionId: string, turnId: string): Promise<AdminSessionTurnDetailData>;
-  searchSessionMessages(sessionId: string, query: string, limit?: number): Promise<AdminSessionSearchData>;
-  listSessionRoutes(): Promise<AdminSessionRouteListData>;
-  resetSourceChannelSession(input: AdminSessionRouteResetInput): Promise<AdminSessionRouteResetData>;
-  listCogSecEvents(): Promise<AdminCogSecEventListData>;
-  previewCogSecRemediation(input: AdminCogSecRemediationInput): Promise<AdminCogSecRemediationPreviewData>;
-  applyCogSecRemediation(input: AdminCogSecRemediationInput): Promise<AdminCogSecRemediationApplyData>;
+  getSessionMessages(sessionId: string, options?: AdminSessionMessagePaginationOptions, context?: GardenRequestContext): Promise<AdminSessionMessagesData>;
+  getSessionTurnDetail(sessionId: string, turnId: string, context?: GardenRequestContext): Promise<AdminSessionTurnDetailData>;
+  searchSessionMessages(sessionId: string, query: string, limit?: number, context?: GardenRequestContext): Promise<AdminSessionSearchData>;
+  listSessionRoutes(context?: GardenRequestContext): Promise<AdminSessionRouteListData>;
+  resetSourceChannelSession(input: AdminSessionRouteResetInput, context?: GardenRequestContext): Promise<AdminSessionRouteResetData>;
+  listCogSecEvents(context?: GardenRequestContext): Promise<AdminCogSecEventListData>;
+  previewCogSecRemediation(input: AdminCogSecRemediationInput, context?: GardenRequestContext): Promise<AdminCogSecRemediationPreviewData>;
+  applyCogSecRemediation(input: AdminCogSecRemediationInput, context?: GardenRequestContext): Promise<AdminCogSecRemediationApplyData>;
 }
 
 export interface AdminSessionTurnData {

@@ -9,6 +9,7 @@ import {
 import type {
   ApprovalQueuePort,
   ConfirmationQueueEntry,
+  ConfirmationQueueHistoryEntry,
 } from '../../system/capabilities/approval-queue-port.js';
 
 const ARTIFACT_EGRESS_NOTIFICATION_SENDER = Object.freeze({
@@ -43,6 +44,13 @@ export type ArtifactEgressDecision =
       disposition: 'queued';
       attachments: [];
       queueEntry: ConfirmationQueueEntry;
+      sensitivity: ArtifactSensitivityClassification['sensitivity'];
+    }
+  | {
+      disposition: 'settled';
+      attachments: [];
+      queueEntryId: string;
+      resolution: ConfirmationQueueHistoryEntry['status'];
       sensitivity: ArtifactSensitivityClassification['sensitivity'];
     };
 
@@ -83,12 +91,61 @@ function assertClassificationsUnchanged(
   }
 }
 
-export async function authorizeArtifactEgress(input: {
+function findMatchingPendingApproval(
+  approvalQueue: ApprovalQueuePort,
+  scope: string,
+  params: Record<string, unknown>,
+): ConfirmationQueueEntry | null {
+  const serializedParams = JSON.stringify(params);
+  return approvalQueue.listPending().find(entry => (
+    entry.method === 'artifact.share'
+    && entry.action === 'share'
+    && entry.scope === scope
+    && JSON.stringify(entry.params) === serializedParams
+  )) ?? null;
+}
+
+function findMatchingSettledApproval(
+  approvalQueue: ApprovalQueuePort,
+  scope: string,
+  params: Record<string, unknown>,
+): ConfirmationQueueHistoryEntry | null {
+  const serializedParams = JSON.stringify(params);
+  return approvalQueue.listHistory().find(entry => (
+    (entry.status === 'approved' || entry.status === 'denied' || entry.executed)
+    && entry.method === 'artifact.share'
+    && entry.action === 'share'
+    && entry.scope === scope
+    && JSON.stringify(entry.params) === serializedParams
+  )) ?? null;
+}
+
+function requireSingleCurrentClassification(
+  attachments: readonly Attachment[],
+  classifications: readonly ArtifactSensitivityClassification[],
+): ArtifactSensitivityClassification {
+  if (classifications.length !== attachments.length || classifications.length === 0) {
+    throw new Error('Recovered artifact egress requires current sensitivity classification for every attachment');
+  }
+  const classification = classifications[0];
+  const fingerprint = fingerprintArtifactSensitivity(classification);
+  if (classifications.some(current => fingerprintArtifactSensitivity(current) !== fingerprint)) {
+    throw new Error('Recovered artifact attachments have inconsistent current sensitivity classifications');
+  }
+  return classification;
+}
+
+interface ArtifactEgressAuthorizationInput {
   attachments: readonly Attachment[];
   classification: ArtifactSensitivityClassification;
   destination: ArtifactEgressDestination;
   deps: ArtifactEgressApprovalDeps;
-}): Promise<ArtifactEgressDecision> {
+}
+
+async function authorizeArtifactEgressInternal(
+  input: ArtifactEgressAuthorizationInput,
+  reuseExistingApproval: boolean,
+): Promise<ArtifactEgressDecision> {
   const attachments = input.attachments.map(attachment => ({ ...attachment }));
   if (attachments.length === 0) return { disposition: 'proceed', attachments };
 
@@ -128,10 +185,32 @@ export async function authorizeArtifactEgress(input: {
       surface: destination.surface,
     },
   };
+  const approvalScope = `${destination.surface}:${destination.channelType}:${destination.channelId}`;
+  if (reuseExistingApproval) {
+    const pendingEntry = findMatchingPendingApproval(approvalQueue, approvalScope, queueParams);
+    if (pendingEntry) {
+      return {
+        disposition: 'queued',
+        attachments: [],
+        queueEntry: pendingEntry,
+        sensitivity: input.classification.sensitivity,
+      };
+    }
+    const settledEntry = findMatchingSettledApproval(approvalQueue, approvalScope, queueParams);
+    if (settledEntry) {
+      return {
+        disposition: 'settled',
+        attachments: [],
+        queueEntryId: settledEntry.id,
+        resolution: settledEntry.status,
+        sensitivity: input.classification.sensitivity,
+      };
+    }
+  }
   const entry = approvalQueue.enqueue({
     method: 'artifact.share',
     action: 'share',
-    scope: `${destination.surface}:${destination.channelType}:${destination.channelId}`,
+    scope: approvalScope,
     params: queueParams,
     companionReason:
       `Sharing ${input.classification.sensitivity} artifact material beyond self or the primary contact requires review.`,
@@ -158,4 +237,38 @@ export async function authorizeArtifactEgress(input: {
     queueEntry: entry,
     sensitivity: input.classification.sensitivity,
   };
+}
+
+export async function authorizeArtifactEgress(
+  input: ArtifactEgressAuthorizationInput,
+): Promise<ArtifactEgressDecision> {
+  return authorizeArtifactEgressInternal(input, false);
+}
+
+/**
+ * Recovery cannot trust the interrupted turn's context classification. External
+ * release is re-authorized from the artifact sidecars as they exist now, while
+ * self/V delivery retains the direct-delivery policy of a normal turn.
+ */
+export async function authorizeRecoveredArtifactEgress(input: {
+  attachments: readonly Attachment[];
+  destination: ArtifactEgressDestination;
+  deps: ArtifactEgressApprovalDeps;
+}): Promise<ArtifactEgressDecision> {
+  const attachments = input.attachments.map(attachment => ({ ...attachment }));
+  if (attachments.length === 0) return { disposition: 'proceed', attachments };
+
+  const destination = requireDestination(input.destination);
+  if (destination.audience === 'self' || destination.audience === 'primary_contact') {
+    return { disposition: 'proceed', attachments };
+  }
+
+  const currentClassifications = await input.deps.readCurrentClassifications(attachments);
+  const classification = requireSingleCurrentClassification(attachments, currentClassifications);
+  return authorizeArtifactEgressInternal({
+    attachments,
+    classification,
+    destination,
+    deps: input.deps,
+  }, true);
 }

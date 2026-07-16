@@ -1537,6 +1537,139 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     });
   }
 
+  it('re-authorizes recovered private artifacts from current sidecars without duplicate delivery or approval', async () => {
+    const { fatigueBudget } = createFatigueBudgetHarness();
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const messageId = 'recovered-private-artifact';
+    const turnId = createTurnId();
+    const message = createInboundIcpFatigueMessage({
+      id: messageId,
+      localCompanionId,
+      peerCompanionId,
+      turnId,
+    });
+    const recoveredCorrelation = {
+      ...message.routing!.icpCorrelation!,
+      localCompanionId,
+      peerCompanionId,
+      peerContactId: 'contact-mi',
+      turnId,
+      messageId,
+      requestId: messageId,
+      costOriginStage: 'reply' as const,
+      fatigueDecision: 'not_evaluated' as const,
+    };
+    const companionDataDir = makeTempDir();
+    const localPath = join(companionDataDir, 'recovered-private-artifact.png');
+    writeFileSync(localPath, Buffer.from('png-bytes'));
+    writeFileSync(`${localPath}.image-meta.json`, JSON.stringify({
+      schemaVersion: 1,
+      sensitivityClassification: {
+        schemaVersion: 1,
+        sensitivity: 'confidential',
+        basis: 'contested',
+        classifiedAt: '2026-07-16T15:00:00.000Z',
+        sources: [{ ref: 'turn:original', sensitivity: 'public' }],
+        contests: [{
+          actor: 'operator',
+          previousSensitivity: 'public',
+          sensitivity: 'confidential',
+          reason: 'Current review found private source material.',
+          contestedAt: '2026-07-16T15:00:00.000Z',
+        }],
+      },
+    }));
+    const recoveredResponse: AgentResponse = {
+      content: 'Here is the recovered private artifact.',
+      channelId: message.channelId,
+      attachments: [{
+        url: 'https://images.example.test/recovered-private-artifact.png',
+        contentType: 'image/png',
+        name: 'recovered-private-artifact.png',
+        localPath,
+      }],
+      metadata: {
+        model: 'recovered-model',
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: 1,
+        turnId,
+        requestId: messageId,
+        icpCorrelation: recoveredCorrelation,
+      },
+    };
+    const queue = new ConfirmationQueue({ idFactory: () => 'recovered-private-approval' });
+    const notify = vi.fn(async () => ({ messageId: 'recovered-private-notice' }));
+    const shareApprovedArtifacts = vi.fn(async () => {});
+    const finalizeDelivery = vi.fn(async () => undefined);
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      configOverrides: {
+        companionId: localCompanionId,
+        companionDataDir,
+        workspacePath: companionDataDir,
+      },
+    });
+    runtime.artifactApprovalQueue = createApprovalQueuePortFromConfirmationQueue(queue);
+    runtime.artifactApprovalNotifier = { notify };
+    runtime.shareApprovedArtifacts = shareApprovedArtifacts;
+
+    const first = await handleMessageForTurn(runtime, message, {
+      recoveredResponse,
+      sourceAlreadyPersisted: true,
+      finalizeDelivery,
+    });
+    const replay = await handleMessageForTurn(runtime, message, {
+      recoveredResponse,
+      sourceAlreadyPersisted: true,
+      finalizeDelivery,
+    });
+
+    expect(first).toMatchObject({ content: '' });
+    expect(first.attachments).toBeUndefined();
+    expect(replay).toEqual(first);
+    expect(finalizeDelivery).toHaveBeenCalledTimes(2);
+    expect(finalizeDelivery).toHaveBeenNthCalledWith(1, first);
+    expect(finalizeDelivery).toHaveBeenNthCalledWith(2, first);
+    expect(queue.listPending()).toEqual([
+      expect.objectContaining({ id: 'recovered-private-approval', method: 'artifact.share' }),
+    ]);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(shareApprovedArtifacts).not.toHaveBeenCalled();
+
+    await queue.resolve(
+      { id: 'recovered-private-approval', decision: 'approve' },
+      { kind: 'operator', id: 'operator:test' },
+    );
+    const settledReplay = await handleMessageForTurn(runtime, message, {
+      recoveredResponse,
+      sourceAlreadyPersisted: true,
+      finalizeDelivery,
+    });
+    expect(settledReplay).toEqual(first);
+    expect(finalizeDelivery).toHaveBeenCalledTimes(3);
+    expect(queue.listPending()).toHaveLength(0);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(shareApprovedArtifacts).toHaveBeenCalledTimes(1);
+
+    rmSync(`${localPath}.image-meta.json`);
+    await expect(handleMessageForTurn(runtime, message, {
+      recoveredResponse,
+      sourceAlreadyPersisted: true,
+      finalizeDelivery,
+    })).rejects.toThrow('Artifact sensitivity metadata is unavailable');
+    writeFileSync(`${localPath}.image-meta.json`, JSON.stringify({ schemaVersion: 1 }));
+    await expect(handleMessageForTurn(runtime, message, {
+      recoveredResponse,
+      sourceAlreadyPersisted: true,
+      finalizeDelivery,
+    })).rejects.toThrow('Artifact sensitivity metadata is missing or invalid');
+    expect(finalizeDelivery).toHaveBeenCalledTimes(3);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(shareApprovedArtifacts).toHaveBeenCalledTimes(1);
+  });
+
   it('calls the model for a normal MI turn and records one spend after the assistant response', async () => {
     const { fatigueBudget, history } = createFatigueBudgetHarness();
     const { runtime } = createFatigueRuntime({ fatigueBudget });

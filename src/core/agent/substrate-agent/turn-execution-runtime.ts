@@ -86,6 +86,7 @@ import {
 } from '../../../shared/contracts/artifact-sensitivity.js';
 import {
   authorizeArtifactEgress,
+  authorizeRecoveredArtifactEgress,
   type ArtifactEgressDestination,
 } from '../../artifacts/sensitivity-egress.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
@@ -1424,7 +1425,7 @@ export async function handleMessageForTurn(
           },
         });
 
-    if (!recoveredResponse && responseAttachments.length > 0) {
+    if (responseAttachments.length > 0) {
       const requestAudience = viewerRequestContext.requestAudience;
       const destination: ArtifactEgressDestination = {
         audience: requestAudience ?? 'ambiguous',
@@ -1440,25 +1441,37 @@ export async function handleMessageForTurn(
                 ? 'conversation'
                 : 'external',
       };
-      const egress = await authorizeArtifactEgress({
-        attachments: responseAttachments,
-        classification: artifactSensitivityClassification,
-        destination,
-        deps: {
-          approvalQueue: runtime.artifactApprovalQueue,
-          notifier: runtime.artifactApprovalNotifier,
-          readCurrentClassifications: readGeneratedImageSensitivityClassifications,
-          executeApprovedShare: async (approvedAttachments, approvedDestination) => {
-            if (!runtime.shareApprovedArtifacts) {
-              throw new Error('Approved artifact egress is not wired for this runtime');
-            }
-            await runtime.shareApprovedArtifacts(approvedAttachments, approvedDestination);
-          },
+      const egressDeps = {
+        approvalQueue: runtime.artifactApprovalQueue,
+        notifier: runtime.artifactApprovalNotifier,
+        readCurrentClassifications: readGeneratedImageSensitivityClassifications,
+        executeApprovedShare: async (
+          approvedAttachments: readonly Attachment[],
+          approvedDestination: ArtifactEgressDestination,
+        ) => {
+          if (!runtime.shareApprovedArtifacts) {
+            throw new Error('Approved artifact egress is not wired for this runtime');
+          }
+          await runtime.shareApprovedArtifacts(approvedAttachments, approvedDestination);
         },
-      });
+      };
+      const egress = recoveredResponse
+        ? await authorizeRecoveredArtifactEgress({
+            attachments: responseAttachments,
+            destination,
+            deps: egressDeps,
+          })
+        : await authorizeArtifactEgress({
+            attachments: responseAttachments,
+            classification: artifactSensitivityClassification,
+            destination,
+            deps: egressDeps,
+          });
       responseAttachments = egress.attachments;
-      if (egress.disposition === 'queued') {
+      if (egress.disposition !== 'proceed') {
         safeResponseText = '';
+      }
+      if (egress.disposition === 'queued') {
         runtime.sessionManager.appendSystemNote(
           turnSessionIdentity.logicalSessionId,
           `Artifact share held for V's review because it inherited ${egress.sensitivity} context. `
@@ -1656,7 +1669,9 @@ export async function handleMessageForTurn(
     }
     const agentResponse: AgentResponse = recoveredResponse
       ? {
-          ...recoveredResponse,
+          content: safeResponseText,
+          channelId: recoveredResponse.channelId,
+          ...(responseAttachments.length > 0 ? { attachments: responseAttachments } : {}),
           metadata: {
             ...recoveredResponse.metadata,
             ...(responseFatigueMetadata ? { fatigue: responseFatigueMetadata } : {}),

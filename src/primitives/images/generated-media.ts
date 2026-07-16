@@ -405,7 +405,7 @@ export async function readGeneratedImageSensitivityClassifications(
     }
     let metadata: unknown;
     try {
-      metadata = JSON.parse(await readFile(`${localPath}${GENERATED_IMAGE_META_SUFFIX}`, 'utf-8')) as unknown;
+      metadata = JSON.parse(await readFile(`${localPath}${GENERATED_IMAGE_META_SUFFIX}`, 'utf-8'));
     } catch (error) {
       throw new Error(`Artifact sensitivity metadata is unavailable: ${String(error)}`);
     }

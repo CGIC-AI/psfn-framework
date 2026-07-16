@@ -110,6 +110,13 @@ function makeTempDir(): string {
   return tempDir;
 }
 
+function createRuntimeSessionManager(dataDir = makeTempDir()): SessionManager {
+  return new SessionManager(
+    new SessionStore(dataDir),
+    makePersistenceConfig(dataDir),
+  );
+}
+
 function createDeferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
   let reject!: (reason?: unknown) => void;
@@ -1201,10 +1208,9 @@ describe('handleMessageForTurn generated media delivery', () => {
     const queue = new ConfirmationQueue({ idFactory: () => 'artifact-public-approval' });
     const notify = vi.fn(async () => ({ messageId: 'notice-public-art' }));
     const shareApprovedArtifacts = vi.fn(async () => {});
-    const appendSystemNote = vi.fn();
     const runtime = createRuntime({
       eventBus,
-      sessionManager: { appendSystemNote } as unknown as SessionManager,
+      sessionManager: createRuntimeSessionManager(companionDataDir),
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
@@ -1235,7 +1241,8 @@ describe('handleMessageForTurn generated media delivery', () => {
           versionPointer: 'active-memory-public-art-v1',
         })),
         refreshActiveMemoryContext: vi.fn(async () => null),
-      } as unknown as TurnExecutionRuntime['memoryProvider'],
+        retrieve: vi.fn(async () => ''),
+      },
       configOverrides: {
         companionDataDir,
         workspacePath: companionDataDir,
@@ -1244,8 +1251,8 @@ describe('handleMessageForTurn generated media delivery', () => {
     runtime.artifactApprovalQueue = createApprovalQueuePortFromConfirmationQueue(queue);
     runtime.artifactApprovalNotifier = { notify };
     runtime.shareApprovedArtifacts = shareApprovedArtifacts;
-    (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
-      runtime.agent.state.messages.push({ role: 'user', content: promptMessage.content });
+    vi.mocked(runtime.agent.prompt).mockImplementationOnce(async () => {
+      runtime.agent.state.messages.push({ role: 'user', content: 'Create something for this public room.' });
       runtime.agent.state.messages.push({
         role: 'toolResult',
         toolCallId: 'call-private-art',
@@ -1285,7 +1292,7 @@ describe('handleMessageForTurn generated media delivery', () => {
     ]);
     expect(notify).toHaveBeenCalledTimes(1);
     expect(shareApprovedArtifacts).not.toHaveBeenCalled();
-    expect(appendSystemNote).toHaveBeenCalledWith(
+    expect(runtime.sessionManager.appendSystemNote).toHaveBeenCalledWith(
       'discord:public-art',
       expect.stringContaining('inherited confidential context'),
       'artifact_egress_approval',
@@ -5808,7 +5815,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     }));
     const runtime = createRuntime({
       eventBus,
-      sessionManager: {} as SessionManager,
+      sessionManager: createRuntimeSessionManager(),
       buildContext,
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -5824,7 +5831,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       memoryProvider: {
         getActiveMemoryContext,
         refreshActiveMemoryContext,
-      } as unknown as TurnExecutionRuntime['memoryProvider'],
+        retrieve: vi.fn(async () => ''),
+      },
     });
 
     await handleMessageForTurn(runtime, createMessage('msg-free-time-self', {
@@ -5858,7 +5866,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     }));
     const runtime = createRuntime({
       eventBus,
-      sessionManager: {} as SessionManager,
+      sessionManager: createRuntimeSessionManager(),
       buildContext,
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -5874,7 +5882,8 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       memoryProvider: {
         getActiveMemoryContext: vi.fn(() => null),
         refreshActiveMemoryContext,
-      } as unknown as TurnExecutionRuntime['memoryProvider'],
+        retrieve: vi.fn(async () => ''),
+      },
     });
 
     await handleMessageForTurn(runtime, createMessage('msg-internal-ambiguous', {
@@ -5892,7 +5901,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const observedAudiences: unknown[] = [];
     const runtime = createRuntime({
       eventBus: new EventBus(),
-      sessionManager: {} as SessionManager,
+      sessionManager: createRuntimeSessionManager(),
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
@@ -5911,7 +5920,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
         continuityFallbackKeys: [],
       })),
     });
-    (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+    vi.mocked(runtime.agent.prompt).mockImplementationOnce(async () => {
       observedAudiences.push(getRequestContext()?.requestAudience);
       runtime.agent.state.messages.push({ role: 'assistant', content: 'hello V' });
     });

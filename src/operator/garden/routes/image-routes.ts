@@ -16,6 +16,7 @@ import type { AdminAuditDecision } from '../types.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
 import { isSensitivityLevel } from '../../../shared/contracts/artifact-sensitivity.js';
+import { isRecord } from '../../../shared/utils/types.js';
 
 function sendImageBlob(
   res: ServerResponse,
@@ -136,19 +137,14 @@ function parseGeneratedImageUpdatePayload(payload: Record<string, unknown>): Adm
   const sensitivityContestValue = payload.sensitivityContest;
   let sensitivityContest: AdminGeneratedImageUpdateInput['sensitivityContest'];
   if (sensitivityContestValue !== undefined) {
-    if (
-      sensitivityContestValue === null
-      || typeof sensitivityContestValue !== 'object'
-      || Array.isArray(sensitivityContestValue)
-    ) {
+    if (!isRecord(sensitivityContestValue)) {
       throw new Error('sensitivityContest must be an object');
     }
-    const record = sensitivityContestValue as Record<string, unknown>;
-    const reason = stringValue(record.reason)?.trim() ?? '';
-    if (!isSensitivityLevel(record.sensitivity) || !reason) {
+    const reason = stringValue(sensitivityContestValue.reason)?.trim() ?? '';
+    if (!isSensitivityLevel(sensitivityContestValue.sensitivity) || !reason) {
       throw new Error('sensitivityContest requires a valid sensitivity and non-empty reason');
     }
-    sensitivityContest = { sensitivity: record.sensitivity, reason };
+    sensitivityContest = { sensitivity: sensitivityContestValue.sensitivity, reason };
   }
   return {
     ...(typeof payload.favorite === 'boolean' ? { favorite: payload.favorite } : {}),
@@ -227,13 +223,13 @@ export function buildAdminImageRoutes(options: {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
-          if (parsed.value === null || typeof parsed.value !== 'object' || Array.isArray(parsed.value)) {
+          if (!isRecord(parsed.value)) {
             sendJson(res, 400, { error: 'Generated image update payload must be a JSON object' });
             return;
           }
           let update: AdminGeneratedImageUpdateInput;
           try {
-            update = parseGeneratedImageUpdatePayload(parsed.value as Record<string, unknown>);
+            update = parseGeneratedImageUpdatePayload(parsed.value);
           } catch (error) {
             sendJson(res, 400, { error: toSanitizedMessage(error, 'Invalid generated image update') });
             return;

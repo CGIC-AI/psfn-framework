@@ -217,6 +217,16 @@
                 <dt class="text-xs uppercase tracking-[0.14em] text-shadow-500">Live State</dt>
                 <dd class="mt-1 text-shadow-700">{labelize(item.endpoint.live.status)}</dd>
               </div>
+              {#if item.endpoint.hubDeviceEnrollment}
+                <div>
+                  <dt class="text-xs uppercase tracking-[0.14em] text-shadow-500">Hub Device Enrollment</dt>
+                  <dd class="mt-1 text-shadow-700">
+                    {item.endpoint.hubDeviceEnrollment.deviceId} /
+                    v{item.endpoint.hubDeviceEnrollment.enrollmentVersion} /
+                    {labelize(item.endpoint.hubDeviceEnrollment.enrollmentStatus)}
+                  </dd>
+                </div>
+              {/if}
             </dl>
 
             <div class="mt-5 space-y-3">

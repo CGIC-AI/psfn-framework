@@ -49,6 +49,7 @@ export function buildAdminSatelliteRegistryView(
         defaultIdentity: endpoint.defaultIdentity,
         maxCapabilities: endpoint.maxCapabilities,
         telemetryScopes: endpoint.telemetryScopes,
+        ...(endpoint.hubDeviceEnrollment ? { hubDeviceEnrollment: endpoint.hubDeviceEnrollment } : {}),
         live: {
           status: 'not_observed',
           detail: LIVE_OBSERVATION_DETAIL,

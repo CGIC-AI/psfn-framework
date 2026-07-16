@@ -245,7 +245,6 @@
       class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
     >
       <div class="flex items-center gap-3">
-        <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">X</span>
         <h2 class="text-sm font-serif font-semibold text-shadow-800">Memory Extraction Tuning</h2>
       </div>
       <div class="flex items-center gap-3">
@@ -308,7 +307,6 @@
       class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
     >
       <div class="flex items-center gap-3">
-        <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">P</span>
         <h2 class="text-sm font-serif font-semibold text-shadow-800">Profile Synthesis</h2>
       </div>
       <div class="flex items-center gap-3">
@@ -384,7 +382,6 @@
       class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
     >
       <div class="flex items-center gap-3">
-        <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">R</span>
         <h2 class="text-sm font-serif font-semibold text-shadow-800">Analysis Workbench (RLM Sandbox)</h2>
       </div>
       <div class="flex items-center gap-3">

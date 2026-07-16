@@ -235,6 +235,9 @@ export class InMemoryMemoryStore {
     const stored = this.memories.get(id);
     if (!stored) return;
     const next = cloneMemory({ ...stored.memory, ...updates });
+    if (updates.retentionClass !== undefined) {
+      next.tags = applyRetentionClassTags(next, updates.retentionClass);
+    }
     if (updates.salience !== undefined || updates.lastAccessed !== undefined) {
       next.salienceDecayAnchorAt = updates.lastAccessed ?? Date.now();
     }

@@ -142,6 +142,7 @@ const FLEET_AUTH_RUNTIME_READ_ONLY_TABLES = [
 const FLEET_AUTH_INTERNAL_TABLES = [
   'schema_migrations',
   'provider_subject_registry',
+  'companion_restore_import_receipts',
 ] as const;
 
 const TABLE_PRIVILEGES = [

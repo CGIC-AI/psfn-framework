@@ -90,6 +90,7 @@ describe('buildFleetAuthBackupCycleOptions', () => {
       fleet: FLEET,
       systemDataDir: '/runtime/system-data',
       backupRestoreDatabaseUrl: 'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app',
+      schemaOwnerDatabaseUrl: 'postgresql://auth_migration:secret@127.0.0.1:5432/app',
       roles: ROLES,
       authorityFloors,
       schemaAccessContracts: [
@@ -170,6 +171,7 @@ describe('buildFleetAuthBackupCycleOptions', () => {
       fleet: FLEET,
       systemDataDir: '/runtime/system-data',
       backupRestoreDatabaseUrl: 'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app',
+      schemaOwnerDatabaseUrl: 'postgresql://auth_migration:secret@127.0.0.1:5432/app',
       roles: ROLES,
       authorityFloors: makeAuthorityFloors(),
       schemaAccessContracts: [

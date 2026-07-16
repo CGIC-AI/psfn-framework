@@ -1,9 +1,10 @@
-import { randomUUID } from 'node:crypto';
+import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import {
   chmodSync,
-  copyFileSync,
   mkdirSync,
+  readFileSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -154,6 +155,29 @@ async function freshDatabase() {
   };
 }
 
+function writeFleetAuthTestConfig(systemDataDir: string): void {
+  const seed = JSON.parse(readFileSync(
+    join(process.cwd(), 'config', 'fleet-auth.seed.json'),
+    'utf8',
+  )) as {
+    verifierKeys: Array<{ kid: string; publicKeyPem: string }>;
+    hubDeviceAssertions: { keys: Array<{ kid: string; publicKeyPem: string }> };
+  };
+  const publicKeyPem = (): string => generateKeyPairSync('ed25519').publicKey.export({
+    type: 'spki',
+    format: 'pem',
+  }).toString();
+  seed.verifierKeys[0]!.kid = 'family-restore-test-verifier';
+  seed.verifierKeys[0]!.publicKeyPem = publicKeyPem();
+  seed.hubDeviceAssertions.keys[0]!.kid = 'family-restore-test-hub';
+  seed.hubDeviceAssertions.keys[0]!.publicKeyPem = publicKeyPem();
+  writeFileSync(
+    join(systemDataDir, 'fleet-auth.json'),
+    `${JSON.stringify(seed, null, 2)}\n`,
+    'utf8',
+  );
+}
+
 async function freshRestoreVerifyDatabase() {
   if (!harness) throw new Error('Postgres harness unavailable');
   const databaseName = `psfn_${randomUUID().replaceAll('-', '')}_restore_verify`;
@@ -181,7 +205,7 @@ async function waitForRestoreAdvisoryLockWaiter(databaseUrl: string): Promise<vo
   const databaseName = decodeURIComponent(new URL(databaseUrl).pathname.slice(1));
   const admin = createPostgresPool(harness.adminDatabaseUrl, { max: 1 });
   try {
-    for (let attempt = 0; attempt < 100; attempt += 1) {
+    for (let attempt = 0; attempt < 500; attempt += 1) {
       const result = await admin.query<{ waiter_count: number }>(`
         SELECT COUNT(*)::integer AS waiter_count
         FROM pg_stat_activity
@@ -216,10 +240,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
     mkdirSync(systemDataDir, { recursive: true });
     mkdirSync(floorRoot, { recursive: true, mode: 0o700 });
     chmodSync(floorRoot, 0o700);
-    copyFileSync(
-      join(process.cwd(), 'config', 'fleet-auth.seed.json'),
-      join(systemDataDir, 'fleet-auth.json'),
-    );
+    writeFleetAuthTestConfig(systemDataDir);
     const principalId = randomUUID();
     const sourceAuditEventId = randomUUID();
     let sourceCompanion: ReturnType<typeof createPostgresPool> | undefined;
@@ -325,7 +346,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
       mkdirSync(companionTwoSessionsDir, { recursive: true });
       mkdirSync(join(companionTwoWorkspacePath, 'journal'), { recursive: true });
       mkdirSync(join(sharedWorkspacePath, 'artifacts'), { recursive: true });
-      copyFileSync(join(process.cwd(), 'config', 'fleet-auth.seed.json'), join(systemDataDir, 'fleet-auth.json'));
+      writeFleetAuthTestConfig(systemDataDir);
       const recovery = await runFleetBackupCycle({
         postgres: { databaseUrl: source.backupUrl },
         companions: [
@@ -359,6 +380,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         manifestPath: backup.manifestPath,
         fleetManifestPath: recovery.fleetManifestPath,
         scratchDatabaseUrl: routedScratchUrl.toString(),
+        scratchSchemaOwnerDatabaseUrl: routedScratchUrl.toString(),
         roles: ROLES,
         authorityFloors: floors,
         activationGeneration: floors.read().trustedHost.activationGeneration,
@@ -373,6 +395,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         manifestPath: backup.manifestPath,
         fleetManifestPath: recovery.fleetManifestPath,
         scratchDatabaseUrl: scratch.backupUrl,
+        scratchSchemaOwnerDatabaseUrl: scratch.migrationUrl,
         roles: ROLES,
         authorityFloors: floors,
         activationGeneration: floorBeforeVerification.trustedHost.activationGeneration,
@@ -398,6 +421,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
       await expect(restoreFleetAuthConsistentFamily({
         manifestPath: backup.manifestPath,
         backupRestoreDatabaseUrl: target.backupUrl,
+        fleetAuthSchemaOwnerDatabaseUrl: target.migrationUrl,
         roles: ROLES,
         authorityFloors: floors,
         activationGeneration: 2,
@@ -411,6 +435,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
       const result = await restoreFleetAuthConsistentFamily({
         manifestPath: backup.manifestPath,
         backupRestoreDatabaseUrl: target.backupUrl,
+        fleetAuthSchemaOwnerDatabaseUrl: target.migrationUrl,
         roles: ROLES,
         authorityFloors: floors,
         activationGeneration: 2,
@@ -501,6 +526,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         await expect(restoreFleetAuthConsistentFamily({
           manifestPath: backup.manifestPath,
           backupRestoreDatabaseUrl: conflictingTarget.backupUrl,
+          fleetAuthSchemaOwnerDatabaseUrl: conflictingTarget.migrationUrl,
           roles: ROLES,
           authorityFloors: floors,
           activationGeneration: 3,
@@ -531,6 +557,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         await expect(restoreFleetAuthConsistentFamily({
           manifestPath: backup.manifestPath,
           backupRestoreDatabaseUrl: retryTarget.backupUrl,
+          fleetAuthSchemaOwnerDatabaseUrl: retryTarget.migrationUrl,
           roles: ROLES,
           authorityFloors: floors,
           activationGeneration: 4,
@@ -557,6 +584,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         await expect(restoreFleetAuthConsistentFamily({
           manifestPath: backup.manifestPath,
           backupRestoreDatabaseUrl: retryTarget.backupUrl,
+          fleetAuthSchemaOwnerDatabaseUrl: retryTarget.migrationUrl,
           roles: ROLES,
           authorityFloors: floors,
           activationGeneration: 5,
@@ -602,6 +630,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
       const firstRestore = restoreFleetAuthConsistentFamily({
         manifestPath: backup.manifestPath,
         backupRestoreDatabaseUrl: concurrentTarget.backupUrl,
+        fleetAuthSchemaOwnerDatabaseUrl: concurrentTarget.migrationUrl,
         roles: ROLES,
         authorityFloors: floors,
         activationGeneration: 6,
@@ -621,6 +650,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
       const secondRestore = restoreFleetAuthConsistentFamily({
         manifestPath: backup.manifestPath,
         backupRestoreDatabaseUrl: concurrentTarget.backupUrl,
+        fleetAuthSchemaOwnerDatabaseUrl: concurrentTarget.migrationUrl,
         roles: ROLES,
         authorityFloors: floors,
         activationGeneration: 7,

@@ -903,6 +903,59 @@ describe('gateway fleet-auth authority lifecycle store', () => {
         companionId: seeded.companionId,
       } satisfies VerifiedFleetAuthLifecycleDecision;
       const removed = await executeDecision(context, remove);
+      const attempt = async (statements: readonly string[]): Promise<void> => {
+        const attacker = await context.pool.connect();
+        try {
+          await attacker.query('BEGIN');
+          await expect((async () => {
+            for (const statement of statements) {
+              await attacker.query(statement, [seeded.companionId]);
+            }
+          })()).rejects.toThrow(/permission denied|reapprove_companion_authority/i);
+        } finally {
+          await attacker.query('ROLLBACK');
+          attacker.release();
+        }
+      };
+      await attempt([
+        `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+         SET lifecycle = 'active' WHERE companion_id = $1`,
+      ]);
+      await attempt([
+        `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+         SET version = version + 1, authority_generation = authority_generation + 1
+         WHERE companion_id = $1`,
+      ]);
+      const attacker = await context.pool.connect();
+      try {
+        const admittedDecisionId = randomUUID();
+        const substitutedDecisionId = randomUUID();
+        const lineageId = createHash('sha256').update(randomUUID()).digest('hex');
+        const lineageGeneration = removed.authorityGeneration + 1;
+        await attacker.query('BEGIN');
+        await attacker.query(`
+          INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authority_floor_tombstone_projection
+            (kind, resource_hash, authority_generation, companion_lineage_id,
+             companion_readd_decision_id)
+          VALUES ('companion_lineage_floor',
+                  encode(sha256(convert_to($1::text, 'UTF8')), 'hex'), $2, $3, $4)
+        `, [seeded.companionId, lineageGeneration, lineageId, admittedDecisionId]);
+        await expect(attacker.query(`
+          UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          SET lifecycle = 'quarantined', version = version + 1,
+              authority_generation = $2, authority_lineage_id = $3,
+              lineage_generation = $2, readd_decision_id = $4
+          WHERE companion_id = $1
+        `, [
+          seeded.companionId,
+          lineageGeneration,
+          lineageId,
+          substitutedDecisionId,
+        ])).rejects.toThrow(/reapprove_companion_authority/i);
+      } finally {
+        await attacker.query('ROLLBACK');
+        attacker.release();
+      }
       await seedActorSession(
         context.pool,
         removed.target,
@@ -918,21 +971,6 @@ describe('gateway fleet-auth authority lifecycle store', () => {
         authorityGeneration: removed.authorityGeneration,
       } satisfies VerifiedFleetAuthLifecycleDecision;
       await executeDecision(context, readd);
-
-      const attempt = async (statements: readonly string[]): Promise<void> => {
-        const attacker = await context.pool.connect();
-        try {
-          await attacker.query('BEGIN');
-          await expect((async () => {
-            for (const statement of statements) {
-              await attacker.query(statement, [seeded.companionId]);
-            }
-          })()).rejects.toThrow(/permission denied|reapprove_companion_authority/i);
-        } finally {
-          await attacker.query('ROLLBACK');
-          attacker.release();
-        }
-      };
 
       await attempt([
         `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
@@ -1096,6 +1134,20 @@ describe('gateway fleet-auth authority lifecycle store', () => {
         new FleetAuthAuthorityFloorStore(context.floorRoot),
       );
       await expect(backupReapprove(request)).rejects.toThrow(/permission denied/i);
+      const substitutedDecisionId = randomUUID();
+      await context.pool.query(`
+        UPDATE ${FLEET_AUTH_SCHEMA_NAME}.authority_floor_tombstone_projection
+        SET companion_readd_decision_id = $2
+        WHERE kind = 'companion_lineage_floor'
+          AND resource_hash = encode(sha256(convert_to($1::text, 'UTF8')), 'hex')
+      `, [seeded.companionId, substitutedDecisionId]);
+      await expect(reapprove(request)).rejects.toThrow(/non-restored floor|not admitted/i);
+      await context.pool.query(`
+        UPDATE ${FLEET_AUTH_SCHEMA_NAME}.authority_floor_tombstone_projection
+        SET companion_readd_decision_id = $2
+        WHERE kind = 'companion_lineage_floor'
+          AND resource_hash = encode(sha256(convert_to($1::text, 'UTF8')), 'hex')
+      `, [seeded.companionId, request.readdDecisionId]);
       const [approved, concurrentReplay] = await Promise.all([
         reapprove(request),
         reapprove(request),

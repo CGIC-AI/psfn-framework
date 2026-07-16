@@ -81,7 +81,10 @@ export function createGardenFleetChildAssertionClient(
 ): GardenFleetChildAssertionClient {
   const endpoint = endpointFromBaseUrl(baseUrl);
   return Object.freeze({
-    exchange: async ({ parentToken, parentContext, target }) => {
+    exchange: async (
+      { parentToken, parentContext, target }:
+      Parameters<GardenFleetChildAssertionClient['exchange']>[0],
+    ) => {
       if (parentContext.parent) throw new Error('Operator parent capability must not be a child');
       const requestId = randomUUID();
       const wireTarget = {

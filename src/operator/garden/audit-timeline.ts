@@ -70,6 +70,7 @@ export class AdminAuditTimelineStore {
       narrative: entry.narrative,
       details: entry.details?.trim() || undefined,
       actor: entry.actor,
+      requestAttribution: entry.requestAttribution,
     };
     this.entries.unshift(normalized);
     if (this.entries.length > MAX_AUDIT_TIMELINE_ENTRIES) {

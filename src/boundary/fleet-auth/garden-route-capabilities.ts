@@ -84,7 +84,6 @@ const queryPolicies: Readonly<Partial<Record<string, Readonly<Partial<Record<str
     '/api/admin/contacts': singleton(['limit', 'contactId', 'actor', 'field']),
     '/api/admin/dashboard': singleton(['costWindow']),
     '/api/admin/diagnostics': singleton(['windowMs', 'sinceMs', 'limit', 'includeFileLogs']),
-    '/api/admin/enrollments/:hubIdentityId': singleton(['actor']),
     '/api/admin/episodic-memory/episodes': singleton(['limit', 'offset', 'threadId', 'from', 'to']),
     '/api/admin/episodic-memory/episodes/:id/arcs': singleton(['direction', 'arcKind', 'limit']),
     '/api/admin/episodic-memory/threads': singleton(['limit']),

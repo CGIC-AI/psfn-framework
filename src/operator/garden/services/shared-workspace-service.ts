@@ -1,4 +1,3 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
 import {
   SharedCompanionWorkspaceStore,
   type SharedWorkspaceActor,
@@ -6,76 +5,54 @@ import {
   type SharedWorkspaceProposalInput,
   type SharedWorkspaceReviewInput,
 } from '../../../persistence/workspaces/shared-workspace-store.js';
-
-export const SHARED_WORKSPACE_CREDENTIAL_HEADER = 'x-companion-shared-workspace-credential';
-export const SHARED_WORKSPACE_PROPOSER_TOKEN_ENV = 'SHARED_WORKSPACE_PROPOSER_TOKEN';
-export const SHARED_WORKSPACE_REVIEWER_TOKEN_ENV = 'SHARED_WORKSPACE_REVIEWER_TOKEN';
-export const SHARED_WORKSPACE_COGSEC_TOKEN_ENV = 'SHARED_WORKSPACE_COGSEC_TOKEN';
-
-export interface SharedWorkspaceCredentials {
-  proposerToken: string;
-  reviewerToken: string;
-  cogSecToken: string;
-}
+import type { GardenRequestContext } from '../garden-request-context.js';
 
 type SharedWorkspacePrincipalRole = SharedWorkspaceActor['role'];
 
 export class SharedWorkspaceAuthenticationError extends Error {}
 
-function requireCredential(value: string | undefined, envName: string): string {
-  const credential = value?.trim() ?? '';
-  if (credential.length < 24) {
-    throw new Error(`${envName} must be configured with at least 24 non-whitespace characters`);
-  }
-  return credential;
-}
-
-export function resolveSharedWorkspaceCredentials(env: NodeJS.ProcessEnv): SharedWorkspaceCredentials {
-  return {
-    proposerToken: requireCredential(env[SHARED_WORKSPACE_PROPOSER_TOKEN_ENV], SHARED_WORKSPACE_PROPOSER_TOKEN_ENV),
-    reviewerToken: requireCredential(env[SHARED_WORKSPACE_REVIEWER_TOKEN_ENV], SHARED_WORKSPACE_REVIEWER_TOKEN_ENV),
-    cogSecToken: requireCredential(env[SHARED_WORKSPACE_COGSEC_TOKEN_ENV], SHARED_WORKSPACE_COGSEC_TOKEN_ENV),
+function authenticateRequest(
+  context: GardenRequestContext | undefined,
+  role: SharedWorkspacePrincipalRole,
+): SharedWorkspaceActor {
+  const expectedRouteId: Record<SharedWorkspacePrincipalRole, string> = {
+    proposer: 'POST /api/admin/shared-workspace/proposals',
+    cogsec: 'POST /api/admin/shared-workspace/reviews/:reviewId/cogsec',
+    reviewer: 'POST /api/admin/shared-workspace/reviews/:reviewId/decision',
   };
-}
-
-function digestCredential(value: string): Buffer {
-  return createHash('sha256').update(value, 'utf8').digest();
-}
-
-function principalId(role: SharedWorkspacePrincipalRole): string {
-  // Persist the authenticated role, not a reusable verifier for the bearer
-  // credential. Credential digests remain process-local.
-  return `shared-workspace:authenticated:${role}`;
+  if (!context || context.kind !== 'fleet_principal'
+    || context.resource.scope !== 'governed_shared_workspace'
+    || context.action !== 'shared_workspace.manage'
+    || context.resource.routeId !== expectedRouteId[role]) {
+    throw new SharedWorkspaceAuthenticationError(
+      'A trusted Fleet shared-workspace authorization is required',
+    );
+  }
+  const requirements = context.authorization.requirements;
+  if (role === 'cogsec'
+    && (!requirements.approvals.includes('cogsec')
+      || requirements.assurance !== 'webauthn_uv'
+      || requirements.confirmation !== 'explicit')) {
+    throw new SharedWorkspaceAuthenticationError('CogSec workflow authorization is incomplete');
+  }
+  if (role === 'reviewer'
+    && (!requirements.approvals.includes('cogsec')
+      || !requirements.approvals.includes('independent_reviewer')
+      || requirements.assurance !== 'webauthn_uv'
+      || requirements.confirmation !== 'explicit')) {
+    throw new SharedWorkspaceAuthenticationError('Independent review authorization is incomplete');
+  }
+  return Object.freeze({
+    id: `shared-workspace:fleet:${context.actor.principalId}`,
+    role,
+  });
 }
 
 export class AdminSharedWorkspaceService {
   private readonly store: SharedCompanionWorkspaceStore;
-  private readonly credentialDigests: Record<SharedWorkspacePrincipalRole, Buffer>;
 
-  constructor(sharedWorkspacePath: string, credentials: SharedWorkspaceCredentials) {
+  constructor(sharedWorkspacePath: string) {
     this.store = new SharedCompanionWorkspaceStore(sharedWorkspacePath);
-    this.credentialDigests = {
-      proposer: digestCredential(requireCredential(credentials.proposerToken, SHARED_WORKSPACE_PROPOSER_TOKEN_ENV)),
-      reviewer: digestCredential(requireCredential(credentials.reviewerToken, SHARED_WORKSPACE_REVIEWER_TOKEN_ENV)),
-      cogsec: digestCredential(requireCredential(credentials.cogSecToken, SHARED_WORKSPACE_COGSEC_TOKEN_ENV)),
-    };
-    const distinct = new Set(Object.values(this.credentialDigests).map(digest => digest.toString('hex')));
-    if (distinct.size !== 3) {
-      throw new Error('Shared workspace proposer, reviewer, and CogSec credentials must be distinct');
-    }
-  }
-
-  authenticate(credential: string | undefined, role: SharedWorkspacePrincipalRole): SharedWorkspaceActor {
-    const provided = typeof credential === 'string' && credential.trim()
-      ? digestCredential(credential.trim())
-      : null;
-    const expected = this.credentialDigests[role];
-    if (!provided || !timingSafeEqual(provided, expected)) {
-      throw new SharedWorkspaceAuthenticationError(
-        `A valid distinct ${role} credential is required for this shared workspace action`,
-      );
-    }
-    return { id: principalId(role), role };
   }
 
   getSnapshot() {
@@ -91,26 +68,26 @@ export class AdminSharedWorkspaceService {
   }
 
   propose(
-    credential: string | undefined,
+    context: GardenRequestContext | undefined,
     input: Omit<SharedWorkspaceProposalInput, 'actor'>,
   ) {
-    return this.store.propose({ ...input, actor: this.authenticate(credential, 'proposer') });
+    return this.store.propose({ ...input, actor: authenticateRequest(context, 'proposer') });
   }
 
   recordCogSecDecision(
-    credential: string | undefined,
+    context: GardenRequestContext | undefined,
     input: Omit<SharedWorkspaceCogSecInput, 'reviewer'>,
   ) {
     return this.store.recordCogSecDecision({
       ...input,
-      reviewer: this.authenticate(credential, 'cogsec'),
+      reviewer: authenticateRequest(context, 'cogsec'),
     });
   }
 
   review(
-    credential: string | undefined,
+    context: GardenRequestContext | undefined,
     input: Omit<SharedWorkspaceReviewInput, 'reviewer'>,
   ) {
-    return this.store.review({ ...input, reviewer: this.authenticate(credential, 'reviewer') });
+    return this.store.review({ ...input, reviewer: authenticateRequest(context, 'reviewer') });
   }
 }

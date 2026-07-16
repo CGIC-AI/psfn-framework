@@ -274,10 +274,10 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     assurance: 'webauthn_uv', confirmation: 'explicit',
   },
   {
-    action: 'memory.read', area: 'memory', routeIds: [
+    action: 'memory.read.self', area: 'memory', routeIds: [
       ...ids('GET', [
         '/api/admin/episodic-memory/episodes', '/api/admin/episodic-memory/threads',
-        '/api/admin/group-memory', '/api/admin/memory', '/api/admin/memory/elevation',
+        '/api/admin/group-memory', '/api/admin/memory',
         '/api/admin/memory/scopes', '/api/admin/memory/search',
         '/api/admin/memory/shared-background', '/api/admin/episodic-memory/episodes/:id',
         '/api/admin/episodic-memory/episodes/:id/arcs',
@@ -287,19 +287,25 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
         '/api/admin/memory/scopes/:scopeKey/detail',
       ]),
       ...pageIds(['/episodic-memory', '/memory']),
-    ],
+    ], subjectRelation: 'self_or_co_subject',
+  },
+  {
+    action: 'memory.jit.self', area: 'memory', routeIds: [
+      ...ids('GET', ['/api/admin/memory/elevation']),
+      ...ids('POST', ['/api/admin/memory/elevation', '/api/admin/memory/:id/reveal']),
+      ...ids('DELETE', ['/api/admin/memory/elevation']),
+    ], subjectRelation: 'self', assurance: 'webauthn_uv', confirmation: 'explicit',
   },
   {
     action: 'memory.manage', area: 'memory', routeIds: [
       ...ids('POST', [
         '/api/admin/memory/bulk-delete', '/api/admin/memory/bulk-update',
-        '/api/admin/memory/elevation', '/api/admin/memory/link',
+        '/api/admin/memory/link',
         '/api/admin/memory/scope-update', '/api/admin/group-memory/:channelId/backfill',
-        '/api/admin/memory/:id/reveal',
       ]),
-      ...ids('DELETE', ['/api/admin/memory/elevation', '/api/admin/memory/link', '/api/admin/memory/:id']),
+      ...ids('DELETE', ['/api/admin/memory/link', '/api/admin/memory/:id']),
       ...ids('PATCH', ['/api/admin/memory/:id/patch']),
-    ], assurance: 'webauthn_uv', confirmation: 'explicit',
+    ], subjectRelation: 'self_or_co_subject', assurance: 'webauthn_uv', confirmation: 'explicit',
   },
   {
     action: 'models.read', area: 'models', routeIds: [

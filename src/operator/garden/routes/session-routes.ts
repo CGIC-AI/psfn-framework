@@ -17,6 +17,7 @@ import {
 import { parseRequestUrl } from '../request-url.js';
 import { toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminBodyReader } from './types.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 
 interface ParsedSessionMessageQuery {
   limit?: number;
@@ -104,7 +105,7 @@ function parseResetMode(value: unknown): AdminSessionRouteResetInput['mode'] {
 
 function parseOptionalPositiveInteger(value: unknown, field: string): number | undefined {
   if (value === undefined) return undefined;
-  if (!Number.isInteger(value) || value <= 0) {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
     throw new Error(`${field} must be a positive integer`);
   }
   return value;
@@ -172,25 +173,37 @@ function parseCogSecRanges(value: unknown): AdminCogSecRemediationInput['affecte
   });
 }
 
-function parseSessionRouteResetInput(value: unknown): AdminSessionRouteResetInput {
+function requestActor(context: GardenRequestContext | undefined): string {
+  return context?.kind === 'fleet_principal'
+    ? `fleet-principal:${context.actor.principalId}`
+    : 'legacy-token:operator';
+}
+
+function parseSessionRouteResetInput(
+  value: unknown,
+  context: GardenRequestContext | undefined,
+): AdminSessionRouteResetInput {
   if (!isRecord(value)) {
     throw new Error('Request body must be a JSON object');
   }
-  const actor = parseOptionalString(value.actor, 'actor');
+  parseOptionalString(value.actor, 'actor');
   const mode = parseResetMode(value.mode);
   return {
     sourceChannelId: parseRequiredString(value.sourceChannelId, 'sourceChannelId'),
     reason: parseRequiredString(value.reason, 'reason'),
-    ...(actor ? { actor } : {}),
+    actor: requestActor(context),
     ...(mode ? { mode } : {}),
   };
 }
 
-function parseCogSecInput(value: unknown): AdminCogSecRemediationInput {
+function parseCogSecInput(
+  value: unknown,
+  context: GardenRequestContext | undefined,
+): AdminCogSecRemediationInput {
   if (!isRecord(value)) {
     throw new Error('Request body must be a JSON object');
   }
-  const actor = parseOptionalString(value.actor, 'actor');
+  parseOptionalString(value.actor, 'actor');
   const caseId = parseOptionalString(value.caseId, 'caseId');
   const affectedLogicalSessionIds = parseOptionalStringArray(value.affectedLogicalSessionIds, 'affectedLogicalSessionIds');
   const affectedMessageRanges = parseCogSecRanges(value.affectedMessageRanges);
@@ -209,7 +222,7 @@ function parseCogSecInput(value: unknown): AdminCogSecRemediationInput {
     type: parseRequiredString(value.type, 'type') as AdminCogSecRemediationInput['type'],
     severity: parseRequiredString(value.severity, 'severity') as AdminCogSecRemediationInput['severity'],
     reason: parseRequiredString(value.reason, 'reason'),
-    ...(actor ? { actor } : {}),
+    actor: requestActor(context),
     ...(cutEpoch !== undefined ? { cutEpoch } : {}),
   };
 }
@@ -224,8 +237,8 @@ export function buildAdminSessionRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/sessions'),
-      handle: (_req, res) => {
-        sessionService.listSessions().then(
+      handle: (_req, res, _params, context) => {
+        (context ? sessionService.listSessions(context) : sessionService.listSessions()).then(
           (payload) => {
             sendJson(res, 200, payload);
           },
@@ -240,8 +253,8 @@ export function buildAdminSessionRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/session-routes'),
-      handle: (_req, res) => {
-        sessionService.listSessionRoutes().then(
+      handle: (_req, res, _params, context) => {
+        (context ? sessionService.listSessionRoutes(context) : sessionService.listSessionRoutes()).then(
           payload => sendJson(res, 200, payload),
           error => sendJson(res, 500, {
             error: toSanitizedMessage(error, 'Failed to load session routes'),
@@ -252,7 +265,7 @@ export function buildAdminSessionRoutes(options: {
     {
       method: 'POST',
       match: exactPath('/api/admin/session-routes/reset'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         withBody(req, res, (body) => {
           const parsedBody = parseAdminJsonBody(body);
           if (!parsedBody.ok) {
@@ -261,7 +274,7 @@ export function buildAdminSessionRoutes(options: {
           }
           let input: AdminSessionRouteResetInput;
           try {
-            input = parseSessionRouteResetInput(parsedBody.value);
+            input = parseSessionRouteResetInput(parsedBody.value, context);
           } catch (error) {
             sendJson(res, 400, {
               ok: false,
@@ -269,7 +282,9 @@ export function buildAdminSessionRoutes(options: {
             });
             return;
           }
-          sessionService.resetSourceChannelSession(input).then(
+          (context
+            ? sessionService.resetSourceChannelSession(input, context)
+            : sessionService.resetSourceChannelSession(input)).then(
             payload => sendJson(res, 200, payload),
             error => sendJson(res, 500, {
               ok: false,
@@ -282,8 +297,8 @@ export function buildAdminSessionRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/session-routes/cogsec/events'),
-      handle: (_req, res) => {
-        sessionService.listCogSecEvents().then(
+      handle: (_req, res, _params, context) => {
+        (context ? sessionService.listCogSecEvents(context) : sessionService.listCogSecEvents()).then(
           payload => sendJson(res, 200, payload),
           error => sendJson(res, 500, {
             error: toSanitizedMessage(error, 'Failed to load CogSec events'),
@@ -294,7 +309,7 @@ export function buildAdminSessionRoutes(options: {
     {
       method: 'POST',
       match: exactPath('/api/admin/session-routes/cogsec/preview'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         withBody(req, res, (body) => {
           const parsedBody = parseAdminJsonBody(body);
           if (!parsedBody.ok) {
@@ -303,7 +318,7 @@ export function buildAdminSessionRoutes(options: {
           }
           let input: AdminCogSecRemediationInput;
           try {
-            input = parseCogSecInput(parsedBody.value);
+            input = parseCogSecInput(parsedBody.value, context);
           } catch (error) {
             sendJson(res, 400, {
               ok: false,
@@ -311,7 +326,9 @@ export function buildAdminSessionRoutes(options: {
             });
             return;
           }
-          sessionService.previewCogSecRemediation(input).then(
+          (context
+            ? sessionService.previewCogSecRemediation(input, context)
+            : sessionService.previewCogSecRemediation(input)).then(
             payload => sendJson(res, 200, payload),
             error => sendJson(res, 500, {
               ok: false,
@@ -324,7 +341,7 @@ export function buildAdminSessionRoutes(options: {
     {
       method: 'POST',
       match: exactPath('/api/admin/session-routes/cogsec/apply'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         withBody(req, res, (body) => {
           const parsedBody = parseAdminJsonBody(body);
           if (!parsedBody.ok) {
@@ -333,7 +350,7 @@ export function buildAdminSessionRoutes(options: {
           }
           let input: AdminCogSecRemediationInput;
           try {
-            input = parseCogSecInput(parsedBody.value);
+            input = parseCogSecInput(parsedBody.value, context);
           } catch (error) {
             sendJson(res, 400, {
               ok: false,
@@ -341,7 +358,9 @@ export function buildAdminSessionRoutes(options: {
             });
             return;
           }
-          sessionService.applyCogSecRemediation(input).then(
+          (context
+            ? sessionService.applyCogSecRemediation(input, context)
+            : sessionService.applyCogSecRemediation(input)).then(
             payload => sendJson(res, 200, payload),
             error => sendJson(res, 500, {
               ok: false,
@@ -354,7 +373,7 @@ export function buildAdminSessionRoutes(options: {
     {
       method: 'GET',
       match: wrappedParamPath('/api/admin/sessions/', '/search', 'channelId'),
-      handle: (req, res, { channelId }) => {
+      handle: (req, res, { channelId }, context) => {
         const params = parseRequestUrl(req).searchParams;
         const query = params.get('q')?.trim() ?? '';
         if (!query) {
@@ -366,7 +385,9 @@ export function buildAdminSessionRoutes(options: {
           sendJson(res, 400, { error: limit.error });
           return;
         }
-        sessionService.searchSessionMessages(channelId, query, limit.value).then(
+        (context
+          ? sessionService.searchSessionMessages(channelId, query, limit.value, context)
+          : sessionService.searchSessionMessages(channelId, query, limit.value)).then(
           payload => sendJson(res, 200, payload),
           error => sendJson(res, 500, {
             error: toSanitizedMessage(error, 'Failed to search session messages'),
@@ -379,8 +400,10 @@ export function buildAdminSessionRoutes(options: {
       // Resolve it only after the operator selects one concrete session.
       method: 'GET',
       match: wrappedParamPath('/api/admin/sessions/', '/detail', 'channelId'),
-      handle: (req, res, { channelId }) => {
-        sessionService.getSessionDetail(channelId).then(
+      handle: (req, res, { channelId }, context) => {
+        (context
+          ? sessionService.getSessionDetail(channelId, context)
+          : sessionService.getSessionDetail(channelId)).then(
           payload => sendCompressedJson(req, res, 200, payload),
           (error) => {
             if (error instanceof AdminSessionNotFoundError) {
@@ -400,8 +423,10 @@ export function buildAdminSessionRoutes(options: {
       // of being swallowed as a channelId.
       method: 'GET',
       match: nestedParamPath('/api/admin/sessions/', '/turns/', 'channelId', 'turnId'),
-      handle: (req, res, { channelId, turnId }) => {
-        sessionService.getSessionTurnDetail(channelId, turnId).then(
+      handle: (req, res, { channelId, turnId }, context) => {
+        (context
+          ? sessionService.getSessionTurnDetail(channelId, turnId, context)
+          : sessionService.getSessionTurnDetail(channelId, turnId)).then(
           payload => sendCompressedJson(req, res, 200, payload),
           (error) => {
             if (error instanceof AdminSessionTurnNotFoundError) {
@@ -418,13 +443,15 @@ export function buildAdminSessionRoutes(options: {
     {
       method: 'GET',
       match: prefixedParamPath('/api/admin/sessions/', 'channelId'),
-      handle: (req, res, { channelId }) => {
+      handle: (req, res, { channelId }, context) => {
         const parsed = parseSessionMessageQuery(req);
         if (!parsed.ok) {
           sendJson(res, 400, { error: parsed.error });
           return;
         }
-        sessionService.getSessionMessagesForAdminRead(channelId, parsed.value).then(
+        (context
+          ? sessionService.getSessionMessagesForAdminRead(channelId, parsed.value, context)
+          : sessionService.getSessionMessagesForAdminRead(channelId, parsed.value)).then(
           payload => sendCompressedJson(req, res, 200, payload),
           error => sendJson(res, 500, {
             error: toSanitizedMessage(error, 'Failed to load session messages'),

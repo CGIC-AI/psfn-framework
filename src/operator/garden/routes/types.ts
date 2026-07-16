@@ -6,11 +6,17 @@ import type {
   AdminAuditDecision,
 } from '../types.js';
 import type { AuthorizedGardenRoute } from '../../../boundary/fleet-auth/garden-route-capabilities.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 
 export interface AdminApiRoute {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
   match: RouteMatcher;
-  handle: (req: IncomingMessage, res: ServerResponse, params: RouteParams) => void;
+  handle: (
+    req: IncomingMessage,
+    res: ServerResponse,
+    params: RouteParams,
+    context?: GardenRequestContext,
+  ) => void;
 }
 
 export type AuthorizedAdminApiRoute = AuthorizedGardenRoute<AdminApiRoute>;
@@ -27,4 +33,5 @@ export type AdminAuditTimelineAppender = (
   narrative: string,
   details?: Array<string | null | undefined>,
   actor?: AdminAuditActor,
+  context?: GardenRequestContext,
 ) => void;

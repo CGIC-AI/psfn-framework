@@ -111,6 +111,19 @@ describe('Garden fleet request capability target', () => {
     })).toThrow(/authority body field/u);
   });
 
+  it.each(['actor', 'actorId', 'principalId', 'contactId', 'operatorGrantId', 'root', 'rootId'])(
+    'rejects browser-controlled JSON identity field %s',
+    (field) => {
+      expect(() => compileGatewayGardenRequestTarget({
+        rawTarget: '/api/admin/images/generated/image-a',
+        method: 'PATCH',
+        companionId,
+        body: Buffer.from(JSON.stringify({ [field]: 'forged' })),
+        headers: { 'content-type': 'application/json' },
+      })).toThrow(/authority body field/u);
+    },
+  );
+
   it.each(['capability', 'assertion', 'jti', 'parent', 'request_capability', 'token'])(
     'forbids WebSocket/query authority field %s before route dispatch',
     (field) => {

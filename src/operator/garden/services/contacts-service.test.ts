@@ -6,6 +6,14 @@ import type { AdminContactRelationshipScoreReader } from './types.js';
 import { createContactRelationshipScoreReader } from '../../../core/contacts/trust-drift-signals.js';
 import type { EmotionalTimeSeriesPoint } from '../../../core/contacts/store/emotional-baseline.js';
 import { createTestPostgresContactStore } from '../../../test-support/postgres-contact-store.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
+
+function fleetContext(contactId: string): GardenRequestContext {
+  return {
+    kind: 'fleet_principal',
+    actor: { principalId: `principal-${contactId}`, contactId },
+  } as unknown as GardenRequestContext;
+}
 
 async function createServiceHarness(options?: {
   relationshipScoreReader?: AdminContactRelationshipScoreReader;
@@ -37,6 +45,30 @@ async function createServiceHarness(options?: {
 }
 
 describe('AdminContactsDataService', () => {
+  it('does not expose another contact through fleet list projections', async () => {
+    const { contactStore, service, profiles } = await createServiceHarness();
+    const current = await contactStore.upsert({ displayName: 'Current Contact' });
+    const other = await contactStore.upsert({ displayName: 'Other Contact' });
+    for (const contact of [current, other]) {
+      profiles.set(contact.id, {
+        contactId: contact.id,
+        summary: `profile-${contact.id}`,
+        sourceMemoryIds: [],
+        confidenceScore: 1,
+        noveltyScore: 0,
+        updatedAt: 1,
+      });
+    }
+
+    const result = await service.listContacts(undefined, fleetContext(current.id));
+
+    expect(result.contacts.map(contact => contact.id)).toEqual([current.id]);
+    expect([...result.profileMap.keys()]).toEqual([current.id]);
+    expect(result.socialGraphMap.size).toBe(0);
+    expect(result.verifications).toEqual([]);
+    expect(result.mutationAudits).toEqual([]);
+  });
+
   it('deletes a persisted conversation channel from a contact', async () => {
     const { contactStore, service } = await createServiceHarness();
     const contact = await contactStore.upsert({ displayName: 'Primary User' });

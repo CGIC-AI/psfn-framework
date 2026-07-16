@@ -20,6 +20,12 @@ const versions: RequestCapabilityAuthorityVersions = Object.freeze({
   grantVersion: 13,
   policyVersion: 17,
 });
+const authContext = Object.freeze({
+  principalId: 'principal-a', provider: 'discord' as const, providerSubjectId: '12345678901234567',
+  companionId, contactBindingId: 'binding-a', contactId: 'contact-a', operatorGrantId: 'grant-a',
+  role: 'admin' as const, sessionRecordId: 'session-a', sessionAssurance: 'webauthn_uv' as const,
+  authorizationEventId: 'event-a', resolvedAt: '2030-01-01T00:00:00.000Z',
+});
 
 function fixture() {
   const pair = generateKeyPairSync('ed25519');
@@ -53,6 +59,7 @@ function fixture() {
     target,
     requestId: randomUUID(),
     decisionId: randomUUID(),
+    authContext,
     versions,
   };
   const token = signer.signOperator(binding);

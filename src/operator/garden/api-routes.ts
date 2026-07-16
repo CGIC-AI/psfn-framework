@@ -91,6 +91,7 @@ import { isRecord } from '../../shared/utils/types.js';
 import type { GroupMemoryBackfillInput } from '../../faculties/memory/extraction/group-backfill.js';
 import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import { buildAdminSharedWorkspaceRoutes } from './api-routes-shared-workspace.js';
+import type { GardenRequestContext } from './garden-request-context.js';
 
 export type { AdminApiRoute, AuthorizedAdminApiRoute } from './routes/types.js';
 
@@ -305,6 +306,7 @@ export function buildAdminApiRoutes(options: {
     narrative: string,
     details?: Array<string | null | undefined>,
     actor?: AdminAuditActor,
+    context?: GardenRequestContext,
   ) => void;
   withBody: (req: IncomingMessage, res: ServerResponse, cb: (body: string) => void) => void;
 }): AuthorizedAdminApiRoute[] {
@@ -937,7 +939,7 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/confirmations'),
-      handle: (_req, res) => {
+      handle: (_req, res, _params, context) => {
         if (!confirmationQueueApi) {
           sendJson(res, 200, {
             entries: [],
@@ -946,7 +948,7 @@ export function buildAdminApiRoutes(options: {
           }, ADMIN_POLLED_QUEUE_JSON_HEADERS);
           return;
         }
-        confirmationQueueApi.listConfirmationQueue().then(
+        confirmationQueueApi.listConfirmationQueue(context).then(
           (result) => {
             sendJson(res, 200, {
               entries: result.entries,
@@ -966,7 +968,7 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'POST',
       match: exactPath('/api/admin/confirmations/resolve'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         if (!confirmationQueueApi) {
           appendAuditTimelineEntry?.(
             'confirmation',
@@ -974,6 +976,7 @@ export function buildAdminApiRoutes(options: {
             'Operator confirmation resolve failed: confirmation queue unavailable.',
             [],
             'operator',
+            context,
           );
           sendJson(res, 400, { ok: false, message: 'Confirmation queue is unavailable' });
           return;
@@ -987,6 +990,7 @@ export function buildAdminApiRoutes(options: {
               'Operator confirmation resolve failed: invalid JSON payload.',
               [],
               'operator',
+              context,
             );
             sendJson(res, 400, { ok: false, message: parsed.error });
             return;
@@ -1002,6 +1006,7 @@ export function buildAdminApiRoutes(options: {
               'Operator confirmation resolve failed: missing confirmation ID.',
               [],
               'operator',
+              context,
             );
             sendJson(res, 400, { ok: false, message: 'Confirmation ID is required' });
             return;
@@ -1013,6 +1018,7 @@ export function buildAdminApiRoutes(options: {
               'Operator confirmation resolve failed: invalid decision.',
               [`id=${id}`, `decision=${decision || 'missing'}`],
               'operator',
+              context,
             );
             sendJson(res, 400, { ok: false, message: 'Invalid decision (must be approve, deny, or modify)' });
             return;
@@ -1027,7 +1033,7 @@ export function buildAdminApiRoutes(options: {
           // Operator-only gateway confirmations are resolved by the Garden
           // operator process on a direct operator→gateway path, so no operator
           // ADMIN_TOKEN is read from or forwarded through this agent (x5rt.10).
-          confirmationQueueApi!.resolveConfirmationQueue(resolveParams).then(
+          confirmationQueueApi!.resolveConfirmationQueue(resolveParams, context).then(
             (result) => {
               appendAuditTimelineEntry?.(
                 'confirmation',
@@ -1041,6 +1047,7 @@ export function buildAdminApiRoutes(options: {
                   result.message ? `message=${result.message}` : null,
                 ],
                 'operator',
+                context,
               );
               sendJson(res, 200, {
                 ok: result.status === 'approved' || result.status === 'modified',
@@ -1056,6 +1063,7 @@ export function buildAdminApiRoutes(options: {
                 `Operator confirmation resolve failed for ${id}.`,
                 [`decision=${decision}`, `error=${toSanitizedMessage(error, 'unknown error')}`],
                 'operator',
+                context,
               );
               sendJson(res, 500, { ok: false, message: `Confirmation resolve failed: ${String(error)}` });
             },

@@ -21,8 +21,31 @@ import {
   createAdminIntakeQuarantineService,
   type AdminIntakeQuarantineService,
 } from './intake-quarantine-service.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 
 const NOW = 1_750_000_000_000;
+
+function fleetContext(principalId: string, sessionAuthzVersion = 1): GardenRequestContext {
+  return {
+    kind: 'fleet_principal',
+    actor: {
+      principalId,
+      contactId: `contact-${principalId}`,
+      sessionRecordId: `session-${principalId}`,
+      role: 'admin',
+    },
+    resource: { companionId: '11111111-1111-4111-8111-111111111111' },
+    versions: {
+      authorityGeneration: 1,
+      globalAuthEpoch: 1,
+      sessionAuthnVersion: 1,
+      sessionAuthzVersion,
+      bindingVersion: 1,
+      grantVersion: 1,
+      policyVersion: 1,
+    },
+  } as unknown as GardenRequestContext;
+}
 
 function makeQuarantinedEnvelope(input: {
   id?: string;
@@ -278,6 +301,26 @@ describe('admin intake quarantine service (htm9.11)', () => {
         reason: 'retry',
       });
       expect(replay).toMatchObject({ ok: false, status: 403 });
+      expect(store.getById(envelope.id)?.status).toBe('held');
+    });
+
+    it('binds a token to the exact fleet principal and authority versions', () => {
+      const envelope = holdItem();
+      const begin = service.beginDecision(
+        { id: envelope.id, action: 'discard' },
+        fleetContext('principal-a'),
+      );
+      if (!begin.ok) throw new Error('begin failed');
+
+      const resolved = service.resolveDecision({
+        id: envelope.id,
+        action: 'discard',
+        confirmToken: begin.confirmToken,
+        reason: 'cross-principal attempt',
+      }, fleetContext('principal-b'));
+
+      expect(resolved).toMatchObject({ ok: false, status: 403 });
+      expect((resolved as { message: string }).message).toContain('different authority snapshot');
       expect(store.getById(envelope.id)?.status).toBe('held');
     });
 

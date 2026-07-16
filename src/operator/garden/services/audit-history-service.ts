@@ -19,6 +19,7 @@ import type {
   AdminAuditHistoryFilters,
   AdminAuditHistoryListEntry,
   AdminAuditHistorySource,
+  AdminAuditRequestAttribution,
   AdminAuditTimeRange,
 } from '../types.js';
 import type { AuditEntry } from '../../../boundary/gateway/audit-port.js';
@@ -30,6 +31,7 @@ import type {
   RunChargeLedger,
   RunChargeLedgerEntry,
 } from '../../../shared/telemetry/charge-ledger.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 
 const GARDEN_AUDIT_SCHEMA_VERSION = 1;
 const DEFAULT_HISTORY_LIMIT = 100;
@@ -69,6 +71,7 @@ export interface AdminAuditHistoryService {
     narrative: string;
     details?: string;
     actor?: AdminAuditActor;
+    requestContext?: GardenRequestContext;
     timestamp?: number;
     raw?: Record<string, unknown>;
   }): AdminAuditHistoryEntry;
@@ -269,6 +272,7 @@ export class AdminAuditHistoryDataService implements AdminAuditHistoryService {
     narrative: string;
     details?: string;
     actor?: AdminAuditActor;
+    requestContext?: GardenRequestContext;
     timestamp?: number;
     raw?: Record<string, unknown>;
   }): AdminAuditHistoryEntry {
@@ -283,6 +287,9 @@ export class AdminAuditHistoryDataService implements AdminAuditHistoryService {
       narrative: input.narrative,
       ...(input.details?.trim() ? { details: input.details.trim() } : {}),
       ...(input.actor ? { actor: input.actor } : {}),
+      ...(input.requestContext
+        ? { requestAttribution: toAuditRequestAttribution(input.requestContext) }
+        : {}),
       ...(input.raw ? { raw: input.raw } : {}),
     };
     this.deps.gardenStore.append(entry);
@@ -375,6 +382,28 @@ export class AdminAuditHistoryDataService implements AdminAuditHistoryService {
   }
 }
 
+function toAuditRequestAttribution(context: GardenRequestContext): AdminAuditRequestAttribution {
+  return Object.freeze({
+    actor: context.kind === 'fleet_principal'
+      ? Object.freeze({
+          kind: context.actor.kind,
+          principalId: context.actor.principalId,
+          contactId: context.actor.contactId,
+          role: context.actor.role,
+        })
+      : Object.freeze({ kind: context.actor.kind }),
+    companionId: context.resource.companionId,
+    requestId: context.requestId,
+    decisionId: context.decisionId,
+    action: context.action,
+    routeId: context.resource.routeId,
+    resourceScope: context.resource.scope,
+    resourceArea: context.resource.area,
+    subjectRelation: context.subjectRelation,
+    authorityVersions: context.versions ? Object.freeze({ ...context.versions }) : null,
+  });
+}
+
 function toAuditHistoryListEntry(
   entry: AdminAuditHistoryEntry,
   scopeId: string,
@@ -389,6 +418,7 @@ function toAuditHistoryListEntry(
     narrative: entry.narrative,
     ...(entry.details ? { details: entry.details } : {}),
     ...(entry.actor ? { actor: entry.actor } : {}),
+    ...(entry.requestAttribution ? { requestAttribution: entry.requestAttribution } : {}),
   };
 }
 

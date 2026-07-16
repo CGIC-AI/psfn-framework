@@ -2,6 +2,7 @@ import type { MemoryLink } from '../../../../faculties/memory/memory-store-port.
 import type { PurrMemory } from '../../../../faculties/memory/types.js';
 import type { SharedBackgroundSource } from '../../../../faculties/memory/retrieval/shared-background.js';
 import type { SensitivityLevel } from '../../../../system/trust/types.js';
+import type { GardenRequestContext } from '../../garden-request-context.js';
 import type {
   AdminMemoryManagedScopeKind,
   AdminMemoryScopeEvidenceItem,
@@ -183,6 +184,11 @@ export interface AdminMemoryScopeMutationResult extends MemoryMutationResult {
 export type AdminMemorySessionKey = string | null;
 
 export interface AdminMemoryService {
+  /** Bind one immutable admitted request; fleet identity never comes from cookies. */
+  forRequest(
+    context: GardenRequestContext | undefined,
+    legacySessionKey?: AdminMemorySessionKey,
+  ): AdminMemorySessionService;
   /**
    * Binds the per-request admin session identity. Body-gate grants
    * (elevation and reveals) are keyed by this identity so one operator's

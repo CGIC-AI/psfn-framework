@@ -12,7 +12,6 @@
 
 import { sendJson } from '../../channels/backplane/http/primitives.js';
 import { parseAdminJsonBody } from './request-body.js';
-import { parseRequestUrl } from './request-url.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
   exactPath,
@@ -39,8 +38,8 @@ export function buildAdminEnrollmentRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/enrollments'),
-      handle: (_req, res) => {
-        enrollmentService.listEnrollments().then(
+      handle: (_req, res, _params, context) => {
+        enrollmentService.listEnrollments(context).then(
           (data) => sendJson(res, 200, data, ADMIN_DYNAMIC_JSON_HEADERS),
           (error) => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list enrollments') }),
         );
@@ -49,7 +48,7 @@ export function buildAdminEnrollmentRoutes(options: {
     {
       method: 'POST',
       match: exactPath('/api/admin/enrollments'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -61,6 +60,10 @@ export function buildAdminEnrollmentRoutes(options: {
             return;
           }
           const payload = parsed.value;
+          if (Object.hasOwn(payload, 'actor')) {
+            sendJson(res, 400, { error: 'Browser actor attribution is forbidden' });
+            return;
+          }
           if (typeof payload.hubIdentityId !== 'string' || !payload.hubIdentityId.trim()) {
             sendJson(res, 400, { error: 'hubIdentityId is required' });
             return;
@@ -69,19 +72,20 @@ export function buildAdminEnrollmentRoutes(options: {
             sendJson(res, 400, { error: 'canonicalContactId is required' });
             return;
           }
+          if (context?.kind === 'fleet_principal'
+            && payload.canonicalContactId.trim() !== context.actor.contactId) {
+            sendJson(res, 403, { error: 'Enrollment contact must be the current trusted subject' });
+            return;
+          }
           const satelliteId = optionalString(payload.satelliteId, 'satelliteId');
           if (!satelliteId.ok) { sendJson(res, 400, { error: satelliteId.error }); return; }
           const endpointId = optionalString(payload.endpointId, 'endpointId');
           if (!endpointId.ok) { sendJson(res, 400, { error: endpointId.error }); return; }
-          const actor = optionalString(payload.actor, 'actor');
-          if (!actor.ok) { sendJson(res, 400, { error: actor.error }); return; }
-
-          enrollmentService.enroll({
+          enrollmentService.enroll(context, {
             hubIdentityId: payload.hubIdentityId,
             canonicalContactId: payload.canonicalContactId,
             ...(satelliteId.value ? { satelliteId: satelliteId.value } : {}),
             ...(endpointId.value ? { endpointId: endpointId.value } : {}),
-            ...(actor.value ? { actor: actor.value } : {}),
           }).then(
             (binding) => sendJson(res, 201, { ok: true, binding }, ADMIN_DYNAMIC_JSON_HEADERS),
             (error) => sendJson(res, 400, { error: toSanitizedMessage(error, 'Failed to enroll hub identity') }),
@@ -92,10 +96,8 @@ export function buildAdminEnrollmentRoutes(options: {
     {
       method: 'DELETE',
       match: prefixedParamPath('/api/admin/enrollments/', 'hubIdentityId'),
-      handle: (req, res, { hubIdentityId }) => {
-        const url = parseRequestUrl(req, '/api/admin/enrollments');
-        const actor = url.searchParams.get('actor')?.trim() || undefined;
-        enrollmentService.revoke(hubIdentityId, actor).then(
+      handle: (_req, res, { hubIdentityId }, context) => {
+        enrollmentService.revoke(context, hubIdentityId).then(
           (result) => {
             if (!result.revoked) {
               sendJson(res, 404, { error: 'No active enrollment to revoke', ...result }, ADMIN_DYNAMIC_JSON_HEADERS);

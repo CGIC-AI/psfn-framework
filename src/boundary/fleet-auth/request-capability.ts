@@ -44,6 +44,7 @@ const OPERATOR_CLAIM_KEYS = [
   'resource_digest',
   'request_id',
   'decision_id',
+  'auth_context',
   'versions',
   'jti',
   'iat',
@@ -78,6 +79,34 @@ const VERSION_KEYS = [
   'policy_version',
 ] as const;
 const PARENT_KEYS = ['aud', 'request_id', 'decision_id', 'jti', 'target_digest'] as const;
+const AUTH_CONTEXT_KEYS = [
+  'principal_id',
+  'provider',
+  'provider_subject_id',
+  'companion_id',
+  'contact_binding_id',
+  'contact_id',
+  'operator_grant_id',
+  'role',
+  'session_record_id',
+  'session_assurance',
+  'authorization_event_id',
+  'resolved_at',
+] as const;
+const AUTH_CONTEXT_INPUT_KEYS = [
+  'principalId',
+  'provider',
+  'providerSubjectId',
+  'companionId',
+  'contactBindingId',
+  'contactId',
+  'operatorGrantId',
+  'role',
+  'sessionRecordId',
+  'sessionAssurance',
+  'authorizationEventId',
+  'resolvedAt',
+] as const;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]+$/u;
 const STABLE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
@@ -107,6 +136,26 @@ export interface RequestCapabilityParentBinding {
   readonly targetDigest: string;
 }
 
+/**
+ * Immutable human authority selected by the gateway authorization snapshot.
+ * Every field is signed into the request capability; none may be reconstructed
+ * from Garden headers, cookies, JSON, or process-global request state.
+ */
+export interface RequestCapabilityAuthContext {
+  readonly principalId: string;
+  readonly provider: 'discord';
+  readonly providerSubjectId: string;
+  readonly companionId: string;
+  readonly contactBindingId: string;
+  readonly contactId: string;
+  readonly operatorGrantId: string;
+  readonly role: 'owner' | 'admin' | 'member' | 'guest';
+  readonly sessionRecordId: string;
+  readonly sessionAssurance: 'oauth' | 'webauthn_uv' | 'break_glass';
+  readonly authorizationEventId: string;
+  readonly resolvedAt: string;
+}
+
 export interface RequestCapabilityVerifierKey {
   readonly issuer: string;
   readonly kid: string;
@@ -133,10 +182,11 @@ export interface RequestCapabilitySignInput {
   readonly target: CompiledGardenRequestTarget;
   readonly requestId: string;
   readonly decisionId: string;
+  readonly authContext: RequestCapabilityAuthContext;
   readonly versions: RequestCapabilityAuthorityVersions;
 }
 
-export interface RequestCapabilityVerifyInput extends RequestCapabilitySignInput {
+export interface RequestCapabilityVerifyInput extends Omit<RequestCapabilitySignInput, 'authContext'> {
   readonly token: string;
   readonly nowSeconds?: number;
 }
@@ -176,6 +226,7 @@ export interface VerifiedRequestCapability {
   readonly companionId: string;
   readonly requestId: string;
   readonly decisionId: string;
+  readonly authContext: RequestCapabilityAuthContext;
   readonly jti: string;
   readonly method: GardenForwardMethod;
   readonly canonicalRequestTarget: string;
@@ -221,6 +272,21 @@ interface RequestCapabilityVersionClaims {
   policy_version: number;
 }
 
+interface RequestCapabilityAuthClaims {
+  principal_id: string;
+  provider: 'discord';
+  provider_subject_id: string;
+  companion_id: string;
+  contact_binding_id: string;
+  contact_id: string;
+  operator_grant_id: string;
+  role: RequestCapabilityAuthContext['role'];
+  session_record_id: string;
+  session_assurance: RequestCapabilityAuthContext['sessionAssurance'];
+  authorization_event_id: string;
+  resolved_at: string;
+}
+
 interface RequestCapabilityParentClaims {
   aud: `operator:${string}`;
   request_id: string;
@@ -245,6 +311,7 @@ interface RequestCapabilityClaims {
   resource_digest: string;
   request_id: string;
   decision_id: string;
+  auth_context: RequestCapabilityAuthClaims;
   parent?: RequestCapabilityParentClaims;
   versions: RequestCapabilityVersionClaims;
   jti: string;
@@ -409,6 +476,40 @@ function toVersionClaims(versions: RequestCapabilityAuthorityVersions): RequestC
   };
 }
 
+function toAuthClaims(context: RequestCapabilityAuthContext): RequestCapabilityAuthClaims {
+  return {
+    principal_id: context.principalId,
+    provider: context.provider,
+    provider_subject_id: context.providerSubjectId,
+    companion_id: context.companionId,
+    contact_binding_id: context.contactBindingId,
+    contact_id: context.contactId,
+    operator_grant_id: context.operatorGrantId,
+    role: context.role,
+    session_record_id: context.sessionRecordId,
+    session_assurance: context.sessionAssurance,
+    authorization_event_id: context.authorizationEventId,
+    resolved_at: context.resolvedAt,
+  };
+}
+
+function fromAuthClaims(context: RequestCapabilityAuthClaims): RequestCapabilityAuthContext {
+  return Object.freeze({
+    principalId: context.principal_id,
+    provider: context.provider,
+    providerSubjectId: context.provider_subject_id,
+    companionId: context.companion_id,
+    contactBindingId: context.contact_binding_id,
+    contactId: context.contact_id,
+    operatorGrantId: context.operator_grant_id,
+    role: context.role,
+    sessionRecordId: context.session_record_id,
+    sessionAssurance: context.session_assurance,
+    authorizationEventId: context.authorization_event_id,
+    resolvedAt: context.resolved_at,
+  });
+}
+
 function toParentClaims(parent: RequestCapabilityParentBinding): RequestCapabilityParentClaims {
   return {
     aud: parent.audience,
@@ -437,6 +538,37 @@ function assertVersions(versions: RequestCapabilityAuthorityVersions): void {
   requireInteger(versions.bindingVersion, 'versions.bindingVersion', 1);
   requireInteger(versions.grantVersion, 'versions.grantVersion', 1);
   requireInteger(versions.policyVersion, 'versions.policyVersion', 1);
+}
+
+function assertAuthContext(value: unknown, companionId: string): void {
+  const context = requireRecord(value, 'authContext');
+  requireExactKeys(context, AUTH_CONTEXT_INPUT_KEYS, 'authContext');
+  requireStableId(context.principalId, 'authContext.principalId');
+  if (requireString(context.provider, 'authContext.provider') !== 'discord') {
+    reject('authContext.provider is invalid');
+  }
+  requireStableId(context.providerSubjectId, 'authContext.providerSubjectId');
+  if (requireString(context.companionId, 'authContext.companionId') !== companionId) {
+    reject('authContext.companionId does not match target');
+  }
+  requireStableId(context.contactBindingId, 'authContext.contactBindingId');
+  requireStableId(context.contactId, 'authContext.contactId');
+  requireStableId(context.operatorGrantId, 'authContext.operatorGrantId');
+  if (!['owner', 'admin', 'member', 'guest'].includes(
+    requireString(context.role, 'authContext.role'),
+  )) {
+    reject('authContext.role is invalid');
+  }
+  requireStableId(context.sessionRecordId, 'authContext.sessionRecordId');
+  if (!['oauth', 'webauthn_uv', 'break_glass'].includes(
+    requireString(context.sessionAssurance, 'authContext.sessionAssurance'),
+  )) {
+    reject('authContext.sessionAssurance is invalid');
+  }
+  requireStableId(context.authorizationEventId, 'authContext.authorizationEventId');
+  if (!isCanonicalIsoTimestamp(requireString(context.resolvedAt, 'authContext.resolvedAt'))) {
+    reject('authContext.resolvedAt is invalid');
+  }
 }
 
 function assertParent(parent: RequestCapabilityParentBinding, companionId: string): void {
@@ -542,6 +674,7 @@ function buildClaims(input: RequestCapabilitySignInput & {
     resource_digest: input.target.resourceDigest,
     request_id: input.requestId,
     decision_id: input.decisionId,
+    auth_context: toAuthClaims(input.authContext),
   };
   return input.parent
     ? {
@@ -569,6 +702,7 @@ function validateSignInput(input: RequestCapabilitySignInput): void {
   assertTarget(input.target);
   requireUuid(input.requestId, 'requestId');
   requireUuid(input.decisionId, 'decisionId');
+  assertAuthContext(input.authContext, input.target.companionId);
   assertVersions(input.versions);
 }
 
@@ -759,6 +893,50 @@ function parseVersions(value: unknown): RequestCapabilityVersionClaims {
   };
 }
 
+function parseAuthContext(value: unknown, companionId: string): RequestCapabilityAuthClaims {
+  const record = requireRecord(value, 'claims.auth_context');
+  requireExactKeys(record, AUTH_CONTEXT_KEYS, 'claims.auth_context');
+  const provider = requireString(record.provider, 'claims.auth_context.provider');
+  const role = requireString(record.role, 'claims.auth_context.role');
+  const assurance = requireString(record.session_assurance, 'claims.auth_context.session_assurance');
+  const context: RequestCapabilityAuthClaims = {
+    principal_id: requireStableId(record.principal_id, 'claims.auth_context.principal_id'),
+    provider: provider === 'discord' ? provider : reject('claims.auth_context.provider is invalid'),
+    provider_subject_id: requireStableId(
+      record.provider_subject_id,
+      'claims.auth_context.provider_subject_id',
+    ),
+    companion_id: requireUuid(record.companion_id, 'claims.auth_context.companion_id'),
+    contact_binding_id: requireStableId(
+      record.contact_binding_id,
+      'claims.auth_context.contact_binding_id',
+    ),
+    contact_id: requireStableId(record.contact_id, 'claims.auth_context.contact_id'),
+    operator_grant_id: requireStableId(
+      record.operator_grant_id,
+      'claims.auth_context.operator_grant_id',
+    ),
+    role: ['owner', 'admin', 'member', 'guest'].includes(role)
+      ? role as RequestCapabilityAuthContext['role']
+      : reject('claims.auth_context.role is invalid'),
+    session_record_id: requireStableId(
+      record.session_record_id,
+      'claims.auth_context.session_record_id',
+    ),
+    session_assurance: ['oauth', 'webauthn_uv', 'break_glass'].includes(assurance)
+      ? assurance as RequestCapabilityAuthContext['sessionAssurance']
+      : reject('claims.auth_context.session_assurance is invalid'),
+    authorization_event_id: requireStableId(
+      record.authorization_event_id,
+      'claims.auth_context.authorization_event_id',
+    ),
+    resolved_at: requireString(record.resolved_at, 'claims.auth_context.resolved_at'),
+  };
+  if (context.companion_id !== companionId) reject('claims.auth_context companion does not match');
+  if (!isCanonicalIsoTimestamp(context.resolved_at)) reject('claims.auth_context.resolved_at is invalid');
+  return context;
+}
+
 function parseParent(value: unknown, companionId: string): RequestCapabilityParentClaims {
   const record = requireRecord(value, 'claims.parent');
   requireExactKeys(record, PARENT_KEYS, 'claims.parent');
@@ -790,6 +968,7 @@ function canonicalClaims(claims: RequestCapabilityClaims): RequestCapabilityClai
     resource_digest: claims.resource_digest,
     request_id: claims.request_id,
     decision_id: claims.decision_id,
+    auth_context: claims.auth_context,
   };
   return claims.parent
     ? {
@@ -838,6 +1017,7 @@ function parseClaims(encoded: string, audienceKind: 'operator' | 'agent'): Reque
     resource_digest: requireDigest(record.resource_digest, 'claims.resource_digest'),
     request_id: requireUuid(record.request_id, 'claims.request_id'),
     decision_id: requireUuid(record.decision_id, 'claims.decision_id'),
+    auth_context: parseAuthContext(record.auth_context, companionId),
     ...(audienceKind === 'agent' ? { parent: parseParent(record.parent, companionId) } : {}),
     versions: parseVersions(record.versions),
     jti: requireTokenId(record.jti, 'claims.jti'),
@@ -862,7 +1042,7 @@ function assertSameParent(actual: RequestCapabilityParentClaims, expected: Reque
 
 function assertClaimsBinding(
   claims: RequestCapabilityClaims,
-  expected: RequestCapabilitySignInput,
+  expected: Omit<RequestCapabilitySignInput, 'authContext'>,
 ): void {
   assertTarget(expected.target);
   requireUuid(expected.requestId, 'expected requestId');
@@ -935,6 +1115,7 @@ export function createRequestCapabilityVerifier(
     companionId: claims.companion_id,
     requestId: claims.request_id,
     decisionId: claims.decision_id,
+    authContext: fromAuthClaims(claims.auth_context),
     jti: claims.jti,
     method: claims.method,
     canonicalRequestTarget: claims.request_target,

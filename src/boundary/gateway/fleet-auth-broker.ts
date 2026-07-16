@@ -6,28 +6,19 @@ import {
 } from 'node:crypto';
 import type { FleetAuthConfig } from '../../system/config/fleet-auth-config.js';
 import { isRecord } from '../../shared/utils/types.js';
-import type { DiscordEvidenceLifecycleAdmission } from '../fleet-auth/discord-evidence-lifecycle.js';
+import { DiscordEvidenceBrokerBoundary, type DiscordEvidenceBrokerOptions } from './discord-evidence-broker-boundary.js';
+import type { DiscordEvidenceAdmissionStore } from './discord-evidence-admission.js';
+import { FleetAuthBrokerError } from './fleet-auth-errors.js';
+export { FleetAuthBrokerError };
 
 const DISCORD_AUTHORIZE_URL = 'https://discord.com/oauth2/authorize';
 const DISCORD_TOKEN_URL = 'https://discord.com/api/v10/oauth2/token';
 const DISCORD_USER_URL = 'https://discord.com/api/v10/users/@me';
-const DISCORD_GUILDS_URL = 'https://discord.com/api/v10/users/@me/guilds?limit=200';
 const DISCORD_SNOWFLAKE = /^[1-9][0-9]{16,19}$/u;
 const OPAQUE_TOKEN_BYTES = 32;
 const OAUTH_CODE_MAX_LENGTH = 2048;
 
 export type OAuthTransactionKind = 'login' | 'provider_link' | 'provider_replace' | 'first_owner' | 'recovery';
-
-export class FleetAuthBrokerError extends Error {
-  constructor(
-    readonly code: string,
-    readonly status: number,
-    message = code,
-  ) {
-    super(message);
-    this.name = 'FleetAuthBrokerError';
-  }
-}
 
 export interface OAuthTransactionInput {
   transactionId: string;
@@ -59,7 +50,7 @@ export interface FleetAuthSessionRecord {
   absoluteExpiresAt: Date;
 }
 
-export interface FleetAuthBrokerStore {
+export interface FleetAuthBrokerStore extends DiscordEvidenceAdmissionStore {
   createOAuthTransaction(input: OAuthTransactionInput): Promise<void>;
   consumeOAuthTransaction(input: {
     stateDigest: string;
@@ -95,11 +86,6 @@ export interface FleetAuthBrokerStore {
   revokeSession(input: {
     token: string;
     csrfToken: string;
-    now: Date;
-  }): Promise<void>;
-  revokeIssuedSessionForReauthentication(input: {
-    recordId: string;
-    principalId: string;
     now: Date;
   }): Promise<void>;
   revokeProvider(input: {
@@ -155,29 +141,13 @@ interface DiscordIdentity {
   mfaEnabled?: boolean;
 }
 
-export interface GatewayFleetAuthBrokerOptions {
-  config: FleetAuthConfig;
-  store: FleetAuthBrokerStore;
+export interface GatewayFleetAuthBrokerOptions extends DiscordEvidenceBrokerOptions<FleetAuthBrokerStore> {
   oauthClientSecret: string;
   sessionPepper: string;
   fetchImpl?: typeof fetch;
   now?: () => Date;
   randomBytes?: (length: number) => Buffer;
   firstOwnerAssurance?: FirstOwnerAssurancePort;
-  discordEvidenceLifecycle?: {
-    recordActiveOAuthSession(input: {
-      principalId: string;
-      providerSubjectId: string;
-      providerMembershipEvidence: unknown;
-      idleExpiresAt: Date;
-      absoluteExpiresAt: Date;
-    }): Promise<DiscordEvidenceLifecycleAdmission>;
-    recordSessionRotation(input: {
-      principalId: string;
-      idleExpiresAt: Date;
-      absoluteExpiresAt: Date;
-    }): Promise<DiscordEvidenceLifecycleAdmission>;
-  };
 }
 
 function opaqueToken(randomBytes: (length: number) => Buffer): string {
@@ -232,12 +202,9 @@ export class GatewayFleetAuthBroker {
   private readonly now: () => Date;
   private readonly randomBytes: (length: number) => Buffer;
   private readonly firstOwnerAssurance?: FirstOwnerAssurancePort;
-  private readonly discordEvidenceLifecycle?: GatewayFleetAuthBrokerOptions['discordEvidenceLifecycle'];
+  private readonly discordEvidence: DiscordEvidenceBrokerBoundary;
 
   constructor(options: GatewayFleetAuthBrokerOptions) {
-    if (options.config.discordEvidenceMappings.length > 0 && !options.discordEvidenceLifecycle) {
-      throw new Error('Discord evidence mappings require lifecycle admission authority');
-    }
     this.config = options.config;
     this.store = options.store;
     this.oauthClientSecret = options.oauthClientSecret;
@@ -246,7 +213,7 @@ export class GatewayFleetAuthBroker {
     this.now = options.now ?? (() => new Date());
     this.randomBytes = options.randomBytes ?? cryptoRandomBytes;
     this.firstOwnerAssurance = options.firstOwnerAssurance;
-    this.discordEvidenceLifecycle = options.discordEvidenceLifecycle;
+    this.discordEvidence = new DiscordEvidenceBrokerBoundary(options, this.fetchImpl, this.now);
   }
 
   async beginLogin(input: { returnPath: string }): Promise<{
@@ -319,10 +286,7 @@ export class GatewayFleetAuthBroker {
     }
     const providerTokens = await this.exchangeCode(input.code, transaction);
     const identity = await this.resolveDiscordIdentity(providerTokens.accessToken);
-    const providerMembershipEvidence = await this.resolveDiscordGuildMembershipEvidence(
-      providerTokens.accessToken,
-      identity.subjectId,
-    );
+    const providerMembershipEvidence = await this.discordEvidence.collectOAuthMembership(providerTokens.accessToken, identity.subjectId);
     if (this.config.provider.tokenCustody === 'encrypted_refresh'
       && providerTokens.refreshToken === undefined) {
       throw new FleetAuthBrokerError(
@@ -354,18 +318,7 @@ export class GatewayFleetAuthBroker {
           }
         : {}),
     });
-    const lifecycle = this.discordEvidenceLifecycle;
-    if (session.principalStatus === 'active' && lifecycle) {
-      await this.requireLifecycleAdmission(session, () => (
-        lifecycle.recordActiveOAuthSession({
-          principalId: session.principalId,
-          providerSubjectId: identity.subjectId,
-          providerMembershipEvidence,
-          idleExpiresAt: session.idleExpiresAt,
-          absoluteExpiresAt: session.absoluteExpiresAt,
-        })
-      ));
-    }
+    await this.discordEvidence.admitActiveOAuthSession(session, identity.subjectId, providerMembershipEvidence);
     return { returnPath: transaction.returnPath, session };
   }
 
@@ -375,25 +328,14 @@ export class GatewayFleetAuthBroker {
     requestOrigin: string;
   }): Promise<FleetAuthSessionRecord> {
     this.assertMutationOrigin(input.requestOrigin);
-    const rotated = await this.store.rotateSession({
+    return await this.discordEvidence.admitSessionRotation(await this.store.rotateSession({
       token: input.token,
       csrfToken: input.csrfToken,
       nextToken: opaqueToken(this.randomBytes),
       nextCsrfToken: opaqueToken(this.randomBytes),
       now: this.now(),
       idleTtlMs: this.config.ttls.sessionIdleMs,
-    });
-    const lifecycle = this.discordEvidenceLifecycle;
-    if (lifecycle) {
-      await this.requireLifecycleAdmission(rotated, () => (
-        lifecycle.recordSessionRotation({
-          principalId: rotated.principalId,
-          idleExpiresAt: rotated.idleExpiresAt,
-          absoluteExpiresAt: rotated.absoluteExpiresAt,
-        })
-      ));
-    }
-    return rotated;
+    }));
   }
 
   async issueCsrf(input: {
@@ -457,59 +399,17 @@ export class GatewayFleetAuthBroker {
       evidence: input.assuranceEvidence,
       expectedOrigin: this.config.canonicalOrigin,
     });
-    const activated = await this.store.completeFirstOwnerBootstrap({
-      token: input.token,
-      csrfToken: input.csrfToken,
-      ...verified,
-      nextToken: opaqueToken(this.randomBytes),
-      nextCsrfToken: opaqueToken(this.randomBytes),
-      now: this.now(),
-      idleTtlMs: this.config.ttls.sessionIdleMs,
-      absoluteTtlMs: this.config.ttls.sessionAbsoluteMs,
-    });
-    if (this.config.discordEvidenceMappings.length > 0) {
-      await this.denyIssuedSession(activated);
-    }
-    return activated;
-  }
-
-  private async requireLifecycleAdmission(
-    session: FleetAuthSessionRecord,
-    admit: () => Promise<DiscordEvidenceLifecycleAdmission>,
-  ): Promise<void> {
-    let admission: Awaited<ReturnType<typeof admit>>;
-    try {
-      admission = await admit();
-    } catch (error) {
-      try {
-        await this.store.revokeIssuedSessionForReauthentication({
-          recordId: session.recordId,
-          principalId: session.principalId,
-          now: this.now(),
-        });
-      } catch (revokeError) {
-        throw new AggregateError(
-          [error, revokeError],
-          'Discord evidence admission failed and issued session revocation also failed',
-        );
-      }
-      throw error;
-    }
-    if (admission.status === 'reauthentication_required') {
-      await this.denyIssuedSession(session);
-    }
-  }
-
-  private async denyIssuedSession(session: FleetAuthSessionRecord): Promise<never> {
-    await this.store.revokeIssuedSessionForReauthentication({
-      recordId: session.recordId,
-      principalId: session.principalId,
-      now: this.now(),
-    });
-    throw new FleetAuthBrokerError(
-      'reauthentication_required',
-      401,
-      'Reauthentication is required',
+    return await this.discordEvidence.fenceFirstOwnerActivation(
+      await this.store.completeFirstOwnerBootstrap({
+        token: input.token,
+        csrfToken: input.csrfToken,
+        ...verified,
+        nextToken: opaqueToken(this.randomBytes),
+        nextCsrfToken: opaqueToken(this.randomBytes),
+        now: this.now(),
+        idleTtlMs: this.config.ttls.sessionIdleMs,
+        absoluteTtlMs: this.config.ttls.sessionAbsoluteMs,
+      }),
     );
   }
 
@@ -605,98 +505,6 @@ export class GatewayFleetAuthBroker {
       accessToken: body.access_token,
       expiresInSeconds: Number(body.expires_in),
       ...(typeof refreshToken === 'string' ? { refreshToken } : {}),
-    };
-  }
-
-  private async resolveDiscordGuildMembershipEvidence(
-    accessToken: string,
-    providerSubjectId: string,
-  ): Promise<unknown> {
-    const mappedGuildIds = [...new Set(
-      this.config.discordEvidenceMappings.map(mapping => mapping.guildId),
-    )].sort();
-    const observedAt = this.now().toISOString();
-    if (mappedGuildIds.length === 0) {
-      return {
-        status: 'observed',
-        providerSubjectId,
-        observedAt,
-        guilds: [],
-      };
-    }
-    let guildsResponse: Response;
-    try {
-      guildsResponse = await this.fetchImpl(DISCORD_GUILDS_URL, {
-        headers: { authorization: `Bearer ${accessToken}` },
-        redirect: 'error',
-      });
-    } catch {
-      return { status: 'provider_unavailable' };
-    }
-    if (!guildsResponse.ok) return { status: 'provider_unavailable' };
-    let decodedGuilds: unknown;
-    try {
-      decodedGuilds = await guildsResponse.json();
-    } catch {
-      return { status: 'provider_unavailable' };
-    }
-    if (!Array.isArray(decodedGuilds) || decodedGuilds.length > 200) {
-      return { status: 'provider_unavailable' };
-    }
-    const consentedGuildIds = new Set<string>();
-    for (const guild of decodedGuilds) {
-      if (!isRecord(guild) || typeof guild.id !== 'string' || !DISCORD_SNOWFLAKE.test(guild.id)) {
-        return { status: 'provider_unavailable' };
-      }
-      consentedGuildIds.add(guild.id);
-    }
-    const guilds: Array<{ guildId: string; roleIds: string[] }> = [];
-    for (const guildId of mappedGuildIds) {
-      if (!consentedGuildIds.has(guildId)) continue;
-      let memberResponse: Response;
-      try {
-        memberResponse = await this.fetchImpl(
-          `https://discord.com/api/v10/users/@me/guilds/${guildId}/member`,
-          {
-            headers: { authorization: `Bearer ${accessToken}` },
-            redirect: 'error',
-          },
-        );
-      } catch {
-        return { status: 'provider_unavailable' };
-      }
-      if (memberResponse.status === 404) continue;
-      if (!memberResponse.ok) return { status: 'provider_unavailable' };
-      let decodedMember: unknown;
-      try {
-        decodedMember = await memberResponse.json();
-      } catch {
-        return { status: 'provider_unavailable' };
-      }
-      if (!isRecord(decodedMember) || !Array.isArray(decodedMember.roles)
-        || decodedMember.roles.length > 250
-        || !isRecord(decodedMember.user)
-        || decodedMember.user.id !== providerSubjectId) {
-        return { status: 'provider_unavailable' };
-      }
-      const roleIds = decodedMember.roles.map((roleId) => {
-        if (typeof roleId !== 'string' || !DISCORD_SNOWFLAKE.test(roleId)) {
-          throw new FleetAuthBrokerError(
-            'malformed_provider_response',
-            502,
-            'Discord guild membership response was malformed',
-          );
-        }
-        return roleId;
-      }).sort();
-      if (new Set(roleIds).size !== roleIds.length) return { status: 'provider_unavailable' };
-      guilds.push({ guildId, roleIds });
-    }
-    return {
-      status: 'observed',
-      providerSubjectId,
-      observedAt,
-      guilds,
     };
   }
 

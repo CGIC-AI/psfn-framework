@@ -39,6 +39,8 @@ vi.mock('discord.js', () => {
         return value ?? null;
       }),
     };
+    user = null;
+    isReady = vi.fn(() => false);
 
     on = vi.fn();
     once = vi.fn();
@@ -187,7 +189,7 @@ function makeTextChannel(messages: MockDiscordMessage[]) {
 }
 
 describe('DiscordAdapter startup backfill', () => {
-  it('requests privileged member observation only when evidence mappings enable it', () => {
+  it('requests privileged member observation only when evidence mappings enable it', async () => {
     const disabled = new DiscordAdapter(makeConfig(), new EventBus());
     const disabledClient = discordMock.createdClients.at(-1) as {
       options: { intents: number[]; partials: string[] };
@@ -205,7 +207,12 @@ describe('DiscordAdapter startup backfill', () => {
     expect(enabledClient.options.intents).toContain(64);
     expect(enabledClient.options.partials).toContain('guild-member');
     expect(enabledClient.options.partials).toContain('thread-member');
-    expect(() => enabled.subscribeDiscordEvidenceLifecycle(() => undefined)).not.toThrow();
+    expect(() => enabled.discordEvidence.subscribeDiscordEvidenceLifecycle(() => undefined))
+      .not.toThrow();
+    await expect(enabled.discordEvidence.observeDiscordEvidence({
+      providerSubjectId: '100000000000000001',
+      targets: [],
+    })).resolves.toEqual({ status: 'bot_absent' });
   });
 
   let sessionsDir: string;

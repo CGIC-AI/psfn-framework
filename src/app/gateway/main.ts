@@ -349,10 +349,10 @@ async function main(): Promise<void> {
   const discordEvidenceLifecycle = fleetAuthPersistence?.discordEvidenceLifecycle;
   if (channelSurfaces.discordAccounts && discordEvidenceLifecycle) {
     for (const account of channelSurfaces.discordAccounts) {
-      discordEvidenceObservers.register(account.companionId, account.adapter);
+      discordEvidenceObservers.register(account.companionId, account.adapter.discordEvidence);
       discordEvidenceLifecycle.registerCompanionEventSource(
         account.companionId,
-        account.adapter,
+        account.adapter.discordEvidence,
       );
     }
   } else if (discordEvidenceLifecycle) {
@@ -361,10 +361,10 @@ async function main(): Promise<void> {
         ? config.companionFleet.companions.at(0)?.companionId
         : undefined);
     if (singleCompanionId) {
-      discordEvidenceObservers.register(singleCompanionId, discord);
+      discordEvidenceObservers.register(singleCompanionId, discord.discordEvidence);
       discordEvidenceLifecycle.registerCompanionEventSource(
         singleCompanionId,
-        discord,
+        discord.discordEvidence,
       );
     }
   }

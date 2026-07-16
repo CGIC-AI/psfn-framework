@@ -22,6 +22,7 @@ import {
   validateTtsAudioChunk,
   validateTtsInputText,
 } from '../../primitives/voice/policy/security.js';
+import { classifyVoiceControlIntent } from '../../primitives/voice/control-intent.js';
 import type { SttStreamSession } from '../../primitives/voice/connectors/stt/index.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { createComponentLogger } from '../../shared/logger.js';
@@ -287,6 +288,30 @@ export async function handleVoiceUtterance(
     emitVoicePerformance(runtime, turn, 'stt_final');
     assertActiveVoiceTurn(runtime, turn);
 
+    // mmo9.7.5: deterministic transport-control guard. If the finalized
+    // transcript is exactly a stop/interrupt/repeat command, handle it locally
+    // with ZERO model invocations — it must never reach the message handler.
+    // Detection is exact/local (no classifier, no model call). `repeat` replays
+    // the last spoken utterance; `stop`/`interrupt` produce no reply (the turn
+    // `finally` cancels the in-flight resources).
+    const controlIntent = classifyVoiceControlIntent(transcript);
+    if (controlIntent) {
+      turnReason = `control:${controlIntent}`;
+      log.debug('Voice transport control handled locally', {
+        turnId,
+        userId: runtime.targetUserId,
+        intent: controlIntent,
+      });
+      if (controlIntent === 'repeat') {
+        const lastText = runtime.lastAssistantUtterance?.trim();
+        if (lastText) {
+          await runtime.speakText(lastText, turn);
+          assertActiveVoiceTurn(runtime, turn);
+        }
+      }
+      return;
+    }
+
     const handler = runtime.getHandler();
     if (!handler) return;
 
@@ -369,6 +394,9 @@ export async function handleVoiceUtterance(
 
     await runtime.speakText(text, turn);
     assertActiveVoiceTurn(runtime, turn);
+    // mmo9.7.5: remember the spoken reply so a later "repeat" control can replay
+    // it locally without a model turn.
+    runtime.lastAssistantUtterance = text;
     await runtime.eventBus.emit('channel.voice.tts.sent', {
       guildId: turn.channel.guild.id,
       channelId: turn.channel.id,

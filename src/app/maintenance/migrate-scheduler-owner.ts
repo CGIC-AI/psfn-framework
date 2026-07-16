@@ -2,7 +2,6 @@
 
 import '../../shared/utils/load-dotenv.js';
 import { resolve } from 'node:path';
-import { resolveConfiguredSystemDataDir } from '../../persistence/layout.js';
 import { migrateLegacySchedulerOwner } from '../../system/config/scheduler-owner-migration.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
@@ -13,7 +12,7 @@ interface CliOptions {
 }
 
 function printUsage(): void {
-  console.log('Usage: npm run migrate:scheduler-owner [-- OPTIONS]');
+  console.log('Usage: npm run migrate:scheduler-owner -- --data-dir <companion-data-dir> [OPTIONS]');
   console.log('');
   console.log('Migrates the retired salience/social-graph scheduler cadences into');
   console.log('scheduler.json > backgroundMaintenance. Dry-run is the default.');
@@ -21,7 +20,7 @@ function printUsage(): void {
   console.log('Options:');
   console.log('  --apply             Validate and atomically replace scheduler.json');
   console.log('  --dry-run           Report the migration without writing (default)');
-  console.log('  --data-dir <path>   Override the system owner-file directory');
+  console.log('  --data-dir <path>   Exact companion owner-file directory (required)');
   console.log('  -h, --help          Show this help message');
 }
 
@@ -59,13 +58,11 @@ function main(): void {
     printUsage();
     return;
   }
-  const dataDir = options.dataDir
-    ?? resolveConfiguredSystemDataDir({
-      systemDataDir: process.env.SYSTEM_DATA_DIR,
-      dataDir: process.env.DATA_DIR,
-    });
+  if (!options.dataDir) {
+    throw new Error('--data-dir is required; pass the exact companion owner-file directory');
+  }
   const result = migrateLegacySchedulerOwner({
-    dataDir,
+    dataDir: options.dataDir,
     apply: options.apply,
   });
   console.log(JSON.stringify(result, null, 2));

@@ -120,7 +120,10 @@ loaded from its own `companionDataDir/scheduler.json`, so two fleet companions
 can hold distinct wake/rest schedules under one release. A missing per-companion
 scheduler file fails startup closed, the settings contract marks the `scheduler`
 subsystem `perCompanion`, and the file rides the `companion-tree` backup slice,
-not the cluster-global `system-config` slice. Both files are enumerated in
+not the cluster-global `system-config` slice. `charge-policy.json` and
+`skills.json` are likewise relocated: fatigue/charge budgets are co-rooted with
+their companion ledger, and enabled skill sets remain individuated. All four
+files are enumerated in
 `PER_COMPANION_OWNER_FILES` (`src/system/config/settings-contract.ts`), which the
 owner-file config store and startup verification consult to root them at
 `companionDataDir`.

@@ -3,7 +3,6 @@ import { relative, resolve, sep } from 'node:path';
 import {
   SKILLS_FILE_NAME,
   loadSkillsConfig,
-  saveSkillsConfig,
   type SkillsRuntimeConfig,
 } from '../../system/config/skills-config.js';
 import { filterEligibleSkills } from './filter.js';
@@ -180,30 +179,6 @@ export class SkillsRuntime {
   deleteSkill(name: string): void {
     this.store.delete(name);
     this.invalidate();
-  }
-
-  /** Toggle a skill's enabled/disabled state via disabledSkills config. Returns new enabled state. */
-  toggleSkill(name: string): boolean {
-    const config = this.loadRuntimeConfig();
-    const normalizedName = name.trim();
-    if (!normalizedName) throw new Error('Skill name must be non-empty');
-
-    const isDisabled = config.disabledSkills.includes(normalizedName);
-    const nextDisabled = isDisabled
-      ? config.disabledSkills.filter(s => s !== normalizedName)
-      : [...config.disabledSkills, normalizedName];
-
-    saveSkillsConfig(this.options.dataDir, {
-      ...config,
-      disabledSkills: nextDisabled,
-    });
-    this.invalidate();
-    return isDisabled; // was disabled, now enabled → returns true
-  }
-
-  /** Get the current disabled skills list from config. */
-  getDisabledSkills(): string[] {
-    return this.loadRuntimeConfig().disabledSkills;
   }
 
   private getOrCreateCache(): SkillSnapshotCache {

@@ -8,6 +8,7 @@ import type {
 } from '../../shared/telemetry/model-usage.js';
 import { estimateConservativeModelUsageCostUsd } from '../../shared/telemetry/model-usage-accounting.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { ChargePolicyConfig } from '../../shared/contracts/charge-policy.js';
 import { resolveModelUsageCostRates } from './model-budget.js';
 import type { RoutingCandidate, RoutingPurpose } from './routing.js';
 
@@ -21,6 +22,10 @@ export interface IcpConversationCostPhysicalAttempt {
   correlation?: Partial<CorrelationMetadata>;
   requestedAtMs?: number;
 }
+
+export type IcpConversationChargePolicyResolver = (
+  localCompanionId: string,
+) => ChargePolicyConfig;
 
 export class IcpConversationCostBreakerError extends Error {
   readonly code = 'icp_conversation_cost_blocked';
@@ -82,20 +87,22 @@ export class IcpConversationCostBreaker {
     private readonly config: SubstrateConfig,
     private readonly accounting?: IcpConversationCostAccountingPort,
     private readonly onDecision?: (event: IcpConversationCostBreakerEvent) => void,
+    private readonly resolveChargePolicy?: IcpConversationChargePolicyResolver,
   ) {}
 
   requiresInputEstimate(correlation: Partial<CorrelationMetadata> | undefined): boolean {
-    return this.config.chargePolicy?.icpCostBreaker.enabled === true
-      && correlation?.icpCorrelation !== undefined;
+    if (correlation?.icpCorrelation === undefined) return false;
+    return this.policyForCorrelation(correlation).icpCostBreaker.enabled === true;
   }
 
   async reservePhysicalAttempt(
     input: IcpConversationCostPhysicalAttempt,
   ): Promise<IcpConversationCostReservationResult | undefined> {
-    const policy = this.config.chargePolicy?.icpCostBreaker;
-    if (policy?.enabled !== true || input.correlation?.icpCorrelation === undefined) {
+    if (input.correlation?.icpCorrelation === undefined) {
       return undefined;
     }
+    const policy = this.policyForCorrelation(input.correlation).icpCostBreaker;
+    if (policy.enabled !== true) return undefined;
 
     const timestampMs = input.requestedAtMs ?? Date.now();
     const correlation = parseIcpConversationCorrelation(input.correlation.icpCorrelation);
@@ -188,5 +195,18 @@ export class IcpConversationCostBreaker {
       });
     }
     return result;
+  }
+
+  private policyForCorrelation(
+    correlation: Partial<CorrelationMetadata>,
+  ): ChargePolicyConfig {
+    const parsed = parseIcpConversationCorrelation(correlation.icpCorrelation);
+    if (this.resolveChargePolicy) {
+      return this.resolveChargePolicy(parsed.localCompanionId);
+    }
+    if (!this.config.chargePolicy) {
+      throw new Error('ICP conversation cost enforcement requires chargePolicy');
+    }
+    return this.config.chargePolicy;
   }
 }

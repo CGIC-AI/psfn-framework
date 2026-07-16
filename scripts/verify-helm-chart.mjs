@@ -475,9 +475,50 @@ assertIncludes(
 );
 assertIncludes(
   seededRender,
-  'target="/app/system-data/${base%.seed.json}.json"',
-  'owner-file seeding targets system-data owner files when opted in',
+  'capability-tier.json|scheduler.json|charge-policy.json|skills.json)',
+  'per-companion owner-file bootstrap partition',
 );
+assertIncludes(
+  seededRender,
+  'target_root="/app/companion-data"',
+  'per-companion owner-file bootstrap root',
+);
+assertIncludes(
+  seededRender,
+  'target_root="/app/system-data"',
+  'system owner-file bootstrap root',
+);
+assertNotIncludes(
+  seededRender,
+  'target="/app/system-data/${base%.seed.json}.json"',
+  'obsolete all-owner system-data bootstrap target',
+);
+
+for (const [companionId, companionDataDir] of [
+  ['aria', '/app/fleet/companions/aria'],
+  ['beatrix', '/app/fleet/companions/beatrix'],
+]) {
+  const companionRender = render([
+    '--set',
+    'bootstrap.seedOwnerFiles=true',
+    '--set-string',
+    `runtime.companionId=${companionId}`,
+    '--set-string',
+    `runtime.companionDataDir=${companionDataDir}`,
+    '--set-string',
+    `runtime.characterCardPath=${companionDataDir}/companion.json`,
+  ]);
+  assertIncludes(
+    companionRender,
+    `target_root="${companionDataDir}"`,
+    `${companionId} per-companion owner-file bootstrap root`,
+  );
+  assertIncludes(
+    companionRender,
+    'target_root="/app/system-data"',
+    `${companionId} system owner-file bootstrap root`,
+  );
+}
 
 const liteLlmConfig = findDocumentByKindName(rendered, 'ConfigMap', 'psfn-litellm-config');
 assertIncludes(liteLlmConfig, 'model_name: "openrouter/*"', 'LiteLLM OpenRouter wildcard config');

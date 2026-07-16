@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
@@ -10,6 +11,7 @@ import {
 import { resolveChargeLedgerPath } from '../../../persistence/layout.js';
 import { createPostgresPool } from '../../../persistence/postgres.js';
 import { readRunChargeRollingWindowFromLedger } from '../../../shared/telemetry/charge-ledger.js';
+import { createGatewayFleetChargePolicyResolver } from '../../gateway/fleet-charge-policy-resolver.js';
 import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
@@ -567,14 +569,33 @@ describe('ICP certification real process harness', () => {
   }, TIMEOUT_MS);
 
   it.each([
-    ['lowered_warning', 'warning_closeout_reserve_only', 0.0001],
-    ['lowered_hard', 'hard_limit_exceeded', 0.00015],
+    ['lowered_warning', 'warning_closeout_reserve_only', 0.0001, 0.0001, 0.0003],
+    ['lowered_hard', 'hard_limit_exceeded', 0.00015, 0.00015, 0.0002],
   ] as const)(
-    'stops the second companion at the fleet-scoped %s cost boundary',
-    async (costProfile, expectedReason, expectedActualCostUsd) => {
+    'stops the second companion at its companion-bound %s cost boundary',
+    async (
+      costProfile,
+      expectedReason,
+      expectedActualCostUsd,
+      warningThresholdUsd,
+      hardLimitUsd,
+    ) => {
       if (!postgres) throw new Error('Postgres certification harness is unavailable');
       const { databaseUrl } = await postgres.createDatabase();
       fixture = createIcpCertificationFixture({ databaseUrl, costProfile });
+      expect(existsSync(join(fixture.systemDataDir, 'charge-policy.json'))).toBe(false);
+      const resolveChargePolicy = createGatewayFleetChargePolicyResolver({
+        companions: fixture.companions,
+        seedDir: fixture.companions[0].env.CONFIG_DIR!,
+      });
+      expect(resolveChargePolicy(CERTIFICATION_COMPANION_A).icpCostBreaker).toMatchObject({
+        warningThresholdUsd: 0.0003,
+        hardLimitUsd: 0.0004,
+      });
+      expect(resolveChargePolicy(CERTIFICATION_COMPANION_B).icpCostBreaker).toMatchObject({
+        warningThresholdUsd,
+        hardLimitUsd,
+      });
       processes = await startIcpCertificationProcessHarness({ databaseUrl, fixture });
 
       const [agentA, agentB] = processes.agents;

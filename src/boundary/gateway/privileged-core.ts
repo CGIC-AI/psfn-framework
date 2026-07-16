@@ -27,6 +27,7 @@ import type { GatewayIcpInitiationPolicyAuthority } from './icp-initiation-polic
 import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { resolveCoreCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import { resolveKubeSelfManagementController } from './kube-self-management-runtime.js';
+import type { IcpConversationChargePolicyResolver } from '../../primitives/llm/icp-conversation-cost-breaker.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
@@ -37,6 +38,7 @@ export interface GatewayPrivilegedCoreBuildInput {
     error(message: string, meta?: Record<string, unknown>): void;
   };
   onEligibilityDecision?: (eventBus: EventBus, decision: EligibilityDecision) => void;
+  icpConversationChargePolicyResolver?: IcpConversationChargePolicyResolver;
 }
 
 export interface GatewayPrivilegedCore {
@@ -108,6 +110,9 @@ export async function buildGatewayPrivilegedCore(
           });
         });
       },
+      ...(input.icpConversationChargePolicyResolver
+        ? { icpConversationChargePolicyResolver: input.icpConversationChargePolicyResolver }
+        : {}),
     },
     vaultPolicyConfig: input.bootstrap.policyConfig.vault,
   });

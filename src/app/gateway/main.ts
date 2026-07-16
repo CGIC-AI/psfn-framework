@@ -76,6 +76,7 @@ import {
   SCHEDULED_BACKUP_TASK_NAME,
 } from '../../persistence/backups/service.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
+import { createGatewayFleetChargePolicyResolver } from './fleet-charge-policy-resolver.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -172,13 +173,20 @@ async function main(): Promise<void> {
   });
   log.info('Loaded charge policy quotas', {
     runChargeQuotaByLane: startupHydration.chargePolicyConfig.runChargeQuotaByLane,
-    sourcePath: `${startupHydration.pathSnapshot.systemDataDir}/${CHARGE_POLICY_FILE_NAME}`,
+    sourcePath: `${startupHydration.pathSnapshot.companionDataDir}/${CHARGE_POLICY_FILE_NAME}`,
   });
   if (!bootstrap.diagnostics.workspacePathProvided) {
     log.warn('WORKSPACE_PATH not set, defaulting to runtime layout workspace path', {
       workspacePath: bootstrap.workspacePath,
     });
   }
+
+  const resolveFleetChargePolicy = config.multiCompanion === true && config.companionFleet
+    ? createGatewayFleetChargePolicyResolver({
+      companions: config.companionFleet.companions,
+      ...(env.CONFIG_DIR ? { seedDir: env.CONFIG_DIR } : {}),
+    })
+    : null;
 
   const privilegedCore = await buildGatewayPrivilegedCore({
     config,
@@ -187,6 +195,9 @@ async function main(): Promise<void> {
     startupHydration,
     logger: log,
     onEligibilityDecision: emitEligibilityDecision,
+    ...(resolveFleetChargePolicy
+      ? { icpConversationChargePolicyResolver: resolveFleetChargePolicy }
+      : {}),
   });
   const {
     eventBus,
@@ -399,6 +410,9 @@ async function main(): Promise<void> {
     if (!config.companionFleet) {
       throw new Error('Multi-companion inter-companion channels require the companions.json fleet manifest');
     }
+    if (!resolveFleetChargePolicy) {
+      throw new Error('Multi-companion inter-companion channels require fleet charge-policy owners');
+    }
     const fleetCompanionIds = config.companionFleet.companions.map((entry) => entry.companionId);
     const fleetByCompanionId = new Map(
       config.companionFleet.companions.map(entry => [entry.companionId, entry]),
@@ -414,7 +428,9 @@ async function main(): Promise<void> {
       quietHours: startupHydration.schedulerConfig.episodicProcessing,
       capacityAuthority: new IcpFatigueInitiationCapacityAuthority(
         icpFatigueRegulationStore,
-        startupHydration.chargePolicyConfig,
+        {
+          read: ({ senderCompanionId }) => resolveFleetChargePolicy(senderCompanionId),
+        },
         {
           read: ({ senderCompanionId, nowMs }) => {
             const fleetEntry = fleetByCompanionId.get(createCompanionId(

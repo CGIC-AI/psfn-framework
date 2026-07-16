@@ -762,18 +762,11 @@ acquire_launcher_lock
 
 provision_companion_fleet
 
-echo "[${MODE_LABEL}] migrating legacy scheduler owner if needed..."
-if [ -x "./node_modules/.bin/tsx" ]; then
-  ./node_modules/.bin/tsx src/app/maintenance/migrate-scheduler-owner.ts --apply
-else
-  npm run --silent migrate:scheduler-owner -- --apply
-fi
-
 echo "[${MODE_LABEL}] verifying startup owner files..."
 if [ -x "./node_modules/.bin/tsx" ]; then
-  ./node_modules/.bin/tsx scripts/verify-startup-owner-files.ts
+  ./node_modules/.bin/tsx scripts/preflight-startup-owner-files.ts
 else
-  npm run verify:startup-owner-files
+  npm run preflight:startup-owner-files
 fi
 
 echo "[${MODE_LABEL}] starting gateway..."

@@ -49,7 +49,7 @@ export function hydrateJsonBackedRuntimeConfig(
   // capability-tier.json is a per-companion owner file (dnll.2): root it at the
   // companion data dir so fleet companions can hold distinct maturation tiers.
   config.capabilityTier = loadCapabilityTierConfig(companionDataDir, loadOptions).tier;
-  config.chargePolicy = loadChargePolicyConfig(dataDir, loadOptions);
+  config.chargePolicy = loadChargePolicyConfig(companionDataDir, loadOptions);
 
   return config;
 }

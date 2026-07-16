@@ -95,6 +95,7 @@ import type { HubIdentityEnrollmentStorePort } from '../../core/enrollment/enrol
 import { createAdminGraphProposalsService } from './services/graph-proposals-service.js';
 import type { SocialGraphProposalStore } from '../../faculties/memory/social-graph/proposals.js';
 import { AdminDashboardDataService } from './services/dashboard-service.js';
+import { AdminSkillsDataService } from './services/skills-service.js';
 import { AdminDiagnosticsDataService } from './services/diagnostics-service.js';
 import { AdminEpisodicMemoryDataService } from './services/episodic-memory-service.js';
 import { AdminGroupMemoryDataService } from './services/group-memory-diagnostics-service.js';
@@ -538,7 +539,9 @@ export function createInProcessGardenAdminContract(
     subsystemHealth,
     toolConformance,
     icpAutonomy,
-    skills: options.skillsRuntime ?? null,
+    skills: options.skillsRuntime
+      ? new AdminSkillsDataService(options.skillsRuntime, configStore)
+      : null,
     confirmations: options.confirmationQueueApi ?? null,
     values: valuesJournal,
     reflectionMetacognitionJournal,

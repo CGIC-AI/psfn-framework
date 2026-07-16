@@ -15,6 +15,12 @@ export interface IcpSocialChargeBalanceReader {
   }): Promise<RunChargeRollingWindowSnapshot> | RunChargeRollingWindowSnapshot;
 }
 
+export interface IcpChargePolicyReader {
+  read(input: {
+    senderCompanionId: string;
+  }): Promise<ChargePolicyConfig> | ChargePolicyConfig;
+}
+
 /**
  * Content-free deterministic initiation pressure. Conversation cost is
  * enforced separately at the gateway's canonical model-usage reservation
@@ -28,14 +34,17 @@ export class IcpFatigueInitiationCapacityAuthority implements IcpInitiationCapac
       IcpFatigueRegulationReservationPort,
       "readInitiationPressure"
     >,
-    private readonly chargePolicy: ChargePolicyConfig,
+    private readonly chargePolicies: IcpChargePolicyReader,
     private readonly chargeBalance: IcpSocialChargeBalanceReader,
   ) {}
 
   async resolve(
     input: IcpInitiationCapacityPolicyInput,
   ): Promise<IcpInitiationCapacityPolicyDecision> {
-    const regulation = this.chargePolicy.fatigue.socialRegulation;
+    const chargePolicy = await this.chargePolicies.read({
+      senderCompanionId: input.senderCompanionId,
+    });
+    const regulation = chargePolicy.fatigue.socialRegulation;
     const snapshot = await this.pressure.readInitiationPressure({
       localCompanionId: input.senderCompanionId,
       peerCompanionId: input.candidate.peerCompanionId,
@@ -49,7 +58,7 @@ export class IcpFatigueInitiationCapacityAuthority implements IcpInitiationCapac
     });
     const spent = Math.ceil(snapshot.relationshipPressure);
     const policy = evaluateFatiguePolicy({
-      config: this.chargePolicy.fatigue,
+      config: chargePolicy.fatigue,
       peer: {
         // Private sender-local contact IDs are intentionally absent from the
         // shared candidate projection. The authenticated peer companion UUID
@@ -79,7 +88,7 @@ export class IcpFatigueInitiationCapacityAuthority implements IcpInitiationCapac
       triggerAuthorKind: "machine_intelligence",
     });
     const socialChargeCost =
-      this.chargePolicy.surfaceCosts.companionSocialContinuation;
+      chargePolicy.surfaceCosts.companionSocialContinuation;
     const rollingCharge = await this.chargeBalance.read({
       senderCompanionId: input.senderCompanionId,
       nowMs: input.nowMs,
@@ -89,7 +98,7 @@ export class IcpFatigueInitiationCapacityAuthority implements IcpInitiationCapac
       socialPressureAllows: spent < policy.softTarget,
       chargeAllows:
         rollingSocialSpent + socialChargeCost <=
-        this.chargePolicy.runChargeQuotaByLane.companion_social,
+        chargePolicy.runChargeQuotaByLane.companion_social,
       fatigueAllows: spent < policy.hardCap,
       costAllows: true,
     };

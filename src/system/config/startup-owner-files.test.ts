@@ -24,8 +24,13 @@ import {
   loadStartupRuntimeSettingsOwnerFile,
   loadStartupTrustPolicyOwnerFile,
   loadStartupSchedulerOwnerFile,
+  verifyStartupFleetOwnerFiles,
   verifyStartupOwnerFiles,
 } from './startup-owner-files.js';
+import {
+  resolveCompanionFleetPaths,
+  validateCompanionsConfig,
+} from './companions-config.js';
 
 describe('startup owner-file loaders', () => {
   const tempDirs: string[] = [];
@@ -67,6 +72,78 @@ describe('startup owner-file loaders', () => {
         copyOwnerExample(rootDir, ownerFile);
       }
     }
+  }
+
+  function createFleetOwnerFixture(): {
+    rootDir: string;
+    systemDataDir: string;
+    companionA: string;
+    companionB: string;
+    companionAId: string;
+    companionBId: string;
+    fleet: ReturnType<typeof resolveCompanionFleetPaths>;
+  } {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-owner-fleet-'));
+    const systemDataDir = join(rootDir, 'system-data');
+    const companionA = join(rootDir, 'companions/a');
+    const companionB = join(rootDir, 'companions/b');
+    const companionAId = '11111111-1111-4111-8111-111111111111';
+    const companionBId = '22222222-2222-4222-8222-222222222222';
+    const rawFleet = {
+      companions: [
+        {
+          companionId: companionAId,
+          companionDataDir: 'companions/a',
+          characterCardPath: 'companions/a/character-card.json',
+          postgresSchema: 'companion_a',
+        },
+        {
+          companionId: companionBId,
+          companionDataDir: 'companions/b',
+          characterCardPath: 'companions/b/character-card.json',
+          postgresSchema: 'companion_b',
+        },
+      ],
+    };
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionA, { recursive: true });
+    mkdirSync(companionB, { recursive: true });
+    tempDirs.push(rootDir);
+    writeRequiredOwnerExamples(systemDataDir, [
+      'scheduler.json',
+      'capability-tier.json',
+      'charge-policy.json',
+      'skills.json',
+    ]);
+    for (const companionRoot of [companionA, companionB]) {
+      for (const ownerFile of [
+        'scheduler.json',
+        'capability-tier.json',
+        'charge-policy.json',
+        'skills.json',
+      ] as const) {
+        copyOwnerExample(companionRoot, ownerFile);
+      }
+    }
+    writeFileSync(
+      join(systemDataDir, 'companions.json'),
+      `${JSON.stringify(rawFleet, null, 2)}\n`,
+      'utf8',
+    );
+    const fleet = resolveCompanionFleetPaths(
+      validateCompanionsConfig(rawFleet, join(systemDataDir, 'companions.json')),
+      rootDir,
+      [{ label: 'systemDataDir', path: systemDataDir }],
+    );
+    return {
+      rootDir,
+      systemDataDir,
+      companionA,
+      companionB,
+      companionAId,
+      companionBId,
+      fleet,
+    };
   }
 
   it('loads the explicit startup owner-file bundle without collapsing ownership boundaries', () => {
@@ -360,6 +437,96 @@ describe('startup owner-file loaders', () => {
     expect(result.errors[0]).toContain('copy the example template');
   });
 
+  it('validates system owners once and every exact resolved fleet companion root', () => {
+    const fixture = createFleetOwnerFixture();
+    const seedDir = join(process.cwd(), 'config');
+    for (const ownerFile of [
+      'scheduler.json',
+      'capability-tier.json',
+      'charge-policy.json',
+      'skills.json',
+    ]) {
+      writeFileSync(join(fixture.systemDataDir, ownerFile), '{"decoy":true}\n', 'utf8');
+    }
+
+    expect(verifyStartupFleetOwnerFiles({
+      dataDir: fixture.systemDataDir,
+      seedDir,
+      defaultContextWindow: 128_000,
+      fleetAuth: false,
+      fleet: fixture.fleet,
+    })).toEqual({ ok: true, errors: [] });
+
+    writeFileSync(
+      join(fixture.systemDataDir, 'settings.json'),
+      '{"capabilityTier":"nursery"}\n',
+      'utf8',
+    );
+    const drifted = verifyStartupFleetOwnerFiles({
+      dataDir: fixture.systemDataDir,
+      seedDir,
+      defaultContextWindow: 128_000,
+      fleetAuth: false,
+      fleet: fixture.fleet,
+    });
+    expect(drifted.errors.filter(error => error.startsWith('settings owner-file'))).toHaveLength(1);
+  });
+
+  it('names the exact companion whose owner is missing or malformed without cross-root fallback', () => {
+    const fixture = createFleetOwnerFixture();
+    const seedDir = join(process.cwd(), 'config');
+    copyOwnerExample(fixture.systemDataDir, 'scheduler.json');
+    rmSync(join(fixture.companionA, 'scheduler.json'));
+    writeFileSync(join(fixture.companionB, 'skills.json'), '{"enabled":"invalid"}\n', 'utf8');
+
+    const result = verifyStartupFleetOwnerFiles({
+      dataDir: fixture.systemDataDir,
+      seedDir,
+      defaultContextWindow: 128_000,
+      fleetAuth: false,
+      fleet: fixture.fleet,
+    });
+
+    expect(result.ok).toBe(false);
+    const companionAError = result.errors.find(error => error.includes(fixture.companionAId));
+    const companionBError = result.errors.find(error => error.includes(fixture.companionBId));
+    expect(companionAError).toContain('scheduler owner-file validation failed');
+    expect(companionAError).toContain(join(fixture.companionA, 'scheduler.json'));
+    expect(companionBError).toContain('skills owner-file validation failed');
+    expect(companionBError).toContain(join(fixture.companionB, 'skills.json'));
+    expect(result.errors.some(error => (
+      error.includes(fixture.companionAId)
+      && error.includes(fixture.companionB)
+    ))).toBe(false);
+  });
+
+  it('requires the fleet to pass canonical unknown, duplicate, and overlap validation first', () => {
+    const baseEntry = {
+      companionId: '11111111-1111-4111-8111-111111111111',
+      companionDataDir: 'companions/a',
+      characterCardPath: 'companions/a/character-card.json',
+      postgresSchema: 'companion_a',
+    };
+    expect(() => validateCompanionsConfig({
+      companions: [{ ...baseEntry, unknownOwnerRoot: 'system-data' }],
+    }, 'companions.json')).toThrow(/unknown key/i);
+    expect(() => validateCompanionsConfig({
+      companions: [baseEntry, { ...baseEntry, postgresSchema: 'companion_b' }],
+    }, 'companions.json')).toThrow(/duplicate companionId/);
+    expect(() => validateCompanionsConfig({
+      companions: [
+        baseEntry,
+        {
+          ...baseEntry,
+          companionId: '22222222-2222-4222-8222-222222222222',
+          companionDataDir: 'companions/a/nested',
+          characterCardPath: 'companions/a/nested/character-card.json',
+          postgresSchema: 'companion_b',
+        },
+      ],
+    }, 'companions.json')).toThrow(/must not overlap/);
+  });
+
   it('reports stale scheduler drift before split startup begins', () => {
     const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-owner-files-drift-'));
     const seedDir = join(process.cwd(), 'config');
@@ -395,7 +562,7 @@ describe('startup owner-file loaders', () => {
     expect(result.ok).toBe(false);
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0]).toContain('scheduler.json');
-    expect(result.errors[0]).toContain('artifactLifecycle must be an object');
+    expect(result.errors[0]).toContain('episodicProcessing must be an object');
     expect(result.errors[0]).toContain('PSFN will not overwrite it from seed/example templates');
   });
 

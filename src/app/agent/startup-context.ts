@@ -122,7 +122,7 @@ export function prepareAgentStartupContext(input: {
   });
   input.log.info('Loaded charge policy quotas', {
     runChargeQuotaByLane: chargePolicyConfig.runChargeQuotaByLane,
-    sourcePath: `${pathSnapshot.systemDataDir}/${CHARGE_POLICY_FILE_NAME}`,
+    sourcePath: `${pathSnapshot.companionDataDir}/${CHARGE_POLICY_FILE_NAME}`,
   });
   const runtimeChannelsOverrides = buildRuntimeChannelsConfigOverrides(
     config,

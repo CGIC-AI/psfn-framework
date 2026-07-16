@@ -134,20 +134,23 @@ PSFN_BACKUP_ENCRYPTION_KEY=<long random secret>
 
 ### Config Ownership
 
-Mutable runtime/admin config is owned by canonical JSON files under the system-data config domain, not by `.env`:
+Mutable runtime/admin config is owned by canonical JSON files, not by `.env`.
+Cluster-global owners live under `SYSTEM_DATA_DIR`; the four per-companion
+owners marked below live under each companion's `COMPANION_DATA_DIR`:
 
 - `settings.json`
 - `models.json`
 - `providers.json`
-- `scheduler.json`
-- `capability-tier.json`
+- `scheduler.json` (per companion)
+- `capability-tier.json` (per companion)
 - `channels.json`
-- `skills.json`
+- `skills.json` (per companion)
 - `trust-policy.json`
-- `charge-policy.json`
+- `intake-policy.json`
+- `charge-policy.json` (per companion)
 - `backup.json`
 
-Startup verifies the seed-backed owner files before the split runtime comes up. Distributed `config/*.seed.json` files are examples/templates only; PSFN does not silently copy them into runtime state. For a new local environment, intentionally copy the examples into your system data directory and edit them for the deployment:
+Startup verifies the seed-backed owner files before the split runtime comes up. Distributed `config/*.seed.json` files are examples/templates only; PSFN does not silently copy them into runtime state. For a new shared-root local environment, intentionally copy the examples into `./data` and edit them for the deployment:
 
 ```bash
 cp config/settings.seed.json ./data/settings.json
@@ -156,10 +159,17 @@ cp config/providers.seed.json ./data/providers.json
 cp config/scheduler.seed.json ./data/scheduler.json
 cp config/capability-tier.seed.json ./data/capability-tier.json
 cp config/trust-policy.seed.json ./data/trust-policy.json
+cp config/intake-policy.seed.json ./data/intake-policy.json
 cp config/charge-policy.seed.json ./data/charge-policy.json
 cp config/backup.seed.json ./data/backup.json
 cp config/skills.seed.json ./data/skills.json
 ```
+
+In a production split-root or multi-companion deployment, copy
+`scheduler.json`, `capability-tier.json`, `charge-policy.json`, and `skills.json`
+to every intended `COMPANION_DATA_DIR`; copy the remaining owner files to
+`SYSTEM_DATA_DIR`. Missing per-companion owners fail startup closed, and the
+runtime never reads a system-root fallback.
 
 `channels.json` has no seed file; channel config loads safe defaults when the file is absent and is created or updated when channel settings are saved through Garden or the admin API.
 
@@ -324,7 +334,8 @@ Operator / Garden (localhost)          Satellite Hub / companion-ui
 
 ### Storage
 
-- **System owner files**: JSON under the system-data config domain; `settings.json`, `models.json`, `providers.json`, `scheduler.json`, `capability-tier.json`, `trust-policy.json`, `charge-policy.json`, `backup.json`, `skills.json`, and generated `channels.json`
+- **System owner files**: cluster-global JSON under `SYSTEM_DATA_DIR`; `settings.json`, `models.json`, `providers.json`, `trust-policy.json`, `intake-policy.json`, `backup.json`, and generated `channels.json`
+- **Per-companion owner files**: JSON under each `COMPANION_DATA_DIR`; `scheduler.json`, `capability-tier.json`, `charge-policy.json`, and `skills.json`
 - **Sessions (L0)**: Append-only JSONL files, one per channel
 - **Episodes (L0.1)**: PostgreSQL-backed candidate/canonical episode landmarks, message claims, candidate decisions, lineage, and graph arcs with L0 span/artifact provenance
 - **Memories (L2)**: PostgreSQL + pgvector extracted facts, emotions, boundaries, reflections, relational notes, procedural knowledge, group-room provenance, and salience decay

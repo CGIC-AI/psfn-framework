@@ -24,6 +24,8 @@ import { FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME } from './authority-
 import type { ProviderRevocationAuthorityPort } from './oauth-session-store.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 
+const AUTHORIZATION_CORRELATION_DIGEST_DOMAIN = 'fleet-authorization:correlation:v1\0';
+
 interface SessionRow {
   record_id: string;
   principal_id: string;
@@ -172,6 +174,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
 
   async resolve(request: FleetAuthorizationRequest): Promise<FleetAuthorizationStoreDecision> {
     const client = await this.pool.connect();
+    const correlationDigest = this.digestCorrelation(request.correlationId);
     try {
       await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
       const snapshot = await this.loadSnapshot(client, request);
@@ -204,7 +207,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
           : snapshot.sessions.at(0)?.principalId,
         authorityGeneration: snapshot.authority.authorityGeneration,
         globalAuthEpoch: snapshot.authority.globalAuthEpoch,
-        correlationId: request.correlationId,
+        correlationDigest,
         occurredAt: resolvedAt,
       });
       await client.query('COMMIT');
@@ -214,6 +217,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
         facts: evaluation.facts,
         authorizationEventId,
         resolvedAt,
+        ...(correlationDigest ? { correlationDigest } : {}),
       });
       if (!this.providerRevocationAuthority.sessionAuthorityGenerationIsCurrent(
         snapshot.authority.authorityGeneration,
@@ -221,6 +225,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
         await this.recordPostCommitAuthorityDenial(client, {
           request,
           principalId: evaluation.facts.principalId,
+          ...(correlationDigest ? { correlationDigest } : {}),
         });
         return { decision: 'deny', reasonCode: 'authority_generation_stale' };
       }
@@ -234,7 +239,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
         await this.recordInfrastructureDenial(client, {
           action: request.action,
           companionId: request.companionId,
-          correlationId: request.correlationId,
+          correlationDigest,
           evidenceRequested: request.discordEvidence !== undefined,
         });
       } catch (auditError) {
@@ -266,7 +271,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
         companionId: input.audit.companionId,
         authorityGeneration: authority.authorityGeneration,
         globalAuthEpoch: authority.globalAuthEpoch,
-        correlationId: input.audit.correlationId,
+        correlationDigest: this.digestCorrelation(input.audit.correlationId),
         occurredAt: this.now(),
       });
       await client.query('COMMIT');
@@ -581,9 +586,13 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
     principalId?: string;
     authorityGeneration: number;
     globalAuthEpoch: number;
-    correlationId?: string;
+    correlationDigest?: string;
     occurredAt: Date;
   }): Promise<void> {
+    if (input.correlationDigest !== undefined
+      && !/^[0-9a-f]{64}$/u.test(input.correlationDigest)) {
+      throw new Error('Fleet authorization audit correlation must be a canonical digest');
+    }
     await client.query(`
       INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
         (event_id, actor_context, action, resource, decision, reason_code,
@@ -601,7 +610,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
       input.principalId ?? null,
       input.authorityGeneration,
       input.globalAuthEpoch,
-      input.correlationId ?? null,
+      input.correlationDigest ?? null,
       input.occurredAt,
     ]);
   }
@@ -609,7 +618,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
   private async recordInfrastructureDenial(client: PoolClient, input: {
     action: string;
     companionId: string;
-    correlationId?: string;
+    correlationDigest?: string;
     evidenceRequested: boolean;
   }): Promise<void> {
     try {
@@ -625,7 +634,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
         companionId: input.companionId,
         authorityGeneration: authority.authorityGeneration,
         globalAuthEpoch: authority.globalAuthEpoch,
-        correlationId: input.correlationId,
+        correlationDigest: input.correlationDigest,
         occurredAt: this.now(),
       });
       await client.query('COMMIT');
@@ -638,6 +647,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
   private async recordPostCommitAuthorityDenial(client: PoolClient, input: {
     request: FleetAuthorizationRequest;
     principalId: string;
+    correlationDigest?: string;
   }): Promise<void> {
     try {
       await client.query('BEGIN');
@@ -653,7 +663,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
         principalId: input.principalId,
         authorityGeneration: authority.authorityGeneration,
         globalAuthEpoch: authority.globalAuthEpoch,
-        correlationId: input.request.correlationId,
+        correlationDigest: input.correlationDigest,
         occurredAt: this.now(),
       });
       await client.query('COMMIT');
@@ -665,5 +675,13 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
 
   private digest(value: string): string {
     return createHmac('sha256', this.sessionPepper).update(value).digest('hex');
+  }
+
+  private digestCorrelation(value: string | undefined): string | undefined {
+    if (value === undefined) return undefined;
+    return createHmac('sha256', this.sessionPepper)
+      .update(AUTHORIZATION_CORRELATION_DIGEST_DOMAIN)
+      .update(value)
+      .digest('hex');
   }
 }

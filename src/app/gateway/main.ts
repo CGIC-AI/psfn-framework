@@ -180,6 +180,26 @@ async function main(): Promise<void> {
     });
   }
 
+  const fleetChargePolicyByCompanionId = config.multiCompanion === true && config.companionFleet
+    ? new Map(config.companionFleet.companions.map(entry => [
+        entry.companionId,
+        loadChargePolicyConfig(
+          entry.companionDataDir,
+          env.CONFIG_DIR ? { seedDir: env.CONFIG_DIR } : {},
+        ),
+      ]))
+    : null;
+  const resolveFleetChargePolicy = (rawCompanionId: string) => {
+    const policy = fleetChargePolicyByCompanionId?.get(createCompanionId(
+      rawCompanionId,
+      'fleet charge policy companionId',
+    ));
+    if (!policy) {
+      throw new Error('Fleet charge policy requires a known multi-companion sender');
+    }
+    return policy;
+  };
+
   const privilegedCore = await buildGatewayPrivilegedCore({
     config,
     env,
@@ -187,6 +207,9 @@ async function main(): Promise<void> {
     startupHydration,
     logger: log,
     onEligibilityDecision: emitEligibilityDecision,
+    ...(fleetChargePolicyByCompanionId
+      ? { icpConversationChargePolicyResolver: resolveFleetChargePolicy }
+      : {}),
   });
   const {
     eventBus,
@@ -380,15 +403,6 @@ async function main(): Promise<void> {
     const fleetByCompanionId = new Map(
       config.companionFleet.companions.map(entry => [entry.companionId, entry]),
     );
-    const chargePolicyByCompanionId = new Map(
-      config.companionFleet.companions.map(entry => [
-        entry.companionId,
-        loadChargePolicyConfig(
-          entry.companionDataDir,
-          env.CONFIG_DIR ? { seedDir: env.CONFIG_DIR } : {},
-        ),
-      ]),
-    );
     companionPresenceStore = await PostgresCompanionPresenceStore.connect(databaseUrl);
     icpAutonomyStore = await PostgresIcpSharedAutonomyStore.connect(databaseUrl, {
       knownCompanionIds: fleetCompanionIds,
@@ -401,16 +415,7 @@ async function main(): Promise<void> {
       capacityAuthority: new IcpFatigueInitiationCapacityAuthority(
         icpFatigueRegulationStore,
         {
-          read: ({ senderCompanionId }) => {
-            const policy = chargePolicyByCompanionId.get(createCompanionId(
-              senderCompanionId,
-              'ICP charge policy senderCompanionId',
-            ));
-            if (!policy) {
-              throw new Error('ICP charge policy requires a known fleet sender');
-            }
-            return policy;
-          },
+          read: ({ senderCompanionId }) => resolveFleetChargePolicy(senderCompanionId),
         },
         {
           read: ({ senderCompanionId, nowMs }) => {

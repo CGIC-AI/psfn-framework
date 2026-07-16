@@ -128,6 +128,43 @@ function accountingPort(
 }
 
 describe('IcpConversationCostBreaker', () => {
+  it('resolves ICP cost policy from the correlated local companion', async () => {
+    const reserve = vi.fn<IcpConversationCostAccountingPort['reserveIcpConversationCost']>(async () => ({
+      allowed: true,
+      replayed: false,
+      reason: 'below_warning',
+      projectedRequestCostUsd: 0.003,
+      projection: projection(),
+    }));
+    const companionPolicy = makeConfig().chargePolicy!;
+    const resolveChargePolicy = vi.fn((localCompanionId: string) => {
+      if (localCompanionId !== CORRELATION.localCompanionId) {
+        throw new Error('unknown companion policy');
+      }
+      return companionPolicy;
+    });
+    const breaker = new IcpConversationCostBreaker(
+      makeConfig({ enabled: false }),
+      accountingPort(reserve),
+      undefined,
+      resolveChargePolicy,
+    );
+
+    expect(breaker.requiresInputEstimate({ icpCorrelation: CORRELATION })).toBe(true);
+    await breaker.reservePhysicalAttempt({
+      candidate: CANDIDATE,
+      purpose: 'chat',
+      estimatedInputTokens: 1_000,
+      logicalCallId: 'per-companion-policy',
+      attempt: 1,
+      correlation: { icpCorrelation: CORRELATION },
+      requestedAtMs: 123,
+    });
+
+    expect(resolveChargePolicy).toHaveBeenCalledWith(CORRELATION.localCompanionId);
+    expect(reserve).toHaveBeenCalledWith(expect.objectContaining({ policy: POLICY }));
+  });
+
   it('projects canonical model rates and emits a content-free warning reservation decision', async () => {
     const reserve = vi.fn<IcpConversationCostAccountingPort['reserveIcpConversationCost']>(async () => ({
       allowed: true,

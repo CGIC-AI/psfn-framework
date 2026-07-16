@@ -398,6 +398,21 @@ export async function startIcpCertificationProcessHarness(input: {
     loadAgentConfig(input.fixture.companions[0].env),
     { seedDir: input.fixture.companions[0].env.CONFIG_DIR },
   );
+  const fleet = input.fixture.companions.map(companion => ({
+    companionId: companion.companionId,
+    postgresSchema: companion.postgresSchema,
+    companionDataDir: companion.companionDataDir,
+  }));
+  const fleetById = new Map(fleet.map(companion => [companion.companionId, companion]));
+  const chargePolicyById = new Map(fleet.map(companion => [
+    companion.companionId,
+    loadChargePolicyConfig(companion.companionDataDir),
+  ]));
+  const resolveChargePolicy = (companionId: string) => {
+    const chargePolicy = chargePolicyById.get(companionId);
+    if (!chargePolicy) throw new Error('Unknown certification companion charge owner');
+    return chargePolicy;
+  };
   const modelUsagePool = createPostgresPool(input.databaseUrl, {
     applicationName: 'psfn-icp-certification-model-usage',
     allowExitOnIdle: true,
@@ -419,6 +434,7 @@ export async function startIcpCertificationProcessHarness(input: {
         reason: decision.reason,
       });
     },
+    icpConversationChargePolicyResolver: resolveChargePolicy,
   });
   const companionIds = [CERTIFICATION_COMPANION_A, CERTIFICATION_COMPANION_B];
   const presence = await PostgresCompanionPresenceStore.connect(input.databaseUrl);
@@ -426,16 +442,6 @@ export async function startIcpCertificationProcessHarness(input: {
     knownCompanionIds: companionIds,
   });
   const fatigue = await PostgresIcpFatigueRegulationReservationStore.connect(input.databaseUrl);
-  const fleet = input.fixture.companions.map(companion => ({
-    companionId: companion.companionId,
-    postgresSchema: companion.postgresSchema,
-    companionDataDir: companion.companionDataDir,
-  }));
-  const fleetById = new Map(fleet.map(companion => [companion.companionId, companion]));
-  const chargePolicyById = new Map(fleet.map(companion => [
-    companion.companionId,
-    loadChargePolicyConfig(companion.companionDataDir),
-  ]));
   const authority = new PostgresIcpInitiationPolicyAuthority(input.databaseUrl, {
     fleet,
     quietHours: {
@@ -447,11 +453,7 @@ export async function startIcpCertificationProcessHarness(input: {
     capacityAuthority: new IcpFatigueInitiationCapacityAuthority(
       fatigue,
       {
-        read: ({ senderCompanionId }) => {
-          const chargePolicy = chargePolicyById.get(senderCompanionId);
-          if (!chargePolicy) throw new Error('Unknown certification companion charge owner');
-          return chargePolicy;
-        },
+        read: ({ senderCompanionId }) => resolveChargePolicy(senderCompanionId),
       },
       {
         read: ({ senderCompanionId, nowMs }) => {

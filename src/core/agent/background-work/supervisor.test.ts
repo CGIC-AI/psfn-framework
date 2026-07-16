@@ -104,6 +104,11 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     revision: number;
   }>();
   private foregroundRenewalLoss = false;
+  private requeueFailuresRemaining = 0;
+
+  failNextRequeuePreBoundaryClaims(count = 1): void {
+    this.requeueFailuresRemaining = count;
+  }
 
   async enqueue(input: EnqueueBackgroundWorkInput): Promise<BackgroundWorkJobEnqueueResult> {
     const incumbent = [...this.jobs.values()].find(job => job.idempotencyKey === input.idempotencyKey);
@@ -463,6 +468,10 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     nowMs: number;
     reasonCode: 'shutdown';
   }): Promise<StoredBackgroundWorkJob[]> {
+    if (this.requeueFailuresRemaining > 0) {
+      this.requeueFailuresRemaining -= 1;
+      throw new Error('injected shutdown requeue failure');
+    }
     const requeued: StoredBackgroundWorkJob[] = [];
     for (const job of [...this.jobs.values()]) {
       if (job.state !== 'running' || job.leaseOwner !== input.leaseOwner) continue;
@@ -953,6 +962,42 @@ describe('BackgroundWorkSupervisor', () => {
     expect((await store.get(input.jobId))?.state).toBe('succeeded');
     expect(secondSinkWrites).toBe(1);
     expect(firstSinkWrites).toBe(0);
+  });
+
+  it('surfaces a shutdown requeue failure and permits a bounded retry without consuming an attempt', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      leaseOwner: 'first',
+      now: () => 1_000,
+      shutdownTimeoutMs: 0,
+      executor: async ({ effects, signal }) => {
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+        await effects.run('durable-sink', async (crossBoundary) => {
+          await crossBoundary();
+        });
+      },
+    });
+    const input = { ...makeInput('session-a', 'turn-a'), maxAttempts: 1 };
+    await supervisor.enqueue([input]);
+    await supervisor.tick();
+    await flush();
+    expect(await store.get(input.jobId)).toMatchObject({ state: 'running', attemptCount: 0 });
+
+    store.failNextRequeuePreBoundaryClaims();
+    await expect(supervisor.stop()).rejects.toThrow('injected shutdown requeue failure');
+    expect(await store.get(input.jobId)).toMatchObject({ state: 'running', attemptCount: 0 });
+
+    await supervisor.stop();
+    expect(await store.get(input.jobId)).toMatchObject({
+      state: 'queued',
+      reasonCode: 'shutdown',
+      attemptCount: 0,
+    });
   });
 
   it('fails malformed persisted payloads closed without invoking a handler', async () => {

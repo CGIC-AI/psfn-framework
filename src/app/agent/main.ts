@@ -213,9 +213,14 @@ async function main(): Promise<void> {
     });
     try {
       await stopFn();
-    } finally {
-      process.exit(1);
+    } catch (error) {
+      shuttingDown = false;
+      log.error('Gateway disconnect shutdown failed; leaving process running for retry', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
     }
+    process.exit(1);
   });
 
   const persistenceRuntime = await createAgentPersistenceRuntime({

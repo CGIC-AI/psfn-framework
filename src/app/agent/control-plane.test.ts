@@ -38,6 +38,8 @@ describe('agent control plane', () => {
     expect(controlPlaneSource).toContain('runRepoLifecycleBuildCommand');
     expect(controlPlaneSource).not.toContain("gateway.shellExec('npm', ['run', 'build']");
     expect(controlPlaneSource).toContain('unregister gateway disconnect hook');
+    expect(controlPlaneSource).toContain("step: 'stop durable background work supervisor'");
+    expect(controlPlaneSource).toContain('failClosed: true');
     expect(controlPlaneSource).toContain('write graceful shutdown markers');
     expect(controlPlaneSource).toContain('close app cache');
     expect(readSource('main.ts')).toContain('shutdownTargets.appCache = appCache');

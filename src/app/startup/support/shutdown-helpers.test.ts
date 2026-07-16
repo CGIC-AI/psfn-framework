@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createRetryableShutdown,
   runShutdownSequence,
   type ShutdownLogger,
 } from './shutdown-helpers.js';
@@ -101,5 +102,66 @@ describe('runShutdownSequence', () => {
         maxAttempts: 2,
       }),
     );
+  });
+
+  it('aborts before later shutdown steps when a fail-closed step exhausts its retries', async () => {
+    const logger = createLogger();
+    const calls: string[] = [];
+
+    await expect(runShutdownSequence([
+      {
+        step: 'durable release',
+        action: () => {
+          calls.push('durable release');
+          throw new Error('release unavailable');
+        },
+        maxAttempts: 2,
+        failClosed: true,
+      },
+      {
+        step: 'close database',
+        action: () => {
+          calls.push('close database');
+        },
+      },
+    ], logger)).rejects.toThrow('release unavailable');
+
+    expect(calls).toEqual(['durable release', 'durable release']);
+    expect(logger.error).toHaveBeenCalledWith(
+      'Shutdown step failed; aborting shutdown',
+      expect.objectContaining({
+        step: 'durable release',
+        attempt: 2,
+        maxAttempts: 2,
+      }),
+    );
+  });
+
+  it('shares a failed shutdown attempt and permits one later durable retry', async () => {
+    const logger = createLogger();
+    let releaseAttempts = 0;
+    const closeDatabase = vi.fn(async () => undefined);
+    const shutdown = createRetryableShutdown(() => runShutdownSequence([
+      {
+        step: 'durable release',
+        action: () => {
+          releaseAttempts += 1;
+          if (releaseAttempts <= 2) throw new Error('release unavailable');
+        },
+        maxAttempts: 2,
+        failClosed: true,
+      },
+      { step: 'close database', action: closeDatabase },
+    ], logger));
+
+    const first = await Promise.allSettled([shutdown(), shutdown()]);
+    expect(first.map(result => result.status)).toEqual(['rejected', 'rejected']);
+    expect(releaseAttempts).toBe(2);
+    expect(closeDatabase).not.toHaveBeenCalled();
+
+    await shutdown();
+    await shutdown();
+    expect(releaseAttempts).toBe(3);
+    expect(closeDatabase).toHaveBeenCalledOnce();
   });
 });

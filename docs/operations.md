@@ -542,6 +542,19 @@ npm run migrate:system-owner-fleet -- --apply \
   --approve skills.json=<exact-sha256>
 ```
 
+The final Helm chart can rehearse the same transaction as one explicit
+pre-upgrade boundary. Set `ownerMigration.required=true`, keep
+`bootstrap.seedOwnerFiles=false`, bind the exact printed approvals, and list
+the system, backup, and every companion PVC with the same canonical paths used
+by `companions.json`. The hook captures the whole-fleet snapshot before its
+canonical compiled migration init container runs; packaged per-companion probes
+must then prove distinct writable owners before Helm admits the new revision.
+This is not an automatic fallback: the feature is disabled by default, missing
+or duplicated claims and paths fail closed, and it must be removed from values
+after the one-time cutover. `npm run e2e:kube-owner-upgrade` exercises the real
+old-chart install, final-chart upgrade, failure matrix, and fresh-PVC old-chart
+restore.
+
 The supported command validates `charge-policy.json` and `skills.json` with
 their canonical runtime schemas before it creates or mutates a migration
 object. A new receipt validates the pinned system-root sources. Receipt-bound

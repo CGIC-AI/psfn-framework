@@ -1,3 +1,4 @@
+{{- if not .Values.persistence.systemData.existingClaim }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -14,6 +15,8 @@ spec:
     requests:
       storage: {{ .Values.persistence.systemData.size | quote }}
 ---
+{{- end }}
+{{- if not .Values.persistence.companionData.existingClaim }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -30,6 +33,8 @@ spec:
     requests:
       storage: {{ .Values.persistence.companionData.size | quote }}
 ---
+{{- end }}
+{{- if not .Values.persistence.workspace.existingClaim }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -46,6 +51,8 @@ spec:
     requests:
       storage: {{ .Values.persistence.workspace.size | quote }}
 ---
+{{- end }}
+{{- if not .Values.persistence.runtime.existingClaim }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -61,7 +68,8 @@ spec:
   resources:
     requests:
       storage: {{ .Values.persistence.runtime.size | quote }}
-{{- if .Values.persistence.modelCache.enabled }}
+{{- end }}
+{{- if and .Values.persistence.modelCache.enabled (not .Values.persistence.modelCache.existingClaim) }}
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

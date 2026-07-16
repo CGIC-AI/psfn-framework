@@ -1,0 +1,173 @@
+{{- if not (has .Values.mode (list "seed" "restore")) -}}
+{{- fail "mode must be seed or restore" -}}
+{{- end -}}
+{{- if or (not .Values.image.repository) (not .Values.image.tag) (not (regexMatch "^sha256:[a-f0-9]{64}$" .Values.image.digest)) -}}
+{{- fail "image repository, pinned tag, and exact sha256 digest are required" -}}
+{{- end -}}
+{{- if or (not .Values.claims.systemData) (ne (len .Values.claims.companions) 2) -}}
+{{- fail "one system claim and exactly two companion claims are required" -}}
+{{- end -}}
+{{- if and (eq .Values.mode "restore") (not .Values.claims.backups) -}}
+{{- fail "restore mode requires the immutable snapshot backup claim" -}}
+{{- end -}}
+{{- $image := printf "%s@%s" .Values.image.repository .Values.image.digest -}}
+{{- if eq .Values.mode "seed" }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-legacy-owner-fixture
+data:
+  companions.json: |
+{{ .Values.fixture.companionsJson | toString | indent 4 }}
+  charge-policy.json: |
+{{ .Values.fixture.chargePolicyJson | toString | indent 4 }}
+  skills.json: |
+{{ .Values.fixture.skillsJson | toString | indent 4 }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}-old-release
+  labels:
+    app.kubernetes.io/name: psfn
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: old-release
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: old-release
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: old-release
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        {{- if eq .Values.mode "seed" }}
+        - name: seed-legacy-system-owners
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - node
+            - /app/dist/owner-upgrade-readiness-probe.js
+            - --mode
+            - seed-legacy
+            - --fixture-dir
+            - /fixture
+            - --config-dir
+            - /app/config
+            - --system-data-dir
+            - {{ .Values.runtime.systemDataDir | quote }}
+            {{- range .Values.runtime.companionDataDirs }}
+            - --companion-data-dir
+            - {{ . | quote }}
+            {{- end }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: system-data
+              mountPath: {{ .Values.runtime.systemDataDir | quote }}
+            {{- range $index, $path := .Values.runtime.companionDataDirs }}
+            - name: companion-{{ $index }}
+              mountPath: {{ $path | quote }}
+            {{- end }}
+            - name: fixture
+              mountPath: /fixture
+              readOnly: true
+        {{- else }}
+        - name: restore-whole-fleet
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - node
+            - /app/dist/system-owner-fleet-snapshot.js
+            - restore
+            - --manifest
+            - {{ .Values.restore.manifestPath | quote }}
+            - --restore-runtime-root
+            - {{ .Values.restore.runtimeRoot | quote }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: system-data
+              mountPath: {{ .Values.restore.systemDataDir | quote }}
+            {{- range $index, $path := .Values.restore.companionDataDirs }}
+            - name: companion-{{ $index }}
+              mountPath: {{ $path | quote }}
+            {{- end }}
+            - name: backups
+              mountPath: /backups
+              readOnly: true
+        {{- end }}
+      containers:
+        - name: old-release
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - node
+            - /app/dist/owner-upgrade-readiness-probe.js
+            - --mode
+            - legacy-server
+            - --system-data-dir
+            - {{ ternary .Values.restore.systemDataDir .Values.runtime.systemDataDir (eq .Values.mode "restore") | quote }}
+            {{- range (ternary .Values.restore.companionDataDirs .Values.runtime.companionDataDirs (eq .Values.mode "restore")) }}
+            - --companion-data-dir
+            - {{ . | quote }}
+            {{- end }}
+            - --expected-charge
+            - {{ .Values.expectedChargeQuota | quote }}
+            - --expected-skills
+            - {{ .Values.expectedMaxLoadedSkills | quote }}
+            - --listen-port
+            - "8080"
+          ports:
+            - name: readiness
+              containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: readiness
+            periodSeconds: 2
+            failureThreshold: 15
+          livenessProbe:
+            httpGet:
+              path: /
+              port: readiness
+            periodSeconds: 5
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: system-data
+              mountPath: {{ ternary .Values.restore.systemDataDir .Values.runtime.systemDataDir (eq .Values.mode "restore") | quote }}
+              readOnly: true
+            {{- range $index, $path := (ternary .Values.restore.companionDataDirs .Values.runtime.companionDataDirs (eq .Values.mode "restore")) }}
+            - name: companion-{{ $index }}
+              mountPath: {{ $path | quote }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: system-data
+          persistentVolumeClaim:
+            claimName: {{ .Values.claims.systemData | quote }}
+        {{- range $index, $claim := .Values.claims.companions }}
+        - name: companion-{{ $index }}
+          persistentVolumeClaim:
+            claimName: {{ $claim | quote }}
+        {{- end }}
+        {{- if eq .Values.mode "seed" }}
+        - name: fixture
+          configMap:
+            name: {{ .Release.Name }}-legacy-owner-fixture
+        {{- else }}
+        - name: backups
+          persistentVolumeClaim:
+            claimName: {{ .Values.claims.backups | quote }}
+        {{- end }}

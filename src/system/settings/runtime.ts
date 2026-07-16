@@ -90,6 +90,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'wikiRetrievalSimilarityThreshold',
   'wikiRetrievalGroupSimilarityThreshold',
   'wikiStartupHydration',
+  'lifecycleKubernetes',
   'sessionMirrorEnabled',
   'sessionMirrorMaxChars',
   'sessionMirrorActiveWindowMs',
@@ -183,6 +184,9 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     wikiStartupHydration: config.wikiStartupHydration
       ? structuredClone(config.wikiStartupHydration)
       : null,
+    lifecycleKubernetes: config.lifecycleKubernetes
+      ? structuredClone(config.lifecycleKubernetes)
+      : null,
     sessionMirrorEnabled: config.sessionMirrorEnabled ?? true,
     sessionMirrorMaxChars: config.sessionMirrorMaxChars ?? 220,
     sessionMirrorActiveWindowMs:
@@ -214,6 +218,7 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     | 'wikiRetrievalSimilarityThreshold'
     | 'wikiRetrievalGroupSimilarityThreshold'
     | 'wikiStartupHydration'
+    | 'lifecycleKubernetes'
     | 'sessionMirrorEnabled'
     | 'sessionMirrorMaxChars'
     | 'sessionMirrorActiveWindowMs'
@@ -629,6 +634,11 @@ function applyCoreSettings(
   if ('wikiStartupHydration' in settings) {
     config.wikiStartupHydration = settings.wikiStartupHydration
       ? structuredClone(settings.wikiStartupHydration)
+      : undefined;
+  }
+  if ('lifecycleKubernetes' in settings) {
+    config.lifecycleKubernetes = settings.lifecycleKubernetes
+      ? structuredClone(settings.lifecycleKubernetes)
       : undefined;
   }
   if ('sessionTailCache' in settings) {

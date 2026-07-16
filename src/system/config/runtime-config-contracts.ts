@@ -207,6 +207,8 @@ export interface SubstrateConfig {
   wikiRetrievalGroupSimilarityThreshold?: number;
   /** settings.json-owned startup wiki cache hydration volume. */
   wikiStartupHydration?: WikiStartupHydrationSettings;
+  /** settings.json-owned lifecycle and Kubernetes operational policy. */
+  lifecycleKubernetes?: LifecycleKubernetesSettings;
   extractionInterval: number;
   maintenanceIntervalMs: number;
   defaultContextWindow: number;
@@ -419,6 +421,27 @@ export interface WikiStartupHydrationSettings {
 export interface VoiceReplySegmenterSettings {
   minSegmentLength: number;
   maxBufferLength: number;
+}
+
+/**
+ * Mutable operational limits for lifecycle commands and the Kubernetes
+ * self-management surfaces. Network coordinates and credentials remain
+ * environment-owned; immutable protocol and response-size guards remain code-owned.
+ */
+export interface LifecycleKubernetesSettings {
+  lifecycleCommandTimeoutMs: number;
+  operatorCommandTimeoutMs: number;
+  operatorHttpTimeoutMs: number;
+  operatorConfirmationRequestTimeoutMs: number;
+  kubernetesReadRequestTimeoutMs: number;
+  kubernetesRolloutRequestTimeoutMs: number;
+  rolloutWaitTimeoutMs: number;
+  rolloutPollIntervalMs: number;
+  rollbackWaitTimeoutMs: number;
+  rollbackPollIntervalMs: number;
+  postRolloutMaxLogRecords: number;
+  postRolloutValidationHistoryLimit: number;
+  rollbackHistoryLimit: number;
 }
 export const DEFAULT_MOOD_CONGRUENCE_WEIGHT = 0.15;
 export const DEFAULT_UI_THEME_ID = 'garden';

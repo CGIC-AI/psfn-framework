@@ -432,6 +432,8 @@ export interface DeployPipelinePostRolloutValidation {
   emergencyWaiver?: { justification: string };
   /** Post-rollout tool-validation-failure count that fails the log scan (default 1). */
   toolValidationFailureThreshold?: number;
+  /** settings.json-owned cap on sanitized log records copied into the verdict. */
+  maxLogRecords: number;
   /**
    * Persist the verdict so x5rt.8 can read it out-of-band. Invoked on BOTH the
    * healthy and unhealthy paths before the pipeline resolves/throws.
@@ -651,6 +653,7 @@ export async function runKubeDeployPipeline(
           ...(validation.toolValidationFailureThreshold !== undefined
             ? { toolValidationFailureThreshold: validation.toolValidationFailureThreshold }
             : {}),
+          maxLogRecords: validation.maxLogRecords,
           ...(validation.now ? { now: validation.now } : {}),
         },
       );

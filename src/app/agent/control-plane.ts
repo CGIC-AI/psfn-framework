@@ -6,6 +6,7 @@ import {
 } from '../../system/lifecycle/notifications.js';
 import type { RuntimeModeContract } from '../../system/lifecycle/runtime-mode.js';
 import { runConfiguredLifecycleCommand } from '../../system/lifecycle/command-runner.js';
+import { requireLifecycleKubernetesSettings } from '../../system/lifecycle/lifecycle-kubernetes-settings.js';
 import { resolveKubeLifecycleContext } from '../../system/lifecycle/kube-lifecycle-context.js';
 import {
   createSystemTool,
@@ -123,6 +124,7 @@ export function buildAgentControlPlane(
     icpAutonomyRuntime,
     icpInitiationSourceRuntime,
   } = options;
+  const lifecycleKubernetes = requireLifecycleKubernetesSettings(config);
   const deferredCompanionOutreachAuthorizationRuntime: DeferredCompanionOutreachAuthorizationRuntime = {
     hasExternalCompanionCapability: () => capabilityRuntime.has('external.companion'),
     isNotifyToolRegistered: () => agentLoop.getToolCatalog().extended.some(
@@ -187,7 +189,7 @@ export function buildAgentControlPlane(
   const runRestartCommand = async (): Promise<void> => {
     await runConfiguredLifecycleCommand(lifecycleRuntimeContract.restart.command, {
       cwd: process.cwd(),
-      timeoutMs: 30_000,
+      timeoutMs: lifecycleKubernetes.lifecycleCommandTimeoutMs,
       maxOutputChars: 10_000,
     });
   };

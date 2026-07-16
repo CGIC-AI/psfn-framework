@@ -334,6 +334,35 @@ describe('memory retrieval policy settings compliance', () => {
     expect(SETTINGS_GARDEN_SECTION_FIELDS.memory).toContain('memoryRetrievalPolicy');
   });
 
+  it('surfaces lifecycle Kubernetes policy as one global Garden object editor', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.fields.lifecycleKubernetes).toEqual({
+      key: 'lifecycleKubernetes',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'object',
+      scope: 'global',
+    });
+    expect(SETTINGS_GARDEN_FIELD_EXPOSURE.lifecycleKubernetes).toEqual({
+      sectionId: 'sessions',
+      surface: 'advanced',
+    });
+    expect(SETTINGS_GARDEN_SECTION_FIELDS.sessions).toContain('lifecycleKubernetes');
+
+    const seed = JSON.parse(readFileSync('config/settings.seed.json', 'utf-8')) as {
+      lifecycleKubernetes?: Record<string, unknown>;
+    };
+    expect(seed.lifecycleKubernetes).toEqual(expect.objectContaining({
+      lifecycleCommandTimeoutMs: 30_000,
+      operatorCommandTimeoutMs: 600_000,
+      rolloutWaitTimeoutMs: 180_000,
+      rollbackWaitTimeoutMs: 180_000,
+      postRolloutValidationHistoryLimit: 20,
+      rollbackHistoryLimit: 50,
+    }));
+  });
+
   it('ships every matrix knob in the canonical seed policy', () => {
     const seed = JSON.parse(readFileSync('config/settings.seed.json', 'utf-8')) as {
       memoryRetrievalPolicy?: Record<string, unknown>;

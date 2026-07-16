@@ -2,7 +2,7 @@ import type { CanonicalModelRegistry, ImportProcessingRouteMode, ModelCatalogEnt
 import type { GroupMemorySettings } from '../config/group-memory-config.js';
 import type { EmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import type { MemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
-import type { CapabilityTier, CompositionalPolicyConfig, SessionRestartBehavior, SessionTailCacheSettings, SubstrateConfig, VoiceReplySegmenterSettings, WikiStartupHydrationSettings } from '../config/runtime-config-contracts.js';
+import type { CapabilityTier, CompositionalPolicyConfig, LifecycleKubernetesSettings, SessionRestartBehavior, SessionTailCacheSettings, SubstrateConfig, VoiceReplySegmenterSettings, WikiStartupHydrationSettings } from '../config/runtime-config-contracts.js';
 import type { ImageWorkflowSettings } from '../../primitives/images/types.js';
 
 export const SETTINGS_FILE_NAME = 'settings.json';
@@ -128,6 +128,7 @@ export interface EditableSettings {
   wikiRetrievalSimilarityThreshold?: number;
   wikiRetrievalGroupSimilarityThreshold?: number;
   wikiStartupHydration?: WikiStartupHydrationSettings;
+  lifecycleKubernetes?: LifecycleKubernetesSettings;
   sessionMirrorEnabled?: boolean;
   sessionMirrorMaxChars?: number;
   sessionMirrorActiveWindowMs?: number;
@@ -295,6 +296,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'wikiRetrievalSimilarityThreshold',
   'wikiRetrievalGroupSimilarityThreshold',
   'wikiStartupHydration',
+  'lifecycleKubernetes',
   'sessionMirrorEnabled',
   'sessionMirrorMaxChars',
   'sessionMirrorActiveWindowMs',
@@ -439,6 +441,7 @@ export type RuntimeSettingValue =
   | ObserverEvalSidecarSettings
   | SessionTailCacheSettings
   | WikiStartupHydrationSettings
+  | LifecycleKubernetesSettings
   | VoiceReplySegmenterSettings
   | ImageWorkflowSettings
   | Record<string, boolean>

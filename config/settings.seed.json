@@ -14,6 +14,21 @@
     "recentMessageLimit": 18,
     "maxContextChars": 6000
   },
+  "lifecycleKubernetes": {
+    "lifecycleCommandTimeoutMs": 30000,
+    "operatorCommandTimeoutMs": 600000,
+    "operatorHttpTimeoutMs": 8000,
+    "operatorConfirmationRequestTimeoutMs": 5000,
+    "kubernetesReadRequestTimeoutMs": 5000,
+    "kubernetesRolloutRequestTimeoutMs": 5000,
+    "rolloutWaitTimeoutMs": 180000,
+    "rolloutPollIntervalMs": 3000,
+    "rollbackWaitTimeoutMs": 180000,
+    "rollbackPollIntervalMs": 3000,
+    "postRolloutMaxLogRecords": 10,
+    "postRolloutValidationHistoryLimit": 20,
+    "rollbackHistoryLimit": 50
+  },
   "sessionMirrorEnabled": true,
   "sessionMirrorMaxChars": 220,
   "sessionMirrorActiveWindowMs": 1800000,

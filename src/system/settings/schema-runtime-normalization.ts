@@ -690,6 +690,75 @@ function normalizeEndpointAndGardenSettings(
       ),
     };
   }
+  if ('lifecycleKubernetes' in settings) {
+    const value = expectRecord(
+      settings.lifecycleKubernetes,
+      'lifecycleKubernetes',
+    );
+    assertNoUnknownKeys(
+      value,
+      [
+        'lifecycleCommandTimeoutMs',
+        'operatorCommandTimeoutMs',
+        'operatorHttpTimeoutMs',
+        'operatorConfirmationRequestTimeoutMs',
+        'kubernetesReadRequestTimeoutMs',
+        'kubernetesRolloutRequestTimeoutMs',
+        'rolloutWaitTimeoutMs',
+        'rolloutPollIntervalMs',
+        'rollbackWaitTimeoutMs',
+        'rollbackPollIntervalMs',
+        'postRolloutMaxLogRecords',
+        'postRolloutValidationHistoryLimit',
+        'rollbackHistoryLimit',
+      ],
+      'lifecycleKubernetes',
+      { errorPrefix: 'Invalid settings' },
+    );
+    const timeout = (key: string): number => expectIntegerInRange(
+      value[key],
+      `lifecycleKubernetes.${key}`,
+      1,
+      3_600_000,
+    );
+    const count = (key: string, min: number): number => expectIntegerInRange(
+      value[key],
+      `lifecycleKubernetes.${key}`,
+      min,
+      10_000,
+    );
+    const rolloutWaitTimeoutMs = timeout('rolloutWaitTimeoutMs');
+    const rolloutPollIntervalMs = timeout('rolloutPollIntervalMs');
+    const rollbackWaitTimeoutMs = timeout('rollbackWaitTimeoutMs');
+    const rollbackPollIntervalMs = timeout('rollbackPollIntervalMs');
+    if (rolloutPollIntervalMs > rolloutWaitTimeoutMs) {
+      throw new Error(
+        'Invalid settings at lifecycleKubernetes.rolloutPollIntervalMs: '
+        + 'must not exceed lifecycleKubernetes.rolloutWaitTimeoutMs',
+      );
+    }
+    if (rollbackPollIntervalMs > rollbackWaitTimeoutMs) {
+      throw new Error(
+        'Invalid settings at lifecycleKubernetes.rollbackPollIntervalMs: '
+        + 'must not exceed lifecycleKubernetes.rollbackWaitTimeoutMs',
+      );
+    }
+    normalized.lifecycleKubernetes = {
+      lifecycleCommandTimeoutMs: timeout('lifecycleCommandTimeoutMs'),
+      operatorCommandTimeoutMs: timeout('operatorCommandTimeoutMs'),
+      operatorHttpTimeoutMs: timeout('operatorHttpTimeoutMs'),
+      operatorConfirmationRequestTimeoutMs: timeout('operatorConfirmationRequestTimeoutMs'),
+      kubernetesReadRequestTimeoutMs: timeout('kubernetesReadRequestTimeoutMs'),
+      kubernetesRolloutRequestTimeoutMs: timeout('kubernetesRolloutRequestTimeoutMs'),
+      rolloutWaitTimeoutMs,
+      rolloutPollIntervalMs,
+      rollbackWaitTimeoutMs,
+      rollbackPollIntervalMs,
+      postRolloutMaxLogRecords: count('postRolloutMaxLogRecords', 0),
+      postRolloutValidationHistoryLimit: count('postRolloutValidationHistoryLimit', 1),
+      rollbackHistoryLimit: count('rollbackHistoryLimit', 1),
+    };
+  }
 }
 
 function normalizeBudgetAndThresholdSettings(

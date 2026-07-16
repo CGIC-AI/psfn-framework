@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  POST_ROLLOUT_VALIDATION_HISTORY_LIMIT,
   readPostRolloutValidationLatest,
   writePostRolloutValidationVerdict,
 } from './kube-post-rollout-validation-store.js';
@@ -35,6 +34,7 @@ function record(overrides: Partial<PostRolloutValidationRecord> = {}): PostRollo
 }
 
 describe('post-rollout validation store', () => {
+  const historyLimit = 20;
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), 'psfn-post-rollout-'));
@@ -45,7 +45,7 @@ describe('post-rollout validation store', () => {
 
   it('writes the latest verdict atomically and reads it back', () => {
     const verdict = record();
-    writePostRolloutValidationVerdict(dir, verdict);
+    writePostRolloutValidationVerdict(dir, verdict, historyLimit);
     expect(readPostRolloutValidationLatest(dir)).toEqual(verdict);
     // The latest path is the stable cross-workstream contract x5rt.8 reads.
     const onDisk = JSON.parse(readFileSync(resolvePostRolloutValidationLatestPath(dir), 'utf-8'));
@@ -53,13 +53,13 @@ describe('post-rollout validation store', () => {
   });
 
   it('persists both healthy and unhealthy verdicts so rollback always has a signal', () => {
-    writePostRolloutValidationVerdict(dir, record({ healthy: true, overall: 'passed', recommendedAction: 'none' }));
+    writePostRolloutValidationVerdict(dir, record({ healthy: true, overall: 'passed', recommendedAction: 'none' }), historyLimit);
     writePostRolloutValidationVerdict(dir, record({
       healthy: false,
       overall: 'failed',
       recommendedAction: 'rollback',
       failedChecks: ['model_route'],
-    }));
+    }), historyLimit);
     const latest = readPostRolloutValidationLatest(dir);
     expect(latest?.healthy).toBe(false);
     expect(latest?.recommendedAction).toBe('rollback');
@@ -71,13 +71,13 @@ describe('post-rollout validation store', () => {
   });
 
   it('bounds the history file', () => {
-    for (let i = 0; i < POST_ROLLOUT_VALIDATION_HISTORY_LIMIT + 5; i += 1) {
-      writePostRolloutValidationVerdict(dir, record({ helmRevision: i + 1 }));
+    for (let i = 0; i < historyLimit + 5; i += 1) {
+      writePostRolloutValidationVerdict(dir, record({ helmRevision: i + 1 }), historyLimit);
     }
     const lines = readFileSync(resolvePostRolloutValidationHistoryPath(dir), 'utf-8')
       .split('\n')
       .filter(Boolean);
-    expect(lines).toHaveLength(POST_ROLLOUT_VALIDATION_HISTORY_LIMIT);
+    expect(lines).toHaveLength(historyLimit);
     const first = JSON.parse(lines[0]) as PostRolloutValidationRecord;
     // Oldest retained entry is revision 6 (first 5 dropped).
     expect(first.helmRevision).toBe(6);

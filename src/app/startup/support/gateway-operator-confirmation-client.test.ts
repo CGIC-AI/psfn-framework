@@ -14,7 +14,7 @@ describe('createGatewayOperatorConfirmationClient', () => {
     }));
     const client = createGatewayOperatorConfirmationClient(
       'http://psfn-gateway:10053/v1',
-      { fetchImpl },
+      { fetchImpl, requestTimeoutMs: 5_000 },
     );
 
     const result = await client.resolve({
@@ -46,7 +46,7 @@ describe('createGatewayOperatorConfirmationClient', () => {
     const fetchImpl = vi.fn();
     const client = createGatewayOperatorConfirmationClient(
       'http://psfn-gateway:10053/v1',
-      { fetchImpl },
+      { fetchImpl, requestTimeoutMs: 5_000 },
     );
 
     await expect(client.resolve({

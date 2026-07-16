@@ -17,7 +17,6 @@ const SERVICE_ACCOUNT_CA_PATH = `${SERVICE_ACCOUNT_ROOT}/ca.crt`;
 const DNS_LABEL_PATTERN = /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/;
 const STRATEGIC_MERGE_PATCH_CONTENT_TYPE = 'application/strategic-merge-patch+json';
 const RESTART_ANNOTATION = 'kubectl.kubernetes.io/restartedAt';
-const REQUEST_TIMEOUT_MS = 5_000;
 // eslint-disable-next-line no-control-regex
 const CONTROL_OR_WHITESPACE = new RegExp('\\s|[\\u0000-\\u001f\\u007f]', 'u');
 
@@ -74,6 +73,7 @@ export interface InClusterKubernetesPatchRequestOptions {
 }
 
 export interface InClusterKubernetesRolloutApiDeps extends InClusterKubernetesReadApiDeps {
+  rolloutRequestTimeoutMs: number;
   readToken?: (path: string) => string;
   readCa?: (path: string) => Buffer;
   patchRequest?: (options: InClusterKubernetesPatchRequestOptions) => Promise<void>;
@@ -107,7 +107,10 @@ function loadServiceAccountToken(readToken: (path: string) => string): string {
   return token;
 }
 
-function patchKubernetesJson(options: InClusterKubernetesPatchRequestOptions): Promise<void> {
+function patchKubernetesJson(
+  options: InClusterKubernetesPatchRequestOptions,
+  requestTimeoutMs: number,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const request = httpsRequest({
       hostname: options.hostname,
@@ -133,7 +136,7 @@ function patchKubernetesJson(options: InClusterKubernetesPatchRequestOptions): P
         resolve();
       });
     });
-    request.setTimeout(REQUEST_TIMEOUT_MS, () => {
+    request.setTimeout(requestTimeoutMs, () => {
       request.destroy(new Error('Kubernetes rollout restart request timed out.'));
     });
     request.once('error', reject);
@@ -142,14 +145,19 @@ function patchKubernetesJson(options: InClusterKubernetesPatchRequestOptions): P
 }
 
 export function createInClusterKubernetesRolloutApi(
-  env: NodeJS.ProcessEnv = process.env,
-  deps: InClusterKubernetesRolloutApiDeps = {},
+  env: NodeJS.ProcessEnv,
+  deps: InClusterKubernetesRolloutApiDeps,
 ): KubeRolloutApiPort {
+  if (!Number.isSafeInteger(deps.rolloutRequestTimeoutMs)
+    || deps.rolloutRequestTimeoutMs <= 0) {
+    throw new Error('Kubernetes rollout request timeout must be a positive integer.');
+  }
   const hostname = requireServiceHost(env);
   const port = requireServicePort(env);
   const readToken = deps.readToken ?? (path => readFileSync(path, 'utf8'));
   const ca = (deps.readCa ?? (path => readFileSync(path)))(SERVICE_ACCOUNT_CA_PATH);
-  const patchRequest = deps.patchRequest ?? patchKubernetesJson;
+  const patchRequest = deps.patchRequest
+    ?? (options => patchKubernetesJson(options, deps.rolloutRequestTimeoutMs));
   const read = createInClusterKubernetesReadApi(env, deps);
 
   return createKubernetesRolloutApi({

@@ -6,7 +6,6 @@ import { isRecord } from '../../../shared/utils/types.js';
 import type { ConfirmationOperatorAuthContext } from '../../../operator/garden/admin-contract.js';
 
 const OPERATOR_CONFIRMATION_PATH = '/operator/confirmations/resolve';
-const REQUEST_TIMEOUT_MS = 5_000;
 const MAX_RESPONSE_BYTES = 64 * 1024;
 const MAX_AUTHORIZATION_LENGTH = 1_024;
 const MAX_COOKIE_LENGTH = 2_048;
@@ -27,6 +26,7 @@ export interface GatewayOperatorConfirmationClient {
 }
 
 interface GatewayOperatorConfirmationClientDeps {
+  requestTimeoutMs: number;
   fetchImpl?: typeof fetch;
 }
 
@@ -116,8 +116,11 @@ function parseResolveResult(value: unknown, expectedId: string): ConfirmationRes
 
 export function createGatewayOperatorConfirmationClient(
   baseUrl: string,
-  deps: GatewayOperatorConfirmationClientDeps = {},
+  deps: GatewayOperatorConfirmationClientDeps,
 ): GatewayOperatorConfirmationClient {
+  if (!Number.isSafeInteger(deps.requestTimeoutMs) || deps.requestTimeoutMs <= 0) {
+    throw new Error('Gateway operator confirmation request timeout must be a positive integer.');
+  }
   const endpoint = resolveEndpoint(baseUrl);
   const fetchImpl = deps.fetchImpl ?? fetch;
   return {
@@ -131,7 +134,7 @@ export function createGatewayOperatorConfirmationClient(
       const response = await fetchImpl(endpoint, {
         method: 'POST',
         redirect: 'error',
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(deps.requestTimeoutMs),
         headers: {
           Accept: 'application/json',
           'Content-Type': 'application/json',

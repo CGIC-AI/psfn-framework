@@ -121,6 +121,7 @@ export async function buildGatewayPrivilegedCore(
   const auditStore = await createPostgresGatewayAuditStore(databaseUrl);
   const kubeSelfManagement = resolveKubeSelfManagementController({
     env: input.env,
+    lifecycleKubernetes: input.config.lifecycleKubernetes,
     audit: entry => auditStore.recordSummary(entry),
   });
 

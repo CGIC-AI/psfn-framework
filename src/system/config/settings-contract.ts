@@ -327,6 +327,7 @@ const SETTINGS_OBJECT_FIELDS = new Set<string>([
   'modelRoster',
   'sessionMirrorChannelOverrides',
   'wikiStartupHydration',
+  'lifecycleKubernetes',
   'voiceReplySegmenter',
   'wyomingShardRouting',
   'shardToolsets',

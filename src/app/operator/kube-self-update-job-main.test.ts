@@ -3,8 +3,16 @@ import {
   buildKubeSelfUpdateJobOptions,
   resolveKubeSelfUpdateJobEnvConfig,
 } from './kube-self-update-job-main.js';
+import { lifecycleKubernetesSettingsFixture } from '../../test-support/lifecycle-kubernetes-settings.js';
 
 const COMMIT = 'a'.repeat(40);
+
+function validConfig(env: NodeJS.ProcessEnv) {
+  return {
+    ...resolveKubeSelfUpdateJobEnvConfig(env),
+    lifecycleKubernetes: lifecycleKubernetesSettingsFixture(),
+  };
+}
 
 function validEnv(overrides: Record<string, string | undefined> = {}): NodeJS.ProcessEnv {
   return {
@@ -76,13 +84,14 @@ describe('buildKubeSelfUpdateJobOptions', () => {
       importImage: async () => undefined,
       verifyBackup: async () => true,
     };
-    const enabled = buildKubeSelfUpdateJobOptions(resolveKubeSelfUpdateJobEnvConfig(validEnv()), deps);
+    const enabled = buildKubeSelfUpdateJobOptions(validConfig(validEnv()), deps);
     expect(enabled.autoRollback).toBeDefined();
     expect(enabled.postRolloutValidationRunner).toBeDefined();
     expect(enabled.deployRunner).toBeDefined();
+    expect(enabled.lifecycleKubernetes).toEqual(lifecycleKubernetesSettingsFixture());
 
     const disabled = buildKubeSelfUpdateJobOptions(
-      resolveKubeSelfUpdateJobEnvConfig(validEnv({ PSFN_AUTO_ROLLBACK_ENABLED: 'false' })),
+      validConfig(validEnv({ PSFN_AUTO_ROLLBACK_ENABLED: 'false' })),
       deps,
     );
     expect(disabled.autoRollback).toBeUndefined();

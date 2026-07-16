@@ -47,9 +47,6 @@ export interface KubeHelmRollbackApiPort {
 /** The three Deployments a rollback must bring back to ready. */
 export const MANAGED_ROLLBACK_COMPONENTS = ['agent', 'gateway', 'garden'] as const;
 
-export const DEFAULT_ROLLBACK_WAIT_TIMEOUT_MS = 180_000;
-export const DEFAULT_ROLLBACK_POLL_INTERVAL_MS = 3_000;
-
 export interface KubeReadinessWaitOptions {
   namespace: string;
   deploymentNames: readonly string[];
@@ -114,9 +111,9 @@ export interface KubeHelmRollbackExecutorOptions {
   resourcePrefix: string;
   api: KubeHelmRollbackApiPort;
   /** Total time to wait for the three Deployments to become ready after rollback. */
-  waitTimeoutMs?: number;
+  waitTimeoutMs: number;
   /** Delay between readiness polls. */
-  pollIntervalMs?: number;
+  pollIntervalMs: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   /**
@@ -142,8 +139,8 @@ export function createKubeHelmRollbackExecutor(
   options: KubeHelmRollbackExecutorOptions,
 ): KubeSelfManagementExecutor {
   const deploymentNames = managedRollbackDeploymentNames(options.resourcePrefix);
-  const waitTimeoutMs = options.waitTimeoutMs ?? DEFAULT_ROLLBACK_WAIT_TIMEOUT_MS;
-  const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_ROLLBACK_POLL_INTERVAL_MS;
+  const waitTimeoutMs = options.waitTimeoutMs;
+  const pollIntervalMs = options.pollIntervalMs;
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? defaultSleep;
 

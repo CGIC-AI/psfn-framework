@@ -40,8 +40,12 @@ import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import {
   createTurnRecordSharedStore,
+  resolveTurnRecordStaticPrompt,
   resolveTurnRecordToolDefinitions,
+  resolveTurnRecordWirePayload,
+  slimTurnRecordStaticPromptForAppend,
   slimTurnRecordToolDefinitionsForAppend,
+  slimTurnRecordWirePayloadForAppend,
 } from './turn-record-shared-store.js';
 import {
   fileIdentityKey,
@@ -1248,12 +1252,21 @@ export function createFilesystemTurnRecordStorePort(
   const sharedStore = createTurnRecordSharedStore(turnRecordsDir(sessionsDir));
   return {
     appendTurnRecord: (record) => {
-      // Content-address duplicated tool definitions (bead hgw3.3) before the
-      // rotation-aware append (bead hgw3.4). Slimming runs on the normalized
-      // record; the ref round-trips normalizeTurnRecord, so the re-normalize
-      // inside appendTurnRecordWithRotation preserves it.
-      const slimmed = slimTurnRecordToolDefinitionsForAppend(
-        normalizeTurnRecord(record, record.channelId),
+      // Content-address duplicated tool definitions (bead hgw3.3), captured
+      // wire bodies (bead hgw3-80f6), and the session-stable static system
+      // prompt prefix (bead auiu) before the rotation-aware append (bead
+      // hgw3.4). Each projection touches an independent field, so ordering is
+      // irrelevant. Slimming runs on the normalized record; every ref
+      // round-trips normalizeTurnRecord, so the re-normalize inside
+      // appendTurnRecordWithRotation preserves them.
+      const slimmed = slimTurnRecordStaticPromptForAppend(
+        slimTurnRecordWirePayloadForAppend(
+          slimTurnRecordToolDefinitionsForAppend(
+            normalizeTurnRecord(record, record.channelId),
+            sharedStore,
+          ),
+          sharedStore,
+        ),
         sharedStore,
       );
       appendTurnRecordWithRotation(sessionsDir, slimmed, segmentMaxBytes);
@@ -1276,7 +1289,13 @@ export function createFilesystemTurnRecordStorePort(
       // Refs resolve at the read boundary — only for records actually
       // returned — so every consumer above persistence sees fully inline
       // records. Fail closed: a dangling ref is a loud error (hgw3.3).
-      return windowed.map(record => resolveTurnRecordToolDefinitions(record, sharedStore));
+      return windowed.map(record => resolveTurnRecordStaticPrompt(
+        resolveTurnRecordWirePayload(
+          resolveTurnRecordToolDefinitions(record, sharedStore),
+          sharedStore,
+        ),
+        sharedStore,
+      ));
     },
     findTurnRecord: (channelId, turnId) => {
       const record = findTurnRecordAcrossSegments(
@@ -1285,7 +1304,15 @@ export function createFilesystemTurnRecordStorePort(
         turnId,
         scanChunkBytes,
       );
-      return record ? resolveTurnRecordToolDefinitions(record, sharedStore) : null;
+      return record
+        ? resolveTurnRecordStaticPrompt(
+          resolveTurnRecordWirePayload(
+            resolveTurnRecordToolDefinitions(record, sharedStore),
+            sharedStore,
+          ),
+          sharedStore,
+        )
+        : null;
     },
   };
 }

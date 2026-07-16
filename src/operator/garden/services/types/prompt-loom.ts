@@ -1,5 +1,6 @@
 import type {
   ContextMessage,
+  LLMCapturedProviderWirePayload,
   LLMProviderWireMessage,
   LLMSystemPromptTransport,
   PromptSectionTelemetry,
@@ -106,6 +107,16 @@ export interface AdminPromptLoomProviderWireData {
   messages: LLMProviderWireMessage[];
   /** Tool definitions exactly as shipped to the provider for this turn. */
   toolDefinitions: ToolSchema[];
+  /**
+   * The true provider request body captured as-sent via pi-ai `onPayload`
+   * (bead hgw3-80f6). Ground truth for the Loom "raw wire" view — includes the
+   * tool schemas (each once), `cache_control`, and provider transforms that the
+   * plan-derived `messages`/`toolDefinitions` "cleaned" view above omit. Absent
+   * on legacy records and turn shapes (e.g. MoA) that do not stream through the
+   * agent loop; the plan-derived view is then the only wire projection. Absent
+   * (not null) when no capture was recorded — preserve absence.
+   */
+  capturedWirePayload?: LLMCapturedProviderWirePayload;
 }
 
 export interface AdminPromptLoomData {

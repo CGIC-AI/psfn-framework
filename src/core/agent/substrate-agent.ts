@@ -77,6 +77,7 @@ import {
 } from '../../system/capabilities/gate.js';
 import { assertToolCapabilityRequirementDeclared } from '../../system/capabilities/requirements.js';
 import { isCanonicalFirstPartyToolName } from './tool-surface/registry.js';
+import type { ToolUsageRanking } from './tool-surface/usage-ranking.js';
 import {
   isEgressCapabilityToken,
   type IntakeSinkGate,
@@ -159,6 +160,7 @@ import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-ru
 import {
   handleMessageForTurn,
   type TurnDeliveryLifecycle,
+  type TurnSessionIdentity,
 } from './substrate-agent/turn-execution-runtime.js';
 import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
 import { parseTurnRecordBackgroundWorkHandoff } from './background-work/types.js';
@@ -189,6 +191,10 @@ import type {
   BackgroundWorkWelfarePolicy,
 } from './background-work/store-port.js';
 import { executePostTurnBackgroundWork } from './background-work/post-turn-runtime.js';
+import {
+  recoverHistoricalBackgroundWorkHandoffs,
+  runBackgroundWorkTick,
+} from './background-work/tick-runtime.js';
 import type { ObserverEvalSidecarRuntime } from '../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from './fatigue/fatigue-budget.js';
 import type { IcpFatigueRegulationReservationPort } from './fatigue/regulation-reservation.js';
@@ -207,6 +213,7 @@ export type {
 export type {
   PostTurnActionInferer,
   IntentionPostTurnHookContext,
+  IntentionPostTurnHookEffects,
   IntentionPostTurnHook,
 } from './substrate-agent/post-turn-actions.js';
 export type {
@@ -253,6 +260,7 @@ export interface SubstrateAgentOptions {
   backgroundWorkWelfare?: Partial<BackgroundWorkWelfarePolicy>;
 }
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
+const BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE = 32;
 
 export type SubstrateAgentAbortResult = AgentRunAbortResult;
 
@@ -556,6 +564,7 @@ export class SubstrateAgent {
       stream: this.llmClient.stream.bind(this.llmClient),
     };
     const configuredProviderFirstOutput = options.streamRuntimeOptions?.onProviderFirstOutput;
+    const configuredProviderPayloadCaptured = options.streamRuntimeOptions?.onProviderPayloadCaptured;
 
     this.agent = new Agent({
       streamFn: options.streamFn ?? createSubstrateStreamFn(config, {
@@ -563,6 +572,10 @@ export class SubstrateAgent {
         onProviderFirstOutput: async (event) => {
           await this.eventBus.emit('agent.provider.first_output', event);
           await configuredProviderFirstOutput?.(event);
+        },
+        onProviderPayloadCaptured: async (event) => {
+          await this.eventBus.emit('agent.provider.payload_captured', event);
+          await configuredProviderPayloadCaptured?.(event);
         },
         transport: defaultStreamTransport,
       }),
@@ -843,6 +856,14 @@ export class SubstrateAgent {
     return this.toolRuntimeFacade.getToolCatalog();
   }
 
+  /**
+   * Refresh the durable-usage presentation-ordering signal (psfn-framework-b0yl.5).
+   * Fed by the periodic tool-usage evaluator; presentation-only, never gates callability.
+   */
+  setToolUsageRanking(ranking: ToolUsageRanking | null): void {
+    this.toolRuntimeFacade.setToolUsageRanking(ranking);
+  }
+
   getAdaptiveToolRuntimeState(): AdaptiveToolRuntimeState {
     return this.toolRuntimeFacade.getAdaptiveToolRuntimeState();
   }
@@ -918,8 +939,10 @@ export class SubstrateAgent {
   private async trySteerActiveRun(message: SubstrateMessage): Promise<boolean> {
     const authorContext = await this.resolveAuthorContext(message);
     if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
+    const turnSessionIdentity = this.requireActiveTurnSessionIdentity();
     this.turnSupportRuntime.recordUserMessage(
       message,
+      turnSessionIdentity,
       createTurnId(),
       message.id,
       authorContext.trustLevel,
@@ -998,9 +1021,11 @@ export class SubstrateAgent {
       ? null
       : await this.resolveAuthorContext(message);
     if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
+    const turnSessionIdentity = this.requireActiveTurnSessionIdentity();
     if (isSystemOriginated) {
       this.turnSupportRuntime.recordSystemMessage(
         message,
+        turnSessionIdentity,
         turnId,
         message.id,
         systemContent,
@@ -1011,6 +1036,7 @@ export class SubstrateAgent {
       }
       this.turnSupportRuntime.recordUserMessage(
         message,
+        turnSessionIdentity,
         turnId,
         message.id,
         authorContext.trustLevel,
@@ -1035,6 +1061,14 @@ export class SubstrateAgent {
       systemOriginated: isSystemOriginated,
     });
     return true;
+  }
+
+  private requireActiveTurnSessionIdentity(): TurnSessionIdentity {
+    const identity = this.turnSupportRuntime.getActiveTurnSessionIdentity();
+    if (!identity) {
+      throw new Error('Active ordinary run is missing its captured session identity');
+    }
+    return identity;
   }
 
   /**
@@ -1224,22 +1258,40 @@ export class SubstrateAgent {
   }
 
   async tickBackgroundWork(): Promise<void> {
-    if (!this.backgroundWorkSupervisor) {
+    const supervisor = this.backgroundWorkSupervisor;
+    if (!supervisor) {
       throw new Error('Durable background work supervisor is not configured');
     }
-    await this.recoverBackgroundWorkHandoffs();
-    await this.backgroundWorkSupervisor.tick();
+    await runBackgroundWorkTick({
+      recoverHandoffs: () => this.recoverBackgroundWorkHandoffs(),
+      tick: () => supervisor.tick(),
+    });
   }
 
   private async recoverBackgroundWorkHandoffs(): Promise<void> {
-    if (this.backgroundWorkHandoffsRecovered) return;
     if (!this.backgroundWorkHandoffRecoveryPromise) {
       this.backgroundWorkHandoffRecoveryPromise = (async () => {
-        for (const record of this.sessionManager.listRecoverableBackgroundWorkTurnRecords()) {
-          const jobs = parseTurnRecordBackgroundWorkHandoff(record);
-          if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
+        if (!this.backgroundWorkHandoffsRecovered) {
+          const records = this.sessionManager.listRecoverableBackgroundWorkTurnRecords();
+          // Enumeration is intentionally once per process. Enqueue failures move
+          // into the source-keyed retry index drained in bounded batches below.
+          this.backgroundWorkHandoffsRecovered = true;
+          await recoverHistoricalBackgroundWorkHandoffs(
+            records,
+            async (record) => {
+              const jobs = parseTurnRecordBackgroundWorkHandoff(record);
+              if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
+            },
+            (record) => this.sessionManager.deferBackgroundWorkHandoffRecovery(record),
+          );
         }
-        this.backgroundWorkHandoffsRecovered = true;
+        await this.sessionManager.recoverPendingBackgroundWorkHandoffs(
+          BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
+          async (record) => {
+            const jobs = parseTurnRecordBackgroundWorkHandoff(record);
+            if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
+          },
+        );
       })().finally(() => {
         this.backgroundWorkHandoffRecoveryPromise = null;
       });

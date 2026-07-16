@@ -13,6 +13,7 @@ import {
 import type {
   AgentResponse,
   CorrelationMetadata,
+  LLMCapturedProviderWirePayload,
   ObservabilityCallType,
   RuntimeFallbackProvenance,
   RuntimeFallbackStrategy,
@@ -67,6 +68,7 @@ const VISION_CONTENT_BUILD_FAILURE_DIAGNOSTIC = 'Vision content build failed.';
 const VISION_PROMPT_FAILURE_DIAGNOSTIC = 'Vision prompt failed.';
 const VISION_RECOVERY_FAILURE_DIAGNOSTIC = 'Vision recovery replay failed.';
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
+type TurnSessionIdentity = import('../turn-execution-runtime.js').TurnSessionIdentity;
 type RuntimeContradictionDiagnostic = NonNullable<
 NonNullable<AgentResponse['metadata']['diagnostics']>['runtimeContradiction']
 >;
@@ -404,6 +406,7 @@ function appendRuntimeFallbackAssistantMessage(
 export async function invokeAgentForTurn(input: {
   runtime: TurnExecutionRuntime;
   message: SubstrateMessage;
+  turnSessionIdentity: TurnSessionIdentity;
   context: Awaited<ReturnType<TurnExecutionRuntime['sessionManager']['buildContext']>>;
   providerSystemPrompt: string;
   piMessages: ReturnType<typeof contextMessagesToPiMessages>;
@@ -432,6 +435,7 @@ export async function invokeAgentForTurn(input: {
   const {
     runtime,
     message,
+    turnSessionIdentity,
     context,
     providerSystemPrompt,
     piMessages,
@@ -605,6 +609,19 @@ export async function invokeAgentForTurn(input: {
     });
   });
 
+  // The true provider wire body captured as-sent (bead hgw3-80f6). Keep the
+  // FIRST provider call of this turn — it carries the full initial context
+  // (system + history + current message + tools) that the recorded wire view
+  // represents; later tool-loop calls and the runtime-contradiction retry
+  // (a distinct requestId) are ignored.
+  let capturedWirePayload: LLMCapturedProviderWirePayload | undefined;
+  const unsubscribePayloadCaptured = runtime.eventBus.on('agent.provider.payload_captured', (event) => {
+    if (event.requestId !== requestId
+      || (event.channelId !== undefined && event.channelId !== message.channelId)
+      || capturedWirePayload !== undefined) return;
+    capturedWirePayload = event.payload;
+  });
+
   const bridgeToken = runtime.bridge.setChannel(message.channelId, {
     turnId,
     requestId,
@@ -613,12 +630,18 @@ export async function invokeAgentForTurn(input: {
     originStage: 'agent.turn.prompt',
     purpose: 'agent.turn.prompt',
   });
-  runtime.setActiveTurnContext(turnCorrelationBase, taskKind ?? null, toolTurnOutcome.intent);
+  runtime.setActiveTurnContext(
+    turnCorrelationBase,
+    taskKind ?? null,
+    toolTurnOutcome.intent,
+    turnSessionIdentity,
+  );
   let initialBridgeActive = true;
   const clearInitialPromptContext = (): void => {
     if (!initialBridgeActive) return;
     initialBridgeActive = false;
     unsubscribeFirstToken();
+    unsubscribePayloadCaptured();
     runtime.bridge.clearChannel(bridgeToken);
     runtime.clearActiveTurnContext();
   };
@@ -794,7 +817,12 @@ export async function invokeAgentForTurn(input: {
       originStage: 'agent.turn.runtime_contradiction_retry',
       purpose: 'agent.turn.runtime_contradiction_retry',
     });
-    runtime.setActiveTurnContext(turnCorrelationBase, taskKind ?? null, toolTurnOutcome.intent);
+    runtime.setActiveTurnContext(
+      turnCorrelationBase,
+      taskKind ?? null,
+      toolTurnOutcome.intent,
+      turnSessionIdentity,
+    );
     try {
       await runWithVisionTurnTimeout({
         channelId: message.channelId,
@@ -1015,6 +1043,13 @@ export async function invokeAgentForTurn(input: {
       ...turnSnapshot.promptContext.providerObservability.promptCaching,
       usage: providerCacheUsage,
     };
+  }
+  // Attach the true provider wire body captured as-sent (bead hgw3-80f6) so the
+  // Loom renders the raw wire view (tools included, counted once) instead of the
+  // pre-call reconstruction. Absence is a valid signal (e.g. the MoA path, which
+  // does not stream through the agent loop) — the read path then falls back.
+  if (capturedWirePayload && turnSnapshot.promptContext?.providerObservability) {
+    turnSnapshot.promptContext.providerObservability.capturedWirePayload = capturedWirePayload;
   }
   observability.emitObservedTurnStage('prompt', {
     durationMs: Date.now() - promptStageStart,

@@ -38,6 +38,9 @@ import type { SensorIngestPort } from '../../shared/telemetry/sensor-ingest-port
 import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
 import { isExplicitTrue, parseCommaSeparatedEnv } from '../startup/support/env-parsing.js';
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
+import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
+import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
+import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
 
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const GATEWAY_API_REQUEST_TIMEOUT_MS = 240_000;
@@ -61,6 +64,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
     | 'requestAgentVoiceStream'
     | 'invalidateIcpAutonomyForCompanion'
     | 'isIcpAutonomyConfigured'
+    | 'resolveOperatorApproval'
   >;
   channelsConfig?: RuntimeChannelsConfig;
   satelliteRegistry?: SatelliteRegistryConfig;
@@ -72,6 +76,8 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   intakeScreening?: IntakeScreeningService | null;
   /** Companion event relay surface (w9hj.1); `/v1/companion/*` 503s without it. */
   companionRelay?: Omit<CompanionRelayHttpDeps, 'stimuli'>;
+  /** Present only in gateway fleet-auth mode; owns all browser OAuth/session authority. */
+  fleetAuthBroker?: GatewayFleetAuthBroker;
 }
 
 /**
@@ -294,20 +300,33 @@ export async function startOptionalGatewayApiServer(
   }
 
   const env = options.env ?? process.env;
-  const allowInsecureWithoutAuth = isExplicitTrue(env.ALLOW_INSECURE_LOCAL_API);
+  const fleetAuthBootstrapOnly = options.config.fleetAuth !== undefined;
+  assertFleetAuthLegacySurfacesUnavailable({
+    fleetAuthEnabled: options.config.fleetAuth !== undefined,
+    processMode: 'gateway',
+    env: { ...env, API_PORT: String(options.apiPort) },
+    principalAuthenticationWired: false,
+    fleetAuthBootstrapRoutesWired: options.fleetAuthBroker !== undefined,
+  });
+  const allowInsecureWithoutAuth = !fleetAuthBootstrapOnly
+    && isExplicitTrue(env.ALLOW_INSECURE_LOCAL_API);
   // Sprint-10 C1/H4: fail-closed parsing — a malformed trusted-proxy token,
   // weak/colliding satellite keys, or partial TLS config abort startup.
-  const trustedProxyClientCertToken = parseTrustedProxyClientCertToken(env.API_TRUSTED_PROXY_CLIENT_CERT_TOKEN);
-  const satelliteApiKeys = parseSatelliteApiKeys(env.API_SATELLITE_KEYS, {
-    reservedTokens: [env.API_KEY, env.ADMIN_TOKEN],
-  });
+  const trustedProxyClientCertToken = fleetAuthBootstrapOnly
+    ? undefined
+    : parseTrustedProxyClientCertToken(env.API_TRUSTED_PROXY_CLIENT_CERT_TOKEN);
+  const satelliteApiKeys = fleetAuthBootstrapOnly
+    ? []
+    : parseSatelliteApiKeys(env.API_SATELLITE_KEYS, {
+        reservedTokens: [env.API_KEY, env.ADMIN_TOKEN],
+      });
   const apiTlsConfig = resolveApiHttpServerTlsConfig(env);
   const corsAllowedOrigins = resolveApiCorsAllowedOrigins({
     explicitAllowlist: parseCommaSeparatedEnv(env.API_CORS_ALLOWLIST),
     adminHost: options.adminHost,
     adminPort: options.adminPort,
   });
-  const voiceWebSocketRuntime = createApiVoiceWebSocketRuntime({
+  const voiceWebSocketRuntime = fleetAuthBootstrapOnly ? undefined : createApiVoiceWebSocketRuntime({
     config: options.config,
     eligibilityGate: options.eligibilityGate,
     handleAssistantTurn: async ({ request, principal, transportSession, sessionId, transcript, signal, channelPrefix }) => {
@@ -328,7 +347,7 @@ export async function startOptionalGatewayApiServer(
   const voiceWebSocketPath = voiceWebSocketRuntime
     ? undefined
     : DISABLED_VOICE_WEBSOCKET_PATH;
-  const companionRelay: CompanionRelayHttpDeps | undefined = options.companionRelay
+  const companionRelay: CompanionRelayHttpDeps | undefined = !fleetAuthBootstrapOnly && options.companionRelay
     ? {
         ...options.companionRelay,
         stimuli: new CompanionStimulusIngress({
@@ -368,12 +387,13 @@ export async function startOptionalGatewayApiServer(
     eventBus: inertEventBus,
     sessionManager: inertSessionManager,
     sensorIngest: inertSensorIngest,
-    apiKey: env.API_KEY || undefined,
-    adminToken: env.ADMIN_TOKEN || undefined,
+    apiKey: fleetAuthBootstrapOnly ? undefined : env.API_KEY || undefined,
+    adminToken: fleetAuthBootstrapOnly ? undefined : env.ADMIN_TOKEN || undefined,
     ...(satelliteApiKeys.length > 0 ? { satelliteApiKeys } : {}),
     ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
     ...(apiTlsConfig ? { tls: apiTlsConfig } : {}),
     allowInsecureWithoutAuth,
+    fleetAuthBootstrapOnly,
     corsAllowedOrigins,
     voiceWebSocketPath,
     voiceWebSocketRuntime,
@@ -394,6 +414,18 @@ export async function startOptionalGatewayApiServer(
             cancelForCompanion: async companionId => await options.gateway
               .invalidateIcpAutonomyForCompanion(companionId, 'operator_cancelled'),
           },
+        }
+      : {}),
+    confirmationOperator: {
+      resolve: async params => await options.gateway.resolveOperatorApproval(params),
+    },
+    ...(options.fleetAuthBroker && options.config.fleetAuth
+      ? {
+          fleetAuthHttpRoutes: new FleetAuthHttpRoutes({
+            broker: options.fleetAuthBroker,
+            canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
+            callbackPath: options.config.fleetAuth.callbackPath,
+          }),
         }
       : {}),
   });

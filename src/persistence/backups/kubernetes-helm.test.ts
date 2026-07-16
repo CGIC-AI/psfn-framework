@@ -312,6 +312,37 @@ describe('Kubernetes Helm recovery snapshot', () => {
     expect(() => makeConfig(chartDir)).not.toThrow();
   });
 
+  it('allows only boolean Kubernetes automountServiceAccountToken assignments', () => {
+    const root = join(tmpdir(), `psfn-kube-helm-service-account-token-${Date.now()}`);
+    roots.push(root);
+    const chartDir = writeChart(root);
+    writeFileSync(
+      join(chartDir, 'templates', 'serviceaccount.yaml'),
+      [
+        'apiVersion: v1',
+        'kind: ServiceAccount',
+        'automountServiceAccountToken: false',
+        '---',
+        'apiVersion: v1',
+        'kind: Pod',
+        'spec:',
+        '  automountServiceAccountToken: {{ .Values.kubeSelfManagement.enabled }}',
+        '',
+      ].join('\n'),
+      'utf-8',
+    );
+    refreshChartDigest(chartDir);
+
+    expect(() => makeConfig(chartDir)).not.toThrow();
+
+    writeFileSync(
+      join(chartDir, 'templates', 'serviceaccount.yaml'),
+      'apiVersion: v1\nkind: ServiceAccount\nautomountServiceAccountToken: actual-secret\n',
+      'utf-8',
+    );
+    expect(() => makeConfig(chartDir)).toThrow('literal credential assignment');
+  });
+
   it.each([
     ['environment-style key', 'API_KEY: {{ "real-template-secret" | quote }}'],
     ['quoted spaced key', '"api key": {{ "real-template-secret" | quote }}'],

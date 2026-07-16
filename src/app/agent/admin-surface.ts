@@ -145,6 +145,10 @@ export async function startOptionalAdminTransportServer(
     memoryExtractor: options.coreRuntime.memoryExtractor,
     ...(options.channelGroupMemory ? { channelGroupMemory: options.channelGroupMemory } : {}),
     companionAuthorIds: options.config.discordBotId ? [options.config.discordBotId] : [],
+    // Operator-only gateway confirmations (e.g. kube self-management) are
+    // resolved directly by the Garden operator process; the agent never holds
+    // the operator gateway client or the ADMIN_TOKEN it would need (x5rt.10).
+    // This surface resolves agent-local confirmations only.
     confirmationQueueApi: createGatewayConfirmationQueueAdminApi(
       options.gateway,
       options.cardProposalQueue,

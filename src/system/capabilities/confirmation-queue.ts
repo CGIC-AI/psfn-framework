@@ -6,6 +6,31 @@ export const DEFAULT_CONFIRMATION_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 export type ConfirmationDecision = 'approve' | 'deny' | 'modify';
 
+export type ConfirmationResolutionAuthority = 'operator';
+
+export interface ConfirmationResolverIdentity {
+  kind: 'companion' | 'operator';
+  id: string;
+}
+
+export interface ConfirmationExecutionContext {
+  resolver?: ConfirmationResolverIdentity;
+}
+
+/**
+ * Signals that the queued side effect committed before a post-execution
+ * durability/audit step failed. The queue must never describe this as
+ * unexecuted: callers can then retry a non-idempotent mutation.
+ */
+export class ConfirmationExecutionCommittedError extends Error {
+  readonly executed = true;
+
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = 'ConfirmationExecutionCommittedError';
+  }
+}
+
 export type ConfirmationResolutionStatus =
   | 'approved'
   | 'denied'
@@ -21,6 +46,7 @@ export interface ConfirmationQueueEntry {
   scope: string;
   params: Record<string, unknown>;
   companionReason: string;
+  resolutionAuthority?: ConfirmationResolutionAuthority;
   requestedAt: number;
   expiresAt: number;
 }
@@ -34,6 +60,7 @@ export interface ConfirmationQueueHistoryEntry extends Partial<ConfirmationQueue
   decision?: ConfirmationDecision;
   appliedParams?: Record<string, unknown>;
   error?: string;
+  resolver?: ConfirmationResolverIdentity;
 }
 
 export interface ConfirmationQueueRequest {
@@ -42,6 +69,7 @@ export interface ConfirmationQueueRequest {
   scope: string;
   params: Record<string, unknown>;
   companionReason: string;
+  resolutionAuthority?: ConfirmationResolutionAuthority;
   expiresInMs?: number;
 }
 
@@ -67,7 +95,9 @@ export interface ConfirmationQueueResolutionOutcome {
   id: string;
   status: Exclude<ConfirmationResolutionStatus, 'not_found'>;
   resolvedAt: number;
+  executed: boolean;
   decision?: ConfirmationDecision;
+  resolver?: ConfirmationResolverIdentity;
   entry: ConfirmationQueueEntry;
 }
 
@@ -92,6 +122,7 @@ export interface ConfirmationQueueOptions {
 type ConfirmationExecutor = (
   params: Record<string, unknown>,
   entry: ConfirmationQueueEntry,
+  context: ConfirmationExecutionContext,
 ) => Promise<unknown>;
 
 interface PendingEntry {
@@ -152,6 +183,9 @@ export class ConfirmationQueue {
       scope: request.scope,
       params: cloneRecord(request.params),
       companionReason: request.companionReason.trim() || 'No companion reason provided.',
+      ...(request.resolutionAuthority
+        ? { resolutionAuthority: request.resolutionAuthority }
+        : {}),
       requestedAt,
       expiresAt: requestedAt + expiresInMs,
     };
@@ -184,7 +218,10 @@ export class ConfirmationQueue {
     return found ? this.snapshot(found.entry) : null;
   }
 
-  async resolve(request: ConfirmationResolveRequest): Promise<ConfirmationResolveResult> {
+  async resolve(
+    request: ConfirmationResolveRequest,
+    resolver?: ConfirmationResolverIdentity,
+  ): Promise<ConfirmationResolveResult> {
     const pending = this.pending.get(request.id);
     if (!pending) {
       this.expirePending();
@@ -206,12 +243,15 @@ export class ConfirmationQueue {
         resolvedAt: now,
         executed: false,
         message: 'Confirmation request expired before resolution.',
+        ...(resolver ? { resolver } : {}),
       }));
       this.notifyResolved({
         id: request.id,
         status: 'expired',
         resolvedAt: now,
+        executed: false,
         decision: request.decision,
+        ...(resolver ? { resolver } : {}),
         entry: pending.entry,
       });
       this.expirePending();
@@ -219,6 +259,15 @@ export class ConfirmationQueue {
         id: request.id,
         status: 'expired',
         message: 'Confirmation request expired before resolution.',
+        executed: false,
+      };
+    }
+
+    if (pending.entry.resolutionAuthority === 'operator' && resolver?.kind !== 'operator') {
+      return {
+        id: request.id,
+        status: 'failed',
+        message: 'Confirmation requires an independently authenticated operator resolution.',
         executed: false,
       };
     }
@@ -232,12 +281,15 @@ export class ConfirmationQueue {
         resolvedAt: now,
         executed: false,
         message: 'Action denied by operator.',
+        ...(resolver ? { resolver } : {}),
       }));
       this.notifyResolved({
         id: request.id,
         status: 'denied',
         resolvedAt: now,
+        executed: false,
         decision: request.decision,
+        ...(resolver ? { resolver } : {}),
         entry: pending.entry,
       });
       return {
@@ -256,6 +308,7 @@ export class ConfirmationQueue {
         resolvedAt: now,
         executed: false,
         message: 'Modified params are required and must be a JSON object.',
+        ...(resolver ? { resolver } : {}),
       }));
       return {
         id: request.id,
@@ -275,7 +328,9 @@ export class ConfirmationQueue {
     this.pending.delete(request.id);
 
     try {
-      await pending.execute(nextParams, runEntry);
+      await pending.execute(nextParams, runEntry, {
+        ...(resolver ? { resolver } : {}),
+      });
       const resolvedAt = this.now();
       const status = request.decision === 'modify' ? 'modified' : 'approved';
       this.history.push(this.snapshotHistory({
@@ -288,12 +343,15 @@ export class ConfirmationQueue {
           ? 'Action executed with modified parameters.'
           : 'Action approved and executed.',
         appliedParams: nextParams,
+        ...(resolver ? { resolver } : {}),
       }));
       this.notifyResolved({
         id: request.id,
         status,
         resolvedAt,
+        executed: true,
         decision: request.decision,
+        ...(resolver ? { resolver } : {}),
         entry: pending.entry,
       });
       return {
@@ -306,28 +364,32 @@ export class ConfirmationQueue {
       };
     } catch (error) {
       const resolvedAt = this.now();
+      const executed = error instanceof ConfirmationExecutionCommittedError;
       this.history.push(this.snapshotHistory({
         ...pending.entry,
         status: 'failed',
         decision: request.decision,
         resolvedAt,
-        executed: false,
+        executed,
         message: toErrorMessage(error),
         appliedParams: nextParams,
         error: toErrorMessage(error),
+        ...(resolver ? { resolver } : {}),
       }));
       this.notifyResolved({
         id: request.id,
         status: 'failed',
         resolvedAt,
+        executed,
         decision: request.decision,
+        ...(resolver ? { resolver } : {}),
         entry: pending.entry,
       });
       return {
         id: request.id,
         status: 'failed',
         message: toErrorMessage(error),
-        executed: false,
+        executed,
       };
     }
   }
@@ -349,6 +411,7 @@ export class ConfirmationQueue {
           id,
           status: 'expired',
           resolvedAt: now,
+          executed: false,
           entry: pending.entry,
         });
         expired += 1;

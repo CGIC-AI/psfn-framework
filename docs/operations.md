@@ -132,6 +132,182 @@ What it does:
 
 Use `--dry-run` first. Keep authoritative env and runtime wiring in the deployed repo tree; do not create shadow service config elsewhere. The installer-owned unit injects the production layout paths and `PSFN_SKIP_DOTENV=true`, while the filtered env file only carries env-owned values that remain appropriate to source from disk.
 
+## Guarded Kubernetes Deploy Pipeline
+
+The live k3s companion updates through a repo-owned, auditable pipeline that
+generalizes the manual `scripts/ops/ship-kube-update.sh` flow into a system
+action (`src/system/lifecycle/kube-deploy-pipeline.ts`). It runs strictly
+inside the self-management approval/audit boundary (least-privilege RBAC and
+operator confirmation) and the operator-credential separation: the companion
+may *request* a `rebuild` or `deploy`, an operator approves it, and only then
+does the pipeline execute. No operator credential reaches the agent path — every
+live-touching side effect is delegated to an operator-job runner
+(`DeployPipelineRunner`) supplied by the operator composition, never by the
+agent runtime (which stays diagnose-only).
+
+Ordered stages, fail-closed. Live workloads are untouched until the final
+stage, so any earlier failure yields a record with `liveUntouched === true`:
+
+1. **preconditions** — only committed state ships; a verified backup must exist
+   before any companion-data mutation.
+2. **archive** — source archived at the exact commit; a sha256 checksum is
+   recorded.
+3. **gate** — `npm run lint`, `npm run build`, `npm run verify:helm-chart`, and
+   the change-scoped tests. Skipped only under a documented, justified
+   emergency-recovery run (the justification is recorded).
+4. **build** — one image with the exact, non-floating tag and the
+   `org.opencontainers.image.revision` label set to the source commit.
+5. **import** — imported into the node runtime. `k3s ctr images import` names
+   the image `docker.io/library/<name>:<tag>`, so it is retagged to
+   `localhost/<name>:<tag>` (`deriveLocalImportRetag`) or the Deployments will
+   not find it. Importing does not restart pods; live stays unchanged.
+6. **k3d_validation** — local k3d validation runs, or the record carries an
+   explicit skip reason.
+7. **helm_upgrade** — the single live-mutating stage. Live values are captured
+   and *re-supplied* to `helm upgrade` (never `--reuse-values` against a changed
+   chart); the record stores only a redacted summary plus a digest, never
+   secret material.
+
+`rebuild` stops after the import and produces a validated, imported (deployable)
+artifact with live untouched; `deploy` runs through the Helm upgrade. The record
+captures source branch/commit, archive checksum, image reference and revision
+label, contract hash, gate results, k3d validation, Helm release revision, and
+the redacted live-values summary. Node-side rewrites of PVC files must run as the
+container `uid 999 gid 999` (mode `0664`) — a root-owned rewrite bricks turns
+with `EACCES`.
+
+Sibling surfaces build on the same seams: the post-rollout validation gate and
+manual/automatic Helm rollback consume the pipeline record and the
+`DeployPipelineRunner` interface; k3d end-to-end coverage exercises the runner
+against a throwaway cluster.
+
+### Post-Rollout Validation Gate
+
+After `helm_upgrade`, an optional `post_rollout_validation` stage
+(`src/system/lifecycle/kube-post-rollout-validation.ts`) validates the
+*live-rolled* companion — distinct from the pre-rollout `k3d_validation`, which
+runs an imported image on a throwaway cluster before anything live changes. Helm
+reporting "deployed" is not proof of health; this gate is. It is opt-in and
+supplied only by the operator-job composition (its own transport, no agent
+credentials); the agent path stays diagnose-only.
+
+The gate runs a fixed set of required checks and returns a structured verdict
+with per-check evidence and timestamps: agent/gateway/garden rollout status,
+Garden `/health` with admin transport up, gateway `/v1/models` includes the
+expected companion model route, Postgres pgvector present, Redis `PONG`, agent
+readiness (Ready log, no `CrashLoopBackOff`, running image matches the target
+tag/revision), a two-turn gateway smoke (served provider matches the request and
+the persisted turn record is residue-free), the tool-surface conformance harness
+result (reused from x5rt.3, fetched from the new pod's `post_rollout` run), and a
+bounded diagnostics scan (reused from x5rt.2) for crash/owner-file/tool-wiring
+failures.
+
+Fail-closed is the safety semantics that makes the sibling rollback correct: a
+companion that cannot *prove* it is healthy is not healthy. Any check that is
+inconclusive, errors, or times out is treated as a **fail**, never a silent
+pass. The gate is healthy only when every required check passes; tool conformance
+is the sole check that may be explicitly skipped with a recorded reason. An
+`emergencyWaiver` with a non-empty justification records a healthy-by-waiver
+verdict without running checks (documented, like emergency-recovery for the
+quality gate). When the verdict is unhealthy the pipeline fails at the
+`post_rollout_validation` stage with the verdict attached to the record.
+
+The verdict (`healthy`, `recommendedAction`, per-check results, and bounded,
+already-sanitized log context for rollback debugging) is written to
+`<system-data>/state/post-rollout-validation-latest.json` (bounded JSONL history
+alongside) on the healthy and unhealthy verdict paths **when the operator-job
+composition supplies the `persist` callback** — the stable cross-workstream
+contract the Helm-rollback surface reads to decide whether to roll back.
+Persistence is opt-in: if the `post_rollout_validation` stage is not composed, or
+the gate itself errors before producing a verdict, no fresh verdict is written
+and `latest.json` retains the **prior** rollout's verdict. The Helm-rollback
+surface must therefore bind on `(release, helmRevision, sourceCommit)` before
+trusting a `healthy` verdict, and treat an absent/stale verdict as "no verdict
+for this rollout — do not suppress rollback." An `overall: 'waived'` verdict is
+an operator emergency assertion with no probe evidence and means "do not
+auto-rollback," not "healthy."
+
+### Manual and Automatic Helm Rollback
+
+The rollback surface (`src/system/lifecycle/kube-helm-rollback.ts` and
+`src/system/lifecycle/kube-auto-rollback.ts`) enacts and validates a Helm
+rollback of the companion release, closing the self-management loop.
+
+**Manual** rollback is the `rollback` self-management action. `helm rollback`
+needs full release-management credentials — unlike the RBAC-scoped rollout
+restart — so, like the deploy pipeline, the rollback executor holds the
+operator-job's own Helm transport and is composed **only** in the operator-job
+composition, never on the agent-only path. The companion may *request* a
+rollback; an operator approves it through the same x5rt.4 approval/audit boundary
+and x5rt.10 credential separation; only then does the executor run
+`helm rollback <release> <targetRevision>` and wait for the agent/gateway/garden
+Deployments to recover. A rollback whose release does not come back ready is a
+**failed rollback** (`rollbackStatus: 'failed'`) that escalates rather than a
+silent success. Manual and automatic rollbacks both record to
+`<system-data>/state/kube-rollback-latest.json` (bounded JSONL history alongside).
+
+**Automatic** rollback is the deploy job's own safety net (not the agent approval
+path): after a self-update, it consumes the post-rollout verdict and rolls back a
+failed rollout. Its decision honours the x5rt.7 review contract exactly:
+
+1. **Bind before trusting.** The verdict is trusted only when it binds to the
+   current rollout on `(release, helmRevision, sourceCommit)`. A stale verdict
+   from a prior deploy is "no verdict for this rollout": a stale *healthy* verdict
+   never suppresses a needed rollback, and a stale *failed* verdict never triggers
+   one — both surface to the operator instead.
+2. **Act once per revision.** After a rollback, `latest.json` still holds the
+   *failed* verdict of the rolled-back-from revision. The decision keys on
+   `(release, fromHelmRevision)` and consults the rollback ledger, so it never
+   rollback-loops. A rollback that ran but failed to recover is still recorded, so
+   it is not silently re-fired.
+3. **Waived means the operator owns it.** An `overall: 'waived'` verdict is
+   surfaced, never treated as health and never auto-rolled-back.
+4. **Absent/errored/stale = fail-safe, not auto-rollback.** Auto-rollback fires on
+   validation *failure* for the current rollout, not on validation *absence*
+   (rolling back an unvalidated deploy is itself destructive). An absent, stale, or
+   malformed verdict surfaces to the operator and, crucially, still refuses to
+   declare the rollout healthy. When the failed revision is the first-ever revision
+   (no previous revision to target), the rollback is a recorded no-op escalation.
+
+### Composed operator job (x5rt.9)
+
+The deploy pipeline, the post-rollout validation gate, and the automatic rollback
+surface ship as library seams; **`src/system/lifecycle/kube-self-update-job.ts`
+(`runKubeSelfUpdateJob`) is the composition that wires them into one live flow**,
+and `src/app/operator/kube-self-update-job-main.ts` (`npm run
+operator:kube-self-update`) is the credential-bearing operator entrypoint that
+constructs the real docker/helm/kubectl transports
+(`src/app/operator/kube-self-update-transport.ts`,
+`kube-self-update-validation-transport.ts`). The agent process never imports
+these transports, preserving the x5rt.10 credential separation.
+
+The composition enforces the cross-bead contracts at the wiring boundary:
+
+- **Persist is required when auto-rollback is enabled.** The job always wires the
+  pipeline's post-rollout persist callback to `writePostRolloutValidationVerdict`
+  (and refuses to run auto-rollback without a validation runner), so the safety
+  net always has a bound verdict to read — never a stale one.
+- **The caller serializes `executeAutoRollback`.** The ledger read-modify-write
+  has no lock, so the job funnels every auto-rollback evaluation through a
+  process-wide single-flight guard; overlapping jobs never race the act-once
+  ledger.
+- **Auto-rollback only after the live mutation.** A deploy that fails before the
+  Helm upgrade left live untouched, so the job skips rollback entirely.
+- **The rollback target comes from `helm history`.** `createLiveRollbackTargetResolver`
+  picks the highest `deployed`/`superseded` revision strictly earlier than the
+  failed one (never a `failed`/`pending-*` revision); the auto-rollback surface
+  additionally rejects any non-strictly-earlier target.
+
+The deterministic wiring is unit-tested off-cluster with fakes
+(`src/system/lifecycle/kube-self-update-job.test.ts`,
+`src/app/operator/kube-self-update-transport.test.ts`) — this is the mandatory
+gate proving the seams are driven, not dead code. Live k3d end-to-end coverage of
+the full self-update → validate → auto/manual rollback flow is
+`src/app/e2e/kube-self-update-e2e.test.ts`, gated behind `PSFN_K3D_E2E` (`npm run
+e2e:kube-self-update`) so normal unit runs need no cluster or docker daemon; it
+provisions and tears down its own disposable k3d cluster and never touches
+psfn-shard, live namespaces, or any real PVC.
+
 ## Host-Specific Storage Validation
 
 Live hostnames, private addresses, device identifiers, mount points, and home
@@ -390,7 +566,7 @@ authorization and redaction contracts.
 - Backups are encrypted at rest. `backup.json` declares `encryption.mode: "required"` and an env key reference; the actual key material stays in `PSFN_BACKUP_ENCRYPTION_KEY` or another configured env secret. Startup fails closed when the key is missing.
 - Under the PostgreSQL runtime backend the scheduled backup stages a `pg_dump` custom-format archive (requires `pg_dump`/`pg_restore` on PATH) plus session JSONL, memory mutation ledger, and character-card files; the scheduler refuses to start without a database backup source.
 - The scheduled backup also stages the full companion-data file tree (journals, generated media/selfies, vault notes, prompt and card history, scratchpad) into `companion-tree/` with a per-file sha256 manifest; the walk is exhaustive except for sessions (captured separately), backup targets, and repair snapshots, so new companion-authored file classes can never silently fall out of scope.
-- System-data JSON owner files are staged into `system-config/` with a per-file sha256 manifest. This includes `settings.json`, `models.json`, `providers.json`, `scheduler.json`, `capability-tier.json`, `channels.json`, `backup.json`, `skills.json`, `trust-policy.json`, `charge-policy.json`, and `intake-policy.json` when present. `.env`, generated systemd env files, and raw provider/channel secrets are not copied by this system-config snapshot.
+- System-data JSON owner files are staged into `system-config/` with a per-file sha256 manifest. This includes `settings.json`, `models.json`, `providers.json`, `channels.json`, `backup.json`, `skills.json`, `trust-policy.json`, `charge-policy.json`, and `intake-policy.json` when present. `.env`, generated systemd env files, and raw provider/channel secrets are not copied by this system-config snapshot. `capability-tier.json` (dnll.2) and `scheduler.json` (dnll.3) are per-companion owner files rooted at `companionDataDir`, so they are captured by the exhaustive `companion-tree` slice above, not this cluster-global system-config slice.
 - Helm deployments also stage `helm-recovery/`: the recovery-safe deployable files from the repo-owned `deploy/helm/psfn` chart plus a versioned descriptor containing release name, namespace, Helm revision, an exact chart-content digest, and the effective agent/gateway/Garden image references. Documentation files, live Helm values, rendered manifests, Kubernetes Secret objects, and secret material are deliberately excluded. Real YAML parsing rejects secret-bearing values regardless of quoting, inline-map, or snake-case syntax; unsupported overlays, packed/opaque subcharts, special files, and source/destination overlap fail closed before capture writes anything. The chart has a per-file sha256 manifest and is verified before encryption and again by `verify:backup-restore`.
 - Every snapshot contains `backup-contents.json`, which records whether Helm recovery is `required` or `absent`. In production this marker is inside the authenticated encrypted payload, so deleting the entire Helm subtree cannot make a Kubernetes backup masquerade as a non-Kubernetes backup. Restore operators still re-provision credentials and review deployment-specific overrides rather than replaying stale secrets.
 - The configured Personal Workspace is staged separately into `workspace-tree/` with its own sha256 manifest. This covers its docs, downloads, images, journal/scratchpad files, authored skills/modules, experiments, and canonical `knowledge/wiki/` store. In fleet mode, each companion slice contains only that companion's Personal Workspace; the cluster artifact contains only the governed Shared Companion Workspace. Group mode captures the complete `workspaces/` parent in its one family artifact. Runtime roots, backup targets, VCS metadata, dependency directories, caches, and temp directories are excluded and recorded in the manifest.

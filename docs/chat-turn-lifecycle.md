@@ -247,3 +247,43 @@ fragment bytes and, when a tool call still arrives with empty arguments, emits a
   pre-upstream-fix loss mode; must not recur with the pinned accumulator).
 - `validation_rejected` — args were non-empty (any downstream failure is a real
   schema mismatch, not lost/absent arguments).
+
+## Tool-call validate-and-reprompt (psfn-framework-b0yl.3)
+
+The empty-argument backstop above recovers a *lost* argument fragment by
+re-running the whole completion (`primitives/llm/empty-tool-argument-retry.ts`).
+That is only one failure class. Every other recoverable tool-call defect is
+healed by feeding a corrective tool result back to the model so its next
+completion reprompts with a fixed call — never a dropped turn and never a
+silently defaulted action. This is the universal pattern across surveyed
+harnesses (Hermes re-inject, Codex `RespondToModel`, opencode Zod-error
+rewrite).
+
+The chokepoint is the tool-call scheduler (`src/core/agent/tool-call-scheduler.ts`,
+`executeSingleToolCall`), which every model-driven turn routes through via
+`agentLoopWithScheduler`. Corrective result text is built in
+`src/core/agent/tool-call-correction.ts`, classified into three defect classes:
+
+- `unknown_tool` — the called name is not in the live catalog. Retired
+  first-party aliases resolve to their canonical replacement (and action) via
+  the retired-alias machinery (`getRetiredToolAlias`); otherwise the nearest
+  catalog name (bounded edit distance) is suggested and the available names are
+  echoed.
+- `malformed_arguments` — top-level arguments are not a JSON object (a bare
+  string, array, number, or `null`). An empty object (`{}`) is NOT malformed —
+  it is a valid object the schema validator rejects on required properties.
+- `schema_invalid` — arguments fail the tool's schema. The original
+  `validateToolArguments` message (per-field errors + received arguments) is
+  preserved verbatim so the repeated-malformed classifier still parses it; a
+  reprompt instruction is appended.
+
+Bounded retries are enforced by the scheduler guard: repeated malformed calls to
+the same action are skipped (`repeated_malformed_arguments`), and a signature
+that keeps failing is degraded after `maxFailuresPerSignature` attempts
+(`tool_signature_degraded`), so a model that cannot self-correct stops looping.
+
+Telemetry: each correction emits `agent.tools.validation.failed` and
+`agent.tools.correction.reprompt` (with `defectClass` and, when available, the
+`suggestedTool`); when a previously-corrected tool then succeeds in the same
+loop, `agent.tools.correction.recovered` fires — so a retried-then-succeeded
+call is observable instead of looking like a plain success or a failed turn.

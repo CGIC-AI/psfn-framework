@@ -28,6 +28,14 @@ describe('agent core runtime builder', () => {
     expect(coreRuntimeSource).toContain('wireMemoryRuntime(');
   });
 
+  it('wires live self_status statistics through the trusted subject provider', () => {
+    const coreRuntimeSource = readSource('core-runtime.ts');
+    expect(coreRuntimeSource).toContain(
+      'getMemoryStats: createSelfStatusMemoryStatsProvider(memoryStore)',
+    );
+    expect(coreRuntimeSource).not.toContain('getMemoryStats: () => memoryStore.getStats()');
+  });
+
   it('wires fatigue accounting into the live agent runtime', () => {
     const coreRuntimeSource = readSource('core-runtime.ts');
     expect(coreRuntimeSource).toContain('composeFatigueBudgetRuntime({ config, eventBus })');

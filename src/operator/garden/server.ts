@@ -14,6 +14,7 @@ import { handleAdminRequest } from './server-request-routing.js';
 import { AdminServerTransport } from './server-transport.js';
 import { AdminServerTelemetryTransport } from './server-telemetry-transport.js';
 import { validateAdminAuthStartupPolicy } from './auth-policy.js';
+import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 
 const log = createComponentLogger('AdminServer');
 const ADMIN_MAX_BODY_SIZE = 65_536; // 64KB
@@ -24,6 +25,7 @@ export class AdminServer implements Lifecycle {
   private host: string;
   private token?: string;
   private allowInsecureWithoutToken: boolean;
+  private fleetAuthEnabled: boolean;
   private routes: AdminRoute[];
   private transport: AdminServerTransport;
   private telemetryTransport: AdminServerTelemetryTransport;
@@ -33,6 +35,8 @@ export class AdminServer implements Lifecycle {
     this.host = config.host ?? '127.0.0.1';
     this.token = config.token;
     this.allowInsecureWithoutToken = config.allowInsecureWithoutToken ?? false;
+    this.fleetAuthEnabled = config.config.fleetAuthVerifier !== undefined
+      || config.config.fleetAuth !== undefined;
     this.transport = new AdminServerTransport(log);
     this.telemetryTransport = new AdminServerTelemetryTransport(
       config.eventBus,
@@ -53,6 +57,15 @@ export class AdminServer implements Lifecycle {
   }
 
   async start(): Promise<void> {
+    assertFleetAuthLegacySurfacesUnavailable({
+      fleetAuthEnabled: this.fleetAuthEnabled,
+      processMode: 'operator',
+      env: {
+        ADMIN_PORT: String(this.port),
+        ...(this.token ? { ADMIN_TOKEN: this.token } : {}),
+        ...(this.allowInsecureWithoutToken ? { ADMIN_ALLOW_INSECURE: 'true' } : {}),
+      },
+    });
     validateAdminAuthStartupPolicy({
       host: this.host,
       port: this.port,

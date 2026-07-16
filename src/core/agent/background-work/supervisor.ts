@@ -399,7 +399,7 @@ export class BackgroundWorkSupervisor {
     for (const entry of this.running.values()) {
       if (!entry.controller.signal.aborted) entry.controller.abort();
     }
-    this.stopPromise = (async () => {
+    const stopAttempt = (async () => {
       await this.tickPromise;
       await this.waitForSessionTransitions();
       const runningPromises = [...this.running.values()].map(entry => entry.promise);
@@ -414,21 +414,24 @@ export class BackgroundWorkSupervisor {
       // `started` receipt and is left running for fail-closed lease-expiry
       // recovery; the revision bump on requeued rows fences any worker still
       // in-flight from crossing after we release it.
-      try {
-        const requeued = await this.store.requeuePreBoundaryClaims({
-          leaseOwner: this.leaseOwner,
-          nowMs: this.now(),
-          reasonCode: 'shutdown',
-        });
-        for (const job of requeued) this.emitJobTelemetry(job);
-      } catch (error) {
-        log.error('Background pre-boundary requeue failed during shutdown', {
-          errorName: error instanceof Error ? error.name : 'UnknownError',
-        });
-      }
+      const requeued = await this.store.requeuePreBoundaryClaims({
+        leaseOwner: this.leaseOwner,
+        nowMs: this.now(),
+        reasonCode: 'shutdown',
+      });
+      for (const job of requeued) this.emitJobTelemetry(job);
       this.stopHeartbeat();
     })();
-    return this.stopPromise;
+    this.stopPromise = stopAttempt;
+    try {
+      await stopAttempt;
+    } catch (error) {
+      // Permit an explicit bounded retry by the shutdown owner. `stopping`
+      // remains true, so no new claims or enqueue handoffs can enter between
+      // attempts and the database must remain open until one succeeds.
+      if (this.stopPromise === stopAttempt) this.stopPromise = null;
+      throw error;
+    }
   }
 
   private async runTick(): Promise<void> {
@@ -858,9 +861,18 @@ export class BackgroundWorkSupervisor {
   }
 
   private markForegroundLeaseLost(leaseId: string): void {
+    // The store grants an observed-expired lease one durable quarantine
+    // extension while omitting it from the renewed ids. Once that loss is
+    // observed locally, the id must never be submitted to another heartbeat:
+    // doing so would turn the bounded quarantine into an immortal lease.
+    this.readyForegroundLeaseIds.delete(leaseId);
     const lease = this.foregroundLeases.get(leaseId);
-    if (!lease || lease.signal.aborted) return;
-    lease.controller.abort(new ForegroundWorkLeaseLostError());
+    if (lease && !lease.signal.aborted) {
+      lease.controller.abort(new ForegroundWorkLeaseLostError());
+    }
+    if (this.running.size === 0 && this.readyForegroundLeaseIds.size === 0) {
+      this.stopHeartbeat();
+    }
   }
 
   private executionDurationMs(job: ClaimedBackgroundWorkJob): number {

@@ -83,6 +83,14 @@ import type {
   IcpConversationCorrelation,
 } from '../../shared/contracts/icp-autonomy.js';
 import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
+import type {
+  KubeSelfManagementRequest,
+  KubeSelfManagementResponse,
+} from '../../system/lifecycle/kube-self-management.js';
+export type {
+  KubeSelfManagementRequest,
+  KubeSelfManagementResponse,
+} from '../../system/lifecycle/kube-self-management.js';
 
 // ── Request parameter types (agent → gateway) ──
 
@@ -927,6 +935,7 @@ export interface GatewayMethods {
   'confirmation.resolve': [ConfirmationResolveParams, ConfirmationResolveResult];
   'runtime.health': [RuntimeHealthParams, RuntimeHealthResult];
   'runtime.credential_presence': [GatewayCredentialPresenceParams, GatewayCredentialPresenceResult];
+  'kube.self_management': [KubeSelfManagementRequest, KubeSelfManagementResponse];
   'session.hmac.sign': [SessionHmacSignParams, SessionHmacSignResult];
   'session.hmac.verify': [SessionHmacVerifyParams, SessionHmacVerifyResult];
 }

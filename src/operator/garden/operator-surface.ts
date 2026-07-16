@@ -11,6 +11,7 @@ import {
   sendText,
 } from '../../channels/backplane/http/primitives.js';
 import { checkAdminRequestAuth, checkAdminUpgradeAuth } from './server-auth.js';
+import { getCookieValue } from '../../channels/backplane/http/auth.js';
 import { handleAdminRequest } from './server-request-routing.js';
 import { AdminServerTransport } from './server-transport.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -21,9 +22,17 @@ import {
 } from './transport-client.js';
 import type { GardenAdminTransportClientEndpoint } from './transport-paths.js';
 import { validateAdminAuthStartupPolicy } from './auth-policy.js';
+import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
+import { parseAdminJsonBody } from './request-body.js';
+import { parseConfirmationResolveRequest } from './confirmation-resolve-request.js';
+import type { ConfirmationOperatorAuthContext } from './admin-contract.js';
+import type { GatewayOperatorConfirmationClient } from '../../app/startup/support/gateway-operator-confirmation-client.js';
 
 const log = createComponentLogger('GardenOperatorSurface');
 const ADMIN_MAX_BODY_SIZE = 65_536;
+const CONFIRMATION_RESOLVE_PATH = '/api/admin/confirmations/resolve';
+const MAX_OPERATOR_AUTHORIZATION_LENGTH = 1_024;
+const MAX_OPERATOR_COOKIE_TOKEN_LENGTH = 512;
 
 export interface GardenOperatorSurfaceConfig {
   port: number;
@@ -32,6 +41,35 @@ export interface GardenOperatorSurfaceConfig {
   allowInsecureWithoutToken?: boolean;
   config: SubstrateConfig;
   transportEndpoint: GardenAdminTransportClientEndpoint;
+  /**
+   * Direct operator → gateway confirmation resolver. Only the independently
+   * authenticated Garden operator process holds this; it carries the operator
+   * ADMIN_TOKEN straight to the gateway so the credential never traverses the
+   * agent (x5rt.10). Absent → operator-only confirmations are not resolvable
+   * from this surface and stay pending (fail closed).
+   */
+  operatorConfirmationResolver?: GatewayOperatorConfirmationClient;
+}
+
+/**
+ * Extracts the operator ADMIN_TOKEN material (bearer header and/or `psfn_token`
+ * cookie) from an already-authenticated Garden operator request, to be handed
+ * only to the direct operator → gateway confirmation call (x5rt.10).
+ */
+function extractOperatorConfirmationAuth(req: IncomingMessage): ConfirmationOperatorAuthContext {
+  const authorizationHeader = req.headers.authorization;
+  const authorization = typeof authorizationHeader === 'string'
+    && authorizationHeader.length <= MAX_OPERATOR_AUTHORIZATION_LENGTH
+    ? authorizationHeader
+    : undefined;
+  const adminCookieToken = getCookieValue(req, 'psfn_token');
+  const cookie = adminCookieToken && adminCookieToken.length <= MAX_OPERATOR_COOKIE_TOKEN_LENGTH
+    ? `psfn_token=${encodeURIComponent(adminCookieToken)}`
+    : undefined;
+  return {
+    ...(authorization ? { authorization } : {}),
+    ...(cookie ? { cookie } : {}),
+  };
 }
 
 interface GardenOperatorHealthPayload {
@@ -59,6 +97,16 @@ export class GardenOperatorSurface implements Lifecycle {
   }
 
   async start(): Promise<void> {
+    assertFleetAuthLegacySurfacesUnavailable({
+      fleetAuthEnabled: this.config.config.fleetAuthVerifier !== undefined
+        || this.config.config.fleetAuth !== undefined,
+      processMode: 'operator',
+      env: {
+        ADMIN_PORT: String(this.config.port),
+        ...(this.config.token ? { ADMIN_TOKEN: this.config.token } : {}),
+        ...(this.config.allowInsecureWithoutToken ? { ADMIN_ALLOW_INSECURE: 'true' } : {}),
+      },
+    });
     const host = this.config.host ?? '127.0.0.1';
     validateAdminAuthStartupPolicy({
       host,
@@ -197,12 +245,83 @@ export class GardenOperatorSurface implements Lifecycle {
       return true;
     }
 
+    if (method === 'POST' && path === CONFIRMATION_RESOLVE_PATH) {
+      this.handleConfirmationResolve(req, res);
+      return true;
+    }
+
     if (path === '/api/admin' || path.startsWith('/api/admin/')) {
       this.proxy.proxyApiRequest(req, res);
       return true;
     }
 
     return false;
+  }
+
+  /**
+   * Resolves a confirmation from the independently authenticated Garden
+   * operator process (x5rt.10).
+   *
+   * Operator-owned gateway confirmations (e.g. kube self-management) are
+   * resolved on a direct operator → gateway path that carries the operator
+   * ADMIN_TOKEN; the credential never crosses into the agent. Agent-local
+   * confirmations (e.g. card proposals) are proxied to the agent with the
+   * credential stripped. When no resolver or no operator credential is present,
+   * only agent-local resolution is attempted and operator-owned entries stay
+   * pending — fail closed.
+   */
+  private handleConfirmationResolve(req: IncomingMessage, res: ServerResponse): void {
+    this.withBody(req, res, (body) => {
+      const parsedBody = parseAdminJsonBody(body);
+      if (!parsedBody.ok) {
+        sendJson(res, 400, { ok: false, message: parsedBody.error });
+        return;
+      }
+      const parsed = parseConfirmationResolveRequest(parsedBody.value);
+      if (!parsed.ok) {
+        sendJson(res, 400, { ok: false, message: parsed.error });
+        return;
+      }
+
+      const bodyBuffer = Buffer.from(body, 'utf8');
+      const resolver = this.config.operatorConfirmationResolver;
+      const auth = extractOperatorConfirmationAuth(req);
+      const hasOperatorCredential = auth.authorization !== undefined || auth.cookie !== undefined;
+
+      if (!resolver || !hasOperatorCredential) {
+        // No operator → gateway resolution path (or no operator credential):
+        // only agent-local confirmations are resolvable. The admin credential,
+        // if any, is stripped before the request reaches the agent; operator
+        // -owned entries stay pending.
+        this.proxy.proxyBufferedApiRequest(req, res, bodyBuffer);
+        return;
+      }
+
+      resolver.resolve(parsed.params, auth).then(
+        (result) => {
+          if (res.writableEnded || res.destroyed) return;
+          if (result.status === 'not_found') {
+            // Not an operator-owned gateway confirmation — resolve the
+            // agent-local entry. The proxy strips the admin credential.
+            this.proxy.proxyBufferedApiRequest(req, res, bodyBuffer);
+            return;
+          }
+          sendJson(res, 200, {
+            ok: result.status === 'approved' || result.status === 'modified',
+            message: result.message,
+            status: result.status,
+            executed: result.executed,
+          });
+        },
+        (error) => {
+          log.error('Operator confirmation resolution failed', {
+            error: toErrorMessage(error),
+          });
+          if (res.writableEnded || res.destroyed) return;
+          sendJson(res, 500, { ok: false, message: 'Confirmation resolve failed' });
+        },
+      );
+    });
   }
 
   private withBody(

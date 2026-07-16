@@ -45,6 +45,18 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 {{- end -}}
 
+{{- define "psfn.kubeSelfManagementServiceAccountName" -}}
+{{- default (printf "%s-kube-self-management" (include "psfn.fullname" .)) .Values.kubeSelfManagement.serviceAccountName | trunc 63 | trimSuffix "-" -}}
+{{- end -}}
+
+{{- define "psfn.gatewayServiceAccountName" -}}
+{{- if .Values.kubeSelfManagement.enabled -}}
+{{- include "psfn.kubeSelfManagementServiceAccountName" . -}}
+{{- else -}}
+{{- include "psfn.serviceAccountName" . -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "psfn.image" -}}
 {{- $root := .root -}}
 {{- $image := .image -}}

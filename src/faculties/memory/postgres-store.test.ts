@@ -134,6 +134,7 @@ class FakeTransactionClient {
   private snapshot: {
     memories: Map<string, MemoryRow>;
     patchEvents: Array<Record<string, unknown>>;
+    subjectBackfillCheckpoint: FakeMemoryPool['subjectBackfillCheckpoint'];
   } | null = null;
 
   constructor(private readonly pool: FakeMemoryPool) {}
@@ -145,6 +146,9 @@ class FakeTransactionClient {
       this.snapshot = {
         memories: new Map(this.pool.memories),
         patchEvents: [...this.pool.patchEvents],
+        subjectBackfillCheckpoint: this.pool.subjectBackfillCheckpoint
+          ? { ...this.pool.subjectBackfillCheckpoint }
+          : null,
       };
       return { rows: [], rowCount: 0, command: 'BEGIN', oid: 0, fields: [] } as QueryResult;
     }
@@ -157,6 +161,9 @@ class FakeTransactionClient {
         this.pool.memories.clear();
         for (const [id, row] of this.snapshot.memories) this.pool.memories.set(id, row);
         this.pool.patchEvents.splice(0, this.pool.patchEvents.length, ...this.snapshot.patchEvents);
+        this.pool.subjectBackfillCheckpoint = this.snapshot.subjectBackfillCheckpoint
+          ? { ...this.snapshot.subjectBackfillCheckpoint }
+          : null;
         this.snapshot = null;
       }
       return { rows: [], rowCount: 0, command: 'ROLLBACK', oid: 0, fields: [] } as QueryResult;
@@ -176,6 +183,11 @@ class FakeMemoryPool {
   readonly scratchpadEntries = new Map<string, ScratchpadTestRow>();
   readonly patchEvents: Array<Record<string, unknown>> = [];
   readonly clients: FakeTransactionClient[] = [];
+  subjectBackfillCheckpoint: {
+    cursor_memory_id: string | null;
+    completed: boolean;
+    processed_count: string;
+  } | null = null;
   readonly queryFailures: Array<{ fragment: string; error: Error }>;
   readonly schemaHasEmbeddingColumn: boolean;
   readonly schemaHasLegacyEmbeddingTable: boolean;
@@ -252,6 +264,73 @@ class FakeMemoryPool {
         oid: 0,
         fields: [],
       } as QueryResult;
+    }
+
+    if (normalized.startsWith("select to_regclass('contacts')::text as table_name")) {
+      return {
+        rows: [{ table_name: null }],
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      } as QueryResult;
+    }
+
+    if (normalized.startsWith('select pg_try_advisory_xact_lock')) {
+      return {
+        rows: [{ locked: true }],
+        rowCount: 1,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      } as QueryResult;
+    }
+
+    if (normalized.startsWith('delete from l2_memory_subject_backfill_checkpoints')) {
+      const deleted = this.subjectBackfillCheckpoint !== null;
+      this.subjectBackfillCheckpoint = null;
+      return { rows: [], rowCount: deleted ? 1 : 0, command: 'DELETE', oid: 0, fields: [] } as QueryResult;
+    }
+
+    if (normalized.startsWith('insert into l2_memory_subject_backfill_checkpoints')) {
+      this.subjectBackfillCheckpoint ??= {
+        cursor_memory_id: null,
+        completed: false,
+        processed_count: '0',
+      };
+      return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
+    }
+
+    if (normalized.includes('from l2_memory_subject_backfill_checkpoints')) {
+      return {
+        rows: this.subjectBackfillCheckpoint ? [{ ...this.subjectBackfillCheckpoint }] : [],
+        rowCount: this.subjectBackfillCheckpoint ? 1 : 0,
+        command: 'SELECT',
+        oid: 0,
+        fields: [],
+      } as QueryResult;
+    }
+
+    if (normalized.startsWith('update l2_memory_subject_backfill_checkpoints')) {
+      this.subjectBackfillCheckpoint = {
+        cursor_memory_id: values[1] == null ? null : String(values[1]),
+        completed: values[2] === true,
+        processed_count: String(values[3] ?? 0),
+      };
+      return { rows: [], rowCount: 1, command: 'UPDATE', oid: 0, fields: [] } as QueryResult;
+    }
+
+    if (normalized.includes('from l2_memories')
+      && normalized.includes('authorization_revision')
+      && normalized.includes('for update')) {
+      const cursor = values[0] == null ? null : String(values[0]);
+      const limit = Number(values[1] ?? 100);
+      const rows = [...this.memories.values()]
+        .filter(row => cursor === null || row.id > cursor)
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .slice(0, limit)
+        .map(row => ({ ...row, authorization_revision: '1' }));
+      return { rows, rowCount: rows.length, command: 'SELECT', oid: 0, fields: [] } as QueryResult;
     }
 
     if (normalized.includes('1 - (embedding <=> $1::vector) as similarity')) {
@@ -367,7 +446,40 @@ class FakeMemoryPool {
         embedding: typeof values[29] === 'string' ? values[29] : null,
       };
       this.memories.set(row.id, row);
+      return {
+        rows: [{ authorization_revision: '1' }],
+        rowCount: 1,
+        command: 'INSERT',
+        oid: 0,
+        fields: [],
+      } as QueryResult;
+    }
+
+    if (normalized.startsWith('insert into l2_memory_subject_classifications')) {
       return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
+    }
+
+    if (normalized.startsWith('delete from l2_memory_subject_contacts')) {
+      return { rows: [], rowCount: 0, command: 'DELETE', oid: 0, fields: [] } as QueryResult;
+    }
+
+    if (normalized.startsWith('insert into l2_memory_subject_contacts')) {
+      return { rows: [], rowCount: 1, command: 'INSERT', oid: 0, fields: [] } as QueryResult;
+    }
+
+    if (
+      normalized.startsWith('update l2_memories set subject_evidence_digest = $2')
+      && normalized.includes('returning id')
+    ) {
+      const id = String(values[0] ?? '');
+      const exists = this.memories.has(id);
+      return {
+        rows: exists ? [{ id }] : [],
+        rowCount: exists ? 1 : 0,
+        command: 'UPDATE',
+        oid: 0,
+        fields: [],
+      } as QueryResult;
     }
 
     if (
@@ -571,7 +683,13 @@ describe('postgres memory store unit coverage', () => {
     const store = await createPostgresMemoryStore('postgres://unused', 4);
     const listSpy = vi.spyOn(store, 'listActiveMemories');
     const policy = createDefaultMemoryRetrievalPolicy();
-    policy.lexicalAugment = { pageSize: 50, maxScan: 120, selectedLimit: 12 };
+    policy.lexicalAugment = {
+      pageSize: 50,
+      maxScan: 120,
+      selectedLimit: 12,
+      minOverlap: 2,
+      baseSimilarity: 0.62,
+    };
 
     const candidates = await collectRecentLexicalMemoryCandidates({
       memoryStore: store,
@@ -822,6 +940,7 @@ describe('postgres memory store unit coverage', () => {
     pool.memories.set(memory.id, makeMemoryRow(memory));
     postgresMocks.activePool = pool;
     const store = await createPostgresMemoryStore('postgres://unused', 4);
+    pool.clients.splice(0);
 
     await store.runInTransaction(async () => {
       await store.updateMemory('txn-commit-source', { supersededBy: 'txn-commit-replacement' });
@@ -855,6 +974,7 @@ describe('postgres memory store unit coverage', () => {
     pool.memories.set(memory.id, makeMemoryRow(memory));
     postgresMocks.activePool = pool;
     const store = await createPostgresMemoryStore('postgres://unused', 4);
+    pool.clients.splice(0);
 
     // Legacy handler style (memory writer patch flows): operations are not
     // awaited inside the handler but must still land before COMMIT.
@@ -890,6 +1010,7 @@ describe('postgres memory store unit coverage', () => {
     pool.memories.set(memory.id, makeMemoryRow(memory));
     postgresMocks.activePool = pool;
     const store = await createPostgresMemoryStore('postgres://unused', 4);
+    pool.clients.splice(0);
 
     pool.failNextQuery('insert into l2_memory_patch_events', 'simulated patch-event failure');
 

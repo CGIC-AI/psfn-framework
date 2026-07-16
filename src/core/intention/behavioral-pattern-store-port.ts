@@ -11,6 +11,11 @@ import type {
 
 type Awaitable<T> = T | Promise<T>;
 
+export interface BehavioralPatternWriteOptions {
+  /** Called after connection acquisition and immediately before the idempotent write begins. */
+  crossEffectBoundary?: () => Promise<void>;
+}
+
 export interface BehavioralPatternLatestPendingOutcomeInput {
   contactId: string;
   outcomeScore: number;
@@ -21,7 +26,10 @@ export interface BehavioralPatternLatestPendingOutcomeInput {
 
 export interface BehavioralPatternStorePortBackend {
   setPromotionHook(hook: BehavioralPatternPromotionHook | null): void;
-  recordResponseStrategy(input: BehavioralPatternRecordInput): Awaitable<BehavioralPatternSample>;
+  recordResponseStrategy(
+    input: BehavioralPatternRecordInput,
+    options?: BehavioralPatternWriteOptions,
+  ): Awaitable<BehavioralPatternSample>;
   recordOutcomeForSample(input: BehavioralPatternOutcomeInput): Awaitable<BehavioralPatternSample>;
   tryRecordOutcomeForLatestPending(
     input: BehavioralPatternLatestPendingOutcomeInput,
@@ -35,7 +43,10 @@ export interface BehavioralPatternStorePortBackend {
 
 export interface BehavioralPatternStorePort {
   setPromotionHook(hook: BehavioralPatternPromotionHook | null): void;
-  recordResponseStrategy(input: BehavioralPatternRecordInput): Promise<BehavioralPatternSample>;
+  recordResponseStrategy(
+    input: BehavioralPatternRecordInput,
+    options?: BehavioralPatternWriteOptions,
+  ): Promise<BehavioralPatternSample>;
   recordOutcomeForSample(input: BehavioralPatternOutcomeInput): Promise<BehavioralPatternSample>;
   tryRecordOutcomeForLatestPending(
     input: BehavioralPatternLatestPendingOutcomeInput,
@@ -54,7 +65,9 @@ export function createBehavioralPatternStorePort(
     setPromotionHook: (hook) => {
       store.setPromotionHook(hook);
     },
-    recordResponseStrategy: async (input) => await store.recordResponseStrategy(input),
+    recordResponseStrategy: async (input, options) => (
+      await store.recordResponseStrategy(input, options)
+    ),
     recordOutcomeForSample: async (input) => await store.recordOutcomeForSample(input),
     tryRecordOutcomeForLatestPending: async (input) => (
       await store.tryRecordOutcomeForLatestPending(input)

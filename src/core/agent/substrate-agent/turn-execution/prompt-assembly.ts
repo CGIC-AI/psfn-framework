@@ -59,6 +59,7 @@ import type { TurnExecutionObservability } from './observability.js';
 
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
+type TurnSessionIdentity = import('../turn-execution-runtime.js').TurnSessionIdentity;
 
 interface DynamicSuffixRenderSection {
   identifier: string;
@@ -148,6 +149,7 @@ function buildCurrentUserRuntimeProfile(input: {
 export async function assembleTurnPrompt(input: {
   runtime: TurnExecutionRuntime;
   message: SubstrateMessage;
+  turnSessionIdentity: TurnSessionIdentity;
   channelType: string | undefined;
   taskKind: string | undefined;
   channelMeta: import('../../../../system/trust/policy.js').ChannelMeta;
@@ -185,6 +187,7 @@ export async function assembleTurnPrompt(input: {
   const {
     runtime,
     message,
+    turnSessionIdentity,
     channelType,
     taskKind,
     channelMeta,
@@ -482,7 +485,7 @@ export async function assembleTurnPrompt(input: {
       ...viewerRequestContext,
     },
     async () => runtime.sessionManager.buildContext(
-      message.channelId,
+      turnSessionIdentity.logicalSessionId,
       fullPrompt,
       memoryContextBlock,
       undefined,
@@ -555,7 +558,7 @@ export async function assembleTurnPrompt(input: {
   // in the system prompt (never among the recent chat messages). Draining here
   // is what enforces the once-only contract.
   const completionNoticesBlock = renderBackgroundCompletionsBlock(
-    runtime.completionNotices.drain(runtime.resolveSessionChannelId(message.channelId)),
+    runtime.completionNotices.drain(turnSessionIdentity.logicalSessionId),
   );
   if (completionNoticesBlock) {
     planBlocks.push(createPromptPlanBlock({

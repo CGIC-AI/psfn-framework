@@ -342,6 +342,7 @@ describe('subsystem config round-trip', () => {
         minConversationalEntries: 2,
         minSingleEntryChars: 120,
         topicSegmentationEnabled: false,
+        maxPriorCandidates: 24,
       },
       sleepConsolidation: {
         reviewWindowDays: 60,
@@ -349,6 +350,8 @@ describe('subsystem config round-trip', () => {
         adjacencyGapMinutes: 45,
         maxRefinementsPerRun: 8,
         maxConsolidationsPerRun: 6,
+        transcriptMessageLimit: 200,
+        maxTranscriptCharsPerEpisode: 6000,
       },
       arcFormation: {
         passIntervalDays: 6,

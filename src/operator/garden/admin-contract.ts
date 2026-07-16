@@ -58,7 +58,25 @@ import type { AdminSharedWorkspaceService } from './services/shared-workspace-se
 
 export interface ConfirmationQueueAdminApi {
   listConfirmationQueue(): Promise<ConfirmationListResult>;
-  resolveConfirmationQueue(params: ConfirmationResolveParams): Promise<ConfirmationResolveResult>;
+  /**
+   * Resolves an agent-local confirmation (e.g. a card proposal). Operator-only
+   * gateway confirmations are never resolved through this agent-hosted surface;
+   * the operator credential required for them must not traverse the agent
+   * (x5rt.10). Agent-local resolution therefore takes no auth context.
+   */
+  resolveConfirmationQueue(
+    params: ConfirmationResolveParams,
+  ): Promise<ConfirmationResolveResult>;
+}
+
+/**
+ * Operator ADMIN_TOKEN material presented to the gateway operator confirmation
+ * endpoint. Only the independently authenticated Garden operator process ever
+ * holds this; it never crosses into the agent process (x5rt.10).
+ */
+export interface ConfirmationOperatorAuthContext {
+  authorization?: string;
+  cookie?: string;
 }
 
 export interface AdaptiveToolsStateProvider {

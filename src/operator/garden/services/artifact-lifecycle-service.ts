@@ -16,7 +16,9 @@ export class AdminArtifactLifecycleDataService implements AdminArtifactLifecycle
   }) {}
 
   getArtifactLifecycleData() {
-    const schedulerConfig = loadSchedulerConfig(this.deps.config.dataDir);
+    // scheduler.json is a per-companion owner file (dnll.3): read it from the
+    // companion data dir, not the shared system root.
+    const schedulerConfig = loadSchedulerConfig(this.deps.companionDataDir);
     const manager = new ArtifactLifecycleManager({
       companionDataDir: this.deps.companionDataDir,
       workspacePath: typeof this.deps.config.workspacePath === 'string' ? this.deps.config.workspacePath : undefined,

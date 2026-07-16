@@ -120,6 +120,23 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'analysisWorkbenchMaxTokens',
   'analysisWorkbenchMaxWallTimeMs',
   'analysisWorkbenchMaxSubQueries',
+  'analysisWorkbenchExecutionTimeoutMs',
+  'analysisWorkbenchOutputTruncation',
+  'voiceSessionTimeoutMs',
+  'voiceMaxFrameBytes',
+  'voiceMaxPendingFrames',
+  'subagentMaxConcurrent',
+  'shardMaxConcurrent',
+  'shardHeartbeatStaleAfterMs',
+  'shardHeartbeatDisconnectAfterMs',
+  'documentIngestMaxBytes',
+  'documentIngestTextMaxBytes',
+  'documentIngestPromptChars',
+  'documentIngestSidecarChars',
+  'imageFalTimeoutMs',
+  'imageFalPollIntervalMs',
+  'imageComfyTimeoutMs',
+  'imageComfyPollIntervalMs',
   'retryMaxAttempts',
   'retryBaseDelayMs',
   'moaMaxRounds',
@@ -244,6 +261,10 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     analysisWorkbenchMaxTokens: config.analysisWorkbenchMaxTokens ?? null,
     analysisWorkbenchMaxWallTimeMs: config.analysisWorkbenchMaxWallTimeMs ?? null,
     analysisWorkbenchMaxSubQueries: config.analysisWorkbenchMaxSubQueries ?? null,
+    analysisWorkbenchExecutionTimeoutMs:
+      config.analysisWorkbenchExecutionTimeoutMs ?? null,
+    analysisWorkbenchOutputTruncation:
+      config.analysisWorkbenchOutputTruncation ?? null,
     observerEvalSidecar: structuredClone(
       config.observerEvalSidecar ?? createDefaultObserverEvalSidecarSettings(),
     ),
@@ -273,6 +294,8 @@ function getMemorySettingsSnapshot(config: SubstrateConfig) {
     | 'analysisWorkbenchMaxTokens'
     | 'analysisWorkbenchMaxWallTimeMs'
     | 'analysisWorkbenchMaxSubQueries'
+    | 'analysisWorkbenchExecutionTimeoutMs'
+    | 'analysisWorkbenchOutputTruncation'
     | 'observerEvalSidecar'
     | 'retryMaxAttempts'
     | 'retryBaseDelayMs'
@@ -389,6 +412,9 @@ function getVoiceSettingsSnapshot(config: SubstrateConfig) {
     deepgramListenEndpoint: config.deepgramListenEndpoint ?? null,
     elevenLabsModelId: config.elevenLabsModelId ?? null,
     elevenLabsEndpointBase: config.elevenLabsEndpointBase ?? null,
+    voiceSessionTimeoutMs: config.voiceSessionTimeoutMs ?? null,
+    voiceMaxFrameBytes: config.voiceMaxFrameBytes ?? null,
+    voiceMaxPendingFrames: config.voiceMaxPendingFrames ?? null,
   } satisfies SnapshotSection<
     | 'voiceEnabled'
     | 'ttsProvider'
@@ -405,6 +431,9 @@ function getVoiceSettingsSnapshot(config: SubstrateConfig) {
     | 'deepgramListenEndpoint'
     | 'elevenLabsModelId'
     | 'elevenLabsEndpointBase'
+    | 'voiceSessionTimeoutMs'
+    | 'voiceMaxFrameBytes'
+    | 'voiceMaxPendingFrames'
   >;
 }
 
@@ -454,6 +483,39 @@ function getObsidianAndMoaSettingsSnapshot(config: SubstrateConfig) {
     | 'moaMaxRounds'
     | 'moaMaxTokensPerRound'
     | 'moaTimeoutMs'
+  >;
+}
+
+// Tier 2 tuning knobs (zet.7): compositional concurrency, document ingest
+// caps, and image polling limits. Null means "not set — compiled default".
+function getTier2TuningSnapshot(config: SubstrateConfig) {
+  return {
+    subagentMaxConcurrent: config.subagentMaxConcurrent ?? null,
+    shardMaxConcurrent: config.shardMaxConcurrent ?? null,
+    shardHeartbeatStaleAfterMs: config.shardHeartbeatStaleAfterMs ?? null,
+    shardHeartbeatDisconnectAfterMs:
+      config.shardHeartbeatDisconnectAfterMs ?? null,
+    documentIngestMaxBytes: config.documentIngestMaxBytes ?? null,
+    documentIngestTextMaxBytes: config.documentIngestTextMaxBytes ?? null,
+    documentIngestPromptChars: config.documentIngestPromptChars ?? null,
+    documentIngestSidecarChars: config.documentIngestSidecarChars ?? null,
+    imageFalTimeoutMs: config.imageFalTimeoutMs ?? null,
+    imageFalPollIntervalMs: config.imageFalPollIntervalMs ?? null,
+    imageComfyTimeoutMs: config.imageComfyTimeoutMs ?? null,
+    imageComfyPollIntervalMs: config.imageComfyPollIntervalMs ?? null,
+  } satisfies SnapshotSection<
+    | 'subagentMaxConcurrent'
+    | 'shardMaxConcurrent'
+    | 'shardHeartbeatStaleAfterMs'
+    | 'shardHeartbeatDisconnectAfterMs'
+    | 'documentIngestMaxBytes'
+    | 'documentIngestTextMaxBytes'
+    | 'documentIngestPromptChars'
+    | 'documentIngestSidecarChars'
+    | 'imageFalTimeoutMs'
+    | 'imageFalPollIntervalMs'
+    | 'imageComfyTimeoutMs'
+    | 'imageComfyPollIntervalMs'
   >;
 }
 
@@ -540,6 +602,7 @@ export function getRuntimeSettingsSnapshot(
     ...getVoiceSettingsSnapshot(config),
     ...getChannelSettingsSnapshot(config),
     ...getObsidianAndMoaSettingsSnapshot(config),
+    ...getTier2TuningSnapshot(config),
   };
 }
 

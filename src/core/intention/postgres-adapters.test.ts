@@ -1,8 +1,58 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { FakeIntentionPool } from '../../test-support/fake-postgres-intention-pool.js';
 import { createPostgresIntentionPortsFromPool } from './postgres-adapters.js';
 
 describe('postgres intention adapters', () => {
+  it('keeps connection acquisition failures before the behavioral write boundary', async () => {
+    const connectionError = new Error('connection unavailable');
+    const pool = {
+      connect: vi.fn(async () => {
+        throw connectionError;
+      }),
+    };
+    const ports = createPostgresIntentionPortsFromPool(pool as never);
+    const crossEffectBoundary = vi.fn(async () => undefined);
+
+    await expect(ports.behavioralPatternTracker.recordResponseStrategy({
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-connection-failure',
+      responseContent: 'Retry this after the connection recovers.',
+    }, { crossEffectBoundary })).rejects.toBe(connectionError);
+
+    expect(crossEffectBoundary).not.toHaveBeenCalled();
+  });
+
+  it('crosses immediately before the behavioral write begins', async () => {
+    const writeError = new Error('write outcome is ambiguous');
+    const order: string[] = [];
+    const query = vi.fn(async () => {
+      order.push('query');
+      throw writeError;
+    });
+    const release = vi.fn(() => {
+      order.push('release');
+    });
+    const pool = {
+      connect: vi.fn(async () => {
+        order.push('connect');
+        return { query, release };
+      }),
+    };
+    const ports = createPostgresIntentionPortsFromPool(pool as never);
+
+    await expect(ports.behavioralPatternTracker.recordResponseStrategy({
+      contactId: 'contact-a',
+      sourceMessageId: 'msg-ambiguous-write',
+      responseContent: 'Do not replay an ambiguous durable write.',
+    }, {
+      crossEffectBoundary: async () => {
+        order.push('cross');
+      },
+    })).rejects.toBe(writeError);
+
+    expect(order).toEqual(['connect', 'cross', 'query', 'release']);
+  });
+
   it('persists concerns and resolves similar follow-up lookups', async () => {
     const pool = new FakeIntentionPool();
     const ports = createPostgresIntentionPortsFromPool(pool as never);

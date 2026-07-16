@@ -10,6 +10,7 @@ import {
   parseIcpAutonomySchedulerConfig,
   type IcpAutonomySchedulerConfig,
 } from './icp-autonomy-scheduler-config.js';
+import { MODEL_USAGE_RANGES, type ModelUsageRange } from '../../shared/telemetry/model-usage.js';
 
 export {
   DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
@@ -99,6 +100,13 @@ export interface EpisodeSynthesisLaneConfig {
    * keep validating; when false the deterministic cuts are unchanged.
    */
   topicSegmentationEnabled: boolean;
+  /**
+   * Cap on prior-episode candidates pulled for consolidation/dedup lookups
+   * (zet.7). Optional key with an explicit default (24, mirrors
+   * DEFAULT_MAX_PRIOR_CANDIDATES in the synthesizer) so existing operator
+   * files keep validating.
+   */
+  maxPriorCandidates: number;
 }
 
 /**
@@ -120,6 +128,20 @@ export interface SleepConsolidationConfig {
    * and are not bounded by this.
    */
   maxConsolidationsPerRun: number;
+  /**
+   * Messages pulled per episode transcript during consolidation (zet.7).
+   * Optional key with an explicit default (200, mirrors
+   * DEFAULT_TRANSCRIPT_MESSAGE_LIMIT in the consolidator) so existing
+   * operator files keep validating.
+   */
+  transcriptMessageLimit: number;
+  /**
+   * Per-episode transcript character cap during consolidation (zet.7).
+   * Optional key with an explicit default (6000, mirrors
+   * DEFAULT_MAX_TRANSCRIPT_CHARS in the consolidator) so existing operator
+   * files keep validating.
+   */
+  maxTranscriptCharsPerEpisode: number;
 }
 
 /**
@@ -641,6 +663,31 @@ export const DEFAULT_INTROSPECTION_AUDIT_CONFIG: IntrospectionAuditConfig = {
   reflectionMaxTokens: 300,
 };
 
+/** Durable-usage windows the tool-usage evaluator may aggregate over. */
+export type ToolUsageEvaluatorWindow = Exclude<ModelUsageRange, 'custom'>;
+
+/**
+ * Tool-usage evaluator cadence + thresholds (psfn-framework-b0yl.5). The
+ * evaluator aggregates ACTUAL per-tool invocations from the durable turn-record
+ * stream (every catalog tool, per-companion) and feeds presentation ordering
+ * plus operator-visible pin suggestions. It never gates callability. Opt-in
+ * (fail-closed default) and registered only when enabled, mirroring the
+ * introspection-audit lane. `usageWindow` bounds which turn records count.
+ */
+export interface ToolUsageEvaluatorConfig {
+  enabled: boolean;
+  intervalMs: number;
+  usageWindow: ToolUsageEvaluatorWindow;
+  minPinSuggestionInvocations: number;
+}
+
+export const DEFAULT_TOOL_USAGE_EVALUATOR_CONFIG: ToolUsageEvaluatorConfig = {
+  enabled: false,
+  intervalMs: 21_600_000, // 6h — durable rollup, cheap, no LLM cost
+  usageWindow: 'month',
+  minPinSuggestionInvocations: 25,
+};
+
 export interface SchedulerRuntimeConfig {
   tickIntervalMs: number;
   heartbeatIntervalMs: number;
@@ -661,6 +708,7 @@ export interface SchedulerRuntimeConfig {
   icpAutonomy: IcpAutonomySchedulerConfig;
   introspectionAudit?: IntrospectionAuditConfig;
   backgroundWorkWelfare?: BackgroundWorkWelfareConfig;
+  toolUsageEvaluator?: ToolUsageEvaluatorConfig;
 }
 
 interface SchedulerRuntimeLoadOptions {
@@ -841,6 +889,11 @@ function validateEpisodeSynthesisConfig(
     topicSegmentationEnabled: raw.topicSegmentationEnabled === undefined
       ? false
       : toBoolean(raw.topicSegmentationEnabled, 'episodeSynthesis.topicSegmentationEnabled'),
+    // zet.7: optional key, default mirrors DEFAULT_MAX_PRIOR_CANDIDATES (24)
+    // in src/faculties/memory/episodic/synthesis.ts — keep in lockstep.
+    maxPriorCandidates: raw.maxPriorCandidates === undefined
+      ? 24
+      : toPositiveInteger(raw.maxPriorCandidates, 'episodeSynthesis.maxPriorCandidates', 1),
   };
 }
 
@@ -861,6 +914,15 @@ function validateSleepConsolidationConfig(
       'sleepConsolidation.maxConsolidationsPerRun',
       1,
     ),
+    // zet.7: optional keys, defaults mirror DEFAULT_TRANSCRIPT_MESSAGE_LIMIT
+    // (200) and DEFAULT_MAX_TRANSCRIPT_CHARS (6000) in
+    // src/faculties/memory/episodic/sleep-consolidation.ts — keep in lockstep.
+    transcriptMessageLimit: raw.transcriptMessageLimit === undefined
+      ? 200
+      : toPositiveInteger(raw.transcriptMessageLimit, 'sleepConsolidation.transcriptMessageLimit', 1),
+    maxTranscriptCharsPerEpisode: raw.maxTranscriptCharsPerEpisode === undefined
+      ? 6000
+      : toPositiveInteger(raw.maxTranscriptCharsPerEpisode, 'sleepConsolidation.maxTranscriptCharsPerEpisode', 1),
   };
 }
 
@@ -1466,6 +1528,36 @@ function validateWeightedThoughtOutreachConfig(
   };
 }
 
+function toToolUsageEvaluatorWindow(value: unknown, field: string): ToolUsageEvaluatorWindow {
+  if (typeof value !== 'string' || value === 'custom' || !MODEL_USAGE_RANGES.includes(value as ModelUsageRange)) {
+    throw new Error(
+      `Invalid scheduler config: ${field} must be one of `
+      + `${MODEL_USAGE_RANGES.filter(range => range !== 'custom').join(', ')}`,
+    );
+  }
+  return value as ToolUsageEvaluatorWindow;
+}
+
+function validateToolUsageEvaluatorConfig(
+  value: unknown,
+  sourcePath: string,
+): ToolUsageEvaluatorConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: toolUsageEvaluator must be an object`);
+  }
+  return {
+    enabled: toBoolean(value.enabled, 'toolUsageEvaluator.enabled'),
+    intervalMs: toInterval(value.intervalMs, 'toolUsageEvaluator.intervalMs'),
+    usageWindow: toToolUsageEvaluatorWindow(value.usageWindow, 'toolUsageEvaluator.usageWindow'),
+    minPinSuggestionInvocations: toPositiveInteger(
+      value.minPinSuggestionInvocations,
+      'toolUsageEvaluator.minPinSuggestionInvocations',
+      1,
+    ),
+  };
+}
+
 function validateIntrospectionAuditConfig(
   value: unknown,
   sourcePath: string,
@@ -1609,6 +1701,9 @@ export function validateSchedulerConfig(raw: unknown, sourcePath: string): Sched
     ...(raw.backgroundWorkWelfare === undefined
       ? {}
       : { backgroundWorkWelfare: validateBackgroundWorkWelfareConfig(raw.backgroundWorkWelfare, sourcePath) }),
+    ...(raw.toolUsageEvaluator === undefined
+      ? {}
+      : { toolUsageEvaluator: validateToolUsageEvaluatorConfig(raw.toolUsageEvaluator, sourcePath) }),
   };
   assertBackgroundMaintenanceRestWindowCoverage(validated, sourcePath);
   return validated;

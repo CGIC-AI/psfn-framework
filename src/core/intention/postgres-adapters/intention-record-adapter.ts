@@ -2,7 +2,10 @@ import type { Pool } from 'pg';
 import { wrapPromptSectionXml } from '../../identity/prompt-sections.js';
 import { queryOne, queryRows } from './connection.js';
 import type { PostgresIntentionPortOptions } from './types.js';
-import type { BehavioralPatternStorePortBackend } from '../behavioral-pattern-store-port.js';
+import type {
+  BehavioralPatternStorePortBackend,
+  BehavioralPatternWriteOptions,
+} from '../behavioral-pattern-store-port.js';
 import type {
   BehavioralPatternPromotionHook,
   BehavioralPatternSample,
@@ -151,7 +154,7 @@ export class PostgresBehavioralPatternTracker implements BehavioralPatternStoreP
     responseContent: string;
     strategy?: (typeof BEHAVIORAL_RESPONSE_STRATEGIES)[number];
     createdAt?: string;
-  }): Promise<BehavioralPatternSample> {
+  }, options: BehavioralPatternWriteOptions = {}): Promise<BehavioralPatternSample> {
     const contactId = normalizeRequiredText(input.contactId, 'contactId', MAX_CONTACT_ID_CHARS);
     const sourceMessageId = normalizeRequiredText(input.sourceMessageId, 'sourceMessageId', MAX_MESSAGE_ID_CHARS);
     const responseContent = normalizeRequiredText(input.responseContent, 'responseContent', 20_000);
@@ -162,22 +165,29 @@ export class PostgresBehavioralPatternTracker implements BehavioralPatternStoreP
       : responseContent;
     const id = normalizeRequiredText(this.idFactory(), 'id', 128);
 
-    const row = await queryOne<BehavioralPatternRow>(
-      this.pool,
-      `
-        INSERT INTO behavioral_pattern_events (
-          id, contact_id, source_message_id, strategy, response_excerpt, created_at
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6
-        )
-        ON CONFLICT (contact_id, source_message_id, strategy)
-        DO UPDATE SET response_excerpt = EXCLUDED.response_excerpt
-        RETURNING
-          id, contact_id, source_message_id, strategy, response_excerpt, created_at,
-          outcome_score, outcome_observed_at, outcome_source_message_id, promoted_at, promoted_memory_id
-      `,
-      [id, contactId, sourceMessageId, strategy, responseExcerpt, createdAt],
-    );
+    const client = await this.pool.connect();
+    let row: BehavioralPatternRow | undefined;
+    try {
+      await options.crossEffectBoundary?.();
+      const result = await client.query<BehavioralPatternRow>(
+        `
+          INSERT INTO behavioral_pattern_events (
+            id, contact_id, source_message_id, strategy, response_excerpt, created_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6
+          )
+          ON CONFLICT (contact_id, source_message_id, strategy)
+          DO UPDATE SET response_excerpt = EXCLUDED.response_excerpt
+          RETURNING
+            id, contact_id, source_message_id, strategy, response_excerpt, created_at,
+            outcome_score, outcome_observed_at, outcome_source_message_id, promoted_at, promoted_memory_id
+        `,
+        [id, contactId, sourceMessageId, strategy, responseExcerpt, createdAt],
+      );
+      row = result.rows.at(0);
+    } finally {
+      client.release();
+    }
     if (!row) {
       throw new Error('Behavioral pattern event is missing after upsert');
     }

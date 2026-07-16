@@ -115,6 +115,8 @@ import type {
   ConfirmationListResult,
   ConfirmationResolveParams,
   RuntimeHealthResult,
+  KubeSelfManagementRequest,
+  KubeSelfManagementResponse,
   GatewayCredentialPresenceResult,
   RpcSubstrateMessage,
   VoiceStreamChunkParams,
@@ -1322,6 +1324,15 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
 
   async runtimeHealth(): Promise<RuntimeHealthResult> {
     return await this.rpcInstance.request('runtime.health', {}) as RuntimeHealthResult;
+  }
+
+  async kubeSelfManagement(
+    params: KubeSelfManagementRequest,
+  ): Promise<KubeSelfManagementResponse> {
+    return await this.rpcInstance.request(
+      'kube.self_management',
+      params,
+    ) as KubeSelfManagementResponse;
   }
 
   async getCredentialPresence(): Promise<GatewayCredentialPresenceResult> {

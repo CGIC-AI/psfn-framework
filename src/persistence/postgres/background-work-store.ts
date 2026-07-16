@@ -1473,7 +1473,10 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     // A `pending` receipt marks a run that entered but never crossed its write
     // boundary. On lease expiry that work is safely re-runnable, so drop the
     // receipt before classifying: recovery decides from the durable phase, and
-    // only a boundary-crossed (`started`) receipt forces outcome-unknown.
+    // only a boundary-crossed (`started`) receipt forces outcome-unknown. A
+    // pre-boundary crash did not attempt the durable effect, so lease recovery
+    // must not consume a work attempt; otherwise maxAttempts=1 loses safe work
+    // solely because a graceful-release database call or process failed.
     await this.pool.query(`
       DELETE FROM agent_background_work_effect_receipts receipt
       USING agent_background_work_jobs job
@@ -1484,14 +1487,20 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     `, [nowMs]);
     const result = await this.pool.query(`
       UPDATE agent_background_work_jobs
-      SET attempt_count = attempt_count + 1,
+      SET attempt_count = CASE
+            WHEN EXISTS (
+              SELECT 1 FROM agent_background_work_effect_receipts receipt
+              WHERE receipt.job_id = agent_background_work_jobs.job_id
+                AND receipt.state = 'started'
+            ) THEN attempt_count + 1
+            ELSE attempt_count
+          END,
           state = CASE
             WHEN EXISTS (
               SELECT 1 FROM agent_background_work_effect_receipts receipt
               WHERE receipt.job_id = agent_background_work_jobs.job_id
                 AND receipt.state = 'started'
             ) THEN 'failed'
-            WHEN attempt_count + 1 >= max_attempts THEN 'failed'
             ELSE 'retry_wait'
           END,
           reason_code = CASE
@@ -1500,7 +1509,6 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
               WHERE receipt.job_id = agent_background_work_jobs.job_id
                 AND receipt.state = 'started'
             ) THEN 'effect_outcome_unknown'
-            WHEN attempt_count + 1 >= max_attempts THEN 'retry_exhausted'
             ELSE 'lease_expired'
           END,
           available_at_ms = $1::bigint,
@@ -1509,7 +1517,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
               SELECT 1 FROM agent_background_work_effect_receipts receipt
               WHERE receipt.job_id = agent_background_work_jobs.job_id
                 AND receipt.state = 'started'
-            ) OR attempt_count + 1 >= max_attempts THEN $1::bigint
+            ) THEN $1::bigint
             ELSE NULL::bigint
           END,
           updated_at_ms = $1,

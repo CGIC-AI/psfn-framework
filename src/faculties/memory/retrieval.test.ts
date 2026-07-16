@@ -4,7 +4,7 @@ import {
   RetrievalIntegrityError,
   __retrieval_internals,
 } from './retrieval.js';
-import type { MemoryStorePort } from './memory-store-port.js';
+import type { MemoryStorePort, MemorySubjectAuthorizedQuery } from './memory-store-port.js';
 import type { EmbeddingProviderPort, LLMProviderPort } from '../../core/agent/contracts.js';
 import type { PurrMemory } from './types.js';
 import type { SensitivityLevel } from '../../system/trust/types.js';
@@ -177,6 +177,64 @@ describe('MemoryRetriever active memory context', () => {
     idCounter = 0;
   });
 
+  it('uses the SQL subject projection for production retrieval and access updates', async () => {
+    const visible = makeMemory({
+      id: 'subject-visible',
+      text: 'subject visible retrieval marker',
+      contactId: 'contact-a',
+      similarity: 0.95,
+    });
+    const rawSearch = vi.fn(() => {
+      throw new Error('raw retrieval must not run');
+    });
+    const authorizedQueries: Array<MemorySubjectAuthorizedQuery> = [];
+    const store = {
+      searchByEmbedding: rawSearch,
+      searchByText: rawSearch,
+      updateMemory: rawSearch,
+      getContactProfile: vi.fn().mockReturnValue(undefined),
+      getEvolutionLinksForSourceMemory: vi.fn().mockReturnValue([]),
+      queryAuthorizedMemorySubjects: vi.fn(async (input: MemorySubjectAuthorizedQuery) => {
+        authorizedQueries.push(input);
+        if (input.selector.kind === 'embedding_search') {
+          return { memories: [visible], total: 1 };
+        }
+        return { memories: [], total: 0 };
+      }),
+      mutateAuthorizedMemorySubjects: vi.fn().mockResolvedValue(1),
+    } as unknown as MemoryStorePort;
+    const retriever = new MemoryRetriever(
+      store,
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      undefined,
+      null,
+      null,
+      null,
+      null,
+      true,
+    );
+
+    const output = await retriever.retrieve(
+      'subject visible retrieval marker',
+      'api:test',
+      'regular',
+      { isDirectMessage: true },
+      'contact-a',
+    );
+
+    expect(output).toContain('subject visible retrieval marker');
+    expect(rawSearch).not.toHaveBeenCalled();
+    expect(authorizedQueries.some(query => (
+      query.selector.kind === 'embedding_search'
+      && query.authorization.viewerContactIds[0] === 'contact-a'
+    ))).toBe(true);
+    expect(store.mutateAuthorizedMemorySubjects).toHaveBeenCalledWith(expect.objectContaining({
+      authorization: expect.objectContaining({ action: 'update', viewerContactIds: ['contact-a'] }),
+      memoryIds: ['subject-visible'],
+    }));
+  });
+
   it('retains existing recalled memories when a later refresh has no candidates', async () => {
     const recalled = makeMemory({
       text: 'V prefers oolong tea in the afternoon.',
@@ -227,7 +285,13 @@ describe('MemoryRetriever active memory context', () => {
     store.listActiveMemories = listActiveMemories;
 
     const initialPolicy = createDefaultMemoryRetrievalPolicy();
-    initialPolicy.lexicalAugment = { pageSize: 2, maxScan: 3, selectedLimit: 1 };
+    initialPolicy.lexicalAugment = {
+      pageSize: 2,
+      maxScan: 3,
+      selectedLimit: 1,
+      minOverlap: 2,
+      baseSimilarity: 0.62,
+    };
     const config = makeRuntimeConfig({
       embeddingProvider: 'api',
       embeddingApiModel: 'test-embedding-v1',
@@ -250,7 +314,13 @@ describe('MemoryRetriever active memory context', () => {
     expect(retriever.getActiveMemoryContext(request)?.selectedMemoryIds).toHaveLength(1);
 
     const reloadedPolicy = createDefaultMemoryRetrievalPolicy();
-    reloadedPolicy.lexicalAugment = { pageSize: 1, maxScan: 2, selectedLimit: 2 };
+    reloadedPolicy.lexicalAugment = {
+      pageSize: 1,
+      maxScan: 2,
+      selectedLimit: 2,
+      minOverlap: 2,
+      baseSimilarity: 0.62,
+    };
     config.memoryRetrievalPolicy = reloadedPolicy;
     listActiveMemories.mockClear();
 

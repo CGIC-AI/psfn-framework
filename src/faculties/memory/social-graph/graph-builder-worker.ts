@@ -32,6 +32,7 @@ import type { SensitivityLevel } from '../../../system/trust/types.js';
 import { SENSITIVITY_LEVELS, sensitivityOrd } from '../../../system/trust/types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { PurrMemory } from '../types.js';
+import { resolveCanonicalMemorySubjectContactId } from '../subject-evidence.js';
 import type { ExtractedFact } from '../types.js';
 import { inferRelationshipTypeFromFact } from '../extraction/mention-only-contacts.js';
 import {
@@ -182,28 +183,6 @@ function memoryToFact(memory: PurrMemory): ExtractedFact {
   };
 }
 
-function resolveSocialGraphTargetContactId(memory: PurrMemory): string | undefined {
-  const provenance = memory.provenance;
-  const subjectContactId = provenance?.subjectContactId;
-  if (subjectContactId !== undefined) return subjectContactId;
-
-  const mentionContactId = memory.contactId;
-  if (
-    mentionContactId !== undefined
-    && mentionContactId !== provenance?.routedContactId
-    && mentionContactId !== provenance?.sourceContactId
-    && mentionContactId !== provenance?.triggerContactId
-  ) {
-    return mentionContactId;
-  }
-
-  const routedContactId = provenance?.routedContactId;
-  if (routedContactId === undefined || routedContactId === provenance?.triggerContactId) {
-    return undefined;
-  }
-  return routedContactId;
-}
-
 /**
  * (a) Repeated co-presence. Groups room-scoped memories by channel, then by
  * window (provenance.sessionId, else an extractedAt time-bucket). A pair of
@@ -281,7 +260,7 @@ function buildOverheardCandidates(memories: readonly PurrMemory[]): EdgeCandidat
   for (const memory of memories) {
     if (memory.provenance?.addressMode !== 'overheard_room_context') continue;
     const source = memory.provenance.sourceContactId;
-    const target = resolveSocialGraphTargetContactId(memory);
+    const target = resolveCanonicalMemorySubjectContactId(memory);
     if (!source || !target || source === target) continue;
     const coarse = inferRelationshipTypeFromFact(memoryToFact(memory));
     const kind: SocialRelationshipKind = coarse ? coarseRelationshipTypeToKind(coarse) : 'acquaintance';
@@ -312,7 +291,7 @@ function buildNamedRelationshipCandidates(memories: readonly PurrMemory[]): Edge
   for (const memory of memories) {
     if (memory.provenance?.addressMode === 'overheard_room_context') continue;
     const source = memory.provenance?.sourceContactId;
-    const target = resolveSocialGraphTargetContactId(memory);
+    const target = resolveCanonicalMemorySubjectContactId(memory);
     if (!source || !target || source === target) continue;
     const inference = inferSocialRelationshipKindFromText(memory.text);
     if (!inference) continue;

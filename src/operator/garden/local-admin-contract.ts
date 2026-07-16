@@ -24,6 +24,7 @@ import type { ConcernStorePort } from '../../core/intention/concern-store-port.j
 import type { OutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
+import { createSubjectAuthorizedMemoryStore } from '../../faculties/memory/subject-authorized-store.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import type { GroupMemoryBackfillExtractorPort } from '../../faculties/memory/extraction/group-backfill.js';
 import type {
@@ -190,12 +191,15 @@ export function createInProcessGardenAdminContract(
 ): GardenAdminDomainServices {
   const publicConfig = sanitizeCoreSubstrateConfig(options.config) as SubstrateConfig;
   const promptState = options.promptState ?? createPromptStatePort({});
+  const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
   const configStore = createOwnerFileConfigStore({
     dataDir: options.config.dataDir,
+    // capability-tier.json is a per-companion owner file (dnll.2): the Garden
+    // editor must read/write the selected companion's file, not a shared one.
+    companionDataDir,
     seedDir: process.env.CONFIG_DIR,
     defaultContextWindow: options.config.defaultContextWindow,
   });
-  const companionDataDir = resolveConfiguredCompanionDataDir(options.config);
   const resolveLastActiveSessionId = () => readLastActiveSession(companionDataDir)?.sessionId ?? null;
   const valuesJournal = new ValuesJournalStore(resolveValuesJournalPath(companionDataDir), {
     legacyFilePaths: [resolveLegacyValuesJournalPath(companionDataDir)],
@@ -221,7 +225,7 @@ export function createInProcessGardenAdminContract(
     ? new AdminModelUsageDataService(modelUsageStore)
     : null;
   const auditHistory = new AdminAuditHistoryDataService({
-    gardenStore: new GardenAuditHistoryJsonlStore(join(options.config.dataDir, 'garden-audit-history.jsonl')),
+    gardenStore: new GardenAuditHistoryJsonlStore(join(companionDataDir, 'garden-audit-history.jsonl')),
     gatewayReader: resolveGatewayAuditReader(options.config),
     chargeLedger,
     scopeId: options.config.companionId ?? companionDataDir,
@@ -261,7 +265,11 @@ export function createInProcessGardenAdminContract(
   });
   const schedulerService = new AdminSchedulerService(
     options.scheduler,
-    options.config.dataDir,
+    // Per-companion state (heartbeat-policy.json + reflection-metacognition
+    // journal). Must match the runtime, which roots both under companionDataDir
+    // (agent/main.ts wireHeartbeatRuntime); config.dataDir is the shared
+    // system-data root and would collide across a multi-companion fleet.
+    companionDataDir,
     // Live habit wake-window snapshot: recompute from the current scheduler
     // config + active-session partner timestamps on each read (E7.2).
     () => resolveMorningWakeSnapshot({
@@ -340,14 +348,18 @@ export function createInProcessGardenAdminContract(
   // emotion; the operator-approved second-arrow consolidation is the single
   // exception, applied through the live memory store's existing supersession
   // machinery (same in-process instance the agent runtime uses).
+  // The legacy admin session proves operator access but carries no subject
+  // identity. Fleet-auth must supply that authority before Garden may expose
+  // or mutate subject-classified memories.
+  const gardenMemoryStore = createSubjectAuthorizedMemoryStore(options.memoryStore, {});
   const driftReviews = createAdminDriftReviewService({
     store: createDriftReviewCardStore(resolveDriftReviewCardsPath(companionDataDir)),
-    memoryStore: options.memoryStore,
+    memoryStore: gardenMemoryStore,
   });
 
   return {
     dashboard: new AdminDashboardDataService({
-      memoryStore: options.memoryStore,
+      memoryStore: gardenMemoryStore,
       sessionStore: options.sessionStore,
       sessionManager: options.sessionManager,
       scheduler: options.scheduler,
@@ -409,7 +421,7 @@ export function createInProcessGardenAdminContract(
       ...(options.config.groupMemory ? { groupMemory: options.config.groupMemory } : {}),
       ...(options.channelGroupMemory ? { channelGroupMemory: options.channelGroupMemory } : {}),
       sessionStore: options.sessionStore,
-      memoryStore: options.memoryStore,
+      memoryStore: gardenMemoryStore,
       ...(options.contactStore ? { contactStore: options.contactStore } : {}),
       watermarkStore: new JsonGroupMemoryWatermarkStore(join(companionDataDir, 'group-memory-watermarks.json')),
       ...(options.memoryExtractor ? { memoryExtractor: options.memoryExtractor } : {}),
@@ -418,7 +430,10 @@ export function createInProcessGardenAdminContract(
       companionAuthorIds: options.companionAuthorIds ?? [],
     }),
     memory: new AdminMemoryDataService({
-      memoryStore: options.memoryStore,
+      // The legacy admin session key authenticates an operator but carries no
+      // subject identity. Until fleet authority supplies one, Garden memory
+      // product surfaces must fail closed rather than enumerate the corpus.
+      memoryStore: gardenMemoryStore,
       contactStore: options.contactStore,
       embeddingService: options.embeddingService,
       resolveCompanionName: () => resolveCompanionNameFromConfig(options.config),
@@ -440,12 +455,12 @@ export function createInProcessGardenAdminContract(
       sessionManager: options.sessionManager,
       eventBus: options.eventBus,
       contactStore: options.contactStore,
-      memoryStore: options.memoryStore,
+      memoryStore: gardenMemoryStore,
       config: options.config,
     }),
     contacts: new AdminContactsDataService({
       contactStore: options.contactStore,
-      memoryStore: options.memoryStore,
+      memoryStore: gardenMemoryStore,
       sessionStore: options.sessionStore,
       relationshipScoreReader: options.contactStore
         ? createContactRelationshipScoreReader(options.contactStore)

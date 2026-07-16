@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { resolveCompanionStateDir } from '../../persistence/layout.js';
 import { loadConfig } from '../../system/config/load-config.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
+import { PER_COMPANION_OWNER_FILES } from '../../system/config/settings-contract.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createBootstrapStarterCard } from '../../core/identity/loader.js';
 
@@ -140,7 +141,14 @@ export function createIsolatedE2ERuntime(
       'backup.json',
       'skills.json',
     ]) {
-      copyOwnerExample(seedDir, systemDataDir, ownerFile);
+      // Per-companion owner files (capability-tier.json dnll.2, scheduler.json
+      // dnll.3) are rooted at companionDataDir; the rest stay cluster-global at
+      // systemDataDir.
+      copyOwnerExample(
+        seedDir,
+        PER_COMPANION_OWNER_FILES.has(ownerFile) ? companionDataDir : systemDataDir,
+        ownerFile,
+      );
     }
     writeFileSync(
       characterCardPath,

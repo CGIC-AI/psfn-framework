@@ -3139,6 +3139,85 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   }, 30_000);
 
+  it('permits routine review of an admitted attention concern at the cap yet still rejects a fresh admission', async () => {
+    const database = await harness.createDatabase();
+    const adminPool = createPostgresPool(database.databaseUrl, { max: 1 });
+    await ensurePostgresSchemaExists(adminPool, 'companion_a');
+    await adminPool.end();
+    const pool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 4,
+    });
+    await ensureIntentionPostgresSchema(pool);
+    let idCounter = 0;
+    const concernStore = createConcernStorePort(new PostgresActiveConcernStore(
+      pool,
+      () => new Date('2026-07-16T12:00:00.000Z'),
+      () => `cap-review-concern-${++idCounter}`,
+    ));
+    try {
+      const created: string[] = [];
+      for (const text of [
+        'Confirm Tuesday cardiology appointment logistics.',
+        'Review database migration rollback checklist.',
+        'Check whether voice latency regression returned.',
+        'Track hydration routine after medication change.',
+        'Revisit backup verification evidence tonight.',
+        'Clarify calendar scheduling conflict with Sam.',
+        'Prepare quarterly budget variance summary tonight.',
+      ]) {
+        const concern = await concernStore.create({ text, priority: 'low' });
+        created.push(concern.id);
+      }
+      // The cap is now saturated at exactly 7 admitted attention concerns, and all
+      // seven were created inside the trigger's 7-day admission window.
+      await expect(concernStore.getActiveConcerns()).resolves.toHaveLength(7);
+
+      // (a)/(c) Routine review of an already-admitted attention concern bumps
+      // last_reviewed_at while status stays 'active'. Before the fix this UPDATE
+      // re-evaluated the admission cap against the new timestamp and raised
+      // 'Active concern cap reached (7)', which propagated out of routine review /
+      // transitionConcernStatus and failed the intention_post_turn_hooks
+      // background job. It must now succeed.
+      const reviewedAt = '2026-07-16T12:05:00.000Z';
+      const reviewed = await concernStore.transitionConcernStatus(created[0]!, {
+        status: 'active',
+        transitionedAt: reviewedAt,
+      });
+      expect(reviewed?.status).toBe('active');
+      expect(reviewed?.lastReviewedAt).toBe(reviewedAt);
+      // The review neither evicted nor admitted anything: the set is still 7.
+      await expect(concernStore.getActiveConcerns()).resolves.toHaveLength(7);
+
+      // Reviewing every admitted concern (the heartbeat-driven sweep shape) must
+      // likewise never trip the cap.
+      for (const id of created) {
+        await expect(concernStore.transitionConcernStatus(id, {
+          status: 'active',
+          transitionedAt: '2026-07-16T12:07:00.000Z',
+        })).resolves.toMatchObject({ status: 'active' });
+      }
+      await expect(concernStore.getActiveConcerns()).resolves.toHaveLength(7);
+
+      // (b) A brand-new admission INTO attention while the cap is saturated must
+      // still be rejected by the fail-closed DB trigger.
+      const eighthCandidate = await concernStore.create({
+        text: 'Follow up capreviewcandidateeighth',
+        priority: 'high',
+        status: 'candidate',
+      });
+      await expect(concernStore.transitionConcernStatus(eighthCandidate.id, {
+        status: 'active',
+        transitionedAt: '2026-07-16T12:08:00.000Z',
+      })).rejects.toThrow('Active concern cap reached (7)');
+      // The rejected candidate stays a candidate; the admitted set is unchanged.
+      await expect(concernStore.getById(eighthCandidate.id)).resolves.toMatchObject({ status: 'candidate' });
+      await expect(concernStore.getActiveConcerns()).resolves.toHaveLength(7);
+    } finally {
+      await pool.end();
+    }
+  }, 30_000);
+
   it('marks a live post-boundary projecting failure outcome-unknown immediately', async () => {
     const database = await harness.createDatabase();
     const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {

@@ -906,21 +906,41 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   RETURNS TRIGGER AS $$
   DECLARE
     attention_count INTEGER;
+    entering_attention BOOLEAN;
   BEGIN
+    -- The admission cap gates ONLY transitions INTO active attention: an INSERT
+    -- that creates an attention concern, or an UPDATE that moves a concern into
+    -- attention status from a resolved/non-attention state. Maintenance updates
+    -- of an already-admitted attention concern (last_reviewed_at bumps from
+    -- routine review, expires_at extensions, salience changes, etc.) MUST NOT be
+    -- re-evaluated against the cap; re-reviewing an admitted concern can never be
+    -- blocked by admission pressure. Fail-closed remains intact: a genuine
+    -- over-cap admission still raises below.
     IF NEW.resolved_at IS NULL
       AND NEW.status IN ('active', 'watching', 'deferred', 'blocked')
       AND NEW.expires_at::timestamptz > NEW.last_reviewed_at::timestamptz
     THEN
-      PERFORM pg_advisory_xact_lock(hashtextextended('active-concern-attention-cap', 0));
-      SELECT COUNT(*) INTO attention_count
-      FROM active_concerns concern
-      WHERE concern.id <> NEW.id
-        AND concern.resolved_at IS NULL
-        AND concern.status IN ('active', 'watching', 'deferred', 'blocked')
-        AND concern.expires_at::timestamptz > NEW.last_reviewed_at::timestamptz
-        AND concern.created_at::timestamptz > NEW.last_reviewed_at::timestamptz - INTERVAL '7 days';
-      IF attention_count >= 7 THEN
-        RAISE EXCEPTION 'Active concern cap reached (7)';
+      IF TG_OP = 'INSERT' THEN
+        entering_attention := TRUE;
+      ELSE
+        -- UPDATE: admission only when the prior row was not already an
+        -- unresolved attention concern (i.e. it is crossing INTO attention now).
+        entering_attention := OLD.resolved_at IS NOT NULL
+          OR OLD.status NOT IN ('active', 'watching', 'deferred', 'blocked');
+      END IF;
+
+      IF entering_attention THEN
+        PERFORM pg_advisory_xact_lock(hashtextextended('active-concern-attention-cap', 0));
+        SELECT COUNT(*) INTO attention_count
+        FROM active_concerns concern
+        WHERE concern.id <> NEW.id
+          AND concern.resolved_at IS NULL
+          AND concern.status IN ('active', 'watching', 'deferred', 'blocked')
+          AND concern.expires_at::timestamptz > NEW.last_reviewed_at::timestamptz
+          AND concern.created_at::timestamptz > NEW.last_reviewed_at::timestamptz - INTERVAL '7 days';
+        IF attention_count >= 7 THEN
+          RAISE EXCEPTION 'Active concern cap reached (7)';
+        END IF;
       END IF;
     END IF;
     RETURN NEW;
@@ -929,7 +949,7 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   `,
   `DROP TRIGGER IF EXISTS trg_active_concern_attention_cap ON active_concerns;`,
   `CREATE TRIGGER trg_active_concern_attention_cap
-    BEFORE INSERT OR UPDATE OF status, resolved_at, expires_at, last_reviewed_at
+    BEFORE INSERT OR UPDATE OF status, resolved_at
     ON active_concerns
     FOR EACH ROW EXECUTE FUNCTION enforce_active_concern_attention_cap();`,
   `

@@ -49,6 +49,7 @@ function roleUrl(databaseUrl: string, role: keyof typeof PASSWORDS): string {
 async function createStore(options: { failDuringReconcile?: boolean } = {}): Promise<{
   store: PostgresFleetAuthBrokerStore;
   runtime: import('pg').Pool;
+  coordinator: import('pg').Pool;
   migration: import('pg').Pool;
   authorityFloors: FleetAuthAuthorityFloorStore;
 }> {
@@ -71,6 +72,10 @@ async function createStore(options: { failDuringReconcile?: boolean } = {}): Pro
     max: 4,
     allowExitOnIdle: true,
   });
+  const coordinator = createPostgresPool(roleUrl(database.databaseUrl, ROLES.backupRestore), {
+    max: 1,
+    allowExitOnIdle: true,
+  });
   const floorRoot = mkdtempSync(join(tmpdir(), 'fleet-auth-oauth-floor-'));
   floorRoots.push(floorRoot);
   const authorityFloors = new FleetAuthAuthorityFloorStore(floorRoot);
@@ -78,12 +83,13 @@ async function createStore(options: { failDuringReconcile?: boolean } = {}): Pro
     activationGeneration: 1,
     databaseHasDurableAuthority: false,
   });
-  await reconcileFleetAuthAuthorityState(runtime, initialFloor, randomUUID());
+  await reconcileFleetAuthAuthorityState(coordinator, initialFloor, randomUUID());
   const providerRevocationAuthority = createGatewayProviderRevocationAuthorityPort(
     authorityFloors,
   );
   return {
     runtime,
+    coordinator,
     migration: createPostgresPool(migrationUrl, { max: 1, allowExitOnIdle: true }),
     authorityFloors,
     store: new PostgresFleetAuthBrokerStore({
@@ -144,7 +150,7 @@ beforeAll(async () => {
   try {
     for (const role of Object.values(ROLES)) {
       await admin.query(
-        `CREATE ROLE ${quoteIdentifier(role)} LOGIN PASSWORD '${PASSWORDS[role]}'`,
+        `CREATE ROLE ${quoteIdentifier(role)} LOGIN NOINHERIT CONNECTION LIMIT 16 PASSWORD '${PASSWORDS[role]}'`,
       );
     }
   } finally {
@@ -159,7 +165,7 @@ afterAll(async () => {
 
 describe('Postgres gateway OAuth/session authority', () => {
   it('creates pending no-role principals, rotates once under races, and tombstones provider revocation', async () => {
-    const { store, runtime, migration, authorityFloors } = await createStore();
+    const { store, runtime, coordinator, migration, authorityFloors } = await createStore();
     try {
       const loginInput = await authenticate(store, 'first');
       const login = await store.createLoginSession({
@@ -344,12 +350,13 @@ describe('Postgres gateway OAuth/session authority', () => {
       })).rejects.toMatchObject({ code: 'provider_subject_suspended' });
     } finally {
       await migration.end();
+      await coordinator.end();
       await runtime.end();
     }
   }, TIMEOUT_MS);
 
   it('immediately over-fences live sessions when reconciliation fails after floor publication', async () => {
-    const { store, runtime, migration, authorityFloors } = await createStore({
+    const { store, runtime, coordinator, migration, authorityFloors } = await createStore({
       failDuringReconcile: true,
     });
     try {
@@ -409,7 +416,7 @@ describe('Postgres gateway OAuth/session authority', () => {
         now: sessionUseAt,
       })).rejects.toMatchObject({ code: 'invalid_session' });
 
-      await reconcileFleetAuthAuthorityState(runtime, fenced, randomUUID());
+      await reconcileFleetAuthAuthorityState(coordinator, fenced, randomUUID());
       const recovered = await runtime.query<{ status: string; state: string; sessions: string }>(`
         SELECT principal.status, subject.state,
                (SELECT count(*)::text FROM fleet_auth.browser_sessions
@@ -440,12 +447,13 @@ describe('Postgres gateway OAuth/session authority', () => {
       })).rejects.toThrow(/permanently tombstoned by non-restored authority/i);
     } finally {
       await migration.end();
+      await coordinator.end();
       await runtime.end();
     }
   }, TIMEOUT_MS);
 
   it('atomically expires and rejects replayed OAuth state', async () => {
-    const { store, runtime, migration } = await createStore();
+    const { store, runtime, coordinator, migration } = await createStore();
     try {
       const transactionId = randomUUID();
       const stateDigest = 'c'.repeat(64);
@@ -473,12 +481,13 @@ describe('Postgres gateway OAuth/session authority', () => {
       })).rejects.toMatchObject({ code: 'invalid_oauth_state' });
     } finally {
       await migration.end();
+      await coordinator.end();
       await runtime.end();
     }
   }, TIMEOUT_MS);
 
   it('does not consume browser A OAuth state when browser B presents the callback', async () => {
-    const { store, runtime, migration } = await createStore();
+    const { store, runtime, coordinator, migration } = await createStore();
     try {
       const transactionId = randomUUID();
       const stateDigest = 'a'.repeat(64);
@@ -507,6 +516,7 @@ describe('Postgres gateway OAuth/session authority', () => {
       })).resolves.toMatchObject({ transactionId, pkceVerifier: 'browser-bound-pkce-verifier' });
     } finally {
       await migration.end();
+      await coordinator.end();
       await runtime.end();
     }
   }, TIMEOUT_MS);
@@ -519,7 +529,7 @@ describe('Postgres gateway OAuth/session authority', () => {
   ] as const)(
     'accepts only coherent provider/principal login state %s/%s',
     async (providerState, principalStatus, allowed) => {
-      const { store, runtime, migration } = await createStore();
+      const { store, runtime, coordinator, migration } = await createStore();
       try {
         const initialInput = await authenticate(store, `matrix-initial-${providerState}-${principalStatus}`);
         const initial = await store.createLoginSession({
@@ -556,6 +566,7 @@ describe('Postgres gateway OAuth/session authority', () => {
         }
       } finally {
         await migration.end();
+        await coordinator.end();
         await runtime.end();
       }
     },

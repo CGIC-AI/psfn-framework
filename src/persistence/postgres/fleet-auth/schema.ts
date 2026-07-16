@@ -12,6 +12,16 @@ import {
   FLEET_AUTH_FIRST_OWNER_FUNCTION_ARG_TYPES,
   FLEET_AUTH_FIRST_OWNER_FUNCTION_NAME,
 } from './first-owner-sql.js';
+import {
+  FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL,
+  FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME,
+} from './authority-state-lock-sql.js';
+import {
+  FLEET_AUTH_RECONCILIATION_DDL_SQL,
+  FLEET_AUTH_RECONCILE_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_RECONCILE_FUNCTION_NAME,
+} from './authority-reconciliation-sql.js';
 
 export const FLEET_AUTH_SCHEMA_NAME = 'fleet_auth';
 const MIGRATION_LOCK_CLASS = 0x5053464e;
@@ -289,6 +299,12 @@ async function applyRoleGrants(
   await client.query(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_FIRST_OWNER_FUNCTION_NAME}(${FLEET_AUTH_FIRST_OWNER_FUNCTION_ARG_TYPES}) TO ${runtime}`,
   );
+  await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}(${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_ARG_TYPES}) TO ${runtime}`,
+  );
+  await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_RECONCILE_FUNCTION_NAME}(${FLEET_AUTH_RECONCILE_FUNCTION_ARG_TYPES}) TO ${runtime}, ${backup}`,
+  );
 }
 
 /**
@@ -303,6 +319,8 @@ async function applyFleetAuthReapprovalBoundary(
 ): Promise<void> {
   await client.query(FLEET_AUTH_REAPPROVAL_DDL_SQL);
   await client.query(FLEET_AUTH_FIRST_OWNER_DDL_SQL);
+  await client.query(FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL);
+  await client.query(FLEET_AUTH_RECONCILIATION_DDL_SQL);
 }
 
 export async function migrateFleetAuthSchema(options: {

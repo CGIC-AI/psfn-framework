@@ -10,6 +10,7 @@ import {
   revokeProviderAuthority,
 } from './provider-lifecycle-store.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
+import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
 import type {
   PrincipalRow,
   SessionAuthorityRow,
@@ -84,9 +85,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
         global_auth_epoch: string;
       }>(`
         SELECT authority_generation, global_auth_epoch
-        FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
-        WHERE singleton = TRUE
-        FOR SHARE
+        FROM ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}()
       `);
       const authority = authorityResult.rows.at(0);
       if (!authority) throw new Error('fleet_auth authority_state singleton is missing');

@@ -7,6 +7,7 @@ import {
 } from '../../../boundary/gateway/fleet-auth-broker.js';
 import type { FleetAuthSecretCodec } from './oauth-secret-codec.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
+import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
 
 interface OAuthTransactionRow {
   transaction_id: string;
@@ -29,9 +30,7 @@ export async function createOAuthTransaction(
     await client.query('BEGIN');
     const authority = await client.query<{ global_auth_epoch: string }>(`
       SELECT global_auth_epoch
-      FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
-      WHERE singleton = TRUE
-      FOR SHARE
+      FROM ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}()
     `);
     const globalAuthEpoch = authority.rows.at(0)?.global_auth_epoch;
     if (!globalAuthEpoch) throw new Error('fleet_auth authority_state singleton is missing');
@@ -100,9 +99,7 @@ export async function consumeOAuthTransaction(
     }
     const authority = await client.query<{ global_auth_epoch: string }>(`
       SELECT global_auth_epoch
-      FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
-      WHERE singleton = TRUE
-      FOR SHARE
+      FROM ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}()
     `);
     if (authority.rows.at(0)?.global_auth_epoch !== transaction.global_auth_epoch) {
       throw new FleetAuthBrokerError('invalid_oauth_state', 400, 'OAuth authority epoch is stale');

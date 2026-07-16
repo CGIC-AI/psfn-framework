@@ -32,6 +32,7 @@ import {
   type HubDevicePrincipal,
 } from '../../../boundary/fleet-auth/hub-device-assertion.js';
 import { PostgresHubDeviceAssertionReplayStore } from './hub-device-assertion-replay.js';
+import { FLEET_AUTH_RECONCILE_FUNCTION_NAME } from './authority-reconciliation-sql.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -50,14 +51,6 @@ export interface GatewayFleetAuthPersistence {
     expected: HubDeviceAssertionExpectedBinding,
   ): Promise<HubDevicePrincipal>;
   close(): Promise<void>;
-}
-
-interface AuthorityStateRow {
-  authority_lineage_id: string | null;
-  authority_generation: string;
-  global_auth_epoch: string;
-  restore_checkpoint: string;
-  activation_generation: string;
 }
 
 function parseStateInteger(value: string, field: string): number {
@@ -102,130 +95,20 @@ export async function reconcileFleetAuthAuthorityStateInTransaction(
   floor: FleetAuthAuthorityFloor,
   auditEventId: string,
 ): Promise<void> {
-  const result = await client.query<AuthorityStateRow>(`
-      SELECT authority_lineage_id, authority_generation, global_auth_epoch,
-             restore_checkpoint, activation_generation
-      FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
-      WHERE singleton = TRUE
-      FOR UPDATE
-    `);
-  const row = result.rows.at(0);
-  if (!row) throw new Error('fleet_auth authority_state singleton is missing');
-  const databaseAuthorityGeneration = parseStateInteger(
-    row.authority_generation,
-    'authority_generation',
-  );
-  const databaseAuthEpoch = parseStateInteger(row.global_auth_epoch, 'global_auth_epoch');
-  const databaseRestoreCheckpoint = parseStateInteger(
-    row.restore_checkpoint,
-    'restore_checkpoint',
-  );
-  const databaseActivationGeneration = parseStateInteger(
-    row.activation_generation,
-    'activation_generation',
-  );
   const trusted = floor.trustedHost;
-  if (row.authority_lineage_id !== null
-    && row.authority_lineage_id !== trusted.lineageId) {
-    throw new Error(
-      'Restorable fleet_auth authority lineage does not match its non-restored trusted-host floor',
-    );
-  }
-  if (databaseAuthorityGeneration > trusted.authorityGeneration
-    || databaseRestoreCheckpoint > trusted.restoreCheckpoint
-    || databaseActivationGeneration > trusted.activationGeneration) {
-    throw new Error('Restorable fleet_auth authority is ahead of its non-restored trusted-host floor');
-  }
-  const floorAdvanced = databaseAuthorityGeneration < trusted.authorityGeneration
-    || databaseRestoreCheckpoint < trusted.restoreCheckpoint
-    || databaseActivationGeneration < trusted.activationGeneration;
-  const lineageNeedsBinding = row.authority_lineage_id === null;
-  if (!floorAdvanced && !lineageNeedsBinding) return;
-
-  if (!floorAdvanced) {
-    await client.query(`
-      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.authority_state
-      SET authority_lineage_id = $1,
-          updated_at = clock_timestamp()
-      WHERE singleton = TRUE
-    `, [trusted.lineageId]);
-    return;
-  }
-
-  // Durable account rows become non-authoritative restore candidates. Keep
-  // explicit revocation states intact while quarantining everything else.
-  await client.query(`
-      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.human_principals
-      SET status = CASE WHEN status = 'revoked' THEN status ELSE 'quarantined' END,
-          restore_state = 'quarantined',
-          updated_at = clock_timestamp()
-    `);
-  await client.query(`
-      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
-      SET state = CASE WHEN state = 'revoked' THEN state ELSE 'quarantined' END,
-          restore_state = 'quarantined',
-          updated_at = clock_timestamp()
-    `);
-  await client.query(`
-      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
-      SET state = CASE WHEN state = 'revoked' THEN state ELSE 'quarantined' END,
-          restore_state = 'quarantined',
-          updated_at = clock_timestamp()
-    `);
-  await client.query(`
-      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
-      SET lifecycle = CASE WHEN lifecycle = 'revoked' THEN lifecycle ELSE 'quarantined' END,
-          restore_state = 'quarantined',
-          updated_at = clock_timestamp()
-    `);
-  await client.query(`
-      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials
-      SET state = CASE WHEN state = 'revoked' THEN state ELSE 'quarantined' END,
-          restore_state = 'quarantined',
-          updated_at = clock_timestamp()
-    `);
-
-  // Ephemeral rows bind the old epoch and are removed before the epoch is
-  // published. Provider token custody is intentionally never restorable.
-  for (const table of [
-    'jit_authorization_grants',
-    'step_up_challenges',
-    // Completed OAuth rows reference their minted browser session. Remove the
-    // transaction receipt before the session while fencing the whole epoch.
-    'oauth_transactions',
-    'browser_sessions',
-    'provider_token_custody',
-    'discord_evidence_snapshots',
-    'trusted_host_ceremonies',
-    'hub_device_assertion_replays',
-  ]) {
-    await client.query(`DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}."${table}"`);
-  }
-  const nextEpoch = databaseAuthEpoch + 1;
-  await client.query(`
-      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.authority_state
-      SET authority_lineage_id = $1,
-          authority_generation = $2,
-          global_auth_epoch = $3,
-          restore_checkpoint = $4,
-          activation_generation = $5,
-          updated_at = clock_timestamp()
-      WHERE singleton = TRUE
-    `, [
+  const result = await client.query<{ global_auth_epoch: string }>(`
+    SELECT global_auth_epoch
+    FROM ${FLEET_AUTH_RECONCILE_FUNCTION_NAME}($1, $2, $3, $4, $5)
+  `, [
       trusted.lineageId,
       trusted.authorityGeneration,
-      nextEpoch,
       trusted.restoreCheckpoint,
       trusted.activationGeneration,
+      auditEventId,
     ]);
-  await client.query(`
-      INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
-        (event_id, actor_context, action, resource, decision, reason_code,
-         authority_generation, global_auth_epoch)
-      VALUES ($1, '{"kind":"system","id":"fleet-auth-startup"}'::jsonb,
-              'authority.reconcile', 'fleet_auth', 'deny', 'restored_authority_quarantined',
-              $2, $3)
-    `, [auditEventId, trusted.authorityGeneration, nextEpoch]);
+  const globalAuthEpoch = result.rows.at(0)?.global_auth_epoch;
+  if (!globalAuthEpoch) throw new Error('fleet_auth authority reconciliation returned no state');
+  parseStateInteger(globalAuthEpoch, 'global_auth_epoch');
 }
 
 /** Gateway-internal bridge from browser revocation to the non-restored floor. */

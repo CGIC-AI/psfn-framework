@@ -898,11 +898,11 @@ describe('fleet_auth Postgres authority boundary', () => {
       );
       await runtime.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions
-          (transaction_id, state_digest, pkce_verifier_digest, callback_uri, return_path,
-           global_auth_epoch, expires_at)
-         VALUES ($1, $2, $3, 'https://fleet.example.test/oauth/callback', '/garden', 1,
+          (transaction_id, state_digest, initiating_browser_digest, pkce_verifier_digest,
+           callback_uri, return_path, global_auth_epoch, expires_at)
+         VALUES ($1, $2, $3, $4, 'https://fleet.example.test/oauth/callback', '/garden', 1,
                  clock_timestamp() + interval '5 minutes')`,
-        [randomUUID(), '3'.repeat(64), '4'.repeat(64)],
+        [randomUUID(), '3'.repeat(64), '4'.repeat(64), '5'.repeat(64)],
       );
       await runtime.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_token_custody

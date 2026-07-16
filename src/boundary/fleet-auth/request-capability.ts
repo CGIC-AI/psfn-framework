@@ -17,6 +17,9 @@ import {
 } from '../../shared/utils/types.js';
 import {
   GARDEN_FORWARD_METHODS,
+  GARDEN_RESOURCE_AREAS,
+  GARDEN_WORKSPACE_SCOPES,
+  resolveGardenRouteCapability,
   type GardenForwardMethod,
   type GardenResourceArea,
   type GardenWorkspaceScope,
@@ -33,6 +36,7 @@ const OPERATOR_CLAIM_KEYS = [
   'query',
   'request_target',
   'action',
+  'authorization_digest',
   'resource',
   'body_digest',
   'body_length',
@@ -46,10 +50,11 @@ const OPERATOR_CLAIM_KEYS = [
   'exp',
   'target_digest',
 ] as const;
+const PARENT_CLAIM_INDEX = OPERATOR_CLAIM_KEYS.indexOf('versions');
 const AGENT_CLAIM_KEYS = [
-  ...OPERATOR_CLAIM_KEYS.slice(0, 14),
+  ...OPERATOR_CLAIM_KEYS.slice(0, PARENT_CLAIM_INDEX),
   'parent',
-  ...OPERATOR_CLAIM_KEYS.slice(14),
+  ...OPERATOR_CLAIM_KEYS.slice(PARENT_CLAIM_INDEX),
 ] as const;
 const RESOURCE_KEYS = [
   'schema_version',
@@ -78,35 +83,8 @@ const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const TOKEN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
 const METHODS = new Set<string>(GARDEN_FORWARD_METHODS);
 const ACTIONS = new Set<string>(FLEET_AUTH_ACTIONS);
-const SCOPES = new Set<string>([
-  'personal_workspace',
-  'governed_shared_workspace',
-  'garden_surface',
-]);
-const RESOURCE_AREAS = new Set<string>([
-  'action_pipe',
-  'attachments',
-  'audit',
-  'beads',
-  'channels',
-  'channel_artifacts',
-  'cognitive_security',
-  'contacts',
-  'devices',
-  'filesystem',
-  'garden_ui',
-  'identity',
-  'images',
-  'memory',
-  'models',
-  'personal_settings',
-  'scheduler',
-  'shared_workspace',
-  'shell',
-  'skills',
-  'telemetry',
-  'wiki',
-]);
+const SCOPES = new Set<string>(GARDEN_WORKSPACE_SCOPES);
+const RESOURCE_AREAS = new Set<string>(GARDEN_RESOURCE_AREAS);
 
 export type RequestCapabilityAudience = `operator:${string}` | `agent:${string}`;
 
@@ -178,6 +156,7 @@ export interface VerifiedRequestCapability {
   readonly decisionId: string;
   readonly jti: string;
   readonly targetDigest: string;
+  readonly authorizationDigest: string;
   readonly issuedAt: number;
   readonly notBefore: number;
   readonly expiresAt: number;
@@ -230,6 +209,7 @@ interface RequestCapabilityClaims {
   query: string;
   request_target: string;
   action: FleetAuthAction;
+  authorization_digest: string;
   resource: RequestCapabilityResourceClaims;
   body_digest: string;
   body_length: number;
@@ -444,6 +424,19 @@ function assertTarget(target: CompiledGardenRequestTarget): void {
   if (!METHODS.has(target.method)) reject('target method is invalid');
   requireUuid(target.companionId, 'target.companionId');
   if (!ACTIONS.has(target.action)) reject('target action is invalid');
+  const resolved = resolveGardenRouteCapability(target.method, target.canonicalPath);
+  if (!resolved || resolved.capability.id !== target.resource.routeId) {
+    reject('target route classification is invalid');
+  }
+  const canonicalAuthorization = resolved.capability.authorization;
+  const suppliedAuthorizationDigest = digest(JSON.stringify(target.authorization));
+  const canonicalAuthorizationDigest = digest(JSON.stringify(canonicalAuthorization));
+  if (!equalDigest(suppliedAuthorizationDigest, canonicalAuthorizationDigest)
+    || !equalEncodedValue(target.action, canonicalAuthorization.action)
+    || !equalEncodedValue(target.resource.scope, canonicalAuthorization.resource.scope)
+    || !equalEncodedValue(target.resource.area, canonicalAuthorization.resource.area)) {
+    reject('target authorization classification does not match the canonical route');
+  }
   const resourceSchemaVersion: unknown = target.resource.schemaVersion;
   const resourceKind: unknown = target.resource.kind;
   if (resourceSchemaVersion !== 1 || resourceKind !== 'garden_route') {
@@ -466,12 +459,17 @@ function assertTarget(target: CompiledGardenRequestTarget): void {
   const canonicalResource = fromResourceClaims(toResourceClaims(target));
   const resourceDigest = digest(JSON.stringify(canonicalResource));
   if (!equalDigest(target.resourceDigest, resourceDigest)) reject('target resource digest does not match');
+  const authorizationDigest = canonicalAuthorizationDigest;
+  if (!equalDigest(target.authorizationDigest, authorizationDigest)) {
+    reject('target authorization digest does not match');
+  }
   const targetDigest = digest(JSON.stringify({
     schemaVersion: 1,
     method: target.method,
     canonicalRequestTarget: target.canonicalRequestTarget,
     companionId: target.companionId,
     action: target.action,
+    authorizationDigest,
     resourceDigest,
   }));
   if (!equalDigest(target.targetDigest, targetDigest)) reject('target digest does not match');
@@ -494,6 +492,7 @@ function buildClaims(input: RequestCapabilitySignInput & {
     query: input.target.canonicalQuery,
     request_target: input.target.canonicalRequestTarget,
     action: input.target.action,
+    authorization_digest: input.target.authorizationDigest,
     resource: toResourceClaims(input.target),
     body_digest: input.target.bodyDigest,
     body_length: input.target.bodyLength,
@@ -741,6 +740,7 @@ function canonicalClaims(claims: RequestCapabilityClaims): RequestCapabilityClai
     query: claims.query,
     request_target: claims.request_target,
     action: claims.action,
+    authorization_digest: claims.authorization_digest,
     resource: claims.resource,
     body_digest: claims.body_digest,
     body_length: claims.body_length,
@@ -788,6 +788,7 @@ function parseClaims(encoded: string, audienceKind: 'operator' | 'agent'): Reque
     query: typeof record.query === 'string' ? record.query : reject('claims.query is invalid'),
     request_target: requireString(record.request_target, 'claims.request_target'),
     action: action as FleetAuthAction,
+    authorization_digest: requireDigest(record.authorization_digest, 'claims.authorization_digest'),
     resource: parseResource(record.resource),
     body_digest: requireDigest(record.body_digest, 'claims.body_digest'),
     body_length: requireInteger(record.body_length, 'claims.body_length'),
@@ -831,6 +832,7 @@ function assertClaimsBinding(
     || claims.query !== target.canonicalQuery
     || claims.request_target !== target.canonicalRequestTarget
     || claims.action !== target.action
+    || !equalDigest(claims.authorization_digest, target.authorizationDigest)
     || !equalDigest(claims.body_digest, target.bodyDigest)
     || claims.body_length !== target.bodyLength
     || !equalDigest(claims.resource_digest, target.resourceDigest)
@@ -895,6 +897,7 @@ export function createRequestCapabilityVerifier(
       decisionId: claims.decision_id,
       jti: claims.jti,
       targetDigest: claims.target_digest,
+      authorizationDigest: claims.authorization_digest,
       issuedAt: claims.iat,
       notBefore: claims.nbf,
       expiresAt: claims.exp,

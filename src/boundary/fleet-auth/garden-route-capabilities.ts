@@ -6,6 +6,8 @@ import {
 import type { GardenForwardMethod } from './garden-route-types.js';
 export {
   GARDEN_FORWARD_METHODS,
+  GARDEN_RESOURCE_AREAS,
+  GARDEN_WORKSPACE_SCOPES,
   type GardenForwardMethod,
   type GardenResourceArea,
   type GardenWorkspaceScope,

@@ -57,18 +57,23 @@ DECLARE
   v_lifecycle_column text;
   v_new_lifecycle text;
   v_schema_owner text;
-  v_companion_lineage_non_active boolean;
+  v_companion_non_active boolean;
 BEGIN
-  -- Restored quarantine and a newly allocated companion lineage are both
-  -- activation gates. The latter deliberately remains restore_state='live':
-  -- it was not restored, but still requires its exact trusted-host ceremony.
-  v_companion_lineage_non_active := TG_TABLE_NAME = 'companion_authority_state'
-    AND (v_old->>'lifecycle') <> 'active'
-    AND (v_old->>'authority_lineage_id') IS NOT NULL
-    AND (v_old->>'lineage_generation') IS NOT NULL
-    AND (v_old->>'readd_decision_id') IS NOT NULL;
+  -- A companion UUID is its authority identity, not mutable row metadata.
+  -- Renaming it would free the protected identity for a replacement INSERT.
+  IF TG_TABLE_NAME = 'companion_authority_state'
+     AND (v_new->>'companion_id') IS DISTINCT FROM (v_old->>'companion_id') THEN
+    RAISE EXCEPTION 'companion authority identity is immutable; use fleet_auth.reapprove_companion_authority'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- Every non-active companion row is an activation gate, including legacy
+  -- removed rows whose lineage tuple predates the tuple columns. A null tuple
+  -- must never turn this trigger into an unguarded backup-role update path.
+  v_companion_non_active := TG_TABLE_NAME = 'companion_authority_state'
+    AND (v_old->>'lifecycle') <> 'active';
   IF (v_old->>'restore_state') IS DISTINCT FROM 'quarantined'
-     AND NOT v_companion_lineage_non_active THEN
+     AND NOT v_companion_non_active THEN
     RETURN NEW;
   END IF;
 
@@ -109,7 +114,7 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  IF v_companion_lineage_non_active THEN
+  IF v_companion_non_active THEN
     -- A legitimately removed, previously reapproved companion may be re-added
     -- on a strictly newer projected lineage. This transition remains
     -- quarantined and is the only non-owner mutation of the protected tuple.
@@ -121,7 +126,7 @@ BEGIN
        AND (v_new->>'authority_generation')::bigint =
           (v_new->>'lineage_generation')::bigint
        AND (v_new->>'lineage_generation')::bigint >
-          (v_old->>'lineage_generation')::bigint
+          (v_old->>'authority_generation')::bigint
        AND (v_new->>'authority_lineage_id') IS NOT NULL
        AND (v_new->>'authority_lineage_id') IS DISTINCT FROM
           (v_old->>'authority_lineage_id')
@@ -138,6 +143,8 @@ BEGIN
            AND lineage.authority_generation =
              (v_new->>'lineage_generation')::bigint
            AND lineage.companion_lineage_id = v_new->>'authority_lineage_id'
+           AND lineage.companion_readd_decision_id =
+             (v_new->>'readd_decision_id')::uuid
        ) AND EXISTS (
          SELECT 1
          FROM fleet_auth.authority_floor_tombstone_projection AS removal
@@ -232,6 +239,21 @@ DECLARE
   v_schema_owner text;
   v_principal_restore_state text;
 BEGIN
+  SELECT owner_role.rolname INTO v_schema_owner
+  FROM pg_namespace AS namespace
+  JOIN pg_roles AS owner_role ON owner_role.oid = namespace.nspowner
+  WHERE namespace.nspname = 'fleet_auth';
+
+  -- Companion rows may only be authored by a bounded schema-owner procedure.
+  -- This fences ordinary INSERT, UPSERT and COPY even if grants later drift.
+  IF TG_TABLE_NAME = 'companion_authority_state' THEN
+    IF current_user <> v_schema_owner THEN
+      RAISE EXCEPTION 'companion authority can only be inserted through a bounded fleet_auth schema-owner procedure'
+        USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+  END IF;
+
   v_lifecycle_column := CASE TG_TABLE_NAME
     WHEN 'principal_contact_bindings' THEN 'state'
     WHEN 'principal_role_grants' THEN 'lifecycle'
@@ -250,11 +272,6 @@ BEGIN
      OR v_new_lifecycle NOT IN ('active', 'pending') THEN
     RETURN NEW;
   END IF;
-
-  SELECT owner_role.rolname INTO v_schema_owner
-  FROM pg_namespace AS namespace
-  JOIN pg_roles AS owner_role ON owner_role.oid = namespace.nspowner
-  WHERE namespace.nspname = 'fleet_auth';
 
   -- The SECURITY DEFINER reapproval procedure runs as the schema owner; only
   -- that context may author a live authority row bound to a quarantined
@@ -286,12 +303,6 @@ AS $$
 DECLARE
   v_schema_owner text;
 BEGIN
-  -- Only quarantined restore candidates are fenced from deletion. Deletes of
-  -- live/revoked rows are unaffected.
-  IF (to_jsonb(OLD)->>'restore_state') IS DISTINCT FROM 'quarantined' THEN
-    RETURN OLD;
-  END IF;
-
   SELECT owner_role.rolname INTO v_schema_owner
   FROM pg_namespace AS namespace
   JOIN pg_roles AS owner_role ON owner_role.oid = namespace.nspowner
@@ -301,10 +312,33 @@ BEGIN
     RETURN OLD;
   END IF;
 
+  -- A companion authority identity is never replaceable by ordinary SQL,
+  -- regardless of its current lifecycle or restore state.
+  IF TG_TABLE_NAME = 'companion_authority_state' THEN
+    RAISE EXCEPTION 'companion authority can only be removed through the fleet_auth schema owner context'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- Only quarantined restore candidates are fenced on the other authority
+  -- tables. Deletes of their live/revoked rows are unaffected.
+  IF (to_jsonb(OLD)->>'restore_state') IS DISTINCT FROM 'quarantined' THEN
+    RETURN OLD;
+  END IF;
+
   RAISE EXCEPTION 'quarantined fleet_auth authority row can only be removed through the schema owner context'
     USING ERRCODE = '42501';
 END;
 $$;
+
+DROP TRIGGER IF EXISTS restore_quarantine_insert_guard ON companion_authority_state;
+CREATE TRIGGER restore_quarantine_insert_guard
+  BEFORE INSERT ON companion_authority_state
+  FOR EACH ROW EXECUTE FUNCTION restore_quarantine_insert_guard();
+
+DROP TRIGGER IF EXISTS restore_quarantine_delete_guard ON companion_authority_state;
+CREATE TRIGGER restore_quarantine_delete_guard
+  BEFORE DELETE ON companion_authority_state
+  FOR EACH ROW EXECUTE FUNCTION restore_quarantine_delete_guard();
 
 DROP TRIGGER IF EXISTS restore_quarantine_insert_guard ON principal_contact_bindings;
 CREATE TRIGGER restore_quarantine_insert_guard

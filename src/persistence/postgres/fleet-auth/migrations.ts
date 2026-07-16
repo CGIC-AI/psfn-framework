@@ -1084,6 +1084,45 @@ ALTER TABLE trusted_host_ceremonies
   );
 `;
 
+const COMPANION_RESTORE_PROJECTION_SQL = `
+ALTER TABLE authority_floor_tombstone_projection
+  ADD COLUMN companion_readd_decision_id UUID;
+`;
+
+const COMPANION_RESTORE_RECEIPTS_SQL = `
+CREATE TABLE companion_restore_import_receipts (
+  receipt_id UUID PRIMARY KEY,
+  restore_operation_id UUID NOT NULL,
+  restore_transaction_id BIGINT NOT NULL CHECK (restore_transaction_id >= 1),
+  manifest_digest TEXT NOT NULL CHECK (manifest_digest ~ '^[0-9a-f]{64}$'),
+  snapshot_digest TEXT NOT NULL CHECK (snapshot_digest ~ '^[0-9a-f]{64}$'),
+  companion_id UUID NOT NULL,
+  version BIGINT NOT NULL CHECK (version >= 1),
+  authority_lineage_id TEXT CHECK (
+    authority_lineage_id IS NULL OR authority_lineage_id ~ '^[0-9a-f]{64}$'
+  ),
+  lineage_generation BIGINT CHECK (lineage_generation IS NULL OR lineage_generation >= 1),
+  readd_decision_id UUID,
+  created_at TIMESTAMPTZ NOT NULL,
+  imported_at TIMESTAMPTZ NOT NULL,
+  global_authority_lineage_id TEXT NOT NULL CHECK (
+    global_authority_lineage_id ~ '^[0-9a-f]{64}$'
+  ),
+  authority_generation BIGINT NOT NULL CHECK (authority_generation >= 1),
+  restore_checkpoint BIGINT NOT NULL CHECK (restore_checkpoint >= 1),
+  issued_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  CONSTRAINT companion_restore_receipt_lineage_tuple_exact CHECK (
+    (authority_lineage_id IS NULL
+      AND lineage_generation IS NULL
+      AND readd_decision_id IS NULL)
+    OR (authority_lineage_id IS NOT NULL
+      AND lineage_generation IS NOT NULL
+      AND readd_decision_id IS NOT NULL)
+  ),
+  UNIQUE (restore_operation_id, companion_id)
+);
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
@@ -1102,4 +1141,6 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 15, name: 'companion_authority_lineage', sql: COMPANION_AUTHORITY_LINEAGE_SQL },
   { version: 16, name: 'hub_device_assertion_durable_denial_audit', sql: HUB_DEVICE_ASSERTION_DURABLE_DENIAL_AUDIT_SQL },
   { version: 17, name: 'hub_device_assertion_replay_procedure_boundary', sql: HUB_DEVICE_ASSERTION_REPLAY_PROCEDURE_BOUNDARY_SQL },
+  { version: 18, name: 'companion_restore_projection', sql: COMPANION_RESTORE_PROJECTION_SQL },
+  { version: 19, name: 'companion_restore_receipts', sql: COMPANION_RESTORE_RECEIPTS_SQL },
 ] as const;

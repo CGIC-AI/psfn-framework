@@ -179,6 +179,7 @@ export interface FleetAuthConsistentFamilyRestoreVerificationOptions {
   manifestPath: string;
   fleetManifestPath: string;
   scratchDatabaseUrl: string;
+  scratchSchemaOwnerDatabaseUrl: string;
   roles: FleetAuthDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
   activationGeneration: number;
@@ -536,6 +537,7 @@ async function assertFleetAuthFamilyDumpScope(
 export async function restoreFleetAuthConsistentFamily(options: {
   manifestPath: string;
   backupRestoreDatabaseUrl: string;
+  fleetAuthSchemaOwnerDatabaseUrl: string;
   roles: FleetAuthDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
   activationGeneration: number;
@@ -680,6 +682,7 @@ export async function restoreFleetAuthConsistentFamily(options: {
       const fleetAuth = await restoreFleetAuthSnapshot({
         manifestPath: options.manifestPath,
         databaseUrl: options.backupRestoreDatabaseUrl,
+        schemaOwnerDatabaseUrl: options.fleetAuthSchemaOwnerDatabaseUrl,
         roles: options.roles,
         authorityFloors: options.authorityFloors,
         activationGeneration: options.activationGeneration,
@@ -841,6 +844,7 @@ export async function verifyFleetAuthConsistentFamilyRestore(
     await verifyFleetAuthSnapshotRestore({
       manifestPath: options.manifestPath,
       databaseUrl: options.scratchDatabaseUrl,
+      schemaOwnerDatabaseUrl: options.scratchSchemaOwnerDatabaseUrl,
       roles: options.roles,
       authorityFloors: scratchFloors,
       activationGeneration: options.activationGeneration,

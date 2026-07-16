@@ -213,6 +213,7 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
           [{ kind: 'companion_lineage_floor', resourceId: decision.companionId }],
           authorityGeneration,
           companionLineage.lineageId,
+          companionLineage.entry.companionReadd.decisionId,
         );
       } else if (mutation.revocations.length > 0) {
         const fenced = await this.accountAuthority.fenceMany({

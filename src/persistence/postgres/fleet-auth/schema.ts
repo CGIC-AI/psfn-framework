@@ -34,6 +34,11 @@ import {
   FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_ARG_TYPES,
   FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_NAME,
 } from './hub-device-assertion-replay-sql.js';
+import {
+  FLEET_AUTH_COMPANION_RESTORE_DDL_SQL,
+  FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME,
+} from './companion-restore-sql.js';
 
 export const FLEET_AUTH_SCHEMA_NAME = 'fleet_auth';
 const MIGRATION_LOCK_CLASS = 0x5053464e;
@@ -144,6 +149,7 @@ const FLEET_AUTH_RUNTIME_READ_ONLY_TABLES = [
 const FLEET_AUTH_INTERNAL_TABLES = [
   'schema_migrations',
   'provider_subject_registry',
+  'companion_restore_import_receipts',
 ] as const;
 
 const TABLE_PRIVILEGES = [
@@ -330,6 +336,12 @@ async function applyRoleGrants(
   await client.query(
     `REVOKE INSERT, UPDATE, DELETE ON ${qualifiedTable('hub_device_assertion_replays')} FROM ${backup}`,
   );
+  // Companion creation is narrower than ordinary restore DML. The coordinator
+  // retains SELECT/UPDATE for lifecycle reconciliation, while restore INSERT is
+  // exposed only by the bounded schema-owner import procedure.
+  await client.query(
+    `REVOKE INSERT, DELETE ON ${qualifiedTable('companion_authority_state')} FROM ${backup}`,
+  );
   await client.query(
     `GRANT SELECT, INSERT ON ${FLEET_AUTH_IMMUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${backup}`,
   );
@@ -360,6 +372,9 @@ async function applyRoleGrants(
   await client.query(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_NAME}(${FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_ARG_TYPES}) TO ${backup}`,
   );
+  await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME}(${FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_ARG_TYPES}) TO ${backup}`,
+  );
 }
 
 /**
@@ -378,6 +393,7 @@ async function applyFleetAuthReapprovalBoundary(
   await client.query(FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL);
   await client.query(FLEET_AUTH_RECONCILIATION_DDL_SQL);
   await client.query(FLEET_AUTH_HUB_REPLAY_BOUNDARY_DDL_SQL);
+  await client.query(FLEET_AUTH_COMPANION_RESTORE_DDL_SQL);
 }
 
 export async function migrateFleetAuthSchema(options: {
@@ -573,6 +589,10 @@ async function assertExactDml(
       if (tableName === 'hub_device_assertion_replays'
         && (expectedRole === roles.runtime || expectedRole === roles.backupRestore)) {
         return new Set(['SELECT']);
+      }
+      if (expectedRole === roles.backupRestore
+        && tableName === 'companion_authority_state') {
+        return new Set(['SELECT', 'UPDATE']);
       }
       return new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE']);
     }

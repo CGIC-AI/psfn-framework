@@ -175,6 +175,8 @@ function makeCycleOptions(
     'postgresql://auth_backup_restore:secret@127.0.0.1:5432/app';
   return {
     backupRestoreDatabaseUrl,
+    restoreVerifySchemaOwnerDatabaseUrl:
+      'postgresql://auth_migration:secret@127.0.0.1:5432/app_restore_verify',
     roles: ROLES,
     schemas: [
       {

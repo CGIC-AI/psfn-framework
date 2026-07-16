@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import type { PoolClient } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import {
   assertNoUnknownKeys,
   isCanonicalIsoTimestamp,
@@ -21,6 +21,7 @@ import {
   assertFleetAuthBackupRestorePrivileges,
   type FleetAuthDatabaseRoles,
 } from '../postgres/fleet-auth/schema.js';
+import { FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME } from '../postgres/fleet-auth/companion-restore-sql.js';
 
 const RESTORE_LOCK_CLASS = 0x5053464e;
 const RESTORE_LOCK_ID = 0x52535452;
@@ -47,6 +48,7 @@ interface FleetAuthSnapshot {
   capturedAt: string;
   postgresSnapshot: string;
   authorityLineageId: string;
+  contentDigest: string;
   durable: FleetAuthDurableSnapshot;
 }
 
@@ -65,6 +67,7 @@ export interface VerifiedFleetAuthRestoreOptions {
   manifestPath: string;
   manifest: VerifiedFleetAuthBackupManifest;
   databaseUrl: string;
+  schemaOwnerDatabaseUrl: string;
   roles: FleetAuthDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
   activationGeneration: number;
@@ -180,8 +183,10 @@ function parseCollection(
 
 function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest): FleetAuthSnapshot {
   let value: unknown;
+  let content: string;
   try {
-    value = JSON.parse(readFileSync(path, 'utf8'));
+    content = readFileSync(path, 'utf8');
+    value = JSON.parse(content);
   } catch (error) {
     throw new Error(`Fleet auth snapshot is unavailable: ${String(error)}`);
   }
@@ -263,6 +268,7 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
     capturedAt: value.capturedAt,
     postgresSnapshot: value.postgresSnapshot,
     authorityLineageId: value.authorityLineageId,
+    contentDigest: createHash('sha256').update(content).digest('hex'),
     durable: parsed,
   };
 }
@@ -346,6 +352,133 @@ function admittedRestoredCompanionLineage(
   };
 }
 
+interface CompanionRestoreAdmission {
+  receiptId: string;
+  lineageId: string | null;
+  lineageGeneration: number | null;
+  readdDecisionId: string | null;
+}
+
+interface CompanionRestoreReceiptContext {
+  restoreOperationId: string;
+  manifestDigest: string;
+  snapshotDigest: string;
+  admissions: ReadonlyMap<string, CompanionRestoreAdmission>;
+}
+
+async function issueCompanionRestoreReceipts(options: {
+  owner: PoolClient;
+  target: PoolClient;
+  roles: FleetAuthDatabaseRoles;
+  durable: FleetAuthDurableSnapshot;
+  floor: FleetAuthAuthorityFloor;
+  floors: FleetAuthAuthorityFloorStore;
+  restoredAt: string;
+  restoreOperationId: string;
+  manifestDigest: string;
+  snapshotDigest: string;
+}): Promise<ReadonlyMap<string, CompanionRestoreAdmission>> {
+  const [ownerIdentity, targetIdentity] = await Promise.all([
+    options.owner.query<{
+      current_user: string;
+      current_database: string;
+      schema_owner: string;
+    }>(`
+      SELECT current_user, current_database() AS current_database,
+             owner_role.rolname AS schema_owner
+      FROM pg_namespace AS namespace
+      JOIN pg_roles AS owner_role ON owner_role.oid = namespace.nspowner
+      WHERE namespace.nspname = $1
+    `, [FLEET_AUTH_SCHEMA_NAME]),
+    options.target.query<{ current_database: string; restore_transaction_id: string }>(
+      'SELECT current_database() AS current_database, txid_current()::text AS restore_transaction_id',
+    ),
+  ]);
+  const owner = ownerIdentity.rows.at(0);
+  const target = targetIdentity.rows.at(0);
+  if (!owner || !target
+    || owner.current_user !== options.roles.migration
+    || owner.schema_owner !== options.roles.migration
+    || owner.current_database !== target.current_database) {
+    throw new Error(
+      'Fleet auth restore receipt issuer must be the fleet_auth schema owner in the target database',
+    );
+  }
+
+  const admissions = new Map<string, CompanionRestoreAdmission>();
+  await options.owner.query('BEGIN');
+  try {
+    for (const [index, row] of options.durable.companionAuthorityState.entries()) {
+      const companionId = requiredString(
+        row,
+        'companion_id',
+        `durable.companionAuthorityState[${index}]`,
+      );
+      if (admissions.has(companionId)) {
+        throw new Error('Invalid fleet auth snapshot: duplicate companion authority identity');
+      }
+      const lineage = admittedRestoredCompanionLineage(
+        row,
+        index,
+        options.floor,
+        options.floors,
+      );
+      const admission: CompanionRestoreAdmission = {
+        receiptId: randomUUID(),
+        ...lineage,
+      };
+      await options.owner.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_restore_import_receipts
+          (receipt_id, restore_operation_id, restore_transaction_id,
+           manifest_digest, snapshot_digest,
+           companion_id, version, authority_lineage_id, lineage_generation,
+           readd_decision_id, created_at, imported_at,
+           global_authority_lineage_id, authority_generation, restore_checkpoint)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      `, [
+        admission.receiptId,
+        options.restoreOperationId,
+        target.restore_transaction_id,
+        options.manifestDigest,
+        options.snapshotDigest,
+        companionId,
+        row.version,
+        admission.lineageId,
+        admission.lineageGeneration,
+        admission.readdDecisionId,
+        row.created_at,
+        options.restoredAt,
+        options.floor.trustedHost.lineageId,
+        options.floor.trustedHost.authorityGeneration,
+        options.floor.trustedHost.restoreCheckpoint,
+      ]);
+      admissions.set(companionId, admission);
+    }
+    await options.owner.query('COMMIT');
+    return admissions;
+  } catch (error) {
+    try {
+      await options.owner.query('ROLLBACK');
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        'Fleet auth restore receipt issuance and rollback failed',
+      );
+    }
+    throw error;
+  }
+}
+
+async function deleteOutstandingCompanionRestoreReceipts(
+  ownerPool: Pool,
+  restoreOperationId: string,
+): Promise<void> {
+  await ownerPool.query(`
+    DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_restore_import_receipts
+    WHERE restore_operation_id = $1
+  `, [restoreOperationId]);
+}
+
 async function assertTargetNotAhead(
   client: PoolClient,
   floor: FleetAuthAuthorityFloor,
@@ -403,6 +536,7 @@ async function importDurableRows(
   floor: FleetAuthAuthorityFloor,
   floors: FleetAuthAuthorityFloorStore,
   restoredAt: string,
+  receiptContext: CompanionRestoreReceiptContext,
 ): Promise<number> {
   let importedRows = 0;
   const record = async (query: Promise<number>): Promise<void> => {
@@ -447,38 +581,55 @@ async function importDurableRows(
   }
 
   for (const [index, row] of durable.companionAuthorityState.entries()) {
-    const lineage = admittedRestoredCompanionLineage(row, index, floor, floors);
+    const companionId = requiredString(
+      row,
+      'companion_id',
+      `durable.companionAuthorityState[${index}]`,
+    );
+    const admission = receiptContext.admissions.get(companionId);
+    if (!admission) {
+      throw new Error('Fleet auth restore companion receipt admission is unavailable');
+    }
     const values = [
-      row.companion_id, row.version, floor.trustedHost.authorityGeneration,
-      lineage.lineageId, lineage.lineageGeneration, lineage.readdDecisionId,
-      row.created_at, restoredAt,
+      admission.receiptId,
+      receiptContext.restoreOperationId,
+      receiptContext.manifestDigest,
+      receiptContext.snapshotDigest,
+      companionId,
+      row.version,
+      admission.lineageId,
+      admission.lineageGeneration,
+      admission.readdDecisionId,
+      row.created_at,
+      restoredAt,
+      floor.trustedHost.lineageId,
+      floor.trustedHost.authorityGeneration,
+      floor.trustedHost.restoreCheckpoint,
     ];
     await record(insertOrAssertCompatibleConflict({
       client,
       insertSql: `
-        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
-          (companion_id, lifecycle, version, authority_generation, restore_state,
-           authority_lineage_id, lineage_generation, readd_decision_id,
-           created_at, updated_at)
-        VALUES ($1, 'quarantined', $2, $3, 'quarantined', $4, $5, $6, $7, $8)
-        ON CONFLICT DO NOTHING
+        SELECT 1
+        WHERE ${FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME}(
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+        )
       `,
       insertValues: values,
       compatibilitySql: `
         SELECT EXISTS (
           SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
-          WHERE companion_id = $1::uuid AND version >= $2::bigint
-            AND authority_generation <= $3::bigint
-            AND ($4::text IS NULL OR (
-              authority_lineage_id = $4
-              AND lineage_generation = $5::bigint
-              AND readd_decision_id = $6::uuid
+          WHERE companion_id = $5::uuid AND version >= $6::bigint
+            AND authority_generation <= $13::bigint
+            AND ($7::text IS NULL OR (
+              authority_lineage_id = $7
+              AND lineage_generation = $8::bigint
+              AND readd_decision_id = $9::uuid
             ))
-            AND created_at <= $7::timestamptz
+            AND created_at <= $10::timestamptz
           FOR UPDATE
         ) AS compatible
       `,
-      compatibilityValues: values.slice(0, 7),
+      compatibilityValues: values.slice(0, 13),
       description: 'companion authority state',
     }));
   }
@@ -874,6 +1025,9 @@ async function executeVerifiedFleetAuthSnapshot(
     resolve(dirname(resolve(options.manifestPath)), artifact.path),
     options.manifest,
   );
+  const manifestDigest = createHash('sha256')
+    .update(readFileSync(resolve(options.manifestPath)))
+    .digest('hex');
   const currentFloor = options.authorityFloors.read();
   if (snapshot.authorityLineageId !== currentFloor.trustedHost.lineageId) {
     throw new Error(
@@ -893,10 +1047,19 @@ async function executeVerifiedFleetAuthSnapshot(
     applicationName: 'fleet-auth-consistent-restore',
     max: 1,
   });
+  const ownerPool = createPostgresPool(options.schemaOwnerDatabaseUrl, {
+    applicationName: 'fleet-auth-restore-receipt-issuer',
+    max: 1,
+  });
+  const restoreOperationId = randomUUID();
   let client: PoolClient | undefined;
+  let transactionOpen = false;
+  let result: FleetAuthRestoreResult | undefined;
+  let failure: unknown;
   try {
     client = await pool.connect();
     await client.query('BEGIN');
+    transactionOpen = true;
     await client.query(
       'SELECT pg_advisory_xact_lock($1::integer, $2::integer)',
       [RESTORE_LOCK_CLASS, RESTORE_LOCK_ID],
@@ -907,31 +1070,98 @@ async function executeVerifiedFleetAuthSnapshot(
       restoredTombstones,
       at: restoredAt,
     });
+    // Establish the exact current singleton and floor projection before the
+    // bounded companion importer validates any restored lineage tuple.
+    const restoreAuditEventId = randomUUID();
+    await reconcileFleetAuthAuthorityStateInTransaction(
+      client,
+      preparedFloor,
+      restoreAuditEventId,
+    );
+    const owner = await ownerPool.connect();
+    let admissions: ReadonlyMap<string, CompanionRestoreAdmission>;
+    try {
+      admissions = await issueCompanionRestoreReceipts({
+        owner,
+        target: client,
+        roles: options.roles,
+        durable: snapshot.durable,
+        floor: preparedFloor,
+        floors: options.authorityFloors,
+        restoredAt,
+        restoreOperationId,
+        manifestDigest,
+        snapshotDigest: snapshot.contentDigest,
+      });
+    } finally {
+      owner.release();
+    }
     const importedRows = await importDurableRows(
       client,
       snapshot.durable,
       preparedFloor,
       options.authorityFloors,
       restoredAt,
-    );
-    await reconcileFleetAuthAuthorityStateInTransaction(
-      client,
-      preparedFloor,
-      randomUUID(),
+      {
+        restoreOperationId,
+        manifestDigest,
+        snapshotDigest: snapshot.contentDigest,
+        admissions,
+      },
     );
     await client.query(verificationOnly ? 'ROLLBACK' : 'COMMIT');
-    return {
+    transactionOpen = false;
+    result = {
       importedRows,
       authorityGeneration: preparedFloor.trustedHost.authorityGeneration,
       restoreCheckpoint: preparedFloor.trustedHost.restoreCheckpoint,
     };
   } catch (error) {
-    await client?.query('ROLLBACK').catch(() => undefined);
-    throw error;
+    failure = error;
+    if (client && transactionOpen) {
+      try {
+        await client.query('ROLLBACK');
+        transactionOpen = false;
+      } catch (rollbackError) {
+        failure = new AggregateError(
+          [error, rollbackError],
+          'Fleet auth restore and database rollback failed',
+        );
+      }
+    }
   } finally {
     client?.release();
-    await pool.end();
+    try {
+      await pool.end();
+    } catch (poolError) {
+      failure = failure
+        ? new AggregateError([failure, poolError], 'Fleet auth restore and pool cleanup failed')
+        : poolError;
+    }
+    try {
+      await deleteOutstandingCompanionRestoreReceipts(ownerPool, restoreOperationId);
+    } catch (cleanupError) {
+      failure = failure
+        ? new AggregateError(
+            [failure, cleanupError],
+            'Fleet auth restore and receipt cleanup failed',
+          )
+        : cleanupError;
+    }
+    try {
+      await ownerPool.end();
+    } catch (ownerPoolError) {
+      failure = failure
+        ? new AggregateError(
+            [failure, ownerPoolError],
+            'Fleet auth restore and schema-owner pool cleanup failed',
+          )
+        : ownerPoolError;
+    }
   }
+  if (failure) throw failure;
+  if (!result) throw new Error('Fleet auth restore completed without a result');
+  return result;
 }
 
 export async function restoreVerifiedFleetAuthSnapshot(

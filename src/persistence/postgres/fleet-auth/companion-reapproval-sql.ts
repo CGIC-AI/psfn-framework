@@ -118,6 +118,7 @@ BEGIN
            )
            AND lineage.authority_generation = p_lineage_generation
            AND lineage.companion_lineage_id = p_lineage_id
+           AND lineage.companion_readd_decision_id = p_readd_decision_id
        ) OR NOT EXISTS (
          SELECT 1
          FROM fleet_auth.authority_floor_tombstone_projection AS removal
@@ -188,6 +189,7 @@ BEGIN
       AND lineage.resource_hash = encode(sha256(convert_to(p_companion_id::text, 'UTF8')), 'hex')
       AND lineage.authority_generation = p_lineage_generation
       AND lineage.companion_lineage_id = p_lineage_id
+      AND lineage.companion_readd_decision_id = p_readd_decision_id
   ) OR NOT EXISTS (
     SELECT 1
     FROM fleet_auth.authority_floor_tombstone_projection AS removal

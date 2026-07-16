@@ -261,6 +261,7 @@ async function main(): Promise<void> {
       fleet: config.companionFleet,
       systemDataDir: startupHydration.pathSnapshot.systemDataDir,
       backupRestoreDatabaseUrl: fleetAuthSecrets.database.backupRestoreUrl,
+      schemaOwnerDatabaseUrl: fleetAuthSecrets.database.migrationUrl,
       roles: config.fleetAuth.databaseRoles,
       authorityFloors: fleetAuthPersistence.authorityFloors,
       schemaAccessContracts,

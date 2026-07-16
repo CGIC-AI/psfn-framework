@@ -38,6 +38,7 @@ function sha256(path: string): string {
 
 export interface FleetAuthConsistentBackupCycleOptions {
   backupRestoreDatabaseUrl: string;
+  restoreVerifySchemaOwnerDatabaseUrl?: string;
   roles: FleetAuthDatabaseRoles;
   schemas: ReadonlyArray<{
     kind: 'companion' | 'shared';
@@ -73,6 +74,7 @@ export interface FleetAuthFamilyRestoreVerificationOptions {
   manifestPath: string;
   fleetManifestPath: string;
   scratchDatabaseUrl: string;
+  scratchSchemaOwnerDatabaseUrl: string;
   roles: FleetAuthDatabaseRoles;
   authorityFloors: FleetAuthAuthorityFloorStore;
   activationGeneration: number;
@@ -174,7 +176,9 @@ export async function runFleetAuthConsistentBackupCycleImplementation(
     if (options.config.verifyRestore) {
       verifyFleetAuthBackupManifest(expectedManifestPath);
       const scratchDatabaseUrl = options.fleetBackupOptions.postgres.restoreVerifyDatabaseUrl;
-      if (!scratchDatabaseUrl || !options.verifyFamilyRestore) {
+      if (!scratchDatabaseUrl
+        || !options.restoreVerifySchemaOwnerDatabaseUrl
+        || !options.verifyFamilyRestore) {
         throw new Error(
           'Fleet auth verifyRestore requires a scratch database and full-family restore verifier',
         );
@@ -183,6 +187,7 @@ export async function runFleetAuthConsistentBackupCycleImplementation(
         manifestPath: expectedManifestPath,
         fleetManifestPath: fleetResult.fleetManifestPath,
         scratchDatabaseUrl,
+        scratchSchemaOwnerDatabaseUrl: options.restoreVerifySchemaOwnerDatabaseUrl,
         roles: options.roles,
         authorityFloors: options.authorityFloors,
         activationGeneration: options.authorityFloors.read().trustedHost.activationGeneration,

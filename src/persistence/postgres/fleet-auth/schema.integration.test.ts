@@ -41,6 +41,10 @@ import {
   FLEET_AUTH_CONSUME_HUB_REPLAY_FUNCTION_NAME,
   FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_NAME,
 } from './hub-device-assertion-replay-sql.js';
+import {
+  FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME,
+} from './companion-restore-sql.js';
 import { PostgresDiscordEvidenceStore } from './discord-evidence-store.js';
 import { digestDiscordEvidence } from '../../../boundary/fleet-auth/discord-evidence-types.js';
 import {
@@ -225,7 +229,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         `SELECT version, checksum FROM ${FLEET_AUTH_SCHEMA_NAME}.schema_migrations ORDER BY version`,
       );
       expect(ledger.rows.map(row => row.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
       ]);
       expect(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum))).toBe(true);
 
@@ -1108,6 +1112,42 @@ describe('fleet_auth Postgres authority boundary', () => {
       await expect(assertFleetAuthBackupRestorePrivileges(db.backupUrl, ROLES))
         .resolves.toBeUndefined();
 
+      const boundaryBackup = createPostgresPool(db.backupUrl, { max: 1 });
+      const boundaryRuntime = createPostgresPool(db.runtimeUrl, { max: 1 });
+      try {
+        const backupBoundary = await boundaryBackup.query<{
+          can_insert: boolean;
+          can_update: boolean;
+          can_delete: boolean;
+          can_import: boolean;
+        }>(`
+          SELECT
+            has_table_privilege(current_user,
+              '${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state', 'INSERT') AS can_insert,
+            has_table_privilege(current_user,
+              '${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state', 'UPDATE') AS can_update,
+            has_table_privilege(current_user,
+              '${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state', 'DELETE') AS can_delete,
+            has_function_privilege(current_user,
+              '${FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME}(${FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_ARG_TYPES})',
+              'EXECUTE') AS can_import
+        `);
+        expect(backupBoundary.rows[0]).toEqual({
+          can_insert: false,
+          can_update: true,
+          can_delete: false,
+          can_import: true,
+        });
+        const runtimeBoundary = await boundaryRuntime.query<{ can_import: boolean }>(`
+          SELECT has_function_privilege(current_user,
+            '${FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME}(${FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_ARG_TYPES})',
+            'EXECUTE') AS can_import
+        `);
+        expect(runtimeBoundary.rows[0]?.can_import).toBe(false);
+      } finally {
+        await Promise.all([boundaryBackup.end(), boundaryRuntime.end()]);
+      }
+
       const runtime = createPostgresPool(db.runtimeUrl, { max: 1 });
       const backup = createPostgresPool(db.backupUrl, { max: 1 });
       try {
@@ -1656,7 +1696,7 @@ describe('fleet_auth Postgres authority boundary', () => {
          VALUES ('discord', '123456789012345678', $1, 'active', 1)`,
         [principalId],
       );
-      await sourceCoordinator.query(
+      await sourceMigration.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
           (companion_id, lifecycle, authority_generation)
          VALUES ('11111111-1111-4111-8111-111111111111', 'active', 1)`,
@@ -1799,6 +1839,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       await restoreFleetAuthSnapshot({
         manifestPath: backup.manifestPath,
         databaseUrl: target.backupUrl,
+        schemaOwnerDatabaseUrl: target.migrationUrl,
         roles: ROLES,
         authorityFloors: floors,
         activationGeneration: 2,
@@ -2012,7 +2053,7 @@ describe('fleet_auth Postgres authority boundary', () => {
                authority_lineage_id
         FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state WHERE singleton = TRUE
       `);
-      await sourceBackup.query(`
+      await sourceMigration.query(`
         INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
           (companion_id, lifecycle, version, authority_generation, restore_state,
            authority_lineage_id, lineage_generation, readd_decision_id)
@@ -2097,10 +2138,12 @@ describe('fleet_auth Postgres authority boundary', () => {
       await migrateFleetAuthSchema({ databaseUrl: target.migrationUrl, roles: ROLES });
       const targetRuntime = createPostgresPool(target.runtimeUrl, { max: 1 });
       const targetBackup = createPostgresPool(target.backupUrl, { max: 1 });
+      const targetMigration = createPostgresPool(target.migrationUrl, { max: 1 });
       try {
         await restoreFleetAuthSnapshot({
           manifestPath: backup.manifestPath,
           databaseUrl: target.backupUrl,
+          schemaOwnerDatabaseUrl: target.migrationUrl,
           roles: ROLES,
           authorityFloors: floors,
           activationGeneration: 1,
@@ -2127,6 +2170,219 @@ describe('fleet_auth Postgres authority boundary', () => {
           lineage_generation: String(lineage.lineageGeneration),
           ceremony_count: '0',
         });
+        const restoredAuthority = await targetBackup.query<{
+          authority_lineage_id: string;
+          authority_generation: string;
+          restore_checkpoint: string;
+        }>(`
+          SELECT authority_lineage_id, authority_generation, restore_checkpoint
+          FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+          WHERE singleton = TRUE
+        `);
+        const restoredAuthorityRow = restoredAuthority.rows.at(0);
+        if (!restoredAuthorityRow) throw new Error('Restored authority state is unavailable');
+        const forgedAuditEventId = randomUUID();
+        const currentEpoch = await targetBackup.query<{ global_auth_epoch: string }>(`
+          SELECT global_auth_epoch
+          FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+          WHERE singleton = TRUE
+        `);
+        await targetBackup.query(`
+          INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+            (event_id, actor_context, action, resource, decision, reason_code,
+             authority_generation, global_auth_epoch)
+          VALUES ($1, '{"kind":"system","id":"forged-backup"}'::jsonb,
+                  'authority.reconcile', 'fleet_auth', 'deny',
+                  'restored_authority_quarantined', $2, $3)
+        `, [
+          forgedAuditEventId,
+          restoredAuthorityRow.authority_generation,
+          currentEpoch.rows[0]?.global_auth_epoch,
+        ]);
+        await expect(targetBackup.query(`
+          SELECT ${FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME}(
+            $1, $2, $3, $4, $5, 1, NULL, NULL, NULL,
+            clock_timestamp(), clock_timestamp(), $6, $7, $8
+          )
+        `, [
+          randomUUID(),
+          randomUUID(),
+          'a'.repeat(64),
+          'b'.repeat(64),
+          randomUUID(),
+          restoredAuthorityRow.authority_lineage_id,
+          restoredAuthorityRow.authority_generation,
+          restoredAuthorityRow.restore_checkpoint,
+        ])).rejects.toThrow(/restore receipt|admission/i);
+        await expect(targetBackup.query(`
+          SELECT * FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_restore_import_receipts
+        `)).rejects.toThrow(/permission denied/i);
+        await expect(targetBackup.query(`
+          INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_restore_import_receipts
+            (receipt_id, restore_operation_id, manifest_digest, snapshot_digest,
+             companion_id, version, created_at, imported_at,
+             global_authority_lineage_id, authority_generation, restore_checkpoint)
+          VALUES ($1, $2, $3, $4, $5, 1, $6, $7, $8, $9, $10)
+        `, [
+          randomUUID(), randomUUID(), 'c'.repeat(64), 'd'.repeat(64), randomUUID(),
+          '2026-07-16T12:03:00.000Z', '2026-07-16T12:04:00.000Z',
+          restoredAuthorityRow.authority_lineage_id,
+          restoredAuthorityRow.authority_generation,
+          restoredAuthorityRow.restore_checkpoint,
+        ])).rejects.toThrow(/permission denied/i);
+
+        const restoreOperationId = randomUUID();
+        const manifestDigest = 'c'.repeat(64);
+        const snapshotDigest = 'd'.repeat(64);
+        const createdAt = '2026-07-16T12:03:00.000Z';
+        const importedAt = '2026-07-16T12:04:00.000Z';
+        const importValues = (receiptId: string, companionId: string) => [
+          receiptId, restoreOperationId, manifestDigest, snapshotDigest,
+          companionId, 1, null, null, null, createdAt, importedAt,
+          restoredAuthorityRow.authority_lineage_id,
+          restoredAuthorityRow.authority_generation,
+          restoredAuthorityRow.restore_checkpoint,
+        ];
+        const invokeImport = (
+          client: import('pg').Pool | import('pg').PoolClient,
+          values: readonly unknown[],
+        ) => client.query(`
+          SELECT ${FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME}(
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+          ) AS imported
+        `, [...values]);
+        const issueReceipt = async (
+          client: import('pg').PoolClient,
+          receiptId: string,
+          companionId: string,
+        ): Promise<void> => {
+          const transaction = await client.query<{ restore_transaction_id: string }>(
+            'SELECT txid_current()::text AS restore_transaction_id',
+          );
+          await targetMigration.query(`
+            INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_restore_import_receipts
+              (receipt_id, restore_operation_id, restore_transaction_id,
+               manifest_digest, snapshot_digest, companion_id, version,
+               created_at, imported_at, global_authority_lineage_id,
+               authority_generation, restore_checkpoint)
+            VALUES ($1, $2, $3, $4, $5, $6, 1, $7, $8, $9, $10, $11)
+          `, [
+            receiptId,
+            restoreOperationId,
+            transaction.rows[0]?.restore_transaction_id,
+            manifestDigest,
+            snapshotDigest,
+            companionId,
+            createdAt,
+            importedAt,
+            restoredAuthorityRow.authority_lineage_id,
+            restoredAuthorityRow.authority_generation,
+            restoredAuthorityRow.restore_checkpoint,
+          ]);
+        };
+        const rejectReceiptMutation = async (
+          mutate: (values: readonly unknown[]) => readonly unknown[],
+        ): Promise<void> => {
+          const client = await targetBackup.connect();
+          const receiptId = randomUUID();
+          const companionId = randomUUID();
+          try {
+            await client.query('BEGIN');
+            await issueReceipt(client, receiptId, companionId);
+            await expect(invokeImport(
+              client,
+              mutate(importValues(receiptId, companionId)),
+            )).rejects.toThrow(/receipt.*mismatched/i);
+          } finally {
+            await client.query('ROLLBACK');
+            client.release();
+            await targetMigration.query(`
+              DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_restore_import_receipts
+              WHERE receipt_id = $1
+            `, [receiptId]);
+          }
+        };
+        await rejectReceiptMutation(values => [
+          ...values.slice(0, 4), randomUUID(), ...values.slice(5),
+        ]);
+        await rejectReceiptMutation(values => [
+          ...values.slice(0, 3), 'e'.repeat(64), ...values.slice(4),
+        ]);
+
+        const wrongTransactionReceiptId = randomUUID();
+        const wrongTransactionCompanionId = randomUUID();
+        const issuingClient = await targetBackup.connect();
+        try {
+          await issuingClient.query('BEGIN');
+          await issueReceipt(
+            issuingClient,
+            wrongTransactionReceiptId,
+            wrongTransactionCompanionId,
+          );
+          await issuingClient.query('COMMIT');
+        } finally {
+          issuingClient.release();
+        }
+        await expect(invokeImport(
+          targetBackup,
+          importValues(wrongTransactionReceiptId, wrongTransactionCompanionId),
+        )).rejects.toThrow(/receipt.*mismatched/i);
+        await targetMigration.query(`
+          DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_restore_import_receipts
+          WHERE receipt_id = $1
+        `, [wrongTransactionReceiptId]);
+
+        const receiptId = randomUUID();
+        const admittedCompanionId = randomUUID();
+        const admittedClient = await targetBackup.connect();
+        try {
+          await admittedClient.query('BEGIN');
+          await issueReceipt(admittedClient, receiptId, admittedCompanionId);
+          await expect(invokeImport(
+            admittedClient,
+            importValues(receiptId, admittedCompanionId),
+          )).resolves.toMatchObject({ rows: [{ imported: true }] });
+          await admittedClient.query('COMMIT');
+        } finally {
+          admittedClient.release();
+        }
+        await expect(invokeImport(
+          targetBackup,
+          importValues(receiptId, admittedCompanionId),
+        )).rejects.toThrow(/receipt.*unavailable/i);
+
+        const orphanReceiptId = randomUUID();
+        const orphanCompanionId = randomUUID();
+        const orphanLineageId = createHash('sha256').update(randomUUID()).digest('hex');
+        const orphanClient = await targetBackup.connect();
+        try {
+          await orphanClient.query('BEGIN');
+          await issueReceipt(orphanClient, orphanReceiptId, orphanCompanionId);
+          await orphanClient.query(`
+            INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authority_floor_tombstone_projection
+              (kind, resource_hash, authority_generation, companion_lineage_id,
+               companion_readd_decision_id)
+            VALUES ('companion_lineage_floor',
+                    encode(sha256(convert_to($1::text, 'UTF8')), 'hex'),
+                    $2, $3, $4)
+          `, [
+            orphanCompanionId,
+            Number(restoredAuthorityRow.authority_generation) + 1,
+            orphanLineageId,
+            randomUUID(),
+          ]);
+          await expect(invokeImport(
+            orphanClient,
+            importValues(orphanReceiptId, orphanCompanionId),
+          )).rejects.toThrow(/without lineage.*floor/i);
+        } finally {
+          await orphanClient.query('ROLLBACK');
+          orphanClient.release();
+          await targetMigration.query(`
+            DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_restore_import_receipts
+            WHERE receipt_id = $1
+          `, [orphanReceiptId]);
+        }
         await expect(targetBackup.query(`
           UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
           SET restore_state = 'live'
@@ -2137,10 +2393,48 @@ describe('fleet_auth Postgres authority boundary', () => {
           SET lifecycle = 'removed', restore_state = 'live'
           WHERE companion_id = $1
         `, [companionId])).rejects.toThrow(/reapprove_companion_authority/i);
+        await expect(targetBackup.query(`
+          DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          WHERE companion_id = $1
+        `, [companionId])).rejects.toThrow(/permission denied|schema owner/i);
+        await expect(targetBackup.query(`
+          UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          SET companion_id = $2
+          WHERE companion_id = $1
+        `, [companionId, randomUUID()])).rejects.toThrow(/identity is immutable/i);
+        await expect(targetBackup.query(`
+          INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+            (companion_id, lifecycle, authority_generation, restore_state)
+          VALUES ($1, 'active', 1, 'live')
+        `, [randomUUID()])).rejects.toThrow(/permission denied|bounded.*procedure/i);
+        await expect(targetBackup.query(`
+          INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+            (companion_id, lifecycle, authority_generation, restore_state)
+          VALUES ($1, 'active', 1, 'live')
+          ON CONFLICT (companion_id) DO UPDATE
+          SET lifecycle = EXCLUDED.lifecycle,
+              restore_state = EXCLUDED.restore_state
+        `, [companionId])).rejects.toThrow(/permission denied|bounded.*procedure/i);
+        expect(() => execFileSync(
+          requirePostgresClients().psqlBinary,
+          [
+            target.backupUrl,
+            '--set=ON_ERROR_STOP=1',
+            '--command',
+            `COPY ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+              (companion_id, lifecycle, version, authority_generation, restore_state)
+             FROM STDIN`,
+          ],
+          {
+            input: `${randomUUID()}\tactive\t1\t1\tlive\n`,
+            encoding: 'utf8',
+            stdio: ['pipe', 'pipe', 'pipe'],
+          },
+        )).toThrow();
         await expect(executeCompanionReapproval(targetRuntime, request))
           .rejects.toThrow(/receipt.*current companion authority/i);
       } finally {
-        await Promise.all([targetRuntime.end(), targetBackup.end()]);
+        await Promise.all([targetRuntime.end(), targetBackup.end(), targetMigration.end()]);
       }
     } finally {
       await Promise.all([sourceMigration.end(), sourceBackup.end(), sourceRuntime.end()]);
@@ -2225,6 +2519,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         await expect(restoreFleetAuthSnapshot({
           manifestPath: backup.manifestPath,
           databaseUrl: target.backupUrl,
+          schemaOwnerDatabaseUrl: target.migrationUrl,
           roles: ROLES,
           authorityFloors: newFloors,
           activationGeneration: 1,

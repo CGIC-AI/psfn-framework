@@ -312,6 +312,26 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     ], subjectRelation: 'self_or_co_subject', assurance: 'webauthn_uv', confirmation: 'explicit',
   },
   {
+    action: 'privacy.break_glass', area: 'memory', routeIds: ids('POST', [
+      '/api/admin/privacy-break-glass/memory/:id/confirm',
+    ]), subjectRelation: 'none', assurance: 'privacy_break_glass', confirmation: 'explicit',
+  },
+  {
+    action: 'privacy.break_glass', area: 'memory', routeIds: ids('POST', [
+      '/api/admin/privacy-break-glass/memory/:id/decide',
+    ]), subjectRelation: 'none', assurance: 'oauth', confirmation: 'explicit',
+  },
+  {
+    action: 'privacy.break_glass', area: 'contacts', routeIds: ids('POST', [
+      '/api/admin/privacy-break-glass/profile/:id/confirm',
+    ]), subjectRelation: 'none', assurance: 'privacy_break_glass', confirmation: 'explicit',
+  },
+  {
+    action: 'privacy.break_glass', area: 'contacts', routeIds: ids('POST', [
+      '/api/admin/privacy-break-glass/profile/:id/decide',
+    ]), subjectRelation: 'none', assurance: 'oauth', confirmation: 'explicit',
+  },
+  {
     action: 'memory.manage', area: 'memory', routeIds: [
       ...ids('POST', [
         '/api/admin/memory/bulk-delete', '/api/admin/memory/bulk-update',

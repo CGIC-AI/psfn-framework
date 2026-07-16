@@ -28,6 +28,10 @@ import { GatewayFleetPortalProjection } from '../../boundary/gateway/fleet-porta
 import { FleetStatusServer } from '../../boundary/gateway/fleet-status.js';
 import { fleetAuthRoleAllowsAction } from '../../boundary/fleet-auth/role-action-policy.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
+import {
+  privacyBreakGlassPurpose,
+  privacyBreakGlassSubjectScopeDigest,
+} from '../../shared/contracts/privacy-break-glass.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { FleetAuthRole } from '../../system/config/fleet-auth-config.js';
 
@@ -426,6 +430,89 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     expect(missingGrant.status).toBe(404);
     expect(consumeGrant).toHaveBeenCalledTimes(1);
 
+    const breakGlassRequest = {
+      reasonCategory: 'incident_response' as const,
+      reason: 'Contain an active account compromise.',
+    };
+    const breakGlassConfirmBody = JSON.stringify(breakGlassRequest);
+    const breakGlassConfirmPath =
+      '/api/admin/privacy-break-glass/memory/memory-private-b/confirm';
+    const ownerWithoutUv = await post(
+      edgePort,
+      `/companions/${COMPANION_A}/garden${breakGlassConfirmPath}`,
+      SESSION_A,
+      breakGlassConfirmBody,
+    );
+    expect(ownerWithoutUv.status).toBe(404);
+
+    const breakGlassConfirm = await post(
+      edgePort,
+      `/companions/${COMPANION_A}/garden${breakGlassConfirmPath}`,
+      SESSION_A,
+      breakGlassConfirmBody,
+      { 'x-psfn-jit-grant': '99999999-9999-4999-8999-999999999999' },
+    );
+    expect(breakGlassConfirm.status).toBe(200);
+    expect(consumeGrant).toHaveBeenLastCalledWith(expect.objectContaining({
+      grantId: '99999999-9999-4999-8999-999999999999',
+      token: SESSION_A,
+      requestOrigin: CANONICAL_ORIGIN,
+      binding: expect.objectContaining({
+        subjectScopeDigest: privacyBreakGlassSubjectScopeDigest({
+          companionId: COMPANION_A,
+          action: 'privacy.break_glass',
+          routeId: 'POST /api/admin/privacy-break-glass/memory/:id/confirm',
+          resourceKind: 'memory',
+          resourceId: 'memory-private-b',
+        }),
+        purpose: privacyBreakGlassPurpose(breakGlassRequest),
+        memoryRevision: 1,
+      }),
+    }));
+    const breakGlassConfirmPayload = JSON.parse(breakGlassConfirm.body);
+    const breakGlassConfirmMetadata = validateGardenRequestMetadata({
+      rawTarget: breakGlassConfirmPath,
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: Buffer.from(breakGlassConfirmBody),
+    });
+    const breakGlassCapability = verifier.verifyOperatorTransport({
+      token: String(breakGlassConfirmPayload.forwarded.capability),
+      companionId: COMPANION_A,
+      method: breakGlassConfirmMetadata.method,
+      canonicalRequestTarget: breakGlassConfirmMetadata.canonicalRequestTarget,
+      action: breakGlassConfirmMetadata.action,
+      authorizationDigest: digestGardenRouteAuthorization(breakGlassConfirmMetadata.authorization),
+      bodyLength: Buffer.byteLength(breakGlassConfirmBody),
+      requestId: String(breakGlassConfirmPayload.forwarded.requestId),
+      decisionId: String(breakGlassConfirmPayload.forwarded.decisionId),
+      nowSeconds: NOW_SECONDS,
+    });
+    expect(breakGlassCapability.authContext.sessionAssurance).toBe('break_glass');
+
+    const breakGlassDecidePath =
+      '/api/admin/privacy-break-glass/memory/memory-private-b/decide';
+    const breakGlassDecideBody = JSON.stringify({
+      ...breakGlassRequest,
+      confirmToken: 'f'.repeat(64),
+    });
+    const jitOnDecision = await post(
+      edgePort,
+      `/companions/${COMPANION_A}/garden${breakGlassDecidePath}`,
+      SESSION_A,
+      breakGlassDecideBody,
+      { 'x-psfn-jit-grant': '99999999-9999-4999-8999-999999999999' },
+    );
+    expect(jitOnDecision.status).toBe(404);
+    const breakGlassDecision = await post(
+      edgePort,
+      `/companions/${COMPANION_A}/garden${breakGlassDecidePath}`,
+      SESSION_A,
+      breakGlassDecideBody,
+    );
+    expect(breakGlassDecision.status).toBe(200);
+    expect(consumeGrant).toHaveBeenCalledTimes(2);
+
     const metadata = validateGardenRequestMetadata({ rawTarget: resourcePath, method: 'GET' });
     expect(() => verifier.verifyOperatorTransport({
       token: String(payloadA.forwarded.capability),
@@ -485,7 +572,7 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       SESSION_A,
     );
     expect(revoked.status).toBe(404);
-    expect(await getHitCount(workloadA.port)).toEqual({ hits: 2, pid: workloadA.pid });
+    expect(await getHitCount(workloadA.port)).toEqual({ hits: 4, pid: workloadA.pid });
   });
 
   it('certifies disjoint portal projections, stateless links, outages, and raw-status separation', async () => {

@@ -122,6 +122,7 @@ export const FLEET_AUTH_ACTIONS = [
   'roles.manage',
   'memory.read.self',
   'memory.jit.self',
+  'privacy.break_glass',
   'devices.manage',
   'provider.link',
 ] as const;

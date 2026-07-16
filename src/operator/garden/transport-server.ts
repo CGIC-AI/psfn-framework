@@ -144,6 +144,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       episodicMemoryService: config.services.episodicMemory,
       groupMemoryService: config.services.groupMemory,
       memoryService: config.services.memory,
+      privacyBreakGlassService: config.services.privacyBreakGlass,
       sessionService: config.services.sessions,
       contactsService: config.services.contacts,
       pendingContactsService: config.services.pendingContacts ?? null,

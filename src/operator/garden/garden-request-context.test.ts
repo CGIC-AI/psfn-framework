@@ -5,7 +5,10 @@ import type {
 } from '../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../faculties/memory/types.js';
 import { AdminMemoryDataService } from './services/memory-service.js';
-import type { FleetGardenRequestContext } from './garden-request-context.js';
+import {
+  gardenRequestServiceBoundaryDenial,
+  type FleetGardenRequestContext,
+} from './garden-request-context.js';
 import type { MemorySubjectClassification } from '../../shared/contracts/memory-subject.js';
 
 function memory(contactId: string): PurrMemory {
@@ -150,6 +153,27 @@ describe('request-bound Garden principal isolation', () => {
     expect(() => service.forRequest(context('principal-a', 'contact-a', {
       subjectRelation: 'current_companion',
     }))).toThrow(/exact request-local subject relation/u);
+  });
+
+  it('admits only the declared privacy break-glass memory routes to their gated service', () => {
+    const confirm = context('principal-a', 'contact-a', {
+      action: 'privacy.break_glass',
+      subjectRelation: 'none',
+      routeId: 'POST /api/admin/privacy-break-glass/memory/:id/confirm',
+      pathParams: { id: 'memory-b' },
+      assurance: 'break_glass',
+      role: 'admin',
+    });
+    expect(gardenRequestServiceBoundaryDenial(confirm)).toBeNull();
+    const undeclared = context('principal-a', 'contact-a', {
+      action: 'privacy.break_glass',
+      subjectRelation: 'none',
+      routeId: 'POST /api/admin/privacy-break-glass/memory/:id/export',
+      pathParams: { id: 'memory-b' },
+      assurance: 'break_glass',
+      role: 'admin',
+    });
+    expect(gardenRequestServiceBoundaryDenial(undeclared)).toMatch(/subject-authorized/u);
   });
 
   it('does not let an owner role bypass the routine subject SQL projection', async () => {

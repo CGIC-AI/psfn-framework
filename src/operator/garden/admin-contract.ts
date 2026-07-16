@@ -55,6 +55,7 @@ import type { AdminGraphProposalsService } from './services/graph-proposals-serv
 import type { AdminSubsystemHealthService } from './services/subsystem-health-service.js';
 import type { AdminToolConformanceService } from './services/tool-conformance-service.js';
 import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
+import type { AdminPrivacyBreakGlassService } from './services/privacy-break-glass-service.js';
 import type { GardenRequestContext } from './garden-request-context.js';
 
 export interface ConfirmationQueueAdminApi {
@@ -197,6 +198,7 @@ export interface GardenAdminDomainServices {
   episodicMemory?: AdminEpisodicMemoryService | null;
   groupMemory?: AdminGroupMemoryService | null;
   memory: AdminMemoryService;
+  privacyBreakGlass?: AdminPrivacyBreakGlassService | null;
   sessions: AdminSessionService;
   contacts: AdminContactsService;
   pendingContacts?: AdminPendingContactsService | null;

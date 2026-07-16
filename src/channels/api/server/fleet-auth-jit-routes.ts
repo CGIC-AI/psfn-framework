@@ -13,6 +13,13 @@ import {
 import { assertNoUnknownKeys, isRecord } from '../../../shared/utils/types.js';
 import { readJsonBodyWithLimit, sendJson } from '../../backplane/http/primitives.js';
 import { parseMemorySubjectJitRequest } from '../../../shared/contracts/memory-subject-jit.js';
+import {
+  isPrivacyBreakGlassConfirmRoute,
+  parsePrivacyBreakGlassConfirmRequest,
+  privacyBreakGlassPurpose,
+  privacyBreakGlassResourceKindForRoute,
+  privacyBreakGlassSubjectScopeDigest,
+} from '../../../shared/contracts/privacy-break-glass.js';
 import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
 
 export const FLEET_AUTH_JIT_WEBAUTHN_START_PATH = '/v1/fleet-auth/jit/webauthn/start';
@@ -57,15 +64,8 @@ function requestBinding(value: unknown): FleetJitRequestBinding {
   const method = requiredString(value, 'method');
   const rawTarget = requiredString(value, 'target');
   const bodyBase64url = requiredString(value, 'bodyBase64url');
-  const subjectScopeDigest = requiredString(value, 'subjectScopeDigest');
-  const purpose = requiredString(value, 'purpose');
-  const classifierEvidenceDigest = requiredString(value, 'classifierEvidenceDigest');
   if (!LOWERCASE_RFC4122_COMPANION_ID_PATTERN.test(companionId)
-    || !BASE64URL_PATTERN.test(bodyBase64url)
-    || !DIGEST_PATTERN.test(subjectScopeDigest)
-    || !DIGEST_PATTERN.test(classifierEvidenceDigest)
-    || !Number.isSafeInteger(value.memoryRevision)
-    || Number(value.memoryRevision) < 1) {
+    || !BASE64URL_PATTERN.test(bodyBase64url)) {
     throw new Error('JIT start binding is malformed');
   }
   const body = Buffer.from(bodyBase64url, 'base64url');
@@ -78,6 +78,42 @@ function requestBinding(value: unknown): FleetJitRequestBinding {
     companionId: createCompanionId(companionId),
     body,
   });
+  if (target.action === 'privacy.break_glass') {
+    const resourceKind = privacyBreakGlassResourceKindForRoute(target.resource.routeId);
+    const resourceId = target.resource.pathParams.id;
+    if (!isPrivacyBreakGlassConfirmRoute(target.resource.routeId)
+      || target.authorization.requirements.assurance !== 'privacy_break_glass'
+      || !resourceKind || !resourceId
+      || value.subjectScopeDigest !== undefined
+      || value.purpose !== undefined
+      || value.memoryRevision !== undefined
+      || value.classifierEvidenceDigest !== undefined) {
+      throw new Error('Privacy break-glass JIT must bind one exact confirmation resource');
+    }
+    const request = parsePrivacyBreakGlassConfirmRequest(JSON.parse(body.toString('utf8')));
+    return {
+      target,
+      subjectScopeDigest: privacyBreakGlassSubjectScopeDigest({
+        companionId,
+        action: target.action,
+        routeId: target.resource.routeId,
+        resourceKind,
+        resourceId,
+      }),
+      purpose: privacyBreakGlassPurpose(request),
+      memoryRevision: 1,
+      classifierEvidenceDigest: target.resourceDigest,
+    };
+  }
+  const subjectScopeDigest = requiredString(value, 'subjectScopeDigest');
+  const purpose = requiredString(value, 'purpose');
+  const classifierEvidenceDigest = requiredString(value, 'classifierEvidenceDigest');
+  if (!DIGEST_PATTERN.test(subjectScopeDigest)
+    || !DIGEST_PATTERN.test(classifierEvidenceDigest)
+    || !Number.isSafeInteger(value.memoryRevision)
+    || Number(value.memoryRevision) < 1) {
+    throw new Error('JIT start binding is malformed');
+  }
   if (target.action === 'memory.jit.self') {
     if (target.resource.routeId !== 'POST /api/admin/memory/:id/reveal') {
       throw new Error('Memory JIT must bind one exact reveal resource');

@@ -34,6 +34,25 @@ function binding(strong = true): FleetJitRequestBinding {
   };
 }
 
+function privacyBinding(): FleetJitRequestBinding {
+  const target = compileGatewayGardenRequestTarget({
+    rawTarget: '/api/admin/privacy-break-glass/memory/memory-b/confirm',
+    method: 'POST',
+    companionId: COMPANION_ID,
+    body: Buffer.from(JSON.stringify({
+      reasonCategory: 'incident_response',
+      reason: 'Contain an active compromise.',
+    }), 'utf8'),
+  });
+  return {
+    target,
+    subjectScopeDigest: DIGEST,
+    purpose: 'Privacy break-glass incident response',
+    memoryRevision: 1,
+    classifierEvidenceDigest: 'b'.repeat(64),
+  };
+}
+
 function fixture() {
   let pending: FleetJitPendingChallenge | undefined;
   let consumed = false;
@@ -168,6 +187,17 @@ describe('FleetJitStepUpCoordinator', () => {
       csrfToken: 'csrf',
       requestOrigin: ORIGIN,
       binding: binding(true),
+    })).rejects.toMatchObject({ code: 'strong_assurance_required' });
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it('treats privacy break-glass as UV-only even when Discord possession is configured', async () => {
+    const { coordinator, deliver } = fixture();
+    await expect(coordinator.startDiscordPossession({
+      token: 'session',
+      csrfToken: 'csrf',
+      requestOrigin: ORIGIN,
+      binding: privacyBinding(),
     })).rejects.toMatchObject({ code: 'strong_assurance_required' });
     expect(deliver).not.toHaveBeenCalled();
   });

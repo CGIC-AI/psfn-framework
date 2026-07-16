@@ -23,6 +23,9 @@ import type { AdminWikiService } from './services/types.js';
 
 const WIKI_UNAVAILABLE_ERROR = 'Wiki backend unavailable';
 const SHARED_WORLD_PREFIX = '/api/admin/wiki/shared-world/';
+const CARETAKER_PROPOSALS_PATH = '/api/admin/wiki/shared-world-proposals';
+const CARETAKER_PROPOSALS_PREFIX = `${CARETAKER_PROPOSALS_PATH}/`;
+const GARDEN_OPERATOR_ACTOR = 'garden-operator';
 
 export function buildAdminWikiScopeRoutes(options: {
   wikiService?: AdminWikiService | null;
@@ -39,6 +42,97 @@ export function buildAdminWikiScopeRoutes(options: {
         wikiService.listWikiScopes().then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
           error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list wiki scopes') }),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath(CARETAKER_PROPOSALS_PATH),
+      handle: (req, res) => {
+        if (!wikiService) { sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR }); return; }
+        const url = parseRequestUrl(req, CARETAKER_PROPOSALS_PATH);
+        const rawState = url.searchParams.get('state')?.trim();
+        const state = rawState === 'pending' || rawState === 'approved' || rawState === 'rejected'
+          ? rawState
+          : undefined;
+        if (rawState && !state) {
+          sendJson(res, 400, { error: 'state must be pending, approved, or rejected' });
+          return;
+        }
+        const rawLimit = url.searchParams.get('limit');
+        const parsedLimit = rawLimit === null ? undefined : Number(rawLimit);
+        if (parsedLimit !== undefined && (!Number.isInteger(parsedLimit) || parsedLimit < 1)) {
+          sendJson(res, 400, { error: 'limit must be a positive integer' });
+          return;
+        }
+        wikiService.listSharedWorldWikiProposals({
+          ...(state ? { state } : {}),
+          ...(parsedLimit !== undefined ? { limit: parsedLimit } : {}),
+        }).then(
+          proposals => sendJson(res, 200, { proposals }, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to list shared-world wiki proposals') }),
+        );
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath(`${CARETAKER_PROPOSALS_PATH}/cleanup`),
+      handle: (req, res) => {
+        if (!wikiService) { sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR }); return; }
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) { sendJson(res, 400, { error: parsed.error }); return; }
+          if (!isRecord(parsed.value)) {
+            sendJson(res, 400, { error: 'Cleanup payload must be a JSON object' });
+            return;
+          }
+          const limit = parsed.value.limit;
+          if (typeof limit !== 'number' || !Number.isInteger(limit) || limit < 1) {
+            sendJson(res, 400, { error: 'limit must be a positive integer' });
+            return;
+          }
+          wikiService.cleanupSharedWorldWikiProposals(limit).then(
+            result => sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS),
+            error => sendJson(res, 400, { error: toSanitizedMessage(error, 'Failed to clean shared-world wiki projections') }),
+          );
+        });
+      },
+    },
+    {
+      method: 'POST',
+      match: paramWithSuffix(CARETAKER_PROPOSALS_PREFIX, 'proposalId', '/approve'),
+      handle: (_req, res, { proposalId }) => {
+        if (!wikiService) { sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR }); return; }
+        wikiService.approveSharedWorldWikiProposal(proposalId, GARDEN_OPERATOR_ACTOR).then(
+          result => sendJson(res, 200, result, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => sendJson(res, 400, { error: toSanitizedMessage(error, 'Failed to approve shared-world wiki proposal') }),
+        );
+      },
+    },
+    {
+      method: 'POST',
+      match: paramWithSuffix(CARETAKER_PROPOSALS_PREFIX, 'proposalId', '/reject'),
+      handle: (_req, res, { proposalId }) => {
+        if (!wikiService) { sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR }); return; }
+        wikiService.rejectSharedWorldWikiProposal(proposalId, GARDEN_OPERATOR_ACTOR).then(
+          proposal => sendJson(res, 200, { proposal }, ADMIN_DYNAMIC_JSON_HEADERS),
+          error => sendJson(res, 400, { error: toSanitizedMessage(error, 'Failed to reject shared-world wiki proposal') }),
+        );
+      },
+    },
+    {
+      method: 'GET',
+      match: prefixedParamPath(CARETAKER_PROPOSALS_PREFIX, 'proposalId', {
+        exclude: path => path.slice(CARETAKER_PROPOSALS_PREFIX.length).includes('/'),
+      }),
+      handle: (_req, res, { proposalId }) => {
+        if (!wikiService) { sendJson(res, 503, { error: WIKI_UNAVAILABLE_ERROR }); return; }
+        wikiService.getSharedWorldWikiProposal(proposalId).then(
+          (proposal) => {
+            if (!proposal) { sendJson(res, 404, { error: 'Shared-world wiki proposal not found' }); return; }
+            sendJson(res, 200, { proposal }, ADMIN_DYNAMIC_JSON_HEADERS);
+          },
+          error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to inspect shared-world wiki proposal') }),
         );
       },
     },

@@ -11,6 +11,7 @@ import {
 import { VALID_SENSITIVITY_LEVELS } from '../../system/trust/types.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../core/cogsec/intake-firewall-notice-templates.js';
 import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
+import type { SharedWorldWikiProposalSubmissionPort } from './shared-world-caretaker.js';
 import {
   WIKI_SOURCE_CLASSES,
   type WikiDocumentUpsertInput,
@@ -19,7 +20,15 @@ import {
   type WikiStorePort,
 } from './types.js';
 
-const WIKI_ACTIONS = ['list', 'read', 'search', 'semantic_search', 'write', 'import'] as const;
+const WIKI_ACTIONS = [
+  'list',
+  'read',
+  'search',
+  'semantic_search',
+  'write',
+  'import',
+  'propose_shared_world',
+] as const;
 type WikiAction = typeof WIKI_ACTIONS[number];
 
 export interface WikiToolDeps {
@@ -38,6 +47,14 @@ export interface WikiToolDeps {
    * off.
    */
   getIntakeSinkGate?: () => IntakeSinkGate | null;
+  /**
+   * Multi-companion-only enqueue surface. It exposes no SharedWorldWikiStore,
+   * so a companion can propose a public world fact but cannot publish it.
+   */
+  sharedWorldProposal?: {
+    actorId: string;
+    submitter: SharedWorldWikiProposalSubmissionPort;
+  };
 }
 
 interface WikiToolParams {
@@ -52,6 +69,8 @@ interface WikiToolParams {
   provenance_refs?: string[] | string;
   sensitivity?: WikiDocumentUpsertInput['sensitivity'];
   summary?: string;
+  site_id?: string;
+  source_ref?: string;
 }
 
 function normalizeAction(params: WikiToolParams): WikiAction {
@@ -112,6 +131,7 @@ function resolveWikiCapabilityRequirement(params: Record<string, unknown>): Capa
       return 'identity.read';
     case 'write':
     case 'import':
+    case 'propose_shared_world':
       return 'identity.write.runtime';
     default:
       return ['identity.read', 'identity.write.runtime'];
@@ -173,6 +193,14 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
       summary: Type.Optional(Type.String({
         minLength: 1,
         description: 'Optional short summary used in list/search previews.',
+      })),
+      site_id: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Known shared-world site id for action=propose_shared_world.',
+      })),
+      source_ref: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Non-memory source event/reference for action=propose_shared_world.',
       })),
     }),
     execute: async (
@@ -246,6 +274,36 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
               action,
               document,
               boundary: 'Stored in the internal wiki/knowledge-base; no L2 memory was created.',
+            }, null, 2));
+          }
+          case 'propose_shared_world': {
+            const proposalSurface = deps.sharedWorldProposal;
+            if (!proposalSurface) {
+              return textResultWithError(
+                'wiki propose_shared_world is unavailable outside the configured multi-companion caretaker flow.',
+                true,
+              );
+            }
+            const provenanceRefs = typeof params.provenance_refs === 'string'
+              ? params.provenance_refs.split(',')
+              : (params.provenance_refs ?? []);
+            const tags = typeof params.tags === 'string' ? params.tags.split(',') : params.tags;
+            const result = await proposalSurface.submitter.submit({
+              siteId: requireString(params.site_id, 'site_id'),
+              ...(typeof params.id === 'string' && params.id.trim() ? { documentId: params.id.trim() } : {}),
+              actorId: proposalSurface.actorId,
+              sourceRef: requireString(params.source_ref, 'source_ref'),
+              title: requireString(params.title, 'title'),
+              body: requireString(params.body, 'body'),
+              ...(tags ? { tags } : {}),
+              provenanceRefs,
+              sensitivity: params.sensitivity ?? 'public',
+            });
+            return textResult(JSON.stringify({
+              action,
+              proposal: result.proposal,
+              deduplicated: result.deduplicated,
+              boundary: 'Queued for operator review; no shared-world document was written.',
             }, null, 2));
           }
         }

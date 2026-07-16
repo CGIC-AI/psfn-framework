@@ -24,6 +24,9 @@ import type {
   WikiSemanticSearchResult,
 } from './types.js';
 import type { RetrievalQueryEmbeddingProvenance } from '../../shared/retrieval-query-embedding.js';
+import { loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
+import { SharedWorldWikiProposalStore } from './shared-world-caretaker-store.js';
+import { SharedWorldWikiProposalService } from './shared-world-caretaker.js';
 
 const log = createComponentLogger('WikiRuntime');
 
@@ -65,6 +68,10 @@ export interface WikiRuntimeDeps {
    * wiki_write gate. Absent/null = firewall off.
    */
   getIntakeSinkGate?: () => IntakeSinkGate | null;
+  /** Runtime identity stamped on companion-authored shared-world proposals. */
+  companionId?: string;
+  /** System owner root containing places.json; used only to validate proposal site ids. */
+  systemDataDir?: string;
 }
 
 export interface WikiRuntimeWiring {
@@ -77,6 +84,7 @@ export interface WikiRuntimeWiring {
    */
   sharedProjection: SharedWikiPgvectorProjectionStore | null;
   retrievalService: WikiRetrievalService | null;
+  proposalStore: SharedWorldWikiProposalStore | null;
 }
 
 /**
@@ -185,9 +193,30 @@ export async function wireWikiRuntime(
     }
   }
 
+  let proposalStore: SharedWorldWikiProposalStore | null = null;
+  let sharedWorldProposal: {
+    actorId: string;
+    submitter: SharedWorldWikiProposalService;
+  } | undefined;
+  if (deps.getMultiCompanion?.() === true
+    && deps.databaseUrl
+    && deps.companionId?.trim()
+    && deps.systemDataDir?.trim()) {
+    proposalStore = new SharedWorldWikiProposalStore(deps.databaseUrl);
+    const systemDataDir = deps.systemDataDir;
+    sharedWorldProposal = {
+      actorId: deps.companionId.trim(),
+      submitter: new SharedWorldWikiProposalService({
+        proposalStore,
+        isKnownSite: siteId => loadPlacesRegistryConfig(systemDataDir).sites.some(site => site.siteId === siteId),
+      }),
+    };
+  }
+
   target.registerTool(createWikiTool(store, {
     ...(semanticSearch ? { semanticSearch } : {}),
     ...(deps.getIntakeSinkGate ? { getIntakeSinkGate: deps.getIntakeSinkGate } : {}),
+    ...(sharedWorldProposal ? { sharedWorldProposal } : {}),
   }), 'core');
 
   if (projection) {
@@ -218,5 +247,5 @@ export async function wireWikiRuntime(
     })();
   }
 
-  return { store, projection, sharedProjection, retrievalService };
+  return { store, projection, sharedProjection, retrievalService, proposalStore };
 }

@@ -2493,8 +2493,63 @@ export const POSTGRES_SHARED_WIKI_MIGRATIONS: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS idx_shared_wiki_chunks_site ON shared_wiki_chunks(site_id);`,
   `CREATE INDEX IF NOT EXISTS idx_shared_wiki_chunks_scope ON shared_wiki_chunks(scope);`,
   `
+  CREATE TABLE IF NOT EXISTS shared_wiki_proposals (
+    proposal_id UUID PRIMARY KEY,
+    site_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    tags_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    provenance_refs_json JSONB NOT NULL,
+    sensitivity TEXT NOT NULL,
+    content_digest TEXT NOT NULL,
+    review_state TEXT NOT NULL DEFAULT 'pending',
+    rejection_code TEXT,
+    reviewed_by TEXT,
+    reviewed_at_ms BIGINT,
+    apply_state TEXT NOT NULL DEFAULT 'unreviewed',
+    apply_lease_token UUID,
+    apply_lease_until_ms BIGINT,
+    applied_at_ms BIGINT,
+    applied_document_version INTEGER,
+    applied_body_sha256 TEXT,
+    projection_body_sha256 TEXT,
+    cleanup_checked_at_ms BIGINT,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at_ms BIGINT NOT NULL,
+    updated_at_ms BIGINT NOT NULL,
+    UNIQUE (site_id, content_digest),
+    CHECK (review_state IN ('pending', 'approved', 'rejected')),
+    CHECK (apply_state IN ('unreviewed', 'ready', 'applying', 'retryable', 'applied', 'rejected')),
+    CHECK (sensitivity = 'public'),
+    CHECK (jsonb_typeof(tags_json) = 'array'),
+    CHECK (jsonb_typeof(provenance_refs_json) = 'array'),
+    CHECK (
+      (review_state = 'pending' AND reviewed_by IS NULL AND reviewed_at_ms IS NULL AND rejection_code IS NULL)
+      OR (review_state = 'approved' AND reviewed_by IS NOT NULL AND reviewed_at_ms IS NOT NULL AND rejection_code IS NULL)
+      OR (review_state = 'rejected' AND reviewed_by IS NOT NULL AND reviewed_at_ms IS NOT NULL AND rejection_code IS NOT NULL)
+    ),
+    CHECK (
+      (apply_state = 'applying' AND apply_lease_token IS NOT NULL AND apply_lease_until_ms IS NOT NULL)
+      OR (apply_state <> 'applying' AND apply_lease_token IS NULL AND apply_lease_until_ms IS NULL)
+    ),
+    CHECK ((review_state = 'approved') OR apply_state IN ('unreviewed', 'rejected')),
+    CHECK ((review_state = 'rejected') = (apply_state = 'rejected'))
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_shared_wiki_proposals_review ON shared_wiki_proposals(review_state, created_at_ms);`,
+  `CREATE INDEX IF NOT EXISTS idx_shared_wiki_proposals_apply ON shared_wiki_proposals(apply_state, apply_lease_until_ms);`,
+  `CREATE INDEX IF NOT EXISTS idx_shared_wiki_proposals_cleanup ON shared_wiki_proposals(cleanup_checked_at_ms NULLS FIRST) WHERE review_state = 'approved' AND apply_state = 'applied';`,
+  `
   INSERT INTO shared_schema_migrations (version, name)
   VALUES (3, 'shared-wiki-chunks')
+  ON CONFLICT (version) DO NOTHING;
+  `,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (8, 'shared-wiki-caretaker-proposals')
   ON CONFLICT (version) DO NOTHING;
   `,
 ];

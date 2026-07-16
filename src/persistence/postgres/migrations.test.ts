@@ -234,6 +234,24 @@ describe('Postgres live schema migrations', () => {
     expect(baseSql).not.toContain('shared_wiki_chunks');
   });
 
+  it('adds the durable shared-world caretaker proposal state machine as shared migration 8', () => {
+    const sql = migrationSql(POSTGRES_SHARED_WIKI_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS shared_wiki_proposals');
+    expect(sql).toContain('UNIQUE (site_id, content_digest)');
+    expect(sql).toContain("CHECK (review_state IN ('pending', 'approved', 'rejected'))");
+    expect(sql).toContain("CHECK (apply_state IN ('unreviewed', 'ready', 'applying', 'retryable', 'applied', 'rejected'))");
+    expect(sql).toContain("CHECK (sensitivity = 'public')");
+    expect(sql).toContain('apply_lease_token UUID');
+    expect(sql).toContain('projection_body_sha256 TEXT');
+    expect(sql).toContain('idx_shared_wiki_proposals_review');
+    expect(sql).toContain('idx_shared_wiki_proposals_apply');
+    expect(sql).toContain('idx_shared_wiki_proposals_cleanup');
+    expect(sql.indexOf('CREATE TABLE IF NOT EXISTS shared_wiki_proposals')).toBeLessThan(
+      sql.indexOf("VALUES (8, 'shared-wiki-caretaker-proposals')"),
+    );
+  });
+
   it('creates the hub-identity enrollment binding + audit tables bound to contacts', () => {
     const sql = migrationSql(POSTGRES_ENROLLMENT_MIGRATIONS);
 

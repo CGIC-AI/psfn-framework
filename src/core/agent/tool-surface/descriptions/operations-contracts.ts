@@ -41,9 +41,10 @@ export const OPERATIONS_TOOL_CONTRACTS = {
       action('semantic_search', ['query'], ['limit']),
       action('write', ['title', 'body'], ['id', 'tags', 'source_class', 'provenance_refs', 'sensitivity', 'summary']),
       action('import', ['title', 'body', 'source_class', 'provenance_refs'], ['id', 'tags', 'sensitivity', 'summary']),
+      action('propose_shared_world', ['site_id', 'title', 'body', 'source_ref', 'provenance_refs', 'sensitivity'], ['id', 'tags']),
     ],
-    output: 'It returns documents or matches and writes provenance-bearing reference material; semantic search fails closed when unwired.',
-    guidance: 'Do not use wiki for lived memory or journal reflection; use memory or journal.',
+    output: 'It returns documents or matches, writes personal provenance-bearing reference material, or queues a public shared-world proposal for operator review; semantic search fails closed when unwired.',
+    guidance: 'Do not use wiki for lived memory or journal reflection; use memory or journal. A shared-world proposal never publishes directly.',
     example: { action: 'search', query: 'greenhouse watering protocol' },
   },
   schedule: {

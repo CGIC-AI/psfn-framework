@@ -39,6 +39,10 @@ export type {
   AdminSharedWorldWikiPublishData,
   AdminSharedWorldWikiImportData,
   AdminWikiImportRequest,
+  SharedWorldWikiProposal,
+  SharedWorldWikiProposalApplyResult,
+  SharedWorldWikiCleanupResult,
+  SharedWorldWikiProposalListQuery,
 } from './types/wiki.js';
 
 export type {

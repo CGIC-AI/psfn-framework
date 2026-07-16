@@ -411,6 +411,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     getConfig: () => config,
     getMultiCompanion: () => config.multiCompanion === true,
     getIntakeSinkGate: () => intakeSinkGate,
+    ...(config.companionId ? { companionId: config.companionId } : {}),
+    systemDataDir: pathSnapshot.systemDataDir,
   });
   // E8.3: attach the supplemental wiki RAG provider (null when the projection
   // is unavailable); pre-turn assembly consults it AFTER memory context.

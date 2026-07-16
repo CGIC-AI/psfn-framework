@@ -7,6 +7,18 @@ import type {
 import type { PlacesWikiPublicationReport } from '../../../../faculties/wiki/places-wiki-publication.js';
 import type { WikiImportReport } from '../../../../faculties/wiki/bulk-import.js';
 import type { SharedWikiProjectionOutcome } from '../../../../faculties/wiki/shared-pgvector-projection.js';
+import type {
+  SharedWorldWikiProposal,
+  SharedWorldWikiProposalApplyResult,
+  SharedWorldWikiCleanupResult,
+  SharedWorldWikiProposalListQuery,
+} from '../../../../faculties/wiki/shared-world-caretaker-types.js';
+export type {
+  SharedWorldWikiProposal,
+  SharedWorldWikiProposalApplyResult,
+  SharedWorldWikiCleanupResult,
+  SharedWorldWikiProposalListQuery,
+} from '../../../../faculties/wiki/shared-world-caretaker-types.js';
 
 export interface AdminWikiListData {
   roots: {
@@ -86,4 +98,10 @@ export interface AdminWikiService {
    * scope plus its shared-schema pgvector projection pass (s10f9).
    */
   importSharedWorldDirectory(siteId: string, request: AdminWikiImportRequest): Promise<AdminSharedWorldWikiImportData>;
+  /** Operator-only caretaker review queue. */
+  listSharedWorldWikiProposals(query?: SharedWorldWikiProposalListQuery): Promise<SharedWorldWikiProposal[]>;
+  getSharedWorldWikiProposal(proposalId: string): Promise<SharedWorldWikiProposal | null>;
+  approveSharedWorldWikiProposal(proposalId: string, operatorActorId: string): Promise<SharedWorldWikiProposalApplyResult>;
+  rejectSharedWorldWikiProposal(proposalId: string, operatorActorId: string): Promise<SharedWorldWikiProposal>;
+  cleanupSharedWorldWikiProposals(limit: number): Promise<SharedWorldWikiCleanupResult>;
 }

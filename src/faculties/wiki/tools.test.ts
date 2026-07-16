@@ -3,9 +3,10 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { TextContent } from '@mariozechner/pi-ai';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WikiStore } from './store.js';
 import { createWikiTool } from './tools.js';
+import type { SharedWorldWikiProposalInput } from './shared-world-caretaker-types.js';
 
 function resultText(result: AgentToolResult<any>): string {
   return result.content
@@ -89,5 +90,51 @@ describe('wiki tool', () => {
     }))) as { document: { sourceClass: string; provenanceRefs: string[] } };
     expect(imported.document.sourceClass).toBe('imported_partner_vault_note');
     expect(imported.document.provenanceRefs).toEqual(['vault:partner:Vault Import.md']);
+  });
+
+  it('queues a shared-world proposal through an enqueue-only dependency', async () => {
+    const submit = vi.fn(async (input: SharedWorldWikiProposalInput) => ({
+      proposal: {
+        ...input,
+        documentId: input.documentId ?? 'kitchen-toaster',
+        tags: [...(input.tags ?? [])],
+        provenanceRefs: [...input.provenanceRefs],
+        sensitivity: 'public' as const,
+        contentDigest: 'digest',
+        proposalId: '11111111-1111-4111-8111-111111111111',
+        reviewState: 'pending' as const,
+        applyState: 'unreviewed' as const,
+        revision: 1,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      },
+      deduplicated: false,
+    }));
+    const tool = createWikiTool(store, {
+      sharedWorldProposal: {
+        actorId: 'companion-a',
+        submitter: { submit },
+      },
+    });
+
+    const result = JSON.parse(resultText(await tool.execute('proposal', {
+      action: 'propose_shared_world',
+      site_id: 'studio',
+      id: 'kitchen-toaster',
+      title: 'Kitchen toaster',
+      body: 'A toaster is installed in the kitchen.',
+      source_ref: 'world-observation:turn-7',
+      provenance_refs: ['world-observation:sensor-4'],
+      sensitivity: 'public',
+    }))) as { proposal: { reviewState: string }; boundary: string };
+
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      siteId: 'studio',
+      actorId: 'companion-a',
+      sensitivity: 'public',
+    }));
+    expect(result.proposal.reviewState).toBe('pending');
+    expect(result.boundary).toContain('no shared-world document was written');
+    expect(store.list()).toEqual([]);
   });
 });

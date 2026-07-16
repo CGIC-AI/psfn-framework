@@ -60,6 +60,7 @@
     "e2e:kube-self-update": "PSFN_K3D_E2E=1 vitest run src/app/e2e/kube-self-update-e2e.test.ts",
     "smoke:chat": "node scripts/chat-cockpit-smoke.mjs",
     "smoke:cogsec": "tsx scripts/cogsec-remediation-smoke.ts",
+    "smoke:wiki-caretaker": "vitest run src/faculties/wiki/shared-world-caretaker.integration.test.ts",
     "smoke:garden:postgres-memory": "node scripts/garden-postgres-memory-cutover-smoke.mjs",
     "smoke:discord:dm-voice": "node scripts/discord-dm-voice-smoke.mjs",
     "walkthrough": "tsx src/app/e2e/e2e-walkthrough.ts",

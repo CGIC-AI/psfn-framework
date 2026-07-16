@@ -18,10 +18,18 @@ import {
   type WikiImportReport,
 } from '../../../faculties/wiki/bulk-import.js';
 import {
+  createSharedWikiPgvectorProjectionStore,
   runSharedWorldWikiWrite,
   type SharedWikiProjectionContext,
   type SharedWikiProjectionOutcome,
 } from '../../../faculties/wiki/shared-pgvector-projection.js';
+import { SharedWorldWikiProposalStore } from '../../../faculties/wiki/shared-world-caretaker-store.js';
+import { SharedWorldWikiCaretakerService } from '../../../faculties/wiki/shared-world-caretaker.js';
+import type {
+  SharedWorldWikiProposalApplyResult,
+  SharedWorldWikiProposalListQuery,
+  SharedWorldWikiCleanupResult,
+} from '../../../faculties/wiki/shared-world-caretaker-types.js';
 import {
   loadPlacesRegistryConfig,
   resolveSiteById,
@@ -66,6 +74,7 @@ export class AdminWikiDataService implements AdminWikiService {
   private readonly personalStore: WikiStore;
   private readonly systemDataDir: string;
   private readonly sharedProjectionContext: SharedWikiProjectionContext;
+  private readonly proposalStore: SharedWorldWikiProposalStore | null;
 
   constructor(options: AdminWikiDataServiceOptions) {
     this.personalStore = new WikiStore(options.workspacePath);
@@ -74,6 +83,21 @@ export class AdminWikiDataService implements AdminWikiService {
     // never fail closed here because multiCompanion is only knowable from the
     // injected context — compositions running multi-companion MUST inject it.
     this.sharedProjectionContext = options.sharedProjection ?? { multiCompanion: false };
+    const proposalDatabaseUrl = this.sharedProjectionContext.databaseUrl?.trim();
+    this.proposalStore = this.sharedProjectionContext.multiCompanion && proposalDatabaseUrl
+      ? new SharedWorldWikiProposalStore(proposalDatabaseUrl)
+      : null;
+  }
+
+  private requireProposalStore(): SharedWorldWikiProposalStore {
+    if (!this.proposalStore) {
+      throw new Error('shared-world wiki caretaker is unavailable');
+    }
+    return this.proposalStore;
+  }
+
+  private isKnownSite(siteId: string): boolean {
+    return loadPlacesRegistryConfig(this.systemDataDir).sites.some(site => site.siteId === siteId);
   }
 
   async listWikiDocuments(): Promise<AdminWikiListData> {
@@ -198,5 +222,74 @@ export class AdminWikiDataService implements AdminWikiService {
       write: (): WikiImportReport => runImport(false),
     });
     return { ...report, projection };
+  }
+
+  async listSharedWorldWikiProposals(query: SharedWorldWikiProposalListQuery = {}) {
+    return this.requireProposalStore().list(query);
+  }
+
+  async getSharedWorldWikiProposal(proposalId: string) {
+    return this.requireProposalStore().get(proposalId);
+  }
+
+  async approveSharedWorldWikiProposal(
+    proposalId: string,
+    operatorActorId: string,
+  ): Promise<SharedWorldWikiProposalApplyResult> {
+    const databaseUrl = this.sharedProjectionContext.databaseUrl?.trim();
+    const embedding = this.sharedProjectionContext.embedding;
+    if (!databaseUrl || !embedding) {
+      throw new Error('shared-world wiki caretaker projection dependencies are unavailable');
+    }
+    const projection = await createSharedWikiPgvectorProjectionStore(databaseUrl, embedding, {
+      ...(this.sharedProjectionContext.eventBus
+        ? { eventBus: this.sharedProjectionContext.eventBus }
+        : {}),
+    });
+    try {
+      const caretaker = new SharedWorldWikiCaretakerService({
+        proposalStore: this.requireProposalStore(),
+        isKnownSite: siteId => this.isKnownSite(siteId),
+        openSharedStore: siteId => new SharedWorldWikiStore(this.systemDataDir, siteId),
+        projection,
+      });
+      return await caretaker.approve(proposalId, operatorActorId);
+    } finally {
+      await projection.close();
+    }
+  }
+
+  async rejectSharedWorldWikiProposal(proposalId: string, operatorActorId: string) {
+    return this.requireProposalStore().review({
+      proposalId,
+      decision: 'reject',
+      operatorActorId,
+      rejectionCode: 'operator_rejected',
+      nowMs: Date.now(),
+    });
+  }
+
+  async cleanupSharedWorldWikiProposals(limit: number): Promise<SharedWorldWikiCleanupResult> {
+    const databaseUrl = this.sharedProjectionContext.databaseUrl?.trim();
+    const embedding = this.sharedProjectionContext.embedding;
+    if (!databaseUrl || !embedding) {
+      throw new Error('shared-world wiki caretaker projection dependencies are unavailable');
+    }
+    const projection = await createSharedWikiPgvectorProjectionStore(databaseUrl, embedding, {
+      ...(this.sharedProjectionContext.eventBus
+        ? { eventBus: this.sharedProjectionContext.eventBus }
+        : {}),
+    });
+    try {
+      const caretaker = new SharedWorldWikiCaretakerService({
+        proposalStore: this.requireProposalStore(),
+        isKnownSite: siteId => this.isKnownSite(siteId),
+        openSharedStore: siteId => new SharedWorldWikiStore(this.systemDataDir, siteId),
+        projection,
+      });
+      return await caretaker.cleanupChangedContent(limit);
+    } finally {
+      await projection.close();
+    }
   }
 }

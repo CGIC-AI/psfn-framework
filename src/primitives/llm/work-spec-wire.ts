@@ -103,6 +103,16 @@ export function parseWorkSpecWireParams(value: unknown): LLMWorkSpecWireParams {
   if (raw.preemptionProtected !== undefined && typeof raw.preemptionProtected !== 'boolean') {
     throw new MalformedWorkSpecError('LLMWorkSpec.preemptionProtected must be a boolean when present');
   }
+  // fxt1: the welfare grant proof, when present, must be a non-empty string.
+  // The gateway re-verifies it against the store before honoring
+  // preemptionProtected; a malformed/empty id is rejected here (fail closed)
+  // rather than silently reaching the verify step.
+  if (raw.welfareGrantJobId !== undefined
+    && (typeof raw.welfareGrantJobId !== 'string' || raw.welfareGrantJobId.trim().length === 0)) {
+    throw new MalformedWorkSpecError(
+      'LLMWorkSpec.welfareGrantJobId must be a non-empty string when present',
+    );
+  }
   if (raw.cancellation !== undefined
     && !CANCELLATIONS.has(raw.cancellation as LLMWorkCancellation)) {
     throw new MalformedWorkSpecError(
@@ -140,6 +150,9 @@ export function parseWorkSpecWireParams(value: unknown): LLMWorkSpecWireParams {
       : {}),
     ...(raw.preemptionProtected !== undefined
       ? { preemptionProtected: raw.preemptionProtected }
+      : {}),
+    ...(raw.welfareGrantJobId !== undefined
+      ? { welfareGrantJobId: raw.welfareGrantJobId }
       : {}),
   };
   return wire;

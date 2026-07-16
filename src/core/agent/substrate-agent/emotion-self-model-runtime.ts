@@ -476,6 +476,8 @@ export class EmotionSelfModelRuntime {
     recentEntries?: readonly SessionEntry[];
     /** mmo9.7.4: protect a welfare-escalated appraisal model call from gate preemption. */
     preemptionProtected?: boolean;
+    /** fxt1: the granting welfare job id, re-verified gateway-side. */
+    welfareGrantJobId?: string;
   }): Promise<void> {
     if (!this.emotionAppraisal) return;
 
@@ -519,6 +521,7 @@ export class EmotionSelfModelRuntime {
         ? { assertEffectAllowed: params.assertEffectAllowed }
         : {}),
       ...(params.preemptionProtected ? { preemptionProtected: true } : {}),
+      ...(params.welfareGrantJobId ? { welfareGrantJobId: params.welfareGrantJobId } : {}),
       ...(params.icpCorrelation ? { icpCorrelation: params.icpCorrelation } : {}),
     });
     if (result.appraised) {

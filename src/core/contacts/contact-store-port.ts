@@ -57,6 +57,31 @@ export interface ContactTrustDriftApplyResult {
   reason: string;
 }
 
+export type ContactLifecycleDiagnosticState = 'prepared' | 'over_fenced' | 'manual_hold';
+
+/**
+ * Bounded operator projection of durable contact-authority work. Deliberately
+ * omits intent, contact, companion, and provider-subject identifiers.
+ */
+export interface ContactLifecycleDiagnosticEntry {
+  action: 'contact.merge' | 'contact.delete' | 'contact.discord_unlink'
+    | 'contact.identity_conflict' | 'contact.verify' | 'contact.reapprove';
+  state: ContactLifecycleDiagnosticState;
+  phase: 'gateway_prepare_pending' | 'contact_commit_pending'
+    | 'gateway_finalize_pending' | 'manual_hold' | 'quarantined';
+  reason: string;
+  retryCount: number;
+  updatedAt: string;
+}
+
+export interface ContactLifecycleDiagnostics {
+  schemaVersion: 1;
+  total: number;
+  truncated: boolean;
+  counts: Record<ContactLifecycleDiagnosticState, number>;
+  entries: ContactLifecycleDiagnosticEntry[];
+}
+
 /**
  * Outcome of an atomic observation-driven machine-intelligence marking (E7.3).
  * `override_preserved` means the latest `is_machine_intelligence` audit entry
@@ -87,6 +112,8 @@ export interface ContactStorePort {
   assertContactLifecycleLedgerHealthy(): Awaitable<void>;
   /** Resume a bounded batch of durable contact-authority mutations at startup. */
   recoverContactLifecycleMutations(): Awaitable<ContactLifecyclePrepareOutcome[]>;
+  /** Identity-free, bounded projection of pending/over-fenced/manual-hold work. */
+  getContactLifecycleDiagnostics(limit?: number): Awaitable<ContactLifecycleDiagnostics>;
   upsert(
     partial: Partial<Contact> & { displayName: string },
     options?: ContactUpsertMutationOptions,

@@ -30,12 +30,17 @@ import { installPostgresContactLifecycleRecoveryOperations } from './contact-lif
 import type { ContactLifecycleGatewayPort } from '../contact-lifecycle-gateway-port.js';
 import { installPostgresContactLifecycleCoordinatorOperations } from './contact-lifecycle-coordinator.js';
 import { installPostgresContactLifecycleMutationCommitOperations } from './contact-lifecycle-mutation-commit.js';
+import type { ContactLifecycleFaultStage } from './options.js';
 
 export class PostgresContactStore implements ContactStorePort {
   readonly pool: Pool;
   readonly primaryUserId?: string;
   readonly exportDir: string | null;
   readonly contactLifecycleGateway: ContactLifecycleGatewayPort | null;
+  readonly contactLifecycleFaultInjection: ((
+    stage: ContactLifecycleFaultStage,
+    request: import('../../../shared/contracts/contact-authority-lifecycle.js').ContactAuthorityLifecycleRequest,
+  ) => Promise<void> | void) | null;
 
   declare prepareContactLifecycleIntent: ContactStorePort['prepareContactLifecycleIntent'];
   declare recordContactLifecycleGatewayResult: ContactStorePort['recordContactLifecycleGatewayResult'];
@@ -43,6 +48,7 @@ export class PostgresContactStore implements ContactStorePort {
   declare deferContactLifecycleRecovery: ContactStorePort['deferContactLifecycleRecovery'];
   declare assertContactLifecycleLedgerHealthy: ContactStorePort['assertContactLifecycleLedgerHealthy'];
   declare recoverContactLifecycleMutations: ContactStorePort['recoverContactLifecycleMutations'];
+  declare getContactLifecycleDiagnostics: ContactStorePort['getContactLifecycleDiagnostics'];
   declare upsert: ContactStorePort['upsert'];
   declare getById: ContactStorePort['getById'];
   declare getByDiscordUserId: ContactStorePort['getByDiscordUserId'];
@@ -129,11 +135,13 @@ export class PostgresContactStore implements ContactStorePort {
     primaryUserId?: string,
     exportDir?: string,
     contactLifecycleGateway?: ContactLifecycleGatewayPort,
+    contactLifecycleFaultInjection?: PostgresContactStore['contactLifecycleFaultInjection'],
   ) {
     this.pool = pool;
     this.primaryUserId = normalizeTrimmed(primaryUserId);
     this.exportDir = normalizeTrimmed(exportDir) ?? null;
     this.contactLifecycleGateway = contactLifecycleGateway ?? null;
+    this.contactLifecycleFaultInjection = contactLifecycleFaultInjection ?? null;
   }
 }
 

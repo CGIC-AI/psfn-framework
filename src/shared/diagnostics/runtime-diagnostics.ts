@@ -109,6 +109,21 @@ export interface RuntimeDiagnosticsSnapshot {
     status: 'available';
     events: RuntimeLifecycleDiagnosticEvent[];
   };
+  contactLifecycle: {
+    status: 'available';
+    schemaVersion: 1;
+    total: number;
+    truncated: boolean;
+    counts: { prepared: number; over_fenced: number; manual_hold: number };
+    entries: Array<{
+      action: string;
+      state: 'prepared' | 'over_fenced' | 'manual_hold';
+      phase: string;
+      reason: string;
+      retryCount: number;
+      updatedAt: string;
+    }>;
+  } | DiagnosticUnavailable | DiagnosticError;
   rollout: DiagnosticUnavailable;
   pods: DiagnosticUnavailable;
   backup: {
@@ -528,6 +543,7 @@ export function buildRuntimeDiagnosticsSnapshot(input: RuntimeDiagnosticsQuery =
     },
     { name: 'tool_validation_telemetry', status: 'available' },
     { name: 'backup_runtime_state', status: 'available' },
+    { name: 'contact_lifecycle', status: 'unavailable', reason: 'contact lifecycle store unavailable' },
     { name: 'kubernetes', status: 'unavailable', reason: KUBE_UNAVAILABLE_REASON },
   ];
 
@@ -542,6 +558,10 @@ export function buildRuntimeDiagnosticsSnapshot(input: RuntimeDiagnosticsQuery =
     lifecycle: {
       status: 'available',
       events: withinWindow(lifecycleEvents, query).slice(0, query.limit),
+    },
+    contactLifecycle: {
+      status: 'unavailable',
+      reason: 'contact lifecycle store unavailable',
     },
     rollout: {
       status: 'unavailable',

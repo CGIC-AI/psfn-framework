@@ -25,12 +25,17 @@ import type { ContactLifecycleGatewayPort } from '../contact-lifecycle-gateway-p
 import type { ContactAuthorityLifecycleRequest } from '../../../shared/contracts/contact-authority-lifecycle.js';
 import type { ContactLifecyclePrepareOutcome } from '../../../shared/contracts/contact-lifecycle-ledger.js';
 import type { ContactIdentityLinkVerificationResult } from '../types.js';
+import type { ContactLifecycleFaultStage } from './options.js';
 
 export interface PostgresContactOperationContext extends ContactStorePort {
   readonly pool: Pool;
   readonly primaryUserId?: string;
   readonly exportDir: string | null;
   readonly contactLifecycleGateway: ContactLifecycleGatewayPort | null;
+  readonly contactLifecycleFaultInjection: ((
+    stage: ContactLifecycleFaultStage,
+    request: ContactAuthorityLifecycleRequest,
+  ) => Promise<void> | void) | null;
   tableExists(tableName: string): Promise<boolean>;
   loadContactRow(id: string): Promise<ContactRow | undefined>;
   loadContactById(id: string): Promise<Contact | undefined>;

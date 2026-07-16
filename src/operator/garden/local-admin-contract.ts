@@ -384,6 +384,7 @@ export function createInProcessGardenAdminContract(
     }),
     diagnostics: new AdminDiagnosticsDataService({
       eventBus: options.eventBus,
+      contactLifecycle: options.contactStore ?? null,
       ...(options.logsDir ? { logsDir: options.logsDir } : {}),
     }),
     images: new AdminImagesDataService({

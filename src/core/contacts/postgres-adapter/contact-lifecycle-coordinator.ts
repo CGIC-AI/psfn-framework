@@ -199,18 +199,22 @@ async function driveContactLifecycle(
     throw new Error('Authenticated contact lifecycle gateway is not configured');
   }
   let outcome = await store.prepareContactLifecycleIntent(request);
+  await store.contactLifecycleFaultInjection?.('after_local_prepare', request);
   for (let step = 0; step < 4 && outcome.status === 'pending'; step += 1) {
     if (outcome.phase === 'gateway_prepare_pending') {
       const result = await gateway.executeContactLifecycle(request);
+      await store.contactLifecycleFaultInjection?.('after_gateway_fence', request);
       outcome = await store.recordContactLifecycleGatewayResult({
         intentId: request.intentId,
         result,
         ...(recoveryLeaseOwner ? { leaseOwner: recoveryLeaseOwner } : {}),
       });
+      await store.contactLifecycleFaultInjection?.('after_gateway_result', request);
       continue;
     }
     if (outcome.phase === 'contact_commit_pending') {
       await commitLocalMutation(store, request, recoveryLeaseOwner);
+      await store.contactLifecycleFaultInjection?.('after_contact_commit', request);
       outcome = await store.prepareContactLifecycleIntent(request);
       continue;
     }
@@ -227,11 +231,13 @@ async function driveContactLifecycle(
         contactVersion,
       },
     });
+    await store.contactLifecycleFaultInjection?.('after_gateway_finalize', request);
     outcome = await store.recordContactLifecycleGatewayResult({
       intentId: request.intentId,
       result,
       ...(recoveryLeaseOwner ? { leaseOwner: recoveryLeaseOwner } : {}),
     });
+    await store.contactLifecycleFaultInjection?.('after_local_final_record', request);
   }
   return outcome;
 }

@@ -8,7 +8,11 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   postgresMemoryStore: { kind: 'postgres-memory-store' },
   postgresEpisodicStore: { kind: 'postgres-episodic-store' },
   postgresReflectionMirror: { kind: 'postgres-reflection-mirror' },
-  postgresContactStore: { kind: 'postgres-contact-store' },
+  postgresContactStore: {
+    kind: 'postgres-contact-store',
+    assertContactLifecycleLedgerHealthy: vi.fn(async () => undefined),
+    recoverContactLifecycleMutations: vi.fn(async () => []),
+  },
   postgresIntentionRuntime: {
     concernStore: { kind: 'concern-store' },
     pendingFollowUpStore: { kind: 'pending-store' },
@@ -119,9 +123,45 @@ beforeEach(() => {
   runtimeFactoryMocks.createPostgresPool.mockClear();
   runtimeFactoryMocks.ensurePostgresSchemaExists.mockClear();
   runtimeFactoryMocks.bootstrapPool.end.mockClear();
+  runtimeFactoryMocks.postgresContactStore.assertContactLifecycleLedgerHealthy.mockClear();
+  runtimeFactoryMocks.postgresContactStore.recoverContactLifecycleMutations.mockClear();
 });
 
 describe('createAgentPersistenceRuntime', () => {
+  it('runs authenticated contact recovery before returning and exposes a stoppable worker', async () => {
+    const gateway = { executeContactLifecycle: vi.fn() };
+    const runtime = await createAgentPersistenceRuntime({
+      config: {
+        databasePath: '/tmp/ignored.db',
+        persistenceBackend: 'postgres',
+        postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn',
+        postgresSchema: 'companion_x',
+      },
+      pathSnapshot: {
+        systemDataDir: '/tmp/system-data',
+        companionDataDir: '/tmp/companion-data',
+        workspacePath: '/tmp/workspace',
+        tempDir: '/tmp/tmp',
+        logsDir: '/tmp/logs',
+        backupRootDir: '/tmp/backups',
+      },
+      embeddingDims: 1536,
+      contactLifecycleGateway: gateway,
+    });
+
+    expect(runtimeFactoryMocks.createPostgresContactStore).toHaveBeenCalledWith(
+      expect.any(String),
+      undefined,
+      expect.objectContaining({ contactLifecycleGateway: gateway, schema: 'companion_x' }),
+    );
+    expect(runtimeFactoryMocks.postgresContactStore.assertContactLifecycleLedgerHealthy)
+      .toHaveBeenCalledTimes(1);
+    expect(runtimeFactoryMocks.postgresContactStore.recoverContactLifecycleMutations)
+      .toHaveBeenCalledTimes(1);
+    expect(runtime.contactLifecycleRecovery).toBeDefined();
+    await runtime.contactLifecycleRecovery?.stop();
+  });
+
   it('fails closed when runtime persistence is not configured for postgres', async () => {
     await expect(createAgentPersistenceRuntime({
       config: {

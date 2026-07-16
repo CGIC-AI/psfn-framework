@@ -238,6 +238,11 @@ async function main(): Promise<void> {
     embeddingDims,
     primaryUserId,
     contactLifecycleGateway: gateway,
+    onContactLifecycleRecoveryFailure: (error) => {
+      log.error('Contact lifecycle recovery worker failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
   });
   const {
     backend: persistenceBackend,
@@ -947,6 +952,7 @@ async function main(): Promise<void> {
       }
     },
     closeDatabase: async () => {
+      await persistenceRuntime.contactLifecycleRecovery?.stop();
       await persistenceRuntime.icpInitiationCandidateStore?.close();
       await persistenceRuntime.backgroundWorkStore.close();
       await persistenceRuntime.introspectionLandmarkStore.close();

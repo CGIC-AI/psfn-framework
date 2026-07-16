@@ -1356,7 +1356,7 @@ export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
     ON agent_background_work_jobs (completed_at_ms ASC, job_id ASC)
     WHERE state IN ('succeeded', 'failed', 'stale_discarded');
   `,
-  // Anti-starvation welfare aging (psfn-framework-mmo9.7.4). A background job that
+  // Anti-starvation welfare aging (mmo9.7.4). A background job that
   // is repeatedly deferred by sustained foreground turns accrues durable defer
   // pressure so it can eventually be admitted into a bounded welfare-reserve slot
   // instead of starving forever. `defer_count`/`first_deferred_at_ms` are the

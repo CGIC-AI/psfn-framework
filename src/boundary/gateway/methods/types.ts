@@ -65,7 +65,7 @@ export interface GatewayMethodRuntime {
   /** Authenticated companion bound to the connection serving this RPC. */
   authenticatedCompanionId(): string | undefined;
   /**
-   * psfn-framework-fxt1: verify that a caller-asserted `preemptionProtected`
+   * fxt1: verify that a caller-asserted `preemptionProtected`
    * work spec is backed by a genuine welfare escalation — `jobId` names a
    * `welfare_claimed`, `running` background-work row owned (schema-scoped) by
    * `companionId`. Absent ⇒ the boundary cannot verify and strips the flag

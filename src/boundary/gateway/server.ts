@@ -256,7 +256,7 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    */
   companionChannels?: GatewayCompanionChannelLane;
   /**
-   * psfn-framework-fxt1: verifies a caller-asserted `preemptionProtected` work
+   * fxt1: verifies a caller-asserted `preemptionProtected` work
    * spec against the background-work store before the gateway-side gate honors
    * it. Absent ⇒ the LLM handlers strip every asserted flag (fail closed).
    */

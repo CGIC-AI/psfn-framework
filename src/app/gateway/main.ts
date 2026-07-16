@@ -423,7 +423,7 @@ async function main(): Promise<void> {
     });
   }
 
-  // psfn-framework-fxt1: gateway-side welfare grant verifier. Re-verifies a
+  // fxt1: gateway-side welfare grant verifier. Re-verifies a
   // caller-asserted `preemptionProtected` LLMWorkSpec against the background-work
   // store (`welfare_claimed = true AND state = 'running'`, scoped to the
   // authenticated companion's schema) before the gate honors it; the RPC

@@ -1,5 +1,5 @@
 #!/usr/bin/env tsx
-// ── Prompt-cache benchmark harness (psfn-framework-mmo9.7.6) ──
+// ── Prompt-cache benchmark harness (mmo9.7.6) ──
 //
 // Measures the ONLY thing that determines provider prompt-cache value: how
 // byte-stable the cacheable system-prompt PREFIX (PromptPlan blocks of
@@ -18,7 +18,7 @@
 // A --live mode is documented but intentionally NOT implemented here: a live
 // run measures real cache_read / cache_write tokens from LLMResponse
 // usageDetails on one companion and requires operator approval (bead
-// psfn-framework-9hyv). See printLiveInstructions().
+// 9hyv). See printLiveInstructions().
 
 import { countTokens, formatTokens } from '../../src/primitives/llm/tokens.js';
 import {
@@ -344,7 +344,7 @@ function printLiveInstructions(): void {
       '',
       'Live mode measures REAL cache_read / cache_write tokens and cost from the',
       'provider instead of the offline prefix model. It spends money and must run',
-      'against one consenting companion only. Tracked as bead psfn-framework-9hyv.',
+      'against one consenting companion only. Tracked as bead 9hyv.',
       '',
       'Procedure:',
       '1. On ONE companion, set models.json promptCaching.enabled=true (owner file,',
@@ -375,7 +375,7 @@ function main(): void {
   if (argv.includes('--live')) {
     process.stderr.write(
       'Refusing to run live mode: live provider round-trips require operator approval '
-        + '(bead psfn-framework-9hyv). Printing the documented procedure instead.\n',
+        + '(bead 9hyv). Printing the documented procedure instead.\n',
     );
     printLiveInstructions();
     return;

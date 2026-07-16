@@ -362,7 +362,7 @@ export class SubagentFaculty implements SubagentControlPort {
     // mmo9.7.7: hoisted above the try so a mid-turn cancel that aborts the
     // in-flight handleMessage (surfacing as a throw) preserves the accumulated
     // partial in the catch path — otherwise the cancelled result would discard
-    // every completed turn's tokens/checkpoint (psfn-framework-mmo9.7.7 P1).
+    // every completed turn's tokens/checkpoint (mmo9.7.7 P1).
     let totalInput = 0;
     let totalOutput = 0;
     let lastModel = '';

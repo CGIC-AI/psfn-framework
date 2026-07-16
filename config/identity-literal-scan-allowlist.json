@@ -391,6 +391,12 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "src/boundary/gateway/welfare-grant-verifier.ts",
+      "contains": "applicationName: 'psfn-welfare-verify'",
+      "reason": "The welfare verifier retains its project-scoped PostgreSQL application_name for stable operational connection attribution.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "src/boundary/gateway/session-integrity-worker-source.ts",
       "contains": "psfn-rpc-v1",
       "reason": "Gateway session-integrity worker preserves the project-scoped RPC websocket subprotocol.",
@@ -1342,6 +1348,12 @@
       "path": "src/test-support/postgres-test-harness.ts",
       "contains": "applicationName: 'psfn-memory-test'",
       "reason": "PostgreSQL test harness uses project-scoped application_name labels for connection attribution.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/test-support/postgres-test-harness.ts",
+      "contains": "applicationName: 'psfn-memory-test-provision'",
+      "reason": "PostgreSQL test database provisioning retains the harness's established project-scoped application_name family for operational connection attribution.",
       "pattern": "identity-legacy-slug"
     },
     {

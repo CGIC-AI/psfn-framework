@@ -1,11 +1,29 @@
-import { createHash, createPrivateKey, generateKeyPairSync, sign } from 'node:crypto';
+import { createHash, createHmac, createPrivateKey, generateKeyPairSync, sign } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
+  FLEET_AUTH_HUB_DEVICE_ASSERTION_DIGEST_DOMAIN,
   verifyAndConsumeHubDeviceAssertion,
   type HubDeviceAssertionReplayStore,
   type HubDeviceAssertionVerifierConfig,
 } from './hub-device-assertion.js';
+
+const SESSION_PEPPER = 'hub-device-assertion-session-pepper-32b';
+
+/** Keyed audit digest mirroring the boundary's HMAC scheme for assertions. */
+function keyedAuditDigest(value: string): string {
+  return createHmac('sha256', SESSION_PEPPER)
+    .update(FLEET_AUTH_HUB_DEVICE_ASSERTION_DIGEST_DOMAIN)
+    .update(value, 'utf8')
+    .digest('hex');
+}
+
+/** Inject the required session pepper so every call exercises the keyed path. */
+function verify(
+  input: Omit<Parameters<typeof verifyAndConsumeHubDeviceAssertion>[0], 'sessionPepper'>,
+): ReturnType<typeof verifyAndConsumeHubDeviceAssertion> {
+  return verifyAndConsumeHubDeviceAssertion({ ...input, sessionPepper: SESSION_PEPPER });
+}
 
 const PRIVATE_KEY = createPrivateKey({
   key: Buffer.from('MC4CAQAwBQYDK2VwBCIEIBxi3MoZ6dMittBNv2g0RvbmOi9PJuzu5IVCwAL2tIbN', 'base64'),
@@ -107,7 +125,7 @@ const expected = {
 
 describe('Hub device assertion trust boundary', () => {
   it('consumes the canonical cross-repo fixture bytes', async () => {
-    await expect(verifyAndConsumeHubDeviceAssertion({
+    await expect(verify({
       token: fixture.validToken,
       config: config(),
       expected,
@@ -118,7 +136,7 @@ describe('Hub device assertion trust boundary', () => {
 
   it('verifies the Hub public ring and atomically consumes one device principal', async () => {
     const replayStore = new ReplayStore();
-    const first = await verifyAndConsumeHubDeviceAssertion({
+    const first = await verify({
       token: token(),
       config: config(),
       expected,
@@ -140,26 +158,67 @@ describe('Hub device assertion trust boundary', () => {
       expiresAt: new Date((NOW + 20) * 1000),
       jti: JTI,
     });
-    await expect(verifyAndConsumeHubDeviceAssertion({
+    await expect(verify({
       token: token(), config: config(), expected, replayStore, nowSeconds: NOW,
     })).resolves.toEqual(first);
-    const digest = (value: string): string => createHash('sha256').update(value).digest('hex');
     expect(replayStore.lastAuditContext).toEqual({
-      issuerDigest: digest('psfn-satellite-hub'),
-      keyIdDigest: digest('hub-2026-07'),
-      audienceDigest: digest('https://fleet.example.test'),
-      companionIdDigest: digest(COMPANION_ID),
-      deviceIdDigest: digest('office-device'),
-      sessionIdDigest: digest('realtime:office-device:session'),
-      enrollmentVersionDigest: digest('7'),
-      jtiDigest: digest(JTI),
+      issuerDigest: keyedAuditDigest('psfn-satellite-hub'),
+      keyIdDigest: keyedAuditDigest('hub-2026-07'),
+      audienceDigest: keyedAuditDigest('https://fleet.example.test'),
+      companionIdDigest: keyedAuditDigest(COMPANION_ID),
+      deviceIdDigest: keyedAuditDigest('office-device'),
+      sessionIdDigest: keyedAuditDigest('realtime:office-device:session'),
+      enrollmentVersionDigest: keyedAuditDigest('7'),
+      jtiDigest: keyedAuditDigest(JTI),
     });
     expect(Object.keys(replayStore.lastAuditContext ?? {})).not.toContain('placeId');
   });
 
-  it('retains the replay fence through the verifier clock-skew acceptance window', async () => {
+  it('does not let a plain SHA-256 of a known identifier confirm any audit digest', async () => {
+    const replayStore = new ReplayStore();
+    await verify({ token: token(), config: config(), expected, replayStore, nowSeconds: NOW });
+    const context = replayStore.lastAuditContext;
+    if (!context) throw new Error('audit context was not captured');
+    // The deanonymization oracle this bead closes: hashing an enumerable id and
+    // matching it against a persisted digest. Every audited field must resist it.
+    const unkeyed = (value: string): string => createHash('sha256').update(value).digest('hex');
+    const attackerCandidates: Record<keyof typeof context, string> = {
+      issuerDigest: 'psfn-satellite-hub',
+      keyIdDigest: 'hub-2026-07',
+      audienceDigest: 'https://fleet.example.test',
+      companionIdDigest: COMPANION_ID,
+      deviceIdDigest: 'office-device',
+      sessionIdDigest: 'realtime:office-device:session',
+      enrollmentVersionDigest: '7',
+      jtiDigest: JTI,
+    };
+    for (const [field, raw] of Object.entries(attackerCandidates)) {
+      expect(context[field as keyof typeof context]).not.toBe(unkeyed(raw));
+      expect(context[field as keyof typeof context]).toMatch(/^[0-9a-f]{64}$/u);
+    }
+  });
+
+  it('binds audit digests to the pepper so a different pepper cannot reproduce them', async () => {
     const replayStore = new ReplayStore();
     await verifyAndConsumeHubDeviceAssertion({
+      token: token(), config: config(), expected, replayStore, nowSeconds: NOW,
+      sessionPepper: 'a-completely-different-session-pepper-32b',
+    });
+    expect(replayStore.lastAuditContext?.jtiDigest).not.toBe(keyedAuditDigest(JTI));
+    expect(replayStore.lastAuditContext?.companionIdDigest)
+      .not.toBe(keyedAuditDigest(COMPANION_ID));
+  });
+
+  it('fails closed when the audit pepper is missing or too short', async () => {
+    await expect(verifyAndConsumeHubDeviceAssertion({
+      token: token(), config: config(), expected, replayStore: new ReplayStore(),
+      nowSeconds: NOW, sessionPepper: 'too-short',
+    })).rejects.toThrow(/session pepper/);
+  });
+
+  it('retains the replay fence through the verifier clock-skew acceptance window', async () => {
+    const replayStore = new ReplayStore();
+    await verify({
       token: token(), config: config(), expected, replayStore, nowSeconds: NOW,
     });
     expect(replayStore.lastExpiresAt).toEqual(new Date((NOW + 22) * 1000));
@@ -169,7 +228,7 @@ describe('Hub device assertion trust boundary', () => {
     'rejects a non-exact expected session binding before consuming replay state',
     async (sessionId) => {
       const replayStore = new ReplayStore();
-      await expect(verifyAndConsumeHubDeviceAssertion({
+      await expect(verify({
         token: token(),
         config: config(),
         expected: { ...expected, sessionId },
@@ -192,7 +251,7 @@ describe('Hub device assertion trust boundary', () => {
     ['revoked enrollment', {}, config(), { ...expected, enrollmentStatus: 'revoked' as const }, /enrollment is revoked/],
   ])('rejects %s before consuming replay state', async (_name, claims, verifier, expectedBinding, error) => {
     const replayStore = new ReplayStore();
-    await expect(verifyAndConsumeHubDeviceAssertion({
+    await expect(verify({
       token: token(claims),
       config: verifier,
       expected: expectedBinding,
@@ -203,31 +262,31 @@ describe('Hub device assertion trust boundary', () => {
   });
 
   it('accepts an allowlisted retiring rotation key but rejects a revoked key', async () => {
-    await expect(verifyAndConsumeHubDeviceAssertion({
+    await expect(verify({
       token: token(), config: config('retiring'), expected, replayStore: new ReplayStore(), nowSeconds: NOW,
     })).resolves.toMatchObject({ keyId: 'hub-2026-07' });
-    await expect(verifyAndConsumeHubDeviceAssertion({
+    await expect(verify({
       token: token(), config: config('revoked'), expected, replayStore: new ReplayStore(), nowSeconds: NOW,
     })).rejects.toThrow(/revoked/);
   });
 
   it('rejects a mutated reuse of the same jti even when the second assertion is validly signed', async () => {
     const replayStore = new ReplayStore();
-    await verifyAndConsumeHubDeviceAssertion({
+    await verify({
       token: token(), config: config(), expected, replayStore, nowSeconds: NOW,
     });
-    await expect(verifyAndConsumeHubDeviceAssertion({
+    await expect(verify({
       token: token({ exp: NOW + 19 }), config: config(), expected, replayStore, nowSeconds: NOW,
     })).rejects.toThrow(/mutated replay/i);
   });
 
   it('rejects non-canonical or unknown claims and malformed compact tokens', async () => {
     const replayStore = new ReplayStore();
-    await expect(verifyAndConsumeHubDeviceAssertion({
+    await expect(verify({
       token: token({ human_principal_id: 'browser-user' }),
       config: config(), expected, replayStore, nowSeconds: NOW,
     })).rejects.toThrow(/unknown claim/);
-    await expect(verifyAndConsumeHubDeviceAssertion({
+    await expect(verify({
       token: 'not.a.valid.compact.token',
       config: config(), expected, replayStore, nowSeconds: NOW,
     })).rejects.toThrow(/malformed/);
@@ -239,20 +298,20 @@ describe('Hub device assertion trust boundary', () => {
       { alg: 'EdDSA', typ: 'PSFN-HUB-DEVICE', v: 1, kid: 'hub-2026-07' },
       { aud, ...remainingClaims },
     );
-    await expect(verifyAndConsumeHubDeviceAssertion({
+    await expect(verify({
       token: reordered, config: config(), expected, replayStore, nowSeconds: NOW,
     })).rejects.toThrow(/canonical order/);
   });
 
   it('rejects verifier identities outside the owner-file protocol', async () => {
-    await expect(verifyAndConsumeHubDeviceAssertion({
+    await expect(verify({
       token: token(),
       config: { ...config(), issuer: 'https://mutable.example.test' },
       expected,
       replayStore: new ReplayStore(),
       nowSeconds: NOW,
     })).rejects.toThrow(/stable identifier characters/);
-    await expect(verifyAndConsumeHubDeviceAssertion({
+    await expect(verify({
       token: token(),
       config: { ...config(), audience: 'http://fleet.example.test' },
       expected,

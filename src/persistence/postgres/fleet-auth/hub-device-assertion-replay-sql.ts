@@ -116,18 +116,21 @@ DECLARE
   v_correlation_id TEXT;
   v_inserted_event UUID;
 BEGIN
+  -- Identifier digests are keyed HMAC-SHA256 computed app-side under the
+  -- fleet-auth session pepper (psfn-framework-5wrp); the pepper is deliberately
+  -- never shipped into Postgres, so this boundary can only assert digest SHAPE,
+  -- not recompute it from the raw value. The raw issuer/jti/device/enrollment
+  -- inputs remain for the replay-ledger primary key and binding checks.
   IF p_issuer IS NULL OR length(p_issuer) NOT BETWEEN 1 AND 128
      OR p_jti IS NULL
      OR p_assertion_digest !~ '^[0-9a-f]{64}$'
      OR p_device_id IS NULL OR length(p_device_id) NOT BETWEEN 1 AND 256
      OR p_enrollment_version < 1
      OR p_expires_at <= clock_timestamp()
-     OR p_issuer_digest IS DISTINCT FROM encode(sha256(convert_to(p_issuer, 'UTF8')), 'hex')
-     OR p_device_id_digest IS DISTINCT FROM encode(sha256(convert_to(p_device_id, 'UTF8')), 'hex')
-     OR p_enrollment_version_digest IS DISTINCT FROM encode(
-       sha256(convert_to(p_enrollment_version::text, 'UTF8')), 'hex'
-     )
-     OR p_jti_digest IS DISTINCT FROM encode(sha256(convert_to(p_jti::text, 'UTF8')), 'hex')
+     OR p_issuer_digest !~ '^[0-9a-f]{64}$'
+     OR p_device_id_digest !~ '^[0-9a-f]{64}$'
+     OR p_enrollment_version_digest !~ '^[0-9a-f]{64}$'
+     OR p_jti_digest !~ '^[0-9a-f]{64}$'
      OR p_key_id_digest !~ '^[0-9a-f]{64}$'
      OR p_audience_digest !~ '^[0-9a-f]{64}$'
      OR p_companion_id_digest !~ '^[0-9a-f]{64}$'
@@ -152,11 +155,13 @@ BEGIN
 
   INSERT INTO fleet_auth.hub_device_assertion_replays
     (issuer, jti, assertion_digest, device_id, enrollment_version, expires_at,
-     key_id_digest, audience_digest, companion_id_digest, session_id_digest)
+     key_id_digest, audience_digest, companion_id_digest, session_id_digest,
+     issuer_digest, device_id_digest, enrollment_version_digest, jti_digest)
   VALUES (
     p_issuer, p_jti, p_assertion_digest, p_device_id, p_enrollment_version,
     p_expires_at, p_key_id_digest, p_audience_digest, p_companion_id_digest,
-    p_session_id_digest
+    p_session_id_digest, p_issuer_digest, p_device_id_digest,
+    p_enrollment_version_digest, p_jti_digest
   )
   ON CONFLICT (issuer, jti) DO NOTHING;
   IF FOUND THEN
@@ -177,7 +182,11 @@ BEGIN
      OR v_replay.key_id_digest IS DISTINCT FROM p_key_id_digest
      OR v_replay.audience_digest IS DISTINCT FROM p_audience_digest
      OR v_replay.companion_id_digest IS DISTINCT FROM p_companion_id_digest
-     OR v_replay.session_id_digest IS DISTINCT FROM p_session_id_digest THEN
+     OR v_replay.session_id_digest IS DISTINCT FROM p_session_id_digest
+     OR v_replay.issuer_digest IS DISTINCT FROM p_issuer_digest
+     OR v_replay.device_id_digest IS DISTINCT FROM p_device_id_digest
+     OR v_replay.enrollment_version_digest IS DISTINCT FROM p_enrollment_version_digest
+     OR v_replay.jti_digest IS DISTINCT FROM p_jti_digest THEN
     RAISE EXCEPTION 'Hub device assertion replay binding does not match its locked ledger row'
       USING ERRCODE = '42501';
   END IF;
@@ -190,18 +199,20 @@ BEGIN
     RETURN 'replayed';
   END IF;
 
+  -- Every identifier digest is read back from the ledger row where it was stored
+  -- as an app-computed keyed HMAC; the raw issuer/device/enrollment/jti values
+  -- are never re-hashed here, so the durable audit context carries no unkeyed
+  -- SHA-256 over an enumerable identifier (psfn-framework-5wrp).
   v_context := jsonb_build_object(
     'schemaVersion', 1,
-    'issuerDigest', encode(sha256(convert_to(v_replay.issuer, 'UTF8')), 'hex'),
+    'issuerDigest', v_replay.issuer_digest,
     'keyIdDigest', v_replay.key_id_digest,
     'audienceDigest', v_replay.audience_digest,
     'companionIdDigest', v_replay.companion_id_digest,
-    'deviceIdDigest', encode(sha256(convert_to(v_replay.device_id, 'UTF8')), 'hex'),
+    'deviceIdDigest', v_replay.device_id_digest,
     'sessionIdDigest', v_replay.session_id_digest,
-    'enrollmentVersionDigest', encode(
-      sha256(convert_to(v_replay.enrollment_version::text, 'UTF8')), 'hex'
-    ),
-    'jtiDigest', encode(sha256(convert_to(v_replay.jti::text, 'UTF8')), 'hex'),
+    'enrollmentVersionDigest', v_replay.enrollment_version_digest,
+    'jtiDigest', v_replay.jti_digest,
     'acceptedAssertionDigest', v_replay.assertion_digest,
     'mutatedAssertionDigest', p_assertion_digest
   );

@@ -115,6 +115,7 @@ import {
   resolveAuthenticatedHubDeviceConnection,
   stripHubDeviceDownstreamAuthorityHeaders,
 } from './server/hub-device-ingress.js';
+import type { CompanionUiWebSocketAdapter } from './companion-ui-websocket.js';
 
 const log = createComponentLogger('ApiServer');
 const API_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
@@ -445,6 +446,8 @@ export interface ApiServerConfig {
   hubDeviceIngress?: GatewayHubDeviceIngressService;
   /** Server-owned companion binding for the gateway API surface. */
   hubDeviceCompanionId?: string;
+  /** Fleet-only exact same-origin Companion UI WebSocket broker. */
+  companionUiWebSocket?: CompanionUiWebSocketAdapter;
 }
 
 export class ApiServer implements ChannelAdapterPort {
@@ -495,6 +498,7 @@ export class ApiServer implements ChannelAdapterPort {
   private fleetAuthBootstrapOnly: boolean;
   private hubDeviceIngress?: GatewayHubDeviceIngressService;
   private hubDeviceCompanionId?: string;
+  private companionUiWebSocket?: CompanionUiWebSocketAdapter;
   private healthChecks: ApiServerHealthChecks;
   private schedulerHealthcheckStaleAfterMs: number;
   private lastSchedulerHealthcheckAtMs: number | null = null;
@@ -533,6 +537,7 @@ export class ApiServer implements ChannelAdapterPort {
     this.fleetAuthBootstrapOnly = config.fleetAuthBootstrapOnly === true;
     this.hubDeviceIngress = config.hubDeviceIngress;
     this.hubDeviceCompanionId = config.hubDeviceCompanionId;
+    this.companionUiWebSocket = config.companionUiWebSocket;
     this.schedulerHealthcheckStaleAfterMs = parseSchedulerHealthcheckStaleAfterMs(
       config.schedulerHealthcheckStaleAfterMs,
     );
@@ -619,10 +624,12 @@ export class ApiServer implements ChannelAdapterPort {
     this.unregisterSchedulerHealthcheck?.();
     this.unregisterSchedulerHealthcheck = null;
     await this.voiceWebSocket.stop();
+    await this.companionUiWebSocket?.stop();
     return stopApiHttpServer(this.server);
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    if (this.companionUiWebSocket?.handleUpgrade(req, socket, head)) return;
     stripBrowserRequestCapabilityHeaders(req.headers);
     if (this.fleetAuthBootstrapOnly) {
       this.voiceWebSocket.rejectUnknownUpgrade(socket);

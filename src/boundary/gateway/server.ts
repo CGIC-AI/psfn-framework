@@ -75,6 +75,7 @@ import { createCanaryEgressGuard, type CanaryEgressGuard } from './canary-egress
 import type { GatewayVisionIntakeScreener } from './intake/compose-screening.js';
 import type { EventBus, GardenQueueName } from '../../shared/event-bus.js';
 import type {
+  ConfirmationQueueEntry,
   ConfirmationQueueHistoryEntry,
   ConfirmationResolveResult,
 } from '../../system/capabilities/confirmation-queue.js';
@@ -758,6 +759,16 @@ export class GatewayServer {
     return this.approvalBoundary.resolveConfirmation(params, {
       kind: 'operator',
       id: 'garden-admin',
+    });
+  }
+
+  listOperatorConfirmations(): Readonly<{
+    pending: ConfirmationQueueEntry[];
+    history: ConfirmationQueueHistoryEntry[];
+  }> {
+    return Object.freeze({
+      pending: this.approvalBoundary.listPendingConfirmations(),
+      history: this.approvalBoundary.listConfirmationHistory(),
     });
   }
 

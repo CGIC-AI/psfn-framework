@@ -14,8 +14,8 @@ describe('canonical fleet role/action policy', () => {
     );
     expect(byBaseRole).toEqual({
       none: ['public.read', 'legacy_session.manage', 'recovery.begin'],
-      guest: ['companion.read'],
-      member: ['memory.read.self', 'memory.jit.self'],
+      guest: ['companion.read', 'companion.interact'],
+      member: ['artifacts.read', 'tool_activity.read', 'memory.read.self', 'memory.jit.self'],
       admin: [
         'garden.read',
         'action_pipe.read',
@@ -29,6 +29,7 @@ describe('canonical fleet role/action policy', () => {
         'cogsec.read',
         'cogsec.manage',
         'confirmations.read',
+        'confirmations.resolve',
         'confirmations.manage',
         'contact_approvals.read',
         'contact_approvals.manage',
@@ -80,9 +81,12 @@ describe('canonical fleet role/action policy', () => {
           .toBe(FLEET_AUTH_DEFAULT_ROLE_ACTION_POLICY[role].includes(action));
       }
     }
-    expect(FLEET_AUTH_DEFAULT_ROLE_ACTION_POLICY.guest).toEqual(['companion.read']);
+    expect(FLEET_AUTH_DEFAULT_ROLE_ACTION_POLICY.guest).toEqual([
+      'companion.read', 'companion.interact',
+    ]);
     expect(FLEET_AUTH_DEFAULT_ROLE_ACTION_POLICY.member).toEqual([
-      'companion.read', 'memory.read.self', 'memory.jit.self',
+      'companion.read', 'companion.interact', 'artifacts.read', 'tool_activity.read',
+      'memory.read.self', 'memory.jit.self',
     ]);
     expect(FLEET_AUTH_DEFAULT_ROLE_ACTION_POLICY.owner).not.toContain('recovery.begin');
   });

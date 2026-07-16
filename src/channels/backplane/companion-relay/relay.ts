@@ -32,6 +32,8 @@ export interface CompanionEventSubscriber {
 
 export interface CompanionArtifactPreviewEntry {
   artifactId: string;
+  /** Authenticated producing companion; required for fleet-scoped reads. */
+  companionId?: string;
   mediaType: string;
   sizeBytes: number;
   previewable: boolean;
@@ -131,8 +133,10 @@ export class CompanionEventRelay {
     return this.subscribers.size;
   }
 
-  getPreviewSource(artifactId: string): CompanionArtifactPreviewEntry | null {
-    return this.previews.get(artifactId) ?? null;
+  getPreviewSource(artifactId: string, companionId?: string): CompanionArtifactPreviewEntry | null {
+    const preview = this.previews.get(artifactId);
+    if (!preview || (companionId !== undefined && preview.companionId !== companionId)) return null;
+    return preview;
   }
 
   private publish(envelope: CompanionEventEnvelope): void {
@@ -216,6 +220,7 @@ export class CompanionEventRelay {
     }
     this.previews.set(payload.id, {
       artifactId: payload.id,
+      ...(companionId ? { companionId } : {}),
       mediaType: preview.mediaType,
       sizeBytes: materialized.sizeBytes,
       previewable: materialized.bytes !== null,

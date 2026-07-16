@@ -19,6 +19,7 @@ import type {
 import type { SatelliteRoutingMetadata } from './satellite-registry.js';
 import type { GatewayRoutingEnvelope } from '../routing/envelope.js';
 import type { IntakeEnvelopeSnapshot } from './intake-envelope.js';
+import type { HubDeviceAttachmentSnapshot } from './hub-device-ingress.js';
 import type {
   IcpConversationCorrelation,
   IcpInitiationSource,
@@ -431,6 +432,8 @@ export interface MessageRoutingMetadata {
   gateway?: GatewayRoutingMetadata;
   wyoming?: WyomingRoutingMetadata;
   satellite?: SatelliteRoutingMetadata;
+  /** Separate server-authored human/device provenance for Companion UI turns. */
+  hubDeviceAttachment?: HubDeviceAttachmentSnapshot;
   /** Gateway-authoritative location-room classification for companion turns. */
   room?: {
     placeId: string;

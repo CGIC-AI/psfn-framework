@@ -74,6 +74,13 @@ import {
 import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
 import { emitTurnPerformance } from '../../shared/telemetry/turn-performance.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
+import type { RequestCapabilityVerifier } from '../../boundary/fleet-auth/request-capability.js';
+import {
+  companionUiPromptContent,
+  compileCompanionUiAction,
+} from '../../boundary/fleet-auth/companion-ui-action.js';
+import { resolveSatelliteClaim } from '../backplane/satellite-registry.js';
 
 const log = createComponentLogger('AgentApiBackend');
 
@@ -168,6 +175,8 @@ export interface AgentApiBackendConfig {
   onStreamDelta?: (requestId: string, text: string) => void | Promise<void>;
   /** htm9.9: shared document file-part ingestion; null when not configured. */
   documentIngest?: ApiDocumentIngestConfig | null;
+  /** Agent-side verifier for linked gateway child assertions. */
+  requestCapabilityVerifier?: RequestCapabilityVerifier;
 }
 
 export class AgentApiBackend {
@@ -184,6 +193,7 @@ export class AgentApiBackend {
   private readonly sensorIngest: SensorIngestPort;
   private readonly documentIngest: ApiDocumentIngestConfig | null;
   private readonly onStreamDelta?: (requestId: string, text: string) => void | Promise<void>;
+  private readonly requestCapabilityVerifier?: RequestCapabilityVerifier;
   private readonly channelTurnLock = new FifoChannelLock();
   private readonly processingChannels = new Set<string>();
   private readonly activeRequests = new Map<string, ActiveRequestState>();
@@ -206,6 +216,7 @@ export class AgentApiBackend {
     this.sensorIngest = config.sensorIngest ?? createEventBusSensorIngestPort(config.eventBus);
     this.documentIngest = config.documentIngest ?? null;
     this.onStreamDelta = config.onStreamDelta;
+    this.requestCapabilityVerifier = config.requestCapabilityVerifier;
     this.unregisterSchedulerHealthcheck = this.eventBus.on('schedule.healthcheck', ({ timestamp }) => {
       if (Number.isFinite(timestamp) && timestamp > 0) {
         this.lastSchedulerHealthcheckAtMs = Math.floor(timestamp);
@@ -318,6 +329,7 @@ export class AgentApiBackend {
       clientCert: params.clientCert,
       hubDevicePrincipal: params.hubDevicePrincipal,
       hubDeviceAttachment: params.hubDeviceAttachment,
+      companionUiCapability: params.companionUiCapability,
       timeoutMs: params.timeoutMs,
       performance: params.performance,
       onDelta: params.request.stream && this.onStreamDelta
@@ -335,6 +347,7 @@ export class AgentApiBackend {
       clientCert: input.clientCert,
       hubDevicePrincipal: input.hubDevicePrincipal,
       hubDeviceAttachment: input.hubDeviceAttachment,
+      companionUiCapability: input.companionUiCapability,
       onDelta: input.onDelta,
       signal: input.signal,
     });
@@ -348,6 +361,7 @@ export class AgentApiBackend {
     clientCert?: SatelliteClientCertIdentity;
     hubDevicePrincipal?: HubDevicePrincipalSnapshot;
     hubDeviceAttachment?: HubDeviceAttachmentSnapshot;
+    companionUiCapability?: ApiChatCompletionRpcParams['companionUiCapability'];
     onDelta?: (text: string) => void | Promise<void>;
     signal?: AbortSignal;
     timeoutMs?: number;
@@ -361,6 +375,8 @@ export class AgentApiBackend {
         'Hub device principal and attachment contexts must be supplied together',
       );
     }
+    const companionUiCapabilityFailure = this.verifyCompanionUiCapability(params);
+    if (companionUiCapabilityFailure) return companionUiCapabilityFailure;
     if (params.hubDevicePrincipal && (
       params.request.provider !== undefined
       || params.request.system_prompt !== undefined
@@ -1160,6 +1176,68 @@ export class AgentApiBackend {
     }
   }
 
+  private verifyCompanionUiCapability(params: {
+    request: ChatCompletionRequest;
+    principal: ApiAuthPrincipal;
+    headers: ApiRpcHeaders;
+    clientCert?: SatelliteClientCertIdentity;
+    hubDevicePrincipal?: HubDevicePrincipalSnapshot;
+    hubDeviceAttachment?: HubDeviceAttachmentSnapshot;
+    companionUiCapability?: ApiChatCompletionRpcParams['companionUiCapability'];
+  }): ApiRpcFailure | undefined {
+    const capability = params.companionUiCapability;
+    if (!capability) return undefined;
+    if (!params.hubDevicePrincipal || !params.hubDeviceAttachment
+      || !this.requestCapabilityVerifier || !this.companionId) {
+      return this.fail(403, 'companion_ui_capability_denied', 'Companion UI child capability was denied');
+    }
+    try {
+      const rawBody = Buffer.from(capability.rawBodyBase64Url, 'base64url');
+      if (rawBody.toString('base64url') !== capability.rawBodyBase64Url) throw new Error('non-canonical body');
+      const satellite = resolveSatelliteClaim({
+        headers: params.headers,
+        principal: params.principal,
+        registry: this.satelliteRegistry,
+        ...(params.clientCert ? { clientCert: params.clientCert } : {}),
+      });
+      if (!satellite.ok) throw new Error('satellite authority denied');
+      const compiled = compileCompanionUiAction(
+        rawBody,
+        this.companionId as CompanionId,
+        {
+          capabilities: satellite.value.satellite.capabilities.effective,
+          telemetryScopes: satellite.value.satellite.telemetryScopes,
+        },
+      );
+      this.requestCapabilityVerifier.verifyAgent({
+        token: capability.token,
+        target: compiled.target,
+        requestId: capability.requestId,
+        decisionId: capability.decisionId,
+        versions: capability.versions,
+        parent: capability.parent,
+      });
+      if (compiled.frame.resource !== 'conversation.interact'
+        && compiled.frame.resource !== 'conversation.audio'
+        && compiled.frame.resource !== 'conversation.touch') {
+        throw new Error('non-agent Companion UI action');
+      }
+      const exactContent = companionUiPromptContent(compiled.frame);
+      if (typeof exactContent !== 'string'
+        || params.request.messages.length !== 1
+        || params.request.messages[0]?.role !== 'user'
+        || params.request.messages[0].content !== exactContent
+        || params.request.tools !== undefined
+        || params.request.tool_choice !== undefined
+        || params.request.user !== undefined) {
+        throw new Error('agent prompt does not match signed UI body');
+      }
+    } catch {
+      return this.fail(403, 'companion_ui_capability_denied', 'Companion UI child capability was denied');
+    }
+    return undefined;
+  }
+
   private buildSubstrateMessage(params: {
     requestId: string;
     channelId: string;
@@ -1173,6 +1251,7 @@ export class AgentApiBackend {
     channelPrivacy?: ChannelPrivacy;
     canonicalContactId?: string;
     satellite?: SatelliteRoutingMetadata;
+    hubDeviceAttachment?: HubDeviceAttachmentSnapshot;
     attachments?: Attachment[];
     /** htm9.9: intake-firewall envelope snapshots for screened document attachments. */
     intakeEnvelopes?: IntakeEnvelopeSnapshot[];
@@ -1193,6 +1272,7 @@ export class AgentApiBackend {
         }
         : {}),
       ...(params.satellite ? { satellite: params.satellite } : {}),
+      ...(params.hubDeviceAttachment ? { hubDeviceAttachment: params.hubDeviceAttachment } : {}),
       ...(params.channelPrivacy ? { channelPrivacy: params.channelPrivacy } : {}),
       ...(params.overrides.modelOverride ? { modelOverride: params.overrides.modelOverride } : {}),
       ...(params.overrides.promptOverride ? { promptOverride: params.overrides.promptOverride } : {}),
@@ -1205,6 +1285,7 @@ export class AgentApiBackend {
     const hasRouting = params.source !== 'api'
       || routing.broadcast
       || routing.satellite
+      || routing.hubDeviceAttachment
       || routing.channelPrivacy
       || routing.modelOverride
       || routing.promptOverride
@@ -1364,6 +1445,7 @@ export class AgentApiBackend {
       channelPrivacy: resolvedChannelPrivacy,
       canonicalContactId,
       satellite,
+      ...(hubDeviceAttachment ? { hubDeviceAttachment } : {}),
       attachments: [...lastUserAttachments, ...ingestedFiles.attachments],
       intakeEnvelopes: ingestedFiles.intakeEnvelopes,
     });

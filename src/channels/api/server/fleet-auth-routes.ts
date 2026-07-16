@@ -11,6 +11,7 @@ import {
   isLifecycleOAuthProofRole,
 } from '../../../shared/contracts/fleet-auth-lifecycle-oauth.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import { FLEET_AUTH_SESSION_COOKIE_NAME } from './fleet-auth-cookie.js';
 
 const LOGIN_PATH = '/v1/fleet-auth/login';
 export const FLEET_AUTH_LIFECYCLE_OAUTH_PATH = '/v1/fleet-auth/lifecycle/oauth';
@@ -18,7 +19,6 @@ const REFRESH_PATH = '/v1/fleet-auth/session/refresh';
 const CSRF_PATH = '/v1/fleet-auth/session/csrf';
 const LOGOUT_PATH = '/v1/fleet-auth/logout';
 const PROVIDER_REVOKE_PATH = '/v1/fleet-auth/provider/revoke';
-const SESSION_COOKIE_NAME = '__Host-psfn_session';
 const PREAUTH_COOKIE_NAME = '__Host-psfn_preauth';
 const CSRF_HEADER_NAME = 'x-psfn-csrf';
 const MUTATION_BODY_LIMIT = 2048;
@@ -46,7 +46,7 @@ function readOpaqueCookie(request: IncomingMessage, name: string): string | unde
 }
 
 function readSessionCookie(request: IncomingMessage): string | undefined {
-  return readOpaqueCookie(request, SESSION_COOKIE_NAME);
+  return readOpaqueCookie(request, FLEET_AUTH_SESSION_COOKIE_NAME);
 }
 
 function requireSingleQuery(url: URL, name: string): string | undefined {
@@ -79,11 +79,11 @@ function requestedLifecycleCorsHeaders(request: IncomingMessage): string[] | und
 
 function sessionCookie(token: string, absoluteExpiresAt: Date, now = Date.now()): string {
   const maxAge = Math.max(0, Math.floor((absoluteExpiresAt.getTime() - now) / 1000));
-  return `${SESSION_COOKIE_NAME}=${token}; Path=/; Max-Age=${maxAge}; Secure; HttpOnly; SameSite=Lax`;
+  return `${FLEET_AUTH_SESSION_COOKIE_NAME}=${token}; Path=/; Max-Age=${maxAge}; Secure; HttpOnly; SameSite=Lax`;
 }
 
 function clearSessionCookie(): string {
-  return `${SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax`;
+  return `${FLEET_AUTH_SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax`;
 }
 
 function preauthCookie(token: string, expiresAt: Date, now = Date.now()): string {

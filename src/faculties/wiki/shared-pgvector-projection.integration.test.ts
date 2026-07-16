@@ -8,7 +8,7 @@
 
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createPostgresPool, ensurePostgresSchema } from '../../persistence/postgres.js';
+import { createPostgresPool, runPostgresMigrations } from '../../persistence/postgres.js';
 import {
   POSTGRES_WIKI_PROJECTION_MIGRATIONS,
   SHARED_SCHEMA_NAME,
@@ -265,9 +265,14 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
       const personalPool = createPostgresPool(databaseUrl, {
         applicationName: 'psfn-wiki-personal',
         allowExitOnIdle: true,
+        schema: 'companion_test',
       });
       try {
-        await ensurePostgresSchema(personalPool, POSTGRES_WIKI_PROJECTION_MIGRATIONS);
+        await runPostgresMigrations(
+          personalPool,
+          POSTGRES_WIKI_PROJECTION_MIGRATIONS,
+          { schema: 'companion_test' },
+        );
         const personalStore = new WikiPgvectorProjectionStore(personalPool, deterministicEmbedding);
 
         await personalStore.syncDocument(
@@ -301,6 +306,7 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
         applicationName: 'psfn-shared-wiki-check',
         allowExitOnIdle: true,
         max: 1,
+        schema: SHARED_SCHEMA_NAME,
       });
       try {
         // A personal-scoped document can never be projected into the shared table.

@@ -46,6 +46,17 @@ function embed(text: string): Float32Array {
   return vector;
 }
 
+async function closeTestResources(resources: ReadonlyArray<() => Promise<void>>): Promise<void> {
+  const results = await Promise.allSettled(resources.map(close => close()));
+  const failures: unknown[] = [];
+  for (const result of results) {
+    if (result.status === 'rejected') failures.push(result.reason);
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, 'Shared-world caretaker test resource cleanup failed');
+  }
+}
+
 let harness: PostgresTestHarness | null = null;
 
 beforeAll(async () => {
@@ -62,11 +73,16 @@ describe('shared-world wiki caretaker real Postgres toaster', () => {
     const database = await harness.createDatabase();
     const systemDataDir = mkdtempSync(join(tmpdir(), 'psfn-caretaker-'));
     const proposalStore = new SharedWorldWikiProposalStore(database.databaseUrl);
-    const companionAReader = await createSharedWikiPgvectorProjectionStore(database.databaseUrl, embedding);
-    const companionBReader = await createSharedWikiPgvectorProjectionStore(database.databaseUrl, embedding);
-    const writer = await createSharedWikiPgvectorProjectionStore(database.databaseUrl, embedding);
-    const pool = createPostgresPool(database.databaseUrl, { applicationName: 'caretaker-test-inspection' });
+    let companionAReader: Awaited<ReturnType<typeof createSharedWikiPgvectorProjectionStore>> | null = null;
+    let companionBReader: Awaited<ReturnType<typeof createSharedWikiPgvectorProjectionStore>> | null = null;
+    let writer: Awaited<ReturnType<typeof createSharedWikiPgvectorProjectionStore>> | null = null;
+    let pool: ReturnType<typeof createPostgresPool> | null = null;
     try {
+      await proposalStore.initialize();
+      companionAReader = await createSharedWikiPgvectorProjectionStore(database.databaseUrl, embedding);
+      companionBReader = await createSharedWikiPgvectorProjectionStore(database.databaseUrl, embedding);
+      writer = await createSharedWikiPgvectorProjectionStore(database.databaseUrl, embedding);
+      pool = createPostgresPool(database.databaseUrl, { applicationName: 'caretaker-test-inspection' });
       const isKnownSite = (siteId: string): boolean => siteId === 'studio';
       const submitterA = new SharedWorldWikiProposalService({ proposalStore, isKnownSite, now: () => 1_000 });
       const submitterB = new SharedWorldWikiProposalService({ proposalStore, isKnownSite, now: () => 1_001 });
@@ -218,12 +234,29 @@ describe('shared-world wiki caretaker real Postgres toaster', () => {
       `);
       expect(privateRows.rows[0]?.count).toBe('0');
     } finally {
-      await pool.end();
-      await writer.close();
-      await companionBReader.close();
-      await companionAReader.close();
-      await proposalStore.close();
-      rmSync(systemDataDir, { recursive: true, force: true });
+      const resourceClosers: Array<() => Promise<void>> = [];
+      if (pool) {
+        const openedPool = pool;
+        resourceClosers.push(() => openedPool.end());
+      }
+      if (writer) {
+        const openedWriter = writer;
+        resourceClosers.push(() => openedWriter.close());
+      }
+      if (companionBReader) {
+        const openedCompanionBReader = companionBReader;
+        resourceClosers.push(() => openedCompanionBReader.close());
+      }
+      if (companionAReader) {
+        const openedCompanionAReader = companionAReader;
+        resourceClosers.push(() => openedCompanionAReader.close());
+      }
+      resourceClosers.push(() => proposalStore.close());
+      try {
+        await closeTestResources(resourceClosers);
+      } finally {
+        rmSync(systemDataDir, { recursive: true, force: true });
+      }
     }
   }, TEST_LIMITS.timeoutMs);
 });

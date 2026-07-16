@@ -133,6 +133,9 @@ cleanup_prepared_root() {
   if [[ -n "$PREPARED_ROOT" && -d "$PREPARED_ROOT" ]]; then
     rm -rf "$PREPARED_ROOT"
   fi
+  if [[ -n "${SECRET_ENV_FILE:-}" && -f "$SECRET_ENV_FILE" ]]; then
+    rm -f "$SECRET_ENV_FILE"
+  fi
 }
 
 trap cleanup_prepared_root EXIT
@@ -422,6 +425,7 @@ write_app_secret_env() {
 create_local_app_secret() {
   local env_file
   env_file="$(mktemp "${TMPDIR:-/tmp}/psfn-artemis-secret.XXXXXX")"
+  SECRET_ENV_FILE="$env_file"
   write_app_secret_env "$env_file"
   kubectl -n "$NAMESPACE" create secret generic psfn-app \
     --from-env-file="$env_file" \

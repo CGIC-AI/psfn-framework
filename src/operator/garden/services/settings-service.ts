@@ -74,6 +74,7 @@ import { parseContextEnvelopeSection } from '../../../channels/backplane/config.
 import { validateChannelEnvelopeLabel } from '../../../system/trust/context-envelope.js';
 import { resolveChannelEnvelopeClassification } from '../../../system/trust/policy.js';
 import type { GatewayCredentialPresenceResult } from '../../../boundary/gateway/protocol.js';
+import { buildEffectiveFleetAuthOwnerProjection } from './fleet-auth-owner-projection.js';
 
 const IMPORT_ROUTE_MODE_VALUES = new Set(IMPORT_PROCESSING_ROUTE_MODE_VALUES);
 const SESSION_RESTART_BEHAVIOR_VALUES_SET = new Set(SESSION_RESTART_BEHAVIOR_VALUES);
@@ -840,6 +841,18 @@ export class AdminSettingsDataService implements AdminSettingsService {
         editors.scheduler,
       ),
       effectiveIcpAutonomy: this.buildEffectiveIcpAutonomyState(editors),
+      fleetAuth: buildEffectiveFleetAuthOwnerProjection({
+        ...(this.deps.config.fleetAuth
+          ? { effectiveGatewayConfig: this.deps.config.fleetAuth }
+          : {}),
+        ...(this.deps.config.fleetAuthVerifier
+          ? { effectiveVerifierConfig: this.deps.config.fleetAuthVerifier }
+          : {}),
+        loadOnDisk: () => this.deps.configStore.loadFleetAuthOwnerFile(),
+        reportUnavailable: error => log.warn('Canonical fleet-auth owner projection is unavailable', {
+          error: toErrorMessage(error),
+        }),
+      }),
       workspaceLayout: {
         mode: this.deps.config.multiCompanion === true ? 'fleet' : 'single',
         personalWorkspacePath: this.deps.config.workspacePath?.trim() || null,
@@ -1133,6 +1146,11 @@ export class AdminSettingsDataService implements AdminSettingsService {
 
     try {
       switch (key) {
+        case 'fleet-auth':
+          return {
+            ok: false,
+            message: 'fleet-auth.json is read-only in Garden; edit the canonical system owner file outside Garden',
+          };
         case 'models': {
           const result = applyAdminModelsConfigMutation({
             config: this.deps.config,

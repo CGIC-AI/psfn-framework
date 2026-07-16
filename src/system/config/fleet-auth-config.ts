@@ -28,6 +28,17 @@ import {
   assertFleetAuthPublicKeyBoundary,
   canonicalEd25519SpkiFingerprint,
 } from './fleet-auth-key-boundary.js';
+import {
+  projectFleetAuthGardenMetadata,
+  type FleetAuthGardenMetadata,
+} from './fleet-auth-garden-projection.js';
+
+export { projectFleetAuthGardenMetadata } from './fleet-auth-garden-projection.js';
+export type {
+  FleetAuthConfigRevision,
+  FleetAuthGardenKeyMetadata,
+  FleetAuthGardenMetadata,
+} from './fleet-auth-garden-projection.js';
 
 export const FLEET_AUTH_ENV_VAR = 'PSFN_FLEET_AUTH';
 export const FLEET_AUTH_FILE_NAME = 'fleet-auth.json';
@@ -187,6 +198,8 @@ export interface FleetAuthVerifierConfig {
     keys: FleetAuthVerifierKey[];
   };
   hubDeviceAssertions: HubDeviceAssertionVerifierConfig;
+  /** Startup-captured, bounded Garden view. Production resolvers always set it. */
+  gardenMetadata?: FleetAuthGardenMetadata;
 }
 
 export interface FleetAuthGatewayConfig {
@@ -209,21 +222,6 @@ export interface ResolvedGatewayFleetAuthSecrets {
     runtimeUrl: string;
     migrationUrl: string;
     backupRestoreUrl: string;
-  };
-}
-
-export interface FleetAuthGardenMetadata {
-  enabled: true;
-  canonicalOrigin: string;
-  callbackPath: string;
-  activationGeneration: number;
-  provider: Pick<FleetAuthConfig['provider'], 'kind' | 'scopes' | 'tokenCustody'>;
-  ttls: FleetAuthConfig['ttls'];
-  rolePolicy: FleetAuthConfig['rolePolicy'];
-  discordEvidenceMappings: FleetAuthConfig['discordEvidenceMappings'];
-  verifierKeys: Array<Pick<FleetAuthVerifierKey, 'issuer' | 'kid' | 'notBefore' | 'notAfter' | 'status'>>;
-  hubDeviceAssertions: Omit<HubDeviceAssertionVerifierConfig, 'keys'> & {
-    keys: Array<Pick<HubDeviceAssertionVerifierKey, 'kid' | 'notBefore' | 'notAfter' | 'status'>>;
   };
 }
 
@@ -705,6 +703,7 @@ export function resolveFleetAuthOwnerFile(options: {
     kind: 'verifier',
     enabled: true,
     canonicalOrigin: config.canonicalOrigin,
+    gardenMetadata: projectFleetAuthGardenMetadata(config),
     requestCapabilities: {
       issuer: config.verifierKeys[0]!.issuer,
       maxTtlSeconds: config.ttls.internalAssertionMs / 1_000,
@@ -944,49 +943,5 @@ export function resolveGatewayFleetAuthSecrets(options: {
     trustedHostRecoveryCredential,
     authorityFloorRoot,
     database: { runtimeUrl, migrationUrl, backupRestoreUrl },
-  };
-}
-
-export function projectFleetAuthGardenMetadata(config: FleetAuthConfig): FleetAuthGardenMetadata {
-  return {
-    enabled: true,
-    canonicalOrigin: config.canonicalOrigin,
-    callbackPath: config.callbackPath,
-    activationGeneration: config.activationGeneration,
-    provider: {
-      kind: config.provider.kind,
-      scopes: [...config.provider.scopes],
-      tokenCustody: config.provider.tokenCustody,
-    },
-    ttls: { ...config.ttls },
-    rolePolicy: {
-      disabledActionsByRole: Object.fromEntries(FLEET_AUTH_ROLES.map(role => [
-        role,
-        [...config.rolePolicy.disabledActionsByRole[role]],
-      ])) as Record<FleetAuthRole, FleetAuthAction[]>,
-    },
-    discordEvidenceMappings: config.discordEvidenceMappings.map(mapping => ({
-      ...mapping,
-      requiredRoleIds: [...mapping.requiredRoleIds],
-    })),
-    verifierKeys: config.verifierKeys.map(({ issuer, kid, notBefore, notAfter, status }) => ({
-      issuer,
-      kid,
-      notBefore,
-      notAfter,
-      status,
-    })),
-    hubDeviceAssertions: {
-      issuer: config.hubDeviceAssertions.issuer,
-      audience: config.hubDeviceAssertions.audience,
-      maxTtlSeconds: config.hubDeviceAssertions.maxTtlSeconds,
-      clockSkewSeconds: config.hubDeviceAssertions.clockSkewSeconds,
-      keys: config.hubDeviceAssertions.keys.map(({ kid, notBefore, notAfter, status }) => ({
-        kid,
-        notBefore,
-        notAfter,
-        status,
-      })),
-    },
   };
 }

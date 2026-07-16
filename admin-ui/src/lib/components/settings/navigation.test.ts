@@ -37,7 +37,10 @@ test('settings groups keep deterministic section order', () => {
   );
   assert.deepEqual(sessions.sections.map((section) => section.id), ['memory-sessions']);
   assert.ok(runtime.sections.some((section) => section.id === 'advanced-fields'));
-  assert.deepEqual(trust.sections.map((section) => section.id), ['advanced-trust', 'advanced-secrets']);
+  assert.deepEqual(
+    trust.sections.map((section) => section.id),
+    ['advanced-trust', 'advanced-fleet-auth', 'advanced-secrets'],
+  );
   assert.deepEqual(backups.sections.map((section) => section.id), ['advanced-backup']);
   assert.deepEqual(ownerFiles.sections.map((section) => section.id), ['owner-files']);
 });
@@ -58,6 +61,7 @@ test('group filtering drops empty groups and preserves relative order', () => {
 test('hash parsing accepts only known settings section anchors', () => {
   assert.equal(parseSettingsSimpleSectionHash('#settings-memory-budget'), 'memory-budget');
   assert.equal(parseSettingsSimpleSectionHash('#settings-advanced-fields'), 'advanced-fields');
+  assert.equal(parseSettingsSimpleSectionHash('#settings-advanced-fleet-auth'), 'advanced-fleet-auth');
   assert.equal(parseSettingsSimpleSectionHash('#settings-owner-files'), 'owner-files');
   assert.equal(parseSettingsSimpleSectionHash('#settings-missing'), null);
   assert.equal(parseSettingsSimpleSectionHash('#not-settings-memory-budget'), null);

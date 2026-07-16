@@ -21,6 +21,10 @@ import type {
   IntakeSourceListsConfig,
 } from '../../../../system/config/intake-policy-config.js';
 import type { EnvInfo } from '../../types.js';
+import type {
+  FleetAuthConfigRevision,
+  FleetAuthGardenMetadata,
+} from '../../../../system/config/fleet-auth-garden-projection.js';
 
 export interface SettingsConfigEditors {
   models: ModelsRuntimeConfig;
@@ -103,6 +107,42 @@ export interface EffectiveIcpAutonomySettingsState {
   };
 }
 
+export interface LoadedFleetAuthOwnerSnapshot {
+  state: 'loaded';
+  revision: FleetAuthConfigRevision;
+  value: FleetAuthGardenMetadata;
+}
+
+export interface UnloadedFleetAuthOwnerSnapshot {
+  state: 'off' | 'absent' | 'unavailable';
+  detail: string;
+}
+
+export type FleetAuthOwnerSnapshot =
+  | LoadedFleetAuthOwnerSnapshot
+  | UnloadedFleetAuthOwnerSnapshot;
+
+export interface EffectiveFleetAuthOwnerProjection {
+  ownerFile: 'fleet-auth.json';
+  scope: 'global';
+  access: {
+    mode: 'read_only';
+    editableFields: [];
+    omittedCategories: string[];
+  };
+  featureState: 'enabled' | 'off' | 'unavailable';
+  status: 'healthy' | 'restart_required' | 'off' | 'unavailable';
+  effective: FleetAuthOwnerSnapshot;
+  onDisk: FleetAuthOwnerSnapshot;
+  restartRequired: boolean | null;
+  restartStatus: 'not_required' | 'required' | 'blocked' | 'unknown';
+  provenance: {
+    parser: 'validateFleetAuthConfig';
+    effectiveSource: 'startup_runtime';
+    onDiskSource: 'canonical_owner_file';
+  };
+}
+
 export interface AdminSettingsData {
   config: EditableSettings;
   env: EnvInfo;
@@ -112,6 +152,7 @@ export interface AdminSettingsData {
   effectiveChargeQuota: EffectiveChargeQuotaState;
   effectiveBackgroundMaintenance: EffectiveBackgroundMaintenanceState;
   effectiveIcpAutonomy: EffectiveIcpAutonomySettingsState;
+  fleetAuth: EffectiveFleetAuthOwnerProjection;
   workspaceLayout?: {
     mode: 'single' | 'fleet';
     personalWorkspacePath: string | null;

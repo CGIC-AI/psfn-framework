@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import type {
   RuntimeChannelsConfig,
   RuntimeChannelsConfigOverrides,
@@ -62,6 +63,11 @@ import {
   loadTrustPolicyConfig,
   saveTrustPolicyConfig,
 } from './trust-policy-config.js';
+import type { FleetAuthConfig } from './fleet-auth-config.js';
+import {
+  fleetAuthFilePath,
+  loadFleetAuthConfig,
+} from './fleet-auth-config.js';
 
 export interface ConfigStorePort {
   loadRuntimeSettings(): EditableSettings;
@@ -87,6 +93,8 @@ export interface ConfigStorePort {
   saveTrustPolicy(nextConfig: unknown): TrustPolicyConfig;
   loadIntakePolicy(): IntakePolicyConfig;
   saveIntakePolicy(nextConfig: unknown): IntakePolicyConfig;
+  /** Read-only system owner. Garden must never turn this into a raw editor. */
+  loadFleetAuthOwnerFile(): FleetAuthConfig | null;
   loadStartupRuntimeSettings(): Pick<StartupOwnerFileState, 'runtimeSettings' | 'settingsDomains'>;
   loadStartupModels(): ModelsLoadResult;
   loadStartupProviders(): ProvidersLoadResult;
@@ -154,6 +162,11 @@ export function createOwnerFileConfigStore(
     saveTrustPolicy: (nextConfig) => saveTrustPolicyConfig(options.dataDir, nextConfig),
     loadIntakePolicy: () => loadIntakePolicyConfig(options.dataDir, loadOptions),
     saveIntakePolicy: (nextConfig) => saveIntakePolicyConfig(options.dataDir, nextConfig),
+    loadFleetAuthOwnerFile: () => (
+      existsSync(fleetAuthFilePath(options.dataDir))
+        ? loadFleetAuthConfig(options.dataDir, options.seedDir)
+        : null
+    ),
     loadStartupRuntimeSettings: () => loadStartupRuntimeSettingsOwnerFile({
       dataDir: options.dataDir,
       seedDir: options.seedDir,

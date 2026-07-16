@@ -152,7 +152,8 @@ describe('fleet-auth owner-file configuration', () => {
 
   it('projects the full config only to the gateway and public verifier material elsewhere', () => {
     const dataDir = makeRoot();
-    writeConfig(dataDir, validConfig(publicKeyPem, hubPublicKeyPem));
+    const config = validConfig(publicKeyPem, hubPublicKeyPem);
+    writeConfig(dataDir, config);
 
     const gateway = resolveFleetAuthOwnerFile({ dataDir, enabled: true, processMode: 'gateway' });
     const agent = resolveFleetAuthOwnerFile({ dataDir, enabled: true, processMode: 'agent' });
@@ -161,10 +162,12 @@ describe('fleet-auth owner-file configuration', () => {
     expect(gateway?.kind).toBe('gateway');
     expect(gateway && 'config' in gateway ? gateway.config.credentials.runtimeDatabaseUrlRef : null)
       .toEqual(credential('FLEET_AUTH_RUNTIME_DATABASE_URL'));
+    if (!gateway || gateway.kind !== 'gateway') throw new Error('gateway projection missing');
     expect(agent).toEqual({
       kind: 'verifier',
       enabled: true,
       canonicalOrigin: 'https://fleet.example.test',
+      gardenMetadata: projectFleetAuthGardenMetadata(gateway.config),
       requestCapabilities: {
         issuer: 'psfn-fleet-auth',
         maxTtlSeconds: 30,
@@ -518,12 +521,29 @@ describe('fleet-auth owner-file configuration', () => {
     const metadata = projectFleetAuthGardenMetadata(config);
     expect(metadata).toMatchObject({
       enabled: true,
-      canonicalOrigin: config.canonicalOrigin,
+      featureMode: 'fleet-principal',
+      canonicalOrigin: {
+        value: config.canonicalOrigin,
+        status: 'configured_https',
+      },
       callbackPath: config.callbackPath,
-      provider: {
+      revision: {
+        schemaVersion: 1,
+        activationGeneration: 1,
+        canonicalSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      },
+      providerPolicy: {
         kind: 'discord',
         scopes: ['identify', 'guilds', 'guilds.members.read'],
         tokenCustody: 'discard',
+      },
+      disabledActionsByRole: config.rolePolicy.disabledActionsByRole,
+      discordEvidence: {
+        mappingCount: 1,
+        companionBindingCount: 1,
+        channelRestrictedMappingCount: 1,
+        roleRestrictedMappingCount: 1,
+        requiredRoleBindingCount: 1,
       },
       verifierKeys: [{ issuer: 'psfn-fleet-auth', kid: '2026-07-primary', status: 'active' }],
       hubDeviceAssertions: {
@@ -536,6 +556,13 @@ describe('fleet-auth owner-file configuration', () => {
     expect(serialized).not.toContain('envName');
     expect(serialized).not.toContain('PUBLIC KEY');
     expect(serialized).not.toContain('clientId');
+    expect(serialized).not.toContain(config.provider.clientId);
+    expect(serialized).not.toContain(config.discordEvidenceMappings[0]!.guildId);
+    expect(serialized).not.toContain(config.discordEvidenceMappings[0]!.channelId);
+    expect(serialized).not.toContain(config.discordEvidenceMappings[0]!.companionId);
+    expect(serialized).not.toContain(config.discordEvidenceMappings[0]!.requiredRoleIds[0]);
+    expect(serialized).not.toContain('fleet_auth_runtime');
+    expect(serialized).not.toContain('RECOVERY_CREDENTIAL');
   });
 
   it('keeps the distributed example schema-readable but rejects every seed key in enabled config', () => {

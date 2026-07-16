@@ -218,4 +218,18 @@ describe('createOwnerFileConfigStore', () => {
     expect(repo.loadStartupCapabilityTier()).toEqual(repo.loadCapabilityTier());
     expect(repo.loadStartupChargePolicy()).toEqual(repo.loadChargePolicy());
   });
+
+  it('keeps fleet-auth owner access read-only, optional, and canonical-parser-backed', () => {
+    const dataDir = makeDataDir('psfn-config-store-fleet-auth-');
+    const repo = createOwnerFileConfigStore({ dataDir });
+
+    expect(repo.loadFleetAuthOwnerFile()).toBeNull();
+    copyFileSync(
+      join(process.cwd(), 'config', 'fleet-auth.seed.json'),
+      join(dataDir, 'fleet-auth.json'),
+    );
+    expect(() => repo.loadFleetAuthOwnerFile())
+      .toThrow(/distributed seed or test fixture key must be replaced|replace-before-enable/iu);
+    expect('saveFleetAuthOwnerFile' in repo).toBe(false);
+  });
 });

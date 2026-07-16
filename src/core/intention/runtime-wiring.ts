@@ -13,6 +13,7 @@ import type { ActiveConcernVAD } from './concerns.js';
 import {
   evaluatePendingFollowUpActivationState,
   filterPendingFollowUpsForActiveChannel,
+  MAX_TEXT_CHARS as PENDING_FOLLOW_UP_MAX_TEXT_CHARS,
   type PendingFollowUpContextProvider,
   type PendingFollowUp,
 } from './pending-follow-ups.js';
@@ -121,6 +122,20 @@ function normalizeOptionalText(value: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+// Bound producer-side to the pending-follow-up content contract so an
+// over-long, model-authored follow-up is truncated with a clear marker at the
+// producer rather than throwing at the consumer's fail-closed enqueue guard
+// (normalizeRequiredText → MAX_TEXT_CHARS). Whitespace is compacted first to
+// match the consumer's own length measurement. The consumer check is left
+// intact (psfn-framework-ktvo).
+function boundFollowUpContentToContract(content: string): string {
+  const compacted = content.replace(/\s+/g, ' ').trim();
+  if (compacted.length <= PENDING_FOLLOW_UP_MAX_TEXT_CHARS) {
+    return compacted;
+  }
+  return `${compacted.slice(0, PENDING_FOLLOW_UP_MAX_TEXT_CHARS - 3)}...`;
+}
+
 function resolveFollowUpDecisionContent(decision: IntentionActionDecision): string {
   if (decision.type !== 'followUp') {
     throw new Error(`Expected followUp decision, received "${decision.type}"`);
@@ -129,7 +144,7 @@ function resolveFollowUpDecisionContent(decision: IntentionActionDecision): stri
   if (!content) {
     throw new Error('Follow-up decision must include followUp.content');
   }
-  return content;
+  return boundFollowUpContentToContract(content);
 }
 
 function normalizeFutureIsoTimestamp(value: number | undefined): string | undefined {

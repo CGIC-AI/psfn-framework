@@ -73,6 +73,12 @@ export function registerWeightedThoughtOutreachTask(
     },
     { skipFirstRun: true },
   );
+
+  log.info('Weighted-thought outreach lane registered', {
+    checkIntervalMs: Math.max(1_000, options.config.checkIntervalMs),
+    nudgeThreshold: options.config.nudgeThreshold,
+    maxNudgesPerRun: options.config.maxNudgesPerRun,
+  });
 }
 
 async function safeEmit(

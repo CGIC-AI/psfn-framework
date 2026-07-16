@@ -359,7 +359,7 @@ describe('SessionManager', () => {
 
     mgr.recordUserMessage('ch1', 'Background completion ready.', 'scheduler', 'Scheduler');
     mgr.recordUserMessage('ch1', 'Concern sweep results attached.', 'system:metacog', 'Metacognition');
-    mgr.recordUserMessage('ch1', '[Intention Appraisal] Follow up on his arm.', 'u-unknown', 'Vega');
+    mgr.recordUserMessage('ch1', '[Intention Appraisal] Follow up on his arm.', 'u-unknown', 'Primary User');
 
     const entries = mgr.getRecentMessages('ch1', 10);
     expect(entries).toHaveLength(3);
@@ -382,12 +382,12 @@ describe('SessionManager', () => {
     });
     const mgr = new SessionManager(store, config, eventBus);
 
-    mgr.recordUserMessage('ch1', 'good morning my heart', '388908766306893854', 'Vega');
+    mgr.recordUserMessage('ch1', 'good morning my heart', '388908766306893854', 'Primary User');
 
     const entries = mgr.getRecentMessages('ch1', 10);
     expect(entries).toHaveLength(1);
     expect(entries[0].role).toBe('user');
-    expect(entries[0].authorName).toBe('Vega');
+    expect(entries[0].authorName).toBe('Primary User');
     expect(guardEvents).toHaveLength(0);
   });
 
@@ -1717,7 +1717,7 @@ describe('SessionManager', () => {
     const sourceChannelId = 'discord:guild:room';
     const otherChannelId = 'discord:guild:other';
 
-    mgr.recordUserMessage(sourceChannelId, 'old poisoned room line', 'vega-id', 'Vega', false);
+    mgr.recordUserMessage(sourceChannelId, 'old poisoned room line', 'primary-user-id', 'Primary User', false);
     mgr.recordAssistantMessage(sourceChannelId, 'old assistant room line', undefined, false);
     mgr.recordUserMessage(otherChannelId, 'other room stays on its own lane', 'iku-id', 'Iku', false);
 
@@ -1734,7 +1734,7 @@ describe('SessionManager', () => {
     expect(mgr.resolveSessionChannelId(otherChannelId)).toBe(otherChannelId);
     expect(mgr.isSessionRetiredOrQuarantined(sourceChannelId)).toBe(true);
 
-    mgr.recordUserMessage(sourceChannelId, 'fresh user line after reset', 'vega-id', 'Vega', false);
+    mgr.recordUserMessage(sourceChannelId, 'fresh user line after reset', 'primary-user-id', 'Primary User', false);
     mgr.recordAssistantMessage(sourceChannelId, 'fresh assistant line after reset', undefined, false);
 
     expect(store.getRecent(sourceChannelId, 10).map(entry => entry.content)).toEqual([

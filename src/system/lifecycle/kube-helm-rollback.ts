@@ -185,6 +185,12 @@ export function createKubeHelmRollbackExecutor(
         namespace: options.namespace,
         release: options.release,
         trigger: 'manual' as const,
+        // The live revision this rollback moved AWAY from. Helm enacts a rollback
+        // as a fresh revision numbered one above the current live revision, so the
+        // source revision is the resulting revision minus one. Recording it keys
+        // the act-once ledger (hasRolledBackFrom) so a manual rollback of revision
+        // N stops the automatic surface — still pinned to N — from double-firing.
+        fromHelmRevision: rollbackResult.helmRevision - 1,
         targetHelmRevision: targetRevision,
         resultingHelmRevision: rollbackResult.helmRevision,
         reason: request.reason,

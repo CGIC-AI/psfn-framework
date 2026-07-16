@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createRetryableShutdown,
   runShutdownSequence,
   type ShutdownLogger,
 } from './shutdown-helpers.js';
@@ -134,5 +135,33 @@ describe('runShutdownSequence', () => {
         maxAttempts: 2,
       }),
     );
+  });
+
+  it('shares a failed shutdown attempt and permits one later durable retry', async () => {
+    const logger = createLogger();
+    let releaseAttempts = 0;
+    const closeDatabase = vi.fn(async () => undefined);
+    const shutdown = createRetryableShutdown(() => runShutdownSequence([
+      {
+        step: 'durable release',
+        action: () => {
+          releaseAttempts += 1;
+          if (releaseAttempts <= 2) throw new Error('release unavailable');
+        },
+        maxAttempts: 2,
+        failClosed: true,
+      },
+      { step: 'close database', action: closeDatabase },
+    ], logger));
+
+    const first = await Promise.allSettled([shutdown(), shutdown()]);
+    expect(first.map(result => result.status)).toEqual(['rejected', 'rejected']);
+    expect(releaseAttempts).toBe(2);
+    expect(closeDatabase).not.toHaveBeenCalled();
+
+    await shutdown();
+    await shutdown();
+    expect(releaseAttempts).toBe(3);
+    expect(closeDatabase).toHaveBeenCalledOnce();
   });
 });

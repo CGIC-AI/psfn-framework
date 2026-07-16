@@ -68,3 +68,28 @@ export async function runShutdownSequence(
     );
   }
 }
+
+/**
+ * Share concurrent shutdown callers, cache a completed shutdown, and allow a
+ * later caller to retry after a failed attempt. The operation itself owns its
+ * bounded internal retries; this wrapper prevents one rejected promise from
+ * poisoning every future production shutdown request.
+ */
+export function createRetryableShutdown(
+  operation: () => Promise<void>,
+): () => Promise<void> {
+  let current: Promise<void> | null = null;
+  let completed = false;
+  return async () => {
+    if (completed) return;
+    const attempt = current ?? operation();
+    current = attempt;
+    try {
+      await attempt;
+      completed = true;
+    } catch (error) {
+      if (current === attempt) current = null;
+      throw error;
+    }
+  };
+}

@@ -12,7 +12,7 @@ import {
   createNotifyTool,
   type NotificationPort,
 } from '../../core/tools/ntfy.js';
-import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
+import { createRetryableShutdown, runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
@@ -112,7 +112,6 @@ export function buildAgentControlPlane(
     icpAutonomyRuntime,
     icpInitiationSourceRuntime,
   } = options;
-  let stopPromise: Promise<void> | null = null;
   const deferredCompanionOutreachAuthorizationRuntime: DeferredCompanionOutreachAuthorizationRuntime = {
     hasExternalCompanionCapability: () => capabilityRuntime.has('external.companion'),
     isNotifyToolRegistered: () => agentLoop.getToolCatalog().extended.some(
@@ -158,13 +157,7 @@ export function buildAgentControlPlane(
     startTime: Date.now(),
   });
 
-  const stopFn = async () => {
-    if (stopPromise) {
-      await stopPromise;
-      return;
-    }
-
-    stopPromise = (async () => {
+  const stopFn = createRetryableShutdown(async () => {
       const timeoutMs = parsePositiveIntEnv(
         process.env.EXTRACTION_DRAIN_TIMEOUT_MS,
         DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
@@ -206,10 +199,7 @@ export function buildAgentControlPlane(
         { step: 'close database', action: () => closeDatabase() },
       ], log);
       log.info('Stopped');
-    })();
-
-    await stopPromise;
-  };
+  });
 
   agentLoop.registerTool(createSystemTool(
     config,

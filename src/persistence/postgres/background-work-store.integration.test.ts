@@ -2556,13 +2556,13 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
-  it('recovers an expired lease with a bounded attempt and permits restart claim', async () => {
+  it('recovers a pre-boundary expired lease without consuming its final attempt', async () => {
     const database = await harness.createDatabase();
     const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
       schema: 'companion_a',
     });
     try {
-      const input = makeInput('session-a', 'turn-a');
+      const input = { ...makeInput('session-a', 'turn-a'), maxAttempts: 1 };
       await store.enqueue(input);
       const firstClaim = await store.claimNext({
         leaseOwner: 'crashed-worker',
@@ -2572,8 +2572,11 @@ describe('PostgresBackgroundWorkStore', () => {
       });
       expect(firstClaim?.state).toBe('running');
       expect(await store.recoverExpired({ nowMs: 111 })).toBe(1);
-      expect((await store.get(input.jobId))?.state).toBe('retry_wait');
-      expect((await store.get(input.jobId))?.attemptCount).toBe(1);
+      expect(await store.get(input.jobId)).toMatchObject({
+        state: 'retry_wait',
+        reasonCode: 'lease_expired',
+        attemptCount: 0,
+      });
 
       const restartClaim = await store.claimNext({
         leaseOwner: 'restart-worker',

@@ -59,7 +59,7 @@ type LifecycleRestartPlan =
     supported: true;
     strategy: SupportedRestartStrategy;
     exitCode: number;
-    runCommandBeforeShutdown: boolean;
+    requiresRestartCommand: boolean;
   }
   | {
     supported: false;
@@ -80,14 +80,14 @@ function resolveLifecycleRestartPlan(options: LifecycleToolOptions): LifecycleRe
         supported: true,
         strategy: 'command',
         exitCode: 0,
-        runCommandBeforeShutdown: true,
+        requiresRestartCommand: true,
       };
     }
     return {
       supported: true,
       strategy: 'supervisor',
       exitCode: 0,
-      runCommandBeforeShutdown: false,
+      requiresRestartCommand: false,
     };
   }
 
@@ -109,7 +109,7 @@ function resolveLifecycleRestartPlan(options: LifecycleToolOptions): LifecycleRe
       supported: true,
       strategy: 'command',
       exitCode: 0,
-      runCommandBeforeShutdown: true,
+      requiresRestartCommand: true,
     };
   }
 
@@ -118,7 +118,7 @@ function resolveLifecycleRestartPlan(options: LifecycleToolOptions): LifecycleRe
       supported: true,
       strategy: 'reexec',
       exitCode: contract.exitCode ?? DEFAULT_REEXEC_RESTART_EXIT_CODE,
-      runCommandBeforeShutdown: false,
+      requiresRestartCommand: false,
     };
   }
 
@@ -126,7 +126,7 @@ function resolveLifecycleRestartPlan(options: LifecycleToolOptions): LifecycleRe
     supported: true,
     strategy: 'supervisor',
     exitCode: 0,
-    runCommandBeforeShutdown: false,
+    requiresRestartCommand: false,
   };
 }
 
@@ -226,7 +226,7 @@ async function runRestartCommandIfRequired(
   notifier: LifecycleNotifier,
   failurePrefix: string,
 ): Promise<boolean> {
-  if (!plan.runCommandBeforeShutdown) {
+  if (!plan.requiresRestartCommand) {
     return true;
   }
 
@@ -236,10 +236,28 @@ async function runRestartCommandIfRequired(
     return true;
   } catch (err) {
     const errorText = err instanceof Error ? err.message : String(err);
-    log.error('Restart command failed; aborting shutdown', { error: errorText });
+    log.error('Restart command failed after durable shutdown', { error: errorText });
     await notifier.notifyShutdown(`${failurePrefix} failed: ${errorText.slice(0, 160)}`);
     return false;
   }
+}
+
+async function completeDurableShutdownForRestart(
+  plan: LifecycleRestartPlan & { supported: true },
+  stopFn: () => Promise<void>,
+  options: LifecycleToolOptions,
+  notifier: LifecycleNotifier,
+  failurePrefix: string,
+): Promise<boolean> {
+  try {
+    await stopFn();
+  } catch (err) {
+    const errorText = err instanceof Error ? err.message : String(err);
+    log.error('Durable shutdown failed; aborting restart', { error: errorText });
+    await notifier.notifyShutdown(`${failurePrefix} blocked: ${errorText.slice(0, 160)}`);
+    return false;
+  }
+  return runRestartCommandIfRequired(plan, options, notifier, failurePrefix);
 }
 
 /**
@@ -287,19 +305,15 @@ async function executeRestartAction(
   // Schedule clean shutdown + exit after returning the tool result
   // Use setImmediate so the tool result gets back to the LLM first
   setImmediate(async () => {
-    try {
-      const restartCommandReady = await runRestartCommandIfRequired(
-        restartPlan,
-        options,
-        notifier,
-        'restart',
-      );
-      if (!restartCommandReady) {
-        return;
-      }
-      await stopFn();
-    } catch (err) {
-      log.error('Error during shutdown', { error: String(err) });
+    const restartCommandReady = await completeDurableShutdownForRestart(
+      restartPlan,
+      stopFn,
+      options,
+      notifier,
+      'restart',
+    );
+    if (!restartCommandReady) {
+      return;
     }
     process.exit(restartPlan.exitCode);
   });
@@ -370,19 +384,15 @@ async function executeRebuildAction(
       return;
     }
 
-    try {
-      const restartCommandReady = await runRestartCommandIfRequired(
-        restartPlan,
-        options,
-        notifier,
-        'rebuild restart',
-      );
-      if (!restartCommandReady) {
-        return;
-      }
-      await stopFn();
-    } catch (err) {
-      log.error('Error during shutdown', { error: String(err) });
+    const restartCommandReady = await completeDurableShutdownForRestart(
+      restartPlan,
+      stopFn,
+      options,
+      notifier,
+      'rebuild restart',
+    );
+    if (!restartCommandReady) {
+      return;
     }
     process.exit(restartPlan.exitCode);
   });
@@ -672,8 +682,9 @@ async function executeDeferredRestart(
     void (async () => {
       try {
         await input.notifier.notifyPreRestart(payload.reason);
-        const restartCommandReady = await runRestartCommandIfRequired(
+        const restartCommandReady = await completeDurableShutdownForRestart(
           restartPlan,
+          input.stopFn,
           input,
           input.notifier,
           'restart',
@@ -681,9 +692,9 @@ async function executeDeferredRestart(
         if (!restartCommandReady) {
           return;
         }
-        await input.stopFn();
       } catch (err) {
         log.error('Error during deferred restart shutdown', { error: String(err) });
+        return;
       }
       process.exit(restartPlan.exitCode);
     })();
@@ -731,8 +742,9 @@ async function executeDeferredRebuild(
       }
 
       try {
-        const restartCommandReady = await runRestartCommandIfRequired(
+        const restartCommandReady = await completeDurableShutdownForRestart(
           restartPlan,
+          input.stopFn,
           input,
           input.notifier,
           'rebuild restart',
@@ -740,9 +752,9 @@ async function executeDeferredRebuild(
         if (!restartCommandReady) {
           return;
         }
-        await input.stopFn();
       } catch (err) {
         log.error('Error during deferred rebuild shutdown', { error: String(err) });
+        return;
       }
       process.exit(restartPlan.exitCode);
     })();

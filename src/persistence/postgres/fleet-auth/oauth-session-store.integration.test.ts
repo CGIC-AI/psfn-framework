@@ -14,8 +14,8 @@ import { PostgresFleetAuthBrokerStore } from './oauth-session-store.js';
 import { FleetAuthAuthorityFloorStore } from './authority-floor.js';
 import {
   createGatewayAccountReapprovalAuthority,
+  createGatewayProviderRevocationAuthorityPort,
   reconcileFleetAuthAuthorityState,
-  reconcileFleetAuthAuthorityStateInTransaction,
 } from './gateway-persistence.js';
 
 const TIMEOUT_MS = 120_000;
@@ -46,7 +46,7 @@ function roleUrl(databaseUrl: string, role: keyof typeof PASSWORDS): string {
   return url.toString();
 }
 
-async function createStore(options: { failAfterFloor?: boolean } = {}): Promise<{
+async function createStore(options: { failDuringReconcile?: boolean } = {}): Promise<{
   store: PostgresFleetAuthBrokerStore;
   runtime: import('pg').Pool;
   migration: import('pg').Pool;
@@ -79,6 +79,9 @@ async function createStore(options: { failAfterFloor?: boolean } = {}): Promise<
     databaseHasDurableAuthority: false,
   });
   await reconcileFleetAuthAuthorityState(runtime, initialFloor, randomUUID());
+  const providerRevocationAuthority = createGatewayProviderRevocationAuthorityPort(
+    authorityFloors,
+  );
   return {
     runtime,
     migration: createPostgresPool(migrationUrl, { max: 1, allowExitOnIdle: true }),
@@ -88,26 +91,16 @@ async function createStore(options: { failAfterFloor?: boolean } = {}): Promise<
       sessionPepper: 'session-pepper-at-least-thirty-two-bytes',
       tokenEncryptionKey: 'token-encryption-key-at-least-thirty-two-bytes',
       providerRevocationAuthority: {
+        sessionAuthorityGenerationIsCurrent: authorityGeneration => (
+          providerRevocationAuthority.sessionAuthorityGenerationIsCurrent(authorityGeneration)
+        ),
         fence: async (input) => {
-          const floor = authorityFloors.revokeAccountAuthority({
-            kind: 'provider_subject',
-            resourceId: `${input.provider}:${input.subjectId}`,
-            reason: input.reasonDigest,
-            at: input.at.toISOString(),
-          });
-          if (options.failAfterFloor) throw new Error('injected failure after provider floor fence');
+          const fence = await providerRevocationAuthority.fence(input);
+          if (!options.failDuringReconcile) return fence;
           return {
-            authorityGeneration: floor.trustedHost.authorityGeneration,
-            reconcile: async (client) => {
-              await reconcileFleetAuthAuthorityStateInTransaction(client, floor, randomUUID());
-              const state = await client.query<{ global_auth_epoch: string }>(`
-                SELECT global_auth_epoch
-                FROM fleet_auth.authority_state
-                WHERE singleton = TRUE
-              `);
-              return {
-                globalAuthEpoch: Number(state.rows[0]!.global_auth_epoch),
-              };
+            ...fence,
+            reconcile: async () => {
+              throw new Error('injected failure during provider authority reconciliation');
             },
           };
         },
@@ -355,8 +348,10 @@ describe('Postgres gateway OAuth/session authority', () => {
     }
   }, TIMEOUT_MS);
 
-  it('leaves provider authority over-fenced when database reconciliation fails after floor publication', async () => {
-    const { store, runtime, migration, authorityFloors } = await createStore({ failAfterFloor: true });
+  it('immediately over-fences live sessions when reconciliation fails after floor publication', async () => {
+    const { store, runtime, migration, authorityFloors } = await createStore({
+      failDuringReconcile: true,
+    });
     try {
       const loginInput = await authenticate(store, 'partial-provider-revoke');
       const login = await store.createLoginSession({
@@ -374,7 +369,7 @@ describe('Postgres gateway OAuth/session authority', () => {
         csrfToken: login.csrfToken,
         now: new Date(NOW.getTime() + 1000),
         reasonDigest: 'e'.repeat(64),
-      })).rejects.toThrow(/injected failure after provider floor fence/);
+      })).rejects.toThrow(/injected failure during provider authority reconciliation/);
 
       const fenced = authorityFloors.read();
       expect(fenced.trustedHost.authorityGeneration)
@@ -393,6 +388,26 @@ describe('Postgres gateway OAuth/session authority', () => {
         WHERE principal.principal_id = $1
       `, [login.principalId]);
       expect(beforeRecovery.rows[0]).toEqual({ status: 'pending', state: 'pending', sessions: '1' });
+
+      const sessionUseAt = new Date(NOW.getTime() + 1500);
+      await expect(store.rotateSession({
+        token: login.token,
+        csrfToken: login.csrfToken,
+        nextToken: 'must-not-rotate-after-provider-floor',
+        nextCsrfToken: 'must-not-rotate-csrf-after-provider-floor',
+        now: sessionUseAt,
+        idleTtlMs: 1_800_000,
+      })).rejects.toMatchObject({ code: 'invalid_session' });
+      await expect(store.issueCsrf({
+        token: login.token,
+        nextCsrfToken: 'must-not-issue-csrf-after-provider-floor',
+        now: sessionUseAt,
+      })).rejects.toMatchObject({ code: 'invalid_session' });
+      await expect(store.revokeSession({
+        token: login.token,
+        csrfToken: login.csrfToken,
+        now: sessionUseAt,
+      })).rejects.toMatchObject({ code: 'invalid_session' });
 
       await reconcileFleetAuthAuthorityState(runtime, fenced, randomUUID());
       const recovered = await runtime.query<{ status: string; state: string; sessions: string }>(`

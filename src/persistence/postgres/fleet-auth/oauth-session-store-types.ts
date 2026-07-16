@@ -10,6 +10,7 @@ export interface SessionAuthorityRow {
   session_authn_version: string;
   session_authz_version: string;
   global_auth_epoch: string;
+  authority_generation: string;
   session_global_auth_epoch: string;
   idle_expires_at: Date;
   absolute_expires_at: Date;

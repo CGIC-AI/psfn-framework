@@ -1,7 +1,8 @@
 import { createComponentLogger } from '../../shared/logger.js';
+import { sanitizeDiagnosticText } from '../../shared/diagnostics/redaction.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { WikiProjectionSyncOutcome } from './pgvector-projection.js';
-import type { SharedWorldWikiStore } from './store.js';
-import type { WikiDocument } from './types.js';
+import type { WikiDocument, WikiDocumentUpsertInput } from './types.js';
 import type { SharedWorldWikiProposalStorePort } from './shared-world-caretaker-store.js';
 import {
   guardSharedWorldWikiProposal,
@@ -14,6 +15,35 @@ import {
 } from './shared-world-caretaker-types.js';
 
 const log = createComponentLogger('SharedWorldWikiCaretaker');
+const REDACTED_PROPOSAL_CONTENT = '[REDACTED_PROPOSAL_CONTENT]';
+
+type SharedWorldWikiApplyFailurePhase =
+  | 'deterministic_guard'
+  | 'canonical_write'
+  | 'projection'
+  | 'mark_applied';
+
+function sanitizeCaretakerApplyError(
+  error: unknown,
+  proposal: Pick<SharedWorldWikiProposal, 'title' | 'body'>,
+): string {
+  let message = toErrorMessage(error);
+  const contentFragments = [proposal.body, proposal.title]
+    .map(fragment => fragment.trim())
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+  for (const fragment of contentFragments) {
+    message = message.replaceAll(fragment, REDACTED_PROPOSAL_CONTENT);
+  }
+  return sanitizeDiagnosticText(message) || 'unknown caretaker apply failure';
+}
+
+function resolveCaretakerErrorCode(error: unknown): string {
+  if (error instanceof Error && error.name.trim()) {
+    return sanitizeDiagnosticText(error.name);
+  }
+  return typeof error;
+}
 
 export interface SharedWorldWikiProposalSubmissionPort {
   submit(input: SharedWorldWikiProposalInput): Promise<SharedWorldWikiProposalSubmissionResult>;
@@ -21,6 +51,11 @@ export interface SharedWorldWikiProposalSubmissionPort {
 
 export interface SharedWorldWikiProjectionPort {
   syncDocument(siteId: string, document: WikiDocument): Promise<WikiProjectionSyncOutcome>;
+}
+
+export interface SharedWorldWikiWriteStorePort {
+  get(documentId: string): WikiDocument | null;
+  upsert(input: WikiDocumentUpsertInput): WikiDocument;
 }
 
 export interface SharedWorldWikiProposalServiceOptions {
@@ -59,14 +94,14 @@ export class SharedWorldWikiProposalService implements SharedWorldWikiProposalSu
 }
 
 export interface SharedWorldWikiCaretakerOptions extends SharedWorldWikiProposalServiceOptions {
-  openSharedStore: (siteId: string) => SharedWorldWikiStore;
+  openSharedStore: (siteId: string) => SharedWorldWikiWriteStorePort;
   projection: SharedWorldWikiProjectionPort;
 }
 
 export class SharedWorldWikiCaretakerService {
   private readonly proposalStore: SharedWorldWikiProposalStorePort;
   private readonly isKnownSite: (siteId: string) => boolean;
-  private readonly openSharedStore: (siteId: string) => SharedWorldWikiStore;
+  private readonly openSharedStore: (siteId: string) => SharedWorldWikiWriteStorePort;
   private readonly projection: SharedWorldWikiProjectionPort;
   private readonly now: () => number;
 
@@ -143,6 +178,7 @@ export class SharedWorldWikiCaretakerService {
     const leaseToken = claim.applyLeaseToken;
     if (!leaseToken) throw new Error('shared wiki proposal apply claim has no lease token');
 
+    let failurePhase: SharedWorldWikiApplyFailurePhase = 'deterministic_guard';
     try {
       // Mandatory second guard: approval cannot turn a stale/now-private input
       // into a write, and a site removed after queueing fails closed here.
@@ -161,6 +197,7 @@ export class SharedWorldWikiCaretakerService {
         throw new Error('shared wiki proposal failed deterministic apply guard');
       }
 
+      failurePhase = 'canonical_write';
       const store = this.openSharedStore(claim.siteId);
       const proposalMarker = `caretaker-proposal:${claim.proposalId}`;
       const digestMarker = `caretaker-digest:${claim.contentDigest}`;
@@ -192,10 +229,12 @@ export class SharedWorldWikiCaretakerService {
         });
       }
 
+      failurePhase = 'projection';
       const projection = await this.projection.syncDocument(claim.siteId, document);
       if (projection.status !== 'ran') {
         throw new Error('shared wiki proposal projection failed');
       }
+      failurePhase = 'mark_applied';
       const applied = await this.proposalStore.markApplied({
         proposalId: claim.proposalId,
         leaseToken,
@@ -216,14 +255,37 @@ export class SharedWorldWikiCaretakerService {
         documentVersion: document.version,
         bodySha256: document.bodySha256,
       };
-    } catch {
-      await this.proposalStore.markRetryable(claim.proposalId, leaseToken, this.now());
+    } catch (error) {
+      const applyError = sanitizeCaretakerApplyError(error, claim);
+      const applyErrorCode = resolveCaretakerErrorCode(error);
+      try {
+        await this.proposalStore.markRetryable(claim.proposalId, leaseToken, this.now());
+      } catch (retryStateError) {
+        const retryError = sanitizeCaretakerApplyError(retryStateError, claim);
+        log.error('Shared-world wiki proposal apply failed and retry state could not be persisted', {
+          proposalId: claim.proposalId,
+          state: claim.applyState,
+          siteId: claim.siteId,
+          digest: claim.contentDigest,
+          revision: claim.revision,
+          phase: 'retry_state_persistence',
+          code: `${applyErrorCode}:${resolveCaretakerErrorCode(retryStateError)}`,
+          error: `apply[${failurePhase}]: ${applyError}; retry_state: ${retryError}`,
+        });
+        throw new AggregateError(
+          [error, retryStateError],
+          `Shared-world wiki proposal apply failed during ${failurePhase} and retry state persistence also failed`,
+        );
+      }
       log.warn('Shared-world wiki proposal apply is retryable', {
         proposalId: claim.proposalId,
         state: 'retryable',
         siteId: claim.siteId,
         digest: claim.contentDigest,
         revision: claim.revision,
+        phase: failurePhase,
+        code: applyErrorCode,
+        error: applyError,
       });
       const proposal = await this.proposalStore.get(claim.proposalId);
       if (!proposal) throw new Error('shared wiki proposal disappeared after apply failure');

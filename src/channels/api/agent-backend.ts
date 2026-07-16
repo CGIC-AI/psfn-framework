@@ -43,7 +43,9 @@ import type {
   TelemetryIngestResponse,
 } from './types.js';
 import {
+  isHubDeviceAttachmentSnapshot,
   isHubDevicePrincipalSnapshot,
+  type HubDeviceAttachmentSnapshot,
   type HubDevicePrincipalSnapshot,
 } from '../../shared/contracts/hub-device-ingress.js';
 import {
@@ -74,6 +76,23 @@ import { emitTurnPerformance } from '../../shared/telemetry/turn-performance.js'
 import { createComponentLogger } from '../../shared/logger.js';
 
 const log = createComponentLogger('AgentApiBackend');
+
+function sameHubDevicePrincipal(
+  left: HubDevicePrincipalSnapshot,
+  right: HubDevicePrincipalSnapshot,
+): boolean {
+  return left.issuer === right.issuer
+    && left.keyId === right.keyId
+    && left.deviceId === right.deviceId
+    && left.enrollmentVersion === right.enrollmentVersion
+    && left.placeId === right.placeId
+    && left.audience === right.audience
+    && left.companionId === right.companionId
+    && left.sessionId === right.sessionId
+    && left.issuedAt === right.issuedAt
+    && left.expiresAt === right.expiresAt
+    && left.jti === right.jti;
+}
 
 const DEFAULT_SCHEDULER_HEALTHCHECK_STALE_AFTER_MS = 65 * 60_000;
 const IDENTITY_LINK_CHALLENGE_TTL_MS = 5 * 60_000;
@@ -298,6 +317,7 @@ export class AgentApiBackend {
       headers: params.headers,
       clientCert: params.clientCert,
       hubDevicePrincipal: params.hubDevicePrincipal,
+      hubDeviceAttachment: params.hubDeviceAttachment,
       timeoutMs: params.timeoutMs,
       performance: params.performance,
       onDelta: params.request.stream && this.onStreamDelta
@@ -314,6 +334,7 @@ export class AgentApiBackend {
       headers: input.headers,
       clientCert: input.clientCert,
       hubDevicePrincipal: input.hubDevicePrincipal,
+      hubDeviceAttachment: input.hubDeviceAttachment,
       onDelta: input.onDelta,
       signal: input.signal,
     });
@@ -326,11 +347,20 @@ export class AgentApiBackend {
     headers: ApiRpcHeaders;
     clientCert?: SatelliteClientCertIdentity;
     hubDevicePrincipal?: HubDevicePrincipalSnapshot;
+    hubDeviceAttachment?: HubDeviceAttachmentSnapshot;
     onDelta?: (text: string) => void | Promise<void>;
     signal?: AbortSignal;
     timeoutMs?: number;
     performance?: ApiChatCompletionRpcParams['performance'];
   }): Promise<ApiChatCompletionRpcResult> {
+    if ((params.hubDevicePrincipal === undefined)
+      !== (params.hubDeviceAttachment === undefined)) {
+      return this.fail(
+        403,
+        'hub_device_attachment_missing',
+        'Hub device principal and attachment contexts must be supplied together',
+      );
+    }
     if (params.hubDevicePrincipal && (
       params.request.provider !== undefined
       || params.request.system_prompt !== undefined
@@ -357,6 +387,7 @@ export class AgentApiBackend {
       params.principal,
       params.clientCert,
       params.hubDevicePrincipal,
+      params.hubDeviceAttachment,
     );
     if (!pendingTurn.ok) {
       return pendingTurn.error;
@@ -1202,6 +1233,7 @@ export class AgentApiBackend {
     principal: ApiAuthPrincipal,
     clientCert: SatelliteClientCertIdentity | undefined,
     hubDevicePrincipal: HubDevicePrincipalSnapshot | undefined,
+    hubDeviceAttachment: HubDeviceAttachmentSnapshot | undefined,
   ): Promise<{ ok: true; value: PendingTurn } | { ok: false; error: ApiRpcFailure }> {
     const routingOverrides = this.parseTurnRoutingOverrides(request);
     if (!routingOverrides.ok) {
@@ -1242,6 +1274,7 @@ export class AgentApiBackend {
       canonicalContactId: claimedCanonicalContactId,
       satellite,
     } = turnIdentity.value;
+    let hubDeviceCanonicalContactId: string | undefined;
 
     if (hubDevicePrincipal) {
       const enrollment = satellite && this.satelliteRegistry?.satellites
@@ -1251,6 +1284,10 @@ export class AgentApiBackend {
       if (!enrollment
         || !this.companionId
         || !isHubDevicePrincipalSnapshot(hubDevicePrincipal)
+        || !isHubDeviceAttachmentSnapshot(hubDeviceAttachment)
+        || !sameHubDevicePrincipal(hubDeviceAttachment.deviceActor.principal, hubDevicePrincipal)
+        || hubDeviceAttachment.channel.companionId !== this.companionId
+        || hubDeviceAttachment.actor.companionId !== this.companionId
         || enrollment.enrollmentStatus !== 'active'
         || hubDevicePrincipal.companionId !== this.companionId
         || hubDevicePrincipal.deviceId !== enrollment.deviceId
@@ -1263,10 +1300,16 @@ export class AgentApiBackend {
           error: this.fail(403, 'hub_device_principal_mismatch', 'Hub device principal did not match the server registry binding'),
         };
       }
-      authorId = `hub-device:${hubDevicePrincipal.deviceId}`;
-      authorName = 'Enrolled Hub device';
-      channelId = `hub-device:${hubDevicePrincipal.deviceId}:${hubDevicePrincipal.sessionId}`;
-      claimedCanonicalContactId = undefined;
+      channelId = hubDeviceAttachment.channel.id;
+      if (hubDeviceAttachment.actor.kind === 'human') {
+        authorId = hubDeviceAttachment.actor.principalId;
+        authorName = 'Authenticated fleet human';
+        hubDeviceCanonicalContactId = hubDeviceAttachment.actor.contact.contactId;
+      } else {
+        authorId = `hub-device-guest:${hubDevicePrincipal.deviceId}`;
+        authorName = 'Hub device guest';
+      }
+      claimedCanonicalContactId = hubDeviceCanonicalContactId;
       satellite = { ...satellite, hubDevicePrincipal };
     }
 
@@ -1278,7 +1321,7 @@ export class AgentApiBackend {
     }
 
     const canonicalContactId = hubDevicePrincipal
-      ? undefined
+      ? hubDeviceCanonicalContactId
       : this.readHeader(headers, 'x-canonical-contact-id', 256) ?? claimedCanonicalContactId;
     const resolvedChannelPrivacy = channelPrivacy.value ?? claimedChannelPrivacy;
     if (source !== 'api' && !hubDevicePrincipal) {

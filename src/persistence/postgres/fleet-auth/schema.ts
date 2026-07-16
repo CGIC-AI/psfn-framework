@@ -54,6 +54,13 @@ import {
   FLEET_AUTH_CONTACT_AUTHORITY_FENCE_FUNCTION_ARG_TYPES,
   FLEET_AUTH_CONTACT_AUTHORITY_FENCE_FUNCTION_NAME,
 } from './contact-authority-sql.js';
+import {
+  FLEET_AUTH_ATTACH_HUB_DEVICE_HUMAN_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_ATTACH_HUB_DEVICE_HUMAN_FUNCTION_NAME,
+  FLEET_AUTH_FENCE_HUB_DEVICE_ATTACHMENT_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_FENCE_HUB_DEVICE_ATTACHMENT_FUNCTION_NAME,
+  FLEET_AUTH_HUB_DEVICE_HUMAN_ATTACHMENT_DDL_SQL,
+} from './hub-device-human-attachment-sql.js';
 
 export const FLEET_AUTH_SCHEMA_NAME = 'fleet_auth';
 const MIGRATION_LOCK_CLASS = 0x5053464e;
@@ -114,6 +121,7 @@ export const FLEET_AUTH_DURABLE_TABLES = [
   'contact_authority_intents',
   'contact_authority_resources',
   'contact_authority_receipts',
+  'hub_device_human_attachments',
 ] as const;
 
 export const FLEET_AUTH_EPHEMERAL_TABLES = [
@@ -139,6 +147,7 @@ const FLEET_AUTH_MUTABLE_TABLES = [
   'principal_role_grants',
   'passkey_credentials',
   'contact_authority_intents',
+  'hub_device_human_attachments',
   ...FLEET_AUTH_EPHEMERAL_TABLES,
 ] as const;
 
@@ -324,6 +333,9 @@ async function applyRoleGrants(
   await client.query(
     `REVOKE INSERT, UPDATE, DELETE ON ${qualifiedTable('hub_device_assertion_replays')} FROM ${runtime}`,
   );
+  await client.query(
+    `REVOKE INSERT, UPDATE, DELETE ON ${qualifiedTable('hub_device_human_attachments')} FROM ${runtime}`,
+  );
   // The restorable database copy of the non-restored authority floor is
   // observable by the broker, never directly mutable by its ordinary SQL
   // credential. Startup/restore reconciliation uses the coordinator role;
@@ -403,6 +415,12 @@ async function applyRoleGrants(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_CONSUME_HUB_REPLAY_FUNCTION_NAME}(${FLEET_AUTH_CONSUME_HUB_REPLAY_FUNCTION_ARG_TYPES}) TO ${runtime}`,
   );
   await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_ATTACH_HUB_DEVICE_HUMAN_FUNCTION_NAME}(${FLEET_AUTH_ATTACH_HUB_DEVICE_HUMAN_FUNCTION_ARG_TYPES}) TO ${runtime}`,
+  );
+  await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_FENCE_HUB_DEVICE_ATTACHMENT_FUNCTION_NAME}(${FLEET_AUTH_FENCE_HUB_DEVICE_ATTACHMENT_FUNCTION_ARG_TYPES}) TO ${runtime}`,
+  );
+  await client.query(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_NAME}(${FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_ARG_TYPES}) TO ${backup}`,
   );
   await client.query(
@@ -425,6 +443,7 @@ async function applyFleetAuthReapprovalBoundary(
   await client.query(FLEET_AUTH_FIRST_OWNER_DDL_SQL);
   await client.query(FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL);
   await client.query(FLEET_AUTH_LOCK_COMPANION_AUTHORITY_DDL_SQL);
+  await client.query(FLEET_AUTH_HUB_DEVICE_HUMAN_ATTACHMENT_DDL_SQL);
   await client.query(FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_DDL_SQL);
   await client.query(FLEET_AUTH_CONTACT_AUTHORITY_DDL_SQL);
   await client.query(FLEET_AUTH_RECONCILIATION_DDL_SQL);
@@ -625,6 +644,9 @@ async function assertExactDml(
       }
       if (tableName === 'hub_device_assertion_replays'
         && (expectedRole === roles.runtime || expectedRole === roles.backupRestore)) {
+        return new Set(['SELECT']);
+      }
+      if (tableName === 'hub_device_human_attachments' && expectedRole === roles.runtime) {
         return new Set(['SELECT']);
       }
       if (expectedRole === roles.backupRestore

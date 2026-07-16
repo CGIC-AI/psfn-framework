@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
+import { createHash, createHmac, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -44,6 +44,7 @@ const KNOWN_COMPANION_ID = '7f87ee85-9fcc-4520-91a8-b728293eca76';
 interface GatewayTestContext {
   databaseName: string;
   runtimeUrl: string;
+  migrationUrl: string;
   config: FleetAuthConfig;
   credentialVault: ReturnType<typeof createStaticCredentialVault>;
   systemDataDir: string;
@@ -198,6 +199,7 @@ async function freshContext(): Promise<GatewayTestContext> {
   return {
     databaseName: database.databaseName,
     runtimeUrl,
+    migrationUrl,
     config: config(),
     credentialVault: createStaticCredentialVault({
       FLEET_AUTH_DISCORD_CLIENT_SECRET: 'discord-client-secret',
@@ -267,6 +269,71 @@ async function seedSession(
     await pool.end();
   }
   return principalId;
+}
+
+async function seedAttachableHuman(
+  context: GatewayTestContext,
+  input: { token: string; subjectId: string; companionId?: string },
+): Promise<{ principalId: string; sessionId: string }> {
+  const companionId = input.companionId ?? KNOWN_COMPANION_ID;
+  const migration = createPostgresPool(context.migrationUrl, { max: 1 });
+  const runtime = createPostgresPool(context.runtimeUrl, { max: 1 });
+  const principalId = randomUUID();
+  const sessionId = randomUUID();
+  try {
+    await migration.query(`
+      INSERT INTO fleet_auth.companion_authority_state
+        (companion_id, lifecycle, version, authority_generation, restore_state)
+      VALUES ($1, 'active', 1, 1, 'live')
+      ON CONFLICT (companion_id) DO NOTHING
+    `, [companionId]);
+    await runtime.query('BEGIN');
+    await runtime.query(`
+      INSERT INTO fleet_auth.human_principals
+        (principal_id, status, authn_version, authz_version, binding_version,
+         grant_version, policy_version, authority_generation, restore_state)
+      VALUES ($1, 'active', 1, 1, 1, 1, 1, 1, 'live')
+    `, [principalId]);
+    await runtime.query(`
+      INSERT INTO fleet_auth.provider_subjects
+        (provider, subject_id, principal_id, state, authority_generation, restore_state)
+      VALUES ('discord', $2, $1, 'active', 1, 'live')
+    `, [principalId, input.subjectId]);
+    await runtime.query(`
+      INSERT INTO fleet_auth.principal_contact_bindings
+        (binding_id, principal_id, companion_id, contact_id, state,
+         verification_provenance, version, authority_generation, restore_state)
+      VALUES ($1, $2, $3, $4, 'active', '{"source":"attachment_test"}'::jsonb, 1, 1, 'live')
+    `, [randomUUID(), principalId, companionId, `contact/${input.subjectId}`]);
+    await runtime.query(`
+      INSERT INTO fleet_auth.principal_role_grants
+        (grant_id, principal_id, companion_id, role, lifecycle,
+         version, authority_generation, restore_state)
+      VALUES ($1, $2, $3, 'member', 'active', 1, 1, 'live')
+    `, [randomUUID(), principalId, companionId]);
+    await runtime.query(`
+      INSERT INTO fleet_auth.browser_sessions
+        (record_id, token_digest, csrf_digest, principal_id, provider, provider_subject_id,
+         audience, assurance, authn_version, authz_version, binding_version, grant_version,
+         policy_version, global_auth_epoch, idle_expires_at, absolute_expires_at, created_at)
+      VALUES ($1, $2, $3, $4, 'discord', $5, 'fleet', 'oauth', 1, 1, 1, 1, 1, 1,
+              clock_timestamp() + interval '5 minutes',
+              clock_timestamp() + interval '1 hour', clock_timestamp())
+    `, [
+      sessionId,
+      createHmac('sha256', 's'.repeat(32)).update(input.token).digest('hex'),
+      createHash('sha256').update(`csrf:${sessionId}`).digest('hex'),
+      principalId,
+      input.subjectId,
+    ]);
+    await runtime.query('COMMIT');
+    return { principalId, sessionId };
+  } catch (error) {
+    await runtime.query('ROLLBACK').catch(() => undefined);
+    throw error;
+  } finally {
+    await Promise.all([migration.end(), runtime.end()]);
+  }
 }
 
 async function sessionCount(context: GatewayTestContext): Promise<number> {
@@ -501,6 +568,13 @@ describe('gateway fleet-auth lifecycle publication', () => {
       const sessions = new InMemoryHubDeviceSessionAdmissionStore();
       const ingress = new GatewayHubDeviceIngressService({
         verifyAndConsume: (token, binding) => persistence.verifyAndConsumeHubDeviceAssertion(token, binding),
+        enrollmentAuthority: {
+          resolve: async input => input.authenticatedConnection,
+        },
+        attachments: {
+          attach: input => persistence.attachHubDeviceHuman(input),
+          fenceDevice: input => persistence.fenceHubDeviceAttachment(input),
+        },
         sessions,
       });
       const connection = {
@@ -513,15 +587,273 @@ describe('gateway fleet-auth lifecycle publication', () => {
         ingress.admit({ assertion: admittedAssertion, connection }),
       ]);
       expect(concurrent.map(entry => entry.sessionDisposition).sort()).toEqual(['created', 'retry']);
+      expect(concurrent.map(entry => entry.attachment.disposition).sort()).toEqual(['guest_created', 'retry']);
       await expect(ingress.admit({ assertion: admittedAssertion, connection }))
-        .resolves.toMatchObject({ sessionDisposition: 'retry' });
+        .resolves.toMatchObject({
+          sessionDisposition: 'retry',
+          attachment: {
+            disposition: 'retry',
+            deviceActor: { kind: 'hub_device' },
+            actor: { kind: 'guest' },
+            channel: { source: 'server', companionId },
+          },
+        });
       expect(sessions.size).toBe(1);
+      await expect(ingress.admit({
+        assertion: admittedAssertion,
+        connection: { ...connection, connectionId: 'different-authenticated-connection' },
+      })).rejects.toMatchObject({ code: 'device_binding_mismatch' });
+      expect(sessions.size).toBe(1);
+      await expect(ingress.admit({ assertion: admittedAssertion, connection }))
+        .rejects.toMatchObject({ code: 'device_fenced' });
+      const attachmentLedger = await auditPool.query<{
+        assertion_digest: string;
+        device_state: string;
+        human_state: string;
+        retry_count: string;
+      }>(`
+        SELECT assertion_digest, device_state, human_state, retry_count
+        FROM fleet_auth.hub_device_human_attachments
+        WHERE assertion_jti = $1
+      `, [admittedJti]);
+      expect(attachmentLedger.rows).toEqual([{
+        assertion_digest: createHash('sha256').update(admittedAssertion).digest('hex'),
+        device_state: 'fenced',
+        human_state: 'detached',
+        retry_count: '2',
+      }]);
+      const attachmentAudit = await auditPool.query<{
+        actor_context: Record<string, unknown>;
+        resource: string;
+      }>(`
+        SELECT actor_context, resource
+        FROM fleet_auth.authorization_audit_events
+        WHERE action LIKE 'hub_device_human.%'
+      `);
+      expect(attachmentAudit.rows.length).toBeGreaterThanOrEqual(5);
+      const serializedAttachmentAudit = JSON.stringify(attachmentAudit.rows);
+      expect(serializedAttachmentAudit).not.toContain('office-device');
+      expect(serializedAttachmentAudit).not.toContain(sessionA);
+      expect(serializedAttachmentAudit).not.toContain(companionId);
+      expect(serializedAttachmentAudit).not.toContain('authenticated-hub-connection');
+      expect(serializedAttachmentAudit).not.toContain(admittedAssertion);
       const admissionReplay = await auditPool.query<{ replay_count: string }>(`
         SELECT replay_count
         FROM fleet_auth.hub_device_assertion_replays
         WHERE issuer = $1 AND jti = $2
       `, ['psfn-satellite-hub', admittedJti]);
-      expect(admissionReplay.rows).toEqual([{ replay_count: '2' }]);
+      expect(admissionReplay.rows).toEqual([{ replay_count: '4' }]);
+    } finally {
+      await auditPool.end();
+      await persistence.close();
+    }
+  }, TIMEOUT_MS);
+
+  it('binds a current fleet human as a sibling actor and fences human authority independently', async () => {
+    const context = await freshContext();
+    const persistence = await startEnabled(context);
+    const auditPool = createPostgresPool(context.runtimeUrl, { max: 1 });
+    const firstToken = 'A'.repeat(43);
+    const secondToken = 'B'.repeat(43);
+    const providerFenceToken = 'C'.repeat(43);
+    const roleFenceToken = 'D'.repeat(43);
+    const epochFenceToken = 'E'.repeat(43);
+    const firstHuman = await seedAttachableHuman(context, {
+      token: firstToken,
+      subjectId: '123456789012345679',
+    });
+    const secondHuman = await seedAttachableHuman(context, {
+      token: secondToken,
+      subjectId: '123456789012345680',
+    });
+    const providerFenceHuman = await seedAttachableHuman(context, {
+      token: providerFenceToken,
+      subjectId: '123456789012345681',
+    });
+    const roleFenceHuman = await seedAttachableHuman(context, {
+      token: roleFenceToken,
+      subjectId: '123456789012345682',
+    });
+    const epochFenceHuman = await seedAttachableHuman(context, {
+      token: epochFenceToken,
+      subjectId: '123456789012345683',
+    });
+    const ingress = new GatewayHubDeviceIngressService({
+      verifyAndConsume: (token, binding) => persistence.verifyAndConsumeHubDeviceAssertion(token, binding),
+      enrollmentAuthority: { resolve: async input => input.authenticatedConnection },
+      attachments: {
+        attach: input => persistence.attachHubDeviceHuman(input),
+        fenceDevice: input => persistence.fenceHubDeviceAttachment(input),
+      },
+    });
+    const sessionId = 'realtime:office-device:human-session';
+    const connection = {
+      connectionId: 'authenticated-human-hub-connection',
+      deviceId: 'office-device',
+      enrollmentVersion: 7,
+      enrollmentStatus: 'active' as const,
+      companionId: KNOWN_COMPANION_ID,
+      placeId: 'office',
+      sessionId,
+    };
+    const assertion = hubDeviceAssertionToken({
+      companionId: KNOWN_COMPANION_ID,
+      sessionId,
+      jti: randomUUID(),
+    });
+    try {
+      const attached = await ingress.admit({
+        assertion,
+        connection,
+        human: { kind: 'fleet_browser_session', sessionToken: firstToken },
+      });
+      expect(attached.attachment).toMatchObject({
+        disposition: 'created',
+        deviceActor: { kind: 'hub_device', connectionId: connection.connectionId },
+        actor: {
+          kind: 'human',
+          principalId: firstHuman.principalId,
+          companionId: KNOWN_COMPANION_ID,
+          session: { recordId: firstHuman.sessionId },
+        },
+        channel: { source: 'server', companionId: KNOWN_COMPANION_ID },
+      });
+      expect(attached.attachment.deviceActor).not.toBe(attached.attachment.actor);
+      expect(Object.isFrozen(attached.attachment.deviceActor)).toBe(true);
+      expect(Object.isFrozen(attached.attachment.actor)).toBe(true);
+
+      await expect(ingress.admit({
+        assertion,
+        connection,
+        human: { kind: 'fleet_browser_session', sessionToken: firstToken },
+      })).resolves.toMatchObject({ attachment: { disposition: 'retry', actor: { kind: 'human' } } });
+
+      await expect(ingress.admit({
+        assertion,
+        connection,
+        human: { kind: 'fleet_browser_session', sessionToken: secondToken },
+      })).rejects.toMatchObject({ code: 'human_binding_mismatch' });
+      const humanFence = await auditPool.query<{ device_state: string; human_state: string }>(`
+        SELECT device_state, human_state
+        FROM fleet_auth.hub_device_human_attachments
+        WHERE assertion_jti = $1
+      `, [attached.devicePrincipal.jti]);
+      expect(humanFence.rows).toEqual([{ device_state: 'active', human_state: 'detached' }]);
+
+      const logoutJti = randomUUID();
+      const logoutAssertion = hubDeviceAssertionToken({
+        companionId: KNOWN_COMPANION_ID,
+        sessionId,
+        jti: logoutJti,
+      });
+      const logoutConnection = { ...connection, connectionId: 'authenticated-logout-connection' };
+      await ingress.admit({
+        assertion: logoutAssertion,
+        connection: logoutConnection,
+        human: { kind: 'fleet_browser_session', sessionToken: secondToken },
+      });
+      await auditPool.query(`
+        UPDATE fleet_auth.browser_sessions SET revoked_at = clock_timestamp()
+        WHERE record_id = $1
+      `, [secondHuman.sessionId]);
+      await expect(ingress.admit({
+        assertion: logoutAssertion,
+        connection: logoutConnection,
+        human: { kind: 'fleet_browser_session', sessionToken: secondToken },
+      })).resolves.toMatchObject({
+        attachment: {
+          disposition: 'human_detached',
+          deviceActor: { kind: 'hub_device' },
+          actor: { kind: 'guest' },
+        },
+      });
+      const logoutFence = await auditPool.query<{ device_state: string; human_state: string }>(`
+        SELECT device_state, human_state
+        FROM fleet_auth.hub_device_human_attachments
+        WHERE assertion_jti = $1
+      `, [logoutJti]);
+      expect(logoutFence.rows).toEqual([{ device_state: 'active', human_state: 'detached' }]);
+
+      const authorityMigration = createPostgresPool(context.migrationUrl, { max: 1 });
+      const fenceCases = [
+        {
+          token: providerFenceToken,
+          human: providerFenceHuman,
+          mutate: () => auditPool.query(`
+            UPDATE fleet_auth.provider_subjects SET state = 'revoked'
+            WHERE principal_id = $1
+          `, [providerFenceHuman.principalId]),
+        },
+        {
+          token: roleFenceToken,
+          human: roleFenceHuman,
+          mutate: () => auditPool.query(`
+            UPDATE fleet_auth.principal_role_grants SET lifecycle = 'revoked'
+            WHERE principal_id = $1
+          `, [roleFenceHuman.principalId]),
+        },
+        {
+          token: epochFenceToken,
+          human: epochFenceHuman,
+          mutate: () => authorityMigration.query(`
+            UPDATE fleet_auth.authority_state SET global_auth_epoch = global_auth_epoch + 1
+            WHERE singleton = TRUE
+          `),
+        },
+      ];
+      try {
+        for (const [index, fenceCase] of fenceCases.entries()) {
+          const fenceJti = randomUUID();
+          const fenceAssertion = hubDeviceAssertionToken({
+            companionId: KNOWN_COMPANION_ID,
+            sessionId,
+            jti: fenceJti,
+          });
+          const fenceConnection = {
+            ...connection,
+            connectionId: `authenticated-authority-fence-${index}`,
+          };
+          await ingress.admit({
+            assertion: fenceAssertion,
+            connection: fenceConnection,
+            human: { kind: 'fleet_browser_session', sessionToken: fenceCase.token },
+          });
+          await fenceCase.mutate();
+          await expect(ingress.admit({
+            assertion: fenceAssertion,
+            connection: fenceConnection,
+            human: { kind: 'fleet_browser_session', sessionToken: fenceCase.token },
+          })).resolves.toMatchObject({
+            attachment: {
+              disposition: 'human_detached',
+              deviceActor: { kind: 'hub_device' },
+              actor: { kind: 'guest' },
+            },
+          });
+          await expect(auditPool.query(`
+            SELECT device_state, human_state
+            FROM fleet_auth.hub_device_human_attachments
+            WHERE assertion_jti = $1
+          `, [fenceJti])).resolves.toMatchObject({
+            rows: [{ device_state: 'active', human_state: 'detached' }],
+          });
+        }
+      } finally {
+        await authorityMigration.end();
+      }
+
+      const rawAudit = JSON.stringify((await auditPool.query(`
+        SELECT actor_context, resource, reason_code
+        FROM fleet_auth.authorization_audit_events
+        WHERE action LIKE 'hub_device_human.%'
+      `)).rows);
+      expect(rawAudit).not.toContain(firstToken);
+      expect(rawAudit).not.toContain(secondToken);
+      expect(rawAudit).not.toContain(firstHuman.principalId);
+      expect(rawAudit).not.toContain(secondHuman.principalId);
+      expect(rawAudit).not.toContain(firstHuman.sessionId);
+      expect(rawAudit).not.toContain(secondHuman.sessionId);
+      expect(rawAudit).not.toContain(KNOWN_COMPANION_ID);
     } finally {
       await auditPool.end();
       await persistence.close();

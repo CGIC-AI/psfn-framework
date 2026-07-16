@@ -1135,6 +1135,65 @@ ALTER TABLE authority_floor_tombstone_projection
   ));
 `;
 
+const HUB_DEVICE_HUMAN_ATTACHMENT_SQL = `
+CREATE TABLE hub_device_human_attachments (
+  attachment_id UUID PRIMARY KEY,
+  assertion_digest TEXT NOT NULL UNIQUE CHECK (assertion_digest ~ '^[0-9a-f]{64}$'),
+  assertion_jti UUID NOT NULL UNIQUE,
+  device_id TEXT NOT NULL CHECK (length(device_id) BETWEEN 1 AND 256),
+  enrollment_version BIGINT NOT NULL CHECK (enrollment_version >= 1),
+  place_id TEXT CHECK (place_id IS NULL OR length(place_id) BETWEEN 1 AND 256),
+  key_id TEXT NOT NULL CHECK (length(key_id) BETWEEN 1 AND 128),
+  companion_id UUID NOT NULL,
+  hub_session_id TEXT NOT NULL CHECK (length(hub_session_id) BETWEEN 1 AND 256),
+  connection_id TEXT NOT NULL CHECK (length(connection_id) BETWEEN 1 AND 256),
+  channel_id TEXT NOT NULL CHECK (channel_id ~ '^hub-device:[0-9a-f]{64}$'),
+  human_binding_digest TEXT CHECK (
+    human_binding_digest IS NULL OR human_binding_digest ~ '^[0-9a-f]{64}$'
+  ),
+  principal_id UUID,
+  session_record_id UUID,
+  provider_subject_id TEXT CHECK (
+    provider_subject_id IS NULL OR provider_subject_id ~ '^[1-9][0-9]{16,19}$'
+  ),
+  binding_id UUID,
+  contact_id TEXT CHECK (contact_id IS NULL OR length(contact_id) BETWEEN 1 AND 256),
+  binding_version BIGINT CHECK (binding_version IS NULL OR binding_version >= 1),
+  grant_id UUID,
+  role TEXT CHECK (role IS NULL OR role IN ('owner', 'admin', 'member', 'guest')),
+  grant_version BIGINT CHECK (grant_version IS NULL OR grant_version >= 1),
+  authority_generation BIGINT CHECK (authority_generation IS NULL OR authority_generation >= 1),
+  global_auth_epoch BIGINT CHECK (global_auth_epoch IS NULL OR global_auth_epoch >= 1),
+  device_state TEXT NOT NULL CHECK (device_state IN ('active', 'fenced')),
+  human_state TEXT NOT NULL CHECK (human_state IN ('attached', 'guest', 'detached')),
+  retry_count BIGINT NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
+  last_retry_at TIMESTAMPTZ,
+  human_detached_at TIMESTAMPTZ,
+  fenced_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  CONSTRAINT hub_device_human_binding_exact CHECK (
+    (human_binding_digest IS NULL AND principal_id IS NULL AND session_record_id IS NULL
+      AND provider_subject_id IS NULL
+      AND binding_id IS NULL AND contact_id IS NULL AND binding_version IS NULL
+      AND grant_id IS NULL AND role IS NULL AND grant_version IS NULL
+      AND authority_generation IS NULL AND global_auth_epoch IS NULL)
+    OR
+    (human_binding_digest IS NOT NULL AND principal_id IS NOT NULL
+      AND session_record_id IS NOT NULL AND provider_subject_id IS NOT NULL
+      AND binding_id IS NOT NULL AND contact_id IS NOT NULL AND binding_version IS NOT NULL
+      AND grant_id IS NOT NULL AND role IS NOT NULL AND grant_version IS NOT NULL
+      AND authority_generation IS NOT NULL AND global_auth_epoch IS NOT NULL)
+  )
+);
+
+CREATE INDEX hub_device_human_attachments_device_session_idx
+  ON hub_device_human_attachments (companion_id, device_id, hub_session_id);
+CREATE INDEX hub_device_human_attachments_human_session_idx
+  ON hub_device_human_attachments (session_record_id)
+  WHERE session_record_id IS NOT NULL;
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
@@ -1165,4 +1224,5 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
     name: 'contact_authority_lifecycle_fences',
     sql: `${CONTACT_AUTHORITY_FLOOR_KIND_SQL}\n${FLEET_AUTH_CONTACT_AUTHORITY_DDL_SQL}`,
   },
+  { version: 22, name: 'hub_device_human_attachment_ledger', sql: HUB_DEVICE_HUMAN_ATTACHMENT_SQL },
 ] as const;

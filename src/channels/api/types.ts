@@ -3,7 +3,10 @@
 import type { ExternalTelemetryEvent } from '../../shared/event-bus.js';
 import type { IntentionalNoReplyMetadata } from '../../shared/contracts/runtime.js';
 import type { SatelliteClientCertIdentity } from '../../shared/contracts/satellite-registry.js';
-import type { HubDevicePrincipalSnapshot } from '../../shared/contracts/hub-device-ingress.js';
+import type {
+  HubDeviceAttachmentSnapshot,
+  HubDevicePrincipalSnapshot,
+} from '../../shared/contracts/hub-device-ingress.js';
 import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
 
 export interface OpenAITextContentPart {
@@ -198,6 +201,8 @@ export interface ApiChatCompletionRpcParams {
   clientCert?: SatelliteClientCertIdentity;
   /** Device-only principal normalized by authenticated gateway ingress. */
   hubDevicePrincipal?: HubDevicePrincipalSnapshot;
+  /** Sibling human/guest + device contexts and server-owned channel binding. */
+  hubDeviceAttachment?: HubDeviceAttachmentSnapshot;
   timeoutMs?: number;
   /** Server-authored content-free timing anchor captured at HTTP ingress. */
   performance?: {
@@ -258,6 +263,7 @@ export interface ApiRuntimeChatRequest {
   clientCert?: SatelliteClientCertIdentity;
   /** Device-only principal normalized by authenticated gateway ingress. */
   hubDevicePrincipal?: HubDevicePrincipalSnapshot;
+  hubDeviceAttachment?: HubDeviceAttachmentSnapshot;
   onDelta?: (text: string) => void;
   signal?: AbortSignal;
 }

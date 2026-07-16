@@ -87,6 +87,21 @@ describe('AgentApiBackend Hub device principal boundary', () => {
       issuedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 30_000).toISOString(),
       jti: '018f0f10-79b2-4cc7-8c99-0242ac120002',
     };
+    const hubDeviceAttachment = {
+      attachmentId: '018f0f10-79b2-4cc7-8c99-0242ac120003',
+      disposition: 'guest_created' as const,
+      deviceActor: {
+        kind: 'hub_device' as const,
+        principal: hubDevicePrincipal,
+        connectionId: 'authenticated-connection',
+      },
+      actor: { kind: 'guest' as const, companionId },
+      channel: {
+        source: 'server' as const,
+        id: `hub-device:${'a'.repeat(64)}`,
+        companionId,
+      },
+    };
     const result = await backend.handleChatCompletion({
       requestId: 'hub-device-request',
       request: { model: 'companion', messages: [{ role: 'user', content: 'hello' }] },
@@ -98,14 +113,15 @@ describe('AgentApiBackend Hub device principal boundary', () => {
         'x-psfn-satellite-session-id': 'realtime:office-device:session',
       },
       hubDevicePrincipal,
+      hubDeviceAttachment,
     });
 
     expect(result).toMatchObject({ ok: true });
     expect(handleMessage).toHaveBeenCalledOnce();
     expect(handleMessage.mock.calls[0]?.[0]).toMatchObject({
-      channelId: 'hub-device:office-device:realtime:office-device:session',
-      authorId: 'hub-device:office-device',
-      authorName: 'Enrolled Hub device',
+      channelId: `hub-device:${'a'.repeat(64)}`,
+      authorId: 'hub-device-guest:office-device',
+      authorName: 'Hub device guest',
       routing: { satellite: { hubDevicePrincipal } },
     });
     expect(handleMessage.mock.calls[0]?.[0].routing).not.toHaveProperty('canonicalContactId');
@@ -120,6 +136,7 @@ describe('AgentApiBackend Hub device principal boundary', () => {
         'x-psfn-satellite-session-id': 'realtime:office-device:session',
       },
       hubDevicePrincipal: { ...hubDevicePrincipal, companionId: '22222222-2222-4222-8222-222222222222' },
+      hubDeviceAttachment,
     })).resolves.toMatchObject({ ok: false, error: { type: 'hub_device_principal_mismatch' } });
 
     await expect(backend.handleChatCompletion({
@@ -133,7 +150,57 @@ describe('AgentApiBackend Hub device principal boundary', () => {
         'x-psfn-satellite-session-id': 'realtime:office-device:session',
       },
       hubDevicePrincipal: { ...hubDevicePrincipal, humanPrincipal: { id: 'forged' } } as any,
+      hubDeviceAttachment,
     })).resolves.toMatchObject({ ok: false, error: { type: 'hub_device_principal_mismatch' } });
+
+    const humanAttachment = {
+      ...hubDeviceAttachment,
+      attachmentId: '018f0f10-79b2-4cc7-8c99-0242ac120004',
+      disposition: 'created' as const,
+      actor: {
+        kind: 'human' as const,
+        principalId: '33333333-3333-4333-8333-333333333333',
+        companionId,
+        providerSubject: { provider: 'discord' as const, subjectId: '123456789012345678' },
+        contact: {
+          bindingId: '44444444-4444-4444-8444-444444444444',
+          contactId: 'contact/current-human',
+          bindingVersion: 1,
+        },
+        operator: {
+          grantId: '55555555-5555-4555-8555-555555555555',
+          role: 'member' as const,
+          grantVersion: 1,
+        },
+        session: {
+          recordId: '66666666-6666-4666-8666-666666666666',
+          authorityGeneration: 1,
+          globalAuthEpoch: 1,
+        },
+      },
+    };
+    await expect(backend.handleChatCompletion({
+      requestId: 'hub-device-human',
+      request: { model: 'companion', messages: [{ role: 'user', content: 'hello' }] },
+      principal,
+      headers: {
+        'x-psfn-satellite-claim-type': 'hub-device',
+        'x-psfn-satellite-id': 'office',
+        'x-psfn-satellite-endpoint-id': 'office-device',
+        'x-psfn-satellite-session-id': 'realtime:office-device:session',
+      },
+      hubDevicePrincipal,
+      hubDeviceAttachment: humanAttachment,
+    })).resolves.toMatchObject({ ok: true });
+    expect(handleMessage.mock.calls.at(-1)?.[0]).toMatchObject({
+      channelId: `hub-device:${'a'.repeat(64)}`,
+      authorId: humanAttachment.actor.principalId,
+      authorName: 'Authenticated fleet human',
+      routing: {
+        canonicalContactId: humanAttachment.actor.contact.contactId,
+        satellite: { hubDevicePrincipal },
+      },
+    });
   });
 });
 

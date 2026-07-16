@@ -8,6 +8,7 @@ import { deriveApiKeyPrincipalId } from '../backplane/http/auth.js';
 import {
   GatewayHubDeviceIngressService,
   type HubDeviceAssertionVerifierPort,
+  type HubDeviceHumanAttachmentPort,
 } from '../../boundary/fleet-auth/hub-device-ingress.js';
 import { HubDeviceAssertionRejectedError } from '../../boundary/fleet-auth/hub-device-assertion.js';
 import type { ApiRuntimeChatRequest, ApiServerRuntime } from './types.js';
@@ -35,6 +36,7 @@ function post(
   port: number,
   body: object,
   assertion: string | string[] | null = ASSERTION,
+  closeConnection = false,
 ): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
@@ -51,6 +53,7 @@ function post(
         'x-channel-privacy': 'public',
         'x-author-id': 'forged-human',
         'x-canonical-contact-id': 'forged-contact',
+        ...(closeConnection ? { connection: 'close' } : {}),
       },
     }, response => {
       let text = '';
@@ -62,7 +65,7 @@ function post(
   });
 }
 
-function registry() {
+function registry(includeEnrollment = true) {
   return parseSatelliteRegistryConfig({
     schemaVersion: 1,
     enabled: true,
@@ -77,9 +80,11 @@ function registry() {
           canonicalContactId: 'contact-legacy-human', channelPrivacy: 'private',
         },
         maxCapabilities: ['text'], telemetryScopes: ['presence'],
-        hubDeviceEnrollment: {
-          deviceId: 'office-device', enrollmentVersion: 7, enrollmentStatus: 'active',
-        },
+        ...(includeEnrollment ? {
+          hubDeviceEnrollment: {
+            deviceId: 'office-device', enrollmentVersion: 7, enrollmentStatus: 'active',
+          },
+        } : {}),
       }],
     }],
   });
@@ -97,8 +102,13 @@ describe('ApiServer authenticated Hub device ingress', () => {
     await Promise.all(running.splice(0).map(server => server.stop()));
   });
 
-  async function start(verifyAndConsume: HubDeviceAssertionVerifierPort['verifyAndConsume']) {
+  async function start(
+    verifyAndConsume: HubDeviceAssertionVerifierPort['verifyAndConsume'],
+    satelliteRegistry = registry(),
+  ) {
     const requests: ApiRuntimeChatRequest[] = [];
+    const connectionIds: string[] = [];
+    const fences: Array<Parameters<HubDeviceHumanAttachmentPort['fenceDevice']>[0]> = [];
     const runtime: ApiServerRuntime = {
       handleHealth: async () => { throw new Error('unused'); },
       handleTelemetryIngest: async () => { throw new Error('unused'); },
@@ -112,18 +122,44 @@ describe('ApiServer authenticated Hub device ingress', () => {
       port, host: '127.0.0.1',
       agentLoop: {} as SubstrateAgent,
       eventBus: new EventBus(), sessionManager: {} as SessionManager,
-      runtime, satelliteRegistry: registry(), satelliteApiKeys: [TOKEN],
+      runtime, satelliteRegistry, satelliteApiKeys: [TOKEN],
       companionId: COMPANION_ID,
       fleetAuthBootstrapOnly: true, fleetAuthHttpRoutes: fleetRoutes,
       hubDeviceCompanionId: COMPANION_ID,
-      hubDeviceIngress: new GatewayHubDeviceIngressService({ verifyAndConsume }),
+      hubDeviceIngress: new GatewayHubDeviceIngressService({
+        verifyAndConsume,
+        enrollmentAuthority: {
+          resolve: async input => input.authenticatedConnection,
+        },
+        attachments: {
+          attach: async (input) => {
+            connectionIds.push(input.connection.connectionId);
+            return {
+              attachmentId: '018f0f10-79b2-4cc7-8c99-0242ac120003',
+              disposition: 'guest_created',
+              deviceActor: Object.freeze({
+                kind: 'hub_device',
+                principal: input.devicePrincipal,
+                connectionId: input.connection.connectionId,
+              }),
+              actor: Object.freeze({ kind: 'guest', companionId: input.connection.companionId }),
+              channel: Object.freeze({
+                source: 'server',
+                id: `hub-device:${'0'.repeat(64)}`,
+                companionId: input.connection.companionId,
+              }),
+            };
+          },
+          fenceDevice: async input => { fences.push(input); },
+        },
+      }),
     });
     await server.start();
     running.push(server);
-    return { server, port, requests };
+    return { server, port, requests, connectionIds, fences };
   }
 
-  it('verifies server-owned bindings before runtime admission and forwards only a device principal', async () => {
+  it('verifies server-owned bindings and forwards sibling guest/device contexts', async () => {
     const verifier = vi.fn(async (_assertion: string, expected: {
       deviceId: string; enrollmentVersion: number; companionId: string; sessionId: string; placeId?: string;
     }) => ({
@@ -149,6 +185,11 @@ describe('ApiServer authenticated Hub device ingress', () => {
     expect(requests[0]?.hubDevicePrincipal).toMatchObject({
       kind: 'hub_device', deviceId: 'office-device', companionId: COMPANION_ID,
     });
+    expect(requests[0]?.hubDeviceAttachment).toMatchObject({
+      deviceActor: { kind: 'hub_device' },
+      actor: { kind: 'guest', companionId: COMPANION_ID },
+      channel: { source: 'server', companionId: COMPANION_ID },
+    });
     expect(requests[0]?.headers.authorization).toBeUndefined();
     expect(requests[0]?.headers['x-psfn-hub-device-assertion']).toBeUndefined();
     expect(requests[0]?.headers['x-channel-privacy']).toBeUndefined();
@@ -156,6 +197,42 @@ describe('ApiServer authenticated Hub device ingress', () => {
     expect(requests[0]?.headers['x-canonical-contact-id']).toBeUndefined();
     expect(requests[0]?.request.messages[0]).not.toHaveProperty('name');
     expect(requests[0]).not.toHaveProperty('humanPrincipal');
+  });
+
+  it('binds attachment authority to the exact server socket connection', async () => {
+    const verifier = vi.fn(async (_assertion: string, expected: {
+      deviceId: string; enrollmentVersion: number; companionId: string; sessionId: string; placeId?: string;
+    }) => ({
+      kind: 'hub_device' as const, issuer: 'psfn-satellite-hub', keyId: 'hub-key',
+      deviceId: expected.deviceId, enrollmentVersion: expected.enrollmentVersion,
+      enrollmentAssurance: 'device_credential' as const, placeId: expected.placeId,
+      audience: 'https://fleet.example.test', companionId: expected.companionId,
+      sessionId: expected.sessionId, issuedAt: new Date(), expiresAt: new Date(Date.now() + 30_000),
+      jti: '018f0f10-79b2-4cc7-8c99-0242ac120002',
+    }));
+    const { port, connectionIds } = await start(verifier);
+    const request = { model: 'companion', messages: [{ role: 'user' as const, content: 'hello' }] };
+    await expect(post(port, request, ASSERTION, true)).resolves.toMatchObject({ status: 200 });
+    await expect(post(port, request, ASSERTION, true)).resolves.toMatchObject({ status: 200 });
+
+    expect(connectionIds).toHaveLength(2);
+    expect(connectionIds[0]).toMatch(/^[0-9a-f]{64}$/u);
+    expect(connectionIds[1]).not.toBe(connectionIds[0]);
+  });
+
+  it('fences the durable device attachment when server enrollment is removed', async () => {
+    const verifier = vi.fn(async () => { throw new Error('must not verify'); });
+    const { port, fences } = await start(verifier, registry(false));
+
+    await expect(post(port, {
+      model: 'companion', messages: [{ role: 'user', content: 'hello' }],
+    })).resolves.toMatchObject({ status: 403, body: { error: { type: 'hub_device_not_enrolled' } } });
+    expect(verifier).not.toHaveBeenCalled();
+    expect(fences).toEqual([{
+      assertionDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+      connectionId: expect.stringMatching(/^[0-9a-f]{64}$/u),
+      reason: 'enrollment_authority_changed',
+    }]);
   });
 
   it('fails closed with sanitized errors for rejection, verifier outage, or body authority conflict', async () => {

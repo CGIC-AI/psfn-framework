@@ -51,6 +51,8 @@ import { createPostgresFleetAuthorizationContextResolver } from './authorization
 import { reconcilePendingCompanionReadd } from './companion-readd-reconciliation.js';
 import type { GatewayContactLifecycleAuthorityPort } from '../../../boundary/gateway/contact-lifecycle-authority.js';
 import { PostgresContactLifecycleAuthorityStore } from './contact-lifecycle-authority-store.js';
+import type { HubDeviceHumanAttachmentPort } from '../../../boundary/fleet-auth/hub-device-ingress.js';
+import { PostgresHubDeviceHumanAttachmentStore } from './hub-device-human-attachment-store.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -75,6 +77,12 @@ export interface GatewayFleetAuthPersistence {
     token: string,
     expected: HubDeviceAssertionExpectedBinding,
   ): Promise<HubDevicePrincipal>;
+  attachHubDeviceHuman(
+    input: Parameters<HubDeviceHumanAttachmentPort['attach']>[0],
+  ): ReturnType<HubDeviceHumanAttachmentPort['attach']>;
+  fenceHubDeviceAttachment(
+    input: Parameters<HubDeviceHumanAttachmentPort['fenceDevice']>[0],
+  ): ReturnType<HubDeviceHumanAttachmentPort['fenceDevice']>;
   close(): Promise<void>;
 }
 
@@ -401,6 +409,10 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       authorizationContextResolver,
       ...(discordEvidenceLifecycle ? { discordEvidenceLifecycle } : {}),
     });
+    const hubDeviceHumanAttachments = new PostgresHubDeviceHumanAttachmentStore({
+      pool,
+      resolveAuthorizationContext: input => broker.resolveAuthorizationContext(input),
+    });
     return {
       authorityFloors,
       broker,
@@ -416,6 +428,8 @@ export async function initializeGatewayFleetAuthPersistence(options: {
         config: config.hubDeviceAssertions,
         replayStore: new PostgresHubDeviceAssertionReplayStore(pool),
       }),
+      attachHubDeviceHuman: input => hubDeviceHumanAttachments.attach(input),
+      fenceHubDeviceAttachment: input => hubDeviceHumanAttachments.fenceDevice(input),
       close: async () => {
         await discordEvidenceLifecycle?.close();
         await Promise.all([pool.end(), authorityPool.end()]);

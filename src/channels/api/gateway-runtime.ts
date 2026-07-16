@@ -93,6 +93,7 @@ export class GatewayApiRuntime implements ApiServerRuntime {
         headers: input.headers,
         ...(input.clientCert ? { clientCert: input.clientCert } : {}),
         ...(input.hubDevicePrincipal ? { hubDevicePrincipal: input.hubDevicePrincipal } : {}),
+        ...(input.hubDeviceAttachment ? { hubDeviceAttachment: input.hubDeviceAttachment } : {}),
         timeoutMs: computeAgentChatTurnTimeoutMs(this.chatRequestTimeoutMs),
         performance: { receivedMonotonicAtMs, receivedTimestampMs },
       }, this.chatRequestTimeoutMs);

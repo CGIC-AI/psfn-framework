@@ -6,7 +6,11 @@ import type { TextContent } from '@mariozechner/pi-ai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WikiStore } from './store.js';
 import { createWikiTool } from './tools.js';
-import type { SharedWorldWikiProposalInput } from './shared-world-caretaker-types.js';
+import { isRecord } from '../../shared/utils/types.js';
+import type {
+  SharedWorldWikiProposalInput,
+  SharedWorldWikiProposalSubmissionResult,
+} from './shared-world-caretaker-types.js';
 
 function resultText(result: AgentToolResult<any>): string {
   return result.content
@@ -93,17 +97,19 @@ describe('wiki tool', () => {
   });
 
   it('queues a shared-world proposal through an enqueue-only dependency', async () => {
-    const submit = vi.fn(async (input: SharedWorldWikiProposalInput) => ({
+    const submit = vi.fn(async (
+      input: SharedWorldWikiProposalInput,
+    ): Promise<SharedWorldWikiProposalSubmissionResult> => ({
       proposal: {
         ...input,
         documentId: input.documentId ?? 'kitchen-toaster',
         tags: [...(input.tags ?? [])],
         provenanceRefs: [...input.provenanceRefs],
-        sensitivity: 'public' as const,
+        sensitivity: 'public',
         contentDigest: 'digest',
         proposalId: '11111111-1111-4111-8111-111111111111',
-        reviewState: 'pending' as const,
-        applyState: 'unreviewed' as const,
+        reviewState: 'pending',
+        applyState: 'unreviewed',
         revision: 1,
         createdAtMs: 1,
         updatedAtMs: 1,
@@ -117,7 +123,7 @@ describe('wiki tool', () => {
       },
     });
 
-    const result = JSON.parse(resultText(await tool.execute('proposal', {
+    const result: unknown = JSON.parse(resultText(await tool.execute('proposal', {
       action: 'propose_shared_world',
       site_id: 'studio',
       id: 'kitchen-toaster',
@@ -126,7 +132,13 @@ describe('wiki tool', () => {
       source_ref: 'world-observation:turn-7',
       provenance_refs: ['world-observation:sensor-4'],
       sensitivity: 'public',
-    }))) as { proposal: { reviewState: string }; boundary: string };
+    })));
+    if (!isRecord(result)
+      || !isRecord(result.proposal)
+      || typeof result.proposal.reviewState !== 'string'
+      || typeof result.boundary !== 'string') {
+      throw new Error('wiki proposal tool result is malformed');
+    }
 
     expect(submit).toHaveBeenCalledWith(expect.objectContaining({
       siteId: 'studio',

@@ -15,6 +15,8 @@ import type {
   AdminSettingsService,
   AdminShardFoldReviewService,
   AdminWikiService,
+  SharedWorldWikiProposal,
+  SharedWorldWikiProposalApplyResult,
 } from './services/types.js';
 
 class CapturingResponse {
@@ -44,6 +46,53 @@ function makeRequest(url: string): IncomingMessage {
 }
 
 let nextRequestBody = '';
+
+function makeCaretakerProposal(
+  overrides: Partial<SharedWorldWikiProposal> = {},
+): SharedWorldWikiProposal {
+  return {
+    proposalId: '11111111-1111-4111-8111-111111111111',
+    siteId: 'home',
+    documentId: 'kitchen-toaster',
+    actorId: 'companion-a',
+    sourceRef: 'world-observation:turn-7',
+    title: 'Kitchen toaster',
+    body: 'A toaster is installed in the kitchen.\n',
+    tags: ['kitchen'],
+    provenanceRefs: ['world-observation:sensor-4'],
+    sensitivity: 'public',
+    contentDigest: 'digest',
+    reviewState: 'pending',
+    applyState: 'unreviewed',
+    revision: 1,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    ...overrides,
+  };
+}
+
+function makeAppliedCaretakerResult(
+  proposalId: string,
+): SharedWorldWikiProposalApplyResult {
+  return {
+    proposal: makeCaretakerProposal({
+      proposalId,
+      reviewState: 'approved',
+      reviewedBy: 'garden-operator',
+      reviewedAtMs: 2,
+      applyState: 'applied',
+      appliedAtMs: 3,
+      appliedDocumentVersion: 1,
+      appliedBodySha256: 'sha256',
+      projectionBodySha256: 'sha256',
+      revision: 4,
+      updatedAtMs: 3,
+    }),
+    status: 'applied',
+    documentVersion: 1,
+    bodySha256: 'sha256',
+  };
+}
 
 function makeRoutes(wikiService?: AdminWikiService | null): AdminApiRoute[] {
   return buildAdminApiRoutes({
@@ -239,90 +288,19 @@ function makeWikiService(): AdminWikiService {
         failedDocuments: [],
       },
     })),
-    listSharedWorldWikiProposals: vi.fn(async () => [{
-      proposalId: '11111111-1111-4111-8111-111111111111',
-      siteId: 'home',
-      documentId: 'kitchen-toaster',
-      actorId: 'companion-a',
-      sourceRef: 'world-observation:turn-7',
-      title: 'Kitchen toaster',
-      body: 'A toaster is installed in the kitchen.\n',
-      tags: ['kitchen'],
-      provenanceRefs: ['world-observation:sensor-4'],
-      sensitivity: 'public' as const,
-      contentDigest: 'digest',
-      reviewState: 'pending' as const,
-      applyState: 'unreviewed' as const,
-      revision: 1,
-      createdAtMs: 1,
-      updatedAtMs: 1,
-    }]),
-    getSharedWorldWikiProposal: vi.fn(async proposalId => ({
+    listSharedWorldWikiProposals: vi.fn(async () => [makeCaretakerProposal()]),
+    getSharedWorldWikiProposal: vi.fn(async proposalId => makeCaretakerProposal({ proposalId })),
+    approveSharedWorldWikiProposal: vi.fn(async proposalId => (
+      makeAppliedCaretakerResult(proposalId)
+    )),
+    rejectSharedWorldWikiProposal: vi.fn(async proposalId => makeCaretakerProposal({
       proposalId,
-      siteId: 'home',
-      documentId: 'kitchen-toaster',
-      actorId: 'companion-a',
-      sourceRef: 'world-observation:turn-7',
-      title: 'Kitchen toaster',
-      body: 'A toaster is installed in the kitchen.\n',
-      tags: ['kitchen'],
-      provenanceRefs: ['world-observation:sensor-4'],
-      sensitivity: 'public' as const,
-      contentDigest: 'digest',
-      reviewState: 'pending' as const,
-      applyState: 'unreviewed' as const,
-      revision: 1,
-      createdAtMs: 1,
-      updatedAtMs: 1,
-    })),
-    approveSharedWorldWikiProposal: vi.fn(async proposalId => ({
-      proposal: {
-        proposalId,
-        siteId: 'home',
-        documentId: 'kitchen-toaster',
-        actorId: 'companion-a',
-        sourceRef: 'world-observation:turn-7',
-        title: 'Kitchen toaster',
-        body: 'A toaster is installed in the kitchen.\n',
-        tags: ['kitchen'],
-        provenanceRefs: ['world-observation:sensor-4'],
-        sensitivity: 'public' as const,
-        contentDigest: 'digest',
-        reviewState: 'approved' as const,
-        reviewedBy: 'garden-operator',
-        reviewedAtMs: 2,
-        applyState: 'applied' as const,
-        appliedAtMs: 3,
-        appliedDocumentVersion: 1,
-        appliedBodySha256: 'sha256',
-        projectionBodySha256: 'sha256',
-        revision: 4,
-        createdAtMs: 1,
-        updatedAtMs: 3,
-      },
-      status: 'applied' as const,
-      documentVersion: 1,
-      bodySha256: 'sha256',
-    })),
-    rejectSharedWorldWikiProposal: vi.fn(async proposalId => ({
-      proposalId,
-      siteId: 'home',
-      documentId: 'kitchen-toaster',
-      actorId: 'companion-a',
-      sourceRef: 'world-observation:turn-7',
-      title: 'Kitchen toaster',
-      body: 'A toaster is installed in the kitchen.\n',
-      tags: ['kitchen'],
-      provenanceRefs: ['world-observation:sensor-4'],
-      sensitivity: 'public' as const,
-      contentDigest: 'digest',
-      reviewState: 'rejected' as const,
-      rejectionCode: 'operator_rejected' as const,
+      reviewState: 'rejected',
+      rejectionCode: 'operator_rejected',
       reviewedBy: 'garden-operator',
       reviewedAtMs: 2,
-      applyState: 'rejected' as const,
+      applyState: 'rejected',
       revision: 2,
-      createdAtMs: 1,
       updatedAtMs: 2,
     })),
     cleanupSharedWorldWikiProposals: vi.fn(async () => ({ checked: 1, reprojected: 1, failed: 0 })),

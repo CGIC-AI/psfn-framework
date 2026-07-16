@@ -4,9 +4,20 @@ import { isValidPlaceIdToken } from '../../shared/contracts/places-registry.js';
 import { normalizeWikiDocumentId } from './store.js';
 import { filterPersonalFactProposals } from './sleeptime-wiki-pass.js';
 
-export const SHARED_WORLD_WIKI_REVIEW_STATES = ['pending', 'approved', 'rejected'] as const;
-export type SharedWorldWikiReviewState = typeof SHARED_WORLD_WIKI_REVIEW_STATES[number];
+export type SharedWorldWikiReviewState = 'pending' | 'approved' | 'rejected';
+export const SHARED_WORLD_WIKI_REVIEW_STATES = [
+  'pending',
+  'approved',
+  'rejected',
+] satisfies readonly SharedWorldWikiReviewState[];
 
+export type SharedWorldWikiApplyState =
+  | 'unreviewed'
+  | 'ready'
+  | 'applying'
+  | 'retryable'
+  | 'applied'
+  | 'rejected';
 export const SHARED_WORLD_WIKI_APPLY_STATES = [
   'unreviewed',
   'ready',
@@ -14,9 +25,16 @@ export const SHARED_WORLD_WIKI_APPLY_STATES = [
   'retryable',
   'applied',
   'rejected',
-] as const;
-export type SharedWorldWikiApplyState = typeof SHARED_WORLD_WIKI_APPLY_STATES[number];
+] satisfies readonly SharedWorldWikiApplyState[];
 
+export type SharedWorldWikiRejectionCode =
+  | 'operator_rejected'
+  | 'invalid_site'
+  | 'non_public_sensitivity'
+  | 'missing_provenance'
+  | 'personal_memory_provenance'
+  | 'personal_fact_content'
+  | 'invalid_payload';
 export const SHARED_WORLD_WIKI_REJECTION_CODES = [
   'operator_rejected',
   'invalid_site',
@@ -25,8 +43,7 @@ export const SHARED_WORLD_WIKI_REJECTION_CODES = [
   'personal_memory_provenance',
   'personal_fact_content',
   'invalid_payload',
-] as const;
-export type SharedWorldWikiRejectionCode = typeof SHARED_WORLD_WIKI_REJECTION_CODES[number];
+] satisfies readonly SharedWorldWikiRejectionCode[];
 
 export interface SharedWorldWikiProposalInput {
   siteId: string;
@@ -76,6 +93,17 @@ export type SharedWorldWikiProposalGuardResult =
   | { accepted: true; proposal: NormalizedSharedWorldWikiProposal }
   | { accepted: false; rejectionCode: Exclude<SharedWorldWikiRejectionCode, 'operator_rejected'> };
 
+interface SharedWorldWikiProposalBounds {
+  titleChars: number;
+  bodyChars: number;
+  actorChars: number;
+  sourceRefChars: number;
+  provenanceRefChars: number;
+  maxProvenanceRefs: number;
+  tagChars: number;
+  maxTags: number;
+}
+
 const PROPOSAL_BOUNDS = {
   titleChars: 180,
   bodyChars: 16_000,
@@ -85,7 +113,7 @@ const PROPOSAL_BOUNDS = {
   maxProvenanceRefs: 24,
   tagChars: 64,
   maxTags: 24,
-} as const;
+} satisfies Readonly<SharedWorldWikiProposalBounds>;
 
 const PERSONAL_PROVENANCE_PREFIX = /^(?:memory|l0|l0\.1|l01|l1|l2|episode|episodic|session|transcript|contact):/iu;
 

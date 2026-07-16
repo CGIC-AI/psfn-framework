@@ -11,16 +11,22 @@ import {
 import { SharedWorldWikiStore } from './store.js';
 import { createSharedWikiPgvectorProjectionStore } from './shared-pgvector-projection.js';
 import { SharedWorldWikiProposalStore } from './shared-world-caretaker-store.js';
+import type { SharedWorldWikiProposalInput } from './shared-world-caretaker-types.js';
 import {
   SharedWorldWikiCaretakerService,
   SharedWorldWikiProposalService,
   type SharedWorldWikiProjectionPort,
 } from './shared-world-caretaker.js';
 
+interface SharedWorldWikiCaretakerTestLimits {
+  timeoutMs: number;
+  embeddingDims: number;
+}
+
 const TEST_LIMITS = {
   timeoutMs: 120_000,
   embeddingDims: 16,
-} as const;
+} satisfies Readonly<SharedWorldWikiCaretakerTestLimits>;
 
 const embedding: EmbeddingProviderPort = {
   dims: TEST_LIMITS.embeddingDims,
@@ -64,7 +70,7 @@ describe('shared-world wiki caretaker real Postgres toaster', () => {
       const isKnownSite = (siteId: string): boolean => siteId === 'studio';
       const submitterA = new SharedWorldWikiProposalService({ proposalStore, isKnownSite, now: () => 1_000 });
       const submitterB = new SharedWorldWikiProposalService({ proposalStore, isKnownSite, now: () => 1_001 });
-      const input = {
+      const input: SharedWorldWikiProposalInput = {
         siteId: 'studio',
         documentId: 'kitchen-toaster',
         actorId: 'companion-a',
@@ -73,7 +79,7 @@ describe('shared-world wiki caretaker real Postgres toaster', () => {
         body: 'A new toaster is installed beside the kitchen satellite.',
         tags: ['kitchen', 'appliance'],
         provenanceRefs: ['world-observation:sensor-4'],
-        sensitivity: 'public' as const,
+        sensitivity: 'public',
       };
 
       const [fromA, fromB] = await Promise.all([

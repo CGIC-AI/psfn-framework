@@ -20,6 +20,15 @@ import {
   type WikiStorePort,
 } from './types.js';
 
+type WikiAction =
+  | 'list'
+  | 'read'
+  | 'search'
+  | 'semantic_search'
+  | 'write'
+  | 'import'
+  | 'propose_shared_world';
+
 const WIKI_ACTIONS = [
   'list',
   'read',
@@ -28,8 +37,7 @@ const WIKI_ACTIONS = [
   'write',
   'import',
   'propose_shared_world',
-] as const;
-type WikiAction = typeof WIKI_ACTIONS[number];
+] satisfies readonly WikiAction[];
 
 export interface WikiToolDeps {
   /**
@@ -84,10 +92,12 @@ function normalizeAction(params: WikiToolParams): WikiAction {
     if (!hasId && !hasWriteFields) return 'list';
     throw new Error(`action is required. Supported actions: ${WIKI_ACTIONS.join(', ')}`);
   }
-  if ((WIKI_ACTIONS as readonly string[]).includes(rawAction)) {
-    return rawAction as WikiAction;
-  }
+  if (isWikiAction(rawAction)) return rawAction;
   throw new Error(`action must be one of: ${WIKI_ACTIONS.join(', ')}`);
+}
+
+function isWikiAction(value: string): value is WikiAction {
+  return WIKI_ACTIONS.some(action => action === value);
 }
 
 function requireString(value: unknown, field: string): string {

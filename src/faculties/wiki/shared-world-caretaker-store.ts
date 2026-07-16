@@ -74,12 +74,19 @@ export interface SharedWorldWikiProposalStorePort {
   close(): Promise<void>;
 }
 
+interface SharedWorldWikiProposalStoreBounds {
+  defaultListLimit: number;
+  maxListLimit: number;
+  applyLeaseMs: number;
+  maxCleanupLimit: number;
+}
+
 const STORE_BOUNDS = {
   defaultListLimit: 50,
   maxListLimit: 200,
   applyLeaseMs: 60_000,
   maxCleanupLimit: 100,
-} as const;
+} satisfies Readonly<SharedWorldWikiProposalStoreBounds>;
 
 const SELECT_PROPOSAL_COLUMNS = `
   proposal_id, site_id, document_id, actor_id, source_ref, title, body,

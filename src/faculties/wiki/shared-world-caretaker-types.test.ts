@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { guardSharedWorldWikiProposal } from './shared-world-caretaker-types.js';
+import {
+  guardSharedWorldWikiProposal,
+  type SharedWorldWikiProposalInput,
+  type SharedWorldWikiRejectionCode,
+} from './shared-world-caretaker-types.js';
 
 const knownSite = (siteId: string): boolean => siteId === 'studio';
 
-function validProposal() {
+function validProposal(): SharedWorldWikiProposalInput {
   return {
     siteId: 'studio',
     actorId: 'companion-a',
@@ -12,9 +16,36 @@ function validProposal() {
     body: 'A toaster is installed on the kitchen counter.',
     tags: ['Kitchen', 'appliance'],
     provenanceRefs: ['world-observation:sensor-4'],
-    sensitivity: 'public' as const,
+    sensitivity: 'public',
   };
 }
+
+interface SharedWorldWikiGuardRejectionCase {
+  input: SharedWorldWikiProposalInput;
+  rejectionCode: Exclude<SharedWorldWikiRejectionCode, 'operator_rejected'>;
+}
+
+const REJECTION_CASES = [
+  { input: { ...validProposal(), siteId: 'unknown' }, rejectionCode: 'invalid_site' },
+  { input: { ...validProposal(), siteId: '../studio' }, rejectionCode: 'invalid_site' },
+  {
+    input: { ...validProposal(), sensitivity: 'personal' },
+    rejectionCode: 'non_public_sensitivity',
+  },
+  { input: { ...validProposal(), provenanceRefs: [] }, rejectionCode: 'missing_provenance' },
+  {
+    input: { ...validProposal(), provenanceRefs: ['memory:private-7'] },
+    rejectionCode: 'personal_memory_provenance',
+  },
+  {
+    input: { ...validProposal(), sourceRef: 'episode:private-8' },
+    rejectionCode: 'personal_memory_provenance',
+  },
+  {
+    input: { ...validProposal(), body: 'My partner bought a toaster for the kitchen.' },
+    rejectionCode: 'personal_fact_content',
+  },
+] satisfies readonly SharedWorldWikiGuardRejectionCase[];
 
 describe('shared-world wiki proposal guard', () => {
   it('normalizes a public world fact and creates a deterministic content digest', () => {
@@ -41,15 +72,13 @@ describe('shared-world wiki proposal guard', () => {
     expect(first.proposal.contentDigest).toBe(second.proposal.contentDigest);
   });
 
-  it.each([
-    [{ ...validProposal(), siteId: 'unknown' }, 'invalid_site'],
-    [{ ...validProposal(), siteId: '../studio' }, 'invalid_site'],
-    [{ ...validProposal(), sensitivity: 'personal' as const }, 'non_public_sensitivity'],
-    [{ ...validProposal(), provenanceRefs: [] }, 'missing_provenance'],
-    [{ ...validProposal(), provenanceRefs: ['memory:private-7'] }, 'personal_memory_provenance'],
-    [{ ...validProposal(), sourceRef: 'episode:private-8' }, 'personal_memory_provenance'],
-    [{ ...validProposal(), body: 'My partner bought a toaster for the kitchen.' }, 'personal_fact_content'],
-  ])('rejects guarded input without producing a queueable proposal', (input, rejectionCode) => {
-    expect(guardSharedWorldWikiProposal(input, knownSite)).toEqual({ accepted: false, rejectionCode });
-  });
+  it.each(REJECTION_CASES)(
+    'rejects guarded input without producing a queueable proposal',
+    ({ input, rejectionCode }) => {
+      expect(guardSharedWorldWikiProposal(input, knownSite)).toEqual({
+        accepted: false,
+        rejectionCode,
+      });
+    },
+  );
 });

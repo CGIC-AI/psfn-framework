@@ -99,7 +99,7 @@ describe('notify companion candidate action', () => {
     ['internal:free-time:idle', 'free_time'],
     ['discord:owner', 'foreground'],
   ] as const)('infers %s only after the successful tool result', (channelId, source) => {
-    const actions = inferIcpInitiationCandidateActions(context(channelId), 'extended_loaded');
+    const actions = inferIcpInitiationCandidateActions(context(channelId), 'extended');
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({
       kind: ICP_INITIATION_CANDIDATE_ACTION_KIND,
@@ -117,7 +117,7 @@ describe('notify companion candidate action', () => {
 
   it('preserves an inherited ICP root instead of minting a recursive root', () => {
     const root = '55555555-5555-4555-8555-555555555555';
-    const actions = inferIcpInitiationCandidateActions(context('companion-dm:a:b', root), 'extended_loaded');
+    const actions = inferIcpInitiationCandidateActions(context('companion-dm:a:b', root), 'extended');
     expect(actions[0]?.payload).toMatchObject({
       request: { cause: { kind: 'icp_conversation', rootInitiationId: root } },
     });
@@ -128,18 +128,18 @@ describe('notify companion candidate action', () => {
     const otherRoot = '66666666-6666-4666-8666-666666666666';
     const durable = inferIcpInitiationCandidateActions(
       context('discord:owner', undefined, root),
-      'extended_loaded',
+      'extended',
     );
     expect(durable[0]?.payload).toMatchObject({
       request: { cause: { kind: 'icp_conversation', rootInitiationId: root } },
     });
     expect(() => inferIcpInitiationCandidateActions(
       context('companion-dm:a:b', root, otherRoot),
-      'extended_loaded',
+      'extended',
     )).toThrow('conflicting ICP root lineage');
     expect(() => inferIcpInitiationCandidateActions(
       context('discord:owner', undefined, 'not-a-root'),
-      'extended_loaded',
+      'extended',
     )).toThrow('malformed ICP root lineage (durable)');
   });
 
@@ -156,15 +156,17 @@ describe('notify companion candidate action', () => {
         }),
       } as never,
       runtime,
-      resolveOriginActivationSource: () => null,
+      resolveOriginCatalogSource: () => null,
       isExecutionAuthorized: () => true,
     });
-    const action = inferIcpInitiationCandidateActions(context('discord:owner'), 'extended_loaded')[0]!;
+    const actions = inferIcpInitiationCandidateActions(context('discord:owner'), 'extended');
+    const action = actions.at(0);
+    if (!action) throw new Error('expected a durable companion candidate action');
     await handler?.({ id: 'action', kind: action.kind, payload: action.payload } as InferredPostTurnAction);
     expect(runtime.submit).toHaveBeenCalledOnce();
   });
 
-  it('executes free-time and foreground choices only through the idle post-turn queue', async () => {
+  it('executes free-time and foreground choices through the post-turn appraisal lane', async () => {
     const eventBus = new EventBus();
     const scheduler = new Scheduler(eventBus, {
       tickIntervalMs: 10,
@@ -188,13 +190,13 @@ describe('notify companion candidate action', () => {
       agentLoop: { registerPostTurnActionInferer: vi.fn(() => () => undefined) },
       postTurnActions,
       runtime,
-      resolveOriginActivationSource: () => null,
+      resolveOriginCatalogSource: () => null,
       isExecutionAuthorized: () => true,
     });
     const inferredContext = context('internal:free-time:idle');
     const candidates = inferIcpInitiationCandidateActions(
       inferredContext,
-      'extended_loaded',
+      'extended',
     );
     const message = {
       id: 'source-message',
@@ -221,7 +223,7 @@ describe('notify companion candidate action', () => {
     });
     expect(runtime.submit).not.toHaveBeenCalled();
     await scheduler.tick();
-    expect(waitForIdle).toHaveBeenCalledOnce();
+    expect(waitForIdle).not.toHaveBeenCalled();
     expect(runtime.submit).toHaveBeenCalledOnce();
   });
 });

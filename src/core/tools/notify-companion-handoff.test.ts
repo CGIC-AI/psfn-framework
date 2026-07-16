@@ -12,6 +12,7 @@ import {
   DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
   inferDeferredCompanionOutreachActions,
   isDeferredCompanionOutreachExecutionAuthorized,
+  parseDeferredCompanionOutreachAuthorizationEvidence,
   registerDeferredCompanionOutreachRuntime,
   type DeferredCompanionOutreachAuthorizationEvidence,
   type DeferredCompanionOutreachAuthorizationRuntime,
@@ -26,10 +27,10 @@ const CANDIDATE_ORIGIN = {
   continuationTaskKind: 'research',
 } as const;
 const ORIGIN_AUTHORIZATION: DeferredCompanionOutreachAuthorizationEvidence = {
-  version: 1,
+  version: 2,
   toolName: 'notify',
   toolScope: 'extended',
-  activationSource: 'extended_loaded',
+  catalogSource: 'extended',
   requiredCapability: 'external.companion',
   originToolCallId: 'call-outreach',
   originTurnId: 'turn-1',
@@ -189,7 +190,7 @@ describe('permit-governed notify companion handoff', () => {
       turnId: 'turn-1' as never,
       completedAt: 1_000,
       taskKind: 'research',
-    }, 'extended_loaded');
+    }, 'extended');
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({
       kind: DEFERRED_COMPANION_OUTREACH_ACTION_KIND,
@@ -204,7 +205,7 @@ describe('permit-governed notify companion handoff', () => {
     expect(actions[0]?.dedupeKey).not.toContain(PERMIT_ID);
   });
 
-  it('does not persist outreach without current origin overlay evidence', () => {
+  it('does not persist outreach without current origin catalog evidence', () => {
     expect(inferDeferredCompanionOutreachActions({
       message: { id: 'source-1', channelId: 'discord:owner' } as never,
       response: {} as never,
@@ -266,7 +267,7 @@ describe('permit-governed notify companion handoff', () => {
       turnId: 'turn-1' as never,
       completedAt: 1_000,
       taskKind: 'research requested in motivation prose',
-    }, 'extended_loaded');
+    }, 'extended');
 
     expect(actions[0]?.payload).not.toHaveProperty('continuationTaskKind');
     expect(actions[0]?.payload).not.toHaveProperty('candidateOrigin');
@@ -287,7 +288,7 @@ describe('permit-governed notify companion handoff', () => {
         }),
       } as never,
       runtime: owner,
-      resolveOriginActivationSource: () => 'extended_loaded',
+      resolveOriginCatalogSource: () => 'extended',
       isExecutionAuthorized: () => true,
     });
     await handler?.({
@@ -311,7 +312,7 @@ describe('permit-governed notify companion handoff', () => {
     expect(unregisterInferer).toHaveBeenCalledOnce();
   });
 
-  it('rechecks capability and tool-overlay authorization before deferred execution', async () => {
+  it('rechecks capability and tool registration before deferred execution', async () => {
     const owner = runtime();
     let handler: PostTurnActionHandler | undefined;
     registerDeferredCompanionOutreachRuntime({
@@ -323,7 +324,7 @@ describe('permit-governed notify companion handoff', () => {
         }),
       } as never,
       runtime: owner,
-      resolveOriginActivationSource: () => null,
+      resolveOriginCatalogSource: () => null,
       isExecutionAuthorized: () => false,
     });
     await expect(handler?.({
@@ -350,7 +351,7 @@ describe('permit-governed notify companion handoff', () => {
         }),
       } as never,
       runtime: owner,
-      resolveOriginActivationSource: () => null,
+      resolveOriginCatalogSource: () => null,
       isExecutionAuthorized: () => true,
     });
     await expect(handler?.({
@@ -366,12 +367,10 @@ describe('permit-governed notify companion handoff', () => {
     expect(owner.executeCompanionOutreach).not.toHaveBeenCalled();
   });
 
-  it('uses durable origin evidence after restart without requiring the ephemeral active overlay', () => {
+  it('uses durable origin catalog evidence after restart without requiring ephemeral activation state', () => {
     const authorizationRuntime: DeferredCompanionOutreachAuthorizationRuntime = {
       hasExternalCompanionCapability: () => true,
       isNotifyToolRegistered: () => true,
-      isNotifyOverlayEligible: () => true,
-      getNotifyActivationSource: () => null,
     };
     expect(isDeferredCompanionOutreachExecutionAuthorized(
       ORIGIN_AUTHORIZATION,
@@ -380,15 +379,20 @@ describe('permit-governed notify companion handoff', () => {
   });
 
   it.each([
-    { name: 'capability revocation', capability: false, registered: true, overlay: true },
-    { name: 'tool removal or wiring disable', capability: true, registered: false, overlay: true },
-    { name: 'overlay policy disable', capability: true, registered: true, overlay: false },
-  ])('fails closed on current $name', ({ capability, registered, overlay }) => {
+    ['authorization v1', { ...ORIGIN_AUTHORIZATION, version: 1 }],
+    ['unknown authorization field', { ...ORIGIN_AUTHORIZATION, unexpected: true }],
+    ['malformed catalog evidence', { ...ORIGIN_AUTHORIZATION, catalogSource: 'promoted' }],
+  ])('rejects stale or malformed persisted %s', (_name, evidence) => {
+    expect(parseDeferredCompanionOutreachAuthorizationEvidence(evidence)).toBeNull();
+  });
+
+  it.each([
+    { name: 'capability revocation', capability: false, registered: true },
+    { name: 'tool removal or wiring disable', capability: true, registered: false },
+  ])('fails closed on current $name', ({ capability, registered }) => {
     const authorizationRuntime: DeferredCompanionOutreachAuthorizationRuntime = {
       hasExternalCompanionCapability: () => capability,
       isNotifyToolRegistered: () => registered,
-      isNotifyOverlayEligible: () => overlay,
-      getNotifyActivationSource: () => null,
     };
     expect(isDeferredCompanionOutreachExecutionAuthorized(
       ORIGIN_AUTHORIZATION,
@@ -408,7 +412,7 @@ describe('permit-governed notify companion handoff', () => {
         }),
       } as never,
       runtime: owner,
-      resolveOriginActivationSource: () => null,
+      resolveOriginCatalogSource: () => null,
       isExecutionAuthorized: () => true,
     });
     await expect(handler?.({

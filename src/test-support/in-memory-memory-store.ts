@@ -23,6 +23,11 @@ import {
   type MemoryStorePort,
   type MemoryStoreStats,
   type MemoryStoreUpdatePatch,
+  type MemorySubjectAuthorizedDelete,
+  type MemorySubjectAuthorizedMutation,
+  type MemorySubjectAuthorizedQuery,
+  type MemorySubjectAuthorizedRestore,
+  type MemorySubjectAuthorizedWrite,
   type ScratchpadAddResult,
   type ScratchpadEntry,
   type ScratchpadEntryCreateOptions,
@@ -37,6 +42,14 @@ import {
   type MemoryScopeQuery,
   type PurrMemory,
 } from '../faculties/memory/types.js';
+import {
+  classifyInMemorySubject,
+  mutateInMemoryAuthorizedSubjects,
+  persistInMemoryAuthorizedSubject,
+  queryInMemoryAuthorizedSubjects,
+  softDeleteInMemoryAuthorizedSubject,
+  undoDeleteInMemoryAuthorizedSubject,
+} from './in-memory-memory-subjects.js';
 
 interface StoredMemory {
   memory: PurrMemory;
@@ -374,6 +387,30 @@ export class InMemoryMemoryStore {
 
   getDeleteVersion(deleteId: string): MemoryDeleteVersion | undefined {
     return this.deleteVersions.get(deleteId);
+  }
+
+  queryAuthorizedMemorySubjects(input: MemorySubjectAuthorizedQuery) {
+    return queryInMemoryAuthorizedSubjects(this, input);
+  }
+
+  mutateAuthorizedMemorySubjects(input: MemorySubjectAuthorizedMutation) {
+    return mutateInMemoryAuthorizedSubjects(this, input);
+  }
+
+  persistAuthorizedMemoryWrite(input: MemorySubjectAuthorizedWrite) {
+    return persistInMemoryAuthorizedSubject(this, input);
+  }
+
+  softDeleteAuthorizedMemorySubject(input: MemorySubjectAuthorizedDelete) {
+    return softDeleteInMemoryAuthorizedSubject(this, input);
+  }
+
+  undoAuthorizedMemorySubjectDelete(input: MemorySubjectAuthorizedRestore) {
+    return undoDeleteInMemoryAuthorizedSubject(this, input);
+  }
+
+  getMemorySubjectClassification(memoryId: string) {
+    return classifyInMemorySubject(this, memoryId);
   }
 
   getStats(): MemoryStoreStats {

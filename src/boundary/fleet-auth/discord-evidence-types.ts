@@ -34,6 +34,7 @@ export interface DiscordCompanionEvidenceObserverPort {
 
 export type DiscordEvidenceAuthorityChange =
   | { kind: 'ready' }
+  | { kind: 'observer'; availability: 'current' | 'unavailable'; guildId?: string }
   | { kind: 'guild'; guildId: string }
   | { kind: 'member'; guildId: string; providerSubjectId: string }
   | { kind: 'channel'; guildId: string; channelId: string };

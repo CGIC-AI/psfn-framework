@@ -268,7 +268,9 @@ export class DiscordEvidenceLifecycleCoordinator {
     this.assertStarted();
     const mappings = this.config.discordEvidenceMappings.filter(mapping => (
       mapping.companionId === companionId
-      && (event.kind === 'ready' || mapping.guildId === event.guildId)
+      && (event.kind === 'ready'
+        || (event.kind === 'observer' && event.guildId === undefined)
+        || mapping.guildId === event.guildId)
     ));
     if (mappings.length === 0) return;
     const guildIds = new Set(mappings.map(mapping => mapping.guildId));
@@ -284,6 +286,11 @@ export class DiscordEvidenceLifecycleCoordinator {
           companionId,
           mutation: this.nextMutation(entry),
         });
+        if (event.kind === 'observer' && event.availability === 'unavailable') {
+          entry.renewalAttempted = true;
+          this.schedule(entry);
+          continue;
+        }
         await this.refreshOrRequireReauthentication(entry, companionId);
       } catch (error) {
         await this.failEntry(entry, 'provider_evidence_unavailable', error);

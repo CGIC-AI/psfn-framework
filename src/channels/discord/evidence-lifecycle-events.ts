@@ -16,18 +16,24 @@ export class DiscordEvidenceLifecycleEventSource implements DiscordEvidenceLifec
     if (this.attached) return;
     this.attached = true;
     this.on(Events.ClientReady, () => { this.emit({ kind: 'ready' }); });
-    this.on(Events.GuildAvailable, guild => { this.emit({ kind: 'guild', guildId: guild.id }); });
-    this.on(Events.GuildCreate, guild => { this.emit({ kind: 'guild', guildId: guild.id }); });
-    this.on(Events.GuildDelete, guild => { this.emit({ kind: 'guild', guildId: guild.id }); });
-    this.on(Events.GuildUnavailable, guild => { this.emit({ kind: 'guild', guildId: guild.id }); });
+    this.on(Events.GuildAvailable, guild => { this.emitObserverCurrent(guild.id); });
+    this.on(Events.GuildCreate, guild => { this.emitObserverCurrent(guild.id); });
+    this.on(Events.GuildDelete, guild => { this.emitObserverUnavailable(guild.id); });
+    this.on(Events.GuildUnavailable, guild => { this.emitObserverUnavailable(guild.id); });
     this.on(Events.GuildUpdate, (_oldGuild, guild) => {
       this.emit({ kind: 'guild', guildId: guild.id });
     });
-    this.on(Events.GuildMemberAdd, member => { this.emitMember(member.guild.id, member.id); });
-    this.on(Events.GuildMemberAvailable, member => { this.emitMember(member.guild.id, member.id); });
-    this.on(Events.GuildMemberRemove, member => { this.emitMember(member.guild.id, member.id); });
+    this.on(Events.GuildMemberAdd, member => {
+      this.emitMemberOrObserver(member.guild.id, member.id, 'current');
+    });
+    this.on(Events.GuildMemberAvailable, member => {
+      this.emitMemberOrObserver(member.guild.id, member.id, 'current');
+    });
+    this.on(Events.GuildMemberRemove, member => {
+      this.emitMemberOrObserver(member.guild.id, member.id, 'unavailable');
+    });
     this.on(Events.GuildMemberUpdate, (_oldMember, member) => {
-      this.emitMember(member.guild.id, member.id);
+      this.emitMemberOrObserver(member.guild.id, member.id, 'current');
     });
     this.on(Events.GuildRoleCreate, role => { this.emit({ kind: 'guild', guildId: role.guild.id }); });
     this.on(Events.GuildRoleDelete, role => { this.emit({ kind: 'guild', guildId: role.guild.id }); });
@@ -53,14 +59,24 @@ export class DiscordEvidenceLifecycleEventSource implements DiscordEvidenceLifec
       this.emitThread(thread.guildId, thread.id);
     });
     this.on(Events.ThreadMemberUpdate, (_oldMember, member) => {
-      this.emitMember(member.thread.guildId, member.id);
+      this.emitMemberOrObserver(member.thread.guildId, member.id, 'current');
     });
     this.on(Events.ThreadMembersUpdate, (added, removed, thread) => {
       for (const member of [...added.values(), ...removed.values()]) {
-        this.emitMember(thread.guildId, member.id);
+        this.emitMemberOrObserver(
+          thread.guildId,
+          member.id,
+          removed.has(member.id) ? 'unavailable' : 'current',
+        );
       }
       this.emitThread(thread.guildId, thread.id);
     });
+    this.on(Events.Invalidated, () => { this.emitObserverUnavailable(); });
+    this.on(Events.ShardDisconnect, () => { this.emitObserverUnavailable(); });
+    this.on(Events.ShardError, () => { this.emitObserverUnavailable(); });
+    this.on(Events.ShardReconnecting, () => { this.emitObserverUnavailable(); });
+    this.on(Events.ShardReady, () => { this.emit({ kind: 'ready' }); });
+    this.on(Events.ShardResume, () => { this.emit({ kind: 'ready' }); });
   }
 
   subscribeDiscordEvidenceLifecycle(
@@ -84,8 +100,28 @@ export class DiscordEvidenceLifecycleEventSource implements DiscordEvidenceLifec
     this.detach.push(() => { this.client.off(event, listener); });
   }
 
-  private emitMember(guildId: string, providerSubjectId: string): void {
+  private emitMemberOrObserver(
+    guildId: string,
+    providerSubjectId: string,
+    observerAvailability: 'current' | 'unavailable',
+  ): void {
+    if (providerSubjectId === this.client.user?.id) {
+      this.emit({ kind: 'observer', availability: observerAvailability, guildId });
+      return;
+    }
     this.emit({ kind: 'member', guildId, providerSubjectId });
+  }
+
+  private emitObserverCurrent(guildId: string): void {
+    this.emit({ kind: 'observer', availability: 'current', guildId });
+  }
+
+  private emitObserverUnavailable(guildId?: string): void {
+    this.emit({
+      kind: 'observer',
+      availability: 'unavailable',
+      ...(guildId ? { guildId } : {}),
+    });
   }
 
   private emitThread(guildId: string, channelId: string): void {

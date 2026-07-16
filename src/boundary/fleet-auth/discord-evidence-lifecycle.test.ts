@@ -146,6 +146,18 @@ describe('Discord evidence production lifecycle', () => {
       input.companionId === COMPANION_B
     ))).toBe(false);
 
+    const beforeDisconnect = runtime.refreshCompanionEvidence.mock.calls.length;
+    await coordinator.handleAuthorityChange(COMPANION_A, {
+      kind: 'observer',
+      availability: 'unavailable',
+    });
+    expect(runtime.refreshCompanionEvidence).toHaveBeenCalledTimes(beforeDisconnect);
+    expect(store.invalidatePrincipalEvidence).toHaveBeenLastCalledWith(expect.objectContaining({
+      companionId: COMPANION_A,
+    }));
+    await coordinator.handleAuthorityChange(COMPANION_A, { kind: 'ready' });
+    expect(runtime.refreshCompanionEvidence).toHaveBeenCalledTimes(beforeDisconnect + 1);
+
     now = new Date('2026-07-16T12:05:00.000Z');
     await coordinator.handleAuthorityChange(COMPANION_A, { kind: 'ready' });
     expect(coordinator.reauthenticationReason(PRINCIPAL_ID, SUBJECT_ID)).toBe('evidence_expired');

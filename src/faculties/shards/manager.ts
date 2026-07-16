@@ -690,6 +690,20 @@ export class ShardManager implements ShardExecutionPort {
         turns++;
         this.touchShardHeartbeat(shardId);
 
+        // Shards are ephemeral and intentionally do not own a durable post-turn
+        // worker. For a bounded multi-turn shard, the manager therefore owns
+        // compaction between turns so the next turn sees a committed summary
+        // and compression-guideline review retains the exact shard trajectory.
+        if (turn + 1 < maxTurns && response.metadata.autoCompactionEligible === true) {
+          await sessionManager.scheduleAutoCompactionBetweenTurns({
+            channelId,
+            systemPrompt,
+            memoriesBlock: '',
+            llmProvider: this.deps.llmProvider,
+            throwOnFailure: true,
+          });
+        }
+
         // For a one-turn shard, we break after the first turn.
         // Multi-turn shards continue only if the response suggests more work.
         if (turn === 0 && maxTurns === 1) break;

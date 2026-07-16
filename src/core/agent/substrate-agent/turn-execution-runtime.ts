@@ -1568,6 +1568,7 @@ export async function handleMessageForTurn(
         inputTokens: turnUsage.inputTokens,
         outputTokens: turnUsage.outputTokens,
         durationMs: completedAt - startTime,
+        autoCompactionEligible: promptAssembly.context.manifest.compaction.eligible === true,
         turnId,
         requestId,
         ...(runtimeFallbackProvenance ? { runtimeFallbackProvenance } : {}),

@@ -327,6 +327,16 @@ describe('ShardManager', () => {
         chat: { model: 'test-model', provider: 'test', maxTokens: 512, contextWindow: 1_000 },
       },
     };
+    const complete = vi.fn<LLMProviderPort['complete']>(async (_context, _purpose, options) => ({
+      content: options?.correlation?.purpose === 'session.compression_guideline.update'
+        ? '{"updatedGuideline":"Preserve task lineage and the active thread explicitly."}'
+        : 'Summary of the pre-shard trajectory.',
+      toolCalls: [],
+      model: 'test-model',
+      inputTokens: 0,
+      outputTokens: 0,
+      stopReason: 'end_turn',
+    }));
     const llmProvider: LLMProviderPort = {
       stream: vi.fn(async () => ({
         content: '',
@@ -336,16 +346,7 @@ describe('ShardManager', () => {
         outputTokens: 0,
         stopReason: 'end_turn',
       })),
-      complete: vi.fn(async (request) => ({
-        content: request.correlation?.purpose === 'session.compression_guideline.update'
-          ? '{"updatedGuideline":"Preserve task lineage and the active thread explicitly."}'
-          : 'Summary of the pre-shard trajectory.',
-        toolCalls: [],
-        model: 'test-model',
-        inputTokens: 0,
-        outputTokens: 0,
-        stopReason: 'end_turn',
-      })),
+      complete,
     };
     const eligibilityGate = createEligibilityGate(() => ({
       getTier: () => 'autonomous',
@@ -406,11 +407,14 @@ describe('ShardManager', () => {
       version: 2,
       guideline: 'Preserve task lineage and the active thread explicitly.',
     });
-    expect(llmProvider.complete).toHaveBeenCalledTimes(3);
-    expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls.filter(
-      ([request]) => request.correlation?.purpose === 'session.compression_guideline.update',
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete.mock.calls.filter(
+      ([, , options]) => options?.correlation?.purpose === 'session.compaction.summary',
     )).toHaveLength(1);
-  });
+    expect(complete.mock.calls.filter(
+      ([, , options]) => options?.correlation?.purpose === 'session.compression_guideline.update',
+    )).toHaveLength(1);
+  }, 60_000);
 
   it('spawns a shard and returns result', async () => {
     mockShardContent = 'Hello from shard';

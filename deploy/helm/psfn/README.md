@@ -98,9 +98,11 @@ CHARACTER_CARD_PATH=/app/companion-data/companion.json
 `system-data`, `companion-data`, `workspace`, `runtime`, and `model-cache` are
 PVC-backed. The seed init container creates the runtime directories and, only
 when `bootstrap.seedOwnerFiles=true`, copies `/app/config/*.seed.json` into
-`system-data` for any missing owner file. It never overwrites Garden-edited
-owner files. A starter `companion.json` ConfigMap is copied once into
-`companion-data` only if no companion card exists.
+the correct owner root for any missing owner file. Cluster-global owners go to
+`system-data`; `scheduler.json` and `capability-tier.json` go to
+`companion-data`. It never overwrites Garden-edited owner files. A starter
+`companion.json` ConfigMap is copied once into `companion-data` only if no
+companion card exists.
 
 `bootstrap.seedOwnerFiles` defaults to `false`. With it disabled, absent owner
 files fail closed at startup with the runtime's `loadRequiredJson` error rather
@@ -111,6 +113,71 @@ all subsequent upgrades so a stale seed can never mask a missing/mis-migrated
 owner file.
 
 Mutable owner JSON stays on PVCs, not in ConfigMaps.
+
+### Upgrading releases created before per-companion owner files
+
+`scheduler.json` and `capability-tier.json` used to live under `system-data`.
+Every app workload runs the same idempotent init migration before startup:
+
+- If the companion-owned target is absent and a legacy system-owned file
+  exists, the file is copied byte-for-byte and a source-hash marker is written
+  under `companion-data/.owner-migrations/`.
+- The legacy source is retained as the rollback snapshot. The runtime never
+  reads it as a fallback after the upgrade.
+- A later companion-owned edit is preserved. The marker binds the unchanged
+  legacy source, so the init path can distinguish a legitimate target edit from
+  an ambiguous first migration.
+- If an unmarked source and target differ, or the legacy source changes after a
+  marked migration, startup fails closed with an actionable error. The chart
+  never guesses which schedule or capability tier is authoritative.
+- If neither file exists, only an intentional first install with
+  `bootstrap.seedOwnerFiles=true` creates the companion-owned file. Otherwise
+  the init container fails before runtime startup.
+
+Before upgrading another cluster, preserve its values and take a backup. Then
+compare hashes for both files at the old and new roots without printing their
+contents:
+
+```bash
+RELEASE=psfn
+NAMESPACE=psfn
+helm get values "$RELEASE" -n "$NAMESPACE" -o yaml > "/tmp/${RELEASE}-values.yaml"
+chmod 600 "/tmp/${RELEASE}-values.yaml"
+
+kubectl -n "$NAMESPACE" exec deploy/psfn-agent -- sh -c '
+  for root in /app/system-data /app/companion-data; do
+    for file in scheduler.json capability-tier.json; do
+      if [ -f "$root/$file" ]; then sha256sum "$root/$file"; else echo "MISSING $root/$file"; fi
+    done
+  done
+'
+```
+
+Safe automatic upgrade states are: legacy source present and target absent;
+both present and byte-identical before the first marked migration; or target
+present with no legacy source. If both exist and differ without a marker, stop,
+back up both, and explicitly reconcile the authoritative file before upgrading.
+Do not enable seed defaults to conceal a conflict.
+
+After the Helm upgrade, require all three app rollouts and verify the new owner
+paths and markers:
+
+```bash
+kubectl -n "$NAMESPACE" rollout status deploy/psfn-agent --timeout=300s
+kubectl -n "$NAMESPACE" rollout status deploy/psfn-gateway --timeout=300s
+kubectl -n "$NAMESPACE" rollout status deploy/psfn-garden --timeout=300s
+kubectl -n "$NAMESPACE" exec deploy/psfn-agent -- sh -c '
+  for file in scheduler.json capability-tier.json; do
+    test -f "/app/companion-data/$file"
+    test -f "/app/companion-data/.owner-migrations/$file.from-system.sha256" \
+      || test ! -f "/app/system-data/$file"
+  done
+'
+```
+
+For rollback, use the prior Helm revision. The retained system-owned files let
+the old runtime start, but they represent the values at migration time; later
+companion-owned edits are intentionally not mirrored backward.
 
 ## Repository Checkout
 

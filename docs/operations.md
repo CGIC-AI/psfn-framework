@@ -132,6 +132,77 @@ What it does:
 
 Use `--dry-run` first. Keep authoritative env and runtime wiring in the deployed repo tree; do not create shadow service config elsewhere. The installer-owned unit injects the production layout paths and `PSFN_SKIP_DOTENV=true`, while the filtered env file only carries env-owned values that remain appropriate to source from disk.
 
+### Helm upgrade for per-companion scheduler and capability owners
+
+Releases created before the per-companion ownership cutover have
+`scheduler.json` and `capability-tier.json` under `SYSTEM_DATA_DIR`. Current
+runtime code requires both under `COMPANION_DATA_DIR` and does not fall back to
+the legacy path. The Helm init container owns the one-time upgrade transaction;
+operators should not add env overrides or runtime fallback readers.
+
+Before upgrading each release:
+
+1. Take and verify a current backup. Preserve the live Helm values without
+   printing them:
+
+   ```bash
+   RELEASE=psfn
+   NAMESPACE=psfn
+   helm get values "$RELEASE" -n "$NAMESPACE" -o yaml > "/tmp/${RELEASE}-values.yaml"
+   chmod 600 "/tmp/${RELEASE}-values.yaml"
+   ```
+
+2. From the currently healthy agent, record only the hashes/existence of the
+   old and new paths:
+
+   ```bash
+   kubectl -n "$NAMESPACE" exec deploy/psfn-agent -- sh -c '
+     for root in /app/system-data /app/companion-data; do
+       for file in scheduler.json capability-tier.json; do
+         if [ -f "$root/$file" ]; then sha256sum "$root/$file"; else echo "MISSING $root/$file"; fi
+       done
+     done
+   '
+   ```
+
+   Automatic migration is safe when the legacy source exists and the target is
+   absent, when both are byte-identical before the first migration, or when the
+   companion target exists and no legacy source exists. If an unmarked source
+   and target differ, stop and explicitly reconcile the authoritative copy
+   after backing up both. Never turn on seed defaults to hide the ambiguity.
+
+3. Build/import or pull the exact pinned application image, then upgrade with
+   the preserved values and repo-owned chart. Leave
+   `bootstrap.seedOwnerFiles=false` for an existing release. The init container
+   copies each legacy owner byte-for-byte, records its source SHA-256 under
+   `companion-data/.owner-migrations/`, and retains the old source as a rollback
+   snapshot. The operation is idempotent across the agent, gateway, and Garden
+   init containers.
+
+4. Require all app rollouts, normal service smokes, and the owner checks:
+
+   ```bash
+   kubectl -n "$NAMESPACE" rollout status deploy/psfn-agent --timeout=300s
+   kubectl -n "$NAMESPACE" rollout status deploy/psfn-gateway --timeout=300s
+   kubectl -n "$NAMESPACE" rollout status deploy/psfn-garden --timeout=300s
+   kubectl -n "$NAMESPACE" exec deploy/psfn-agent -- sh -c '
+     for file in scheduler.json capability-tier.json; do
+       test -f "/app/companion-data/$file"
+       test -f "/app/companion-data/.owner-migrations/$file.from-system.sha256" \
+         || test ! -f "/app/system-data/$file"
+     done
+   '
+   ```
+
+The migration marker binds the retained legacy source, not the evolving target.
+Garden may therefore update the companion-owned file after migration without
+being overwritten. A changed legacy source after migration fails closed because
+it usually means an old runtime or manual process resumed writing the retired
+owner. Roll back with the prior Helm revision; the old runtime can use the
+retained snapshot, but later companion-owned edits are not mirrored backward.
+Run this procedure once per Helm release/companion root in multi-release
+clusters.
+
 ## Guarded Kubernetes Deploy Pipeline
 
 The live k3s companion updates through a repo-owned, auditable pipeline that

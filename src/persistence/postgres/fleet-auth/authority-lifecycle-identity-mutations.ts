@@ -57,7 +57,7 @@ export async function preparePrincipalMergeMutation(
       }],
       [decision.target.principalId, { authz: true, policy: true }],
     ]),
-    revocations: [],
+    revocations: [{ kind: 'principal', resourceId: decision.source.principalId }],
     apply: async authorityGeneration => {
       await client.query(`
         INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_merge_aliases

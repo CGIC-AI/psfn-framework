@@ -4,6 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
+  lifecycleOAuthKindFor,
+  type LifecycleOAuthProofRole,
+} from '../../../shared/contracts/fleet-auth-lifecycle-oauth.js';
+import {
   DEFAULT_POSTGRES_TEST_IMAGE,
   startPostgresTestHarness,
   type PostgresTestHarness,
@@ -123,16 +127,22 @@ function providerProof(subjectId: string, callbackTransactionId = randomUUID()) 
 
 function decisionProofs(
   decision: VerifiedFleetAuthLifecycleDecision,
-): Array<ReturnType<typeof providerProof>> {
+): Array<{ role: LifecycleOAuthProofRole; proof: ReturnType<typeof providerProof> }> {
   if (decision.action === 'principal.merge') {
-    return [decision.canonicalProvider, decision.sourceProvider];
+    return [
+      { role: 'canonical', proof: decision.canonicalProvider },
+      { role: 'source', proof: decision.sourceProvider },
+    ];
   }
-  const result: Array<ReturnType<typeof providerProof>> = [];
+  const result: Array<{
+    role: LifecycleOAuthProofRole;
+    proof: ReturnType<typeof providerProof>;
+  }> = [];
   if ('currentProvider' in decision) {
-    result.push(decision.currentProvider);
+    result.push({ role: 'current', proof: decision.currentProvider });
   }
   if ('newProvider' in decision) {
-    result.push(decision.newProvider);
+    result.push({ role: 'new', proof: decision.newProvider });
   }
   return result;
 }
@@ -141,7 +151,7 @@ async function seedDecisionProviderProofs(
   pool: import('pg').Pool,
   decision: VerifiedFleetAuthLifecycleDecision,
 ): Promise<void> {
-  for (const proof of decisionProofs(decision)) {
+  for (const { role, proof } of decisionProofs(decision)) {
     const prior = await pool.query(`
       SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions
       WHERE transaction_id = $1
@@ -151,19 +161,28 @@ async function seedDecisionProviderProofs(
       INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions
         (transaction_id, state_digest, pkce_verifier_digest, callback_uri,
          return_path, kind, status, global_auth_epoch, created_at, expires_at,
-         consumed_at, verified_provider, verified_provider_subject_id)
+         consumed_at, verified_provider, verified_provider_subject_id,
+         lifecycle_ceremony_id, lifecycle_action, lifecycle_proof_role,
+         initiating_principal_id, initiating_session_id)
       VALUES ($1, $2, $3, 'https://fleet.example.test/auth/discord/callback',
-              '/garden', 'provider_link', 'consumed', $4, $5, $6, $7, $8, $9)
+              '/garden', $4, 'consumed', $5, $6, $7, $8, $9, $10,
+              $11, $12, $13, $14, $15)
     `, [
       proof.callbackTransactionId,
       createHash('sha256').update(randomUUID()).digest('hex'),
       createHash('sha256').update(randomUUID()).digest('hex'),
+      lifecycleOAuthKindFor(decision.action, role),
       decision.globalAuthEpoch,
       new Date(decision.decidedAt.getTime() - 2_000),
       new Date(decision.decidedAt.getTime() + 300_000),
       new Date(decision.decidedAt.getTime() - 1_000),
       proof.provider,
       proof.subjectId,
+      decision.ceremonyId,
+      decision.action,
+      role,
+      decision.actor.principalId,
+      decision.actorSession.sessionId,
     ]);
   }
 }
@@ -421,6 +440,70 @@ describe('gateway fleet-auth authority lifecycle store', () => {
       await expect(executeDecision(context, substituted)).rejects.toBeInstanceOf(
         FleetAuthLifecycleDeniedError,
       );
+    } finally {
+      await context.pool.end();
+      rmSync(context.floorRoot, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
+  it('rejects OAuth proof reuse across lifecycle action, ceremony, and proof role', async () => {
+    const context = await freshContext();
+    try {
+      const seeded = await seedOwnerAndTarget(context.pool);
+      const seededPurpose = {
+        ...baseDecision('provider.replace', claim(seeded.targetId), claim(seeded.targetId)),
+        currentProvider: providerProof('223456789012345678'),
+        newProvider: providerProof('423456789012345678'),
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      await seedDecisionProviderProofs(context.pool, seededPurpose);
+
+      const crossAction = {
+        ...baseDecision('provider.add', claim(seeded.targetId), claim(seeded.targetId)),
+        ceremonyId: seededPurpose.ceremonyId,
+        newProvider: seededPurpose.newProvider,
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      await expect(executeDecision(context, crossAction)).rejects.toMatchObject({
+        reasonCode: 'provider_callback_proof_invalid',
+      });
+
+      const crossCeremony = {
+        ...seededPurpose,
+        decisionId: randomUUID(),
+        ceremonyId: randomUUID(),
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      await expect(executeDecision(context, crossCeremony)).rejects.toMatchObject({
+        reasonCode: 'provider_callback_proof_invalid',
+      });
+
+      const wrongRole = {
+        ...seededPurpose,
+        decisionId: randomUUID(),
+        currentProvider: seededPurpose.newProvider,
+        newProvider: providerProof('523456789012345678'),
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      await expect(context.store.execute(wrongRole)).rejects.toMatchObject({
+        reasonCode: 'provider_callback_proof_invalid',
+      });
+
+      const wrongSession = {
+        ...baseDecision('provider.add', claim(seeded.targetId), claim(seeded.targetId)),
+        newProvider: providerProof('623456789012345678'),
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      await seedDecisionProviderProofs(context.pool, wrongSession);
+      const otherSession = await seedActorSession(
+        context.pool,
+        claim(seeded.targetId),
+        '223456789012345678',
+        1,
+      );
+      await context.pool.query(`
+        UPDATE ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions
+        SET initiating_session_id = $2
+        WHERE transaction_id = $1
+      `, [wrongSession.newProvider.callbackTransactionId, otherSession.sessionId]);
+      await expect(context.store.execute(wrongSession)).rejects.toMatchObject({
+        reasonCode: 'provider_callback_proof_invalid',
+      });
     } finally {
       await context.pool.end();
       rmSync(context.floorRoot, { recursive: true, force: true });
@@ -874,6 +957,221 @@ describe('gateway fleet-auth authority lifecycle store', () => {
         jit_revoked: true,
         custody_revoked: true,
         evidence_count: '0',
+      });
+    } finally {
+      await context.pool.end();
+      rmSync(context.floorRoot, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
+  it('keeps a denied decision terminal when its rejected state later becomes valid', async () => {
+    const context = await freshContext();
+    try {
+      const seeded = await seedOwnerAndTarget(context.pool);
+      const decision = {
+        ...baseDecision('role.grant', claim(seeded.actorId), claim(seeded.targetId)),
+        companionId: seeded.companionId,
+        grantId: randomUUID(),
+        role: 'admin' as const,
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      await expect(executeDecision(context, decision)).rejects.toBeInstanceOf(
+        FleetAuthLifecycleDeniedError,
+      );
+      await context.pool.query(`
+        UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+        SET lifecycle = 'revoked'
+        WHERE grant_id = $1
+      `, [seeded.targetGrantId]);
+
+      await expect(executeDecision(context, decision)).rejects.toMatchObject({
+        reasonCode: 'lifecycle_decision_terminal',
+      });
+      const granted = await context.pool.query<{ count: string }>(`
+        SELECT count(*)::text AS count
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+        WHERE grant_id = $1
+      `, [decision.grantId]);
+      expect(granted.rows[0]?.count).toBe('0');
+    } finally {
+      await context.pool.end();
+      rmSync(context.floorRoot, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
+  it('rejects decision-id reuse after authority reconciliation removes ephemeral receipts', async () => {
+    const context = await freshContext();
+    try {
+      const seeded = await seedOwnerAndTarget(context.pool);
+      const decision = {
+        ...baseDecision('role.grant', claim(seeded.actorId), claim(seeded.targetId)),
+        companionId: seeded.companionId,
+        grantId: randomUUID(),
+        role: 'admin' as const,
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      await expect(executeDecision(context, decision)).rejects.toBeInstanceOf(
+        FleetAuthLifecycleDeniedError,
+      );
+      const floors = new FleetAuthAuthorityFloorStore(context.floorRoot);
+      const advanced = floors.revokeAccountAuthority({
+        kind: 'contact_binding',
+        resourceId: seeded.targetBindingId,
+        reason: DIGEST,
+        at: new Date().toISOString(),
+      });
+      await reconcileFleetAuthAuthorityState(context.pool, advanced, randomUUID());
+      const receipts = await context.pool.query<{ count: string }>(`
+        SELECT count(*)::text AS count
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.lifecycle_decision_receipts
+        WHERE decision_id = $1
+      `, [decision.decisionId]);
+      expect(receipts.rows[0]?.count).toBe('0');
+
+      await expect(context.store.execute(decision)).rejects.toMatchObject({
+        reasonCode: 'lifecycle_decision_terminal',
+      });
+    } finally {
+      await context.pool.end();
+      rmSync(context.floorRoot, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
+  it('publishes immutable source-principal authority before principal merge SQL mutation', async () => {
+    const context = await freshContext();
+    try {
+      const seeded = await seedOwnerAndTarget(context.pool);
+      const decision = {
+        ...baseDecision('principal.merge', claim(seeded.actorId), claim(seeded.actorId)),
+        source: claim(seeded.targetId),
+        canonicalProvider: providerProof('123456789012345678'),
+        sourceProvider: providerProof('223456789012345678'),
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      await executeDecision(context, decision);
+      const floor = new FleetAuthAuthorityFloorStore(context.floorRoot).read();
+      expect(floor.trustedHost.tombstones).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'principal' }),
+      ]));
+    } finally {
+      await context.pool.end();
+      rmSync(context.floorRoot, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
+  it('publishes companion-only floor authority before companion removal SQL mutation', async () => {
+    const context = await freshContext();
+    try {
+      const seeded = await seedOwnerAndTarget(context.pool);
+      const decision = {
+        ...baseDecision('companion.remove', claim(seeded.actorId), claim(seeded.actorId)),
+        companionId: seeded.companionId,
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      await executeDecision(context, decision);
+      const floor = new FleetAuthAuthorityFloorStore(context.floorRoot).read();
+      expect(floor.trustedHost.tombstones).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'companion' }),
+      ]));
+      expect(floor.trustedHost.tombstones).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: 'provider_subject' }),
+      ]));
+    } finally {
+      await context.pool.end();
+      rmSync(context.floorRoot, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
+  it('writes resource-complete redacted audit evidence that distinguishes exact role mutations', async () => {
+    const context = await freshContext();
+    try {
+      const seeded = await seedOwnerAndTarget(context.pool);
+      await context.pool.query(`
+        UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+        SET version = 7
+        WHERE grant_id = $1
+      `, [seeded.targetGrantId]);
+      const decision = {
+        ...baseDecision('role.change', claim(seeded.actorId), claim(seeded.targetId)),
+        companionId: seeded.companionId,
+        grantId: seeded.targetGrantId,
+        newGrantId: randomUUID(),
+        currentRole: 'member' as const,
+        role: 'admin' as const,
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      await executeDecision(context, decision);
+      const audit = await context.pool.query<{
+        resource: string;
+        principal_id: string | null;
+        companion_id: string | null;
+        decision_context: Record<string, unknown>;
+      }>(`
+        SELECT resource, principal_id, companion_id, decision_context
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+        WHERE decision_id = $1
+      `, [decision.decisionId]);
+      expect(audit.rows[0]).toMatchObject({
+        resource: expect.stringMatching(/^lifecycle:role\.change:[0-9a-f]{64}$/u),
+        principal_id: null,
+        companion_id: null,
+        decision_context: {
+          action: 'role.change',
+          oldRole: 'member',
+          newRole: 'admin',
+          authorityClaim: { authorityGeneration: 1, globalAuthEpoch: 1 },
+          actorSession: expect.objectContaining({
+            sessionDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+            providerSubjectDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+          }),
+          resourceClaims: expect.objectContaining({
+            companionDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+            grantDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+            replacementGrantDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+          }),
+        },
+      });
+      const encoded = JSON.stringify(audit.rows[0]);
+      expect(encoded).not.toContain(seeded.actorId);
+      expect(encoded).not.toContain(seeded.targetId);
+      expect(encoded).not.toContain(seeded.companionId);
+      expect(encoded).not.toContain(seeded.targetGrantId);
+      const integrationContract = await context.pool.query<{
+        actor_authority_generation: string;
+        actor_session_epoch: string;
+        actor_session_revoked_at: Date | null;
+        target_grant_version: string;
+        old_resource_version: string;
+        new_resource_version: string;
+      }>(`
+        SELECT
+          (SELECT authority_generation::text
+           FROM ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+           WHERE principal_id = $1) AS actor_authority_generation,
+          (SELECT global_auth_epoch::text
+           FROM ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions
+           WHERE record_id = $2) AS actor_session_epoch,
+          (SELECT revoked_at
+           FROM ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions
+           WHERE record_id = $2) AS actor_session_revoked_at,
+          (SELECT grant_version::text
+           FROM ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+           WHERE principal_id = $3) AS target_grant_version,
+          (SELECT version::text
+           FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+           WHERE grant_id = $4) AS old_resource_version,
+          (SELECT version::text
+           FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+           WHERE grant_id = $5) AS new_resource_version
+      `, [
+        seeded.actorId,
+        decision.actorSession.sessionId,
+        seeded.targetId,
+        seeded.targetGrantId,
+        decision.newGrantId,
+      ]);
+      expect(integrationContract.rows[0]).toEqual({
+        actor_authority_generation: '1',
+        actor_session_epoch: '2',
+        actor_session_revoked_at: null,
+        target_grant_version: '2',
+        old_resource_version: '8',
+        new_resource_version: '8',
       });
     } finally {
       await context.pool.end();

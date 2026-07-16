@@ -1,5 +1,10 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
+import {
+  insertLifecycleAudit,
+  readRedactedLifecycleResourceSnapshot,
+} from './authority-lifecycle-audit.js';
+import { appendAccountAuthorityFloorProjection } from './authority-floor-projection.js';
 import type { AccountAuthorityFencePort } from './provider-revocation-authority.js';
 import {
   LifecycleMutationDenied,
@@ -7,11 +12,19 @@ import {
 } from './authority-lifecycle-mutation-contract.js';
 import { prepareLifecycleMutation } from './authority-lifecycle-mutations.js';
 import {
+  lifecycleProviderProofs,
+  lockAndValidateLifecycleProviderProofs,
+} from './authority-lifecycle-proof.js';
+import {
+  acquireLifecycleDecisionLock,
+  lifecycleDecisionIsTerminal,
+  releaseLifecycleDecisionLock,
+} from './authority-lifecycle-terminal.js';
+import {
   assertVerifiedFleetAuthLifecycleDecision,
   type FleetAuthLifecycleResult,
   type PrincipalAuthorityClaim,
   type VerifiedFleetAuthLifecycleDecision,
-  type VerifiedProviderProof,
 } from './authority-lifecycle-types.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 
@@ -44,19 +57,6 @@ function integer(value: string, field: string): number {
     throw new Error(`Invalid fleet_auth lifecycle ${field}`);
   }
   return parsed;
-}
-
-function digest(value: string): string {
-  return createHash('sha256').update(value).digest('hex');
-}
-
-function proofs(decision: VerifiedFleetAuthLifecycleDecision): VerifiedProviderProof[] {
-  const result: VerifiedProviderProof[] = [];
-  if ('currentProvider' in decision) result.push(decision.currentProvider);
-  if ('newProvider' in decision) result.push(decision.newProvider);
-  if ('canonicalProvider' in decision) result.push(decision.canonicalProvider);
-  if ('sourceProvider' in decision) result.push(decision.sourceProvider);
-  return result;
 }
 
 function claims(decision: VerifiedFleetAuthLifecycleDecision): PrincipalAuthorityClaim[] {
@@ -96,28 +96,6 @@ function expectedStatus(
   return ['active'];
 }
 
-function redactedContext(decision: VerifiedFleetAuthLifecycleDecision): Record<string, unknown> {
-  return {
-    schemaVersion: 1,
-    action: decision.action,
-    actorDigest: digest(decision.actor.principalId),
-    targetDigest: digest(decision.target.principalId),
-    actorIsTarget: decision.actor.principalId === decision.target.principalId,
-    ...('source' in decision
-      ? { sourceDigest: digest(decision.source.principalId) }
-      : {}),
-    ...('companionId' in decision
-      ? { companionDigest: digest(decision.companionId) }
-      : {}),
-    providerProofs: proofs(decision).map(proof => ({
-      provider: proof.provider,
-      subjectDigest: digest(proof.subjectId),
-      callbackDigest: digest(proof.callbackTransactionId),
-      proofDigest: proof.proofDigest,
-    })),
-  };
-}
-
 function denialReason(error: unknown): string {
   if (error instanceof FleetAuthLifecycleDeniedError
     || error instanceof LifecycleMutationDenied) {
@@ -150,15 +128,31 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
       throw new FleetAuthLifecycleDeniedError('invalid_verified_decision', { cause: error });
     }
     const client = await this.pool.connect();
+    let decisionLockHeld = false;
     try {
+      await acquireLifecycleDecisionLock(client, decision.decisionId);
+      decisionLockHeld = true;
       await client.query('BEGIN');
+      if (await lifecycleDecisionIsTerminal(client, decision.decisionId)) {
+        throw new FleetAuthLifecycleDeniedError('lifecycle_decision_terminal');
+      }
       const authority = await this.lockAuthority(client, decision);
-      await this.lockAndValidateProviderProofs(client, decision);
+      await lockAndValidateLifecycleProviderProofs(client, decision);
       await this.consumeReceipts(client, decision);
       await this.lockAndValidateClaims(client, decision);
       await this.lockAndValidateActorSession(client, decision);
       const mutation = await prepareLifecycleMutation(client, decision);
       await this.lockAffectedPrincipals(client, mutation.affectedPrincipalIds);
+      const principalIds = [...new Set([
+        ...claims(decision).map(claim => claim.principalId),
+        ...mutation.affectedPrincipalIds,
+      ])].sort();
+      const before = await readRedactedLifecycleResourceSnapshot(
+        client,
+        decision,
+        principalIds,
+        mutation.affectedPrincipalIds,
+      );
 
       let authorityGeneration = decision.authorityGeneration;
       if (mutation.revocations.length > 0) {
@@ -171,6 +165,11 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
         if (authorityGeneration !== decision.authorityGeneration + 1) {
           throw new FleetAuthLifecycleDeniedError('non_restored_authority_race');
         }
+        await appendAccountAuthorityFloorProjection(
+          client,
+          mutation.revocations,
+          authorityGeneration,
+        );
       }
 
       await mutation.apply(authorityGeneration);
@@ -179,6 +178,12 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
         mutation.bumps,
         authorityGeneration,
         decision.decidedAt,
+      );
+      const after = await readRedactedLifecycleResourceSnapshot(
+        client,
+        decision,
+        principalIds,
+        mutation.affectedPrincipalIds,
       );
       const globalAuthEpoch = integer(authority.global_auth_epoch, 'global_auth_epoch') + 1;
       const authorityUpdate = await client.query(`
@@ -202,10 +207,16 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
         mutation.affectedPrincipalIds,
         decision.decidedAt,
       );
-      await this.insertAudit(client, decision, 'allow', 'lifecycle_transition_applied', {
+      await this.carryForwardUnaffectedEphemeralAuthority(
+        client,
+        mutation.affectedPrincipalIds,
+        decision.globalAuthEpoch,
+        globalAuthEpoch,
+      );
+      await insertLifecycleAudit(client, decision, 'allow', 'lifecycle_transition_applied', {
         authorityGeneration,
         globalAuthEpoch,
-      });
+      }, { before, after });
       const target = await this.readClaim(client, decision.target.principalId);
       await client.query('COMMIT');
       return {
@@ -217,9 +228,12 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
       };
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
+      if (await lifecycleDecisionIsTerminal(client, decision.decisionId)) {
+        throw new FleetAuthLifecycleDeniedError('lifecycle_decision_terminal', { cause: error });
+      }
       const reasonCode = denialReason(error);
       try {
-        await this.persistDenial(decision, reasonCode);
+        await this.persistDenial(client, decision, reasonCode);
       } catch (auditError) {
         throw new FleetAuthLifecycleDeniedError(
           'denial_audit_persistence_failed',
@@ -230,6 +244,9 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
         ? error
         : new FleetAuthLifecycleDeniedError(reasonCode);
     } finally {
+      if (decisionLockHeld) {
+        await releaseLifecycleDecisionLock(client, decision.decisionId);
+      }
       client.release();
     }
   }
@@ -267,7 +284,7 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
         (receipt_id, decision_id, ceremony_id, action, created_at)
       VALUES ($1, $1, $2, $3, $4)
     `, [decision.decisionId, decision.ceremonyId, decision.action, decision.decidedAt]);
-    for (const proof of proofs(decision)) {
+    for (const { proof } of lifecycleProviderProofs(decision)) {
       await client.query(`
         INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.lifecycle_decision_receipts
           (receipt_id, decision_id, ceremony_id, callback_transaction_id,
@@ -282,37 +299,6 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
         proof.proofDigest,
         decision.decidedAt,
       ]);
-    }
-  }
-
-  private async lockAndValidateProviderProofs(
-    client: PoolClient,
-    decision: VerifiedFleetAuthLifecycleDecision,
-  ): Promise<void> {
-    for (const proof of proofs(decision)) {
-      const result = await client.query<{ transaction_id: string }>(`
-        SELECT transaction.transaction_id
-        FROM ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions AS transaction
-        WHERE transaction.transaction_id = $1
-          AND transaction.status = 'consumed'
-          AND transaction.consumed_at IS NOT NULL
-          AND transaction.consumed_at <= $2
-          AND $2 <= clock_timestamp()
-          AND transaction.expires_at > clock_timestamp()
-          AND transaction.global_auth_epoch = $3
-          AND transaction.verified_provider = $4
-          AND transaction.verified_provider_subject_id = $5
-        FOR UPDATE OF transaction
-      `, [
-        proof.callbackTransactionId,
-        decision.decidedAt,
-        decision.globalAuthEpoch,
-        proof.provider,
-        proof.subjectId,
-      ]);
-      if (result.rowCount !== 1) {
-        throw new FleetAuthLifecycleDeniedError('provider_callback_proof_invalid');
-      }
     }
   }
 
@@ -492,7 +478,41 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
       UPDATE ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions
       SET status = 'revoked'
       WHERE status = 'pending'
-    `);
+        AND (initiating_principal_id IS NULL
+          OR initiating_principal_id = ANY($1::uuid[]))
+    `, [unique]);
+  }
+
+  private async carryForwardUnaffectedEphemeralAuthority(
+    client: PoolClient,
+    affectedPrincipalIds: string[],
+    currentEpoch: number,
+    nextEpoch: number,
+  ): Promise<void> {
+    const affected = [...new Set(affectedPrincipalIds)];
+    for (const table of [
+      'browser_sessions',
+      'jit_authorization_grants',
+      'step_up_challenges',
+      'provider_token_custody',
+      'discord_evidence_snapshots',
+      'discord_evidence_lifecycle_fences',
+    ]) {
+      await client.query(`
+        UPDATE ${FLEET_AUTH_SCHEMA_NAME}.${table}
+        SET global_auth_epoch = $3
+        WHERE global_auth_epoch = $2
+          AND NOT (principal_id = ANY($1::uuid[]))
+      `, [affected, currentEpoch, nextEpoch]);
+    }
+    await client.query(`
+      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions
+      SET global_auth_epoch = $3
+      WHERE status = 'pending'
+        AND global_auth_epoch = $2
+        AND initiating_principal_id IS NOT NULL
+        AND NOT (initiating_principal_id = ANY($1::uuid[]))
+    `, [affected, currentEpoch, nextEpoch]);
   }
 
   private async readClaim(client: PoolClient, principalId: string): Promise<PrincipalAuthorityClaim> {
@@ -516,47 +536,12 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
     };
   }
 
-  private async insertAudit(
+  private async persistDenial(
     client: PoolClient,
     decision: VerifiedFleetAuthLifecycleDecision,
-    outcome: 'allow' | 'deny',
-    reasonCode: string,
-    authority: { authorityGeneration: number; globalAuthEpoch: number },
-  ): Promise<void> {
-    await client.query(`
-      INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
-        (event_id, actor_context, action, resource, decision, reason_code,
-         companion_id, principal_id, authority_generation, global_auth_epoch,
-         correlation_id, occurred_at, decision_id, ceremony_id, reason_digest,
-         decision_context)
-      VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7, $8, $9, $10,
-              $11, $12, $13, $14, $15, $16::jsonb)
-      ON CONFLICT (decision_id) WHERE decision_id IS NOT NULL DO NOTHING
-    `, [
-      randomUUID(),
-      JSON.stringify({ kind: 'principal', idDigest: digest(decision.actor.principalId) }),
-      decision.action,
-      `lifecycle:${decision.action}`,
-      outcome,
-      reasonCode,
-      'companionId' in decision ? decision.companionId : null,
-      decision.target.principalId,
-      authority.authorityGeneration,
-      authority.globalAuthEpoch,
-      decision.decisionId,
-      decision.decidedAt,
-      decision.decisionId,
-      decision.ceremonyId,
-      decision.reasonDigest,
-      JSON.stringify(redactedContext(decision)),
-    ]);
-  }
-
-  private async persistDenial(
-    decision: VerifiedFleetAuthLifecycleDecision,
     reasonCode: string,
   ): Promise<void> {
-    const result = await this.pool.query<AuthorityRow>(`
+    const result = await client.query<AuthorityRow>(`
       SELECT authority_generation, global_auth_epoch
       FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
       WHERE singleton = TRUE
@@ -565,14 +550,9 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
       throw new Error('fleet_auth authority_state singleton is missing during denial audit');
     }
     const authority = result.rows[0];
-    const client = await this.pool.connect();
-    try {
-      await this.insertAudit(client, decision, 'deny', reasonCode, {
-        authorityGeneration: integer(authority.authority_generation, 'authority_generation'),
-        globalAuthEpoch: integer(authority.global_auth_epoch, 'global_auth_epoch'),
-      });
-    } finally {
-      client.release();
-    }
+    await insertLifecycleAudit(client, decision, 'deny', reasonCode, {
+      authorityGeneration: integer(authority.authority_generation, 'authority_generation'),
+      globalAuthEpoch: integer(authority.global_auth_epoch, 'global_auth_epoch'),
+    });
   }
 }

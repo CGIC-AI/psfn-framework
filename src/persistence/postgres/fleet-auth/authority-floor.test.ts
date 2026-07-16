@@ -122,6 +122,8 @@ describe('non-restored fleet auth authority floors', () => {
       restoredTombstones: [
         { kind: 'provider_subject', resourceId: 'discord:123456789012345678' },
         { kind: 'role_grant', resourceId: 'old-role-grant' },
+        { kind: 'principal', resourceId: PRINCIPAL_ID },
+        { kind: 'companion', resourceId: '22222222-2222-4222-8222-222222222222' },
       ],
       at: '2026-07-15T13:00:00.000Z',
     });
@@ -129,7 +131,11 @@ describe('non-restored fleet auth authority floors', () => {
     expect(restored.trustedHost.authorityGeneration).toBe(3);
     expect(restored.trustedHost.restoreCheckpoint).toBe(1);
     expect(restored.trustedHost.revocationCheckpoint).toBe(1);
-    expect(restored.trustedHost.tombstones).toHaveLength(2);
+    expect(restored.trustedHost.tombstones).toHaveLength(4);
+    expect(floor.read().trustedHost.tombstones).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'principal' }),
+      expect.objectContaining({ kind: 'companion' }),
+    ]));
     expect(() => floor.prepareRestore({
       activationGeneration: 1,
       restoredTombstones: [],

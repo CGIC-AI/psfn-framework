@@ -17,7 +17,7 @@ export interface ProviderRevocationAuthorityPort {
 export interface AccountAuthorityFencePort extends ProviderRevocationAuthorityPort {
   fenceMany(input: {
     resources: ReadonlyArray<{
-      kind: 'provider_subject' | 'contact_binding' | 'role_grant';
+      kind: 'provider_subject' | 'contact_binding' | 'role_grant' | 'principal' | 'companion';
       resourceId: string;
     }>;
     reasonDigest: string;

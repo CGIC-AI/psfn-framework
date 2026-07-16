@@ -7,7 +7,7 @@ export interface LifecycleVersionBump {
 }
 
 export interface LifecycleRevocation {
-  kind: 'provider_subject' | 'contact_binding' | 'role_grant';
+  kind: 'provider_subject' | 'contact_binding' | 'role_grant' | 'principal' | 'companion';
   resourceId: string;
 }
 

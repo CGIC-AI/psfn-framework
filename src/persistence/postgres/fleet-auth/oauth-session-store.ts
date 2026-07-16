@@ -4,7 +4,13 @@ import {
   FleetAuthBrokerError,
   type FleetAuthBrokerStore,
   type FleetAuthSessionRecord,
+  type OAuthTransactionKind,
 } from '../../../boundary/gateway/fleet-auth-broker.js';
+import {
+  lifecycleOAuthKindFor,
+  type LifecycleOAuthAction,
+  type LifecycleOAuthProofRole,
+} from '../../../shared/contracts/fleet-auth-lifecycle-oauth.js';
 import {
   completeFirstOwnerAuthority,
   revokeProviderAuthority,
@@ -64,6 +70,132 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
     return await consumeOAuthTransaction(this.pool, this.codec, input);
   }
 
+  async createLifecycleOAuthTransaction(
+    input: Parameters<FleetAuthBrokerStore['createLifecycleOAuthTransaction']>[0],
+  ): Promise<void> {
+    const expectedKind = lifecycleOAuthKindFor(
+      input.lifecyclePurpose.action,
+      input.lifecyclePurpose.proofRole,
+    );
+    if (input.kind !== expectedKind) {
+      throw new FleetAuthBrokerError(
+        'oauth_transaction_kind_mismatch',
+        400,
+        'Lifecycle OAuth kind does not match its exact proof purpose',
+      );
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(`SELECT global_auth_epoch FROM ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}()`);
+      const session = await this.lockValidSession(
+        client,
+        input.token,
+        input.csrfToken,
+        input.createdAt,
+      );
+      await client.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions
+          (transaction_id, state_digest, initiating_browser_digest, pkce_verifier_digest,
+           pkce_verifier_ciphertext, callback_uri, return_path, kind, status,
+           global_auth_epoch, created_at, expires_at, lifecycle_ceremony_id,
+           lifecycle_action, lifecycle_proof_role, initiating_principal_id,
+           initiating_session_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $10, $11,
+                $12, $13, $14, $15, $16)
+      `, [
+        input.transactionId,
+        input.stateDigest,
+        input.initiatingBrowserDigest,
+        this.codec.digest(input.pkceVerifier),
+        this.codec.encrypt(input.pkceVerifier),
+        input.callbackUri,
+        input.returnPath,
+        input.kind,
+        session.global_auth_epoch,
+        input.createdAt,
+        input.expiresAt,
+        input.lifecyclePurpose.ceremonyId,
+        input.lifecyclePurpose.action,
+        input.lifecyclePurpose.proofRole,
+        session.principal_id,
+        session.record_id,
+      ]);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async completeLifecycleOAuthEvidence(
+    input: Parameters<FleetAuthBrokerStore['completeLifecycleOAuthEvidence']>[0],
+  ): ReturnType<FleetAuthBrokerStore['completeLifecycleOAuthEvidence']> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const authority = await client.query<{ global_auth_epoch: string }>(`
+        SELECT global_auth_epoch
+        FROM ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}()
+      `);
+      const transaction = await client.query<{
+        status: string;
+        kind: OAuthTransactionKind;
+        global_auth_epoch: string;
+        expires_at: Date;
+        verified_provider: string | null;
+        verified_provider_subject_id: string | null;
+        lifecycle_ceremony_id: string | null;
+        lifecycle_action: LifecycleOAuthAction | null;
+        lifecycle_proof_role: LifecycleOAuthProofRole | null;
+        initiating_principal_id: string | null;
+        initiating_session_id: string | null;
+      }>(`
+        SELECT status, kind, global_auth_epoch, expires_at, verified_provider,
+               verified_provider_subject_id, lifecycle_ceremony_id, lifecycle_action,
+               lifecycle_proof_role, initiating_principal_id, initiating_session_id
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions
+        WHERE transaction_id = $1
+        FOR UPDATE
+      `, [input.transactionId]);
+      const row = transaction.rows.at(0);
+      if (!row
+        || row.status !== 'consumed'
+        || row.global_auth_epoch !== authority.rows.at(0)?.global_auth_epoch
+        || row.expires_at.getTime() <= input.now.getTime()
+        || row.verified_provider !== null
+        || row.verified_provider_subject_id !== null
+        || !row.lifecycle_ceremony_id
+        || !row.lifecycle_action
+        || !row.lifecycle_proof_role
+        || !row.initiating_principal_id
+        || !row.initiating_session_id
+        || lifecycleOAuthKindFor(row.lifecycle_action, row.lifecycle_proof_role) !== row.kind) {
+        throw new FleetAuthBrokerError('invalid_oauth_state', 400, 'OAuth lifecycle proof is not usable');
+      }
+      await client.query(`
+        UPDATE ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions
+        SET verified_provider = 'discord', verified_provider_subject_id = $2
+        WHERE transaction_id = $1
+      `, [input.transactionId, input.providerSubjectId]);
+      await client.query('COMMIT');
+      return {
+        ceremonyId: row.lifecycle_ceremony_id,
+        action: row.lifecycle_action,
+        proofRole: row.lifecycle_proof_role,
+        initiatingPrincipalId: row.initiating_principal_id,
+        initiatingSessionId: row.initiating_session_id,
+      };
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async createLoginSession(
     input: Parameters<FleetAuthBrokerStore['createLoginSession']>[0],
   ): Promise<FleetAuthSessionRecord> {
@@ -81,17 +213,22 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
       if (!authority) throw new Error('fleet_auth authority_state singleton is missing');
       const transaction = await client.query<{
         status: string;
+        kind: OAuthTransactionKind;
         global_auth_epoch: string;
         completed_session_id: string | null;
+        lifecycle_ceremony_id: string | null;
       }>(`
-        SELECT status, global_auth_epoch, completed_session_id
+        SELECT status, kind, global_auth_epoch, completed_session_id,
+               lifecycle_ceremony_id
         FROM ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions
         WHERE transaction_id = $1
         FOR UPDATE
       `, [input.transactionId]);
       const transactionRow = transaction.rows.at(0);
       if (transactionRow?.status !== 'consumed'
+        || transactionRow.kind !== 'login'
         || transactionRow.completed_session_id !== null
+        || transactionRow.lifecycle_ceremony_id !== null
         || transactionRow.global_auth_epoch !== authority.global_auth_epoch) {
         throw new FleetAuthBrokerError('invalid_oauth_state', 400, 'OAuth transaction is not usable');
       }

@@ -18,7 +18,9 @@ const PROVIDER_SUBJECT_PATTERN = /^[1-9][0-9]{16,19}$/u;
 export type AccountAuthorityTombstoneKind =
   | 'provider_subject'
   | 'contact_binding'
-  | 'role_grant';
+  | 'role_grant'
+  | 'principal'
+  | 'companion';
 
 export interface AccountAuthorityTombstone {
   kind: AccountAuthorityTombstoneKind;
@@ -132,7 +134,11 @@ function assertAccountAuthorityTombstoneKind(
   value: unknown,
   field: string,
 ): asserts value is AccountAuthorityTombstoneKind {
-  if (value !== 'provider_subject' && value !== 'contact_binding' && value !== 'role_grant') {
+  if (value !== 'provider_subject'
+    && value !== 'contact_binding'
+    && value !== 'role_grant'
+    && value !== 'principal'
+    && value !== 'companion') {
     throw new Error(`Invalid fleet auth authority floor: ${field} is unknown`);
   }
 }

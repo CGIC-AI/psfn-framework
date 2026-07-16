@@ -471,7 +471,9 @@ async function prepareCompanionMutation(
       principalId,
       { authz: true, binding: true, grant: true, policy: true },
     ])),
-    revocations: [],
+    revocations: decision.action === 'companion.remove'
+      ? [{ kind: 'companion', resourceId: decision.companionId }]
+      : [],
     apply: async authorityGeneration => {
       await client.query(`
         UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state

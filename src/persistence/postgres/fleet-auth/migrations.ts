@@ -841,6 +841,70 @@ CREATE INDEX lifecycle_decision_receipts_decision_idx
   ON lifecycle_decision_receipts (decision_id);
 `;
 
+const LIFECYCLE_OAUTH_PURPOSE_SQL = `
+CREATE TABLE authority_floor_tombstone_projection (
+  kind TEXT NOT NULL CHECK (kind IN (
+    'provider_subject', 'contact_binding', 'role_grant', 'principal', 'companion'
+  )),
+  resource_hash TEXT NOT NULL CHECK (resource_hash ~ '^[0-9a-f]{64}$'),
+  authority_generation BIGINT NOT NULL CHECK (authority_generation >= 1),
+  PRIMARY KEY (kind, resource_hash)
+);
+
+ALTER TABLE oauth_transactions
+  ADD COLUMN lifecycle_ceremony_id UUID,
+  ADD COLUMN lifecycle_action TEXT,
+  ADD COLUMN lifecycle_proof_role TEXT,
+  ADD COLUMN initiating_principal_id UUID REFERENCES human_principals(principal_id),
+  ADD COLUMN initiating_session_id UUID REFERENCES browser_sessions(record_id);
+
+-- Pending pre-v14 non-login transactions have no trustworthy lifecycle
+-- purpose. Revoke them instead of inferring a ceremony or proof role.
+UPDATE oauth_transactions
+SET status = 'revoked'
+WHERE status = 'pending'
+  AND kind <> 'login'
+  AND lifecycle_ceremony_id IS NULL;
+
+ALTER TABLE oauth_transactions
+  ADD CONSTRAINT oauth_transaction_lifecycle_purpose_complete CHECK (
+    (lifecycle_ceremony_id IS NULL
+      AND lifecycle_action IS NULL
+      AND lifecycle_proof_role IS NULL
+      AND initiating_principal_id IS NULL
+      AND initiating_session_id IS NULL)
+    OR
+    (lifecycle_ceremony_id IS NOT NULL
+      AND lifecycle_action IS NOT NULL
+      AND lifecycle_proof_role IS NOT NULL
+      AND initiating_principal_id IS NOT NULL
+      AND initiating_session_id IS NOT NULL)
+  ),
+  ADD CONSTRAINT oauth_transaction_lifecycle_purpose_exact CHECK (
+    lifecycle_action IS NULL OR (
+      (lifecycle_action IN ('binding.activate', 'provider.add')
+        AND lifecycle_proof_role = 'new'
+        AND kind = 'provider_link')
+      OR (lifecycle_action = 'provider.relink'
+        AND lifecycle_proof_role = 'new'
+        AND kind = 'recovery')
+      OR (lifecycle_action = 'provider.replace'
+        AND lifecycle_proof_role IN ('current', 'new')
+        AND kind = 'provider_replace')
+      OR (lifecycle_action = 'provider.unlink'
+        AND lifecycle_proof_role = 'current'
+        AND kind = 'recovery')
+      OR (lifecycle_action = 'principal.merge'
+        AND lifecycle_proof_role IN ('canonical', 'source')
+        AND kind = 'recovery')
+    )
+  );
+
+CREATE UNIQUE INDEX oauth_transaction_lifecycle_proof_unique
+  ON oauth_transactions (lifecycle_ceremony_id, lifecycle_proof_role)
+  WHERE lifecycle_ceremony_id IS NOT NULL;
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
@@ -855,4 +919,5 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 11, name: 'discord_evidence_lifecycle_fence', sql: DISCORD_EVIDENCE_LIFECYCLE_FENCE_SQL },
   { version: 12, name: 'exclusive_broker_authority_lock', sql: FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL },
   { version: 13, name: 'atomic_authority_lifecycle', sql: ATOMIC_AUTHORITY_LIFECYCLE_SQL },
+  { version: 14, name: 'lifecycle_oauth_purpose', sql: LIFECYCLE_OAUTH_PURPOSE_SQL },
 ] as const;

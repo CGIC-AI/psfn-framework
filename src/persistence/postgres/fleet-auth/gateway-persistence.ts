@@ -41,6 +41,7 @@ import type { DiscordEvidenceObservationPort } from '../../../boundary/fleet-aut
 import { PostgresDiscordEvidenceStore } from './discord-evidence-store.js';
 import { DiscordEvidenceLifecycleCoordinator } from '../../../boundary/fleet-auth/discord-evidence-lifecycle.js';
 import { GatewayFleetAuthAuthorityLifecycleStore } from './authority-lifecycle-store.js';
+import { replaceAccountAuthorityFloorProjection } from './authority-floor-projection.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -107,6 +108,7 @@ export async function reconcileFleetAuthAuthorityStateInTransaction(
   auditEventId: string,
 ): Promise<void> {
   const trusted = floor.trustedHost;
+  await replaceAccountAuthorityFloorProjection(client, trusted.tombstones);
   const result = await client.query<{ global_auth_epoch: string }>(`
     SELECT global_auth_epoch
     FROM ${FLEET_AUTH_RECONCILE_FUNCTION_NAME}($1, $2, $3, $4, $5)
@@ -205,12 +207,17 @@ export function createGatewayAccountReapprovalAuthority(
   authorityFloors: FleetAuthAuthorityFloorStore,
 ): GatewayFleetAuthPersistence['reapproveAccountAuthority'] {
   return async (request) => {
-    const providerResourceId = `${request.provider}:${request.providerSubjectId}`;
-    if (authorityFloors.isAccountAuthorityTombstoned(
-      'provider_subject',
-      providerResourceId,
-    )) {
-      throw new Error('Provider subject is permanently tombstoned by non-restored authority');
+    const resources = [
+      ['provider_subject', `${request.provider}:${request.providerSubjectId}`],
+      ['principal', request.principalId],
+      ['companion', request.companionId],
+      ['contact_binding', request.bindingId],
+      ['role_grant', request.roleGrantId],
+    ] as const;
+    if (resources.some(([kind, resourceId]) => (
+      authorityFloors.isAccountAuthorityTombstoned(kind, resourceId)
+    ))) {
+      throw new Error('Account authority is permanently tombstoned by non-restored authority');
     }
     return await executeAccountReapproval(pool, request);
   };

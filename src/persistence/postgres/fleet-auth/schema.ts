@@ -96,6 +96,7 @@ export const FLEET_AUTH_EPHEMERAL_TABLES = [
 
 const FLEET_AUTH_MUTABLE_TABLES = [
   'authority_state',
+  'authority_floor_tombstone_projection',
   'companion_authority_state',
   'human_principals',
   'provider_subjects',
@@ -107,6 +108,7 @@ const FLEET_AUTH_MUTABLE_TABLES = [
 
 const FLEET_AUTH_RUNTIME_MUTABLE_TABLES = FLEET_AUTH_MUTABLE_TABLES.filter(
   table => table !== 'authority_state'
+    && table !== 'authority_floor_tombstone_projection'
     && table !== 'companion_authority_state'
     && table !== 'lifecycle_decision_receipts',
 );
@@ -518,7 +520,9 @@ async function assertExactDml(
   const runtimeImmutable = new Set<string>(FLEET_AUTH_RUNTIME_IMMUTABLE_TABLES);
   const expectedPrivileges = (tableName: string): ReadonlySet<string> => {
     if (mutable.has(tableName)) {
-      if (expectedRole === roles.runtime && tableName === 'lifecycle_decision_receipts') {
+      if (expectedRole === roles.runtime
+        && (tableName === 'lifecycle_decision_receipts'
+          || tableName === 'authority_floor_tombstone_projection')) {
         return new Set<string>();
       }
       if (expectedRole === roles.runtime

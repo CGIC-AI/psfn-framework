@@ -1,4 +1,5 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual } from 'node:crypto';
+import { digestFleetAuthVerifiedProviderProof } from '../../../shared/contracts/fleet-auth-lifecycle-oauth.js';
 import {
   assertNoUnknownKeys,
   isRecord,
@@ -43,12 +44,7 @@ export function digestVerifiedProviderProof(input: {
   subjectId: string;
   callbackTransactionId: string;
 }): string {
-  return createHash('sha256')
-    .update(
-      `fleet-auth-verified-provider-proof:v1:${input.provider}:`
-      + `${input.subjectId}:${input.callbackTransactionId}`,
-    )
-    .digest('hex');
+  return digestFleetAuthVerifiedProviderProof(input);
 }
 
 interface LifecycleDecisionBase {

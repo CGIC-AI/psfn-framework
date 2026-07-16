@@ -165,6 +165,100 @@ afterAll(async () => {
 }, TIMEOUT_MS);
 
 describe('Postgres gateway OAuth/session authority', () => {
+  it('produces exact lifecycle OAuth evidence without linking the new provider subject', async () => {
+    const { store, runtime, coordinator, migration } = await createStore();
+    try {
+      const loginInput = await authenticate(store, 'lifecycle-proof-producer');
+      const login = await store.createLoginSession({
+        ...loginInput,
+        providerSubjectId: PROVIDER_SUBJECT_ID,
+        providerMetadata: {},
+        audience: 'fleet',
+        now: NOW,
+        idleTtlMs: 1_800_000,
+        absoluteTtlMs: 28_800_000,
+      });
+      const transactionId = randomUUID();
+      const ceremonyId = randomUUID();
+      const stateDigest = createHash('sha256').update('lifecycle-state').digest('hex');
+      const browserDigest = createHash('sha256').update('lifecycle-browser').digest('hex');
+      const lifecycleInput = {
+        transactionId,
+        stateDigest,
+        initiatingBrowserDigest: browserDigest,
+        pkceVerifier: 'lifecycle-pkce-verifier',
+        callbackUri: 'https://fleet.example.test/auth/discord/callback',
+        returnPath: '/fleet/security',
+        kind: 'provider_link' as const,
+        createdAt: new Date(NOW.getTime() + 1_000),
+        expiresAt: new Date(NOW.getTime() + 301_000),
+        token: login.token,
+        csrfToken: login.csrfToken,
+        lifecyclePurpose: {
+          ceremonyId,
+          action: 'provider.add' as const,
+          proofRole: 'new' as const,
+        },
+      };
+      await expect(store.createLifecycleOAuthTransaction({
+        ...lifecycleInput,
+        kind: 'recovery',
+      })).rejects.toMatchObject({ code: 'oauth_transaction_kind_mismatch' });
+      await store.createLifecycleOAuthTransaction(lifecycleInput);
+      const consumed = await store.consumeOAuthTransaction({
+        stateDigest,
+        initiatingBrowserDigest: browserDigest,
+        now: new Date(NOW.getTime() + 2_000),
+      });
+      expect(consumed.lifecyclePurpose).toEqual({
+        ceremonyId,
+        action: 'provider.add',
+        proofRole: 'new',
+        initiatingPrincipalId: login.principalId,
+        initiatingSessionId: login.recordId,
+      });
+      await expect(store.createLoginSession({
+        transactionId,
+        providerSubjectId: '223456789012345679',
+        providerMetadata: {},
+        token: 'forbidden-login-token',
+        csrfToken: 'forbidden-login-csrf',
+        audience: 'fleet',
+        now: new Date(NOW.getTime() + 2_000),
+        idleTtlMs: 1_800_000,
+        absoluteTtlMs: 28_800_000,
+      })).rejects.toMatchObject({ code: 'invalid_oauth_state' });
+      const purpose = await store.completeLifecycleOAuthEvidence({
+        transactionId,
+        providerSubjectId: '223456789012345679',
+        now: new Date(NOW.getTime() + 3_000),
+      });
+      expect(purpose).toEqual(consumed.lifecyclePurpose);
+      const durable = await runtime.query<{
+        provider_count: string;
+        completed_session_id: string | null;
+        verified_provider_subject_id: string;
+      }>(`
+        SELECT
+          (SELECT count(*)::text FROM fleet_auth.provider_subjects
+           WHERE subject_id = '223456789012345679') AS provider_count,
+          completed_session_id,
+          verified_provider_subject_id
+        FROM fleet_auth.oauth_transactions
+        WHERE transaction_id = $1
+      `, [transactionId]);
+      expect(durable.rows[0]).toEqual({
+        provider_count: '0',
+        completed_session_id: null,
+        verified_provider_subject_id: '223456789012345679',
+      });
+    } finally {
+      await migration.end();
+      await coordinator.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
   it('durably fences Discord reauthentication against rotation with redacted audit evidence', async () => {
     const { store, runtime, coordinator, migration } = await createStore();
     try {

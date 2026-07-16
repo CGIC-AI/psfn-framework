@@ -81,9 +81,12 @@ function accountReapprovalScope(input: {
   authorityLineageId: string;
   authorityGeneration: number;
   restoreCheckpoint: number;
+  companionVersion?: number;
+  bindingVersion?: number;
+  roleGrantVersion?: number;
 }): Record<string, unknown> {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     principalId: input.principalId,
     provider: 'discord',
     providerSubjectId: input.providerSubjectId,
@@ -92,6 +95,9 @@ function accountReapprovalScope(input: {
     bindingId: input.bindingId,
     roleGrantId: input.roleGrantId,
     role: input.role,
+    companionVersion: input.companionVersion ?? 1,
+    bindingVersion: input.bindingVersion ?? 1,
+    roleGrantVersion: input.roleGrantVersion ?? 1,
     authorityLineageId: input.authorityLineageId,
     authorityGeneration: input.authorityGeneration,
     restoreCheckpoint: input.restoreCheckpoint,
@@ -174,7 +180,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       const ledger = await migration.query<{ version: number; checksum: string }>(
         `SELECT version, checksum FROM ${FLEET_AUTH_SCHEMA_NAME}.schema_migrations ORDER BY version`,
       );
-      expect(ledger.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+      expect(ledger.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
       expect(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum))).toBe(true);
 
       const tables = await migration.query<{ table_name: string }>(`
@@ -1640,6 +1646,13 @@ describe('fleet_auth Postgres authority boundary', () => {
         restoreCheckpoint: floor.trustedHost.restoreCheckpoint,
       });
 
+      await migration.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          (companion_id, lifecycle, authority_generation, restore_state)
+         VALUES ($1, 'quarantined', 1, 'quarantined')`,
+        [companionId],
+      );
+
       // A quarantined restore candidate: principal + provider subject + binding + role.
       await runtime.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
@@ -1674,6 +1687,55 @@ describe('fleet_auth Postgres authority boundary', () => {
          VALUES ($1, $2, $3, 'fleet.example.test', 'verifier', 1, 'quarantined', 1, 'quarantined')`,
         [passkeyHash, principalId, subjectId],
       );
+
+      // The SECURITY DEFINER procedure itself (not only the gateway wrapper)
+      // denies restored principal/companion identities projected from the
+      // non-restored authority floor.
+      for (const [index, kind, resourceId] of [
+        [0, 'principal', principalId],
+        [1, 'companion', companionId],
+      ] as const) {
+        const tombstonedCeremonyId = randomUUID();
+        await migration.query(`
+          INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authority_floor_tombstone_projection
+            (kind, resource_hash, authority_generation)
+          VALUES ($1, encode(sha256(convert_to($2, 'UTF8')), 'hex'), 1)
+        `, [kind, resourceId]);
+        await migration.query(`
+          INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+            (ceremony_id, nonce_digest, kind, expected_provider_subject_id,
+             expected_companion_id, expected_contact_id, exact_scope,
+             global_auth_epoch, expires_at)
+          VALUES ($1, $2, 'account_reapproval', $3, $4, 'contact-owner', $5::jsonb,
+                  1, clock_timestamp() + interval '5 minutes')
+        `, [
+          tombstonedCeremonyId,
+          String(index + 7).repeat(64),
+          subjectId,
+          companionId,
+          JSON.stringify(exactScope),
+        ]);
+        await expect(executeAccountReapproval(runtime, {
+          ceremonyId: tombstonedCeremonyId,
+          principalId,
+          provider: 'discord',
+          providerSubjectId: subjectId,
+          companionId,
+          contactId: 'contact-owner',
+          bindingId,
+          roleGrantId: grantId,
+          auditEventId: randomUUID(),
+          at: '2026-07-15T11:55:00.000Z',
+        })).rejects.toThrow(/tombstoned by the non-restored floor/);
+        await migration.query(`
+          DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_floor_tombstone_projection
+          WHERE kind = $1
+        `, [kind]);
+        await migration.query(`
+          DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+          WHERE ceremony_id = $1
+        `, [tombstonedCeremonyId]);
+      }
 
       // Direct runtime SQL cannot escalate any quarantined row.
       await expect(runtime.query(
@@ -1948,6 +2010,20 @@ describe('fleet_auth Postgres authority boundary', () => {
         [grantId],
       );
       expect(role.rows[0]).toEqual({ lifecycle: 'active', restore_state: 'live' });
+      const companion = await runtime.query<{
+        lifecycle: string;
+        restore_state: string;
+        version: string;
+      }>(`
+        SELECT lifecycle, restore_state, version::text AS version
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+        WHERE companion_id = $1
+      `, [companionId]);
+      expect(companion.rows[0]).toEqual({
+        lifecycle: 'active',
+        restore_state: 'live',
+        version: '2',
+      });
       const audit = await runtime.query<{ count: string }>(
         `SELECT COUNT(*)::text AS count FROM ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
          WHERE action = 'authority.reapprove' AND decision = 'allow' AND principal_id = $1
@@ -1983,6 +2059,131 @@ describe('fleet_auth Postgres authority boundary', () => {
         auditEventId: randomUUID(),
         at: '2026-07-15T12:10:00.000Z',
       })).rejects.toThrow(/not pending/);
+
+      // A second restored account can join the now-live companion without
+      // advancing the independent companion resource version again.
+      const secondPrincipalId = randomUUID();
+      const secondBindingId = randomUUID();
+      const secondGrantId = randomUUID();
+      const secondSubjectId = '223456789012345678';
+      await runtime.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+          (principal_id, status, authority_generation, restore_state)
+        VALUES ($1, 'quarantined', 1, 'quarantined')
+      `, [secondPrincipalId]);
+      await runtime.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+          (provider, subject_id, principal_id, state, authority_generation, restore_state)
+        VALUES ('discord', $1, $2, 'quarantined', 1, 'quarantined')
+      `, [secondSubjectId, secondPrincipalId]);
+      await runtime.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+          (binding_id, principal_id, companion_id, contact_id, state,
+           verification_provenance, authority_generation, restore_state)
+        VALUES ($1, $2, $3, 'contact-member', 'quarantined',
+                '{"kind":"verified"}', 1, 'quarantined')
+      `, [secondBindingId, secondPrincipalId, companionId]);
+      await runtime.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+          (grant_id, principal_id, companion_id, role, lifecycle,
+           authority_generation, restore_state)
+        VALUES ($1, $2, $3, 'member', 'quarantined', 1, 'quarantined')
+      `, [secondGrantId, secondPrincipalId, companionId]);
+      const secondCeremonyId = randomUUID();
+      const secondScope = accountReapprovalScope({
+        principalId: secondPrincipalId,
+        providerSubjectId: secondSubjectId,
+        companionId,
+        contactId: 'contact-member',
+        bindingId: secondBindingId,
+        roleGrantId: secondGrantId,
+        role: 'member',
+        companionVersion: 2,
+        authorityLineageId: floor.trustedHost.lineageId,
+        authorityGeneration: floor.trustedHost.authorityGeneration,
+        restoreCheckpoint: floor.trustedHost.restoreCheckpoint,
+      });
+      await migration.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+          (ceremony_id, nonce_digest, kind, expected_provider_subject_id,
+           expected_companion_id, expected_contact_id, exact_scope,
+           global_auth_epoch, expires_at)
+        VALUES ($1, $2, 'account_reapproval', $3, $4, 'contact-member', $5::jsonb,
+                2, clock_timestamp() + interval '5 minutes')
+      `, [
+        secondCeremonyId,
+        '2'.repeat(64),
+        secondSubjectId,
+        companionId,
+        JSON.stringify(secondScope),
+      ]);
+      await expect(executeAccountReapproval(runtime, {
+        ceremonyId: secondCeremonyId,
+        principalId: secondPrincipalId,
+        provider: 'discord',
+        providerSubjectId: secondSubjectId,
+        companionId,
+        contactId: 'contact-member',
+        bindingId: secondBindingId,
+        roleGrantId: secondGrantId,
+        auditEventId: randomUUID(),
+        at: '2026-07-15T12:15:00.000Z',
+      })).resolves.toMatchObject({ globalAuthEpoch: 3 });
+      const companionAfterSecond = await runtime.query<{
+        lifecycle: string;
+        restore_state: string;
+        version: string;
+      }>(`
+        SELECT lifecycle, restore_state, version::text AS version
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+        WHERE companion_id = $1
+      `, [companionId]);
+      expect(companionAfterSecond.rows[0]).toEqual({
+        lifecycle: 'active',
+        restore_state: 'live',
+        version: '2',
+      });
+
+      // A removed companion can never be reactivated as a side effect of
+      // reapproving one of its restored accounts.
+      await migration.query(`
+        UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+        SET lifecycle = 'removed', version = version + 1
+        WHERE companion_id = $1
+      `, [companionId]);
+      const thirdPrincipalId = randomUUID();
+      const thirdCeremonyId = randomUUID();
+      await runtime.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+          (principal_id, status, authority_generation, restore_state)
+        VALUES ($1, 'quarantined', 1, 'quarantined')
+      `, [thirdPrincipalId]);
+      await runtime.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+          (provider, subject_id, principal_id, state, authority_generation, restore_state)
+        VALUES ('discord', '323456789012345678', $1, 'quarantined', 1, 'quarantined')
+      `, [thirdPrincipalId]);
+      await migration.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+          (ceremony_id, nonce_digest, kind, expected_provider_subject_id,
+           expected_companion_id, expected_contact_id, exact_scope,
+           global_auth_epoch, expires_at)
+        VALUES ($1, $2, 'account_reapproval', '323456789012345678', $3,
+                'contact-removed', '{}'::jsonb, 3,
+                clock_timestamp() + interval '5 minutes')
+      `, [thirdCeremonyId, '3'.repeat(64), companionId]);
+      await expect(executeAccountReapproval(runtime, {
+        ceremonyId: thirdCeremonyId,
+        principalId: thirdPrincipalId,
+        provider: 'discord',
+        providerSubjectId: '323456789012345678',
+        companionId,
+        contactId: 'contact-removed',
+        bindingId: randomUUID(),
+        roleGrantId: randomUUID(),
+        auditEventId: randomUUID(),
+        at: '2026-07-15T12:20:00.000Z',
+      })).rejects.toThrow(/companion authority is not reapprovable/);
     } finally {
       await runtime.end();
       await migration.end();

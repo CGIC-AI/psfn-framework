@@ -101,6 +101,54 @@ describe('buildApiHealthChecks', () => {
     });
   });
 
+  function buildDiscordCheck(activeMode: string) {
+    const checks = buildApiHealthChecks(
+      {
+        config: {
+          primaryModel: 'openrouter/moonshotai/kimi-k2.5',
+          primaryProvider: 'openrouter',
+          modelRoster: {},
+        } as any,
+        memoryStore: {
+          getStats: async () => ({ total: 0, avgSalience: 0 }),
+        } as any,
+        gateway: { dims: 384 } as any,
+        scheduler: new Scheduler(new EventBus(), {
+          tickIntervalMs: 100,
+          heartbeatIntervalMs: 500,
+        }),
+        runtimeStatusMeta: { ...runtimeStatusMeta, activeMode } as any,
+      },
+      { enabled: false, timeoutMs: 10_000, cacheTtlMs: 10_000 },
+    );
+    return checks.discord;
+  }
+
+  it('reports Discord as delegated (healthy, not-applicable) in a split runtime topology', () => {
+    const result = buildDiscordCheck('split')();
+
+    expect(result).toMatchObject({
+      status: 'healthy',
+      detail: 'Discord transport is delegated to the gateway (not applicable to the agent container)',
+      meta: {
+        activeMode: 'split',
+        delegated: true,
+      },
+    });
+  });
+
+  it('reports Discord as delegated in the gateway-agent runtime topology', () => {
+    const result = buildDiscordCheck('gateway-agent')();
+
+    expect(result).toMatchObject({
+      status: 'healthy',
+      meta: {
+        activeMode: 'gateway-agent',
+        delegated: true,
+      },
+    });
+  });
+
   it('reports the reasoning probe slot and resolved backend route in llm health metadata', async () => {
     const gateway = {
       dims: 384,

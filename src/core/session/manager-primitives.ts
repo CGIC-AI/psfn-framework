@@ -11,7 +11,11 @@ import {
   type ContextBudgetTurnCharacteristics,
   type TemporalTurnWindow,
 } from '../../shared/context-budget.js';
-import { formatActiveDate } from '../../shared/time/active-timezone.js';
+import {
+  formatActiveDate,
+  formatActiveDateTimeCompact,
+  formatActiveWeekdayShort,
+} from '../../shared/time/active-timezone.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { decodeStoredChannelVisibility } from '../../system/trust/types.js';
@@ -299,6 +303,20 @@ export function isNonConversationalSessionEntry(entry: Pick<SessionEntry, 'metad
   return laneMetadata.schemaVersion === 1 && laneMetadata.kind === 'internal';
 }
 
+// Rendered history lines carry a '[<Www> MM-DD-YY HH:mm] ' provenance stamp
+// (see entriesToMessages / entryStampLabel in manager/context-support.ts). The
+// companion's own assistant turns stay unstamped so it does not mimic the prefix
+// into new replies. This budget estimate must count the same stamp overhead as
+// the rendered messages, otherwise the verbatim tail is selected slightly larger
+// than the assembly-side budget believes (psfn-framework-2x37.8).
+function stampOverheadTokens(entry: Pick<SessionEntry, 'role' | 'timestamp'>): number {
+  if (entry.role === 'assistant') return 0;
+  if (!Number.isFinite(entry.timestamp) || entry.timestamp <= 0) return 0;
+  const at = new Date(entry.timestamp);
+  const stampLabel = `${formatActiveWeekdayShort(at)} ${formatActiveDateTimeCompact(at)}`;
+  return countTokens(`[${stampLabel}] `);
+}
+
 export function trimRecentEntriesToTokenBudget(entries: SessionEntry[], tokenBudget: number): SessionEntry[] {
   if (entries.length === 0) return [];
   if (tokenBudget <= 0) {
@@ -310,7 +328,7 @@ export function trimRecentEntriesToTokenBudget(entries: SessionEntry[], tokenBud
 
   for (let index = entries.length - 1; index >= 0; index--) {
     const entry = entries[index];
-    const entryTokens = Math.max(1, countTokens(entry.content));
+    const entryTokens = Math.max(1, countTokens(entry.content) + stampOverheadTokens(entry));
     if (selected.length >= SESSION_HISTORY_MIN_MESSAGES && usedTokens + entryTokens > tokenBudget) {
       break;
     }

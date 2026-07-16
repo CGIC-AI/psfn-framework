@@ -176,6 +176,8 @@ function minimalRecord(): AdminSessionTurnData['record'] {
     userMessage: { role: 'user', content: 'hello' },
     toolCalls: [],
     extractedMemoryIds: [],
+    concernDeltaRefs: [],
+    contactDeltaRefs: [],
   } as unknown as AdminSessionTurnData['record'];
 }
 

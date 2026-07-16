@@ -1,6 +1,11 @@
 <script lang="ts">
   import { onDestroy, onMount } from 'svelte';
-  import { getSessionMessages, listSessions } from '$lib/api/endpoints/sessions';
+  import { ApiError } from '$lib/api/client';
+  import {
+    getSessionMessages,
+    getSessionTurnDetail,
+    listSessions,
+  } from '$lib/api/endpoints/sessions';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import PromptMonitorSelectedTurnTabs from '$lib/components/prompt-monitor/PromptMonitorSelectedTurnTabs.svelte';
   import {
@@ -14,6 +19,7 @@
     buildPromptMonitorTurns,
     formatPromptMonitorStageLabel,
     mergePromptMonitorEvent,
+    mergePromptMonitorResolvedTurn,
     PROMPT_MONITOR_STAGE_ORDER,
     resolvePromptMonitorMetrics,
     resolvePromptMonitorSummary,
@@ -21,6 +27,7 @@
     type PromptMonitorTurn,
   } from '$lib/events/prompt-monitor';
   import type { ChannelInfo } from '$lib/types';
+  import { isRecord } from '../../../../src/shared/utils/types.js';
 
   let channels = $state<ChannelInfo[]>([]);
   let selectedSessionId = $state<string | null>(null);
@@ -33,6 +40,8 @@
   let liveEventCount = $state(0);
 
   let unsubscribePromptEvents: (() => void) | null = null;
+  const pendingTurnDetailFetches = new Map<string, Promise<void>>();
+  const deferredTurnDetailFetches = new Set<string>();
 
   const selectedChannel = $derived(channels.find(channel => channel.sessionId === selectedSessionId) ?? null);
   const selectedLogicalChannelId = $derived(selectedChannel?.channelId ?? null);
@@ -180,6 +189,58 @@
     error = `Rejected malformed ${rejection.source} turn snapshot${turnLabel}: ${rejection.message}`;
   }
 
+  function isEndStageEvent(event: Parameters<typeof mergePromptMonitorEvent>[1]): boolean {
+    return event.type === 'agent.turn.stage'
+      && isRecord(event.data)
+      && event.data.stage === 'end';
+  }
+
+  function needsResolvedTurnDetail(turnId: string): boolean {
+    const turn = turns.find(candidate => candidate.turnId === turnId);
+    return turn !== undefined && (turn.record === null || turn.promptLoom === null);
+  }
+
+  function resolveLiveTurnDetail(turnId: string, surfaceFailure: boolean): void {
+    const sessionId = selectedSessionId;
+    if (!sessionId || !needsResolvedTurnDetail(turnId)) return;
+    if (!surfaceFailure && deferredTurnDetailFetches.has(turnId)) return;
+
+    const active = pendingTurnDetailFetches.get(turnId);
+    if (active) {
+      if (surfaceFailure) {
+        void active.finally(() => resolveLiveTurnDetail(turnId, true));
+      }
+      return;
+    }
+
+    let request: Promise<void>;
+    request = getSessionTurnDetail(sessionId, turnId)
+      .then((detail) => {
+        if (selectedSessionId !== sessionId) return;
+        turns = mergePromptMonitorResolvedTurn(turns, detail.turn, {
+          onRejectedSnapshot: surfaceSnapshotRejection,
+        });
+        deferredTurnDetailFetches.delete(turnId);
+      })
+      .catch((cause: unknown) => {
+        if (cause instanceof ApiError && cause.status === 404 && !surfaceFailure) {
+          // Snapshot/stage telemetry can beat the durable TurnRecord to the
+          // read endpoint. Record that race and retry exactly once when the end
+          // stage arrives instead of rendering the unresolved slim snapshot.
+          deferredTurnDetailFetches.add(turnId);
+          return;
+        }
+        const message = cause instanceof Error ? cause.message : 'Failed to resolve live turn detail';
+        error = `Failed to resolve live turn ${turnId}: ${message}`;
+      })
+      .finally(() => {
+        if (pendingTurnDetailFetches.get(turnId) === request) {
+          pendingTurnDetailFetches.delete(turnId);
+        }
+      });
+    pendingTurnDetailFetches.set(turnId, request);
+  }
+
   function handlePromptEvent(event: Parameters<typeof mergePromptMonitorEvent>[1]): void {
     if (!selectedLogicalChannelId || event.correlation.channelId !== selectedLogicalChannelId) {
       return;
@@ -197,12 +258,16 @@
     if (!selectedTurnId) {
       selectedTurnId = turns[0]?.turnId ?? null;
     }
+    const turnId = event.correlation.turnId;
+    if (turnId) {
+      resolveLiveTurnDetail(turnId, isEndStageEvent(event));
+    }
   }
 
   onMount(async () => {
     connectGardenEventBus();
     unsubscribePromptEvents = subscribeGardenEvents(handlePromptEvent, {
-      types: ['agent.turn.snapshot', 'agent.turn.stage'],
+      types: ['agent.turn.snapshot', 'agent.turn.stage', 'memory.retrieval'],
     });
     await loadChannels();
   });

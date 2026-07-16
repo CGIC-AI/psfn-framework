@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
+import type { ConcernStorePort } from '../../../core/intention/concern-store-port.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import { sessionEntryToMessage } from '../../../core/agent/messages.js';
 import { MESSAGE_CLASSES } from '../../../core/agent/message-classes.js';
@@ -77,8 +78,16 @@ import {
 } from '../../../persistence/layout.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { getLinkedContactForSession } from './contact-session-linker.js';
-import { AdminSessionTurnObservabilityStore } from './session-turn-observability.js';
+import {
+  AdminSessionTurnObservabilityStore,
+  resolvePromptLoomSubsystemOutputs,
+} from './session-turn-observability.js';
 import type { SessionEntry } from '../../../core/session/types.js';
+import type { BackgroundWorkStorePort } from '../../../core/agent/background-work/store-port.js';
+import {
+  parseSubsystemOutputRef,
+  parseTurnSubsystemProjectionRef,
+} from '../../../shared/contracts/subsystem-output-refs.js';
 
 const DEFAULT_ADMIN_TURN_LIMIT = 50;
 export const DEFAULT_ADMIN_SESSION_MESSAGE_PAGE_LIMIT = 100;
@@ -286,7 +295,9 @@ export class AdminSessionDataService implements AdminSessionService {
     sessionManager: SessionManager;
     eventBus: EventBus;
     contactStore?: ContactStorePort | null;
+    concernStore?: ConcernStorePort | null;
     memoryStore?: MemoryStorePort | null;
+    subsystemOutputRefStore?: Pick<BackgroundWorkStorePort, 'getSubsystemOutputProjection'> | null;
     config?: SubstrateConfig;
     cogSecEventStore?: CogSecEventStore;
     cogSecForensicArchive?: CogSecForensicArchive;
@@ -790,6 +801,72 @@ export class AdminSessionDataService implements AdminSessionService {
     return records.map(record => resolveTurnRecordMemoryCandidates(record, resolve));
   }
 
+  private async buildResolvedTurnData(record: TurnRecord): Promise<AdminSessionTurnData> {
+    const expansion = await this.expandTurnSubsystemOutputRefs(record);
+    const effectiveRecord = expansion.record;
+    const subsystemOutputs = await resolvePromptLoomSubsystemOutputs(effectiveRecord, {
+      memoryStore: this.deps.memoryStore,
+      concernStore: this.deps.concernStore,
+      contactStore: this.deps.contactStore,
+      projectionStatus: expansion.projectionStatus,
+    });
+    return this.turnObservability.buildTurnData(effectiveRecord, subsystemOutputs);
+  }
+
+  private async expandTurnSubsystemOutputRefs(record: TurnRecord): Promise<{
+    record: TurnRecord;
+    projectionStatus: 'not_applicable' | 'pending' | 'applied' | 'failed' | 'outcome_unknown';
+  }> {
+    const projectionRefs = [
+      ...record.extractedMemoryIds,
+      ...record.concernDeltaRefs,
+      ...record.contactDeltaRefs,
+    ];
+    if (projectionRefs.length === 0) {
+      return { record, projectionStatus: 'not_applicable' };
+    }
+    if (record.extractedMemoryIds.length !== 1
+      || record.concernDeltaRefs.length !== 1
+      || record.contactDeltaRefs.length !== 1) {
+      throw new Error('TurnRecord subsystem output projection must contain one ref per field');
+    }
+    const binding = {
+      logicalSessionId: record.sessionId ?? record.channelId,
+      sourceChannelId: record.channelId,
+      sourceTurnId: record.turnId,
+      sourceRequestId: record.requestId,
+    };
+    parseTurnSubsystemProjectionRef(record.extractedMemoryIds[0]!, binding, 'memory');
+    parseTurnSubsystemProjectionRef(record.concernDeltaRefs[0]!, binding, 'concern');
+    parseTurnSubsystemProjectionRef(record.contactDeltaRefs[0]!, binding, 'contact');
+    const projectionStore = this.deps.subsystemOutputRefStore;
+    if (!projectionStore) {
+      throw new Error('Cannot expand TurnRecord subsystem output refs: projection store is not configured');
+    }
+    const projection = await projectionStore.getSubsystemOutputProjection(binding);
+    if (projection.status !== 'applied' && projection.outputRefs.length > 0) {
+      throw new Error(`Non-applied subsystem output projection contains refs: ${projection.status}`);
+    }
+    const grouped = {
+      memory: [] as string[],
+      concern: [] as string[],
+      contact: [] as string[],
+    };
+    for (const targetRef of projection.outputRefs) {
+      const target = parseSubsystemOutputRef(targetRef);
+      grouped[target.kind].push(targetRef);
+    }
+    return {
+      projectionStatus: projection.status,
+      record: {
+        ...record,
+        extractedMemoryIds: grouped.memory,
+        concernDeltaRefs: grouped.concern,
+        contactDeltaRefs: grouped.contact,
+      },
+    };
+  }
+
   private async buildSessionMessages(
     sessionId: string,
     options: AdminSessionMessagePaginationOptions,
@@ -835,8 +912,8 @@ export class AdminSessionDataService implements AdminSessionService {
         this.deps.sessionStore.getRecentTurnRecords(sessionId, DEFAULT_ADMIN_TURN_LIMIT),
       )
       : [];
-    const turns = turnRecords.map((record) => {
-      const turnData = this.turnObservability.buildTurnData(record);
+    const turns = await Promise.all(turnRecords.map(async (record) => {
+      const turnData = await this.buildResolvedTurnData(record);
       return {
         ...turnData,
         continuityProvenance: buildContinuityProvenanceViews(
@@ -846,7 +923,7 @@ export class AdminSessionDataService implements AdminSessionService {
           turnData.snapshot?.sessionContext?.continuityEntries ?? [],
         ),
       };
-    });
+    }));
     const compactionAuditViews = options.messagesOnly
       ? []
       : this.deps.sessionStore
@@ -898,7 +975,7 @@ export class AdminSessionDataService implements AdminSessionService {
     const currentVisibility: ChannelPrivacy = decodeStoredChannelVisibility(recentEntry?.channelVisibility)
       ?? classifyChannelDisclosure(record.channelId).channelPrivacy;
     const [resolvedRecord] = await this.resolveTurnRecordMemoryRefs([record]);
-    const turnData = this.turnObservability.buildTurnData(resolvedRecord!);
+    const turnData = await this.buildResolvedTurnData(resolvedRecord!);
     const turn: AdminSessionTurnData = {
       ...turnData,
       continuityProvenance: buildContinuityProvenanceViews(

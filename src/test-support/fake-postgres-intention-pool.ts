@@ -23,6 +23,7 @@ interface ActiveConcernRow {
   merged_from_ids: unknown;
   split_from_id: string | null;
   origin_icp_root_initiation_id: string | null;
+  candidate_review_snapshot: unknown;
 }
 
 interface PendingFollowUpRow {
@@ -144,6 +145,7 @@ export class FakeIntentionPool {
         mergedFromIds,
         splitFromId,
         originIcpRootInitiationId,
+        candidateReviewSnapshot,
       ] = values as [
         string,
         string,
@@ -159,12 +161,13 @@ export class FakeIntentionPool {
         unknown,
         string | null,
         string | null,
-        string | null,
         unknown,
         string,
         string | null,
         unknown,
         string | null,
+        string | null,
+        unknown,
       ];
       this.activeConcerns.set(id, {
         id,
@@ -188,6 +191,7 @@ export class FakeIntentionPool {
         merged_from_ids: mergedFromIds,
         split_from_id: splitFromId,
         origin_icp_root_initiation_id: originIcpRootInitiationId,
+        candidate_review_snapshot: candidateReviewSnapshot,
       });
       return { rows: [this.activeConcerns.get(id)! as Row] };
     }
@@ -212,7 +216,9 @@ export class FakeIntentionPool {
       return { rows };
     }
 
-    if (normalized.includes('FROM active_concerns') && normalized.includes('ORDER BY CASE priority')) {
+    if (normalized.includes('FROM active_concerns')
+      && normalized.includes('ORDER BY CASE priority')
+      && !normalized.includes("status IN ('active', 'watching', 'deferred', 'blocked')")) {
       const filtersExpired = normalized.includes('expires_at >');
       const filtersResolved = normalized.includes('resolved_at IS NULL');
       let cursor = 0;
@@ -225,6 +231,7 @@ export class FakeIntentionPool {
         : undefined;
       const contactId = typeof maybeContactId === 'string' ? maybeContactId : undefined;
       const limit = Number(values[cursor]);
+      const offset = Number(values[cursor + 1] ?? 0);
       const rows = [...this.activeConcerns.values()]
         .filter((row) => !filtersResolved || row.resolved_at === null)
         .filter((row) => !filtersResolved || (row.status !== 'resolved' && row.status !== 'dismissed' && row.status !== 'suppressed'))
@@ -232,7 +239,20 @@ export class FakeIntentionPool {
         .filter((row) => !hardLifetimeCutoff || row.created_at > hardLifetimeCutoff)
         .filter((row) => !contactId || row.contact_id === null || row.contact_id === contactId)
         .sort((left, right) => concernSort(left, right))
-        .slice(0, limit)
+        .slice(offset, offset + limit)
+        .map(row => row as Row);
+      return { rows };
+    }
+
+    if (normalized.includes('FROM active_concerns')
+      && normalized.includes("status IN ('active', 'watching', 'deferred', 'blocked')")) {
+      const [asOf, hardLifetimeCutoff, maybeContactId] = values as [string, string, string | undefined];
+      const rows = [...this.activeConcerns.values()]
+        .filter(row => row.resolved_at === null)
+        .filter(row => ['active', 'watching', 'deferred', 'blocked'].includes(row.status ?? 'active'))
+        .filter(row => row.expires_at > asOf && row.created_at > hardLifetimeCutoff)
+        .filter(row => !maybeContactId || row.contact_id === null || row.contact_id === maybeContactId)
+        .sort((left, right) => concernSort(left, right))
         .map(row => row as Row);
       return { rows };
     }
@@ -262,6 +282,7 @@ export class FakeIntentionPool {
         row.salience = salience;
         row.evidence_refs = evidenceRefs;
         row.resolution_evidence_refs = resolutionEvidenceRefs;
+        if (status !== 'candidate') row.candidate_review_snapshot = null;
         return { rows: [row as Row] };
       }
       const [

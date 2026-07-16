@@ -21,6 +21,7 @@ import {
   type BackgroundWorkSourceRef,
 } from './types.js';
 import type { BackgroundWorkPostTurnTuning } from './config.js';
+import { buildSubsystemOutputRef } from '../../../shared/contracts/subsystem-output-refs.js';
 
 const SOURCE_RECORD_GRACE_MS = 60_000;
 
@@ -243,7 +244,7 @@ async function runPostTurnBackgroundWork(
             // is called only at the durable write sites, where a post-write crash
             // must instead fail closed. Passing both keeps pre-write work
             // retryable while the write phase stays exactly-once.
-            await extractor.maybeExtract(
+            const outputs = await extractor.maybeExtract(
               payload.source.logicalSessionId,
               payload.canonicalContactId,
               record.turnId,
@@ -261,7 +262,13 @@ async function runPostTurnBackgroundWork(
                 ? { preemptionProtected: true, welfareGrantJobId: job.jobId }
                 : { preemptionProtected: false },
             );
-          });
+            if (!outputs) return [];
+            return [
+              ...outputs.memoryIds.map(id => buildSubsystemOutputRef('memory', id)),
+              ...outputs.concernIds.map(id => buildSubsystemOutputRef('concern', id)),
+              ...outputs.contactIds.map(id => buildSubsystemOutputRef('contact', id)),
+            ];
+          }, { projectsSubsystemOutputs: true });
         } catch (error) {
           // u5bv.11: the queued durable extraction found the extractor draining
           // before its serialized run wrote any fact. It crossed no write

@@ -17,6 +17,7 @@
     togglePrompt,
     rollbackPrompt,
     getPromptDiff,
+    countPromptTokens,
   } from '$lib/api/endpoints/prompts';
   import { apiPost } from '$lib/api/client';
   import type {
@@ -41,7 +42,6 @@
     comparePromptLayers,
     compareRuntimeBlocks,
     computeDiffLines,
-    estimateTokens,
     formatTokenCount,
     groupRuntimeMacroHints,
     isProtected,
@@ -124,10 +124,35 @@
   let toastMessage = $state('');
   let toastTimeout: ReturnType<typeof setTimeout> | null = null;
 
+  // Token counts are backend-owned. Exact prompt text is the cache key so every
+  // Builder view renders the same count for identical text.
+  let tokenCounts = $state<Map<string, number>>(new Map());
+  let tokenCountError = $state('');
+  let tokenCountRequestId = 0;
+
+  function promptTokenCount(text: string): number | null {
+    return tokenCounts.get(text) ?? null;
+  }
+
+  function formatResolvedTokenCount(count: number | null): string {
+    if (count === null) return tokenCountError ? 'Unavailable' : 'Counting…';
+    return `${formatTokenCount(count)} tokens`;
+  }
+
   // ── Derived ──
   let sortedLayers = $derived(
     [...layers].sort(comparePromptLayers)
   );
+
+  let totalLayerTokenCount = $derived.by(() => {
+    let total = 0;
+    for (const layer of layers) {
+      const count = promptTokenCount(layer.content);
+      if (count === null) return null;
+      total += count;
+    }
+    return total;
+  });
 
   let editCharCount = $derived(editRawContent.length);
 
@@ -179,14 +204,20 @@
     const preview = buildNorthStarPreview(northStarItems);
     return preview || northStarServerPreview;
   });
-  let constitutionPreviewTokenCount = $derived(formatTokenCount(estimateTokens(constitutionPreviewText)));
-  let northStarPreviewTokenCount = $derived(formatTokenCount(estimateTokens(northStarPreviewText)));
+  let constitutionPreviewTokenCount = $derived(
+    formatResolvedTokenCount(promptTokenCount(constitutionPreviewText))
+  );
+  let northStarPreviewTokenCount = $derived(
+    formatResolvedTokenCount(promptTokenCount(northStarPreviewText))
+  );
 
   let stackEntries = $derived.by((): StackEntry[] => {
     return buildStackEntries({
       constitutionPreviewText,
+      constitutionTokenCount: promptTokenCount(constitutionPreviewText),
       constitutionImmutableBlockCount: constitutionImmutableBlocks.length,
       northStarPreviewText,
+      northStarTokenCount: promptTokenCount(northStarPreviewText),
       northStarActiveCount: northStarItems.filter(item => item.enabled).length,
       northStarLimit,
       sortedLayers,
@@ -643,6 +674,57 @@
   let newLayerTaskKind = $state('');
   let creatingLayer = $state(false);
 
+  let tokenCountTexts = $derived.by(() => [...new Set([
+    constitutionPreviewText,
+    northStarPreviewText,
+    ...layers.map(layer => layer.content),
+    detailData?.layer?.content ?? '',
+    newLayerContent,
+    editRawContent,
+  ])]);
+
+  async function refreshPromptTokenCounts(texts: string[], requestId: number): Promise<void> {
+    const missingTexts = texts.filter(text => !tokenCounts.has(text));
+    if (missingTexts.length === 0) {
+      if (requestId === tokenCountRequestId) tokenCountError = '';
+      return;
+    }
+
+    try {
+      const counts = await countPromptTokens(missingTexts);
+      if (requestId !== tokenCountRequestId) return;
+      const nextCounts = new Map(tokenCounts);
+      for (const [index, text] of missingTexts.entries()) {
+        const count = counts[index];
+        if (count === undefined) throw new Error('Invalid prompt token-count response');
+        nextCounts.set(text, count);
+      }
+      tokenCounts = nextCounts;
+      tokenCountError = '';
+    } catch (countError) {
+      if (requestId !== tokenCountRequestId) return;
+      tokenCountError = countError instanceof Error
+        ? countError.message
+        : 'Failed to count prompt tokens';
+    }
+  }
+
+  function retryPromptTokenCounts(): void {
+    tokenCountError = '';
+    const requestId = ++tokenCountRequestId;
+    void refreshPromptTokenCounts(tokenCountTexts, requestId);
+  }
+
+  $effect(() => {
+    const texts = tokenCountTexts;
+    const requestId = ++tokenCountRequestId;
+    tokenCountError = '';
+    const timer = setTimeout(() => {
+      void refreshPromptTokenCounts(texts, requestId);
+    }, 250);
+    return () => clearTimeout(timer);
+  });
+
   function resetNewLayerForm() {
     newLayerName = '';
     newLayerType = 'runtime';
@@ -695,7 +777,7 @@
       </p>
     </div>
     <div class="flex items-center gap-3 text-sm text-shadow-600">
-      <span>Total: ~{formatTokenCount(layers.reduce((sum, l) => sum + estimateTokens(l.content), 0))} tokens</span>
+      <span>Total: {formatResolvedTokenCount(totalLayerTokenCount)}</span>
     </div>
   </div>
 
@@ -707,6 +789,18 @@
       </svg>
       <span class="text-sm text-wilt-600">{error}</span>
       <button onclick={() => error = ''} class="ml-auto text-shadow-600 hover:text-shadow-900 text-lg leading-none">&times;</button>
+    </div>
+  {/if}
+
+  {#if tokenCountError}
+    <div class="card-garden p-4 flex items-center gap-3 border-wilt-400">
+      <span class="text-sm text-wilt-600">Token counts unavailable: {tokenCountError}</span>
+      <button
+        onclick={retryPromptTokenCounts}
+        class="ml-auto px-3 py-1 rounded border border-wilt-400 text-sm text-wilt-700 hover:bg-wilt-50"
+      >
+        Retry
+      </button>
     </div>
   {/if}
 
@@ -836,7 +930,7 @@
               placeholder="Enter prompt content..."
               class="w-full px-3 py-2 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm font-mono resize-vertical leading-relaxed focus:outline-none focus:ring-2 focus:ring-gold-300 focus:border-gold-400"
             ></textarea>
-            <span class="text-sm text-shadow-600 mt-1">{newLayerContent.length} chars | ~{formatTokenCount(estimateTokens(newLayerContent))} tokens</span>
+            <span class="text-sm text-shadow-600 mt-1">{newLayerContent.length} chars | {formatResolvedTokenCount(promptTokenCount(newLayerContent))}</span>
           </label>
 
           <div class="flex items-center gap-2">
@@ -864,7 +958,7 @@
             {@const fixed = entry.fixed}
             <CollapsibleSection
               title={fixed.id === 'constitution' ? 'Constitution' : 'North Star'}
-              subtitle={`Fixed position · ${fixed.status} · ~${formatTokenCount(fixed.tokenCount)} tokens`}
+              subtitle={`Fixed position · ${fixed.status} · ${formatResolvedTokenCount(fixed.tokenCount)}`}
               class="border-bark-300 bg-bark-50"
             >
               <div class="space-y-2">
@@ -1012,7 +1106,7 @@
             {@const rBadge = roleBadge(layer.role)}
             {@const isExpanded = expandedLayerId === layer.id}
             {@const locked = isProtected(layer)}
-            {@const tokens = estimateTokens(layer.content)}
+            {@const tokens = promptTokenCount(layer.content)}
             {@const isDragSource = dragSourceIdx === idx}
             {@const isDragTarget = dragOverIdx === idx}
 
@@ -1073,8 +1167,8 @@
                 <span class="flex-1"></span>
 
                 <!-- Token count -->
-                <span class="text-sm font-mono text-shadow-600 shrink-0" title="{tokens} tokens (~{layer.content.length} chars)">
-                  {formatTokenCount(tokens)}t
+                <span class="text-sm font-mono text-shadow-600 shrink-0" title={tokens === null ? `${layer.content.length} chars` : `${tokens} tokens (${layer.content.length} chars)`}>
+                  {tokens === null ? '…' : `${formatTokenCount(tokens)}t`}
                 </span>
 
                 <!-- Version -->
@@ -1201,7 +1295,7 @@
                             <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap bg-bark-100 p-3 rounded-lg max-h-72 overflow-y-auto leading-relaxed {locked ? 'border border-bark-300' : ''}">{dl.content ?? ''}</pre>
                             <div class="flex justify-between mt-1.5">
                               <span class="text-sm text-shadow-600">{(dl.content ?? '').length} chars</span>
-                              <span class="text-sm text-shadow-600">~{formatTokenCount(estimateTokens(dl.content ?? ''))} tokens</span>
+                              <span class="text-sm text-shadow-600">{formatResolvedTokenCount(promptTokenCount(dl.content ?? ''))}</span>
                             </div>
                           </div>
                         </div>
@@ -1251,7 +1345,7 @@
                           <div class="flex items-center justify-between">
                             <div class="flex items-center gap-4 text-sm text-shadow-600">
                               <span>{editCharCount} chars</span>
-                              <span>~{formatTokenCount(Math.ceil(editCharCount / 4))} tokens</span>
+                              <span>{formatResolvedTokenCount(promptTokenCount(editRawContent))}</span>
                             </div>
                             <div class="flex gap-2">
                               <button

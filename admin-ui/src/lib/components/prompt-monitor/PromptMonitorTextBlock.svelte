@@ -1,5 +1,7 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte';
   import type { AdminPromptSectionCacheability } from '$lib/types';
+  import { writePromptMonitorClipboard } from './PromptMonitorTextBlock.helpers';
 
   interface Props {
     title: string;
@@ -21,6 +23,33 @@
     if (typeof value !== 'string') return null;
     const trimmed = value.trim();
     return trimmed.length > 0 ? trimmed : null;
+  });
+
+  let copyState = $state<'idle' | 'copied' | 'error'>('idle');
+  let resetTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function scheduleCopyStateReset(): void {
+    if (resetTimer) clearTimeout(resetTimer);
+    resetTimer = setTimeout(() => {
+      copyState = 'idle';
+      resetTimer = null;
+    }, 2_000);
+  }
+
+  async function copyValue(): Promise<void> {
+    if (!resolvedValue) return;
+    try {
+      await writePromptMonitorClipboard(resolvedValue);
+      copyState = 'copied';
+    } catch (error) {
+      console.error(`Failed to copy prompt-monitor text block "${title}"`, error);
+      copyState = 'error';
+    }
+    scheduleCopyStateReset();
+  }
+
+  onDestroy(() => {
+    if (resetTimer) clearTimeout(resetTimer);
   });
 
   function cacheabilityTone(value: AdminPromptSectionCacheability['cacheability'] | undefined): string {
@@ -52,6 +81,17 @@
         </span>
       {/each}
     {/if}
+    <button
+      type="button"
+      class="ml-auto rounded-md border border-bark-300 bg-bark-50 px-2 py-1 text-xs font-medium text-shadow-700 transition-colors hover:bg-bark-100 disabled:cursor-not-allowed disabled:opacity-50"
+      disabled={!resolvedValue}
+      aria-label={`Copy ${title}`}
+      aria-live="polite"
+      title={resolvedValue ? `Copy ${title}` : `Nothing to copy from ${title}`}
+      onclick={copyValue}
+    >
+      {copyState === 'copied' ? 'Copied' : copyState === 'error' ? 'Copy failed' : 'Copy'}
+    </button>
   </div>
   {#if cacheability}
     <p class="mt-1 text-xs text-shadow-600">{cacheability.reason}</p>

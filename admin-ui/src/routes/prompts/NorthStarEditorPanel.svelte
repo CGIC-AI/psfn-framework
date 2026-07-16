@@ -174,7 +174,7 @@
           <div class="rounded-lg border border-bark-300 bg-bark-100 p-3">
             <div class="flex items-center justify-between mb-2">
               <h3 class="text-sm font-semibold text-shadow-700 uppercase tracking-wider">Preview Output</h3>
-              <span class="text-sm text-shadow-600">~{northStarPreviewTokenCount} tokens</span>
+              <span class="text-sm text-shadow-600">{northStarPreviewTokenCount}</span>
             </div>
             <pre class="text-sm font-mono text-shadow-800 whitespace-pre-wrap bg-bark-50/60 p-3 rounded border border-bark-200 max-h-80 overflow-y-auto leading-relaxed">{northStarPreviewText || 'No enabled North Star goals.'}</pre>
           </div>

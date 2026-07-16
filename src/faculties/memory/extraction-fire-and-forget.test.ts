@@ -26,8 +26,8 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe('MemoryExtractor fire-and-forget handling', () => {
-  it('logs rejected emotional-state persistence without failing extraction', async () => {
+describe('MemoryExtractor emotional persistence fencing', () => {
+  it('fails the extraction effect when emotional-state persistence rejects', async () => {
     mocks.persistEmotionalStateFromExtraction.mockRejectedValueOnce(
       new Error('emotional persistence offline'),
     );
@@ -119,7 +119,9 @@ describe('MemoryExtractor fire-and-forget handling', () => {
         memory: { id: 'memory-emotional' },
       }));
 
-      await expect(extractor.extract(channelId, canonicalContactId)).resolves.toBeUndefined();
+      await expect(extractor.extract(channelId, canonicalContactId)).rejects.toThrow(
+        'Extraction orchestration failed',
+      );
       await Promise.resolve();
 
       expect(mocks.persistEmotionalStateFromExtraction).toHaveBeenCalledWith(expect.objectContaining({
@@ -131,12 +133,7 @@ describe('MemoryExtractor fire-and-forget handling', () => {
           }),
         ],
       }));
-      expect(mocks.logWarn).toHaveBeenCalledWith('Failed to persist emotional state from extraction', {
-        canonicalContactId,
-        acceptedFactCount: 1,
-        recentEntryCount: 2,
-        error: 'emotional persistence offline',
-      });
+      expect(mocks.logWarn).not.toHaveBeenCalled();
       expect(unhandledRejections).toEqual([]);
     } finally {
       process.off('unhandledRejection', onUnhandledRejection);

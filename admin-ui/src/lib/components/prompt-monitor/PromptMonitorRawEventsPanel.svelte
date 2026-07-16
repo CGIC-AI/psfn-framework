@@ -7,6 +7,7 @@
     formatTimestamp,
     truncateValue,
   } from './PromptMonitorSelectedTurnTabs.helpers';
+  import { resolvePromptMonitorRetrievals } from './PromptMonitorTimingPanel.helpers';
 
   interface Props {
     turn: PromptMonitorTurn;
@@ -17,6 +18,13 @@
     turn,
     selectedChannelEvents,
   }: Props = $props();
+
+  const recordWithoutObservability = $derived.by(() => {
+    if (!turn.record) return null;
+    return Object.fromEntries(
+      Object.entries(turn.record).filter(([key]) => key !== 'observability'),
+    );
+  });
 </script>
 
 <div class="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -24,8 +32,8 @@
     <h3 class="font-medium text-shadow-900">Raw Turn Objects</h3>
     <div class="mt-3 space-y-3 text-sm">
       <PromptMonitorTextBlock
-        title="Session Record"
-        value={formatJson(turn.record)}
+        title="Session Record (observability split below)"
+        value={formatJson(recordWithoutObservability)}
         emptyText="No session record captured for this turn."
         maxHeightClass="max-h-[28rem]"
       />
@@ -39,6 +47,12 @@
         title="Stage Telemetry"
         value={formatJson(turn.stages)}
         emptyText="No stage telemetry captured for this turn."
+        maxHeightClass="max-h-[28rem]"
+      />
+      <PromptMonitorTextBlock
+        title="Retrieval Telemetry"
+        value={formatJson(resolvePromptMonitorRetrievals(turn))}
+        emptyText="No retrieval telemetry captured for this turn."
         maxHeightClass="max-h-[28rem]"
       />
     </div>

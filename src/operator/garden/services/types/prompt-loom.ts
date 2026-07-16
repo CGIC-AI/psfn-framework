@@ -17,6 +17,8 @@ import type {
   TurnSnapshotRecord,
   TurnStageTelemetryRecord,
 } from '../../../../core/turns/observability.js';
+import type { ActiveConcern } from '../../../../core/intention/concerns.js';
+import type { Contact } from '../../../../core/contacts/types.js';
 
 export type AdminObservedMemory = ObservedMemory;
 
@@ -87,6 +89,60 @@ export interface AdminPromptLoomToolActivityData {
   toolResults: TurnRecord['toolCalls'];
 }
 
+export type AdminPromptLoomSubsystemOutputStatus = 'resolved' | 'missing' | 'not_resolved';
+export type AdminPromptLoomSubsystemOutputProjectionStatus =
+  | 'not_applicable'
+  | 'pending'
+  | 'applied'
+  | 'failed'
+  | 'outcome_unknown';
+
+export interface AdminPromptLoomSubsystemOutputEntry<TValue> {
+  ref: string;
+  status: AdminPromptLoomSubsystemOutputStatus;
+  value?: TValue;
+}
+
+export type AdminPromptLoomConcernOutputData = Pick<
+  ActiveConcern,
+  | 'id'
+  | 'text'
+  | 'priority'
+  | 'source'
+  | 'status'
+  | 'createdAt'
+  | 'expiresAt'
+  | 'salience'
+  | 'sensitivity'
+  | 'owner'
+  | 'contactId'
+>;
+
+export type AdminPromptLoomContactOutputData = Pick<
+  Contact,
+  | 'id'
+  | 'trustLevel'
+  | 'relationshipType'
+  | 'isMachineIntelligence'
+  | 'firstSeen'
+  | 'lastSeen'
+>;
+
+/**
+ * Read-time projections of the durable outputs referenced by TurnRecord.
+ * Values are never copied back into the persisted record. `not_resolved` is
+ * reserved for the live-browser fallback before it round-trips through the
+ * authenticated Garden turn-detail endpoint.
+ */
+export interface AdminPromptLoomSubsystemOutputsData {
+  projectionStatus: AdminPromptLoomSubsystemOutputProjectionStatus;
+  contextManifestRef: string | null;
+  internalStateSnapshotRef: string | null;
+  memoryWrites: Array<AdminPromptLoomSubsystemOutputEntry<ObservedMemory>>;
+  concernDeltas: Array<AdminPromptLoomSubsystemOutputEntry<AdminPromptLoomConcernOutputData>>;
+  contactDeltas: Array<AdminPromptLoomSubsystemOutputEntry<AdminPromptLoomContactOutputData>>;
+}
+
 /**
  * The Loom's Provider Wire projection (E2.3): the serialized provider payload
  * (system prompt + messages + tool definitions) exactly as shipped.
@@ -133,5 +189,6 @@ export interface AdminPromptLoomData {
   providerPayload: AdminPromptLoomProviderPayloadData;
   providerResult: AdminPromptLoomProviderResultData;
   memoryCapture: AdminPromptLoomMemoryCaptureData;
+  subsystemOutputs: AdminPromptLoomSubsystemOutputsData;
   toolActivity: AdminPromptLoomToolActivityData;
 }

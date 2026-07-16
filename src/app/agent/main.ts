@@ -945,6 +945,7 @@ async function main(): Promise<void> {
     postTurnActions,
     outreachOutbox,
     episodicStore,
+    subsystemOutputRefStore: backgroundWorkStore,
     pendingContactApprovals,
     socialGraphProposals: socialGraphProposalStore,
     hubIdentityEnrollmentStore: persistedHubIdentityEnrollmentStore,

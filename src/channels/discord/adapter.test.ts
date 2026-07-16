@@ -190,7 +190,7 @@ function makeTextChannel(messages: MockDiscordMessage[]) {
 
 describe('DiscordAdapter startup backfill', () => {
   it('requests privileged member observation only when evidence mappings enable it', async () => {
-    const _disabled = new DiscordAdapter(makeConfig(), new EventBus());
+    new DiscordAdapter(makeConfig(), new EventBus());
     const disabledClient = discordMock.createdClients.at(-1) as {
       options: { intents: number[]; partials: string[] };
     };

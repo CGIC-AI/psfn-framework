@@ -38,6 +38,12 @@ describe('Companion UI action target', () => {
     ['confirmations.resolve', 'confirmations.resolve', { id: 'confirmation-1', decision: 'deny' }],
     ['artifact.preview', 'artifacts.read', { id: 'artifact-1' }],
     ['tool_activity.subscribe', 'tool_activity.read', { subscribe: true }],
+    ['embodiment.status', 'companion.read', {}],
+    ['embodiment.handoff', 'embodiment.handoff', {
+      expectedGeneration: 0,
+      decisionId: '22222222-2222-4222-8222-222222222222',
+      reason: 'user_requested',
+    }],
   ])('compiles the exact %s action/resource/body under the Hub ceiling', (resource, action, body) => {
     const bytes = raw(resource, action, body);
     const compiled = compileCompanionUiAction(bytes, companionId, ceiling);
@@ -65,6 +71,16 @@ describe('Companion UI action target', () => {
         body,
       ))).toThrowError(expect.objectContaining({ code: 'authority_forbidden' }));
     }
+    expect(() => parseCompanionUiActionFrame(raw(
+      'embodiment.handoff',
+      'embodiment.handoff',
+      {
+        expectedGeneration: 0,
+        decisionId: '22222222-2222-4222-8222-222222222222',
+        reason: 'user_requested',
+        deviceId: 'browser-selected',
+      },
+    ))).toThrowError(expect.objectContaining({ code: 'authority_forbidden' }));
   });
 
   it('intersects human action with the physical capability ceiling', () => {

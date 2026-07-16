@@ -89,6 +89,7 @@ function fixture() {
     sessionDisposition: 'created' as const,
     attachment,
   }));
+  const execute = vi.fn(async () => ({ generation: 1, currentDeviceIsPrimary: true }));
   const adapter = new CompanionUiWebSocketAdapter({
     canonicalOrigin: 'https://fleet.example.test',
     satelliteApiKeys: [satelliteKey],
@@ -114,14 +115,14 @@ function fixture() {
       }],
     }),
     hubDeviceIngress: { admit } as never,
-    actionBroker: { execute: vi.fn() } as never,
+    actionBroker: { execute } as never,
     authorityPollMs: 60_000,
     createWebSocketServer: () => ({
       handleUpgrade,
       close: (callback: (error?: Error) => void) => callback(),
     }) as never,
   });
-  return { adapter, admit, handleUpgrade, webSocket };
+  return { adapter, admit, execute, handleUpgrade, webSocket };
 }
 
 describe('CompanionUiWebSocketAdapter upgrade policy', () => {
@@ -175,6 +176,37 @@ describe('CompanionUiWebSocketAdapter upgrade policy', () => {
     })), false);
     await vi.waitFor(() => expect(built.webSocket.readyState).toBe(WebSocket.CLOSED));
     expect(built.webSocket.closeArgs[0]).toBe(4403);
+    await built.adapter.stop();
+  });
+
+  it('forwards an explicit generation-bound handoff without browser device or place authority', async () => {
+    const built = fixture();
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(request(), socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    const body = Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      requestId: 'embodiment-handoff-1',
+      action: 'embodiment.handoff',
+      resource: 'embodiment.handoff',
+      body: {
+        expectedGeneration: 0,
+        decisionId: '77777777-7777-4777-8777-777777777777',
+        reason: 'user_requested',
+      },
+    }));
+    built.webSocket.emit('message', body, false);
+    await vi.waitFor(() => expect(built.execute).toHaveBeenCalledOnce());
+    expect(built.execute).toHaveBeenCalledWith(expect.objectContaining({
+      rawBody: expect.any(Uint8Array),
+      companionId,
+      attachment: expect.objectContaining({
+        deviceActor: expect.objectContaining({ principal: expect.objectContaining({ deviceId: 'display' }) }),
+      }),
+    }));
+    expect(body.toString()).not.toContain('deviceId');
+    expect(body.toString()).not.toContain('placeId');
+    await vi.waitFor(() => expect(built.webSocket.sent).toContainEqual(expect.stringContaining('"ok":true')));
     await built.adapter.stop();
   });
 });

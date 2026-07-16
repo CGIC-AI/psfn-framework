@@ -17,6 +17,7 @@ describe('canonical fleet role/action policy', () => {
       guest: ['companion.read', 'companion.interact'],
       member: ['artifacts.read', 'tool_activity.read', 'memory.read.self', 'memory.jit.self'],
       admin: [
+        'embodiment.handoff',
         'garden.read',
         'action_pipe.read',
         'action_pipe.manage',

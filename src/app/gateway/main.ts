@@ -604,6 +604,7 @@ async function main(): Promise<void> {
           fleetAuthRequestCapabilities: fleetAuthPersistence.requestCapabilities,
           fleetAuthRequestCapabilityVerifier: fleetAuthPersistence.requestCapabilityVerifier,
           fleetAuthRequestCapabilityReplay: fleetAuthPersistence.requestCapabilityReplay,
+          primaryEmbodiments: fleetAuthPersistence.primaryEmbodiments,
           hubDeviceAssertionVerifier: fleetAuthPersistence,
         }
       : {}),

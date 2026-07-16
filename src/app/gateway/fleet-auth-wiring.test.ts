@@ -20,6 +20,7 @@ describe('gateway fleet authorization context wiring', () => {
     expect(mainSource).toContain('principalAuthenticationWired: false,');
     expect(apiSurfaceSource).toContain('principalAuthenticationWired: false,');
     expect(mainSource).toContain('hubDeviceAssertionVerifier: fleetAuthPersistence,');
+    expect(mainSource).toContain('primaryEmbodiments: fleetAuthPersistence.primaryEmbodiments,');
     expect(apiSurfaceSource).toContain('new GatewayHubDeviceIngressService({');
     expect(apiSurfaceSource).toContain('.verifyAndConsumeHubDeviceAssertion(assertion, expected)');
   });

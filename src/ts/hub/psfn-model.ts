@@ -179,6 +179,10 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
           attempts.push({ attempt, status: "timeout", elapsedMs: Date.now() - attemptStart });
           continue;
         }
+        if (isRetryableTransportLoss(error)) {
+          attempts.push({ attempt, status: "error", elapsedMs: Date.now() - attemptStart });
+          continue;
+        }
         emit("failed");
         throw error;
       } finally {
@@ -775,6 +779,30 @@ function createAttemptScope(external: AbortSignal | undefined, timeoutMs: number
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
+}
+
+const RETRYABLE_TRANSPORT_ERROR_CODES = new Set([
+  "ECONNABORTED",
+  "ECONNRESET",
+  "EPIPE",
+  "UND_ERR_SOCKET",
+]);
+
+function isRetryableTransportLoss(error: unknown): boolean {
+  if (error instanceof TypeError) {
+    return /fetch failed|failed to fetch|network|socket|terminated|connection|reset/i.test(error.message);
+  }
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const candidate = current as { code?: unknown; cause?: unknown };
+    if (typeof candidate.code === "string" && RETRYABLE_TRANSPORT_ERROR_CODES.has(candidate.code)) {
+      return true;
+    }
+    current = candidate.cause;
+  }
+  return false;
 }
 
 function abortReason(signal?: AbortSignal): Error {

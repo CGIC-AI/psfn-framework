@@ -335,6 +335,123 @@ test("authenticated recovery retries reuse one exact Hub assertion for one logic
   }
 });
 
+test("authenticated recovery retries byte-identical request bytes after a consumed transport loss", async () => {
+  const originalFetch = globalThis.fetch;
+  const assertions: string[] = [];
+  const bodies: string[] = [];
+  let calls = 0;
+
+  globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+    calls += 1;
+    const headers = init?.headers as Record<string, string>;
+    assertions.push(headers["X-PSFN-Hub-Device-Assertion"] ?? "");
+    bodies.push(String(init?.body ?? ""));
+    if (calls === 1) {
+      throw new TypeError("fetch failed after Framework consumed the request");
+    }
+    return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"Recovered"}}]}');
+  };
+
+  const adapter = new PsfnModelAdapter(
+    authenticatedAssertionRuntime({ textReplyDeadlineMs: 250, textAttemptTimeoutMs: 100 }),
+    undefined,
+    authenticatedRegistryAuthority(),
+  );
+
+  try {
+    await drainReply(adapter, {
+      inputMode: "text",
+      userText: "recover the consumed request",
+      conversationId: authenticatedChannel().sessionId,
+      channel: authenticatedChannel(),
+    });
+    assert.equal(calls, 2);
+    assert.ok(assertions[0]);
+    assert.equal(assertions[1], assertions[0], "the replay must reuse exact assertion bytes");
+    assert.equal(bodies[1], bodies[0], "the replay must reuse the exact request body");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("authenticated recovery retries an ECONNRESET-equivalent transport loss", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw Object.assign(new Error("socket closed after write"), { code: "ECONNRESET" });
+    }
+    return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"Recovered"}}]}');
+  };
+
+  const adapter = new PsfnModelAdapter(
+    authenticatedAssertionRuntime({ textReplyDeadlineMs: 250, textAttemptTimeoutMs: 100 }),
+    undefined,
+    authenticatedRegistryAuthority(),
+  );
+
+  try {
+    await drainReply(adapter, {
+      inputMode: "text",
+      userText: "recover the reset request",
+      conversationId: authenticatedChannel().sessionId,
+      channel: authenticatedChannel(),
+    });
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("authenticated recovery does not retry deterministic auth denials or arbitrary exceptions", async () => {
+  const originalFetch = globalThis.fetch;
+  const scenarios: Array<{
+    name: string;
+    respond: () => Promise<Response>;
+    expectedError: RegExp;
+  }> = [
+    {
+      name: "auth denial",
+      respond: async () => new Response('{"error":"denied"}', { status: 401 }),
+      expectedError: /failed \(401\).*denied/,
+    },
+    {
+      name: "arbitrary exception",
+      respond: async () => { throw new RangeError("not a transport failure"); },
+      expectedError: /not a transport failure/,
+    },
+  ];
+
+  try {
+    for (const scenario of scenarios) {
+      let calls = 0;
+      globalThis.fetch = async () => {
+        calls += 1;
+        return await scenario.respond();
+      };
+      const adapter = new PsfnModelAdapter(
+        authenticatedAssertionRuntime({ textReplyDeadlineMs: 250, textAttemptTimeoutMs: 100 }),
+        undefined,
+        authenticatedRegistryAuthority(),
+      );
+      await assert.rejects(
+        drainReply(adapter, {
+          inputMode: "text",
+          userText: scenario.name,
+          conversationId: authenticatedChannel().sessionId,
+          channel: authenticatedChannel(),
+        }),
+        scenario.expectedError,
+      );
+      assert.equal(calls, 1, `${scenario.name} must not retry`);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("authenticated recovery fences a device whose enrollment version changes between attempts", async () => {
   const originalFetch = globalThis.fetch;
   let registry: HubDeviceRegistry = { schemaVersion: 1, devices: [AUTHENTICATED_DEVICE] };

@@ -15,6 +15,7 @@
   import PromptMonitorMessageList from './PromptMonitorMessageList.svelte';
   import PromptMonitorRawEventsPanel from './PromptMonitorRawEventsPanel.svelte';
   import PromptMonitorSessionEntryList from './PromptMonitorSessionEntryList.svelte';
+  import PromptMonitorSubsystemOutputs from './PromptMonitorSubsystemOutputs.svelte';
   import PromptMonitorTextBlock from './PromptMonitorTextBlock.svelte';
   import PromptMonitorTimelinePanel from './PromptMonitorTimelinePanel.svelte';
   import PromptMonitorToolList from './PromptMonitorToolList.svelte';
@@ -706,7 +707,7 @@
         </div>
       </CollapsibleSection>
 
-      <!-- v83d.3 integration seam: render PromptMonitorSubsystemOutputs here after Memory Capture. -->
+      <PromptMonitorSubsystemOutputs outputs={promptLoom.subsystemOutputs} />
     {:else if activeTab === 'tools'}
       <div class="rounded-xl border border-bark-200 bg-bark-50 p-3 text-xs text-shadow-700">
         <span class="font-medium text-shadow-900">Tool surface:</span>

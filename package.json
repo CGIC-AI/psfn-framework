@@ -59,6 +59,7 @@
     "e2e:voice": "tsx src/app/e2e/e2e-voice-roundtrip.ts",
     "e2e:kube-self-update": "PSFN_K3D_E2E=1 vitest run src/app/e2e/kube-self-update-e2e.test.ts",
     "e2e:postgres-tenancy": "vitest run src/persistence/postgres/tenancy-boundary.integration.test.ts",
+    "e2e:multi-companion-runtime": "LOG_LEVEL=error tsx src/app/e2e/multi-companion-runtime-validation.ts",
     "smoke:chat": "node scripts/chat-cockpit-smoke.mjs",
     "smoke:cogsec": "tsx scripts/cogsec-remediation-smoke.ts",
     "smoke:wiki-caretaker": "vitest run src/faculties/wiki/shared-world-caretaker.integration.test.ts",

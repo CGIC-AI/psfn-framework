@@ -47,6 +47,8 @@ import { IcpCertificationArtifactRecorder } from './artifact-recorder.js';
 
 const AGENT_PROCESS_ENTRY = resolve('src/app/e2e/icp-certification/agent-process.ts');
 const START_TIMEOUT_MS = 60_000;
+const COMMAND_TIMEOUT_MS = 60_000;
+const STOP_TIMEOUT_MS = 15_000;
 
 interface ChildMessage {
   error?: string;
@@ -69,10 +71,12 @@ export class IcpCertificationAgentProcess {
   private readonly pending = new Map<number, {
     reject(error: Error): void;
     resolve(value: unknown): void;
+    timeout: ReturnType<typeof setTimeout>;
   }>();
   private readyResolve!: (value: CertificationAgentReady) => void;
   private readyReject!: (error: Error) => void;
   private readonly readyPromise: Promise<CertificationAgentReady>;
+  private readonly exitPromise: Promise<void>;
 
   private constructor(
     readonly fixture: IcpCertificationCompanionFixture,
@@ -84,15 +88,28 @@ export class IcpCertificationAgentProcess {
       this.readyReject = rejectReady;
     });
     child.on('message', (raw: ChildMessage) => this.onMessage(raw));
-    child.once('exit', (code, signal) => {
-      const error = new Error(
-        `ICP certification agent ${fixture.companionId} exited before shutdown `
-        + `(code=${String(code)}, signal=${String(signal)})`,
-      );
-      this.readyReject(error);
-      for (const waiter of this.pending.values()) waiter.reject(error);
-      this.pending.clear();
+    this.exitPromise = new Promise<void>((resolveExit) => {
+      child.once('exit', (code, signal) => {
+        const error = new Error(
+          `ICP certification agent ${fixture.companionId} exited `
+          + `(code=${String(code)}, signal=${String(signal)})`,
+        );
+        this.readyReject(error);
+        for (const waiter of this.pending.values()) {
+          clearTimeout(waiter.timeout);
+          waiter.reject(error);
+        }
+        this.pending.clear();
+        resolveExit();
+      });
     });
+  }
+
+  get processId(): number {
+    if (this.child.pid === undefined) {
+      throw new Error(`ICP certification agent ${this.fixture.companionId} has no process id`);
+    }
+    return this.child.pid;
   }
 
   static async start(
@@ -277,8 +294,18 @@ export class IcpCertificationAgentProcess {
   }
 
   async stop(): Promise<void> {
-    if (!this.child.connected) return;
-    await this.request({ type: 'shutdown' });
+    if (this.child.exitCode !== null) return;
+    if (this.child.connected) {
+      await this.request({ type: 'shutdown' });
+    }
+    try {
+      await this.waitForExit(STOP_TIMEOUT_MS);
+    } catch (error) {
+      this.forceStop();
+      await this.waitForExit(STOP_TIMEOUT_MS).catch(() => {
+        throw error;
+      });
+    }
   }
 
   forceStop(): void {
@@ -301,6 +328,7 @@ export class IcpCertificationAgentProcess {
     const waiter = this.pending.get(message.id);
     if (!waiter) return;
     this.pending.delete(message.id);
+    clearTimeout(waiter.timeout);
     if (message.ok) waiter.resolve(message.result);
     else waiter.reject(new Error(message.error ?? 'ICP certification agent request failed'));
   }
@@ -308,10 +336,34 @@ export class IcpCertificationAgentProcess {
   private async request(command: Record<string, unknown> & { type: string }): Promise<unknown> {
     const id = ++this.nextRequestId;
     const result = new Promise<unknown>((resolveRequest, rejectRequest) => {
-      this.pending.set(id, { resolve: resolveRequest, reject: rejectRequest });
+      const timeout = setTimeout(() => {
+        this.pending.delete(id);
+        rejectRequest(new Error(
+          `Timed out waiting for ICP certification agent command ${command.type}`,
+        ));
+      }, COMMAND_TIMEOUT_MS);
+      timeout.unref();
+      this.pending.set(id, { resolve: resolveRequest, reject: rejectRequest, timeout });
     });
     this.child.send({ id, ...command });
     return await result;
+  }
+
+  private async waitForExit(timeoutMs: number): Promise<void> {
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.exitPromise,
+        new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(() => reject(new Error(
+            `Timed out waiting for ICP certification agent ${this.fixture.companionId} to exit`,
+          )), timeoutMs);
+          timeoutHandle.unref();
+        }),
+      ]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
   }
 }
 
@@ -426,6 +478,7 @@ async function provisionCertificationTenantBoundaries(
 export async function startIcpCertificationProcessHarness(input: {
   databaseUrl: string;
   fixture: IcpCertificationFixture;
+  channelRouting?: GatewayMultiCompanionConfig['channelRouting'];
 }): Promise<IcpCertificationProcessHarness> {
   const modelServer = await startIcpCertificationModelServer();
   const artifacts = new IcpCertificationArtifactRecorder(input.fixture.artifactsPath);
@@ -506,7 +559,7 @@ export async function startIcpCertificationProcessHarness(input: {
   const multiCompanion: GatewayMultiCompanionConfig = {
     enabled: true,
     fleetCompanionIds: companionIds,
-    channelRouting: {},
+    channelRouting: { ...(input.channelRouting ?? {}) },
     discordAccounts: {},
     personalWorkspaceByCompanionId: Object.fromEntries(
       input.fixture.companions.map(companion => [

@@ -18,7 +18,7 @@ const OWNER_FILE_SEEDS = [
 ] as const;
 
 const seedDir = resolve(process.env.CONFIG_DIR?.trim() || 'config');
-const fixtureRoot = mkdtempSync(join(tmpdir(), 'psfn-owner-seed-verification-'));
+const fixtureRoot = mkdtempSync(join(tmpdir(), 'owner-seed-verification-'));
 const systemDataDir = join(fixtureRoot, 'system-data');
 const companionDataDir = join(fixtureRoot, 'companion-data');
 mkdirSync(systemDataDir, { recursive: true });

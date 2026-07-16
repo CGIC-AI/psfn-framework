@@ -133,6 +133,18 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "scripts/verify-helm-owner-file-registry.ts",
+      "contains": "deploy/helm/psfn/templates/_helpers.tpl",
+      "reason": "Owner-file registry verification must address the repository's checked-in Helm chart path; renaming it would be a chart relocation, not identity-default cleanup.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/verify-helm-owner-file-registry.ts",
+      "contains": "psfn\\.perCompanionOwnerFilePattern",
+      "reason": "Owner-file registry verification must match the established project-scoped Helm helper identifier used by the checked-in chart.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "scripts/verify-k8s-manifests.mjs",
       "contains": "/var/run/secrets/psfn-postgres/database-url",
       "reason": "Kubernetes verifier pins the project-scoped Postgres Secret mount path; this is infrastructure naming, not companion identity.",

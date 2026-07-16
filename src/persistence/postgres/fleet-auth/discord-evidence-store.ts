@@ -86,10 +86,10 @@ function assertSnapshot(
     && (!snapshot.discordPermissionResult
       || snapshot.memberSpecificDenyVeto
       || snapshot.decisionReason !== undefined)) {
-    throw new Error('Positive PSFN evidence is inconsistent with Discord permission evidence');
+    throw new Error('Positive fleet authorization evidence conflicts with Discord permission evidence');
   }
   if (!snapshot.psfnEvidenceResult && snapshot.decisionReason === undefined) {
-    throw new Error('Denied PSFN evidence must record a decision reason');
+    throw new Error('Denied fleet authorization evidence must record a decision reason');
   }
   const provenance = parseProvenance(snapshot.provenance);
   if (provenance.providerSubjectId !== providerSubjectId

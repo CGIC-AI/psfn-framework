@@ -27,7 +27,6 @@
     sectionSummaries,
     openSections,
     modelOwnedFields,
-    saving,
     capabilityTierOptions,
     compositionalChannelTypeOptions,
     compositionalPurposeOptions,
@@ -49,14 +48,12 @@
     setCompositionalPolicyEnabled,
     toggleCompositionalPolicyValue,
     hasCompositionalPolicyValue,
-    saveAdvanced,
   } = $props<{
     data: AdminSettingsData | null;
     sections: AdvancedSettingsSection[];
     sectionSummaries: Record<string, string>;
     openSections: Set<string>;
     modelOwnedFields: Set<string>;
-    saving: boolean;
     capabilityTierOptions: string[];
     compositionalChannelTypeOptions: readonly string[];
     compositionalPurposeOptions: readonly string[];
@@ -78,7 +75,6 @@
     setCompositionalPolicyEnabled: (enabled: boolean) => void;
     toggleCompositionalPolicyValue: (listKey: CompositionalListKey, value: string) => void;
     hasCompositionalPolicyValue: (listKey: CompositionalListKey, value: string) => boolean;
-    saveAdvanced: () => void | Promise<void>;
   }>();
 
   const FIELD_INPUT_CLASS = 'flex-1 px-3 py-1.5 rounded-lg border border-bark-300 bg-bark-50 text-shadow-800 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-gold-300';
@@ -430,12 +426,4 @@
       </div>
     {/if}
   {/if}
-
-  <div class="flex items-center gap-3 pt-2">
-    <button onclick={saveAdvanced} disabled={saving}
-      class="px-5 py-2.5 rounded-lg bg-gold-600 text-white text-sm font-medium
-             hover:bg-gold-700 disabled:opacity-50 transition-colors shadow-sm">
-      {saving ? 'Saving...' : 'Save All Settings'}
-    </button>
-  </div>
 </div>

@@ -132,8 +132,9 @@ export type SettingsTabDefinition = (typeof SETTINGS_TAB_DEFINITIONS)[number];
 export type SettingsTabId = SettingsTabDefinition['id'];
 
 // Tabs whose content is edited through the curated form and saved with the
-// shared "Save Curated Settings" action. Advanced fields and raw owner-file
-// editors carry their own save controls.
+// unified "Save Settings" action (which also commits the advanced canonical
+// fields and the provider registry). Raw owner-file editors carry their own
+// scoped save controls on the Raw JSON tab.
 export const CURATED_SETTINGS_TAB_IDS: readonly SettingsTabId[] = [
   'providers',
   'memory',

@@ -44,7 +44,6 @@
     setCompositionalPolicyEnabled,
     toggleCompositionalPolicyValue,
     hasCompositionalPolicyValue,
-    saveAdvanced,
     settingsJson,
     rawEditorViews,
     rawSaveStatus,
@@ -83,7 +82,6 @@
     setCompositionalPolicyEnabled: (enabled: boolean) => void;
     toggleCompositionalPolicyValue: (listKey: CompositionalListKey, value: string) => void;
     hasCompositionalPolicyValue: (listKey: CompositionalListKey, value: string) => boolean;
-    saveAdvanced: () => void | Promise<void>;
     settingsJson: string;
     rawEditorViews: { key: RawEditorKey; ownerFile: string }[];
     rawSaveStatus: Record<string, { ok: boolean; msg: string }>;
@@ -116,7 +114,6 @@
               sectionSummaries={advancedSectionSummaries}
               {openSections}
               modelOwnedFields={MODEL_OWNED_FIELDS}
-              {saving}
               {capabilityTierOptions}
               compositionalChannelTypeOptions={COMPOSITIONAL_CHANNEL_TYPE_OPTIONS}
               compositionalPurposeOptions={COMPOSITIONAL_PURPOSE_OPTIONS}
@@ -138,7 +135,6 @@
               {setCompositionalPolicyEnabled}
               {toggleCompositionalPolicyValue}
               {hasCompositionalPolicyValue}
-              {saveAdvanced}
             />
           </section>
 {:else}
@@ -151,8 +147,9 @@
               <p class="text-xs uppercase tracking-[0.16em] text-shadow-500">Owner Files</p>
               <h2 class="text-sm font-serif font-semibold text-shadow-800">Raw Owner-File Editors</h2>
               <p class="text-sm text-shadow-600">
-                JSON owner files remain editable in place. Raw edits are dirty-guarded so general settings saves
-                do not overwrite staged file changes.
+                JSON owner files remain editable in place. Raw edits save directly to their
+                owner files here and are never touched by the unified settings save; unsaved
+                raw edits are flagged on the Raw JSON tab badge.
               </p>
             </div>
             <RawSettingsMode

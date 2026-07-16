@@ -1535,6 +1535,354 @@
       "contains": "psfn-framework-hgw3.5",
       "reason": "Settings-normalization comment cites the bead that owns session-tail cache validation.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "admin-ui/src/routes/wiki/+page.svelte",
+      "contains": "psfn:personal-project",
+      "reason": "Garden reads the established persisted personal-project wiki tag written by the canonical personal-project publisher.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "admin-ui/src/lib/cache/indexeddb.ts",
+      "contains": "psfn-garden-local-cache",
+      "reason": "The origin-scoped IndexedDB database name preserves the shipped Garden cache across upgrades; it is a browser storage namespace, not a companion identity default.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "admin-ui/src/routes/wiki/+page.svelte",
+      "contains": "psfn:named-look",
+      "reason": "Garden reads the established persisted named-look wiki tag written by the canonical wardrobe publisher.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/provision-postgres-tenancy.ts",
+      "contains": "applicationName: 'psfn-tenant-provision'",
+      "reason": "Tenant provisioning uses a project-scoped PostgreSQL application_name for operational connection attribution.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/agent/main.ts",
+      "contains": "psfn-framework-b0yl.5",
+      "reason": "Agent runtime comment cites the bead that owns durable tool-usage evaluation.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/e2e/icp-certification/process-harness.ts",
+      "contains": "applicationName: 'psfn-icp-certification-tenant-provisioning'",
+      "reason": "ICP certification tenant setup uses a project-scoped PostgreSQL application_name for test connection attribution.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/e2e/multi-companion-runtime-validation.ts",
+      "contains": "psfn-framework-1nsp",
+      "reason": "Multi-companion E2E evidence records the exact bead that fixed satellite flag-off behavior.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/e2e/multi-companion-runtime-validation.ts",
+      "contains": "psfn-framework-4i1c",
+      "reason": "Multi-companion E2E evidence records the exact bead that fixed its validated runtime boundary.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/e2e/multi-companion-runtime-validation.ts",
+      "contains": "psfn-framework-573l",
+      "reason": "Multi-companion E2E evidence records the exact bead that fixed its validated teardown boundary.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/fleet-auth/hub-device-assertion.ts",
+      "contains": "PSFN-HUB-DEVICE",
+      "reason": "Hub device assertions preserve the signed versioned typ value; changing it would break the canonical fleet-auth wire protocol.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/api/server/fleet-auth-routes.ts",
+      "contains": "x-psfn-csrf",
+      "reason": "Fleet-auth mutations preserve the deployed CSRF header name as a stable HTTP protocol contract.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/voice-websocket-runtime.ts",
+      "contains": "psfn-framework-mmo9.8.3",
+      "reason": "Voice websocket runtime comments cite the bead that owns live streaming assistant turns.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/substrate-agent.ts",
+      "contains": "psfn-framework-b0yl.5",
+      "reason": "Substrate-agent comment cites the bead that owns durable tool-usage presentation ordering.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/substrate-agent.ts",
+      "contains": "psfn-framework-mmo9.6.1",
+      "reason": "Substrate-agent comment cites the bead that owns voice cancellation identity isolation.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/substrate-agent/tool-orchestration-runtime.ts",
+      "contains": "psfn-framework-b0yl.5",
+      "reason": "Tool-orchestration contract cites the bead that owns durable usage ordering.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/substrate-agent/tool-runtime-facade.ts",
+      "contains": "psfn-framework-b0yl.5",
+      "reason": "Tool-runtime comments cite the bead that owns durable usage ordering refresh.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/substrate-agent/turn-execution-runtime.ts",
+      "contains": "psfn-amica",
+      "reason": "Turn execution preserves the established psfn-amica external channel-type discriminant used by persisted and wire contracts.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/tool-call-correction.ts",
+      "contains": "psfn-framework-b0yl.3",
+      "reason": "Tool-call correction module heading cites the bead that owns validate-and-reprompt behavior.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/tool-call-scheduler.ts",
+      "contains": "psfn-framework-b0yl.3",
+      "reason": "Tool-call scheduler comments cite the bead that owns correction recovery semantics.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/tool-schema-token-cost.fixture.ts",
+      "contains": "PSFN-123",
+      "reason": "Historical token-cost fixture preserves the exact pre-rewrite tool description captured at its documented source commit.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/core/agent/tool-surface/descriptions/operations-contracts.ts",
+      "contains": "psfn-framework-123",
+      "reason": "Canonical Beads tool guidance demonstrates the repository tracker ID prefix, not a companion identity default.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/tool-surface/turn-record-usage-source.ts",
+      "contains": "psfn-framework-b0yl.5",
+      "reason": "Turn-record usage source heading cites the bead that owns durable usage aggregation.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/tool-surface/usage-evaluator-scheduler-lane.ts",
+      "contains": "psfn-framework-b0yl.5",
+      "reason": "Usage-evaluator scheduler contract cites the bead that owns the lane.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/tool-surface/usage-evaluator.ts",
+      "contains": "psfn-framework-b0yl.5",
+      "reason": "Usage-evaluator module heading cites the bead that owns durable evaluation.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/agent/tool-surface/usage-ranking.ts",
+      "contains": "psfn-framework-vvf.6",
+      "reason": "Usage-ranking contract cites the bead that owns correction-signal ordering.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/tools/lifecycle.ts",
+      "contains": "psfn-agent, psfn-gateway, and psfn-garden",
+      "reason": "Lifecycle results name the exact project-owned Kubernetes deployments targeted and verified by the rollout operation.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/tools/lifecycle.ts",
+      "contains": "psfn-framework-x5rt.6",
+      "reason": "Lifecycle safety guidance cites the bead that owns the guarded image deploy pipeline.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/wiki/personal-projects.ts",
+      "contains": "psfn:personal-project",
+      "reason": "Personal-project publication preserves the established persisted wiki tag consumed by Garden and existing documents.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/wiki/personal-projects.ts",
+      "contains": "psfn:named-look",
+      "reason": "Wardrobe publication preserves the established persisted wiki tag consumed by Garden and existing documents.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/wiki/shared-world-caretaker-store.ts",
+      "contains": "applicationName: 'psfn-shared-wiki-caretaker'",
+      "reason": "Shared-world caretaker persistence uses a project-scoped PostgreSQL application_name for operational connection attribution.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/operator/garden/audit-opaque-id-keyring.ts",
+      "contains": "psfn-garden-audit-opaque-id-key-v1",
+      "reason": "Audit opaque-ID key derivation preserves its versioned HMAC domain separator; changing it would rotate derived IDs outside key-version control.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/operator/garden/services/scheduler-service.ts",
+      "contains": "psfn-framework-dnll.4",
+      "reason": "Garden scheduler service comment cites the bead that owns per-companion scheduler state isolation.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/operator/garden/services/session-service.ts",
+      "contains": "psfn-framework-jsi9",
+      "reason": "Garden session service comment cites the bead that owns retrieved-memory candidate references.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/operator/garden/services/types/sessions.ts",
+      "contains": "psfn-framework-jsi9",
+      "reason": "Garden session service contract cites the bead that owns retrieved-memory candidate references.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/backups/fleet-restore.ts",
+      "contains": "psfn-fleet-auth-restore-verify-",
+      "reason": "Fleet-auth restore verification uses a project-scoped temporary-directory prefix for operator diagnostics and cleanup.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/background-work-store.ts",
+      "contains": "applicationName: 'psfn-background-work'",
+      "reason": "Background-work persistence uses a project-scoped PostgreSQL application_name for operational connection attribution.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/shard-schema-lifecycle.ts",
+      "contains": "shard-schema-provision",
+      "reason": "Shard schema provisioning uses a project-scoped PostgreSQL application_name for operational connection attribution.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/shard-schema-lifecycle.ts",
+      "contains": "shard-schema-migrate",
+      "reason": "Shard schema migration uses a project-scoped PostgreSQL application_name for operational connection attribution.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/shard-schema-lifecycle.ts",
+      "contains": "shard-schema-cleanup",
+      "reason": "Shard schema cleanup uses a project-scoped PostgreSQL application_name for operational connection attribution.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/runtime-factory.ts",
+      "contains": "applicationName: 'psfn-tenant-boundary-preflight'",
+      "reason": "Tenant-boundary preflight uses a project-scoped PostgreSQL application_name for operational connection attribution.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/sessions/store.ts",
+      "contains": "psfn-framework-eb14",
+      "reason": "Session-store comments cite the bead that owns captured-wire redaction propagation.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/sessions/store.ts",
+      "contains": "psfn-framework-9ree",
+      "reason": "Session-store comment cites the bead that owns ref-backed session-window reconstruction.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/sessions/turn-record-memory-refs.ts",
+      "contains": "psfn-framework-jsi9",
+      "reason": "Turn-record memory-reference contract cites the bead that owns retrieved-memory diet behavior.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/sessions/turn-record-session-refs.ts",
+      "contains": "psfn-framework-9ree",
+      "reason": "Turn-record session-reference contract cites the bead that owns ref-backed session windows.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/sessions/turn-record-session-refs.ts",
+      "contains": "psfn-framework-hgw3.10",
+      "reason": "Turn-record session-reference comments cite the bead that owns old-record redaction gating.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/sessions/turn-record-session-refs.ts",
+      "contains": "psfn-framework-eb14",
+      "reason": "Turn-record session-reference comments cite the bead that owns captured-wire redaction propagation.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/sessions/turn-record-session-refs.ts",
+      "contains": "psfn-framework-ervg",
+      "reason": "Turn-record session-reference comments cite the follow-up bead that owns cross-channel continuity gating.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/primitives/voice/reply-stream/agent-stream-bridge.ts",
+      "contains": "psfn-framework-mmo9.8.3",
+      "reason": "Agent voice-stream bridge heading cites the bead that owns live reply streaming.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/primitives/voice/reply-stream/content-gate.ts",
+      "contains": "psfn-framework-mmo9.8.1",
+      "reason": "Voice content-gate heading cites the bead that owns committed-segment streaming.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/primitives/voice/reply-stream/eligibility.ts",
+      "contains": "psfn-framework-mmo9.8.1",
+      "reason": "Voice stream-eligibility heading cites the bead that owns committed-segment streaming.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/primitives/voice/reply-stream/index.ts",
+      "contains": "psfn-framework-mmo9.8.1",
+      "reason": "Voice reply-stream barrel heading cites the bead that owns the core stream contract.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/primitives/voice/reply-stream/reply-stream.ts",
+      "contains": "psfn-framework-mmo9.8.1",
+      "reason": "Voice reply-stream state-machine heading cites the bead that owns the core stream contract.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/primitives/voice/reply-stream/segmenter.ts",
+      "contains": "psfn-framework-mmo9.8.1",
+      "reason": "Voice segmenter heading cites the bead that owns committed-segment streaming.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/primitives/voice/reply-stream/types.ts",
+      "contains": "psfn-framework-mmo9.8.1",
+      "reason": "Voice reply-stream type heading cites the bead that owns the core stream contract.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/primitives/voice/reply-stream/types.ts",
+      "contains": "psfn-framework-mmo9.8.3",
+      "reason": "Voice reply-stream type contract cites the bead that owns live assistant streaming.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/primitives/voice/transports/websocket/runtime.ts",
+      "contains": "psfn-framework-mmo9.8.3",
+      "reason": "Voice websocket runtime comments cite the bead that owns live assistant streaming.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/primitives/voice/transports/websocket/types.ts",
+      "contains": "psfn-framework-mmo9.8.3",
+      "reason": "Voice websocket type contracts cite the bead that owns live assistant streaming.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/system/config/scheduler-config.ts",
+      "contains": "psfn-framework-b0yl.5",
+      "reason": "Scheduler-config contract cites the bead that owns tool-usage evaluator cadence and thresholds.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

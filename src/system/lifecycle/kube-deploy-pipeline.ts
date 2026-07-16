@@ -89,7 +89,7 @@ export interface DeployPipelinePlan {
   sourceBranch: string;
   /** Exact 40-character source commit; also the image revision label. */
   sourceCommit: string;
-  /** Image repository, e.g. `localhost/psfn-framework`. */
+  /** Image repository, e.g. `localhost/example/framework`. */
   imageRepository: string;
   /** Exact, non-floating image tag, e.g. `0.1.0-kube-<shortsha>`. */
   imageTag: string;

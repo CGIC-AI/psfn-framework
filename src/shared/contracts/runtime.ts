@@ -416,6 +416,18 @@ export interface IcpAutonomyCandidateOrigin {
   continuationTaskKind?: IcpContinuationTaskKind;
 }
 
+export type ReflectionTurnStage = 'tool_grounding' | 'final_output';
+export type ReflectionTurnMode = 'agent' | 'deliberation';
+
+/** Scheduler-authored provenance for assistant rows in an internal reflection session. */
+export interface ReflectionTurnProvenance {
+  schemaVersion: 1;
+  stage: ReflectionTurnStage;
+  templateId: string;
+  mode: ReflectionTurnMode;
+  journalEntryId?: string;
+}
+
 export interface MessageRoutingMetadata {
   source?: 'wyoming' | 'discord' | 'telegram' | 'api' | 'terminal' | 'psfn-amica' | 'satellite' | 'companion' | 'unknown';
   /**
@@ -469,6 +481,12 @@ export interface MessageRoutingMetadata {
    * leaves the existing DM/internal reflection binding byte-identical.
    */
   reflectionScope?: ReflectionScopeHint;
+  /**
+   * Scheduler-authored reflection stage. The assistant turn boundary stores it
+   * in durable session/continuity metadata, while canonical journal output adds
+   * its journal entry id before experiential extraction. No prose inference.
+   */
+  reflectionTurn?: ReflectionTurnProvenance;
   /**
    * Fully-bound ICP lineage for an ordinary companion-channel turn. The
    * gateway and target-turn entrypoint validate this before it reaches the

@@ -1,4 +1,6 @@
 import type { SessionEntry } from '../../../core/session/types.js';
+import { isInternalReflectionSessionId } from '../../../core/session/session-id.js';
+import { resolveSessionEntryReflectionTurnProvenance } from '../../../core/session/reflection-turn-provenance.js';
 import type { ExtractedFact } from '../types.js';
 import type { FactRoutingDecision } from './speaker-routing.js';
 
@@ -23,6 +25,7 @@ export type SelfDirectedFactRejectionReason =
   | 'missing_emotional_experience'
   | 'missing_companion_source_attribution'
   | 'invalid_companion_source_attribution'
+  | 'invalid_reflection_source_stage'
   | 'unsupported_experiential_text';
 
 export type SelfDirectedFactNormalizationResult =
@@ -41,6 +44,7 @@ export function buildExperientialSelfDirectedExtractionGuidance(companionName: s
     '[Experiential self-memory mode]',
     'This transcript is a real self-directed session. Extract only experiences that actually occurred in this transcript.',
     `The assistant is ${companionName}. Only companion-authored assistant messages can support an experiential memory; scheduler/user messages are prompts, never the experiencer or subject.`,
+    'In reflection sessions, cite only assistant entries marked as final reflection output; read-only grounding and tool-worker notes are evidence for reflection, not lived self-experience.',
     'Copy one complete first-person experiential sentence or contiguous span verbatim from the cited assistant messages into each fact text. After whitespace normalization, fact text must be an exact substring of those cited messages; never paraphrase or summarize a feeling.',
     'Each fact must be first-person, emotion-carrying, non-procedural, and grounded with source_message_ids that point only to assistant messages in this transcript.',
     'Preserve explicit reactions, preferences, dislikes, and the concrete creative or style context. Do not invent a feeling, preference, activity, or result that the assistant did not state.',
@@ -67,6 +71,12 @@ export function normalizeExperientialSelfDirectedFact(input: {
   }
   if (sourceEntries.some(entry => entry.role !== 'assistant')) {
     return { accepted: false, reason: 'invalid_companion_source_attribution' };
+  }
+  if (sourceEntries.some(entry => (
+    isInternalReflectionSessionId(entry.channelId)
+    && resolveSessionEntryReflectionTurnProvenance(entry)?.stage !== 'final_output'
+  ))) {
+    return { accepted: false, reason: 'invalid_reflection_source_stage' };
   }
 
   const sourceText = sourceEntries.map(entry => entry.content).join(' ');

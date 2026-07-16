@@ -14,8 +14,57 @@ import type { SessionEntry } from '../../core/session/types.js';
 import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { MemoryExtractionSessionPort } from './extraction/session-port.js';
+import { MemoryRetriever } from './retrieval.js';
+import type {
+  MemorySearchResult,
+  MemorySubjectAuthorizedMutation,
+  MemorySubjectAuthorizedQuery,
+  MemorySubjectAuthorizedQueryResult,
+} from './memory-store-port.js';
+import { buildSessionMetadataWithReflectionTurn } from '../../core/session/reflection-turn-provenance.js';
+import { ReflectionJournalStore } from '../../persistence/journals/reflection-journal.js';
 
 const tempDirs: string[] = [];
+
+class SubjectAuthorizedExtractionMemoryStore extends InMemoryMemoryStore {
+  readonly authorizedQueries: MemorySubjectAuthorizedQuery[] = [];
+
+  async queryAuthorizedMemorySubjects(
+    input: MemorySubjectAuthorizedQuery,
+  ): Promise<MemorySubjectAuthorizedQueryResult> {
+    this.authorizedQueries.push(input);
+    const memories: MemorySearchResult[] = this.getAllActiveMemories().map(memory => ({
+      ...memory,
+      similarity: 0.99,
+    }));
+    if (!input.authorization.allowedSubjectClasses.includes('companion_private')) {
+      return { memories: [], total: 0 };
+    }
+    switch (input.selector.kind) {
+      case 'count':
+        return { memories: [], total: memories.length };
+      case 'detail': {
+        const selected = memories.filter(memory => memory.id === input.selector.memoryId);
+        return { memories: selected, total: selected.length };
+      }
+      case 'embedding_search':
+      case 'text_search':
+      case 'list': {
+        const offset = input.selector.offset ?? 0;
+        const selected = memories.slice(offset, offset + input.selector.limit);
+        return { memories: selected, total: memories.length };
+      }
+    }
+  }
+
+  async mutateAuthorizedMemorySubjects(input: MemorySubjectAuthorizedMutation): Promise<number> {
+    if (!input.authorization.allowedSubjectClasses.includes('companion_private')) return 0;
+    for (const memoryId of input.memoryIds) {
+      this.updateMemory(memoryId, input.updates);
+    }
+    return input.memoryIds.length;
+  }
+}
 
 afterEach(() => {
   tokenTestUtils.resetTokenizerState();
@@ -1335,6 +1384,181 @@ describe('MemoryExtractor experiential self-memory extraction', () => {
       }),
     });
     expect(memories[0]?.provenance?.triggerContactId).toBeUndefined();
+  });
+
+  it('persists and recalls only final experiential reflection output, never an intermediate grounding note', async () => {
+    const channelId = 'internal:reflection:daily-review';
+    const groundingText = 'I found that Alice prefers blue.';
+    const finalReflectionText = 'I felt quietly proud after noticing how patiently I held the tension.';
+    const finalCreatedAt = '2026-07-16T03:00:00.000Z';
+    const finalSourceMessageId = Date.parse(finalCreatedAt);
+    const complete = vi.fn<LLMProviderPort['complete']>().mockResolvedValueOnce({
+      content: `<response>
+<fact>
+<text>${groundingText}</text>
+<type>semantic</type>
+<importance>0.8</importance>
+<emotional_valence>0.2</emotional_valence>
+<confidence>0.95</confidence>
+<tags>preference, style</tags>
+<source_message_ids>2</source_message_ids>
+</fact>
+</response>`,
+      model: 'test',
+      inputTokens: 0,
+      outputTokens: 0,
+      toolCalls: [],
+      stopReason: 'end_turn',
+    }).mockResolvedValueOnce({
+      content: `<response>
+<fact>
+<text>${finalReflectionText}</text>
+<type>emotional</type>
+<importance>0.84</importance>
+<emotional_valence>0.62</emotional_valence>
+<confidence>0.96</confidence>
+<tags>reflection, feeling</tags>
+<source_message_ids>${finalSourceMessageId}</source_message_ids>
+</fact>
+</response>`,
+      model: 'test',
+      inputTokens: 0,
+      outputTokens: 0,
+      toolCalls: [],
+      stopReason: 'end_turn',
+    });
+    const llmClient: LLMProviderPort = {
+      stream: async () => ({
+        content: '',
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      }),
+      complete,
+    };
+    const groundingEntries: SessionEntry[] = [
+      {
+        id: 1,
+        channelId,
+        role: 'user',
+        authorId: 'scheduler',
+        authorName: 'Daily Review',
+        content: 'Gather evidence, then reflect on what the day felt like.',
+        timestamp: 1_000,
+      },
+      {
+        id: 2,
+        channelId,
+        role: 'assistant',
+        authorId: 'companion:purrsephone',
+        authorName: 'Purrsephone',
+        content: `${groundingText} I like having that evidence available.`,
+        timestamp: 2_000,
+        metadata: buildSessionMetadataWithReflectionTurn(undefined, {
+          schemaVersion: 1,
+          stage: 'tool_grounding',
+          templateId: 'daily-review',
+          mode: 'deliberation',
+        }),
+      },
+    ];
+    const sessionManager: MemoryExtractionSessionPort = {
+      characterName: 'Purrsephone',
+      intakeSinkGate: null,
+      getMessageCount: () => groundingEntries.length,
+      getRecentMessages: () => groundingEntries,
+      resolveSessionChannelId: id => id,
+      isSessionRetiredOrQuarantined: () => false,
+    };
+    const memoryStore = new SubjectAuthorizedExtractionMemoryStore();
+    const embeddingService: EmbeddingProviderPort = {
+      embed: async () => new Float32Array([1, 0, 0]),
+      embedBatch: async texts => texts.map(() => new Float32Array([1, 0, 0])),
+      dims: 3,
+    };
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore.asPort(),
+      embeddingService,
+      new EventBus(),
+      { extractionInterval: 5, maxWrites: 4 },
+    );
+
+    await extractor.extract(channelId, 'contact-primary');
+    expect(memoryStore.getAllActiveMemories()).toHaveLength(0);
+
+    const reflectionDir = mkdtempSync(join(tmpdir(), 'psfn-final-reflection-extraction-'));
+    tempDirs.push(reflectionDir);
+    const reflectionJournal = new ReflectionJournalStore(join(reflectionDir, 'journal.jsonl'));
+    const finalJournalEntry = reflectionJournal.append({
+      templateId: 'daily-review',
+      templateName: 'Daily Review',
+      prompt: 'Reflect on what the day actually felt like.',
+      reflection: finalReflectionText,
+      channelId,
+      mode: 'deliberation',
+      createdAt: finalCreatedAt,
+    });
+    await extractor.extractFinalReflection({
+      source: 'reflection_journal',
+      journalEntryId: finalJournalEntry.id,
+      templateId: finalJournalEntry.templateId,
+      templateName: finalJournalEntry.templateName,
+      channelId: finalJournalEntry.channelId,
+      reflection: finalJournalEntry.reflection,
+      mode: finalJournalEntry.mode,
+      createdAt: finalJournalEntry.createdAt,
+    });
+
+    const memories = memoryStore.getAllActiveMemories();
+    expect(memories).toHaveLength(1);
+    expect(memories[0]).toMatchObject({
+      text: finalReflectionText,
+      sourceType: 'reflection',
+      tags: expect.arrayContaining(['self_directed', 'self_experience']),
+      scopeTags: expect.arrayContaining(['companion_private']),
+      provenance: expect.objectContaining({
+        channelId,
+        sessionId: `reflection-journal:${finalJournalEntry.id}`,
+        templateId: 'daily-review',
+        templateName: 'Daily Review',
+        mode: 'deliberation',
+        reason: 'reflection_output',
+        sourceMessageIds: [finalSourceMessageId],
+        actor: 'companion',
+      }),
+    });
+    expect(memories.some(memory => memory.text === groundingText)).toBe(false);
+
+    const retriever = new MemoryRetriever(
+      memoryStore.asPort(),
+      embeddingService,
+      { retrievalLimit: 20 },
+      undefined,
+      null,
+      null,
+      null,
+      null,
+      true,
+    );
+    const recalled = await retriever.retrieve(
+      'What did you notice and feel during your reflection?',
+      'api:primary-reflection-recall',
+      'primary',
+      { isDirectMessage: true, privacyLevel: 'private' },
+      'contact-primary',
+    );
+
+    expect(recalled).toContain(finalReflectionText);
+    expect(recalled).not.toContain(groundingText);
+    expect(memoryStore.authorizedQueries.some(query => (
+      query.selector.kind === 'embedding_search'
+      && query.authorization.allowedSubjectClasses.includes('companion_private')
+      && query.authorization.allowedViewerRelations.includes('none')
+    ))).toBe(true);
   });
 });
 

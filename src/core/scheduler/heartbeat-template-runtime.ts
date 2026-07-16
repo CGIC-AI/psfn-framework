@@ -36,6 +36,7 @@ import {
 } from '../../persistence/layout.js';
 import {
   ReflectionJournalStore,
+  type ReflectionJournalEntry,
 } from '../../persistence/journals/reflection-journal.js';
 import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import {
@@ -812,7 +813,15 @@ export function createHeartbeatTemplateRuntime(
             + '- Return a concise evidence note, not the final reflection.',
         ),
         timestamp: new Date(),
-        routing: reflectionWorkerRouting,
+        routing: {
+          ...reflectionWorkerRouting,
+          reflectionTurn: {
+            schemaVersion: 1,
+            stage: 'tool_grounding',
+            templateId: template.id,
+            mode: 'deliberation',
+          },
+        },
       });
       const toolGrounding = groundingResponse.content.trim();
       if (toolGrounding) {
@@ -940,6 +949,12 @@ export function createHeartbeatTemplateRuntime(
         timestamp: new Date(),
         routing: {
           ...reflectionWorkerRouting,
+          reflectionTurn: {
+            schemaVersion: 1,
+            stage: 'final_output',
+            templateId: template.id,
+            mode: 'agent',
+          },
         },
       });
       const normalizedReflection = normalizeTemplateReflectionOutput(template, response.content);
@@ -1014,6 +1029,7 @@ export function createHeartbeatTemplateRuntime(
       : null;
 
     let reflectionJournalEntryId: string | undefined;
+    let finalReflectionJournalEntry: ReflectionJournalEntry | undefined;
     let dailyJournalEntryId: string | undefined;
     if (!silentInterval) {
       try {
@@ -1037,10 +1053,30 @@ export function createHeartbeatTemplateRuntime(
           } : {}),
         });
         reflectionJournalEntryId = reflectionEntry.id;
+        finalReflectionJournalEntry = reflectionEntry;
       } catch (error) {
         log.warn(`Reflection "${template.id}" note journal persistence skipped`, {
           error: String(error),
         });
+      }
+
+      if (finalReflectionJournalEntry && agentLoop.memoryExtractor?.extractFinalReflection) {
+        try {
+          await agentLoop.memoryExtractor.extractFinalReflection({
+            source: 'reflection_journal',
+            journalEntryId: finalReflectionJournalEntry.id,
+            templateId: finalReflectionJournalEntry.templateId,
+            templateName: finalReflectionJournalEntry.templateName,
+            channelId: finalReflectionJournalEntry.channelId,
+            reflection: finalReflectionJournalEntry.reflection,
+            mode: finalReflectionJournalEntry.mode,
+            createdAt: finalReflectionJournalEntry.createdAt,
+          });
+        } catch (error) {
+          log.warn(`Reflection "${template.id}" experiential extraction skipped`, {
+            error: String(error),
+          });
+        }
       }
 
       try {

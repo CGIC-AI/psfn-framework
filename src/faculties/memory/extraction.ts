@@ -1,4 +1,8 @@
-import type { EmbeddingProviderPort, LLMProviderPort } from '../../core/agent/contracts.js';
+import type {
+  EmbeddingProviderPort,
+  FinalReflectionExtractionInput,
+  LLMProviderPort,
+} from '../../core/agent/contracts.js';
 import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-port.js';
 import type { PersonaPreamblePort } from '../../core/identity/persona-preamble.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
@@ -81,6 +85,7 @@ import {
 } from './extraction/signals.js';
 import { parseFactsXml } from './extraction/parser.js';
 import type { MemoryExtractionSessionPort } from './extraction/session-port.js';
+import { projectFinalReflectionForExtraction } from './extraction/reflection-output.js';
 
 const log = createComponentLogger('Extraction');
 
@@ -121,9 +126,12 @@ export interface GroupBackfillExtractionOptions {
   groupWriteCaps: GroupMemoryWriteCapSettings;
 }
 
-type MemoryExtractorGroupOptions =
+type MemoryExtractorRunOptions =
   Pick<ExtractionRunOptions, 'groupWriteCaps' | 'groupWriteCapContext'>
-  & { forceLegacyExtraction?: boolean };
+  & {
+    forceLegacyExtraction?: boolean;
+    reflectionSource?: FinalReflectionExtractionInput;
+  };
 
 export class MemoryExtractor {
   private llmClient: LLMProviderPort;
@@ -359,6 +367,30 @@ export class MemoryExtractor {
     await this.trackExtraction(channelId, 'manual', canonicalContactId, undefined, turnId, undefined, placeId);
   }
 
+  async extractFinalReflection(input: FinalReflectionExtractionInput): Promise<void> {
+    if (!this.acceptingExtractions) {
+      log.debug('Skipping final reflection extraction while extractor is draining', {
+        channelId: input.channelId,
+        journalEntryId: input.journalEntryId,
+      });
+      return;
+    }
+
+    const entry = projectFinalReflectionForExtraction(input, this.sessionManager.characterName);
+    await this.trackExtraction(
+      input.channelId,
+      'reflection_output',
+      undefined,
+      [entry],
+      undefined,
+      { reflectionSource: input },
+      undefined,
+      undefined,
+      undefined,
+      'serialize',
+    );
+  }
+
   async extractObservedGroupRange(options: ObservedGroupExtractionOptions): Promise<boolean> {
     if (options.recoveredEntries.length === 0) return false;
     if (!this.acceptingExtractions) {
@@ -479,7 +511,7 @@ export class MemoryExtractor {
     canonicalContactId?: string,
     recoveredEntries?: SessionEntry[],
     turnId?: TurnID,
-    groupOptions?: MemoryExtractorGroupOptions,
+    groupOptions?: MemoryExtractorRunOptions,
     placeId?: string,
     icpCorrelation?: IcpConversationCorrelation,
     assertEffectAllowed?: () => Promise<void>,
@@ -554,7 +586,7 @@ export class MemoryExtractor {
     canonicalContactId?: string,
     recoveredEntries?: SessionEntry[],
     turnId?: TurnID,
-    groupOptions?: MemoryExtractorGroupOptions,
+    groupOptions?: MemoryExtractorRunOptions,
     placeId?: string,
     icpCorrelation?: IcpConversationCorrelation,
     assertEffectAllowed?: () => Promise<void>,
@@ -604,13 +636,17 @@ export class MemoryExtractor {
       && typeof this.contactStore.getById === 'function'
       ? resolvePreferredContactName(await this.contactStore.getById(canonicalContactId))
       : undefined;
+    const reflectionSource = groupOptions?.reflectionSource;
+    const extractionSourceSessionId = reflectionSource
+      ? `reflection-journal:${reflectionSource.journalEntryId}`
+      : logicalSessionId;
 
     await runExtractionOrchestration({
       channelId,
       triggerReason,
       canonicalContactId,
       turnId,
-      sourceSessionId: logicalSessionId,
+      sourceSessionId: extractionSourceSessionId,
       recoveredEntries,
       icpCorrelation,
       resolveParticipantNames: (recentEntries, extractionCanonicalContactId) => resolveExtractionParticipantNames({
@@ -658,7 +694,7 @@ export class MemoryExtractor {
           maybeContactId,
           resolveFormationVAD(),
           channelId,
-          logicalSessionId,
+          extractionSourceSessionId,
           canonicalContactName,
           this.sessionManager.characterName,
           triggerReason,
@@ -666,6 +702,7 @@ export class MemoryExtractor {
           routing,
           placeId,
           assertEffectAllowed,
+          reflectionSource,
         )
       ),
       emitExtractionStart: (extractionChannelId, reason, extractionTurnId) => (
@@ -678,7 +715,9 @@ export class MemoryExtractor {
         resolveCoveredMarker(this.sessionManager, extractionChannelId, entries)
       ),
       recordExtractionMarker: (_extractionChannelId, coveredUpToMessageId) => (
-        persistExtractionMarker(this.sessionStore, logicalSessionId, coveredUpToMessageId)
+        reflectionSource
+          ? undefined
+          : persistExtractionMarker(this.sessionStore, logicalSessionId, coveredUpToMessageId)
       ),
       maybePersistEmotionalState: (contactId, acceptedFacts, recentEntries) => (
         this.maybePersistEmotionalState(contactId, acceptedFacts, recentEntries)
@@ -776,6 +815,7 @@ export class MemoryExtractor {
     routing?: ExtractionFactRouting,
     placeId?: string,
     assertEffectAllowed?: () => Promise<void>,
+    reflectionSource?: FinalReflectionExtractionInput,
   ): Promise<WriteResult> {
     await assertEffectAllowed?.();
     const selfDirectedMemory = routing?.routingReason === 'self_directed_companion';
@@ -874,6 +914,11 @@ export class MemoryExtractor {
           ? {
             channelId,
             ...(logicalSessionId ? { sessionId: logicalSessionId } : {}),
+            ...(reflectionSource ? {
+              templateId: reflectionSource.templateId,
+              templateName: reflectionSource.templateName,
+              mode: reflectionSource.mode,
+            } : {}),
             ...(turnId ? { turnId } : {}),
             ...(triggerReason ? { reason: triggerReason } : {}),
           ...(selfDirectedMemory ? { actor: 'companion' } : {}),

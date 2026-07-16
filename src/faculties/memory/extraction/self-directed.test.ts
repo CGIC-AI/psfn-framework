@@ -2,11 +2,15 @@ import { describe, expect, it } from 'vitest';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { ExtractedFact } from '../types.js';
 import { normalizeExperientialSelfDirectedFact } from './self-directed.js';
+import { buildSessionMetadataWithReflectionTurn } from '../../../core/session/reflection-turn-provenance.js';
 
 const CHANNEL_ID = 'internal:free-time:idle';
+const REFLECTION_CHANNEL_ID = 'internal:reflection:daily-review';
 const COMPANION_NAME = 'Purrsephone';
 const GENUINE_FEELING = 'I felt unexpectedly calm while painting the blue wash.';
 const STYLE_PREFERENCE = 'I dislike polished symmetry; I prefer loose watercolor edges because they feel alive.';
+const GROUNDING_FALSE_POSITIVE = 'I found that Alice prefers blue.';
+const FINAL_REFLECTION = 'I felt quietly proud after noticing how patiently I held the tension.';
 
 const entries: SessionEntry[] = [
   {
@@ -62,6 +66,70 @@ describe('experiential self-memory exact grounding', () => {
     expect(result).toEqual({
       accepted: false,
       reason: 'unsupported_experiential_text',
+    });
+  });
+
+  it('rejects an exact-cited grounding assistant turn and accepts the marked final reflection', () => {
+    const reflectionEntries: SessionEntry[] = [
+      {
+        id: 10,
+        channelId: REFLECTION_CHANNEL_ID,
+        role: 'assistant',
+        authorId: 'companion:purrsephone',
+        authorName: COMPANION_NAME,
+        content: `${GROUNDING_FALSE_POSITIVE} I like having that evidence available.`,
+        timestamp: 10_000,
+        metadata: buildSessionMetadataWithReflectionTurn(undefined, {
+          schemaVersion: 1,
+          stage: 'tool_grounding',
+          templateId: 'daily-review',
+          mode: 'deliberation',
+        }),
+      },
+      {
+        id: 11,
+        channelId: REFLECTION_CHANNEL_ID,
+        role: 'assistant',
+        authorId: 'companion:purrsephone',
+        authorName: COMPANION_NAME,
+        content: FINAL_REFLECTION,
+        timestamp: 11_000,
+        metadata: buildSessionMetadataWithReflectionTurn(undefined, {
+          schemaVersion: 1,
+          stage: 'final_output',
+          templateId: 'daily-review',
+          mode: 'deliberation',
+        }),
+      },
+    ];
+
+    expect(normalizeExperientialSelfDirectedFact({
+      fact: fact(GROUNDING_FALSE_POSITIVE, 10, {
+        type: 'semantic',
+        emotionalValence: 0.2,
+        tags: ['preference', 'style'],
+      }),
+      entries: reflectionEntries,
+      companionName: COMPANION_NAME,
+    })).toEqual({
+      accepted: false,
+      reason: 'invalid_reflection_source_stage',
+    });
+
+    expect(normalizeExperientialSelfDirectedFact({
+      fact: fact(FINAL_REFLECTION, 11),
+      entries: reflectionEntries,
+      companionName: COMPANION_NAME,
+    })).toMatchObject({
+      accepted: true,
+      fact: {
+        text: FINAL_REFLECTION,
+        tags: expect.arrayContaining(['self_directed', 'self_experience']),
+      },
+      routing: {
+        sourceMessageIds: [11],
+        reason: 'self_directed_companion',
+      },
     });
   });
 

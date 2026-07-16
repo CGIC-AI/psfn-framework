@@ -1,9 +1,10 @@
 import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
 
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
+const INTERNAL_REFLECTION_SESSION_PREFIX = 'internal:reflection:';
 const EXPERIENTIAL_SELF_DIRECTED_SESSION_PREFIXES = [
   'internal:free-time:',
-  'internal:reflection:',
+  INTERNAL_REFLECTION_SESSION_PREFIX,
 ] as const;
 export type InferredSessionChannelType = ChannelType | 'subagent';
 
@@ -25,6 +26,10 @@ export function isInternalSessionId(sessionId: string): boolean {
  */
 export function isExperientialSelfDirectedSessionId(sessionId: string): boolean {
   return EXPERIENTIAL_SELF_DIRECTED_SESSION_PREFIXES.some(prefix => sessionId.startsWith(prefix));
+}
+
+export function isInternalReflectionSessionId(sessionId: string): boolean {
+  return sessionId.startsWith(INTERNAL_REFLECTION_SESSION_PREFIX);
 }
 
 export function inferSessionChannelType(sessionId: string): InferredSessionChannelType | undefined {

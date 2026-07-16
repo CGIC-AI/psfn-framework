@@ -2,8 +2,8 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { LLMProviderPort } from '../agent/contracts.js';
-import type { LLMContext } from '../../shared/contracts/runtime.js';
+import type { LLMProviderPort, MemoryExtractor } from '../agent/contracts.js';
+import type { LLMContext, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { EventBus, type EventMap } from '../../shared/event-bus.js';
 import {
   NON_CANONICAL_REFLECTION_SUBSTRATE,
@@ -35,6 +35,7 @@ import { Scheduler } from './scheduler.js';
 import { createHeartbeatTemplateRuntime } from './heartbeat-template-runtime.js';
 import { createGroupConversationScope } from '../session/conversation-scope.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
+import type { HeartbeatAgent } from './heartbeat-runtime-contracts.js';
 
 describe('createHeartbeatTemplateRuntime reflection metacognition journal', () => {
   let tempDir: string;
@@ -113,18 +114,28 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       },
     });
     const snapshotRef = buildInternalStateSnapshotRef(internalState);
+    const handleMessage = vi.fn<HeartbeatAgent['handleMessage']>(async (message: SubstrateMessage) => {
+      capturedPrompts.push(message.content);
+      return { content: 'ACAC context was captured.' };
+    });
+    const extractFinalReflection = vi.fn<NonNullable<MemoryExtractor['extractFinalReflection']>>(
+      async () => undefined,
+    );
+    const memoryExtractor: MemoryExtractor = {
+      maybeExtract: async () => undefined,
+      getBoundedExtractionSnapshotLimit: () => 50,
+      extractFinalReflection,
+    };
 
     const runtime = createHeartbeatTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
       agentLoop: {
-        handleMessage: vi.fn(async (message: { content: string }) => {
-          capturedPrompts.push(message.content);
-          return { content: 'ACAC context was captured.' };
-        }),
+        handleMessage,
+        memoryExtractor,
         getCurrentInternalState: () => internalState,
         getCurrentInternalStateSnapshotRef: () => snapshotRef,
         getCurrentMetacognitiveFlags: () => [],
-      } as any,
+      },
       sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
     });
@@ -133,6 +144,25 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       sendToDiscordOverride: false,
       deferIfBusy: false,
     });
+
+    expect(handleMessage).toHaveBeenCalledWith(expect.objectContaining({
+      routing: expect.objectContaining({
+        reflectionTurn: {
+          schemaVersion: 1,
+          stage: 'final_output',
+          templateId: 'daily-review',
+          mode: 'agent',
+        },
+      }),
+    }));
+    expect(extractFinalReflection).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'reflection_journal',
+      templateId: 'daily-review',
+      channelId: 'internal:reflection:daily-review',
+      reflection: 'ACAC context was captured.',
+      mode: 'agent',
+      journalEntryId: expect.stringMatching(/^reflection-/),
+    }));
 
     const prompt = capturedPrompts[0] ?? '';
     const internalStateSection = getPromptSection(prompt, '[Reflection Self Evidence]');
@@ -560,17 +590,26 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       }),
     };
     const toolGroundingPrompts: string[] = [];
-    const handleMessage = vi.fn(async (message: { content: string }) => {
+    const handleMessage = vi.fn<HeartbeatAgent['handleMessage']>(async (message: SubstrateMessage) => {
       toolGroundingPrompts.push(message.content);
       return {
         content: 'Read-only tool grounding found the unresolved recovery follow-up.',
       };
     });
+    const extractFinalReflection = vi.fn<NonNullable<MemoryExtractor['extractFinalReflection']>>(
+      async () => undefined,
+    );
+    const memoryExtractor: MemoryExtractor = {
+      maybeExtract: async () => undefined,
+      getBoundedExtractionSnapshotLimit: () => 50,
+      extractFinalReflection,
+    };
 
     const runtime = createHeartbeatTemplateRuntime({
       scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
       agentLoop: {
         handleMessage,
+        memoryExtractor,
         memoryProvider: {
           retrieve: vi.fn(async () => '[Reflection Memory Retrieval]\n- trust-filtered contact memory'),
         },
@@ -639,12 +678,27 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(handleMessage).toHaveBeenCalledWith(expect.objectContaining({
       channelId: 'internal:reflection:daily-review',
       routing: expect.objectContaining({
+        reflectionTurn: {
+          schemaVersion: 1,
+          stage: 'tool_grounding',
+          templateId: 'daily-review',
+          mode: 'deliberation',
+        },
         workerExecution: expect.objectContaining({
           lane: 'whisper',
           profileClass: 'subconscious',
           failClosed: true,
         }),
       }),
+    }));
+    expect(extractFinalReflection).toHaveBeenCalledTimes(1);
+    expect(extractFinalReflection).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'reflection_journal',
+      templateId: 'daily-review',
+      channelId: 'internal:reflection:daily-review',
+      reflection: expect.stringContaining('still needs an explicit follow-up'),
+      mode: 'deliberation',
+      journalEntryId: expect.stringMatching(/^reflection-/),
     }));
     expect(toolGroundingPrompts[0]).toContain('analysis_workbench');
     expect(toolGroundingPrompts[0]).toContain('read-only introspection helpers');

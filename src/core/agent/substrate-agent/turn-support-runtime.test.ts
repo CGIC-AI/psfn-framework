@@ -10,6 +10,9 @@ import type { SubstrateConfig } from '../../../system/config/runtime-config-cont
 import { TurnSupportRuntime } from './turn-support-runtime.js';
 import { IntrospectionTurnSensitivityDecisions } from '../../../faculties/introspection/turn-sensitivity.js';
 import type { BackgroundWorkSupervisor } from '../background-work/supervisor.js';
+import { resolveSessionEntryReflectionTurnProvenance } from '../../session/reflection-turn-provenance.js';
+import type { SubstrateMessage } from '../../../shared/contracts/runtime.js';
+import { UserContinuityStore } from '../../session/continuity.js';
 
 function flushAsyncWork(): Promise<void> {
   return Promise.resolve().then(() => undefined);
@@ -149,6 +152,55 @@ describe('TurnSupportRuntime role-envelope projections', () => {
     });
 
     expect(record.roleEnvelopeRefs).toEqual(['turn_record_summary:env_runtime_projection_1']);
+  });
+
+  it('persists scheduler-authored reflection stage provenance on the durable continuity row', () => {
+    sessionManager.continuityStore = new UserContinuityStore(join(dir, 'continuity'));
+    const runtime = new TurnSupportRuntime({
+      eventBus: new EventBus(),
+      sessionManager,
+      backgroundWorkSupervisor: null,
+      hashPromptText: text => `hash:${text.length}`,
+      resolveContextWindow: () => 1_000,
+    });
+    const channelId = 'internal:reflection:daily-review';
+    const message: SubstrateMessage = {
+      id: 'reflection-daily-review-request',
+      channelId,
+      channelType: 'terminal',
+      authorId: 'scheduler',
+      authorName: 'Daily Review',
+      content: 'Reflect on the day.',
+      timestamp: new Date('2026-07-16T00:00:00.000Z'),
+      routing: {
+        reflectionTurn: {
+          schemaVersion: 1,
+          stage: 'tool_grounding',
+          templateId: 'daily-review',
+          mode: 'deliberation',
+        },
+      },
+    };
+
+    runtime.recordAssistantMessage(
+      message,
+      { sourceChannelId: channelId, logicalSessionId: channelId },
+      createTurnId(),
+      message.id,
+      'I found that Alice prefers blue. I like having that evidence available.',
+      'trusted',
+      'contact-primary',
+    );
+
+    expect(store.count(channelId)).toBe(0);
+    const assistantEntry = sessionManager.continuityStore.getRecent('contact-primary', 1)[0];
+    expect(assistantEntry.role).toBe('assistant');
+    expect(resolveSessionEntryReflectionTurnProvenance(assistantEntry)).toEqual({
+      schemaVersion: 1,
+      stage: 'tool_grounding',
+      templateId: 'daily-review',
+      mode: 'deliberation',
+    });
   });
 
   it('consumes only a companion-owned current-turn sensitivity decision into durable privacy provenance', () => {

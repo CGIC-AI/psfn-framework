@@ -183,6 +183,17 @@ export interface MemoryProvider {
   ): Promise<string>;
 }
 
+export interface FinalReflectionExtractionInput {
+  source: 'reflection_journal';
+  journalEntryId: string;
+  templateId: string;
+  templateName: string;
+  channelId: string;
+  reflection: string;
+  mode: 'agent' | 'deliberation';
+  createdAt: string;
+}
+
 export interface MemoryExtractor {
   maybeExtract(
     channelId: string,
@@ -204,4 +215,6 @@ export interface MemoryExtractor {
    */
   getBoundedExtractionSnapshotLimit(): number;
   getPendingExtractionPromise?(channelId: string): Promise<void> | null;
+  /** Canonical final-output seam; intermediate reflection turns never call it. */
+  extractFinalReflection?(input: FinalReflectionExtractionInput): Promise<void>;
 }

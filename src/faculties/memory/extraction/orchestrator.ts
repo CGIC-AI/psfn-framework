@@ -237,6 +237,12 @@ export interface ExtractionRunOptions {
    * completion instead of being gate-preempted back into the defer loop.
    */
   preemptionProtected?: boolean;
+  /**
+   * fxt1: the background-work `jobId` that granted the welfare escalation.
+   * Carried on the work spec so the gateway re-verifies it against the store
+   * before honoring `preemptionProtected`. Set only alongside it.
+   */
+  welfareGrantJobId?: string;
   resolveParticipantNames?: (
     recentEntries: readonly SessionEntry[],
     canonicalContactId?: string,
@@ -423,7 +429,14 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
           buildLLMWorkSpec({
             purpose: 'extraction',
             durable: true,
-            ...(options.preemptionProtected ? { preemptionProtected: true } : {}),
+            ...(options.preemptionProtected
+              ? {
+                  preemptionProtected: true,
+                  ...(options.welfareGrantJobId
+                    ? { welfareGrantJobId: options.welfareGrantJobId }
+                    : {}),
+                }
+              : {}),
             correlation: {
               requestId: chunkRequestId,
               ...(turnId ? { turnId } : {}),

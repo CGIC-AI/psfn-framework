@@ -18,12 +18,24 @@ describe('parseWorkSpecWireParams (fail-closed RPC boundary)', () => {
     cancellation: 'deadline',
     retryPolicy: 'none',
     preemptionProtected: true,
+    welfareGrantJobId: 'job-abc-123',
   };
 
   it('accepts a fully-populated valid spec and returns only recognized fields', () => {
     const parsed = parseWorkSpecWireParams({ ...valid, unknownJunk: 'dropped' });
     expect(parsed).toEqual(valid);
     expect(parsed).not.toHaveProperty('unknownJunk');
+  });
+
+  it('carries a non-empty welfareGrantJobId (fxt1)', () => {
+    const parsed = parseWorkSpecWireParams({
+      purpose: 'extraction',
+      lane: 'maintenance_reflection',
+      durable: true,
+      preemptionProtected: true,
+      welfareGrantJobId: 'job-xyz',
+    });
+    expect(parsed.welfareGrantJobId).toBe('job-xyz');
   });
 
   it('accepts a minimal spec (required fields only)', () => {
@@ -52,6 +64,9 @@ describe('parseWorkSpecWireParams (fail-closed RPC boundary)', () => {
     ['bad cancellation', { purpose: 'chat', lane: 'foreground_chat', durable: true, cancellation: 'maybe' }],
     ['bad retryPolicy', { purpose: 'chat', lane: 'foreground_chat', durable: true, retryPolicy: 'always' }],
     ['non-boolean preemptionProtected', { purpose: 'chat', lane: 'foreground_chat', durable: true, preemptionProtected: 1 }],
+    ['non-string welfareGrantJobId', { purpose: 'chat', lane: 'foreground_chat', durable: true, welfareGrantJobId: 42 }],
+    ['empty welfareGrantJobId', { purpose: 'chat', lane: 'foreground_chat', durable: true, welfareGrantJobId: '' }],
+    ['blank welfareGrantJobId', { purpose: 'chat', lane: 'foreground_chat', durable: true, welfareGrantJobId: '   ' }],
   ])('fails closed on %s', (_label, value) => {
     expect(() => parseWorkSpecWireParams(value)).toThrow(MalformedWorkSpecError);
   });

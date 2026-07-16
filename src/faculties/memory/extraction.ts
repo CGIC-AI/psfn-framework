@@ -265,8 +265,9 @@ export class MemoryExtractor {
     assertPreWriteFence?: () => Promise<void>,
     // mmo9.7.4: a welfare-escalated durable claim marks its model call
     // preemption-protected so the aged job runs to completion instead of being
-    // gate-preempted back into the defer loop.
-    extractOptions?: { preemptionProtected?: boolean },
+    // gate-preempted back into the defer loop. fxt1: the granting job id rides
+    // alongside so the gateway can re-verify the welfare escalation.
+    extractOptions?: { preemptionProtected?: boolean; welfareGrantJobId?: string },
   ): Promise<void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping extraction trigger while extractor is draining', { channelId });
@@ -318,6 +319,7 @@ export class MemoryExtractor {
       boundedEntries === undefined ? 'coalesce' : 'serialize',
       assertPreWriteFence,
       extractOptions?.preemptionProtected,
+      extractOptions?.welfareGrantJobId,
     );
     if (boundedEntries !== undefined) {
       this.advanceIntervalWatermarkAfterCoverage(
@@ -491,6 +493,7 @@ export class MemoryExtractor {
     scheduling: 'coalesce' | 'serialize' = 'coalesce',
     assertPreWriteFence?: () => Promise<void>,
     preemptionProtected?: boolean,
+    welfareGrantJobId?: string,
   ): Promise<void> {
     const logicalSessionId = this.resolveExtractionLogicalSessionId(channelId);
     const existing = this.inFlightByChannel.get(logicalSessionId);
@@ -512,6 +515,7 @@ export class MemoryExtractor {
       assertEffectAllowed,
       assertPreWriteFence,
       preemptionProtected,
+      welfareGrantJobId,
     );
     const promise = existing
       ? existing.then(start, start)
@@ -567,6 +571,7 @@ export class MemoryExtractor {
     assertEffectAllowed?: () => Promise<void>,
     assertPreWriteFence?: () => Promise<void>,
     preemptionProtected?: boolean,
+    welfareGrantJobId?: string,
   ): Promise<void> {
     // u5bv.11: A durable, receipt-bound bounded run (assertEffectAllowed present)
     // can be queued behind other same-session work under serialize scheduling. If
@@ -622,6 +627,7 @@ export class MemoryExtractor {
       recoveredEntries,
       icpCorrelation,
       ...(preemptionProtected ? { preemptionProtected: true } : {}),
+      ...(welfareGrantJobId ? { welfareGrantJobId } : {}),
       resolveParticipantNames: (recentEntries, extractionCanonicalContactId) => resolveExtractionParticipantNames({
         entries: recentEntries,
         canonicalContactName: extractionCanonicalContactId ? canonicalContactName : undefined,

@@ -1510,6 +1510,17 @@ export interface LLMWorkSpec {
    * here so mmo9.7.4 consumes it without introducing a second flag.
    */
   preemptionProtected?: boolean;
+  /**
+   * fxt1: welfare grant proof. When `preemptionProtected` is asserted for an
+   * autonomous call, this carries the background-work `jobId` whose store row
+   * granted the escalation. The gateway RPC boundary re-verifies this id against
+   * the background-work store (`welfare_claimed = true AND state = 'running'`,
+   * companion-scoped) before honoring `preemptionProtected`; any failure strips
+   * the flag (fail closed → preemptable). It is a gateway-only verification
+   * token, never forwarded past the boundary. Only the sanctioned welfare path
+   * (post-turn background runtime, keyed off `job.welfareClaimed`) sets it.
+   */
+  welfareGrantJobId?: string;
   /** Correlation lineage (companion/session/channel/charge/ICP) for this work. */
   correlation?: Partial<CorrelationMetadata>;
 }

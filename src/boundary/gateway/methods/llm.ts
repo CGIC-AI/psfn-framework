@@ -49,6 +49,9 @@ import {
   toModelCallPreemptedErrorData,
 } from '../../../primitives/llm/model-call-gate.js';
 import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+
+const log = createComponentLogger('GatewayLLM');
 
 /**
  * Re-raise gateway-side model-call gate/budget outcomes as typed JSON-RPC
@@ -93,16 +96,78 @@ export async function exposeModelCallGateBlocks<T>(operation: () => Promise<T>):
  * provider I/O; an absent spec is simply undefined (legacy non-work-spec calls
  * are untouched). The parsed spec is forwarded to the serving-side LLMClient so
  * its accountability guard + lane reconciliation fire in the split topology.
+ *
+ * psfn-framework-fxt1: additionally re-verify a caller-asserted
+ * `preemptionProtected` against the welfare-grant authority (the background-work
+ * store) and STRIP it on any failure before the gate can honor it.
  */
-function resolveRpcWorkSpec(raw: unknown): LLMWorkSpecWireParams | undefined {
+export async function resolveRpcWorkSpec(
+  raw: unknown,
+  runtime: GatewayMethodRuntime,
+): Promise<LLMWorkSpecWireParams | undefined> {
   if (raw === undefined || raw === null) return undefined;
+  let spec: LLMWorkSpecWireParams;
   try {
-    return parseWorkSpecWireParams(raw);
+    spec = parseWorkSpecWireParams(raw);
   } catch (error) {
     throw new JSONRPCErrorException(
       error instanceof Error ? error.message : 'Malformed LLMWorkSpec',
       GatewayErrors.INVALID_WORK_SPEC,
     );
+  }
+  return await enforceWelfareGrant(spec, runtime);
+}
+
+/**
+ * psfn-framework-fxt1: honor `preemptionProtected` only when its welfare grant
+ * verifies; strip it (and always the gateway-only `welfareGrantJobId` token)
+ * otherwise. Fail closed: absent verifier, absent/invalid grant id, non-welfare
+ * or non-running row, wrong companion, or a verify throw all resolve to a
+ * preemptable (unprotected) spec — no path forwards an unverified `true`.
+ */
+async function enforceWelfareGrant(
+  spec: LLMWorkSpecWireParams,
+  runtime: GatewayMethodRuntime,
+): Promise<LLMWorkSpecWireParams> {
+  // `welfareGrantJobId` is a gateway-only verification token — never forward it
+  // past the boundary regardless of the outcome.
+  const { welfareGrantJobId, ...forwarded } = spec;
+  if (spec.preemptionProtected !== true) {
+    return forwarded;
+  }
+  if (await verifyPreemptionGrant(spec.welfareGrantJobId, runtime)) {
+    return forwarded;
+  }
+  const { preemptionProtected: _stripped, ...unprotected } = forwarded;
+  return unprotected;
+}
+
+async function verifyPreemptionGrant(
+  welfareGrantJobId: string | undefined,
+  runtime: GatewayMethodRuntime,
+): Promise<boolean> {
+  const companionId = runtime.authenticatedCompanionId();
+  if (!welfareGrantJobId || !companionId || !runtime.verifyWelfareGrant) {
+    // Version skew (old agent sends no grant id), an unauthenticated call, or a
+    // gateway with no verifier: cannot prove the escalation → strip. This is the
+    // benign anti-starvation-lost degradation, not an error.
+    log.debug('preemptionProtected asserted without a verifiable welfare grant; stripping', {
+      hasGrantId: Boolean(welfareGrantJobId),
+      hasCompanion: Boolean(companionId),
+      hasVerifier: Boolean(runtime.verifyWelfareGrant),
+    });
+    return false;
+  }
+  try {
+    return await runtime.verifyWelfareGrant(welfareGrantJobId, companionId);
+  } catch (error) {
+    // No swallowed errors: a verify/DB failure is surfaced to telemetry, then
+    // the call proceeds preemptable (fail closed). The exception never
+    // propagates to the provider path.
+    log.warn('Welfare grant verification failed; stripping preemptionProtected (fail closed)', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
   }
 }
 
@@ -128,7 +193,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
     name: 'llm.chat',
     handler: async (params: LLMChatParams, runtime) => {
       params = await authorizeIcpCorrelation(params, runtime);
-      const workSpec = resolveRpcWorkSpec(params.workSpec);
+      const workSpec = await resolveRpcWorkSpec(params.workSpec, runtime);
       const messages = resolveRetainedImageReferences(params, runtime);
       const shardRouting = resolveShardChannelRouting(params.channelId);
       const requestId = params.requestId ?? runtime.nextStreamRequestId();
@@ -219,7 +284,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
     name: 'llm.complete',
     handler: async (params: LLMCompleteParams, runtime) => {
       params = await authorizeIcpCorrelation(params, runtime);
-      const workSpec = resolveRpcWorkSpec(params.workSpec);
+      const workSpec = await resolveRpcWorkSpec(params.workSpec, runtime);
       const messages = resolveRetainedImageReferences(params, runtime);
       const shardRouting = resolveShardChannelRouting(params.channelId);
       const inferredCallType = inferCallType(params.purpose, params.channelId);

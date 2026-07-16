@@ -87,6 +87,12 @@ export interface EmotionAppraisalInput {
   assertEffectAllowed?: () => Promise<void>;
   /** mmo9.7.4: protect a welfare-escalated appraisal model call from gate preemption. */
   preemptionProtected?: boolean;
+  /**
+   * fxt1: the background-work `jobId` that granted the welfare escalation.
+   * Carried on the work spec so the gateway re-verifies it before honoring
+   * `preemptionProtected`. Set only alongside it.
+   */
+  welfareGrantJobId?: string;
 }
 
 export interface EmotionAppraisalResult {
@@ -517,7 +523,12 @@ export class EmotionAppraisal {
     const response = await completeWithWorkSpec(this.llmProvider, context, buildLLMWorkSpec({
       purpose: 'background',
       durable: false,
-      ...(input.preemptionProtected ? { preemptionProtected: true } : {}),
+      ...(input.preemptionProtected
+        ? {
+            preemptionProtected: true,
+            ...(input.welfareGrantJobId ? { welfareGrantJobId: input.welfareGrantJobId } : {}),
+          }
+        : {}),
       correlation: {
         // Companion identity is the outer prompt-cache isolation scope; the
         // client's affinity resolver folds it into the provider cache token

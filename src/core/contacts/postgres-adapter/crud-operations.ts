@@ -59,6 +59,8 @@ import { invalidateMemorySubjectsForContact } from './memory-subject-lifecycle.j
 import { queryOne, queryRows, withPostgresClient } from './connection.js';
 import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
 import { compareAndSetGenericUpsertTrust, loadContactTrustSnapshot } from './trust-concurrency.js';
+import { markVerifiedContactOwnership } from './contact-lifecycle-snapshot.js';
+import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
 
 function hasOwnTimezone(partial: Partial<Contact>): boolean {
   return Object.prototype.hasOwnProperty.call(partial, 'timezone');
@@ -1139,27 +1141,12 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     failureReason?: string,
     verifiedAt?: string,
   ): Promise<ContactIdentityLinkVerification | undefined> {
-    const now = new Date().toISOString();
-    await this.pool.query(
-      `
-        UPDATE contact_identity_link_verifications
-        SET status = $1,
-            updated_at = $2,
-            verified_at = COALESCE($3, verified_at),
-            failure_reason = $4
-        WHERE id = $5
-      `,
-      [status, now, verifiedAt ?? null, failureReason ?? null, verificationId],
-    );
-    const row = await queryOne<ContactIdentityVerificationRow>(
+    const row = await markVerifiedContactOwnership(
       this.pool,
-      `
-        SELECT *
-        FROM contact_identity_link_verifications
-        WHERE id = $1
-        LIMIT 1
-      `,
-      [verificationId],
+      verificationId,
+      status,
+      failureReason,
+      verifiedAt,
     );
     return row ? this.toVerification(row) : undefined;
   },
@@ -1205,7 +1192,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       const expired = await this.markIdentityLinkVerification(row.id, 'expired', 'expired');
       return { status: 'verification_expired', verification: expired ?? verification };
     }
-    if (row.signature !== input.signature.trim()) {
+    if (!timingSafeStringEqual(row.signature, input.signature.trim())) {
       const failed = await this.markIdentityLinkVerification(row.id, 'failed', 'invalid_signature');
       return { status: 'invalid_signature', verification: failed ?? verification };
     }

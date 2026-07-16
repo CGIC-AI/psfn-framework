@@ -126,6 +126,9 @@ describe('Postgres live schema migrations', () => {
       'emotional_time_series',
       'is_machine_intelligence',
       'trust_version',
+      'contact_authority_version',
+      'contact_lifecycle_state',
+      'contact_restore_state',
     ]) {
       expectAddColumn(sql, 'contacts', column);
     }
@@ -134,6 +137,13 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain('CREATE TABLE IF NOT EXISTS social_relationship_edges');
     expect(sql).toContain('contact_id TEXT UNIQUE');
     expect(sql).toContain('evidence_memory_ids JSONB NOT NULL DEFAULT');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS contact_lifecycle_intents');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS contact_lifecycle_target_locks');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS contact_lifecycle_results');
+    expect(sql).toContain('identity_version BIGINT NOT NULL DEFAULT 1');
+    expect(sql).toContain("ownership_state IN ('unverified', 'verified', 'deleted', 'quarantined')");
+    expect(sql).toContain('verification_digest');
+    expect(sql).toContain('idx_contact_lifecycle_active_target');
   });
 
   it('extends the shared chain with companion_presence as versioned migration 2 (W5a)', () => {

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 
-export const SUBSYSTEM_OUTPUT_KINDS = ['memory', 'concern', 'contact'] as const;
+const SUBSYSTEM_OUTPUT_KINDS = ['memory', 'concern', 'contact'] as const;
 
 export type SubsystemOutputKind = typeof SUBSYSTEM_OUTPUT_KINDS[number];
 

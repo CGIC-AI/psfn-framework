@@ -61,15 +61,6 @@ export function formatBytesDelta(entry: PromptPlanBlockDiffEntry): string {
   return `${sign}${entry.bytesDelta} bytes (${entry.bytesBefore ?? 0} → ${entry.bytesAfter ?? 0})`;
 }
 
-export function toTimestamp(value: number | string | undefined): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim().length > 0) {
-    const parsed = Date.parse(value);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  return null;
-}
-
 export function formatDuration(value: number | null): string {
   if (value == null) return '—';
   if (value < 1_000) return `${Math.round(value)}ms`;
@@ -162,11 +153,6 @@ export function humanizeToken(value: string | null | undefined): string {
     .join(' ');
 }
 
-export function formatCapability(value: boolean | null | undefined): string {
-  if (value == null) return '—';
-  return value ? 'Yes' : 'No';
-}
-
 export function formatStageName(value: string | null | undefined): string {
   return value ? formatPromptMonitorStageLabel(value) : '—';
 }
@@ -188,10 +174,6 @@ export function activeToolCount(currentTurn: PromptMonitorTurn): number {
 
 export function skippedToolCount(currentTurn: PromptMonitorTurn): number {
   return currentTurn.snapshot?.toolContext?.adaptiveSnapshot?.skipped?.length ?? 0;
-}
-
-export function stageFieldCount(stage: PromptMonitorTurn['stages'][number]): number {
-  return Object.entries(stage.data).length;
 }
 
 export function sessionMetadataJson(currentTurn: PromptMonitorTurn): string | null {

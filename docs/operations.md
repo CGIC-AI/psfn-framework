@@ -134,6 +134,18 @@ Use `--dry-run` first. Keep authoritative env and runtime wiring in the deployed
 
 ### Helm upgrade for per-companion scheduler and capability owners
 
+Before this per-release Helm procedure, inspect the fleet-wide owner boundary.
+If `charge-policy.json` or `skills.json` is still under `SYSTEM_DATA_DIR`, stop
+every release and complete the digest-approved
+[`migrate:system-owner-fleet`](#existing-split-fleets-with-shared-per-companion-owners)
+procedure once across every exact root in `companions.json`. The chart mounts
+only one companion root per release, so its init container cannot perform that
+fleet-wide fan-out and intentionally refuses to treat seed files as a
+migration. Run the command from a repo-owned maintenance environment where the
+system-data PVC and every manifest companion-data PVC are mounted at their
+production paths. Do not start any individual Helm upgrade until the fleet
+preflight passes with `bootstrap.seedOwnerFiles=false`.
+
 Releases created before the per-companion ownership cutover have
 `scheduler.json` and `capability-tier.json` under `SYSTEM_DATA_DIR`. Current
 runtime code requires both under `COMPANION_DATA_DIR` and does not fall back to
@@ -211,9 +223,10 @@ Before upgrading each release:
      --wait --timeout 10m
    ```
 
-   This is the complete forward migration for both boundaries. Do not manually
-   rewrite the live scheduler or run an off-chart workaround. Apply it once to
-   every Helm release/companion root when updating the other clusters.
+   This completes the scheduler/capability Helm routing and scheduler-schema
+   boundaries. The separate charge/skills fleet transaction above must already
+   be complete. Do not manually rewrite the live scheduler or run an off-chart
+   workaround. Apply the Helm upgrade once to every release/companion root.
 
 4. Require all app rollouts, normal service smokes, and the owner checks:
 
@@ -222,11 +235,15 @@ Before upgrading each release:
    kubectl -n "$NAMESPACE" rollout status deploy/psfn-gateway --timeout=300s
    kubectl -n "$NAMESPACE" rollout status deploy/psfn-garden --timeout=300s
    kubectl -n "$NAMESPACE" exec deploy/psfn-agent -- sh -c '
-     for file in scheduler.json capability-tier.json; do
+     for file in scheduler.json capability-tier.json charge-policy.json skills.json; do
        test -f "/app/companion-data/$file"
+     done
+     for file in scheduler.json capability-tier.json; do
        test -f "/app/companion-data/.owner-migrations/$file.from-system.sha256" \
          || test ! -f "/app/system-data/$file"
      done
+     test ! -f /app/system-data/charge-policy.json
+     test ! -f /app/system-data/skills.json
    '
    ```
 
@@ -414,7 +431,7 @@ the full self-update → validate → auto/manual rollback flow is
 `src/app/e2e/kube-self-update-e2e.test.ts`, gated behind `PSFN_K3D_E2E` (`npm run
 e2e:kube-self-update`) so normal unit runs need no cluster or docker daemon; it
 provisions and tears down its own disposable k3d cluster and never touches
-psfn-shard, live namespaces, or any real PVC.
+an operator-managed cluster, live namespaces, or any real PVC.
 
 ## Host-Specific Storage Validation
 
@@ -515,6 +532,13 @@ npm run migrate:system-owner-fleet -- --apply \
   --approve skills.json=<exact-sha256>
 ```
 
+The supported command validates system-root `charge-policy.json` and
+`skills.json` with their canonical runtime schemas before it creates a receipt,
+destination, or quarantine object. Malformed JSON or schema drift therefore
+leaves the source and every companion root unchanged. Keep
+`bootstrap.seedOwnerFiles=false`; a seed copy is new default state, not
+preserved operator state and cannot certify this migration.
+
 The command first durably writes a bootstrap receipt at
 `SYSTEM_DATA_DIR/migrations/system-owner-fleet-reroot.json`. That receipt binds
 unpredictable operation, quarantine, staging, and copy identifiers before any
@@ -542,6 +566,17 @@ from `companions.json`; an owner in another companion root or a system-root
 decoy cannot satisfy the check. `npm run verify:startup-owner-files` is the
 separate repository gate: it validates distributed seeds in a disposable,
 explicit split-root fixture and is never called by the launcher.
+
+Rollback is a whole-fleet restore boundary. Before apply, take and verify one
+backup containing `SYSTEM_DATA_DIR` and every manifest companion-data root. If
+an old release must be restored after charge/skills fan-out, stop every fleet
+process and restore that verified pre-migration backup as one fleet unit, then
+run its startup preflight before reopening traffic. Do not copy the quarantined
+source back by hand, selectively restore one companion, delete the receipt, or
+reuse a partially migrated root: those actions sever the receipt's provenance
+and can reintroduce a shared owner alongside individuated state. Forward
+recovery is to fix the reported conflict and repeat the same digest-approved
+apply command; rollback is the verified all-root backup restore.
 
 ## Migration Boundary Until Beta
 

@@ -21,7 +21,7 @@
 //   PSFN_K3D_E2E=1 ./node_modules/.bin/vitest run src/app/e2e/kube-self-update-e2e.test.ts
 //
 // It provisions and tears down its own `psfn-x5rt9-e2e-<pid>` cluster and never
-// touches psfn-shard, live namespaces, or any real PVC.
+// touches an operator-managed cluster, live namespaces, or any real PVC.
 
 import { execFile } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';

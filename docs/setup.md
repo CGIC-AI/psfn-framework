@@ -226,6 +226,14 @@ retries preserve rather than delete unbound or replaced crash remnants. Do not
 remove the quarantine or retained staging artifacts manually; they are part of
 deterministic receipt verification and retry.
 
+For a multi-release Helm upgrade, run that command once from the repo-owned
+maintenance environment with all manifest PVC roots mounted, then require
+`npm run preflight:startup-owner-files` to pass before upgrading any individual
+release. Keep `bootstrap.seedOwnerFiles=false` throughout the upgrade. Rolling
+back to a pre-routing release requires restoring the verified pre-migration
+backup of system-data and every companion-data root together, never copying a
+quarantined shared owner into selected companions.
+
 ### Multi-companion workspaces
 
 Do not set per-companion workspace paths in `companions.json`. The fleet

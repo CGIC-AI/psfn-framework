@@ -1,5 +1,7 @@
 #!/usr/bin/env tsx
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 import '../../shared/utils/load-dotenv.js';
 import {
   isMultiCompanionEnabled,
@@ -7,6 +9,11 @@ import {
   resolveCompanionFleetPaths,
 } from '../../system/config/companions-config.js';
 import { PER_COMPANION_OWNER_FILES } from '../../system/config/settings-contract.js';
+import {
+  CHARGE_POLICY_FILE_NAME,
+  loadChargePolicyConfig,
+} from '../../system/config/charge-policy-config.js';
+import { loadSkillsConfig, SKILLS_FILE_NAME } from '../../system/config/skills-config.js';
 import { resolveRuntimePathLayout } from '../../persistence/layout.js';
 import {
   buildSystemOwnerFleetMigrationPlan,
@@ -110,6 +117,24 @@ function resolveMigrationContext(env: NodeJS.ProcessEnv) {
   return { layout, fleet };
 }
 
+/**
+ * Validate schema-bound owners before the receipt transaction can create any
+ * destination or retire a source. Scheduler is intentionally excluded here:
+ * the supported old-release flow copies its pre-bundled schema byte-for-byte
+ * before the separately guarded scheduler owner migrator upgrades the shape.
+ */
+function validateSchemaBoundMigrationSources(
+  systemDataDir: string,
+  seedDir: string | undefined,
+): void {
+  if (existsSync(join(systemDataDir, CHARGE_POLICY_FILE_NAME))) {
+    loadChargePolicyConfig(systemDataDir, seedDir ? { seedDir } : undefined);
+  }
+  if (existsSync(join(systemDataDir, SKILLS_FILE_NAME))) {
+    loadSkillsConfig(systemDataDir, seedDir ? { seedDir } : undefined);
+  }
+}
+
 function main(): void {
   const options = parseArgs(process.argv.slice(2));
   if (options.showHelp) {
@@ -117,6 +142,10 @@ function main(): void {
     return;
   }
   const { layout, fleet } = resolveMigrationContext(process.env);
+  validateSchemaBoundMigrationSources(
+    layout.systemDataDir,
+    process.env.CONFIG_DIR?.trim() || undefined,
+  );
   if (options.apply) {
     const result = executeSystemOwnerFleetMigration({
       systemDataDir: layout.systemDataDir,

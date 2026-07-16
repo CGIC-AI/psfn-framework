@@ -1135,6 +1135,39 @@ ALTER TABLE authority_floor_tombstone_projection
   ));
 `;
 
+const HUB_REPLAY_KEYED_AUDIT_DIGEST_SQL = `
+-- psfn-framework-5wrp: audit/replay identifier digests move from unkeyed SHA-256
+-- to app-side keyed HMAC-SHA256 under the fleet-auth session pepper, closing a
+-- deanonymization oracle for privileged readers of authorization_audit_events.
+-- The consume procedure previously derived issuer/device/enrollment/jti digests
+-- from raw values in-SQL; those keyed digests are now computed app-side and
+-- stored on the ephemeral replay ledger so the mutated-replay audit context can
+-- be assembled without re-hashing a raw identifier in Postgres.
+--
+-- Replay fences are short-lived enforcement state (<=60s TTL) whose prior digest
+-- columns were SQL-derivable; drop them rather than backfilling unkeyed values.
+-- The procedure-owned ledger repopulates as signed assertions are re-verified.
+TRUNCATE TABLE hub_device_assertion_replays;
+
+ALTER TABLE hub_device_assertion_replays
+  ADD COLUMN issuer_digest TEXT NOT NULL CHECK (issuer_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN device_id_digest TEXT NOT NULL CHECK (device_id_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN enrollment_version_digest TEXT NOT NULL
+    CHECK (enrollment_version_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN jti_digest TEXT NOT NULL CHECK (jti_digest ~ '^[0-9a-f]{64}$');
+
+-- Correlation discontinuity note (no dual-read fallback, per the no-shims rule):
+-- pre-existing hub_device_assertion.verify/mutated_replay and lifecycle audit
+-- rows keep their prior unkeyed SHA-256 digests and correlation_ids. New keyed
+-- digests occupy a distinct versioned domain (v1), so an old value and a new
+-- value never collide under the correlation_id partial unique index, and the
+-- v17 canonical CHECK (correlation_id = sha256(digest-array)) still holds for
+-- both eras because the correlation stays a SHA-256 over already-digested fields.
+-- A logical mismatch that recurs after upgrade appends a fresh keyed deny audit
+-- row instead of deduplicating against a pre-upgrade row -- an accepted one-time
+-- discontinuity for append-only deny records, not a uniqueness regression.
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
@@ -1164,5 +1197,10 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
     version: 21,
     name: 'contact_authority_lifecycle_fences',
     sql: `${CONTACT_AUTHORITY_FLOOR_KIND_SQL}\n${FLEET_AUTH_CONTACT_AUTHORITY_DDL_SQL}`,
+  },
+  {
+    version: 22,
+    name: 'hub_replay_keyed_audit_digests',
+    sql: HUB_REPLAY_KEYED_AUDIT_DIGEST_SQL,
   },
 ] as const;

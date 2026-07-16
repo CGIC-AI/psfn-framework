@@ -867,6 +867,7 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
     merged_from_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
     split_from_id TEXT,
     origin_icp_root_initiation_id UUID,
+    candidate_review_snapshot JSONB,
     CHECK (priority IN ('high', 'medium', 'low')),
     CHECK (source IN ('appraisal', 'agent', 'heartbeat')),
     CHECK (status IN ('candidate', 'active', 'watching', 'deferred', 'blocked', 'resolved', 'dismissed', 'suppressed')),
@@ -886,6 +887,7 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS merged_from_ids JSONB NOT NULL DEFAULT '[]'::jsonb;`,
   `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS split_from_id TEXT;`,
   `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS origin_icp_root_initiation_id UUID;`,
+  `ALTER TABLE active_concerns ADD COLUMN IF NOT EXISTS candidate_review_snapshot JSONB;`,
   `
   UPDATE active_concerns
   SET status = 'resolved'
@@ -899,6 +901,37 @@ export const POSTGRES_INTENTION_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_active_concerns_active ON active_concerns (resolved_at, expires_at, priority, created_at, id);`,
   `CREATE INDEX IF NOT EXISTS idx_active_concerns_contact ON active_concerns (contact_id, resolved_at, expires_at, created_at, id);`,
   `CREATE INDEX IF NOT EXISTS idx_active_concerns_lifecycle ON active_concerns (status, next_review_at, expires_at, last_reviewed_at, id);`,
+  `
+  CREATE OR REPLACE FUNCTION enforce_active_concern_attention_cap()
+  RETURNS TRIGGER AS $$
+  DECLARE
+    attention_count INTEGER;
+  BEGIN
+    IF NEW.resolved_at IS NULL
+      AND NEW.status IN ('active', 'watching', 'deferred', 'blocked')
+      AND NEW.expires_at::timestamptz > NEW.last_reviewed_at::timestamptz
+    THEN
+      PERFORM pg_advisory_xact_lock(hashtextextended('active-concern-attention-cap', 0));
+      SELECT COUNT(*) INTO attention_count
+      FROM active_concerns concern
+      WHERE concern.id <> NEW.id
+        AND concern.resolved_at IS NULL
+        AND concern.status IN ('active', 'watching', 'deferred', 'blocked')
+        AND concern.expires_at::timestamptz > NEW.last_reviewed_at::timestamptz
+        AND concern.created_at::timestamptz > NEW.last_reviewed_at::timestamptz - INTERVAL '7 days';
+      IF attention_count >= 7 THEN
+        RAISE EXCEPTION 'Active concern cap reached (7)';
+      END IF;
+    END IF;
+    RETURN NEW;
+  END;
+  $$ LANGUAGE plpgsql;
+  `,
+  `DROP TRIGGER IF EXISTS trg_active_concern_attention_cap ON active_concerns;`,
+  `CREATE TRIGGER trg_active_concern_attention_cap
+    BEFORE INSERT OR UPDATE OF status, resolved_at, expires_at, last_reviewed_at
+    ON active_concerns
+    FOR EACH ROW EXECUTE FUNCTION enforce_active_concern_attention_cap();`,
   `
   CREATE TABLE IF NOT EXISTS intention_pending_follow_ups (
     id TEXT PRIMARY KEY,
@@ -1313,14 +1346,88 @@ export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
     state TEXT NOT NULL CHECK (state IN ('pending', 'started', 'applied')),
     lease_owner TEXT NOT NULL,
     lease_revision INTEGER NOT NULL CHECK (lease_revision > 0),
+    projects_subsystem_outputs BOOLEAN NOT NULL DEFAULT false,
     started_at_ms BIGINT NOT NULL CHECK (started_at_ms >= 0),
     applied_at_ms BIGINT,
     PRIMARY KEY (job_id, effect_key),
     CHECK ((state = 'applied') = (applied_at_ms IS NOT NULL))
   );
   `,
+  `
+  CREATE TABLE IF NOT EXISTS agent_turn_subsystem_output_refs (
+    logical_session_id TEXT NOT NULL,
+    source_channel_id TEXT NOT NULL,
+    source_turn_id TEXT NOT NULL,
+    source_request_id TEXT NOT NULL,
+    output_ref TEXT NOT NULL,
+    source_job_id TEXT NOT NULL,
+    source_effect_key TEXT NOT NULL,
+    recorded_at_ms BIGINT NOT NULL CHECK (recorded_at_ms >= 0),
+    PRIMARY KEY (logical_session_id, source_channel_id, source_turn_id, source_request_id, output_ref)
+  );
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS agent_turn_subsystem_output_status (
+    logical_session_id TEXT NOT NULL,
+    source_channel_id TEXT NOT NULL,
+    source_turn_id TEXT NOT NULL,
+    source_request_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('applied', 'failed', 'outcome_unknown')),
+    source_job_id TEXT NOT NULL,
+    source_effect_key TEXT NOT NULL,
+    recorded_at_ms BIGINT NOT NULL CHECK (recorded_at_ms >= 0),
+    PRIMARY KEY (logical_session_id, source_channel_id, source_turn_id, source_request_id)
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_agent_turn_subsystem_output_refs_turn
+    ON agent_turn_subsystem_output_refs (
+      logical_session_id, source_channel_id, source_turn_id, source_request_id
+    );`,
+  `ALTER TABLE agent_turn_subsystem_output_status
+    DROP CONSTRAINT IF EXISTS agent_turn_subsystem_output_status_status_check;`,
+  `ALTER TABLE agent_turn_subsystem_output_status
+    ADD CONSTRAINT agent_turn_subsystem_output_status_status_check
+    CHECK (status IN ('applied', 'failed', 'outcome_unknown'));`,
+  `
+  CREATE OR REPLACE FUNCTION reject_agent_turn_subsystem_output_ref_mutation()
+  RETURNS TRIGGER AS $$
+  BEGIN
+    RAISE EXCEPTION 'agent_turn_subsystem_output_refs is append-only';
+  END;
+  $$ LANGUAGE plpgsql;
+  `,
+  `DROP TRIGGER IF EXISTS trg_agent_turn_subsystem_output_refs_append_only
+    ON agent_turn_subsystem_output_refs;`,
+  `CREATE TRIGGER trg_agent_turn_subsystem_output_refs_append_only
+    BEFORE UPDATE OR DELETE ON agent_turn_subsystem_output_refs
+    FOR EACH ROW EXECUTE FUNCTION reject_agent_turn_subsystem_output_ref_mutation();`,
+  `DROP TRIGGER IF EXISTS trg_agent_turn_subsystem_output_refs_no_truncate
+    ON agent_turn_subsystem_output_refs;`,
+  `CREATE TRIGGER trg_agent_turn_subsystem_output_refs_no_truncate
+    BEFORE TRUNCATE ON agent_turn_subsystem_output_refs
+    FOR EACH STATEMENT EXECUTE FUNCTION reject_agent_turn_subsystem_output_ref_mutation();`,
+  `
+  CREATE OR REPLACE FUNCTION reject_agent_turn_subsystem_output_status_mutation()
+  RETURNS TRIGGER AS $$
+  BEGIN
+    RAISE EXCEPTION 'agent_turn_subsystem_output_status is append-only';
+  END;
+  $$ LANGUAGE plpgsql;
+  `,
+  `DROP TRIGGER IF EXISTS trg_agent_turn_subsystem_output_status_append_only
+    ON agent_turn_subsystem_output_status;`,
+  `CREATE TRIGGER trg_agent_turn_subsystem_output_status_append_only
+    BEFORE UPDATE OR DELETE ON agent_turn_subsystem_output_status
+    FOR EACH ROW EXECUTE FUNCTION reject_agent_turn_subsystem_output_status_mutation();`,
+  `DROP TRIGGER IF EXISTS trg_agent_turn_subsystem_output_status_no_truncate
+    ON agent_turn_subsystem_output_status;`,
+  `CREATE TRIGGER trg_agent_turn_subsystem_output_status_no_truncate
+    BEFORE TRUNCATE ON agent_turn_subsystem_output_status
+    FOR EACH STATEMENT EXECUTE FUNCTION reject_agent_turn_subsystem_output_status_mutation();`,
   `ALTER TABLE agent_background_work_effect_receipts
     ADD COLUMN IF NOT EXISTS lease_revision INTEGER;`,
+  `ALTER TABLE agent_background_work_effect_receipts
+    ADD COLUMN IF NOT EXISTS projects_subsystem_outputs BOOLEAN NOT NULL DEFAULT false;`,
   `UPDATE agent_background_work_effect_receipts receipt
     SET lease_revision = job.revision
     FROM agent_background_work_jobs job

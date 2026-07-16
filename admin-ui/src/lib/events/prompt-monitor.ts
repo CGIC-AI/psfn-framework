@@ -555,6 +555,11 @@ function buildPromptLoomFromTurn(turn: PromptMonitorTurn): AdminPromptLoomData {
       },
     },
     subsystemOutputs: {
+      projectionStatus: (turn.record?.extractedMemoryIds.length ?? 0)
+        + (turn.record?.concernDeltaRefs.length ?? 0)
+        + (turn.record?.contactDeltaRefs.length ?? 0) > 0
+        ? 'pending'
+        : 'not_applicable',
       contextManifestRef: turn.record?.contextManifestRef ?? null,
       internalStateSnapshotRef: turn.record?.internalStateSnapshotRef ?? null,
       memoryWrites: (turn.record?.extractedMemoryIds ?? []).map(ref => ({

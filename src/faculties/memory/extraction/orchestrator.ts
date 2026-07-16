@@ -1,5 +1,5 @@
 import { createComponentLogger } from '../../../shared/logger.js';
-import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { LLMProviderPort, MemoryExtractionOutputs } from '../../../core/agent/contracts.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import { isExperientialSelfDirectedSessionId } from '../../../core/session/session-id.js';
@@ -306,7 +306,7 @@ export interface ExtractionRunOptions {
     canonicalContactId: string | undefined,
     acceptedFacts: ExtractedFact[],
     recentEntries: SessionEntry[],
-  ) => Promise<void>;
+  ) => Promise<string | undefined>;
   maybeRefreshContactProfile: (
     channelId: string,
     triggerReason: ExtractionTriggerReason,
@@ -317,7 +317,13 @@ export interface ExtractionRunOptions {
   assertEffectAllowed?: () => Promise<void>;
 }
 
-export async function runExtractionOrchestration(options: ExtractionRunOptions): Promise<void> {
+function emptyExtractionOutputs(): MemoryExtractionOutputs {
+  return { memoryIds: [], concernIds: [], contactIds: [] };
+}
+
+export async function runExtractionOrchestration(
+  options: ExtractionRunOptions,
+): Promise<MemoryExtractionOutputs> {
   let resolvedTurnId: TurnID | undefined = options.turnId;
   try {
     const recoveredEntries = (options.recoveredEntries !== undefined
@@ -389,7 +395,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
         preLlmGateSignalScore: preLlmGate.signalScore,
         preLlmGateSignalCount: preLlmGate.signalCount,
       });
-      return;
+      return emptyExtractionOutputs();
     }
 
 	    const sourceRef = buildExtractionSourceRef(
@@ -605,7 +611,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
         crossChunkDeduplicatedCount,
         boundaryFactCount: inferredBoundaryFacts.length,
       });
-      return;
+      return emptyExtractionOutputs();
     }
 
     const rejectionBreakdown: Record<ExtractionRejectionReason, number> = createEmptyRejectionBreakdown();
@@ -796,6 +802,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     let supersededCount = 0;
     let routedFactCount = 0;
     const acceptedWrites: AcceptedFactWrite[] = [];
+    const durableMemoryIds = new Set<string>();
     const acceptedFactsForConcernCandidates: ExtractedFact[] = [];
     const acceptedFactsByContact = new Map<string | undefined, ExtractedFact[]>();
     const routedContactIds = new Set<string>();
@@ -836,6 +843,10 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
 
       try {
         const result = await options.processFact(fact, sourceRef, routing.contactId, routingTelemetry);
+        durableMemoryIds.add(result.memory.id);
+        for (const supersededMemoryId of result.supersededMemoryIds ?? []) {
+          durableMemoryIds.add(supersededMemoryId);
+        }
         acceptedCount++;
         const routedToDifferentContact = Boolean(
           routing.contactId
@@ -957,9 +968,10 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     await options.assertEffectAllowed?.();
     options.recordExtractionMarker(options.channelId, coveredUpToMessageId);
     await options.emitExtractionEnd(telemetry);
+    const concernIds: string[] = [];
     if (options.emitConcernCandidates) {
       await options.assertEffectAllowed?.();
-      await options.emitConcernCandidates({
+      const emittedConcernIds = await options.emitConcernCandidates({
         channelId: options.channelId,
         triggerReason: options.triggerReason,
         ...(canonicalContactId ? { canonicalContactId } : {}),
@@ -978,19 +990,22 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
           sourceRef: memory.sourceRef,
         })),
       });
+      concernIds.push(...(emittedConcernIds ?? []));
     }
+    const contactIds: string[] = [];
     const emotionalFactGroups = acceptedFactsByContact.size > 0
       ? acceptedFactsByContact
       : new Map<string | undefined, ExtractedFact[]>([[canonicalContactId, []]]);
-    for (const [contactId, acceptedFacts] of emotionalFactGroups.entries()) {
+    for (const [sourceContactId, acceptedFacts] of emotionalFactGroups.entries()) {
       await options.assertEffectAllowed?.();
       // Awaited (not fire-and-forget) so this durable child settles before the
       // parent effect receipt is applied and its fence releases (u5bv.6 AC3).
-      await options.maybePersistEmotionalState(
-        contactId,
+      const mutatedContactId = await options.maybePersistEmotionalState(
+        sourceContactId,
         acceptedFacts,
         recentEntries,
       );
+      if (mutatedContactId) contactIds.push(mutatedContactId);
     }
 
     const refreshGroups = groupAcceptedWritesByContact(acceptedWrites, canonicalContactId);
@@ -1005,6 +1020,11 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
         writes,
       );
     }
+    return {
+      memoryIds: [...durableMemoryIds],
+      concernIds: [...new Set(concernIds)],
+      contactIds: [...new Set(contactIds)],
+    };
   } catch (error) {
     // A durable drain requeue is an intentional retryable control signal, not an
     // integrity failure — surface it unwrapped so the post-turn seam can defer

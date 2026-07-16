@@ -3791,6 +3791,11 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(JSON.stringify(enqueued)).not.toContain('broadcastApprovalToken');
     expect(JSON.stringify(enqueued)).not.toContain('compactionPromptText');
     expect(JSON.stringify(enqueued)).not.toContain('templateVariables');
+    expect(runtime.sessionManager.recordTurn).toHaveBeenCalledWith(expect.objectContaining({
+      extractedMemoryIds: [expect.stringMatching(/^loom-projection:v1:memory:[a-f0-9]{64}$/u)],
+      concernDeltaRefs: [expect.stringMatching(/^loom-projection:v1:concern:[a-f0-9]{64}$/u)],
+      contactDeltaRefs: [expect.stringMatching(/^loom-projection:v1:contact:[a-f0-9]{64}$/u)],
+    }));
     const emotionPayload = enqueued.find(job => job.kind === 'emotion_appraisal')?.payload;
     expect(emotionPayload).toMatchObject({
       internalStateSnapshotRef: expect.stringMatching(/^internal-state-v1:/),

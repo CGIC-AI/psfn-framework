@@ -150,7 +150,7 @@ export interface ConcernCandidateExtractionContext {
 
 export type ConcernCandidateExtractionSink = (
   context: ConcernCandidateExtractionContext,
-) => void | Promise<void>;
+) => readonly string[] | undefined | Promise<readonly string[] | undefined>;
 
 export interface AcceptedFactCandidate {
   fact: ExtractedFact;

@@ -83,6 +83,11 @@ import {
   resolvePromptLoomSubsystemOutputs,
 } from './session-turn-observability.js';
 import type { SessionEntry } from '../../../core/session/types.js';
+import type { BackgroundWorkStorePort } from '../../../core/agent/background-work/store-port.js';
+import {
+  parseSubsystemOutputRef,
+  parseTurnSubsystemProjectionRef,
+} from '../../../shared/contracts/subsystem-output-refs.js';
 
 const DEFAULT_ADMIN_TURN_LIMIT = 50;
 export const DEFAULT_ADMIN_SESSION_MESSAGE_PAGE_LIMIT = 100;
@@ -292,6 +297,7 @@ export class AdminSessionDataService implements AdminSessionService {
     contactStore?: ContactStorePort | null;
     concernStore?: ConcernStorePort | null;
     memoryStore?: MemoryStorePort | null;
+    subsystemOutputRefStore?: Pick<BackgroundWorkStorePort, 'getSubsystemOutputProjection'> | null;
     config?: SubstrateConfig;
     cogSecEventStore?: CogSecEventStore;
     cogSecForensicArchive?: CogSecForensicArchive;
@@ -796,12 +802,69 @@ export class AdminSessionDataService implements AdminSessionService {
   }
 
   private async buildResolvedTurnData(record: TurnRecord): Promise<AdminSessionTurnData> {
-    const subsystemOutputs = await resolvePromptLoomSubsystemOutputs(record, {
+    const expansion = await this.expandTurnSubsystemOutputRefs(record);
+    const effectiveRecord = expansion.record;
+    const subsystemOutputs = await resolvePromptLoomSubsystemOutputs(effectiveRecord, {
       memoryStore: this.deps.memoryStore,
       concernStore: this.deps.concernStore,
       contactStore: this.deps.contactStore,
+      projectionStatus: expansion.projectionStatus,
     });
-    return this.turnObservability.buildTurnData(record, subsystemOutputs);
+    return this.turnObservability.buildTurnData(effectiveRecord, subsystemOutputs);
+  }
+
+  private async expandTurnSubsystemOutputRefs(record: TurnRecord): Promise<{
+    record: TurnRecord;
+    projectionStatus: 'not_applicable' | 'pending' | 'applied' | 'failed' | 'outcome_unknown';
+  }> {
+    const projectionRefs = [
+      ...record.extractedMemoryIds,
+      ...record.concernDeltaRefs,
+      ...record.contactDeltaRefs,
+    ];
+    if (projectionRefs.length === 0) {
+      return { record, projectionStatus: 'not_applicable' };
+    }
+    if (record.extractedMemoryIds.length !== 1
+      || record.concernDeltaRefs.length !== 1
+      || record.contactDeltaRefs.length !== 1) {
+      throw new Error('TurnRecord subsystem output projection must contain one ref per field');
+    }
+    const binding = {
+      logicalSessionId: record.sessionId ?? record.channelId,
+      sourceChannelId: record.channelId,
+      sourceTurnId: record.turnId,
+      sourceRequestId: record.requestId,
+    };
+    parseTurnSubsystemProjectionRef(record.extractedMemoryIds[0]!, binding, 'memory');
+    parseTurnSubsystemProjectionRef(record.concernDeltaRefs[0]!, binding, 'concern');
+    parseTurnSubsystemProjectionRef(record.contactDeltaRefs[0]!, binding, 'contact');
+    const projectionStore = this.deps.subsystemOutputRefStore;
+    if (!projectionStore) {
+      throw new Error('Cannot expand TurnRecord subsystem output refs: projection store is not configured');
+    }
+    const projection = await projectionStore.getSubsystemOutputProjection(binding);
+    if (projection.status !== 'applied' && projection.outputRefs.length > 0) {
+      throw new Error(`Non-applied subsystem output projection contains refs: ${projection.status}`);
+    }
+    const grouped = {
+      memory: [] as string[],
+      concern: [] as string[],
+      contact: [] as string[],
+    };
+    for (const targetRef of projection.outputRefs) {
+      const target = parseSubsystemOutputRef(targetRef);
+      grouped[target.kind].push(targetRef);
+    }
+    return {
+      projectionStatus: projection.status,
+      record: {
+        ...record,
+        extractedMemoryIds: grouped.memory,
+        concernDeltaRefs: grouped.concern,
+        contactDeltaRefs: grouped.contact,
+      },
+    };
   }
 
   private async buildSessionMessages(

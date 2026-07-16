@@ -35,6 +35,7 @@ import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-st
 import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
 import { PostgresIcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
 import { resolveSharedWorkspaceCredentials } from '../../operator/garden/services/shared-workspace-service.js';
+import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 
 export interface StartOptionalAdminTransportServerOptions {
   adminPort?: number;
@@ -54,6 +55,7 @@ export interface StartOptionalAdminTransportServerOptions {
   postTurnActions: PostTurnActionRuntime;
   outreachOutbox?: OutreachOutboxStore | null;
   episodicStore?: EpisodicStorePort | null;
+  subsystemOutputRefStore: Pick<BackgroundWorkStorePort, 'getSubsystemOutputProjection'>;
   /** Pending contact approvals queue (E3.4 contact-tracking policy gate). */
   pendingContactApprovals?: PendingContactApprovalStore | null;
   /** Social-graph edge proposals from the graph-builder worker (E4.2). */
@@ -117,6 +119,7 @@ export async function startOptionalAdminTransportServer(
     apiHost: options.apiHost,
     apiPort: options.apiPort,
     memoryStore: options.coreRuntime.memoryStore,
+    subsystemOutputRefStore: options.subsystemOutputRefStore,
     episodicStore: options.episodicStore ?? null,
     sessionStore: options.coreRuntime.sessionStore,
     sessionManager: options.coreRuntime.sessionManager,

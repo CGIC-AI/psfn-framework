@@ -373,6 +373,7 @@ test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dro
       },
     },
     subsystemOutputs: {
+      projectionStatus: 'not_applicable',
       contextManifestRef: null,
       internalStateSnapshotRef: null,
       memoryWrites: [],
@@ -982,6 +983,7 @@ test('live event fallback and replay read path project slim and explicit-empty s
 
     turn.record.concernDeltaRefs = ['concern-parity'];
     const replayLoom = buildPromptLoomData(turn.record, turn.snapshot, {
+      projectionStatus: 'applied',
       contextManifestRef: null,
       internalStateSnapshotRef: null,
       memoryWrites: [],

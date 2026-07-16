@@ -36,7 +36,11 @@ export interface BackgroundWorkExecutionInput {
 
 export interface BackgroundWorkEffectRunner {
   assertOwned(): Promise<void>;
-  run(effectKey: string, operation: (assertOwned: () => Promise<void>) => Promise<void>): Promise<void>;
+  run(
+    effectKey: string,
+    operation: (assertOwned: () => Promise<void>) => Promise<readonly string[] | void>,
+    options?: { projectsSubsystemOutputs?: boolean },
+  ): Promise<void>;
 }
 
 export type BackgroundWorkExecutor = (
@@ -641,7 +645,7 @@ export class BackgroundWorkSupervisor {
         throwIfShuttingDown();
         await assertEffectAllowed();
       },
-      run: async (effectKey, operation) => {
+      run: async (effectKey, operation, effectOptions) => {
         throwIfShuttingDown();
         await assertEffectAllowed();
         // Open the effect as `pending`: the run has entered but no external
@@ -653,6 +657,9 @@ export class BackgroundWorkSupervisor {
           leaseOwner: this.leaseOwner,
           expectedRevision: job.revision,
           nowMs: this.now(),
+          ...(effectOptions?.projectsSubsystemOutputs
+            ? { projectsSubsystemOutputs: true }
+            : {}),
         });
         if (disposition === 'foreground_active') {
           throw new BackgroundWorkDeferredError('foreground_active', this.retryBaseDelayMs);
@@ -701,7 +708,7 @@ export class BackgroundWorkSupervisor {
         };
         let operationCompleted = false;
         try {
-          await operation(crossBoundary);
+          const outputRefs = await operation(crossBoundary);
           operationCompleted = true;
           // Once the operation reports success, a later foreground arrival
           // cannot make that durable outcome un-happen. Fence only queue lease
@@ -713,6 +720,7 @@ export class BackgroundWorkSupervisor {
             leaseOwner: this.leaseOwner,
             expectedRevision: job.revision,
             nowMs: this.now(),
+            ...(outputRefs ? { outputRefs } : {}),
           });
         } catch (error) {
           // Abandon (delete the receipt) ONLY when the effect never crossed its

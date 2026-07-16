@@ -22,6 +22,10 @@ import type { ContactStorePort } from '../../../core/contacts/contact-store-port
 import type { Contact } from '../../../core/contacts/types.js';
 import type { ConcernStorePort } from '../../../core/intention/concern-store-port.js';
 import { AdminSessionDataService, AdminSessionTurnNotFoundError } from './session-service.js';
+import {
+  buildSubsystemOutputRef,
+  buildTurnSubsystemProjectionRef,
+} from '../../../shared/contracts/subsystem-output-refs.js';
 
 function makeTurnRecord(channelId: string, turnId: string): TurnRecord {
   return {
@@ -487,9 +491,15 @@ describe('AdminSessionDataService', () => {
     const channelId = 'api:turn-subsystem-outputs';
     const turnId = createTurnId();
     const record = makeTurnRecord(channelId, turnId);
-    record.extractedMemoryIds = ['memory-output-1'];
-    record.concernDeltaRefs = ['concern-output-1'];
-    record.contactDeltaRefs = ['contact-output-1'];
+    const binding = {
+      logicalSessionId: channelId,
+      sourceChannelId: channelId,
+      sourceTurnId: turnId,
+      sourceRequestId: record.requestId,
+    };
+    record.extractedMemoryIds = [buildTurnSubsystemProjectionRef('memory', binding)];
+    record.concernDeltaRefs = [buildTurnSubsystemProjectionRef('concern', binding)];
+    record.contactDeltaRefs = [buildTurnSubsystemProjectionRef('contact', binding)];
     store.append({ channelId, role: 'user', content: 'hi', timestamp: 1_700_000_000_001 });
     store.appendTurnRecord(record);
 
@@ -517,6 +527,14 @@ describe('AdminSessionDataService', () => {
       lastSeen: '2026-07-16T12:00:00.000Z',
       notes: 'Must stay out of the Loom output projection.',
     };
+    const getSubsystemOutputProjection = vi.fn(async () => ({
+      status: 'applied' as const,
+      outputRefs: [
+        buildSubsystemOutputRef('memory', memory.id),
+        buildSubsystemOutputRef('concern', 'concern-output-1'),
+        buildSubsystemOutputRef('contact', contact.id),
+      ],
+    }));
     const service = new AdminSessionDataService({
       sessionStore: store,
       sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
@@ -545,6 +563,9 @@ describe('AdminSessionDataService', () => {
       contactStore: {
         getById: vi.fn(async id => id === contact.id ? contact : undefined),
       } as unknown as ContactStorePort,
+      subsystemOutputRefStore: {
+        getSubsystemOutputProjection,
+      },
     });
 
     const detail = await service.getSessionTurnDetail(channelId, turnId);
@@ -553,9 +574,95 @@ describe('AdminSessionDataService', () => {
     expect(detail.turn.promptLoom?.subsystemOutputs.concernDeltas[0]?.value?.text)
       .toBe('Resolved from the concern store.');
     expect(detail.turn.promptLoom?.subsystemOutputs.contactDeltas[0]?.value)
-      .toEqual(expect.objectContaining({ id: contact.id, displayName: contact.displayName }));
+      .toEqual(expect.objectContaining({ id: contact.id }));
     expect(detail.turn.promptLoom?.subsystemOutputs.contactDeltas[0]?.value)
       .not.toHaveProperty('notes');
+    expect(detail.turn.promptLoom?.subsystemOutputs.contactDeltas[0]?.value)
+      .not.toHaveProperty('displayName');
+
+    getSubsystemOutputProjection.mockResolvedValue({ status: 'applied', outputRefs: [] });
+    const appliedEmpty = await service.getSessionTurnDetail(channelId, turnId);
+    expect(appliedEmpty.turn.promptLoom?.subsystemOutputs).toMatchObject({
+      projectionStatus: 'applied',
+      memoryWrites: [],
+      concernDeltas: [],
+      contactDeltas: [],
+    });
+
+    getSubsystemOutputProjection.mockResolvedValue({ status: 'pending', outputRefs: [] });
+    const pending = await service.getSessionTurnDetail(channelId, turnId);
+    expect(pending.turn.promptLoom?.subsystemOutputs.projectionStatus).toBe('pending');
+
+    getSubsystemOutputProjection.mockResolvedValue({ status: 'failed', outputRefs: [] });
+    const failed = await service.getSessionTurnDetail(channelId, turnId);
+    expect(failed.turn.promptLoom?.subsystemOutputs.projectionStatus).toBe('failed');
+
+    getSubsystemOutputProjection.mockResolvedValue({ status: 'outcome_unknown', outputRefs: [] });
+    const outcomeUnknown = await service.getSessionTurnDetail(channelId, turnId);
+    expect(outcomeUnknown.turn.promptLoom?.subsystemOutputs.projectionStatus)
+      .toBe('outcome_unknown');
+  });
+
+  it('fails closed when persisted projection handles are unwired or source-mismatched', async () => {
+    const channelId = 'api:turn-subsystem-output-failure';
+    const turnId = createTurnId();
+    const record = makeTurnRecord(channelId, turnId);
+    const binding = {
+      logicalSessionId: channelId,
+      sourceChannelId: channelId,
+      sourceTurnId: turnId,
+      sourceRequestId: record.requestId,
+    };
+    record.extractedMemoryIds = [buildTurnSubsystemProjectionRef('memory', binding)];
+    record.concernDeltaRefs = [buildTurnSubsystemProjectionRef('concern', binding)];
+    record.contactDeltaRefs = [buildTurnSubsystemProjectionRef('contact', binding)];
+    store.append({ channelId, role: 'user', content: 'hi', timestamp: 1_700_000_000_001 });
+    store.appendTurnRecord(record);
+
+    const unwired = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+    });
+    await expect(unwired.getSessionTurnDetail(channelId, turnId)).rejects.toThrow(
+      'projection store is not configured',
+    );
+
+    const mismatchedTurnId = createTurnId();
+    const mismatchedRecord = makeTurnRecord(channelId, mismatchedTurnId);
+    mismatchedRecord.extractedMemoryIds = [buildTurnSubsystemProjectionRef('memory', {
+      logicalSessionId: channelId,
+      sourceChannelId: channelId,
+      sourceTurnId: mismatchedTurnId,
+      sourceRequestId: 'wrong-request',
+    })];
+    mismatchedRecord.concernDeltaRefs = [buildTurnSubsystemProjectionRef('concern', {
+      logicalSessionId: channelId,
+      sourceChannelId: channelId,
+      sourceTurnId: mismatchedTurnId,
+      sourceRequestId: mismatchedRecord.requestId,
+    })];
+    mismatchedRecord.contactDeltaRefs = [buildTurnSubsystemProjectionRef('contact', {
+      logicalSessionId: channelId,
+      sourceChannelId: channelId,
+      sourceTurnId: mismatchedTurnId,
+      sourceRequestId: mismatchedRecord.requestId,
+    })];
+    store.appendTurnRecord(mismatchedRecord);
+    const mismatched = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+      subsystemOutputRefStore: {
+        getSubsystemOutputProjection: vi.fn(async () => ({
+          status: 'applied' as const,
+          outputRefs: [],
+        })),
+      },
+    });
+    await expect(mismatched.getSessionTurnDetail(channelId, mismatchedTurnId)).rejects.toThrow(
+      'Invalid Loom subsystem projection ref',
+    );
   });
 
   it('previews and applies CogSec remediation without exposing sealed content in safe event logs', async () => {

@@ -276,7 +276,7 @@ describe('ActiveConcernStore', () => {
     const first = await store.create({
       text: 'Follow up on hydration tomorrow',
       priority: 'low',
-      status: 'candidate',
+      status: 'watching',
       evidenceRefs: [{ kind: 'message', ref: 'msg-1' }],
       expiresAt: '2026-02-01T12:00:00.000Z',
     });

@@ -5,6 +5,13 @@ import type {
   StoredBackgroundWorkJob,
 } from './types.js';
 
+export type SubsystemOutputProjectionStatus = 'pending' | 'applied' | 'failed' | 'outcome_unknown';
+
+export interface SubsystemOutputProjection {
+  status: SubsystemOutputProjectionStatus;
+  outputRefs: string[];
+}
+
 export interface BackgroundWorkJobEnqueueResult {
   outcome: 'enqueued' | 'deduplicated';
   job: StoredBackgroundWorkJob;
@@ -120,6 +127,8 @@ export interface BackgroundWorkStorePort {
     leaseOwner: string;
     expectedRevision: number;
     nowMs: number;
+    /** Marks effects whose applied/unknown projection state must remain historical. */
+    projectsSubsystemOutputs?: boolean;
   }): Promise<'execute' | 'applied' | 'outcome_unknown' | 'foreground_active' | 'lease_lost'>;
   /**
    * Cross the durable side-effect boundary for an already-open (`pending`)
@@ -141,6 +150,8 @@ export interface BackgroundWorkStorePort {
     leaseOwner: string;
     expectedRevision: number;
     nowMs: number;
+    /** Canonical ref-only projection committed atomically with the applied receipt. */
+    outputRefs?: readonly string[];
   }): Promise<void>;
   abandonEffect(input: {
     jobId: string;
@@ -210,5 +221,22 @@ export interface BackgroundWorkStorePort {
   countRunnable(input: { nowMs: number }): Promise<number>;
   countPending(): Promise<number>;
   get(jobId: string): Promise<StoredBackgroundWorkJob | null>;
+  /**
+   * Permanent append-only output projection. It survives terminal job/receipt
+   * retention and requires the complete source binding to prevent cross-session
+   * or stale-turn resolution.
+   */
+  listSubsystemOutputRefs(input: {
+    logicalSessionId: string;
+    sourceChannelId: string;
+    sourceTurnId: string;
+    sourceRequestId: string;
+  }): Promise<string[]>;
+  getSubsystemOutputProjection(input: {
+    logicalSessionId: string;
+    sourceChannelId: string;
+    sourceTurnId: string;
+    sourceRequestId: string;
+  }): Promise<SubsystemOutputProjection>;
   close(): Promise<void>;
 }

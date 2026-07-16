@@ -16,6 +16,7 @@ import type {
   AdminPromptLoomConcernOutputData,
   AdminPromptLoomHistoricalSnapshotHit,
   AdminPromptLoomSubsystemOutputEntry,
+  AdminPromptLoomSubsystemOutputProjectionStatus,
   AdminPromptLoomSubsystemOutputsData,
   AdminSessionTurnData,
   AdminTurnRetrievalTelemetry,
@@ -30,6 +31,10 @@ import { projectTurnSnapshotPrompt } from '../../../shared/contracts/prompt-proj
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { ConcernStorePort } from '../../../core/intention/concern-store-port.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
+import {
+  parseSubsystemOutputRef,
+  type SubsystemOutputKind,
+} from '../../../shared/contracts/subsystem-output-refs.js';
 
 /**
  * Truncation-point inventory (bead u9jo.2).
@@ -257,7 +262,11 @@ export function buildUnresolvedPromptLoomSubsystemOutputs(
     | 'contactDeltaRefs'
   >,
 ): AdminPromptLoomSubsystemOutputsData {
+  const hasProjectionRefs = record.extractedMemoryIds.length > 0
+    || record.concernDeltaRefs.length > 0
+    || record.contactDeltaRefs.length > 0;
   return {
+    projectionStatus: hasProjectionRefs ? 'pending' : 'not_applicable',
     contextManifestRef: record.contextManifestRef ?? null,
     internalStateSnapshotRef: record.internalStateSnapshotRef ?? null,
     memoryWrites: buildUnresolvedOutputEntries(record.extractedMemoryIds, 'extractedMemoryIds'),
@@ -285,7 +294,6 @@ function projectConcernOutput(concern: NonNullable<Awaited<ReturnType<ConcernSto
 function projectContactOutput(contact: NonNullable<Awaited<ReturnType<ContactStorePort['getById']>>>): AdminPromptLoomContactOutputData {
   return {
     id: contact.id,
-    displayName: contact.displayName,
     trustLevel: contact.trustLevel,
     relationshipType: contact.relationshipType,
     ...(contact.isMachineIntelligence !== undefined
@@ -294,6 +302,15 @@ function projectContactOutput(contact: NonNullable<Awaited<ReturnType<ContactSto
     firstSeen: contact.firstSeen,
     lastSeen: contact.lastSeen,
   };
+}
+
+function parseTargetRef(rawRef: string, field: string, kind: SubsystemOutputKind) {
+  const ref = normalizeSubsystemOutputRef(rawRef, field);
+  const parsed = parseSubsystemOutputRef(ref);
+  if (parsed.kind !== kind) {
+    throw new Error(`Invalid ${field} subsystem output kind: ${parsed.kind}`);
+  }
+  return { ref, targetId: parsed.targetId };
 }
 
 function requireResolverStore<TStore>(
@@ -320,6 +337,7 @@ export async function resolvePromptLoomSubsystemOutputs(
     memoryStore?: MemoryStorePort | null;
     concernStore?: ConcernStorePort | null;
     contactStore?: ContactStorePort | null;
+    projectionStatus?: AdminPromptLoomSubsystemOutputProjectionStatus;
   },
 ): Promise<AdminPromptLoomSubsystemOutputsData> {
   const memoryStore = requireResolverStore(record.extractedMemoryIds, deps.memoryStore, 'memory');
@@ -328,22 +346,22 @@ export async function resolvePromptLoomSubsystemOutputs(
 
   const [memoryWrites, concernDeltas, contactDeltas] = await Promise.all([
     Promise.all(record.extractedMemoryIds.map(async (rawRef) => {
-      const ref = normalizeSubsystemOutputRef(rawRef, 'extractedMemoryIds');
-      const memory = await memoryStore?.getById(ref);
+      const { ref, targetId } = parseTargetRef(rawRef, 'extractedMemoryIds', 'memory');
+      const memory = await memoryStore?.getById(targetId);
       return memory && memory.deletedAt === undefined
         ? { ref, status: 'resolved' as const, value: sanitizeObservedMemory(memory) }
         : { ref, status: 'missing' as const };
     })),
     Promise.all(record.concernDeltaRefs.map(async (rawRef) => {
-      const ref = normalizeSubsystemOutputRef(rawRef, 'concernDeltaRefs');
-      const concern = await concernStore?.getById(ref);
+      const { ref, targetId } = parseTargetRef(rawRef, 'concernDeltaRefs', 'concern');
+      const concern = await concernStore?.getById(targetId);
       return concern
         ? { ref, status: 'resolved' as const, value: projectConcernOutput(concern) }
         : { ref, status: 'missing' as const };
     })),
     Promise.all(record.contactDeltaRefs.map(async (rawRef) => {
-      const ref = normalizeSubsystemOutputRef(rawRef, 'contactDeltaRefs');
-      const contact = await contactStore?.getById(ref);
+      const { ref, targetId } = parseTargetRef(rawRef, 'contactDeltaRefs', 'contact');
+      const contact = await contactStore?.getById(targetId);
       return contact
         ? { ref, status: 'resolved' as const, value: projectContactOutput(contact) }
         : { ref, status: 'missing' as const };
@@ -351,6 +369,10 @@ export async function resolvePromptLoomSubsystemOutputs(
   ]);
 
   return {
+    projectionStatus: deps.projectionStatus
+      ?? (memoryWrites.length + concernDeltas.length + contactDeltas.length > 0
+        ? 'applied'
+        : 'not_applicable'),
     contextManifestRef: record.contextManifestRef ?? null,
     internalStateSnapshotRef: record.internalStateSnapshotRef ?? null,
     memoryWrites,

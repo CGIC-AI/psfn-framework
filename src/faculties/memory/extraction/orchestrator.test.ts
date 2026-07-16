@@ -145,6 +145,37 @@ function factResponse(text: string): string {
 }
 
 describe('runExtractionOrchestration durable children', () => {
+  it('reports deduplicated memory, durable concern, and actual contact mutation targets', async () => {
+    const options = buildOptions({
+      processFact: vi.fn().mockResolvedValue({
+        action: 'deduplicated',
+        memory: { id: 'mem-existing' },
+      }),
+      emitConcernCandidates: vi.fn(async () => ['concern-candidate-1']),
+      maybePersistEmotionalState: vi.fn(async () => 'contact-mutated-1'),
+    });
+
+    await expect(runExtractionOrchestration(options)).resolves.toEqual({
+      memoryIds: ['mem-existing'],
+      concernIds: ['concern-candidate-1'],
+      contactIds: ['contact-mutated-1'],
+    });
+  });
+
+  it('reports both a replacement memory and every prior memory superseded by the write', async () => {
+    const options = buildOptions({
+      processFact: vi.fn().mockResolvedValue({
+        action: 'superseded',
+        memory: { id: 'mem-replacement' },
+        supersededMemoryIds: ['mem-prior-a', 'mem-prior-b'],
+      }),
+    });
+
+    await expect(runExtractionOrchestration(options)).resolves.toMatchObject({
+      memoryIds: ['mem-replacement', 'mem-prior-a', 'mem-prior-b'],
+    });
+  });
+
   it('awaits the emotional and profile children before resolving (no detached child)', async () => {
     let releaseEmotional!: () => void;
     let releaseProfile!: () => void;
@@ -177,7 +208,7 @@ describe('runExtractionOrchestration durable children', () => {
     expect(resolved).toBe(false);
 
     releaseProfile();
-    await expect(runPromise).resolves.toBeUndefined();
+    await expect(runPromise).resolves.toMatchObject({ memoryIds: ['mem-1'] });
   });
 });
 
@@ -361,7 +392,7 @@ describe('runExtractionOrchestration fail-closed errors', () => {
   });
 
   it('emits concern candidate context from accepted extraction material', async () => {
-    const emitConcernCandidates = vi.fn().mockResolvedValue(undefined);
+    const emitConcernCandidates = vi.fn().mockResolvedValue(['concern-candidate-1']);
     const options = buildOptions({
       turnId: 'turn-extract-1',
       emitConcernCandidates,
@@ -405,7 +436,9 @@ describe('runExtractionOrchestration fail-closed errors', () => {
       }),
     });
 
-    await runExtractionOrchestration(options);
+    await expect(runExtractionOrchestration(options)).resolves.toMatchObject({
+      concernIds: ['concern-candidate-1'],
+    });
 
     expect(emitConcernCandidates).toHaveBeenCalledWith(expect.objectContaining({
       channelId: 'api:test',
@@ -488,7 +521,7 @@ describe('runExtractionOrchestration fail-closed errors', () => {
       processFact,
     });
 
-    await expect(runExtractionOrchestration(options)).resolves.toBeUndefined();
+    await expect(runExtractionOrchestration(options)).resolves.toMatchObject({ memoryIds: ['mem-2'] });
 
     expect(processFact).toHaveBeenCalledTimes(2);
     expect(options.recordExtractionMarker).toHaveBeenCalledWith('api:test', 2);
@@ -577,7 +610,7 @@ describe('runExtractionOrchestration chunk concurrency', () => {
     pendingCompletions[2].resolve(factResponse('Sourdough starter notes stay organized'));
     pendingCompletions[0].resolve(factResponse('Alpine train journeys remain preferred'));
 
-    await expect(runPromise).resolves.toBeUndefined();
+    await expect(runPromise).resolves.toMatchObject({ memoryIds: ['mem-chunk'] });
 
     expect(maxActiveCalls).toBe(2);
     expect(complete).toHaveBeenCalledTimes(3);

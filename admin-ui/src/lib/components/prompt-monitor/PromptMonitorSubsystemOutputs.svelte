@@ -30,12 +30,26 @@
   function contactMeta(contact: AdminPromptLoomContactOutputData): string {
     return [contact.relationshipType, contact.trustLevel].join(' · ');
   }
+
+  function emptyOutputMessage(label: string): string {
+    if (outputs.projectionStatus === 'pending') return 'Output projection is still pending.';
+    if (outputs.projectionStatus === 'outcome_unknown') {
+      return 'Effect outcome is unknown; no output refs were claimed.';
+    }
+    if (outputs.projectionStatus === 'failed') {
+      return 'Output projection failed before producing output refs.';
+    }
+    if (outputs.projectionStatus === 'applied') return `No ${label} were produced.`;
+    return `No ${label} were referenced.`;
+  }
 </script>
 
 <section class="rounded-xl border border-bark-200 bg-bark-50 p-4" aria-labelledby="subsystem-outputs-title">
   <div class="flex flex-wrap items-baseline justify-between gap-2">
     <h3 id="subsystem-outputs-title" class="font-medium text-shadow-900">Subsystem Outputs</h3>
-    <p class="text-xs text-shadow-600">Resolved from TurnRecord refs at read time</p>
+    <p class="text-xs text-shadow-600">
+      Resolved at read time · projection: {outputs.projectionStatus.replaceAll('_', ' ')}
+    </p>
   </div>
 
   <dl class="mt-3 grid gap-2 text-xs sm:grid-cols-2">
@@ -53,7 +67,7 @@
     <div>
       <h4 class="text-sm font-medium text-shadow-900">Memory writes</h4>
       {#if outputs.memoryWrites.length === 0}
-        <p class="mt-2 text-sm text-shadow-600">No memory writes referenced.</p>
+        <p class="mt-2 text-sm text-shadow-600">{emptyOutputMessage('memory writes')}</p>
       {:else}
         <div class="mt-2 space-y-2">
           {#each outputs.memoryWrites as entry, index (`${entry.ref}:${index}`)}
@@ -77,7 +91,7 @@
     <div>
       <h4 class="text-sm font-medium text-shadow-900">Concern deltas</h4>
       {#if outputs.concernDeltas.length === 0}
-        <p class="mt-2 text-sm text-shadow-600">No concern deltas referenced.</p>
+        <p class="mt-2 text-sm text-shadow-600">{emptyOutputMessage('concern deltas')}</p>
       {:else}
         <div class="mt-2 space-y-2">
           {#each outputs.concernDeltas as entry, index (`${entry.ref}:${index}`)}
@@ -101,7 +115,7 @@
     <div>
       <h4 class="text-sm font-medium text-shadow-900">Contact deltas</h4>
       {#if outputs.contactDeltas.length === 0}
-        <p class="mt-2 text-sm text-shadow-600">No contact deltas referenced.</p>
+        <p class="mt-2 text-sm text-shadow-600">{emptyOutputMessage('contact deltas')}</p>
       {:else}
         <div class="mt-2 space-y-2">
           {#each outputs.contactDeltas as entry, index (`${entry.ref}:${index}`)}
@@ -113,8 +127,8 @@
                 </span>
               </div>
               {#if entry.value}
-                <p class="mt-2 text-sm font-medium text-shadow-900">{entry.value.displayName}</p>
-                <p class="mt-0.5 text-xs text-shadow-600">{contactMeta(entry.value)}</p>
+                <p class="mt-2 break-all font-mono text-xs text-shadow-700">{entry.value.id}</p>
+                <p class="mt-1 text-xs text-shadow-600">{contactMeta(entry.value)}</p>
               {/if}
             </article>
           {/each}

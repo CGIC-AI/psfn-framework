@@ -573,7 +573,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     companionDataDir: pathSnapshot.companionDataDir,
     eventBus,
   });
-  const automatedConcernRuntime = createAutomatedConcernRuntime({
+  const automatedConcernRuntime = await createAutomatedConcernRuntime({
     eventBus,
     llmProvider,
     concernStore: intentionRuntime.concernStore,

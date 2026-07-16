@@ -90,6 +90,12 @@ export interface AdminPromptLoomToolActivityData {
 }
 
 export type AdminPromptLoomSubsystemOutputStatus = 'resolved' | 'missing' | 'not_resolved';
+export type AdminPromptLoomSubsystemOutputProjectionStatus =
+  | 'not_applicable'
+  | 'pending'
+  | 'applied'
+  | 'failed'
+  | 'outcome_unknown';
 
 export interface AdminPromptLoomSubsystemOutputEntry<TValue> {
   ref: string;
@@ -115,7 +121,6 @@ export type AdminPromptLoomConcernOutputData = Pick<
 export type AdminPromptLoomContactOutputData = Pick<
   Contact,
   | 'id'
-  | 'displayName'
   | 'trustLevel'
   | 'relationshipType'
   | 'isMachineIntelligence'
@@ -130,6 +135,7 @@ export type AdminPromptLoomContactOutputData = Pick<
  * authenticated Garden turn-detail endpoint.
  */
 export interface AdminPromptLoomSubsystemOutputsData {
+  projectionStatus: AdminPromptLoomSubsystemOutputProjectionStatus;
   contextManifestRef: string | null;
   internalStateSnapshotRef: string | null;
   memoryWrites: Array<AdminPromptLoomSubsystemOutputEntry<ObservedMemory>>;

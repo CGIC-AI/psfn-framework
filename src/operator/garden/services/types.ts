@@ -163,6 +163,7 @@ export type {
   AdminPromptLoomMemoryCaptureData,
   AdminPromptLoomToolActivityData,
   AdminPromptLoomSubsystemOutputStatus,
+  AdminPromptLoomSubsystemOutputProjectionStatus,
   AdminPromptLoomSubsystemOutputEntry,
   AdminPromptLoomConcernOutputData,
   AdminPromptLoomContactOutputData,

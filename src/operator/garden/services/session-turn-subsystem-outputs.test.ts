@@ -10,6 +10,7 @@ import {
   buildPromptLoomData,
   resolvePromptLoomSubsystemOutputs,
 } from './session-turn-observability.js';
+import { buildSubsystemOutputRef } from '../../../shared/contracts/subsystem-output-refs.js';
 
 function buildRecord(overrides: Partial<TurnRecord> = {}): TurnRecord {
   return {
@@ -26,9 +27,9 @@ function buildRecord(overrides: Partial<TurnRecord> = {}): TurnRecord {
     toolCalls: [],
     contextManifestRef: 'session:api:subsystem-test|messages:2|memory_chars:24',
     internalStateSnapshotRef: 'internal-state-v1:0123456789abcdef',
-    extractedMemoryIds: ['memory-1'],
-    concernDeltaRefs: ['concern-1'],
-    contactDeltaRefs: ['contact-1'],
+    extractedMemoryIds: [buildSubsystemOutputRef('memory', 'memory-1')],
+    concernDeltaRefs: [buildSubsystemOutputRef('concern', 'concern-1')],
+    contactDeltaRefs: [buildSubsystemOutputRef('contact', 'contact-1')],
     versionPointers: { model: 'test-model' },
     provenanceRefs: [],
     ...overrides,
@@ -119,21 +120,22 @@ describe('Prompt Loom subsystem output resolution', () => {
     expect(outputs.contextManifestRef).toBe(record.contextManifestRef);
     expect(outputs.internalStateSnapshotRef).toBe(record.internalStateSnapshotRef);
     expect(outputs.memoryWrites).toEqual([expect.objectContaining({
-      ref: 'memory-1',
+      ref: buildSubsystemOutputRef('memory', 'memory-1'),
       status: 'resolved',
       value: expect.objectContaining({ id: 'memory-1', text: 'A representative memory write.' }),
     })]);
     expect(outputs.concernDeltas).toEqual([expect.objectContaining({
-      ref: 'concern-1',
+      ref: buildSubsystemOutputRef('concern', 'concern-1'),
       status: 'resolved',
       value: expect.objectContaining({ id: 'concern-1', status: 'candidate' }),
     })]);
     expect(outputs.contactDeltas).toEqual([expect.objectContaining({
-      ref: 'contact-1',
+      ref: buildSubsystemOutputRef('contact', 'contact-1'),
       status: 'resolved',
-      value: expect.objectContaining({ id: 'contact-1', displayName: 'Representative Contact' }),
+      value: expect.objectContaining({ id: 'contact-1' }),
     })]);
     expect(outputs.contactDeltas[0]?.value).not.toHaveProperty('notes');
+    expect(outputs.contactDeltas[0]?.value).not.toHaveProperty('displayName');
 
     const loom = buildPromptLoomData(record, null, outputs);
     expect(loom.subsystemOutputs).toEqual(outputs);
@@ -146,9 +148,18 @@ describe('Prompt Loom subsystem output resolution', () => {
       concern: null,
     }));
 
-    expect(outputs.memoryWrites).toEqual([{ ref: 'memory-1', status: 'missing' }]);
-    expect(outputs.concernDeltas).toEqual([{ ref: 'concern-1', status: 'missing' }]);
-    expect(outputs.contactDeltas).toEqual([{ ref: 'contact-1', status: 'missing' }]);
+    expect(outputs.memoryWrites).toEqual([{
+      ref: buildSubsystemOutputRef('memory', 'memory-1'),
+      status: 'missing',
+    }]);
+    expect(outputs.concernDeltas).toEqual([{
+      ref: buildSubsystemOutputRef('concern', 'concern-1'),
+      status: 'missing',
+    }]);
+    expect(outputs.contactDeltas).toEqual([{
+      ref: buildSubsystemOutputRef('contact', 'contact-1'),
+      status: 'missing',
+    }]);
   });
 
   it('fails closed when a referenced subsystem has no configured store', async () => {

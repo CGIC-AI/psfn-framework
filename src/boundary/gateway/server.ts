@@ -46,6 +46,7 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { registerGatewayMethods } from './methods/index.js';
 import type { GatewayMethodRuntime } from './methods/types.js';
+import type { WelfareGrantVerifier } from './welfare-grant-verifier.js';
 import type { PolicyConfig } from './policy.js';
 import {
   DEFAULT_AGENT_TIMEOUT_MS,
@@ -252,6 +253,12 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    * and rejects every send.
    */
   companionChannels?: GatewayCompanionChannelLane;
+  /**
+   * psfn-framework-fxt1: verifies a caller-asserted `preemptionProtected` work
+   * spec against the background-work store before the gateway-side gate honors
+   * it. Absent ⇒ the LLM handlers strip every asserted flag (fail closed).
+   */
+  welfareGrantVerifier?: WelfareGrantVerifier;
   /** Durable shared-schema authority for the content-free ICP autonomy broker. */
   icpAutonomyStore?: IcpSharedAutonomyStorePort;
   /** Canonical gateway-owned deterministic policy authority for ICP initiation. */
@@ -525,6 +532,12 @@ export class GatewayServer {
         ? { kubeSelfManagement: this.options.kubeSelfManagement }
         : {}),
       authenticatedCompanionId: () => this.authenticatedCompanionId(conn),
+      ...(this.options.welfareGrantVerifier
+        ? {
+            verifyWelfareGrant: (jobId: string, companionId: string) =>
+              this.options.welfareGrantVerifier!.verify(jobId, companionId),
+          }
+        : {}),
       notifyRequester: (method, params) => this.notifyRequestingConnection(conn, method, params),
       listPendingConfirmations: () => this.approvalBoundary.listPendingConfirmations(),
       listConfirmationHistory: () => this.approvalBoundary.listConfirmationHistory(),

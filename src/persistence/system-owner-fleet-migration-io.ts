@@ -392,6 +392,13 @@ export function retireSource(input: {
       throw new Error(`Migration source disappeared outside quarantine: ${file.sourcePath}`);
     }
     verifyQuarantinedSource(file, quarantineDirectory);
+    fsyncSync(systemDirectory.descriptor);
+    fsyncSync(quarantineDirectory.descriptor);
+    input.faultInjection?.({
+      stage: 'after_quarantine_sync',
+      ownerFile: file.ownerFile,
+      path: file.quarantinePath,
+    });
     return;
   }
   if (quarantineExists) {

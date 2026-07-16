@@ -294,6 +294,48 @@ describe('system-owner fleet migration', () => {
     }
   });
 
+  it('fsyncs a recovered source quarantine before a second crash and receipt completion', () => {
+    const { systemDataDir, fleet } = fixture();
+    const source = Buffer.from('{"enabled":true,"recovered-quarantine-sync":true}\n');
+    const digest = sha256(source);
+    const sourcePath = join(systemDataDir, 'skills.json');
+    writeFileSync(sourcePath, source);
+
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+      faultInjection: (event) => {
+        if (event.stage === 'after_source_quarantine') throw new Error('crash:after-source-quarantine');
+      },
+    })).toThrow('crash:after-source-quarantine');
+
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+      faultInjection: (event) => {
+        if (event.stage === 'after_quarantine_sync') throw new Error('crash:after-recovered-sync');
+      },
+    })).toThrow('crash:after-recovered-sync');
+
+    const receiptPath = join(systemDataDir, 'migrations', 'system-owner-fleet-reroot.json');
+    const interruptedReceipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as {
+      status: string;
+      files: Array<{ quarantinePath: string; status: string }>;
+    };
+    expect(interruptedReceipt.status).toBe('in_progress');
+    expect(interruptedReceipt.files[0].status).toBe('pending');
+    expect(existsSync(sourcePath)).toBe(false);
+    expect(readFileSync(interruptedReceipt.files[0].quarantinePath)).toEqual(source);
+
+    expect(executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+    }).status).toBe('migrated');
+  });
+
   it('denies pre-existing or symlinked migration temp/final/source paths', () => {
     const preexisting = fixture();
     const source = Buffer.from('{"enabled":true}\n');

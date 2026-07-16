@@ -35,7 +35,7 @@ export interface FixedStackEntry {
   id: 'constitution' | 'north-star';
   label: string;
   description: string;
-  tokenCount: number;
+  tokenCount: number | null;
   preview: string;
   status: string;
 }
@@ -157,16 +157,20 @@ export function buildNorthStarPreview(
 
 export function buildStackEntries({
   constitutionPreviewText,
+  constitutionTokenCount,
   constitutionImmutableBlockCount,
   northStarPreviewText,
+  northStarTokenCount,
   northStarActiveCount,
   northStarLimit,
   sortedLayers,
   orderedRuntimeBlocks,
 }: {
   constitutionPreviewText: string;
+  constitutionTokenCount: number | null;
   constitutionImmutableBlockCount: number;
   northStarPreviewText: string;
+  northStarTokenCount: number | null;
   northStarActiveCount: number;
   northStarLimit: number;
   sortedLayers: PromptLayer[];
@@ -180,7 +184,7 @@ export function buildStackEntries({
       id: 'constitution',
       label: 'CONSTITUTION',
       description: 'Immutable human-care law. Mutable operator policy now lives in the composition stack.',
-      tokenCount: estimateTokens(constitutionPreviewText),
+      tokenCount: constitutionTokenCount,
       preview: constitutionPreviewText,
       status: `${constitutionImmutableBlockCount} immutable`,
     },
@@ -192,7 +196,7 @@ export function buildStackEntries({
       id: 'north-star',
       label: 'NORTH STAR',
       description: 'Long-term goals layer. Fixed immediately after Constitution.',
-      tokenCount: estimateTokens(northStarPreviewText),
+      tokenCount: northStarTokenCount,
       preview: northStarPreviewText || 'No enabled North Star goals.',
       status: `${northStarActiveCount}/${northStarLimit} active`,
     },
@@ -288,10 +292,6 @@ export function buildReorderedLayerIds(
   if (!movedLayerId) return null;
   nextOrder.splice(targetIdx, 0, movedLayerId);
   return nextOrder;
-}
-
-export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
 }
 
 export function formatTokenCount(n: number): string {

@@ -1,4 +1,5 @@
 import { apiGet, apiPatch, apiPost, apiPut } from '$lib/api/client';
+import { isRecord } from '../../../../../src/shared/utils/types.js';
 import type {
   ConstitutionUpdateResult,
   ConstitutionSnapshotData,
@@ -27,6 +28,18 @@ export interface PromptCreateParams {
 
 export function listPrompts(): Promise<AdminPromptListData> {
   return apiGet<AdminPromptListData>('/api/admin/prompts');
+}
+
+export async function countPromptTokens(texts: string[]): Promise<number[]> {
+  const result = await apiPost<unknown>('/api/admin/prompts/count-tokens', { texts });
+  if (!isRecord(result)
+    || Object.keys(result).some(key => key !== 'counts')
+    || !Array.isArray(result.counts)
+    || result.counts.length !== texts.length
+    || !result.counts.every(count => Number.isSafeInteger(count) && count >= 0)) {
+    throw new Error('Invalid prompt token-count response');
+  }
+  return result.counts as number[];
 }
 
 export function getConstitutionSnapshot(): Promise<ConstitutionSnapshotData> {

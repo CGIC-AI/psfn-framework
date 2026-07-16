@@ -597,7 +597,12 @@ async function main(): Promise<void> {
       },
       audit: (entry) => gateway.recordCompanionAuditSummary(entry),
     },
-    ...(fleetAuthPersistence ? { fleetAuthBroker: fleetAuthPersistence.broker } : {}),
+    ...(fleetAuthPersistence
+      ? {
+          fleetAuthBroker: fleetAuthPersistence.broker,
+          hubDeviceAssertionVerifier: fleetAuthPersistence,
+        }
+      : {}),
   });
   await voiceSurfaces.start();
   await startGatewayChannelSurfaces(channelSurfaces, bootstrap, log);

@@ -29,6 +29,7 @@ export type FleetAuthorizationDenialReason =
   | 'provider_subject_not_active'
   | 'provider_subject_not_live'
   | 'provider_subject_tombstoned'
+  | 'contact_authority_fenced'
   | 'companion_absent'
   | 'companion_ambiguous'
   | 'companion_not_active'
@@ -118,6 +119,7 @@ export interface FleetAuthorizationSnapshot {
     authorityGeneration: number;
     restoreState: 'live' | 'quarantined';
     tombstoned: boolean;
+    contactAuthorityFenced?: boolean;
   }>;
   companions: Array<{
     companionId: string;
@@ -138,6 +140,7 @@ export interface FleetAuthorizationSnapshot {
     authorityGeneration: number;
     restoreState: 'live' | 'quarantined';
     tombstoned: boolean;
+    contactAuthorityFenced?: boolean;
   }>;
   grants: Array<{
     grantId: string;
@@ -455,6 +458,7 @@ export function evaluateFleetAuthorizationSnapshot(input: {
   if (exactSubjects.length !== 1) return deny('provider_subject_ambiguous');
   const subject = exactSubjects[0]!;
   if (subject.tombstoned) return deny('provider_subject_tombstoned');
+  if (subject.contactAuthorityFenced) return deny('contact_authority_fenced');
   if (subject.restoreState !== 'live') return deny('provider_subject_not_live');
   if (subject.state !== 'active') return deny('provider_subject_not_active');
 
@@ -489,6 +493,7 @@ export function evaluateFleetAuthorizationSnapshot(input: {
   if (activeBindings.length !== 1) return deny('binding_ambiguous');
   const binding = activeBindings[0]!;
   if (binding.tombstoned) return deny('binding_tombstoned');
+  if (binding.contactAuthorityFenced) return deny('contact_authority_fenced');
 
   const companionGrants = snapshot.grants.filter(grant => grant.companionId === request.companionId);
   const activeGrants = companionGrants.filter(grant => (
@@ -577,6 +582,7 @@ export function createImmutableFleetAuthorizationContext(input: {
   facts: FleetAuthorizationFacts;
   authorizationEventId: string;
   resolvedAt: Date;
+  correlationDigest?: string;
 }): FleetAuthorizationContext {
   const context: FleetAuthorizationContext = {
     principalId: input.facts.principalId,
@@ -602,7 +608,7 @@ export function createImmutableFleetAuthorizationContext(input: {
       source: 'gateway_fleet_authorization_snapshot',
       authorizationEventId: input.authorizationEventId,
       resolvedAt: input.resolvedAt.toISOString(),
-      ...(input.request.correlationId ? { correlationId: input.request.correlationId } : {}),
+      ...(input.correlationDigest ? { correlationId: input.correlationDigest } : {}),
     }),
   };
   return Object.freeze(context);

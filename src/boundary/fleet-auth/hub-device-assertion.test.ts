@@ -102,6 +102,7 @@ const expected = {
   enrollmentStatus: 'active' as const,
   companionId: COMPANION_ID,
   sessionId: 'realtime:office-device:session',
+  placeId: 'office',
 };
 
 describe('Hub device assertion trust boundary', () => {
@@ -184,6 +185,7 @@ describe('Hub device assertion trust boundary', () => {
     ['wrong audience', { aud: 'https://other.example.test' }, config(), expected, /audience/],
     ['wrong companion', { companion_id: '22222222-2222-4222-8222-222222222222' }, config(), expected, /companion/],
     ['wrong session', {}, config(), { ...expected, sessionId: 'realtime:office-device:other-session' }, /session/],
+    ['wrong place', {}, config(), { ...expected, placeId: 'kitchen' }, /place/],
     ['expired', { exp: NOW - 3 }, config(), expected, /expired/],
     ['future issued-at', { iat: NOW + 3 }, config(), expected, /issued-at/],
     ['stale enrollment', {}, config(), { ...expected, enrollmentVersion: 8 }, /enrollment version/],
@@ -215,7 +217,7 @@ describe('Hub device assertion trust boundary', () => {
       token: token(), config: config(), expected, replayStore, nowSeconds: NOW,
     });
     await expect(verifyAndConsumeHubDeviceAssertion({
-      token: token({ place_id: 'kitchen' }), config: config(), expected, replayStore, nowSeconds: NOW,
+      token: token({ exp: NOW + 19 }), config: config(), expected, replayStore, nowSeconds: NOW,
     })).rejects.toThrow(/mutated replay/i);
   });
 

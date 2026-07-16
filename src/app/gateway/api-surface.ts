@@ -41,6 +41,11 @@ import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.
 import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
+import { GatewayHubDeviceIngressService } from '../../boundary/fleet-auth/hub-device-ingress.js';
+import type {
+  HubDeviceAssertionExpectedBinding,
+  HubDevicePrincipal,
+} from '../../shared/contracts/hub-device-ingress.js';
 
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const GATEWAY_API_REQUEST_TIMEOUT_MS = 240_000;
@@ -78,6 +83,22 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   companionRelay?: Omit<CompanionRelayHttpDeps, 'stimuli'>;
   /** Present only in gateway fleet-auth mode; owns all browser OAuth/session authority. */
   fleetAuthBroker?: GatewayFleetAuthBroker;
+  /** Persistence-backed verifier/consumer required by authenticated Hub device ingress. */
+  hubDeviceAssertionVerifier?: {
+    verifyAndConsumeHubDeviceAssertion(
+      token: string,
+      expected: HubDeviceAssertionExpectedBinding,
+    ): Promise<HubDevicePrincipal>;
+  };
+}
+
+function resolveGatewayHubDeviceCompanionId(options: StartOptionalGatewayApiServerOptions): string {
+  const channelCompanionId = options.channelsConfig?.api.companionId;
+  if (channelCompanionId) return channelCompanionId;
+  const fleet = options.config.companionFleet?.companions ?? [];
+  if (fleet.length === 1) return fleet[0]!.companionId;
+  if (!options.config.companionFleet && options.config.companionId) return options.config.companionId;
+  throw new Error('Fleet Hub device ingress requires one server-owned API companion binding');
 }
 
 /**
@@ -312,14 +333,21 @@ export async function startOptionalGatewayApiServer(
     && isExplicitTrue(env.ALLOW_INSECURE_LOCAL_API);
   // Sprint-10 C1/H4: fail-closed parsing — a malformed trusted-proxy token,
   // weak/colliding satellite keys, or partial TLS config abort startup.
-  const trustedProxyClientCertToken = fleetAuthBootstrapOnly
-    ? undefined
-    : parseTrustedProxyClientCertToken(env.API_TRUSTED_PROXY_CLIENT_CERT_TOKEN);
-  const satelliteApiKeys = fleetAuthBootstrapOnly
-    ? []
-    : parseSatelliteApiKeys(env.API_SATELLITE_KEYS, {
-        reservedTokens: [env.API_KEY, env.ADMIN_TOKEN],
-      });
+  const trustedProxyClientCertToken = parseTrustedProxyClientCertToken(
+    env.API_TRUSTED_PROXY_CLIENT_CERT_TOKEN,
+  );
+  const satelliteApiKeys = parseSatelliteApiKeys(env.API_SATELLITE_KEYS, {
+    reservedTokens: [env.API_KEY, env.ADMIN_TOKEN],
+  });
+  const hubDeviceCompanionId = fleetAuthBootstrapOnly
+    ? resolveGatewayHubDeviceCompanionId(options)
+    : undefined;
+  const hubDeviceIngress = fleetAuthBootstrapOnly && options.hubDeviceAssertionVerifier
+    ? new GatewayHubDeviceIngressService({
+        verifyAndConsume: (assertion, expected) => options.hubDeviceAssertionVerifier!
+          .verifyAndConsumeHubDeviceAssertion(assertion, expected),
+      })
+    : undefined;
   const apiTlsConfig = resolveApiHttpServerTlsConfig(env);
   const corsAllowedOrigins = resolveApiCorsAllowedOrigins({
     explicitAllowlist: parseCommaSeparatedEnv(env.API_CORS_ALLOWLIST),
@@ -394,6 +422,8 @@ export async function startOptionalGatewayApiServer(
     ...(apiTlsConfig ? { tls: apiTlsConfig } : {}),
     allowInsecureWithoutAuth,
     fleetAuthBootstrapOnly,
+    ...(hubDeviceIngress ? { hubDeviceIngress } : {}),
+    ...(hubDeviceCompanionId ? { hubDeviceCompanionId } : {}),
     corsAllowedOrigins,
     voiceWebSocketPath,
     voiceWebSocketRuntime,
@@ -401,7 +431,7 @@ export async function startOptionalGatewayApiServer(
     runtime: new GatewayApiRuntime(options.gateway, {
       chatRequestTimeoutMs: computeGatewayChatRequestTimeoutMs(GATEWAY_API_REQUEST_TIMEOUT_MS),
     }),
-    modelName: options.config.companionId,
+    modelName: options.config.companionId ?? hubDeviceCompanionId,
     companionName: resolveCompanionNameFromConfig(options.config),
     externalChannelProfiles: options.channelsConfig
       ? buildExternalChannelProfiles(options.channelsConfig)

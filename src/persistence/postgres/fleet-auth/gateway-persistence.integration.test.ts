@@ -18,6 +18,10 @@ import {
   type GatewayFleetAuthPersistence,
 } from './gateway-persistence.js';
 import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
+import {
+  GatewayHubDeviceIngressService,
+  InMemoryHubDeviceSessionAdmissionStore,
+} from '../../../boundary/fleet-auth/hub-device-ingress.js';
 
 const TIMEOUT_MS = 120_000;
 const ROLES = {
@@ -136,6 +140,7 @@ function hubDeviceAssertionToken(input: {
   sessionId: string;
   jti: string;
   placeId?: string;
+  expiresInSeconds?: number;
 }): string {
   const nowSeconds = Math.floor(Date.now() / 1000);
   const encodedHeader = Buffer.from(JSON.stringify({
@@ -154,7 +159,7 @@ function hubDeviceAssertionToken(input: {
     companion_id: input.companionId,
     session_id: input.sessionId,
     iat: nowSeconds - 1,
-    exp: nowSeconds + 30,
+    exp: nowSeconds + (input.expiresInSeconds ?? 30),
     jti: input.jti,
   })).toString('base64url');
   const signature = sign(
@@ -408,6 +413,7 @@ describe('gateway fleet-auth lifecycle publication', () => {
       enrollmentVersion: 7,
       enrollmentStatus: 'active' as const,
       companionId,
+      placeId: 'office',
     };
     try {
       await expect(persistence.verifyAndConsumeHubDeviceAssertion(assertion, {
@@ -449,7 +455,7 @@ describe('gateway fleet-auth lifecycle publication', () => {
         companionId,
         sessionId: sessionA,
         jti,
-        placeId: 'kitchen',
+        expiresInSeconds: 29,
       });
       await expect(persistence.verifyAndConsumeHubDeviceAssertion(mutatedAssertion, {
         ...expected,
@@ -477,7 +483,6 @@ describe('gateway fleet-auth lifecycle publication', () => {
       }]);
       const serializedAudit = JSON.stringify(mutatedAudit.rows);
       expect(serializedAudit).not.toContain('office');
-      expect(serializedAudit).not.toContain('kitchen');
       expect(serializedAudit).not.toContain(sessionA);
       expect(serializedAudit).not.toContain(companionId);
       expect(serializedAudit).not.toContain('psfn-satellite-hub');
@@ -486,6 +491,37 @@ describe('gateway fleet-auth lifecycle publication', () => {
       expect(serializedAudit).not.toContain(assertion);
       expect(serializedAudit).not.toContain(assertion.split('.')[2]!);
       expect(serializedAudit).not.toContain(mutatedAssertion.split('.')[2]!);
+
+      const admittedJti = randomUUID();
+      const admittedAssertion = hubDeviceAssertionToken({
+        companionId,
+        sessionId: sessionA,
+        jti: admittedJti,
+      });
+      const sessions = new InMemoryHubDeviceSessionAdmissionStore();
+      const ingress = new GatewayHubDeviceIngressService({
+        verifyAndConsume: (token, binding) => persistence.verifyAndConsumeHubDeviceAssertion(token, binding),
+        sessions,
+      });
+      const connection = {
+        connectionId: 'authenticated-hub-connection',
+        ...expected,
+        sessionId: sessionA,
+      };
+      const concurrent = await Promise.all([
+        ingress.admit({ assertion: admittedAssertion, connection }),
+        ingress.admit({ assertion: admittedAssertion, connection }),
+      ]);
+      expect(concurrent.map(entry => entry.sessionDisposition).sort()).toEqual(['created', 'retry']);
+      await expect(ingress.admit({ assertion: admittedAssertion, connection }))
+        .resolves.toMatchObject({ sessionDisposition: 'retry' });
+      expect(sessions.size).toBe(1);
+      const admissionReplay = await auditPool.query<{ replay_count: string }>(`
+        SELECT replay_count
+        FROM fleet_auth.hub_device_assertion_replays
+        WHERE issuer = $1 AND jti = $2
+      `, ['psfn-satellite-hub', admittedJti]);
+      expect(admissionReplay.rows).toEqual([{ replay_count: '2' }]);
     } finally {
       await auditPool.end();
       await persistence.close();

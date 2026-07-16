@@ -10,8 +10,25 @@ import {
   isRecord,
   isRfc4122Uuid,
 } from '../../shared/utils/types.js';
+import type {
+  HubDeviceAssertionExpectedBinding,
+  HubDevicePrincipal,
+} from '../../shared/contracts/hub-device-ingress.js';
+
+export type {
+  HubDeviceAssertionExpectedBinding,
+  HubDevicePrincipal,
+} from '../../shared/contracts/hub-device-ingress.js';
 
 export type HubDeviceAssertionKeyStatus = 'active' | 'retiring' | 'revoked';
+
+/** Protocol/configuration rejection safe to classify separately from store outages. */
+export class HubDeviceAssertionRejectedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HubDeviceAssertionRejectedError';
+  }
+}
 
 export interface HubDeviceAssertionVerifierKey {
   kid: string;
@@ -27,14 +44,6 @@ export interface HubDeviceAssertionVerifierConfig {
   maxTtlSeconds: number;
   clockSkewSeconds: number;
   keys: HubDeviceAssertionVerifierKey[];
-}
-
-export interface HubDeviceAssertionExpectedBinding {
-  deviceId: string;
-  enrollmentVersion: number;
-  enrollmentStatus: 'active' | 'revoked';
-  companionId: string;
-  sessionId: string;
 }
 
 export interface HubDeviceAssertionReplayStore {
@@ -58,22 +67,6 @@ export interface HubDeviceAssertionReplayAuditContext {
   sessionIdDigest: string;
   enrollmentVersionDigest: string;
   jtiDigest: string;
-}
-
-export interface HubDevicePrincipal {
-  kind: 'hub_device';
-  issuer: string;
-  keyId: string;
-  deviceId: string;
-  enrollmentVersion: number;
-  enrollmentAssurance: 'device_credential';
-  placeId?: string;
-  audience: string;
-  companionId: string;
-  sessionId: string;
-  issuedAt: Date;
-  expiresAt: Date;
-  jti: string;
 }
 
 const HEADER_KEYS = ['alg', 'typ', 'v', 'kid'] as const;
@@ -140,6 +133,9 @@ export async function verifyAndConsumeHubDeviceAssertion(input: {
   }
   if (claims.session_id !== expectedSessionId) {
     throw new Error('Hub device assertion session binding does not match');
+  }
+  if (claims.place_id !== input.expected.placeId) {
+    throw new Error('Hub device assertion place binding does not match');
   }
   if (claims.enrollment_version !== input.expected.enrollmentVersion) {
     throw new Error('Hub device assertion enrollment version is stale');

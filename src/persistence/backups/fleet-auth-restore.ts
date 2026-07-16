@@ -22,6 +22,7 @@ import {
   type FleetAuthDatabaseRoles,
 } from '../postgres/fleet-auth/schema.js';
 import { FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME } from '../postgres/fleet-auth/companion-restore-sql.js';
+import { parseContactAuthorityLifecycleResult } from '../../shared/contracts/contact-authority-lifecycle.js';
 
 const RESTORE_LOCK_CLASS = 0x5053464e;
 const RESTORE_LOCK_ID = 0x52535452;
@@ -41,10 +42,13 @@ interface FleetAuthDurableSnapshot {
   principalMergeAliases: SnapshotRow[];
   passkeyCredentials: SnapshotRow[];
   authorizationAuditEvents: SnapshotRow[];
+  contactAuthorityIntents: SnapshotRow[];
+  contactAuthorityResources: SnapshotRow[];
+  contactAuthorityReceipts: SnapshotRow[];
 }
 
 interface FleetAuthSnapshot {
-  schemaVersion: 4;
+  schemaVersion: 5;
   capturedAt: string;
   postgresSnapshot: string;
   authorityLineageId: string;
@@ -92,6 +96,9 @@ const SNAPSHOT_COLLECTION_KEYS = [
   'principalMergeAliases',
   'passkeyCredentials',
   'authorizationAuditEvents',
+  'contactAuthorityIntents',
+  'contactAuthorityResources',
+  'contactAuthorityReceipts',
 ] as const;
 
 const ROW_KEYS = {
@@ -147,6 +154,19 @@ const ROW_KEYS = {
     'correlation_id', 'occurred_at', 'decision_id', 'ceremony_id', 'reason_digest',
     'decision_context',
   ],
+  contactAuthorityIntents: [
+    'companion_id', 'intent_id', 'schema_version', 'intent_digest', 'action',
+    'contact_id', 'canonical_contact_id', 'provider_subject_id', 'state',
+    'authority_generation', 'restore_state', 'created_at', 'updated_at',
+  ],
+  contactAuthorityResources: [
+    'companion_id', 'intent_id', 'kind', 'resource_id', 'terminal_fence', 'created_at',
+  ],
+  contactAuthorityReceipts: [
+    'companion_id', 'intent_id', 'phase', 'request_digest', 'result',
+    'authority_generation', 'global_auth_epoch', 'audit_event_id', 'restore_state',
+    'created_at',
+  ],
 } as const;
 
 function assertExactKeys(
@@ -196,7 +216,7 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
     ['schemaVersion', 'capturedAt', 'postgresSnapshot', 'authorityLineageId', 'durable'],
     'root',
   );
-  if (value.schemaVersion !== 4
+  if (value.schemaVersion !== 5
     || !isCanonicalIsoTimestamp(value.capturedAt)
     || value.capturedAt !== manifest.capturedAt
     || typeof value.postgresSnapshot !== 'string'
@@ -253,6 +273,21 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
       'authorizationAuditEvents',
       ROW_KEYS.authorizationAuditEvents,
     ),
+    contactAuthorityIntents: parseCollection(
+      durable.contactAuthorityIntents,
+      'contactAuthorityIntents',
+      ROW_KEYS.contactAuthorityIntents,
+    ),
+    contactAuthorityResources: parseCollection(
+      durable.contactAuthorityResources,
+      'contactAuthorityResources',
+      ROW_KEYS.contactAuthorityResources,
+    ),
+    contactAuthorityReceipts: parseCollection(
+      durable.contactAuthorityReceipts,
+      'contactAuthorityReceipts',
+      ROW_KEYS.contactAuthorityReceipts,
+    ),
   };
   if (parsed.authorityState.length !== 1) {
     throw new Error('Invalid fleet auth snapshot: authorityState must contain its singleton row');
@@ -264,7 +299,7 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
     throw new Error('Invalid fleet auth snapshot: authority lineage does not match its manifest');
   }
   return {
-    schemaVersion: 4,
+    schemaVersion: 5,
     capturedAt: value.capturedAt,
     postgresSnapshot: value.postgresSnapshot,
     authorityLineageId: value.authorityLineageId,
@@ -634,6 +669,70 @@ async function importDurableRows(
     }));
   }
 
+  for (const row of durable.contactAuthorityIntents) {
+    const values = [
+      row.companion_id, row.intent_id, row.schema_version, row.intent_digest,
+      row.action, row.contact_id, row.canonical_contact_id,
+      row.provider_subject_id, floor.trustedHost.authorityGeneration,
+      row.created_at, restoredAt,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_intents
+          (companion_id, intent_id, schema_version, intent_digest, action,
+           contact_id, canonical_contact_id, provider_subject_id, state,
+           authority_generation, restore_state, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'quarantined', $9,
+                'quarantined', $10, $11)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_intents
+          WHERE companion_id = $1::uuid AND intent_id = $2::uuid
+            AND schema_version = $3::integer AND intent_digest = $4
+            AND action = $5 AND contact_id = $6
+            AND canonical_contact_id IS NOT DISTINCT FROM $7::text
+            AND provider_subject_id IS NOT DISTINCT FROM $8::text
+            AND state = 'quarantined' AND restore_state = 'quarantined'
+            AND authority_generation <= $9::bigint
+            AND created_at <= $10::timestamptz
+        ) AS compatible
+      `,
+      compatibilityValues: values.slice(0, 10),
+      description: 'contact authority intent',
+    }));
+  }
+
+  for (const row of durable.contactAuthorityResources) {
+    const values = [
+      row.companion_id, row.intent_id, row.kind, row.resource_id,
+      row.terminal_fence, row.created_at,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_resources
+          (companion_id, intent_id, kind, resource_id, terminal_fence, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_resources
+          WHERE companion_id = $1::uuid AND intent_id = $2::uuid
+            AND kind = $3 AND resource_id = $4
+            AND terminal_fence = $5::boolean AND created_at = $6::timestamptz
+        ) AS compatible
+      `,
+      compatibilityValues: values,
+      description: 'contact authority resource fence',
+    }));
+  }
+
   for (const row of durable.principalMergeAliases) {
     const values = [
       row.source_principal_id, row.canonical_principal_id, row.decision_id,
@@ -997,6 +1096,46 @@ async function importDurableRows(
       `,
       compatibilityValues: values,
       description: 'authorization audit event',
+    }));
+  }
+  for (const row of durable.contactAuthorityReceipts) {
+    const result = parseContactAuthorityLifecycleResult(row.result);
+    if (result.intentId !== row.intent_id
+      || result.phase !== row.phase
+      || result.authorityGeneration !== Number(row.authority_generation)
+      || result.globalAuthEpoch !== Number(row.global_auth_epoch)
+      || result.auditEventId !== row.audit_event_id) {
+      throw new Error('Invalid fleet auth snapshot: contact authority receipt tuple mismatch');
+    }
+    const values = [
+      row.companion_id, row.intent_id, row.phase, row.request_digest,
+      JSON.stringify(result), row.authority_generation, row.global_auth_epoch,
+      row.audit_event_id, row.created_at,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_receipts
+          (companion_id, intent_id, phase, request_digest, result,
+           authority_generation, global_auth_epoch, audit_event_id,
+           restore_state, created_at)
+        VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, 'quarantined', $9)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_receipts
+          WHERE companion_id = $1::uuid AND intent_id = $2::uuid AND phase = $3
+            AND request_digest = $4 AND result = $5::jsonb
+            AND authority_generation = $6::bigint
+            AND global_auth_epoch = $7::bigint
+            AND audit_event_id = $8::uuid AND restore_state = 'quarantined'
+            AND created_at = $9::timestamptz
+        ) AS compatible
+      `,
+      compatibilityValues: values,
+      description: 'contact authority phase receipt',
     }));
   }
   return importedRows;

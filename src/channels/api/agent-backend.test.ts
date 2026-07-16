@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EventBus } from '../../shared/event-bus.js';
 import { AgentApiBackend } from './agent-backend.js';
+import { parseSatelliteRegistryConfig } from '../backplane/satellite-registry.js';
+import { deriveApiKeyPrincipalId } from '../backplane/http/auth.js';
 
 function createSessionManagerStub() {
   return {
@@ -39,6 +41,99 @@ describe('AgentApiBackend health RPC', () => {
     });
     expect(health).not.toHaveProperty('statusCode');
     expect(health).not.toHaveProperty('body');
+  });
+});
+
+describe('AgentApiBackend Hub device principal boundary', () => {
+  it('authors the turn as a device with no human contact and revalidates registry/session/companion bindings', async () => {
+    const token = 'hub-satellite-secret-key';
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    const sessionManager = createSessionManagerStub();
+    const handleMessage = vi.fn(async (message) => ({
+      content: 'device reply', channelId: message.channelId,
+      metadata: { inputTokens: 1, outputTokens: 1 },
+    }));
+    const backend = new AgentApiBackend({
+      agentLoop: { handleMessage, abort: vi.fn() } as any,
+      eventBus: new EventBus(), sessionManager,
+      companionId,
+      satelliteRegistry: parseSatelliteRegistryConfig({
+        schemaVersion: 1, enabled: true,
+        satellites: [{
+          satelliteId: 'office', displayName: 'Office', mobility: 'static', placeId: 'office',
+          endpoints: [{
+            endpointId: 'office-device', displayName: 'Office Device',
+            claimTypes: ['hub-device'], promptChannelType: 'satellite_hub',
+            auth: { mode: 'api_key', apiKeyPrincipalIds: [deriveApiKeyPrincipalId(token)] },
+            defaultIdentity: {
+              authorId: 'legacy-human', authorName: 'Legacy Human',
+              canonicalContactId: 'contact-legacy-human', channelPrivacy: 'private',
+            },
+            maxCapabilities: ['text'],
+            hubDeviceEnrollment: {
+              deviceId: 'office-device', enrollmentVersion: 7, enrollmentStatus: 'active',
+            },
+          }],
+        }],
+      }),
+    });
+    const principal = { id: deriveApiKeyPrincipalId(token), mode: 'api_key' as const, scope: 'satellite' as const };
+    const hubDevicePrincipal = {
+      kind: 'hub_device' as const, issuer: 'psfn-satellite-hub', keyId: 'hub-key',
+      deviceId: 'office-device', enrollmentVersion: 7,
+      enrollmentAssurance: 'device_credential' as const, placeId: 'office',
+      audience: 'https://fleet.example.test', companionId,
+      sessionId: 'realtime:office-device:session',
+      issuedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 30_000).toISOString(),
+      jti: '018f0f10-79b2-4cc7-8c99-0242ac120002',
+    };
+    const result = await backend.handleChatCompletion({
+      requestId: 'hub-device-request',
+      request: { model: 'companion', messages: [{ role: 'user', content: 'hello' }] },
+      principal,
+      headers: {
+        'x-psfn-satellite-claim-type': 'hub-device',
+        'x-psfn-satellite-id': 'office',
+        'x-psfn-satellite-endpoint-id': 'office-device',
+        'x-psfn-satellite-session-id': 'realtime:office-device:session',
+      },
+      hubDevicePrincipal,
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(handleMessage).toHaveBeenCalledOnce();
+    expect(handleMessage.mock.calls[0]?.[0]).toMatchObject({
+      channelId: 'hub-device:office-device:realtime:office-device:session',
+      authorId: 'hub-device:office-device',
+      authorName: 'Enrolled Hub device',
+      routing: { satellite: { hubDevicePrincipal } },
+    });
+    expect(handleMessage.mock.calls[0]?.[0].routing).not.toHaveProperty('canonicalContactId');
+    await expect(backend.handleChatCompletion({
+      requestId: 'hub-device-wrong-companion',
+      request: { model: 'companion', messages: [{ role: 'user', content: 'hello' }] },
+      principal,
+      headers: {
+        'x-psfn-satellite-claim-type': 'hub-device',
+        'x-psfn-satellite-id': 'office',
+        'x-psfn-satellite-endpoint-id': 'office-device',
+        'x-psfn-satellite-session-id': 'realtime:office-device:session',
+      },
+      hubDevicePrincipal: { ...hubDevicePrincipal, companionId: '22222222-2222-4222-8222-222222222222' },
+    })).resolves.toMatchObject({ ok: false, error: { type: 'hub_device_principal_mismatch' } });
+
+    await expect(backend.handleChatCompletion({
+      requestId: 'hub-device-human-smuggling',
+      request: { model: 'companion', messages: [{ role: 'user', content: 'hello' }] },
+      principal,
+      headers: {
+        'x-psfn-satellite-claim-type': 'hub-device',
+        'x-psfn-satellite-id': 'office',
+        'x-psfn-satellite-endpoint-id': 'office-device',
+        'x-psfn-satellite-session-id': 'realtime:office-device:session',
+      },
+      hubDevicePrincipal: { ...hubDevicePrincipal, humanPrincipal: { id: 'forged' } } as any,
+    })).resolves.toMatchObject({ ok: false, error: { type: 'hub_device_principal_mismatch' } });
   });
 });
 

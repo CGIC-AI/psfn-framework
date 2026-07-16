@@ -49,6 +49,8 @@ import { GatewayFleetAuthAuthorityLifecycleStore } from './authority-lifecycle-s
 import { replaceAccountAuthorityFloorProjection } from './authority-floor-projection.js';
 import { createPostgresFleetAuthorizationContextResolver } from './authorization-context.js';
 import { reconcilePendingCompanionReadd } from './companion-readd-reconciliation.js';
+import type { GatewayContactLifecycleAuthorityPort } from '../../../boundary/gateway/contact-lifecycle-authority.js';
+import { PostgresContactLifecycleAuthorityStore } from './contact-lifecycle-authority-store.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -60,6 +62,7 @@ export interface GatewayFleetAuthPersistence {
   authorityFloors: FleetAuthAuthorityFloorStore;
   broker: GatewayFleetAuthBroker;
   authorityLifecycle: GatewayFleetAuthAuthorityLifecycleStore;
+  contactLifecycleAuthority: GatewayContactLifecycleAuthorityPort;
   discordEvidence?: DiscordEvidenceRuntime;
   discordEvidenceLifecycle?: DiscordEvidenceLifecycleCoordinator;
   reapproveAccountAuthority(
@@ -353,6 +356,17 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       pool: authorityPool,
       accountAuthority,
     });
+    const contactLifecycleAuthority = new PostgresContactLifecycleAuthorityStore({
+      pool: authorityPool,
+      accountAuthority,
+      reconcileExternalFloor: async () => {
+        await reconcileFleetAuthAuthorityState(
+          authorityPool,
+          authorityFloors.read(),
+          randomUUID(),
+        );
+      },
+    });
     const authorizationContextResolver = createPostgresFleetAuthorizationContextResolver({
       pool,
       sessionPepper: secrets.sessionPepper,
@@ -391,6 +405,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       authorityFloors,
       broker,
       authorityLifecycle,
+      contactLifecycleAuthority,
       ...(discordEvidence ? { discordEvidence } : {}),
       ...(discordEvidenceLifecycle ? { discordEvidenceLifecycle } : {}),
       reapproveAccountAuthority: createGatewayAccountReapprovalAuthority(pool, authorityFloors),

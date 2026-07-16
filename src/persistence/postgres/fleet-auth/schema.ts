@@ -49,6 +49,11 @@ import {
   FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_ARG_TYPES,
   FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME,
 } from './companion-restore-sql.js';
+import {
+  FLEET_AUTH_CONTACT_AUTHORITY_DDL_SQL,
+  FLEET_AUTH_CONTACT_AUTHORITY_FENCE_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_CONTACT_AUTHORITY_FENCE_FUNCTION_NAME,
+} from './contact-authority-sql.js';
 
 export const FLEET_AUTH_SCHEMA_NAME = 'fleet_auth';
 const MIGRATION_LOCK_CLASS = 0x5053464e;
@@ -106,6 +111,9 @@ export const FLEET_AUTH_DURABLE_TABLES = [
   'principal_merge_aliases',
   'passkey_credentials',
   'authorization_audit_events',
+  'contact_authority_intents',
+  'contact_authority_resources',
+  'contact_authority_receipts',
 ] as const;
 
 export const FLEET_AUTH_EPHEMERAL_TABLES = [
@@ -130,6 +138,7 @@ const FLEET_AUTH_MUTABLE_TABLES = [
   'principal_contact_bindings',
   'principal_role_grants',
   'passkey_credentials',
+  'contact_authority_intents',
   ...FLEET_AUTH_EPHEMERAL_TABLES,
 ] as const;
 
@@ -137,7 +146,8 @@ const FLEET_AUTH_RUNTIME_MUTABLE_TABLES = FLEET_AUTH_MUTABLE_TABLES.filter(
   table => table !== 'authority_state'
     && table !== 'authority_floor_tombstone_projection'
     && table !== 'companion_authority_state'
-    && table !== 'lifecycle_decision_receipts',
+    && table !== 'lifecycle_decision_receipts'
+    && table !== 'contact_authority_intents',
 );
 
 const FLEET_AUTH_IMMUTABLE_TABLES = [
@@ -145,10 +155,14 @@ const FLEET_AUTH_IMMUTABLE_TABLES = [
   'provider_subject_tombstones',
   'authorization_audit_events',
   'principal_merge_aliases',
+  'contact_authority_resources',
+  'contact_authority_receipts',
 ] as const;
 
 const FLEET_AUTH_RUNTIME_IMMUTABLE_TABLES = FLEET_AUTH_IMMUTABLE_TABLES.filter(
-  table => table !== 'principal_merge_aliases',
+  table => table !== 'principal_merge_aliases'
+    && table !== 'contact_authority_resources'
+    && table !== 'contact_authority_receipts',
 );
 
 const FLEET_AUTH_RUNTIME_READ_ONLY_TABLES = [
@@ -380,6 +394,9 @@ async function applyRoleGrants(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME}(${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_ARG_TYPES}) TO ${runtime}`,
   );
   await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_CONTACT_AUTHORITY_FENCE_FUNCTION_NAME}(${FLEET_AUTH_CONTACT_AUTHORITY_FENCE_FUNCTION_ARG_TYPES}) TO ${runtime}`,
+  );
+  await client.query(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_RECONCILE_FUNCTION_NAME}(${FLEET_AUTH_RECONCILE_FUNCTION_ARG_TYPES}) TO ${backup}`,
   );
   await client.query(
@@ -409,6 +426,7 @@ async function applyFleetAuthReapprovalBoundary(
   await client.query(FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL);
   await client.query(FLEET_AUTH_LOCK_COMPANION_AUTHORITY_DDL_SQL);
   await client.query(FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_DDL_SQL);
+  await client.query(FLEET_AUTH_CONTACT_AUTHORITY_DDL_SQL);
   await client.query(FLEET_AUTH_RECONCILIATION_DDL_SQL);
   await client.query(FLEET_AUTH_HUB_REPLAY_BOUNDARY_DDL_SQL);
   await client.query(FLEET_AUTH_COMPANION_RESTORE_DDL_SQL);
@@ -591,7 +609,8 @@ async function assertExactDml(
     if (mutable.has(tableName)) {
       if (expectedRole === roles.runtime
         && (tableName === 'lifecycle_decision_receipts'
-          || tableName === 'authority_floor_tombstone_projection')) {
+          || tableName === 'authority_floor_tombstone_projection'
+          || tableName === 'contact_authority_intents')) {
         return new Set<string>();
       }
       if (expectedRole === roles.runtime

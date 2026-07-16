@@ -310,6 +310,12 @@ Wyoming/OpenHome endpoint transports live in the Satellite Hub repository. Confi
 Satellite authentication has two layers:
 
 - **Per-satellite bearer keys**: set `API_SATELLITE_KEYS` (comma-separated, each >=16 chars). Each key yields a distinct satellite-scoped principal id that the matching `satellites.json` endpoint must list in `auth.apiKeyPrincipalIds`. Satellite keys are only valid on satellite surfaces.
+- **Fleet-auth Hub devices**: each device-facing endpoint must declare a strict
+  `hubDeviceEnrollment` with `deviceId`, positive `enrollmentVersion`, and
+  `enrollmentStatus` (`active` or `revoked`). The authenticated Hub key selects
+  the endpoint; the gateway then binds the signed assertion to this enrollment,
+  the API surface's companion, the authenticated Hub session, and the
+  satellite's optional `placeId` before a turn can enter the agent runtime.
 - **Mutual TLS**: satellite client-cert identity is bound to the API listener's real TLS peer certificate (or to `X-PSFN-Client-Cert-*` headers only behind a trusted proxy presenting `API_TRUSTED_PROXY_CLIENT_CERT_TOKEN`). Certificate issuance, renewal, and revocation run through the cert-manager sidecar (`npm run cert-manager`, `src/app/cert-manager/`) — see [`docs/certificates.md`](./certificates.md) for the full bootstrap.
 
 ## Sanity Checks

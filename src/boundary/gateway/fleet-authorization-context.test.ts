@@ -129,6 +129,18 @@ function sessionWithPrincipal(
 }
 
 describe('fleet authorization context policy', () => {
+  it('denies existing authority while its contact or provider subject is lifecycle-fenced', () => {
+    expect(decide(snapshot({
+      bindings: [{ ...snapshot().bindings[0]!, contactAuthorityFenced: true }],
+    }))).toEqual({ decision: 'deny', reasonCode: 'contact_authority_fenced' });
+    expect(decide(snapshot({
+      providerSubjects: [{
+        ...snapshot().providerSubjects[0]!,
+        contactAuthorityFenced: true,
+      }],
+    }))).toEqual({ decision: 'deny', reasonCode: 'contact_authority_fenced' });
+  });
+
   it('returns immutable, companion-local facts while keeping contact and operator authority separate', () => {
     const decision = decide();
     expect(decision).toMatchObject({
@@ -349,5 +361,21 @@ describe('fleet authorization request parsing', () => {
   ])('rejects spoofing or evidence widening', (input, reasonCode) => {
     expect(parseFleetAuthorizationRequest(input, new Set([COMPANION_ID])))
       .toMatchObject({ ok: false, reasonCode });
+  });
+
+  it('fails closed without retaining a malformed caller correlation in denial audit input', () => {
+    const parsed = parseFleetAuthorizationRequest(
+      { ...valid, correlationId: 'session-secret\nidentifier' },
+      new Set([COMPANION_ID]),
+    );
+    expect(parsed).toEqual({
+      ok: false,
+      reasonCode: 'malformed_request',
+      audit: {
+        action: 'memory.read.self',
+        companionId: COMPANION_ID,
+        evidenceRequested: true,
+      },
+    });
   });
 });

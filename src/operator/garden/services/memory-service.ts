@@ -19,7 +19,6 @@ import {
 } from '../../../faculties/memory/types.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { VALID_SENSITIVITY_LEVELS, type SensitivityLevel } from '../../../system/trust/types.js';
-import { isHighIntimacySensitivityLevel } from '../../../system/trust/types.js';
 import {
   collectSharedBackgroundUnion,
   SHARED_BACKGROUND_DEFAULT_LIMIT,
@@ -318,7 +317,6 @@ export class AdminMemoryDataService implements AdminMemoryService {
     if (this.requestContext?.kind !== 'fleet_principal') {
       return this.bodyGate.toAdminView(sessionKey, memory);
     }
-    if (!isHighIntimacySensitivityLevel(memory.sensitivity)) return memory;
     const classification = await this.deps.memoryStore.getMemorySubjectClassification(memory.id);
     if (!classification) {
       throw new Error('Memory subject projection changed during Garden view construction');

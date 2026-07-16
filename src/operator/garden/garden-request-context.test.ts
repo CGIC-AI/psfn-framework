@@ -103,6 +103,22 @@ describe('request-bound Garden principal isolation', () => {
       return { memories, total: memories.length };
     });
     const rawStore = { queryAuthorizedMemorySubjects } as unknown as MemoryStorePort;
+    rawStore.getMemorySubjectClassification = vi.fn(async memoryId => {
+      const contactId = memoryId.replace(/^memory-/u, '');
+      return {
+        memoryId,
+        subjectClass: 'single_contact',
+        status: 'current',
+        classifierVersion: 1,
+        memoryRevision: 1,
+        evidenceDigest: 'a'.repeat(64),
+        evidence: ['explicit_subject_contact'],
+        subjectContactIds: [contactId],
+        reasonClass: 'explicit_subject_contact',
+        classifiedAt: 1,
+        updatedAt: 1,
+      };
+    });
     const service = new AdminMemoryDataService({
       memoryStore: rawStore,
       fleetMemoryStore: rawStore,
@@ -134,6 +150,90 @@ describe('request-bound Garden principal isolation', () => {
     expect(() => service.forRequest(context('principal-a', 'contact-a', {
       subjectRelation: 'current_companion',
     }))).toThrow(/exact request-local subject relation/u);
+  });
+
+  it('does not let an owner role bypass the routine subject SQL projection', async () => {
+    const rawAdminList = vi.fn(() => {
+      throw new Error('owner role must not reach the broad admin list');
+    });
+    const queryAuthorizedMemorySubjects = vi.fn(async () => ({ memories: [], total: 0 }));
+    const rawStore = {
+      listAdminMemories: rawAdminList,
+      queryAuthorizedMemorySubjects,
+    } as unknown as MemoryStorePort;
+    const service = new AdminMemoryDataService({ memoryStore: rawStore, fleetMemoryStore: rawStore });
+
+    const result = await service.forRequest(context('principal-a', 'contact-a', { role: 'owner' }))
+      .listMemories();
+
+    expect(result.memories).toEqual([]);
+    expect(result.pagination.total).toBe(0);
+    expect(queryAuthorizedMemorySubjects).toHaveBeenCalledWith(expect.objectContaining({
+      authorization: expect.objectContaining({
+        viewerContactIds: ['contact-a'],
+        allowedSubjectClasses: ['single_contact'],
+        allowedViewerRelations: ['self'],
+      }),
+    }));
+    expect(rawAdminList).not.toHaveBeenCalled();
+  });
+
+  it('fails closed across routine named-memory sensitivities for missing, stale, ambiguous, or non-subject projections', async () => {
+    const sensitivities = ['public', 'personal', 'intimate', 'confidential'] as const;
+    const memories = new Map(sensitivities.map(sensitivity => {
+      const item = {
+        ...memory('contact-a'),
+        id: `memory-${sensitivity}`,
+        sensitivity,
+      };
+      return [item.id, item] as const;
+    }));
+    const baseClassification = {
+      subjectClass: 'single_contact' as const,
+      status: 'current' as const,
+      classifierVersion: 1,
+      memoryRevision: 1,
+      evidenceDigest: 'a'.repeat(64),
+      evidence: ['explicit_subject_contact' as const],
+      subjectContactIds: ['contact-a'],
+      reasonClass: 'explicit_subject_contact',
+      classifiedAt: 1,
+      updatedAt: 1,
+    };
+    const classifications = new Map<string, MemorySubjectClassification>([
+      ['memory-personal', {
+        ...baseClassification,
+        memoryId: 'memory-personal',
+        classifierVersion: 2,
+      }],
+      ['memory-intimate', {
+        ...baseClassification,
+        memoryId: 'memory-intimate',
+        subjectClass: 'ambiguous',
+        reasonClass: 'contradictory_evidence',
+      }],
+      ['memory-confidential', {
+        ...baseClassification,
+        memoryId: 'memory-confidential',
+        subjectContactIds: ['contact-other'],
+      }],
+    ]);
+    const rawStore = {
+      queryAuthorizedMemorySubjects: vi.fn(async (input: MemorySubjectAuthorizedQuery) => {
+        const item = input.selector.kind === 'detail'
+          ? memories.get(input.selector.memoryId)
+          : undefined;
+        return { memories: item ? [item] : [], total: item ? 1 : 0 };
+      }),
+      getMemorySubjectClassification: vi.fn(async memoryId => classifications.get(memoryId)),
+    } as unknown as MemoryStorePort;
+    const service = new AdminMemoryDataService({ memoryStore: rawStore, fleetMemoryStore: rawStore });
+    const routine = service.forRequest(context('principal-a', 'contact-a'));
+
+    for (const sensitivity of sensitivities) {
+      await expect(routine.getMemoryDetail(`memory-${sensitivity}`))
+        .rejects.toThrow(/subject projection|current proven single-contact subject/u);
+    }
   });
 
   it('does not resolve links for a memory outside the signed subject', async () => {

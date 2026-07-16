@@ -2291,17 +2291,26 @@ describe('ApiServer startup auth guard', () => {
 describe('ApiServer fleet-auth bootstrap-only boundary', () => {
   let server: ApiServer;
   let port: number;
+  let broker: {
+    beginLogin: ReturnType<typeof vi.fn>;
+    beginLifecycleOAuth: ReturnType<typeof vi.fn>;
+  };
 
   beforeEach(async () => {
     const eventBus = new EventBus();
     port = await allocatePort();
-    const broker = {
+    broker = {
       beginLogin: vi.fn(async () => ({
         authorizationUrl: 'https://discord.com/oauth2/authorize?state=opaque',
         initiatingBrowserToken: 'p'.repeat(43),
         expiresAt: new Date(Date.now() + 300_000),
       })),
-    } as unknown as GatewayFleetAuthBroker;
+      beginLifecycleOAuth: vi.fn(async () => ({
+        authorizationUrl: 'https://discord.com/oauth2/authorize?state=lifecycle',
+        initiatingBrowserToken: 'q'.repeat(43),
+        expiresAt: new Date(Date.now() + 300_000),
+      })),
+    };
     server = createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),
@@ -2311,7 +2320,7 @@ describe('ApiServer fleet-auth bootstrap-only boundary', () => {
       allowInsecureWithoutAuth: true,
       fleetAuthBootstrapOnly: true,
       fleetAuthHttpRoutes: new FleetAuthHttpRoutes({
-        broker,
+        broker: broker as unknown as GatewayFleetAuthBroker,
         canonicalOrigin: 'https://fleet.example.test',
         callbackPath: '/auth/discord/callback',
       }),
@@ -2343,6 +2352,98 @@ describe('ApiServer fleet-auth bootstrap-only boundary', () => {
     await expect(openWebSocketExpectStatus(port, '/v1/voice/ws', {
       Authorization: 'Bearer legacy-api-key',
     })).resolves.toBe(404);
+  });
+
+  it('admits only canonical-origin lifecycle initiation and its bounded CSRF preflight', async () => {
+    const preflight = await request(
+      port,
+      'OPTIONS',
+      '/v1/fleet-auth/lifecycle/oauth',
+      undefined,
+      {
+        Origin: 'https://fleet.example.test',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'content-type, x-psfn-csrf',
+      },
+    );
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers['access-control-allow-origin']).toBe(
+      'https://fleet.example.test',
+    );
+    expect(preflight.headers['access-control-allow-methods']).toBe('POST');
+    expect(preflight.headers['access-control-allow-headers']).toBe(
+      'Content-Type, X-PSFN-CSRF',
+    );
+
+    const widenedPreflight = await request(
+      port,
+      'OPTIONS',
+      '/v1/fleet-auth/lifecycle/oauth',
+      undefined,
+      {
+        Origin: 'https://fleet.example.test',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'content-type, x-psfn-csrf, authorization',
+      },
+    );
+    expect(widenedPreflight.status).toBe(403);
+    expect(JSON.parse(widenedPreflight.body).error.type).toBe('cors_preflight_not_allowed');
+
+    const lifecycle = await request(port, 'POST', '/v1/fleet-auth/lifecycle/oauth', {
+      returnPath: '/fleet/providers',
+      ceremonyId: '00000000-0000-4000-8000-000000000301',
+      action: 'provider.replace',
+      proofRole: 'new',
+    }, {
+      Origin: 'https://fleet.example.test',
+      Cookie: `__Host-psfn_session=${'a'.repeat(43)}`,
+      'X-PSFN-CSRF': 'b'.repeat(43),
+    });
+    expect(lifecycle.status).toBe(302);
+    expect(lifecycle.headers.location).toContain('state=lifecycle');
+    expect(lifecycle.headers['set-cookie']?.[0]).toMatch(
+      /^__Host-psfn_preauth=q{43}; Path=\/; Max-Age=\d+; Secure; HttpOnly; SameSite=Lax$/u,
+    );
+    expect(broker.beginLifecycleOAuth).toHaveBeenCalledOnce();
+
+    const untrusted = await request(port, 'POST', '/v1/fleet-auth/lifecycle/oauth', {
+      returnPath: '/fleet/providers',
+      ceremonyId: '00000000-0000-4000-8000-000000000301',
+      action: 'provider.replace',
+      proofRole: 'new',
+    }, {
+      Origin: 'https://attacker.example',
+      Cookie: `__Host-psfn_session=${'a'.repeat(43)}`,
+      'X-PSFN-CSRF': 'b'.repeat(43),
+    });
+    expect(untrusted.status).toBe(403);
+    expect(JSON.parse(untrusted.body).error.type).toBe('cors_origin_not_allowed');
+    expect(broker.beginLifecycleOAuth).toHaveBeenCalledOnce();
+
+    const noOrigin = await request(port, 'POST', '/v1/fleet-auth/lifecycle/oauth', {
+      returnPath: '/fleet/providers',
+      ceremonyId: '00000000-0000-4000-8000-000000000301',
+      action: 'provider.replace',
+      proofRole: 'new',
+    }, {
+      Cookie: `__Host-psfn_session=${'a'.repeat(43)}`,
+      'X-PSFN-CSRF': 'b'.repeat(43),
+    });
+    expect(noOrigin.status).toBe(403);
+    expect(broker.beginLifecycleOAuth).toHaveBeenCalledOnce();
+
+    const unrelatedPreflight = await request(
+      port,
+      'OPTIONS',
+      '/v1/chat/completions',
+      undefined,
+      {
+        Origin: 'https://fleet.example.test',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'x-psfn-csrf',
+      },
+    );
+    expect(unrelatedPreflight.status).toBe(403);
   });
 });
 

@@ -81,6 +81,7 @@ export class TurnSupportRuntime {
   private activeTurnCorrelation: CorrelationMetadata | null = null;
   private activeTurnTaskKind: string | null = null;
   private activeTurnIntent: string | null = null;
+  private activeTurnSessionIdentity: TurnSessionIdentity | null = null;
 
   private readonly postTurnActionInferers: PostTurnActionInferer[] = [];
   private readonly intentionPostTurnHooks: IntentionPostTurnHook[] = [];
@@ -115,20 +116,27 @@ export class TurnSupportRuntime {
     return this.activeTurnIntent;
   }
 
+  getActiveTurnSessionIdentity(): TurnSessionIdentity | null {
+    return this.activeTurnSessionIdentity;
+  }
+
   setActiveTurnContext(
     correlation: CorrelationMetadata,
     taskKind: string | null,
     intent: string | null,
+    turnSessionIdentity: TurnSessionIdentity,
   ): void {
     this.activeTurnCorrelation = correlation;
     this.activeTurnTaskKind = taskKind;
     this.activeTurnIntent = intent;
+    this.activeTurnSessionIdentity = turnSessionIdentity;
   }
 
   clearActiveTurnContext(): void {
     this.activeTurnCorrelation = null;
     this.activeTurnTaskKind = null;
     this.activeTurnIntent = null;
+    this.activeTurnSessionIdentity = null;
   }
 
   setActiveTurnCorrelation(correlation: CorrelationMetadata | null): void {
@@ -337,6 +345,7 @@ export class TurnSupportRuntime {
 
   recordUserMessage(
     message: SubstrateMessage,
+    turnSessionIdentity: TurnSessionIdentity,
     turnId: TurnID,
     requestId: string,
     trustLevel: TrustLevel,
@@ -347,6 +356,7 @@ export class TurnSupportRuntime {
     return recordUserMessageForTurn({
       sessionManager: this.sessionManager,
       message,
+      turnSessionIdentity,
       turnId,
       requestId,
       trustLevel,
@@ -358,13 +368,14 @@ export class TurnSupportRuntime {
 
   recordSystemMessage(
     message: SubstrateMessage,
+    turnSessionIdentity: TurnSessionIdentity,
     turnId: TurnID,
     requestId: string,
     content: string,
     continuityUserId?: string,
   ): number | null {
     return this.sessionManager.recordSystemMessage(
-      message.channelId,
+      turnSessionIdentity.logicalSessionId,
       content,
       message.authorId,
       message.authorName,
@@ -374,6 +385,7 @@ export class TurnSupportRuntime {
         turnId,
         requestId,
         sourceMessageId: message.id,
+        sourceChannelId: turnSessionIdentity.sourceChannelId,
         channelMeta: resolveSessionChannelMeta(message),
       },
     );
@@ -381,6 +393,7 @@ export class TurnSupportRuntime {
 
   recordAssistantMessage(
     message: SubstrateMessage,
+    turnSessionIdentity: TurnSessionIdentity,
     turnId: TurnID,
     requestId: string,
     responseText: string,
@@ -393,6 +406,7 @@ export class TurnSupportRuntime {
     return recordAssistantMessageForTurn({
       sessionManager: this.sessionManager,
       message,
+      turnSessionIdentity,
       turnId,
       requestId,
       responseText,
@@ -406,6 +420,7 @@ export class TurnSupportRuntime {
 
   recordToolObservations(
     message: SubstrateMessage,
+    turnSessionIdentity: TurnSessionIdentity,
     turnId: TurnID,
     requestId: string,
     turnMessages: AgentMessage[],
@@ -414,6 +429,7 @@ export class TurnSupportRuntime {
     recordToolObservationsForTurn({
       sessionManager: this.sessionManager,
       message,
+      turnSessionIdentity,
       turnId,
       requestId,
       turnMessages,

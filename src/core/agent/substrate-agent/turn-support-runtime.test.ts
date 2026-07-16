@@ -250,6 +250,104 @@ describe('TurnSupportRuntime role-envelope projections', () => {
     });
     expect(correlation.sessionId).not.toBe(correlation.channelId);
   });
+
+  it('writes every turn transcript role and system note to the captured owner after a route reset', () => {
+    const runtime = new TurnSupportRuntime({
+      eventBus: new EventBus(),
+      sessionManager,
+      backgroundWorkSupervisor: null,
+      hashPromptText: text => `hash:${text.length}`,
+      resolveContextWindow: () => 1_000,
+    });
+    const sourceChannelId = 'discord:guild:captured-write-owner';
+    const turnStartRoute = sessionManager.resetSourceChannelSession({
+      sourceChannelId,
+      actor: 'test',
+      reason: 'establish turn-start owner',
+      mode: 'fresh_split',
+    });
+    const turnSessionIdentity = {
+      sourceChannelId,
+      logicalSessionId: turnStartRoute.newLogicalSessionId,
+    };
+    const futureRoute = sessionManager.resetSourceChannelSession({
+      sourceChannelId,
+      actor: 'test',
+      reason: 'move only future turns',
+      mode: 'fresh_split',
+    });
+    const turnId = createTurnId();
+    const message = {
+      id: 'captured-write-owner-turn',
+      channelId: sourceChannelId,
+      channelType: 'discord' as const,
+      authorId: 'user-1',
+      authorName: 'User',
+      content: 'Old-turn user row.',
+      timestamp: new Date('2026-07-16T00:00:00.000Z'),
+      isDirectMessage: false,
+    };
+
+    runtime.recordUserMessage(
+      message,
+      turnSessionIdentity,
+      turnId,
+      message.id,
+      'regular',
+      undefined,
+      undefined,
+      'human',
+    );
+    runtime.recordSystemMessage(
+      { ...message, authorId: 'system:test', authorName: 'System' },
+      turnSessionIdentity,
+      turnId,
+      message.id,
+      'Old-turn system row.',
+    );
+    runtime.recordToolObservations(
+      message,
+      turnSessionIdentity,
+      turnId,
+      message.id,
+      [{
+        role: 'toolResult',
+        toolCallId: 'captured-owner-tool',
+        toolName: 'contact',
+        content: [{ type: 'text', text: 'Old-turn tool row.' }],
+        isError: false,
+      }],
+      'regular',
+    );
+    runtime.recordAssistantMessage(
+      message,
+      turnSessionIdentity,
+      turnId,
+      message.id,
+      'Old-turn assistant row.',
+      'regular',
+    );
+    sessionManager.appendSystemNote(
+      turnSessionIdentity.logicalSessionId,
+      'Old-turn internal note.',
+      'test',
+      turnSessionIdentity.sourceChannelId,
+    );
+
+    const capturedEntries = sessionManager.getRecentSessionEntries(
+      turnSessionIdentity.logicalSessionId,
+      10,
+    );
+    expect(capturedEntries.map(entry => entry.role)).toEqual([
+      'user',
+      'system',
+      'tool',
+      'assistant',
+      'system',
+    ]);
+    expect(capturedEntries.every(entry => entry.originChannelId === sourceChannelId)).toBe(true);
+    expect(sessionManager.getRecentSessionEntries(futureRoute.newLogicalSessionId, 10)).toEqual([]);
+  });
 });
 
 describe('TurnSupportRuntime durable background work delegation', () => {
@@ -320,6 +418,10 @@ describe('TurnSupportRuntime intentional no-reply decisions', () => {
       },
       null,
       null,
+      {
+        sourceChannelId: 'api:no-reply',
+        logicalSessionId: 'session:no-reply',
+      },
     );
 
     const decision = runtime.recordIntentionalNoReplyDecision({

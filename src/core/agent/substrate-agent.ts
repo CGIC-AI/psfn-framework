@@ -158,6 +158,7 @@ import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-ru
 import {
   handleMessageForTurn,
   type TurnDeliveryLifecycle,
+  type TurnSessionIdentity,
 } from './substrate-agent/turn-execution-runtime.js';
 import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
 import { parseTurnRecordBackgroundWorkHandoff } from './background-work/types.js';
@@ -905,8 +906,10 @@ export class SubstrateAgent {
   private async trySteerActiveRun(message: SubstrateMessage): Promise<boolean> {
     const authorContext = await this.resolveAuthorContext(message);
     if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
+    const turnSessionIdentity = this.requireActiveTurnSessionIdentity();
     this.turnSupportRuntime.recordUserMessage(
       message,
+      turnSessionIdentity,
       createTurnId(),
       message.id,
       authorContext.trustLevel,
@@ -985,9 +988,11 @@ export class SubstrateAgent {
       ? null
       : await this.resolveAuthorContext(message);
     if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
+    const turnSessionIdentity = this.requireActiveTurnSessionIdentity();
     if (isSystemOriginated) {
       this.turnSupportRuntime.recordSystemMessage(
         message,
+        turnSessionIdentity,
         turnId,
         message.id,
         systemContent,
@@ -998,6 +1003,7 @@ export class SubstrateAgent {
       }
       this.turnSupportRuntime.recordUserMessage(
         message,
+        turnSessionIdentity,
         turnId,
         message.id,
         authorContext.trustLevel,
@@ -1022,6 +1028,14 @@ export class SubstrateAgent {
       systemOriginated: isSystemOriginated,
     });
     return true;
+  }
+
+  private requireActiveTurnSessionIdentity(): TurnSessionIdentity {
+    const identity = this.turnSupportRuntime.getActiveTurnSessionIdentity();
+    if (!identity) {
+      throw new Error('Active ordinary run is missing its captured session identity');
+    }
+    return identity;
   }
 
   /**

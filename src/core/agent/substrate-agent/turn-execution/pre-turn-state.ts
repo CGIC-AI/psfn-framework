@@ -38,6 +38,7 @@ import type { SessionActorKind } from '../../../session/turn-provenance.js';
 
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
+type TurnSessionIdentity = import('../turn-execution-runtime.js').TurnSessionIdentity;
 const MEMORY_RETRIEVAL_RECENT_ENTRY_LIMIT = 6;
 const MEMORY_RETRIEVAL_RECENT_ENTRY_MAX_CHARS = 700;
 const MEMORY_RETRIEVAL_QUERY_MAX_CHARS = 6_000;
@@ -224,6 +225,7 @@ function resolveActiveMemoryTurnDegradedReason(
 export async function prepareTurnIdentityState(input: {
   runtime: TurnExecutionRuntime;
   message: SubstrateMessage;
+  turnSessionIdentity: TurnSessionIdentity;
   turnId: TurnID;
   requestId: string;
   turnCorrelationBase: CorrelationMetadata;
@@ -234,6 +236,7 @@ export async function prepareTurnIdentityState(input: {
   const {
     runtime,
     message,
+    turnSessionIdentity,
     turnId,
     requestId,
     turnCorrelationBase,
@@ -352,7 +355,7 @@ export async function prepareTurnIdentityState(input: {
 
   runtime.emotionSelfModelRuntime.assertSelfModelRuntimeConfigured();
   const compactionWaitStartedAt = performance.now();
-  await runtime.sessionManager.awaitPendingAutoCompaction(message.channelId);
+  await runtime.sessionManager.awaitPendingAutoCompaction(turnSessionIdentity.logicalSessionId);
   observability.emitPerformanceStage('compaction_wait', {
     durationMs: Math.max(0, performance.now() - compactionWaitStartedAt),
   });
@@ -365,6 +368,7 @@ export async function prepareTurnIdentityState(input: {
     : authorContext.speakerRole === 'system'
       ? runtime.recordSystemMessage(
         message,
+        turnSessionIdentity,
         turnId,
         requestId,
         attributedSystemContent,
@@ -372,6 +376,7 @@ export async function prepareTurnIdentityState(input: {
       )
       : runtime.recordUserMessage(
         message,
+        turnSessionIdentity,
         turnId,
         requestId,
         authorContext.trustLevel,
@@ -408,7 +413,7 @@ export async function prepareTurnIdentityState(input: {
   // the internal transport channel).
   const scopeChannelId = reflectionScopeHint?.kind === 'group'
     ? reflectionScopeHint.roomId
-    : message.channelId;
+    : turnSessionIdentity.logicalSessionId;
   const recentSpeakers = runtime.sessionManager.getRecentConversationSpeakers(scopeChannelId);
   const resolvedSpeakerContactCount = reflectionScopeHint?.kind === 'group'
     ? undefined
@@ -419,7 +424,7 @@ export async function prepareTurnIdentityState(input: {
       recentSpeakers,
     })
     : runtime.sessionManager.resolveConversationScope({
-      channelId: message.channelId,
+      channelId: turnSessionIdentity.logicalSessionId,
       channelMeta,
       recentSpeakers,
       ...(resolvedSpeakerContactCount !== undefined ? { resolvedSpeakerContactCount } : {}),
@@ -456,7 +461,7 @@ export async function prepareTurnIdentityState(input: {
     continuitySubjectKey,
     attributedSystemContent,
     userSessionEntryId,
-    emotionSessionId: runtime.resolveSessionChannelId(message.channelId),
+    emotionSessionId: turnSessionIdentity.logicalSessionId,
     trustLevel: authorContext.trustLevel,
     speakerRole: authorContext.speakerRole,
     ...(authorContext.canonicalContactKey ? { canonicalContactKey: authorContext.canonicalContactKey } : {}),
@@ -554,6 +559,7 @@ export async function healStaleCapturedSessionWindow(input: {
 export async function computePreTurnState(input: {
   runtime: TurnExecutionRuntime;
   message: SubstrateMessage;
+  turnSessionIdentity: TurnSessionIdentity;
   channelType: string | undefined;
   taskKind: string | undefined;
   turnId: TurnID;
@@ -576,6 +582,7 @@ export async function computePreTurnState(input: {
   const {
     runtime,
     message,
+    turnSessionIdentity,
     channelType,
     taskKind,
     turnId,
@@ -603,7 +610,7 @@ export async function computePreTurnState(input: {
   // passes it to buildContext), and the persisted PromptPlan turn snapshot.
   const captureSessionContext = (): Promise<TurnSessionContextSnapshot> => (
     runtime.sessionManager.captureTurnSessionContext({
-      channelId: message.channelId,
+      channelId: turnSessionIdentity.logicalSessionId,
       userId: input.continuitySubjectKey,
       channelMeta,
       continuityFallbackUserIds: authorContext.continuityFallbackKeys,
@@ -614,7 +621,7 @@ export async function computePreTurnState(input: {
   const sessionContextSnapshot = await healStaleCapturedSessionWindow({
     snapshot: await captureSessionContext(),
     currentSessionEntryId,
-    channelId: message.channelId,
+    channelId: turnSessionIdentity.logicalSessionId,
     turnId,
     requestId,
     sessionManager: runtime.sessionManager,
@@ -622,7 +629,7 @@ export async function computePreTurnState(input: {
     emitTelemetry: (event, payload) => runtime.emitTelemetry(event, payload),
   });
   const memoryRetrievalContextText = buildMemoryRetrievalContextText(message, sessionContextSnapshot);
-  const sessionChannelId = runtime.resolveSessionChannelId(message.channelId);
+  const sessionChannelId = turnSessionIdentity.logicalSessionId;
   const companionId = activeMemorySurface?.createTurnRetrievalQueryEmbedding
     ? resolveCompanionIdFromConfig(runtime.config)
     : undefined;

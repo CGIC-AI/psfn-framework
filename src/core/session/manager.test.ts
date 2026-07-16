@@ -1474,6 +1474,67 @@ describe('SessionManager', () => {
     expect(context.messages.some(message => message.content.includes('continued assistant turn'))).toBe(true);
   });
 
+  it('keeps explicit turn writes on a captured API owner after the active context changes', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const sourceChannelId = 'api:transient-request';
+    const capturedOwner = 'api:captured-owner';
+    const futureOwner = 'api:future-owner';
+    const capturedSource = { sourceChannelId };
+
+    mgr.setActiveContextSession(futureOwner);
+    mgr.recordUserMessage(
+      capturedOwner,
+      'captured user turn',
+      'u1',
+      'User',
+      false,
+      undefined,
+      capturedSource,
+    );
+    mgr.recordSystemMessage(
+      capturedOwner,
+      'captured system turn',
+      'system:runtime',
+      'Runtime',
+      false,
+      undefined,
+      capturedSource,
+    );
+    mgr.recordToolObservation(
+      capturedOwner,
+      { toolName: 'test_tool', content: 'captured tool turn' },
+      false,
+      capturedSource,
+    );
+    mgr.recordAssistantMessage(
+      capturedOwner,
+      'captured assistant turn',
+      undefined,
+      false,
+      undefined,
+      capturedSource,
+    );
+    mgr.appendSystemNote(
+      capturedOwner,
+      'captured internal note',
+      'test',
+      sourceChannelId,
+    );
+
+    expect(store.getRecent(capturedOwner, 10).map(entry => entry.content)).toEqual([
+      'captured user turn',
+      'captured system turn',
+      'captured tool turn',
+      'captured assistant turn',
+      'captured internal note',
+    ]);
+    expect(store.getRecent(capturedOwner, 10).every(entry => (
+      entry.originChannelId === sourceChannelId
+    ))).toBe(true);
+    expect(store.count(futureOwner)).toBe(0);
+  });
+
   it('routes a Discord source channel to a fresh logical session without pulling pre-reset chat context', async () => {
     const config = makeConfig({ dataDir: dir, sessionMessageLimit: 20 });
     const mgr = new SessionManager(store, config);

@@ -260,6 +260,7 @@ export interface TurnExecutionRuntime {
   ) => EventMap['agent.turn.stage'];
   recordUserMessage: (
     message: SubstrateMessage,
+    turnSessionIdentity: TurnSessionIdentity,
     turnId: TurnID,
     requestId: string,
     trustLevel: TrustLevel,
@@ -269,6 +270,7 @@ export interface TurnExecutionRuntime {
   ) => number | null;
   recordSystemMessage: (
     message: SubstrateMessage,
+    turnSessionIdentity: TurnSessionIdentity,
     turnId: TurnID,
     requestId: string,
     content: string,
@@ -378,6 +380,7 @@ export interface TurnExecutionRuntime {
     correlation: CorrelationMetadata,
     taskKind: string | null,
     intent: string | null,
+    turnSessionIdentity: TurnSessionIdentity,
   ) => void;
   clearActiveTurnContext: () => void;
   setActiveTurnCorrelation: (correlation: CorrelationMetadata | null) => void;
@@ -386,6 +389,7 @@ export interface TurnExecutionRuntime {
   accumulateTurnUsage: (messages: AgentMessage[]) => TurnUsage;
   recordToolObservations: (
     message: SubstrateMessage,
+    turnSessionIdentity: TurnSessionIdentity,
     turnId: TurnID,
     requestId: string,
     turnMessages: AgentMessage[],
@@ -393,6 +397,7 @@ export interface TurnExecutionRuntime {
   ) => void;
   recordAssistantMessage: (
     message: SubstrateMessage,
+    turnSessionIdentity: TurnSessionIdentity,
     turnId: TurnID,
     requestId: string,
     responseText: string,
@@ -489,6 +494,7 @@ function summarizeFatigue(metadata: FatigueEnforcementMetadata): Record<string, 
 function evaluateRuntimeFatigue(input: {
   runtime: TurnExecutionRuntime;
   message: SubstrateMessage;
+  turnSessionIdentity: TurnSessionIdentity;
   authorContext: ResolvedAuthorContext;
   channelType: string | undefined;
   channelMeta: ChannelMeta;
@@ -510,7 +516,7 @@ function evaluateRuntimeFatigue(input: {
     localCompanionId: resolveCompanionIdFromConfig(input.runtime.config),
     message: input.message,
     authorContext: input.authorContext,
-    channelId: input.runtime.resolveSessionChannelId(input.message.channelId),
+    channelId: input.turnSessionIdentity.logicalSessionId,
     channelType: input.channelType,
     channelMeta: input.channelMeta,
     taskKind: input.taskKind,
@@ -519,7 +525,7 @@ function evaluateRuntimeFatigue(input: {
       runtime: input.runtime,
       message: input.message,
       authorContext: input.authorContext,
-      sessionChannelId: input.runtime.resolveSessionChannelId(input.message.channelId),
+      sessionChannelId: input.turnSessionIdentity.logicalSessionId,
       nowMs: input.timestampMs,
       windowMs: fatiguePolicy.overcharge.recentHumanParticipationWindowMs,
     }),
@@ -716,7 +722,7 @@ export async function handleMessageForTurn(
     : undefined;
   const turnCallType = runtime.resolveTurnCallType(message, taskKind);
   let turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
-  const activeLogicalSessionId = turnCorrelationBase.sessionId?.trim();
+  const activeLogicalSessionId = runtime.sessionManager.resolveSessionChannelId(message.channelId).trim();
   if (!activeLogicalSessionId) {
     throw new Error('Turn execution requires a logical session id');
   }
@@ -734,12 +740,28 @@ export async function handleMessageForTurn(
     sourceChannelId: message.channelId,
     logicalSessionId,
   });
-  if (logicalSessionId !== activeLogicalSessionId) {
-    turnCorrelationBase = {
-      ...turnCorrelationBase,
-      sessionId: logicalSessionId,
+  const initialCorrelationSessionId = turnCorrelationBase.sessionId?.trim();
+  const wyomingObservabilitySessionId = message.routing?.wyoming?.sessionId?.trim();
+  const correlationUsesWyomingSession = Boolean(
+    wyomingObservabilitySessionId
+    && initialCorrelationSessionId === wyomingObservabilitySessionId,
+  );
+  const turnCorrelationSessionId = recoveredResponse && !correlationUsesWyomingSession
+    ? logicalSessionId
+    : initialCorrelationSessionId || logicalSessionId;
+  turnCorrelationBase = {
+    ...turnCorrelationBase,
+    sessionId: turnCorrelationSessionId,
+    conversationId: turnCorrelationBase.icpCorrelation?.conversationId ?? turnCorrelationSessionId,
+  };
+  const rebuildTurnCorrelation = (): CorrelationMetadata => {
+    const rebuilt = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
+    return {
+      ...rebuilt,
+      sessionId: turnCorrelationSessionId,
+      conversationId: rebuilt.icpCorrelation?.conversationId ?? turnCorrelationSessionId,
     };
-  }
+  };
   const performanceCompanionId = turnCorrelationBase.companionId
     ?? runtime.config.companionId?.trim();
   void emitTurnPerformance(runtime.eventBus, {
@@ -771,7 +793,9 @@ export async function handleMessageForTurn(
   assertForegroundWorkOwned(foregroundLease);
   try {
   const startTime = Date.now();
-  const focusMemoryScopeQuery = runtime.sessionManager.getActiveFocusMemoryScopeQuery(message.channelId);
+  const focusMemoryScopeQuery = runtime.sessionManager.getActiveFocusMemoryScopeQuery(
+    turnSessionIdentity.logicalSessionId,
+  );
   const hasDeferredVisionPersistence = hasVisionTurnInputs(message);
   // A fresh inbound companion correlation is not trusted until it has been
   // bound to the resolved canonical peer below. Keep it out of L0 until that
@@ -792,6 +816,7 @@ export async function handleMessageForTurn(
   const identityState = await prepareTurnIdentityState({
     runtime,
     message,
+    turnSessionIdentity,
     turnId,
     requestId,
     turnCorrelationBase,
@@ -826,7 +851,7 @@ export async function handleMessageForTurn(
       ...message.routing,
       icpCorrelation: recoveredCorrelation,
     };
-    turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
+    turnCorrelationBase = rebuildTurnCorrelation();
   } else if (inboundIcpOrigin && !privateIcpCorrelation) {
     const localCompanionId = resolveCompanionIdFromConfig(runtime.config);
     if (inboundIcpOrigin.localCompanionId !== message.authorId
@@ -852,7 +877,7 @@ export async function handleMessageForTurn(
       ...message.routing,
       icpCorrelation: recipientCorrelation,
     };
-    turnCorrelationBase = runtime.buildTurnCorrelation(message, turnCallType, turnId, requestId);
+    turnCorrelationBase = rebuildTurnCorrelation();
   }
   let promptMode: MessagePromptOverrideMode = 'default';
   let fullPrompt = '';
@@ -881,6 +906,7 @@ export async function handleMessageForTurn(
     if (speakerRole === 'system') {
       return runtime.recordSystemMessage(
         message,
+        turnSessionIdentity,
         turnId,
         requestId,
         contentOverride ?? attributedSystemContent,
@@ -889,6 +915,7 @@ export async function handleMessageForTurn(
     }
     return runtime.recordUserMessage(
       message,
+      turnSessionIdentity,
       turnId,
       requestId,
       trustLevel,
@@ -925,6 +952,7 @@ export async function handleMessageForTurn(
       : evaluateRuntimeFatigue({
           runtime,
           message,
+          turnSessionIdentity,
           authorContext,
           channelType,
           channelMeta,
@@ -1040,6 +1068,7 @@ export async function handleMessageForTurn(
     const preTurnState = await computePreTurnState({
       runtime,
       message,
+      turnSessionIdentity,
       channelType,
       taskKind,
       turnId,
@@ -1087,6 +1116,7 @@ export async function handleMessageForTurn(
     const promptAssembly = await assembleTurnPrompt({
       runtime,
       message,
+      turnSessionIdentity,
       channelType,
       taskKind,
       channelMeta,
@@ -1133,6 +1163,7 @@ export async function handleMessageForTurn(
         return await invokeAgentForTurn({
           runtime,
           message,
+          turnSessionIdentity,
           context: promptAssembly.context,
           providerSystemPrompt: promptAssembly.providerSystemPrompt,
           piMessages: promptAssembly.piMessages,
@@ -1275,8 +1306,10 @@ export async function handleMessageForTurn(
           ...runtime.withCorrelationPurpose(turnCorrelationBase, 'broadcast.approval.required'),
         });
         runtime.sessionManager.appendSystemNote(
-          message.channelId,
+          turnSessionIdentity.logicalSessionId,
           `Broadcast draft held for approval (${classification.signals.join(', ') || 'risk'} risk).`,
+          'appendSystemNote',
+          turnSessionIdentity.sourceChannelId,
         );
         safeResponseText = '';
       }
@@ -1328,6 +1361,7 @@ export async function handleMessageForTurn(
 
     runtime.recordToolObservations(
       message,
+      turnSessionIdentity,
       turnId,
       requestId,
       turnMessages,
@@ -1472,6 +1506,7 @@ export async function handleMessageForTurn(
         : undefined;
       assistantSessionEntryId = runtime.recordAssistantMessage(
         message,
+        turnSessionIdentity,
         turnId,
         requestId,
         safeResponseText,
@@ -1600,7 +1635,12 @@ export async function handleMessageForTurn(
       const toolSummary = runtime.buildTurnToolSummary(turnMessages);
       const nudge = runtime.evaluateReflectionNudge(toolSummary);
       if (nudge) {
-        runtime.sessionManager.appendSystemNote(message.channelId, nudge);
+        runtime.sessionManager.appendSystemNote(
+          turnSessionIdentity.logicalSessionId,
+          nudge,
+          'appendSystemNote',
+          turnSessionIdentity.sourceChannelId,
+        );
       }
     }
     assertForegroundWorkOwned(foregroundLease);

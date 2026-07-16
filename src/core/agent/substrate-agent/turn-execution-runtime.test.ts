@@ -59,7 +59,10 @@ import { buildTurnUserContent } from './vision-attachments.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
 import { backfillLegacyTurnId, createTurnId } from '../../turns/id.js';
 import { parseIcpRecoveryResponse } from '../../session/icp-delivery-recovery.js';
-import { buildSessionMetadataWithTurn } from '../../session/turn-provenance.js';
+import {
+  buildSessionMetadataWithTurn,
+  resolveSessionEntryTurnContext,
+} from '../../session/turn-provenance.js';
 import { runWithChargeContext } from '../../../shared/telemetry/run-charge.js';
 import { resolveTaskKind as resolveChannelTaskKind } from './channel-routing-runtime.js';
 import { createInteractiveTerminalMessage } from '../../../app/cli/interactive-terminal-message.js';
@@ -610,6 +613,7 @@ function createRuntime(params: {
       findRecordedTurn: vi.fn(() => null),
       findSourceRecordedTurn: vi.fn(() => null),
       findUniqueSourceRecordedTurn: vi.fn(() => null),
+      resolveSessionChannelId: vi.fn((channelId: string) => channelId),
       appendSystemNote: vi.fn(),
       awaitPendingAutoCompaction: params.awaitPendingAutoCompaction,
       scheduleAutoCompactionBetweenTurns: params.scheduleAutoCompactionBetweenTurns,
@@ -844,6 +848,8 @@ function createPersistenceBackedRuntime(
     )),
   });
   runtime.sessionManager.recordTurn = sessionManager.recordTurn.bind(sessionManager);
+  runtime.recordSystemMessage = turnSupportRuntime.recordSystemMessage.bind(turnSupportRuntime);
+  runtime.recordToolObservations = turnSupportRuntime.recordToolObservations.bind(turnSupportRuntime);
   runtime.buildTurnRecord = turnSupportRuntime.buildTurnRecord.bind(turnSupportRuntime);
   runtime.extractResponseText = vi.fn(() => {
     const latestAssistant = [...(runtime.agent.state.messages as any[])]
@@ -859,7 +865,7 @@ function createPersistenceBackedRuntime(
         : '';
   });
 
-  return { runtime, store, sessionManager };
+  return { runtime, store, sessionManager, turnSupportRuntime };
 }
 
 describe('handleMessageForTurn intentional no-reply', () => {
@@ -991,7 +997,7 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
 
     expect(response.content).toBe('the kettle is on\ntea in five');
     expect(recordAssistantMessage).toHaveBeenCalledTimes(1);
-    expect(recordAssistantMessage.mock.calls[0]?.[3]).toBe('the kettle is on\ntea in five');
+    expect(recordAssistantMessage.mock.calls[0]?.[4]).toBe('the kettle is on\ntea in five');
   });
 
   it('leaves a stamp quoted mid-sentence in the reply untouched', async () => {
@@ -1019,7 +1025,7 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
     const response = await handleMessageForTurn(runtime, createMessage('msg-quoted-stamp'));
 
     expect(response.content).toBe(quoted);
-    expect(recordAssistantMessage.mock.calls[0]?.[3]).toBe(quoted);
+    expect(recordAssistantMessage.mock.calls[0]?.[4]).toBe(quoted);
   });
 
   it('rejects an image-attachment claim when no attachment exists this turn', async () => {
@@ -1051,7 +1057,7 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
       + 'I need to call selfie_create or generate_image before saying an image is attached.';
     expect(response.content).toBe(correction);
     expect(response.attachments).toBeUndefined();
-    expect(recordAssistantMessage.mock.calls[0]?.[3]).toBe(correction);
+    expect(recordAssistantMessage.mock.calls[0]?.[4]).toBe(correction);
     expect(runtime.emitTelemetry).toHaveBeenCalledWith(
       'agent.image_attachment_claim.rejected',
       expect.objectContaining({
@@ -1137,6 +1143,7 @@ describe('handleMessageForTurn generated media delivery', () => {
     expect(response.attachments).toEqual([expectedAttachment]);
     expect(runtime.recordToolObservations).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'msg-generated-media' }),
+      expect.objectContaining({ sourceChannelId: 'ch1', logicalSessionId: 'ch1' }),
       expect.any(String),
       'msg-generated-media',
       expect.arrayContaining([
@@ -1232,6 +1239,7 @@ describe('handleMessageForTurn generated media delivery', () => {
     expect(response.attachments).toEqual([expectedAttachment]);
     expect(runtime.recordToolObservations).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'msg-missed-tool-result' }),
+      expect.objectContaining({ sourceChannelId: 'ch1', logicalSessionId: 'ch1' }),
       expect.any(String),
       'msg-missed-tool-result',
       expect.not.arrayContaining([
@@ -2363,7 +2371,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       .mockImplementation((evaluation, input) => originalRecord(evaluation, input));
     let durableResponse: AgentResponse | undefined;
     const recordAssistantMessage = vi.fn((...args: unknown[]) => {
-      durableResponse = args[7] as AgentResponse;
+      durableResponse = args[8] as AgentResponse;
       return 2;
     });
     const reserve = vi.fn(async () => ({
@@ -3091,7 +3099,7 @@ function expectProductionEmotionSnapshotUnchanged(result: Awaited<ReturnType<typ
   for (const call of result.computeInternalStateForTurn.mock.calls) {
     expect(call[0].emotionSnapshot).toEqual(TEST_EMOTION_SNAPSHOT);
   }
-  expect(result.recordAssistantMessage.mock.calls[0]?.[6]).toEqual(TEST_EMOTION_SNAPSHOT);
+  expect(result.recordAssistantMessage.mock.calls[0]?.[7]).toEqual(TEST_EMOTION_SNAPSHOT);
 }
 
 async function captureObserverSidecarInput(
@@ -3823,12 +3831,21 @@ describe('handleMessageForTurn compaction scheduling', () => {
       maybeExtract: vi.fn(async () => undefined),
       getBoundedExtractionSnapshotLimit: () => 10,
     };
+    runtime.skillsRuntime = {} as TurnExecutionRuntime['skillsRuntime'];
+    runtime.evaluateReflectionNudge = vi.fn(() => 'Old-turn reflection nudge.');
     const promptStarted = createDeferred<void>();
     const releasePrompt = createDeferred<void>();
     runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
       (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
       promptStarted.resolve();
       await releasePrompt.promise;
+      (runtime.agent.state.messages as any[]).push({
+        role: 'toolResult',
+        toolCallId: 'call-turn-start-owner',
+        toolName: 'contact',
+        content: [{ type: 'text', text: 'Old-turn tool observation.' }],
+        isError: false,
+      });
       (runtime.agent.state.messages as any[]).push({
         role: 'assistant',
         content: [{ type: 'text', text: 'assistant reply' }],
@@ -3851,47 +3868,143 @@ describe('handleMessageForTurn compaction scheduling', () => {
       reason: 'move only future turns to a new logical session',
       mode: 'fresh_split',
     });
-    releasePrompt.resolve();
-    await expect(inFlight).rejects.toThrow('injected routed enqueue failure');
-
-    const physicalRecords = store.getRecentSourceTurnRecords(sourceChannelId, 10);
-    expect(physicalRecords).toHaveLength(1);
-    expect(physicalRecords[0]).toMatchObject({
-      channelId: sourceChannelId,
-      sessionId: turnStartLogicalSessionId,
-      status: 'completed',
-    });
-    const exactManifest = parseTurnRecordBackgroundWorkHandoff(physicalRecords[0]!);
-    expect(exactManifest).toHaveLength(4);
-    expect(new Set(exactManifest.map(job => job.logicalSessionId))).toEqual(
-      new Set([turnStartLogicalSessionId]),
+    const {
+      runtime: futureRuntime,
+      sessionManager: futureSessionManager,
+    } = createPersistenceBackedRuntime(dataDir, eventBus);
+    futureRuntime.sessionManager = futureSessionManager;
+    futureRuntime.resolveSessionChannelId = channelId => (
+      futureSessionManager.resolveSessionChannelId(channelId)
     );
-    const recoveryEnqueue = vi.fn(async () => undefined);
-    expect(await sessionManager.recoverPendingBackgroundWorkHandoffs(
-      1,
-      async record => recoveryEnqueue(parseTurnRecordBackgroundWorkHandoff(record)),
-    )).toBe(1);
-    expect(recoveryEnqueue).toHaveBeenCalledOnce();
-    expect(recoveryEnqueue).toHaveBeenCalledWith(exactManifest);
-    expect(await sessionManager.recoverPendingBackgroundWorkHandoffs(
-      1,
-      async record => recoveryEnqueue(parseTurnRecordBackgroundWorkHandoff(record)),
-    )).toBe(0);
-
-    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
-      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
-      (runtime.agent.state.messages as any[]).push({
+    futureRuntime.buildTurnCorrelation = (turnMessage, callType, turnId, requestId) => ({
+      callType,
+      purpose: 'agent.turn',
+      turnId,
+      requestId,
+      channelId: turnMessage.channelId,
+      sessionId: futureSessionManager.resolveSessionChannelId(turnMessage.channelId),
+    });
+    futureRuntime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      (futureRuntime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (futureRuntime.agent.state.messages as any[]).push({
         role: 'assistant',
         content: [{ type: 'text', text: 'future reply' }],
       });
     });
-    await expect(handleMessageForTurn(runtime, createMessage('msg-future-route', {
+    await expect(handleMessageForTurn(futureRuntime, createMessage('msg-future-route', {
       channelId: sourceChannelId,
       channelType: 'discord',
       isDirectMessage: false,
+      content: 'Future routed turn.',
     }))).resolves.toMatchObject({ content: 'future reply' });
-    expect(store.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.sessionId))
-      .toEqual([turnStartLogicalSessionId, futureRoute.newLogicalSessionId]);
+    releasePrompt.resolve();
+    await expect(inFlight).rejects.toThrow('injected routed enqueue failure');
+
+    const physicalRecords = store.getRecentSourceTurnRecords(sourceChannelId, 10);
+    const oldTurnRecords = physicalRecords.filter(record => record.requestId === 'msg-routed-handoff');
+    expect(oldTurnRecords).toHaveLength(1);
+    expect(oldTurnRecords[0]).toMatchObject({
+      channelId: sourceChannelId,
+      sessionId: turnStartLogicalSessionId,
+      status: 'completed',
+    });
+    const exactManifest = parseTurnRecordBackgroundWorkHandoff(oldTurnRecords[0]!);
+    expect(exactManifest).toHaveLength(4);
+    expect(new Set(exactManifest.map(job => job.logicalSessionId))).toEqual(
+      new Set([turnStartLogicalSessionId]),
+    );
+    const executedRecoveryJobs: string[] = [];
+    expect(await sessionManager.recoverPendingBackgroundWorkHandoffs(
+      1,
+      async (record) => {
+        const jobs = parseTurnRecordBackgroundWorkHandoff(record);
+        executedRecoveryJobs.push(...jobs.map(job => job.kind));
+        await liveEnqueue(jobs);
+      },
+    )).toBe(1);
+    expect(executedRecoveryJobs).toEqual(exactManifest.map(job => job.kind));
+    expect(liveEnqueue).toHaveBeenNthCalledWith(2, exactManifest);
+    expect(await sessionManager.recoverPendingBackgroundWorkHandoffs(
+      1,
+      async record => liveEnqueue(parseTurnRecordBackgroundWorkHandoff(record)),
+    )).toBe(0);
+
+    const oldTurnEntries = sessionManager.getRecentSessionEntries(turnStartLogicalSessionId, 20)
+      .filter(entry => resolveSessionEntryTurnContext(entry).requestId === 'msg-routed-handoff');
+    expect(oldTurnEntries.map(entry => entry.role)).toEqual(['user', 'tool', 'assistant']);
+    expect(oldTurnEntries.every(entry => entry.originChannelId === sourceChannelId)).toBe(true);
+    expect(sessionManager.getRecentSessionEntries(turnStartLogicalSessionId, 20)).toContainEqual(
+      expect.objectContaining({
+        role: 'system',
+        content: 'Old-turn reflection nudge.',
+        originChannelId: sourceChannelId,
+      }),
+    );
+    const futureOwnerEntries = futureSessionManager.getRecentSessionEntries(
+      futureRoute.newLogicalSessionId,
+      20,
+    );
+    expect(futureOwnerEntries.filter(entry => (
+      resolveSessionEntryTurnContext(entry).requestId === 'msg-routed-handoff'
+    ))).toEqual([]);
+    expect(futureOwnerEntries.some(entry => entry.content === 'Old-turn reflection nudge.')).toBe(false);
+    expect(futureOwnerEntries.filter(entry => (
+      resolveSessionEntryTurnContext(entry).requestId === 'msg-future-route'
+    )).map(entry => entry.role)).toEqual(['user', 'assistant']);
+    expect(new Set(store.getRecentSourceTurnRecords(sourceChannelId, 10).map(record => record.sessionId)))
+      .toEqual(new Set([turnStartLogicalSessionId, futureRoute.newLogicalSessionId]));
+  });
+
+  it('keeps a distinct Wyoming observability session out of durable turn ownership', async () => {
+    const dataDir = makeTempDir();
+    const eventBus = new EventBus();
+    const {
+      runtime,
+      store,
+      sessionManager,
+      turnSupportRuntime,
+    } = createPersistenceBackedRuntime(dataDir, eventBus);
+    const emitSpy = vi.spyOn(eventBus, 'emit');
+    const sourceChannelId = 'api:wyoming:office';
+    const observabilitySessionId = 'wyoming-observability:office';
+    runtime.sessionManager = sessionManager;
+    runtime.resolveSessionChannelId = channelId => sessionManager.resolveSessionChannelId(channelId);
+    runtime.buildTurnCorrelation = turnSupportRuntime.buildTurnCorrelation.bind(turnSupportRuntime);
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'assistant reply' }],
+      });
+    });
+
+    await expect(handleMessageForTurn(runtime, createMessage('msg-wyoming-owner', {
+      channelId: sourceChannelId,
+      channelType: 'api',
+      routing: {
+        source: 'wyoming',
+        wyoming: { sessionId: observabilitySessionId },
+      },
+    }))).resolves.toMatchObject({ content: 'assistant reply' });
+
+    expect(emitSpy).toHaveBeenCalledWith('agent.turn.end', expect.objectContaining({
+      sessionId: observabilitySessionId,
+    }));
+    const records = store.getRecentSourceTurnRecords(sourceChannelId, 10);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      channelId: sourceChannelId,
+      sessionId: sourceChannelId,
+      status: 'completed',
+    });
+    expect(parseTurnRecordBackgroundWorkHandoff(records[0]!).every(job => (
+      job.logicalSessionId === sourceChannelId
+      && job.sourceChannelId === sourceChannelId
+    ))).toBe(true);
+    expect(sessionManager.getRecentSessionEntries(sourceChannelId, 10)
+      .filter(entry => resolveSessionEntryTurnContext(entry).requestId === 'msg-wyoming-owner')
+      .map(entry => entry.role)).toEqual(['user', 'assistant']);
+    expect(sessionManager.getRecentSessionEntries(observabilitySessionId, 10)).toEqual([]);
   });
 
   it('replays the exact TurnRecord handoff after a record-to-queue crash gap', async () => {
@@ -4074,6 +4187,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
         authorName: taskKind === 'heartbeat' ? 'Scheduler' : 'Whisper',
         content: `${taskKind} run`,
       }),
+      expect.objectContaining({ sourceChannelId: channelId, logicalSessionId: channelId }),
       expect.any(String),
       expect.any(String),
       `[SYSTEM: ${taskKind === 'heartbeat' ? 'Scheduler' : 'Whisper'}] ${taskKind} run`,
@@ -4141,6 +4255,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(recordUserMessage).not.toHaveBeenCalled();
     expect(recordSystemMessage).toHaveBeenCalledWith(
       expect.anything(),
+      expect.objectContaining({ sourceChannelId: 'ch1', logicalSessionId: 'ch1' }),
       expect.any(String),
       expect.any(String),
       '[SYSTEM: Runtime] tool notify is unavailable; choose another route',
@@ -4211,6 +4326,10 @@ describe('handleMessageForTurn compaction scheduling', () => {
         authorId: 'discord-user-1',
         authorName: 'Alex',
       }),
+      expect.objectContaining({
+        sourceChannelId: 'discord:dm:alex',
+        logicalSessionId: 'discord:dm:alex',
+      }),
       expect.any(String),
       expect.any(String),
       'trusted',
@@ -4222,6 +4341,10 @@ describe('handleMessageForTurn compaction scheduling', () => {
       expect.objectContaining({
         channelId: 'discord:dm:alex',
         authorId: 'discord-user-1',
+      }),
+      expect.objectContaining({
+        sourceChannelId: 'discord:dm:alex',
+        logicalSessionId: 'discord:dm:alex',
       }),
       expect.any(String),
       expect.any(String),
@@ -4566,6 +4689,10 @@ describe('handleMessageForTurn compaction scheduling', () => {
         authorId: '388908766306893854',
         authorName: 'Vega',
         content: 'can you hear us?',
+      }),
+      expect.objectContaining({
+        sourceChannelId: '123456789012345678',
+        logicalSessionId: '123456789012345678',
       }),
       expect.any(String),
       'msg-group-current',
@@ -5860,7 +5987,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       'A catgirl sits on a server rack holding a pink rifle.',
     );
     expect(recordUserMessage).toHaveBeenCalledTimes(1);
-    const persistedUserContent = recordUserMessage.mock.calls[0]?.[5] as string;
+    const persistedUserContent = recordUserMessage.mock.calls[0]?.[6] as string;
     expect(persistedUserContent).toContain('do you see it?');
     expect(persistedUserContent).toContain('---\nImage attachment:');
     expect(persistedUserContent).toContain('Description (untrusted image-derived data): A catgirl sits on a server rack holding a pink rifle.');
@@ -5940,7 +6067,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     }));
 
     expect(analyze).toHaveBeenCalledTimes(3);
-    const persistedUserContent = recordUserMessage.mock.calls[0]?.[5] as string;
+    const persistedUserContent = recordUserMessage.mock.calls[0]?.[6] as string;
     expect(persistedUserContent).toContain('what did i send?');
     expect(persistedUserContent).toContain('---\nImage attachment:');
     expect(persistedUserContent).toContain(

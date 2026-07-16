@@ -124,6 +124,12 @@ const MAX_FALLBACK_RECENT_SUMMARY_ITEM_CHARS = 140;
 export interface SessionMessageRecordOptions {
   trustLevel?: TrustLevel;
   mirror?: boolean;
+  /**
+   * Immutable physical provenance for a write whose `channelId` is already
+   * the captured logical owner. Turn execution uses this to prevent a live
+   * route reset from rebinding an in-flight row while retaining its source.
+   */
+  sourceChannelId?: string;
   turnId?: TurnID;
   requestId?: string;
   sourceMessageId?: string;

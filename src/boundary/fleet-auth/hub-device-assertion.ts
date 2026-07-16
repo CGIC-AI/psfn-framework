@@ -34,6 +34,7 @@ export interface HubDeviceAssertionExpectedBinding {
   enrollmentVersion: number;
   enrollmentStatus: 'active' | 'revoked';
   companionId: string;
+  sessionId: string;
 }
 
 export interface HubDeviceAssertionReplayStore {
@@ -113,6 +114,10 @@ export async function verifyAndConsumeHubDeviceAssertion(input: {
   }
 
   const claims = parseClaims(compact.encodedClaims);
+  const expectedSessionId = requireToken(
+    input.expected.sessionId,
+    'Hub device assertion expected sessionId',
+  );
   if (claims.iss !== parsedConfig.issuer) throw new Error('Hub device assertion issuer does not match');
   if (claims.aud !== parsedConfig.audience) throw new Error('Hub device assertion audience does not match');
   if (claims.companion_id !== input.expected.companionId) {
@@ -120,6 +125,9 @@ export async function verifyAndConsumeHubDeviceAssertion(input: {
   }
   if (claims.device_id !== input.expected.deviceId) {
     throw new Error('Hub device assertion device binding does not match');
+  }
+  if (claims.session_id !== expectedSessionId) {
+    throw new Error('Hub device assertion session binding does not match');
   }
   if (claims.enrollment_version !== input.expected.enrollmentVersion) {
     throw new Error('Hub device assertion enrollment version is stale');

@@ -407,6 +407,17 @@ async function prepareContactMutation(
     `, [decision.companionId, decision.canonicalContactId]);
     if (collision.rows[0]?.present === true) deny('canonical_contact_collision');
   }
+  const ownerGrant = await client.query<{ grant_id: string; role: string }>(`
+    SELECT grant_id, role
+    FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+    WHERE principal_id = $1 AND companion_id = $2
+      AND lifecycle = 'active' AND restore_state = 'live'
+    FOR UPDATE
+  `, [decision.target.principalId, decision.companionId]);
+  const owner = ownerGrant.rows.find(row => row.role === 'owner');
+  if (owner) {
+    await assertNotLastOwner(client, decision.companionId, owner.grant_id, owner.role);
+  }
   const bindingIds = live.map(row => row.binding_id);
   return {
     affectedPrincipalIds: [decision.target.principalId],

@@ -7,6 +7,7 @@ export const REQUEST_CAPABILITY_ASSERTION_HEADERS = Object.freeze([
   'x-psfn-capability-audience',
   'x-psfn-capability-decision',
   'x-psfn-capability-jti',
+  'x-psfn-capability-context',
 ] as const);
 
 /**

@@ -22,7 +22,6 @@ import {
 } from './transport-client.js';
 import type { GardenAdminTransportClientEndpoint } from './transport-paths.js';
 import { validateAdminAuthStartupPolicy } from './auth-policy.js';
-import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import { parseAdminJsonBody } from './request-body.js';
 import { parseConfirmationResolveRequest } from './confirmation-resolve-request.js';
 import type { ConfirmationOperatorAuthContext } from './admin-contract.js';
@@ -32,6 +31,15 @@ import {
   validateGardenRequestMetadata,
 } from '../../boundary/fleet-auth/request-capability-target.js';
 import { stripBrowserRequestCapabilityHeaders } from '../../boundary/fleet-auth/request-capability-transport.js';
+import {
+  admitFleetGardenRequest,
+  buildGardenCapabilityHeaders,
+  isLegacyTokenGardenAdmission,
+  readFleetGardenBody,
+  resolveGardenAdmissionMode,
+  type GardenAdmissionMode,
+} from './garden-admission.js';
+import type { GardenFleetChildAssertionClient } from './fleet-child-assertion-client.js';
 
 const log = createComponentLogger('GardenOperatorSurface');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -54,6 +62,8 @@ export interface GardenOperatorSurfaceConfig {
    * from this surface and stay pending (fail closed).
    */
   operatorConfirmationResolver?: GatewayOperatorConfirmationClient;
+  /** Authenticated operator→gateway exchange for an exact agent-audience child capability. */
+  fleetChildAssertions?: GardenFleetChildAssertionClient;
 }
 
 /**
@@ -89,8 +99,16 @@ export class GardenOperatorSurface implements Lifecycle {
   private readonly server: Server;
   private readonly transport: AdminServerTransport;
   private readonly proxy: GardenAdminTransportProxy;
+  private readonly admission: GardenAdmissionMode;
 
   constructor(private readonly config: GardenOperatorSurfaceConfig) {
+    const modeSelection = {
+      fleetAuthVerifier: config.config.fleetAuthVerifier,
+      companionId: config.config.companionId,
+      audience: 'operator' as const,
+      token: config.token,
+    };
+    this.admission = resolveGardenAdmissionMode(modeSelection);
     this.transport = new AdminServerTransport(log);
     this.proxy = new GardenAdminTransportProxy(config.transportEndpoint);
     this.server = createServer((req, res) => this.handleRequest(req, res));
@@ -102,25 +120,17 @@ export class GardenOperatorSurface implements Lifecycle {
   }
 
   async start(): Promise<void> {
-    assertFleetAuthLegacySurfacesUnavailable({
-      fleetAuthEnabled: this.config.config.fleetAuthVerifier !== undefined
-        || this.config.config.fleetAuth !== undefined,
-      processMode: 'operator',
-      env: {
-        ADMIN_PORT: String(this.config.port),
-        ...(this.config.token ? { ADMIN_TOKEN: this.config.token } : {}),
-        ...(this.config.allowInsecureWithoutToken ? { ADMIN_ALLOW_INSECURE: 'true' } : {}),
-      },
-    });
     const host = this.config.host ?? '127.0.0.1';
-    validateAdminAuthStartupPolicy({
-      host,
-      port: this.config.port,
-      token: this.config.token,
-      allowInsecureWithoutToken: this.config.allowInsecureWithoutToken,
-      componentLabel: 'Garden operator surface',
-      logger: log,
-    });
+    if (isLegacyTokenGardenAdmission(this.admission)) {
+      validateAdminAuthStartupPolicy({
+        host,
+        port: this.config.port,
+        token: this.config.token,
+        allowInsecureWithoutToken: this.config.allowInsecureWithoutToken,
+        componentLabel: 'Garden operator surface',
+        logger: log,
+      });
+    }
 
     return await new Promise((resolve, reject) => {
       const onError = (error: NodeJS.ErrnoException) => {
@@ -161,8 +171,20 @@ export class GardenOperatorSurface implements Lifecycle {
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
+    if (this.admission.kind === 'fleet-principal') {
+      void this.handleFleetRequest(req, res);
+      return;
+    }
+    this.dispatchRequest(req, res, this.config.token);
+  }
+
+  private dispatchRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    token: string | undefined,
+  ): void {
     handleAdminRequest(req, res, {
-      token: this.config.token,
+      token,
       checkAuth: (request, response) => checkAdminRequestAuth(request, response, this.config.token),
       isGardenUiEnabled: () => this.transport.isGardenUiEnabled(),
       serveGardenBuildAsset: (path, request, response) => this.transport.serveGardenBuildAsset(path, request, response),
@@ -179,6 +201,10 @@ export class GardenOperatorSurface implements Lifecycle {
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    if (this.admission.kind === 'fleet-principal') {
+      void this.handleFleetUpgrade(req, socket, head);
+      return;
+    }
     stripBrowserRequestCapabilityHeaders(req.headers);
     let target;
     try {
@@ -208,6 +234,93 @@ export class GardenOperatorSurface implements Lifecycle {
     }
 
     this.proxy.handleTelemetryUpgrade(req, socket, head);
+  }
+
+  private async handleFleetRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let body: Buffer | null;
+    try {
+      body = await readFleetGardenBody(req, res, {
+        maxBytes: ADMIN_MAX_BODY_SIZE,
+        logger: log,
+      });
+    } catch (error) {
+      log.error('Fleet Garden request body read failed', { error: toErrorMessage(error) });
+      if (!res.writableEnded && !res.destroyed) sendText(res, 500, 'Internal Server Error');
+      return;
+    }
+    if (body === null) return;
+    const admitted = await admitFleetGardenRequest({
+      admission: this.admission as Extract<GardenAdmissionMode, { kind: 'fleet-principal' }>,
+      rawTarget: req.url ?? '/',
+      method: req.method ?? 'GET',
+      headers: req.headers,
+      body,
+    });
+    if (admitted.decision === 'deny') {
+      sendText(res, admitted.status, admitted.message);
+      return;
+    }
+    if (!admitted.target.canonicalPath.startsWith('/api/admin/')) {
+      this.dispatchRequest(req, res, undefined);
+      return;
+    }
+    if (!admitted.authority || !this.config.fleetChildAssertions) {
+      sendText(res, 503, 'Fleet child assertion exchange unavailable');
+      return;
+    }
+    try {
+      const child = await this.config.fleetChildAssertions.exchange({
+        parentToken: admitted.authority.token,
+        parentContext: admitted.authority.context,
+        target: admitted.target,
+      });
+      this.proxy.proxyBufferedApiRequest(
+        req,
+        res,
+        admitted.target.body,
+        buildGardenCapabilityHeaders(child),
+      );
+    } catch (error) {
+      log.warn('Fleet child assertion exchange failed', { error: toErrorMessage(error) });
+      sendText(res, 403, 'Fleet child assertion exchange denied');
+    }
+  }
+
+  private async handleFleetUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+    const admitted = await admitFleetGardenRequest({
+      admission: this.admission as Extract<GardenAdmissionMode, { kind: 'fleet-principal' }>,
+      rawTarget: req.url ?? '/',
+      method: 'WS',
+      headers: req.headers,
+      body: Buffer.alloc(0),
+    });
+    if (admitted.decision === 'deny'
+      || !admitted.authority
+      || !admitted.verified
+      || !this.config.fleetChildAssertions) {
+      const status = admitted.decision === 'deny' ? admitted.status : 503;
+      socket.write(`HTTP/1.1 ${status} Unauthorized\r\n\r\n`);
+      socket.destroy();
+      return;
+    }
+    try {
+      const child = await this.config.fleetChildAssertions.exchange({
+        parentToken: admitted.authority.token,
+        parentContext: admitted.authority.context,
+        target: admitted.target,
+      });
+      this.proxy.handleTelemetryUpgrade(
+        req,
+        socket,
+        head,
+        buildGardenCapabilityHeaders(child),
+        admitted.verified.expiresAt,
+      );
+    } catch (error) {
+      log.warn('Fleet websocket child assertion exchange failed', { error: toErrorMessage(error) });
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+    }
   }
 
   private route(

@@ -51,6 +51,7 @@ import { TurnRunReservation } from './substrate-agent/turn-run-reservation.js';
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 import { PromptComposer } from '../identity/prompt-composer.js';
 import { PromptLayerStore } from '../identity/prompt-store.js';
+import { lifecycleKubernetesSettingsFixture } from '../../test-support/lifecycle-kubernetes-settings.js';
 
 class SubstrateAgent extends RuntimeSubstrateAgent {
   constructor(...args: ConstructorParameters<typeof RuntimeSubstrateAgent>) {
@@ -263,6 +264,7 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
     defaultContextWindow: 128_000,
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
+    lifecycleKubernetes: lifecycleKubernetesSettingsFixture(),
     modelRoster: {
       chat: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
       background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },

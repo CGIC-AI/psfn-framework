@@ -88,6 +88,9 @@ BEGIN
   UPDATE fleet_auth.passkey_credentials
   SET state = CASE WHEN state = 'revoked' THEN state ELSE 'quarantined' END,
       restore_state = 'quarantined', updated_at = clock_timestamp();
+  UPDATE fleet_auth.contact_authority_intents
+  SET state = 'quarantined', restore_state = 'quarantined',
+      updated_at = clock_timestamp();
 
   DELETE FROM fleet_auth.jit_authorization_grants;
   DELETE FROM fleet_auth.step_up_challenges;

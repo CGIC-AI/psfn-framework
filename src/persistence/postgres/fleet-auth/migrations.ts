@@ -1,6 +1,7 @@
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL } from './authority-state-lock-sql.js';
 import { FLEET_AUTH_LOCK_COMPANION_AUTHORITY_DDL_SQL } from './companion-authority-lock-sql.js';
 import { FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_DDL_SQL } from './authority-floor-read-sql.js';
+import { FLEET_AUTH_CONTACT_AUTHORITY_DDL_SQL } from './contact-authority-sql.js';
 
 export interface FleetAuthMigration {
   version: number;
@@ -1125,6 +1126,15 @@ CREATE TABLE companion_restore_import_receipts (
 );
 `;
 
+const CONTACT_AUTHORITY_FLOOR_KIND_SQL = `
+ALTER TABLE authority_floor_tombstone_projection
+  DROP CONSTRAINT authority_floor_tombstone_projection_kind_check,
+  ADD CONSTRAINT authority_floor_tombstone_projection_kind_check CHECK (kind IN (
+    'provider_subject', 'contact_binding', 'role_grant', 'principal', 'companion',
+    'contact_authority_fence', 'companion_lineage_floor'
+  ));
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
@@ -1149,5 +1159,10 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
     version: 20,
     name: 'broker_authorization_snapshot_locks',
     sql: `${FLEET_AUTH_LOCK_COMPANION_AUTHORITY_DDL_SQL}\n${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_DDL_SQL}`,
+  },
+  {
+    version: 21,
+    name: 'contact_authority_lifecycle_fences',
+    sql: `${CONTACT_AUTHORITY_FLOOR_KIND_SQL}\n${FLEET_AUTH_CONTACT_AUTHORITY_DDL_SQL}`,
   },
 ] as const;

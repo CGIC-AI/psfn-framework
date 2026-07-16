@@ -229,7 +229,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         `SELECT version, checksum FROM ${FLEET_AUTH_SCHEMA_NAME}.schema_migrations ORDER BY version`,
       );
       expect(ledger.rows.map(row => row.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
       ]);
       expect(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum))).toBe(true);
 
@@ -1652,6 +1652,8 @@ describe('fleet_auth Postgres authority boundary', () => {
     const principalId = randomUUID();
     const bindingId = randomUUID();
     const grantId = randomUUID();
+    const contactIntentId = randomUUID();
+    const contactAuditId = randomUUID();
     const hubReplayJti = randomUUID();
     const hubReplayDigest = (value: string): string => createHash('sha256').update(value).digest('hex');
     const keyA = {
@@ -1723,6 +1725,41 @@ describe('fleet_auth Postgres authority boundary', () => {
                  'pending', 1)`,
         [keyA.credentialIdHash, principalId],
       );
+      await sourceCoordinator.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_intents
+          (companion_id, intent_id, schema_version, intent_digest, action,
+           contact_id, provider_subject_id, state, authority_generation,
+           restore_state)
+        VALUES ('11111111-1111-4111-8111-111111111111', $1, 1, $2,
+                'contact.verify', 'contact-owner', '123456789012345678',
+                'active', 1, 'live')
+      `, [contactIntentId, 'c'.repeat(64)]);
+      await sourceCoordinator.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_resources
+          (companion_id, intent_id, kind, resource_id, terminal_fence)
+        VALUES ('11111111-1111-4111-8111-111111111111', $1,
+                'contact', 'contact-owner', FALSE)
+      `, [contactIntentId]);
+      await sourceCoordinator.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+          (event_id, actor_context, action, resource, decision, reason_code,
+           companion_id, authority_generation, global_auth_epoch)
+        VALUES ($1, '{"kind":"system_companion"}'::jsonb, 'contact.verify',
+                'contact_digest:backup', 'allow', 'contact_authority_reserved',
+                '11111111-1111-4111-8111-111111111111', 1, 1)
+      `, [contactAuditId]);
+      await sourceCoordinator.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_receipts
+          (companion_id, intent_id, phase, request_digest, result,
+           authority_generation, global_auth_epoch, audit_event_id, restore_state)
+        VALUES ('11111111-1111-4111-8111-111111111111', $1::uuid, 'prepare', $2::text,
+                jsonb_build_object(
+                  'schemaVersion', 1, 'intentId', $1::uuid::text, 'phase', 'prepare',
+                  'action', 'contact.verify', 'status', 'reserved',
+                  'authorityGeneration', 1, 'globalAuthEpoch', 1,
+                  'auditEventId', $3::uuid::text
+                ), 1, 1, $3::uuid, 'live')
+      `, [contactIntentId, 'd'.repeat(64), contactAuditId]);
       const hubReplayStore = new PostgresHubDeviceAssertionReplayStore(sourceRuntime);
       const hubReplayInput = {
         issuer: 'psfn-satellite-hub',
@@ -1855,6 +1892,23 @@ describe('fleet_auth Postgres authority boundary', () => {
           [principalId],
         );
         expect(principal.rows[0]).toEqual({ status: 'quarantined', restore_state: 'quarantined' });
+        const restoredContactIntent = await targetMigration.query<{
+          state: string;
+          restore_state: string;
+          receipt_restore_state: string;
+        }>(`
+          SELECT intent.state, intent.restore_state,
+                 receipt.restore_state AS receipt_restore_state
+          FROM ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_intents AS intent
+          JOIN ${FLEET_AUTH_SCHEMA_NAME}.contact_authority_receipts AS receipt
+            USING (companion_id, intent_id)
+          WHERE intent.intent_id = $1
+        `, [contactIntentId]);
+        expect(restoredContactIntent.rows[0]).toEqual({
+          state: 'quarantined',
+          restore_state: 'quarantined',
+          receipt_restore_state: 'quarantined',
+        });
         const restoredHubReplayAudit = await targetRuntime.query<{
           audit_count: string;
           replay_count: string;
@@ -1921,7 +1975,7 @@ describe('fleet_auth Postgres authority boundary', () => {
           `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
            SET state = 'active'
            WHERE provider = 'discord' AND subject_id = '123456789012345678'`,
-        )).rejects.toThrow(/permanently tombstoned/i);
+        )).rejects.toThrow(/permanently tombstoned|provider subject authority is fenced/i);
         const passkey = await targetRuntime.query<{ state: string; restore_state: string }>(
           `SELECT state, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials
            WHERE credential_id_hash = $1`,
@@ -1935,16 +1989,16 @@ describe('fleet_auth Postgres authority boundary', () => {
         await expect(targetRuntime.query(
           `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.human_principals SET status = 'active' WHERE principal_id = $1`,
           [principalId],
-        )).rejects.toThrow(/reapprove_account_authority/);
+        )).rejects.toThrow(/reapprove_account_authority|contact authority is fenced/);
         await expect(targetRuntime.query(
           `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
            SET state = 'active' WHERE binding_id = $1`,
           [bindingId],
-        )).rejects.toThrow(/reapprove_account_authority/);
+        )).rejects.toThrow(/reapprove_account_authority|contact authority is fenced/);
         await expect(targetRuntime.query(
           `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants SET lifecycle = 'active' WHERE grant_id = $1`,
           [grantId],
-        )).rejects.toThrow(/reapprove_account_authority/);
+        )).rejects.toThrow(/reapprove_account_authority|contact authority is fenced/);
 
         // The constrained ceremony also refuses this account: its provider
         // subject was tombstoned after the backup, so no reapproval can promote

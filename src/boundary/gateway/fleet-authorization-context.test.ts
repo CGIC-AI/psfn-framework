@@ -129,6 +129,18 @@ function sessionWithPrincipal(
 }
 
 describe('fleet authorization context policy', () => {
+  it('denies existing authority while its contact or provider subject is lifecycle-fenced', () => {
+    expect(decide(snapshot({
+      bindings: [{ ...snapshot().bindings[0]!, contactAuthorityFenced: true }],
+    }))).toEqual({ decision: 'deny', reasonCode: 'contact_authority_fenced' });
+    expect(decide(snapshot({
+      providerSubjects: [{
+        ...snapshot().providerSubjects[0]!,
+        contactAuthorityFenced: true,
+      }],
+    }))).toEqual({ decision: 'deny', reasonCode: 'contact_authority_fenced' });
+  });
+
   it('returns immutable, companion-local facts while keeping contact and operator authority separate', () => {
     const decision = decide();
     expect(decision).toMatchObject({

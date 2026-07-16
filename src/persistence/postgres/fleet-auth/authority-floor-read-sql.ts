@@ -20,7 +20,7 @@ SET search_path = pg_catalog, fleet_auth
 AS $$
 BEGIN
   IF p_kind NOT IN ('provider_subject', 'contact_binding', 'role_grant',
-                    'principal', 'companion')
+                    'principal', 'companion', 'contact_authority_fence')
      OR length(p_resource_id) NOT BETWEEN 1 AND 512 THEN
     RAISE EXCEPTION 'Invalid fleet_auth authority-floor resource lookup'
       USING ERRCODE = '22023';

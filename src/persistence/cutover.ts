@@ -14,6 +14,10 @@ import {
 import { createHash } from 'node:crypto';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import type { SubstrateConfig } from '../system/config/runtime-config-contracts.js';
+import {
+  PER_COMPANION_OWNER_FILES,
+  SETTINGS_SUBSYSTEMS,
+} from '../system/config/settings-contract.js';
 import { createComponentLogger } from '../shared/logger.js';
 import { writeJsonAtomic } from '../shared/utils/fs.js';
 import {
@@ -45,16 +49,6 @@ const DEFAULT_GATEWAY_AUDIT_DB_FILE_NAME = 'gateway-audit.db';
 const CUTOVER_MANIFEST_DIR = 'migrations';
 const CUTOVER_MANIFEST_PREFIX = 'persistence-cutover';
 const HASH_BUFFER_BYTES = 64 * 1024;
-
-const SYSTEM_FILE_NAMES = [
-  'settings.json',
-  'models.json',
-  'scheduler.json',
-  'capability-tier.json',
-  'channels.json',
-  'skills.json',
-  'trust-policy.json',
-] as const;
 
 type ArtifactOwner = 'system' | 'companion';
 type ArtifactKind = 'file' | 'dir';
@@ -519,13 +513,17 @@ function buildSpecs(options: PersistenceCutoverOptions): PersistenceCutoverSpec[
   const legacyCompanionDir = resolve(options.legacyCompanionDir ?? DEFAULT_LEGACY_COMPANION_DIR);
   const specs: PersistenceCutoverSpec[] = [];
 
-  for (const fileName of SYSTEM_FILE_NAMES) {
+  for (const { ownerFile: fileName } of Object.values(SETTINGS_SUBSYSTEMS)) {
+    const owner: ArtifactOwner = PER_COMPANION_OWNER_FILES.has(fileName)
+      ? 'companion'
+      : 'system';
+    const targetRoot = owner === 'companion' ? companionDataDir : systemDataDir;
     specs.push({
-      id: `system.${fileName.replaceAll(/[^A-Za-z0-9]+/g, '_')}`,
-      owner: 'system',
+      id: `${owner}.${fileName.replaceAll(/[^A-Za-z0-9]+/g, '_')}`,
+      owner,
       kind: 'file',
       description: fileName,
-      targetPath: join(systemDataDir, fileName),
+      targetPath: join(targetRoot, fileName),
       sourceCandidates: [join(legacySharedDataDir, fileName)],
     });
   }

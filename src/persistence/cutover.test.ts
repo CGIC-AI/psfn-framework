@@ -76,6 +76,31 @@ describe('persistence cutover', () => {
     expect(() => assertPersistenceCutoverReady(dirs)).toThrow('Run "npm run migrate:persistence-layout');
   });
 
+  it('routes whole owner files through the per-companion ownership registry', () => {
+    const dirs = createRoots();
+    writeJson(join(dirs.legacySharedDataDir, 'capability-tier.json'), { tier: 'nursery' });
+    writeJson(join(dirs.legacySharedDataDir, 'scheduler.json'), { tickIntervalMs: 1_000 });
+    writeJson(join(dirs.legacySharedDataDir, 'settings.json'), { sessionMessageLimit: 44 });
+
+    const result = executePersistenceCutover(dirs);
+
+    expect(existsSync(join(dirs.companionDataDir, 'capability-tier.json'))).toBe(true);
+    expect(existsSync(join(dirs.companionDataDir, 'scheduler.json'))).toBe(true);
+    expect(existsSync(join(dirs.systemDataDir, 'capability-tier.json'))).toBe(false);
+    expect(existsSync(join(dirs.systemDataDir, 'scheduler.json'))).toBe(false);
+    expect(existsSync(join(dirs.systemDataDir, 'settings.json'))).toBe(true);
+
+    const manifest = JSON.parse(readFileSync(result.manifestPath!, 'utf-8')) as {
+      entries: Array<{ id: string; status: string; backupPath?: string }>;
+    };
+    expect(manifest.entries.find(entry => entry.id === 'companion.capability_tier_json')?.status)
+      .toBe('completed_migration');
+    expect(manifest.entries.find(entry => entry.id === 'companion.scheduler_json')?.status)
+      .toBe('completed_migration');
+    expect(existsSync(join(result.backupRootDir!, 'companion', 'capability-tier.json'))).toBe(true);
+    expect(existsSync(join(result.backupRootDir!, 'companion', 'scheduler.json'))).toBe(true);
+  });
+
   it('supports dry-run without mutating legacy or target roots', () => {
     const dirs = createRoots();
     writeJson(join(dirs.legacySharedDataDir, 'settings.json'), { sessionMessageLimit: 12 });

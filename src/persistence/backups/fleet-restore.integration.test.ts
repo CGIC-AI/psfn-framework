@@ -55,6 +55,17 @@ async function freshDatabaseUrl(): Promise<string> {
   return (await harness.createDatabase()).databaseUrl;
 }
 
+async function freshFleetArtifactDatabaseUrl(): Promise<string> {
+  const databaseUrl = await freshDatabaseUrl();
+  const pool = createPostgresPool(databaseUrl, { max: 1 });
+  try {
+    await pool.query('DROP SCHEMA extensions');
+  } finally {
+    await pool.end();
+  }
+  return databaseUrl;
+}
+
 function requirePostgresClients() {
   if (!harness) throw new Error('Postgres integration harness is not available');
   return harness.clientBinaries;
@@ -234,7 +245,6 @@ describe('fleet restore against real Postgres', () => {
     const pool = createPostgresPool(databaseUrl, { schema: 'companion_alpha', max: 2 });
     try {
       await admin.query(`
-        CREATE SCHEMA extensions;
         CREATE EXTENSION vector WITH SCHEMA extensions;
         CREATE SCHEMA companion_alpha;
       `);
@@ -359,7 +369,7 @@ describe('fleet restore against real Postgres', () => {
   it('restores exact companion/shared/group scopes and rolls back collisions and partial failures', async () => {
     const root = join(tmpdir(), `psfn-fleet-restore-pg-${Date.now()}`);
     roots.push(root);
-    const sourceDatabaseUrl = await freshDatabaseUrl();
+    const sourceDatabaseUrl = await freshFleetArtifactDatabaseUrl();
     const sourcePool = createPostgresPool(sourceDatabaseUrl, { max: 1 });
     try {
       await sourcePool.query(`
@@ -432,7 +442,7 @@ describe('fleet restore against real Postgres', () => {
       groupWorkspacesRoot: join(root, 'workspaces'),
       now: () => Date.UTC(2026, 6, 14, 5, 1, 0),
     });
-    const groupTargetUrl = await freshDatabaseUrl();
+    const groupTargetUrl = await freshFleetArtifactDatabaseUrl();
     await restoreFleetGroupArtifact({
       fleetManifestPath: group.fleetManifestPath,
       destinations: {

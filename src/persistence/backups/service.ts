@@ -489,11 +489,17 @@ export async function runBackupCycle(
     const maxRotating = options.maxRotatingBackups
       ?? options.retentionCount
       ?? 9;
+    // Low-level fallback only: a caller that omits the daily tier gets no daily
+    // protection (pre-daily-tier behavior). The production path always supplies
+    // an explicit value from BackupRuntimeConfig, where an absent owner-file key
+    // resolves to DEFAULT_BACKUP_DAILY_COUNT.
+    const maxDaily = options.maxDailyBackups ?? 0;
     const maxWeekly = options.maxWeeklyBackups ?? 2;
     const maxMonthly = options.maxMonthlyBackups ?? 1;
 
     const tieredRetention = applyTieredRetention(options.backupRootDir, {
       maxRotatingBackups: maxRotating,
+      maxDailyBackups: maxDaily,
       maxWeeklyBackups: maxWeekly,
       maxMonthlyBackups: maxMonthly,
     });
@@ -602,6 +608,7 @@ export function registerScheduledBackupTask(
             characterCardHistoryPath: options.characterCardHistoryPath,
             backupRootDir: options.config.rootDir,
             maxRotatingBackups: options.config.maxRotatingBackups,
+            maxDailyBackups: options.config.maxDailyBackups,
             maxWeeklyBackups: options.config.maxWeeklyBackups,
             maxMonthlyBackups: options.config.maxMonthlyBackups,
             mirrorDir: options.config.mirrorDir,
@@ -646,6 +653,7 @@ export function registerScheduledBackupTask(
           postgresDumpCaptured: result.postgresDumpCaptured,
           copiedSessionFiles: result.copiedSessionFiles.length,
           prunedBackupDirs: result.prunedBackupDirs.length,
+          dailySlots: result.tieredRetention?.dailyCount,
           weeklySlots: result.tieredRetention?.weeklyCount,
           monthlySlots: result.tieredRetention?.monthlyCount,
           mirrored: Boolean(result.mirrorDir),
@@ -807,6 +815,7 @@ export async function runFleetBackupCycle(
 
   const retentionFields = {
     ...(options.maxRotatingBackups !== undefined ? { maxRotatingBackups: options.maxRotatingBackups } : {}),
+    ...(options.maxDailyBackups !== undefined ? { maxDailyBackups: options.maxDailyBackups } : {}),
     ...(options.maxWeeklyBackups !== undefined ? { maxWeeklyBackups: options.maxWeeklyBackups } : {}),
     ...(options.maxMonthlyBackups !== undefined ? { maxMonthlyBackups: options.maxMonthlyBackups } : {}),
     ...(!consistentSnapshotDumpPaths && options.mirrorDir !== undefined

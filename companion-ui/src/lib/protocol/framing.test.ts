@@ -17,6 +17,7 @@ describe('hub websocket framing', () => {
       deviceName: 'Phone Browser',
       satelliteId: 'phone-browser',
       audioFormat: 'text',
+      place: { id: 'office', name: 'Office' },
       identity: {
         source: 'framework',
         companion: { id: 'companion-1', name: 'Purrsephone' },
@@ -37,6 +38,7 @@ describe('hub websocket framing', () => {
         control: ['interrupt', 'presence', 'session_attach'],
         safety: ['confirmation_required', 'local_only'],
       },
+      place: { id: 'office', name: 'Office' },
     },
     { type: 'status', data: 'ready' },
     { type: 'text', data: 'audio-init' },
@@ -118,11 +120,6 @@ describe('hub websocket framing', () => {
   const clientMessages: ClientToHubMessage[] = [
     {
       type: 'hello',
-      deviceId: 'phone-browser',
-      deviceName: 'Phone Browser',
-      sessionId: 'session-1',
-      satelliteId: 'phone-browser',
-      satelliteName: 'PSFN Satellite Mobile Chat App',
       capabilities: {
         input: ['text'],
         output: ['text', 'subtitle'],
@@ -166,6 +163,11 @@ describe('hub websocket framing', () => {
   });
 
   const malformedHubFrames: Array<[string, string]> = [
+    ['session.ready discriminator only', '{"type":"session.ready"}'],
+    ['session.ready with browser credential echo', '{"type":"session.ready","sessionId":"s","channelId":"c","deviceId":"d","deviceName":"D","satelliteId":"sat","audioFormat":"text","credential":"secret"}'],
+    ['hello.ack missing capabilities', '{"type":"hello.ack","sessionId":"s","channelId":"c","deviceId":"d","deviceName":"D","satelliteId":"sat","satelliteName":"S"}'],
+    ['hello.ack malformed place', '{"type":"hello.ack","sessionId":"s","channelId":"c","deviceId":"d","deviceName":"D","satelliteId":"sat","satelliteName":"S","capabilities":{},"place":{"id":"office"}}'],
+    ['message extra trust field', '{"type":"message","data":{"role":"assistant","content":"x","trusted":true}}'],
     ['approval.requested missing id', '{"type":"approval.requested","data":{"title":"t","requestedAt":"x","redactedContext":"y","status":"pending"}}'],
     ['approval.requested wrong status', '{"type":"approval.requested","data":{"id":"1","title":"t","requestedAt":"x","redactedContext":"y","status":"approved"}}'],
     ['approval.resolved bad status', '{"type":"approval.resolved","data":{"id":"1","status":"maybe","resolvedAt":"x"}}'],
@@ -178,6 +180,14 @@ describe('hub websocket framing', () => {
 
   it.each(malformedHubFrames)('fails closed on malformed hub frame: %s', (_label, frame) => {
     expect(() => parseHubToClientMessage(frame)).toThrow(HubFramingError);
+  });
+
+  it('rejects browser authority fields from the initial hello', () => {
+    expect(() => serializeClientToHubMessage({
+      type: 'hello',
+      capabilities: {},
+      deviceId: 'forged',
+    } as unknown as ClientToHubMessage)).toThrow(HubFramingError);
   });
 
   it('rejects malformed client control messages', () => {

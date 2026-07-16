@@ -2,113 +2,116 @@ import {
   ChevronDown,
   CircleStop,
   Loader2,
+  LogIn,
+  LogOut,
   Plug,
   Settings,
+  UserRoundCog,
 } from 'lucide-react';
 import type { HubStreamState } from '../lib/stream/hub-stream.js';
 import { DrawerHeader } from './overlay-drawer.js';
 import type { MicMode } from './types.js';
 
+export type CompanionUiAccessPresentation = Readonly<{
+  state: 'loading' | 'offline' | 'signed_out' | 'signed_in' | 'guest';
+  humanLabel: string;
+  humanDetail: string;
+  guestAvailable: boolean;
+}>;
+
 export function SettingsDrawer({
-  autoConnect,
-  autoReconnect,
-  channelId,
+  access,
   connecting,
-  deviceCredential,
-  hubUrl,
   micMode,
-  sessionId,
   spriteAnimations,
   spriteEnabled,
   streamState,
-  onAutoConnectChange,
-  onAutoReconnectChange,
-  onChannelIdChange,
   onClose,
   onConnect,
   onDisconnect,
-  onDeviceCredentialChange,
-  onHubUrlChange,
+  onGuest,
+  onLogin,
+  onLogout,
   onMicModeChange,
-  onSessionIdChange,
   onSpriteAnimationsChange,
   onSpriteEnabledChange,
+  onSwitchUser,
 }: {
-  autoConnect: boolean;
-  autoReconnect: string;
-  channelId: string;
+  access: CompanionUiAccessPresentation;
   connecting: boolean;
-  deviceCredential: string;
-  hubUrl: string;
   micMode: MicMode;
-  sessionId: string;
   spriteAnimations: boolean;
   spriteEnabled: boolean;
   streamState: HubStreamState;
-  onAutoConnectChange: (value: boolean) => void;
-  onAutoReconnectChange: (value: string) => void;
-  onChannelIdChange: (value: string) => void;
   onClose: () => void;
   onConnect: () => void;
   onDisconnect: () => void;
-  onDeviceCredentialChange: (value: string) => void;
-  onHubUrlChange: (value: string) => void;
+  onGuest: () => void;
+  onLogin: () => void;
+  onLogout: () => void;
   onMicModeChange: (value: MicMode) => void;
-  onSessionIdChange: (value: string) => void;
   onSpriteAnimationsChange: (value: boolean) => void;
   onSpriteEnabledChange: (value: boolean) => void;
+  onSwitchUser: () => void;
 }) {
+  const attached = streamState.session;
   return (
     <aside className="overlay-drawer" aria-label="Settings">
       <DrawerHeader icon={<Settings aria-hidden />} title="Settings" onClose={onClose} />
       <div className="drawer-content">
+        <section className="settings-section" aria-label="Account and device authority">
+          <h2>Account</h2>
+          <ReadOnlyAuthority label="Human" value={access.humanLabel} detail={access.humanDetail} />
+          <ReadOnlyAuthority
+            label="Device"
+            value={attached?.deviceName ?? 'Not attached'}
+            detail={attached?.deviceId ? 'Verified by Satellite Hub' : 'No current device authority'}
+          />
+          <ReadOnlyAuthority
+            label="Place"
+            value={attached?.place?.name ?? 'Not available'}
+            detail={attached?.place ? 'Server-owned enrollment place' : 'No current place authority'}
+          />
+          <p>Human login and enrolled device/place authority remain separate. Connecting or signing in never claims primary embodiment.</p>
+          <div className="drawer-actions">
+            {access.state === 'signed_out' && (
+              <button className="primary-action" type="button" onClick={onLogin}>
+                <LogIn aria-hidden /> Sign in with Discord
+              </button>
+            )}
+            {access.state === 'signed_out' && access.guestAvailable && (
+              <button type="button" onClick={onGuest}><Plug aria-hidden /> Continue as guest</button>
+            )}
+            {access.state === 'signed_in' && (
+              <button type="button" onClick={onSwitchUser}><UserRoundCog aria-hidden /> Switch user</button>
+            )}
+            {(access.state === 'signed_in' || access.state === 'guest') && (
+              <button type="button" onClick={onLogout}><LogOut aria-hidden /> Log out</button>
+            )}
+          </div>
+        </section>
+
         <section className="settings-section">
           <h2>Connection</h2>
-          <LabelledInput label="Hub URL" value={hubUrl} onChange={onHubUrlChange} placeholder="ws://hub.local:8787/" />
-          <LabelledInput label="Session" value={sessionId} onChange={onSessionIdChange} />
-          <LabelledInput label="Channel" value={channelId} onChange={onChannelIdChange} placeholder="optional" />
-          <LabelledInput
-            label="Device enrollment token"
-            value={deviceCredential}
-            onChange={onDeviceCredentialChange}
-            placeholder="required for room identity"
-            type="password"
-          />
-          <p>The token stays in this page's memory and is sent only during connection.</p>
-          <ToggleRow label="Auto-connect on start" checked={autoConnect} onChange={onAutoConnectChange} />
-          <label className="field-label">
-            <span>Reconnect behavior</span>
-            <select value={autoReconnect} onChange={(event) => onAutoReconnectChange(event.target.value)}>
-              <option value="exponential">Exponential backoff</option>
-              <option value="manual">Manual only</option>
-            </select>
-          </label>
+          <p>The WebSocket path, device, place, session, and channel are supplied by the same-origin gateway and authenticated Hub. They are never editable here.</p>
           <div className="drawer-actions">
-            <button className="primary-action" type="button" onClick={onConnect} disabled={!hubUrl || connecting}>
+            <button
+              className="primary-action"
+              type="button"
+              onClick={onConnect}
+              disabled={access.state === 'loading' || access.state === 'offline' || access.state === 'signed_out' || connecting}
+            >
               {connecting ? <Loader2 aria-hidden className="spin" /> : <Plug aria-hidden />}
-              Connect
+              Reconnect with fresh authority
             </button>
             <button type="button" onClick={onDisconnect} disabled={streamState.connection === 'idle'}>
-              <CircleStop aria-hidden />
-              Close
+              <CircleStop aria-hidden /> Close
             </button>
           </div>
         </section>
 
         <section className="settings-section">
           <h2>Audio</h2>
-          <label className="field-label">
-            <span>Microphone input</span>
-            <select defaultValue="default">
-              <option value="default">Default microphone</option>
-            </select>
-          </label>
-          <label className="field-label">
-            <span>Speaker output</span>
-            <select defaultValue="default">
-              <option value="default">Default speakers</option>
-            </select>
-          </label>
           <SegmentedControl
             label="Mic mode"
             options={[
@@ -118,81 +121,34 @@ export function SettingsDrawer({
             value={micMode}
             onChange={onMicModeChange}
           />
-          <label className="field-label">
-            <span>Voice message behavior</span>
-            <select defaultValue="text-visible">
-              <option value="text-visible">Text remains visible</option>
-            </select>
-          </label>
-        </section>
-
-        <section className="settings-section">
-          <h2>Notifications</h2>
-          <ToggleRow label="Approval request popups" checked onChange={() => undefined} />
-          <ToggleRow label="Artifact created toasts" checked onChange={() => undefined} />
-          <ToggleRow label="Sound effects" checked={false} onChange={() => undefined} />
-          <ToggleRow label="Voice playback" checked={micMode === 'voice'} onChange={() => undefined} />
         </section>
 
         <section className="settings-section">
           <h2>Companion</h2>
           <ToggleRow label="Sprite enabled" checked={spriteEnabled} onChange={onSpriteEnabledChange} />
-          <label className="field-label">
-            <span>Sprite emotion source</span>
-            <select defaultValue="stream">
-              <option value="stream">Local stream state</option>
-            </select>
-          </label>
           <ToggleRow label="Animation enabled" checked={spriteAnimations} onChange={onSpriteAnimationsChange} />
-          <ToggleRow label="Speaking animation enabled" checked={spriteAnimations} onChange={onSpriteAnimationsChange} />
-          <ToggleRow label="Tool-use animation enabled" checked={spriteAnimations} onChange={onSpriteAnimationsChange} />
         </section>
 
         <details className="settings-section advanced-section">
-          <summary>
-            <span>Advanced</span>
-            <ChevronDown aria-hidden />
-          </summary>
-          <p>Activity, diagnostics, and raw protocol inspection live in the Activity drawer.</p>
-          <p>Raw logs stay redacted; transcript content is not copied into diagnostics.</p>
+          <summary><span>Advanced</span><ChevronDown aria-hidden /></summary>
+          <p>Diagnostics remain redacted. OAuth, session, assertion, enrollment, device, and channel credentials are never written to browser storage or logs.</p>
         </details>
       </div>
     </aside>
   );
 }
 
-function LabelledInput({
-  label,
-  onChange,
-  placeholder,
-  type = 'text',
-  value,
-}: {
-  label: string;
-  onChange: (value: string) => void;
-  placeholder?: string;
-  type?: 'password' | 'text';
-  value: string;
-}) {
+function ReadOnlyAuthority({ label, value, detail }: { label: string; value: string; detail: string }) {
   return (
-    <label className="field-label">
-      <span>{label}</span>
-      <input
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        type={type}
-        autoComplete={type === 'password' ? 'off' : undefined}
-      />
-    </label>
+    <div className="authority-row">
+      <strong>{label}</strong>
+      <span>{value}</span>
+      <small>{detail}</small>
+    </div>
   );
 }
 
-function ToggleRow({
-  checked,
-  label,
-  onChange,
-}: {
+function ToggleRow({ checked, label, onChange }: {
   checked: boolean;
   label: string;
   onChange: (value: boolean) => void;
@@ -205,12 +161,7 @@ function ToggleRow({
   );
 }
 
-function SegmentedControl<T extends string>({
-  label,
-  onChange,
-  options,
-  value,
-}: {
+function SegmentedControl<T extends string>({ label, onChange, options, value }: {
   label: string;
   onChange: (value: T) => void;
   options: Array<{ label: string; value: T }>;

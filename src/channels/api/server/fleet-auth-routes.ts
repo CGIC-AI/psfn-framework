@@ -20,11 +20,13 @@ import {
   FleetAuthPasskeyHttpRoutes,
 } from './fleet-auth-passkey-routes.js';
 import type { TrustedHostPasskeyCeremonyService } from '../../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
+import { FleetAuthorizationDeniedError } from '../../../boundary/gateway/fleet-authorization-context.js';
 
 const LOGIN_PATH = '/v1/fleet-auth/login';
 export const FLEET_AUTH_LIFECYCLE_OAUTH_PATH = '/v1/fleet-auth/lifecycle/oauth';
 const REFRESH_PATH = '/v1/fleet-auth/session/refresh';
 const CSRF_PATH = '/v1/fleet-auth/session/csrf';
+const STATUS_PATH = '/v1/fleet-auth/session/status';
 const LOGOUT_PATH = '/v1/fleet-auth/logout';
 const PROVIDER_REVOKE_PATH = '/v1/fleet-auth/provider/revoke';
 const PREAUTH_COOKIE_NAME = '__Host-psfn_preauth';
@@ -126,6 +128,10 @@ export class FleetAuthHttpRoutes {
   private readonly trustProxy: boolean;
   private readonly jitRoutes?: FleetAuthJitHttpRoutes;
   private readonly passkeyRoutes?: FleetAuthPasskeyHttpRoutes;
+  private readonly companionUi?: Readonly<{
+    companionId: string;
+    guestMode: 'disabled' | 'explicit';
+  }>;
 
   constructor(options: {
     broker: GatewayFleetAuthBroker;
@@ -134,6 +140,10 @@ export class FleetAuthHttpRoutes {
     jitStepUp?: FleetJitStepUpCoordinator;
     passkeyCeremonies?: TrustedHostPasskeyCeremonyService;
     trustProxy?: boolean;
+    companionUi?: Readonly<{
+      companionId: string;
+      guestMode: 'disabled' | 'explicit';
+    }>;
   }) {
     this.broker = options.broker;
     this.canonicalOrigin = options.canonicalOrigin;
@@ -148,12 +158,15 @@ export class FleetAuthHttpRoutes {
         broker: options.broker,
       })
       : undefined;
+    this.companionUi = options.companionUi;
   }
 
   matches(method: string | undefined, path: string): boolean {
     return (this.jitRoutes?.matches(method, path) ?? false)
       || (this.passkeyRoutes?.matches(method, path) ?? false)
-      || (method === 'GET' && (path === LOGIN_PATH || path === CSRF_PATH || path === this.callbackPath))
+      || (method === 'GET' && (
+        path === LOGIN_PATH || path === CSRF_PATH || path === STATUS_PATH || path === this.callbackPath
+      ))
       || (method === 'POST'
         && (path === FLEET_AUTH_LIFECYCLE_OAUTH_PATH || path === REFRESH_PATH
           || path === LOGOUT_PATH || path === PROVIDER_REVOKE_PATH));
@@ -259,6 +272,60 @@ export class FleetAuthHttpRoutes {
           proof: completed.proof,
         }, { 'Cache-Control': 'no-store' });
         return;
+      }
+      if (request.method === 'GET' && url.pathname === STATUS_PATH) {
+        if (url.search || !this.companionUi) {
+          throw new FleetAuthBrokerError('fleet_auth_route_not_found', 404);
+        }
+        response.setHeader('Vary', 'Cookie');
+        const statusToken = readSessionCookie(request);
+        if (!statusToken) {
+          sendJson(response, 200, {
+            schemaVersion: 1,
+            state: 'signed_out',
+            guestMode: this.companionUi.guestMode,
+            ...(this.companionUi.guestMode === 'explicit'
+              ? { websocketPath: `/companion-ui/companions/${this.companionUi.companionId}/ws` }
+              : {}),
+          }, { 'Cache-Control': 'no-store, private' });
+          return;
+        }
+        try {
+          const context = await this.broker.resolveAuthorizationContext({
+            sessionToken: statusToken,
+            audience: 'fleet',
+            companionId: this.companionUi.companionId,
+            action: 'companion.read',
+          });
+          if (context.companionId !== this.companionUi.companionId
+            || context.authorization.action !== 'companion.read') {
+            throw new Error('Companion UI session authority changed');
+          }
+          sendJson(response, 200, {
+            schemaVersion: 1,
+            state: 'signed_in',
+            guestMode: this.companionUi.guestMode,
+            websocketPath: `/companion-ui/companions/${this.companionUi.companionId}/ws`,
+            human: {
+              provider: context.providerSubject.provider,
+              label: 'Discord user',
+              role: context.operator.role,
+            },
+          }, { 'Cache-Control': 'no-store, private' });
+          return;
+        } catch (error) {
+          if (!(error instanceof FleetAuthorizationDeniedError)) throw error;
+          response.setHeader('Set-Cookie', clearSessionCookie());
+          sendJson(response, 200, {
+            schemaVersion: 1,
+            state: 'signed_out',
+            guestMode: this.companionUi.guestMode,
+            ...(this.companionUi.guestMode === 'explicit'
+              ? { websocketPath: `/companion-ui/companions/${this.companionUi.companionId}/ws` }
+              : {}),
+          }, { 'Cache-Control': 'no-store, private' });
+          return;
+        }
       }
       const token = readSessionCookie(request);
       if (!token) {

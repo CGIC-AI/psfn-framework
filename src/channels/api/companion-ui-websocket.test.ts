@@ -58,7 +58,7 @@ function request(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
   } as IncomingMessage;
 }
 
-function fixture() {
+function fixture(options: { guest?: boolean } = {}) {
   const webSocket = new FakeWebSocket();
   const handleUpgrade = vi.fn((_request, _socket, _head, callback) => callback(webSocket));
   const attachment = {
@@ -75,7 +75,10 @@ function fixture() {
       },
       connectionId: 'connection-1',
     },
-    actor: {
+    actor: options.guest ? {
+      kind: 'guest' as const,
+      companionId,
+    } : {
       kind: 'human' as const, principalId: '33333333-3333-4333-8333-333333333333', companionId,
       providerSubject: { provider: 'discord' as const, subjectId: '123456789012345678' },
       contact: { bindingId: '44444444-4444-4444-8444-444444444444', contactId: 'contact-1', bindingVersion: 1 },
@@ -90,6 +93,12 @@ function fixture() {
     attachment,
   }));
   const execute = vi.fn(async () => ({ generation: 1, currentDeviceIsPrimary: true }));
+  const guestExecute = vi.fn(async () => ({
+    content: 'guest reply',
+    channelId: 'server-owned-channel',
+    inputTokens: 1,
+    outputTokens: 2,
+  }));
   const adapter = new CompanionUiWebSocketAdapter({
     canonicalOrigin: 'https://fleet.example.test',
     satelliteApiKeys: [satelliteKey],
@@ -116,13 +125,17 @@ function fixture() {
     }),
     hubDeviceIngress: { admit } as never,
     actionBroker: { execute } as never,
+    ...(options.guest ? {
+      guestMode: 'explicit' as const,
+      guestActionBroker: { execute: guestExecute } as never,
+    } : {}),
     authorityPollMs: 60_000,
     createWebSocketServer: () => ({
       handleUpgrade,
       close: (callback: (error?: Error) => void) => callback(),
     }) as never,
   });
-  return { adapter, admit, execute, handleUpgrade, webSocket };
+  return { adapter, admit, execute, guestExecute, handleUpgrade, webSocket };
 }
 
 describe('CompanionUiWebSocketAdapter upgrade policy', () => {
@@ -139,6 +152,50 @@ describe('CompanionUiWebSocketAdapter upgrade policy', () => {
       connection: expect.objectContaining({ companionId, deviceId: 'display', sessionId: 'hub-session-1' }),
       human: { kind: 'fleet_browser_session', sessionToken: 's'.repeat(43) },
     }));
+    expect(built.webSocket.sent.map(value => JSON.parse(value))).toEqual([{
+      schemaVersion: 1,
+      type: 'session.ready',
+      device: { id: 'display', label: 'Display' },
+      place: { id: 'office', label: 'office' },
+      capabilities: ['text'],
+      telemetryScopes: ['status'],
+    }]);
+    expect(built.webSocket.sent[0]).not.toMatch(/sessionId|channelId|human|cookie|credential|assertion/u);
+    await built.adapter.stop();
+  });
+
+  it('admits an explicit no-cookie guest through the authenticated Hub and uses only the guest broker', async () => {
+    const built = fixture({ guest: true });
+    const guestRequest = request();
+    delete guestRequest.headers.cookie;
+    guestRequest.rawHeaders = Object.entries(guestRequest.headers)
+      .flatMap(([name, value]) => [name, String(value)]);
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(guestRequest, socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    expect(built.admit).toHaveBeenCalledWith(expect.objectContaining({ human: { kind: 'guest' } }));
+
+    const body = Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      requestId: 'guest-interact-1',
+      action: 'companion.interact',
+      resource: 'conversation.interact',
+      body: { content: 'hello as guest' },
+    }));
+    built.webSocket.emit('message', body, false);
+    await vi.waitFor(() => expect(built.guestExecute).toHaveBeenCalledOnce());
+    expect(built.execute).not.toHaveBeenCalled();
+    expect(built.guestExecute).toHaveBeenCalledWith(expect.objectContaining({
+      rawBody: expect.any(Uint8Array),
+      companionId,
+      attachment: expect.objectContaining({ actor: { kind: 'guest', companionId } }),
+    }));
+    await vi.waitFor(() => expect(built.webSocket.sent).toContainEqual(expect.stringContaining('"guest reply"')));
+
+    built.webSocket.emit('message', body, false);
+    await vi.waitFor(() => expect(built.webSocket.readyState).toBe(WebSocket.CLOSED));
+    expect(built.guestExecute).toHaveBeenCalledOnce();
+    expect(built.webSocket.closeArgs[0]).toBe(4403);
     await built.adapter.stop();
   });
 

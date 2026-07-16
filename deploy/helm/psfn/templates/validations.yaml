@@ -231,6 +231,15 @@ never back a ClusterIssuer. */ -}}
 {{- end -}}
 {{- end -}}
 {{- if .Values.companionUiTest.enabled -}}
+{{- if not .Values.fleetAuth.enabled -}}
+{{- fail "companionUiTest.enabled=true requires fleetAuth.enabled=true for the canonical login/session origin" -}}
+{{- end -}}
+{{- if not .Values.satelliteHub.enabled -}}
+{{- fail "companionUiTest.enabled=true requires satelliteHub.enabled=true for server-owned device authority" -}}
+{{- end -}}
+{{- if not (has .Values.companionUiTest.guestMode (list "disabled" "explicit")) -}}
+{{- fail "companionUiTest.guestMode must be disabled or explicit" -}}
+{{- end -}}
 {{- if ne .Values.companionUiTest.service.type "ClusterIP" -}}
 {{- fail "companionUiTest.service.type must be ClusterIP; browser access is gateway-mediated" -}}
 {{- end -}}

@@ -250,12 +250,6 @@ test('legacy root control is retired when the client migrates to the subpath', a
     await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
     await expect(page.locator('html')).toHaveAttribute('data-test-build', legacy.marker);
     await page.getByLabel('Open settings').click();
-    const session = page.getByLabel('Session');
-    const channel = page.getByLabel('Channel');
-    const credential = page.getByLabel('Device enrollment token');
-    await session.fill('operator-session-in-progress');
-    await channel.fill('operator-channel-in-progress');
-    await credential.fill('operator-credential-in-progress');
     await page.locator('input[type="file"]').first().setInputFiles({
       name: 'unfinished-notes.txt',
       mimeType: 'text/plain',
@@ -315,12 +309,6 @@ test('generated A to B ignores a legacy cache, keeps active state, and remains a
     await expect(page.locator('html')).toHaveAttribute('data-test-build', buildA.marker);
     await expect(page.getByText('Update ready')).toHaveCount(0);
     await page.getByLabel('Open settings').click();
-    const session = page.getByLabel('Session');
-    const channel = page.getByLabel('Channel');
-    const credential = page.getByLabel('Device enrollment token');
-    await session.fill('active-session');
-    await channel.fill('active-channel');
-    await credential.fill('active-credential');
     await page.locator('input[type="file"]').first().setInputFiles({
       name: 'active-draft.txt',
       mimeType: 'text/plain',
@@ -338,9 +326,6 @@ test('generated A to B ignores a legacy cache, keeps active state, and remains a
     await waitForWorkerRevision(page, buildB.revision, 'psfn-satellite-mobile-chat-app-v1');
 
     await expect(page.locator('html')).toHaveAttribute('data-test-build', buildA.marker);
-    await expect(session).toHaveValue('active-session');
-    await expect(channel).toHaveValue('active-channel');
-    await expect(credential).toHaveValue('active-credential');
     await expect(page.getByText('active-draft.txt')).toBeVisible();
     await expect(page.getByText('Update ready')).toBeVisible();
     await expect(page.getByText(/reload this page when your draft and live work are safe/i)).toBeVisible();

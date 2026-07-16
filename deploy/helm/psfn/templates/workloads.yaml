@@ -114,6 +114,8 @@ spec:
             {{- if .Values.companionUiTest.enabled }}
             - name: FLEET_SSO_COMPANION_UI_ORIGIN
               value: {{ printf "http://%s:%v" (include "psfn.companionUiTestServiceName" .) .Values.ports.companionUiTest | quote }}
+            - name: FLEET_SSO_COMPANION_UI_GUEST_MODE
+              value: {{ .Values.companionUiTest.guestMode | quote }}
             {{- with .Values.fleetAuth.companionUiCompanionId }}
             - name: FLEET_SSO_COMPANION_UI_COMPANION_ID
               value: {{ . | quote }}

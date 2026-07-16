@@ -354,17 +354,22 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       hits: 1,
     }));
 
-    const companionUiA = await get(edgePort, '/companion-ui/app.js?v=1', SESSION_A);
+    const companionUiA = await get(edgePort, '/companion-ui/app.js', SESSION_A);
     expect(companionUiA.status).toBe(200);
-    expect(companionUiA.body).toBe('<main>companion-ui:/companion-ui/app.js?v=1</main>');
+    expect(companionUiA.body).toBe('<main>companion-ui:/companion-ui/app.js</main>');
     expect(companionUiHits).toHaveLength(1);
     expect(companionUiHits[0]!.cookie).toBeUndefined();
     expect(companionUiHits[0]!.authorization).toBeUndefined();
     expect(companionUiHits[0]!['x-psfn-request-capability']).toBeUndefined();
 
-    const companionUiB = await get(edgePort, '/companion-ui/app.js?v=1', SESSION_B);
-    expect(companionUiB.status).toBe(404);
-    expect(companionUiHits).toHaveLength(1);
+    const companionUiB = await get(edgePort, '/companion-ui/app.js', SESSION_B);
+    expect(companionUiB.status).toBe(200);
+    expect(companionUiHits).toHaveLength(2);
+    expect(companionUiHits[1]!.cookie).toBeUndefined();
+
+    const queryBearingShell = await get(edgePort, '/companion-ui/app.js?code=secret', SESSION_A);
+    expect(queryBearingShell.status).toBe(404);
+    expect(companionUiHits).toHaveLength(2);
 
     revokedA = true;
     const revoked = await get(

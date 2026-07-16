@@ -715,10 +715,13 @@ NetworkPolicy remains separate and still has no broad outbound egress.
 static web container that serves the `companion-ui` PWA so the operator can open
 it in a browser and chat through the Satellite Hub. The container serves the
 pre-built Vite `dist/` tree only — no server logic, no admin API, no outbound
-calls. With fleet auth enabled, the gateway authenticates `/companion-ui/`,
-resolves `companion.read` for its server-owned companion binding, and only then
-proxies the static files. This is a stopgap test surface to be replaced by a
-packaged app.
+calls. The gateway serves a public signed-out shell at `/companion-ui/`, exposes
+same-origin fleet login/session/logout routes, and binds the browser to one
+server-owned companion. The more-specific same-origin realtime path routes to
+the enrolled Satellite Hub, which authenticates its gateway backchannel and
+mints a fresh device assertion for each connection. The browser never owns a
+Hub URL, device credential, session ID, or channel ID. This is a stopgap test
+surface to be replaced by a packaged app.
 
 Build the image (ARM64 for the Pi) from this repo's `companion-ui/` source with
 the repo-owned Dockerfile and build script:
@@ -731,10 +734,8 @@ docker/companion-ui/build-image.sh
 The script tags the image `0.1.0-kube-<repo-sha12>`, refuses a dirty tree
 (override with `COMPANION_UI_ALLOW_DIRTY=true` only for throwaway probes) and
 floating tags, and passes the source commit as `SOURCE_REVISION`. The hub
-websocket URL is baked as a build-time default
-(`COMPANION_UI_HUB_WS_URL`, default `ws://psfn-hub.local:8787/`) but stays
-editable at runtime in the in-app Settings drawer, so the baked value is a
-convenience, not a constraint. The runtime stage uses the pinned
+websocket URL is not a build argument: runtime uses only the exact
+server-issued path on the canonical gateway origin. The runtime stage uses the pinned
 `nginxinc/nginx-unprivileged` image (manifest-list digest, resolves the ARM64
 sub-image on the Pi) and serves on port 8080 as uid 999, with the service worker
 served no-cache and the PWA manifest served as `application/manifest+json`.
@@ -762,7 +763,15 @@ helm upgrade --install psfn deploy/helm/psfn \
   --set-string runtime.companionId=<registered-companion-uuid> \
   --set ingress.gateway.tls.enabled=true \
   --set-string ingress.gateway.tls.secretName=psfn-public-origin-tls \
-  --set-string fleetAuth.companionUiCompanionId=<registered-companion-uuid>
+  --set-string fleetAuth.companionUiCompanionId=<registered-companion-uuid> \
+  --set satelliteHub.enabled=true \
+  --set satelliteHub.textOnly=true \
+  --set-string satelliteHub.image.repository=<pinned-hub-image-repository> \
+  --set-string satelliteHub.image.tag=<pinned-hub-image-tag> \
+  --set-string satelliteHub.identity.satelliteId=<registered-hub-satellite-id> \
+  --set-string satelliteHub.identity.endpointId=<registered-hub-endpoint-id> \
+  --set-string satelliteHub.identity.claimType=<registered-hub-claim-type> \
+  --set-string secrets.values.satelliteHubApiKey=<dedicated-hub-key-16plus-chars>
 
 kubectl -n psfn rollout status deploy/psfn-companion-ui-test
 ```
@@ -783,11 +792,12 @@ kubectl -n psfn port-forward svc/psfn-companion-ui-test 8080:8080
 # open http://127.0.0.1:8080/companion-ui/ in a browser
 ```
 
-Then open the in-app Settings drawer (floating gear button) and point the hub
-websocket URL at the Satellite Hub — for example the in-cluster hub Ingress
-(`ws://psfn-hub.local:8787/`, per `ingress.satelliteHub.host`) or a
-port-forwarded hub. The companion-ui test pod itself needs the Satellite Hub
-enabled (`satelliteHub.enabled=true`, see above) to have something to chat with.
+Open the canonical gateway HTTPS origin at `/companion-ui/` and sign in with
+Discord (or enable `companionUiTest.guestMode=explicit` deliberately). The Hub
+URL and device/session authority are not editable: the chart routes the exact
+same-origin `/companion-ui/companions/<uuid>/ws` path to the enabled Satellite
+Hub. A direct Hub ingress or port-forward is not a supported browser authority
+path.
 
 The companion-ui test NetworkPolicy allows ingress only from gateway pods on
 port 8080 and denies all egress. Its Service must remain `ClusterIP`; the chart

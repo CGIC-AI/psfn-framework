@@ -24,6 +24,19 @@ spec:
     - host: {{ .Values.ingress.gateway.host | quote }}
       http:
         paths:
+          {{- if and .Values.companionUiTest.enabled .Values.satelliteHub.enabled }}
+          # The enrolled Hub terminates the browser-facing realtime protocol,
+          # mints a fresh device assertion per connection, and reaches the
+          # gateway over its authenticated backchannel. The browser remains on
+          # the canonical fleet origin and never receives Hub credentials.
+          - path: /companion-ui/companions/
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "psfn.satelliteHubServiceName" . }}
+                port:
+                  name: hub-ws
+          {{- end }}
           - path: {{ .Values.ingress.gateway.path | quote }}
             pathType: {{ .Values.ingress.gateway.pathType }}
             backend:

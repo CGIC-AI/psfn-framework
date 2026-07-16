@@ -550,7 +550,7 @@ ingress:
   companionUiTest:
     enabled: false
     host: psfn-companion.local
-    path: /
+    path: /companion-ui/
     pathType: Prefix
 
 satelliteHub:

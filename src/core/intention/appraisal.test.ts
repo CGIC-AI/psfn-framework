@@ -248,7 +248,9 @@ describe('IntentionAppraisal', () => {
     });
 
     expect(complete).toHaveBeenCalledTimes(1);
-    expect(complete.mock.calls[0]?.[0].correlation).toMatchObject({
+    // mmo9.7.1: correlation now rides the completion options (3rd arg) as part of
+    // the LLMWorkSpec's correlation, not the context (1st arg).
+    expect(complete.mock.calls[0]?.[2]?.correlation).toMatchObject({
       purpose: 'intention.appraisal',
       icpCorrelation: {
         ...icpCorrelation,
@@ -257,8 +259,9 @@ describe('IntentionAppraisal', () => {
         costOriginStage: 'post_turn',
       },
     });
-    expect(complete.mock.calls[0]?.[0].correlation?.icpCorrelation?.requestId)
-      .toBe(complete.mock.calls[0]?.[0].correlation?.requestId);
+    expect(complete.mock.calls[0]?.[2]?.correlation?.icpCorrelation?.requestId)
+      .toBe(complete.mock.calls[0]?.[2]?.correlation?.requestId);
+    expect(complete.mock.calls[0]?.[2]?.workSpec?.purpose).toBe('background');
   });
 
   it('triggers immediately on emotional shift', async () => {

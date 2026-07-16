@@ -19,6 +19,7 @@ import type {
   LLMModelHint,
   LLMResponse,
   LLMProviderWireMessage,
+  LLMWorkSpec,
   ModelBudgetBlockedEvent,
   StreamCallbacks,
   ToolCall,
@@ -155,6 +156,14 @@ export interface LLMCompletionOptions {
   disableRetry?: boolean;
   modelHint?: LLMCompletionModelHint;
   correlation?: Partial<CorrelationMetadata>;
+  /**
+   * mmo9.7.1: typed work spec from the autonomous entry (`completeWithWorkSpec`).
+   * When present the client validates purpose agreement, reconciles the declared
+   * lane byte-identically with the gate resolver (Law 12.4, fail closed), and
+   * clamps output tokens to the spec cap. Optional so foreground/tool/gateway
+   * callers stay unchanged.
+   */
+  workSpec?: LLMWorkSpec;
 }
 
 export interface LLMClientRuntimeOptions {
@@ -563,6 +572,48 @@ export class LLMClient {
       ...(correlation?.channelId ? { channelId: correlation.channelId } : {}),
       ...(correlation?.originStage ? { originStage: correlation.originStage } : {}),
     });
+  }
+
+  /**
+   * mmo9.7.1 / Law 12.4: reconcile a declared `LLMWorkSpec` against this call.
+   * Fails closed (non-retryable) if the spec's purpose disagrees with the call
+   * purpose or its declared lane disagrees with the SINGLE admission lane the
+   * gate resolves from the resolved correlation. No second lane resolver: the
+   * gate keeps owning lane resolution; the spec.lane is a verified assertion.
+   */
+  private validateWorkSpecForCall(
+    purpose: CompletionPurpose,
+    routingPurpose: RoutingPurpose,
+    workSpec: LLMWorkSpec,
+    correlation: ResolvedCorrelationMetadata | undefined,
+  ): void {
+    if (workSpec.purpose !== purpose) {
+      throw markErrorAsNonRetryable(new Error(
+        `LLMWorkSpec.purpose "${workSpec.purpose}" does not match completion purpose "${purpose}"`,
+      ));
+    }
+    const admissionLane = this.resolveModelCallRuntimeClass(routingPurpose, correlation);
+    if (workSpec.lane !== admissionLane) {
+      throw markErrorAsNonRetryable(new Error(
+        `LLMWorkSpec.lane "${workSpec.lane}" does not reconcile with admission lane `
+        + `"${admissionLane}" for purpose "${purpose}" (Law 12.4: no second lane resolver)`,
+      ));
+    }
+  }
+
+  /**
+   * mmo9.7.1: clamp a candidate's output token budget to the work spec's
+   * declared `maxOutputTokens`. Only ever reduces the ceiling (fail closed);
+   * absent cap leaves the candidate untouched.
+   */
+  private applyWorkSpecOutputCap(
+    candidate: RoutingCandidate,
+    outputTokenCap: number | undefined,
+  ): RoutingCandidate {
+    if (outputTokenCap === undefined) return candidate;
+    const capped = Math.max(1, Math.min(candidate.maxTokens, Math.floor(outputTokenCap)));
+    if (capped === candidate.maxTokens) return candidate;
+    return { ...candidate, maxTokens: capped };
   }
 
   private resolveModelCallResourceKey(candidate: RoutingCandidate): string | null {
@@ -994,13 +1045,29 @@ export class LLMClient {
 
   async stream(context: LLMContext, callbacks?: StreamCallbacks, options?: LLMProviderStreamOptions): Promise<LLMResponse> {
     const piContext = this.buildPiContext(context);
-    const correlation = this.resolveCorrelation(context.correlation, undefined, 'chat');
+    // mmo9.7.1 (+ mmo9.8 seam): honor an option-level work spec instead of
+    // dropping option-level correlation and hardcoding purpose 'chat'. Absent a
+    // spec (the interactive chat turn), streamPurpose/streamRoutingPurpose stay
+    // 'chat' so this path is byte-identical to the prior behavior.
+    const streamWorkSpec = options?.workSpec;
+    const streamPurpose: CompletionPurpose = streamWorkSpec?.purpose ?? 'chat';
+    const streamRoutingPurpose: RoutingPurpose = streamPurpose === 'chat'
+      ? 'chat'
+      : this.toRoutingPurpose(streamPurpose);
+    const correlation = this.resolveCorrelation(
+      context.correlation,
+      streamWorkSpec?.correlation,
+      streamPurpose,
+    );
+    if (streamWorkSpec) {
+      this.validateWorkSpecForCall(streamPurpose, streamRoutingPurpose, streamWorkSpec, correlation);
+    }
     const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext, correlation);
     const accountingInputTokens = estimatedInputTokens ?? this.estimateBudgetInputTokens(piContext);
     const modelHint = mergeModelHints(context.modelHint, undefined);
     const externalAccounting = normalizeLLMCallAccountingContext(context.accounting);
     const logicalCallId = externalAccounting?.logicalCallId
-      ?? this.createUsageLogicalCallId('chat', 'chat', correlation);
+      ?? this.createUsageLogicalCallId('chat', streamRoutingPurpose, correlation);
     let physicalAttempt = (externalAccounting?.attempt ?? 1) - 1;
     const streamRetryConfig = externalAccounting?.retryOwner === 'caller'
       ? { ...llmRetryConfig(this.config), maxRetries: 0 }
@@ -1010,7 +1077,7 @@ export class LLMClient {
 
     try {
       const { result: finalResponse, candidate, attempts } = await this.runWithFallback(
-        'chat',
+        streamRoutingPurpose,
         async (candidateTarget, _attempt, preemptSignal) => {
           // mmo9.6.1 + mmo9.5.1: compose the caller/barge-in cancellation signal
           // (threaded in as `options.signal`) with the gate-owned preempt signal
@@ -1073,7 +1140,7 @@ export class LLMClient {
             tools: context.tools,
             candidate: candidateTarget,
             correlation,
-            purpose: 'chat',
+            purpose: streamRoutingPurpose,
             ...(externalAccounting?.retryOwner === 'caller' ? { maxRetries: 0 } : {}),
             extractToolCalls: (result) => result.toolCalls,
             onRetriesResolved: () => {},
@@ -1082,7 +1149,7 @@ export class LLMClient {
             const usageAttempt = physicalAttempt;
             const attemptStartedAtMs = Date.now();
             await this.reserveIcpConversationCost(
-              'chat',
+              streamRoutingPurpose,
               candidateTarget,
               accountingInputTokens,
               correlation,
@@ -1249,7 +1316,7 @@ export class LLMClient {
                   )
                 : undefined;
               await this.recordUsage(
-                'chat',
+                streamRoutingPurpose,
                 'chat',
                 candidateTarget,
                 partialUsage?.input ?? 0,
@@ -1287,7 +1354,7 @@ export class LLMClient {
               } catch (error) {
                 const err = error instanceof Error ? error : new Error(String(error));
                 await this.recordUsage(
-                  'chat',
+                  streamRoutingPurpose,
                   'chat',
                   candidateTarget,
                   response.inputTokens,
@@ -1324,7 +1391,7 @@ export class LLMClient {
                 attemptIndex,
               );
               await this.recordUsage(
-                'chat',
+                streamRoutingPurpose,
                 'chat',
                 candidateTarget,
                 response.inputTokens,
@@ -1374,7 +1441,7 @@ export class LLMClient {
             };
             assertUsableProviderResponse(incompleteResponse, candidateTarget);
             await this.recordUsage(
-              'chat',
+              streamRoutingPurpose,
               'chat',
               candidateTarget,
               incompleteUsage.input,
@@ -1420,7 +1487,7 @@ export class LLMClient {
                 delayMs,
                 error: error.message,
                 ...correlation,
-                purpose: 'chat',
+                purpose: streamPurpose,
               });
             },
           }),
@@ -1430,6 +1497,9 @@ export class LLMClient {
           modelHint,
           correlation,
           estimatedInputTokens,
+          ...(streamWorkSpec?.maxOutputTokens !== undefined
+            ? { outputTokenCap: streamWorkSpec.maxOutputTokens }
+            : {}),
           onCandidateSelected: candidate => {
             requestedProvider ??= candidate.provider;
             requestedModel ??= candidate.model;
@@ -1446,7 +1516,7 @@ export class LLMClient {
         backendApi: finalResponse.providerObservability?.backendApi,
         attempts,
         ...correlation,
-        purpose: 'chat',
+        purpose: streamPurpose,
       });
 
       callbacks?.onDone?.(finalResponse);
@@ -1466,6 +1536,9 @@ export class LLMClient {
     const routingPurpose = this.toRoutingPurpose(purpose);
     const piContext = this.buildPiContext(context);
     const correlation = this.resolveCorrelation(context.correlation, options.correlation, purpose);
+    if (options.workSpec) {
+      this.validateWorkSpecForCall(purpose, routingPurpose, options.workSpec, correlation);
+    }
     const estimatedInputTokens = this.resolveEstimatedBudgetInputTokens(piContext, correlation);
     const modelHint = mergeModelHints(context.modelHint, options.modelHint);
     const externalAccounting = normalizeLLMCallAccountingContext(context.accounting);
@@ -1744,6 +1817,9 @@ export class LLMClient {
           correlation,
           estimatedInputTokens,
           signal: options.signal,
+          ...(options.workSpec?.maxOutputTokens !== undefined
+            ? { outputTokenCap: options.workSpec.maxOutputTokens }
+            : {}),
           onCandidateSelected: candidate => {
             requestedProvider ??= candidate.provider;
             requestedModel ??= candidate.model;
@@ -1868,6 +1944,7 @@ export class LLMClient {
       correlation?: ResolvedCorrelationMetadata;
       estimatedInputTokens?: number;
       signal?: AbortSignal;
+      outputTokenCap?: number;
       onCandidateSelected?: (candidate: RoutingCandidate) => void;
     } = {},
   ): Promise<{ result: T; candidate: RoutingCandidate; attempts: number }> {
@@ -1899,7 +1976,10 @@ export class LLMClient {
 
     const candidates = this.resolveCandidates(purpose, options.modelHint);
     return this.fallbackRunner.run(purpose, candidates, async (candidate, attempt) => {
-      const effectiveCandidate = this.applyPurposeOutputLimits(purpose, candidate);
+      const effectiveCandidate = this.applyWorkSpecOutputCap(
+        this.applyPurposeOutputLimits(purpose, candidate),
+        options.outputTokenCap,
+      );
       options.onCandidateSelected?.(effectiveCandidate);
       await this.evaluateBudgetPreflight(
         purpose,

@@ -340,7 +340,11 @@ describe('session search tools', () => {
 
     await expect(resultPromise).rejects.toBe(budgetError);
     expect(llmProvider.complete).toHaveBeenCalledTimes(1);
-    expect(llmProvider.complete.mock.calls[0]?.[2]).toEqual({ signal: controller.signal });
+    // mmo9.7.1: the summary now also carries a work spec + correlation alongside
+    // the caller signal in the completion options.
+    expect(llmProvider.complete.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({ signal: controller.signal }),
+    );
   });
 
   it('session_search requires a non-empty query through the canonical surface', async () => {

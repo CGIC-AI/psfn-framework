@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import {
   getDefaultPromptText,
   SLEEPTIME_ORIENTATION_PROMPT_KEY,
@@ -638,10 +639,15 @@ export class SleeptimeMemoryAgent {
       `Return strict JSON with keys "orient" and "memory_writes" (max ${this.maxMemoryWrites}).`,
     ].join('\n');
 
-    const response = await this.llmProvider.complete(
+    const response = await completeWithWorkSpec(
+      this.llmProvider,
       {
         systemPrompt: this.resolveSleeptimePromptText(),
         messages: [{ role: 'user', content: requestPrompt }],
+      },
+      buildLLMWorkSpec({
+        purpose: 'memory',
+        durable: true,
         correlation: {
           requestId: `sleeptime:${sessionId}:${action.id}`,
           channelId: action.channelId,
@@ -650,8 +656,7 @@ export class SleeptimeMemoryAgent {
           originType: 'memory',
           originStage: 'memory.sleeptime.plan',
         },
-      },
-      'memory',
+      }),
     );
     const plan = normalizeSleeptimePlan(response.content, this.maxMemoryWrites);
 

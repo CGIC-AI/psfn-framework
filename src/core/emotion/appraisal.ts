@@ -1,5 +1,6 @@
 import { isRecord } from '../../shared/utils/types.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import type { CompletionPurpose, ContextMessage, CorrelationMetadata, LLMResponse } from '../../shared/contracts/runtime.js';
 import {
   deriveChildIcpConversationCostCorrelation,
@@ -460,7 +461,9 @@ export class EmotionAppraisal {
         },
       ],
     };
-    const response = await this.llmProvider.complete(context, 'background', {
+    const response = await completeWithWorkSpec(this.llmProvider, context, buildLLMWorkSpec({
+      purpose: 'background',
+      durable: false,
       correlation: {
         ...(input.icpCorrelation
           ? { requestId: `${input.icpCorrelation.requestId}:emotion-appraisal` }
@@ -484,7 +487,7 @@ export class EmotionAppraisal {
             }
           : {}),
       },
-    });
+    }));
     const summary = normalizeAppraisalSummary(response.content, this.maxSummaryChars);
 
     const entry: EmotionAppraisalEntry = {

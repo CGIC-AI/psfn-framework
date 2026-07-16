@@ -12,8 +12,11 @@ import { createDefaultGroupMemorySettings } from '../../../system/config/group-m
 type LlmCompletionContext = Parameters<ExtractionRunOptions['llmClient']['complete']>[0];
 type LlmCompletionResponse = Awaited<ReturnType<ExtractionRunOptions['llmClient']['complete']>>;
 
+type LlmCompletionOptions = Parameters<ExtractionRunOptions['llmClient']['complete']>[2];
+
 interface PendingChunkCompletion {
   context: LlmCompletionContext;
+  correlation: NonNullable<LlmCompletionOptions>['correlation'];
   resolve: (content: string) => void;
   reject: (error: Error) => void;
 }
@@ -344,7 +347,7 @@ describe('runExtractionOrchestration fail-closed errors', () => {
       llmClient: { complete } as ExtractionRunOptions['llmClient'],
     }));
 
-    expect(complete.mock.calls[0]?.[0].correlation).toMatchObject({
+    expect(complete.mock.calls[0]?.[2]?.correlation).toMatchObject({
       requestId: 'memory-extraction:api:test:manual',
       icpCorrelation: {
         ...icpCorrelation,
@@ -353,8 +356,8 @@ describe('runExtractionOrchestration fail-closed errors', () => {
         costOriginStage: 'post_turn',
       },
     });
-    expect(complete.mock.calls[0]?.[0].correlation?.icpCorrelation?.requestId)
-      .toBe(complete.mock.calls[0]?.[0].correlation?.requestId);
+    expect(complete.mock.calls[0]?.[2]?.correlation?.icpCorrelation?.requestId)
+      .toBe(complete.mock.calls[0]?.[2]?.correlation?.requestId);
   });
 
   it('emits concern candidate context from accepted extraction material', async () => {
@@ -526,13 +529,18 @@ describe('runExtractionOrchestration chunk concurrency', () => {
     const pendingCompletions: PendingChunkCompletion[] = [];
     let activeCalls = 0;
     let maxActiveCalls = 0;
-    const complete = vi.fn((context: LlmCompletionContext): Promise<LlmCompletionResponse> => {
+    const complete = vi.fn((
+      context: LlmCompletionContext,
+      _purpose: unknown,
+      options?: LlmCompletionOptions,
+    ): Promise<LlmCompletionResponse> => {
       activeCalls++;
       maxActiveCalls = Math.max(maxActiveCalls, activeCalls);
 
       return new Promise((resolve, reject) => {
         pendingCompletions.push({
           context,
+          correlation: options?.correlation,
           resolve: (content: string) => {
             activeCalls--;
             resolve({ content });
@@ -573,7 +581,7 @@ describe('runExtractionOrchestration chunk concurrency', () => {
 
     expect(maxActiveCalls).toBe(2);
     expect(complete).toHaveBeenCalledTimes(3);
-    expect(pendingCompletions.map(completion => completion.context.correlation?.requestId)).toEqual([
+    expect(pendingCompletions.map(completion => completion.correlation?.requestId)).toEqual([
       'memory-extraction:api:test:manual:chunk:1',
       'memory-extraction:api:test:manual:chunk:2',
       'memory-extraction:api:test:manual:chunk:3',
@@ -666,7 +674,7 @@ describe('runExtractionOrchestration chunk concurrency', () => {
     await runExtractionOrchestration(options);
 
     expect(complete).toHaveBeenCalledTimes(1);
-    expect(complete.mock.calls[0][0].correlation?.requestId).toBe(
+    expect(complete.mock.calls[0][2]?.correlation?.requestId).toBe(
       'memory-extraction:api:test:manual',
     );
     expect(processFact).toHaveBeenCalledTimes(1);
@@ -862,13 +870,13 @@ describe('runExtractionOrchestration naming fidelity', () => {
 
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.stringContaining('[message_id:1] Alex: I really enjoy board games.'),
-    }), 'extraction');
+    }), 'extraction', expect.anything());
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.stringContaining('[message_id:2] Lyra: I love hearing that.'),
-    }), 'extraction');
+    }), 'extraction', expect.anything());
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.stringContaining('Human participant name: Alex'),
-    }), 'extraction');
+    }), 'extraction', expect.anything());
     expect(processFact).toHaveBeenCalledWith(expect.objectContaining({
       text: "Alex appreciates Lyra's patience.",
     }), expect.any(String), undefined, expect.objectContaining({
@@ -1063,10 +1071,10 @@ describe('runExtractionOrchestration naming fidelity', () => {
 
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.stringContaining('user: Please keep only the actual conversation.'),
-    }), 'extraction');
+    }), 'extraction', expect.anything());
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.not.stringContaining('Admin updated prompt order.'),
-    }), 'extraction');
+    }), 'extraction', expect.anything());
   });
 
   it('uses neutral role labels when explicit participant names are unavailable', async () => {
@@ -1131,10 +1139,10 @@ describe('runExtractionOrchestration naming fidelity', () => {
 
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.stringContaining('[message_id:1] user: Please keep it simple.'),
-    }), 'extraction');
+    }), 'extraction', expect.anything());
     expect(llmClient.complete).toHaveBeenCalledWith(expect.objectContaining({
       systemPrompt: expect.stringContaining('[message_id:2] assistant: I will keep it simple.'),
-    }), 'extraction');
+    }), 'extraction', expect.anything());
   });
 });
 

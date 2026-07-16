@@ -123,26 +123,27 @@ describe('runSessionSearch summarize consolidation', () => {
     expect(promptRegistry.getPrompt).toHaveBeenCalledWith(SESSION_SEARCH_SUMMARY_PROMPT_KEY);
     expect(complete).toHaveBeenCalledTimes(1);
 
-    const [request, positionalCallType] = complete.mock.calls[0] as [
+    const [request, positionalCallType, options] = complete.mock.calls[0] as [
       {
         systemPrompt: string;
         messages: Array<{ role: string; content: string }>;
-        correlation: Record<string, unknown>;
       },
       string,
+      { correlation: Record<string, unknown> },
     ];
     // Compaction-service convention: positional callType 'background',
-    // correlation callType 'summary'.
+    // correlation callType 'summary' (mmo9.7.1: correlation rides the options
+    // work spec, not the context).
     expect(positionalCallType).toBe('background');
     expect(request.systemPrompt).toBe('Registry-owned session search summary prompt.');
-    expect(request.correlation).toEqual(expect.objectContaining({
+    expect(options.correlation).toEqual(expect.objectContaining({
       callType: 'summary',
       purpose: 'session.search.summary',
       originType: 'summary',
       originStage: 'session.search.summary',
       channelId: 'api:public-search',
     }));
-    expect(String(request.correlation.requestId)).toMatch(/^search-summary:.*:summary$/);
+    expect(String(options.correlation.requestId)).toMatch(/^search-summary:.*:summary$/);
   });
 
   it('falls back to the seed prompt when no registry is provided', async () => {

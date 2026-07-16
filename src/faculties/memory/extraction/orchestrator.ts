@@ -1,5 +1,6 @@
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
 import type { SessionManager } from '../../../core/session/manager.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import { resolveLatestTurnContext } from '../../../core/session/turn-provenance.js';
@@ -407,10 +408,15 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
           ? `${requestId}:chunk:${index + 1}`
           : requestId;
 
-        const response = await options.llmClient.complete(
+        const response = await completeWithWorkSpec(
+          options.llmClient,
           {
             systemPrompt: prompt,
             messages: [{ role: 'user', content: 'Extract facts from the conversation above.' }],
+          },
+          buildLLMWorkSpec({
+            purpose: 'extraction',
+            durable: true,
             correlation: {
               requestId: chunkRequestId,
               ...(turnId ? { turnId } : {}),
@@ -430,8 +436,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
                   }
                 : {}),
             },
-          },
-          'extraction',
+          }),
         );
 
         return parseFactsXml(response.content);

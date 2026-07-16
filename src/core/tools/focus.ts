@@ -2,6 +2,7 @@ import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { TextContent } from '@mariozechner/pi-ai';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import { textResultWithError } from './results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { deriveChildIcpConversationCostCorrelation } from '../../shared/contracts/icp-autonomy.js';
@@ -238,10 +239,15 @@ export async function executeCompleteFocusAction(
   });
 
   try {
-    const response = await llmProvider.complete(
+    const response = await completeWithWorkSpec(
+      llmProvider,
       {
         systemPrompt,
         messages: [{ role: 'user', content: input }],
+      },
+      buildLLMWorkSpec({
+        purpose: 'context',
+        durable: false,
         correlation: {
           ...(requestContext?.turnId ? { turnId: requestContext.turnId } : {}),
           ...(focusCompletionRequestId ? { requestId: focusCompletionRequestId } : {}),
@@ -265,8 +271,7 @@ export async function executeCompleteFocusAction(
               }
             : {}),
         },
-      },
-      'context',
+      }),
     );
     const distilledKnowledge = compactText(response.content);
     if (!distilledKnowledge) {

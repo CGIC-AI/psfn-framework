@@ -2383,6 +2383,8 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).not.toContain('Previous conversation summary');
     expect(mockLLM.complete).toHaveBeenCalledTimes(1);
     expect(mockLLM.complete).toHaveBeenCalledWith(
+      expect.anything(),
+      'background',
       expect.objectContaining({
         correlation: expect.objectContaining({
           callType: 'summary',
@@ -2390,7 +2392,6 @@ describe('SessionManager', () => {
           originStage: 'session.recent.summary.history_budget',
         }),
       }),
-      'background',
     );
     const sessionManifest = ctx.manifest?.session;
     expect(sessionManifest).toBeDefined();
@@ -2815,9 +2816,11 @@ describe('SessionManager', () => {
     });
     mgr.setPreCompactionExtractionHandler(preCompactionFlush as any);
 
-    const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async (context, purpose) => {
+    const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async (_context, purpose, options) => {
       expect(purpose).toBe('background');
-      expect(context.correlation).toMatchObject({
+      // mmo9.7.1: correlation now rides the completion options (work spec).
+      const correlation = options?.correlation;
+      expect(correlation).toMatchObject({
         requestId: expect.stringContaining('compaction:'),
         channelId: 'ch1',
         callType: 'summary',
@@ -2830,7 +2833,7 @@ describe('SessionManager', () => {
           costOriginStage: 'post_turn',
         }),
       });
-      expect(context.correlation?.icpCorrelation?.requestId).toBe(context.correlation?.requestId);
+      expect(correlation?.icpCorrelation?.requestId).toBe(correlation?.requestId);
       callOrder.push('summary');
       return {
         content: 'Summary of old messages.',
@@ -3130,7 +3133,7 @@ describe('SessionManager', () => {
     await runScheduledCompaction(mgr, mockLLM, { systemPrompt: 'S' });
 
     expect(mockLLM.complete).toHaveBeenCalledTimes(1);
-    expect(mockLLM.complete).toHaveBeenCalledWith(expect.anything(), 'background');
+    expect(mockLLM.complete).toHaveBeenCalledWith(expect.anything(), 'background', expect.anything());
   });
 
   it('skips compaction when no llmProvider given', async () => {

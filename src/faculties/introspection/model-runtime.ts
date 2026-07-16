@@ -1,6 +1,7 @@
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { LLMContext } from '../../shared/contracts/runtime.js';
 import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
 import { isRecord } from '../../shared/utils/types.js';
 import type { IntrospectionAuditConfig } from '../../system/config/scheduler-config.js';
 import type {
@@ -64,17 +65,19 @@ export function createLLMIntrospectionAuditor(
 ): BlindedAuditorPort {
   return {
     estimateStableReply: async (candidate): Promise<StableReplyEstimate> => {
-      const response = await llmProvider.complete(
+      const response = await completeWithWorkSpec(
+        llmProvider,
         context(AUDITOR_SYSTEM_PROMPT, JSON.stringify({
           task: 'Estimate the stable, ordinary reply to this public stimulus.',
           outputSchema: { stableReply: 'string' },
           publicStimulus: blindPublicStimulus(candidate.publicStimulus),
         })),
-        'background',
-        {
-          modelHint: { maxTokens: config.estimatorMaxTokens, temperature: 0 },
+        buildLLMWorkSpec({
+          purpose: 'background',
+          durable: false,
           correlation: COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
-        },
+        }),
+        { modelHint: { maxTokens: config.estimatorMaxTokens, temperature: 0 } },
       );
       const parsed = parseJsonObject(response.content, 'stable reply estimator');
       assertExactKeys(parsed, ['stableReply'], 'stable reply estimator');
@@ -84,7 +87,8 @@ export function createLLMIntrospectionAuditor(
       };
     },
     compareReplies: async (candidate, stableReply): Promise<DivergenceComparison> => {
-      const response = await llmProvider.complete(
+      const response = await completeWithWorkSpec(
+        llmProvider,
         context(AUDITOR_SYSTEM_PROMPT, JSON.stringify({
           task: 'Compare the stable estimate with the actual public reply. Classify only meaningful divergence.',
           outputSchema: {
@@ -96,11 +100,12 @@ export function createLLMIntrospectionAuditor(
           stableReply,
           actualReply: candidate.actualReply,
         })),
-        'background',
-        {
-          modelHint: { maxTokens: config.comparisonMaxTokens, temperature: 0 },
+        buildLLMWorkSpec({
+          purpose: 'background',
+          durable: false,
           correlation: COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
-        },
+        }),
+        { modelHint: { maxTokens: config.comparisonMaxTokens, temperature: 0 } },
       );
       const parsed = parseJsonObject(response.content, 'divergence comparator');
       assertExactKeys(parsed, ['diverged', 'type', 'observation', 'confidence'], 'divergence comparator');
@@ -135,7 +140,8 @@ export function createLLMCompanionLandmarkReflector(
 ): CompanionLandmarkReflectorPort {
   return {
     reflect: async (input) => {
-      const response = await llmProvider.complete(
+      const response = await completeWithWorkSpec(
+        llmProvider,
         context(
           companionSystemPrompt,
           JSON.stringify({
@@ -144,11 +150,12 @@ export function createLLMCompanionLandmarkReflector(
             outputSchema: { reflection: 'string' },
           }),
         ),
-        'background',
-        {
-          modelHint: { maxTokens: config.reflectionMaxTokens },
+        buildLLMWorkSpec({
+          purpose: 'background',
+          durable: false,
           correlation: COMPANION_PRIVATE_BACKGROUND_TELEMETRY,
-        },
+        }),
+        { modelHint: { maxTokens: config.reflectionMaxTokens } },
       );
       const parsed = parseJsonObject(response.content, 'companion landmark reflection');
       assertExactKeys(parsed, ['reflection'], 'companion landmark reflection');

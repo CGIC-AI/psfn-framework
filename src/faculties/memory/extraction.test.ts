@@ -398,7 +398,7 @@ describe('MemoryExtractor telemetry payloads', () => {
       boundaryFactCount: 0,
     });
     expect(llmClient.complete).toHaveBeenCalled();
-    expect(llmClient.complete.mock.calls[0][0].correlation).toMatchObject({
+    expect(llmClient.complete.mock.calls[0][2]?.correlation).toMatchObject({
       turnId,
       requestId: 'req-telemetry-test',
     });
@@ -536,7 +536,7 @@ describe('MemoryExtractor telemetry payloads', () => {
     await extractor.maybeExtract('api:threshold-tokens-callsite');
 
     expect(llmClient.complete).toHaveBeenCalledTimes(1);
-    expect(llmClient.complete).toHaveBeenCalledWith(expect.anything(), 'extraction');
+    expect(llmClient.complete).toHaveBeenCalledWith(expect.anything(), 'extraction', expect.anything());
     const calls = (eventBus.emit as ReturnType<typeof vi.fn>).mock.calls;
     const startCall = calls.find(([name]) => name === 'memory.extraction.start');
     expect(startCall?.[1]?.triggerReason).toBe('context_threshold');

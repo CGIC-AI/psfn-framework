@@ -276,7 +276,7 @@ describe('runRLMLoop', () => {
     );
 
     const calls = (llm.complete as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls[0][0].correlation).toMatchObject({
+    expect(calls[0][2]?.correlation).toMatchObject({
       turnId: 'turn-1',
       requestId: 'req-1:iteration-1',
       sessionId: 'logical-session-1',
@@ -342,7 +342,7 @@ describe('runRLMLoop', () => {
     );
 
     const correlations = (llm.complete as ReturnType<typeof vi.fn>).mock.calls
-      .map(call => call[0].correlation);
+      .map(call => call[2]?.correlation);
     expect(correlations).toHaveLength(3);
     for (const correlation of correlations) {
       expect(correlation).toMatchObject({
@@ -592,7 +592,7 @@ describe('runRLMLoop', () => {
     );
 
     const calls = (llm.complete as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls[1][0].correlation).toMatchObject({
+    expect(calls[1][2]?.correlation).toMatchObject({
       turnId: 'turn-2',
       requestId: 'req-2:sandbox-subquery:1',
       sessionId: 'logical-session-2',
@@ -654,7 +654,7 @@ describe('runRLMLoop', () => {
     expect(calls).toHaveLength(3);
     expect(calls[1][0].messages[0]).toEqual({ role: 'user', content: 'child task' });
     expect(calls[1][0].messages).toHaveLength(2);
-    expect(calls[1][0].correlation).toMatchObject({
+    expect(calls[1][2]?.correlation).toMatchObject({
       requestId: 'req-nested:nested-analysis-1:iteration-1',
       toolCallId: 'tool-nested:nested-analysis-1',
       originStage: 'repl.analysis_workbench.iteration',

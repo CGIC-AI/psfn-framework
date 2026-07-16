@@ -659,9 +659,10 @@ describe('orientation context surface wiring', () => {
 
       expect(spanBound.entries.some(entry => entry.content === 'outside-old-01')).toBe(false);
 
-      const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async (context, purpose) => {
+      const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async (context, purpose, options) => {
         expect(purpose).toBe('background');
-        expect(context.correlation).toMatchObject({
+        // mmo9.7.1: correlation now rides the completion options (work spec).
+        expect(options?.correlation).toMatchObject({
           channelId: 'api:main',
           callType: 'summary',
           purpose: 'session.recent.summary',
@@ -768,8 +769,8 @@ describe('orientation context surface wiring', () => {
         timestamp: now - (2 * hourMs),
       },
     ];
-    const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async (context) => {
-      const originStage = context.correlation?.originStage;
+    const complete = vi.fn<LLMProviderPort['complete']>().mockImplementation(async (_context, _purpose, options) => {
+      const originStage = options?.correlation?.originStage;
       return {
         content: originStage === 'session.recent.summary.wake_continuity'
           ? 'The side channel was waiting on prompt registry review.'
@@ -818,7 +819,7 @@ describe('orientation context surface wiring', () => {
       recentSummaryMode: 'foreground',
     });
 
-    const originStages = complete.mock.calls.map(([context]) => context.correlation?.originStage);
+    const originStages = complete.mock.calls.map((call) => call[2]?.correlation?.originStage);
     expect(originStages).toContain('session.recent.summary.wake_session');
     expect(originStages).toContain('session.recent.summary.wake_continuity');
     expect(ctx.systemPrompt).toContain('Before the pause, Vega and Companion chose the shared summary service');
@@ -941,7 +942,7 @@ describe('wake_continuity entry floor', () => {
 
     // One conversational continuity entry < default floor (2): the
     // wake_session lane still fires; the wake_continuity lane must not.
-    const originStages = complete.mock.calls.map(([context]) => context.correlation?.originStage);
+    const originStages = complete.mock.calls.map((call) => call[2]?.correlation?.originStage);
     expect(originStages).toContain('session.recent.summary.wake_session');
     expect(originStages).not.toContain('session.recent.summary.wake_continuity');
   });
@@ -958,7 +959,7 @@ describe('wake_continuity entry floor', () => {
     });
 
     // Floor lowered to 1 by config: both wake lanes fire again.
-    const originStages = complete.mock.calls.map(([context]) => context.correlation?.originStage);
+    const originStages = complete.mock.calls.map((call) => call[2]?.correlation?.originStage);
     expect(originStages).toContain('session.recent.summary.wake_session');
     expect(originStages).toContain('session.recent.summary.wake_continuity');
   });

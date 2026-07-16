@@ -4,6 +4,7 @@ import type {
   CorrelationMetadata,
 } from '../../../shared/contracts/runtime.js';
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
+import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
 import { deriveChildIcpConversationCostCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import {
   classifyAppraisalTrigger,
@@ -187,11 +188,14 @@ export class IntentionAppraisal {
     };
 
     try {
-      const completion = await this.llmProvider.complete({
-        systemPrompt: buildRuntimeAppraisalSystemPrompt(this.systemPrompt, persona),
-        messages: [promptMessage],
-        correlation,
-      }, completionPurpose);
+      const completion = await completeWithWorkSpec(
+        this.llmProvider,
+        {
+          systemPrompt: buildRuntimeAppraisalSystemPrompt(this.systemPrompt, persona),
+          messages: [promptMessage],
+        },
+        buildLLMWorkSpec({ purpose: completionPurpose, durable: false, correlation }),
+      );
       const parsed = parseDecisionResponse(completion.content, this.maxDecisions);
       const decisions = parsed.decisions.length > 0
         ? parsed.decisions

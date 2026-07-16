@@ -1,3 +1,4 @@
+import type { RuntimeLaneClass } from '../../core/agent/worker-lanes.js';
 import type { ContextManifest } from '../../core/session/context-manifest.js';
 import type { CompanionPresenceMetadata, EmbodimentPresenceMetadata } from '../../core/agent/presence-metadata.js';
 import type { CredentialReference } from '../../boundary/custody/credential-vault.js';
@@ -1363,6 +1364,75 @@ export interface ModelBudgetBlockedEvent extends Partial<CorrelationMetadata> {
 
 export type ModelPurpose = 'chat' | 'background' | 'memory' | 'context' | 'reasoning' | 'longContext' | 'vision' | 'moa';
 export type CompletionPurpose = 'chat' | 'background' | 'memory' | 'context' | 'extraction' | 'summary' | 'reasoning' | 'import_processing' | 'vision';
+
+/**
+ * Retry disposition an autonomous work item declares to the LLM client.
+ * - 'inherit' keeps the client's configured retry policy (current behavior).
+ * - 'none' opts the work item out of client-side retries (maps to disableRetry).
+ * Consumed by the client's retry wiring; carried on {@link LLMWorkSpec}.
+ */
+export type LLMWorkRetryPolicy = 'inherit' | 'none';
+
+/**
+ * Cancellation semantics a work item declares. The concrete AbortSignal is NOT
+ * carried on the spec (specs must stay serializable across the gateway RPC
+ * boundary); the caller still threads the live signal through the call options.
+ * - 'caller_signal' the caller owns an AbortSignal that cancels this work.
+ * - 'deadline'      the work is bounded by {@link LLMWorkSpec.deadlineMs}.
+ * - 'none'          no explicit cancellation channel.
+ */
+export type LLMWorkCancellation = 'caller_signal' | 'deadline' | 'none';
+
+/**
+ * mmo9.7.1 — the typed superset of the ad-hoc correlation+lane every autonomous
+ * LLM call previously passed piecemeal. A single declarative contract for a unit
+ * of model work: its purpose, the runtime lane it belongs to, output/deadline/
+ * cost ceilings, cancellation + retry disposition, whether it is durable, and
+ * the correlation lineage.
+ *
+ * Law 12.4 (single admission/lane/budget system): `lane` is a DECLARED value the
+ * client reconciles BYTE-IDENTICALLY against the existing
+ * `resolveRuntimeLaneClassForModelCall`. It is NOT a second lane resolver: the
+ * model-call gate keeps resolving the runtime class from correlation exactly as
+ * before, and the client fails closed if a declared `lane` disagrees. Admission
+ * stays the mmo9.5 ModelCallGate; budget stays the charge-unit economy. The
+ * ceiling fields are consumed by mmo9.7.2 boundary accounting; `durable` /
+ * `preemptionProtected` by mmo9.7.3/.7.4 welfare + anti-starvation.
+ */
+export interface LLMWorkSpec {
+  /** Semantic completion purpose; also the value passed to the client entry. */
+  purpose: CompletionPurpose;
+  /**
+   * Runtime lane this work belongs to. MUST equal
+   * `resolveRuntimeLaneClassForModelCall(...)` for this call's correlation — a
+   * declared assertion the client verifies, never a parallel resolver.
+   */
+  lane: RuntimeLaneClass;
+  /**
+   * Whether the work is durable (survives process restart via the background
+   * work supervisor) or ephemeral. Consumed by mmo9.7.3.
+   */
+  durable: boolean;
+  /** Hard cap on generated output tokens for this work item, when declared. */
+  maxOutputTokens?: number;
+  /** Advisory wall-clock budget in ms. Cancellation is owned by the signal. */
+  deadlineMs?: number;
+  /** Token ceiling declaration consulted by mmo9.7.2 accounting (not a ledger). */
+  tokenCeiling?: number;
+  /** Dollar ceiling declaration consulted by mmo9.7.2 accounting (not a ledger). */
+  costCeilingUsd?: number;
+  /** Cancellation semantics; the live AbortSignal rides the call options. */
+  cancellation?: LLMWorkCancellation;
+  /** Retry disposition; defaults to the client's configured policy. */
+  retryPolicy?: LLMWorkRetryPolicy;
+  /**
+   * mmo9.7.4 welfare/anti-starvation flag. Nothing sets it true yet; carried
+   * here so mmo9.7.4 consumes it without introducing a second flag.
+   */
+  preemptionProtected?: boolean;
+  /** Correlation lineage (companion/session/channel/charge/ICP) for this work. */
+  correlation?: Partial<CorrelationMetadata>;
+}
 export type ImportProcessingRouteMode = 'background' | 'openrouter_zdr' | 'local_endpoint';
 export const COMPOSITIONAL_PURPOSES = [
   'extraction',

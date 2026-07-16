@@ -2,7 +2,7 @@
 // Shared interfaces used by agent, session, memory, gateway, and REPL modules.
 // This module is intentionally dependency-light to avoid circular imports.
 
-import type { CompletionPurpose, CorrelationMetadata, LLMModelHint, LLMRequestMetadata, LLMContext, LLMResponse, StreamCallbacks, TurnID } from '../../shared/contracts/runtime.js';
+import type { CompletionPurpose, CorrelationMetadata, LLMModelHint, LLMRequestMetadata, LLMContext, LLMResponse, LLMWorkSpec, StreamCallbacks, TurnID } from '../../shared/contracts/runtime.js';
 import type { IcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import type { ChannelMeta } from '../../system/trust/policy.js';
@@ -47,12 +47,27 @@ export interface LLMProviderStreamOptions {
    * (mmo9.5.1) so the upstream stream is torn down when either fires.
    */
   signal?: AbortSignal;
+  /**
+   * mmo9.7.1: optional typed work spec for an autonomous stream. When present the
+   * client honors its correlation + purpose instead of dropping option-level
+   * correlation and hardcoding purpose 'chat' (also the mmo9.8 streaming seam).
+   * Absent for the interactive chat turn, whose purpose is 'chat'.
+   */
+  workSpec?: LLMWorkSpec;
 }
 
 export interface LLMProviderCompletionOptions {
   signal?: AbortSignal;
   modelHint?: LLMModelHint;
   correlation?: Partial<CorrelationMetadata>;
+  /**
+   * mmo9.7.1: typed work spec supplied by the autonomous client entry
+   * (`completeWithWorkSpec`). Optional on the shared port so foreground/tool and
+   * gateway callers stay unchanged; the client validates + reconciles it when
+   * present. Autonomous src/core + src/faculties call sites always carry one
+   * (enforced by the entry's required param and a lint/AST test).
+   */
+  workSpec?: LLMWorkSpec;
 }
 
 export function createLLMProviderPort(provider: LLMProviderPort): LLMProviderPort {

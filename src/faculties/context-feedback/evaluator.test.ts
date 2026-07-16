@@ -157,7 +157,11 @@ describe('ContextEvaluator', () => {
       },
     });
 
-    expect(complete).toHaveBeenCalledWith(expect.anything(), 'memory');
+    expect(complete).toHaveBeenCalledWith(
+      expect.anything(),
+      'memory',
+      expect.objectContaining({ workSpec: expect.objectContaining({ purpose: 'memory' }) }),
+    );
     expect(result).toEqual({
       effectivenessScore: 0.67,
       signals: {

@@ -48,6 +48,7 @@ import {
   COMPANIONS_SEED_FILE_NAME,
   isMultiCompanionEnabled,
   resolveCompanionFleet,
+  type ResolvedCompanionsFleetConfig,
 } from './companions-config.js';
 import {
   loadIntakePolicyConfig,
@@ -97,6 +98,21 @@ export interface StartupOwnerFileState {
 export interface StartupOwnerFileVerificationResult {
   ok: boolean;
   errors: string[];
+}
+
+export interface StartupFleetOwnerFileVerificationOptions extends Omit<
+  StartupOwnerFileLoadOptions,
+  'companionDataDir' | 'multiCompanion'
+> {
+  /** Canonically resolved fleet; every entry's exact companion root is checked. */
+  fleet: ResolvedCompanionsFleetConfig;
+}
+
+interface OwnerFileCheck {
+  label: string;
+  dataPath: string;
+  seedPath: string;
+  run: () => unknown;
 }
 
 function ownerFileSeedDir(options: Pick<StartupOwnerFileLoadOptions, 'seedDir'>): string {
@@ -220,14 +236,11 @@ export function loadStartupIntakePolicyOwnerFile(
   return loadIntakePolicyConfig(dataDir, seedDir ? { seedDir } : undefined);
 }
 
-export function verifyStartupOwnerFiles(
-  options: StartupOwnerFileLoadOptions,
-): StartupOwnerFileVerificationResult {
-  const seedDir = ownerFileSeedDir(options);
-  // Whole-file per-companion owners are verified at the companion root.
-  // Defaults to dataDir only for the legacy shared-root layout.
-  const companionDataDir = options.companionDataDir ?? options.dataDir;
-  const checks: Array<{ label: string; dataPath: string; seedPath: string; run: () => unknown }> = [
+function systemOwnerFileChecks(
+  options: Omit<StartupOwnerFileLoadOptions, 'companionDataDir'>,
+  seedDir: string,
+): OwnerFileCheck[] {
+  return [
     {
       label: 'settings',
       dataPath: join(options.dataDir, SETTINGS_FILE_NAME),
@@ -260,37 +273,10 @@ export function verifyStartupOwnerFiles(
       run: () => loadStartupTrustPolicyOwnerFile(options.dataDir, options.seedDir),
     },
     {
-      label: 'scheduler',
-      dataPath: join(companionDataDir, SCHEDULER_FILE_NAME),
-      seedPath: join(seedDir, 'scheduler.seed.json'),
-      run: () => loadStartupSchedulerOwnerFile(companionDataDir, options.seedDir),
-    },
-    {
-      label: 'capability-tier',
-      dataPath: join(companionDataDir, CAPABILITY_TIER_FILE_NAME),
-      seedPath: join(seedDir, 'capability-tier.seed.json'),
-      run: () => loadStartupCapabilityTierOwnerFile(companionDataDir, options.seedDir),
-    },
-    {
-      label: 'charge-policy',
-      dataPath: join(companionDataDir, CHARGE_POLICY_FILE_NAME),
-      seedPath: join(seedDir, CHARGE_POLICY_SEED_FILE_NAME),
-      run: () => loadStartupChargePolicyOwnerFile(companionDataDir, options.seedDir),
-    },
-    {
       label: 'backup',
       dataPath: join(options.dataDir, BACKUP_FILE_NAME),
       seedPath: join(seedDir, BACKUP_SEED_FILE_NAME),
       run: () => loadBackupConfig(options.dataDir, options.seedDir ? { seedDir: options.seedDir } : undefined),
-    },
-    {
-      label: 'skills',
-      dataPath: join(companionDataDir, SKILLS_FILE_NAME),
-      seedPath: join(seedDir, SKILLS_SEED_FILE_NAME),
-      run: () => loadSkillsConfig(
-        companionDataDir,
-        options.seedDir ? { seedDir: options.seedDir } : undefined,
-      ),
     },
     {
       label: 'companions',
@@ -320,7 +306,47 @@ export function verifyStartupOwnerFiles(
       }),
     },
   ];
+}
 
+function companionOwnerFileChecks(input: {
+  companionDataDir: string;
+  companionLabel?: string;
+  seedDir: string;
+  configuredSeedDir?: string;
+}): OwnerFileCheck[] {
+  const labelPrefix = input.companionLabel ? `${input.companionLabel} ` : '';
+  return [
+    {
+      label: `${labelPrefix}scheduler`,
+      dataPath: join(input.companionDataDir, SCHEDULER_FILE_NAME),
+      seedPath: join(input.seedDir, 'scheduler.seed.json'),
+      run: () => loadStartupSchedulerOwnerFile(input.companionDataDir, input.configuredSeedDir),
+    },
+    {
+      label: `${labelPrefix}capability-tier`,
+      dataPath: join(input.companionDataDir, CAPABILITY_TIER_FILE_NAME),
+      seedPath: join(input.seedDir, 'capability-tier.seed.json'),
+      run: () => loadStartupCapabilityTierOwnerFile(input.companionDataDir, input.configuredSeedDir),
+    },
+    {
+      label: `${labelPrefix}charge-policy`,
+      dataPath: join(input.companionDataDir, CHARGE_POLICY_FILE_NAME),
+      seedPath: join(input.seedDir, CHARGE_POLICY_SEED_FILE_NAME),
+      run: () => loadStartupChargePolicyOwnerFile(input.companionDataDir, input.configuredSeedDir),
+    },
+    {
+      label: `${labelPrefix}skills`,
+      dataPath: join(input.companionDataDir, SKILLS_FILE_NAME),
+      seedPath: join(input.seedDir, SKILLS_SEED_FILE_NAME),
+      run: () => loadSkillsConfig(
+        input.companionDataDir,
+        input.configuredSeedDir ? { seedDir: input.configuredSeedDir } : undefined,
+      ),
+    },
+  ];
+}
+
+function runOwnerFileChecks(checks: readonly OwnerFileCheck[]): StartupOwnerFileVerificationResult {
   const errors: string[] = [];
   for (const check of checks) {
     try {
@@ -334,4 +360,43 @@ export function verifyStartupOwnerFiles(
     ok: errors.length === 0,
     errors,
   };
+}
+
+export function verifyStartupOwnerFiles(
+  options: StartupOwnerFileLoadOptions,
+): StartupOwnerFileVerificationResult {
+  const seedDir = ownerFileSeedDir(options);
+  // Whole-file per-companion owners are verified at the companion root.
+  // Defaults to dataDir only for the legacy shared-root layout.
+  const companionDataDir = options.companionDataDir ?? options.dataDir;
+  return runOwnerFileChecks([
+    ...systemOwnerFileChecks(options, seedDir),
+    ...companionOwnerFileChecks({
+      companionDataDir,
+      seedDir,
+      configuredSeedDir: options.seedDir,
+    }),
+  ]);
+}
+
+/** Verify global owners once, then every exact root from the resolved fleet. */
+export function verifyStartupFleetOwnerFiles(
+  options: StartupFleetOwnerFileVerificationOptions,
+): StartupOwnerFileVerificationResult {
+  const seedDir = ownerFileSeedDir(options);
+  return runOwnerFileChecks([
+    ...systemOwnerFileChecks({
+      dataDir: options.dataDir,
+      seedDir: options.seedDir,
+      defaultContextWindow: options.defaultContextWindow,
+      fleetAuth: options.fleetAuth,
+      multiCompanion: true,
+    }, seedDir),
+    ...options.fleet.companions.flatMap(companion => companionOwnerFileChecks({
+      companionDataDir: companion.companionDataDir,
+      companionLabel: `companion ${companion.companionId}`,
+      seedDir,
+      configuredSeedDir: options.seedDir,
+    })),
+  ]);
 }

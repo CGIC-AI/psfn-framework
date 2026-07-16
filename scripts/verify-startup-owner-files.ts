@@ -1,7 +1,10 @@
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { loadConfig } from '../src/system/config/load-config.js';
-import { verifyStartupOwnerFiles } from '../src/system/config/startup-owner-files.js';
+import {
+  verifyStartupFleetOwnerFiles,
+  verifyStartupOwnerFiles,
+} from '../src/system/config/startup-owner-files.js';
 
 const OWNER_FILE_SEEDS = [
   ['settings.seed.json', 'settings.json'],
@@ -81,12 +84,21 @@ try {
   }
 
   const config = loadConfig();
-  const result = verifyStartupOwnerFiles({
+  const commonOptions = {
     dataDir: config.dataDir,
     seedDir,
     defaultContextWindow: config.defaultContextWindow,
-    multiCompanion: config.multiCompanion,
-  });
+  };
+  const result = config.companionFleet
+    ? verifyStartupFleetOwnerFiles({
+      ...commonOptions,
+      fleet: config.companionFleet,
+    })
+    : verifyStartupOwnerFiles({
+      ...commonOptions,
+      companionDataDir: config.companionDataDir ?? config.dataDir,
+      multiCompanion: false,
+    });
 
   if (!result.ok) {
     console.error('Startup owner-file validation failed:');

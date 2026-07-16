@@ -414,8 +414,10 @@ repeat the exact apply command: only receipt-recorded, digest-identical partial
 copies are accepted. A changed source, changed fleet, pre-existing destination,
 or destination tamper is a hard conflict requiring operator investigation; the
 tool never chooses a winner. After completion, run
-`npm run verify:startup-owner-files` for each companion's runtime wiring before
-restarting the fleet.
+`npm run verify:startup-owner-files` once before restarting the fleet. The
+canonical preflight validates global owners at `SYSTEM_DATA_DIR` once and every
+per-companion owner at each exact root resolved from `companions.json`; an owner
+in another companion root or a system-root decoy cannot satisfy the check.
 
 ## Migration Boundary Until Beta
 

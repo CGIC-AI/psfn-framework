@@ -642,4 +642,29 @@ describe('startup owner-file loaders', () => {
     expect(result.errors[0]).toContain('charge-policy.json');
     expect(result.errors[0]).toContain('surfaceCosts.localFilesystem must be a finite number >= 0');
   });
+
+  it('rejects the tracked fleet-auth seed before enabled startup', () => {
+    const rootDir = mkdtempSync(join(tmpdir(), 'psfn-startup-owner-files-fleet-auth-seed-'));
+    const seedDir = join(process.cwd(), 'config');
+    mkdirSync(rootDir, { recursive: true });
+    tempDirs.push(rootDir);
+    writeRequiredOwnerExamples(rootDir);
+    writeFileSync(
+      join(rootDir, 'fleet-auth.json'),
+      readFileSync(join(seedDir, 'fleet-auth.seed.json'), 'utf8'),
+      'utf8',
+    );
+
+    const result = verifyStartupOwnerFiles({
+      dataDir: rootDir,
+      seedDir,
+      defaultContextWindow: 128_000,
+      fleetAuth: true,
+      multiCompanion: false,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.errors.find(error => error.startsWith('fleet-auth owner-file')))
+      .toMatch(/replace-before-enable.*must be replaced/i);
+  });
 });

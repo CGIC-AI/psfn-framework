@@ -13,6 +13,7 @@ import { MEMORY_SUBJECT_CLASSIFIER_VERSION } from '../../shared/contracts/memory
 import type { MemorySubjectQueryAuthorization } from '../../shared/contracts/memory-subject.js';
 import { createPostgresContactStore } from '../../core/contacts/postgres-adapter.js';
 import { persistMemorySubjectProjection } from './postgres-store/subject-projection.js';
+import { createSubjectAuthorizedMemoryStore } from './subject-authorized-store.js';
 
 const INTEGRATION_TIMEOUT_MS = 120_000;
 const DEFAULT_EMBEDDING = new Float32Array([0.9, 0.1, 0.1, 0.1]);
@@ -349,6 +350,57 @@ describe('postgres memory store integration', () => {
           threshold: 0.99,
         },
       })).rejects.toThrow(/does not permit embedding_search/);
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
+  it('computes memory statistics only from rows authorized for the trusted subject', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      await store.insertMemory(makeMemory({
+        id: 'stats-visible-semantic',
+        text: 'visible semantic content',
+        type: 'semantic',
+        salience: 0.25,
+        provenance: { subjectContactId: 'contact-a' },
+      }), DEFAULT_EMBEDDING);
+      await store.insertMemory(makeMemory({
+        id: 'stats-visible-procedural',
+        text: 'visible procedural content',
+        type: 'procedural',
+        salience: 0.75,
+        provenance: { subjectContactId: 'contact-a' },
+      }), DEFAULT_EMBEDDING);
+      await store.insertMemory(makeMemory({
+        id: 'stats-hidden-subject',
+        text: 'hidden subject content',
+        type: 'emotional',
+        salience: 1,
+        provenance: { subjectContactId: 'contact-b' },
+      }), DEFAULT_EMBEDDING);
+      await store.insertMemory(makeMemory({
+        id: 'stats-unattributed',
+        text: 'unattributed content',
+        type: 'relational',
+        salience: 1,
+      }), DEFAULT_EMBEDDING);
+
+      const authorized = createSubjectAuthorizedMemoryStore(store, {
+        viewerContactId: 'contact-a',
+      });
+      const stats = await authorized.getStats();
+      expect(stats).toEqual({
+        total: 2,
+        byType: { semantic: 1, procedural: 1 },
+        avgSalience: 0.5,
+      });
+      expect(JSON.stringify(stats)).not.toContain('content');
+
+      const denied = createSubjectAuthorizedMemoryStore(store, {});
+      await expect(denied.getStats()).resolves.toEqual({
+        total: 0,
+        byType: {},
+        avgSalience: 0,
+      });
     });
   }, INTEGRATION_TIMEOUT_MS);
 

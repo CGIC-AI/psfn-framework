@@ -95,6 +95,7 @@ import { maybeCreateIntakeSinkGate } from '../../core/cogsec/intake/sink-gates.j
 import { loadIntakePolicyConfig } from '../../system/config/intake-policy-config.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { createSelfStatusTool } from '../../core/tools/self-status.js';
+import { createSelfStatusMemoryStatsProvider } from './self-status-memory-stats.js';
 import {
   createPostgresModelUsageStoreFromConfig,
   type PostgresModelUsageStore,
@@ -347,7 +348,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     getToolCatalogSnapshot: () => agentLoop.getToolCatalogSnapshot(),
     getToolHealthStatusByName: () => agentLoop.getToolHealthStatusByName(),
     getObserverEvalSidecarHealth: () => getObserverEvalSidecarHealthSnapshot(observerEvalSidecar),
-    getMemoryStats: () => memoryStore.getStats(),
+    getMemoryStats: createSelfStatusMemoryStatsProvider(memoryStore),
     listRecentSessions: (limit) => sessionManager.listRecentSessions(limit),
     getStreamingState: () => agentLoop.isStreaming,
     logsDir: pathSnapshot.runtimePathLayout.logsDir,

@@ -44,6 +44,7 @@ import {
   buildReflectionProcessId,
   ReflectionDailyJournalStore,
   ReflectionProcessLogStore,
+  type ReflectionDailyJournalEntry,
   type ReflectionSubstrateContext,
 } from '../../persistence/journals/reflection-substrate.js';
 import { isBusyTurnError } from '../../system/lifecycle/turn-contention.js';
@@ -74,7 +75,6 @@ import {
   promptUsesReflectionMacros,
   type ReflectionInternalStateContext,
   type ReflectionMetacognitiveFlag,
-  type ReflectionPromptContext,
   type ReflectionPromptSectionBundle,
 } from './heartbeat-template-runtime/prompt-formatting.js';
 import {
@@ -83,6 +83,7 @@ import {
   normalizeSnapshotRef,
   resolveInternalStateContext,
 } from './heartbeat-template-runtime/internal-state-prompt.js';
+import { buildReflectionStarterPromptBundle } from './heartbeat-template-runtime/reflection-starter-prompt.js';
 import { runExperientialTemplateDeliberation } from './heartbeat-template-runtime/experiential-deliberation.js';
 import {
   HeartbeatTemplateLoopGuardError,
@@ -242,19 +243,31 @@ export function createHeartbeatTemplateRuntime(
 
   const resolveReflectionSubstratePromptContext = (
     template: ReflectionTemplate,
-  ): ReflectionSubstrateContext | null => {
+  ): {
+    context: ReflectionSubstrateContext | null;
+    recentDailyJournalEntries: ReflectionDailyJournalEntry[];
+  } => {
     if (!template.internalStateInput && template.mode !== 'deliberation') {
-      return null;
+      return {
+        context: null,
+        recentDailyJournalEntries: [],
+      };
     }
+    const recentDailyJournalEntries = reflectionDailyJournal.listRecent({
+      limit: template.id === 'weekly-review' ? 7 : 2,
+    });
     const context = assembleReflectionSubstrateContext({
       recentReflectionJournalEntries: reflectionJournal.listRecent({ limit: 2 }),
-      recentDailyJournalEntries: reflectionDailyJournal.listRecent({ limit: 2 }),
+      recentDailyJournalEntries,
       recentProcessLogEntries: reflectionProcessLog.listRecent({
         limit: 2,
         stages: ['completed', 'failed'],
       }),
     });
-    return context;
+    return {
+      context,
+      recentDailyJournalEntries,
+    };
   };
 
   const formatNarrativePromptInput = (
@@ -765,18 +778,24 @@ export function createHeartbeatTemplateRuntime(
       logger: log,
     });
     const reflectionContactContext = reflectionContactResolution.bundle;
-    const reflectionSubstrateContext = resolveReflectionSubstratePromptContext(template);
+    const reflectionSubstrateResolution = resolveReflectionSubstratePromptContext(template);
+    const reflectionSubstrateContext = reflectionSubstrateResolution.context;
     const reflectionCreatedAt = new Date(Date.now()).toISOString();
-    const reflectionPromptContext: ReflectionPromptContext = {
-      internalState: internalStateContext ?? undefined,
-      contactBundle: reflectionContactContext ?? undefined,
-      substrateContext: reflectionSubstrateContext ?? undefined,
-    };
-    const reflectionPromptBundle = mergeReflectionPromptBundles(
-      reflectionPromptContext.contactBundle,
-      buildInternalStatePromptBundle(reflectionPromptContext.internalState ?? null),
-      reflectionPromptContext.substrateContext,
+    const collectedEvidenceBundle = mergeReflectionPromptBundles(
+      reflectionContactContext,
+      buildInternalStatePromptBundle(internalStateContext),
+      reflectionSubstrateContext,
     );
+    const reflectionPromptBundle = template.id === 'daily-review' || template.id === 'weekly-review'
+      ? buildReflectionStarterPromptBundle({
+        templateId: template.id,
+        internalStateContext,
+        retrievedMemoryBlock: reflectionContactResolution.retrievedMemoryBlock,
+        recentSessionMessages: reflectionContactResolution.recentSessionMessages,
+        recentDailyJournalEntries: reflectionSubstrateResolution.recentDailyJournalEntries,
+        provenanceRefs: collectedEvidenceBundle?.provenanceRefs ?? [],
+      })
+      : collectedEvidenceBundle;
     let reflectionGroundingProvenanceRefs = reflectionPromptBundle?.provenanceRefs ?? [];
     let reflectionPrompt = formatNarrativePromptInput(
       template.prompt,

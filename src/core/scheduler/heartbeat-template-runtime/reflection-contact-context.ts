@@ -46,6 +46,8 @@ export interface ReflectionContactTelemetryDiagnostics {
 export interface ReflectionContactContextResolution {
   bundle: ReflectionContactContextBundle | null;
   diagnostics: ReflectionContactTelemetryDiagnostics;
+  retrievedMemoryBlock?: string;
+  recentSessionMessages: readonly ReflectionContactRecentMessage[];
 }
 
 export function normalizeRecentReflectionMessage(
@@ -260,6 +262,7 @@ export async function resolveReflectionContactContextBundle(input: {
       diagnostics: {
         recentMessageCount: 0,
       },
+      recentSessionMessages: [],
     };
   }
 
@@ -396,6 +399,10 @@ export async function resolveReflectionContactContextBundle(input: {
       activeConcerns,
       pendingFollowUps,
     }),
+    ...(memoryRetrieval.memoryBlock?.trim()
+      ? { retrievedMemoryBlock: memoryRetrieval.memoryBlock.trim() }
+      : {}),
+    recentSessionMessages,
     diagnostics: {
       primarySessionId,
       recentMessageCount: recentSessionMessages.length,

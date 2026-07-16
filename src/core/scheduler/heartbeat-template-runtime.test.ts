@@ -66,7 +66,40 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       .filter(line => line.startsWith('- '));
   }
 
-  it('includes companion-readable ACAC self-report clues in heartbeat prompts and persisted telemetry', async () => {
+  const removedStarterBlockHeaders = [
+    '[Reflection Self Evidence]',
+    '[What this evidence is]',
+    '[Wellbeing and Affect Clues]',
+    '[Cognitive and Attention Clues]',
+    '[Salient Entities]',
+    '[Relational Clues]',
+    '[Recent Metacognitive Flags]',
+    '[Active Concerns]',
+    '[Pending Follow-Ups]',
+    '[Care Reminders]',
+    '[Reflection Contact Evidence]',
+    '[Recent Contact Session]',
+    '[Reflection Memory Retrieval]',
+    '[Retrieved Memory]',
+    '[Recent Session Tail]',
+    '[Reflection Affect Evidence]',
+    '[Recent Reflection Journal]',
+    '[Recent Lived-Day Journal]',
+    '[Recent Long-Process Trace]',
+    '[Reflection Self Substrate]',
+    '[Reflection Relational Substrate]',
+    '[Reflection Affect Substrate]',
+  ];
+
+  function expectCuratedReflectionStarter(prompt: string, timeframe: 'Day' | 'Week'): void {
+    expect(prompt).toContain(`[${timeframe} Events Starter]`);
+    for (const removedHeader of removedStarterBlockHeaders) {
+      expect(prompt).not.toContain(removedHeader);
+    }
+    expect(prompt).not.toContain('silence or absence framing');
+  }
+
+  it('keeps raw ACAC detail out of the daily starter while preserving it in telemetry', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
     const capturedPrompts: string[] = [];
     const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
@@ -165,17 +198,12 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     }));
 
     const prompt = capturedPrompts[0] ?? '';
-    const internalStateSection = getPromptSection(prompt, '[Reflection Self Evidence]');
-    // E6.2: the evidence boundary guards re-voiced first person (meaning preserved).
-    expect(internalStateSection).toContain('[What this evidence is]');
-    expect(internalStateSection).toContain('fallible clues to weigh against what I actually remember, feel, and know');
-    expect(internalStateSection).toContain('I keep the uncertainty rather than force them into agreement');
-    expect(internalStateSection).toContain('I keep the raw machinery — scores, ids, hashes, provenance refs, tool metadata — out of my own words');
-    expect(internalStateSection).toContain('[Wellbeing and Affect Clues]');
-    expect(internalStateSection).toContain('ACAC self-report clues: agency strong: The next action feels available.');
-    expect(internalStateSection).toContain('connection present: The contact thread is present.');
-    expect(internalStateSection).toContain('authenticity strong: The report matches the current context.');
-    expect(internalStateSection).toContain('curiosity strong: There is an unresolved question.');
+    expectCuratedReflectionStarter(prompt, 'Day');
+    expect(prompt).toContain('[High-Signal Starter Clues]');
+    expect(prompt).toContain('Recent affect evidence appears');
+    expect(prompt).not.toContain('ACAC self-report clues');
+    expect(prompt).not.toContain('The next action feels available.');
+    expect(prompt).not.toContain('The contact thread is present.');
     expect(prompt).not.toContain('[Internal State Input]');
     expect(prompt).not.toContain('serialized_internal_state:');
     expect(prompt).not.toContain('snapshot_ref:');
@@ -199,7 +227,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     );
   });
 
-  it('marks uncertain emotion telemetry in reflection prompts before affect use', async () => {
+  it('keeps uncertain emotion telemetry out of the compact daily starter', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
     const capturedPrompts: string[] = [];
     const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
@@ -266,12 +294,11 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     });
 
     const prompt = capturedPrompts[0] ?? '';
-    const internalStateSection = getPromptSection(prompt, '[Reflection Self Evidence]');
-    expect(internalStateSection).toContain('Emotion telemetry validation: uncertain; source classifier_inferred; reasons stale_signal');
-    expect(internalStateSection).toContain('VAD and mood were downweighted, and discrete classifier labels were withheld before reflection use.');
-    expect(internalStateSection).toContain('Effective affect clue after validation');
-    expect(internalStateSection).not.toContain('Current feel appears');
-    expect(internalStateSection).not.toContain('Discrete emotion clues: sadness');
+    expectCuratedReflectionStarter(prompt, 'Day');
+    expect(prompt).not.toContain('[High-Signal Starter Clues]');
+    expect(prompt).not.toContain('Emotion telemetry validation:');
+    expect(prompt).not.toContain('Current feel appears');
+    expect(prompt).not.toContain('Discrete emotion clues: sadness');
   });
 
   it('records manual deliberation runs with provenance and process ids', async () => {
@@ -708,8 +735,8 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(capturedPrompts[0]).toContain('tool_use_mode: bounded_read_only_introspection');
     expect(capturedPrompts[0]).toContain('memory_retrieval_modes: default, temporal');
     expect(capturedPrompts[0]).toContain('memory_access_scope: companion_self_reflection');
-    expect(capturedPrompts[0]).toContain('[Reflection Contact Evidence]');
-    expect(capturedPrompts[0]).toContain('We should revisit the recovery plan tomorrow.');
+    expectCuratedReflectionStarter(capturedPrompts[0] ?? '', 'Day');
+    expect(capturedPrompts[0]).toContain('trust-filtered contact memory');
     expect(capturedPrompts[0]).toContain('[Read-only Tool Grounding]');
     expect(capturedPrompts[0]).toContain('Read-only tool grounding found the unresolved recovery follow-up.');
     // Character-card persona fields stay out of the reflection input. Identity
@@ -717,7 +744,6 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(capturedPrompts[0]).not.toContain('PERSONALITY_SENTINEL');
     expect(capturedPrompts[0]).not.toContain('DESCRIPTION_SENTINEL');
     expect(capturedPrompts[0]).not.toContain('SCENARIO_SENTINEL');
-    expect(capturedPrompts[0]).toContain('trust-filtered contact memory');
     expect(capturedPrompts[1]).toContain('Stage: synthesis');
     expect(capturedPrompts[2]).toContain('Stage: contradiction');
     expect(capturedSystemPrompts).toHaveLength(3);
@@ -1187,24 +1213,35 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       }));
       const prompt = capturedPrompts[0];
       const introspectionPolicySection = getPromptSection(prompt, '[Reflection Introspection Policy]');
-      const contactSection = getPromptSection(prompt, '[Reflection Contact Evidence]');
-      const recentSessionSection = getPromptSection(prompt, '[Recent Contact Session]');
-      const memoryHeaderSection = getPromptSection(prompt, '[Reflection Memory Retrieval]');
-      const recentTailSection = getPromptSection(prompt, '[Recent Session Tail]');
       expect(introspectionPolicySection).toContain('tool_use_mode: bounded_read_only_introspection');
       expect(introspectionPolicySection).toContain('memory_retrieval_modes: default, temporal');
       expect(introspectionPolicySection).toContain('memory_access_scope: companion_self_reflection');
       expect(introspectionPolicySection).toContain('overlay_tool_activation: forbidden');
       expect(introspectionPolicySection).toContain('core analysis_workbench tool');
       expect(introspectionPolicySection).toContain('memory_search, session_messages, session_search');
-      expect(contactSection).toContain('Current contact: Ari; trust scope trusted.');
-      expect(contactSection).toContain('Recent contact status: active.');
-      expect(contactSection).not.toContain('contact_id:');
-      expect(contactSection).not.toContain('trust_level:');
-      expect(getPromptBulletLines(recentSessionSection)).toHaveLength(2);
-      expect(memoryHeaderSection).not.toBe('');
-      expect(recentTailSection).toBe('');
+      expectCuratedReflectionStarter(prompt, templateId === 'weekly-review' ? 'Week' : 'Day');
+      expect(prompt).toContain('trust-filtered contact memory');
+      expect(prompt).toContain('[High-Signal Starter Clues]');
+      expect(prompt).not.toContain('Current contact: Ari; trust scope trusted.');
+      expect(prompt).not.toContain('I was here yesterday.');
       expect(prompt).not.toContain('stale silence');
+      if (templateId === 'weekly-review') {
+        for (const prescribedCategory of [
+          'my daily reflections',
+          'my memories',
+          'my inner-state clues',
+          'my goals',
+          'the people I have been close to',
+          'the arcs still unfolding',
+          'north-star signals',
+          'agency',
+          'connection',
+          'authenticity',
+          'curiosity',
+        ]) {
+          expect(prompt).not.toContain(prescribedCategory);
+        }
+      }
       expect(memoryRetrieve).toHaveBeenCalled();
       expect(memoryRetrieve.mock.calls[0]?.[1]).toBe(`internal:reflection:${templateId}`);
       expect(memoryRetrieve.mock.calls[0]?.[4]).toBe('contact-1');
@@ -1851,7 +1888,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(warning.details.claimSnippets?.[0]).toContain('3 days since we last chatted');
   });
 
-  it('expands reflection_self, reflection_relational, and reflection_affect macros from atomic bundles', async () => {
+  it('expands reflection macros with only the curated daily starter while retaining source provenance', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
     const capturedPrompts: string[] = [];
 
@@ -2035,15 +2072,6 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
 
     expect(capturedPrompts).toHaveLength(1);
     const prompt = capturedPrompts[0];
-    const internalStateSection = getPromptSection(prompt, '[Reflection Self Evidence]');
-    const memoryHeaderSection = getPromptSection(prompt, '[Reflection Memory Retrieval]');
-    const retrievedMemorySection = getPromptSection(prompt, '[Retrieved Memory]');
-    const contactSection = getPromptSection(prompt, '[Reflection Contact Evidence]');
-    const recentSessionSection = getPromptSection(prompt, '[Recent Contact Session]');
-    const relationalSubstrateSection = getPromptSection(prompt, '[Reflection Relational Substrate]');
-    const affectContextSection = getPromptSection(prompt, '[Reflection Affect Evidence]');
-    const affectSubstrateSection = getPromptSection(prompt, '[Reflection Affect Substrate]');
-    const selfSubstrateSection = getPromptSection(prompt, '[Reflection Self Substrate]');
 
     expect(prompt).not.toContain('{{reflection_self}}');
     expect(prompt).not.toContain('{{reflection_relational}}');
@@ -2051,31 +2079,14 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(prompt).not.toContain('PERSONALITY_SENTINEL');
     expect(prompt).not.toContain('DESCRIPTION_SENTINEL');
     expect(prompt).not.toContain('SCENARIO_SENTINEL');
-    expect(internalStateSection).toContain('[What this evidence is]');
-    expect(internalStateSection).toContain('private evidence I gather for myself, not the settled truth of who I am');
-    expect(internalStateSection).toContain('fallible clues to weigh against what I actually remember, feel, and know');
-    expect(internalStateSection).toContain('[Wellbeing and Affect Clues]');
+    expectCuratedReflectionStarter(prompt, 'Day');
+    expect(prompt).toContain('trust-filtered contact memory');
+    expect(prompt).toContain('[High-Signal Starter Clues]');
     expect(prompt).not.toContain(`snapshot_ref: ${currentSnapshotRef}`);
     expect(prompt).not.toContain('serialized_internal_state:');
-    expect(memoryHeaderSection).not.toBe('');
-    expect(retrievedMemorySection).not.toBe('');
-    expect(retrievedMemorySection).not.toContain('[Recent Session Tail]');
-    expect(contactSection).toContain('Current contact: Ari; trust scope trusted.');
-    expect(contactSection).toContain('Recent contact status: active.');
-    expect(contactSection).not.toContain('contact_id:');
-    expect(recentSessionSection).toContain('Purrsephone: I am here and tracking that thread.');
-    expect(recentSessionSection).not.toContain('Assistant: I am here and tracking that thread.');
-    expect(getPromptBulletLines(recentSessionSection)).toHaveLength(2);
-    expect(relationalSubstrateSection).toContain('canonical_truth_boundary:');
-    expect(relationalSubstrateSection).toContain('daily-review');
-    expect(affectContextSection).toContain('Recent affect trend:');
-    expect(affectContextSection).toContain('strong confidence');
-    expect(affectContextSection).not.toContain('current_vad:');
-    expect(affectContextSection).not.toContain('confidence=');
-    expect(affectSubstrateSection).toContain('canonical_truth_boundary:');
-    expect(affectSubstrateSection).toContain('experiential-review');
-    expect(selfSubstrateSection).toContain('canonical_truth_boundary:');
-    expect(selfSubstrateSection).toContain('values-reflection');
+    expect(prompt).not.toContain('I wanted to follow up on yesterday.');
+    expect(prompt).not.toContain('Recent conversations kept returning to steadiness under pressure.');
+    expect(prompt).not.toContain('Continuity and care remained durable values.');
     expect(memoryRetrieve).toHaveBeenCalled();
 
     const reflectionRaw = readFileSync(resolveReflectionJournalPath(tempDir), 'utf-8').trim();
@@ -2294,11 +2305,11 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
       expect(memoryRetrieve).toHaveBeenCalledTimes(1);
       expect(capturedPrompts.length).toBeGreaterThan(0);
       const prompt = capturedPrompts.join('\n\n');
-      const memoryHeaderSection = getPromptSection(prompt, '[Reflection Memory Retrieval]');
-      const recentTailSection = getPromptSection(prompt, '[Recent Session Tail]');
-      expect(memoryHeaderSection).not.toBe('');
-      expect(recentTailSection).not.toBe('');
-      expect(getPromptBulletLines(recentTailSection)).toHaveLength(2);
+      expectCuratedReflectionStarter(prompt, 'Week');
+      const eventStarter = getPromptSection(prompt, '[Week Events Starter]');
+      expect(eventStarter).toContain('I just sent the update.');
+      expect(eventStarter).toContain('I am tracking the update now.');
+      expect(getPromptBulletLines(eventStarter)).toHaveLength(2);
     } finally {
       reflectionJournalPrototype.listRecent = originalListRecent;
     }

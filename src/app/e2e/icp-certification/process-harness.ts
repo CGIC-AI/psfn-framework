@@ -220,7 +220,9 @@ export class IcpCertificationAgentProcess {
     return await this.request({ type: 'enter_private_room' }) as Record<string, unknown>;
   }
 
-  async sendRoomProbe(phase: 'post_exit' | 'pre_entry'): Promise<Record<string, unknown>> {
+  async sendRoomProbe(
+    phase: 'post_exit' | 'pre_entry' | 'rejoined',
+  ): Promise<Record<string, unknown>> {
     return await this.request({ type: 'send_room_probe', phase }) as Record<string, unknown>;
   }
 

@@ -406,10 +406,8 @@ describe('ICP certification real process harness', () => {
     expect(JSON.stringify(rejoinedRaw)).not.toContain('pre-entry room probe');
     expect(JSON.stringify(rejoinedRaw)).not.toContain('post-exit room probe');
 
-    await expect(agentA.runRoomWeightedThoughtScheduler()).resolves.toMatchObject({
-      preferredChannel: 'current_room',
-      status: 'consumed',
-      deliveryDisposition: 'delivered',
+    await expect(agentA.sendRoomProbe('rejoined')).resolves.toMatchObject({
+      deliveredTo: [CERTIFICATION_COMPANION_B],
     });
     await waitForChannelEntries(agentB, rejoinedRaw.entries.length + 2, CERTIFICATION_PRIVATE_ROOM);
 

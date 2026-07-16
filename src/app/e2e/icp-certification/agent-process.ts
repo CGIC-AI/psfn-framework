@@ -25,6 +25,7 @@ import { createCompactionBoundaryStore } from '../../../core/session/manager/com
 import { createIcpDeliveryProjectionStore } from '../../../core/session/manager/icp-delivery-projection-store.js';
 import { countTokens } from '../../../primitives/llm/tokens.js';
 import { Scheduler } from '../../../core/scheduler/scheduler.js';
+import { registerBackgroundWorkSupervisorTask } from '../../agent/scheduler-runtime.js';
 import { wirePostTurnActionRuntime } from '../../startup/composition/post-turn-actions.js';
 import {
   COMPANION_CANDIDATE_QUEUED_TEXT,
@@ -80,7 +81,7 @@ type AgentProcessCommand = {
   type: 'run_recursive_weighted_thought_scheduler';
 } | {
   id: number;
-  phase: 'post_exit' | 'pre_entry';
+  phase: 'post_exit' | 'pre_entry' | 'rejoined';
   type: 'send_room_probe';
 } | {
   channelId: string;
@@ -328,6 +329,9 @@ async function main(): Promise<void> {
   const scheduler = new Scheduler(startup.eventBus, { tickIntervalMs: 10 }, {
     eligibilityGate: startup.eligibilityGate,
   });
+  const backgroundScheduler = new Scheduler(startup.eventBus, { tickIntervalMs: 10 }, {
+    eligibilityGate: startup.eligibilityGate,
+  });
   const postTurnActions = wirePostTurnActionRuntime({
     eventBus: startup.eventBus,
     scheduler,
@@ -359,6 +363,11 @@ async function main(): Promise<void> {
     },
     ...(weightedThoughtCandidateAdapter ? { icpCandidateAdapter: weightedThoughtCandidateAdapter } : {}),
     channelPolicy: { primaryChannelType: 'discord' },
+  });
+  registerBackgroundWorkSupervisorTask({
+    scheduler: backgroundScheduler,
+    agentLoop: agent,
+    intervalMs: 10,
   });
   const presenceStore = persistence.companionPresenceStore;
   const presenceRuntime = presenceStore
@@ -412,6 +421,7 @@ async function main(): Promise<void> {
   let compactionMarkerIndex = 0;
   await startup.eventBus.emit('system.init', {});
   await startup.eventBus.emit('system.ready', {});
+  backgroundScheduler.start();
   reply({
     ok: true,
     type: 'ready',
@@ -877,10 +887,11 @@ async function main(): Promise<void> {
           return;
         }
         await agent.waitForIdle();
-        await agent.stopBackgroundWork();
         unregisterInitiationCandidates();
         sourceWiring.unregisterCoLocationThoughtAdapter();
         await scheduler.stop();
+        await backgroundScheduler.stop();
+        await agent.stopBackgroundWork();
         gateway.destroy();
         await gardenIcpAutonomy?.close();
         await presenceRuntime?.shutdown();

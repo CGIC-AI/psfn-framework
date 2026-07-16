@@ -99,6 +99,24 @@ export interface BuildAgentSchedulerRuntimeOptions {
   sharedWorldWikiCaretaker?: Pick<SharedWorldWikiCaretakerService, 'cleanupChangedContent'> | null;
 }
 
+export function registerBackgroundWorkSupervisorTask(options: {
+  scheduler: Scheduler;
+  agentLoop: Pick<SubstrateAgent, 'hasDurableBackgroundWorkSupervisor' | 'tickBackgroundWork'>;
+  intervalMs: number;
+}): void {
+  if (!options.agentLoop.hasDurableBackgroundWorkSupervisor()) {
+    throw new Error('Agent scheduler requires a durable background work supervisor');
+  }
+  options.scheduler.register({
+    id: BACKGROUND_WORK_SUPERVISOR_TASK_ID,
+    name: 'Durable Background Work Supervisor',
+    type: 'every',
+    intervalMs: options.intervalMs,
+    handler: () => options.agentLoop.tickBackgroundWork(),
+    state: 'idle',
+  });
+}
+
 export function registerSalienceDecayOperation(input: {
   backgroundMaintenance: BackgroundMaintenanceRegistrar;
   memoryStore: MemoryStorePort;
@@ -292,16 +310,10 @@ export function buildAgentSchedulerRuntime(
       eligibilityGate: options.eligibilityGate,
     },
   );
-  if (!options.agentLoop.hasDurableBackgroundWorkSupervisor()) {
-    throw new Error('Agent scheduler requires a durable background work supervisor');
-  }
-  scheduler.register({
-    id: BACKGROUND_WORK_SUPERVISOR_TASK_ID,
-    name: 'Durable Background Work Supervisor',
-    type: 'every',
+  registerBackgroundWorkSupervisorTask({
+    scheduler,
+    agentLoop: options.agentLoop,
     intervalMs: options.schedulerConfig.tickIntervalMs,
-    handler: () => options.agentLoop.tickBackgroundWork(),
-    state: 'idle',
   });
 
   const backgroundMaintenance = new BackgroundMaintenanceRegistry({

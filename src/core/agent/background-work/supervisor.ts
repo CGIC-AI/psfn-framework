@@ -4,10 +4,6 @@ import type { EventBus } from '../../../shared/event-bus.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { emitTurnPerformance } from '../../../shared/telemetry/turn-performance.js';
 import type { TurnPerformanceDeferReason } from '../../../shared/telemetry/turn-performance.js';
-import {
-  MAINTENANCE_REFLECTION_RUNTIME_CLASS,
-  resolveRuntimeLaneBudgetProfile,
-} from '../worker-lanes.js';
 import type { BackgroundWorkStorePort, BackgroundWorkWelfarePolicy } from './store-port.js';
 import type { BackgroundWorkSupervisorTuning } from './config.js';
 import {
@@ -23,17 +19,6 @@ import {
 
 const log = createComponentLogger('BackgroundWorkSupervisor');
 const TERMINAL_PURGE_BATCH_SIZE = 500;
-// Anti-starvation welfare defaults (mmo9.7.4). Conservative: a background job
-// must be foreground-deferred many times OR wait several minutes before it is
-// admitted past the foreground exclusion, and only into a small bounded reserve.
-// The reserve-slot default is sourced from the lane budget profile so the
-// welfare-reserve policy has a single home (Law 12.4); a deployment may override
-// all three through the scheduler owner file.
-const DEFAULT_WELFARE_DEFER_THRESHOLD = 8;
-const DEFAULT_WELFARE_AGE_THRESHOLD_MS = 5 * 60_000;
-const DEFAULT_WELFARE_RESERVE_SLOTS = resolveRuntimeLaneBudgetProfile(
-  MAINTENANCE_REFLECTION_RUNTIME_CLASS,
-).welfareReserveSlots;
 
 export interface BackgroundWorkExecutionInput {
   job: ClaimedBackgroundWorkJob;
@@ -65,11 +50,11 @@ export interface BackgroundWorkSupervisorOptions extends BackgroundWorkSuperviso
   now?: () => number;
   leaseOwner?: string;
   /**
-   * Anti-starvation welfare policy (mmo9.7.4). Owner-file backed (scheduler.json)
-   * with conservative defaults. `reserveSlots: 0` disables welfare admission
+   * Required anti-starvation welfare policy (mmo9.7.4), resolved from the
+   * scheduler.json owner contract. `reserveSlots: 0` disables welfare admission
    * entirely (fail-closed to pre-welfare FIFO behavior).
    */
-  welfare?: Partial<BackgroundWorkWelfarePolicy>;
+  welfare: BackgroundWorkWelfarePolicy;
 }
 
 export interface ForegroundWorkLease {
@@ -140,22 +125,6 @@ export class BackgroundWorkPermanentError extends Error {
     super(`Background work permanently failed: ${reasonCode}`);
     this.name = 'BackgroundWorkPermanentError';
   }
-}
-
-function normalizePositiveInteger(value: number | undefined, fallback: number, field: string): number {
-  const normalized = value ?? fallback;
-  if (!Number.isSafeInteger(normalized) || normalized < 1) {
-    throw new Error(`${field} must be a positive safe integer`);
-  }
-  return normalized;
-}
-
-function normalizeNonNegativeInteger(value: number | undefined, fallback: number, field: string): number {
-  const normalized = value ?? fallback;
-  if (!Number.isSafeInteger(normalized) || normalized < 0) {
-    throw new Error(`${field} must be a non-negative safe integer`);
-  }
-  return normalized;
 }
 
 function requirePositiveInteger(value: number, field: string): number {
@@ -258,26 +227,21 @@ export class BackgroundWorkSupervisor {
       options.cleanupIntervalMs,
       'cleanupIntervalMs',
     );
-    const reserveSlots = normalizeNonNegativeInteger(
-      options.welfare?.reserveSlots,
-      DEFAULT_WELFARE_RESERVE_SLOTS,
+    const reserveSlots = requireNonNegativeInteger(
+      options.welfare.reserveSlots,
       'welfare.reserveSlots',
     );
-    this.welfare = reserveSlots === 0
-      ? { deferThreshold: 1, ageThresholdMs: 0, reserveSlots: 0 }
-      : {
-        deferThreshold: normalizePositiveInteger(
-          options.welfare?.deferThreshold,
-          DEFAULT_WELFARE_DEFER_THRESHOLD,
-          'welfare.deferThreshold',
-        ),
-        ageThresholdMs: normalizeNonNegativeInteger(
-          options.welfare?.ageThresholdMs,
-          DEFAULT_WELFARE_AGE_THRESHOLD_MS,
-          'welfare.ageThresholdMs',
-        ),
-        reserveSlots,
-      };
+    this.welfare = {
+      deferThreshold: requirePositiveInteger(
+        options.welfare.deferThreshold,
+        'welfare.deferThreshold',
+      ),
+      ageThresholdMs: requireNonNegativeInteger(
+        options.welfare.ageThresholdMs,
+        'welfare.ageThresholdMs',
+      ),
+      reserveSlots,
+    };
   }
 
   async enqueue(inputs: readonly EnqueueBackgroundWorkInput[]): Promise<void> {

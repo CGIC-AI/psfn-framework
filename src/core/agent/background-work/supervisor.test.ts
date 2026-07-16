@@ -40,15 +40,23 @@ const TEST_BACKGROUND_WORK_SUPERVISOR_TUNING: BackgroundWorkSupervisorTuning = {
   cleanupIntervalMs: 3_600_000,
 };
 
+const TEST_BACKGROUND_WORK_WELFARE_POLICY: BackgroundWorkSupervisorOptions['welfare'] = {
+  deferThreshold: 8,
+  ageThresholdMs: 300_000,
+  reserveSlots: 1,
+};
+
 type TestBackgroundWorkSupervisorOptions =
-  Omit<BackgroundWorkSupervisorOptions, keyof BackgroundWorkSupervisorTuning>
-  & Partial<BackgroundWorkSupervisorTuning>;
+  Omit<BackgroundWorkSupervisorOptions, keyof BackgroundWorkSupervisorTuning | 'welfare'>
+  & Partial<BackgroundWorkSupervisorTuning>
+  & { welfare?: BackgroundWorkSupervisorOptions['welfare'] };
 
 function createBackgroundWorkSupervisor(
   options: TestBackgroundWorkSupervisorOptions,
 ): BackgroundWorkSupervisor {
   return new BackgroundWorkSupervisor({
     ...TEST_BACKGROUND_WORK_SUPERVISOR_TUNING,
+    welfare: TEST_BACKGROUND_WORK_WELFARE_POLICY,
     ...options,
   });
 }

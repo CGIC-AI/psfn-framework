@@ -271,6 +271,21 @@ function requireBackgroundWorkTuning(
   }
   return tuning;
 }
+
+function requireBackgroundWorkWelfare(
+  welfare: Partial<BackgroundWorkWelfarePolicy> | undefined,
+): BackgroundWorkWelfarePolicy {
+  if (welfare?.deferThreshold === undefined
+    || welfare.ageThresholdMs === undefined
+    || welfare.reserveSlots === undefined) {
+    throw new Error('SubstrateAgent requires scheduler-owned durable background work welfare policy');
+  }
+  return {
+    deferThreshold: welfare.deferThreshold,
+    ageThresholdMs: welfare.ageThresholdMs,
+    reserveSlots: welfare.reserveSlots,
+  };
+}
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
 const BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE = 32;
 
@@ -518,6 +533,9 @@ export class SubstrateAgent {
     const backgroundWorkTuning = backgroundWorkStore
       ? requireBackgroundWorkTuning(options.backgroundWorkTuning)
       : null;
+    const backgroundWorkWelfare = backgroundWorkStore
+      ? requireBackgroundWorkWelfare(options.backgroundWorkWelfare)
+      : null;
     this.eventBus = eventBus;
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
@@ -567,12 +585,12 @@ export class SubstrateAgent {
     });
     this.emotionSelfModelRuntime.assertEmotionRuntimeConfigured();
 
-    if (backgroundWorkStore && backgroundWorkTuning) {
+    if (backgroundWorkStore && backgroundWorkTuning && backgroundWorkWelfare) {
       this.backgroundWorkSupervisor = new BackgroundWorkSupervisor({
         ...backgroundWorkTuning.supervisor,
         store: backgroundWorkStore,
         eventBus: this.eventBus,
-        ...(options.backgroundWorkWelfare ? { welfare: options.backgroundWorkWelfare } : {}),
+        welfare: backgroundWorkWelfare,
         executor: (input) => executePostTurnBackgroundWork(input, {
           sessionManager: this.sessionManager,
           llmProvider: this.llmClient,

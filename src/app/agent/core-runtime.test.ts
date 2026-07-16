@@ -43,7 +43,7 @@ describe('agent core runtime builder', () => {
     expect(coreRuntimeSource).toContain('fatigueLedger: fatigueRuntime.fatigueLedger');
   });
 
-  it('threads scheduler-owned durable background-work tuning into every live runtime layer', () => {
+  it('threads scheduler-owned durable background-work tuning and welfare into every live runtime layer', () => {
     const agentMainSource = readSource('main.ts');
     const coreBootstrapSource = readSource('core-bootstrap.ts');
     const coreRuntimeSource = readSource('core-runtime.ts');
@@ -59,17 +59,31 @@ describe('agent core runtime builder', () => {
     expect(agentMainSource).toContain(
       'backgroundWorkTuning: schedulerConfig.backgroundWork',
     );
+    expect(agentMainSource).toContain(
+      'schedulerConfig.backgroundWorkWelfare ?? DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG',
+    );
     expect(coreBootstrapSource).toContain('backgroundWorkTuning,');
+    expect(coreBootstrapSource).toContain('backgroundWorkWelfare: options.backgroundWorkWelfare');
     expect(coreRuntimeSource).toContain(
       'backgroundWorkTuning: options.backgroundWorkTuning',
+    );
+    expect(coreRuntimeSource).toContain(
+      'backgroundWorkWelfare: options.backgroundWorkWelfare',
     );
     expect(compositionSource).toContain(
       'backgroundWorkTuning: options.backgroundWorkTuning',
     );
+    expect(compositionSource).toContain(
+      'backgroundWorkWelfare: options.backgroundWorkWelfare',
+    );
     expect(substrateAgentSource).toContain('...backgroundWorkTuning.supervisor');
     expect(substrateAgentSource).toContain('tuning: backgroundWorkTuning.postTurn');
+    expect(substrateAgentSource).toContain('welfare: backgroundWorkWelfare');
     expect(substrateAgentSource).toContain(
       'SubstrateAgent requires scheduler-owned durable background work tuning',
+    );
+    expect(substrateAgentSource).toContain(
+      'SubstrateAgent requires scheduler-owned durable background work welfare policy',
     );
   });
 

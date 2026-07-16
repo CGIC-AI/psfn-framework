@@ -37,7 +37,7 @@ A forged flag makes an in-flight background-lane call non-preemptable for its ow
 
 **Fail-closed semantics:** every failure strips → call proceeds preemptable. Degradation equals pre-welfare FIFO behavior (`supervisor.ts:269` `reserveSlots:0` is the same degradation) — correctness intact, only the anti-starvation optimization lost, self-healing on next claim. No path fails toward protected.
 
-**Race:** supervisor sets `welfare_claimed=true` + `state=running` before dispatch, resets only after the call returns; gateway verify happens at gate-acquire, strictly inside that window. Reset (abandoned/expired) → verify fails → strip.
+**Race:** supervisor sets `welfare_claimed=true` + `state=running` before dispatch, resets only after the call returns. As implemented, the gateway verifies at RPC-handler entry (`resolveRpcWorkSpec`), which is earlier than the gate-acquire inside the provider call — a supervisor reset in that gap leaves the call protected for its own duration on a now-invalid grant. Accepted: the window is still inside the sanctioned `[dispatch, reset-after-return]` lifecycle and the blast radius is bounded to the call's own duration (§4). Reset before handler entry (abandoned/expired) → verify fails → strip.
 
 ## 6. Test plan
 

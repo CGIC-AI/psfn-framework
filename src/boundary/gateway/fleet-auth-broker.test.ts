@@ -174,12 +174,19 @@ function makeBroker(
   firstOwnerAssurance?: FirstOwnerAssurancePort,
   options: {
     config?: FleetAuthConfig;
-    discordEvidence?: {
-      refreshPrincipalEvidence(input: {
+    discordEvidenceLifecycle?: {
+      recordActiveOAuthSession(input: {
         principalId: string;
         providerSubjectId: string;
         providerMembershipEvidence: unknown;
-      }): Promise<unknown>;
+        idleExpiresAt: Date;
+        absoluteExpiresAt: Date;
+      }): Promise<void>;
+      recordSessionRotation(input: {
+        principalId: string;
+        idleExpiresAt: Date;
+        absoluteExpiresAt: Date;
+      }): Promise<void>;
     };
   } = {},
 ) {
@@ -201,7 +208,9 @@ function makeBroker(
       return result;
     },
     ...(firstOwnerAssurance ? { firstOwnerAssurance } : {}),
-    ...(options.discordEvidence ? { discordEvidence: options.discordEvidence } : {}),
+    ...(options.discordEvidenceLifecycle
+      ? { discordEvidenceLifecycle: options.discordEvidenceLifecycle }
+      : {}),
   });
   return { broker, store, fetchImpl };
 }
@@ -303,10 +312,13 @@ describe('gateway fleet auth broker', () => {
         user: { id: '123456789012345679' },
         roles: ['423456789012345678'],
       }));
-    const refreshPrincipalEvidence = vi.fn(async () => undefined);
+    const recordActiveOAuthSession = vi.fn(async () => undefined);
     const { broker } = makeBroker(store, fetchImpl, undefined, {
       config: mappedConfig,
-      discordEvidence: { refreshPrincipalEvidence },
+      discordEvidenceLifecycle: {
+        recordActiveOAuthSession,
+        recordSessionRotation: vi.fn(async () => undefined),
+      },
     });
     const started = await broker.beginLogin({ returnPath: '/fleet' });
     expect(new URL(started.authorizationUrl).searchParams.get('scope'))
@@ -327,7 +339,7 @@ describe('gateway fleet auth broker', () => {
       'https://discord.com/api/v10/users/@me/guilds/223456789012345678/member',
       expect.objectContaining({ headers: { authorization: 'Bearer provider-access-secret' } }),
     );
-    expect(refreshPrincipalEvidence).toHaveBeenCalledWith({
+    expect(recordActiveOAuthSession).toHaveBeenCalledWith({
       principalId: '00000000-0000-4000-8000-000000000102',
       providerSubjectId: '123456789012345679',
       providerMembershipEvidence: {
@@ -339,6 +351,8 @@ describe('gateway fleet auth broker', () => {
           roleIds: ['423456789012345678'],
         }],
       },
+      idleExpiresAt: expect.any(Date),
+      absoluteExpiresAt: expect.any(Date),
     });
   });
 

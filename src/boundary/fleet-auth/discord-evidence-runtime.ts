@@ -31,18 +31,18 @@ export interface DiscordEvidenceRuntimeOptions {
   now?: () => Date;
 }
 
-interface ProviderGuildMembership {
+export interface ProviderGuildMembership {
   guildId: string;
   roleIds: string[];
 }
 
-interface ProviderMembershipObservation {
+export interface ProviderMembershipObservation {
   status: 'observed';
   observedAt: Date;
   guilds: ProviderGuildMembership[];
 }
 
-function parseProviderMembershipEvidence(
+export function parseProviderMembershipEvidence(
   value: unknown,
   expectedProviderSubjectId: string,
   maximumGuilds: number,
@@ -156,11 +156,33 @@ export class DiscordEvidenceRuntime {
     providerSubjectId: string;
     providerMembershipEvidence: unknown;
   }): Promise<DiscordEvidenceSnapshot[]> {
+    return await this.refreshEvidence(input);
+  }
+
+  async refreshCompanionEvidence(input: {
+    principalId: string;
+    providerSubjectId: string;
+    providerMembershipEvidence: unknown;
+    companionId: string;
+  }): Promise<DiscordEvidenceSnapshot[]> {
+    return await this.refreshEvidence(input);
+  }
+
+  private async refreshEvidence(input: {
+    principalId: string;
+    providerSubjectId: string;
+    providerMembershipEvidence: unknown;
+    companionId?: string;
+  }): Promise<DiscordEvidenceSnapshot[]> {
     if (!isRfc4122Uuid(input.principalId)) throw new Error('Invalid fleet principal ID');
     if (!DISCORD_SNOWFLAKE_PATTERN.test(input.providerSubjectId)) {
       throw new Error('Invalid Discord provider subject ID');
     }
     let providerMembership: ReturnType<typeof parseProviderMembershipEvidence>;
+    const selectedMappings = this.config.discordEvidenceMappings.filter(mapping => (
+      input.companionId === undefined || mapping.companionId === input.companionId
+    ));
+    if (input.companionId !== undefined && selectedMappings.length === 0) return [];
     const mappedGuildCount = new Set(
       this.config.discordEvidenceMappings.map(mapping => mapping.guildId),
     ).size;
@@ -178,18 +200,14 @@ export class DiscordEvidenceRuntime {
         providerSubjectId: input.providerSubjectId,
         observationStatus: 'invalid',
       };
-      const snapshots = this.config.discordEvidenceMappings.map(mapping => this.denialSnapshot({
+      const snapshots = selectedMappings.map(mapping => this.denialSnapshot({
         ...input,
         mapping,
         evaluatedAt,
         provenance,
         reason: 'incomplete_observation',
       }));
-      await this.store.replacePrincipalEvidence({
-        principalId: input.principalId,
-        providerSubjectId: input.providerSubjectId,
-        snapshots,
-      });
+      await this.replaceSelectedEvidence(input, snapshots);
       return snapshots;
     }
     if (providerMembership.status === 'provider_unavailable') {
@@ -200,22 +218,18 @@ export class DiscordEvidenceRuntime {
         providerSubjectId: input.providerSubjectId,
         observationStatus: 'provider_unavailable',
       };
-      const snapshots = this.config.discordEvidenceMappings.map(mapping => this.denialSnapshot({
+      const snapshots = selectedMappings.map(mapping => this.denialSnapshot({
         ...input,
         mapping,
         evaluatedAt,
         provenance,
         reason: 'provider_unavailable',
       }));
-      await this.store.replacePrincipalEvidence({
-        principalId: input.principalId,
-        providerSubjectId: input.providerSubjectId,
-        snapshots,
-      });
+      await this.replaceSelectedEvidence(input, snapshots);
       return snapshots;
     }
     const mappingsByCompanion = new Map<string, FleetAuthConfig['discordEvidenceMappings']>();
-    for (const mapping of this.config.discordEvidenceMappings) {
+    for (const mapping of selectedMappings) {
       const existing = mappingsByCompanion.get(mapping.companionId) ?? [];
       existing.push(mapping);
       mappingsByCompanion.set(mapping.companionId, existing);
@@ -276,12 +290,28 @@ export class DiscordEvidenceRuntime {
       }
     }
 
+    await this.replaceSelectedEvidence(input, snapshots);
+    return snapshots;
+  }
+
+  private async replaceSelectedEvidence(
+    input: { principalId: string; providerSubjectId: string; companionId?: string },
+    snapshots: readonly DiscordEvidenceSnapshot[],
+  ): Promise<void> {
+    if (input.companionId !== undefined) {
+      await this.store.replaceCompanionEvidence({
+        principalId: input.principalId,
+        providerSubjectId: input.providerSubjectId,
+        companionId: input.companionId,
+        snapshots,
+      });
+      return;
+    }
     await this.store.replacePrincipalEvidence({
       principalId: input.principalId,
       providerSubjectId: input.providerSubjectId,
       snapshots,
     });
-    return snapshots;
   }
 
   private evaluateUnavailable(

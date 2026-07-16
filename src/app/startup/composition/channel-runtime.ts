@@ -36,6 +36,7 @@ export interface DiscordChannelAdapterFactoryOptions {
    */
   account?: DiscordAdapterAccountBinding;
   allowedBotUserIds?: string[];
+  enableDiscordEvidenceLifecycle?: boolean;
 }
 
 export function createDiscordChannelAdapterFactoryEntry(
@@ -60,6 +61,7 @@ export function createDiscordChannelAdapterFactoryEntry(
         ...(options.personalFilesDir ? { personalFilesDir: options.personalFilesDir } : {}),
         ...(options.intakeScreening ? { intakeScreening: options.intakeScreening } : {}),
         ...(options.account ? { account: options.account } : {}),
+        ...(options.enableDiscordEvidenceLifecycle ? { enableDiscordEvidenceLifecycle: true } : {}),
       });
       if (options.agentLoop) {
         adapter.setAgent(options.agentLoop);

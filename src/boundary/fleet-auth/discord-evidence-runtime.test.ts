@@ -166,11 +166,28 @@ function providerMembership(roleIds: string[] = [ROLE_A], input: {
 
 class RecordingStore implements DiscordEvidenceStorePort {
   readonly replacements: DiscordEvidenceSnapshot[][] = [];
+  readonly companionReplacements: string[] = [];
 
   async replacePrincipalEvidence(input: {
     snapshots: readonly DiscordEvidenceSnapshot[];
   }): Promise<void> {
     this.replacements.push([...input.snapshots]);
+  }
+
+  async replaceCompanionEvidence(input: {
+    companionId: string;
+    snapshots: readonly DiscordEvidenceSnapshot[];
+  }): Promise<void> {
+    this.companionReplacements.push(input.companionId);
+    this.replacements.push([...input.snapshots]);
+  }
+
+  async revokePrincipalEvidence(): Promise<void> {
+    await Promise.resolve();
+  }
+
+  async revokeAllEvidence(): Promise<void> {
+    await Promise.resolve();
   }
 
   async loadUsablePositiveEvidence(): Promise<DiscordEvidenceSnapshot | undefined> {
@@ -237,13 +254,13 @@ describe('bounded Discord access evidence', () => {
         providerSubjectId: SUBJECT_ID,
       },
     });
-    expect(evidence?.permissionInputs).toMatchObject({
+    expect(evidence.permissionInputs).toMatchObject({
       observation: { observedAt: NOW.toISOString(), botUserId: BOT_A },
       target: { channel: { overwritesComplete: true } },
     });
-    expect(evidence?.inputDigest).toMatch(/^[0-9a-f]{64}$/u);
-    expect(evidence?.configDigest).toMatch(/^[0-9a-f]{64}$/u);
-    expect(evidence?.expiresAt.toISOString()).toBe('2026-07-16T12:05:00.000Z');
+    expect(evidence.inputDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(evidence.configDigest).toMatch(/^[0-9a-f]{64}$/u);
+    expect(evidence.expiresAt.toISOString()).toBe('2026-07-16T12:05:00.000Z');
   });
 
   it('treats member VIEW_CHANNEL deny as a hard veto even for Discord ADMINISTRATOR', async () => {
@@ -441,10 +458,28 @@ describe('bounded Discord access evidence', () => {
       .toEqual([[COMPANION_A, BOT_A], [COMPANION_B, BOT_B]]);
   });
 
+  it('refreshes and replaces only the companion named by a lifecycle event', async () => {
+    const subject = runtime({
+      mappings: [mapping(), mapping({ companionId: COMPANION_B, channelId: CHANNEL_B })],
+      observe: companionId => observed(
+        [currentTarget({ channelId: companionId === COMPANION_A ? CHANNEL_A : CHANNEL_B })],
+        { botUserId: companionId === COMPANION_A ? BOT_A : BOT_B },
+      ),
+    });
+    const evidence = await subject.runtime.refreshCompanionEvidence({
+      principalId: PRINCIPAL_ID,
+      providerSubjectId: SUBJECT_ID,
+      providerMembershipEvidence: providerMembership(),
+      companionId: COMPANION_A,
+    });
+    expect(subject.observe.mock.calls.map(([input]) => input.companionId)).toEqual([COMPANION_A]);
+    expect(subject.store.companionReplacements).toEqual([COMPANION_A]);
+    expect(evidence.map(item => item.companionId)).toEqual([COMPANION_A]);
+  });
+
   it('uses cached positive evidence only for an unexpired exact input/config binding', async () => {
     const subject = runtime({ observe: () => observed([currentTarget()]) });
     const [snapshot] = await refresh(subject);
-    if (!snapshot) throw new Error('Expected a Discord evidence snapshot');
     const expected = {
       principalId: snapshot.principalId,
       providerSubjectId: snapshot.providerSubjectId,

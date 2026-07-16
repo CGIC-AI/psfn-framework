@@ -32,6 +32,18 @@ export interface DiscordCompanionEvidenceObserverPort {
   }): Promise<unknown>;
 }
 
+export type DiscordEvidenceAuthorityChange =
+  | { kind: 'ready' }
+  | { kind: 'guild'; guildId: string }
+  | { kind: 'member'; guildId: string; providerSubjectId: string }
+  | { kind: 'channel'; guildId: string; channelId: string };
+
+export interface DiscordEvidenceLifecycleEventSourcePort {
+  subscribeDiscordEvidenceLifecycle(
+    listener: (event: DiscordEvidenceAuthorityChange) => void,
+  ): () => void;
+}
+
 export interface DiscordEvidenceProvenance {
   source: 'discord_oauth_and_bot_observation';
   provider: 'discord';
@@ -84,6 +96,18 @@ export interface DiscordEvidenceStorePort {
     providerSubjectId: string;
     snapshots: readonly DiscordEvidenceSnapshot[];
   }): Promise<void>;
+  replaceCompanionEvidence(input: {
+    principalId: string;
+    providerSubjectId: string;
+    companionId: string;
+    snapshots: readonly DiscordEvidenceSnapshot[];
+  }): Promise<void>;
+  revokePrincipalEvidence(input: {
+    principalId: string;
+    providerSubjectId: string;
+    companionId?: string;
+  }): Promise<void>;
+  revokeAllEvidence(): Promise<void>;
   loadUsablePositiveEvidence(
     input: DiscordPositiveEvidenceLookup,
   ): Promise<DiscordEvidenceSnapshot | undefined>;

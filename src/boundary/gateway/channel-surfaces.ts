@@ -85,6 +85,7 @@ export interface LoadGatewayChannelSurfacesInput {
    */
   intakeScreening: IntakeScreeningService | null;
   log: RuntimeChannelLifecycleLogger;
+  enableDiscordEvidenceLifecycle?: boolean;
 }
 
 export interface GatewayChannelStartupLogger extends RuntimeChannelLifecycleLogger {
@@ -142,6 +143,7 @@ export async function loadGatewayChannelSurfaces(
               .optional<DiscordAdapter>(registryId)?.getBotUserId())
             .filter((botUserId): botUserId is string => Boolean(botUserId)),
         },
+        enableDiscordEvidenceLifecycle: input.enableDiscordEvidenceLifecycle,
       });
     })
     : [
@@ -156,6 +158,7 @@ export async function loadGatewayChannelSurfaces(
           'discord',
         ),
         intakeScreening: input.intakeScreening,
+        enableDiscordEvidenceLifecycle: input.enableDiscordEvidenceLifecycle,
       }),
     ];
   const gatewayChannelManifest = buildChannelAdapterFactoryManifest([

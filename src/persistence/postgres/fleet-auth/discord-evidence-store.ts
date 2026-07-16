@@ -161,6 +161,43 @@ export class PostgresDiscordEvidenceStore implements DiscordEvidenceStorePort {
     providerSubjectId: string;
     snapshots: readonly DiscordEvidenceSnapshot[];
   }): Promise<void> {
+    await this.replaceEvidence(input);
+  }
+
+  async replaceCompanionEvidence(input: {
+    principalId: string;
+    providerSubjectId: string;
+    companionId: string;
+    snapshots: readonly DiscordEvidenceSnapshot[];
+  }): Promise<void> {
+    if (input.snapshots.some(snapshot => snapshot.companionId !== input.companionId)) {
+      throw new Error('Discord evidence companion replacement is cross-boundary');
+    }
+    await this.replaceEvidence(input);
+  }
+
+  async revokePrincipalEvidence(input: {
+    principalId: string;
+    providerSubjectId: string;
+    companionId?: string;
+  }): Promise<void> {
+    await this.pool.query(`
+      DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots
+      WHERE principal_id = $1 AND provider = 'discord' AND provider_subject_id = $2
+        AND ($3::uuid IS NULL OR companion_id = $3)
+    `, [input.principalId, input.providerSubjectId, input.companionId ?? null]);
+  }
+
+  async revokeAllEvidence(): Promise<void> {
+    await this.pool.query(`DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots`);
+  }
+
+  private async replaceEvidence(input: {
+    principalId: string;
+    providerSubjectId: string;
+    companionId?: string;
+    snapshots: readonly DiscordEvidenceSnapshot[];
+  }): Promise<void> {
     for (const snapshot of input.snapshots) {
       assertSnapshot(snapshot, input.principalId, input.providerSubjectId);
     }
@@ -175,7 +212,8 @@ export class PostgresDiscordEvidenceStore implements DiscordEvidenceStorePort {
       await client.query(`
         DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots
         WHERE principal_id = $1 AND provider = 'discord' AND provider_subject_id = $2
-      `, [input.principalId, input.providerSubjectId]);
+          AND ($3::uuid IS NULL OR companion_id = $3)
+      `, [input.principalId, input.providerSubjectId, input.companionId ?? null]);
       for (const snapshot of input.snapshots) {
         await client.query(`
           INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots

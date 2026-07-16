@@ -158,12 +158,19 @@ export interface GatewayFleetAuthBrokerOptions {
   now?: () => Date;
   randomBytes?: (length: number) => Buffer;
   firstOwnerAssurance?: FirstOwnerAssurancePort;
-  discordEvidence?: {
-    refreshPrincipalEvidence(input: {
+  discordEvidenceLifecycle?: {
+    recordActiveOAuthSession(input: {
       principalId: string;
       providerSubjectId: string;
       providerMembershipEvidence: unknown;
-    }): Promise<unknown>;
+      idleExpiresAt: Date;
+      absoluteExpiresAt: Date;
+    }): Promise<void>;
+    recordSessionRotation(input: {
+      principalId: string;
+      idleExpiresAt: Date;
+      absoluteExpiresAt: Date;
+    }): Promise<void>;
   };
 }
 
@@ -219,7 +226,7 @@ export class GatewayFleetAuthBroker {
   private readonly now: () => Date;
   private readonly randomBytes: (length: number) => Buffer;
   private readonly firstOwnerAssurance?: FirstOwnerAssurancePort;
-  private readonly discordEvidence?: GatewayFleetAuthBrokerOptions['discordEvidence'];
+  private readonly discordEvidenceLifecycle?: GatewayFleetAuthBrokerOptions['discordEvidenceLifecycle'];
 
   constructor(options: GatewayFleetAuthBrokerOptions) {
     this.config = options.config;
@@ -230,7 +237,7 @@ export class GatewayFleetAuthBroker {
     this.now = options.now ?? (() => new Date());
     this.randomBytes = options.randomBytes ?? cryptoRandomBytes;
     this.firstOwnerAssurance = options.firstOwnerAssurance;
-    this.discordEvidence = options.discordEvidence;
+    this.discordEvidenceLifecycle = options.discordEvidenceLifecycle;
   }
 
   async beginLogin(input: { returnPath: string }): Promise<{
@@ -338,11 +345,13 @@ export class GatewayFleetAuthBroker {
           }
         : {}),
     });
-    if (session.principalStatus === 'active' && this.discordEvidence) {
-      await this.discordEvidence.refreshPrincipalEvidence({
+    if (session.principalStatus === 'active' && this.discordEvidenceLifecycle) {
+      await this.discordEvidenceLifecycle.recordActiveOAuthSession({
         principalId: session.principalId,
         providerSubjectId: identity.subjectId,
         providerMembershipEvidence,
+        idleExpiresAt: session.idleExpiresAt,
+        absoluteExpiresAt: session.absoluteExpiresAt,
       });
     }
     return { returnPath: transaction.returnPath, session };
@@ -354,7 +363,7 @@ export class GatewayFleetAuthBroker {
     requestOrigin: string;
   }): Promise<FleetAuthSessionRecord> {
     this.assertMutationOrigin(input.requestOrigin);
-    return await this.store.rotateSession({
+    const rotated = await this.store.rotateSession({
       token: input.token,
       csrfToken: input.csrfToken,
       nextToken: opaqueToken(this.randomBytes),
@@ -362,6 +371,12 @@ export class GatewayFleetAuthBroker {
       now: this.now(),
       idleTtlMs: this.config.ttls.sessionIdleMs,
     });
+    await this.discordEvidenceLifecycle?.recordSessionRotation({
+      principalId: rotated.principalId,
+      idleExpiresAt: rotated.idleExpiresAt,
+      absoluteExpiresAt: rotated.absoluteExpiresAt,
+    });
+    return rotated;
   }
 
   async issueCsrf(input: {

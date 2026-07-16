@@ -339,6 +339,7 @@ async function main(): Promise<void> {
     eligibilityGate,
     intakeScreening: privilegedCore.intakeScreening.screening,
     log,
+    enableDiscordEvidenceLifecycle: fleetAuthPersistence !== undefined,
   });
   log.info('Embedding provider initialized', {
     provider: privilegedServices.embeddingProvider.kind,
@@ -348,13 +349,23 @@ async function main(): Promise<void> {
   if (channelSurfaces.discordAccounts) {
     for (const account of channelSurfaces.discordAccounts) {
       discordEvidenceObservers.register(account.companionId, account.adapter);
+      fleetAuthPersistence?.discordEvidenceLifecycle.registerCompanionEventSource(
+        account.companionId,
+        account.adapter,
+      );
     }
   } else {
     const singleCompanionId = bootstrap.channelsConfig.discord.companionId
       ?? (config.companionFleet?.companions.length === 1
         ? config.companionFleet.companions.at(0)?.companionId
         : undefined);
-    if (singleCompanionId) discordEvidenceObservers.register(singleCompanionId, discord);
+    if (singleCompanionId) {
+      discordEvidenceObservers.register(singleCompanionId, discord);
+      fleetAuthPersistence?.discordEvidenceLifecycle.registerCompanionEventSource(
+        singleCompanionId,
+        discord,
+      );
+    }
   }
 
   log.info('Gateway audit persistence backend', {

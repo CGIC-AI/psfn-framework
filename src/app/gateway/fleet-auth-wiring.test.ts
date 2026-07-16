@@ -23,4 +23,21 @@ describe('gateway fleet authorization context wiring', () => {
     expect(apiSurfaceSource).toContain('new GatewayHubDeviceIngressService({');
     expect(apiSurfaceSource).toContain('.verifyAndConsumeHubDeviceAssertion(assertion, expected)');
   });
+
+  it('constructs the private request-capability signer only inside gateway persistence', () => {
+    const persistenceSource = readFileSync(
+      new URL('../../persistence/postgres/fleet-auth/gateway-persistence.ts', import.meta.url),
+      'utf8',
+    );
+    const configSource = readFileSync(
+      new URL('../../system/config/fleet-auth-config.ts', import.meta.url),
+      'utf8',
+    );
+
+    expect(persistenceSource).toContain('createGatewayRequestCapabilitySigner({');
+    expect(persistenceSource).toContain('privateKeyPem: secrets.assertionPrivateKeyPem,');
+    expect(persistenceSource).toContain('requestCapabilities,');
+    expect(configSource).toContain('requestCapabilities: {');
+    expect(configSource).toContain('keys: config.verifierKeys.map(key => ({ ...key })),');
+  });
 });

@@ -1913,6 +1913,60 @@
       "contains": "psfn-framework-b0yl.5",
       "reason": "Scheduler-config contract cites the bead that owns tool-usage evaluator cadence and thresholds.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "scripts/verify-helm-charge-skills-owner-upgrade.mjs",
+      "contains": "psfn",
+      "reason": "The Helm charge/skills owner-upgrade proof uses project-scoped chart directory, release, namespace, image repository, and rendered Deployment names, plus project-scoped mkdtemp fixture prefixes; these are infrastructure identifiers rather than companion identity defaults.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/server/fleet-auth-routes.ts",
+      "contains": "X-PSFN-CSRF",
+      "reason": "Fleet-auth lifecycle CORS Access-Control-Allow-Headers must name the deployed CSRF request header as a stable HTTP protocol contract.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/api/server/hub-device-ingress.ts",
+      "contains": "x-psfn-hub-device-assertion",
+      "reason": "Hub device ingress binds to the deployed hub-device-assertion request header name as a stable HTTP protocol contract.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/server/hub-device-ingress.ts",
+      "contains": "X-PSFN-Hub-Device-Assertion",
+      "reason": "Forbidden-body-authority guard rejects the canonical hub-device-assertion header name if smuggled as a request-body field, so the wire header name must appear as a literal.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/api/server/hub-device-ingress.ts",
+      "contains": "'x-psfn-author-id'",
+      "reason": "Downstream authority-header strip list names the deployed x-psfn-* identity/channel request headers as stable HTTP protocol contracts.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/server/hub-device-ingress.ts",
+      "contains": "'x-psfn-channel-type'",
+      "reason": "Downstream authority-header strip list names the deployed x-psfn-* identity/channel request headers as stable HTTP protocol contracts.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/server/hub-device-ingress.ts",
+      "contains": "'x-psfn-trusted-proxy-token'",
+      "reason": "Downstream authority-header strip list names the deployed trusted-proxy-token request header as a stable HTTP protocol contract.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/server/hub-device-ingress.ts",
+      "contains": "x-psfn-client-cert-",
+      "reason": "Downstream header sanitation strips the deployed x-psfn-client-cert-* request header family by its stable HTTP protocol prefix.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/test-support/postgres-test-harness.ts",
+      "contains": "psfn-postgres-clients-",
+      "reason": "PostgreSQL test harness uses a project-scoped mkdtemp prefix for its per-run client-binary staging directory, consistent with its established project-scoped test artifact namespace.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

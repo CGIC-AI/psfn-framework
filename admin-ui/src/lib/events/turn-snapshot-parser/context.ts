@@ -1,30 +1,24 @@
 import { isObservabilityCallType } from '../../../../../src/shared/contracts/observability-call-types.js';
+import { isCapabilityToken } from '../../../../../src/system/capabilities/tokens.js';
 import type {
   AdminAdaptiveToolSnapshotCounts,
   AdminAdaptiveToolSnapshotData,
   AdminAdaptiveToolSnapshotSkip,
   AdminAdaptiveToolSnapshotTool,
-  AdminObservedMemory,
-  AdminObservedScoredMemory,
-  AdminTurnMemorySnapshotData,
   AdminTurnSessionContextSnapshotData,
   AdminTurnToolContextSnapshotData,
-  MemoryWithheldSummary,
 } from '../../types';
 import { parseToolSchema } from './plan';
 import {
   optionalNonNegativeInteger,
   optionalString,
   parseArray,
-  parseJsonRecord,
   parseStringArray,
   reject,
   requireBoolean,
   requireExactRecord,
-  requireFiniteNumber,
   requireNonEmptyString,
   requireNonNegativeInteger,
-  requirePlainRecord,
   requireString,
 } from './primitives';
 
@@ -50,7 +44,10 @@ function parseAdaptiveSkip(value: unknown, path: string): AdminAdaptiveToolSnaps
   if (source.source !== 'extended') reject(`${path}.source`, 'must equal extended');
   const missingTokens = source.missingTokens === undefined
     ? undefined
-    : parseStringArray(source.missingTokens, `${path}.missingTokens`);
+    : parseArray(source.missingTokens, `${path}.missingTokens`, (item, itemPath) => {
+      if (!isCapabilityToken(item)) reject(itemPath, 'contains an unsupported capability token');
+      return item;
+    });
   return {
     toolName: requireNonEmptyString(source.toolName, `${path}.toolName`),
     source: 'extended',
@@ -182,7 +179,10 @@ function parseSessionEntry(
   };
 }
 
-function parseContinuityArtifact(value: unknown, path: string): unknown {
+function parseContinuityArtifact(
+  value: unknown,
+  path: string,
+): NonNullable<AdminTurnSessionContextSnapshotData['wakeReturnArtifacts']>[number] {
   const source = requireExactRecord(value, path, [
     'id',
     'sessionId',
@@ -193,16 +193,22 @@ function parseContinuityArtifact(value: unknown, path: string): unknown {
     'facets',
     'occasion',
   ]);
-  const kind = requireString(source.kind, `${path}.kind`);
-  if (kind !== 'checkpoint' && kind !== 'wake_return') reject(`${path}.kind`, 'is unsupported');
-  const facets = parseStringArray(source.facets, `${path}.facets`);
-  if (facets.some(facet => !['task', 'relational', 'life'].includes(facet))) {
-    reject(`${path}.facets`, 'contains an unsupported value');
-  }
-  const occasion = optionalString(source, 'occasion', path);
-  if (occasion !== undefined && occasion !== 'wake' && occasion !== 'return') {
-    reject(`${path}.occasion`, 'contains an unsupported value');
-  }
+  const rawKind = requireString(source.kind, `${path}.kind`);
+  const kind = rawKind === 'checkpoint' || rawKind === 'wake_return'
+    ? rawKind
+    : reject(`${path}.kind`, 'is unsupported');
+  const facets = parseArray(source.facets, `${path}.facets`, (item, itemPath) => {
+    const facet = requireString(item, itemPath);
+    return facet === 'task' || facet === 'relational' || facet === 'life'
+      ? facet
+      : reject(itemPath, 'contains an unsupported value');
+  });
+  const rawOccasion = optionalString(source, 'occasion', path);
+  const occasion = rawOccasion === undefined
+    ? undefined
+    : rawOccasion === 'wake' || rawOccasion === 'return'
+      ? rawOccasion
+      : reject(`${path}.occasion`, 'contains an unsupported value');
   if ((kind === 'wake_return') !== (occasion !== undefined)) {
     reject(path, 'has an invalid kind/occasion combination');
   }
@@ -219,7 +225,10 @@ function parseContinuityArtifact(value: unknown, path: string): unknown {
   };
 }
 
-function parseOrientation(value: unknown, path: string): unknown {
+function parseOrientation(
+  value: unknown,
+  path: string,
+): NonNullable<AdminTurnSessionContextSnapshotData['orientation']> {
   const source = requireExactRecord(value, path, [
     'fired',
     'reason',
@@ -235,10 +244,13 @@ function parseOrientation(value: unknown, path: string): unknown {
     'timeTexture',
     'sourceCounts',
   ]);
-  const reason = requireString(source.reason, `${path}.reason`);
-  if (!['idle_gap_exceeded', 'below_threshold', 'no_previous_activity', 'internal_channel'].includes(reason)) {
-    reject(`${path}.reason`, 'contains an unsupported value');
-  }
+  const rawReason = requireString(source.reason, `${path}.reason`);
+  const reason = rawReason === 'idle_gap_exceeded'
+    || rawReason === 'below_threshold'
+    || rawReason === 'no_previous_activity'
+    || rawReason === 'internal_channel'
+    ? rawReason
+    : reject(`${path}.reason`, 'contains an unsupported value');
   const sourceCounts = requireExactRecord(source.sourceCounts, `${path}.sourceCounts`, [
     'session',
     'continuity',
@@ -254,21 +266,63 @@ function parseOrientation(value: unknown, path: string): unknown {
       'reconnectionWarmth',
       'guidance',
     ]);
-  if (timeTexture) {
-    const kind = requireString(timeTexture.kind, `${path}.timeTexture.kind`);
-    if (!['short_gap', 'long_workday', 'overnight', 'multiple_days'].includes(kind)) {
-      reject(`${path}.timeTexture.kind`, 'contains an unsupported value');
-    }
-    const warmth = requireString(timeTexture.reconnectionWarmth, `${path}.timeTexture.reconnectionWarmth`);
-    if (!['low', 'medium', 'high'].includes(warmth)) {
-      reject(`${path}.timeTexture.reconnectionWarmth`, 'contains an unsupported value');
-    }
-  }
-  const result: Record<string, unknown> = {
+  const noteText = optionalString(source, 'noteText', path);
+  const sessionSummary = optionalString(source, 'sessionSummary', path);
+  const continuitySummary = optionalString(source, 'continuitySummary', path);
+  const lastUserMessage = optionalString(source, 'lastUserMessage', path);
+  const openThreadSummary = optionalString(source, 'openThreadSummary', path);
+  const lastActivityAt = optionalNonNegativeInteger(source, 'lastActivityAt', path);
+  const idleGapMs = optionalNonNegativeInteger(source, 'idleGapMs', path);
+  const parsedTimeTexture: NonNullable<
+    AdminTurnSessionContextSnapshotData['orientation']
+  >['timeTexture'] = timeTexture
+    ? (() => {
+      const rawKind = requireString(timeTexture.kind, `${path}.timeTexture.kind`);
+      const kind: NonNullable<
+        NonNullable<AdminTurnSessionContextSnapshotData['orientation']>['timeTexture']
+      >['kind'] = rawKind === 'short_gap'
+        || rawKind === 'long_workday'
+        || rawKind === 'overnight'
+        || rawKind === 'multiple_days'
+        ? rawKind
+        : reject(`${path}.timeTexture.kind`, 'contains an unsupported value');
+      const rawWarmth = requireString(
+        timeTexture.reconnectionWarmth,
+        `${path}.timeTexture.reconnectionWarmth`,
+      );
+      const reconnectionWarmth: NonNullable<
+        NonNullable<AdminTurnSessionContextSnapshotData['orientation']>['timeTexture']
+      >['reconnectionWarmth'] = rawWarmth === 'low'
+        || rawWarmth === 'medium'
+        || rawWarmth === 'high'
+        ? rawWarmth
+        : reject(`${path}.timeTexture.reconnectionWarmth`, 'contains an unsupported value');
+      return {
+        kind,
+        label: requireString(timeTexture.label, `${path}.timeTexture.label`),
+        elapsedMs: requireNonNegativeInteger(timeTexture.elapsedMs, `${path}.timeTexture.elapsedMs`),
+        dayBoundaryCount: requireNonNegativeInteger(
+          timeTexture.dayBoundaryCount,
+          `${path}.timeTexture.dayBoundaryCount`,
+        ),
+        reconnectionWarmth,
+        guidance: requireString(timeTexture.guidance, `${path}.timeTexture.guidance`),
+      };
+    })()
+    : undefined;
+  return {
     fired: requireBoolean(source.fired, `${path}.fired`),
     reason,
     observedAt: requireNonNegativeInteger(source.observedAt, `${path}.observedAt`),
     idleThresholdMs: requireNonNegativeInteger(source.idleThresholdMs, `${path}.idleThresholdMs`),
+    ...(lastActivityAt !== undefined ? { lastActivityAt } : {}),
+    ...(idleGapMs !== undefined ? { idleGapMs } : {}),
+    ...(noteText !== undefined ? { noteText } : {}),
+    ...(sessionSummary !== undefined ? { sessionSummary } : {}),
+    ...(continuitySummary !== undefined ? { continuitySummary } : {}),
+    ...(lastUserMessage !== undefined ? { lastUserMessage } : {}),
+    ...(openThreadSummary !== undefined ? { openThreadSummary } : {}),
+    ...(parsedTimeTexture !== undefined ? { timeTexture: parsedTimeTexture } : {}),
     sourceCounts: {
       session: requireNonNegativeInteger(sourceCounts.session, `${path}.sourceCounts.session`),
       continuity: requireNonNegativeInteger(sourceCounts.continuity, `${path}.sourceCounts.continuity`),
@@ -278,34 +332,6 @@ function parseOrientation(value: unknown, path: string): unknown {
       ),
     },
   };
-  for (const key of [
-    'noteText',
-    'sessionSummary',
-    'continuitySummary',
-    'lastUserMessage',
-    'openThreadSummary',
-  ]) {
-    const parsed = optionalString(source, key, path);
-    if (parsed !== undefined) result[key] = parsed;
-  }
-  const lastActivityAt = optionalNonNegativeInteger(source, 'lastActivityAt', path);
-  const idleGapMs = optionalNonNegativeInteger(source, 'idleGapMs', path);
-  if (lastActivityAt !== undefined) result.lastActivityAt = lastActivityAt;
-  if (idleGapMs !== undefined) result.idleGapMs = idleGapMs;
-  if (timeTexture) {
-    result.timeTexture = {
-      kind: timeTexture.kind,
-      label: requireString(timeTexture.label, `${path}.timeTexture.label`),
-      elapsedMs: requireNonNegativeInteger(timeTexture.elapsedMs, `${path}.timeTexture.elapsedMs`),
-      dayBoundaryCount: requireNonNegativeInteger(
-        timeTexture.dayBoundaryCount,
-        `${path}.timeTexture.dayBoundaryCount`,
-      ),
-      reconnectionWarmth: timeTexture.reconnectionWarmth,
-      guidance: requireString(timeTexture.guidance, `${path}.timeTexture.guidance`),
-    };
-  }
-  return result;
 }
 
 export function parseSessionContext(
@@ -366,182 +392,6 @@ export function parseSessionContext(
     ...(orientation !== undefined ? { orientation } : {}),
     ...(intentionAppraisalArtifactCount !== undefined ? { intentionAppraisalArtifactCount } : {}),
     ...(compactionPromptText !== undefined ? { compactionPromptText } : {}),
-    versionPointer: requireNonEmptyString(source.versionPointer, `${path}.versionPointer`),
-  };
-}
-
-function parseMemory(value: unknown, path: string, scored: false): AdminObservedMemory;
-function parseMemory(value: unknown, path: string, scored: true): AdminObservedScoredMemory;
-function parseMemory(
-  value: unknown,
-  path: string,
-  scored: boolean,
-): AdminObservedMemory | AdminObservedScoredMemory {
-  const source = requireExactRecord(value, path, [
-    'id', 'text', 'type', 'importance', 'confidence', 'emotionalValence', 'formationVAD',
-    'salience', 'salienceDecayAnchorAt', 'sourceRef', 'sourceType', 'provenance', 'extractedAt',
-    'lastAccessed', 'accessCount', 'supersededBy', 'tags', 'scopeRef', 'scopeTags',
-    'provenanceRefs', 'retentionClass', 'sensitivity', 'consentFlags', 'contactId', 'deletedAt',
-    'deletedBy', 'deleteReason', ...(scored ? ['similarity'] : []),
-  ]);
-  const type = requireString(source.type, `${path}.type`);
-  if (!['episodic', 'semantic', 'emotional', 'procedural', 'boundary', 'reflection', 'relational'].includes(type)) {
-    reject(`${path}.type`, 'contains an unsupported value');
-  }
-  const sensitivity = requireString(source.sensitivity, `${path}.sensitivity`);
-  if (!['public', 'personal', 'intimate', 'confidential'].includes(sensitivity)) {
-    reject(`${path}.sensitivity`, 'contains an unsupported value');
-  }
-  const sourceType = optionalString(source, 'sourceType', path);
-  if (
-    sourceType !== undefined
-    && ![
-      'unknown', 'turn', 'reflection', 'heartbeat', 'compaction_summary', 'shard',
-      'tool_write', 'autonomous_action',
-    ].includes(sourceType)
-  ) {
-    reject(`${path}.sourceType`, 'contains an unsupported value');
-  }
-  const retentionClass = optionalString(source, 'retentionClass', path);
-  if (retentionClass !== undefined && retentionClass !== 'standard' && retentionClass !== 'durable') {
-    reject(`${path}.retentionClass`, 'contains an unsupported value');
-  }
-  const formationVAD = source.formationVAD === undefined
-    ? undefined
-    : parseJsonRecord(source.formationVAD, `${path}.formationVAD`);
-  const provenance = source.provenance === undefined
-    ? undefined
-    : parseJsonRecord(source.provenance, `${path}.provenance`);
-  const scopeRef = source.scopeRef === undefined
-    ? undefined
-    : parseJsonRecord(source.scopeRef, `${path}.scopeRef`);
-  const consentFlags = source.consentFlags === undefined
-    ? undefined
-    : parseJsonRecord(source.consentFlags, `${path}.consentFlags`);
-  const salienceDecayAnchorAt = optionalNonNegativeInteger(source, 'salienceDecayAnchorAt', path);
-  const supersededBy = optionalString(source, 'supersededBy', path);
-  const scopeTags = source.scopeTags === undefined
-    ? undefined
-    : parseStringArray(source.scopeTags, `${path}.scopeTags`);
-  const provenanceRefs = source.provenanceRefs === undefined
-    ? undefined
-    : parseStringArray(source.provenanceRefs, `${path}.provenanceRefs`);
-  const contactId = optionalString(source, 'contactId', path);
-  const deletedAt = optionalNonNegativeInteger(source, 'deletedAt', path);
-  const deletedBy = optionalString(source, 'deletedBy', path);
-  const deleteReason = optionalString(source, 'deleteReason', path);
-  const base: AdminObservedMemory = {
-    id: requireNonEmptyString(source.id, `${path}.id`),
-    text: requireString(source.text, `${path}.text`),
-    type,
-    importance: requireFiniteNumber(source.importance, `${path}.importance`),
-    confidence: requireFiniteNumber(source.confidence, `${path}.confidence`),
-    emotionalValence: requireFiniteNumber(source.emotionalValence, `${path}.emotionalValence`),
-    ...(formationVAD !== undefined ? { formationVAD } : {}),
-    salience: requireFiniteNumber(source.salience, `${path}.salience`),
-    ...(salienceDecayAnchorAt !== undefined ? { salienceDecayAnchorAt } : {}),
-    sourceRef: requireString(source.sourceRef, `${path}.sourceRef`),
-    ...(sourceType !== undefined ? { sourceType } : {}),
-    ...(provenance !== undefined ? { provenance } : {}),
-    extractedAt: requireNonNegativeInteger(source.extractedAt, `${path}.extractedAt`),
-    lastAccessed: requireNonNegativeInteger(source.lastAccessed, `${path}.lastAccessed`),
-    accessCount: requireNonNegativeInteger(source.accessCount, `${path}.accessCount`),
-    ...(supersededBy !== undefined ? { supersededBy } : {}),
-    tags: parseStringArray(source.tags, `${path}.tags`),
-    ...(scopeRef !== undefined ? { scopeRef } : {}),
-    ...(scopeTags !== undefined ? { scopeTags } : {}),
-    ...(provenanceRefs !== undefined ? { provenanceRefs } : {}),
-    ...(retentionClass !== undefined ? { retentionClass } : {}),
-    sensitivity,
-    ...(consentFlags !== undefined ? { consentFlags } : {}),
-    ...(contactId !== undefined ? { contactId } : {}),
-    ...(deletedAt !== undefined ? { deletedAt } : {}),
-    ...(deletedBy !== undefined ? { deletedBy } : {}),
-    ...(deleteReason !== undefined ? { deleteReason } : {}),
-  };
-  if (!scored) return base;
-  return {
-    ...base,
-    similarity: requireFiniteNumber(source.similarity, `${path}.similarity`),
-  };
-}
-
-function parseCountRecord(value: unknown, path: string): Record<string, number> {
-  const source = requirePlainRecord(value, path);
-  const result: Record<string, number> = {};
-  for (const [key, item] of Object.entries(source)) {
-    Object.defineProperty(result, key, {
-      value: requireNonNegativeInteger(item, `${path}.${key}`),
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    });
-  }
-  return result;
-}
-
-function parseWithheldSummary(value: unknown, path: string): MemoryWithheldSummary {
-  const source = requireExactRecord(value, path, ['totalCount', 'reasonCounts', 'relevanceBands']);
-  const relevanceBands = source.relevanceBands === undefined
-    ? undefined
-    : parseCountRecord(source.relevanceBands, `${path}.relevanceBands`);
-  return {
-    totalCount: requireNonNegativeInteger(source.totalCount, `${path}.totalCount`),
-    reasonCounts: parseCountRecord(source.reasonCounts, `${path}.reasonCounts`),
-    ...(relevanceBands !== undefined ? { relevanceBands } : {}),
-  };
-}
-
-export function parseMemoryContext(
-  value: unknown,
-  path: string,
-): AdminTurnMemorySnapshotData {
-  const source = requireExactRecord(value, path, [
-    'channelId', 'profile', 'emotionalSnapshot', 'contactEmotionalMemories', 'semanticCandidates',
-    'lexicalCandidates', 'episodicChains', 'proactiveCandidates', 'withheldSummary', 'versionPointer',
-  ]);
-  const profile = source.profile === undefined
-    ? undefined
-    : parseJsonRecord(source.profile, `${path}.profile`);
-  const emotionalSnapshot = source.emotionalSnapshot === undefined
-    ? undefined
-    : parseJsonRecord(source.emotionalSnapshot, `${path}.emotionalSnapshot`);
-  const episodicChains = source.episodicChains === undefined
-    ? undefined
-    : parseArray(
-      source.episodicChains,
-      `${path}.episodicChains`,
-      (item, itemPath) => parseJsonRecord(item, itemPath),
-    );
-  const withheldSummary = source.withheldSummary === undefined
-    ? undefined
-    : parseWithheldSummary(source.withheldSummary, `${path}.withheldSummary`);
-  return {
-    channelId: requireNonEmptyString(source.channelId, `${path}.channelId`),
-    ...(profile !== undefined ? { profile } : {}),
-    ...(emotionalSnapshot !== undefined ? { emotionalSnapshot } : {}),
-    contactEmotionalMemories: parseArray(
-      source.contactEmotionalMemories,
-      `${path}.contactEmotionalMemories`,
-      (item, itemPath) => parseMemory(item, itemPath, false),
-    ),
-    semanticCandidates: parseArray(
-      source.semanticCandidates,
-      `${path}.semanticCandidates`,
-      (item, itemPath) => parseMemory(item, itemPath, true),
-    ),
-    lexicalCandidates: parseArray(
-      source.lexicalCandidates,
-      `${path}.lexicalCandidates`,
-      (item, itemPath) => parseMemory(item, itemPath, true),
-    ),
-    ...(episodicChains !== undefined ? { episodicChains } : {}),
-    proactiveCandidates: parseArray(
-      source.proactiveCandidates,
-      `${path}.proactiveCandidates`,
-      (item, itemPath) => parseMemory(item, itemPath, false),
-    ),
-    ...(withheldSummary !== undefined ? { withheldSummary } : {}),
     versionPointer: requireNonEmptyString(source.versionPointer, `${path}.versionPointer`),
   };
 }

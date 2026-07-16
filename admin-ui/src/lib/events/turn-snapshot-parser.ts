@@ -9,12 +9,13 @@ import {
   REQUESTER_PROVENANCE_VALUES,
 } from '../../../../src/shared/contracts/runtime.js';
 import { isChannelPrivacy } from '../../../../src/system/trust/context-envelope.js';
-import { parseMemoryContext, parseSessionContext, parseToolContext } from './turn-snapshot-parser/context';
+import { parseSessionContext, parseToolContext } from './turn-snapshot-parser/context';
+import { parseFatigue } from './turn-snapshot-parser/fatigue';
+import { parseMemoryContext } from './turn-snapshot-parser/memory';
 import { parsePlan, parsePromptSnapshot } from './turn-snapshot-parser/plan';
 import { parsePromptContext } from './turn-snapshot-parser/provider';
 import {
   optionalString,
-  parseJsonRecord,
   parseJsonValue,
   reject,
   requireBoolean,
@@ -220,7 +221,7 @@ function parseSnapshot(value: unknown): AdminTurnSnapshotData {
     : parseMemoryContext(source.memory, 'snapshot.memory');
   const fatigue = source.fatigue === undefined
     ? undefined
-    : parseJsonRecord(source.fatigue, 'snapshot.fatigue');
+    : parseFatigue(source.fatigue, 'snapshot.fatigue');
   return {
     turnId: requireNonEmptyString(source.turnId, 'snapshot.turnId'),
     requestId: requireNonEmptyString(source.requestId, 'snapshot.requestId'),

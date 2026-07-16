@@ -3,6 +3,17 @@ import type {
   PurrMemory as CanonicalPurrMemory,
   MemoryScopeRef as CanonicalMemoryScopeRef,
 } from '../../../../src/faculties/memory/types.js';
+import type { TurnToolContextSnapshot } from '../../../../src/core/turns/snapshot.js';
+import type {
+  ObservedMemory as CanonicalObservedMemory,
+  ObservedScoredMemory as CanonicalObservedScoredMemory,
+  TurnMemorySnapshotRecord,
+  TurnSessionContextSnapshotRecord,
+  TurnSnapshotRecord,
+} from '../../../../src/core/turns/observability.js';
+import type { AdaptiveToolCatalogSource } from '../../../../src/core/agent/adaptive-tools-telemetry.js';
+import type { PromptPlan } from '../../../../src/core/agent/substrate-agent/turn-execution/prompt-plan.js';
+import type { CapabilityToken } from '../../../../src/system/capabilities/tokens.js';
 import type {
   RecurringCadence as CanonicalRecurringCadence,
   ScheduledTask as CanonicalScheduledTask,
@@ -30,8 +41,11 @@ import type {
   RuntimePromptUpdateResult as CanonicalRuntimePromptUpdateResult,
 } from '../../../../src/operator/garden/services/types.js';
 import type {
+  AuthenticityProvenance,
+  ContextMessage,
   LLMProviderWireMessage,
   LLMSystemPromptTransport,
+  ObservabilityCallType,
 } from '../../../../src/shared/contracts/runtime.js';
 
 export type {
@@ -356,39 +370,9 @@ export interface MemoryWithheldSummary {
   relevanceBands?: Record<string, number>;
 }
 
-export interface AdminObservedMemory {
-  id: string;
-  text: string;
-  type: string;
-  importance: number;
-  confidence: number;
-  emotionalValence: number;
-  formationVAD?: unknown;
-  salience: number;
-  salienceDecayAnchorAt?: number;
-  sourceRef: string;
-  sourceType?: string;
-  provenance?: unknown;
-  extractedAt: number;
-  lastAccessed: number;
-  accessCount: number;
-  supersededBy?: string;
-  tags: string[];
-  scopeRef?: unknown;
-  scopeTags?: string[];
-  provenanceRefs?: string[];
-  retentionClass?: string;
-  sensitivity: string;
-  consentFlags?: unknown;
-  contactId?: string;
-  deletedAt?: number;
-  deletedBy?: string;
-  deleteReason?: string;
-}
+export type AdminObservedMemory = CanonicalObservedMemory;
 
-export interface AdminObservedScoredMemory extends AdminObservedMemory {
-  similarity: number;
-}
+export type AdminObservedScoredMemory = CanonicalObservedScoredMemory;
 
 export interface AdminTurnPromptSnapshotData {
   staticPrefixTemplate: string;
@@ -403,36 +387,10 @@ export interface AdminTurnPromptSnapshotData {
   sectionCacheability?: AdminPromptSectionCacheability[];
 }
 
-export type AdminAuthenticityProvenanceKind =
-  | 'user_direct'
-  | 'companion_direct'
-  | 'compaction_summary'
-  | 'system_note'
-  | 'system_injection'
-  | 'memory_retrieval'
-  | 'extraction_artifact'
-  | 'projection'
-  | 'search_result'
-  | 'tool_result'
-  | 'redacted_transformed';
-
-export interface AdminAuthenticityProvenance {
-  schemaVersion: 1;
-  kind: AdminAuthenticityProvenanceKind;
-  sourceAuthor: string;
-  transformedBy: string;
-  wording: string;
-  directSpeech: boolean;
-  detailLoss: string;
-  emotionalTexture: string;
-  safeAsPartnerSpeech: boolean;
-  sourceSpanCount?: number;
-  sourceEntryIds?: number[];
-  notes?: string[];
-}
+export type AdminAuthenticityProvenance = AuthenticityProvenance;
 
 export interface AdminTurnPromptContextMessage {
-  role: string;
+  role: ContextMessage['role'];
   content: string;
   provenance?: AdminAuthenticityProvenance;
 }
@@ -609,14 +567,14 @@ export interface AdminTurnToolSchema {
 
 export interface AdminAdaptiveToolSnapshotTool {
   toolName: string;
-  source: string;
+  source: AdaptiveToolCatalogSource;
 }
 
 export interface AdminAdaptiveToolSnapshotSkip {
   toolName: string;
-  source: string;
+  source: 'extended';
   reason: string;
-  missingTokens?: string[];
+  missingTokens?: CapabilityToken[];
 }
 
 export interface AdminAdaptiveToolSnapshotCounts {
@@ -635,44 +593,15 @@ export interface AdminAdaptiveToolSnapshotData {
   turnId?: string;
   requestId?: string;
   channelId?: string;
-  callType?: string;
+  callType?: ObservabilityCallType;
   purpose?: string;
 }
 
-export interface AdminTurnToolContextSnapshotData {
-  /** Absent on slim records when identical to PromptPlan.toolDefinitions. */
-  activeTools?: AdminTurnToolSchema[];
-  adaptiveSnapshot?: AdminAdaptiveToolSnapshotData;
-}
+export type AdminTurnToolContextSnapshotData = TurnToolContextSnapshot;
 
-export interface AdminTurnSessionContextSnapshotData {
-  channelId: string;
-  recentEntries: SessionEntry[];
-  sourceEntryCount?: number;
-  historySummaryText?: string;
-  historySummaryEntryCount?: number;
-  compactionSummaryTexts: string[];
-  focusKnowledgeTexts: string[];
-  continuityEntries: SessionEntry[];
-  wakeReturnArtifacts?: unknown[];
-  orientation?: unknown;
-  intentionAppraisalArtifactCount?: number;
-  compactionPromptText?: string;
-  versionPointer: string;
-}
+export type AdminTurnSessionContextSnapshotData = TurnSessionContextSnapshotRecord;
 
-export interface AdminTurnMemorySnapshotData {
-  channelId: string;
-  profile?: unknown;
-  emotionalSnapshot?: unknown;
-  contactEmotionalMemories: AdminObservedMemory[];
-  semanticCandidates: AdminObservedScoredMemory[];
-  lexicalCandidates: AdminObservedScoredMemory[];
-  episodicChains?: unknown[];
-  proactiveCandidates: AdminObservedMemory[];
-  withheldSummary?: MemoryWithheldSummary;
-  versionPointer: string;
-}
+export type AdminTurnMemorySnapshotData = TurnMemorySnapshotRecord;
 
 export interface AdminPromptPlanBlock {
   id: string;
@@ -691,25 +620,13 @@ export interface AdminPromptPlanData {
   messages: AdminTurnPromptContextMessage[];
   toolDefinitions: AdminTurnToolSchema[];
   cachePlan: { staticBoundary: number; sessionStableBoundary: number };
-  scope: unknown;
+  scope: PromptPlan['scope'];
 }
 
-export interface AdminTurnSnapshotData {
-  turnId: string;
-  requestId: string;
-  channelId: string;
-  capturedAt: number;
-  trustLevel: string;
-  canonicalContactKey?: string;
-  prompt?: AdminTurnPromptSnapshotData;
-  /** The turn's PromptPlan: the persisted snapshot IS the plan (E2.2). */
-  plan?: AdminPromptPlanData;
+export type AdminTurnSnapshotData = Omit<TurnSnapshotRecord, 'promptContext'> & {
+  /** Historical persisted records may carry pre-plan prompt string fields. */
   promptContext?: AdminTurnPromptContextSnapshotData;
-  toolContext?: AdminTurnToolContextSnapshotData;
-  sessionContext?: AdminTurnSessionContextSnapshotData;
-  memory?: AdminTurnMemorySnapshotData;
-  fatigue?: unknown;
-}
+};
 
 export interface SessionRoleEnvelopePreview {
   schemaVersion: 1;

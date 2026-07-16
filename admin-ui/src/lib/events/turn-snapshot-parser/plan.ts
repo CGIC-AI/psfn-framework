@@ -29,12 +29,27 @@ import {
   requireString,
 } from './primitives';
 
-function requirePromptRole(value: unknown, path: string): string {
+function requirePromptRole(
+  value: unknown,
+  path: string,
+): AdminTurnPromptContextMessage['role'] {
   const result = requireString(value, path);
   if (result !== 'user' && result !== 'assistant' && result !== 'system') {
     reject(path, `contains unsupported role ${JSON.stringify(result)}`);
   }
   return result;
+}
+
+function requireOneOf<T extends string>(
+  value: unknown,
+  path: string,
+  allowed: readonly T[],
+): T {
+  const result = requireString(value, path);
+  if (!(allowed as readonly string[]).includes(result)) {
+    reject(path, `contains unsupported value ${JSON.stringify(result)}`);
+  }
+  return result as T;
 }
 
 function requirePlanLayer(value: unknown, path: string): AdminPromptPlanBlock['layer'] {
@@ -214,26 +229,22 @@ export function parseProvenance(value: unknown, path: string): AdminAuthenticity
     'notes',
   ]);
   if (source.schemaVersion !== 1) reject(`${path}.schemaVersion`, 'must equal 1');
-  const sourceAuthor = requireString(source.sourceAuthor, `${path}.sourceAuthor`);
-  if (!['partner', 'companion', 'system', 'tool', 'memory', 'mixed', 'unknown'].includes(sourceAuthor)) {
-    reject(`${path}.sourceAuthor`, 'contains an unsupported value');
-  }
-  const transformedBy = requireString(source.transformedBy, `${path}.transformedBy`);
-  if (!['none', 'runtime', 'compaction', 'retrieval', 'extraction', 'projection', 'redaction', 'tool', 'system'].includes(transformedBy)) {
-    reject(`${path}.transformedBy`, 'contains an unsupported value');
-  }
-  const wording = requireString(source.wording, `${path}.wording`);
-  if (!['direct', 'derived', 'transformed', 'redacted'].includes(wording)) {
-    reject(`${path}.wording`, 'contains an unsupported value');
-  }
-  const detailLoss = requireString(source.detailLoss, `${path}.detailLoss`);
-  if (!['none', 'possible', 'likely'].includes(detailLoss)) {
-    reject(`${path}.detailLoss`, 'contains an unsupported value');
-  }
-  const emotionalTexture = requireString(source.emotionalTexture, `${path}.emotionalTexture`);
-  if (!['preserved', 'may_be_flattened', 'unknown'].includes(emotionalTexture)) {
-    reject(`${path}.emotionalTexture`, 'contains an unsupported value');
-  }
+  const sourceAuthor = requireOneOf(source.sourceAuthor, `${path}.sourceAuthor`, [
+    'partner', 'companion', 'system', 'tool', 'memory', 'mixed', 'unknown',
+  ] as const);
+  const transformedBy = requireOneOf(source.transformedBy, `${path}.transformedBy`, [
+    'none', 'runtime', 'compaction', 'retrieval', 'extraction', 'projection', 'redaction', 'tool',
+    'system',
+  ] as const);
+  const wording = requireOneOf(source.wording, `${path}.wording`, [
+    'direct', 'derived', 'transformed', 'redacted',
+  ] as const);
+  const detailLoss = requireOneOf(source.detailLoss, `${path}.detailLoss`, [
+    'none', 'possible', 'likely',
+  ] as const);
+  const emotionalTexture = requireOneOf(source.emotionalTexture, `${path}.emotionalTexture`, [
+    'preserved', 'may_be_flattened', 'unknown',
+  ] as const);
   const sourceSpanCount = optionalNonNegativeInteger(source, 'sourceSpanCount', path);
   const sourceEntryIds = source.sourceEntryIds === undefined
     ? undefined
@@ -317,14 +328,27 @@ function parsePlanVariables(value: unknown, path: string): Record<string, string
   return result;
 }
 
-function parseScope(value: unknown, path: string): unknown {
+function requireDmScopeKey(value: unknown, path: string): `dm:${string}` {
+  const key = requireNonEmptyString(value, path);
+  if (!key.startsWith('dm:')) reject(path, 'must start with dm:');
+  return `dm:${key.slice(3)}`;
+}
+
+function requireRoomScopeKey(value: unknown, path: string): `room:${string}` {
+  const key = requireNonEmptyString(value, path);
+  if (!key.startsWith('room:')) reject(path, 'must start with room:');
+  return `room:${key.slice(5)}`;
+}
+
+function parseScope(value: unknown, path: string): AdminPromptPlanData['scope'] {
   const base = requirePlainRecord(value, path);
-  const kind = requireString(base.kind, `${path}.kind`);
+  const rawKind = requireString(base.kind, `${path}.kind`);
+  const kind = rawKind === 'dm' || rawKind === 'group'
+    ? rawKind
+    : reject(`${path}.kind`, `contains unsupported value ${JSON.stringify(rawKind)}`);
   const allowed = kind === 'dm'
     ? ['kind', 'channelId', 'envelope', 'recentSpeakers', 'key', 'contact']
-    : kind === 'group'
-      ? ['kind', 'channelId', 'envelope', 'recentSpeakers', 'key', 'roomName', 'memberCountHint']
-      : reject(`${path}.kind`, `contains unsupported value ${JSON.stringify(kind)}`);
+    : ['kind', 'channelId', 'envelope', 'recentSpeakers', 'key', 'roomName', 'memberCountHint'];
   assertNoUnknownKeys(base, allowed, path, { errorPrefix: 'Malformed turn snapshot' });
   const envelope = requireExactRecord(base.envelope, `${path}.envelope`, [
     'channelPrivacy',
@@ -332,9 +356,10 @@ function parseScope(value: unknown, path: string): unknown {
     'audienceKnowledge',
     'broadcast',
   ]);
-  if (!isChannelPrivacy(envelope.channelPrivacy)) reject(`${path}.envelope.channelPrivacy`, 'is unsupported');
-  if (!isAudienceScope(envelope.audienceScope)) reject(`${path}.envelope.audienceScope`, 'is unsupported');
-  if (!isAudienceKnowledge(envelope.audienceKnowledge)) reject(`${path}.envelope.audienceKnowledge`, 'is unsupported');
+  const { channelPrivacy, audienceScope, audienceKnowledge } = envelope;
+  if (!isChannelPrivacy(channelPrivacy)) reject(`${path}.envelope.channelPrivacy`, 'is unsupported');
+  if (!isAudienceScope(audienceScope)) reject(`${path}.envelope.audienceScope`, 'is unsupported');
+  if (!isAudienceKnowledge(audienceKnowledge)) reject(`${path}.envelope.audienceKnowledge`, 'is unsupported');
   const recentSpeakers = parseArray(base.recentSpeakers, `${path}.recentSpeakers`, (item, itemPath) => {
     const speaker = requireExactRecord(item, itemPath, ['authorId', 'name']);
     return {
@@ -343,15 +368,14 @@ function parseScope(value: unknown, path: string): unknown {
     };
   });
   const channelId = requireNonEmptyString(base.channelId, `${path}.channelId`);
-  const key = requireNonEmptyString(base.key, `${path}.key`);
   const parsedEnvelope = {
-    channelPrivacy: envelope.channelPrivacy,
-    audienceScope: envelope.audienceScope,
-    audienceKnowledge: envelope.audienceKnowledge,
+    channelPrivacy,
+    audienceScope,
+    audienceKnowledge,
     broadcast: requireBoolean(envelope.broadcast, `${path}.envelope.broadcast`),
   };
   if (kind === 'dm') {
-    if (!key.startsWith('dm:')) reject(`${path}.key`, 'must start with dm:');
+    const key = requireDmScopeKey(base.key, `${path}.key`);
     const contact = requireExactRecord(base.contact, `${path}.contact`, ['contactId', 'displayName']);
     const displayName = optionalString(contact, 'displayName', `${path}.contact`);
     return {
@@ -366,7 +390,7 @@ function parseScope(value: unknown, path: string): unknown {
       },
     };
   }
-  if (!key.startsWith('room:')) reject(`${path}.key`, 'must start with room:');
+  const key = requireRoomScopeKey(base.key, `${path}.key`);
   const roomName = optionalString(base, 'roomName', path);
   const memberCountHint = optionalNonNegativeInteger(base, 'memberCountHint', path);
   return {

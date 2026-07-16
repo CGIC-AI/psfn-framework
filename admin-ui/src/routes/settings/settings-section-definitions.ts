@@ -7,7 +7,6 @@ import type { SettingsSimpleSectionId } from '$lib/components/settings/navigatio
 export interface SettingsAdvancedSection {
   id: string;
   title: string;
-  icon: string;
   keys: string[];
 }
 
@@ -19,59 +18,59 @@ export const MODEL_OWNED_FIELDS = new Set<string>(SETTINGS_GARDEN_SECTION_FIELDS
 // admins never see a generic input that the runtime write path would reject.
 export const SETTINGS_ADVANCED_SECTIONS: SettingsAdvancedSection[] = [
   {
-    id: 'budget', title: 'Context Budget', icon: 'B',
+    id: 'budget', title: 'Context Budget',
     keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.budget,
   },
   {
-    id: 'memory', title: 'Memory & Extraction', icon: 'E',
+    id: 'memory', title: 'Memory & Extraction',
     keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.memory,
   },
   {
-    id: 'sessions', title: 'Sessions & Compaction', icon: 'S',
+    id: 'sessions', title: 'Sessions & Compaction',
     keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.sessions,
   },
   {
-    id: 'extraction-tuning', title: 'Memory Extraction Tuning', icon: 'X',
+    id: 'extraction-tuning', title: 'Memory Extraction Tuning',
     keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS['extraction-tuning'],
   },
   {
-    id: 'profile', title: 'Profile Synthesis', icon: 'P',
+    id: 'profile', title: 'Profile Synthesis',
     keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.profile,
   },
   {
-    id: 'analysis-workbench', title: 'Analysis Workbench', icon: 'R',
+    id: 'analysis-workbench', title: 'Analysis Workbench',
     keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS['analysis-workbench'],
   },
   {
-    id: 'compositional', title: 'Compositional Cognition', icon: 'K',
+    id: 'compositional', title: 'Compositional Cognition',
     keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.compositional,
   },
   {
-    id: 'trust', title: 'Trust & Capabilities', icon: 'T',
+    id: 'trust', title: 'Trust & Capabilities',
     keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.trust,
   },
   {
-    id: 'llm', title: 'LLM Retries & Behavior', icon: 'L',
+    id: 'llm', title: 'LLM Retries & Behavior',
     keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.llm,
   },
   {
-    id: 'import', title: 'Import Processing', icon: 'I',
+    id: 'import', title: 'Import Processing',
     keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.import,
   },
   {
-    id: 'fetch', title: 'Web Fetch Policy', icon: 'W',
+    id: 'fetch', title: 'Web Fetch Policy',
     keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.fetch,
   },
   {
-    id: 'voice', title: 'Voice & Speech', icon: 'V',
+    id: 'voice', title: 'Voice & Speech',
     keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.voice,
   },
   {
-    id: 'obsidian', title: 'External Obsidian', icon: 'O',
+    id: 'obsidian', title: 'External Obsidian',
     keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.obsidian,
   },
   {
-    id: 'channels', title: 'Channels', icon: 'C',
+    id: 'channels', title: 'Channels',
     keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.channels,
   },
 ];

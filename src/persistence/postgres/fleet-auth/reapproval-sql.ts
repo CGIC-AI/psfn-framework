@@ -395,6 +395,8 @@ DECLARE
   v_new_authz bigint;
   v_new_binding_version bigint;
   v_new_role_version bigint;
+  v_contact_proof_intent_id uuid;
+  v_contact_proof_request_digest text;
 BEGIN
   IF p_at IS NULL THEN
     RAISE EXCEPTION 'reapproval timestamp is required' USING ERRCODE = '42501';
@@ -558,12 +560,48 @@ BEGIN
     RAISE EXCEPTION 'role grant conflicts with a live grant' USING ERRCODE = '42501';
   END IF;
 
+  -- Restored fleet authority may become live only after the authenticated
+  -- companion has finalized one exact post-restore contact reapproval saga.
+  -- The finalize request digest commits the exact reapproved post-state and
+  -- contact version; the intent row binds companion/contact/Discord ownership.
+  SELECT intent.intent_id, receipt.request_digest
+    INTO v_contact_proof_intent_id, v_contact_proof_request_digest
+  FROM fleet_auth.contact_authority_intents AS intent
+  JOIN fleet_auth.contact_authority_receipts AS receipt
+    ON receipt.companion_id = intent.companion_id
+   AND receipt.intent_id = intent.intent_id
+   AND receipt.phase = 'finalize'
+  WHERE intent.companion_id = p_companion_id
+    AND intent.action = 'contact.reapprove'
+    AND intent.contact_id = p_contact_id
+    AND intent.provider_subject_id = p_provider_subject_id
+    AND intent.state = 'released'
+    AND intent.restore_state = 'live'
+    AND receipt.restore_state = 'live'
+    AND receipt.result->>'status' = 'finalized'
+    AND NOT EXISTS (
+      SELECT 1
+      FROM fleet_auth.contact_authority_intents AS newer
+      WHERE newer.companion_id = intent.companion_id
+        AND newer.intent_id <> intent.intent_id
+        AND newer.created_at > intent.updated_at
+        AND (newer.contact_id = intent.contact_id
+          OR newer.provider_subject_id = intent.provider_subject_id)
+    )
+  ORDER BY intent.updated_at DESC, intent.intent_id DESC
+  LIMIT 1
+  FOR UPDATE OF intent;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'finalized exact companion contact ownership proof is required'
+      USING ERRCODE = '42501';
+  END IF;
+
   -- The trusted host binds the exact authority being promoted, including the
   -- role value and the current non-restored floor projection. JSONB equality
   -- is intentionally exact: missing or extra fields reject rather than being
   -- ignored by a permissive partial parser.
   v_expected_scope := jsonb_build_object(
-    'schemaVersion', 2,
+    'schemaVersion', 3,
     'principalId', p_principal_id::text,
     'provider', p_provider,
     'providerSubjectId', p_provider_subject_id,
@@ -575,6 +613,8 @@ BEGIN
     'companionVersion', v_companion.version,
     'bindingVersion', v_binding.version,
     'roleGrantVersion', v_grant.version,
+    'contactOwnershipIntentId', v_contact_proof_intent_id::text,
+    'contactOwnershipRequestDigest', v_contact_proof_request_digest,
     'authorityLineageId', v_lineage,
     'authorityGeneration', v_generation,
     'restoreCheckpoint', v_restore_checkpoint

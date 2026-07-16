@@ -13,6 +13,7 @@ import {
   type PostgresTestHarness,
 } from '../../../test-support/postgres-test-harness.js';
 import { createPostgresContactStore } from '../postgres-adapter.js';
+import type { ContactLifecycleFaultStage } from './options.js';
 
 const TIMEOUT_MS = 120_000;
 const SUBJECT = '12345678901234567';
@@ -67,7 +68,13 @@ class RecordingGateway implements ContactLifecycleGatewayPort {
   }
 }
 
-async function fixture(gateway: RecordingGateway): Promise<{
+async function fixture(
+  gateway: RecordingGateway,
+  contactLifecycleFaultInjection?: (
+    stage: ContactLifecycleFaultStage,
+    request: ContactAuthorityLifecycleRequest,
+  ) => Promise<void> | void,
+): Promise<{
   pool: ReturnType<typeof createPostgresPool>;
   store: ContactStorePort;
 }> {
@@ -81,6 +88,7 @@ async function fixture(gateway: RecordingGateway): Promise<{
   const store = await createPostgresContactStore(database.databaseUrl, SUBJECT, {
     pool,
     contactLifecycleGateway: gateway,
+    ...(contactLifecycleFaultInjection ? { contactLifecycleFaultInjection } : {}),
   });
   await store.upsert({
     id: 'contact-a',
@@ -122,6 +130,55 @@ async function verify(store: ContactStorePort, proof: Awaited<ReturnType<typeof 
 }
 
 describe('authenticated contact lifecycle coordinator', () => {
+  it.each([
+    'after_local_prepare',
+    'after_gateway_fence',
+    'after_gateway_result',
+    'after_contact_commit',
+    'after_gateway_finalize',
+    'after_local_final_record',
+  ] as const)('restarts deterministically after the %s crash cut', async (crashStage) => {
+    const gateway = new RecordingGateway();
+    let armed = true;
+    const { pool, store } = await fixture(gateway, (stage) => {
+      if (armed && stage === crashStage) {
+        armed = false;
+        throw new Error(`injected process crash at ${stage}`);
+      }
+    });
+    try {
+      await expect(store.deleteContact('contact-a')).rejects.toThrow(
+        `injected process crash at ${crashStage}`,
+      );
+      const restarted = await createPostgresContactStore('unused-by-injected-pool', SUBJECT, {
+        pool,
+        contactLifecycleGateway: gateway,
+      });
+      await expect(restarted.deleteContact('contact-a')).resolves.toBe(true);
+      await expect(restarted.getById('contact-a')).resolves.toBeUndefined();
+      const ledger = await pool.query<{
+        phase: string;
+        lease_owner: string | null;
+        finalize_count: string;
+      }>(`
+        SELECT intent.phase, intent.lease_owner,
+               (SELECT COUNT(*)::text FROM contact_lifecycle_results AS result
+                WHERE result.intent_id = intent.intent_id
+                  AND result.gateway_phase = 'finalize') AS finalize_count
+        FROM contact_lifecycle_intents AS intent
+        WHERE intent.action = 'contact.delete'
+      `);
+      expect(ledger.rows).toEqual([{
+        phase: 'finalized',
+        lease_owner: null,
+        finalize_count: '1',
+      }]);
+      expect(new Set(gateway.calls.map(call => call.intentId)).size).toBe(1);
+    } finally {
+      await pool.end();
+    }
+  }, TIMEOUT_MS);
+
   it('finalizes exact verification before authority activation and clears legacy identity on unlink', async () => {
     const gateway = new RecordingGateway();
     const { pool, store } = await fixture(gateway);

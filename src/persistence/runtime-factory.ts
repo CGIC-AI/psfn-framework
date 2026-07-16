@@ -47,6 +47,7 @@ import { IntrospectionLandmarkPostgresStore } from '../faculties/introspection/p
 import { PostgresBackgroundWorkStore } from './postgres/background-work-store.js';
 import type { BackgroundWorkStorePort } from '../core/agent/background-work/store-port.js';
 import type { ContactLifecycleGatewayPort } from '../core/contacts/contact-lifecycle-gateway-port.js';
+import { ContactLifecycleRecoveryRuntime } from '../core/contacts/contact-lifecycle-recovery-runtime.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
@@ -77,6 +78,8 @@ export interface AgentPersistenceRuntime {
   companionPresenceStore?: CompanionPresenceStorePort;
   /** Companion-private durable ICP motivation; multi-companion only. */
   icpInitiationCandidateStore?: IcpInitiationCandidateStorePort;
+  /** Leased contact-authority recovery, started before the factory returns. */
+  contactLifecycleRecovery?: ContactLifecycleRecoveryRuntime;
 }
 
 export interface CreateAgentPersistenceRuntimeOptions {
@@ -88,6 +91,7 @@ export interface CreateAgentPersistenceRuntimeOptions {
   embeddingDims: number;
   primaryUserId?: string;
   contactLifecycleGateway?: ContactLifecycleGatewayPort;
+  onContactLifecycleRecoveryFailure?: (error: unknown) => void;
 }
 
 export async function createAgentPersistenceRuntime(
@@ -142,7 +146,14 @@ export async function createAgentPersistenceRuntime(
     : undefined;
 
   const intentionRuntime = await createPostgresIntentionPorts(databaseUrl, { schema });
-  return {
+  const contactStore = await createPostgresContactStore(databaseUrl, options.primaryUserId, {
+    exportDir: resolveContactsDir(options.pathSnapshot.companionDataDir),
+    schema,
+    ...(options.contactLifecycleGateway
+      ? { contactLifecycleGateway: options.contactLifecycleGateway }
+      : {}),
+  });
+  const runtime: AgentPersistenceRuntime = {
     backend: 'postgres',
     memoryStore: await createPostgresMemoryStore(databaseUrl, options.embeddingDims, {
       notesDir: resolveNotesDir(options.pathSnapshot.companionDataDir),
@@ -157,13 +168,7 @@ export async function createAgentPersistenceRuntime(
         mirror: await PostgresReflectionMetacognitionMirrorStore.connect(databaseUrl, { schema }),
       },
     ),
-    contactStore: await createPostgresContactStore(databaseUrl, options.primaryUserId, {
-      exportDir: resolveContactsDir(options.pathSnapshot.companionDataDir),
-      schema,
-      ...(options.contactLifecycleGateway
-        ? { contactLifecycleGateway: options.contactLifecycleGateway }
-        : {}),
-    }),
+    contactStore,
     hubIdentityEnrollmentStore: await createPostgresHubIdentityEnrollmentStore(databaseUrl, { schema }),
     intentionRuntime,
     intentionProviders: intentionRuntime,
@@ -176,4 +181,16 @@ export async function createAgentPersistenceRuntime(
     ...(companionPresenceStore ? { companionPresenceStore } : {}),
     ...(icpInitiationCandidateStore ? { icpInitiationCandidateStore } : {}),
   };
+  if (!options.contactLifecycleGateway) return runtime;
+  const contactLifecycleRecovery = new ContactLifecycleRecoveryRuntime({
+    store: contactStore,
+    ...(options.onContactLifecycleRecoveryFailure
+      ? { onFailure: options.onContactLifecycleRecoveryFailure }
+      : {}),
+  });
+  // This is deliberately awaited before returning: callers cannot register
+  // contact tools, RPC callbacks, or Garden/admin surfaces first.
+  await contactLifecycleRecovery.recoverBeforeExposure();
+  contactLifecycleRecovery.start();
+  return { ...runtime, contactLifecycleRecovery };
 }

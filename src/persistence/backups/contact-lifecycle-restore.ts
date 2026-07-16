@@ -48,7 +48,13 @@ export async function quarantineRestoredContactLifecycleAuthority(
           `${schema}.contact_lifecycle_target_locks`,
         ]);
         const state = tables.rows.at(0);
-        if (!state?.contacts || !state.ownerships || !state.intents || !state.locks) continue;
+        const present = state
+          ? [state.contacts, state.ownerships, state.intents, state.locks].filter(Boolean).length
+          : 0;
+        if (present === 0) continue;
+        if (present !== 4) {
+          throw new Error(`Restored companion schema ${schema} has incomplete contact authority state`);
+        }
         const qualified = quoteIdentifier(schema);
         await client.query(`SET LOCAL search_path TO ${qualified}, public`);
         await client.query(`

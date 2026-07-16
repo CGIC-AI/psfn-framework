@@ -4,6 +4,10 @@ import type {
   ContactLifecycleRecoveryDeferralInput,
   ContactLifecycleRecoveryLease,
 } from '../../../shared/contracts/contact-lifecycle-ledger.js';
+import type {
+  ContactLifecycleDiagnosticEntry,
+  ContactLifecycleDiagnostics,
+} from '../contact-store-port.js';
 import { parseContactAuthorityLifecycleResult } from '../../../shared/contracts/contact-authority-lifecycle.js';
 import { isRfc4122Uuid } from '../../../shared/utils/types.js';
 import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
@@ -66,6 +70,43 @@ const RECOVERY_POLICY = {
   maximumLeaseMs: 300_000,
   manualHoldAfterAttempts: 8,
 } as const;
+
+const DIAGNOSTIC_PHASES = [
+  'gateway_prepare_pending',
+  'contact_commit_pending',
+  'gateway_finalize_pending',
+  'manual_hold',
+  'quarantined',
+] as const;
+
+function diagnosticLimit(value: number | undefined): number {
+  const resolved = value ?? 20;
+  if (!Number.isSafeInteger(resolved) || resolved < 1 || resolved > 100) {
+    throw new ContactLifecycleLedgerDeniedError('invalid_diagnostic_limit');
+  }
+  return resolved;
+}
+
+function diagnosticEntry(row: ContactLifecycleIntentRow): ContactLifecycleDiagnosticEntry {
+  const parsed = parseContactLifecycleIntentRow(row);
+  if (!DIAGNOSTIC_PHASES.includes(row.phase as (typeof DIAGNOSTIC_PHASES)[number])) {
+    throw new Error('Contact lifecycle diagnostic query returned a terminal row');
+  }
+  let state: ContactLifecycleDiagnosticEntry['state'] = 'over_fenced';
+  if (row.phase === 'gateway_prepare_pending') state = 'prepared';
+  else if (row.phase === 'manual_hold' || row.phase === 'quarantined') state = 'manual_hold';
+  let reason: string = row.phase;
+  if (row.phase === 'manual_hold') reason = parsed.outcome.reason;
+  else if (row.phase === 'quarantined') reason = 'ownership_quarantined';
+  return {
+    action: parsed.request.action,
+    state,
+    phase: row.phase,
+    reason,
+    retryCount: row.retry_count,
+    updatedAt: canonicalTimestamp(row.updated_at, 'diagnostic update'),
+  };
+}
 
 function leaseOwner(value: string): string {
   const trimmed = value.trim();
@@ -138,6 +179,53 @@ function assertHealthyVerifiedOwnership(row: OwnershipHealthRow): void {
 }
 
 const postgresContactLifecycleRecoveryOperations: PostgresContactOperationMap = {
+  async getContactLifecycleDiagnostics(limitInput?: number): Promise<ContactLifecycleDiagnostics> {
+    const limit = diagnosticLimit(limitInput);
+    return await withPostgresClient(this.pool, async (client) => {
+      const countsResult = await client.query<{ phase: ContactLifecycleIntentRow['phase']; count: string }>(`
+        SELECT phase, COUNT(*)::text AS count
+        FROM contact_lifecycle_intents
+        WHERE phase = ANY($1::text[])
+        GROUP BY phase
+      `, [[...DIAGNOSTIC_PHASES]]);
+      const rows = await client.query<ContactLifecycleIntentRow>(`
+        SELECT * FROM contact_lifecycle_intents
+        WHERE phase = ANY($1::text[])
+        ORDER BY updated_at DESC, intent_id DESC
+        LIMIT $2
+      `, [[...DIAGNOSTIC_PHASES], limit]);
+      const counts: ContactLifecycleDiagnostics['counts'] = {
+        prepared: 0,
+        over_fenced: 0,
+        manual_hold: 0,
+      };
+      let total = 0;
+      for (const row of countsResult.rows) {
+        const count = Number(row.count);
+        if (!Number.isSafeInteger(count) || count < 0) {
+          throw new Error('Corrupt contact lifecycle diagnostic count');
+        }
+        total += count;
+        if (row.phase === 'gateway_prepare_pending') counts.prepared += count;
+        else if (row.phase === 'manual_hold' || row.phase === 'quarantined') {
+          counts.manual_hold += count;
+        } else if (row.phase === 'contact_commit_pending'
+          || row.phase === 'gateway_finalize_pending') {
+          counts.over_fenced += count;
+        } else {
+          throw new Error('Corrupt contact lifecycle diagnostic phase');
+        }
+      }
+      return {
+        schemaVersion: 1,
+        total,
+        truncated: total > rows.rows.length,
+        counts,
+        entries: rows.rows.map(diagnosticEntry),
+      };
+    });
+  },
+
   async claimContactLifecycleRecovery(
     input: ContactLifecycleRecoveryClaimInput,
   ): Promise<ContactLifecycleRecoveryLease[]> {

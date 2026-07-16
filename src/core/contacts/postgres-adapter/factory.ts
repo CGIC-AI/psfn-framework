@@ -22,6 +22,7 @@ export async function createPostgresContactStore(
       primaryUserId,
       options.exportDir,
       options.contactLifecycleGateway,
+      options.contactLifecycleFaultInjection,
     );
     await store.assertContactLifecycleLedgerHealthy();
     if (options.contactLifecycleGateway) {

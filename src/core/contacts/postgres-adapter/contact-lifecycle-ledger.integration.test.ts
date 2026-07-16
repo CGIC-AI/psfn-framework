@@ -154,6 +154,19 @@ describe('Postgres companion contact lifecycle ledger', () => {
         companionId: 'caller-must-not-choose-schema-owner',
       })).rejects.toThrow(/invalid_v1_request/);
 
+      const diagnostics = await store.getContactLifecycleDiagnostics(1);
+      expect(diagnostics).toMatchObject({
+        schemaVersion: 1,
+        total: 2,
+        truncated: true,
+        counts: { prepared: 1, over_fenced: 0, manual_hold: 1 },
+        entries: [expect.objectContaining({ state: expect.stringMatching(/prepared|manual_hold/u) })],
+      });
+      const serializedDiagnostics = JSON.stringify(diagnostics);
+      expect(serializedDiagnostics).not.toContain('contact-authority-owner');
+      expect(serializedDiagnostics).not.toContain(SUBJECT);
+      expect(serializedDiagnostics).not.toContain(intentId);
+
       await pool.query(`
         UPDATE contact_identity_link_verifications SET status = 'failed'
         WHERE id = $1

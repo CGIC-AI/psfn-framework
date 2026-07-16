@@ -103,6 +103,22 @@ class FakeStore implements FleetAuthBrokerStore {
     this.transaction = input;
   }
 
+  async resolveOAuthCallbackDestination(
+    input: Parameters<FleetAuthBrokerStore['resolveOAuthCallbackDestination']>[0],
+  ): ReturnType<FleetAuthBrokerStore['resolveOAuthCallbackDestination']> {
+    if (!this.transaction || this.consumed
+      || this.transaction.stateDigest !== input.stateDigest
+      || this.transaction.initiatingBrowserDigest !== input.initiatingBrowserDigest) {
+      throw new FleetAuthBrokerError('invalid_oauth_state', 400);
+    }
+    if (this.transaction.expiresAt.getTime() <= input.now.getTime()) {
+      throw new FleetAuthBrokerError('expired_oauth_transaction', 400);
+    }
+    if (this.transaction.kind === 'login' && !this.lifecyclePurpose) return 'login';
+    if (this.transaction.kind !== 'first_owner' && this.lifecyclePurpose) return 'lifecycle';
+    throw new FleetAuthBrokerError('oauth_transaction_kind_mismatch', 400);
+  }
+
   async createLifecycleOAuthTransaction(
     input: Parameters<FleetAuthBrokerStore['createLifecycleOAuthTransaction']>[0],
   ): Promise<void> {
@@ -288,7 +304,7 @@ describe('gateway fleet auth broker', () => {
       proofRole: 'new',
     });
     const state = new URL(started.authorizationUrl).searchParams.get('state')!;
-    const completed = await broker.completeLifecycleOAuthCallback({
+    const completed = await broker.completeOAuthCallback({
       state,
       code: 'discord-code',
       requestOrigin: config.canonicalOrigin,
@@ -296,6 +312,7 @@ describe('gateway fleet auth broker', () => {
     });
 
     expect(completed).toMatchObject({
+      kind: 'lifecycle',
       returnPath: '/fleet/security',
       ceremonyId: '00000000-0000-4000-8000-000000000301',
       action: 'provider.add',
@@ -306,6 +323,32 @@ describe('gateway fleet auth broker', () => {
       },
     });
     expect(store.session).toBeNull();
+  });
+
+  it('classifies a login callback before consuming it and preserves routine session creation', async () => {
+    const { broker, store } = makeBroker(new FakeStore(), vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(200, {
+        access_token: 'provider-access-secret',
+        token_type: 'Bearer',
+        expires_in: 3600,
+        scope: 'identify',
+      }))
+      .mockResolvedValueOnce(response(200, { id: '123456789012345679' })));
+    const started = await broker.beginLogin({ returnPath: '/fleet' });
+
+    const completed = await broker.completeOAuthCallback({
+      state: new URL(started.authorizationUrl).searchParams.get('state')!,
+      code: 'discord-code',
+      requestOrigin: config.canonicalOrigin,
+      initiatingBrowserToken: started.initiatingBrowserToken,
+    });
+
+    expect(completed).toMatchObject({
+      kind: 'login',
+      returnPath: '/fleet',
+      session: { principalStatus: 'pending' },
+    });
+    expect(store.consumed).toBe(true);
   });
 
   it('starts only login transactions with exact callback, allowlisted return path, and PKCE S256', async () => {

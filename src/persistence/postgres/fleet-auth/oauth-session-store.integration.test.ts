@@ -1,8 +1,14 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
+import type { IncomingMessage, ServerResponse } from 'node:http';
+import { Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { TLSSocket } from 'node:tls';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { GatewayFleetAuthBroker } from '../../../boundary/gateway/fleet-auth-broker.js';
+import { FleetAuthHttpRoutes } from '../../../channels/api/server/fleet-auth-routes.js';
+import type { FleetAuthConfig } from '../../../system/config/fleet-auth-config.js';
 import {
   DEFAULT_POSTGRES_TEST_IMAGE,
   startPostgresTestHarness,
@@ -31,6 +37,103 @@ const PASSWORDS = {
 } as const;
 const PROVIDER_SUBJECT_ID = '123456789012345679';
 const NOW = new Date('2026-07-15T12:00:00.000Z');
+const CALLBACK_CONFIG: FleetAuthConfig = {
+  schemaVersion: 1,
+  activationGeneration: 1,
+  canonicalOrigin: 'https://fleet.example.test',
+  callbackPath: '/auth/discord/callback',
+  provider: {
+    kind: 'discord',
+    clientId: '123456789012345678',
+    scopes: ['identify'],
+    clientSecretRef: { kind: 'env', envName: 'FLEET_AUTH_DISCORD_CLIENT_SECRET' },
+    tokenCustody: 'discard',
+  },
+  credentials: {
+    tokenEncryptionKeyRef: { kind: 'env', envName: 'FLEET_AUTH_TOKEN_ENCRYPTION_KEY' },
+    sessionPepperRef: { kind: 'env', envName: 'FLEET_AUTH_SESSION_PEPPER' },
+    assertionPrivateKeyRef: { kind: 'env', envName: 'FLEET_AUTH_ASSERTION_PRIVATE_KEY' },
+    trustedHostRecoveryCredentialRef: { kind: 'env', envName: 'FLEET_AUTH_RECOVERY_CREDENTIAL' },
+    runtimeDatabaseUrlRef: { kind: 'env', envName: 'FLEET_AUTH_RUNTIME_DATABASE_URL' },
+    migrationDatabaseUrlRef: { kind: 'env', envName: 'FLEET_AUTH_MIGRATION_DATABASE_URL' },
+    backupRestoreDatabaseUrlRef: { kind: 'env', envName: 'FLEET_AUTH_BACKUP_DATABASE_URL' },
+    authorityFloorRootRef: { kind: 'env', envName: 'FLEET_AUTH_AUTHORITY_FLOOR_ROOT' },
+  },
+  databaseRoles: ROLES,
+  verifierKeys: [{
+    issuer: 'psfn-fleet-auth',
+    kid: 'callback-test',
+    publicKeyPem: 'unused-in-callback-test',
+    notBefore: '2026-01-01T00:00:00.000Z',
+    notAfter: '2099-01-01T00:00:00.000Z',
+    status: 'active',
+  }],
+  hubDeviceAssertions: {
+    issuer: 'psfn-satellite-hub',
+    audience: 'https://fleet.example.test',
+    maxTtlSeconds: 60,
+    clockSkewSeconds: 2,
+    keys: [{
+      kid: 'hub-callback-test',
+      publicKeyPem: 'unused-in-callback-test',
+      notBefore: '2026-01-01T00:00:00.000Z',
+      notAfter: '2099-01-01T00:00:00.000Z',
+      status: 'active',
+    }],
+  },
+  ttls: {
+    oauthTransactionMs: 300_000,
+    sessionIdleMs: 1_800_000,
+    sessionAbsoluteMs: 28_800_000,
+    discordEvidenceMs: 300_000,
+    jitGrantMs: 300_000,
+    stepUpChallengeMs: 180_000,
+    internalAssertionMs: 30_000,
+  },
+  rolePolicy: {
+    disabledActionsByRole: {
+      owner: [],
+      admin: ['roles.manage'],
+      member: ['settings.write', 'roles.manage'],
+      guest: ['garden.read', 'settings.read', 'settings.write', 'roles.manage'],
+    },
+  },
+  discordEvidenceMappings: [],
+};
+
+interface CapturedResponse {
+  statusCode: number;
+  headers: Map<string, string | number | readonly string[]>;
+  body: string;
+  writableEnded: boolean;
+}
+
+function callbackResponse(): ServerResponse & CapturedResponse {
+  const captured: CapturedResponse = {
+    statusCode: 200,
+    headers: new Map(),
+    body: '',
+    writableEnded: false,
+  };
+  return Object.assign(captured, {
+    setHeader(name: string, value: string | number | readonly string[]) {
+      captured.headers.set(name.toLowerCase(), value);
+      return this;
+    },
+    writeHead(statusCode: number, headers?: Record<string, string>) {
+      captured.statusCode = statusCode;
+      for (const [name, value] of Object.entries(headers ?? {})) {
+        captured.headers.set(name.toLowerCase(), value);
+      }
+      return this;
+    },
+    end(body?: string) {
+      captured.body = body ?? '';
+      captured.writableEnded = true;
+      return this;
+    },
+  }) as unknown as ServerResponse & CapturedResponse;
+}
 
 let harness: PostgresTestHarness | null = null;
 const floorRoots: string[] = [];
@@ -253,6 +356,140 @@ describe('Postgres gateway OAuth/session authority', () => {
         verified_provider_subject_id: '223456789012345679',
       });
     } finally {
+      await migration.end();
+      await coordinator.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('routes the live shared callback to lifecycle completion before consuming its transaction', async () => {
+    const { store, runtime, coordinator, migration } = await createStore();
+    const tlsSocket = new TLSSocket(new Socket());
+    try {
+      const loginInput = await authenticate(store, 'live-lifecycle-callback');
+      const session = await store.createLoginSession({
+        ...loginInput,
+        providerSubjectId: PROVIDER_SUBJECT_ID,
+        providerMetadata: {},
+        token: 's'.repeat(43),
+        csrfToken: 'c'.repeat(43),
+        audience: 'fleet',
+        now: NOW,
+        idleTtlMs: 1_800_000,
+        absoluteTtlMs: 28_800_000,
+      });
+      const providerAccessToken = 'provider-access-secret-must-stay-server-side';
+      const verifiedSubjectId = '223456789012345679';
+      const broker = new GatewayFleetAuthBroker({
+        config: CALLBACK_CONFIG,
+        store,
+        oauthClientSecret: 'discord-client-secret',
+        sessionPepper: 'session-pepper-at-least-thirty-two-bytes',
+        now: () => new Date(NOW.getTime() + 1_000),
+        fetchImpl: vi.fn<typeof fetch>()
+          .mockResolvedValueOnce(new Response(JSON.stringify({
+            access_token: providerAccessToken,
+            token_type: 'Bearer',
+            expires_in: 3_600,
+            scope: 'identify',
+          }), { status: 200, headers: { 'content-type': 'application/json' } }))
+          .mockResolvedValueOnce(new Response(JSON.stringify({ id: verifiedSubjectId }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })),
+      });
+      const ceremonyId = randomUUID();
+      const started = await broker.beginLifecycleOAuth({
+        token: session.token,
+        csrfToken: session.csrfToken,
+        requestOrigin: CALLBACK_CONFIG.canonicalOrigin,
+        returnPath: '/fleet/security',
+        ceremonyId,
+        action: 'provider.add',
+        proofRole: 'new',
+      });
+      const state = new URL(started.authorizationUrl).searchParams.get('state')!;
+      const stateDigest = createHmac('sha256', 'session-pepper-at-least-thirty-two-bytes')
+        .update(state)
+        .digest('hex');
+      await expect(store.resolveOAuthCallbackDestination({
+        stateDigest,
+        initiatingBrowserDigest: createHmac(
+          'sha256',
+          'session-pepper-at-least-thirty-two-bytes',
+        ).update(started.initiatingBrowserToken).digest('hex'),
+        now: NOW,
+      })).resolves.toBe('lifecycle');
+      const pending = await runtime.query<{ status: string }>(`
+        SELECT status
+        FROM fleet_auth.oauth_transactions
+        WHERE state_digest = $1
+      `, [stateDigest]);
+      expect(pending.rows[0]?.status).toBe('pending');
+      const routes = new FleetAuthHttpRoutes({
+        broker,
+        canonicalOrigin: CALLBACK_CONFIG.canonicalOrigin,
+        callbackPath: CALLBACK_CONFIG.callbackPath,
+      });
+      const request = {
+        method: 'GET',
+        headers: {
+          host: 'fleet.example.test',
+          cookie: `__Host-psfn_preauth=${started.initiatingBrowserToken}`,
+        },
+        socket: tlsSocket,
+      } as IncomingMessage;
+      const response = callbackResponse();
+      await routes.handle(
+        request,
+        response,
+        new URL(`${CALLBACK_CONFIG.canonicalOrigin}${CALLBACK_CONFIG.callbackPath}`
+          + `?state=${encodeURIComponent(state)}&code=one-time-code`),
+      );
+      const transaction = await runtime.query<{
+        status: string;
+        verified_provider: string | null;
+        verified_provider_subject_id: string | null;
+        completed_session_id: string | null;
+      }>(`
+        SELECT status, verified_provider, verified_provider_subject_id, completed_session_id
+        FROM fleet_auth.oauth_transactions
+        WHERE state_digest = $1
+      `, [stateDigest]);
+
+      expect({
+        statusCode: response.statusCode,
+        receipt: JSON.parse(response.body) as unknown,
+        transaction: transaction.rows[0],
+      }).toEqual({
+        statusCode: 200,
+        receipt: {
+          kind: 'lifecycle',
+          returnPath: '/fleet/security',
+          ceremonyId,
+          action: 'provider.add',
+          proofRole: 'new',
+          proof: {
+            provider: 'discord',
+            subjectId: verifiedSubjectId,
+            callbackTransactionId: expect.any(String),
+            proofDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+          },
+        },
+        transaction: {
+          status: 'consumed',
+          verified_provider: 'discord',
+          verified_provider_subject_id: verifiedSubjectId,
+          completed_session_id: null,
+        },
+      });
+      expect(response.headers.get('set-cookie')).toBe(
+        '__Host-psfn_preauth=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax',
+      );
+      expect(response.body).not.toContain(providerAccessToken);
+      expect(response.body).not.toContain(session.token);
+    } finally {
+      tlsSocket.destroy();
       await migration.end();
       await coordinator.end();
       await runtime.end();

@@ -10,6 +10,19 @@ export type LifecycleOAuthAction =
 
 export type LifecycleOAuthProofRole = 'current' | 'new' | 'canonical' | 'source';
 
+export function isLifecycleOAuthAction(value: unknown): value is LifecycleOAuthAction {
+  return value === 'binding.activate'
+    || value === 'provider.add'
+    || value === 'provider.relink'
+    || value === 'provider.replace'
+    || value === 'provider.unlink'
+    || value === 'principal.merge';
+}
+
+export function isLifecycleOAuthProofRole(value: unknown): value is LifecycleOAuthProofRole {
+  return value === 'current' || value === 'new' || value === 'canonical' || value === 'source';
+}
+
 export type LifecycleOAuthTransactionKind =
   | 'provider_link'
   | 'provider_replace'

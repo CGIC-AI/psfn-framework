@@ -5,9 +5,15 @@ import {
   type GatewayFleetAuthBroker,
 } from '../../../boundary/gateway/fleet-auth-broker.js';
 import { readJsonBodyWithLimit, sendJson } from '../../backplane/http/primitives.js';
+import { appendVaryValue } from '../http-policy.js';
+import {
+  isLifecycleOAuthAction,
+  isLifecycleOAuthProofRole,
+} from '../../../shared/contracts/fleet-auth-lifecycle-oauth.js';
 import { isRecord } from '../../../shared/utils/types.js';
 
 const LOGIN_PATH = '/v1/fleet-auth/login';
+export const FLEET_AUTH_LIFECYCLE_OAUTH_PATH = '/v1/fleet-auth/lifecycle/oauth';
 const REFRESH_PATH = '/v1/fleet-auth/session/refresh';
 const CSRF_PATH = '/v1/fleet-auth/session/csrf';
 const LOGOUT_PATH = '/v1/fleet-auth/logout';
@@ -16,6 +22,9 @@ const SESSION_COOKIE_NAME = '__Host-psfn_session';
 const PREAUTH_COOKIE_NAME = '__Host-psfn_preauth';
 const CSRF_HEADER_NAME = 'x-psfn-csrf';
 const MUTATION_BODY_LIMIT = 2048;
+const LIFECYCLE_CORS_ALLOWED_HEADERS = 'Content-Type, X-PSFN-CSRF';
+
+export type FleetAuthLifecycleCorsDisposition = 'not_applicable' | 'continue' | 'handled';
 
 function singleHeader(value: string | string[] | undefined): string | undefined {
   return typeof value === 'string' ? value : undefined;
@@ -55,6 +64,17 @@ function requestCallbackOrigin(request: IncomingMessage, canonicalOrigin: string
 
 function mutationOrigin(request: IncomingMessage): string {
   return singleHeader(request.headers.origin) ?? '';
+}
+
+function requestedLifecycleCorsHeaders(request: IncomingMessage): string[] | undefined {
+  const raw = singleHeader(request.headers['access-control-request-headers']);
+  if (!raw) return undefined;
+  const headers = raw.split(',').map(header => header.trim().toLowerCase());
+  if (headers.some(header => !header) || new Set(headers).size !== headers.length) return undefined;
+  if (headers.length !== 2
+    || !headers.includes('content-type')
+    || !headers.includes('x-psfn-csrf')) return undefined;
+  return headers;
 }
 
 function sessionCookie(token: string, absoluteExpiresAt: Date, now = Date.now()): string {
@@ -105,7 +125,56 @@ export class FleetAuthHttpRoutes {
   matches(method: string | undefined, path: string): boolean {
     return (method === 'GET' && (path === LOGIN_PATH || path === CSRF_PATH || path === this.callbackPath))
       || (method === 'POST'
-        && (path === REFRESH_PATH || path === LOGOUT_PATH || path === PROVIDER_REVOKE_PATH));
+        && (path === FLEET_AUTH_LIFECYCLE_OAUTH_PATH || path === REFRESH_PATH
+          || path === LOGOUT_PATH || path === PROVIDER_REVOKE_PATH));
+  }
+
+  applyLifecycleCorsPolicy(
+    request: IncomingMessage,
+    response: ServerResponse,
+    path: string,
+  ): FleetAuthLifecycleCorsDisposition {
+    if (path !== FLEET_AUTH_LIFECYCLE_OAUTH_PATH
+      || (request.method !== 'POST' && request.method !== 'OPTIONS')) {
+      return 'not_applicable';
+    }
+    if (singleHeader(request.headers.origin) !== this.canonicalOrigin) {
+      sendJson(response, 403, {
+        error: {
+          type: 'cors_origin_not_allowed',
+          message: 'Origin is not allowed for fleet-auth lifecycle OAuth',
+        },
+      }, { 'Cache-Control': 'no-store' });
+      return 'handled';
+    }
+
+    let vary = appendVaryValue(response.getHeader('Vary'), 'Origin');
+    response.setHeader('Access-Control-Allow-Origin', this.canonicalOrigin);
+    response.setHeader('Access-Control-Allow-Credentials', 'true');
+    if (request.method === 'POST') {
+      response.setHeader('Vary', vary);
+      return 'continue';
+    }
+
+    vary = appendVaryValue(vary, 'Access-Control-Request-Method');
+    vary = appendVaryValue(vary, 'Access-Control-Request-Headers');
+    response.setHeader('Vary', vary);
+    if (singleHeader(request.headers['access-control-request-method']) !== 'POST'
+      || !requestedLifecycleCorsHeaders(request)) {
+      sendJson(response, 403, {
+        error: {
+          type: 'cors_preflight_not_allowed',
+          message: 'Fleet-auth lifecycle OAuth preflight is not allowed',
+        },
+      }, { 'Cache-Control': 'no-store' });
+      return 'handled';
+    }
+    response.statusCode = 204;
+    response.setHeader('Access-Control-Allow-Methods', 'POST');
+    response.setHeader('Access-Control-Allow-Headers', LIFECYCLE_CORS_ALLOWED_HEADERS);
+    response.setHeader('Access-Control-Max-Age', '600');
+    response.end();
+    return 'handled';
   }
 
   async handle(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
@@ -134,19 +203,31 @@ export class FleetAuthHttpRoutes {
         if (!state || !code || [...url.searchParams.keys()].some(key => key !== 'state' && key !== 'code')) {
           throw new FleetAuthBrokerError('invalid_oauth_callback', 400, 'OAuth callback is malformed');
         }
-        const completed = await this.broker.completeCallback({
+        const completed = await this.broker.completeOAuthCallback({
           state,
           code,
           requestOrigin: requestCallbackOrigin(request, this.canonicalOrigin),
           initiatingBrowserToken: readOpaqueCookie(request, PREAUTH_COOKIE_NAME) ?? '',
         });
-        response.statusCode = 303;
-        response.setHeader('Set-Cookie', [
-          clearPreauthCookie(),
-          sessionCookie(completed.session.token, completed.session.absoluteExpiresAt),
-        ]);
-        response.setHeader('Location', completed.returnPath);
-        response.end();
+        if (completed.kind === 'login') {
+          response.statusCode = 303;
+          response.setHeader('Set-Cookie', [
+            clearPreauthCookie(),
+            sessionCookie(completed.session.token, completed.session.absoluteExpiresAt),
+          ]);
+          response.setHeader('Location', completed.returnPath);
+          response.end();
+          return;
+        }
+        response.setHeader('Set-Cookie', clearPreauthCookie());
+        sendJson(response, 200, {
+          kind: completed.kind,
+          returnPath: completed.returnPath,
+          ceremonyId: completed.ceremonyId,
+          action: completed.action,
+          proofRole: completed.proofRole,
+          proof: completed.proof,
+        }, { 'Cache-Control': 'no-store' });
         return;
       }
       const token = readSessionCookie(request);
@@ -164,6 +245,40 @@ export class FleetAuthHttpRoutes {
       const csrfToken = singleHeader(request.headers[CSRF_HEADER_NAME]);
       if (!csrfToken || !/^[A-Za-z0-9_-]{43}$/u.test(csrfToken)) {
         throw new FleetAuthBrokerError('invalid_csrf', 403, 'Session-bound CSRF token is required');
+      }
+      if (request.method === 'POST' && url.pathname === FLEET_AUTH_LIFECYCLE_OAUTH_PATH) {
+        const body = await readJsonBodyWithLimit(request, response, { maxBytes: MUTATION_BODY_LIMIT });
+        if (!body.ok || !isRecord(body.value) || Object.keys(body.value).length !== 4
+          || typeof body.value.returnPath !== 'string'
+          || typeof body.value.ceremonyId !== 'string'
+          || !isLifecycleOAuthAction(body.value.action)
+          || !isLifecycleOAuthProofRole(body.value.proofRole)) {
+          if (!response.writableEnded) {
+            throw new FleetAuthBrokerError(
+              'invalid_lifecycle_oauth_request',
+              400,
+              'Lifecycle OAuth request is malformed',
+            );
+          }
+          return;
+        }
+        const started = await this.broker.beginLifecycleOAuth({
+          token,
+          csrfToken,
+          requestOrigin: mutationOrigin(request),
+          returnPath: body.value.returnPath,
+          ceremonyId: body.value.ceremonyId,
+          action: body.value.action,
+          proofRole: body.value.proofRole,
+        });
+        response.statusCode = 302;
+        response.setHeader('Location', started.authorizationUrl);
+        response.setHeader('Set-Cookie', preauthCookie(
+          started.initiatingBrowserToken,
+          started.expiresAt,
+        ));
+        response.end();
+        return;
       }
       if (request.method === 'POST' && url.pathname === REFRESH_PATH) {
         const rotated = await this.broker.rotateSession({

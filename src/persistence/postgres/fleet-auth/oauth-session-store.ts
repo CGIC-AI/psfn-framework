@@ -25,6 +25,7 @@ import { FleetAuthSecretCodec } from './oauth-secret-codec.js';
 import {
   consumeOAuthTransaction,
   createOAuthTransaction,
+  resolveOAuthCallbackDestination,
 } from './oauth-transaction-store.js';
 import type { ProviderRevocationAuthorityPort } from './provider-revocation-authority.js';
 
@@ -68,6 +69,12 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
     input: Parameters<FleetAuthBrokerStore['consumeOAuthTransaction']>[0],
   ): ReturnType<FleetAuthBrokerStore['consumeOAuthTransaction']> {
     return await consumeOAuthTransaction(this.pool, this.codec, input);
+  }
+
+  async resolveOAuthCallbackDestination(
+    input: Parameters<FleetAuthBrokerStore['resolveOAuthCallbackDestination']>[0],
+  ): ReturnType<FleetAuthBrokerStore['resolveOAuthCallbackDestination']> {
+    return await resolveOAuthCallbackDestination(this.pool, input);
   }
 
   async createLifecycleOAuthTransaction(

@@ -610,7 +610,12 @@ export class ApiServer implements ChannelAdapterPort {
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
-    if (!applyApiCorsPolicy(req, res, this.corsAllowedOrigins)) return;
+    const requestTargetPath = (req.url ?? '/').split('?', 1)[0] ?? '/';
+    const fleetAuthCors = this.fleetAuthHttpRoutes
+      ?.applyLifecycleCorsPolicy(req, res, requestTargetPath) ?? 'not_applicable';
+    if (fleetAuthCors === 'handled') return;
+    if (fleetAuthCors === 'not_applicable'
+      && !applyApiCorsPolicy(req, res, this.corsAllowedOrigins)) return;
 
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;

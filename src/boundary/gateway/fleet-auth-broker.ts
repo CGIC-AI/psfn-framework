@@ -12,7 +12,7 @@ import {
   type LifecycleOAuthProofRole,
   type LifecycleOAuthPurpose,
 } from '../../shared/contracts/fleet-auth-lifecycle-oauth.js';
-import { isRecord } from '../../shared/utils/types.js';
+import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import { DiscordEvidenceBrokerBoundary, type DiscordEvidenceBrokerOptions } from './discord-evidence-broker-boundary.js';
 import type { DiscordEvidenceAdmissionStore } from './discord-evidence-admission.js';
 import { FleetAuthBrokerError } from './fleet-auth-errors.js';
@@ -30,6 +30,14 @@ const OPAQUE_TOKEN_BYTES = 32;
 const OAUTH_CODE_MAX_LENGTH = 2048;
 
 export type OAuthTransactionKind = 'login' | 'provider_link' | 'provider_replace' | 'first_owner' | 'recovery';
+export type OAuthCallbackDestination = 'login' | 'lifecycle';
+
+export interface OAuthCallbackInput {
+  state: string;
+  code: string;
+  requestOrigin: string;
+  initiatingBrowserToken: string;
+}
 
 export interface OAuthTransactionInput {
   transactionId: string;
@@ -70,6 +78,11 @@ export interface FleetAuthSessionRecord {
 
 export interface FleetAuthBrokerStore extends DiscordEvidenceAdmissionStore {
   createOAuthTransaction(input: OAuthTransactionInput): Promise<void>;
+  resolveOAuthCallbackDestination(input: {
+    stateDigest: string;
+    initiatingBrowserDigest: string;
+    now: Date;
+  }): Promise<OAuthCallbackDestination>;
   consumeOAuthTransaction(input: {
     stateDigest: string;
     initiatingBrowserDigest: string;
@@ -311,7 +324,23 @@ export class GatewayFleetAuthBroker {
   }> {
     this.assertMutationOrigin(input.requestOrigin);
     const returnPath = parseReturnPath(input.returnPath, this.config.canonicalOrigin);
-    const kind = lifecycleOAuthKindFor(input.action, input.proofRole);
+    if (!isRfc4122Uuid(input.ceremonyId)) {
+      throw new FleetAuthBrokerError(
+        'invalid_lifecycle_oauth_request',
+        400,
+        'Lifecycle OAuth request is malformed',
+      );
+    }
+    let kind: ReturnType<typeof lifecycleOAuthKindFor>;
+    try {
+      kind = lifecycleOAuthKindFor(input.action, input.proofRole);
+    } catch {
+      throw new FleetAuthBrokerError(
+        'invalid_lifecycle_oauth_request',
+        400,
+        'Lifecycle OAuth request is malformed',
+      );
+    }
     const state = opaqueToken(this.randomBytes);
     const initiatingBrowserToken = opaqueToken(this.randomBytes);
     const pkceVerifier = opaqueToken(this.randomBytes);
@@ -344,23 +373,27 @@ export class GatewayFleetAuthBroker {
     };
   }
 
-  async completeCallback(input: {
-    state: string;
-    code: string;
-    requestOrigin: string;
-    initiatingBrowserToken: string;
-  }): Promise<{ returnPath: string; session: FleetAuthSessionRecord }> {
-    if (input.requestOrigin !== this.config.canonicalOrigin) {
-      throw new FleetAuthBrokerError(
-        'callback_origin_mismatch',
-        400,
-        'OAuth callback origin does not match the configured fleet origin',
-      );
+  async completeOAuthCallback(input: OAuthCallbackInput): Promise<
+    | ({ kind: 'login' } & Awaited<ReturnType<GatewayFleetAuthBroker['completeCallback']>>)
+    | ({ kind: 'lifecycle' } & Awaited<ReturnType<GatewayFleetAuthBroker['completeLifecycleOAuthCallback']>>)
+  > {
+    this.assertCallbackInput(input);
+    const destination = await this.store.resolveOAuthCallbackDestination({
+      stateDigest: this.digest(input.state),
+      initiatingBrowserDigest: this.digest(input.initiatingBrowserToken),
+      now: this.now(),
+    });
+    if (destination === 'login') {
+      return { kind: 'login', ...await this.completeCallback(input) };
     }
-    if (!isSafeOAuthValue(input.state, 128) || !isSafeOAuthValue(input.code)
-      || !/^[A-Za-z0-9_-]{43}$/u.test(input.initiatingBrowserToken)) {
-      throw new FleetAuthBrokerError('invalid_oauth_callback', 400, 'OAuth callback is malformed');
-    }
+    return { kind: 'lifecycle', ...await this.completeLifecycleOAuthCallback(input) };
+  }
+
+  async completeCallback(input: OAuthCallbackInput): Promise<{
+    returnPath: string;
+    session: FleetAuthSessionRecord;
+  }> {
+    this.assertCallbackInput(input);
     const now = this.now();
     const transaction = await this.store.consumeOAuthTransaction({
       stateDigest: this.digest(input.state),
@@ -412,12 +445,7 @@ export class GatewayFleetAuthBroker {
     return { returnPath: transaction.returnPath, session };
   }
 
-  async completeLifecycleOAuthCallback(input: {
-    state: string;
-    code: string;
-    requestOrigin: string;
-    initiatingBrowserToken: string;
-  }): Promise<{
+  async completeLifecycleOAuthCallback(input: OAuthCallbackInput): Promise<{
     returnPath: string;
     ceremonyId: string;
     action: LifecycleOAuthAction;
@@ -429,17 +457,7 @@ export class GatewayFleetAuthBroker {
       proofDigest: string;
     };
   }> {
-    if (input.requestOrigin !== this.config.canonicalOrigin) {
-      throw new FleetAuthBrokerError(
-        'callback_origin_mismatch',
-        400,
-        'OAuth callback origin does not match the configured fleet origin',
-      );
-    }
-    if (!isSafeOAuthValue(input.state, 128) || !isSafeOAuthValue(input.code)
-      || !/^[A-Za-z0-9_-]{43}$/u.test(input.initiatingBrowserToken)) {
-      throw new FleetAuthBrokerError('invalid_oauth_callback', 400, 'OAuth callback is malformed');
-    }
+    this.assertCallbackInput(input);
     const now = this.now();
     const transaction = await this.store.consumeOAuthTransaction({
       stateDigest: this.digest(input.state),
@@ -592,6 +610,20 @@ export class GatewayFleetAuthBroker {
         403,
         'Mutation origin does not match the configured fleet origin',
       );
+    }
+  }
+
+  private assertCallbackInput(input: OAuthCallbackInput): void {
+    if (input.requestOrigin !== this.config.canonicalOrigin) {
+      throw new FleetAuthBrokerError(
+        'callback_origin_mismatch',
+        400,
+        'OAuth callback origin does not match the configured fleet origin',
+      );
+    }
+    if (!isSafeOAuthValue(input.state, 128) || !isSafeOAuthValue(input.code)
+      || !/^[A-Za-z0-9_-]{43}$/u.test(input.initiatingBrowserToken)) {
+      throw new FleetAuthBrokerError('invalid_oauth_callback', 400, 'OAuth callback is malformed');
     }
   }
 

@@ -25,6 +25,7 @@ import {
   hasDurableFleetAuthAuthority,
   migrateFleetAuthSchema,
   type FleetAuthDatabaseRoles,
+  type FleetAuthFamilyDatabaseRoles,
 } from './schema.js';
 import { reconcileFleetAuthAuthorityState } from './gateway-persistence.js';
 import { executeAccountReapproval } from './reapproval.js';
@@ -42,6 +43,10 @@ const ROLES: FleetAuthDatabaseRoles = {
   backupRestore: 'fleet_auth_backup',
 };
 const COMPANION_ROLE = 'companion_runtime';
+const FAMILY_ROLES: FleetAuthFamilyDatabaseRoles = {
+  ...ROLES,
+  sharedMigration: 'shared_schema_migration',
+};
 const PASSWORDS = {
   fleet_auth_runtime: 'runtime-password',
   fleet_auth_migration: 'migration-password',
@@ -1011,10 +1016,10 @@ describe('fleet_auth Postgres authority boundary', () => {
 
       const result = await runFleetAuthConsistentBackup({
         databaseUrl: db.backupUrl,
-        roles: ROLES,
+        roles: FAMILY_ROLES,
         schemas: [
           { kind: 'companion', schema: 'companion_alpha', ownerRole: COMPANION_ROLE, runtimeRoles: [COMPANION_ROLE] },
-          { kind: 'shared', schema: 'shared', ownerRole: COMPANION_ROLE, runtimeRoles: [COMPANION_ROLE] },
+          { kind: 'shared', schema: 'shared', ownerRole: FAMILY_ROLES.sharedMigration, runtimeRoles: [COMPANION_ROLE] },
         ],
         systemDataDir,
         backupDir,
@@ -1148,10 +1153,10 @@ describe('fleet_auth Postgres authority boundary', () => {
       );
       const backup = await runFleetAuthConsistentBackup({
         databaseUrl: source.backupUrl,
-        roles: ROLES,
+        roles: FAMILY_ROLES,
         schemas: [
           { kind: 'companion', schema: 'companion_alpha', ownerRole: COMPANION_ROLE, runtimeRoles: [COMPANION_ROLE] },
-          { kind: 'shared', schema: 'shared', ownerRole: COMPANION_ROLE, runtimeRoles: [COMPANION_ROLE] },
+          { kind: 'shared', schema: 'shared', ownerRole: FAMILY_ROLES.sharedMigration, runtimeRoles: [COMPANION_ROLE] },
         ],
         systemDataDir,
         backupDir,
@@ -1325,10 +1330,10 @@ describe('fleet_auth Postgres authority boundary', () => {
       );
       const backup = await runFleetAuthConsistentBackup({
         databaseUrl: source.backupUrl,
-        roles: ROLES,
+        roles: FAMILY_ROLES,
         schemas: [
           { kind: 'companion', schema: 'companion_alpha', ownerRole: COMPANION_ROLE, runtimeRoles: [COMPANION_ROLE] },
-          { kind: 'shared', schema: 'shared', ownerRole: COMPANION_ROLE, runtimeRoles: [COMPANION_ROLE] },
+          { kind: 'shared', schema: 'shared', ownerRole: FAMILY_ROLES.sharedMigration, runtimeRoles: [COMPANION_ROLE] },
         ],
         systemDataDir,
         backupDir,

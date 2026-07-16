@@ -9,12 +9,27 @@ import {
   type FleetAuthFamilyDatabaseRoles,
 } from '../postgres/fleet-auth/schema.js';
 import { parseExactPostgresCredential } from '../../shared/utils/postgres-credential.js';
+import { assertPostgresRolesAreLeastPrivilege } from '../postgres/role-posture.js';
 
 export interface FleetAuthSchemaAccessContract {
   kind: 'companion' | 'shared';
   schema: string;
   ownerRole: string;
   runtimeRoles: readonly string[];
+}
+
+export interface SharedSchemaRoleBoundary {
+  sharedMigration: string;
+  protectedRoles?: readonly string[];
+}
+
+type SchemaAccessRoleBoundary = FleetAuthFamilyDatabaseRoles | SharedSchemaRoleBoundary;
+
+function protectedRolesForBoundary(boundary: SchemaAccessRoleBoundary): string[] {
+  if ('runtime' in boundary) {
+    return [boundary.runtime, boundary.migration, boundary.backupRestore];
+  }
+  return [...(boundary.protectedRoles ?? [])];
 }
 
 function assertValidRoleName(role: string, field: string): string {
@@ -32,13 +47,11 @@ function quoteIdentifier(value: string): string {
 export function validateFleetAuthSchemaAccessContracts(
   contracts: readonly FleetAuthSchemaAccessContract[],
   expectedSchemas: readonly string[],
-  fleetAuthRoles: FleetAuthFamilyDatabaseRoles,
+  fleetAuthRoles: SchemaAccessRoleBoundary,
 ): FleetAuthSchemaAccessContract[] {
   const expected = [...expectedSchemas].map(assertValidPostgresSchemaName).sort();
   const protectedFleetAuthRoles = new Set([
-    fleetAuthRoles.runtime,
-    fleetAuthRoles.migration,
-    fleetAuthRoles.backupRestore,
+    ...protectedRolesForBoundary(fleetAuthRoles),
   ]);
   const validated = contracts.map((contract, index) => {
     const schema = assertValidPostgresSchemaName(contract.schema);
@@ -119,44 +132,11 @@ export async function assertFleetAuthRolesAreSafe(
   mappedRoles: readonly string[],
   expectedOwner: string,
 ): Promise<void> {
-  const result = await client.query<{
-    rolname: string;
-    rolcanlogin: boolean;
-    rolinherit: boolean;
-    rolsuper: boolean;
-    rolcreaterole: boolean;
-    rolcreatedb: boolean;
-    rolreplication: boolean;
-    rolbypassrls: boolean;
-  }>(`
-    SELECT rolname, rolcanlogin, rolinherit, rolsuper, rolcreaterole, rolcreatedb,
-           rolreplication, rolbypassrls
-    FROM pg_roles
-    WHERE rolname = ANY($1::text[])
-    ORDER BY rolname
-  `, [mappedRoles]);
-  if (JSON.stringify(result.rows.map(row => row.rolname)) !== JSON.stringify(mappedRoles)) {
-    throw new Error('Fleet auth family restore schema access mapping names an unknown PostgreSQL role');
-  }
-  const unsafe = result.rows.find(row => !row.rolcanlogin || row.rolinherit
-    || row.rolsuper || row.rolcreaterole
-    || row.rolcreatedb || row.rolreplication || row.rolbypassrls);
-  if (unsafe) {
-    throw new Error(
-      `Fleet auth family restore runtime role ${unsafe.rolname} is not a least-privilege LOGIN role`,
-    );
-  }
-  const memberships = await client.query<{ edge_count: number }>(`
-    SELECT COUNT(*)::integer AS edge_count
-    FROM pg_auth_members AS membership
-    JOIN pg_roles AS granted_role ON granted_role.oid = membership.roleid
-    JOIN pg_roles AS member_role ON member_role.oid = membership.member
-    WHERE granted_role.rolname = ANY($1::text[])
-       OR member_role.rolname = ANY($1::text[])
-  `, [mappedRoles]);
-  if ((memberships.rows.at(0)?.edge_count ?? 0) > 0) {
-    throw new Error('Fleet auth family restore mapped roles must not participate in role memberships');
-  }
+  await assertPostgresRolesAreLeastPrivilege(
+    client,
+    mappedRoles,
+    'Fleet auth family restore mapped authority',
+  );
   const owner = await client.query<{ current_user: string }>('SELECT current_user');
   if (owner.rows.at(0)?.current_user !== expectedOwner) {
     throw new Error(`Fleet auth family restore must authenticate as PostgreSQL role ${expectedOwner}`);
@@ -216,7 +196,8 @@ async function assertNoFleetAuthAccess(
     table_access: boolean;
   }>(`
     SELECT role_name,
-           has_schema_privilege(role_name, 'fleet_auth', 'USAGE') AS schema_usage,
+           CASE WHEN to_regnamespace('fleet_auth') IS NULL THEN FALSE
+                ELSE has_schema_privilege(role_name, 'fleet_auth', 'USAGE') END AS schema_usage,
            EXISTS (
              SELECT 1
              FROM pg_class AS relation
@@ -250,8 +231,10 @@ export async function assertSharedMigrationAuthorityIsolation(
     relation_access: boolean;
   }>(`
     SELECT schema_name,
-           has_schema_privilege($1, schema_name, 'USAGE') AS schema_usage,
-           has_schema_privilege($1, schema_name, 'CREATE') AS schema_create,
+           CASE WHEN to_regnamespace(schema_name) IS NULL THEN FALSE
+                ELSE has_schema_privilege($1, schema_name, 'USAGE') END AS schema_usage,
+           CASE WHEN to_regnamespace(schema_name) IS NULL THEN FALSE
+                ELSE has_schema_privilege($1, schema_name, 'CREATE') END AS schema_create,
            EXISTS (
              SELECT 1
              FROM pg_class AS relation
@@ -459,9 +442,11 @@ export async function assertFleetAuthSchemaAccessTargets(options: {
 export async function applyFleetAuthSchemaAccessContracts(options: {
   contracts: readonly FleetAuthSchemaAccessContract[];
   ownerDatabaseUrls: Readonly<Record<string, string>>;
-  backupRole: string;
+  backupRole?: string;
 }): Promise<void> {
-  const backupRole = assertValidRoleName(options.backupRole, 'backupRole');
+  const backupRole = options.backupRole === undefined
+    ? undefined
+    : assertValidRoleName(options.backupRole, 'backupRole');
   for (const contract of options.contracts) {
     const pool = createPostgresPool(options.ownerDatabaseUrls[contract.schema], {
       applicationName: 'fleet-auth-schema-access-restore',
@@ -531,10 +516,16 @@ export async function applyFleetAuthSchemaAccessContracts(options: {
         await client.query(`GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA ${schema} TO ${grantees}`);
       }
       await client.query(`GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA ${schema} TO ${grantees}`);
-      await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${quoteIdentifier(backupRole)}`);
-      await client.query(`GRANT SELECT ON ALL TABLES IN SCHEMA ${schema} TO ${quoteIdentifier(backupRole)}`);
-      await client.query(`GRANT SELECT, USAGE ON ALL SEQUENCES IN SCHEMA ${schema} TO ${quoteIdentifier(backupRole)}`);
-      const allowedGrantees = [contract.ownerRole, backupRole, ...contract.runtimeRoles];
+      if (backupRole) {
+        await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${quoteIdentifier(backupRole)}`);
+        await client.query(`GRANT SELECT ON ALL TABLES IN SCHEMA ${schema} TO ${quoteIdentifier(backupRole)}`);
+        await client.query(`GRANT SELECT, USAGE ON ALL SEQUENCES IN SCHEMA ${schema} TO ${quoteIdentifier(backupRole)}`);
+      }
+      const allowedGrantees = [
+        contract.ownerRole,
+        ...(backupRole ? [backupRole] : []),
+        ...contract.runtimeRoles,
+      ];
       const unexpectedGrantees = await client.query<{ role_name: string }>(`
         WITH acl_grantees AS (
           SELECT acl.grantee

@@ -50,6 +50,10 @@ enumerating the fleet.
     strictness will not ignore a fleet manifest)
   - flag off + no manifest → `undefined` (default single-companion topology)
 
+The root `postgres` block owns the dedicated shared-schema migration role and
+its gateway-only credential reference. This topology authority exists whether
+or not fleet human auth is enabled; `fleet-auth.json` does not own shared DDL.
+
 Each companion entry (`CompanionFleetEntry`, strict — unknown keys rejected)
 carries exactly:
 
@@ -59,10 +63,13 @@ carries exactly:
 | `companionDataDir` | companion's data root, relative to the canonical persistence root (`PSFN_RUNTIME_ROOT`, or the selected layout's runtime root) | relative path, may not escape the root |
 | `characterCardPath` | companion's character card, relative to the same canonical persistence root | relative path, may not escape the root |
 | `postgresSchema` | Postgres schema owning this companion's tenant tables | lowercase identifier, ≤63 chars, no `pg_` prefix |
+| `postgresRole` | dedicated owner/runtime role for that schema | safe PostgreSQL role name, unique across the fleet and distinct from the shared migration role |
+| `postgresDatabaseUrlRef` | gateway/launcher-resolved credential reference delivered to this agent through an inherited file descriptor | valid credential reference, unique across the fleet and never `POSTGRES_DATABASE_URL` |
 | `gardenPort` | optional TCP port for this companion's own Garden operator surface | integer 1–65535, unique across the fleet |
 
-Cross-entry validation rejects duplicate `companionId`, duplicate
-`postgresSchema`, duplicate `gardenPort`, and overlapping `companionDataDir`.
+Cross-entry validation rejects duplicate `companionId`, `postgresSchema`,
+`postgresRole`, database credential reference, `gardenPort`, and overlapping
+`companionDataDir`.
 Before any process is spawned, the supervisor resolves both path fields to
 canonical absolute strict subpaths of the runtime root. Existing symlink
 ancestors are resolved and an escape outside that root is rejected. Agent and
@@ -70,8 +77,9 @@ operator startup then bind `COMPANION_ID`, both paths, `COMPANION_PG_SCHEMA`,
 and the per-companion admin socket back to that one manifest entry; an unknown
 ID or any drift refuses startup before persistence or character-card loading.
 
-**What is NOT in `companions.json`:** per-companion Discord tokens,
-model/settings selections, or a mutable personal workspace path. Discord identity +
+**What is NOT in `companions.json`:** database secret values, per-companion
+Discord tokens, model/settings selections, or a mutable personal workspace path.
+The file contains credential references only. Discord identity +
 channel→companion routing live in `channels.json`; the per-companion Postgres
 schema for a single agent process is sourced from the `COMPANION_PG_SCHEMA` env
 var. The manifest owns identity, data location, tenant schema, and Garden port;
@@ -177,7 +185,8 @@ fleet and spawns one agent process per companion.
   an internal tab-delimited spawn plan, one line per companion:
   `companionId, companionDataDir, characterCardPath, postgresSchema,
   personalWorkspacePath,
-  role-bound agent proof, role-bound session-integrity proof,
+  role-bound agent proof, role-bound session-integrity proof, the resolved
+  per-companion database credential,
   adminTransportSocket, gardenPort` (`gardenPort` is `-` when absent). A
   single-companion topology prints nothing — the launcher reads empty stdout as
   "stay in single-agent mode." The admin socket is derived from
@@ -189,6 +198,9 @@ fleet and spawns one agent process per companion.
   `ADMIN_PORT` from the plan. The gateway proofs are derived from the gateway
   session keyring and companion ID; they are passed only to the agent and its
   isolated session-integrity worker and are omitted from dry-run output.
+  Each distinct topology-owned database credential is delivered through
+  `POSTGRES_DATABASE_URL_FD`; neither it nor any sibling/shared-migration
+  credential is placed in the process environment or dry-run output.
   The default single-companion launcher derives the same role separation for
   its isolated worker even though normal agent methods retain local-socket
   trust for flag-off compatibility.

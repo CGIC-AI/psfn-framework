@@ -25,7 +25,7 @@ import {
   withPostgresClient,
 } from '../../persistence/postgres.js';
 import { SHARED_SCHEMA_NAME } from '../../persistence/postgres/migrations.js';
-import { ensureSharedWikiSchema } from '../../persistence/postgres/shared-schema.js';
+import { assertSharedWikiSchemaReady } from '../../persistence/postgres/shared-schema.js';
 import type { SensitivityLevel } from '../../system/trust/types.js';
 import {
   chunkWikiBody,
@@ -332,9 +332,9 @@ export class SharedWikiPgvectorProjectionStore implements SharedWikiSearchPort {
 }
 
 /**
- * Open a shared-schema-pinned pool, provision the shared schema INCLUDING the
- * wiki chunk table (advisory-lock serialized), and return the projection
- * store. Fails closed (throws) when Postgres or pgvector is unavailable.
+ * Open a shared-schema-pinned pool and prove the gateway already provisioned
+ * the wiki chain. This path is deliberately read-only at startup: ordinary
+ * companion credentials never receive shared DDL authority.
  */
 export async function createSharedWikiPgvectorProjectionStore(
   databaseUrl: string,
@@ -347,7 +347,7 @@ export async function createSharedWikiPgvectorProjectionStore(
     schema: SHARED_SCHEMA_NAME,
   });
   try {
-    await ensureSharedWikiSchema(pool);
+    await assertSharedWikiSchemaReady(pool);
   } catch (error) {
     await pool.end().catch(() => undefined);
     throw error;

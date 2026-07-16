@@ -1938,6 +1938,7 @@ export const SHARED_SCHEMA_NAME = 'shared';
 
 /** Ledger versions installed by POSTGRES_SHARED_MIGRATIONS (excluding wiki version 3). */
 export const POSTGRES_SHARED_BASE_MIGRATION_VERSIONS = [1, 2, 4, 5, 6, 7] as const;
+export const POSTGRES_SHARED_ALL_MIGRATION_VERSIONS = [1, 2, 3, 4, 5, 6, 7] as const;
 
 export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   // Version ledger for the shared schema. Independent of the per-companion
@@ -2193,9 +2194,9 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
 // POSTGRES_SHARED_MIGRATIONS: it requires the pgvector extension, and the base
 // shared chain must stay runnable on a plain Postgres so pgvector-free shared
 // consumers (companion_presence) never grow a hidden extension dependency.
-// Wiki surfaces provision it via `ensureSharedWikiSchema`, which runs the base
-// chain first and then this list under the same advisory lock, registering
-// version 3 in the same shared_schema_migrations ledger.
+// Gateway startup provisions it after the base chain under the same advisory
+// lock, registering version 3 in the same shared_schema_migrations ledger.
+// Ordinary runtime wiki surfaces only verify that the complete chain exists.
 //
 // Column shape mirrors the per-companion `wiki_document_chunks` table closely
 // (plus site_id) so chunk query code stays uniform across both projections.
@@ -2203,10 +2204,9 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
 // cross-site mis-scoped) row can never land in the shared table — that is the
 // W5b world-info leak surface, enforced fail-closed in the schema itself.
 export const POSTGRES_SHARED_WIKI_MIGRATIONS: readonly string[] = [
-  // Deterministic extension placement: shared migrations run with search_path
-  // pinned to `shared, public`, and shared/per-companion chains alike resolve
-  // vector types through `public`.
-  `CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;`,
+  // The vector extension is operator-provisioned in public before startup. The
+  // dedicated shared migration role is deliberately neither superuser nor
+  // database owner and therefore must not attempt cluster extension DDL.
   `
   CREATE TABLE IF NOT EXISTS shared_wiki_chunks (
     site_id TEXT NOT NULL,

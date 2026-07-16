@@ -44,10 +44,6 @@
       "kind": "env",
       "envName": "FLEET_AUTH_BACKUP_DATABASE_URL"
     },
-    "sharedMigrationDatabaseUrlRef": {
-      "kind": "env",
-      "envName": "SHARED_SCHEMA_MIGRATION_DATABASE_URL"
-    },
     "authorityFloorRootRef": {
       "kind": "env",
       "envName": "FLEET_AUTH_AUTHORITY_FLOOR_ROOT"
@@ -56,8 +52,7 @@
   "databaseRoles": {
     "runtime": "fleet_auth_runtime",
     "migration": "fleet_auth_migration",
-    "backupRestore": "fleet_auth_backup",
-    "sharedMigration": "shared_schema_migration"
+    "backupRestore": "fleet_auth_backup"
   },
   "verifierKeys": [
     {

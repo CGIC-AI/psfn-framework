@@ -6,10 +6,12 @@ import {
 } from '../postgres.js';
 import {
   POSTGRES_SHARED_BASE_MIGRATION_VERSIONS,
+  POSTGRES_SHARED_ALL_MIGRATION_VERSIONS,
   POSTGRES_SHARED_MIGRATIONS,
   POSTGRES_SHARED_WIKI_MIGRATIONS,
   SHARED_SCHEMA_NAME,
 } from './migrations.js';
+import { assertPostgresRolesAreLeastPrivilege } from './role-posture.js';
 
 /**
  * Cluster-wide advisory lock key serializing shared-schema provisioning.
@@ -109,6 +111,46 @@ export async function bootstrapSharedSchema(databaseUrl: string): Promise<void> 
   }
 }
 
+/** Gateway-only base + pgvector wiki migration chain. */
+export async function bootstrapSharedWikiSchema(databaseUrl: string): Promise<void> {
+  const pool = createPostgresPool(databaseUrl, {
+    applicationName: 'shared-wiki-schema',
+    allowExitOnIdle: true,
+    max: 1,
+    schema: SHARED_SCHEMA_NAME,
+  });
+  try {
+    await ensureSharedWikiSchema(pool);
+  } finally {
+    await pool.end();
+  }
+}
+
+/** Read-only proof that the gateway migration authority completed every chain. */
+export async function assertSharedWikiSchemaReady(pool: Pool): Promise<void> {
+  const readiness = await pool.query<{
+    projection_table: string | null;
+    versions: number[] | null;
+  }>(`
+    SELECT to_regclass('shared.shared_wiki_chunks')::text AS projection_table,
+           (
+             SELECT ARRAY_AGG(version ORDER BY version)::integer[]
+             FROM shared.shared_schema_migrations
+           ) AS versions
+  `);
+  const row = readiness.rows.at(0);
+  if (row?.projection_table !== 'shared_wiki_chunks'
+    && row?.projection_table !== 'shared.shared_wiki_chunks') {
+    throw new Error('Shared wiki runtime is missing the shared_wiki_chunks projection table');
+  }
+  const versions = row.versions ?? [];
+  for (const required of POSTGRES_SHARED_ALL_MIGRATION_VERSIONS) {
+    if (!versions.includes(required)) {
+      throw new Error(`Shared wiki runtime is missing required migration ${required}`);
+    }
+  }
+}
+
 /**
  * Read-only startup check for one ordinary companion credential. Shared DDL is
  * completed by the gateway's dedicated migration authority before agents are
@@ -129,45 +171,23 @@ export async function assertSharedSchemaRuntimeAuthority(
     throw new Error('Shared schema runtime authority requires one exact fleet schema identity');
   }
   const pool = createPostgresPool(databaseUrl, {
-    applicationName: 'psfn-shared-schema-runtime-preflight',
+    applicationName: 'shared-schema-runtime-preflight',
     allowExitOnIdle: true,
     max: 1,
     schema: SHARED_SCHEMA_NAME,
   });
   try {
     await withPostgresClient(pool, async (client) => {
-      const role = await client.query<{
-        current_user: string;
-        rolcanlogin: boolean;
-        rolinherit: boolean;
-        rolsuper: boolean;
-        rolcreaterole: boolean;
-        rolcreatedb: boolean;
-        rolreplication: boolean;
-        rolbypassrls: boolean;
-      }>(`
-        SELECT current_user, role.rolcanlogin, role.rolinherit, role.rolsuper,
-               role.rolcreaterole, role.rolcreatedb, role.rolreplication,
-               role.rolbypassrls
-        FROM pg_roles AS role
-        WHERE role.rolname = current_user
-      `);
+      const role = await client.query<{ current_user: string }>('SELECT current_user');
       const current = role.rows.at(0);
-      if (!current || !current.rolcanlogin || current.rolinherit || current.rolsuper
-        || current.rolcreaterole || current.rolcreatedb
-        || current.rolreplication || current.rolbypassrls) {
-        throw new Error('Shared schema runtime credential is not a least-privilege LOGIN role');
+      if (!current) {
+        throw new Error('Shared schema runtime credential returned no PostgreSQL role');
       }
-      const memberships = await client.query<{ edge_count: number }>(`
-        SELECT COUNT(*)::integer AS edge_count
-        FROM pg_auth_members AS membership
-        JOIN pg_roles AS granted_role ON granted_role.oid = membership.roleid
-        JOIN pg_roles AS member_role ON member_role.oid = membership.member
-        WHERE granted_role.rolname = current_user OR member_role.rolname = current_user
-      `);
-      if ((memberships.rows.at(0)?.edge_count ?? 0) > 0) {
-        throw new Error('Shared schema runtime role must not participate in role memberships');
-      }
+      await assertPostgresRolesAreLeastPrivilege(
+        client,
+        [current.current_user],
+        'Shared schema runtime credential',
+      );
 
       const schemaPrivileges = await client.query<{
         schema_name: string;

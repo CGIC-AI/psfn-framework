@@ -1,23 +1,29 @@
-import type { PoolClient } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import {
   assertValidPostgresSchemaName,
   createPostgresPool,
 } from '../postgres.js';
-import type { FleetAuthFamilyDatabaseRoles } from '../postgres/fleet-auth/schema.js';
-import { bootstrapSharedSchema } from '../postgres/shared-schema.js';
+import type { FleetAuthDatabaseRoles } from '../postgres/fleet-auth/schema.js';
+import { bootstrapSharedWikiSchema } from '../postgres/shared-schema.js';
 import { parseExactPostgresCredential } from '../../shared/utils/postgres-credential.js';
 import {
   applyFleetAuthSchemaAccessContracts,
   assertFleetAuthRolesAreSafe,
   assertFleetAuthSchemaAccessIsolation,
   assertSharedMigrationAuthorityIsolation,
-  resolveFleetAuthSchemaAccessContracts,
+  validateFleetAuthSchemaAccessContracts,
   type FleetAuthSchemaAccessContract,
 } from './fleet-auth-schema-access.js';
 
 interface DatabaseTargetIdentity {
   database_name: string;
   system_identifier: string;
+}
+
+export interface CompanionSharedSchemaDatabase {
+  databaseUrl: string;
+  role: string;
+  schema: string;
 }
 
 async function readDatabaseTargetIdentity(client: PoolClient): Promise<DatabaseTargetIdentity> {
@@ -30,132 +36,208 @@ async function readDatabaseTargetIdentity(client: PoolClient): Promise<DatabaseT
   return identity;
 }
 
+async function connectPreflightPool(databaseUrl: string, applicationName: string): Promise<{
+  pool: Pool;
+  client: PoolClient;
+}> {
+  const pool = createPostgresPool(databaseUrl, { applicationName, max: 1 });
+  try {
+    return { pool, client: await pool.connect() };
+  } catch (error) {
+    await pool.end();
+    throw error;
+  }
+}
+
 /**
- * Production shared-schema startup authority chain. All identity, role-posture,
- * target-database, ownership, and isolation checks complete before the first
- * shared DDL statement. The dedicated owner then runs migrations and refreshes
- * the exact least-privilege runtime grants used by every companion.
+ * Production shared-schema startup authority chain. Topology-owned credentials
+ * are resolved by the gateway before this function is called. Every credential,
+ * role posture, database target, schema owner, and isolation invariant is proved
+ * before the dedicated owner executes the base + pgvector wiki DDL chains.
  */
 export async function prepareFleetSharedSchemaRuntime(options: {
-  backupRestoreDatabaseUrl: string;
   sharedMigrationDatabaseUrl: string;
-  companionSchemas: readonly string[];
+  sharedMigrationRole: string;
+  companionDatabases: readonly CompanionSharedSchemaDatabase[];
   sharedSchema: string;
-  roles: FleetAuthFamilyDatabaseRoles;
+  fleetAuth?: {
+    backupRestoreDatabaseUrl: string;
+    roles: FleetAuthDatabaseRoles;
+  };
 }): Promise<FleetAuthSchemaAccessContract[]> {
-  const backupCredential = parseExactPostgresCredential(
-    options.backupRestoreDatabaseUrl,
-    'Fleet shared schema backup/restore credential',
-  );
   const migrationCredential = parseExactPostgresCredential(
     options.sharedMigrationDatabaseUrl,
     'Fleet shared schema migration credential',
   );
-  if (backupCredential.username !== options.roles.backupRestore) {
+  if (migrationCredential.username !== options.sharedMigrationRole) {
     throw new Error(
-      `Fleet shared schema backup/restore credential must authenticate as PostgreSQL role ${options.roles.backupRestore}`,
+      `Fleet shared schema migration credential must authenticate as PostgreSQL role ${options.sharedMigrationRole}`,
     );
   }
-  if (migrationCredential.username !== options.roles.sharedMigration) {
-    throw new Error(
-      `Fleet shared schema migration credential must authenticate as PostgreSQL role ${options.roles.sharedMigration}`,
+  const companionDatabases = options.companionDatabases.map((entry, index) => {
+    const schema = assertValidPostgresSchemaName(entry.schema);
+    const credential = parseExactPostgresCredential(
+      entry.databaseUrl,
+      `Fleet shared schema companion credential ${index}`,
     );
-  }
-  if (options.backupRestoreDatabaseUrl === options.sharedMigrationDatabaseUrl) {
-    throw new Error('Fleet shared schema migration credential must be distinct from backup/restore');
-  }
-
-  const companionSchemas = options.companionSchemas.map(assertValidPostgresSchemaName);
-  const sharedSchema = assertValidPostgresSchemaName(options.sharedSchema);
-  if (companionSchemas.length === 0
-    || new Set([...companionSchemas, sharedSchema]).size !== companionSchemas.length + 1) {
-    throw new Error('Fleet shared schema startup requires distinct companion/shared schemas');
-  }
-
-  const backupPool = createPostgresPool(options.backupRestoreDatabaseUrl, {
-    applicationName: 'fleet-shared-schema-preflight',
-    max: 1,
-  });
-  const migrationPool = createPostgresPool(options.sharedMigrationDatabaseUrl, {
-    applicationName: 'fleet-shared-schema-migration-preflight',
-    max: 1,
-  });
-  let backupClient: PoolClient | undefined;
-  let migrationClient: PoolClient | undefined;
-  try {
-    backupClient = await backupPool.connect();
-    migrationClient = await migrationPool.connect();
-    const companionOwners = await backupClient.query<{ owner_role: string }>(`
-      SELECT owner.rolname AS owner_role
-      FROM pg_namespace AS namespace
-      JOIN pg_roles AS owner ON owner.oid = namespace.nspowner
-      WHERE namespace.nspname = ANY($1::text[])
-      ORDER BY namespace.nspname
-    `, [companionSchemas]);
-    if (companionOwners.rows.length !== companionSchemas.length) {
-      throw new Error('Fleet shared schema startup found a missing companion schema');
+    if (credential.username !== entry.role) {
+      throw new Error(
+        `Fleet shared schema companion credential ${index} must authenticate as PostgreSQL role ${entry.role}`,
+      );
     }
-    const mappedRoles = [...new Set([
-      options.roles.runtime,
-      options.roles.migration,
-      options.roles.backupRestore,
-      options.roles.sharedMigration,
-      ...companionOwners.rows.map(row => row.owner_role),
-    ])].sort();
-    await assertFleetAuthRolesAreSafe(
-      backupClient,
-      mappedRoles,
-      options.roles.backupRestore,
+    return { ...entry, schema };
+  });
+  const sharedSchema = assertValidPostgresSchemaName(options.sharedSchema);
+  const companionSchemas = companionDatabases.map(entry => entry.schema);
+  const companionRoles = companionDatabases.map(entry => entry.role);
+  if (companionDatabases.length === 0
+    || new Set([...companionSchemas, sharedSchema]).size !== companionSchemas.length + 1
+    || new Set(companionRoles).size !== companionRoles.length
+    || companionRoles.includes(options.sharedMigrationRole)) {
+    throw new Error('Fleet shared schema startup requires distinct companion/shared schema authorities');
+  }
+
+  const protectedRoles = options.fleetAuth ? Object.values(options.fleetAuth.roles) : [];
+  const mappedRoles = [...new Set([
+    ...protectedRoles,
+    options.sharedMigrationRole,
+    ...companionRoles,
+  ])].sort();
+  if (mappedRoles.length !== protectedRoles.length + companionRoles.length + 1) {
+    throw new Error('Fleet shared schema startup requires every authority role to be distinct');
+  }
+  const credentialValues = [
+    options.sharedMigrationDatabaseUrl,
+    ...companionDatabases.map(entry => entry.databaseUrl),
+    ...(options.fleetAuth ? [options.fleetAuth.backupRestoreDatabaseUrl] : []),
+  ];
+  if (new Set(credentialValues).size !== credentialValues.length) {
+    throw new Error('Fleet shared schema startup requires every database credential to be distinct');
+  }
+
+  const connections: Array<{ pool: Pool; client: PoolClient }> = [];
+  try {
+    const migration = await connectPreflightPool(
+      options.sharedMigrationDatabaseUrl,
+      'fleet-shared-schema-migration-preflight',
     );
+    connections.push(migration);
+    const companionConnections = [];
+    for (let index = 0; index < companionDatabases.length; index += 1) {
+      const connection = await connectPreflightPool(
+        companionDatabases[index].databaseUrl,
+        `fleet-shared-schema-companion-${index}-preflight`,
+      );
+      connections.push(connection);
+      companionConnections.push(connection);
+    }
+    const backup = options.fleetAuth
+      ? await connectPreflightPool(
+          options.fleetAuth.backupRestoreDatabaseUrl,
+          'fleet-shared-schema-backup-preflight',
+        )
+      : undefined;
+    if (backup) connections.push(backup);
+
     await assertFleetAuthRolesAreSafe(
-      migrationClient,
+      migration.client,
       mappedRoles,
-      options.roles.sharedMigration,
+      options.sharedMigrationRole,
     );
-    const createPrivilege = await migrationClient.query<{ allowed: boolean }>(`
+    const expectedTarget = await readDatabaseTargetIdentity(migration.client);
+    const createPrivilege = await migration.client.query<{ allowed: boolean }>(`
       SELECT has_database_privilege(current_user, current_database(), 'CREATE') AS allowed
     `);
     if (createPrivilege.rows.at(0)?.allowed !== true) {
       throw new Error('Fleet shared schema migration role requires CREATE on the target database');
     }
-    const [expectedTarget, actualTarget] = await Promise.all([
-      readDatabaseTargetIdentity(backupClient),
-      readDatabaseTargetIdentity(migrationClient),
-    ]);
-    if (JSON.stringify(actualTarget) !== JSON.stringify(expectedTarget)) {
-      throw new Error('Fleet shared schema migration credential targets another database');
+    const vectorExtension = await migration.client.query<{ installed: boolean }>(`
+      SELECT EXISTS (
+        SELECT 1
+        FROM pg_extension AS extension
+        JOIN pg_namespace AS namespace ON namespace.oid = extension.extnamespace
+        WHERE extension.extname = 'vector' AND namespace.nspname = 'public'
+      ) AS installed
+    `);
+    if (vectorExtension.rows.at(0)?.installed !== true) {
+      throw new Error(
+        'Fleet shared schema startup requires the operator-provisioned vector extension in public',
+      );
+    }
+
+    for (let index = 0; index < companionConnections.length; index += 1) {
+      const entry = companionDatabases[index];
+      const connection = companionConnections[index];
+      await assertFleetAuthRolesAreSafe(connection.client, mappedRoles, entry.role);
+      const target = await readDatabaseTargetIdentity(connection.client);
+      if (JSON.stringify(target) !== JSON.stringify(expectedTarget)) {
+        throw new Error(`Fleet shared schema companion credential ${index} targets another database`);
+      }
+    }
+    if (backup && options.fleetAuth) {
+      await assertFleetAuthRolesAreSafe(
+        backup.client,
+        mappedRoles,
+        options.fleetAuth.roles.backupRestore,
+      );
+      const target = await readDatabaseTargetIdentity(backup.client);
+      if (JSON.stringify(target) !== JSON.stringify(expectedTarget)) {
+        throw new Error('Fleet shared schema backup credential targets another database');
+      }
+    }
+
+    const owners = await migration.client.query<{ schema_name: string; owner_role: string }>(`
+      SELECT namespace.nspname AS schema_name, owner.rolname AS owner_role
+      FROM pg_namespace AS namespace
+      JOIN pg_roles AS owner ON owner.oid = namespace.nspowner
+      WHERE namespace.nspname = ANY($1::text[])
+      ORDER BY namespace.nspname
+    `, [companionSchemas]);
+    const expectedOwners = new Map(companionDatabases.map(entry => [entry.schema, entry.role]));
+    if (owners.rows.length !== companionSchemas.length
+      || owners.rows.some(row => expectedOwners.get(row.schema_name) !== row.owner_role)) {
+      throw new Error('Fleet shared schema startup found a missing or incorrectly owned companion schema');
     }
     await assertSharedMigrationAuthorityIsolation(
-      migrationClient,
+      migration.client,
       companionSchemas,
       sharedSchema,
-      options.roles.sharedMigration,
+      options.sharedMigrationRole,
     );
   } finally {
-    migrationClient?.release();
-    backupClient?.release();
-    await Promise.all([backupPool.end(), migrationPool.end()]);
+    for (const connection of connections) {
+      connection.client.release();
+    }
+    await Promise.all(connections.map(connection => connection.pool.end()));
   }
 
-  await bootstrapSharedSchema(options.sharedMigrationDatabaseUrl);
-  const contracts = await resolveFleetAuthSchemaAccessContracts({
-    databaseUrl: options.backupRestoreDatabaseUrl,
-    companionSchemas,
-    sharedSchema,
-    roles: options.roles,
-    verifyIsolation: false,
+  await bootstrapSharedWikiSchema(options.sharedMigrationDatabaseUrl);
+  const contracts = validateFleetAuthSchemaAccessContracts([
+    ...companionDatabases.map(entry => ({
+      kind: 'companion' as const,
+      schema: entry.schema,
+      ownerRole: entry.role,
+      runtimeRoles: [entry.role],
+    })),
+    {
+      kind: 'shared' as const,
+      schema: sharedSchema,
+      ownerRole: options.sharedMigrationRole,
+      runtimeRoles: companionRoles,
+    },
+  ], [...companionSchemas, sharedSchema], {
+    sharedMigration: options.sharedMigrationRole,
+    protectedRoles,
   });
-  const sharedContract = contracts.find(contract => contract.kind === 'shared');
-  if (!sharedContract) throw new Error('Fleet shared schema startup resolved no shared contract');
   await applyFleetAuthSchemaAccessContracts({
-    contracts: [sharedContract],
+    contracts: [contracts.find(contract => contract.kind === 'shared')!],
     ownerDatabaseUrls: { [sharedSchema]: options.sharedMigrationDatabaseUrl },
-    backupRole: options.roles.backupRestore,
+    ...(options.fleetAuth ? { backupRole: options.fleetAuth.roles.backupRestore } : {}),
   });
   await assertFleetAuthSchemaAccessIsolation({
-    databaseUrl: options.backupRestoreDatabaseUrl,
+    databaseUrl: options.sharedMigrationDatabaseUrl,
     contracts,
-    ownerRole: options.roles.backupRestore,
+    ownerRole: options.sharedMigrationRole,
   });
   return contracts;
 }

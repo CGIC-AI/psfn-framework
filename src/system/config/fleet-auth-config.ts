@@ -20,7 +20,7 @@ import { parseBooleanEnv } from '../../shared/utils/env.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { parseExactPostgresCredential } from '../../shared/utils/postgres-credential.js';
 import { loadRequiredJson } from './load-or-seed.js';
-import type { FleetAuthFamilyDatabaseRoles } from '../../persistence/postgres/fleet-auth/schema.js';
+import type { FleetAuthDatabaseRoles } from '../../persistence/postgres/fleet-auth/schema.js';
 
 export const FLEET_AUTH_ENV_VAR = 'PSFN_FLEET_AUTH';
 export const FLEET_AUTH_FILE_NAME = 'fleet-auth.json';
@@ -88,10 +88,9 @@ export interface FleetAuthConfig {
     runtimeDatabaseUrlRef: CredentialReference;
     migrationDatabaseUrlRef: CredentialReference;
     backupRestoreDatabaseUrlRef: CredentialReference;
-    sharedMigrationDatabaseUrlRef: CredentialReference;
     authorityFloorRootRef: CredentialReference;
   };
-  databaseRoles: FleetAuthFamilyDatabaseRoles;
+  databaseRoles: FleetAuthDatabaseRoles;
   verifierKeys: FleetAuthVerifierKey[];
   ttls: {
     oauthTransactionMs: number;
@@ -140,7 +139,6 @@ export interface ResolvedGatewayFleetAuthSecrets {
     runtimeUrl: string;
     migrationUrl: string;
     backupRestoreUrl: string;
-    sharedMigrationUrl: string;
   };
 }
 
@@ -298,23 +296,19 @@ function parseDatabaseRoles(value: unknown): FleetAuthConfig['databaseRoles'] {
   const record = requireRecord(value, 'databaseRoles');
   requireExactKeys(
     record,
-    ['runtime', 'migration', 'backupRestore', 'sharedMigration'],
+    ['runtime', 'migration', 'backupRestore'],
     'databaseRoles',
   );
   const roles = {
     runtime: requireString(record.runtime, 'databaseRoles.runtime'),
     migration: requireString(record.migration, 'databaseRoles.migration'),
     backupRestore: requireString(record.backupRestore, 'databaseRoles.backupRestore'),
-    sharedMigration: requireString(
-      record.sharedMigration,
-      'databaseRoles.sharedMigration',
-    ),
   };
   for (const [field, role] of Object.entries(roles)) {
     if (!POSTGRES_ROLE_PATTERN.test(role)) fail(`databaseRoles.${field} is not a safe PostgreSQL role name`);
   }
-  if (new Set(Object.values(roles)).size !== 4) {
-    fail('databaseRoles must name four distinct roles');
+  if (new Set(Object.values(roles)).size !== 3) {
+    fail('databaseRoles must name three distinct roles');
   }
   return roles;
 }
@@ -457,7 +451,6 @@ export function validateFleetAuthConfig(value: unknown, _sourcePath: string): Fl
     'runtimeDatabaseUrlRef',
     'migrationDatabaseUrlRef',
     'backupRestoreDatabaseUrlRef',
-    'sharedMigrationDatabaseUrlRef',
     'authorityFloorRootRef',
   ] as const;
   requireExactKeys(credentials, credentialKeys, 'credentials');
@@ -697,25 +690,15 @@ export function resolveGatewayFleetAuthSecrets(options: {
     config.credentials.backupRestoreDatabaseUrlRef,
     'Fleet auth backup/restore database credential',
   );
-  const sharedMigrationUrl = resolveRequiredSecret(
-    credentialVault,
-    config.credentials.sharedMigrationDatabaseUrlRef,
-    'Shared schema migration database credential',
-  );
   const runtime = parseDatabaseCredential(runtimeUrl, config.databaseRoles.runtime, 'Fleet auth runtime database credential');
   const migration = parseDatabaseCredential(migrationUrl, config.databaseRoles.migration, 'Fleet auth migration database credential');
   const backup = parseDatabaseCredential(backupRestoreUrl, config.databaseRoles.backupRestore, 'Fleet auth backup/restore database credential');
-  const sharedMigration = parseDatabaseCredential(
-    sharedMigrationUrl,
-    config.databaseRoles.sharedMigration,
-    'Shared schema migration database credential',
-  );
-  if (new Set([runtimeUrl, migrationUrl, backupRestoreUrl, sharedMigrationUrl]).size !== 4) {
-    throw new Error('Fleet auth family requires four distinct PostgreSQL credentials');
+  if (new Set([runtimeUrl, migrationUrl, backupRestoreUrl]).size !== 3) {
+    throw new Error('Fleet auth requires three distinct PostgreSQL credentials');
   }
   const companionDatabaseUrl = options.companionDatabaseUrl?.trim();
   if (companionDatabaseUrl
-    && [runtimeUrl, migrationUrl, backupRestoreUrl, sharedMigrationUrl].includes(companionDatabaseUrl)) {
+    && [runtimeUrl, migrationUrl, backupRestoreUrl].includes(companionDatabaseUrl)) {
     throw new Error('Fleet auth credentials must not reuse the companion POSTGRES_DATABASE_URL value');
   }
   if (companionDatabaseUrl) {
@@ -739,11 +722,10 @@ export function resolveGatewayFleetAuthSecrets(options: {
     runtime.username,
     migration.username,
     backup.username,
-    sharedMigration.username,
-  ]).size !== 4) {
-    throw new Error('Fleet auth family requires four distinct PostgreSQL credential roles');
+  ]).size !== 3) {
+    throw new Error('Fleet auth requires three distinct PostgreSQL credential roles');
   }
-  const identities = [runtime, migration, backup, sharedMigration].map(databaseIdentity);
+  const identities = [runtime, migration, backup].map(databaseIdentity);
   if (new Set(identities).size !== 1) {
     throw new Error('Fleet auth PostgreSQL credentials must target the same exact database');
   }
@@ -764,7 +746,7 @@ export function resolveGatewayFleetAuthSecrets(options: {
     assertionSigningKid: activeVerifier.kid,
     trustedHostRecoveryCredential,
     authorityFloorRoot,
-    database: { runtimeUrl, migrationUrl, backupRestoreUrl, sharedMigrationUrl },
+    database: { runtimeUrl, migrationUrl, backupRestoreUrl },
   };
 }
 

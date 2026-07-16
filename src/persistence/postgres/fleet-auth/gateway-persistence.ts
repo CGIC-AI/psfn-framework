@@ -62,6 +62,8 @@ import type { RequestCapabilityReplayPort } from '../../../boundary/fleet-auth/r
 import { PostgresRequestCapabilityReplayStore } from './request-capability-replay.js';
 import { GatewayFleetAuthChildAssertionBroker } from '../../../boundary/gateway/fleet-auth-child-assertions.js';
 import { PostgresChildAssertionAuthority } from './child-assertion-authority.js';
+import type { PrimaryEmbodimentAuthorityPort } from '../../../boundary/fleet-auth/primary-embodiment.js';
+import { PostgresPrimaryEmbodimentStore } from './primary-embodiment-store.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -75,6 +77,7 @@ export interface GatewayFleetAuthPersistence {
   requestCapabilities: GatewayRequestCapabilitySigner;
   requestCapabilityReplay: RequestCapabilityReplayPort;
   childAssertions: GatewayFleetAuthChildAssertionBroker;
+  primaryEmbodiments: PrimaryEmbodimentAuthorityPort;
   authorityLifecycle: GatewayFleetAuthAuthorityLifecycleStore;
   contactLifecycleAuthority: GatewayContactLifecycleAuthorityPort;
   discordEvidence?: DiscordEvidenceRuntime;
@@ -438,6 +441,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       resolveAuthorizationContext: input => broker.resolveAuthorizationContext(input),
     });
     const requestCapabilityReplay = new PostgresRequestCapabilityReplayStore(pool);
+    const primaryEmbodiments = new PostgresPrimaryEmbodimentStore({ pool });
     const childAssertions = new GatewayFleetAuthChildAssertionBroker({
       verifier: requestCapabilityVerifier,
       signer: requestCapabilities,
@@ -450,6 +454,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       requestCapabilities,
       requestCapabilityReplay,
       childAssertions,
+      primaryEmbodiments,
       authorityLifecycle,
       contactLifecycleAuthority,
       ...(discordEvidence ? { discordEvidence } : {}),

@@ -1230,6 +1230,61 @@ CREATE UNIQUE INDEX authorization_audit_request_capability_mutated_replay_unique
     AND reason_code = 'request_capability_mutated_replay';
 `;
 
+const PRIMARY_EMBODIMENT_AUTHORITY_SQL = `
+CREATE TABLE primary_embodiment_authority (
+  companion_id UUID PRIMARY KEY,
+  generation BIGINT NOT NULL CHECK (generation >= 1),
+  version BIGINT NOT NULL CHECK (version >= 1),
+  current_attachment_id UUID,
+  current_device_id TEXT CHECK (
+    current_device_id IS NULL OR length(current_device_id) BETWEEN 1 AND 256
+  ),
+  current_enrollment_version BIGINT CHECK (
+    current_enrollment_version IS NULL OR current_enrollment_version >= 1
+  ),
+  current_hub_session_id TEXT CHECK (
+    current_hub_session_id IS NULL OR length(current_hub_session_id) BETWEEN 1 AND 256
+  ),
+  last_decision_id UUID NOT NULL,
+  last_decision TEXT NOT NULL CHECK (last_decision IN ('handoff', 'invalidated')),
+  last_reason TEXT NOT NULL CHECK (last_reason IN (
+    'user_requested', 'device_replacement', 'recovery',
+    'device_revoked', 'enrollment_revoked'
+  )),
+  decided_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  CONSTRAINT primary_embodiment_current_tuple_exact CHECK (
+    (current_attachment_id IS NULL AND current_device_id IS NULL
+      AND current_enrollment_version IS NULL AND current_hub_session_id IS NULL
+      AND last_decision = 'invalidated')
+    OR
+    (current_attachment_id IS NOT NULL AND current_device_id IS NOT NULL
+      AND current_enrollment_version IS NOT NULL AND current_hub_session_id IS NOT NULL
+      AND last_decision = 'handoff')
+  )
+);
+
+CREATE TABLE primary_embodiment_handoff_decisions (
+  decision_id UUID PRIMARY KEY,
+  companion_id UUID NOT NULL,
+  expected_generation BIGINT NOT NULL CHECK (expected_generation >= 0),
+  target_attachment_id UUID NOT NULL,
+  target_device_digest TEXT NOT NULL CHECK (target_device_digest ~ '^[0-9a-f]{64}$'),
+  decision TEXT NOT NULL CHECK (decision IN ('allow', 'deny')),
+  reason_code TEXT NOT NULL CHECK (reason_code IN (
+    'handoff', 'decision_replay', 'decision_cross_companion', 'stale_generation',
+    'attachment_not_current', 'human_authority_required', 'already_primary'
+  )),
+  resulting_generation BIGINT NOT NULL CHECK (resulting_generation >= 0),
+  resulting_version BIGINT NOT NULL CHECK (resulting_version >= 0),
+  occurred_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX primary_embodiment_handoff_decisions_companion_idx
+  ON primary_embodiment_handoff_decisions (companion_id, occurred_at, decision_id);
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
@@ -1262,4 +1317,5 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   },
   { version: 22, name: 'hub_device_human_attachment_ledger', sql: HUB_DEVICE_HUMAN_ATTACHMENT_SQL },
   { version: 23, name: 'request_capability_replay_ledger', sql: REQUEST_CAPABILITY_REPLAY_SQL },
+  { version: 24, name: 'primary_embodiment_authority', sql: PRIMARY_EMBODIMENT_AUTHORITY_SQL },
 ] as const;

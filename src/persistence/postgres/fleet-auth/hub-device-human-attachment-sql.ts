@@ -195,7 +195,10 @@ BEGIN
 END;
 $function$;
 
-CREATE OR REPLACE FUNCTION fence_hub_device_attachment(
+DROP FUNCTION IF EXISTS fence_hub_device_attachment(
+  ${FLEET_AUTH_FENCE_HUB_DEVICE_ATTACHMENT_FUNCTION_ARG_TYPES}
+);
+CREATE FUNCTION fence_hub_device_attachment(
   p_assertion_digest TEXT,
   p_connection_id TEXT,
   p_reason TEXT,

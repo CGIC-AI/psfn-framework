@@ -66,6 +66,11 @@ import {
   FLEET_AUTH_FENCE_HUB_DEVICE_ATTACHMENT_FUNCTION_NAME,
   FLEET_AUTH_HUB_DEVICE_HUMAN_ATTACHMENT_DDL_SQL,
 } from './hub-device-human-attachment-sql.js';
+import {
+  FLEET_AUTH_HANDOFF_PRIMARY_EMBODIMENT_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_HANDOFF_PRIMARY_EMBODIMENT_FUNCTION_NAME,
+  FLEET_AUTH_PRIMARY_EMBODIMENT_DDL_SQL,
+} from './primary-embodiment-sql.js';
 
 export const FLEET_AUTH_SCHEMA_NAME = 'fleet_auth';
 const MIGRATION_LOCK_CLASS = 0x5053464e;
@@ -140,6 +145,8 @@ export const FLEET_AUTH_EPHEMERAL_TABLES = [
   'trusted_host_ceremonies',
   'hub_device_assertion_replays',
   'request_capability_consumptions',
+  'primary_embodiment_authority',
+  'primary_embodiment_handoff_decisions',
   'lifecycle_decision_receipts',
 ] as const;
 
@@ -343,6 +350,12 @@ async function applyRoleGrants(
     `REVOKE INSERT, UPDATE, DELETE ON ${qualifiedTable('request_capability_consumptions')} FROM ${runtime}`,
   );
   await client.query(
+    `REVOKE INSERT, UPDATE, DELETE ON ${[
+      qualifiedTable('primary_embodiment_authority'),
+      qualifiedTable('primary_embodiment_handoff_decisions'),
+    ].join(', ')} FROM ${runtime}`,
+  );
+  await client.query(
     `REVOKE INSERT, UPDATE, DELETE ON ${qualifiedTable('hub_device_human_attachments')} FROM ${runtime}`,
   );
   // The restorable database copy of the non-restored authority floor is
@@ -383,6 +396,12 @@ async function applyRoleGrants(
   );
   await client.query(
     `REVOKE INSERT, UPDATE, DELETE ON ${qualifiedTable('request_capability_consumptions')} FROM ${backup}`,
+  );
+  await client.query(
+    `REVOKE INSERT, UPDATE, DELETE ON ${[
+      qualifiedTable('primary_embodiment_authority'),
+      qualifiedTable('primary_embodiment_handoff_decisions'),
+    ].join(', ')} FROM ${backup}`,
   );
   // Companion creation is narrower than ordinary restore DML. The coordinator
   // retains SELECT/UPDATE for lifecycle reconciliation, while restore INSERT is
@@ -436,6 +455,9 @@ async function applyRoleGrants(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_FENCE_HUB_DEVICE_ATTACHMENT_FUNCTION_NAME}(${FLEET_AUTH_FENCE_HUB_DEVICE_ATTACHMENT_FUNCTION_ARG_TYPES}) TO ${runtime}`,
   );
   await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_HANDOFF_PRIMARY_EMBODIMENT_FUNCTION_NAME}(${FLEET_AUTH_HANDOFF_PRIMARY_EMBODIMENT_FUNCTION_ARG_TYPES}) TO ${runtime}`,
+  );
+  await client.query(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_NAME}(${FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_ARG_TYPES}) TO ${backup}`,
   );
   await client.query(
@@ -459,6 +481,7 @@ async function applyFleetAuthReapprovalBoundary(
   await client.query(FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL);
   await client.query(FLEET_AUTH_LOCK_COMPANION_AUTHORITY_DDL_SQL);
   await client.query(FLEET_AUTH_HUB_DEVICE_HUMAN_ATTACHMENT_DDL_SQL);
+  await client.query(FLEET_AUTH_PRIMARY_EMBODIMENT_DDL_SQL);
   await client.query(FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_DDL_SQL);
   await client.query(FLEET_AUTH_CONTACT_AUTHORITY_DDL_SQL);
   await client.query(FLEET_AUTH_RECONCILIATION_DDL_SQL);
@@ -659,7 +682,9 @@ async function assertExactDml(
         return new Set(['SELECT', 'DELETE']);
       }
       if ((tableName === 'hub_device_assertion_replays'
-          || tableName === 'request_capability_consumptions')
+          || tableName === 'request_capability_consumptions'
+          || tableName === 'primary_embodiment_authority'
+          || tableName === 'primary_embodiment_handoff_decisions')
         && (expectedRole === roles.runtime || expectedRole === roles.backupRestore)) {
         return new Set(['SELECT']);
       }

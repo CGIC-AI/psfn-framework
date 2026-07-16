@@ -43,6 +43,14 @@ export interface FleetReceiptEntry {
   companionDataDir: string;
 }
 
+export interface CurrentOwnerReceiptEntry {
+  bytes: number;
+  sha256: string;
+  identity: FilesystemIdentity;
+  observedAt: string;
+  provenance: 'canonical-owner-after-verified-source-retirement';
+}
+
 export interface DestinationReceiptEntry extends FleetReceiptEntry {
   destinationPath: string;
   companionDataDirIdentity: FilesystemIdentity;
@@ -56,6 +64,7 @@ export interface DestinationReceiptEntry extends FleetReceiptEntry {
   destinationIdentity?: FilesystemIdentity;
   status: DestinationStatus;
   verifiedAt?: string;
+  currentOwner?: CurrentOwnerReceiptEntry;
 }
 
 export interface SupersededTemporaryReceiptEntry {
@@ -201,6 +210,18 @@ function isSupersededTemporaryEntry(value: unknown): value is SupersededTemporar
     && SHA256_PATTERN.test(value.sha256);
 }
 
+function isCurrentOwnerEntry(value: unknown): value is CurrentOwnerReceiptEntry {
+  return isRecord(value)
+    && typeof value.bytes === 'number'
+    && Number.isSafeInteger(value.bytes)
+    && value.bytes >= 0
+    && typeof value.sha256 === 'string'
+    && SHA256_PATTERN.test(value.sha256)
+    && isFilesystemIdentity(value.identity)
+    && typeof value.observedAt === 'string'
+    && value.provenance === 'canonical-owner-after-verified-source-retirement';
+}
+
 function isDestinationEntry(value: unknown): value is DestinationReceiptEntry {
   return isFleetEntry(value)
     && typeof value.destinationPath === 'string'
@@ -221,7 +242,8 @@ function isDestinationEntry(value: unknown): value is DestinationReceiptEntry {
     && (value.status === 'pending' || value.status === 'verified')
     && (value.status !== 'verified' || isFilesystemIdentity(value.destinationIdentity))
     && (value.status !== 'verified' || isFilesystemIdentity(value.temporaryIdentity))
-    && (value.verifiedAt === undefined || typeof value.verifiedAt === 'string');
+    && (value.verifiedAt === undefined || typeof value.verifiedAt === 'string')
+    && (value.currentOwner === undefined || isCurrentOwnerEntry(value.currentOwner));
 }
 
 function isFileEntry(value: unknown): value is FileReceiptEntry {
@@ -332,6 +354,23 @@ export function assertReceiptPinnedIdentities(input: {
   );
 }
 
+export function assertReceiptRootIdentities(input: {
+  receipt: SystemOwnerFleetMigrationReceipt;
+  systemDataDir: PinnedDirectory;
+  receiptDirectory: PinnedDirectory;
+}): void {
+  assertFilesystemIdentity(
+    input.systemDataDir.identity,
+    input.receipt.systemDataDirIdentity,
+    'System-owner fleet migration system directory',
+  );
+  assertFilesystemIdentity(
+    input.receiptDirectory.identity,
+    input.receipt.receiptDirectoryIdentity,
+    'System-owner fleet migration receipt directory',
+  );
+}
+
 export function assertReceiptContents(
   receipt: SystemOwnerFleetMigrationReceipt,
   systemDataDir: string,
@@ -387,7 +426,9 @@ export function assertReceiptContents(
         || destination.sha256 !== file.sourceSha256
         || (destination.status === 'verified' && !destination.temporaryIdentity)
         || (destination.status === 'verified' && !destination.destinationIdentity)
-        || (destination.status === 'verified' && !destination.verifiedAt)) {
+        || (destination.status === 'verified' && !destination.verifiedAt)
+        || (destination.status !== 'verified' && destination.currentOwner)
+        || (file.status !== 'retired' && destination.currentOwner)) {
         throw new Error(`System-owner fleet migration receipt destination mismatch for ${file.ownerFile}`);
       }
       const supersededPaths = destination.supersededTemporaryFiles.map(entry => resolve(entry.path));
@@ -406,7 +447,8 @@ export function assertReceiptContents(
     && receipt.files.some(file => file.status !== 'pending'
         || file.destinations.some(destination => destination.status !== 'pending'
           || destination.destinationIdentity
-          || destination.temporaryIdentity))) {
+          || destination.temporaryIdentity
+          || destination.currentOwner))) {
     throw new Error('Bootstrap system-owner fleet migration receipt contains post-bootstrap progress');
   }
   if (receipt.status !== 'bootstrap'

@@ -146,6 +146,71 @@ describe('system-owner fleet migration', () => {
     expect(readdirSync(fleet.companions[0].companionDataDir)).toEqual([]);
   });
 
+  it.each(['receipt', 'system', 'companion'] as const)(
+    'rejects a same-path %s root replacement before any recovery mutation',
+    (replacedRoot) => {
+      const { runtimeRoot, systemDataDir, fleet } = fixture();
+      const source = validSkillsSource(`same-path-${replacedRoot}`);
+      const sourcePath = join(systemDataDir, 'skills.json');
+      writeFileSync(sourcePath, source);
+
+      expect(() => executeSystemOwnerFleetMigration({
+        systemDataDir,
+        fleet,
+        expectedSourceDigests: { 'skills.json': sha256(source) },
+        faultInjection: (event) => {
+          if (event.stage === 'after_bootstrap_receipt') throw new Error('crash:bootstrap-receipt');
+        },
+      })).toThrow('crash:bootstrap-receipt');
+
+      const receiptPath = join(systemDataDir, 'migrations', 'system-owner-fleet-reroot.json');
+      const originalReceipt = readFileSync(receiptPath);
+      const receipt = JSON.parse(originalReceipt.toString('utf8')) as {
+        quarantineDirectoryPath: string;
+        files: Array<{
+          destinations: Array<{ stagingDirectoryPath: string }>;
+        }>;
+      };
+
+      if (replacedRoot === 'receipt') {
+        const receiptDirectory = join(systemDataDir, 'migrations');
+        const retiredDirectory = join(systemDataDir, 'migrations-replaced');
+        renameSync(receiptDirectory, retiredDirectory);
+        mkdirSync(receiptDirectory);
+        copyFileSync(join(retiredDirectory, 'system-owner-fleet-reroot.json'), receiptPath);
+      } else if (replacedRoot === 'system') {
+        const retiredDirectory = join(runtimeRoot, 'system-data-replaced');
+        renameSync(systemDataDir, retiredDirectory);
+        mkdirSync(systemDataDir);
+        mkdirSync(join(systemDataDir, 'migrations'));
+        copyFileSync(
+          join(retiredDirectory, 'migrations', 'system-owner-fleet-reroot.json'),
+          receiptPath,
+        );
+        writeFileSync(sourcePath, source);
+      } else {
+        const companionRoot = fleet.companions[0].companionDataDir;
+        renameSync(companionRoot, `${companionRoot}-replaced`);
+        mkdirSync(companionRoot);
+      }
+
+      expect(() => executeSystemOwnerFleetMigration({
+        systemDataDir,
+        fleet,
+        expectedSourceDigests: { 'skills.json': sha256(source) },
+      })).toThrow(/changed identity/);
+
+      expect(readFileSync(receiptPath)).toEqual(originalReceipt);
+      expect(readFileSync(sourcePath)).toEqual(source);
+      expect(existsSync(receipt.quarantineDirectoryPath)).toBe(false);
+      for (const file of receipt.files) {
+        for (const destination of file.destinations) {
+          expect(existsSync(destination.stagingDirectoryPath)).toBe(false);
+        }
+      }
+    },
+  );
+
   it('fans exact owner bytes to every configured companion, retires sources, and passes startup verification', () => {
     const { systemDataDir, fleet } = fixture();
     const seedDir = join(process.cwd(), 'config');

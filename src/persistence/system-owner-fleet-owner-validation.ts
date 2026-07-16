@@ -14,6 +14,7 @@ import {
   pinnedLeafExists,
   readPinnedRegularFile,
   relativeDirectoryPath,
+  type InspectedPinnedFile,
   type PinnedDirectory,
 } from './pinned-filesystem.js';
 import type {
@@ -38,16 +39,23 @@ export function validatePinnedMigrationOwner(
   directory: PinnedDirectory,
   ownerFile: string,
   label: string,
-): void {
-  if (!SCHEMA_BOUND_OWNER_FILES.has(ownerFile)) return;
+): InspectedPinnedFile {
   const sourcePath = join(directory.logicalPath, ownerFile);
   const pinned = readPinnedRegularFile(directory, ownerFile, label);
-  const raw = parseOwnerJson(pinned.content, sourcePath);
-  if (ownerFile === CHARGE_POLICY_FILE_NAME) {
-    validateChargePolicyConfig(raw, sourcePath);
-  } else {
-    validateSkillsConfig(raw, sourcePath);
+  if (SCHEMA_BOUND_OWNER_FILES.has(ownerFile)) {
+    const raw = parseOwnerJson(pinned.content, sourcePath);
+    if (ownerFile === CHARGE_POLICY_FILE_NAME) {
+      validateChargePolicyConfig(raw, sourcePath);
+    } else {
+      validateSkillsConfig(raw, sourcePath);
+    }
   }
+  return {
+    bytes: pinned.bytes,
+    sha256: pinned.sha256,
+    device: pinned.device,
+    inode: pinned.inode,
+  };
 }
 
 /**

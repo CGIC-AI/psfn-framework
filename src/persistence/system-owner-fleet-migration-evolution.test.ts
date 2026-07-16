@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
   writeFileSync,
@@ -46,6 +47,13 @@ interface CompletedReceiptFile {
     companionId: string;
     destinationPath: string;
     temporaryPath: string;
+    currentOwner?: {
+      bytes: number;
+      sha256: string;
+      identity: { device: string; inode: string };
+      observedAt: string;
+      provenance: 'canonical-owner-after-verified-source-retirement';
+    };
   }>;
 }
 
@@ -58,6 +66,14 @@ function validChargeSource(interactiveQuota: number): Buffer {
     readFileSync(join(process.cwd(), 'config', 'charge-policy.seed.json'), 'utf8'),
   ) as { runChargeQuotaByLane: { interactive: number } };
   value.runChargeQuotaByLane.interactive = interactiveQuota;
+  return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function validSkillsSource(marker: string): Buffer {
+  const value = JSON.parse(
+    readFileSync(join(process.cwd(), 'config', 'skills.seed.json'), 'utf8'),
+  ) as { disabledSkills: string[] };
+  value.disabledSkills = [marker];
   return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
 }
 
@@ -165,6 +181,102 @@ describe('completed system-owner fleet migration owner evolution', () => {
     expect(JSON.parse(readFileSync(destination.destinationPath, 'utf8'))).toEqual(replacement);
     expect(readFileSync(destination.temporaryPath)).toEqual(source);
     expect(readFileSync(file.quarantinePath)).toEqual(source);
+    const currentBytes = readFileSync(destination.destinationPath);
+    const currentStats = statSync(destination.destinationPath, { bigint: true });
+    const evolvedReceipt = JSON.parse(readFileSync(
+      join(systemDataDir, 'migrations', 'system-owner-fleet-reroot.json'),
+      'utf8',
+    )) as { files: CompletedReceiptFile[] };
+    expect(evolvedReceipt.files[0].destinations[0].currentOwner).toMatchObject({
+      bytes: currentBytes.byteLength,
+      sha256: sha256(currentBytes),
+      identity: {
+        device: currentStats.dev.toString(),
+        inode: currentStats.ino.toString(),
+      },
+      provenance: 'canonical-owner-after-verified-source-retirement',
+    });
+    const receiptBytes = readFileSync(
+      join(systemDataDir, 'migrations', 'system-owner-fleet-reroot.json'),
+    );
+    expect(executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'charge-policy.json': digest },
+    }).status).toBe('already_completed');
+    expect(readFileSync(
+      join(systemDataDir, 'migrations', 'system-owner-fleet-reroot.json'),
+    )).toEqual(receiptBytes);
+  });
+
+  it.each([
+    { ownerFile: 'charge-policy.json', replacement: validChargeSource(41) },
+    { ownerFile: 'skills.json', replacement: validSkillsSource('recovered-evolution') },
+  ])('recovers every post-quarantine crash after atomic $ownerFile evolution', ({
+    ownerFile,
+    replacement,
+  }) => {
+    for (const crashStage of [
+      'after_source_quarantine',
+      'after_quarantine_sync',
+      'before_final_receipt',
+    ] as const) {
+      const context = fixture();
+      const source = ownerFile === 'charge-policy.json'
+        ? validChargeSource(40)
+        : validSkillsSource('migration-source');
+      const digest = sha256(source);
+      writeFileSync(join(context.systemDataDir, ownerFile), source);
+      let interrupted = false;
+      expect(() => executeSystemOwnerFleetMigration({
+        systemDataDir: context.systemDataDir,
+        fleet: context.fleet,
+        expectedSourceDigests: { [ownerFile]: digest },
+        faultInjection: (event) => {
+          if (!interrupted && event.stage === crashStage) {
+            interrupted = true;
+            throw new Error(`crash:${crashStage}`);
+          }
+        },
+      })).toThrow(`crash:${crashStage}`);
+      expect(interrupted).toBe(true);
+
+      const evolved = JSON.parse(replacement.toString('utf8')) as unknown;
+      for (const companion of context.fleet.companions) {
+        writeJsonAtomic(join(companion.companionDataDir, ownerFile), evolved);
+      }
+
+      const result = executeSystemOwnerFleetMigration({
+        systemDataDir: context.systemDataDir,
+        fleet: context.fleet,
+        expectedSourceDigests: { [ownerFile]: digest },
+      });
+      expect(result.status).toBe('migrated');
+      const receipt = JSON.parse(readFileSync(result.receiptPath, 'utf8')) as {
+        status: string;
+        files: CompletedReceiptFile[];
+      };
+      const file = receipt.files.find(candidate => candidate.ownerFile === ownerFile);
+      if (!file) throw new Error(`Missing recovered receipt file for ${ownerFile}`);
+      expect(receipt.status).toBe('completed');
+      expect(readFileSync(file.quarantinePath)).toEqual(source);
+      for (const destination of file.destinations) {
+        const currentBytes = readFileSync(destination.destinationPath);
+        const currentStats = statSync(destination.destinationPath, { bigint: true });
+        expect(JSON.parse(currentBytes.toString('utf8'))).toEqual(evolved);
+        expect(readFileSync(destination.temporaryPath)).toEqual(source);
+        expect(destination.currentOwner).toMatchObject({
+          bytes: currentBytes.byteLength,
+          sha256: sha256(currentBytes),
+          identity: {
+            device: currentStats.dev.toString(),
+            inode: currentStats.ino.toString(),
+          },
+          provenance: 'canonical-owner-after-verified-source-retirement',
+        });
+        expect(destination.currentOwner?.observedAt).toEqual(expect.any(String));
+      }
+    }
   });
 
   it('denies in-place mutation of hard-linked retained migration evidence', () => {

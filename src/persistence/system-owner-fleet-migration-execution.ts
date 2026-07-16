@@ -29,7 +29,10 @@ import {
   assertNoUnknownMigrationArtifacts,
   inspectPinnedPlanFiles,
 } from './system-owner-fleet-migration-planning.js';
-import { validateReceiptBoundMigrationOwners } from './system-owner-fleet-owner-validation.js';
+import {
+  validatePinnedMigrationOwner,
+  validateReceiptBoundMigrationOwners,
+} from './system-owner-fleet-owner-validation.js';
 import {
   supersedeUnboundTemporary,
   validateRecordedArtifacts,
@@ -39,6 +42,7 @@ import {
   assertReceiptContents,
   assertReceiptIdentity,
   assertReceiptPinnedIdentities,
+  assertReceiptRootIdentities,
   fleetEntries,
   loadReceipt,
   quarantineDirectoryName,
@@ -50,28 +54,112 @@ import {
   type SystemOwnerFleetMigrationOptions,
   type SystemOwnerFleetMigrationReceipt,
   type SystemOwnerFleetMigrationResult,
+  type CurrentOwnerReceiptEntry,
+  type FileReceiptEntry,
 } from './system-owner-fleet-migration-receipt.js';
 
-function verifyCompletedReceipt(input: {
+type CurrentOwnerObservation = Omit<CurrentOwnerReceiptEntry, 'observedAt'>;
+
+function observationKey(ownerFile: string, companionId: string): string {
+  return `${ownerFile}\u0000${companionId}`;
+}
+
+function verifyRetiredFileEvidence(input: {
+  file: FileReceiptEntry;
+  systemDirectory: PinnedDirectory;
+  quarantineDirectory: PinnedDirectory;
+  destinations: ReadonlyMap<string, DestinationPins>;
+}): Map<string, CurrentOwnerObservation> {
+  const { file } = input;
+  if (pinnedLeafExists(input.systemDirectory, file.ownerFile)) {
+    throw new Error(`Retired migration source reappeared: ${file.sourcePath}`);
+  }
+  verifyQuarantinedSource(file, input.quarantineDirectory);
+  const observations = new Map<string, CurrentOwnerObservation>();
+  for (const destination of file.destinations) {
+    if (destination.status !== 'verified') {
+      throw new Error(
+        `Source was retired before destination verification: ${destination.destinationPath}`,
+      );
+    }
+    const pins = input.destinations.get(destinationPinKey(destination.companionId));
+    if (!pins) throw new Error(`Missing pinned destination for ${destination.companionId}`);
+    verifyCompletedDestinationEvidence(file, destination, pins);
+    const current = validatePinnedMigrationOwner(
+      pins.destinationDirectory,
+      file.ownerFile,
+      `${file.ownerFile} current receipt-bound owner`,
+    );
+    observations.set(observationKey(file.ownerFile, destination.companionId), {
+      bytes: current.bytes,
+      sha256: current.sha256,
+      identity: { device: current.device, inode: current.inode },
+      provenance: 'canonical-owner-after-verified-source-retirement',
+    });
+  }
+  return observations;
+}
+
+function preflightRecoveryState(input: {
   receipt: SystemOwnerFleetMigrationReceipt;
   systemDirectory: PinnedDirectory;
   quarantineDirectory: PinnedDirectory;
   destinations: ReadonlyMap<string, DestinationPins>;
-}): void {
+}): Map<string, CurrentOwnerObservation> {
+  const observations = new Map<string, CurrentOwnerObservation>();
   for (const file of input.receipt.files) {
-    if (file.status !== 'retired' || pinnedLeafExists(input.systemDirectory, file.ownerFile)) {
-      throw new Error(`Completed migration receipt has a live or unretired source: ${file.sourcePath}`);
-    }
-    verifyQuarantinedSource(file, input.quarantineDirectory);
-    for (const destination of file.destinations) {
-      if (destination.status !== 'verified') {
-        throw new Error(`Completed migration receipt has an unverified destination: ${destination.destinationPath}`);
+    if (pinnedLeafExists(input.systemDirectory, file.ownerFile)) {
+      if (file.status === 'retired') {
+        throw new Error(`Retired migration source reappeared: ${file.sourcePath}`);
       }
-      const pins = input.destinations.get(destinationPinKey(destination.companionId));
-      if (!pins) throw new Error(`Missing pinned destination for ${destination.companionId}`);
-      verifyCompletedDestinationEvidence(file, destination, pins);
+      assertSourceUnchanged(file, input.systemDirectory);
+      for (const destination of file.destinations) {
+        if (destination.status !== 'verified') continue;
+        const pins = input.destinations.get(destinationPinKey(destination.companionId));
+        if (!pins) throw new Error(`Missing pinned destination for ${destination.companionId}`);
+        verifyDestination(file, destination, pins);
+      }
+      continue;
+    }
+    const fileObservations = verifyRetiredFileEvidence({
+      file,
+      systemDirectory: input.systemDirectory,
+      quarantineDirectory: input.quarantineDirectory,
+      destinations: input.destinations,
+    });
+    for (const [key, observation] of fileObservations) {
+      observations.set(key, observation);
     }
   }
+  return observations;
+}
+
+function applyCurrentOwnerObservations(input: {
+  file: FileReceiptEntry;
+  observations: ReadonlyMap<string, CurrentOwnerObservation>;
+  observedAt: string;
+}): boolean {
+  let changed = false;
+  for (const destination of input.file.destinations) {
+    const observation = input.observations.get(
+      observationKey(input.file.ownerFile, destination.companionId),
+    );
+    if (!observation) {
+      throw new Error(`Missing current-owner observation for ${destination.destinationPath}`);
+    }
+    const current = destination.currentOwner;
+    if (current
+      && current.bytes === observation.bytes
+      && current.sha256 === observation.sha256
+      && current.identity.device === observation.identity.device
+      && current.identity.inode === observation.identity.inode
+      && current.provenance === observation.provenance) {
+      continue;
+    }
+    destination.currentOwner = { ...observation, observedAt: input.observedAt };
+    changed = true;
+  }
+  return changed;
 }
 
 function assertNoUntrackedOwnerFiles(
@@ -129,6 +217,11 @@ export function executeSystemOwnerFleetMigration(
       if (resolve(receipt.receiptDirectoryPath) !== receiptDirectory.logicalPath) {
         throw new Error('System-owner fleet migration receipt directory path is invalid');
       }
+      assertReceiptRootIdentities({
+        receipt,
+        systemDataDir: systemDirectory,
+        receiptDirectory,
+      });
     } else {
       const planFiles = inspectPinnedPlanFiles({
         systemDataDir,
@@ -276,14 +369,24 @@ export function executeSystemOwnerFleetMigration(
       destinationPins,
     });
     assertNoUntrackedOwnerFiles(receipt, systemDirectory);
+    const recoveryObservations = preflightRecoveryState({
+      receipt,
+      systemDirectory,
+      quarantineDirectory,
+      destinations: destinationPins,
+    });
 
     if (receipt.status === 'completed') {
-      verifyCompletedReceipt({
-        receipt,
-        systemDirectory,
-        quarantineDirectory,
-        destinations: destinationPins,
-      });
+      let receiptChanged = false;
+      const observedAt = now().toISOString();
+      for (const file of receipt.files) {
+        receiptChanged = applyCurrentOwnerObservations({
+          file,
+          observations: recoveryObservations,
+          observedAt,
+        }) || receiptChanged;
+      }
+      if (receiptChanged) persistReceipt();
       return {
         status: 'already_completed',
         receiptPath: path,
@@ -293,91 +396,101 @@ export function executeSystemOwnerFleetMigration(
 
     for (const file of receipt.files) {
       if (file.status === 'retired') {
-        if (pinnedLeafExists(systemDirectory, file.ownerFile)) {
-          throw new Error(`Retired migration source reappeared: ${file.sourcePath}`);
+        if (applyCurrentOwnerObservations({
+          file,
+          observations: recoveryObservations,
+          observedAt: now().toISOString(),
+        })) persistReceipt();
+        continue;
+      }
+
+      const sourceIsLive = pinnedLeafExists(systemDirectory, file.ownerFile);
+      if (sourceIsLive) {
+        assertSourceUnchanged(file, systemDirectory);
+      }
+      if (sourceIsLive) {
+        for (const destination of file.destinations) {
+          const pins = destinationPins.get(destinationPinKey(destination.companionId));
+          if (!pins) throw new Error(`Missing pinned destination for ${destination.companionId}`);
+          if (destination.status === 'verified') {
+            verifyDestination(file, destination, pins);
+            continue;
+          }
+          assertSourceUnchanged(file, systemDirectory);
+          supersedeUnboundTemporary({
+            destination,
+            pins,
+            operationId: receipt.operationId,
+            temporaryId,
+            persistReceipt,
+            faultInjection: options.faultInjection,
+            ownerFile: file.ownerFile,
+          });
+          const publishedIdentities = publishDestination({
+            file,
+            destination,
+            pins,
+            systemDirectory,
+            onTemporaryCreated: (identity) => {
+              destination.temporaryIdentity = identity;
+              persistReceipt();
+            },
+            faultInjection: options.faultInjection,
+          });
+          destination.destinationIdentity = publishedIdentities.destinationIdentity;
+          destination.temporaryIdentity = publishedIdentities.temporaryIdentity;
+          options.faultInjection?.({
+            stage: 'before_receipt_update',
+            ownerFile: file.ownerFile,
+            companionId: destination.companionId,
+            path: destination.destinationPath,
+          });
+          destination.status = 'verified';
+          destination.verifiedAt = now().toISOString();
+          persistReceipt();
+          options.faultInjection?.({
+            stage: 'after_receipt_update',
+            ownerFile: file.ownerFile,
+            companionId: destination.companionId,
+            path: destination.destinationPath,
+          });
+          options.afterDestinationVerified?.({
+            ownerFile: file.ownerFile,
+            companionId: destination.companionId,
+            destinationPath: destination.destinationPath,
+          });
         }
-        verifyQuarantinedSource(file, quarantineDirectory);
+
         for (const destination of file.destinations) {
           const pins = destinationPins.get(destinationPinKey(destination.companionId));
           if (!pins) throw new Error(`Missing pinned destination for ${destination.companionId}`);
           verifyDestination(file, destination, pins);
         }
-        continue;
-      }
-
-      if (pinnedLeafExists(systemDirectory, file.ownerFile)) {
-        assertSourceUnchanged(file, systemDirectory);
-      } else if (!pinnedLeafExists(quarantineDirectory, basename(file.quarantinePath))) {
-        throw new Error(`Migration source disappeared outside quarantine: ${file.sourcePath}`);
-      }
-      for (const destination of file.destinations) {
-        const pins = destinationPins.get(destinationPinKey(destination.companionId));
-        if (!pins) throw new Error(`Missing pinned destination for ${destination.companionId}`);
-        if (destination.status === 'verified') {
-          verifyDestination(file, destination, pins);
-          continue;
-        }
-        assertSourceUnchanged(file, systemDirectory);
-        supersedeUnboundTemporary({
-          destination,
-          pins,
-          operationId: receipt.operationId,
-          temporaryId,
-          persistReceipt,
-          faultInjection: options.faultInjection,
-          ownerFile: file.ownerFile,
-        });
-        const publishedIdentities = publishDestination({
+        retireSource({
           file,
-          destination,
-          pins,
           systemDirectory,
-          onTemporaryCreated: (identity) => {
-            destination.temporaryIdentity = identity;
-            persistReceipt();
-          },
+          quarantineDirectory,
           faultInjection: options.faultInjection,
         });
-        destination.destinationIdentity = publishedIdentities.destinationIdentity;
-        destination.temporaryIdentity = publishedIdentities.temporaryIdentity;
-        options.faultInjection?.({
-          stage: 'before_receipt_update',
-          ownerFile: file.ownerFile,
-          companionId: destination.companionId,
-          path: destination.destinationPath,
-        });
-        destination.status = 'verified';
-        destination.verifiedAt = now().toISOString();
-        persistReceipt();
-        options.faultInjection?.({
-          stage: 'after_receipt_update',
-          ownerFile: file.ownerFile,
-          companionId: destination.companionId,
-          path: destination.destinationPath,
-        });
-        options.afterDestinationVerified?.({
-          ownerFile: file.ownerFile,
-          companionId: destination.companionId,
-          destinationPath: destination.destinationPath,
+      } else {
+        retireSource({
+          file,
+          systemDirectory,
+          quarantineDirectory,
+          faultInjection: options.faultInjection,
         });
       }
-
-      for (const destination of file.destinations) {
-        const pins = destinationPins.get(destinationPinKey(destination.companionId));
-        if (!pins) throw new Error(`Missing pinned destination for ${destination.companionId}`);
-        verifyDestination(file, destination, pins);
-      }
-      retireSource({
+      const retiredObservations = verifyRetiredFileEvidence({
         file,
         systemDirectory,
         quarantineDirectory,
-        faultInjection: options.faultInjection,
+        destinations: destinationPins,
       });
-      for (const destination of file.destinations) {
-        const pins = destinationPins.get(destinationPinKey(destination.companionId));
-        if (!pins) throw new Error(`Missing pinned destination for ${destination.companionId}`);
-        verifyDestination(file, destination, pins);
-      }
+      applyCurrentOwnerObservations({
+        file,
+        observations: retiredObservations,
+        observedAt: now().toISOString(),
+      });
       file.status = 'retired';
       file.retiredAt = now().toISOString();
       persistReceipt();

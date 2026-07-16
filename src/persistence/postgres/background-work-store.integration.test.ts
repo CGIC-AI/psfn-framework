@@ -2195,9 +2195,12 @@ describe('PostgresBackgroundWorkStore', () => {
         permitOutcome: 'consumed',
         recoveryResponse: icpRecoveryResponse,
       });
+      const changedSnapshotRejection = expect(changedSnapshot).rejects.toThrow(
+        'TurnRecord eligibility snapshot changed',
+      );
       releaseSuccessfulFence.resolve();
       await heldSuccessfulFence;
-      await expect(changedSnapshot).rejects.toThrow('TurnRecord eligibility snapshot changed');
+      await changedSnapshotRejection;
       expect(snapshotReads).toBe(2);
       expect(changedSnapshotEffectRan).toBe(false);
 

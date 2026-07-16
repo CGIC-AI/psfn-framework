@@ -207,19 +207,22 @@ never back a ClusterIssuer. */ -}}
 {{- fail "secrets.values.extraSatelliteApiKeys entries must each be at least 16 characters" -}}
 {{- end -}}
 {{- end -}}
+{{- if .Values.fleetAuth.enabled -}}
+{{- if not (regexMatch "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$" .Values.runtime.companionId) -}}
+{{- fail "fleetAuth.enabled=true requires runtime.companionId to be one lowercase RFC4122 UUID" -}}
+{{- end -}}
+{{- if or (not .Values.ingress.enabled) (not .Values.ingress.gateway.enabled) -}}
+{{- fail "fleetAuth.enabled=true requires the Gateway Ingress as the sole browser origin" -}}
+{{- end -}}
+{{- if not .Values.ingress.gateway.tls.enabled -}}
+{{- fail "fleetAuth.enabled=true requires ingress.gateway.tls.enabled=true" -}}
+{{- end -}}
+{{- if not (trim .Values.ingress.gateway.tls.secretName) -}}
+{{- fail "fleetAuth.enabled=true requires ingress.gateway.tls.secretName" -}}
+{{- end -}}
+{{- end -}}
 {{- if .Values.companionUiTest.enabled -}}
-{{- if ne .Values.ingress.companionUiTest.path "/companion-ui/" -}}
-{{- fail "ingress.companionUiTest.path must be exactly /companion-ui/" -}}
-{{- end -}}
-{{- if not (has .Values.companionUiTest.service.type (list "ClusterIP" "NodePort")) -}}
-{{- fail "companionUiTest.service.type must be ClusterIP or NodePort" -}}
-{{- end -}}
-{{- with .Values.companionUiTest.service.nodePort -}}
-{{- if ne $.Values.companionUiTest.service.type "NodePort" -}}
-{{- fail "companionUiTest.service.nodePort requires companionUiTest.service.type=NodePort" -}}
-{{- end -}}
-{{- if or (lt (int .) 30000) (gt (int .) 32767) -}}
-{{- fail "companionUiTest.service.nodePort must be within 30000-32767" -}}
-{{- end -}}
+{{- if ne .Values.companionUiTest.service.type "ClusterIP" -}}
+{{- fail "companionUiTest.service.type must be ClusterIP; browser access is gateway-mediated" -}}
 {{- end -}}
 {{- end -}}

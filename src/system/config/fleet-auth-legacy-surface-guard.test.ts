@@ -59,4 +59,16 @@ describe('fleet auth legacy surface startup guard', () => {
       principalAuthenticationWired: false,
     })).toThrow(/legacy/i);
   });
+
+  it('allows configured legacy material only when principal admission is fully wired', () => {
+    expect(() => assertFleetAuthLegacySurfacesUnavailable({
+      fleetAuthEnabled: true,
+      processMode: 'operator',
+      env: {
+        ADMIN_PORT: '8790',
+        ADMIN_TOKEN: 'configured-but-never-evaluated',
+      },
+      principalAuthenticationWired: true,
+    })).not.toThrow();
+  });
 });

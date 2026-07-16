@@ -109,7 +109,9 @@ psfn_require_production_launcher_env() {
   psfn_require_env_var "API_KEY" "production API must not rely on ALLOW_INSECURE_LOCAL_API" || return 1
   psfn_require_env_var "ADMIN_HOST" "explicit Garden/admin bind host" || return 1
   psfn_require_env_var "ADMIN_PORT" "explicit Garden/admin bind port" || return 1
-  psfn_require_env_var "ADMIN_TOKEN" "production admin transport must be authenticated" || return 1
+  if ! psfn_is_truthy_env_value "${PSFN_FLEET_AUTH:-}"; then
+    psfn_require_env_var "ADMIN_TOKEN" "production admin transport must be authenticated" || return 1
+  fi
   psfn_require_env_var "WORKSPACE_PATH" "production personal files root must be explicit" || return 1
   psfn_require_one_env_var \
     "GATEWAY_SESSION_HMAC_KEYS" \

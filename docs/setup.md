@@ -274,6 +274,23 @@ npm run agent:docker:continuous # Continuous/dev profile (isolated internal netw
 
 ## Optional Surface Wiring
 
+### Fleet-authenticated browser origin
+
+When the system-owned `fleet-auth.json` is present and `PSFN_FLEET_AUTH=1`, do
+not publish `ADMIN_HOST`/`ADMIN_PORT` as a browser endpoint. Terminate HTTPS at
+the exact `canonicalOrigin`, route the full origin to the gateway API listener,
+and open `/fleet`. A direct TLS listener must receive no forwarding headers. A
+single reverse proxy requires `FLEET_SSO_TRUST_PROXY=true`, exact forwarded
+host/proto metadata, and an independent network restriction that admits only
+that proxy. Non-loopback gateway-to-Garden traffic must configure the complete
+`FLEET_SSO_GARDEN_TLS_*` mTLS tuple; partial configuration fails startup.
+
+The optional static Companion UI may be registered with
+`FLEET_SSO_COMPANION_UI_ORIGIN`. If the fleet has more than one companion, also
+set `FLEET_SSO_COMPANION_UI_COMPANION_ID` to one exact registered UUID. It is
+then available only at authenticated `/companion-ui/`; the configured origin is
+internal wiring, never a second browser edge.
+
 ### Garden operator surface + public API
 
 ```dotenv
@@ -289,7 +306,11 @@ API_KEY=...
 ADMIN_TRANSPORT_SOCKET=./runtime/sockets/garden-admin.sock
 ```
 
-When `admin-ui/build` is present, Garden is served from the admin host root, for example `http://127.0.0.1:3001/`. There is no `/garden` prefix on the integrated SPA route.
+With fleet auth disabled, `admin-ui/build` is served from the internal or
+loopback admin host root, for example `http://127.0.0.1:3001/`. With fleet auth
+enabled, the same Garden is reachable only through
+`/companions/<companion-uuid>/garden/` on the canonical gateway HTTPS origin;
+`ADMIN_TOKEN` and `ADMIN_ALLOW_INSECURE` are rejected on that operator process.
 
 ### Discord voice
 

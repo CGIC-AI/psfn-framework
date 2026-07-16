@@ -504,6 +504,12 @@ describe('start-gateway-agent launcher supervision', () => {
     expect(launcher).toContain('source "${ROOT_DIR}/scripts/system/runtime-env.sh"');
   });
 
+  it('scrubs legacy admin credentials from fleet-auth gateway and operator processes', () => {
+    const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
+    expect(launcher).toContain('env -u ADMIN_TOKEN -u ADMIN_ALLOW_INSECURE');
+    expect(launcher).toContain('ADMIN_ALLOW_INSECURE|ADMIN_TOKEN)');
+  });
+
   it('launches the agent with a non-secret environment allowlist', () => {
     const launcher = readFileSync(join(repoRoot, 'scripts/start-gateway-agent.sh'), 'utf8');
     const agentAllowlist = launcher.slice(
@@ -1396,6 +1402,29 @@ describe('psfn_source_dotenv_preserving_existing_env', () => {
           'export ADMIN_HOST=0.0.0.0 ADMIN_PORT=10054 ADMIN_TOKEN=test-admin-token',
           'export WORKSPACE_PATH=/srv/psfn/purrsephone',
           'export GATEWAY_SESSION_HMAC_KEYS=test-keyring',
+          'psfn_require_production_launcher_env',
+          'printf ok',
+        ].join('; '),
+      ],
+      { cwd: repoRoot, encoding: 'utf8' },
+    );
+
+    expect(output).toBe('ok');
+  });
+
+  it('does not require a legacy ADMIN_TOKEN for production fleet authentication', () => {
+    const output = execFileSync(
+      'bash',
+      [
+        '-lc',
+        [
+          `source ${JSON.stringify(runtimeEnvPath)}`,
+          'export PSFN_RUNTIME_LAYOUT_MODE=production PSFN_FLEET_AUTH=1',
+          'export API_HOST=0.0.0.0 API_PORT=10053 API_KEY=test-api-key',
+          'export ADMIN_HOST=0.0.0.0 ADMIN_PORT=10054',
+          'export WORKSPACE_PATH=/srv/psfn/purrsephone',
+          'export GATEWAY_SESSION_HMAC_KEYS=test-keyring',
+          'unset ADMIN_TOKEN',
           'psfn_require_production_launcher_env',
           'printf ok',
         ].join('; '),

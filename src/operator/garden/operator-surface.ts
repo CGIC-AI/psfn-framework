@@ -1,5 +1,8 @@
+import { readFileSync } from 'node:fs';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
+import { createServer as createHttpsServer, type Server as HttpsServer } from 'node:https';
 import type { Duplex } from 'node:stream';
+import type { TLSSocket } from 'node:tls';
 import type { Lifecycle } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
@@ -22,6 +25,7 @@ import {
 } from './transport-client.js';
 import type { GardenAdminTransportClientEndpoint } from './transport-paths.js';
 import { validateAdminAuthStartupPolicy } from './auth-policy.js';
+import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import { parseAdminJsonBody } from './request-body.js';
 import { parseConfirmationResolveRequest } from './confirmation-resolve-request.js';
 import type { ConfirmationOperatorAuthContext } from './admin-contract.js';
@@ -40,6 +44,11 @@ import {
   type GardenAdmissionMode,
 } from './garden-admission.js';
 import type { GardenFleetChildAssertionClient } from './fleet-child-assertion-client.js';
+import {
+  requireMtlsPeerFileConfig,
+  verifyPeerCertificateSpiffeUri,
+  type RequiredMtlsPeerFileConfig,
+} from '../../shared/net/mtls.js';
 
 const log = createComponentLogger('GardenOperatorSurface');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -64,6 +73,8 @@ export interface GardenOperatorSurfaceConfig {
   operatorConfirmationResolver?: GatewayOperatorConfirmationClient;
   /** Authenticated operator→gateway exchange for an exact agent-audience child capability. */
   fleetChildAssertions?: GardenFleetChildAssertionClient;
+  /** Required for a non-loopback fleet-auth Garden listener. */
+  fleetSsoTls?: RequiredMtlsPeerFileConfig;
 }
 
 /**
@@ -96,7 +107,7 @@ interface GardenOperatorHealthPayload {
 }
 
 export class GardenOperatorSurface implements Lifecycle {
-  private readonly server: Server;
+  private readonly server: Server | HttpsServer;
   private readonly transport: AdminServerTransport;
   private readonly proxy: GardenAdminTransportProxy;
   private readonly admission: GardenAdmissionMode;
@@ -111,7 +122,17 @@ export class GardenOperatorSurface implements Lifecycle {
     this.admission = resolveGardenAdmissionMode(modeSelection);
     this.transport = new AdminServerTransport(log);
     this.proxy = new GardenAdminTransportProxy(config.transportEndpoint);
-    this.server = createServer((req, res) => this.handleRequest(req, res));
+    const handler = (req: IncomingMessage, res: ServerResponse) => this.handleRequest(req, res);
+    this.server = config.fleetSsoTls
+      ? createHttpsServer({
+          ca: readFileSync(config.fleetSsoTls.caPath),
+          cert: readFileSync(config.fleetSsoTls.certPath),
+          key: readFileSync(config.fleetSsoTls.keyPath),
+          requestCert: true,
+          rejectUnauthorized: true,
+          minVersion: 'TLSv1.3',
+        }, handler)
+      : createServer(handler);
     this.server.on('upgrade', (req, socket, head) => this.handleUpgrade(req, socket, head));
   }
 
@@ -120,8 +141,26 @@ export class GardenOperatorSurface implements Lifecycle {
   }
 
   async start(): Promise<void> {
+    assertFleetAuthLegacySurfacesUnavailable({
+      fleetAuthEnabled: this.admission.kind === 'fleet-principal',
+      processMode: 'operator',
+      env: {
+        ADMIN_PORT: String(this.config.port),
+        ...(this.config.token ? { ADMIN_TOKEN: this.config.token } : {}),
+        ...(this.config.allowInsecureWithoutToken ? { ADMIN_ALLOW_INSECURE: 'true' } : {}),
+      },
+      principalAuthenticationWired: this.admission.kind === 'fleet-principal',
+    });
     const host = this.config.host ?? '127.0.0.1';
-    if (isLegacyTokenGardenAdmission(this.admission)) {
+    if (this.admission.kind === 'fleet-principal') {
+      const loopback = host === '127.0.0.1' || host === '::1' || host === 'localhost';
+      if (!loopback && !this.config.fleetSsoTls) {
+        throw new Error('Non-loopback fleet-auth Garden requires HTTPS mTLS with SPIFFE authorization');
+      }
+      if (this.config.fleetSsoTls) {
+        requireMtlsPeerFileConfig(this.config.fleetSsoTls, 'Fleet SSO Garden server TLS');
+      }
+    } else if (isLegacyTokenGardenAdmission(this.admission)) {
       validateAdminAuthStartupPolicy({
         host,
         port: this.config.port,
@@ -171,6 +210,10 @@ export class GardenOperatorSurface implements Lifecycle {
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
+    if (!this.authorizeFleetPeer(req)) {
+      sendText(res, 403, 'Forbidden');
+      return;
+    }
     if (this.admission.kind === 'fleet-principal') {
       void this.handleFleetRequest(req, res);
       return;
@@ -185,7 +228,9 @@ export class GardenOperatorSurface implements Lifecycle {
   ): void {
     handleAdminRequest(req, res, {
       token,
-      checkAuth: (request, response) => checkAdminRequestAuth(request, response, this.config.token),
+      checkAuth: this.admission.kind === 'fleet-principal'
+        ? () => true
+        : (request, response) => checkAdminRequestAuth(request, response, this.config.token),
       isGardenUiEnabled: () => this.transport.isGardenUiEnabled(),
       serveGardenBuildAsset: (path, request, response) => this.transport.serveGardenBuildAsset(path, request, response),
       serveGardenPage: (path, request, response) => this.transport.serveGardenPage(path, request, response),
@@ -197,10 +242,17 @@ export class GardenOperatorSurface implements Lifecycle {
           error: toErrorMessage(error),
         });
       },
+      trustedRequestCapability: this.admission.kind === 'fleet-principal',
+      requireAuthForPublicRoutes: this.admission.kind === 'fleet-principal',
     });
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    if (!this.authorizeFleetPeer(req)) {
+      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     if (this.admission.kind === 'fleet-principal') {
       void this.handleFleetUpgrade(req, socket, head);
       return;
@@ -321,6 +373,22 @@ export class GardenOperatorSurface implements Lifecycle {
       socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
       socket.destroy();
     }
+  }
+
+  private authorizeFleetPeer(req: IncomingMessage): boolean {
+    if (this.admission.kind !== 'fleet-principal') return true;
+    if (!this.config.fleetSsoTls) {
+      const address = req.socket.remoteAddress;
+      return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+    }
+    const socket = req.socket as TLSSocket;
+    if (!socket.authorized) return false;
+    const certificate = socket.getPeerCertificate();
+    return Object.keys(certificate).length > 0
+      && verifyPeerCertificateSpiffeUri(
+        certificate,
+        this.config.fleetSsoTls.expectedPeerSpiffeUri,
+      ) === null;
   }
 
   private route(

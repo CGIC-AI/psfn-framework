@@ -143,9 +143,30 @@ export interface RequestCapabilityVerifyInput extends RequestCapabilitySignInput
 
 export interface RequestCapabilityVerifier {
   verifyOperator(input: RequestCapabilityVerifyInput): VerifiedRequestCapability;
+  /**
+   * Verify the signed gateway-to-operator envelope at the mTLS/loopback hop.
+   * The gateway has already hashed the exact body bytes and forwards them
+   * unchanged with an exact Content-Length; this verifies the signed route,
+   * authorization, length, and decision metadata before the operator reads
+   * the body stream.
+   */
+  verifyOperatorTransport(input: RequestCapabilityTransportVerifyInput): VerifiedRequestCapability;
   verifyAgent(input: RequestCapabilityVerifyInput & {
     readonly parent: RequestCapabilityParentBinding;
   }): VerifiedRequestCapability;
+}
+
+export interface RequestCapabilityTransportVerifyInput {
+  readonly token: string;
+  readonly companionId: string;
+  readonly method: GardenForwardMethod;
+  readonly canonicalRequestTarget: string;
+  readonly action: FleetAuthAction;
+  readonly authorizationDigest: string;
+  readonly bodyLength: number;
+  readonly requestId: string;
+  readonly decisionId: string;
+  readonly nowSeconds?: number;
 }
 
 export interface VerifiedRequestCapability {
@@ -156,8 +177,11 @@ export interface VerifiedRequestCapability {
   readonly requestId: string;
   readonly decisionId: string;
   readonly jti: string;
+  readonly method: GardenForwardMethod;
+  readonly canonicalRequestTarget: string;
   readonly action: FleetAuthAction;
   readonly bodyDigest: string;
+  readonly bodyLength: number;
   readonly resourceDigest: string;
   readonly versions: RequestCapabilityAuthorityVersions;
   readonly targetDigest: string;
@@ -871,14 +895,14 @@ export function createRequestCapabilityVerifier(
   config: RequestCapabilityVerifierConfig,
 ): RequestCapabilityVerifier {
   const parsedConfig = parseVerifierConfig(config);
-  const verifyExpected = (
-    input: RequestCapabilityVerifyInput,
+  const verifyToken = (
+    token: string,
     audienceKind: 'operator' | 'agent',
-    expectedParent?: RequestCapabilityParentBinding,
-  ): VerifiedRequestCapability => {
-    const nowSeconds = input.nowSeconds ?? Math.floor(Date.now() / 1000);
+    nowSecondsInput?: number,
+  ): { claims: RequestCapabilityClaims; key: ParsedVerifierKey } => {
+    const nowSeconds = nowSecondsInput ?? Math.floor(Date.now() / 1000);
     requireInteger(nowSeconds, 'verification time', 1);
-    const compact = parseCompactToken(input.token);
+    const compact = parseCompactToken(token);
     const header = parseHeader(compact.encodedHeader);
     const key = selectVerifierKey(parsedConfig.keys, header.kid);
     if (key.status === 'revoked') reject('key is revoked');
@@ -899,6 +923,47 @@ export function createRequestCapabilityVerifier(
     if (claims.iat < key.notBeforeSeconds || claims.exp > key.notAfterSeconds) {
       reject('capability is outside the key validity window');
     }
+    return { claims, key };
+  };
+  const verifiedCapability = (
+    claims: RequestCapabilityClaims,
+    key: ParsedVerifierKey,
+  ): VerifiedRequestCapability => Object.freeze({
+    issuer: claims.iss,
+    keyId: key.kid,
+    audience: claims.aud,
+    companionId: claims.companion_id,
+    requestId: claims.request_id,
+    decisionId: claims.decision_id,
+    jti: claims.jti,
+    method: claims.method,
+    canonicalRequestTarget: claims.request_target,
+    action: claims.action,
+    bodyDigest: claims.body_digest,
+    bodyLength: claims.body_length,
+    resourceDigest: claims.resource_digest,
+    versions: Object.freeze({
+      authorityGeneration: claims.versions.authority_generation,
+      globalAuthEpoch: claims.versions.global_auth_epoch,
+      sessionAuthnVersion: claims.versions.session_authn_version,
+      sessionAuthzVersion: claims.versions.session_authz_version,
+      bindingVersion: claims.versions.binding_version,
+      grantVersion: claims.versions.grant_version,
+      policyVersion: claims.versions.policy_version,
+    }),
+    targetDigest: claims.target_digest,
+    authorizationDigest: claims.authorization_digest,
+    issuedAt: claims.iat,
+    notBefore: claims.nbf,
+    expiresAt: claims.exp,
+    ...(claims.parent ? { parent: fromParentClaims(claims.parent) } : {}),
+  });
+  const verifyExpected = (
+    input: RequestCapabilityVerifyInput,
+    audienceKind: 'operator' | 'agent',
+    expectedParent?: RequestCapabilityParentBinding,
+  ): VerifiedRequestCapability => {
+    const { claims, key } = verifyToken(input.token, audienceKind, input.nowSeconds);
     assertClaimsBinding(claims, input);
     if (audienceKind === 'agent') {
       if (!claims.parent || !expectedParent) reject('agent parent binding is required');
@@ -907,36 +972,31 @@ export function createRequestCapabilityVerifier(
     } else if (claims.parent || expectedParent) {
       reject('operator capabilities must not contain a parent binding');
     }
-    return Object.freeze({
-      issuer: claims.iss,
-      keyId: key.kid,
-      audience: claims.aud,
-      companionId: claims.companion_id,
-      requestId: claims.request_id,
-      decisionId: claims.decision_id,
-      jti: claims.jti,
-      action: claims.action,
-      bodyDigest: claims.body_digest,
-      resourceDigest: claims.resource_digest,
-      versions: Object.freeze({
-        authorityGeneration: claims.versions.authority_generation,
-        globalAuthEpoch: claims.versions.global_auth_epoch,
-        sessionAuthnVersion: claims.versions.session_authn_version,
-        sessionAuthzVersion: claims.versions.session_authz_version,
-        bindingVersion: claims.versions.binding_version,
-        grantVersion: claims.versions.grant_version,
-        policyVersion: claims.versions.policy_version,
-      }),
-      targetDigest: claims.target_digest,
-      authorizationDigest: claims.authorization_digest,
-      issuedAt: claims.iat,
-      notBefore: claims.nbf,
-      expiresAt: claims.exp,
-      ...(claims.parent ? { parent: fromParentClaims(claims.parent) } : {}),
-    });
+    return verifiedCapability(claims, key);
   };
   return Object.freeze({
     verifyOperator: (input: RequestCapabilityVerifyInput) => verifyExpected(input, 'operator'),
+    verifyOperatorTransport: (input: RequestCapabilityTransportVerifyInput) => {
+      requireUuid(input.companionId, 'transport companionId');
+      requireUuid(input.requestId, 'transport requestId');
+      requireUuid(input.decisionId, 'transport decisionId');
+      requireDigest(input.authorizationDigest, 'transport authorizationDigest');
+      requireInteger(input.bodyLength, 'transport bodyLength');
+      const { claims, key } = verifyToken(input.token, 'operator', input.nowSeconds);
+      if (claims.companion_id !== input.companionId
+        || claims.aud !== `operator:${input.companionId}`
+        || claims.method !== input.method
+        || claims.request_target !== input.canonicalRequestTarget
+        || claims.action !== input.action
+        || !equalDigest(claims.authorization_digest, input.authorizationDigest)
+        || claims.body_length !== input.bodyLength
+        || claims.request_id !== input.requestId
+        || claims.decision_id !== input.decisionId
+        || claims.parent) {
+        reject('operator transport binding does not match');
+      }
+      return verifiedCapability(claims, key);
+    },
     verifyAgent: (input: RequestCapabilityVerifyInput & { parent: RequestCapabilityParentBinding }) => (
       verifyExpected(input, 'agent', input.parent)
     ),

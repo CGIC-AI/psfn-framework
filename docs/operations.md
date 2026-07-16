@@ -2,7 +2,7 @@
 
 This is the operator-facing runtime guide for the current repo-owned deployment model.
 
-Last updated: 2026-07-12.
+Last updated: 2026-07-16.
 
 ## Daily Runtime Commands
 
@@ -106,6 +106,54 @@ fed by the gateway connection registry plus the fleet roster. Setting
 `FLEET_STATUS_PORT` while `PSFN_MULTI_COMPANION` is off fails closed; a taken
 port fails closed. Fatigue/charge posture and tool-error counts are a documented
 follow-up and are not shown today.
+
+### Unified fleet human origin
+
+With `PSFN_FLEET_AUTH=1`, the gateway is the only browser origin. Open the
+exact HTTPS `canonicalOrigin` from `fleet-auth.json` at `/fleet`; unauthenticated
+browser requests are sent through the gateway-owned OAuth login. Authorized
+Garden routes are `/companions/<companion-uuid>/garden/...`. The optional static
+Companion UI is `/companion-ui/` and is bound by the server to one registered
+companion. The old direct Garden host/port is not a browser edge in this mode.
+
+For every Garden request, the gateway resolves the live OPL1.5 session/contact/
+grant/policy context for the companion encoded in the path. Only then does it
+mint and durably consume a short-lived, exact request capability and connect to
+that companion's Garden. Unknown companions, authorization denial, stale or
+revoked sessions, and missing upstream registrations all return the same 404
+before an upstream connection, so the edge does not enumerate the fleet.
+Browser cookies, bearer credentials, forwarding metadata, and caller-supplied
+capability assertions are stripped. Garden verifies the signed method, target,
+action, authorization digest, body length, request id, decision id, audience,
+and companion before stripping the assertion again at the agent boundary.
+
+There are two admitted HTTPS-origin shapes:
+
+- Direct TLS: exact canonical `Host`, no forwarding headers.
+- One trusted proxy: set `FLEET_SSO_TRUST_PROXY=true`; require exact canonical
+  `Host` and `X-Forwarded-Host`, `X-Forwarded-Proto: https`, optional exact
+  HTTPS port, and one IP-valued `X-Forwarded-For`. RFC `Forwarded`, lists, mixed
+  direct-TLS metadata, or mismatched callback origins fail closed. Restrict the
+  gateway listener to that proxy independently with NetworkPolicy/firewall.
+
+The local fleet launcher uses loopback Garden upstreams. Any non-loopback
+`FLEET_SSO_GARDEN_HOST` requires the complete `FLEET_SSO_GARDEN_TLS_*` tuple;
+the gateway validates the Garden SPIFFE URI and Garden validates the gateway
+SPIFFE URI. Partial TLS configuration aborts startup. In Helm, set
+`fleetAuth.enabled=true`, enable `ingress.gateway.tls`, and name an existing
+browser-trusted TLS Secret. The chart renders that gateway as the sole browser
+Ingress, cert-manager identities for gateway-to-Garden mTLS, and NetworkPolicy
+allowing Garden and the optional Companion UI only from gateway pods.
+
+Rollback keeps the same edge invariant. Capture the current values, certificate
+Secrets, and fleet owner backup before changing the flag. A fleet-on rollback
+may target only a revision that still has the unified router and sole-gateway
+Ingress. To disable fleet auth, first render and inspect the feature-off chart:
+Garden remains a ClusterIP/loopback internal service protected by
+`ADMIN_TOKEN`, with no Garden or Companion UI Ingress or hostPort. Never restore
+a historical direct privileged Garden edge. After either change, verify the
+gateway TLS host, `/fleet` login/callback, one authorized Garden, one denied
+cross-companion route, and a revoked session before declaring recovery.
 
 ### Fleet backups
 

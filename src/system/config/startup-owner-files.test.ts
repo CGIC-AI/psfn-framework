@@ -16,6 +16,7 @@ import {
   saveChargePolicyConfig,
 } from './charge-policy-config.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
+import { isRecord } from '../../shared/utils/types.js';
 import {
   loadStartupCapabilityTierOwnerFile,
   loadStartupChargePolicyOwnerFile,
@@ -196,7 +197,6 @@ describe('startup owner-file loaders', () => {
             upperQuantile: 0.75,
             maxSamplesScanned: 2000,
           },
-          minPartnerIdleMinutes: 60,
           catchUpEntryLimit: 32,
           catchUpSummaryMaxTokens: 160,
           fullTurnMaxIdleHours: 72,
@@ -367,22 +367,17 @@ describe('startup owner-file loaders', () => {
     tempDirs.push(rootDir);
     writeRequiredOwnerExamples(rootDir, ['scheduler.json']);
 
+    const scheduler = JSON.parse(
+      readFileSync(join(seedDir, 'scheduler.seed.json'), 'utf8'),
+    ) as unknown;
+    if (!isRecord(scheduler)) {
+      throw new Error('scheduler seed fixture must be an object');
+    }
+    delete scheduler.artifactLifecycle;
+
     writeFileSync(
       join(rootDir, 'scheduler.json'),
-      `${JSON.stringify({
-        tickIntervalMs: 2_000,
-        heartbeatIntervalMs: 8_000,
-        backgroundMaintenance: {
-          intervalMs: 123_000,
-          ambientPresence: {
-            minIdleMinutes: 180,
-            minNoteIntervalMinutes: 360,
-          },
-          concernGrooming: {
-            maxActiveConcerns: 7,
-          },
-        },
-      }, null, 2)}\n`,
+      `${JSON.stringify(scheduler, null, 2)}\n`,
       'utf-8',
     );
 

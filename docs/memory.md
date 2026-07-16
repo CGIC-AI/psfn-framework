@@ -350,7 +350,7 @@ The memory system is actively maintained by runtime jobs:
 
 Background memory work is split into three lanes. Every cadence, threshold, and window is owned by `scheduler.json` (schema-guarded, fail closed on missing or invalid config); nothing is hardcoded.
 
-Salience retrieval is cadence-independent: ranking computes effective salience lazily from each memory's `lastAccessed` timestamp, while the scheduler-owned persistence sweep runs from `salienceDecayIntervalMs` (default 3,600,000 ms / hourly) to enforce floors and durably refresh stored values. Compression-guideline review is a separately gated step in the bundled heartbeat and does not share the salience-decay cadence. Context compaction itself remains threshold-driven by `compactionThresholdPct`; it has no timer cadence.
+Salience retrieval is cadence-independent: ranking computes effective salience lazily from each memory's `lastAccessed` timestamp, while the bundled scheduler-owned persistence sweep runs from `backgroundMaintenance.intervalMs` (default 3,600,000 ms / hourly) to enforce floors and durably refresh stored values. Compression-guideline review is a separately gated operation in that bundled heartbeat. Context compaction itself remains threshold-driven by `compactionThresholdPct`; it has no timer cadence.
 
 **Near-turn lane (`nearTurnMemory`)** — lightweight, deterministic, zero LLM spend (the lane holds no LLM provider at all). It keeps only extraction trigger evaluation (the existing per-turn and observed-group extraction wiring), active-memory review refresh (stale-memory maintenance reviews), and concern-candidate derivation (the intention appraisal path). Cadence keys:
 

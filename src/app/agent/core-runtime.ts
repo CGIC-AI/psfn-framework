@@ -116,7 +116,10 @@ import {
   type AgentFacingIcpAutonomyRuntime,
 } from '../../core/icp/agent-facing-autonomy.js';
 import { icpTargetChannelInitiationCommand } from './icp-target-channel-command.js';
-import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
+import type {
+  BackgroundWorkStorePort,
+  BackgroundWorkWelfarePolicy,
+} from '../../core/agent/background-work/store-port.js';
 
 const log = createComponentLogger('AgentCoreRuntime');
 
@@ -130,6 +133,8 @@ export interface AgentCoreRuntimeOptions {
   memoryStore?: MemoryStorePort;
   episodicStore?: EpisodicStorePort | null;
   backgroundWorkStore: BackgroundWorkStorePort;
+  /** Anti-starvation welfare policy (mmo9.7.4), resolved from scheduler.json. */
+  backgroundWorkWelfare?: Partial<BackgroundWorkWelfarePolicy>;
   contactStore?: ContactStorePort;
   card: CharacterCardV2;
   systemPrompt: string;
@@ -299,6 +304,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     observerEvalSidecar,
     appCache,
     backgroundWorkStore: options.backgroundWorkStore,
+    ...(options.backgroundWorkWelfare ? { backgroundWorkWelfare: options.backgroundWorkWelfare } : {}),
     contactTrackingGate,
     ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
   });

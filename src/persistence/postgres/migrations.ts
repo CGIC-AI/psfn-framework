@@ -1224,6 +1224,51 @@ export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
     ON agent_background_work_jobs (completed_at_ms ASC, job_id ASC)
     WHERE state IN ('succeeded', 'failed', 'stale_discarded');
   `,
+  // Anti-starvation welfare aging (psfn-framework-mmo9.7.4). A background job that
+  // is repeatedly deferred by sustained foreground turns accrues durable defer
+  // pressure so it can eventually be admitted into a bounded welfare-reserve slot
+  // instead of starving forever. `defer_count`/`first_deferred_at_ms` are the
+  // aging boost columns the claimNext eligibility predicate reads (an in-memory
+  // boost alone cannot survive the process-restart / multi-replica boundary);
+  // `welfare_claimed` marks a running job admitted via the welfare bypass so the
+  // reserve cap can be counted and the foreground effect-fence can grant it a
+  // protected completion. All three are additive with fail-closed defaults, so
+  // pre-mmo9.7.4 rows and every non-welfare claim path stay byte-identical.
+  `ALTER TABLE agent_background_work_jobs
+    ADD COLUMN IF NOT EXISTS defer_count INTEGER NOT NULL DEFAULT 0;`,
+  `ALTER TABLE agent_background_work_jobs
+    ADD COLUMN IF NOT EXISTS first_deferred_at_ms BIGINT;`,
+  `ALTER TABLE agent_background_work_jobs
+    ADD COLUMN IF NOT EXISTS welfare_claimed BOOLEAN NOT NULL DEFAULT false;`,
+  `ALTER TABLE agent_background_work_jobs
+    DROP CONSTRAINT IF EXISTS agent_background_work_jobs_defer_count_check;`,
+  `ALTER TABLE agent_background_work_jobs
+    ADD CONSTRAINT agent_background_work_jobs_defer_count_check CHECK (defer_count >= 0);`,
+  `ALTER TABLE agent_background_work_jobs
+    DROP CONSTRAINT IF EXISTS agent_background_work_jobs_first_deferred_at_ms_check;`,
+  `ALTER TABLE agent_background_work_jobs
+    ADD CONSTRAINT agent_background_work_jobs_first_deferred_at_ms_check
+      CHECK (first_deferred_at_ms IS NULL OR first_deferred_at_ms >= 0);`,
+  // A welfare_claimed marker is only meaningful while the row is running; a
+  // non-running row must never carry it, matching the lease-field invariant.
+  `ALTER TABLE agent_background_work_jobs
+    DROP CONSTRAINT IF EXISTS agent_background_work_jobs_welfare_claimed_check;`,
+  `ALTER TABLE agent_background_work_jobs
+    ADD CONSTRAINT agent_background_work_jobs_welfare_claimed_check
+      CHECK (state = 'running' OR welfare_claimed = false);`,
+  // Bounded welfare-eligibility scan: find the oldest runnable jobs carrying
+  // defer pressure without a sequential scan of the whole table.
+  `
+  CREATE INDEX IF NOT EXISTS idx_agent_background_work_welfare_aging
+    ON agent_background_work_jobs (defer_count DESC, first_deferred_at_ms ASC, created_at_ms ASC)
+    WHERE state IN ('queued', 'deferred', 'retry_wait');
+  `,
+  // Count concurrently-running welfare-admitted jobs against the reserve cap.
+  `
+  CREATE INDEX IF NOT EXISTS idx_agent_background_work_welfare_running
+    ON agent_background_work_jobs (welfare_claimed)
+    WHERE state = 'running' AND welfare_claimed = true;
+  `,
 ];
 
 export const POSTGRES_BACKGROUND_WORK_MIGRATION_ADVISORY_LOCK = [

@@ -242,6 +242,30 @@ export const DEFAULT_BACKGROUND_MAINTENANCE_CONFIG: BackgroundMaintenanceConfig 
 };
 
 /**
+ * Anti-starvation welfare reserve for durable background work (mmo9.7.4). A
+ * background/reflection job repeatedly deferred by sustained foreground turns
+ * accrues durable defer pressure; once it has been foreground-deferred
+ * `deferThreshold` times OR its first foreground defer is at least
+ * `ageThresholdMs` old, it becomes eligible to be admitted past the foreground
+ * exclusion into one of `reserveSlots` globally bounded welfare slots, then runs
+ * to a protected completion. This is Charter 8.8/8.9's ethical floor: reflection
+ * and rest yield to conversation but are guaranteed a bounded slice rather than
+ * being starved forever. Optional block — the conservative defaults apply when
+ * absent. `reserveSlots: 0` disables welfare admission (fail-closed to FIFO).
+ */
+export interface BackgroundWorkWelfareConfig {
+  deferThreshold: number;
+  ageThresholdMs: number;
+  reserveSlots: number;
+}
+
+export const DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG: BackgroundWorkWelfareConfig = {
+  deferThreshold: 8,
+  ageThresholdMs: 300_000,
+  reserveSlots: 1,
+};
+
+/**
  * Social-graph builder worker tuning (E4.2). The worker proposes social-graph
  * edges from accumulated room evidence and only acts on memories past its
  * watermark. Its cadence is the shared `backgroundMaintenance.intervalMs`.
@@ -636,6 +660,7 @@ export interface SchedulerRuntimeConfig {
   weightedThoughtOutreach: WeightedThoughtOutreachConfig;
   icpAutonomy: IcpAutonomySchedulerConfig;
   introspectionAudit?: IntrospectionAuditConfig;
+  backgroundWorkWelfare?: BackgroundWorkWelfareConfig;
 }
 
 interface SchedulerRuntimeLoadOptions {
@@ -1463,6 +1488,41 @@ function validateIntrospectionAuditConfig(
   };
 }
 
+function toNonNegativeInteger(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0) {
+    throw new Error(`Invalid scheduler config: ${field} must be an integer >= 0`);
+  }
+  return value;
+}
+
+function validateBackgroundWorkWelfareConfig(
+  value: unknown,
+  sourcePath: string,
+): BackgroundWorkWelfareConfig | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: backgroundWorkWelfare must be an object`);
+  }
+  const reserveSlots = toNonNegativeInteger(
+    value.reserveSlots ?? DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG.reserveSlots,
+    'backgroundWorkWelfare.reserveSlots',
+  );
+  // reserveSlots: 0 disables welfare; the aging thresholds are then irrelevant
+  // but still validated for shape so a later enable cannot ship a bad value.
+  return {
+    deferThreshold: toPositiveInteger(
+      value.deferThreshold ?? DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG.deferThreshold,
+      'backgroundWorkWelfare.deferThreshold',
+      1,
+    ),
+    ageThresholdMs: toNonNegativeInteger(
+      value.ageThresholdMs ?? DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG.ageThresholdMs,
+      'backgroundWorkWelfare.ageThresholdMs',
+    ),
+    reserveSlots,
+  };
+}
+
 function localTimeMinute(value: string): number {
   const [hour, minute] = value.split(':').map(Number);
   return hour * 60 + minute;
@@ -1546,6 +1606,9 @@ export function validateSchedulerConfig(raw: unknown, sourcePath: string): Sched
     ...(raw.introspectionAudit === undefined
       ? {}
       : { introspectionAudit: validateIntrospectionAuditConfig(raw.introspectionAudit, sourcePath) }),
+    ...(raw.backgroundWorkWelfare === undefined
+      ? {}
+      : { backgroundWorkWelfare: validateBackgroundWorkWelfareConfig(raw.backgroundWorkWelfare, sourcePath) }),
   };
   assertBackgroundMaintenanceRestWindowCoverage(validated, sourcePath);
   return validated;

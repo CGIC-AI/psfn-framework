@@ -5,6 +5,7 @@ import type {
   BackgroundWorkEnqueueResult,
   BackgroundWorkJobEnqueueResult,
   BackgroundWorkStorePort,
+  BackgroundWorkWelfarePolicy,
 } from '../../core/agent/background-work/store-port.js';
 import {
   BACKGROUND_WORK_REASON_CODES,
@@ -56,11 +57,38 @@ interface BackgroundWorkRow extends QueryResultRow {
   revision: number | string;
   deferred_from_state: string | null;
   deferred_from_available_at_ms: number | string | null;
+  defer_count: number | string;
+  first_deferred_at_ms: number | string | null;
+  welfare_claimed: boolean;
 }
 
 interface BackgroundWorkClaimCandidateRow extends QueryResultRow {
   job_id: string;
   logical_session_id: string;
+  via_welfare?: boolean;
+}
+
+/**
+ * Kinds eligible for welfare bypass (mmo9.7.4). `auto_compaction` is deliberately
+ * excluded: it rewrites the live session context a concurrent foreground turn is
+ * reading/appending, so granting it foreground-fence immunity would let a
+ * compaction race a turn. The other three kinds write to separate stores
+ * (memories, emotion/internal state, behavioral patterns) off a claim-time
+ * snapshot, so a bounded concurrent welfare run is safe.
+ */
+const WELFARE_INELIGIBLE_KIND = 'auto_compaction';
+
+function normalizeWelfarePolicy(
+  welfare: BackgroundWorkWelfarePolicy | undefined,
+): { deferThreshold: number; ageThresholdMs: number; reserveSlots: number } {
+  if (!welfare) return { deferThreshold: 1, ageThresholdMs: 0, reserveSlots: 0 };
+  const reserveSlots = safeInteger(welfare.reserveSlots, 'welfare.reserveSlots');
+  if (reserveSlots === 0) return { deferThreshold: 1, ageThresholdMs: 0, reserveSlots: 0 };
+  return {
+    deferThreshold: positiveInteger(welfare.deferThreshold, 'welfare.deferThreshold'),
+    ageThresholdMs: safeInteger(welfare.ageThresholdMs, 'welfare.ageThresholdMs'),
+    reserveSlots,
+  };
 }
 
 const JOB_COLUMN_NAMES = [
@@ -87,6 +115,9 @@ const JOB_COLUMN_NAMES = [
   'revision',
   'deferred_from_state',
   'deferred_from_available_at_ms',
+  'defer_count',
+  'first_deferred_at_ms',
+  'welfare_claimed',
 ] as const;
 const JOB_COLUMNS = JOB_COLUMN_NAMES.join(', ');
 
@@ -190,6 +221,11 @@ function mapRow(row: BackgroundWorkRow): StoredBackgroundWorkJob {
           'deferredFromAvailableAtMs',
         ),
       }),
+    deferCount: safeInteger(row.defer_count, 'deferCount'),
+    ...(row.first_deferred_at_ms === null
+      ? {}
+      : { firstDeferredAtMs: safeInteger(row.first_deferred_at_ms, 'firstDeferredAtMs') }),
+    welfareClaimed: row.welfare_claimed === true,
   };
 }
 
@@ -533,6 +569,8 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
             available_at_ms = GREATEST(available_at_ms, $2::bigint + $3::bigint),
             reason_code = 'foreground_active',
             updated_at_ms = $2::bigint,
+            defer_count = defer_count + 1,
+            first_deferred_at_ms = COALESCE(first_deferred_at_ms, $2::bigint),
             revision = revision + 1
         WHERE logical_session_id = $1
           AND state IN ('queued', 'retry_wait')
@@ -650,6 +688,8 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
           available_at_ms = GREATEST(available_at_ms, $3::bigint),
           reason_code = 'foreground_active',
           updated_at_ms = $2,
+          defer_count = defer_count + 1,
+          first_deferred_at_ms = COALESCE(first_deferred_at_ms, $2::bigint),
           revision = revision + 1
       WHERE logical_session_id = $1
         AND state IN ('queued', 'retry_wait')
@@ -691,55 +731,122 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     nowMs: number;
     leaseDurationMs: number;
     excludedLogicalSessionIds: readonly string[];
+    foregroundExcludedLogicalSessionIds?: readonly string[];
+    welfare?: BackgroundWorkWelfarePolicy;
   }): Promise<ClaimedBackgroundWorkJob | null> {
     const nowMs = safeInteger(input.nowMs, 'nowMs');
     const leaseDurationMs = positiveInteger(input.leaseDurationMs, 'leaseDurationMs');
+    // Hard exclusion (running sessions): never bypassed. Foreground exclusion:
+    // normally excluded, welfare may bypass. A session may appear in both lists;
+    // the hard list always wins.
     const excluded = input.excludedLogicalSessionIds.map(sessionId => (
       requireText(sessionId, 'excludedLogicalSessionId')
     ));
+    const foregroundExcluded = (input.foregroundExcludedLogicalSessionIds ?? []).map(sessionId => (
+      requireText(sessionId, 'foregroundExcludedLogicalSessionId')
+    ));
+    const welfare = normalizeWelfarePolicy(input.welfare);
     const leaseOwner = requireText(input.leaseOwner, 'leaseOwner');
     return withPostgresClient(this.pool, async (client) => {
       // SAFETY: foreground acquisition, enqueue, and claim all serialize on
       // the same per-session transaction advisory lock before mutating rows.
       // Candidate discovery deliberately takes no row lock: taking a job row
       // before this advisory lock would invert beginForeground's lock order.
+      //
+      // A candidate is admissible via the NORMAL path (no foreground contention)
+      // or, once it has crossed the welfare threshold (mmo9.7.4), via the WELFARE
+      // path which bypasses the foreground exclusion into one of a bounded number
+      // of reserve slots. Non-admissible rows are filtered out before ranking, so
+      // an inadmissible sibling (e.g. a foreground-blocked auto_compaction) never
+      // occupies the session's rank-1 slot ahead of a welfare-eligible job.
       const candidates = await client.query<BackgroundWorkClaimCandidateRow>(`
-        WITH ranked AS (
+        WITH admissible AS (
           SELECT
             candidate_job.job_id,
             candidate_job.logical_session_id,
             candidate_job.created_at_ms,
             candidate_job.kind,
-            ROW_NUMBER() OVER (
-              PARTITION BY candidate_job.logical_session_id
-              ORDER BY
-                candidate_job.created_at_ms ASC,
-                CASE candidate_job.kind
-                  WHEN 'intention_post_turn_hooks' THEN 0
-                  WHEN 'emotion_appraisal' THEN 1
-                  WHEN 'memory_extraction' THEN 2
-                  ELSE 3
-                END ASC,
-                candidate_job.job_id ASC
-            ) AS session_rank
+            -- via_welfare = NOT admissible-by-the-normal-path. The normal path
+            -- requires the job to be available (backoff elapsed) AND free of any
+            -- foreground contention; anything else that still reaches this CTE
+            -- got here through the welfare branch below.
+            NOT (
+              candidate_job.available_at_ms <= $1
+              AND NOT (candidate_job.logical_session_id = ANY($3::text[]))
+              AND NOT EXISTS (
+                SELECT 1
+                FROM agent_background_work_foreground_leases foreground
+                WHERE foreground.logical_session_id = candidate_job.logical_session_id
+                  AND foreground.expires_at_ms > $1
+              )
+            ) AS via_welfare
           FROM agent_background_work_jobs candidate_job
           WHERE candidate_job.state IN ('queued', 'deferred', 'retry_wait')
-            AND candidate_job.available_at_ms <= $1
             AND NOT (candidate_job.logical_session_id = ANY($2::text[]))
-            AND NOT EXISTS (
-              SELECT 1
-              FROM agent_background_work_foreground_leases foreground
-              WHERE foreground.logical_session_id = candidate_job.logical_session_id
-                AND foreground.expires_at_ms > $1
-            )
             AND NOT EXISTS (
               SELECT 1
               FROM agent_background_work_jobs running_job
               WHERE running_job.logical_session_id = candidate_job.logical_session_id
                 AND running_job.state = 'running'
             )
+            AND (
+              -- normal admission: available and no foreground contention
+              (
+                candidate_job.available_at_ms <= $1
+                AND NOT (candidate_job.logical_session_id = ANY($3::text[]))
+                AND NOT EXISTS (
+                  SELECT 1
+                  FROM agent_background_work_foreground_leases foreground
+                  WHERE foreground.logical_session_id = candidate_job.logical_session_id
+                    AND foreground.expires_at_ms > $1
+                )
+              )
+              -- welfare admission: aged past threshold, kind is welfare-safe, and a
+              -- reserve slot is free. Deliberately bypasses BOTH the foreground
+              -- exclusion AND the availability backoff: the deferred job's
+              -- available_at_ms was pushed past the foreground window, but the
+              -- welfare age is measured from the stable first_deferred_at_ms, so an
+              -- aged job runs now rather than waiting out a foreground that never ends.
+              OR (
+                $6 > 0
+                AND candidate_job.kind <> '${WELFARE_INELIGIBLE_KIND}'
+                AND (
+                  candidate_job.defer_count >= $4
+                  OR (
+                    candidate_job.first_deferred_at_ms IS NOT NULL
+                    AND $1 - candidate_job.first_deferred_at_ms >= $5
+                  )
+                )
+                AND (
+                  SELECT COUNT(*)
+                  FROM agent_background_work_jobs welfare_running
+                  WHERE welfare_running.state = 'running'
+                    AND welfare_running.welfare_claimed = true
+                ) < $6
+              )
+            )
+        ), ranked AS (
+          SELECT
+            admissible.job_id,
+            admissible.logical_session_id,
+            admissible.created_at_ms,
+            admissible.kind,
+            admissible.via_welfare,
+            ROW_NUMBER() OVER (
+              PARTITION BY admissible.logical_session_id
+              ORDER BY
+                admissible.created_at_ms ASC,
+                CASE admissible.kind
+                  WHEN 'intention_post_turn_hooks' THEN 0
+                  WHEN 'emotion_appraisal' THEN 1
+                  WHEN 'memory_extraction' THEN 2
+                  ELSE 3
+                END ASC,
+                admissible.job_id ASC
+            ) AS session_rank
+          FROM admissible
         )
-        SELECT job_id, logical_session_id
+        SELECT job_id, logical_session_id, via_welfare
         FROM ranked
         WHERE session_rank = 1
         ORDER BY
@@ -751,7 +858,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
             ELSE 3
           END ASC,
           job_id ASC
-      `, [nowMs, excluded]);
+      `, [nowMs, excluded, foregroundExcluded, welfare.deferThreshold, welfare.ageThresholdMs, welfare.reserveSlots]);
 
       for (const candidate of candidates.rows) {
         const lock = await client.query<{ acquired: boolean }>(`
@@ -763,33 +870,76 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
           WHERE logical_session_id = $1 AND expires_at_ms <= $2
         `, [candidate.logical_session_id, nowMs]);
 
-        const claimed = await client.query<BackgroundWorkRow>(`
-          UPDATE agent_background_work_jobs job
-          SET state = 'running',
-              reason_code = 'started',
-              lease_owner = $1,
-              lease_expires_at_ms = $2::bigint + $3::bigint,
-              updated_at_ms = $2,
-              deferred_from_state = NULL,
-              deferred_from_available_at_ms = NULL,
-              revision = revision + 1
-          WHERE job.job_id = $4
-            AND job.state IN ('queued', 'deferred', 'retry_wait')
-            AND job.available_at_ms <= $2
-            AND NOT EXISTS (
-              SELECT 1
-              FROM agent_background_work_foreground_leases foreground
-              WHERE foreground.logical_session_id = job.logical_session_id
-                AND foreground.expires_at_ms > $2
-            )
-            AND NOT EXISTS (
-              SELECT 1
-              FROM agent_background_work_jobs running_job
-              WHERE running_job.logical_session_id = job.logical_session_id
-                AND running_job.state = 'running'
-            )
-          RETURNING ${qualifiedJobColumns('job')}
-        `, [leaseOwner, nowMs, leaseDurationMs, candidate.job_id]);
+        const claimed = candidate.via_welfare === true
+          ? await client.query<BackgroundWorkRow>(`
+            UPDATE agent_background_work_jobs job
+            SET state = 'running',
+                reason_code = 'started',
+                lease_owner = $1,
+                lease_expires_at_ms = $2::bigint + $3::bigint,
+                updated_at_ms = $2,
+                deferred_from_state = NULL,
+                deferred_from_available_at_ms = NULL,
+                welfare_claimed = true,
+                revision = revision + 1
+            WHERE job.job_id = $4
+              AND job.state IN ('queued', 'deferred', 'retry_wait')
+              AND job.kind <> '${WELFARE_INELIGIBLE_KIND}'
+              AND $7 > 0
+              AND (
+                job.defer_count >= $5
+                OR (job.first_deferred_at_ms IS NOT NULL AND $2 - job.first_deferred_at_ms >= $6)
+              )
+              AND (
+                SELECT COUNT(*)
+                FROM agent_background_work_jobs welfare_running
+                WHERE welfare_running.state = 'running'
+                  AND welfare_running.welfare_claimed = true
+              ) < $7
+              AND NOT EXISTS (
+                SELECT 1
+                FROM agent_background_work_jobs running_job
+                WHERE running_job.logical_session_id = job.logical_session_id
+                  AND running_job.state = 'running'
+              )
+            RETURNING ${qualifiedJobColumns('job')}
+          `, [
+            leaseOwner,
+            nowMs,
+            leaseDurationMs,
+            candidate.job_id,
+            welfare.deferThreshold,
+            welfare.ageThresholdMs,
+            welfare.reserveSlots,
+          ])
+          : await client.query<BackgroundWorkRow>(`
+            UPDATE agent_background_work_jobs job
+            SET state = 'running',
+                reason_code = 'started',
+                lease_owner = $1,
+                lease_expires_at_ms = $2::bigint + $3::bigint,
+                updated_at_ms = $2,
+                deferred_from_state = NULL,
+                deferred_from_available_at_ms = NULL,
+                welfare_claimed = false,
+                revision = revision + 1
+            WHERE job.job_id = $4
+              AND job.state IN ('queued', 'deferred', 'retry_wait')
+              AND job.available_at_ms <= $2
+              AND NOT EXISTS (
+                SELECT 1
+                FROM agent_background_work_foreground_leases foreground
+                WHERE foreground.logical_session_id = job.logical_session_id
+                  AND foreground.expires_at_ms > $2
+              )
+              AND NOT EXISTS (
+                SELECT 1
+                FROM agent_background_work_jobs running_job
+                WHERE running_job.logical_session_id = job.logical_session_id
+                  AND running_job.state = 'running'
+              )
+            RETURNING ${qualifiedJobColumns('job')}
+          `, [leaseOwner, nowMs, leaseDurationMs, candidate.job_id]);
         if (claimed.rows[0]) return mapClaimedRow(claimed.rows[0]);
       }
       return null;
@@ -859,7 +1009,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
           OR job.revision <> $3
           OR job.lease_expires_at_ms <= $4
           THEN 'lease_lost'
-        WHEN EXISTS (
+        WHEN (NOT COALESCE(job.welfare_claimed, false)) AND EXISTS (
           SELECT 1
           FROM agent_background_work_foreground_leases foreground
           WHERE foreground.logical_session_id = job.logical_session_id
@@ -905,7 +1055,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
             OR job.revision <> $3
             OR job.lease_expires_at_ms <= $4
             THEN 'lease_lost'
-          WHEN EXISTS (
+          WHEN (NOT job.welfare_claimed) AND EXISTS (
             SELECT 1 FROM agent_background_work_foreground_leases foreground
             WHERE foreground.logical_session_id = job.logical_session_id
               AND foreground.expires_at_ms > $4
@@ -1006,7 +1156,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
             OR job.revision <> $3
             OR job.lease_expires_at_ms <= $4
             THEN 'lease_lost'
-          WHEN EXISTS (
+          WHEN (NOT job.welfare_claimed) AND EXISTS (
             SELECT 1 FROM agent_background_work_foreground_leases foreground
             WHERE foreground.logical_session_id = job.logical_session_id
               AND foreground.expires_at_ms > $4
@@ -1135,6 +1285,9 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
       lease_expires_at_ms = NULL,
       deferred_from_state = NULL,
       deferred_from_available_at_ms = NULL,
+      welfare_claimed = false,
+      defer_count = 0,
+      first_deferred_at_ms = NULL,
       revision = revision + 1
     `);
     return requireTransitionRow(row, input.jobId);
@@ -1161,6 +1314,12 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
           updated_at_ms = $4,
           lease_owner = NULL,
           lease_expires_at_ms = NULL,
+          welfare_claimed = false,
+          defer_count = defer_count + CASE WHEN $5 = 'foreground_active' THEN 1 ELSE 0 END,
+          first_deferred_at_ms = CASE
+            WHEN $5 = 'foreground_active' THEN COALESCE(first_deferred_at_ms, $4::bigint)
+            ELSE first_deferred_at_ms
+          END,
           revision = revision + 1
       WHERE job_id = $1 AND state = 'running' AND lease_owner = $2 AND revision = $3
       RETURNING ${JOB_COLUMNS}
@@ -1200,6 +1359,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
           lease_expires_at_ms = NULL,
           deferred_from_state = NULL,
           deferred_from_available_at_ms = NULL,
+          welfare_claimed = false,
           revision = revision + 1
       WHERE job_id = $1 AND state = 'running' AND lease_owner = $2 AND revision = $3
       RETURNING ${JOB_COLUMNS}
@@ -1287,6 +1447,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
               lease_expires_at_ms = NULL,
               deferred_from_state = NULL,
               deferred_from_available_at_ms = NULL,
+              welfare_claimed = false,
               revision = revision + 1
           WHERE job.job_id = $1 AND job.state = 'running' AND job.lease_owner = $4
             AND NOT EXISTS (
@@ -1356,6 +1517,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
           lease_expires_at_ms = NULL,
           deferred_from_state = NULL,
           deferred_from_available_at_ms = NULL,
+          welfare_claimed = false,
           revision = revision + 1
       WHERE state = 'running' AND lease_expires_at_ms <= $1
     `, [nowMs]);
@@ -1438,6 +1600,9 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
           lease_expires_at_ms = NULL,
           deferred_from_state = NULL,
           deferred_from_available_at_ms = NULL,
+          welfare_claimed = false,
+          defer_count = 0,
+          first_deferred_at_ms = NULL,
           revision = revision + 1
       WHERE job_id = $1 AND state = 'running' AND lease_owner = $2 AND revision = $3
       RETURNING ${JOB_COLUMNS}

@@ -285,6 +285,7 @@ export interface SubstrateAgentCompositionOptions {
   placesRegistryConfig?: PlacesRegistryConfig;
   backgroundWorkStore?: SubstrateAgentOptions['backgroundWorkStore'];
   backgroundWorkDisabled?: boolean;
+  backgroundWorkWelfare?: SubstrateAgentOptions['backgroundWorkWelfare'];
 }
 
 export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions): SubstrateAgent {
@@ -314,6 +315,7 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
       ...(options.backgroundWorkStore ? { backgroundWorkStore: options.backgroundWorkStore } : {}),
       ...(options.backgroundWorkDisabled ? { backgroundWorkDisabled: true } : {}),
+      ...(options.backgroundWorkWelfare ? { backgroundWorkWelfare: options.backgroundWorkWelfare } : {}),
     },
   );
 }

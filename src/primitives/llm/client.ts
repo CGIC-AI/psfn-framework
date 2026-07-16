@@ -696,6 +696,7 @@ export class LLMClient {
     correlation: ResolvedCorrelationMetadata | undefined,
     execute: (preemptSignal: AbortSignal) => Promise<T>,
     signal?: AbortSignal,
+    preemptionProtected?: boolean,
   ): Promise<T> {
     try {
       return await this.modelCallGate.run({
@@ -703,6 +704,10 @@ export class LLMClient {
         runtimeClass: this.resolveModelCallRuntimeClass(purpose, correlation),
         capacity: this.resolveModelCallCapacity(candidate),
         signal,
+        // mmo9.7.4: a welfare-escalated autonomous call declares
+        // LLMWorkSpec.preemptionProtected; honoring it here (not a second policy)
+        // stops the gate aborting the aged background job again.
+        ...(preemptionProtected ? { preemptionProtected: true } : {}),
       }, execute);
     } catch (error) {
       // A gate preemption is a deliberate yield to higher-priority work, not a
@@ -1500,6 +1505,9 @@ export class LLMClient {
           ...(streamWorkSpec?.maxOutputTokens !== undefined
             ? { outputTokenCap: streamWorkSpec.maxOutputTokens }
             : {}),
+          ...(streamWorkSpec?.preemptionProtected
+            ? { preemptionProtected: true }
+            : {}),
           onCandidateSelected: candidate => {
             requestedProvider ??= candidate.provider;
             requestedModel ??= candidate.model;
@@ -1820,6 +1828,9 @@ export class LLMClient {
           ...(options.workSpec?.maxOutputTokens !== undefined
             ? { outputTokenCap: options.workSpec.maxOutputTokens }
             : {}),
+          ...(options.workSpec?.preemptionProtected
+            ? { preemptionProtected: true }
+            : {}),
           onCandidateSelected: candidate => {
             requestedProvider ??= candidate.provider;
             requestedModel ??= candidate.model;
@@ -1945,6 +1956,7 @@ export class LLMClient {
       estimatedInputTokens?: number;
       signal?: AbortSignal;
       outputTokenCap?: number;
+      preemptionProtected?: boolean;
       onCandidateSelected?: (candidate: RoutingCandidate) => void;
     } = {},
   ): Promise<{ result: T; candidate: RoutingCandidate; attempts: number }> {
@@ -1994,6 +2006,7 @@ export class LLMClient {
         options.correlation,
         preemptSignal => execute(effectiveCandidate, attempt, preemptSignal),
         options.signal,
+        options.preemptionProtected,
       );
     }, options.correlation);
   }

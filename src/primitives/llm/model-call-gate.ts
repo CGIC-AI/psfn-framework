@@ -30,6 +30,17 @@ export interface ModelCallGateRequest {
   runtimeClass: RuntimeLaneClass;
   capacity?: ModelCallGateCapacity;
   signal?: AbortSignal;
+  /**
+   * Per-call override (mmo9.7.4): when true, this in-flight call is treated as
+   * non-preemptable for this acquire even though its lane class is normally
+   * preemptable. It is NOT a second preemption policy — the gate's single
+   * `preemptable` check still owns the mechanism; this only lets a
+   * welfare-escalated background job (an aged, repeatedly-preempted claim
+   * carrying `LLMWorkSpec.preemptionProtected`) run its model call to completion
+   * instead of being aborted again, which is what breaks the
+   * preempt→defer→preempt starvation loop. A non-preemptable lane is unaffected.
+   */
+  preemptionProtected?: boolean;
 }
 
 export interface ModelCallPreemptionTelemetry {
@@ -125,6 +136,7 @@ interface ActiveCall {
 interface PendingAcquire {
   sequence: number;
   runtimeClass: RuntimeLaneClass;
+  preemptionProtected: boolean;
   enqueuedAtMs: number;
   resolve: (slot: AcquiredSlot) => void;
   reject: (error: Error) => void;
@@ -176,6 +188,7 @@ export class ModelCallGate {
       resourceKey: request.resourceKey,
       runtimeClass: request.runtimeClass,
       capacity: request.capacity ?? DEFAULT_MODEL_CALL_GATE_CAPACITY,
+      preemptionProtected: request.preemptionProtected === true,
       ...(request.signal ? { signal: request.signal } : {}),
     });
     try {
@@ -200,6 +213,7 @@ export class ModelCallGate {
     resourceKey: string;
     runtimeClass: RuntimeLaneClass;
     capacity: ModelCallGateCapacity;
+    preemptionProtected: boolean;
     signal?: AbortSignal;
   }): Promise<AcquiredSlot> {
     if (request.signal?.aborted) {
@@ -222,19 +236,20 @@ export class ModelCallGate {
     const enqueuedAtMs = this.now();
 
     if (this.canGrantImmediately(queue, request.runtimeClass)) {
-      return this.grant(resourceKey, queue, request.runtimeClass);
+      return this.grant(resourceKey, queue, request.runtimeClass, request.preemptionProtected);
     }
 
     const victim = this.selectPreemptionVictim(queue, request.runtimeClass);
     if (victim) {
       this.preempt(resourceKey, queue, victim, request.runtimeClass, 0);
-      return this.grant(resourceKey, queue, request.runtimeClass);
+      return this.grant(resourceKey, queue, request.runtimeClass, request.preemptionProtected);
     }
 
     return await new Promise<AcquiredSlot>((resolve, reject) => {
       const pending: PendingAcquire = {
         sequence: this.nextSequence += 1,
         runtimeClass: request.runtimeClass,
+        preemptionProtected: request.preemptionProtected,
         enqueuedAtMs,
         resolve,
         reject,
@@ -342,11 +357,15 @@ export class ModelCallGate {
     resourceKey: string,
     queue: ResourceQueue,
     runtimeClass: RuntimeLaneClass,
+    preemptionProtected: boolean,
   ): AcquiredSlot {
     const active: ActiveCall = {
       sequence: this.nextSequence += 1,
       runtimeClass,
-      preemptable: isPreemptableLane(runtimeClass),
+      // Per-call override (mmo9.7.4): a normally-preemptable lane becomes
+      // non-preemptable for this call when the caller marks it protected. The
+      // single preemptable check still owns the mechanism (Law 12.4).
+      preemptable: isPreemptableLane(runtimeClass) && !preemptionProtected,
       preemptController: new AbortController(),
     };
     queue.active.push(active);
@@ -381,7 +400,7 @@ export class ModelCallGate {
       }
       const next = queue.pending.splice(nextIndex, 1)[0]!;
       next.cleanup();
-      next.resolve(this.grant(resourceKey, queue, next.runtimeClass));
+      next.resolve(this.grant(resourceKey, queue, next.runtimeClass, next.preemptionProtected));
     }
   }
 

@@ -114,7 +114,10 @@ import { createDriftVelocityEvidencePort } from '../../core/cogsec/drift/drift-e
 import { createSecondArrowEvidencePort } from '../../core/cogsec/drift/second-arrow-evidence-adapters.js';
 import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { enforceNetworkIsolationOnStartup } from './startup-guards.js';
-import { DEFAULT_INTROSPECTION_AUDIT_CONFIG } from '../../system/config/scheduler-config.js';
+import {
+  DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG,
+  DEFAULT_INTROSPECTION_AUDIT_CONFIG,
+} from '../../system/config/scheduler-config.js';
 import {
   createLLMCompanionLandmarkReflector,
   createLLMIntrospectionAuditor,
@@ -323,6 +326,8 @@ async function main(): Promise<void> {
     memoryStore: companionMemoryStore,
     episodicStore: companionEpisodicStore,
     backgroundWorkStore,
+    backgroundWorkWelfare:
+      schedulerConfig.backgroundWorkWelfare ?? DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG,
     contactStore: persistedContactStore,
     intentionRuntime: persistedIntentionRuntime,
     intentionProviders,

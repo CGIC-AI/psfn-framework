@@ -386,11 +386,46 @@ The cutover tooling:
 
 Production startup should not proceed until the cutover plan is clean.
 
+### Existing split fleets with shared per-companion owners
+
+Fleets created before per-companion owner-file rooting may still have
+`charge-policy.json` or `skills.json` (and potentially the other registered
+per-companion owners) under `SYSTEM_DATA_DIR`. Stop every fleet process, then
+inspect the explicit fan-out plan:
+
+```bash
+npm run migrate:system-owner-fleet
+```
+
+The plan prints one `--approve <owner-file>=<sha256>` argument for every
+system-root source it found. Review the enumerated companion destinations and
+run the apply command with all printed approvals, for example:
+
+```bash
+npm run migrate:system-owner-fleet -- --apply \
+  --approve charge-policy.json=<exact-sha256> \
+  --approve skills.json=<exact-sha256>
+```
+
+The command copies without overwrite or merge, records progress at
+`SYSTEM_DATA_DIR/migrations/system-owner-fleet-reroot.json`, verifies every
+destination digest, and only then removes the system-root source. If interrupted,
+repeat the exact apply command: only receipt-recorded, digest-identical partial
+copies are accepted. A changed source, changed fleet, pre-existing destination,
+or destination tamper is a hard conflict requiring operator investigation; the
+tool never chooses a winner. After completion, run
+`npm run verify:startup-owner-files` for each companion's runtime wiring before
+restarting the fleet.
+
 ## Migration Boundary Until Beta
 
 The live alpha migration boundary is defined in [`docs/specifications.md`](./specifications.md). Operationally, keep migration support explicit and temporary:
 
 - Use `npm run migrate:persistence-layout` for legacy shared-root data. Do not keep the old shared root mounted as a runtime fallback after cutover.
+- Use `npm run migrate:system-owner-fleet` only for the receipt-bearing alpha
+  fan-out of registered per-companion owner files left in a current split
+  fleet's system root. Do not point the single-companion persistence cutover at
+  `SYSTEM_DATA_DIR` and do not retain a shared fallback reader.
 - Use continuous/local `DATA_DIR` only for local development and smoke testing. Production must use split roots and fail closed on shared-root or partial split-root wiring.
 - Keep `WORKSPACE_PATH` as one companion's Personal Workspace. It must not
   overlap runtime data roots; live Purrsephone personal files live under

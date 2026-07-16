@@ -190,6 +190,15 @@ the normal agent role. A direct `npm run agent` launch must provide
 `GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN`; in multi-companion mode it must also
 provide the exact fleet tuple and `GATEWAY_COMPANION_AUTH_TOKEN`.
 
+If this is an existing split fleet that predates per-companion
+`charge-policy.json` or `skills.json`, do not copy the shared system file into
+one companion by hand and do not point `migrate:persistence-layout` at
+`SYSTEM_DATA_DIR`. Stop the fleet and use the digest-approved,
+receipt-bearing `npm run migrate:system-owner-fleet` workflow documented in
+[`docs/operations.md`](./operations.md#existing-split-fleets-with-shared-per-companion-owners).
+It enumerates every configured companion and retires the shared source only
+after every exact-byte destination verifies.
+
 ### Multi-companion workspaces
 
 Do not set per-companion workspace paths in `companions.json`. The fleet

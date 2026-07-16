@@ -34,6 +34,17 @@ Supported until beta:
 
 - Continuous/local shared-root layout through `DATA_DIR`. This is for local development and smoke testing only; production mode forbids shared-root operation.
 - Split-root persistence cutover through `npm run migrate:persistence-layout` and the installer `--migrate-data` path. The cutover tooling may read legacy shared roots, write manifests, and run existing intra-root cleanup, but production startup should stop until the plan is clean.
+- Explicit system-owner fleet re-rooting through
+  `npm run migrate:system-owner-fleet`. This one-time operator command may read
+  only `PER_COMPANION_OWNER_FILES` entries left at `SYSTEM_DATA_DIR`, fan their
+  exact approved bytes to every companion enumerated by `companions.json`, and
+  retire each source only after all destinations verify. Validation is the
+  exact source digest supplied per file, no-overwrite destination checks, and
+  the durable `migrations/system-owner-fleet-reroot.json` receipt recording
+  every source/destination digest. Partial retries must match that receipt and
+  the unchanged fleet. Remove the command and receipt reader before beta after
+  every split fleet has a completed receipt (or a plan proving no system-root
+  per-companion owners remain).
 - Startup owner-file hydration for currently supported legacy owner data. Hydration may seed missing owner files on first boot, migrate or warn on existing owner-file drift, and load model/provider registries with the existing migration paths, but it must not restore `.env` as mutable-settings authority.
 - Existing companion persistence migrations for legacy continuity files, session channel filenames, opaque pre-cutover SQLite database placement, contact `discord_user_id` identity rows, and the `core_memory.json` orientation filename. These flows may preserve or move opaque files but do not open them through a SQLite reader; they are not permission to add new parallel artifact names.
 - Tool-surface migration aliases documented in `docs/tool-surface.md`. They preserve model-facing continuity while unified tools roll out, and should be removed after canonical actions have stable adoption.

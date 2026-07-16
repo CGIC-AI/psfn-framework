@@ -556,6 +556,40 @@ The cutover tooling:
 
 Production startup should not proceed until the cutover plan is clean.
 
+### Owner-file migration framework
+
+Per-companion owner files (`charge-policy.json`, `skills.json`, and the other
+registered per-companion owners) were once rooted under `SYSTEM_DATA_DIR`.
+Current runtime requires each under its companion root with no legacy fallback,
+so re-rooting an existing fleet is a one-time, digest-approved migration built
+from three pieces:
+
+- **CLI** — `npm run migrate:system-owner-fleet`
+  (`src/app/maintenance/migrate-system-owner-fleet.ts`). The default mode is a
+  read-only plan; `--apply` executes; each source is gated by an explicit
+  `--approve <owner-file>=<exact-sha256>` argument so the operator confirms the
+  exact bytes being fanned out. It fans each approved source to every companion
+  enumerated in `companions.json` and retires the source only after all
+  destinations verify. Digests only — the command carries no secrets.
+- **Helm pre-upgrade hook** —
+  `deploy/helm/psfn/templates/owner-migration-upgrade.yaml`, gated by
+  `ownerMigration.enabled`. It runs as a `pre-upgrade` Job that first snapshots
+  the whole fleet, then runs the same compiled `--apply` migration with the
+  bound `--approve` digests, then runs packaged per-companion readiness probes;
+  Helm admits the new revision only after every probe passes. Missing claims,
+  wrong paths, image-digest failures, shared-companion claims, or an omitted
+  required hook fail the upgrade with the old revision left deployed.
+- **Receipts** — the durable schema-v4 receipt lands at
+  `SYSTEM_DATA_DIR/migrations/system-owner-fleet-reroot.json`; retired sources
+  move into receipt-owned quarantine directories under `SYSTEM_DATA_DIR`, and
+  the whole-fleet snapshot lands under the backups area (`BACKUP_ROOT_DIR`). The
+  receipt is what makes the migration crash-recoverable and idempotent on retry.
+
+The supported scope and beta-removal condition are recorded in
+`docs/specifications.md` (Live Alpha Migration Boundary). The exact operator
+procedure — snapshot, plan, approve, apply, and post-migration preflight —
+follows.
+
 ### Existing split fleets with shared per-companion owners
 
 Fleets created before per-companion owner-file rooting may still have

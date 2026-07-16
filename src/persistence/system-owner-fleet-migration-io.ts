@@ -11,6 +11,7 @@ import {
 } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
+  assertExactLinkCount,
   assertFilesystemIdentity,
   closePinnedDirectory,
   filesystemIdentityForDescriptor,
@@ -19,6 +20,7 @@ import {
   pinnedLeafExists,
   pinnedLeafPath,
   type FilesystemIdentity,
+  type InspectedPinnedFile,
   type PinnedDirectory,
 } from './pinned-filesystem.js';
 import {
@@ -35,6 +37,11 @@ export interface DestinationPins {
 export interface PublishedDestinationIdentities {
   destinationIdentity: FilesystemIdentity;
   temporaryIdentity: FilesystemIdentity;
+}
+
+export interface CompletedDestinationEvidence {
+  currentOwner: InspectedPinnedFile;
+  expectedCurrentLinkCount: 1 | 2;
 }
 
 function requireStagingDirectoryIdentity(destination: DestinationReceiptEntry): FilesystemIdentity {
@@ -89,6 +96,11 @@ function copySourceToTemporary(input: {
       file.sourceIdentity,
       `${file.ownerFile} migration source descriptor`,
     );
+    assertExactLinkCount(
+      { linkCount: Number(fstatSync(sourceDescriptor, { bigint: true }).nlink) },
+      1,
+      `${file.ownerFile} migration source descriptor`,
+    );
     const sourceBytes = readFileSync(sourceDescriptor);
     const temporaryOperationPath = pinnedLeafPath(input.stagingDirectory, temporaryLeaf);
     if (pinnedLeafExists(input.stagingDirectory, temporaryLeaf)) {
@@ -103,6 +115,11 @@ function copySourceToTemporary(input: {
       if (!stats.isFile()) {
         throw new Error(`Migration temporary must be a regular file: ${destination.temporaryPath}`);
       }
+      assertExactLinkCount(
+        { linkCount: Number(stats.nlink) },
+        1,
+        `${file.ownerFile} migration temporary`,
+      );
       assertFilesystemIdentity(
         filesystemIdentityForDescriptor(temporaryDescriptor),
         destination.temporaryIdentity,
@@ -173,6 +190,7 @@ function copySourceToTemporary(input: {
   if (temporary.sha256 !== file.sourceSha256 || temporary.bytes !== file.sourceBytes) {
     throw new Error(`Temporary copy verification failed for ${file.ownerFile}`);
   }
+  assertExactLinkCount(temporary, 1, `${file.ownerFile} migration temporary`);
   if (!destination.temporaryIdentity) {
     throw new Error(`Migration temporary identity was not durably recorded: ${destination.temporaryPath}`);
   }
@@ -294,6 +312,8 @@ export function verifyDestination(
     inspected,
     `${file.ownerFile} migration publish hard link`,
   );
+  assertExactLinkCount(inspected, 2, `${file.ownerFile} migration destination`);
+  assertExactLinkCount(temporary, 2, `${file.ownerFile} migration temporary`);
   return {
     destinationIdentity: { device: inspected.device, inode: inspected.inode },
     temporaryIdentity: { device: temporary.device, inode: temporary.inode },
@@ -304,7 +324,7 @@ export function verifyCompletedDestinationEvidence(
   file: FileReceiptEntry,
   destination: DestinationReceiptEntry,
   pins: DestinationPins,
-): void {
+): CompletedDestinationEvidence {
   // Completion binds retained evidence, while the canonical owner remains mutable.
   assertFilesystemIdentity(
     pins.destinationDirectory.identity,
@@ -319,7 +339,7 @@ export function verifyCompletedDestinationEvidence(
   if (!pinnedLeafExists(pins.destinationDirectory, file.ownerFile)) {
     throw new Error(`Verified destination disappeared for ${file.ownerFile}: ${destination.destinationPath}`);
   }
-  inspectPinnedRegularFile(
+  const currentOwner = inspectPinnedRegularFile(
     pins.destinationDirectory,
     file.ownerFile,
     `${file.ownerFile} migration destination`,
@@ -341,6 +361,20 @@ export function verifyCompletedDestinationEvidence(
       `${file.ownerFile} migration temporary`,
     );
   }
+  const retainsPublishedLink = currentOwner.device === temporary.device
+    && currentOwner.inode === temporary.inode;
+  const expectedCurrentLinkCount = retainsPublishedLink ? 2 : 1;
+  assertExactLinkCount(
+    currentOwner,
+    expectedCurrentLinkCount,
+    `${file.ownerFile} current receipt-bound owner`,
+  );
+  assertExactLinkCount(
+    temporary,
+    expectedCurrentLinkCount,
+    `${file.ownerFile} retained migration temporary`,
+  );
+  return { currentOwner, expectedCurrentLinkCount };
 }
 
 export function assertSourceUnchanged(
@@ -355,6 +389,7 @@ export function assertSourceUnchanged(
     file.ownerFile,
     `${file.ownerFile} migration source`,
   );
+  assertExactLinkCount(source, 1, `${file.ownerFile} migration source`);
   assertFilesystemIdentity(source, file.sourceIdentity, `${file.ownerFile} migration source`);
   if (source.sha256 !== file.sourceSha256 || source.bytes !== file.sourceBytes) {
     throw new Error(
@@ -412,6 +447,7 @@ export function verifyQuarantinedSource(
     `${file.ownerFile} migration quarantine`,
     { fsync: true },
   );
+  assertExactLinkCount(quarantine, 1, `${file.ownerFile} quarantined source`);
   assertFilesystemIdentity(quarantine, file.sourceIdentity, `${file.ownerFile} quarantined source`);
   if (quarantine.sha256 !== file.sourceSha256 || quarantine.bytes !== file.sourceBytes) {
     throw new Error(

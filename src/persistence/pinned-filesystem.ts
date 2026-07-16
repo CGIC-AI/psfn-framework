@@ -26,6 +26,7 @@ export interface PinnedDirectory {
 export interface InspectedPinnedFile extends FilesystemIdentity {
   bytes: number;
   sha256: string;
+  linkCount: number;
 }
 
 export interface ReadPinnedFile extends InspectedPinnedFile {
@@ -205,6 +206,7 @@ export function inspectPinnedRegularFile(
     sha256: inspected.sha256,
     device: inspected.device,
     inode: inspected.inode,
+    linkCount: inspected.linkCount,
   };
 }
 
@@ -229,6 +231,7 @@ export function readPinnedRegularFile(
       sha256: createHash('sha256').update(content).digest('hex'),
       device: stats.dev.toString(),
       inode: stats.ino.toString(),
+      linkCount: Number(stats.nlink),
       content,
     };
   } catch (error) {
@@ -238,6 +241,18 @@ export function readPinnedRegularFile(
     throw error;
   } finally {
     if (descriptor !== null) closeSync(descriptor);
+  }
+}
+
+export function assertExactLinkCount(
+  actual: Pick<InspectedPinnedFile, 'linkCount'>,
+  expected: number,
+  label: string,
+): void {
+  if (actual.linkCount !== expected) {
+    throw new Error(
+      `${label} has an unrecorded hard-link alias; expected ${expected} links, found ${actual.linkCount}`,
+    );
   }
 }
 

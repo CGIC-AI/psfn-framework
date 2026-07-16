@@ -9,11 +9,28 @@ export async function createPostgresContactStore(
   primaryUserId?: string,
   options: PostgresContactStoreOptions = {},
 ): Promise<ContactStorePort> {
+  const ownsPool = options.pool === undefined;
   const pool = options.pool ?? createPostgresPool(databaseUrl, {
     applicationName: options.applicationName ?? 'psfn-contacts',
     allowExitOnIdle: true,
     schema: options.schema,
   });
-  await ensurePostgresContactSchema(pool);
-  return new PostgresContactStore(pool, primaryUserId, options.exportDir);
+  try {
+    await ensurePostgresContactSchema(pool);
+    const store = new PostgresContactStore(pool, primaryUserId, options.exportDir);
+    await store.assertContactLifecycleLedgerHealthy();
+    return store;
+  } catch (error) {
+    if (ownsPool) {
+      try {
+        await pool.end();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          'Contact store startup failed and its owned Postgres pool could not close',
+        );
+      }
+    }
+    throw error;
+  }
 }

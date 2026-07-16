@@ -5,6 +5,13 @@ import type {
 import type { TrustLevel, TrustMutationSource } from '../../system/trust/types.js';
 import type { EmotionalSnapshot, EmotionalTimeSeriesPoint } from './store/emotional-baseline.js';
 import type {
+  ContactLifecycleGatewayResultInput,
+  ContactLifecyclePrepareOutcome,
+  ContactLifecycleRecoveryClaimInput,
+  ContactLifecycleRecoveryDeferralInput,
+  ContactLifecycleRecoveryLease,
+} from '../../shared/contracts/contact-lifecycle-ledger.js';
+import type {
   ChannelPrivacyLevel,
   Contact,
   ContactChannel,
@@ -62,6 +69,22 @@ export type MachineIntelligenceObservationMarkResult =
   | 'not_found';
 
 export interface ContactStorePort {
+  /** Prepare or exactly resume one companion-local contact authority saga. */
+  prepareContactLifecycleIntent(input: unknown): Awaitable<ContactLifecyclePrepareOutcome>;
+  /** Append one exact gateway result and advance the durable companion phase. */
+  recordContactLifecycleGatewayResult(
+    input: ContactLifecycleGatewayResultInput,
+  ): Awaitable<ContactLifecyclePrepareOutcome>;
+  /** Claim bounded startup/retry work with database-owned leases. */
+  claimContactLifecycleRecovery(
+    input: ContactLifecycleRecoveryClaimInput,
+  ): Awaitable<ContactLifecycleRecoveryLease[]>;
+  /** Release a failed recovery lease with durable exponential backoff. */
+  deferContactLifecycleRecovery(
+    input: ContactLifecycleRecoveryDeferralInput,
+  ): Awaitable<ContactLifecyclePrepareOutcome>;
+  /** Startup integrity check; corrupt authority state fails store creation. */
+  assertContactLifecycleLedgerHealthy(): Awaitable<void>;
   upsert(
     partial: Partial<Contact> & { displayName: string },
     options?: ContactUpsertMutationOptions,

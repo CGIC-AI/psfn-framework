@@ -1,5 +1,6 @@
 export { createPostgresContactStore } from './postgres-adapter/factory.js';
 export type { PostgresContactStoreOptions } from './postgres-adapter/options.js';
+export { ContactLifecycleLedgerDeniedError } from './postgres-adapter/contact-lifecycle-ledger-operations.js';
 export type {
   ContactChannelActivityRow,
   ContactIdentityRow,

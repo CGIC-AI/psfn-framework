@@ -25,12 +25,19 @@ import { installPostgresContactCrudOperations } from './crud-operations.js';
 import { installPostgresContactSharedOperations } from './shared-queries.js';
 import { installPostgresContactSocialGraphOperations } from './social-graph-queries.js';
 import { installPostgresContactTrustPolicyOperations } from './trust-policy-queries.js';
+import { installPostgresContactLifecycleLedgerOperations } from './contact-lifecycle-ledger-operations.js';
+import { installPostgresContactLifecycleRecoveryOperations } from './contact-lifecycle-recovery.js';
 
 export class PostgresContactStore implements ContactStorePort {
   readonly pool: Pool;
   readonly primaryUserId?: string;
   readonly exportDir: string | null;
 
+  declare prepareContactLifecycleIntent: ContactStorePort['prepareContactLifecycleIntent'];
+  declare recordContactLifecycleGatewayResult: ContactStorePort['recordContactLifecycleGatewayResult'];
+  declare claimContactLifecycleRecovery: ContactStorePort['claimContactLifecycleRecovery'];
+  declare deferContactLifecycleRecovery: ContactStorePort['deferContactLifecycleRecovery'];
+  declare assertContactLifecycleLedgerHealthy: ContactStorePort['assertContactLifecycleLedgerHealthy'];
   declare upsert: ContactStorePort['upsert'];
   declare getById: ContactStorePort['getById'];
   declare getByDiscordUserId: ContactStorePort['getByDiscordUserId'];
@@ -113,3 +120,5 @@ installPostgresContactSharedOperations(PostgresContactStore);
 installPostgresContactSocialGraphOperations(PostgresContactStore);
 installPostgresContactTrustPolicyOperations(PostgresContactStore);
 installPostgresContactCrudOperations(PostgresContactStore);
+installPostgresContactLifecycleLedgerOperations(PostgresContactStore);
+installPostgresContactLifecycleRecoveryOperations(PostgresContactStore);

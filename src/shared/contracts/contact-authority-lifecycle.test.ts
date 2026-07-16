@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   parseContactAuthorityLifecycleRequest,
+  parseContactAuthorityLifecycleResult,
   type ContactAuthorityLifecycleRequest,
 } from './contact-authority-lifecycle.js';
 
@@ -78,5 +79,26 @@ describe('contact authority lifecycle v1 contract', () => {
         role: 'owner',
       },
     })).toThrow(/unknown keys/u);
+  });
+
+  it('binds result status to the exact gateway phase', () => {
+    const result = {
+      schemaVersion: 1,
+      intentId: INTENT_ID,
+      action: 'contact.delete',
+      authorityGeneration: 1,
+      globalAuthEpoch: 1,
+      auditEventId: '27641d6e-e039-4bed-ae5b-3c16a8bda501',
+    };
+    expect(() => parseContactAuthorityLifecycleResult({
+      ...result,
+      phase: 'prepare',
+      status: 'finalized',
+    })).toThrow(/Invalid contact authority lifecycle v1 result/);
+    expect(() => parseContactAuthorityLifecycleResult({
+      ...result,
+      phase: 'finalize',
+      status: 'prepared',
+    })).toThrow(/Invalid contact authority lifecycle v1 result/);
   });
 });

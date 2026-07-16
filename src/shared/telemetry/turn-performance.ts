@@ -35,6 +35,8 @@ export type TurnPerformanceDeferReason =
   | 'rescheduled'
   | 'retry_scheduled'
   | 'failed'
+  | 'resumed'
+  | 'stale_discarded'
   | 'dropped_budget'
   | 'cancelled'
   | 'acknowledged'
@@ -71,6 +73,38 @@ export interface TurnPerformanceEvent {
   cacheWriteTokens?: number;
   costUsd?: number;
   backgroundJobAgeMs?: number;
+  backgroundSessionIdHash?: string;
+  backgroundJobAttemptCount?: number;
+  backgroundJobKind?:
+    | 'memory_extraction'
+    | 'intention_post_turn_hooks'
+    | 'emotion_appraisal'
+    | 'auto_compaction';
+  backgroundJobState?:
+    | 'queued'
+    | 'deferred'
+    | 'retry_wait'
+    | 'running'
+    | 'succeeded'
+    | 'failed'
+    | 'stale_discarded';
+  backgroundJobReason?:
+    | 'enqueued'
+    | 'deduplicated'
+    | 'foreground_active'
+    | 'started'
+    | 'completed'
+    | 'handler_failed'
+    | 'retry_scheduled'
+    | 'retry_exhausted'
+    | 'lease_expired'
+    | 'shutdown'
+    | 'source_not_ready'
+    | 'source_missing'
+    | 'source_mismatch'
+    | 'superseded'
+    | 'malformed_payload'
+    | 'unknown_kind';
   deferReason?: TurnPerformanceDeferReason;
   cancellationOutcome?: 'acknowledged' | 'timed_out' | 'failed';
 }
@@ -177,6 +211,11 @@ const TURN_PERFORMANCE_EVENT_KEYS = new Set<keyof TurnPerformanceEvent>([
   'cacheWriteTokens',
   'costUsd',
   'backgroundJobAgeMs',
+  'backgroundSessionIdHash',
+  'backgroundJobAttemptCount',
+  'backgroundJobKind',
+  'backgroundJobState',
+  'backgroundJobReason',
   'deferReason',
   'cancellationOutcome',
 ]);
@@ -194,6 +233,8 @@ const TURN_PERFORMANCE_DEFER_REASON_SET = new Set<string>([
   'rescheduled',
   'retry_scheduled',
   'failed',
+  'resumed',
+  'stale_discarded',
   'dropped_budget',
   'cancelled',
   'acknowledged',
@@ -203,6 +244,39 @@ const TURN_PERFORMANCE_CANCELLATION_OUTCOME_SET = new Set<string>([
   'acknowledged',
   'timed_out',
   'failed',
+]);
+const TURN_PERFORMANCE_BACKGROUND_JOB_KIND_SET = new Set<string>([
+  'memory_extraction',
+  'intention_post_turn_hooks',
+  'emotion_appraisal',
+  'auto_compaction',
+]);
+const TURN_PERFORMANCE_BACKGROUND_JOB_STATE_SET = new Set<string>([
+  'queued',
+  'deferred',
+  'retry_wait',
+  'running',
+  'succeeded',
+  'failed',
+  'stale_discarded',
+]);
+const TURN_PERFORMANCE_BACKGROUND_JOB_REASON_SET = new Set<string>([
+  'enqueued',
+  'deduplicated',
+  'foreground_active',
+  'started',
+  'completed',
+  'handler_failed',
+  'retry_scheduled',
+  'retry_exhausted',
+  'lease_expired',
+  'shutdown',
+  'source_not_ready',
+  'source_missing',
+  'source_mismatch',
+  'superseded',
+  'malformed_payload',
+  'unknown_kind',
 ]);
 
 /**
@@ -234,6 +308,7 @@ export function parseTurnPerformanceEvent(value: unknown): TurnPerformanceEvent 
     'channelType',
     'model',
     'provider',
+    'backgroundSessionIdHash',
   ] as const) {
     if (value[key] !== undefined) requireNonEmptyString(value[key], key);
   }
@@ -245,6 +320,21 @@ export function parseTurnPerformanceEvent(value: unknown): TurnPerformanceEvent 
   }
   if (value.cacheState !== undefined) {
     requireEnum(value.cacheState, TURN_PERFORMANCE_CACHE_STATE_SET, 'cacheState');
+  }
+  if (value.backgroundJobKind !== undefined) {
+    requireEnum(value.backgroundJobKind, TURN_PERFORMANCE_BACKGROUND_JOB_KIND_SET, 'backgroundJobKind');
+  }
+  if (value.backgroundJobState !== undefined) {
+    requireEnum(value.backgroundJobState, TURN_PERFORMANCE_BACKGROUND_JOB_STATE_SET, 'backgroundJobState');
+  }
+  if (value.backgroundJobReason !== undefined) {
+    requireEnum(value.backgroundJobReason, TURN_PERFORMANCE_BACKGROUND_JOB_REASON_SET, 'backgroundJobReason');
+  }
+  if (value.backgroundSessionIdHash !== undefined) {
+    requireNonEmptyString(value.backgroundSessionIdHash, 'backgroundSessionIdHash');
+    if (!/^[a-f0-9]{64}$/.test(value.backgroundSessionIdHash)) {
+      throw new Error('Turn performance event backgroundSessionIdHash must be a SHA-256 hex digest');
+    }
   }
   for (const key of ['toolUse', 'backgroundContention'] as const) {
     if (value[key] !== undefined && typeof value[key] !== 'boolean') {
@@ -260,8 +350,13 @@ export function parseTurnPerformanceEvent(value: unknown): TurnPerformanceEvent 
     'cacheWriteTokens',
     'costUsd',
     'backgroundJobAgeMs',
+    'backgroundJobAttemptCount',
   ] as const) {
     if (value[key] !== undefined) requireFiniteNonNegative(value[key], key);
+  }
+  if (value.backgroundJobAttemptCount !== undefined
+    && !Number.isSafeInteger(value.backgroundJobAttemptCount)) {
+    throw new Error('Turn performance event backgroundJobAttemptCount must be a safe integer');
   }
   if (value.deferReason !== undefined) {
     requireEnum(value.deferReason, TURN_PERFORMANCE_DEFER_REASON_SET, 'deferReason');

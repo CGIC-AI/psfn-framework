@@ -4,16 +4,26 @@ import {
   type LifecycleNotifier,
   type MessageSender,
 } from '../../system/lifecycle/notifications.js';
-import { resolveRuntimeCommandInvocation, type RuntimeModeContract } from '../../system/lifecycle/runtime-mode.js';
+import type { RuntimeModeContract } from '../../system/lifecycle/runtime-mode.js';
+import { runConfiguredLifecycleCommand } from '../../system/lifecycle/command-runner.js';
 import { resolveKubeLifecycleContext } from '../../system/lifecycle/kube-lifecycle-context.js';
-import { createSystemTool, runRepoLifecycleBuildCommand, type KubeLifecycleToolRuntime } from '../../core/tools/lifecycle.js';
+import {
+  createSystemTool,
+  registerDeferredLifecycleRuntime,
+  runRepoLifecycleBuildCommand,
+  type KubeLifecycleToolRuntime,
+} from '../../core/tools/lifecycle.js';
 import {
   createGatewayDiscordNotifySender,
   createNotifyDispatcher,
   createNotifyTool,
   type NotificationPort,
 } from '../../core/tools/ntfy.js';
-import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
+import {
+  createRetryableShutdown,
+  runShutdownSequence,
+  runShutdownStep,
+} from '../startup/support/shutdown-helpers.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
@@ -113,7 +123,6 @@ export function buildAgentControlPlane(
     icpAutonomyRuntime,
     icpInitiationSourceRuntime,
   } = options;
-  let stopPromise: Promise<void> | null = null;
   const deferredCompanionOutreachAuthorizationRuntime: DeferredCompanionOutreachAuthorizationRuntime = {
     hasExternalCompanionCapability: () => capabilityRuntime.has('external.companion'),
     isNotifyToolRegistered: () => agentLoop.getToolCatalog().extended.some(
@@ -159,52 +168,75 @@ export function buildAgentControlPlane(
     startTime: Date.now(),
   });
 
-  const stopFn = async () => {
-    if (stopPromise) {
-      await stopPromise;
-      return;
-    }
-
-    stopPromise = (async () => {
-      const timeoutMs = parsePositiveIntEnv(
-        process.env.EXTRACTION_DRAIN_TIMEOUT_MS,
-        DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
-      );
-      await runShutdownSequence([
-        { step: 'unregister deferred companion outreach', action: () => unregisterDeferredCompanionOutreach() },
-        { step: 'unregister ICP initiation candidates', action: () => unregisterIcpInitiationCandidates() },
-        { step: 'unregister gateway disconnect hook', action: () => unregisterGatewayDisconnect() },
-        { step: 'emit system.shutdown event', action: () => eventBus.emit('system.shutdown', {}) },
-        { step: 'stop debug observer', action: () => stopDebugObserver() },
-        { step: 'stop scheduler', action: () => scheduler.stop() },
-        {
-          step: 'drain memory extractor',
-          action: async () => {
-            const drained = await memoryExtractor.stop({ timeoutMs });
-            if (!drained) {
-              log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
-            }
-          },
-        },
-        {
-          step: 'write graceful shutdown markers',
-          action: () => writeGracefulShutdownMarkers(),
-        },
-        { step: 'shutdown module loader', action: () => moduleLoader.shutdown() },
-        { step: 'stop API server', action: () => shutdownTargets.apiServer?.stop() },
-        { step: 'stop admin server', action: () => shutdownTargets.adminTransport?.stop() },
-        { step: 'close app cache', action: () => shutdownTargets.appCache?.close?.() },
-        { step: 'close charge ledger', action: () => shutdownTargets.chargeLedger?.close() },
-        { step: 'close ICP fatigue regulation reservations', action: () => shutdownTargets.fatigueRegulationReservations?.close() },
-        { step: 'close session tail cache', action: () => shutdownTargets.sessionTailCache?.close?.() },
-        { step: 'destroy gateway client', action: () => gateway.destroy() },
-        { step: 'close database', action: () => closeDatabase() },
-      ], log);
-      log.info('Stopped');
-    })();
-
-    await stopPromise;
+  const prepareRestartCommand = createRetryableShutdown(async () => {
+    await runShutdownStep(
+      'stop durable background work supervisor',
+      () => agentLoop.stopBackgroundWork(),
+      log,
+      2,
+      true,
+    );
+  });
+  const runBuildCommand = async (): Promise<void> => {
+    await runRepoLifecycleBuildCommand({
+      repoRoot: process.cwd(),
+      timeoutMs: 120_000,
+      maxOutputChars: 40_000,
+    });
   };
+  const runRestartCommand = async (): Promise<void> => {
+    await runConfiguredLifecycleCommand(lifecycleRuntimeContract.restart.command, {
+      cwd: process.cwd(),
+      timeoutMs: 30_000,
+      maxOutputChars: 10_000,
+    });
+  };
+  let unregisterDeferredLifecycle = (): void => undefined;
+
+  const stopFn = createRetryableShutdown(async () => {
+    const timeoutMs = parsePositiveIntEnv(
+      process.env.EXTRACTION_DRAIN_TIMEOUT_MS,
+      DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
+    );
+    await runShutdownSequence([
+      { step: 'unregister deferred lifecycle actions', action: () => unregisterDeferredLifecycle() },
+      { step: 'unregister deferred companion outreach', action: () => unregisterDeferredCompanionOutreach() },
+      { step: 'unregister ICP initiation candidates', action: () => unregisterIcpInitiationCandidates() },
+      { step: 'unregister gateway disconnect hook', action: () => unregisterGatewayDisconnect() },
+      { step: 'emit system.shutdown event', action: () => eventBus.emit('system.shutdown', {}) },
+      { step: 'stop debug observer', action: () => stopDebugObserver() },
+      { step: 'stop scheduler', action: () => scheduler.stop() },
+      {
+        step: 'stop durable background work supervisor',
+        action: prepareRestartCommand,
+        maxAttempts: 1,
+        failClosed: true,
+      },
+      {
+        step: 'drain memory extractor',
+        action: async () => {
+          const drained = await memoryExtractor.stop({ timeoutMs });
+          if (!drained) {
+            log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
+          }
+        },
+      },
+      {
+        step: 'write graceful shutdown markers',
+        action: () => writeGracefulShutdownMarkers(),
+      },
+      { step: 'shutdown module loader', action: () => moduleLoader.shutdown() },
+      { step: 'stop API server', action: () => shutdownTargets.apiServer?.stop() },
+      { step: 'stop admin server', action: () => shutdownTargets.adminTransport?.stop() },
+      { step: 'close app cache', action: () => shutdownTargets.appCache?.close?.() },
+      { step: 'close charge ledger', action: () => shutdownTargets.chargeLedger?.close() },
+      { step: 'close ICP fatigue regulation reservations', action: () => shutdownTargets.fatigueRegulationReservations?.close() },
+      { step: 'close session tail cache', action: () => shutdownTargets.sessionTailCache?.close?.() },
+      { step: 'destroy gateway client', action: () => gateway.destroy() },
+      { step: 'close database', action: () => closeDatabase() },
+    ], log);
+    log.info('Stopped');
+  });
 
   // Resolve deployment mode. Under a guarded Kubernetes deployment the system
   // tool routes restart/rebuild through the gateway's approval-gated controller
@@ -218,6 +250,19 @@ export function buildAgentControlPlane(
       }
     : undefined;
 
+  if (!kubeLifecycle) {
+    unregisterDeferredLifecycle = registerDeferredLifecycleRuntime({
+      agentLoop,
+      postTurnActions,
+      notifier: lifecycleNotifier,
+      stopFn,
+      restartContract: lifecycleRuntimeContract.restart,
+      prepareRestartCommand,
+      runBuildCommand,
+      runRestartCommand,
+    });
+  }
+
   agentLoop.registerTool(createSystemTool(
     config,
     {
@@ -226,25 +271,11 @@ export function buildAgentControlPlane(
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
       restartContract: lifecycleRuntimeContract.restart,
+      executionMode: kubeLifecycle ? 'immediate' : 'deferred',
+      prepareRestartCommand,
+      runBuildCommand,
+      runRestartCommand,
       ...(kubeLifecycle ? { kubeLifecycle } : {}),
-      runBuildCommand: async () => {
-        await runRepoLifecycleBuildCommand({
-          repoRoot: process.cwd(),
-          timeoutMs: 120_000,
-          maxOutputChars: 40_000,
-        });
-      },
-      runRestartCommand: async () => {
-        const invocation = resolveRuntimeCommandInvocation(lifecycleRuntimeContract.restart.command);
-        if (!invocation) {
-          throw new Error('Lifecycle restart command strategy is missing a restart command');
-        }
-        await gateway.shellExec(invocation.command, invocation.args, {
-          cwd: process.cwd(),
-          timeoutMs: 30_000,
-          maxOutputChars: 10_000,
-        });
-      },
     },
   ));
   agentLoop.registerTool(createNotifyTool(createNotifyDispatcher({

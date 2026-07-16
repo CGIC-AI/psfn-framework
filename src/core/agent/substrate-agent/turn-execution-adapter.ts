@@ -224,8 +224,12 @@ export function createTurnExecutionRuntimeAdapter(
     evaluateReflectionNudge: (toolSummary) => options.evaluateReflectionNudge(toolSummary),
     emotionSelfModelRuntime: options.emotionSelfModelRuntime,
     observerEvalSidecar: options.observerEvalSidecar ?? null,
-    awaitPostTurnDrain: (input) => options.turnSupportRuntime.awaitPostTurnDrain(input),
-    registerPostTurnBackgroundWork: (input) => options.turnSupportRuntime.registerPostTurnBackgroundWork(input),
+    beginForegroundBackgroundWork: (logicalSessionId) => options.turnSupportRuntime
+      .beginForegroundBackgroundWork(logicalSessionId),
+    endForegroundBackgroundWork: (lease) => options.turnSupportRuntime
+      .endForegroundBackgroundWork(lease),
+    enqueuePostTurnBackgroundWork: (inputs) => options.turnSupportRuntime
+      .enqueuePostTurnBackgroundWork(inputs),
     resolveTaskKind: (message) => options.callbacks.resolveTaskKind(message),
     buildTurnBudgetCharacteristics: (message, taskKind) => options.callbacks
       .buildTurnBudgetCharacteristics(message, taskKind),
@@ -255,10 +259,35 @@ export function createTurnExecutionRuntimeAdapter(
       callType,
       payload,
     ),
-    recordUserMessage: (message, turnId, requestId, trustLevel, continuityUserId, contentOverride, actorKind) => options.turnSupportRuntime
-      .recordUserMessage(message, turnId, requestId, trustLevel, continuityUserId, contentOverride, actorKind),
-    recordSystemMessage: (message, turnId, requestId, content, continuityUserId) => options.turnSupportRuntime
-      .recordSystemMessage(message, turnId, requestId, content, continuityUserId),
+    recordUserMessage: (
+      message,
+      turnSessionIdentity,
+      turnId,
+      requestId,
+      trustLevel,
+      continuityUserId,
+      contentOverride,
+      actorKind,
+    ) => options.turnSupportRuntime.recordUserMessage(
+      message,
+      turnSessionIdentity,
+      turnId,
+      requestId,
+      trustLevel,
+      continuityUserId,
+      contentOverride,
+      actorKind,
+    ),
+    recordSystemMessage: (message, turnSessionIdentity, turnId, requestId, content, continuityUserId) => (
+      options.turnSupportRuntime.recordSystemMessage(
+        message,
+        turnSessionIdentity,
+        turnId,
+        requestId,
+        content,
+        continuityUserId,
+      )
+    ),
     resolveSessionChannelId: (channelId) => options.turnSupportRuntime.resolveSessionChannelId(channelId),
     resolveChannelType: (message) => options.callbacks.resolveChannelType(message),
     ensureModel: (message) => options.callbacks.ensureModel(message),
@@ -385,17 +414,37 @@ export function createTurnExecutionRuntimeAdapter(
       correlation,
       toolTurnOutcome,
     ),
-    setActiveTurnContext: (correlation, taskKind, intent) => options.turnSupportRuntime
-      .setActiveTurnContext(correlation, taskKind, intent),
+    setActiveTurnContext: (correlation, taskKind, intent, turnSessionIdentity) => (
+      options.turnSupportRuntime.setActiveTurnContext(
+        correlation,
+        taskKind,
+        intent,
+        turnSessionIdentity,
+      )
+    ),
     clearActiveTurnContext: () => options.turnSupportRuntime.clearActiveTurnContext(),
     setActiveTurnCorrelation: (correlation) => options.turnSupportRuntime.setActiveTurnCorrelation(correlation),
     extractResponseText: () => options.callbacks.extractResponseText(),
     getLatestAssistantMessage: () => options.callbacks.getLatestAssistantMessage(),
     accumulateTurnUsage: (messages) => options.turnSupportRuntime.accumulateTurnUsage(messages),
-    recordToolObservations: (message, turnId, requestId, turnMessages, trustLevel) => options.turnSupportRuntime
-      .recordToolObservations(message, turnId, requestId, turnMessages, trustLevel),
+    recordToolObservations: (
+      message,
+      turnSessionIdentity,
+      turnId,
+      requestId,
+      turnMessages,
+      trustLevel,
+    ) => options.turnSupportRuntime.recordToolObservations(
+      message,
+      turnSessionIdentity,
+      turnId,
+      requestId,
+      turnMessages,
+      trustLevel,
+    ),
     recordAssistantMessage: (
       message,
+      turnSessionIdentity,
       turnId,
       requestId,
       responseText,
@@ -406,6 +455,7 @@ export function createTurnExecutionRuntimeAdapter(
       runtimeFallbackProvenance,
     ) => options.turnSupportRuntime.recordAssistantMessage(
       message,
+      turnSessionIdentity,
       turnId,
       requestId,
       responseText,

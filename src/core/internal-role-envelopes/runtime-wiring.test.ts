@@ -37,6 +37,10 @@ vi.mock('../../persistence/sessions/postgres-adapters.js', async () => {
         transcriptProjection,
         transcriptSearch: transcriptProjection,
         turnRecordStore: turnRecords.createFilesystemTurnRecordStorePort(options.sessionsDir),
+        turnRecordEligibilityFence: {
+          withTurnRecordEligibilityFence: async (_key: unknown, operation: () => Promise<unknown>) => operation(),
+          withTurnRecordEligibilityFences: async (_keys: readonly unknown[], operation: () => Promise<unknown>) => operation(),
+        },
       };
     }),
   };

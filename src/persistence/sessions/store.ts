@@ -56,6 +56,7 @@ import {
 } from './turn-record-session-refs.js';
 import { slimTurnRecordMemoryCandidatesForAppend } from './turn-record-memory-refs.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
+import type { TurnRecordEligibilityFencePort } from './turn-record-eligibility-fence-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import {
   getCrashRecoveryExtractionCandidates,
@@ -155,6 +156,8 @@ function emitWireBodyWithheld(event: TurnRecordWireBodyWithheld): void {
 const MAX_RECENT_ENTRY_CACHE_LIMITS = 8;
 /** Initial overscan multiplier for tombstone-filtered turn-record reads. */
 const TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR = 4;
+/** Hard bound preventing a post-turn effect from turning one session into an unbounded lock set. */
+const MAX_TURN_RECORD_ELIGIBILITY_SNAPSHOT_FENCES = 512;
 const TAIL_DEGRADED_WARN_INTERVAL_MS = 30_000;
 export {
   L0_SESSION_FILE_MAX_BYTES,
@@ -221,6 +224,41 @@ export interface CogSecTombstoneChannelDiagnostic {
   messageIds: number[];
 }
 
+export class TurnRecordEligibilitySnapshotChangedError extends Error {
+  constructor() {
+    super('TurnRecord eligibility snapshot changed while acquiring consumed-record fences');
+    this.name = 'TurnRecordEligibilitySnapshotChangedError';
+  }
+}
+
+export class TurnRecordEligibilitySnapshotInvalidError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TurnRecordEligibilitySnapshotInvalidError';
+  }
+}
+
+function sessionEntrySnapshotMatches(
+  left: readonly SessionEntry[],
+  right: readonly SessionEntry[],
+): boolean {
+  if (left.length !== right.length) return false;
+  return left.every((entry, index) => {
+    const candidate = right[index]!;
+    return entry.id === candidate.id
+      && entry.channelId === candidate.channelId
+      && entry.role === candidate.role
+      && entry.content === candidate.content
+      && entry.authorId === candidate.authorId
+      && entry.authorName === candidate.authorName
+      && entry.timestamp === candidate.timestamp
+      && entry.discordMessageId === candidate.discordMessageId
+      && entry.metadata === candidate.metadata
+      && entry.originChannelId === candidate.originChannelId
+      && entry.channelVisibility === candidate.channelVisibility;
+  });
+}
+
 export interface CogSecTombstoneDiagnostic {
   caseId: string;
   rowCount: number;
@@ -271,6 +309,7 @@ export class SessionStore implements TranscriptSearchPort {
   private transcriptProjection: TranscriptProjectionPort | null = null;
   private transcriptSearch: TranscriptSearchPort | null = null;
   private turnRecordStore: TurnRecordStorePort;
+  private turnRecordEligibilityFence: TurnRecordEligibilityFencePort | null;
   private journalRuntime: SessionJournalRuntime;
   private channelIndexFailureLogged = false;
   /** Optional shared hot tail (psfn-framework-hgw3.5); null = file-only behavior. */
@@ -305,6 +344,7 @@ export class SessionStore implements TranscriptSearchPort {
       this.transcriptSearch = this.transcriptProjection;
     }
     this.turnRecordStore = options.turnRecordStore ?? createFilesystemTurnRecordStorePort(this.sessionsDir);
+    this.turnRecordEligibilityFence = options.turnRecordEligibilityFence ?? null;
     this.tailCache = options.tailCache ?? null;
     for (const rootPath of this.journalRuntime.listPendingJournalChainRewriteRoots(this.sessionsDir)) {
       withSessionJournalWriteLock(rootPath, () => {
@@ -1115,18 +1155,127 @@ export class SessionStore implements TranscriptSearchPort {
       },
     );
   }
-  appendTurnRecord(record: TurnRecord): void {
-    // Diet the record before it is persisted (all pure projections):
-    // - session-entry arrays → L0 id references (bead psfn-framework-9ree); the
-    //   journal stays the durable source and redaction can never be resurrected.
-    // - retrieved-memory candidate arrays → memory id references (bead
-    //   psfn-framework-jsi9); the memory store stays the durable source and a
-    //   deleted/redacted memory can never be resurrected. Memory refs are
-    //   resolved at the Garden read boundary (the only reader of these arrays),
-    //   NOT at the store read boundary — see turn-record-memory-refs.ts.
-    this.turnRecordStore.appendTurnRecord(
-      slimTurnRecordMemoryCandidatesForAppend(slimTurnRecordSessionEntriesForAppend(record)),
+  async appendTurnRecord(record: TurnRecord): Promise<void> {
+    await this.withTurnRecordEligibilityMutationFence(
+      record.sessionId ?? record.channelId,
+      record.turnId,
+      async () => {
+        this.turnRecordStore.appendTurnRecord(
+          slimTurnRecordMemoryCandidatesForAppend(
+            slimTurnRecordSessionEntriesForAppend(record),
+          ),
+        );
+      },
     );
+  }
+  async withSourceTurnRecordEligibilityFence<T>(
+    sourceChannelId: string,
+    logicalSessionId: string,
+    turnId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (!sourceChannelId.trim()) {
+      throw new Error('TurnRecord eligibility fence sourceChannelId cannot be empty');
+    }
+    if (!this.turnRecordEligibilityFence) {
+      throw new Error('TurnRecord eligibility fence is not configured');
+    }
+    return this.turnRecordEligibilityFence.withTurnRecordEligibilityFence({
+      logicalSessionId,
+      turnId,
+    }, operation);
+  }
+  /**
+   * Captures a bounded content window, locks every TurnID represented in that
+   * window plus the required source IDs, then re-reads and validates the exact
+   * snapshot before exposing it to a durable effect.
+   */
+  async withStableTurnRecordEligibilitySnapshot<T>(
+    logicalSessionId: string,
+    requiredTurnIds: readonly string[],
+    readSnapshot: () => SessionEntry[],
+    operation: (entries: readonly SessionEntry[]) => Promise<T>,
+  ): Promise<T> {
+    const normalizedSessionId = logicalSessionId.trim();
+    if (!normalizedSessionId) {
+      throw new TurnRecordEligibilitySnapshotInvalidError(
+        'TurnRecord eligibility snapshot logicalSessionId cannot be empty',
+      );
+    }
+    if (!this.turnRecordEligibilityFence) {
+      throw new TurnRecordEligibilitySnapshotInvalidError(
+        'TurnRecord eligibility fence is not configured',
+      );
+    }
+
+    const initial = readSnapshot();
+    const consumed = initial.map((entry) => ({
+      sourceChannelId: entry.originChannelId?.trim() || entry.channelId,
+      turnId: resolveSessionEntryTurnContext(entry).turnId,
+    }));
+    const turnIds = new Set<string>();
+    for (const turnId of requiredTurnIds) {
+      const normalized = turnId.trim();
+      if (!normalized) {
+        throw new TurnRecordEligibilitySnapshotInvalidError(
+          'TurnRecord eligibility snapshot required TurnID cannot be empty',
+        );
+      }
+      turnIds.add(normalized);
+    }
+    for (const reference of consumed) turnIds.add(reference.turnId);
+    if (turnIds.size === 0) {
+      throw new TurnRecordEligibilitySnapshotInvalidError(
+        'TurnRecord eligibility snapshot must contain at least one TurnID',
+      );
+    }
+    if (turnIds.size > MAX_TURN_RECORD_ELIGIBILITY_SNAPSHOT_FENCES) {
+      throw new TurnRecordEligibilitySnapshotInvalidError(
+        `TurnRecord eligibility snapshot exceeds ${MAX_TURN_RECORD_ELIGIBILITY_SNAPSHOT_FENCES} TurnIDs`,
+      );
+    }
+
+    return this.turnRecordEligibilityFence.withTurnRecordEligibilityFences(
+      [...turnIds].map(turnId => ({ logicalSessionId: normalizedSessionId, turnId })),
+      async () => {
+        const current = readSnapshot();
+        if (!sessionEntrySnapshotMatches(initial, current)) {
+          throw new TurnRecordEligibilitySnapshotChangedError();
+        }
+
+        const uniqueConsumed = new Map<string, { sourceChannelId: string; turnId: string }>();
+        for (const entry of current) {
+          const reference = {
+            sourceChannelId: entry.originChannelId?.trim() || entry.channelId,
+            turnId: resolveSessionEntryTurnContext(entry).turnId,
+          };
+          uniqueConsumed.set(`${reference.sourceChannelId}\u0000${reference.turnId}`, reference);
+        }
+        for (const reference of uniqueConsumed.values()) {
+          if (!this.isSourceTurnRecordEligible(
+            reference.sourceChannelId,
+            normalizedSessionId,
+            reference.turnId,
+          )) {
+            throw new TurnRecordEligibilitySnapshotInvalidError(
+              'Consumed TurnRecord is missing, duplicated, tombstoned, or belongs to another session',
+            );
+          }
+        }
+        return operation(current);
+      },
+    );
+  }
+  private async withTurnRecordEligibilityMutationFence<T>(
+    logicalSessionId: string,
+    turnId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (!this.turnRecordEligibilityFence) return operation();
+    return this.turnRecordEligibilityFence.withTurnRecordEligibilityFence({
+      logicalSessionId,
+      turnId,
+    }, operation);
   }
   /**
    * Reconstruct L0-referenced session entries and redaction-gate the rendered
@@ -1150,6 +1299,54 @@ export class SessionStore implements TranscriptSearchPort {
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
     const record = this.turnRecordStore.findTurnRecord(sessionId, turnId);
     return record ? this.resolveTurnRecordSessionRefs(record) : null;
+  }
+  /**
+   * Find one canonical turn by its physical source channel while proving that
+   * it belongs to the expected logical session. Background work uses this
+   * exact scope so a later route reset cannot redirect an old durable job to a
+   * newer logical session on the same transport channel.
+   */
+  findSourceTurnRecord(
+    sourceChannelId: string,
+    logicalSessionId: string,
+    turnId: string,
+  ): TurnRecord | null {
+    const record = this.turnRecordStore.findTurnRecord(sourceChannelId, turnId);
+    if (!record || record.channelId !== sourceChannelId) return null;
+    return (record.sessionId ?? sourceChannelId) === logicalSessionId
+      ? this.resolveTurnRecordSessionRefs(record)
+      : null;
+  }
+  /**
+   * Resolves the sole eligible durable owner for an exact physical source and
+   * turn. Recovery callers do not yet know the logical owner, so this lookup
+   * derives it from the canonical record while preserving the same duplicate
+   * and tombstone fences used by background work. Null means no record exists;
+   * an existing ambiguous or ineligible source fails closed.
+   */
+  findUniqueSourceTurnRecord(sourceChannelId: string, turnId: string): TurnRecord | null {
+    const normalizedSourceChannelId = sourceChannelId.trim();
+    const normalizedTurnId = turnId.trim();
+    if (!normalizedSourceChannelId || !normalizedTurnId) {
+      throw new Error('Source TurnRecord lookup requires a physical channel and turn id');
+    }
+    const matches = this.turnRecordStore.readRecentTurnRecords(
+      normalizedSourceChannelId,
+      Number.MAX_SAFE_INTEGER,
+    ).filter(record => record.turnId === normalizedTurnId);
+    if (matches.length === 0) return null;
+    if (matches.length !== 1) {
+      throw new Error('Source TurnRecord is duplicated and cannot establish a recovery identity');
+    }
+    const record = matches[0]!;
+    const logicalSessionId = record.sessionId ?? normalizedSourceChannelId;
+    const owner = this.ensureChannelFullyLoaded(logicalSessionId);
+    if (record.channelId !== normalizedSourceChannelId
+      || owner === null
+      || owner.turnTombstones.has(normalizedTurnId)) {
+      throw new Error('Source TurnRecord is tombstoned, missing its owner, or belongs to another source');
+    }
+    return this.resolveTurnRecordSessionRefs(record);
   }
   getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {
     if (limit <= 0) return [];
@@ -1829,6 +2026,17 @@ export class SessionStore implements TranscriptSearchPort {
       compactionArchivePaths,
     );
   }
+  /**
+   * Longest prefix that a scalar compaction boundary may safely cover.
+   * Read projections override this when they can temporarily hide a row that
+   * may become visible later; the raw journal has no such projection gaps.
+   */
+  getCompactionBoundarySafePrefix(
+    _channelId: string,
+    proposedEntries: readonly SessionEntry[],
+  ): SessionEntry[] {
+    return [...proposedEntries];
+  }
   getSessionActivity(channelId: string): SessionActivitySummary | null {
     this.refreshChannelIndexFromDisk();
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
@@ -1981,6 +2189,20 @@ export class SessionStore implements TranscriptSearchPort {
     });
   }
   private async appendTurnTombstone(
+    channelId: string,
+    turnId: string,
+    action: 'redact' | 'restore',
+    options: { actor?: string; reason?: string; timestamp?: number } = {},
+  ): Promise<void> {
+    this.refreshChannelIndexFromDisk();
+    const logicalSessionId = this.resolveSessionId(channelId) ?? channelId;
+    await this.withTurnRecordEligibilityMutationFence(
+      logicalSessionId,
+      turnId,
+      () => this.appendTurnTombstoneUnderFence(channelId, turnId, action, options),
+    );
+  }
+  private async appendTurnTombstoneUnderFence(
     channelId: string,
     turnId: string,
     action: 'redact' | 'restore',

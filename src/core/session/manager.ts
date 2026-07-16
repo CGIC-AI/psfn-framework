@@ -45,6 +45,7 @@ import {
 import {
   resolveAdaptiveContextBudgetProfile,
   resolveSessionHistoryBudget,
+  type AdaptiveContextBudgetProfile,
   type ContextBudgetTurnCharacteristics,
 } from '../../shared/context-budget.js';
 import {
@@ -121,6 +122,7 @@ import {
   type FocusSessionContextSnapshot,
   type FocusSessionSnapshot,
 } from './manager/focus-session-runtime.js';
+import { BackgroundWorkHandoffRecovery } from './manager/background-work-handoff-recovery.js';
 import {
   resolveCompressionFailureLogPath,
   resolveCompressionGuidelinePath,
@@ -200,14 +202,47 @@ export interface SessionCoreMemoryProvider {
 
 export interface AutoCompactionBetweenTurnsParams {
   channelId: string;
-  systemPrompt: string;
-  memoriesBlock: string;
+  systemPrompt?: string;
+  memoriesBlock?: string;
+  /** Durable jobs persist counts and hashes, never a second prompt/content copy. */
+  systemPromptTokenCount?: number;
+  memoriesTokenCount?: number;
+  adaptiveProfile?: AdaptiveContextBudgetProfile;
   llmProvider: LLMProviderPort;
   userId?: string;
   channelMeta?: ChannelMeta;
   compactionPromptText?: string;
   turnBudgetCharacteristics?: ContextBudgetTurnCharacteristics;
   icpCorrelation?: IcpConversationCorrelation;
+  throwOnFailure?: boolean;
+  assertEffectAllowed?: () => Promise<void>;
+  /** Exact source-bounded input captured and rechecked under TurnRecord fences; empty is authoritative. */
+  capturedRecentEntries?: readonly SessionEntry[];
+}
+
+export type AutoCompactionRecentEntriesCaptureParams = Pick<
+  AutoCompactionBetweenTurnsParams,
+  'channelId' | 'adaptiveProfile' | 'turnBudgetCharacteristics'
+> & {
+  maxSessionEntryId?: number;
+  now?: Date;
+};
+
+function resolveCompactionTokenCount(input: {
+  count?: number;
+  text?: string;
+  field: 'systemPrompt' | 'memoriesBlock';
+}): number {
+  if (input.count !== undefined) {
+    if (!Number.isSafeInteger(input.count) || input.count < 0) {
+      throw new Error(`Auto-compaction ${input.field}TokenCount must be a non-negative safe integer`);
+    }
+    return input.count;
+  }
+  if (input.text === undefined) {
+    throw new Error(`Auto-compaction requires ${input.field} or ${input.field}TokenCount`);
+  }
+  return countTokens(input.text);
 }
 
 export class SessionManager {
@@ -249,6 +284,7 @@ export class SessionManager {
   private internalRoleEnvelopeLedger: InternalRoleEnvelopeLedger | null;
   private activeContextSessionId: string | null = null;
   private pendingAutoCompactions = new Map<string, Promise<void>>();
+  private backgroundWorkHandoffRecovery: BackgroundWorkHandoffRecovery;
   private continuityStoreRef: UserContinuityStore | null = null;
   crossChannelContinuity: CrossChannelContinuityPort = createMissingCrossChannelContinuityPort();
   /** Character name from identity card (e.g. 'Companion'). Used for display labels in context. */
@@ -268,6 +304,7 @@ export class SessionManager {
     transcriptSearch?: TranscriptSearchPort,
   ) {
     this.store = store;
+    this.backgroundWorkHandoffRecovery = new BackgroundWorkHandoffRecovery(store);
     this.transcriptSearch = transcriptSearch ?? store;
     this.deliveryProjectionStore = createIcpDeliveryProjectionStore(store);
     this.compactionBoundaryStore = createCompactionBoundaryStore(this.deliveryProjectionStore);
@@ -329,6 +366,37 @@ export class SessionManager {
   private resolveOriginChannelId(channelId: string, resolvedChannelId: string): string | undefined {
     const normalized = channelId.trim();
     return normalized && normalized !== resolvedChannelId ? normalized : undefined;
+  }
+
+  private resolveSessionWriteTarget(
+    channelId: string,
+    explicitSourceChannelId?: string,
+  ): {
+    resolvedChannelId: string;
+    sourceChannelId: string;
+    originChannelId: string | undefined;
+  } {
+    const normalizedExplicitSource = explicitSourceChannelId?.trim();
+    if (explicitSourceChannelId !== undefined && !normalizedExplicitSource) {
+      throw new Error('Session write physical source channel must not be empty');
+    }
+    const normalizedChannelId = channelId.trim();
+    if (explicitSourceChannelId !== undefined && !normalizedChannelId) {
+      throw new Error('Session write logical owner must not be empty');
+    }
+    // An explicit physical source means the caller has already captured both
+    // halves of the immutable write identity. Do not send that logical owner
+    // back through mutable source-route or API active-context resolution.
+    const resolvedChannelId = explicitSourceChannelId === undefined
+      ? this.resolveSessionChannelId(channelId)
+      : normalizedChannelId;
+    const inferredOriginChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
+    const sourceChannelId = normalizedExplicitSource ?? inferredOriginChannelId ?? resolvedChannelId;
+    return {
+      resolvedChannelId,
+      sourceChannelId,
+      originChannelId: sourceChannelId !== resolvedChannelId ? sourceChannelId : undefined,
+    };
   }
 
   private resolveSourceChannelId(channelId: string): string {
@@ -505,9 +573,10 @@ export class SessionManager {
     continuityUserId?: string,
     options: SessionMessageRecordOptions = {},
   ): number | null {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
-    const sourceChannelId = originChannelId ?? resolvedChannelId;
+    const { resolvedChannelId, originChannelId, sourceChannelId } = this.resolveSessionWriteTarget(
+      channelId,
+      options.sourceChannelId,
+    );
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
@@ -651,9 +720,10 @@ export class SessionManager {
     continuityUserId?: string,
     options: SessionMessageRecordOptions = {},
   ): number | null {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
-    const sourceChannelId = originChannelId ?? resolvedChannelId;
+    const { resolvedChannelId, originChannelId, sourceChannelId } = this.resolveSessionWriteTarget(
+      channelId,
+      options.sourceChannelId,
+    );
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
@@ -736,10 +806,11 @@ export class SessionManager {
     continuityUserId?: string,
     options: SessionMessageRecordOptions = {},
   ): number | null {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const { resolvedChannelId, originChannelId, sourceChannelId } = this.resolveSessionWriteTarget(
+      channelId,
+      options.sourceChannelId,
+    );
     if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
-    const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
-    const sourceChannelId = originChannelId ?? resolvedChannelId;
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
@@ -803,37 +874,19 @@ export class SessionManager {
         });
       })
       .then(async () => {
-        const adaptiveProfile = resolveAdaptiveContextBudgetProfile(
+        const adaptiveProfile = params.adaptiveProfile ?? resolveAdaptiveContextBudgetProfile(
           this.config,
           params.turnBudgetCharacteristics,
         );
-        const historyBudget = resolveSessionHistoryBudget(this.config, {
-          ...(params.turnBudgetCharacteristics ? { turn: params.turnBudgetCharacteristics } : {}),
-          adaptiveProfile,
-        });
-        let recent = collectRecentEntriesWithinTokenBudget({
-          store: this.compactionBoundaryStore,
-          channelId: resolvedChannelId,
-          estimatedCount: historyBudget.estimatedCount,
-          tokenBudget: historyBudget.tokenBudget,
-          turnBudgetCharacteristics: params.turnBudgetCharacteristics,
-        }).entries;
-        // Presence-window gate (bead s10rm): a compaction summary is
-        // itself a served surface — never let it summarize pre-window room
-        // content, or the summary would smuggle it back into context.
-        const roomWindow = this.resolveRoomContentWindow(resolvedChannelId);
-        if (roomWindow.kind !== 'unwindowed') {
-          const floor = roomContentWindowFloorMs(roomWindow);
-          recent = recent.filter(entry => entry.timestamp >= floor);
-        }
-        recent = applyFocusCompactionRanges(
-          recent,
-          this.getFocusCompactionRanges(resolvedChannelId),
-        ).entries;
-        recent = applyObservationMasking(
-          recent,
-          this.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
-        ).entries;
+        const recent = params.capturedRecentEntries !== undefined
+          ? [...params.capturedRecentEntries]
+          : this.captureAutoCompactionRecentEntries({
+              channelId: resolvedChannelId,
+              adaptiveProfile,
+              ...(params.turnBudgetCharacteristics
+                ? { turnBudgetCharacteristics: params.turnBudgetCharacteristics }
+                : {}),
+            });
         const coreMemoryBlock = this.coreMemoryProvider
           ?.formatForContext(this.buildCoreMemoryFormatContext(
             // Between-turns work resolves its own scope at drain time; the
@@ -846,9 +899,17 @@ export class SessionManager {
           .trim() ?? '';
         const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
           ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
-        const systemTokens = countTokens(params.systemPrompt)
+        const systemTokens = resolveCompactionTokenCount({
+          count: params.systemPromptTokenCount,
+          text: params.systemPrompt,
+          field: 'systemPrompt',
+        })
           + countTokens(coreMemoryBlock)
-          + countTokens(params.memoriesBlock);
+          + resolveCompactionTokenCount({
+            count: params.memoriesTokenCount,
+            text: params.memoriesBlock,
+            field: 'memoriesBlock',
+          });
         await runAutoCompaction({
           channelId: resolvedChannelId,
           recent,
@@ -872,6 +933,10 @@ export class SessionManager {
             });
           },
           userId: params.userId,
+          ...(params.throwOnFailure === true ? { throwOnFailure: true } : {}),
+          ...(params.assertEffectAllowed
+            ? { assertEffectAllowed: params.assertEffectAllowed }
+            : {}),
         });
       })
       .finally(() => {
@@ -884,16 +949,70 @@ export class SessionManager {
     return next;
   }
 
+  captureAutoCompactionRecentEntries(
+    params: AutoCompactionRecentEntriesCaptureParams,
+  ): SessionEntry[] {
+    const resolvedChannelId = this.resolveSessionChannelId(params.channelId);
+    const adaptiveProfile = params.adaptiveProfile ?? resolveAdaptiveContextBudgetProfile(
+      this.config,
+      params.turnBudgetCharacteristics,
+    );
+    const historyBudget = resolveSessionHistoryBudget(this.config, {
+      ...(params.turnBudgetCharacteristics ? { turn: params.turnBudgetCharacteristics } : {}),
+      adaptiveProfile,
+    });
+    const maxSessionEntryId = params.maxSessionEntryId;
+    if (maxSessionEntryId !== undefined
+      && (!Number.isSafeInteger(maxSessionEntryId) || maxSessionEntryId < 1)) {
+      throw new Error('Auto-compaction maxSessionEntryId must be a positive safe integer');
+    }
+    const boundedStore = maxSessionEntryId === undefined
+      ? this.compactionBoundaryStore
+      : {
+          getRecent: (channelId: string, limit: number): SessionEntry[] => (
+            this.compactionBoundaryStore.getEntriesBefore(
+              channelId,
+              maxSessionEntryId + 1,
+              limit,
+            )
+          ),
+        };
+    let recent = collectRecentEntriesWithinTokenBudget({
+      store: boundedStore,
+      channelId: resolvedChannelId,
+      estimatedCount: historyBudget.estimatedCount,
+      tokenBudget: historyBudget.tokenBudget,
+      turnBudgetCharacteristics: params.turnBudgetCharacteristics,
+      ...(params.now ? { now: params.now } : {}),
+    }).entries;
+    // A compaction summary is a served surface: never let it reintroduce room
+    // content from before the current presence window.
+    const roomWindow = this.resolveRoomContentWindow(resolvedChannelId);
+    if (roomWindow.kind !== 'unwindowed') {
+      const floor = roomContentWindowFloorMs(roomWindow);
+      recent = recent.filter(entry => entry.timestamp >= floor);
+    }
+    recent = applyFocusCompactionRanges(
+      recent,
+      this.getFocusCompactionRanges(resolvedChannelId),
+    ).entries;
+    return applyObservationMasking(
+      recent,
+      this.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
+    ).entries;
+  }
+
   recordToolObservation(
     channelId: string,
     observation: ToolObservationInput,
     isDirectMessage?: boolean,
     options: SessionMessageRecordOptions = {},
   ): number | null {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const { resolvedChannelId, originChannelId, sourceChannelId } = this.resolveSessionWriteTarget(
+      channelId,
+      options.sourceChannelId,
+    );
     if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
-    const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
-    const sourceChannelId = originChannelId ?? resolvedChannelId;
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
@@ -958,8 +1077,25 @@ export class SessionManager {
     });
   }
 
-  recordTurn(record: TurnRecord): void {
-    this.store.appendTurnRecord(record);
+  async recordTurn(record: TurnRecord): Promise<void> {
+    await this.store.appendTurnRecord(record);
+  }
+
+  deferBackgroundWorkHandoffRecovery(record: TurnRecord): void {
+    this.backgroundWorkHandoffRecovery.defer(record);
+  }
+
+  /**
+   * Drain at most `limit` live enqueue failures. Each candidate is re-read
+   * from the canonical TurnRecord store while the same cross-process fence
+   * used by redaction and duplicate-source mutations is held. Invalid sources
+   * are retired without enqueue; failed enqueue attempts remain indexed.
+   */
+  async recoverPendingBackgroundWorkHandoffs(
+    limit: number,
+    operation: (record: TurnRecord) => Promise<void>,
+  ): Promise<number> {
+    return this.backgroundWorkHandoffRecovery.recover(limit, operation);
   }
 
   hasRecordedTurn(channelId: string, turnId: string): boolean {
@@ -967,6 +1103,91 @@ export class SessionManager {
     // Recovery markers must not age out behind an arbitrary recent-turn cap:
     // an old lost acknowledgement can replay after any number of newer turns.
     return this.store.findTurnRecord(resolvedChannelId, turnId)?.status === 'completed';
+  }
+
+  findRecordedTurn(channelId: string, turnId: string): TurnRecord | null {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    return this.store.findTurnRecord(resolvedChannelId, turnId);
+  }
+
+  findSourceRecordedTurn(
+    sourceChannelId: string,
+    logicalSessionId: string,
+    turnId: string,
+  ): TurnRecord | null {
+    return this.store.findSourceTurnRecord(sourceChannelId, logicalSessionId, turnId);
+  }
+
+  findUniqueSourceRecordedTurn(sourceChannelId: string, turnId: string): TurnRecord | null {
+    return this.store.findUniqueSourceTurnRecord(sourceChannelId, turnId);
+  }
+
+  isSourceRecordedTurnEligible(
+    sourceChannelId: string,
+    logicalSessionId: string,
+    turnId: string,
+  ): boolean {
+    return this.store.isSourceTurnRecordEligible(sourceChannelId, logicalSessionId, turnId);
+  }
+
+  async withSourceRecordedTurnEligibilityFence<T>(
+    sourceChannelId: string,
+    logicalSessionId: string,
+    turnId: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return this.store.withSourceTurnRecordEligibilityFence(
+      sourceChannelId,
+      logicalSessionId,
+      turnId,
+      operation,
+    );
+  }
+
+  async withStableRecordedTurnEligibilitySnapshot<T>(
+    logicalSessionId: string,
+    requiredTurnIds: readonly string[],
+    readSnapshot: () => SessionEntry[],
+    operation: (entries: readonly SessionEntry[]) => Promise<T>,
+  ): Promise<T> {
+    return this.store.withStableTurnRecordEligibilitySnapshot(
+      logicalSessionId,
+      requiredTurnIds,
+      readSnapshot,
+      operation,
+    );
+  }
+
+  /**
+   * One startup recovery view of record-first background handoffs. Exact source
+   * eligibility is checked here so tombstoned or physically duplicated turns
+   * never reach the queue replay path.
+   */
+  listRecoverableBackgroundWorkTurnRecords(): TurnRecord[] {
+    const sourceChannelIds = new Set<string>();
+    for (const channel of this.store.listChannels()) {
+      sourceChannelIds.add(channel.channelId);
+      sourceChannelIds.add(channel.sessionId);
+    }
+    const recovered = new Map<string, TurnRecord>();
+    for (const sourceChannelId of sourceChannelIds) {
+      for (const record of this.store.getRecentSourceTurnRecords(
+        sourceChannelId,
+        Number.MAX_SAFE_INTEGER,
+      )) {
+        if (record.status !== 'completed' || !record.backgroundWorkHandoff) continue;
+        const logicalSessionId = record.sessionId ?? record.channelId;
+        if (!this.store.isSourceTurnRecordEligible(
+          record.channelId,
+          logicalSessionId,
+          record.turnId,
+        )) continue;
+        recovered.set(`${record.channelId}\u0000${record.turnId}`, record);
+      }
+    }
+    return [...recovered.values()].sort((left, right) => (
+      left.completedAt - right.completedAt || left.turnId.localeCompare(right.turnId)
+    ));
   }
 
   getRoleEnvelopeRefsForEntries(channelId: string, sessionEntryIds: readonly number[]): string[] {
@@ -1089,7 +1310,7 @@ export class SessionManager {
       turnBudgetCharacteristics: input.turnBudgetCharacteristics,
       config: this.config,
       store: tailReadStore
-        ? createCompactionBoundaryStore(tailReadStore)
+        ? createCompactionBoundaryStore(createIcpDeliveryProjectionStore(tailReadStore))
         : this.compactionBoundaryStore,
       activityStore: tailReadStore ?? this.store,
       crossChannelContinuity: this.crossChannelContinuity,
@@ -1203,10 +1424,15 @@ export class SessionManager {
   }
 
   /** Append a system note to a session's internal lane. Hidden from ordinary context builds. */
-  appendSystemNote(channelId: string, note: string, source = 'appendSystemNote'): void {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+  appendSystemNote(
+    channelId: string,
+    note: string,
+    source = 'appendSystemNote',
+    sourceChannelId?: string,
+  ): void {
+    const target = this.resolveSessionWriteTarget(channelId, sourceChannelId);
+    const { resolvedChannelId, originChannelId } = target;
     if (!shouldPersistSessionChannel(resolvedChannelId)) return;
-    const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
     this.store.append({
       channelId: resolvedChannelId,
       role: 'system',
@@ -1616,6 +1842,23 @@ export class SessionManager {
       estimatedCount: historyBudget.estimatedCount,
       tokenBudget: historyBudget.tokenBudget,
     }).entries;
+  }
+
+  getRecentMessagesAtOrBefore(
+    channelId: string,
+    maxEntryId: number,
+    limit: number,
+  ): SessionEntry[] {
+    if (!Number.isSafeInteger(maxEntryId) || maxEntryId < 1) {
+      throw new Error('maxEntryId must be a positive safe integer');
+    }
+    if (!Number.isSafeInteger(limit) || limit < 1) {
+      throw new Error('limit must be a positive safe integer');
+    }
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    return this.deliveryProjectionStore
+      .getEntriesBefore(resolvedChannelId, maxEntryId + 1, limit)
+      .filter(entry => !isNonConversationalSessionEntry(entry));
   }
 
   getMessageCount(channelId: string): number {

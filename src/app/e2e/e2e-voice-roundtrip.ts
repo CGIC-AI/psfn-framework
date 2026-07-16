@@ -395,6 +395,7 @@ async function main(): Promise<void> {
       sessionManager,
       systemPrompt,
       config: sanitizeCoreSubstrateConfig(config),
+      backgroundWorkDisabled: true,
     });
 
     await eventBus.emit('system.init', {});

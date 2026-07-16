@@ -20,6 +20,8 @@ import type {
 } from './transcript-projection-port.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
+import type { TurnRecordEligibilityFencePort } from './turn-record-eligibility-fence-port.js';
+import { PostgresTurnRecordEligibilityFence } from '../postgres/turn-record-eligibility-fence.js';
 
 const DEFAULT_SEARCH_LIMIT = 10;
 const MAX_SEARCH_LIMIT = 100;
@@ -86,6 +88,7 @@ export interface PostgresSessionAdapters {
   transcriptProjection: KeywordSearchableTranscriptProjection;
   transcriptSearch: KeywordSearchableTranscriptProjection;
   turnRecordStore: TurnRecordStorePort;
+  turnRecordEligibilityFence: TurnRecordEligibilityFencePort;
 }
 
 export interface PostgresSessionAdaptersOptions extends PostgresTranscriptProjectionOptions {
@@ -543,11 +546,23 @@ export async function createDefaultPostgresSessionAdapters(
   databaseUrl: string,
   options: PostgresSessionAdaptersOptions,
 ): Promise<PostgresSessionAdapters> {
-  const transcriptProjection = await createPostgresTranscriptProjection(databaseUrl, options);
+  const pool = options.pool ?? createPostgresPool(databaseUrl, {
+    applicationName: options.applicationName ?? 'psfn-session-search',
+    allowExitOnIdle: true,
+    ...(options.schema ? { schema: options.schema } : {}),
+  });
+  const transcriptProjection = await createPostgresTranscriptProjection(databaseUrl, {
+    ...options,
+    pool,
+  });
   return {
     sessionArchivePort: createFilesystemSessionArchivePort(),
     transcriptProjection,
     transcriptSearch: transcriptProjection,
     turnRecordStore: createFilesystemTurnRecordStorePort(options.sessionsDir),
+    turnRecordEligibilityFence: new PostgresTurnRecordEligibilityFence(
+      pool,
+      options.schema ?? 'default',
+    ),
   };
 }

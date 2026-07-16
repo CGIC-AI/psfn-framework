@@ -4,7 +4,7 @@ import { parseIcpDeliveryObservation } from '../icp-delivery-recovery.js';
 import type { SessionEntry } from '../types.js';
 
 type IcpDeliveryStatus = 'prepared' | 'delivered' | 'failed' | 'suppressed';
-const RECENT_PROJECTION_PAGE_SIZE = 256;
+const DELIVERY_PROJECTION_PAGE_SIZE = 256;
 
 function parseJsonObject(value: string, label: string): Record<string, unknown> {
   let parsed: unknown;
@@ -86,6 +86,40 @@ function filterUndeliveredIcpAssistantEntries(
   });
 }
 
+function deliveryContiguousCompactionPrefix(
+  store: SessionStore,
+  channelId: string,
+  proposedEntries: readonly SessionEntry[],
+): SessionEntry[] {
+  if (proposedEntries.length === 0) return [];
+  const coveredUpTo = store.getCompactionSummaries(channelId).reduce(
+    (maximum, summary) => Math.max(maximum, summary.coveredUpTo),
+    0,
+  );
+  const proposedIds = new Set(proposedEntries.map(entry => entry.id));
+  const proposedEndId = proposedEntries[proposedEntries.length - 1]!.id;
+  let cursor = coveredUpTo + 1;
+
+  while (cursor <= proposedEndId) {
+    const pageEnd = Math.min(
+      proposedEndId,
+      cursor + DELIVERY_PROJECTION_PAGE_SIZE - 1,
+    );
+    const page = store.getEntriesInRange(channelId, cursor, pageEnd);
+    for (const entry of page) {
+      const sourceMessageId = pendingIcpSourceMessageId(entry);
+      if (sourceMessageId !== null
+        && (!proposedIds.has(entry.id)
+          || findDeliveryStatus(store, channelId, sourceMessageId) !== 'delivered')) {
+        return proposedEntries.filter(candidate => candidate.id < entry.id);
+      }
+    }
+    cursor = pageEnd + 1;
+  }
+
+  return [...proposedEntries];
+}
+
 /**
  * Read projection that keeps pending/failed/suppressed sender output out of
  * every ordinary context, extraction, and compaction consumer. Raw journal
@@ -98,12 +132,14 @@ export function createIcpDeliveryProjectionStore(store: SessionStore): SessionSt
         return (channelId: string, limit: number): SessionEntry[] => {
           const normalizedLimit = Math.max(0, Math.floor(limit));
           if (normalizedLimit <= 0) return [];
-          const lastEntry = target.getLastEntry(channelId);
+          // Use the wrapped read surface rather than getLastEntry so composed
+          // hot-tail views can contribute rows newer than the local journal.
+          const lastEntry = target.getRecent(channelId, 1).at(-1);
           if (!lastEntry) return [];
           let cursor = lastEntry.id;
           let projected: SessionEntry[] = [];
           while (cursor > 0 && projected.length < normalizedLimit) {
-            const pageStart = Math.max(1, cursor - RECENT_PROJECTION_PAGE_SIZE + 1);
+            const pageStart = Math.max(1, cursor - DELIVERY_PROJECTION_PAGE_SIZE + 1);
             const page = filterUndeliveredIcpAssistantEntries(
               target.getEntriesInRange(channelId, pageStart, cursor),
               sourceMessageId => findDeliveryStatus(target, channelId, sourceMessageId),
@@ -121,6 +157,55 @@ export function createIcpDeliveryProjectionStore(store: SessionStore): SessionSt
             target.getEntriesInRange(channelId, startId, endId),
             sourceMessageId => findDeliveryStatus(target, channelId, sourceMessageId),
           )
+        );
+      }
+
+      if (property === 'getEntriesBefore') {
+        return (channelId: string, beforeId: number, limit: number): SessionEntry[] => {
+          if (!Number.isFinite(beforeId) || !Number.isFinite(limit)) return [];
+          const normalizedBeforeId = Math.max(0, Math.floor(beforeId));
+          const normalizedLimit = Math.max(0, Math.floor(limit));
+          if (normalizedBeforeId <= 0 || normalizedLimit <= 0) return [];
+
+          const statuses = new Map<string, IcpDeliveryStatus | null>();
+          const resolveStatus = (sourceMessageId: string): IcpDeliveryStatus | null => {
+            if (statuses.has(sourceMessageId)) return statuses.get(sourceMessageId) ?? null;
+            const status = findDeliveryStatus(target, channelId, sourceMessageId);
+            statuses.set(sourceMessageId, status);
+            return status;
+          };
+          let cursor = normalizedBeforeId;
+          let projected: SessionEntry[] = [];
+          while (cursor > 0 && projected.length < normalizedLimit) {
+            const page = target.getEntriesBefore(
+              channelId,
+              cursor,
+              DELIVERY_PROJECTION_PAGE_SIZE,
+            );
+            if (page.length === 0) break;
+            const earliestEntry = page[0]!;
+            if (earliestEntry.id >= cursor) {
+              throw new Error('SessionStore getEntriesBefore returned a non-decreasing page');
+            }
+            projected = [
+              ...filterUndeliveredIcpAssistantEntries(page, resolveStatus),
+              ...projected,
+            ].slice(-normalizedLimit);
+            cursor = earliestEntry.id;
+            if (page.length < DELIVERY_PROJECTION_PAGE_SIZE) break;
+          }
+          return projected;
+        };
+      }
+
+      if (property === 'getCompactionBoundarySafePrefix') {
+        return (
+          channelId: string,
+          proposedEntries: readonly SessionEntry[],
+        ): SessionEntry[] => deliveryContiguousCompactionPrefix(
+          target,
+          channelId,
+          target.getCompactionBoundarySafePrefix(channelId, proposedEntries),
         );
       }
 

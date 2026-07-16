@@ -40,6 +40,14 @@ import {
   resolveSessionEntryTurnContext,
 } from './turn-provenance.js';
 import type { TranscriptSearchPort } from '../../persistence/sessions/transcript-search-port.js';
+import type { TurnRecordEligibilityFencePort } from '../../persistence/sessions/turn-record-eligibility-fence-port.js';
+import type { TurnRecord } from '../../shared/contracts/runtime.js';
+import {
+  createBackgroundWorkIdentity,
+  fingerprintBackgroundWorkPayload,
+  fingerprintBackgroundWorkTurnRecord,
+  type MemoryExtractionBackgroundPayload,
+} from '../agent/background-work/types.js';
 
 // Assembled history lines carry '[MM-DD-YY HH:mm] ' provenance stamps derived
 // from live clocks; strip them so content assertions stay deterministic.
@@ -96,6 +104,81 @@ function makeMockLLM(): LLMProviderPort {
     stream: async () => ({ content: '', model: 'test', inputTokens: 0, outputTokens: 0, toolCalls: [], stopReason: 'end_turn' }),
     complete,
   };
+}
+
+function createSerialTurnRecordEligibilityFence(): TurnRecordEligibilityFencePort {
+  let tail = Promise.resolve();
+  const runExclusive = async <T>(operation: () => Promise<T>): Promise<T> => {
+    const prior = tail;
+    let release!: () => void;
+    tail = new Promise<void>((resolve) => { release = resolve; });
+    await prior;
+    try {
+      return await operation();
+    } finally {
+      release();
+    }
+  };
+  return {
+    withTurnRecordEligibilityFence: (_key, operation) => runExclusive(operation),
+    withTurnRecordEligibilityFences: (_keys, operation) => runExclusive(operation),
+  };
+}
+
+function makeBackgroundHandoffTurnRecord(channelId: string, completedAt: number): TurnRecord {
+  const turnId = createTurnId(completedAt);
+  const record: TurnRecord = {
+    schemaVersion: 1,
+    turnId,
+    requestId: `request-${turnId}`,
+    sessionId: channelId,
+    channelId,
+    channelType: 'api',
+    startedAt: completedAt - 10,
+    completedAt,
+    status: 'completed',
+    userMessage: { role: 'user', content: 'private source', timestamp: completedAt - 10 },
+    assistantMessage: { role: 'assistant', content: 'private reply', timestamp: completedAt },
+    toolCalls: [],
+    extractedMemoryIds: [],
+    concernDeltaRefs: [],
+    contactDeltaRefs: [],
+    versionPointers: { model: 'test/model' },
+    provenanceRefs: [],
+  };
+  const payload: MemoryExtractionBackgroundPayload = {
+    schemaVersion: 1,
+    kind: 'memory_extraction',
+    source: {
+      schemaVersion: 1,
+      logicalSessionId: channelId,
+      channelId,
+      turnId,
+      requestId: record.requestId,
+      turnRecordFingerprint: fingerprintBackgroundWorkTurnRecord(record),
+      createdAtMs: completedAt,
+    },
+  };
+  record.backgroundWorkHandoff = {
+    schemaVersion: 1,
+    jobs: [{
+      ...createBackgroundWorkIdentity({
+        logicalSessionId: channelId,
+        turnId,
+        kind: payload.kind,
+      }),
+      logicalSessionId: channelId,
+      kind: payload.kind,
+      payload,
+      payloadFingerprint: fingerprintBackgroundWorkPayload(payload),
+      sourceTurnId: turnId,
+      sourceRequestId: record.requestId,
+      sourceChannelId: channelId,
+      createdAtMs: completedAt,
+      maxAttempts: 5,
+    }],
+  };
+  return record;
 }
 
 async function runScheduledCompaction(
@@ -165,6 +248,104 @@ describe('SessionManager', () => {
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
     tokenTestUtils.resetTokenizerState();
+  });
+
+  it('retries deferred record-first handoffs in bounded same-process batches', async () => {
+    const fencedStore = new SessionStore(dir, {
+      turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),
+    });
+    const mgr = new SessionManager(fencedStore, makeConfig());
+    const records = [
+      makeBackgroundHandoffTurnRecord('api:handoff-retry', 1_742_000_000_100),
+      makeBackgroundHandoffTurnRecord('api:handoff-retry', 1_742_000_000_200),
+    ];
+    for (const record of records) {
+      mgr.recordUserMessage(
+        record.channelId,
+        'private source',
+        'partner',
+        'Partner',
+        true,
+        undefined,
+        { turnId: record.turnId, requestId: record.requestId },
+      );
+      await mgr.recordTurn(record);
+      mgr.deferBackgroundWorkHandoffRecovery(record);
+    }
+
+    const enqueue = vi.fn<(record: TurnRecord) => Promise<void>>()
+      .mockRejectedValueOnce(new Error('injected live enqueue failure'))
+      .mockResolvedValue(undefined);
+    await expect(mgr.recoverPendingBackgroundWorkHandoffs(1, enqueue))
+      .rejects.toThrow('injected live enqueue failure');
+    expect(enqueue).toHaveBeenCalledTimes(1);
+
+    expect(await mgr.recoverPendingBackgroundWorkHandoffs(1, enqueue)).toBe(1);
+    expect(enqueue).toHaveBeenCalledTimes(2);
+    expect(enqueue.mock.calls[1]?.[0]).toEqual(records[1]);
+    expect(await mgr.recoverPendingBackgroundWorkHandoffs(1, enqueue)).toBe(1);
+    expect(enqueue.mock.calls[2]?.[0]).toEqual(records[0]);
+    expect(await mgr.recoverPendingBackgroundWorkHandoffs(1, enqueue)).toBe(0);
+  });
+
+  it('deduplicates concurrent pending-handoff recovery and drops revoked sources before enqueue', async () => {
+    const fencedStore = new SessionStore(dir, {
+      turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),
+    });
+    const mgr = new SessionManager(fencedStore, makeConfig());
+    const recoverable = makeBackgroundHandoffTurnRecord('api:handoff-concurrent', 1_742_000_000_300);
+    mgr.recordUserMessage(
+      recoverable.channelId,
+      'private source',
+      'partner',
+      'Partner',
+      true,
+      undefined,
+      { turnId: recoverable.turnId, requestId: recoverable.requestId },
+    );
+    await mgr.recordTurn(recoverable);
+    mgr.deferBackgroundWorkHandoffRecovery(recoverable);
+    const enqueue = vi.fn(async () => undefined);
+
+    expect((await Promise.all([
+      mgr.recoverPendingBackgroundWorkHandoffs(1, enqueue),
+      mgr.recoverPendingBackgroundWorkHandoffs(1, enqueue),
+    ])).reduce((sum, count) => sum + count, 0)).toBe(1);
+    expect(enqueue).toHaveBeenCalledOnce();
+
+    const tombstoned = makeBackgroundHandoffTurnRecord('api:handoff-tombstone', 1_742_000_000_400);
+    mgr.recordUserMessage(
+      tombstoned.channelId,
+      'private source',
+      'partner',
+      'Partner',
+      true,
+      undefined,
+      { turnId: tombstoned.turnId, requestId: tombstoned.requestId },
+    );
+    await mgr.recordTurn(tombstoned);
+    mgr.deferBackgroundWorkHandoffRecovery(tombstoned);
+    await fencedStore.redactTurn(tombstoned.channelId, tombstoned.turnId, {
+      actor: 'test',
+      reason: 'privacy revocation',
+    });
+    expect(await mgr.recoverPendingBackgroundWorkHandoffs(1, enqueue)).toBe(0);
+
+    const duplicated = makeBackgroundHandoffTurnRecord('api:handoff-duplicate', 1_742_000_000_500);
+    mgr.recordUserMessage(
+      duplicated.channelId,
+      'private source',
+      'partner',
+      'Partner',
+      true,
+      undefined,
+      { turnId: duplicated.turnId, requestId: duplicated.requestId },
+    );
+    await mgr.recordTurn(duplicated);
+    await fencedStore.appendTurnRecord(duplicated);
+    mgr.deferBackgroundWorkHandoffRecovery(duplicated);
+    expect(await mgr.recoverPendingBackgroundWorkHandoffs(1, enqueue)).toBe(0);
+    expect(enqueue).toHaveBeenCalledOnce();
   });
 
   it('authorship guard re-tags internal-origin messages submitted as user speech', async () => {
@@ -1291,6 +1472,67 @@ describe('SessionManager', () => {
     const context = await mgr.buildContext('api:transient-request', 'System', '');
     expect(context.messages.some(message => message.content.includes('continued user turn'))).toBe(true);
     expect(context.messages.some(message => message.content.includes('continued assistant turn'))).toBe(true);
+  });
+
+  it('keeps explicit turn writes on a captured API owner after the active context changes', () => {
+    const config = makeConfig();
+    const mgr = new SessionManager(store, config);
+    const sourceChannelId = 'api:transient-request';
+    const capturedOwner = 'api:captured-owner';
+    const futureOwner = 'api:future-owner';
+    const capturedSource = { sourceChannelId };
+
+    mgr.setActiveContextSession(futureOwner);
+    mgr.recordUserMessage(
+      capturedOwner,
+      'captured user turn',
+      'u1',
+      'User',
+      false,
+      undefined,
+      capturedSource,
+    );
+    mgr.recordSystemMessage(
+      capturedOwner,
+      'captured system turn',
+      'system:runtime',
+      'Runtime',
+      false,
+      undefined,
+      capturedSource,
+    );
+    mgr.recordToolObservation(
+      capturedOwner,
+      { toolName: 'test_tool', content: 'captured tool turn' },
+      false,
+      capturedSource,
+    );
+    mgr.recordAssistantMessage(
+      capturedOwner,
+      'captured assistant turn',
+      undefined,
+      false,
+      undefined,
+      capturedSource,
+    );
+    mgr.appendSystemNote(
+      capturedOwner,
+      'captured internal note',
+      'test',
+      sourceChannelId,
+    );
+
+    expect(store.getRecent(capturedOwner, 10).map(entry => entry.content)).toEqual([
+      'captured user turn',
+      'captured system turn',
+      'captured tool turn',
+      'captured assistant turn',
+      'captured internal note',
+    ]);
+    expect(store.getRecent(capturedOwner, 10).every(entry => (
+      entry.originChannelId === sourceChannelId
+    ))).toBe(true);
+    expect(store.count(futureOwner)).toBe(0);
   });
 
   it('routes a Discord source channel to a fresh logical session without pulling pre-reset chat context', async () => {
@@ -2480,6 +2722,46 @@ describe('SessionManager', () => {
     expect(ctx.systemPrompt).toContain('Summary of old messages.');
   });
 
+  it('captures auto-compaction input at or before the durable source entry', () => {
+    const mgr = new SessionManager(store, makeConfig());
+    mgr.recordUserMessage('ch1', 'turn A user', 'u1', 'User');
+    const sourceEntryId = mgr.recordAssistantMessage('ch1', 'turn A assistant');
+    expect(sourceEntryId).not.toBeNull();
+    mgr.recordUserMessage('ch1', 'newer turn must stay out', 'u1', 'User');
+    mgr.recordAssistantMessage('ch1', 'newer response must stay out');
+
+    const captured = mgr.captureAutoCompactionRecentEntries({
+      channelId: 'ch1',
+      maxSessionEntryId: sourceEntryId!,
+      now: new Date(),
+    });
+
+    expect(captured.map(entry => entry.content)).toEqual([
+      'turn A user',
+      'turn A assistant',
+    ]);
+    expect(captured.every(entry => entry.id <= sourceEntryId!)).toBe(true);
+  });
+
+  it('does not replace an explicitly captured empty compaction snapshot with live history', async () => {
+    const mgr = new SessionManager(store, makeConfig({ compactionThresholdPct: 1 }));
+    mgr.recordUserMessage('ch1', 'Live turn A must not be compacted.', 'u1', 'User');
+    mgr.recordAssistantMessage('ch1', 'Live turn C must not be compacted.');
+    const capture = vi.spyOn(mgr, 'captureAutoCompactionRecentEntries');
+    const mockLLM = makeMockLLM();
+
+    await mgr.scheduleAutoCompactionBetweenTurns({
+      channelId: 'ch1',
+      systemPrompt: 'System prompt',
+      memoriesBlock: '',
+      llmProvider: mockLLM,
+      capturedRecentEntries: [],
+    });
+
+    expect(capture).not.toHaveBeenCalled();
+    expect(mockLLM.complete).not.toHaveBeenCalled();
+  });
+
   it('marks compaction summaries as untrusted at generation and retrieval boundaries', async () => {
     const config = makeConfig({ compactionThresholdPct: 70 });
     const mgr = new SessionManager(store, config);
@@ -2933,6 +3215,41 @@ describe('SessionManager', () => {
     expect(store.getCompactionSummaries('ch1')).toHaveLength(0);
     expect(ctx.systemPrompt).not.toContain('Previous conversation summary');
     expect(ctx.messages.length).toBeGreaterThan(0);
+  });
+
+  it('propagates background compaction failures into the durable retry owner', async () => {
+    const config = makeConfig({ compactionThresholdPct: 1 });
+    const mgr = new SessionManager(store, config);
+    const mockLLM = makeMockLLM();
+    vi.mocked(mockLLM.complete).mockRejectedValue(new Error('compaction provider failed'));
+    for (let i = 0; i < 5; i += 1) {
+      mgr.recordUserMessage('ch1', `User ${String(i)} ${'A'.repeat(200)}`, 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `Assistant ${String(i)} ${'B'.repeat(200)}`);
+    }
+
+    await expect(runScheduledCompaction(mgr, mockLLM, { throwOnFailure: true }))
+      .rejects.toThrow('compaction provider failed');
+    expect(store.getCompactionSummaries('ch1')).toHaveLength(0);
+  });
+
+  it('checks the background claim fence immediately before a compaction write', async () => {
+    const config = makeConfig({ compactionThresholdPct: 1 });
+    const mgr = new SessionManager(store, config);
+    const mockLLM = makeMockLLM();
+    const assertEffectAllowed = vi.fn(async () => {
+      throw new Error('background lease lost');
+    });
+    for (let i = 0; i < 5; i += 1) {
+      mgr.recordUserMessage('ch1', `User ${String(i)} ${'A'.repeat(200)}`, 'u1', 'User');
+      mgr.recordAssistantMessage('ch1', `Assistant ${String(i)} ${'B'.repeat(200)}`);
+    }
+
+    await expect(runScheduledCompaction(mgr, mockLLM, {
+      throwOnFailure: true,
+      assertEffectAllowed,
+    })).rejects.toThrow('background lease lost');
+    expect(assertEffectAllowed).toHaveBeenCalledTimes(1);
+    expect(store.getCompactionSummaries('ch1')).toHaveLength(0);
   });
 
   it('appendSystemNote stores an internal system entry that stays out of conversational context', async () => {

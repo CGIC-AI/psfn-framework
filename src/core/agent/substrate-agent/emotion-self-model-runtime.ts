@@ -1,4 +1,5 @@
 import { EmotionAppraisal, type EmotionAppraisalEntry } from '../../emotion/appraisal.js';
+import type { EmotionAppraisalStateSnapshot } from '../../emotion/appraisal-state.js';
 import type { EmotionObserver, EmotionObserverResult } from '../../emotion/observer.js';
 import { EmotionState, type EmotionObservation, type EmotionStateSnapshot, type VADVector } from '../../emotion/state.js';
 import { parseSessionEmotionState } from '../../emotion/session-metadata.js';
@@ -39,6 +40,7 @@ import {
 import type { ContactStorePort } from '../../contacts/contact-store-port.js';
 import type { EmotionalSnapshot } from '../../contacts/store/emotional-baseline.js';
 import type { SessionManager } from '../../session/manager.js';
+import type { SessionEntry } from '../../session/types.js';
 import type { ConversationScope } from '../../session/conversation-scope.js';
 import { isIntentionAppraisalArtifact } from '../../session/entry-attribution.js';
 import { isIntakeFirewallNoticeText } from '../../cogsec/intake-firewall-notice-templates.js';
@@ -60,6 +62,15 @@ import type { DeterministicGateEvent } from '../../../shared/event-bus.js';
 
 const TOP_EMOTION_COUNT = 3;
 const MIN_TOP_EMOTION_SCORE = 0.05;
+
+export function selectEmotionAppraisalSourceEntries(
+  entries: readonly SessionEntry[],
+): SessionEntry[] {
+  return entries
+    .filter(entry => !isIntentionAppraisalArtifact(entry))
+    // Intake-firewall/quarantine notices contribute zero appraisal input.
+    .filter(entry => !isIntakeFirewallNoticeText(entry.content));
+}
 
 interface EmotionSelfModelRuntimeLogger {
   debug: (message: string, payload: Record<string, unknown>) => void;
@@ -445,11 +456,16 @@ export class EmotionSelfModelRuntime {
   async triggerEmotionAppraisal(params: {
     sessionChannelId: string;
     turnId: TurnID;
-    internalState: InternalState;
+    appraisalState: EmotionAppraisalStateSnapshot;
     templateVariables: Record<string, string> | undefined;
     // E1.5: turn ConversationScope, plumbed as an available input for the
     // emotion scoping bead. Appraisal behavior is unchanged here.
     conversationScope?: ConversationScope;
+    maxSessionEntryId?: number;
+    icpCorrelation?: IcpConversationCorrelation;
+    assertEffectAllowed?: () => Promise<void>;
+    /** Undefined permits direct-call history lookup; an empty array is authoritative. */
+    recentEntries?: readonly SessionEntry[];
   }): Promise<void> {
     if (!this.emotionAppraisal) return;
 
@@ -467,11 +483,16 @@ export class EmotionSelfModelRuntime {
       return;
     }
 
-    const recentMessages = manager.getRecentMessages(params.sessionChannelId, 10)
-      .filter(entry => !isIntentionAppraisalArtifact(entry))
-      // htm9.12: intake-firewall/quarantine notices must contribute ZERO emotion
-      // appraisal input. A quarantine notice must never become a stress signal.
-      .filter(entry => !isIntakeFirewallNoticeText(entry.content))
+    const recentEntries = params.recentEntries !== undefined
+      ? [...params.recentEntries]
+      : params.maxSessionEntryId === undefined
+        ? manager.getRecentMessages(params.sessionChannelId, 10)
+        : this.sessionManager.getRecentMessagesAtOrBefore(
+            params.sessionChannelId,
+            params.maxSessionEntryId,
+            10,
+          );
+    const recentMessages = selectEmotionAppraisalSourceEntries(recentEntries)
       .map((entry) => ({
         role: entry.role,
         content: entry.content,
@@ -481,9 +502,12 @@ export class EmotionSelfModelRuntime {
     const result = await this.emotionAppraisal.maybeAppraise({
       sessionId: params.sessionChannelId,
       turnId: params.turnId,
-      internalState: params.internalState,
+      appraisalState: params.appraisalState,
       recentMessages,
       personalityTraits: this.resolveEmotionPersonalityTraits(params.templateVariables),
+      ...(params.assertEffectAllowed
+        ? { assertEffectAllowed: params.assertEffectAllowed }
+        : {}),
       ...(params.icpCorrelation ? { icpCorrelation: params.icpCorrelation } : {}),
     });
     if (result.appraised) {

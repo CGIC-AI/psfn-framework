@@ -227,6 +227,7 @@ async function main(): Promise<void> {
     runtimeMode: 'gateway',
     fatigueBudget: fatigue.fatigueBudget,
     fatigueRegulationReservations: fatigueReservations,
+    backgroundWorkStore: persistence.backgroundWorkStore,
     streamTransport: { stream: gateway.stream.bind(gateway) },
   });
   const chargeLedger = new RunChargeLedger(
@@ -875,6 +876,7 @@ async function main(): Promise<void> {
           return;
         }
         await agent.waitForIdle();
+        await agent.stopBackgroundWork();
         unregisterInitiationCandidates();
         sourceWiring.unregisterCoLocationThoughtAdapter();
         await scheduler.stop();
@@ -882,6 +884,7 @@ async function main(): Promise<void> {
         await gardenIcpAutonomy?.close();
         await presenceRuntime?.shutdown();
         await fatigueReservations.close();
+        await persistence.backgroundWorkStore.close();
         chargeLedger.close();
         startup.stopDebugObserver();
         reply({ id: raw.id, ok: true });

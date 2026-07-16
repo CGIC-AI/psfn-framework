@@ -6,7 +6,7 @@ import { Agent, type AgentTool } from '../../boundary/pi-agent/index.js';
 import type { CanonicalModelRegistry, LLMContext, LLMResponse, ModelRegistryEntry, ModelSlot, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { MemoryProvider, MemoryExtractor, LLMProviderPort } from './substrate-agent.js';
-import { SubstrateAgent } from './substrate-agent.js';
+import { SubstrateAgent as RuntimeSubstrateAgent } from './substrate-agent.js';
 import { EventBus } from '../../shared/event-bus.js';
 import type { SessionManager } from '../session/manager.js';
 import { resolveConversationScopeFromMetadata } from '../session/conversation-scope.js';
@@ -48,6 +48,17 @@ import type { IcpInitiationPermit } from '../../shared/contracts/icp-autonomy.js
 import { DEFERRED_COMPANION_OUTREACH_ACTION_KIND } from '../tools/notify-companion-handoff.js';
 import { createIcpAutonomyCandidateSchedulerMessage } from '../icp/candidate-scheduler-origin.js';
 import { TurnRunReservation } from './substrate-agent/turn-run-reservation.js';
+import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
+
+class SubstrateAgent extends RuntimeSubstrateAgent {
+  constructor(...args: ConstructorParameters<typeof RuntimeSubstrateAgent>) {
+    const [eventBus, llmProvider, sessionManager, systemPrompt, config, options] = args;
+    super(eventBus, llmProvider, sessionManager, systemPrompt, config, {
+      ...(options ?? {}),
+      ...(options?.backgroundWorkStore ? {} : { backgroundWorkDisabled: true }),
+    });
+  }
+}
 
 const TEST_COMPANION_NAME = 'Companion';
 const TEST_SYSTEM_PROMPT = `You are ${TEST_COMPANION_NAME}.`;
@@ -376,6 +387,9 @@ function makeMockSessionManager(): SessionManager {
     recordSystemMessage: vi.fn().mockReturnValue(103),
     recordTurn: vi.fn(),
     hasRecordedTurn: vi.fn().mockReturnValue(false),
+    findRecordedTurn: vi.fn().mockReturnValue(null),
+    findSourceRecordedTurn: vi.fn().mockReturnValue(null),
+    findUniqueSourceRecordedTurn: vi.fn().mockReturnValue(null),
     appendSystemNote: vi.fn(),
     awaitPendingAutoCompaction: vi.fn().mockResolvedValue(undefined),
     scheduleAutoCompactionBetweenTurns: vi.fn().mockResolvedValue(undefined),
@@ -679,6 +693,7 @@ describe('SubstrateAgent construction', () => {
     };
     const mockExtractor: MemoryExtractor = {
       maybeExtract: vi.fn<any>().mockResolvedValue(undefined),
+      getBoundedExtractionSnapshotLimit: () => 10,
     };
     const mockContactStore = {
       resolveUserId: vi.fn().mockReturnValue({ trustLevel: 'primary' }),
@@ -1788,7 +1803,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(captured[0].contextManifest).toEqual(manifest);
   });
 
-  it('runs registered intention post-turn hooks without blocking turn completion', async () => {
+  it('does not execute registered post-turn hooks when background work is explicitly disabled', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();
     const agent = new SubstrateAgent(
@@ -1808,13 +1823,8 @@ describe('SubstrateAgent.handleMessage', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(failingHook).toHaveBeenCalledTimes(1);
-    expect(successfulHook).toHaveBeenCalledTimes(1);
-    expect(successfulHook.mock.calls[0]?.[0]).toMatchObject({
-      message: expect.objectContaining({ id: 'turn-intention-hook-1' }),
-      response: expect.objectContaining({ channelId: 'test-channel' }),
-    });
-    expect(isTurnId(successfulHook.mock.calls[0]?.[0]?.turnId)).toBe(true);
+    expect(failingHook).not.toHaveBeenCalled();
+    expect(successfulHook).not.toHaveBeenCalled();
   });
 
 
@@ -2091,9 +2101,7 @@ describe('SubstrateAgent.handleMessage', () => {
       content: TEST_ASSISTANT_RESPONSE,
       metadata: expect.objectContaining({ icpCorrelation: correlation }),
     }));
-    expect(finalizeDelivery.mock.invocationCallOrder[0]).toBeLessThan(
-      sessionManager.scheduleAutoCompactionBetweenTurns.mock.invocationCallOrder[0]!,
-    );
+    expect(sessionManager.scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
     expect(sessionManager.recordAssistantMessage).toHaveBeenCalledWith(
       correlation.channelId,
       TEST_ASSISTANT_RESPONSE,
@@ -2192,7 +2200,7 @@ describe('SubstrateAgent.handleMessage', () => {
 
     expect(promptSpy.mock.calls.length - promptCallsBefore).toBe(1);
     expect(sessionManager.recordAssistantMessage).toHaveBeenCalledTimes(1);
-    expect(sessionManager.scheduleAutoCompactionBetweenTurns).toHaveBeenCalledTimes(1);
+    expect(sessionManager.scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
     expect(sessionManager.recordTurn).toHaveBeenCalledWith(expect.objectContaining({
       turnId: correlation.turnId,
       status: 'failed',
@@ -2703,10 +2711,7 @@ describe('SubstrateAgent.handleMessage', () => {
     expect((sessionManager.recordSystemMessage as any).mock.calls[0][5]).toBe(DEFAULT_COMPANION_ID);
     expect((sessionManager.buildContext as any).mock.calls[0][4]).toBe(DEFAULT_COMPANION_ID);
     expect((sessionManager.recordAssistantMessage as any).mock.calls[0][4]).toBe(DEFAULT_COMPANION_ID);
-    expect((sessionManager.scheduleAutoCompactionBetweenTurns as any).mock.calls[0][0]).toMatchObject({
-      channelId,
-      userId: DEFAULT_COMPANION_ID,
-    });
+    expect(sessionManager.scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;
     expect(prompt).toContain('<internal_turn_context>');
@@ -2718,10 +2723,11 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(speakingWith.toLowerCase()).not.toContain(authorName.toLowerCase());
   });
 
-  it('triggers memory extraction after response', async () => {
+  it('does not trigger memory extraction when background work is explicitly disabled', async () => {
     const config = makeConfig();
     const mockExtractor: MemoryExtractor = {
       maybeExtract: vi.fn<any>().mockResolvedValue(undefined),
+      getBoundedExtractionSnapshotLimit: () => 10,
     };
 
     const agent = new SubstrateAgent(
@@ -2737,13 +2743,7 @@ describe('SubstrateAgent.handleMessage', () => {
       },
     }));
 
-    // Fire-and-forget, but should have been called
-    expect(mockExtractor.maybeExtract).toHaveBeenCalledTimes(1);
-    const [channelId, canonicalContactId, turnId, placeId] = (mockExtractor.maybeExtract as any).mock.calls[0];
-    expect(channelId).toBe('test-channel');
-    expect(canonicalContactId).toBeUndefined();
-    expect(isTurnId(turnId)).toBe(true);
-    expect(placeId).toBe('den');
+    expect(mockExtractor.maybeExtract).not.toHaveBeenCalled();
   });
 
   it('returns AgentResponse with content and metadata', async () => {
@@ -4961,6 +4961,8 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(sessionManager.appendSystemNote).toHaveBeenCalledWith(
       'twitter:timeline',
       expect.stringContaining('held for approval'),
+      'appendSystemNote',
+      'twitter:timeline',
     );
     expect(approvalEvents).toEqual([
       { channelId: 'twitter:timeline', signals: ['private'] },
@@ -5019,6 +5021,8 @@ describe('SubstrateAgent.handleMessage', () => {
       expect(sessionManager.appendSystemNote).toHaveBeenCalledWith(
         'api:admin-broadcast',
         expect.stringContaining('held for approval'),
+        'appendSystemNote',
+        'api:admin-broadcast',
       );
     } finally {
       resetRuntimeChannelEnvelopeLabels();
@@ -5482,6 +5486,7 @@ describe('SubstrateAgent steering + follow-up', () => {
 
   it('preserves immediate follow-up and steer delivery for an ordinary active run', async () => {
     const sessionManager = makeMockSessionManager();
+    sessionManager.setActiveContextSession('session:captured-owner');
     let markPromptEntered!: () => void;
     let releasePrompt!: () => void;
     const promptEntered = new Promise<void>((resolve) => {
@@ -5528,17 +5533,32 @@ describe('SubstrateAgent steering + follow-up', () => {
     });
     const followUpSpy = vi.spyOn(Agent.prototype, 'followUp');
     const steerSpy = vi.spyOn(Agent.prototype, 'steer');
-    const ordinaryRun = agent.handleMessage(makeMessage({ id: 'ordinary-active-ingress-owner' }));
+    const activeMessage = makeMessage({
+      id: 'ordinary-active-ingress-owner',
+      channelId: 'api:active-ordinary',
+      channelType: 'api',
+    });
+    const ordinaryRun = agent.handleMessage(activeMessage);
     await promptEntered;
+    sessionManager.setActiveContextSession('session:future-owner');
 
     await Promise.all([
       agent.followUp(makeMessage({
         id: 'ordinary-active-follow-up',
+        channelId: activeMessage.channelId,
         content: 'ordinary active follow-up',
       })),
       agent.steer(makeMessage({
         id: 'ordinary-active-steer',
+        channelId: activeMessage.channelId,
         content: 'ordinary active steer',
+      })),
+      agent.followUp(makeMessage({
+        id: 'ordinary-active-system-follow-up',
+        channelId: activeMessage.channelId,
+        authorId: 'system:scheduler',
+        authorName: 'Scheduler',
+        content: 'ordinary active system follow-up',
       })),
     ]);
     expect(followUpSpy).toHaveBeenCalledWith(expect.objectContaining({
@@ -5550,22 +5570,40 @@ describe('SubstrateAgent steering + follow-up', () => {
       content: 'ordinary active steer',
     }));
     expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
-      'test-channel',
+      'session:captured-owner',
       'ordinary active follow-up',
       expect.anything(),
       expect.anything(),
       undefined,
       undefined,
-      expect.objectContaining({ sourceMessageId: 'ordinary-active-follow-up' }),
+      expect.objectContaining({
+        sourceMessageId: 'ordinary-active-follow-up',
+        sourceChannelId: 'api:active-ordinary',
+      }),
     );
     expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
-      'test-channel',
+      'session:captured-owner',
       'ordinary active steer',
       expect.anything(),
       expect.anything(),
       undefined,
       undefined,
-      expect.objectContaining({ sourceMessageId: 'ordinary-active-steer' }),
+      expect.objectContaining({
+        sourceMessageId: 'ordinary-active-steer',
+        sourceChannelId: 'api:active-ordinary',
+      }),
+    );
+    expect(sessionManager.recordSystemMessage).toHaveBeenCalledWith(
+      'session:captured-owner',
+      '[SYSTEM: Scheduler] ordinary active system follow-up',
+      'system:scheduler',
+      'Scheduler',
+      undefined,
+      undefined,
+      expect.objectContaining({
+        sourceMessageId: 'ordinary-active-system-follow-up',
+        sourceChannelId: 'api:active-ordinary',
+      }),
     );
 
     releasePrompt();
@@ -6302,30 +6340,28 @@ describe('SubstrateAgent steering + follow-up', () => {
       release: releaseTool,
     });
 
-    let markPostTurnEntered!: () => void;
-    let releasePostTurn!: () => void;
-    const postTurnEntered = new Promise<void>((resolve) => {
-      markPostTurnEntered = resolve;
-    });
-    const postTurnRelease = new Promise<void>((resolve) => {
-      releasePostTurn = resolve;
-    });
-    agent.registerIntentionPostTurnHook(async (context) => {
-      if (context.message.id !== candidateMessage.id) return;
-      markPostTurnEntered();
-      await postTurnRelease;
-    });
+    let markPostTurnEntered!: () => void, releasePostTurn!: () => void;
+    const postTurnEntered = new Promise<void>((resolve) => { markPostTurnEntered = resolve; });
+    const postTurnRelease = new Promise<void>((resolve) => { releasePostTurn = resolve; });
+    const enqueuePostTurnSpy = vi.spyOn(TurnSupportRuntime.prototype, 'enqueuePostTurnBackgroundWork')
+      .mockImplementationOnce(async () => {
+        markPostTurnEntered();
+        await postTurnRelease;
+      });
     promptSpy.mockImplementationOnce(async function (this: Agent) {
       expect(agent.getActiveTurnTools().map(tool => tool.name)).toEqual(['notify']);
       appendAssistant(this, 'candidate post-turn phase starting');
     });
     const candidatePostTurnRun = agent.handleIcpAutonomyCandidateTurn(candidateMessage);
-    await postTurnEntered;
-    await assertDeferredIngressPhase({
-      phase: 'post-turn',
-      candidateRun: candidatePostTurnRun,
-      release: releasePostTurn,
-    });
+    try {
+      await postTurnEntered;
+      await assertDeferredIngressPhase({
+        phase: 'post-turn', candidateRun: candidatePostTurnRun, release: releasePostTurn,
+      });
+    } finally {
+      releasePostTurn();
+      enqueuePostTurnSpy.mockRestore();
+    }
 
     let releaseDetachedIngress!: () => void;
     const detachedIngressRelease = new Promise<void>((resolve) => {

@@ -362,6 +362,8 @@ export class SubagentFaculty implements SubagentControlPort {
         sanitizeCoreSubstrateConfig(this.deps.config),
         {
           runtimeMode: this.deps.runtimeMode === 'gateway' ? 'gateway' : undefined,
+          // Subagents are ephemeral and intentionally own no durable post-turn lane.
+          backgroundWorkDisabled: true,
         },
       );
       handle.agentLoop = agentLoop;

@@ -117,6 +117,7 @@ import {
   type AgentFacingIcpAutonomyRuntime,
 } from '../../core/icp/agent-facing-autonomy.js';
 import { icpTargetChannelInitiationCommand } from './icp-target-channel-command.js';
+import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 
 const log = createComponentLogger('AgentCoreRuntime');
 
@@ -129,6 +130,7 @@ export interface AgentCoreRuntimeOptions {
   gateway: GatewayClient;
   memoryStore?: MemoryStorePort;
   episodicStore?: EpisodicStorePort | null;
+  backgroundWorkStore: BackgroundWorkStorePort;
   contactStore?: ContactStorePort;
   card: CharacterCardV2;
   systemPrompt: string;
@@ -299,6 +301,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     emotionRuntime,
     observerEvalSidecar,
     appCache,
+    backgroundWorkStore: options.backgroundWorkStore,
     contactTrackingGate,
     ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
   });

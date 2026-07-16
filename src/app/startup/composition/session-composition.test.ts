@@ -39,6 +39,10 @@ vi.mock('../../../persistence/sessions/postgres-adapters.js', async () => {
         transcriptProjection,
         transcriptSearch: transcriptProjection,
         turnRecordStore: turnRecords.createFilesystemTurnRecordStorePort(options.sessionsDir),
+        turnRecordEligibilityFence: {
+          withTurnRecordEligibilityFence: async (_key: unknown, operation: () => Promise<unknown>) => operation(),
+          withTurnRecordEligibilityFences: async (_keys: readonly unknown[], operation: () => Promise<unknown>) => operation(),
+        },
       };
     }),
   };
@@ -128,6 +132,27 @@ describe('session runtime composition transcript projection wiring', () => {
         persistenceBackend: 'postgres',
       } as any,
     })).rejects.toThrow('requires config.postgresDatabaseUrl');
+  });
+
+  it('fails closed when postgres session adapters omit the TurnRecord eligibility fence', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-session-composition-missing-turn-fence-'));
+    dirs.push(root);
+    const companionDataDir = join(root, 'companion-data');
+    const sessionsDir = resolveSessionsDir(companionDataDir);
+    const adapters = await createDefaultPostgresSessionAdapters('postgres://unused', { sessionsDir });
+    vi.mocked(createDefaultPostgresSessionAdapters).mockResolvedValueOnce({
+      ...adapters,
+      turnRecordEligibilityFence: undefined,
+    } as unknown as Awaited<ReturnType<typeof createDefaultPostgresSessionAdapters>>);
+
+    await expect(composeSessionRuntimeAsync({
+      config: {
+        companionDataDir,
+        dataDir: companionDataDir,
+        persistenceBackend: 'postgres',
+        postgresDatabaseUrl: 'postgres://postgres:secret@localhost:5432/psfn_test',
+      } as any,
+    })).rejects.toThrow('requires a TurnRecord eligibility fence');
   });
 
   it('accepts an explicit database credential alongside secret-sanitized core config', async () => {

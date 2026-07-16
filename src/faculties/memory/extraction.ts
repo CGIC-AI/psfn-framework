@@ -21,6 +21,7 @@ import { evaluateCompositionalPolicyForChannelId } from '../../system/capabiliti
 import type { MemoryStorePort } from './memory-store-port.js';
 import type { ExtractedFact, MemoryFormationVAD } from './types.js';
 import { MEMORY_CONFIG } from './types.js';
+import { RECOVERY_CONTEXT_MESSAGE_LIMIT } from './extraction/types.js';
 import { MemoryWriter, type WriteResult } from './writer.js';
 import {
   DEFAULT_EMOTIONAL_INTENSITY_IMPORTANCE_WEIGHT,
@@ -51,6 +52,7 @@ import {
   runExtractionOrchestration,
   type ExtractionRunOptions,
 } from './extraction/orchestrator.js';
+import { ExtractionDrainRequeueError } from './extraction/drain-signal.js';
 import { refreshContactProfile as runProfileRefresh } from './extraction/profile-synthesis.js';
 import { persistEmotionalStateFromExtraction } from './extraction/emotional.js';
 import {
@@ -62,6 +64,7 @@ import {
   emitExtractionEnd as emitExtractionEndEvent,
   emitExtractionStart as emitExtractionStartEvent,
   evaluateExtractionTrigger,
+  evaluateExtractionTriggerForSnapshot,
   recordExtractionMarker as persistExtractionMarker,
   resetLastExtractionCount,
   resolveCoveredUpToMessageId as resolveCoveredMarker,
@@ -254,18 +257,32 @@ export class MemoryExtractor {
     turnId?: TurnID,
     placeId?: string,
     icpCorrelation?: IcpConversationCorrelation,
+    assertEffectAllowed?: () => Promise<void>,
+    recoveredEntries?: readonly SessionEntry[],
+    // NON-crossing durable fence for the pre-write phase (entry, LLM, parse, DB
+    // reads). Separate from `assertEffectAllowed`, which crosses the durable
+    // side-effect boundary and must fire only at the write sites.
+    assertPreWriteFence?: () => Promise<void>,
   ): Promise<void> {
     if (!this.acceptingExtractions) {
       log.debug('Skipping extraction trigger while extractor is draining', { channelId });
       return;
     }
 
-    const trigger = evaluateExtractionTrigger(
-      channelId,
-      this.sessionManager,
-      this.runtimeConfig,
-      this.extractionInterval,
-    );
+    const boundedEntries = recoveredEntries !== undefined ? [...recoveredEntries] : undefined;
+    const trigger = boundedEntries === undefined
+      ? evaluateExtractionTrigger(
+        channelId,
+        this.sessionManager,
+        this.runtimeConfig,
+        this.extractionInterval,
+      )
+      : evaluateExtractionTriggerForSnapshot(
+        channelId,
+        boundedEntries,
+        this.runtimeConfig,
+        this.extractionInterval,
+      );
     if (!trigger) return;
 
     if (this.isTelemetryEnabled()) {
@@ -286,12 +303,46 @@ export class MemoryExtractor {
       channelId,
       trigger.triggerReason,
       canonicalContactId,
-      undefined,
+      boundedEntries,
       turnId,
       undefined,
       placeId,
       icpCorrelation,
+      assertEffectAllowed,
+      // A durable bounded callback may complete an effect receipt only after
+      // its own snapshot runs; reusing unrelated channel work would drop it.
+      boundedEntries === undefined ? 'coalesce' : 'serialize',
+      assertPreWriteFence,
     );
+    if (boundedEntries !== undefined) {
+      this.advanceIntervalWatermarkAfterCoverage(
+        channelId,
+        trigger.triggerReason,
+        boundedEntries,
+      );
+    }
+  }
+
+  /**
+   * Entry count a durable post-turn handler must read into its bounded snapshot
+   * for this extractor's interval to be reachable. The interval trigger counts
+   * exact uncovered entries inside the supplied snapshot, so a snapshot smaller
+   * than the interval can never satisfy it — the original fixed ten-entry window
+   * left every configured interval of 11-50 permanently unable to interval-fire.
+   *
+   * Sized to the effective interval and clamped to the extraction recovery
+   * window: the interval upper bound (50) equals that window by construction, so
+   * a valid interval is never truncated. The clamp only fails safe on an
+   * out-of-contract interval — the snapshot must never exceed the recovery window
+   * the orchestrator feeds the LLM, or coverage would advance over entries the
+   * extractor never actually processed.
+   */
+  getBoundedExtractionSnapshotLimit(): number {
+    const interval = this.runtimeConfig?.extractionInterval ?? this.extractionInterval;
+    const normalized = Number.isSafeInteger(interval) && interval >= 1
+      ? interval
+      : MEMORY_CONFIG.extractionInterval;
+    return Math.max(1, Math.min(normalized, RECOVERY_CONTEXT_MESSAGE_LIMIT));
   }
 
   async extract(
@@ -431,15 +482,18 @@ export class MemoryExtractor {
     groupOptions?: MemoryExtractorGroupOptions,
     placeId?: string,
     icpCorrelation?: IcpConversationCorrelation,
+    assertEffectAllowed?: () => Promise<void>,
+    scheduling: 'coalesce' | 'serialize' = 'coalesce',
+    assertPreWriteFence?: () => Promise<void>,
   ): Promise<void> {
     const logicalSessionId = this.resolveExtractionLogicalSessionId(channelId);
     const existing = this.inFlightByChannel.get(logicalSessionId);
-    if (existing) {
+    if (existing && scheduling === 'coalesce') {
       log.debug('Reusing in-flight extraction', { channelId, logicalSessionId, triggerReason });
       return existing;
     }
 
-    const promise = this.runExtraction(
+    const start = () => this.runExtraction(
       channelId,
       logicalSessionId,
       triggerReason,
@@ -449,11 +503,33 @@ export class MemoryExtractor {
       groupOptions,
       placeId,
       icpCorrelation,
+      assertEffectAllowed,
+      assertPreWriteFence,
     );
+    const promise = existing
+      ? existing.then(start, start)
+      : start();
+    if (existing) {
+      log.debug('Queued bounded extraction behind in-flight channel work', {
+        channelId,
+        logicalSessionId,
+        triggerReason,
+      });
+    }
     this.inFlightExtractions.add(promise);
     this.inFlightByChannel.set(logicalSessionId, promise);
     void promise
       .catch((error) => {
+        if (error instanceof ExtractionDrainRequeueError) {
+          // Expected control-flow signal on shutdown: a queued durable run failed
+          // closed before writing so its job/receipt stay retryable. Not a failure.
+          log.debug('Requeued durable bounded extraction interrupted by drain before it wrote', {
+            channelId,
+            logicalSessionId,
+            triggerReason,
+          });
+          return;
+        }
         log.error('Extraction run failed', {
           channelId,
           logicalSessionId,
@@ -481,7 +557,27 @@ export class MemoryExtractor {
     groupOptions?: MemoryExtractorGroupOptions,
     placeId?: string,
     icpCorrelation?: IcpConversationCorrelation,
+    assertEffectAllowed?: () => Promise<void>,
+    assertPreWriteFence?: () => Promise<void>,
   ): Promise<void> {
+    // u5bv.11: A durable, receipt-bound bounded run (assertEffectAllowed present)
+    // can be queued behind other same-session work under serialize scheduling. If
+    // the extractor began draining while this run waited its turn, fail closed —
+    // retryable — BEFORE crossing the effect boundary or advancing coverage.
+    // Resolving normally here is the silent-loss bug: maybeExtract would mark the
+    // snapshot covered and the background receipt would complete `applied` without
+    // ever writing its facts. Foreground/manual/group drains (no receipt) keep
+    // their intentional silent skip and never reach this guard.
+    if (assertEffectAllowed && !this.acceptingExtractions) {
+      throw new ExtractionDrainRequeueError(channelId, triggerReason);
+    }
+    // Entry guard on the pre-write phase: use the NON-crossing fence so a
+    // transient failure in the LLM/parse/read work below leaves the durable
+    // receipt `pending` (safely retryable) instead of crossing the side-effect
+    // boundary early. The boundary is crossed later, at the first durable write
+    // (processFact / extraction marker), via `assertEffectAllowed`. Callers that
+    // supply no pre-write fence fall back to the prior behavior.
+    await (assertPreWriteFence ?? assertEffectAllowed)?.();
     if (!this.isExtractionSessionCurrent(channelId, logicalSessionId)) {
       log.debug('Skipping stale extraction after session route changed', {
         channelId,
@@ -548,6 +644,10 @@ export class MemoryExtractor {
         this.acceptingExtractions
         && this.isExtractionSessionCurrent(channelId, logicalSessionId)
       ),
+      // u5bv.11: distinguishes a drain (extractor stopping) from a stale session
+      // route so the orchestrator can fail a durable run closed on a mid-flight
+      // drain instead of resolving it as a covered no-op.
+      isDraining: () => !this.acceptingExtractions,
       adjustFactForWrite: fact => (
         this.adjustFactImportanceByEmotion(fact, resolveFormationVAD(), intensityWeight)
       ),
@@ -565,6 +665,7 @@ export class MemoryExtractor {
           turnId,
           routing,
           placeId,
+          assertEffectAllowed,
         )
       ),
       emitExtractionStart: (extractionChannelId, reason, extractionTurnId) => (
@@ -591,6 +692,7 @@ export class MemoryExtractor {
       ...(this.emitConcernCandidates
         ? { emitConcernCandidates: this.emitConcernCandidates }
         : {}),
+      ...(assertEffectAllowed ? { assertEffectAllowed } : {}),
     });
   }
 
@@ -599,13 +701,10 @@ export class MemoryExtractor {
   }
 
   /**
-   * Advances the interval watermark after an out-of-band extraction
-   * (pre_compaction / crash_recovery) successfully consumed a batch, so the
-   * next interval trigger does not re-send the same messages
-   * (psfn-framework-xcw8). Callers must only invoke this after the awaited
-   * extraction resolved and only when the batch was actually consumed by this
-   * run (not coalesced into an unrelated in-flight run) — on failure the
-   * watermark stays put so no content is skipped without extraction.
+   * Advances the interval watermark after an explicit bounded extraction
+   * successfully consumed its snapshot. Callers must invoke this only after
+   * the awaited extraction resolved and only when that snapshot was consumed
+   * by this run — on failure the watermark stays put so no content is skipped.
    */
   private advanceIntervalWatermarkAfterCoverage(
     channelId: string,
@@ -624,7 +723,6 @@ export class MemoryExtractor {
 
     const advance = advanceExtractionWatermarkForCoverage(
       channelId,
-      this.sessionManager,
       consumedEntries,
     );
     if (advance && this.isTelemetryEnabled()) {
@@ -677,7 +775,9 @@ export class MemoryExtractor {
     turnId?: TurnID,
     routing?: ExtractionFactRouting,
     placeId?: string,
+    assertEffectAllowed?: () => Promise<void>,
   ): Promise<WriteResult> {
+    await assertEffectAllowed?.();
     let factContactId = canonicalContactId;
     // Contact-tracking policy gate (E3.4): non-'auto' channels must not have
     // extraction create contact rows (mention-only path included). Facts keep
@@ -748,6 +848,7 @@ export class MemoryExtractor {
       });
     }
 
+    await assertEffectAllowed?.();
     return this.writer.write({
       text: fact.text,
       type: fact.type,
@@ -844,8 +945,11 @@ export class MemoryExtractor {
     triggerReason: ExtractionTriggerReason,
     canonicalContactId: string | undefined,
     acceptedWrites: AcceptedFactWrite[],
-  ): void {
-    scheduleProfileRefresh({
+  ): Promise<void> {
+    // Returns an awaitable that settles when the (idempotent, contact-id-keyed)
+    // profile upsert completes, so the orchestrator can keep the parent receipt
+    // open until this durable child finishes rather than detaching it (AC3).
+    return scheduleProfileRefresh({
       channelId,
       triggerReason,
       canonicalContactId,
@@ -890,8 +994,14 @@ export class MemoryExtractor {
     canonicalContactId: string | undefined,
     acceptedFacts: ExtractedFact[],
     recentEntries: SessionEntry[],
-  ): void {
-    void persistEmotionalStateFromExtraction({
+  ): Promise<void> {
+    // Awaited by the orchestrator inside the effect-guarded region so this
+    // durable child settles before the parent receipt is applied (u5bv.6 AC3).
+    // It swallows its own failures and never rejects, so awaiting cannot fail
+    // the extraction effect; the emotional update stays best-effort. It always
+    // runs after the durable write boundary is crossed, so a crash mid-update
+    // fails the effect closed rather than replaying and double-counting.
+    return persistEmotionalStateFromExtraction({
       canonicalContactId,
       acceptedFacts,
       recentEntries,

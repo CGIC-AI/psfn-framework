@@ -11,24 +11,36 @@ import type {
   TurnUsage,
 } from '../../../../shared/contracts/runtime.js';
 import type { PendingPaidDeliverable } from '../../../../shared/paid-deliverable-tracking.js';
-import type { ContextBudgetTurnCharacteristics } from '../../../../shared/context-budget.js';
+import {
+  resolveAdaptiveContextBudgetProfile,
+  type ContextBudgetTurnCharacteristics,
+} from '../../../../shared/context-budget.js';
+import { countTokens } from '../../../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../../../shared/logger.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
 import type { ChannelMeta } from '../../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../../system/trust/types.js';
 import type { ConversationScope } from '../../../session/conversation-scope.js';
 import type { InternalState } from '../../../self-model/state.js';
+import { projectEmotionAppraisalState } from '../../../emotion/appraisal-state.js';
 import type { TurnSnapshot } from '../../../turns/snapshot.js';
 import type { TurnExecutionObservability } from './observability.js';
 import { resolveMessagePlaceId } from '../message-location.js';
+import {
+  createBackgroundWorkIdentity,
+  createTurnRecordBackgroundWorkHandoff,
+  fingerprintBackgroundWorkPayload,
+  fingerprintBackgroundWorkTurnRecord,
+  fingerprintEmotionAppraisalPersonalityProjection,
+  type BackgroundWorkKind,
+  type BackgroundWorkPayload,
+  type BackgroundWorkSourceRef,
+  type EnqueueBackgroundWorkInput,
+} from '../../background-work/types.js';
 
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
-
-interface PostTurnBackgroundTask {
-  name: string;
-  promise: Promise<unknown>;
-}
+type TurnSessionIdentity = import('../turn-execution-runtime.js').TurnSessionIdentity;
 
 export async function collectTurnResponseAttachments(input: {
   runtime: TurnExecutionRuntime;
@@ -69,29 +81,34 @@ export async function collectTurnResponseAttachments(input: {
   return attachments;
 }
 
-function createPostTurnBackgroundTask(input: {
-  name: string;
-  run: () => Promise<unknown> | unknown;
-  onError: (error: unknown) => void;
-}): PostTurnBackgroundTask {
-  let promise: Promise<unknown>;
-  try {
-    promise = Promise.resolve(input.run());
-  } catch (error) {
-    promise = Promise.reject(error);
-  }
+function createBackgroundWorkInput(input: {
+  kind: BackgroundWorkKind;
+  payload: BackgroundWorkPayload;
+  source: BackgroundWorkSourceRef;
+}): EnqueueBackgroundWorkInput {
+  const identity = createBackgroundWorkIdentity({
+    logicalSessionId: input.source.logicalSessionId,
+    turnId: input.source.turnId,
+    kind: input.kind,
+  });
   return {
-    name: input.name,
-    promise: promise.catch((error) => {
-      input.onError(error);
-      throw error;
-    }),
+    ...identity,
+    logicalSessionId: input.source.logicalSessionId,
+    kind: input.kind,
+    payload: input.payload,
+    payloadFingerprint: fingerprintBackgroundWorkPayload(input.payload),
+    sourceTurnId: input.source.turnId,
+    sourceRequestId: input.source.requestId,
+    sourceChannelId: input.source.channelId,
+    createdAtMs: input.source.createdAtMs,
+    maxAttempts: 5,
   };
 }
 
 export async function schedulePostTurnWork(input: {
   runtime: TurnExecutionRuntime;
   message: SubstrateMessage;
+  turnSessionIdentity: TurnSessionIdentity;
   response: AgentResponse;
   turnMessages: AgentMessage[];
   turnId: TurnID;
@@ -135,6 +152,7 @@ export async function schedulePostTurnWork(input: {
   const {
     runtime,
     message,
+    turnSessionIdentity,
     response,
     turnMessages,
     turnId,
@@ -163,7 +181,6 @@ export async function schedulePostTurnWork(input: {
     templateVariables,
     emotionSessionId,
     channelMeta,
-    conversationScope,
     turnBudgetCharacteristics,
     persistedUserMessageContent,
     observability,
@@ -194,32 +211,33 @@ export async function schedulePostTurnWork(input: {
       : {}),
   });
   const turnRecord = runtime.buildTurnRecord({
-      message,
-      turnId,
-      requestId,
-      startedAt: startTime,
-      completedAt,
-      userSessionEntryId,
-      assistantSessionEntryId,
-      response,
-      turnMessages,
-      promptMode,
-      promptText: fullPrompt,
-      contextMessageCount,
-      memoryContextChars,
-      trustLevel,
-      speakerRole,
-      canonicalContactKey,
-      retrievalProvenanceRefs,
-      ...(persistedUserMessageContent ? { persistedUserMessageContent } : {}),
-      turnSnapshot,
-      turnObservability: {
-        stages: observability.getObservedTurnStages(),
-        retrievals: observability.getObservedTurnRetrievals(),
-        ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
-      },
-      internalStateSnapshotRef,
-    });
+    message,
+    turnSessionIdentity,
+    turnId,
+    requestId,
+    startedAt: startTime,
+    completedAt,
+    userSessionEntryId,
+    assistantSessionEntryId,
+    response,
+    turnMessages,
+    promptMode,
+    promptText: fullPrompt,
+    contextMessageCount,
+    memoryContextChars,
+    trustLevel,
+    speakerRole,
+    canonicalContactKey,
+    retrievalProvenanceRefs,
+    ...(persistedUserMessageContent ? { persistedUserMessageContent } : {}),
+    turnSnapshot,
+    turnObservability: {
+      stages: observability.getObservedTurnStages(),
+      retrievals: observability.getObservedTurnRetrievals(),
+      ...(observability.getObservedTurnSnapshot() ? { snapshot: observability.getObservedTurnSnapshot() } : {}),
+    },
+    internalStateSnapshotRef,
+  });
 
   await runtime.eventBus.emit('agent.turn.end', {
     message,
@@ -240,103 +258,109 @@ export async function schedulePostTurnWork(input: {
     ...runtime.withCorrelationPurpose(turnCorrelationBase, 'agent.turn.usage'),
   });
 
-  const postTurnBackgroundWork: PostTurnBackgroundTask[] = [];
-  const memoryExtractor = runtime.memoryExtractor;
-  if (memoryExtractor) {
-    postTurnBackgroundWork.push(createPostTurnBackgroundTask({
-      name: 'memory_extraction',
-      run: () => memoryExtractor.maybeExtract(
-        message.channelId,
-        canonicalContactKey,
-        turnId,
-        // Location tagging (S10): gateway-authoritative companion-room place
-        // first, then the static satellite binding. Absent means no location
-        // tag (fail-closed).
-        resolveMessagePlaceId(message),
-        message.routing?.icpCorrelation,
-      ),
-      onError: (error) => {
-        log.error('Memory extraction error', { error: String(error) });
-      },
-    }));
+  const logicalSessionId = turnSessionIdentity.logicalSessionId;
+  const turnRecordLogicalSessionId = turnRecord.sessionId ?? turnRecord.channelId;
+  if (turnRecord.channelId !== turnSessionIdentity.sourceChannelId
+    || turnRecordLogicalSessionId !== logicalSessionId) {
+    throw new Error('TurnRecord source does not match the captured turn identity');
   }
-
-  postTurnBackgroundWork.push(createPostTurnBackgroundTask({
-    name: 'intention_post_turn_hooks',
-    run: () => runtime.runIntentionPostTurnHooks({
-      message,
-      response,
-      turnMessages,
-      turnId,
-      completedAt,
-      ...(canonicalContactKey ? { canonicalContactKey } : {}),
-      ...(message.routing?.icpCorrelation
-        ? { icpCorrelation: message.routing.icpCorrelation }
-        : {}),
-    }),
-    onError: (error) => {
-      log.error('Intention post-turn hook dispatch error', {
-        channelId: message.channelId,
-        error: toErrorMessage(error),
-      });
-    },
-  }));
-
-  postTurnBackgroundWork.push(createPostTurnBackgroundTask({
-    name: 'emotion_appraisal',
-    // E1.5: the turn's ConversationScope is plumbed into the appraisal params
-    // as an available input; emotion scoping acts on it without changing this
-    // call site's shape.
-    run: () => runtime.emotionSelfModelRuntime.triggerEmotionAppraisal({
-      sessionChannelId: emotionSessionId,
-      turnId,
-      internalState,
-      templateVariables,
-      conversationScope,
-      ...(message.routing?.icpCorrelation
-        ? { icpCorrelation: message.routing.icpCorrelation }
-        : {}),
-    }),
-    onError: (error) => {
-      log.error('Emotion appraisal error', {
-        channelId: message.channelId,
-        error: toErrorMessage(error),
-      });
-    },
-  }));
-
-  postTurnBackgroundWork.push(createPostTurnBackgroundTask({
-    name: 'auto_compaction',
-    run: () => runtime.sessionManager.scheduleAutoCompactionBetweenTurns({
-      channelId: message.channelId,
-      systemPrompt: fullPrompt,
-      memoriesBlock: memoryContextBlock,
-      llmProvider: runtime.llmClient,
-      channelMeta,
-      userId: continuitySubjectKey,
-      compactionPromptText: turnSnapshot.sessionContext?.compactionPromptText,
-      turnBudgetCharacteristics,
-      ...(message.routing?.icpCorrelation
-        ? { icpCorrelation: message.routing.icpCorrelation }
-        : {}),
-    }),
-    onError: (error) => {
-      log.error('Auto-compaction dispatch error', {
-        channelId: message.channelId,
-        error: toErrorMessage(error),
-      });
-    },
-  }));
-
-  runtime.registerPostTurnBackgroundWork({
-    channelId: message.channelId,
+  const source: BackgroundWorkSourceRef = {
+    schemaVersion: 1,
+    logicalSessionId,
+    channelId: turnSessionIdentity.sourceChannelId,
     turnId,
     requestId,
-    work: postTurnBackgroundWork,
-    correlation: turnCorrelationBase,
-  });
-  // This is the durable completion marker for post-turn scheduling. Keep it
-  // last: a recovery may skip this whole scheduler only after every awaited
-  // effect ran and every background task was handed to the runtime owner.
-  runtime.sessionManager.recordTurn(turnRecord);
+    turnRecordFingerprint: fingerprintBackgroundWorkTurnRecord(turnRecord),
+    createdAtMs: completedAt,
+    ...(userSessionEntryId !== null ? { userSessionEntryId } : {}),
+    ...(assistantSessionEntryId !== null ? { assistantSessionEntryId } : {}),
+  };
+  const persistedTurnBudgetCharacteristics: Omit<ContextBudgetTurnCharacteristics, 'messageText'> = {
+    ...(turnBudgetCharacteristics.channelId !== undefined
+      ? { channelId: turnBudgetCharacteristics.channelId }
+      : {}),
+    ...(turnBudgetCharacteristics.channelType !== undefined
+      ? { channelType: turnBudgetCharacteristics.channelType }
+      : {}),
+    ...(turnBudgetCharacteristics.isDirectMessage !== undefined
+      ? { isDirectMessage: turnBudgetCharacteristics.isDirectMessage }
+      : {}),
+    ...(turnBudgetCharacteristics.taskKind !== undefined
+      ? { taskKind: turnBudgetCharacteristics.taskKind }
+      : {}),
+    ...(turnBudgetCharacteristics.modelSelection !== undefined
+      ? { modelSelection: turnBudgetCharacteristics.modelSelection }
+      : {}),
+  };
+  const persistedChannelMeta = {
+    ...(channelMeta.isDirectMessage !== undefined
+      ? { isDirectMessage: channelMeta.isDirectMessage }
+      : {}),
+    ...(channelMeta.privacyLevel !== undefined
+      ? { privacyLevel: channelMeta.privacyLevel }
+      : {}),
+    ...(channelMeta.disclosureConsentGranted !== undefined
+      ? { disclosureConsentGranted: channelMeta.disclosureConsentGranted }
+      : {}),
+  };
+  const icpCorrelation = message.routing?.icpCorrelation;
+  const placeId = resolveMessagePlaceId(message);
+  const payloads: BackgroundWorkPayload[] = [];
+  if (runtime.memoryExtractor) {
+    payloads.push({
+      schemaVersion: 1,
+      kind: 'memory_extraction',
+      source,
+      ...(canonicalContactKey ? { canonicalContactId: canonicalContactKey } : {}),
+      ...(placeId ? { placeId } : {}),
+      ...(icpCorrelation ? { icpCorrelation } : {}),
+    });
+  }
+  payloads.push(
+    {
+      schemaVersion: 1,
+      kind: 'intention_post_turn_hooks',
+      source,
+      ...(canonicalContactKey ? { canonicalContactKey } : {}),
+    },
+    {
+      schemaVersion: 1,
+      kind: 'emotion_appraisal',
+      source,
+      emotionSessionId,
+      internalStateSnapshotRef,
+      appraisalState: projectEmotionAppraisalState(internalState),
+      personalityOwnerRef: 'character-card',
+      personalityProjectionHash: fingerprintEmotionAppraisalPersonalityProjection(templateVariables),
+      ...(icpCorrelation ? { icpCorrelation } : {}),
+    },
+    {
+      schemaVersion: 1,
+      kind: 'auto_compaction',
+      source,
+      systemPromptTokenCount: countTokens(fullPrompt),
+      memoriesTokenCount: countTokens(memoryContextBlock),
+      adaptiveProfile: resolveAdaptiveContextBudgetProfile(runtime.config, turnBudgetCharacteristics),
+      turnBudgetCharacteristics: persistedTurnBudgetCharacteristics,
+      ...(continuitySubjectKey ? { userId: continuitySubjectKey } : {}),
+      ...(Object.keys(persistedChannelMeta).length > 0 ? { channelMeta: persistedChannelMeta } : {}),
+      ...(icpCorrelation ? { icpCorrelation } : {}),
+    },
+  );
+  const backgroundWorkInputs = payloads.map(payload => createBackgroundWorkInput({
+    kind: payload.kind,
+    payload,
+    source,
+  }));
+  turnRecord.backgroundWorkHandoff = createTurnRecordBackgroundWorkHandoff(backgroundWorkInputs);
+  // Record first, then atomically enqueue the complete manifest. A crash on
+  // either side is recoverable: no queue row can outlive its canonical source,
+  // and delivery/startup replay can safely re-enqueue the stable turn IDs.
+  await runtime.sessionManager.recordTurn(turnRecord);
+  try {
+    await runtime.enqueuePostTurnBackgroundWork(backgroundWorkInputs);
+  } catch (error) {
+    runtime.sessionManager.deferBackgroundWorkHandoffRecovery(turnRecord);
+    throw error;
+  }
 }

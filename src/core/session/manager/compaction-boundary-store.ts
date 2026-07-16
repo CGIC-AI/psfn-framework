@@ -38,6 +38,22 @@ export function createCompactionBoundaryStore(store: SessionStore): SessionStore
         };
       }
 
+      if (property === 'getEntriesBefore') {
+        return (channelId: string, beforeId: number, limit: number): SessionEntry[] => {
+          if (!Number.isFinite(beforeId) || !Number.isFinite(limit)) return [];
+          const normalizedBeforeId = Math.max(0, Math.floor(beforeId));
+          const normalizedLimit = Math.max(0, Math.floor(limit));
+          if (normalizedBeforeId <= 0 || normalizedLimit <= 0) return [];
+          const coveredUpTo = target.getCompactionSummaries(channelId).reduce(
+            (maxCoveredUpTo, summary) => Math.max(maxCoveredUpTo, summary.coveredUpTo),
+            0,
+          );
+          return target
+            .getEntriesBefore(channelId, normalizedBeforeId, normalizedLimit)
+            .filter(entry => entry.id > coveredUpTo);
+        };
+      }
+
       if (property === 'insertCompaction') {
         return (channelId: string, summary: string, coveredUpTo: number): void => {
           target.insertCompaction(

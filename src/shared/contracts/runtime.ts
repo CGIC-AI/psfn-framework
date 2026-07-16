@@ -145,6 +145,37 @@ export interface ParentTurnContinuationStop extends ParentTurnContinuationStopSn
   outcome: 'failed' | 'partial';
 }
 
+export type TurnRecordBackgroundWorkKind =
+  | 'memory_extraction'
+  | 'intention_post_turn_hooks'
+  | 'emotion_appraisal'
+  | 'auto_compaction';
+
+/**
+ * Privacy-safe durable handoff descriptor for one post-turn job. Payloads are
+ * validated by the background-work owner before enqueue; keeping the manifest
+ * on the canonical TurnRecord makes a record-first handoff replayable after a
+ * process crash without copying the raw turn into Postgres.
+ */
+export interface TurnRecordBackgroundWorkJob {
+  jobId: string;
+  idempotencyKey: string;
+  logicalSessionId: string;
+  kind: TurnRecordBackgroundWorkKind;
+  payload: unknown;
+  payloadFingerprint: string;
+  sourceTurnId: string;
+  sourceRequestId: string;
+  sourceChannelId: string;
+  createdAtMs: number;
+  maxAttempts: number;
+}
+
+export interface TurnRecordBackgroundWorkHandoff {
+  schemaVersion: 1;
+  jobs: TurnRecordBackgroundWorkJob[];
+}
+
 export interface TurnRecord {
   schemaVersion: 1;
   turnId: TurnID;
@@ -175,6 +206,8 @@ export interface TurnRecord {
   observability?: import('../../core/turns/observability.js').TurnObservabilityRecord;
   versionPointers: TurnRecordVersionPointers;
   provenanceRefs: string[];
+  /** Record-first, atomically enqueued post-turn work; safe to replay by turn ID. */
+  backgroundWorkHandoff?: TurnRecordBackgroundWorkHandoff;
   /** Same-cluster autonomous-conversation lineage, when this is an ICP turn. */
   icpCorrelation?: IcpConversationCorrelation;
 }

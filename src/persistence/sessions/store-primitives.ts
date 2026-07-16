@@ -11,6 +11,7 @@ import type { SessionTailCachePort } from './session-tail-cache-port.js';
 import type { TranscriptProjectionPort } from './transcript-projection-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
+import type { TurnRecordEligibilityFencePort } from './turn-record-eligibility-fence-port.js';
 export {
   IMPORT_MANIFEST_FILENAME,
   READABLE_SESSION_FILENAME,
@@ -89,6 +90,12 @@ export interface SessionStoreOptions {
   transcriptProjection?: TranscriptProjectionPort | null;
   transcriptSearch?: TranscriptSearchPort | null;
   turnRecordStore?: TurnRecordStorePort | null;
+  /**
+   * Cross-process source-authority fence. PostgreSQL runtime composition
+   * always supplies this; direct filesystem-only stores have no durable
+   * background consumer to coordinate with.
+   */
+  turnRecordEligibilityFence?: TurnRecordEligibilityFencePort | null;
   /**
    * Optional bounded hot session tail shared across processes
    * (psfn-framework-hgw3.5). Null/absent keeps reads and writes byte-identical

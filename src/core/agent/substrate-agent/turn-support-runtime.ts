@@ -33,6 +33,7 @@ import {
   runIntentionPostTurnHooks as runIntentionPostTurnHooksForTurn,
   type IntentionPostTurnHook,
   type IntentionPostTurnHookContext,
+  type IntentionPostTurnHookRunOptions,
   type PostTurnActionInferer,
   type PostTurnInferenceContext,
 } from './post-turn-actions.js';
@@ -41,59 +42,14 @@ import type { ChannelMeta } from '../../../system/trust/policy.js';
 import type { SessionActorKind } from '../../session/turn-provenance.js';
 import type { IntrospectionTurnSensitivityDecisions } from '../../../faculties/introspection/turn-sensitivity.js';
 import { getRunChargeSnapshot } from '../../../shared/telemetry/run-charge.js';
+import type {
+  BackgroundWorkSupervisor,
+  ForegroundWorkLease,
+} from '../background-work/supervisor.js';
+import type { EnqueueBackgroundWorkInput } from '../background-work/types.js';
+import type { TurnSessionIdentity } from './turn-execution-runtime.js';
 
 const log = createComponentLogger('SubstrateAgent');
-export const DEFAULT_POST_TURN_DRAIN_TIMEOUT_MS = 5_000;
-
-export interface PostTurnBackgroundWork {
-  name: string;
-  promise: Promise<unknown>;
-}
-
-export interface RegisterPostTurnBackgroundWorkInput {
-  channelId: string;
-  turnId: TurnID;
-  requestId: string;
-  work: readonly PostTurnBackgroundWork[];
-  correlation?: CorrelationMetadata;
-}
-
-export interface AwaitPostTurnDrainInput {
-  channelId: string;
-  turnId: TurnID;
-  requestId: string;
-  timeoutMs?: number;
-  correlation?: CorrelationMetadata;
-}
-
-export interface AwaitPostTurnDrainResult {
-  status: 'idle' | 'drained' | 'timeout';
-  waitMs: number;
-  workCount: number;
-  previousChannelId?: string;
-  previousTurnId?: TurnID;
-  previousRequestId?: string;
-}
-
-interface ActivePostTurnDrain {
-  sequence: number;
-  channelId: string;
-  turnId: TurnID;
-  requestId: string;
-  taskNames: string[];
-  promise: Promise<void>;
-  timedOut: boolean;
-}
-
-function normalizePostTurnDrainTimeoutMs(value: number | undefined): number {
-  if (value === undefined) {
-    return DEFAULT_POST_TURN_DRAIN_TIMEOUT_MS;
-  }
-  if (!Number.isFinite(value) || value < 0) {
-    return DEFAULT_POST_TURN_DRAIN_TIMEOUT_MS;
-  }
-  return Math.floor(value);
-}
 
 function resolveSessionChannelMeta(message: SubstrateMessage): ChannelMeta | undefined {
   const privacyLevel = normalizeChannelPrivacy(message.routing?.channelPrivacy);
@@ -107,6 +63,8 @@ function resolveSessionChannelMeta(message: SubstrateMessage): ChannelMeta | und
 export interface TurnSupportRuntimeOptions {
   eventBus: EventBus;
   sessionManager: SessionManager;
+  backgroundWorkSupervisor: BackgroundWorkSupervisor | null;
+  backgroundWorkDisabled?: boolean;
   hashPromptText: (text: string) => string;
   resolveContextWindow: () => number;
 }
@@ -114,6 +72,8 @@ export interface TurnSupportRuntimeOptions {
 export class TurnSupportRuntime {
   private readonly eventBus: EventBus;
   private readonly sessionManager: SessionManager;
+  private readonly backgroundWorkSupervisor: BackgroundWorkSupervisor | null;
+  private readonly backgroundWorkDisabled: boolean;
   private readonly hashPromptText: (text: string) => string;
   private readonly resolveContextWindow: () => number;
   private introspectionTurnSensitivityDecisions: IntrospectionTurnSensitivityDecisions | null = null;
@@ -121,16 +81,19 @@ export class TurnSupportRuntime {
   private activeTurnCorrelation: CorrelationMetadata | null = null;
   private activeTurnTaskKind: string | null = null;
   private activeTurnIntent: string | null = null;
+  private activeTurnSessionIdentity: TurnSessionIdentity | null = null;
 
   private readonly postTurnActionInferers: PostTurnActionInferer[] = [];
   private readonly intentionPostTurnHooks: IntentionPostTurnHook[] = [];
   private readonly intentionalNoReplyDecisions = new Map<TurnID, IntentionalNoReplyMetadata>();
-  private postTurnDrainSequence = 0;
-  private activePostTurnDrain: ActivePostTurnDrain | null = null;
-
   constructor(options: TurnSupportRuntimeOptions) {
     this.eventBus = options.eventBus;
     this.sessionManager = options.sessionManager;
+    this.backgroundWorkSupervisor = options.backgroundWorkSupervisor;
+    this.backgroundWorkDisabled = options.backgroundWorkDisabled === true;
+    if (this.backgroundWorkDisabled && this.backgroundWorkSupervisor) {
+      throw new Error('Background work cannot be both durable and disabled');
+    }
     this.hashPromptText = options.hashPromptText;
     this.resolveContextWindow = options.resolveContextWindow;
   }
@@ -153,20 +116,27 @@ export class TurnSupportRuntime {
     return this.activeTurnIntent;
   }
 
+  getActiveTurnSessionIdentity(): TurnSessionIdentity | null {
+    return this.activeTurnSessionIdentity;
+  }
+
   setActiveTurnContext(
     correlation: CorrelationMetadata,
     taskKind: string | null,
     intent: string | null,
+    turnSessionIdentity: TurnSessionIdentity,
   ): void {
     this.activeTurnCorrelation = correlation;
     this.activeTurnTaskKind = taskKind;
     this.activeTurnIntent = intent;
+    this.activeTurnSessionIdentity = turnSessionIdentity;
   }
 
   clearActiveTurnContext(): void {
     this.activeTurnCorrelation = null;
     this.activeTurnTaskKind = null;
     this.activeTurnIntent = null;
+    this.activeTurnSessionIdentity = null;
   }
 
   setActiveTurnCorrelation(correlation: CorrelationMetadata | null): void {
@@ -242,157 +212,20 @@ export class TurnSupportRuntime {
     };
   }
 
-  registerPostTurnBackgroundWork(input: RegisterPostTurnBackgroundWorkInput): void {
-    const work = input.work.filter(task => task.name.trim().length > 0);
-    if (work.length === 0) {
-      return;
+  enqueuePostTurnBackgroundWork(inputs: readonly EnqueueBackgroundWorkInput[]): Promise<void> {
+    if (!this.backgroundWorkSupervisor) {
+      if (this.backgroundWorkDisabled) return Promise.resolve();
+      return Promise.reject(new Error('Durable background work supervisor is not configured'));
     }
-
-    const sequence = this.postTurnDrainSequence + 1;
-    this.postTurnDrainSequence = sequence;
-    const taskNames = work.map(task => task.name);
-    const drain: ActivePostTurnDrain = {
-      sequence,
-      channelId: input.channelId,
-      turnId: input.turnId,
-      requestId: input.requestId,
-      taskNames,
-      promise: Promise.resolve(),
-      timedOut: false,
-    };
-
-    drain.promise = Promise.all(
-      work.map(async (task) => {
-        try {
-          await task.promise;
-          return null;
-        } catch (error) {
-          return {
-            name: task.name,
-            error: toErrorMessage(error),
-          };
-        }
-      }),
-    ).then((failures) => {
-      const failedTasks = failures.filter((failure): failure is { name: string; error: string } => failure !== null);
-      if (failedTasks.length > 0) {
-        log.warn('Post-turn background work completed with failures', {
-          channelId: input.channelId,
-          turnId: input.turnId,
-          requestId: input.requestId,
-          failureCount: failedTasks.length,
-          failedTasks,
-        });
-      }
-      this.emitPostTurnDrainTelemetry('drained', {
-        channelId: input.channelId,
-        previousTurnId: input.turnId,
-        previousRequestId: input.requestId,
-        workCount: work.length,
-        taskNames,
-        failureCount: failedTasks.length,
-        correlation: input.correlation,
-      });
-    }).finally(() => {
-      if (this.activePostTurnDrain?.sequence === sequence) {
-        this.activePostTurnDrain = null;
-      }
-    });
-
-    this.activePostTurnDrain = drain;
-    this.emitPostTurnDrainTelemetry('registered', {
-      channelId: input.channelId,
-      previousTurnId: input.turnId,
-      previousRequestId: input.requestId,
-      workCount: work.length,
-      taskNames,
-      correlation: input.correlation,
-    });
+    return this.backgroundWorkSupervisor.enqueue(inputs);
   }
 
-  async awaitPostTurnDrain(input: AwaitPostTurnDrainInput): Promise<AwaitPostTurnDrainResult> {
-    const drain = this.activePostTurnDrain;
-    if (!drain || drain.timedOut) {
-      return {
-        status: 'idle',
-        waitMs: 0,
-        workCount: 0,
-      };
-    }
+  beginForegroundBackgroundWork(logicalSessionId: string): ForegroundWorkLease | null {
+    return this.backgroundWorkSupervisor?.beginForeground(logicalSessionId) ?? null;
+  }
 
-    const timeoutMs = normalizePostTurnDrainTimeoutMs(input.timeoutMs);
-    const waitStartedAt = Date.now();
-    this.emitPostTurnDrainTelemetry('wait_started', {
-      channelId: input.channelId,
-      turnId: input.turnId,
-      requestId: input.requestId,
-      previousChannelId: drain.channelId,
-      previousTurnId: drain.turnId,
-      previousRequestId: drain.requestId,
-      workCount: drain.taskNames.length,
-      taskNames: drain.taskNames,
-      timeoutMs,
-      correlation: input.correlation,
-    });
-
-    let resolveTimeout!: (value: 'timeout') => void;
-    const timeoutPromise = new Promise<'timeout'>((resolve) => {
-      resolveTimeout = resolve;
-    });
-    const timeoutHandle = setTimeout(() => resolveTimeout('timeout'), timeoutMs);
-    const outcome = await Promise.race([
-      drain.promise.then(() => 'drained' as const),
-      timeoutPromise,
-    ]);
-    clearTimeout(timeoutHandle);
-
-    const waitMs = Math.max(0, Date.now() - waitStartedAt);
-    if (outcome === 'timeout') {
-      drain.timedOut = true;
-      if (this.activePostTurnDrain?.sequence === drain.sequence) {
-        this.activePostTurnDrain = null;
-      }
-      log.warn('Post-turn drain timed out before starting new turn', {
-        channelId: input.channelId,
-        turnId: input.turnId,
-        requestId: input.requestId,
-        previousChannelId: drain.channelId,
-        previousTurnId: drain.turnId,
-        previousRequestId: drain.requestId,
-        timeoutMs,
-        waitMs,
-        taskNames: drain.taskNames,
-      });
-      this.emitPostTurnDrainTelemetry('timeout', {
-        channelId: input.channelId,
-        turnId: input.turnId,
-        requestId: input.requestId,
-        previousTurnId: drain.turnId,
-        previousRequestId: drain.requestId,
-        workCount: drain.taskNames.length,
-        taskNames: drain.taskNames,
-        waitMs,
-        timeoutMs,
-        correlation: input.correlation,
-      });
-      return {
-        status: 'timeout',
-        waitMs,
-        workCount: drain.taskNames.length,
-        previousChannelId: drain.channelId,
-        previousTurnId: drain.turnId,
-        previousRequestId: drain.requestId,
-      };
-    }
-
-    return {
-      status: 'drained',
-      waitMs,
-      workCount: drain.taskNames.length,
-      previousChannelId: drain.channelId,
-      previousTurnId: drain.turnId,
-      previousRequestId: drain.requestId,
-    };
+  async endForegroundBackgroundWork(lease: ForegroundWorkLease | null): Promise<void> {
+    if (lease) await this.backgroundWorkSupervisor?.endForeground(lease);
   }
 
   async inferPostTurnActions(
@@ -407,11 +240,13 @@ export class TurnSupportRuntime {
 
   async runIntentionPostTurnHooks(
     context: IntentionPostTurnHookContext,
+    options?: IntentionPostTurnHookRunOptions,
   ): Promise<void> {
     await runIntentionPostTurnHooksForTurn({
       hooks: this.intentionPostTurnHooks,
       context,
       logger: log,
+      ...(options ? { options } : {}),
     });
   }
 
@@ -508,35 +343,9 @@ export class TurnSupportRuntime {
     });
   }
 
-  private emitPostTurnDrainTelemetry(
-    phase: EventMap['agent.post_turn.drain']['phase'],
-    payload: {
-      channelId: string;
-      turnId?: TurnID;
-      requestId?: string;
-      previousChannelId?: string;
-      previousTurnId?: TurnID;
-      previousRequestId?: string;
-      workCount: number;
-      taskNames: string[];
-      waitMs?: number;
-      timeoutMs?: number;
-      failureCount?: number;
-      correlation?: CorrelationMetadata;
-    },
-  ): void {
-    const { correlation, ...rest } = payload;
-    const purpose = `agent.post_turn.drain.${phase}`;
-    this.emitTelemetry('agent.post_turn.drain', {
-      ...rest,
-      phase,
-      timestamp: Date.now(),
-      ...(correlation ? this.withCorrelationPurpose(correlation, purpose) : { purpose }),
-    });
-  }
-
   recordUserMessage(
     message: SubstrateMessage,
+    turnSessionIdentity: TurnSessionIdentity,
     turnId: TurnID,
     requestId: string,
     trustLevel: TrustLevel,
@@ -547,6 +356,7 @@ export class TurnSupportRuntime {
     return recordUserMessageForTurn({
       sessionManager: this.sessionManager,
       message,
+      turnSessionIdentity,
       turnId,
       requestId,
       trustLevel,
@@ -558,13 +368,14 @@ export class TurnSupportRuntime {
 
   recordSystemMessage(
     message: SubstrateMessage,
+    turnSessionIdentity: TurnSessionIdentity,
     turnId: TurnID,
     requestId: string,
     content: string,
     continuityUserId?: string,
   ): number | null {
     return this.sessionManager.recordSystemMessage(
-      message.channelId,
+      turnSessionIdentity.logicalSessionId,
       content,
       message.authorId,
       message.authorName,
@@ -574,6 +385,7 @@ export class TurnSupportRuntime {
         turnId,
         requestId,
         sourceMessageId: message.id,
+        sourceChannelId: turnSessionIdentity.sourceChannelId,
         channelMeta: resolveSessionChannelMeta(message),
       },
     );
@@ -581,6 +393,7 @@ export class TurnSupportRuntime {
 
   recordAssistantMessage(
     message: SubstrateMessage,
+    turnSessionIdentity: TurnSessionIdentity,
     turnId: TurnID,
     requestId: string,
     responseText: string,
@@ -593,6 +406,7 @@ export class TurnSupportRuntime {
     return recordAssistantMessageForTurn({
       sessionManager: this.sessionManager,
       message,
+      turnSessionIdentity,
       turnId,
       requestId,
       responseText,
@@ -606,6 +420,7 @@ export class TurnSupportRuntime {
 
   recordToolObservations(
     message: SubstrateMessage,
+    turnSessionIdentity: TurnSessionIdentity,
     turnId: TurnID,
     requestId: string,
     turnMessages: AgentMessage[],
@@ -614,6 +429,7 @@ export class TurnSupportRuntime {
     recordToolObservationsForTurn({
       sessionManager: this.sessionManager,
       message,
+      turnSessionIdentity,
       turnId,
       requestId,
       turnMessages,
@@ -623,6 +439,7 @@ export class TurnSupportRuntime {
 
   buildTurnRecord(input: {
     message: SubstrateMessage;
+    turnSessionIdentity: TurnSessionIdentity;
     turnId: TurnID;
     requestId: string;
     startedAt: number;
@@ -648,8 +465,11 @@ export class TurnSupportRuntime {
     internalStateSnapshotRef?: string;
     persistedUserMessageContent?: string;
   }): TurnRecord {
+    if (input.message.channelId !== input.turnSessionIdentity.sourceChannelId) {
+      throw new Error('TurnRecord physical source does not match the captured turn identity');
+    }
     const roleEnvelopeRefs = this.sessionManager.getRoleEnvelopeRefsForEntries(
-      input.message.channelId,
+      input.turnSessionIdentity.logicalSessionId,
       [
         ...(input.userSessionEntryId != null ? [input.userSessionEntryId] : []),
         ...(input.assistantSessionEntryId != null ? [input.assistantSessionEntryId] : []),
@@ -659,9 +479,10 @@ export class TurnSupportRuntime {
       turnId: input.turnId,
       requestId: input.requestId,
     });
+    const { turnSessionIdentity, ...turnRecordInput } = input;
     return buildTurnRecordForTurn({
-      ...input,
-      sessionId: this.sessionManager.resolveSessionChannelId(input.message.channelId),
+      ...turnRecordInput,
+      sessionId: turnSessionIdentity.logicalSessionId,
       roleEnvelopeRefs,
       hashPromptText: this.hashPromptText,
       ...(introspectionSensitivityDecision ? { introspectionSensitivityDecision } : {}),

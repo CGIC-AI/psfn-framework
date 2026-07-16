@@ -219,9 +219,14 @@ async function main(): Promise<void> {
     });
     try {
       await stopFn();
-    } finally {
-      process.exit(1);
+    } catch (error) {
+      shuttingDown = false;
+      log.error('Gateway disconnect shutdown failed; leaving process running for retry', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
     }
+    process.exit(1);
   });
 
   const persistenceRuntime = await createAgentPersistenceRuntime({
@@ -234,6 +239,7 @@ async function main(): Promise<void> {
     backend: persistenceBackend,
     memoryStore: companionMemoryStore,
     episodicStore: companionEpisodicStore,
+    backgroundWorkStore,
     reflectionStore,
     contactStore: persistedContactStore,
     hubIdentityEnrollmentStore: persistedHubIdentityEnrollmentStore,
@@ -327,6 +333,7 @@ async function main(): Promise<void> {
     gateway,
     memoryStore: companionMemoryStore,
     episodicStore: companionEpisodicStore,
+    backgroundWorkStore,
     contactStore: persistedContactStore,
     intentionRuntime: persistedIntentionRuntime,
     intentionProviders,
@@ -933,6 +940,7 @@ async function main(): Promise<void> {
     },
     closeDatabase: async () => {
       await persistenceRuntime.icpInitiationCandidateStore?.close();
+      await persistenceRuntime.backgroundWorkStore.close();
       await persistenceRuntime.introspectionLandmarkStore.close();
     },
     scheduler,

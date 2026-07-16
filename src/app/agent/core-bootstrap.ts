@@ -36,6 +36,7 @@ import type {
   IntentionRuntimeProviders,
   IntentionRuntimeWiring,
 } from '../../core/intention/runtime-wiring.js';
+import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 
 const log = createComponentLogger('Agent');
 
@@ -62,6 +63,7 @@ export interface BootstrapAgentCoreRuntimeOptions {
   gateway: GatewayClient;
   memoryStore: MemoryStorePort;
   episodicStore: EpisodicStorePort;
+  backgroundWorkStore: BackgroundWorkStorePort;
   contactStore?: ContactStorePort;
   /** Hub identity ↔ contact enrollment store (S10 D2a). Enables face identity-claim resolution (bead .13). */
   hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort;
@@ -87,6 +89,7 @@ export async function bootstrapAgentCoreRuntime(
     gateway,
     memoryStore,
     episodicStore,
+    backgroundWorkStore,
     contactStore,
     intentionRuntime,
     intentionProviders,
@@ -137,6 +140,7 @@ export async function bootstrapAgentCoreRuntime(
     gateway,
     memoryStore,
     episodicStore,
+    backgroundWorkStore,
     contactStore,
     ...(options.hubIdentityEnrollmentStore
       ? { hubIdentityEnrollmentStore: options.hubIdentityEnrollmentStore }

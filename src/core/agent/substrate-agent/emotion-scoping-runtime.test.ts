@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
 import { EmotionState, type EmotionStateSnapshot } from '../../emotion/state.js';
 import type { EmotionObserver } from '../../emotion/observer.js';
+import type { EmotionAppraisal } from '../../emotion/appraisal.js';
 import { buildSessionMetadataWithEmotionState } from '../../emotion/session-metadata.js';
 import {
   createDmConversationScope,
@@ -10,6 +11,7 @@ import {
 import { createDefaultEmotionScopingSettings } from '../../../system/config/emotion-scoping-config.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { LLMProviderPort } from '../contracts.js';
+import { createTurnId } from '../../turns/id.js';
 
 const FIXED_NOW = 1_000_000_000;
 
@@ -60,6 +62,66 @@ afterEach(() => {
 });
 
 describe('scoped emotion runtime (E1.5)', () => {
+  it('treats an explicitly supplied empty appraisal snapshot as authoritative', async () => {
+    const getRecentMessages = vi.fn().mockReturnValue([{
+      id: 9,
+      channelId: 'chanA',
+      role: 'user',
+      content: 'Live history must not be recovered for an explicit empty snapshot.',
+      timestamp: FIXED_NOW,
+    }]);
+    const maybeAppraise = vi.fn().mockResolvedValue({
+      appraised: false,
+      turnsSinceLast: 1,
+      delta: 0,
+    });
+    const runtime = new EmotionSelfModelRuntime({
+      sessionManager: { getRecentMessages } as unknown as SessionManager,
+      llmProvider,
+      emotionRuntime: {
+        state: new EmotionState(),
+        observer,
+        appraisal: { maybeAppraise } as unknown as EmotionAppraisal,
+        requireWiring: true,
+      },
+      emotionScopingConfig: createDefaultEmotionScopingSettings(),
+      getActiveConcernProvider: () => null,
+      getPendingFollowUpProvider: () => null,
+      getContactStore: () => null,
+      getSelfModelRuntimeRequired: () => false,
+      logger: { debug: () => {} },
+    });
+
+    await runtime.triggerEmotionAppraisal({
+      sessionChannelId: 'chanA',
+      turnId: createTurnId(),
+      appraisalState: {
+        schemaVersion: 1,
+        emotional: {
+          vad: { valence: 0, arousal: 0, dominance: 0 },
+          mood: { valence: 0, arousal: 0, dominance: 0 },
+          discreteEmotions: {},
+          confidence: 1,
+          telemetry: { status: 'trusted', source: 'runtime_state', reasons: [], weight: 1 },
+        },
+        cognitive: { certaintyLevel: 1, topicEngagement: 1, processingQuality: 'fluent' },
+        attention: {
+          activeConcernCount: 0,
+          salientEntityCount: 0,
+          conversationTrajectory: 'casual',
+        },
+        relational: { contactId: null, trustLevel: 'regular', moodDrift: 0 },
+      },
+      templateVariables: undefined,
+      recentEntries: [],
+    });
+
+    expect(getRecentMessages).not.toHaveBeenCalled();
+    expect(maybeAppraise).toHaveBeenCalledWith(expect.objectContaining({
+      recentMessages: [],
+    }));
+  });
+
   it('applies a bounded group→DM carry-over to a member and none to an unrelated contact', async () => {
     vi.spyOn(Date, 'now').mockReturnValue(FIXED_NOW);
     const runtime = makeRuntime(makeSessionManager(() => []));

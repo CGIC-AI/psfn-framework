@@ -1,0 +1,347 @@
+import type { AgentMessage } from '../../../boundary/pi-agent/index.js';
+import type { LLMProviderPort, MemoryExtractor } from '../contracts.js';
+import type { AgentResponse, SubstrateMessage, TurnRecord } from '../../../shared/contracts/runtime.js';
+import type { SessionManager } from '../../session/manager.js';
+import type {
+  IntentionPostTurnHookContext,
+  IntentionPostTurnHookRunOptions,
+} from '../substrate-agent/post-turn-actions.js';
+import {
+  selectEmotionAppraisalSourceEntries,
+  type EmotionSelfModelRuntime,
+} from '../substrate-agent/emotion-self-model-runtime.js';
+import {
+  BackgroundWorkDeferredError,
+  BackgroundWorkPermanentError,
+  type BackgroundWorkExecutionInput,
+} from './supervisor.js';
+import {
+  fingerprintBackgroundWorkTurnRecord,
+  type BackgroundWorkPayload,
+  type BackgroundWorkSourceRef,
+} from './types.js';
+
+const SOURCE_RECORD_GRACE_MS = 60_000;
+// u5bv.11: a durable bounded extraction that failed closed because the extractor
+// drained defers rather than consuming a retry attempt. A slightly longer delay
+// than the source-not-ready grace avoids a hot re-defer loop if the extractor is
+// drained while the supervisor is still claiming; the job survives shutdown as a
+// deferred row and its exact snapshot re-runs on a fresh (accepting) process.
+const EXTRACTION_DRAIN_REQUEUE_DELAY_MS = 1_000;
+
+export interface PostTurnBackgroundRuntimeDependencies {
+  sessionManager: SessionManager;
+  llmProvider: LLMProviderPort;
+  getMemoryExtractor: () => MemoryExtractor | null;
+  runIntentionPostTurnHooks: (
+    context: IntentionPostTurnHookContext,
+    options?: IntentionPostTurnHookRunOptions,
+  ) => Promise<void>;
+  emotionRuntime: Pick<EmotionSelfModelRuntime, 'triggerEmotionAppraisal'>;
+  getEmotionTemplateVariables: () => Record<string, string>;
+  now?: () => number;
+}
+
+function requireCanonicalTurnRecord(
+  source: BackgroundWorkSourceRef,
+  jobCreatedAtMs: number,
+  dependencies: PostTurnBackgroundRuntimeDependencies,
+): TurnRecord {
+  if (!dependencies.sessionManager.isSourceRecordedTurnEligible(
+    source.channelId,
+    source.logicalSessionId,
+    source.turnId,
+  )) {
+    throw new BackgroundWorkPermanentError('source_missing');
+  }
+  const record = dependencies.sessionManager.findSourceRecordedTurn(
+    source.channelId,
+    source.logicalSessionId,
+    source.turnId,
+  );
+  if (!record) {
+    const nowMs = (dependencies.now ?? Date.now)();
+    if (nowMs - jobCreatedAtMs < SOURCE_RECORD_GRACE_MS) {
+      throw new BackgroundWorkDeferredError('source_not_ready', 250);
+    }
+    throw new BackgroundWorkPermanentError('source_missing');
+  }
+  if ((record.sessionId ?? record.channelId) !== source.logicalSessionId
+    || record.channelId !== source.channelId
+    || record.requestId !== source.requestId
+    || fingerprintBackgroundWorkTurnRecord(record) !== source.turnRecordFingerprint) {
+    throw new BackgroundWorkPermanentError('source_mismatch');
+  }
+  return record;
+}
+
+function isDirectTurn(record: TurnRecord): boolean | undefined {
+  if (record.auditPrivacy?.reason === 'direct_message') return true;
+  if (record.channelPrivacy === 'public') return false;
+  return undefined;
+}
+
+function rehydrateIntentionContext(
+  record: TurnRecord,
+  payload: Extract<BackgroundWorkPayload, { kind: 'intention_post_turn_hooks' }>,
+): IntentionPostTurnHookContext {
+  const message: SubstrateMessage = {
+    id: record.userMessage.sourceMessageId ?? record.requestId,
+    channelId: record.channelId,
+    channelType: record.channelType,
+    authorId: record.userMessage.authorId ?? 'unknown',
+    authorName: record.userMessage.authorName ?? 'Unknown',
+    content: record.userMessage.content,
+    timestamp: new Date(record.userMessage.timestamp),
+    ...(isDirectTurn(record) !== undefined ? { isDirectMessage: isDirectTurn(record) } : {}),
+    ...(record.userMessage.replyToMessageId
+      ? { replyToMessageId: record.userMessage.replyToMessageId }
+      : {}),
+    ...(record.icpCorrelation ? { routing: { icpCorrelation: record.icpCorrelation } } : {}),
+  };
+  const response: AgentResponse = {
+    content: record.assistantMessage?.content ?? '',
+    channelId: record.channelId,
+    metadata: {
+      model: record.versionPointers.model,
+      inputTokens: 0,
+      outputTokens: 0,
+      durationMs: Math.max(0, record.completedAt - record.startedAt),
+      turnId: record.turnId,
+      requestId: record.requestId,
+      ...(record.icpCorrelation ? { icpCorrelation: record.icpCorrelation } : {}),
+    },
+  };
+  // Hook inputs are rehydrated from the canonical TurnRecord. Tool messages are
+  // represented there as normalized toolCalls; the current intention hook uses
+  // the stable source id and assistant response, so no raw tool payload is
+  // duplicated into the queue merely to recreate upstream provider objects.
+  const turnMessages: AgentMessage[] = [];
+  return {
+    message,
+    response,
+    turnMessages,
+    turnId: record.turnId,
+    completedAt: record.completedAt,
+    ...(payload.canonicalContactKey
+      ? { canonicalContactKey: payload.canonicalContactKey }
+      : {}),
+    ...(record.icpCorrelation ? { icpCorrelation: record.icpCorrelation } : {}),
+  };
+}
+
+function resolveMaxSessionEntryId(source: BackgroundWorkSourceRef): number | undefined {
+  return source.assistantSessionEntryId ?? source.userSessionEntryId;
+}
+
+function requireMaxSessionEntryId(source: BackgroundWorkSourceRef): number {
+  const maxSessionEntryId = resolveMaxSessionEntryId(source);
+  if (maxSessionEntryId === undefined) {
+    throw new BackgroundWorkPermanentError('source_mismatch');
+  }
+  return maxSessionEntryId;
+}
+
+async function withStableConsumedSnapshot<T>(
+  input: BackgroundWorkExecutionInput,
+  dependencies: PostTurnBackgroundRuntimeDependencies,
+  readSnapshot: () => ReturnType<SessionManager['getRecentMessagesAtOrBefore']>,
+  operation: (entries: ReturnType<SessionManager['getRecentMessagesAtOrBefore']>) => Promise<T>,
+): Promise<T> {
+  try {
+    return await dependencies.sessionManager.withStableRecordedTurnEligibilitySnapshot(
+      input.payload.source.logicalSessionId,
+      [input.payload.source.turnId],
+      readSnapshot,
+      async entries => operation([...entries]),
+    );
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TurnRecordEligibilitySnapshotChangedError') {
+      throw new BackgroundWorkDeferredError('source_not_ready', 250);
+    }
+    if (error instanceof Error && error.name === 'TurnRecordEligibilitySnapshotInvalidError') {
+      throw new BackgroundWorkPermanentError('source_missing');
+    }
+    throw error;
+  }
+}
+
+/**
+ * A bounded snapshot is usable only when it still contains the entry it was
+ * anchored to. Older source entries may legitimately fall outside the window,
+ * so require the max boundary id rather than every id recorded on the job.
+ */
+function requireSourceSessionEntry(
+  entries: ReturnType<SessionManager['getRecentMessagesAtOrBefore']>,
+  requiredSessionEntryId: number,
+): void {
+  if (!entries.some(entry => entry.id === requiredSessionEntryId)) {
+    throw new BackgroundWorkDeferredError('source_not_ready', 250);
+  }
+}
+
+export async function executePostTurnBackgroundWork(
+  input: BackgroundWorkExecutionInput,
+  dependencies: PostTurnBackgroundRuntimeDependencies,
+): Promise<void> {
+  const { payload, job } = input;
+  if (payload.kind === 'memory_extraction') {
+    const maxSessionEntryId = requireMaxSessionEntryId(payload.source);
+    const extractor = dependencies.getMemoryExtractor();
+    if (!extractor) throw new Error('Memory extraction background handler is not wired');
+    // Size the bounded snapshot to the configured extraction interval instead of
+    // a fixed ten entries. A snapshot capped at ten can never contain the 11-50
+    // uncovered entries a valid interval requires, so those configs would never
+    // interval-fire and every job receipt completed as a durable no-op. The
+    // extractor clamps this to its recovery window, keeping coverage aligned with
+    // the entries its LLM prompt actually consumes.
+    const snapshotLimit = extractor.getBoundedExtractionSnapshotLimit();
+    await withStableConsumedSnapshot(
+      input,
+      dependencies,
+      () => dependencies.sessionManager.getRecentMessagesAtOrBefore(
+        payload.source.logicalSessionId,
+        maxSessionEntryId,
+        snapshotLimit,
+      ),
+      async (recentEntries) => {
+        await input.effects.assertOwned();
+        const record = requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+        requireSourceSessionEntry(recentEntries, maxSessionEntryId);
+        try {
+          await input.effects.run('memory-extraction', async (crossBoundary) => {
+            // Extraction has a long, failable pre-write phase (LLM call, parse, DB
+            // reads) before its first durable write. Guard that phase with the
+            // NON-crossing `assertOwned` fence so a transient pre-write failure
+            // leaves the receipt `pending` and the job retryable; `crossBoundary`
+            // is called only at the durable write sites, where a post-write crash
+            // must instead fail closed. Passing both keeps pre-write work
+            // retryable while the write phase stays exactly-once.
+            await extractor.maybeExtract(
+              payload.source.logicalSessionId,
+              payload.canonicalContactId,
+              record.turnId,
+              payload.placeId,
+              payload.icpCorrelation,
+              crossBoundary,
+              recentEntries,
+              input.effects.assertOwned,
+            );
+          });
+        } catch (error) {
+          // u5bv.11: the queued durable extraction found the extractor draining
+          // before its serialized run wrote any fact. It crossed no write
+          // boundary and its `pending` receipt was abandoned by the effect
+          // runner, so defer the job (retryable) rather than let a drain-time
+          // no-op complete the receipt and mark the snapshot covered. Matched by
+          // name to avoid a core -> faculties error-class import.
+          if (error instanceof Error && error.name === 'ExtractionDrainRequeueError') {
+            throw new BackgroundWorkDeferredError(
+              'source_not_ready',
+              EXTRACTION_DRAIN_REQUEUE_DELAY_MS,
+            );
+          }
+          throw error;
+        }
+      },
+    );
+    return;
+  }
+  if (payload.kind === 'emotion_appraisal') {
+    const maxSessionEntryId = requireMaxSessionEntryId(payload.source);
+    await withStableConsumedSnapshot(
+      input,
+      dependencies,
+      () => selectEmotionAppraisalSourceEntries(
+        dependencies.sessionManager.getRecentMessagesAtOrBefore(
+          payload.source.logicalSessionId,
+          maxSessionEntryId,
+          10,
+        ),
+      ),
+      async (recentEntries) => {
+        await input.effects.assertOwned();
+        const record = requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+        requireSourceSessionEntry(recentEntries, maxSessionEntryId);
+        if (record.internalStateSnapshotRef !== payload.internalStateSnapshotRef) {
+          throw new BackgroundWorkPermanentError('source_mismatch');
+        }
+        await input.effects.run('emotion-appraisal', async (assertOwned) => {
+          const canonicalTemplateVariables = dependencies.getEmotionTemplateVariables();
+          await dependencies.emotionRuntime.triggerEmotionAppraisal({
+            sessionChannelId: payload.emotionSessionId,
+            turnId: record.turnId,
+            appraisalState: payload.appraisalState,
+            templateVariables: canonicalTemplateVariables,
+            assertEffectAllowed: assertOwned,
+            recentEntries,
+            ...(payload.icpCorrelation ? { icpCorrelation: payload.icpCorrelation } : {}),
+          });
+        });
+      },
+    );
+    return;
+  }
+  if (payload.kind === 'auto_compaction') {
+    const maxSessionEntryId = requireMaxSessionEntryId(payload.source);
+    const snapshotAt = new Date();
+    const captureParams = {
+      channelId: payload.source.logicalSessionId,
+      adaptiveProfile: payload.adaptiveProfile,
+      turnBudgetCharacteristics: payload.turnBudgetCharacteristics,
+      maxSessionEntryId,
+      now: snapshotAt,
+    } as const;
+    await withStableConsumedSnapshot(
+      input,
+      dependencies,
+      () => dependencies.sessionManager.captureAutoCompactionRecentEntries(captureParams),
+      async (recentEntries) => {
+        await input.effects.assertOwned();
+        requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+        requireSourceSessionEntry(recentEntries, maxSessionEntryId);
+        await input.effects.run('auto-compaction', async (assertOwned) => {
+          await dependencies.sessionManager.scheduleAutoCompactionBetweenTurns({
+            channelId: payload.source.logicalSessionId,
+            systemPromptTokenCount: payload.systemPromptTokenCount,
+            memoriesTokenCount: payload.memoriesTokenCount,
+            adaptiveProfile: payload.adaptiveProfile,
+            turnBudgetCharacteristics: payload.turnBudgetCharacteristics,
+            llmProvider: dependencies.llmProvider,
+            throwOnFailure: true,
+            assertEffectAllowed: assertOwned,
+            capturedRecentEntries: recentEntries,
+            ...(payload.channelMeta ? { channelMeta: payload.channelMeta } : {}),
+            ...(payload.userId ? { userId: payload.userId } : {}),
+            ...(payload.icpCorrelation ? { icpCorrelation: payload.icpCorrelation } : {}),
+          });
+        });
+      },
+    );
+    return;
+  }
+  await dependencies.sessionManager.withSourceRecordedTurnEligibilityFence(
+    payload.source.channelId,
+    payload.source.logicalSessionId,
+    payload.source.turnId,
+    async () => {
+      // The durable source fence is shared with turn-tombstone and duplicate
+      // TurnRecord writers. Queue ownership and canonical eligibility are both
+      // proved only after it is held, and raw content never leaves its scope.
+      await input.effects.assertOwned();
+      const record = requireCanonicalTurnRecord(payload.source, job.createdAtMs, dependencies);
+      // Source-only audit: the sole production hook records a behavioral
+      // pattern from this canonical message/response pair; it does not read a
+      // session window. Keep it on the one-source fence unless that hook
+      // contract changes.
+      await dependencies.runIntentionPostTurnHooks(
+        rehydrateIntentionContext(record, payload),
+        {
+          propagateFailures: true,
+          assertOwned: input.effects.assertOwned,
+          runEffect: input.effects.run,
+        },
+      );
+    },
+  );
+}

@@ -9,16 +9,7 @@ import { createTurnId } from '../../turns/id.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { TurnSupportRuntime } from './turn-support-runtime.js';
 import { IntrospectionTurnSensitivityDecisions } from '../../../faculties/introspection/turn-sensitivity.js';
-
-function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
+import type { BackgroundWorkSupervisor } from '../background-work/supervisor.js';
 
 function flushAsyncWork(): Promise<void> {
   return Promise.resolve().then(() => undefined);
@@ -75,6 +66,7 @@ describe('TurnSupportRuntime role-envelope projections', () => {
     const runtime = new TurnSupportRuntime({
       eventBus: new EventBus(),
       sessionManager,
+      backgroundWorkSupervisor: null,
       hashPromptText: (text) => `hash:${text.length}`,
       resolveContextWindow: () => 1_000,
     });
@@ -126,6 +118,10 @@ describe('TurnSupportRuntime role-envelope projections', () => {
         content: 'Please check in tomorrow if I disappear.',
         timestamp,
       },
+      turnSessionIdentity: {
+        sourceChannelId: channelId,
+        logicalSessionId: channelId,
+      },
       turnId,
       requestId,
       startedAt: timestamp.getTime(),
@@ -159,6 +155,7 @@ describe('TurnSupportRuntime role-envelope projections', () => {
     const runtime = new TurnSupportRuntime({
       eventBus: new EventBus(),
       sessionManager,
+      backgroundWorkSupervisor: null,
       hashPromptText: (text) => `hash:${text.length}`,
       resolveContextWindow: () => 1_000,
     });
@@ -178,6 +175,10 @@ describe('TurnSupportRuntime role-envelope projections', () => {
         timestamp: new Date('2026-07-13T14:00:00.000Z'),
         isDirectMessage: false,
         routing: { channelPrivacy: 'public' as const },
+      },
+      turnSessionIdentity: {
+        sourceChannelId: 'api:public-room',
+        logicalSessionId: 'api:public-room',
       },
       turnId,
       requestId,
@@ -220,6 +221,7 @@ describe('TurnSupportRuntime role-envelope projections', () => {
     const runtime = new TurnSupportRuntime({
       eventBus: new EventBus(),
       sessionManager,
+      backgroundWorkSupervisor: null,
       hashPromptText: (text) => `hash:${text.length}`,
       resolveContextWindow: () => 1_000,
     });
@@ -248,146 +250,146 @@ describe('TurnSupportRuntime role-envelope projections', () => {
     });
     expect(correlation.sessionId).not.toBe(correlation.channelId);
   });
+
+  it('writes every turn transcript role and system note to the captured owner after a route reset', () => {
+    const runtime = new TurnSupportRuntime({
+      eventBus: new EventBus(),
+      sessionManager,
+      backgroundWorkSupervisor: null,
+      hashPromptText: text => `hash:${text.length}`,
+      resolveContextWindow: () => 1_000,
+    });
+    const sourceChannelId = 'discord:guild:captured-write-owner';
+    const turnStartRoute = sessionManager.resetSourceChannelSession({
+      sourceChannelId,
+      actor: 'test',
+      reason: 'establish turn-start owner',
+      mode: 'fresh_split',
+    });
+    const turnSessionIdentity = {
+      sourceChannelId,
+      logicalSessionId: turnStartRoute.newLogicalSessionId,
+    };
+    const futureRoute = sessionManager.resetSourceChannelSession({
+      sourceChannelId,
+      actor: 'test',
+      reason: 'move only future turns',
+      mode: 'fresh_split',
+    });
+    const turnId = createTurnId();
+    const message = {
+      id: 'captured-write-owner-turn',
+      channelId: sourceChannelId,
+      channelType: 'discord' as const,
+      authorId: 'user-1',
+      authorName: 'User',
+      content: 'Old-turn user row.',
+      timestamp: new Date('2026-07-16T00:00:00.000Z'),
+      isDirectMessage: false,
+    };
+
+    runtime.recordUserMessage(
+      message,
+      turnSessionIdentity,
+      turnId,
+      message.id,
+      'regular',
+      undefined,
+      undefined,
+      'human',
+    );
+    runtime.recordSystemMessage(
+      { ...message, authorId: 'system:test', authorName: 'System' },
+      turnSessionIdentity,
+      turnId,
+      message.id,
+      'Old-turn system row.',
+    );
+    runtime.recordToolObservations(
+      message,
+      turnSessionIdentity,
+      turnId,
+      message.id,
+      [{
+        role: 'toolResult',
+        toolCallId: 'captured-owner-tool',
+        toolName: 'contact',
+        content: [{ type: 'text', text: 'Old-turn tool row.' }],
+        isError: false,
+      }],
+      'regular',
+    );
+    runtime.recordAssistantMessage(
+      message,
+      turnSessionIdentity,
+      turnId,
+      message.id,
+      'Old-turn assistant row.',
+      'regular',
+    );
+    sessionManager.appendSystemNote(
+      turnSessionIdentity.logicalSessionId,
+      'Old-turn internal note.',
+      'test',
+      turnSessionIdentity.sourceChannelId,
+    );
+
+    const capturedEntries = sessionManager.getRecentSessionEntries(
+      turnSessionIdentity.logicalSessionId,
+      10,
+    );
+    expect(capturedEntries.map(entry => entry.role)).toEqual([
+      'user',
+      'system',
+      'tool',
+      'assistant',
+      'system',
+    ]);
+    expect(capturedEntries.every(entry => entry.originChannelId === sourceChannelId)).toBe(true);
+    expect(sessionManager.getRecentSessionEntries(futureRoute.newLogicalSessionId, 10)).toEqual([]);
+  });
 });
 
-describe('TurnSupportRuntime post-turn drain gate', () => {
-  function createRuntime(eventBus = new EventBus()): TurnSupportRuntime {
-    return new TurnSupportRuntime({
-      eventBus,
+describe('TurnSupportRuntime durable background work delegation', () => {
+  it('delegates enqueue and foreground lifecycle to the per-session supervisor', async () => {
+    const lease = {
+      id: 'lease-1',
+      logicalSessionId: 'session-a',
+      ready: Promise.resolve(),
+      signal: new AbortController().signal,
+    };
+    const enqueue = vi.fn(async () => undefined);
+    const beginForeground = vi.fn(() => lease);
+    const endForeground = vi.fn();
+    const supervisor = { enqueue, beginForeground, endForeground } as unknown as BackgroundWorkSupervisor;
+    const runtime = new TurnSupportRuntime({
+      eventBus: new EventBus(),
       sessionManager: {} as SessionManager,
+      backgroundWorkSupervisor: supervisor,
       hashPromptText: (text) => `hash:${text.length}`,
       resolveContextWindow: () => 1_000,
     });
-  }
 
-  afterEach(() => {
-    vi.useRealTimers();
+    await runtime.enqueuePostTurnBackgroundWork([]);
+    const foregroundLease = runtime.beginForegroundBackgroundWork('session-a');
+    await runtime.endForegroundBackgroundWork(foregroundLease);
+
+    expect(enqueue).toHaveBeenCalledWith([]);
+    expect(beginForeground).toHaveBeenCalledWith('session-a');
+    expect(endForeground).toHaveBeenCalledWith(lease);
   });
 
-  it('waits for registered post-turn work before releasing the next turn', async () => {
-    const runtime = createRuntime();
-    const previousTurnId = createTurnId();
-    const nextTurnId = createTurnId();
-    const work = createDeferred<void>();
-
-    runtime.registerPostTurnBackgroundWork({
-      channelId: 'api:drain-wait',
-      turnId: previousTurnId,
-      requestId: 'previous-request',
-      work: [{ name: 'emotion_appraisal', promise: work.promise }],
+  it('fails closed when durable enqueue is not configured', async () => {
+    const runtime = new TurnSupportRuntime({
+      eventBus: new EventBus(),
+      sessionManager: {} as SessionManager,
+      backgroundWorkSupervisor: null,
+      hashPromptText: (text) => `hash:${text.length}`,
+      resolveContextWindow: () => 1_000,
     });
-
-    let released = false;
-    const waitPromise = runtime.awaitPostTurnDrain({
-      channelId: 'api:drain-wait',
-      turnId: nextTurnId,
-      requestId: 'next-request',
-      timeoutMs: 1_000,
-    }).then((result) => {
-      released = true;
-      return result;
-    });
-
-    await flushAsyncWork();
-    expect(released).toBe(false);
-
-    work.resolve();
-    const result = await waitPromise;
-
-    expect(released).toBe(true);
-    expect(result).toMatchObject({
-      status: 'drained',
-      workCount: 1,
-      previousTurnId,
-      previousRequestId: 'previous-request',
-    });
-  });
-
-  it('times out an active drain and clears the gate for later turns', async () => {
-    vi.useFakeTimers();
-    const eventBus = new EventBus();
-    const telemetry: Array<Record<string, unknown>> = [];
-    eventBus.on('agent.post_turn.drain', (event) => {
-      telemetry.push(event);
-    });
-    const runtime = createRuntime(eventBus);
-    const previousTurnId = createTurnId();
-
-    runtime.registerPostTurnBackgroundWork({
-      channelId: 'api:drain-timeout',
-      turnId: previousTurnId,
-      requestId: 'previous-timeout-request',
-      work: [{ name: 'auto_compaction', promise: new Promise(() => undefined) }],
-    });
-
-    const waitPromise = runtime.awaitPostTurnDrain({
-      channelId: 'api:drain-timeout',
-      turnId: createTurnId(),
-      requestId: 'next-timeout-request',
-      timeoutMs: 25,
-    });
-    await vi.advanceTimersByTimeAsync(25);
-    const result = await waitPromise;
-    await flushAsyncWork();
-
-    expect(result).toMatchObject({
-      status: 'timeout',
-      workCount: 1,
-      previousTurnId,
-      previousRequestId: 'previous-timeout-request',
-    });
-    expect(telemetry).toContainEqual(expect.objectContaining({
-      phase: 'timeout',
-      channelId: 'api:drain-timeout',
-      previousTurnId,
-      timeoutMs: 25,
-      taskNames: ['auto_compaction'],
-    }));
-
-    await expect(runtime.awaitPostTurnDrain({
-      channelId: 'api:drain-timeout',
-      turnId: createTurnId(),
-      requestId: 'after-timeout-request',
-      timeoutMs: 25,
-    })).resolves.toMatchObject({ status: 'idle' });
-  });
-
-  it('settles rejected post-turn work so failures do not block the next turn forever', async () => {
-    const eventBus = new EventBus();
-    const telemetry: Array<Record<string, unknown>> = [];
-    eventBus.on('agent.post_turn.drain', (event) => {
-      telemetry.push(event);
-    });
-    const runtime = createRuntime(eventBus);
-    const previousTurnId = createTurnId();
-
-    runtime.registerPostTurnBackgroundWork({
-      channelId: 'api:drain-failure',
-      turnId: previousTurnId,
-      requestId: 'previous-failure-request',
-      work: [{ name: 'memory_extraction', promise: Promise.reject(new Error('extract failed')) }],
-    });
-
-    const result = await runtime.awaitPostTurnDrain({
-      channelId: 'api:drain-failure',
-      turnId: createTurnId(),
-      requestId: 'next-failure-request',
-      timeoutMs: 1_000,
-    });
-    await flushAsyncWork();
-
-    expect(result).toMatchObject({
-      status: 'drained',
-      workCount: 1,
-      previousTurnId,
-    });
-    expect(telemetry).toContainEqual(expect.objectContaining({
-      phase: 'drained',
-      channelId: 'api:drain-failure',
-      previousTurnId,
-      failureCount: 1,
-      taskNames: ['memory_extraction'],
-    }));
+    await expect(runtime.enqueuePostTurnBackgroundWork([])).rejects.toThrow(
+      'Durable background work supervisor is not configured',
+    );
   });
 });
 
@@ -401,6 +403,7 @@ describe('TurnSupportRuntime intentional no-reply decisions', () => {
     const runtime = new TurnSupportRuntime({
       eventBus,
       sessionManager: {} as SessionManager,
+      backgroundWorkSupervisor: null,
       hashPromptText: (text) => `hash:${text.length}`,
       resolveContextWindow: () => 1_000,
     });
@@ -415,6 +418,10 @@ describe('TurnSupportRuntime intentional no-reply decisions', () => {
       },
       null,
       null,
+      {
+        sourceChannelId: 'api:no-reply',
+        logicalSessionId: 'session:no-reply',
+      },
     );
 
     const decision = runtime.recordIntentionalNoReplyDecision({

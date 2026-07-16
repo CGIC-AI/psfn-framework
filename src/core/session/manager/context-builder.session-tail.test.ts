@@ -10,6 +10,13 @@ import {
 } from '../../../persistence/sessions/session-tail-cache-port.js';
 import type { SessionEntry } from '../types.js';
 import { SessionManager } from '../manager.js';
+import { buildSessionMetadataWithIcpCorrelation } from '../icp-correlation-metadata.js';
+import {
+  CHANNEL as ICP_CHANNEL,
+  SOURCE as ICP_SOURCE,
+  correlation as icpCorrelation,
+  recoveryResponse as icpRecoveryResponse,
+} from '../icp-recovery.test-fixtures.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 
 // In-memory fake of the tail port (no live Redis in unit tests). Mirrors the
@@ -287,4 +294,67 @@ describe('captureTurnSessionContext with the session tail cache', () => {
     expect(tailSnapshot.compactionSummaryTexts).toEqual(fileSnapshot.compactionSummaryTexts);
     expect(tailSnapshot.compactionSummaryTexts).toHaveLength(1);
   });
+
+  it.each([
+    ['failed', false],
+    ['delivered', true],
+  ] as const)(
+    'projects %s ICP delivery truth through a real tail-backed SessionManager capture',
+    async (status, includesAssistantOutput) => {
+      const tail = new FakeSessionTailCache();
+      const writerStore = new SessionStore(sessionsDir, { tailCache: tail });
+      const writer = new SessionManager(writerStore, makeConfig(dir));
+      const gatedContent = `${status} private ICP assistant output`;
+      writer.recordAssistantMessage(
+        ICP_CHANNEL,
+        gatedContent,
+        'contact-peer',
+        true,
+        'contact-peer',
+        {
+          turnId: icpCorrelation.turnId,
+          requestId: ICP_SOURCE,
+          sourceMessageId: ICP_SOURCE,
+          metadata: buildSessionMetadataWithIcpCorrelation(
+            undefined,
+            icpCorrelation,
+            { deliveryStatus: 'pending', recoveryResponse: icpRecoveryResponse },
+          ),
+        },
+      );
+      writer.recordIcpDeliveryObservation(status === 'delivered'
+        ? {
+            channelId: ICP_CHANNEL,
+            sourceMessageId: ICP_SOURCE,
+            status,
+            gatewayMessageId: `gateway-${ICP_SOURCE}`,
+            deliveredTo: ['22222222-2222-4222-8222-222222222222'],
+            permitOutcome: 'consumed',
+            recoveryResponse: icpRecoveryResponse,
+          }
+        : {
+            channelId: ICP_CHANNEL,
+            sourceMessageId: ICP_SOURCE,
+            status,
+            error: 'peer unavailable',
+            recoveryResponse: icpRecoveryResponse,
+          });
+      writer.recordUserMessage(
+        ICP_CHANNEL,
+        'ordinary successful follow-up',
+        'human-b',
+        'Human B',
+      );
+      await writerStore.flushSessionTailWrites();
+
+      const readerStore = new SessionStore(sessionsDir, { tailCache: tail });
+      const reader = new SessionManager(readerStore, makeConfig(dir));
+      const snapshot = await reader.captureTurnSessionContext({ channelId: ICP_CHANNEL });
+      const contents = snapshot.recentEntries.map(entry => entry.content);
+
+      expect(tail.calls.getTail).toBeGreaterThan(0);
+      expect(contents.includes(gatedContent)).toBe(includesAssistantOutput);
+      expect(contents).toContain('ordinary successful follow-up');
+    },
+  );
 });

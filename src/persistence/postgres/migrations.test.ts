@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   POSTGRES_CONTACT_MIGRATIONS,
+  POSTGRES_BACKGROUND_WORK_MIGRATIONS,
   POSTGRES_ENROLLMENT_MIGRATIONS,
   POSTGRES_INTENTION_MIGRATIONS,
   POSTGRES_INTROSPECTION_MIGRATIONS,
@@ -19,6 +20,28 @@ function expectAddColumn(sql: string, table: string, column: string): void {
 }
 
 describe('Postgres live schema migrations', () => {
+  it('creates a companion-private leased background-work queue with fail-closed states', () => {
+    const sql = migrationSql(POSTGRES_BACKGROUND_WORK_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS agent_background_work_jobs');
+    expect(sql).toContain('idempotency_key TEXT NOT NULL UNIQUE');
+    expect(sql).toContain('payload_fingerprint TEXT NOT NULL');
+    expect(sql).toContain("'emotion_appraisal'");
+    expect(sql).toContain("'stale_discarded'");
+    expect(sql).toContain("'effect_outcome_unknown'");
+    expect(sql).toContain('deferred_from_available_at_ms BIGINT');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS agent_background_work_foreground_leases');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS agent_background_work_handoffs');
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS agent_background_work_effect_receipts');
+    expect(sql).toContain("state = 'running' AND lease_owner IS NOT NULL");
+    expect(sql).toContain("state <> 'running' AND lease_owner IS NULL");
+    expect(sql).toContain('idx_agent_background_work_one_running_per_session');
+    expect(sql).toContain("WHERE state = 'running'");
+    expect(sql).toContain('idx_agent_background_work_runnable');
+    expect(sql).toContain('idx_agent_background_work_terminal_retention');
+    expect(sql).toContain("WHERE state IN ('succeeded', 'failed', 'stale_discarded')");
+  });
+
   it('creates append-only introspection landmark and audit-decision ledgers', () => {
     const sql = migrationSql(POSTGRES_INTROSPECTION_MIGRATIONS);
 

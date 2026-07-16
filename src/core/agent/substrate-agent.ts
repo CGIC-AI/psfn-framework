@@ -159,8 +159,10 @@ import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-ru
 import {
   handleMessageForTurn,
   type TurnDeliveryLifecycle,
+  type TurnSessionIdentity,
 } from './substrate-agent/turn-execution-runtime.js';
 import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
+import { parseTurnRecordBackgroundWorkHandoff } from './background-work/types.js';
 import { CompletionNoticeBuffer } from './completion-notices.js';
 import {
   refreshModelFromConfig as refreshModelFromConfigForRuntime,
@@ -182,6 +184,13 @@ import {
 } from './substrate-agent/tool-runtime-facade.js';
 import { createResponseControlTool } from './no-reply-tool.js';
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
+import { BackgroundWorkSupervisor } from './background-work/supervisor.js';
+import type { BackgroundWorkStorePort } from './background-work/store-port.js';
+import { executePostTurnBackgroundWork } from './background-work/post-turn-runtime.js';
+import {
+  recoverHistoricalBackgroundWorkHandoffs,
+  runBackgroundWorkTick,
+} from './background-work/tick-runtime.js';
 import type { ObserverEvalSidecarRuntime } from '../eval/observer-sidecar/types.js';
 import type { FatigueBudgetPort } from './fatigue/fatigue-budget.js';
 import type { IcpFatigueRegulationReservationPort } from './fatigue/regulation-reservation.js';
@@ -200,6 +209,7 @@ export type {
 export type {
   PostTurnActionInferer,
   IntentionPostTurnHookContext,
+  IntentionPostTurnHookEffects,
   IntentionPostTurnHook,
 } from './substrate-agent/post-turn-actions.js';
 export type {
@@ -239,8 +249,12 @@ export interface SubstrateAgentOptions {
    * so a runtime with no `places.json` renders byte-identically.
    */
   placesRegistryConfig?: PlacesRegistryConfig;
+  backgroundWorkStore?: BackgroundWorkStorePort;
+  /** Explicitly omit post-turn jobs for ephemeral/test agents with no durable owner. */
+  backgroundWorkDisabled?: boolean;
 }
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
+const BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE = 32;
 
 export type SubstrateAgentAbortResult = AgentRunAbortResult;
 
@@ -268,6 +282,9 @@ export class SubstrateAgent {
   private readonly turnQueueIngress: TurnQueueIngressCoordinator;
   readonly completionNotices = new CompletionNoticeBuffer();
   private readonly turnSupportRuntime: TurnSupportRuntime;
+  private readonly backgroundWorkSupervisor: BackgroundWorkSupervisor | null;
+  private backgroundWorkHandoffsRecovered = false;
+  private backgroundWorkHandoffRecoveryPromise: Promise<void> | null = null;
   private readonly toolRuntimeFacade: ToolRuntimeFacade;
   private readonly satellitePresencePort = createActiveEmanationSatellitePresencePort();
   private selfModelRuntimeRequired = false;
@@ -457,25 +474,28 @@ export class SubstrateAgent {
     config: CoreSubstrateConfig,
     options?: SubstrateAgentOptions,
   ) {
+    if (!options?.backgroundWorkStore && options?.backgroundWorkDisabled !== true) {
+      throw new Error('SubstrateAgent requires a durable background work store');
+    }
     this.eventBus = eventBus;
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
     this.systemPrompt = systemPrompt;
-    this.characterName = options?.characterName?.trim()
+    this.characterName = options.characterName?.trim()
       || resolveConfiguredCharacterName(config)
       || deriveCharacterNameForRuntime(systemPrompt);
-    const fallbackPromptVariables = { ...(options?.characterPromptVariables ?? {}) };
-    this.resolveCharacterPromptVariables = options?.characterPromptVariablesProvider
+    const fallbackPromptVariables = { ...(options.characterPromptVariables ?? {}) };
+    this.resolveCharacterPromptVariables = options.characterPromptVariablesProvider
       ?? (() => fallbackPromptVariables);
     this.config = config;
-    this.runtimeMode = options?.runtimeMode ?? 'gateway';
-    this.appCache = options?.appCache ?? createMemoryAppCache({ name: 'substrate-agent-prompt-cache' });
-    this.selfModelRuntimeRequired = options?.selfModelRuntime?.requireWiring ?? false;
-    this.observerEvalSidecar = options?.observerEvalSidecar ?? null;
-    this.fatigueBudget = options?.fatigueBudget ?? null;
-    this.fatigueRegulationReservations = options?.fatigueRegulationReservations ?? null;
-    this.contactTrackingGate = options?.contactTrackingGate ?? null;
-    this.placesRegistryConfig = options?.placesRegistryConfig;
+    this.runtimeMode = options.runtimeMode ?? 'gateway';
+    this.appCache = options.appCache ?? createMemoryAppCache({ name: 'substrate-agent-prompt-cache' });
+    this.selfModelRuntimeRequired = options.selfModelRuntime?.requireWiring ?? false;
+    this.observerEvalSidecar = options.observerEvalSidecar ?? null;
+    this.fatigueBudget = options.fatigueBudget ?? null;
+    this.fatigueRegulationReservations = options.fatigueRegulationReservations ?? null;
+    this.contactTrackingGate = options.contactTrackingGate ?? null;
+    this.placesRegistryConfig = options.placesRegistryConfig;
     this.virtualRoomFollower = createVirtualRoomFollower({
       ...(this.placesRegistryConfig ? { placesRegistry: this.placesRegistryConfig } : {}),
       getCompanionPresence: () => this.companionPresence,
@@ -487,7 +507,7 @@ export class SubstrateAgent {
     this.emotionSelfModelRuntime = new EmotionSelfModelRuntime({
       sessionManager: this.sessionManager,
       llmProvider: this.llmClient,
-      emotionRuntime: options?.emotionRuntime,
+      emotionRuntime: options.emotionRuntime,
       ...(config.emotionScoping ? { emotionScopingConfig: config.emotionScoping } : {}),
       getActiveConcernProvider: () => this.activeConcernProvider,
       getPendingFollowUpProvider: () => this.pendingFollowUpProvider,
@@ -505,15 +525,31 @@ export class SubstrateAgent {
     });
     this.emotionSelfModelRuntime.assertEmotionRuntimeConfigured();
 
-    const defaultStreamTransport = options?.streamTransport ?? {
+    this.backgroundWorkSupervisor = options.backgroundWorkStore
+      ? new BackgroundWorkSupervisor({
+        store: options.backgroundWorkStore,
+        eventBus: this.eventBus,
+        executor: (input) => executePostTurnBackgroundWork(input, {
+          sessionManager: this.sessionManager,
+          llmProvider: this.llmClient,
+          getMemoryExtractor: () => this.memoryExtractor,
+          runIntentionPostTurnHooks: (context, runOptions) => this.turnSupportRuntime
+            .runIntentionPostTurnHooks(context, runOptions),
+          emotionRuntime: this.emotionSelfModelRuntime,
+          getEmotionTemplateVariables: () => this.resolveCharacterPromptVariables(),
+        }),
+      })
+      : null;
+
+    const defaultStreamTransport = options.streamTransport ?? {
       stream: this.llmClient.stream.bind(this.llmClient),
     };
-    const configuredProviderFirstOutput = options?.streamRuntimeOptions?.onProviderFirstOutput;
-    const configuredProviderPayloadCaptured = options?.streamRuntimeOptions?.onProviderPayloadCaptured;
+    const configuredProviderFirstOutput = options.streamRuntimeOptions?.onProviderFirstOutput;
+    const configuredProviderPayloadCaptured = options.streamRuntimeOptions?.onProviderPayloadCaptured;
 
     this.agent = new Agent({
-      streamFn: options?.streamFn ?? createSubstrateStreamFn(config, {
-        ...(options?.streamRuntimeOptions ?? {}),
+      streamFn: options.streamFn ?? createSubstrateStreamFn(config, {
+        ...(options.streamRuntimeOptions ?? {}),
         onProviderFirstOutput: async (event) => {
           await this.eventBus.emit('agent.provider.first_output', event);
           await configuredProviderFirstOutput?.(event);
@@ -537,6 +573,8 @@ export class SubstrateAgent {
     this.turnSupportRuntime = new TurnSupportRuntime({
       eventBus: this.eventBus,
       sessionManager: this.sessionManager,
+      backgroundWorkSupervisor: this.backgroundWorkSupervisor,
+      backgroundWorkDisabled: options.backgroundWorkDisabled === true,
       hashPromptText: hashPromptTextForTurn,
       resolveContextWindow: () => resolveContextWindowForRuntime(
         this.config,
@@ -882,8 +920,10 @@ export class SubstrateAgent {
   private async trySteerActiveRun(message: SubstrateMessage): Promise<boolean> {
     const authorContext = await this.resolveAuthorContext(message);
     if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
+    const turnSessionIdentity = this.requireActiveTurnSessionIdentity();
     this.turnSupportRuntime.recordUserMessage(
       message,
+      turnSessionIdentity,
       createTurnId(),
       message.id,
       authorContext.trustLevel,
@@ -962,9 +1002,11 @@ export class SubstrateAgent {
       ? null
       : await this.resolveAuthorContext(message);
     if (!this.turnQueueIngress.canQueueIntoActiveOrdinaryRun()) return false;
+    const turnSessionIdentity = this.requireActiveTurnSessionIdentity();
     if (isSystemOriginated) {
       this.turnSupportRuntime.recordSystemMessage(
         message,
+        turnSessionIdentity,
         turnId,
         message.id,
         systemContent,
@@ -975,6 +1017,7 @@ export class SubstrateAgent {
       }
       this.turnSupportRuntime.recordUserMessage(
         message,
+        turnSessionIdentity,
         turnId,
         message.id,
         authorContext.trustLevel,
@@ -999,6 +1042,14 @@ export class SubstrateAgent {
       systemOriginated: isSystemOriginated,
     });
     return true;
+  }
+
+  private requireActiveTurnSessionIdentity(): TurnSessionIdentity {
+    const identity = this.turnSupportRuntime.getActiveTurnSessionIdentity();
+    if (!identity) {
+      throw new Error('Active ordinary run is missing its captured session identity');
+    }
+    return identity;
   }
 
   /**
@@ -1179,6 +1230,56 @@ export class SubstrateAgent {
 
   registerIntentionPostTurnHook(hook: IntentionPostTurnHook): () => void {
     return this.turnSupportRuntime.registerIntentionPostTurnHook(hook);
+  }
+
+  hasDurableBackgroundWorkSupervisor(): boolean {
+    return this.backgroundWorkSupervisor !== null;
+  }
+
+  async tickBackgroundWork(): Promise<void> {
+    const supervisor = this.backgroundWorkSupervisor;
+    if (!supervisor) {
+      throw new Error('Durable background work supervisor is not configured');
+    }
+    await runBackgroundWorkTick({
+      recoverHandoffs: () => this.recoverBackgroundWorkHandoffs(),
+      tick: () => supervisor.tick(),
+    });
+  }
+
+  private async recoverBackgroundWorkHandoffs(): Promise<void> {
+    if (!this.backgroundWorkHandoffRecoveryPromise) {
+      this.backgroundWorkHandoffRecoveryPromise = (async () => {
+        if (!this.backgroundWorkHandoffsRecovered) {
+          const records = this.sessionManager.listRecoverableBackgroundWorkTurnRecords();
+          // Enumeration is intentionally once per process. Enqueue failures move
+          // into the source-keyed retry index drained in bounded batches below.
+          this.backgroundWorkHandoffsRecovered = true;
+          await recoverHistoricalBackgroundWorkHandoffs(
+            records,
+            async (record) => {
+              const jobs = parseTurnRecordBackgroundWorkHandoff(record);
+              if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
+            },
+            (record) => this.sessionManager.deferBackgroundWorkHandoffRecovery(record),
+          );
+        }
+        await this.sessionManager.recoverPendingBackgroundWorkHandoffs(
+          BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE,
+          async (record) => {
+            const jobs = parseTurnRecordBackgroundWorkHandoff(record);
+            if (jobs.length > 0) await this.backgroundWorkSupervisor!.enqueue(jobs);
+          },
+        );
+      })().finally(() => {
+        this.backgroundWorkHandoffRecoveryPromise = null;
+      });
+    }
+    await this.backgroundWorkHandoffRecoveryPromise;
+  }
+
+  async stopBackgroundWork(): Promise<void> {
+    await this.backgroundWorkSupervisor?.stop();
   }
 
   /** Abort the expected request's prompt and report whether its signal was actually tripped. */

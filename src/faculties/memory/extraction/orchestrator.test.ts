@@ -141,6 +141,176 @@ function factResponse(text: string): string {
 </response>`;
 }
 
+describe('runExtractionOrchestration durable children', () => {
+  it('awaits the emotional and profile children before resolving (no detached child)', async () => {
+    let releaseEmotional!: () => void;
+    let releaseProfile!: () => void;
+    const emotionalSettled = new Promise<void>((resolve) => { releaseEmotional = resolve; });
+    const profileSettled = new Promise<void>((resolve) => { releaseProfile = resolve; });
+    const maybePersistEmotionalState = vi.fn(() => emotionalSettled);
+    const maybeRefreshContactProfile = vi.fn(() => profileSettled);
+    const options = buildOptions({
+      canonicalContactId: 'contact-1',
+      maybePersistEmotionalState,
+      maybeRefreshContactProfile,
+    });
+
+    const runPromise = runExtractionOrchestration(options);
+    let resolved = false;
+    void runPromise.then(() => { resolved = true; });
+
+    // The extraction reaches the emotional child and awaits it: it cannot
+    // resolve while the child is still in flight, and it has not yet launched
+    // the profile child.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(maybePersistEmotionalState).toHaveBeenCalledTimes(1);
+    expect(maybeRefreshContactProfile).not.toHaveBeenCalled();
+    expect(resolved).toBe(false);
+
+    releaseEmotional();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // The profile child is now awaited in turn; still not resolved.
+    expect(maybeRefreshContactProfile).toHaveBeenCalledTimes(1);
+    expect(resolved).toBe(false);
+
+    releaseProfile();
+    await expect(runPromise).resolves.toBeUndefined();
+  });
+});
+
+describe('runExtractionOrchestration snapshot authority', () => {
+  it('treats an authoritative empty recovered snapshot as empty instead of reading live history', async () => {
+    const liveEntries = [
+      {
+        id: 10,
+        channelId: 'api:test',
+        role: 'user' as const,
+        content: 'Private live turn A must not be consumed.',
+        timestamp: 10,
+      },
+      {
+        id: 12,
+        channelId: 'api:test',
+        role: 'assistant' as const,
+        content: 'Newer live turn C must not be consumed.',
+        timestamp: 12,
+      },
+    ];
+    const getRecentMessages = vi.fn().mockReturnValue(liveEntries);
+    const complete = vi.fn().mockResolvedValue({
+      content: factResponse('Leaked fact from live history'),
+    });
+    const processFact = vi.fn().mockResolvedValue({
+      action: 'created',
+      memory: { id: 'mem-leaked' },
+    });
+
+    await runExtractionOrchestration(buildOptions({
+      recoveredEntries: [],
+      sessionManager: {
+        getRecentMessages,
+        characterName: 'Lyra',
+      } as ExtractionRunOptions['sessionManager'],
+      llmClient: { complete } as ExtractionRunOptions['llmClient'],
+      processFact,
+    }));
+
+    expect(getRecentMessages).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+    expect(processFact).not.toHaveBeenCalled();
+  });
+
+  it('retains the intentional live-history fallback when no recovered snapshot is supplied', async () => {
+    const liveEntries = [
+      {
+        id: 20,
+        channelId: 'api:test',
+        role: 'user' as const,
+        content: 'I need to remember the live foreground detail.',
+        timestamp: 20,
+      },
+      {
+        id: 21,
+        channelId: 'api:test',
+        role: 'assistant' as const,
+        content: 'I will remember the live foreground detail.',
+        timestamp: 21,
+      },
+    ];
+    const getRecentMessages = vi.fn().mockReturnValue(liveEntries);
+    const complete = vi.fn().mockResolvedValue({
+      content: factResponse('Foreground fallback fact'),
+    });
+
+    await runExtractionOrchestration(buildOptions({
+      recoveredEntries: undefined,
+      sessionManager: {
+        getRecentMessages,
+        characterName: 'Lyra',
+      } as ExtractionRunOptions['sessionManager'],
+      llmClient: { complete } as ExtractionRunOptions['llmClient'],
+    }));
+
+    expect(getRecentMessages).toHaveBeenCalledWith('api:test', 10);
+    expect(complete).toHaveBeenCalledOnce();
+  });
+
+  it('uses a non-empty recovered snapshot exactly and never mixes in newer live entries', async () => {
+    const sourceEntries = [
+      {
+        id: 30,
+        channelId: 'api:test',
+        role: 'user' as const,
+        content: 'Authoritative bounded source turn B detail.',
+        timestamp: 30,
+      },
+      {
+        id: 31,
+        channelId: 'api:test',
+        role: 'assistant' as const,
+        content: 'Authoritative bounded source turn B response.',
+        timestamp: 31,
+      },
+    ];
+    const getRecentMessages = vi.fn().mockReturnValue([
+      {
+        id: 29,
+        channelId: 'api:test',
+        role: 'user' as const,
+        content: 'Unfenced live turn A detail.',
+        timestamp: 29,
+      },
+      {
+        id: 32,
+        channelId: 'api:test',
+        role: 'assistant' as const,
+        content: 'Unfenced newer live turn C detail.',
+        timestamp: 32,
+      },
+    ]);
+    const complete = vi.fn().mockResolvedValue({
+      content: factResponse('Bounded source fact'),
+    });
+
+    await runExtractionOrchestration(buildOptions({
+      recoveredEntries: sourceEntries,
+      sessionManager: {
+        getRecentMessages,
+        characterName: 'Lyra',
+      } as ExtractionRunOptions['sessionManager'],
+      llmClient: { complete } as ExtractionRunOptions['llmClient'],
+    }));
+
+    expect(getRecentMessages).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledOnce();
+    const prompt = complete.mock.calls[0]?.[0].systemPrompt;
+    expect(prompt).toContain('Authoritative bounded source turn B detail.');
+    expect(prompt).toContain('Authoritative bounded source turn B response.');
+    expect(prompt).not.toContain('Unfenced live turn A detail.');
+    expect(prompt).not.toContain('Unfenced newer live turn C detail.');
+  });
+});
+
 async function waitForCondition(description: string, condition: () => boolean): Promise<void> {
   for (let attempt = 0; attempt < 50; attempt++) {
     if (condition()) return;

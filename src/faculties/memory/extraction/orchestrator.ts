@@ -24,6 +24,7 @@ import type { MemoryStorePort } from '../memory-store-port.js';
 import type { ExtractedFact } from '../types.js';
 import { MemoryWritePolicyError, type WriteResult } from '../writer.js';
 import { parseFactsXml } from './parser.js';
+import { ExtractionDrainRequeueError } from './drain-signal.js';
 import {
   buildExtractionEntryChunks,
   formatExtractionTranscript,
@@ -224,9 +225,10 @@ export interface ExtractionRunOptions {
   channelId: string;
   triggerReason: ExtractionTriggerReason;
   canonicalContactId?: string;
-	  turnId?: TurnID;
-	  sourceSessionId?: string;
-	  recoveredEntries?: SessionEntry[];
+  turnId?: TurnID;
+  sourceSessionId?: string;
+  /** Undefined permits foreground live-history lookup; an empty array is authoritative. */
+  recoveredEntries?: SessionEntry[];
   icpCorrelation?: IcpConversationCorrelation;
   resolveParticipantNames?: (
     recentEntries: readonly SessionEntry[],
@@ -249,6 +251,13 @@ export interface ExtractionRunOptions {
   telemetryEnabled: boolean;
   useCompositionalExtraction: boolean;
   isAcceptingExtractions: () => boolean;
+  /**
+   * True when the extractor is draining (stopping), as distinct from a stale
+   * session route. Lets a durable, receipt-bound run (assertEffectAllowed present)
+   * fail closed on a mid-flight drain instead of resolving as a covered no-op
+   * that completes its effect receipt without writing (u5bv.11).
+   */
+  isDraining?: () => boolean;
   adjustFactForWrite?: (fact: ExtractedFact) => ExtractedFact;
   processFact: (
     fact: ExtractedFact,
@@ -264,24 +273,28 @@ export interface ExtractionRunOptions {
   emitExtractionEnd: (telemetry: ExtractionEndTelemetry) => Promise<void>;
   resolveCoveredUpToMessageId: (channelId: string, entries: SessionEntry[]) => number | null;
   recordExtractionMarker: (channelId: string, coveredUpToMessageId: number | null) => void;
+  // These durable children are awaited inside the effect-guarded region so the
+  // parent job receipt/fence stays open until they settle; each swallows its own
+  // best-effort failures, so awaiting never fails the extraction effect.
   maybePersistEmotionalState: (
     canonicalContactId: string | undefined,
     acceptedFacts: ExtractedFact[],
     recentEntries: SessionEntry[],
-  ) => void;
+  ) => Promise<void>;
   maybeRefreshContactProfile: (
     channelId: string,
     triggerReason: ExtractionTriggerReason,
     canonicalContactId: string | undefined,
     acceptedWrites: AcceptedFactWrite[],
-  ) => void;
+  ) => Promise<void>;
   emitConcernCandidates?: ConcernCandidateExtractionSink;
+  assertEffectAllowed?: () => Promise<void>;
 }
 
 export async function runExtractionOrchestration(options: ExtractionRunOptions): Promise<void> {
   let resolvedTurnId: TurnID | undefined = options.turnId;
   try {
-    const recoveredEntries = (options.recoveredEntries && options.recoveredEntries.length > 0
+    const recoveredEntries = (options.recoveredEntries !== undefined
       ? options.recoveredEntries
       : options.sessionManager.getRecentMessages(options.channelId, 10)
     )
@@ -472,6 +485,17 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     }
 
     if (!options.isAcceptingExtractions()) {
+      // u5bv.11: a durable, receipt-bound run (assertEffectAllowed present) that
+      // began draining mid-flight must not resolve as a covered no-op — that
+      // would complete its effect receipt and advance coverage without ever
+      // writing a fact (silent durable memory loss). Fail closed (retryable) so
+      // the exact snapshot re-runs. No fact has been written yet at this point,
+      // so requeuing cannot duplicate a durable effect. A stale session route
+      // (isDraining false) keeps the intentional normal skip, as do
+      // foreground/manual/group drains (no receipt).
+      if (options.assertEffectAllowed && options.isDraining?.()) {
+        throw new ExtractionDrainRequeueError(options.channelId, options.triggerReason);
+      }
       log.debug('Skipping fact writes while extractor is stopping', {
         channelId: options.channelId,
         factCount: facts.length,
@@ -831,9 +855,11 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     if (options.telemetryEnabled) {
       log.info('Extraction completed', { ...telemetry, maxWrites: options.maxWrites });
     }
+    await options.assertEffectAllowed?.();
     options.recordExtractionMarker(options.channelId, coveredUpToMessageId);
     await options.emitExtractionEnd(telemetry);
     if (options.emitConcernCandidates) {
+      await options.assertEffectAllowed?.();
       await options.emitConcernCandidates({
         channelId: options.channelId,
         triggerReason: options.triggerReason,
@@ -858,7 +884,10 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       ? acceptedFactsByContact
       : new Map<string | undefined, ExtractedFact[]>([[options.canonicalContactId, []]]);
     for (const [contactId, acceptedFacts] of emotionalFactGroups.entries()) {
-      options.maybePersistEmotionalState(
+      await options.assertEffectAllowed?.();
+      // Awaited (not fire-and-forget) so this durable child settles before the
+      // parent effect receipt is applied and its fence releases (u5bv.6 AC3).
+      await options.maybePersistEmotionalState(
         contactId,
         acceptedFacts,
         recentEntries,
@@ -867,7 +896,10 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
 
     const refreshGroups = groupAcceptedWritesByContact(acceptedWrites, options.canonicalContactId);
     for (const [contactId, writes] of refreshGroups.entries()) {
-      options.maybeRefreshContactProfile(
+      await options.assertEffectAllowed?.();
+      // Awaited for the same reason: no detached durable child may outlive the
+      // parent receipt. The profile write is an idempotent upsert by contact id.
+      await options.maybeRefreshContactProfile(
         options.channelId,
         options.triggerReason,
         contactId,
@@ -875,6 +907,10 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       );
     }
   } catch (error) {
+    // A durable drain requeue is an intentional retryable control signal, not an
+    // integrity failure — surface it unwrapped so the post-turn seam can defer
+    // the job and its receipt for a later run (u5bv.11).
+    if (error instanceof ExtractionDrainRequeueError) throw error;
     const wrapped = error instanceof ExtractionIntegrityError
       ? error
       : new ExtractionIntegrityError(

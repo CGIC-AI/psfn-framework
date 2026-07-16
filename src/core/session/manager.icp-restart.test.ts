@@ -361,6 +361,8 @@ describe('ICP L0 restart continuity', () => {
       }),
     );
     const failedContent = 'FAILED PRIVATE OUTPUT MUST NEVER BECOME SHARED MEMORY';
+    sender.recordUserMessage(CHANNEL, 'Safe ordinary context before failed ICP output', 'user', 'User');
+    sender.recordAssistantMessage(CHANNEL, 'Safe delivered context before failed ICP output');
     sender.recordAssistantMessage(
       CHANNEL,
       failedContent,
@@ -418,5 +420,189 @@ describe('ICP L0 restart continuity', () => {
     expect(extractionInputs[0]).not.toContain(failedContent);
     expect(complete).toHaveBeenCalled();
     expect(complete.mock.calls[0]?.[0].messages[0]?.content).not.toContain(failedContent);
+  });
+
+  it.each([
+    ['failed', false],
+    ['delivered', true],
+  ] as const)(
+    'applies %s ICP delivery truth to a source-bounded compaction snapshot after its boundary',
+    (status, includesIcpOutput) => {
+      const root = mkdtempSync(join(tmpdir(), `psfn-icp-bounded-compaction-${status}-`));
+      roots.push(root);
+      const dataDir = join(root, 'sender');
+      const store = new SessionStore(join(dataDir, 'sessions'));
+      const sender = new SessionManager(store, config(dataDir, {
+        modelRoster: {
+          chat: { provider: 'test', model: 'test', contextWindow: 128_000, maxTokens: 4_096 },
+        } as SubstrateConfig['modelRoster'],
+      }));
+      const compactedId = sender.recordUserMessage(
+        CHANNEL,
+        'already represented by the previous compaction',
+        'user',
+        'User',
+      );
+      expect(compactedId).not.toBeNull();
+      store.insertCompaction(CHANNEL, 'previous summary', compactedId!);
+
+      const gatedContent = `${status} ICP turn A output`;
+      sender.recordAssistantMessage(
+        CHANNEL,
+        gatedContent,
+        'contact-nova',
+        true,
+        'contact-nova',
+        {
+          turnId: correlation.turnId as TurnID,
+          requestId: SOURCE_ID,
+          sourceMessageId: SOURCE_ID,
+          metadata: buildSessionMetadataWithIcpCorrelation(
+            undefined,
+            correlation,
+            { deliveryStatus: 'pending', recoveryResponse },
+          ),
+        },
+      );
+      sender.recordIcpDeliveryObservation(status === 'delivered'
+        ? {
+            channelId: CHANNEL,
+            sourceMessageId: SOURCE_ID,
+            status,
+            gatewayMessageId: GATEWAY_ID,
+            deliveredTo: [RECIPIENT],
+            permitOutcome: 'consumed',
+            recoveryResponse,
+          }
+        : {
+            channelId: CHANNEL,
+            sourceMessageId: SOURCE_ID,
+            status,
+            error: 'peer unavailable',
+            recoveryResponse,
+          });
+      sender.recordUserMessage(CHANNEL, 'successful turn B input', 'user', 'User');
+      const successfulOutputId = sender.recordAssistantMessage(
+        CHANNEL,
+        'successful turn B output',
+      );
+      expect(successfulOutputId).not.toBeNull();
+
+      const captured = sender.captureAutoCompactionRecentEntries({
+        channelId: CHANNEL,
+        maxSessionEntryId: successfulOutputId!,
+        now: new Date(),
+      });
+
+      expect(captured.map(entry => entry.content)).toEqual([
+        ...(includesIcpOutput ? [gatedContent] : []),
+        'successful turn B input',
+        'successful turn B output',
+      ]);
+      expect(captured.every(entry => entry.id > compactedId!)).toBe(true);
+    },
+  );
+
+  it('does not compact across failed ICP output that later becomes delivered', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-icp-late-delivery-boundary-'));
+    roots.push(root);
+    const dataDir = join(root, 'sender');
+    const store = new SessionStore(join(dataDir, 'sessions'));
+    const sender = new SessionManager(store, config(dataDir, {
+      defaultContextWindow: 512,
+      compactionThresholdPct: 1,
+      modelRoster: {
+        chat: { provider: 'test', model: 'test', contextWindow: 512, maxTokens: 128 },
+      } as SubstrateConfig['modelRoster'],
+    }));
+    const oldContents = [
+      `already summarized old context 1 ${'O'.repeat(20)}`,
+      `already summarized old context 2 ${'O'.repeat(20)}`,
+    ];
+    const oldIds = oldContents.map(content => sender.recordUserMessage(
+      CHANNEL,
+      content,
+      'user',
+      'User',
+    ));
+    const lateDeliveredContent = `late delivered ICP turn A ${'A'.repeat(20)}`;
+    const pendingId = sender.recordAssistantMessage(
+      CHANNEL,
+      lateDeliveredContent,
+      'contact-nova',
+      true,
+      'contact-nova',
+      {
+        turnId: correlation.turnId as TurnID,
+        requestId: SOURCE_ID,
+        sourceMessageId: SOURCE_ID,
+        metadata: buildSessionMetadataWithIcpCorrelation(
+          undefined,
+          correlation,
+          { deliveryStatus: 'pending', recoveryResponse },
+        ),
+      },
+    );
+    expect(pendingId).not.toBeNull();
+    sender.recordIcpDeliveryObservation({
+      channelId: CHANNEL,
+      sourceMessageId: SOURCE_ID,
+      status: 'failed',
+      error: 'peer unavailable',
+      recoveryResponse,
+    });
+    const successfulContents = Array.from(
+      { length: 6 },
+      (_, index) => `successful B context ${index + 1} ${'B'.repeat(20)}`,
+    );
+    let lastSuccessfulId: number | null = null;
+    for (const content of successfulContents) {
+      lastSuccessfulId = sender.recordUserMessage(CHANNEL, content, 'user', 'User');
+    }
+    expect(lastSuccessfulId).not.toBeNull();
+    const complete = vi.fn<LLMProviderPort['complete']>().mockResolvedValue({
+      content: 'summary of the old context only',
+      model: 'test',
+      inputTokens: 1,
+      outputTokens: 1,
+      toolCalls: [],
+      stopReason: 'end_turn',
+    });
+
+    await sender.scheduleAutoCompactionBetweenTurns({
+      channelId: CHANNEL,
+      systemPrompt: '',
+      memoriesBlock: '',
+      llmProvider: { stream: vi.fn(), complete } as LLMProviderPort,
+      throwOnFailure: true,
+    });
+
+    const summaries = store.getCompactionSummaries(CHANNEL);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]?.coveredUpTo).toBe(oldIds[1]);
+    expect(JSON.stringify(complete.mock.calls)).not.toContain(lateDeliveredContent);
+    expect(JSON.stringify(complete.mock.calls)).not.toContain('successful B context');
+
+    sender.recordIcpDeliveryObservation({
+      channelId: CHANNEL,
+      sourceMessageId: SOURCE_ID,
+      status: 'delivered',
+      gatewayMessageId: GATEWAY_ID,
+      deliveredTo: [RECIPIENT],
+      permitOutcome: 'consumed',
+      recoveryResponse,
+    });
+    const captured = sender.captureAutoCompactionRecentEntries({
+      channelId: CHANNEL,
+      maxSessionEntryId: lastSuccessfulId!,
+      now: new Date(),
+    });
+
+    expect(captured.map(entry => entry.content)).toEqual([
+      lateDeliveredContent,
+      ...successfulContents,
+    ]);
+    expect(new Set(captured.map(entry => entry.id)).size).toBe(captured.length);
+    expect(captured.every(entry => !oldContents.includes(entry.content))).toBe(true);
   });
 });

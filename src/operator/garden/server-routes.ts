@@ -32,6 +32,7 @@ export type AdminRoute = AuthorizedGardenRoute<AdminRouteDeclaration>;
 
 interface AdminRouteDependencies {
   token?: string;
+  legacySessionRoutes: boolean;
   services: GardenAdminDomainServices;
   config: SubstrateConfig;
   withBody: (req: IncomingMessage, res: ServerResponse, cb: (body: string) => void) => void;
@@ -75,7 +76,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
     });
   };
 
-  const routes = compileGardenRouteDeclarations([
+  const legacySessionRoutes: AdminRouteDeclaration[] = deps.legacySessionRoutes ? [
     {
       method: 'GET',
       match: exactPath('/login'),
@@ -124,6 +125,9 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
         );
       },
     },
+  ] : [];
+  const routes = compileGardenRouteDeclarations([
+    ...legacySessionRoutes,
     {
       method: 'GET',
       match: exactPath('/health'),

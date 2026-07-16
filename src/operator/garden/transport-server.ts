@@ -31,6 +31,12 @@ import {
   parseCanonicalGardenRequestPath,
   validateGardenRequestMetadata,
 } from '../../boundary/fleet-auth/request-capability-target.js';
+import {
+  admitFleetGardenRequest,
+  readFleetGardenBody,
+  resolveGardenAdmissionMode,
+  type GardenAdmissionMode,
+} from './garden-admission.js';
 
 const log = createComponentLogger('GardenAdminTransport');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -64,10 +70,18 @@ export class GardenAdminTransportServer implements Lifecycle {
   private readonly server: HttpServer | HttpsServer;
   private readonly routes: AuthorizedAdminApiRoute[];
   private readonly telemetryTransport: AdminServerTelemetryTransport;
+  private readonly admission: GardenAdmissionMode;
+  private readonly bufferedFleetBodies = new WeakMap<IncomingMessage, string>();
 
   constructor(
     private readonly config: GardenAdminTransportServerConfig,
   ) {
+    const modeSelection = {
+      fleetAuthVerifier: config.config.fleetAuthVerifier,
+      companionId: config.config.companionId,
+      audience: 'agent' as const,
+    };
+    this.admission = resolveGardenAdmissionMode(modeSelection);
     const appendAuditTimelineEntry = (
       actionType: AdminAuditActionType,
       decision: AdminAuditDecision,
@@ -326,6 +340,21 @@ export class GardenAdminTransportServer implements Lifecycle {
       return;
     }
 
+    if (this.admission.kind === 'fleet-principal') {
+      void this.handleFleetRequest(req, res);
+      return;
+    }
+
+    this.dispatchRequest(req, res, requestPath);
+  }
+
+  private dispatchRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    parsedPath?: string,
+  ): void {
+    let requestPath = parsedPath ?? '/';
+
     try {
       requestPath = validateGardenRequestMetadata({
         rawTarget: req.url ?? '/',
@@ -366,6 +395,36 @@ export class GardenAdminTransportServer implements Lifecycle {
     sendText(res, 404, `Not found: ${requestPath}`);
   }
 
+  private async handleFleetRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let body: Buffer | null;
+    try {
+      body = await readFleetGardenBody(req, res, {
+        maxBytes: ADMIN_MAX_BODY_SIZE,
+        logger: log,
+      });
+    } catch (error) {
+      log.error('Fleet Garden transport body read failed', { error: toErrorMessage(error) });
+      if (!res.writableEnded && !res.destroyed) sendText(res, 500, 'Internal Server Error');
+      return;
+    }
+    if (body === null) return;
+    const admitted = await admitFleetGardenRequest({
+      admission: this.admission as Extract<GardenAdmissionMode, { kind: 'fleet-principal' }>,
+      rawTarget: req.url ?? '/',
+      method: req.method ?? 'GET',
+      headers: req.headers,
+      body,
+    });
+    if (admitted.decision === 'deny' || !admitted.verified) {
+      const status = admitted.decision === 'deny' ? admitted.status : 403;
+      const message = admitted.decision === 'deny' ? admitted.message : 'Invalid Fleet Garden capability';
+      sendText(res, status, message);
+      return;
+    }
+    this.bufferedFleetBodies.set(req, body.toString('utf8'));
+    this.dispatchRequest(req, res, admitted.target.canonicalPath);
+  }
+
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const rejectionReason = this.authorizePeer(req);
     if (rejectionReason) {
@@ -375,7 +434,33 @@ export class GardenAdminTransportServer implements Lifecycle {
       return;
     }
 
+    if (this.admission.kind === 'fleet-principal') {
+      void this.handleFleetUpgrade(req, socket, head);
+      return;
+    }
     this.telemetryTransport.handleUpgrade(req, socket, head);
+  }
+
+  private async handleFleetUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+    const admitted = await admitFleetGardenRequest({
+      admission: this.admission as Extract<GardenAdmissionMode, { kind: 'fleet-principal' }>,
+      rawTarget: req.url ?? '/',
+      method: 'WS',
+      headers: req.headers,
+      body: Buffer.alloc(0),
+    });
+    if (admitted.decision === 'deny' || !admitted.verified) {
+      const status = admitted.decision === 'deny' ? admitted.status : 403;
+      socket.write(`HTTP/1.1 ${status} Unauthorized\r\n\r\n`);
+      socket.destroy();
+      return;
+    }
+    this.telemetryTransport.handleAuthorizedUpgrade(
+      req,
+      socket,
+      head,
+      admitted.verified.expiresAt,
+    );
   }
 
   private withBody(
@@ -383,6 +468,12 @@ export class GardenAdminTransportServer implements Lifecycle {
     res: ServerResponse,
     cb: (body: string) => void,
   ): void {
+    const bufferedBody = this.bufferedFleetBodies.get(req);
+    if (bufferedBody !== undefined) {
+      this.bufferedFleetBodies.delete(req);
+      cb(bufferedBody);
+      return;
+    }
     readBodyWithLimit(req, res, {
       maxBytes: ADMIN_MAX_BODY_SIZE,
       logger: log,

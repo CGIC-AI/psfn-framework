@@ -140,6 +140,25 @@ export class AdminServerTelemetryTransport {
   }
 
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    this.handleUpgradeWithAuthority(req, socket, head, false);
+  }
+
+  handleAuthorizedUpgrade(
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+    expiresAtSeconds: number,
+  ): void {
+    this.handleUpgradeWithAuthority(req, socket, head, true, expiresAtSeconds);
+  }
+
+  private handleUpgradeWithAuthority(
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+    preauthorized: boolean,
+    expiresAtSeconds?: number,
+  ): void {
     stripBrowserRequestCapabilityHeaders(req.headers);
     let target;
     try {
@@ -166,18 +185,18 @@ export class AdminServerTelemetryTransport {
       return;
     }
 
-    if (!this.checkUpgradeAuth(req)) {
+    if (!preauthorized && !this.checkUpgradeAuth(req)) {
       socket.write('HTTP/1.1 401 Unauthorized\\r\\n\\r\\n');
       socket.destroy();
       return;
     }
 
     this.webSocketServer.handleUpgrade(req, socket, head, (ws) => {
-      this.attachTelemetryWebSocket(ws);
+      this.attachTelemetryWebSocket(ws, expiresAtSeconds);
     });
   }
 
-  private attachTelemetryWebSocket(ws: WebSocket): void {
+  private attachTelemetryWebSocket(ws: WebSocket, expiresAtSeconds?: number): void {
     const telemetryEvents: EventName[] = [
       'agent.turn.usage',
       'agent.turn.snapshot',
@@ -222,7 +241,16 @@ export class AdminServerTelemetryTransport {
       unsubscribers.push(unsub);
     }
 
+    const expiryTimer = expiresAtSeconds === undefined
+      ? undefined
+      : setTimeout(() => ws.close(1008, 'Fleet capability expired'), Math.max(
+          0,
+          (expiresAtSeconds * 1_000) - Date.now(),
+        ));
+    expiryTimer?.unref();
+
     const cleanup = (): void => {
+      if (expiryTimer) clearTimeout(expiryTimer);
       for (const unsub of unsubscribers) {
         unsub();
       }

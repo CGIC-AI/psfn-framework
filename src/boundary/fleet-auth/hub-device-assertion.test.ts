@@ -99,6 +99,7 @@ const expected = {
   enrollmentVersion: 7,
   enrollmentStatus: 'active' as const,
   companionId: COMPANION_ID,
+  sessionId: 'realtime:office-device:session',
 };
 
 describe('Hub device assertion trust boundary', () => {
@@ -149,10 +150,26 @@ describe('Hub device assertion trust boundary', () => {
     expect(replayStore.lastExpiresAt).toEqual(new Date((NOW + 22) * 1000));
   });
 
+  it.each(['', ' realtime:office-device:session'])(
+    'rejects a non-exact expected session binding before consuming replay state',
+    async (sessionId) => {
+      const replayStore = new ReplayStore();
+      await expect(verifyAndConsumeHubDeviceAssertion({
+        token: token(),
+        config: config(),
+        expected: { ...expected, sessionId },
+        replayStore,
+        nowSeconds: NOW,
+      })).rejects.toThrow(/expected sessionId/);
+      expect(replayStore.seen.size).toBe(0);
+    },
+  );
+
   it.each([
     ['wrong issuer', { iss: 'evil-hub' }, config(), expected, /issuer/],
     ['wrong audience', { aud: 'https://other.example.test' }, config(), expected, /audience/],
     ['wrong companion', { companion_id: '22222222-2222-4222-8222-222222222222' }, config(), expected, /companion/],
+    ['wrong session', {}, config(), { ...expected, sessionId: 'realtime:office-device:other-session' }, /session/],
     ['expired', { exp: NOW - 3 }, config(), expected, /expired/],
     ['future issued-at', { iat: NOW + 3 }, config(), expected, /issued-at/],
     ['stale enrollment', {}, config(), { ...expected, enrollmentVersion: 8 }, /enrollment version/],

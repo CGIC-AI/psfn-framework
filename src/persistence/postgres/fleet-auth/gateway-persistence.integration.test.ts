@@ -1,4 +1,4 @@
-import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomUUID, sign } from 'node:crypto';
 import { chmodSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -126,6 +126,39 @@ function config(): FleetAuthConfig {
     },
     discordEvidenceMappings: [],
   };
+}
+
+function hubDeviceAssertionToken(input: {
+  companionId: string;
+  sessionId: string;
+  jti: string;
+}): string {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  const encodedHeader = Buffer.from(JSON.stringify({
+    alg: 'EdDSA',
+    typ: 'PSFN-HUB-DEVICE',
+    v: 1,
+    kid: 'hub-gateway-startup-test',
+  })).toString('base64url');
+  const encodedClaims = Buffer.from(JSON.stringify({
+    iss: 'psfn-satellite-hub',
+    device_id: 'office-device',
+    enrollment_version: 7,
+    enrollment_assurance: 'device_credential',
+    place_id: 'office',
+    aud: 'https://fleet.example.test',
+    companion_id: input.companionId,
+    session_id: input.sessionId,
+    iat: nowSeconds - 1,
+    exp: nowSeconds + 30,
+    jti: input.jti,
+  })).toString('base64url');
+  const signature = sign(
+    null,
+    Buffer.from(`${encodedHeader}.${encodedClaims}`, 'ascii'),
+    keyPair.privateKey,
+  ).toString('base64url');
+  return `${encodedHeader}.${encodedClaims}.${signature}`;
 }
 
 async function freshContext(): Promise<GatewayTestContext> {
@@ -304,6 +337,61 @@ afterAll(async () => {
 }, TIMEOUT_MS);
 
 describe('gateway fleet-auth lifecycle publication', () => {
+  it('binds Hub assertion replay consumption to the exact expected session', async () => {
+    const context = await freshContext();
+    const persistence = await startEnabled(context);
+    const auditPool = createPostgresPool(context.runtimeUrl, { max: 1 });
+    const companionId = randomUUID();
+    const jti = randomUUID();
+    const sessionA = 'realtime:office-device:session-a';
+    const assertion = hubDeviceAssertionToken({ companionId, sessionId: sessionA, jti });
+    const expected = {
+      deviceId: 'office-device',
+      enrollmentVersion: 7,
+      enrollmentStatus: 'active' as const,
+      companionId,
+    };
+    try {
+      await expect(persistence.verifyAndConsumeHubDeviceAssertion(assertion, {
+        ...expected,
+        sessionId: 'realtime:office-device:session-b',
+      })).rejects.toThrow(/session binding does not match/);
+
+      const afterMismatch = await auditPool.query<{ count: string }>(`
+        SELECT COUNT(*)::text AS count
+        FROM fleet_auth.hub_device_assertion_replays
+        WHERE issuer = $1 AND jti = $2
+      `, ['psfn-satellite-hub', jti]);
+      expect(afterMismatch.rows[0]?.count).toBe('0');
+
+      const first = await persistence.verifyAndConsumeHubDeviceAssertion(assertion, {
+        ...expected,
+        sessionId: sessionA,
+      });
+      await expect(persistence.verifyAndConsumeHubDeviceAssertion(assertion, {
+        ...expected,
+        sessionId: sessionA,
+      })).resolves.toEqual(first);
+      expect(first.sessionId).toBe(sessionA);
+
+      const replay = await auditPool.query<{
+        replay_count: string;
+        mismatch_count: string;
+      }>(`
+        SELECT replay_count, mismatch_count
+        FROM fleet_auth.hub_device_assertion_replays
+        WHERE issuer = $1 AND jti = $2
+      `, ['psfn-satellite-hub', jti]);
+      expect(replay.rows).toEqual([{
+        replay_count: '1',
+        mismatch_count: '0',
+      }]);
+    } finally {
+      await auditPool.end();
+      await persistence.close();
+    }
+  }, TIMEOUT_MS);
+
   it('keeps sessions across simultaneous ordinary enabled restarts', async () => {
     const context = await freshContext();
     const initial = await startEnabled(context);

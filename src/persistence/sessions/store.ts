@@ -48,6 +48,13 @@ import {
   type SessionTailRow,
 } from './session-tail-cache-port.js';
 import { createFilesystemTurnRecordStorePort } from './turn-records.js';
+import {
+  slimTurnRecordSessionEntriesForAppend,
+  resolveTurnRecordSessionEntries,
+  type TurnRecordRecentEntryHealDrop,
+  type TurnRecordWireBodyWithheld,
+} from './turn-record-session-refs.js';
+import { slimTurnRecordMemoryCandidatesForAppend } from './turn-record-memory-refs.js';
 import type { TurnRecordStorePort } from './turn-record-store-port.js';
 import type { TurnRecordEligibilityFencePort } from './turn-record-eligibility-fence-port.js';
 import type { TranscriptSearchPort } from './transcript-search-port.js';
@@ -110,6 +117,42 @@ import {
   uniqueStrings,
 } from './store/cogsec-journal-helpers.js';
 const log = createComponentLogger('SessionStore');
+
+/**
+ * Process-lifetime count of turn-record `recentEntries` heal-drops (an id-backed
+ * entry that was dropped on read because its L0 row is gone). Emitted as a stable
+ * structured event with a running counter — mirroring the turn-record quarantine
+ * telemetry in turn-records.ts, since no telemetry port is reachable from the
+ * persistence layer. Lets operators distinguish legitimate redaction/rolloff
+ * drops (this signal, expected) from structural ref corruption (fails closed
+ * upstream and throws, never reaching here). See bead psfn-framework-hgw3.10.
+ */
+let recentEntryHealDropCount = 0;
+function emitRecentEntryHealDrop(drop: TurnRecordRecentEntryHealDrop): void {
+  recentEntryHealDropCount += 1;
+  log.info('turn_record_recent_entry_heal_drop', {
+    ...drop,
+    healDropsThisProcess: recentEntryHealDropCount,
+  });
+}
+
+/**
+ * Process-lifetime count of captured wire bodies withheld on read because a
+ * source L0 entry they embedded was redacted/removed (bead psfn-framework-eb14).
+ * Emitted as a stable structured event with a running counter, mirroring the
+ * recentEntries heal-drop telemetry above — no telemetry port is reachable from
+ * the persistence layer. Lets operators see redaction propagating into the
+ * observability wire surface.
+ */
+let wireBodyWithheldCount = 0;
+function emitWireBodyWithheld(event: TurnRecordWireBodyWithheld): void {
+  wireBodyWithheldCount += 1;
+  log.info('turn_record_wire_body_withheld', {
+    ...event,
+    wireBodiesWithheldThisProcess: wireBodyWithheldCount,
+  });
+}
+
 const MAX_RECENT_ENTRY_CACHE_LIMITS = 8;
 /** Initial overscan multiplier for tombstone-filtered turn-record reads. */
 const TURN_RECORD_TOMBSTONE_OVERSCAN_FACTOR = 4;
@@ -1117,7 +1160,11 @@ export class SessionStore implements TranscriptSearchPort {
       record.sessionId ?? record.channelId,
       record.turnId,
       async () => {
-        this.turnRecordStore.appendTurnRecord(record);
+        this.turnRecordStore.appendTurnRecord(
+          slimTurnRecordMemoryCandidatesForAppend(
+            slimTurnRecordSessionEntriesForAppend(record),
+          ),
+        );
       },
     );
   }
@@ -1230,9 +1277,28 @@ export class SessionStore implements TranscriptSearchPort {
       turnId,
     }, operation);
   }
+  /**
+   * Reconstruct L0-referenced session entries and redaction-gate the rendered
+   * view (bead psfn-framework-9ree) at the persistence read boundary, so every
+   * consumer above the store sees fully inline, journal-current records. Pre-9ree
+   * "old fat" records (inline recentEntries, no ref) are redaction-gated against
+   * L0 here too (bead psfn-framework-hgw3.10); id-backed heal-drops emit
+   * structured telemetry via emitRecentEntryHealDrop. The captured provider wire
+   * body is withheld here if a source L0 entry it embedded was redacted/removed
+   * (bead psfn-framework-eb14), emitting telemetry via emitWireBodyWithheld.
+   */
+  private resolveTurnRecordSessionRefs(record: TurnRecord): TurnRecord {
+    return resolveTurnRecordSessionEntries(
+      record,
+      (channelId, minId, maxId) => this.getEntriesInRange(channelId, minId, maxId),
+      emitRecentEntryHealDrop,
+      emitWireBodyWithheld,
+    );
+  }
   findTurnRecord(channelId: string, turnId: string): TurnRecord | null {
     const sessionId = this.resolveSessionId(channelId) ?? channelId;
-    return this.turnRecordStore.findTurnRecord(sessionId, turnId);
+    const record = this.turnRecordStore.findTurnRecord(sessionId, turnId);
+    return record ? this.resolveTurnRecordSessionRefs(record) : null;
   }
   /**
    * Find one canonical turn by its physical source channel while proving that
@@ -1247,7 +1313,9 @@ export class SessionStore implements TranscriptSearchPort {
   ): TurnRecord | null {
     const record = this.turnRecordStore.findTurnRecord(sourceChannelId, turnId);
     if (!record || record.channelId !== sourceChannelId) return null;
-    return (record.sessionId ?? sourceChannelId) === logicalSessionId ? record : null;
+    return (record.sessionId ?? sourceChannelId) === logicalSessionId
+      ? this.resolveTurnRecordSessionRefs(record)
+      : null;
   }
   /**
    * Resolves the sole eligible durable owner for an exact physical source and
@@ -1278,7 +1346,7 @@ export class SessionStore implements TranscriptSearchPort {
       || owner.turnTombstones.has(normalizedTurnId)) {
       throw new Error('Source TurnRecord is tombstoned, missing its owner, or belongs to another source');
     }
-    return record;
+    return this.resolveTurnRecordSessionRefs(record);
   }
   getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {
     if (limit <= 0) return [];
@@ -1293,7 +1361,8 @@ export class SessionStore implements TranscriptSearchPort {
       }
       : null);
     if (!resolved) {
-      return this.turnRecordStore.readRecentTurnRecords(sessionId, limit);
+      return this.turnRecordStore.readRecentTurnRecords(sessionId, limit)
+        .map(record => this.resolveTurnRecordSessionRefs(record));
     }
     const indexEntry = this.ensureChannelIndexEntry(
       resolved.sessionId,
@@ -1309,8 +1378,12 @@ export class SessionStore implements TranscriptSearchPort {
       filePaths: resolved.filePaths,
       cache: cached ?? undefined,
     });
-    if (tombstones.size === 0) return this.turnRecordStore.readRecentTurnRecords(sessionId, limit);
-    return this.readTombstoneFilteredTurnRecords(sessionId, limit, tombstones);
+    if (tombstones.size === 0) {
+      return this.turnRecordStore.readRecentTurnRecords(sessionId, limit)
+        .map(record => this.resolveTurnRecordSessionRefs(record));
+    }
+    return this.readTombstoneFilteredTurnRecords(sessionId, limit, tombstones)
+      .map(record => this.resolveTurnRecordSessionRefs(record));
   }
   /**
    * Bounded iterative overscan for tombstone-filtered turn-record reads:
@@ -1357,7 +1430,8 @@ export class SessionStore implements TranscriptSearchPort {
     });
     const end = Math.max(0, filtered.length - offset);
     const start = Math.max(0, end - limit);
-    return filtered.slice(start, end);
+    return filtered.slice(start, end)
+      .map(record => this.resolveTurnRecordSessionRefs(record));
   }
   isSourceTurnRecordEligible(
     sourceChannelId: string,

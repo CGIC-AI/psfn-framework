@@ -18,6 +18,11 @@ import type { PostTurnActionCandidate } from '../../shared/contracts/runtime.js'
 import type { PostTurnInferenceContext } from '../agent/substrate-agent/post-turn-actions.js';
 import type { PostTurnActionRuntime } from '../agent/post-turn-action-runtime.js';
 import { DEFAULT_REEXEC_RESTART_EXIT_CODE, type RuntimeRestartContract } from '../../system/lifecycle/runtime-mode.js';
+import type {
+  KubeSelfManagementRequest,
+  KubeSelfManagementResponse,
+} from '../../system/lifecycle/kube-self-management.js';
+import type { KubeLifecycleContext } from '../../system/lifecycle/kube-lifecycle-context.js';
 import { executeSystemReadAction, type SettingsGetParams } from '../../system/settings-tools.js';
 import { textResult, textResultWithError } from './results.js';
 
@@ -43,9 +48,21 @@ interface LifecycleToolOptions {
   executionMode?: 'immediate' | 'deferred';
 }
 
+/**
+ * Kube-aware lifecycle seam for the agent process. When the runtime is a guarded
+ * Kubernetes deployment, restart/rebuild route through the gateway's
+ * approval-gated KubeSelfManagementController instead of the local
+ * supervisor/reexec path, and status reporting includes live deployment state.
+ */
+export interface KubeLifecycleToolRuntime {
+  context: KubeLifecycleContext;
+  invoke(request: KubeSelfManagementRequest): Promise<KubeSelfManagementResponse>;
+}
+
 interface SystemToolOptions extends LifecycleToolOptions {
   notifier?: LifecycleNotifier;
   stopFn?: () => Promise<void>;
+  kubeLifecycle?: KubeLifecycleToolRuntime;
 }
 
 interface SystemToolParams extends SettingsGetParams {
@@ -439,6 +456,170 @@ async function executeRebuildAction(
   };
 }
 
+interface KubeDeploymentReadiness {
+  name: string;
+  readyReplicas: number;
+  desiredReplicas: number;
+}
+
+function projectDeploymentReadiness(value: unknown): KubeDeploymentReadiness | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.name !== 'string') return null;
+  const ready = typeof record.readyReplicas === 'number' ? record.readyReplicas : null;
+  const desired = typeof record.desiredReplicas === 'number' ? record.desiredReplicas : null;
+  if (ready === null || desired === null) return null;
+  return { name: record.name, readyReplicas: ready, desiredReplicas: desired };
+}
+
+/**
+ * Build a compact kube lifecycle status report: deployment mode plus the current
+ * image/Helm/source-revision facts, and (best-effort) live deployment readiness
+ * fetched through the gateway's read-only diagnose action.
+ */
+async function buildKubeLifecycleStatusText(kube: KubeLifecycleToolRuntime): Promise<string> {
+  const context = kube.context;
+  if (context.deployment !== 'kube') {
+    return 'Deployment mode: local (supervisor/reexec lifecycle).';
+  }
+  const selfManagement = context.selfManagement;
+  if (!selfManagement.enabled) {
+    return `Deployment mode: kubernetes; guarded self-management: disabled (${selfManagement.reason}).`;
+  }
+  const lines = [
+    'Deployment mode: kubernetes (guarded self-management enabled).',
+    `Image: ${selfManagement.targetImage}`,
+    `Helm revision: ${selfManagement.helmRevision}`,
+    `Source revision: ${selfManagement.sourceRevision}`,
+  ];
+  try {
+    const diagnose = await kube.invoke({
+      action: 'diagnose',
+      namespace: selfManagement.namespace,
+      release: selfManagement.release,
+    });
+    if (diagnose.status === 'completed' && diagnose.details) {
+      const rawDeployments = (diagnose.details as { deployments?: unknown }).deployments;
+      const deployments = Array.isArray(rawDeployments)
+        ? rawDeployments.map(projectDeploymentReadiness).filter((d): d is KubeDeploymentReadiness => d !== null)
+        : [];
+      if (deployments.length > 0) {
+        lines.push('Deployments:');
+        for (const deployment of deployments) {
+          lines.push(`  ${deployment.name}: ready ${deployment.readyReplicas}/${deployment.desiredReplicas}`);
+        }
+      }
+    }
+  } catch (err) {
+    lines.push(`Live deployment state unavailable: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return lines.join('\n');
+}
+
+async function appendKubeLifecycleStatus(
+  settingsResult: AgentToolResult<{ isError?: boolean }>,
+  kube: KubeLifecycleToolRuntime,
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  const statusText = await buildKubeLifecycleStatusText(kube);
+  return {
+    ...settingsResult,
+    content: [
+      ...settingsResult.content,
+      { type: 'text', text: `\n\n${statusText}` },
+    ] satisfies TextContent[],
+  };
+}
+
+/**
+ * Execute action=restart under a guarded Kubernetes deployment: route a rollout
+ * restart through the gateway's approval-gated controller. Fails closed (never a
+ * local reexec) when self-management is unavailable.
+ */
+async function executeKubeRestartAction(
+  kube: KubeLifecycleToolRuntime,
+  options: LifecycleToolOptions,
+  params: { reason: string },
+): Promise<AgentToolResult<{ isError?: boolean }>> {
+  const reason = params.reason.trim();
+  if (!reason) {
+    return textResultWithError('Restart blocked: reason is required.', true);
+  }
+  const tier = options.getCapabilityTier?.() ?? 'autonomous';
+  if (options.restartSafeguard) {
+    const decision = options.restartSafeguard.evaluate({
+      toolName: 'self_restart',
+      reason,
+      tier,
+    });
+    if (!decision.allowed) {
+      return textResultWithError(decision.reason, true);
+    }
+  }
+  const context = kube.context;
+  const selfManagement = context.deployment === 'kube' ? context.selfManagement : null;
+  if (!selfManagement || !selfManagement.enabled) {
+    const detail = selfManagement
+      ? selfManagement.reason
+      : 'the Kubernetes deployment scope is unavailable';
+    return textResultWithError(
+      `Restart blocked: ${detail}. No local restart was performed under Kubernetes.`,
+      true,
+    );
+  }
+
+  log.info('Self-restart requested (kube rollout)', { reason, tier });
+
+  let response: KubeSelfManagementResponse;
+  try {
+    response = await kube.invoke({
+      action: 'restart',
+      namespace: selfManagement.namespace,
+      release: selfManagement.release,
+      sourceRevision: selfManagement.sourceRevision,
+      targetImage: selfManagement.targetImage,
+      helmRevision: selfManagement.helmRevision,
+      reason,
+    });
+  } catch (err) {
+    return textResultWithError(
+      `Restart failed: ${err instanceof Error ? err.message : String(err)}`,
+      true,
+    );
+  }
+
+  if (response.status === 'approval_required') {
+    return textResult(
+      'Rollout restart of the psfn-agent, psfn-gateway, and psfn-garden deployments is queued for operator approval '
+      + `(approval ${response.approvalId}). It will not run until an operator approves; you will not be restarted before then.`,
+    );
+  }
+
+  return textResult(
+    `Rollout restart completed (validation: ${response.validationResult}). `
+    + 'The psfn-agent, psfn-gateway, and psfn-garden deployments were restarted and reported ready.',
+  );
+}
+
+/**
+ * Execute action=rebuild under a guarded Kubernetes deployment: refuse loudly and
+ * point at the guarded build/deploy pipeline. Building an image in the running
+ * pod is never performed in kube mode.
+ */
+function executeKubeRebuildRefusal(
+  params: { reason: string },
+): AgentToolResult<{ isError?: boolean }> {
+  const reason = params.reason.trim();
+  if (!reason) {
+    return textResultWithError('Rebuild blocked: reason is required.', true);
+  }
+  return textResultWithError(
+    'Rebuild does not run in-pod under Kubernetes: building an image inside the running container is unsupported and '
+    + 'unsafe. Route the change through the guarded build-test-image deploy pipeline (bead psfn-framework-x5rt.6), which '
+    + 'builds a pinned image, validates it, and rolls it out under operator approval. No local build was performed.',
+    true,
+  );
+}
+
 function normalizeSystemAction(params: SystemToolParams): SystemAction {
   const action = typeof params.action === 'string' ? params.action.trim() : '';
   switch (action) {
@@ -497,7 +678,25 @@ export function createSystemTool(
       }
 
       if (action === 'read') {
-        return executeSystemReadAction(config, params);
+        const settingsResult = executeSystemReadAction(config, params);
+        if (options.kubeLifecycle) {
+          return await appendKubeLifecycleStatus(settingsResult, options.kubeLifecycle);
+        }
+        return settingsResult;
+      }
+
+      // Under a Kubernetes deployment, lifecycle mutation must route through the
+      // gateway's approval-gated controller and never fall back to the local
+      // supervisor/reexec path (fail closed).
+      if (options.kubeLifecycle && options.kubeLifecycle.context.deployment === 'kube') {
+        if (action === 'restart') {
+          return await executeKubeRestartAction(
+            options.kubeLifecycle,
+            options,
+            { reason: params.reason ?? '' },
+          );
+        }
+        return executeKubeRebuildRefusal({ reason: params.reason ?? '' });
       }
 
       if (!options.notifier || !options.stopFn) {

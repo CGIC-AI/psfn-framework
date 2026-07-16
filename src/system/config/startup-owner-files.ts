@@ -55,9 +55,25 @@ import {
   INTAKE_POLICY_FILE_NAME,
   INTAKE_POLICY_SEED_FILE_NAME,
 } from './intake-policy-config.js';
+import {
+  FLEET_AUTH_FILE_NAME,
+  FLEET_AUTH_SEED_FILE_NAME,
+  isFleetAuthEnabled,
+  resolveFleetAuthOwnerFile,
+} from './fleet-auth-config.js';
 
 export interface StartupOwnerFileLoadOptions {
   dataDir: string;
+  /**
+   * Companion-owned config root (companionDataDir). Roots the per-companion
+   * owner files verified here — capability-tier.json (dnll.2) and scheduler.json
+   * (dnll.3).
+   * When omitted it resolves to {@link StartupOwnerFileLoadOptions.dataDir},
+   * matching the legacy shared-root layout. The underlying loader still fails
+   * closed on a missing per-companion file; this is a rooting default, not a
+   * config fallback.
+   */
+  companionDataDir?: string;
   seedDir?: string;
   defaultContextWindow?: number;
   /**
@@ -65,6 +81,8 @@ export interface StartupOwnerFileLoadOptions {
    * consulted. Controls the fail-closed direction for the companions owner file.
    */
   multiCompanion?: boolean;
+  /** Optional fleet-auth topology flag; strict flag/file matrix when omitted. */
+  fleetAuth?: boolean;
 }
 
 export interface StartupOwnerFileState {
@@ -206,6 +224,10 @@ export function verifyStartupOwnerFiles(
   options: StartupOwnerFileLoadOptions,
 ): StartupOwnerFileVerificationResult {
   const seedDir = ownerFileSeedDir(options);
+  // capability-tier.json (dnll.2) and scheduler.json (dnll.3) are per-companion
+  // owner files: verify them at the companion root. Defaults to dataDir for the
+  // legacy shared-root layout.
+  const companionDataDir = options.companionDataDir ?? options.dataDir;
   const checks: Array<{ label: string; dataPath: string; seedPath: string; run: () => unknown }> = [
     {
       label: 'settings',
@@ -240,15 +262,15 @@ export function verifyStartupOwnerFiles(
     },
     {
       label: 'scheduler',
-      dataPath: join(options.dataDir, SCHEDULER_FILE_NAME),
+      dataPath: join(companionDataDir, SCHEDULER_FILE_NAME),
       seedPath: join(seedDir, 'scheduler.seed.json'),
-      run: () => loadStartupSchedulerOwnerFile(options.dataDir, options.seedDir),
+      run: () => loadStartupSchedulerOwnerFile(companionDataDir, options.seedDir),
     },
     {
       label: 'capability-tier',
-      dataPath: join(options.dataDir, CAPABILITY_TIER_FILE_NAME),
+      dataPath: join(companionDataDir, CAPABILITY_TIER_FILE_NAME),
       seedPath: join(seedDir, 'capability-tier.seed.json'),
-      run: () => loadStartupCapabilityTierOwnerFile(options.dataDir, options.seedDir),
+      run: () => loadStartupCapabilityTierOwnerFile(companionDataDir, options.seedDir),
     },
     {
       label: 'charge-policy',
@@ -283,6 +305,17 @@ export function verifyStartupOwnerFiles(
       dataPath: join(options.dataDir, INTAKE_POLICY_FILE_NAME),
       seedPath: join(seedDir, INTAKE_POLICY_SEED_FILE_NAME),
       run: () => loadStartupIntakePolicyOwnerFile(options.dataDir, options.seedDir),
+    },
+    {
+      label: 'fleet-auth',
+      dataPath: join(options.dataDir, FLEET_AUTH_FILE_NAME),
+      seedPath: join(seedDir, FLEET_AUTH_SEED_FILE_NAME),
+      run: () => resolveFleetAuthOwnerFile({
+        dataDir: options.dataDir,
+        enabled: options.fleetAuth ?? isFleetAuthEnabled(),
+        processMode: 'gateway',
+        seedDir: options.seedDir,
+      }),
     },
   ];
 

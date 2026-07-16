@@ -51,6 +51,31 @@ const log = createComponentLogger('ApiVoiceRuntime');
 
 const DEFAULT_CHANNEL_PREFIX = 'api-voice';
 
+// Fallbacks must match the DEFAULT_* constants in
+// src/primitives/voice/transports/websocket/server.ts. They only apply when the
+// owner-file settings are absent from config; in production load-config always
+// supplies them, so an operator-set value reaches the live server.
+const DEFAULT_VOICE_WS_SESSION_TIMEOUT_MS = 30_000;
+const DEFAULT_VOICE_WS_MAX_FRAME_BYTES = 256 * 1024;
+const DEFAULT_VOICE_WS_MAX_PENDING_FRAMES = 32;
+
+/**
+ * Derive the voice websocket server transport limits from owner-file settings.
+ * Exposed for wiring tests (proves an operator-set `voice*` setting reaches the
+ * {@link WebSocketVoiceServer} construction options).
+ */
+export function buildVoiceWebSocketServerOptions(
+  config: SubstrateConfig,
+): Partial<WebSocketVoiceServerOptions> & { maxPendingFrames?: number } {
+  return {
+    sessionTimeoutMs:
+      config.voiceSessionTimeoutMs ?? DEFAULT_VOICE_WS_SESSION_TIMEOUT_MS,
+    maxFrameBytes: config.voiceMaxFrameBytes ?? DEFAULT_VOICE_WS_MAX_FRAME_BYTES,
+    maxPendingFrames:
+      config.voiceMaxPendingFrames ?? DEFAULT_VOICE_WS_MAX_PENDING_FRAMES,
+  };
+}
+
 export interface ApiVoiceAssistantTurnInput {
   request: IncomingMessage;
   principal: ApiAuthPrincipal;
@@ -661,7 +686,10 @@ export function createApiVoiceWebSocketRuntime(
     },
   });
 
-  const server = new WebSocketVoiceServer(options.serverOptions, {
+  const server = new WebSocketVoiceServer({
+    ...buildVoiceWebSocketServerOptions(options.config),
+    ...options.serverOptions,
+  }, {
     onFrame: (session, frame) => runtime.handleFrame(session, frame),
     onSessionClose: async (session, reason) => {
       await runtime.closeConnection(session.connectionId, `transport.${toCloseReason(reason)}`);

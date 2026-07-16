@@ -51,6 +51,10 @@ if [ -z "${API_HOST:-}" ]; then
   export API_HOST=127.0.0.1
 fi
 
+if [ -z "${GATEWAY_OPERATOR_API_BASE_URL:-}" ]; then
+  export GATEWAY_OPERATOR_API_BASE_URL="http://127.0.0.1:${API_PORT}/v1"
+fi
+
 if [ -z "${API_KEY:-}" ] && [ -z "${ALLOW_INSECURE_LOCAL_API:-}" ]; then
   export ALLOW_INSECURE_LOCAL_API=true
 fi
@@ -204,6 +208,7 @@ build_agent_env() {
     PSFN_DEBUG_MODE \
     PSFN_DEBUG_TEXT \
     PSFN_DEBUG_THINKING \
+    PSFN_FLEET_AUTH \
     PSFN_LIFECYCLE_RESTART_EXIT_CODE \
     PSFN_LOGS_DIR \
     PSFN_MULTI_COMPANION \
@@ -271,6 +276,7 @@ build_operator_env() {
     COMPANION_PG_SCHEMA \
     CONFIG_DIR \
     DATA_DIR \
+    GATEWAY_OPERATOR_API_BASE_URL \
     GATEWAY_SOCKET \
     HOME \
     LANG \
@@ -281,6 +287,7 @@ build_operator_env() {
     NODE_ENV \
     NODE_OPTIONS \
     PATH \
+    PSFN_FLEET_AUTH \
     PSFN_LOGS_DIR \
     PSFN_MULTI_COMPANION \
     PSFN_RUNTIME_LAYOUT_MODE \

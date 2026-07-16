@@ -14,6 +14,13 @@ export function isRfc4122Uuid(value: unknown): value is string {
   return typeof value === 'string' && RFC_4122_UUID_PATTERN.test(value);
 }
 
+/** Canonical UTC ISO-8601 timestamp with millisecond precision. */
+export function isCanonicalIsoTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) && new Date(milliseconds).toISOString() === value;
+}
+
 /** Fail closed when an external object contains fields outside its contract. */
 export function assertNoUnknownKeys(
   value: Record<string, unknown>,

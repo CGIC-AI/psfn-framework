@@ -36,7 +36,7 @@ describe('agent control plane', () => {
     expect(controlPlaneSource).toContain('runRepoLifecycleBuildCommand');
     expect(controlPlaneSource).not.toContain('gateway.shellExec(');
     expect(controlPlaneSource).toContain('registerDeferredLifecycleRuntime({');
-    expect(controlPlaneSource).toContain("executionMode: 'deferred'");
+    expect(controlPlaneSource).toContain("executionMode: kubeLifecycle ? 'immediate' : 'deferred'");
     expect(controlPlaneSource).toContain('unregister deferred lifecycle actions');
     expect(controlPlaneSource).toContain('unregister gateway disconnect hook');
     expect(controlPlaneSource).toContain("step: 'stop durable background work supervisor'");

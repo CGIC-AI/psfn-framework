@@ -386,6 +386,17 @@ The canonical model-facing `system` surface collapses safe runtime-setting reads
 
 `system action="read"` preserves the existing safe runtime-settings snapshot behavior. `system action="restart|rebuild"` preserves the existing restart safeguard checks, notification flow, and capability enforcement, but keeps lifecycle control on one semantic surface instead of separate micro-tools.
 
+### Deployment-mode awareness (Kubernetes)
+
+The `system` surface is deployment-mode aware and fails closed when the mode cannot be determined:
+
+- **Local / systemd / split runtime** keeps the existing behavior: `restart` exits through the configured supervisor/reexec/command strategy, and `rebuild` runs the repo-owned build before restarting.
+- **Guarded Kubernetes deployment** (detected from `KUBERNETES_SERVICE_HOST` plus `PSFN_KUBE_SELF_MANAGEMENT_ENABLED` and the pinned Helm facts):
+  - `read` additionally reports deployment mode, the current image/Helm/source revision, and live per-deployment readiness (fetched through the gateway's read-only diagnose action).
+  - `restart` performs an **approved rollout restart** of `psfn-agent`, `psfn-gateway`, and `psfn-garden`, routed through the gateway's approval-gated `KubeSelfManagementController` (x5rt.4). The agent holds no Kubernetes RBAC; the write path (a strategic-merge pod-template patch) stays on the gateway ServiceAccount, and the rollout only runs after an operator approves. The companion is never restarted before approval, and there is never a silent local reexec under Kubernetes.
+  - `rebuild` refuses in-pod builds and directs the change to the guarded build-test-image deploy pipeline (x5rt.6).
+  - When running under Kubernetes but self-management is disabled or its facts are missing, lifecycle mutation refuses loudly rather than falling back to the local path.
+
 ## Reserved Shard Surface
 
 The `shard` registry entry is reserved for long-horizon shard work and fold-back lifecycle control. It is not yet the ordinary direct model-facing control surface.
@@ -416,6 +427,12 @@ The companion-facing runtime prompt should describe the policy-constrained catal
 - Mention `tool_search` only as optional documentation lookup and `toolset` pin/unpin only as presentation ordering.
 - Hide internal/background-only tools from ordinary direct turns unless the current turn is scheduled or explicitly about that background workflow.
 - Keep policy/source/debug detail on admin and observability surfaces rather than in the companion prompt.
+
+### Durable usage ordering and pin suggestions (psfn-framework-b0yl.5)
+
+The presentation order is: explicit pins first, then a fixed social/expressive-first domain rank, then a tie-break, then alphabetical. Durable per-tool usage aggregates — computed by the periodic tool-usage evaluator lane from the **turn-record stream** (`_turn_records/*.jsonl`, per-companion, survives restart), which records every tool call in a turn (`toolCalls[].toolName` + `isError`) for all catalog tools — feed the tie-break **inside** a presentation band. This is the actual-invocation signal: the earlier `model_usage_events` source only saw LLM API calls, so deterministic tools (repo, shell, fs, memory, …) accrued zero usage. The evaluator emits coverage telemetry (`toolsWithData` vs `catalogToolCount`, `channelsScanned`, `turnRecordsScanned`, `truncated`) so a sparse window is visibly sparse rather than a confident wrong ranking. Usage never crosses a band, never overrides an explicit pin, and never changes what is callable.
+
+The same evaluator surfaces **operator-visible pin suggestions** for frequently and successfully used extended tools. Suggestions are recorded through the existing autonomous-action memory path (tagged `tool_usage_evaluator`/`pin_suggestion`) and are never applied silently: the companion or operator acts on them via `toolset action="pin"`. Higher durable failure counts demote a tool within its band (the explicit-correction signal folded from `psfn-framework-vvf.6`).
 
 ## Naming Rules
 
@@ -522,6 +539,7 @@ The table below maps current or retired first-party tool names to the canonical 
 ## Configuration Guidance
 
 - Keep `promotedExtendedTools` small. Despite the retained serialized key, its current contract is presentation ordering only; it never grants availability or capability.
+- The durable tool-usage evaluator lane is owned by `scheduler.json` under `toolUsageEvaluator` (`enabled`, `intervalMs`, `usageWindow`, `minPinSuggestionInvocations`). It is opt-in (absent/`enabled:false` => not registered) and aggregates actual per-tool invocations from the existing durable turn-record stream (`usageWindow` bounds the records counted); it introduces no new persistence store and never gates callability.
 - Do not add more micro-tool-specific config keys as a substitute for `toolset`.
 - Treat `tool_search` as optional documentation lookup and `toolset` as the presentation-order control plane for pinning and unpinning.
 - Keep `shardToolsets` shard-specific. It should not become a general companion tool-selection mechanism.

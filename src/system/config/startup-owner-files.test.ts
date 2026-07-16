@@ -151,6 +151,7 @@ describe('startup owner-file loaders', () => {
         minConversationalEntries: 2,
         minSingleEntryChars: 120,
         topicSegmentationEnabled: false,
+        maxPriorCandidates: 24,
       },
       sleepConsolidation: {
         reviewWindowDays: 60,
@@ -158,6 +159,8 @@ describe('startup owner-file loaders', () => {
         adjacencyGapMinutes: 45,
         maxRefinementsPerRun: 8,
         maxConsolidationsPerRun: 6,
+        transcriptMessageLimit: 200,
+        maxTranscriptCharsPerEpisode: 6000,
       },
       arcFormation: {
         passIntervalDays: 6,

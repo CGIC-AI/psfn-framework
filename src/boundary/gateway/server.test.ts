@@ -15,6 +15,7 @@ import type { SessionHmacKeyring } from '../../persistence/journals/journal-util
 import { EventBus } from '../../shared/event-bus.js';
 import type { GatewayAuditStorePort } from './audit-port.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
+import { KubeSelfManagementController } from '../../system/lifecycle/kube-self-management.js';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({
@@ -880,6 +881,113 @@ describe('GatewayServer', () => {
           message: 'Confirmation request expired before resolution.',
         }),
       ]);
+    });
+
+    it('denies kube mutation resolution over normal agent RPC and preserves it for operator resolution', async () => {
+      const execute = vi.fn(async () => ({
+        validationResult: 'passed' as const,
+        rollbackStatus: 'not_requested' as const,
+      }));
+      const kubeSelfManagement = new KubeSelfManagementController({
+        namespace: 'psfn-test',
+        release: 'psfn',
+        executor: { supports: () => true, execute },
+        audit: vi.fn(async () => undefined),
+      });
+      const { conn, server } = await setupServerConnection({
+        ...createMinimalOptions(),
+        kubeSelfManagement,
+      });
+
+      const queued = await invokeRpc(conn, 50, 'kube.self_management', {
+        action: 'restart',
+        namespace: 'psfn-test',
+        release: 'psfn',
+        sourceRevision: 'a'.repeat(40),
+        targetImage: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
+        helmRevision: 7,
+        reason: 'Restart the reviewed release.',
+      });
+      const approvalId = queued.result.approvalId as string;
+
+      const agentResolution = await invokeRpc(conn, 51, 'confirmation.resolve', {
+        id: approvalId,
+        decision: 'approve',
+      });
+      expect(agentResolution.result).toEqual({
+        id: approvalId,
+        status: 'failed',
+        message: 'Confirmation requires an independently authenticated operator resolution.',
+        executed: false,
+      });
+      expect(execute).not.toHaveBeenCalled();
+      const stillPending = await invokeRpc(conn, 52, 'confirmation.list', {});
+      expect(stillPending.result.entries).toEqual([
+        expect.objectContaining({ id: approvalId, resolutionAuthority: 'operator' }),
+      ]);
+
+      const operatorResolution = await server.resolveOperatorApproval({
+        id: approvalId,
+        decision: 'approve',
+      });
+      expect(operatorResolution).toMatchObject({ status: 'approved', executed: true });
+      expect(execute).toHaveBeenCalledOnce();
+      const history = await invokeRpc(conn, 53, 'confirmation.history', {});
+      expect(history.result.entries).toEqual([
+        expect.objectContaining({
+          id: approvalId,
+          executed: true,
+          resolver: { kind: 'operator', id: 'garden-admin' },
+        }),
+      ]);
+    });
+
+    it('relays a committed kube mutation as executed when result audit persistence fails', async () => {
+      const eventBus = new EventBus();
+      const onResolved = vi.fn();
+      eventBus.on('companion.approval.resolved', onResolved);
+      const execute = vi.fn(async () => ({
+        validationResult: 'passed' as const,
+        rollbackStatus: 'not_requested' as const,
+      }));
+      const kubeSelfManagement = new KubeSelfManagementController({
+        namespace: 'psfn-test',
+        release: 'psfn',
+        executor: { supports: () => true, execute },
+        audit: vi.fn(async (event) => {
+          if (event.phase === 'result'
+            && event.decision === 'ALLOW'
+            && event.outcome === 'succeeded') {
+            throw new Error('audit store unavailable');
+          }
+        }),
+      });
+      const { conn, server } = await setupServerConnection({
+        ...createMinimalOptions(),
+        eventBus,
+        kubeSelfManagement,
+      });
+      const queued = await invokeRpc(conn, 54, 'kube.self_management', {
+        action: 'restart',
+        namespace: 'psfn-test',
+        release: 'psfn',
+        sourceRevision: 'a'.repeat(40),
+        targetImage: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
+        helmRevision: 7,
+        reason: 'Restart the reviewed release.',
+      });
+
+      const result = await server.resolveOperatorApproval({
+        id: queued.result.approvalId as string,
+        decision: 'approve',
+      });
+
+      expect(result).toMatchObject({ status: 'failed', executed: true });
+      expect(execute).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(onResolved).toHaveBeenCalledOnce());
+      expect(onResolved).toHaveBeenCalledWith(expect.objectContaining({
+        payload: expect.objectContaining({ status: 'approved' }),
+      }));
     });
   });
 

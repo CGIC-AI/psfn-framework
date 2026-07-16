@@ -21,7 +21,11 @@ __pycache__/
 .bv/
 
 # Local beads state lives in the shared Dolt server and must not dirty code commits.
-.beads/
+# Exception: issues.jsonl is tracked so bead state syncs across machines over git
+# (export here -> commit -> pull + import/rehydrate on the other machine). Everything
+# else under .beads/ (the Dolt DB, credential key, config, runtime locks) stays ignored.
+.beads/*
+!.beads/issues.jsonl
 
 # Internal planning/audit artifacts (non-product docs)
 history/

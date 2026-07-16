@@ -67,6 +67,7 @@ describe('ConfirmationQueue', () => {
     expect(execute).toHaveBeenCalledWith(
       { path: '/etc/hosts' },
       expect.objectContaining({ id: entry.id, method: 'fs.read' }),
+      {},
     );
     expect(queue.listPending()).toEqual([]);
     expect(queue.listHistory()).toEqual([
@@ -160,6 +161,7 @@ describe('ConfirmationQueue', () => {
         prompt: 'operator-adjusted prompt',
       },
       expect.objectContaining({ id: entry.id }),
+      {},
     );
     expect(queue.listHistory()).toEqual([
       expect.objectContaining({
@@ -315,6 +317,44 @@ describe('ConfirmationQueue', () => {
     );
 
     expect(entry.expiresAt).toBe(5_000 + DEFAULT_CONFIRMATION_EXPIRY_MS);
+  });
+
+  it('keeps operator-only requests pending when a companion tries to resolve them', async () => {
+    const execute = vi.fn();
+    const queue = new ConfirmationQueue({ idFactory: () => 'operator-only' });
+    queue.enqueue({
+      method: 'kube.self_management',
+      action: 'restart',
+      scope: 'psfn-test/psfn',
+      params: { action: 'restart' },
+      companionReason: 'Restart reviewed release',
+      resolutionAuthority: 'operator',
+    }, execute);
+
+    const companionResult = await queue.resolve(
+      { id: 'operator-only', decision: 'approve' },
+      { kind: 'companion', id: 'companion-1' },
+    );
+    const operatorResult = await queue.resolve(
+      { id: 'operator-only', decision: 'approve' },
+      { kind: 'operator', id: 'garden-admin' },
+    );
+
+    expect(companionResult).toEqual({
+      id: 'operator-only',
+      status: 'failed',
+      message: 'Confirmation requires an independently authenticated operator resolution.',
+      executed: false,
+    });
+    expect(operatorResult).toMatchObject({ status: 'approved', executed: true });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(queue.listHistory()).toEqual([
+      expect.objectContaining({
+        id: 'operator-only',
+        executed: true,
+        resolver: { kind: 'operator', id: 'garden-admin' },
+      }),
+    ]);
   });
 });
 

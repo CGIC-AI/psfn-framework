@@ -84,6 +84,7 @@ describe('redactApprovalResolved / toCompanionApprovalStatus', () => {
     expect(toCompanionApprovalStatus('denied')).toBe('denied');
     expect(toCompanionApprovalStatus('expired')).toBe('expired');
     expect(toCompanionApprovalStatus('failed')).toBe('blocked');
+    expect(toCompanionApprovalStatus('failed', true)).toBe('approved');
     expect(() => toCompanionApprovalStatus('not_found')).toThrow(/not_found/);
   });
 
@@ -92,6 +93,7 @@ describe('redactApprovalResolved / toCompanionApprovalStatus', () => {
       id: 'conf-9',
       status: 'denied',
       resolvedAt: 1_700_000_001_000,
+      executed: false,
     });
     expect(Object.keys(payload).sort()).toEqual(['id', 'resolvedAt', 'status']);
     expect(payload).toEqual({

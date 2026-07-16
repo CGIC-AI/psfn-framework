@@ -401,18 +401,18 @@ export function buildAdminSessionRoutes(options: {
       method: 'GET',
       match: nestedParamPath('/api/admin/sessions/', '/turns/', 'channelId', 'turnId'),
       handle: (req, res, { channelId, turnId }) => {
-        try {
-          const payload = sessionService.getSessionTurnDetail(channelId, turnId);
-          sendCompressedJson(req, res, 200, payload);
-        } catch (error) {
-          if (error instanceof AdminSessionTurnNotFoundError) {
-            sendJson(res, 404, { error: error.message });
-            return;
-          }
-          sendJson(res, 500, {
-            error: toSanitizedMessage(error, 'Failed to load turn detail'),
-          });
-        }
+        sessionService.getSessionTurnDetail(channelId, turnId).then(
+          payload => sendCompressedJson(req, res, 200, payload),
+          (error) => {
+            if (error instanceof AdminSessionTurnNotFoundError) {
+              sendJson(res, 404, { error: error.message });
+              return;
+            }
+            sendJson(res, 500, {
+              error: toSanitizedMessage(error, 'Failed to load turn detail'),
+            });
+          },
+        );
       },
     },
     {

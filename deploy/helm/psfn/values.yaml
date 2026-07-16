@@ -8,6 +8,16 @@ serviceAccount:
   create: true
   name: ""
 
+# Opt-in gateway-owned Kubernetes self-management boundary. The dedicated
+# ServiceAccount is namespace-scoped and never receives Secret or exec access.
+kubeSelfManagement:
+  enabled: false
+  serviceAccountName: ""
+  # NetworkPolicy cannot select the host-network Kubernetes API process by
+  # label. Supply only the kubernetes.default Service ClusterIP as a host CIDR
+  # (/32 for IPv4 or /128 for IPv6) when enabling this boundary.
+  apiServerCIDRs: []
+
 podSecurityContext:
   fsGroup: 999
   fsGroupChangePolicy: OnRootMismatch

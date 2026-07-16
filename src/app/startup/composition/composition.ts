@@ -416,6 +416,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
 	      options.llmProvider,
 	      options.episodicStore ?? null,
 	      options.sessionManager,
+	      true,
 	    )
 	    : new MemoryRetriever(
 	      options.memoryStore,
@@ -426,6 +427,7 @@ export function wireMemoryRuntime(options: MemoryRuntimeOptions): MemoryExtracto
 	      options.llmProvider,
 	      options.episodicStore ?? null,
 	      options.sessionManager,
+	      true,
 	    );
 
   const extractorFormationOptions = {

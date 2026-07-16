@@ -100,6 +100,11 @@ export class FakePostgresPool {
       return result([{ exists }]);
     }
 
+    if (normalized.startsWith('select trust_level from contacts where id = $1 for update')) {
+      const row = this.contacts.get(String(values[0] ?? ''));
+      return result(row ? [{ trust_level: row.trust_level }] : []);
+    }
+
     if (normalized.startsWith('update l2_memories set contact_id = $1 where contact_id = $2')) {
       const targetId = String(values[0] ?? '');
       const sourceId = String(values[1] ?? '');

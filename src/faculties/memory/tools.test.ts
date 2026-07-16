@@ -28,6 +28,7 @@ import {
   type EpisodeArc,
 } from '../../shared/contracts/episodic-memory.js';
 import type { EpisodicTimelineStore } from './retrieval/episodic.js';
+import { createDefaultMemoryRetrievalPolicy } from '../../system/config/memory-retrieval-policy.js';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
 
 /** Extract text from AgentToolResult content array */
@@ -691,6 +692,85 @@ describe('createMemoryTool', () => {
     expect(text).toContain('linked continuation episode');
     expect(text).toContain('outside requested range');
     expect(text).not.toContain('Hidden continuation detail');
+  });
+
+  it('applies operator-set timeline policy knobs to the episodic store (zet.2)', async () => {
+    const store = mockUnifiedStore();
+    const episodicStore = makeEpisodicTimelineStore([
+      makeEpisode({
+        id: 'episode-policy-inside-day',
+        title: 'Policy-threaded episode',
+        landmark: 'This episode exercises operator-set timeline knobs.',
+        startedAt: '2026-03-30T12:00:00.000Z',
+        endedAt: '2026-03-30T12:10:00.000Z',
+      }),
+    ]);
+
+    // Distinct, dominating scan value proves the operator policy — not the
+    // compiled DEFAULT_POLICY — reaches searchByTime. timelineScanLimit=517
+    // dominates limit*4 (8*4=32), so scanLimit resolves to exactly 517.
+    const policy = createDefaultMemoryRetrievalPolicy();
+    policy.episodic.timelineScanLimit = 517;
+
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort, {
+      episodicStore,
+      memoryRetrievalPolicy: policy,
+    });
+
+    const result = await tool.execute('memory-call-timeline-policy', {
+      action: 'timeline',
+      date: '2026-03-30',
+      channel_id: 'api:test',
+      trust_level: 'primary',
+      channel_visibility: 'private',
+    });
+
+    expect(episodicStore.searchByTime).toHaveBeenCalledWith({
+      from: '2026-03-30T00:00:00.000Z',
+      to: '2026-03-30T23:59:59.999Z',
+      limit: 517,
+    });
+    expect(resultText(result as any)).toContain('Policy-threaded episode');
+  });
+
+  it('honors an explicit limit param over the policy timelineLimit (zet.2)', async () => {
+    const store = mockUnifiedStore();
+    const episodes = Array.from({ length: 6 }, (_, index) => makeEpisode({
+      id: `episode-limit-${index}`,
+      title: `Limited episode ${index}`,
+      landmark: `Episode ${index} within the requested day.`,
+      startedAt: `2026-03-30T0${index}:00:00.000Z`,
+      endedAt: `2026-03-30T0${index}:10:00.000Z`,
+    }));
+    const episodicStore = makeEpisodicTimelineStore(episodes);
+
+    // Policy default timelineLimit is 8; an explicit limit of 2 must win and
+    // cap the returned entries regardless of the policy default.
+    const policy = createDefaultMemoryRetrievalPolicy();
+    const tool = createMemoryTool(writer as unknown as MemoryWriter, store as unknown as MemoryStorePort, {
+      episodicStore,
+      memoryRetrievalPolicy: policy,
+    });
+
+    const result = await tool.execute('memory-call-timeline-explicit-limit', {
+      action: 'timeline',
+      date: '2026-03-30',
+      channel_id: 'api:test',
+      trust_level: 'primary',
+      channel_visibility: 'private',
+      limit: 2,
+    });
+
+    const text = resultText(result as any);
+    expect(text).toContain('Limited episode 0');
+    expect(text).toContain('Limited episode 1');
+    expect(text).not.toContain('Limited episode 2');
+    // Explicit limit=2 drives scanLimit = max(timelineScanLimit=200, 2*4=8) = 200.
+    expect(episodicStore.searchByTime).toHaveBeenCalledWith({
+      from: '2026-03-30T00:00:00.000Z',
+      to: '2026-03-30T23:59:59.999Z',
+      limit: 200,
+    });
   });
 
   it('imports through action=import with unified provenance qualifiers', async () => {

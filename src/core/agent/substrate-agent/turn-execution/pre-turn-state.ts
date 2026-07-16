@@ -446,6 +446,9 @@ export async function prepareTurnIdentityState(input: {
     // Human-in-the-loop effector gates (world.control Gate 2) read THIS, not trust.
     requesterProvenance: resolveRequesterProvenance(authorContext, message),
     viewerChannelPrivacy: conversationScope.envelope.channelPrivacy,
+    ...(authorContext.canonicalContactKey
+      ? { viewerMemorySubjectContactId: authorContext.canonicalContactKey }
+      : {}),
     ...(message.isDirectMessage !== undefined ? { viewerIsDirectMessage: message.isDirectMessage } : {}),
     ...(canonicalEmbodimentContext ? { embodimentContext: canonicalEmbodimentContext } : {}),
   };

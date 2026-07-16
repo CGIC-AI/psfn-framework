@@ -6,10 +6,12 @@ import {
 } from '../../system/lifecycle/notifications.js';
 import type { RuntimeModeContract } from '../../system/lifecycle/runtime-mode.js';
 import { runConfiguredLifecycleCommand } from '../../system/lifecycle/command-runner.js';
+import { resolveKubeLifecycleContext } from '../../system/lifecycle/kube-lifecycle-context.js';
 import {
   createSystemTool,
   registerDeferredLifecycleRuntime,
   runRepoLifecycleBuildCommand,
+  type KubeLifecycleToolRuntime,
 } from '../../core/tools/lifecycle.js';
 import {
   createGatewayDiscordNotifySender,
@@ -236,16 +238,30 @@ export function buildAgentControlPlane(
     log.info('Stopped');
   });
 
-  unregisterDeferredLifecycle = registerDeferredLifecycleRuntime({
-    agentLoop,
-    postTurnActions,
-    notifier: lifecycleNotifier,
-    stopFn,
-    restartContract: lifecycleRuntimeContract.restart,
-    prepareRestartCommand,
-    runBuildCommand,
-    runRestartCommand,
-  });
+  // Resolve deployment mode. Under a guarded Kubernetes deployment the system
+  // tool routes restart/rebuild through the gateway's approval-gated controller
+  // instead of the local supervisor/reexec path. Fails closed (throws) if
+  // self-management is declared enabled but its facts are malformed.
+  const kubeLifecycleContext = resolveKubeLifecycleContext(process.env);
+  const kubeLifecycle: KubeLifecycleToolRuntime | undefined = kubeLifecycleContext.deployment === 'kube'
+    ? {
+        context: kubeLifecycleContext,
+        invoke: request => gateway.kubeSelfManagement(request),
+      }
+    : undefined;
+
+  if (!kubeLifecycle) {
+    unregisterDeferredLifecycle = registerDeferredLifecycleRuntime({
+      agentLoop,
+      postTurnActions,
+      notifier: lifecycleNotifier,
+      stopFn,
+      restartContract: lifecycleRuntimeContract.restart,
+      prepareRestartCommand,
+      runBuildCommand,
+      runRestartCommand,
+    });
+  }
 
   agentLoop.registerTool(createSystemTool(
     config,
@@ -255,10 +271,11 @@ export function buildAgentControlPlane(
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
       restartContract: lifecycleRuntimeContract.restart,
-      executionMode: 'deferred',
+      executionMode: kubeLifecycle ? 'immediate' : 'deferred',
       prepareRestartCommand,
       runBuildCommand,
       runRestartCommand,
+      ...(kubeLifecycle ? { kubeLifecycle } : {}),
     },
   ));
   agentLoop.registerTool(createNotifyTool(createNotifyDispatcher({

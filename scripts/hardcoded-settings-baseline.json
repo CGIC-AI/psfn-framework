@@ -1,0 +1,4324 @@
+{
+  "$comment": "Inventory of hardcoded tuning/policy constants in src/ that are intentionally code-owned (NOT owned by the settings contract). Generated + reviewed baseline for scripts/verify-hardcoded-settings.mjs. The gate fails when a NEW matching constant appears that is not listed here, or when a listed constant disappears. The gate keys on file + name identity; \"value\" is informational only. Regenerate with: npm run verify:hardcoded-settings -- --update (review the diff, and add a one-line \"note\" justifying why each deliberate refusal stays code-owned). To retire a constant from code, migrate it to an owned setting instead of baselining it.",
+  "entries": [
+    {
+      "file": "src/app/agent/control-plane.ts",
+      "name": "DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS",
+      "value": "10_000"
+    },
+    {
+      "file": "src/app/agent/main.ts",
+      "name": "DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS",
+      "value": "15_000"
+    },
+    {
+      "file": "src/app/agent/startup-guards.ts",
+      "name": "NETWORK_ISOLATION_PROBE_TIMEOUT_MS",
+      "value": "2_000"
+    },
+    {
+      "file": "src/app/cert-manager/config.ts",
+      "name": "DEFAULT_RENEW_CHECK_INTERVAL_MINUTES",
+      "value": "60"
+    },
+    {
+      "file": "src/app/cert-manager/config.ts",
+      "name": "MIN_TOKEN_LENGTH",
+      "value": "32"
+    },
+    {
+      "file": "src/app/cert-manager/server.ts",
+      "name": "MAX_BODY_BYTES",
+      "value": "64 * 1024"
+    },
+    {
+      "file": "src/app/e2e/e2e-voice-roundtrip.ts",
+      "name": "WAIT_TIMEOUT_MS",
+      "value": "180_000"
+    },
+    {
+      "file": "src/app/e2e/icp-certification/process-harness.ts",
+      "name": "START_TIMEOUT_MS",
+      "value": "60_000"
+    },
+    {
+      "file": "src/app/gateway/api-surface.ts",
+      "name": "COMPANION_STIMULUS_COOLDOWN_MS",
+      "value": "3_000"
+    },
+    {
+      "file": "src/app/gateway/api-surface.ts",
+      "name": "GATEWAY_API_REQUEST_TIMEOUT_MS",
+      "value": "240_000"
+    },
+    {
+      "file": "src/app/operator/main.ts",
+      "name": "DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS",
+      "value": "15_000"
+    },
+    {
+      "file": "src/app/startup/composition/post-turn-actions.ts",
+      "name": "MAX_STATUS_HISTORY",
+      "value": "25"
+    },
+    {
+      "file": "src/boundary/custody/runtime-credential-source.ts",
+      "name": "MAX_RUNTIME_CREDENTIAL_BYTES",
+      "value": "16 * 1024"
+    },
+    {
+      "file": "src/boundary/gateway/attachment-materialization.ts",
+      "name": "MAX_GATEWAY_ATTACHMENT_BYTES",
+      "value": "25 * 1024 * 1024"
+    },
+    {
+      "file": "src/boundary/gateway/attachment-materialization.ts",
+      "name": "MAX_GATEWAY_ATTACHMENTS",
+      "value": "10"
+    },
+    {
+      "file": "src/boundary/gateway/bootstrap-input.ts",
+      "name": "DEFAULT_NTFY_TIMEOUT_MS",
+      "value": "8_000"
+    },
+    {
+      "file": "src/boundary/gateway/bootstrap-input.ts",
+      "name": "DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS",
+      "value": "15_000"
+    },
+    {
+      "file": "src/boundary/gateway/client.ts",
+      "name": "DEFAULT_GATEWAY_KEEPALIVE_INTERVAL_MS",
+      "value": "30_000"
+    },
+    {
+      "file": "src/boundary/gateway/client.ts",
+      "name": "DEFAULT_SESSION_INTEGRITY_RPC_TIMEOUT_MS",
+      "value": "3_000"
+    },
+    {
+      "file": "src/boundary/gateway/discord-startup.ts",
+      "name": "DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS",
+      "value": "2_000"
+    },
+    {
+      "file": "src/boundary/gateway/discord-startup.ts",
+      "name": "DEFAULT_DISCORD_START_RETRY_MAX_ATTEMPTS",
+      "value": "0"
+    },
+    {
+      "file": "src/boundary/gateway/discord-startup.ts",
+      "name": "DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS",
+      "value": "30_000"
+    },
+    {
+      "file": "src/boundary/gateway/filesystem-paths.ts",
+      "name": "MAX_FS_LIST_GLOB_LENGTH",
+      "value": "512"
+    },
+    {
+      "file": "src/boundary/gateway/inline-image-reference-hints.ts",
+      "name": "GATEWAY_INLINE_IMAGE_HINT_MAX_ENTRIES",
+      "value": "64"
+    },
+    {
+      "file": "src/boundary/gateway/inline-image-retention.ts",
+      "name": "GATEWAY_INLINE_IMAGE_RETENTION_MAX_BYTES",
+      "value": "32 * 1024 * 1024"
+    },
+    {
+      "file": "src/boundary/gateway/inline-image-retention.ts",
+      "name": "GATEWAY_INLINE_IMAGE_RETENTION_MAX_ENTRIES",
+      "value": "12"
+    },
+    {
+      "file": "src/boundary/gateway/intake/injection-classifier.ts",
+      "name": "DEFAULT_MAX_SEQUENCE_LENGTH",
+      "value": "512"
+    },
+    {
+      "file": "src/boundary/gateway/intake/injection-classifier.ts",
+      "name": "DEFAULT_MAX_WINDOWS",
+      "value": "64"
+    },
+    {
+      "file": "src/boundary/gateway/intake/l2-screener.ts",
+      "name": "DEFAULT_MAX_CONTENT_CHARS",
+      "value": "24000"
+    },
+    {
+      "file": "src/boundary/gateway/intake/l2-screener.ts",
+      "name": "MAX_SUMMARY_CHARS",
+      "value": "280"
+    },
+    {
+      "file": "src/boundary/gateway/intake/l3-screener.ts",
+      "name": "DEFAULT_MAX_CONTENT_CHARS",
+      "value": "48000"
+    },
+    {
+      "file": "src/boundary/gateway/intake/l3-screener.ts",
+      "name": "L3_MIN_VERBATIM_QUOTE_CHARS",
+      "value": "24"
+    },
+    {
+      "file": "src/boundary/gateway/intake/l3-screener.ts",
+      "name": "MAX_CONTENT_TYPE_CHARS",
+      "value": "64"
+    },
+    {
+      "file": "src/boundary/gateway/intake/l3-screener.ts",
+      "name": "MAX_ENTITIES",
+      "value": "16"
+    },
+    {
+      "file": "src/boundary/gateway/intake/l3-screener.ts",
+      "name": "MAX_ENTITY_CHARS",
+      "value": "80"
+    },
+    {
+      "file": "src/boundary/gateway/intake/l3-screener.ts",
+      "name": "MAX_SOURCE_REF_CHARS",
+      "value": "300"
+    },
+    {
+      "file": "src/boundary/gateway/intake/l3-screener.ts",
+      "name": "MAX_SUMMARY_CHARS",
+      "value": "500"
+    },
+    {
+      "file": "src/boundary/gateway/intake/l3-screener.ts",
+      "name": "MAX_WHY_FLAGGED_CHARS",
+      "value": "300"
+    },
+    {
+      "file": "src/boundary/gateway/intake/vision-screener.ts",
+      "name": "MAX_DESCRIPTION_CHARS",
+      "value": "600"
+    },
+    {
+      "file": "src/boundary/gateway/intake/vision-screener.ts",
+      "name": "MAX_OCR_CHARS",
+      "value": "16000"
+    },
+    {
+      "file": "src/boundary/gateway/methods/beads-github-project-sync.ts",
+      "name": "DEFAULT_COMMAND_TIMEOUT_MS",
+      "value": "12_000"
+    },
+    {
+      "file": "src/boundary/gateway/methods/beads-github-project-sync.ts",
+      "name": "MAX_COMMAND_OUTPUT_CHARS",
+      "value": "250_000"
+    },
+    {
+      "file": "src/boundary/gateway/methods/beads.ts",
+      "name": "DEFAULT_BD_TIMEOUT_MS",
+      "value": "12_000"
+    },
+    {
+      "file": "src/boundary/gateway/methods/beads.ts",
+      "name": "DEFAULT_READY_LIMIT",
+      "value": "20"
+    },
+    {
+      "file": "src/boundary/gateway/methods/beads.ts",
+      "name": "MAX_ACTOR_CHARS",
+      "value": "64"
+    },
+    {
+      "file": "src/boundary/gateway/methods/beads.ts",
+      "name": "MAX_BD_OUTPUT_CHARS",
+      "value": "250_000"
+    },
+    {
+      "file": "src/boundary/gateway/methods/beads.ts",
+      "name": "MAX_DEPENDENCIES",
+      "value": "16"
+    },
+    {
+      "file": "src/boundary/gateway/methods/beads.ts",
+      "name": "MAX_ISSUE_REF_CHARS",
+      "value": "128"
+    },
+    {
+      "file": "src/boundary/gateway/methods/beads.ts",
+      "name": "MAX_READY_LIMIT",
+      "value": "100"
+    },
+    {
+      "file": "src/boundary/gateway/methods/beads.ts",
+      "name": "MAX_REASON_CHARS",
+      "value": "400"
+    },
+    {
+      "file": "src/boundary/gateway/methods/beads.ts",
+      "name": "MAX_TITLE_CHARS",
+      "value": "200"
+    },
+    {
+      "file": "src/boundary/gateway/methods/home-assistant.ts",
+      "name": "MAX_ENTITY_IDS",
+      "value": "50"
+    },
+    {
+      "file": "src/boundary/gateway/methods/home-assistant.ts",
+      "name": "MAX_REQUEST_BYTES",
+      "value": "64 * 1024"
+    },
+    {
+      "file": "src/boundary/gateway/methods/home-assistant.ts",
+      "name": "MAX_RESPONSE_BYTES",
+      "value": "1_000_000"
+    },
+    {
+      "file": "src/boundary/gateway/methods/intake-image.ts",
+      "name": "INTAKE_SCREEN_IMAGE_MAX_BYTES",
+      "value": "8 * 1024 * 1024"
+    },
+    {
+      "file": "src/boundary/gateway/methods/openrouter-web.ts",
+      "name": "DEFAULT_SEARCH_MAX_RESULTS",
+      "value": "5"
+    },
+    {
+      "file": "src/boundary/gateway/methods/web.ts",
+      "name": "WEB_FETCH_BINARY_MAX_BYTES_DEFAULT",
+      "value": "8 * 1024 * 1024"
+    },
+    {
+      "file": "src/boundary/gateway/methods/web.ts",
+      "name": "WEB_FETCH_TEXT_MAX_BYTES",
+      "value": "8 * 1024 * 1024"
+    },
+    {
+      "file": "src/boundary/gateway/sanitize.ts",
+      "name": "MAX_CONTENT_LENGTH",
+      "value": "50_000"
+    },
+    {
+      "file": "src/boundary/gateway/server.ts",
+      "name": "COMPANION_MESSAGE_MAX_AUTHOR_NAME_CHARS",
+      "value": "200"
+    },
+    {
+      "file": "src/boundary/gateway/server.ts",
+      "name": "COMPANION_MESSAGE_MAX_CONTENT_CHARS",
+      "value": "65_536"
+    },
+    {
+      "file": "src/boundary/gateway/server.ts",
+      "name": "COMPANION_MESSAGE_MAX_REPLY_TO_ID_CHARS",
+      "value": "256"
+    },
+    {
+      "file": "src/boundary/gateway/server.ts",
+      "name": "COMPANION_VIOLATION_LOG_LIMIT",
+      "value": "1_000"
+    },
+    {
+      "file": "src/boundary/gateway/server.ts",
+      "name": "FRAME_PREVIEW_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/boundary/gateway/session-integrity-worker-source.ts",
+      "name": "SESSION_INTEGRITY_VERIFY_CACHE_MAX_ENTRIES",
+      "value": "4_096"
+    },
+    {
+      "file": "src/boundary/gateway/transport.ts",
+      "name": "FRAME_PREVIEW_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/boundary/gateway/url-policy.ts",
+      "name": "DEFAULT_MAX_REDIRECT_HOPS",
+      "value": "5"
+    },
+    {
+      "file": "src/boundary/gateway/url-policy.ts",
+      "name": "DNS_RESOLUTION_RETRY_DELAY_MS",
+      "value": "250"
+    },
+    {
+      "file": "src/boundary/gateway/url-policy.ts",
+      "name": "MAX_REDIRECT_HOPS",
+      "value": "20"
+    },
+    {
+      "file": "src/boundary/gateway/voice-stream-request.ts",
+      "name": "DEFAULT_AGENT_TIMEOUT_MS",
+      "value": "60_000"
+    },
+    {
+      "file": "src/boundary/gateway/world-autonomy-limiter.ts",
+      "name": "AUTONOMY_COOLDOWN_MS",
+      "value": "10_000"
+    },
+    {
+      "file": "src/boundary/gateway/world-autonomy-limiter.ts",
+      "name": "AUTONOMY_HOURLY_LIMIT",
+      "value": "20"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/local-ops.ts",
+      "name": "DEFAULT_LIST_MAX_ENTRIES",
+      "value": "200"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/tools.ts",
+      "name": "DEFAULT_LIST_MAX_ENTRIES",
+      "value": "200"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/tools.ts",
+      "name": "DEFAULT_LIST_MAX_SCANNED_ENTRIES",
+      "value": "5_000"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/tools.ts",
+      "name": "DEFAULT_SEARCH_MAX_BYTES_PER_FILE",
+      "value": "40_000"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/tools.ts",
+      "name": "DEFAULT_SEARCH_MAX_FILES",
+      "value": "200"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/tools.ts",
+      "name": "DEFAULT_SEARCH_MAX_MATCHES",
+      "value": "50"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/tools.ts",
+      "name": "MAX_CONTEXT_LINES",
+      "value": "2"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/tools.ts",
+      "name": "MAX_LIST_MAX_ENTRIES",
+      "value": "500"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/tools.ts",
+      "name": "MAX_LIST_MAX_SCANNED_ENTRIES",
+      "value": "20_000"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/tools.ts",
+      "name": "MAX_READ_CHARS",
+      "value": "20_000"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/tools.ts",
+      "name": "MAX_SEARCH_MAX_BYTES_PER_FILE",
+      "value": "200_000"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/tools.ts",
+      "name": "MAX_SEARCH_MAX_FILES",
+      "value": "500"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/tools.ts",
+      "name": "MAX_SEARCH_MAX_MATCHES",
+      "value": "200"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
+      "name": "DEFAULT_LIST_MAX_ENTRIES",
+      "value": "200"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
+      "name": "DEFAULT_LIST_MAX_SCANNED_ENTRIES",
+      "value": "5_000"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
+      "name": "DEFAULT_SEARCH_MAX_BYTES_PER_FILE",
+      "value": "40_000"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
+      "name": "DEFAULT_SEARCH_MAX_FILES",
+      "value": "200"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
+      "name": "DEFAULT_SEARCH_MAX_MATCHES",
+      "value": "50"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
+      "name": "MAX_LIST_MAX_ENTRIES",
+      "value": "500"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
+      "name": "MAX_LIST_MAX_SCANNED_ENTRIES",
+      "value": "20_000"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
+      "name": "MAX_PREVIEW_CHARS",
+      "value": "500"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
+      "name": "MAX_SEARCH_CONTEXT_LINES",
+      "value": "2"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
+      "name": "MAX_SEARCH_LINE_CHARS",
+      "value": "8_192"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
+      "name": "MAX_SEARCH_MAX_BYTES_PER_FILE",
+      "value": "200_000"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
+      "name": "MAX_SEARCH_MAX_FILES",
+      "value": "500"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
+      "name": "MAX_SEARCH_MAX_MATCHES",
+      "value": "200"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
+      "name": "MAX_SEARCH_REGEX_PATTERN_CHARS",
+      "value": "1_000"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
+      "name": "SEARCH_TIME_BUDGET_MS",
+      "value": "2_000"
+    },
+    {
+      "file": "src/boundary/integrations/filesystem/workspace-ops.ts",
+      "name": "SEARCH_YIELD_INTERVAL",
+      "value": "256"
+    },
+    {
+      "file": "src/boundary/integrations/git/tools.ts",
+      "name": "MAX_DIFF_CHARS",
+      "value": "8000"
+    },
+    {
+      "file": "src/boundary/integrations/journal/ops.ts",
+      "name": "MAX_SEARCH_SNIPPET_CHARS",
+      "value": "180"
+    },
+    {
+      "file": "src/boundary/integrations/journal/tools.ts",
+      "name": "MAX_READ_CHARS",
+      "value": "12_000"
+    },
+    {
+      "file": "src/boundary/integrations/vault/tools.ts",
+      "name": "MAX_READ_CHARS",
+      "value": "12_000"
+    },
+    {
+      "file": "src/boundary/integrations/web/search.ts",
+      "name": "DEFAULT_WEB_SEARCH_MAX_URLS",
+      "value": "3"
+    },
+    {
+      "file": "src/boundary/integrations/web/search.ts",
+      "name": "MAX_WEB_SEARCH_URLS",
+      "value": "5"
+    },
+    {
+      "file": "src/boundary/sandbox/capabilities/shell.ts",
+      "name": "MAX_ARG_LENGTH",
+      "value": "4096"
+    },
+    {
+      "file": "src/boundary/sandbox/capabilities/shell.ts",
+      "name": "MAX_ARGS",
+      "value": "64"
+    },
+    {
+      "file": "src/boundary/sandbox/capabilities/shell.ts",
+      "name": "MAX_COMMAND_LENGTH",
+      "value": "256"
+    },
+    {
+      "file": "src/boundary/sandbox/capabilities/shell.ts",
+      "name": "MAX_CWD_LENGTH",
+      "value": "4096"
+    },
+    {
+      "file": "src/boundary/sandbox/capabilities/shell.ts",
+      "name": "MAX_OUTPUT_CHARS",
+      "value": "500_000"
+    },
+    {
+      "file": "src/boundary/sandbox/capabilities/shell.ts",
+      "name": "MAX_TIMEOUT_MS",
+      "value": "120_000"
+    },
+    {
+      "file": "src/boundary/sandbox/capabilities/toolchain.ts",
+      "name": "DEFAULT_LIST_FILES_MAX_ENTRIES",
+      "value": "200"
+    },
+    {
+      "file": "src/boundary/sandbox/capabilities/toolchain.ts",
+      "name": "MAX_LIST_FILES_GLOB_LENGTH",
+      "value": "512"
+    },
+    {
+      "file": "src/boundary/sandbox/capabilities/toolchain.ts",
+      "name": "MAX_WRITE_FILE_CONTENT_CHARS",
+      "value": "500_000"
+    },
+    {
+      "file": "src/boundary/sandbox/execution/analysis-workbench-child-source.ts",
+      "name": "MAX_IPC_ARRAY_LENGTH",
+      "value": "10000"
+    },
+    {
+      "file": "src/boundary/sandbox/execution/analysis-workbench-child-source.ts",
+      "name": "MAX_IPC_DEPTH",
+      "value": "20"
+    },
+    {
+      "file": "src/boundary/sandbox/execution/analysis-workbench-child-source.ts",
+      "name": "MAX_IPC_OBJECT_KEYS",
+      "value": "2000"
+    },
+    {
+      "file": "src/boundary/sandbox/execution/shell-policy-config.ts",
+      "name": "DEFAULT_SHELL_EXEC_MAX_TIMEOUT_MS",
+      "value": "30_000",
+      "note": "zet.6 refusal: shell exec policy path unreachable in current runtime (dead code)."
+    },
+    {
+      "file": "src/boundary/sandbox/execution/shell-policy-config.ts",
+      "name": "DEFAULT_SHELL_EXEC_OUTPUT_CHARS_CAP",
+      "value": "100_000",
+      "note": "zet.6 refusal: shell exec policy path unreachable in current runtime (dead code)."
+    },
+    {
+      "file": "src/boundary/sandbox/execution/shell-policy-config.ts",
+      "name": "DEFAULT_SHELL_EXEC_TIMEOUT_MS",
+      "value": "5_000",
+      "note": "zet.6 refusal: shell exec policy path unreachable in current runtime (dead code)."
+    },
+    {
+      "file": "src/boundary/sandbox/sandbox-execution-port.ts",
+      "name": "MAX_IPC_ARRAY_LENGTH",
+      "value": "10_000"
+    },
+    {
+      "file": "src/boundary/sandbox/sandbox-execution-port.ts",
+      "name": "MAX_IPC_DEPTH",
+      "value": "20"
+    },
+    {
+      "file": "src/boundary/sandbox/sandbox-execution-port.ts",
+      "name": "MAX_IPC_OBJECT_KEYS",
+      "value": "2_000"
+    },
+    {
+      "file": "src/boundary/sandbox/sandbox-execution-port.ts",
+      "name": "MAX_SANDBOX_DEBUG_KEY_LENGTH",
+      "value": "128"
+    },
+    {
+      "file": "src/channels/api/active-health-probe.ts",
+      "name": "DEFAULT_ACTIVE_PROBE_TIMEOUT_MS",
+      "value": "10_000"
+    },
+    {
+      "file": "src/channels/api/agent-backend.ts",
+      "name": "MIN_CHAT_COMPLETION_TIMEOUT_MS",
+      "value": "1_000"
+    },
+    {
+      "file": "src/channels/api/gateway-runtime.ts",
+      "name": "AGENT_CHAT_TURN_TIMEOUT_HEADROOM_MS",
+      "value": "1_000"
+    },
+    {
+      "file": "src/channels/api/gateway-runtime.ts",
+      "name": "DEFAULT_GATEWAY_CHAT_REQUEST_TIMEOUT_MS",
+      "value": "95_000"
+    },
+    {
+      "file": "src/channels/api/gateway-runtime.ts",
+      "name": "GATEWAY_CHAT_REQUEST_TIMEOUT_BUFFER_MS",
+      "value": "5_000"
+    },
+    {
+      "file": "src/channels/api/request-validation.ts",
+      "name": "MAX_CHAT_COMPLETION_TOKENS",
+      "value": "1_000_000"
+    },
+    {
+      "file": "src/channels/api/request-validation.ts",
+      "name": "MAX_CONTENT_PARTS",
+      "value": "256"
+    },
+    {
+      "file": "src/channels/api/request-validation.ts",
+      "name": "MAX_FILE_DATA_CHARS",
+      "value": "22_400_000"
+    },
+    {
+      "file": "src/channels/api/request-validation.ts",
+      "name": "MAX_FILE_NAME_CHARS",
+      "value": "512"
+    },
+    {
+      "file": "src/channels/api/request-validation.ts",
+      "name": "MAX_LOGIT_BIAS_KEYS",
+      "value": "10_000"
+    },
+    {
+      "file": "src/channels/api/request-validation.ts",
+      "name": "MAX_MESSAGE_COUNT",
+      "value": "1_000"
+    },
+    {
+      "file": "src/channels/api/request-validation.ts",
+      "name": "MAX_N",
+      "value": "128"
+    },
+    {
+      "file": "src/channels/api/request-validation.ts",
+      "name": "MAX_SEED_ABS",
+      "value": "9_007_199_254_740_991"
+    },
+    {
+      "file": "src/channels/api/request-validation.ts",
+      "name": "MAX_STOP_SEQUENCES",
+      "value": "64"
+    },
+    {
+      "file": "src/channels/api/server.ts",
+      "name": "TELEMETRY_MAX_SKEW_MS",
+      "value": "5 * 60_000"
+    },
+    {
+      "file": "src/channels/api/server.ts",
+      "name": "TELEMETRY_PAYLOAD_MAX_ARRAY_LENGTH",
+      "value": "16"
+    },
+    {
+      "file": "src/channels/api/server.ts",
+      "name": "TELEMETRY_PAYLOAD_MAX_BYTES",
+      "value": "16 * 1024"
+    },
+    {
+      "file": "src/channels/api/server.ts",
+      "name": "TELEMETRY_PAYLOAD_MAX_DEPTH",
+      "value": "6"
+    },
+    {
+      "file": "src/channels/api/server.ts",
+      "name": "TELEMETRY_PAYLOAD_MAX_KEYS",
+      "value": "64"
+    },
+    {
+      "file": "src/channels/api/server.ts",
+      "name": "TELEMETRY_PAYLOAD_MAX_STRING_LENGTH",
+      "value": "2_048"
+    },
+    {
+      "file": "src/channels/api/server.ts",
+      "name": "TELEMETRY_PAYLOAD_NUMERIC_VECTOR_THRESHOLD",
+      "value": "8"
+    },
+    {
+      "file": "src/channels/api/server/companion-relay-routes.ts",
+      "name": "APPROVAL_DECISION_MAX_BODY_BYTES",
+      "value": "16 * 1024"
+    },
+    {
+      "file": "src/channels/api/server/companion-relay-routes.ts",
+      "name": "SSE_HEARTBEAT_INTERVAL_MS",
+      "value": "25_000"
+    },
+    {
+      "file": "src/channels/api/server/companion-touch-stimulus-route.ts",
+      "name": "TOUCH_STIMULUS_MAX_BODY_BYTES",
+      "value": "16 * 1024"
+    },
+    {
+      "file": "src/channels/api/server/http.ts",
+      "name": "DEFAULT_CHAT_REQUEST_TIMEOUT_MS",
+      "value": "90_000"
+    },
+    {
+      "file": "src/channels/api/server/http.ts",
+      "name": "MAX_BODY_SIZE",
+      "value": "1_048_576"
+    },
+    {
+      "file": "src/channels/api/server/session.ts",
+      "name": "MAX_INLINE_CHAT_FILES",
+      "value": "4"
+    },
+    {
+      "file": "src/channels/api/server/session.ts",
+      "name": "MAX_INLINE_CHAT_IMAGES",
+      "value": "4"
+    },
+    {
+      "file": "src/channels/api/voice-websocket-runtime.ts",
+      "name": "DEFAULT_VOICE_WS_MAX_FRAME_BYTES",
+      "value": "256 * 1024"
+    },
+    {
+      "file": "src/channels/api/voice-websocket-runtime.ts",
+      "name": "DEFAULT_VOICE_WS_MAX_PENDING_FRAMES",
+      "value": "32"
+    },
+    {
+      "file": "src/channels/api/voice-websocket-runtime.ts",
+      "name": "DEFAULT_VOICE_WS_SESSION_TIMEOUT_MS",
+      "value": "30_000"
+    },
+    {
+      "file": "src/channels/backplane/companion-relay/redaction.ts",
+      "name": "MAX_CONTEXT_LENGTH",
+      "value": "280"
+    },
+    {
+      "file": "src/channels/backplane/companion-relay/redaction.ts",
+      "name": "MAX_ID_LENGTH",
+      "value": "160"
+    },
+    {
+      "file": "src/channels/backplane/companion-relay/redaction.ts",
+      "name": "MAX_LABEL_LENGTH",
+      "value": "120"
+    },
+    {
+      "file": "src/channels/backplane/companion-relay/redaction.ts",
+      "name": "MAX_MEDIA_TYPE_LENGTH",
+      "value": "100"
+    },
+    {
+      "file": "src/channels/backplane/companion-relay/redaction.ts",
+      "name": "MAX_PROVENANCE_LENGTH",
+      "value": "120"
+    },
+    {
+      "file": "src/channels/backplane/companion-relay/redaction.ts",
+      "name": "MAX_TITLE_LENGTH",
+      "value": "160"
+    },
+    {
+      "file": "src/channels/backplane/companion-relay/redaction.ts",
+      "name": "MAX_TOOL_NAME_LENGTH",
+      "value": "120"
+    },
+    {
+      "file": "src/channels/backplane/companion-relay/relay.ts",
+      "name": "DEFAULT_MAX_ARTIFACT_PREVIEW_BYTES",
+      "value": "5 * 1024 * 1024"
+    },
+    {
+      "file": "src/channels/backplane/companion-relay/relay.ts",
+      "name": "MAX_PREVIEW_REGISTRY_ENTRIES",
+      "value": "500"
+    },
+    {
+      "file": "src/channels/backplane/companion-relay/relay.ts",
+      "name": "MAX_SUBSCRIBERS",
+      "value": "32"
+    },
+    {
+      "file": "src/channels/backplane/config.ts",
+      "name": "DEFAULT_TELEGRAM_POLL_INTERVAL_MS",
+      "value": "1_000"
+    },
+    {
+      "file": "src/channels/backplane/http/auth.ts",
+      "name": "MIN_SATELLITE_API_KEY_LENGTH",
+      "value": "16"
+    },
+    {
+      "file": "src/channels/backplane/http/client-cert.ts",
+      "name": "MIN_TRUSTED_PROXY_TOKEN_LENGTH",
+      "value": "32"
+    },
+    {
+      "file": "src/channels/backplane/http/primitives.ts",
+      "name": "MIN_COMPRESSED_JSON_BYTES",
+      "value": "1024"
+    },
+    {
+      "file": "src/channels/backplane/safe-remote-fetch.ts",
+      "name": "MAX_REDIRECT_HOPS",
+      "value": "3"
+    },
+    {
+      "file": "src/channels/backplane/safe-remote-fetch.ts",
+      "name": "REMOTE_FETCH_TIMEOUT_MS",
+      "value": "30_000"
+    },
+    {
+      "file": "src/channels/discord/adapter.ts",
+      "name": "DISCORD_LISTEN_WINDOW_MAX_MS",
+      "value": "600_000"
+    },
+    {
+      "file": "src/channels/discord/adapter.ts",
+      "name": "DISCORD_LISTEN_WINDOW_MIN_MS",
+      "value": "10_000"
+    },
+    {
+      "file": "src/channels/discord/adapter.ts",
+      "name": "DISCORD_OUTBOUND_MEDIA_MAX_BYTES",
+      "value": "25 * 1024 * 1024"
+    },
+    {
+      "file": "src/channels/discord/adapter.ts",
+      "name": "LONG_RUNNING_STATUS_INITIAL_DELAY_MS",
+      "value": "12_000"
+    },
+    {
+      "file": "src/channels/discord/adapter.ts",
+      "name": "LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS",
+      "value": "20_000"
+    },
+    {
+      "file": "src/channels/discord/adapter.ts",
+      "name": "MAX_DISCORD_LENGTH",
+      "value": "2000"
+    },
+    {
+      "file": "src/channels/discord/adapter.ts",
+      "name": "STARTUP_BACKFILL_LIMIT",
+      "value": "100"
+    },
+    {
+      "file": "src/channels/discord/adapter.ts",
+      "name": "TYPING_INTERVAL_MS",
+      "value": "9_000"
+    },
+    {
+      "file": "src/channels/discord/attachments.ts",
+      "name": "DISCORD_MAX_DOCUMENT_ATTACHMENTS_PER_MESSAGE",
+      "value": "4"
+    },
+    {
+      "file": "src/channels/discord/attachments.ts",
+      "name": "DISCORD_MAX_IMAGE_ATTACHMENT_BYTES",
+      "value": "8 * 1024 * 1024"
+    },
+    {
+      "file": "src/channels/discord/attachments.ts",
+      "name": "DISCORD_MAX_IMAGE_ATTACHMENTS_PER_MESSAGE",
+      "value": "4"
+    },
+    {
+      "file": "src/channels/discord/voice-types.ts",
+      "name": "DECRYPT_RECOVERY_COOLDOWN_MS",
+      "value": "1_500"
+    },
+    {
+      "file": "src/channels/discord/voice-types.ts",
+      "name": "DECRYPT_RECOVERY_MAX_REJOINS",
+      "value": "3"
+    },
+    {
+      "file": "src/channels/discord/voice-types.ts",
+      "name": "MIN_PCM_BYTES",
+      "value": "32_000"
+    },
+    {
+      "file": "src/channels/discord/voice-types.ts",
+      "name": "STREAM_ERROR_MAX_FAILURES",
+      "value": "10"
+    },
+    {
+      "file": "src/channels/telegram/adapter.ts",
+      "name": "DEFAULT_LONG_POLL_TIMEOUT_SECONDS",
+      "value": "20"
+    },
+    {
+      "file": "src/channels/telegram/adapter.ts",
+      "name": "DEFAULT_TYPING_INTERVAL_MS",
+      "value": "4_000"
+    },
+    {
+      "file": "src/channels/telegram/adapter.ts",
+      "name": "LONG_RUNNING_STATUS_INITIAL_DELAY_MS",
+      "value": "12_000"
+    },
+    {
+      "file": "src/channels/telegram/adapter.ts",
+      "name": "LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS",
+      "value": "20_000"
+    },
+    {
+      "file": "src/channels/telegram/adapter.ts",
+      "name": "MAX_CONTEXT_MAP_SIZE",
+      "value": "2_000"
+    },
+    {
+      "file": "src/channels/telegram/adapter.ts",
+      "name": "MAX_POLL_BACKOFF_MS",
+      "value": "30_000"
+    },
+    {
+      "file": "src/channels/telegram/adapter.ts",
+      "name": "TELEGRAM_MAX_INLINE_IMAGE_BYTES",
+      "value": "8 * 1024 * 1024"
+    },
+    {
+      "file": "src/channels/telegram/adapter.ts",
+      "name": "TELEGRAM_TEXT_LIMIT",
+      "value": "4_096"
+    },
+    {
+      "file": "src/channels/telegram/adapter.ts",
+      "name": "TELEGRAM_WEBHOOK_MAX_BODY_BYTES",
+      "value": "512 * 1_024"
+    },
+    {
+      "file": "src/core/agent/completion-handoff.ts",
+      "name": "MAX_SUMMARY_CHARS",
+      "value": "700"
+    },
+    {
+      "file": "src/core/agent/completion-handoff.ts",
+      "name": "MAX_TRACKED_DEDUPE_KEYS",
+      "value": "4096"
+    },
+    {
+      "file": "src/core/agent/completion-notices.ts",
+      "name": "MAX_NOTICE_SUMMARY_CHARS",
+      "value": "160"
+    },
+    {
+      "file": "src/core/agent/completion-notices.ts",
+      "name": "MAX_NOTICES_PER_CHANNEL",
+      "value": "8"
+    },
+    {
+      "file": "src/core/agent/fatigue/adaptive-tuning.ts",
+      "name": "DEFAULT_MIN_EVENTS",
+      "value": "4"
+    },
+    {
+      "file": "src/core/agent/messages.ts",
+      "name": "MAX_MIRROR_RENDER_CHARS",
+      "value": "180"
+    },
+    {
+      "file": "src/core/agent/no-reply-tool.ts",
+      "name": "MAX_NO_REPLY_REASON_LENGTH",
+      "value": "500"
+    },
+    {
+      "file": "src/core/agent/perception/identity-claim-resolver.ts",
+      "name": "DEFAULT_IDENTITY_CLAIM_CONFIDENCE_THRESHOLD",
+      "value": "0.6"
+    },
+    {
+      "file": "src/core/agent/perception/sensor-cognition-bridge.ts",
+      "name": "IDENTITY_CLAIM_MAX_DEPTH",
+      "value": "4"
+    },
+    {
+      "file": "src/core/agent/perception/sensor-cognition-bridge.ts",
+      "name": "MAX_SEEN_EVENT_KEYS",
+      "value": "1_024"
+    },
+    {
+      "file": "src/core/agent/substrate-agent.ts",
+      "name": "DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL",
+      "value": "5"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/bounded-subagent-contract.ts",
+      "name": "DEFAULT_BOUNDED_SUBAGENT_LAUNCH_MAX_PARALLEL",
+      "value": "5"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/bounded-subagent-contract.ts",
+      "name": "DEFAULT_BOUNDED_SUBAGENT_LAUNCH_MAX_TURNS",
+      "value": "1"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/emotion-self-model-runtime.ts",
+      "name": "MIN_TOP_EMOTION_SCORE",
+      "value": "0.05"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/runtime-context-sections/conversation-state.ts",
+      "name": "PARTICIPANT_RELATIONSHIP_LIMIT",
+      "value": "5"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/runtime-context-sections/conversation-state.ts",
+      "name": "RECENT_ACTIVE_PARTICIPANT_LIMIT",
+      "value": "5"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/runtime-context.ts",
+      "name": "SCRATCHPAD_PROMPT_MAX_ENTRIES",
+      "value": "8"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/runtime-context.ts",
+      "name": "SCRATCHPAD_PROMPT_MAX_ENTRY_CHARS",
+      "value": "240"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/runtime-context.ts",
+      "name": "SCRATCHPAD_PROMPT_MAX_TOTAL_CHARS",
+      "value": "1_600"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/runtime-context.ts",
+      "name": "SCRATCHPAD_PROMPT_SCAN_LIMIT",
+      "value": "64"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/tool-orchestration-runtime.ts",
+      "name": "DEFAULT_PARALLEL_READ_MAX",
+      "value": "3"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/turn-execution/agent-invocation.ts",
+      "name": "VISION_RECOVERY_REPLAY_MAX_ATTEMPTS",
+      "value": "3"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/turn-execution/agent-invocation.ts",
+      "name": "VISION_TURN_TIMEOUT_MS",
+      "value": "120_000"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/turn-execution/pre-turn-state.ts",
+      "name": "MEMORY_RETRIEVAL_QUERY_MAX_CHARS",
+      "value": "6_000"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/turn-execution/pre-turn-state.ts",
+      "name": "MEMORY_RETRIEVAL_RECENT_ENTRY_LIMIT",
+      "value": "6"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/turn-execution/pre-turn-state.ts",
+      "name": "MEMORY_RETRIEVAL_RECENT_ENTRY_MAX_CHARS",
+      "value": "700"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/turn-execution/prompt-cache-runtime.ts",
+      "name": "MAX_TRACKED_SCOPES",
+      "value": "256"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/turn-support-runtime.ts",
+      "name": "DEFAULT_POST_TURN_DRAIN_TIMEOUT_MS",
+      "value": "5_000"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/vision-attachments.ts",
+      "name": "DEDICATED_VISION_REVIEW_MAX_ATTEMPTS",
+      "value": "3"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/vision-attachments.ts",
+      "name": "VISION_ATTACHMENT_MAX_BYTES",
+      "value": "8 * 1024 * 1024"
+    },
+    {
+      "file": "src/core/agent/substrate-agent/vision-attachments.ts",
+      "name": "VISION_ATTACHMENT_MAX_COUNT",
+      "value": "4"
+    },
+    {
+      "file": "src/core/agent/tool-call-correction.ts",
+      "name": "MAX_ECHOED_CATALOG_NAMES",
+      "value": "24"
+    },
+    {
+      "file": "src/core/agent/tool-catalog.ts",
+      "name": "TOOL_LISTING_DESCRIPTION_MAX_CHARS",
+      "value": "160"
+    },
+    {
+      "file": "src/core/agent/tool-conformance/harness.ts",
+      "name": "DEFAULT_PER_PROBE_TIMEOUT_MS",
+      "value": "5_000"
+    },
+    {
+      "file": "src/core/agent/tool-conformance/harness.ts",
+      "name": "MAX_ERROR_CHARS",
+      "value": "500"
+    },
+    {
+      "file": "src/core/agent/tool-conformance/store.ts",
+      "name": "TOOL_CONFORMANCE_HISTORY_LIMIT",
+      "value": "20"
+    },
+    {
+      "file": "src/core/agent/tool-suggestion.ts",
+      "name": "DEFAULT_TOOL_SUGGESTION_LIMIT",
+      "value": "5"
+    },
+    {
+      "file": "src/core/agent/tool-suggestion.ts",
+      "name": "MAX_TOOL_SUGGESTION_LIMIT",
+      "value": "12"
+    },
+    {
+      "file": "src/core/agent/tool-suggestion.ts",
+      "name": "MIN_CONFIDENT_MATCH_SCORE",
+      "value": "18"
+    },
+    {
+      "file": "src/core/agent/tool-surface/turn-record-usage-source.ts",
+      "name": "DEFAULT_MAX_TURN_RECORDS_PER_CHANNEL",
+      "value": "5_000"
+    },
+    {
+      "file": "src/core/agent/tool-surface/turn-record-usage-source.ts",
+      "name": "DEFAULT_MAX_TURN_RECORDS_TOTAL",
+      "value": "50_000"
+    },
+    {
+      "file": "src/core/agent/turn-limits.ts",
+      "name": "AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN",
+      "value": "36"
+    },
+    {
+      "file": "src/core/agent/turn-limits.ts",
+      "name": "PARENT_TURN_MAX_WALL_TIME_MS",
+      "value": "5 * 60_000"
+    },
+    {
+      "file": "src/core/cogsec/canary/egress-scan.ts",
+      "name": "MAX_DEPTH",
+      "value": "8"
+    },
+    {
+      "file": "src/core/cogsec/canary/egress-scan.ts",
+      "name": "MAX_NODES",
+      "value": "4096"
+    },
+    {
+      "file": "src/core/cogsec/canary/egress-scan.ts",
+      "name": "MAX_SCANNED_BYTES",
+      "value": "4 * 1024 * 1024"
+    },
+    {
+      "file": "src/core/cogsec/drift/drift-evidence-adapters.ts",
+      "name": "MEMORY_SCAN_LIMIT",
+      "value": "512"
+    },
+    {
+      "file": "src/core/cogsec/drift/drift-evidence-adapters.ts",
+      "name": "RETRIEVAL_SCAN_LIMIT",
+      "value": "4096"
+    },
+    {
+      "file": "src/core/cogsec/drift/drift-evidence-adapters.ts",
+      "name": "VALENCE_SERIES_LIMIT",
+      "value": "64"
+    },
+    {
+      "file": "src/core/cogsec/drift/drift-review-card-store.ts",
+      "name": "MAX_RESOLVED_ENTRIES",
+      "value": "200"
+    },
+    {
+      "file": "src/core/cogsec/drift/second-arrow-evidence-adapters.ts",
+      "name": "MEMORY_EMBEDDING_SCAN_LIMIT",
+      "value": "4096"
+    },
+    {
+      "file": "src/core/cogsec/drift/second-arrow-evidence-adapters.ts",
+      "name": "NEAR_DUPLICATE_REVIEW_SCAN_LIMIT",
+      "value": "1024"
+    },
+    {
+      "file": "src/core/cogsec/drift/second-arrow-evidence-adapters.ts",
+      "name": "VALENCE_SERIES_LIMIT",
+      "value": "64"
+    },
+    {
+      "file": "src/core/cogsec/drift/second-arrow-signals.ts",
+      "name": "TOPIC_LABEL_MAX_CHARS",
+      "value": "140"
+    },
+    {
+      "file": "src/core/cogsec/intake/marking.ts",
+      "name": "ELEVATED_SCORE_THRESHOLD",
+      "value": "0.5"
+    },
+    {
+      "file": "src/core/cogsec/intake/marking.ts",
+      "name": "FLAGGED_SCORE_THRESHOLD",
+      "value": "0.8"
+    },
+    {
+      "file": "src/core/cogsec/intake/marking.ts",
+      "name": "NOTED_SCORE_THRESHOLD",
+      "value": "0.25"
+    },
+    {
+      "file": "src/core/cogsec/intake/quarantine-store.ts",
+      "name": "INTAKE_QUARANTINE_MAX_RAW_CHARS",
+      "value": "400_000"
+    },
+    {
+      "file": "src/core/cogsec/intake/quarantine-store.ts",
+      "name": "MAX_TERMINAL_ENTRIES",
+      "value": "200"
+    },
+    {
+      "file": "src/core/cogsec/intake/scanners/encoding-smuggling.ts",
+      "name": "MAX_BLOBS_EXAMINED",
+      "value": "8"
+    },
+    {
+      "file": "src/core/cogsec/intake/scanners/encoding-smuggling.ts",
+      "name": "TEXTLIKE_MIN_BYTES",
+      "value": "24"
+    },
+    {
+      "file": "src/core/cogsec/intake/scanners/index.ts",
+      "name": "MAX_EXTRACTED_FIELDS",
+      "value": "64"
+    },
+    {
+      "file": "src/core/cogsec/intake/scanners/index.ts",
+      "name": "MAX_EXTRACTED_KEY_CHARS",
+      "value": "128"
+    },
+    {
+      "file": "src/core/cogsec/intake/scanners/index.ts",
+      "name": "MAX_EXTRACTED_VALUE_CHARS",
+      "value": "4_096"
+    },
+    {
+      "file": "src/core/cogsec/intake/scanners/proximity.ts",
+      "name": "MAX_BOUNDED_QUANTIFIER",
+      "value": "4_096"
+    },
+    {
+      "file": "src/core/cogsec/intake/scanners/proximity.ts",
+      "name": "MAX_FILLER_WORDS",
+      "value": "16"
+    },
+    {
+      "file": "src/core/cogsec/intake/scanners/proximity.ts",
+      "name": "MAX_PROXIMITY_GAP_CHARS",
+      "value": "4_096"
+    },
+    {
+      "file": "src/core/cogsec/intake/scanners/proximity.ts",
+      "name": "MAX_RULE_PATTERN_CHARS",
+      "value": "600"
+    },
+    {
+      "file": "src/core/cogsec/intake/scanners/rule-engine.ts",
+      "name": "MAX_RULES",
+      "value": "512"
+    },
+    {
+      "file": "src/core/cogsec/intake/scanners/secrets-pii.ts",
+      "name": "MAX_MATCHES_PER_DETECTOR",
+      "value": "16"
+    },
+    {
+      "file": "src/core/cogsec/intake/scanners/types.ts",
+      "name": "MAX_SCAN_CHARS",
+      "value": "65_536"
+    },
+    {
+      "file": "src/core/cogsec/intake/scanners/urls.ts",
+      "name": "MAX_EXTRACTED_URLS_CHARS",
+      "value": "4_096"
+    },
+    {
+      "file": "src/core/cogsec/intake/scanners/urls.ts",
+      "name": "MAX_URLS_EXAMINED",
+      "value": "32"
+    },
+    {
+      "file": "src/core/contacts/pending-contact-approvals.ts",
+      "name": "DEFAULT_MAX_PREVIEW_LENGTH",
+      "value": "160"
+    },
+    {
+      "file": "src/core/contacts/pending-contact-approvals.ts",
+      "name": "DEFAULT_MAX_PREVIEWS",
+      "value": "3"
+    },
+    {
+      "file": "src/core/contacts/relationship-tools.ts",
+      "name": "RELATIONSHIP_SIGNAL_TIME_SERIES_LIMIT",
+      "value": "64"
+    },
+    {
+      "file": "src/core/contacts/store/emotional-baseline.ts",
+      "name": "DEFAULT_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT",
+      "value": "8"
+    },
+    {
+      "file": "src/core/contacts/store/emotional-baseline.ts",
+      "name": "MAX_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT",
+      "value": "64"
+    },
+    {
+      "file": "src/core/contacts/trust-drift-review-lane.ts",
+      "name": "SIGNAL_TIME_SERIES_LIMIT",
+      "value": "64"
+    },
+    {
+      "file": "src/core/contacts/trust-drift-signals.ts",
+      "name": "BOUNDARY_BREACH_VALENCE_MAX",
+      "value": "-0.4"
+    },
+    {
+      "file": "src/core/contacts/trust-drift-signals.ts",
+      "name": "NEGATIVE_INTERACTION_VALENCE_MAX",
+      "value": "-0.15"
+    },
+    {
+      "file": "src/core/contacts/trust-drift-signals.ts",
+      "name": "POSITIVE_INTERACTION_VALENCE_MIN",
+      "value": "0.15"
+    },
+    {
+      "file": "src/core/contacts/trust-drift-signals.ts",
+      "name": "SCORE_TIME_SERIES_LIMIT",
+      "value": "64"
+    },
+    {
+      "file": "src/core/contacts/trust-drift-signals.ts",
+      "name": "SIGNAL_CONFIDENCE_MIN",
+      "value": "0.35"
+    },
+    {
+      "file": "src/core/contacts/types.ts",
+      "name": "DEFAULT_KNOWN_ROOMS_LIMIT",
+      "value": "100"
+    },
+    {
+      "file": "src/core/contacts/types.ts",
+      "name": "DEFAULT_ROOM_ROSTER_LIMIT",
+      "value": "50"
+    },
+    {
+      "file": "src/core/contacts/types.ts",
+      "name": "MAX_KNOWN_ROOMS_LIMIT",
+      "value": "500"
+    },
+    {
+      "file": "src/core/contacts/types.ts",
+      "name": "MAX_ROOM_ROSTER_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/core/emotion/acac.ts",
+      "name": "MAX_RATIONALE_LENGTH",
+      "value": "500"
+    },
+    {
+      "file": "src/core/emotion/appraisal.ts",
+      "name": "DEFAULT_MAX_CHAIN_ENTRIES",
+      "value": "20"
+    },
+    {
+      "file": "src/core/emotion/appraisal.ts",
+      "name": "DEFAULT_MAX_MESSAGE_CHARS",
+      "value": "240"
+    },
+    {
+      "file": "src/core/emotion/appraisal.ts",
+      "name": "DEFAULT_MAX_SUMMARY_CHARS",
+      "value": "900"
+    },
+    {
+      "file": "src/core/emotion/appraisal.ts",
+      "name": "DEFAULT_TURN_CADENCE",
+      "value": "5"
+    },
+    {
+      "file": "src/core/emotion/appraisal.ts",
+      "name": "DEFAULT_VAD_DELTA_THRESHOLD",
+      "value": "0.35"
+    },
+    {
+      "file": "src/core/emotion/appraisal.ts",
+      "name": "MAX_TRAIT_COUNT",
+      "value": "16"
+    },
+    {
+      "file": "src/core/emotion/observer.ts",
+      "name": "DEFAULT_EMOTION_OBSERVER_MAX_TEXT_LENGTH",
+      "value": "2_000"
+    },
+    {
+      "file": "src/core/emotion/participant-trends.ts",
+      "name": "DISCRETE_LABEL_CAP",
+      "value": "16"
+    },
+    {
+      "file": "src/core/emotion/telemetry-validation.ts",
+      "name": "DEFAULT_MIN_CONFIDENCE",
+      "value": "0.35"
+    },
+    {
+      "file": "src/core/emotion/telemetry-validation.ts",
+      "name": "DISCRETE_CONFLICT_THRESHOLD",
+      "value": "0.35"
+    },
+    {
+      "file": "src/core/eval/observer-sidecar/config.ts",
+      "name": "OBSERVER_EVAL_LEVER_MIN_RETENTION_DAYS",
+      "value": "90"
+    },
+    {
+      "file": "src/core/eval/observer-sidecar/crosswalk.ts",
+      "name": "DEFAULT_OBSERVER_CROSSWALK_EMOTION_THRESHOLD",
+      "value": "0.05"
+    },
+    {
+      "file": "src/core/eval/observer-sidecar/emosim-adapter.ts",
+      "name": "DEFAULT_EMOSIM_TIMEOUT_MS",
+      "value": "5_000"
+    },
+    {
+      "file": "src/core/eval/observer-sidecar/emosim-server-adapter.ts",
+      "name": "DEFAULT_EMOSIM_AFTER_TICK_DELAY_MS",
+      "value": "750"
+    },
+    {
+      "file": "src/core/eval/observer-sidecar/metrics.ts",
+      "name": "LOW_PROJECTION_CONFIDENCE_THRESHOLD",
+      "value": "0.45"
+    },
+    {
+      "file": "src/core/eval/observer-sidecar/persistence.ts",
+      "name": "DEFAULT_QUERY_LIMIT",
+      "value": "100"
+    },
+    {
+      "file": "src/core/eval/observer-sidecar/persistence.ts",
+      "name": "MAX_QUERY_LIMIT",
+      "value": "1_001"
+    },
+    {
+      "file": "src/core/eval/observer-sidecar/queue.ts",
+      "name": "DEFAULT_MAX_QUEUED_TURNS",
+      "value": "32"
+    },
+    {
+      "file": "src/core/eval/observer-sidecar/queue.ts",
+      "name": "DEFAULT_MAX_RETRIES",
+      "value": "0"
+    },
+    {
+      "file": "src/core/eval/observer-sidecar/queue.ts",
+      "name": "DEFAULT_OBSERVER_TIMEOUT_MS",
+      "value": "5_000"
+    },
+    {
+      "file": "src/core/eval/observer-sidecar/queue.ts",
+      "name": "DEFAULT_RETRY_DELAY_MS",
+      "value": "0"
+    },
+    {
+      "file": "src/core/eval/observer-sidecar/queue.ts",
+      "name": "DEFAULT_SHUTDOWN_DRAIN_TIMEOUT_MS",
+      "value": "5_000"
+    },
+    {
+      "file": "src/core/icp/initiation-candidate.ts",
+      "name": "MAX_ICP_CANDIDATE_REASON_CHARS",
+      "value": "1_000"
+    },
+    {
+      "file": "src/core/icp/initiation-candidate.ts",
+      "name": "MAX_ICP_CANDIDATE_TTL_MS",
+      "value": "7 * 24 * 60 * 60_000"
+    },
+    {
+      "file": "src/core/icp/initiation-source-runtime.ts",
+      "name": "ICP_INITIATION_RETRY_COOLDOWN_MS",
+      "value": "5 * 60_000"
+    },
+    {
+      "file": "src/core/icp/initiation-source-runtime.ts",
+      "name": "MAX_ICP_INITIATION_RETRY_ATTEMPTS",
+      "value": "3"
+    },
+    {
+      "file": "src/core/icp/initiation-source-runtime.ts",
+      "name": "MAX_SOURCE_RECORD_ID_CHARS",
+      "value": "1_024"
+    },
+    {
+      "file": "src/core/identity/card-versioning.ts",
+      "name": "MAX_SAFE_REMAINING_RATIO",
+      "value": "0.6"
+    },
+    {
+      "file": "src/core/identity/card-versioning.ts",
+      "name": "MIN_DESTRUCTIVE_REPLACE_REMOVED_CHARS",
+      "value": "200"
+    },
+    {
+      "file": "src/core/identity/card-versioning.ts",
+      "name": "MIN_DESTRUCTIVE_REPLACE_SOURCE_LENGTH",
+      "value": "400"
+    },
+    {
+      "file": "src/core/identity/importer.ts",
+      "name": "LOREBOOK_KEYWORD_LIMIT",
+      "value": "6"
+    },
+    {
+      "file": "src/core/identity/persona-preamble.ts",
+      "name": "DEFAULT_MAX_PERSONA_SUMMARY_CHARS",
+      "value": "320"
+    },
+    {
+      "file": "src/core/identity/persona-preamble.ts",
+      "name": "DEFAULT_MAX_PERSONA_SUMMARY_SENTENCES",
+      "value": "2"
+    },
+    {
+      "file": "src/core/identity/prompt-runtime.ts",
+      "name": "CONDITIONAL_RESOLUTION_MAX_ROUNDS",
+      "value": "8"
+    },
+    {
+      "file": "src/core/identity/prompt-runtime.ts",
+      "name": "EMPTY_SECTION_PRUNE_MAX_ROUNDS",
+      "value": "8"
+    },
+    {
+      "file": "src/core/identity/prompt-runtime.ts",
+      "name": "MACRO_VALUE_EXPANSION_MAX_DEPTH",
+      "value": "8"
+    },
+    {
+      "file": "src/core/identity/prompt-runtime.ts",
+      "name": "PROMPT_RUNTIME_RELOAD_INTERVAL_MS",
+      "value": "30000"
+    },
+    {
+      "file": "src/core/identity/prompt-store.ts",
+      "name": "HISTORY_CORRUPTION_DETAIL_LIMIT",
+      "value": "5"
+    },
+    {
+      "file": "src/core/identity/prompt-tools.ts",
+      "name": "DEFAULT_CHANGELOG_LIMIT",
+      "value": "20"
+    },
+    {
+      "file": "src/core/identity/prompt-tools.ts",
+      "name": "DEFAULT_DIFF_LINE_LIMIT",
+      "value": "160"
+    },
+    {
+      "file": "src/core/identity/prompt-tools.ts",
+      "name": "MAX_CHANGELOG_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/core/identity/prompt-tools.ts",
+      "name": "MAX_DIFF_LINE_LIMIT",
+      "value": "1_000"
+    },
+    {
+      "file": "src/core/identity/system-language-contracts.ts",
+      "name": "SYSTEM_LANGUAGE_MAX_TEMPLATE_CHARS",
+      "value": "800"
+    },
+    {
+      "file": "src/core/intention/appraisal/concern-matching.ts",
+      "name": "RECENT_RESOLVED_CONCERN_SNAPSHOT_LIMIT",
+      "value": "3"
+    },
+    {
+      "file": "src/core/intention/appraisal/types.ts",
+      "name": "DEFAULT_EMOTIONAL_SHIFT_THRESHOLD",
+      "value": "0.35"
+    },
+    {
+      "file": "src/core/intention/appraisal/types.ts",
+      "name": "DEFAULT_FOLLOW_UP_PENDING_DELAY_MS",
+      "value": "5 * 60 * 1_000"
+    },
+    {
+      "file": "src/core/intention/appraisal/types.ts",
+      "name": "DEFAULT_MAX_CONCERN_COUNT",
+      "value": "8"
+    },
+    {
+      "file": "src/core/intention/appraisal/types.ts",
+      "name": "DEFAULT_MAX_DECISIONS",
+      "value": "4"
+    },
+    {
+      "file": "src/core/intention/appraisal/types.ts",
+      "name": "DEFAULT_MAX_MESSAGE_CHARS",
+      "value": "400"
+    },
+    {
+      "file": "src/core/intention/care-reminders.ts",
+      "name": "DEFAULT_LIST_LIMIT",
+      "value": "64"
+    },
+    {
+      "file": "src/core/intention/care-reminders.ts",
+      "name": "MAX_ID_CHARS",
+      "value": "128"
+    },
+    {
+      "file": "src/core/intention/care-reminders.ts",
+      "name": "MAX_LIST_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/core/intention/care-reminders.ts",
+      "name": "MAX_TEXT_CHARS",
+      "value": "500"
+    },
+    {
+      "file": "src/core/intention/care-reminders.ts",
+      "name": "MAX_TITLE_CHARS",
+      "value": "160"
+    },
+    {
+      "file": "src/core/intention/concern-candidates.ts",
+      "name": "DEFAULT_MAX_REVIEW_BATCH",
+      "value": "7"
+    },
+    {
+      "file": "src/core/intention/concern-candidates.ts",
+      "name": "DEFAULT_REVIEW_TURN_INTERVAL",
+      "value": "3"
+    },
+    {
+      "file": "src/core/intention/concern-candidates.ts",
+      "name": "MAX_CANDIDATE_TEXT_CHARS",
+      "value": "500"
+    },
+    {
+      "file": "src/core/intention/concern-candidates.ts",
+      "name": "MAX_CONTEXT_MESSAGES",
+      "value": "12"
+    },
+    {
+      "file": "src/core/intention/concern-candidates.ts",
+      "name": "MAX_RELATED_MEMORIES",
+      "value": "8"
+    },
+    {
+      "file": "src/core/intention/concern-route-adapters.ts",
+      "name": "MAX_ROUTE_TEXT_CHARS",
+      "value": "500"
+    },
+    {
+      "file": "src/core/intention/concern-softening.ts",
+      "name": "MAX_MAX_TEXT_CHARS",
+      "value": "2000"
+    },
+    {
+      "file": "src/core/intention/concern-softening.ts",
+      "name": "MIN_MAX_TEXT_CHARS",
+      "value": "8"
+    },
+    {
+      "file": "src/core/intention/concerns.ts",
+      "name": "CONCERN_DUPLICATE_SIMILARITY_THRESHOLD",
+      "value": "0.72"
+    },
+    {
+      "file": "src/core/intention/concerns.ts",
+      "name": "DEFAULT_LIST_LIMIT",
+      "value": "32"
+    },
+    {
+      "file": "src/core/intention/concerns.ts",
+      "name": "DEFAULT_RECENT_RESOLUTION_LIMIT",
+      "value": "8"
+    },
+    {
+      "file": "src/core/intention/concerns.ts",
+      "name": "DEFAULT_RUNTIME_CONTEXT_LIMIT",
+      "value": "3"
+    },
+    {
+      "file": "src/core/intention/concerns.ts",
+      "name": "MAX_ACTIVE_CONCERN_LIFETIME_MS",
+      "value": "7 * 24 * 60 * 60 * 1000"
+    },
+    {
+      "file": "src/core/intention/concerns.ts",
+      "name": "MAX_ACTIVE_CONCERNS",
+      "value": "7"
+    },
+    {
+      "file": "src/core/intention/concerns.ts",
+      "name": "MAX_CONCERN_REF_CHARS",
+      "value": "240"
+    },
+    {
+      "file": "src/core/intention/concerns.ts",
+      "name": "MAX_CONCERN_RESOLUTION_CHARS",
+      "value": "400"
+    },
+    {
+      "file": "src/core/intention/concerns.ts",
+      "name": "MAX_CONCERN_TEXT_CHARS",
+      "value": "500"
+    },
+    {
+      "file": "src/core/intention/concerns.ts",
+      "name": "MAX_LIST_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/core/intention/patterns.ts",
+      "name": "DEFAULT_LIST_LIMIT",
+      "value": "50"
+    },
+    {
+      "file": "src/core/intention/patterns.ts",
+      "name": "DEFAULT_SUMMARY_LIMIT",
+      "value": "4"
+    },
+    {
+      "file": "src/core/intention/patterns.ts",
+      "name": "MAX_CONTACT_ID_CHARS",
+      "value": "160"
+    },
+    {
+      "file": "src/core/intention/patterns.ts",
+      "name": "MAX_LIST_LIMIT",
+      "value": "500"
+    },
+    {
+      "file": "src/core/intention/patterns.ts",
+      "name": "MAX_MESSAGE_ID_CHARS",
+      "value": "200"
+    },
+    {
+      "file": "src/core/intention/patterns.ts",
+      "name": "MAX_PROMOTION_MEMORY_ID_CHARS",
+      "value": "128"
+    },
+    {
+      "file": "src/core/intention/patterns.ts",
+      "name": "MAX_RESPONSE_EXCERPT_CHARS",
+      "value": "240"
+    },
+    {
+      "file": "src/core/intention/patterns.ts",
+      "name": "MAX_SUMMARY_LIMIT",
+      "value": "12"
+    },
+    {
+      "file": "src/core/intention/pending-follow-ups.ts",
+      "name": "DEFAULT_LIST_LIMIT",
+      "value": "32"
+    },
+    {
+      "file": "src/core/intention/pending-follow-ups.ts",
+      "name": "DEFAULT_PENDING_FOLLOW_UP_ACTIVATION_DELAY_MS",
+      "value": "5 * 60_000"
+    },
+    {
+      "file": "src/core/intention/pending-follow-ups.ts",
+      "name": "DEFAULT_PENDING_FOLLOW_UP_BACKLOG_CAP",
+      "value": "5"
+    },
+    {
+      "file": "src/core/intention/pending-follow-ups.ts",
+      "name": "MAX_ID_CHARS",
+      "value": "128"
+    },
+    {
+      "file": "src/core/intention/pending-follow-ups.ts",
+      "name": "MAX_LIST_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/core/intention/pending-follow-ups.ts",
+      "name": "MAX_QUARANTINE_REASON_CHARS",
+      "value": "1000"
+    },
+    {
+      "file": "src/core/intention/pending-follow-ups.ts",
+      "name": "MAX_QUARANTINE_SOURCE_CHARS",
+      "value": "128"
+    },
+    {
+      "file": "src/core/intention/pending-follow-ups.ts",
+      "name": "MAX_REASON_CHARS",
+      "value": "240"
+    },
+    {
+      "file": "src/core/intention/pending-follow-ups.ts",
+      "name": "MAX_SUMMARY_CHARS",
+      "value": "320"
+    },
+    {
+      "file": "src/core/intention/pending-follow-ups.ts",
+      "name": "MAX_TEXT_CHARS",
+      "value": "500"
+    },
+    {
+      "file": "src/core/intention/pending-follow-ups.ts",
+      "name": "NEGATIVE_MOOD_WAKE_THRESHOLD",
+      "value": "-0.2"
+    },
+    {
+      "file": "src/core/intention/pending-follow-ups.ts",
+      "name": "PENDING_FOLLOW_UP_CAP_SUPERSEDE_SIMILARITY_THRESHOLD",
+      "value": "0.45"
+    },
+    {
+      "file": "src/core/intention/pending-follow-ups.ts",
+      "name": "PENDING_FOLLOW_UP_DEDUPE_SIMILARITY_THRESHOLD",
+      "value": "0.72"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/appraisal-trace-adapter.ts",
+      "name": "MAX_QUARANTINE_REASON_CHARS",
+      "value": "1000"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/appraisal-trace-adapter.ts",
+      "name": "MAX_QUARANTINE_SOURCE_CHARS",
+      "value": "128"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "CONCERN_DUPLICATE_SIMILARITY_THRESHOLD",
+      "value": "0.72"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "DEFAULT_BEHAVIORAL_LIST_LIMIT",
+      "value": "50"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "DEFAULT_BEHAVIORAL_SUMMARY_LIMIT",
+      "value": "4"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "DEFAULT_CONCERN_LIST_LIMIT",
+      "value": "32"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "DEFAULT_PENDING_LIST_LIMIT",
+      "value": "32"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "DEFAULT_RECENT_RESOLUTION_LIMIT",
+      "value": "8"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "MAX_BEHAVIORAL_SUMMARY_LIMIT",
+      "value": "12"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "MAX_CONCERN_RESOLUTION_CHARS",
+      "value": "400"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "MAX_CONCERN_TEXT_CHARS",
+      "value": "500"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "MAX_CONTACT_ID_CHARS",
+      "value": "160"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "MAX_LIST_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "MAX_MESSAGE_ID_CHARS",
+      "value": "200"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "MAX_PENDING_ID_CHARS",
+      "value": "128"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "MAX_PENDING_REASON_CHARS",
+      "value": "240"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "MAX_PENDING_SUMMARY_CHARS",
+      "value": "320"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "MAX_PENDING_TEXT_CHARS",
+      "value": "500"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "MAX_PROMOTION_MEMORY_ID_CHARS",
+      "value": "128"
+    },
+    {
+      "file": "src/core/intention/postgres-adapters/shared.ts",
+      "name": "MAX_RESPONSE_EXCERPT_CHARS",
+      "value": "240"
+    },
+    {
+      "file": "src/core/intention/runtime-wiring.ts",
+      "name": "PENDING_FOLLOW_UP_RESURFACE_LIMIT",
+      "value": "3"
+    },
+    {
+      "file": "src/core/scheduler/ambient-presence.ts",
+      "name": "DEFAULT_AMBIENT_PRESENCE_MIN_IDLE_MS",
+      "value": "3 * 60 * 60_000"
+    },
+    {
+      "file": "src/core/scheduler/ambient-presence.ts",
+      "name": "DEFAULT_AMBIENT_PRESENCE_MIN_NOTE_INTERVAL_MS",
+      "value": "6 * 60 * 60_000"
+    },
+    {
+      "file": "src/core/scheduler/heartbeat-policy.ts",
+      "name": "MAX_INTERVAL_MS",
+      "value": "604_800_000"
+    },
+    {
+      "file": "src/core/scheduler/heartbeat-policy.ts",
+      "name": "MAX_PROMPT_LENGTH",
+      "value": "2000"
+    },
+    {
+      "file": "src/core/scheduler/heartbeat-policy.ts",
+      "name": "MAX_TEMPLATES",
+      "value": "20"
+    },
+    {
+      "file": "src/core/scheduler/heartbeat-policy.ts",
+      "name": "MIN_INTERVAL_MS",
+      "value": "300_000"
+    },
+    {
+      "file": "src/core/scheduler/heartbeat-policy.ts",
+      "name": "MIN_PROMPT_LENGTH",
+      "value": "10"
+    },
+    {
+      "file": "src/core/scheduler/heartbeat-post-turn-runtime.ts",
+      "name": "INTENTION_FOLLOW_UP_ACTIVATION_MIN_INTERVAL_MS",
+      "value": "5 * 60_000"
+    },
+    {
+      "file": "src/core/scheduler/heartbeat-template-runtime.ts",
+      "name": "MIN_SCHEDULED_TEMPLATE_GAP_MS",
+      "value": "60_000"
+    },
+    {
+      "file": "src/core/scheduler/heartbeat-template-runtime.ts",
+      "name": "TEMPLATE_EXECUTION_BURST_LIMIT",
+      "value": "4"
+    },
+    {
+      "file": "src/core/scheduler/heartbeat-template-runtime.ts",
+      "name": "TEMPLATE_EXECUTION_COOLDOWN_MS",
+      "value": "10 * 60_000"
+    },
+    {
+      "file": "src/core/scheduler/heartbeat-template-runtime/prompt-formatting.ts",
+      "name": "MAX_UNSUPPORTED_CLAIM_FLAGS",
+      "value": "4"
+    },
+    {
+      "file": "src/core/scheduler/heartbeat-template-runtime/reflection-contact-context.ts",
+      "name": "REFLECTION_CONTACT_EMOTIONAL_TIME_SERIES_LIMIT",
+      "value": "8"
+    },
+    {
+      "file": "src/core/scheduler/heartbeat-template-runtime/reflection-contact-context.ts",
+      "name": "REFLECTION_MEMORY_EXTRACTION_DRAIN_TIMEOUT_MS",
+      "value": "2_500"
+    },
+    {
+      "file": "src/core/scheduler/heartbeat-template-runtime/runtime-helpers.ts",
+      "name": "REFLECTION_NOVELTY_ENTRY_SCAN_LIMIT",
+      "value": "50"
+    },
+    {
+      "file": "src/core/scheduler/reflection-guardrail-telemetry.ts",
+      "name": "CLAIM_SNIPPET_MAX_CHARS",
+      "value": "180"
+    },
+    {
+      "file": "src/core/scheduler/reflection-guardrail-telemetry.ts",
+      "name": "REFLECTION_CADENCE_DRIFT_RATIO_THRESHOLD",
+      "value": "4"
+    },
+    {
+      "file": "src/core/scheduler/reflection-guardrail-telemetry.ts",
+      "name": "REFLECTION_GUARDRAIL_RECENT_CHAT_MAX_AGE_MS",
+      "value": "6 * 60 * 60 * 1000"
+    },
+    {
+      "file": "src/core/scheduler/schedule-tool.ts",
+      "name": "DEFAULT_LIST_LIMIT",
+      "value": "32"
+    },
+    {
+      "file": "src/core/scheduler/schedule-tool.ts",
+      "name": "MAX_ABSOLUTE_SCHEDULE_MS",
+      "value": "366 * 24 * 60 * 60_000"
+    },
+    {
+      "file": "src/core/scheduler/schedule-tool.ts",
+      "name": "MAX_DELAY_MINUTES",
+      "value": "10080"
+    },
+    {
+      "file": "src/core/scheduler/schedule-tool.ts",
+      "name": "MAX_LIST_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/core/scheduler/schedule-tool.ts",
+      "name": "MAX_SCHEDULED_TASKS",
+      "value": "50"
+    },
+    {
+      "file": "src/core/scheduler/scheduled-prompts.ts",
+      "name": "DEFAULT_REHYDRATE_LIMIT",
+      "value": "500"
+    },
+    {
+      "file": "src/core/self-model/situated-location.ts",
+      "name": "SITUATED_LOCATION_STALE_THRESHOLD_MS",
+      "value": "6 * 60 * 60 * 1000"
+    },
+    {
+      "file": "src/core/self-model/state.ts",
+      "name": "MAX_SALIENT_ENTITIES",
+      "value": "8"
+    },
+    {
+      "file": "src/core/self-model/state.ts",
+      "name": "MAX_SALIENT_ENTITY_LENGTH",
+      "value": "48"
+    },
+    {
+      "file": "src/core/session/compression-guideline.ts",
+      "name": "DEFAULT_FAILURE_REVIEW_LIMIT",
+      "value": "25"
+    },
+    {
+      "file": "src/core/session/compression-guideline.ts",
+      "name": "DEFAULT_TRAJECTORY_MAX_AGE_MS",
+      "value": "30 * 60_000"
+    },
+    {
+      "file": "src/core/session/compression-guideline.ts",
+      "name": "MAX_CONTEXT_CHARS",
+      "value": "12_000"
+    },
+    {
+      "file": "src/core/session/compression-guideline.ts",
+      "name": "MAX_RESPONSE_CHARS",
+      "value": "3_000"
+    },
+    {
+      "file": "src/core/session/continuity-artifacts.ts",
+      "name": "CONTINUITY_NEXT_ANCHOR_MAX_CHARS",
+      "value": "240"
+    },
+    {
+      "file": "src/core/session/continuity-artifacts.ts",
+      "name": "CONTINUITY_SUMMARY_MAX_CHARS",
+      "value": "800"
+    },
+    {
+      "file": "src/core/session/continuity.ts",
+      "name": "DEFAULT_CONTINUITY_LIMIT",
+      "value": "20"
+    },
+    {
+      "file": "src/core/session/conversation-scope.ts",
+      "name": "CONVERSATION_SCOPE_RECENT_SPEAKER_LIMIT",
+      "value": "5"
+    },
+    {
+      "file": "src/core/session/focus-knowledge.ts",
+      "name": "DEFAULT_KNOWLEDGE_LIST_LIMIT",
+      "value": "8"
+    },
+    {
+      "file": "src/core/session/focus-knowledge.ts",
+      "name": "MAX_FOCUS_EVIDENCE_ITEMS",
+      "value": "32"
+    },
+    {
+      "file": "src/core/session/focus-knowledge.ts",
+      "name": "MAX_FOCUS_EVIDENCE_QUERY_CHARS",
+      "value": "200"
+    },
+    {
+      "file": "src/core/session/focus-knowledge.ts",
+      "name": "MAX_FOCUS_EVIDENCE_SNIPPET_CHARS",
+      "value": "200"
+    },
+    {
+      "file": "src/core/session/focus-knowledge.ts",
+      "name": "MAX_FOCUS_KNOWLEDGE_CHARS",
+      "value": "2_000"
+    },
+    {
+      "file": "src/core/session/focus-knowledge.ts",
+      "name": "MAX_FOCUS_SCOPE_CHARS",
+      "value": "300"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
+      "name": "DEFAULT_CONTINUITY_CONTEXT_LIMIT",
+      "value": "10"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
+      "name": "DEFAULT_EMOTIONAL_SALIENCE_THRESHOLD_PCT",
+      "value": "75"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
+      "name": "DEFAULT_IMPORT_BOOTSTRAP_MAX_TOKENS",
+      "value": "50_000"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
+      "name": "DEFAULT_MAX_HISTORY_SPAN_MS",
+      "value": "36 * 60 * 60 * 1000"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
+      "name": "DEFAULT_SESSION_MIRROR_MAX_CHARS",
+      "value": "220"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
+      "name": "MAX_FALLBACK_RECENT_SUMMARY_ITEM_CHARS",
+      "value": "140"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
+      "name": "MAX_FALLBACK_RECENT_SUMMARY_ITEMS",
+      "value": "4"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
+      "name": "MAX_HISTORY_SUMMARY_ITEM_CHARS",
+      "value": "160"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
+      "name": "MAX_HISTORY_SUMMARY_ITEMS",
+      "value": "6"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
+      "name": "MAX_PRESERVED_EMOTIONAL_ENTRIES",
+      "value": "6"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
+      "name": "MAX_PRESERVED_SAFETY_TAG_CONTENT_CHARS",
+      "value": "240"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
+      "name": "MAX_PRESERVED_SAFETY_TAGS",
+      "value": "8"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
+      "name": "MAX_SUMMARY_SOURCE_TOOL_FAILURE_CHARS",
+      "value": "220"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
+      "name": "MIN_IMPORT_BOOTSTRAP_MAX_TOKENS",
+      "value": "1"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
+      "name": "TEMPORAL_WINDOW_BACKFILL_MAX_AGE_MS",
+      "value": "24 * 60 * 60 * 1000"
+    },
+    {
+      "file": "src/core/session/manager-primitives.ts",
+      "name": "TEMPORAL_WINDOW_MIN_CONVERSATIONAL_ENTRIES",
+      "value": "12"
+    },
+    {
+      "file": "src/core/session/manager.ts",
+      "name": "RECENT_ACTIVE_CHANNEL_PARTNER_SCAN_LIMIT",
+      "value": "128"
+    },
+    {
+      "file": "src/core/session/manager/context-builder.ts",
+      "name": "DEFAULT_ORIENTATION_IDLE_THRESHOLD_MS",
+      "value": "2 * 60 * 60 * 1000"
+    },
+    {
+      "file": "src/core/session/manager/context-builder.ts",
+      "name": "ORIENTATION_SUMMARY_MAX_CHARS",
+      "value": "180"
+    },
+    {
+      "file": "src/core/session/manager/context-history-assembly.ts",
+      "name": "MIN_HISTORY_SUMMARY_TOKEN_BUDGET",
+      "value": "32"
+    },
+    {
+      "file": "src/core/session/manager/focus-session-runtime.ts",
+      "name": "MAX_ACTIVE_FOCUS_EVIDENCE_ITEMS",
+      "value": "64"
+    },
+    {
+      "file": "src/core/session/search-runtime.ts",
+      "name": "DEFAULT_SESSION_SEARCH_LIMIT",
+      "value": "8"
+    },
+    {
+      "file": "src/core/session/search-runtime.ts",
+      "name": "MAX_SESSION_SEARCH_LIMIT",
+      "value": "25"
+    },
+    {
+      "file": "src/core/session/search-runtime.ts",
+      "name": "SESSION_SEARCH_MAX_SNIPPET_CHARS",
+      "value": "220"
+    },
+    {
+      "file": "src/core/session/search-runtime.ts",
+      "name": "SESSION_SEARCH_MAX_SUMMARY_CONTEXT_CHARS",
+      "value": "4000"
+    },
+    {
+      "file": "src/core/session/search-runtime.ts",
+      "name": "SESSION_SEARCH_MAX_SUMMARY_MATCHES",
+      "value": "10"
+    },
+    {
+      "file": "src/core/session/tool-observation-context.ts",
+      "name": "MAX_CONTEXT_SUMMARY_CHARS",
+      "value": "240"
+    },
+    {
+      "file": "src/core/session/tool-observation-context.ts",
+      "name": "MAX_INLINE_TOOL_CONTEXT_CHARS",
+      "value": "280"
+    },
+    {
+      "file": "src/core/session/tool-observation-context.ts",
+      "name": "MAX_INLINE_TOOL_CONTEXT_LINES",
+      "value": "2"
+    },
+    {
+      "file": "src/core/session/tool-observation-context.ts",
+      "name": "MAX_JSON_KEY_SUMMARY",
+      "value": "5"
+    },
+    {
+      "file": "src/core/session/tool-observation-context.ts",
+      "name": "MAX_JSON_SUMMARY_PARTS",
+      "value": "4"
+    },
+    {
+      "file": "src/core/session/tool-observation.ts",
+      "name": "MAX_TOOL_OBSERVATION_CONTENT_CHARS",
+      "value": "4_000"
+    },
+    {
+      "file": "src/core/tools/analysis-workbench/loop.ts",
+      "name": "LLM_TIMEOUT_BUFFER_MS",
+      "value": "25"
+    },
+    {
+      "file": "src/core/tools/analysis-workbench/loop.ts",
+      "name": "MAX_NESTED_ANALYSIS_DEPTH",
+      "value": "2"
+    },
+    {
+      "file": "src/core/tools/focus.ts",
+      "name": "MAX_EVIDENCE_LINES",
+      "value": "24",
+      "note": "zet.7 refusal: focus render limit coupled to multi-consumer error strings; refused migration."
+    },
+    {
+      "file": "src/core/tools/focus.ts",
+      "name": "MAX_FOCUS_TRANSCRIPT_CHARS",
+      "value": "12_000",
+      "note": "zet.7 refusal: focus render limit coupled to multi-consumer error strings; refused migration."
+    },
+    {
+      "file": "src/core/tools/focus.ts",
+      "name": "MAX_FOCUS_TRANSCRIPT_LINES",
+      "value": "120",
+      "note": "zet.7 refusal: focus render limit coupled to multi-consumer error strings; refused migration."
+    },
+    {
+      "file": "src/core/tools/focus.ts",
+      "name": "MAX_LINE_CHARS",
+      "value": "260",
+      "note": "zet.7 refusal: focus render limit coupled to multi-consumer error strings; refused migration."
+    },
+    {
+      "file": "src/core/tools/lifecycle.ts",
+      "name": "DEFAULT_REBUILD_MAX_OUTPUT_CHARS",
+      "value": "40_000"
+    },
+    {
+      "file": "src/core/tools/lifecycle.ts",
+      "name": "DEFAULT_REBUILD_TIMEOUT_MS",
+      "value": "120_000"
+    },
+    {
+      "file": "src/core/tools/ntfy.ts",
+      "name": "DEFAULT_NTFY_TIMEOUT_MS",
+      "value": "8_000"
+    },
+    {
+      "file": "src/core/tools/results.ts",
+      "name": "COMPANION_MESSAGE_MAX_CHARS",
+      "value": "320"
+    },
+    {
+      "file": "src/core/tools/results.ts",
+      "name": "RAW_DIAGNOSTIC_MAX_CHARS",
+      "value": "512"
+    },
+    {
+      "file": "src/core/tools/self-diagnosis.ts",
+      "name": "DEFAULT_RECENT_MODEL_CALL_LIMIT",
+      "value": "20"
+    },
+    {
+      "file": "src/core/tools/self-diagnosis.ts",
+      "name": "MAX_RECENT_MODEL_CALL_LIMIT",
+      "value": "100"
+    },
+    {
+      "file": "src/core/tools/self-status.ts",
+      "name": "DEFAULT_RECENT_CHANNEL_LIMIT",
+      "value": "8"
+    },
+    {
+      "file": "src/core/tools/session-search.ts",
+      "name": "DEFAULT_SESSION_GREP_LIMIT",
+      "value": "10"
+    },
+    {
+      "file": "src/core/tools/session-search.ts",
+      "name": "MAX_SESSION_GREP_LIMIT",
+      "value": "50"
+    },
+    {
+      "file": "src/core/tools/session.ts",
+      "name": "DEFAULT_SESSION_LIST_LIMIT",
+      "value": "20"
+    },
+    {
+      "file": "src/core/tools/session.ts",
+      "name": "MAX_SESSION_LIST_LIMIT",
+      "value": "100"
+    },
+    {
+      "file": "src/core/turns/observability-warnings.ts",
+      "name": "CLAIM_SNIPPET_MAX_CHARS",
+      "value": "180"
+    },
+    {
+      "file": "src/core/turns/observability-warnings.ts",
+      "name": "CLAIM_SOURCE_LIMIT",
+      "value": "6"
+    },
+    {
+      "file": "src/core/turns/observability-warnings.ts",
+      "name": "RECENT_LIVE_ACTIVITY_MAX_AGE_MS",
+      "value": "6 * 60 * 60 * 1000"
+    },
+    {
+      "file": "src/core/turns/observability-warnings.ts",
+      "name": "STALE_TOOL_NAME_LIMIT",
+      "value": "6"
+    },
+    {
+      "file": "src/faculties/context-feedback/evaluator.ts",
+      "name": "MAX_FOLLOW_UP_CHARS",
+      "value": "1_200"
+    },
+    {
+      "file": "src/faculties/context-feedback/evaluator.ts",
+      "name": "MAX_MESSAGE_CHARS",
+      "value": "4_000"
+    },
+    {
+      "file": "src/faculties/context-feedback/runtime.ts",
+      "name": "FOLLOW_UP_TEXT_MAX_CHARS",
+      "value": "1_200"
+    },
+    {
+      "file": "src/faculties/core-memory/startup-hydration.ts",
+      "name": "DEFAULT_RECENT_SESSION_LIMIT",
+      "value": "8"
+    },
+    {
+      "file": "src/faculties/file-ingest/document-ingest.ts",
+      "name": "DOCUMENT_MAX_BYTES",
+      "value": "16 * 1024 * 1024"
+    },
+    {
+      "file": "src/faculties/file-ingest/document-ingest.ts",
+      "name": "TEXT_DOCUMENT_MAX_BYTES",
+      "value": "4 * 1024 * 1024"
+    },
+    {
+      "file": "src/faculties/file-ingest/office-document.ts",
+      "name": "MAX_OFFICE_XML_ENTRY_BYTES",
+      "value": "8 * 1024 * 1024",
+      "note": "zet.7 refusal: zip-bomb / XML decompression guard; security limit, code-owned by design."
+    },
+    {
+      "file": "src/faculties/file-ingest/office-document.ts",
+      "name": "MAX_UNICODE_CODE_POINT",
+      "value": "0x10ffff"
+    },
+    {
+      "file": "src/faculties/file-ingest/quarantine.ts",
+      "name": "MAX_ARCHIVE_ENTRIES_TO_REPORT",
+      "value": "5"
+    },
+    {
+      "file": "src/faculties/file-ingest/zip-container.ts",
+      "name": "ZIP_MAX_COMMENT_BYTES",
+      "value": "65_535"
+    },
+    {
+      "file": "src/faculties/introspection/consent-store.ts",
+      "name": "MAX_CHANNEL_ID_LENGTH",
+      "value": "240"
+    },
+    {
+      "file": "src/faculties/introspection/consent-store.ts",
+      "name": "MAX_CHANNEL_IDS",
+      "value": "64"
+    },
+    {
+      "file": "src/faculties/introspection/consent-store.ts",
+      "name": "MAX_REASON_LENGTH",
+      "value": "500"
+    },
+    {
+      "file": "src/faculties/introspection/postgres-store-records.ts",
+      "name": "MAX_CHANNEL_ID_LENGTH",
+      "value": "512"
+    },
+    {
+      "file": "src/faculties/introspection/postgres-store-records.ts",
+      "name": "MAX_ID_LENGTH",
+      "value": "256"
+    },
+    {
+      "file": "src/faculties/introspection/postgres-store-records.ts",
+      "name": "MAX_INTROSPECTION_LANDMARK_LIST_LIMIT",
+      "value": "1_000"
+    },
+    {
+      "file": "src/faculties/introspection/postgres-store-records.ts",
+      "name": "MAX_MODEL_ID_LENGTH",
+      "value": "512"
+    },
+    {
+      "file": "src/faculties/introspection/postgres-store-records.ts",
+      "name": "MAX_NARRATIVE_LENGTH",
+      "value": "32_768"
+    },
+    {
+      "file": "src/faculties/introspection/postgres-store-records.ts",
+      "name": "MAX_PROVENANCE_BYTES",
+      "value": "65_536"
+    },
+    {
+      "file": "src/faculties/introspection/postgres-store-records.ts",
+      "name": "MAX_SOURCE_REF_LENGTH",
+      "value": "1_024"
+    },
+    {
+      "file": "src/faculties/introspection/postgres-store-records.ts",
+      "name": "MAX_TURN_ID_LENGTH",
+      "value": "512"
+    },
+    {
+      "file": "src/faculties/introspection/turn-sensitivity.ts",
+      "name": "MAX_PENDING_DECISIONS",
+      "value": "512"
+    },
+    {
+      "file": "src/faculties/memory/boundary-log.ts",
+      "name": "MAX_DYNAMIC_TAGS",
+      "value": "6"
+    },
+    {
+      "file": "src/faculties/memory/boundary-log.ts",
+      "name": "MAX_FACTS_DEFAULT",
+      "value": "3"
+    },
+    {
+      "file": "src/faculties/memory/boundary-log.ts",
+      "name": "MAX_REFUSAL_CHARS",
+      "value": "220"
+    },
+    {
+      "file": "src/faculties/memory/boundary-log.ts",
+      "name": "MAX_REQUEST_CHARS",
+      "value": "220"
+    },
+    {
+      "file": "src/faculties/memory/boundary-log.ts",
+      "name": "USER_LOOKBACK_LIMIT",
+      "value": "6"
+    },
+    {
+      "file": "src/faculties/memory/episodic/arc-formation.ts",
+      "name": "DEFAULT_MAX_ARCS_PER_RUN",
+      "value": "12"
+    },
+    {
+      "file": "src/faculties/memory/episodic/arc-formation.ts",
+      "name": "DEFAULT_MAX_EPISODES_PER_RUN",
+      "value": "60"
+    },
+    {
+      "file": "src/faculties/memory/episodic/arc-formation.ts",
+      "name": "DEFAULT_PASS_INTERVAL_MS",
+      "value": "6 * 24 * 60 * 60_000"
+    },
+    {
+      "file": "src/faculties/memory/episodic/arc-formation.ts",
+      "name": "MIN_ARC_CONFIDENCE",
+      "value": "0.5"
+    },
+    {
+      "file": "src/faculties/memory/episodic/arc-formation.ts",
+      "name": "MIN_EPISODES_FOR_PASS",
+      "value": "4"
+    },
+    {
+      "file": "src/faculties/memory/episodic/dream-meaning-pass.ts",
+      "name": "DEFAULT_MAX_EPISODES_PER_PASS",
+      "value": "8",
+      "note": "zet.7 refusal: DreamMeaningPass options unthreaded; deferred (needs new settings section)."
+    },
+    {
+      "file": "src/faculties/memory/episodic/dream-meaning-pass.ts",
+      "name": "DEFAULT_MAX_TURNS",
+      "value": "4",
+      "note": "zet.7 refusal: DreamMeaningPass options unthreaded; deferred (needs new settings section)."
+    },
+    {
+      "file": "src/faculties/memory/episodic/dream-meaning-pass.ts",
+      "name": "DEFAULT_PASS_INTERVAL_MS",
+      "value": "20 * 60 * 60_000",
+      "note": "zet.7 refusal: DreamMeaningPass options unthreaded; deferred (needs new settings section)."
+    },
+    {
+      "file": "src/faculties/memory/episodic/dream-meaning-pass.ts",
+      "name": "MAX_MEANING_CHARS",
+      "value": "800",
+      "note": "zet.7 refusal: DreamMeaningPass options unthreaded; deferred (needs new settings section)."
+    },
+    {
+      "file": "src/faculties/memory/episodic/postgres-store/rows.ts",
+      "name": "DEFAULT_LIMIT",
+      "value": "100"
+    },
+    {
+      "file": "src/faculties/memory/episodic/postgres-store/rows.ts",
+      "name": "MAX_LIMIT",
+      "value": "1000"
+    },
+    {
+      "file": "src/faculties/memory/episodic/sleep-consolidation.ts",
+      "name": "DEFAULT_MAX_CONSOLIDATIONS_PER_RUN",
+      "value": "6"
+    },
+    {
+      "file": "src/faculties/memory/episodic/sleep-consolidation.ts",
+      "name": "DEFAULT_MAX_REFINEMENTS_PER_RUN",
+      "value": "8"
+    },
+    {
+      "file": "src/faculties/memory/episodic/sleep-consolidation.ts",
+      "name": "DEFAULT_MAX_TRANSCRIPT_CHARS",
+      "value": "6000"
+    },
+    {
+      "file": "src/faculties/memory/episodic/sleep-consolidation.ts",
+      "name": "DEFAULT_TRANSCRIPT_MESSAGE_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/faculties/memory/episodic/sleep-consolidation.ts",
+      "name": "MAX_TRACKED_REFINED_EPISODE_IDS",
+      "value": "400"
+    },
+    {
+      "file": "src/faculties/memory/episodic/sleep-consolidation.ts",
+      "name": "REVIEW_EPISODE_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis-lane.ts",
+      "name": "DEFAULT_TIMER_SESSION_LIMIT",
+      "value": "20"
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis-lane.ts",
+      "name": "MAX_BEHAVIORAL_SUMMARY_WRITES",
+      "value": "1"
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis.ts",
+      "name": "DEFAULT_MAX_ENTRIES_PER_EPISODE",
+      "value": "14"
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis.ts",
+      "name": "DEFAULT_MAX_EPISODES_PER_RUN",
+      "value": "6"
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis.ts",
+      "name": "DEFAULT_MAX_PRIOR_CANDIDATES",
+      "value": "24"
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis.ts",
+      "name": "DEFAULT_TRANSCRIPT_MESSAGE_LIMIT",
+      "value": "96"
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis.ts",
+      "name": "MAX_CONSOLIDATION_SEARCH_WINDOW_MS",
+      "value": "24 * 60 * 60_000"
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis.ts",
+      "name": "MIN_CONSOLIDATION_SEARCH_WINDOW_MS",
+      "value": "2 * 60 * 60_000"
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis.ts",
+      "name": "MIN_CONVERSATIONAL_ENTRIES",
+      "value": "2"
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis.ts",
+      "name": "MIN_SINGLE_ENTRY_CHARS",
+      "value": "120"
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis/consolidation.ts",
+      "name": "MAX_CONSOLIDATION_BOUNDARY_GAP_MS",
+      "value": "10 * 60_000"
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis/consolidation.ts",
+      "name": "MIN_CONSOLIDATION_SPAN_OVERLAP_RATIO",
+      "value": "0.5"
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis/consolidation.ts",
+      "name": "MIN_CONSOLIDATION_THEME_OVERLAP",
+      "value": "1"
+    },
+    {
+      "file": "src/faculties/memory/episodic/synthesis/consolidation.ts",
+      "name": "MIN_RELATED_THEME_OVERLAP",
+      "value": "1"
+    },
+    {
+      "file": "src/faculties/memory/episodic/topic-segmentation.ts",
+      "name": "MAX_ENTRY_CONTENT_CHARS",
+      "value": "400"
+    },
+    {
+      "file": "src/faculties/memory/episodic/topic-segmentation.ts",
+      "name": "MAX_TOPIC_LABEL_CHARS",
+      "value": "80"
+    },
+    {
+      "file": "src/faculties/memory/extraction/orchestrator.ts",
+      "name": "EXTRACTION_CHUNK_LLM_CONCURRENCY",
+      "value": "2"
+    },
+    {
+      "file": "src/faculties/memory/extraction/preference.ts",
+      "name": "MAX_PREFERENCE_VALUE_CHARS",
+      "value": "96"
+    },
+    {
+      "file": "src/faculties/memory/extraction/signals.ts",
+      "name": "MEANINGFUL_ENTRY_SCORE_THRESHOLD",
+      "value": "1.25"
+    },
+    {
+      "file": "src/faculties/memory/extraction/types.ts",
+      "name": "DEFAULT_MAX_WRITES",
+      "value": "2"
+    },
+    {
+      "file": "src/faculties/memory/extraction/types.ts",
+      "name": "DEFAULT_MIN_CONFIDENCE",
+      "value": "0.6"
+    },
+    {
+      "file": "src/faculties/memory/extraction/types.ts",
+      "name": "DEFAULT_MIN_IMPORTANCE",
+      "value": "0.45"
+    },
+    {
+      "file": "src/faculties/memory/extraction/types.ts",
+      "name": "DEFAULT_MIN_NOVELTY",
+      "value": "0.35"
+    },
+    {
+      "file": "src/faculties/memory/extraction/types.ts",
+      "name": "DEFAULT_PROFILE_MIN_CONFIDENCE",
+      "value": "0.7"
+    },
+    {
+      "file": "src/faculties/memory/extraction/types.ts",
+      "name": "DEFAULT_PROFILE_MIN_IMPORTANCE",
+      "value": "0.65"
+    },
+    {
+      "file": "src/faculties/memory/extraction/types.ts",
+      "name": "DEFAULT_PROFILE_MIN_NOVELTY",
+      "value": "0.12"
+    },
+    {
+      "file": "src/faculties/memory/extraction/types.ts",
+      "name": "DEFAULT_PROFILE_MIN_SOURCE_MEMORIES",
+      "value": "2"
+    },
+    {
+      "file": "src/faculties/memory/extraction/types.ts",
+      "name": "DEFAULT_PROFILE_MIN_WRITES",
+      "value": "1"
+    },
+    {
+      "file": "src/faculties/memory/extraction/types.ts",
+      "name": "DEFAULT_PROFILE_REFRESH_COOLDOWN_MS",
+      "value": "5 * 60 * 1000"
+    },
+    {
+      "file": "src/faculties/memory/extraction/types.ts",
+      "name": "DEFAULT_PROFILE_REFRESH_INTERVAL_MS",
+      "value": "6 * 60 * 60 * 1000"
+    },
+    {
+      "file": "src/faculties/memory/extraction/types.ts",
+      "name": "DEFAULT_PROFILE_SOURCE_MEMORY_LIMIT",
+      "value": "16"
+    },
+    {
+      "file": "src/faculties/memory/extraction/types.ts",
+      "name": "RECOVERY_CONTEXT_MESSAGE_LIMIT",
+      "value": "50"
+    },
+    {
+      "file": "src/faculties/memory/extraction/types.ts",
+      "name": "TRANSCRIPT_EMOTIONAL_SIGNAL_LIMIT",
+      "value": "12"
+    },
+    {
+      "file": "src/faculties/memory/lexical-match.ts",
+      "name": "LEXICAL_QUERY_MAX_TOKENS",
+      "value": "10"
+    },
+    {
+      "file": "src/faculties/memory/maintenance-review.ts",
+      "name": "HIGH_IMPACT_LOW_CONFIDENCE_THRESHOLD",
+      "value": "0.65"
+    },
+    {
+      "file": "src/faculties/memory/maintenance-review.ts",
+      "name": "PROVENANCE_CONFIDENCE_REVIEW_EVIDENCE_LIMIT",
+      "value": "1"
+    },
+    {
+      "file": "src/faculties/memory/maintenance-review.ts",
+      "name": "PROVENANCE_CONFIDENCE_REVIEW_THRESHOLD",
+      "value": "0.5"
+    },
+    {
+      "file": "src/faculties/memory/maintenance-review.ts",
+      "name": "STALE_MEMORY_CONFIDENCE_THRESHOLD",
+      "value": "0.58"
+    },
+    {
+      "file": "src/faculties/memory/near-turn-memory-lane.ts",
+      "name": "MAX_STALE_REVIEW_SCAN",
+      "value": "50"
+    },
+    {
+      "file": "src/faculties/memory/near-turn-memory-lane.ts",
+      "name": "MAX_STALE_REVIEWS_PER_RUN",
+      "value": "3"
+    },
+    {
+      "file": "src/faculties/memory/postgres-store.ts",
+      "name": "SCRATCHPAD_MAX_ENTRIES",
+      "value": "64"
+    },
+    {
+      "file": "src/faculties/memory/research-library/store.ts",
+      "name": "PREVIEW_MAX_CHARS",
+      "value": "12_000"
+    },
+    {
+      "file": "src/faculties/memory/retrieval-compose.ts",
+      "name": "RETRIEVAL_COMPOSITION_FINALIST_LIMIT",
+      "value": "6"
+    },
+    {
+      "file": "src/faculties/memory/retrieval-compose.ts",
+      "name": "RETRIEVAL_COMPOSITION_MAX_CANDIDATES",
+      "value": "12"
+    },
+    {
+      "file": "src/faculties/memory/retrieval/active-state.ts",
+      "name": "ACTIVE_MEMORY_ENTRY_LIMIT_MULTIPLIER",
+      "value": "2"
+    },
+    {
+      "file": "src/faculties/memory/retrieval/active-state.ts",
+      "name": "ACTIVE_MEMORY_ENTRY_MIN_LIMIT",
+      "value": "12"
+    },
+    {
+      "file": "src/faculties/memory/retrieval/active-state.ts",
+      "name": "ACTIVE_MEMORY_MISS_LIMIT",
+      "value": "3"
+    },
+    {
+      "file": "src/faculties/memory/retrieval/shared-background.ts",
+      "name": "SHARED_BACKGROUND_DEFAULT_LIMIT",
+      "value": "12"
+    },
+    {
+      "file": "src/faculties/memory/retrieval/shared-background.ts",
+      "name": "SHARED_BACKGROUND_MAX_LIMIT",
+      "value": "25"
+    },
+    {
+      "file": "src/faculties/memory/retrieval/shared-background.ts",
+      "name": "SHARED_BACKGROUND_UNION_SCAN_CAP",
+      "value": "100"
+    },
+    {
+      "file": "src/faculties/memory/retrieval/social-context.ts",
+      "name": "EVOLUTION_CHAIN_PER_MEMORY_LIMIT",
+      "value": "3"
+    },
+    {
+      "file": "src/faculties/memory/retrieval/social-context.ts",
+      "name": "EVOLUTION_CHAIN_SELECTED_LIMIT",
+      "value": "3"
+    },
+    {
+      "file": "src/faculties/memory/sleeptime-agent.ts",
+      "name": "DEFAULT_IDLE_SESSION_LIMIT",
+      "value": "20"
+    },
+    {
+      "file": "src/faculties/memory/sleeptime-agent.ts",
+      "name": "DEFAULT_MAX_MEMORY_WRITES",
+      "value": "4"
+    },
+    {
+      "file": "src/faculties/memory/sleeptime-agent.ts",
+      "name": "DEFAULT_TRANSCRIPT_MESSAGE_LIMIT",
+      "value": "24"
+    },
+    {
+      "file": "src/faculties/memory/sleeptime-agent.ts",
+      "name": "MAX_TRANSCRIPT_ENTRY_CHARS",
+      "value": "600"
+    },
+    {
+      "file": "src/faculties/memory/social-graph/graph-builder-worker.ts",
+      "name": "MAX_EVIDENCE_MEMORY_IDS",
+      "value": "24"
+    },
+    {
+      "file": "src/faculties/memory/startup-hydration.ts",
+      "name": "DEFAULT_RECENT_MESSAGE_LIMIT",
+      "value": "18"
+    },
+    {
+      "file": "src/faculties/memory/startup-hydration.ts",
+      "name": "DEFAULT_RECENT_SESSION_LIMIT",
+      "value": "4"
+    },
+    {
+      "file": "src/faculties/memory/startup-hydration.ts",
+      "name": "MAX_HYDRATION_CONTEXT_CHARS",
+      "value": "6_000"
+    },
+    {
+      "file": "src/faculties/memory/tools.ts",
+      "name": "MEMORY_SEARCH_DEFAULT_LIMIT",
+      "value": "5"
+    },
+    {
+      "file": "src/faculties/memory/tools.ts",
+      "name": "MEMORY_SEARCH_MAX_LIMIT",
+      "value": "20"
+    },
+    {
+      "file": "src/faculties/memory/tools.ts",
+      "name": "MEMORY_TIMELINE_DEFAULT_LIMIT",
+      "value": "8"
+    },
+    {
+      "file": "src/faculties/memory/tools.ts",
+      "name": "MEMORY_TIMELINE_MAX_LIMIT",
+      "value": "20"
+    },
+    {
+      "file": "src/faculties/memory/tools.ts",
+      "name": "SHARED_BACKGROUND_TOOL_LIMIT_DEFAULT",
+      "value": "12"
+    },
+    {
+      "file": "src/faculties/memory/tools.ts",
+      "name": "SHARED_BACKGROUND_TOOL_LIMIT_MAX",
+      "value": "25"
+    },
+    {
+      "file": "src/faculties/memory/tools/scratchpad.ts",
+      "name": "SCRATCHPAD_DEFAULT_LIMIT",
+      "value": "20"
+    },
+    {
+      "file": "src/faculties/memory/tools/scratchpad.ts",
+      "name": "SCRATCHPAD_MAX_LIMIT",
+      "value": "64"
+    },
+    {
+      "file": "src/faculties/north-star/store.ts",
+      "name": "MAX_NORTH_STAR_ITEMS",
+      "value": "3"
+    },
+    {
+      "file": "src/faculties/shards/context-pack.ts",
+      "name": "CONTEXT_PACK_ENTRY_CONTENT_MAX_CHARS",
+      "value": "600"
+    },
+    {
+      "file": "src/faculties/shards/context-pack.ts",
+      "name": "CONTEXT_PACK_MEMORY_MAX_CHARS",
+      "value": "4_000"
+    },
+    {
+      "file": "src/faculties/shards/context-pack.ts",
+      "name": "CONTEXT_PACK_SESSION_ENTRY_LIMIT",
+      "value": "6"
+    },
+    {
+      "file": "src/faculties/shards/context-pack.ts",
+      "name": "CONTEXT_PACK_SESSION_SCAN_LIMIT",
+      "value": "12"
+    },
+    {
+      "file": "src/faculties/shards/manager.ts",
+      "name": "DEFAULT_MAX_CONCURRENT",
+      "value": "5"
+    },
+    {
+      "file": "src/faculties/shards/manager.ts",
+      "name": "DEFAULT_MAX_TURNS",
+      "value": "1"
+    },
+    {
+      "file": "src/faculties/skills/store.ts",
+      "name": "MAX_DESCRIPTION_CHARS",
+      "value": "240"
+    },
+    {
+      "file": "src/faculties/skills/telemetry.ts",
+      "name": "MAX_SKILL_USAGE_NAME_CHARS",
+      "value": "256"
+    },
+    {
+      "file": "src/faculties/subagents/faculty.ts",
+      "name": "DEFAULT_MAX_CONCURRENT",
+      "value": "8"
+    },
+    {
+      "file": "src/faculties/subagents/faculty.ts",
+      "name": "DEFAULT_MAX_TURNS",
+      "value": "1"
+    },
+    {
+      "file": "src/faculties/subagents/faculty.ts",
+      "name": "DEFAULT_RECENT_RESULT_LIMIT",
+      "value": "25"
+    },
+    {
+      "file": "src/faculties/subagents/task-registry.ts",
+      "name": "DEFAULT_COMPLETED_TASK_LIMIT",
+      "value": "25"
+    },
+    {
+      "file": "src/faculties/values/store.ts",
+      "name": "DEFAULT_COMPANION_LAYER_HISTORY_LIMIT",
+      "value": "6"
+    },
+    {
+      "file": "src/faculties/values/store.ts",
+      "name": "MAX_COMPANION_LAYER_HISTORY_LIMIT",
+      "value": "24"
+    },
+    {
+      "file": "src/faculties/values/tools.ts",
+      "name": "DEFAULT_LIST_LIMIT",
+      "value": "20"
+    },
+    {
+      "file": "src/faculties/values/tools.ts",
+      "name": "MAX_LIST_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/faculties/wiki/pgvector-projection.ts",
+      "name": "DEFAULT_WIKI_CHUNK_MAX_CHARS",
+      "value": "1200"
+    },
+    {
+      "file": "src/faculties/wiki/pgvector-projection.ts",
+      "name": "MAX_CHUNKS_PER_DOCUMENT",
+      "value": "64"
+    },
+    {
+      "file": "src/faculties/wiki/retrieval.ts",
+      "name": "DEFAULT_WIKI_SEARCH_LIMIT",
+      "value": "6"
+    },
+    {
+      "file": "src/faculties/wiki/sleeptime-wiki-pass.ts",
+      "name": "GUARD_MIN_SHARED_ABSOLUTE",
+      "value": "4"
+    },
+    {
+      "file": "src/faculties/wiki/sleeptime-wiki-pass.ts",
+      "name": "GUARD_MIN_SHARED_RATIO",
+      "value": "3"
+    },
+    {
+      "file": "src/faculties/wiki/sleeptime-wiki-pass.ts",
+      "name": "GUARD_RATIO_THRESHOLD",
+      "value": "0.7"
+    },
+    {
+      "file": "src/faculties/wiki/sleeptime-wiki-pass.ts",
+      "name": "MAX_WIKI_BODY_CHARS",
+      "value": "8_000"
+    },
+    {
+      "file": "src/faculties/wiki/store.ts",
+      "name": "DEFAULT_SEARCH_LIMIT",
+      "value": "20"
+    },
+    {
+      "file": "src/faculties/wiki/store.ts",
+      "name": "MAX_PROVENANCE_REF_CHARS",
+      "value": "512"
+    },
+    {
+      "file": "src/faculties/wiki/store.ts",
+      "name": "MAX_SEARCH_LIMIT",
+      "value": "100"
+    },
+    {
+      "file": "src/faculties/wiki/store.ts",
+      "name": "MAX_SUMMARY_CHARS",
+      "value": "500"
+    },
+    {
+      "file": "src/faculties/wiki/store.ts",
+      "name": "MAX_TAG_CHARS",
+      "value": "64"
+    },
+    {
+      "file": "src/faculties/wiki/store.ts",
+      "name": "MAX_TITLE_CHARS",
+      "value": "180"
+    },
+    {
+      "file": "src/operator/garden/audit-timeline.ts",
+      "name": "MAX_AUDIT_TIMELINE_ENTRIES",
+      "value": "500"
+    },
+    {
+      "file": "src/operator/garden/multipart.ts",
+      "name": "MAX_UPLOAD_SIZE",
+      "value": "2 * 1024 * 1024"
+    },
+    {
+      "file": "src/operator/garden/operator-surface.ts",
+      "name": "ADMIN_MAX_BODY_SIZE",
+      "value": "65_536"
+    },
+    {
+      "file": "src/operator/garden/routes/drift-review-routes.ts",
+      "name": "MAX_NOTE_CHARS",
+      "value": "1024"
+    },
+    {
+      "file": "src/operator/garden/routes/intake-quarantine-routes.ts",
+      "name": "MAX_REASON_CHARS",
+      "value": "1024"
+    },
+    {
+      "file": "src/operator/garden/routes/intake-quarantine-routes.ts",
+      "name": "MAX_TOKEN_CHARS",
+      "value": "128"
+    },
+    {
+      "file": "src/operator/garden/routes/intake-source-list-routes.ts",
+      "name": "MAX_NOTE_CHARS",
+      "value": "512"
+    },
+    {
+      "file": "src/operator/garden/routes/model-usage-query.ts",
+      "name": "MAX_QUERY_PARAMETERS",
+      "value": "64"
+    },
+    {
+      "file": "src/operator/garden/server-telemetry-transport.ts",
+      "name": "ADMIN_TELEMETRY_PAYLOAD_MAX_FIELDS",
+      "value": "32"
+    },
+    {
+      "file": "src/operator/garden/server-telemetry-transport.ts",
+      "name": "ADMIN_TELEMETRY_STRING_MAX",
+      "value": "256"
+    },
+    {
+      "file": "src/operator/garden/server-transport.ts",
+      "name": "GARDEN_COMPRESSION_CACHE_MAX_ENTRIES",
+      "value": "512"
+    },
+    {
+      "file": "src/operator/garden/server-transport.ts",
+      "name": "GARDEN_MIN_COMPRESS_BYTES",
+      "value": "1024"
+    },
+    {
+      "file": "src/operator/garden/server.ts",
+      "name": "ADMIN_MAX_BODY_SIZE",
+      "value": "65_536"
+    },
+    {
+      "file": "src/operator/garden/services/adaptive-tools-service.ts",
+      "name": "DEFAULT_RECENT_FAILURE_LIMIT",
+      "value": "50"
+    },
+    {
+      "file": "src/operator/garden/services/adaptive-tools-service.ts",
+      "name": "DEFAULT_RECENT_INVOCATION_LIMIT",
+      "value": "100"
+    },
+    {
+      "file": "src/operator/garden/services/adaptive-tools-service.ts",
+      "name": "DEFAULT_RECENT_TELEMETRY_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/operator/garden/services/audit-history-service.ts",
+      "name": "DEFAULT_HISTORY_LIMIT",
+      "value": "100"
+    },
+    {
+      "file": "src/operator/garden/services/audit-history-service.ts",
+      "name": "MAX_GARDEN_AUDIT_READ_BYTES",
+      "value": "16 * 1_024 * 1_024"
+    },
+    {
+      "file": "src/operator/garden/services/audit-history-service.ts",
+      "name": "MAX_HISTORY_LIMIT",
+      "value": "500"
+    },
+    {
+      "file": "src/operator/garden/services/audit-history-service.ts",
+      "name": "MAX_SOURCE_SCAN",
+      "value": "2_000"
+    },
+    {
+      "file": "src/operator/garden/services/dashboard-cost-windows.ts",
+      "name": "DASHBOARD_MODEL_USAGE_REFRESH_INTERVAL_MS",
+      "value": "15_000"
+    },
+    {
+      "file": "src/operator/garden/services/episodic-memory-service.ts",
+      "name": "DEFAULT_ARC_LIST_LIMIT",
+      "value": "100"
+    },
+    {
+      "file": "src/operator/garden/services/episodic-memory-service.ts",
+      "name": "DEFAULT_EPISODE_LIST_LIMIT",
+      "value": "50"
+    },
+    {
+      "file": "src/operator/garden/services/episodic-memory-service.ts",
+      "name": "MAX_EPISODIC_SCAN_LIMIT",
+      "value": "1000"
+    },
+    {
+      "file": "src/operator/garden/services/icp-autonomy-service.ts",
+      "name": "ADMIN_ICP_LIMIT",
+      "value": "50"
+    },
+    {
+      "file": "src/operator/garden/services/images-service.ts",
+      "name": "MAX_GALLERY_NOTE_CHARS",
+      "value": "2_000"
+    },
+    {
+      "file": "src/operator/garden/services/images-service.ts",
+      "name": "MAX_GALLERY_REF_CHARS",
+      "value": "512"
+    },
+    {
+      "file": "src/operator/garden/services/images-service.ts",
+      "name": "MAX_GALLERY_TAG_CHARS",
+      "value": "64"
+    },
+    {
+      "file": "src/operator/garden/services/images-service.ts",
+      "name": "MAX_GALLERY_TAGS",
+      "value": "32"
+    },
+    {
+      "file": "src/operator/garden/services/intake-quarantine-service.ts",
+      "name": "MAX_REASON_CHARS",
+      "value": "1024"
+    },
+    {
+      "file": "src/operator/garden/services/memory-service.ts",
+      "name": "DEFAULT_MEMORY_LIST_LIMIT",
+      "value": "50"
+    },
+    {
+      "file": "src/operator/garden/services/memory-service.ts",
+      "name": "MAX_MANAGED_SCOPE_MEMORY_SCAN",
+      "value": "100_000"
+    },
+    {
+      "file": "src/operator/garden/services/memory-service.ts",
+      "name": "MAX_MEMORY_LIST_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/operator/garden/services/observer-eval-sidecar-service.ts",
+      "name": "MAX_PAGE_LIMIT",
+      "value": "1_000"
+    },
+    {
+      "file": "src/operator/garden/services/session-service.ts",
+      "name": "DEFAULT_ADMIN_SESSION_MESSAGE_PAGE_LIMIT",
+      "value": "100"
+    },
+    {
+      "file": "src/operator/garden/services/session-service.ts",
+      "name": "DEFAULT_ADMIN_SESSION_SEARCH_LIMIT",
+      "value": "25"
+    },
+    {
+      "file": "src/operator/garden/services/session-service.ts",
+      "name": "DEFAULT_ADMIN_TURN_LIMIT",
+      "value": "50"
+    },
+    {
+      "file": "src/operator/garden/services/session-service.ts",
+      "name": "MAX_ADMIN_SESSION_MESSAGE_PAGE_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/operator/garden/services/session-service.ts",
+      "name": "MAX_ADMIN_SESSION_SEARCH_LIMIT",
+      "value": "100"
+    },
+    {
+      "file": "src/operator/garden/services/session-turn-observability.ts",
+      "name": "DEFAULT_RETRIEVAL_BUFFER_LIMIT",
+      "value": "8"
+    },
+    {
+      "file": "src/operator/garden/services/session-turn-observability.ts",
+      "name": "DEFAULT_STAGE_BUFFER_LIMIT",
+      "value": "16"
+    },
+    {
+      "file": "src/operator/garden/services/session-turn-observability.ts",
+      "name": "DEFAULT_TURN_BUFFER_LIMIT",
+      "value": "128"
+    },
+    {
+      "file": "src/operator/garden/services/subsystem-health-service.ts",
+      "name": "DEFAULT_RING_LIMIT",
+      "value": "50"
+    },
+    {
+      "file": "src/operator/garden/services/subsystem-health-service.ts",
+      "name": "DEFAULT_STALE_INTERVAL_FACTOR",
+      "value": "2"
+    },
+    {
+      "file": "src/operator/garden/transport-client.ts",
+      "name": "HEALTH_PROBE_TIMEOUT_MS",
+      "value": "1_500"
+    },
+    {
+      "file": "src/operator/garden/transport-paths.ts",
+      "name": "DEFAULT_ADMIN_TRANSPORT_TIMEOUT_MS",
+      "value": "15_000"
+    },
+    {
+      "file": "src/operator/garden/transport-server.ts",
+      "name": "ADMIN_MAX_BODY_SIZE",
+      "value": "65_536"
+    },
+    {
+      "file": "src/persistence/artifact-lifecycle/manager.ts",
+      "name": "MAX_RECENT_RUNS",
+      "value": "20"
+    },
+    {
+      "file": "src/persistence/backups/config.ts",
+      "name": "DEFAULT_BACKUP_INTERVAL_HOURS",
+      "value": "12"
+    },
+    {
+      "file": "src/persistence/backups/config.ts",
+      "name": "MIN_BACKUP_INTERVAL_MS",
+      "value": "60_000"
+    },
+    {
+      "file": "src/persistence/backups/config.ts",
+      "name": "MIN_BACKUP_RETENTION_COUNT",
+      "value": "1"
+    },
+    {
+      "file": "src/persistence/backups/fleet-restore.ts",
+      "name": "POSTGRES_COMMAND_MAX_BUFFER_BYTES",
+      "value": "16 * 1024 * 1024"
+    },
+    {
+      "file": "src/persistence/backups/postgres-restore.ts",
+      "name": "PSQL_MAX_BUFFER_BYTES",
+      "value": "16 * 1024 * 1024"
+    },
+    {
+      "file": "src/persistence/backups/service.ts",
+      "name": "PG_RESTORE_LIST_MAX_BUFFER_BYTES",
+      "value": "16 * 1024 * 1024"
+    },
+    {
+      "file": "src/persistence/journals/journal/file-io.ts",
+      "name": "JOURNAL_SEGMENT_READ_RETRIES",
+      "value": "3"
+    },
+    {
+      "file": "src/persistence/postgres.ts",
+      "name": "POSTGRES_SCHEMA_NAME_MAX_LENGTH",
+      "value": "63"
+    },
+    {
+      "file": "src/persistence/postgres/companion-presence-store.ts",
+      "name": "MAX_ID_CHARS",
+      "value": "256"
+    },
+    {
+      "file": "src/persistence/postgres/fleet-auth/reapproval.ts",
+      "name": "CONTACT_ID_MAX_LENGTH",
+      "value": "256",
+      "note": "Code-owned protocol boundary mirroring the fleet_auth.contact_bindings database CHECK constraint; it is not an operator-tunable policy."
+    },
+    {
+      "file": "src/persistence/postgres/icp-admin-projection-store.ts",
+      "name": "MAX_ADMIN_ROWS",
+      "value": "100"
+    },
+    {
+      "file": "src/persistence/postgres/icp-fatigue-regulation-reservation-store.ts",
+      "name": "FATIGUE_LEASE_ACQUIRE_TIMEOUT_MS",
+      "value": "5_000"
+    },
+    {
+      "file": "src/persistence/postgres/icp-fatigue-regulation-reservation-store.ts",
+      "name": "FATIGUE_LEASE_POOL_MAX",
+      "value": "8"
+    },
+    {
+      "file": "src/persistence/postgres/model-usage-store.ts",
+      "name": "DEFAULT_BREAKDOWN_LIMIT",
+      "value": "20"
+    },
+    {
+      "file": "src/persistence/postgres/model-usage-store.ts",
+      "name": "DEFAULT_EVENT_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/persistence/postgres/model-usage-store.ts",
+      "name": "MAX_EVENT_LIMIT",
+      "value": "2_000"
+    },
+    {
+      "file": "src/persistence/postgres/model-usage-store.ts",
+      "name": "MAX_EXPORT_ROWS",
+      "value": "50_000"
+    },
+    {
+      "file": "src/persistence/postgres/model-usage-store.ts",
+      "name": "MAX_TOP_N",
+      "value": "100"
+    },
+    {
+      "file": "src/persistence/postgres/scheduled-prompt-store.ts",
+      "name": "DEFAULT_LIST_LIMIT",
+      "value": "500"
+    },
+    {
+      "file": "src/persistence/postgres/scheduled-prompt-store.ts",
+      "name": "MAX_AUTHOR_CHARS",
+      "value": "256"
+    },
+    {
+      "file": "src/persistence/postgres/scheduled-prompt-store.ts",
+      "name": "MAX_CHANNEL_ID_CHARS",
+      "value": "512"
+    },
+    {
+      "file": "src/persistence/postgres/scheduled-prompt-store.ts",
+      "name": "MAX_ID_CHARS",
+      "value": "256"
+    },
+    {
+      "file": "src/persistence/postgres/scheduled-prompt-store.ts",
+      "name": "MAX_LIST_LIMIT",
+      "value": "1_000"
+    },
+    {
+      "file": "src/persistence/postgres/scheduled-prompt-store.ts",
+      "name": "MAX_NAME_CHARS",
+      "value": "256"
+    },
+    {
+      "file": "src/persistence/postgres/scheduled-prompt-store.ts",
+      "name": "MAX_PROMPT_CHARS",
+      "value": "32_000"
+    },
+    {
+      "file": "src/persistence/repair/memory-participant-name-repair.ts",
+      "name": "DEFAULT_REPAIR_LIMIT",
+      "value": "500"
+    },
+    {
+      "file": "src/persistence/repair/memory-participant-name-repair.ts",
+      "name": "MAX_REPAIR_LIMIT",
+      "value": "10_000"
+    },
+    {
+      "file": "src/persistence/repair/memory-provenance-backfill.ts",
+      "name": "REPORT_SAMPLE_LIMIT",
+      "value": "25"
+    },
+    {
+      "file": "src/persistence/sessions/cross-process-write-lock.ts",
+      "name": "MIN_TOKENIZED_STALE_MS",
+      "value": "250"
+    },
+    {
+      "file": "src/persistence/sessions/postgres-adapters.ts",
+      "name": "DEFAULT_SEARCH_LIMIT",
+      "value": "10"
+    },
+    {
+      "file": "src/persistence/sessions/postgres-adapters.ts",
+      "name": "MAX_SEARCH_LIMIT",
+      "value": "100"
+    },
+    {
+      "file": "src/persistence/sessions/store-primitives.ts",
+      "name": "L0_SESSION_FILE_MAX_BYTES",
+      "value": "16 * 1024 * 1024"
+    },
+    {
+      "file": "src/persistence/sessions/store.ts",
+      "name": "MAX_RECENT_ENTRY_CACHE_LIMITS",
+      "value": "8"
+    },
+    {
+      "file": "src/persistence/sessions/store.ts",
+      "name": "TAIL_DEGRADED_WARN_INTERVAL_MS",
+      "value": "30_000"
+    },
+    {
+      "file": "src/persistence/sessions/store/channel-index-write-lock.ts",
+      "name": "CHANNEL_INDEX_LOCK_TIMEOUT_MS",
+      "value": "5_000"
+    },
+    {
+      "file": "src/persistence/sessions/store/session-journal-write-lock.ts",
+      "name": "JOURNAL_WRITE_LOCK_TIMEOUT_MS",
+      "value": "5_000"
+    },
+    {
+      "file": "src/persistence/sessions/turn-records.ts",
+      "name": "ROTATION_LOCK_TIMEOUT_MS",
+      "value": "5_000"
+    },
+    {
+      "file": "src/persistence/sessions/turn-records.ts",
+      "name": "TAIL_READ_ROTATION_RETRIES",
+      "value": "3"
+    },
+    {
+      "file": "src/persistence/sessions/turn-records.ts",
+      "name": "TURN_RECORD_SEGMENT_MAX_BYTES",
+      "value": "64 * 1024 * 1024"
+    },
+    {
+      "file": "src/persistence/workspaces/shared-workspace-store.ts",
+      "name": "MAX_ARTIFACT_BYTES",
+      "value": "1_000_000"
+    },
+    {
+      "file": "src/primitives/images/comfyui.ts",
+      "name": "DEFAULT_COMFY_POLL_INTERVAL_MS",
+      "value": "1_500"
+    },
+    {
+      "file": "src/primitives/images/comfyui.ts",
+      "name": "DEFAULT_COMFY_TIMEOUT_MS",
+      "value": "180_000"
+    },
+    {
+      "file": "src/primitives/images/fal.ts",
+      "name": "DEFAULT_FAL_POLL_INTERVAL_MS",
+      "value": "1_500"
+    },
+    {
+      "file": "src/primitives/images/fal.ts",
+      "name": "DEFAULT_FAL_TIMEOUT_MS",
+      "value": "300_000"
+    },
+    {
+      "file": "src/primitives/images/reference-store.ts",
+      "name": "MAX_DESCRIPTION_CHARS",
+      "value": "240"
+    },
+    {
+      "file": "src/primitives/images/remote-fetch.ts",
+      "name": "DEFAULT_REMOTE_IMAGE_MAX_BYTES",
+      "value": "8 * 1024 * 1024"
+    },
+    {
+      "file": "src/primitives/images/vision-reviewer.ts",
+      "name": "VISION_IMAGE_MAX_BYTES",
+      "value": "8 * 1024 * 1024"
+    },
+    {
+      "file": "src/primitives/images/vision-reviewer.ts",
+      "name": "VISION_IMAGE_MAX_COUNT",
+      "value": "4"
+    },
+    {
+      "file": "src/primitives/llm/accounting-context.ts",
+      "name": "MAX_LOGICAL_CALL_ID_LENGTH",
+      "value": "512"
+    },
+    {
+      "file": "src/primitives/llm/client-response-helpers.ts",
+      "name": "PROVIDER_RESPONSE_HEADER_POTENTIAL_MAX_CHARS",
+      "value": "120"
+    },
+    {
+      "file": "src/primitives/llm/client.ts",
+      "name": "LLM_CIRCUIT_BREAKER_COOLDOWN_MS",
+      "value": "30_000",
+      "note": "zet.6 refusal: LLM circuit-breaker knob deferred (invasive provider-client plumbing)."
+    },
+    {
+      "file": "src/primitives/llm/client.ts",
+      "name": "LLM_CIRCUIT_BREAKER_FAILURE_THRESHOLD",
+      "value": "3",
+      "note": "zet.6 refusal: LLM circuit-breaker knob deferred (invasive provider-client plumbing)."
+    },
+    {
+      "file": "src/primitives/llm/empty-tool-argument-retry.ts",
+      "name": "MAX_EMPTY_TOOL_ARGS_COMPLETION_RETRIES",
+      "value": "2"
+    },
+    {
+      "file": "src/primitives/llm/fallback.ts",
+      "name": "DEFAULT_CONNECTIVITY_COOLDOWN_MS",
+      "value": "5 * 60_000"
+    },
+    {
+      "file": "src/primitives/llm/fallback.ts",
+      "name": "DEFAULT_RATE_LIMIT_COOLDOWN_MS",
+      "value": "45_000"
+    },
+    {
+      "file": "src/primitives/llm/retry.ts",
+      "name": "DEFAULT_BASE_DELAY_MS",
+      "value": "2000"
+    },
+    {
+      "file": "src/primitives/llm/retry.ts",
+      "name": "DEFAULT_MAX_RETRIES",
+      "value": "3"
+    },
+    {
+      "file": "src/primitives/llm/vision-limits.ts",
+      "name": "VISION_COMPLETION_MAX_TOKENS",
+      "value": "1024"
+    },
+    {
+      "file": "src/primitives/voice/connectors/stt/deepgram-stream.ts",
+      "name": "DEFAULT_FINALIZE_TIMEOUT_MS",
+      "value": "2_000"
+    },
+    {
+      "file": "src/primitives/voice/connectors/stt/deepgram-stream.ts",
+      "name": "DEFAULT_OPEN_TIMEOUT_MS",
+      "value": "10_000"
+    },
+    {
+      "file": "src/primitives/voice/connectors/stt/deepgram-stream.ts",
+      "name": "DEFAULT_TRANSCRIPT_QUEUE_MAX_ENTRIES",
+      "value": "128"
+    },
+    {
+      "file": "src/primitives/voice/transports/discord-output.ts",
+      "name": "PLAYBACK_FINISH_TIMEOUT_MS",
+      "value": "120_000"
+    },
+    {
+      "file": "src/primitives/voice/transports/discord-output.ts",
+      "name": "PLAYBACK_START_TIMEOUT_MS",
+      "value": "5_000"
+    },
+    {
+      "file": "src/primitives/voice/transports/websocket/runtime.ts",
+      "name": "DEFAULT_MAX_AUDIO_CHUNK_BYTES",
+      "value": "256 * 1024"
+    },
+    {
+      "file": "src/primitives/voice/transports/websocket/runtime.ts",
+      "name": "DEFAULT_MAX_FINAL_TRANSCRIPTS",
+      "value": "128"
+    },
+    {
+      "file": "src/primitives/voice/transports/websocket/server.ts",
+      "name": "CLOSE_CODE_SESSION_TIMEOUT",
+      "value": "4000"
+    },
+    {
+      "file": "src/primitives/voice/transports/websocket/server.ts",
+      "name": "DEFAULT_MAX_FRAME_BYTES",
+      "value": "256 * 1024"
+    },
+    {
+      "file": "src/primitives/voice/transports/websocket/server.ts",
+      "name": "DEFAULT_MAX_PENDING_FRAMES",
+      "value": "32"
+    },
+    {
+      "file": "src/primitives/voice/transports/websocket/server.ts",
+      "name": "DEFAULT_SESSION_TIMEOUT_MS",
+      "value": "30_000"
+    },
+    {
+      "file": "src/primitives/voice/turns/controller.ts",
+      "name": "DEFAULT_SILENCE_THRESHOLD_MS",
+      "value": "1_200"
+    },
+    {
+      "file": "src/shared/context-budget.ts",
+      "name": "MEMORY_RETRIEVAL_BUDGET_PCT_DEFAULT",
+      "value": "2"
+    },
+    {
+      "file": "src/shared/context-budget.ts",
+      "name": "MEMORY_RETRIEVAL_MIN_ITEMS",
+      "value": "1"
+    },
+    {
+      "file": "src/shared/context-budget.ts",
+      "name": "MEMORY_RETRIEVAL_MIN_TOKENS_FLOOR_DEFAULT",
+      "value": "1_000"
+    },
+    {
+      "file": "src/shared/context-budget.ts",
+      "name": "SESSION_HISTORY_BUDGET_PCT_DEFAULT",
+      "value": "6"
+    },
+    {
+      "file": "src/shared/context-budget.ts",
+      "name": "SESSION_HISTORY_MIN_MESSAGES",
+      "value": "5"
+    },
+    {
+      "file": "src/shared/context-budget.ts",
+      "name": "SESSION_HISTORY_MIN_TOKENS_FLOOR_DEFAULT",
+      "value": "4_000"
+    },
+    {
+      "file": "src/shared/context-budget.ts",
+      "name": "WIKI_RETRIEVAL_CHAT_TOKEN_CAP_DEFAULT",
+      "value": "1_000"
+    },
+    {
+      "file": "src/shared/context-budget.ts",
+      "name": "WIKI_RETRIEVAL_FOCUS_TOKEN_CAP_DEFAULT",
+      "value": "2_000"
+    },
+    {
+      "file": "src/shared/context-budget.ts",
+      "name": "WIKI_RETRIEVAL_GROUP_SIMILARITY_THRESHOLD_DEFAULT",
+      "value": "0.78"
+    },
+    {
+      "file": "src/shared/context-budget.ts",
+      "name": "WIKI_RETRIEVAL_GROUP_TOKEN_CAP_DEFAULT",
+      "value": "400"
+    },
+    {
+      "file": "src/shared/context-budget.ts",
+      "name": "WIKI_RETRIEVAL_SIMILARITY_THRESHOLD_DEFAULT",
+      "value": "0.6"
+    },
+    {
+      "file": "src/shared/contracts/icp-autonomy.ts",
+      "name": "MAX_ICP_AVAILABILITY_LEASE_TTL_MS",
+      "value": "24 * 60 * 60_000"
+    },
+    {
+      "file": "src/shared/contracts/icp-autonomy.ts",
+      "name": "MAX_ICP_PERMIT_TTL_MS",
+      "value": "15 * 60_000"
+    },
+    {
+      "file": "src/shared/contracts/intake-envelope.ts",
+      "name": "MAX_CONTENT_REF_CHARS",
+      "value": "2048"
+    },
+    {
+      "file": "src/shared/contracts/intake-envelope.ts",
+      "name": "MAX_EXTRACTED_FIELD_KEY_CHARS",
+      "value": "128"
+    },
+    {
+      "file": "src/shared/contracts/intake-envelope.ts",
+      "name": "MAX_EXTRACTED_FIELD_VALUE_CHARS",
+      "value": "4096"
+    },
+    {
+      "file": "src/shared/contracts/intake-envelope.ts",
+      "name": "MAX_EXTRACTED_FIELDS",
+      "value": "64"
+    },
+    {
+      "file": "src/shared/contracts/intake-envelope.ts",
+      "name": "MAX_PROVENANCE_HOPS",
+      "value": "32"
+    },
+    {
+      "file": "src/shared/contracts/intake-envelope.ts",
+      "name": "MAX_REASON_CHARS",
+      "value": "1024"
+    },
+    {
+      "file": "src/shared/diagnostics/redaction.ts",
+      "name": "MAX_DIAGNOSTIC_TEXT_CHARS",
+      "value": "240"
+    },
+    {
+      "file": "src/shared/diagnostics/runtime-diagnostics.ts",
+      "name": "BACKUP_RING_LIMIT",
+      "value": "128"
+    },
+    {
+      "file": "src/shared/diagnostics/runtime-diagnostics.ts",
+      "name": "DEFAULT_LIMIT",
+      "value": "20"
+    },
+    {
+      "file": "src/shared/diagnostics/runtime-diagnostics.ts",
+      "name": "LIFECYCLE_RING_LIMIT",
+      "value": "256"
+    },
+    {
+      "file": "src/shared/diagnostics/runtime-diagnostics.ts",
+      "name": "MAX_FILE_LOG_BYTES",
+      "value": "64 * 1024"
+    },
+    {
+      "file": "src/shared/diagnostics/runtime-diagnostics.ts",
+      "name": "MAX_FILE_LOG_FILES",
+      "value": "5"
+    },
+    {
+      "file": "src/shared/diagnostics/runtime-diagnostics.ts",
+      "name": "MAX_LIMIT",
+      "value": "100"
+    },
+    {
+      "file": "src/shared/diagnostics/runtime-diagnostics.ts",
+      "name": "MAX_WINDOW_MS",
+      "value": "24 * 60 * 60 * 1000"
+    },
+    {
+      "file": "src/shared/diagnostics/runtime-diagnostics.ts",
+      "name": "MIN_WINDOW_MS",
+      "value": "1000"
+    },
+    {
+      "file": "src/shared/diagnostics/runtime-diagnostics.ts",
+      "name": "TOOL_VALIDATION_RING_LIMIT",
+      "value": "1024"
+    },
+    {
+      "file": "src/shared/log-rate-limit.ts",
+      "name": "DEFAULT_MAX_KEYS",
+      "value": "500"
+    },
+    {
+      "file": "src/shared/logger.ts",
+      "name": "DIAGNOSTIC_LOG_RING_LIMIT",
+      "value": "256"
+    },
+    {
+      "file": "src/shared/routing/companion-id.ts",
+      "name": "COMPANION_ID_MAX_LENGTH",
+      "value": "128"
+    },
+    {
+      "file": "src/shared/telemetry/charge-ledger.ts",
+      "name": "DEFAULT_EVENT_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/shared/telemetry/charge-ledger.ts",
+      "name": "DEFAULT_RECENT_RUN_LIMIT",
+      "value": "24"
+    },
+    {
+      "file": "src/shared/telemetry/charge-ledger.ts",
+      "name": "MAX_EVENT_LIMIT",
+      "value": "2_000"
+    },
+    {
+      "file": "src/shared/telemetry/fatigue-ledger.ts",
+      "name": "DEFAULT_EVENT_LIMIT",
+      "value": "200"
+    },
+    {
+      "file": "src/shared/telemetry/fatigue-ledger.ts",
+      "name": "MAX_EVENT_LIMIT",
+      "value": "2_000"
+    },
+    {
+      "file": "src/shared/telemetry/model-usage-attribution.ts",
+      "name": "MAX_DIMENSION_LENGTH",
+      "value": "512"
+    },
+    {
+      "file": "src/shared/telemetry/model-usage-metadata.ts",
+      "name": "MAX_METADATA_ARRAY_ITEMS",
+      "value": "32"
+    },
+    {
+      "file": "src/shared/telemetry/model-usage-metadata.ts",
+      "name": "MAX_METADATA_DEPTH",
+      "value": "6"
+    },
+    {
+      "file": "src/shared/telemetry/model-usage-metadata.ts",
+      "name": "MAX_METADATA_KEYS",
+      "value": "64"
+    },
+    {
+      "file": "src/shared/telemetry/model-usage-metadata.ts",
+      "name": "MAX_METADATA_STRING_CHARS",
+      "value": "2_048"
+    },
+    {
+      "file": "src/shared/telemetry/model-usage-metadata.ts",
+      "name": "MAX_MODEL_USAGE_METADATA_BYTES",
+      "value": "16 * 1024"
+    },
+    {
+      "file": "src/shared/telemetry/model-usage-range.ts",
+      "name": "MAX_BUCKET_COUNT",
+      "value": "2_000"
+    },
+    {
+      "file": "src/shared/telemetry/provider-cost-evidence.ts",
+      "name": "MAX_PROVIDER_COST_EVIDENCE_SOURCES",
+      "value": "128"
+    },
+    {
+      "file": "src/shared/utils/escaping.ts",
+      "name": "PROMPT_EMBEDDED_TEXT_DEFAULT_MAX_LENGTH",
+      "value": "256"
+    },
+    {
+      "file": "src/system/capabilities/safeguards.ts",
+      "name": "DEFAULT_IDENTITY_COOLDOWN_MS",
+      "value": "5 * 60 * 1000",
+      "note": "zet.6 refusal: safeguard tier is env-owned; default intentionally code-owned."
+    },
+    {
+      "file": "src/system/capabilities/safeguards.ts",
+      "name": "DEFAULT_MAX_RESTARTS_PER_HOUR",
+      "value": "5",
+      "note": "zet.6 refusal: safeguard tier is env-owned; default intentionally code-owned."
+    },
+    {
+      "file": "src/system/capabilities/safeguards.ts",
+      "name": "DEFAULT_RESTART_COOLDOWN_MS",
+      "value": "60_000",
+      "note": "zet.6 refusal: safeguard tier is env-owned; default intentionally code-owned."
+    },
+    {
+      "file": "src/system/capabilities/safeguards.ts",
+      "name": "MIN_RESTART_COOLDOWN_MS",
+      "value": "60_000",
+      "note": "zet.6 refusal: safeguard floor is env-owned; intentionally code-owned."
+    },
+    {
+      "file": "src/system/config/charge-policy-config.ts",
+      "name": "MAX_FATIGUE_OVERCHARGE_RESERVE_RESPONSES",
+      "value": "10"
+    },
+    {
+      "file": "src/system/config/companions-config.ts",
+      "name": "GARDEN_PORT_MAX",
+      "value": "65_535"
+    },
+    {
+      "file": "src/system/config/companions-config.ts",
+      "name": "GARDEN_PORT_MIN",
+      "value": "1"
+    },
+    {
+      "file": "src/system/config/companions-config.ts",
+      "name": "POSTGRES_SCHEMA_MAX_LENGTH",
+      "value": "63"
+    },
+    {
+      "file": "src/system/config/intake-policy-config.ts",
+      "name": "MAX_PERSON_PATTERN_CHARS",
+      "value": "256"
+    },
+    {
+      "file": "src/system/config/intake-policy-config.ts",
+      "name": "MAX_SITE_PATTERN_CHARS",
+      "value": "255"
+    },
+    {
+      "file": "src/system/config/intake-policy-config.ts",
+      "name": "MAX_SOURCE_LIST_ADDED_BY_CHARS",
+      "value": "128"
+    },
+    {
+      "file": "src/system/config/intake-policy-config.ts",
+      "name": "MAX_SOURCE_LIST_ENTRIES",
+      "value": "512"
+    },
+    {
+      "file": "src/system/config/intake-policy-config.ts",
+      "name": "MAX_SOURCE_LIST_NOTE_CHARS",
+      "value": "512"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "BOOTSTRAP_MAX_OUTPUT_TOKENS",
+      "value": "1"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_COMPACTION_EMOTIONAL_SALIENCE_THRESHOLD_PCT",
+      "value": "75"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_COMPACTION_THRESHOLD_PCT",
+      "value": "70"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_CONTINUITY_MESSAGE_LIMIT",
+      "value": "10"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_DOCUMENT_INGEST_MAX_BYTES",
+      "value": "16 * 1024 * 1024"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_DOCUMENT_INGEST_TEXT_MAX_BYTES",
+      "value": "4 * 1024 * 1024"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_EXTRACTION_INTERVAL",
+      "value": "5"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_EXTRACTION_THRESHOLD_PCT",
+      "value": "30"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_IMAGE_COMFY_POLL_INTERVAL_MS",
+      "value": "1_500"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_IMAGE_COMFY_TIMEOUT_MS",
+      "value": "180_000"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_IMAGE_FAL_POLL_INTERVAL_MS",
+      "value": "1_500"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_IMAGE_FAL_TIMEOUT_MS",
+      "value": "300_000"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_MAINTENANCE_INTERVAL_MS",
+      "value": "3_600_000"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_MEMORY_EXTRACTION_MAX_WRITES",
+      "value": "2"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_MEMORY_EXTRACTION_MIN_CONFIDENCE",
+      "value": "0.6"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_MEMORY_EXTRACTION_MIN_IMPORTANCE",
+      "value": "0.45"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_MEMORY_EXTRACTION_MIN_NOVELTY",
+      "value": "0.35"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_MEMORY_REFRESH_FAILURE_ALERT_THRESHOLD",
+      "value": "3"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_OBSIDIAN_TIMEOUT_MS",
+      "value": "10_000"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_PROFILE_SYNTHESIS_COOLDOWN_MS",
+      "value": "5 * 60 * 1000"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_PROFILE_SYNTHESIS_MIN_CONFIDENCE",
+      "value": "0.7"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_PROFILE_SYNTHESIS_MIN_IMPORTANCE",
+      "value": "0.65"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_PROFILE_SYNTHESIS_MIN_NOVELTY",
+      "value": "0.12"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_PROFILE_SYNTHESIS_MIN_SOURCE_MEMORIES",
+      "value": "2"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_PROFILE_SYNTHESIS_MIN_WRITES",
+      "value": "1"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_PROFILE_SYNTHESIS_REFRESH_INTERVAL_MS",
+      "value": "6 * 60 * 60 * 1000"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_PROFILE_SYNTHESIS_SOURCE_MEMORY_LIMIT",
+      "value": "16"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_RETRY_BASE_DELAY_MS",
+      "value": "2_000"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_RETRY_MAX_ATTEMPTS",
+      "value": "3"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_SESSION_MIRROR_MAX_CHARS",
+      "value": "220"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_SHARD_MAX_CONCURRENT",
+      "value": "5"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_SUBAGENT_MAX_CONCURRENT",
+      "value": "8"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_THINK_EXECUTION_TIMEOUT_MS",
+      "value": "5_000"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_THINK_MAX_SUB_QUERIES",
+      "value": "24"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_THINK_MAX_TOKENS",
+      "value": "76_000"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_THINK_MAX_WALL_TIME_MS",
+      "value": "300_000"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_VOICE_MAX_FRAME_BYTES",
+      "value": "256 * 1024"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_VOICE_MAX_PENDING_FRAMES",
+      "value": "32"
+    },
+    {
+      "file": "src/system/config/load-config.ts",
+      "name": "DEFAULT_VOICE_SESSION_TIMEOUT_MS",
+      "value": "30_000"
+    },
+    {
+      "file": "src/system/config/runtime-config-contracts.ts",
+      "name": "PROMOTED_EXTENDED_TOOL_SLOTS_MAX",
+      "value": "4"
+    },
+    {
+      "file": "src/system/security/policy-constants.ts",
+      "name": "WEB_FETCH_TIMEOUT_MS",
+      "value": "15_000"
+    },
+    {
+      "file": "src/system/trust/broadcast-safety.ts",
+      "name": "MAX_MATCHES_PER_SIGNAL",
+      "value": "3"
+    },
+    {
+      "file": "src/system/trust/broadcast-safety.ts",
+      "name": "MIN_APPROVAL_TOKEN_SUFFIX_LENGTH",
+      "value": "8"
+    },
+    {
+      "file": "src/system/trust/context-envelope.ts",
+      "name": "DEFAULT_PARTICIPANT_RELATIONSHIP_CONFIDENCE_THRESHOLD",
+      "value": "0.7"
+    },
+    {
+      "file": "src/test-support/postgres-test-harness.ts",
+      "name": "READY_RETRY_DELAY_MS",
+      "value": "500"
+    },
+    {
+      "file": "src/test-support/postgres-test-harness.ts",
+      "name": "READY_RETRY_LIMIT",
+      "value": "120"
+    }
+  ]
+}

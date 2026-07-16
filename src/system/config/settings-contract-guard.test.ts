@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import * as adminUiGardenContract from '../../../admin-ui/src/lib/settings-garden-contract.js';
 import {
+  SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS,
   SETTINGS_GARDEN_FIELD_EXPOSURE,
   SETTINGS_GARDEN_GENERIC_FIELD_TYPES,
   SETTINGS_GARDEN_RAW_EDITOR_FALLBACK_FILE_BY_KEY,
@@ -15,6 +16,7 @@ import {
 } from '../../shared/contracts/settings-garden-contract.js';
 import { buildSettingsContractData } from './settings-contract.js';
 import { verifySettingsContractGuard } from './settings-contract-guard.js';
+import { COMPANION_SETTINGS_OVERLAY_WHITELIST } from './settings-overlay.js';
 
 describe('settings contract guard', () => {
   it('keeps backend schema, Garden exposure metadata, and owner files aligned', () => {
@@ -29,6 +31,9 @@ describe('settings contract guard', () => {
     expect(adminUiGardenContract.SETTINGS_GARDEN_FIELD_EXPOSURE).toBe(SETTINGS_GARDEN_FIELD_EXPOSURE);
     expect(adminUiGardenContract.SETTINGS_GARDEN_GENERIC_FIELD_TYPES).toBe(SETTINGS_GARDEN_GENERIC_FIELD_TYPES);
     expect(adminUiGardenContract.SETTINGS_GARDEN_SECTION_FIELDS).toBe(SETTINGS_GARDEN_SECTION_FIELDS);
+    expect(adminUiGardenContract.SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS).toBe(
+      SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS,
+    );
     expect(adminUiGardenContract.SETTINGS_GARDEN_RAW_EDITOR_KEYS).toBe(SETTINGS_GARDEN_RAW_EDITOR_KEYS);
     expect(adminUiGardenContract.SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY).toBe(
       SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY,
@@ -40,6 +45,25 @@ describe('settings contract guard', () => {
     expect(adminUiGardenContract.listGardenSettingsFieldExposureKeys).toBe(listGardenSettingsFieldExposureKeys);
     expect(adminUiGardenContract.listGardenSettingsOwnerFileCoverage).toBe(listGardenSettingsOwnerFileCoverage);
     expect(adminUiGardenContract.listGardenSettingsTunableFieldCoverage).toBe(listGardenSettingsTunableFieldCoverage);
+  });
+
+  it('records a global-vs-perCompanion scope for every settings field (dnll.1)', () => {
+    const contractData = buildSettingsContractData();
+    const overlayKeys = new Set<string>(COMPANION_SETTINGS_OVERLAY_WHITELIST);
+
+    for (const field of Object.values(contractData.fields)) {
+      expect(field.scope).toBe(overlayKeys.has(field.key) ? 'perCompanion' : 'global');
+    }
+
+    // Every whitelisted overlay key must exist in the contract and be per-companion.
+    for (const key of overlayKeys) {
+      expect(contractData.fields[key], `missing contract field for overlay key ${key}`).toBeDefined();
+      expect(contractData.fields[key].scope).toBe('perCompanion');
+    }
+
+    // Representative cluster-global keys stay global.
+    expect(contractData.fields.capabilityTier.scope).toBe('global');
+    expect(contractData.fields.sessionHistoryBudgetPct.scope).toBe('global');
   });
 
   it('keeps the Garden tunable-setting inventory aligned to backend owner metadata', () => {
@@ -72,6 +96,64 @@ describe('settings contract guard', () => {
         expect(field.ownerFile).toBe('capability-tier.json');
       }
     }
+  });
+
+  it('projects every advanced-surface field into its section for the generic "All Fields" editor', () => {
+    // The generic advanced editor renders SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS,
+    // independent of whether a field is present in the persisted runtime settings,
+    // so admins can discover and edit settings still on their built-in defaults
+    // (psfn-framework-zet.3). This projection must contain exactly the
+    // advanced-surface fields and must never leak a custom-surface field, which
+    // the runtime write path would reject as wrong_owner.
+    const advancedByKey = new Map<string, string>();
+    for (const [sectionId, keys] of Object.entries(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS)) {
+      for (const key of keys) {
+        expect(advancedByKey.has(key)).toBe(false); // no field lands in two sections
+        advancedByKey.set(key, sectionId);
+      }
+    }
+
+    // Every entry is advanced-surface and mapped to the section it declares.
+    for (const [key, sectionId] of advancedByKey) {
+      const exposure = SETTINGS_GARDEN_FIELD_EXPOSURE[
+        key as keyof typeof SETTINGS_GARDEN_FIELD_EXPOSURE
+      ];
+      expect(exposure).toBeDefined();
+      expect(exposure.surface).toBe('advanced');
+      expect(exposure.sectionId).toBe(sectionId);
+      // Advanced fields must also stay listed in the raw section index.
+      expect(SETTINGS_GARDEN_SECTION_FIELDS[exposure.sectionId]).toContain(key);
+    }
+
+    // The projection is exactly the set of advanced-surface exposure keys.
+    const expectedAdvancedKeys = Object.entries(SETTINGS_GARDEN_FIELD_EXPOSURE)
+      .filter(([, exposure]) => exposure.surface === 'advanced')
+      .map(([key]) => key)
+      .sort();
+    expect([...advancedByKey.keys()].sort()).toEqual(expectedAdvancedKeys);
+
+    // Custom-surface fields keep their dedicated editors and must never appear.
+    for (const customKey of [
+      'modelCatalog',
+      'capabilityTier',
+      'customTokens',
+      'salienceDecayIntervalMs',
+      'episodicProcessingEnabled',
+      'episodicProcessingInactivityThresholdMinutes',
+    ]) {
+      expect(advancedByKey.has(customKey)).toBe(false);
+    }
+
+    // High-impact fields that were previously invisible until first persisted
+    // (absent from the seed settings.json) are now surfaced in their sections.
+    expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.channels).toContain('promotedExtendedTools');
+    expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.memory).toContain('emotionScoping');
+    expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.memory).toContain('embeddingProvider');
+    expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.sessions).toContain('sessionMirrorEnabled');
+    expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.sessions).toContain('continuityMessageLimit');
+    expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.sessions).toContain('observationMaskingWindow');
+    expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.channels).toContain('imageWorkflows');
+    expect(SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.channels).toContain('moaEnabled');
   });
 
   it('keeps the Garden owner-file inventory exact and aligned to backend subsystems', () => {
@@ -109,6 +191,7 @@ describe('settings contract guard', () => {
       id: 'channels',
       ownerFile: 'channels.json',
       mode: 'raw_only',
+      scope: 'global',
     });
   });
 
@@ -119,6 +202,7 @@ describe('settings contract guard', () => {
       id: 'chargePolicy',
       ownerFile: 'charge-policy.json',
       mode: 'raw_only',
+      scope: 'global',
     });
   });
 
@@ -129,6 +213,7 @@ describe('settings contract guard', () => {
       id: 'intakePolicy',
       ownerFile: 'intake-policy.json',
       mode: 'raw_only',
+      scope: 'global',
     });
   });
 
@@ -189,6 +274,7 @@ describe('memory retrieval policy settings compliance', () => {
       ownerSubsystem: 'runtime',
       ownerFile: 'settings.json',
       type: 'object',
+      scope: 'global',
     });
     expect(SETTINGS_GARDEN_FIELD_EXPOSURE.memoryRetrievalPolicy).toEqual({
       sectionId: 'memory',
@@ -215,7 +301,28 @@ describe('memory retrieval policy settings compliance', () => {
       proceduralTaskRetrievalPrior: 1.2,
       selectionCaps: { reflection: 2, procedural: 2 },
       nonTemporalRecencyFloor: 0.35,
-      lexicalAugment: { pageSize: 256, maxScan: 2_048, selectedLimit: 12 },
+      lexicalAugment: {
+        pageSize: 256,
+        maxScan: 2_048,
+        selectedLimit: 12,
+        minOverlap: 2,
+        baseSimilarity: 0.62,
+      },
+      scoreGuaranteeMinK: 3,
+      scoreGuaranteeFloor: 0.01,
+      episodic: {
+        scanLimit: 1_000,
+        maxChains: 3,
+        maxDepth: 2,
+        maxEpisodesPerChain: 5,
+        timelineLimit: 8,
+        timelineScanLimit: 200,
+        timelineMaxDepth: 1,
+        timelineMaxEpisodesPerRoot: 3,
+        arcScanLimit: 8,
+        minRootMatchScore: 0.18,
+        minRelatedMatchScore: 0.08,
+      },
       emotionalIntensityPersistenceMaxMultiplier: 6,
     }));
   });
@@ -237,6 +344,7 @@ describe('home assistant connection settings compliance', () => {
       ownerSubsystem: 'runtime',
       ownerFile: 'settings.json',
       type: 'boolean',
+      scope: 'global',
     });
     for (const key of HA_FIELD_KEYS) {
       expect(contractData.fields[key].deprecated).toBeUndefined();

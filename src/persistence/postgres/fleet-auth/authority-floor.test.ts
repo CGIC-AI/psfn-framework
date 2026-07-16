@@ -13,8 +13,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   FLEET_AUTH_AUTHORITY_FLOOR_FILE_NAME,
   FleetAuthAuthorityFloorStore,
-  type PasskeyAuthorityCandidate,
 } from './authority-floor.js';
+import type { PasskeyAuthorityCandidate } from '../../../boundary/fleet-auth/passkey-authority.js';
 
 const PRINCIPAL_ID = '11111111-1111-4111-8111-111111111111';
 const COMPANION_ID = '22222222-2222-4222-8222-222222222222';

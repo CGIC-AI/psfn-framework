@@ -175,7 +175,6 @@ export function normalizeDiscordListenWindowSeconds(value: number): number {
 export interface AdvancedSettingsSectionDef {
   id: string;
   title: string;
-  icon: string;
   keys: string[];
   summary: () => string;
 }

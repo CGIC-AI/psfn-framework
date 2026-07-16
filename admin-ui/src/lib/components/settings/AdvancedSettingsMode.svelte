@@ -9,7 +9,6 @@
   export interface AdvancedSettingsSection {
     id: string;
     title: string;
-    icon: string;
     keys: string[];
   }
 
@@ -131,9 +130,6 @@
           class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
         >
           <div class="flex items-center gap-3">
-            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">
-              {section.icon}
-            </span>
             <h2 class="text-sm font-serif font-semibold text-shadow-800">{section.title}</h2>
             <span class="text-sm text-shadow-500">({sectionKeys.length} fields)</span>
           </div>
@@ -333,9 +329,6 @@
           class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
         >
           <div class="flex items-center gap-3">
-            <span class="flex items-center justify-center w-7 h-7 rounded-full bg-bark-200 text-shadow-600 text-sm font-bold border border-bark-400">
-              ?
-            </span>
             <h2 class="text-sm font-serif font-semibold text-shadow-800">Other Settings</h2>
             <span class="text-sm text-shadow-500">({otherKeys.length} fields)</span>
           </div>

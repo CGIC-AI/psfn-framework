@@ -18,7 +18,20 @@ export interface MemorySubjectAccessContext {
   viewerContactId?: string;
   /** Only process-local companion work may opt into companion-private rows. */
   companionInternal?: boolean;
+  /**
+   * Add companion-private rows to product recall candidate queries. This is
+   * not a disclosure grant: the retriever's room, trust, sensitivity, consent,
+   * and policy gates still decide whether any candidate reaches a prompt.
+   */
+  includeCompanionPrivateRecallCandidates?: boolean;
 }
+
+const COMPANION_PRIVATE_RECALL_ACTIONS = new Set<MemorySubjectQueryAuthorization['action']>([
+  'list',
+  'detail',
+  'search',
+  'embedding',
+]);
 
 export function memorySubjectAccessContextFromCorrelation(
   context: Partial<CorrelationMetadata> | undefined,
@@ -43,15 +56,25 @@ function authorization(
 ): MemorySubjectQueryAuthorization | undefined {
   const subject = normalizedSubject(context);
   if (!subject) return undefined;
+  const companionInternal = context.companionInternal && !context.viewerContactId?.trim();
+  const includeCompanionPrivateRecall = Boolean(
+    context.viewerContactId?.trim()
+    && context.includeCompanionPrivateRecallCandidates
+    && COMPANION_PRIVATE_RECALL_ACTIONS.has(action),
+  );
   return {
     action,
     viewerContactIds: [subject],
-    allowedSubjectClasses: context.companionInternal && !context.viewerContactId?.trim()
+    allowedSubjectClasses: companionInternal
       ? ['companion_private']
-      : ['single_contact', 'multiple_contacts'],
-    allowedViewerRelations: context.companionInternal && !context.viewerContactId?.trim()
+      : includeCompanionPrivateRecall
+        ? ['single_contact', 'multiple_contacts', 'companion_private']
+        : ['single_contact', 'multiple_contacts'],
+    allowedViewerRelations: companionInternal
       ? ['none']
-      : ['self', 'co_subject'],
+      : includeCompanionPrivateRecall
+        ? ['self', 'co_subject', 'none']
+        : ['self', 'co_subject'],
     classifierVersion: MEMORY_SUBJECT_CLASSIFIER_VERSION,
     grantBindings: [],
   };

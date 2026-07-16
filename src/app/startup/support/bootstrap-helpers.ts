@@ -287,8 +287,15 @@ export function hydrateCanonicalStartupConfig(
     heartbeatIntervalMs: persistedScheduler.heartbeatIntervalMs,
     backgroundMaintenance: {
       intervalMs: persistedScheduler.backgroundMaintenance.intervalMs,
+      sharedWorldWikiCaretaker: {
+        ...persistedScheduler.backgroundMaintenance.sharedWorldWikiCaretaker,
+      },
       ambientPresence: { ...persistedScheduler.backgroundMaintenance.ambientPresence },
       concernGrooming: { ...persistedScheduler.backgroundMaintenance.concernGrooming },
+    },
+    backgroundWork: {
+      supervisor: { ...persistedScheduler.backgroundWork.supervisor },
+      postTurn: { ...persistedScheduler.backgroundWork.postTurn },
     },
     artifactLifecycle: { ...persistedScheduler.artifactLifecycle },
     episodicProcessing: { ...persistedScheduler.episodicProcessing },
@@ -346,6 +353,9 @@ export function hydrateCanonicalStartupConfig(
     },
     ...(persistedScheduler.introspectionAudit
       ? { introspectionAudit: { ...persistedScheduler.introspectionAudit } }
+      : {}),
+    ...(persistedScheduler.backgroundWorkWelfare
+      ? { backgroundWorkWelfare: { ...persistedScheduler.backgroundWorkWelfare } }
       : {}),
   };
   const chargePolicyConfig = configStore.loadStartupChargePolicy();

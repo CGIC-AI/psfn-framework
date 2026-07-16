@@ -3,7 +3,7 @@
   import {
     confirmIntakeQuarantineDecision,
     decideIntakeQuarantine,
-    getIntakeQuarantine,
+    loadIntakeQuarantineLocalFirst,
     getIntakeQuarantineItem,
     type IntakeQuarantineDecisionAction,
   } from '$lib/api/endpoints/intake';
@@ -87,11 +87,17 @@
     loading = true;
     error = '';
     endpointMissing = false;
+    let rendered = false;
     try {
-      const data = await getIntakeQuarantine();
-      items = data.items;
+      await loadIntakeQuarantineLocalFirst((data, source) => {
+        rendered = true;
+        items = data.items;
+        if (source === 'cache') loading = false;
+      });
     } catch (e) {
-      if (e instanceof Error && e.message.includes('404')) {
+      if (rendered) {
+        pushToast(e instanceof Error ? e.message : 'Failed to refresh quarantine queue', 'error');
+      } else if (e instanceof Error && e.message.includes('404')) {
         endpointMissing = true;
       } else {
         error = e instanceof Error ? e.message : 'Failed to load quarantine queue';

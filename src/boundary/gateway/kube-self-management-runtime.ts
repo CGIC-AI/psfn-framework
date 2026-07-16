@@ -27,12 +27,19 @@ import {
 import type { KubeRollbackRecord } from '../../system/lifecycle/kube-rollback-store.js';
 import { createInClusterKubernetesReadApi } from './kubernetes-read-api.js';
 import { createInClusterKubernetesRolloutApi } from './kubernetes-rollout-api.js';
+import type { LifecycleKubernetesSettings } from '../../system/config/runtime-config-contracts.js';
+import { requireLifecycleKubernetesSettings } from '../../system/lifecycle/lifecycle-kubernetes-settings.js';
 
 export interface ResolveKubeSelfManagementControllerOptions {
   env: NodeJS.ProcessEnv;
+  lifecycleKubernetes?: LifecycleKubernetesSettings;
   audit(entry: AuditSummaryEntry): Promise<unknown>;
-  createApi?: (env: NodeJS.ProcessEnv) => KubeReadApiPort;
-  createRolloutApi?: (env: NodeJS.ProcessEnv) => KubeRolloutApiPort;
+  createApi?: (env: NodeJS.ProcessEnv, requestTimeoutMs: number) => KubeReadApiPort;
+  createRolloutApi?: (
+    env: NodeJS.ProcessEnv,
+    readRequestTimeoutMs: number,
+    rolloutRequestTimeoutMs: number,
+  ) => KubeRolloutApiPort;
   /**
    * Operator-job composition seam for the guarded build/deploy pipeline. When
    * supplied, the controller additionally dispatches `rebuild`/`deploy` through
@@ -53,8 +60,6 @@ export interface ResolveKubeSelfManagementControllerOptions {
     /** Operator-job Helm rollback transport (holds release-management credentials). */
     api: KubeHelmRollbackApiPort;
     recordRollback?: (record: KubeRollbackRecord) => void;
-    waitTimeoutMs?: number;
-    pollIntervalMs?: number;
   };
 }
 
@@ -102,6 +107,7 @@ export function resolveKubeSelfManagementController(
   if (!parseEnabled(options.env.PSFN_KUBE_SELF_MANAGEMENT_ENABLED)) {
     return undefined;
   }
+  const settings = requireLifecycleKubernetesSettings(options);
   const namespace = options.env.PSFN_HELM_NAMESPACE?.trim() ?? '';
   const release = options.env.PSFN_HELM_RELEASE_NAME?.trim() ?? '';
   const resourcePrefix = options.env.PSFN_KUBE_RESOURCE_PREFIX?.trim() ?? '';
@@ -122,8 +128,21 @@ export function resolveKubeSelfManagementController(
     throw new Error('PSFN_KUBE_CURRENT_IMAGE must be an exact pinned image reference for Kubernetes self-management.');
   }
   const helmRevision = requirePositiveRevision(options.env.PSFN_HELM_REVISION);
-  const api = (options.createApi ?? createInClusterKubernetesReadApi)(options.env);
-  const rolloutApi = (options.createRolloutApi ?? createInClusterKubernetesRolloutApi)(options.env);
+  const api = options.createApi
+    ? options.createApi(options.env, settings.kubernetesReadRequestTimeoutMs)
+    : createInClusterKubernetesReadApi(options.env, {
+      requestTimeoutMs: settings.kubernetesReadRequestTimeoutMs,
+    });
+  const rolloutApi = options.createRolloutApi
+    ? options.createRolloutApi(
+      options.env,
+      settings.kubernetesReadRequestTimeoutMs,
+      settings.kubernetesRolloutRequestTimeoutMs,
+    )
+    : createInClusterKubernetesRolloutApi(options.env, {
+      requestTimeoutMs: settings.kubernetesReadRequestTimeoutMs,
+      rolloutRequestTimeoutMs: settings.kubernetesRolloutRequestTimeoutMs,
+    });
   // Compose every applicable executor into ONE fail-closed combinator. The
   // diagnostics (read-only, x5rt.5) and rollout-restart (mutating, x5rt.5)
   // executors are always present; the guarded deploy pipeline (x5rt.6) is added
@@ -147,6 +166,8 @@ export function resolveKubeSelfManagementController(
       release,
       resourcePrefix,
       api: rolloutApi,
+      waitTimeoutMs: settings.rolloutWaitTimeoutMs,
+      pollIntervalMs: settings.rolloutPollIntervalMs,
     }),
   ];
   if (options.deployPipeline) {
@@ -161,12 +182,8 @@ export function resolveKubeSelfManagementController(
       ...(options.helmRollback.recordRollback
         ? { recordRollback: options.helmRollback.recordRollback }
         : {}),
-      ...(options.helmRollback.waitTimeoutMs !== undefined
-        ? { waitTimeoutMs: options.helmRollback.waitTimeoutMs }
-        : {}),
-      ...(options.helmRollback.pollIntervalMs !== undefined
-        ? { pollIntervalMs: options.helmRollback.pollIntervalMs }
-        : {}),
+      waitTimeoutMs: settings.rollbackWaitTimeoutMs,
+      pollIntervalMs: settings.rollbackPollIntervalMs,
     }));
   }
   return new KubeSelfManagementController({

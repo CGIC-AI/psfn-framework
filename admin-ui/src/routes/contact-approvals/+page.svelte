@@ -3,7 +3,7 @@
   import {
     approveContactApproval,
     denyContactApproval,
-    getContactApprovals,
+    loadContactApprovalsLocalFirst,
     resetContactApproval,
     type ContactApprovalEntry,
   } from '$lib/api/endpoints/contact-approvals';
@@ -25,12 +25,18 @@
     loading = true;
     error = '';
     endpointMissing = false;
+    let rendered = false;
 
     try {
-      const data = await getContactApprovals();
-      entries = data.entries;
+      await loadContactApprovalsLocalFirst((data, source) => {
+        rendered = true;
+        entries = data.entries;
+        if (source === 'cache') loading = false;
+      });
     } catch (e) {
-      if (e instanceof Error && e.message.includes('404')) {
+      if (rendered) {
+        pushToast(e instanceof Error ? e.message : 'Failed to refresh contact approvals', 'error');
+      } else if (e instanceof Error && e.message.includes('404')) {
         endpointMissing = true;
       } else {
         error = e instanceof Error ? e.message : 'Failed to load contact approvals';

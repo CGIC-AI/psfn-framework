@@ -226,6 +226,10 @@ describe('image admin API routes', () => {
         conversation: { channelId: 'discord:gallery', turnId: 'turn-gallery-1' },
         companionNoteRefs: [{ id: 'wiki:note', label: 'Note' }],
         artifactRefs: [{ kind: 'l0_artifact', refId: 'artifact-1' }],
+        sensitivityContest: {
+          sensitivity: 'personal',
+          reason: 'V reviewed the artifact boundary.',
+        },
       }),
     );
 
@@ -237,6 +241,10 @@ describe('image admin API routes', () => {
       conversation: { channelId: 'discord:gallery', turnId: 'turn-gallery-1' },
       companionNoteRefs: [{ id: 'wiki:note', label: 'Note' }],
       artifactRefs: [{ kind: 'l0_artifact', refId: 'artifact-1' }],
+      sensitivityContest: {
+        sensitivity: 'personal',
+        reason: 'V reviewed the artifact boundary.',
+      },
     });
     expect(JSON.parse(String(patchResponse.body))).toMatchObject({
       ok: true,

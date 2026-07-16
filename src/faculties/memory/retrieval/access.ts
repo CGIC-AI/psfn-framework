@@ -8,7 +8,10 @@ import {
   type ChannelMeta,
   type DisclosureBoundaryDirective,
 } from '../../../system/trust/policy.js';
-import type { PurrMemory } from '../types.js';
+import type {
+  PurrMemory,
+  RetrievalAccessScope,
+} from '../types.js';
 import type { ConversationScope } from '../../../core/session/conversation-scope.js';
 import {
   createEmptyMemoryWithheldSummary,
@@ -55,6 +58,7 @@ export interface RetrievalRoomVisibilityContext {
 }
 
 interface RetrievalParticipantAccessContext {
+  accessScope?: RetrievalAccessScope;
   trustLevel: TrustLevel;
   channelPrivacy: ChannelPrivacy;
   broadcast: boolean;
@@ -106,6 +110,15 @@ function hasRoomContextScopeTag(memory: Pick<PurrMemory, 'scopeTags'>): boolean 
   return false;
 }
 
+function isRecallableCompanionSelfExperience(
+  memory: Pick<PurrMemory, 'tags' | 'provenance'>,
+): boolean {
+  const tags = new Set(memory.tags.map(tag => tag.trim().toLowerCase()));
+  return memory.provenance?.actor === 'companion'
+    && tags.has('self_directed')
+    && tags.has('self_experience');
+}
+
 function resolveMemorySourceRoom(memory: Pick<PurrMemory, 'provenance' | 'scopeRef'>): {
   roomId?: string;
   inconsistent: boolean;
@@ -123,7 +136,7 @@ function resolveMemorySourceRoom(memory: Pick<PurrMemory, 'provenance' | 'scopeR
 }
 
 function isPrimaryPrivateDmSubject(
-  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'provenance' | 'scopeRef' | 'scopeTags'>,
+  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'tags' | 'provenance' | 'scopeRef' | 'scopeTags'>,
   options: RetrievalParticipantAccessContext,
 ): boolean {
   const canonicalContactId = normalizeContactId(options.canonicalContactId);
@@ -147,11 +160,12 @@ function isPrimaryPrivateDmSubject(
 
   return memory.scopeRef?.kind !== 'conversation'
     && !hasRoomContextScopeTag(memory)
-    && !isHighIntimacySensitivityLevel(memory.sensitivity);
+    && !isHighIntimacySensitivityLevel(memory.sensitivity)
+    && isRecallableCompanionSelfExperience(memory);
 }
 
 function violatesHighIntimacyContactScope(
-  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'provenance' | 'scopeRef' | 'scopeTags'>,
+  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'tags' | 'provenance' | 'scopeRef' | 'scopeTags'>,
   options: RetrievalParticipantAccessContext,
 ): boolean {
   if (!isHighIntimacySensitivityLevel(memory.sensitivity)) return false;
@@ -171,7 +185,7 @@ function requiresRoomProofWhenSourceMissing(
 }
 
 function evaluateRoomVisibilityDecision(
-  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'provenance' | 'scopeRef' | 'scopeTags'>,
+  memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'tags' | 'provenance' | 'scopeRef' | 'scopeTags'>,
   options: RetrievalParticipantAccessContext,
 ): RetrievalAccessDecision | undefined {
   const roomVisibility = options.roomVisibility;
@@ -220,6 +234,7 @@ function evaluateRoomVisibilityDecision(
 export function evaluateRetrievalAccessDecision(
   memory: Pick<PurrMemory, 'sensitivity' | 'contactId' | 'consentFlags' | 'tags' | 'provenance' | 'scopeRef' | 'scopeTags'>,
   options: {
+    accessScope?: RetrievalAccessScope;
     trustLevel: TrustLevel;
     /** Context Envelope disclosure pair (E3.3 re-key). */
     channelPrivacy: ChannelPrivacy;
@@ -230,6 +245,10 @@ export function evaluateRetrievalAccessDecision(
     roomVisibility?: RetrievalRoomVisibilityContext;
   },
 ): RetrievalAccessDecision {
+  const companionSelfAccess = options.accessScope === 'companion_self_reflection'
+    || options.accessScope === 'companion_self_creation';
+  if (companionSelfAccess) return { allowed: true };
+
   const roomDecision = evaluateRoomVisibilityDecision(memory, options);
   if (roomDecision) return roomDecision;
 
@@ -279,6 +298,7 @@ export function evaluateRetrievalAccessDecision(
 export function summarizeWithheldMemories<T extends Pick<PurrMemory, 'id' | 'sensitivity' | 'contactId' | 'consentFlags' | 'tags' | 'provenance' | 'scopeRef' | 'scopeTags'> & { similarity?: number }>(
   memories: readonly T[],
   options: {
+    accessScope?: RetrievalAccessScope;
     trustLevel: TrustLevel;
     /** Context Envelope disclosure pair (E3.3 re-key). */
     channelPrivacy: ChannelPrivacy;

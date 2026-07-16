@@ -1,4 +1,4 @@
-import type { RuntimeLaneClass } from '../../core/agent/worker-lanes.js';
+import type { RuntimeLaneClass } from './runtime-lanes.js';
 import type { ContextManifest } from '../../core/session/context-manifest.js';
 import type { CompanionPresenceMetadata, EmbodimentPresenceMetadata } from '../../core/agent/presence-metadata.js';
 import type { CredentialReference } from '../../boundary/custody/credential-vault.js';
@@ -351,6 +351,7 @@ export interface LLMRequestMetadata {
  */
 export const REQUESTER_PROVENANCE_VALUES = ['human', 'self_directed', 'system'] as const;
 export type RequesterProvenance = typeof REQUESTER_PROVENANCE_VALUES[number];
+export type RequestAudience = 'self' | 'primary_contact' | 'external';
 
 export interface CorrelationMetadata extends LLMRequestMetadata {
   callType: ObservabilityCallType;
@@ -362,6 +363,11 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
    * are refused even at `viewerTrustLevel: 'primary'`. See {@link RequesterProvenance}.
    */
   requesterProvenance?: RequesterProvenance;
+  /**
+   * Audience of the work product, resolved by the runtime rather than the
+   * model. Absence is deliberately ambiguous and must never grant self access.
+   */
+  requestAudience?: RequestAudience;
   viewerChannelPrivacy?: ChannelPrivacy;
   viewerIsDirectMessage?: boolean;
   /** Canonical contact resolved at ingress for subject-authorized memory access. Never model supplied. */
@@ -409,6 +415,18 @@ export interface IcpAutonomyCandidateOrigin {
   source: IcpInitiationSource;
   provenanceRef: string;
   continuationTaskKind?: IcpContinuationTaskKind;
+}
+
+export type ReflectionTurnStage = 'tool_grounding' | 'final_output';
+export type ReflectionTurnMode = 'agent' | 'deliberation';
+
+/** Scheduler-authored provenance for assistant rows in an internal reflection session. */
+export interface ReflectionTurnProvenance {
+  schemaVersion: 1;
+  stage: ReflectionTurnStage;
+  templateId: string;
+  mode: ReflectionTurnMode;
+  journalEntryId?: string;
 }
 
 export interface MessageRoutingMetadata {
@@ -464,6 +482,12 @@ export interface MessageRoutingMetadata {
    * leaves the existing DM/internal reflection binding byte-identical.
    */
   reflectionScope?: ReflectionScopeHint;
+  /**
+   * Scheduler-authored reflection stage. The assistant turn boundary stores it
+   * in durable session/continuity metadata, while canonical journal output adds
+   * its journal entry id before experiential extraction. No prose inference.
+   */
+  reflectionTurn?: ReflectionTurnProvenance;
   /**
    * Fully-bound ICP lineage for an ordinary companion-channel turn. The
    * gateway and target-turn entrypoint validate this before it reaches the

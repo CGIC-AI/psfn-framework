@@ -16,10 +16,11 @@ import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge
 import { normalizeRoleEnvelopeRefs } from '../../internal-role-envelopes/projections.js';
 import { normalizeToolArguments } from '../../../shared/tool-argument-normalization.js';
 import { buildSessionMetadataWithIcpCorrelation } from '../../session/icp-correlation-metadata.js';
+import { buildSessionMetadataWithReflectionTurn } from '../../session/reflection-turn-provenance.js';
 import type { SessionActorKind } from '../../session/turn-provenance.js';
 import type { IntrospectionTurnSensitivityDecision } from '../../../faculties/introspection/turn-sensitivity.js';
 import { resolveMessagePlaceId } from './message-location.js';
-import type { TurnSessionIdentity } from './turn-execution-runtime.js';
+import type { TurnSessionIdentity } from './turn-execution/contracts.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const REASONING_PLACEHOLDER_VALUES = new Set(['none', 'null', 'n/a', 'na', 'nil', 'undefined']);
@@ -205,6 +206,12 @@ export function recordAssistantMessage(input: {
         deliveryStatus: 'pending',
         ...(input.recoveryResponse ? { recoveryResponse: input.recoveryResponse } : {}),
       },
+    );
+  }
+  if (input.message.routing?.reflectionTurn) {
+    metadata = buildSessionMetadataWithReflectionTurn(
+      metadata,
+      input.message.routing.reflectionTurn,
     );
   }
 

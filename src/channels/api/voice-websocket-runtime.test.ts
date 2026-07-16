@@ -44,7 +44,11 @@ vi.mock('../../primitives/voice/connectors/tts/index.js', async (importOriginal)
   };
 });
 
-import { createApiVoiceWebSocketRuntime, runAgentAssistantStream } from './voice-websocket-runtime.js';
+import {
+  createApiVoiceWebSocketRuntime,
+  requireVoiceReplySegmenterSettings,
+  runAgentAssistantStream,
+} from './voice-websocket-runtime.js';
 
 // Echo TTS no longer has silent defaults — requires explicit config
 
@@ -88,6 +92,10 @@ function createTestOptions(configOverrides: RuntimeVoiceTestOverrides = {}) {
     elevenLabsVoiceId: 'voice-id',
     elevenLabsModelId: 'eleven_turbo_v2_5',
     elevenLabsEndpointBase: 'https://api.elevenlabs.io/v1',
+    voiceReplySegmenter: {
+      minSegmentLength: 24,
+      maxBufferLength: 240,
+    },
     ...configOverrides,
   } as SubstrateConfig;
 
@@ -107,6 +115,12 @@ describe('createApiVoiceWebSocketRuntime provider wiring', () => {
     vi.clearAllMocks();
     createStreamingSttConnectorMock.mockReturnValue(createStubSttConnector());
     createStreamingTtsConnectorMock.mockReturnValue(createStubTtsConnector());
+  });
+
+  it('requires the settings-owned committed reply segmenter thresholds', () => {
+    expect(() => requireVoiceReplySegmenterSettings(createTestOptions({
+      voiceReplySegmenter: undefined,
+    }).config)).toThrow('settings.json must define voiceReplySegmenter');
   });
 
   it('returns undefined when Deepgram credentials are missing', () => {
@@ -605,6 +619,10 @@ describe('runAgentAssistantStream real-turn delta wiring (mmo9.8.3 first-audio r
       transcript: 'hi',
       signal: new AbortController().signal,
       channelPrefix: 'api-voice',
+      segmenter: {
+        minSegmentLength: 24,
+        maxBufferLength: 240,
+      },
     });
 
     const spoken = await drainSegments(stream);

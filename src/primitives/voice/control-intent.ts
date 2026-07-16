@@ -1,5 +1,5 @@
 /**
- * Deterministic voice transport-control intents (psfn-framework-mmo9.7.5).
+ * Deterministic voice transport-control intents (mmo9.7.5).
  *
  * Voice transport controls — stop / interrupt / repeat — are handled locally
  * and deterministically at the transport layer with ZERO model invocations.
@@ -14,7 +14,7 @@
  * utterance falls through to the normal model turn (fail open toward the model
  * for content, fail closed toward zero-model handling only on an exact match).
  *
- * Phrase-set policy (psfn-framework-d8vq.1): bare single words that double as
+ * Phrase-set policy (d8vq.1): bare single words that double as
  * ordinary semantic verbs — "wait", "pause", "cancel", "again" — are NOT
  * controls, because a user who says just "wait" or "again" as a complete
  * conversational turn must still reach the model. Those words are reachable as

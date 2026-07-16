@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import {
     approveGraphProposal,
-    getGraphProposals,
+    loadGraphProposalsLocalFirst,
     rejectGraphProposal,
     SOCIAL_RELATIONSHIP_KINDS,
     type GraphProposal,
@@ -27,11 +27,17 @@
     loading = true;
     error = '';
     endpointMissing = false;
+    let rendered = false;
     try {
-      const data = await getGraphProposals();
-      proposals = data.proposals;
+      await loadGraphProposalsLocalFirst((data, source) => {
+        rendered = true;
+        proposals = data.proposals;
+        if (source === 'cache') loading = false;
+      });
     } catch (e) {
-      if (e instanceof Error && e.message.includes('404')) {
+      if (rendered) {
+        pushToast(e instanceof Error ? e.message : 'Failed to refresh graph proposals', 'error');
+      } else if (e instanceof Error && e.message.includes('404')) {
         endpointMissing = true;
       } else {
         error = e instanceof Error ? e.message : 'Failed to load graph proposals';

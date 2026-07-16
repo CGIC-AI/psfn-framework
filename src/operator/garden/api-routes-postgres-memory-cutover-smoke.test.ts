@@ -584,6 +584,9 @@ function makeSettingsService(): AdminSettingsService {
         tickIntervalMs: 60_000,
         backgroundMaintenance: {
           intervalMs: 300_000,
+          sharedWorldWikiCaretaker: {
+            batchSize: 25,
+          },
           ambientPresence: {
             minIdleMinutes: 180,
             minNoteIntervalMinutes: 360,

@@ -11,10 +11,12 @@ import type { BackupRuntimeConfig } from './config.js';
 import {
   FleetBackupPartialFailureError,
   SCHEDULED_BACKUP_TASK_ID,
-  type FleetBackupRunOptions,
-  type FleetBackupRunResult,
-  type FleetBackupUnitOutcome,
 } from './service.js';
+import type {
+  FleetBackupRunOptions,
+  FleetBackupRunResult,
+  FleetBackupUnitOutcome,
+} from './fleet-backup-contracts.js';
 import {
   buildFleetBackupRunOptions,
   deriveFleetAnchorDir,

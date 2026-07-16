@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { StartupSessionMetadata } from '../../core/session/manager.js';
+import type { SessionEntry } from '../../core/session/types.js';
 import { hydrateStartupWikiContexts } from './startup-hydration.js';
+
+const WIKI_HYDRATION_TUNING = {
+  recentSessionLimit: 4,
+  recentMessageLimit: 18,
+  maxContextChars: 6_000,
+};
 
 describe('hydrateStartupWikiContexts', () => {
   it('warms restored and recent session wiki contexts off the foreground path', async () => {
@@ -52,7 +60,10 @@ describe('hydrateStartupWikiContexts', () => {
         refreshWikiContextBlock,
       },
       sessionManager,
-      recentSessionLimit: 3,
+      tuning: {
+        ...WIKI_HYDRATION_TUNING,
+        recentSessionLimit: 3,
+      },
     });
 
     expect(result).toEqual({ attempted: 2, hydrated: 2, degraded: [] });
@@ -72,6 +83,7 @@ describe('hydrateStartupWikiContexts', () => {
         listRecentSessions: vi.fn(() => []),
         getRecentMessages: vi.fn(() => []),
       },
+      tuning: WIKI_HYDRATION_TUNING,
     });
     expect(result).toEqual({ attempted: 0, hydrated: 0, degraded: [] });
   });
@@ -102,6 +114,7 @@ describe('hydrateStartupWikiContexts', () => {
         refreshWikiContextBlock,
       },
       sessionManager,
+      tuning: WIKI_HYDRATION_TUNING,
     });
 
     expect(result).toEqual({
@@ -109,5 +122,45 @@ describe('hydrateStartupWikiContexts', () => {
       hydrated: 0,
       degraded: [{ channelId: 'discord:restored', error: 'pgvector down' }],
     });
+  });
+
+  it('uses the owned message and context caps without module fallbacks', async () => {
+    const refreshWikiContextBlock = vi.fn().mockResolvedValue({
+      block: '## Reference Wiki',
+      refreshStatus: 'ready',
+    });
+    const getRecentMessages = vi.fn((): SessionEntry[] => [{
+      id: 1,
+      channelId: 'discord:restored',
+      role: 'user',
+      content: 'prefix-which-must-be-trimmed owned-context-tail',
+      timestamp: 1,
+    }]);
+
+    await hydrateStartupWikiContexts({
+      wikiRetrieval: {
+        getWikiContextBlock: vi.fn(() => null),
+        refreshWikiContextBlock,
+      },
+      sessionManager: {
+        resolveStartupSessionMetadata: vi.fn((): StartupSessionMetadata => ({
+          sessionId: 'discord:restored',
+          channelType: 'discord',
+          timestamp: 1,
+        })),
+        listRecentSessions: vi.fn(() => []),
+        getRecentMessages,
+      },
+      tuning: {
+        recentSessionLimit: 2,
+        recentMessageLimit: 7,
+        maxContextChars: 24,
+      },
+    });
+
+    expect(getRecentMessages).toHaveBeenCalledWith('discord:restored', 7);
+    expect(refreshWikiContextBlock).toHaveBeenCalledWith(expect.objectContaining({
+      queryText: 'immed owned-context-tail',
+    }));
   });
 });

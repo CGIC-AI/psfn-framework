@@ -1,8 +1,8 @@
 import { createComponentLogger } from '../../../shared/logger.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../../primitives/llm/work-spec.js';
-import type { SessionManager } from '../../../core/session/manager.js';
 import type { SessionEntry } from '../../../core/session/types.js';
+import { isExperientialSelfDirectedSessionId } from '../../../core/session/session-id.js';
 import { resolveLatestTurnContext } from '../../../core/session/turn-provenance.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import type { TurnID } from '../../../shared/contracts/runtime.js';
@@ -37,6 +37,10 @@ import {
   normalizeExtractedFactParticipantNames,
   type ExtractionParticipantNames,
 } from './naming.js';
+import {
+  buildExperientialSelfDirectedExtractionGuidance,
+  normalizeExperientialSelfDirectedFact,
+} from './self-directed.js';
 import {
   buildSpeakerRoutingContext,
   resolveFactRouting,
@@ -74,6 +78,7 @@ import type {
   ConcernCandidateExtractionSink,
 } from './types.js';
 import { RECOVERY_CONTEXT_MESSAGE_LIMIT } from './types.js';
+import type { ExtractionSessionReader } from './session-port.js';
 
 const log = createComponentLogger('Extraction');
 const EXTRACTION_CHUNK_LLM_CONCURRENCY = 2;
@@ -123,6 +128,14 @@ function createEmptyRejectionBreakdown(): Record<ExtractionRejectionReason, numb
     ambiguous_speaker: 0,
     write_cap: 0,
   };
+}
+
+function requireExperientialCompanionName(value: string | undefined): string {
+  const companionName = value?.trim();
+  if (!companionName) {
+    throw new Error('Experiential self-directed extraction requires a companion name');
+  }
+  return companionName;
 }
 
 const CHANNEL_PRIVACY_RESTRICTIVENESS: Record<ChannelPrivacy, number> = {
@@ -249,7 +262,7 @@ export interface ExtractionRunOptions {
   ) => ExtractionParticipantNames;
   resolveSourceSpeakerContactId?: (speaker: ExtractionSourceSpeaker) => Promise<string | undefined>;
   llmClient: LLMProviderPort;
-  sessionManager: SessionManager;
+  sessionManager: ExtractionSessionReader;
   memoryStore: MemoryStorePort;
   promptRegistry: PromptRegistryStatePort | null;
   /** Shared persona preamble service (E6.1). Prepends soft persona framing before the schema-bound task prompt. */
@@ -315,6 +328,13 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     const recentEntries = options.groupWriteCaps
       ? recoveredEntries
       : recoveredEntries.slice(-RECOVERY_CONTEXT_MESSAGE_LIMIT);
+    const experientialSelfDirected = isExperientialSelfDirectedSessionId(options.channelId);
+    // A reflection may have a grounding contact, but its first-person
+    // experiential output is companion-owned. Never let that grounding contact
+    // leak into memory subject/provenance or downstream profile refreshes.
+    const canonicalContactId = experientialSelfDirected
+      ? undefined
+      : options.canonicalContactId;
     const latestTurnContext = resolveLatestTurnContext(recentEntries);
     const turnId = options.turnId ?? latestTurnContext?.turnId;
     resolvedTurnId = turnId;
@@ -328,13 +348,16 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     // coverage in 3b9a1d85) and bypassed the gate for nearly all real 1:1
     // traffic, spending extraction LLM calls on filler streaks from known
     // contacts — exactly the case the gate exists to prevent.
-    const preLlmGate = evaluateExtractionPreLlmGate(recentEntries);
+    const preLlmGate = evaluateExtractionPreLlmGate(
+      recentEntries,
+      experientialSelfDirected ? { signalRole: 'assistant' } : {},
+    );
     if (!preLlmGate.allowed) {
       if (options.telemetryEnabled) {
         log.debug('Skipping extraction LLM for low-signal turn', {
           channelId: options.channelId,
           triggerReason: options.triggerReason,
-          ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
+          ...(canonicalContactId ? { triggerContactId: canonicalContactId } : {}),
           reason: preLlmGate.reason,
           signalScore: preLlmGate.signalScore,
           signalCount: preLlmGate.signalCount,
@@ -348,7 +371,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
         count: 0,
         ...(turnId ? { turnId } : {}),
         triggerReason: options.triggerReason,
-        ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
+        ...(canonicalContactId ? { triggerContactId: canonicalContactId } : {}),
         parsedCount: 0,
         acceptedCount: 0,
         rejectedCount: 0,
@@ -378,11 +401,18 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
 	      options.sourceSessionId,
 	    );
     const coveredUpToMessageId = options.resolveCoveredUpToMessageId(options.channelId, recentEntries);
-    const participantNames = options.resolveParticipantNames?.(recentEntries, options.canonicalContactId) ?? {};
-    const speakerRouting = await buildSpeakerRoutingContext(
-      recentEntries,
-      options.resolveSourceSpeakerContactId,
-    );
+    const participantNames = options.resolveParticipantNames?.(recentEntries, canonicalContactId) ?? {};
+    const experientialCompanionName = experientialSelfDirected
+      ? requireExperientialCompanionName(
+        participantNames.companionName ?? options.sessionManager.characterName,
+      )
+      : undefined;
+    const speakerRouting = experientialSelfDirected
+      ? undefined
+      : await buildSpeakerRoutingContext(
+        recentEntries,
+        options.resolveSourceSpeakerContactId,
+      );
 
     const existing = await options.memoryStore.getMemoriesByChannel(options.channelId, 30);
     const noveltyCorpus = existing.map(m => m.text);
@@ -408,9 +438,12 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
             userName: participantNames.userName,
           }));
         const namingGuidance = buildExtractionNamingGuidance(participantNames);
-        const taskPrompt = namingGuidance
-          ? `${renderedPrompt}\n\n${namingGuidance}`
-          : renderedPrompt;
+        const selfDirectedGuidance = experientialCompanionName
+          ? buildExperientialSelfDirectedExtractionGuidance(experientialCompanionName)
+          : undefined;
+        const taskPrompt = [renderedPrompt, namingGuidance, selfDirectedGuidance]
+          .filter((section): section is string => Boolean(section))
+          .join('\n\n');
         // E6.1: soft persona framing precedes the strict task instructions and
         // JSON schema; the schema/format sections stay byte-identical.
         const prompt = options.personaPreamble
@@ -479,17 +512,42 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
             factIndex: index,
             factType: fact.type,
             reason: normalized.reason,
-            textPreview: fact.text.slice(0, 120),
           });
         }
         continue;
       }
-      parsedFacts.push(normalized.fact);
+      if (experientialCompanionName) {
+        const selfDirected = normalizeExperientialSelfDirectedFact({
+          fact: normalized.fact,
+          entries: recentEntries,
+          companionName: experientialCompanionName,
+        });
+        if (!selfDirected.accepted) {
+          participantNameHygieneRejectedCount++;
+          if (options.telemetryEnabled) {
+            log.debug('Rejected ungrounded experiential self-memory fact', {
+              channelId: options.channelId,
+              triggerReason: options.triggerReason,
+              factIndex: index,
+              factType: fact.type,
+              reason: selfDirected.reason,
+            });
+          }
+          continue;
+        }
+        parsedFacts.push(selfDirected.fact);
+      } else {
+        parsedFacts.push(normalized.fact);
+      }
     }
-    const inferredBoundaryFacts = extractBoundaryFactsFromEntries(recentEntries, parsedFacts);
-    const inferredPreferenceFacts = extractExplicitPreferenceFactsFromEntries(recentEntries, {
-      fallbackSubjectName: participantNames.userName,
-    });
+    const inferredBoundaryFacts = experientialSelfDirected
+      ? []
+      : extractBoundaryFactsFromEntries(recentEntries, parsedFacts);
+    const inferredPreferenceFacts = experientialSelfDirected
+      ? []
+      : extractExplicitPreferenceFactsFromEntries(recentEntries, {
+        fallbackSubjectName: participantNames.userName,
+      });
     const adjustFactForWrite = options.adjustFactForWrite ?? ((fact: ExtractedFact) => fact);
     const facts = mergeExtractedFactGroups([parsedFacts, inferredBoundaryFacts, inferredPreferenceFacts])
       .map(fact => applyChannelImportanceCaps(adjustFactForWrite(fact), channelVisibility));
@@ -575,7 +633,6 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
             minImportance: options.gateConfig.minImportance,
             confidence: fact.confidence,
             minConfidence: options.gateConfig.minConfidence,
-            textPreview: fact.text.slice(0, 120),
           });
         }
         continue;
@@ -625,19 +682,36 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
         continue;
       }
 
-      const routing = resolveFactRouting(
-        fact,
-        speakerRouting,
-        options.canonicalContactId,
-        {
-          companionNames: [
-            ...new Set([
-              participantNames.companionName,
-              options.sessionManager.characterName,
-            ].filter((name): name is string => Boolean(name))),
-          ],
-        },
-      );
+      let routing: FactRoutingDecision;
+      if (experientialCompanionName) {
+        const selfDirected = normalizeExperientialSelfDirectedFact({
+          fact,
+          entries: recentEntries,
+          companionName: experientialCompanionName,
+        });
+        if (!selfDirected.accepted) {
+          rejectionBreakdown.low_signal++;
+          continue;
+        }
+        routing = selfDirected.routing;
+      } else {
+        if (!speakerRouting) {
+          throw new Error('Speaker routing context is required for conversational extraction');
+        }
+        routing = resolveFactRouting(
+          fact,
+          speakerRouting,
+          canonicalContactId,
+          {
+            companionNames: [
+              ...new Set([
+                participantNames.companionName,
+                options.sessionManager.characterName,
+              ].filter((name): name is string => Boolean(name))),
+            ],
+          },
+        );
+      }
       if (routing.status === 'skip') {
         ambiguousSpeakerSkippedCount++;
         ambiguousSpeakerSkipReasons[routing.reason] =
@@ -650,9 +724,9 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
             factIndex: index,
             factType: fact.type,
             routingReason: routing.reason,
-            triggerContactId: options.canonicalContactId,
+            triggerContactId: canonicalContactId,
             sourceSpeakerName: routing.sourceSpeakerName,
-            speakerCount: speakerRouting.speakers.length,
+            speakerCount: speakerRouting?.speakers.length ?? 0,
           });
         }
         continue;
@@ -740,7 +814,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
 	      const { routing } = candidate;
 
       const routingTelemetry: ExtractionFactRouting = {
-        ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
+        ...(canonicalContactId ? { triggerContactId: canonicalContactId } : {}),
         ...(routing.contactId ? { routedContactId: routing.contactId } : {}),
         ...(routing.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),
         ...(routing.sourceAuthorId ? { sourceAuthorId: routing.sourceAuthorId } : {}),
@@ -765,8 +839,8 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
         acceptedCount++;
         const routedToDifferentContact = Boolean(
           routing.contactId
-            && options.canonicalContactId
-            && routing.contactId !== options.canonicalContactId,
+            && canonicalContactId
+            && routing.contactId !== canonicalContactId,
         );
         if (routedToDifferentContact) routedFactCount++;
         if (routing.contactId) routedContactIds.add(routing.contactId);
@@ -787,7 +861,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
               ...(routing.contactId ? { contactId: routing.contactId } : {}),
               ...(routing.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),
               ...(routing.subjectContactId ? { subjectContactId: routing.subjectContactId } : {}),
-              ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
+              ...(canonicalContactId ? { triggerContactId: canonicalContactId } : {}),
               ...(routing.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
               ...(routing.scopeRef ? { scopeRef: routing.scopeRef } : {}),
             });
@@ -802,7 +876,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
               ...(routing.contactId ? { contactId: routing.contactId } : {}),
               ...(routing.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),
               ...(routing.subjectContactId ? { subjectContactId: routing.subjectContactId } : {}),
-              ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
+              ...(canonicalContactId ? { triggerContactId: canonicalContactId } : {}),
               ...(routing.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
               ...(routing.scopeRef ? { scopeRef: routing.scopeRef } : {}),
             });
@@ -853,7 +927,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       count: acceptedCount,
       ...(turnId ? { turnId } : {}),
       triggerReason: options.triggerReason,
-      ...(options.canonicalContactId ? { triggerContactId: options.canonicalContactId } : {}),
+      ...(canonicalContactId ? { triggerContactId: canonicalContactId } : {}),
       ...(routedContactIds.size > 0 ? { routedContactIds: [...routedContactIds].sort() } : {}),
       ...(sourceSpeakerNames.size > 0 ? { sourceSpeakerNames: [...sourceSpeakerNames].sort() } : {}),
       coveredUpToMessageId: coveredUpToMessageId ?? undefined,
@@ -888,7 +962,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       await options.emitConcernCandidates({
         channelId: options.channelId,
         triggerReason: options.triggerReason,
-        ...(options.canonicalContactId ? { canonicalContactId: options.canonicalContactId } : {}),
+        ...(canonicalContactId ? { canonicalContactId } : {}),
         ...(turnId ? { turnId } : {}),
         sourceRef,
         recentEntries,
@@ -907,7 +981,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
     }
     const emotionalFactGroups = acceptedFactsByContact.size > 0
       ? acceptedFactsByContact
-      : new Map<string | undefined, ExtractedFact[]>([[options.canonicalContactId, []]]);
+      : new Map<string | undefined, ExtractedFact[]>([[canonicalContactId, []]]);
     for (const [contactId, acceptedFacts] of emotionalFactGroups.entries()) {
       await options.assertEffectAllowed?.();
       // Awaited (not fire-and-forget) so this durable child settles before the
@@ -919,7 +993,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
       );
     }
 
-    const refreshGroups = groupAcceptedWritesByContact(acceptedWrites, options.canonicalContactId);
+    const refreshGroups = groupAcceptedWritesByContact(acceptedWrites, canonicalContactId);
     for (const [contactId, writes] of refreshGroups.entries()) {
       await options.assertEffectAllowed?.();
       // Awaited for the same reason: no detached durable child may outlive the

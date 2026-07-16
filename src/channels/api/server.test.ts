@@ -24,6 +24,8 @@ import type {
 } from './voice-websocket.js';
 import { FleetAuthHttpRoutes } from './server/fleet-auth-routes.js';
 import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 
 // ── Helpers ──
 
@@ -85,6 +87,17 @@ const SATELLITE_TEST_REGISTRY = parseSatelliteRegistryConfig({
     },
   ],
 });
+
+function satelliteRegistryOwnedBy(companionId: string): SatelliteRegistryConfig {
+  const owner = createCompanionId(companionId);
+  return {
+    ...SATELLITE_TEST_REGISTRY,
+    satellites: SATELLITE_TEST_REGISTRY.satellites.map(satellite => ({
+      ...satellite,
+      companionId: owner,
+    })),
+  };
+}
 
 function insecureSessionChannel(sessionId: string): string {
   return `api:${INSECURE_LOCAL_API_PRINCIPAL_ID}:${sessionId}`;
@@ -382,9 +395,13 @@ function toAuthSubprotocol(apiToken: string): string {
 
 // ── Mocks ──
 
-function createMockAgentLoop(eventBus: EventBus): SubstrateAgent {
+function createMockAgentLoop(
+  eventBus: EventBus,
+  onMessage?: (message: SubstrateMessage) => void,
+): SubstrateAgent {
   return {
     handleMessage: vi.fn(async (msg) => {
+      onMessage?.(msg);
       // Emit stream deltas for streaming tests
       await eventBus.emit('agent.stream.delta', { channelId: msg.channelId, text: 'Hello' });
       await eventBus.emit('agent.stream.delta', { channelId: msg.channelId, text: ' world' });
@@ -2754,6 +2771,57 @@ describe('ApiServer with auth', () => {
       'image_upload',
       'location',
     ]);
+  });
+
+  it('reads current satellite ownership for every authenticated chat claim and fails closed on provider errors', async () => {
+    await server.stop();
+    const receivedMessages: SubstrateMessage[] = [];
+    let currentRegistry = satelliteRegistryOwnedBy('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    let providerFailure = false;
+    server = createApiServer({
+      port,
+      agentLoop: createMockAgentLoop(eventBus, message => receivedMessages.push(message)),
+      eventBus,
+      sessionManager: createMockSessionManager(),
+      apiKey: 'test-secret-key',
+      satelliteRegistryProvider: () => {
+        if (providerFailure) {
+          throw new Error('satellite owner file unavailable');
+        }
+        return currentRegistry;
+      },
+    });
+    await server.init();
+    await server.start();
+
+    const sendSatelliteTurn = async (sessionId: string) => await request(
+      port,
+      'POST',
+      '/v1/chat/completions',
+      {
+        model: DEFAULT_COMPANION_ID,
+        messages: [{ role: 'user', content: 'who owns this app?' }],
+      },
+      {
+        Authorization: 'Bearer test-secret-key',
+        'X-PSFN-Satellite-Claim-Type': 'android-mobile',
+        'X-PSFN-Satellite-ID': 'android-phone',
+        'X-PSFN-Satellite-Endpoint-ID': 'companion-app',
+        'X-PSFN-Satellite-Session-ID': sessionId,
+      },
+    );
+
+    expect((await sendSatelliteTurn('owner-a')).status).toBe(200);
+    currentRegistry = satelliteRegistryOwnedBy('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+    expect((await sendSatelliteTurn('owner-b')).status).toBe(200);
+    expect(receivedMessages.map(message => message.routing?.satellite?.companionId)).toEqual([
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+    ]);
+
+    providerFailure = true;
+    expect((await sendSatelliteTurn('owner-failure')).status).toBe(503);
+    expect(receivedMessages).toHaveLength(2);
   });
 
   it('applies configured psfn-amica defaults when the caller only claims channel type and id', async () => {

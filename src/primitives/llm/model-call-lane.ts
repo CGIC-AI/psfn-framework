@@ -15,8 +15,8 @@ import {
 import {
   resolveRuntimeLaneClassForModelCall,
   type ModelCallRuntimePurpose,
-  type RuntimeLaneClass,
 } from '../../core/agent/worker-lanes.js';
+import type { RuntimeLaneClass } from '../../shared/contracts/runtime-lanes.js';
 import {
   inferCallType,
   normalizeCorrelationValue,

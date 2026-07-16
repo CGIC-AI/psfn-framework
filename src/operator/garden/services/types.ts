@@ -39,7 +39,18 @@ export type {
   AdminSharedWorldWikiPublishData,
   AdminSharedWorldWikiImportData,
   AdminWikiImportRequest,
+  SharedWorldWikiProposal,
+  SharedWorldWikiProposalApplyResult,
+  SharedWorldWikiCleanupResult,
+  SharedWorldWikiProposalListQuery,
 } from './types/wiki.js';
+
+export type {
+  AdminWishlistBeadCreatePort,
+  AdminWishlistConvertInput,
+  AdminWishlistListData,
+  AdminWishlistService,
+} from './types/wishlist.js';
 
 export type {
   AdminChargeCostReconciliationService,

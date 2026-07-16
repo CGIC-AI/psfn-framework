@@ -54,6 +54,7 @@ import {
 } from '../../core/agent/background-work/scheduler-task.js';
 import type { SchedulerRuntimeConfig } from '../../system/config/scheduler-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { SharedWorldWikiCaretakerService } from '../../faculties/wiki/shared-world-caretaker.js';
 import {
   resolveCharacterCardHistoryPath,
   resolveMemoryJournalPath,
@@ -64,6 +65,7 @@ import {
 
 const log = createComponentLogger('Agent');
 export { BACKGROUND_WORK_SUPERVISOR_TASK_ID };
+export const SHARED_WORLD_WIKI_CARETAKER_OPERATION_ID = 'shared-world-wiki-caretaker';
 
 export interface AgentSchedulerRuntime {
   scheduler: Scheduler;
@@ -97,6 +99,8 @@ export interface BuildAgentSchedulerRuntimeOptions {
   contactStore?: ContactStorePort | null;
   socialGraphProposalStore?: SocialGraphProposalStore | null;
   socialGraphWatermarkStore?: SocialGraphBuilderWatermarkStore | null;
+  /** Multi-companion-only operator-owned shared-world projection caretaker. */
+  sharedWorldWikiCaretaker?: Pick<SharedWorldWikiCaretakerService, 'cleanupChangedContent'> | null;
 }
 
 export function registerSalienceDecayOperation(input: {
@@ -115,6 +119,32 @@ export function registerSalienceDecayOperation(input: {
     description: 'Applies the configured memory weight decay pass to durable memories.',
     handler: () => salienceDecay.run(),
     eligibility: { requiredTokens: ['memory.write'] },
+  });
+}
+
+export function registerSharedWorldWikiCaretakerOperation(input: {
+  backgroundMaintenance: BackgroundMaintenanceRegistrar;
+  caretaker: Pick<SharedWorldWikiCaretakerService, 'cleanupChangedContent'>;
+  batchSize: number;
+}): void {
+  input.backgroundMaintenance.registerOperation({
+    id: SHARED_WORLD_WIKI_CARETAKER_OPERATION_ID,
+    name: 'Shared-World Wiki Caretaker',
+    description:
+      'Checks a bounded batch of approved shared-world documents and reprojects only changed content.',
+    handler: async () => {
+      const result = await input.caretaker.cleanupChangedContent(input.batchSize);
+      log.info('Shared-world wiki caretaker maintenance batch completed', {
+        checked: result.checked,
+        reprojected: result.reprojected,
+        failed: result.failed,
+      });
+      if (result.failed > 0) {
+        throw new Error(
+          `Shared-world wiki caretaker failed ${result.failed} of ${result.checked} projection checks`,
+        );
+      }
+    },
   });
 }
 
@@ -287,6 +317,35 @@ export function buildAgentSchedulerRuntime(
     memoryStore: options.memoryStore,
     config: options.config,
   });
+
+  if (options.config.multiCompanion === true) {
+    if (!options.sharedWorldWikiCaretaker) {
+      throw new Error(
+        'Multi-companion background maintenance requires shared-world wiki caretaker dependencies',
+      );
+    }
+    const fleet = options.config.companionFleet;
+    if (!fleet) {
+      throw new Error(
+        'Multi-companion background maintenance requires the resolved companion fleet',
+      );
+    }
+    // Every companion process owns a scheduler. Reuse the fleet's deterministic
+    // leader so one shared projection is not redundantly embedded N times.
+    if (isFleetBackupLeader(options.config.companionId, fleet)) {
+      registerSharedWorldWikiCaretakerOperation({
+        backgroundMaintenance,
+        caretaker: options.sharedWorldWikiCaretaker,
+        batchSize:
+          options.schedulerConfig.backgroundMaintenance.sharedWorldWikiCaretaker.batchSize,
+      });
+    } else {
+      log.info('Shared-world wiki caretaker maintenance delegated to fleet leader', {
+        companionId: options.config.companionId,
+        leaderCompanionId: fleet.companions[0].companionId,
+      });
+    }
+  }
 
   registerAgentDatabaseBackupLane({
     scheduler,

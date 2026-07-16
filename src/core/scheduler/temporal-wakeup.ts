@@ -59,6 +59,13 @@ import {
   type WakeWindowInsufficientReason,
 } from './wake-window-estimator.js';
 import type { TemporalWakeupMorningConfig } from '../../system/config/scheduler-config.js';
+import type {
+  IdleRefresherDecision,
+  IdleRefresherEvaluateInput,
+  IdleRefresherNoteKind,
+  MorningWakeDecision,
+  MorningWakeEvaluateInput,
+} from './temporal-wakeup-contracts.js';
 
 const log = createComponentLogger('TemporalWakeup');
 
@@ -346,48 +353,6 @@ export function partnerTimestampsFromEntries(entries: readonly SessionEntry[]): 
 
 // ── Morning wake eligibility ──
 
-export type MorningWakeSkipReason =
-  | 'no_recent_session'
-  | 'internal_session'
-  | 'privacy_boundary'
-  | 'no_partner_activity'
-  | 'partner_recently_active'
-  | 'anti_loop_note_today';
-
-export type MorningWakeDecision =
-  | {
-    allowed: true;
-    reason: 'eligible';
-    nowMs: number;
-    sessionId: string;
-    lastPartnerActivityAtMs: number;
-    lastActivityAtMs: number;
-    timeTexture: IdleGapTexture;
-    /** Whether the session is warm enough to justify a full response turn. */
-    invokeFullTurn: boolean;
-  }
-  | {
-    allowed: false;
-    reason: MorningWakeSkipReason;
-    nowMs: number;
-    sessionId?: string;
-  };
-
-export interface MorningWakeEvaluateInput {
-  session: StartupSessionMetadata | null;
-  recentEntries: readonly SessionEntry[];
-  fullTurnMaxIdleMs: number;
-  /**
-   * Partner-idle recency guard (ms). Suppresses the note when the partner spoke
-   * more recently than this — they are actively conversing, so the temporal
-   * frame is already current. 0 disables the guard.
-   */
-  minPartnerIdleMs: number;
-  nowMs?: number;
-  timeZone?: string;
-  lastWakeupNoteAtMs?: number;
-}
-
 export function evaluateMorningWakeEligibility(
   input: MorningWakeEvaluateInput,
 ): MorningWakeDecision {
@@ -450,46 +415,6 @@ export function evaluateMorningWakeEligibility(
 }
 
 // ── Idle refresher eligibility ──
-
-export type IdleRefresherSkipReason =
-  | 'no_recent_session'
-  | 'internal_session'
-  | 'privacy_boundary'
-  | 'no_conversational_activity'
-  | 'below_idle_threshold'
-  | 'anti_loop_recent_note';
-
-export type IdleRefresherNoteKind = 'time_of_day_refresh' | 'new_day';
-
-export type IdleRefresherDecision =
-  | {
-    allowed: true;
-    reason: 'eligible';
-    kind: IdleRefresherNoteKind;
-    nowMs: number;
-    sessionId: string;
-    idleGapMs: number;
-    lastActivityAtMs: number;
-    lastPartnerActivityAtMs?: number;
-    timeTexture: IdleGapTexture;
-  }
-  | {
-    allowed: false;
-    reason: IdleRefresherSkipReason;
-    nowMs: number;
-    sessionId?: string;
-    idleGapMs?: number;
-  };
-
-export interface IdleRefresherEvaluateInput {
-  session: StartupSessionMetadata | null;
-  recentEntries: readonly SessionEntry[];
-  minIdleMs: number;
-  minNoteIntervalMs: number;
-  nowMs?: number;
-  timeZone?: string;
-  lastWakeupNoteAtMs?: number;
-}
 
 export function evaluateIdleRefresherEligibility(
   input: IdleRefresherEvaluateInput,

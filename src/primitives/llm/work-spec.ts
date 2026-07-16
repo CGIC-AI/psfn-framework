@@ -21,7 +21,7 @@ import type {
   LLMWorkRetryPolicy,
   LLMWorkSpec,
 } from '../../shared/contracts/runtime.js';
-import type { RuntimeLaneClass } from '../../core/agent/worker-lanes.js';
+import type { RuntimeLaneClass } from '../../shared/contracts/runtime-lanes.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { resolveAutonomousModelCallLane } from './model-call-lane.js';
 

@@ -43,6 +43,8 @@ import type { ContactRuntimeOptions } from '../../core/contacts/runtime-wiring.j
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import { wireSkillsRuntime } from '../../faculties/skills/runtime-wiring.js';
 import { wireWikiRuntime } from '../../faculties/wiki/runtime-wiring.js';
+import type { PersonalProjectLibrary } from '../../faculties/wiki/personal-projects.js';
+import type { SharedWorldWikiCaretakerService } from '../../faculties/wiki/shared-world-caretaker.js';
 import { registerFilesystemTools } from '../../boundary/integrations/filesystem/runtime-wiring.js';
 import { GatewayFilesystemOps } from '../../boundary/integrations/filesystem/gateway-ops.js';
 import { registerImageTools } from '../../primitives/images/runtime-wiring.js';
@@ -117,10 +119,9 @@ import {
   type AgentFacingIcpAutonomyRuntime,
 } from '../../core/icp/agent-facing-autonomy.js';
 import { icpTargetChannelInitiationCommand } from './icp-target-channel-command.js';
-import type {
-  BackgroundWorkStorePort,
-  BackgroundWorkWelfarePolicy,
-} from '../../core/agent/background-work/store-port.js';
+import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
+import type { BackgroundWorkRuntimeTuning } from '../../core/agent/background-work/config.js';
+import type { BackgroundWorkWelfarePolicy } from '../../core/agent/background-work/store-port.js';
 
 const log = createComponentLogger('AgentCoreRuntime');
 
@@ -134,6 +135,7 @@ export interface AgentCoreRuntimeOptions {
   memoryStore?: MemoryStorePort;
   episodicStore?: EpisodicStorePort | null;
   backgroundWorkStore: BackgroundWorkStorePort;
+  backgroundWorkTuning: BackgroundWorkRuntimeTuning;
   /** Anti-starvation welfare policy (mmo9.7.4), resolved from scheduler.json. */
   backgroundWorkWelfare?: Partial<BackgroundWorkWelfarePolicy>;
   contactStore?: ContactStorePort;
@@ -180,6 +182,7 @@ export interface AgentCoreRuntime {
   memoryExtractor: MemoryExtractor;
   personaPreamble: PersonaPreamblePort;
   imageVisionReviewer: DefaultImageVisionReviewer;
+  personalProjects: PersonalProjectLibrary;
   appCache: AppCache;
   /** Redis-backed hot session tail; null unless settings.json enables it (psfn-framework-hgw3.5). */
   sessionTailCache: SessionTailCachePort | null;
@@ -187,6 +190,8 @@ export interface AgentCoreRuntime {
   fatigueLedger: FatigueBudgetComposition['fatigueLedger'];
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort;
   toolConformanceRunner: ToolConformanceRunner;
+  sharedWorldWikiCaretaker: SharedWorldWikiCaretakerService | null;
+  closeWikiRuntime: () => Promise<void>;
   /** Shared lazy durable model-usage query handle (b0yl.5); null on non-postgres. */
   getModelUsageQuery: () => ModelUsageQueryPort | null;
   icpAutonomyRuntime?: AgentFacingIcpAutonomyRuntime;
@@ -307,10 +312,23 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     observerEvalSidecar,
     appCache,
     backgroundWorkStore: options.backgroundWorkStore,
+    backgroundWorkTuning: options.backgroundWorkTuning,
     ...(options.backgroundWorkWelfare ? { backgroundWorkWelfare: options.backgroundWorkWelfare } : {}),
     contactTrackingGate,
     ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
   });
+  agentLoop.artifactApprovalQueue = cardProposalQueue;
+  agentLoop.artifactApprovalNotifier = operatorNotifier;
+  agentLoop.shareApprovedArtifacts = async (attachments, destination) => {
+    if (destination.channelType !== 'discord') {
+      throw new Error(
+        `Approved artifact delivery is not supported for channel type ${destination.channelType}`,
+      );
+    }
+    for (const attachment of attachments) {
+      await gateway.discordSendMedia(destination.channelId, attachment);
+    }
+  };
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.intakeSinkGate = intakeSinkGate;
   agentLoop.setCapabilityRuntime(capabilityRuntime);
@@ -405,6 +423,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     getConfig: () => config,
     getMultiCompanion: () => config.multiCompanion === true,
     getIntakeSinkGate: () => intakeSinkGate,
+    ...(config.companionId ? { companionId: config.companionId } : {}),
+    systemDataDir: pathSnapshot.systemDataDir,
   });
   // E8.3: attach the supplemental wiki RAG provider (null when the projection
   // is unavailable); pre-turn assembly consults it AFTER memory context.
@@ -417,6 +437,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     gatewayMode: true,
     reviewer: imageVisionReviewer,
     referenceResolver: new ImageReferenceStore(pathSnapshot.companionDataDir),
+    wardrobeLookResolver: wikiRuntime.personalProjects,
   });
   agentLoop.imageVisionReviewer = imageVisionReviewer;
   // htm9.8: vision intake screening — every inbound image attachment is
@@ -599,12 +620,15 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     memoryExtractor,
     personaPreamble,
     imageVisionReviewer,
+    personalProjects: wikiRuntime.personalProjects,
     appCache,
     sessionTailCache: sessionComposition.sessionTailCache,
     fatigueBudget: fatigueRuntime.fatigueBudget,
     fatigueLedger: fatigueRuntime.fatigueLedger,
     ...(fatigueRegulationReservations ? { fatigueRegulationReservations } : {}),
     toolConformanceRunner,
+    sharedWorldWikiCaretaker: wikiRuntime.sharedWorldCaretaker,
+    closeWikiRuntime: wikiRuntime.close,
     // Durable model-usage query handle (b0yl.5): shared lazy store also used by
     // the self-diagnosis tool, reused by the tool-usage evaluator scheduler lane
     // so the two do not open separate pools.

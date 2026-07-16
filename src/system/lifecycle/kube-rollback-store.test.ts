@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
-  KUBE_ROLLBACK_HISTORY_LIMIT,
   hasRolledBackFrom,
   readKubeRollbackHistory,
   readKubeRollbackLatest,
@@ -29,6 +28,7 @@ function record(overrides: Partial<KubeRollbackRecord>): KubeRollbackRecord {
 }
 
 describe('kube-rollback-store', () => {
+  const historyLimit = 50;
   let dir: string;
   beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'kube-rollback-store-')); });
   afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
@@ -39,21 +39,21 @@ describe('kube-rollback-store', () => {
   });
 
   it('persists latest + bounded history', () => {
-    writeKubeRollbackRecord(dir, record({ fromHelmRevision: 9 }));
-    writeKubeRollbackRecord(dir, record({ fromHelmRevision: 10, targetHelmRevision: 9 }));
+    writeKubeRollbackRecord(dir, record({ fromHelmRevision: 9 }), historyLimit);
+    writeKubeRollbackRecord(dir, record({ fromHelmRevision: 10, targetHelmRevision: 9 }), historyLimit);
     expect(readKubeRollbackLatest(dir)?.fromHelmRevision).toBe(10);
     const history = readKubeRollbackHistory(dir);
     expect(history.map(r => r.fromHelmRevision)).toEqual([9, 10]);
   });
 
   it('bounds the history to the retention limit', () => {
-    for (let i = 1; i <= KUBE_ROLLBACK_HISTORY_LIMIT + 5; i += 1) {
-      writeKubeRollbackRecord(dir, record({ fromHelmRevision: i, targetHelmRevision: i - 1 }));
+    for (let i = 1; i <= historyLimit + 5; i += 1) {
+      writeKubeRollbackRecord(dir, record({ fromHelmRevision: i, targetHelmRevision: i - 1 }), historyLimit);
     }
     const history = readKubeRollbackHistory(dir);
-    expect(history).toHaveLength(KUBE_ROLLBACK_HISTORY_LIMIT);
+    expect(history).toHaveLength(historyLimit);
     // Oldest entries dropped, newest kept.
-    expect(history[history.length - 1].fromHelmRevision).toBe(KUBE_ROLLBACK_HISTORY_LIMIT + 5);
+    expect(history[history.length - 1].fromHelmRevision).toBe(historyLimit + 5);
   });
 
   it('hasRolledBackFrom matches on (release, fromHelmRevision) regardless of outcome', () => {

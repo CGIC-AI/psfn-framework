@@ -1,4 +1,9 @@
 import { apiGet, apiPost } from '$lib/api/client';
+import {
+  createQueuePageCache,
+  isGraphProposalListData,
+} from '$lib/cache/queue-cache';
+import type { LocalFirstDataSource, LocalFirstResult } from '$lib/cache/local-first';
 
 export type GraphProposalStatus = 'pending' | 'accepted' | 'rejected' | 'conflict';
 export type GraphEvidenceClass = 'co_presence' | 'overheard_interaction' | 'named_relationship';
@@ -39,12 +44,24 @@ export interface GraphProposalMutationResult {
   message?: string;
 }
 
+const graphProposalCache = createQueuePageCache({
+  key: 'graph-proposals',
+  path: '/api/admin/graph-proposals',
+  validate: isGraphProposalListData,
+});
+
 /**
  * Fetch social-graph edge proposals emitted by the background graph-builder
  * worker (E4.2). Endpoint: GET /api/admin/graph-proposals
  */
 export function getGraphProposals(): Promise<GraphProposalListData> {
   return apiGet<GraphProposalListData>('/api/admin/graph-proposals');
+}
+
+export function loadGraphProposalsLocalFirst(
+  onData: (data: GraphProposalListData, source: LocalFirstDataSource) => void,
+): Promise<LocalFirstResult<GraphProposalListData>> {
+  return graphProposalCache.load(onData);
 }
 
 /**

@@ -28,6 +28,9 @@ export function resolveRuntimeSchedulerConfig(
     heartbeatIntervalMs: persisted.heartbeatIntervalMs,
     backgroundMaintenance: {
       intervalMs: persisted.backgroundMaintenance.intervalMs,
+      sharedWorldWikiCaretaker: {
+        ...persisted.backgroundMaintenance.sharedWorldWikiCaretaker,
+      },
       ambientPresence: { ...persisted.backgroundMaintenance.ambientPresence },
       concernGrooming: { ...persisted.backgroundMaintenance.concernGrooming },
     },

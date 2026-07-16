@@ -4,7 +4,11 @@ import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createPostgresPool } from '../persistence/postgres.js';
+import {
+  POSTGRES_EXTENSION_SCHEMA_NAME,
+  createPostgresPool,
+  ensurePostgresSchemaExists,
+} from '../persistence/postgres.js';
 
 export const DEFAULT_POSTGRES_TEST_IMAGE = 'postgres:16.8-alpine';
 export const PGVECTOR_POSTGRES_TEST_IMAGE = 'pgvector/pgvector:0.8.2-pg16-bookworm@sha256:6f2fedef8e4311682b3a5989a21bf527d3310ab5421258ad6e41e52955c16294';
@@ -100,8 +104,21 @@ async function waitForDatabaseReady(databaseUrl: string): Promise<void> {
       }
       await delay(READY_RETRY_DELAY_MS);
     } finally {
-      await pool.end().catch(() => undefined);
+      await pool.end();
     }
+  }
+}
+
+async function provisionTestDatabase(databaseUrl: string): Promise<void> {
+  const pool = createPostgresPool(databaseUrl, {
+    applicationName: 'psfn-memory-test-provision',
+    allowExitOnIdle: true,
+    max: 1,
+  });
+  try {
+    await ensurePostgresSchemaExists(pool, POSTGRES_EXTENSION_SCHEMA_NAME);
+  } finally {
+    await pool.end();
   }
 }
 
@@ -162,6 +179,7 @@ export async function startPostgresTestHarness(options: PostgresTestHarnessOptio
       await adminPool.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`);
       const databaseUrl = resolveDatabaseUrl(adminDatabaseUrl, databaseName);
       await waitForDatabaseReady(databaseUrl);
+      await provisionTestDatabase(databaseUrl);
       return {
         databaseName,
         databaseUrl,

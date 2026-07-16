@@ -48,6 +48,7 @@ import {
 } from './multi-companion.js';
 import { resolveGatewayCredentialPresence } from './credential-presence.js';
 import type { GatewayCredentialPresenceResult } from './protocol.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
@@ -110,6 +111,7 @@ interface GatewayBootstrapOptions {
   config: SubstrateConfig;
   env: GatewayPolicyEnv & NodeJS.ProcessEnv;
   startupHydration: StartupConfigHydrationResult;
+  satelliteRegistryConfig: SatelliteRegistryConfig;
 }
 
 function parseBooleanEnvWithFallback(value: string | undefined, fallback = false): boolean {
@@ -384,7 +386,7 @@ export function buildGatewayChannelsConfigOverrides(
 export function resolveGatewayBootstrapInput(
   options: GatewayBootstrapOptions,
 ): GatewayBootstrapInput {
-  const { config, env, startupHydration } = options;
+  const { config, env, startupHydration, satelliteRegistryConfig } = options;
   const { systemDataDir, runtimePathLayout, settingsDomains } = startupHydration;
   const workspacePath = runtimePathLayout.workspacePath;
   const workspaceRoot = resolveWorkspaceRoot(workspacePath);
@@ -471,7 +473,11 @@ export function resolveGatewayBootstrapInput(
     server: {
       sessionHmacKeyring,
       wyomingShardRouting,
-      multiCompanion: resolveGatewayMultiCompanionConfig(config, channelsConfig),
+      multiCompanion: resolveGatewayMultiCompanionConfig(
+        config,
+        channelsConfig,
+        satelliteRegistryConfig,
+      ),
       credentialPresence: resolveGatewayCredentialPresence({
         config,
         channelsConfig,

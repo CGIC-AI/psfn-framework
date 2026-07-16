@@ -282,8 +282,56 @@ describe('EpisodeSynthesisLane', () => {
     // Internal channels never count.
     expect(harness.lane.noteTurn({
       id: 'm7',
-      channelId: 'internal:reflection:whisper',
+      channelId: 'internal:maintenance',
     })).toBeNull();
+  });
+
+  it('admits a real self-directed free-time arc to the episodic candidate lane', async () => {
+    const channelId = 'internal:free-time:idle';
+    const entries = Array.from({ length: 4 }, (_, index) => makeEntry({
+      id: index + 1,
+      channelId,
+      role: index % 2 === 0 ? 'user' : 'assistant',
+      authorId: index % 2 === 0 ? 'scheduler' : COMPANION_AUTHOR_ID,
+      authorName: index % 2 === 0 ? 'Free Time' : COMPANION_NAME,
+      content: index % 2 === 0
+        ? 'Continue the watercolor project if that is what you want.'
+        : 'I returned to the watercolor study and felt pleased by the softer edge this time.',
+    }));
+    const harness = makeHarness({
+      entries,
+      watermarkEndedAt: null,
+      config: gateConfig({ minRelevantTurns: 4, turnThreshold: 2 }),
+    });
+
+    expect(harness.lane.noteTurn({ id: 'self-1', channelId, channelType: 'terminal' })).toBeNull();
+    const candidate = harness.lane.noteTurn({ id: 'self-2', channelId, channelType: 'terminal' });
+    expect(candidate).toMatchObject({
+      kind: EPISODE_SYNTHESIS_ACTION_KIND,
+      payload: { sessionId: channelId, trigger: 'turn_threshold' },
+    });
+
+    await harness.lane.execute({
+      id: 'self-episode-action',
+      channelId,
+      sourceMessageId: 'self-2',
+      payload: {
+        sessionId: channelId,
+        sourceChannelId: channelId,
+        trigger: 'turn_threshold',
+        channelType: 'terminal',
+      },
+    });
+
+    expect(harness.synthesizer.run).toHaveBeenCalledWith({
+      sessionId: channelId,
+      sourceMessageId: 'self-2',
+    });
+    expect(harness.gateEvents[0]).toMatchObject({
+      sessionId: channelId,
+      outcome: 'processed',
+      relevantTurnCount: 4,
+    });
   });
 
   it('emits one timer gate-evaluation action per recent session', () => {

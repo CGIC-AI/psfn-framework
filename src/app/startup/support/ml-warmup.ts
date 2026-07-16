@@ -1,4 +1,4 @@
-import type { EmbeddingProviderPort } from '../../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import {
   TextEmotionClassifier,
   type TextEmotionClassifierConfig,

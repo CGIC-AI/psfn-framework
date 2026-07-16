@@ -5,6 +5,10 @@ import type {
   ImageReferenceUpdateInput,
   ImageReferenceUploadInput,
 } from '../../../../primitives/images/reference-store.js';
+import type {
+  ArtifactSensitivityClassification,
+} from '../../../../shared/contracts/artifact-sensitivity.js';
+import type { SensitivityLevel } from '../../../../system/trust/types.js';
 
 export interface AdminGeneratedImageRootView {
   kind: 'personal' | 'companion';
@@ -34,6 +38,7 @@ export interface AdminGeneratedImageView {
   conversation?: AdminGeneratedImageConversationLink;
   companionNoteRefs: AdminGeneratedImageCompanionNoteRef[];
   artifactRefs: AdminGeneratedImageArtifactRef[];
+  sensitivityClassification?: ArtifactSensitivityClassification;
 }
 
 export interface AdminGeneratedImageConversationLink {
@@ -84,6 +89,10 @@ export interface AdminGeneratedImageUpdateInput {
   conversation?: AdminGeneratedImageConversationLink;
   companionNoteRefs?: AdminGeneratedImageCompanionNoteRef[];
   artifactRefs?: AdminGeneratedImageArtifactRef[];
+  sensitivityContest?: {
+    sensitivity: SensitivityLevel;
+    reason: string;
+  };
 }
 
 export interface AdminGeneratedImageListData {

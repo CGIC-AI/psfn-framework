@@ -1,4 +1,4 @@
-// psfn-framework-fxt1 — gateway-side welfare grant verification.
+// fxt1 — gateway-side welfare grant verification.
 //
 // `preemptionProtected` on an autonomous LLMWorkSpec is consumed at the
 // gateway-side ModelCallGate (`model-call-gate.ts` — a protected call is not

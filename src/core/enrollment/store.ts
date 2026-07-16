@@ -273,6 +273,7 @@ export interface PostgresHubIdentityEnrollmentStoreOptions {
    * tables must be created and queried inside the same schema, never public.
    */
   schema?: string | undefined;
+  role?: string | undefined;
 }
 
 export async function createPostgresHubIdentityEnrollmentStore(
@@ -283,6 +284,7 @@ export async function createPostgresHubIdentityEnrollmentStore(
     applicationName: options.applicationName ?? 'psfn-enrollment',
     allowExitOnIdle: true,
     ...(options.schema ? { schema: options.schema } : {}),
+    ...(options.role ? { role: options.role } : {}),
   });
   await ensurePostgresSchema(pool, POSTGRES_ENROLLMENT_MIGRATIONS);
   return new PostgresHubIdentityEnrollmentStore(pool);

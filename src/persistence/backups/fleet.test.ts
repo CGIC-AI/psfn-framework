@@ -19,8 +19,8 @@ import {
   FLEET_GROUP_DIR_NAME,
   FleetBackupPartialFailureError,
   runFleetBackupCycle,
-  type FleetBackupCompanionUnit,
 } from './service.js';
+import type { FleetBackupCompanionUnit } from './fleet-backup-contracts.js';
 import {
   restoreFleetClusterArtifact as restoreFleetClusterArtifactProduction,
   restoreFleetCompanionSlice as restoreFleetCompanionSliceProduction,

@@ -83,12 +83,13 @@ export class IntrospectionLandmarkPostgresStore implements IntrospectionAuditPer
 
   static async connect(
     databaseUrl: string,
-    options: { schema?: string } = {},
+    options: { schema?: string; role?: string } = {},
   ): Promise<IntrospectionLandmarkPostgresStore> {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'companion-introspection-landmarks',
       allowExitOnIdle: true,
       schema: options.schema,
+      role: options.role,
     });
     try {
       await ensurePostgresSchema(pool, POSTGRES_INTROSPECTION_MIGRATIONS);

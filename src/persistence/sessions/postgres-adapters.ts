@@ -81,6 +81,7 @@ export interface PostgresTranscriptProjectionOptions {
   pool?: Pool;
   applicationName?: string;
   schema?: string;
+  role?: string;
 }
 
 export interface PostgresSessionAdapters {
@@ -533,6 +534,7 @@ export async function createPostgresTranscriptProjection(
     applicationName: options.applicationName ?? 'psfn-session-search',
     allowExitOnIdle: true,
     ...(options.schema ? { schema: options.schema } : {}),
+    ...(options.role ? { role: options.role } : {}),
   });
   await ensurePostgresSchema(pool, POSTGRES_TRANSCRIPT_MIGRATIONS);
   const [messageMetadataByChannel, driftByChannel] = await Promise.all([
@@ -550,6 +552,7 @@ export async function createDefaultPostgresSessionAdapters(
     applicationName: options.applicationName ?? 'psfn-session-search',
     allowExitOnIdle: true,
     ...(options.schema ? { schema: options.schema } : {}),
+    ...(options.role ? { role: options.role } : {}),
   });
   const transcriptProjection = await createPostgresTranscriptProjection(databaseUrl, {
     ...options,

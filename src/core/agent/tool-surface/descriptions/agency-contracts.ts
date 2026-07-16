@@ -24,8 +24,8 @@ export const AGENCY_TOOL_CONTRACTS = {
   generate_image: {
     purpose: 'Create, transform, or inspect generic images when the subject is not the companion\'s self-representation.',
     actions: [
-      action('generate', ['prompt'], [...IMAGE_RENDER_FIELDS, 'reference_image_id', 'reference_image_tags', 'use_default_reference']),
-      action('edit', ['prompt', 'input_urls'], [...IMAGE_RENDER_FIELDS, 'reference_image_id', 'reference_image_tags', 'use_default_reference', 'mask_image_url', 'input_fidelity']),
+      action('generate', ['prompt'], [...IMAGE_RENDER_FIELDS, 'reference_image_id', 'reference_image_tags', 'use_default_reference', 'wardrobe_look_ref']),
+      action('edit', ['prompt', 'input_urls'], [...IMAGE_RENDER_FIELDS, 'reference_image_id', 'reference_image_tags', 'use_default_reference', 'wardrobe_look_ref', 'mask_image_url', 'input_fidelity']),
       action('analyze', ['input_urls'], ['question']),
     ],
     output: 'It returns pending image artifacts plus visual review, or visible-content evidence for analysis.',
@@ -34,7 +34,7 @@ export const AGENCY_TOOL_CONTRACTS = {
   },
   selfie_create: {
     purpose: 'Create a selfie or self-portrait of the companion with appearance context and saved-reference anchoring.',
-    actions: [action('create', ['prompt'], [...IMAGE_RENDER_FIELDS, 'reference_image_id', 'reference_image_tags', 'use_reference_image', 'edit_model'], { id: 'create', actionField: false })],
+    actions: [action('create', ['prompt'], [...IMAGE_RENDER_FIELDS, 'reference_image_id', 'reference_image_tags', 'use_reference_image', 'wardrobe_look_ref', 'edit_model'], { id: 'create', actionField: false })],
     output: 'It returns pending image artifacts plus visual review and does not handle unrelated scenes or ordinary photo edits.',
     guidance: 'Do not use it for generic image work; use generate_image.',
     example: { prompt: 'A relaxed window-light selfie in a green sweater, eye-level camera' },

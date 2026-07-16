@@ -149,6 +149,7 @@ export interface PostgresMemoryStoreOptions {
   journal?: MemoryJournal;
   /** Optional per-companion Postgres schema; pins the pool's search_path. */
   schema?: string;
+  role?: string;
   /** Disable only for bounded-backfill tests; production startup drains this before hydration. */
   subjectBackfill?: false | MemorySubjectBackfillOptions;
 }
@@ -162,6 +163,7 @@ export async function createPostgresMemoryStore(
     applicationName: 'psfn-memory',
     allowExitOnIdle: true,
     schema: options.schema,
+    role: options.role,
   });
   return await createPostgresMemoryStoreFromPool(pool, embeddingDims, options);
 }

@@ -94,6 +94,7 @@ describe('createInClusterKubernetesReadApi', () => {
       KUBERNETES_SERVICE_HOST: 'kubernetes.default.svc',
       KUBERNETES_SERVICE_PORT_HTTPS: '443',
     }, {
+      requestTimeoutMs: 5_000,
       readToken,
       readCa: () => Buffer.from('test-ca'),
       requestJson,
@@ -114,6 +115,7 @@ describe('createInClusterKubernetesReadApi', () => {
       KUBERNETES_SERVICE_HOST: 'kubernetes.default.svc',
       KUBERNETES_SERVICE_PORT_HTTPS: '443',
     }, {
+      requestTimeoutMs: 5_000,
       readToken: () => 'token-one\ntoken-two',
       readCa: () => Buffer.from('test-ca'),
       requestJson: vi.fn(),

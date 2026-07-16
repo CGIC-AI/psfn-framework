@@ -1,4 +1,9 @@
 import { apiGet, apiPost } from '$lib/api/client';
+import {
+  createQueuePageCache,
+  isContactApprovalListData,
+} from '$lib/cache/queue-cache';
+import type { LocalFirstDataSource, LocalFirstResult } from '$lib/cache/local-first';
 
 export interface ContactApprovalMessagePreview {
   messageId: string;
@@ -29,12 +34,24 @@ export interface ContactApprovalMutationResult {
   message?: string;
 }
 
+const contactApprovalCache = createQueuePageCache({
+  key: 'contact-approvals',
+  path: '/api/admin/contact-approvals',
+  validate: isContactApprovalListData,
+});
+
 /**
  * Fetch pending contact approvals (contact-tracking policy gate, E3.4).
  * Endpoint: GET /api/admin/contact-approvals
  */
 export function getContactApprovals(): Promise<ContactApprovalListData> {
   return apiGet<ContactApprovalListData>('/api/admin/contact-approvals');
+}
+
+export function loadContactApprovalsLocalFirst(
+  onData: (data: ContactApprovalListData, source: LocalFirstDataSource) => void,
+): Promise<LocalFirstResult<ContactApprovalListData>> {
+  return contactApprovalCache.load(onData);
 }
 
 /**

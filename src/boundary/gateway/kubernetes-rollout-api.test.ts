@@ -71,6 +71,8 @@ describe('createInClusterKubernetesRolloutApi', () => {
       KUBERNETES_SERVICE_HOST: '10.0.0.1',
       KUBERNETES_SERVICE_PORT_HTTPS: '443',
     } as NodeJS.ProcessEnv, {
+      requestTimeoutMs: 5_000,
+      rolloutRequestTimeoutMs: 5_000,
       readToken,
       readCa: () => Buffer.from('ca'),
       requestJson: vi.fn(),
@@ -97,6 +99,8 @@ describe('createInClusterKubernetesRolloutApi', () => {
       KUBERNETES_SERVICE_HOST: '10.0.0.1',
       KUBERNETES_SERVICE_PORT_HTTPS: '443',
     } as NodeJS.ProcessEnv, {
+      requestTimeoutMs: 5_000,
+      rolloutRequestTimeoutMs: 5_000,
       readToken: () => 'has whitespace',
       readCa: () => Buffer.from('ca'),
       patchRequest: vi.fn(),

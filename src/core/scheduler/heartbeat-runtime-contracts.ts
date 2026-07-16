@@ -77,6 +77,8 @@ export interface HeartbeatAgent {
   getCurrentInternalState?(): InternalState | null;
   getCurrentInternalStateSnapshotRef?(): string | null;
   getCurrentMetacognitiveFlags?(): unknown;
+  /** Latest assembled default prompt-stack/runtime prefix, before session and provider-only blocks. */
+  getCurrentAuthoritativeSystemPrompt?(): string | null;
 }
 
 export interface HeartbeatRuntimeOptions {

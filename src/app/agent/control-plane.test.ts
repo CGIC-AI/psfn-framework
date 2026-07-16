@@ -33,6 +33,8 @@ describe('agent control plane', () => {
     expect(controlPlaneSource).toContain('createGatewayDiscordNotifySender(');
     expect(controlPlaneSource).toContain('runShutdownSequence(');
     expect(controlPlaneSource).toContain('runConfiguredLifecycleCommand');
+    expect(controlPlaneSource).toContain('requireLifecycleKubernetesSettings(config)');
+    expect(controlPlaneSource).toContain('timeoutMs: lifecycleKubernetes.lifecycleCommandTimeoutMs');
     expect(controlPlaneSource).toContain('runRepoLifecycleBuildCommand');
     expect(controlPlaneSource).not.toContain('gateway.shellExec(');
     expect(controlPlaneSource).toContain('registerDeferredLifecycleRuntime({');

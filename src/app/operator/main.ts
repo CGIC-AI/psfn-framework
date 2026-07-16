@@ -13,6 +13,7 @@ import {
 import { GardenOperatorSurface } from '../../operator/garden/operator-surface.js';
 import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import { createGatewayOperatorConfirmationClient } from '../startup/support/gateway-operator-confirmation-client.js';
+import { requireLifecycleKubernetesSettings } from '../../system/lifecycle/lifecycle-kubernetes-settings.js';
 
 const log = createComponentLogger('OperatorSurface');
 const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
@@ -21,6 +22,7 @@ ensureActiveTimezone();
 
 async function main(): Promise<void> {
   const config = hydrateJsonBackedRuntimeConfig(loadOperatorConfig());
+  const lifecycleKubernetes = requireLifecycleKubernetesSettings(config);
   assertFleetAuthLegacySurfacesUnavailable({
     fleetAuthEnabled: config.fleetAuthVerifier !== undefined,
     processMode: 'operator',
@@ -48,7 +50,9 @@ async function main(): Promise<void> {
     ...(operatorConfirmationBaseUrl
       ? {
           operatorConfirmationResolver:
-            createGatewayOperatorConfirmationClient(operatorConfirmationBaseUrl),
+            createGatewayOperatorConfirmationClient(operatorConfirmationBaseUrl, {
+              requestTimeoutMs: lifecycleKubernetes.operatorConfirmationRequestTimeoutMs,
+            }),
         }
       : {}),
   });

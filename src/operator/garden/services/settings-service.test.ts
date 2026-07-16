@@ -571,6 +571,8 @@ describe('AdminSettingsDataService', () => {
 
     const settingsData = await service.getSettingsData();
     expect(settingsData.editors.scheduler.backgroundMaintenance.intervalMs).toBe(180_000);
+    expect(settingsData.editors.scheduler.backgroundMaintenance.sharedWorldWikiCaretaker)
+      .toEqual({ batchSize: 25 });
     expect(settingsData.effectiveBackgroundMaintenance).toEqual({
       ownerFile: 'scheduler.json',
       effectiveIntervalMs: 3_600_000,
@@ -581,6 +583,53 @@ describe('AdminSettingsDataService', () => {
       tier: 'custom',
       customTokens: capabilitiesPayload.customTokens,
     }));
+  });
+
+  it('governs durable background-work tuning through scheduler.json and rejects malformed edits', async () => {
+    const root = makeTempDir();
+    const config = buildConfig(root);
+    const service = buildService(config);
+    const current = loadSchedulerConfig(root);
+    const edited = {
+      ...current,
+      backgroundWork: {
+        ...current.backgroundWork,
+        supervisor: {
+          ...current.backgroundWork.supervisor,
+          maxConcurrentSessions: 6,
+        },
+        postTurn: {
+          ...current.backgroundWork.postTurn,
+          extractionDrainRequeueDelayMs: 1_500,
+        },
+      },
+    };
+
+    expect(service.saveSubConfigJson('scheduler', JSON.stringify(edited))).toMatchObject({
+      ok: true,
+    });
+    expect(loadSchedulerConfig(root).backgroundWork).toEqual(edited.backgroundWork);
+    expect((await service.getSettingsData()).editors.scheduler.backgroundWork)
+      .toEqual(edited.backgroundWork);
+
+    const malformed = {
+      ...edited,
+      backgroundWork: {
+        ...edited.backgroundWork,
+        supervisor: {
+          ...edited.backgroundWork.supervisor,
+          retryBaseDelayMs: 5_000,
+          retryMaxDelayMs: 1_000,
+        },
+      },
+    };
+    expect(service.saveSubConfigJson('scheduler', JSON.stringify(malformed))).toEqual({
+      ok: false,
+      message:
+        'Invalid scheduler config: backgroundWork.supervisor.retryMaxDelayMs '
+        + 'must be greater than or equal to backgroundWork.supervisor.retryBaseDelayMs',
+    });
+    expect(loadSchedulerConfig(root).backgroundWork).toEqual(edited.backgroundWork);
   });
 
   it('reports the live 1h cadence, a saved 10m cadence, and restart alignment end to end', async () => {

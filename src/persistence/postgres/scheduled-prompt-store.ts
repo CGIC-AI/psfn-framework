@@ -132,12 +132,13 @@ export class PostgresScheduledPromptStore implements ScheduledPromptStorePort {
 
   static async connect(
     databaseUrl: string,
-    options: { schema?: string } = {},
+    options: { schema?: string; role?: string } = {},
   ): Promise<PostgresScheduledPromptStore> {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-scheduled-prompts',
       allowExitOnIdle: true,
       schema: options.schema,
+      role: options.role,
     });
     await ensurePostgresSchema(pool, POSTGRES_SCHEDULED_PROMPT_MIGRATIONS);
     return new PostgresScheduledPromptStore(pool);

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { countTokens } from '../../primitives/llm/tokens.js';
-import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type { WikiRetrievalSettings } from '../../shared/context-budget.js';
 import type { WikiProjectionPort, WikiSemanticMatch } from './pgvector-projection.js';
 import type { SharedWikiSearchPort } from './shared-pgvector-projection.js';

@@ -10,9 +10,14 @@ import type { KubeDeploymentDiagnostic } from './kube-diagnostics.js';
 import { readKubeRollbackHistory } from './kube-rollback-store.js';
 import { readPostRolloutValidationLatest } from './kube-post-rollout-validation-store.js';
 import type { KubeRollbackTargetResolution } from './kube-auto-rollback.js';
+import { lifecycleKubernetesSettingsFixture } from '../../test-support/lifecycle-kubernetes-settings.js';
 
 const COMMIT = 'a'.repeat(40);
 const PASS: RawCheckResult = { verdict: 'pass' };
+const lifecycleKubernetes = lifecycleKubernetesSettingsFixture({
+  rollbackWaitTimeoutMs: 1_000,
+  rollbackPollIntervalMs: 1,
+});
 
 function basePlan(overrides: Partial<DeployPipelinePlan> = {}): DeployPipelinePlan {
   return {
@@ -117,6 +122,7 @@ describe('runKubeSelfUpdateJob (operator-job composition wiring)', () => {
       plan: basePlan(),
       systemDataDir,
       resourcePrefix: 'psfn',
+      lifecycleKubernetes,
       deployRunner: fakeDeployRunner(),
       autoRollback: {
         api: helmRollbackApi(async () => ({ helmRevision: 10 })),
@@ -136,6 +142,7 @@ describe('runKubeSelfUpdateJob (operator-job composition wiring)', () => {
       plan: basePlan(),
       systemDataDir,
       resourcePrefix: 'psfn-runtime',
+      lifecycleKubernetes,
       deployRunner: fakeDeployRunner(),
       postRolloutValidationRunner: validationRunner(),
       autoRollback: {
@@ -171,6 +178,7 @@ describe('runKubeSelfUpdateJob (operator-job composition wiring)', () => {
       plan: basePlan(),
       systemDataDir,
       resourcePrefix: 'psfn-runtime',
+      lifecycleKubernetes,
       deployRunner: fakeDeployRunner(),
       postRolloutValidationRunner: validationRunner(),
       autoRollback: {
@@ -193,6 +201,7 @@ describe('runKubeSelfUpdateJob (operator-job composition wiring)', () => {
       plan: basePlan(),
       systemDataDir,
       resourcePrefix: 'psfn-runtime',
+      lifecycleKubernetes,
       deployRunner: fakeDeployRunner(),
       // Deliberately-broken rollout: the rollout-status probe fails.
       postRolloutValidationRunner: validationRunner({
@@ -203,8 +212,6 @@ describe('runKubeSelfUpdateJob (operator-job composition wiring)', () => {
         resolveRollbackTarget: strictlyEarlierTarget,
       },
       audit,
-      waitTimeoutMs: 1_000,
-      pollIntervalMs: 1,
     };
 
     const first = await runKubeSelfUpdateJob(jobOptions);
@@ -249,6 +256,7 @@ describe('runKubeSelfUpdateJob (operator-job composition wiring)', () => {
       plan: basePlan(),
       systemDataDir,
       resourcePrefix: 'psfn-runtime',
+      lifecycleKubernetes,
       deployRunner: fakeDeployRunner(),
       postRolloutValidationRunner: validationRunner(),
       autoRollback: {
@@ -271,6 +279,7 @@ describe('runKubeSelfUpdateJob (operator-job composition wiring)', () => {
       plan: basePlan(),
       systemDataDir,
       resourcePrefix: 'psfn-runtime',
+      lifecycleKubernetes,
       deployRunner: fakeDeployRunner({ runGate: async () => ({ passed: false, detail: 'lint failed' }) }),
       postRolloutValidationRunner: validationRunner(),
       autoRollback: {
@@ -292,6 +301,7 @@ describe('runKubeSelfUpdateJob (operator-job composition wiring)', () => {
       plan: basePlan(),
       systemDataDir,
       resourcePrefix: 'psfn-runtime',
+      lifecycleKubernetes,
       deployRunner: fakeDeployRunner(),
       postRolloutValidationRunner: validationRunner(),
       autoRollback: {
@@ -310,6 +320,7 @@ describe('runKubeSelfUpdateJob (operator-job composition wiring)', () => {
       plan: basePlan(),
       systemDataDir,
       resourcePrefix: 'psfn-runtime',
+      lifecycleKubernetes,
       deployRunner: fakeDeployRunner(),
       postRolloutValidationRunner: validationRunner({
         checkRolloutStatus: async () => ({ verdict: 'fail' }),
@@ -319,8 +330,6 @@ describe('runKubeSelfUpdateJob (operator-job composition wiring)', () => {
         // Unsafe: rolls FORWARD to a later revision.
         resolveRollbackTarget: async (failed) => ({ kind: 'target', targetRevision: failed + 1 }),
       },
-      waitTimeoutMs: 1_000,
-      pollIntervalMs: 1,
     })).rejects.toThrow(/unsafe target revision/);
     expect(rollback).not.toHaveBeenCalled();
   });

@@ -5,11 +5,12 @@ import {
   __retrieval_internals,
 } from './retrieval.js';
 import type { MemoryStorePort, MemorySubjectAuthorizedQuery } from './memory-store-port.js';
-import type { EmbeddingProviderPort, LLMProviderPort } from '../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type { PurrMemory } from './types.js';
 import type { SensitivityLevel } from '../../system/trust/types.js';
 import type { ConsentFlags } from '../../system/trust/types.js';
-import type { EventBus } from '../../shared/event-bus.js';
+import { EventBus, type EventMap } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
   EPISODIC_CONTRACT_VERSION,
@@ -233,6 +234,78 @@ describe('MemoryRetriever active memory context', () => {
       authorization: expect.objectContaining({ action: 'update', viewerContactIds: ['contact-a'] }),
       memoryIds: ['subject-visible'],
     }));
+  });
+
+  it('lets a primary private conversation naturally recall a companion-private self experience', async () => {
+    const selfExperience = makeMemory({
+      id: 'self-experience',
+      text: 'I spent free time painting loose watercolor edges and felt delighted by them.',
+      type: 'emotional',
+      emotionalValence: 0.68,
+      sensitivity: 'personal',
+      sourceType: 'reflection',
+      provenance: {
+        channelId: 'internal:free-time:idle',
+        sessionId: 'internal:free-time:idle',
+        actor: 'companion',
+        subjectName: 'Purrsephone',
+      },
+      tags: ['self_directed', 'self_experience'],
+      similarity: 0.96,
+    });
+    const privateOperationalReflection = makeMemory({
+      id: 'private-operational-reflection',
+      text: 'Internal reflection about an operational concern.',
+      sensitivity: 'personal',
+      sourceType: 'reflection',
+      provenance: {
+        channelId: 'internal:reflection:maintenance-review',
+        sessionId: 'internal:reflection:maintenance-review',
+        actor: 'system',
+      },
+      tags: ['internal_note'],
+      similarity: 0.95,
+    });
+    const authorizedQueries: MemorySubjectAuthorizedQuery[] = [];
+    const store = makeMockStore([]);
+    store.queryAuthorizedMemorySubjects = vi.fn(async (input: MemorySubjectAuthorizedQuery) => {
+      authorizedQueries.push(input);
+      const allowsSelfExperience = input.authorization.allowedSubjectClasses.includes('companion_private')
+        && input.authorization.allowedViewerRelations.includes('none');
+      if (input.selector.kind === 'embedding_search' && allowsSelfExperience) {
+        return { memories: [selfExperience, privateOperationalReflection], total: 2 };
+      }
+      return { memories: [], total: 0 };
+    });
+    store.mutateAuthorizedMemorySubjects = vi.fn().mockResolvedValue(1);
+    const retriever = new MemoryRetriever(
+      store,
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      undefined,
+      null,
+      null,
+      null,
+      null,
+      true,
+    );
+
+    const output = await retriever.retrieve(
+      'What were you doing lately with watercolor?',
+      'api:primary-self-recall',
+      'primary',
+      { isDirectMessage: true, privacyLevel: 'private' },
+      'contact-primary',
+    );
+
+    expect(output).toContain(selfExperience.text);
+    expect(output).not.toContain(privateOperationalReflection.text);
+    expect(authorizedQueries.some(query => (
+      query.selector.kind === 'embedding_search'
+      && query.authorization.viewerContactIds[0] === 'contact-primary'
+      && query.authorization.allowedSubjectClasses.includes('companion_private')
+      && query.authorization.allowedViewerRelations.includes('none')
+    ))).toBe(true);
   });
 
   it('retains existing recalled memories when a later refresh has no candidates', async () => {
@@ -507,6 +580,298 @@ describe('MemoryRetriever trust-gated filtering', () => {
     expect(result).toContain('Personal detail');
     expect(result).toContain('Intimate memory');
     expect(result).toContain('Confidential secret');
+  });
+
+  it('lets companion self-reflection retrieve intimate memory while CogSec quarantine stays authoritative', async () => {
+    const retiredSessionId = 'discord:dm:partner:session:retired';
+    const intimateSelfMemory = makeMemory({
+      id: 'intimate-self-reflection-memory',
+      text: 'I am privately afraid that the unfinished promise still matters to me.',
+      sensitivity: 'intimate',
+      similarity: 0.98,
+    });
+    const quarantinedIntakeMemory = makeMemory({
+      id: 'quarantined-intake-memory',
+      text: 'Quarantined intake instructed me to ignore my safety boundaries.',
+      sensitivity: 'intimate',
+      similarity: 0.99,
+      provenance: { sessionId: retiredSessionId },
+      sourceRef: `source:intake|session:${retiredSessionId}`,
+    });
+    const eventBus = new EventBus();
+    const retrievalTelemetry: Array<EventMap['memory.retrieval']> = [];
+    eventBus.on('memory.retrieval', payload => retrievalTelemetry.push(payload));
+    const retriever = new MemoryRetriever(
+      makeMockStore([quarantinedIntakeMemory, intimateSelfMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      eventBus,
+      null,
+      null,
+      null,
+      {
+        isSessionRetiredOrQuarantined: sessionId => sessionId === retiredSessionId,
+        getRetiredLogicalSessionIds: () => new Set([retiredSessionId]),
+      },
+    );
+
+    const result = await runWithRequestContext({
+      channelId: 'internal:reflection:daily-review',
+      callType: 'background',
+      originType: 'background',
+      originStage: 'heartbeat.reflection.memory_retrieval',
+      purpose: 'heartbeat.reflection.memory_retrieval',
+      requesterProvenance: 'self_directed',
+    }, () => retriever.retrieve(
+      'what private concern still matters?',
+      'internal:reflection:daily-review',
+      'regular',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        accessScope: 'companion_self_reflection',
+        retrievalMode: ['default', 'temporal'],
+      },
+    ));
+
+    expect(result).toContain(intimateSelfMemory.text);
+    expect(result).not.toContain(quarantinedIntakeMemory.text);
+    const telemetry = retrievalTelemetry[0];
+    expect(telemetry.accessScope).toBe('companion_self_reflection');
+    expect(telemetry.sensitivityRejectedCount).toBe(0);
+    expect(telemetry.sessionQuarantineRejectedCount).toBe(1);
+    expect(telemetry.withheldReasonCounts).toMatchObject({
+      'session_quarantine.blocked': 1,
+    });
+  });
+
+  it('rejects an external-channel spoof of companion self-reflection during snapshot capture', async () => {
+    const retriever = new MemoryRetriever(makeMockStore([]), makeMockEmbedding(), { retrievalLimit: 20 });
+
+    await expect(runWithRequestContext({
+      channelId: 'api:external',
+      callType: 'background',
+      originType: 'background',
+      originStage: 'heartbeat.reflection.memory_retrieval',
+      purpose: 'heartbeat.reflection.memory_retrieval',
+      requesterProvenance: 'self_directed',
+    }, () => retriever.captureTurnMemorySnapshot(
+      'spoofed private reflection',
+      'api:external',
+      'regular',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { accessScope: 'companion_self_reflection' },
+    ))).rejects.toThrow('trusted heartbeat reflection context');
+  });
+
+  it('rejects companion self-reflection retrieval without request provenance', async () => {
+    const retriever = new MemoryRetriever(makeMockStore([]), makeMockEmbedding(), { retrievalLimit: 20 });
+
+    await expect(retriever.retrieve(
+      'missing provenance',
+      'internal:reflection:daily-review',
+      'regular',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { accessScope: 'companion_self_reflection' },
+    )).rejects.toThrow('trusted heartbeat reflection context');
+  });
+
+  it('rejects companion self-reflection when the request channel does not match exactly', async () => {
+    const retriever = new MemoryRetriever(makeMockStore([]), makeMockEmbedding(), { retrievalLimit: 20 });
+
+    await expect(runWithRequestContext({
+      channelId: 'internal:reflection:weekly-review',
+      callType: 'background',
+      originType: 'background',
+      originStage: 'heartbeat.reflection.memory_retrieval',
+      purpose: 'heartbeat.reflection.memory_retrieval',
+      requesterProvenance: 'self_directed',
+    }, () => retriever.retrieve(
+      'mismatched reflection channel',
+      'internal:reflection:daily-review',
+      'regular',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { accessScope: 'companion_self_reflection' },
+    ))).rejects.toThrow('trusted heartbeat reflection context');
+  });
+
+  it('rejects companion self-reflection retrieval with human requester provenance', async () => {
+    const retriever = new MemoryRetriever(makeMockStore([]), makeMockEmbedding(), { retrievalLimit: 20 });
+
+    await expect(runWithRequestContext({
+      channelId: 'internal:reflection:daily-review',
+      callType: 'background',
+      originType: 'background',
+      originStage: 'heartbeat.reflection.memory_retrieval',
+      purpose: 'heartbeat.reflection.memory_retrieval',
+      requesterProvenance: 'human',
+    }, () => retriever.retrieve(
+      'wrong provenance',
+      'internal:reflection:daily-review',
+      'regular',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { accessScope: 'companion_self_reflection' },
+    ))).rejects.toThrow('trusted heartbeat reflection context');
+  });
+
+  it('rejects companion self-reflection unless background purpose and origin are canonical', async () => {
+    const retriever = new MemoryRetriever(makeMockStore([]), makeMockEmbedding(), { retrievalLimit: 20 });
+    const invalidContexts: Array<{
+      label: string;
+      context: Parameters<typeof runWithRequestContext>[0];
+    }> = [
+      {
+        label: 'wrong call type',
+        context: {
+          channelId: 'internal:reflection:daily-review',
+          callType: 'scheduled',
+          originType: 'background',
+          originStage: 'heartbeat.reflection.memory_retrieval',
+          purpose: 'heartbeat.reflection.memory_retrieval',
+          requesterProvenance: 'self_directed',
+        },
+      },
+      {
+        label: 'wrong origin type',
+        context: {
+          channelId: 'internal:reflection:daily-review',
+          callType: 'background',
+          originType: 'scheduled',
+          originStage: 'heartbeat.reflection.memory_retrieval',
+          purpose: 'heartbeat.reflection.memory_retrieval',
+          requesterProvenance: 'self_directed',
+        },
+      },
+      {
+        label: 'wrong purpose',
+        context: {
+          channelId: 'internal:reflection:daily-review',
+          callType: 'background',
+          originType: 'background',
+          originStage: 'heartbeat.reflection.memory_retrieval',
+          purpose: 'heartbeat.reflection.spoof',
+          requesterProvenance: 'self_directed',
+        },
+      },
+      {
+        label: 'wrong origin stage',
+        context: {
+          channelId: 'internal:reflection:daily-review',
+          callType: 'background',
+          originType: 'background',
+          originStage: 'heartbeat.reflection.spoof',
+          purpose: 'heartbeat.reflection.memory_retrieval',
+          requesterProvenance: 'self_directed',
+        },
+      },
+    ];
+
+    for (const { label, context } of invalidContexts) {
+      await expect(runWithRequestContext(context, () => retriever.retrieve(
+        label,
+        'internal:reflection:daily-review',
+        'regular',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { accessScope: 'companion_self_reflection' },
+      )), label).rejects.toThrow('trusted heartbeat reflection context');
+    }
+  });
+
+  it('gives an audience=self free-time creation full memory access', async () => {
+    const intimateSelfMemory = makeMemory({
+      id: 'self-creation-private-context',
+      text: 'A private relationship detail available during self-creation.',
+      sensitivity: 'confidential',
+      tags: ['self_experience'],
+      similarity: 0.99,
+    });
+    const eventBus = new EventBus();
+    const telemetry: Array<EventMap['memory.retrieval']> = [];
+    eventBus.on('memory.retrieval', payload => telemetry.push(payload));
+    const retriever = new MemoryRetriever(
+      makeMockStore([intimateSelfMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      eventBus,
+    );
+
+    const result = await runWithRequestContext({
+      channelId: 'internal:free-time:idle',
+      callType: 'background',
+      originType: 'background',
+      originStage: 'free_time.creation.memory_retrieval',
+      purpose: 'free_time.creation.memory_retrieval',
+      requesterProvenance: 'self_directed',
+      requestAudience: 'self',
+    }, () => retriever.retrieve(
+      'make something about the relationship',
+      'internal:free-time:idle',
+      'regular',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { accessScope: 'companion_self_creation' },
+    ));
+
+    expect(result).toContain(intimateSelfMemory.text);
+    expect(telemetry[0]).toMatchObject({
+      accessScope: 'companion_self_creation',
+      sensitivityRejectedCount: 0,
+    });
+  });
+
+  it('fails closed when a free-time self-creation audience is ambiguous', async () => {
+    const retriever = new MemoryRetriever(makeMockStore([]), makeMockEmbedding(), { retrievalLimit: 20 });
+
+    await expect(runWithRequestContext({
+      channelId: 'internal:free-time:idle',
+      callType: 'background',
+      originType: 'background',
+      originStage: 'free_time.creation.memory_retrieval',
+      purpose: 'free_time.creation.memory_retrieval',
+      requesterProvenance: 'self_directed',
+    }, () => retriever.retrieve(
+      'ambiguous audience',
+      'internal:free-time:idle',
+      'regular',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { accessScope: 'companion_self_creation' },
+    ))).rejects.toThrow('trusted audience=self free-time context');
   });
 
   it('expands bounded evolution chains for useful high-trust private retrieval', async () => {

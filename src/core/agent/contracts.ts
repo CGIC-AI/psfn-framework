@@ -79,12 +79,6 @@ export function createLLMProviderPort(provider: LLMProviderPort): LLMProviderPor
 
 export type { LLMRequestMetadata };
 
-export interface EmbeddingProviderPort {
-  embed(text: string): Promise<Float32Array>;
-  embedBatch(texts: string[]): Promise<Float32Array[]>;
-  readonly dims: number;
-}
-
 /**
  * E8.3: supplemental wiki RAG surface consumed by turn execution. Held on the
  * agent as an optional provider (null until wired); pre-turn assembly calls it
@@ -183,6 +177,17 @@ export interface MemoryProvider {
   ): Promise<string>;
 }
 
+export interface FinalReflectionExtractionInput {
+  source: 'reflection_journal';
+  journalEntryId: string;
+  templateId: string;
+  templateName: string;
+  channelId: string;
+  reflection: string;
+  mode: 'agent' | 'deliberation';
+  createdAt: string;
+}
+
 export interface MemoryExtractor {
   maybeExtract(
     channelId: string,
@@ -204,4 +209,6 @@ export interface MemoryExtractor {
    */
   getBoundedExtractionSnapshotLimit(): number;
   getPendingExtractionPromise?(channelId: string): Promise<void> | null;
+  /** Canonical final-output seam; intermediate reflection turns never call it. */
+  extractFinalReflection?(input: FinalReflectionExtractionInput): Promise<void>;
 }

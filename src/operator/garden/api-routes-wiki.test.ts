@@ -15,6 +15,8 @@ import type {
   AdminSettingsService,
   AdminShardFoldReviewService,
   AdminWikiService,
+  SharedWorldWikiProposal,
+  SharedWorldWikiProposalApplyResult,
 } from './services/types.js';
 
 class CapturingResponse {
@@ -44,6 +46,53 @@ function makeRequest(url: string): IncomingMessage {
 }
 
 let nextRequestBody = '';
+
+function makeCaretakerProposal(
+  overrides: Partial<SharedWorldWikiProposal> = {},
+): SharedWorldWikiProposal {
+  return {
+    proposalId: '11111111-1111-4111-8111-111111111111',
+    siteId: 'home',
+    documentId: 'kitchen-toaster',
+    actorId: 'companion-a',
+    sourceRef: 'world-observation:turn-7',
+    title: 'Kitchen toaster',
+    body: 'A toaster is installed in the kitchen.\n',
+    tags: ['kitchen'],
+    provenanceRefs: ['world-observation:sensor-4'],
+    sensitivity: 'public',
+    contentDigest: 'digest',
+    reviewState: 'pending',
+    applyState: 'unreviewed',
+    revision: 1,
+    createdAtMs: 1,
+    updatedAtMs: 1,
+    ...overrides,
+  };
+}
+
+function makeAppliedCaretakerResult(
+  proposalId: string,
+): SharedWorldWikiProposalApplyResult {
+  return {
+    proposal: makeCaretakerProposal({
+      proposalId,
+      reviewState: 'approved',
+      reviewedBy: 'garden-operator',
+      reviewedAtMs: 2,
+      applyState: 'applied',
+      appliedAtMs: 3,
+      appliedDocumentVersion: 1,
+      appliedBodySha256: 'sha256',
+      projectionBodySha256: 'sha256',
+      revision: 4,
+      updatedAtMs: 3,
+    }),
+    status: 'applied',
+    documentVersion: 1,
+    bodySha256: 'sha256',
+  };
+}
 
 function makeRoutes(wikiService?: AdminWikiService | null): AdminApiRoute[] {
   return buildAdminApiRoutes({
@@ -239,6 +288,22 @@ function makeWikiService(): AdminWikiService {
         failedDocuments: [],
       },
     })),
+    listSharedWorldWikiProposals: vi.fn(async () => [makeCaretakerProposal()]),
+    getSharedWorldWikiProposal: vi.fn(async proposalId => makeCaretakerProposal({ proposalId })),
+    approveSharedWorldWikiProposal: vi.fn(async proposalId => (
+      makeAppliedCaretakerResult(proposalId)
+    )),
+    rejectSharedWorldWikiProposal: vi.fn(async proposalId => makeCaretakerProposal({
+      proposalId,
+      reviewState: 'rejected',
+      rejectionCode: 'operator_rejected',
+      reviewedBy: 'garden-operator',
+      reviewedAtMs: 2,
+      applyState: 'rejected',
+      revision: 2,
+      updatedAtMs: 2,
+    })),
+    cleanupSharedWorldWikiProposals: vi.fn(async () => ({ checked: 1, reprojected: 1, failed: 0 })),
   };
 }
 
@@ -366,5 +431,35 @@ describe('wiki admin API scope delineation (vinz.28)', () => {
     const bad = await invokePost(routes, '/api/admin/wiki/shared-world/home/import', { dryRun: true });
     expect(bad.status).toBe(400);
     expect(JSON.parse(bad.body).error).toBe('directory (string) is required');
+  });
+
+  it('lists, inspects, approves, and rejects caretaker proposals as operator-only admin routes', async () => {
+    const wikiService = makeWikiService();
+    const routes = makeRoutes(wikiService);
+    const proposalId = '11111111-1111-4111-8111-111111111111';
+
+    const list = await invokeRoute(routes, '/api/admin/wiki/shared-world-proposals?state=pending&limit=10');
+    expect(list.status).toBe(200);
+    expect(wikiService.listSharedWorldWikiProposals).toHaveBeenCalledWith({ state: 'pending', limit: 10 });
+    expect(JSON.parse(list.body).proposals[0]).toMatchObject({ proposalId, reviewState: 'pending' });
+
+    const inspect = await invokeRoute(routes, `/api/admin/wiki/shared-world-proposals/${proposalId}`);
+    expect(inspect.status).toBe(200);
+    expect(wikiService.getSharedWorldWikiProposal).toHaveBeenCalledWith(proposalId);
+
+    const approve = await invokePost(routes, `/api/admin/wiki/shared-world-proposals/${proposalId}/approve`, {});
+    expect(approve.status).toBe(200);
+    expect(wikiService.approveSharedWorldWikiProposal).toHaveBeenCalledWith(proposalId, 'garden-operator');
+    expect(JSON.parse(approve.body)).toMatchObject({ status: 'applied', documentVersion: 1 });
+
+    const reject = await invokePost(routes, `/api/admin/wiki/shared-world-proposals/${proposalId}/reject`, {});
+    expect(reject.status).toBe(200);
+    expect(wikiService.rejectSharedWorldWikiProposal).toHaveBeenCalledWith(proposalId, 'garden-operator');
+    expect(JSON.parse(reject.body).proposal).toMatchObject({ reviewState: 'rejected' });
+
+    const cleanup = await invokePost(routes, '/api/admin/wiki/shared-world-proposals/cleanup', { limit: 25 });
+    expect(cleanup.status).toBe(200);
+    expect(wikiService.cleanupSharedWorldWikiProposals).toHaveBeenCalledWith(25);
+    expect(JSON.parse(cleanup.body)).toEqual({ checked: 1, reprojected: 1, failed: 0 });
   });
 });

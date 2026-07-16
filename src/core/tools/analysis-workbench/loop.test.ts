@@ -11,6 +11,13 @@ import {
   resetRunChargeRollingWindowForTests,
 } from '../../../shared/telemetry/run-charge.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
+import { InMemoryMemoryStore } from '../../../test-support/in-memory-memory-store.js';
+import type {
+  MemorySearchResult,
+  MemorySubjectAuthorizedQuery,
+  MemorySubjectAuthorizedQueryResult,
+} from '../../../faculties/memory/memory-store-port.js';
+import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
 
 const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
 
@@ -120,6 +127,51 @@ function makeChargePolicy(): ChargePolicyConfig {
   };
 }
 
+class SubjectAuthorizedLoopMemoryStore extends InMemoryMemoryStore {
+  readonly authorizedQueries: MemorySubjectAuthorizedQuery[] = [];
+
+  constructor(private readonly authorizedMemories: readonly MemorySearchResult[]) {
+    super();
+  }
+
+  async queryAuthorizedMemorySubjects(
+    input: MemorySubjectAuthorizedQuery,
+  ): Promise<MemorySubjectAuthorizedQueryResult> {
+    this.authorizedQueries.push(input);
+    if (
+      !input.authorization.viewerContactIds.includes('companion:internal')
+      || !input.authorization.allowedSubjectClasses.includes('companion_private')
+      || input.selector.kind !== 'list'
+    ) {
+      throw new Error('Analysis Workbench memory inventory requires companion-private list authority');
+    }
+    const offset = input.selector.offset ?? 0;
+    return {
+      memories: this.authorizedMemories.slice(offset, offset + input.selector.limit),
+      total: this.authorizedMemories.length,
+    };
+  }
+}
+
+function subjectMemory(id: string, type: MemorySearchResult['type']): MemorySearchResult {
+  return {
+    id,
+    text: `Authorized ${type} memory`,
+    type,
+    importance: 0.7,
+    confidence: 0.9,
+    emotionalValence: 0,
+    salience: 0.5,
+    sourceRef: 'internal:reflection:analysis-workbench-test',
+    extractedAt: 1,
+    lastAccessed: 1,
+    accessCount: 0,
+    tags: [],
+    sensitivity: 'personal',
+    similarity: 1,
+  };
+}
+
 describe('runRLMLoop', () => {
   it('handles single-iteration FINAL in text', async () => {
     const llm = sequentialLLM(['FINAL("immediate answer")']);
@@ -208,27 +260,42 @@ describe('runRLMLoop', () => {
     expect((llm.complete as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(1);
   });
 
-  it('awaits async memory stats when building prompt context', async () => {
-    const llm = sequentialLLM(['FINAL("done")']);
-    const getStats = vi.fn(async () => ({
-      total: 2,
-      byType: {
-        semantic: 2,
-      },
-      avgSalience: 0.5,
-    }));
+  it('awaits subject-authorized memory inventory when building prompt context', async () => {
+    const complete = vi.fn<LLMProviderPort['complete']>(async () => mockResponse('FINAL("done")'));
+    const llm: LLMProviderPort = { stream: vi.fn(), complete };
+    const memoryStore = new SubjectAuthorizedLoopMemoryStore([
+      subjectMemory('semantic-memory', 'semantic'),
+      subjectMemory('episodic-memory', 'episodic'),
+    ]);
 
-    const result = await runRLMLoop(
-      'Memory stats route test',
-      makeDeps(llm, {
-        memoryStore: {
-          getStats,
-        } as any,
-      }),
+    const result = await runWithRequestContext(
+      {
+        channelId: 'internal:reflection:analysis-workbench-test',
+        callType: 'background',
+        purpose: 'analysis-workbench.subject-inventory.test',
+        requesterProvenance: 'self_directed',
+      },
+      () => runRLMLoop(
+        'Memory stats route test',
+        makeDeps(llm, { memoryStore: memoryStore.asPort() }),
+      ),
     );
 
     expect(result.answer).toBe('done');
-    expect(getStats).toHaveBeenCalledTimes(1);
+    expect(memoryStore.authorizedQueries).toEqual([
+      expect.objectContaining({
+        authorization: expect.objectContaining({
+          action: 'list',
+          viewerContactIds: ['companion:internal'],
+          allowedSubjectClasses: ['companion_private'],
+          allowedViewerRelations: ['none'],
+        }),
+        selector: { kind: 'list', limit: 500, offset: 0 },
+      }),
+    ]);
+    expect(complete.mock.calls[0]?.[0].systemPrompt).toContain(
+      '- Memories: 2 total (1 semantic, 1 episodic)',
+    );
   });
 
   it('does not derive shell_exec from the llm provider without an explicit sandbox boundary', async () => {

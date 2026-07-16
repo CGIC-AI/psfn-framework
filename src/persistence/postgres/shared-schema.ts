@@ -77,8 +77,9 @@ async function provisionSharedSchema(
     await client.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
     // Transaction-local pin: migration statements below are unqualified and
     // MUST land in the shared schema even on a pool without a pinned
-    // search_path (`public` is retained for shared extension types).
-    await client.query(`SET LOCAL search_path TO "${schema}", public`);
+    // search_path. Extension lookup is explicit and cannot fall through to
+    // legacy tenant objects in public.
+    await client.query(`SET LOCAL search_path TO "${schema}", extensions`);
     for (const chain of chains) {
       for (const statement of chain) {
         await client.query(statement);

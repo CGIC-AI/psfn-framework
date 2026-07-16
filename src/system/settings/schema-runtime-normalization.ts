@@ -15,7 +15,7 @@ import {
   SESSION_HISTORY_BUDGET_PCT_RANGE,
 } from '../../shared/context-budget.js';
 import { normalizeCompositionalPolicyConfig } from '../capabilities/compositional-policy.js';
-import { isRecord } from '../../shared/utils/types.js';
+import { assertNoUnknownKeys, isRecord } from '../../shared/utils/types.js';
 import { isCapabilityTier } from '../capabilities/tiers.js';
 import {
   OBSERVER_EVAL_SIDECAR_ADAPTER_KINDS,
@@ -658,6 +658,107 @@ function normalizeEndpointAndGardenSettings(
       'emotionScoping',
     );
   }
+  if ('wikiStartupHydration' in settings) {
+    const value = expectRecord(
+      settings.wikiStartupHydration,
+      'wikiStartupHydration',
+    );
+    assertNoUnknownKeys(
+      value,
+      ['recentSessionLimit', 'recentMessageLimit', 'maxContextChars'],
+      'wikiStartupHydration',
+      { errorPrefix: 'Invalid settings' },
+    );
+    normalized.wikiStartupHydration = {
+      recentSessionLimit: expectIntegerInRange(
+        value.recentSessionLimit,
+        'wikiStartupHydration.recentSessionLimit',
+        1,
+        256,
+      ),
+      recentMessageLimit: expectIntegerInRange(
+        value.recentMessageLimit,
+        'wikiStartupHydration.recentMessageLimit',
+        1,
+        2_048,
+      ),
+      maxContextChars: expectIntegerInRange(
+        value.maxContextChars,
+        'wikiStartupHydration.maxContextChars',
+        256,
+        1_000_000,
+      ),
+    };
+  }
+  if ('lifecycleKubernetes' in settings) {
+    const value = expectRecord(
+      settings.lifecycleKubernetes,
+      'lifecycleKubernetes',
+    );
+    assertNoUnknownKeys(
+      value,
+      [
+        'lifecycleCommandTimeoutMs',
+        'operatorCommandTimeoutMs',
+        'operatorHttpTimeoutMs',
+        'operatorConfirmationRequestTimeoutMs',
+        'kubernetesReadRequestTimeoutMs',
+        'kubernetesRolloutRequestTimeoutMs',
+        'rolloutWaitTimeoutMs',
+        'rolloutPollIntervalMs',
+        'rollbackWaitTimeoutMs',
+        'rollbackPollIntervalMs',
+        'postRolloutMaxLogRecords',
+        'postRolloutValidationHistoryLimit',
+        'rollbackHistoryLimit',
+      ],
+      'lifecycleKubernetes',
+      { errorPrefix: 'Invalid settings' },
+    );
+    const timeout = (key: string): number => expectIntegerInRange(
+      value[key],
+      `lifecycleKubernetes.${key}`,
+      1,
+      3_600_000,
+    );
+    const count = (key: string, min: number): number => expectIntegerInRange(
+      value[key],
+      `lifecycleKubernetes.${key}`,
+      min,
+      10_000,
+    );
+    const rolloutWaitTimeoutMs = timeout('rolloutWaitTimeoutMs');
+    const rolloutPollIntervalMs = timeout('rolloutPollIntervalMs');
+    const rollbackWaitTimeoutMs = timeout('rollbackWaitTimeoutMs');
+    const rollbackPollIntervalMs = timeout('rollbackPollIntervalMs');
+    if (rolloutPollIntervalMs > rolloutWaitTimeoutMs) {
+      throw new Error(
+        'Invalid settings at lifecycleKubernetes.rolloutPollIntervalMs: '
+        + 'must not exceed lifecycleKubernetes.rolloutWaitTimeoutMs',
+      );
+    }
+    if (rollbackPollIntervalMs > rollbackWaitTimeoutMs) {
+      throw new Error(
+        'Invalid settings at lifecycleKubernetes.rollbackPollIntervalMs: '
+        + 'must not exceed lifecycleKubernetes.rollbackWaitTimeoutMs',
+      );
+    }
+    normalized.lifecycleKubernetes = {
+      lifecycleCommandTimeoutMs: timeout('lifecycleCommandTimeoutMs'),
+      operatorCommandTimeoutMs: timeout('operatorCommandTimeoutMs'),
+      operatorHttpTimeoutMs: timeout('operatorHttpTimeoutMs'),
+      operatorConfirmationRequestTimeoutMs: timeout('operatorConfirmationRequestTimeoutMs'),
+      kubernetesReadRequestTimeoutMs: timeout('kubernetesReadRequestTimeoutMs'),
+      kubernetesRolloutRequestTimeoutMs: timeout('kubernetesRolloutRequestTimeoutMs'),
+      rolloutWaitTimeoutMs,
+      rolloutPollIntervalMs,
+      rollbackWaitTimeoutMs,
+      rollbackPollIntervalMs,
+      postRolloutMaxLogRecords: count('postRolloutMaxLogRecords', 0),
+      postRolloutValidationHistoryLimit: count('postRolloutValidationHistoryLimit', 1),
+      rollbackHistoryLimit: count('rollbackHistoryLimit', 1),
+    };
+  }
 }
 
 function normalizeBudgetAndThresholdSettings(
@@ -976,6 +1077,40 @@ function normalizeVoiceSettings(
   normalizeTrimmedStringSetting(normalized, settings, 'deepgramListenEndpoint');
   normalizeTrimmedStringSetting(normalized, settings, 'elevenLabsModelId');
   normalizeTrimmedStringSetting(normalized, settings, 'elevenLabsEndpointBase');
+  if ('voiceReplySegmenter' in settings) {
+    const value = expectRecord(
+      settings.voiceReplySegmenter,
+      'voiceReplySegmenter',
+    );
+    assertNoUnknownKeys(
+      value,
+      ['minSegmentLength', 'maxBufferLength'],
+      'voiceReplySegmenter',
+      { errorPrefix: 'Invalid settings' },
+    );
+    const minSegmentLength = expectIntegerInRange(
+      value.minSegmentLength,
+      'voiceReplySegmenter.minSegmentLength',
+      1,
+      10_000,
+    );
+    const maxBufferLength = expectIntegerInRange(
+      value.maxBufferLength,
+      'voiceReplySegmenter.maxBufferLength',
+      2,
+      100_000,
+    );
+    if (maxBufferLength <= minSegmentLength) {
+      throw new Error(
+        'Invalid settings at voiceReplySegmenter.maxBufferLength: '
+        + 'must be greater than voiceReplySegmenter.minSegmentLength',
+      );
+    }
+    normalized.voiceReplySegmenter = {
+      minSegmentLength,
+      maxBufferLength,
+    };
+  }
 }
 
 function normalizeShardSettings(

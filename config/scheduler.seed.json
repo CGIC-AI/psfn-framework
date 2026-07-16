@@ -3,12 +3,30 @@
   "heartbeatIntervalMs": 1800000,
   "backgroundMaintenance": {
     "intervalMs": 3600000,
+    "sharedWorldWikiCaretaker": {
+      "batchSize": 25
+    },
     "ambientPresence": {
       "minIdleMinutes": 180,
       "minNoteIntervalMinutes": 360
     },
     "concernGrooming": {
       "maxActiveConcerns": 7
+    }
+  },
+  "backgroundWork": {
+    "supervisor": {
+      "maxConcurrentSessions": 4,
+      "leaseDurationMs": 300000,
+      "retryBaseDelayMs": 1000,
+      "retryMaxDelayMs": 300000,
+      "shutdownTimeoutMs": 5000,
+      "terminalRetentionMs": 604800000,
+      "cleanupIntervalMs": 3600000
+    },
+    "postTurn": {
+      "extractionDrainRequeueDelayMs": 1000,
+      "foregroundPreemptionDeferDelayMs": 1000
     }
   },
   "artifactLifecycle": {

@@ -1,4 +1,4 @@
-import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { join } from 'node:path';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { PendingContactApprovalStore } from '../../core/contacts/pending-contact-approvals.js';
@@ -124,6 +124,8 @@ import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { AdminShardFoldReviewDataService } from './services/shard-fold-review-service.js';
 import { AdminWikiDataService } from './services/wiki-service.js';
+import { AdminWishlistDataService } from './services/wishlist-service.js';
+import type { AdminWishlistBeadCreatePort } from './services/types.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
 import type { GatewayCredentialPresenceResult } from '../../boundary/gateway/protocol.js';
 import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-store-ports.js';
@@ -194,6 +196,8 @@ export interface InProcessGardenAdminContractOptions {
   icpRuntimeEnablement?: IcpAutonomyRuntimeEnablement | null;
   /** Distinct authenticated principals for governed shared-workspace writes. */
   sharedWorkspaceCredentials?: SharedWorkspaceCredentials;
+  /** Existing gateway-backed Beads create primitive used for explicit wish conversion. */
+  wishlistBeadCreator?: AdminWishlistBeadCreatePort;
 }
 
 export function createInProcessGardenAdminContract(
@@ -427,6 +431,12 @@ export function createInProcessGardenAdminContract(
         },
       })
       : null,
+    wishlist: options.config.workspacePath
+      ? new AdminWishlistDataService(
+        options.config.workspacePath,
+        options.wishlistBeadCreator,
+      )
+      : null,
     episodicMemory: options.episodicStore
       ? new AdminEpisodicMemoryDataService(options.episodicStore)
       : null,
@@ -489,7 +499,12 @@ export function createInProcessGardenAdminContract(
     rooms: createAdminRoomsService({
       contactStore: options.contactStore ?? null,
     }),
-    places: createAdminPlacesService({ dataDir: options.config.dataDir }),
+    places: createAdminPlacesService({
+      dataDir: options.config.dataDir,
+      fleetCompanionIds: options.config.companionFleet?.companions.map(
+        companion => companion.companionId,
+      ) ?? [],
+    }),
     enrollment: options.hubIdentityEnrollmentStore && options.contactStore
       ? createAdminEnrollmentService({
         enrollmentService: new HubIdentityEnrollmentService(

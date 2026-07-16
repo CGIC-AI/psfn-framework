@@ -2,12 +2,11 @@ import { spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { resolveRuntimeCommandInvocation } from './runtime-mode.js';
 
-const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_CHARS = 10_000;
 
 export interface LifecycleCommandOptions {
   cwd?: string;
-  timeoutMs?: number;
+  timeoutMs: number;
   maxOutputChars?: number;
 }
 
@@ -19,7 +18,7 @@ function resolvePositiveInt(value: number | undefined, fallback: number): number
 
 export async function runConfiguredLifecycleCommand(
   rawCommand: string | undefined,
-  options: LifecycleCommandOptions = {},
+  options: LifecycleCommandOptions,
 ): Promise<void> {
   const invocation = resolveRuntimeCommandInvocation(rawCommand);
   if (!invocation) {
@@ -27,7 +26,10 @@ export async function runConfiguredLifecycleCommand(
   }
 
   const cwd = resolve(options.cwd ?? process.cwd());
-  const timeoutMs = resolvePositiveInt(options.timeoutMs, DEFAULT_TIMEOUT_MS);
+  const timeoutMs = resolvePositiveInt(options.timeoutMs, 0);
+  if (timeoutMs === 0) {
+    throw new Error('Lifecycle restart command timeout must be a positive integer');
+  }
   const maxOutputChars = resolvePositiveInt(
     options.maxOutputChars,
     DEFAULT_MAX_OUTPUT_CHARS,

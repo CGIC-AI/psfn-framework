@@ -22,11 +22,8 @@ import { isDeploymentRolloutComplete } from '../../system/lifecycle/kube-rollout
 import type { ToolConformanceRunResult } from '../../core/agent/tool-conformance/types.js';
 import type { RuntimeDiagnosticsSnapshot } from '../../shared/diagnostics/runtime-diagnostics.js';
 import {
-  execFileCommandRunner,
   type CommandRunner,
 } from './kube-self-update-transport.js';
-
-const HTTP_TIMEOUT_MS = 8_000;
 
 export interface HttpJsonResponse {
   status: number;
@@ -39,9 +36,12 @@ export type HttpJsonFetcher = (
   options?: { headers?: Record<string, string>; body?: string },
 ) => Promise<HttpJsonResponse>;
 
-/** Default HTTP fetcher over node http/https, bounded and fail-closed on timeout. */
-export const nodeHttpJsonFetcher: HttpJsonFetcher = (method, url, options = {}) =>
-  new Promise<HttpJsonResponse>((resolve, reject) => {
+/** Build the HTTP transport with its timeout owned by settings.json. */
+export function createNodeHttpJsonFetcher(requestTimeoutMs: number): HttpJsonFetcher {
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs <= 0) {
+    throw new Error('Kube self-update HTTP timeout must be a positive integer.');
+  }
+  return (method, url, options = {}) => new Promise<HttpJsonResponse>((resolve, reject) => {
     const parsed = new URL(url);
     const transport = parsed.protocol === 'https:' ? httpsRequest : httpRequest;
     const req = transport(
@@ -63,19 +63,20 @@ export const nodeHttpJsonFetcher: HttpJsonFetcher = (method, url, options = {}) 
         res.on('end', () => resolve({ status: res.statusCode ?? 0, body }));
       },
     );
-    req.setTimeout(HTTP_TIMEOUT_MS, () => req.destroy(new Error(`HTTP ${method} ${url} timed out`)));
+    req.setTimeout(requestTimeoutMs, () => req.destroy(new Error(`HTTP ${method} ${url} timed out`)));
     req.once('error', reject);
     if (options.body !== undefined) req.end(options.body);
     else req.end();
   });
+}
 
 export interface LivePostRolloutValidationConfig {
   namespace: string;
   resourcePrefix: string;
   kubectlBin?: string;
   kubectlGlobalArgs?: readonly string[];
-  run?: CommandRunner;
-  http?: HttpJsonFetcher;
+  run: CommandRunner;
+  http: HttpJsonFetcher;
   /** Garden /health URL. */
   gardenHealthUrl: string;
   /** Gateway /v1/models URL and the model id that MUST be present. */
@@ -105,7 +106,7 @@ function fail(detail: string, evidence?: Record<string, unknown>): RawCheckResul
 export interface KubectlExecProbeConfig {
   kubectlBin?: string;
   kubectlGlobalArgs?: readonly string[];
-  run?: CommandRunner;
+  run: CommandRunner;
   namespace: string;
   /** Label selector for the target pod (first matching pod is used). */
   podSelector: string;
@@ -127,7 +128,7 @@ export function createKubectlExecProbe(
   config: KubectlExecProbeConfig,
 ): () => Promise<RawCheckResult> {
   const kubectl = config.kubectlBin ?? 'kubectl';
-  const run = config.run ?? execFileCommandRunner;
+  const run = config.run;
   return async () => {
     const podResult = await run(kubectl, [
       ...(config.kubectlGlobalArgs ?? []),
@@ -155,7 +156,7 @@ export function createKubectlExecProbe(
 }
 
 export interface HttpChatTurnProbeConfig {
-  http?: HttpJsonFetcher;
+  http: HttpJsonFetcher;
   chatCompletionsUrl: string;
   model: string;
   headers?: Record<string, string>;
@@ -169,7 +170,7 @@ export interface HttpChatTurnProbeConfig {
 export function createHttpChatTurnProbe(
   config: HttpChatTurnProbeConfig,
 ): () => Promise<RawCheckResult> {
-  const http = config.http ?? nodeHttpJsonFetcher;
+  const http = config.http;
   const turn = async (content: string): Promise<boolean> => {
     const res = await http('POST', config.chatCompletionsUrl, {
       ...(config.headers ? { headers: config.headers } : {}),
@@ -206,8 +207,8 @@ export function createLivePostRolloutValidationRunner(
   config: LivePostRolloutValidationConfig,
 ): PostRolloutValidationRunner {
   const kubectl = config.kubectlBin ?? 'kubectl';
-  const run = config.run ?? execFileCommandRunner;
-  const http = config.http ?? nodeHttpJsonFetcher;
+  const run = config.run;
+  const http = config.http;
   const deploymentNames = managedRollbackDeploymentNames(config.resourcePrefix);
 
   const getDeploymentJson = async (name: string): Promise<unknown> => {

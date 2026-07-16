@@ -312,16 +312,17 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
 
   static async connect(
     databaseUrl: string,
-    options: { schema?: string } = {},
+    options: { schema?: string; role?: string } = {},
   ): Promise<PostgresBackgroundWorkStore> {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-background-work',
       allowExitOnIdle: true,
       max: 8,
       schema: options.schema,
+      role: options.role,
     });
     try {
-      const migrationStatements = options.schema === undefined
+      const migrationStatements = options.schema === undefined || options.role !== undefined
         ? POSTGRES_BACKGROUND_WORK_MIGRATIONS
         : [
           `CREATE SCHEMA IF NOT EXISTS "${assertValidPostgresSchemaName(options.schema)}"`,
@@ -1558,6 +1559,15 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
       WHERE state IN ('queued', 'deferred', 'retry_wait') AND available_at_ms <= $1
     `, [safeInteger(input.nowMs, 'nowMs')]);
     return row ? safeInteger(row.count, 'runnable count') : 0;
+  }
+
+  async countPending(): Promise<number> {
+    const row = await queryOne<{ count: string }>(this.pool, `
+      SELECT COUNT(*)::text AS count
+      FROM agent_background_work_jobs
+      WHERE state IN ('queued', 'deferred', 'retry_wait', 'running')
+    `);
+    return row ? safeInteger(row.count, 'pending count') : 0;
   }
 
   async get(jobId: string): Promise<StoredBackgroundWorkJob | null> {

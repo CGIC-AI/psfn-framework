@@ -42,9 +42,11 @@ import {
   FLEET_CLUSTER_DIR_NAME,
   FLEET_COMPANIONS_DIR_NAME,
   FLEET_GROUP_DIR_NAME,
-  type FleetArtifactIdentity,
-  type FleetBackupUnitOutcome,
 } from './service.js';
+import type {
+  FleetArtifactIdentity,
+  FleetBackupUnitOutcome,
+} from './fleet-backup-contracts.js';
 import {
   executeFleetRestoreTransaction,
   type FleetRestoreFaultInjectionOptions,
@@ -387,7 +389,7 @@ export async function invalidateRestoredMemorySubjectProjections(
         // The subject-evidence invalidation trigger intentionally addresses
         // companion-local projection tables without schema qualification.
         // Pin its lookup to the restored schema for this transaction.
-        await client.query(`SET LOCAL search_path TO ${qualified}, public`);
+        await client.query(`SET LOCAL search_path TO ${qualified}, extensions`);
         await client.query(`
           UPDATE ${qualified}.l2_memories
           SET authorization_revision = authorization_revision + 1,
@@ -505,6 +507,58 @@ async function assertDumpScope(
     );
   }
   return expectedSchemas;
+}
+
+/**
+ * Restore one validated schema-only archive without any filesystem side
+ * effects. Used by ephemeral shard lifecycle rehearsals and operator tooling.
+ */
+export async function restorePostgresSchemaSlice(options: {
+  dumpPath: string;
+  schema: string;
+  postgres: FleetRestorePostgresOptions;
+}): Promise<{ schema: string; dumpPath: string }> {
+  const schema = assertValidPostgresSchemaName(options.schema);
+  const unit: FleetBackupUnitOutcome = {
+    kind: 'companion',
+    postgresSchema: schema,
+    status: 'success',
+  };
+  await assertDumpScope(options.dumpPath, unit, options.postgres);
+  const pool = createPostgresPool(options.postgres.databaseUrl, {
+    applicationName: 'fleet-schema-slice-restore-preflight',
+    allowExitOnIdle: true,
+    max: 1,
+  });
+  try {
+    const existing = await pool.query<{ exists: boolean }>(
+      'SELECT to_regnamespace($1) IS NOT NULL AS exists',
+      [schema],
+    );
+    if (existing.rows[0]?.exists === true) {
+      throw new Error(`PostgreSQL schema-slice restore requires absent target schema ${schema}`);
+    }
+  } finally {
+    await pool.end();
+  }
+  try {
+    await restorePostgresDump(options.dumpPath, options.postgres);
+  } catch (error) {
+    try {
+      await dropOwnedPostgresSchema(
+        schema,
+        options.postgres.databaseUrl,
+        options.postgres.psqlBinary,
+      );
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        `PostgreSQL schema-slice restore failed and rollback remains pending for ${schema}`,
+      );
+    }
+    throw error;
+  }
+  return { schema, dumpPath: options.dumpPath };
 }
 
 async function assertFleetAuthFamilyDumpScope(

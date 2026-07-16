@@ -1,5 +1,6 @@
 import {
   Menu,
+  Heart,
   Settings,
   Wifi,
   WifiOff,
@@ -38,6 +39,7 @@ import { OverlayFrame } from './overlay-drawer.js';
 import { SettingsDrawer } from './settings-drawer.js';
 import { ThreadView } from './thread-view.js';
 import type { ActivityFilter, OverlayDrawer } from './types.js';
+import { WishlistDrawer } from './wishlist-drawer.js';
 
 export function App() {
   const [configError, setConfigError] = useState<string | null>(null);
@@ -242,6 +244,15 @@ export function App() {
         <Menu aria-hidden />
       </button>
 
+      <button
+        className="floating-button wishlist-button"
+        type="button"
+        onClick={() => setOverlay('wishlist')}
+        aria-label="Open wishlist"
+      >
+        <Heart aria-hidden />
+      </button>
+
       <div className="floating-status" aria-label={`Connection ${streamState.connection}`}>
         {connectionTone === 'bad' ? <WifiOff aria-hidden /> : <Wifi aria-hidden />}
         <span>{connecting ? 'Connecting' : streamState.connection}</span>
@@ -322,6 +333,15 @@ export function App() {
               onSessionIdChange={setSessionId}
               onSpriteAnimationsChange={setSpriteAnimations}
               onSpriteEnabledChange={setSpriteEnabled}
+            />
+          ) : overlay === 'wishlist' ? (
+            <WishlistDrawer
+              canSend={canSend}
+              onClose={() => setOverlay(null)}
+              onRequestReview={(prompt) => {
+                sendUserText(prompt);
+                setOverlay(null);
+              }}
             />
           ) : (
             <ActivityDrawer

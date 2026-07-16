@@ -39,7 +39,7 @@ import type { ChargePolicyConfig } from '../../shared/contracts/charge-policy.js
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 import type { AdminModelUsageService } from '../../operator/garden/services/types.js';
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
-import { RUNTIME_LANE_CLASSES } from '../../core/agent/worker-lanes.js';
+import { RUNTIME_LANE_CLASSES } from '../../shared/contracts/runtime-lanes.js';
 import { MODEL_USAGE_RUNTIME_LANE_CLASSES } from '../../shared/telemetry/model-usage-attribution.js';
 
 const piMocks = vi.hoisted(() => ({

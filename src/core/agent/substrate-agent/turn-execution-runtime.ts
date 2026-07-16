@@ -77,9 +77,22 @@ import {
 } from '../../cogsec/canary/canary-token.js';
 import {
   mergeChargedImageDeliverableSummaries,
+  readGeneratedImageSensitivityClassifications,
   summarizeChargedImageDeliverables,
   summarizePendingPaidImageDeliverables,
 } from '../../../primitives/images/generated-media.js';
+import {
+  classifyArtifactSensitivity,
+  type ArtifactSensitivitySource,
+} from '../../../shared/contracts/artifact-sensitivity.js';
+import {
+  authorizeArtifactEgress,
+  authorizeRecoveredArtifactEgress,
+  type ArtifactEgressDestination,
+} from '../../artifacts/sensitivity-egress.js';
+import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
+import type { NotificationPort } from '../../../boundary/gateway/notification-port.js';
+import type { Attachment } from '../../../shared/contracts/runtime.js';
 import {
   MISSING_IMAGE_ATTACHMENT_CORRECTION,
   rejectsMissingImageAttachmentClaim,
@@ -118,6 +131,7 @@ import { ParentTurnContinuationBudgetExceededError } from '../turn-limits.js';
 import { parseTurnRecordBackgroundWorkHandoff } from '../background-work/types.js';
 import type { ForegroundWorkLease } from '../background-work/supervisor.js';
 import type { EnqueueBackgroundWorkInput } from '../background-work/types.js';
+import type { TurnSessionIdentity } from './turn-execution/contracts.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -134,11 +148,6 @@ function assertForegroundWorkOwned(lease: ForegroundWorkLease | null): void {
 
 function cloneComputedInternalStateForResponse(internalState: InternalState): InternalState {
   return JSON.parse(JSON.stringify(internalState)) as InternalState;
-}
-
-export interface TurnSessionIdentity {
-  readonly sourceChannelId: string;
-  readonly logicalSessionId: string;
 }
 
 export interface TurnExecutionRuntime {
@@ -170,6 +179,12 @@ export interface TurnExecutionRuntime {
   /** Ephemeral background-completion notices rendered once into the next prompt. */
   completionNotices: CompletionNoticeBuffer;
   memoryProvider: MemoryProvider | null;
+  artifactApprovalQueue?: ApprovalQueuePort | null;
+  artifactApprovalNotifier?: NotificationPort | null;
+  shareApprovedArtifacts?: (
+    attachments: readonly Attachment[],
+    destination: ArtifactEgressDestination,
+  ) => Promise<void>;
   memoryExtractor: MemoryExtractor | null;
   /** E8.3: supplemental wiki RAG provider; null until the projection is wired. */
   wikiRetrieval: WikiRetrievalPort | null;
@@ -281,6 +296,7 @@ export interface TurnExecutionRuntime {
   resolveChannelType: (message: SubstrateMessage) => string | undefined;
   ensureModel: (message?: SubstrateMessage) => void;
   captureTurnPromptSnapshot: (ctx: ComposeContext) => TurnPromptSnapshot;
+  captureAuthoritativeSystemPrompt?: (systemPrompt: string) => void;
   buildScratchpadContextBlock: () => string;
   normalizeTurnPromptOverride: (message: SubstrateMessage) => MessagePromptOverride;
   resolveResponseStyle: (
@@ -1174,6 +1190,7 @@ export async function handleMessageForTurn(
           message,
           turnSessionIdentity,
           context: promptAssembly.context,
+          authoritativeSystemPrompt: promptAssembly.fullPrompt,
           providerSystemPrompt: promptAssembly.providerSystemPrompt,
           piMessages: promptAssembly.piMessages,
           startTime,
@@ -1376,7 +1393,17 @@ export async function handleMessageForTurn(
       turnMessages,
       trustLevel,
     );
-    const responseAttachments = honorNoReply
+    const artifactSensitivitySources: ArtifactSensitivitySource[] = [
+      ...preTurnState.artifactSensitivitySources,
+      {
+        ref: `turn:${turnId}`,
+        sensitivity: contextEnvelope.channelPrivacy === 'public' ? 'public' : 'personal',
+      },
+    ];
+    const artifactSensitivityClassification = classifyArtifactSensitivity(
+      artifactSensitivitySources,
+    );
+    let responseAttachments = honorNoReply
       ? []
       : recoveredResponse?.attachments
         ? [...recoveredResponse.attachments]
@@ -1391,8 +1418,67 @@ export async function handleMessageForTurn(
             requestId,
             sourceMessageId: message.id,
             ...(userSessionEntryId !== null ? { userSessionEntryId } : {}),
+            sensitivitySources: artifactSensitivitySources,
+            sensitivityClassification: artifactSensitivityClassification,
           },
         });
+
+    if (responseAttachments.length > 0) {
+      const requestAudience = viewerRequestContext.requestAudience;
+      const destination: ArtifactEgressDestination = {
+        audience: requestAudience ?? 'ambiguous',
+        channelId: message.channelId,
+        channelType: message.channelType,
+        surface: message.channelType === 'psfn-amica'
+          ? 'satellite'
+          : message.channelType === 'api'
+            ? 'pwa'
+            : contextEnvelope.broadcast || contextEnvelope.channelPrivacy === 'public'
+              ? 'public_channel'
+              : requestAudience === 'self' || requestAudience === 'primary_contact'
+                ? 'conversation'
+                : 'external',
+      };
+      const egressDeps = {
+        approvalQueue: runtime.artifactApprovalQueue,
+        notifier: runtime.artifactApprovalNotifier,
+        readCurrentClassifications: readGeneratedImageSensitivityClassifications,
+        executeApprovedShare: async (
+          approvedAttachments: readonly Attachment[],
+          approvedDestination: ArtifactEgressDestination,
+        ) => {
+          if (!runtime.shareApprovedArtifacts) {
+            throw new Error('Approved artifact egress is not wired for this runtime');
+          }
+          await runtime.shareApprovedArtifacts(approvedAttachments, approvedDestination);
+        },
+      };
+      const egress = recoveredResponse
+        ? await authorizeRecoveredArtifactEgress({
+            attachments: responseAttachments,
+            destination,
+            deps: egressDeps,
+          })
+        : await authorizeArtifactEgress({
+            attachments: responseAttachments,
+            classification: artifactSensitivityClassification,
+            destination,
+            deps: egressDeps,
+          });
+      responseAttachments = egress.attachments;
+      if (egress.disposition !== 'proceed') {
+        safeResponseText = '';
+      }
+      if (egress.disposition === 'queued') {
+        runtime.sessionManager.appendSystemNote(
+          turnSessionIdentity.logicalSessionId,
+          `Artifact share held for V's review because it inherited ${egress.sensitivity} context. `
+            + `Confirmation ${egress.queueEntry.id} is pending; the artifact remains in the personal gallery.`,
+          'artifact_egress_approval',
+          turnSessionIdentity.sourceChannelId,
+        );
+      }
+    }
 
     if (rejectsMissingImageAttachmentClaim({
       responseText: safeResponseText,
@@ -1581,7 +1667,9 @@ export async function handleMessageForTurn(
     }
     const agentResponse: AgentResponse = recoveredResponse
       ? {
-          ...recoveredResponse,
+          content: safeResponseText,
+          channelId: recoveredResponse.channelId,
+          ...(responseAttachments.length > 0 ? { attachments: responseAttachments } : {}),
           metadata: {
             ...recoveredResponse.metadata,
             ...(responseFatigueMetadata ? { fatigue: responseFatigueMetadata } : {}),

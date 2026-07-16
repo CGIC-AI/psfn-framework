@@ -11,6 +11,7 @@ import type { ChannelType } from '../../shared/contracts/runtime.js';
 import type {
   SatelliteClientCertIdentity,
   SatelliteRegistryConfig,
+  SatelliteRegistryProvider,
   SatelliteTelemetryAuthContext,
 } from '../../shared/contracts/satellite-registry.js';
 import {
@@ -395,6 +396,8 @@ export interface ApiServerConfig {
   schedulerHealthcheckStaleAfterMs?: number;
   externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   satelliteRegistry?: SatelliteRegistryConfig;
+  /** Dynamic canonical owner source used by gateway-hosted satellite ingress. */
+  satelliteRegistryProvider?: SatelliteRegistryProvider;
   sensorIngest?: SensorIngestPort;
   /**
    * Per-satellite bearer credentials (`API_SATELLITE_KEYS`), each yielding a
@@ -471,6 +474,7 @@ export class ApiServer implements ChannelAdapterPort {
   private voiceWebSocket: ApiVoiceWebSocketAdapter;
   private chatCompletions: ApiChatCompletionsHandler;
   private satelliteRegistry?: SatelliteRegistryConfig;
+  private satelliteRegistryProvider?: SatelliteRegistryProvider;
   private companionRelay?: CompanionRelayHttpDeps;
   private icpAutonomyOperator?: IcpAutonomyOperatorPort;
   private confirmationOperator?: ConfirmationOperatorPort;
@@ -503,7 +507,11 @@ export class ApiServer implements ChannelAdapterPort {
     this.companionName = config.companionName?.trim() || this.modelName;
     this.requestTimeoutMs = parseChatRequestTimeoutMs(config.requestTimeoutMs);
     this.healthChecks = config.healthChecks ?? {};
+    if (config.satelliteRegistry && config.satelliteRegistryProvider) {
+      throw new Error('ApiServer requires exactly one satellite registry source');
+    }
     this.satelliteRegistry = config.satelliteRegistry;
+    this.satelliteRegistryProvider = config.satelliteRegistryProvider;
     this.companionRelay = config.companionRelay;
     this.icpAutonomyOperator = config.icpAutonomyOperator;
     this.confirmationOperator = config.confirmationOperator;
@@ -535,6 +543,7 @@ export class ApiServer implements ChannelAdapterPort {
       requestTimeoutMs: this.requestTimeoutMs,
       externalChannelProfiles: config.externalChannelProfiles ?? {},
       satelliteRegistry: config.satelliteRegistry,
+      satelliteRegistryProvider: config.satelliteRegistryProvider,
       logger: log,
       documentIngest: config.documentIngest ?? null,
     });
@@ -838,12 +847,20 @@ export class ApiServer implements ChannelAdapterPort {
       sendApiError(res, 503, 'companion_relay_not_configured', 'Companion event relay is not configured on this runtime');
       return;
     }
+    let satelliteRegistry: SatelliteRegistryConfig | undefined;
+    try {
+      satelliteRegistry = this.readSatelliteRegistry();
+    } catch (error) {
+      log.error('Satellite registry provider failed', { error: toErrorMessage(error) });
+      sendApiError(res, 503, 'satellite_registry_unavailable', 'The canonical satellite registry is unavailable');
+      return;
+    }
     const ctx = {
       req,
       res,
       url,
       principal,
-      ...(this.satelliteRegistry ? { registry: this.satelliteRegistry } : {}),
+      ...(satelliteRegistry ? { registry: satelliteRegistry } : {}),
       ...(clientCert ? { clientCert } : {}),
       companionId: this.modelName,
       deps: this.companionRelay,
@@ -917,9 +934,17 @@ export class ApiServer implements ChannelAdapterPort {
     principal: ApiAuthPrincipal,
     clientCert: SatelliteClientCertIdentity | undefined,
   ): void {
+    let satelliteRegistry: SatelliteRegistryConfig | undefined;
+    try {
+      satelliteRegistry = this.readSatelliteRegistry();
+    } catch (error) {
+      log.error('Satellite registry provider failed', { error: toErrorMessage(error) });
+      sendApiError(res, 503, 'satellite_registry_unavailable', 'The canonical satellite registry is unavailable');
+      return;
+    }
     const resolution = resolveSatelliteConfigPull({
       principal,
-      registry: this.satelliteRegistry,
+      registry: satelliteRegistry,
       satelliteId: url.searchParams.get('satelliteId') ?? undefined,
       endpointId: url.searchParams.get('endpointId') ?? undefined,
       claimType: url.searchParams.get('claimType') ?? undefined,
@@ -930,6 +955,12 @@ export class ApiServer implements ChannelAdapterPort {
       return;
     }
     sendJson(res, 200, resolution.value, API_DYNAMIC_JSON_HEADERS);
+  }
+
+  private readSatelliteRegistry(): SatelliteRegistryConfig | undefined {
+    return this.satelliteRegistryProvider
+      ? this.satelliteRegistryProvider()
+      : this.satelliteRegistry;
   }
 
   private async handleHealth(res: ServerResponse): Promise<void> {

@@ -96,6 +96,29 @@ function makeLLMProvider(content: string): LLMProviderPort {
   };
 }
 
+function deferredIdleGate(): {
+  reached: Promise<void>;
+  release: () => void;
+  wait: () => Promise<void>;
+} {
+  let markReached = () => {};
+  let release = () => {};
+  const reached = new Promise<void>(resolve => {
+    markReached = resolve;
+  });
+  const released = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  return {
+    reached,
+    release,
+    wait: async () => {
+      markReached();
+      await released;
+    },
+  };
+}
+
 describe('SleeptimeMemoryAgent', () => {
   function makeCoreMemoryStore() {
     return {
@@ -609,7 +632,7 @@ describe('SleeptimeMemoryAgent', () => {
     expect(episodicDiagnosticsStore.getMaintenanceDiagnostics).toHaveBeenCalledOnce();
   });
 
-  it('executes sleeptime actions in background mode without waiting for idle foreground turns', async () => {
+  it('waits for foreground idle before executing sleeptime maintenance work', async () => {
     const tempDir = mkdtempSync(join(tmpdir(), 'sleeptime-background-'));
     try {
       const eventBus = new EventBus();
@@ -657,8 +680,9 @@ describe('SleeptimeMemoryAgent', () => {
         // floor so the two transcript turns open the gate for this path test.
         orientationRewriteGate: { minNewEntriesSinceRewrite: 1, refreshAfterQuietDays: 1 },
       }));
+      const idleGate = deferredIdleGate();
       const agentLoop = {
-        waitForIdle: vi.fn().mockImplementation(() => new Promise<void>(() => {})),
+        waitForIdle: vi.fn(idleGate.wait),
       };
       const postTurnRuntime = wirePostTurnActionRuntime({
         eventBus,
@@ -679,10 +703,17 @@ describe('SleeptimeMemoryAgent', () => {
         response: makeResponse(),
         actions: [makeSleeptimeAction()],
       });
-      await scheduler.tick();
+      const tick = scheduler.tick();
+      try {
+        await idleGate.reached;
+        expect(agentLoop.waitForIdle).toHaveBeenCalledOnce();
+        expect(llmProvider.complete).not.toHaveBeenCalled();
+      } finally {
+        idleGate.release();
+        await tick;
+      }
 
-      expect(agentLoop.waitForIdle).not.toHaveBeenCalled();
-      expect((llmProvider.complete as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
+      expect(llmProvider.complete).toHaveBeenCalledTimes(1);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

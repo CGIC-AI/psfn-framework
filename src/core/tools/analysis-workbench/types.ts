@@ -1,6 +1,7 @@
 // ── REPL Sandbox Types ──
 
-import type { LLMProviderPort, EmbeddingProviderPort, LLMRequestMetadata } from '../../agent/contracts.js';
+import type { LLMProviderPort, LLMRequestMetadata } from '../../agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { Scheduler } from '../../scheduler/scheduler.js';

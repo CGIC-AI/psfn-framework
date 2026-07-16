@@ -43,6 +43,57 @@ describe('agent core runtime builder', () => {
     expect(coreRuntimeSource).toContain('fatigueLedger: fatigueRuntime.fatigueLedger');
   });
 
+  it('threads scheduler-owned durable background-work tuning and welfare into every live runtime layer', () => {
+    const agentMainSource = readSource('main.ts');
+    const coreBootstrapSource = readSource('core-bootstrap.ts');
+    const coreRuntimeSource = readSource('core-runtime.ts');
+    const compositionSource = readFileSync(
+      join(SRC_DIR, '../startup/composition/composition.ts'),
+      'utf-8',
+    );
+    const icpCertificationAgentSource = readFileSync(
+      join(SRC_DIR, '../e2e/icp-certification/agent-process.ts'),
+      'utf-8',
+    );
+    const substrateAgentSource = readFileSync(
+      join(SRC_DIR, '../../core/agent/substrate-agent.ts'),
+      'utf-8',
+    );
+
+    expect(agentMainSource).toContain(
+      'backgroundWorkTuning: schedulerConfig.backgroundWork',
+    );
+    expect(agentMainSource).toContain(
+      'schedulerConfig.backgroundWorkWelfare ?? DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG',
+    );
+    expect(coreBootstrapSource).toContain('backgroundWorkTuning,');
+    expect(coreBootstrapSource).toContain('backgroundWorkWelfare: options.backgroundWorkWelfare');
+    expect(coreRuntimeSource).toContain(
+      'backgroundWorkTuning: options.backgroundWorkTuning',
+    );
+    expect(coreRuntimeSource).toContain(
+      'backgroundWorkWelfare: options.backgroundWorkWelfare',
+    );
+    expect(compositionSource).toContain(
+      'backgroundWorkTuning: options.backgroundWorkTuning',
+    );
+    expect(compositionSource).toContain(
+      'backgroundWorkWelfare: options.backgroundWorkWelfare',
+    );
+    expect(icpCertificationAgentSource).toContain(
+      'backgroundWorkWelfare: startup.schedulerConfig.backgroundWorkWelfare',
+    );
+    expect(substrateAgentSource).toContain('...backgroundWorkTuning.supervisor');
+    expect(substrateAgentSource).toContain('tuning: backgroundWorkTuning.postTurn');
+    expect(substrateAgentSource).toContain('welfare: backgroundWorkWelfare');
+    expect(substrateAgentSource).toContain(
+      'SubstrateAgent requires scheduler-owned durable background work tuning',
+    );
+    expect(substrateAgentSource).toContain(
+      'SubstrateAgent requires scheduler-owned durable background work welfare policy',
+    );
+  });
+
   it('threads injected episodic stores instead of disabling L0.1 when sqlite db is absent', () => {
     const agentMainSource = readSource('main.ts');
     const coreRuntimeSource = readSource('core-runtime.ts');
@@ -57,5 +108,19 @@ describe('agent core runtime builder', () => {
     expect(coreRuntimeSource).toContain('PostgreSQL core runtime requires an injected memory store');
     expect(coreRuntimeSource).toContain('PostgreSQL core runtime requires an injected contact store');
     expect(coreRuntimeSource).toContain('PostgreSQL core runtime requires injected intention persistence stores');
+  });
+
+  it('threads shared-world caretaker maintenance and shutdown handles through agent main', () => {
+    const agentMainSource = readSource('main.ts');
+    const coreRuntimeSource = readSource('core-runtime.ts');
+
+    expect(coreRuntimeSource).toContain(
+      'sharedWorldWikiCaretaker: wikiRuntime.sharedWorldCaretaker',
+    );
+    expect(coreRuntimeSource).toContain('closeWikiRuntime: wikiRuntime.close');
+    expect(agentMainSource).toContain(
+      'sharedWorldWikiCaretaker: coreRuntime.sharedWorldWikiCaretaker',
+    );
+    expect(agentMainSource).toContain('await coreRuntime.closeWikiRuntime()');
   });
 });

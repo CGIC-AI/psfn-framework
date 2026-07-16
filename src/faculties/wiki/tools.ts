@@ -11,6 +11,17 @@ import {
 import { VALID_SENSITIVITY_LEVELS } from '../../system/trust/types.js';
 import { INTAKE_FIREWALL_NOTICE_TEMPLATES } from '../../core/cogsec/intake-firewall-notice-templates.js';
 import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
+import type { SharedWorldWikiProposalSubmissionPort } from './shared-world-caretaker.js';
+import {
+  type CompanionOwnedVisibility,
+  type PersonalProjectStatus,
+  PersonalProjectLibrary,
+} from './personal-projects.js';
+import {
+  MAX_WISH_CONTEXT_CHARS,
+  MAX_WISH_TEXT_CHARS,
+  PersonalWishlist,
+} from './personal-wishlist.js';
 import {
   WIKI_SOURCE_CLASSES,
   type WikiDocumentUpsertInput,
@@ -19,8 +30,50 @@ import {
   type WikiStorePort,
 } from './types.js';
 
-const WIKI_ACTIONS = ['list', 'read', 'search', 'semantic_search', 'write', 'import'] as const;
-type WikiAction = typeof WIKI_ACTIONS[number];
+type WikiAction =
+  | 'list'
+  | 'read'
+  | 'search'
+  | 'semantic_search'
+  | 'write'
+  | 'import'
+  | 'propose_shared_world'
+  | 'wish_list'
+  | 'wish_read'
+  | 'wish_create'
+  | 'project_list'
+  | 'project_read'
+  | 'project_create'
+  | 'project_update'
+  | 'project_add_artifact'
+  | 'project_share'
+  | 'wardrobe_list'
+  | 'wardrobe_read'
+  | 'wardrobe_save'
+  | 'wardrobe_revise';
+
+const WIKI_ACTIONS = [
+  'list',
+  'read',
+  'search',
+  'semantic_search',
+  'write',
+  'import',
+  'propose_shared_world',
+  'wish_list',
+  'wish_read',
+  'wish_create',
+  'project_list',
+  'project_read',
+  'project_create',
+  'project_update',
+  'project_add_artifact',
+  'project_share',
+  'wardrobe_list',
+  'wardrobe_read',
+  'wardrobe_save',
+  'wardrobe_revise',
+] satisfies readonly WikiAction[];
 
 export interface WikiToolDeps {
   /**
@@ -38,6 +91,18 @@ export interface WikiToolDeps {
    * off.
    */
   getIntakeSinkGate?: () => IntakeSinkGate | null;
+  /**
+   * Multi-companion-only enqueue surface. It exposes no SharedWorldWikiStore,
+   * so a companion can propose a public world fact but cannot publish it.
+   */
+  sharedWorldProposal?: {
+    actorId: string;
+    submitter: SharedWorldWikiProposalSubmissionPort;
+  };
+  /** Existing personal-wiki storage interpreted as project and wardrobe manifests. */
+  personalProjects?: PersonalProjectLibrary;
+  /** Existing personal-wiki storage interpreted as companion-authored wishes. */
+  personalWishlist?: PersonalWishlist;
 }
 
 interface WikiToolParams {
@@ -52,6 +117,24 @@ interface WikiToolParams {
   provenance_refs?: string[] | string;
   sensitivity?: WikiDocumentUpsertInput['sensitivity'];
   summary?: string;
+  site_id?: string;
+  source_ref?: string;
+  wish_ref?: string;
+  wish_text?: string;
+  wish_context?: string;
+  project_id?: string;
+  project_ref?: string;
+  project_status?: PersonalProjectStatus;
+  visibility?: CompanionOwnedVisibility;
+  next_step?: string;
+  artifact_ref?: string;
+  artifact_label?: string;
+  audience?: CompanionOwnedVisibility;
+  look_id?: string;
+  look_ref?: string;
+  look_name?: string;
+  look_prompt?: string;
+  supersedes_ref?: string;
 }
 
 function normalizeAction(params: WikiToolParams): WikiAction {
@@ -65,10 +148,12 @@ function normalizeAction(params: WikiToolParams): WikiAction {
     if (!hasId && !hasWriteFields) return 'list';
     throw new Error(`action is required. Supported actions: ${WIKI_ACTIONS.join(', ')}`);
   }
-  if ((WIKI_ACTIONS as readonly string[]).includes(rawAction)) {
-    return rawAction as WikiAction;
-  }
+  if (isWikiAction(rawAction)) return rawAction;
   throw new Error(`action must be one of: ${WIKI_ACTIONS.join(', ')}`);
+}
+
+function isWikiAction(value: string): value is WikiAction {
+  return WIKI_ACTIONS.some(action => action === value);
 }
 
 function requireString(value: unknown, field: string): string {
@@ -109,13 +194,41 @@ function resolveWikiCapabilityRequirement(params: Record<string, unknown>): Capa
     case 'read':
     case 'search':
     case 'semantic_search':
+    case 'wish_list':
+    case 'wish_read':
+    case 'project_list':
+    case 'project_read':
+    case 'wardrobe_list':
+    case 'wardrobe_read':
       return 'identity.read';
     case 'write':
     case 'import':
+    case 'propose_shared_world':
+    case 'wish_create':
+    case 'project_create':
+    case 'project_update':
+    case 'project_add_artifact':
+    case 'project_share':
+    case 'wardrobe_save':
+    case 'wardrobe_revise':
       return 'identity.write.runtime';
     default:
       return ['identity.read', 'identity.write.runtime'];
   }
+}
+
+function requirePersonalProjects(deps: WikiToolDeps): PersonalProjectLibrary {
+  if (!deps.personalProjects) {
+    throw new Error('personal project storage is unavailable');
+  }
+  return deps.personalProjects;
+}
+
+function requirePersonalWishlist(deps: WikiToolDeps): PersonalWishlist {
+  if (!deps.personalWishlist) {
+    throw new Error('personal wishlist storage is unavailable');
+  }
+  return deps.personalWishlist;
 }
 
 export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): SubstrateAgentTool {
@@ -174,6 +287,47 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
         minLength: 1,
         description: 'Optional short summary used in list/search previews.',
       })),
+      site_id: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Known shared-world site id for action=propose_shared_world.',
+      })),
+      source_ref: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Non-memory source event/reference for action=propose_shared_world.',
+      })),
+      wish_ref: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Stable wish:<uuid> reference for wish_read.',
+      })),
+      wish_text: Type.Optional(Type.String({
+        minLength: 1,
+        maxLength: MAX_WISH_TEXT_CHARS,
+        description: 'What the companion wants for wish_create, in her own words.',
+      })),
+      wish_context: Type.Optional(Type.String({
+        minLength: 1,
+        maxLength: MAX_WISH_CONTEXT_CHARS,
+        description: 'Optional context about why, when, or how the wish matters.',
+      })),
+      project_id: Type.Optional(Type.String({ minLength: 1, description: 'Stable id for project_create.' })),
+      project_ref: Type.Optional(Type.String({ minLength: 1, description: 'Stable project:<id> reference.' })),
+      project_status: Type.Optional(Type.Union([
+        Type.Literal('active'), Type.Literal('paused'), Type.Literal('completed'), Type.Literal('archived'),
+      ])),
+      visibility: Type.Optional(Type.Union([
+        Type.Literal('self'), Type.Literal('primary_contact'), Type.Literal('public'),
+      ], { description: 'Companion-owned read/share visibility.' })),
+      next_step: Type.Optional(Type.String({ minLength: 1, description: 'The companion\'s own next-step intention.' })),
+      artifact_ref: Type.Optional(Type.String({ minLength: 1, description: 'Durable generated/file/wiki artifact reference.' })),
+      artifact_label: Type.Optional(Type.String({ minLength: 1 })),
+      audience: Type.Optional(Type.Union([
+        Type.Literal('self'), Type.Literal('primary_contact'), Type.Literal('public'),
+      ], { description: 'Intended artifact audience; actual release remains subject to the artifact egress gate.' })),
+      look_id: Type.Optional(Type.String({ minLength: 1, description: 'Stable id for wardrobe_save.' })),
+      look_ref: Type.Optional(Type.String({ minLength: 1, description: 'Stable wardrobe:<id> reference.' })),
+      look_name: Type.Optional(Type.String({ minLength: 1 })),
+      look_prompt: Type.Optional(Type.String({ minLength: 1, description: 'Reusable outfit prompt fragment.' })),
+      supersedes_ref: Type.Optional(Type.String({ minLength: 1, description: 'Prior wardrobe:<id> ref replaced by this look.' })),
     }),
     execute: async (
       _toolCallId: string,
@@ -247,6 +401,138 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
               document,
               boundary: 'Stored in the internal wiki/knowledge-base; no L2 memory was created.',
             }, null, 2));
+          }
+          case 'propose_shared_world': {
+            const proposalSurface = deps.sharedWorldProposal;
+            if (!proposalSurface) {
+              return textResultWithError(
+                'wiki propose_shared_world is unavailable outside the configured multi-companion caretaker flow.',
+                true,
+              );
+            }
+            const provenanceRefs = typeof params.provenance_refs === 'string'
+              ? params.provenance_refs.split(',')
+              : (params.provenance_refs ?? []);
+            const tags = typeof params.tags === 'string' ? params.tags.split(',') : params.tags;
+            const result = await proposalSurface.submitter.submit({
+              siteId: requireString(params.site_id, 'site_id'),
+              ...(typeof params.id === 'string' && params.id.trim() ? { documentId: params.id.trim() } : {}),
+              actorId: proposalSurface.actorId,
+              sourceRef: requireString(params.source_ref, 'source_ref'),
+              title: requireString(params.title, 'title'),
+              body: requireString(params.body, 'body'),
+              ...(tags ? { tags } : {}),
+              provenanceRefs,
+              sensitivity: params.sensitivity ?? 'public',
+            });
+            return textResult(JSON.stringify({
+              action,
+              proposal: result.proposal,
+              deduplicated: result.deduplicated,
+              boundary: 'Queued for operator review; no shared-world document was written.',
+            }, null, 2));
+          }
+          case 'wish_list': {
+            const wishes = requirePersonalWishlist(deps).listWishes();
+            return textResult(JSON.stringify({
+              action,
+              wishes,
+              boundary: 'Wishes are companion-authored personal wiki records. Saving one is asynchronous and does not notify or interrupt the operator.',
+            }, null, 2));
+          }
+          case 'wish_read': {
+            const wish = requirePersonalWishlist(deps).getWish(requireString(params.wish_ref, 'wish_ref'));
+            return textResult(JSON.stringify({ action, wish }, null, 2));
+          }
+          case 'wish_create': {
+            const wish = requirePersonalWishlist(deps).createWish({
+              text: requireString(params.wish_text, 'wish_text'),
+              ...(params.wish_context !== undefined ? { context: params.wish_context } : {}),
+            });
+            return textResult(JSON.stringify({
+              action,
+              wish,
+              boundary: 'Saved for asynchronous operator review. No push notification or operator interruption was emitted.',
+            }, null, 2));
+          }
+          case 'project_list': {
+            const projects = requirePersonalProjects(deps).listProjects();
+            return textResult(JSON.stringify({
+              action,
+              projects,
+              boundary: 'Projects live in the existing personal wiki; this does not create a new persistence backend.',
+            }, null, 2));
+          }
+          case 'project_read': {
+            const project = requirePersonalProjects(deps).getProject(requireString(params.project_ref, 'project_ref'));
+            return textResult(JSON.stringify({ action, project }, null, 2));
+          }
+          case 'project_create': {
+            const project = await requirePersonalProjects(deps).createProject({
+              ...(params.project_id ? { id: params.project_id } : {}),
+              title: requireString(params.title, 'title'),
+              nextStep: requireString(params.next_step, 'next_step'),
+              ...(params.visibility ? { visibility: params.visibility } : {}),
+            });
+            return textResult(JSON.stringify({ action, project }, null, 2));
+          }
+          case 'project_update': {
+            const project = await requirePersonalProjects(deps).updateProject({
+              ref: requireString(params.project_ref, 'project_ref'),
+              ...(params.next_step ? { nextStep: params.next_step } : {}),
+              ...(params.project_status ? { status: params.project_status } : {}),
+              ...(params.visibility ? { visibility: params.visibility } : {}),
+            });
+            return textResult(JSON.stringify({ action, project }, null, 2));
+          }
+          case 'project_add_artifact': {
+            if (!params.sensitivity) throw new Error('sensitivity is required for project_add_artifact');
+            const project = await requirePersonalProjects(deps).addArtifact({
+              projectRef: requireString(params.project_ref, 'project_ref'),
+              artifactRef: requireString(params.artifact_ref, 'artifact_ref'),
+              label: requireString(params.artifact_label, 'artifact_label'),
+              sensitivity: params.sensitivity,
+              ...(params.audience ? { intendedAudience: params.audience } : {}),
+            });
+            return textResult(JSON.stringify({ action, project }, null, 2));
+          }
+          case 'project_share': {
+            const project = await requirePersonalProjects(deps).requestArtifactShare({
+              projectRef: requireString(params.project_ref, 'project_ref'),
+              artifactRef: requireString(params.artifact_ref, 'artifact_ref'),
+              audience: params.audience ?? 'self',
+            });
+            return textResult(JSON.stringify({
+              action,
+              project,
+              boundary: 'This records sharing intent only. Attaching or publishing the artifact still passes through sensitivity inheritance and HITL egress policy.',
+            }, null, 2));
+          }
+          case 'wardrobe_list': {
+            const looks = requirePersonalProjects(deps).listWardrobeLooks();
+            return textResult(JSON.stringify({ action, looks }, null, 2));
+          }
+          case 'wardrobe_read': {
+            const look = requirePersonalProjects(deps).getWardrobeLook(requireString(params.look_ref, 'look_ref'));
+            return textResult(JSON.stringify({ action, look }, null, 2));
+          }
+          case 'wardrobe_save': {
+            const look = requirePersonalProjects(deps).saveNamedLook({
+              ...(params.look_id ? { id: params.look_id } : {}),
+              name: requireString(params.look_name, 'look_name'),
+              promptFragment: requireString(params.look_prompt, 'look_prompt'),
+              ...(params.visibility ? { visibility: params.visibility } : {}),
+              ...(params.supersedes_ref ? { supersedesRef: params.supersedes_ref } : {}),
+            });
+            return textResult(JSON.stringify({ action, look }, null, 2));
+          }
+          case 'wardrobe_revise': {
+            const look = requirePersonalProjects(deps).reviseNamedLook({
+              ref: requireString(params.look_ref, 'look_ref'),
+              promptFragment: requireString(params.look_prompt, 'look_prompt'),
+              ...(params.visibility ? { visibility: params.visibility } : {}),
+            });
+            return textResult(JSON.stringify({ action, look }, null, 2));
           }
         }
       } catch (error) {

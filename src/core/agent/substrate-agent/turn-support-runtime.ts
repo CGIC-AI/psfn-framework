@@ -47,7 +47,7 @@ import type {
   ForegroundWorkLease,
 } from '../background-work/supervisor.js';
 import type { EnqueueBackgroundWorkInput } from '../background-work/types.js';
-import type { TurnSessionIdentity } from './turn-execution-runtime.js';
+import type { TurnSessionIdentity } from './turn-execution/contracts.js';
 
 const log = createComponentLogger('SubstrateAgent');
 

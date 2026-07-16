@@ -205,6 +205,10 @@ export interface SubstrateConfig {
   wikiRetrievalFocusTokenCap?: number;
   wikiRetrievalSimilarityThreshold?: number;
   wikiRetrievalGroupSimilarityThreshold?: number;
+  /** settings.json-owned startup wiki cache hydration volume. */
+  wikiStartupHydration?: WikiStartupHydrationSettings;
+  /** settings.json-owned lifecycle and Kubernetes operational policy. */
+  lifecycleKubernetes?: LifecycleKubernetesSettings;
   extractionInterval: number;
   maintenanceIntervalMs: number;
   defaultContextWindow: number;
@@ -315,6 +319,8 @@ export interface SubstrateConfig {
   voiceMaxFrameBytes?: number;
   /** Backpressure cap on queued inbound voice frames before overflow close. */
   voiceMaxPendingFrames?: number;
+  /** settings.json-owned committed voice reply segmentation thresholds. */
+  voiceReplySegmenter?: VoiceReplySegmenterSettings;
   sttProvider?: StreamingSttProvider | 'disabled';
   ttsProvider?: StreamingTtsProvider | 'disabled';
   deepgramApiKey?: string;
@@ -404,6 +410,38 @@ export interface SubstrateConfig {
   moaMaxRounds?: number;
   moaMaxTokensPerRound?: number;
   moaTimeoutMs?: number;
+}
+
+export interface WikiStartupHydrationSettings {
+  recentSessionLimit: number;
+  recentMessageLimit: number;
+  maxContextChars: number;
+}
+
+export interface VoiceReplySegmenterSettings {
+  minSegmentLength: number;
+  maxBufferLength: number;
+}
+
+/**
+ * Mutable operational limits for lifecycle commands and the Kubernetes
+ * self-management surfaces. Network coordinates and credentials remain
+ * environment-owned; immutable protocol and response-size guards remain code-owned.
+ */
+export interface LifecycleKubernetesSettings {
+  lifecycleCommandTimeoutMs: number;
+  operatorCommandTimeoutMs: number;
+  operatorHttpTimeoutMs: number;
+  operatorConfirmationRequestTimeoutMs: number;
+  kubernetesReadRequestTimeoutMs: number;
+  kubernetesRolloutRequestTimeoutMs: number;
+  rolloutWaitTimeoutMs: number;
+  rolloutPollIntervalMs: number;
+  rollbackWaitTimeoutMs: number;
+  rollbackPollIntervalMs: number;
+  postRolloutMaxLogRecords: number;
+  postRolloutValidationHistoryLimit: number;
+  rollbackHistoryLimit: number;
 }
 export const DEFAULT_MOOD_CONGRUENCE_WEIGHT = 0.15;
 export const DEFAULT_UI_THEME_ID = 'garden';

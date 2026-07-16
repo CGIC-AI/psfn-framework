@@ -24,7 +24,9 @@ const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 // v2: R2 rewrite — replaced "do not invent a gap or stale absence" and
 // "not as a command to intensify them" suppression phrasing with
 // out-of-scope/descriptive framing.
-export const REFLECTION_CONTEXT_GUIDANCE_VERSION = 2;
+// v3 (kb9j): contact guidance no longer names or forecloses a silence/absence
+// topic; the curated starter and downstream guardrail carry the useful signal.
+export const REFLECTION_CONTEXT_GUIDANCE_VERSION = 3;
 
 export type ReflectionExecutionSource =
   | 'manual'
@@ -464,7 +466,6 @@ function formatContactRelationalBlock(input: ReflectionContactContextBundleInput
     `- ${lastSeenLine}`,
     `- Recent contact status: ${recentStatus}.`,
     '- Ground the reflection in the live contact evidence above.',
-    '- Recent contact status is the authoritative presence signal; while it reads active, silence or absence framing is out of scope for this reflection.',
   ];
 
   return lines.join('\n');

@@ -163,7 +163,7 @@ export interface AbortResult {
 }
 
 export interface VoiceReplyStreamOptions {
-  readonly segmenter?: Partial<SegmenterConfig>;
+  readonly segmenter: SegmenterConfig;
   readonly gate: ContentGateConfig;
   /**
    * Optional telemetry sink for provisional deltas. These are the raw model

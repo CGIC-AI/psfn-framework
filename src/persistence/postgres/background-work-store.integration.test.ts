@@ -15,9 +15,11 @@ import {
 import {
   BackgroundWorkDeferredError,
   BackgroundWorkSupervisor,
+  type BackgroundWorkSupervisorOptions,
 } from '../../core/agent/background-work/supervisor.js';
+import type { BackgroundWorkSupervisorTuning } from '../../core/agent/background-work/config.js';
 import { EventBus } from '../../shared/event-bus.js';
-import { createPostgresPool } from '../postgres.js';
+import { createPostgresPool, ensurePostgresSchemaExists } from '../postgres.js';
 import {
   DEFAULT_POSTGRES_TEST_IMAGE,
   startPostgresTestHarness,
@@ -43,6 +45,37 @@ import {
   runExtractionOrchestration,
   type ExtractionRunOptions,
 } from '../../faculties/memory/extraction/orchestrator.js';
+
+const TEST_BACKGROUND_WORK_SUPERVISOR_TUNING: BackgroundWorkSupervisorTuning = {
+  maxConcurrentSessions: 4,
+  leaseDurationMs: 300_000,
+  retryBaseDelayMs: 1_000,
+  retryMaxDelayMs: 300_000,
+  shutdownTimeoutMs: 5_000,
+  terminalRetentionMs: 604_800_000,
+  cleanupIntervalMs: 3_600_000,
+};
+
+const TEST_BACKGROUND_WORK_WELFARE_POLICY: BackgroundWorkSupervisorOptions['welfare'] = {
+  deferThreshold: 8,
+  ageThresholdMs: 300_000,
+  reserveSlots: 1,
+};
+
+type TestBackgroundWorkSupervisorOptions =
+  Omit<BackgroundWorkSupervisorOptions, keyof BackgroundWorkSupervisorTuning | 'welfare'>
+  & Partial<BackgroundWorkSupervisorTuning>
+  & { welfare?: BackgroundWorkSupervisorOptions['welfare'] };
+
+function createBackgroundWorkSupervisor(
+  options: TestBackgroundWorkSupervisorOptions,
+): BackgroundWorkSupervisor {
+  return new BackgroundWorkSupervisor({
+    ...TEST_BACKGROUND_WORK_SUPERVISOR_TUNING,
+    welfare: TEST_BACKGROUND_WORK_WELFARE_POLICY,
+    ...options,
+  });
+}
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -301,7 +334,7 @@ describe('PostgresBackgroundWorkStore', () => {
       max: 1,
     });
     const executor = vi.fn(async () => undefined);
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       leaseOwner: 'payload-validation-worker',
@@ -376,7 +409,7 @@ describe('PostgresBackgroundWorkStore', () => {
       max: 1,
     });
     const executor = vi.fn(async () => undefined);
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       leaseOwner: 'payload-shape-validation-worker',
@@ -508,6 +541,52 @@ describe('PostgresBackgroundWorkStore', () => {
       expect(claims.filter(Boolean)).toHaveLength(1);
     } finally {
       await Promise.all([first.close(), second.close()]);
+    }
+  });
+
+  it('runs role-bound migrations without database CREATE and never creates a missing tenant schema', async () => {
+    const database = await harness.createDatabase();
+    const adminPool = createPostgresPool(database.databaseUrl, { max: 1 });
+    const tenantSchema = 'background_work_tenant';
+    const tenantRole = 'background_work_tenant_role';
+    const missingSchema = 'background_work_missing_tenant';
+    const missingRole = 'background_work_missing_role';
+    let store: PostgresBackgroundWorkStore | undefined;
+    try {
+      await adminPool.query(`CREATE ROLE "${tenantRole}" NOLOGIN NOINHERIT`);
+      await adminPool.query(`CREATE SCHEMA "${tenantSchema}" AUTHORIZATION "${tenantRole}"`);
+      await adminPool.query(`GRANT "${tenantRole}" TO CURRENT_USER`);
+      const privileges = await adminPool.query<{ can_create_database_objects: boolean }>(`
+        SELECT has_database_privilege($1, current_database(), 'CREATE')
+          AS can_create_database_objects
+      `, [tenantRole]);
+      expect(privileges.rows[0]?.can_create_database_objects).toBe(false);
+
+      store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+        schema: tenantSchema,
+        role: tenantRole,
+      });
+      await store.enqueue(makeInput('tenant-session', 'tenant-turn'));
+      expect(await store.get(createBackgroundWorkIdentity({
+        logicalSessionId: 'tenant-session',
+        turnId: 'tenant-turn',
+        kind: 'memory_extraction',
+      }).jobId)).not.toBeNull();
+
+      await adminPool.query(`CREATE ROLE "${missingRole}" NOLOGIN NOINHERIT`);
+      await adminPool.query(`GRANT "${missingRole}" TO CURRENT_USER`);
+      await expect(PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+        schema: missingSchema,
+        role: missingRole,
+      })).rejects.toThrow();
+      const missing = await adminPool.query<{ exists: boolean }>(
+        'SELECT to_regnamespace($1) IS NOT NULL AS exists',
+        [missingSchema],
+      );
+      expect(missing.rows[0]?.exists).toBe(false);
+    } finally {
+      await store?.close();
+      await adminPool.end();
     }
   });
 
@@ -799,7 +878,7 @@ describe('PostgresBackgroundWorkStore', () => {
     let foregroundEffectCapable = true;
     let firstReplicaEffects = 0;
     let secondReplicaEffects = 0;
-    const first = new BackgroundWorkSupervisor({
+    const first = createBackgroundWorkSupervisor({
       store: firstStore,
       eventBus: new EventBus(),
       leaseOwner: 'foreground-replica',
@@ -811,7 +890,7 @@ describe('PostgresBackgroundWorkStore', () => {
         });
       },
     });
-    const second = new BackgroundWorkSupervisor({
+    const second = createBackgroundWorkSupervisor({
       store: secondStore,
       eventBus: new EventBus(),
       leaseOwner: 'background-replica',
@@ -994,7 +1073,7 @@ describe('PostgresBackgroundWorkStore', () => {
     let firstSinkWrites = 0;
     let secondSinkWrites = 0;
     const providerEntered = deferred();
-    const first = new BackgroundWorkSupervisor({
+    const first = createBackgroundWorkSupervisor({
       store: firstStore,
       eventBus: new EventBus(),
       leaseOwner: 'first-replica',
@@ -1015,7 +1094,7 @@ describe('PostgresBackgroundWorkStore', () => {
         });
       },
     });
-    const second = new BackgroundWorkSupervisor({
+    const second = createBackgroundWorkSupervisor({
       store: secondStore,
       eventBus: new EventBus(),
       leaseOwner: 'second-replica',
@@ -1076,7 +1155,7 @@ describe('PostgresBackgroundWorkStore', () => {
       return originalRequeue(input);
     });
     const providerEntered = deferred();
-    const first = new BackgroundWorkSupervisor({
+    const first = createBackgroundWorkSupervisor({
       store: firstStore,
       eventBus: new EventBus(),
       leaseOwner: 'first-replica',
@@ -1095,7 +1174,7 @@ describe('PostgresBackgroundWorkStore', () => {
       },
     });
     let sinkWrites = 0;
-    const second = new BackgroundWorkSupervisor({
+    const second = createBackgroundWorkSupervisor({
       store: secondStore,
       eventBus: new EventBus(),
       leaseOwner: 'second-replica',
@@ -1153,7 +1232,7 @@ describe('PostgresBackgroundWorkStore', () => {
     let nowMs = 1_000;
     let attempts = 0;
     const sinkWrites: string[] = [];
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       leaseOwner: 'worker',
@@ -1499,7 +1578,7 @@ describe('PostgresBackgroundWorkStore', () => {
     `);
     let sinkWrites = 0;
     let now = 1_000;
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => now,
@@ -1799,8 +1878,9 @@ describe('PostgresBackgroundWorkStore', () => {
     };
 
     try {
+      await ensurePostgresSchemaExists(inspectionPool, 'companion_a');
       await inspectionPool.query(`
-        CREATE TABLE cross_turn_derived_effects (
+        CREATE TABLE companion_a.cross_turn_derived_effects (
           id BIGSERIAL PRIMARY KEY,
           content TEXT NOT NULL
         )
@@ -1834,7 +1914,7 @@ describe('PostgresBackgroundWorkStore', () => {
         },
         async (entries) => {
           await inspectionPool.query(
-            'INSERT INTO cross_turn_derived_effects (content) VALUES ($1)',
+            'INSERT INTO companion_a.cross_turn_derived_effects (content) VALUES ($1)',
             [entries.map(entry => entry.content).join('|')],
           );
         },
@@ -1850,14 +1930,14 @@ describe('PostgresBackgroundWorkStore', () => {
         () => consumer.getRecent(logicalSessionId, 10),
         async (entries) => {
           await inspectionPool.query(
-            'INSERT INTO cross_turn_derived_effects (content) VALUES ($1)',
+            'INSERT INTO companion_a.cross_turn_derived_effects (content) VALUES ($1)',
             [entries.map(entry => entry.content).join('|')],
           );
         },
       );
 
       const effects = await inspectionPool.query<{ content: string }>(
-        'SELECT content FROM cross_turn_derived_effects ORDER BY id',
+        'SELECT content FROM companion_a.cross_turn_derived_effects ORDER BY id',
       );
       expect(effects.rows).toHaveLength(1);
       expect(effects.rows[0]?.content).not.toContain(privateOlderContent);
@@ -1986,8 +2066,9 @@ describe('PostgresBackgroundWorkStore', () => {
     const failedContent = 'FAILED ICP A MUST NOT ENTER THE PROJECTED POST-TURN SINK';
 
     try {
+      await ensurePostgresSchemaExists(inspectionPool, 'companion_a');
       await inspectionPool.query(`
-        CREATE TABLE projected_background_effects (
+        CREATE TABLE companion_a.projected_background_effects (
           id BIGSERIAL PRIMARY KEY,
           content TEXT NOT NULL
         )
@@ -2066,7 +2147,7 @@ describe('PostgresBackgroundWorkStore', () => {
           effectEntered.resolve();
           await allowEffect.promise;
           await inspectionPool.query(
-            'INSERT INTO projected_background_effects (content) VALUES ($1)',
+            'INSERT INTO companion_a.projected_background_effects (content) VALUES ($1)',
             [entries.map(entry => entry.content).join('|')],
           );
         },
@@ -2122,14 +2203,17 @@ describe('PostgresBackgroundWorkStore', () => {
         permitOutcome: 'consumed',
         recoveryResponse: icpRecoveryResponse,
       });
+      const changedSnapshotRejection = expect(changedSnapshot).rejects.toThrow(
+        'TurnRecord eligibility snapshot changed',
+      );
       releaseSuccessfulFence.resolve();
       await heldSuccessfulFence;
-      await expect(changedSnapshot).rejects.toThrow('TurnRecord eligibility snapshot changed');
+      await changedSnapshotRejection;
       expect(snapshotReads).toBe(2);
       expect(changedSnapshotEffectRan).toBe(false);
 
       const effects = await inspectionPool.query<{ content: string }>(
-        'SELECT content FROM projected_background_effects ORDER BY id',
+        'SELECT content FROM companion_a.projected_background_effects ORDER BY id',
       );
       expect(effects.rows).toEqual([{
         content: 'successful B input|successful B output',
@@ -2204,8 +2288,9 @@ describe('PostgresBackgroundWorkStore', () => {
     };
 
     try {
+      await ensurePostgresSchemaExists(inspectionPool, 'companion_a');
       await inspectionPool.query(`
-        CREATE TABLE empty_snapshot_memory_effects (
+        CREATE TABLE companion_a.empty_snapshot_memory_effects (
           id BIGSERIAL PRIMARY KEY,
           content TEXT NOT NULL
         )
@@ -2241,7 +2326,7 @@ describe('PostgresBackgroundWorkStore', () => {
       });
       const processFact = vi.fn(async (fact: { text: string }) => {
         await inspectionPool.query(
-          'INSERT INTO empty_snapshot_memory_effects (content) VALUES ($1)',
+          'INSERT INTO companion_a.empty_snapshot_memory_effects (content) VALUES ($1)',
           [fact.text],
         );
         return { action: 'created', memory: { id: 'memory-from-empty-snapshot' } };
@@ -2298,7 +2383,7 @@ describe('PostgresBackgroundWorkStore', () => {
       expect(complete).not.toHaveBeenCalled();
       expect(processFact).not.toHaveBeenCalled();
       const effects = await inspectionPool.query<{ content: string }>(
-        'SELECT content FROM empty_snapshot_memory_effects ORDER BY id',
+        'SELECT content FROM companion_a.empty_snapshot_memory_effects ORDER BY id',
       );
       expect(effects.rows).toEqual([]);
       expect(consumer.getRecent(logicalSessionId, 10).map(entry => entry.content))

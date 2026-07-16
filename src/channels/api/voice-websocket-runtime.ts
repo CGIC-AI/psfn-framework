@@ -31,6 +31,11 @@ import {
 } from '../../primitives/voice/policy/security.js';
 import { serializeVoiceWireFrame } from '../../primitives/voice/transports/websocket/serializer.js';
 import { WebSocketVoiceRuntime } from '../../primitives/voice/transports/websocket/runtime.js';
+import type { WebSocketVoiceAssistantStream } from '../../primitives/voice/transports/websocket/types.js';
+import {
+  createAgentReplyStreamBridge,
+  type AgentReplyDeltaSource,
+} from '../../primitives/voice/reply-stream/index.js';
 import { WebSocketVoiceServer } from '../../primitives/voice/transports/websocket/server.js';
 import type {
   WebSocketVoiceConnection,
@@ -503,6 +508,172 @@ async function runAgentAssistantTurn(params: {
   }
 }
 
+/**
+ * Live streaming variant of {@link runAgentAssistantTurn} (psfn-framework-mmo9.8.3).
+ *
+ * Drives the SAME normal agent turn (tools run, home automation fires, selfie /
+ * work-delegation / search all keep working on voice — NOTHING is stripped) and
+ * bridges the live `agent.stream.delta` TEXT channel into committed reply
+ * segments spoken as they finalize. The `agent.toolcall.*` channel is never
+ * consumed, so tool-call JSON never reaches TTS. First audio lands before the
+ * turn completes.
+ *
+ * Genuine SYSTEM withholds are handled conservatively via the disposition: only
+ * a `send` disposition flushes the segmenter tail; no_reply / broadcast approval
+ * hold / notification-ack / empty resolve to `withhold` (stop, don't speak the
+ * tail). Barge-in aborts the turn and cancels the bridge.
+ */
+function runAgentAssistantStream(params: {
+  agentLoop: SubstrateAgent;
+  eventBus: EventBus;
+  request: IncomingMessage;
+  principal: ApiAuthPrincipal;
+  transportSession: WebSocketVoiceSession;
+  sessionId: string;
+  transcript: string;
+  signal: AbortSignal;
+  channelPrefix: string;
+}): WebSocketVoiceAssistantStream {
+  const {
+    agentLoop,
+    eventBus,
+    request,
+    principal,
+    transportSession,
+    sessionId,
+    transcript,
+    signal,
+    channelPrefix,
+  } = params;
+
+  const actor = deriveActor(principal);
+  const channelId = deriveChannelId(request, transportSession.connectionId, channelPrefix, principal);
+  const turnId = `api-voice-${transportSession.connectionId}-${sessionId}-${Date.now()}`;
+
+  const message: SubstrateMessage = {
+    id: `api-voice-msg-${randomUUID()}`,
+    channelId,
+    channelType: 'api',
+    authorId: actor.authorId,
+    authorName: actor.authorName,
+    content: transcript,
+    isDirectMessage: true,
+    routing: {
+      source: 'api',
+      responseStyle: 'concise',
+    },
+    timestamp: new Date(),
+  };
+
+  // Structural adapter: expose ONLY the text delta channel to the bridge.
+  const deltaSource: AgentReplyDeltaSource = {
+    on: (event, handler) => eventBus.on(event, (data) => handler(data)),
+  };
+
+  const bridge = createAgentReplyStreamBridge({
+    deltaSource,
+    channelId,
+    turnId,
+    cancellationId: turnId,
+    // Content gates retained (mmo9.8.1): image-claim runs on attachmentCount 0.
+    // The runtime datetime anchor is resolved deep in turn execution and is not
+    // plumbed to this transport layer yet (mmo9.8.2 TurnPreparation producer);
+    // its detector is a no-op without an anchor, and the authoritative turn-level
+    // datetime guard on the final content path is unaffected.
+    gate: { attachmentCount: 0, datetimePromptContext: null },
+  });
+
+  const maybeAbortable = agentLoop as unknown as { abort?: () => void };
+  const onAbort = () => {
+    try {
+      maybeAbortable.abort?.();
+    } catch (error) {
+      log.warn('Failed to abort active streaming voice turn', {
+        channelId,
+        error: String(error),
+      });
+    }
+    bridge.cancel('cancelled');
+  };
+  signal.addEventListener('abort', onAbort, { once: true });
+
+  void (async () => {
+    try {
+      if (signal.aborted) {
+        bridge.cancel('cancelled');
+        return;
+      }
+
+      const startedAt = Date.now();
+      await eventBus.emit('voice.turn.start', {
+        turnId,
+        channelId,
+        userId: actor.authorId,
+        timestampMs: startedAt,
+      });
+      await eventBus.emit('voice.stt.final', {
+        turnId,
+        channelId,
+        userId: actor.authorId,
+        text: transcript,
+        timestampMs: startedAt,
+      });
+
+      await eventBus.emit('message.received', { message });
+      const response = await agentLoop.handleMessage(message);
+      const disposition = resolveAgentResponseDisposition(response);
+
+      if (disposition.kind === 'send') {
+        bridge.finish(response.content);
+        await eventBus.emit('message.sent', { response });
+        await eventBus.emit('voice.tts.requested', {
+          turnId,
+          channelId,
+          userId: actor.authorId,
+          text: response.content,
+          timestampMs: Date.now(),
+        });
+      } else {
+        // Genuine SYSTEM withhold (no_reply / broadcast hold / ack / empty):
+        // stop without flushing the tail. Any already-committed segments may
+        // already be audible — a rare mid-stream edge, per the design.
+        bridge.withhold('external');
+      }
+
+      await eventBus.emit('voice.turn.end', {
+        turnId,
+        channelId,
+        userId: actor.authorId,
+        status: 'completed',
+        timestampMs: Date.now(),
+      });
+    } catch (error) {
+      bridge.cancel('external');
+      const messageText = toErrorMessage(error);
+      await eventBus.emit('voice.turn.error', {
+        turnId,
+        channelId,
+        userId: actor.authorId,
+        stage: 'orchestrator',
+        error: messageText,
+        timestampMs: Date.now(),
+      }).catch(() => undefined);
+      await eventBus.emit('voice.turn.end', {
+        turnId,
+        channelId,
+        userId: actor.authorId,
+        status: signal.aborted ? 'cancelled' : 'error',
+        reason: messageText,
+        timestampMs: Date.now(),
+      }).catch(() => undefined);
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+    }
+  })();
+
+  return { segments: bridge.segments };
+}
+
 export function createApiVoiceWebSocketRuntime(
   options: ApiVoiceWebSocketRuntimeConfig,
 ): VoiceWebSocketRuntime | undefined {
@@ -654,6 +825,31 @@ export function createApiVoiceWebSocketRuntime(
         channelPrefix,
       });
     },
+    // Live streaming path (psfn-framework-mmo9.8.3): default real deployments
+    // (agentLoop + eventBus present, no custom final-only override) speak the
+    // committed text stream as it finalizes while tools run normally. A caller
+    // supplying `handleAssistantTurn` keeps the final-only path unchanged.
+    ...((!options.handleAssistantTurn && options.agentLoop && options.eventBus)
+      ? {
+        onAssistantStream: ({ transportSession, sessionId, transcript, signal }): WebSocketVoiceAssistantStream => {
+          const context = contexts.get(transportSession.connectionId);
+          if (!context) {
+            throw new Error(`Missing websocket request context for ${transportSession.connectionId}`);
+          }
+          return runAgentAssistantStream({
+            agentLoop: options.agentLoop as SubstrateAgent,
+            eventBus: options.eventBus as EventBus,
+            request: context.request,
+            principal: context.principal,
+            transportSession,
+            sessionId,
+            transcript,
+            signal,
+            channelPrefix,
+          });
+        },
+      }
+      : {}),
     emitFrame: (session, frame) => {
       const connection = connections.get(session.connectionId);
       if (!connection) return;

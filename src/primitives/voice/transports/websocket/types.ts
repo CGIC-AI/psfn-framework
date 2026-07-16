@@ -135,11 +135,38 @@ export type WebSocketVoiceRuntimeAssistantHandler = (
   request: WebSocketVoiceRuntimeAssistantRequest,
 ) => Promise<string>;
 
+/** One speakable, already-committed reply segment (psfn-framework-mmo9.8.3). */
+export interface WebSocketVoiceAssistantSegment {
+  readonly text: string;
+}
+
+/**
+ * A live assistant turn surfaced as committed segments to speak as they
+ * finalize. Iteration ends when the turn completes, is withheld, or aborts. The
+ * turn's tools run normally on the agent loop while these segments stream — the
+ * tool-call channel is never part of this stream (psfn-framework-mmo9.8.3).
+ */
+export interface WebSocketVoiceAssistantStream {
+  readonly segments: AsyncIterable<WebSocketVoiceAssistantSegment>;
+}
+
+export type WebSocketVoiceRuntimeAssistantStreamHandler = (
+  request: WebSocketVoiceRuntimeAssistantRequest,
+) => WebSocketVoiceAssistantStream | Promise<WebSocketVoiceAssistantStream>;
+
 export interface WebSocketVoiceRuntimeOptions {
   stt: StreamingSttConnector;
   tts: StreamingTtsConnector;
   security: VoiceRuntimeSecurityPolicy;
   onAssistantTurn: WebSocketVoiceRuntimeAssistantHandler;
+  /**
+   * Optional live-streaming assistant handler (psfn-framework-mmo9.8.3). When
+   * provided, the runtime speaks committed reply segments as they finalize —
+   * first audio lands before the full turn completes — while the turn's tools
+   * run normally. When absent, the runtime uses the final-only `onAssistantTurn`
+   * path (unchanged).
+   */
+  onAssistantStream?: WebSocketVoiceRuntimeAssistantStreamHandler;
   emitFrame: (session: WebSocketVoiceSession, frame: VoiceWireOutboundFrame) => void | Promise<void>;
   sttConfig: SttStreamConfig;
   ttsRequest?: Omit<TtsSynthesisRequest, 'text'>;

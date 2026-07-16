@@ -11,6 +11,7 @@ import {
   type VoicePlaybackFrame,
   type VoicePongFrame,
   type VoiceTranscriptFrame,
+  type WebSocketVoiceAssistantStream,
   type WebSocketVoiceRuntimeOptions,
   type WebSocketVoiceSession,
 } from './types.js';
@@ -96,6 +97,7 @@ export class WebSocketVoiceRuntime {
   private readonly tts: WebSocketVoiceRuntimeOptions['tts'];
   private readonly security: WebSocketVoiceRuntimeOptions['security'];
   private readonly onAssistantTurn: WebSocketVoiceRuntimeOptions['onAssistantTurn'];
+  private readonly onAssistantStream: WebSocketVoiceRuntimeOptions['onAssistantStream'];
   private readonly emitFrame: WebSocketVoiceRuntimeOptions['emitFrame'];
   private readonly sttConfig: WebSocketVoiceRuntimeOptions['sttConfig'];
   private readonly ttsRequest: WebSocketVoiceRuntimeOptions['ttsRequest'];
@@ -106,6 +108,7 @@ export class WebSocketVoiceRuntime {
     this.tts = options.tts;
     this.security = options.security;
     this.onAssistantTurn = options.onAssistantTurn;
+    this.onAssistantStream = options.onAssistantStream;
     this.emitFrame = options.emitFrame;
     this.sttConfig = options.sttConfig;
     this.ttsRequest = options.ttsRequest;
@@ -307,23 +310,38 @@ export class WebSocketVoiceRuntime {
       const transcript = this.security.validateTranscriptText(this.collectTranscript(state));
       this.throwIfInterrupted(state);
 
-      const assistantText = this.security.validateTtsInputText(
-        await this.runStage(
-          'llm',
-          (stageSignal) => this.onAssistantTurn({
-            transportSession,
-            sessionId: frameSessionId,
-            transcript,
-            signal: stageSignal,
-          }),
-          state.abortController.signal,
-        ),
-      );
+      if (this.onAssistantStream) {
+        // Live streaming path (psfn-framework-mmo9.8.3): the turn runs on the
+        // normal agent loop (tools execute, home automation fires) while we
+        // speak committed text segments as they finalize. First audio lands
+        // before the full turn completes. The tool-call channel is never part
+        // of this stream — the companion keeps every tool on voice.
+        const stream = await this.onAssistantStream({
+          transportSession,
+          sessionId: frameSessionId,
+          transcript,
+          signal: state.abortController.signal,
+        });
+        await this.streamAssistantPlayback(state, stream);
+      } else {
+        const assistantText = this.security.validateTtsInputText(
+          await this.runStage(
+            'llm',
+            (stageSignal) => this.onAssistantTurn({
+              transportSession,
+              sessionId: frameSessionId,
+              transcript,
+              signal: stageSignal,
+            }),
+            state.abortController.signal,
+          ),
+        );
 
-      this.throwIfInterrupted(state);
+        this.throwIfInterrupted(state);
 
-      if (assistantText.length > 0) {
-        await this.streamPlayback(state, assistantText);
+        if (assistantText.length > 0) {
+          await this.streamPlayback(state, assistantText);
+        }
       }
 
       this.throwIfInterrupted(state);
@@ -453,11 +471,67 @@ export class WebSocketVoiceRuntime {
   }
 
   private async streamPlayback(state: RuntimeSessionState, assistantText: string): Promise<void> {
-    // Budget synth-request -> first audible chunk under the short, retry-safe
-    // `tts_first_byte` stage. On a first-byte retry the prior attempt's session
-    // is cancelled BEFORE re-synth so a stalled first byte cannot leave two
-    // overlapping streams. Playback of every chunk stays under the long,
-    // non-retryable `output` stage so playback duration never trips a retry.
+    // Final-only path (unchanged): synthesize the whole accepted turn text as a
+    // single utterance. Byte budget and seq policy preserved verbatim.
+    let totalBytes = 0;
+    let fallbackSeq = 0;
+    await this.synthesizeTts(state, assistantText, async (audio, providerSeq) => {
+      totalBytes = this.security.validateTtsAudioChunk(audio, totalBytes);
+      await this.emitOutbound(state.transportSession, state.frameSessionId, {
+        type: 'playback.chunk',
+        seq: Number.isFinite(providerSeq) ? providerSeq : fallbackSeq,
+        audio: new Uint8Array(audio),
+      });
+      fallbackSeq += 1;
+    });
+  }
+
+  /**
+   * Live streaming playback (psfn-framework-mmo9.8.3): speak each committed
+   * reply segment as it finalizes. First audio lands before the full turn
+   * completes. Byte budget and playback seq are monotonic across the whole turn
+   * (segments concatenate into one continuous utterance on the wire). Barge-in
+   * aborts `state.abortController`, which both cancels the in-flight TTS session
+   * and (via the handler's `signal`) stops the upstream agent turn/segment
+   * producer; breaking the `for await` closes the segment stream.
+   */
+  private async streamAssistantPlayback(
+    state: RuntimeSessionState,
+    stream: WebSocketVoiceAssistantStream,
+  ): Promise<void> {
+    let totalBytes = 0;
+    let seq = 0;
+    for await (const segment of stream.segments) {
+      this.throwIfInterrupted(state);
+      const text = this.security.validateTtsInputText(segment.text);
+      if (text.length === 0) continue;
+
+      await this.synthesizeTts(state, text, async (audio) => {
+        totalBytes = this.security.validateTtsAudioChunk(audio, totalBytes);
+        await this.emitOutbound(state.transportSession, state.frameSessionId, {
+          type: 'playback.chunk',
+          seq: seq++,
+          audio: new Uint8Array(audio),
+        });
+      });
+
+      this.throwIfInterrupted(state);
+    }
+  }
+
+  /**
+   * Shared TTS synthesis + playback loop for both the final and streaming paths.
+   * Budget synth-request -> first audible chunk under the short, retry-safe
+   * `tts_first_byte` stage. On a first-byte retry the prior attempt's session is
+   * cancelled BEFORE re-synth so a stalled first byte cannot leave two
+   * overlapping streams. Playback of every chunk stays under the long,
+   * non-retryable `output` stage so playback duration never trips a retry.
+   */
+  private async synthesizeTts(
+    state: RuntimeSessionState,
+    text: string,
+    emit: (audio: Uint8Array, providerSeq: number) => Promise<void>,
+  ): Promise<void> {
     let attempt = 0;
     const acquired = await this.runStage(
       'tts_first_byte',
@@ -469,7 +543,7 @@ export class WebSocketVoiceRuntime {
           await prior.cancel('tts-first-byte-retry').catch(() => undefined);
         }
 
-        const session = await this.tts.synthesizeStream({ ...this.ttsRequest, text: assistantText }, stageSignal);
+        const session = await this.tts.synthesizeStream({ ...this.ttsRequest, text }, stageSignal);
         state.ttsSession = session;
 
         const iterator = session.audio[Symbol.asyncIterator]();
@@ -479,25 +553,17 @@ export class WebSocketVoiceRuntime {
       state.abortController.signal,
     );
 
-    let totalBytes = 0;
-    let fallbackSeq = 0;
     let result = acquired.first;
     while (!result.done) {
       const chunk = result.value;
       this.throwIfInterrupted(state);
 
-      totalBytes = this.security.validateTtsAudioChunk(chunk.audio, totalBytes);
       await this.runStage(
         'output',
-        () => this.emitOutbound(state.transportSession, state.frameSessionId, {
-          type: 'playback.chunk',
-          seq: Number.isFinite(chunk.sequence) ? chunk.sequence : fallbackSeq,
-          audio: new Uint8Array(chunk.audio),
-        }),
+        () => emit(chunk.audio, chunk.sequence),
         state.abortController.signal,
       );
 
-      fallbackSeq += 1;
       result = await acquired.iterator.next();
     }
 

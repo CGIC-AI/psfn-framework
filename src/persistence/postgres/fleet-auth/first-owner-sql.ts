@@ -106,13 +106,30 @@ BEGIN
     RAISE EXCEPTION 'first-owner contact is already bound' USING ERRCODE = '42501';
   END IF;
 
+  INSERT INTO fleet_auth.companion_authority_state
+    (companion_id, lifecycle, authority_generation, created_at, updated_at)
+  VALUES (p_companion_id, 'active', v_generation, p_at, p_at)
+  ON CONFLICT (companion_id) DO NOTHING;
+  IF NOT EXISTS (
+    SELECT 1 FROM fleet_auth.companion_authority_state
+    WHERE companion_id = p_companion_id
+      AND lifecycle = 'active'
+      AND restore_state = 'live'
+  ) THEN
+    RAISE EXCEPTION 'first-owner companion authority is unavailable' USING ERRCODE = '42501';
+  END IF;
+
   v_new_epoch := v_epoch + 1;
   v_new_authn := v_principal.authn_version + 1;
   v_new_authz := v_principal.authz_version + 1;
 
   UPDATE fleet_auth.human_principals
   SET status = 'active', authn_version = v_new_authn,
-      authz_version = v_new_authz, updated_at = p_at
+      authz_version = v_new_authz,
+      binding_version = binding_version + 1,
+      grant_version = grant_version + 1,
+      policy_version = policy_version + 1,
+      updated_at = p_at
   WHERE principal_id = p_principal_id;
 
   UPDATE fleet_auth.provider_subjects
@@ -189,7 +206,10 @@ BEGIN
     'principalId', p_principal_id::text,
     'globalAuthEpoch', v_new_epoch,
     'authnVersion', v_new_authn,
-    'authzVersion', v_new_authz
+    'authzVersion', v_new_authz,
+    'bindingVersion', v_principal.binding_version + 1,
+    'grantVersion', v_principal.grant_version + 1,
+    'policyVersion', v_principal.policy_version + 1
   );
 END;
 $$;

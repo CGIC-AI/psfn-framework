@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import {
   FleetAuthBrokerError,
   type FleetAuthBrokerStore,
@@ -9,8 +9,48 @@ import { isRecord } from '../../../shared/utils/types.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
 import { FLEET_AUTH_FIRST_OWNER_FUNCTION_NAME } from './first-owner-sql.js';
 import type { InsertSession, LockValidSession } from './oauth-session-store-types.js';
-import type { ProviderRevocationAuthorityPort } from './oauth-session-store.js';
+import type { ProviderRevocationAuthorityPort } from './provider-revocation-authority.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
+
+export async function revokeExactProviderSubject(
+  client: PoolClient,
+  input: {
+    principalId: string;
+    subjectId: string;
+    authorityGeneration: number;
+    reasonDigest: string;
+    at: Date;
+    eventType: 'unlinked' | 'replaced';
+    payload: Record<string, unknown>;
+  },
+): Promise<void> {
+  await client.query(`
+    INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_tombstones
+      (provider, subject_id, prior_principal_id, authority_generation,
+       revoked_at, reason_digest)
+    VALUES ('discord', $1, $2, $3, $4, $5)
+  `, [
+    input.subjectId,
+    input.principalId,
+    input.authorityGeneration,
+    input.at,
+    input.reasonDigest,
+  ]);
+  await client.query(`
+    INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_history
+      (event_id, provider, subject_id, principal_id, state, event_type,
+       authority_generation, payload, recorded_at)
+    VALUES ($1, 'discord', $2, $3, 'revoked', $4, $5, $6::jsonb, $7)
+  `, [
+    randomUUID(),
+    input.subjectId,
+    input.principalId,
+    input.eventType,
+    input.authorityGeneration,
+    JSON.stringify(input.payload),
+    input.at,
+  ]);
+}
 
 export async function revokeProviderAuthority(
   pool: Pool,
@@ -28,14 +68,20 @@ export async function revokeProviderAuthority(
       FOR UPDATE
     `);
     const current = await lockValidSession(client, input.token, input.csrfToken, input.now);
+    if (current.provider !== 'discord' || current.provider_subject_id === null) {
+      throw new FleetAuthBrokerError('provider_not_active', 409, 'Provider is not active');
+    }
     const provider = await client.query<{ subject_id: string; state: string }>(`
       SELECT subject_id, state
       FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
-      WHERE provider = 'discord' AND principal_id = $1
+      WHERE provider = 'discord' AND principal_id = $1 AND subject_id = $2
       FOR UPDATE
-    `, [current.principal_id]);
-    const subject = provider.rows.at(0);
-    if (!subject || (subject.state !== 'pending' && subject.state !== 'active')) {
+    `, [current.principal_id, current.provider_subject_id]);
+    if (provider.rowCount !== 1) {
+      throw new FleetAuthBrokerError('provider_not_active', 409, 'Provider is not active');
+    }
+    const subject = provider.rows[0];
+    if (subject.state !== 'pending' && subject.state !== 'active') {
       throw new FleetAuthBrokerError('provider_not_active', 409, 'Provider is not active');
     }
     // Publish the non-restored provider tombstone before any database mutation.
@@ -47,49 +93,52 @@ export async function revokeProviderAuthority(
       reasonDigest: input.reasonDigest,
       at: input.now,
     });
-    await client.query(`
-      INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_tombstones
-        (provider, subject_id, prior_principal_id, authority_generation,
-         revoked_at, reason_digest)
-      VALUES ('discord', $1, $2, $3, $4, $5)
-    `, [
-      subject.subject_id,
-      current.principal_id,
-      authorityFence.authorityGeneration,
-      input.now,
-      input.reasonDigest,
-    ]);
-    await client.query(`
-      INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_history
-        (event_id, provider, subject_id, principal_id, state, event_type,
-         authority_generation, payload, recorded_at)
-      VALUES ($1, 'discord', $2, $3, 'revoked', 'unlinked', $4,
-              '{"reason":"provider_revoked"}'::jsonb, $5)
-    `, [
-      randomUUID(),
-      subject.subject_id,
-      current.principal_id,
-      authorityFence.authorityGeneration,
-      input.now,
-    ]);
+    await revokeExactProviderSubject(client, {
+      principalId: current.principal_id,
+      subjectId: subject.subject_id,
+      authorityGeneration: authorityFence.authorityGeneration,
+      reasonDigest: input.reasonDigest,
+      at: input.now,
+      eventType: 'unlinked',
+      payload: { reason: 'provider_revoked' },
+    });
+    const remaining = await client.query<{ count: string }>(`
+      SELECT count(*)::text AS count
+      FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+      WHERE provider = 'discord' AND principal_id = $1 AND subject_id <> $2
+        AND state IN ('pending', 'active') AND restore_state = 'live'
+    `, [current.principal_id, subject.subject_id]);
+    const suspendAccount = remaining.rows[0]?.count === '0';
     await client.query(`
       UPDATE ${FLEET_AUTH_SCHEMA_NAME}.human_principals
-      SET status = 'suspended', authn_version = authn_version + 1,
-          authz_version = authz_version + 1, updated_at = $2
+      SET status = CASE WHEN $2::boolean THEN 'suspended' ELSE status END,
+          authn_version = authn_version + 1,
+          authz_version = authz_version + CASE WHEN $2::boolean THEN 1 ELSE 0 END,
+          binding_version = binding_version + CASE WHEN $2::boolean THEN 1 ELSE 0 END,
+          grant_version = grant_version + CASE WHEN $2::boolean THEN 1 ELSE 0 END,
+          policy_version = policy_version + CASE WHEN $2::boolean THEN 1 ELSE 0 END,
+          authority_generation = $3, updated_at = $4
       WHERE principal_id = $1
-    `, [current.principal_id, input.now]);
-    await client.query(`
-      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
-      SET state = CASE WHEN state = 'revoked' THEN state ELSE 'suspended' END,
-          version = version + 1, updated_at = $2
-      WHERE principal_id = $1
-    `, [current.principal_id, input.now]);
-    await client.query(`
-      UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
-      SET lifecycle = CASE WHEN lifecycle = 'revoked' THEN lifecycle ELSE 'suspended' END,
-          version = version + 1, updated_at = $2
-      WHERE principal_id = $1
-    `, [current.principal_id, input.now]);
+    `, [
+      current.principal_id,
+      suspendAccount,
+      authorityFence.authorityGeneration,
+      input.now,
+    ]);
+    if (suspendAccount) {
+      await client.query(`
+        UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+        SET state = CASE WHEN state = 'revoked' THEN state ELSE 'suspended' END,
+            version = version + 1, updated_at = $2
+        WHERE principal_id = $1
+      `, [current.principal_id, input.now]);
+      await client.query(`
+        UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+        SET lifecycle = CASE WHEN lifecycle = 'revoked' THEN lifecycle ELSE 'suspended' END,
+            version = version + 1, updated_at = $2
+        WHERE principal_id = $1
+      `, [current.principal_id, input.now]);
+    }
     await client.query(`
       UPDATE ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions
       SET revoked_at = COALESCE(revoked_at, $2)
@@ -118,9 +167,6 @@ export async function revokeProviderAuthority(
       DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_lifecycle_fences
       WHERE principal_id = $1
     `, [current.principal_id]);
-    // Reconcile only after the explicit revocation mutations have run because
-    // reconciliation quarantines all remaining durable authority. It still
-    // runs inside this transaction and therefore precedes COMMIT.
     const reconciledAuthority = await authorityFence.reconcile(client);
     await client.query(`
       INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
@@ -200,6 +246,9 @@ export async function completeFirstOwnerAuthority(
     if (!isRecord(completion)
       || typeof completion.authnVersion !== 'number'
       || typeof completion.authzVersion !== 'number'
+      || typeof completion.bindingVersion !== 'number'
+      || typeof completion.grantVersion !== 'number'
+      || typeof completion.policyVersion !== 'number'
       || typeof completion.globalAuthEpoch !== 'number') {
       throw new Error('Fleet auth first-owner procedure returned an invalid result');
     }
@@ -209,6 +258,9 @@ export async function completeFirstOwnerAuthority(
         status: 'active',
         authn_version: String(completion.authnVersion),
         authz_version: String(completion.authzVersion),
+        binding_version: String(completion.bindingVersion),
+        grant_version: String(completion.grantVersion),
+        policy_version: String(completion.policyVersion),
       },
       audience: 'fleet',
       token: input.nextToken,
@@ -217,6 +269,7 @@ export async function completeFirstOwnerAuthority(
       idleExpiresAt: new Date(input.now.getTime() + input.idleTtlMs),
       absoluteExpiresAt: new Date(input.now.getTime() + input.absoluteTtlMs),
       globalAuthEpoch: completion.globalAuthEpoch,
+      providerSubjectId: input.providerSubjectId,
     });
     await client.query('COMMIT');
     return session;

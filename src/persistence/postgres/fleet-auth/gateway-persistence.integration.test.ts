@@ -233,10 +233,18 @@ async function seedSession(
       ON CONFLICT (principal_id) DO NOTHING
     `, [principalId]);
     await pool.query(`
+      INSERT INTO fleet_auth.provider_subjects
+        (provider, subject_id, principal_id, state, authority_generation)
+      VALUES ('discord', '123456789012345678', $1, 'active', 1)
+      ON CONFLICT (provider, subject_id) DO NOTHING
+    `, [principalId]);
+    await pool.query(`
       INSERT INTO fleet_auth.browser_sessions
         (record_id, token_digest, csrf_digest, principal_id, audience, assurance,
-         authn_version, authz_version, global_auth_epoch, idle_expires_at, absolute_expires_at)
-      VALUES ($1, $2, $3, $4, 'garden', 'oauth', 1, 1, $5,
+         authn_version, authz_version, provider, provider_subject_id,
+         global_auth_epoch, idle_expires_at, absolute_expires_at)
+      VALUES ($1, $2, $3, $4, 'garden', 'oauth', 1, 1,
+              'discord', '123456789012345678', $5,
               clock_timestamp() + interval '5 minutes', clock_timestamp() + interval '1 hour')
     `, [
       sessionId,

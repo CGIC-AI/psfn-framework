@@ -731,6 +731,116 @@ CREATE INDEX discord_evidence_lifecycle_active_idx
   WHERE state = 'active';
 `;
 
+const ATOMIC_AUTHORITY_LIFECYCLE_SQL = `
+-- Central counters make every authorization input part of the session/JIT
+-- validity predicate. Existing ephemeral credentials predate exact provider
+-- provenance, so they are fenced instead of being guessed during migration.
+ALTER TABLE human_principals
+  ADD COLUMN binding_version BIGINT NOT NULL DEFAULT 1 CHECK (binding_version >= 1),
+  ADD COLUMN grant_version BIGINT NOT NULL DEFAULT 1 CHECK (grant_version >= 1),
+  ADD COLUMN policy_version BIGINT NOT NULL DEFAULT 1 CHECK (policy_version >= 1);
+
+ALTER TABLE oauth_transactions
+  ADD COLUMN verified_provider TEXT CHECK (verified_provider = 'discord'),
+  ADD COLUMN verified_provider_subject_id TEXT
+    CHECK (verified_provider_subject_id ~ '^[1-9][0-9]{16,19}$'),
+  ADD CONSTRAINT oauth_transaction_verified_provider_pair
+    CHECK (
+      (verified_provider IS NULL AND verified_provider_subject_id IS NULL)
+      OR (verified_provider IS NOT NULL
+          AND verified_provider_subject_id IS NOT NULL
+          AND status = 'consumed'
+          AND consumed_at IS NOT NULL)
+    );
+
+UPDATE browser_sessions SET revoked_at = COALESCE(revoked_at, clock_timestamp());
+ALTER TABLE browser_sessions
+  ADD COLUMN provider TEXT CHECK (provider = 'discord'),
+  ADD COLUMN provider_subject_id TEXT
+    CHECK (provider_subject_id ~ '^[1-9][0-9]{16,19}$'),
+  ADD COLUMN grant_version BIGINT NOT NULL DEFAULT 1 CHECK (grant_version >= 1),
+  ADD CONSTRAINT browser_session_exact_provider
+    CHECK (revoked_at IS NOT NULL OR (provider IS NOT NULL AND provider_subject_id IS NOT NULL)),
+  ADD CONSTRAINT browser_session_provider_subject_fk
+    FOREIGN KEY (provider, provider_subject_id)
+    REFERENCES provider_subjects(provider, subject_id);
+
+UPDATE provider_token_custody SET revoked_at = COALESCE(revoked_at, clock_timestamp());
+ALTER TABLE provider_token_custody
+  ADD COLUMN provider_subject_id TEXT
+    CHECK (provider_subject_id ~ '^[1-9][0-9]{16,19}$'),
+  ADD CONSTRAINT provider_custody_exact_subject
+    CHECK (revoked_at IS NOT NULL OR provider_subject_id IS NOT NULL),
+  ADD CONSTRAINT provider_custody_subject_fk
+    FOREIGN KEY (provider, provider_subject_id)
+    REFERENCES provider_subjects(provider, subject_id);
+
+UPDATE jit_authorization_grants SET revoked_at = COALESCE(revoked_at, clock_timestamp());
+ALTER TABLE jit_authorization_grants
+  ADD COLUMN grant_version BIGINT NOT NULL DEFAULT 1 CHECK (grant_version >= 1),
+  ADD COLUMN policy_version BIGINT NOT NULL DEFAULT 1 CHECK (policy_version >= 1);
+
+CREATE TABLE companion_authority_state (
+  companion_id UUID PRIMARY KEY,
+  lifecycle TEXT NOT NULL CHECK (lifecycle IN ('active', 'removed', 'quarantined')),
+  version BIGINT NOT NULL DEFAULT 1 CHECK (version >= 1),
+  authority_generation BIGINT NOT NULL CHECK (authority_generation >= 1),
+  restore_state TEXT NOT NULL DEFAULT 'live' CHECK (restore_state IN ('live', 'quarantined')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+);
+
+INSERT INTO companion_authority_state (companion_id, lifecycle, authority_generation)
+SELECT companion_id, 'active', max(authority_generation)
+FROM (
+  SELECT companion_id, authority_generation FROM principal_contact_bindings
+  UNION ALL
+  SELECT companion_id, authority_generation FROM principal_role_grants
+) AS existing_companions
+GROUP BY companion_id;
+
+CREATE TABLE principal_merge_aliases (
+  source_principal_id UUID PRIMARY KEY REFERENCES human_principals(principal_id),
+  canonical_principal_id UUID NOT NULL REFERENCES human_principals(principal_id),
+  decision_id UUID NOT NULL UNIQUE,
+  authority_generation BIGINT NOT NULL CHECK (authority_generation >= 1),
+  reason_digest TEXT NOT NULL CHECK (reason_digest ~ '^[0-9a-f]{64}$'),
+  restore_state TEXT NOT NULL DEFAULT 'live' CHECK (restore_state IN ('live', 'quarantined')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  CHECK (source_principal_id <> canonical_principal_id)
+);
+
+CREATE TABLE lifecycle_decision_receipts (
+  receipt_id UUID PRIMARY KEY,
+  decision_id UUID NOT NULL,
+  ceremony_id UUID NOT NULL,
+  callback_transaction_id UUID,
+  action TEXT NOT NULL CHECK (length(action) BETWEEN 1 AND 128),
+  proof_digest TEXT CHECK (proof_digest ~ '^[0-9a-f]{64}$'),
+  created_at TIMESTAMPTZ NOT NULL,
+  UNIQUE (decision_id, callback_transaction_id),
+  UNIQUE (callback_transaction_id)
+);
+
+ALTER TABLE authorization_audit_events
+  ADD COLUMN decision_id UUID,
+  ADD COLUMN ceremony_id UUID,
+  ADD COLUMN reason_digest TEXT CHECK (reason_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN decision_context JSONB NOT NULL DEFAULT '{}'::jsonb
+    CHECK (jsonb_typeof(decision_context) = 'object');
+CREATE UNIQUE INDEX authorization_audit_lifecycle_decision_unique
+  ON authorization_audit_events (decision_id)
+  WHERE decision_id IS NOT NULL;
+
+CREATE TRIGGER principal_merge_aliases_append_only
+  BEFORE UPDATE OR DELETE ON principal_merge_aliases
+  FOR EACH ROW EXECUTE FUNCTION reject_immutable_mutation();
+CREATE INDEX principal_merge_aliases_canonical_idx
+  ON principal_merge_aliases (canonical_principal_id);
+CREATE INDEX lifecycle_decision_receipts_decision_idx
+  ON lifecycle_decision_receipts (decision_id);
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
@@ -744,4 +854,5 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 10, name: 'discord_evidence_completeness', sql: DISCORD_EVIDENCE_COMPLETENESS_SQL },
   { version: 11, name: 'discord_evidence_lifecycle_fence', sql: DISCORD_EVIDENCE_LIFECYCLE_FENCE_SQL },
   { version: 12, name: 'exclusive_broker_authority_lock', sql: FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL },
+  { version: 13, name: 'atomic_authority_lifecycle', sql: ATOMIC_AUTHORITY_LIFECYCLE_SQL },
 ] as const;

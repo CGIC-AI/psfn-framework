@@ -549,16 +549,37 @@ export class FleetAuthAuthorityFloorStore {
     reason: string;
     at: string;
   }): FleetAuthAuthorityFloor {
-    assertTimestamp(input.at, 'revokeAccountAuthority.at');
-    assertString(input.resourceId, 'revokeAccountAuthority.resourceId');
-    assertString(input.reason, 'revokeAccountAuthority.reason');
-    assertAccountAuthorityTombstoneKind(input.kind, 'revokeAccountAuthority.kind');
+    return this.revokeAccountAuthorities({ resources: [input], at: input.at });
+  }
+
+  revokeAccountAuthorities(input: {
+    resources: ReadonlyArray<{
+      kind: AccountAuthorityTombstoneKind;
+      resourceId: string;
+      reason: string;
+    }>;
+    at: string;
+  }): FleetAuthAuthorityFloor {
+    assertTimestamp(input.at, 'revokeAccountAuthorities.at');
+    if (input.resources.length === 0) {
+      throw new Error('Fleet auth account authority revocation requires at least one resource');
+    }
+    for (const [index, resource] of input.resources.entries()) {
+      assertString(resource.resourceId, `revokeAccountAuthorities.resources[${index}].resourceId`);
+      assertString(resource.reason, `revokeAccountAuthorities.resources[${index}].reason`);
+      assertAccountAuthorityTombstoneKind(
+        resource.kind,
+        `revokeAccountAuthorities.resources[${index}].kind`,
+      );
+    }
     return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
       const current = this.read();
-      const resourceHash = digest(input.resourceId);
       const nextGeneration = current.trustedHost.authorityGeneration + 1;
+      const replacementKeys = new Set(input.resources.map(resource => (
+        `${resource.kind}:${digest(resource.resourceId)}`
+      )));
       const withoutPrior = current.trustedHost.tombstones.filter(entry => (
-        entry.kind !== input.kind || entry.resourceHash !== resourceHash
+        !replacementKeys.has(`${entry.kind}:${entry.resourceHash}`)
       ));
       const next: FleetAuthAuthorityFloor = {
         ...current,
@@ -566,13 +587,13 @@ export class FleetAuthAuthorityFloorStore {
           ...current.trustedHost,
           authorityGeneration: nextGeneration,
           revocationCheckpoint: current.trustedHost.revocationCheckpoint + 1,
-          tombstones: [...withoutPrior, {
-            kind: input.kind,
-            resourceHash,
+          tombstones: [...withoutPrior, ...input.resources.map(resource => ({
+            kind: resource.kind,
+            resourceHash: digest(resource.resourceId),
             generation: nextGeneration,
             revokedAt: input.at,
-            reasonHash: digest(input.reason),
-          }],
+            reasonHash: digest(resource.reason),
+          }))],
         },
         updatedAt: input.at,
       };

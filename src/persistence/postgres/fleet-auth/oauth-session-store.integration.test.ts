@@ -273,16 +273,28 @@ describe('Postgres gateway OAuth/session authority', () => {
         status: string;
         bindings: string;
         roles: string;
+        verified_provider: string;
+        verified_provider_subject_id: string;
       }>(`
         SELECT principal.status,
                (SELECT count(*)::text FROM fleet_auth.principal_contact_bindings
                 WHERE principal_id = principal.principal_id) AS bindings,
                (SELECT count(*)::text FROM fleet_auth.principal_role_grants
-                WHERE principal_id = principal.principal_id) AS roles
+                WHERE principal_id = principal.principal_id) AS roles,
+               transaction.verified_provider,
+               transaction.verified_provider_subject_id
         FROM fleet_auth.human_principals AS principal
+        JOIN fleet_auth.oauth_transactions AS transaction
+          ON transaction.transaction_id = $2
         WHERE principal.principal_id = $1
-      `, [login.principalId]);
-      expect(authority.rows[0]).toEqual({ status: 'pending', bindings: '0', roles: '0' });
+      `, [login.principalId, loginInput.transactionId]);
+      expect(authority.rows[0]).toEqual({
+        status: 'pending',
+        bindings: '0',
+        roles: '0',
+        verified_provider: 'discord',
+        verified_provider_subject_id: PROVIDER_SUBJECT_ID,
+      });
 
       const rotations = await Promise.allSettled([
         store.rotateSession({
@@ -422,7 +434,7 @@ describe('Postgres gateway OAuth/session authority', () => {
         WHERE principal.principal_id = $1
       `, [login.principalId, PROVIDER_SUBJECT_ID]);
       expect(fenced.rows[0]).toEqual({
-        principal_status: 'quarantined',
+        principal_status: 'suspended',
         provider_state: 'revoked',
         tombstones: '1',
         live_sessions: '0',

@@ -66,6 +66,7 @@ BEGIN
 
   v_lifecycle_column := CASE TG_TABLE_NAME
     WHEN 'human_principals' THEN 'status'
+    WHEN 'companion_authority_state' THEN 'lifecycle'
     WHEN 'provider_subjects' THEN 'state'
     WHEN 'principal_contact_bindings' THEN 'state'
     WHEN 'principal_role_grants' THEN 'lifecycle'
@@ -105,6 +106,9 @@ BEGIN
      OR (v_new->>'authority_generation') IS DISTINCT FROM (v_old->>'authority_generation')
      OR (v_new->>'authn_version') IS DISTINCT FROM (v_old->>'authn_version')
      OR (v_new->>'authz_version') IS DISTINCT FROM (v_old->>'authz_version')
+     OR (v_new->>'binding_version') IS DISTINCT FROM (v_old->>'binding_version')
+     OR (v_new->>'grant_version') IS DISTINCT FROM (v_old->>'grant_version')
+     OR (v_new->>'policy_version') IS DISTINCT FROM (v_old->>'policy_version')
      OR (v_new->>'version') IS DISTINCT FROM (v_old->>'version') THEN
     RAISE EXCEPTION 'quarantined fleet_auth authority can only be reactivated through fleet_auth.reapprove_account_authority'
       USING ERRCODE = '42501';
@@ -116,6 +120,11 @@ $$;
 DROP TRIGGER IF EXISTS restore_quarantine_activation_guard ON human_principals;
 CREATE TRIGGER restore_quarantine_activation_guard
   BEFORE UPDATE ON human_principals
+  FOR EACH ROW EXECUTE FUNCTION restore_quarantine_activation_guard();
+
+DROP TRIGGER IF EXISTS restore_quarantine_activation_guard ON companion_authority_state;
+CREATE TRIGGER restore_quarantine_activation_guard
+  BEFORE UPDATE ON companion_authority_state
   FOR EACH ROW EXECUTE FUNCTION restore_quarantine_activation_guard();
 
 DROP TRIGGER IF EXISTS restore_quarantine_activation_guard ON provider_subjects;
@@ -451,6 +460,9 @@ BEGIN
   UPDATE fleet_auth.human_principals
   SET status = 'active', restore_state = 'live',
       authn_version = v_new_authn, authz_version = v_new_authz,
+      binding_version = binding_version + 1,
+      grant_version = grant_version + 1,
+      policy_version = policy_version + 1,
       authority_generation = v_generation, updated_at = v_now
   WHERE principal_id = p_principal_id;
 

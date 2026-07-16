@@ -7,8 +7,18 @@ export interface SessionAuthorityRow {
   principal_status: 'pending' | 'active' | 'suspended' | 'revoked' | 'quarantined';
   authn_version: string;
   authz_version: string;
+  binding_version: string;
+  grant_version: string;
+  policy_version: string;
   session_authn_version: string;
   session_authz_version: string;
+  session_binding_version: string;
+  session_grant_version: string;
+  session_policy_version: string;
+  provider: 'discord' | null;
+  provider_subject_id: string | null;
+  provider_state: string | null;
+  provider_restore_state: string | null;
   global_auth_epoch: string;
   authority_generation: string;
   session_global_auth_epoch: string;
@@ -24,6 +34,9 @@ export interface PrincipalRow {
   status: 'pending' | 'active' | 'suspended' | 'revoked' | 'quarantined';
   authn_version: string;
   authz_version: string;
+  binding_version: string;
+  grant_version: string;
+  policy_version: string;
 }
 
 export type LockValidSession = (
@@ -45,5 +58,6 @@ export type InsertSession = (
     idleExpiresAt: Date;
     absoluteExpiresAt: Date;
     globalAuthEpoch: number;
+    providerSubjectId: string;
   },
 ) => Promise<FleetAuthSessionRecord>;

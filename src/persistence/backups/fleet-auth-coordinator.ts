@@ -157,7 +157,7 @@ async function captureFleetAuthSnapshot(
   return {
     authorityLineageId,
     value: {
-      schemaVersion: 2,
+      schemaVersion: 3,
       capturedAt,
       postgresSnapshot,
       authorityLineageId,
@@ -167,8 +167,10 @@ async function captureFleetAuthSnapshot(
         providerSubjects: await selectJsonRows(client, 'provider_subjects', 'provider, subject_id'),
         providerSubjectHistory: await selectJsonRows(client, 'provider_subject_history', 'recorded_at, event_id'),
         providerSubjectTombstones: await selectJsonRows(client, 'provider_subject_tombstones', 'provider, subject_id'),
+        companionAuthorityState: await selectJsonRows(client, 'companion_authority_state', 'companion_id'),
         principalContactBindings: await selectJsonRows(client, 'principal_contact_bindings', 'binding_id'),
         principalRoleGrants: await selectJsonRows(client, 'principal_role_grants', 'grant_id'),
+        principalMergeAliases: await selectJsonRows(client, 'principal_merge_aliases', 'source_principal_id'),
         passkeyCredentials: await selectJsonRows(client, 'passkey_credentials', 'credential_id_hash'),
         authorizationAuditEvents: await selectJsonRows(client, 'authorization_audit_events', 'occurred_at, event_id'),
       },

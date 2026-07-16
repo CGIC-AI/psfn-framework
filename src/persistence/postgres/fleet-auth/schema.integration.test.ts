@@ -174,7 +174,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       const ledger = await migration.query<{ version: number; checksum: string }>(
         `SELECT version, checksum FROM ${FLEET_AUTH_SCHEMA_NAME}.schema_migrations ORDER BY version`,
       );
-      expect(ledger.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+      expect(ledger.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
       expect(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum))).toBe(true);
 
       const tables = await migration.query<{ table_name: string }>(`
@@ -187,14 +187,17 @@ describe('fleet_auth Postgres authority boundary', () => {
         'authority_state',
         'authorization_audit_events',
         'browser_sessions',
+        'companion_authority_state',
         'discord_evidence_lifecycle_fences',
         'discord_evidence_snapshots',
         'human_principals',
         'hub_device_assertion_replays',
         'jit_authorization_grants',
+        'lifecycle_decision_receipts',
         'oauth_transactions',
         'passkey_credentials',
         'principal_contact_bindings',
+        'principal_merge_aliases',
         'principal_role_grants',
         'provider_subject_history',
         'provider_subject_tombstones',
@@ -1002,10 +1005,18 @@ describe('fleet_auth Postgres authority boundary', () => {
         [principalId],
       );
       await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+          (provider, subject_id, principal_id, state, authority_generation)
+         VALUES ('discord', '123456789012345678', $1, 'active', 1)`,
+        [principalId],
+      );
+      await runtime.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions
           (record_id, token_digest, csrf_digest, principal_id, audience, assurance,
-           authn_version, authz_version, global_auth_epoch, idle_expires_at, absolute_expires_at)
-         VALUES ($1, $2, $3, $4, 'garden', 'oauth', 1, 1, 1,
+           authn_version, authz_version, provider, provider_subject_id,
+           global_auth_epoch, idle_expires_at, absolute_expires_at)
+         VALUES ($1, $2, $3, $4, 'garden', 'oauth', 1, 1,
+                 'discord', '123456789012345678', 1,
                  clock_timestamp() + interval '5 minutes', clock_timestamp() + interval '1 hour')`,
         [sessionId, '1'.repeat(64), '2'.repeat(64), principalId],
       );
@@ -1019,8 +1030,10 @@ describe('fleet_auth Postgres authority boundary', () => {
       );
       await runtime.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_token_custody
-          (custody_id, principal_id, encrypted_token, key_version, global_auth_epoch, expires_at)
-         VALUES ($1, $2, decode('aa', 'hex'), 1, 1, clock_timestamp() + interval '5 minutes')`,
+          (custody_id, principal_id, provider_subject_id, encrypted_token,
+           key_version, global_auth_epoch, expires_at)
+         VALUES ($1, $2, '123456789012345678', decode('aa', 'hex'), 1, 1,
+                 clock_timestamp() + interval '5 minutes')`,
         [randomUUID(), principalId],
       );
       await runtime.query(

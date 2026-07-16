@@ -20,6 +20,7 @@ import {
   consumeOAuthTransaction,
   createOAuthTransaction,
 } from './oauth-transaction-store.js';
+import type { ProviderRevocationAuthorityPort } from './provider-revocation-authority.js';
 
 
 export interface PostgresFleetAuthBrokerStoreOptions {
@@ -28,20 +29,6 @@ export interface PostgresFleetAuthBrokerStoreOptions {
   sessionPepper: string;
   tokenEncryptionKey: string;
   providerRevocationAuthority: ProviderRevocationAuthorityPort;
-}
-
-export interface ProviderRevocationAuthorityPort {
-  /** Deny database-backed sessions whenever non-restored authority is ahead. */
-  sessionAuthorityGenerationIsCurrent(authorityGeneration: number): boolean;
-  fence(input: {
-    provider: 'discord';
-    subjectId: string;
-    reasonDigest: string;
-    at: Date;
-  }): Promise<{
-    authorityGeneration: number;
-    reconcile(client: PoolClient): Promise<{ globalAuthEpoch: number }>;
-  }>;
 }
 
 function safeInteger(value: string, field: string): number {
@@ -124,21 +111,25 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
         idleExpiresAt: new Date(input.now.getTime() + input.idleTtlMs),
         absoluteExpiresAt: new Date(input.now.getTime() + input.absoluteTtlMs),
         globalAuthEpoch: safeInteger(authority.global_auth_epoch, 'global_auth_epoch'),
+        providerSubjectId: input.providerSubjectId,
       });
       await client.query(`
         UPDATE ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions
-        SET completed_session_id = $2
+        SET completed_session_id = $2,
+            verified_provider = 'discord',
+            verified_provider_subject_id = $3
         WHERE transaction_id = $1
-      `, [input.transactionId, session.recordId]);
+      `, [input.transactionId, session.recordId, input.providerSubjectId]);
       if (input.refreshToken && input.providerTokenExpiresAt) {
         await client.query(`
           INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_token_custody
-            (custody_id, principal_id, encrypted_token, key_version,
+            (custody_id, principal_id, provider_subject_id, encrypted_token, key_version,
              global_auth_epoch, expires_at, created_at)
-          VALUES ($1, $2, $3, 1, $4, $5, $6)
+          VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
         `, [
           randomUUID(),
           principal.principal_id,
+          input.providerSubjectId,
           this.codec.encrypt(input.refreshToken),
           authority.global_auth_epoch,
           input.providerTokenExpiresAt,
@@ -183,6 +174,9 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
         status: current.principal_status,
         authn_version: current.authn_version,
         authz_version: current.authz_version,
+        binding_version: current.binding_version,
+        grant_version: current.grant_version,
+        policy_version: current.policy_version,
       };
       const nextRecordId = randomUUID();
       const idleExpiresAt = new Date(Math.min(
@@ -199,6 +193,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
         idleExpiresAt,
         absoluteExpiresAt: current.absolute_expires_at,
         globalAuthEpoch: safeInteger(current.global_auth_epoch, 'global_auth_epoch'),
+        providerSubjectId: current.provider_subject_id,
       });
       await client.query(`
         UPDATE ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions
@@ -226,8 +221,15 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
         SELECT session.record_id, session.principal_id,
                principal.status AS principal_status,
                principal.authn_version, principal.authz_version,
+               principal.binding_version, principal.grant_version, principal.policy_version,
                session.authn_version AS session_authn_version,
                session.authz_version AS session_authz_version,
+               session.binding_version AS session_binding_version,
+               session.grant_version AS session_grant_version,
+               session.policy_version AS session_policy_version,
+               session.provider, session.provider_subject_id,
+               subject.state AS provider_state,
+               subject.restore_state AS provider_restore_state,
                authority.global_auth_epoch, authority.authority_generation,
                session.global_auth_epoch AS session_global_auth_epoch,
                session.idle_expires_at, session.absolute_expires_at,
@@ -235,10 +237,14 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
         FROM ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions AS session
         JOIN ${FLEET_AUTH_SCHEMA_NAME}.human_principals AS principal
           ON principal.principal_id = session.principal_id
+        JOIN ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects AS subject
+          ON subject.provider = session.provider
+         AND subject.subject_id = session.provider_subject_id
+         AND subject.principal_id = session.principal_id
         JOIN ${FLEET_AUTH_SCHEMA_NAME}.authority_state AS authority
           ON authority.singleton = TRUE
         WHERE session.token_digest = $1
-        FOR UPDATE OF session, principal
+        FOR UPDATE OF session, principal, subject
       `, [this.digest(input.token)]);
       const session = result.rows.at(0);
       if (!this.sessionAuthorityIsValid(session, input.now)) {
@@ -350,12 +356,17 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
       principal_status: PrincipalRow['status'];
       authn_version: string;
       authz_version: string;
+      binding_version: string;
+      grant_version: string;
+      policy_version: string;
       provider_restore_state: string;
       principal_restore_state: string;
     }>(`
       SELECT subject.principal_id, subject.state AS provider_state,
              principal.status AS principal_status, principal.authn_version,
-             principal.authz_version, subject.restore_state AS provider_restore_state,
+             principal.authz_version, principal.binding_version,
+             principal.grant_version, principal.policy_version,
+             subject.restore_state AS provider_restore_state,
              principal.restore_state AS principal_restore_state
       FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects AS subject
       JOIN ${FLEET_AUTH_SCHEMA_NAME}.human_principals AS principal
@@ -381,6 +392,9 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
         status: existing.principal_status,
         authn_version: existing.authn_version,
         authz_version: existing.authz_version,
+        binding_version: existing.binding_version,
+        grant_version: existing.grant_version,
+        policy_version: existing.policy_version,
       };
     }
     // The internal permanent registry is deliberately unreadable by the
@@ -434,6 +448,9 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
       status: 'pending',
       authn_version: '1',
       authz_version: '1',
+      binding_version: '1',
+      grant_version: '1',
+      policy_version: '1',
     };
   }
 
@@ -447,8 +464,15 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
       SELECT session.record_id, session.principal_id,
              principal.status AS principal_status,
              principal.authn_version, principal.authz_version,
+             principal.binding_version, principal.grant_version, principal.policy_version,
              session.authn_version AS session_authn_version,
              session.authz_version AS session_authz_version,
+             session.binding_version AS session_binding_version,
+             session.grant_version AS session_grant_version,
+             session.policy_version AS session_policy_version,
+             session.provider, session.provider_subject_id,
+             subject.state AS provider_state,
+             subject.restore_state AS provider_restore_state,
              authority.global_auth_epoch, authority.authority_generation,
              session.global_auth_epoch AS session_global_auth_epoch,
              session.idle_expires_at, session.absolute_expires_at,
@@ -456,10 +480,14 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
       FROM ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions AS session
       JOIN ${FLEET_AUTH_SCHEMA_NAME}.human_principals AS principal
         ON principal.principal_id = session.principal_id
+      JOIN ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects AS subject
+        ON subject.provider = session.provider
+       AND subject.subject_id = session.provider_subject_id
+       AND subject.principal_id = session.principal_id
       JOIN ${FLEET_AUTH_SCHEMA_NAME}.authority_state AS authority
         ON authority.singleton = TRUE
       WHERE session.token_digest = $1 AND session.csrf_digest = $2
-      FOR UPDATE OF session, principal
+      FOR UPDATE OF session, principal, subject
     `, [this.digest(token), this.digest(csrfToken)]);
     const session = result.rows.at(0);
     if (!this.sessionAuthorityIsValid(session, now)) {
@@ -481,6 +509,13 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
       && (session.principal_status === 'pending' || session.principal_status === 'active')
       && session.authn_version === session.session_authn_version
       && session.authz_version === session.session_authz_version
+      && session.binding_version === session.session_binding_version
+      && session.grant_version === session.session_grant_version
+      && session.policy_version === session.session_policy_version
+      && session.provider === 'discord'
+      && session.provider_subject_id !== null
+      && (session.provider_state === 'pending' || session.provider_state === 'active')
+      && session.provider_restore_state === 'live'
       && this.providerRevocationAuthority.sessionAuthorityGenerationIsCurrent(
         safeInteger(session.authority_generation, 'authority_generation'),
       )
@@ -499,15 +534,18 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
       idleExpiresAt: Date;
       absoluteExpiresAt: Date;
       globalAuthEpoch: number;
+      providerSubjectId: string;
     },
   ): Promise<FleetAuthSessionRecord> {
     const recordId = input.recordId ?? randomUUID();
     await client.query(`
       INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions
         (record_id, token_digest, csrf_digest, principal_id, audience, assurance,
-         authn_version, authz_version, global_auth_epoch, idle_expires_at,
-         absolute_expires_at, created_at)
-      VALUES ($1, $2, $3, $4, $5, 'oauth', $6, $7, $8, $9, $10, $11)
+         authn_version, authz_version, binding_version, grant_version,
+         policy_version, provider, provider_subject_id, global_auth_epoch,
+         idle_expires_at, absolute_expires_at, created_at)
+      VALUES ($1, $2, $3, $4, $5, 'oauth', $6, $7, $8, $9, $10,
+              'discord', $11, $12, $13, $14, $15)
     `, [
       recordId,
       this.digest(input.token),
@@ -516,6 +554,10 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
       input.audience,
       input.principal.authn_version,
       input.principal.authz_version,
+      input.principal.binding_version,
+      input.principal.grant_version,
+      input.principal.policy_version,
+      input.providerSubjectId,
       input.globalAuthEpoch,
       input.idleExpiresAt,
       input.absoluteExpiresAt,

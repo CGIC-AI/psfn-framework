@@ -46,6 +46,13 @@ export type {
 } from './types/wiki.js';
 
 export type {
+  AdminWishlistBeadCreatePort,
+  AdminWishlistConvertInput,
+  AdminWishlistListData,
+  AdminWishlistService,
+} from './types/wishlist.js';
+
+export type {
   AdminChargeCostReconciliationService,
   AdminChargeLedgerService,
   AdminModelUsageService,

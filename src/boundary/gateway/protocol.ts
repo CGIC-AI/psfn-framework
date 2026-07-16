@@ -337,6 +337,8 @@ export interface BeadsShowParams extends BeadsBaseParams {
 
 export interface BeadsCreateParams extends BeadsBaseParams {
   title: string;
+  description?: string;
+  acceptance?: string;
   issueType?: BeadsIssueType;
   priority?: number;
   deps?: string[];

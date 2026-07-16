@@ -31,6 +31,7 @@ import {
   SharedWorldWikiProposalService,
 } from './shared-world-caretaker.js';
 import { PersonalProjectLibrary } from './personal-projects.js';
+import { PersonalWishlist } from './personal-wishlist.js';
 import { derivePostgresTenantRole } from '../../persistence/postgres/tenancy.js';
 
 const log = createComponentLogger('WikiRuntime');
@@ -82,6 +83,7 @@ export interface WikiRuntimeDeps {
 export interface WikiRuntimeWiring {
   store: WikiStore;
   personalProjects: PersonalProjectLibrary;
+  personalWishlist: PersonalWishlist;
   projection: WikiPgvectorProjectionStore | null;
   /**
    * s10f9: read-side handle on `shared.shared_wiki_chunks` for the retrieval
@@ -302,6 +304,7 @@ export async function wireWikiRuntime(
   }
 
   const personalProjects = new PersonalProjectLibrary(store);
+  const personalWishlist = new PersonalWishlist(store);
   const resources = [
     ...(projection ? [projection] : []),
     ...(sharedProjection ? [sharedProjection] : []),
@@ -313,6 +316,7 @@ export async function wireWikiRuntime(
       ...(deps.getIntakeSinkGate ? { getIntakeSinkGate: deps.getIntakeSinkGate } : {}),
       ...(sharedWorldProposal ? { sharedWorldProposal } : {}),
       personalProjects,
+      personalWishlist,
     }), 'core');
   } catch (error) {
     await closeWikiRuntimeAfterFailure(error, resources);
@@ -349,6 +353,7 @@ export async function wireWikiRuntime(
   return {
     store,
     personalProjects,
+    personalWishlist,
     projection,
     sharedProjection,
     retrievalService,

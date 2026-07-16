@@ -18,6 +18,11 @@ import {
   PersonalProjectLibrary,
 } from './personal-projects.js';
 import {
+  MAX_WISH_CONTEXT_CHARS,
+  MAX_WISH_TEXT_CHARS,
+  PersonalWishlist,
+} from './personal-wishlist.js';
+import {
   WIKI_SOURCE_CLASSES,
   type WikiDocumentUpsertInput,
   type WikiSemanticSearchFn,
@@ -33,6 +38,9 @@ type WikiAction =
   | 'write'
   | 'import'
   | 'propose_shared_world'
+  | 'wish_list'
+  | 'wish_read'
+  | 'wish_create'
   | 'project_list'
   | 'project_read'
   | 'project_create'
@@ -52,6 +60,9 @@ const WIKI_ACTIONS = [
   'write',
   'import',
   'propose_shared_world',
+  'wish_list',
+  'wish_read',
+  'wish_create',
   'project_list',
   'project_read',
   'project_create',
@@ -90,6 +101,8 @@ export interface WikiToolDeps {
   };
   /** Existing personal-wiki storage interpreted as project and wardrobe manifests. */
   personalProjects?: PersonalProjectLibrary;
+  /** Existing personal-wiki storage interpreted as companion-authored wishes. */
+  personalWishlist?: PersonalWishlist;
 }
 
 interface WikiToolParams {
@@ -106,6 +119,9 @@ interface WikiToolParams {
   summary?: string;
   site_id?: string;
   source_ref?: string;
+  wish_ref?: string;
+  wish_text?: string;
+  wish_context?: string;
   project_id?: string;
   project_ref?: string;
   project_status?: PersonalProjectStatus;
@@ -178,6 +194,8 @@ function resolveWikiCapabilityRequirement(params: Record<string, unknown>): Capa
     case 'read':
     case 'search':
     case 'semantic_search':
+    case 'wish_list':
+    case 'wish_read':
     case 'project_list':
     case 'project_read':
     case 'wardrobe_list':
@@ -186,6 +204,7 @@ function resolveWikiCapabilityRequirement(params: Record<string, unknown>): Capa
     case 'write':
     case 'import':
     case 'propose_shared_world':
+    case 'wish_create':
     case 'project_create':
     case 'project_update':
     case 'project_add_artifact':
@@ -203,6 +222,13 @@ function requirePersonalProjects(deps: WikiToolDeps): PersonalProjectLibrary {
     throw new Error('personal project storage is unavailable');
   }
   return deps.personalProjects;
+}
+
+function requirePersonalWishlist(deps: WikiToolDeps): PersonalWishlist {
+  if (!deps.personalWishlist) {
+    throw new Error('personal wishlist storage is unavailable');
+  }
+  return deps.personalWishlist;
 }
 
 export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): SubstrateAgentTool {
@@ -268,6 +294,20 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
       source_ref: Type.Optional(Type.String({
         minLength: 1,
         description: 'Non-memory source event/reference for action=propose_shared_world.',
+      })),
+      wish_ref: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Stable wish:<uuid> reference for wish_read.',
+      })),
+      wish_text: Type.Optional(Type.String({
+        minLength: 1,
+        maxLength: MAX_WISH_TEXT_CHARS,
+        description: 'What the companion wants for wish_create, in her own words.',
+      })),
+      wish_context: Type.Optional(Type.String({
+        minLength: 1,
+        maxLength: MAX_WISH_CONTEXT_CHARS,
+        description: 'Optional context about why, when, or how the wish matters.',
       })),
       project_id: Type.Optional(Type.String({ minLength: 1, description: 'Stable id for project_create.' })),
       project_ref: Type.Optional(Type.String({ minLength: 1, description: 'Stable project:<id> reference.' })),
@@ -390,6 +430,29 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
               proposal: result.proposal,
               deduplicated: result.deduplicated,
               boundary: 'Queued for operator review; no shared-world document was written.',
+            }, null, 2));
+          }
+          case 'wish_list': {
+            const wishes = requirePersonalWishlist(deps).listWishes();
+            return textResult(JSON.stringify({
+              action,
+              wishes,
+              boundary: 'Wishes are companion-authored personal wiki records. Saving one is asynchronous and does not notify or interrupt the operator.',
+            }, null, 2));
+          }
+          case 'wish_read': {
+            const wish = requirePersonalWishlist(deps).getWish(requireString(params.wish_ref, 'wish_ref'));
+            return textResult(JSON.stringify({ action, wish }, null, 2));
+          }
+          case 'wish_create': {
+            const wish = requirePersonalWishlist(deps).createWish({
+              text: requireString(params.wish_text, 'wish_text'),
+              ...(params.wish_context !== undefined ? { context: params.wish_context } : {}),
+            });
+            return textResult(JSON.stringify({
+              action,
+              wish,
+              boundary: 'Saved for asynchronous operator review. No push notification or operator interruption was emitted.',
             }, null, 2));
           }
           case 'project_list': {

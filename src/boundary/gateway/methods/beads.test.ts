@@ -214,6 +214,38 @@ describe('registerBeadsMethods', () => {
     );
   });
 
+  it('passes self-contained description and acceptance text to beads.create', async () => {
+    queueSpawnResult({ stdout: JSON.stringify({ id: 'wish-11' }) });
+    const harness = createHarness(makePolicy(['create']));
+
+    await harness.invoke('beads.create', {
+      actor: 'garden-operator',
+      title: 'Plan a quiet watercolor afternoon',
+      description: 'Companion wish: protect unhurried time for watercolor practice.',
+      acceptance: 'A protected afternoon is agreed and visible to the companion.',
+      issueType: 'task',
+      priority: 2,
+    });
+
+    expect(mockedSpawn).toHaveBeenCalledWith(
+      'bd',
+      [
+        'create',
+        'Plan a quiet watercolor afternoon',
+        '--description',
+        'Companion wish: protect unhurried time for watercolor practice.',
+        '--acceptance',
+        'A protected afternoon is agreed and visible to the companion.',
+        '-t',
+        'task',
+        '-p',
+        '2',
+        '--json',
+      ],
+      expect.objectContaining({ cwd: process.cwd(), shell: false }),
+    );
+  });
+
   it('records error audit telemetry when bd command fails', async () => {
     queueSpawnResult({
       stderr: 'issue not found',

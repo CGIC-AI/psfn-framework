@@ -259,6 +259,12 @@
     },
     {
       "file": "src/boundary/gateway/methods/beads.ts",
+      "name": "MAX_ACCEPTANCE_CHARS",
+      "value": "10_000",
+      "note": "Code-owned Beads CLI argument ceiling that bounds operator-authored acceptance payloads before process execution."
+    },
+    {
+      "file": "src/boundary/gateway/methods/beads.ts",
       "name": "MAX_ACTOR_CHARS",
       "value": "64"
     },
@@ -271,6 +277,12 @@
       "file": "src/boundary/gateway/methods/beads.ts",
       "name": "MAX_DEPENDENCIES",
       "value": "16"
+    },
+    {
+      "file": "src/boundary/gateway/methods/beads.ts",
+      "name": "MAX_DESCRIPTION_CHARS",
+      "value": "20_000",
+      "note": "Code-owned Beads CLI argument ceiling that bounds operator-authored issue descriptions before process execution."
     },
     {
       "file": "src/boundary/gateway/methods/beads.ts",
@@ -3211,6 +3223,24 @@
       "file": "src/faculties/values/tools.ts",
       "name": "MAX_LIST_LIMIT",
       "value": "200"
+    },
+    {
+      "file": "src/faculties/wiki/personal-wishlist-contracts.ts",
+      "name": "MAX_OPERATOR_RESPONSE_CHARS",
+      "value": "4_000",
+      "note": "Code-owned canonical wishlist document bound that rejects oversized operator responses consistently across tool and Garden reads."
+    },
+    {
+      "file": "src/faculties/wiki/personal-wishlist-contracts.ts",
+      "name": "MAX_WISH_CONTEXT_CHARS",
+      "value": "4_000",
+      "note": "Code-owned canonical wishlist document bound that rejects oversized optional context before persistence."
+    },
+    {
+      "file": "src/faculties/wiki/personal-wishlist-contracts.ts",
+      "name": "MAX_WISH_TEXT_CHARS",
+      "value": "2_000",
+      "note": "Code-owned canonical wishlist document bound that rejects oversized companion-authored wish text before persistence."
     },
     {
       "file": "src/faculties/wiki/pgvector-projection.ts",

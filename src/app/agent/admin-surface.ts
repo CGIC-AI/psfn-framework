@@ -159,6 +159,16 @@ export async function startOptionalAdminTransportServer(
     getCredentialPresence: () => options.gateway.getCredentialPresence(),
     ...(env.PSFN_LOGS_DIR ? { logsDir: env.PSFN_LOGS_DIR } : {}),
     toolConformanceRunner: options.coreRuntime.toolConformanceRunner,
+    wishlistBeadCreator: {
+      createWishBead: input => options.gateway.beadsCreate({
+        title: input.title,
+        description: input.description,
+        acceptance: input.acceptance,
+        issueType: input.issueType,
+        priority: input.priority,
+        actor: input.actor,
+      }),
+    },
     ...(adminConfig.sharedWorkspacePath
       ? { sharedWorkspaceCredentials: resolveSharedWorkspaceCredentials(env) }
       : {}),

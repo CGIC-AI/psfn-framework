@@ -381,6 +381,7 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.wiki,
     actions: [
       'list', 'read', 'search', 'semantic_search', 'write', 'import', 'propose_shared_world',
+      'wish_list', 'wish_read', 'wish_create',
       'project_list', 'project_read', 'project_create', 'project_update',
       'project_add_artifact', 'project_share',
       'wardrobe_list', 'wardrobe_read', 'wardrobe_save', 'wardrobe_revise',

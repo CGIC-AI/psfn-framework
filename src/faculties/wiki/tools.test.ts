@@ -12,6 +12,7 @@ import type {
   SharedWorldWikiProposalSubmissionResult,
 } from './shared-world-caretaker-types.js';
 import { PersonalProjectLibrary } from './personal-projects.js';
+import { PersonalWishlist } from './personal-wishlist.js';
 
 function resultText(result: AgentToolResult<any>): string {
   return result.content
@@ -134,6 +135,62 @@ describe('wiki tool', () => {
     const tool = createWikiTool(store);
     const result = await tool.execute('project-list', { action: 'project_list' });
     expect(resultText(result)).toContain('personal project storage is unavailable');
+    expect(result.details?.isError).toBe(true);
+  });
+
+  it('round-trips a companion wish through the canonical wiki tool and operator library', async () => {
+    const timestamps = [
+      new Date('2026-07-16T10:00:00.000Z'),
+      new Date('2026-07-16T10:01:00.000Z'),
+      new Date('2026-07-16T10:02:00.000Z'),
+    ];
+    const personalWishlist = new PersonalWishlist(
+      store,
+      () => timestamps.shift() ?? new Date('2026-07-16T10:03:00.000Z'),
+      () => '22222222-2222-4222-8222-222222222222',
+    );
+    const tool = createWikiTool(store, { personalWishlist });
+
+    const created: unknown = JSON.parse(resultText(await tool.execute('wish-create', {
+      action: 'wish_create',
+      wish_text: 'I would love a quiet afternoon for watercolor practice.',
+      wish_context: 'The new landscape palette has been sitting unopened.',
+    })));
+    if (!isRecord(created) || !isRecord(created.wish) || typeof created.boundary !== 'string') {
+      throw new Error('wish_create returned malformed data');
+    }
+    expect(created.wish.ref).toBe('wish:22222222-2222-4222-8222-222222222222');
+    expect(created.wish.state).toBe('open');
+    expect(created.boundary).toContain('No push notification or operator interruption');
+
+    personalWishlist.respondToWish(
+      'wish:22222222-2222-4222-8222-222222222222',
+      'That sounds lovely. Let us protect Saturday afternoon.',
+    );
+    personalWishlist.planWish(
+      'wish:22222222-2222-4222-8222-222222222222',
+      'wishlist-watercolor',
+    );
+
+    const listed: unknown = JSON.parse(resultText(await tool.execute('wish-list', {
+      action: 'wish_list',
+    })));
+    if (!isRecord(listed) || !Array.isArray(listed.wishes) || !isRecord(listed.wishes[0])) {
+      throw new Error('wish_list returned malformed data');
+    }
+    expect(listed.wishes).toHaveLength(1);
+    expect(listed.wishes[0]).toMatchObject({
+      state: 'planned',
+      beadId: 'wishlist-watercolor',
+      operatorResponse: 'That sounds lovely. Let us protect Saturday afternoon.',
+    });
+    expect(store.list()).toHaveLength(1);
+  });
+
+  it('fails closed when wish actions are unwired', async () => {
+    const tool = createWikiTool(store);
+    const result = await tool.execute('wish-list', { action: 'wish_list' });
+    expect(resultText(result)).toContain('personal wishlist storage is unavailable');
     expect(result.details?.isError).toBe(true);
   });
 

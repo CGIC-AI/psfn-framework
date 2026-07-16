@@ -120,6 +120,8 @@ import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { AdminShardFoldReviewDataService } from './services/shard-fold-review-service.js';
 import { AdminWikiDataService } from './services/wiki-service.js';
+import { AdminWishlistDataService } from './services/wishlist-service.js';
+import type { AdminWishlistBeadCreatePort } from './services/types.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
 import type { GatewayCredentialPresenceResult } from '../../boundary/gateway/protocol.js';
 import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-store-ports.js';
@@ -184,6 +186,8 @@ export interface InProcessGardenAdminContractOptions {
   icpRuntimeEnablement?: IcpAutonomyRuntimeEnablement | null;
   /** Distinct authenticated principals for governed shared-workspace writes. */
   sharedWorkspaceCredentials?: SharedWorkspaceCredentials;
+  /** Existing gateway-backed Beads create primitive used for explicit wish conversion. */
+  wishlistBeadCreator?: AdminWishlistBeadCreatePort;
 }
 
 export function createInProcessGardenAdminContract(
@@ -413,6 +417,12 @@ export function createInProcessGardenAdminContract(
           eventBus: options.eventBus,
         },
       })
+      : null,
+    wishlist: options.config.workspacePath
+      ? new AdminWishlistDataService(
+        options.config.workspacePath,
+        options.wishlistBeadCreator,
+      )
       : null,
     episodicMemory: options.episodicStore
       ? new AdminEpisodicMemoryDataService(options.episodicStore)

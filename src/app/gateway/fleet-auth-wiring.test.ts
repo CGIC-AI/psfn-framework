@@ -31,6 +31,10 @@ describe('gateway fleet authorization context wiring', () => {
     );
     expect(apiSurfaceSource).toContain('new GatewayHubDeviceIngressService({');
     expect(apiSurfaceSource).toContain('.verifyAndConsumeHubDeviceAssertion(assertion, expected)');
+    expect(mainSource).toContain(
+      'fleetAuthProviderRecovery: fleetAuthPersistence.providerRecovery,',
+    );
+    expect(apiSurfaceSource).toContain('providerRecovery: options.fleetAuthProviderRecovery');
   });
 
   it('constructs the private request-capability signer only inside gateway persistence', () => {

@@ -277,6 +277,61 @@ describe('non-restored fleet auth authority floors', () => {
     expect(floor.verifyCurrentPasskey(keyB)).toMatchObject({ allowed: true, generation: 3 });
   });
 
+  it('atomically fences an unavailable provider and rebinds its verified passkey', () => {
+    const floor = store();
+    floor.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
+    const current = passkey('9'.repeat(64), 'verifier-recovery');
+    floor.enrollPasskey(current, '2026-07-16T10:00:00.000Z');
+
+    const recovered = floor.recoverProviderAuthority({
+      principalId: PRINCIPAL_ID,
+      currentProviderSubjectId: current.expectedProviderSubjectId,
+      expectedNewProviderSubjectId: '223456789012345678',
+      credentialIdHash: current.credentialIdHash,
+      credentialGeneration: 1,
+      credentialFloorGeneration: 1,
+      expectedAuthorityGeneration: 1,
+      reasonDigest: '7'.repeat(64),
+      at: '2026-07-16T11:00:00.000Z',
+    });
+
+    expect(recovered.trustedHost).toMatchObject({
+      authorityGeneration: 2,
+      revocationCheckpoint: 1,
+    });
+    expect(floor.isAccountAuthorityTombstoned(
+      'provider_subject',
+      `discord:${current.expectedProviderSubjectId}`,
+    )).toBe(true);
+    expect(recovered.passkeys).toMatchObject({
+      generation: 2,
+      credentials: [expect.objectContaining({
+        credentialIdHash: current.credentialIdHash,
+        expectedProviderSubjectId: '223456789012345678',
+        generation: 2,
+        status: 'current',
+      })],
+    });
+    const beforeRestore = recovered.passkeys;
+    floor.prepareRestore({
+      activationGeneration: 2,
+      restoredTombstones: [],
+      at: '2026-07-16T12:00:00.000Z',
+    });
+    expect(floor.read().passkeys).toEqual(beforeRestore);
+    expect(() => floor.recoverProviderAuthority({
+      principalId: PRINCIPAL_ID,
+      currentProviderSubjectId: current.expectedProviderSubjectId,
+      expectedNewProviderSubjectId: '323456789012345678',
+      credentialIdHash: current.credentialIdHash,
+      credentialGeneration: 1,
+      credentialFloorGeneration: 1,
+      expectedAuthorityGeneration: 1,
+      reasonDigest: '8'.repeat(64),
+      at: '2026-07-16T13:00:00.000Z',
+    })).toThrow(/authority floor changed/i);
+  });
+
   it('denies mismatched verifier/binding metadata and fails closed when the floor is unavailable', () => {
     const floor = store();
     floor.open({ activationGeneration: 1, databaseHasDurableAuthority: false });

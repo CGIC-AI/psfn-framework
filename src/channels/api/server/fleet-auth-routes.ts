@@ -27,6 +27,8 @@ import type { GatewayFleetAuthLifecycleCeremonyService } from '../../../boundary
 import { FleetAuthLifecycleCeremonyHttpRoutes } from './fleet-auth-lifecycle-ceremony-routes.js';
 import type { TrustedHostAccountReapprovalService } from '../../../boundary/fleet-auth/trusted-host-account-reapproval.js';
 import { FleetAuthAccountReapprovalHttpRoutes } from './fleet-auth-account-reapproval-routes.js';
+import type { TrustedHostProviderRecoveryService } from '../../../boundary/fleet-auth/trusted-host-provider-recovery.js';
+import { FleetAuthProviderRecoveryHttpRoutes } from './fleet-auth-provider-recovery-routes.js';
 
 const LOGIN_PATH = '/v1/fleet-auth/login';
 export const FLEET_AUTH_LIFECYCLE_OAUTH_PATH = '/v1/fleet-auth/lifecycle/oauth';
@@ -134,6 +136,7 @@ export class FleetAuthHttpRoutes {
   private readonly trustProxy: boolean;
   private readonly jitRoutes?: FleetAuthJitHttpRoutes;
   private readonly passkeyRoutes?: FleetAuthPasskeyHttpRoutes;
+  private readonly providerRecoveryRoutes?: FleetAuthProviderRecoveryHttpRoutes;
   private readonly companionUi?: Readonly<{
     companionId: string;
     guestMode: 'disabled' | 'explicit';
@@ -151,6 +154,7 @@ export class FleetAuthHttpRoutes {
     trustedHostRecovery?: GatewayTrustedHostGardenRecoveryService;
     lifecycleCeremonies?: GatewayFleetAuthLifecycleCeremonyService;
     accountReapprovalCeremonies?: TrustedHostAccountReapprovalService;
+    providerRecovery?: TrustedHostProviderRecoveryService;
     trustProxy?: boolean;
     companionUi?: Readonly<{
       companionId: string;
@@ -170,6 +174,9 @@ export class FleetAuthHttpRoutes {
         broker: options.broker,
       })
       : undefined;
+    this.providerRecoveryRoutes = options.providerRecovery
+      ? new FleetAuthProviderRecoveryHttpRoutes(options.providerRecovery)
+      : undefined;
     this.companionUi = options.companionUi;
     this.recoveryRoutes = options.trustedHostRecovery
       ? new FleetAuthRecoveryHttpRoutes(options.trustedHostRecovery)
@@ -188,6 +195,7 @@ export class FleetAuthHttpRoutes {
       || (this.recoveryRoutes?.matches(method, path) ?? false)
       || (this.lifecycleCeremonyRoutes?.matches(method, path) ?? false)
       || (this.accountReapprovalRoutes?.matches(method, path) ?? false)
+      || (this.providerRecoveryRoutes?.matches(method, path) ?? false)
       || (method === 'GET' && (
         path === LOGIN_PATH || path === CSRF_PATH || path === STATUS_PATH || path === this.callbackPath
       ))
@@ -406,6 +414,17 @@ export class FleetAuthHttpRoutes {
       }
       if (this.accountReapprovalRoutes?.matches(request.method, url.pathname)) {
         await this.accountReapprovalRoutes.handle({
+          request,
+          response,
+          path: url.pathname,
+          token,
+          csrfToken,
+          requestOrigin: mutationOrigin(request),
+        });
+        return;
+      }
+      if (this.providerRecoveryRoutes?.matches(request.method, url.pathname)) {
+        await this.providerRecoveryRoutes.handle({
           request,
           response,
           path: url.pathname,

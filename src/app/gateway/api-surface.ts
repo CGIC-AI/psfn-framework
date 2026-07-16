@@ -64,6 +64,7 @@ import type { TrustedHostPasskeyCeremonyService } from '../../boundary/fleet-aut
 import type { GatewayTrustedHostGardenRecoveryService } from '../../boundary/gateway/trusted-host-garden-recovery.js';
 import type { GatewayFleetAuthLifecycleCeremonyService } from '../../boundary/fleet-auth/lifecycle-ceremony.js';
 import type { TrustedHostAccountReapprovalService } from '../../boundary/fleet-auth/trusted-host-account-reapproval.js';
+import type { TrustedHostProviderRecoveryService } from '../../boundary/fleet-auth/trusted-host-provider-recovery.js';
 import {
   GatewayHubDeviceIngressService,
   type HubDeviceHumanAttachmentPort,
@@ -120,6 +121,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   fleetAuthTrustedHostRecovery?: GatewayTrustedHostGardenRecoveryService;
   fleetAuthLifecycleCeremonies?: GatewayFleetAuthLifecycleCeremonyService;
   fleetAuthAccountReapprovalCeremonies?: TrustedHostAccountReapprovalService;
+  fleetAuthProviderRecovery?: TrustedHostProviderRecoveryService;
   fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
   fleetAuthRequestCapabilities?: GatewayRequestCapabilitySigner;
   fleetAuthRequestCapabilityVerifier?: RequestCapabilityVerifier;
@@ -412,6 +414,7 @@ export async function startOptionalGatewayApiServer(
     && options.fleetAuthTrustedHostRecovery !== undefined
     && options.fleetAuthLifecycleCeremonies !== undefined
     && options.fleetAuthAccountReapprovalCeremonies !== undefined
+    && options.fleetAuthProviderRecovery !== undefined
     && options.fleetAuthChildAssertions !== undefined
     && options.fleetAuthRequestCapabilities !== undefined
     && options.fleetAuthRequestCapabilityVerifier !== undefined
@@ -782,6 +785,9 @@ export async function startOptionalGatewayApiServer(
               : {}),
             ...(options.fleetAuthAccountReapprovalCeremonies
               ? { accountReapprovalCeremonies: options.fleetAuthAccountReapprovalCeremonies }
+              : {}),
+            ...(options.fleetAuthProviderRecovery
+              ? { providerRecovery: options.fleetAuthProviderRecovery }
               : {}),
             trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
             ...(fleetSsoCompanionUi ? {

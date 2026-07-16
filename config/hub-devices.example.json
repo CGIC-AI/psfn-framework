@@ -9,6 +9,11 @@
       "endpointId": "office-device",
       "claimType": "room-satellite",
       "credentialSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "enrollmentVersion": 1,
+      "enrollmentAssurance": "device_credential",
+      "enrollmentStatus": "active",
+      "companionId": "11111111-1111-4111-8111-111111111111",
+      "placeId": "office",
       "homeAssistantEntityIds": [
         "light.office",
         "binary_sensor.office_motion"

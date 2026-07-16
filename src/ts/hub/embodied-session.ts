@@ -1,4 +1,5 @@
 import type { SatelliteCapabilities } from "../shared/protocol.js";
+import type { HubDeviceAssertionAuthority } from "./device-assertion.js";
 
 export const DEFAULT_PSFN_CHANNEL_TYPE = "satellite.endpoint";
 
@@ -38,6 +39,7 @@ export interface EmbodiedSession {
   channelId: string;
   satellites: AttachedSatellite[];
   claimIdentities?: Record<string, NonNullable<PsfnChannelContext["claimIdentity"]>>;
+  deviceAuthorities?: Record<string, HubDeviceAssertionAuthority>;
   createdAt: string;
   updatedAt: string;
 }
@@ -54,6 +56,7 @@ export interface PsfnChannelContext {
     claimType: string;
     displayName: string;
   };
+  deviceAuthority?: HubDeviceAssertionAuthority;
   activeSatellites: Array<{
     id: string;
     name: string;
@@ -90,14 +93,22 @@ export interface AttachSatelliteInput {
   satelliteName: string;
   capabilities?: SatelliteCapabilities;
   claimIdentity?: PsfnChannelContext["claimIdentity"];
+  deviceAuthority?: HubDeviceAssertionAuthority;
 }
+
+export type SatelliteAttachmentOwnership = symbol;
 
 export class EmbodiedSessionRegistry {
   private readonly sessions = new Map<string, EmbodiedSession>();
+  private readonly attachmentOwners = new Map<string, Map<string, SatelliteAttachmentOwnership>>();
 
   constructor(private readonly channelType: string = DEFAULT_PSFN_CHANNEL_TYPE) {}
 
-  attachSatellite(input: AttachSatelliteInput): { session: EmbodiedSession; satellite: AttachedSatellite } {
+  attachSatellite(input: AttachSatelliteInput): {
+    session: EmbodiedSession;
+    satellite: AttachedSatellite;
+    ownership: SatelliteAttachmentOwnership;
+  } {
     const sessionId = normalizeRequired(input.sessionId, "sessionId");
     const satelliteId = normalizeRequired(input.satelliteId, "satelliteId");
     const now = new Date().toISOString();
@@ -126,37 +137,81 @@ export class EmbodiedSessionRegistry {
           ...(input.claimIdentity ? { [satelliteId]: input.claimIdentity } : {}),
         },
       } : {}),
+      ...((current?.deviceAuthorities || input.deviceAuthority) ? {
+        deviceAuthorities: {
+          ...(current?.deviceAuthorities ?? {}),
+          ...(input.deviceAuthority ? { [satelliteId]: input.deviceAuthority } : {}),
+        },
+      } : {}),
       createdAt: current?.createdAt ?? now,
       updatedAt: now,
     };
+    const ownership = Symbol(`satellite-attachment:${sessionId}:${satelliteId}`);
+    const owners = new Map(this.attachmentOwners.get(sessionId));
+    owners.set(satelliteId, ownership);
     this.sessions.set(sessionId, session);
-    return { session, satellite };
+    this.attachmentOwners.set(sessionId, owners);
+    return { session, satellite, ownership };
   }
 
-  getContext(sessionId: string, sourceSatelliteId: string): PsfnChannelContext {
+  getContext(
+    sessionId: string,
+    sourceSatelliteId: string,
+    ownership?: SatelliteAttachmentOwnership,
+  ): PsfnChannelContext {
+    const currentOwnership = this.attachmentOwners.get(sessionId)?.get(sourceSatelliteId);
+    // ubs:ignore — these are opaque in-process Symbol references, not attacker-supplied secret bytes.
+    if (ownership && currentOwnership !== ownership) {
+      throw new Error(`Satellite attachment is not current: ${sessionId}/${sourceSatelliteId}`);
+    }
     const session = this.sessions.get(sessionId);
     if (!session) {
-      const { session: created, satellite } = this.attachSatellite({
-        sessionId,
-        satelliteId: sourceSatelliteId,
-        satelliteName: sourceSatelliteId,
-      });
-      return contextFromSession(created, satellite);
+      throw new Error(`Satellite is not attached: ${sessionId}/${sourceSatelliteId}`);
     }
-    const source = session.satellites.find((satellite) => satellite.id === sourceSatelliteId) ?? session.satellites[0];
+    const source = session.satellites.find((satellite) => satellite.id === sourceSatelliteId);
     if (!source) {
-      const { session: updated, satellite } = this.attachSatellite({
-        sessionId,
-        satelliteId: sourceSatelliteId,
-        satelliteName: sourceSatelliteId,
-      });
-      return contextFromSession(updated, satellite);
+      throw new Error(`Satellite is not attached: ${sessionId}/${sourceSatelliteId}`);
     }
     return contextFromSession(session, source);
   }
 
   getSession(sessionId: string): EmbodiedSession | null {
     return this.sessions.get(sessionId) ?? null;
+  }
+
+  detachSatellite(
+    sessionId: string,
+    satelliteId: string,
+    ownership: SatelliteAttachmentOwnership,
+  ): boolean {
+    const current = this.sessions.get(sessionId);
+    if (!current) return false;
+    const owners = this.attachmentOwners.get(sessionId);
+    // ubs:ignore — these are opaque in-process Symbol references, not attacker-supplied secret bytes.
+    if (owners?.get(satelliteId) !== ownership) return false;
+    const satellites = current.satellites.filter(satellite => satellite.id !== satelliteId);
+    if (satellites.length === current.satellites.length) return false;
+    if (satellites.length === 0) {
+      this.sessions.delete(sessionId);
+      this.attachmentOwners.delete(sessionId);
+      return true;
+    }
+    owners.delete(satelliteId);
+    const claimIdentities = { ...current.claimIdentities };
+    const deviceAuthorities = { ...current.deviceAuthorities };
+    delete claimIdentities[satelliteId];
+    delete deviceAuthorities[satelliteId];
+    const updated: EmbodiedSession = {
+      ...current,
+      satellites,
+      claimIdentities,
+      deviceAuthorities,
+      updatedAt: new Date().toISOString(),
+    };
+    if (Object.keys(claimIdentities).length === 0) delete updated.claimIdentities;
+    if (Object.keys(deviceAuthorities).length === 0) delete updated.deviceAuthorities;
+    this.sessions.set(sessionId, updated);
+    return true;
   }
 }
 
@@ -204,6 +259,9 @@ function contextFromSession(session: EmbodiedSession, sourceSatellite: AttachedS
     sourceSatelliteName: sourceSatellite.name,
     ...(session.claimIdentities?.[sourceSatellite.id]
       ? { claimIdentity: session.claimIdentities[sourceSatellite.id] }
+      : {}),
+    ...(session.deviceAuthorities?.[sourceSatellite.id]
+      ? { deviceAuthority: session.deviceAuthorities[sourceSatellite.id] }
       : {}),
     activeSatellites: session.satellites.map((satellite) => ({
       id: satellite.id,

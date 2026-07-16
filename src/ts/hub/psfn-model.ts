@@ -9,6 +9,10 @@ import type { FrameworkAgentAdapter, FrameworkReplyInputMode } from "./framework
 import type { PsfnRuntimeConfig } from "../shared/env.js";
 import type { RuntimeIdentity } from "../shared/protocol.js";
 import {
+  requireCurrentHubDeviceEnrollment,
+  type HubDeviceRegistryAuthority,
+} from "./device-registry.js";
+import {
   buildSatelliteClaimEnvelope,
   buildSatelliteRegistryHeaders,
   defaultCapabilitiesForProfile,
@@ -20,6 +24,13 @@ interface CompletionResponse {
   status: number;
   text(): Promise<string>;
   chunks(): AsyncIterable<Uint8Array>;
+}
+
+class KnownHttpResponseReadError extends Error {
+  constructor(readonly status: number, cause: unknown) {
+    super(`PSFN chat completion failed (${status}): response body unavailable`, { cause });
+    this.name = "KnownHttpResponseReadError";
+  }
 }
 
 type PsfnChatMessageContent =
@@ -69,7 +80,11 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
   private readonly onTelemetry: PsfnTelemetrySink;
   private identityRequest: Promise<RuntimeIdentity | null> | null = null;
 
-  constructor(private readonly runtime: PsfnRuntimeConfig, onTelemetry?: PsfnTelemetrySink) {
+  constructor(
+    private readonly runtime: PsfnRuntimeConfig,
+    onTelemetry?: PsfnTelemetrySink,
+    private readonly deviceRegistryAuthority: HubDeviceRegistryAuthority | null = null,
+  ) {
     const baseUrl = runtime.baseUrl.replace(/\/$/, "");
     this.apiBaseUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
     this.onTelemetry = onTelemetry ?? defaultTelemetrySink;
@@ -96,6 +111,9 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
     });
     const channelMetadata = buildChannelMetadata(channel, satelliteClaim);
     const headers = this.buildHeaders(channel, satelliteClaim, channelMetadata);
+    const hasAuthenticatedReplayProtection = Boolean(
+      channel.deviceAuthority && headers["X-PSFN-Hub-Device-Assertion"],
+    );
     const body = JSON.stringify({
       model: this.runtime.model,
       stream: false,
@@ -138,7 +156,12 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
       const attemptStart = Date.now();
       const scope = createAttemptScope(externalSignal, Math.min(attemptTimeoutMs, remainingMs));
       try {
-        const response = await this.postChatCompletionWithBusyRetry(headers, body, scope.signal);
+        const response = await this.postChatCompletionWithBusyRetry(
+          headers,
+          body,
+          scope.signal,
+          () => this.assertCurrentDeviceAuthority(channel),
+        );
         if (!response.ok) {
           const errorText = await formatError(response);
           attempts.push({ attempt, status: "error", elapsedMs: Date.now() - attemptStart, httpStatus: response.status });
@@ -162,8 +185,22 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
         if (externalSignal?.aborted) {
           throw cancelled();
         }
+        if (error instanceof KnownHttpResponseReadError) {
+          attempts.push({
+            attempt,
+            status: "error",
+            elapsedMs: Date.now() - attemptStart,
+            httpStatus: error.status,
+          });
+          emit("failed");
+          throw error;
+        }
         if (isAbortError(error)) {
           attempts.push({ attempt, status: "timeout", elapsedMs: Date.now() - attemptStart });
+          continue;
+        }
+        if (hasAuthenticatedReplayProtection && isRetryableTransportLoss(error)) {
+          attempts.push({ attempt, status: "error", elapsedMs: Date.now() - attemptStart });
           continue;
         }
         emit("failed");
@@ -252,17 +289,24 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
     headers: Record<string, string>,
     body: string,
     signal?: AbortSignal,
+    assertCurrentAuthority: () => void = () => undefined,
   ): Promise<CompletionResponse> {
     const maxRetries = agentBusyMaxRetries();
     for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       if (signal?.aborted) {
         throw abortReason(signal);
       }
+      assertCurrentAuthority();
       const response = await this.postChatCompletion(headers, body, signal);
       if (response.ok) {
         return response;
       }
-      const responseText = await response.text();
+      let responseText: string;
+      try {
+        responseText = await response.text();
+      } catch (error) {
+        throw new KnownHttpResponseReadError(response.status, error);
+      }
       if (!isAgentBusyResponse(response.status, responseText) || attempt >= maxRetries) {
         return responseFromText(response.status, responseText);
       }
@@ -348,9 +392,27 @@ export class PsfnModelAdapter implements FrameworkAgentAdapter {
       config: this.runtime.satelliteClaim,
       satelliteClaim,
     }));
+    if (channel.deviceAuthority) {
+      this.assertCurrentDeviceAuthority(channel);
+      if (!this.runtime.deviceAssertionIssuer) {
+        throw new Error("Authenticated Hub device traffic requires the device assertion signing authority");
+      }
+      headers["X-PSFN-Hub-Device-Assertion"] = this.runtime.deviceAssertionIssuer.issue({
+        device: channel.deviceAuthority,
+        sessionId: channel.sessionId,
+      });
+    }
     headers["X-PSFN-Satellite-Claim"] = JSON.stringify(sanitizeHeaderJsonValue(satelliteClaim));
     headers["X-PSFN-Channel-Metadata"] = JSON.stringify(sanitizeHeaderJsonValue(channelMetadata));
     return sanitizeHttpHeaders(headers);
+  }
+
+  private assertCurrentDeviceAuthority(channel: PsfnChannelContext): void {
+    if (!channel.deviceAuthority) return;
+    if (!this.deviceRegistryAuthority) {
+      throw new Error("Authenticated Hub device traffic requires a live device registry authority");
+    }
+    requireCurrentHubDeviceEnrollment(this.deviceRegistryAuthority, channel.deviceAuthority);
   }
 
   private buildMessages(
@@ -742,6 +804,30 @@ function createAttemptScope(external: AbortSignal | undefined, timeoutMs: number
 
 function isAbortError(error: unknown): boolean {
   return error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError");
+}
+
+const RETRYABLE_TRANSPORT_ERROR_CODES = new Set([
+  "ECONNABORTED",
+  "ECONNRESET",
+  "EPIPE",
+  "UND_ERR_SOCKET",
+]);
+
+function isRetryableTransportLoss(error: unknown): boolean {
+  if (error instanceof TypeError) {
+    return /fetch failed|failed to fetch|network|socket|terminated|connection|reset/i.test(error.message);
+  }
+  let current: unknown = error;
+  const seen = new Set<unknown>();
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    const candidate = current as { code?: unknown; cause?: unknown };
+    if (typeof candidate.code === "string" && RETRYABLE_TRANSPORT_ERROR_CODES.has(candidate.code)) {
+      return true;
+    }
+    current = candidate.cause;
+  }
+  return false;
 }
 
 function abortReason(signal?: AbortSignal): Error {

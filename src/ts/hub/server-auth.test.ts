@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, createPrivateKey } from "node:crypto";
 import test from "node:test";
 import WebSocket from "ws";
 
@@ -8,8 +8,27 @@ import type { FrameworkAgentAdapter } from "./framework-agent.js";
 import { RealtimeHubServer } from "./server.js";
 import type { HubConfig } from "../shared/env.js";
 import type { HubToClientMessage } from "../shared/protocol.js";
+import { createHubDeviceAssertionIssuer } from "./device-assertion.js";
+import type { PsfnChannelContext } from "./embodied-session.js";
+import {
+  createHubDeviceRegistryAuthority,
+  type HubDeviceIdentity,
+  type HubDeviceRegistry,
+  type HubDeviceRegistryAuthority,
+} from "./device-registry.js";
 
 const credential = "office-satellite-secret";
+const DEVICE_ASSERTION_ISSUER = createHubDeviceAssertionIssuer({
+  issuer: "psfn-satellite-hub",
+  kid: "hub-test",
+  audience: "https://fleet.example.test",
+  privateKeyPem: createPrivateKey({
+    key: Buffer.from("MC4CAQAwBQYDK2VwBCIEIBxi3MoZ6dMittBNv2g0RvbmOi9PJuzu5IVCwAL2tIbN", "base64"),
+    format: "der",
+    type: "pkcs8",
+  }).export({ format: "pem", type: "pkcs8" }).toString(),
+  ttlSeconds: 30,
+});
 
 test("realtime hub requires registry authentication before accepting messages", async () => {
   const server = new RealtimeHubServer(config(), { agent: agent() });
@@ -55,6 +74,31 @@ test("authenticated hello uses registry-owned identity and bounded capabilities"
   socket.close();
   await new Promise<void>((resolve) => socket.once("close", () => resolve()));
   await server.close();
+});
+
+test("authenticated hello rejects browser-authored place, companion, contact, or human authority", async () => {
+  for (const forbidden of [
+    { placeId: "kitchen" },
+    { companionId: "22222222-2222-4222-8222-222222222222" },
+    { contactId: "owner" },
+    { humanPrincipalId: "browser-user" },
+  ]) {
+    const server = new RealtimeHubServer(config(), { agent: agent() });
+    await server.start();
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const socket = new WebSocket(`ws://127.0.0.1:${address.port}`);
+    const messages: HubToClientMessage[] = [];
+    socket.on("message", raw => messages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+    await new Promise<void>(resolve => socket.once("open", resolve));
+    socket.send(JSON.stringify({
+      type: "hello", deviceId: "office-device", deviceName: "Office Device", credential, ...forbidden,
+    }));
+    await new Promise<void>(resolve => socket.once("close", () => resolve()));
+    assert.equal(messages.some(message => message.type === "hello.ack"), false);
+    assert.equal(messages.at(-1)?.type, "error-event");
+    await server.close();
+  }
 });
 
 test("authenticated user.text forwards an explicit text reply mode", async () => {
@@ -225,24 +269,179 @@ test("authenticated realtime interruption detaches stalled TTS before admitting 
   }
 });
 
-function config(options: { allowInterrupt?: boolean; streamingAudio?: boolean } = {}): HubConfig {
+test("stale authenticated connection fencing cannot detach an overlapping reconnect", async () => {
+  const authority = createHubDeviceRegistryAuthority(() => registry());
+  let observedAuthority: PsfnChannelContext["deviceAuthority"];
+  const captureAgent: FrameworkAgentAdapter = {
+    async *streamReply(input) {
+      observedAuthority = input.channel?.deviceAuthority;
+      yield "current";
+      return "current";
+    },
+    async close() {},
+  };
+  const server = new RealtimeHubServer(config({ deviceRegistry: authority }), { agent: captureAgent });
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const first = new WebSocket(`ws://127.0.0.1:${address.port}`);
+  let second: WebSocket | undefined;
+  const firstMessages: HubToClientMessage[] = [];
+  const secondMessages: HubToClientMessage[] = [];
+  first.on("message", raw => firstMessages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+
+  try {
+    await new Promise<void>(resolve => first.once("open", resolve));
+    sendAuthenticatedHello(first);
+    await waitFor(() => firstMessages.some(message => message.type === "hello.ack"));
+
+    const current = new WebSocket(`ws://127.0.0.1:${address.port}`);
+    second = current;
+    current.on("message", raw => secondMessages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+    await new Promise<void>(resolve => current.once("open", resolve));
+    sendAuthenticatedHello(current);
+    await waitFor(() => secondMessages.some(message => message.type === "hello.ack"));
+
+    first.send(JSON.stringify({ type: "ping", sentAt: "2026-07-15T00:00:00.000Z" }));
+    await new Promise<void>(resolve => first.once("close", () => resolve()));
+    assert.equal(firstMessages.some(message => message.type === "pong"), false);
+
+    second.send(JSON.stringify({ type: "user.text", text: "current authority" }));
+    await waitFor(() => observedAuthority !== undefined);
+    assert.equal(observedAuthority?.deviceId, "office-device");
+    assert.equal(observedAuthority?.enrollmentVersion, 1);
+    await waitFor(() => secondMessages.some(message => (
+      message.type === "message" && message.data.final === true
+    )));
+  } finally {
+    first.close();
+    second?.close();
+    await server.close();
+  }
+});
+
+test("active authenticated session fences revocation and rejects reconnect", async () => {
+  let current = registry();
+  const authority = createHubDeviceRegistryAuthority(() => current);
+  const server = new RealtimeHubServer(config({ deviceRegistry: authority }), { agent: agent() });
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+
+  try {
+    const first = new WebSocket(`ws://127.0.0.1:${address.port}`);
+    const firstMessages: HubToClientMessage[] = [];
+    first.on("message", raw => firstMessages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+    await new Promise<void>(resolve => first.once("open", resolve));
+    sendAuthenticatedHello(first);
+    await waitFor(() => firstMessages.some(message => message.type === "hello.ack"));
+
+    current = registry({ enrollmentStatus: "revoked" });
+    first.send(JSON.stringify({ type: "ping", sentAt: "2026-07-15T00:00:00.000Z" }));
+    await new Promise<void>(resolve => first.once("close", () => resolve()));
+    assert.equal(firstMessages.at(-1)?.type, "error-event");
+    assert.equal(firstMessages.some(message => message.type === "pong"), false);
+
+    const reconnect = new WebSocket(`ws://127.0.0.1:${address.port}`);
+    const reconnectMessages: HubToClientMessage[] = [];
+    reconnect.on("message", raw => reconnectMessages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+    await new Promise<void>(resolve => reconnect.once("open", resolve));
+    sendAuthenticatedHello(reconnect);
+    await new Promise<void>(resolve => reconnect.once("close", () => resolve()));
+    assert.equal(reconnectMessages.some(message => message.type === "hello.ack"), false);
+  } finally {
+    await server.close();
+  }
+});
+
+test("active authenticated session fences a version bump and reconnects at the current version", async () => {
+  let current = registry();
+  const authority = createHubDeviceRegistryAuthority(() => current);
+  let observedVersion: number | undefined;
+  const captureAgent: FrameworkAgentAdapter = {
+    async *streamReply(input) {
+      observedVersion = input.channel?.deviceAuthority?.enrollmentVersion;
+      yield "current";
+      return "current";
+    },
+    async close() {},
+  };
+  const server = new RealtimeHubServer(config({ deviceRegistry: authority }), { agent: captureAgent });
+  await server.start();
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+
+  try {
+    const first = new WebSocket(`ws://127.0.0.1:${address.port}`);
+    const firstMessages: HubToClientMessage[] = [];
+    first.on("message", raw => firstMessages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+    await new Promise<void>(resolve => first.once("open", resolve));
+    sendAuthenticatedHello(first);
+    await waitFor(() => firstMessages.some(message => message.type === "hello.ack"));
+
+    current = registry({ enrollmentVersion: 2 });
+    first.send(JSON.stringify({ type: "ping", sentAt: "2026-07-15T00:00:00.000Z" }));
+    await new Promise<void>(resolve => first.once("close", () => resolve()));
+    assert.equal(firstMessages.at(-1)?.type, "error-event");
+
+    const reconnect = new WebSocket(`ws://127.0.0.1:${address.port}`);
+    const reconnectMessages: HubToClientMessage[] = [];
+    reconnect.on("message", raw => reconnectMessages.push(JSON.parse(raw.toString()) as HubToClientMessage));
+    await new Promise<void>(resolve => reconnect.once("open", resolve));
+    sendAuthenticatedHello(reconnect);
+    await waitFor(() => reconnectMessages.some(message => message.type === "hello.ack"));
+    reconnect.send(JSON.stringify({ type: "user.text", text: "current authority" }));
+    await waitFor(() => observedVersion !== undefined);
+    assert.equal(observedVersion, 2);
+    reconnect.close();
+    await new Promise<void>(resolve => reconnect.once("close", () => resolve()));
+  } finally {
+    await server.close();
+  }
+});
+
+function config(options: {
+  allowInterrupt?: boolean;
+  streamingAudio?: boolean;
+  deviceRegistry?: HubDeviceRegistryAuthority;
+} = {}): HubConfig {
   return {
     textOnlyMode: !options.streamingAudio, bindHost: "127.0.0.1", port: 0,
     deepgramApiKey: null,
     elevenlabsApiKey: options.streamingAudio ? "test-elevenlabs" : null,
     elevenlabsVoiceId: options.streamingAudio ? "test-voice" : null,
     elevenlabsModelId: "eleven_flash_v2_5", artifactsRoot: ".artifacts/test-auth",
-    psfn: { baseUrl: "http://127.0.0.1:1/v1", model: "psfn", channelType: "satellite.endpoint", satelliteClaim: {
+    psfn: { baseUrl: "http://127.0.0.1:1/v1", model: "psfn", channelType: "satellite.endpoint", deviceAssertionIssuer: DEVICE_ASSERTION_ISSUER, satelliteClaim: {
       namespace: "satellite.endpoint", type: "text-only", channelType: "satellite.endpoint",
       capabilityProfile: "text-only", satelliteId: "hub", endpointId: "hub", displayName: "Hub",
       endpointClass: "text", locationMode: "static", telemetry: { mode: "disabled", categories: [] },
     }, voiceReplyDeadlineMs: 8_000, voiceAttemptTimeoutMs: 6_000,
       textReplyDeadlineMs: 80_000, textAttemptTimeoutMs: 75_000 },
     companion: null, homeAssistant: null, control: null,
-    deviceRegistry: { schemaVersion: 1, devices: [{
+    deviceRegistry: options.deviceRegistry ?? createHubDeviceRegistryAuthority(() => registry(undefined, options)),
+    voxta: { enabled: false, satelliteId: "voxta", satelliteName: "Voxta", sessionId: null,
+      chatId: null, assistantId: "assistant", assistantName: "Assistant", userId: "user", userName: "User",
+      appLabel: "Test", clientVersion: "1", publicBaseUrl: null, audioFolder: null, sttStreamEnabled: false,
+      visionCaptureTimeoutMs: 1000, actionAllowlist: [] },
+    sessionTtlSeconds: 60,
+  };
+}
+
+function registry(
+  overrides: Partial<HubDeviceIdentity> = {},
+  options: { allowInterrupt?: boolean; streamingAudio?: boolean } = {},
+): HubDeviceRegistry {
+  return {
+    schemaVersion: 1,
+    devices: [{
       deviceId: "office-device", deviceName: "Office Device", satelliteId: "office",
       satelliteName: "Office", endpointId: "office-device", claimType: "room-satellite",
       credentialSha256: createHash("sha256").update(credential).digest("hex"),
+      enrollmentVersion: 1,
+      enrollmentAssurance: "device_credential",
+      enrollmentStatus: "active",
+      companionId: "11111111-1111-4111-8111-111111111111",
+      placeId: "office",
       homeAssistantEntityIds: [],
       maxCapabilities: {
         input: ["text"],
@@ -250,13 +449,19 @@ function config(options: { allowInterrupt?: boolean; streamingAudio?: boolean } 
         control: options.allowInterrupt ? ["interrupt"] : [],
         safety: ["local_only"],
       },
-    }] },
-    voxta: { enabled: false, satelliteId: "voxta", satelliteName: "Voxta", sessionId: null,
-      chatId: null, assistantId: "assistant", assistantName: "Assistant", userId: "user", userName: "User",
-      appLabel: "Test", clientVersion: "1", publicBaseUrl: null, audioFolder: null, sttStreamEnabled: false,
-      visionCaptureTimeoutMs: 1000, actionAllowlist: [] },
-    sessionTtlSeconds: 60,
+      ...overrides,
+    }],
   };
+}
+
+function sendAuthenticatedHello(socket: WebSocket): void {
+  socket.send(JSON.stringify({
+    type: "hello",
+    deviceId: "office-device",
+    deviceName: "Office Device",
+    credential,
+    capabilities: { input: ["text"], output: ["text"], control: [], safety: [] },
+  }));
 }
 
 function agent(): FrameworkAgentAdapter {

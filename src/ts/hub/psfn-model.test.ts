@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { createPrivateKey } from "node:crypto";
 import https from "node:https";
 import type { AddressInfo } from "node:net";
 import os from "node:os";
@@ -10,6 +11,18 @@ import type { PsfnChannelContext } from "./embodied-session.js";
 import { PsfnModelAdapter, type PsfnReplyTelemetry } from "./psfn-model.js";
 import { normalizeSatelliteClaimConfig } from "./satellite-claim.js";
 import type { PsfnRuntimeConfig } from "../shared/env.js";
+import { createHubDeviceAssertionIssuer } from "./device-assertion.js";
+import {
+  createHubDeviceRegistryAuthority,
+  type HubDeviceIdentity,
+  type HubDeviceRegistry,
+} from "./device-registry.js";
+
+const HUB_ASSERTION_PRIVATE_KEY = createPrivateKey({
+  key: Buffer.from("MC4CAQAwBQYDK2VwBCIEIBxi3MoZ6dMittBNv2g0RvbmOi9PJuzu5IVCwAL2tIbN", "base64"),
+  format: "der",
+  type: "pkcs8",
+}).export({ format: "pem", type: "pkcs8" }).toString();
 
 const TEST_REPLY_BUDGETS = {
   voiceReplyDeadlineMs: 8_000,
@@ -44,6 +57,55 @@ function jsonResponse(body: string): Response {
 }
 
 const EMPTY_COMPLETION = '{"choices":[{"message":{"role":"assistant","content":""}}]}';
+
+const AUTHENTICATED_DEVICE = {
+  deviceId: "office-device",
+  deviceName: "Office Device",
+  satelliteId: "office",
+  satelliteName: "Office",
+  endpointId: "office-device",
+  claimType: "room-satellite",
+  credentialSha256: "0".repeat(64),
+  enrollmentVersion: 7,
+  enrollmentAssurance: "device_credential",
+  enrollmentStatus: "active",
+  companionId: "11111111-1111-4111-8111-111111111111",
+  placeId: "office",
+  maxCapabilities: { input: ["text"], output: ["text"], control: [], safety: ["local_only"] },
+  homeAssistantEntityIds: [],
+} satisfies HubDeviceIdentity;
+
+function authenticatedAssertionRuntime(overrides: Partial<PsfnRuntimeConfig> = {}): PsfnRuntimeConfig {
+  return buildRuntimeConfig({
+    deviceAssertionIssuer: createHubDeviceAssertionIssuer({
+      issuer: "psfn-satellite-hub",
+      kid: "hub-2026-07",
+      audience: "https://fleet.example.test",
+      privateKeyPem: HUB_ASSERTION_PRIVATE_KEY,
+      ttlSeconds: 30,
+    }),
+    ...overrides,
+  });
+}
+
+function authenticatedChannel(): PsfnChannelContext {
+  return {
+    sessionId: "realtime:office-device:session",
+    channelType: "satellite.endpoint",
+    channelId: "satellite.endpoint:office",
+    sourceSatelliteId: "office",
+    sourceSatelliteName: "Office",
+    deviceAuthority: AUTHENTICATED_DEVICE,
+    activeSatellites: [],
+  };
+}
+
+function authenticatedRegistryAuthority() {
+  return createHubDeviceRegistryAuthority(() => ({
+    schemaVersion: 1,
+    devices: [AUTHENTICATED_DEVICE],
+  }));
+}
 
 test("psfn model adapter sends embodied hub channel headers", async () => {
   const originalFetch = globalThis.fetch;
@@ -151,6 +213,340 @@ test("psfn model adapter sends embodied hub channel headers", async () => {
     };
     assert.deepEqual(capturedBody.channel_metadata, expectedChannelMetadata);
     assert.deepEqual(JSON.parse(capturedHeaders["X-PSFN-Channel-Metadata"] || "{}"), expectedChannelMetadata);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("psfn model adapter mints a fresh Hub assertion only from authenticated device authority", async () => {
+  const originalFetch = globalThis.fetch;
+  const capturedHeaders: Array<Record<string, string>> = [];
+  globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+    capturedHeaders.push(init?.headers as Record<string, string>);
+    return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"ok"}}]}');
+  };
+  const runtime = buildRuntimeConfig({
+    deviceAssertionIssuer: createHubDeviceAssertionIssuer({
+      issuer: "psfn-satellite-hub",
+      kid: "hub-2026-07",
+      audience: "https://fleet.example.test",
+      privateKeyPem: HUB_ASSERTION_PRIVATE_KEY,
+      ttlSeconds: 30,
+    }),
+  });
+  const channel: PsfnChannelContext = {
+    sessionId: "realtime:office-device:session",
+    channelType: "satellite.endpoint",
+    channelId: "satellite.endpoint:office",
+    sourceSatelliteId: "office",
+    sourceSatelliteName: "Office",
+    deviceAuthority: {
+      deviceId: "office-device",
+      enrollmentVersion: 7,
+      enrollmentAssurance: "device_credential",
+      enrollmentStatus: "active",
+      companionId: "11111111-1111-4111-8111-111111111111",
+      placeId: "office",
+    },
+    activeSatellites: [],
+  };
+  const adapter = new PsfnModelAdapter(runtime, undefined, authenticatedRegistryAuthority());
+  try {
+    await drainReply(adapter, {
+      inputMode: "text", userText: "first", conversationId: channel.sessionId, channel,
+    });
+    await drainReply(adapter, {
+      inputMode: "text", userText: "second", conversationId: channel.sessionId, channel,
+    });
+    const first = capturedHeaders[0]?.["X-PSFN-Hub-Device-Assertion"];
+    const second = capturedHeaders[1]?.["X-PSFN-Hub-Device-Assertion"];
+    assert.ok(first);
+    assert.ok(second);
+    assert.notEqual(first, second, "each Framework request must get a unique replay id");
+    const claims = JSON.parse(Buffer.from(first.split(".")[1]!, "base64url").toString("utf8"));
+    assert.deepEqual({
+      deviceId: claims.device_id,
+      companionId: claims.companion_id,
+      placeId: claims.place_id,
+    }, {
+      deviceId: "office-device",
+      companionId: "11111111-1111-4111-8111-111111111111",
+      placeId: "office",
+    });
+    assert.equal(JSON.stringify(capturedHeaders).includes("PRIVATE KEY"), false);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("authenticated recovery retries reuse one exact Hub assertion for one logical turn", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalRetryBase = process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS;
+  process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS = "1";
+  const scenarios = ["agent_busy", "empty", "timeout"] as const;
+
+  try {
+    for (const scenario of scenarios) {
+      const assertions: string[] = [];
+      let calls = 0;
+      globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+        calls += 1;
+        const headers = init?.headers as Record<string, string>;
+        assertions.push(headers["X-PSFN-Hub-Device-Assertion"] ?? "");
+        if (calls > 1) {
+          return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"Recovered"}}]}');
+        }
+        if (scenario === "agent_busy") {
+          return new Response(
+            '{"error":{"message":"Agent is already processing another prompt","type":"agent_busy"}}',
+            { status: 503, headers: { "Content-Type": "application/json" } },
+          );
+        }
+        if (scenario === "empty") return jsonResponse(EMPTY_COMPLETION);
+        return await delayedResponse(
+          200,
+          '{"choices":[{"message":{"role":"assistant","content":"Too late"}}]}',
+          init?.signal,
+        );
+      };
+      const adapter = new PsfnModelAdapter(
+        authenticatedAssertionRuntime({
+          textReplyDeadlineMs: 250,
+          textAttemptTimeoutMs: 25,
+        }),
+        undefined,
+        authenticatedRegistryAuthority(),
+      );
+      await drainReply(adapter, {
+        inputMode: "text",
+        userText: `recover ${scenario}`,
+        conversationId: authenticatedChannel().sessionId,
+        channel: authenticatedChannel(),
+      });
+      assert.equal(calls, 2, `${scenario} must make exactly one recovery request`);
+      assert.equal(assertions.length, 2);
+      assert.ok(assertions[0]);
+      assert.equal(assertions[1], assertions[0], `${scenario} must reuse identical assertion bytes`);
+    }
+  } finally {
+    if (originalRetryBase === undefined) delete process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS;
+    else process.env.PSFN_AGENT_BUSY_RETRY_BASE_MS = originalRetryBase;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("authenticated recovery retries byte-identical request bytes after a consumed transport loss", async () => {
+  const originalFetch = globalThis.fetch;
+  const assertions: string[] = [];
+  const bodies: string[] = [];
+  let calls = 0;
+
+  globalThis.fetch = async (_input: string | URL | Request, init?: RequestInit) => {
+    calls += 1;
+    const headers = init?.headers as Record<string, string>;
+    assertions.push(headers["X-PSFN-Hub-Device-Assertion"] ?? "");
+    bodies.push(String(init?.body ?? ""));
+    if (calls === 1) {
+      throw new TypeError("fetch failed after Framework consumed the request");
+    }
+    return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"Recovered"}}]}');
+  };
+
+  const adapter = new PsfnModelAdapter(
+    authenticatedAssertionRuntime({ textReplyDeadlineMs: 250, textAttemptTimeoutMs: 100 }),
+    undefined,
+    authenticatedRegistryAuthority(),
+  );
+
+  try {
+    await drainReply(adapter, {
+      inputMode: "text",
+      userText: "recover the consumed request",
+      conversationId: authenticatedChannel().sessionId,
+      channel: authenticatedChannel(),
+    });
+    assert.equal(calls, 2);
+    assert.ok(assertions[0]);
+    assert.equal(assertions[1], assertions[0], "the replay must reuse exact assertion bytes");
+    assert.equal(bodies[1], bodies[0], "the replay must reuse the exact request body");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("unauthenticated transport loss does not retry without replay protection", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw new TypeError("fetch failed without an authenticated replay assertion");
+    }
+    return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"must not recover"}}]}');
+  };
+  const adapter = new PsfnModelAdapter(
+    buildRuntimeConfig({ textReplyDeadlineMs: 250, textAttemptTimeoutMs: 100 }),
+  );
+
+  try {
+    await assert.rejects(
+      drainReply(adapter, {
+        inputMode: "text",
+        userText: "do not replay me",
+        conversationId: "unauthenticated-transport-loss",
+      }),
+      /without an authenticated replay assertion/,
+    );
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("authenticated recovery retries an ECONNRESET-equivalent transport loss", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      throw Object.assign(new Error("socket closed after write"), { code: "ECONNRESET" });
+    }
+    return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"Recovered"}}]}');
+  };
+
+  const adapter = new PsfnModelAdapter(
+    authenticatedAssertionRuntime({ textReplyDeadlineMs: 250, textAttemptTimeoutMs: 100 }),
+    undefined,
+    authenticatedRegistryAuthority(),
+  );
+
+  try {
+    await drainReply(adapter, {
+      inputMode: "text",
+      userText: "recover the reset request",
+      conversationId: authenticatedChannel().sessionId,
+      channel: authenticatedChannel(),
+    });
+    assert.equal(calls, 2);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("authenticated recovery does not retry deterministic auth denials or arbitrary exceptions", async () => {
+  const originalFetch = globalThis.fetch;
+  const scenarios: Array<{
+    name: string;
+    respond: () => Promise<Response>;
+    expectedError: RegExp;
+  }> = [
+    {
+      name: "auth denial",
+      respond: async () => new Response('{"error":"denied"}', { status: 401 }),
+      expectedError: /failed \(401\).*denied/,
+    },
+    {
+      name: "arbitrary exception",
+      respond: async () => { throw new RangeError("not a transport failure"); },
+      expectedError: /not a transport failure/,
+    },
+  ];
+
+  try {
+    for (const scenario of scenarios) {
+      let calls = 0;
+      globalThis.fetch = async () => {
+        calls += 1;
+        return await scenario.respond();
+      };
+      const adapter = new PsfnModelAdapter(
+        authenticatedAssertionRuntime({ textReplyDeadlineMs: 250, textAttemptTimeoutMs: 100 }),
+        undefined,
+        authenticatedRegistryAuthority(),
+      );
+      await assert.rejects(
+        drainReply(adapter, {
+          inputMode: "text",
+          userText: scenario.name,
+          conversationId: authenticatedChannel().sessionId,
+          channel: authenticatedChannel(),
+        }),
+        scenario.expectedError,
+      );
+      assert.equal(calls, 1, `${scenario.name} must not retry`);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("authenticated recovery does not retry a known 401 whose body read loses transport", async () => {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    if (calls === 1) {
+      return {
+        ok: false,
+        status: 401,
+        text: async () => { throw new TypeError("terminated while reading the denied response"); },
+      } as unknown as Response;
+    }
+    return jsonResponse('{"choices":[{"message":{"role":"assistant","content":"must not recover"}}]}');
+  };
+  const adapter = new PsfnModelAdapter(
+    authenticatedAssertionRuntime({ textReplyDeadlineMs: 250, textAttemptTimeoutMs: 100 }),
+    undefined,
+    authenticatedRegistryAuthority(),
+  );
+
+  try {
+    await assert.rejects(
+      drainReply(adapter, {
+        inputMode: "text",
+        userText: "do not replay a denied request",
+        conversationId: authenticatedChannel().sessionId,
+        channel: authenticatedChannel(),
+      }),
+      /401/,
+    );
+    assert.equal(calls, 1);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("authenticated recovery fences a device whose enrollment version changes between attempts", async () => {
+  const originalFetch = globalThis.fetch;
+  let registry: HubDeviceRegistry = { schemaVersion: 1, devices: [AUTHENTICATED_DEVICE] };
+  const authority = createHubDeviceRegistryAuthority(() => registry);
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls += 1;
+    registry = {
+      schemaVersion: 1,
+      devices: [{ ...AUTHENTICATED_DEVICE, enrollmentVersion: 8 }],
+    };
+    return jsonResponse(EMPTY_COMPLETION);
+  };
+  const adapter = new PsfnModelAdapter(
+    authenticatedAssertionRuntime({ textReplyDeadlineMs: 250, textAttemptTimeoutMs: 100 }),
+    undefined,
+    authority,
+  );
+
+  try {
+    await assert.rejects(
+      drainReply(adapter, {
+        inputMode: "text",
+        userText: "must not retry after version bump",
+        conversationId: authenticatedChannel().sessionId,
+        channel: authenticatedChannel(),
+      }),
+      /enrollment version changed/,
+    );
+    assert.equal(calls, 1, "no request may leave after the authority version changes");
   } finally {
     globalThis.fetch = originalFetch;
   }

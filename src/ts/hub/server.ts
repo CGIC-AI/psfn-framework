@@ -51,6 +51,7 @@ import {
   canUseApprovals,
   DEFAULT_REALTIME_CAPABILITIES,
   EmbodiedSessionRegistry,
+  type SatelliteAttachmentOwnership,
 } from "./embodied-session.js";
 import { SessionStore } from "./session-store.js";
 import {
@@ -61,7 +62,9 @@ import {
 import {
   authenticateHubDevice,
   intersectCapabilities,
-  type HubDeviceRegistry,
+  requireCurrentHubDeviceEnrollment,
+  type HubDeviceIdentity,
+  type HubDeviceRegistryAuthority,
 } from "./device-registry.js";
 import type { PsfnChannelContext } from "./embodied-session.js";
 
@@ -85,6 +88,9 @@ export class RealtimeHubServer {
       companion?: CompanionBridge | null;
     } = {},
   ) {
+    if (config.deviceRegistry && !config.psfn.deviceAssertionIssuer) {
+      throw new Error("Hub device registry requires the device assertion signing authority");
+    }
     this.sessions = new SessionStore(config.sessionTtlSeconds);
     this.embodiedSessions = new EmbodiedSessionRegistry(resolveChannelType(config));
     this.agent = options.agent ?? createFrameworkAgent(config);
@@ -203,7 +209,7 @@ class ElevenLabsVoxtaTts implements VoxtaTtsAdapter {
 }
 
 function createFrameworkAgent(config: HubConfig): FrameworkAgentAdapter {
-  return new PsfnModelAdapter(config.psfn);
+  return new PsfnModelAdapter(config.psfn, undefined, config.deviceRegistry);
 }
 
 function resolveChannelType(config: HubConfig): string {
@@ -228,6 +234,8 @@ class RealtimeConnection {
   private identityTask: Promise<RuntimeIdentity | undefined> | null = null;
   private claimIdentity: PsfnChannelContext["claimIdentity"];
   private authenticated: boolean;
+  private authenticatedDevice: HubDeviceIdentity | null = null;
+  private attachmentOwnership: SatelliteAttachmentOwnership | null = null;
   private unsubscribeCompanion: (() => void) | null = null;
 
   constructor(
@@ -238,7 +246,7 @@ class RealtimeConnection {
     private readonly agent: FrameworkAgentAdapter,
     private readonly tts: StreamingTtsAdapter,
     private readonly companion: CompanionBridge | null = null,
-    private readonly deviceRegistry: HubDeviceRegistry | null = null,
+    private readonly deviceRegistry: HubDeviceRegistryAuthority | null = null,
   ) {
     this.authenticated = !this.deviceRegistry;
     if (!this.deviceRegistry) this.attachSatellite();
@@ -301,10 +309,32 @@ class RealtimeConnection {
       this.socket.close(1008, "duplicate hello");
       return;
     }
+    if (this.deviceRegistry && this.authenticated && message.type !== "hello") {
+      if (!await this.ensureCurrentDeviceEnrollment()) return;
+    }
     switch (message.type) {
       case "hello":
         if (this.deviceRegistry) {
-          const device = authenticateHubDevice(this.deviceRegistry, message.credential);
+          if (hasBrowserAuthoredAuthority(message)) {
+            await this.send({
+              type: "error-event",
+              data: { message: "Browser-authored satellite authority is forbidden" },
+            });
+            this.socket.close(1008, "browser-authored authority forbidden");
+            return;
+          }
+          let device: HubDeviceIdentity | null;
+          try {
+            device = authenticateHubDevice(this.deviceRegistry.readCurrent(), message.credential);
+          } catch (error) {
+            console.error("Hub device registry reload failed:", error);
+            await this.send({
+              type: "error-event",
+              data: { message: "Satellite device authority is unavailable" },
+            });
+            this.socket.close(1011, "device authority unavailable");
+            return;
+          }
           if (!device || message.deviceId !== device.deviceId) {
             await this.send({
               type: "error-event",
@@ -314,6 +344,7 @@ class RealtimeConnection {
             return;
           }
           this.deviceId = device.deviceId;
+          this.authenticatedDevice = device;
           this.deviceName = device.deviceName;
           this.satelliteId = device.satelliteId;
           this.satelliteName = device.satelliteName;
@@ -329,6 +360,7 @@ class RealtimeConnection {
               undefined,
               intersectCapabilities(message.capabilities, device.maxCapabilities),
               this.claimIdentity,
+              device,
             );
           } catch {
             await this.send({
@@ -909,7 +941,11 @@ class RealtimeConnection {
         userText: transcript,
         conversationId: this.sessionId,
         history: this.sessions.getHistory(this.sessionId),
-        channel: this.embodiedSessions.getContext(this.sessionId, this.satelliteId),
+        channel: this.embodiedSessions.getContext(
+          this.sessionId,
+          this.satelliteId,
+          this.requireAttachmentOwnership(),
+        ),
         signal: replyAbortController.signal,
       });
       for await (const delta of stream) {
@@ -1070,11 +1106,44 @@ class RealtimeConnection {
   private async cleanup(): Promise<void> {
     this.unsubscribeCompanion?.();
     this.unsubscribeCompanion = null;
+    if (this.attachmentOwnership) {
+      this.embodiedSessions.detachSatellite(this.sessionId, this.satelliteId, this.attachmentOwnership);
+      this.attachmentOwnership = null;
+    }
     await this.cancelReply("connection_closed");
     this.activeTurn = null;
     if (this.sttSession) {
       await this.sttSession.close();
       this.sttSession = null;
+    }
+  }
+
+  private async ensureCurrentDeviceEnrollment(): Promise<boolean> {
+    if (!this.deviceRegistry || !this.authenticatedDevice) return false;
+    try {
+      this.authenticatedDevice = requireCurrentHubDeviceEnrollment(
+        this.deviceRegistry,
+        this.authenticatedDevice,
+      );
+      this.embodiedSessions.getContext(
+        this.sessionId,
+        this.satelliteId,
+        this.requireAttachmentOwnership(),
+      );
+      return true;
+    } catch (error) {
+      console.warn("Active Hub device enrollment fenced:", error);
+      if (this.attachmentOwnership) {
+        this.embodiedSessions.detachSatellite(this.sessionId, this.satelliteId, this.attachmentOwnership);
+        this.attachmentOwnership = null;
+      }
+      await this.cancelReply("device_enrollment_fenced");
+      await this.send({
+        type: "error-event",
+        data: { message: "Satellite device enrollment changed; reconnect required" },
+      });
+      this.socket.close(1008, "device enrollment changed");
+      return false;
     }
   }
 
@@ -1089,6 +1158,7 @@ class RealtimeConnection {
     channelId?: string,
     capabilities?: SatelliteCapabilities,
     claimIdentity?: PsfnChannelContext["claimIdentity"],
+    deviceAuthority?: PsfnChannelContext["deviceAuthority"],
   ): void {
     const attachment = this.embodiedSessions.attachSatellite({
       sessionId: this.sessionId,
@@ -1097,10 +1167,32 @@ class RealtimeConnection {
       satelliteName: this.satelliteName,
       capabilities,
       ...(claimIdentity ? { claimIdentity } : {}),
+      ...(deviceAuthority ? { deviceAuthority } : {}),
     });
     this.channelId = attachment.session.channelId;
     this.capabilities = attachment.satellite.capabilities;
+    this.attachmentOwnership = attachment.ownership;
   }
+
+  private requireAttachmentOwnership(): SatelliteAttachmentOwnership {
+    if (!this.attachmentOwnership) {
+      throw new Error("Realtime connection has no current embodied-session attachment");
+    }
+    return this.attachmentOwnership;
+  }
+}
+
+function hasBrowserAuthoredAuthority(message: ClientToHubMessage): boolean {
+  if (message.type !== "hello") return false;
+  const untrusted = message as unknown as Record<string, unknown>;
+  return [
+    "placeId",
+    "companionId",
+    "contactId",
+    "humanPrincipalId",
+    "humanSessionId",
+    "channelId",
+  ].some(field => Object.hasOwn(untrusted, field));
 }
 
 function deriveAuthenticatedSessionId(deviceId: string, requested: string | undefined): string {

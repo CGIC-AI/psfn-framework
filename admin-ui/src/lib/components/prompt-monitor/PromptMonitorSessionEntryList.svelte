@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { SessionEntry } from '$lib/types';
+  import PromptMonitorTextBlock from './PromptMonitorTextBlock.svelte';
 
   interface Props {
     title: string;
@@ -45,7 +46,9 @@
             </div>
             <p class="text-xs text-shadow-600">{formatTimestamp(entry.timestamp)}</p>
           </div>
-          <pre class="mt-2 overflow-auto whitespace-pre-wrap font-mono text-sm text-shadow-800">{entry.content}</pre>
+          <div class="mt-2">
+            <PromptMonitorTextBlock title="Entry Content" value={entry.content} maxHeightClass="max-h-64" />
+          </div>
         </div>
       {/each}
     </div>

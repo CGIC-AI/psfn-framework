@@ -6,6 +6,7 @@ import type {
   FleetPortalAuthorizationBatchPort,
   FleetPortalAuthorizedCompanion,
 } from './fleet-portal-authorization.js';
+import { compileFleetSsoGardenPath } from './fleet-sso-route-compiler.js';
 
 const FLEET_PORTAL_PROTOCOL = Object.freeze({
   schemaVersion: 1 as const,
@@ -127,7 +128,7 @@ export class GatewayFleetPortalProjection {
         throw new Error('Fleet portal authorization returned an unknown manifest companion');
       }
       const gardenPath = authority.gardenLinkEligible && manifest.gardenPort !== undefined
-        ? `/companions/${manifest.companionId}/garden`
+        ? compileFleetSsoGardenPath(manifest.companionId)
         : undefined;
       companions.push(Object.freeze({
         companionId: manifest.companionId,

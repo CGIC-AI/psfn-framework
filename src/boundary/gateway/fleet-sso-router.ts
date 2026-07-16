@@ -36,6 +36,11 @@ import { createSpiffeCheckServerIdentity } from '../../shared/net/mtls.js';
 import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import type { FleetSsoGardenUpstream } from '../fleet-auth/fleet-sso-transport.js';
+import {
+  FLEET_PORTAL_API_PATH,
+  GatewayFleetPortalHttpRoutes,
+} from './fleet-portal-http-routes.js';
+import type { GatewayFleetPortalProjection } from './fleet-portal-projection.js';
 
 const SESSION_COOKIE_NAME = '__Host-psfn_session';
 const MAX_PROXY_BODY_BYTES = 1_048_576;
@@ -100,6 +105,7 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
   readonly signer: GatewayRequestCapabilitySigner;
   readonly verifier: RequestCapabilityVerifier;
   readonly replay: RequestCapabilityReplayPort;
+  readonly portalProjection: Pick<GatewayFleetPortalProjection, 'resolve'>;
   readonly upstreams: readonly FleetSsoGardenUpstream[];
   readonly companionUi?: {
     readonly companionId: CompanionId;
@@ -352,6 +358,7 @@ function requestOptions(
 
 export class GatewayFleetSsoRouter {
   private readonly upstreams: ReadonlyMap<string, FleetSsoGardenUpstream>;
+  private readonly portalRoutes: GatewayFleetPortalHttpRoutes;
 
   constructor(private readonly options: GatewayFleetSsoRouterOptions) {
     const canonical = new URL(options.canonicalOrigin);
@@ -361,6 +368,9 @@ export class GatewayFleetSsoRouter {
     if (options.upstreams.length === 0) {
       throw new Error('Fleet SSO router requires at least one Garden upstream');
     }
+    this.portalRoutes = new GatewayFleetPortalHttpRoutes({
+      projection: options.portalProjection,
+    });
     const entries = options.upstreams.map((upstream) => {
       if (upstream.origin.username || upstream.origin.password || upstream.origin.pathname !== '/'
         || upstream.origin.search || upstream.origin.hash) {
@@ -396,10 +406,12 @@ export class GatewayFleetSsoRouter {
     try {
       const { rawPath } = parseOuterPath(rawTarget);
       return rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`
-        || rawPath === FLEET_LOGIN_PATH || rawPath.startsWith(COMPANION_PREFIX)
+        || rawPath === FLEET_LOGIN_PATH || rawPath.startsWith(FLEET_PORTAL_API_PATH)
+        || rawPath.startsWith(COMPANION_PREFIX)
         || rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`);
     } catch {
-      return rawTarget.startsWith(FLEET_PATH) || rawTarget.startsWith(COMPANION_PREFIX)
+      return rawTarget.startsWith(FLEET_PATH) || rawTarget.startsWith(FLEET_PORTAL_API_PATH)
+        || rawTarget.startsWith(COMPANION_PREFIX)
         || rawTarget.startsWith(COMPANION_UI_PREFIX);
     }
   }
@@ -433,10 +445,20 @@ export class GatewayFleetSsoRouter {
           response.end();
           return;
         }
+        if (rawPath.startsWith(FLEET_PORTAL_API_PATH)) {
+          this.portalRoutes.sendUnauthenticated(response);
+          return;
+        }
         throw new FleetSsoRequestError(401, 'Authentication required');
       }
-      if (rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`) {
-        await this.serveFleetShell(request, response, sessionToken, rawQuery);
+      if (this.portalRoutes.matches(rawPath) || rawPath.startsWith(FLEET_PORTAL_API_PATH)) {
+        await this.portalRoutes.handle({
+          request,
+          response,
+          sessionToken,
+          rawPath,
+          rawQuery,
+        });
         return;
       }
       if (rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`)) {
@@ -480,53 +502,6 @@ export class GatewayFleetSsoRouter {
         writeSocketError(socket, error instanceof FleetSsoRequestError ? error.status : 503);
       }
     });
-  }
-
-  private async serveFleetShell(
-    request: IncomingMessage,
-    response: ServerResponse,
-    sessionToken: string,
-    rawQuery: string,
-  ): Promise<void> {
-    if (request.method !== 'GET' || rawQuery) throw new FleetSsoRequestError(404, 'Resource not found');
-    const authorized: string[] = [];
-    for (const companionId of this.upstreams.keys()) {
-      try {
-        await this.options.broker.resolveAuthorizationContext({
-          sessionToken,
-          audience: 'fleet',
-          companionId,
-          action: 'companion.read',
-          correlationId: randomUUID(),
-        });
-        authorized.push(companionId);
-      } catch {
-        // Deliberately collapse unknown, unauthorized, revoked, and stale
-        // states into absence from this principal-scoped shell.
-      }
-    }
-    const links = authorized.map(companionId => (
-      `<li><a href="/companions/${companionId}/garden/">Open companion</a></li>`
-    )).join('');
-    const companionUiLink = this.options.companionUi
-      && authorized.includes(this.options.companionUi.companionId)
-      ? '<li><a href="/companion-ui/">Open Companion UI</a></li>'
-      : '';
-    const body = Buffer.from(
-      `<!doctype html><html><head><meta charset="utf-8"><title>PSFN Fleet</title></head>`
-      + `<body><main><h1>PSFN Fleet</h1><ul>${links}${companionUiLink}</ul></main></body></html>`,
-      'utf8',
-    );
-    response.writeHead(200, {
-      'Cache-Control': 'no-store',
-      'Content-Length': String(body.byteLength),
-      'Content-Security-Policy': "default-src 'none'; style-src 'none'; img-src 'none'",
-      'Content-Type': 'text/html; charset=utf-8',
-      'Referrer-Policy': 'no-referrer',
-      'X-Content-Type-Options': 'nosniff',
-      'X-Frame-Options': 'DENY',
-    });
-    response.end(body);
   }
 
   private async serveCompanionUi(

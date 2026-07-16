@@ -267,6 +267,14 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       replay: {
         consume: async input => ({ outcome: 'consumed', result: input.consumeResult }),
       },
+      portalProjection: {
+        resolve: async () => ({
+          schemaVersion: 1,
+          generatedAt: new Date(NOW_SECONDS * 1_000).toISOString(),
+          session: { state: 'authenticated' },
+          companions: [],
+        }),
+      },
       nowSeconds: () => NOW_SECONDS,
     });
     const edge = createServer((request, response) => { void router.handle(request, response); });

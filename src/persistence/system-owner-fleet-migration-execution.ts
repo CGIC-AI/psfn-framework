@@ -2,6 +2,7 @@ import { basename, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { PER_COMPANION_OWNER_FILES } from '../system/config/settings-contract.js';
 import {
+  assertExactLinkCount,
   assertFilesystemIdentity,
   closePinnedDirectory,
   inspectPinnedRegularFile,
@@ -12,7 +13,10 @@ import {
   type FilesystemIdentity,
   type PinnedDirectory,
 } from './pinned-filesystem.js';
-import { initializeMigrationDirectories } from './system-owner-fleet-migration-bootstrap.js';
+import {
+  initializeMigrationDirectories,
+  type PreflightMigrationDirectories,
+} from './system-owner-fleet-migration-bootstrap.js';
 import {
   assertSourceUnchanged,
   buildTemporaryPath,
@@ -29,10 +33,7 @@ import {
   assertNoUnknownMigrationArtifacts,
   inspectPinnedPlanFiles,
 } from './system-owner-fleet-migration-planning.js';
-import {
-  validatePinnedMigrationOwner,
-  validateReceiptBoundMigrationOwners,
-} from './system-owner-fleet-owner-validation.js';
+import { validatePinnedMigrationOwner } from './system-owner-fleet-owner-validation.js';
 import {
   supersedeUnboundTemporary,
   validateRecordedArtifacts,
@@ -84,10 +85,20 @@ function verifyRetiredFileEvidence(input: {
     }
     const pins = input.destinations.get(destinationPinKey(destination.companionId));
     if (!pins) throw new Error(`Missing pinned destination for ${destination.companionId}`);
-    verifyCompletedDestinationEvidence(file, destination, pins);
+    const evidence = verifyCompletedDestinationEvidence(file, destination, pins);
     const current = validatePinnedMigrationOwner(
       pins.destinationDirectory,
       file.ownerFile,
+      `${file.ownerFile} current receipt-bound owner`,
+    );
+    assertFilesystemIdentity(
+      current,
+      evidence.currentOwner,
+      `${file.ownerFile} current receipt-bound owner`,
+    );
+    assertExactLinkCount(
+      current,
+      evidence.expectedCurrentLinkCount,
       `${file.ownerFile} current receipt-bound owner`,
     );
     observations.set(observationKey(file.ownerFile, destination.companionId), {
@@ -113,11 +124,27 @@ function preflightRecoveryState(input: {
         throw new Error(`Retired migration source reappeared: ${file.sourcePath}`);
       }
       assertSourceUnchanged(file, input.systemDirectory);
+      validatePinnedMigrationOwner(
+        input.systemDirectory,
+        file.ownerFile,
+        `${file.ownerFile} migration source`,
+      );
+      if (pinnedLeafExists(input.quarantineDirectory, basename(file.quarantinePath))) {
+        throw new Error(
+          `Migration source and quarantine both exist for ${file.ownerFile}; refusing recovery`,
+        );
+      }
       for (const destination of file.destinations) {
-        if (destination.status !== 'verified') continue;
         const pins = input.destinations.get(destinationPinKey(destination.companionId));
         if (!pins) throw new Error(`Missing pinned destination for ${destination.companionId}`);
-        verifyDestination(file, destination, pins);
+        if (destination.status === 'verified') {
+          verifyDestination(file, destination, pins);
+        } else if (pinnedLeafExists(pins.destinationDirectory, file.ownerFile)) {
+          if (!destination.temporaryIdentity) {
+            throw new Error(`Unrecorded pending destination appeared: ${destination.destinationPath}`);
+          }
+          verifyDestination(file, destination, pins);
+        }
       }
       continue;
     }
@@ -132,6 +159,60 @@ function preflightRecoveryState(input: {
     }
   }
   return observations;
+}
+
+function requireInitializedPreflightDirectories(
+  directories: PreflightMigrationDirectories,
+): {
+  quarantineDirectory: PinnedDirectory;
+  destinations: Map<string, DestinationPins>;
+} {
+  if (!directories.quarantineDirectory) {
+    throw new Error('Receipt-owned migration quarantine directory is missing');
+  }
+  const destinations = new Map<string, DestinationPins>();
+  for (const [key, pins] of directories.destinationPins) {
+    if (!pins.stagingDirectory) {
+      throw new Error(`Receipt-owned migration staging directory is missing for ${key}`);
+    }
+    destinations.set(key, {
+      destinationDirectory: pins.destinationDirectory,
+      stagingDirectory: pins.stagingDirectory,
+    });
+  }
+  return { quarantineDirectory: directories.quarantineDirectory, destinations };
+}
+
+function preflightBootstrapReceipt(input: {
+  receipt: SystemOwnerFleetMigrationReceipt;
+  systemDirectory: PinnedDirectory;
+  directories: PreflightMigrationDirectories;
+}): Map<string, CurrentOwnerObservation> {
+  for (const file of input.receipt.files) {
+    assertSourceUnchanged(file, input.systemDirectory);
+    validatePinnedMigrationOwner(
+      input.systemDirectory,
+      file.ownerFile,
+      `${file.ownerFile} migration source`,
+    );
+    if (input.directories.quarantineDirectory
+      && pinnedLeafExists(
+        input.directories.quarantineDirectory,
+        basename(file.quarantinePath),
+      )) {
+      throw new Error(`Unrecorded pending quarantine artifact appeared: ${file.quarantinePath}`);
+    }
+    for (const destination of file.destinations) {
+      const pins = input.directories.destinationPins.get(
+        destinationPinKey(destination.companionId),
+      );
+      if (!pins) throw new Error(`Missing pinned destination for ${destination.companionId}`);
+      if (pinnedLeafExists(pins.destinationDirectory, file.ownerFile)) {
+        throw new Error(`Unrecorded pending destination appeared: ${destination.destinationPath}`);
+      }
+    }
+  }
+  return new Map();
 }
 
 function applyCurrentOwnerObservations(input: {
@@ -152,8 +233,7 @@ function applyCurrentOwnerObservations(input: {
       && current.bytes === observation.bytes
       && current.sha256 === observation.sha256
       && current.identity.device === observation.identity.device
-      && current.identity.inode === observation.identity.inode
-      && current.provenance === observation.provenance) {
+      && current.identity.inode === observation.identity.inode) {
       continue;
     }
     destination.currentOwner = { ...observation, observedAt: input.observedAt };
@@ -282,6 +362,7 @@ export function executeSystemOwnerFleetMigration(
             file.ownerFile,
             `${file.ownerFile} migration source`,
           );
+          assertExactLinkCount(source, 1, `${file.ownerFile} migration source`);
           if (source.sha256 !== file.sourceSha256 || source.bytes !== file.sourceBytes) {
             throw new Error(`Source changed for ${file.ownerFile} while migration bootstrap was prepared`);
           }
@@ -338,12 +419,7 @@ export function executeSystemOwnerFleetMigration(
       receipt.updatedAt = now().toISOString();
       writeReceipt(path, receipt, receiptDirectory);
     };
-    validateReceiptBoundMigrationOwners({
-      receipt,
-      fleet,
-      systemDirectory,
-      persistenceDirectory,
-    });
+    assertReceiptContents(receipt, systemDataDir, fleet);
     const initialized = initializeMigrationDirectories({
       receipt,
       receiptDirectory,
@@ -351,6 +427,25 @@ export function executeSystemOwnerFleetMigration(
       fleet,
       plannedDestinationDirectories,
       persistReceipt,
+      preflight: (directories) => {
+        validateRecordedArtifacts({
+          receipt,
+          receiptDirectory,
+          quarantineDirectory: directories.quarantineDirectory,
+          destinationPins: directories.destinationPins,
+        });
+        assertNoUntrackedOwnerFiles(receipt, systemDirectory);
+        if (receipt.status === 'bootstrap') {
+          return preflightBootstrapReceipt({ receipt, systemDirectory, directories });
+        }
+        const pinned = requireInitializedPreflightDirectories(directories);
+        return preflightRecoveryState({
+          receipt,
+          systemDirectory,
+          quarantineDirectory: pinned.quarantineDirectory,
+          destinations: pinned.destinations,
+        });
+      },
       faultInjection: options.faultInjection,
     });
     quarantineDirectory = initialized.quarantineDirectory;
@@ -362,19 +457,7 @@ export function executeSystemOwnerFleetMigration(
       quarantineDirectory,
     });
     assertReceiptContents(receipt, systemDataDir, fleet);
-    validateRecordedArtifacts({
-      receipt,
-      receiptDirectory,
-      quarantineDirectory,
-      destinationPins,
-    });
-    assertNoUntrackedOwnerFiles(receipt, systemDirectory);
-    const recoveryObservations = preflightRecoveryState({
-      receipt,
-      systemDirectory,
-      quarantineDirectory,
-      destinations: destinationPins,
-    });
+    const recoveryObservations = initialized.preflightResult;
 
     if (receipt.status === 'completed') {
       let receiptChanged = false;

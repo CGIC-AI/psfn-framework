@@ -86,6 +86,10 @@ export interface FileReceiptEntry {
   retiredAt?: string;
 }
 
+export type MigrationDirectoryCreationIntent =
+  | { kind: 'quarantine' }
+  | { kind: 'staging'; companionId: string };
+
 export interface SystemOwnerFleetMigrationReceipt {
   schemaVersion: 4;
   migration: 'system-owner-fleet-reroot';
@@ -97,6 +101,7 @@ export interface SystemOwnerFleetMigrationReceipt {
   receiptDirectoryIdentity: FilesystemIdentity;
   quarantineDirectoryPath: string;
   quarantineDirectoryIdentity?: FilesystemIdentity;
+  directoryCreationIntent?: MigrationDirectoryCreationIntent;
   fleet: FleetReceiptEntry[];
   startedAt: string;
   updatedAt: string;
@@ -264,6 +269,17 @@ function isFileEntry(value: unknown): value is FileReceiptEntry {
     && (value.retiredAt === undefined || typeof value.retiredAt === 'string');
 }
 
+function isDirectoryCreationIntent(
+  value: unknown,
+): value is MigrationDirectoryCreationIntent {
+  return isRecord(value)
+    && (value.kind === 'quarantine'
+      ? Object.keys(value).length === 1
+      : value.kind === 'staging'
+        && typeof value.companionId === 'string'
+        && Object.keys(value).length === 2);
+}
+
 export function loadReceipt(path: string, operationPath = path): SystemOwnerFleetMigrationReceipt {
   let descriptor: number | null = null;
   let value: unknown;
@@ -291,6 +307,8 @@ export function loadReceipt(path: string, operationPath = path): SystemOwnerFlee
     || typeof value.quarantineDirectoryPath !== 'string'
     || (value.quarantineDirectoryIdentity !== undefined
       && !isFilesystemIdentity(value.quarantineDirectoryIdentity))
+    || (value.directoryCreationIntent !== undefined
+      && !isDirectoryCreationIntent(value.directoryCreationIntent))
     || !Array.isArray(value.fleet)
     || !value.fleet.every(isFleetEntry)
     || typeof value.startedAt !== 'string'
@@ -393,6 +411,32 @@ export function assertReceiptContents(
     throw new Error('System-owner fleet migration receipt owner files are duplicated or out of registry order');
   }
 
+  const creationIntent = receipt.directoryCreationIntent;
+  if (creationIntent) {
+    if (receipt.status !== 'bootstrap') {
+      throw new Error('Initialized system-owner fleet migration receipt retains a directory creation intent');
+    }
+    if (creationIntent.kind === 'quarantine') {
+      if (receipt.quarantineDirectoryIdentity
+        || receipt.files.some(file => file.destinations.some(
+          destination => destination.stagingDirectoryIdentity,
+        ))) {
+        throw new Error('Quarantine directory creation intent is inconsistent with bound directories');
+      }
+    } else {
+      if (!receipt.quarantineDirectoryIdentity
+        || !fleet.some(entry => entry.companionId === creationIntent.companionId)
+        || receipt.files.some(file => {
+          const destination = file.destinations.find(
+            entry => entry.companionId === creationIntent.companionId,
+          );
+          return !destination || destination.stagingDirectoryIdentity !== undefined;
+        })) {
+        throw new Error('Staging directory creation intent is inconsistent with bound directories');
+      }
+    }
+  }
+
   for (const file of receipt.files) {
     if (resolve(file.sourcePath) !== join(systemDataDir, file.ownerFile)) {
       throw new Error(`System-owner fleet migration receipt has an invalid source path for ${file.ownerFile}`);
@@ -452,7 +496,8 @@ export function assertReceiptContents(
     throw new Error('Bootstrap system-owner fleet migration receipt contains post-bootstrap progress');
   }
   if (receipt.status !== 'bootstrap'
-    && (!receipt.quarantineDirectoryIdentity
+    && (receipt.directoryCreationIntent
+      || !receipt.quarantineDirectoryIdentity
       || receipt.files.some(file => file.destinations.some(
         destination => !destination.stagingDirectoryIdentity,
       )))) {

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   copyFileSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -75,6 +76,20 @@ function validSkillsSource(marker: string): Buffer {
   ) as { disabledSkills: string[] };
   value.disabledSkills = [marker];
   return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function snapshotFiles(paths: readonly string[]): string {
+  return JSON.stringify(paths.map(path => {
+    const stats = statSync(path, { bigint: true });
+    return {
+      path,
+      device: stats.dev.toString(),
+      inode: stats.ino.toString(),
+      links: stats.nlink.toString(),
+      bytes: stats.size.toString(),
+      sha256: sha256(readFileSync(path)),
+    };
+  }));
 }
 
 describe('completed system-owner fleet migration owner evolution', () => {
@@ -209,6 +224,40 @@ describe('completed system-owner fleet migration owner evolution', () => {
     )).toEqual(receiptBytes);
   });
 
+  it.each(['outside', 'quarantine'] as const)(
+    'rejects an evolved owner with an unrecorded %s hard-link alias',
+    (aliasKind) => {
+      const { runtimeRoot, systemDataDir, fleet, digest, file } = migrateSingleOwner();
+      const destination = file.destinations[0];
+      writeJsonAtomic(
+        destination.destinationPath,
+        JSON.parse(validChargeSource(42).toString('utf8')) as unknown,
+      );
+      if (aliasKind === 'outside') {
+        linkSync(destination.destinationPath, join(runtimeRoot, 'outside-owner-alias.json'));
+      } else {
+        unlinkSync(destination.destinationPath);
+        linkSync(file.quarantinePath, destination.destinationPath);
+      }
+      const receiptPath = join(systemDataDir, 'migrations', 'system-owner-fleet-reroot.json');
+      const evidencePaths = [
+        receiptPath,
+        destination.destinationPath,
+        destination.temporaryPath,
+        file.quarantinePath,
+        ...(aliasKind === 'outside' ? [join(runtimeRoot, 'outside-owner-alias.json')] : []),
+      ];
+      const beforeRecovery = snapshotFiles(evidencePaths);
+
+      expect(() => executeSystemOwnerFleetMigration({
+        systemDataDir,
+        fleet,
+        expectedSourceDigests: { 'charge-policy.json': digest },
+      })).toThrow(/unrecorded hard-link alias/);
+      expect(snapshotFiles(evidencePaths)).toBe(beforeRecovery);
+    },
+  );
+
   it.each([
     { ownerFile: 'charge-policy.json', replacement: validChargeSource(41) },
     { ownerFile: 'skills.json', replacement: validSkillsSource('recovered-evolution') },
@@ -340,7 +389,7 @@ describe('completed system-owner fleet migration owner evolution', () => {
       mutate: (file: CompletedReceiptFile, _runtimeRoot: string) => {
         unlinkSync(file.destinations[0].destinationPath);
       },
-      error: /Receipt-bound current owner is missing/,
+      error: /Verified destination disappeared/,
     },
     {
       label: 'a symlinked live destination',
@@ -366,7 +415,7 @@ describe('completed system-owner fleet migration owner evolution', () => {
         const sourcePath = join(runtimeRoot, 'system-data', file.ownerFile);
         writeFileSync(sourcePath, '{"reappeared":true}\n');
       },
-      error: /Invalid charge policy/,
+      error: /Retired migration source reappeared/,
     },
   ])('fails closed on $label after completion', ({ mutate, error }) => {
     const { runtimeRoot, systemDataDir, fleet, digest, file } = migrateSingleOwner();

@@ -1,5 +1,6 @@
 import { basename } from 'node:path';
 import {
+  assertExactLinkCount,
   assertFilesystemIdentity,
   inspectPinnedRegularFile,
   listPinnedDirectoryNames,
@@ -11,6 +12,7 @@ import {
   destinationPinKey,
   type DestinationPins,
 } from './system-owner-fleet-migration-io.js';
+import type { PreflightDestinationPins } from './system-owner-fleet-migration-bootstrap.js';
 import {
   assertMigrationArtifactId,
   type DestinationReceiptEntry,
@@ -21,8 +23,8 @@ import {
 export function validateRecordedArtifacts(input: {
   receipt: SystemOwnerFleetMigrationReceipt;
   receiptDirectory: PinnedDirectory;
-  quarantineDirectory: PinnedDirectory;
-  destinationPins: ReadonlyMap<string, DestinationPins>;
+  quarantineDirectory?: PinnedDirectory;
+  destinationPins: ReadonlyMap<string, PreflightDestinationPins>;
 }): void {
   const quarantineDirectoryLeaf = basename(input.receipt.quarantineDirectoryPath);
   const unknownReceiptArtifacts = listPinnedDirectoryNames(input.receiptDirectory)
@@ -32,14 +34,17 @@ export function validateRecordedArtifacts(input: {
     throw new Error(`Receipt directory contains unknown migration artifacts: ${unknownReceiptArtifacts.join(', ')}`);
   }
   const allowedQuarantineLeaves = new Set(input.receipt.files.map(file => basename(file.quarantinePath)));
-  const unknownQuarantine = listPinnedDirectoryNames(input.quarantineDirectory)
-    .filter(name => !allowedQuarantineLeaves.has(name));
-  if (unknownQuarantine.length > 0) {
-    throw new Error(`Receipt-owned quarantine contains unknown artifacts: ${unknownQuarantine.join(', ')}`);
+  if (input.quarantineDirectory) {
+    const unknownQuarantine = listPinnedDirectoryNames(input.quarantineDirectory)
+      .filter(name => !allowedQuarantineLeaves.has(name));
+    if (unknownQuarantine.length > 0) {
+      throw new Error(`Receipt-owned quarantine contains unknown artifacts: ${unknownQuarantine.join(', ')}`);
+    }
   }
   for (const entry of input.receipt.fleet) {
     const pins = input.destinationPins.get(destinationPinKey(entry.companionId));
     if (!pins) throw new Error(`Missing pinned destination for ${entry.companionId}`);
+    if (!pins.stagingDirectory) continue;
     const destinations = input.receipt.files.map(file => {
       const destination = file.destinations.find(candidate => candidate.companionId === entry.companionId);
       if (!destination) throw new Error(`Receipt is missing destination ${entry.companionId}`);
@@ -70,6 +75,12 @@ export function validateRecordedArtifacts(input: {
             'Current migration temporary',
           );
         }
+        if (!pinnedLeafExists(
+          pins.destinationDirectory,
+          basename(destination.destinationPath),
+        )) {
+          assertExactLinkCount(current, 1, 'Current migration temporary');
+        }
       } else if (destination.temporaryIdentity) {
         throw new Error(`Receipt-owned migration temporary disappeared: ${destination.temporaryPath}`);
       }
@@ -81,6 +92,7 @@ export function validateRecordedArtifacts(input: {
           { fsync: true },
         );
         assertFilesystemIdentity(inspected, superseded.identity, 'Superseded migration temporary');
+        assertExactLinkCount(inspected, 1, 'Superseded migration temporary');
         if (inspected.bytes !== superseded.bytes || inspected.sha256 !== superseded.sha256) {
           throw new Error(`Superseded migration temporary changed: ${superseded.path}`);
         }

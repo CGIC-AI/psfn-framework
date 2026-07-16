@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { PER_COMPANION_OWNER_FILES } from '../system/config/settings-contract.js';
 import {
+  assertExactLinkCount,
   closePinnedDirectory,
   inspectPinnedRegularFile,
   listPinnedDirectoryNames,
@@ -54,6 +55,7 @@ export function inspectPinnedPlanFiles(input: {
       ownerFile,
       `${ownerFile} migration source`,
     );
+    assertExactLinkCount(source, 1, `${ownerFile} migration source`);
     validatePinnedMigrationOwner(
       input.systemDirectory,
       ownerFile,

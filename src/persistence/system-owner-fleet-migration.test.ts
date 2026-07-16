@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -63,6 +64,30 @@ function validChargeSource(interactiveQuota: number): Buffer {
   ) as { runChargeQuotaByLane: { interactive: number } };
   value.runChargeQuotaByLane.interactive = interactiveQuota;
   return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function snapshotTree(root: string): string {
+  const entries: Array<Record<string, string>> = [];
+  const visit = (path: string, relativePath: string): void => {
+    const stats = lstatSync(path, { bigint: true });
+    const type = stats.isDirectory() ? 'directory' : stats.isFile() ? 'file' : 'other';
+    entries.push({
+      path: relativePath || '.',
+      type,
+      device: stats.dev.toString(),
+      inode: stats.ino.toString(),
+      links: stats.nlink.toString(),
+      bytes: stats.size.toString(),
+      ...(stats.isFile() ? { sha256: sha256(readFileSync(path)) } : {}),
+    });
+    if (stats.isDirectory()) {
+      for (const name of readdirSync(path).sort()) {
+        visit(join(path, name), relativePath ? join(relativePath, name) : name);
+      }
+    }
+  };
+  visit(root, '');
+  return JSON.stringify(entries);
 }
 
 describe('system-owner fleet migration', () => {
@@ -194,12 +219,15 @@ describe('system-owner fleet migration', () => {
         mkdirSync(companionRoot);
       }
 
+      const beforeRecovery = snapshotTree(runtimeRoot);
+
       expect(() => executeSystemOwnerFleetMigration({
         systemDataDir,
         fleet,
         expectedSourceDigests: { 'skills.json': sha256(source) },
       })).toThrow(/changed identity/);
 
+      expect(snapshotTree(runtimeRoot)).toBe(beforeRecovery);
       expect(readFileSync(receiptPath)).toEqual(originalReceipt);
       expect(readFileSync(sourcePath)).toEqual(source);
       expect(existsSync(receipt.quarantineDirectoryPath)).toBe(false);
@@ -208,6 +236,71 @@ describe('system-owner fleet migration', () => {
           expect(existsSync(destination.stagingDirectoryPath)).toBe(false);
         }
       }
+    },
+  );
+
+  it('rejects a byte-identical source replacement before any recovery mutation', () => {
+    const { runtimeRoot, systemDataDir, fleet } = fixture();
+    const source = validSkillsSource('same-bytes-new-inode');
+    const sourcePath = join(systemDataDir, 'skills.json');
+    writeFileSync(sourcePath, source);
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': sha256(source) },
+      faultInjection: (event) => {
+        if (event.stage === 'after_bootstrap_receipt') throw new Error('crash:bootstrap-receipt');
+      },
+    })).toThrow('crash:bootstrap-receipt');
+
+    renameSync(sourcePath, join(runtimeRoot, 'original-source'));
+    writeFileSync(sourcePath, source);
+    const beforeRecovery = snapshotTree(runtimeRoot);
+
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': sha256(source) },
+    })).toThrow(/changed identity/);
+    expect(snapshotTree(runtimeRoot)).toBe(beforeRecovery);
+  });
+
+  it.each(['destination', 'staging'] as const)(
+    'rejects an unrecorded pending %s before any recovery mutation',
+    (appearedPath) => {
+      const { runtimeRoot, systemDataDir, fleet } = fixture();
+      const source = validSkillsSource(`appeared-${appearedPath}`);
+      writeFileSync(join(systemDataDir, 'skills.json'), source);
+      expect(() => executeSystemOwnerFleetMigration({
+        systemDataDir,
+        fleet,
+        expectedSourceDigests: { 'skills.json': sha256(source) },
+        faultInjection: (event) => {
+          if (event.stage === 'after_bootstrap_receipt') throw new Error('crash:bootstrap-receipt');
+        },
+      })).toThrow('crash:bootstrap-receipt');
+      const receipt = JSON.parse(readFileSync(
+        join(systemDataDir, 'migrations', 'system-owner-fleet-reroot.json'),
+        'utf8',
+      )) as {
+        files: Array<{
+          destinations: Array<{ destinationPath: string; stagingDirectoryPath: string }>;
+        }>;
+      };
+      const destination = receipt.files[0].destinations[0];
+      if (appearedPath === 'destination') {
+        writeFileSync(destination.destinationPath, source);
+      } else {
+        mkdirSync(destination.stagingDirectoryPath);
+      }
+      const beforeRecovery = snapshotTree(runtimeRoot);
+
+      expect(() => executeSystemOwnerFleetMigration({
+        systemDataDir,
+        fleet,
+        expectedSourceDigests: { 'skills.json': sha256(source) },
+      })).toThrow(/unrecorded pending|creation intent/i);
+      expect(snapshotTree(runtimeRoot)).toBe(beforeRecovery);
     },
   );
 

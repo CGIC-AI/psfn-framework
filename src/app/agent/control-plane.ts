@@ -4,8 +4,13 @@ import {
   type LifecycleNotifier,
   type MessageSender,
 } from '../../system/lifecycle/notifications.js';
-import { resolveRuntimeCommandInvocation, type RuntimeModeContract } from '../../system/lifecycle/runtime-mode.js';
-import { createSystemTool, runRepoLifecycleBuildCommand } from '../../core/tools/lifecycle.js';
+import type { RuntimeModeContract } from '../../system/lifecycle/runtime-mode.js';
+import { runConfiguredLifecycleCommand } from '../../system/lifecycle/command-runner.js';
+import {
+  createSystemTool,
+  registerDeferredLifecycleRuntime,
+  runRepoLifecycleBuildCommand,
+} from '../../core/tools/lifecycle.js';
 import {
   createGatewayDiscordNotifySender,
   createNotifyDispatcher,
@@ -170,6 +175,21 @@ export function buildAgentControlPlane(
       true,
     );
   });
+  const runBuildCommand = async (): Promise<void> => {
+    await runRepoLifecycleBuildCommand({
+      repoRoot: process.cwd(),
+      timeoutMs: 120_000,
+      maxOutputChars: 40_000,
+    });
+  };
+  const runRestartCommand = async (): Promise<void> => {
+    await runConfiguredLifecycleCommand(lifecycleRuntimeContract.restart.command, {
+      cwd: process.cwd(),
+      timeoutMs: 30_000,
+      maxOutputChars: 10_000,
+    });
+  };
+  let unregisterDeferredLifecycle = (): void => undefined;
 
   const stopFn = createRetryableShutdown(async () => {
     const timeoutMs = parsePositiveIntEnv(
@@ -177,6 +197,7 @@ export function buildAgentControlPlane(
       DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
     );
     await runShutdownSequence([
+      { step: 'unregister deferred lifecycle actions', action: () => unregisterDeferredLifecycle() },
       { step: 'unregister deferred companion outreach', action: () => unregisterDeferredCompanionOutreach() },
       { step: 'unregister ICP initiation candidates', action: () => unregisterIcpInitiationCandidates() },
       { step: 'unregister gateway disconnect hook', action: () => unregisterGatewayDisconnect() },
@@ -215,6 +236,17 @@ export function buildAgentControlPlane(
     log.info('Stopped');
   });
 
+  unregisterDeferredLifecycle = registerDeferredLifecycleRuntime({
+    agentLoop,
+    postTurnActions,
+    notifier: lifecycleNotifier,
+    stopFn,
+    restartContract: lifecycleRuntimeContract.restart,
+    prepareRestartCommand,
+    runBuildCommand,
+    runRestartCommand,
+  });
+
   agentLoop.registerTool(createSystemTool(
     config,
     {
@@ -223,25 +255,10 @@ export function buildAgentControlPlane(
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
       restartContract: lifecycleRuntimeContract.restart,
+      executionMode: 'deferred',
       prepareRestartCommand,
-      runBuildCommand: async () => {
-        await runRepoLifecycleBuildCommand({
-          repoRoot: process.cwd(),
-          timeoutMs: 120_000,
-          maxOutputChars: 40_000,
-        });
-      },
-      runRestartCommand: async () => {
-        const invocation = resolveRuntimeCommandInvocation(lifecycleRuntimeContract.restart.command);
-        if (!invocation) {
-          throw new Error('Lifecycle restart command strategy is missing a restart command');
-        }
-        await gateway.shellExec(invocation.command, invocation.args, {
-          cwd: process.cwd(),
-          timeoutMs: 30_000,
-          maxOutputChars: 10_000,
-        });
-      },
+      runBuildCommand,
+      runRestartCommand,
     },
   ));
   agentLoop.registerTool(createNotifyTool(createNotifyDispatcher({

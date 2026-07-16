@@ -19,6 +19,7 @@ import {
   runShutdownStep,
   type ShutdownLogger,
 } from '../../app/startup/support/shutdown-helpers.js';
+import { runConfiguredLifecycleCommand } from '../../system/lifecycle/command-runner.js';
 
 /** Extract text from AgentToolResult content array */
 function resultText(result: { content: Array<{ type: string; text: string }> }): string {
@@ -45,26 +46,7 @@ function createRestartCommandGateway(): {
   const connection: GatewayRpcConnection = Object.assign(emitter, {
     send(data: unknown): boolean {
       if (destroyed) return false;
-      const request = data as { id?: unknown; method?: unknown; params?: unknown };
-      if (request.method === 'shell.exec' && typeof request.id === 'number') {
-        queueMicrotask(() => {
-          emitter.emit('message', {
-            jsonrpc: '2.0',
-            id: request.id,
-            result: {
-              command: 'systemctl',
-              args: ['--user', 'restart', 'psfn.service'],
-              cwd: process.cwd(),
-              exitCode: 0,
-              stdout: '',
-              stderr: '',
-              timedOut: false,
-              truncated: false,
-              durationMs: 1,
-            },
-          });
-        });
-      }
+      void data;
       return true;
     },
     sendHeartbeat: () => !destroyed,
@@ -305,9 +287,13 @@ describe('system action=restart', () => {
     exitSpy.mockRestore();
   });
 
-  it('settles a restart command through a live GatewayClient before destroying its transport', async () => {
+  it('settles a local fixed-argv command before destroying the live gateway transport', async () => {
     const events: string[] = [];
     const gateway = createRestartCommandGateway();
+    let resolveFinalShutdown!: () => void;
+    const finalShutdown = new Promise<void>((resolve) => {
+      resolveFinalShutdown = resolve;
+    });
     const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => undefined as never);
     const origSetImmediate = globalThis.setImmediate;
     globalThis.setImmediate = ((fn: (...args: any[]) => void) => {
@@ -326,16 +312,21 @@ describe('system action=restart', () => {
       }),
       runRestartCommand: vi.fn(async () => {
         events.push('command-started');
-        await gateway.client.shellExec('systemctl', ['--user', 'restart', 'psfn.service']);
+        expect(gateway.isDestroyed()).toBe(false);
+        await runConfiguredLifecycleCommand(
+          `${process.execPath} -e "process.exit(0)"`,
+        );
         events.push('command-settled');
       }),
       stopFn: vi.fn(async () => {
         events.push('final-shutdown');
         gateway.client.destroy();
+        resolveFinalShutdown();
       }),
     });
 
     await tool.execute('call-live-gateway', { action: 'restart', reason: 'production transport' });
+    await finalShutdown;
     await new Promise(resolve => setTimeout(resolve, 0));
 
     expect(events).toEqual([

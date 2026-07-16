@@ -20,6 +20,7 @@ import {
   destinationPinKey,
   publishDestination,
   retireSource,
+  verifyCompletedDestinationEvidence,
   verifyDestination,
   verifyQuarantinedSource,
   type DestinationPins,
@@ -68,7 +69,7 @@ function verifyCompletedReceipt(input: {
       }
       const pins = input.destinations.get(destinationPinKey(destination.companionId));
       if (!pins) throw new Error(`Missing pinned destination for ${destination.companionId}`);
-      verifyDestination(file, destination, pins);
+      verifyCompletedDestinationEvidence(file, destination, pins);
     }
   }
 }

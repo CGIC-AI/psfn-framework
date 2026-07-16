@@ -1,6 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { writeJsonAtomic } from '../../shared/utils/fs.js';
+import {
+  writeFileDurableAtomicSync,
+  type DurableWriteOptions,
+} from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
   DEFAULT_BACKGROUND_MAINTENANCE_CONFIG,
@@ -11,6 +14,7 @@ import {
 export interface SchedulerOwnerMigrationOptions {
   dataDir: string;
   apply?: boolean;
+  faultInjection?: DurableWriteOptions['faultInjection'];
 }
 
 export interface SchedulerOwnerMigrationResult {
@@ -104,8 +108,12 @@ export function migrateLegacySchedulerOwner(
 
   if (options.apply) {
     // Preserve every unrelated raw owner key. Validation above proves the
-    // canonical projection is safe before this atomic publish occurs.
-    writeJsonAtomic(filePath, candidate);
+    // canonical projection is safe before this durable atomic publish occurs.
+    writeFileDurableAtomicSync(
+      filePath,
+      `${JSON.stringify(candidate, null, 2)}\n`,
+      { faultInjection: options.faultInjection },
+    );
   }
   return result;
 }

@@ -222,7 +222,7 @@ describe('system-owner fleet migration', () => {
       systemDataDir,
       fleet,
       expectedSourceDigests: { 'charge-policy.json': digest },
-    })).toThrow(/Destination conflict/);
+    })).toThrow(/Migration-owned temporary conflict/);
   });
 
   it.each([

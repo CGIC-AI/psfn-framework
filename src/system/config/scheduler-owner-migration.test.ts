@@ -11,7 +11,11 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
-import { loadSchedulerConfig, SCHEDULER_FILE_NAME } from './scheduler-config.js';
+import {
+  DEFAULT_BACKGROUND_MAINTENANCE_CONFIG,
+  loadSchedulerConfig,
+  SCHEDULER_FILE_NAME,
+} from './scheduler-config.js';
 import { migrateLegacySchedulerOwner } from './scheduler-owner-migration.js';
 
 const fixturePath = join(
@@ -171,6 +175,43 @@ describe('migrateLegacySchedulerOwner', () => {
     });
     expect(readFileSync(filePath, 'utf8')).toBe(bytesAfterApply);
     expect(statSync(filePath).ino).toBe(inodeAfterApply);
+  });
+
+  it.each([
+    ['after_file_sync', 'legacy'],
+    ['after_publish', 'canonical'],
+    ['after_directory_sync', 'canonical'],
+  ] as const)('publishes through the durable atomic %s boundary', (stage, expectedState) => {
+    const { dataDir, filePath } = prepareOwner();
+    const before = readFileSync(filePath, 'utf8');
+
+    expect(() => migrateLegacySchedulerOwner({
+      dataDir,
+      apply: true,
+      faultInjection: (currentStage) => {
+        if (currentStage === stage) throw new Error(`crash:${stage}`);
+      },
+    })).toThrow(`crash:${stage}`);
+
+    if (expectedState === 'legacy') {
+      expect(readFileSync(filePath, 'utf8')).toBe(before);
+      expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({ status: 'planned' });
+    } else {
+      expect(loadSchedulerConfig(dataDir).backgroundMaintenance.intervalMs).toBe(3_600_000);
+      expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({ status: 'not_needed' });
+    }
+  });
+
+  it('refuses a mixed legacy/canonical owner without changing its bytes', () => {
+    const { dataDir, filePath } = prepareOwner((owner) => {
+      owner.backgroundMaintenance = structuredClone(DEFAULT_BACKGROUND_MAINTENANCE_CONFIG);
+    });
+    const before = readFileSync(filePath, 'utf8');
+
+    expect(() => migrateLegacySchedulerOwner({ dataDir, apply: true })).toThrow(
+      /refuses a mixed shape/,
+    );
+    expect(readFileSync(filePath, 'utf8')).toBe(before);
   });
 
   it('falls back to the legacy social-graph cadence when no salience cadence exists', () => {

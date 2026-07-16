@@ -14,6 +14,7 @@ function buildTurn(): PromptMonitorTurn {
     record: null,
     snapshot: null,
     promptLoom: null,
+    retrievals: [],
     stages: [
       { observedAt: 1_100, turnId: 'turn-1', channelId: 'channel-1', stage: 'trust', elapsedMs: 100, data: { durationMs: 80 } },
       { observedAt: 1_200, turnId: 'turn-1', channelId: 'channel-1', stage: 'memory', elapsedMs: 300, data: { durationMs: 150, memoryChars: 42 } },
@@ -45,16 +46,7 @@ test('timing summary prefers subsystem durationMs and falls back to adjacent ela
 });
 
 test('timing retrievals prefer the live turn field while retaining a persisted-record fallback', () => {
-  const turn = buildTurn() as PromptMonitorTurn & {
-    retrievals: Array<{
-      observedAt: number;
-      turnId: string;
-      channelId: string;
-      count: number;
-      retrievalSource: 'embedding';
-      data: Record<string, unknown>;
-    }>;
-  };
+  const turn = buildTurn();
   turn.retrievals = [{
     observedAt: 1_210,
     turnId: 'turn-1',

@@ -1,4 +1,4 @@
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -38,6 +38,7 @@ const PASSWORDS = {
 const SESSION_PEPPER = 'fleet-context-session-pepper-32-bytes';
 const SESSION_TOKEN = 'S'.repeat(43);
 const SUBJECT_ID = '123456789012345678';
+const OTHER_SUBJECT_ID = '123456789012345679';
 const COMPANION_ID = '7f87ee85-9fcc-4520-91a8-b728293eca76';
 
 let harness: PostgresTestHarness | null = null;
@@ -142,6 +143,7 @@ async function createContextRuntime(options: {
   }
   const migrationUrl = roleUrl(database.databaseUrl, ROLES.migration);
   await migrateFleetAuthSchema({ databaseUrl: migrationUrl, roles: ROLES });
+  const migration = createPostgresPool(migrationUrl, { max: 1, allowExitOnIdle: true });
   const runtime = createPostgresPool(roleUrl(database.databaseUrl, ROLES.runtime), {
     applicationName: 'fleet-auth-context-resolver-test',
     max: 4,
@@ -162,6 +164,11 @@ async function createContextRuntime(options: {
     : baseAuthority;
   const principalId = randomUUID();
   const now = new Date();
+  await migration.query(`
+    INSERT INTO fleet_auth.companion_authority_state
+      (companion_id, lifecycle, version, authority_generation, restore_state)
+    VALUES ($1, 'active', 1, 1, 'live')
+  `, [COMPANION_ID]);
   const seeder = await runtime.connect();
   try {
     await seeder.query('BEGIN');
@@ -216,7 +223,7 @@ async function createContextRuntime(options: {
     databaseName: database.databaseName,
     runtime,
     coordinator,
-    migration: createPostgresPool(migrationUrl, { max: 1, allowExitOnIdle: true }),
+    migration,
     principalId,
     resolver: createPostgresFleetAuthorizationContextResolver({
       pool: runtime,
@@ -323,6 +330,30 @@ afterAll(async () => {
 }, TIMEOUT_MS);
 
 describe('Postgres fleet authorization context snapshot', () => {
+  it('uses the exact provider subject recorded by the session when a principal has multiple live providers', async () => {
+    const { runtime, coordinator, migration, resolver, principalId } = await createContextRuntime();
+    try {
+      await runtime.query(`
+        INSERT INTO fleet_auth.provider_subjects
+          (provider, subject_id, principal_id, state, authority_generation, restore_state)
+        VALUES ('discord', $2, $1, 'active', 1, 'live')
+      `, [principalId, OTHER_SUBJECT_ID]);
+
+      await expect(resolver.resolve({
+        sessionToken: SESSION_TOKEN,
+        audience: 'fleet',
+        companionId: COMPANION_ID,
+        action: 'memory.read.self',
+      })).resolves.toMatchObject({
+        providerSubject: { provider: 'discord', subjectId: SUBJECT_ID },
+      });
+    } finally {
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
   it('resolves one current companion-local authority snapshot and durably audits redacted allow/deny decisions', async () => {
     const { runtime, coordinator, migration, resolver, principalId } = await createContextRuntime();
     try {
@@ -341,6 +372,11 @@ describe('Postgres fleet authorization context snapshot', () => {
         operator: { role: 'member', grantVersion: 1 },
         authorization: { action: 'memory.read.self', decision: 'allow' },
         authority: { authorityGeneration: 1, globalAuthEpoch: 1 },
+        session: {
+          provider: 'discord',
+          providerSubjectId: SUBJECT_ID,
+          grantVersion: 1,
+        },
         provenance: { source: 'gateway_fleet_authorization_snapshot' },
       });
       expect(Object.isFrozen(context)).toBe(true);
@@ -393,6 +429,153 @@ describe('Postgres fleet authorization context snapshot', () => {
       expect(JSON.stringify(audit.rows)).not.toContain(SESSION_TOKEN);
       expect(JSON.stringify(audit.rows)).not.toContain('contact/shared-id');
       expect(JSON.stringify(audit.rows)).not.toContain(SUBJECT_ID);
+    } finally {
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('uses principal-wide invalidation counters independently from row-local versions', async () => {
+    const { runtime, coordinator, migration, resolver } = await createContextRuntime();
+    try {
+      await runtime.query(`
+        UPDATE fleet_auth.principal_contact_bindings SET version = 17
+        WHERE companion_id = $1
+      `, [COMPANION_ID]);
+      await runtime.query(`
+        UPDATE fleet_auth.principal_role_grants SET version = 23
+        WHERE companion_id = $1
+      `, [COMPANION_ID]);
+
+      await expect(resolver.resolve({
+        sessionToken: SESSION_TOKEN,
+        audience: 'fleet',
+        companionId: COMPANION_ID,
+        action: 'memory.read.self',
+      })).resolves.toMatchObject({
+        contact: { bindingVersion: 17 },
+        operator: { grantVersion: 23 },
+        session: { bindingVersion: 1, grantVersion: 1, policyVersion: 1 },
+      });
+
+      await runtime.query(`
+        UPDATE fleet_auth.human_principals SET grant_version = grant_version + 1
+      `);
+      await expect(resolver.resolve({
+        sessionToken: SESSION_TOKEN,
+        audience: 'fleet',
+        companionId: COMPANION_ID,
+        action: 'memory.read.self',
+      })).rejects.toMatchObject({ code: 'grant_version_stale' });
+    } finally {
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('keeps an unaffected session valid across an unrelated central authority advance', async () => {
+    const { runtime, coordinator, migration, resolver } = await createContextRuntime({
+      configureProviderAuthority: authority => ({
+        sessionAuthorityGenerationIsCurrent: () => true,
+        fence: input => authority.fence(input),
+      }),
+    });
+    try {
+      await migration.query(`
+        UPDATE fleet_auth.authority_state
+        SET authority_generation = 2, global_auth_epoch = 2
+        WHERE singleton = TRUE
+      `);
+      await runtime.query(`
+        UPDATE fleet_auth.browser_sessions SET global_auth_epoch = 2
+      `);
+
+      await expect(resolver.resolve({
+        sessionToken: SESSION_TOKEN,
+        audience: 'fleet',
+        companionId: COMPANION_ID,
+        action: 'memory.read.self',
+      })).resolves.toMatchObject({
+        authority: { authorityGeneration: 2, globalAuthEpoch: 2 },
+      });
+    } finally {
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('denies immutable merged-source aliases', async () => {
+    const { runtime, coordinator, migration, resolver, principalId } = await createContextRuntime();
+    const canonicalPrincipalId = randomUUID();
+    try {
+      await migration.query(`
+        INSERT INTO fleet_auth.human_principals
+          (principal_id, status, authn_version, authz_version, authority_generation, restore_state)
+        VALUES ($1, 'active', 1, 1, 1, 'live')
+      `, [canonicalPrincipalId]);
+      await migration.query(`
+        INSERT INTO fleet_auth.principal_merge_aliases
+          (source_principal_id, canonical_principal_id, decision_id,
+           authority_generation, reason_digest, restore_state)
+        VALUES ($1, $2, $3, 1, $4, 'live')
+      `, [principalId, canonicalPrincipalId, randomUUID(), 'a'.repeat(64)]);
+      await expect(resolver.resolve({
+        sessionToken: SESSION_TOKEN,
+        audience: 'fleet',
+        companionId: COMPANION_ID,
+        action: 'memory.read.self',
+      })).rejects.toMatchObject({ code: 'principal_merged' });
+    } finally {
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('denies removed companion authority before consuming binding or grant rows', async () => {
+    const { runtime, coordinator, migration, resolver } = await createContextRuntime();
+    try {
+      await migration.query(`
+        UPDATE fleet_auth.companion_authority_state SET lifecycle = 'removed'
+        WHERE companion_id = $1
+      `, [COMPANION_ID]);
+      await expect(resolver.resolve({
+        sessionToken: SESSION_TOKEN,
+        audience: 'fleet',
+        companionId: COMPANION_ID,
+        action: 'memory.read.self',
+      })).rejects.toMatchObject({ code: 'companion_not_active' });
+    } finally {
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('denies exact resource rows carried behind the non-restored tombstone floor', async () => {
+    const { runtime, coordinator, migration, resolver } = await createContextRuntime();
+    try {
+      const binding = await runtime.query<{ binding_id: string }>(`
+        SELECT binding_id FROM fleet_auth.principal_contact_bindings
+        WHERE companion_id = $1
+      `, [COMPANION_ID]);
+      const bindingId = binding.rows[0]?.binding_id;
+      if (!bindingId) throw new Error('context fixture binding is missing');
+      await migration.query(`
+        INSERT INTO fleet_auth.authority_floor_tombstone_projection
+          (kind, resource_hash, authority_generation)
+        VALUES ('contact_binding', $1, 1)
+      `, [createHash('sha256').update(bindingId).digest('hex')]);
+
+      await expect(resolver.resolve({
+        sessionToken: SESSION_TOKEN,
+        audience: 'fleet',
+        companionId: COMPANION_ID,
+        action: 'memory.read.self',
+      })).rejects.toMatchObject({ code: 'binding_tombstoned' });
     } finally {
       await coordinator.end();
       await migration.end();
@@ -522,6 +705,121 @@ describe('Postgres fleet authorization context snapshot', () => {
     } finally {
       if (!released) await blocker.query('ROLLBACK').catch(() => undefined);
       blocker.release();
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('locks session provenance and lifecycle rows in deterministic authority order', async () => {
+    const {
+      databaseName,
+      runtime,
+      coordinator,
+      migration,
+      resolver,
+      principalId,
+    } = await createContextRuntime();
+    const evidenceId = await seedPositiveEvidence({
+      runtime,
+      principalId,
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const sessionDigest = createHmac('sha256', SESSION_PEPPER)
+      .update(SESSION_TOKEN)
+      .digest('hex');
+    let stage = 0;
+    const assertPrecedes = async (input: {
+      blockerPool: Pool;
+      blockerSql: string;
+      blockerParams: unknown[];
+      probePool: Pool;
+      probeSql: string;
+      probeParams: unknown[];
+    }): Promise<void> => {
+      stage += 1;
+      const blocker = await input.blockerPool.connect();
+      const probe = await input.probePool.connect();
+      let pendingResolution: Promise<unknown> | undefined;
+      try {
+        await blocker.query('BEGIN');
+        await blocker.query(input.blockerSql, input.blockerParams);
+        pendingResolution = resolver.resolve({
+          sessionToken: SESSION_TOKEN,
+          audience: 'fleet',
+          companionId: COMPANION_ID,
+          action: 'memory.read.self',
+          discordEvidence: { evidenceId },
+          correlationId: `correlation-lock-order-${stage}`,
+        });
+        await waitForBlockedContextResolution(databaseName);
+        await probe.query('BEGIN');
+        await expect(probe.query(input.probeSql, input.probeParams)).resolves.toBeDefined();
+        await probe.query('ROLLBACK');
+        await blocker.query('COMMIT');
+        await expect(pendingResolution).resolves.toMatchObject({
+          providerSubject: { subjectId: SUBJECT_ID },
+        });
+      } finally {
+        await probe.query('ROLLBACK').catch(() => undefined);
+        await blocker.query('ROLLBACK').catch(() => undefined);
+        probe.release();
+        blocker.release();
+        await pendingResolution?.catch(() => undefined);
+      }
+    };
+    try {
+      await assertPrecedes({
+        blockerPool: runtime,
+        blockerSql: `SELECT 1 FROM fleet_auth.browser_sessions
+          WHERE token_digest = $1 FOR UPDATE`,
+        blockerParams: [sessionDigest],
+        probePool: runtime,
+        probeSql: `SELECT 1 FROM fleet_auth.provider_subjects
+          WHERE provider = 'discord' AND subject_id = $1 FOR UPDATE NOWAIT`,
+        probeParams: [SUBJECT_ID],
+      });
+      await assertPrecedes({
+        blockerPool: runtime,
+        blockerSql: `SELECT 1 FROM fleet_auth.provider_subjects
+          WHERE provider = 'discord' AND subject_id = $1 FOR UPDATE`,
+        blockerParams: [SUBJECT_ID],
+        probePool: coordinator,
+        probeSql: `SELECT 1 FROM fleet_auth.companion_authority_state
+          WHERE companion_id = $1 FOR UPDATE NOWAIT`,
+        probeParams: [COMPANION_ID],
+      });
+      await assertPrecedes({
+        blockerPool: coordinator,
+        blockerSql: `SELECT 1 FROM fleet_auth.companion_authority_state
+          WHERE companion_id = $1 FOR UPDATE`,
+        blockerParams: [COMPANION_ID],
+        probePool: runtime,
+        probeSql: `SELECT 1 FROM fleet_auth.principal_contact_bindings
+          WHERE companion_id = $1 FOR UPDATE NOWAIT`,
+        probeParams: [COMPANION_ID],
+      });
+      await assertPrecedes({
+        blockerPool: runtime,
+        blockerSql: `SELECT 1 FROM fleet_auth.principal_contact_bindings
+          WHERE companion_id = $1 FOR UPDATE`,
+        blockerParams: [COMPANION_ID],
+        probePool: runtime,
+        probeSql: `SELECT 1 FROM fleet_auth.principal_role_grants
+          WHERE companion_id = $1 FOR UPDATE NOWAIT`,
+        probeParams: [COMPANION_ID],
+      });
+      await assertPrecedes({
+        blockerPool: runtime,
+        blockerSql: `SELECT 1 FROM fleet_auth.principal_role_grants
+          WHERE companion_id = $1 FOR UPDATE`,
+        blockerParams: [COMPANION_ID],
+        probePool: runtime,
+        probeSql: `SELECT 1 FROM fleet_auth.discord_evidence_snapshots
+          WHERE evidence_id = $1 FOR UPDATE NOWAIT`,
+        probeParams: [evidenceId],
+      });
+    } finally {
       await coordinator.end();
       await migration.end();
       await runtime.end();

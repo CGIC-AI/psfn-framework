@@ -184,6 +184,23 @@ if [[ ${#SELECTED[@]} -gt 0 && ${#SELECTED[@]} -lt 3 ]]; then
   echo "==> contract-skew guard (selective rollout requested)"
   for c in agent gateway garden; do
     if [[ ! " ${SELECTED[*]} " == *" $c "* ]]; then
+      # Probe reachability first so an exec/readiness failure (pod restarting or
+      # mid crash-loop) is never conflated with a genuinely pre-hash image. Only
+      # a reachable pod that truly lacks the file is the real pre-hash case this
+      # guard is about; a failed exec must fail closed on its own error, not fall
+      # through to a bogus "pre-hash" verdict that forces a full-stack rebuild.
+      REACHABLE=0
+      for attempt in 1 2 3; do
+        if rkubectl exec "deploy/psfn-${c}" -- true >/dev/null 2>&1; then
+          REACHABLE=1
+          break
+        fi
+        sleep $((attempt * 5))
+      done
+      if [[ $REACHABLE -ne 1 ]]; then
+        echo "FAIL: cannot reach live psfn-${c} to read its contract hash: exec failed after 3 attempts (pod not ready / restarting). Resolve pod readiness and retry — a failed exec is NOT proof of a pre-hash image." >&2
+        exit 1
+      fi
       LIVE_HASH="$(rkubectl exec "deploy/psfn-${c}" -- cat /app/contract-hash.txt 2>/dev/null | tr -d '[:space:]' || true)"
       if [[ -z "$LIVE_HASH" ]]; then
         echo "FAIL: live psfn-${c} carries no contract hash (pre-hash image); first selective ship requires --components all" >&2

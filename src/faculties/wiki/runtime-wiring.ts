@@ -8,7 +8,7 @@ import {
 } from '../../shared/context-budget.js';
 import { createWikiTool } from './tools.js';
 import type { IntakeSinkGate } from '../../core/cogsec/intake/sink-gates.js';
-import { WikiStore } from './store.js';
+import { SharedWorldWikiStore, WikiStore } from './store.js';
 import {
   createWikiPgvectorProjectionStore,
   type WikiPgvectorProjectionStore,
@@ -26,7 +26,10 @@ import type {
 import type { RetrievalQueryEmbeddingProvenance } from '../../shared/retrieval-query-embedding.js';
 import { loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
 import { SharedWorldWikiProposalStore } from './shared-world-caretaker-store.js';
-import { SharedWorldWikiProposalService } from './shared-world-caretaker.js';
+import {
+  SharedWorldWikiCaretakerService,
+  SharedWorldWikiProposalService,
+} from './shared-world-caretaker.js';
 import { PersonalProjectLibrary } from './personal-projects.js';
 import { derivePostgresTenantRole } from '../../persistence/postgres/tenancy.js';
 
@@ -88,6 +91,40 @@ export interface WikiRuntimeWiring {
   sharedProjection: SharedWikiPgvectorProjectionStore | null;
   retrievalService: WikiRetrievalService | null;
   proposalStore: SharedWorldWikiProposalStore | null;
+  sharedWorldCaretaker: SharedWorldWikiCaretakerService | null;
+  close(): Promise<void>;
+}
+
+interface WikiRuntimeClosable {
+  close(): Promise<void>;
+}
+
+export async function closeWikiRuntimeResources(
+  resources: readonly WikiRuntimeClosable[],
+): Promise<void> {
+  const results = await Promise.allSettled(resources.map(resource => resource.close()));
+  const failures: unknown[] = [];
+  for (const result of results) {
+    if (result.status === 'rejected') failures.push(result.reason);
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, 'Failed to close wiki runtime resources');
+  }
+}
+
+async function closeWikiRuntimeAfterFailure(
+  error: unknown,
+  resources: readonly WikiRuntimeClosable[],
+): Promise<never> {
+  try {
+    await closeWikiRuntimeResources(resources);
+  } catch (closeError) {
+    throw new AggregateError(
+      [error, closeError],
+      'Wiki runtime initialization failed and its resources did not close cleanly',
+    );
+  }
+  throw error;
 }
 
 /**
@@ -95,16 +132,47 @@ export interface WikiRuntimeWiring {
  * projection (rebuildable mirror), the wiki tool (with semantic search when the
  * projection is available), and the supplemental chat RAG retrieval service.
  *
- * The projection is best-effort: if it cannot be created the wiki tool still
- * offers plain text search and writes still succeed — semantic search simply
- * fails closed. The store's write-hook mirrors every committed document into
- * the projection out of band, so it tolerates concurrent writers.
+ * In single-companion mode the projection is best-effort: if it cannot be
+ * created the wiki tool still offers plain text search. Multi-companion mode
+ * requires the shared projection and caretaker dependencies because silently
+ * disabling approved shared-world maintenance would strand canonical changes.
+ * The store's write-hook mirrors every committed document into the projection
+ * out of band, so it tolerates concurrent writers.
  */
 export async function wireWikiRuntime(
   target: WikiRuntimeTarget,
   workspacePath: string,
   deps: WikiRuntimeDeps = {},
 ): Promise<WikiRuntimeWiring> {
+  const multiCompanion = deps.getMultiCompanion?.() === true;
+  let knownSiteIds: ReadonlySet<string> | null = null;
+  if (multiCompanion) {
+    if (!deps.databaseUrl?.trim()) {
+      throw new Error('Multi-companion shared-world wiki caretaker requires PostgreSQL');
+    }
+    if (!deps.embedding) {
+      throw new Error('Multi-companion shared-world wiki caretaker requires an embedding provider');
+    }
+    if (!deps.companionId?.trim()) {
+      throw new Error('Multi-companion shared-world wiki caretaker requires a companion identity');
+    }
+    const systemDataDir = deps.systemDataDir?.trim();
+    if (!systemDataDir) {
+      throw new Error('Multi-companion shared-world wiki caretaker requires the system data root');
+    }
+    try {
+      knownSiteIds = new Set(loadPlacesRegistryConfig(systemDataDir).sites.map(site => site.siteId));
+      if (knownSiteIds.size === 0) {
+        throw new Error('places registry contains no sites');
+      }
+    } catch (error) {
+      throw new Error(
+        'Multi-companion shared-world wiki caretaker requires a valid places registry',
+        { cause: error },
+      );
+    }
+  }
+
   let projection: WikiPgvectorProjectionStore | null = null;
   if (deps.databaseUrl && deps.embedding) {
     try {
@@ -126,20 +194,17 @@ export async function wireWikiRuntime(
   // s10f9: shared-world chunk projection for the retrieval union. Multi-
   // companion only — flag-off the shared schema is never created or touched,
   // and retrieval never grants a shared scope anyway (resolveReadableWikiScopes
-  // returns undefined), so the personal path stays byte-identical. Best-effort
-  // like the personal projection: retrieval degrades loudly when it is down;
-  // shared WRITES fail closed separately on the operator surfaces.
+  // returns undefined), so the personal path stays byte-identical.
+  // Multi-companion startup requires this projection because it is also the
+  // approved shared-world caretaker's write-side projection target.
   let sharedProjection: SharedWikiPgvectorProjectionStore | null = null;
-  if (deps.databaseUrl && deps.embedding && deps.getMultiCompanion?.() === true) {
+  if (deps.databaseUrl && deps.embedding && multiCompanion) {
     try {
       sharedProjection = await createSharedWikiPgvectorProjectionStore(deps.databaseUrl, deps.embedding, {
         ...(deps.eventBus ? { eventBus: deps.eventBus } : {}),
       });
     } catch (error) {
-      log.warn('Shared-world wiki projection unavailable; shared-scope retrieval will degrade to personal-only', {
-        error: String(error),
-      });
-      sharedProjection = null;
+      await closeWikiRuntimeAfterFailure(error, projection ? [projection] : []);
     }
   }
 
@@ -200,33 +265,58 @@ export async function wireWikiRuntime(
   }
 
   let proposalStore: SharedWorldWikiProposalStore | null = null;
+  let sharedWorldCaretaker: SharedWorldWikiCaretakerService | null = null;
   let sharedWorldProposal: {
     actorId: string;
     submitter: SharedWorldWikiProposalService;
   } | undefined;
-  if (deps.getMultiCompanion?.() === true
-    && deps.databaseUrl
-    && deps.companionId?.trim()
-    && deps.systemDataDir?.trim()) {
+  if (multiCompanion) {
+    if (!deps.databaseUrl || !deps.companionId || !deps.systemDataDir
+      || !deps.embedding || !sharedProjection || !knownSiteIds) {
+      throw new Error('Multi-companion shared-world wiki caretaker dependencies are incomplete');
+    }
     proposalStore = new SharedWorldWikiProposalStore(deps.databaseUrl);
+    try {
+      await proposalStore.initialize();
+    } catch (error) {
+      await closeWikiRuntimeAfterFailure(
+        error,
+        [proposalStore, ...(projection ? [projection] : []), sharedProjection],
+      );
+    }
     const systemDataDir = deps.systemDataDir;
+    const activeKnownSiteIds = knownSiteIds;
     sharedWorldProposal = {
       actorId: deps.companionId.trim(),
       submitter: new SharedWorldWikiProposalService({
         proposalStore,
-        isKnownSite: siteId => loadPlacesRegistryConfig(systemDataDir).sites.some(site => site.siteId === siteId),
+        isKnownSite: siteId => activeKnownSiteIds.has(siteId),
       }),
     };
+    sharedWorldCaretaker = new SharedWorldWikiCaretakerService({
+      proposalStore,
+      isKnownSite: siteId => activeKnownSiteIds.has(siteId),
+      openSharedStore: siteId => new SharedWorldWikiStore(systemDataDir, siteId),
+      projection: sharedProjection,
+    });
   }
 
   const personalProjects = new PersonalProjectLibrary(store);
-
-  target.registerTool(createWikiTool(store, {
-    ...(semanticSearch ? { semanticSearch } : {}),
-    ...(deps.getIntakeSinkGate ? { getIntakeSinkGate: deps.getIntakeSinkGate } : {}),
-    ...(sharedWorldProposal ? { sharedWorldProposal } : {}),
-    personalProjects,
-  }), 'core');
+  const resources = [
+    ...(projection ? [projection] : []),
+    ...(sharedProjection ? [sharedProjection] : []),
+    ...(proposalStore ? [proposalStore] : []),
+  ];
+  try {
+    target.registerTool(createWikiTool(store, {
+      ...(semanticSearch ? { semanticSearch } : {}),
+      ...(deps.getIntakeSinkGate ? { getIntakeSinkGate: deps.getIntakeSinkGate } : {}),
+      ...(sharedWorldProposal ? { sharedWorldProposal } : {}),
+      personalProjects,
+    }), 'core');
+  } catch (error) {
+    await closeWikiRuntimeAfterFailure(error, resources);
+  }
 
   if (projection) {
     // Startup repair pass: rebuild the projection from the canonical workspace
@@ -256,5 +346,14 @@ export async function wireWikiRuntime(
     })();
   }
 
-  return { store, personalProjects, projection, sharedProjection, retrievalService, proposalStore };
+  return {
+    store,
+    personalProjects,
+    projection,
+    sharedProjection,
+    retrievalService,
+    proposalStore,
+    sharedWorldCaretaker,
+    close: () => closeWikiRuntimeResources(resources),
+  };
 }

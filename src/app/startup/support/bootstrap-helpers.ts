@@ -287,6 +287,9 @@ export function hydrateCanonicalStartupConfig(
     heartbeatIntervalMs: persistedScheduler.heartbeatIntervalMs,
     backgroundMaintenance: {
       intervalMs: persistedScheduler.backgroundMaintenance.intervalMs,
+      sharedWorldWikiCaretaker: {
+        ...persistedScheduler.backgroundMaintenance.sharedWorldWikiCaretaker,
+      },
       ambientPresence: { ...persistedScheduler.backgroundMaintenance.ambientPresence },
       concernGrooming: { ...persistedScheduler.backgroundMaintenance.concernGrooming },
     },

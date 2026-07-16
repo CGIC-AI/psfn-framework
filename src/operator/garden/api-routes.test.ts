@@ -3341,6 +3341,9 @@ describe('AdminServer JSON API routes', () => {
         scheduler: {
           backgroundMaintenance: {
             intervalMs: number;
+            sharedWorldWikiCaretaker: {
+              batchSize: number;
+            };
           };
         };
         capabilities: {
@@ -3364,6 +3367,8 @@ describe('AdminServer JSON API routes', () => {
     expect(settingsPayload.editors.scheduler.backgroundMaintenance.intervalMs).toBe(
       loadSchedulerConfig(tempDir).backgroundMaintenance.intervalMs,
     );
+    expect(settingsPayload.editors.scheduler.backgroundMaintenance.sharedWorldWikiCaretaker)
+      .toEqual({ batchSize: 25 });
     expect(settingsPayload.editors.capabilities.tier).toBe(testConfig.capabilityTier);
 
     const settingsPatchRes = await request(
@@ -4321,6 +4326,9 @@ describe('AdminServer JSON API routes', () => {
       heartbeatIntervalMs: 9000,
       backgroundMaintenance: {
         intervalMs: 12000,
+        sharedWorldWikiCaretaker: {
+          batchSize: 25,
+        },
         ambientPresence: {
           minIdleMinutes: 180,
           minNoteIntervalMinutes: 360,

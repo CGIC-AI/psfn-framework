@@ -44,6 +44,7 @@ import type { ContactStorePort } from '../../core/contacts/contact-store-port.js
 import { wireSkillsRuntime } from '../../faculties/skills/runtime-wiring.js';
 import { wireWikiRuntime } from '../../faculties/wiki/runtime-wiring.js';
 import type { PersonalProjectLibrary } from '../../faculties/wiki/personal-projects.js';
+import type { SharedWorldWikiCaretakerService } from '../../faculties/wiki/shared-world-caretaker.js';
 import { registerFilesystemTools } from '../../boundary/integrations/filesystem/runtime-wiring.js';
 import { GatewayFilesystemOps } from '../../boundary/integrations/filesystem/gateway-ops.js';
 import { registerImageTools } from '../../primitives/images/runtime-wiring.js';
@@ -186,6 +187,8 @@ export interface AgentCoreRuntime {
   fatigueLedger: FatigueBudgetComposition['fatigueLedger'];
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort;
   toolConformanceRunner: ToolConformanceRunner;
+  sharedWorldWikiCaretaker: SharedWorldWikiCaretakerService | null;
+  closeWikiRuntime: () => Promise<void>;
   /** Shared lazy durable model-usage query handle (b0yl.5); null on non-postgres. */
   getModelUsageQuery: () => ModelUsageQueryPort | null;
   icpAutonomyRuntime?: AgentFacingIcpAutonomyRuntime;
@@ -617,6 +620,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     fatigueLedger: fatigueRuntime.fatigueLedger,
     ...(fatigueRegulationReservations ? { fatigueRegulationReservations } : {}),
     toolConformanceRunner,
+    sharedWorldWikiCaretaker: wikiRuntime.sharedWorldCaretaker,
+    closeWikiRuntime: wikiRuntime.close,
     // Durable model-usage query handle (b0yl.5): shared lazy store also used by
     // the self-diagnosis tool, reused by the tool-usage evaluator scheduler lane
     // so the two do not open separate pools.

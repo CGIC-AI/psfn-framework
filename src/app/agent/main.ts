@@ -507,6 +507,7 @@ async function main(): Promise<void> {
     contactStore,
     socialGraphProposalStore,
     socialGraphWatermarkStore,
+    sharedWorldWikiCaretaker: coreRuntime.sharedWorldWikiCaretaker,
   });
   const {
     runtimeEnablement: icpRuntimeEnablement,
@@ -969,6 +970,7 @@ async function main(): Promise<void> {
       }
     },
     closeDatabase: async () => {
+      await coreRuntime.closeWikiRuntime();
       await persistenceRuntime.icpInitiationCandidateStore?.close();
       await persistenceRuntime.backgroundWorkStore.close();
       await persistenceRuntime.introspectionLandmarkStore.close();

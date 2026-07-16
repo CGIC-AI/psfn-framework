@@ -88,4 +88,18 @@ describe('agent core runtime builder', () => {
     expect(coreRuntimeSource).toContain('PostgreSQL core runtime requires an injected contact store');
     expect(coreRuntimeSource).toContain('PostgreSQL core runtime requires injected intention persistence stores');
   });
+
+  it('threads shared-world caretaker maintenance and shutdown handles through agent main', () => {
+    const agentMainSource = readSource('main.ts');
+    const coreRuntimeSource = readSource('core-runtime.ts');
+
+    expect(coreRuntimeSource).toContain(
+      'sharedWorldWikiCaretaker: wikiRuntime.sharedWorldCaretaker',
+    );
+    expect(coreRuntimeSource).toContain('closeWikiRuntime: wikiRuntime.close');
+    expect(agentMainSource).toContain(
+      'sharedWorldWikiCaretaker: coreRuntime.sharedWorldWikiCaretaker',
+    );
+    expect(agentMainSource).toContain('await coreRuntime.closeWikiRuntime()');
+  });
 });

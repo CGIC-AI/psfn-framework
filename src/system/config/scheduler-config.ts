@@ -258,6 +258,10 @@ export interface ArcFormationConfig {
 export interface BackgroundMaintenanceConfig {
   /** Shared poll interval for every operation listed by the bundled task. */
   intervalMs: number;
+  /** Bounded approved shared-world projection drift checks per maintenance tick. */
+  sharedWorldWikiCaretaker: {
+    batchSize: number;
+  };
   /** Ambient-presence eligibility thresholds evaluated on the shared tick. */
   ambientPresence: {
     minIdleMinutes: number;
@@ -271,6 +275,9 @@ export interface BackgroundMaintenanceConfig {
 
 export const DEFAULT_BACKGROUND_MAINTENANCE_CONFIG: BackgroundMaintenanceConfig = {
   intervalMs: 3_600_000,
+  sharedWorldWikiCaretaker: {
+    batchSize: 25,
+  },
   ambientPresence: {
     minIdleMinutes: 180,
     minNoteIntervalMinutes: 360,
@@ -1184,6 +1191,17 @@ function validateBackgroundMaintenanceConfig(
       `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.ambientPresence must be an object`,
     );
   }
+  if (!isRecord(raw.sharedWorldWikiCaretaker)) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.sharedWorldWikiCaretaker must be an object`,
+    );
+  }
+  assertNoUnknownKeys(
+    raw.sharedWorldWikiCaretaker,
+    ['batchSize'],
+    `${sourcePath}.backgroundMaintenance.sharedWorldWikiCaretaker`,
+    { errorPrefix: 'Invalid scheduler config' },
+  );
   if (!isRecord(raw.concernGrooming)) {
     throw new Error(
       `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.concernGrooming must be an object`,
@@ -1191,6 +1209,13 @@ function validateBackgroundMaintenanceConfig(
   }
   return {
     intervalMs: toInterval(raw.intervalMs, 'backgroundMaintenance.intervalMs'),
+    sharedWorldWikiCaretaker: {
+      batchSize: toPositiveInteger(
+        raw.sharedWorldWikiCaretaker.batchSize,
+        'backgroundMaintenance.sharedWorldWikiCaretaker.batchSize',
+        1,
+      ),
+    },
     ambientPresence: {
       minIdleMinutes: toPositiveInteger(
         raw.ambientPresence.minIdleMinutes,

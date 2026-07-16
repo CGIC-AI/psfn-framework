@@ -190,6 +190,11 @@ export class SharedWorldWikiProposalStore implements SharedWorldWikiProposalStor
     void this.ready.catch(() => undefined);
   }
 
+  /** Startup probe used by required multi-companion runtime wiring. */
+  async initialize(): Promise<void> {
+    await this.ready;
+  }
+
   async submit(
     proposal: NormalizedSharedWorldWikiProposal,
     nowMs: number,

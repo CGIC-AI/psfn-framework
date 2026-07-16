@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearDiagnosticLogRingBufferForTests,
@@ -14,6 +17,8 @@ import {
   type SharedWorldWikiCaretakerOptions,
   type SharedWorldWikiProjectionPort,
 } from './shared-world-caretaker.js';
+import type { WikiProjectionSyncOutcome } from './pgvector-projection.js';
+import { SharedWorldWikiStore } from './store.js';
 
 const PROPOSAL_TITLE = 'Studio layout alpha';
 const PROPOSAL_BODY = 'A painted object stands behind the north wall.';
@@ -224,5 +229,125 @@ describe('SharedWorldWikiCaretakerService failure diagnostics', () => {
     const serialized = JSON.stringify(record);
     expect(serialized).not.toContain(PROPOSAL_TITLE);
     expect(serialized).not.toContain(PROPOSAL_BODY);
+  });
+});
+
+function makeProposal(input: {
+  proposalId: string;
+  documentId: string;
+  projectionBodySha256: string;
+}): SharedWorldWikiProposal {
+  return {
+    proposalId: input.proposalId,
+    siteId: 'studio',
+    documentId: input.documentId,
+    actorId: 'companion-a',
+    sourceRef: 'world-observation:turn-1',
+    title: input.documentId,
+    body: 'Approved public content.\n',
+    tags: [],
+    provenanceRefs: ['world-observation:sensor-1'],
+    sensitivity: 'public',
+    contentDigest: `digest-${input.proposalId}`,
+    reviewState: 'approved',
+    reviewedBy: 'operator',
+    reviewedAtMs: 100,
+    applyState: 'applied',
+    appliedAtMs: 101,
+    appliedDocumentVersion: 1,
+    appliedBodySha256: 'applied-sha',
+    projectionBodySha256: input.projectionBodySha256,
+    revision: 3,
+    createdAtMs: 90,
+    updatedAtMs: 101,
+  };
+}
+
+describe('SharedWorldWikiCaretakerService cleanup', () => {
+  it('projects only changed approved content in a deterministic bounded batch', async () => {
+    const systemDataDir = mkdtempSync(join(tmpdir(), 'psfn-caretaker-unit-'));
+    try {
+      const sharedStore = new SharedWorldWikiStore(systemDataDir, 'studio');
+      const unchanged = sharedStore.upsert({
+        id: 'unchanged',
+        title: 'Unchanged',
+        body: 'Approved unchanged body.',
+        provenanceRefs: ['world-observation:unchanged'],
+        sensitivity: 'public',
+        updatedBy: 'operator',
+      });
+      const changed = sharedStore.upsert({
+        id: 'changed',
+        title: 'Changed',
+        body: 'Approved changed body.',
+        provenanceRefs: ['world-observation:changed'],
+        sensitivity: 'public',
+        updatedBy: 'operator',
+      });
+      const candidates = [
+        makeProposal({
+          proposalId: 'proposal-unchanged',
+          documentId: unchanged.id,
+          projectionBodySha256: unchanged.bodySha256,
+        }),
+        makeProposal({
+          proposalId: 'proposal-changed',
+          documentId: changed.id,
+          projectionBodySha256: 'stale-projection-sha',
+        }),
+      ];
+      const cleanupChecks: Array<{
+        proposalId: string;
+        projectionBodySha256?: string | undefined;
+        nowMs: number;
+      }> = [];
+      const listCleanupCandidates = vi.fn(async (limit: number) => candidates.slice(0, limit));
+      const proposalStore: SharedWorldWikiProposalStorePort = {
+        submit: async () => { throw new Error('not used'); },
+        list: async () => [],
+        get: async () => null,
+        review: async () => { throw new Error('not used'); },
+        claimApproved: async () => null,
+        markApplied: async () => { throw new Error('not used'); },
+        markRetryable: async () => undefined,
+        listCleanupCandidates,
+        markCleanupChecked: async input => { cleanupChecks.push(input); },
+        close: async () => undefined,
+      };
+      const syncDocument = vi.fn(async (
+        _siteId: string,
+        document: typeof changed,
+      ): Promise<WikiProjectionSyncOutcome> => ({
+        status: 'ran',
+        documentId: document.id,
+        chunkCount: 1,
+      }));
+      const caretaker = new SharedWorldWikiCaretakerService({
+        proposalStore,
+        isKnownSite: siteId => siteId === 'studio',
+        openSharedStore: () => sharedStore,
+        projection: { syncDocument },
+        now: () => 500,
+      });
+
+      await expect(caretaker.cleanupChangedContent(2)).resolves.toEqual({
+        checked: 2,
+        reprojected: 1,
+        failed: 0,
+      });
+      expect(syncDocument).toHaveBeenCalledOnce();
+      expect(syncDocument).toHaveBeenCalledWith('studio', changed);
+      expect(listCleanupCandidates).toHaveBeenCalledWith(2);
+      expect(cleanupChecks).toEqual([
+        { proposalId: 'proposal-unchanged', nowMs: 500 },
+        {
+          proposalId: 'proposal-changed',
+          projectionBodySha256: changed.bodySha256,
+          nowMs: 500,
+        },
+      ]);
+    } finally {
+      rmSync(systemDataDir, { recursive: true, force: true });
+    }
   });
 });

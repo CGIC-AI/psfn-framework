@@ -571,6 +571,8 @@ describe('AdminSettingsDataService', () => {
 
     const settingsData = await service.getSettingsData();
     expect(settingsData.editors.scheduler.backgroundMaintenance.intervalMs).toBe(180_000);
+    expect(settingsData.editors.scheduler.backgroundMaintenance.sharedWorldWikiCaretaker)
+      .toEqual({ batchSize: 25 });
     expect(settingsData.effectiveBackgroundMaintenance).toEqual({
       ownerFile: 'scheduler.json',
       effectiveIntervalMs: 3_600_000,

@@ -12,6 +12,7 @@ import {
 } from './scheduler-config.js';
 import { assertPositiveInteger } from './validators.js';
 import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
@@ -23,6 +24,9 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
     heartbeatIntervalMs: 90_000,
     backgroundMaintenance: {
       intervalMs: 3_600_000,
+      sharedWorldWikiCaretaker: {
+        batchSize: 25,
+      },
       ambientPresence: {
         minIdleMinutes: 180,
         minNoteIntervalMinutes: 360,
@@ -204,6 +208,9 @@ describe('scheduler config seed defaults', () => {
   it('checks in one hourly background-maintenance cadence with owned ambient thresholds', () => {
     expect(loadSchedulerSeedDefaults().backgroundMaintenance).toEqual({
       intervalMs: 3_600_000,
+      sharedWorldWikiCaretaker: {
+        batchSize: 25,
+      },
       ambientPresence: {
         minIdleMinutes: 180,
         minNoteIntervalMinutes: 360,
@@ -213,6 +220,32 @@ describe('scheduler config seed defaults', () => {
       },
     });
     expect(loadSchedulerSeedDefaults().socialGraphBuilder).not.toHaveProperty('intervalMs');
+  });
+
+  it('requires an owner-file caretaker cleanup batch with no runtime default', () => {
+    withSeedDir((seedDir) => {
+      const missing = buildValidSchedulerConfig();
+      const backgroundMaintenance = missing.backgroundMaintenance;
+      if (!isRecord(backgroundMaintenance)) {
+        throw new Error('test scheduler config backgroundMaintenance is malformed');
+      }
+      delete backgroundMaintenance.sharedWorldWikiCaretaker;
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), missing);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'backgroundMaintenance.sharedWorldWikiCaretaker must be an object',
+      );
+
+      const invalid = buildValidSchedulerConfig();
+      const invalidMaintenance = invalid.backgroundMaintenance;
+      if (!isRecord(invalidMaintenance)) {
+        throw new Error('test scheduler config backgroundMaintenance is malformed');
+      }
+      invalidMaintenance.sharedWorldWikiCaretaker = { batchSize: 0 };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), invalid);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'backgroundMaintenance.sharedWorldWikiCaretaker.batchSize',
+      );
+    });
   });
 
   it('rejects retired per-operation cadence keys instead of silently aliasing them', () => {

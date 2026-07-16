@@ -1261,6 +1261,8 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(config.modelCatalog.chatslot.model).toBe('openai/gpt-4.1-mini');
     expect(config.modelRoster.chat?.contextWindow).toBe(65_536);
     expect(result.schedulerConfig.backgroundMaintenance.intervalMs).toBe(123_000);
+    expect(result.schedulerConfig.backgroundMaintenance.sharedWorldWikiCaretaker)
+      .toEqual({ batchSize: 25 });
     expect(config.maintenanceIntervalMs).toBe(300_000);
     expect(config.providerRegistry?.providers.length).toBeGreaterThan(0);
     expect(config.litellmBaseUrl).toBeUndefined();

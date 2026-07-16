@@ -21,6 +21,7 @@ import {
   type SystemOwnerFleetMigrationFilePlan,
   type SystemOwnerFleetMigrationPlan,
 } from './system-owner-fleet-migration-receipt.js';
+import { validatePinnedMigrationOwner } from './system-owner-fleet-owner-validation.js';
 
 export { executeSystemOwnerFleetMigration } from './system-owner-fleet-migration-execution.js';
 export type {
@@ -70,6 +71,11 @@ export function buildSystemOwnerFleetMigrationPlan(input: {
         ownerFile,
         `${ownerFile} migration source`,
       );
+      validatePinnedMigrationOwner(
+        systemDirectory,
+        ownerFile,
+        `${ownerFile} migration source`,
+      );
       const destinations = fleet.map((entry): SystemOwnerFleetMigrationDestinationPlan => {
         const destinationPath = join(entry.companionDataDir, ownerFile);
         const destinationRelativePath = relativeDirectoryPath(
@@ -83,7 +89,11 @@ export function buildSystemOwnerFleetMigrationPlan(input: {
           `${ownerFile} migration destination directory`,
           { allowMissing: true },
         );
-        if (!destinationDirectory) return { ...entry, destinationPath, status: 'missing' };
+        if (!destinationDirectory) {
+          throw new Error(
+            `Companion ${entry.companionId} migration destination directory is missing: ${entry.companionDataDir}`,
+          );
+        }
         try {
           if (!pinnedLeafExists(destinationDirectory, ownerFile)) {
             return { ...entry, destinationPath, status: 'missing' };

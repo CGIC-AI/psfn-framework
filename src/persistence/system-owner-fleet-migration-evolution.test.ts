@@ -53,6 +53,14 @@ function sha256(value: Buffer | string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
+function validChargeSource(interactiveQuota: number): Buffer {
+  const value = JSON.parse(
+    readFileSync(join(process.cwd(), 'config', 'charge-policy.seed.json'), 'utf8'),
+  ) as { runChargeQuotaByLane: { interactive: number } };
+  value.runChargeQuotaByLane.interactive = interactiveQuota;
+  return Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+}
+
 describe('completed system-owner fleet migration owner evolution', () => {
   const roots: string[] = [];
 
@@ -66,12 +74,15 @@ describe('completed system-owner fleet migration owner evolution', () => {
     const systemDataDir = join(runtimeRoot, 'system-data');
     mkdirSync(systemDataDir);
     const fleet = resolveCompanionFleetPaths(FLEET, runtimeRoot);
+    for (const companion of fleet.companions) {
+      mkdirSync(companion.companionDataDir, { recursive: true });
+    }
     return { runtimeRoot, systemDataDir, fleet };
   }
 
   function migrateSingleOwner(ownerFile = 'charge-policy.json') {
     const context = fixture();
-    const source = Buffer.from('{"quota":"individual","revision":1}\n');
+    const source = validChargeSource(25);
     const digest = sha256(source);
     writeFileSync(join(context.systemDataDir, ownerFile), source);
     const result = executeSystemOwnerFleetMigration({
@@ -142,7 +153,7 @@ describe('completed system-owner fleet migration owner evolution', () => {
   it('accepts an atomic live-owner replacement while retaining exact migration evidence', () => {
     const { systemDataDir, fleet, source, digest, file } = migrateSingleOwner();
     const destination = file.destinations[0];
-    const replacement = { quota: 'individual', revision: 2 };
+    const replacement = JSON.parse(validChargeSource(26).toString('utf8')) as unknown;
 
     writeJsonAtomic(destination.destinationPath, replacement);
 
@@ -159,7 +170,7 @@ describe('completed system-owner fleet migration owner evolution', () => {
   it('denies in-place mutation of hard-linked retained migration evidence', () => {
     const { systemDataDir, fleet, digest, file } = migrateSingleOwner();
     const destination = file.destinations[0];
-    writeFileSync(destination.destinationPath, '{"quota":"tampered"}\n');
+    writeFileSync(destination.destinationPath, validChargeSource(27));
 
     expect(() => executeSystemOwnerFleetMigration({
       systemDataDir,
@@ -168,13 +179,56 @@ describe('completed system-owner fleet migration owner evolution', () => {
     })).toThrow(/Migration-owned temporary conflict/);
   });
 
+  it('fails closed on a malformed atomic owner after completed receipt reuse', () => {
+    const { systemDataDir, fleet, digest, file } = migrateSingleOwner();
+    const destination = file.destinations[0];
+    writeJsonAtomic(destination.destinationPath, { schemaVersion: 0 });
+
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'charge-policy.json': digest },
+    })).toThrow(/Invalid charge policy/);
+  });
+
+  it('fails closed on a malformed current owner while recovering after source quarantine', () => {
+    const context = fixture();
+    const source = validChargeSource(28);
+    const digest = sha256(source);
+    writeFileSync(join(context.systemDataDir, 'charge-policy.json'), source);
+    let interrupted = false;
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir: context.systemDataDir,
+      fleet: context.fleet,
+      expectedSourceDigests: { 'charge-policy.json': digest },
+      faultInjection: (event) => {
+        if (!interrupted && event.stage === 'after_source_quarantine') {
+          interrupted = true;
+          throw new Error('crash:after-source-quarantine');
+        }
+      },
+    })).toThrow('crash:after-source-quarantine');
+    expect(interrupted).toBe(true);
+
+    const destinationPath = join(
+      context.fleet.companions[0].companionDataDir,
+      'charge-policy.json',
+    );
+    writeJsonAtomic(destinationPath, { schemaVersion: 0 });
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir: context.systemDataDir,
+      fleet: context.fleet,
+      expectedSourceDigests: { 'charge-policy.json': digest },
+    })).toThrow(/Invalid charge policy/);
+  });
+
   it.each([
     {
       label: 'a missing live destination',
       mutate: (file: CompletedReceiptFile, _runtimeRoot: string) => {
         unlinkSync(file.destinations[0].destinationPath);
       },
-      error: /Verified destination disappeared/,
+      error: /Receipt-bound current owner is missing/,
     },
     {
       label: 'a symlinked live destination',
@@ -200,7 +254,7 @@ describe('completed system-owner fleet migration owner evolution', () => {
         const sourcePath = join(runtimeRoot, 'system-data', file.ownerFile);
         writeFileSync(sourcePath, '{"reappeared":true}\n');
       },
-      error: /live or unretired source/,
+      error: /Invalid charge policy/,
     },
   ])('fails closed on $label after completion', ({ mutate, error }) => {
     const { runtimeRoot, systemDataDir, fleet, digest, file } = migrateSingleOwner();

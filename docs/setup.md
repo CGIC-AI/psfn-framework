@@ -218,6 +218,11 @@ one companion by hand and do not point `migrate:persistence-layout` at
 `SYSTEM_DATA_DIR`. Stop the fleet and use the digest-approved,
 receipt-bearing `npm run migrate:system-owner-fleet` workflow documented in
 [`docs/operations.md`](./operations.md#existing-split-fleets-with-shared-per-companion-owners).
+Before apply, mount every exact manifest root and run
+`npm run snapshot:system-owner-fleet -- --output <backup-family-dir>`; a missing
+root is a hard preflight failure and is never created by migration. Rehearse an
+old-release rollback only into fresh empty PVC roots with
+`npm run restore:system-owner-fleet-snapshot -- --manifest <family-manifest> --restore-runtime-root <fresh-root>`.
 It enumerates every configured companion and retires the shared source only
 after every exact-byte destination verifies, by moving the approved inode into
 the durable receipt-owned quarantine. Its bootstrap receipt owns unpredictable
@@ -225,6 +230,14 @@ quarantine, staging, and copy identifiers before those objects are created, and
 retries preserve rather than delete unbound or replaced crash remnants. Do not
 remove the quarantine or retained staging artifacts manually; they are part of
 deterministic receipt verification and retry.
+
+For a multi-release Helm upgrade, run that command once from the repo-owned
+maintenance environment with all manifest PVC roots mounted, then require
+`npm run preflight:startup-owner-files` to pass before upgrading any individual
+release. Keep `bootstrap.seedOwnerFiles=false` throughout the upgrade. Rolling
+back to a pre-routing release requires restoring the verified pre-migration
+backup of system-data and every companion-data root together, never copying a
+quarantined shared owner into selected companions.
 
 ### Multi-companion workspaces
 

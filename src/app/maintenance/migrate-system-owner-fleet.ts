@@ -1,18 +1,13 @@
 #!/usr/bin/env tsx
 
 import '../../shared/utils/load-dotenv.js';
-import {
-  isMultiCompanionEnabled,
-  resolveCompanionFleet,
-  resolveCompanionFleetPaths,
-} from '../../system/config/companions-config.js';
 import { PER_COMPANION_OWNER_FILES } from '../../system/config/settings-contract.js';
-import { resolveRuntimePathLayout } from '../../persistence/layout.js';
 import {
   buildSystemOwnerFleetMigrationPlan,
   executeSystemOwnerFleetMigration,
 } from '../../persistence/system-owner-fleet-migration.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { resolveSystemOwnerFleetContext } from './system-owner-fleet-context.js';
 
 interface CliOptions {
   apply: boolean;
@@ -76,47 +71,13 @@ function parseArgs(argv: string[]): CliOptions {
   return options;
 }
 
-function resolveMigrationContext(env: NodeJS.ProcessEnv) {
-  const layout = resolveRuntimePathLayout({
-    mode: env.PSFN_RUNTIME_LAYOUT_MODE,
-    nodeEnv: env.NODE_ENV,
-    runtimeRootDir: env.PSFN_RUNTIME_ROOT,
-    systemDataDir: env.SYSTEM_DATA_DIR,
-    companionDataDir: env.COMPANION_DATA_DIR,
-    legacyDataDir: env.DATA_DIR,
-    workspacePath: env.WORKSPACE_PATH,
-    logsDir: env.PSFN_LOGS_DIR,
-    tempDir: env.PSFN_TEMP_DIR,
-    backupsDir: env.BACKUP_ROOT_DIR,
-  });
-  if (layout.systemDataDir === layout.companionDataDir) {
-    throw new Error('System-owner fleet migration requires production split roots');
-  }
-  const rawFleet = resolveCompanionFleet({
-    dataDir: layout.systemDataDir,
-    multiCompanion: isMultiCompanionEnabled(env),
-    seedDir: env.CONFIG_DIR?.trim() || undefined,
-  });
-  if (!rawFleet) {
-    throw new Error('System-owner fleet migration requires an enabled companions.json fleet');
-  }
-  const fleet = resolveCompanionFleetPaths(rawFleet, layout.runtimeRootDir, [
-    { label: 'systemDataDir', path: layout.systemDataDir },
-    { label: 'companionDataDir', path: layout.companionDataDir },
-    { label: 'logsDir', path: layout.logsDir },
-    { label: 'tempDir', path: layout.tempDir },
-    { label: 'backupsDir', path: layout.backupsDir },
-  ]);
-  return { layout, fleet };
-}
-
 function main(): void {
   const options = parseArgs(process.argv.slice(2));
   if (options.showHelp) {
     printUsage();
     return;
   }
-  const { layout, fleet } = resolveMigrationContext(process.env);
+  const { layout, fleet } = resolveSystemOwnerFleetContext(process.env);
   if (options.apply) {
     const result = executeSystemOwnerFleetMigration({
       systemDataDir: layout.systemDataDir,

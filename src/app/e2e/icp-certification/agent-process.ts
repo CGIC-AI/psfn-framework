@@ -58,7 +58,7 @@ import { createPersonaPreambleService } from '../../../core/identity/persona-pre
 
 type AgentProcessCommand = {
   id: number;
-  type: 'ping' | 'shutdown' | 'snapshot';
+  type: 'background_work_snapshot' | 'ping' | 'shutdown' | 'snapshot';
 } | {
   id: number;
   type: 'publish_availability';
@@ -88,6 +88,11 @@ type AgentProcessCommand = {
   id: number;
   type: 'channel_snapshot' | 'served_channel_snapshot'
     | 'turn_records_snapshot' | 'force_compaction' | 'append_compaction_marker';
+} | {
+  channelId: string;
+  id: number;
+  rootInitiationId: string;
+  type: 'has_completed_fatigue_suppression';
 };
 
 interface AgentProcessReply {
@@ -451,6 +456,12 @@ async function main(): Promise<void> {
               runtimeClass: agent.constructor.name,
             },
           });
+          return;
+        }
+        if (raw.type === 'background_work_snapshot') {
+          await agent.waitForIdle();
+          const pending = await persistence.backgroundWorkStore.countPending();
+          reply({ id: raw.id, ok: true, result: { pending } });
           return;
         }
         if (raw.type === 'publish_availability') {
@@ -835,6 +846,18 @@ async function main(): Promise<void> {
               })),
             },
           });
+          return;
+        }
+        if (raw.type === 'has_completed_fatigue_suppression') {
+          await agent.waitForIdle();
+          const completed = sessionRuntime.sessionStore
+            .getRecentTurnRecords(raw.channelId, 100)
+            .some(record => (
+              record.status === 'completed'
+              && record.icpCorrelation?.rootInitiationId === raw.rootInitiationId
+              && record.icpCorrelation.fatigueDecision === 'suppress'
+            ));
+          reply({ id: raw.id, ok: true, result: { completed } });
           return;
         }
         if (raw.type === 'force_compaction') {

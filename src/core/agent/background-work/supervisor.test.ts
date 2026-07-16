@@ -535,6 +535,11 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
       ['queued', 'deferred', 'retry_wait'].includes(job.state) && job.availableAtMs <= input.nowMs
     )).length;
   }
+  async countPending(): Promise<number> {
+    return [...this.jobs.values()].filter(job => (
+      ['queued', 'deferred', 'retry_wait', 'running'].includes(job.state)
+    )).length;
+  }
   async get(jobId: string): Promise<StoredBackgroundWorkJob | null> {
     const job = this.jobs.get(jobId);
     return job ? { ...job } : null;

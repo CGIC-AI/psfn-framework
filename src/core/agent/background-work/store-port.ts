@@ -179,6 +179,7 @@ export interface BackgroundWorkStorePort {
   recoverExpired(input: { nowMs: number }): Promise<number>;
   purgeTerminal(input: { completedBeforeMs: number; limit: number }): Promise<number>;
   countRunnable(input: { nowMs: number }): Promise<number>;
+  countPending(): Promise<number>;
   get(jobId: string): Promise<StoredBackgroundWorkJob | null>;
   close(): Promise<void>;
 }

@@ -169,19 +169,31 @@ async function waitForModelRequestQuiescence(
   harness: IcpCertificationProcessHarness,
 ): Promise<number> {
   const deadline = Date.now() + 20_000;
-  let previousCount = harness.modelRequestCount;
-  let unchangedSinceMs = Date.now();
   while (Date.now() < deadline) {
+    const pending = await Promise.all(
+      harness.agents.map(agent => agent.pendingBackgroundWorkCount()),
+    );
+    if (pending.every(count => count === 0)) return harness.modelRequestCount;
     await new Promise(resolveWait => setTimeout(resolveWait, 25));
-    const currentCount = harness.modelRequestCount;
-    if (currentCount !== previousCount) {
-      previousCount = currentCount;
-      unchangedSinceMs = Date.now();
-      continue;
-    }
-    if (Date.now() - unchangedSinceMs >= 750) return currentCount;
   }
-  throw new Error(`Model fixture did not quiesce after ${harness.modelRequestCount} requests`);
+  throw new Error('Timed out waiting for durable background work to settle');
+}
+
+async function waitForCompletedFatigueSuppression(
+  harness: IcpCertificationProcessHarness,
+  rootInitiationId: string,
+): Promise<IcpCertificationProcessHarness['agents'][number]> {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    for (const agent of harness.agents) {
+      if (await agent.hasCompletedFatigueSuppression(
+        CERTIFICATION_DM_CHANNEL,
+        rootInitiationId,
+      )) return agent;
+    }
+    await new Promise(resolveWait => setTimeout(resolveWait, 25));
+  }
+  throw new Error(`Timed out waiting for fatigue suppression for ${rootInitiationId}`);
 }
 
 describe('ICP certification real process harness', () => {
@@ -725,32 +737,8 @@ describe('ICP certification real process harness', () => {
       status: 'consumed',
       deliveryDisposition: 'delivered',
     });
-    const providerRequestsAfterConversation = await waitForModelRequestQuiescence(processes);
     const rootInitiationId = String(sent.rootInitiationId);
-    const reservationPool = createPostgresPool(databaseUrl, {
-      applicationName: 'psfn-icp-certification-fatigue-exhaustion-assertions',
-      max: 1,
-    });
-    const exhaustedCompanion = await (async () => {
-      try {
-        return await reservationPool.query<{ local_companion_id: string }>(`
-          SELECT local_companion_id::text
-          FROM shared.icp_fatigue_turn_reservations
-          WHERE outcome IN ('delivered', 'no_reply')
-            AND root_initiation_id = $1
-          GROUP BY local_companion_id
-          HAVING COUNT(*) FILTER (WHERE decision = 'charged') > 0
-            AND COUNT(*) FILTER (WHERE decision = 'overcharge') > 0
-          ORDER BY local_companion_id
-          LIMIT 1
-        `, [rootInitiationId]);
-      } finally {
-        await reservationPool.end();
-      }
-    })();
-    const exhaustedCompanionId = exhaustedCompanion.rows.at(0)?.local_companion_id;
-    expect(exhaustedCompanionId).toBeTruthy();
-    const exhaustedAgent = exhaustedCompanionId === CERTIFICATION_COMPANION_A ? agentA : agentB;
+    const exhaustedAgent = await waitForCompletedFatigueSuppression(processes, rootInitiationId);
     const exhaustedTurns = await exhaustedAgent.turnRecordsSnapshot(
       CERTIFICATION_DM_CHANNEL,
     ) as unknown as TurnRecordsSnapshot;
@@ -760,6 +748,7 @@ describe('ICP certification real process harness', () => {
     ));
     expect(suppressedTurns, JSON.stringify(exhaustedTurns.records)).not.toHaveLength(0);
     expect(suppressedTurns.every(record => record.status === 'completed')).toBe(true);
+    const providerRequestsAfterConversation = await waitForModelRequestQuiescence(processes);
 
     await expect(exhaustedAgent.runRecursiveWeightedThoughtScheduler(rootInitiationId)).resolves
       .toMatchObject({ status: 'rejected', reasonCode: 'recursive_trigger' });
@@ -873,6 +862,7 @@ describe('ICP certification real process harness', () => {
       deliveryDisposition: 'delivered',
     });
     const candidateId = String(initial.candidateId);
+    const rootInitiationId = String(initial.rootInitiationId);
     const failureDeadline = Date.now() + 20_000;
     while (await agentA.failureObservationCount() < 1) {
       if (Date.now() >= failureDeadline) {
@@ -892,6 +882,7 @@ describe('ICP certification real process harness', () => {
       beforeRetry.entries.length + 2,
       CERTIFICATION_DM_CHANNEL,
     );
+    await waitForCompletedFatigueSuppression(processes, rootInitiationId);
     const requestsAfterRetry = await waitForModelRequestQuiescence(processes);
     const settledAfterRetry = await agentB.channelSnapshot(
       CERTIFICATION_DM_CHANNEL,
@@ -899,12 +890,11 @@ describe('ICP certification real process harness', () => {
     await expect(agentA.retryCandidateDelivery(candidateId)).resolves.toMatchObject({
       disposition: 'delivered',
     });
-    await new Promise(resolveWait => setTimeout(resolveWait, 250));
+    expect(await waitForModelRequestQuiescence(processes)).toBe(requestsAfterRetry);
     const afterDuplicate = await agentB.channelSnapshot(
       CERTIFICATION_DM_CHANNEL,
     ) as unknown as ChannelSnapshot;
     expect(afterDuplicate.entries).toHaveLength(settledAfterRetry.entries.length);
-    expect(await waitForModelRequestQuiescence(processes)).toBe(requestsAfterRetry);
 
     await processes.rejectMalformedFrame();
     await processes.stopAgent(0);

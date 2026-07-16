@@ -1399,6 +1399,15 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     return row ? safeInteger(row.count, 'runnable count') : 0;
   }
 
+  async countPending(): Promise<number> {
+    const row = await queryOne<{ count: string }>(this.pool, `
+      SELECT COUNT(*)::text AS count
+      FROM agent_background_work_jobs
+      WHERE state IN ('queued', 'deferred', 'retry_wait', 'running')
+    `);
+    return row ? safeInteger(row.count, 'pending count') : 0;
+  }
+
   async get(jobId: string): Promise<StoredBackgroundWorkJob | null> {
     const row = await queryOne<BackgroundWorkRow>(this.pool, `
       SELECT ${JOB_COLUMNS}

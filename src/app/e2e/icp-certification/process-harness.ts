@@ -295,6 +295,31 @@ export class IcpCertificationAgentProcess {
     await this.request({ type: 'append_compaction_marker', channelId });
   }
 
+  async pendingBackgroundWorkCount(): Promise<number> {
+    const result = await this.request({ type: 'background_work_snapshot' });
+    if (typeof result !== 'object' || result === null
+      || !('pending' in result) || typeof result.pending !== 'number') {
+      throw new Error('ICP certification background-work snapshot is malformed');
+    }
+    return result.pending;
+  }
+
+  async hasCompletedFatigueSuppression(
+    channelId: string,
+    rootInitiationId: string,
+  ): Promise<boolean> {
+    const result = await this.request({
+      type: 'has_completed_fatigue_suppression',
+      channelId,
+      rootInitiationId,
+    });
+    if (typeof result !== 'object' || result === null
+      || !('completed' in result) || typeof result.completed !== 'boolean') {
+      throw new Error('ICP certification fatigue-suppression result is malformed');
+    }
+    return result.completed;
+  }
+
   async stop(): Promise<void> {
     if (this.child.exitCode !== null) return;
     if (this.child.connected) {

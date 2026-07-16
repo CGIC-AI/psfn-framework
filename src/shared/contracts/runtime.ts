@@ -28,6 +28,8 @@ import type {
   CompanionTouchRegion,
   CompanionTouchStimulusKind,
 } from './companion-relay.js';
+import type { ObservabilityCallType } from './observability-call-types.js';
+export type { ObservabilityCallType } from './observability-call-types.js';
 
 // ── Channel-agnostic message types ──
 
@@ -297,16 +299,6 @@ export interface ResponseStyleOverrides {
   channelType?: Record<string, ResponseStyle>;
   defaultStyle?: ResponseStyle;
 }
-
-export const OBSERVABILITY_CALL_TYPES = [
-  'chat',
-  'tool',
-  'memory',
-  'summary',
-  'background',
-  'scheduled',
-] as const;
-export type ObservabilityCallType = typeof OBSERVABILITY_CALL_TYPES[number];
 
 export type TelemetryVisibility = 'operator_visible' | 'companion_private';
 export const COMPANION_PRIVATE_BACKGROUND_PURPOSE = 'companion_private.background';

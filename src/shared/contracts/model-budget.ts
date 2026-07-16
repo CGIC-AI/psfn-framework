@@ -2,8 +2,8 @@ import type {
   ModelBudgetBlockedEvent,
   ModelBudgetBlockReason,
   ModelBudgetWindowSnapshot,
-  ObservabilityCallType,
 } from './runtime.js';
+import { OBSERVABILITY_CALL_TYPES } from './observability-call-types.js';
 import { isRecord } from '../utils/types.js';
 
 export const MODEL_BUDGET_BLOCK_REASONS = [
@@ -13,15 +13,6 @@ export const MODEL_BUDGET_BLOCK_REASONS = [
   'accounting_unavailable',
   'unknown_historical_cost',
 ] as const satisfies readonly ModelBudgetBlockReason[];
-
-const OBSERVABILITY_CALL_TYPES = [
-  'chat',
-  'tool',
-  'memory',
-  'summary',
-  'background',
-  'scheduled',
-] as const satisfies readonly ObservabilityCallType[];
 
 const EVENT_KEYS = new Set([
   'timestampMs',

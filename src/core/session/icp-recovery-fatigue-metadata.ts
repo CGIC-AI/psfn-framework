@@ -8,7 +8,6 @@ import {
 } from '../../shared/contracts/charge-policy.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import {
-  OBSERVABILITY_CALL_TYPES,
   REQUESTER_PROVENANCE_VALUES,
   type CorrelationMetadata,
   type FatigueBudgetActorSnapshot,
@@ -20,6 +19,7 @@ import {
   type FatigueRecordedEventMetadata,
   type FatigueSocialRegulationMetadata,
 } from '../../shared/contracts/runtime.js';
+import { OBSERVABILITY_CALL_TYPES } from '../../shared/contracts/observability-call-types.js';
 import { parseTurnId } from '../turns/id.js';
 import { isChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { TRUST_LEVELS } from '../../system/trust/types.js';

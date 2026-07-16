@@ -677,27 +677,21 @@ describe('registerFreeTimeTasks', () => {
 
 describe('free-time return summary lane', () => {
   it('summarizeRecentSessionEntries carries the free_time_return purpose into correlation metadata', async () => {
-    const complete = vi.fn(async (context: {
-      correlation?: Record<string, unknown>;
-    }, callType: string) => {
-      // Shared summary completion convention: positional callType 'background',
-      // correlation callType 'summary', lane-specific purpose in originStage.
-      expect(callType).toBe('background');
-      expect(context.correlation).toMatchObject({
-        callType: 'summary',
-        purpose: 'session.recent.summary',
-        originStage: 'session.recent.summary.free_time_return',
-        channelId: 'internal:free-time:quiet-hours',
-      });
-      expect(String(context.correlation?.requestId)).toContain('free_time_return');
-      return {
-        content: 'Wandered the wiki and wrote a poem.',
-        model: 'test',
-        inputTokens: 0,
-        outputTokens: 0,
-        toolCalls: [],
-        stopReason: 'end_turn',
-      };
+    const complete = vi.fn<LLMProviderPort['complete']>().mockResolvedValue({
+      content: 'Wandered the wiki and wrote a poem.',
+      model: 'test',
+      inputTokens: 0,
+      outputTokens: 0,
+      toolCalls: [],
+      stopReason: 'end_turn',
+    });
+    const stream = vi.fn<LLMProviderPort['stream']>().mockResolvedValue({
+      content: 'Wandered the wiki and wrote a poem.',
+      model: 'test',
+      inputTokens: 0,
+      outputTokens: 0,
+      toolCalls: [],
+      stopReason: 'end_turn',
     });
 
     const summary = await summarizeRecentSessionEntries({
@@ -706,13 +700,32 @@ describe('free-time return summary lane', () => {
         entry({ role: 'assistant', timestamp: 1_000, content: 'I wrote a poem about sunbeams.' }),
       ],
       characterName: 'Companion',
-      llmProvider: { complete } as unknown as LLMProviderPort,
+      llmProvider: { complete, stream },
       promptRegistry: null,
       maxTokens: 160,
       purpose: 'free_time_return',
     });
 
     expect(complete).toHaveBeenCalledTimes(1);
+    expect(stream).not.toHaveBeenCalled();
+    const [context, positionalPurpose, options] = complete.mock.calls[0] ?? [];
+    // completeWithWorkSpec strips correlation from prompt context and owns it
+    // on the typed completion options/work spec.
+    expect(context.correlation).toBeUndefined();
+    expect(positionalPurpose).toBe('background');
+    expect(options?.workSpec).toMatchObject({
+      purpose: 'background',
+      durable: false,
+      correlation: {
+        callType: 'summary',
+        purpose: 'session.recent.summary',
+        originType: 'summary',
+        originStage: 'session.recent.summary.free_time_return',
+        channelId: 'internal:free-time:quiet-hours',
+        requestId: expect.stringContaining('free_time_return'),
+      },
+    });
+    expect(options?.correlation).toEqual(options?.workSpec?.correlation);
     expect(summary).toBe('Wandered the wiki and wrote a poem.');
   });
 

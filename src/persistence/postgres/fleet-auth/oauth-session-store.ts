@@ -29,6 +29,8 @@ export interface PostgresFleetAuthBrokerStoreOptions {
 }
 
 export interface ProviderRevocationAuthorityPort {
+  /** Deny database-backed sessions whenever non-restored authority is ahead. */
+  sessionAuthorityGenerationIsCurrent(authorityGeneration: number): boolean;
   fence(input: {
     provider: 'discord';
     subjectId: string;
@@ -223,7 +225,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
                principal.authn_version, principal.authz_version,
                session.authn_version AS session_authn_version,
                session.authz_version AS session_authz_version,
-               authority.global_auth_epoch,
+               authority.global_auth_epoch, authority.authority_generation,
                session.global_auth_epoch AS session_global_auth_epoch,
                session.idle_expires_at, session.absolute_expires_at,
                session.revoked_at, session.replaced_by, principal.restore_state
@@ -423,7 +425,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
              principal.authn_version, principal.authz_version,
              session.authn_version AS session_authn_version,
              session.authz_version AS session_authz_version,
-             authority.global_auth_epoch,
+             authority.global_auth_epoch, authority.authority_generation,
              session.global_auth_epoch AS session_global_auth_epoch,
              session.idle_expires_at, session.absolute_expires_at,
              session.revoked_at, session.replaced_by, principal.restore_state
@@ -455,6 +457,9 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
       && (session.principal_status === 'pending' || session.principal_status === 'active')
       && session.authn_version === session.session_authn_version
       && session.authz_version === session.session_authz_version
+      && this.providerRevocationAuthority.sessionAuthorityGenerationIsCurrent(
+        safeInteger(session.authority_generation, 'authority_generation'),
+      )
       && session.global_auth_epoch === session.session_global_auth_epoch);
   }
 

@@ -232,7 +232,20 @@ export async function reconcileFleetAuthAuthorityStateInTransaction(
 export function createGatewayProviderRevocationAuthorityPort(
   authorityFloors: FleetAuthAuthorityFloorStore,
 ): ProviderRevocationAuthorityPort {
+  // Read on every validation for cross-process advances, while retaining the
+  // highest observed generation so this gateway can never accept a regression.
+  let observedAuthorityGeneration = authorityFloors.read().trustedHost.authorityGeneration;
+  const observeAuthorityGeneration = (): number => {
+    observedAuthorityGeneration = Math.max(
+      observedAuthorityGeneration,
+      authorityFloors.read().trustedHost.authorityGeneration,
+    );
+    return observedAuthorityGeneration;
+  };
   return {
+    sessionAuthorityGenerationIsCurrent: authorityGeneration => (
+      authorityGeneration === observeAuthorityGeneration()
+    ),
     fence: async (input) => {
       const fencedFloor = authorityFloors.revokeAccountAuthority({
         kind: 'provider_subject',
@@ -240,6 +253,10 @@ export function createGatewayProviderRevocationAuthorityPort(
         reason: input.reasonDigest,
         at: input.at.toISOString(),
       });
+      observedAuthorityGeneration = Math.max(
+        observedAuthorityGeneration,
+        fencedFloor.trustedHost.authorityGeneration,
+      );
       return {
         authorityGeneration: fencedFloor.trustedHost.authorityGeneration,
         reconcile: async (client) => {

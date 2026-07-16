@@ -9,6 +9,10 @@ import { isRecord } from '../../shared/utils/types.js';
 import { DiscordEvidenceBrokerBoundary, type DiscordEvidenceBrokerOptions } from './discord-evidence-broker-boundary.js';
 import type { DiscordEvidenceAdmissionStore } from './discord-evidence-admission.js';
 import { FleetAuthBrokerError } from './fleet-auth-errors.js';
+import type {
+  FleetAuthorizationContext,
+  GatewayFleetAuthorizationContextResolver,
+} from './fleet-authorization-context.js';
 export { FleetAuthBrokerError };
 
 const DISCORD_AUTHORIZE_URL = 'https://discord.com/oauth2/authorize';
@@ -148,6 +152,7 @@ export interface GatewayFleetAuthBrokerOptions extends DiscordEvidenceBrokerOpti
   now?: () => Date;
   randomBytes?: (length: number) => Buffer;
   firstOwnerAssurance?: FirstOwnerAssurancePort;
+  authorizationContextResolver?: GatewayFleetAuthorizationContextResolver;
 }
 
 function opaqueToken(randomBytes: (length: number) => Buffer): string {
@@ -203,6 +208,7 @@ export class GatewayFleetAuthBroker {
   private readonly randomBytes: (length: number) => Buffer;
   private readonly firstOwnerAssurance?: FirstOwnerAssurancePort;
   private readonly discordEvidence: DiscordEvidenceBrokerBoundary;
+  private readonly authorizationContextResolver?: GatewayFleetAuthorizationContextResolver;
 
   constructor(options: GatewayFleetAuthBrokerOptions) {
     this.config = options.config;
@@ -213,7 +219,23 @@ export class GatewayFleetAuthBroker {
     this.now = options.now ?? (() => new Date());
     this.randomBytes = options.randomBytes ?? cryptoRandomBytes;
     this.firstOwnerAssurance = options.firstOwnerAssurance;
+    this.authorizationContextResolver = options.authorizationContextResolver;
     this.discordEvidence = new DiscordEvidenceBrokerBoundary(options, this.fetchImpl, this.now);
+  }
+
+  /**
+   * Gateway-internal authority snapshot seam. HTTP/API authentication remains
+   * bootstrap-only until the signed OPL1.6 hop is wired and verified.
+   */
+  async resolveAuthorizationContext(input: unknown): Promise<FleetAuthorizationContext> {
+    if (!this.authorizationContextResolver) {
+      throw new FleetAuthBrokerError(
+        'authorization_context_unavailable',
+        503,
+        'Fleet authorization context resolution is unavailable',
+      );
+    }
+    return await this.authorizationContextResolver.resolve(input);
   }
 
   async beginLogin(input: { returnPath: string }): Promise<{

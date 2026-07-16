@@ -17,6 +17,11 @@ import {
 } from './authority-floor.js';
 
 const PRINCIPAL_ID = '11111111-1111-4111-8111-111111111111';
+const COMPANION_ID = '22222222-2222-4222-8222-222222222222';
+const DECISION_ID_A = '33333333-3333-4333-8333-333333333333';
+const DECISION_ID_B = '44444444-4444-4444-8444-444444444444';
+const CEREMONY_ID_A = '55555555-5555-4555-8555-555555555555';
+const CEREMONY_ID_B = '66666666-6666-4666-8666-666666666666';
 
 function passkey(
   credentialIdHash: string,
@@ -141,6 +146,81 @@ describe('non-restored fleet auth authority floors', () => {
       restoredTombstones: [],
       at: '2026-07-15T14:00:00.000Z',
     })).toThrow(/activation generation.*cannot move backward/i);
+  });
+
+  it('allocates a fresh monotonic same-id companion lineage without weakening the removal floor', () => {
+    const floor = store();
+    floor.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
+    floor.revokeAccountAuthority({
+      kind: 'companion',
+      resourceId: COMPANION_ID,
+      reason: 'remove companion',
+      at: '2026-07-15T10:00:00.000Z',
+    });
+    const input = {
+      companionId: COMPANION_ID,
+      decisionId: DECISION_ID_A,
+      ceremonyId: CEREMONY_ID_A,
+      decisionFingerprint: 'a'.repeat(64),
+      actorPrincipalId: PRINCIPAL_ID,
+      target: {
+        principalId: PRINCIPAL_ID,
+        authnVersion: 1,
+        authzVersion: 2,
+        bindingVersion: 2,
+        grantVersion: 2,
+        policyVersion: 2,
+      },
+      priorCompanionVersion: 2,
+      priorAuthorityGeneration: 2,
+      priorGlobalAuthEpoch: 2,
+      reasonDigest: 'b'.repeat(64),
+      at: '2026-07-15T11:00:00.000Z',
+    };
+    const first = floor.beginCompanionAuthorityReadd(input);
+    const replay = floor.beginCompanionAuthorityReadd(input);
+    expect(replay).toEqual(first);
+    expect(first).toMatchObject({ lineageGeneration: 3, authorityGeneration: 3 });
+    expect(floor.companionAuthorityLineageIsCurrent({
+      companionId: COMPANION_ID,
+      lineageId: first.lineageId,
+      lineageGeneration: first.lineageGeneration,
+    })).toBe(true);
+    expect(floor.isAccountAuthorityTombstoned('companion', COMPANION_ID)).toBe(true);
+
+    floor.revokeAccountAuthority({
+      kind: 'companion',
+      resourceId: COMPANION_ID,
+      reason: 'remove replacement companion',
+      at: '2026-07-15T12:00:00.000Z',
+    });
+    expect(floor.companionAuthorityLineageIsCurrent({
+      companionId: COMPANION_ID,
+      lineageId: first.lineageId,
+      lineageGeneration: first.lineageGeneration,
+    })).toBe(false);
+    const second = floor.beginCompanionAuthorityReadd({
+      ...input,
+      decisionId: DECISION_ID_B,
+      ceremonyId: CEREMONY_ID_B,
+      decisionFingerprint: 'c'.repeat(64),
+      priorCompanionVersion: 4,
+      priorAuthorityGeneration: 4,
+      priorGlobalAuthEpoch: 4,
+      at: '2026-07-15T13:00:00.000Z',
+    });
+    expect(second.lineageGeneration).toBe(5);
+    expect(second.lineageId).not.toBe(first.lineageId);
+    expect(floor.companionAuthorityLineageIsCurrent({
+      companionId: COMPANION_ID,
+      lineageId: second.lineageId,
+      lineageGeneration: second.lineageGeneration,
+    })).toBe(true);
+    expect(() => floor.prepareRestore({
+      activationGeneration: 2,
+      restoredTombstones: [{ kind: 'companion_lineage_floor', resourceId: COMPANION_ID }],
+      at: '2026-07-15T14:00:00.000Z',
+    })).toThrow(/cannot be synthesized from restored authority/i);
   });
 
   it('keeps current replacement B authoritative while restored A remains denied', () => {

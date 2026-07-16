@@ -14,9 +14,9 @@ async function assertCompanion(
   client: PoolClient,
   companionId: string,
   expected: 'active' | 'removed',
-): Promise<void> {
-  const result = await client.query<{ lifecycle: string; restore_state: string }>(`
-    SELECT lifecycle, restore_state
+): Promise<{ version: number }> {
+  const result = await client.query<{ lifecycle: string; restore_state: string; version: string }>(`
+    SELECT lifecycle, restore_state, version
     FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
     WHERE companion_id = $1
     FOR UPDATE
@@ -25,6 +25,9 @@ async function assertCompanion(
   if (row.lifecycle !== expected || row.restore_state !== 'live') {
     deny('companion_authority_unavailable');
   }
+  const version = Number(row.version);
+  if (!Number.isSafeInteger(version) || version < 1) deny('companion_version_invalid');
+  return { version };
 }
 
 async function assertCompanionAdministrator(
@@ -442,7 +445,7 @@ async function prepareCompanionMutation(
   >,
 ): Promise<PreparedLifecycleMutation> {
   const expected = decision.action === 'companion.remove' ? 'active' : 'removed';
-  await assertCompanion(client, decision.companionId, expected);
+  const companion = await assertCompanion(client, decision.companionId, expected);
   await assertCompanionAdministrator(
     client,
     decision.actor.principalId,
@@ -460,7 +463,9 @@ async function prepareCompanionMutation(
     ) AS affected
     ORDER BY principal_id
   `, [decision.companionId]);
-  const principalIds = principals.rows.map(row => row.principal_id);
+  const principalIds = decision.action === 'companion.remove'
+    ? principals.rows.map(row => row.principal_id)
+    : [decision.target.principalId];
   if (!principalIds.includes(decision.target.principalId)) {
     principalIds.push(decision.target.principalId);
     principalIds.sort();
@@ -474,32 +479,49 @@ async function prepareCompanionMutation(
     revocations: decision.action === 'companion.remove'
       ? [{ kind: 'companion', resourceId: decision.companionId }]
       : [],
-    apply: async authorityGeneration => {
+    ...(decision.action === 'companion.readd'
+      ? { companionReadd: { companionId: decision.companionId, priorVersion: companion.version } }
+      : {}),
+    apply: async (authorityGeneration, companionLineage) => {
+      if (decision.action === 'companion.readd') {
+        if (!companionLineage) deny('companion_lineage_floor_missing');
+        const updated = await client.query(`
+          UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          SET lifecycle = 'quarantined', version = version + 1,
+              authority_generation = $3, authority_lineage_id = $4,
+              lineage_generation = $5, readd_decision_id = $6, updated_at = $7
+          WHERE companion_id = $1 AND version = $2
+            AND lifecycle = 'removed' AND restore_state = 'live'
+        `, [
+          decision.companionId,
+          companion.version,
+          authorityGeneration,
+          companionLineage.lineageId,
+          companionLineage.lineageGeneration,
+          decision.decisionId,
+          decision.decidedAt,
+        ]);
+        if (updated.rowCount !== 1) deny('companion_readd_state_changed');
+        return;
+      }
       await client.query(`
         UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
-        SET lifecycle = $2, version = version + 1,
-            authority_generation = $3, updated_at = $4
+        SET lifecycle = 'removed', version = version + 1,
+            authority_generation = $2, updated_at = $3
         WHERE companion_id = $1
-      `, [
-        decision.companionId,
-        decision.action === 'companion.remove' ? 'removed' : 'quarantined',
-        authorityGeneration,
-        decision.decidedAt,
-      ]);
-      if (decision.action === 'companion.remove') {
-        await client.query(`
-          UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
-          SET state = CASE WHEN state = 'revoked' THEN state ELSE 'suspended' END,
-              version = version + 1, authority_generation = $2, updated_at = $3
-          WHERE companion_id = $1 AND restore_state = 'live'
-        `, [decision.companionId, authorityGeneration, decision.decidedAt]);
-        await client.query(`
-          UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
-          SET lifecycle = CASE WHEN lifecycle = 'revoked' THEN lifecycle ELSE 'suspended' END,
-              version = version + 1, authority_generation = $2, updated_at = $3
-          WHERE companion_id = $1 AND restore_state = 'live'
-        `, [decision.companionId, authorityGeneration, decision.decidedAt]);
-      }
+      `, [decision.companionId, authorityGeneration, decision.decidedAt]);
+      await client.query(`
+        UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+        SET state = CASE WHEN state = 'revoked' THEN state ELSE 'suspended' END,
+            version = version + 1, authority_generation = $2, updated_at = $3
+        WHERE companion_id = $1 AND restore_state = 'live'
+      `, [decision.companionId, authorityGeneration, decision.decidedAt]);
+      await client.query(`
+        UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+        SET lifecycle = CASE WHEN lifecycle = 'revoked' THEN lifecycle ELSE 'suspended' END,
+            version = version + 1, authority_generation = $2, updated_at = $3
+        WHERE companion_id = $1 AND restore_state = 'live'
+      `, [decision.companionId, authorityGeneration, decision.decidedAt]);
     },
   };
 }

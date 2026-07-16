@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { writeFileDurableAtomicSync } from '../../../shared/utils/fs.js';
@@ -8,6 +8,7 @@ import {
   isRecord,
   isRfc4122Uuid,
 } from '../../../shared/utils/types.js';
+import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
 import { withCrossProcessWriteLock } from '../../sessions/cross-process-write-lock.js';
 
 export const FLEET_AUTH_AUTHORITY_FLOOR_FILE_NAME = 'fleet-auth-authority-floor.json';
@@ -20,7 +21,17 @@ export type AccountAuthorityTombstoneKind =
   | 'contact_binding'
   | 'role_grant'
   | 'principal'
-  | 'companion';
+  | 'companion'
+  | 'companion_lineage_floor';
+
+export interface CompanionReaddFloorClaim {
+  principalId: string;
+  authnVersion: number;
+  authzVersion: number;
+  bindingVersion: number;
+  grantVersion: number;
+  policyVersion: number;
+}
 
 export interface AccountAuthorityTombstone {
   kind: AccountAuthorityTombstoneKind;
@@ -28,6 +39,27 @@ export interface AccountAuthorityTombstone {
   generation: number;
   revokedAt: string;
   reasonHash: string;
+  companionReadd?: {
+    decisionId: string;
+    ceremonyId: string;
+    decisionFingerprint: string;
+    actorPrincipalId: string;
+    target: CompanionReaddFloorClaim;
+    priorCompanionVersion: number;
+    priorAuthorityGeneration: number;
+    priorGlobalAuthEpoch: number;
+    reasonDigest: string;
+  };
+}
+
+export interface CompanionAuthorityLineageFloor {
+  lineageId: string;
+  lineageGeneration: number;
+  authorityGeneration: number;
+  entry: AccountAuthorityTombstone & {
+    kind: 'companion_lineage_floor';
+    companionReadd: NonNullable<AccountAuthorityTombstone['companionReadd']>;
+  };
 }
 
 export interface TrustedHostAuthorityFloor {
@@ -98,6 +130,20 @@ function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
+function companionResourceHash(companionId: string): string {
+  return digest(companionId);
+}
+
+export function companionAuthorityLineageId(
+  trustedHost: Pick<TrustedHostAuthorityFloor, 'provisioningSecret'>,
+  resourceHash: string,
+  lineageGeneration: number,
+): string {
+  return createHmac('sha256', trustedHost.provisioningSecret)
+    .update(`fleet-auth-companion-authority-lineage:v1:${resourceHash}:${lineageGeneration}`)
+    .digest('hex');
+}
+
 function lineageIdForSecret(secret: string): string {
   return digest(`fleet-auth-authority-lineage:v1:${secret}`);
 }
@@ -123,6 +169,12 @@ function assertString(value: unknown, field: string): string {
   return value;
 }
 
+function assertUuid(value: unknown, field: string): asserts value is string {
+  if (typeof value !== 'string' || !isRfc4122Uuid(value)) {
+    throw new Error(`Invalid fleet auth authority floor: ${field} must be an RFC-4122 UUID`);
+  }
+}
+
 function assertRecord(value: unknown, field: string): Record<string, unknown> {
   if (!isRecord(value)) {
     throw new Error(`Invalid fleet auth authority floor: ${field} must be an object`);
@@ -138,7 +190,8 @@ function assertAccountAuthorityTombstoneKind(
     && value !== 'contact_binding'
     && value !== 'role_grant'
     && value !== 'principal'
-    && value !== 'companion') {
+    && value !== 'companion'
+    && value !== 'companion_lineage_floor') {
     throw new Error(`Invalid fleet auth authority floor: ${field} is unknown`);
   }
 }
@@ -155,19 +208,102 @@ function strictKeys(value: Record<string, unknown>, keys: readonly string[], fie
 function parseAccountTombstone(value: unknown, index: number): AccountAuthorityTombstone {
   const field = `trustedHost.tombstones[${index}]`;
   const raw = assertRecord(value, field);
-  strictKeys(raw, ['kind', 'resourceHash', 'generation', 'revokedAt', 'reasonHash'], field);
+  const commonKeys = ['kind', 'resourceHash', 'generation', 'revokedAt', 'reasonHash'] as const;
+  assertNoUnknownKeys(raw, [...commonKeys, 'companionReadd'], field, {
+    errorPrefix: 'Invalid fleet auth authority floor',
+  });
+  for (const key of commonKeys) {
+    if (!Object.hasOwn(raw, key)) {
+      throw new Error(`Invalid fleet auth authority floor: ${field}.${key} is required`);
+    }
+  }
   assertAccountAuthorityTombstoneKind(raw.kind, `${field}.kind`);
   const resourceHash = assertString(raw.resourceHash, `${field}.resourceHash`);
   const reasonHash = assertString(raw.reasonHash, `${field}.reasonHash`);
   if (!HASH_PATTERN.test(resourceHash) || !HASH_PATTERN.test(reasonHash)) {
     throw new Error(`Invalid fleet auth authority floor: ${field} hashes must be SHA-256 hex`);
   }
-  return {
+  const common = {
     kind: raw.kind,
     resourceHash,
     generation: assertInteger(raw.generation, `${field}.generation`, 1),
     revokedAt: assertTimestamp(raw.revokedAt, `${field}.revokedAt`),
     reasonHash,
+  };
+  if (raw.kind !== 'companion_lineage_floor') {
+    if (raw.companionReadd !== undefined) {
+      throw new Error(`Invalid fleet auth authority floor: ${field}.companionReadd is misplaced`);
+    }
+    return common;
+  }
+  const readd = assertRecord(raw.companionReadd, `${field}.companionReadd`);
+  strictKeys(readd, [
+    'decisionId',
+    'ceremonyId',
+    'decisionFingerprint',
+    'actorPrincipalId',
+    'target',
+    'priorCompanionVersion',
+    'priorAuthorityGeneration',
+    'priorGlobalAuthEpoch',
+    'reasonDigest',
+  ], `${field}.companionReadd`);
+  assertUuid(readd.decisionId, `${field}.companionReadd.decisionId`);
+  assertUuid(readd.ceremonyId, `${field}.companionReadd.ceremonyId`);
+  assertUuid(readd.actorPrincipalId, `${field}.companionReadd.actorPrincipalId`);
+  const target = assertRecord(readd.target, `${field}.companionReadd.target`);
+  strictKeys(target, [
+    'principalId',
+    'authnVersion',
+    'authzVersion',
+    'bindingVersion',
+    'grantVersion',
+    'policyVersion',
+  ], `${field}.companionReadd.target`);
+  assertUuid(target.principalId, `${field}.companionReadd.target.principalId`);
+  for (const version of [
+    'authnVersion',
+    'authzVersion',
+    'bindingVersion',
+    'grantVersion',
+    'policyVersion',
+  ] as const) {
+    assertInteger(target[version], `${field}.companionReadd.target.${version}`, 1);
+  }
+  const decisionFingerprint = assertString(
+    readd.decisionFingerprint,
+    `${field}.companionReadd.decisionFingerprint`,
+  );
+  const reasonDigest = assertString(readd.reasonDigest, `${field}.companionReadd.reasonDigest`);
+  if (!HASH_PATTERN.test(decisionFingerprint) || !HASH_PATTERN.test(reasonDigest)) {
+    throw new Error(`Invalid fleet auth authority floor: ${field}.companionReadd digests are invalid`);
+  }
+  return {
+    ...common,
+    kind: 'companion_lineage_floor',
+    companionReadd: {
+      decisionId: readd.decisionId,
+      ceremonyId: readd.ceremonyId,
+      decisionFingerprint,
+      actorPrincipalId: readd.actorPrincipalId,
+      target: target as unknown as CompanionReaddFloorClaim,
+      priorCompanionVersion: assertInteger(
+        readd.priorCompanionVersion,
+        `${field}.companionReadd.priorCompanionVersion`,
+        1,
+      ),
+      priorAuthorityGeneration: assertInteger(
+        readd.priorAuthorityGeneration,
+        `${field}.companionReadd.priorAuthorityGeneration`,
+        1,
+      ),
+      priorGlobalAuthEpoch: assertInteger(
+        readd.priorGlobalAuthEpoch,
+        `${field}.companionReadd.priorGlobalAuthEpoch`,
+        1,
+      ),
+      reasonDigest,
+    },
   };
 }
 
@@ -328,6 +464,15 @@ export function validateFleetAuthAuthorityFloor(value: unknown): FleetAuthAuthor
   );
   if (accountTombstones.some(entry => entry.generation > authorityGeneration)) {
     throw new Error('Invalid fleet auth authority floor: trusted-host tombstone is ahead of its floor');
+  }
+  for (const entry of accountTombstones) {
+    if (entry.kind !== 'companion_lineage_floor' || !entry.companionReadd) continue;
+    const removal = accountTombstones.find(candidate => (
+      candidate.kind === 'companion' && candidate.resourceHash === entry.resourceHash
+    ));
+    if (!removal || entry.companionReadd.priorAuthorityGeneration + 1 !== entry.generation) {
+      throw new Error('Invalid fleet auth authority floor: companion lineage floor is not monotonic');
+    }
   }
   const lineageId = assertString(trustedHost.lineageId, 'trustedHost.lineageId');
   const provisioningSecret = assertString(
@@ -577,6 +722,9 @@ export class FleetAuthAuthorityFloorStore {
         resource.kind,
         `revokeAccountAuthorities.resources[${index}].kind`,
       );
+      if (resource.kind === 'companion_lineage_floor') {
+        throw new Error('Companion lineage floors require the exact re-add authority operation');
+      }
     }
     return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
       const current = this.read();
@@ -608,6 +756,151 @@ export class FleetAuthAuthorityFloorStore {
     });
   }
 
+  beginCompanionAuthorityReadd(input: {
+    companionId: string;
+    decisionId: string;
+    ceremonyId: string;
+    decisionFingerprint: string;
+    actorPrincipalId: string;
+    target: CompanionReaddFloorClaim;
+    priorCompanionVersion: number;
+    priorAuthorityGeneration: number;
+    priorGlobalAuthEpoch: number;
+    reasonDigest: string;
+    at: string;
+  }): CompanionAuthorityLineageFloor {
+    assertUuid(input.companionId, 'beginCompanionAuthorityReadd.companionId');
+    assertUuid(input.decisionId, 'beginCompanionAuthorityReadd.decisionId');
+    assertUuid(input.ceremonyId, 'beginCompanionAuthorityReadd.ceremonyId');
+    assertUuid(input.actorPrincipalId, 'beginCompanionAuthorityReadd.actorPrincipalId');
+    assertTimestamp(input.at, 'beginCompanionAuthorityReadd.at');
+    if (!HASH_PATTERN.test(input.decisionFingerprint) || !HASH_PATTERN.test(input.reasonDigest)) {
+      throw new Error('Companion authority re-add digests must be SHA-256 hex');
+    }
+    assertUuid(input.target.principalId, 'beginCompanionAuthorityReadd.target.principalId');
+    for (const [field, value] of Object.entries(input.target)) {
+      if (field !== 'principalId') {
+        assertInteger(value, `beginCompanionAuthorityReadd.target.${field}`, 1);
+      }
+    }
+    assertInteger(input.priorCompanionVersion, 'beginCompanionAuthorityReadd.priorCompanionVersion', 1);
+    assertInteger(input.priorAuthorityGeneration, 'beginCompanionAuthorityReadd.priorAuthorityGeneration', 1);
+    assertInteger(input.priorGlobalAuthEpoch, 'beginCompanionAuthorityReadd.priorGlobalAuthEpoch', 1);
+    return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
+      const current = this.read();
+      const resourceHash = companionResourceHash(input.companionId);
+      const prior = current.trustedHost.tombstones.find(entry => (
+        entry.kind === 'companion_lineage_floor' && entry.resourceHash === resourceHash
+      ));
+      const removal = current.trustedHost.tombstones.find(entry => (
+        entry.kind === 'companion' && entry.resourceHash === resourceHash
+      ));
+      if (prior?.companionReadd?.decisionId === input.decisionId
+        && timingSafeStringEqual(
+          prior.companionReadd.decisionFingerprint,
+          input.decisionFingerprint,
+        )) {
+        if (current.trustedHost.authorityGeneration !== prior.generation
+          || !removal
+          || removal.generation >= prior.generation) {
+          throw new Error('Companion re-add lineage is no longer current');
+        }
+        const entry = prior as CompanionAuthorityLineageFloor['entry'];
+        return {
+          lineageId: companionAuthorityLineageId(current.trustedHost, resourceHash, entry.generation),
+          lineageGeneration: entry.generation,
+          authorityGeneration: current.trustedHost.authorityGeneration,
+          entry,
+        };
+      }
+      if (current.trustedHost.authorityGeneration !== input.priorAuthorityGeneration) {
+        throw new Error('Fleet auth authority changed before companion re-add floor publication');
+      }
+      if (!removal || removal.generation > input.priorAuthorityGeneration) {
+        throw new Error('Companion re-add requires a current permanent removal floor');
+      }
+      const nextGeneration = current.trustedHost.authorityGeneration + 1;
+      const entry: CompanionAuthorityLineageFloor['entry'] = {
+        kind: 'companion_lineage_floor',
+        resourceHash,
+        generation: nextGeneration,
+        revokedAt: input.at,
+        reasonHash: digest(input.reasonDigest),
+        companionReadd: {
+          decisionId: input.decisionId,
+          ceremonyId: input.ceremonyId,
+          decisionFingerprint: input.decisionFingerprint,
+          actorPrincipalId: input.actorPrincipalId,
+          target: input.target,
+          priorCompanionVersion: input.priorCompanionVersion,
+          priorAuthorityGeneration: input.priorAuthorityGeneration,
+          priorGlobalAuthEpoch: input.priorGlobalAuthEpoch,
+          reasonDigest: input.reasonDigest,
+        },
+      };
+      const next: FleetAuthAuthorityFloor = {
+        ...current,
+        trustedHost: {
+          ...current.trustedHost,
+          authorityGeneration: nextGeneration,
+          revocationCheckpoint: current.trustedHost.revocationCheckpoint + 1,
+          tombstones: [
+            ...current.trustedHost.tombstones.filter(candidate => (
+              candidate.kind !== 'companion_lineage_floor'
+                || candidate.resourceHash !== resourceHash
+            )),
+            entry,
+          ],
+        },
+        updatedAt: input.at,
+      };
+      this.write(next);
+      return {
+        lineageId: companionAuthorityLineageId(next.trustedHost, resourceHash, nextGeneration),
+        lineageGeneration: nextGeneration,
+        authorityGeneration: nextGeneration,
+        entry,
+      };
+    });
+  }
+
+  findCompanionAuthorityReadd(
+    companionId: string,
+    floor: FleetAuthAuthorityFloor = this.read(),
+  ): CompanionAuthorityLineageFloor | undefined {
+    const resourceHash = companionResourceHash(companionId);
+    const entry = floor.trustedHost.tombstones.find(candidate => (
+      candidate.kind === 'companion_lineage_floor'
+        && candidate.resourceHash === resourceHash
+        && candidate.companionReadd !== undefined
+    )) as CompanionAuthorityLineageFloor['entry'] | undefined;
+    if (!entry) return undefined;
+    return {
+      lineageId: companionAuthorityLineageId(floor.trustedHost, resourceHash, entry.generation),
+      lineageGeneration: entry.generation,
+      authorityGeneration: floor.trustedHost.authorityGeneration,
+      entry,
+    };
+  }
+
+  companionAuthorityLineageIsCurrent(input: {
+    companionId: string;
+    lineageId: string;
+    lineageGeneration: number;
+  }, floor: FleetAuthAuthorityFloor = this.read()): boolean {
+    const lineage = this.findCompanionAuthorityReadd(input.companionId, floor);
+    if (!lineage
+      || !timingSafeStringEqual(lineage.lineageId, input.lineageId)
+      || lineage.lineageGeneration !== input.lineageGeneration) {
+      return false;
+    }
+    const resourceHash = companionResourceHash(input.companionId);
+    const removal = floor.trustedHost.tombstones.find(entry => (
+      entry.kind === 'companion' && entry.resourceHash === resourceHash
+    ));
+    return removal !== undefined && removal.generation < input.lineageGeneration;
+  }
+
   isAccountAuthorityTombstoned(
     kind: AccountAuthorityTombstoneKind,
     resourceId: string,
@@ -635,6 +928,9 @@ export class FleetAuthAuthorityFloorStore {
         restored.kind,
         `prepareRestore.restoredTombstones[${index}].kind`,
       );
+      if (restored.kind === 'companion_lineage_floor') {
+        throw new Error('Companion lineage floors cannot be synthesized from restored authority');
+      }
     }
     return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
       const current = this.read();

@@ -1,4 +1,8 @@
 import type { PoolClient } from 'pg';
+import type {
+  CompanionAuthorityLineageFloor,
+  CompanionReaddFloorClaim,
+} from './authority-floor.js';
 
 export interface ProviderRevocationAuthorityPort {
   /** Deny database-backed sessions whenever non-restored authority is ahead. */
@@ -23,4 +27,18 @@ export interface AccountAuthorityFencePort extends ProviderRevocationAuthorityPo
     reasonDigest: string;
     at: Date;
   }): Promise<{ authorityGeneration: number }>;
+  beginCompanionReadd(input: {
+    companionId: string;
+    decisionId: string;
+    ceremonyId: string;
+    decisionFingerprint: string;
+    actorPrincipalId: string;
+    target: CompanionReaddFloorClaim;
+    priorCompanionVersion: number;
+    priorAuthorityGeneration: number;
+    priorGlobalAuthEpoch: number;
+    reasonDigest: string;
+    at: Date;
+  }): Promise<CompanionAuthorityLineageFloor>;
+  findCompanionReadd(companionId: string): CompanionAuthorityLineageFloor | undefined;
 }

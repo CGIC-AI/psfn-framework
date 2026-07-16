@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type {
-  AccountAuthorityTombstone,
   AccountAuthorityTombstoneKind,
+  TrustedHostAuthorityFloor,
 } from './authority-floor.js';
+import { companionAuthorityLineageId } from './authority-floor.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 
 function digest(value: string): string {
@@ -12,17 +13,20 @@ function digest(value: string): string {
 
 export async function replaceAccountAuthorityFloorProjection(
   client: PoolClient,
-  tombstones: readonly AccountAuthorityTombstone[],
+  trustedHost: TrustedHostAuthorityFloor,
 ): Promise<void> {
   await client.query(`
     DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_floor_tombstone_projection
   `);
-  for (const tombstone of tombstones) {
+  for (const tombstone of trustedHost.tombstones) {
+    const lineageId = tombstone.kind === 'companion_lineage_floor'
+      ? companionAuthorityLineageId(trustedHost, tombstone.resourceHash, tombstone.generation)
+      : null;
     await client.query(`
       INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authority_floor_tombstone_projection
-        (kind, resource_hash, authority_generation)
-      VALUES ($1, $2, $3)
-    `, [tombstone.kind, tombstone.resourceHash, tombstone.generation]);
+        (kind, resource_hash, authority_generation, companion_lineage_id)
+      VALUES ($1, $2, $3, $4)
+    `, [tombstone.kind, tombstone.resourceHash, tombstone.generation, lineageId]);
   }
 }
 
@@ -30,14 +34,21 @@ export async function appendAccountAuthorityFloorProjection(
   client: PoolClient,
   resources: ReadonlyArray<{ kind: AccountAuthorityTombstoneKind; resourceId: string }>,
   authorityGeneration: number,
+  companionLineageId?: string,
 ): Promise<void> {
   for (const resource of resources) {
     await client.query(`
       INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authority_floor_tombstone_projection
-        (kind, resource_hash, authority_generation)
-      VALUES ($1, $2, $3)
+        (kind, resource_hash, authority_generation, companion_lineage_id)
+      VALUES ($1, $2, $3, $4)
       ON CONFLICT (kind, resource_hash) DO UPDATE
-      SET authority_generation = EXCLUDED.authority_generation
-    `, [resource.kind, digest(resource.resourceId), authorityGeneration]);
+      SET authority_generation = EXCLUDED.authority_generation,
+          companion_lineage_id = EXCLUDED.companion_lineage_id
+    `, [
+      resource.kind,
+      digest(resource.resourceId),
+      authorityGeneration,
+      resource.kind === 'companion_lineage_floor' ? companionLineageId : null,
+    ]);
   }
 }

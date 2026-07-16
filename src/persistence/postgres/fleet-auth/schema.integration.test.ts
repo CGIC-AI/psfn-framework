@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   DEFAULT_POSTGRES_TEST_IMAGE,
@@ -8,11 +8,11 @@ import {
 import { createPostgresPool } from '../../postgres.js';
 import {
   chmodSync,
-  copyFileSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -73,6 +73,29 @@ function roleUrl(databaseUrl: string, role: keyof typeof PASSWORDS): string {
 function requirePostgresClients() {
   if (!harness) throw new Error('Postgres integration harness is not available');
   return harness.clientBinaries;
+}
+
+function writeFleetAuthTestConfig(systemDataDir: string): void {
+  const seed = JSON.parse(readFileSync(
+    join(process.cwd(), 'config', 'fleet-auth.seed.json'),
+    'utf8',
+  )) as {
+    verifierKeys: Array<{ kid: string; publicKeyPem: string }>;
+    hubDeviceAssertions: { keys: Array<{ kid: string; publicKeyPem: string }> };
+  };
+  const publicKeyPem = (): string => generateKeyPairSync('ed25519').publicKey.export({
+    type: 'spki',
+    format: 'pem',
+  }).toString();
+  seed.verifierKeys[0]!.kid = 'schema-test-verifier';
+  seed.verifierKeys[0]!.publicKeyPem = publicKeyPem();
+  seed.hubDeviceAssertions.keys[0]!.kid = 'schema-test-hub';
+  seed.hubDeviceAssertions.keys[0]!.publicKeyPem = publicKeyPem();
+  writeFileSync(
+    join(systemDataDir, 'fleet-auth.json'),
+    `${JSON.stringify(seed, null, 2)}\n`,
+    'utf8',
+  );
 }
 
 function runFleetAuthConsistentBackup(
@@ -195,7 +218,9 @@ describe('fleet_auth Postgres authority boundary', () => {
       const ledger = await migration.query<{ version: number; checksum: string }>(
         `SELECT version, checksum FROM ${FLEET_AUTH_SCHEMA_NAME}.schema_migrations ORDER BY version`,
       );
-      expect(ledger.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+      expect(ledger.rows.map(row => row.version)).toEqual([
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+      ]);
       expect(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum))).toBe(true);
 
       const tables = await migration.query<{ table_name: string }>(`
@@ -1181,10 +1206,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       mkdirSync(systemDataDir, { recursive: true });
       mkdirSync(floorRoot, { mode: 0o700 });
       chmodSync(floorRoot, 0o700);
-      copyFileSync(
-        join(process.cwd(), 'config', 'fleet-auth.seed.json'),
-        join(systemDataDir, 'fleet-auth.json'),
-      );
+      writeFleetAuthTestConfig(systemDataDir);
       const floors = new FleetAuthAuthorityFloorStore(floorRoot);
       const floor = floors.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
       await reconcileThroughCoordinator(db.backupUrl, floor);
@@ -1296,10 +1318,7 @@ describe('fleet_auth Postgres authority boundary', () => {
     };
     const keyB = { ...keyA, credentialIdHash: 'b'.repeat(64), publicKeyVerifier: 'verifier-b' };
     try {
-      copyFileSync(
-        join(process.cwd(), 'config', 'fleet-auth.seed.json'),
-        join(systemDataDir, 'fleet-auth.json'),
-      );
+      writeFleetAuthTestConfig(systemDataDir);
       const floors = new FleetAuthAuthorityFloorStore(floorRoot);
       const sourceFloor = floors.open({
         activationGeneration: 1,
@@ -1327,6 +1346,11 @@ describe('fleet_auth Postgres authority boundary', () => {
           (provider, subject_id, principal_id, state, authority_generation)
          VALUES ('discord', '123456789012345678', $1, 'active', 1)`,
         [principalId],
+      );
+      await sourceCoordinator.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          (companion_id, lifecycle, authority_generation)
+         VALUES ('11111111-1111-4111-8111-111111111111', 'active', 1)`,
       );
       await sourceRuntime.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
@@ -1412,6 +1436,33 @@ describe('fleet_auth Postgres authority boundary', () => {
         'provider_subject',
         'discord:123456789012345678',
       )).toBe(true);
+      const companionRemoval = floors.revokeAccountAuthority({
+        kind: 'companion',
+        resourceId: '11111111-1111-4111-8111-111111111111',
+        reason: 'post-snapshot companion removal',
+        at: '2026-07-15T11:40:00.000Z',
+      });
+      const readdDecisionId = randomUUID();
+      const currentCompanionLineage = floors.beginCompanionAuthorityReadd({
+        companionId: '11111111-1111-4111-8111-111111111111',
+        decisionId: readdDecisionId,
+        ceremonyId: randomUUID(),
+        decisionFingerprint: 'f'.repeat(64),
+        actorPrincipalId: principalId,
+        target: {
+          principalId,
+          authnVersion: 1,
+          authzVersion: 1,
+          bindingVersion: 1,
+          grantVersion: 1,
+          policyVersion: 1,
+        },
+        priorCompanionVersion: 1,
+        priorAuthorityGeneration: companionRemoval.trustedHost.authorityGeneration,
+        priorGlobalAuthEpoch: 2,
+        reasonDigest: 'd'.repeat(64),
+        at: '2026-07-15T11:45:00.000Z',
+      });
 
       const target = await freshDatabase();
       await migrateFleetAuthSchema({ databaseUrl: target.migrationUrl, roles: ROLES });
@@ -1433,6 +1484,29 @@ describe('fleet_auth Postgres authority boundary', () => {
           [principalId],
         );
         expect(principal.rows[0]).toEqual({ status: 'quarantined', restore_state: 'quarantined' });
+        const restoredCompanion = await targetRuntime.query<{
+          lifecycle: string;
+          restore_state: string;
+          authority_lineage_id: string | null;
+          lineage_generation: string | null;
+          readd_decision_id: string | null;
+        }>(`
+          SELECT lifecycle, restore_state, authority_lineage_id,
+                 lineage_generation, readd_decision_id
+          FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          WHERE companion_id = '11111111-1111-4111-8111-111111111111'
+        `);
+        expect(restoredCompanion.rows[0]).toEqual({
+          lifecycle: 'quarantined',
+          restore_state: 'quarantined',
+          authority_lineage_id: null,
+          lineage_generation: null,
+          readd_decision_id: null,
+        });
+        expect(currentCompanionLineage).toMatchObject({
+          lineageGeneration: 4,
+          entry: { companionReadd: { decisionId: readdDecisionId } },
+        });
         const provider = await targetRuntime.query<{ state: string; restore_state: string }>(
           `SELECT state, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
            WHERE provider = 'discord' AND subject_id = '123456789012345678'`,
@@ -1541,10 +1615,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       mkdirSync(newFloorRoot, { mode: 0o700 });
       chmodSync(oldFloorRoot, 0o700);
       chmodSync(newFloorRoot, 0o700);
-      copyFileSync(
-        join(process.cwd(), 'config', 'fleet-auth.seed.json'),
-        join(systemDataDir, 'fleet-auth.json'),
-      );
+      writeFleetAuthTestConfig(systemDataDir);
       const oldFloors = new FleetAuthAuthorityFloorStore(oldFloorRoot);
       const oldFloor = oldFloors.open({
         activationGeneration: 1,

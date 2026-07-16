@@ -905,6 +905,50 @@ CREATE UNIQUE INDEX oauth_transaction_lifecycle_proof_unique
   WHERE lifecycle_ceremony_id IS NOT NULL;
 `;
 
+const COMPANION_AUTHORITY_LINEAGE_SQL = `
+ALTER TABLE companion_authority_state
+  ADD COLUMN authority_lineage_id TEXT CHECK (authority_lineage_id ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN lineage_generation BIGINT CHECK (lineage_generation >= 1),
+  ADD COLUMN readd_decision_id UUID UNIQUE,
+  ADD CONSTRAINT companion_authority_lineage_complete CHECK (
+    (authority_lineage_id IS NULL AND lineage_generation IS NULL AND readd_decision_id IS NULL)
+    OR (authority_lineage_id IS NOT NULL
+      AND lineage_generation IS NOT NULL
+      AND readd_decision_id IS NOT NULL)
+  );
+
+ALTER TABLE authority_floor_tombstone_projection
+  DROP CONSTRAINT authority_floor_tombstone_projection_kind_check,
+  ADD COLUMN companion_lineage_id TEXT CHECK (companion_lineage_id ~ '^[0-9a-f]{64}$'),
+  ADD CONSTRAINT authority_floor_tombstone_projection_kind_check CHECK (kind IN (
+    'provider_subject', 'contact_binding', 'role_grant', 'principal', 'companion',
+    'companion_lineage_floor'
+  )),
+  ADD CONSTRAINT authority_floor_companion_lineage_exact CHECK (
+    (kind = 'companion_lineage_floor' AND companion_lineage_id IS NOT NULL)
+    OR (kind <> 'companion_lineage_floor' AND companion_lineage_id IS NULL)
+  );
+
+ALTER TABLE trusted_host_ceremonies
+  DROP CONSTRAINT trusted_host_ceremonies_kind_check,
+  ALTER COLUMN expected_provider DROP NOT NULL,
+  ALTER COLUMN expected_provider_subject_id DROP NOT NULL,
+  ADD CONSTRAINT trusted_host_ceremonies_kind_check CHECK (kind IN (
+    'first_owner', 'account_reapproval', 'companion_reapproval',
+    'passkey_enrollment', 'passkey_recovery'
+  )),
+  ADD CONSTRAINT trusted_host_ceremony_provider_scope_exact CHECK (
+    (kind = 'companion_reapproval'
+      AND expected_provider IS NULL
+      AND expected_provider_subject_id IS NULL
+      AND expected_companion_id IS NOT NULL
+      AND expected_contact_id IS NULL)
+    OR (kind <> 'companion_reapproval'
+      AND expected_provider = 'discord'
+      AND expected_provider_subject_id IS NOT NULL)
+  );
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
@@ -920,4 +964,5 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 12, name: 'exclusive_broker_authority_lock', sql: FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL },
   { version: 13, name: 'atomic_authority_lifecycle', sql: ATOMIC_AUTHORITY_LIFECYCLE_SQL },
   { version: 14, name: 'lifecycle_oauth_purpose', sql: LIFECYCLE_OAUTH_PURPOSE_SQL },
+  { version: 15, name: 'companion_authority_lineage', sql: COMPANION_AUTHORITY_LINEAGE_SQL },
 ] as const;

@@ -21,6 +21,11 @@ import {
   type AccountReapprovalRequest,
   type AccountReapprovalResult,
 } from './reapproval.js';
+import {
+  executeCompanionReapproval,
+  type CompanionReapprovalRequest,
+  type CompanionReapprovalResult,
+} from './companion-reapproval.js';
 import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
 import {
   PostgresFleetAuthBrokerStore,
@@ -43,6 +48,7 @@ import { DiscordEvidenceLifecycleCoordinator } from '../../../boundary/fleet-aut
 import { GatewayFleetAuthAuthorityLifecycleStore } from './authority-lifecycle-store.js';
 import { replaceAccountAuthorityFloorProjection } from './authority-floor-projection.js';
 import { createPostgresFleetAuthorizationContextResolver } from './authorization-context.js';
+import { reconcilePendingCompanionReadd } from './companion-readd-reconciliation.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -59,6 +65,9 @@ export interface GatewayFleetAuthPersistence {
   reapproveAccountAuthority(
     request: AccountReapprovalRequest,
   ): Promise<AccountReapprovalResult>;
+  reapproveCompanionAuthority(
+    request: CompanionReapprovalRequest,
+  ): Promise<CompanionReapprovalResult>;
   verifyAndConsumeHubDeviceAssertion(
     token: string,
     expected: HubDeviceAssertionExpectedBinding,
@@ -109,7 +118,17 @@ export async function reconcileFleetAuthAuthorityStateInTransaction(
   auditEventId: string,
 ): Promise<void> {
   const trusted = floor.trustedHost;
-  await replaceAccountAuthorityFloorProjection(client, trusted.tombstones);
+  // Serialize projection replacement with both reapproval procedures. They
+  // lock this singleton before consulting the projection, so no caller can
+  // authorize against the prior committed floor while reconciliation swaps it.
+  await client.query(`
+    SELECT 1
+    FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+    WHERE singleton = TRUE
+    FOR UPDATE
+  `);
+  await replaceAccountAuthorityFloorProjection(client, trusted);
+  if (await reconcilePendingCompanionReadd(client, floor, auditEventId)) return;
   const result = await client.query<{ global_auth_epoch: string }>(`
     SELECT global_auth_epoch
     FROM ${FLEET_AUTH_RECONCILE_FUNCTION_NAME}($1, $2, $3, $4, $5)
@@ -195,6 +214,18 @@ export function createGatewayAccountAuthorityFencePort(
       );
       return { authorityGeneration: fencedFloor.trustedHost.authorityGeneration };
     },
+    beginCompanionReadd: async input => {
+      const lineage = authorityFloors.beginCompanionAuthorityReadd({
+        ...input,
+        at: input.at.toISOString(),
+      });
+      observedAuthorityGeneration = Math.max(
+        observedAuthorityGeneration,
+        lineage.authorityGeneration,
+      );
+      return lineage;
+    },
+    findCompanionReadd: companionId => authorityFloors.findCompanionAuthorityReadd(companionId),
   };
 }
 
@@ -221,6 +252,22 @@ export function createGatewayAccountReapprovalAuthority(
       throw new Error('Account authority is permanently tombstoned by non-restored authority');
     }
     return await executeAccountReapproval(pool, request);
+  };
+}
+
+export function createGatewayCompanionReapprovalAuthority(
+  pool: Pool,
+  authorityFloors: FleetAuthAuthorityFloorStore,
+): GatewayFleetAuthPersistence['reapproveCompanionAuthority'] {
+  return async request => {
+    if (!authorityFloors.companionAuthorityLineageIsCurrent({
+      companionId: request.companionId,
+      lineageId: request.lineageId,
+      lineageGeneration: request.lineageGeneration,
+    })) {
+      throw new Error('Companion authority lineage is not current in non-restored authority');
+    }
+    return await executeCompanionReapproval(pool, request);
   };
 }
 
@@ -347,6 +394,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       ...(discordEvidence ? { discordEvidence } : {}),
       ...(discordEvidenceLifecycle ? { discordEvidenceLifecycle } : {}),
       reapproveAccountAuthority: createGatewayAccountReapprovalAuthority(pool, authorityFloors),
+      reapproveCompanionAuthority: createGatewayCompanionReapprovalAuthority(pool, authorityFloors),
       verifyAndConsumeHubDeviceAssertion: (token, expected) => verifyAndConsumeHubDeviceAssertion({
         token,
         expected,

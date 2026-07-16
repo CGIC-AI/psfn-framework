@@ -26,6 +26,8 @@ import {
 } from './authority-lifecycle-types.js';
 import {
   createGatewayAccountAuthorityFencePort,
+  createGatewayAccountReapprovalAuthority,
+  createGatewayCompanionReapprovalAuthority,
   reconcileFleetAuthAuthorityState,
 } from './gateway-persistence.js';
 import {
@@ -102,6 +104,7 @@ async function freshContext() {
   return {
     pool,
     floorRoot,
+    runtimeUrl: roleUrl(database.databaseUrl, ROLES.runtime),
     store: new GatewayFleetAuthAuthorityLifecycleStore({
       pool,
       accountAuthority: createGatewayAccountAuthorityFencePort(floors),
@@ -872,6 +875,422 @@ describe('gateway fleet-auth authority lifecycle store', () => {
         WHERE companion_id = $1 AND lifecycle = 'active'
       `, [seeded.companionId]);
       expect(active.rows[0]?.count).toBe('0');
+    } finally {
+      await context.pool.end();
+      rmSync(context.floorRoot, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
+  it('keeps a fresh companion lineage quarantined against backup-role update sequences', async () => {
+    const context = await freshContext();
+    try {
+      const seeded = await seedOwnerAndTarget(context.pool);
+      const remove = {
+        ...baseDecision('companion.remove', claim(seeded.actorId), claim(seeded.actorId)),
+        companionId: seeded.companionId,
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      const removed = await executeDecision(context, remove);
+      await seedActorSession(
+        context.pool,
+        removed.target,
+        '123456789012345678',
+        removed.globalAuthEpoch,
+      );
+      const readd = {
+        ...baseDecision('companion.readd', removed.target, removed.target),
+        decisionId: randomUUID(),
+        ceremonyId: randomUUID(),
+        companionId: seeded.companionId,
+        globalAuthEpoch: removed.globalAuthEpoch,
+        authorityGeneration: removed.authorityGeneration,
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      await executeDecision(context, readd);
+
+      const attempt = async (statements: readonly string[]): Promise<void> => {
+        const attacker = await context.pool.connect();
+        try {
+          await attacker.query('BEGIN');
+          await expect((async () => {
+            for (const statement of statements) {
+              await attacker.query(statement, [seeded.companionId]);
+            }
+          })()).rejects.toThrow(/reapprove_companion_authority/i);
+        } finally {
+          await attacker.query('ROLLBACK');
+          attacker.release();
+        }
+      };
+
+      await attempt([
+        `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+         SET lifecycle = 'removed' WHERE companion_id = $1`,
+        `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+         SET lifecycle = 'active' WHERE companion_id = $1`,
+      ]);
+      await attempt([
+        `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+         SET lifecycle = 'active' WHERE companion_id = $1`,
+      ]);
+      await attempt([
+        `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+         SET lifecycle = 'removed', authority_lineage_id = NULL,
+             lineage_generation = NULL, readd_decision_id = NULL
+         WHERE companion_id = $1`,
+      ]);
+      await attempt([
+        `UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+         SET version = version + 1 WHERE companion_id = $1`,
+      ]);
+
+      const durable = await context.pool.query<{
+        lifecycle: string;
+        restore_state: string;
+        version: string;
+        authority_lineage_id: string;
+        lineage_generation: string;
+        readd_decision_id: string;
+      }>(`
+        SELECT lifecycle, restore_state, version, authority_lineage_id,
+               lineage_generation, readd_decision_id
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+        WHERE companion_id = $1
+      `, [seeded.companionId]);
+      expect(durable.rows[0]).toMatchObject({
+        lifecycle: 'quarantined',
+        restore_state: 'live',
+        version: '3',
+        lineage_generation: '3',
+        readd_decision_id: readd.decisionId,
+      });
+      expect(durable.rows[0]?.authority_lineage_id).toMatch(/^[0-9a-f]{64}$/);
+    } finally {
+      await context.pool.end();
+      rmSync(context.floorRoot, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
+  it('reapproves a fresh same-id companion authority after remove and re-add', async () => {
+    const context = await freshContext();
+    const runtime = createPostgresPool(context.runtimeUrl, { max: 2 });
+    try {
+      const seeded = await seedOwnerAndTarget(context.pool);
+      const remove = {
+        ...baseDecision('companion.remove', claim(seeded.actorId), claim(seeded.actorId)),
+        companionId: seeded.companionId,
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      const removed = await executeDecision(context, remove);
+      await seedActorSession(
+        context.pool,
+        removed.target,
+        '123456789012345678',
+        removed.globalAuthEpoch,
+      );
+      const readd = {
+        ...baseDecision('companion.readd', removed.target, removed.target),
+        decisionId: randomUUID(),
+        ceremonyId: randomUUID(),
+        companionId: seeded.companionId,
+        globalAuthEpoch: removed.globalAuthEpoch,
+        authorityGeneration: removed.authorityGeneration,
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      await executeDecision(context, readd);
+      await expect(context.pool.query(`
+        UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+        SET lifecycle = 'active'
+        WHERE companion_id = $1
+      `, [seeded.companionId])).rejects.toThrow(/reapprove_companion_authority/i);
+
+      const authority = await context.pool.query<{
+        authority_generation: string;
+        global_auth_epoch: string;
+        restore_checkpoint: string;
+        authority_lineage_id: string;
+      }>(`
+        SELECT authority_generation, global_auth_epoch, restore_checkpoint,
+               authority_lineage_id
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+        WHERE singleton = TRUE
+      `);
+      const companion = await context.pool.query<{
+        version: string;
+        authority_lineage_id: string;
+        lineage_generation: string;
+        readd_decision_id: string;
+      }>(`
+        SELECT version, authority_lineage_id, lineage_generation, readd_decision_id
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+        WHERE companion_id = $1
+      `, [seeded.companionId]);
+      const ceremonyId = randomUUID();
+      await context.pool.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+          (ceremony_id, nonce_digest, kind, expected_provider,
+           expected_provider_subject_id, expected_companion_id, exact_scope,
+           global_auth_epoch, expires_at)
+        VALUES ($1, $2, 'companion_reapproval', NULL, NULL,
+                $3, $4::jsonb, $5, clock_timestamp() + interval '10 minutes')
+      `, [
+        ceremonyId,
+        createHash('sha256').update(randomUUID()).digest('hex'),
+        seeded.companionId,
+        JSON.stringify({
+          schemaVersion: 1,
+          companionId: seeded.companionId,
+          lineageId: companion.rows[0]?.authority_lineage_id,
+          lineageGeneration: Number(companion.rows[0]?.lineage_generation),
+          companionVersion: Number(companion.rows[0]?.version),
+          readdDecisionId: companion.rows[0]?.readd_decision_id,
+          authorityLineageId: authority.rows[0]?.authority_lineage_id,
+          authorityGeneration: Number(authority.rows[0]?.authority_generation),
+          restoreCheckpoint: Number(authority.rows[0]?.restore_checkpoint),
+        }),
+        authority.rows[0]?.global_auth_epoch,
+      ]);
+
+      const reapprove = createGatewayCompanionReapprovalAuthority(
+        runtime,
+        new FleetAuthAuthorityFloorStore(context.floorRoot),
+      );
+      const request = {
+        ceremonyId,
+        companionId: seeded.companionId,
+        lineageId: companion.rows[0]!.authority_lineage_id,
+        lineageGeneration: Number(companion.rows[0]?.lineage_generation),
+        companionVersion: Number(companion.rows[0]?.version),
+        readdDecisionId: companion.rows[0]!.readd_decision_id,
+        auditEventId: randomUUID(),
+        at: new Date().toISOString(),
+      };
+      const backupReapprove = createGatewayCompanionReapprovalAuthority(
+        context.pool,
+        new FleetAuthAuthorityFloorStore(context.floorRoot),
+      );
+      await expect(backupReapprove(request)).rejects.toThrow(/permission denied/i);
+      const [approved, concurrentReplay] = await Promise.all([
+        reapprove(request),
+        reapprove(request),
+      ]);
+      expect(approved).toMatchObject({
+        companionId: seeded.companionId,
+        lineageId: request.lineageId,
+        lineageGeneration: request.lineageGeneration,
+        companionVersion: request.companionVersion + 1,
+      });
+      expect(concurrentReplay).toEqual(approved);
+      await expect(reapprove(request)).resolves.toEqual(approved);
+      await expect(reapprove({
+        ...request,
+        companionVersion: request.companionVersion + 1,
+      })).rejects.toThrow(/idempotency key conflicts/i);
+
+      const durable = await context.pool.query<{
+        lifecycle: string;
+        version: string;
+        authority_lineage_id: string;
+        lineage_generation: string;
+        active_bindings: string;
+        active_grants: string;
+        active_sessions: string;
+      }>(`
+        SELECT companion.lifecycle, companion.version, companion.authority_lineage_id,
+               companion.lineage_generation,
+               (SELECT count(*)::text
+                FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+                WHERE companion_id = companion.companion_id AND state = 'active') AS active_bindings,
+               (SELECT count(*)::text
+                FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+                WHERE companion_id = companion.companion_id AND lifecycle = 'active') AS active_grants,
+               (SELECT count(*)::text
+                FROM ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions
+                WHERE principal_id = ANY($2::uuid[]) AND revoked_at IS NULL) AS active_sessions
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state AS companion
+        WHERE companion.companion_id = $1
+      `, [seeded.companionId, [seeded.actorId, seeded.targetId]]);
+      expect(durable.rows[0]).toEqual({
+        lifecycle: 'active',
+        version: String(approved.companionVersion),
+        authority_lineage_id: request.lineageId,
+        lineage_generation: String(request.lineageGeneration),
+        active_bindings: '0',
+        active_grants: '0',
+        active_sessions: '0',
+      });
+      const audit = await context.pool.query<{
+        action: string;
+        decision: string;
+        reason_code: string;
+        companion_id: string;
+        authority_generation: string;
+        global_auth_epoch: string;
+        decision_context: Record<string, unknown>;
+      }>(`
+        SELECT action, decision, reason_code, companion_id,
+               authority_generation, global_auth_epoch, decision_context
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+        WHERE event_id = $1
+      `, [request.auditEventId]);
+      expect(audit.rows[0]).toMatchObject({
+        action: 'companion.authority.reapprove',
+        decision: 'allow',
+        reason_code: 'trusted_host_companion_reapproval',
+        companion_id: seeded.companionId,
+        authority_generation: String(approved.authorityGeneration),
+        global_auth_epoch: String(approved.globalAuthEpoch),
+        decision_context: {
+          schemaVersion: 2,
+          lineageId: request.lineageId,
+          lineageGeneration: request.lineageGeneration,
+          beforeVersion: request.companionVersion,
+          afterVersion: approved.companionVersion,
+          readdDecisionId: request.readdDecisionId,
+          authorityLineageId: authority.rows[0]?.authority_lineage_id,
+          authorityGeneration: Number(authority.rows[0]?.authority_generation),
+          restoreCheckpoint: Number(authority.rows[0]?.restore_checkpoint),
+        },
+      });
+
+      const oldAccountReapproval = createGatewayAccountReapprovalAuthority(
+        runtime,
+        new FleetAuthAuthorityFloorStore(context.floorRoot),
+      );
+      await expect(oldAccountReapproval({
+        ceremonyId: randomUUID(),
+        principalId: seeded.actorId,
+        provider: 'discord',
+        providerSubjectId: '123456789012345678',
+        companionId: seeded.companionId,
+        contactId: seeded.targetContactId,
+        bindingId: seeded.actorBindingId,
+        roleGrantId: seeded.actorGrantId,
+        auditEventId: randomUUID(),
+        at: new Date().toISOString(),
+      })).rejects.toThrow(/permanently tombstoned/);
+
+    } finally {
+      await Promise.all([context.pool.end(), runtime.end()]);
+      rmSync(context.floorRoot, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
+  it('reconciles an exact companion re-add after floor publication loses its acknowledgement', async () => {
+    const context = await freshContext();
+    try {
+      const seeded = await seedOwnerAndTarget(context.pool);
+      const floors = new FleetAuthAuthorityFloorStore(context.floorRoot);
+      const remove = {
+        ...baseDecision('companion.remove', claim(seeded.actorId), claim(seeded.actorId)),
+        companionId: seeded.companionId,
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      const removed = await executeDecision(context, remove);
+      await seedActorSession(
+        context.pool,
+        removed.target,
+        '123456789012345678',
+        removed.globalAuthEpoch,
+      );
+      const readd = {
+        ...baseDecision('companion.readd', removed.target, removed.target),
+        decisionId: randomUUID(),
+        ceremonyId: randomUUID(),
+        companionId: seeded.companionId,
+        globalAuthEpoch: removed.globalAuthEpoch,
+        authorityGeneration: removed.authorityGeneration,
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      const authority = createGatewayAccountAuthorityFencePort(floors);
+      const storeWithLostPublicationAck = new GatewayFleetAuthAuthorityLifecycleStore({
+        pool: context.pool,
+        accountAuthority: {
+          ...authority,
+          beginCompanionReadd: async input => {
+            await authority.beginCompanionReadd(input);
+            throw new Error('simulated lost floor publication acknowledgement');
+          },
+        },
+      });
+      await expect(storeWithLostPublicationAck.execute(readd)).rejects.toMatchObject({
+        reasonCode: 'companion_readd_pending_reconciliation',
+      });
+
+      const beforeRecovery = await context.pool.query<{
+        authority_generation: string;
+        global_auth_epoch: string;
+        lifecycle: string;
+        version: string;
+        audit_count: string;
+      }>(`
+        SELECT authority.authority_generation, authority.global_auth_epoch,
+               companion.lifecycle, companion.version,
+               (SELECT count(*)::text
+                FROM ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+                WHERE decision_id = $2) AS audit_count
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state AS authority
+        JOIN ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state AS companion
+          ON companion.companion_id = $1
+        WHERE authority.singleton = TRUE
+      `, [seeded.companionId, readd.decisionId]);
+      expect(beforeRecovery.rows[0]).toEqual({
+        authority_generation: '2',
+        global_auth_epoch: '2',
+        lifecycle: 'removed',
+        version: '2',
+        audit_count: '0',
+      });
+      expect(floors.findCompanionAuthorityReadd(seeded.companionId)).toMatchObject({
+        lineageGeneration: 3,
+        authorityGeneration: 3,
+        entry: { companionReadd: { decisionId: readd.decisionId } },
+      });
+
+      await reconcileFleetAuthAuthorityState(context.pool, floors.read(), randomUUID());
+      const replayed = await context.store.execute(readd);
+      expect(replayed).toMatchObject({
+        decisionId: readd.decisionId,
+        action: 'companion.readd',
+        authorityGeneration: 3,
+        globalAuthEpoch: 3,
+        target: {
+          principalId: seeded.actorId,
+          authzVersion: removed.target.authzVersion + 1,
+          bindingVersion: removed.target.bindingVersion + 1,
+          grantVersion: removed.target.grantVersion + 1,
+          policyVersion: removed.target.policyVersion + 1,
+        },
+      });
+      await expect(context.store.execute({
+        ...readd,
+        ceremonyId: randomUUID(),
+      })).rejects.toMatchObject({ reasonCode: 'lifecycle_decision_terminal' });
+
+      const recovered = await context.pool.query<{
+        lifecycle: string;
+        authority_lineage_id: string;
+        lineage_generation: string;
+        active_bindings: string;
+        active_grants: string;
+        audit_count: string;
+      }>(`
+        SELECT companion.lifecycle, companion.authority_lineage_id,
+               companion.lineage_generation,
+               (SELECT count(*)::text
+                FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+                WHERE companion_id = companion.companion_id AND state = 'active') AS active_bindings,
+               (SELECT count(*)::text
+                FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+                WHERE companion_id = companion.companion_id AND lifecycle = 'active') AS active_grants,
+               (SELECT count(*)::text
+                FROM ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+                WHERE decision_id = $2) AS audit_count
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state AS companion
+        WHERE companion.companion_id = $1
+      `, [seeded.companionId, readd.decisionId]);
+      expect(recovered.rows[0]).toMatchObject({
+        lifecycle: 'quarantined',
+        lineage_generation: '3',
+        active_bindings: '0',
+        active_grants: '0',
+        audit_count: '1',
+      });
+      expect(recovered.rows[0]?.authority_lineage_id).toMatch(/^[0-9a-f]{64}$/);
     } finally {
       await context.pool.end();
       rmSync(context.floorRoot, { recursive: true, force: true });

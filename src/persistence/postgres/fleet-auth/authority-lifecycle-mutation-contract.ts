@@ -15,7 +15,14 @@ export interface PreparedLifecycleMutation {
   affectedPrincipalIds: string[];
   bumps: ReadonlyMap<string, LifecycleVersionBump>;
   revocations: LifecycleRevocation[];
-  apply(authorityGeneration: number): Promise<void>;
+  companionReadd?: {
+    companionId: string;
+    priorVersion: number;
+  };
+  apply(
+    authorityGeneration: number,
+    companionLineage?: { lineageId: string; lineageGeneration: number },
+  ): Promise<void>;
 }
 
 export class LifecycleMutationDenied extends Error {

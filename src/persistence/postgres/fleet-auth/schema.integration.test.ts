@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   DEFAULT_POSTGRES_TEST_IMAGE,
@@ -8,11 +8,11 @@ import {
 import { createPostgresPool } from '../../postgres.js';
 import {
   chmodSync,
-  copyFileSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -31,6 +31,7 @@ import {
   reconcileFleetAuthAuthorityState,
 } from './gateway-persistence.js';
 import { executeAccountReapproval } from './reapproval.js';
+import { executeCompanionReapproval } from './companion-reapproval.js';
 import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
 import { PostgresFleetAuthBrokerStore } from './oauth-session-store.js';
 import { PostgresHubDeviceAssertionReplayStore } from './hub-device-assertion-replay.js';
@@ -73,6 +74,29 @@ function roleUrl(databaseUrl: string, role: keyof typeof PASSWORDS): string {
 function requirePostgresClients() {
   if (!harness) throw new Error('Postgres integration harness is not available');
   return harness.clientBinaries;
+}
+
+function writeFleetAuthTestConfig(systemDataDir: string): void {
+  const seed = JSON.parse(readFileSync(
+    join(process.cwd(), 'config', 'fleet-auth.seed.json'),
+    'utf8',
+  )) as {
+    verifierKeys: Array<{ kid: string; publicKeyPem: string }>;
+    hubDeviceAssertions: { keys: Array<{ kid: string; publicKeyPem: string }> };
+  };
+  const publicKeyPem = (): string => generateKeyPairSync('ed25519').publicKey.export({
+    type: 'spki',
+    format: 'pem',
+  }).toString();
+  seed.verifierKeys[0]!.kid = 'schema-test-verifier';
+  seed.verifierKeys[0]!.publicKeyPem = publicKeyPem();
+  seed.hubDeviceAssertions.keys[0]!.kid = 'schema-test-hub';
+  seed.hubDeviceAssertions.keys[0]!.publicKeyPem = publicKeyPem();
+  writeFileSync(
+    join(systemDataDir, 'fleet-auth.json'),
+    `${JSON.stringify(seed, null, 2)}\n`,
+    'utf8',
+  );
 }
 
 function runFleetAuthConsistentBackup(
@@ -195,7 +219,9 @@ describe('fleet_auth Postgres authority boundary', () => {
       const ledger = await migration.query<{ version: number; checksum: string }>(
         `SELECT version, checksum FROM ${FLEET_AUTH_SCHEMA_NAME}.schema_migrations ORDER BY version`,
       );
-      expect(ledger.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]);
+      expect(ledger.rows.map(row => row.version)).toEqual([
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+      ]);
       expect(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum))).toBe(true);
 
       const tables = await migration.query<{ table_name: string }>(`
@@ -1181,10 +1207,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       mkdirSync(systemDataDir, { recursive: true });
       mkdirSync(floorRoot, { mode: 0o700 });
       chmodSync(floorRoot, 0o700);
-      copyFileSync(
-        join(process.cwd(), 'config', 'fleet-auth.seed.json'),
-        join(systemDataDir, 'fleet-auth.json'),
-      );
+      writeFleetAuthTestConfig(systemDataDir);
       const floors = new FleetAuthAuthorityFloorStore(floorRoot);
       const floor = floors.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
       await reconcileThroughCoordinator(db.backupUrl, floor);
@@ -1296,10 +1319,7 @@ describe('fleet_auth Postgres authority boundary', () => {
     };
     const keyB = { ...keyA, credentialIdHash: 'b'.repeat(64), publicKeyVerifier: 'verifier-b' };
     try {
-      copyFileSync(
-        join(process.cwd(), 'config', 'fleet-auth.seed.json'),
-        join(systemDataDir, 'fleet-auth.json'),
-      );
+      writeFleetAuthTestConfig(systemDataDir);
       const floors = new FleetAuthAuthorityFloorStore(floorRoot);
       const sourceFloor = floors.open({
         activationGeneration: 1,
@@ -1327,6 +1347,11 @@ describe('fleet_auth Postgres authority boundary', () => {
           (provider, subject_id, principal_id, state, authority_generation)
          VALUES ('discord', '123456789012345678', $1, 'active', 1)`,
         [principalId],
+      );
+      await sourceCoordinator.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          (companion_id, lifecycle, authority_generation)
+         VALUES ('11111111-1111-4111-8111-111111111111', 'active', 1)`,
       );
       await sourceRuntime.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
@@ -1412,6 +1437,33 @@ describe('fleet_auth Postgres authority boundary', () => {
         'provider_subject',
         'discord:123456789012345678',
       )).toBe(true);
+      const companionRemoval = floors.revokeAccountAuthority({
+        kind: 'companion',
+        resourceId: '11111111-1111-4111-8111-111111111111',
+        reason: 'post-snapshot companion removal',
+        at: '2026-07-15T11:40:00.000Z',
+      });
+      const readdDecisionId = randomUUID();
+      const currentCompanionLineage = floors.beginCompanionAuthorityReadd({
+        companionId: '11111111-1111-4111-8111-111111111111',
+        decisionId: readdDecisionId,
+        ceremonyId: randomUUID(),
+        decisionFingerprint: 'f'.repeat(64),
+        actorPrincipalId: principalId,
+        target: {
+          principalId,
+          authnVersion: 1,
+          authzVersion: 1,
+          bindingVersion: 1,
+          grantVersion: 1,
+          policyVersion: 1,
+        },
+        priorCompanionVersion: 1,
+        priorAuthorityGeneration: companionRemoval.trustedHost.authorityGeneration,
+        priorGlobalAuthEpoch: 2,
+        reasonDigest: 'd'.repeat(64),
+        at: '2026-07-15T11:45:00.000Z',
+      });
 
       const target = await freshDatabase();
       await migrateFleetAuthSchema({ databaseUrl: target.migrationUrl, roles: ROLES });
@@ -1433,6 +1485,29 @@ describe('fleet_auth Postgres authority boundary', () => {
           [principalId],
         );
         expect(principal.rows[0]).toEqual({ status: 'quarantined', restore_state: 'quarantined' });
+        const restoredCompanion = await targetRuntime.query<{
+          lifecycle: string;
+          restore_state: string;
+          authority_lineage_id: string | null;
+          lineage_generation: string | null;
+          readd_decision_id: string | null;
+        }>(`
+          SELECT lifecycle, restore_state, authority_lineage_id,
+                 lineage_generation, readd_decision_id
+          FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          WHERE companion_id = '11111111-1111-4111-8111-111111111111'
+        `);
+        expect(restoredCompanion.rows[0]).toEqual({
+          lifecycle: 'quarantined',
+          restore_state: 'quarantined',
+          authority_lineage_id: null,
+          lineage_generation: null,
+          readd_decision_id: null,
+        });
+        expect(currentCompanionLineage).toMatchObject({
+          lineageGeneration: 4,
+          entry: { companionReadd: { decisionId: readdDecisionId } },
+        });
         const provider = await targetRuntime.query<{ state: string; restore_state: string }>(
           `SELECT state, restore_state FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
            WHERE provider = 'discord' AND subject_id = '123456789012345678'`,
@@ -1524,6 +1599,198 @@ describe('fleet_auth Postgres authority boundary', () => {
     }
   }, TIMEOUT_MS);
 
+  it('rejects a restored companion reapproval receipt after backup and restore quarantine', async () => {
+    const source = await freshDatabase();
+    await migrateFleetAuthSchema({ databaseUrl: source.migrationUrl, roles: ROLES });
+    const sourceMigration = createPostgresPool(source.migrationUrl, { max: 1 });
+    const sourceBackup = createPostgresPool(source.backupUrl, { max: 1 });
+    const sourceRuntime = createPostgresPool(source.runtimeUrl, { max: 1 });
+    const root = mkdtempSync(join(tmpdir(), 'psfn-fleet-auth-companion-replay-'));
+    const systemDataDir = join(root, 'system-data');
+    const backupDir = join(root, 'backup');
+    const floorRoot = join(root, 'authority');
+    const companionId = randomUUID();
+    const readdDecisionId = randomUUID();
+    try {
+      mkdirSync(systemDataDir, { recursive: true });
+      mkdirSync(floorRoot, { mode: 0o700 });
+      chmodSync(floorRoot, 0o700);
+      writeFleetAuthTestConfig(systemDataDir);
+      const floors = new FleetAuthAuthorityFloorStore(floorRoot);
+      floors.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
+      floors.revokeAccountAuthority({
+        kind: 'companion',
+        resourceId: companionId,
+        reason: 'companion removed before fresh authority',
+        at: '2026-07-16T12:00:00.000Z',
+      });
+      const lineage = floors.beginCompanionAuthorityReadd({
+        companionId,
+        decisionId: readdDecisionId,
+        ceremonyId: randomUUID(),
+        decisionFingerprint: 'a'.repeat(64),
+        actorPrincipalId: randomUUID(),
+        target: {
+          principalId: randomUUID(),
+          authnVersion: 1,
+          authzVersion: 1,
+          bindingVersion: 1,
+          grantVersion: 1,
+          policyVersion: 1,
+        },
+        priorCompanionVersion: 2,
+        priorAuthorityGeneration: 2,
+        priorGlobalAuthEpoch: 2,
+        reasonDigest: 'b'.repeat(64),
+        at: '2026-07-16T12:01:00.000Z',
+      });
+      await reconcileFleetAuthAuthorityState(sourceBackup, floors.read(), randomUUID());
+      const authority = await sourceBackup.query<{
+        authority_generation: string;
+        global_auth_epoch: string;
+        restore_checkpoint: string;
+        authority_lineage_id: string;
+      }>(`
+        SELECT authority_generation, global_auth_epoch, restore_checkpoint,
+               authority_lineage_id
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state WHERE singleton = TRUE
+      `);
+      await sourceBackup.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          (companion_id, lifecycle, version, authority_generation, restore_state,
+           authority_lineage_id, lineage_generation, readd_decision_id)
+        VALUES ($1, 'quarantined', 3, $2, 'live', $3, $4, $5)
+      `, [
+        companionId,
+        authority.rows[0]?.authority_generation,
+        lineage.lineageId,
+        lineage.lineageGeneration,
+        readdDecisionId,
+      ]);
+      const ceremonyId = randomUUID();
+      await sourceMigration.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+          (ceremony_id, nonce_digest, kind, expected_provider,
+           expected_provider_subject_id, expected_companion_id, exact_scope,
+           global_auth_epoch, expires_at)
+        VALUES ($1, $2, 'companion_reapproval', NULL, NULL, $3, $4::jsonb,
+                $5, clock_timestamp() + interval '10 minutes')
+      `, [
+        ceremonyId,
+        createHash('sha256').update(randomUUID()).digest('hex'),
+        companionId,
+        JSON.stringify({
+          schemaVersion: 1,
+          companionId,
+          lineageId: lineage.lineageId,
+          lineageGeneration: lineage.lineageGeneration,
+          companionVersion: 3,
+          readdDecisionId,
+          authorityLineageId: authority.rows[0]?.authority_lineage_id,
+          authorityGeneration: Number(authority.rows[0]?.authority_generation),
+          restoreCheckpoint: Number(authority.rows[0]?.restore_checkpoint),
+        }),
+        authority.rows[0]?.global_auth_epoch,
+      ]);
+      const request = {
+        ceremonyId,
+        companionId,
+        lineageId: lineage.lineageId,
+        lineageGeneration: lineage.lineageGeneration,
+        companionVersion: 3,
+        readdDecisionId,
+        auditEventId: randomUUID(),
+        at: '2026-07-16T12:02:00.000Z',
+      };
+      await executeCompanionReapproval(sourceRuntime, request);
+
+      await sourceMigration.query(`
+        CREATE SCHEMA companion_alpha;
+        CREATE TABLE companion_alpha.snapshot_probe (value TEXT NOT NULL);
+        INSERT INTO companion_alpha.snapshot_probe VALUES ('source');
+        CREATE SCHEMA shared;
+        CREATE TABLE shared.snapshot_probe (value TEXT NOT NULL);
+        INSERT INTO shared.snapshot_probe VALUES ('source');
+        GRANT USAGE ON SCHEMA companion_alpha, shared TO ${quoteIdentifier(ROLES.backupRestore)};
+        GRANT SELECT ON ALL TABLES IN SCHEMA companion_alpha, shared TO ${quoteIdentifier(ROLES.backupRestore)};
+      `);
+      const backup = await runFleetAuthConsistentBackup({
+        databaseUrl: source.backupUrl,
+        roles: ROLES,
+        schemas: [
+          {
+            kind: 'companion',
+            schema: 'companion_alpha',
+            ownerRole: COMPANION_ROLE,
+            runtimeRoles: [COMPANION_ROLE],
+          },
+          {
+            kind: 'shared',
+            schema: 'shared',
+            ownerRole: COMPANION_ROLE,
+            runtimeRoles: [COMPANION_ROLE],
+          },
+        ],
+        systemDataDir,
+        backupDir,
+        capturedAt: '2026-07-16T12:03:00.000Z',
+      });
+
+      const target = await freshDatabase();
+      await migrateFleetAuthSchema({ databaseUrl: target.migrationUrl, roles: ROLES });
+      const targetRuntime = createPostgresPool(target.runtimeUrl, { max: 1 });
+      const targetBackup = createPostgresPool(target.backupUrl, { max: 1 });
+      try {
+        await restoreFleetAuthSnapshot({
+          manifestPath: backup.manifestPath,
+          databaseUrl: target.backupUrl,
+          roles: ROLES,
+          authorityFloors: floors,
+          activationGeneration: 1,
+          restoredAt: '2026-07-16T12:04:00.000Z',
+        });
+        const restored = await targetRuntime.query<{
+          lifecycle: string;
+          restore_state: string;
+          authority_lineage_id: string;
+          lineage_generation: string;
+          ceremony_count: string;
+        }>(`
+          SELECT companion.lifecycle, companion.restore_state,
+                 companion.authority_lineage_id, companion.lineage_generation,
+                 (SELECT count(*)::text
+                  FROM ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies) AS ceremony_count
+          FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state AS companion
+          WHERE companion.companion_id = $1
+        `, [companionId]);
+        expect(restored.rows[0]).toEqual({
+          lifecycle: 'quarantined',
+          restore_state: 'quarantined',
+          authority_lineage_id: lineage.lineageId,
+          lineage_generation: String(lineage.lineageGeneration),
+          ceremony_count: '0',
+        });
+        await expect(targetBackup.query(`
+          UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          SET restore_state = 'live'
+          WHERE companion_id = $1
+        `, [companionId])).rejects.toThrow(/reapprove_companion_authority/i);
+        await expect(targetBackup.query(`
+          UPDATE ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          SET lifecycle = 'removed', restore_state = 'live'
+          WHERE companion_id = $1
+        `, [companionId])).rejects.toThrow(/reapprove_companion_authority/i);
+        await expect(executeCompanionReapproval(targetRuntime, request))
+          .rejects.toThrow(/receipt.*current companion authority/i);
+      } finally {
+        await Promise.all([targetRuntime.end(), targetBackup.end()]);
+      }
+    } finally {
+      await Promise.all([sourceMigration.end(), sourceBackup.end(), sourceRuntime.end()]);
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
   it('rejects an old backup after floor loss and fresh provisioning before floor or database mutation', async () => {
     const source = await freshDatabase();
     await migrateFleetAuthSchema({ databaseUrl: source.migrationUrl, roles: ROLES });
@@ -1541,10 +1808,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       mkdirSync(newFloorRoot, { mode: 0o700 });
       chmodSync(oldFloorRoot, 0o700);
       chmodSync(newFloorRoot, 0o700);
-      copyFileSync(
-        join(process.cwd(), 'config', 'fleet-auth.seed.json'),
-        join(systemDataDir, 'fleet-auth.json'),
-      );
+      writeFleetAuthTestConfig(systemDataDir);
       const oldFloors = new FleetAuthAuthorityFloorStore(oldFloorRoot);
       const oldFloor = oldFloors.open({
         activationGeneration: 1,

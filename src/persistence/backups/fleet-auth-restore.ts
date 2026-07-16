@@ -6,7 +6,9 @@ import {
   assertNoUnknownKeys,
   isCanonicalIsoTimestamp,
   isRecord,
+  isRfc4122Uuid,
 } from '../../shared/utils/types.js';
+import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
 import { createPostgresPool } from '../postgres.js';
 import {
   type FleetAuthAuthorityFloor,
@@ -40,7 +42,7 @@ interface FleetAuthDurableSnapshot {
 }
 
 interface FleetAuthSnapshot {
-  schemaVersion: 3;
+  schemaVersion: 4;
   capturedAt: string;
   postgresSnapshot: string;
   authorityLineageId: string;
@@ -113,6 +115,7 @@ const ROW_KEYS = {
   ],
   companionAuthorityState: [
     'companion_id', 'lifecycle', 'version', 'authority_generation', 'restore_state',
+    'authority_lineage_id', 'lineage_generation', 'readd_decision_id',
     'created_at', 'updated_at',
   ],
   principalContactBindings: [
@@ -187,7 +190,7 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
     ['schemaVersion', 'capturedAt', 'postgresSnapshot', 'authorityLineageId', 'durable'],
     'root',
   );
-  if (value.schemaVersion !== 3
+  if (value.schemaVersion !== 4
     || !isCanonicalIsoTimestamp(value.capturedAt)
     || value.capturedAt !== manifest.capturedAt
     || typeof value.postgresSnapshot !== 'string'
@@ -255,7 +258,7 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
     throw new Error('Invalid fleet auth snapshot: authority lineage does not match its manifest');
   }
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     capturedAt: value.capturedAt,
     postgresSnapshot: value.postgresSnapshot,
     authorityLineageId: value.authorityLineageId,
@@ -294,6 +297,52 @@ function parseStateInteger(value: string, field: string): number {
     throw new Error(`Invalid target fleet_auth authority_state.${field}`);
   }
   return parsed;
+}
+
+function admittedRestoredCompanionLineage(
+  row: SnapshotRow,
+  index: number,
+  floor: FleetAuthAuthorityFloor,
+  floors: FleetAuthAuthorityFloorStore,
+): { lineageId: string | null; lineageGeneration: number | null; readdDecisionId: string | null } {
+  const field = `durable.companionAuthorityState[${index}]`;
+  const companionId = requiredString(row, 'companion_id', field);
+  if (!isRfc4122Uuid(companionId)) {
+    throw new Error(`Invalid fleet auth snapshot: ${field}.companion_id must be an RFC-4122 UUID`);
+  }
+  const lineageId = row.authority_lineage_id;
+  const lineageGeneration = row.lineage_generation;
+  const readdDecisionId = row.readd_decision_id;
+  if (lineageId === null && lineageGeneration === null && readdDecisionId === null) {
+    return { lineageId: null, lineageGeneration: null, readdDecisionId: null };
+  }
+  if (typeof lineageId !== 'string'
+    || !/^[0-9a-f]{64}$/u.test(lineageId)
+    || typeof lineageGeneration !== 'number'
+    || !Number.isSafeInteger(lineageGeneration)
+    || Number(lineageGeneration) < 1
+    || typeof readdDecisionId !== 'string'
+    || !isRfc4122Uuid(readdDecisionId)) {
+    throw new Error(`Invalid fleet auth snapshot: ${field} has an incomplete companion lineage`);
+  }
+  const lineage = floors.findCompanionAuthorityReadd(companionId, floor);
+  if (!lineage
+    || !floors.companionAuthorityLineageIsCurrent({
+      companionId,
+      lineageId,
+      lineageGeneration: Number(lineageGeneration),
+    }, floor)
+    || !timingSafeStringEqual(lineage.lineageId, lineageId)
+    || lineage.entry.companionReadd.decisionId !== readdDecisionId) {
+    // A snapshot lineage that predates the current permanent floor is retained
+    // only as inert audit history. It cannot populate executable authority.
+    return { lineageId: null, lineageGeneration: null, readdDecisionId: null };
+  }
+  return {
+    lineageId,
+    lineageGeneration: Number(lineageGeneration),
+    readdDecisionId,
+  };
 }
 
 async function assertTargetNotAhead(
@@ -396,9 +445,11 @@ async function importDurableRows(
     }));
   }
 
-  for (const row of durable.companionAuthorityState) {
+  for (const [index, row] of durable.companionAuthorityState.entries()) {
+    const lineage = admittedRestoredCompanionLineage(row, index, floor, floors);
     const values = [
       row.companion_id, row.version, floor.trustedHost.authorityGeneration,
+      lineage.lineageId, lineage.lineageGeneration, lineage.readdDecisionId,
       row.created_at, restoredAt,
     ];
     await record(insertOrAssertCompatibleConflict({
@@ -406,8 +457,9 @@ async function importDurableRows(
       insertSql: `
         INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
           (companion_id, lifecycle, version, authority_generation, restore_state,
+           authority_lineage_id, lineage_generation, readd_decision_id,
            created_at, updated_at)
-        VALUES ($1, 'quarantined', $2, $3, 'quarantined', $4, $5)
+        VALUES ($1, 'quarantined', $2, $3, 'quarantined', $4, $5, $6, $7, $8)
         ON CONFLICT DO NOTHING
       `,
       insertValues: values,
@@ -415,11 +467,17 @@ async function importDurableRows(
         SELECT EXISTS (
           SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
           WHERE companion_id = $1::uuid AND version >= $2::bigint
-            AND authority_generation <= $3::bigint AND created_at <= $4::timestamptz
+            AND authority_generation <= $3::bigint
+            AND ($4::text IS NULL OR (
+              authority_lineage_id = $4
+              AND lineage_generation = $5::bigint
+              AND readd_decision_id = $6::uuid
+            ))
+            AND created_at <= $7::timestamptz
           FOR UPDATE
         ) AS compatible
       `,
-      compatibilityValues: values.slice(0, 4),
+      compatibilityValues: values.slice(0, 7),
       description: 'companion authority state',
     }));
   }

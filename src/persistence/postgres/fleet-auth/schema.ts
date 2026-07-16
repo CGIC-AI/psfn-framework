@@ -8,6 +8,11 @@ import {
   FLEET_AUTH_REAPPROVE_FUNCTION_NAME,
 } from './reapproval-sql.js';
 import {
+  FLEET_AUTH_COMPANION_REAPPROVAL_DDL_SQL,
+  FLEET_AUTH_REAPPROVE_COMPANION_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_REAPPROVE_COMPANION_FUNCTION_NAME,
+} from './companion-reapproval-sql.js';
+import {
   FLEET_AUTH_FIRST_OWNER_DDL_SQL,
   FLEET_AUTH_FIRST_OWNER_FUNCTION_ARG_TYPES,
   FLEET_AUTH_FIRST_OWNER_FUNCTION_NAME,
@@ -319,6 +324,9 @@ async function applyRoleGrants(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_REAPPROVE_FUNCTION_NAME}(${FLEET_AUTH_REAPPROVE_FUNCTION_ARG_TYPES}) TO ${runtime}`,
   );
   await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_REAPPROVE_COMPANION_FUNCTION_NAME}(${FLEET_AUTH_REAPPROVE_COMPANION_FUNCTION_ARG_TYPES}) TO ${runtime}`,
+  );
+  await client.query(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_FIRST_OWNER_FUNCTION_NAME}(${FLEET_AUTH_FIRST_OWNER_FUNCTION_ARG_TYPES}) TO ${runtime}`,
   );
   await client.query(
@@ -340,6 +348,7 @@ async function applyFleetAuthReapprovalBoundary(
   client: import('pg').PoolClient,
 ): Promise<void> {
   await client.query(FLEET_AUTH_REAPPROVAL_DDL_SQL);
+  await client.query(FLEET_AUTH_COMPANION_REAPPROVAL_DDL_SQL);
   await client.query(FLEET_AUTH_FIRST_OWNER_DDL_SQL);
   await client.query(FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL);
   await client.query(FLEET_AUTH_RECONCILIATION_DDL_SQL);

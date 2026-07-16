@@ -3,10 +3,12 @@ import type { PoolClient } from 'pg';
 import { LifecycleMutationDenied } from './authority-lifecycle-mutation-contract.js';
 import { lifecycleProviderProofs } from './authority-lifecycle-proof.js';
 import type {
+  FleetAuthLifecycleResult,
   PrincipalAuthorityClaim,
   VerifiedFleetAuthLifecycleDecision,
 } from './authority-lifecycle-types.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
+import { fleetAuthLifecycleDecisionFingerprint } from './authority-lifecycle-fingerprint.js';
 
 function digest(value: string): string {
   return createHash('sha256').update(value).digest('hex');
@@ -34,6 +36,7 @@ function redactedClaim(claim: PrincipalAuthorityClaim): Record<string, unknown> 
 function redactedContext(
   decision: VerifiedFleetAuthLifecycleDecision,
   snapshots?: LifecycleAuditSnapshots,
+  lifecycleResult?: FleetAuthLifecycleResult,
 ): Record<string, unknown> {
   const resourceClaims: Record<string, unknown> = {};
   const resourceIds = [
@@ -45,11 +48,13 @@ function redactedContext(
     ['sourceContactDigest', 'sourceContactId'],
     ['canonicalContactDigest', 'canonicalContactId'],
   ] as const;
+  const decisionFields = decision as unknown as Record<string, unknown>;
   for (const [output, input] of resourceIds) {
-    if (input in decision) resourceClaims[output] = digest(String(decision[input]));
+    if (input in decisionFields) resourceClaims[output] = digest(String(decisionFields[input]));
   }
   return {
     schemaVersion: 2,
+    decisionFingerprint: fleetAuthLifecycleDecisionFingerprint(decision),
     action: decision.action,
     ceremonyDigest: digest(decision.ceremonyId),
     authorityClaim: {
@@ -82,6 +87,13 @@ function redactedContext(
       proofDigest: proof.proofDigest,
     })),
     ...(snapshots ? { resourceState: snapshots } : {}),
+    ...(lifecycleResult ? {
+      lifecycleResult: {
+        authorityGeneration: lifecycleResult.authorityGeneration,
+        globalAuthEpoch: lifecycleResult.globalAuthEpoch,
+        target: redactedClaim(lifecycleResult.target),
+      },
+    } : {}),
   };
 }
 
@@ -132,8 +144,12 @@ export async function readRedactedLifecycleResourceSnapshot(
       version: string;
       authority_generation: string;
       restore_state: string;
+      authority_lineage_id: string | null;
+      lineage_generation: string | null;
+      readd_decision_id: string | null;
     }>(`
-      SELECT lifecycle, version, authority_generation, restore_state
+      SELECT lifecycle, version, authority_generation, restore_state,
+             authority_lineage_id, lineage_generation, readd_decision_id
       FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
       WHERE companion_id = $1
     `, [decision.companionId]);
@@ -144,6 +160,11 @@ export async function readRedactedLifecycleResourceSnapshot(
       version: positiveInteger(row.version, 'companion version'),
       authorityGeneration: positiveInteger(row.authority_generation, 'authority_generation'),
       restoreState: row.restore_state,
+      ...(row.authority_lineage_id ? { authorityLineageDigest: digest(row.authority_lineage_id) } : {}),
+      ...(row.lineage_generation
+        ? { lineageGeneration: positiveInteger(row.lineage_generation, 'companion lineage generation') }
+        : {}),
+      ...(row.readd_decision_id ? { readdDecisionDigest: digest(row.readd_decision_id) } : {}),
     } : { companionDigest: digest(decision.companionId), missing: true };
   }
 
@@ -290,8 +311,9 @@ export async function insertLifecycleAudit(
   reasonCode: string,
   authority: { authorityGeneration: number; globalAuthEpoch: number },
   snapshots?: LifecycleAuditSnapshots,
+  lifecycleResult?: FleetAuthLifecycleResult,
 ): Promise<void> {
-  const context = redactedContext(decision, snapshots);
+  const context = redactedContext(decision, snapshots, lifecycleResult);
   const result = await client.query(`
     INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
       (event_id, actor_context, action, resource, decision, reason_code,

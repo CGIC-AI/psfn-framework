@@ -157,7 +157,7 @@ async function captureFleetAuthSnapshot(
   return {
     authorityLineageId,
     value: {
-      schemaVersion: 3,
+      schemaVersion: 4,
       capturedAt,
       postgresSnapshot,
       authorityLineageId,

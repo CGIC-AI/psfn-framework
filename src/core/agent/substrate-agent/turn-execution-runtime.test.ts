@@ -71,6 +71,7 @@ import { parseTurnRecordBackgroundWorkHandoff } from '../background-work/types.j
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
 import { createApprovalQueuePortFromConfirmationQueue } from '../../../system/capabilities/approval-queue-port.js';
+import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
@@ -1549,16 +1550,18 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       peerCompanionId,
       turnId,
     });
-    const recoveredCorrelation = {
-      ...message.routing!.icpCorrelation!,
+    const baseCorrelation = message.routing?.icpCorrelation;
+    if (!baseCorrelation) throw new Error('test message requires ICP correlation');
+    const recoveredCorrelation: IcpConversationCorrelation = {
+      ...baseCorrelation,
       localCompanionId,
       peerCompanionId,
       peerContactId: 'contact-mi',
       turnId,
       messageId,
       requestId: messageId,
-      costOriginStage: 'reply' as const,
-      fatigueDecision: 'not_evaluated' as const,
+      costOriginStage: 'reply',
+      fatigueDecision: 'not_evaluated',
     };
     const companionDataDir = makeTempDir();
     const localPath = join(companionDataDir, 'recovered-private-artifact.png');

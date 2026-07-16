@@ -6,6 +6,7 @@ import type { Attachment } from '../../shared/contracts/runtime.js';
 import {
   authorizeArtifactEgress,
   authorizeRecoveredArtifactEgress,
+  type ArtifactEgressDestination,
 } from './sensitivity-egress.js';
 
 const attachment: Attachment = {
@@ -170,11 +171,11 @@ describe('artifact sensitivity egress', () => {
       executeApprovedShare,
       readCurrentClassifications: vi.fn(async () => [currentClassification]),
     };
-    const destination = {
-      audience: 'external' as const,
+    const destination: ArtifactEgressDestination = {
+      audience: 'external',
       channelId: 'companion-dm:local:peer',
       channelType: 'companion',
-      surface: 'external' as const,
+      surface: 'external',
     };
 
     const first = await authorizeRecoveredArtifactEgress({

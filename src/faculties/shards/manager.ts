@@ -694,7 +694,12 @@ export class ShardManager implements ShardExecutionPort {
         // worker. For a bounded multi-turn shard, the manager therefore owns
         // compaction between turns so the next turn sees a committed summary
         // and compression-guideline review retains the exact shard trajectory.
-        if (turn + 1 < maxTurns && response.metadata.autoCompactionEligible === true) {
+        const recordedTurn = response.metadata.turnId
+          ? sessionManager.findRecordedTurn(channelId, response.metadata.turnId)
+          : null;
+        const autoCompactionEligible = recordedTurn?.observability
+          ?.snapshot?.sessionContext?.autoCompactionEligible === true;
+        if (turn + 1 < maxTurns && autoCompactionEligible) {
           await sessionManager.scheduleAutoCompactionBetweenTurns({
             channelId,
             systemPrompt,

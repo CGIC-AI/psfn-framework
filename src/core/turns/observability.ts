@@ -51,6 +51,7 @@ export interface ObservedScoredMemory extends ObservedMemory {
 export interface TurnSessionContextSnapshotRecord {
   channelId: string;
   recentEntries: SessionEntry[];
+  autoCompactionEligible?: boolean;
   sourceEntryCount?: number;
   historySummaryText?: string;
   historySummaryEntryCount?: number;
@@ -277,6 +278,9 @@ export function sanitizeTurnSnapshot(snapshot: TurnSnapshot): TurnSnapshotRecord
         sessionContext: {
           channelId: snapshot.sessionContext.channelId,
           recentEntries: snapshot.sessionContext.recentEntries.map(cloneSessionEntry),
+          ...(snapshot.sessionContext.autoCompactionEligible !== undefined
+            ? { autoCompactionEligible: snapshot.sessionContext.autoCompactionEligible }
+            : {}),
           ...(snapshot.sessionContext.sourceEntryCount !== undefined
             ? { sourceEntryCount: snapshot.sessionContext.sourceEntryCount }
             : {}),
@@ -406,6 +410,9 @@ export function cloneTurnSnapshotRecord(snapshot: TurnSnapshotRecord): TurnSnaps
         sessionContext: {
           channelId: snapshot.sessionContext.channelId,
           recentEntries: snapshot.sessionContext.recentEntries.map(cloneSessionEntry),
+          ...(snapshot.sessionContext.autoCompactionEligible !== undefined
+            ? { autoCompactionEligible: snapshot.sessionContext.autoCompactionEligible }
+            : {}),
           ...(snapshot.sessionContext.sourceEntryCount !== undefined
             ? { sourceEntryCount: snapshot.sessionContext.sourceEntryCount }
             : {}),

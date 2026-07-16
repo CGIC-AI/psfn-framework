@@ -802,13 +802,6 @@ export interface ResponseMetadata {
   inputTokens: number;
   outputTokens: number;
   durationMs: number;
-  /**
-   * Exact deferred-compaction eligibility computed while assembling this
-   * turn's context. Ephemeral multi-turn runtimes use this signal to perform
-   * only the between-turn maintenance that the normal background worker would
-   * have scheduled.
-   */
-  autoCompactionEligible?: boolean;
   turnId?: TurnID;
   requestId?: string;
   icpCorrelation?: IcpConversationCorrelation;

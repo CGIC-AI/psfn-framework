@@ -505,6 +505,11 @@ export async function assembleTurnPrompt(input: {
       currentSessionEntryId ?? undefined,
     ),
   );
+  const sessionContextSnapshot = turnSnapshot.sessionContext;
+  if (!sessionContextSnapshot) {
+    throw new Error('Turn prompt assembly requires a captured session-context snapshot');
+  }
+  sessionContextSnapshot.autoCompactionEligible = context.manifest.compaction.eligible === true;
   if (currentSessionEntryId !== null && context.messages.some(contextMessage => (
     contextMessage.provenance?.sourceEntryIds?.includes(currentSessionEntryId) === true
   ))) {

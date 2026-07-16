@@ -61,7 +61,10 @@ import {
   GatewayHubDeviceIngressService,
   type AuthenticatedHubDeviceConnection,
 } from '../../../boundary/fleet-auth/hub-device-ingress.js';
-import type { HubDevicePrincipalSnapshot } from '../../../shared/contracts/hub-device-ingress.js';
+import type {
+  HubDeviceAttachmentSnapshot,
+  HubDevicePrincipalSnapshot,
+} from '../../../shared/contracts/hub-device-ingress.js';
 import {
   HubDeviceIngressRequestError,
   sanitizeHubDeviceChatRequest,
@@ -178,6 +181,7 @@ export class ApiChatCompletionsHandler {
     if (!parsed) return;
 
     let hubDevicePrincipal: HubDevicePrincipalSnapshot | undefined;
+    let hubDeviceAttachment: HubDeviceAttachmentSnapshot | undefined;
     if (pendingHubDevice) {
       try {
         parsed = sanitizeHubDeviceChatRequest(parsed);
@@ -186,6 +190,7 @@ export class ApiChatCompletionsHandler {
           connection: pendingHubDevice.connection,
         });
         hubDevicePrincipal = admission.devicePrincipal;
+        hubDeviceAttachment = admission.attachment;
       } catch (error) {
         if (error instanceof HubDeviceIngressRequestError) {
           sendApiError(res, error.status, error.type, error.message);
@@ -200,9 +205,25 @@ export class ApiChatCompletionsHandler {
     }
 
     if (parsed.stream) {
-      await this.handleStreaming(parsed, req, res, principal, clientCert, hubDevicePrincipal);
+      await this.handleStreaming(
+        parsed,
+        req,
+        res,
+        principal,
+        clientCert,
+        hubDevicePrincipal,
+        hubDeviceAttachment,
+      );
     } else {
-      await this.handleNonStreaming(parsed, req, res, principal, clientCert, hubDevicePrincipal);
+      await this.handleNonStreaming(
+        parsed,
+        req,
+        res,
+        principal,
+        clientCert,
+        hubDevicePrincipal,
+        hubDeviceAttachment,
+      );
     }
   }
 
@@ -918,6 +939,7 @@ export class ApiChatCompletionsHandler {
     principal: ApiAuthPrincipal,
     clientCert: SatelliteClientCertIdentity | undefined,
     hubDevicePrincipal: HubDevicePrincipalSnapshot | undefined,
+    hubDeviceAttachment: HubDeviceAttachmentSnapshot | undefined,
   ): Promise<void> {
     const runtime = this.runtime;
     if (runtime) {
@@ -931,6 +953,7 @@ export class ApiChatCompletionsHandler {
             headers: extractRpcHeaders(req),
             ...(clientCert ? { clientCert } : {}),
             ...(hubDevicePrincipal ? { hubDevicePrincipal } : {}),
+            ...(hubDeviceAttachment ? { hubDeviceAttachment } : {}),
             signal,
           }),
         );
@@ -1014,6 +1037,7 @@ export class ApiChatCompletionsHandler {
     principal: ApiAuthPrincipal,
     clientCert: SatelliteClientCertIdentity | undefined,
     hubDevicePrincipal: HubDevicePrincipalSnapshot | undefined,
+    hubDeviceAttachment: HubDeviceAttachmentSnapshot | undefined,
   ): Promise<void> {
     const completionId = `chatcmpl-${randomUUID()}`;
     const created = Math.floor(Date.now() / 1000);
@@ -1038,6 +1062,7 @@ export class ApiChatCompletionsHandler {
             headers: extractRpcHeaders(req),
             ...(clientCert ? { clientCert } : {}),
             ...(hubDevicePrincipal ? { hubDevicePrincipal } : {}),
+            ...(hubDeviceAttachment ? { hubDeviceAttachment } : {}),
             signal,
             onDelta: (text) => {
               transport.writeContent(text);

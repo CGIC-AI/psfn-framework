@@ -243,6 +243,8 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
     writeFleetAuthTestConfig(systemDataDir);
     const principalId = randomUUID();
     const sourceAuditEventId = randomUUID();
+    const sourceAttachmentId = randomUUID();
+    const sourceAttachmentJti = randomUUID();
     let sourceCompanion: ReturnType<typeof createPostgresPool> | undefined;
     let sourceCompanionTwo: ReturnType<typeof createPostgresPool> | undefined;
     let sourceSharedOwner: ReturnType<typeof createPostgresPool> | undefined;
@@ -323,6 +325,22 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
                  'authority.source', 'fleet_auth', 'deny', 'source_event', 1, 1)`,
         [sourceAuditEventId],
       );
+      await sourceBackup.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.hub_device_human_attachments
+          (attachment_id, assertion_digest, assertion_jti, device_id,
+           enrollment_version, place_id, key_id, companion_id, hub_session_id,
+           connection_id, channel_id, device_state, human_state, created_at, updated_at)
+        VALUES ($1, $2, $3, 'restore-device', 2, 'office', 'restore-key', $4,
+                'restore-hub-session', 'restore-connection', $5,
+                'active', 'guest', $6, $6)
+      `, [
+        sourceAttachmentId,
+        'd'.repeat(64),
+        sourceAttachmentJti,
+        '11111111-1111-4111-8111-111111111111',
+        `hub-device:${'e'.repeat(64)}`,
+        '2026-07-15T14:59:00.000Z',
+      ]);
       const backup = await runFleetAuthConsistentBackup({
         databaseUrl: source.backupUrl,
         roles: ROLES,
@@ -464,6 +482,19 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
           [principalId],
         )).resolves.toMatchObject({
           rows: [{ status: 'quarantined', restore_state: 'quarantined' }],
+        });
+        await expect(targetRuntime.query(
+          `SELECT assertion_jti, device_state, human_state, fenced_at
+           FROM ${FLEET_AUTH_SCHEMA_NAME}.hub_device_human_attachments
+           WHERE attachment_id = $1`,
+          [sourceAttachmentId],
+        )).resolves.toMatchObject({
+          rows: [{
+            assertion_jti: sourceAttachmentJti,
+            device_state: 'fenced',
+            human_state: 'detached',
+            fenced_at: new Date('2026-07-15T16:00:00.000Z'),
+          }],
         });
         await expect(targetCompanion.query('SELECT marker FROM companion_one.restore_probe'))
           .resolves.toMatchObject({ rows: [{ marker: 'companion-source' }] });

@@ -744,8 +744,9 @@ export class ApiServer implements ChannelAdapterPort {
       isTelemetryIngest: false,
     });
     if (!principal) return;
+    let assertion: string | undefined;
     try {
-      const assertion = extractCanonicalHubDeviceAssertion(req);
+      assertion = extractCanonicalHubDeviceAssertion(req);
       const connection = resolveAuthenticatedHubDeviceConnection({
         req,
         principal,
@@ -761,6 +762,20 @@ export class ApiServer implements ChannelAdapterPort {
       });
     } catch (error) {
       if (error instanceof HubDeviceIngressRequestError) {
+        if (assertion && error.connectionId) {
+          try {
+            await this.hubDeviceIngress.fenceRejectedAssertion(assertion, error.connectionId);
+          } catch {
+            log.error('Hub device de-enrollment fence failed');
+            sendApiError(
+              res,
+              503,
+              'hub_device_ingress_unavailable',
+              'Hub device authentication is unavailable',
+            );
+            return;
+          }
+        }
         sendApiError(res, error.status, error.type, error.message);
         return;
       }

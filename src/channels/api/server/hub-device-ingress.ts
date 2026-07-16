@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { ChatCompletionRequest } from '../types.js';
 import type { ApiAuthPrincipal } from '../../backplane/http/auth.js';
@@ -14,12 +14,22 @@ import type { AuthenticatedHubDeviceConnection } from '../../../boundary/fleet-a
 import { isRecord } from '../../../shared/utils/types.js';
 
 export const HUB_DEVICE_ASSERTION_HEADER = 'x-psfn-hub-device-assertion';
+const HUB_SOCKET_CONNECTION_NONCES = new WeakMap<object, string>();
+
+function serverSocketConnectionNonce(req: IncomingMessage): string {
+  const current = HUB_SOCKET_CONNECTION_NONCES.get(req.socket);
+  if (current) return current;
+  const created = randomUUID();
+  HUB_SOCKET_CONNECTION_NONCES.set(req.socket, created);
+  return created;
+}
 
 export class HubDeviceIngressRequestError extends Error {
   constructor(
     readonly status: 400 | 401 | 403 | 503,
     readonly type: string,
     message: string,
+    readonly connectionId?: string,
   ) {
     super(message);
     this.name = 'HubDeviceIngressRequestError';
@@ -78,15 +88,21 @@ export function resolveAuthenticatedHubDeviceConnection(input: {
     candidate.endpointId === resolved.value.satellite.endpointId
   ));
   const enrollment = endpoint?.hubDeviceEnrollment;
-  if (!satellite || !endpoint || !enrollment) {
-    throw new HubDeviceIngressRequestError(403, 'hub_device_not_enrolled', 'Authenticated Hub device is not enrolled');
-  }
   const connectionId = createHash('sha256').update(JSON.stringify({
     principalId: input.principal.id,
-    satelliteId: satellite.satelliteId,
-    endpointId: endpoint.endpointId,
+    satelliteId: resolved.value.satellite.satelliteId,
+    endpointId: resolved.value.satellite.endpointId,
     sessionId: resolved.value.satellite.sessionId,
+    socketConnectionNonce: serverSocketConnectionNonce(input.req),
   })).digest('hex');
+  if (!satellite || !endpoint || !enrollment) {
+    throw new HubDeviceIngressRequestError(
+      403,
+      'hub_device_not_enrolled',
+      'Authenticated Hub device is not enrolled',
+      connectionId,
+    );
+  }
   return {
     connectionId,
     deviceId: enrollment.deviceId,

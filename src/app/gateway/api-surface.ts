@@ -41,7 +41,10 @@ import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.
 import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
-import { GatewayHubDeviceIngressService } from '../../boundary/fleet-auth/hub-device-ingress.js';
+import {
+  GatewayHubDeviceIngressService,
+  type HubDeviceHumanAttachmentPort,
+} from '../../boundary/fleet-auth/hub-device-ingress.js';
 import type {
   HubDeviceAssertionExpectedBinding,
   HubDevicePrincipal,
@@ -89,6 +92,12 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
       token: string,
       expected: HubDeviceAssertionExpectedBinding,
     ): Promise<HubDevicePrincipal>;
+    attachHubDeviceHuman(
+      input: Parameters<HubDeviceHumanAttachmentPort['attach']>[0],
+    ): ReturnType<HubDeviceHumanAttachmentPort['attach']>;
+    fenceHubDeviceAttachment(
+      input: Parameters<HubDeviceHumanAttachmentPort['fenceDevice']>[0],
+    ): ReturnType<HubDeviceHumanAttachmentPort['fenceDevice']>;
   };
 }
 
@@ -346,6 +355,18 @@ export async function startOptionalGatewayApiServer(
     ? new GatewayHubDeviceIngressService({
         verifyAndConsume: (assertion, expected) => options.hubDeviceAssertionVerifier!
           .verifyAndConsumeHubDeviceAssertion(assertion, expected),
+        enrollmentAuthority: {
+          resolve: async ({ connectionId, authenticatedConnection }) => {
+            if (connectionId !== authenticatedConnection.connectionId) {
+              throw new Error('Authenticated Hub enrollment authority connection changed');
+            }
+            return Object.freeze({ ...authenticatedConnection });
+          },
+        },
+        attachments: {
+          attach: input => options.hubDeviceAssertionVerifier!.attachHubDeviceHuman(input),
+          fenceDevice: input => options.hubDeviceAssertionVerifier!.fenceHubDeviceAttachment(input),
+        },
       })
     : undefined;
   const apiTlsConfig = resolveApiHttpServerTlsConfig(env);

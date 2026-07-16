@@ -1,4 +1,5 @@
 import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
+import type { HubDevicePrincipalSnapshot } from './hub-device-ingress.js';
 
 export const SATELLITE_REGISTRY_FILE_NAME = 'satellites.json';
 
@@ -271,6 +272,13 @@ export interface SatelliteEndpointRuntimeConfig {
   refresh: SatelliteEndpointRefreshConfig;
 }
 
+/** Server-owned enrollment binding for Hub-authenticated physical devices. */
+export interface SatelliteHubDeviceEnrollmentConfig {
+  deviceId: string;
+  enrollmentVersion: number;
+  enrollmentStatus: 'active' | 'revoked';
+}
+
 export interface SatelliteEndpointConfig {
   endpointId: string;
   displayName: string;
@@ -280,6 +288,7 @@ export interface SatelliteEndpointConfig {
   defaultIdentity: SatelliteDefaultIdentityConfig;
   maxCapabilities: SatelliteCapability[];
   telemetryScopes: SatelliteTelemetryScope[];
+  hubDeviceEnrollment?: SatelliteHubDeviceEnrollmentConfig;
   runtime?: SatelliteEndpointRuntimeConfig;
 }
 
@@ -326,6 +335,7 @@ export interface AdminSatelliteEndpointView {
   defaultIdentity: SatelliteDefaultIdentityConfig;
   maxCapabilities: SatelliteCapability[];
   telemetryScopes: SatelliteTelemetryScope[];
+  hubDeviceEnrollment?: SatelliteHubDeviceEnrollmentConfig;
   live: AdminSatelliteEndpointLiveView;
 }
 
@@ -374,6 +384,8 @@ export interface SatelliteRoutingMetadata {
     principalId: string;
     certBound: boolean;
   };
+  /** Authenticated device principal; human identity is intentionally separate. */
+  hubDevicePrincipal?: HubDevicePrincipalSnapshot;
 }
 
 export interface SatelliteConfigPullHeaderContract {

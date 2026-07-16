@@ -848,6 +848,7 @@ async function main(): Promise<void> {
     healthChecks: apiHealthChecks,
     externalChannelProfiles: buildExternalChannelProfiles(channelsConfig),
     satelliteRegistry: satelliteRegistryConfig,
+    companionId: resolveCoreCompanionIdFromConfig(config),
     onStreamDelta: (requestId, text) => gateway.notifyApiStreamDelta(requestId, text),
     // htm9.9: OpenAI-compatible `file` content parts run the shared
     // file-ingest pipeline with the agent-side (L1-only) intake screening.

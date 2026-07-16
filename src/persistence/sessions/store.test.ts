@@ -725,6 +725,42 @@ describe('SessionStore', () => {
       .toBe(false);
   });
 
+  it('derives one exact routed owner and rejects duplicated or tombstoned recovery sources', async () => {
+    const sourceChannelId = 'discord:recovery-source';
+    const logicalSessionId = 'discord:recovery-owner';
+    const uniqueTurnId = createTurnId(1_700_000_001_000);
+    const tombstonedTurnId = createTurnId(1_700_000_001_100);
+    store.append({
+      channelId: logicalSessionId,
+      role: 'user',
+      content: 'durable owner',
+      timestamp: 1_700_000_001_000,
+      turnId: uniqueTurnId,
+    });
+    const unique = {
+      ...buildTurnRecordFixture(sourceChannelId, 1, uniqueTurnId),
+      sessionId: logicalSessionId,
+    };
+    const tombstoned = {
+      ...buildTurnRecordFixture(sourceChannelId, 2, tombstonedTurnId),
+      sessionId: logicalSessionId,
+    };
+    store.appendTurnRecord(unique);
+    store.appendTurnRecord(tombstoned);
+
+    expect(store.findUniqueSourceTurnRecord(sourceChannelId, uniqueTurnId)).toEqual(unique);
+    await store.redactTurn(logicalSessionId, tombstonedTurnId, {
+      actor: 'admin:test',
+      reason: 'privacy request',
+    });
+    expect(() => store.findUniqueSourceTurnRecord(sourceChannelId, tombstonedTurnId))
+      .toThrow('tombstoned, missing its owner, or belongs to another source');
+
+    store.appendTurnRecord(unique);
+    expect(() => store.findUniqueSourceTurnRecord(sourceChannelId, uniqueTurnId))
+      .toThrow('duplicated and cannot establish a recovery identity');
+  });
+
   it('bounds tombstone-filtered turn-record reads with iterative overscan instead of scanning the full archive', async () => {
     const channelId = 'api:tombstone-overscan';
     const requestedLimits: number[] = [];

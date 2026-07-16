@@ -1249,6 +1249,37 @@ export class SessionStore implements TranscriptSearchPort {
     if (!record || record.channelId !== sourceChannelId) return null;
     return (record.sessionId ?? sourceChannelId) === logicalSessionId ? record : null;
   }
+  /**
+   * Resolves the sole eligible durable owner for an exact physical source and
+   * turn. Recovery callers do not yet know the logical owner, so this lookup
+   * derives it from the canonical record while preserving the same duplicate
+   * and tombstone fences used by background work. Null means no record exists;
+   * an existing ambiguous or ineligible source fails closed.
+   */
+  findUniqueSourceTurnRecord(sourceChannelId: string, turnId: string): TurnRecord | null {
+    const normalizedSourceChannelId = sourceChannelId.trim();
+    const normalizedTurnId = turnId.trim();
+    if (!normalizedSourceChannelId || !normalizedTurnId) {
+      throw new Error('Source TurnRecord lookup requires a physical channel and turn id');
+    }
+    const matches = this.turnRecordStore.readRecentTurnRecords(
+      normalizedSourceChannelId,
+      Number.MAX_SAFE_INTEGER,
+    ).filter(record => record.turnId === normalizedTurnId);
+    if (matches.length === 0) return null;
+    if (matches.length !== 1) {
+      throw new Error('Source TurnRecord is duplicated and cannot establish a recovery identity');
+    }
+    const record = matches[0]!;
+    const logicalSessionId = record.sessionId ?? normalizedSourceChannelId;
+    const owner = this.ensureChannelFullyLoaded(logicalSessionId);
+    if (record.channelId !== normalizedSourceChannelId
+      || owner === null
+      || owner.turnTombstones.has(normalizedTurnId)) {
+      throw new Error('Source TurnRecord is tombstoned, missing its owner, or belongs to another source');
+    }
+    return record;
+  }
   getRecentTurnRecords(channelId: string, limit: number): TurnRecord[] {
     if (limit <= 0) return [];
     this.refreshChannelIndexFromDisk();

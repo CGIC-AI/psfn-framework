@@ -388,6 +388,8 @@ function makeMockSessionManager(): SessionManager {
     recordTurn: vi.fn(),
     hasRecordedTurn: vi.fn().mockReturnValue(false),
     findRecordedTurn: vi.fn().mockReturnValue(null),
+    findSourceRecordedTurn: vi.fn().mockReturnValue(null),
+    findUniqueSourceRecordedTurn: vi.fn().mockReturnValue(null),
     appendSystemNote: vi.fn(),
     awaitPendingAutoCompaction: vi.fn().mockResolvedValue(undefined),
     scheduleAutoCompactionBetweenTurns: vi.fn().mockResolvedValue(undefined),
@@ -4959,6 +4961,8 @@ describe('SubstrateAgent.handleMessage', () => {
     expect(sessionManager.appendSystemNote).toHaveBeenCalledWith(
       'twitter:timeline',
       expect.stringContaining('held for approval'),
+      'appendSystemNote',
+      'twitter:timeline',
     );
     expect(approvalEvents).toEqual([
       { channelId: 'twitter:timeline', signals: ['private'] },
@@ -5017,6 +5021,8 @@ describe('SubstrateAgent.handleMessage', () => {
       expect(sessionManager.appendSystemNote).toHaveBeenCalledWith(
         'api:admin-broadcast',
         expect.stringContaining('held for approval'),
+        'appendSystemNote',
+        'api:admin-broadcast',
       );
     } finally {
       resetRuntimeChannelEnvelopeLabels();
@@ -5480,6 +5486,7 @@ describe('SubstrateAgent steering + follow-up', () => {
 
   it('preserves immediate follow-up and steer delivery for an ordinary active run', async () => {
     const sessionManager = makeMockSessionManager();
+    sessionManager.setActiveContextSession('session:captured-owner');
     let markPromptEntered!: () => void;
     let releasePrompt!: () => void;
     const promptEntered = new Promise<void>((resolve) => {
@@ -5526,17 +5533,32 @@ describe('SubstrateAgent steering + follow-up', () => {
     });
     const followUpSpy = vi.spyOn(Agent.prototype, 'followUp');
     const steerSpy = vi.spyOn(Agent.prototype, 'steer');
-    const ordinaryRun = agent.handleMessage(makeMessage({ id: 'ordinary-active-ingress-owner' }));
+    const activeMessage = makeMessage({
+      id: 'ordinary-active-ingress-owner',
+      channelId: 'api:active-ordinary',
+      channelType: 'api',
+    });
+    const ordinaryRun = agent.handleMessage(activeMessage);
     await promptEntered;
+    sessionManager.setActiveContextSession('session:future-owner');
 
     await Promise.all([
       agent.followUp(makeMessage({
         id: 'ordinary-active-follow-up',
+        channelId: activeMessage.channelId,
         content: 'ordinary active follow-up',
       })),
       agent.steer(makeMessage({
         id: 'ordinary-active-steer',
+        channelId: activeMessage.channelId,
         content: 'ordinary active steer',
+      })),
+      agent.followUp(makeMessage({
+        id: 'ordinary-active-system-follow-up',
+        channelId: activeMessage.channelId,
+        authorId: 'system:scheduler',
+        authorName: 'Scheduler',
+        content: 'ordinary active system follow-up',
       })),
     ]);
     expect(followUpSpy).toHaveBeenCalledWith(expect.objectContaining({
@@ -5548,22 +5570,40 @@ describe('SubstrateAgent steering + follow-up', () => {
       content: 'ordinary active steer',
     }));
     expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
-      'test-channel',
+      'session:captured-owner',
       'ordinary active follow-up',
       expect.anything(),
       expect.anything(),
       undefined,
       undefined,
-      expect.objectContaining({ sourceMessageId: 'ordinary-active-follow-up' }),
+      expect.objectContaining({
+        sourceMessageId: 'ordinary-active-follow-up',
+        sourceChannelId: 'api:active-ordinary',
+      }),
     );
     expect(sessionManager.recordUserMessage).toHaveBeenCalledWith(
-      'test-channel',
+      'session:captured-owner',
       'ordinary active steer',
       expect.anything(),
       expect.anything(),
       undefined,
       undefined,
-      expect.objectContaining({ sourceMessageId: 'ordinary-active-steer' }),
+      expect.objectContaining({
+        sourceMessageId: 'ordinary-active-steer',
+        sourceChannelId: 'api:active-ordinary',
+      }),
+    );
+    expect(sessionManager.recordSystemMessage).toHaveBeenCalledWith(
+      'session:captured-owner',
+      '[SYSTEM: Scheduler] ordinary active system follow-up',
+      'system:scheduler',
+      'Scheduler',
+      undefined,
+      undefined,
+      expect.objectContaining({
+        sourceMessageId: 'ordinary-active-system-follow-up',
+        sourceChannelId: 'api:active-ordinary',
+      }),
     );
 
     releasePrompt();

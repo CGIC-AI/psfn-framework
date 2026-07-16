@@ -19,6 +19,7 @@ import { buildSessionMetadataWithIcpCorrelation } from '../../session/icp-correl
 import type { SessionActorKind } from '../../session/turn-provenance.js';
 import type { IntrospectionTurnSensitivityDecision } from '../../../faculties/introspection/turn-sensitivity.js';
 import { resolveMessagePlaceId } from './message-location.js';
+import type { TurnSessionIdentity } from './turn-execution-runtime.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const REASONING_PLACEHOLDER_VALUES = new Set(['none', 'null', 'n/a', 'na', 'nil', 'undefined']);
@@ -122,7 +123,7 @@ export function resolveTurnRecordAuditPrivacy(
 export function recordUserMessage(input: {
   sessionManager: SessionManager;
   message: SubstrateMessage;
-  sessionId?: string;
+  turnSessionIdentity: TurnSessionIdentity;
   turnId: TurnID;
   requestId: string;
   trustLevel: TrustLevel;
@@ -153,30 +154,31 @@ export function recordUserMessage(input: {
   };
   if (input.continuityUserId) {
     return input.sessionManager.recordUserMessage(
-      input.message.channelId,
+      input.turnSessionIdentity.logicalSessionId,
       content,
       input.message.authorId,
       input.message.authorName,
       input.message.isDirectMessage,
       input.continuityUserId,
-      recordOptions,
+      { ...recordOptions, sourceChannelId: input.turnSessionIdentity.sourceChannelId },
     );
   }
 
   return input.sessionManager.recordUserMessage(
-    input.message.channelId,
+    input.turnSessionIdentity.logicalSessionId,
     content,
     input.message.authorId,
     input.message.authorName,
     input.message.isDirectMessage,
     undefined,
-    recordOptions,
+    { ...recordOptions, sourceChannelId: input.turnSessionIdentity.sourceChannelId },
   );
 }
 
 export function recordAssistantMessage(input: {
   sessionManager: SessionManager;
   message: SubstrateMessage;
+  turnSessionIdentity: TurnSessionIdentity;
   turnId: TurnID;
   requestId: string;
   responseText: string;
@@ -208,7 +210,7 @@ export function recordAssistantMessage(input: {
 
   if (input.continuityUserId) {
     return input.sessionManager.recordAssistantMessage(
-      input.message.channelId,
+      input.turnSessionIdentity.logicalSessionId,
       input.responseText,
       input.message.authorId,
       input.message.isDirectMessage,
@@ -218,6 +220,7 @@ export function recordAssistantMessage(input: {
         turnId: input.turnId,
         requestId: input.requestId,
         sourceMessageId: input.message.id,
+        sourceChannelId: input.turnSessionIdentity.sourceChannelId,
         ...(metadata ? { metadata } : {}),
         channelMeta: resolveSessionChannelMeta(input.message),
       },
@@ -225,7 +228,7 @@ export function recordAssistantMessage(input: {
   }
 
   return input.sessionManager.recordAssistantMessage(
-    input.message.channelId,
+    input.turnSessionIdentity.logicalSessionId,
     input.responseText,
     input.message.authorId,
     input.message.isDirectMessage,
@@ -235,6 +238,7 @@ export function recordAssistantMessage(input: {
       turnId: input.turnId,
       requestId: input.requestId,
       sourceMessageId: input.message.id,
+      sourceChannelId: input.turnSessionIdentity.sourceChannelId,
       ...(metadata ? { metadata } : {}),
       channelMeta: resolveSessionChannelMeta(input.message),
     },
@@ -244,6 +248,7 @@ export function recordAssistantMessage(input: {
 export function recordToolObservations(input: {
   sessionManager: SessionManager;
   message: SubstrateMessage;
+  turnSessionIdentity: TurnSessionIdentity;
   turnId: TurnID;
   requestId: string;
   turnMessages: AgentMessage[];
@@ -252,7 +257,7 @@ export function recordToolObservations(input: {
   for (const entry of input.turnMessages) {
     if (!isToolResultAgentMessage(entry)) continue;
     input.sessionManager.recordToolObservation(
-      input.message.channelId,
+      input.turnSessionIdentity.logicalSessionId,
       {
         toolName: entry.toolName,
         content: extractToolResultText(entry),
@@ -265,6 +270,7 @@ export function recordToolObservations(input: {
         turnId: input.turnId,
         requestId: input.requestId,
         sourceMessageId: input.message.id,
+        sourceChannelId: input.turnSessionIdentity.sourceChannelId,
         channelMeta: resolveSessionChannelMeta(input.message),
       },
     );

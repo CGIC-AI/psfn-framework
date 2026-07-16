@@ -67,6 +67,7 @@ const VISION_CONTENT_BUILD_FAILURE_DIAGNOSTIC = 'Vision content build failed.';
 const VISION_PROMPT_FAILURE_DIAGNOSTIC = 'Vision prompt failed.';
 const VISION_RECOVERY_FAILURE_DIAGNOSTIC = 'Vision recovery replay failed.';
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
+type TurnSessionIdentity = import('../turn-execution-runtime.js').TurnSessionIdentity;
 type RuntimeContradictionDiagnostic = NonNullable<
 NonNullable<AgentResponse['metadata']['diagnostics']>['runtimeContradiction']
 >;
@@ -404,6 +405,7 @@ function appendRuntimeFallbackAssistantMessage(
 export async function invokeAgentForTurn(input: {
   runtime: TurnExecutionRuntime;
   message: SubstrateMessage;
+  turnSessionIdentity: TurnSessionIdentity;
   context: Awaited<ReturnType<TurnExecutionRuntime['sessionManager']['buildContext']>>;
   providerSystemPrompt: string;
   piMessages: ReturnType<typeof contextMessagesToPiMessages>;
@@ -432,6 +434,7 @@ export async function invokeAgentForTurn(input: {
   const {
     runtime,
     message,
+    turnSessionIdentity,
     context,
     providerSystemPrompt,
     piMessages,
@@ -613,7 +616,12 @@ export async function invokeAgentForTurn(input: {
     originStage: 'agent.turn.prompt',
     purpose: 'agent.turn.prompt',
   });
-  runtime.setActiveTurnContext(turnCorrelationBase, taskKind ?? null, toolTurnOutcome.intent);
+  runtime.setActiveTurnContext(
+    turnCorrelationBase,
+    taskKind ?? null,
+    toolTurnOutcome.intent,
+    turnSessionIdentity,
+  );
   let initialBridgeActive = true;
   const clearInitialPromptContext = (): void => {
     if (!initialBridgeActive) return;
@@ -794,7 +802,12 @@ export async function invokeAgentForTurn(input: {
       originStage: 'agent.turn.runtime_contradiction_retry',
       purpose: 'agent.turn.runtime_contradiction_retry',
     });
-    runtime.setActiveTurnContext(turnCorrelationBase, taskKind ?? null, toolTurnOutcome.intent);
+    runtime.setActiveTurnContext(
+      turnCorrelationBase,
+      taskKind ?? null,
+      toolTurnOutcome.intent,
+      turnSessionIdentity,
+    );
     try {
       await runWithVisionTurnTimeout({
         channelId: message.channelId,

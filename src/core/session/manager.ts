@@ -368,6 +368,37 @@ export class SessionManager {
     return normalized && normalized !== resolvedChannelId ? normalized : undefined;
   }
 
+  private resolveSessionWriteTarget(
+    channelId: string,
+    explicitSourceChannelId?: string,
+  ): {
+    resolvedChannelId: string;
+    sourceChannelId: string;
+    originChannelId: string | undefined;
+  } {
+    const normalizedExplicitSource = explicitSourceChannelId?.trim();
+    if (explicitSourceChannelId !== undefined && !normalizedExplicitSource) {
+      throw new Error('Session write physical source channel must not be empty');
+    }
+    const normalizedChannelId = channelId.trim();
+    if (explicitSourceChannelId !== undefined && !normalizedChannelId) {
+      throw new Error('Session write logical owner must not be empty');
+    }
+    // An explicit physical source means the caller has already captured both
+    // halves of the immutable write identity. Do not send that logical owner
+    // back through mutable source-route or API active-context resolution.
+    const resolvedChannelId = explicitSourceChannelId === undefined
+      ? this.resolveSessionChannelId(channelId)
+      : normalizedChannelId;
+    const inferredOriginChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
+    const sourceChannelId = normalizedExplicitSource ?? inferredOriginChannelId ?? resolvedChannelId;
+    return {
+      resolvedChannelId,
+      sourceChannelId,
+      originChannelId: sourceChannelId !== resolvedChannelId ? sourceChannelId : undefined,
+    };
+  }
+
   private resolveSourceChannelId(channelId: string): string {
     return this.sessionRouteStore.resolveSourceChannelId(channelId);
   }
@@ -542,9 +573,10 @@ export class SessionManager {
     continuityUserId?: string,
     options: SessionMessageRecordOptions = {},
   ): number | null {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
-    const sourceChannelId = originChannelId ?? resolvedChannelId;
+    const { resolvedChannelId, originChannelId, sourceChannelId } = this.resolveSessionWriteTarget(
+      channelId,
+      options.sourceChannelId,
+    );
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
@@ -688,9 +720,10 @@ export class SessionManager {
     continuityUserId?: string,
     options: SessionMessageRecordOptions = {},
   ): number | null {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
-    const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
-    const sourceChannelId = originChannelId ?? resolvedChannelId;
+    const { resolvedChannelId, originChannelId, sourceChannelId } = this.resolveSessionWriteTarget(
+      channelId,
+      options.sourceChannelId,
+    );
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
@@ -773,10 +806,11 @@ export class SessionManager {
     continuityUserId?: string,
     options: SessionMessageRecordOptions = {},
   ): number | null {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const { resolvedChannelId, originChannelId, sourceChannelId } = this.resolveSessionWriteTarget(
+      channelId,
+      options.sourceChannelId,
+    );
     if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
-    const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
-    const sourceChannelId = originChannelId ?? resolvedChannelId;
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
@@ -974,10 +1008,11 @@ export class SessionManager {
     isDirectMessage?: boolean,
     options: SessionMessageRecordOptions = {},
   ): number | null {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    const { resolvedChannelId, originChannelId, sourceChannelId } = this.resolveSessionWriteTarget(
+      channelId,
+      options.sourceChannelId,
+    );
     if (!shouldPersistSessionChannel(resolvedChannelId)) return null;
-    const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
-    const sourceChannelId = originChannelId ?? resolvedChannelId;
     const meta = options.channelMeta ?? (isDirectMessage != null ? { isDirectMessage } : undefined);
     const channelVisibility = classifyChannelEnvelope(sourceChannelId, meta).privacy;
     const timestamp = Date.now();
@@ -1081,6 +1116,10 @@ export class SessionManager {
     turnId: string,
   ): TurnRecord | null {
     return this.store.findSourceTurnRecord(sourceChannelId, logicalSessionId, turnId);
+  }
+
+  findUniqueSourceRecordedTurn(sourceChannelId: string, turnId: string): TurnRecord | null {
+    return this.store.findUniqueSourceTurnRecord(sourceChannelId, turnId);
   }
 
   isSourceRecordedTurnEligible(
@@ -1385,10 +1424,15 @@ export class SessionManager {
   }
 
   /** Append a system note to a session's internal lane. Hidden from ordinary context builds. */
-  appendSystemNote(channelId: string, note: string, source = 'appendSystemNote'): void {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+  appendSystemNote(
+    channelId: string,
+    note: string,
+    source = 'appendSystemNote',
+    sourceChannelId?: string,
+  ): void {
+    const target = this.resolveSessionWriteTarget(channelId, sourceChannelId);
+    const { resolvedChannelId, originChannelId } = target;
     if (!shouldPersistSessionChannel(resolvedChannelId)) return;
-    const originChannelId = this.resolveOriginChannelId(channelId, resolvedChannelId);
     this.store.append({
       channelId: resolvedChannelId,
       role: 'system',

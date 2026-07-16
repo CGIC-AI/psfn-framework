@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +14,7 @@ import {
 } from '../../../test-support/postgres-test-harness.js';
 import { createPostgresPool } from '../../postgres.js';
 import { FleetAuthAuthorityFloorStore } from './authority-floor.js';
+import { FLEET_AUTH_LIFECYCLE_AUDIT_DIGEST_DOMAIN } from './authority-lifecycle-audit.js';
 import {
   GatewayFleetAuthAuthorityLifecycleStore,
   FleetAuthLifecycleDeniedError,
@@ -38,6 +39,15 @@ import {
 
 const TIMEOUT_MS = 120_000;
 const DIGEST = 'a'.repeat(64);
+const LIFECYCLE_SESSION_PEPPER = 'lifecycle-audit-session-pepper-32bytes';
+
+/** Keyed lifecycle audit digest mirroring the store's HMAC scheme. */
+function keyedLifecycleDigest(value: string): string {
+  return createHmac('sha256', LIFECYCLE_SESSION_PEPPER)
+    .update(FLEET_AUTH_LIFECYCLE_AUDIT_DIGEST_DOMAIN)
+    .update(value)
+    .digest('hex');
+}
 const ROLES: FleetAuthDatabaseRoles = {
   runtime: 'fleet_auth_runtime',
   migration: 'fleet_auth_migration',
@@ -108,6 +118,7 @@ async function freshContext() {
     store: new GatewayFleetAuthAuthorityLifecycleStore({
       pool,
       accountAuthority: createGatewayAccountAuthorityFencePort(floors),
+      sessionPepper: LIFECYCLE_SESSION_PEPPER,
     }),
   };
 }
@@ -342,6 +353,7 @@ async function seedOwnerAndTarget(pool: import('pg').Pool) {
     actorId,
     targetId,
     companionId,
+    actorContactId,
     targetContactId,
     actorBindingId,
     targetBindingId,
@@ -381,6 +393,22 @@ describe('gateway fleet-auth authority lifecycle store', () => {
       expect(audit.rows).toHaveLength(1);
       expect(audit.rows[0]).toMatchObject({ decision: 'deny', reason_digest: DIGEST });
       expect(JSON.stringify(audit.rows[0]?.decision_context)).not.toContain('223456789012345678');
+
+      // Regression (psfn-framework-5wrp): the actor's Discord snowflake is the
+      // enumerable deanonymization oracle. Its audit digest must be keyed HMAC —
+      // hashing the known snowflake with plain SHA-256 must NOT reproduce it.
+      const actorSession = audit.rows[0]?.decision_context.actorSession as
+        Record<string, unknown> | undefined;
+      const snowflake = '123456789012345678';
+      expect(actorSession?.providerSubjectDigest).toBe(keyedLifecycleDigest(snowflake));
+      expect(actorSession?.providerSubjectDigest)
+        .not.toBe(createHash('sha256').update(snowflake).digest('hex'));
+      // The structural principalId digest stays unkeyed by design (shared with
+      // the recovery-reconciliation writer; a non-enumerable UUID).
+      const actorClaim = audit.rows[0]?.decision_context.actor as
+        Record<string, unknown> | undefined;
+      expect(actorClaim?.principalDigest)
+        .toBe(createHash('sha256').update(seeded.actorId).digest('hex'));
     } finally {
       await context.pool.end();
       rmSync(context.floorRoot, { recursive: true, force: true });
@@ -761,6 +789,94 @@ describe('gateway fleet-auth authority lifecycle store', () => {
         WHERE companion_id = $1 AND contact_id = 'canonical-contact'
       `, [seeded.companionId]);
       expect(canonical.rows[0]?.count).toBe('0');
+    } finally {
+      await context.pool.end();
+      rmSync(context.floorRoot, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
+  it('protects the last active owner from a contact.delete of their bound contact', async () => {
+    const context = await freshContext();
+    try {
+      const seeded = await seedOwnerAndTarget(context.pool);
+      const remove = {
+        ...baseDecision('contact.delete', claim(seeded.actorId), claim(seeded.actorId)),
+        companionId: seeded.companionId,
+        contactId: seeded.actorContactId,
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      await expect(executeDecision(context, remove)).rejects.toMatchObject({
+        reasonCode: 'last_owner_protected',
+      });
+      const grant = await context.pool.query<{ lifecycle: string }>(`
+        SELECT lifecycle FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+        WHERE grant_id = $1
+      `, [seeded.actorGrantId]);
+      expect(grant.rows[0]?.lifecycle).toBe('active');
+      const binding = await context.pool.query<{ state: string }>(`
+        SELECT state FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+        WHERE binding_id = $1
+      `, [seeded.actorBindingId]);
+      expect(binding.rows[0]?.state).toBe('active');
+    } finally {
+      await context.pool.end();
+      rmSync(context.floorRoot, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
+  it('protects the last active owner from a contact.merge of their bound contact', async () => {
+    const context = await freshContext();
+    try {
+      const seeded = await seedOwnerAndTarget(context.pool);
+      const merge = {
+        ...baseDecision('contact.merge', claim(seeded.actorId), claim(seeded.actorId)),
+        companionId: seeded.companionId,
+        sourceContactId: seeded.actorContactId,
+        canonicalContactId: 'canonical-owner-contact',
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      await expect(executeDecision(context, merge)).rejects.toMatchObject({
+        reasonCode: 'last_owner_protected',
+      });
+      const grant = await context.pool.query<{ lifecycle: string }>(`
+        SELECT lifecycle FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+        WHERE grant_id = $1
+      `, [seeded.actorGrantId]);
+      expect(grant.rows[0]?.lifecycle).toBe('active');
+      const binding = await context.pool.query<{ state: string }>(`
+        SELECT state FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+        WHERE binding_id = $1
+      `, [seeded.actorBindingId]);
+      expect(binding.rows[0]?.state).toBe('active');
+    } finally {
+      await context.pool.end();
+      rmSync(context.floorRoot, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
+  it('deletes a non-owner contact and suspends only the member grant', async () => {
+    const context = await freshContext();
+    try {
+      const seeded = await seedOwnerAndTarget(context.pool);
+      const remove = {
+        ...baseDecision('contact.delete', claim(seeded.actorId), claim(seeded.targetId)),
+        companionId: seeded.companionId,
+        contactId: seeded.targetContactId,
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      await executeDecision(context, remove);
+      const memberBinding = await context.pool.query<{ state: string }>(`
+        SELECT state FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+        WHERE binding_id = $1
+      `, [seeded.targetBindingId]);
+      expect(memberBinding.rows[0]?.state).toBe('revoked');
+      const memberGrant = await context.pool.query<{ lifecycle: string }>(`
+        SELECT lifecycle FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+        WHERE grant_id = $1
+      `, [seeded.targetGrantId]);
+      expect(memberGrant.rows[0]?.lifecycle).toBe('suspended');
+      const ownerGrant = await context.pool.query<{ lifecycle: string }>(`
+        SELECT lifecycle FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+        WHERE grant_id = $1
+      `, [seeded.actorGrantId]);
+      expect(ownerGrant.rows[0]?.lifecycle).toBe('active');
     } finally {
       await context.pool.end();
       rmSync(context.floorRoot, { recursive: true, force: true });
@@ -1281,6 +1397,7 @@ describe('gateway fleet-auth authority lifecycle store', () => {
       const authority = createGatewayAccountAuthorityFencePort(floors);
       const storeWithLostPublicationAck = new GatewayFleetAuthAuthorityLifecycleStore({
         pool: context.pool,
+        sessionPepper: LIFECYCLE_SESSION_PEPPER,
         accountAuthority: {
           ...authority,
           beginCompanionReadd: async input => {

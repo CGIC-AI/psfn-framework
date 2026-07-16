@@ -162,6 +162,42 @@ describe('gateway-only fleet auth HTTP routes', () => {
     tlsSocket.destroy();
   });
 
+  it('clears callback cookies and returns only the stable reauthentication response', async () => {
+    const { handler } = routes({
+      completeCallback: vi.fn(async () => {
+        throw new FleetAuthBrokerError(
+          'reauthentication_required',
+          401,
+          'Reauthentication is required',
+        );
+      }),
+    });
+    const res = response();
+    const tlsSocket = new TLSSocket(new Socket());
+    await handler.handle(
+      request('GET', {
+        host: 'fleet.example.test',
+        cookie: `__Host-psfn_preauth=${'p'.repeat(43)}`,
+      }, tlsSocket),
+      res,
+      new URL('https://fleet.example.test/auth/discord/callback?state=opaque&code=code'),
+    );
+
+    expect(res.statusCode).toBe(401);
+    expect(res.headers.get('set-cookie')).toEqual([
+      '__Host-psfn_preauth=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax',
+      '__Host-psfn_session=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax',
+    ]);
+    expect(JSON.parse(res.body)).toEqual({
+      error: {
+        type: 'reauthentication_required',
+        message: 'Reauthentication is required',
+      },
+    });
+    expect(res.body).not.toMatch(/provider|subject|token|secret/iu);
+    tlsSocket.destroy();
+  });
+
   it('requires one opaque __Host- session cookie, exact Origin, and session-bound CSRF to rotate', async () => {
     const { handler, broker } = routes();
     const res = response();
@@ -196,5 +232,38 @@ describe('gateway-only fleet auth HTTP routes', () => {
     );
     expect(duplicate.statusCode).toBe(401);
     expect(broker.rotateSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears the prior session cookie when rotation requires reauthentication', async () => {
+    const { handler } = routes({
+      rotateSession: vi.fn(async () => {
+        throw new FleetAuthBrokerError(
+          'reauthentication_required',
+          401,
+          'Reauthentication is required',
+        );
+      }),
+    });
+    const res = response();
+    await handler.handle(
+      request('POST', {
+        cookie: `__Host-psfn_session=${'a'.repeat(43)}`,
+        origin: 'https://fleet.example.test',
+        'x-psfn-csrf': 'b'.repeat(43),
+      }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/session/refresh'),
+    );
+
+    expect(res.statusCode).toBe(401);
+    expect(res.headers.get('set-cookie')).toBe(
+      '__Host-psfn_session=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax',
+    );
+    expect(JSON.parse(res.body)).toEqual({
+      error: {
+        type: 'reauthentication_required',
+        message: 'Reauthentication is required',
+      },
+    });
   });
 });

@@ -210,7 +210,15 @@ export class FleetAuthHttpRoutes {
       throw new FleetAuthBrokerError('fleet_auth_route_not_found', 404);
     } catch (error) {
       if (!response.writableEnded) {
-        if (isCallback) response.setHeader('Set-Cookie', clearPreauthCookie());
+        const reauthenticationRequired = error instanceof FleetAuthBrokerError
+          && error.code === 'reauthentication_required';
+        if (isCallback && reauthenticationRequired) {
+          response.setHeader('Set-Cookie', [clearPreauthCookie(), clearSessionCookie()]);
+        } else if (isCallback) {
+          response.setHeader('Set-Cookie', clearPreauthCookie());
+        } else if (reauthenticationRequired) {
+          response.setHeader('Set-Cookie', clearSessionCookie());
+        }
         sendRouteError(response, error);
       }
     }

@@ -176,6 +176,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      await client.query(`SELECT global_auth_epoch FROM ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}()`);
       const current = await this.lockValidSession(client, input.token, input.csrfToken, input.now);
       const principal: PrincipalRow = {
         principal_id: current.principal_id,
@@ -278,6 +279,27 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
     } finally {
       client.release();
     }
+  }
+
+  async revokeIssuedSessionForReauthentication(
+    input: Parameters<FleetAuthBrokerStore['revokeIssuedSessionForReauthentication']>[0],
+  ): Promise<void> {
+    await this.fenceDiscordReauthenticationSessions({
+      principalId: input.principalId,
+      recordId: input.recordId,
+      now: input.now,
+    });
+  }
+
+  async fencePrincipalSessionsForDiscordReauthentication(input: {
+    principalId: string;
+    now: Date;
+  }): Promise<void> {
+    await this.fenceDiscordReauthenticationSessions(input);
+  }
+
+  async fenceAllSessionsForDiscordReauthentication(input: { now: Date }): Promise<void> {
+    await this.fenceDiscordReauthenticationSessions(input);
   }
 
   async revokeProvider(
@@ -525,5 +547,74 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
       SET revoked_at = COALESCE(revoked_at, $2)
       WHERE browser_session_id = $1
     `, [sessionId, now]);
+  }
+
+  private async fenceDiscordReauthenticationSessions(input: {
+    principalId?: string;
+    recordId?: string;
+    now: Date;
+  }): Promise<void> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const authority = await client.query<{
+        authority_generation: string;
+        global_auth_epoch: string;
+      }>(`
+        SELECT authority_generation, global_auth_epoch
+        FROM ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}()
+      `);
+      const state = authority.rows.at(0);
+      if (!state) throw new Error('fleet_auth authority_state singleton is missing');
+      const sessions = await client.query<{ record_id: string; principal_id: string }>(`
+        SELECT record_id, principal_id
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions
+        WHERE ($1::uuid IS NULL OR principal_id = $1)
+          AND ($2::uuid IS NULL OR record_id = $2)
+        FOR UPDATE
+      `, [input.principalId ?? null, input.recordId ?? null]);
+      if (input.recordId && (sessions.rows.length !== 1
+        || sessions.rows[0]?.principal_id !== input.principalId)) {
+        throw new Error('Issued fleet session reauthentication binding is missing');
+      }
+      const recordIds = sessions.rows.map(session => session.record_id);
+      if (recordIds.length > 0) {
+        await client.query(`
+          UPDATE ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions
+          SET revoked_at = COALESCE(revoked_at, $2)
+          WHERE record_id = ANY($1::uuid[])
+        `, [recordIds, input.now]);
+        await client.query(`
+          UPDATE ${FLEET_AUTH_SCHEMA_NAME}.step_up_challenges
+          SET status = CASE WHEN status = 'pending' THEN 'revoked' ELSE status END
+          WHERE browser_session_id = ANY($1::uuid[])
+        `, [recordIds]);
+        await client.query(`
+          UPDATE ${FLEET_AUTH_SCHEMA_NAME}.jit_authorization_grants
+          SET revoked_at = COALESCE(revoked_at, $2)
+          WHERE browser_session_id = ANY($1::uuid[])
+        `, [recordIds, input.now]);
+      }
+      await client.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+          (event_id, actor_context, action, resource, decision, reason_code,
+           principal_id, authority_generation, global_auth_epoch, occurred_at)
+        VALUES ($1, '{"kind":"system","boundary":"discord_evidence_lifecycle"}'::jsonb,
+                'session.reauthentication', 'fleet', 'deny',
+                'discord_evidence_reauthentication_required', $2, $3, $4, $5)
+      `, [
+        randomUUID(),
+        input.principalId ?? null,
+        state.authority_generation,
+        state.global_auth_epoch,
+        input.now,
+      ]);
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally {
+      client.release();
+    }
   }
 }

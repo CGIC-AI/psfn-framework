@@ -268,21 +268,23 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       },
       store: discordEvidenceStore,
     });
+    const brokerStore = new PostgresFleetAuthBrokerStore({
+      pool,
+      providerAuthorityPool: authorityPool,
+      sessionPepper: secrets.sessionPepper,
+      tokenEncryptionKey: secrets.tokenEncryptionKey,
+      providerRevocationAuthority,
+    });
     const discordEvidenceLifecycle = new DiscordEvidenceLifecycleCoordinator({
       config,
       runtime: discordEvidence,
       store: discordEvidenceStore,
+      sessionAuthority: brokerStore,
     });
     await discordEvidenceLifecycle.start();
     const broker = new GatewayFleetAuthBroker({
       config: options.config,
-      store: new PostgresFleetAuthBrokerStore({
-        pool,
-        providerAuthorityPool: authorityPool,
-        sessionPepper: secrets.sessionPepper,
-        tokenEncryptionKey: secrets.tokenEncryptionKey,
-        providerRevocationAuthority,
-      }),
+      store: brokerStore,
       oauthClientSecret: secrets.oauthClientSecret,
       sessionPepper: secrets.sessionPepper,
       discordEvidenceLifecycle,

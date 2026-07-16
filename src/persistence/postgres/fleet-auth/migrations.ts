@@ -1,3 +1,5 @@
+import { FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL } from './authority-state-lock-sql.js';
+
 export interface FleetAuthMigration {
   version: number;
   name: string;
@@ -741,4 +743,5 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 9, name: 'hub_device_assertion_replay_audit', sql: HUB_DEVICE_ASSERTION_REPLAY_AUDIT_SQL },
   { version: 10, name: 'discord_evidence_completeness', sql: DISCORD_EVIDENCE_COMPLETENESS_SQL },
   { version: 11, name: 'discord_evidence_lifecycle_fence', sql: DISCORD_EVIDENCE_LIFECYCLE_FENCE_SQL },
+  { version: 12, name: 'exclusive_broker_authority_lock', sql: FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL },
 ] as const;

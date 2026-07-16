@@ -61,6 +61,33 @@ const config: FleetAuthConfig = {
   discordEvidenceMappings: [],
 };
 
+const mappedConfig: FleetAuthConfig = {
+  ...config,
+  provider: { ...config.provider, scopes: ['identify', 'guilds', 'guilds.members.read'] },
+  discordEvidenceMappings: [{
+    guildId: '223456789012345678',
+    channelId: '323456789012345678',
+    companionId: '00000000-0000-4000-8000-000000000201',
+    requiredRoleIds: ['423456789012345678'],
+  }],
+};
+
+function mappedLoginFetch() {
+  return vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(response(200, {
+      access_token: 'provider-access-secret',
+      token_type: 'Bearer',
+      expires_in: 3600,
+      scope: 'identify guilds guilds.members.read',
+    }))
+    .mockResolvedValueOnce(response(200, { id: '123456789012345679' }))
+    .mockResolvedValueOnce(response(200, [{ id: '223456789012345678' }]))
+    .mockResolvedValueOnce(response(200, {
+      user: { id: '123456789012345679' },
+      roles: ['423456789012345678'],
+    }));
+}
+
 class FakeStore implements FleetAuthBrokerStore {
   transaction: OAuthTransactionInput | null = null;
   consumed = false;
@@ -135,6 +162,16 @@ class FakeStore implements FleetAuthBrokerStore {
     this.session = null;
   }
 
+  async revokeIssuedSessionForReauthentication(
+    input: Parameters<FleetAuthBrokerStore['revokeIssuedSessionForReauthentication']>[0],
+  ) {
+    if (!this.session || this.session.recordId !== input.recordId
+      || this.session.principalId !== input.principalId) {
+      throw new Error('Issued session binding is missing');
+    }
+    this.session = null;
+  }
+
   async revokeProvider(input: Parameters<FleetAuthBrokerStore['revokeProvider']>[0]) {
     if (!this.session || input.token !== this.session.token || input.csrfToken !== this.session.csrfToken) {
       throw new FleetAuthBrokerError('invalid_session', 401);
@@ -181,12 +218,12 @@ function makeBroker(
         providerMembershipEvidence: unknown;
         idleExpiresAt: Date;
         absoluteExpiresAt: Date;
-      }): Promise<void>;
+      }): Promise<{ status: 'admitted' } | { status: 'reauthentication_required' }>;
       recordSessionRotation(input: {
         principalId: string;
         idleExpiresAt: Date;
         absoluteExpiresAt: Date;
-      }): Promise<void>;
+      }): Promise<{ status: 'admitted' } | { status: 'reauthentication_required' }>;
     };
   } = {},
 ) {
@@ -287,37 +324,15 @@ describe('gateway fleet auth broker', () => {
   });
 
   it('collects consented current guild roles before refreshing active Discord evidence', async () => {
-    const mappedConfig: FleetAuthConfig = {
-      ...config,
-      provider: { ...config.provider, scopes: ['identify', 'guilds', 'guilds.members.read'] },
-      discordEvidenceMappings: [{
-        guildId: '223456789012345678',
-        channelId: '323456789012345678',
-        companionId: '00000000-0000-4000-8000-000000000201',
-        requiredRoleIds: ['423456789012345678'],
-      }],
-    };
     const store = new FakeStore();
     store.principalStatus = 'active';
-    const fetchImpl = vi.fn<typeof fetch>()
-      .mockResolvedValueOnce(response(200, {
-        access_token: 'provider-access-secret',
-        token_type: 'Bearer',
-        expires_in: 3600,
-        scope: 'identify guilds guilds.members.read',
-      }))
-      .mockResolvedValueOnce(response(200, { id: '123456789012345679' }))
-      .mockResolvedValueOnce(response(200, [{ id: '223456789012345678' }]))
-      .mockResolvedValueOnce(response(200, {
-        user: { id: '123456789012345679' },
-        roles: ['423456789012345678'],
-      }));
-    const recordActiveOAuthSession = vi.fn(async () => undefined);
+    const fetchImpl = mappedLoginFetch();
+    const recordActiveOAuthSession = vi.fn(async () => ({ status: 'admitted' as const }));
     const { broker } = makeBroker(store, fetchImpl, undefined, {
       config: mappedConfig,
       discordEvidenceLifecycle: {
         recordActiveOAuthSession,
-        recordSessionRotation: vi.fn(async () => undefined),
+        recordSessionRotation: vi.fn(async () => ({ status: 'admitted' as const })),
       },
     });
     const started = await broker.beginLogin({ returnPath: '/fleet' });
@@ -354,6 +369,58 @@ describe('gateway fleet auth broker', () => {
       idleExpiresAt: expect.any(Date),
       absoluteExpiresAt: expect.any(Date),
     });
+  });
+
+  it('revokes a callback session before returning a stable reauthentication denial', async () => {
+    const store = new FakeStore();
+    store.principalStatus = 'active';
+    const recordActiveOAuthSession = vi.fn(async () => ({
+      status: 'reauthentication_required' as const,
+    }));
+    const { broker } = makeBroker(store, mappedLoginFetch(), undefined, {
+      config: mappedConfig,
+      discordEvidenceLifecycle: {
+        recordActiveOAuthSession,
+        recordSessionRotation: vi.fn(async () => ({ status: 'admitted' as const })),
+      },
+    });
+    const started = await broker.beginLogin({ returnPath: '/fleet' });
+
+    await expect(broker.completeCallback({
+      state: new URL(started.authorizationUrl).searchParams.get('state')!,
+      code: 'one-time-code',
+      requestOrigin: mappedConfig.canonicalOrigin,
+      initiatingBrowserToken: started.initiatingBrowserToken,
+    })).rejects.toMatchObject({
+      code: 'reauthentication_required',
+      status: 401,
+      message: 'Reauthentication is required',
+    });
+    expect(recordActiveOAuthSession).toHaveBeenCalledOnce();
+    expect(store.session).toBeNull();
+  });
+
+  it('compensates a callback lifecycle failure by revoking the issued session', async () => {
+    const store = new FakeStore();
+    store.principalStatus = 'active';
+    const { broker } = makeBroker(store, mappedLoginFetch(), undefined, {
+      config: mappedConfig,
+      discordEvidenceLifecycle: {
+        recordActiveOAuthSession: vi.fn(async () => {
+          throw new Error('injected lifecycle failure containing provider-access-secret');
+        }),
+        recordSessionRotation: vi.fn(async () => ({ status: 'admitted' as const })),
+      },
+    });
+    const started = await broker.beginLogin({ returnPath: '/fleet' });
+
+    await expect(broker.completeCallback({
+      state: new URL(started.authorizationUrl).searchParams.get('state')!,
+      code: 'one-time-code',
+      requestOrigin: mappedConfig.canonicalOrigin,
+      initiatingBrowserToken: started.initiatingBrowserToken,
+    })).rejects.toThrow('injected lifecycle failure');
+    expect(store.session).toBeNull();
   });
 
   it('binds callback state to the opaque initiating browser without consuming it on mismatch', async () => {
@@ -477,6 +544,36 @@ describe('gateway fleet auth broker', () => {
     })).resolves.toBeUndefined();
   });
 
+  it('revokes a rotated session when lifecycle authority requires a new OAuth ceremony', async () => {
+    const store = new FakeStore();
+    store.principalStatus = 'active';
+    const recordSessionRotation = vi.fn(async () => ({
+      status: 'reauthentication_required' as const,
+    }));
+    const { broker } = makeBroker(store, mappedLoginFetch(), undefined, {
+      config: mappedConfig,
+      discordEvidenceLifecycle: {
+        recordActiveOAuthSession: vi.fn(async () => ({ status: 'admitted' as const })),
+        recordSessionRotation,
+      },
+    });
+    const started = await broker.beginLogin({ returnPath: '/fleet' });
+    const login = await broker.completeCallback({
+      state: new URL(started.authorizationUrl).searchParams.get('state')!,
+      code: 'code',
+      requestOrigin: mappedConfig.canonicalOrigin,
+      initiatingBrowserToken: started.initiatingBrowserToken,
+    });
+
+    await expect(broker.rotateSession({
+      token: login.session.token,
+      csrfToken: login.session.csrfToken,
+      requestOrigin: mappedConfig.canonicalOrigin,
+    })).rejects.toMatchObject({ code: 'reauthentication_required', status: 401 });
+    expect(recordSessionRotation).toHaveBeenCalledOnce();
+    expect(store.session).toBeNull();
+  });
+
   it('activates first owner only from gateway-verified exact trusted-host and WebAuthn assurance', async () => {
     const store = new FakeStore();
     const fetchImpl = vi.fn<typeof fetch>()
@@ -522,5 +619,40 @@ describe('gateway fleet auth broker', () => {
       requestOrigin: config.canonicalOrigin,
       assuranceEvidence: {},
     })).rejects.toMatchObject({ code: 'strong_assurance_unavailable' });
+  });
+
+  it('fences first-owner activation until a mapped fresh OAuth ceremony is admitted', async () => {
+    const store = new FakeStore();
+    const assurance: FirstOwnerAssurancePort = {
+      verify: vi.fn(async () => ({
+        ceremonyId: '00000000-0000-4000-8000-000000000110',
+        principalId: '00000000-0000-4000-8000-000000000102',
+        providerSubjectId: '123456789012345679',
+        companionId: '00000000-0000-4000-8000-000000000111',
+        contactId: 'owner-contact',
+      })),
+    };
+    const { broker } = makeBroker(store, mappedLoginFetch(), assurance, {
+      config: mappedConfig,
+      discordEvidenceLifecycle: {
+        recordActiveOAuthSession: vi.fn(async () => ({ status: 'admitted' as const })),
+        recordSessionRotation: vi.fn(async () => ({ status: 'admitted' as const })),
+      },
+    });
+    const started = await broker.beginLogin({ returnPath: '/fleet' });
+    const login = await broker.completeCallback({
+      state: new URL(started.authorizationUrl).searchParams.get('state')!,
+      code: 'code',
+      requestOrigin: mappedConfig.canonicalOrigin,
+      initiatingBrowserToken: started.initiatingBrowserToken,
+    });
+
+    await expect(broker.completeFirstOwnerBootstrap({
+      token: login.session.token,
+      csrfToken: login.session.csrfToken,
+      requestOrigin: mappedConfig.canonicalOrigin,
+      assuranceEvidence: { opaqueWebAuthnAndTrustedHostResponse: true },
+    })).rejects.toMatchObject({ code: 'reauthentication_required', status: 401 });
+    expect(store.session).toBeNull();
   });
 });

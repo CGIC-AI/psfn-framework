@@ -18,6 +18,18 @@ export type DiscordEvidenceReauthenticationReason =
   | 'provider_evidence_invalid'
   | 'session_expired';
 
+export type DiscordEvidenceLifecycleAdmission =
+  | { status: 'admitted' }
+  | { status: 'reauthentication_required' };
+
+export interface DiscordEvidenceSessionAuthorityPort {
+  fencePrincipalSessionsForDiscordReauthentication(input: {
+    principalId: string;
+    now: Date;
+  }): Promise<void>;
+  fenceAllSessionsForDiscordReauthentication(input: { now: Date }): Promise<void>;
+}
+
 interface ActiveMembershipEvidence {
   principalId: string;
   providerSubjectId: string;
@@ -45,6 +57,7 @@ export interface DiscordEvidenceLifecycleOptions {
     | 'revokeAllEvidence'
     | 'revokePrincipalEvidence'
   >;
+  sessionAuthority: DiscordEvidenceSessionAuthorityPort;
   now?: () => Date;
   setTimer?: (callback: () => void, delayMs: number) => ReturnType<typeof setTimeout>;
   clearTimer?: (timer: ReturnType<typeof setTimeout>) => void;
@@ -75,6 +88,7 @@ export class DiscordEvidenceLifecycleCoordinator {
   private readonly config: FleetAuthConfig;
   private readonly runtime: DiscordEvidenceLifecycleOptions['runtime'];
   private readonly store: DiscordEvidenceLifecycleOptions['store'];
+  private readonly sessionAuthority: DiscordEvidenceSessionAuthorityPort;
   private readonly now: () => Date;
   private readonly setTimer: NonNullable<DiscordEvidenceLifecycleOptions['setTimer']>;
   private readonly clearTimer: NonNullable<DiscordEvidenceLifecycleOptions['clearTimer']>;
@@ -91,6 +105,7 @@ export class DiscordEvidenceLifecycleCoordinator {
     this.config = options.config;
     this.runtime = options.runtime;
     this.store = options.store;
+    this.sessionAuthority = options.sessionAuthority;
     this.now = options.now ?? (() => new Date());
     this.setTimer = options.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
     this.clearTimer = options.clearTimer ?? (timer => clearTimeout(timer));
@@ -102,7 +117,7 @@ export class DiscordEvidenceLifecycleCoordinator {
   async start(): Promise<void> {
     await this.enqueue(async () => {
       if (this.started) return;
-      await this.store.revokeAllEvidence();
+      await this.revokeAllAuthority();
       this.started = true;
     }, true);
   }
@@ -113,19 +128,27 @@ export class DiscordEvidenceLifecycleCoordinator {
     providerMembershipEvidence: unknown;
     idleExpiresAt: Date;
     absoluteExpiresAt: Date;
-  }): Promise<void> {
-    await this.enqueue(() => this.recordActiveOAuthSessionInternal(input));
+  }): Promise<DiscordEvidenceLifecycleAdmission> {
+    return await this.enqueue(() => this.recordActiveOAuthSessionInternal(input));
   }
 
   async recordSessionRotation(input: {
     principalId: string;
     idleExpiresAt: Date;
     absoluteExpiresAt: Date;
-  }): Promise<void> {
-    await this.enqueue(async () => {
+  }): Promise<DiscordEvidenceLifecycleAdmission> {
+    return await this.enqueue(async () => {
       this.assertStarted();
+      if (this.config.discordEvidenceMappings.length === 0) return { status: 'admitted' };
       const matches = [...this.active.values()]
         .filter(entry => entry.principalId === input.principalId);
+      if (matches.length === 0) {
+        await this.sessionAuthority.fencePrincipalSessionsForDiscordReauthentication({
+          principalId: input.principalId,
+          now: this.now(),
+        });
+        return { status: 'reauthentication_required' };
+      }
       for (const entry of matches) {
         entry.sessionExpiresAt = new Date(Math.min(
           input.idleExpiresAt.getTime(),
@@ -133,6 +156,9 @@ export class DiscordEvidenceLifecycleCoordinator {
         ));
         await this.refreshOrRequireReauthentication(entry);
       }
+      return matches.some(entry => this.isCurrentEntry(entry))
+        ? { status: 'admitted' }
+        : { status: 'reauthentication_required' };
     });
   }
 
@@ -177,7 +203,7 @@ export class DiscordEvidenceLifecycleCoordinator {
       for (const entry of this.active.values()) {
         if (entry.timer) this.clearTimer(entry.timer);
       }
-      await this.store.revokeAllEvidence();
+      await this.revokeAllAuthority();
       this.active.clear();
     }, true);
     await this.closePromise;
@@ -189,8 +215,9 @@ export class DiscordEvidenceLifecycleCoordinator {
     providerMembershipEvidence: unknown;
     idleExpiresAt: Date;
     absoluteExpiresAt: Date;
-  }): Promise<void> {
+  }): Promise<DiscordEvidenceLifecycleAdmission> {
     this.assertStarted();
+    if (this.config.discordEvidenceMappings.length === 0) return { status: 'admitted' };
     const key = evidenceKey(input.principalId, input.providerSubjectId);
     let observation: ReturnType<typeof parseProviderMembershipEvidence>;
     try {
@@ -200,12 +227,10 @@ export class DiscordEvidenceLifecycleCoordinator {
         new Set(this.config.discordEvidenceMappings.map(mapping => mapping.guildId)).size,
       );
     } catch {
-      await this.rejectAdmissionWithoutNewEvidence(input, 'provider_evidence_invalid');
-      return;
+      return await this.rejectAdmissionWithoutNewEvidence(input, 'provider_evidence_invalid');
     }
     if (observation.status !== 'observed') {
-      await this.rejectAdmissionWithoutNewEvidence(input, 'provider_evidence_unavailable');
-      return;
+      return await this.rejectAdmissionWithoutNewEvidence(input, 'provider_evidence_unavailable');
     }
     const now = this.now();
     const providerExpiresAt = new Date(
@@ -215,8 +240,7 @@ export class DiscordEvidenceLifecycleCoordinator {
       || providerExpiresAt.getTime() <= now.getTime()
       || Math.min(input.idleExpiresAt.getTime(), input.absoluteExpiresAt.getTime())
         <= now.getTime()) {
-      await this.rejectAdmissionWithoutNewEvidence(input, 'provider_evidence_invalid');
-      return;
+      return await this.rejectAdmissionWithoutNewEvidence(input, 'provider_evidence_invalid');
     }
     const current = this.active.get(key);
     const entry: ActiveMembershipEvidence = {
@@ -243,6 +267,7 @@ export class DiscordEvidenceLifecycleCoordinator {
     try {
       await this.refreshEntry(entry);
       this.schedule(entry);
+      return { status: 'admitted' };
     } catch (error) {
       await this.failEntry(entry, 'provider_evidence_unavailable', error);
     }
@@ -251,14 +276,19 @@ export class DiscordEvidenceLifecycleCoordinator {
   private async rejectAdmissionWithoutNewEvidence(
     input: { principalId: string; providerSubjectId: string },
     reason: DiscordEvidenceReauthenticationReason,
-  ): Promise<void> {
+  ): Promise<DiscordEvidenceLifecycleAdmission> {
     const key = evidenceKey(input.principalId, input.providerSubjectId);
     const current = this.active.get(key);
     if (current) {
       await this.requireReauthentication(current, reason);
-      return;
+      return { status: 'reauthentication_required' };
     }
     this.reauthentication.set(key, reason);
+    await this.sessionAuthority.fencePrincipalSessionsForDiscordReauthentication({
+      principalId: input.principalId,
+      now: this.now(),
+    });
+    return { status: 'reauthentication_required' };
   }
 
   private async handleAuthorityChangeInternal(
@@ -390,11 +420,28 @@ export class DiscordEvidenceLifecycleCoordinator {
   ): Promise<void> {
     if (!this.isCurrentEntry(entry)) return;
     if (entry.timer) this.clearTimer(entry.timer);
-    await this.store.revokePrincipalEvidence({
-      principalId: entry.principalId,
-      providerSubjectId: entry.providerSubjectId,
-      mutation: this.nextMutation(entry),
-    });
+    const errors: unknown[] = [];
+    try {
+      await this.sessionAuthority.fencePrincipalSessionsForDiscordReauthentication({
+        principalId: entry.principalId,
+        now: this.now(),
+      });
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      await this.store.revokePrincipalEvidence({
+        principalId: entry.principalId,
+        providerSubjectId: entry.providerSubjectId,
+        mutation: this.nextMutation(entry),
+      });
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) {
+      throw new AggregateError(errors, 'Discord evidence terminal authority fencing failed');
+    }
     this.active.delete(evidenceKey(entry.principalId, entry.providerSubjectId));
     this.reauthentication.set(
       evidenceKey(entry.principalId, entry.providerSubjectId),
@@ -425,6 +472,26 @@ export class DiscordEvidenceLifecycleCoordinator {
 
   private isCurrentEntry(entry: ActiveMembershipEvidence): boolean {
     return this.active.get(evidenceKey(entry.principalId, entry.providerSubjectId)) === entry;
+  }
+
+  private async revokeAllAuthority(): Promise<void> {
+    const errors: unknown[] = [];
+    if (this.config.discordEvidenceMappings.length > 0) {
+      try {
+        await this.sessionAuthority.fenceAllSessionsForDiscordReauthentication({ now: this.now() });
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    try {
+      await this.store.revokeAllEvidence();
+    } catch (error) {
+      errors.push(error);
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) {
+      throw new AggregateError(errors, 'Discord evidence global authority fencing failed');
+    }
   }
 
   private enqueue<T>(task: () => Promise<T>, allowClosing = false): Promise<T> {

@@ -6,6 +6,7 @@ import {
 } from 'node:crypto';
 import type { FleetAuthConfig } from '../../system/config/fleet-auth-config.js';
 import { isRecord } from '../../shared/utils/types.js';
+import type { DiscordEvidenceLifecycleAdmission } from '../fleet-auth/discord-evidence-lifecycle.js';
 
 const DISCORD_AUTHORIZE_URL = 'https://discord.com/oauth2/authorize';
 const DISCORD_TOKEN_URL = 'https://discord.com/api/v10/oauth2/token';
@@ -96,6 +97,11 @@ export interface FleetAuthBrokerStore {
     csrfToken: string;
     now: Date;
   }): Promise<void>;
+  revokeIssuedSessionForReauthentication(input: {
+    recordId: string;
+    principalId: string;
+    now: Date;
+  }): Promise<void>;
   revokeProvider(input: {
     token: string;
     csrfToken: string;
@@ -165,12 +171,12 @@ export interface GatewayFleetAuthBrokerOptions {
       providerMembershipEvidence: unknown;
       idleExpiresAt: Date;
       absoluteExpiresAt: Date;
-    }): Promise<void>;
+    }): Promise<DiscordEvidenceLifecycleAdmission>;
     recordSessionRotation(input: {
       principalId: string;
       idleExpiresAt: Date;
       absoluteExpiresAt: Date;
-    }): Promise<void>;
+    }): Promise<DiscordEvidenceLifecycleAdmission>;
   };
 }
 
@@ -229,6 +235,9 @@ export class GatewayFleetAuthBroker {
   private readonly discordEvidenceLifecycle?: GatewayFleetAuthBrokerOptions['discordEvidenceLifecycle'];
 
   constructor(options: GatewayFleetAuthBrokerOptions) {
+    if (options.config.discordEvidenceMappings.length > 0 && !options.discordEvidenceLifecycle) {
+      throw new Error('Discord evidence mappings require lifecycle admission authority');
+    }
     this.config = options.config;
     this.store = options.store;
     this.oauthClientSecret = options.oauthClientSecret;
@@ -345,14 +354,17 @@ export class GatewayFleetAuthBroker {
           }
         : {}),
     });
-    if (session.principalStatus === 'active' && this.discordEvidenceLifecycle) {
-      await this.discordEvidenceLifecycle.recordActiveOAuthSession({
-        principalId: session.principalId,
-        providerSubjectId: identity.subjectId,
-        providerMembershipEvidence,
-        idleExpiresAt: session.idleExpiresAt,
-        absoluteExpiresAt: session.absoluteExpiresAt,
-      });
+    const lifecycle = this.discordEvidenceLifecycle;
+    if (session.principalStatus === 'active' && lifecycle) {
+      await this.requireLifecycleAdmission(session, () => (
+        lifecycle.recordActiveOAuthSession({
+          principalId: session.principalId,
+          providerSubjectId: identity.subjectId,
+          providerMembershipEvidence,
+          idleExpiresAt: session.idleExpiresAt,
+          absoluteExpiresAt: session.absoluteExpiresAt,
+        })
+      ));
     }
     return { returnPath: transaction.returnPath, session };
   }
@@ -371,11 +383,16 @@ export class GatewayFleetAuthBroker {
       now: this.now(),
       idleTtlMs: this.config.ttls.sessionIdleMs,
     });
-    await this.discordEvidenceLifecycle?.recordSessionRotation({
-      principalId: rotated.principalId,
-      idleExpiresAt: rotated.idleExpiresAt,
-      absoluteExpiresAt: rotated.absoluteExpiresAt,
-    });
+    const lifecycle = this.discordEvidenceLifecycle;
+    if (lifecycle) {
+      await this.requireLifecycleAdmission(rotated, () => (
+        lifecycle.recordSessionRotation({
+          principalId: rotated.principalId,
+          idleExpiresAt: rotated.idleExpiresAt,
+          absoluteExpiresAt: rotated.absoluteExpiresAt,
+        })
+      ));
+    }
     return rotated;
   }
 
@@ -440,7 +457,7 @@ export class GatewayFleetAuthBroker {
       evidence: input.assuranceEvidence,
       expectedOrigin: this.config.canonicalOrigin,
     });
-    return await this.store.completeFirstOwnerBootstrap({
+    const activated = await this.store.completeFirstOwnerBootstrap({
       token: input.token,
       csrfToken: input.csrfToken,
       ...verified,
@@ -450,6 +467,50 @@ export class GatewayFleetAuthBroker {
       idleTtlMs: this.config.ttls.sessionIdleMs,
       absoluteTtlMs: this.config.ttls.sessionAbsoluteMs,
     });
+    if (this.config.discordEvidenceMappings.length > 0) {
+      await this.denyIssuedSession(activated);
+    }
+    return activated;
+  }
+
+  private async requireLifecycleAdmission(
+    session: FleetAuthSessionRecord,
+    admit: () => Promise<DiscordEvidenceLifecycleAdmission>,
+  ): Promise<void> {
+    let admission: Awaited<ReturnType<typeof admit>>;
+    try {
+      admission = await admit();
+    } catch (error) {
+      try {
+        await this.store.revokeIssuedSessionForReauthentication({
+          recordId: session.recordId,
+          principalId: session.principalId,
+          now: this.now(),
+        });
+      } catch (revokeError) {
+        throw new AggregateError(
+          [error, revokeError],
+          'Discord evidence admission failed and issued session revocation also failed',
+        );
+      }
+      throw error;
+    }
+    if (admission.status === 'reauthentication_required') {
+      await this.denyIssuedSession(session);
+    }
+  }
+
+  private async denyIssuedSession(session: FleetAuthSessionRecord): Promise<never> {
+    await this.store.revokeIssuedSessionForReauthentication({
+      recordId: session.recordId,
+      principalId: session.principalId,
+      now: this.now(),
+    });
+    throw new FleetAuthBrokerError(
+      'reauthentication_required',
+      401,
+      'Reauthentication is required',
+    );
   }
 
   private assertMutationOrigin(requestOrigin: string): void {

@@ -15,7 +15,12 @@ const CHANNEL_A = '100000000000000003';
 const CHANNEL_B = '100000000000000004';
 const ROLE_ID = '100000000000000005';
 
-function config(): FleetAuthConfig {
+function config(
+  discordEvidenceMappings: FleetAuthConfig['discordEvidenceMappings'] = [
+    { companionId: COMPANION_A, guildId: GUILD_ID, channelId: CHANNEL_A, requiredRoleIds: [] },
+    { companionId: COMPANION_B, guildId: GUILD_ID, channelId: CHANNEL_B, requiredRoleIds: [] },
+  ],
+): FleetAuthConfig {
   const credential = (envName: string) => ({ kind: 'env' as const, envName });
   return {
     schemaVersion: 1,
@@ -62,10 +67,7 @@ function config(): FleetAuthConfig {
       internalAssertionMs: 30_000,
     },
     rolePolicy: { disabledActionsByRole: { owner: [], admin: [], member: [], guest: [] } },
-    discordEvidenceMappings: [
-      { companionId: COMPANION_A, guildId: GUILD_ID, channelId: CHANNEL_A, requiredRoleIds: [] },
-      { companionId: COMPANION_B, guildId: GUILD_ID, channelId: CHANNEL_B, requiredRoleIds: [] },
-    ],
+    discordEvidenceMappings,
   };
 }
 
@@ -75,6 +77,13 @@ function membership(observedAt: Date) {
     providerSubjectId: SUBJECT_ID,
     observedAt: observedAt.toISOString(),
     guilds: [{ guildId: GUILD_ID, roleIds: [ROLE_ID] }],
+  };
+}
+
+function sessionAuthority() {
+  return {
+    fencePrincipalSessionsForDiscordReauthentication: vi.fn(async () => undefined),
+    fenceAllSessionsForDiscordReauthentication: vi.fn(async () => undefined),
   };
 }
 
@@ -95,6 +104,7 @@ describe('Discord evidence production lifecycle', () => {
       config: config(),
       runtime,
       store,
+      sessionAuthority: sessionAuthority(),
       now: () => now,
       setTimer: vi.fn(() => 1 as unknown as ReturnType<typeof setTimeout>),
       clearTimer: vi.fn(),
@@ -179,10 +189,12 @@ describe('Discord evidence production lifecycle', () => {
       revokeAllEvidence: vi.fn(async () => undefined),
       revokePrincipalEvidence: vi.fn(async () => undefined),
     };
+    const authority = sessionAuthority();
     const coordinator = new DiscordEvidenceLifecycleCoordinator({
       config: config(),
       runtime,
       store,
+      sessionAuthority: authority,
       now: () => now,
       setTimer: (callback, delayMs) => {
         timers.push({ callback, delayMs });
@@ -217,7 +229,74 @@ describe('Discord evidence production lifecycle', () => {
       providerSubjectId: SUBJECT_ID,
       mutation: expect.objectContaining({ generation: expect.any(Number) }),
     });
+    expect(authority.fencePrincipalSessionsForDiscordReauthentication)
+      .toHaveBeenCalledWith({ principalId: PRINCIPAL_ID, now });
     expect(coordinator.reauthenticationReason(PRINCIPAL_ID, SUBJECT_ID)).toBe('evidence_expired');
+    await coordinator.close();
+  });
+
+  it('returns typed reauthentication admission and durably fences missing lifecycle authority', async () => {
+    const authority = sessionAuthority();
+    const store = {
+      activatePrincipalEvidenceLifecycle: vi.fn(async () => undefined),
+      invalidatePrincipalEvidence: vi.fn(async () => undefined),
+      revokeAllEvidence: vi.fn(async () => undefined),
+      revokePrincipalEvidence: vi.fn(async () => undefined),
+    };
+    const coordinator = new DiscordEvidenceLifecycleCoordinator({
+      config: config(),
+      runtime: {
+        refreshPrincipalEvidence: vi.fn(async () => []),
+        refreshCompanionEvidence: vi.fn(async () => []),
+      },
+      store,
+      sessionAuthority: authority,
+      now: () => new Date('2026-07-16T12:00:00.000Z'),
+    });
+    await coordinator.start();
+    await expect(coordinator.recordActiveOAuthSession({
+      principalId: PRINCIPAL_ID,
+      providerSubjectId: SUBJECT_ID,
+      providerMembershipEvidence: { status: 'provider_unavailable' },
+      idleExpiresAt: new Date('2026-07-16T12:30:00.000Z'),
+      absoluteExpiresAt: new Date('2026-07-16T20:00:00.000Z'),
+    })).resolves.toEqual({ status: 'reauthentication_required' });
+    await expect(coordinator.recordSessionRotation({
+      principalId: PRINCIPAL_ID,
+      idleExpiresAt: new Date('2026-07-16T12:30:00.000Z'),
+      absoluteExpiresAt: new Date('2026-07-16T20:00:00.000Z'),
+    })).resolves.toEqual({ status: 'reauthentication_required' });
+    expect(authority.fencePrincipalSessionsForDiscordReauthentication)
+      .toHaveBeenCalledTimes(2);
+    expect(store.activatePrincipalEvidenceLifecycle).not.toHaveBeenCalled();
+    await coordinator.close();
+  });
+
+  it('preserves feature-off admission without fencing browser sessions', async () => {
+    const authority = sessionAuthority();
+    const store = {
+      activatePrincipalEvidenceLifecycle: vi.fn(async () => undefined),
+      invalidatePrincipalEvidence: vi.fn(async () => undefined),
+      revokeAllEvidence: vi.fn(async () => undefined),
+      revokePrincipalEvidence: vi.fn(async () => undefined),
+    };
+    const coordinator = new DiscordEvidenceLifecycleCoordinator({
+      config: config([]),
+      runtime: {
+        refreshPrincipalEvidence: vi.fn(async () => []),
+        refreshCompanionEvidence: vi.fn(async () => []),
+      },
+      store,
+      sessionAuthority: authority,
+    });
+    await coordinator.start();
+    await expect(coordinator.recordSessionRotation({
+      principalId: PRINCIPAL_ID,
+      idleExpiresAt: new Date('2026-07-16T12:30:00.000Z'),
+      absoluteExpiresAt: new Date('2026-07-16T20:00:00.000Z'),
+    })).resolves.toEqual({ status: 'admitted' });
+    expect(authority.fenceAllSessionsForDiscordReauthentication).not.toHaveBeenCalled();
+    expect(authority.fencePrincipalSessionsForDiscordReauthentication).not.toHaveBeenCalled();
     await coordinator.close();
   });
 
@@ -238,6 +317,7 @@ describe('Discord evidence production lifecycle', () => {
       config: config(),
       runtime,
       store,
+      sessionAuthority: sessionAuthority(),
       now: () => now,
       setTimer: callback => {
         timers.push(callback);
@@ -286,6 +366,7 @@ describe('Discord evidence production lifecycle', () => {
       config: config(),
       runtime,
       store,
+      sessionAuthority: sessionAuthority(),
       now: () => new Date('2026-07-16T12:00:00.000Z'),
       setTimer: vi.fn(() => 1 as unknown as ReturnType<typeof setTimeout>),
       clearTimer: vi.fn(),

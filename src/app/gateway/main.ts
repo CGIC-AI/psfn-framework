@@ -44,10 +44,7 @@ import { IcpFatigueInitiationCapacityAuthority } from '../../core/agent/fatigue/
 import { readRunChargeRollingWindowFromLedger } from '../../shared/telemetry/charge-ledger.js';
 import { RootBoundIcpInitiationCausalityAuthority } from '../../boundary/gateway/icp-initiation-causality-authority.js';
 import { CompanionEventRelay } from '../../channels/backplane/companion-relay/relay.js';
-import {
-  CHARGE_POLICY_FILE_NAME,
-  loadChargePolicyConfig,
-} from '../../system/config/charge-policy-config.js';
+import { CHARGE_POLICY_FILE_NAME } from '../../system/config/charge-policy-config.js';
 import {
   ensurePersonalFilesLayout,
   resolveCogSecEventsPath,
@@ -78,6 +75,7 @@ import {
   SCHEDULED_BACKUP_TASK_NAME,
 } from '../../persistence/backups/service.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
+import { createGatewayFleetChargePolicyResolver } from './fleet-charge-policy-resolver.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -180,25 +178,12 @@ async function main(): Promise<void> {
     });
   }
 
-  const fleetChargePolicyByCompanionId = config.multiCompanion === true && config.companionFleet
-    ? new Map(config.companionFleet.companions.map(entry => [
-        entry.companionId,
-        loadChargePolicyConfig(
-          entry.companionDataDir,
-          env.CONFIG_DIR ? { seedDir: env.CONFIG_DIR } : {},
-        ),
-      ]))
+  const resolveFleetChargePolicy = config.multiCompanion === true && config.companionFleet
+    ? createGatewayFleetChargePolicyResolver({
+      companions: config.companionFleet.companions,
+      ...(env.CONFIG_DIR ? { seedDir: env.CONFIG_DIR } : {}),
+    })
     : null;
-  const resolveFleetChargePolicy = (rawCompanionId: string) => {
-    const policy = fleetChargePolicyByCompanionId?.get(createCompanionId(
-      rawCompanionId,
-      'fleet charge policy companionId',
-    ));
-    if (!policy) {
-      throw new Error('Fleet charge policy requires a known multi-companion sender');
-    }
-    return policy;
-  };
 
   const privilegedCore = await buildGatewayPrivilegedCore({
     config,
@@ -207,7 +192,7 @@ async function main(): Promise<void> {
     startupHydration,
     logger: log,
     onEligibilityDecision: emitEligibilityDecision,
-    ...(fleetChargePolicyByCompanionId
+    ...(resolveFleetChargePolicy
       ? { icpConversationChargePolicyResolver: resolveFleetChargePolicy }
       : {}),
   });
@@ -398,6 +383,9 @@ async function main(): Promise<void> {
     }
     if (!config.companionFleet) {
       throw new Error('Multi-companion inter-companion channels require the companions.json fleet manifest');
+    }
+    if (!resolveFleetChargePolicy) {
+      throw new Error('Multi-companion inter-companion channels require fleet charge-policy owners');
     }
     const fleetCompanionIds = config.companionFleet.companions.map((entry) => entry.companionId);
     const fleetByCompanionId = new Map(

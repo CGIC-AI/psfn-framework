@@ -20,7 +20,7 @@ import { PostgresIcpFatigueRegulationReservationStore } from '../../../persisten
 import { PostgresIcpInitiationPolicyAuthority } from '../../../persistence/postgres/icp-initiation-policy-authority.js';
 import { PostgresIcpSharedAutonomyStore } from '../../../persistence/postgres/icp-shared-autonomy-store.js';
 import { PostgresModelUsageStore } from '../../../persistence/postgres/model-usage-store.js';
-import { loadChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
+import { createGatewayFleetChargePolicyResolver } from '../../gateway/fleet-charge-policy-resolver.js';
 import { loadAgentConfig } from '../../../system/config/load-config.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../../system/config/runtime-config.js';
 import { loadPlacesRegistryConfig } from '../../../channels/backplane/places-registry.js';
@@ -404,15 +404,12 @@ export async function startIcpCertificationProcessHarness(input: {
     companionDataDir: companion.companionDataDir,
   }));
   const fleetById = new Map(fleet.map(companion => [companion.companionId, companion]));
-  const chargePolicyById = new Map(fleet.map(companion => [
-    companion.companionId,
-    loadChargePolicyConfig(companion.companionDataDir),
-  ]));
-  const resolveChargePolicy = (companionId: string) => {
-    const chargePolicy = chargePolicyById.get(companionId);
-    if (!chargePolicy) throw new Error('Unknown certification companion charge owner');
-    return chargePolicy;
-  };
+  const resolveChargePolicy = createGatewayFleetChargePolicyResolver({
+    companions: fleet,
+    ...(input.fixture.companions[0].env.CONFIG_DIR
+      ? { seedDir: input.fixture.companions[0].env.CONFIG_DIR }
+      : {}),
+  });
   const modelUsagePool = createPostgresPool(input.databaseUrl, {
     applicationName: 'psfn-icp-certification-model-usage',
     allowExitOnIdle: true,

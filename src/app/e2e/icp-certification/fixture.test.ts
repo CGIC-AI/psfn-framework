@@ -1,10 +1,11 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { loadAgentConfig } from '../../../system/config/load-config.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../../system/config/runtime-config.js';
 import { loadSchedulerConfig } from '../../../system/config/scheduler-config.js';
+import { createGatewayFleetChargePolicyResolver } from '../../gateway/fleet-charge-policy-resolver.js';
 import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
@@ -88,6 +89,11 @@ describe('ICP certification production-shape fixture', () => {
       enabled: true,
       hardLimitUsd: 0.0004,
     });
+    expect(configB.chargePolicy?.icpCostBreaker).toMatchObject({
+      enabled: true,
+      hardLimitUsd: 0.0004,
+    });
+    expect(existsSync(join(fixture.systemDataDir, 'charge-policy.json'))).toBe(false);
     expect(configA).toMatchObject({
       compactionThresholdPct: 30,
       modelRoster: {
@@ -103,8 +109,73 @@ describe('ICP certification production-shape fixture', () => {
       databaseUrl: 'postgres://certification:certification@127.0.0.1:5432/certification',
     });
 
-    expect(loadSchedulerConfig(fixture.systemDataDir)).toMatchObject({
-      icpAutonomy: { enabled: false },
-    });
+    expect(existsSync(join(fixture.systemDataDir, 'scheduler.json'))).toBe(false);
+    for (const companion of fixture.companions) {
+      expect(loadSchedulerConfig(companion.companionDataDir)).toMatchObject({
+        icpAutonomy: { enabled: false },
+      });
+    }
   });
+
+  it.each([
+    ['lowered_warning', 0.0001, 0.0003],
+    ['lowered_hard', 0.00015, 0.0002],
+  ] as const)(
+    'binds the %s policy only to companion B through the production resolver',
+    (costProfile, warningThresholdUsd, hardLimitUsd) => {
+      fixture = createIcpCertificationFixture({
+        costProfile,
+        databaseUrl: 'postgres://certification:certification@127.0.0.1:5432/certification',
+      });
+      const systemDecoyPath = join(fixture.systemDataDir, 'charge-policy.json');
+      expect(existsSync(systemDecoyPath)).toBe(false);
+      const decoy = JSON.parse(readFileSync(
+        join(fixture.companions[0].companionDataDir, 'charge-policy.json'),
+        'utf8',
+      )) as Record<string, unknown>;
+      decoy.icpCostBreaker = {
+        enabled: true,
+        warningThresholdUsd: 99,
+        hardLimitUsd: 100,
+        finalCloseoutReserveUsd: 1,
+        pendingReservationStaleAfterMs: 60_000,
+        includedCostPurposes: {
+          conversation_turn: true,
+          tool: true,
+          summary: true,
+          extraction: true,
+          sidecar: true,
+        },
+      };
+      writeFileSync(systemDecoyPath, `${JSON.stringify(decoy, null, 2)}\n`, 'utf8');
+
+      const configA = hydrateJsonBackedRuntimeConfig(
+        loadAgentConfig(fixture.companions[0].env),
+        { seedDir: fixture.companions[0].env.CONFIG_DIR },
+      );
+      const configB = hydrateJsonBackedRuntimeConfig(
+        loadAgentConfig(fixture.companions[1].env),
+        { seedDir: fixture.companions[1].env.CONFIG_DIR },
+      );
+      const resolveChargePolicy = createGatewayFleetChargePolicyResolver({
+        companions: configA.companionFleet!.companions,
+        seedDir: fixture.companions[0].env.CONFIG_DIR!,
+      });
+
+      expect(configA.companionId).toBe(CERTIFICATION_COMPANION_A);
+      expect(configB.companionId).toBe(CERTIFICATION_COMPANION_B);
+      expect(resolveChargePolicy(CERTIFICATION_COMPANION_A).icpCostBreaker).toMatchObject({
+        warningThresholdUsd: 0.0003,
+        hardLimitUsd: 0.0004,
+      });
+      expect(resolveChargePolicy(CERTIFICATION_COMPANION_B).icpCostBreaker).toMatchObject({
+        warningThresholdUsd,
+        hardLimitUsd,
+      });
+      expect(configB.chargePolicy?.icpCostBreaker).toMatchObject({
+        warningThresholdUsd,
+        hardLimitUsd,
+      });
+    },
+  );
 });

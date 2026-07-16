@@ -76,17 +76,10 @@ function writeJson(path: string, value: unknown): void {
 }
 
 export function setIcpCertificationAutonomyEnabled(
-  fixture: Pick<IcpCertificationFixture, 'systemDataDir' | 'companions'>,
+  fixture: Pick<IcpCertificationFixture, 'companions'>,
   enabled: boolean,
 ): void {
-  // scheduler.json is a per-companion owner file (dnll.3): the runtime reads it
-  // from each companion's data dir. Update the companion copies plus the
-  // system-root template so every read is consistent.
-  const schedulerDirs = [
-    fixture.systemDataDir,
-    ...fixture.companions.map((companion) => companion.companionDataDir),
-  ];
-  for (const dir of schedulerDirs) {
+  for (const { companionDataDir: dir } of fixture.companions) {
     const schedulerPath = join(dir, 'scheduler.json');
     const scheduler = readJson(schedulerPath);
     const icpAutonomy = scheduler.icpAutonomy;
@@ -100,56 +93,24 @@ export function setIcpCertificationAutonomyEnabled(
 
 function copyCanonicalOwners(seedDir: string, systemDataDir: string): void {
   for (const owner of OWNER_NAMES) {
-    cpSync(join(seedDir, `${owner}.seed.json`), join(systemDataDir, `${owner}.json`));
+    const ownerFile = `${owner}.json`;
+    if (!PER_COMPANION_OWNER_FILES.has(ownerFile)) {
+      cpSync(join(seedDir, `${owner}.seed.json`), join(systemDataDir, ownerFile));
+    }
   }
 }
 
-/**
- * Per-companion owner files are rooted at companionDataDir, not the shared
- * systemDataDir. Copy the
- * fully-configured system-root copies into each companion root so the runtime,
- * which now loads them from companionDataDir, boots. The systemDataDir copies are
- * left in place as the configuration template these are derived from.
- */
-function copyPerCompanionOwners(systemDataDir: string, companionDataDir: string): void {
+/** Copy per-companion seeds directly to their canonical companion root. */
+function copyPerCompanionOwners(seedDir: string, companionDataDir: string): void {
   for (const ownerFile of PER_COMPANION_OWNER_FILES) {
-    cpSync(join(systemDataDir, ownerFile), join(companionDataDir, ownerFile));
+    cpSync(
+      join(seedDir, ownerFile.replace(/\.json$/u, '.seed.json')),
+      join(companionDataDir, ownerFile),
+    );
   }
 }
 
-function configureOwnerFiles(
-  systemDataDir: string,
-  autonomyEnabled: boolean,
-  fatigueProfile: IcpCertificationFatigueProfile,
-): void {
-  const schedulerPath = join(systemDataDir, 'scheduler.json');
-  const scheduler = readJson(schedulerPath);
-  scheduler.icpAutonomy = {
-    enabled: autonomyEnabled,
-    candidate: {
-      defaultTtlMs: 120_000,
-      retryCadenceMs: 50,
-      maxRetryAttempts: 3,
-    },
-    permit: { ttlMs: 60_000 },
-    availability: { operatorLeaseTtlMs: 120_000 },
-  };
-  scheduler.weightedThoughtOutreach = {
-    ...(scheduler.weightedThoughtOutreach as Record<string, unknown>),
-    enabled: true,
-    checkIntervalMs: 1_000,
-    nudgeThreshold: 0.1,
-    maxNudgesPerRun: 1,
-  };
-  scheduler.episodicProcessing = {
-    enabled: false,
-    startLocalTime: '00:00',
-    endLocalTime: '23:59',
-    timeZone: 'UTC',
-    inactivityThresholdMinutes: 60,
-  };
-  writeJson(schedulerPath, scheduler);
-
+function configureSystemOwnerFiles(systemDataDir: string): void {
   const settingsPath = join(systemDataDir, 'settings.json');
   const settings = readJson(settingsPath);
   settings.extractionInterval = 1;
@@ -177,10 +138,56 @@ function configureOwnerFiles(
   };
   writeJson(modelsPath, models);
 
-  const capabilityPath = join(systemDataDir, 'capability-tier.json');
+  const places = readJson(join('config', 'places.seed.json'));
+  places.sites = [{ siteId: 'certification', displayName: 'Certification', kind: 'virtual' }];
+  places.places = [{
+    placeId: 'certification_private_room',
+    siteId: 'certification',
+    displayName: 'Certification Private Room',
+    kind: 'virtual',
+    privacy: 'private',
+    affordances: [],
+  }];
+  writeJson(join(systemDataDir, 'places.json'), places);
+}
+
+function configureCompanionOwnerFiles(
+  companionDataDir: string,
+  autonomyEnabled: boolean,
+  fatigueProfile: IcpCertificationFatigueProfile,
+): void {
+  const schedulerPath = join(companionDataDir, 'scheduler.json');
+  const scheduler = readJson(schedulerPath);
+  scheduler.icpAutonomy = {
+    enabled: autonomyEnabled,
+    candidate: {
+      defaultTtlMs: 120_000,
+      retryCadenceMs: 50,
+      maxRetryAttempts: 3,
+    },
+    permit: { ttlMs: 60_000 },
+    availability: { operatorLeaseTtlMs: 120_000 },
+  };
+  scheduler.weightedThoughtOutreach = {
+    ...(scheduler.weightedThoughtOutreach as Record<string, unknown>),
+    enabled: true,
+    checkIntervalMs: 1_000,
+    nudgeThreshold: 0.1,
+    maxNudgesPerRun: 1,
+  };
+  scheduler.episodicProcessing = {
+    enabled: false,
+    startLocalTime: '00:00',
+    endLocalTime: '23:59',
+    timeZone: 'UTC',
+    inactivityThresholdMinutes: 60,
+  };
+  writeJson(schedulerPath, scheduler);
+
+  const capabilityPath = join(companionDataDir, 'capability-tier.json');
   writeJson(capabilityPath, { tier: 'autonomous', customTokens: [] });
 
-  const chargePath = join(systemDataDir, 'charge-policy.json');
+  const chargePath = join(companionDataDir, 'charge-policy.json');
   const charge = readJson(chargePath);
   charge.runChargeQuotaByLane = {
     ...(charge.runChargeQuotaByLane as Record<string, unknown>),
@@ -216,18 +223,6 @@ function configureOwnerFiles(
     };
   }
   writeJson(chargePath, charge);
-
-  const places = readJson(join('config', 'places.seed.json'));
-  places.sites = [{ siteId: 'certification', displayName: 'Certification', kind: 'virtual' }];
-  places.places = [{
-    placeId: 'certification_private_room',
-    siteId: 'certification',
-    displayName: 'Certification Private Room',
-    kind: 'virtual',
-    privacy: 'private',
-    affordances: [],
-  }];
-  writeJson(join(systemDataDir, 'places.json'), places);
 }
 
 function makeCompanion(input: {
@@ -323,14 +318,19 @@ export function createIcpCertificationFixture(input: {
   mkdirSync(companionDataB, { recursive: true });
   mkdirSync(socketDir, { recursive: true });
   copyCanonicalOwners(seedDir, systemDataDir);
-  configureOwnerFiles(
-    systemDataDir,
+  configureSystemOwnerFiles(systemDataDir);
+  copyPerCompanionOwners(seedDir, companionDataA);
+  copyPerCompanionOwners(seedDir, companionDataB);
+  configureCompanionOwnerFiles(
+    companionDataA,
     input.autonomyEnabled ?? true,
     input.fatigueProfile ?? 'default',
   );
-  // Root the configured per-companion owner files at each companion's data dir.
-  copyPerCompanionOwners(systemDataDir, companionDataA);
-  copyPerCompanionOwners(systemDataDir, companionDataB);
+  configureCompanionOwnerFiles(
+    companionDataB,
+    input.autonomyEnabled ?? true,
+    input.fatigueProfile ?? 'default',
+  );
   const modelsPath = join(systemDataDir, 'models.json');
   const models = readJson(modelsPath);
   const modelEntries = models.models as Array<Record<string, unknown>>;
@@ -374,7 +374,10 @@ export function createIcpCertificationFixture(input: {
   writeJson(modelsPath, models);
 
   if (costProfile === 'lowered_warning' || costProfile === 'lowered_hard') {
-    const chargePath = join(systemDataDir, 'charge-policy.json');
+    // The recipient (companion B) owns the lowered boundary. Companion A keeps
+    // the permissive baseline so the certification proves identity-bound
+    // resolution rather than two identical policies producing different cost.
+    const chargePath = join(companionDataB, 'charge-policy.json');
     const charge = readJson(chargePath);
     charge.icpCostBreaker = costProfile === 'lowered_hard'
       ? {

@@ -713,4 +713,23 @@ describe('world tool — move', () => {
     expect(payload.roomEntryNote).toBe('skipped_no_channel');
     expect(notes).toHaveLength(0);
   });
+
+  it('advertises exact registry ids without a misleading prefixed example (psfn-framework-36dm)', () => {
+    const tool = createWorldTool(createMockOps(), { placesRegistry: REGISTRY });
+    const props = (tool.parameters as {
+      properties: Record<string, { description?: string }>;
+    }).properties;
+    const placeDesc = props.placeId.description ?? '';
+    const affDesc = props.affordanceId.description ?? '';
+
+    // The resolver does exact matching; the schema must not teach a fake id that would fail closed.
+    expect(placeDesc).not.toContain('place.living-room');
+    expect(placeDesc).not.toContain('lr_lights');
+    expect(affDesc).not.toContain('lr_lights');
+    // Descriptions must state exact matching and steer the model to discover ids via list.
+    expect(placeDesc.toLowerCase()).toContain('exactly');
+    expect(affDesc.toLowerCase()).toContain('exactly');
+    expect(placeDesc).toContain('action=list');
+    expect(affDesc).toContain('action=list');
+  });
 });

@@ -960,6 +960,10 @@ export function resolveLastActiveSessionPath(companionDataDir: string): string {
   return join(resolveCompanionStateDir(companionDataDir), 'last_active_channel.json');
 }
 
+export function resolveReadyNotificationMarkerPath(companionDataDir: string): string {
+  return join(resolveCompanionStateDir(companionDataDir), 'ready_notification_marker.json');
+}
+
 function moveLegacyCompanionArtifact(legacyPath: string, targetPath: string): void {
   if (!existsSync(legacyPath) || existsSync(targetPath)) {
     return;

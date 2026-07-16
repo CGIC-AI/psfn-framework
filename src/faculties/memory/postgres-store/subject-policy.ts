@@ -52,6 +52,20 @@ export function buildMemorySubjectAuthorizationPredicate(
         AND classification.subject_class NOT IN ('ambiguous', 'unattributed', 'unbound_person')
         AND classification.subject_class = ANY(${subjectClassesParameter}::text[])
         AND (
+          'companion_private' = ANY(${subjectClassesParameter}::text[])
+          OR NOT (
+            lower(${memoryAlias}.source_ref) LIKE 'source:context_feedback|%'
+            OR (
+              jsonb_typeof(${memoryAlias}.tags) = 'array'
+              AND EXISTS (
+                SELECT 1
+                FROM jsonb_array_elements_text(${memoryAlias}.tags) AS internal_tag(value)
+                WHERE lower(internal_tag.value) = 'context_feedback'
+              )
+            )
+          )
+        )
+        AND (
           (
             'self' = ANY(${viewerRelationsParameter}::text[])
             AND classification.subject_class = 'single_contact'

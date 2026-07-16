@@ -129,4 +129,61 @@ describe('FleetAuthJitHttpRoutes', () => {
     })).rejects.toMatchObject({ code: 'invalid_jit_request', status: 400 });
     expect(fixture.startWebAuthn).not.toHaveBeenCalled();
   });
+
+  it('requires a memory grant to match the exact reveal body and rejects session-wide elevation', async () => {
+    const memoryBody = {
+      subjectScopeDigest: 'c'.repeat(64),
+      purpose: 'Review my own intimate memory',
+      memoryRevision: 4,
+      classifierVersion: 1,
+      classifierEvidenceDigest: 'd'.repeat(64),
+    };
+    const valid = {
+      companionId: '11111111-1111-4111-8111-111111111111',
+      method: 'POST',
+      target: '/api/admin/memory/memory-a/reveal',
+      bodyBase64url: Buffer.from(JSON.stringify(memoryBody), 'utf8').toString('base64url'),
+      subjectScopeDigest: memoryBody.subjectScopeDigest,
+      purpose: memoryBody.purpose,
+      memoryRevision: memoryBody.memoryRevision,
+      classifierEvidenceDigest: memoryBody.classifierEvidenceDigest,
+    };
+    const accepted = coordinator();
+    const acceptedRoutes = new FleetAuthJitHttpRoutes(accepted.value);
+    await acceptedRoutes.handle({
+      request: request(valid),
+      response: response(),
+      path: FLEET_AUTH_JIT_WEBAUTHN_START_PATH,
+      token: 'session',
+      csrfToken: 'csrf',
+      requestOrigin: 'https://fleet.example.test',
+    });
+    expect(accepted.startWebAuthn).toHaveBeenCalledOnce();
+
+    const mismatch = coordinator();
+    await expect(new FleetAuthJitHttpRoutes(mismatch.value).handle({
+      request: request({ ...valid, memoryRevision: 5 }),
+      response: response(),
+      path: FLEET_AUTH_JIT_WEBAUTHN_START_PATH,
+      token: 'session',
+      csrfToken: 'csrf',
+      requestOrigin: 'https://fleet.example.test',
+    })).rejects.toMatchObject({ code: 'invalid_jit_request', status: 400 });
+    expect(mismatch.startWebAuthn).not.toHaveBeenCalled();
+
+    const elevation = coordinator();
+    await expect(new FleetAuthJitHttpRoutes(elevation.value).handle({
+      request: request({
+        ...valid,
+        target: '/api/admin/memory/elevation',
+        bodyBase64url: '',
+      }),
+      response: response(),
+      path: FLEET_AUTH_JIT_WEBAUTHN_START_PATH,
+      token: 'session',
+      csrfToken: 'csrf',
+      requestOrigin: 'https://fleet.example.test',
+    })).rejects.toMatchObject({ code: 'invalid_jit_request', status: 400 });
+    expect(elevation.startWebAuthn).not.toHaveBeenCalled();
+  });
 });

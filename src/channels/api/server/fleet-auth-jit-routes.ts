@@ -12,6 +12,8 @@ import {
 } from '../../../shared/routing/companion-id.js';
 import { assertNoUnknownKeys, isRecord } from '../../../shared/utils/types.js';
 import { readJsonBodyWithLimit, sendJson } from '../../backplane/http/primitives.js';
+import { parseMemorySubjectJitRequest } from '../../../shared/contracts/memory-subject-jit.js';
+import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
 
 export const FLEET_AUTH_JIT_WEBAUTHN_START_PATH = '/v1/fleet-auth/jit/webauthn/start';
 export const FLEET_AUTH_JIT_WEBAUTHN_FINISH_PATH = '/v1/fleet-auth/jit/webauthn/finish';
@@ -70,13 +72,29 @@ function requestBinding(value: unknown): FleetJitRequestBinding {
   if (body.toString('base64url') !== bodyBase64url) {
     throw new Error('JIT body bytes are not canonically encoded');
   }
+  const target = compileGatewayGardenRequestTarget({
+    rawTarget,
+    method,
+    companionId: createCompanionId(companionId),
+    body,
+  });
+  if (target.action === 'memory.jit.self') {
+    if (target.resource.routeId !== 'POST /api/admin/memory/:id/reveal') {
+      throw new Error('Memory JIT must bind one exact reveal resource');
+    }
+    const memoryBinding = parseMemorySubjectJitRequest(JSON.parse(body.toString('utf8')));
+    if (!timingSafeStringEqual(memoryBinding.subjectScopeDigest, subjectScopeDigest)
+      || memoryBinding.purpose !== purpose.trim()
+      || memoryBinding.memoryRevision !== Number(value.memoryRevision)
+      || !timingSafeStringEqual(
+        memoryBinding.classifierEvidenceDigest,
+        classifierEvidenceDigest,
+      )) {
+      throw new Error('Memory JIT target body does not match its durable binding');
+    }
+  }
   return {
-    target: compileGatewayGardenRequestTarget({
-      rawTarget,
-      method,
-      companionId: createCompanionId(companionId),
-      body,
-    }),
+    target,
     subjectScopeDigest,
     purpose,
     memoryRevision: Number(value.memoryRevision),

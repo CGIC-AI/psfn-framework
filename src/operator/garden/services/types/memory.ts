@@ -3,6 +3,7 @@ import type { PurrMemory } from '../../../../faculties/memory/types.js';
 import type { SharedBackgroundSource } from '../../../../faculties/memory/retrieval/shared-background.js';
 import type { SensitivityLevel } from '../../../../system/trust/types.js';
 import type { GardenRequestContext } from '../../garden-request-context.js';
+import type { MemorySubjectJitRequest } from '../../../../shared/contracts/memory-subject-jit.js';
 import type {
   AdminMemoryManagedScopeKind,
   AdminMemoryScopeEvidenceItem,
@@ -33,6 +34,8 @@ export interface AdminMemoryBodyRedaction {
 export type AdminMemoryView = PurrMemory & {
   bodyRedacted?: boolean;
   bodyRedaction?: AdminMemoryBodyRedaction;
+  /** Current subject projection needed to request an exact reveal grant. */
+  subjectJitBinding?: Omit<MemorySubjectJitRequest, 'purpose'>;
 };
 
 /** Session-elevation state for reading high-intimacy memory bodies. */
@@ -233,5 +236,5 @@ export interface AdminMemorySessionService {
   /** Ends an active body-access elevation immediately. Audit-logged. */
   dropBodyElevation(): AdminMemoryElevationStatus;
   /** Reveals a single memory body (TTL-bound grant for that id). Audit-logged when it uncovers a high-intimacy body. */
-  revealMemory(id: string): Promise<AdminMemoryDetailData | null>;
+  revealMemory(id: string, jitRequest?: MemorySubjectJitRequest): Promise<AdminMemoryDetailData | null>;
 }

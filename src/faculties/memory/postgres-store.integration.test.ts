@@ -443,6 +443,31 @@ describe('postgres memory store integration', () => {
     });
   }, INTEGRATION_TIMEOUT_MS);
 
+  it('hides internal derived artifacts from human subject authorization before counts and IDs', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      await store.insertMemory(makeMemory({
+        id: 'subject-visible',
+        provenance: { subjectContactId: 'contact-a' },
+      }), DEFAULT_EMBEDDING);
+      await store.insertMemory(makeMemory({
+        id: 'subject-derived-internal',
+        sourceRef: 'source:context_feedback|contact-a',
+        tags: ['context_feedback'],
+        provenance: { subjectContactId: 'contact-a' },
+      }), DEFAULT_EMBEDDING);
+
+      expect((await store.queryAuthorizedMemorySubjects({
+        authorization: subjectAuthorization('contact-a', 'count'),
+        selector: { kind: 'count' },
+      })).total).toBe(1);
+      expect(await store.queryAuthorizedMemorySubjects({
+        authorization: subjectAuthorization('contact-a', 'detail'),
+        selector: { kind: 'detail', memoryId: 'subject-derived-internal' },
+      })).toEqual({ memories: [], total: 0 });
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('preauthorizes every bulk target and mutates atomically without revealing inaccessible counts', async () => {
     await withMemoryDatabase(async (pool) => {
       const store = await createPostgresMemoryStoreFromPool(pool, 4);

@@ -1,6 +1,12 @@
 {
   "entries": [
     {
+      "path": "src/boundary/gateway/fleet-sso-router.ts",
+      "contains": "x-psfn-jit-grant",
+      "reason": "The unified-origin proxy consumes this opaque single-use fleet JIT grant header and never forwards it to companion workloads.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "src/boundary/fleet-auth/recovery-request-capability.ts",
       "contains": "PSFN-RECOVERY",
       "reason": "The distinct signed recovery-capability type is an internal protocol discriminator, not a companion identity default.",

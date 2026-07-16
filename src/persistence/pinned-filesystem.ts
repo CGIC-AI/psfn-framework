@@ -7,6 +7,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
 } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { relative, resolve, sep } from 'node:path';
@@ -33,7 +34,7 @@ function procDescriptorPath(descriptor: number): string {
   return `/proc/self/fd/${descriptor}`;
 }
 
-function identityForDescriptor(descriptor: number): FilesystemIdentity {
+export function filesystemIdentityForDescriptor(descriptor: number): FilesystemIdentity {
   const stats = fstatSync(descriptor, { bigint: true });
   return { device: stats.dev.toString(), inode: stats.ino.toString() };
 }
@@ -100,7 +101,7 @@ export function pinAbsoluteDirectory(path: string, label: string): PinnedDirecto
       closeSync(descriptor);
       descriptor = child;
     }
-    return { descriptor, identity: identityForDescriptor(descriptor), logicalPath };
+    return { descriptor, identity: filesystemIdentityForDescriptor(descriptor), logicalPath };
   } catch (error) {
     closeSync(descriptor);
     throw error;
@@ -160,7 +161,7 @@ export function pinRelativeDirectory(
     }
     return {
       descriptor,
-      identity: identityForDescriptor(descriptor),
+      identity: filesystemIdentityForDescriptor(descriptor),
       logicalPath: resolve(root.logicalPath, relativePath),
     };
   } catch (error) {
@@ -182,6 +183,10 @@ export function pinnedLeafExists(directory: PinnedDirectory, leaf: string): bool
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
     throw error;
   }
+}
+
+export function listPinnedDirectoryNames(directory: PinnedDirectory): string[] {
+  return readdirSync(`/proc/self/fd/${directory.descriptor}`).sort();
 }
 
 export function inspectPinnedRegularFile(

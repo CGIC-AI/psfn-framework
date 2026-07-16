@@ -198,8 +198,11 @@ receipt-bearing `npm run migrate:system-owner-fleet` workflow documented in
 [`docs/operations.md`](./operations.md#existing-split-fleets-with-shared-per-companion-owners).
 It enumerates every configured companion and retires the shared source only
 after every exact-byte destination verifies, by moving the approved inode into
-the durable receipt-owned quarantine. Do not remove that quarantine manually;
-it is part of deterministic receipt verification and retry.
+the durable receipt-owned quarantine. Its bootstrap receipt owns unpredictable
+quarantine, staging, and copy identifiers before those objects are created, and
+retries preserve rather than delete unbound or replaced crash remnants. Do not
+remove the quarantine or retained staging artifacts manually; they are part of
+deterministic receipt verification and retry.
 
 ### Multi-companion workspaces
 

@@ -226,6 +226,14 @@ describe('system-owner fleet migration', () => {
   });
 
   it.each([
+    'after_bootstrap_receipt',
+    'after_quarantine_directory_create',
+    'after_quarantine_identity_receipt',
+    'after_staging_directory_create',
+    'after_staging_identity_receipt',
+    'after_bootstrap_finalize',
+    'after_temporary_create',
+    'after_temporary_identity_receipt',
     'during_temporary_copy',
     'after_temporary_fsync',
     'after_publish',
@@ -235,6 +243,8 @@ describe('system-owner fleet migration', () => {
     'before_source_retirement',
     'after_source_quarantine',
     'after_quarantine_sync',
+    'before_final_receipt',
+    'after_final_receipt',
   ] as const)('recovers deterministically from the %s crash window', (stage) => {
     const { systemDataDir, fleet } = fixture();
     const sourcePath = join(systemDataDir, 'skills.json');
@@ -256,21 +266,31 @@ describe('system-owner fleet migration', () => {
     })).toThrow(`crash:${stage}`);
     expect(injected).toBe(true);
 
-    expect(executeSystemOwnerFleetMigration({
+    const recovered = executeSystemOwnerFleetMigration({
       systemDataDir,
       fleet,
       expectedSourceDigests: { 'skills.json': digest },
-    }).status).toBe('migrated');
+    });
+    expect(recovered.status).toBe(stage === 'after_final_receipt' ? 'already_completed' : 'migrated');
     expect(existsSync(sourcePath)).toBe(false);
+    const completedReceipt = JSON.parse(readFileSync(recovered.receiptPath, 'utf8')) as {
+      files: Array<{
+        destinations: Array<{
+          companionId: string;
+          supersededTemporaryFiles: Array<{ path: string }>;
+          temporaryPath: string;
+        }>;
+      }>;
+    };
     for (const companion of fleet.companions) {
       expect(readFileSync(join(companion.companionDataDir, 'skills.json'))).toEqual(source);
-      const stagingDirectory = join(
-        companion.companionDataDir,
-        '.system-owner-fleet-reroot-staging',
-      );
-      const stagedFiles = readdirSync(stagingDirectory);
-      expect(stagedFiles).toHaveLength(1);
-      expect(readFileSync(join(stagingDirectory, stagedFiles[0]))).toEqual(source);
+      const destination = completedReceipt.files[0].destinations
+        .find(entry => entry.companionId === companion.companionId);
+      if (!destination) throw new Error(`Missing receipt destination for ${companion.companionId}`);
+      expect(readFileSync(destination.temporaryPath)).toEqual(source);
+      for (const superseded of destination.supersededTemporaryFiles) {
+        expect(existsSync(superseded.path)).toBe(true);
+      }
     }
   });
 
@@ -291,7 +311,7 @@ describe('system-owner fleet migration', () => {
       fleet: preexisting.fleet,
       expectedSourceDigests: { 'skills.json': digest },
       temporaryId: () => 'fixed',
-    })).toThrow(/Pre-existing migration-owned staging directory conflicts/);
+    })).toThrow(/Pre-existing migration-owned staging artifacts conflict/);
 
     const linkedSource = fixture();
     const outsideSource = join(linkedSource.runtimeRoot, 'outside-skills.json');
@@ -339,6 +359,117 @@ describe('system-owner fleet migration', () => {
       fleet: linkedTemp.fleet,
       expectedSourceDigests: { 'skills.json': digest },
     })).toThrow(/regular file without symlinks/);
+  });
+
+  it('durably supersedes and preserves an unbound temporary across a second crash', () => {
+    const { systemDataDir, fleet } = fixture();
+    const source = Buffer.from('{"enabled":true,"supersede":true}\n');
+    const digest = sha256(source);
+    writeFileSync(join(systemDataDir, 'skills.json'), source);
+
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+      faultInjection: (event) => {
+        if (event.stage === 'after_temporary_create') throw new Error('crash:unbound-temporary');
+      },
+    })).toThrow('crash:unbound-temporary');
+
+    let supersessionCrashed = false;
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+      faultInjection: (event) => {
+        if (!supersessionCrashed && event.stage === 'after_temporary_superseded_receipt') {
+          supersessionCrashed = true;
+          throw new Error('crash:superseded-receipt');
+        }
+      },
+    })).toThrow('crash:superseded-receipt');
+    expect(supersessionCrashed).toBe(true);
+
+    const result = executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+    });
+    expect(result.status).toBe('migrated');
+    const receipt = JSON.parse(readFileSync(result.receiptPath, 'utf8')) as {
+      files: Array<{
+        destinations: Array<{
+          supersededTemporaryFiles: Array<{ path: string }>;
+          temporaryPath: string;
+        }>;
+      }>;
+    };
+    const destination = receipt.files[0].destinations[0];
+    expect(destination.supersededTemporaryFiles).toHaveLength(1);
+    expect(readFileSync(destination.supersededTemporaryFiles[0].path)).toHaveLength(0);
+    expect(readFileSync(destination.temporaryPath)).toEqual(source);
+  });
+
+  it('preserves and denies a replacement of an identity-bound partial temporary', () => {
+    const { runtimeRoot, systemDataDir, fleet } = fixture();
+    const source = Buffer.from('{"enabled":true,"partial-replacement":true}\n');
+    const digest = sha256(source);
+    writeFileSync(join(systemDataDir, 'skills.json'), source);
+    let interrupted = false;
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+      faultInjection: (event) => {
+        if (!interrupted && event.stage === 'during_temporary_copy') {
+          interrupted = true;
+          throw new Error('crash:bound-partial');
+        }
+      },
+    })).toThrow('crash:bound-partial');
+    const receiptPath = join(systemDataDir, 'migrations', 'system-owner-fleet-reroot.json');
+    const receipt = JSON.parse(readFileSync(receiptPath, 'utf8')) as {
+      files: Array<{ destinations: Array<{ temporaryPath: string }> }>;
+    };
+    const temporaryPath = receipt.files[0].destinations[0].temporaryPath;
+    const preservedPartial = join(runtimeRoot, 'preserved-partial');
+    renameSync(temporaryPath, preservedPartial);
+    writeFileSync(temporaryPath, 'replacement\n');
+
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+    })).toThrow(/changed identity/);
+    expect(readFileSync(temporaryPath, 'utf8')).toBe('replacement\n');
+    expect(readFileSync(preservedPartial).length).toBeGreaterThan(0);
+  });
+
+  it('denies unrecorded artifacts introduced into a receipt-owned staging directory', () => {
+    const { systemDataDir, fleet } = fixture();
+    const source = Buffer.from('{"enabled":true,"unknown-artifact":true}\n');
+    const digest = sha256(source);
+    writeFileSync(join(systemDataDir, 'skills.json'), source);
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+      faultInjection: (event) => {
+        if (event.stage === 'after_bootstrap_finalize') throw new Error('crash:bootstrap-finalized');
+      },
+    })).toThrow('crash:bootstrap-finalized');
+    const receipt = JSON.parse(readFileSync(
+      join(systemDataDir, 'migrations', 'system-owner-fleet-reroot.json'),
+      'utf8',
+    )) as { files: Array<{ destinations: Array<{ stagingDirectoryPath: string }> }> };
+    const unknownPath = join(receipt.files[0].destinations[0].stagingDirectoryPath, 'unknown-artifact');
+    writeFileSync(unknownPath, 'unknown\n');
+    expect(() => executeSystemOwnerFleetMigration({
+      systemDataDir,
+      fleet,
+      expectedSourceDigests: { 'skills.json': digest },
+    })).toThrow(/unknown artifacts/);
+    expect(readFileSync(unknownPath, 'utf8')).toBe('unknown\n');
   });
 
   it('keeps system, receipt, and destination writes on pinned directory identities after path swaps', () => {

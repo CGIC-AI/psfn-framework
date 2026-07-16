@@ -9,17 +9,15 @@ import {
   pinRelativeDirectory,
   pinnedLeafExists,
   pinnedLeafPath,
-  relativeDirectoryPath,
   type FilesystemIdentity,
   type PinnedDirectory,
 } from './pinned-filesystem.js';
+import { initializeMigrationDirectories } from './system-owner-fleet-migration-bootstrap.js';
 import {
   assertSourceUnchanged,
   buildTemporaryPath,
   closeDestinationPins,
   destinationPinKey,
-  openDestinationPins,
-  openStagingDirectoryPins,
   publishDestination,
   retireSource,
   verifyDestination,
@@ -27,18 +25,26 @@ import {
   type DestinationPins,
 } from './system-owner-fleet-migration-io.js';
 import {
-  MIGRATION_QUARANTINE_DIRECTORY,
-  MIGRATION_STAGING_DIRECTORY,
+  assertNoUnknownMigrationArtifacts,
+  ensureDestinationDirectories,
+  inspectPinnedPlanFiles,
+} from './system-owner-fleet-migration-planning.js';
+import {
+  supersedeUnboundTemporary,
+  validateRecordedArtifacts,
+} from './system-owner-fleet-migration-recovery.js';
+import {
+  assertMigrationArtifactId,
   assertReceiptContents,
   assertReceiptIdentity,
   assertReceiptPinnedIdentities,
   fleetEntries,
   loadReceipt,
+  quarantineDirectoryName,
   receiptPath,
   requireExpectedDigests,
+  stagingDirectoryName,
   writeReceipt,
-  type FleetReceiptEntry,
-  type SystemOwnerFleetMigrationDestinationPlan,
   type SystemOwnerFleetMigrationFilePlan,
   type SystemOwnerFleetMigrationOptions,
   type SystemOwnerFleetMigrationReceipt,
@@ -67,74 +73,22 @@ function verifyCompletedReceipt(input: {
   }
 }
 
-type PinnedPlanFile = SystemOwnerFleetMigrationFilePlan & {
-  sourceIdentity?: FilesystemIdentity;
-};
-
-function inspectPinnedPlanFiles(input: {
-  systemDataDir: string;
-  fleet: readonly FleetReceiptEntry[];
-  systemDirectory: PinnedDirectory;
-  persistenceDirectory: PinnedDirectory;
-  existingDestinationDirectories: Map<string, PinnedDirectory>;
-}): PinnedPlanFile[] {
-  return [...PER_COMPANION_OWNER_FILES].map((ownerFile): PinnedPlanFile => {
-    const sourcePath = join(input.systemDataDir, ownerFile);
-    if (!pinnedLeafExists(input.systemDirectory, ownerFile)) {
-      return { ownerFile, sourcePath, status: 'absent', destinations: [] };
+function assertNoUntrackedOwnerFiles(
+  receipt: SystemOwnerFleetMigrationReceipt,
+  systemDirectory: PinnedDirectory,
+): void {
+  for (const ownerFile of PER_COMPANION_OWNER_FILES) {
+    if (!receipt.files.some(file => file.ownerFile === ownerFile)
+      && pinnedLeafExists(systemDirectory, ownerFile)) {
+      throw new Error(`Untracked system-root per-companion owner file appeared after receipt creation: ${ownerFile}`);
     }
-    const source = inspectPinnedRegularFile(
-      input.systemDirectory,
-      ownerFile,
-      `${ownerFile} migration source`,
-    );
-    const destinations = input.fleet.map((entry): SystemOwnerFleetMigrationDestinationPlan => {
-      const destinationPath = join(entry.companionDataDir, ownerFile);
-      const relativePath = relativeDirectoryPath(
-        input.persistenceDirectory,
-        entry.companionDataDir,
-        `${ownerFile} migration destination`,
-      );
-      const directory = pinRelativeDirectory(
-        input.persistenceDirectory,
-        relativePath,
-        `${ownerFile} migration destination directory`,
-        { allowMissing: true },
-      );
-      if (!directory) return { ...entry, destinationPath, status: 'missing' };
-      const prior = input.existingDestinationDirectories.get(entry.companionId);
-      if (prior) {
-        closePinnedDirectory(directory);
-      } else {
-        if (pinnedLeafExists(directory, MIGRATION_STAGING_DIRECTORY)) {
-          closePinnedDirectory(directory);
-          throw new Error(
-            `Pre-existing migration-owned staging directory conflicts for companion ${entry.companionId}`,
-          );
-        }
-        input.existingDestinationDirectories.set(entry.companionId, directory);
-      }
-      const pinnedDirectory = prior ?? directory;
-      if (!pinnedLeafExists(pinnedDirectory, ownerFile)) {
-        return { ...entry, destinationPath, status: 'missing' };
-      }
-      const existing = inspectPinnedRegularFile(
-        pinnedDirectory,
-        ownerFile,
-        `${ownerFile} migration destination`,
-      );
-      return { ...entry, destinationPath, status: 'conflict', existingSha256: existing.sha256 };
-    });
-    return {
-      ownerFile,
-      sourcePath,
-      status: destinations.some(destination => destination.status === 'conflict') ? 'conflict' : 'ready',
-      sourceSha256: source.sha256,
-      sourceBytes: source.bytes,
-      sourceIdentity: { device: source.device, inode: source.inode },
-      destinations,
-    };
-  });
+  }
+}
+
+function firstReceiptOwnerFile(receipt: SystemOwnerFleetMigrationReceipt): string {
+  const ownerFile = receipt.files[0]?.ownerFile;
+  if (!ownerFile) throw new Error('System-owner fleet migration receipt has no owner files');
+  return ownerFile;
 }
 
 export function executeSystemOwnerFleetMigration(
@@ -171,66 +125,8 @@ export function executeSystemOwnerFleetMigration(
       assertReceiptIdentity(receipt, systemDataDir, fleet);
       assertReceiptContents(receipt, systemDataDir, fleet);
       requireExpectedDigests(receipt.files, options.expectedSourceDigests);
-      if (resolve(receipt.receiptDirectoryPath) !== receiptDirectory.logicalPath
-        || resolve(receipt.quarantineDirectoryPath)
-          !== join(receiptDirectory.logicalPath, MIGRATION_QUARANTINE_DIRECTORY)) {
-        throw new Error('System-owner fleet migration receipt directory paths are invalid');
-      }
-      quarantineDirectory = pinRelativeDirectory(
-        receiptDirectory,
-        MIGRATION_QUARANTINE_DIRECTORY,
-        'System-owner migration quarantine directory',
-      );
-      if (!quarantineDirectory) throw new Error('System-owner migration quarantine directory is missing');
-      assertReceiptPinnedIdentities({
-        receipt,
-        systemDataDir: systemDirectory,
-        receiptDirectory,
-        quarantineDirectory,
-      });
-      for (const entry of fleet) {
-        destinationPins.set(destinationPinKey(entry.companionId), openDestinationPins({
-          persistenceDirectory,
-          companionDataDir: entry.companionDataDir,
-          label: `Companion ${entry.companionId} migration destination`,
-          create: false,
-          exclusiveStagingCreate: false,
-        }));
-      }
-      for (const file of receipt.files) {
-        for (const destination of file.destinations) {
-          const pins = destinationPins.get(destinationPinKey(destination.companionId));
-          if (!pins) throw new Error(`Missing pinned destination for ${destination.companionId}`);
-          assertFilesystemIdentity(
-            pins.destinationDirectory.identity,
-            destination.companionDataDirIdentity,
-            `${file.ownerFile} migration destination directory`,
-          );
-          assertFilesystemIdentity(
-            pins.stagingDirectory.identity,
-            destination.stagingDirectoryIdentity,
-            `${file.ownerFile} migration staging directory`,
-          );
-        }
-      }
-      for (const ownerFile of PER_COMPANION_OWNER_FILES) {
-        if (!receipt.files.some(file => file.ownerFile === ownerFile)
-          && pinnedLeafExists(systemDirectory, ownerFile)) {
-          throw new Error(`Untracked system-root per-companion owner file appeared after receipt creation: ${ownerFile}`);
-        }
-      }
-      if (receipt.status === 'completed') {
-        verifyCompletedReceipt({
-          receipt,
-          systemDirectory,
-          quarantineDirectory,
-          destinations: destinationPins,
-        });
-        return {
-          status: 'already_completed',
-          receiptPath: path,
-          migratedOwnerFiles: receipt.files.map(file => file.ownerFile),
-        };
+      if (resolve(receipt.receiptDirectoryPath) !== receiptDirectory.logicalPath) {
+        throw new Error('System-owner fleet migration receipt directory path is invalid');
       }
     } else {
       const planFiles = inspectPinnedPlanFiles({
@@ -257,7 +153,6 @@ export function executeSystemOwnerFleetMigration(
         status: 'ready'; sourceSha256: string; sourceBytes: number; sourceIdentity: FilesystemIdentity;
       } => file.status === 'ready');
       requireExpectedDigests(sourceFiles, options.expectedSourceDigests);
-
       if (!receiptDirectory) {
         receiptDirectory = pinRelativeDirectory(
           systemDirectory,
@@ -267,54 +162,28 @@ export function executeSystemOwnerFleetMigration(
         );
       }
       if (!receiptDirectory) throw new Error('Unable to pin migration receipt directory');
-      try {
-        quarantineDirectory = pinRelativeDirectory(
-          receiptDirectory,
-          MIGRATION_QUARANTINE_DIRECTORY,
-          'System-owner migration quarantine directory',
-          { create: true, exclusiveLeafCreate: true, mode: 0o700 },
-        );
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-          throw new Error('Pre-existing migration-owned quarantine directory conflicts');
-        }
-        throw error;
-      }
-      if (!quarantineDirectory) throw new Error('Unable to pin migration quarantine directory');
-      for (const entry of fleet) {
-        const plannedDirectory = plannedDestinationDirectories.get(entry.companionId);
-        const label = `Companion ${entry.companionId} migration destination`;
-        if (plannedDirectory) {
-          destinationPins.set(destinationPinKey(entry.companionId), openStagingDirectoryPins({
-            destinationDirectory: plannedDirectory,
-            label,
-            create: true,
-            exclusiveStagingCreate: true,
-          }));
-          plannedDestinationDirectories.delete(entry.companionId);
-        } else {
-          destinationPins.set(destinationPinKey(entry.companionId), openDestinationPins({
-            persistenceDirectory,
-            companionDataDir: entry.companionDataDir,
-            label,
-            create: true,
-            exclusiveStagingCreate: true,
-          }));
-        }
-      }
-
+      assertNoUnknownMigrationArtifacts(receiptDirectory, 'System-owner migration receipt directory');
+      ensureDestinationDirectories({
+        fleet,
+        persistenceDirectory,
+        plannedDestinationDirectories,
+      });
+      const operationId = temporaryId();
+      assertMigrationArtifactId(operationId);
+      const stagingName = stagingDirectoryName(operationId);
+      const quarantineName = quarantineDirectoryName(operationId);
+      const receiptDirectoryPath = receiptDirectory.logicalPath;
       const startedAt = now().toISOString();
-      const quarantineDirectoryPath = quarantineDirectory.logicalPath;
       receipt = {
-        schemaVersion: 3,
+        schemaVersion: 4,
         migration: 'system-owner-fleet-reroot',
-        status: 'in_progress',
+        status: 'bootstrap',
+        operationId,
         systemDataDir,
         systemDataDirIdentity: systemDirectory.identity,
-        receiptDirectoryPath: receiptDirectory.logicalPath,
+        receiptDirectoryPath,
         receiptDirectoryIdentity: receiptDirectory.identity,
-        quarantineDirectoryPath: quarantineDirectory.logicalPath,
-        quarantineDirectoryIdentity: quarantineDirectory.identity,
+        quarantineDirectoryPath: join(receiptDirectoryPath, quarantineName),
         fleet,
         startedAt,
         updatedAt: startedAt,
@@ -325,13 +194,11 @@ export function executeSystemOwnerFleetMigration(
             `${file.ownerFile} migration source`,
           );
           if (source.sha256 !== file.sourceSha256 || source.bytes !== file.sourceBytes) {
-            throw new Error(`Source changed for ${file.ownerFile} while migration directories were pinned`);
+            throw new Error(`Source changed for ${file.ownerFile} while migration bootstrap was prepared`);
           }
-          assertFilesystemIdentity(
-            source,
-            file.sourceIdentity,
-            `${file.ownerFile} migration source`,
-          );
+          assertFilesystemIdentity(source, file.sourceIdentity, `${file.ownerFile} migration source`);
+          const quarantineId = temporaryId();
+          assertMigrationArtifactId(quarantineId);
           return {
             ownerFile: file.ownerFile,
             sourcePath: file.sourcePath,
@@ -339,29 +206,30 @@ export function executeSystemOwnerFleetMigration(
             sourceBytes: file.sourceBytes,
             sourceIdentity: { device: source.device, inode: source.inode },
             quarantinePath: join(
-              quarantineDirectoryPath,
-              `${file.ownerFile}.${temporaryId()}.retired`,
+              receiptDirectoryPath,
+              quarantineName,
+              `${file.ownerFile}.${quarantineId}.retired`,
             ),
             status: 'pending',
             destinations: file.destinations.map(destination => {
-              const pins = destinationPins.get(destinationPinKey(destination.companionId));
-              if (!pins) throw new Error(`Missing pinned destination for ${destination.companionId}`);
-              const temporaryPath = buildTemporaryPath(
-                pins.stagingDirectory.logicalPath,
-                destination.destinationPath,
-                temporaryId(),
-              );
-              if (pinnedLeafExists(pins.stagingDirectory, basename(temporaryPath))) {
-                throw new Error(`Pre-existing migration temporary path conflicts: ${temporaryPath}`);
-              }
+              const directory = plannedDestinationDirectories.get(destination.companionId);
+              if (!directory) throw new Error(`Missing pinned destination for ${destination.companionId}`);
+              const copyId = temporaryId();
+              assertMigrationArtifactId(copyId);
+              const stagingPath = join(directory.logicalPath, stagingName);
               return {
                 companionId: destination.companionId,
                 companionDataDir: destination.companionDataDir,
-                companionDataDirIdentity: pins.destinationDirectory.identity,
+                companionDataDirIdentity: directory.identity,
                 destinationPath: destination.destinationPath,
-                stagingDirectoryPath: pins.stagingDirectory.logicalPath,
-                stagingDirectoryIdentity: pins.stagingDirectory.identity,
-                temporaryPath,
+                stagingDirectoryPath: stagingPath,
+                temporaryPath: buildTemporaryPath(
+                  stagingPath,
+                  destination.destinationPath,
+                  `${operationId}-0-${copyId}`,
+                ),
+                copyGeneration: 0,
+                supersededTemporaryFiles: [],
                 sha256: file.sourceSha256,
                 status: 'pending',
               };
@@ -370,6 +238,55 @@ export function executeSystemOwnerFleetMigration(
         }),
       };
       writeReceipt(path, receipt, receiptDirectory, true);
+      options.faultInjection?.({
+        stage: 'after_bootstrap_receipt',
+        ownerFile: firstReceiptOwnerFile(receipt),
+        path,
+      });
+    }
+
+    const persistReceipt = (): void => {
+      receipt.updatedAt = now().toISOString();
+      writeReceipt(path, receipt, receiptDirectory);
+    };
+    const initialized = initializeMigrationDirectories({
+      receipt,
+      receiptDirectory,
+      persistenceDirectory,
+      fleet,
+      plannedDestinationDirectories,
+      persistReceipt,
+      faultInjection: options.faultInjection,
+    });
+    quarantineDirectory = initialized.quarantineDirectory;
+    for (const [key, pins] of initialized.destinationPins) destinationPins.set(key, pins);
+    assertReceiptPinnedIdentities({
+      receipt,
+      systemDataDir: systemDirectory,
+      receiptDirectory,
+      quarantineDirectory,
+    });
+    assertReceiptContents(receipt, systemDataDir, fleet);
+    validateRecordedArtifacts({
+      receipt,
+      receiptDirectory,
+      quarantineDirectory,
+      destinationPins,
+    });
+    assertNoUntrackedOwnerFiles(receipt, systemDirectory);
+
+    if (receipt.status === 'completed') {
+      verifyCompletedReceipt({
+        receipt,
+        systemDirectory,
+        quarantineDirectory,
+        destinations: destinationPins,
+      });
+      return {
+        status: 'already_completed',
+        receiptPath: path,
+        migratedOwnerFiles: receipt.files.map(file => file.ownerFile),
+      };
     }
 
     for (const file of receipt.files) {
@@ -399,11 +316,24 @@ export function executeSystemOwnerFleetMigration(
           continue;
         }
         assertSourceUnchanged(file, systemDirectory);
+        supersedeUnboundTemporary({
+          destination,
+          pins,
+          operationId: receipt.operationId,
+          temporaryId,
+          persistReceipt,
+          faultInjection: options.faultInjection,
+          ownerFile: file.ownerFile,
+        });
         const publishedIdentities = publishDestination({
           file,
           destination,
           pins,
           systemDirectory,
+          onTemporaryCreated: (identity) => {
+            destination.temporaryIdentity = identity;
+            persistReceipt();
+          },
           faultInjection: options.faultInjection,
         });
         destination.destinationIdentity = publishedIdentities.destinationIdentity;
@@ -415,10 +345,8 @@ export function executeSystemOwnerFleetMigration(
           path: destination.destinationPath,
         });
         destination.status = 'verified';
-        const verifiedAt = now().toISOString();
-        destination.verifiedAt = verifiedAt;
-        receipt.updatedAt = verifiedAt;
-        writeReceipt(path, receipt, receiptDirectory);
+        destination.verifiedAt = now().toISOString();
+        persistReceipt();
         options.faultInjection?.({
           stage: 'after_receipt_update',
           ownerFile: file.ownerFile,
@@ -449,17 +377,23 @@ export function executeSystemOwnerFleetMigration(
         verifyDestination(file, destination, pins);
       }
       file.status = 'retired';
-      const retiredAt = now().toISOString();
-      file.retiredAt = retiredAt;
-      receipt.updatedAt = retiredAt;
-      writeReceipt(path, receipt, receiptDirectory);
+      file.retiredAt = now().toISOString();
+      persistReceipt();
     }
 
+    options.faultInjection?.({
+      stage: 'before_final_receipt',
+      ownerFile: firstReceiptOwnerFile(receipt),
+      path,
+    });
     receipt.status = 'completed';
-    const completedAt = now().toISOString();
-    receipt.completedAt = completedAt;
-    receipt.updatedAt = completedAt;
-    writeReceipt(path, receipt, receiptDirectory);
+    receipt.completedAt = now().toISOString();
+    persistReceipt();
+    options.faultInjection?.({
+      stage: 'after_final_receipt',
+      ownerFile: firstReceiptOwnerFile(receipt),
+      path,
+    });
     return {
       status: 'migrated',
       receiptPath: path,

@@ -41,10 +41,15 @@ Supported until beta:
   retire each source only after all destinations verify. Validation is the
   exact source digest and filesystem identity per file, no-overwrite destination
   checks, descriptor-pinned receipt/staging/destination directories, durable
-  receipt-owned source quarantine, and
-  the durable `migrations/system-owner-fleet-reroot.json` receipt recording
-  every source/destination digest and identity. Partial retries must match that
-  receipt, its pinned directory identities, and the unchanged fleet. Remove the
+  receipt-owned source quarantine, and the durable schema-v4
+  `migrations/system-owner-fleet-reroot.json` receipt. The bootstrap receipt
+  records unpredictable quarantine, staging, and temporary identifiers before
+  those objects are created; created objects are fsynced and identity-bound
+  before use. Partial retries may resume only an identity-bound exact source
+  prefix. An unbound crash remnant is preserved and durably superseded under a
+  new recorded identifier, while unknown or replaced artifacts fail closed.
+  Retries must match the receipt, its pinned directory identities, and the
+  unchanged fleet. Remove the
   command and receipt reader before beta after
   every split fleet has a completed receipt (or a plan proving no system-root
   per-companion owners remain).

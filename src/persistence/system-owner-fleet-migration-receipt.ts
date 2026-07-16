@@ -15,9 +15,25 @@ export const MIGRATION_RECEIPT_RELATIVE_PATH = join(
   'migrations',
   'system-owner-fleet-reroot.json',
 );
-export const MIGRATION_STAGING_DIRECTORY = '.system-owner-fleet-reroot-staging';
-export const MIGRATION_QUARANTINE_DIRECTORY = '.system-owner-fleet-reroot-quarantine';
+export const MIGRATION_ARTIFACT_PREFIX = '.system-owner-fleet-reroot-';
 const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+const ARTIFACT_ID_PATTERN = /^[a-zA-Z0-9-]+$/u;
+
+export function assertMigrationArtifactId(value: string): void {
+  if (!ARTIFACT_ID_PATTERN.test(value)) {
+    throw new Error('System-owner fleet migration artifact id is invalid');
+  }
+}
+
+export function quarantineDirectoryName(operationId: string): string {
+  assertMigrationArtifactId(operationId);
+  return `${MIGRATION_ARTIFACT_PREFIX}quarantine-${operationId}`;
+}
+
+export function stagingDirectoryName(operationId: string): string {
+  assertMigrationArtifactId(operationId);
+  return `${MIGRATION_ARTIFACT_PREFIX}staging-${operationId}`;
+}
 
 export type DestinationStatus = 'pending' | 'verified';
 export type FileStatus = 'pending' | 'retired';
@@ -31,13 +47,22 @@ export interface DestinationReceiptEntry extends FleetReceiptEntry {
   destinationPath: string;
   companionDataDirIdentity: FilesystemIdentity;
   stagingDirectoryPath: string;
-  stagingDirectoryIdentity: FilesystemIdentity;
+  stagingDirectoryIdentity?: FilesystemIdentity;
   temporaryPath: string;
   temporaryIdentity?: FilesystemIdentity;
+  copyGeneration: number;
+  supersededTemporaryFiles: SupersededTemporaryReceiptEntry[];
   sha256: string;
   destinationIdentity?: FilesystemIdentity;
   status: DestinationStatus;
   verifiedAt?: string;
+}
+
+export interface SupersededTemporaryReceiptEntry {
+  path: string;
+  identity: FilesystemIdentity;
+  bytes: number;
+  sha256: string;
 }
 
 export interface FileReceiptEntry {
@@ -53,15 +78,16 @@ export interface FileReceiptEntry {
 }
 
 export interface SystemOwnerFleetMigrationReceipt {
-  schemaVersion: 3;
+  schemaVersion: 4;
   migration: 'system-owner-fleet-reroot';
-  status: 'in_progress' | 'completed';
+  status: 'bootstrap' | 'in_progress' | 'completed';
+  operationId: string;
   systemDataDir: string;
   systemDataDirIdentity: FilesystemIdentity;
   receiptDirectoryPath: string;
   receiptDirectoryIdentity: FilesystemIdentity;
   quarantineDirectoryPath: string;
-  quarantineDirectoryIdentity: FilesystemIdentity;
+  quarantineDirectoryIdentity?: FilesystemIdentity;
   fleet: FleetReceiptEntry[];
   startedAt: string;
   updatedAt: string;
@@ -113,6 +139,15 @@ export interface SystemOwnerFleetMigrationOptions {
   faultInjection?: (input: {
     stage:
       | 'during_temporary_copy'
+      | 'after_bootstrap_receipt'
+      | 'after_quarantine_directory_create'
+      | 'after_quarantine_identity_receipt'
+      | 'after_staging_directory_create'
+      | 'after_staging_identity_receipt'
+      | 'after_bootstrap_finalize'
+      | 'after_temporary_create'
+      | 'after_temporary_identity_receipt'
+      | 'after_temporary_superseded_receipt'
       | 'after_temporary_fsync'
       | 'after_publish'
       | 'after_publish_directory_sync'
@@ -120,7 +155,9 @@ export interface SystemOwnerFleetMigrationOptions {
       | 'after_receipt_update'
       | 'before_source_retirement'
       | 'after_source_quarantine'
-      | 'after_quarantine_sync';
+      | 'after_quarantine_sync'
+      | 'before_final_receipt'
+      | 'after_final_receipt';
     ownerFile: string;
     companionId?: string;
     path: string;
@@ -153,14 +190,31 @@ function isFleetEntry(value: unknown): value is FleetReceiptEntry {
     && typeof value.companionDataDir === 'string';
 }
 
+function isSupersededTemporaryEntry(value: unknown): value is SupersededTemporaryReceiptEntry {
+  return isRecord(value)
+    && typeof value.path === 'string'
+    && isFilesystemIdentity(value.identity)
+    && typeof value.bytes === 'number'
+    && Number.isSafeInteger(value.bytes)
+    && value.bytes >= 0
+    && typeof value.sha256 === 'string'
+    && SHA256_PATTERN.test(value.sha256);
+}
+
 function isDestinationEntry(value: unknown): value is DestinationReceiptEntry {
   return isFleetEntry(value)
     && typeof value.destinationPath === 'string'
     && isFilesystemIdentity(value.companionDataDirIdentity)
     && typeof value.stagingDirectoryPath === 'string'
-    && isFilesystemIdentity(value.stagingDirectoryIdentity)
+    && (value.stagingDirectoryIdentity === undefined
+      || isFilesystemIdentity(value.stagingDirectoryIdentity))
     && typeof value.temporaryPath === 'string'
     && (value.temporaryIdentity === undefined || isFilesystemIdentity(value.temporaryIdentity))
+    && typeof value.copyGeneration === 'number'
+    && Number.isSafeInteger(value.copyGeneration)
+    && value.copyGeneration >= 0
+    && Array.isArray(value.supersededTemporaryFiles)
+    && value.supersededTemporaryFiles.every(isSupersededTemporaryEntry)
     && typeof value.sha256 === 'string'
     && SHA256_PATTERN.test(value.sha256)
     && (value.destinationIdentity === undefined || isFilesystemIdentity(value.destinationIdentity))
@@ -203,15 +257,18 @@ export function loadReceipt(path: string, operationPath = path): SystemOwnerFlee
     if (descriptor !== null) closeSync(descriptor);
   }
   if (!isRecord(value)
-    || value.schemaVersion !== 3
+    || value.schemaVersion !== 4
     || value.migration !== 'system-owner-fleet-reroot'
-    || (value.status !== 'in_progress' && value.status !== 'completed')
+    || (value.status !== 'bootstrap' && value.status !== 'in_progress' && value.status !== 'completed')
+    || typeof value.operationId !== 'string'
+    || !ARTIFACT_ID_PATTERN.test(value.operationId)
     || typeof value.systemDataDir !== 'string'
     || !isFilesystemIdentity(value.systemDataDirIdentity)
     || typeof value.receiptDirectoryPath !== 'string'
     || !isFilesystemIdentity(value.receiptDirectoryIdentity)
     || typeof value.quarantineDirectoryPath !== 'string'
-    || !isFilesystemIdentity(value.quarantineDirectoryIdentity)
+    || (value.quarantineDirectoryIdentity !== undefined
+      && !isFilesystemIdentity(value.quarantineDirectoryIdentity))
     || !Array.isArray(value.fleet)
     || !value.fleet.every(isFleetEntry)
     || typeof value.startedAt !== 'string'
@@ -255,6 +312,9 @@ export function assertReceiptPinnedIdentities(input: {
   receiptDirectory: PinnedDirectory;
   quarantineDirectory: PinnedDirectory;
 }): void {
+  if (!input.receipt.quarantineDirectoryIdentity) {
+    throw new Error('System-owner fleet migration quarantine identity is not initialized');
+  }
   assertFilesystemIdentity(
     input.systemDataDir.identity,
     input.receipt.systemDataDirIdentity,
@@ -277,6 +337,13 @@ export function assertReceiptContents(
   systemDataDir: string,
   fleet: readonly FleetReceiptEntry[],
 ): void {
+  const expectedQuarantineDirectory = join(
+    resolve(receipt.receiptDirectoryPath),
+    quarantineDirectoryName(receipt.operationId),
+  );
+  if (resolve(receipt.quarantineDirectoryPath) !== expectedQuarantineDirectory) {
+    throw new Error('System-owner fleet migration receipt quarantine path is invalid');
+  }
   const registeredOwnerFiles = [...PER_COMPANION_OWNER_FILES];
   const receiptOwnerFiles = receipt.files.map(file => file.ownerFile);
   if (new Set(receiptOwnerFiles).size !== receiptOwnerFiles.length
@@ -311,7 +378,7 @@ export function assertReceiptContents(
         || resolve(destination.companionDataDir) !== expected.companionDataDir
         || resolve(destination.destinationPath) !== expected.destinationPath
         || resolve(destination.stagingDirectoryPath)
-          !== join(expected.companionDataDir, MIGRATION_STAGING_DIRECTORY)
+          !== join(expected.companionDataDir, stagingDirectoryName(receipt.operationId))
         || dirname(resolve(destination.temporaryPath)) !== resolve(destination.stagingDirectoryPath)
         || !basename(destination.temporaryPath).startsWith(
           `.${basename(expected.destinationPath)}.system-owner-fleet-reroot-`,
@@ -323,11 +390,31 @@ export function assertReceiptContents(
         || (destination.status === 'verified' && !destination.verifiedAt)) {
         throw new Error(`System-owner fleet migration receipt destination mismatch for ${file.ownerFile}`);
       }
+      const supersededPaths = destination.supersededTemporaryFiles.map(entry => resolve(entry.path));
+      if (new Set(supersededPaths).size !== supersededPaths.length
+        || supersededPaths.includes(resolve(destination.temporaryPath))
+        || supersededPaths.some(path => dirname(path) !== resolve(destination.stagingDirectoryPath))) {
+        throw new Error(`System-owner fleet migration superseded temporary mismatch for ${file.ownerFile}`);
+      }
     }
     if (file.status === 'retired'
       && (!file.retiredAt || file.destinations.some(destination => destination.status !== 'verified'))) {
       throw new Error(`System-owner fleet migration receipt retired ${file.ownerFile} before verification`);
     }
+  }
+  if (receipt.status === 'bootstrap'
+    && receipt.files.some(file => file.status !== 'pending'
+        || file.destinations.some(destination => destination.status !== 'pending'
+          || destination.destinationIdentity
+          || destination.temporaryIdentity))) {
+    throw new Error('Bootstrap system-owner fleet migration receipt contains post-bootstrap progress');
+  }
+  if (receipt.status !== 'bootstrap'
+    && (!receipt.quarantineDirectoryIdentity
+      || receipt.files.some(file => file.destinations.some(
+        destination => !destination.stagingDirectoryIdentity,
+      )))) {
+    throw new Error('Initialized system-owner fleet migration receipt is missing directory identities');
   }
   if (receipt.status === 'completed'
     && (!receipt.completedAt || receipt.files.some(file => file.status !== 'retired'))) {

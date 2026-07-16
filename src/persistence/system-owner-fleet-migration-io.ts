@@ -1,6 +1,7 @@
 import {
   closeSync,
   constants,
+  fstatSync,
   fsyncSync,
   linkSync,
   openSync,
@@ -12,16 +13,15 @@ import { basename, join } from 'node:path';
 import {
   assertFilesystemIdentity,
   closePinnedDirectory,
+  filesystemIdentityForDescriptor,
   inspectPinnedRegularFile,
   pinRelativeDirectory,
   pinnedLeafExists,
   pinnedLeafPath,
-  relativeDirectoryPath,
   type FilesystemIdentity,
   type PinnedDirectory,
 } from './pinned-filesystem.js';
 import {
-  MIGRATION_STAGING_DIRECTORY,
   type DestinationReceiptEntry,
   type FileReceiptEntry,
   type SystemOwnerFleetMigrationOptions,
@@ -35,6 +35,13 @@ export interface DestinationPins {
 export interface PublishedDestinationIdentities {
   destinationIdentity: FilesystemIdentity;
   temporaryIdentity: FilesystemIdentity;
+}
+
+function requireStagingDirectoryIdentity(destination: DestinationReceiptEntry): FilesystemIdentity {
+  if (!destination.stagingDirectoryIdentity) {
+    throw new Error(`Migration staging directory identity is not initialized: ${destination.stagingDirectoryPath}`);
+  }
+  return destination.stagingDirectoryIdentity;
 }
 
 export function buildTemporaryPath(
@@ -51,10 +58,10 @@ export function buildTemporaryPath(
   );
 }
 
-function writeAll(descriptor: number, bytes: Buffer): void {
-  let offset = 0;
-  while (offset < bytes.length) {
-    const written = writeSync(descriptor, bytes, offset, bytes.length - offset);
+function writeAllAt(descriptor: number, bytes: Buffer, start: number, end = bytes.length): void {
+  let offset = start;
+  while (offset < end) {
+    const written = writeSync(descriptor, bytes, offset, end - offset, offset);
     if (written <= 0) throw new Error('Temporary owner-file copy made no write progress');
     offset += written;
   }
@@ -65,41 +72,87 @@ function copySourceToTemporary(input: {
   destination: DestinationReceiptEntry;
   systemDirectory: PinnedDirectory;
   stagingDirectory: PinnedDirectory;
+  onTemporaryCreated: (identity: FilesystemIdentity) => void;
   faultInjection?: SystemOwnerFleetMigrationOptions['faultInjection'];
 }): void {
   const { file, destination } = input;
   const temporaryLeaf = basename(destination.temporaryPath);
-  if (pinnedLeafExists(input.stagingDirectory, temporaryLeaf)) {
-    const existing = inspectPinnedRegularFile(
-      input.stagingDirectory,
-      temporaryLeaf,
-      `${file.ownerFile} migration temporary`,
-    );
-    if (existing.sha256 === file.sourceSha256 && existing.bytes === file.sourceBytes) return;
-    throw new Error(`Migration-owned temporary conflict for ${file.ownerFile}: ${destination.temporaryPath}`);
-  }
-
+  assertSourceUnchanged(file, input.systemDirectory);
   const sourceDescriptor = openSync(
     pinnedLeafPath(input.systemDirectory, file.ownerFile),
     constants.O_RDONLY | constants.O_NOFOLLOW,
   );
   let temporaryDescriptor: number | null = null;
   try {
-    temporaryDescriptor = openSync(
-      pinnedLeafPath(input.stagingDirectory, temporaryLeaf),
-      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
-      0o600,
+    assertFilesystemIdentity(
+      filesystemIdentityForDescriptor(sourceDescriptor),
+      file.sourceIdentity,
+      `${file.ownerFile} migration source descriptor`,
     );
     const sourceBytes = readFileSync(sourceDescriptor);
+    const temporaryOperationPath = pinnedLeafPath(input.stagingDirectory, temporaryLeaf);
+    if (pinnedLeafExists(input.stagingDirectory, temporaryLeaf)) {
+      if (!destination.temporaryIdentity) {
+        throw new Error(`Unbound migration temporary requires durable supersession: ${destination.temporaryPath}`);
+      }
+      temporaryDescriptor = openSync(
+        temporaryOperationPath,
+        constants.O_RDWR | constants.O_NOFOLLOW,
+      );
+      const stats = fstatSync(temporaryDescriptor);
+      if (!stats.isFile()) {
+        throw new Error(`Migration temporary must be a regular file: ${destination.temporaryPath}`);
+      }
+      assertFilesystemIdentity(
+        filesystemIdentityForDescriptor(temporaryDescriptor),
+        destination.temporaryIdentity,
+        `${file.ownerFile} migration temporary`,
+      );
+    } else {
+      if (destination.temporaryIdentity) {
+        throw new Error(`Receipt-owned migration temporary disappeared: ${destination.temporaryPath}`);
+      }
+      temporaryDescriptor = openSync(
+        temporaryOperationPath,
+        constants.O_CREAT | constants.O_EXCL | constants.O_RDWR | constants.O_NOFOLLOW,
+        0o600,
+      );
+      input.faultInjection?.({
+        stage: 'after_temporary_create',
+        ownerFile: file.ownerFile,
+        companionId: destination.companionId,
+        path: destination.temporaryPath,
+      });
+      const identity = filesystemIdentityForDescriptor(temporaryDescriptor);
+      fsyncSync(input.stagingDirectory.descriptor);
+      input.onTemporaryCreated(identity);
+      input.faultInjection?.({
+        stage: 'after_temporary_identity_receipt',
+        ownerFile: file.ownerFile,
+        companionId: destination.companionId,
+        path: destination.temporaryPath,
+      });
+    }
+    const existingBytes = readFileSync(temporaryDescriptor);
+    if (existingBytes.length > sourceBytes.length
+      || !existingBytes.equals(sourceBytes.subarray(0, existingBytes.length))) {
+      throw new Error(`Receipt-owned migration temporary is not an exact source prefix: ${destination.temporaryPath}`);
+    }
     const split = sourceBytes.length > 1 ? Math.ceil(sourceBytes.length / 2) : sourceBytes.length;
-    if (split > 0) writeAll(temporaryDescriptor, sourceBytes.subarray(0, split));
-    input.faultInjection?.({
-      stage: 'during_temporary_copy',
-      ownerFile: file.ownerFile,
-      companionId: destination.companionId,
-      path: destination.temporaryPath,
-    });
-    if (split < sourceBytes.length) writeAll(temporaryDescriptor, sourceBytes.subarray(split));
+    if (existingBytes.length < split) {
+      writeAllAt(temporaryDescriptor, sourceBytes, existingBytes.length, split);
+    }
+    if (existingBytes.length <= split && split < sourceBytes.length) {
+      input.faultInjection?.({
+        stage: 'during_temporary_copy',
+        ownerFile: file.ownerFile,
+        companionId: destination.companionId,
+        path: destination.temporaryPath,
+      });
+    }
+    if (Math.max(existingBytes.length, split) < sourceBytes.length) {
+      writeAllAt(temporaryDescriptor, sourceBytes, Math.max(existingBytes.length, split));
+    }
     fsyncSync(temporaryDescriptor);
     input.faultInjection?.({
       stage: 'after_temporary_fsync',
@@ -120,6 +173,14 @@ function copySourceToTemporary(input: {
   if (temporary.sha256 !== file.sourceSha256 || temporary.bytes !== file.sourceBytes) {
     throw new Error(`Temporary copy verification failed for ${file.ownerFile}`);
   }
+  if (!destination.temporaryIdentity) {
+    throw new Error(`Migration temporary identity was not durably recorded: ${destination.temporaryPath}`);
+  }
+  assertFilesystemIdentity(
+    temporary,
+    destination.temporaryIdentity,
+    `${file.ownerFile} migration temporary`,
+  );
 }
 
 export function publishDestination(input: {
@@ -127,6 +188,7 @@ export function publishDestination(input: {
   destination: DestinationReceiptEntry;
   pins: DestinationPins;
   systemDirectory: PinnedDirectory;
+  onTemporaryCreated: (identity: FilesystemIdentity) => void;
   faultInjection?: SystemOwnerFleetMigrationOptions['faultInjection'];
 }): PublishedDestinationIdentities {
   const { file, destination } = input;
@@ -138,7 +200,7 @@ export function publishDestination(input: {
   );
   assertFilesystemIdentity(
     stagingDirectory.identity,
-    destination.stagingDirectoryIdentity,
+    requireStagingDirectoryIdentity(destination),
     `${file.ownerFile} migration staging directory`,
   );
 
@@ -148,6 +210,7 @@ export function publishDestination(input: {
       destination,
       systemDirectory: input.systemDirectory,
       stagingDirectory,
+      onTemporaryCreated: input.onTemporaryCreated,
       faultInjection: input.faultInjection,
     });
     linkSync(
@@ -185,7 +248,7 @@ export function verifyDestination(
   );
   assertFilesystemIdentity(
     pins.stagingDirectory.identity,
-    destination.stagingDirectoryIdentity,
+    requireStagingDirectoryIdentity(destination),
     `${file.ownerFile} migration staging directory`,
   );
   if (!pinnedLeafExists(pins.destinationDirectory, file.ownerFile)) {
@@ -261,51 +324,17 @@ export function destinationPinKey(companionId: string): string {
   return companionId;
 }
 
-export function openDestinationPins(input: {
-  persistenceDirectory: PinnedDirectory;
-  companionDataDir: string;
-  label: string;
-  create: boolean;
-  exclusiveStagingCreate: boolean;
-}): DestinationPins {
-  const relativePath = relativeDirectoryPath(
-    input.persistenceDirectory,
-    input.companionDataDir,
-    input.label,
-  );
-  const destinationDirectory = pinRelativeDirectory(
-    input.persistenceDirectory,
-    relativePath,
-    `${input.label} directory`,
-    { create: input.create },
-  );
-  if (!destinationDirectory) throw new Error(`${input.label} directory is missing`);
-  try {
-    return openStagingDirectoryPins({
-      destinationDirectory,
-      label: input.label,
-      create: input.create,
-      exclusiveStagingCreate: input.exclusiveStagingCreate,
-    });
-  } catch (error) {
-    closePinnedDirectory(destinationDirectory);
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new Error(`Pre-existing migration-owned staging directory conflicts for ${input.label}`);
-    }
-    throw error;
-  }
-}
-
 export function openStagingDirectoryPins(input: {
   destinationDirectory: PinnedDirectory;
   label: string;
+  stagingDirectoryName: string;
   create: boolean;
   exclusiveStagingCreate: boolean;
 }): DestinationPins {
   try {
     const stagingDirectory = pinRelativeDirectory(
       input.destinationDirectory,
-      MIGRATION_STAGING_DIRECTORY,
+      input.stagingDirectoryName,
       `${input.label} staging directory`,
       {
         create: input.create,

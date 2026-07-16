@@ -6,7 +6,7 @@ import {
   type KubeHelmRollbackApiPort,
 } from './kube-helm-rollback.js';
 import { combineKubeSelfManagementExecutors } from './kube-self-management.js';
-import type { KubeRollbackRecord } from './kube-rollback-store.js';
+import { hasRolledBackFrom, type KubeRollbackRecord } from './kube-rollback-store.js';
 
 function ready(name: string): KubeDeploymentDiagnostic {
   return {
@@ -83,6 +83,29 @@ describe('createKubeHelmRollbackExecutor', () => {
     expect(record.targetHelmRevision).toBe(8);
     expect(record.outcome).toBe('succeeded');
     expect(record.reason).toBe('roll back the broken rev-9 update');
+  });
+
+  it('records the source revision so a manual rollback keys the act-once ledger', async () => {
+    // Helm enacts the rollback as resulting revision 10 (from live revision 9),
+    // so the ledger must key on fromHelmRevision=9 — the revision the automatic
+    // surface stays pinned to and must not double-fire against.
+    const recordRollback = vi.fn();
+    const executor = createKubeHelmRollbackExecutor({
+      namespace: 'psfn', release: 'psfn', resourcePrefix: 'psfn',
+      api: {
+        rollback: vi.fn(async () => ({ helmRevision: 10 })),
+        getDeployment: vi.fn(async (_ns: string, name: string) => ready(name)),
+      },
+      recordRollback,
+    });
+
+    await executor.execute(ROLLBACK_REQUEST);
+
+    const record = recordRollback.mock.calls[0][0] as KubeRollbackRecord;
+    expect(record.fromHelmRevision).toBe(9);
+    // The recorded manual rollback now satisfies the auto surface's act-once
+    // predicate for the failed revision it moved away from.
+    expect(hasRolledBackFrom([record], 'psfn', 9)).toBe(true);
   });
 
   it('escalates (rollbackStatus failed) when the release never recovers', async () => {

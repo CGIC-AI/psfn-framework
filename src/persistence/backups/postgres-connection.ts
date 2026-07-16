@@ -142,9 +142,13 @@ export function createSanitizedPostgresChildEnv(
   // A missing PGPASSFILE falls back to ~/.pgpass. Pointing it at the null
   // device makes the absence of an explicit URL password fail closed.
   env.PGPASSFILE = NULL_DEVICE;
-  // Negated require_auth connection policy blocks GSS/SSPI. This also makes
-  // the environment-level cache override defense in depth for older clients.
-  env.KRB5CCNAME = `FILE:${NULL_DEVICE}`;
+  // Negated require_auth connection policy blocks GSS/SSPI. Overriding the
+  // Kerberos credential cache to an always-empty in-memory ccache is defense
+  // in depth for older clients so no ambient/inherited ticket cache is used.
+  // MEMORY: is a self-contained, filesystem-free ccache: pointing this at a
+  // character device such as FILE:/dev/null makes libpq's Kerberos probe read
+  // an invalid ccache and segfault (observed as psql/pg_dump exit code 139).
+  env.KRB5CCNAME = 'MEMORY:';
   if (password !== undefined) env.PGPASSWORD = password;
   return env;
 }

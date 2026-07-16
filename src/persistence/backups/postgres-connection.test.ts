@@ -239,7 +239,7 @@ describe('createSanitizedPostgresChildEnv', () => {
       HOME: '/home/restore',
       PGPASSWORD: 'explicit-password',
       PGPASSFILE: process.platform === 'win32' ? 'NUL' : '/dev/null',
-      KRB5CCNAME: process.platform === 'win32' ? 'FILE:NUL' : 'FILE:/dev/null',
+      KRB5CCNAME: 'MEMORY:',
     });
     expect(Object.keys(env).filter(name => name.toUpperCase().startsWith('PG')).sort())
       .toEqual(['PGPASSFILE', 'PGPASSWORD']);

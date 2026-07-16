@@ -1,6 +1,10 @@
 import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
 
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
+const EXPERIENTIAL_SELF_DIRECTED_SESSION_PREFIXES = [
+  'internal:free-time:',
+  'internal:reflection:',
+] as const;
 export type InferredSessionChannelType = ChannelType | 'subagent';
 
 function normalizePrefix(prefix: string): string | null {
@@ -12,6 +16,15 @@ export function isInternalSessionId(sessionId: string): boolean {
   return sessionId.startsWith('internal:')
     || sessionId.startsWith('subagent:')
     || sessionId.startsWith('shard:');
+}
+
+/**
+ * Internal streams where an assistant turn can be evidence about the
+ * companion's own lived activity. Operational heartbeat/maintenance streams
+ * stay excluded even though they are also internal.
+ */
+export function isExperientialSelfDirectedSessionId(sessionId: string): boolean {
+  return EXPERIENTIAL_SELF_DIRECTED_SESSION_PREFIXES.some(prefix => sessionId.startsWith(prefix));
 }
 
 export function inferSessionChannelType(sessionId: string): InferredSessionChannelType | undefined {

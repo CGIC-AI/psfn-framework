@@ -3,7 +3,6 @@ import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-p
 import type { PersonaPreamblePort } from '../../core/identity/persona-preamble.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import { resolvePreferredContactName } from '../../core/contacts/preferred-name.js';
-import type { SessionManager } from '../../core/session/manager.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -81,6 +80,7 @@ import {
   evaluateFactAcceptance,
 } from './extraction/signals.js';
 import { parseFactsXml } from './extraction/parser.js';
+import type { MemoryExtractionSessionPort } from './extraction/session-port.js';
 
 const log = createComponentLogger('Extraction');
 
@@ -127,7 +127,7 @@ type MemoryExtractorGroupOptions =
 
 export class MemoryExtractor {
   private llmClient: LLMProviderPort;
-  private sessionManager: SessionManager;
+  private sessionManager: MemoryExtractionSessionPort;
   private memoryStore: MemoryStorePort;
   private writer: MemoryWriter;
   private costTelemetry: CostTelemetryPort;
@@ -154,7 +154,7 @@ export class MemoryExtractor {
 
   constructor(
     llmClient: LLMProviderPort,
-    sessionManager: SessionManager,
+    sessionManager: MemoryExtractionSessionPort,
     memoryStore: MemoryStorePort,
     embeddingService: EmbeddingProviderPort,
     costTelemetry: CostTelemetryInput,
@@ -778,6 +778,7 @@ export class MemoryExtractor {
     assertEffectAllowed?: () => Promise<void>,
   ): Promise<WriteResult> {
     await assertEffectAllowed?.();
+    const selfDirectedMemory = routing?.routingReason === 'self_directed_companion';
     let factContactId = canonicalContactId;
     // Contact-tracking policy gate (E3.4): non-'auto' channels must not have
     // extraction create contact rows (mention-only path included). Facts keep
@@ -862,7 +863,11 @@ export class MemoryExtractor {
       tags: applyLocationTag(fact.tags, placeId),
       retentionClass: fact.retentionClass,
       sourceRef,
-      sourceType: triggerReason === 'pre_compaction' ? 'compaction_summary' : undefined,
+      sourceType: selfDirectedMemory
+        ? 'reflection'
+        : triggerReason === 'pre_compaction'
+          ? 'compaction_summary'
+          : undefined,
       ...(routing?.scopeRef ? { scopeRef: routing.scopeRef } : {}),
       ...(routing?.scopeTags ? { scopeTags: routing.scopeTags } : {}),
         provenance: channelId
@@ -871,6 +876,7 @@ export class MemoryExtractor {
             ...(logicalSessionId ? { sessionId: logicalSessionId } : {}),
             ...(turnId ? { turnId } : {}),
             ...(triggerReason ? { reason: triggerReason } : {}),
+          ...(selfDirectedMemory ? { actor: 'companion' } : {}),
           ...(routing?.triggerContactId ? { triggerContactId: routing.triggerContactId } : {}),
           ...(routing?.routedContactId ? { routedContactId: routing.routedContactId } : {}),
           ...(routing?.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),

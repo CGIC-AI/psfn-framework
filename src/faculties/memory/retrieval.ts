@@ -325,6 +325,7 @@ export class MemoryRetriever implements MemoryProvider {
     return createSubjectAuthorizedMemoryStore(this.memoryStore, {
       ...context,
       ...(canonicalContactId ? { viewerContactId: canonicalContactId } : {}),
+      includeCompanionPrivateRecallCandidates: Boolean(canonicalContactId),
       companionInternal: !canonicalContactId && context.companionInternal === true,
     });
   }

@@ -110,6 +110,15 @@ function hasRoomContextScopeTag(memory: Pick<PurrMemory, 'scopeTags'>): boolean 
   return false;
 }
 
+function isRecallableCompanionSelfExperience(
+  memory: Pick<PurrMemory, 'tags' | 'provenance'>,
+): boolean {
+  const tags = new Set(memory.tags.map(tag => tag.trim().toLowerCase()));
+  return memory.provenance?.actor === 'companion'
+    && tags.has('self_directed')
+    && tags.has('self_experience');
+}
+
 function resolveMemorySourceRoom(memory: Pick<PurrMemory, 'provenance' | 'scopeRef'>): {
   roomId?: string;
   inconsistent: boolean;
@@ -151,7 +160,8 @@ function isPrimaryPrivateDmSubject(
 
   return memory.scopeRef?.kind !== 'conversation'
     && !hasRoomContextScopeTag(memory)
-    && !isHighIntimacySensitivityLevel(memory.sensitivity);
+    && !isHighIntimacySensitivityLevel(memory.sensitivity)
+    && isRecallableCompanionSelfExperience(memory);
 }
 
 function violatesHighIntimacyContactScope(

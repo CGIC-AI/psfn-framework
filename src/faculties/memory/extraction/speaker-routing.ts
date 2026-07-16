@@ -14,7 +14,8 @@ type ExtractionFactRoutingReason =
   | 'transcript_content_match'
   | 'structured_source_metadata'
   | 'structured_subject_metadata'
-  | 'structured_room_context';
+  | 'structured_room_context'
+  | 'self_directed_companion';
 
 export interface ExtractionSourceSpeaker {
   name: string;

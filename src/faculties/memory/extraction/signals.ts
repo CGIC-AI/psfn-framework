@@ -199,13 +199,19 @@ export interface ExtractionPreLlmGateDecision {
   userEntryCount: number;
 }
 
+export interface ExtractionPreLlmGateOptions {
+  /** Transcript role whose language is the evidence signal for this lane. */
+  signalRole?: 'user' | 'assistant';
+}
+
 /**
  * Extraction pre-LLM gate expressed on the shared deterministic-gate primitive
  * (jpvd.4). Byte-identical to the original hand-rolled decision: an empty
  * transcript hard-closes first; otherwise the gate opens when any user turn
  * scores as meaningful (signalCount > 0) OR nothing was explicitly low-signal
  * (explicitLowSignalEntryCount === 0), and closes as 'low_signal' when a turn
- * was explicit filler and none was meaningful.
+ * was explicit filler and none was meaningful. The selected role defaults to
+ * user and can be assistant only for experiential self-directed transcripts.
  */
 export const EXTRACTION_PRE_LLM_GATE: DeterministicGateDefinition = {
   lane: 'extraction',
@@ -219,15 +225,17 @@ export const EXTRACTION_PRE_LLM_GATE: DeterministicGateDefinition = {
 
 export function evaluateExtractionPreLlmGate(
   recentEntries: readonly SessionEntry[],
+  options: ExtractionPreLlmGateOptions = {},
 ): ExtractionPreLlmGateDecision {
   const recent = recentEntries
     .filter(entry => typeof entry.content === 'string' && entry.content.trim().length > 0);
   const userEntries = recent.filter(entry => entry.role === 'user');
+  const signalEntries = recent.filter(entry => entry.role === (options.signalRole ?? 'user'));
 
   let signalScore = 0;
   let signalCount = 0;
   let explicitLowSignalEntryCount = 0;
-  for (const entry of userEntries) {
+  for (const entry of signalEntries) {
     const entryScore = scoreExtractionEntrySignal(entry.content);
     signalScore += entryScore;
     if (entryScore >= MEANINGFUL_ENTRY_SCORE_THRESHOLD) {
@@ -239,7 +247,7 @@ export function evaluateExtractionPreLlmGate(
   }
 
   const decision = evaluateDeterministicGate(EXTRACTION_PRE_LLM_GATE, {
-    recentEntryCount: recent.length,
+    recentEntryCount: options.signalRole === 'assistant' ? signalEntries.length : recent.length,
     signalCount,
     explicitLowSignalEntryCount,
   });
@@ -249,7 +257,7 @@ export function evaluateExtractionPreLlmGate(
     ...(decision.open ? {} : { reason: decision.reason as ExtractionPreLlmGateReason }),
     signalScore: Number(signalScore.toFixed(4)),
     signalCount,
-    recentEntryCount: recent.length,
+    recentEntryCount: options.signalRole === 'assistant' ? signalEntries.length : recent.length,
     userEntryCount: userEntries.length,
   };
 }

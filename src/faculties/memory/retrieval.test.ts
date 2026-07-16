@@ -235,6 +235,78 @@ describe('MemoryRetriever active memory context', () => {
     }));
   });
 
+  it('lets a primary private conversation naturally recall a companion-private self experience', async () => {
+    const selfExperience = makeMemory({
+      id: 'self-experience',
+      text: 'I spent free time painting loose watercolor edges and felt delighted by them.',
+      type: 'emotional',
+      emotionalValence: 0.68,
+      sensitivity: 'personal',
+      sourceType: 'reflection',
+      provenance: {
+        channelId: 'internal:free-time:idle',
+        sessionId: 'internal:free-time:idle',
+        actor: 'companion',
+        subjectName: 'Purrsephone',
+      },
+      tags: ['self_directed', 'self_experience'],
+      similarity: 0.96,
+    });
+    const privateOperationalReflection = makeMemory({
+      id: 'private-operational-reflection',
+      text: 'Internal reflection about an operational concern.',
+      sensitivity: 'personal',
+      sourceType: 'reflection',
+      provenance: {
+        channelId: 'internal:reflection:maintenance-review',
+        sessionId: 'internal:reflection:maintenance-review',
+        actor: 'system',
+      },
+      tags: ['internal_note'],
+      similarity: 0.95,
+    });
+    const authorizedQueries: MemorySubjectAuthorizedQuery[] = [];
+    const store = makeMockStore([]);
+    store.queryAuthorizedMemorySubjects = vi.fn(async (input: MemorySubjectAuthorizedQuery) => {
+      authorizedQueries.push(input);
+      const allowsSelfExperience = input.authorization.allowedSubjectClasses.includes('companion_private')
+        && input.authorization.allowedViewerRelations.includes('none');
+      if (input.selector.kind === 'embedding_search' && allowsSelfExperience) {
+        return { memories: [selfExperience, privateOperationalReflection], total: 2 };
+      }
+      return { memories: [], total: 0 };
+    });
+    store.mutateAuthorizedMemorySubjects = vi.fn().mockResolvedValue(1);
+    const retriever = new MemoryRetriever(
+      store,
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      undefined,
+      null,
+      null,
+      null,
+      null,
+      true,
+    );
+
+    const output = await retriever.retrieve(
+      'What were you doing lately with watercolor?',
+      'api:primary-self-recall',
+      'primary',
+      { isDirectMessage: true, privacyLevel: 'private' },
+      'contact-primary',
+    );
+
+    expect(output).toContain(selfExperience.text);
+    expect(output).not.toContain(privateOperationalReflection.text);
+    expect(authorizedQueries.some(query => (
+      query.selector.kind === 'embedding_search'
+      && query.authorization.viewerContactIds[0] === 'contact-primary'
+      && query.authorization.allowedSubjectClasses.includes('companion_private')
+      && query.authorization.allowedViewerRelations.includes('none')
+    ))).toBe(true);
+  });
+
   it('retains existing recalled memories when a later refresh has no candidates', async () => {
     const recalled = makeMemory({
       text: 'V prefers oolong tea in the afternoon.',

@@ -9,6 +9,11 @@ import { getDefaultTrustPolicy, resetRuntimeTrustPolicy, setRuntimeTrustPolicy }
 import { createTurnId, isTurnId } from '../../core/turns/id.js';
 import { createDefaultGroupMemorySettings } from '../../system/config/group-memory-config.js';
 import { ExtractionDrainRequeueError } from './extraction/drain-signal.js';
+import type { EmbeddingProviderPort, LLMProviderPort } from '../../core/agent/contracts.js';
+import type { SessionEntry } from '../../core/session/types.js';
+import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
+import { EventBus } from '../../shared/event-bus.js';
+import type { MemoryExtractionSessionPort } from './extraction/session-port.js';
 
 const tempDirs: string[] = [];
 
@@ -1198,6 +1203,138 @@ describe('MemoryExtractor refusal boundary extraction', () => {
     expect(endCall?.[1]?.parsedCount).toBe(1);
     expect(endCall?.[1]?.acceptedCount).toBe(1);
     expect(endCall?.[1]?.boundaryFactCount).toBe(1);
+  });
+});
+
+describe('MemoryExtractor experiential self-memory extraction', () => {
+  it('admits a real free-time response and writes only its grounded first-person style experience', async () => {
+    const channelId = 'internal:free-time:idle';
+    const experienceText = 'I tried a loose watercolor palette and felt delighted by the soft, imperfect edges; I prefer that to polished symmetry.';
+    const complete = vi.fn<LLMProviderPort['complete']>().mockResolvedValue({
+        content: `<response>
+<fact>
+<text>${experienceText}</text>
+<type>emotional</type>
+<importance>0.82</importance>
+<emotional_valence>0.68</emotional_valence>
+<confidence>0.94</confidence>
+<tags>aesthetic, style, preference, reaction</tags>
+<sensitivity>personal</sensitivity>
+<source_message_ids>2</source_message_ids>
+<source_speaker_name>Purrsephone</source_speaker_name>
+<subject_name>Purrsephone</subject_name>
+</fact>
+<fact>
+<text>I felt pleased that the scheduler asked for a summary.</text>
+<type>emotional</type>
+<importance>0.8</importance>
+<emotional_valence>0.5</emotional_valence>
+<confidence>0.9</confidence>
+<tags>reaction</tags>
+<source_message_ids>1</source_message_ids>
+</fact>
+</response>`,
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      });
+    const llmClient: LLMProviderPort = {
+      stream: async () => ({
+        content: '',
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        toolCalls: [],
+        stopReason: 'end_turn',
+      }),
+      complete,
+    };
+    const recentEntries: SessionEntry[] = [
+      {
+        id: 1,
+        channelId,
+        role: 'user',
+        authorId: 'scheduler',
+        authorName: 'Free Time',
+        content: 'Please summarize the findings.',
+        timestamp: 1_000,
+      },
+      {
+        id: 2,
+        channelId,
+        role: 'assistant',
+        authorId: 'companion:purrsephone',
+        authorName: 'Purrsephone',
+        content: experienceText,
+        timestamp: 2_000,
+      },
+    ];
+    const sessionManager: MemoryExtractionSessionPort = {
+      characterName: 'Purrsephone',
+      intakeSinkGate: null,
+      getMessageCount: () => recentEntries.length,
+      getRecentMessages: () => recentEntries,
+      resolveSessionChannelId: id => id,
+      isSessionRetiredOrQuarantined: () => false,
+    };
+    const memoryStore = new InMemoryMemoryStore();
+    const embeddingService: EmbeddingProviderPort = {
+      embed: async () => new Float32Array(8),
+      embedBatch: async texts => texts.map(() => new Float32Array(8)),
+      dims: 8,
+    };
+    const extractor = new MemoryExtractor(
+      llmClient,
+      sessionManager,
+      memoryStore.asPort(),
+      embeddingService,
+      new EventBus(),
+      { extractionInterval: 5, maxWrites: 4 },
+    );
+
+    await extractor.extract(channelId, 'contact-primary');
+
+    expect(complete).toHaveBeenCalledTimes(1);
+    const prompt = complete.mock.calls[0]?.[0].systemPrompt;
+    expect(prompt).toContain('real self-directed session');
+    expect(prompt).toContain('Only companion-authored assistant messages can support an experiential memory');
+    expect(prompt).toContain('exact substring');
+    expect(prompt).toContain('Never generate or request images');
+    const memories = memoryStore.getAllActiveMemories();
+    expect(memories).toHaveLength(1);
+    expect(memories[0]).toMatchObject({
+      text: experienceText,
+      type: 'emotional',
+      emotionalValence: 0.68,
+      retentionClass: 'durable',
+      sourceType: 'reflection',
+      contactId: undefined,
+      scopeRef: {
+        kind: 'system',
+        id: 'companion:self',
+        label: 'Companion self-directed experience',
+      },
+      tags: expect.arrayContaining([
+        'self_directed',
+        'self_experience',
+        'self_style_exploration',
+        'preference',
+        'preference:style',
+        'current_state',
+      ]),
+      provenance: expect.objectContaining({
+        channelId,
+        sessionId: channelId,
+        actor: 'companion',
+        subjectName: 'Purrsephone',
+        sourceSpeakerName: 'Purrsephone',
+        sourceMessageIds: [2],
+        routingReason: 'self_directed_companion',
+      }),
+    });
+    expect(memories[0]?.provenance?.triggerContactId).toBeUndefined();
   });
 });
 

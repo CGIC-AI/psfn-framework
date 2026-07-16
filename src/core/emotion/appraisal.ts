@@ -78,6 +78,8 @@ export interface EmotionAppraisalInput {
   icpCorrelation?: IcpConversationCorrelation;
   /** Durable background lease fence, checked immediately before state writes. */
   assertEffectAllowed?: () => Promise<void>;
+  /** mmo9.7.4: protect a welfare-escalated appraisal model call from gate preemption. */
+  preemptionProtected?: boolean;
 }
 
 export interface EmotionAppraisalResult {
@@ -464,6 +466,7 @@ export class EmotionAppraisal {
     const response = await completeWithWorkSpec(this.llmProvider, context, buildLLMWorkSpec({
       purpose: 'background',
       durable: false,
+      ...(input.preemptionProtected ? { preemptionProtected: true } : {}),
       correlation: {
         ...(input.icpCorrelation
           ? { requestId: `${input.icpCorrelation.requestId}:emotion-appraisal` }

@@ -125,6 +125,8 @@ function makeExecution(record: TurnRecord): {
       leaseOwner: 'worker-1',
       leaseExpiresAtMs: 1_000,
       revision: 2,
+      deferCount: 0,
+      welfareClaimed: false,
     },
   };
 }
@@ -334,6 +336,7 @@ describe('executePostTurnBackgroundWork', () => {
       expect.any(Function),
       recentEntries,
       expect.any(Function),
+      { preemptionProtected: false },
     );
   });
 
@@ -741,6 +744,7 @@ describe('executePostTurnBackgroundWork', () => {
       expect.any(Function),
       recentEntries,
       expect.any(Function),
+      { preemptionProtected: false },
     );
     expect(JSON.stringify(execution.payload)).not.toContain(record.userMessage.content);
     expect(JSON.stringify(execution.payload)).not.toContain(record.assistantMessage?.content);
@@ -1253,9 +1257,10 @@ describe('executePostTurnBackgroundWork', () => {
         signal: base.signal,
         job: makeJob(memoryPayload),
       }, dependencies);
-      // maybeExtract now receives a trailing non-crossing pre-write fence after
-      // recentEntries, so the bounded snapshot is the second-to-last argument.
-      const memoryEntries = maybeExtract.mock.calls[0]?.at(-2) as SessionEntry[];
+      // maybeExtract receives, after recentEntries: a non-crossing pre-write
+      // fence and (mmo9.7.4) a trailing welfare options object, so the bounded
+      // snapshot is the third-to-last argument.
+      const memoryEntries = maybeExtract.mock.calls[0]?.at(-3) as SessionEntry[];
 
       const emotionPayload: EmotionAppraisalBackgroundPayload = {
         schemaVersion: 1,

@@ -231,6 +231,12 @@ export interface ExtractionRunOptions {
   /** Undefined permits foreground live-history lookup; an empty array is authoritative. */
   recoveredEntries?: SessionEntry[];
   icpCorrelation?: IcpConversationCorrelation;
+  /**
+   * mmo9.7.4: mark the extraction model call preemption-protected so a
+   * welfare-escalated (aged, repeatedly-preempted) durable claim runs to
+   * completion instead of being gate-preempted back into the defer loop.
+   */
+  preemptionProtected?: boolean;
   resolveParticipantNames?: (
     recentEntries: readonly SessionEntry[],
     canonicalContactId?: string,
@@ -417,6 +423,7 @@ export async function runExtractionOrchestration(options: ExtractionRunOptions):
           buildLLMWorkSpec({
             purpose: 'extraction',
             durable: true,
+            ...(options.preemptionProtected ? { preemptionProtected: true } : {}),
             correlation: {
               requestId: chunkRequestId,
               ...(turnId ? { turnId } : {}),

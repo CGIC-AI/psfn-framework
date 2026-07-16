@@ -112,6 +112,57 @@ describe('ModelCallGate preemption and capacity', () => {
     expect(typeof events[0]!.waitedMs).toBe('number');
   });
 
+  // mmo9.7.4: a welfare-escalated background call declares preemptionProtected so
+  // the gate does not abort it — this is what breaks the preempt→defer→preempt
+  // starvation loop. It is a per-call override of the SINGLE preemptable check,
+  // not a second preemption policy (Law 12.4).
+  it('does not preempt a preemption-protected background call (welfare escalation)', async () => {
+    const gate = new ModelCallGate();
+    const background = blockingExecute();
+    const backgroundPromise = gate.run(
+      { resourceKey: RESOURCE, runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS, preemptionProtected: true },
+      background.run,
+    );
+    await background.started;
+
+    // A foreground acquire that would normally preempt a maintenance-reflection
+    // call now cannot; it parks behind the single slot instead of aborting the
+    // aged welfare job.
+    let foregroundStarted = false;
+    const foregroundPromise = gate.run(
+      { resourceKey: RESOURCE, runtimeClass: FOREGROUND_CHAT_RUNTIME_CLASS },
+      async () => { foregroundStarted = true; return 'foreground'; },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(foregroundStarted).toBe(false);
+    expect(background.aborted()).toBe(false);
+
+    // The protected call runs to completion, then the parked foreground proceeds.
+    background.release();
+    await expect(backgroundPromise).resolves.toBe('completed');
+    await expect(foregroundPromise).resolves.toBe('foreground');
+    expect(background.aborted()).toBe(false);
+  });
+
+  // Control: the very same lane WITHOUT the per-call flag is still preemptable,
+  // proving the override is per-call and not a lane policy change.
+  it('still preempts an unprotected maintenance-reflection call in the same lane', async () => {
+    const gate = new ModelCallGate();
+    const background = blockingExecute();
+    const backgroundPromise = gate.run(
+      { resourceKey: RESOURCE, runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS },
+      background.run,
+    );
+    await background.started;
+    await gate.run(
+      { resourceKey: RESOURCE, runtimeClass: FOREGROUND_CHAT_RUNTIME_CLASS },
+      async () => 'foreground',
+    );
+    await expect(backgroundPromise).rejects.toBeInstanceOf(ModelCallPreemptedError);
+    expect(background.aborted()).toBe(true);
+  });
+
   it('grants a reserved foreground slot without preempting background (capacity 2, reserve 1)', async () => {
     const capacity: ModelCallGateCapacity = { capacity: 2, reservedForegroundSlots: 1 };
     const gate = new ModelCallGate();

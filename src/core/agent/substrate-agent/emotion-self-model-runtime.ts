@@ -466,6 +466,8 @@ export class EmotionSelfModelRuntime {
     assertEffectAllowed?: () => Promise<void>;
     /** Undefined permits direct-call history lookup; an empty array is authoritative. */
     recentEntries?: readonly SessionEntry[];
+    /** mmo9.7.4: protect a welfare-escalated appraisal model call from gate preemption. */
+    preemptionProtected?: boolean;
   }): Promise<void> {
     if (!this.emotionAppraisal) return;
 
@@ -508,6 +510,7 @@ export class EmotionSelfModelRuntime {
       ...(params.assertEffectAllowed
         ? { assertEffectAllowed: params.assertEffectAllowed }
         : {}),
+      ...(params.preemptionProtected ? { preemptionProtected: true } : {}),
       ...(params.icpCorrelation ? { icpCorrelation: params.icpCorrelation } : {}),
     });
     if (result.appraised) {

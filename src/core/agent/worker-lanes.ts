@@ -86,6 +86,19 @@ export interface RuntimeLaneBudgetProfile {
    * mechanism, fairness/anti-starvation lives elsewhere.
    */
   preemptable: boolean;
+  /**
+   * Anti-starvation welfare reserve (mmo9.7.4). The per-lane count of bounded
+   * welfare-reserve slots the background-work supervisor may admit an aged,
+   * repeatedly-preempted job of this lane class into, past the foreground
+   * exclusion, so sustained foreground turns cannot starve it forever. Zero for
+   * the never-preempted foreground/appraisal lanes (they never defer, so they
+   * cannot starve); a small conservative reserve for the preemptable background
+   * and maintenance lanes. This is the per-lane policy declaration; a deployment
+   * numeric cap may override it through the scheduler owner file. It is NOT a
+   * second scheduler — the reservation is enforced in the existing claimNext
+   * admission choke (Law 12.4).
+   */
+  welfareReserveSlots: number;
   chargeLane: ChargePolicyRuntimeLane;
   modelPurpose: ModelPurpose;
   maxQueuedActions: number;
@@ -105,6 +118,7 @@ const RUNTIME_LANE_BUDGET_PROFILES: Record<RuntimeLaneClass, RuntimeLaneBudgetPr
     runtimeClass: FOREGROUND_CHAT_RUNTIME_CLASS,
     priority: 0,
     preemptable: false,
+    welfareReserveSlots: 0,
     chargeLane: 'interactive',
     modelPurpose: 'chat',
     maxQueuedActions: 0,
@@ -118,6 +132,7 @@ const RUNTIME_LANE_BUDGET_PROFILES: Record<RuntimeLaneClass, RuntimeLaneBudgetPr
     runtimeClass: POST_TURN_APPRAISAL_RUNTIME_CLASS,
     priority: 1,
     preemptable: false,
+    welfareReserveSlots: 0,
     chargeLane: 'background',
     modelPurpose: 'background',
     maxQueuedActions: 12,
@@ -131,6 +146,7 @@ const RUNTIME_LANE_BUDGET_PROFILES: Record<RuntimeLaneClass, RuntimeLaneBudgetPr
     runtimeClass: BACKGROUND_CONTINUATION_RUNTIME_CLASS,
     priority: 2,
     preemptable: true,
+    welfareReserveSlots: 1,
     chargeLane: 'background',
     modelPurpose: 'background',
     maxQueuedActions: 4,
@@ -144,6 +160,7 @@ const RUNTIME_LANE_BUDGET_PROFILES: Record<RuntimeLaneClass, RuntimeLaneBudgetPr
     runtimeClass: MAINTENANCE_REFLECTION_RUNTIME_CLASS,
     priority: 3,
     preemptable: true,
+    welfareReserveSlots: 1,
     chargeLane: 'maintenance',
     modelPurpose: 'memory',
     maxQueuedActions: 3,

@@ -1,10 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { JSONRPCClient, JSONRPCServer, JSONRPCServerAndClient } from 'json-rpc-2.0';
+import type { IncomingMessage } from 'node:http';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { createEligibilityGate } from '../../system/capabilities/eligibility.js';
-import type { EventBus } from '../../shared/event-bus.js';
+import { EventBus } from '../../shared/event-bus.js';
+import { createTurnId, isTurnId } from '../../core/turns/id.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
+import type { WebSocketVoiceSession } from '../../primitives/voice/transports/websocket/types.js';
+import type { CommittedSegment } from '../../primitives/voice/reply-stream/types.js';
 import type { StreamingSttConnector } from '../../primitives/voice/connectors/stt/types.js';
 import type { StreamingTtsConnector } from '../../primitives/voice/connectors/tts/types.js';
 import { registerStreamingSttProvider } from '../../primitives/voice/connectors/stt/index.js';
@@ -13,7 +18,7 @@ import { GatewayClient } from '../../boundary/gateway/client.js';
 import type { GatewayRpcConnection, GatewayRpcSerializedTransportStats } from '../../boundary/gateway/transport.js';
 import { requestAgentVoiceStream } from '../../boundary/gateway/voice-stream-request.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
-import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 
 const {
   createStreamingSttConnectorMock,
@@ -39,7 +44,7 @@ vi.mock('../../primitives/voice/connectors/tts/index.js', async (importOriginal)
   };
 });
 
-import { createApiVoiceWebSocketRuntime } from './voice-websocket-runtime.js';
+import { createApiVoiceWebSocketRuntime, runAgentAssistantStream } from './voice-websocket-runtime.js';
 
 // Echo TTS no longer has silent defaults — requires explicit config
 
@@ -493,5 +498,130 @@ describe('requestAgentVoiceStream barge-in cancellation (mmo9.6.5 production com
     expect(dispatchedSignals[1]?.aborted).toBe(false);
 
     gatewayClient.destroy();
+  });
+});
+
+/**
+ * mmo9.8.3 — streamed voice first-audio / turn-channel isolation regression.
+ *
+ * The live streamed path bridges `agent.stream.delta` into spoken segments. The
+ * bridge filters deltas by channelId AND turnId. Pre-fix, the transport handed
+ * the bridge a FABRICATED `api-voice-<conn>-<sess>-<ts>` turnId while the agent
+ * stamped an independently-generated UUIDv7 on every real delta — the two ids
+ * could never be equal, so 100% of real deltas were dropped and the streamed
+ * path emitted ZERO audio. The prior tests missed it because their fake delta
+ * sources emitted deltas with NO turnId, so the fatal branch never ran.
+ *
+ * The fix threads a REAL UUIDv7 the transport mints through `routing.turnId`, so
+ * `executeTurn` stamps THAT id on the deltas and the bridge's options.turnId
+ * matches. This drives `runAgentAssistantStream` with a fake agent that models
+ * the real one (stamps `routing.turnId` on its deltas) under the exact shared
+ * x-session-id channelId the reviewer flagged for cross-talk, and asserts real
+ * deltas are spoken while a concurrent turn's / other channel's are not.
+ */
+describe('runAgentAssistantStream real-turn delta wiring (mmo9.8.3 first-audio regression)', () => {
+  function makeStreamPrincipal(): ApiAuthPrincipal {
+    return { id: 'principal-1', mode: 'api_key' };
+  }
+
+  function makeStreamRequest(headers: Record<string, string>): IncomingMessage {
+    return { headers, url: '/voice' } as unknown as IncomingMessage;
+  }
+
+  function makeStreamSession(connectionId: string): WebSocketVoiceSession {
+    return { id: `sess-${connectionId}`, connectionId, openedAtMs: 0, lastSeenAtMs: 0 };
+  }
+
+  async function drainSegments(
+    stream: { segments: AsyncIterable<CommittedSegment> },
+  ): Promise<string[]> {
+    const out: string[] = [];
+    for await (const seg of stream.segments) out.push(seg.text);
+    return out;
+  }
+
+  it('speaks real agent deltas stamped with the routing-threaded UUIDv7, and isolates a concurrent turn on the same shared-session channel', async () => {
+    const eventBus = new EventBus();
+    const principal = makeStreamPrincipal();
+    // x-session-id present → channelId collapses to `api:<principal>:<session>`,
+    // the exact shared-session case the reviewer flagged for cross-talk. Isolation
+    // must still hold, purely by the globally-unique per-turn UUIDv7.
+    const request = makeStreamRequest({ 'x-session-id': 'shared-session' });
+    const transportSession = makeStreamSession('conn-A');
+
+    // A different concurrent connection's turn on the SAME collapsed channelId.
+    const concurrentTurnId = createTurnId();
+    let observedRoutingTurnId: string | undefined;
+
+    const handleMessage = vi.fn(async (message: SubstrateMessage): Promise<AgentResponse> => {
+      observedRoutingTurnId = message.routing?.turnId;
+      // Model the REAL agent: executeTurn stamps `routing.turnId` (mmo9.8.3) on
+      // every delta; absent a supplied id it mints its own UUIDv7. Deriving the
+      // stamped id independently of any fabricated transport id is what makes
+      // this test red on the pre-fix code.
+      const stamped = message.routing?.turnId ?? createTurnId();
+
+      // Decoy 1 — a concurrent turn's delta on the SAME (shared) channelId: must
+      // NOT leak into this stream.
+      await eventBus.emit('agent.stream.delta', {
+        channelId: message.channelId,
+        text: 'A different caller entirely. ',
+        turnId: concurrentTurnId,
+      });
+      // Decoy 2 — a delta on a DIFFERENT channel: must NOT be spoken.
+      await eventBus.emit('agent.stream.delta', {
+        channelId: 'api:principal-1:some-other-session',
+        text: 'Wrong channel noise. ',
+        turnId: stamped,
+      });
+      // Real deltas for THIS turn.
+      await eventBus.emit('agent.stream.delta', {
+        channelId: message.channelId,
+        text: 'Hello there. ',
+        turnId: stamped,
+      });
+      await eventBus.emit('agent.stream.delta', {
+        channelId: message.channelId,
+        text: 'How can I help? ',
+        turnId: stamped,
+      });
+
+      return {
+        content: 'Hello there. How can I help?',
+        channelId: message.channelId,
+        metadata: { model: 'voice-model', inputTokens: 1, outputTokens: 1, durationMs: 1 },
+      } as AgentResponse;
+    });
+
+    const agentLoop = { handleMessage } as unknown as SubstrateAgent;
+
+    const stream = runAgentAssistantStream({
+      agentLoop,
+      eventBus,
+      request,
+      principal,
+      transportSession,
+      sessionId: 'shared-session',
+      transcript: 'hi',
+      signal: new AbortController().signal,
+      channelPrefix: 'api-voice',
+    });
+
+    const spoken = await drainSegments(stream);
+    const heard = spoken.join('');
+
+    // The transport threaded a REAL UUIDv7 to the agent — not the pre-fix
+    // fabricated `api-voice-...` id.
+    expect(observedRoutingTurnId).toBeDefined();
+    expect(isTurnId(observedRoutingTurnId as string)).toBe(true);
+    expect(observedRoutingTurnId).not.toMatch(/^api-voice-/);
+    // Real deltas are spoken (pre-fix: nothing was spoken).
+    expect(heard).toContain('Hello there.');
+    expect(heard).toContain('How can I help?');
+    // Cross-isolation: neither the concurrent same-channel turn nor the other
+    // channel's text leaks into this voice stream.
+    expect(heard).not.toContain('A different caller');
+    expect(heard).not.toContain('Wrong channel');
+    expect(handleMessage).toHaveBeenCalledTimes(1);
   });
 });

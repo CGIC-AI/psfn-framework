@@ -51,6 +51,8 @@ export class ReplyStreamReconciliationError extends Error {
 export function createVoiceReplyStream(options: VoiceReplyStreamOptions): VoiceReplyStream {
   const stripper = createStreamingHistoryStampStripper();
   const segmenter = createReplySegmenter(options.segmenter);
+  // Default preserves the mmo9.8.1 final-only contract (Law-18 tripwire on).
+  const reconcileFinalContent = options.reconcileFinalContent ?? true;
 
   let state: ReplyStreamState = 'idle';
   let turnId = '';
@@ -136,8 +138,12 @@ export function createVoiceReplyStream(options: VoiceReplyStreamOptions): VoiceR
       if (result.aborted) {
         return { kind: 'abort', reason: result.aborted.reason, segments: committed };
       }
-      // Fail-closed reconciliation tripwire (Law 18).
-      if (committedConcat !== finalContent) {
+      // Fail-closed reconciliation tripwire (Law 18). Relaxed only on the live
+      // voice-streaming path (reconcileFinalContent: false), where the spoken
+      // segments intentionally reflect the live stream rather than a late
+      // system-owned rewrite of `finalContent`. The defensive in-order-prefix
+      // invariant in commitSegments still holds unconditionally.
+      if (reconcileFinalContent && committedConcat !== finalContent) {
         throw new ReplyStreamReconciliationError(committedConcat, finalContent);
       }
       state = 'finalized';

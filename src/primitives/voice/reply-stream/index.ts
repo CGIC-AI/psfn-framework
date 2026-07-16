@@ -5,6 +5,13 @@ export { isStreamEligible } from './eligibility.js';
 export { createReplySegmenter, type ReplySegmenter } from './segmenter.js';
 export { evaluateSegmentGates } from './content-gate.js';
 export { createVoiceReplyStream, ReplyStreamReconciliationError } from './reply-stream.js';
+export {
+  createAgentReplyStreamBridge,
+  type AgentReplyDeltaEvent,
+  type AgentReplyDeltaSource,
+  type AgentReplyStreamBridge,
+  type AgentReplyStreamBridgeOptions,
+} from './agent-stream-bridge.js';
 export type {
   AbortResult,
   CommittedSegment,

@@ -171,6 +171,23 @@ export interface VoiceReplyStreamOptions {
    * sink through this module (Law 18).
    */
   readonly onProvisionalDelta?: (delta: string) => void;
+  /**
+   * When true (default) `finalize()` enforces the Law-18 reconciliation
+   * tripwire: the committed concatenation MUST equal the disposed
+   * `final.content` or it THROWS. This is correct for the final-only path,
+   * where the spoken text is exactly the accepted turn text.
+   *
+   * The live voice-streaming path (psfn-framework-mmo9.8.3) speaks the model's
+   * LIVE text stream as it is produced — segments are already audible before
+   * the turn's authoritative `AgentResponse.content` exists — so a late
+   * system-owned rewrite (no_reply swap, safety refusal-swap, trailing
+   * post-processing) legitimately diverges from what was already spoken. Set
+   * this to `false` on that path to relax the whole-reply reconciliation
+   * assertion. The per-segment content gates AND the defensive in-order-prefix
+   * invariant (committed text is always a verbatim prefix of the stripped
+   * generation) are UNCHANGED and still fail closed.
+   */
+  readonly reconcileFinalContent?: boolean;
 }
 
 export interface VoiceReplyStream {

@@ -262,6 +262,14 @@ async function runPostTurnBackgroundWork(
               crossBoundary,
               recentEntries,
               input.effects.assertOwned,
+              // mmo9.7.4: a welfare-escalated claim protects its model call from
+              // gate preemption so the aged memory job runs to completion instead
+              // of re-entering the preempt→defer loop. fxt1: pair the flag with
+              // the granting job id so the gateway can re-verify the escalation
+              // against the store; the id rides only when the claim is welfare.
+              job.welfareClaimed
+                ? { preemptionProtected: true, welfareGrantJobId: job.jobId }
+                : { preemptionProtected: false },
             );
           });
         } catch (error) {
@@ -311,6 +319,10 @@ async function runPostTurnBackgroundWork(
             templateVariables: canonicalTemplateVariables,
             assertEffectAllowed: assertOwned,
             recentEntries,
+            // mmo9.7.4: protect the welfare-escalated appraisal model call.
+            // fxt1: pair the flag with the granting job id for gateway re-verify.
+            preemptionProtected: job.welfareClaimed,
+            ...(job.welfareClaimed ? { welfareGrantJobId: job.jobId } : {}),
             ...(payload.icpCorrelation ? { icpCorrelation: payload.icpCorrelation } : {}),
           });
         });

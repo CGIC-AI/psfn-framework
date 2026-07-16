@@ -7,6 +7,7 @@ export default defineConfig({
     'agent-main': 'src/app/agent/main.ts',
     'operator-main': 'src/app/operator/main.ts',
     'cert-manager-main': 'src/app/cert-manager/main.ts',
+    'migrate-scheduler-owner': 'src/app/maintenance/migrate-scheduler-owner.ts',
   },
   format: ['esm'],
   target: 'node22',

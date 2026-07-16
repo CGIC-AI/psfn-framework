@@ -126,7 +126,11 @@ their companion ledger, and enabled skill sets remain individuated. All four
 files are enumerated in
 `PER_COMPANION_OWNER_FILES` (`src/system/config/settings-contract.ts`), which the
 owner-file config store and startup verification consult to root them at
-`companionDataDir`.
+`companionDataDir`. Helm releases created before this cutover migrate the two
+legacy system-root files byte-for-byte in the init container and record
+source-hash markers under `companionDataDir/.owner-migrations/`; divergent
+unmarked copies fail closed instead of choosing an owner silently. See the
+[Helm upgrade runbook](./operations.md#helm-upgrade-for-per-companion-scheduler-and-capability-owners).
 
 Separately, the Garden admin surface owns several per-companion state files that
 must resolve under `companionDataDir` to match the runtime and avoid fleet

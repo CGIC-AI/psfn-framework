@@ -67,6 +67,9 @@ export interface TurnSupportRuntimeOptions {
   backgroundWorkDisabled?: boolean;
   hashPromptText: (text: string) => string;
   resolveContextWindow: () => number;
+  /** Configured companion identity, used as the fallback companion scope on
+   *  ordinary human-ingress turn correlations (icpCorrelation still wins). */
+  companionId?: string;
 }
 
 export class TurnSupportRuntime {
@@ -76,6 +79,7 @@ export class TurnSupportRuntime {
   private readonly backgroundWorkDisabled: boolean;
   private readonly hashPromptText: (text: string) => string;
   private readonly resolveContextWindow: () => number;
+  private readonly companionId?: string;
   private introspectionTurnSensitivityDecisions: IntrospectionTurnSensitivityDecisions | null = null;
 
   private activeTurnCorrelation: CorrelationMetadata | null = null;
@@ -96,6 +100,9 @@ export class TurnSupportRuntime {
     }
     this.hashPromptText = options.hashPromptText;
     this.resolveContextWindow = options.resolveContextWindow;
+    this.companionId = typeof options.companionId === 'string' && options.companionId.trim().length > 0
+      ? options.companionId.trim()
+      : undefined;
   }
 
   setIntrospectionTurnSensitivityDecisions(
@@ -305,7 +312,7 @@ export class TurnSupportRuntime {
     return buildTurnCorrelationForTurn(message, callType, turnId, requestId, {
       sessionId,
       rootInitiationId,
-    });
+    }, this.companionId);
   }
 
   withCorrelationPurpose(

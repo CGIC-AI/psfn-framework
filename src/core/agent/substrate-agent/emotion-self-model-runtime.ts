@@ -105,6 +105,13 @@ export interface EmotionSelfModelRuntimeOptions {
    * trends accumulate in-memory only for the process lifetime.
    */
   participantTrendStore?: ParticipantTrendStorePort | null;
+  /**
+   * Companion identity, threaded to the internally-constructed EmotionAppraisal
+   * as its prompt-cache outer isolation scope (d8vq.5). Optional so tests and
+   * minimal runtimes keep working; when absent, appraisal offers no cache plan
+   * (fail-closed).
+   */
+  companionId?: string;
   getActiveConcernProvider: () => ActiveConcernContextProvider | null;
   getPendingFollowUpProvider: () => PendingFollowUpContextProvider | null;
   getContactStore: () => ContactStorePort | null;
@@ -194,6 +201,7 @@ export class EmotionSelfModelRuntime {
       ?? ((this.emotionState && this.emotionObserver)
         ? new EmotionAppraisal({
           llmProvider: options.llmProvider,
+          ...(options.companionId ? { companionId: options.companionId } : {}),
           ...(options.onEmotionAppraisalGateEvent
             ? { onGateEvent: options.onEmotionAppraisalGateEvent }
             : {}),
@@ -466,6 +474,10 @@ export class EmotionSelfModelRuntime {
     assertEffectAllowed?: () => Promise<void>;
     /** Undefined permits direct-call history lookup; an empty array is authoritative. */
     recentEntries?: readonly SessionEntry[];
+    /** mmo9.7.4: protect a welfare-escalated appraisal model call from gate preemption. */
+    preemptionProtected?: boolean;
+    /** fxt1: the granting welfare job id, re-verified gateway-side. */
+    welfareGrantJobId?: string;
   }): Promise<void> {
     if (!this.emotionAppraisal) return;
 
@@ -508,6 +520,8 @@ export class EmotionSelfModelRuntime {
       ...(params.assertEffectAllowed
         ? { assertEffectAllowed: params.assertEffectAllowed }
         : {}),
+      ...(params.preemptionProtected ? { preemptionProtected: true } : {}),
+      ...(params.welfareGrantJobId ? { welfareGrantJobId: params.welfareGrantJobId } : {}),
       ...(params.icpCorrelation ? { icpCorrelation: params.icpCorrelation } : {}),
     });
     if (result.appraised) {

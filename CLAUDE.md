@@ -2,7 +2,7 @@
 
 This file is the technical orientation note for coding assistants working on PSFN.
 
-For task tracking, use `bd` and follow [AGENTS.md](./AGENTS.md).
+**[AGENTS.md](./AGENTS.md) is the operating contract and the main source of truth for process**: issue tracking (`bd`), the delivery loop and adversarial-review policy, validation gates, configuration ownership rules, parallel-work safety, and session completion. When this file and AGENTS.md disagree on process, AGENTS.md wins. This file adds repo orientation and the Claude-specific orchestration wiring.
 
 ## What This Repo Is
 
@@ -19,92 +19,29 @@ The codebase currently supports:
 
 ## Source Of Truth
 
-When checking behavior, prefer this order:
+When checking behavior, prefer this order (canonical list maintained in AGENTS.md):
 
-1. Runtime entrypoints and composition
-   - `src/app/gateway/main.ts`
-   - `src/app/agent/main.ts`
-   - `src/app/operator/main.ts`
-   - `src/app/startup/composition/composition.ts`
-2. Config and persistence contracts
-   - `src/system/config/runtime-config-contracts.ts`
-   - `src/system/config/load-config.ts`
-   - `src/system/config/settings-contract-guard.ts`
-   - `src/system/config/startup-owner-files.ts`
-   - `src/persistence/layout.ts`
-   - `src/persistence/runtime-factory.ts` (Postgres-only runtime persistence)
-3. Product/runtime overview and deeper design docs
-   - `README.md`
-   - `docs/specifications.md`
-   - `docs/architecture.md`
-   - `docs/chat-turn-lifecycle.md`
-   - `docs/memory.md`
-   - `docs/operations.md`
-   - `docs/setup.md`
-4. Bootstrap template only
-   - `.env.example`
-
-`.env.example` is a starter template, not the canonical authority for mutable runtime settings.
+1. Runtime entrypoints and composition: `src/app/gateway/main.ts`, `src/app/agent/main.ts`, `src/app/operator/main.ts`, `src/app/startup/composition/composition.ts`
+2. Config and persistence contracts: `src/system/config/` (runtime-config-contracts, load-config, settings-contract-guard, startup-owner-files), `src/persistence/layout.ts`, `src/persistence/runtime-factory.ts` (Postgres-only runtime persistence)
+3. Product/design docs: `README.md`, `docs/specifications.md`, `docs/architecture.md`, `docs/chat-turn-lifecycle.md`, `docs/memory.md`, `docs/operations.md`, `docs/setup.md`
+4. `.env.example` is a bootstrap template only — never the authority for mutable runtime settings (those live in the JSON owner files; see AGENTS.md Configuration Rules).
 
 ## Runtime Entry Points
 
-```bash
-npm run split               # same launcher, explicit name
-npm run gateway             # gateway only
-npm run agent               # agent only
-npm run yolo                # split launcher with broader fs.read policy
-npm run agent:docker
-npm run agent:docker:continuous
-```
-
-Entry point roles:
+Entry point roles (launch commands and validation gates live in AGENTS.md):
 
 - `src/app/startup/index.ts`: disabled fail-closed entrypoint with dotenv
 - `src/app/gateway/main.ts`: host-side gateway holding secrets and external egress
 - `src/app/agent/main.ts`: isolated agent process, no dotenv import, gateway-backed providers
 
-## Configuration And Persistence Model
+## Persistence Model
 
-Configuration uses strict owner-file contracts.
+Two-root split topology, fail-closed:
 
-### Env scope
-
-Use `.env` for:
-
-- secrets
-- process wiring
-- host/port/socket configuration
-- layout/runtime mode selection
-- explicit bootstrap-only overrides
-
-Do not use `.env` as the source of truth for mutable runtime settings that now live in JSON owners.
-
-### JSON owner files
-
-Canonical mutable config owners live in the system-owned config domain:
-
-- `settings.json`
-- `models.json`
-- `providers.json`
-- `scheduler.json`
-- `capability-tier.json`
-- `channels.json`
-- `skills.json`
-- `trust-policy.json`
-- `intake-policy.json`
-- `charge-policy.json`
-- `backup.json`
-
-See `src/system/config/settings-contract-guard.ts` and `src/system/config/startup-owner-files.ts` for the owner map and schema metadata.
-
-### Two-root persistence
-
-PSFN uses split persistence topology.
-
-- `system-data`: system-owned config and operator/runtime state
+- `system-data`: system-owned config (the JSON owner files) and operator/runtime state
 - `companion-data`: character, prompts, sessions, notes, memories, and related companion artifacts
 
-`src/persistence/layout.ts` enforces fail-closed path rules. Production mode rejects overlapping mutable roots.
+`src/persistence/layout.ts` enforces path rules; production rejects overlapping mutable roots. Runtime stores are Postgres-only (`src/persistence/runtime-factory.ts`).
 
 ## Architecture Map
 
@@ -138,11 +75,6 @@ src/
 - mutable runtime settings are owned by canonical JSON files, guarded by owner-file validation, and exposed through Garden/admin APIs
 - key files: `src/system/config/settings-contract-guard.ts`, `src/system/config/startup-owner-files.ts`, `src/operator/garden/api-routes.ts`, `admin-ui/`
 
-### Persistence and layout
-
-- system-owned state lives under `system-data`; companion artifacts live under `companion-data`; cutover helpers and path guards enforce the topology
-- key files: `src/persistence/layout.ts`, `src/app/maintenance/migrate-persistence-layout.ts`, `src/persistence/runtime-factory.ts` (PostgreSQL-only runtime stores), `src/system/config/load-config.ts`
-
 ### Cognition and context
 
 - retrieval, extraction, appraisal, analysis workbench context, context manifests, observation masking, and context feedback all feed runtime decision-making
@@ -166,72 +98,22 @@ Implemented runtime surfaces:
 - Telegram text plus attachments, polling, and webhook modes
 - OpenAI-compatible API at `/v1/chat/completions`
 - API voice websocket runtime
-- Garden admin UI at `/garden`
+- Garden admin UI at `/garden` (primary admin surface; routing is `/login`, `/garden`, `/api/admin/*`)
 - Wyoming TCP server and service registry
-
-Notes:
-
-- `/garden` is the primary admin surface.
-- Admin request routing is `/login`, `/garden`, and `/api/admin/*`.
-- The admin API surface under `/api/admin/*` is extensive and actively used by the Garden UI.
 
 ## Tools And Agent Surfaces
 
-Do not rely on hardcoded tool counts in docs. The live set is wired across runtime composition.
-
-Current implemented tool families include:
-
-- memory and scratchpad tools
-- core-memory tools
-- contacts and trust tools
-- prompt and character-card tools
-- git repo tools
-- vault tools
-- skills tools
-- values tools
-- session and focus tools
-- heartbeat and scheduling tools
-- lifecycle tools
-- beads issue tools
-- shard and analysis workbench tools
-- promoted-tool management tools
+Do not rely on hardcoded tool counts in docs. The live set is wired across runtime composition (`src/app/startup/composition/composition.ts`, `src/app/agent/main.ts`, `src/persistence/runtime-factory.ts`).
 
 Tool surface split:
 
-- direct agent tools are registered as `core` or `extended` and participate in `load_tools`, promotion, and adaptive-tool telemetry
+- direct agent tools are registered as `core` or `extended` and participate in activation, promotion, and adaptive-tool telemetry (`src/core/agent/tool-surface/registry.ts`)
 - REPL-only helpers exist only inside `analysis_workbench` sandbox execution and are not direct tool-catalog entries
 - shared names can appear in both places, so docs and Garden should call out whether a tool is direct, REPL-only, or both
 
-Main wiring locations:
-
-- `src/app/startup/composition/composition.ts`
-- `src/app/agent/main.ts`
-- `src/persistence/runtime-factory.ts`
-
-## Validation Commands
-
-Use the narrowest command set that proves the change.
-
-Common commands:
-
-```bash
-npm run build
-npm test
-npm run lint
-npm run verify:repository-hygiene
-npm run verify:settings-contract
-npm run verify:backup-restore
-npm run verify:supply-chain
-npm run smoke:chat
-npm run e2e
-npm run e2e:voice
-```
-
-For runtime parity and plugin wiring, targeted tests are often better than full-suite runs.
-
 ## Current Development Posture
 
-Treat the repo as active implementation, not as a planning branch. Determine current work from `bd`, the entrypoints above, and the live code paths rather than roadmap language.
+Treat the repo as active implementation, not a planning branch. Determine current work from `bd`, the entrypoints above, and the live code paths rather than roadmap language.
 
 ## Working Rules
 
@@ -242,63 +124,30 @@ Treat the repo as active implementation, not as a planning branch. Determine cur
 - Verify new code is actually wired to a runtime entrypoint or registry path.
 - Keep docs, config ownership, and tests aligned in the same change.
 
+Everything else — beads workflow, validation gates, parallel-work rules, session completion ("landing the plane"), live deployment boundary — is in AGENTS.md. Follow it.
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
-## Beads Issue Tracker
+## Orchestration Loop (Claude-side wiring)
 
-This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
+AGENTS.md owns the delivery-loop policy, and [`docs/orchestration-process.md`](./docs/orchestration-process.md) is the full wave protocol (branch/worktree shape, lane tables, review format, fix epics, push policy, operational boundaries). This section is how Claude executes it.
 
-### Quick Reference
+You (Fable) are the orchestrator: plan, decompose, dispatch, synthesize, integrate. You do not implement at scale or bulk-read code yourself.
 
-```bash
-bd ready              # Find available work
-bd show <id>          # View issue details
-bd update <id> --claim  # Claim work
-bd close <id>         # Complete work
-```
+Role wiring:
 
-### Rules
+- **Primary implementer: Codex — `gpt-5.6-sol`**, effort scaled to bead difficulty (`high` for routine beads, `xhigh` only for genuinely hard work — effort is a large latency multiplier). Dispatch directly via the codex-companion runtime with a brief file in the worktree (`node <codex plugin>/scripts/codex-companion.mjs task ...` from the worktree cwd — NOT via the `/codex:rescue` wrapper, which is fire-and-forget and can't be monitored; see memory `codex-pi-dispatch-wiring` for the full mechanics: per-cwd job registry, read-only git sandbox → bundle import, offline npm ci). Treat as a peer engineer, not a reviewer. One bead/stream per dispatch, worktree-isolated per AGENTS.md, explicit file ownership. Always check `status` from the target worktree cwd before dispatching or re-dispatching.
+- **Reviewer A: Opus 4.8 @ high** — Agent tool with `model: opus`. Validation and adversarial review, plus all investigation/search fan-out.
+- **Reviewer B: Pi agent — GLM 5.2 @ xhigh** via the pi-companion runtime (`node <pi plugin>/scripts/pi-companion.mjs task --effort xhigh ...` from the worktree; read-only without `--write`, so pre-export the review diff to a file). Independent third harness; dispatch it exactly like Reviewer A, blind to Reviewer A's findings.
+- **Tiered review (operator decision 2026-07-14):** UBS scan of the change range on every bead as the baseline gate. P0/P1 → both reviewers, blind. P2 and below → one reviewer (alternate A/B), escalating to the second when the review or scan looks suspicious (multiple blockers, messy implementation, unexpected security/welfare/data touches). Blocker verification is unchanged at every tier.
+- **deep-reasoner** (`.claude/agents/deep-reasoner.md`, opus): reasoning-heavy phases — architecture, hard debugging, algorithm design.
+- High-stakes decisions: task Opus and Codex on the same problem in parallel, blind to each other's answers; synthesize the best of both. Keep your own context lean.
 
-- Use `bd` for ALL task tracking — do NOT use TodoWrite, TaskCreate, or markdown TODO lists
-- Run `bd prime` for detailed command reference and session close protocol
-- Use `bd remember` for persistent knowledge — do NOT use MEMORY.md files
+**SUBAGENT MODEL RULE (hard):** Explore/search/investigation subagents run on `model: opus` or `model: sonnet` — NEVER fable. Fable tokens are the most precious resource in this setup; burning them on reading/grepping code is forbidden. Every Agent call that fans out to read code MUST set the model explicitly (default inheritance would silently use fable). Fable is for orchestration and synthesis only.
 
-## Session Completion
+Loop, per bead/stream:
 
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
-
-**MANDATORY WORKFLOW:**
-
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-   Do NOT run `bd dolt push` — beads live on the LOCAL shared dolt server
-   (no dolt remote exists). Pushing recreates junk `__dolt_remote_info__` /
-   `refs/dolt/*` refs on GitHub that have to be manually deleted.
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
-
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
-<!-- END BEADS INTEGRATION -->
-## Orchestration workflow  
-
-You (Fable) are the orchestrator. Plan, decompose, 
-synthesize.  Reasoning-heavy phases → deep-reasoner 
-Mechanical work → fast-worker Codex (/codex:rescue 
---background) is a cracked engineer on par with 
-deep-reasoner, from a different perspective. Treat as a 
-peer, not a reviewer.  High-stakes decisions: task Opus + 
-Codex on the same problem in parallel, synthesize the best 
-of both, without showing either the other's answer. Keep 
-your own context lean.
+1. Decompose to beads; dispatch implementation to Codex in a worktree on a `work/<epic>-<bead>` branch cut from the feature branch (branch shape and push policy per `docs/orchestration-process.md`).
+2. On completion, run the tiered review gate: UBS scan always; reviewer lanes per the tier above, dispatched independently and adversarially — prompted to refute and produce concrete failure scenarios, not to approve; no reviewer sees another's review or the implementer's self-assessment. Run three worker lanes by default; a hard bead must not idle the other two.
+3. Synthesize findings: dedupe, then independently verify every claimed blocker against the Blocking Risk Standard (IMPORTANT ≙ P0/P1) before accepting it — reviewers systematically over-grade severity (confirmed pattern; a blocker claim needs a reproducible failure, not vibes).
+4. **One remediation pass** (Codex) scoped to verified blockers only, then one final check. Re-verify the fixed items only — no full re-review, no successive review/remediation cycles.
+5. If the remediation itself introduces a *new* verified blocker, one more targeted pass is allowed; otherwise stop and surface to the operator.
+6. Close and integrate. Leftover IMPORTANT defects → self-contained beads under the wave's `<wave> fixes` epic for a fresh agent; **nonblocking observations go in the handoff report only, never beads**. **Done beats perfect** — the fixes epic is the go-back pass after the work ships.

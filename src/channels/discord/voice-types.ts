@@ -105,6 +105,11 @@ export interface VoiceTurnRuntimeContext extends VoiceRuntimeBaseContext {
   securityLimits: VoiceSecurityLimits;
   activeTurn: ActiveVoiceTurn | null;
   capturing: boolean;
+  /**
+   * psfn-framework-mmo9.7.5: last spoken assistant utterance, replayed locally
+   * on a deterministic "repeat" control intent without a model turn.
+   */
+  lastAssistantUtterance: string | null;
   preferredTtsProviderId: RuntimeVoiceTtsProvider;
   /** htm9.9: screens transcripts as 'audio_transcript' intake before prompt use. */
   intakeScreening: IntakeScreeningService | null;

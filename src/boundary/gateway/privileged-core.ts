@@ -19,6 +19,7 @@ import {
   type GatewayIntakeScreeningComposition,
 } from './intake/compose-screening.js';
 import { GatewayServer } from './server.js';
+import type { WelfareGrantVerifier } from './welfare-grant-verifier.js';
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { resolveCogSecEventsPath } from '../../persistence/layout.js';
 import type { StartupConfigHydrationResult } from '../../app/startup/support/bootstrap-helpers.js';
@@ -63,6 +64,12 @@ export interface GatewayPrivilegedCore {
     /** Shared durable authority for the ICP autonomy broker. */
     icpAutonomyStore?: IcpSharedAutonomyStorePort;
     icpInitiationPolicyAuthority?: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve' | 'authorizeHandoff'>;
+    /**
+     * psfn-framework-fxt1: gateway-side welfare grant verifier. Injected by
+     * gateway main so the LLM RPC handlers can re-verify caller-asserted
+     * `preemptionProtected` against the background-work store.
+     */
+    welfareGrantVerifier?: WelfareGrantVerifier;
   }): GatewayServer;
 }
 
@@ -166,11 +173,13 @@ export async function buildGatewayPrivilegedCore(
       companionChannels,
       icpAutonomyStore,
       icpInitiationPolicyAuthority,
+      welfareGrantVerifier,
     }) => new GatewayServer({
       ...(discordAccountDocks ? { discordAccountDocks } : {}),
       ...(companionChannels ? { companionChannels } : {}),
       ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
       ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),
+      ...(welfareGrantVerifier ? { welfareGrantVerifier } : {}),
       socketPath: input.bootstrap.socketPath,
       companionId: resolveCoreCompanionIdFromConfig(input.config),
       gatewayRpcEndpoint: input.bootstrap.gatewayRpcEndpoint,

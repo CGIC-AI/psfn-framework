@@ -1335,6 +1335,51 @@ export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
     ON agent_background_work_jobs (completed_at_ms ASC, job_id ASC)
     WHERE state IN ('succeeded', 'failed', 'stale_discarded');
   `,
+  // Anti-starvation welfare aging (psfn-framework-mmo9.7.4). A background job that
+  // is repeatedly deferred by sustained foreground turns accrues durable defer
+  // pressure so it can eventually be admitted into a bounded welfare-reserve slot
+  // instead of starving forever. `defer_count`/`first_deferred_at_ms` are the
+  // aging boost columns the claimNext eligibility predicate reads (an in-memory
+  // boost alone cannot survive the process-restart / multi-replica boundary);
+  // `welfare_claimed` marks a running job admitted via the welfare bypass so the
+  // reserve cap can be counted and the foreground effect-fence can grant it a
+  // protected completion. All three are additive with fail-closed defaults, so
+  // pre-mmo9.7.4 rows and every non-welfare claim path stay byte-identical.
+  `ALTER TABLE agent_background_work_jobs
+    ADD COLUMN IF NOT EXISTS defer_count INTEGER NOT NULL DEFAULT 0;`,
+  `ALTER TABLE agent_background_work_jobs
+    ADD COLUMN IF NOT EXISTS first_deferred_at_ms BIGINT;`,
+  `ALTER TABLE agent_background_work_jobs
+    ADD COLUMN IF NOT EXISTS welfare_claimed BOOLEAN NOT NULL DEFAULT false;`,
+  `ALTER TABLE agent_background_work_jobs
+    DROP CONSTRAINT IF EXISTS agent_background_work_jobs_defer_count_check;`,
+  `ALTER TABLE agent_background_work_jobs
+    ADD CONSTRAINT agent_background_work_jobs_defer_count_check CHECK (defer_count >= 0);`,
+  `ALTER TABLE agent_background_work_jobs
+    DROP CONSTRAINT IF EXISTS agent_background_work_jobs_first_deferred_at_ms_check;`,
+  `ALTER TABLE agent_background_work_jobs
+    ADD CONSTRAINT agent_background_work_jobs_first_deferred_at_ms_check
+      CHECK (first_deferred_at_ms IS NULL OR first_deferred_at_ms >= 0);`,
+  // A welfare_claimed marker is only meaningful while the row is running; a
+  // non-running row must never carry it, matching the lease-field invariant.
+  `ALTER TABLE agent_background_work_jobs
+    DROP CONSTRAINT IF EXISTS agent_background_work_jobs_welfare_claimed_check;`,
+  `ALTER TABLE agent_background_work_jobs
+    ADD CONSTRAINT agent_background_work_jobs_welfare_claimed_check
+      CHECK (state = 'running' OR welfare_claimed = false);`,
+  // Bounded welfare-eligibility scan: find the oldest runnable jobs carrying
+  // defer pressure without a sequential scan of the whole table.
+  `
+  CREATE INDEX IF NOT EXISTS idx_agent_background_work_welfare_aging
+    ON agent_background_work_jobs (defer_count DESC, first_deferred_at_ms ASC, created_at_ms ASC)
+    WHERE state IN ('queued', 'deferred', 'retry_wait');
+  `,
+  // Count concurrently-running welfare-admitted jobs against the reserve cap.
+  `
+  CREATE INDEX IF NOT EXISTS idx_agent_background_work_welfare_running
+    ON agent_background_work_jobs (welfare_claimed)
+    WHERE state = 'running' AND welfare_claimed = true;
+  `,
 ];
 
 export const POSTGRES_BACKGROUND_WORK_MIGRATION_ADVISORY_LOCK = [
@@ -1804,6 +1849,33 @@ export const POSTGRES_MODEL_USAGE_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_slot_time ON model_usage_events(companion_id, slot_key, requested_provider, requested_model, recorded_at_ms DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_expensive ON model_usage_events(companion_id, (COALESCE(effective_cost_usd, 0)) DESC, recorded_at_ms DESC, id DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_model_usage_events_metadata_gin ON model_usage_events USING GIN (metadata_json);`,
+  // mmo9.7.3: per-companion x lane x model spend attribution. `runtime_lane_class`
+  // records the SINGLE gate-resolved RuntimeLaneClass (worker-lanes.ts
+  // RUNTIME_LANE_CLASSES). Additive to attribution schema v1; existing rows default
+  // to 'unknown'. Keep the CHECK value list in sync with MODEL_USAGE_RUNTIME_LANE_CLASSES.
+  `ALTER TABLE model_usage_events ADD COLUMN IF NOT EXISTS runtime_lane_class TEXT NOT NULL DEFAULT 'unknown';`,
+  `
+  DO $$
+  BEGIN
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'model_usage_events_runtime_lane_class_check'
+        AND conrelid = 'model_usage_events'::regclass
+    ) THEN
+      ALTER TABLE model_usage_events
+        ADD CONSTRAINT model_usage_events_runtime_lane_class_check
+        CHECK (runtime_lane_class IN (
+          'foreground_chat',
+          'post_turn_appraisal',
+          'background_continuation',
+          'maintenance_reflection',
+          'unknown'
+        )) NOT VALID;
+    END IF;
+  END $$;
+  `,
+  `ALTER TABLE model_usage_events VALIDATE CONSTRAINT model_usage_events_runtime_lane_class_check;`,
+  `CREATE INDEX IF NOT EXISTS idx_model_usage_events_runtime_lane_class_time ON model_usage_events(companion_id, runtime_lane_class, model, recorded_at_ms DESC);`,
   `
   CREATE TABLE IF NOT EXISTS icp_conversation_cost_reservations (
     logical_call_id TEXT NOT NULL,

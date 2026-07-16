@@ -1535,6 +1535,182 @@ describe('SessionManager', () => {
     expect(store.count(futureOwner)).toBe(0);
   });
 
+  it('keeps captured API prompt and metadata reads on their admitted owner after an active-context switch', async () => {
+    const mgr = new SessionManager(store, makeConfig());
+    const physicalSource = 'api:physical-source';
+    const capturedOwner = 'api:captured-owner';
+    const futureOwner = 'api:future-owner';
+    mgr.recordUserMessage(capturedOwner, 'captured prompt history', 'user-a', 'User');
+    const capturedEnvelopeEntryId = mgr.recordAssistantMessage(
+      capturedOwner,
+      'captured envelope history',
+      undefined,
+      undefined,
+      undefined,
+      {
+        roleEnvelopePreview: {
+          schemaVersion: 1,
+          envelopeId: 'env_captured_owner',
+          internalRole: 'concern_candidate',
+          summary: 'Captured follow-up.',
+          sourceStage: 'post_turn_appraisal',
+          promotionTarget: 'turn_record_summary',
+          promotedRef: 'turn_record_summary:env_captured_owner',
+        },
+      },
+    );
+    mgr.recordUserMessage(futureOwner, 'future prompt history', 'user-b', 'User');
+    mgr.recordAssistantMessage(futureOwner, 'future envelope history');
+    mgr.setActiveContextSession(futureOwner);
+
+    await mgr.withCapturedSessionOwner(capturedOwner, async () => {
+      const snapshot = await mgr.captureTurnSessionContext({ channelId: physicalSource });
+      expect(snapshot.channelId).toBe(capturedOwner);
+      expect(snapshot.recentEntries.map(entry => entry.content)).toEqual([
+        'captured prompt history',
+        'captured envelope history',
+      ]);
+
+      const context = await mgr.buildContext(
+        physicalSource,
+        'System',
+        '',
+        undefined,
+        undefined,
+        undefined,
+        [],
+        snapshot,
+      );
+      expect(context.messages.some(message => message.content.includes('captured prompt history'))).toBe(true);
+      expect(context.messages.some(message => message.content.includes('future prompt history'))).toBe(false);
+      expect(mgr.getRecentMessagesAtOrBefore(
+        physicalSource,
+        capturedEnvelopeEntryId!,
+        10,
+      ).map(entry => entry.content)).toEqual([
+        'captured prompt history',
+        'captured envelope history',
+      ]);
+      expect(mgr.getRoleEnvelopeRefsForEntries(
+        physicalSource,
+        [capturedEnvelopeEntryId!],
+      )).toEqual(['turn_record_summary:env_captured_owner']);
+    }, physicalSource);
+    await expect(mgr.withCapturedSessionOwner(
+      capturedOwner,
+      async () => await mgr.captureTurnSessionContext({ channelId: futureOwner }),
+    )).rejects.toThrow('Captured session owner mismatch');
+  });
+
+  it('keeps stable background reads and compaction on the captured API owner', async () => {
+    const fencedStore = new SessionStore(dir, {
+      turnRecordEligibilityFence: createSerialTurnRecordEligibilityFence(),
+    });
+    const mgr = new SessionManager(fencedStore, makeConfig({ compactionThresholdPct: 1 }));
+    const capturedOwner = 'api:captured-background-owner';
+    const futureOwner = 'api:future-background-owner';
+    const sourceRecord = makeBackgroundHandoffTurnRecord(capturedOwner, Date.now());
+    for (let index = 0; index < 3; index += 1) {
+      const turnContext = { turnId: sourceRecord.turnId, requestId: sourceRecord.requestId };
+      mgr.recordUserMessage(
+        capturedOwner,
+        `captured user ${index} ${'A'.repeat(200)}`,
+        'user-a',
+        'User',
+        undefined,
+        undefined,
+        turnContext,
+      );
+      mgr.recordAssistantMessage(
+        capturedOwner,
+        `captured assistant ${index} ${'B'.repeat(200)}`,
+        undefined,
+        undefined,
+        undefined,
+        turnContext,
+      );
+      mgr.recordUserMessage(futureOwner, `future user ${index} ${'C'.repeat(200)}`, 'user-b', 'User');
+      mgr.recordAssistantMessage(futureOwner, `future assistant ${index} ${'D'.repeat(200)}`);
+    }
+    const maxCapturedEntryId = fencedStore.getLastEntry(capturedOwner)!.id;
+    await mgr.recordTurn(sourceRecord);
+    mgr.setActiveContextSession(futureOwner);
+    const llmProvider = makeMockLLM();
+
+    await mgr.withStableRecordedTurnEligibilitySnapshot(
+      capturedOwner,
+      [sourceRecord.turnId],
+      () => mgr.getRecentMessagesAtOrBefore(capturedOwner, maxCapturedEntryId, 10),
+      async (entries) => {
+        expect(entries.every(entry => entry.channelId === capturedOwner)).toBe(true);
+        await mgr.scheduleAutoCompactionBetweenTurns({
+          channelId: capturedOwner,
+          systemPrompt: '',
+          memoriesBlock: '',
+          llmProvider,
+          capturedRecentEntries: entries,
+          throwOnFailure: true,
+        });
+      },
+    );
+
+    expect(llmProvider.complete).toHaveBeenCalledTimes(1);
+    expect(fencedStore.getCompactionSummaries(capturedOwner)).toHaveLength(1);
+    expect(fencedStore.getCompactionSummaries(futureOwner)).toHaveLength(0);
+  });
+
+  it('keeps a captured API owner on its pre-reset prompt history', async () => {
+    const mgr = new SessionManager(store, makeConfig({ dataDir: dir }));
+    const sourceChannelId = 'api:routed-source';
+    const admittedRoute = mgr.resetSourceChannelSession({
+      sourceChannelId,
+      actor: 'test',
+      reason: 'establish admitted owner',
+      mode: 'fresh_split',
+    });
+    mgr.recordUserMessage(sourceChannelId, 'admitted route history', 'user-a', 'User');
+
+    const futureRoute = mgr.resetSourceChannelSession({
+      sourceChannelId,
+      actor: 'test',
+      reason: 'move future turns after admission',
+      mode: 'fresh_split',
+    });
+    mgr.recordUserMessage(sourceChannelId, 'future route history', 'user-b', 'User');
+
+    const snapshot = await mgr.withCapturedSessionOwner(
+      admittedRoute.newLogicalSessionId,
+      async () => await mgr.captureTurnSessionContext({ channelId: sourceChannelId }),
+      sourceChannelId,
+    );
+
+    expect(snapshot.channelId).toBe(admittedRoute.newLogicalSessionId);
+    expect(snapshot.recentEntries.map(entry => entry.content)).toEqual(['admitted route history']);
+    expect(snapshot.recentEntries.some(entry => entry.content === 'future route history')).toBe(false);
+    expect(futureRoute.newLogicalSessionId).not.toBe(admittedRoute.newLogicalSessionId);
+  });
+
+  it.each(['api', 'terminal'] as const)(
+    'resolves a physical %s ingress owner once before an awaited context capture',
+    async (channelKind) => {
+    const mgr = new SessionManager(store, makeConfig());
+    const admittedOwner = `${channelKind}:admitted-owner`;
+    const futureOwner = `${channelKind}:future-owner`;
+    mgr.recordUserMessage(admittedOwner, 'admitted owner history', 'user-a', 'User');
+    mgr.recordUserMessage(futureOwner, 'future owner history', 'user-b', 'User');
+    mgr.setActiveContextSession(admittedOwner);
+    vi.spyOn(store, 'fetchSessionTailWindow').mockImplementationOnce(async () => {
+      mgr.setActiveContextSession(futureOwner);
+      return null;
+    });
+
+    const context = await mgr.buildContext(`${channelKind}:physical-ingress`, 'System', '');
+
+    expect(context.messages.some(message => message.content.includes('admitted owner history'))).toBe(true);
+    expect(context.messages.some(message => message.content.includes('future owner history'))).toBe(false);
+    },
+  );
+
   it('routes a Discord source channel to a fresh logical session without pulling pre-reset chat context', async () => {
     const config = makeConfig({ dataDir: dir, sessionMessageLimit: 20 });
     const mgr = new SessionManager(store, config);

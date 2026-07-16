@@ -13,6 +13,10 @@ import {
   type ChargePolicyRuntimeLane,
   type ChargePolicySurface,
 } from '../contracts/charge-policy.js';
+import {
+  RUNTIME_LANE_CLASSES,
+  type RuntimeLaneClass,
+} from '../../core/agent/worker-lanes.js';
 
 export const MODEL_USAGE_UNKNOWN_DIMENSION = 'unknown' as const;
 
@@ -34,6 +38,21 @@ export const MODEL_USAGE_CHARGE_SURFACES = [
   MODEL_USAGE_UNKNOWN_DIMENSION,
 ] as const;
 
+/**
+ * mmo9.7.3: per-lane spend attribution. `runtimeLaneClass` records the SINGLE
+ * gate-resolved `RuntimeLaneClass` (`resolveRuntimeLaneClassForModelCall`) the
+ * boundary already produced for a call — never a second lane resolver. It is
+ * strictly richer than the charge economy's `chargeLane` (the runtime class maps
+ * onto a charge lane), and is always available even for autonomous calls that
+ * never touch the run-charge snapshot, so per-companion x lane x model spend has
+ * no silent gaps.
+ */
+export type ModelUsageRuntimeLaneClass = RuntimeLaneClass | typeof MODEL_USAGE_UNKNOWN_DIMENSION;
+export const MODEL_USAGE_RUNTIME_LANE_CLASSES = [
+  ...Object.values(RUNTIME_LANE_CLASSES),
+  MODEL_USAGE_UNKNOWN_DIMENSION,
+] as readonly ModelUsageRuntimeLaneClass[];
+
 export const MODEL_USAGE_GROUP_DIMENSIONS = [
   'companionId',
   'sessionId',
@@ -52,6 +71,7 @@ export const MODEL_USAGE_GROUP_DIMENSIONS = [
   'requestedProvider',
   'requestedModel',
   'toolName',
+  'runtimeLaneClass',
   'chargeLane',
   'chargeSurface',
   'chargeEventId',
@@ -88,6 +108,7 @@ export interface ModelUsageAttributionInput {
   requestId?: string;
   toolName?: string;
   toolCallId?: string;
+  runtimeLaneClass?: RuntimeLaneClass;
   chargeLane?: ChargePolicyRuntimeLane;
   chargeSurface?: ChargePolicySurface;
   chargeEventId?: string;
@@ -117,6 +138,7 @@ export interface ModelUsageAttribution {
   requestId: string;
   toolName: string;
   toolCallId: string;
+  runtimeLaneClass: ModelUsageRuntimeLaneClass;
   chargeLane: ModelUsageChargeLane;
   chargeSurface: ModelUsageChargeSurface;
   chargeEventId: string;
@@ -133,6 +155,7 @@ export interface ModelUsageAttribution {
 
 const CHANNEL_TYPE_SET: ReadonlySet<string> = new Set(CHANNEL_TYPES);
 const CHARGE_LANE_SET: ReadonlySet<string> = new Set(CHARGE_POLICY_RUNTIME_LANE_VALUES);
+const RUNTIME_LANE_CLASS_SET: ReadonlySet<string> = new Set(Object.values(RUNTIME_LANE_CLASSES));
 const CHARGE_SURFACE_SET: ReadonlySet<string> = new Set(CHARGE_POLICY_SURFACE_VALUES);
 const MAX_DIMENSION_LENGTH = 512;
 const UNSAFE_DIMENSION_CHARACTERS = /[\u0000-\u001F\u007F-\u009F]/u;
@@ -239,6 +262,11 @@ export function normalizeModelUsageAttribution(
     requestId: normalizeDimension(input.requestId, 'attribution.requestId'),
     toolName: normalizeDimension(input.toolName, 'attribution.toolName'),
     toolCallId: normalizeDimension(input.toolCallId, 'attribution.toolCallId'),
+    runtimeLaneClass: normalizeEnum<RuntimeLaneClass>(
+      input.runtimeLaneClass,
+      'attribution.runtimeLaneClass',
+      RUNTIME_LANE_CLASS_SET,
+    ),
     chargeLane: normalizeEnum<ChargePolicyRuntimeLane>(
       input.chargeLane,
       'attribution.chargeLane',

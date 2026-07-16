@@ -1,11 +1,13 @@
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -38,6 +40,79 @@ afterEach(() => {
 });
 
 describe('migrateLegacySchedulerOwner', () => {
+  it('CLI requires an explicit companion owner root even when layout env is configured', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'scheduler-owner-cli-'));
+    const dataDir = join(tempDir, 'data');
+    const systemDataDir = join(tempDir, 'system-data');
+    const companionDataDir = join(tempDir, 'companion-data');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    const legacyBytes = readFileSync(fixturePath, 'utf8');
+    writeFileSync(join(dataDir, SCHEDULER_FILE_NAME), legacyBytes, 'utf8');
+    writeFileSync(join(systemDataDir, SCHEDULER_FILE_NAME), legacyBytes, 'utf8');
+    writeFileSync(join(companionDataDir, SCHEDULER_FILE_NAME), legacyBytes, 'utf8');
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+
+    const result = spawnSync(
+      resolve(repoRoot, 'node_modules/.bin/tsx'),
+      [resolve(repoRoot, 'src/app/maintenance/migrate-scheduler-owner.ts'), '--apply'],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PSFN_SKIP_DOTENV: 'true',
+          DATA_DIR: dataDir,
+          SYSTEM_DATA_DIR: systemDataDir,
+          COMPANION_DATA_DIR: companionDataDir,
+        },
+      },
+    );
+
+    expect(result.status, `${result.stderr}${result.stdout}`).toBe(1);
+    expect(`${result.stderr}${result.stdout}`).toContain('--data-dir is required');
+    expect(readFileSync(join(dataDir, SCHEDULER_FILE_NAME), 'utf8')).toBe(legacyBytes);
+    expect(readFileSync(join(systemDataDir, SCHEDULER_FILE_NAME), 'utf8')).toBe(legacyBytes);
+    expect(readFileSync(join(companionDataDir, SCHEDULER_FILE_NAME), 'utf8')).toBe(legacyBytes);
+  });
+
+  it('CLI migrates only the explicitly selected companion owner root', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'scheduler-owner-cli-explicit-'));
+    const systemDataDir = join(tempDir, 'system-data');
+    const companionDataDir = join(tempDir, 'companion-data');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    const legacyBytes = readFileSync(fixturePath, 'utf8');
+    writeFileSync(join(systemDataDir, SCHEDULER_FILE_NAME), legacyBytes, 'utf8');
+    writeFileSync(join(companionDataDir, SCHEDULER_FILE_NAME), legacyBytes, 'utf8');
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+
+    const result = spawnSync(
+      resolve(repoRoot, 'node_modules/.bin/tsx'),
+      [
+        resolve(repoRoot, 'src/app/maintenance/migrate-scheduler-owner.ts'),
+        '--apply',
+        '--data-dir',
+        companionDataDir,
+      ],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PSFN_SKIP_DOTENV: 'true',
+          SYSTEM_DATA_DIR: systemDataDir,
+          COMPANION_DATA_DIR: companionDataDir,
+        },
+      },
+    );
+
+    expect(result.status, `${result.stderr}${result.stdout}`).toBe(0);
+    expect(readFileSync(join(systemDataDir, SCHEDULER_FILE_NAME), 'utf8')).toBe(legacyBytes);
+    expect(loadSchedulerConfig(companionDataDir).backgroundMaintenance.intervalMs).toBe(3_600_000);
+  });
+
   it('dry-runs the deterministic pre-bundled owner without touching it', () => {
     const { dataDir, filePath } = prepareOwner();
     const before = readFileSync(filePath, 'utf8');

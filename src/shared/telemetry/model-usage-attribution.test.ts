@@ -21,6 +21,7 @@ describe('normalizeModelUsageAttribution', () => {
       requestId: 'request-1',
       toolName: 'memory',
       toolCallId: 'tool-call-1',
+      runtimeLaneClass: 'background_continuation',
       chargeLane: 'interactive',
       chargeSurface: 'externalModelConsult',
       chargeEventId: 'charge-event-1',
@@ -50,6 +51,7 @@ describe('normalizeModelUsageAttribution', () => {
       requestId: 'request-1',
       toolName: 'memory',
       toolCallId: 'tool-call-1',
+      runtimeLaneClass: 'background_continuation',
       chargeLane: 'interactive',
       chargeSurface: 'externalModelConsult',
       chargeEventId: 'charge-event-1',
@@ -79,9 +81,26 @@ describe('normalizeModelUsageAttribution', () => {
     expect(attribution.companionId).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
     expect(attribution.originType).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
     expect(attribution.toolName).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
+    expect(attribution.runtimeLaneClass).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
     expect(attribution.chargeLane).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
     expect(attribution.chargeEventId).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
     expect(attribution.conversationId).toBe(MODEL_USAGE_UNKNOWN_DIMENSION);
+  });
+
+  it('keeps companion, gate-resolved lane, and origin stage independently attributable', () => {
+    const attribution = normalizeModelUsageAttribution({
+      companionId: 'companion-alpha',
+      channelId: 'internal:heartbeat',
+      channelType: 'api',
+      callType: 'scheduled',
+      purpose: 'memory',
+      originStage: 'memory.sleeptime.run',
+      runtimeLaneClass: 'maintenance_reflection',
+    });
+
+    expect(attribution.companionId).toBe('companion-alpha');
+    expect(attribution.runtimeLaneClass).toBe('maintenance_reflection');
+    expect(attribution.originStage).toBe('memory.sleeptime.run');
   });
 
   it.each([
@@ -106,6 +125,7 @@ describe('normalizeModelUsageAttribution', () => {
     [{ callType: 'invalid' }, 'attribution.callType has unsupported value'],
     [{ channelType: 'irc' }, 'attribution.channelType has unsupported value'],
     [{ chargeLane: 'free_money' }, 'attribution.chargeLane has unsupported value'],
+    [{ runtimeLaneClass: 'daydreaming' }, 'attribution.runtimeLaneClass has unsupported value'],
     [{ companionId: '' }, 'attribution.companionId must be non-empty'],
     [{ channelId: 'discord:room\nforged' }, 'attribution.channelId must not contain control'],
     [{ workloadId: 'x'.repeat(513) }, 'attribution.workloadId must be at most 512'],

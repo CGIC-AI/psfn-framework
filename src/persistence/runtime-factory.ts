@@ -46,6 +46,7 @@ import { createPostgresPool, ensurePostgresSchemaExists } from './postgres.js';
 import { IntrospectionLandmarkPostgresStore } from '../faculties/introspection/postgres-store.js';
 import { PostgresBackgroundWorkStore } from './postgres/background-work-store.js';
 import type { BackgroundWorkStorePort } from '../core/agent/background-work/store-port.js';
+import type { ContactLifecycleGatewayPort } from '../core/contacts/contact-lifecycle-gateway-port.js';
 
 export interface AgentPersistenceRuntime {
   backend: PersistenceBackend;
@@ -86,6 +87,7 @@ export interface CreateAgentPersistenceRuntimeOptions {
   pathSnapshot: RuntimePathSnapshot;
   embeddingDims: number;
   primaryUserId?: string;
+  contactLifecycleGateway?: ContactLifecycleGatewayPort;
 }
 
 export async function createAgentPersistenceRuntime(
@@ -158,6 +160,9 @@ export async function createAgentPersistenceRuntime(
     contactStore: await createPostgresContactStore(databaseUrl, options.primaryUserId, {
       exportDir: resolveContactsDir(options.pathSnapshot.companionDataDir),
       schema,
+      ...(options.contactLifecycleGateway
+        ? { contactLifecycleGateway: options.contactLifecycleGateway }
+        : {}),
     }),
     hubIdentityEnrollmentStore: await createPostgresHubIdentityEnrollmentStore(databaseUrl, { schema }),
     intentionRuntime,

@@ -142,9 +142,12 @@ async function loadLockedContacts(
         : 'contact_not_found',
     };
   }
-  if (result.rows.some(row => (
-    row.contact_lifecycle_state !== 'live' || row.contact_restore_state !== 'live'
-  ))) {
+  const valid = request.action === 'contact.reapprove'
+    ? result.rows.every(row => row.contact_lifecycle_state === 'quarantined'
+      && row.contact_restore_state === 'quarantined')
+    : result.rows.every(row => row.contact_lifecycle_state === 'live'
+      && row.contact_restore_state === 'live');
+  if (!valid) {
     return { holdReason: 'contact_not_live' };
   }
   return { rows: result.rows };
@@ -154,16 +157,21 @@ async function validateOwnership(
   client: PoolClient,
   ownership: OwnershipAuthorityRow,
   contacts: Map<string, ContactAuthorityRow>,
+  allowQuarantined = false,
 ): Promise<{
   snapshot?: ContactLifecycleLockedSnapshot['verifiedOwnerships'][number];
   holdReason?: ContactLifecycleManualHoldReason;
 }> {
-  if (ownership.restore_state !== 'live' || ownership.ownership_state === 'quarantined') {
-    return { holdReason: 'ownership_quarantined' };
+  const exactLive = ownership.restore_state === 'live'
+    && ownership.ownership_state === 'verified';
+  const exactQuarantine = ownership.restore_state === 'quarantined'
+    && ownership.ownership_state === 'quarantined';
+  if (!exactLive && !(allowQuarantined && exactQuarantine)) {
+    return {
+      holdReason: exactQuarantine ? 'ownership_quarantined' : 'ownership_unverified',
+    };
   }
-  if (ownership.ownership_state !== 'verified'
-    || !ownership.verification_id
-    || !ownership.verification_digest) {
+  if (!ownership.verification_id || !ownership.verification_digest) {
     return { holdReason: 'ownership_unverified' };
   }
   const verification = await client.query<VerificationAuthorityRow>(`
@@ -201,8 +209,8 @@ async function validateOwnership(
         contact.contact_authority_version,
         'contact_authority_version',
       ),
-      ownershipState: 'verified',
-      restoreState: 'live',
+      ownershipState: exactQuarantine ? 'quarantined' : 'verified',
+      restoreState: exactQuarantine ? 'quarantined' : 'live',
     },
   };
 }
@@ -229,7 +237,30 @@ export async function lockExactContactLifecycleSnapshot(
     if (ownership.contact_id !== request.contactId) {
       return { holdReason: 'ownership_reassigned', targets };
     }
-    ownershipRows = [ownership];
+    if (request.action === 'contact.verify' && ownership.ownership_state === 'unverified') {
+      if (ownership.restore_state !== 'live') {
+        return { holdReason: 'ownership_quarantined', targets };
+      }
+      const verification = await client.query<VerificationAuthorityRow>(`
+        SELECT id, contact_id, source_channel, source_user_id,
+               target_channel, target_user_id, status, verified_at
+        FROM contact_identity_link_verifications
+        WHERE id = $1
+        FOR SHARE
+      `, [request.intentId]);
+      const proof = verification.rows.at(0);
+      if (!proof
+        || proof.contact_id !== request.contactId
+        || proof.target_channel !== 'discord'
+        || proof.target_user_id !== request.providerSubjectId
+        || proof.status !== 'pending'
+        || proof.verified_at !== null) {
+        return { holdReason: 'stale_ownership', targets };
+      }
+      ownershipRows = [];
+    } else {
+      ownershipRows = [ownership];
+    }
   } else {
     const result = await client.query<OwnershipAuthorityRow>(`
       SELECT contact_id, channel, channel_user_id, identity_version,
@@ -244,7 +275,12 @@ export async function lockExactContactLifecycleSnapshot(
   }
   const verifiedOwnerships: ContactLifecycleLockedSnapshot['verifiedOwnerships'] = [];
   for (const ownership of ownershipRows) {
-    const validated = await validateOwnership(client, ownership, contacts);
+    const validated = await validateOwnership(
+      client,
+      ownership,
+      contacts,
+      request.action === 'contact.reapprove',
+    );
     if (!validated.snapshot) return { holdReason: validated.holdReason, targets };
     verifiedOwnerships.push(validated.snapshot);
   }
@@ -257,8 +293,8 @@ export async function lockExactContactLifecycleSnapshot(
         row.contact_authority_version,
         'contact_authority_version',
       ),
-      lifecycleState: 'live',
-      restoreState: 'live',
+      lifecycleState: row.contact_lifecycle_state,
+      restoreState: row.contact_restore_state,
     })),
     verifiedOwnerships,
   });

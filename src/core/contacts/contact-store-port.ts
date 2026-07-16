@@ -85,6 +85,8 @@ export interface ContactStorePort {
   ): Awaitable<ContactLifecyclePrepareOutcome>;
   /** Startup integrity check; corrupt authority state fails store creation. */
   assertContactLifecycleLedgerHealthy(): Awaitable<void>;
+  /** Resume a bounded batch of durable contact-authority mutations at startup. */
+  recoverContactLifecycleMutations(): Awaitable<ContactLifecyclePrepareOutcome[]>;
   upsert(
     partial: Partial<Contact> & { displayName: string },
     options?: ContactUpsertMutationOptions,
@@ -222,4 +224,6 @@ export interface ContactStorePort {
   getCanonicalContactKey(channel: ContactChannel, channelUserId: string): Awaitable<string | undefined>;
   deleteContact(id: string): Awaitable<boolean>;
   unlinkChannelIdentity(contactId: string, channel: string, channelUserId: string, actor?: string): Awaitable<boolean>;
+  /** Reapprove one exact restored Discord ownership through the authenticated saga. */
+  reapproveRestoredDiscordIdentity(contactId: string, channelUserId: string): Awaitable<boolean>;
 }

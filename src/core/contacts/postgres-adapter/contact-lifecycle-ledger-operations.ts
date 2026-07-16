@@ -218,6 +218,18 @@ const postgresContactLifecycleLedgerOperations: PostgresContactOperationMap = {
         throw new ContactLifecycleLedgerDeniedError('restored_intent_quarantined');
       }
       const parsed = parseContactLifecycleIntentRow(intent);
+      if (input.leaseOwner) {
+        const owner = input.leaseOwner.trim();
+        const lease = await client.query<{ lease_is_live: boolean }>(`
+          SELECT lease_owner = $2 AND lease_expires_at > clock_timestamp() AS lease_is_live
+          FROM contact_lifecycle_intents WHERE intent_id = $1
+        `, [input.intentId, owner]);
+        if (!owner || owner !== input.leaseOwner || lease.rows.at(0)?.lease_is_live !== true) {
+          throw new ContactLifecycleLedgerDeniedError('recovery_lease_lost');
+        }
+      } else if (intent.lease_owner !== null) {
+        throw new ContactLifecycleLedgerDeniedError('recovery_lease_required');
+      }
       if (parsed.request.action !== result.action) {
         throw new ContactLifecycleLedgerDeniedError('gateway_result_action_mismatch');
       }
@@ -247,8 +259,10 @@ const postgresContactLifecycleLedgerOperations: PostgresContactOperationMap = {
       const nextPhase = result.phase === 'prepare' ? 'contact_commit_pending' : 'finalized';
       const updated = await client.query<ContactLifecycleIntentRow>(`
         UPDATE contact_lifecycle_intents
-        SET phase = $2, reason = $2, lease_owner = NULL,
-            lease_expires_at = NULL, updated_at = clock_timestamp()
+        SET phase = $2, reason = $2,
+            lease_owner = CASE WHEN $2 = 'finalized' THEN NULL ELSE lease_owner END,
+            lease_expires_at = CASE WHEN $2 = 'finalized' THEN NULL ELSE lease_expires_at END,
+            updated_at = clock_timestamp()
         WHERE intent_id = $1
         RETURNING *
       `, [input.intentId, nextPhase]);

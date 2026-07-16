@@ -33,6 +33,7 @@ export interface ContactLifecycleIntentRow {
   provider_subject_id: string | null;
   locked_snapshot: unknown | null;
   snapshot_digest: string | null;
+  committed_contact_version: string | null;
   phase: ContactLifecycleLedgerPhase;
   reason: string;
   retry_count: number;
@@ -135,9 +136,37 @@ export function parseContactLifecycleIntentRow(
     if (!timingSafeStringEqual(digestContactLifecycleSnapshot(snapshot), row.snapshot_digest)) {
       throw new Error('Corrupt contact lifecycle intent snapshot digest');
     }
+    const reapproval = request.action === 'contact.reapprove';
+    const snapshotIsQuarantined = snapshot.contacts.every(contact => (
+      contact.lifecycleState === 'quarantined' && contact.restoreState === 'quarantined'
+    )) && snapshot.verifiedOwnerships.every(ownership => (
+      ownership.ownershipState === 'quarantined' && ownership.restoreState === 'quarantined'
+    ));
+    const snapshotIsLive = snapshot.contacts.every(contact => (
+      contact.lifecycleState === 'live' && contact.restoreState === 'live'
+    )) && snapshot.verifiedOwnerships.every(ownership => (
+      ownership.ownershipState === 'verified' && ownership.restoreState === 'live'
+    ));
+    if ((reapproval && (!snapshotIsQuarantined
+        || snapshot.contacts.length !== 1
+        || snapshot.verifiedOwnerships.length !== 1))
+      || (!reapproval && !snapshotIsLive)) {
+      throw new Error('Corrupt contact lifecycle snapshot action state');
+    }
   }
   if (row.phase !== 'manual_hold' && row.phase !== 'quarantined' && !snapshot) {
     throw new Error('Corrupt live contact lifecycle intent is missing its locked snapshot');
+  }
+  const committedContactVersion = row.committed_contact_version === null
+    ? null
+    : Number(row.committed_contact_version);
+  if ((committedContactVersion !== null
+      && (!Number.isSafeInteger(committedContactVersion) || committedContactVersion < 1))
+    || ((row.phase === 'gateway_finalize_pending' || row.phase === 'finalized')
+      && committedContactVersion === null)
+    || ((row.phase === 'gateway_prepare_pending' || row.phase === 'contact_commit_pending')
+      && committedContactVersion !== null)) {
+    throw new Error('Corrupt contact lifecycle committed contact version');
   }
   return { request, ...(snapshot ? { snapshot } : {}), outcome: outcomeForIntentRow(row) };
 }

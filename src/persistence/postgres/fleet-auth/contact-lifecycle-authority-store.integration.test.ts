@@ -293,6 +293,41 @@ describe('Postgres contact lifecycle authority', () => {
     }
   }, TIMEOUT_MS);
 
+  it('never manufactures a binding or role while finalizing verified contact ownership', async () => {
+    const fixture = await createFixture({ withBinding: false });
+    try {
+      const intentId = randomUUID();
+      await fixture.store.executeForCompanion(COMPANION_ID, {
+        schemaVersion: 1,
+        intentId,
+        phase: 'prepare',
+        action: 'contact.verify',
+        contactId: 'contact-a',
+        providerSubjectId: SUBJECT_ID,
+      });
+      await fixture.store.executeForCompanion(COMPANION_ID, {
+        schemaVersion: 1,
+        intentId,
+        phase: 'finalize',
+        action: 'contact.verify',
+        contactId: 'contact-a',
+        providerSubjectId: SUBJECT_ID,
+        postState: { schemaVersion: 1, state: 'verified', contactVersion: 2 },
+      });
+      const authority = await fixture.coordinator.query<{
+        binding_count: string;
+        role_count: string;
+      }>(`
+        SELECT
+          (SELECT count(*)::text FROM fleet_auth.principal_contact_bindings) AS binding_count,
+          (SELECT count(*)::text FROM fleet_auth.principal_role_grants) AS role_count
+      `);
+      expect(authority.rows.at(0)).toEqual({ binding_count: '0', role_count: '0' });
+    } finally {
+      await fixture.close();
+    }
+  }, TIMEOUT_MS);
+
   it('rolls back database mutation while leaving a published non-restored fence fail closed', async () => {
     const fixture = await createFixture();
     try {

@@ -284,6 +284,7 @@ describe('Postgres companion contact lifecycle ledger', () => {
         limit: 1,
       });
       expect(reclaimed).toHaveLength(1);
+      const reclaimedLease = reclaimed[0];
       const prepareResult = {
         schemaVersion: 1 as const,
         intentId,
@@ -294,13 +295,22 @@ describe('Postgres companion contact lifecycle ledger', () => {
         globalAuthEpoch: 2,
         auditEventId: '8ba7b810-9dad-41d1-80b4-00c04fd430c8',
       };
-      await expect(store.recordContactLifecycleGatewayResult({ intentId, result: prepareResult }))
+      await expect(store.recordContactLifecycleGatewayResult({
+        intentId,
+        result: prepareResult,
+        leaseOwner: reclaimedLease.leaseOwner,
+      }))
         .resolves.toMatchObject({ status: 'pending', phase: 'contact_commit_pending' });
-      await expect(store.recordContactLifecycleGatewayResult({ intentId, result: prepareResult }))
+      await expect(store.recordContactLifecycleGatewayResult({
+        intentId,
+        result: prepareResult,
+        leaseOwner: reclaimedLease.leaseOwner,
+      }))
         .resolves.toMatchObject({ status: 'pending', phase: 'contact_commit_pending' });
       await expect(store.recordContactLifecycleGatewayResult({
         intentId,
         result: { ...prepareResult, globalAuthEpoch: 3 },
+        leaseOwner: reclaimedLease.leaseOwner,
       })).rejects.toThrow(/changed_gateway_result_reuse/);
 
       await expect(store.recordContactLifecycleGatewayResult({
@@ -311,6 +321,7 @@ describe('Postgres companion contact lifecycle ledger', () => {
           status: 'finalized',
           auditEventId: '9ba7b810-9dad-41d1-80b4-00c04fd430c8',
         },
+        leaseOwner: reclaimedLease.leaseOwner,
       })).rejects.toThrow(/gateway_result_phase_mismatch/);
       await expect(store.assertContactLifecycleLedgerHealthy()).resolves.toBeUndefined();
       const lock = await pool.query<{ lock_state: string }>(

@@ -19,7 +19,7 @@ const verifiedOwnership = {
 };
 
 describe('companion contact lifecycle ledger v1 contract', () => {
-  it('accepts only exact live verified ownership snapshots and canonicalizes them', () => {
+  it('accepts exact live verified ownership snapshots and canonicalizes them', () => {
     const snapshot = parseContactLifecycleLockedSnapshot({
       schemaVersion: 1,
       contacts: [{
@@ -32,6 +32,27 @@ describe('companion contact lifecycle ledger v1 contract', () => {
       verifiedOwnerships: [verifiedOwnership],
     });
     expect(JSON.parse(canonicalContactLifecycleSnapshotJson(snapshot))).toEqual(snapshot);
+  });
+
+  it('accepts an exact quarantined ownership snapshot only for restored-contact reapproval', () => {
+    expect(parseContactLifecycleLockedSnapshot({
+      schemaVersion: 1,
+      contacts: [{
+        schemaVersion: 1,
+        contactId: 'contact-a',
+        contactAuthorityVersion: 4,
+        lifecycleState: 'quarantined',
+        restoreState: 'quarantined',
+      }],
+      verifiedOwnerships: [{
+        ...verifiedOwnership,
+        ownershipState: 'quarantined',
+        restoreState: 'quarantined',
+      }],
+    })).toMatchObject({
+      contacts: [{ lifecycleState: 'quarantined', restoreState: 'quarantined' }],
+      verifiedOwnerships: [{ ownershipState: 'quarantined', restoreState: 'quarantined' }],
+    });
   });
 
   it.each([

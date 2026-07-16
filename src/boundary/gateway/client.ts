@@ -161,7 +161,10 @@ import type {
   IcpPermitRevokeResult,
   IcpPermitInvalidateSelfParams,
   GatewayCorrelationParams,
+  ContactLifecycleExecuteResult,
 } from './protocol.js';
+import type { ContactAuthorityLifecycleRequest } from '../../shared/contracts/contact-authority-lifecycle.js';
+import { parseContactAuthorityLifecycleResult } from '../../shared/contracts/contact-authority-lifecycle.js';
 import type {
   IcpInitiationGateDecision,
   IcpInitiationHandoffPrepareResult,
@@ -855,6 +858,15 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
 
   async discordTyping(channelId: string): Promise<void> {
     await this.rpcInstance.request('discord.typing', { channelId });
+  }
+
+  /** Contact authority executes in the companion domain bound to this connection. */
+  async executeContactLifecycle(
+    request: ContactAuthorityLifecycleRequest,
+  ): Promise<ContactLifecycleExecuteResult> {
+    return parseContactAuthorityLifecycleResult(
+      await this.rpcInstance.request('contact.lifecycle.execute', { request }),
+    );
   }
 
   // ── Inter-companion channel lane (sprint 10, W6) ──

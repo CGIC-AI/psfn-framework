@@ -21,6 +21,10 @@ import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';
 import { buildGatewayPrivilegedCore } from '../../boundary/gateway/privileged-core.js';
 import {
+  createWelfareGrantVerifier,
+  type WelfareGrantVerifier,
+} from '../../boundary/gateway/welfare-grant-verifier.js';
+import {
   initGatewayChannelSurfaces,
   loadGatewayChannelSurfaces,
   startGatewayChannelSurfaces,
@@ -419,12 +423,37 @@ async function main(): Promise<void> {
     });
   }
 
+  // psfn-framework-fxt1: gateway-side welfare grant verifier. Re-verifies a
+  // caller-asserted `preemptionProtected` LLMWorkSpec against the background-work
+  // store (`welfare_claimed = true AND state = 'running'`, scoped to the
+  // authenticated companion's schema) before the gate honors it; the RPC
+  // handlers strip the flag on any failure (fail closed → preemptable). Absent
+  // Postgres ⇒ undefined ⇒ every asserted flag is stripped.
+  let welfareGrantVerifier: WelfareGrantVerifier | undefined;
+  const welfareVerifierDatabaseUrl = config.postgresDatabaseUrl?.trim();
+  if (welfareVerifierDatabaseUrl) {
+    welfareGrantVerifier = createWelfareGrantVerifier({
+      databaseUrl: welfareVerifierDatabaseUrl,
+      ...(config.companionFleet
+        ? {
+            fleet: config.companionFleet.companions.map(companion => ({
+              companionId: companion.companionId,
+              postgresSchema: companion.postgresSchema,
+            })),
+          }
+        : (config.postgresSchema?.trim()
+          ? { postgresSchema: config.postgresSchema.trim() }
+          : {})),
+    });
+  }
+
   const gateway = createGatewayServer({
     discordAdapter: discord,
     ...(discordAccountDocks ? { discordAccountDocks } : {}),
     ...(companionChannelLane ? { companionChannels: companionChannelLane } : {}),
     ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
     ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),
+    ...(welfareGrantVerifier ? { welfareGrantVerifier } : {}),
   });
   const detachTurnPerformanceForwarder = attachGatewayTurnPerformanceForwarder({
     eventBus,
@@ -554,6 +583,7 @@ async function main(): Promise<void> {
         { step: 'stop public api server', action: () => apiServer?.stop() },
         { step: 'stop voice surfaces', action: () => voiceSurfaces.stop() },
         { step: 'stop gateway server', action: () => gateway.stop() },
+        { step: 'close welfare grant verifier', action: async () => { await welfareGrantVerifier?.close(); } },
         { step: 'close companion presence reader', action: async () => { await companionPresenceStore?.close(); } },
         { step: 'close ICP autonomy store', action: async () => { await icpAutonomyStore?.close(); } },
         { step: 'close ICP fatigue regulation store', action: async () => { await icpFatigueRegulationStore?.close(); } },

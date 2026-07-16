@@ -7,6 +7,10 @@ import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-a
 import { IcpConversationCostBreakerError } from '../../../primitives/llm/icp-conversation-cost-breaker.js';
 import { GatewayErrors } from '../protocol.js';
 import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import { LLMClient } from '../../../primitives/llm/client.js';
+import { buildLLMWorkSpec } from '../../../primitives/llm/work-spec.js';
+import { toWorkSpecWireParams } from '../../../primitives/llm/work-spec-wire.js';
+import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -18,6 +22,7 @@ function createHarness(options: {
   };
   usageEvents?: ModelUsageEventInput[];
   authorizeIcpConversationCorrelation?: GatewayMethodRuntime['authorizeIcpConversationCorrelation'];
+  llmProvider?: GatewayMethodRuntime['llmProvider'];
 } = {}) {
   const methods = new Map<string, (params: any) => Promise<any>>();
   const stream = vi.fn<LLMProviderPort['stream']>(async () => ({
@@ -82,10 +87,10 @@ function createHarness(options: {
         methods.set(name, handler);
       },
     } as any,
-    llmProvider: {
+    llmProvider: options.llmProvider ?? ({
       stream,
       complete,
-    },
+    }),
     embeddingService: options.embeddingService ?? {
       embed: vi.fn(),
       embedBatch: vi.fn(async () => []),
@@ -675,5 +680,129 @@ describe('registerLLMMethods', () => {
         }),
       }),
     }]);
+  });
+});
+
+// psfn-framework-d8vq.2 — the autonomous accountability guard must enforce on
+// the GATEWAY side in the split topology. These tests exercise the RPC/provider
+// seam: the LLMWorkSpec now crosses the wire and reaches the serving provider.
+describe('registerLLMMethods work-spec accountability seam (psfn-framework-d8vq.2)', () => {
+  // A serving-side config minimal for LLMClient construction; the guard fires
+  // before any candidate resolution / provider I/O, so no roster is required.
+  function makeServingConfig(): SubstrateConfig {
+    return {
+      primaryModel: 'z-ai/glm-5',
+      primaryProvider: 'openrouter',
+      primaryMaxTokens: 4096,
+      defaultContextWindow: 128_000,
+      modelRoster: {
+        chat: { model: 'z-ai/glm-5', provider: 'openrouter', maxTokens: 4096, contextWindow: 128_000 },
+        background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 2048 },
+      },
+    } as unknown as SubstrateConfig;
+  }
+
+  const autonomousWireSpec = () => toWorkSpecWireParams(buildLLMWorkSpec({
+    purpose: 'extraction',
+    durable: true,
+    correlation: { callType: 'background', originStage: 'memory.extraction' },
+  }));
+
+  it('forwards a parsed work spec into the serving provider complete options', async () => {
+    const harness = createHarness();
+    const workSpec = autonomousWireSpec();
+
+    await harness.invoke('llm.complete', {
+      model: '',
+      provider: '',
+      messages: [{ role: 'user', content: 'extract' }],
+      systemPrompt: 'system',
+      purpose: 'extraction',
+      callType: 'background',
+      originStage: 'memory.extraction',
+      workSpec,
+    });
+
+    expect(harness.complete.mock.calls[0]?.[2]).toEqual({ workSpec });
+  });
+
+  it('forwards a parsed work spec into the serving provider stream options', async () => {
+    const harness = createHarness();
+    const workSpec = autonomousWireSpec();
+
+    await harness.invoke('llm.chat', {
+      model: '',
+      provider: '',
+      messages: [{ role: 'user', content: 'extract' }],
+      systemPrompt: 'system',
+      purpose: 'extraction',
+      callType: 'background',
+      originStage: 'memory.extraction',
+      workSpec,
+    });
+
+    expect(harness.stream.mock.calls[0]?.[2]).toEqual({ workSpec });
+  });
+
+  it('leaves legacy non-work-spec calls with no provider options', async () => {
+    const harness = createHarness();
+
+    await harness.invoke('llm.complete', {
+      model: '',
+      provider: '',
+      messages: [{ role: 'user', content: 'hi' }],
+      systemPrompt: 'system',
+      purpose: 'background',
+    });
+
+    expect(harness.complete.mock.calls[0]?.[2]).toBeUndefined();
+  });
+
+  it('fails closed on a malformed work spec before touching the provider', async () => {
+    const harness = createHarness();
+
+    await expect(harness.invoke('llm.complete', {
+      model: '',
+      provider: '',
+      messages: [{ role: 'user', content: 'extract' }],
+      systemPrompt: 'system',
+      purpose: 'extraction',
+      workSpec: { purpose: 'not-a-purpose', lane: 'maintenance_reflection', durable: true },
+    })).rejects.toMatchObject({ code: GatewayErrors.INVALID_WORK_SPEC });
+
+    expect(harness.complete).not.toHaveBeenCalled();
+  });
+
+  it('hard-errors an RPC-transported autonomous call with no serving-side usageRecorder before provider I/O', async () => {
+    const transport = {
+      stream: vi.fn(),
+      complete: vi.fn(async () => ({
+        content: 'should never run',
+        model: 'deepseek/deepseek-v3.2',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'stop',
+        toolCalls: [],
+      })),
+    };
+    // A real serving LLMClient with NO usageRecorder configured.
+    const servingClient = new LLMClient(makeServingConfig(), { transport: transport as any });
+    const harness = createHarness({ llmProvider: servingClient });
+    const workSpec = autonomousWireSpec();
+    expect(workSpec.lane).toBe('maintenance_reflection');
+
+    await expect(harness.invoke('llm.complete', {
+      model: '',
+      provider: '',
+      messages: [{ role: 'user', content: 'extract' }],
+      systemPrompt: 'system',
+      purpose: 'extraction',
+      callType: 'background',
+      originStage: 'memory.extraction',
+      workSpec,
+    })).rejects.toThrow(/unaccounted autonomous spend/);
+
+    // Fail closed BEFORE provider I/O: the transport is never reached.
+    expect(transport.complete).not.toHaveBeenCalled();
   });
 });

@@ -19,6 +19,7 @@ import { resolveCompanionIdFromConfig } from '../../identity/companion-runtime.j
 import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { SessionManager } from '../../session/manager.js';
+import { runWithCapturedSessionOwner } from '../../session/manager/captured-session-owner.js';
 import {
   cloneMetacognitiveFlags,
   type MetacognitiveFlag,
@@ -763,6 +764,7 @@ export async function handleMessageForTurn(
     sourceChannelId: message.channelId,
     logicalSessionId,
   });
+  return await runWithCapturedSessionOwner(runtime.sessionManager, turnSessionIdentity, async () => {
   const initialCorrelationSessionId = turnCorrelationBase.sessionId?.trim();
   const wyomingObservabilitySessionId = message.routing?.wyoming?.sessionId?.trim();
   const correlationUsesWyomingSession = Boolean(
@@ -1936,4 +1938,5 @@ export async function handleMessageForTurn(
     }
     await runtime.endForegroundBackgroundWork(foregroundLease);
   }
+  });
 }

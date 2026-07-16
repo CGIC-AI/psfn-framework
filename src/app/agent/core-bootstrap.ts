@@ -38,6 +38,7 @@ import type {
 } from '../../core/intention/runtime-wiring.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 import type { BackgroundWorkRuntimeTuning } from '../../core/agent/background-work/config.js';
+import type { BackgroundWorkWelfarePolicy } from '../../core/agent/background-work/store-port.js';
 
 const log = createComponentLogger('Agent');
 
@@ -66,6 +67,8 @@ export interface BootstrapAgentCoreRuntimeOptions {
   episodicStore: EpisodicStorePort;
   backgroundWorkStore: BackgroundWorkStorePort;
   backgroundWorkTuning: BackgroundWorkRuntimeTuning;
+  /** Anti-starvation welfare policy (mmo9.7.4), resolved from scheduler.json. */
+  backgroundWorkWelfare?: Partial<BackgroundWorkWelfarePolicy>;
   contactStore?: ContactStorePort;
   /** Hub identity ↔ contact enrollment store (S10 D2a). Enables face identity-claim resolution (bead .13). */
   hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort;
@@ -145,6 +148,9 @@ export async function bootstrapAgentCoreRuntime(
     episodicStore,
     backgroundWorkStore,
     backgroundWorkTuning,
+    ...(options.backgroundWorkWelfare
+      ? { backgroundWorkWelfare: options.backgroundWorkWelfare }
+      : {}),
     contactStore,
     ...(options.hubIdentityEnrollmentStore
       ? { hubIdentityEnrollmentStore: options.hubIdentityEnrollmentStore }

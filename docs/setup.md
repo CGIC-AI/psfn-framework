@@ -45,19 +45,30 @@ The runtime ignores mutable settings that are owned by JSON files. Do not use `.
 
 ## What Goes In JSON Owner Files
 
-Mutable runtime/admin configuration lives under the system-data config domain:
+Mutable cluster-global runtime/admin configuration lives under the system-data
+config domain:
 
 - `settings.json`
 - `models.json`
 - `providers.json`
-- `scheduler.json`
-- `capability-tier.json`
 - `channels.json`
 - `skills.json`
 - `trust-policy.json`
 - `intake-policy.json`
 - `charge-policy.json`
 - `backup.json`
+
+Two whole owner files are companion-owned and live under the companion-data
+root in split-root deployments:
+
+- `scheduler.json`
+- `capability-tier.json`
+
+In a local shared-root layout, system-data and companion-data resolve to the
+same directory, so the distinction does not change the path. Production
+split-root and Helm deployments must place these two files under
+`COMPANION_DATA_DIR`; startup deliberately has no fallback to the old
+system-owned path.
 
 Startup verifies the seed-backed owner files before the split runtime comes up. Distributed `config/*.seed.json` files are examples/templates only; PSFN does not silently copy them into runtime state.
 
@@ -77,7 +88,9 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
    PSFN_BACKUP_ENCRYPTION_KEY=<long random secret>
    ```
 
-2. Intentionally copy the example owner files into the system data directory and edit them for this deployment:
+2. Intentionally copy the example owner files into their canonical owner roots
+   and edit them for this deployment. This shared-root local example uses
+   `./data` for both roots:
 
    ```bash
    cp config/settings.seed.json ./data/settings.json
@@ -91,6 +104,12 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
    cp config/backup.seed.json ./data/backup.json
    cp config/skills.seed.json ./data/skills.json
    ```
+
+   For production split roots, copy `scheduler.seed.json` and
+   `capability-tier.seed.json` to `COMPANION_DATA_DIR`; copy every other file
+   above to `SYSTEM_DATA_DIR`. The Helm chart performs the legacy-to-companion
+   cutover explicitly for existing releases; see
+   [`deploy/helm/psfn/README.md`](../deploy/helm/psfn/README.md#upgrading-releases-created-before-per-companion-owner-files).
 
    The `models.seed.json` template ships `promptCaching.enabled: true`, so new deployments engage provider prompt caching on the byte-stable system-prompt prefix out of the box (Anthropic / OpenRouter→Anthropic get `cache_control` breakpoints; other providers get the stable-prefix benefit plus telemetry, no wire change). Set `promptCaching.enabled: false` in `models.json` to fully disable it. Tune lifetime with `promptCaching.retention` (`none`/`short`/`long`, default `short`) and the session key with `promptCaching.scope` (`channel`/`request`, default `channel`).
 

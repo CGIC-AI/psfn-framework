@@ -39,6 +39,8 @@ import type { ChargePolicyConfig } from '../../shared/contracts/charge-policy.js
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 import type { AdminModelUsageService } from '../../operator/garden/services/types.js';
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
+import { RUNTIME_LANE_CLASSES } from '../../shared/contracts/runtime-lanes.js';
+import { MODEL_USAGE_RUNTIME_LANE_CLASSES } from '../../shared/telemetry/model-usage-attribution.js';
 
 const piMocks = vi.hoisted(() => ({
   completeSimple: vi.fn(),
@@ -128,6 +130,285 @@ describe('PostgresModelUsageStore private telemetry', () => {
       expect(privateEvent?.attribution.requestId).toBe('unknown');
       expect(privateEvent?.attribution.channelId).toBe('unknown');
     });
+  }, INTEGRATION_TIMEOUT_MS);
+});
+
+describe('PostgresModelUsageStore per-lane spend attribution (mmo9.7.3)', () => {
+  it('persists, filters, and aggregates per-companion x lane x model spend', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const database = await harness.createDatabase();
+    const pool = createPostgresPool(database.databaseUrl, {
+      applicationName: 'model-usage-lane-attribution-test',
+      allowExitOnIdle: true,
+      max: 2,
+    });
+    try {
+      const store = new PostgresModelUsageStore(pool, { fleetAggregation: true });
+      await store.recordUsageEvent({
+        logicalCallId: 'a-chat',
+        status: 'success',
+        callKind: 'chat',
+        attribution: {
+          companionId: 'companion-a',
+          callType: 'chat',
+          purpose: 'chat',
+          runtimeLaneClass: 'foreground_chat',
+        },
+        provider: 'litellm',
+        model: 'model-x',
+        inputTokens: 10,
+        outputTokens: 5,
+        providerCostUsd: 0.1,
+      });
+      await store.recordUsageEvent({
+        logicalCallId: 'a-maintenance',
+        status: 'success',
+        callKind: 'completion',
+        attribution: {
+          companionId: 'companion-a',
+          callType: 'background',
+          purpose: 'memory',
+          originStage: 'memory.sleeptime.run',
+          runtimeLaneClass: 'maintenance_reflection',
+        },
+        provider: 'litellm',
+        model: 'model-y',
+        inputTokens: 20,
+        outputTokens: 10,
+        providerCostUsd: 0.4,
+      });
+      await store.recordUsageEvent({
+        logicalCallId: 'b-background',
+        status: 'success',
+        callKind: 'completion',
+        attribution: {
+          companionId: 'companion-b',
+          callType: 'background',
+          purpose: 'background',
+          runtimeLaneClass: 'background_continuation',
+        },
+        provider: 'litellm',
+        model: 'model-x',
+        inputTokens: 30,
+        outputTokens: 15,
+        providerCostUsd: 0.9,
+      });
+
+      // Round-trip: the gate-resolved lane persists and reads back.
+      const all = await store.getUsageData({ limit: 10 });
+      const maintenanceEvent = all.recentEvents.find(event => event.logicalCallId === 'a-maintenance');
+      expect(maintenanceEvent?.attribution.runtimeLaneClass).toBe('maintenance_reflection');
+
+      // Filter by lane returns only the matching autonomous spend.
+      const maintenanceOnly = await store.getUsageData({
+        limit: 10,
+        runtimeLaneClass: 'maintenance_reflection',
+      });
+      expect(maintenanceOnly.totals.calls).toBe(1);
+      expect(maintenanceOnly.recentEvents.map(event => event.logicalCallId)).toEqual(['a-maintenance']);
+
+      // Per-companion x lane aggregation is visible for Garden.
+      const grouped = await store.getUsageData({
+        limit: 10,
+        groupBy: ['companionId', 'runtimeLaneClass'],
+      });
+      const laneGroup = (companionId: string, runtimeLaneClass: string) => grouped.groups.find(
+        group => group.dimensions.companionId === companionId
+          && group.dimensions.runtimeLaneClass === runtimeLaneClass,
+      );
+      expect(laneGroup('companion-a', 'foreground_chat')?.metrics.calls).toBe(1);
+      expect(laneGroup('companion-a', 'maintenance_reflection')?.metrics.totalCostUsd).toBeCloseTo(0.4);
+      expect(laneGroup('companion-b', 'background_continuation')?.metrics.calls).toBe(1);
+      expect(laneGroup('companion-a', 'background_continuation')).toBeUndefined();
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  // d8vq.3: the runtime_lane_class CHECK enumerates lane values independently of the
+  // RUNTIME_LANE_CLASSES source of truth. This round-trip drift guard proves every
+  // declared lane class is accepted by the shipped CHECK against real Postgres. If a
+  // lane class is added to worker-lanes.ts without extending the CHECK, the insert
+  // below fails closed and this test goes red.
+  it('accepts every RUNTIME_LANE_CLASSES value through the runtime_lane_class CHECK', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const database = await harness.createDatabase();
+    const pool = createPostgresPool(database.databaseUrl, {
+      applicationName: 'model-usage-lane-check-drift-test',
+      allowExitOnIdle: true,
+      max: 2,
+    });
+    try {
+      const store = new PostgresModelUsageStore(pool, { companionId: 'companion-a' });
+      // RUNTIME_LANE_CLASSES is the gate-resolved source of truth. Every value must
+      // survive normalization AND the DB CHECK; a drift makes recordUsageEvent throw.
+      const laneClasses = Object.values(RUNTIME_LANE_CLASSES);
+      expect(laneClasses.length).toBeGreaterThan(0);
+      for (const [index, laneClass] of laneClasses.entries()) {
+        await store.recordUsageEvent({
+          logicalCallId: `lane-check-${laneClass}`,
+          recordedAtMs: 1_752_800_000_000 + index,
+          startedAtMs: 1_752_799_999_900 + index,
+          status: 'success',
+          callKind: 'completion',
+          attribution: {
+            companionId: 'companion-a',
+            callType: 'background',
+            purpose: 'lane-check-drift',
+            runtimeLaneClass: laneClass,
+          },
+          provider: 'litellm',
+          model: 'model-x',
+          inputTokens: 1,
+          totalTokens: 1,
+          costSource: 'none',
+        });
+      }
+
+      // Every lane class round-trips back exactly as stored.
+      const persisted = await store.getUsageData({ limit: 50 });
+      const persistedLaneClasses = new Set(
+        persisted.recentEvents.map(event => event.attribution.runtimeLaneClass),
+      );
+      for (const laneClass of laneClasses) {
+        expect(persistedLaneClasses.has(laneClass)).toBe(true);
+      }
+
+      // The 'unknown' sentinel (the column default, part of the CHECK) is also accepted:
+      // an event with no gate-resolved lane class persists as 'unknown'.
+      await store.recordUsageEvent({
+        logicalCallId: 'lane-check-unknown',
+        recordedAtMs: 1_752_800_000_500,
+        startedAtMs: 1_752_800_000_400,
+        status: 'success',
+        callKind: 'completion',
+        attribution: { companionId: 'companion-a', callType: 'background', purpose: 'lane-check-drift' },
+        provider: 'litellm',
+        model: 'model-x',
+        inputTokens: 1,
+        totalTokens: 1,
+        costSource: 'none',
+      });
+      const withUnknown = await store.getUsageData({ limit: 50, runtimeLaneClass: 'unknown' });
+      expect(withUnknown.recentEvents.map(event => event.logicalCallId)).toContain('lane-check-unknown');
+
+      // The exported source-of-truth list is exactly RUNTIME_LANE_CLASSES + 'unknown'.
+      expect(new Set(MODEL_USAGE_RUNTIME_LANE_CLASSES)).toEqual(new Set([...laneClasses, 'unknown']));
+
+      // The CHECK is live: a value outside the enumerated list is rejected by Postgres.
+      await expect(pool.query(
+        `UPDATE model_usage_events SET runtime_lane_class = 'not_a_lane_class'
+         WHERE logical_call_id = 'lane-check-unknown'`,
+      )).rejects.toThrow(/model_usage_events_runtime_lane_class_check/);
+    } finally {
+      await pool.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
+  // d8vq.3: verify the (companion_id, runtime_lane_class, model, recorded_at_ms DESC)
+  // index actually serves the Garden per-companion x lane [x model] spend queries that
+  // buildWhere emits (companion_id is always injected for the tenant store; lane/model
+  // are equality filters). EXPLAIN proves the column order is right: the index is used
+  // for the lane-filtered spend query and its leading equality columns match the filter.
+  it('serves Garden per-lane spend queries with the runtime_lane_class index', async () => {
+    if (!harness) throw new Error('Postgres integration harness is unavailable');
+    const database = await harness.createDatabase();
+    const pool = createPostgresPool(database.databaseUrl, {
+      applicationName: 'model-usage-lane-index-explain-test',
+      allowExitOnIdle: true,
+      max: 2,
+    });
+    try {
+      const store = new PostgresModelUsageStore(pool, { fleetAggregation: true });
+      const laneClasses = Object.values(RUNTIME_LANE_CLASSES);
+      const companions = ['companion-a', 'companion-b', 'companion-c'];
+      const models = ['model-x', 'model-y', 'model-z'];
+      // Populate enough distinct (companion, lane, model, time) rows that the planner's
+      // cost model can meaningfully prefer the lane index for a lane-filtered scan.
+      let seq = 0;
+      for (const companionId of companions) {
+        for (const laneClass of laneClasses) {
+          for (const model of models) {
+            for (let repeat = 0; repeat < 12; repeat += 1) {
+              seq += 1;
+              await store.recordUsageEvent({
+                logicalCallId: `spend-${companionId}-${laneClass}-${model}-${repeat}`,
+                recordedAtMs: 1_752_900_000_000 + seq * 1_000,
+                startedAtMs: 1_752_900_000_000 + seq * 1_000 - 100,
+                status: 'success',
+                callKind: 'completion',
+                attribution: {
+                  companionId,
+                  callType: 'background',
+                  purpose: 'spend-index-explain',
+                  runtimeLaneClass: laneClass,
+                },
+                provider: 'litellm',
+                model,
+                inputTokens: 5,
+                outputTokens: 2,
+                providerCostUsd: 0.01,
+              });
+            }
+          }
+        }
+      }
+      // Refresh planner statistics so EXPLAIN reflects the populated distribution.
+      await pool.query('ANALYZE model_usage_events');
+
+      const explainPlan = async (sql: string, values: unknown[]): Promise<string> => {
+        // enable_seqscan is disabled only to force an index-access plan on a small test
+        // table; the assertion is about WHICH index the planner picks for the predicate.
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query('SET LOCAL enable_seqscan = off');
+          const result = await client.query(`EXPLAIN (FORMAT JSON) ${sql}`, values);
+          await client.query('ROLLBACK');
+          return JSON.stringify(result.rows[0]?.['QUERY PLAN'] ?? result.rows);
+        } finally {
+          client.release();
+        }
+      };
+
+      const sinceMs = 1_752_900_000_000;
+      const untilMs = 1_752_900_000_000 + (seq + 1) * 1_000;
+
+      // (1) Lane-filtered spend query (buildWhere shape for companionId + runtimeLaneClass
+      //     + range). Only the runtime_lane_class index leads with (companion_id,
+      //     runtime_lane_class); it must be chosen.
+      const lanePlan = await explainPlan(
+        `SELECT COALESCE(SUM(effective_cost_usd), 0) AS spend
+         FROM model_usage_events
+         WHERE companion_id = $1 AND runtime_lane_class = $2
+           AND recorded_at_ms >= $3 AND recorded_at_ms < $4`,
+        ['companion-a', 'maintenance_reflection', sinceMs, untilMs],
+      );
+      expect(lanePlan).toContain('idx_model_usage_events_runtime_lane_class_time');
+
+      // (2) Lane + model drill-down (companionId + runtimeLaneClass + model + range): a
+      //     pure equality prefix on the index's first three columns plus the trailing
+      //     recorded_at_ms range. This is the exact shape the column order optimizes.
+      const laneModelPlan = await explainPlan(
+        `SELECT COALESCE(SUM(effective_cost_usd), 0) AS spend
+         FROM model_usage_events
+         WHERE companion_id = $1 AND runtime_lane_class = $2 AND model = $3
+           AND recorded_at_ms >= $4 AND recorded_at_ms < $5`,
+        ['companion-a', 'foreground_chat', 'model-x', sinceMs, untilMs],
+      );
+      expect(laneModelPlan).toContain('idx_model_usage_events_runtime_lane_class_time');
+
+      // Note on column order: the index leads with (companion_id, runtime_lane_class,
+      // model) — the always-injected tenant filter followed by the two spend dimensions,
+      // matching the sibling attribution indexes (origin_time, service_process_time). It
+      // is the ONLY index whose prefix an equality lane (± model) predicate can use, so
+      // the planner selects it for the lane-scoped spend queries above. An unfiltered
+      // GROUP BY runtime_lane_class over a whole companion legitimately prefers a
+      // narrower companion-prefixed index + hash aggregate (only a handful of lane
+      // groups), which does not depend on this index — so no additive reorder is needed.
+    } finally {
+      await pool.end();
+    }
   }, INTEGRATION_TIMEOUT_MS);
 });
 

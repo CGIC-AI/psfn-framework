@@ -188,7 +188,10 @@ import type { NotificationPort } from '../../boundary/gateway/notification-port.
 import type { ArtifactEgressDestination } from '../artifacts/sensitivity-egress.js';
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 import { BackgroundWorkSupervisor } from './background-work/supervisor.js';
-import type { BackgroundWorkStorePort } from './background-work/store-port.js';
+import type {
+  BackgroundWorkStorePort,
+  BackgroundWorkWelfarePolicy,
+} from './background-work/store-port.js';
 import { executePostTurnBackgroundWork } from './background-work/post-turn-runtime.js';
 import {
   recoverHistoricalBackgroundWorkHandoffs,
@@ -256,6 +259,8 @@ export interface SubstrateAgentOptions {
   backgroundWorkTuning?: BackgroundWorkRuntimeTuning;
   /** Explicitly omit post-turn jobs for ephemeral/test agents with no durable owner. */
   backgroundWorkDisabled?: boolean;
+  /** Anti-starvation welfare policy (mmo9.7.4), owner-file backed (scheduler.json). */
+  backgroundWorkWelfare?: Partial<BackgroundWorkWelfarePolicy>;
 }
 
 function requireBackgroundWorkTuning(
@@ -543,6 +548,7 @@ export class SubstrateAgent {
     this.emotionSelfModelRuntime = new EmotionSelfModelRuntime({
       sessionManager: this.sessionManager,
       llmProvider: this.llmClient,
+      ...(this.config.companionId ? { companionId: this.config.companionId } : {}),
       emotionRuntime: options.emotionRuntime,
       ...(config.emotionScoping ? { emotionScopingConfig: config.emotionScoping } : {}),
       getActiveConcernProvider: () => this.activeConcernProvider,
@@ -566,6 +572,7 @@ export class SubstrateAgent {
         ...backgroundWorkTuning.supervisor,
         store: backgroundWorkStore,
         eventBus: this.eventBus,
+        ...(options.backgroundWorkWelfare ? { welfare: options.backgroundWorkWelfare } : {}),
         executor: (input) => executePostTurnBackgroundWork(input, {
           sessionManager: this.sessionManager,
           llmProvider: this.llmClient,
@@ -620,6 +627,7 @@ export class SubstrateAgent {
         this.config,
         this.agent.state.model as { contextWindow?: unknown } | undefined,
       ),
+      companionId: this.config.companionId,
     });
     this.toolRuntimeFacade = new ToolRuntimeFacade({
       config: this.config,

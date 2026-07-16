@@ -4219,6 +4219,67 @@ describe('handleMessageForTurn compaction scheduling', () => {
       .toEqual(new Set([turnStartLogicalSessionId, futureRoute.newLogicalSessionId]));
   });
 
+  it('keeps prompt history and background handoffs on the admitted API owner across an active-context switch', async () => {
+    const dataDir = makeTempDir();
+    const eventBus = new EventBus();
+    const { runtime, sessionManager } = createPersistenceBackedRuntime(dataDir, eventBus);
+    const sourceChannelId = 'api:physical-source';
+    const admittedOwner = 'api:admitted-owner';
+    const futureOwner = 'api:future-owner';
+    sessionManager.recordUserMessage(admittedOwner, 'admitted prompt history', 'user-a', 'User');
+    sessionManager.recordUserMessage(futureOwner, 'future prompt history', 'user-b', 'User');
+    sessionManager.setActiveContextSession(admittedOwner);
+    runtime.sessionManager = sessionManager;
+    runtime.resolveSessionChannelId = channelId => sessionManager.resolveSessionChannelId(channelId);
+    runtime.buildTurnCorrelation = (message, callType, turnId, requestId) => ({
+      callType,
+      purpose: 'agent.turn',
+      turnId,
+      requestId,
+      channelId: message.channelId,
+      sessionId: sessionManager.resolveSessionChannelId(message.channelId),
+    });
+    const authorResolutionStarted = createDeferred<void>();
+    const releaseAuthorResolution = createDeferred<void>();
+    runtime.resolveAuthorContext = vi.fn(async () => {
+      authorResolutionStarted.resolve();
+      await releaseAuthorResolution.promise;
+      return humanAuthorContext();
+    });
+    let observedPromptHistory = '';
+    runtime.agent.prompt = vi.fn(async (promptMessage: { content: string }) => {
+      observedPromptHistory = (runtime.agent.state.messages as Array<{ content?: unknown }>)
+        .map(entry => typeof entry.content === 'string' ? entry.content : '')
+        .join('\n');
+      (runtime.agent.state.messages as any[]).push({ role: 'user', content: promptMessage.content });
+      (runtime.agent.state.messages as any[]).push({
+        role: 'assistant',
+        content: [{ type: 'text', text: 'assistant reply' }],
+      });
+    });
+
+    const inFlight = handleMessageForTurn(runtime, createMessage('msg-owner-switch', {
+      channelId: sourceChannelId,
+      channelType: 'api',
+    }));
+    await authorResolutionStarted.promise;
+    sessionManager.setActiveContextSession(futureOwner);
+    releaseAuthorResolution.resolve();
+    await expect(inFlight).resolves.toMatchObject({ content: 'assistant reply' });
+
+    expect(observedPromptHistory).toContain('admitted prompt history');
+    expect(observedPromptHistory).not.toContain('future prompt history');
+    expect(runtime.enqueuePostTurnBackgroundWork).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            source: expect.objectContaining({ logicalSessionId: admittedOwner }),
+          }),
+        }),
+      ]),
+    );
+  });
+
   it('keeps a distinct Wyoming observability session out of durable turn ownership', async () => {
     const dataDir = makeTempDir();
     const eventBus = new EventBus();

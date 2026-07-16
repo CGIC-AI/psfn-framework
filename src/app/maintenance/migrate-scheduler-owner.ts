@@ -2,7 +2,7 @@
 
 import '../../shared/utils/load-dotenv.js';
 import { resolve } from 'node:path';
-import { resolveConfiguredSystemDataDir } from '../../persistence/layout.js';
+import { resolveConfiguredCompanionDataDir } from '../../persistence/layout.js';
 import { migrateLegacySchedulerOwner } from '../../system/config/scheduler-owner-migration.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
@@ -21,7 +21,7 @@ function printUsage(): void {
   console.log('Options:');
   console.log('  --apply             Validate and atomically replace scheduler.json');
   console.log('  --dry-run           Report the migration without writing (default)');
-  console.log('  --data-dir <path>   Override the system owner-file directory');
+  console.log('  --data-dir <path>   Override the companion owner-file directory');
   console.log('  -h, --help          Show this help message');
 }
 
@@ -60,8 +60,9 @@ function main(): void {
     return;
   }
   const dataDir = options.dataDir
-    ?? resolveConfiguredSystemDataDir({
+    ?? resolveConfiguredCompanionDataDir({
       systemDataDir: process.env.SYSTEM_DATA_DIR,
+      companionDataDir: process.env.COMPANION_DATA_DIR,
       dataDir: process.env.DATA_DIR,
     });
   const result = migrateLegacySchedulerOwner({

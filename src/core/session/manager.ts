@@ -124,6 +124,10 @@ import {
 } from './manager/focus-session-runtime.js';
 import { BackgroundWorkHandoffRecovery } from './manager/background-work-handoff-recovery.js';
 import {
+  getCapturedSessionOwner,
+  runWithCapturedSessionOwner,
+} from './manager/captured-session-owner.js';
+import {
   resolveCompressionFailureLogPath,
   resolveCompressionGuidelinePath,
   resolveConfiguredCompanionDataDir,
@@ -363,6 +367,33 @@ export class SessionManager {
     return channelId.startsWith('api:') || channelId.startsWith('terminal:');
   }
 
+  /**
+   * Bind admitted-turn and durable background reads to an already-canonical
+   * logical owner. Nested work may reuse that owner but cannot replace it.
+   */
+  withCapturedSessionOwner<T>(
+    logicalSessionId: string,
+    operation: () => T,
+    sourceChannelId?: string,
+  ): T {
+    return runWithCapturedSessionOwner(
+      this,
+      { logicalSessionId, ...(sourceChannelId ? { sourceChannelId } : {}) },
+      operation,
+    );
+  }
+
+  private withResolvedSessionOwner<T>(
+    channelId: string,
+    operation: (resolvedChannelId: string) => T,
+  ): T {
+    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    return this.withCapturedSessionOwner(
+      resolvedChannelId,
+      () => operation(resolvedChannelId),
+    );
+  }
+
   private resolveOriginChannelId(channelId: string, resolvedChannelId: string): string | undefined {
     const normalized = channelId.trim();
     return normalized && normalized !== resolvedChannelId ? normalized : undefined;
@@ -404,6 +435,25 @@ export class SessionManager {
   }
 
   resolveSessionChannelId(channelId: string): string {
+    const capturedOwner = getCapturedSessionOwner(this);
+    if (capturedOwner) {
+      const normalizedChannelId = channelId.trim();
+      if (!normalizedChannelId) {
+        throw new Error('Captured session read channel must not be empty');
+      }
+      if (normalizedChannelId === capturedOwner.logicalSessionId
+        || normalizedChannelId === capturedOwner.sourceChannelId) {
+        return capturedOwner.logicalSessionId;
+      }
+      const routedSessionId = this.sessionRouteStore.resolve(normalizedChannelId);
+      if (routedSessionId === capturedOwner.logicalSessionId) {
+        return capturedOwner.logicalSessionId;
+      }
+      throw new Error(
+        `Captured session owner mismatch: active owner is "${capturedOwner.logicalSessionId}" `
+        + `but session resolution requested "${normalizedChannelId}"`,
+      );
+    }
     const routedSessionId = this.sessionRouteStore.resolve(channelId);
     if (routedSessionId) return routedSessionId;
     if (!this.activeContextSessionId) return channelId;
@@ -868,7 +918,7 @@ export class SessionManager {
   }
 
   scheduleAutoCompactionBetweenTurns(params: AutoCompactionBetweenTurnsParams): Promise<void> {
-    const resolvedChannelId = this.resolveSessionChannelId(params.channelId);
+    return this.withResolvedSessionOwner(params.channelId, (resolvedChannelId) => {
     if (!shouldPersistSessionChannel(resolvedChannelId)) {
       return Promise.resolve();
     }
@@ -955,12 +1005,13 @@ export class SessionManager {
 
     this.pendingAutoCompactions.set(resolvedChannelId, next);
     return next;
+    });
   }
 
   captureAutoCompactionRecentEntries(
     params: AutoCompactionRecentEntriesCaptureParams,
   ): SessionEntry[] {
-    const resolvedChannelId = this.resolveSessionChannelId(params.channelId);
+    return this.withResolvedSessionOwner(params.channelId, (resolvedChannelId) => {
     const adaptiveProfile = params.adaptiveProfile ?? resolveAdaptiveContextBudgetProfile(
       this.config,
       params.turnBudgetCharacteristics,
@@ -1008,6 +1059,7 @@ export class SessionManager {
       recent,
       this.config.observationMaskingWindow ?? DEFAULT_OBSERVATION_MASKING_WINDOW,
     ).entries;
+    });
   }
 
   recordToolObservation(
@@ -1158,11 +1210,14 @@ export class SessionManager {
     readSnapshot: () => SessionEntry[],
     operation: (entries: readonly SessionEntry[]) => Promise<T>,
   ): Promise<T> {
-    return this.store.withStableTurnRecordEligibilitySnapshot(
+    return await this.withCapturedSessionOwner(
       logicalSessionId,
-      requiredTurnIds,
-      readSnapshot,
-      operation,
+      async () => await this.store.withStableTurnRecordEligibilitySnapshot(
+        logicalSessionId,
+        requiredTurnIds,
+        readSnapshot,
+        operation,
+      ),
     );
   }
 
@@ -1290,7 +1345,7 @@ export class SessionManager {
     llmProvider?: LLMProviderPort;
     excludeSessionEntryId?: number;
   }): Promise<TurnSessionContextSnapshot> {
-    const resolvedChannelId = this.resolveSessionChannelId(input.channelId);
+    return await this.withResolvedSessionOwner(input.channelId, async (resolvedChannelId) => {
     const sourceChannelId = this.resolveSourceChannelId(resolvedChannelId);
     const baseCompactionPrompt = this.promptRegistry?.getPrompt(COMPACTION_SUMMARY_PROMPT_KEY)
       ?? getDefaultPromptText(COMPACTION_SUMMARY_PROMPT_KEY);
@@ -1337,6 +1392,7 @@ export class SessionManager {
         ? { excludeSessionEntryId: input.excludeSessionEntryId }
         : {}),
     });
+    });
   }
 
   async buildContext(
@@ -1353,7 +1409,7 @@ export class SessionManager {
     conversationScope?: ConversationScope,
     excludeSessionEntryId?: number,
   ): Promise<LLMContext> {
-    const resolvedChannelId = this.resolveSessionChannelId(channelId);
+    return await this.withResolvedSessionOwner(channelId, async (resolvedChannelId) => {
     const sourceChannelId = this.resolveSourceChannelId(resolvedChannelId);
     if (conversationScope && conversationScope.channelId !== resolvedChannelId) {
       throw new Error(
@@ -1428,6 +1484,7 @@ export class SessionManager {
       pendingCompaction: this.pendingAutoCompactions.has(resolvedChannelId),
       wakeSummaryConfig: this.wakeSummaryConfig,
       intakeSinkGate: this.intakeSinkGate,
+    });
     });
   }
 

@@ -301,6 +301,7 @@ export interface SubstrateAgentCompositionOptions {
   backgroundWorkStore?: SubstrateAgentOptions['backgroundWorkStore'];
   backgroundWorkTuning?: SubstrateAgentOptions['backgroundWorkTuning'];
   backgroundWorkDisabled?: boolean;
+  backgroundWorkWelfare?: SubstrateAgentOptions['backgroundWorkWelfare'];
 }
 
 export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions): SubstrateAgent {
@@ -333,6 +334,7 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
         ? { backgroundWorkTuning: options.backgroundWorkTuning }
         : {}),
       ...(options.backgroundWorkDisabled ? { backgroundWorkDisabled: true } : {}),
+      ...(options.backgroundWorkWelfare ? { backgroundWorkWelfare: options.backgroundWorkWelfare } : {}),
     },
   );
 }

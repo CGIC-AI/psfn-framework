@@ -7,9 +7,12 @@ import {
   POSTGRES_INTENTION_MIGRATIONS,
   POSTGRES_INTROSPECTION_MIGRATIONS,
   POSTGRES_MEMORY_MIGRATIONS,
+  POSTGRES_MODEL_USAGE_MIGRATIONS,
   POSTGRES_SHARED_MIGRATIONS,
   POSTGRES_SHARED_WIKI_MIGRATIONS,
 } from './migrations.js';
+import { MODEL_USAGE_RUNTIME_LANE_CLASSES } from '../../shared/telemetry/model-usage-attribution.js';
+import { RUNTIME_LANE_CLASSES } from '../../shared/contracts/runtime-lanes.js';
 
 function migrationSql(statements: readonly string[]): string {
   return statements.join('\n');
@@ -274,5 +277,54 @@ describe('Postgres live schema migrations', () => {
 
     // No biometric/template column is ever declared — core stores only the handle.
     expect(sql).not.toMatch(/biometric|embedding|template|face_vector/i);
+  });
+
+  // mmo9.7.3 / d8vq.3: the runtime_lane_class CHECK enumerates lane values as a
+  // literal SQL list, independent of the RUNTIME_LANE_CLASSES source of truth. This
+  // static drift guard fails fast (no Postgres required) if a lane class is added to
+  // worker-lanes.ts without extending the shipped CHECK, before the runtime insert
+  // would otherwise fail closed against the constraint.
+  it('keeps the model_usage_events runtime_lane_class CHECK in sync with the lane-class source of truth', () => {
+    const sql = migrationSql(POSTGRES_MODEL_USAGE_MIGRATIONS);
+
+    const checkMatch = sql.match(
+      /CONSTRAINT model_usage_events_runtime_lane_class_check\s+CHECK \(runtime_lane_class IN \(([^)]*)\)\)/,
+    );
+    expect(checkMatch, 'runtime_lane_class CHECK constraint must exist in the model usage migrations')
+      .not.toBeNull();
+
+    const checkValues = new Set(
+      (checkMatch?.[1] ?? '')
+        .split(',')
+        .map(value => value.trim().replace(/^'(.*)'$/, '$1'))
+        .filter(value => value.length > 0),
+    );
+
+    // Every declared runtime lane class (and the 'unknown' sentinel) must be accepted
+    // by the CHECK. MODEL_USAGE_RUNTIME_LANE_CLASSES = RUNTIME_LANE_CLASSES + 'unknown'.
+    for (const laneClass of MODEL_USAGE_RUNTIME_LANE_CLASSES) {
+      expect(
+        checkValues.has(laneClass),
+        `runtime_lane_class CHECK is missing lane class '${laneClass}'. `
+          + 'Add it to the model_usage_events_runtime_lane_class_check list via an additive migration '
+          + 'when extending RUNTIME_LANE_CLASSES.',
+      ).toBe(true);
+    }
+
+    // The CHECK must not silently drift the other way either: every enumerated value is
+    // a known lane class or the 'unknown' sentinel.
+    const knownValues = new Set<string>(MODEL_USAGE_RUNTIME_LANE_CLASSES);
+    for (const checkValue of checkValues) {
+      expect(
+        knownValues.has(checkValue),
+        `runtime_lane_class CHECK enumerates unknown value '${checkValue}'.`,
+      ).toBe(true);
+    }
+
+    // Sanity: the source-of-truth lane classes are present so the guard is non-vacuous.
+    expect(Object.values(RUNTIME_LANE_CLASSES).length).toBeGreaterThan(0);
+    for (const laneClass of Object.values(RUNTIME_LANE_CLASSES)) {
+      expect(checkValues.has(laneClass)).toBe(true);
+    }
   });
 });

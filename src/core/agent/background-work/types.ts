@@ -183,6 +183,20 @@ export interface StoredBackgroundWorkJob {
   revision: number;
   deferredFromState?: 'queued' | 'retry_wait';
   deferredFromAvailableAtMs?: number;
+  /**
+   * Anti-starvation aging (mmo9.7.4). Count of foreground-caused defers this job
+   * has accrued; drives welfare eligibility. Zero for a job that has never been
+   * deferred by foreground contention.
+   */
+  deferCount: number;
+  /** Wall-clock of this job's FIRST foreground defer, if any (welfare age gate). */
+  firstDeferredAtMs?: number;
+  /**
+   * True only while this job is running and was admitted through the bounded
+   * welfare-reserve bypass. Grants a protected completion (foreground effect
+   * fences treat it as owned) and is counted against the reserve cap.
+   */
+  welfareClaimed: boolean;
 }
 
 export interface ClaimedBackgroundWorkJob extends StoredBackgroundWorkJob {

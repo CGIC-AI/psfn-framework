@@ -121,6 +121,7 @@ import {
 import { icpTargetChannelInitiationCommand } from './icp-target-channel-command.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 import type { BackgroundWorkRuntimeTuning } from '../../core/agent/background-work/config.js';
+import type { BackgroundWorkWelfarePolicy } from '../../core/agent/background-work/store-port.js';
 
 const log = createComponentLogger('AgentCoreRuntime');
 
@@ -135,6 +136,8 @@ export interface AgentCoreRuntimeOptions {
   episodicStore?: EpisodicStorePort | null;
   backgroundWorkStore: BackgroundWorkStorePort;
   backgroundWorkTuning: BackgroundWorkRuntimeTuning;
+  /** Anti-starvation welfare policy (mmo9.7.4), resolved from scheduler.json. */
+  backgroundWorkWelfare?: Partial<BackgroundWorkWelfarePolicy>;
   contactStore?: ContactStorePort;
   card: CharacterCardV2;
   systemPrompt: string;
@@ -310,6 +313,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     appCache,
     backgroundWorkStore: options.backgroundWorkStore,
     backgroundWorkTuning: options.backgroundWorkTuning,
+    ...(options.backgroundWorkWelfare ? { backgroundWorkWelfare: options.backgroundWorkWelfare } : {}),
     contactTrackingGate,
     ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
   });

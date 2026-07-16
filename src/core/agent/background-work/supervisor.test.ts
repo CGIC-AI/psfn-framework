@@ -153,6 +153,8 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
       availableAtMs: input.createdAtMs,
       updatedAtMs: input.createdAtMs,
       revision: 1,
+      deferCount: 0,
+      welfareClaimed: false,
     };
     this.jobs.set(job.jobId, job);
     return { outcome: 'enqueued', job: { ...job }, staleDiscardedJobIds: [] };

@@ -22,6 +22,21 @@ export type BackgroundWorkEnqueueResult =
 
 export type BackgroundWorkClaimFence = 'owned' | 'foreground_active' | 'lease_lost';
 
+/**
+ * Bounded anti-starvation welfare policy (mmo9.7.4). A runnable job crosses the
+ * welfare threshold once it has accrued `deferThreshold` foreground defers OR its
+ * first foreground defer is at least `ageThresholdMs` old; such a job may then be
+ * admitted past the foreground exclusion into one of `reserveSlots` globally
+ * bounded welfare slots. This is a reservation in the EXISTING claimNext choke,
+ * not a second scheduler (Law 12.4). A `reserveSlots` of 0 disables welfare
+ * admission entirely (fail-closed to pre-welfare FIFO behavior).
+ */
+export interface BackgroundWorkWelfarePolicy {
+  deferThreshold: number;
+  ageThresholdMs: number;
+  reserveSlots: number;
+}
+
 export interface BackgroundWorkStorePort {
   enqueue(input: EnqueueBackgroundWorkInput): Promise<BackgroundWorkJobEnqueueResult>;
   /** Atomic all-or-nothing enqueue for one canonical TurnRecord handoff. */
@@ -58,7 +73,21 @@ export interface BackgroundWorkStorePort {
     leaseOwner: string;
     nowMs: number;
     leaseDurationMs: number;
+    /**
+     * Hard exclusion: sessions with a job this owner is already running. Never
+     * bypassed (one running job per session is a durable invariant).
+     */
     excludedLogicalSessionIds: readonly string[];
+    /**
+     * Foreground-active sessions. Normally excluded, but a welfare-eligible job
+     * (mmo9.7.4) may bypass this into a bounded welfare-reserve slot so sustained
+     * foreground turns cannot starve it forever. Optional — omission preserves
+     * the pre-welfare behavior where the durable foreground-lease exclusion is
+     * the only foreground gate.
+     */
+    foregroundExcludedLogicalSessionIds?: readonly string[];
+    /** Anti-starvation welfare policy (mmo9.7.4). Absent/0-slot disables welfare admission. */
+    welfare?: BackgroundWorkWelfarePolicy;
   }): Promise<ClaimedBackgroundWorkJob | null>;
   renewClaims(input: {
     leaseOwner: string;

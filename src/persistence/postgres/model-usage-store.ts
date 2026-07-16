@@ -66,6 +66,7 @@ import {
   MODEL_USAGE_CHARGE_SURFACES,
   MODEL_USAGE_GROUP_DIMENSIONS,
   MODEL_USAGE_ORIGIN_TYPES,
+  MODEL_USAGE_RUNTIME_LANE_CLASSES,
   MODEL_USAGE_UNKNOWN_DIMENSION,
   normalizeModelUsageAttribution,
 } from '../../shared/telemetry/model-usage-attribution.js';
@@ -118,6 +119,7 @@ interface ModelUsageEventRow {
   channel_type: string;
   tool_name: string | null;
   tool_call_id: string | null;
+  runtime_lane_class: ModelUsageEvent['attribution']['runtimeLaneClass'] | null;
   charge_lane: ModelUsageEvent['attribution']['chargeLane'] | null;
   charge_surface: ModelUsageEvent['attribution']['chargeSurface'] | null;
   charge_event_id: string | null;
@@ -332,6 +334,7 @@ const MODEL_USAGE_DIMENSION_SQL: Record<ModelUsageGroupDimension, string> = {
   requestedProvider: 'requested_provider',
   requestedModel: 'requested_model',
   toolName: 'tool_name',
+  runtimeLaneClass: 'runtime_lane_class',
   chargeLane: 'charge_lane',
   chargeSurface: 'charge_surface',
   chargeEventId: 'charge_event_id',
@@ -698,6 +701,10 @@ function mapEventRow(row: ModelUsageEventRow): ModelUsageEvent {
       requestId: row.request_id ?? undefined,
       toolName: row.tool_name ?? undefined,
       toolCallId: row.tool_call_id ?? undefined,
+      runtimeLaneClass: row.runtime_lane_class === null
+        || row.runtime_lane_class === MODEL_USAGE_UNKNOWN_DIMENSION
+        ? undefined
+        : row.runtime_lane_class,
       chargeLane: row.charge_lane === null || row.charge_lane === MODEL_USAGE_UNKNOWN_DIMENSION
         ? undefined
         : row.charge_lane,
@@ -1555,7 +1562,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
         effective_input_cost_usd, effective_output_cost_usd,
         effective_cache_read_cost_usd, effective_cache_write_cost_usd, effective_cost_usd,
         cost_source, currency, stop_reason, error_code, error_message, metadata_json,
-        event_fingerprint, telemetry_visibility
+        event_fingerprint, telemetry_visibility, runtime_lane_class
       )
       VALUES (
         $1, $2, $3, $4, $5, $6,
@@ -1571,7 +1578,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
         $55, $56, $57, $58, $59,
         $60, $61, $62, $63, $64,
         $65, $66, $67, $68, $69, $70::jsonb,
-        $71, $72
+        $71, $72, $73
       )
       ON CONFLICT (logical_call_id, attempt) DO UPDATE
         SET id = model_usage_events.id
@@ -1650,6 +1657,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       JSON.stringify(event.metadata),
       eventFingerprint(event),
       event.telemetryVisibility,
+      event.attribution.runtimeLaneClass,
       ])).rows.at(0);
       if (!inserted) {
         throw new Error(
@@ -2096,6 +2104,7 @@ const QUERY_ENUM_VALUES: Partial<Record<keyof ModelUsageQuery, ReadonlySet<strin
   callType: new Set(MODEL_USAGE_CALL_TYPES),
   originType: new Set(MODEL_USAGE_ORIGIN_TYPES),
   channelType: new Set(MODEL_USAGE_CHANNEL_TYPES),
+  runtimeLaneClass: new Set(MODEL_USAGE_RUNTIME_LANE_CLASSES),
   chargeLane: new Set(MODEL_USAGE_CHARGE_LANES),
   chargeSurface: new Set(MODEL_USAGE_CHARGE_SURFACES),
   status: new Set(MODEL_USAGE_STATUSES),
@@ -2233,6 +2242,7 @@ function buildWhere(query: ModelUsageQuery): SqlWhere {
     ['requestedProvider', query.requestedProvider],
     ['requestedModel', query.requestedModel],
     ['toolName', query.toolName],
+    ['runtimeLaneClass', query.runtimeLaneClass],
     ['chargeLane', query.chargeLane],
     ['chargeSurface', query.chargeSurface],
     ['chargeEventId', query.chargeEventId],

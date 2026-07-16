@@ -116,6 +116,11 @@ export class DiscordVoiceRuntime {
   private connectionGeneration = 0;
   private connectionStateListener: ((oldState: VoiceConnection['state'], newState: VoiceConnection['state']) => void) | null = null;
   private activeTurn: ActiveVoiceTurn | null = null;
+  /**
+   * psfn-framework-mmo9.7.5: last spoken assistant utterance, replayed locally
+   * on a deterministic "repeat" control intent without a model turn.
+   */
+  private lastAssistantUtterance: string | null = null;
   private decryptFailureGeneration = 0;
   private decryptFailureCount = 0;
   private decryptRecoveryAttempts: number[] = [];
@@ -439,6 +444,10 @@ export class DiscordVoiceRuntime {
     this.activeChannel = null;
     this.activeTurn = null;
     this.activeTurnId = null;
+    // psfn-framework-d8vq.1: the remembered reply is scoped to the channel
+    // session; clear it on leave so a rejoin cannot replay a pre-leave utterance
+    // on a later "repeat" control.
+    this.lastAssistantUtterance = null;
     this.capturing = false;
     this.decryptFailureGeneration = 0;
     this.decryptFailureCount = 0;

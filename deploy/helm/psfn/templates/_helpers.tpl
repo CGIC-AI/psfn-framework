@@ -567,6 +567,82 @@ group: cert-manager.io
         {{ .Values.runtime.tempDir }} \
         {{ .Values.runtime.backupsDir }} \
         {{ .Values.runtime.modelCacheDir }}
+      migration_dir="{{ .Values.runtime.companionDataDir }}/.owner-migrations"
+      mkdir -p "$migration_dir"
+
+      record_owner_migration() {
+        legacy="$1"
+        marker="$2"
+        legacy_hash="$(sha256sum "$legacy" | cut -d ' ' -f1)"
+        marker_tmp="$(mktemp "${marker}.tmp.XXXXXX")"
+        printf '%s\n' "$legacy_hash" > "$marker_tmp"
+        chmod 0600 "$marker_tmp"
+        mv -f "$marker_tmp" "$marker"
+      }
+
+      migrate_per_companion_owner() {
+        base="$1"
+        legacy="{{ .Values.runtime.systemDataDir }}/${base}.json"
+        target="{{ .Values.runtime.companionDataDir }}/${base}.json"
+        marker="${migration_dir}/${base}.json.from-system.sha256"
+
+        if [ -L "$legacy" ] || { [ -e "$legacy" ] && [ ! -f "$legacy" ]; }; then
+          echo "Legacy owner path is not a regular file: $legacy" >&2
+          exit 1
+        fi
+        if [ -L "$target" ] || { [ -e "$target" ] && [ ! -f "$target" ]; }; then
+          echo "Per-companion owner path is not a regular file: $target" >&2
+          exit 1
+        fi
+        if [ -L "$marker" ] || { [ -e "$marker" ] && [ ! -f "$marker" ]; }; then
+          echo "Owner migration marker path is not a regular file: $marker" >&2
+          exit 1
+        fi
+
+        if [ -f "$marker" ]; then
+          if [ ! -f "$target" ]; then
+            echo "Owner migration marker exists but target is missing: $target" >&2
+            exit 1
+          fi
+          if [ -f "$legacy" ]; then
+            recorded_hash="$(tr -d '\r\n' < "$marker")"
+            legacy_hash="$(sha256sum "$legacy" | cut -d ' ' -f1)"
+            if [ "$recorded_hash" != "$legacy_hash" ]; then
+              echo "Legacy owner changed after migration: $legacy" >&2
+              exit 1
+            fi
+          fi
+          return
+        fi
+
+        if [ -f "$target" ]; then
+          if [ -f "$legacy" ]; then
+            if ! cmp -s "$legacy" "$target"; then
+              echo "Refusing ambiguous per-companion owner migration: $legacy and $target differ" >&2
+              exit 1
+            fi
+            record_owner_migration "$legacy" "$marker"
+          fi
+          return
+        fi
+
+        if [ -f "$legacy" ]; then
+          target_tmp="$(mktemp "${target}.tmp.XXXXXX")"
+          cp "$legacy" "$target_tmp"
+          cmp -s "$legacy" "$target_tmp"
+          chmod 0600 "$target_tmp"
+          mv -f "$target_tmp" "$target"
+          record_owner_migration "$legacy" "$marker"
+        fi
+      }
+
+      # capability-tier.json and scheduler.json became per-companion owner files.
+      # Existing single-companion releases have authoritative legacy copies under
+      # system-data; migrate those bytes exactly once before runtime startup.
+      for base in scheduler capability-tier; do
+        migrate_per_companion_owner "$base"
+      done
+
       {{- if .Values.bootstrap.seedOwnerFiles }}
       # bootstrap.seedOwnerFiles opt-in: seed missing owner files on a
       # first-ever install ONLY. Runtime config must not seed itself
@@ -574,13 +650,33 @@ group: cert-manager.io
       # files fail closed at startup via loadRequiredJson.
       for src in {{ .Values.runtime.configDir }}/*.seed.json; do
         [ -e "$src" ] || continue
-        base="$(basename "$src")"
-        target="{{ .Values.runtime.systemDataDir }}/${base%.seed.json}.json"
+        base="$(basename "$src" .seed.json)"
+        case "$base" in
+          scheduler|capability-tier)
+            target="{{ .Values.runtime.companionDataDir }}/${base}.json"
+            ;;
+          *)
+            target="{{ .Values.runtime.systemDataDir }}/${base}.json"
+            ;;
+        esac
         if [ ! -e "$target" ]; then
           cp "$src" "$target"
         fi
       done
       {{- end }}
+      for base in scheduler capability-tier; do
+        target="{{ .Values.runtime.companionDataDir }}/${base}.json"
+        if [ ! -f "$target" ] || [ -L "$target" ]; then
+          echo "Missing required per-companion owner file after bootstrap/migration: $target" >&2
+          exit 1
+        fi
+      done
+      # The owner-root cutover and scheduler schema cutover landed separately.
+      # Run the canonical validated/atomic migrator after routing the file into
+      # companion-data and before any runtime process loads it.
+      node /app/dist/migrate-scheduler-owner.js \
+        --apply \
+        --data-dir {{ .Values.runtime.companionDataDir }}
       if [ ! -e {{ .Values.runtime.characterCardPath }} ] && [ -e /seed/companion.json ]; then
         cp /seed/companion.json {{ .Values.runtime.characterCardPath }}
       fi

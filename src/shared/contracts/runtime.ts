@@ -1113,7 +1113,7 @@ export interface LLMPromptCacheObservability {
   retention?: PromptCacheRetention;
   scope?: PromptCacheScope;
   sessionId?: string;
-  reason?: 'disabled' | 'missing_channel_id';
+  reason?: 'disabled' | 'missing_channel_id' | 'missing_companion_id';
   /** Mechanism actually applied to the provider request (E2.4). */
   mechanism?: PromptCacheMechanism;
   /** cache_control breakpoints applied to the serialized system prompt. */
@@ -1445,7 +1445,29 @@ export interface ModelBudgetBlockedEvent extends Partial<CorrelationMetadata> {
 }
 
 export type ModelPurpose = 'chat' | 'background' | 'memory' | 'context' | 'reasoning' | 'longContext' | 'vision' | 'moa';
-export type CompletionPurpose = 'chat' | 'background' | 'memory' | 'context' | 'extraction' | 'summary' | 'reasoning' | 'import_processing' | 'vision';
+/**
+ * Canonical set of completion purposes. `CompletionPurpose` is derived from this
+ * tuple so the runtime union and the runtime-validatable list can never drift
+ * (used by the gateway RPC boundary to fail closed on a malformed wire purpose).
+ */
+export const COMPLETION_PURPOSES = [
+  'chat',
+  'background',
+  'memory',
+  'context',
+  'extraction',
+  'summary',
+  'reasoning',
+  'import_processing',
+  'vision',
+] as const;
+export type CompletionPurpose = typeof COMPLETION_PURPOSES[number];
+
+/** Runtime type guard for a wire-supplied completion purpose. Fails closed. */
+export function isCompletionPurpose(value: unknown): value is CompletionPurpose {
+  return typeof value === 'string'
+    && (COMPLETION_PURPOSES as readonly string[]).includes(value);
+}
 
 /**
  * Retry disposition an autonomous work item declares to the LLM client.
@@ -1512,6 +1534,17 @@ export interface LLMWorkSpec {
    * here so mmo9.7.4 consumes it without introducing a second flag.
    */
   preemptionProtected?: boolean;
+  /**
+   * fxt1: welfare grant proof. When `preemptionProtected` is asserted for an
+   * autonomous call, this carries the background-work `jobId` whose store row
+   * granted the escalation. The gateway RPC boundary re-verifies this id against
+   * the background-work store (`welfare_claimed = true AND state = 'running'`,
+   * companion-scoped) before honoring `preemptionProtected`; any failure strips
+   * the flag (fail closed → preemptable). It is a gateway-only verification
+   * token, never forwarded past the boundary. Only the sanctioned welfare path
+   * (post-turn background runtime, keyed off `job.welfareClaimed`) sets it.
+   */
+  welfareGrantJobId?: string;
   /** Correlation lineage (companion/session/channel/charge/ICP) for this work. */
   correlation?: Partial<CorrelationMetadata>;
 }

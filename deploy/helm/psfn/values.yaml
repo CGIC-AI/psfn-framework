@@ -73,10 +73,14 @@ runtime:
 
 bootstrap:
   # First-ever-install opt-in ONLY. When true, the seed init container copies
-  # /app/config/*.seed.json into system-data for any missing owner file.
+  # cluster-global owner templates into system-data and per-companion owner
+  # templates (scheduler and capability-tier) into companion-data.
   # Leave false so absent owner files fail closed at startup with the runtime's
   # loadRequiredJson error instead of silently running on seed defaults. See
   # src/system/config/load-or-seed.ts: "Runtime config must not seed itself".
+  # Existing releases are upgraded independently of this flag: the init
+  # container moves legacy system-data scheduler/capability values into their
+  # companion-owned paths using a hash-bound, fail-closed migration.
   seedOwnerFiles: false
 
 ports:

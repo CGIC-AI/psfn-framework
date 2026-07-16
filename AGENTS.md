@@ -38,7 +38,7 @@ Rules:
 - Use `--json` for programmatic use.
 - Do not rely on `bd sync`; the installed CLI here uses `bd dolt` subcommands instead.
 - This repo uses a local shared Dolt server for beads. Verify it with `bd dolt show` or `bd dolt test`.
-- A missing Dolt remote named `origin` is not a problem by itself. Do not run or report `bd dolt push` unless `bd dolt remote list --json` shows an actual configured remote.
+- A missing Dolt remote named `origin` is not a problem by itself. Do not run or report `bd dolt push` unless `bd dolt remote list --json` shows an actual configured remote. Historical incident: pushing without a real remote recreated junk `__dolt_remote_info__` / `refs/dolt/*` refs on GitHub that had to be deleted by hand.
 - `.beads/` is intentionally ignored local runtime/export state. Never `git add .beads`, never force-add `.beads/issues.jsonl`, and do not treat ignored `.beads` changes as code dirt.
 - Keep `bd config get export.git-add` at `false`; otherwise `bd` will try to stage ignored `.beads/issues.jsonl` exports and create noisy false warnings.
 - Do not create markdown TODO lists or external task trackers.
@@ -54,11 +54,18 @@ Prefer these files when checking behavior:
    - `src/app/startup/index.ts`
    - `src/app/gateway/main.ts`
    - `src/app/agent/main.ts`
+   - `src/app/operator/main.ts`
+   - `src/app/startup/composition/composition.ts`
 2. Config and ownership contracts
    - `src/shared/contracts/runtime.ts`
+   - `src/system/config/runtime-config-contracts.ts`
+   - `src/system/config/load-config.ts`
+   - `src/system/config/settings-contract-guard.ts`
+   - `src/system/config/startup-owner-files.ts`
    - `src/system/settings.ts`
    - `src/system/settings/contracts.ts`
    - `src/persistence/layout.ts`
+   - `src/persistence/runtime-factory.ts` (Postgres-only runtime persistence)
 3. Product/runtime overview and deeper design docs
    - `README.md`
    - `docs/specifications.md`
@@ -86,11 +93,15 @@ Mutable runtime settings belong in canonical JSON owner files in the system-owne
 
 - `settings.json`
 - `models.json`
+- `providers.json`
 - `scheduler.json`
 - `capability-tier.json`
 - `channels.json`
 - `skills.json`
 - `trust-policy.json`
+- `intake-policy.json`
+- `charge-policy.json`
+- `backup.json`
 
 Companion state belongs under `companion-data`.
 
@@ -184,9 +195,16 @@ Expanded meaning in this repo:
 - Gateway policy and path checks must deny by default.
 - If a capability or confirmation requirement is missing, stop the action.
 
-## Bugfixing And Adversarial Review
+## Delivery Loop
 
-For high-risk bugfixes, recent-commit reviews, or recurring bug classes, use the practices in `docs/adversarial-review-and-bugfixing-practices.md`. Do not load that document on every session start; consult it when the task involves adversarial review, process repair, regression-first fixes, or changes to config ownership, gateway policy, trust/privacy, persistence, deployment, or durable memory writes.
+The point is to get work DONE and shipped, then iterate — not to polish in place. The full wave protocol (roles, lane tables, branch shape, review/remediation loop, fix epics, validation separation, push policy) is **[`docs/orchestration-process.md`](./docs/orchestration-process.md)** — the operating contract for multi-agent implementation waves. Summary of the load-bearing rules:
+
+- **Roles**: Codex (`gpt-5.6-sol`, xhigh) is the primary implementer; Opus 4.8 (high) and the Pi agent (GLM 5.2, xhigh) are the two adversarial reviewer lanes; the orchestrator plans, dispatches, synthesizes, and integrates but does not implement or bulk-read code. Claude-side tool wiring lives in CLAUDE.md.
+- **Adversarial review**: reviewer lanes review the same immutable commit range independently and blind to each other, prompted to refute with concrete failure scenarios. The orchestrator dedupes and **independently verifies every claimed blocker** against the Blocking Risk Standard before remediation — reviewers systematically over-grade severity.
+- **Bounded loop**: implement → reviews → **one remediation pass** (verified IMPORTANT/P0-P1 findings only) → one final check → move on. No successive review/remediation cycles.
+- **IMPORTANT ≙ P0/P1** and only for: partner-data security/privacy/isolation, companion welfare/consent/autonomy, real data loss or secret exposure, a broken core acceptance path, or a mandatory gate (lint).
+- **Leftover IMPORTANT defects** go to the wave's `<wave> fixes` epic as self-contained beads for a fresh agent; the completed implementation bead still closes. **Nonblocking observations go in the handoff report only — never beads, never merge blockers.**
+- For high-risk areas (config ownership, gateway policy, trust/privacy, persistence, deployment, durable memory writes) and recurring bug classes, additionally apply `docs/adversarial-review-and-bugfixing-practices.md`; consult it when the task warrants, not at every session start.
 
 ## Live Alpha Migration Boundary
 

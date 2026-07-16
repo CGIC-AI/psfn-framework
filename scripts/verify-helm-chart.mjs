@@ -1,8 +1,17 @@
 #!/usr/bin/env node
-import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parseAllDocuments } from 'yaml';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const chartDir = resolve(repoRoot, 'deploy/helm/psfn');
@@ -71,6 +80,107 @@ function findDocumentByKindName(rendered, kind, name) {
     doc.includes(`kind: ${kind}\n`) &&
     doc.includes(`\n  name: ${name}\n`)
   )) ?? '';
+}
+
+function findParsedDocumentByKindName(rendered, kind, name) {
+  return parseAllDocuments(rendered)
+    .map(document => document.toJS())
+    .find(document => document?.kind === kind && document?.metadata?.name === name);
+}
+
+function renderedSeedCommand(rendered) {
+  const commands = [];
+  for (const deploymentName of ['psfn-agent', 'psfn-gateway', 'psfn-garden']) {
+    const deployment = findParsedDocumentByKindName(rendered, 'Deployment', deploymentName);
+    const initContainer = deployment?.spec?.template?.spec?.initContainers
+      ?.find(container => container.name === 'seed-runtime-files');
+    const command = initContainer?.command;
+    if (!Array.isArray(command) || command[0] !== 'sh' || command[1] !== '-c') {
+      throw new Error(
+        `${deploymentName} seed-runtime-files init command is not a rendered sh -c command`,
+      );
+    }
+    const mounts = new Map(
+      (initContainer.volumeMounts ?? []).map(mount => [mount.name, mount]),
+    );
+    for (const volumeName of ['system-data', 'companion-data']) {
+      const mount = mounts.get(volumeName);
+      if (!mount || mount.readOnly === true) {
+        throw new Error(
+          `${deploymentName} seed-runtime-files must mount ${volumeName} writable`,
+        );
+      }
+    }
+    commands.push(command[2]);
+  }
+  if (commands.some(command => command !== commands[0])) {
+    throw new Error('agent, gateway, and Garden owner migration commands differ');
+  }
+  return commands[0];
+}
+
+function renderOwnerMigrationFixture(rootDir, seedOwnerFiles) {
+  const systemDataDir = join(rootDir, 'system-data');
+  const companionDataDir = join(rootDir, 'companion-data');
+  const renderedFixture = render([
+    '--set-string', `runtime.systemDataDir=${systemDataDir}`,
+    '--set-string', `runtime.companionDataDir=${companionDataDir}`,
+    '--set-string', `runtime.workspacePath=${join(rootDir, 'workspace')}`,
+    '--set-string', `runtime.logsDir=${join(rootDir, 'runtime', 'logs')}`,
+    '--set-string', `runtime.tempDir=${join(rootDir, 'runtime', 'tmp')}`,
+    '--set-string', `runtime.backupsDir=${join(rootDir, 'runtime', 'backups')}`,
+    '--set-string', `runtime.modelCacheDir=${join(rootDir, 'models')}`,
+    '--set-string', `runtime.configDir=${resolve(repoRoot, 'config')}`,
+    '--set-string', `runtime.characterCardPath=${join(companionDataDir, 'companion.json')}`,
+    '--set', `bootstrap.seedOwnerFiles=${seedOwnerFiles}`,
+  ]);
+  const containerMigrationCommand = 'node /app/dist/migrate-scheduler-owner.js';
+  const testMigrationCommand = [
+    resolve(repoRoot, 'node_modules/.bin/tsx'),
+    resolve(repoRoot, 'src/app/maintenance/migrate-scheduler-owner.ts'),
+  ].join(' ');
+  return {
+    command: renderedSeedCommand(renderedFixture).replace(
+      containerMigrationCommand,
+      testMigrationCommand,
+    ),
+    systemDataDir,
+    companionDataDir,
+  };
+}
+
+function runOwnerMigrationCommand(command, expectedStatus = 0) {
+  const result = spawnSync('sh', ['-c', command], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  });
+  if (result.status !== expectedStatus) {
+    throw new Error(
+      `owner migration command exit ${result.status}, expected ${expectedStatus}: `
+      + `${result.stderr}${result.stdout}`,
+    );
+  }
+  return `${result.stderr}${result.stdout}`;
+}
+
+function runOwnerMigrationCommandAsync(command) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('sh', ['-c', command], {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.stderr.on('data', chunk => { output += chunk; });
+    child.on('error', reject);
+    child.on('close', status => {
+      if (status !== 0) {
+        reject(new Error(`concurrent owner migration exited ${status}: ${output}`));
+        return;
+      }
+      resolvePromise(output);
+    });
+  });
 }
 
 function assertDocumentDoesNotSelectComponent(document, component, label) {
@@ -475,9 +585,237 @@ assertIncludes(
 );
 assertIncludes(
   seededRender,
-  'target="/app/system-data/${base%.seed.json}.json"',
-  'owner-file seeding targets system-data owner files when opted in',
+  'node /app/dist/migrate-scheduler-owner.js',
+  'compiled scheduler schema migration before runtime startup',
 );
+assertIncludes(
+  seededRender,
+  'scheduler|capability-tier)',
+  'per-companion owner-file routing registry',
+);
+assertIncludes(
+  seededRender,
+  'target="/app/companion-data/${base}.json"',
+  'per-companion owner-file seeding targets companion-data',
+);
+assertIncludes(
+  seededRender,
+  'target="/app/system-data/${base}.json"',
+  'cluster-global owner-file seeding targets system-data',
+);
+
+const schedulerSeed = readFileSync(resolve(repoRoot, 'config/scheduler.seed.json'), 'utf8');
+const preBundledScheduler = readFileSync(
+  resolve(repoRoot, 'src/system/config/fixtures/scheduler.pre-bundled-owner.json'),
+  'utf8',
+);
+const capabilityTierSeed = readFileSync(
+  resolve(repoRoot, 'config/capability-tier.seed.json'),
+  'utf8',
+);
+const perCompanionOwners = new Map([
+  ['scheduler.json', schedulerSeed],
+  ['capability-tier.json', capabilityTierSeed],
+]);
+
+const upgradeRoot = mkdtempSync(join(tmpdir(), 'psfn-helm-owner-upgrade-'));
+try {
+  const fixture = renderOwnerMigrationFixture(upgradeRoot, false);
+  mkdirSync(fixture.systemDataDir, { recursive: true });
+  mkdirSync(fixture.companionDataDir, { recursive: true });
+  const legacyScheduler = preBundledScheduler.replace(
+    '"tickIntervalMs": 60000',
+    '"tickIntervalMs": 61000',
+  );
+  const legacyCapabilityTier = capabilityTierSeed.replace('"nursery"', '"mature"');
+  const legacyOwners = new Map([
+    ['scheduler.json', legacyScheduler],
+    ['capability-tier.json', legacyCapabilityTier],
+  ]);
+  for (const [fileName, contents] of legacyOwners) {
+    writeFileSync(join(fixture.systemDataDir, fileName), contents, 'utf8');
+  }
+
+  // The same shared PVCs are mounted by all three workload init containers.
+  // Prove their idempotent transaction tolerates a simultaneous rollout.
+  await Promise.all([
+    runOwnerMigrationCommandAsync(fixture.command),
+    runOwnerMigrationCommandAsync(fixture.command),
+    runOwnerMigrationCommandAsync(fixture.command),
+  ]);
+  for (const [fileName, contents] of legacyOwners) {
+    const targetPath = join(fixture.companionDataDir, fileName);
+    if (!existsSync(targetPath)) {
+      throw new Error(`${fileName} was not migrated into companion-data`);
+    }
+    if (fileName === 'capability-tier.json' && readFileSync(targetPath, 'utf8') !== contents) {
+      throw new Error('capability-tier.json was not migrated byte-for-byte');
+    }
+    const markerPath = join(
+      fixture.companionDataDir,
+      '.owner-migrations',
+      `${fileName}.from-system.sha256`,
+    );
+    if (!existsSync(markerPath)) {
+      throw new Error(`${fileName} migration marker was not recorded`);
+    }
+  }
+  const migratedScheduler = JSON.parse(
+    readFileSync(join(fixture.companionDataDir, 'scheduler.json'), 'utf8'),
+  );
+  if (migratedScheduler.salienceDecayIntervalMs !== undefined
+    || migratedScheduler.socialGraphBuilder?.intervalMs !== undefined
+    || migratedScheduler.backgroundMaintenance?.intervalMs !== 3_600_000) {
+    throw new Error('legacy scheduler owner was not converted to backgroundMaintenance');
+  }
+
+  migratedScheduler.tickIntervalMs = 62_000;
+  const companionScheduler = `${JSON.stringify(migratedScheduler, null, 2)}\n`;
+  writeFileSync(
+    join(fixture.companionDataDir, 'scheduler.json'),
+    companionScheduler,
+    'utf8',
+  );
+  runOwnerMigrationCommand(fixture.command);
+  if (readFileSync(join(fixture.companionDataDir, 'scheduler.json'), 'utf8') !== companionScheduler) {
+    throw new Error('an already-migrated companion owner was overwritten by its legacy source');
+  }
+
+  writeFileSync(
+    join(fixture.systemDataDir, 'scheduler.json'),
+    legacyScheduler.replace('"tickIntervalMs": 61000', '"tickIntervalMs": 63000'),
+    'utf8',
+  );
+  const changedLegacyOutput = runOwnerMigrationCommand(fixture.command, 1);
+  assertIncludes(
+    changedLegacyOutput,
+    'Legacy owner changed after migration',
+    'changed legacy owner fail-closed error',
+  );
+} finally {
+  rmSync(upgradeRoot, { recursive: true, force: true });
+}
+
+const ambiguousRoot = mkdtempSync(join(tmpdir(), 'psfn-helm-owner-ambiguous-'));
+try {
+  const fixture = renderOwnerMigrationFixture(ambiguousRoot, false);
+  mkdirSync(fixture.systemDataDir, { recursive: true });
+  mkdirSync(fixture.companionDataDir, { recursive: true });
+  writeFileSync(join(fixture.systemDataDir, 'scheduler.json'), schedulerSeed, 'utf8');
+  writeFileSync(
+    join(fixture.companionDataDir, 'scheduler.json'),
+    schedulerSeed.replace('"tickIntervalMs": 60000', '"tickIntervalMs": 61000'),
+    'utf8',
+  );
+  const ambiguousOutput = runOwnerMigrationCommand(fixture.command, 1);
+  assertIncludes(
+    ambiguousOutput,
+    'Refusing ambiguous per-companion owner migration',
+    'divergent unmarked owner fail-closed error',
+  );
+} finally {
+  rmSync(ambiguousRoot, { recursive: true, force: true });
+}
+
+const identicalRoot = mkdtempSync(join(tmpdir(), 'psfn-helm-owner-identical-'));
+try {
+  const fixture = renderOwnerMigrationFixture(identicalRoot, false);
+  mkdirSync(fixture.systemDataDir, { recursive: true });
+  mkdirSync(fixture.companionDataDir, { recursive: true });
+  for (const [fileName, contents] of perCompanionOwners) {
+    writeFileSync(join(fixture.systemDataDir, fileName), contents, 'utf8');
+    writeFileSync(join(fixture.companionDataDir, fileName), contents, 'utf8');
+  }
+  runOwnerMigrationCommand(fixture.command);
+  for (const fileName of perCompanionOwners.keys()) {
+    if (!existsSync(join(
+      fixture.companionDataDir,
+      '.owner-migrations',
+      `${fileName}.from-system.sha256`,
+    ))) {
+      throw new Error(`${fileName} identical legacy and target state was not recorded`);
+    }
+  }
+} finally {
+  rmSync(identicalRoot, { recursive: true, force: true });
+}
+
+const targetOnlyRoot = mkdtempSync(join(tmpdir(), 'psfn-helm-owner-target-only-'));
+try {
+  const fixture = renderOwnerMigrationFixture(targetOnlyRoot, false);
+  mkdirSync(fixture.companionDataDir, { recursive: true });
+  for (const [fileName, contents] of perCompanionOwners) {
+    writeFileSync(join(fixture.companionDataDir, fileName), contents, 'utf8');
+  }
+  runOwnerMigrationCommand(fixture.command);
+  if (existsSync(join(fixture.companionDataDir, '.owner-migrations'))) {
+    const unexpectedMarkers = Array.from(perCompanionOwners.keys()).some(fileName => existsSync(join(
+      fixture.companionDataDir,
+      '.owner-migrations',
+      `${fileName}.from-system.sha256`,
+    )));
+    if (unexpectedMarkers) {
+      throw new Error('target-only owner state was incorrectly recorded as a legacy migration');
+    }
+  }
+} finally {
+  rmSync(targetOnlyRoot, { recursive: true, force: true });
+}
+
+const missingRoot = mkdtempSync(join(tmpdir(), 'psfn-helm-owner-missing-'));
+try {
+  const fixture = renderOwnerMigrationFixture(missingRoot, false);
+  const missingOutput = runOwnerMigrationCommand(fixture.command, 1);
+  assertIncludes(
+    missingOutput,
+    'Missing required per-companion owner file after bootstrap/migration',
+    'missing owner with seeding disabled fail-closed error',
+  );
+} finally {
+  rmSync(missingRoot, { recursive: true, force: true });
+}
+
+const missingMarkedTargetRoot = mkdtempSync(
+  join(tmpdir(), 'psfn-helm-owner-missing-marked-target-'),
+);
+try {
+  const fixture = renderOwnerMigrationFixture(missingMarkedTargetRoot, false);
+  const migrationDir = join(fixture.companionDataDir, '.owner-migrations');
+  mkdirSync(migrationDir, { recursive: true });
+  writeFileSync(
+    join(migrationDir, 'scheduler.json.from-system.sha256'),
+    `${'0'.repeat(64)}\n`,
+    'utf8',
+  );
+  const missingMarkedTargetOutput = runOwnerMigrationCommand(fixture.command, 1);
+  assertIncludes(
+    missingMarkedTargetOutput,
+    'Owner migration marker exists but target is missing',
+    'missing marked target fail-closed error',
+  );
+} finally {
+  rmSync(missingMarkedTargetRoot, { recursive: true, force: true });
+}
+
+const freshInstallRoot = mkdtempSync(join(tmpdir(), 'psfn-helm-owner-fresh-'));
+try {
+  const fixture = renderOwnerMigrationFixture(freshInstallRoot, true);
+  runOwnerMigrationCommand(fixture.command);
+  for (const [fileName, contents] of perCompanionOwners) {
+    const companionPath = join(fixture.companionDataDir, fileName);
+    if (readFileSync(companionPath, 'utf8') !== contents) {
+      throw new Error(`fresh install did not seed ${fileName} into companion-data`);
+    }
+    if (existsSync(join(fixture.systemDataDir, fileName))) {
+      throw new Error(`fresh install incorrectly seeded ${fileName} into system-data`);
+    }
+  }
+  if (!existsSync(join(fixture.systemDataDir, 'settings.json'))) {
+    throw new Error('fresh install did not seed cluster-global settings.json into system-data');
+  }
+} finally {
+  rmSync(freshInstallRoot, { recursive: true, force: true });
+}
 
 const liteLlmConfig = findDocumentByKindName(rendered, 'ConfigMap', 'psfn-litellm-config');
 assertIncludes(liteLlmConfig, 'model_name: "openrouter/*"', 'LiteLLM OpenRouter wildcard config');

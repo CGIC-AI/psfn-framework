@@ -98,9 +98,11 @@ CHARACTER_CARD_PATH=/app/companion-data/companion.json
 `system-data`, `companion-data`, `workspace`, `runtime`, and `model-cache` are
 PVC-backed. The seed init container creates the runtime directories and, only
 when `bootstrap.seedOwnerFiles=true`, copies `/app/config/*.seed.json` into
-`system-data` for any missing owner file. It never overwrites Garden-edited
-owner files. A starter `companion.json` ConfigMap is copied once into
-`companion-data` only if no companion card exists.
+the correct owner root for any missing owner file. Cluster-global owners go to
+`system-data`; `scheduler.json` and `capability-tier.json` go to
+`companion-data`. It never overwrites Garden-edited owner files. A starter
+`companion.json` ConfigMap is copied once into `companion-data` only if no
+companion card exists.
 
 `bootstrap.seedOwnerFiles` defaults to `false`. With it disabled, absent owner
 files fail closed at startup with the runtime's `loadRequiredJson` error rather
@@ -111,6 +113,111 @@ all subsequent upgrades so a stale seed can never mask a missing/mis-migrated
 owner file.
 
 Mutable owner JSON stays on PVCs, not in ConfigMaps.
+
+### Upgrading releases created before per-companion owner files
+
+`scheduler.json` and `capability-tier.json` used to live under `system-data`.
+Every app workload runs the same idempotent init migration before startup:
+
+- If the companion-owned target is absent and a legacy system-owned file
+  exists, the file is first copied byte-for-byte and a source-hash marker is
+  written under `companion-data/.owner-migrations/`.
+- After owner routing, the compiled `migrate-scheduler-owner` entrypoint
+  validates and atomically upgrades the retired `salienceDecayIntervalMs` /
+  `socialGraphBuilder.intervalMs` shape to
+  `backgroundMaintenance.intervalMs`. An already-canonical scheduler is
+  validated without being rewritten; mixed or invalid shapes fail closed.
+- The legacy source is retained as the rollback snapshot. The runtime never
+  reads it as a fallback after the upgrade.
+- A later companion-owned edit is preserved. The marker binds the unchanged
+  legacy source, so the init path can distinguish a legitimate target edit from
+  an ambiguous first migration.
+- If an unmarked source and target differ, or the legacy source changes after a
+  marked migration, startup fails closed with an actionable error. The chart
+  never guesses which schedule or capability tier is authoritative.
+- If neither file exists, only an intentional first install with
+  `bootstrap.seedOwnerFiles=true` creates the companion-owned file. Otherwise
+  the init container fails before runtime startup.
+
+Before upgrading another cluster, preserve its values and take a backup. Then
+compare hashes for both files at the old and new roots without printing their
+contents:
+
+```bash
+RELEASE=psfn
+NAMESPACE=psfn
+helm get values "$RELEASE" -n "$NAMESPACE" -o yaml > "/tmp/${RELEASE}-values.yaml"
+chmod 600 "/tmp/${RELEASE}-values.yaml"
+
+kubectl -n "$NAMESPACE" exec deploy/psfn-agent -- sh -c '
+  for root in /app/system-data /app/companion-data; do
+    for file in scheduler.json capability-tier.json; do
+      if [ -f "$root/$file" ]; then sha256sum "$root/$file"; else echo "MISSING $root/$file"; fi
+    done
+  done
+'
+```
+
+If the old workload is already crash-looping because it requires the new
+companion-owned paths, skip the `kubectl exec` preflight. That is not a reason
+to roll back or copy files manually: deploy the fixed chart and exact image as
+the forward recovery. Its init container runs before the application and
+performs the same guarded migration directly on the PVCs. Use its logs for a
+fail-closed conflict diagnosis:
+
+```bash
+kubectl -n "$NAMESPACE" logs deploy/psfn-agent -c seed-runtime-files --tail=-1
+```
+
+Safe automatic upgrade states are: legacy source present and target absent;
+both present and byte-identical before the first marked migration; or target
+present with no legacy source. If both exist and differ without a marker, stop,
+back up both, and explicitly reconcile the authoritative file before upgrading.
+Do not enable seed defaults to conceal a conflict.
+
+Use the saved values with an exact, non-floating image reference. For a local
+k3d import, the pinned commit tag is sufficient; production registries should
+also set the immutable digest:
+
+```bash
+IMAGE_REPOSITORY=localhost/psfn-framework
+IMAGE_TAG=0.1.0-kube-<git-short-sha>
+helm upgrade --install "$RELEASE" deploy/helm/psfn \
+  --namespace "$NAMESPACE" \
+  -f "/tmp/${RELEASE}-values.yaml" \
+  --set-string psfnAppImage.repository="$IMAGE_REPOSITORY" \
+  --set-string psfnAppImage.tag="$IMAGE_TAG" \
+  --set-string psfnAppImage.digest= \
+  --set psfnAppImage.pullPolicy=IfNotPresent \
+  --set bootstrap.seedOwnerFiles=false \
+  --wait --timeout 10m
+```
+
+This one upgrade handles both historical boundaries in order: system-to-
+companion owner routing, then the scheduler schema conversion. Do not edit the
+PVC JSON by hand or run a separate schema rewrite before Helm. Repeat this
+command for every release/companion root in a multi-release cluster.
+
+After the Helm upgrade, require all three app rollouts and verify the new owner
+paths and markers:
+
+```bash
+kubectl -n "$NAMESPACE" rollout status deploy/psfn-agent --timeout=300s
+kubectl -n "$NAMESPACE" rollout status deploy/psfn-gateway --timeout=300s
+kubectl -n "$NAMESPACE" rollout status deploy/psfn-garden --timeout=300s
+kubectl -n "$NAMESPACE" exec deploy/psfn-agent -- sh -c '
+  for file in scheduler.json capability-tier.json; do
+    test -f "/app/companion-data/$file"
+    test -f "/app/companion-data/.owner-migrations/$file.from-system.sha256" \
+      || test ! -f "/app/system-data/$file"
+  done
+'
+```
+
+The retained system-owned files preserve rollback evidence, but forward
+recovery with the fixed chart is the normal response to the ownership-cutover
+crash loop. Later companion-owned edits are intentionally not mirrored back to
+the retired path.
 
 ## Repository Checkout
 

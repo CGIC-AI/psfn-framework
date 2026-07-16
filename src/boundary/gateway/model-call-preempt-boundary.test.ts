@@ -23,9 +23,12 @@ import { EventEmitter } from 'node:events';
 import { describe, it, expect, afterEach } from 'vitest';
 import { JSONRPCServer } from 'json-rpc-2.0';
 import { GatewayClient } from './client.js';
-import { exposeModelCallGateBlocks } from './methods/llm.js';
+import { exposeModelCallGateBlocks, resolveRpcWorkSpec } from './methods/llm.js';
+import type { GatewayMethodRuntime } from './methods/types.js';
 import type { NdjsonConnection, GatewayRpcSerializedTransportStats } from './transport.js';
-import { ModelCallPreemptedError } from '../../primitives/llm/model-call-gate.js';
+import { ModelCallGate, ModelCallPreemptedError } from '../../primitives/llm/model-call-gate.js';
+import { buildLLMWorkSpec } from '../../primitives/llm/work-spec.js';
+import type { LLMWorkSpecWireParams } from '../../primitives/llm/work-spec-wire.js';
 import {
   executePostTurnBackgroundWork,
   type PostTurnBackgroundRuntimeDependencies,
@@ -211,5 +214,234 @@ describe('model-call preemption across the gateway→agent JSON-RPC boundary (mm
     // attempt consumed — the guarantee the flattened-error path violated.
     expect(disposition).toBeInstanceOf(BackgroundWorkDeferredError);
     expect((disposition as BackgroundWorkDeferredError).reasonCode).toBe('foreground_active');
+  });
+});
+
+// psfn-framework-fxt1: the gateway RPC boundary must re-verify a caller-asserted
+// `preemptionProtected` against the welfare-grant authority (the background-work
+// store) and STRIP it on any failure before the gate can honor it. These tests
+// exercise the real `resolveRpcWorkSpec` boundary path plus a REAL ModelCallGate,
+// and the strip decision over the real JSON-RPC wire.
+
+const OWN_COMPANION = 'companion-a';
+const OTHER_COMPANION = 'companion-b';
+
+/**
+ * A stub gateway method runtime exposing only what `resolveRpcWorkSpec` reads:
+ * the authenticated companion and the welfare-grant verifier. The verifier here
+ * stands in for the store's schema-scoped `welfare_claimed AND running` check.
+ */
+function stubRuntime(options: {
+  companionId?: string;
+  verify?: (jobId: string, companionId: string) => Promise<boolean>;
+}): GatewayMethodRuntime {
+  return {
+    authenticatedCompanionId: () => options.companionId,
+    ...(options.verify ? { verifyWelfareGrant: options.verify } : {}),
+  } as unknown as GatewayMethodRuntime;
+}
+
+/** A forged wire spec on a preemptable lane asserting protection. */
+function forgedProtectedSpec(overrides: Partial<LLMWorkSpecWireParams> = {}): LLMWorkSpecWireParams {
+  return {
+    purpose: 'extraction',
+    lane: 'background_continuation',
+    durable: true,
+    preemptionProtected: true,
+    ...overrides,
+  };
+}
+
+/**
+ * Drive a REAL ModelCallGate at capacity 1: a background_continuation call takes
+ * the only slot, then a higher-priority foreground_chat acquires. Returns
+ * whether the background call was preempted (aborted) — i.e. whether its slot
+ * was granted preemptable.
+ */
+async function backgroundIsPreemptedByForeground(preemptionProtected: boolean): Promise<boolean> {
+  const gate = new ModelCallGate();
+  const resourceKey = 'registered_model::local_endpoint';
+  const capacity = { capacity: 1, reservedForegroundSlots: 0 };
+
+  let releaseBackground!: () => void;
+  const backgroundBarrier = new Promise<void>((resolve) => { releaseBackground = resolve; });
+  let markBackgroundStarted!: () => void;
+  const backgroundStarted = new Promise<void>((resolve) => { markBackgroundStarted = resolve; });
+
+  const backgroundRun = gate.run(
+    { resourceKey, runtimeClass: 'background_continuation', capacity, preemptionProtected },
+    async (signal) => {
+      markBackgroundStarted();
+      await new Promise<void>((resolve, reject) => {
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+        void backgroundBarrier.then(resolve);
+      });
+      return 'background-done';
+    },
+  );
+  const backgroundOutcome = backgroundRun
+    .then(() => ({ preempted: false }))
+    .catch((error: unknown) => ({ preempted: error instanceof ModelCallPreemptedError }));
+
+  await backgroundStarted;
+
+  const foregroundRun = gate.run(
+    { resourceKey, runtimeClass: 'foreground_chat', capacity },
+    async () => 'foreground-done',
+  );
+
+  // Let the gate process the contended acquire (preempt or enqueue).
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  // A protected background is not aborted; release it so the queued foreground
+  // can proceed and the test terminates.
+  if (preemptionProtected) releaseBackground();
+
+  const outcome = await backgroundOutcome;
+  await foregroundRun;
+  return outcome.preempted;
+}
+
+describe('welfare grant verification at the gateway RPC boundary (fxt1)', () => {
+  const harnesses: Array<{ destroy: () => void }> = [];
+  afterEach(() => {
+    for (const harness of harnesses.splice(0)) harness.destroy();
+  });
+
+  it('strips a forged preemptionProtected with no welfareGrantJobId', async () => {
+    const runtime = stubRuntime({
+      companionId: OWN_COMPANION,
+      verify: async () => true, // never consulted: no grant id to verify
+    });
+    const resolved = await resolveRpcWorkSpec(forgedProtectedSpec(), runtime);
+    expect(resolved?.preemptionProtected).toBeUndefined();
+    // The stripped call is preemptable: a foreground acquire aborts it.
+    expect(await backgroundIsPreemptedByForeground(false)).toBe(true);
+  });
+
+  it('strips when the grant row is not welfare-claimed (verify returns false)', async () => {
+    const runtime = stubRuntime({
+      companionId: OWN_COMPANION,
+      verify: async () => false,
+    });
+    const resolved = await resolveRpcWorkSpec(
+      forgedProtectedSpec({ welfareGrantJobId: 'job-not-welfare' }),
+      runtime,
+    );
+    expect(resolved?.preemptionProtected).toBeUndefined();
+    expect(resolved).not.toHaveProperty('welfareGrantJobId');
+  });
+
+  it("strips a valid welfare job id owned by a different companion", async () => {
+    // The verifier is companion-scoped: companion A presents a job id that only
+    // verifies under companion B's schema → false under A → strip.
+    const verify = async (jobId: string, companionId: string): Promise<boolean> =>
+      jobId === 'b-welfare-job' && companionId === OTHER_COMPANION;
+    const runtime = stubRuntime({ companionId: OWN_COMPANION, verify });
+    const resolved = await resolveRpcWorkSpec(
+      forgedProtectedSpec({ welfareGrantJobId: 'b-welfare-job' }),
+      runtime,
+    );
+    expect(resolved?.preemptionProtected).toBeUndefined();
+  });
+
+  it('retains protection for a legit welfare-claimed job (own companion) and never forwards the token', async () => {
+    const verify = async (jobId: string, companionId: string): Promise<boolean> =>
+      jobId === 'a-welfare-job' && companionId === OWN_COMPANION;
+    const runtime = stubRuntime({ companionId: OWN_COMPANION, verify });
+    const resolved = await resolveRpcWorkSpec(
+      forgedProtectedSpec({ welfareGrantJobId: 'a-welfare-job' }),
+      runtime,
+    );
+    expect(resolved?.preemptionProtected).toBe(true);
+    // welfareGrantJobId is a gateway-only token — stripped before forwarding.
+    expect(resolved).not.toHaveProperty('welfareGrantJobId');
+    // The protected call is NOT preemptable: a foreground acquire does not abort it.
+    expect(await backgroundIsPreemptedByForeground(true)).toBe(false);
+  });
+
+  it('fails closed when verifyWelfareGrant throws (DB error), no exception propagates', async () => {
+    const runtime = stubRuntime({
+      companionId: OWN_COMPANION,
+      verify: async () => { throw new Error('connection reset'); },
+    });
+    const resolved = await resolveRpcWorkSpec(
+      forgedProtectedSpec({ welfareGrantJobId: 'a-welfare-job' }),
+      runtime,
+    );
+    expect(resolved?.preemptionProtected).toBeUndefined();
+  });
+
+  it('strips when the gateway has no welfare verifier configured', async () => {
+    const runtime = stubRuntime({ companionId: OWN_COMPANION }); // no verifier
+    const resolved = await resolveRpcWorkSpec(
+      forgedProtectedSpec({ welfareGrantJobId: 'a-welfare-job' }),
+      runtime,
+    );
+    expect(resolved?.preemptionProtected).toBeUndefined();
+  });
+
+  it('is a no-op on an inert lane: a non-protected spec is forwarded unchanged', async () => {
+    // On foreground_chat / post_turn_appraisal the flag is inert at the gate.
+    // A spec that does not assert protection is verified against nothing and
+    // forwarded as-is (the welfare token, if present, is still dropped).
+    const runtime = stubRuntime({ companionId: OWN_COMPANION, verify: async () => false });
+    const resolved = await resolveRpcWorkSpec(
+      { purpose: 'chat', lane: 'foreground_chat', durable: false },
+      runtime,
+    );
+    expect(resolved).toEqual({ purpose: 'chat', lane: 'foreground_chat', durable: false });
+  });
+
+  it('a malformed spec still rejects at the boundary before verification', async () => {
+    const runtime = stubRuntime({ companionId: OWN_COMPANION, verify: async () => true });
+    await expect(
+      resolveRpcWorkSpec({ purpose: 'chat', lane: 'not_a_lane', durable: true }, runtime),
+    ).rejects.toThrow();
+  });
+
+  it('the welfare token survives the real JSON-RPC wire and is verified gateway-side', async () => {
+    // Full agent→wire→gateway path: a real GatewayClient serializes the work
+    // spec through toWorkSpecWireParams over genuine JSON, the gateway handler
+    // parses it and runs the production resolveRpcWorkSpec. We capture what the
+    // boundary decided.
+    let seenWorkSpec: unknown;
+    let resolvedAtBoundary: LLMWorkSpecWireParams | undefined;
+    const runtime = stubRuntime({
+      companionId: OWN_COMPANION,
+      verify: async (jobId, companionId) => jobId === 'a-welfare-job' && companionId === OWN_COMPANION,
+    });
+    const harness = createBoundaryHarness({
+      'llm.complete': async (params) => {
+        seenWorkSpec = (params as { workSpec?: unknown }).workSpec;
+        resolvedAtBoundary = await resolveRpcWorkSpec(seenWorkSpec, runtime);
+        return {
+          content: '',
+          model: 'test-model',
+          inputTokens: 0,
+          outputTokens: 0,
+          stopReason: 'stop',
+        };
+      },
+    });
+    harnesses.push(harness);
+
+    await harness.client.complete(
+      { systemPrompt: 'x', messages: [] },
+      'extraction',
+      {
+        workSpec: buildLLMWorkSpec({
+          purpose: 'extraction',
+          durable: true,
+          preemptionProtected: true,
+          welfareGrantJobId: 'a-welfare-job',
+        }),
+      },
+    );
+
+    // The grant token crossed the wire intact...
+    expect((seenWorkSpec as { welfareGrantJobId?: unknown }).welfareGrantJobId).toBe('a-welfare-job');
+    // ...and the boundary honored it (own companion, verifies), dropping the token.
+    expect(resolvedAtBoundary?.preemptionProtected).toBe(true);
+    expect(resolvedAtBoundary).not.toHaveProperty('welfareGrantJobId');
   });
 });

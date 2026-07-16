@@ -41,6 +41,13 @@ export interface LLMWorkSpecInput {
   cancellation?: LLMWorkCancellation;
   retryPolicy?: LLMWorkRetryPolicy;
   preemptionProtected?: boolean;
+  /**
+   * fxt1: the background-work `jobId` that granted this call's welfare
+   * escalation. Paired with `preemptionProtected`; the gateway re-verifies it
+   * against the store before honoring the flag. Set only by the sanctioned
+   * post-turn welfare path.
+   */
+  welfareGrantJobId?: string;
 }
 
 /**
@@ -61,6 +68,9 @@ export function buildLLMWorkSpec(input: LLMWorkSpecInput): LLMWorkSpec {
     ...(input.retryPolicy !== undefined ? { retryPolicy: input.retryPolicy } : {}),
     ...(input.preemptionProtected !== undefined
       ? { preemptionProtected: input.preemptionProtected }
+      : {}),
+    ...(input.welfareGrantJobId !== undefined
+      ? { welfareGrantJobId: input.welfareGrantJobId }
       : {}),
     ...(input.correlation !== undefined ? { correlation: input.correlation } : {}),
   };

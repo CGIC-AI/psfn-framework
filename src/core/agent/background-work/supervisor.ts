@@ -4,7 +4,11 @@ import type { EventBus } from '../../../shared/event-bus.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { emitTurnPerformance } from '../../../shared/telemetry/turn-performance.js';
 import type { TurnPerformanceDeferReason } from '../../../shared/telemetry/turn-performance.js';
-import type { BackgroundWorkStorePort } from './store-port.js';
+import {
+  MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+  resolveRuntimeLaneBudgetProfile,
+} from '../worker-lanes.js';
+import type { BackgroundWorkStorePort, BackgroundWorkWelfarePolicy } from './store-port.js';
 import type { BackgroundWorkSupervisorTuning } from './config.js';
 import {
   BACKGROUND_WORK_KINDS,
@@ -19,6 +23,17 @@ import {
 
 const log = createComponentLogger('BackgroundWorkSupervisor');
 const TERMINAL_PURGE_BATCH_SIZE = 500;
+// Anti-starvation welfare defaults (mmo9.7.4). Conservative: a background job
+// must be foreground-deferred many times OR wait several minutes before it is
+// admitted past the foreground exclusion, and only into a small bounded reserve.
+// The reserve-slot default is sourced from the lane budget profile so the
+// welfare-reserve policy has a single home (Law 12.4); a deployment may override
+// all three through the scheduler owner file.
+const DEFAULT_WELFARE_DEFER_THRESHOLD = 8;
+const DEFAULT_WELFARE_AGE_THRESHOLD_MS = 5 * 60_000;
+const DEFAULT_WELFARE_RESERVE_SLOTS = resolveRuntimeLaneBudgetProfile(
+  MAINTENANCE_REFLECTION_RUNTIME_CLASS,
+).welfareReserveSlots;
 
 export interface BackgroundWorkExecutionInput {
   job: ClaimedBackgroundWorkJob;
@@ -49,6 +64,12 @@ export interface BackgroundWorkSupervisorOptions extends BackgroundWorkSuperviso
   executor: BackgroundWorkExecutor;
   now?: () => number;
   leaseOwner?: string;
+  /**
+   * Anti-starvation welfare policy (mmo9.7.4). Owner-file backed (scheduler.json)
+   * with conservative defaults. `reserveSlots: 0` disables welfare admission
+   * entirely (fail-closed to pre-welfare FIFO behavior).
+   */
+  welfare?: Partial<BackgroundWorkWelfarePolicy>;
 }
 
 export interface ForegroundWorkLease {
@@ -121,6 +142,22 @@ export class BackgroundWorkPermanentError extends Error {
   }
 }
 
+function normalizePositiveInteger(value: number | undefined, fallback: number, field: string): number {
+  const normalized = value ?? fallback;
+  if (!Number.isSafeInteger(normalized) || normalized < 1) {
+    throw new Error(`${field} must be a positive safe integer`);
+  }
+  return normalized;
+}
+
+function normalizeNonNegativeInteger(value: number | undefined, fallback: number, field: string): number {
+  const normalized = value ?? fallback;
+  if (!Number.isSafeInteger(normalized) || normalized < 0) {
+    throw new Error(`${field} must be a non-negative safe integer`);
+  }
+  return normalized;
+}
+
 function requirePositiveInteger(value: number, field: string): number {
   if (!Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${field} must be a positive safe integer`);
@@ -166,6 +203,7 @@ export class BackgroundWorkSupervisor {
   private readonly shutdownTimeoutMs: number;
   private readonly terminalRetentionMs: number;
   private readonly cleanupIntervalMs: number;
+  private readonly welfare: BackgroundWorkWelfarePolicy;
   private readonly foregroundCounts = new Map<string, number>();
   private readonly foregroundLeases = new Map<string, ManagedForegroundWorkLease>();
   private readonly readyForegroundLeaseIds = new Set<string>();
@@ -220,6 +258,26 @@ export class BackgroundWorkSupervisor {
       options.cleanupIntervalMs,
       'cleanupIntervalMs',
     );
+    const reserveSlots = normalizeNonNegativeInteger(
+      options.welfare?.reserveSlots,
+      DEFAULT_WELFARE_RESERVE_SLOTS,
+      'welfare.reserveSlots',
+    );
+    this.welfare = reserveSlots === 0
+      ? { deferThreshold: 1, ageThresholdMs: 0, reserveSlots: 0 }
+      : {
+        deferThreshold: normalizePositiveInteger(
+          options.welfare?.deferThreshold,
+          DEFAULT_WELFARE_DEFER_THRESHOLD,
+          'welfare.deferThreshold',
+        ),
+        ageThresholdMs: normalizeNonNegativeInteger(
+          options.welfare?.ageThresholdMs,
+          DEFAULT_WELFARE_AGE_THRESHOLD_MS,
+          'welfare.ageThresholdMs',
+        ),
+        reserveSlots,
+      };
   }
 
   async enqueue(inputs: readonly EnqueueBackgroundWorkInput[]): Promise<void> {
@@ -386,15 +444,22 @@ export class BackgroundWorkSupervisor {
     }
 
     while (!this.stopping && this.running.size < this.maxConcurrentSessions) {
-      const excludedSessions = new Set(this.foregroundCounts.keys());
+      // Split the exclusion set: a session running a claim is a HARD exclusion
+      // (one running job per session is a durable invariant), while a session
+      // that merely has foreground activity is a SOFT exclusion a welfare-aged
+      // job may bypass into a bounded reserve slot (mmo9.7.4).
+      const runningExcluded = new Set<string>();
       for (const entry of this.running.values()) {
-        excludedSessions.add(entry.job.logicalSessionId);
+        runningExcluded.add(entry.job.logicalSessionId);
       }
+      const foregroundExcluded = new Set(this.foregroundCounts.keys());
       const job = await this.store.claimNext({
         leaseOwner: this.leaseOwner,
         nowMs: this.now(),
         leaseDurationMs: this.leaseDurationMs,
-        excludedLogicalSessionIds: [...excludedSessions],
+        excludedLogicalSessionIds: [...runningExcluded],
+        foregroundExcludedLogicalSessionIds: [...foregroundExcluded],
+        welfare: this.welfare,
       });
       if (!job) break;
       const fence = { lost: false };
@@ -424,7 +489,13 @@ export class BackgroundWorkSupervisor {
     fence: { lost: boolean },
     controller: AbortController,
   ): Promise<void> {
-    if (this.foregroundCounts.has(job.logicalSessionId)) {
+    // A welfare-admitted claim (mmo9.7.4) is deliberately immune to the
+    // in-memory foreground re-defer here: it was aged past the threshold and
+    // granted a protected completion in a bounded reserve slot, so re-deferring
+    // it now would restart the preempt→defer→preempt starvation loop the welfare
+    // path exists to break. Its durable effect fences are correspondingly immune
+    // in the store. Non-welfare claims keep the original fail-safe re-defer.
+    if (!job.welfareClaimed && this.foregroundCounts.has(job.logicalSessionId)) {
       await this.transitionClaimToDeferred(job, 'foreground_active', this.retryBaseDelayMs);
       return;
     }

@@ -395,6 +395,13 @@ describe('FleetStatusServer', () => {
     const page = await fetch(`http://127.0.0.1:${port}/`);
     expect(page.status).toBe(200);
     expect(page.headers.get('content-type')).toContain('text/html');
+    expect(page.headers.get('cache-control')).toBe('no-store');
+    expect(page.headers.get('content-security-policy')).toBe("frame-ancestors 'none'");
+    expect(page.headers.get('cross-origin-resource-policy')).toBe('same-origin');
+    expect(page.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(page.headers.get('x-content-type-options')).toBe('nosniff');
+    expect(page.headers.get('x-frame-options')).toBe('DENY');
+    expect(page.headers.get('access-control-allow-origin')).toBeNull();
     const html = await page.text();
     expect(html).toContain('PSFN Fleet Status');
     // Self-contained: no external asset references.
@@ -405,6 +412,80 @@ describe('FleetStatusServer', () => {
 
     const mutation = await fetch(`http://127.0.0.1:${port}/fleet/status.json`, { method: 'POST' });
     expect(mutation.status).toBe(405);
+  });
+
+  it('preserves the raw status JSON bytes and legacy GET aliases', async () => {
+    const fleetServer = new FleetStatusServer({
+      port: 0,
+      fleet: [
+        { companionId: COMPANION_A, gardenPort: 10061 },
+        { companionId: COMPANION_B },
+      ],
+      source: {
+        getFleetConnectionSnapshot: () => ({
+          generatedAt: 1_750_000_000_000,
+          connections: [{
+            companionId: COMPANION_A,
+            state: 'ready',
+            health: 'healthy',
+            stateReason: 'rpc_message_received',
+            connectedAt: 1_749_999_000_000,
+            lastSeenAt: 1_749_999_900_000,
+          }],
+          lastSeenByCompanionId: { [COMPANION_B]: 1_749_990_000_000 },
+          recentViolationsByCompanionId: { [COMPANION_B]: 2 },
+          unattributedRecentViolationCount: 1,
+          recentViolationWindowMs: 3_600_000,
+        }),
+      },
+    });
+    await fleetServer.start();
+    cleanups.push(() => fleetServer.stop());
+    const port = fleetServer.boundPort();
+
+    const status = await fetch(`http://127.0.0.1:${port}/fleet/status.json`);
+    expect(status.status).toBe(200);
+    expect(status.headers.get('cache-control')).toBe('no-store');
+    expect(status.headers.get('access-control-allow-origin')).toBeNull();
+    expect(await status.text()).toBe(
+      '{"generatedAt":"2025-06-15T15:06:40.000Z","companionCount":2,"upCount":1,'
+      + '"companions":[{"companionId":"11111111-1111-4111-8111-111111111111","up":true,'
+      + '"state":"ready","health":"healthy","stateReason":"rpc_message_received",'
+      + '"connectedAt":"2025-06-15T14:50:00.000Z","lastSeenAt":"2025-06-15T15:05:00.000Z",'
+      + '"recentViolationCount":0,"gardenPort":10061},{"companionId":'
+      + '"22222222-2222-4222-8222-222222222222","up":false,"state":"down",'
+      + '"lastSeenAt":"2025-06-15T12:20:00.000Z","recentViolationCount":2}],'
+      + '"unattributedRecentViolationCount":1,"recentViolationWindowMs":3600000}',
+    );
+
+    const root = await fetch(`http://127.0.0.1:${port}/`);
+    const fleet = await fetch(`http://127.0.0.1:${port}/fleet`);
+    const fleetWithQuery = await fetch(`http://127.0.0.1:${port}/fleet?legacy=1`);
+    expect(await fleet.text()).toBe(await root.text());
+    expect(await fleetWithQuery.text()).toBe(await fetch(`http://127.0.0.1:${port}/fleet`).then(
+      response => response.text(),
+    ));
+  });
+
+  it('preserves read-only method and missing-route response bytes', async () => {
+    const { server } = await setupServer(
+      createMinimalOptions(multiCompanion({ api: COMPANION_A })),
+    );
+    cleanups.push(() => server.stop());
+    const fleetServer = await startFleetServer(server, [{ companionId: COMPANION_A }]);
+    const port = fleetServer.boundPort();
+
+    for (const method of ['HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']) {
+      const response = await fetch(`http://127.0.0.1:${port}/fleet/status.json`, { method });
+      expect(response.status).toBe(405);
+      expect(response.headers.get('allow')).toBe('GET');
+      expect(response.headers.get('cache-control')).toBe('no-store');
+      if (method !== 'HEAD') expect(await response.text()).toBe('Method Not Allowed');
+    }
+    const missing = await fetch(`http://127.0.0.1:${port}/not-mounted`);
+    expect(missing.status).toBe(404);
+    expect(missing.headers.get('cache-control')).toBe('no-store');
+    expect(await missing.text()).toBe('Not found: /not-mounted');
   });
 
   it('fails closed when the port is already taken (never picks another)', async () => {
@@ -426,17 +507,28 @@ describe('FleetStatusServer', () => {
     await expect(fleetServer.start()).rejects.toThrow(/failed to bind 127\.0\.0\.1:.*EADDRINUSE/);
   });
 
-  it('rejects non-loopback hosts fail-closed', async () => {
+  it('rejects wildcard, public, and loopback-looking hostnames fail-closed', async () => {
     const { server } = await setupServer(
       createMinimalOptions(multiCompanion({ api: COMPANION_A })),
     );
     cleanups.push(() => server.stop());
-    expect(() => new FleetStatusServer({
-      host: '0.0.0.0',
-      port: 0,
-      fleet: [{ companionId: COMPANION_A }],
-      source: server,
-    })).toThrow(/loopback/);
+    for (const host of [
+      '0.0.0.0',
+      '::',
+      '[::]',
+      '192.0.2.10',
+      'fleet.example.test',
+      '127.example.test',
+      '127.0.0.1.example.test',
+      '127.0.0.999',
+    ]) {
+      expect(() => new FleetStatusServer({
+        host,
+        port: 0,
+        fleet: [{ companionId: COMPANION_A }],
+        source: server,
+      }), host).toThrow(/loopback/);
+    }
   });
 });
 

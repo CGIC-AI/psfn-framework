@@ -550,9 +550,10 @@ async function main(): Promise<void> {
 
   await initGatewayChannelSurfaces(channelSurfaces);
   gateway.start();
-  // Fleet-status surface (sprint-10 W4): config-gated, read-only cluster
-  // health view over the connection registry. Absent FLEET_STATUS_PORT keeps
-  // single-companion behavior byte-identical.
+  // Raw fleet-status operator listener (sprint-10 W4): config-gated,
+  // loopback-only cluster health over the connection registry. It is separate
+  // from the authenticated fleet portal composed below. Absent
+  // FLEET_STATUS_PORT keeps single-companion behavior byte-identical.
   const fleetStatusServer = await startOptionalFleetStatusServer({
     env: process.env,
     multiCompanion: config.multiCompanion === true,

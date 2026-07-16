@@ -26,6 +26,27 @@ Last updated: 2026-07-14.
 - `src/app/startup/index.ts` is disabled and exits fail-closed.
 - `npm run split` and `npm run yolo` are the intended launchers for day-to-day runtime use.
 
+### Fleet human and operator surfaces
+
+- The canonical HTTPS origin's `/fleet` shell and `/v1/fleet/portal` JSON route
+  require a live gateway fleet session. They expose only the current
+  principal's bounded authorized projection and compile same-origin stateless
+  Garden links.
+- `FLEET_STATUS_PORT` enables a different, optional raw HTTP operator listener.
+  It retains legacy `GET /`, `GET /fleet`, and `GET /fleet/status.json`
+  behavior, exposes complete operational fleet metadata, and has no
+  browser-session authentication. `FLEET_STATUS_HOST` defaults to
+  `127.0.0.1`; wildcard, public, ambiguous, or non-loopback resolved binds fail
+  startup.
+- The raw listener is not mounted on the public authenticated origin and is not
+  a portal data source. It must not be exposed by a public ingress,
+  unauthenticated proxy, or remote tunnel. Remote operator use requires an
+  independent authentication boundary plus private network policy.
+- Live host/port wiring remains repository-owned. Rollback of only the raw
+  status listener removes `FLEET_STATUS_PORT` and `FLEET_STATUS_HOST` from that
+  wiring and restarts the gateway; it does not roll back or disable the
+  authenticated portal.
+
 ## Live Alpha Migration Boundary
 
 Until beta, the live runtime may keep only the migration support listed here. New compatibility or fallback behavior in config, startup, persistence, or model-facing tool names must fail closed unless this section is updated with the supported scope, validation path, and beta-removal condition.

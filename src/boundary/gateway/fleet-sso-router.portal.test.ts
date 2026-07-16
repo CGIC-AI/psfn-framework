@@ -115,6 +115,7 @@ describe('unified-origin fleet portal routing', () => {
     const harness = await start();
     expect(harness.router.matches('/v1/fleet/portal')).toBe(true);
     expect(harness.router.matches('/v1/fleet/portal/')).toBe(true);
+    expect(harness.router.matches('/fleet/status.json')).toBe(false);
 
     const fleet = await request(harness.port, '/fleet');
     expect(fleet.status).toBe(303);
@@ -130,6 +131,12 @@ describe('unified-origin fleet portal routing', () => {
     expect(api.headers.vary).toBe('Cookie');
     expect(api.headers['access-control-allow-origin']).toBeUndefined();
     expect(harness.resolveProjection).not.toHaveBeenCalled();
+
+    const rawStatus = await request(harness.port, '/fleet/status.json', {
+      session: SESSION_TOKEN,
+    });
+    expect(rawStatus.status).toBe(404);
+    expect(rawStatus.body).not.toMatch(/companionCount|gardenPort|recentViolationWindowMs/u);
 
     const authenticated = await request(harness.port, '/v1/fleet/portal', {
       session: SESSION_TOKEN,

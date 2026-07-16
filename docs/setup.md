@@ -197,8 +197,14 @@ these process-wiring env vars come into play (documented in full in
   `companionDataDir` and `characterCardPath`. The fleet resolver emits absolute
   paths beneath this root and rejects traversal or symlink escapes.
 - `FLEET_STATUS_PORT` / `FLEET_STATUS_HOST` — the gateway's read-only,
-  loopback-only fleet-status page (host defaults to `127.0.0.1`). Setting the
-  port while `PSFN_MULTI_COMPANION` is off fails closed.
+  raw loopback-only fleet-status operator listener (host defaults to
+  `127.0.0.1`). It is a separate opt-in HTTP listener with no browser-session
+  authentication, not the authenticated HTTPS `/fleet` portal. Setting the
+  port while `PSFN_MULTI_COMPANION` is off or selecting a wildcard, public, or
+  ambiguous host fails closed. Never publish or tunnel it without an
+  independent authentication boundary and private network policy. Rollback is
+  to remove both variables from repository-owned runtime wiring and restart the
+  gateway; the authenticated portal remains available.
 - Per-companion Discord tokens are referenced by env-var name from
   `channels.json` (`tokenRef.envName`), not inline. Add each companion's bot
   token to `.env` under the env var name its account references (for example
@@ -279,8 +285,11 @@ npm run agent:docker:continuous # Continuous/dev profile (isolated internal netw
 When the system-owned `fleet-auth.json` is present and `PSFN_FLEET_AUTH=1`, do
 not publish `ADMIN_HOST`/`ADMIN_PORT` as a browser endpoint. Terminate HTTPS at
 the exact `canonicalOrigin`, route the full origin to the gateway API listener,
-and open `/fleet`. A direct TLS listener must receive no forwarding headers. A
-single reverse proxy requires `FLEET_SSO_TRUST_PROXY=true`, exact forwarded
+and open `/fleet`. This is the authenticated bounded portal and is unrelated to
+the raw `FLEET_STATUS_PORT` listener even though that loopback-only listener
+retains its legacy `GET /fleet` alias. A direct TLS listener must receive no
+forwarding headers. A single reverse proxy requires
+`FLEET_SSO_TRUST_PROXY=true`, exact forwarded
 host/proto metadata, and an independent network restriction that admits only
 that proxy. Non-loopback gateway-to-Garden traffic must configure the complete
 `FLEET_SSO_GARDEN_TLS_*` mTLS tuple; partial configuration fails startup.

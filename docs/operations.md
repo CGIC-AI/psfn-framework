@@ -92,20 +92,36 @@ credential vault) at load; an inline `token` field is rejected, and an
 unresolved/empty token fails closed. Add each companion's bot token to `.env`
 under the env var name its account references.
 
-### Fleet status page
+### Loopback fleet-status operator listener
 
-The gateway serves a read-only, loopback-only fleet-status surface when
+The gateway can serve a raw, read-only fleet-status operator surface when
 `FLEET_STATUS_PORT` is set (host `FLEET_STATUS_HOST`, default `127.0.0.1`):
 
 - `GET /` and `GET /fleet` — HTML overview of the cluster
 - `GET /fleet/status.json` — JSON
 
-It reports, per companion: up/down state, health, last-seen and connected
-timestamps, recent violation count, and a link to that companion's Garden. It is
-fed by the gateway connection registry plus the fleet roster. Setting
-`FLEET_STATUS_PORT` while `PSFN_MULTI_COMPANION` is off fails closed; a taken
-port fails closed. Fatigue/charge posture and tool-error counts are a documented
-follow-up and are not shown today.
+This is a separate HTTP listener, not the authenticated fleet portal. Its
+`GET /fleet` route exists only on the configured loopback status port; the
+public HTTPS origin's `/fleet` and `/v1/fleet/portal` routes are gateway-session
+authenticated and expose only the bounded authorized projection. The raw
+listener is never mounted on that public origin.
+
+The status payload intentionally contains the complete fleet roster, Garden
+ports, timestamps, state reasons, and violation counts for local operations.
+It has no browser-session authentication of its own. Do not expose it through
+a public ingress, unauthenticated reverse proxy, or remote tunnel. Any remote
+operator access requires a separate independently authenticated boundary and
+private network policy; the authenticated fleet portal is the normal remote
+human surface and must not consume this raw payload.
+
+The status listener is fed by the gateway connection registry plus the fleet
+roster. Setting `FLEET_STATUS_PORT` while `PSFN_MULTI_COMPANION` is off fails
+closed; a taken port, wildcard/public/ambiguous host, or non-loopback resolved
+address fails closed. Configure its host/port only through repository-owned
+runtime wiring. To roll it back, unset `FLEET_STATUS_PORT` (and
+`FLEET_STATUS_HOST` if present) there and restart the gateway; this does not
+disable the authenticated HTTPS portal. Fatigue/charge posture and tool-error
+counts are a documented follow-up and are not shown today.
 
 ### Unified fleet human origin
 

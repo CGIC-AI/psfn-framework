@@ -313,6 +313,14 @@ Each companion has its own Discord bot identity. Discord accounts in
   while `PSFN_MULTI_COMPANION` is off fails closed; a taken port fails closed
   (never re-picks).
 
+  This is a raw operator listener with no browser-session authentication. Its
+  legacy `GET /fleet` alias is not the authenticated `/fleet` portal on the
+  canonical HTTPS origin, and `/fleet/status.json` is never mounted or consumed
+  there. Do not publish or tunnel the raw listener without an independent
+  authentication boundary and private network policy. Remove
+  `FLEET_STATUS_PORT`/`FLEET_STATUS_HOST` from repository-owned runtime wiring
+  and restart the gateway to disable only this listener.
+
   Not yet surfaced (documented follow-up in the code): fatigue/charge posture and
   tool-error counts. Do not assume the fleet page shows them today.
 

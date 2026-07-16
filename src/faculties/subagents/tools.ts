@@ -8,6 +8,7 @@ import type { SubagentControlPort } from './port.js';
 import { textResult, textResultWithError } from '../../core/tools/results.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
+import { buildSubagentWorkSpec } from './work-spec.js';
 
 type SubagentToolAction = 'spawn' | 'message' | 'wait' | 'cancel' | 'status';
 
@@ -80,6 +81,12 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
             const task = await port.spawn({
               name: normalizeRequiredText(params.name, 'name'),
               task: normalizeRequiredText(params.task, 'task'),
+              // mmo9.7.7: carry the typed work spec through the faculty, seeded
+              // with the spawning turn's correlation so subagent model-call
+              // attribution flows through the existing client boundary.
+              workSpec: buildSubagentWorkSpec(
+                requestContext ? { correlation: requestContext } : {},
+              ),
               ...(typeof params.system_prompt === 'string' ? { systemPrompt: params.system_prompt } : {}),
               ...(typeof params.max_turns === 'number' ? { maxTurns: params.max_turns } : {}),
               ...(params.capabilities?.length ? { capabilities: params.capabilities } : {}),

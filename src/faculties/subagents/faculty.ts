@@ -39,11 +39,15 @@ import {
   type CompletionHandoffInput,
 } from '../../core/agent/completion-handoff.js';
 import type { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
+import { assertWorkSpecLaneParity } from '../../primitives/llm/work-spec.js';
 import type { SubagentControlPort } from './port.js';
 import { SubagentTaskRegistry } from './task-registry.js';
+import { buildSubagentWorkSpec, createSubagentWorkSpecProvider } from './work-spec.js';
 import type {
   SubagentExecutionRequest,
   SubagentExecutionSourceContext,
+  SubagentPartialResult,
+  SubagentRemainingBudget,
   SubagentRuntimeArtifactView,
   SubagentRuntimeTaskDetail,
   SubagentRuntimeResumeView,
@@ -54,6 +58,11 @@ import type {
   SubagentTaskRecord,
   WyomingSubagentDelegationRequest,
 } from './types.js';
+
+/** mmo9.7.7: which declared work-spec budget ceiling curtailed a bounded run. */
+interface SubagentBudgetExhaustion {
+  reason: 'deadline' | 'output_tokens';
+}
 
 const DEFAULT_MAX_CONCURRENT = 8;
 const DEFAULT_MAX_TURNS = 1;
@@ -180,15 +189,17 @@ export class SubagentFaculty implements SubagentControlPort {
   async execute(request: SubagentExecutionRequest): Promise<SubagentResult> {
     const task = await this.spawn(request);
     const result = await this.wait(task.subagentId);
-    if (result.lifecycleState === 'completed') {
+    if (result.outcome === 'completed') {
       return result;
     }
     const failureReason = result.failureReason ?? result.stateReason;
-    const terminalState = result.lifecycleState === 'cancelled' ? 'cancelled' : 'failed';
-    throw new Error(`Subagent "${result.name}" ${terminalState} (${result.stateReason}): ${failureReason}`);
+    throw new Error(`Subagent "${result.name}" ${result.outcome} (${result.stateReason}): ${failureReason}`);
   }
 
   async spawn(request: SubagentExecutionRequest): Promise<SubagentTaskRecord> {
+    // Fail closed on a work spec whose declared lane does not reconcile with the
+    // single runtime lane resolver (Law 12.4) before any worker is registered.
+    assertWorkSpecLaneParity(request.workSpec);
     const subagentId = `subagent-${randomUUID()}`;
     const startTime = Date.now();
     if (this.taskRegistry.getActiveCount() >= this.maxConcurrent) {
@@ -354,9 +365,15 @@ export class SubagentFaculty implements SubagentControlPort {
         this.deps.config,
         this.deps.eventBus,
       );
+      // mmo9.7.7: thread the request's typed work spec onto the bounded worker's
+      // model calls through the mmo9.7.1 client seam (no new admission logic).
+      const workSpecProvider = createSubagentWorkSpecProvider(
+        this.deps.llmProvider,
+        handle.request.workSpec,
+      );
       const agentLoop = new SubstrateAgent(
         this.deps.eventBus,
-        this.deps.llmProvider,
+        workSpecProvider,
         sessionManager,
         handle.request.systemPrompt ?? this.deps.parentSystemPrompt,
         sanitizeCoreSubstrateConfig(this.deps.config),
@@ -423,6 +440,26 @@ export class SubagentFaculty implements SubagentControlPort {
           return;
         }
 
+        // mmo9.7.7: honestly report budget_limited when a declared work-spec
+        // budget (deadline / output-token ceiling) is crossed with bounded-loop
+        // turns still unused. A single-turn run (its bounded deliverable) or the
+        // final turn is never budget_limited — there is nothing left to curtail.
+        if (turn < handle.maxTurns - 1) {
+          const budget = this.evaluateBudgetExhaustion(handle, totalOutput, turns);
+          if (budget) {
+            await this.finishHandle(handle, this.finalizeBudgetLimited(
+              handle,
+              totalInput,
+              totalOutput,
+              lastModel,
+              lastContent,
+              turns,
+              budget,
+            ));
+            return;
+          }
+        }
+
         if (turn === 0 && handle.maxTurns === 1) break;
       }
 
@@ -478,6 +515,13 @@ export class SubagentFaculty implements SubagentControlPort {
       const result = await this.execute({
         name: request.subagentName?.trim() || this.resolveWyomingSubagentName(routing),
         task: request.message.content,
+        workSpec: buildSubagentWorkSpec({
+          correlation: {
+            channelId: request.message.channelId,
+            ...(request.message.id ? { requestId: request.message.id } : {}),
+            ...(routing?.turnId ? { turnId: routing.turnId } : {}),
+          },
+        }),
         message: request.message,
         executionChannelId: request.message.channelId,
         maxTurns: 1,
@@ -694,19 +738,27 @@ export class SubagentFaculty implements SubagentControlPort {
     const sourceContext = this.resolveSourceContext(handle.request);
     if (!sourceContext) return;
 
-    const isPartial = result.lifecycleState === 'cancelled' && result.content.trim().length > 0;
-    const status = result.lifecycleState === 'completed'
+    // mmo9.7.7: key the handoff off the honest terminal outcome + checkpoint. A
+    // cancelled or budget_limited run that captured usable content is a partial
+    // deliverable; a blocked run (or an empty stop) is a non-deliverable.
+    const checkpointContent = result.partial?.latestCheckpoint.content.trim() ?? '';
+    const hasUsableCheckpoint = checkpointContent.length > 0;
+    const isPartial = (result.outcome === 'cancelled' || result.outcome === 'budget_limited')
+      && hasUsableCheckpoint;
+    const status = result.outcome === 'completed'
       ? 'completed'
-      : result.lifecycleState === 'cancelled'
+      : result.outcome === 'cancelled'
         ? (isPartial ? 'partial' : 'cancelled')
-        : 'failed';
+        : result.outcome === 'budget_limited'
+          ? (isPartial ? 'partial' : 'failed')
+          : 'failed';
     await this.emitHandoff({
       source: 'subagent',
       taskId: handle.subagentId,
       taskLabel: result.name,
       subagentId: handle.subagentId,
       status,
-      resultSummary: result.lifecycleState === 'completed' || isPartial
+      resultSummary: result.outcome === 'completed' || isPartial
         ? summarizeCompletionText(result.content)
         : `Subagent "${result.name}" ended without a usable final output.`,
       outputRefs: [
@@ -829,6 +881,7 @@ export class SubagentFaculty implements SubagentControlPort {
       turns,
       workerLane: SUBAGENT_WORKER_LANE,
       lifecycleState: 'completed',
+      outcome: 'completed',
       stateReason: completed.stateReason,
       capabilities: [...handle.capabilities],
       requiredCapabilities: [...handle.requiredCapabilities],
@@ -878,8 +931,10 @@ export class SubagentFaculty implements SubagentControlPort {
       turns,
       workerLane: SUBAGENT_WORKER_LANE,
       lifecycleState: 'cancelled',
+      outcome: 'cancelled',
       stateReason: cancelled.stateReason,
       ...(handle.cancelReason ? { failureReason: handle.cancelReason } : {}),
+      partial: this.buildPartialResult(handle, totalOutput, lastModel, lastContent, turns),
       capabilities: [...handle.capabilities],
       requiredCapabilities: [...handle.requiredCapabilities],
     };
@@ -925,8 +980,10 @@ export class SubagentFaculty implements SubagentControlPort {
       turns: 0,
       workerLane: SUBAGENT_WORKER_LANE,
       lifecycleState: 'failed',
+      outcome: 'blocked',
       stateReason: failed.stateReason,
       failureReason,
+      partial: this.buildPartialResult(handle, 0, '', '', 0),
       capabilities: [...handle.capabilities],
       requiredCapabilities: [...handle.requiredCapabilities],
     };
@@ -938,6 +995,125 @@ export class SubagentFaculty implements SubagentControlPort {
       channelId: handle.channelId,
     });
     return result;
+  }
+
+  private finalizeBudgetLimited(
+    handle: ActiveSubagentHandle,
+    totalInput: number,
+    totalOutput: number,
+    lastModel: string,
+    lastContent: string,
+    turns: number,
+    budget: SubagentBudgetExhaustion,
+  ): SubagentResult {
+    const failureReason = budget.reason === 'deadline'
+      ? 'work spec deadline budget exhausted before completion'
+      : 'work spec output-token budget exhausted before completion';
+    const previous = this.taskRegistry.getActiveTask(handle.subagentId);
+    // The registry lifecycle machine has no budget terminal; record the coarse
+    // non-completed terminal (failed) while the result reports the honest
+    // `budget_limited` outcome so it never masquerades as completed.
+    const stopped = this.taskRegistry.markFailed(
+      handle.subagentId,
+      'budget_exhausted',
+      failureReason,
+      Date.now(),
+    );
+    this.auditTrail?.append('subagent.lifecycle.transition', {
+      subagentId: handle.subagentId,
+      from: previous?.lifecycleState ?? 'running',
+      to: stopped.lifecycleState,
+      reason: stopped.stateReason,
+      outcome: 'budget_limited',
+      budgetReason: budget.reason,
+      failureReason,
+      workerLane: stopped.workerLane,
+      channelId: stopped.channelId,
+    });
+    const result: SubagentResult = {
+      subagentId: handle.subagentId,
+      name: handle.request.name,
+      content: lastContent,
+      model: lastModel,
+      inputTokens: totalInput,
+      outputTokens: totalOutput,
+      durationMs: Date.now() - handle.startTime,
+      turns,
+      workerLane: SUBAGENT_WORKER_LANE,
+      lifecycleState: 'failed',
+      outcome: 'budget_limited',
+      stateReason: stopped.stateReason,
+      failureReason,
+      partial: this.buildPartialResult(handle, totalOutput, lastModel, lastContent, turns),
+      capabilities: [...handle.capabilities],
+      requiredCapabilities: [...handle.requiredCapabilities],
+    };
+    this.auditTrail?.append('subagent.execute.end', {
+      subagentId: handle.subagentId,
+      status: 'budget_limited',
+      durationMs: result.durationMs,
+      turns: result.turns,
+      budgetReason: budget.reason,
+      channelId: handle.channelId,
+    });
+    return result;
+  }
+
+  /**
+   * mmo9.7.7: has this run crossed a declared work-spec budget ceiling? Only
+   * consults ceilings the spec actually declared; returns null when no budget is
+   * exhausted (the run may still complete or be cancelled). No admission logic —
+   * this reads the spec's advisory ceilings, it does not gate model calls.
+   */
+  private evaluateBudgetExhaustion(
+    handle: ActiveSubagentHandle,
+    totalOutput: number,
+    _turns: number,
+  ): SubagentBudgetExhaustion | null {
+    const { workSpec } = handle.request;
+    if (workSpec.deadlineMs !== undefined && Date.now() - handle.startTime >= workSpec.deadlineMs) {
+      return { reason: 'deadline' };
+    }
+    if (workSpec.maxOutputTokens !== undefined && totalOutput >= workSpec.maxOutputTokens) {
+      return { reason: 'output_tokens' };
+    }
+    return null;
+  }
+
+  private buildPartialResult(
+    handle: ActiveSubagentHandle,
+    totalOutput: number,
+    lastModel: string,
+    lastContent: string,
+    turns: number,
+  ): SubagentPartialResult {
+    return {
+      remainingBudget: this.buildRemainingBudget(handle, totalOutput, turns),
+      latestCheckpoint: {
+        content: lastContent,
+        turnsCompleted: turns,
+        model: lastModel,
+        capturedAt: Date.now(),
+      },
+    };
+  }
+
+  private buildRemainingBudget(
+    handle: ActiveSubagentHandle,
+    totalOutput: number,
+    turns: number,
+  ): SubagentRemainingBudget {
+    const { workSpec } = handle.request;
+    const remaining: SubagentRemainingBudget = {
+      remainingTurns: Math.max(0, handle.maxTurns - turns),
+    };
+    if (workSpec.maxOutputTokens !== undefined) {
+      remaining.remainingOutputTokens = Math.max(0, workSpec.maxOutputTokens - totalOutput);
+    }
+    if (workSpec.deadlineMs !== undefined) {
+      remaining.remainingDeadlineMs = workSpec.deadlineMs - (Date.now() - handle.startTime);
+    }
+    return remaining;
   }
 
   private buildControlMessage(channelId: string, content: string): SubstrateMessage {
@@ -1142,6 +1318,14 @@ function normalizeRequiredText(value: string, field: string): string {
 function cloneSubagentResult(result: SubagentResult): SubagentResult {
   return {
     ...result,
+    ...(result.partial
+      ? {
+          partial: {
+            remainingBudget: { ...result.partial.remainingBudget },
+            latestCheckpoint: { ...result.partial.latestCheckpoint },
+          },
+        }
+      : {}),
     capabilities: [...result.capabilities],
     requiredCapabilities: [...result.requiredCapabilities],
   };

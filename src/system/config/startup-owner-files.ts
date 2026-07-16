@@ -286,9 +286,12 @@ export function verifyStartupOwnerFiles(
     },
     {
       label: 'skills',
-      dataPath: join(options.dataDir, SKILLS_FILE_NAME),
+      dataPath: join(companionDataDir, SKILLS_FILE_NAME),
       seedPath: join(seedDir, SKILLS_SEED_FILE_NAME),
-      run: () => loadSkillsConfig(options.dataDir, options.seedDir ? { seedDir: options.seedDir } : undefined),
+      run: () => loadSkillsConfig(
+        companionDataDir,
+        options.seedDir ? { seedDir: options.seedDir } : undefined,
+      ),
     },
     {
       label: 'companions',

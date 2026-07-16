@@ -23,14 +23,13 @@ export const SYSTEM_CONFIG_MANIFEST_NAME = 'system-config-manifest.json';
 // are captured by the companion-tree slice (an exhaustive walk of companionDataDir)
 // and MUST NOT be listed here. capability-tier.json is per-companion (dnll.2);
 // scheduler.json is per-companion (dnll.3); charge-policy.json is
-// per-companion (dnll.8).
+// per-companion (dnll.8); skills.json is per-companion (dnll.9).
 export const SYSTEM_CONFIG_OWNER_FILES = [
   'settings.json',
   'models.json',
   'providers.json',
   'channels.json',
   'backup.json',
-  'skills.json',
   'trust-policy.json',
   'intake-policy.json',
   'fleet-auth.json',

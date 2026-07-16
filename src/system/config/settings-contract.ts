@@ -57,12 +57,14 @@ export type SettingsFieldType =
  * scheduler.json (circadian cadence, rest window, morning wake, freeTime,
  * sleepConsolidation) is per-companion (dnll.3); charge-policy.json is
  * per-companion so fatigue and charge budgets share the companion ledger root
- * (dnll.8).
+ * (dnll.8); skills.json is per-companion so enabled sets remain individuated
+ * while operator-owned (dnll.9).
  */
 export const PER_COMPANION_OWNER_FILES: ReadonlySet<string> = new Set<string>([
   CAPABILITY_TIER_FILE_NAME,
   SCHEDULER_FILE_NAME,
   CHARGE_POLICY_FILE_NAME,
+  SKILLS_FILE_NAME,
 ]);
 
 /** Ownership scope for a whole owner file, derived from its rooting. */

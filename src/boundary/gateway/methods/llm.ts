@@ -36,6 +36,10 @@ import {
   resolveGatewayInlineImageReferences,
 } from '../inline-image-retention.js';
 import { normalizeLLMCallAccountingContext } from '../../../primitives/llm/accounting-context.js';
+import {
+  parseWorkSpecWireParams,
+  type LLMWorkSpecWireParams,
+} from '../../../primitives/llm/work-spec-wire.js';
 import { extractProviderAttemptUsageDetails } from '../../../shared/telemetry/provider-attempt-error.js';
 import { hasProviderCostEvidenceConflict } from '../../../shared/telemetry/provider-cost-evidence.js';
 import { ModelBudgetExceededError } from '../../../primitives/llm/model-budget.js';
@@ -83,6 +87,25 @@ export async function exposeModelCallGateBlocks<T>(operation: () => Promise<T>):
   }
 }
 
+/**
+ * psfn-framework-d8vq.2: parse an RPC-transported LLMWorkSpec fail-closed at the
+ * boundary. A malformed spec is rejected as a typed JSON-RPC error BEFORE any
+ * provider I/O; an absent spec is simply undefined (legacy non-work-spec calls
+ * are untouched). The parsed spec is forwarded to the serving-side LLMClient so
+ * its accountability guard + lane reconciliation fire in the split topology.
+ */
+function resolveRpcWorkSpec(raw: unknown): LLMWorkSpecWireParams | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  try {
+    return parseWorkSpecWireParams(raw);
+  } catch (error) {
+    throw new JSONRPCErrorException(
+      error instanceof Error ? error.message : 'Malformed LLMWorkSpec',
+      GatewayErrors.INVALID_WORK_SPEC,
+    );
+  }
+}
+
 async function authorizeIcpCorrelation<P extends GatewayCorrelationParams>(
   params: P,
   runtime: GatewayMethodRuntime,
@@ -105,6 +128,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
     name: 'llm.chat',
     handler: async (params: LLMChatParams, runtime) => {
       params = await authorizeIcpCorrelation(params, runtime);
+      const workSpec = resolveRpcWorkSpec(params.workSpec);
       const messages = resolveRetainedImageReferences(params, runtime);
       const shardRouting = resolveShardChannelRouting(params.channelId);
       const requestId = params.requestId ?? runtime.nextStreamRequestId();
@@ -147,6 +171,11 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
               } satisfies LLMFirstOutputNotification);
             },
           } : undefined,
+          // psfn-framework-d8vq.2: forward the parsed work spec so the
+          // gateway-side LLMClient enforces the accountability guard + lane
+          // reconciliation for an autonomous streamed call. undefined when
+          // absent so the interactive chat path is unchanged.
+          workSpec ? { workSpec } : undefined,
         )),
       );
       const response = applyGatewayCapturedProviderCost(
@@ -190,6 +219,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
     name: 'llm.complete',
     handler: async (params: LLMCompleteParams, runtime) => {
       params = await authorizeIcpCorrelation(params, runtime);
+      const workSpec = resolveRpcWorkSpec(params.workSpec);
       const messages = resolveRetainedImageReferences(params, runtime);
       const shardRouting = resolveShardChannelRouting(params.channelId);
       const inferredCallType = inferCallType(params.purpose, params.channelId);
@@ -221,6 +251,11 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
             correlation,
           },
           params.purpose,
+          // psfn-framework-d8vq.2: forward the parsed work spec so the
+          // gateway-side LLMClient enforces the fail-closed accountability guard
+          // + lane reconciliation for an autonomous completion. undefined when
+          // absent so legacy non-work-spec calls are unchanged.
+          workSpec ? { workSpec } : undefined,
         )),
       );
       const response = applyGatewayCapturedProviderCost(

@@ -33,6 +33,7 @@ import type {
   ImageEditParams as PrimitiveImageEditParams,
 } from '../../primitives/images/types.js';
 import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
+import type { LLMWorkSpecWireParams } from '../../primitives/llm/work-spec-wire.js';
 import type {
   ConfirmationDecision,
   ConfirmationQueueEntry,
@@ -168,6 +169,14 @@ export interface LLMChatParams extends GatewayCorrelationParams {
   frequencyPenalty?: number;
   tools?: ToolSchema[];
   accounting?: LLMCallAccountingContext;
+  /**
+   * psfn-framework-d8vq.2: declared work spec for an autonomous streamed call.
+   * Threads the typed LLMWorkSpec (minus its correlation, which rides the flat
+   * correlation params) across the RPC boundary so the gateway-side LLMClient
+   * enforces the same fail-closed accountability guard + lane reconciliation.
+   * Absent for the interactive chat turn. Parsed fail-closed at the handler.
+   */
+  workSpec?: LLMWorkSpecWireParams;
 }
 
 export interface LLMCompleteParams extends GatewayCorrelationParams {
@@ -189,6 +198,14 @@ export interface LLMCompleteParams extends GatewayCorrelationParams {
   repetitionPenalty?: number;
   frequencyPenalty?: number;
   accounting?: LLMCallAccountingContext;
+  /**
+   * psfn-framework-d8vq.2: declared work spec for an autonomous completion
+   * (the `completeWithWorkSpec` entry). Threads the typed LLMWorkSpec (minus its
+   * correlation, which rides the flat correlation params) across the RPC boundary
+   * so the gateway-side LLMClient enforces the same fail-closed accountability
+   * guard + lane reconciliation. Parsed fail-closed at the handler.
+   */
+  workSpec?: LLMWorkSpecWireParams;
 }
 
 export interface LLMEmbedParams extends GatewayCorrelationParams {
@@ -1080,4 +1097,10 @@ export const GatewayErrors = {
    * treat the abort as a generic provider failure.
    */
   MODEL_CALL_PREEMPTED: -32018,
+  /**
+   * psfn-framework-d8vq.2: an RPC-transported LLMWorkSpec was structurally
+   * malformed (missing/invalid required field or out-of-domain value). Rejected
+   * at the boundary before any provider I/O — fail closed.
+   */
+  INVALID_WORK_SPEC: -32019,
 } as const;

@@ -4,7 +4,13 @@
 
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
 import { Worker } from 'node:worker_threads';
-import type { LLMProviderPort, LLMProviderStreamOptions, EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type {
+  LLMProviderPort,
+  LLMProviderStreamOptions,
+  LLMProviderCompletionOptions,
+  EmbeddingProviderPort,
+} from '../../core/agent/contracts.js';
+import { toWorkSpecWireParams } from '../../primitives/llm/work-spec-wire.js';
 import { CHANNEL_TYPES } from '../../shared/contracts/runtime.js';
 import type { Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type {
@@ -631,6 +637,11 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
         ...(context.tools?.length ? { tools: context.tools } : {}),
         ...(context.accounting ? { accounting: context.accounting } : {}),
+        // psfn-framework-d8vq.2: carry the declared work spec (minus its
+        // correlation, which rides the flat correlation params) so the
+        // gateway-side LLMClient enforces the accountability guard + lane
+        // reconciliation on an autonomous streamed call.
+        ...(options?.workSpec ? { workSpec: toWorkSpecWireParams(options.workSpec) } : {}),
       };
       let result: LLMChatResult;
       try {
@@ -699,11 +710,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   async complete(
     context: LLMContext,
     purpose: CompletionPurpose,
-    options: {
-      signal?: AbortSignal;
-      modelHint?: LLMModelHint;
-      correlation?: Partial<CorrelationMetadata>;
-    } = {},
+    options: LLMProviderCompletionOptions = {},
   ): Promise<LLMResponse> {
     const correlation = {
       ...(context.correlation ?? {}),
@@ -740,6 +747,11 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
       ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
       ...(context.accounting ? { accounting: context.accounting } : {}),
+      // psfn-framework-d8vq.2: carry the declared work spec (minus its
+      // correlation, which rides the flat correlation params) so the
+      // gateway-side LLMClient enforces the fail-closed accountability guard +
+      // lane reconciliation for an autonomous completion.
+      ...(options.workSpec ? { workSpec: toWorkSpecWireParams(options.workSpec) } : {}),
     };
     let result: LLMCompleteResult;
     try {

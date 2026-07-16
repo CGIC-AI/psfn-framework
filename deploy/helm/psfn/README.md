@@ -153,11 +153,40 @@ kubectl -n "$NAMESPACE" exec deploy/psfn-agent -- sh -c '
 '
 ```
 
+If the old workload is already crash-looping because it requires the new
+companion-owned paths, skip the `kubectl exec` preflight. That is not a reason
+to roll back or copy files manually: deploy the fixed chart and exact image as
+the forward recovery. Its init container runs before the application and
+performs the same guarded migration directly on the PVCs. Use its logs for a
+fail-closed conflict diagnosis:
+
+```bash
+kubectl -n "$NAMESPACE" logs deploy/psfn-agent -c seed-runtime-files --tail=-1
+```
+
 Safe automatic upgrade states are: legacy source present and target absent;
 both present and byte-identical before the first marked migration; or target
 present with no legacy source. If both exist and differ without a marker, stop,
 back up both, and explicitly reconcile the authoritative file before upgrading.
 Do not enable seed defaults to conceal a conflict.
+
+Use the saved values with an exact, non-floating image reference. For a local
+k3d import, the pinned commit tag is sufficient; production registries should
+also set the immutable digest:
+
+```bash
+IMAGE_REPOSITORY=localhost/psfn-framework
+IMAGE_TAG=0.1.0-kube-<git-short-sha>
+helm upgrade --install "$RELEASE" deploy/helm/psfn \
+  --namespace "$NAMESPACE" \
+  -f "/tmp/${RELEASE}-values.yaml" \
+  --set-string psfnAppImage.repository="$IMAGE_REPOSITORY" \
+  --set-string psfnAppImage.tag="$IMAGE_TAG" \
+  --set-string psfnAppImage.digest= \
+  --set psfnAppImage.pullPolicy=IfNotPresent \
+  --set bootstrap.seedOwnerFiles=false \
+  --wait --timeout 10m
+```
 
 After the Helm upgrade, require all three app rollouts and verify the new owner
 paths and markers:
@@ -175,9 +204,10 @@ kubectl -n "$NAMESPACE" exec deploy/psfn-agent -- sh -c '
 '
 ```
 
-For rollback, use the prior Helm revision. The retained system-owned files let
-the old runtime start, but they represent the values at migration time; later
-companion-owned edits are intentionally not mirrored backward.
+The retained system-owned files preserve rollback evidence, but forward
+recovery with the fixed chart is the normal response to the ownership-cutover
+crash loop. Later companion-owned edits are intentionally not mirrored back to
+the retired path.
 
 ## Repository Checkout
 

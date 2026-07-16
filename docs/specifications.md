@@ -35,6 +35,17 @@ Supported until beta:
 - Continuous/local shared-root layout through `DATA_DIR`. This is for local development and smoke testing only; production mode forbids shared-root operation.
 - Split-root persistence cutover through `npm run migrate:persistence-layout` and the installer `--migrate-data` path. The cutover tooling may read legacy shared roots, write manifests, and run existing intra-root cleanup, but production startup should stop until the plan is clean.
 - Startup owner-file hydration for currently supported legacy owner data. Hydration may seed missing owner files on first boot, migrate or warn on existing owner-file drift, and load model/provider registries with the existing migration paths, but it must not restore `.env` as mutable-settings authority.
+- Helm's one-time per-companion owner cutover for `scheduler.json` and
+  `capability-tier.json`. The chart init path may copy a legacy regular file
+  from `systemDataDir` to a missing `companionDataDir` target byte-for-byte and
+  retain a SHA-256 marker for the source; it must never make the runtime read
+  the legacy path as a fallback, overwrite an evolved companion-owned target,
+  or choose between divergent unmarked files. Validate this boundary with
+  `npm run verify:helm-chart` and an exact-image local Helm rollout covering
+  agent, gateway, and Garden. Remove the legacy-source inspection, copy, and
+  marker compatibility before beta after every supported cluster has a
+  verified companion-owned target and the old-chart rollback window has been
+  retired.
 - Existing companion persistence migrations for legacy continuity files, session channel filenames, opaque pre-cutover SQLite database placement, contact `discord_user_id` identity rows, and the `core_memory.json` orientation filename. These flows may preserve or move opaque files but do not open them through a SQLite reader; they are not permission to add new parallel artifact names.
 - Tool-surface migration aliases documented in `docs/tool-surface.md`. They preserve model-facing continuity while unified tools roll out, and should be removed after canonical actions have stable adoption.
 - One-time legacy Personal Workspace assignment during the multi-companion alpha

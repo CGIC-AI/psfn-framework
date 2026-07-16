@@ -152,8 +152,8 @@ Before upgrading each release:
    chmod 600 "/tmp/${RELEASE}-values.yaml"
    ```
 
-2. From the currently healthy agent, record only the hashes/existence of the
-   old and new paths:
+2. From a currently healthy agent, record only the hashes/existence of the old
+   and new paths:
 
    ```bash
    kubectl -n "$NAMESPACE" exec deploy/psfn-agent -- sh -c '
@@ -171,13 +171,40 @@ Before upgrading each release:
    and target differ, stop and explicitly reconcile the authoritative copy
    after backing up both. Never turn on seed defaults to hide the ambiguity.
 
+   If the workload already crash-loops on the missing companion-owned files,
+   skip this `exec` preflight and use step 3 as forward recovery. Do not roll
+   back or manually copy the owners. The fixed chart's init container operates
+   on the mounted PVCs before application startup. If it rejects ambiguous
+   state, inspect the init log without exposing file contents:
+
+   ```bash
+   kubectl -n "$NAMESPACE" logs deploy/psfn-agent \
+     -c seed-runtime-files --tail=-1
+   ```
+
 3. Build/import or pull the exact pinned application image, then upgrade with
    the preserved values and repo-owned chart. Leave
    `bootstrap.seedOwnerFiles=false` for an existing release. The init container
    copies each legacy owner byte-for-byte, records its source SHA-256 under
    `companion-data/.owner-migrations/`, and retains the old source as a rollback
    snapshot. The operation is idempotent across the agent, gateway, and Garden
-   init containers.
+   init containers. For a local k3d image, use the exact commit tag below;
+   production registries should additionally set the immutable digest instead
+   of leaving it empty.
+
+   ```bash
+   IMAGE_REPOSITORY=localhost/psfn-framework
+   IMAGE_TAG=0.1.0-kube-<git-short-sha>
+   helm upgrade --install "$RELEASE" deploy/helm/psfn \
+     --namespace "$NAMESPACE" \
+     -f "/tmp/${RELEASE}-values.yaml" \
+     --set-string psfnAppImage.repository="$IMAGE_REPOSITORY" \
+     --set-string psfnAppImage.tag="$IMAGE_TAG" \
+     --set-string psfnAppImage.digest= \
+     --set psfnAppImage.pullPolicy=IfNotPresent \
+     --set bootstrap.seedOwnerFiles=false \
+     --wait --timeout 10m
+   ```
 
 4. Require all app rollouts, normal service smokes, and the owner checks:
 
@@ -198,8 +225,9 @@ The migration marker binds the retained legacy source, not the evolving target.
 Garden may therefore update the companion-owned file after migration without
 being overwritten. A changed legacy source after migration fails closed because
 it usually means an old runtime or manual process resumed writing the retired
-owner. Roll back with the prior Helm revision; the old runtime can use the
-retained snapshot, but later companion-owned edits are not mirrored backward.
+owner. Use the fixed chart as forward recovery for ownership-cutover crash
+loops. The retained legacy source is rollback evidence, not an active owner,
+and later companion-owned edits are not mirrored backward.
 Run this procedure once per Helm release/companion root in multi-release
 clusters.
 

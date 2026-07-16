@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -89,14 +89,34 @@ function findParsedDocumentByKindName(rendered, kind, name) {
 }
 
 function renderedSeedCommand(rendered) {
-  const deployment = findParsedDocumentByKindName(rendered, 'Deployment', 'psfn-agent');
-  const initContainer = deployment?.spec?.template?.spec?.initContainers
-    ?.find(container => container.name === 'seed-runtime-files');
-  const command = initContainer?.command;
-  if (!Array.isArray(command) || command[0] !== 'sh' || command[1] !== '-c') {
-    throw new Error('agent seed-runtime-files init command is not a rendered sh -c command');
+  const commands = [];
+  for (const deploymentName of ['psfn-agent', 'psfn-gateway', 'psfn-garden']) {
+    const deployment = findParsedDocumentByKindName(rendered, 'Deployment', deploymentName);
+    const initContainer = deployment?.spec?.template?.spec?.initContainers
+      ?.find(container => container.name === 'seed-runtime-files');
+    const command = initContainer?.command;
+    if (!Array.isArray(command) || command[0] !== 'sh' || command[1] !== '-c') {
+      throw new Error(
+        `${deploymentName} seed-runtime-files init command is not a rendered sh -c command`,
+      );
+    }
+    const mounts = new Map(
+      (initContainer.volumeMounts ?? []).map(mount => [mount.name, mount]),
+    );
+    for (const volumeName of ['system-data', 'companion-data']) {
+      const mount = mounts.get(volumeName);
+      if (!mount || mount.readOnly === true) {
+        throw new Error(
+          `${deploymentName} seed-runtime-files must mount ${volumeName} writable`,
+        );
+      }
+    }
+    commands.push(command[2]);
   }
-  return command[2];
+  if (commands.some(command => command !== commands[0])) {
+    throw new Error('agent, gateway, and Garden owner migration commands differ');
+  }
+  return commands[0];
 }
 
 function renderOwnerMigrationFixture(rootDir, seedOwnerFiles) {
@@ -133,6 +153,26 @@ function runOwnerMigrationCommand(command, expectedStatus = 0) {
     );
   }
   return `${result.stderr}${result.stdout}`;
+}
+
+function runOwnerMigrationCommandAsync(command) {
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn('sh', ['-c', command], {
+      cwd: repoRoot,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    child.stdout.on('data', chunk => { output += chunk; });
+    child.stderr.on('data', chunk => { output += chunk; });
+    child.on('error', reject);
+    child.on('close', status => {
+      if (status !== 0) {
+        reject(new Error(`concurrent owner migration exited ${status}: ${output}`));
+        return;
+      }
+      resolvePromise(output);
+    });
+  });
 }
 
 function assertDocumentDoesNotSelectComponent(document, component, label) {
@@ -576,7 +616,13 @@ try {
     writeFileSync(join(fixture.systemDataDir, fileName), contents, 'utf8');
   }
 
-  runOwnerMigrationCommand(fixture.command);
+  // The same shared PVCs are mounted by all three workload init containers.
+  // Prove their idempotent transaction tolerates a simultaneous rollout.
+  await Promise.all([
+    runOwnerMigrationCommandAsync(fixture.command),
+    runOwnerMigrationCommandAsync(fixture.command),
+    runOwnerMigrationCommandAsync(fixture.command),
+  ]);
   for (const [fileName, contents] of legacyOwners) {
     const targetPath = join(fixture.companionDataDir, fileName);
     if (!existsSync(targetPath) || readFileSync(targetPath, 'utf8') !== contents) {
@@ -640,6 +686,86 @@ try {
   );
 } finally {
   rmSync(ambiguousRoot, { recursive: true, force: true });
+}
+
+const identicalRoot = mkdtempSync(join(tmpdir(), 'psfn-helm-owner-identical-'));
+try {
+  const fixture = renderOwnerMigrationFixture(identicalRoot, false);
+  mkdirSync(fixture.systemDataDir, { recursive: true });
+  mkdirSync(fixture.companionDataDir, { recursive: true });
+  for (const [fileName, contents] of perCompanionOwners) {
+    writeFileSync(join(fixture.systemDataDir, fileName), contents, 'utf8');
+    writeFileSync(join(fixture.companionDataDir, fileName), contents, 'utf8');
+  }
+  runOwnerMigrationCommand(fixture.command);
+  for (const fileName of perCompanionOwners.keys()) {
+    if (!existsSync(join(
+      fixture.companionDataDir,
+      '.owner-migrations',
+      `${fileName}.from-system.sha256`,
+    ))) {
+      throw new Error(`${fileName} identical legacy and target state was not recorded`);
+    }
+  }
+} finally {
+  rmSync(identicalRoot, { recursive: true, force: true });
+}
+
+const targetOnlyRoot = mkdtempSync(join(tmpdir(), 'psfn-helm-owner-target-only-'));
+try {
+  const fixture = renderOwnerMigrationFixture(targetOnlyRoot, false);
+  mkdirSync(fixture.companionDataDir, { recursive: true });
+  for (const [fileName, contents] of perCompanionOwners) {
+    writeFileSync(join(fixture.companionDataDir, fileName), contents, 'utf8');
+  }
+  runOwnerMigrationCommand(fixture.command);
+  if (existsSync(join(fixture.companionDataDir, '.owner-migrations'))) {
+    const unexpectedMarkers = Array.from(perCompanionOwners.keys()).some(fileName => existsSync(join(
+      fixture.companionDataDir,
+      '.owner-migrations',
+      `${fileName}.from-system.sha256`,
+    )));
+    if (unexpectedMarkers) {
+      throw new Error('target-only owner state was incorrectly recorded as a legacy migration');
+    }
+  }
+} finally {
+  rmSync(targetOnlyRoot, { recursive: true, force: true });
+}
+
+const missingRoot = mkdtempSync(join(tmpdir(), 'psfn-helm-owner-missing-'));
+try {
+  const fixture = renderOwnerMigrationFixture(missingRoot, false);
+  const missingOutput = runOwnerMigrationCommand(fixture.command, 1);
+  assertIncludes(
+    missingOutput,
+    'Missing required per-companion owner file after bootstrap/migration',
+    'missing owner with seeding disabled fail-closed error',
+  );
+} finally {
+  rmSync(missingRoot, { recursive: true, force: true });
+}
+
+const missingMarkedTargetRoot = mkdtempSync(
+  join(tmpdir(), 'psfn-helm-owner-missing-marked-target-'),
+);
+try {
+  const fixture = renderOwnerMigrationFixture(missingMarkedTargetRoot, false);
+  const migrationDir = join(fixture.companionDataDir, '.owner-migrations');
+  mkdirSync(migrationDir, { recursive: true });
+  writeFileSync(
+    join(migrationDir, 'scheduler.json.from-system.sha256'),
+    `${'0'.repeat(64)}\n`,
+    'utf8',
+  );
+  const missingMarkedTargetOutput = runOwnerMigrationCommand(fixture.command, 1);
+  assertIncludes(
+    missingMarkedTargetOutput,
+    'Owner migration marker exists but target is missing',
+    'missing marked target fail-closed error',
+  );
+} finally {
+  rmSync(missingMarkedTargetRoot, { recursive: true, force: true });
 }
 
 const freshInstallRoot = mkdtempSync(join(tmpdir(), 'psfn-helm-owner-fresh-'));

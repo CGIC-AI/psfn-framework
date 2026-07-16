@@ -1,4 +1,5 @@
 import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
+import type { CompanionId } from '../routing/companion-id.js';
 
 export const SATELLITE_REGISTRY_FILE_NAME = 'satellites.json';
 
@@ -296,6 +297,12 @@ export interface SatelliteConfig {
    * (see `assertSatellitePlaceBindings`).
    */
   placeId?: string;
+  /**
+   * Fleet companion that owns every endpoint/app surface on this satellite.
+   * A satellite has at most one owner; changing an occupied binding requires
+   * an explicit unbind first.
+   */
+  companionId?: CompanionId;
   endpoints: SatelliteEndpointConfig[];
 }
 
@@ -334,6 +341,7 @@ export interface AdminSatelliteView {
   displayName: string;
   mobility: SatelliteMobility;
   staticLocationLabel?: string;
+  companionId?: CompanionId;
   endpoints: AdminSatelliteEndpointView[];
 }
 
@@ -367,6 +375,8 @@ export interface SatelliteRoutingMetadata {
   staticLocationLabel?: string;
   /** Static place binding carried onto the turn (see `SatelliteConfig.placeId`). */
   placeId?: string;
+  /** satellites.json-owned companion route for this authenticated endpoint. */
+  companionId?: CompanionId;
   capabilities: SatelliteClaimCapabilityResolution;
   telemetryScopes: SatelliteTelemetryScope[];
   auth: {

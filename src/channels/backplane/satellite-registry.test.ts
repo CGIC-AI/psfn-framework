@@ -147,6 +147,29 @@ function exampleRegistry(overrides: Record<string, unknown> = {}) {
 }
 
 describe('satellite registry', () => {
+  it('parses and threads a satellite companion ownership binding into authenticated claims', () => {
+    const companionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const registry = exampleRegistry();
+    registry.satellites[0].companionId = companionId;
+
+    const reparsed = parseSatelliteRegistryConfig(registry);
+    const result = resolveSatelliteClaim({
+      registry: reparsed,
+      principal,
+      headers: {
+        'x-psfn-satellite-claim-type': 'voice-pi',
+        'x-psfn-satellite-id': 'pi-voice',
+        'x-psfn-satellite-endpoint-id': 'wyoming-voice',
+        'x-psfn-satellite-session-id': 'owned-voice-session',
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.satellite.companionId).toBe(companionId);
+    }
+  });
+
   it('authorizes touch for the canonical Hub and Waveshare owner-file endpoints', () => {
     const registry = parseSatelliteRegistryConfig(JSON.parse(readFileSync(
       join(process.cwd(), 'purrsephone', 'satellites.json'),

@@ -16,6 +16,7 @@ import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
 import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
 import type { CapabilityTier, WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { SatelliteRoutingMetadata } from '../../shared/contracts/satellite-registry.js';
 import type { GatewayRpcConnection, GatewayRpcEndpoint } from './transport.js';
 import { GatewayInlineImageRetention } from './inline-image-retention.js';
 import { createSocketServer, createWebSocketRpcServer } from './transport.js';
@@ -1619,6 +1620,41 @@ export class GatewayServer {
     return this.requireReadyCompanionRoute(surface, companionId);
   }
 
+  private resolveSatelliteCompanionAgent(satellite: SatelliteRoutingMetadata): {
+    conn: GatewayRpcConnection;
+    client: JSONRPCServerAndClient;
+    companionId: CompanionId;
+  } {
+    const routeLabel = `satellite:${satellite.satelliteId}`;
+    if (!satellite.companionId) {
+      this.alarmCompanionViolation(
+        'unbound_satellite',
+        `Satellite "${satellite.satelliteId}" has no companion binding in satellites.json`,
+        { satelliteId: satellite.satelliteId, endpointId: satellite.endpointId },
+      );
+      throw new Error(
+        `Multi-companion satellite "${satellite.satelliteId}" has no companion binding in satellites.json`,
+      );
+    }
+    if (!this.fleetCompanionIds.has(satellite.companionId)) {
+      this.alarmCompanionViolation(
+        'satellite_unknown_companion',
+        `Satellite "${satellite.satelliteId}" names a companion absent from companions.json`,
+        {
+          satelliteId: satellite.satelliteId,
+          endpointId: satellite.endpointId,
+          companionId: satellite.companionId,
+        },
+      );
+      throw new Error(
+        `Satellite "${satellite.satelliteId}" routes to companion "${satellite.companionId}" `
+        + 'which is absent from companions.json',
+      );
+    }
+    this.refreshConnectionHealth();
+    return this.requireReadyCompanionRoute(routeLabel, satellite.companionId);
+  }
+
   private resolveRoutedCompanionId(
     surface: GatewayChannelSurface,
     discordAccountId?: string,
@@ -1671,7 +1707,7 @@ export class GatewayServer {
     return companionId;
   }
 
-  private requireReadyCompanionRoute(surface: GatewayChannelSurface, companionId: CompanionId): {
+  private requireReadyCompanionRoute(surface: string, companionId: CompanionId): {
     conn: GatewayRpcConnection;
     client: JSONRPCServerAndClient;
     companionId: CompanionId;
@@ -2000,18 +2036,41 @@ export class GatewayServer {
     let companionId = this.options.companionId
       ?? createCompanionId(DEFAULT_COMPANION_ID, 'Default companionId');
     if (this.multiCompanion.enabled) {
-      const surface = resolveGatewaySurfaceForChannelType(message.channelType);
-      if (!surface) {
-        this.alarmCompanionViolation(
-          'unrouted_channel',
-          `Inbound message channelType "${message.channelType}" has no multi-companion routing surface`,
-          { channelType: message.channelType, channelId: message.channelId },
-        );
-        throw new Error(
-          `Multi-companion routing cannot map channelType "${message.channelType}" to a companion`,
-        );
+      const satellite = message.routing?.satellite;
+      const satelliteSource = message.routing?.source === 'satellite';
+      let route: ReturnType<GatewayServer['resolveCompanionAgent']>;
+      if (satellite) {
+        if (!satelliteSource) {
+          this.alarmCompanionViolation(
+            'invalid_satellite_route',
+            'Inbound voice message carries satellite metadata without a satellite routing source',
+            { channelType: message.channelType, channelId: message.channelId },
+          );
+          throw new Error('Satellite voice routing metadata requires routing.source="satellite"');
+        }
+        route = this.resolveSatelliteCompanionAgent(satellite);
+      } else {
+        if (satelliteSource) {
+          this.alarmCompanionViolation(
+            'invalid_satellite_route',
+            'Inbound satellite voice message is missing authenticated satellite routing metadata',
+            { channelType: message.channelType, channelId: message.channelId },
+          );
+          throw new Error('Satellite voice routing requires authenticated satellite metadata');
+        }
+        const surface = resolveGatewaySurfaceForChannelType(message.channelType);
+        if (!surface) {
+          this.alarmCompanionViolation(
+            'unrouted_channel',
+            `Inbound message channelType "${message.channelType}" has no multi-companion routing surface`,
+            { channelType: message.channelType, channelId: message.channelId },
+          );
+          throw new Error(
+            `Multi-companion routing cannot map channelType "${message.channelType}" to a companion`,
+          );
+        }
+        route = this.resolveCompanionAgent(surface);
       }
-      const route = this.resolveCompanionAgent(surface);
       client = route.client;
       conn = route.conn;
       companionId = route.companionId;

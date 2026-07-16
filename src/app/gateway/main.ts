@@ -158,6 +158,7 @@ async function main(): Promise<void> {
     config,
     env,
     startupHydration,
+    satelliteRegistryConfig,
   });
   log.info('Loaded trust policy configuration', {
     exactOverrideCount: Object.keys(

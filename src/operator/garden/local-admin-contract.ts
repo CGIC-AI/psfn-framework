@@ -476,7 +476,12 @@ export function createInProcessGardenAdminContract(
     rooms: createAdminRoomsService({
       contactStore: options.contactStore ?? null,
     }),
-    places: createAdminPlacesService({ dataDir: options.config.dataDir }),
+    places: createAdminPlacesService({
+      dataDir: options.config.dataDir,
+      fleetCompanionIds: options.config.companionFleet?.companions.map(
+        companion => companion.companionId,
+      ) ?? [],
+    }),
     enrollment: options.hubIdentityEnrollmentStore && options.contactStore
       ? createAdminEnrollmentService({
         enrollmentService: new HubIdentityEnrollmentService(

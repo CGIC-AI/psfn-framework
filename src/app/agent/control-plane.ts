@@ -4,15 +4,24 @@ import {
   type LifecycleNotifier,
   type MessageSender,
 } from '../../system/lifecycle/notifications.js';
-import { resolveRuntimeCommandInvocation, type RuntimeModeContract } from '../../system/lifecycle/runtime-mode.js';
-import { createSystemTool, runRepoLifecycleBuildCommand } from '../../core/tools/lifecycle.js';
+import type { RuntimeModeContract } from '../../system/lifecycle/runtime-mode.js';
+import { runConfiguredLifecycleCommand } from '../../system/lifecycle/command-runner.js';
+import {
+  createSystemTool,
+  registerDeferredLifecycleRuntime,
+  runRepoLifecycleBuildCommand,
+} from '../../core/tools/lifecycle.js';
 import {
   createGatewayDiscordNotifySender,
   createNotifyDispatcher,
   createNotifyTool,
   type NotificationPort,
 } from '../../core/tools/ntfy.js';
-import { createRetryableShutdown, runShutdownSequence } from '../startup/support/shutdown-helpers.js';
+import {
+  createRetryableShutdown,
+  runShutdownSequence,
+  runShutdownStep,
+} from '../startup/support/shutdown-helpers.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { Scheduler } from '../../core/scheduler/scheduler.js';
@@ -157,48 +166,85 @@ export function buildAgentControlPlane(
     startTime: Date.now(),
   });
 
+  const prepareRestartCommand = createRetryableShutdown(async () => {
+    await runShutdownStep(
+      'stop durable background work supervisor',
+      () => agentLoop.stopBackgroundWork(),
+      log,
+      2,
+      true,
+    );
+  });
+  const runBuildCommand = async (): Promise<void> => {
+    await runRepoLifecycleBuildCommand({
+      repoRoot: process.cwd(),
+      timeoutMs: 120_000,
+      maxOutputChars: 40_000,
+    });
+  };
+  const runRestartCommand = async (): Promise<void> => {
+    await runConfiguredLifecycleCommand(lifecycleRuntimeContract.restart.command, {
+      cwd: process.cwd(),
+      timeoutMs: 30_000,
+      maxOutputChars: 10_000,
+    });
+  };
+  let unregisterDeferredLifecycle = (): void => undefined;
+
   const stopFn = createRetryableShutdown(async () => {
-      const timeoutMs = parsePositiveIntEnv(
-        process.env.EXTRACTION_DRAIN_TIMEOUT_MS,
-        DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
-      );
-      await runShutdownSequence([
-        { step: 'unregister deferred companion outreach', action: () => unregisterDeferredCompanionOutreach() },
-        { step: 'unregister ICP initiation candidates', action: () => unregisterIcpInitiationCandidates() },
-        { step: 'unregister gateway disconnect hook', action: () => unregisterGatewayDisconnect() },
-        { step: 'emit system.shutdown event', action: () => eventBus.emit('system.shutdown', {}) },
-        { step: 'stop debug observer', action: () => stopDebugObserver() },
-        { step: 'stop scheduler', action: () => scheduler.stop() },
-        {
-          step: 'stop durable background work supervisor',
-          action: () => agentLoop.stopBackgroundWork(),
-          maxAttempts: 2,
-          failClosed: true,
+    const timeoutMs = parsePositiveIntEnv(
+      process.env.EXTRACTION_DRAIN_TIMEOUT_MS,
+      DEFAULT_EXTRACTION_DRAIN_TIMEOUT_MS,
+    );
+    await runShutdownSequence([
+      { step: 'unregister deferred lifecycle actions', action: () => unregisterDeferredLifecycle() },
+      { step: 'unregister deferred companion outreach', action: () => unregisterDeferredCompanionOutreach() },
+      { step: 'unregister ICP initiation candidates', action: () => unregisterIcpInitiationCandidates() },
+      { step: 'unregister gateway disconnect hook', action: () => unregisterGatewayDisconnect() },
+      { step: 'emit system.shutdown event', action: () => eventBus.emit('system.shutdown', {}) },
+      { step: 'stop debug observer', action: () => stopDebugObserver() },
+      { step: 'stop scheduler', action: () => scheduler.stop() },
+      {
+        step: 'stop durable background work supervisor',
+        action: prepareRestartCommand,
+        maxAttempts: 1,
+        failClosed: true,
+      },
+      {
+        step: 'drain memory extractor',
+        action: async () => {
+          const drained = await memoryExtractor.stop({ timeoutMs });
+          if (!drained) {
+            log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
+          }
         },
-        {
-          step: 'drain memory extractor',
-          action: async () => {
-            const drained = await memoryExtractor.stop({ timeoutMs });
-            if (!drained) {
-              log.warn('Proceeding with shutdown before extraction drain completed', { timeoutMs });
-            }
-          },
-        },
-        {
-          step: 'write graceful shutdown markers',
-          action: () => writeGracefulShutdownMarkers(),
-        },
-        { step: 'shutdown module loader', action: () => moduleLoader.shutdown() },
-        { step: 'stop API server', action: () => shutdownTargets.apiServer?.stop() },
-        { step: 'stop admin server', action: () => shutdownTargets.adminTransport?.stop() },
-        { step: 'close app cache', action: () => shutdownTargets.appCache?.close?.() },
-        { step: 'close charge ledger', action: () => shutdownTargets.chargeLedger?.close() },
-        { step: 'close ICP fatigue regulation reservations', action: () => shutdownTargets.fatigueRegulationReservations?.close() },
-        { step: 'close session tail cache', action: () => shutdownTargets.sessionTailCache?.close?.() },
-        { step: 'destroy gateway client', action: () => gateway.destroy() },
-        { step: 'close database', action: () => closeDatabase() },
-      ], log);
-      log.info('Stopped');
+      },
+      {
+        step: 'write graceful shutdown markers',
+        action: () => writeGracefulShutdownMarkers(),
+      },
+      { step: 'shutdown module loader', action: () => moduleLoader.shutdown() },
+      { step: 'stop API server', action: () => shutdownTargets.apiServer?.stop() },
+      { step: 'stop admin server', action: () => shutdownTargets.adminTransport?.stop() },
+      { step: 'close app cache', action: () => shutdownTargets.appCache?.close?.() },
+      { step: 'close charge ledger', action: () => shutdownTargets.chargeLedger?.close() },
+      { step: 'close ICP fatigue regulation reservations', action: () => shutdownTargets.fatigueRegulationReservations?.close() },
+      { step: 'close session tail cache', action: () => shutdownTargets.sessionTailCache?.close?.() },
+      { step: 'destroy gateway client', action: () => gateway.destroy() },
+      { step: 'close database', action: () => closeDatabase() },
+    ], log);
+    log.info('Stopped');
+  });
+
+  unregisterDeferredLifecycle = registerDeferredLifecycleRuntime({
+    agentLoop,
+    postTurnActions,
+    notifier: lifecycleNotifier,
+    stopFn,
+    restartContract: lifecycleRuntimeContract.restart,
+    prepareRestartCommand,
+    runBuildCommand,
+    runRestartCommand,
   });
 
   agentLoop.registerTool(createSystemTool(
@@ -209,24 +255,10 @@ export function buildAgentControlPlane(
       restartSafeguard: lifecycleRestartSafeguard,
       getCapabilityTier: () => capabilityRuntime.getTier(),
       restartContract: lifecycleRuntimeContract.restart,
-      runBuildCommand: async () => {
-        await runRepoLifecycleBuildCommand({
-          repoRoot: process.cwd(),
-          timeoutMs: 120_000,
-          maxOutputChars: 40_000,
-        });
-      },
-      runRestartCommand: async () => {
-        const invocation = resolveRuntimeCommandInvocation(lifecycleRuntimeContract.restart.command);
-        if (!invocation) {
-          throw new Error('Lifecycle restart command strategy is missing a restart command');
-        }
-        await gateway.shellExec(invocation.command, invocation.args, {
-          cwd: process.cwd(),
-          timeoutMs: 30_000,
-          maxOutputChars: 10_000,
-        });
-      },
+      executionMode: 'deferred',
+      prepareRestartCommand,
+      runBuildCommand,
+      runRestartCommand,
     },
   ));
   agentLoop.registerTool(createNotifyTool(createNotifyDispatcher({

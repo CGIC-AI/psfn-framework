@@ -38,8 +38,32 @@
     },
     {
       "file": "src/app/e2e/icp-certification/process-harness.ts",
+      "name": "COMMAND_TIMEOUT_MS",
+      "value": "60_000",
+      "note": "Code-owned real-process certification command deadline that prevents a hung child RPC from stalling the test suite."
+    },
+    {
+      "file": "src/app/e2e/icp-certification/process-harness.ts",
       "name": "START_TIMEOUT_MS",
       "value": "60_000"
+    },
+    {
+      "file": "src/app/e2e/icp-certification/process-harness.ts",
+      "name": "STOP_TIMEOUT_MS",
+      "value": "15_000",
+      "note": "Code-owned certification child shutdown deadline used only by the real-process test harness."
+    },
+    {
+      "file": "src/app/e2e/multi-companion-runtime-validation.ts",
+      "name": "PROCESS_EXIT_TIMEOUT_MS",
+      "value": "10_000",
+      "note": "Code-owned multi-companion validation child-exit deadline that prevents a hung certification process."
+    },
+    {
+      "file": "src/app/e2e/multi-companion-runtime-validation.ts",
+      "name": "QUIESCENCE_TIMEOUT_MS",
+      "value": "30_000",
+      "note": "Code-owned multi-companion validation deadline bounding deterministic background-queue drain."
     },
     {
       "file": "src/app/gateway/api-surface.ts",

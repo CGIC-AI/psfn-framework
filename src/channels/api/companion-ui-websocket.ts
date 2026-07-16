@@ -34,7 +34,11 @@ import { REQUEST_CAPABILITY_ASSERTION_HEADERS } from '../../boundary/fleet-auth/
 const log = createComponentLogger('CompanionUiWebSocket');
 const PATH_PATTERN = /^\/companion-ui\/companions\/([0-9a-f-]+)\/ws$/u;
 const CLOSE = Object.freeze({ denied: 4403, authorityChanged: 4401, shutdown: 1012 });
-const RUNTIME_LIMITS = Object.freeze({ maxPayloadBytes: 1_048_576, authorityPollMs: 5_000 });
+const RUNTIME_LIMITS = Object.freeze({
+  maxPayloadBytes: 1_048_576,
+  maxRequestIdsPerSocket: 4_096,
+  authorityPollMs: 5_000,
+});
 const FORBIDDEN_BROWSER_AUTHORITY_HEADERS = new Set([
   'x-author-id', 'x-author-name', 'x-canonical-contact-id', 'x-channel-id', 'x-channel-type',
   'x-companion-id', 'x-device-id', 'x-place-id', 'x-psfn-action', 'x-psfn-author',
@@ -50,13 +54,17 @@ export interface CompanionUiWebSocketConfig {
   readonly trustedProxyClientCertToken?: string;
   readonly hubDeviceIngress: GatewayHubDeviceIngressService;
   readonly actionBroker: GatewayCompanionUiActionBroker;
+  readonly guestMode?: 'disabled' | 'explicit';
+  readonly guestActionBroker?: Readonly<{
+    execute(input: Omit<Parameters<GatewayCompanionUiActionBroker['execute']>[0], 'sessionToken'>): Promise<unknown>;
+  }>;
   readonly authorityPollMs?: number;
   readonly createWebSocketServer?: () => WebSocketServer;
 }
 
 interface UpgradeAuthority {
   readonly companionId: CompanionId;
-  readonly sessionToken: string;
+  readonly sessionToken?: string;
   readonly assertion: string;
   readonly clientCert?: SatelliteClientCertIdentity;
   readonly principal: ReturnType<typeof principalFromSatelliteApiKeyToken>;
@@ -69,6 +77,10 @@ interface UpgradeAuthority {
     principal: ReturnType<typeof principalFromSatelliteApiKeyToken>;
     headers: Readonly<Record<string, string>>;
     clientCert?: SatelliteClientCertIdentity;
+  }>;
+  readonly presentation: Readonly<{
+    device: Readonly<{ id: string; label: string }>;
+    place?: Readonly<{ id: string; label: string }>;
   }>;
 }
 
@@ -176,9 +188,16 @@ export class CompanionUiWebSocketAdapter {
       const admission = await this.config.hubDeviceIngress.admit({
         assertion: authority.assertion,
         connection: authority.connection,
-        human: { kind: 'fleet_browser_session', sessionToken: authority.sessionToken },
+        human: authority.sessionToken
+          ? { kind: 'fleet_browser_session', sessionToken: authority.sessionToken }
+          : { kind: 'guest' },
       });
-      if (admission.attachment.actor.kind !== 'human') throw new Error('current human attachment required');
+      if (authority.sessionToken && admission.attachment.actor.kind !== 'human') {
+        throw new Error('current human attachment required');
+      }
+      if (!authority.sessionToken && admission.attachment.actor.kind !== 'guest') {
+        throw new Error('guest attachment required');
+      }
       this.webSocketServer.handleUpgrade(request, socket, head, webSocket => {
         this.attachSocket(webSocket, authority, admission.attachment);
       });
@@ -191,14 +210,15 @@ export class CompanionUiWebSocketAdapter {
     if (this.stopped
       || rawHeaderCount(request, 'host') !== 1
       || rawHeaderCount(request, 'origin') !== 1
-      || rawHeaderCount(request, 'cookie') !== 1
       || rawHeaderCount(request, 'authorization') !== 1
       || rawHeaderCount(request, 'sec-websocket-protocol') !== 0
       || request.headers.host !== this.expectedHost
       || request.headers.origin !== this.expectedOrigin
       || hasForbiddenAuthorityHeader(request)) throw new Error('invalid upgrade metadata');
     const sessionToken = readExclusiveFleetSessionCookie(request);
-    if (!sessionToken) throw new Error('invalid fleet session cookie');
+    const cookieCount = rawHeaderCount(request, 'cookie');
+    if (sessionToken ? cookieCount !== 1 : cookieCount !== 0) throw new Error('invalid fleet session cookie');
+    if (!sessionToken && this.config.guestMode !== 'explicit') throw new Error('fleet session required');
     const bearer = getBearerToken(request);
     const satelliteKey = this.config.satelliteApiKeys.find(key => isExpectedApiToken(bearer, key));
     if (!satelliteKey) throw new Error('authenticated Hub backchannel required');
@@ -239,7 +259,7 @@ export class CompanionUiWebSocketAdapter {
     });
     return Object.freeze({
       companionId,
-      sessionToken,
+      ...(sessionToken ? { sessionToken } : {}),
       assertion,
       principal,
       connection,
@@ -251,6 +271,18 @@ export class CompanionUiWebSocketAdapter {
         principal,
         headers: deviceHeaders,
         ...(clientCert ? { clientCert } : {}),
+      }),
+      presentation: Object.freeze({
+        device: Object.freeze({
+          id: connection.deviceId,
+          label: satellite.value.satellite.endpointDisplayName,
+        }),
+        ...(connection.placeId ? {
+          place: Object.freeze({
+            id: connection.placeId,
+            label: satellite.value.satellite.staticLocationLabel ?? connection.placeId,
+          }),
+        } : {}),
       }),
       ...(clientCert ? { clientCert } : {}),
     });
@@ -264,6 +296,7 @@ export class CompanionUiWebSocketAdapter {
     this.activeSockets.add(socket);
     let attachment = initialAttachment;
     let closed = false;
+    const seenRequestIds = new Set<string>();
     const close = (code: number, reason: string): void => {
       if (closed) return;
       closed = true;
@@ -277,9 +310,12 @@ export class CompanionUiWebSocketAdapter {
       const refreshed = await this.config.hubDeviceIngress.admit({
         assertion: authority.assertion,
         connection: authority.connection,
-        human: { kind: 'fleet_browser_session', sessionToken: authority.sessionToken },
+        human: authority.sessionToken
+          ? { kind: 'fleet_browser_session', sessionToken: authority.sessionToken }
+          : { kind: 'guest' },
       });
-      if (refreshed.attachment.actor.kind !== 'human'
+      if ((authority.sessionToken && refreshed.attachment.actor.kind !== 'human')
+        || (!authority.sessionToken && refreshed.attachment.actor.kind !== 'guest')
         || refreshed.attachment.attachmentId !== initialAttachment.attachmentId) {
         throw new Error('socket authority changed');
       }
@@ -289,6 +325,14 @@ export class CompanionUiWebSocketAdapter {
       void refreshAuthority().catch(() => close(CLOSE.authorityChanged, 'authority changed'));
     }, this.authorityPollMs);
     watch.unref();
+    sendJson(socket, {
+      schemaVersion: 1,
+      type: 'session.ready',
+      device: authority.presentation.device,
+      ...(authority.presentation.place ? { place: authority.presentation.place } : {}),
+      capabilities: authority.physicalCeiling.capabilities,
+      telemetryScopes: authority.physicalCeiling.telemetryScopes,
+    });
     socket.on('message', (raw, isBinary) => {
       if (isBinary) {
         close(CLOSE.denied, 'binary frames denied');
@@ -297,15 +341,23 @@ export class CompanionUiWebSocketAdapter {
       const body = rawDataBytes(raw);
       void (async () => {
         const frame = parseCompanionUiActionFrame(body);
+        if (seenRequestIds.has(frame.requestId)
+          || seenRequestIds.size >= RUNTIME_LIMITS.maxRequestIdsPerSocket) {
+          throw new Error('duplicate or exhausted request identifier');
+        }
+        seenRequestIds.add(frame.requestId);
         await refreshAuthority();
-        const result = await this.config.actionBroker.execute({
+        const common = {
           rawBody: body,
           companionId: authority.companionId,
-          sessionToken: authority.sessionToken,
           attachment,
           physicalCeiling: authority.physicalCeiling,
           deviceTransport: authority.deviceTransport,
-        });
+        };
+        const result = authority.sessionToken
+          ? await this.config.actionBroker.execute({ ...common, sessionToken: authority.sessionToken })
+          : await this.config.guestActionBroker?.execute(common);
+        if (!authority.sessionToken && !this.config.guestActionBroker) throw new Error('guest actions disabled');
         sendJson(socket, {
           schemaVersion: 1,
           type: 'result',
@@ -329,7 +381,6 @@ export class CompanionUiWebSocketAdapter {
     log.info('Companion UI socket admitted', {
       companionId: authority.companionId,
       deviceId: authority.connection.deviceId,
-      attachmentId: initialAttachment.attachmentId,
     });
   }
 }

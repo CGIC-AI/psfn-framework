@@ -51,11 +51,7 @@ function eventToTrace(
         operationClass: 'hub_session',
         status: 'done',
         summary: 'Session ready',
-        metadata: {
-          sessionId: message.sessionId,
-          channelId: message.channelId,
-          satelliteId: message.satelliteId,
-        },
+        metadata: {},
       };
     case 'hello.ack':
       return {
@@ -64,9 +60,6 @@ function eventToTrace(
         status: 'done',
         summary: 'Satellite accepted',
         metadata: {
-          sessionId: message.sessionId,
-          channelId: message.channelId,
-          satelliteId: message.satelliteId,
           inputCapabilities: message.capabilities.input?.length ?? 0,
           outputCapabilities: message.capabilities.output?.length ?? 0,
         },
@@ -76,8 +69,8 @@ function eventToTrace(
         ...common,
         operationClass: 'hub_status',
         status: 'info',
-        summary: message.data,
-        metadata: {},
+        summary: 'Hub status update',
+        metadata: { detailChars: message.data.length },
       };
     case 'message':
       return {
@@ -97,8 +90,8 @@ function eventToTrace(
         ...common,
         operationClass: 'text_signal',
         status: 'info',
-        summary: message.data,
-        metadata: {},
+        summary: 'Text signal',
+        metadata: { contentChars: message.data.length },
       };
     case 'audio':
       return {
@@ -123,7 +116,7 @@ function eventToTrace(
         ...common,
         operationClass: 'hub_error',
         status: 'failed',
-        summary: message.data.message,
+        summary: 'Hub reported an error',
         metadata: {},
       };
     case 'relay.stt.result':
@@ -133,8 +126,6 @@ function eventToTrace(
         status: 'done',
         summary: 'Speech transcript returned',
         metadata: {
-          requestId: message.requestId,
-          provider: message.provider,
           transcriptChars: message.text.length,
           latencyMs: message.latencyMs ?? 0,
         },
@@ -146,7 +137,6 @@ function eventToTrace(
         status: 'active',
         summary: 'TTS audio chunk',
         metadata: {
-          requestId: message.requestId,
           encodedChars: message.audio.length,
         },
       };
@@ -157,7 +147,6 @@ function eventToTrace(
         status: 'done',
         summary: 'TTS complete',
         metadata: {
-          requestId: message.requestId,
           mimeType: message.mimeType,
         },
       };
@@ -166,9 +155,8 @@ function eventToTrace(
         ...common,
         operationClass: `relay_${message.operation}`,
         status: 'failed',
-        summary: message.message,
+        summary: 'Relay operation failed',
         metadata: {
-          requestId: message.requestId,
           operation: message.operation,
         },
       };
@@ -188,9 +176,7 @@ function eventToTrace(
         operationClass: 'assistant_interrupt',
         status: 'failed',
         summary: `${labels.companionName} interrupted`,
-        metadata: {
-          sessionId: message.sessionId,
-        },
+        metadata: {},
       };
     case 'approval.requested':
       return {
@@ -199,9 +185,7 @@ function eventToTrace(
         status: 'active',
         summary: 'Approval requested',
         metadata: {
-          approvalId: message.data.id,
-          title: message.data.title,
-          expiresAt: message.data.expiresAt ?? '',
+          hasExpiry: Boolean(message.data.expiresAt),
         },
       };
     case 'approval.resolved':
@@ -211,7 +195,6 @@ function eventToTrace(
         status: message.data.status === 'approved' ? 'done' : 'failed',
         summary: `Approval ${message.data.status}`,
         metadata: {
-          approvalId: message.data.id,
           status: message.data.status,
         },
       };
@@ -222,8 +205,6 @@ function eventToTrace(
         status: 'done',
         summary: 'Artifact created',
         metadata: {
-          artifactId: message.data.id,
-          label: message.data.label,
           mediaType: message.data.mediaType,
           previewable: message.data.previewable,
         },
@@ -235,8 +216,6 @@ function eventToTrace(
         status: 'done',
         summary: 'Artifact preview ready',
         metadata: {
-          requestId: message.requestId,
-          artifactId: message.artifactId,
           mediaType: message.mediaType,
           encodedChars: message.data.length,
         },
@@ -246,11 +225,8 @@ function eventToTrace(
         ...common,
         operationClass: 'artifact_preview',
         status: 'failed',
-        summary: message.message,
-        metadata: {
-          requestId: message.requestId,
-          artifactId: message.artifactId,
-        },
+        summary: 'Artifact preview failed',
+        metadata: {},
       };
     case 'tool.activity':
       return {
@@ -259,10 +235,8 @@ function eventToTrace(
         status: toolActivityStatus(message.data.phase),
         summary: `${message.data.tool} ${message.data.phase}`,
         metadata: {
-          toolActivityId: message.data.id,
           tool: message.data.tool,
           phase: message.data.phase,
-          detail: message.data.detail ?? '',
         },
       };
   }

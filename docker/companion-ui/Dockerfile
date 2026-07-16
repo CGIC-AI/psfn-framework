@@ -2,8 +2,8 @@
 #
 # Multi-stage build: compile the companion-ui Vite PWA from repo source, then
 # serve the static dist/ tree with a pinned nginx-unprivileged base. This image
-# holds NO server logic; it only serves pre-built static files so the operator
-# can reach the PWA from a browser and point it at the Satellite Hub. It is a
+# holds NO server logic; it only serves pre-built static files. Fleet session
+# and Hub attachment paths are derived from the canonical browser origin. It is a
 # stopgap test surface, to be replaced by a packaged app.
 #
 # Build context is the repo root (mirrors docker/Dockerfile.agent), so the
@@ -14,11 +14,6 @@ FROM node:22.22.2-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b
 # because companion-ui reaches into ../../../../src/shared/utils/types.js.
 WORKDIR /build/companion-ui
 
-# The hub websocket URL is a build-time default only; it stays editable at
-# runtime in the in-app Settings drawer, so a baked value is convenience, not a
-# constraint.
-ARG VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL=ws://psfn-hub.local:8787/
-ENV VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL=${VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL}
 # The build helper passes the commit SHA here. Vite injects it into sw.js so a
 # new image always installs a new cache generation in returning browsers.
 ARG SOURCE_REVISION=unknown

@@ -422,6 +422,10 @@ export class GatewayFleetSsoRouter {
         response.end();
         return;
       }
+      if (rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`)) {
+        await this.serveCompanionUi(request, response, rawPath, rawQuery);
+        return;
+      }
       const sessionToken = readOpaqueSessionCookie(request);
       if (!sessionToken) {
         if (request.method === 'GET' && (rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`)) {
@@ -437,10 +441,6 @@ export class GatewayFleetSsoRouter {
       }
       if (rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`) {
         await this.serveFleetShell(request, response, sessionToken, rawQuery);
-        return;
-      }
-      if (rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`)) {
-        await this.serveCompanionUi(request, response, sessionToken, rawPath, rawQuery);
         return;
       }
       const route = parseGardenRoute(request.url ?? '/');
@@ -532,29 +532,17 @@ export class GatewayFleetSsoRouter {
   private async serveCompanionUi(
     request: IncomingMessage,
     response: ServerResponse,
-    sessionToken: string,
     rawPath: string,
     rawQuery: string,
   ): Promise<void> {
     const companionUi = this.options.companionUi;
     if (!companionUi || (request.method !== 'GET' && request.method !== 'HEAD')
+      || rawQuery
       || request.headers['transfer-encoding'] !== undefined
       || (singleHeader(request.headers['content-length']) ?? '0') !== '0') {
       throw new FleetSsoRequestError(404, 'Resource not found');
     }
-    try {
-      const context = await this.options.broker.resolveAuthorizationContext({
-        sessionToken,
-        audience: 'fleet',
-        companionId: companionUi.companionId,
-        action: 'companion.read',
-        correlationId: randomUUID(),
-      });
-      assertAllowedContext(context, companionUi.companionId, 'companion.read');
-    } catch {
-      throw new FleetSsoRequestError(404, 'Resource not found');
-    }
-    const upstreamTarget = rawQuery ? `${rawPath}?${rawQuery}` : rawPath;
+    const upstreamTarget = rawPath;
     await new Promise<void>((resolve, reject) => {
       const headers = copyRequestHeaders(request.headers);
       const proxyRequest = httpRequest(

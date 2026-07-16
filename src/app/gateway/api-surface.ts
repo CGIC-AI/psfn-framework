@@ -47,7 +47,10 @@ import type {
   RequestCapabilityVerifier,
 } from '../../boundary/fleet-auth/request-capability.js';
 import { CompanionUiWebSocketAdapter } from '../../channels/api/companion-ui-websocket.js';
-import { companionUiPromptContent } from '../../boundary/fleet-auth/companion-ui-action.js';
+import {
+  companionUiPromptContent,
+  compileCompanionUiAction,
+} from '../../boundary/fleet-auth/companion-ui-action.js';
 import type { RequestCapabilityReplayPort } from '../../boundary/fleet-auth/request-capability-replay.js';
 import { GatewayFleetSsoRouter } from '../../boundary/gateway/fleet-sso-router.js';
 import { resolveFleetSsoGardenUpstreams } from '../../boundary/fleet-auth/fleet-sso-transport.js';
@@ -135,7 +138,11 @@ function resolveGatewayHubDeviceCompanionId(options: StartOptionalGatewayApiServ
 function resolveFleetSsoCompanionUi(
   config: SubstrateConfig,
   env: NodeJS.ProcessEnv,
-): { companionId: ReturnType<typeof createCompanionId>; origin: URL } | undefined {
+): {
+  companionId: ReturnType<typeof createCompanionId>;
+  origin: URL;
+  guestMode: 'disabled' | 'explicit';
+} | undefined {
   const rawOrigin = env.FLEET_SSO_COMPANION_UI_ORIGIN?.trim();
   if (!rawOrigin) return undefined;
   const fleet = config.companionFleet?.companions
@@ -152,9 +159,14 @@ function resolveFleetSsoCompanionUi(
     || origin.password || origin.pathname !== '/' || origin.search || origin.hash) {
     throw new Error('FLEET_SSO_COMPANION_UI_ORIGIN must be one exact internal HTTP origin');
   }
+  const rawGuestMode = env.FLEET_SSO_COMPANION_UI_GUEST_MODE?.trim() || 'disabled';
+  if (rawGuestMode !== 'disabled' && rawGuestMode !== 'explicit') {
+    throw new Error('FLEET_SSO_COMPANION_UI_GUEST_MODE must be disabled or explicit');
+  }
   return {
     companionId: createCompanionId(rawCompanionId, 'Fleet SSO Companion UI companion binding'),
     origin,
+    guestMode: rawGuestMode,
   };
 }
 
@@ -437,7 +449,12 @@ export async function startOptionalGatewayApiServer(
           ...(options.adminPort ? { gardenPort: options.adminPort } : {}),
           env,
         }),
-        ...(fleetSsoCompanionUi ? { companionUi: fleetSsoCompanionUi } : {}),
+        ...(fleetSsoCompanionUi ? {
+          companionUi: {
+            companionId: fleetSsoCompanionUi.companionId,
+            origin: fleetSsoCompanionUi.origin,
+          },
+        } : {}),
       })
     : undefined;
   if (fleetAuthBootstrapOnly && !fleetSsoRouter) {
@@ -463,6 +480,7 @@ export async function startOptionalGatewayApiServer(
         canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
         satelliteApiKeys,
         satelliteRegistry: options.satelliteRegistry,
+        guestMode: fleetSsoCompanionUi?.guestMode ?? 'disabled',
         ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
         hubDeviceIngress,
         actionBroker: new GatewayCompanionUiActionBroker({
@@ -547,6 +565,57 @@ export async function startOptionalGatewayApiServer(
             },
           },
         }),
+        ...(fleetSsoCompanionUi?.guestMode === 'explicit' ? {
+          guestActionBroker: {
+            execute: async input => {
+              if (input.attachment.actor.kind !== 'guest') throw new Error('guest attachment required');
+              const compiled = compileCompanionUiAction(
+                input.rawBody,
+                input.companionId,
+                input.physicalCeiling,
+              );
+              const frame = compiled.frame;
+              const body = frame.body as Record<string, unknown>;
+              if (frame.resource === 'conversation.status') return await gatewayApiRuntime.handleHealth();
+              if (frame.resource === 'conversation.interrupt') {
+                const interactionId = String(body.interactionId);
+                const active = activeCompanionUiInteractions.get(interactionId);
+                active?.abort();
+                return { interrupted: active !== undefined, interactionId };
+              }
+              if (frame.resource !== 'conversation.interact'
+                && frame.resource !== 'conversation.audio'
+                && frame.resource !== 'conversation.touch') {
+                throw new Error('guest action denied');
+              }
+              const content = companionUiPromptContent(frame);
+              if (!content) throw new Error('Companion UI guest action has no dispatcher');
+              const controller = new AbortController();
+              activeCompanionUiInteractions.set(frame.requestId, controller);
+              try {
+                const result = await gatewayApiRuntime.handleChatCompletion({
+                  request: {
+                    model: input.companionId,
+                    messages: [{ role: 'user', content }],
+                    system_prompt_mode: 'default',
+                  },
+                  principal: input.deviceTransport.principal,
+                  headers: { ...input.deviceTransport.headers },
+                  ...(input.deviceTransport.clientCert ? { clientCert: input.deviceTransport.clientCert } : {}),
+                  hubDevicePrincipal: input.attachment.deviceActor.principal,
+                  hubDeviceAttachment: input.attachment,
+                  signal: controller.signal,
+                });
+                if (!result.ok) throw new Error(result.error.type);
+                return result.response;
+              } finally {
+                if (activeCompanionUiInteractions.get(frame.requestId) === controller) {
+                  activeCompanionUiInteractions.delete(frame.requestId);
+                }
+              }
+            },
+          },
+        } : {}),
       })
     : undefined;
   const voiceWebSocketRuntime = fleetAuthBootstrapOnly ? undefined : createApiVoiceWebSocketRuntime({
@@ -656,6 +725,12 @@ export async function startOptionalGatewayApiServer(
             canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
             callbackPath: options.config.fleetAuth.callbackPath,
             trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
+            ...(fleetSsoCompanionUi ? {
+              companionUi: {
+                companionId: fleetSsoCompanionUi.companionId,
+                guestMode: fleetSsoCompanionUi.guestMode,
+              },
+            } : {}),
           }),
         }
       : {}),

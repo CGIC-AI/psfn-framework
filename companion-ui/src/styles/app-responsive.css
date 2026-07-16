@@ -1,7 +1,14 @@
 @media (max-width: 720px) {
+  .authority-summary {
+    gap: 0.35rem;
+    width: calc(100vw - 2rem);
+    justify-content: center;
+    font-size: 0.62rem;
+  }
+
   .thread-viewport {
     padding:
-      calc(max(0.85rem, env(safe-area-inset-top)) + 3.8rem)
+      calc(max(0.85rem, env(safe-area-inset-top)) + 5.8rem)
       0.72rem
       calc(150px + env(safe-area-inset-bottom));
   }

@@ -82,138 +82,264 @@ function readType(payload: unknown): unknown {
   return payload['type'];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Strict structural validators for the newer control/output-plane message
-// families (approvals, artifacts, tool activity). These fail closed: a frame
-// with a known `type` but a malformed body is REJECTED rather than coerced.
-// ─────────────────────────────────────────────────────────────────────────────
-
-function isStringField(record: Record<string, unknown>, key: string): boolean {
-  return typeof record[key] === 'string';
+function exactRecord(
+  value: unknown,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): Record<string, unknown> | null {
+  if (!isRecord(value) || required.some(key => !Object.hasOwn(value, key))) return null;
+  const allowed = new Set([...required, ...optional]);
+  return Object.keys(value).every(key => allowed.has(key)) ? value : null;
 }
 
-function isOptionalStringField(record: Record<string, unknown>, key: string): boolean {
-  const value = record[key];
-  return value === undefined || typeof value === 'string';
+function boundedString(value: unknown, maximum = 65_536): value is string {
+  return typeof value === 'string' && value.length >= 1 && value.length <= maximum;
 }
 
-function isEnumField<T extends string>(
-  record: Record<string, unknown>,
-  key: string,
-  allowed: readonly T[],
-): boolean {
-  const value = record[key];
-  return typeof value === 'string' && (allowed as readonly string[]).includes(value);
+function optionalBoundedString(value: unknown, maximum = 65_536): boolean {
+  return value === undefined || boundedString(value, maximum);
 }
 
-function dataRecord(payload: unknown): Record<string, unknown> | null {
-  if (!isRecord(payload)) {
-    return null;
-  }
-  const data = payload['data'];
-  return isRecord(data) ? data : null;
+function oneOf(value: unknown, allowed: readonly string[]): boolean {
+  return typeof value === 'string' && allowed.includes(value);
 }
 
-/**
- * Per-type body validators. Only types present here are structurally
- * validated; anything absent is gated purely by its `type` discriminator as
- * before. Returning false raises a HubFramingError at the call site.
- */
-const STRICT_HUB_VALIDATORS: Partial<Record<HubToClientMessage['type'], (payload: unknown) => boolean>> = {
-  'approval.requested': (payload) => {
-    const data = dataRecord(payload);
-    return (
-      data !== null &&
-      isStringField(data, 'id') &&
-      isStringField(data, 'title') &&
-      isStringField(data, 'requestedAt') &&
-      isStringField(data, 'redactedContext') &&
-      isOptionalStringField(data, 'expiresAt') &&
-      data['status'] === 'pending'
-    );
+function nonNegativeInteger(value: unknown, maximum = Number.MAX_SAFE_INTEGER): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= maximum;
+}
+
+function isoTimestamp(value: unknown): value is string {
+  return typeof value === 'string'
+    && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(value)
+    && !Number.isNaN(Date.parse(value));
+}
+
+function base64(value: unknown): value is string {
+  return typeof value === 'string' && value.length <= 1_048_576
+    && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value);
+}
+
+const CAPABILITIES = Object.freeze({
+  input: ['text', 'microphone_pcm', 'final_transcript', 'vision_upload', 'wake_event'],
+  output: [
+    'text', 'subtitle', 'streamed_audio', 'local_file_audio', 'animation', 'action',
+    'expression', 'gaze', 'servo', 'artifact', 'tool_activity',
+  ],
+  control: ['interrupt', 'mute', 'sleep_wake', 'presence', 'session_attach', 'approvals', 'touch'],
+  safety: ['action_allowlist', 'confirmation_required', 'local_only'],
+});
+
+function capabilities(value: unknown): boolean {
+  const record = exactRecord(value, [], ['input', 'output', 'control', 'safety']);
+  if (!record) return false;
+  return (Object.keys(CAPABILITIES) as Array<keyof typeof CAPABILITIES>).every((key) => {
+    const entries = record[key];
+    return entries === undefined || (Array.isArray(entries) && entries.length <= 32
+      && new Set(entries).size === entries.length
+      && entries.every(entry => oneOf(entry, CAPABILITIES[key])));
+  });
+}
+
+function participant(value: unknown, user = false): boolean {
+  const record = exactRecord(value, [], user ? ['id', 'name', 'canonicalContactId'] : ['id', 'name']);
+  return record !== null
+    && optionalBoundedString(record.id, 256)
+    && optionalBoundedString(record.name, 256)
+    && (!user || optionalBoundedString(record.canonicalContactId, 256));
+}
+
+function identity(value: unknown): boolean {
+  if (value === undefined) return true;
+  const record = exactRecord(value, ['source'], ['companion', 'user']);
+  return record !== null
+    && oneOf(record.source, ['framework', 'configured'])
+    && (record.companion === undefined || participant(record.companion))
+    && (record.user === undefined || participant(record.user, true));
+}
+
+function place(value: unknown): boolean {
+  if (value === undefined) return true;
+  const record = exactRecord(value, ['id', 'name']);
+  return record !== null && boundedString(record.id, 256) && boundedString(record.name, 256);
+}
+
+function dataRecord(payload: unknown, required: readonly string[], optional: readonly string[] = []) {
+  const outer = exactRecord(payload, ['type', 'data']);
+  return outer ? exactRecord(outer.data, required, optional) : null;
+}
+
+const STRICT_HUB_VALIDATORS: Record<HubToClientMessage['type'], (payload: unknown) => boolean> = {
+  'session.ready': (payload) => {
+    const record = exactRecord(payload, [
+      'type', 'sessionId', 'channelId', 'deviceId', 'deviceName', 'satelliteId', 'audioFormat',
+    ], ['identity', 'place']);
+    return record !== null
+      && ['sessionId', 'channelId', 'deviceId', 'deviceName', 'satelliteId', 'audioFormat']
+        .every(key => boundedString(record[key], 256))
+      && identity(record.identity) && place(record.place);
   },
-  'approval.resolved': (payload) => {
-    const data = dataRecord(payload);
-    return (
-      data !== null &&
-      isStringField(data, 'id') &&
-      isStringField(data, 'resolvedAt') &&
-      isEnumField(data, 'status', ['approved', 'denied', 'expired', 'blocked'])
-    );
+  'hello.ack': (payload) => {
+    const record = exactRecord(payload, [
+      'type', 'sessionId', 'channelId', 'deviceId', 'deviceName', 'satelliteId',
+      'satelliteName', 'capabilities',
+    ], ['identity', 'place']);
+    return record !== null
+      && ['sessionId', 'channelId', 'deviceId', 'deviceName', 'satelliteId', 'satelliteName']
+        .every(key => boundedString(record[key], 256))
+      && capabilities(record.capabilities) && identity(record.identity) && place(record.place);
   },
-  'artifact.created': (payload) => {
-    const data = dataRecord(payload);
-    return (
-      data !== null &&
-      isStringField(data, 'id') &&
-      isStringField(data, 'label') &&
-      isStringField(data, 'mediaType') &&
-      isStringField(data, 'provenance') &&
-      isStringField(data, 'createdAt') &&
-      typeof data['previewable'] === 'boolean'
-    );
+  status: payload => {
+    const record = exactRecord(payload, ['type', 'data']);
+    return record !== null && boundedString(record.data, 256);
   },
-  'artifact.preview.result': (payload) => {
-    return (
-      isRecord(payload) &&
-      isStringField(payload, 'requestId') &&
-      isStringField(payload, 'artifactId') &&
-      isStringField(payload, 'mediaType') &&
-      isStringField(payload, 'data')
-    );
+  text: payload => {
+    const record = exactRecord(payload, ['type', 'data']);
+    return record !== null && boundedString(record.data);
   },
-  'artifact.preview.error': (payload) => {
-    return (
-      isRecord(payload) &&
-      isStringField(payload, 'requestId') &&
-      isStringField(payload, 'artifactId') &&
-      isStringField(payload, 'message')
-    );
+  audio: payload => {
+    const record = exactRecord(payload, ['type', 'data']);
+    return record !== null && base64(record.data);
   },
-  'tool.activity': (payload) => {
-    const data = dataRecord(payload);
-    return (
-      data !== null &&
-      isStringField(data, 'id') &&
-      isStringField(data, 'tool') &&
-      isStringField(data, 'timestamp') &&
-      isOptionalStringField(data, 'detail') &&
-      isEnumField(data, 'phase', ['started', 'progress', 'completed', 'failed'])
-    );
+  message: payload => {
+    const data = dataRecord(payload, ['role', 'content'], ['live', 'final']);
+    return data !== null && oneOf(data.role, ['user', 'assistant'])
+      && boundedString(data.content)
+      && (data.live === undefined || typeof data.live === 'boolean')
+      && (data.final === undefined || typeof data.final === 'boolean');
+  },
+  action: payload => {
+    const record = exactRecord(payload, ['type', 'data']);
+    return record !== null && oneOf(record.data, ['interrupt', 'pause-audio', 'play-audio']);
+  },
+  'error-event': payload => {
+    const data = dataRecord(payload, ['message']);
+    return data !== null && boundedString(data.message, 1024);
+  },
+  'relay.stt.result': payload => {
+    const record = exactRecord(payload, ['type', 'requestId', 'text', 'provider'], ['latencyMs']);
+    return record !== null && boundedString(record.requestId, 256) && boundedString(record.text)
+      && boundedString(record.provider, 256)
+      && (record.latencyMs === undefined || nonNegativeInteger(record.latencyMs, 3_600_000));
+  },
+  'relay.tts.chunk': payload => {
+    const record = exactRecord(payload, ['type', 'requestId', 'audio']);
+    return record !== null && boundedString(record.requestId, 256) && base64(record.audio);
+  },
+  'relay.tts.done': payload => {
+    const record = exactRecord(payload, ['type', 'requestId', 'mimeType']);
+    return record !== null && boundedString(record.requestId, 256) && boundedString(record.mimeType, 256);
+  },
+  'relay.error': payload => {
+    const record = exactRecord(payload, ['type', 'requestId', 'operation', 'message']);
+    return record !== null && boundedString(record.requestId, 256)
+      && oneOf(record.operation, ['stt', 'tts']) && boundedString(record.message, 1024);
+  },
+  pong: payload => {
+    const record = exactRecord(payload, ['type', 'sentAt']);
+    return record !== null && nonNegativeInteger(record.sentAt);
+  },
+  'assistant.interrupted': payload => {
+    const record = exactRecord(payload, ['type', 'sessionId']);
+    return record !== null && boundedString(record.sessionId, 256);
+  },
+  'approval.requested': payload => {
+    const data = dataRecord(payload, [
+      'id', 'title', 'requestedAt', 'redactedContext', 'status',
+    ], ['expiresAt']);
+    return data !== null && boundedString(data.id, 256) && boundedString(data.title, 512)
+      && isoTimestamp(data.requestedAt) && optionalBoundedString(data.expiresAt, 32)
+      && (data.expiresAt === undefined || isoTimestamp(data.expiresAt))
+      && boundedString(data.redactedContext, 4096) && data.status === 'pending';
+  },
+  'approval.resolved': payload => {
+    const data = dataRecord(payload, ['id', 'status', 'resolvedAt']);
+    return data !== null && boundedString(data.id, 256)
+      && oneOf(data.status, ['approved', 'denied', 'expired', 'blocked'])
+      && isoTimestamp(data.resolvedAt);
+  },
+  'artifact.created': payload => {
+    const data = dataRecord(payload, [
+      'id', 'label', 'mediaType', 'provenance', 'createdAt', 'previewable',
+    ]);
+    return data !== null && boundedString(data.id, 256) && boundedString(data.label, 512)
+      && boundedString(data.mediaType, 256) && boundedString(data.provenance, 1024)
+      && isoTimestamp(data.createdAt) && typeof data.previewable === 'boolean';
+  },
+  'artifact.preview.result': payload => {
+    const record = exactRecord(payload, ['type', 'requestId', 'artifactId', 'mediaType', 'data']);
+    return record !== null && boundedString(record.requestId, 256)
+      && boundedString(record.artifactId, 256) && boundedString(record.mediaType, 256)
+      && base64(record.data);
+  },
+  'artifact.preview.error': payload => {
+    const record = exactRecord(payload, ['type', 'requestId', 'artifactId', 'message']);
+    return record !== null && boundedString(record.requestId, 256)
+      && boundedString(record.artifactId, 256) && boundedString(record.message, 1024);
+  },
+  'tool.activity': payload => {
+    const data = dataRecord(payload, ['id', 'tool', 'phase', 'timestamp'], ['detail']);
+    return data !== null && boundedString(data.id, 256) && boundedString(data.tool, 256)
+      && oneOf(data.phase, ['started', 'progress', 'completed', 'failed'])
+      && optionalBoundedString(data.detail, 4096) && isoTimestamp(data.timestamp);
   },
 };
 
-const STRICT_CLIENT_VALIDATORS: Partial<Record<ClientToHubMessage['type'], (payload: unknown) => boolean>> = {
-  'approval.decision': (payload) => {
-    return (
-      isRecord(payload) &&
-      isStringField(payload, 'id') &&
-      isEnumField(payload, 'decision', ['approve', 'deny'])
-    );
+const STRICT_CLIENT_VALIDATORS: Record<ClientToHubMessage['type'], (payload: unknown) => boolean> = {
+  hello: payload => {
+    const record = exactRecord(payload, ['type', 'capabilities']);
+    return record !== null && capabilities(record.capabilities);
   },
-  'artifact.preview': (payload) => {
-    return (
-      isRecord(payload) &&
-      isStringField(payload, 'requestId') &&
-      isStringField(payload, 'artifactId')
-    );
+  audio: payload => {
+    const record = exactRecord(payload, ['type', 'audio']);
+    return record !== null && base64(record.audio);
   },
-  'touch.interaction': (payload) => {
-    if (!isRecord(payload)) return false;
-    const count = payload['count'];
-    const durationMs = payload['durationMs'];
-    return (
-      isEnumField(payload, 'kind', ['headpat', 'petting', 'hug', 'kiss']) &&
-      isEnumField(payload, 'region', ['head', 'cheek', 'body']) &&
-      typeof count === 'number' &&
-      Number.isInteger(count) &&
-      count >= 1 &&
-      count <= 20 &&
-      typeof durationMs === 'number' &&
-      Number.isInteger(durationMs) &&
-      durationMs >= 0 &&
-      durationMs <= 60_000
-    );
+  'user.text': payload => {
+    const record = exactRecord(payload, ['type', 'text'], ['interrupt']);
+    return record !== null && boundedString(record.text)
+      && (record.interrupt === undefined || typeof record.interrupt === 'boolean');
+  },
+  text: payload => {
+    const record = exactRecord(payload, ['type', 'data']);
+    return record !== null && boundedString(record.data);
+  },
+  ping: payload => {
+    const record = exactRecord(payload, ['type', 'sentAt']);
+    return record !== null && nonNegativeInteger(record.sentAt);
+  },
+  interrupt: payload => exactRecord(payload, ['type']) !== null,
+  'relay.stt': payload => {
+    const record = exactRecord(payload, ['type', 'requestId', 'audio'], ['mimeType', 'prompt', 'language']);
+    return record !== null && boundedString(record.requestId, 256) && base64(record.audio)
+      && optionalBoundedString(record.mimeType, 256) && optionalBoundedString(record.prompt, 4096)
+      && optionalBoundedString(record.language, 64);
+  },
+  'relay.tts': payload => {
+    const record = exactRecord(payload, ['type', 'requestId', 'text'], ['voice', 'model']);
+    return record !== null && boundedString(record.requestId, 256) && boundedString(record.text)
+      && optionalBoundedString(record.voice, 256) && optionalBoundedString(record.model, 256);
+  },
+  'turn.start': payload => {
+    const record = exactRecord(payload, ['type'], ['interrupt']);
+    return record !== null && (record.interrupt === undefined || typeof record.interrupt === 'boolean');
+  },
+  'turn.end': payload => {
+    const record = exactRecord(payload, ['type', 'reason']);
+    return record !== null && boundedString(record.reason, 256);
+  },
+  'approval.decision': payload => {
+    const record = exactRecord(payload, ['type', 'id', 'decision']);
+    return record !== null && boundedString(record.id, 256) && oneOf(record.decision, ['approve', 'deny']);
+  },
+  'artifact.preview': payload => {
+    const record = exactRecord(payload, ['type', 'requestId', 'artifactId']);
+    return record !== null && boundedString(record.requestId, 256) && boundedString(record.artifactId, 256);
+  },
+  'touch.interaction': payload => {
+    const record = exactRecord(payload, ['type', 'kind', 'region', 'count', 'durationMs']);
+    return record !== null && oneOf(record.kind, ['headpat', 'petting', 'hug', 'kiss'])
+      && oneOf(record.region, ['head', 'cheek', 'body'])
+      && nonNegativeInteger(record.count, 20) && Number(record.count) >= 1
+      && nonNegativeInteger(record.durationMs, 60_000);
   },
 };
 

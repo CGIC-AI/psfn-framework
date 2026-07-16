@@ -124,7 +124,7 @@ describe('operational traces', () => {
 
     const traces = deriveOperationalTraces(state);
     expect(traces.map((trace) => trace.status)).toEqual(['active', 'active', 'done']);
-    expect(traces.every((trace) => trace.metadata.toolActivityId === 'tool-1')).toBe(true);
+    expect(JSON.stringify(traces)).not.toContain('tool-1');
     expect(traces.every((trace) => trace.operationClass === 'tool_activity')).toBe(true);
   });
 
@@ -180,7 +180,33 @@ describe('operational traces', () => {
     expect(deriveOperationalTraces(state)[0]).toMatchObject({
       operationClass: 'relay_tts',
       status: 'failed',
-      summary: 'provider unavailable',
+      summary: 'Relay operation failed',
     });
+  });
+
+  it('keeps authority identifiers and arbitrary Hub diagnostics out of visible traces', () => {
+    let state = reduceHubStreamState(createInitialHubStreamState(), {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:00.000Z',
+      event: {
+        message: {
+          type: 'session.ready',
+          sessionId: 'SECRET-SESSION',
+          channelId: 'SECRET-CHANNEL',
+          deviceId: 'SECRET-DEVICE',
+          deviceName: 'Display',
+          satelliteId: 'SECRET-SATELLITE',
+          audioFormat: 'pcm16',
+        },
+      },
+    });
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:01.000Z',
+      event: { message: { type: 'error-event', data: { message: 'SECRET-DIAGNOSTIC' } } },
+    });
+
+    const visibleDiagnostics = JSON.stringify(deriveOperationalTraces(state));
+    expect(visibleDiagnostics).not.toMatch(/SECRET-(?:SESSION|CHANNEL|DEVICE|SATELLITE|DIAGNOSTIC)/u);
   });
 });

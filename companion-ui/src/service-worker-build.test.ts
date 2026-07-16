@@ -186,7 +186,7 @@ function createServiceWorkerHarness(
   };
 }
 
-async function buildCompanionUi(revision: string, hubUrl?: string): Promise<{
+async function buildCompanionUi(revision: string, bundleMarker?: string): Promise<{
   indexHtml: string;
   manifest: string;
   serviceWorker: string;
@@ -194,18 +194,19 @@ async function buildCompanionUi(revision: string, hubUrl?: string): Promise<{
   const outDir = await mkdtemp(resolve(tmpdir(), 'psfn-companion-ui-build-'));
   temporaryDirectories.push(outDir);
   const previousRevision = process.env.COMPANION_UI_BUILD_REVISION;
-  const previousHubUrl = process.env.VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL;
   process.env.COMPANION_UI_BUILD_REVISION = revision;
-  if (hubUrl === undefined) {
-    delete process.env.VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL;
-  } else {
-    process.env.VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL = hubUrl;
-  }
   try {
     await build({
       root: COMPANION_UI_ROOT,
       configFile: resolve(COMPANION_UI_ROOT, 'vite.config.ts'),
       logLevel: 'silent',
+      ...(bundleMarker ? {
+        define: {
+          __PSFN_COMPANION_UI_SW_UPDATE_INTERVAL_MS__: JSON.stringify(
+            bundleMarker === 'bundle-a' ? 60_001 : 60_002,
+          ),
+        },
+      } : {}),
       build: {
         emptyOutDir: true,
         outDir,
@@ -216,11 +217,6 @@ async function buildCompanionUi(revision: string, hubUrl?: string): Promise<{
       delete process.env.COMPANION_UI_BUILD_REVISION;
     } else {
       process.env.COMPANION_UI_BUILD_REVISION = previousRevision;
-    }
-    if (previousHubUrl === undefined) {
-      delete process.env.VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL;
-    } else {
-      process.env.VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL = previousHubUrl;
     }
   }
   return {
@@ -302,8 +298,8 @@ describe('companion-ui production service worker', () => {
 
   it('uses a distinct cache generation when one revision produces different bundles', async () => {
     const revision = '2222222222222222222222222222222222222222';
-    const buildA = await buildCompanionUi(revision, 'ws://hub-a.test:8787/');
-    const buildB = await buildCompanionUi(revision, 'ws://hub-b.test:8787/');
+    const buildA = await buildCompanionUi(revision, 'bundle-a');
+    const buildB = await buildCompanionUi(revision, 'bundle-b');
     const cacheA = buildA.serviceWorker.match(/const CACHE_NAME = "([^"]+)";/u)?.[1];
     const cacheB = buildB.serviceWorker.match(/const CACHE_NAME = "([^"]+)";/u)?.[1];
 

@@ -29,6 +29,14 @@ export function useComposerController() {
     setInput('');
   }
 
+  function clearHumanScopedState() {
+    setInput('');
+    setAttachmentMenuOpen(false);
+    setMicActive(false);
+    setPendingAttachments([]);
+    setVoiceNotice(null);
+  }
+
   function toggleMic() {
     setMicActive((value) => {
       const next = !value;
@@ -84,6 +92,7 @@ export function useComposerController() {
   return {
     attachmentMenuOpen,
     cameraInputRef,
+    clearHumanScopedState,
     clearInput,
     fileInputRef,
     handleAttachmentFiles,

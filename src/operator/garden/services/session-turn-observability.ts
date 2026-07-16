@@ -4,6 +4,7 @@ import {
   cloneTurnRetrievalTelemetryRecord,
   cloneTurnSnapshotRecord,
   cloneTurnStageTelemetryRecord,
+  sanitizeObservedMemory,
   sanitizeTurnRetrievalTelemetry,
   sanitizeTurnSnapshot,
   sanitizeTurnStageTelemetry,
@@ -11,7 +12,11 @@ import {
 import type {
   AdminContinuityProvenanceView,
   AdminPromptLoomData,
+  AdminPromptLoomContactOutputData,
+  AdminPromptLoomConcernOutputData,
   AdminPromptLoomHistoricalSnapshotHit,
+  AdminPromptLoomSubsystemOutputEntry,
+  AdminPromptLoomSubsystemOutputsData,
   AdminSessionTurnData,
   AdminTurnRetrievalTelemetry,
   AdminTurnSnapshotData,
@@ -22,6 +27,9 @@ import type {
   TurnRecord,
 } from '../../../shared/contracts/runtime.js';
 import { projectTurnSnapshotPrompt } from '../../../shared/contracts/prompt-projection.js';
+import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
+import type { ConcernStorePort } from '../../../core/intention/concern-store-port.js';
+import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 
 /**
  * Truncation-point inventory (bead u9jo.2).
@@ -216,9 +224,145 @@ function hasToolResultPayload(toolCall: TurnRecord['toolCalls'][number]): boolea
     || record.details !== undefined;
 }
 
+function normalizeSubsystemOutputRef(ref: string, field: string): string {
+  const normalized = ref.trim();
+  if (!normalized) {
+    throw new Error(`${field} must contain non-empty refs`);
+  }
+  return normalized;
+}
+
+function buildUnresolvedOutputEntries<TValue>(
+  refs: readonly string[],
+  field: string,
+): Array<AdminPromptLoomSubsystemOutputEntry<TValue>> {
+  return refs.map(ref => ({
+    ref: normalizeSubsystemOutputRef(ref, field),
+    status: 'not_resolved',
+  }));
+}
+
+/**
+ * Live-only placeholder. The browser can render snapshot-only turns while they
+ * are still in flight, but durable output refs remain explicitly unresolved
+ * until the canonical turn-detail endpoint supplies the read-side projection.
+ */
+export function buildUnresolvedPromptLoomSubsystemOutputs(
+  record: Pick<
+    TurnRecord,
+    | 'contextManifestRef'
+    | 'internalStateSnapshotRef'
+    | 'extractedMemoryIds'
+    | 'concernDeltaRefs'
+    | 'contactDeltaRefs'
+  >,
+): AdminPromptLoomSubsystemOutputsData {
+  return {
+    contextManifestRef: record.contextManifestRef ?? null,
+    internalStateSnapshotRef: record.internalStateSnapshotRef ?? null,
+    memoryWrites: buildUnresolvedOutputEntries(record.extractedMemoryIds, 'extractedMemoryIds'),
+    concernDeltas: buildUnresolvedOutputEntries(record.concernDeltaRefs, 'concernDeltaRefs'),
+    contactDeltas: buildUnresolvedOutputEntries(record.contactDeltaRefs, 'contactDeltaRefs'),
+  };
+}
+
+function projectConcernOutput(concern: NonNullable<Awaited<ReturnType<ConcernStorePort['getById']>>>): AdminPromptLoomConcernOutputData {
+  return {
+    id: concern.id,
+    text: concern.text,
+    priority: concern.priority,
+    source: concern.source,
+    status: concern.status,
+    createdAt: concern.createdAt,
+    expiresAt: concern.expiresAt,
+    salience: concern.salience,
+    sensitivity: concern.sensitivity,
+    owner: concern.owner,
+    ...(concern.contactId ? { contactId: concern.contactId } : {}),
+  };
+}
+
+function projectContactOutput(contact: NonNullable<Awaited<ReturnType<ContactStorePort['getById']>>>): AdminPromptLoomContactOutputData {
+  return {
+    id: contact.id,
+    displayName: contact.displayName,
+    trustLevel: contact.trustLevel,
+    relationshipType: contact.relationshipType,
+    ...(contact.isMachineIntelligence !== undefined
+      ? { isMachineIntelligence: contact.isMachineIntelligence }
+      : {}),
+    firstSeen: contact.firstSeen,
+    lastSeen: contact.lastSeen,
+  };
+}
+
+function requireResolverStore<TStore>(
+  refs: readonly string[],
+  store: TStore | null | undefined,
+  label: string,
+): TStore | null {
+  if (refs.length === 0) return null;
+  if (!store) {
+    throw new Error(`Cannot resolve turn-record ${label} refs: no ${label} store is configured`);
+  }
+  return store;
+}
+
+/**
+ * Dereference TurnRecord subsystem-output refs at the authenticated Garden
+ * read boundary. Missing/deleted targets stay content-free and visible as
+ * `missing`; store failures propagate so privacy/authority errors cannot turn
+ * into a silent partial response. This function never mutates the record.
+ */
+export async function resolvePromptLoomSubsystemOutputs(
+  record: TurnRecord,
+  deps: {
+    memoryStore?: MemoryStorePort | null;
+    concernStore?: ConcernStorePort | null;
+    contactStore?: ContactStorePort | null;
+  },
+): Promise<AdminPromptLoomSubsystemOutputsData> {
+  const memoryStore = requireResolverStore(record.extractedMemoryIds, deps.memoryStore, 'memory');
+  const concernStore = requireResolverStore(record.concernDeltaRefs, deps.concernStore, 'concern');
+  const contactStore = requireResolverStore(record.contactDeltaRefs, deps.contactStore, 'contact');
+
+  const [memoryWrites, concernDeltas, contactDeltas] = await Promise.all([
+    Promise.all(record.extractedMemoryIds.map(async (rawRef) => {
+      const ref = normalizeSubsystemOutputRef(rawRef, 'extractedMemoryIds');
+      const memory = await memoryStore?.getById(ref);
+      return memory && memory.deletedAt === undefined
+        ? { ref, status: 'resolved' as const, value: sanitizeObservedMemory(memory) }
+        : { ref, status: 'missing' as const };
+    })),
+    Promise.all(record.concernDeltaRefs.map(async (rawRef) => {
+      const ref = normalizeSubsystemOutputRef(rawRef, 'concernDeltaRefs');
+      const concern = await concernStore?.getById(ref);
+      return concern
+        ? { ref, status: 'resolved' as const, value: projectConcernOutput(concern) }
+        : { ref, status: 'missing' as const };
+    })),
+    Promise.all(record.contactDeltaRefs.map(async (rawRef) => {
+      const ref = normalizeSubsystemOutputRef(rawRef, 'contactDeltaRefs');
+      const contact = await contactStore?.getById(ref);
+      return contact
+        ? { ref, status: 'resolved' as const, value: projectContactOutput(contact) }
+        : { ref, status: 'missing' as const };
+    })),
+  ]);
+
+  return {
+    contextManifestRef: record.contextManifestRef ?? null,
+    internalStateSnapshotRef: record.internalStateSnapshotRef ?? null,
+    memoryWrites,
+    concernDeltas,
+    contactDeltas,
+  };
+}
+
 export function buildPromptLoomData(
   record: TurnRecord,
   snapshot: AdminTurnSnapshotData | null,
+  subsystemOutputs: AdminPromptLoomSubsystemOutputsData = buildUnresolvedPromptLoomSubsystemOutputs(record),
 ): AdminPromptLoomData {
   const promptContext = snapshot?.promptContext;
   const response = promptContext?.response ?? null;
@@ -270,6 +414,7 @@ export function buildPromptLoomData(
         extractedMemoryIds: [...record.extractedMemoryIds],
       },
     },
+    subsystemOutputs: cloneUnknownValue(subsystemOutputs),
     toolActivity: {
       toolCalls: record.toolCalls.map(toolCall => cloneUnknownValue(toolCall)),
       toolResults: record.toolCalls
@@ -321,7 +466,10 @@ export class AdminSessionTurnObservabilityStore {
     });
   }
 
-  buildTurnData(record: AdminSessionTurnData['record']): AdminSessionTurnData {
+  buildTurnData(
+    record: AdminSessionTurnData['record'],
+    subsystemOutputs?: AdminPromptLoomSubsystemOutputsData,
+  ): AdminSessionTurnData {
     const observed = this.turnsById.get(record.turnId);
     const recordedStages = buildRecordedStageTelemetry(record);
     const recordedRetrievals = buildRecordedRetrievalTelemetry(record);
@@ -340,7 +488,7 @@ export class AdminSessionTurnObservabilityStore {
         ? observed.retrievals.map(cloneTurnRetrievalTelemetryRecord)
         : recordedRetrievals,
       snapshot,
-      promptLoom: buildPromptLoomData(record, snapshot),
+      promptLoom: buildPromptLoomData(record, snapshot, subsystemOutputs),
     };
   }
 

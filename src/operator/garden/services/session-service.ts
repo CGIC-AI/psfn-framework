@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
+import type { ConcernStorePort } from '../../../core/intention/concern-store-port.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import { sessionEntryToMessage } from '../../../core/agent/messages.js';
 import { MESSAGE_CLASSES } from '../../../core/agent/message-classes.js';
@@ -77,7 +78,10 @@ import {
 } from '../../../persistence/layout.js';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { getLinkedContactForSession } from './contact-session-linker.js';
-import { AdminSessionTurnObservabilityStore } from './session-turn-observability.js';
+import {
+  AdminSessionTurnObservabilityStore,
+  resolvePromptLoomSubsystemOutputs,
+} from './session-turn-observability.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 
 const DEFAULT_ADMIN_TURN_LIMIT = 50;
@@ -286,6 +290,7 @@ export class AdminSessionDataService implements AdminSessionService {
     sessionManager: SessionManager;
     eventBus: EventBus;
     contactStore?: ContactStorePort | null;
+    concernStore?: ConcernStorePort | null;
     memoryStore?: MemoryStorePort | null;
     config?: SubstrateConfig;
     cogSecEventStore?: CogSecEventStore;
@@ -790,6 +795,15 @@ export class AdminSessionDataService implements AdminSessionService {
     return records.map(record => resolveTurnRecordMemoryCandidates(record, resolve));
   }
 
+  private async buildResolvedTurnData(record: TurnRecord): Promise<AdminSessionTurnData> {
+    const subsystemOutputs = await resolvePromptLoomSubsystemOutputs(record, {
+      memoryStore: this.deps.memoryStore,
+      concernStore: this.deps.concernStore,
+      contactStore: this.deps.contactStore,
+    });
+    return this.turnObservability.buildTurnData(record, subsystemOutputs);
+  }
+
   private async buildSessionMessages(
     sessionId: string,
     options: AdminSessionMessagePaginationOptions,
@@ -835,8 +849,8 @@ export class AdminSessionDataService implements AdminSessionService {
         this.deps.sessionStore.getRecentTurnRecords(sessionId, DEFAULT_ADMIN_TURN_LIMIT),
       )
       : [];
-    const turns = turnRecords.map((record) => {
-      const turnData = this.turnObservability.buildTurnData(record);
+    const turns = await Promise.all(turnRecords.map(async (record) => {
+      const turnData = await this.buildResolvedTurnData(record);
       return {
         ...turnData,
         continuityProvenance: buildContinuityProvenanceViews(
@@ -846,7 +860,7 @@ export class AdminSessionDataService implements AdminSessionService {
           turnData.snapshot?.sessionContext?.continuityEntries ?? [],
         ),
       };
-    });
+    }));
     const compactionAuditViews = options.messagesOnly
       ? []
       : this.deps.sessionStore
@@ -898,7 +912,7 @@ export class AdminSessionDataService implements AdminSessionService {
     const currentVisibility: ChannelPrivacy = decodeStoredChannelVisibility(recentEntry?.channelVisibility)
       ?? classifyChannelDisclosure(record.channelId).channelPrivacy;
     const [resolvedRecord] = await this.resolveTurnRecordMemoryRefs([record]);
-    const turnData = this.turnObservability.buildTurnData(resolvedRecord!);
+    const turnData = await this.buildResolvedTurnData(resolvedRecord!);
     const turn: AdminSessionTurnData = {
       ...turnData,
       continuityProvenance: buildContinuityProvenanceViews(

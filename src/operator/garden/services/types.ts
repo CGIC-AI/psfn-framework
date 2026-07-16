@@ -162,6 +162,11 @@ export type {
   AdminPromptLoomProviderResultData,
   AdminPromptLoomMemoryCaptureData,
   AdminPromptLoomToolActivityData,
+  AdminPromptLoomSubsystemOutputStatus,
+  AdminPromptLoomSubsystemOutputEntry,
+  AdminPromptLoomConcernOutputData,
+  AdminPromptLoomContactOutputData,
+  AdminPromptLoomSubsystemOutputsData,
   AdminPromptLoomProviderWireData,
   AdminPromptLoomData,
 } from './types/prompt-loom.js';

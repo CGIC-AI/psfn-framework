@@ -20,6 +20,7 @@ import type { PurrMemory } from '../../../faculties/memory/types.js';
 import type { TurnRecord } from '../../../shared/contracts/runtime.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { Contact } from '../../../core/contacts/types.js';
+import type { ConcernStorePort } from '../../../core/intention/concern-store-port.js';
 import { AdminSessionDataService, AdminSessionTurnNotFoundError } from './session-service.js';
 
 function makeTurnRecord(channelId: string, turnId: string): TurnRecord {
@@ -480,6 +481,81 @@ describe('AdminSessionDataService', () => {
       .rejects.toThrow(AdminSessionTurnNotFoundError);
     await expect(service.getSessionTurnDetail(channelId, '   '))
       .rejects.toThrow(AdminSessionTurnNotFoundError);
+  });
+
+  it('resolves referenced subsystem outputs through the lazy turn-detail seam', async () => {
+    const channelId = 'api:turn-subsystem-outputs';
+    const turnId = createTurnId();
+    const record = makeTurnRecord(channelId, turnId);
+    record.extractedMemoryIds = ['memory-output-1'];
+    record.concernDeltaRefs = ['concern-output-1'];
+    record.contactDeltaRefs = ['contact-output-1'];
+    store.append({ channelId, role: 'user', content: 'hi', timestamp: 1_700_000_000_001 });
+    store.appendTurnRecord(record);
+
+    const memory: PurrMemory = {
+      id: 'memory-output-1',
+      text: 'Resolved from the memory store.',
+      type: 'semantic',
+      importance: 0.8,
+      confidence: 0.9,
+      emotionalValence: 0,
+      salience: 0.7,
+      sourceRef: `turn:${turnId}`,
+      extractedAt: 1_700_000_000_050,
+      lastAccessed: 1_700_000_000_050,
+      accessCount: 0,
+      tags: [],
+      sensitivity: 'personal',
+    };
+    const contact: Contact = {
+      id: 'contact-output-1',
+      displayName: 'Resolved Contact',
+      trustLevel: 'regular',
+      relationshipType: 'friend',
+      firstSeen: '2026-07-01T00:00:00.000Z',
+      lastSeen: '2026-07-16T12:00:00.000Z',
+      notes: 'Must stay out of the Loom output projection.',
+    };
+    const service = new AdminSessionDataService({
+      sessionStore: store,
+      sessionManager: new SessionManager(store, makeConfig({ dataDir: dir })),
+      eventBus: new EventBus(),
+      memoryStore: {
+        getById: vi.fn(async id => id === memory.id ? memory : undefined),
+      } as unknown as MemoryStorePort,
+      concernStore: {
+        getById: vi.fn(async id => id === 'concern-output-1'
+          ? {
+              id,
+              text: 'Resolved from the concern store.',
+              priority: 'medium',
+              source: 'appraisal',
+              status: 'candidate',
+              createdAt: '2026-07-16T12:00:00.000Z',
+              expiresAt: '2026-07-23T12:00:00.000Z',
+              salience: 0.6,
+              sensitivity: 'personal',
+              owner: 'companion',
+              evidenceRefs: [],
+              resolutionEvidenceRefs: [],
+            }
+          : null),
+      } as unknown as ConcernStorePort,
+      contactStore: {
+        getById: vi.fn(async id => id === contact.id ? contact : undefined),
+      } as unknown as ContactStorePort,
+    });
+
+    const detail = await service.getSessionTurnDetail(channelId, turnId);
+    expect(detail.turn.promptLoom?.subsystemOutputs.memoryWrites[0]?.value?.text)
+      .toBe('Resolved from the memory store.');
+    expect(detail.turn.promptLoom?.subsystemOutputs.concernDeltas[0]?.value?.text)
+      .toBe('Resolved from the concern store.');
+    expect(detail.turn.promptLoom?.subsystemOutputs.contactDeltas[0]?.value)
+      .toEqual(expect.objectContaining({ id: contact.id, displayName: contact.displayName }));
+    expect(detail.turn.promptLoom?.subsystemOutputs.contactDeltas[0]?.value)
+      .not.toHaveProperty('notes');
   });
 
   it('previews and applies CogSec remediation without exposing sealed content in safe event logs', async () => {

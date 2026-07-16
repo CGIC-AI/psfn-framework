@@ -478,6 +478,7 @@ export function createInProcessGardenAdminContract(
       sessionManager: options.sessionManager,
       eventBus: options.eventBus,
       contactStore: options.contactStore,
+      concernStore: options.concernStore,
       memoryStore: gardenMemoryStore,
       config: options.config,
     }),

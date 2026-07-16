@@ -6,9 +6,12 @@ import type {
   AdminPromptSectionTelemetry,
   AdminSessionTurnData,
   AdminTurnPromptContextMessage,
+  AdminTurnPromptContextSnapshotData,
+  AdminTurnProviderObservabilityData,
   AdminTurnProviderWireMessage,
   AdminTurnSnapshotData,
   AdminTurnStageTelemetry,
+  AdminTurnToolContextSnapshotData,
 } from '../types';
 import type { GardenEventEnvelope } from './envelope';
 
@@ -60,6 +63,26 @@ export interface PromptMonitorSummary {
   latestPromptVersionPointer: string | null;
   latestStaticHash: string | null;
 }
+
+/**
+ * Snapshot shape accepted at the Garden event/API boundary. Slim persisted
+ * snapshots may omit derivable wire messages and tools; the UI view model
+ * normalizes those collections while the server-projected promptLoom remains
+ * authoritative for plan-derived provider payloads.
+ */
+type PersistedTurnSnapshot = Omit<
+  AdminTurnSnapshotData,
+  'promptContext' | 'toolContext'
+> & {
+  promptContext?: Omit<AdminTurnPromptContextSnapshotData, 'providerObservability'> & {
+    providerObservability?: Omit<AdminTurnProviderObservabilityData, 'providerWireMessages'> & {
+      providerWireMessages?: AdminTurnProviderWireMessage[];
+    };
+  };
+  toolContext?: Omit<AdminTurnToolContextSnapshotData, 'activeTools'> & {
+    activeTools?: AdminTurnToolContextSnapshotData['activeTools'];
+  };
+};
 
 function cloneStage(stage: AdminTurnStageTelemetry): AdminTurnStageTelemetry {
   return {
@@ -161,75 +184,76 @@ function clonePromptLoom(loom: AdminPromptLoomData): AdminPromptLoomData {
   return cloneJsonSafe(loom);
 }
 
-function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
+function cloneSnapshot(snapshot: PersistedTurnSnapshot): AdminTurnSnapshotData {
+  const { promptContext, toolContext, ...snapshotFields } = snapshot;
   return {
-    ...snapshot,
+    ...snapshotFields,
     ...(snapshot.prompt ? { prompt: { ...snapshot.prompt } } : {}),
     ...(snapshot.plan ? { plan: cloneJsonSafe(snapshot.plan) } : {}),
-    ...(snapshot.promptContext
+    ...(promptContext
       ? {
         promptContext: {
-          ...snapshot.promptContext,
-          ...(snapshot.promptContext.messages
-            ? { messages: snapshot.promptContext.messages.map(clonePromptContextMessage) }
+          ...promptContext,
+          ...(promptContext.messages
+            ? { messages: promptContext.messages.map(clonePromptContextMessage) }
             : {}),
-          ...(snapshot.promptContext.inputSections
+          ...(promptContext.inputSections
             ? {
-              inputSections: snapshot.promptContext.inputSections.map(clonePromptSection),
+              inputSections: promptContext.inputSections.map(clonePromptSection),
             }
             : {}),
-          ...(snapshot.promptContext.runtimeContextSections
+          ...(promptContext.runtimeContextSections
             ? {
-              runtimeContextSections: snapshot.promptContext.runtimeContextSections.map(clonePromptSection),
+              runtimeContextSections: promptContext.runtimeContextSections.map(clonePromptSection),
             }
             : {}),
-          ...(snapshot.promptContext.memoryContextSections
+          ...(promptContext.memoryContextSections
             ? {
-              memoryContextSections: snapshot.promptContext.memoryContextSections.map(clonePromptSection),
+              memoryContextSections: promptContext.memoryContextSections.map(clonePromptSection),
             }
             : {}),
-          ...(snapshot.promptContext.finalSystemSections
+          ...(promptContext.finalSystemSections
             ? {
-              finalSystemSections: snapshot.promptContext.finalSystemSections.map(clonePromptSection),
+              finalSystemSections: promptContext.finalSystemSections.map(clonePromptSection),
             }
             : {}),
-          ...(snapshot.promptContext.providerObservability
+          ...(promptContext.providerObservability
             ? {
               providerObservability: {
-                ...snapshot.promptContext.providerObservability,
-                systemRole: { ...snapshot.promptContext.providerObservability.systemRole },
-                providerWireMessages: snapshot.promptContext.providerObservability.providerWireMessages
+                ...promptContext.providerObservability,
+                systemRole: { ...promptContext.providerObservability.systemRole },
+                providerWireMessages: (promptContext.providerObservability.providerWireMessages ?? [])
                   .map(message => ({ ...message })),
               },
             }
             : {}),
-          ...(snapshot.promptContext.response
+          ...(promptContext.response
             ? {
               response: {
-                ...snapshot.promptContext.response,
+                ...promptContext.response,
               },
             }
             : {}),
         },
       }
       : {}),
-    ...(snapshot.toolContext
+    ...(toolContext
       ? {
         toolContext: {
-          activeTools: snapshot.toolContext.activeTools.map(tool => ({
+          activeTools: (toolContext.activeTools ?? []).map(tool => ({
             ...tool,
             inputSchema: cloneJsonObject(tool.inputSchema),
           })),
-          ...(snapshot.toolContext.adaptiveSnapshot
+          ...(toolContext.adaptiveSnapshot
             ? {
               adaptiveSnapshot: {
-                ...snapshot.toolContext.adaptiveSnapshot,
-                tools: snapshot.toolContext.adaptiveSnapshot.tools.map(tool => ({ ...tool })),
-                skipped: snapshot.toolContext.adaptiveSnapshot.skipped.map(skip => ({
+                ...toolContext.adaptiveSnapshot,
+                tools: toolContext.adaptiveSnapshot.tools.map(tool => ({ ...tool })),
+                skipped: toolContext.adaptiveSnapshot.skipped.map(skip => ({
                   ...skip,
                   ...(skip.missingTokens ? { missingTokens: [...skip.missingTokens] } : {}),
                 })),
-                counts: { ...snapshot.toolContext.adaptiveSnapshot.counts },
+                counts: { ...toolContext.adaptiveSnapshot.counts },
               },
             }
             : {}),
@@ -786,7 +810,7 @@ function readSnapshotEnvelopeData(
   if (event.type !== 'agent.turn.snapshot' || typeof event.data !== 'object' || event.data === null) {
     return null;
   }
-  const snapshot = (event.data as { snapshot?: AdminTurnSnapshotData }).snapshot;
+  const snapshot = (event.data as { snapshot?: PersistedTurnSnapshot }).snapshot;
   if (!snapshot || typeof snapshot.turnId !== 'string' || typeof snapshot.channelId !== 'string') {
     return null;
   }

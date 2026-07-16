@@ -254,7 +254,9 @@ test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dro
     promptDurationMs: 140,
   });
 
-  turn.snapshot!.toolContext!.activeTools[0]!.inputSchema = proxiedSchema as Record<string, unknown>;
+  const activeTool = turn.snapshot?.toolContext?.activeTools?.[0];
+  assert.ok(activeTool);
+  activeTool.inputSchema = proxiedSchema as Record<string, unknown>;
   turn.promptLoom = {
     source: 'turn_snapshot',
     snapshotCapturedAt: 3_950,
@@ -344,6 +346,27 @@ test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dro
   assert.equal(
     Object.hasOwn(promptLoom.providerPayload.activeTools[0]?.inputSchema ?? {}, 'uncloneable'),
     false,
+  );
+});
+
+test('buildPromptMonitorTurns normalizes absent provider wire messages for the UI view', () => {
+  const turn = buildTurn({
+    turnId: 'turn-slim-snapshot',
+    channelId: 'api:monitor',
+    promptVersionPointer: 'prompt-slim',
+    completedAt: 5_000,
+    ttftMs: 25,
+    promptDurationMs: 125,
+  });
+  const providerObservability = turn.snapshot?.promptContext?.providerObservability;
+  assert.ok(providerObservability);
+  delete providerObservability.providerWireMessages;
+
+  const [normalized] = buildPromptMonitorTurns([turn]);
+
+  assert.deepEqual(
+    normalized?.snapshot?.promptContext?.providerObservability?.providerWireMessages,
+    [],
   );
 });
 

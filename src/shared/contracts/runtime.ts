@@ -298,13 +298,15 @@ export interface ResponseStyleOverrides {
   defaultStyle?: ResponseStyle;
 }
 
-export type ObservabilityCallType =
-  | 'chat'
-  | 'tool'
-  | 'memory'
-  | 'summary'
-  | 'background'
-  | 'scheduled';
+export const OBSERVABILITY_CALL_TYPES = [
+  'chat',
+  'tool',
+  'memory',
+  'summary',
+  'background',
+  'scheduled',
+] as const;
+export type ObservabilityCallType = typeof OBSERVABILITY_CALL_TYPES[number];
 
 export type TelemetryVisibility = 'operator_visible' | 'companion_private';
 export const COMPANION_PRIVATE_BACKGROUND_PURPOSE = 'companion_private.background';
@@ -355,7 +357,8 @@ export interface LLMRequestMetadata {
  *   - 'self_directed' scheduler-driven heartbeat/reflection (internal: channel)
  *   - 'system'       system-injected turn (system: author, e.g. deferred handoff)
  */
-export type RequesterProvenance = 'human' | 'self_directed' | 'system';
+export const REQUESTER_PROVENANCE_VALUES = ['human', 'self_directed', 'system'] as const;
+export type RequesterProvenance = typeof REQUESTER_PROVENANCE_VALUES[number];
 
 export interface CorrelationMetadata extends LLMRequestMetadata {
   callType: ObservabilityCallType;

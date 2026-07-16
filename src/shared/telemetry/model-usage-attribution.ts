@@ -1,5 +1,6 @@
 import {
   CHANNEL_TYPES,
+  OBSERVABILITY_CALL_TYPES as CANONICAL_OBSERVABILITY_CALL_TYPES,
   type ChannelType,
   type ObservabilityCallType,
 } from '../contracts/runtime.js';
@@ -12,14 +13,7 @@ import {
 
 export const MODEL_USAGE_UNKNOWN_DIMENSION = 'unknown' as const;
 
-export const MODEL_USAGE_CALL_TYPES = [
-  'chat',
-  'tool',
-  'memory',
-  'summary',
-  'background',
-  'scheduled',
-] as const satisfies readonly ObservabilityCallType[];
+export const MODEL_USAGE_CALL_TYPES = CANONICAL_OBSERVABILITY_CALL_TYPES;
 export const MODEL_USAGE_ORIGIN_TYPES = [
   ...MODEL_USAGE_CALL_TYPES,
   MODEL_USAGE_UNKNOWN_DIMENSION,

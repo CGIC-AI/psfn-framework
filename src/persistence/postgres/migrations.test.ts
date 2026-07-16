@@ -144,6 +144,8 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain("ownership_state IN ('unverified', 'verified', 'deleted', 'quarantined')");
     expect(sql).toContain('verification_digest');
     expect(sql).toContain('idx_contact_lifecycle_active_target');
+    expect(sql).toContain('committed_contact_version BIGINT');
+    expect(sql).toContain("NEW.phase = 'gateway_finalize_pending'");
   });
 
   it('extends the shared chain with companion_presence as versioned migration 2 (W5a)', () => {

@@ -22,7 +22,7 @@ import {
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { EmotionalTimeSeriesPoint } from '../store/emotional-baseline.js';
 import { normalizeEmotionalTimeSeries } from '../store/emotional-baseline.js';
-import { defaultPrivacyForChannel, normalizeIdentity, normalizePrivacyLevel } from '../store/identity-utils.js';
+import { normalizeIdentity, normalizePrivacyLevel } from '../store/identity-utils.js';
 import type { ContactChannelActivityRow, ContactIdentityRow, ContactRow } from './rows.js';
 import { normalizeAuditActor, rowToContact } from './mapping.js';
 import { queryOne, queryRows } from './connection.js';
@@ -104,21 +104,6 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
     );
     if (row) {
       return await this.loadContactByRow(row);
-    }
-
-    if (identity.channel === 'discord') {
-      const legacyRow = await this.loadContactRow(identity.userId);
-      if (legacyRow) {
-        await this.upsertIdentityLinkRecord(
-          legacyRow.id,
-          identity.channel,
-          identity.userId,
-          legacyRow.first_seen,
-          legacyRow.last_seen,
-          defaultPrivacyForChannel(identity.channel),
-        );
-        return await this.loadContactByRow(legacyRow);
-      }
     }
 
     return undefined;
@@ -368,17 +353,6 @@ const postgresContactSharedOperations: PostgresContactOperationMap = {
       `,
       [contactId, normalized.channel, normalized.userId, privacy, firstSeen, lastSeen],
     );
-
-    if (normalized.channel === 'discord') {
-      await this.pool.query(
-        `
-          UPDATE contacts
-          SET discord_user_id = COALESCE(discord_user_id, $1)
-          WHERE id = $2
-        `,
-        [normalized.userId, contactId],
-      );
-    }
 
     return 'linked';
   },

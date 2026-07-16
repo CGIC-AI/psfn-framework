@@ -233,6 +233,8 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   ntfy?: GatewayNtfyConfig;
   auditStore?: GatewayAuditStorePort;
   kubeSelfManagement?: KubeSelfManagementController;
+  /** Gateway-owned exact contact authority lifecycle service. */
+  contactLifecycleAuthority?: import('./contact-lifecycle-authority.js').GatewayContactLifecycleAuthorityPort;
   sessionHmacKeyring: SessionHmacKeyring;
   confirmation?: Partial<GatewayConfirmationConfig>;
   capabilityTierProvider?: () => CapabilityTier;
@@ -530,6 +532,9 @@ export class GatewayServer {
       approvalBoundary: this.approvalBoundary,
       ...(this.options.kubeSelfManagement
         ? { kubeSelfManagement: this.options.kubeSelfManagement }
+        : {}),
+      ...(this.options.contactLifecycleAuthority
+        ? { contactLifecycleAuthority: this.options.contactLifecycleAuthority }
         : {}),
       authenticatedCompanionId: () => this.authenticatedCompanionId(conn),
       ...(this.options.welfareGrantVerifier

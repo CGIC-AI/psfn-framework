@@ -14,8 +14,8 @@ export interface ContactLifecycleContactSnapshot {
   schemaVersion: 1;
   contactId: string;
   contactAuthorityVersion: number;
-  lifecycleState: 'live';
-  restoreState: 'live';
+  lifecycleState: 'live' | 'quarantined';
+  restoreState: 'live' | 'quarantined';
 }
 
 export interface ContactLifecycleVerifiedOwnershipSnapshot {
@@ -27,8 +27,8 @@ export interface ContactLifecycleVerifiedOwnershipSnapshot {
   verificationId: string;
   verificationDigest: string;
   contactAuthorityVersion: number;
-  ownershipState: 'verified';
-  restoreState: 'live';
+  ownershipState: 'verified' | 'quarantined';
+  restoreState: 'live' | 'quarantined';
 }
 
 export interface ContactLifecycleLockedSnapshot {
@@ -105,6 +105,8 @@ export interface ContactLifecycleRecoveryDeferralInput {
 export interface ContactLifecycleGatewayResultInput {
   intentId: string;
   result: ContactAuthorityLifecycleResult;
+  /** Present only while a startup recovery worker owns the durable lease. */
+  leaseOwner?: string;
 }
 
 const DISCORD_SUBJECT_PATTERN = /^[1-9][0-9]{16,19}$/u;
@@ -162,8 +164,11 @@ function parseContactSnapshot(value: unknown, index: number): ContactLifecycleCo
     ['schemaVersion', 'contactId', 'contactAuthorityVersion', 'lifecycleState', 'restoreState'],
     `contacts[${index}]`,
   );
-  if (value.schemaVersion !== 1 || value.lifecycleState !== 'live' || value.restoreState !== 'live') {
-    throw invalid(`contacts[${index}] is not live authority`);
+  const exactLive = value.lifecycleState === 'live' && value.restoreState === 'live';
+  const exactQuarantine = value.lifecycleState === 'quarantined'
+    && value.restoreState === 'quarantined';
+  if (value.schemaVersion !== 1 || (!exactLive && !exactQuarantine)) {
+    throw invalid(`contacts[${index}] is not exact live or quarantined authority`);
   }
   assertContactId(value.contactId, `contacts[${index}].contactId`);
   return {
@@ -173,8 +178,8 @@ function parseContactSnapshot(value: unknown, index: number): ContactLifecycleCo
       value.contactAuthorityVersion,
       `contacts[${index}].contactAuthorityVersion`,
     ),
-    lifecycleState: 'live',
-    restoreState: 'live',
+    lifecycleState: value.lifecycleState as 'live' | 'quarantined',
+    restoreState: value.restoreState as 'live' | 'quarantined',
   };
 }
 
@@ -195,11 +200,13 @@ function parseOwnership(
     'ownershipState',
     'restoreState',
   ], `verifiedOwnerships[${index}]`);
+  const exactLive = value.ownershipState === 'verified' && value.restoreState === 'live';
+  const exactQuarantine = value.ownershipState === 'quarantined'
+    && value.restoreState === 'quarantined';
   if (value.schemaVersion !== 1
     || value.channel !== 'discord'
-    || value.ownershipState !== 'verified'
-    || value.restoreState !== 'live') {
-    throw invalid(`verifiedOwnerships[${index}] is not exact live verified Discord ownership`);
+    || (!exactLive && !exactQuarantine)) {
+    throw invalid(`verifiedOwnerships[${index}] is not exact live or quarantined Discord ownership`);
   }
   assertContactId(value.contactId, `verifiedOwnerships[${index}].contactId`);
   if (typeof value.providerSubjectId !== 'string'
@@ -228,8 +235,8 @@ function parseOwnership(
       value.contactAuthorityVersion,
       `verifiedOwnerships[${index}].contactAuthorityVersion`,
     ),
-    ownershipState: 'verified',
-    restoreState: 'live',
+    ownershipState: value.ownershipState as 'verified' | 'quarantined',
+    restoreState: value.restoreState as 'live' | 'quarantined',
   };
 }
 
@@ -245,10 +252,10 @@ export function parseContactLifecycleLockedSnapshot(
   const contacts = input.contacts.map(parseContactSnapshot).sort((a, b) => (
     a.contactId.localeCompare(b.contactId)
   ));
-  const contactVersions = new Map<string, number>();
+  const contactSnapshots = new Map<string, ContactLifecycleContactSnapshot>();
   for (const contact of contacts) {
-    if (contactVersions.has(contact.contactId)) throw invalid('snapshot repeats a contact');
-    contactVersions.set(contact.contactId, contact.contactAuthorityVersion);
+    if (contactSnapshots.has(contact.contactId)) throw invalid('snapshot repeats a contact');
+    contactSnapshots.set(contact.contactId, contact);
   }
   const verifiedOwnerships = input.verifiedOwnerships.map(parseOwnership).sort((a, b) => (
     a.providerSubjectId.localeCompare(b.providerSubjectId)
@@ -257,8 +264,13 @@ export function parseContactLifecycleLockedSnapshot(
   for (const ownership of verifiedOwnerships) {
     if (subjects.has(ownership.providerSubjectId)) throw invalid('snapshot repeats a provider subject');
     subjects.add(ownership.providerSubjectId);
-    if (contactVersions.get(ownership.contactId) !== ownership.contactAuthorityVersion) {
+    const contact = contactSnapshots.get(ownership.contactId);
+    if (contact?.contactAuthorityVersion !== ownership.contactAuthorityVersion) {
       throw invalid('ownership contact authority version is stale');
+    }
+    if ((ownership.restoreState === 'quarantined')
+      !== (contact.restoreState === 'quarantined')) {
+      throw invalid('ownership restore state disagrees with its contact');
     }
   }
   return { schemaVersion: 1, contacts, verifiedOwnerships };

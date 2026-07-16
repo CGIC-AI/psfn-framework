@@ -148,6 +148,7 @@ export const POSTGRES_CONTACT_LIFECYCLE_MIGRATIONS = [
     provider_subject_id TEXT,
     locked_snapshot JSONB,
     snapshot_digest TEXT CHECK (snapshot_digest IS NULL OR snapshot_digest ~ '^[0-9a-f]{64}$'),
+    committed_contact_version BIGINT CHECK (committed_contact_version IS NULL OR committed_contact_version >= 1),
     phase TEXT NOT NULL CHECK (phase IN (
       'gateway_prepare_pending', 'contact_commit_pending',
       'gateway_finalize_pending', 'finalized', 'manual_hold', 'quarantined'
@@ -175,6 +176,7 @@ export const POSTGRES_CONTACT_LIFECYCLE_MIGRATIONS = [
     )
   );
   `,
+  `ALTER TABLE contact_lifecycle_intents ADD COLUMN IF NOT EXISTS committed_contact_version BIGINT CHECK (committed_contact_version IS NULL OR committed_contact_version >= 1);`,
   `CREATE INDEX IF NOT EXISTS idx_contact_lifecycle_intents_recovery ON contact_lifecycle_intents(restore_state, phase, next_attempt_at, lease_expires_at, created_at, intent_id);`,
   `
   CREATE TABLE IF NOT EXISTS contact_lifecycle_target_locks (
@@ -226,6 +228,13 @@ export const POSTGRES_CONTACT_LIFECYCLE_MIGRATIONS = [
         OR (OLD.phase = 'gateway_finalize_pending' AND NEW.phase IN ('finalized', 'manual_hold', 'quarantined'))
         OR (OLD.phase = 'manual_hold' AND NEW.phase = 'quarantined')
         OR NEW.phase = 'quarantined'
+      )
+      OR NOT (
+        NEW.committed_contact_version IS NOT DISTINCT FROM OLD.committed_contact_version
+        OR (OLD.phase = 'contact_commit_pending'
+          AND NEW.phase = 'gateway_finalize_pending'
+          AND OLD.committed_contact_version IS NULL
+          AND NEW.committed_contact_version >= 1)
       )
       OR NOT (NEW.restore_state = OLD.restore_state
         OR (OLD.restore_state = 'live' AND NEW.restore_state = 'quarantined')) THEN

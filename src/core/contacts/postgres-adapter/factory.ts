@@ -17,8 +17,16 @@ export async function createPostgresContactStore(
   });
   try {
     await ensurePostgresContactSchema(pool);
-    const store = new PostgresContactStore(pool, primaryUserId, options.exportDir);
+    const store = new PostgresContactStore(
+      pool,
+      primaryUserId,
+      options.exportDir,
+      options.contactLifecycleGateway,
+    );
     await store.assertContactLifecycleLedgerHealthy();
+    if (options.contactLifecycleGateway) {
+      await store.recoverContactLifecycleMutations();
+    }
     return store;
   } catch (error) {
     if (ownsPool) {

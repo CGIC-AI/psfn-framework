@@ -85,6 +85,10 @@ import type {
 } from '../../shared/contracts/icp-autonomy.js';
 import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
 import type {
+  ContactAuthorityLifecycleRequest,
+  ContactAuthorityLifecycleResult,
+} from '../../shared/contracts/contact-authority-lifecycle.js';
+import type {
   KubeSelfManagementRequest,
   KubeSelfManagementResponse,
 } from '../../system/lifecycle/kube-self-management.js';
@@ -214,6 +218,12 @@ export interface LLMEmbedParams extends GatewayCorrelationParams {
 
 export type LLMDiscoverModelsParams = Record<string, never>;
 export type LLMInvalidateModelDiscoveryParams = Record<string, never>;
+
+export interface ContactLifecycleExecuteParams {
+  request: ContactAuthorityLifecycleRequest;
+}
+
+export type ContactLifecycleExecuteResult = ContactAuthorityLifecycleResult;
 
 export interface DiscordSendParams {
   channelId: string;

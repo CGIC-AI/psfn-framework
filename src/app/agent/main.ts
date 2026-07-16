@@ -237,6 +237,7 @@ async function main(): Promise<void> {
     pathSnapshot,
     embeddingDims,
     primaryUserId,
+    contactLifecycleGateway: gateway,
   });
   const {
     backend: persistenceBackend,

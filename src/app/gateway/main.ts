@@ -499,6 +499,9 @@ async function main(): Promise<void> {
     ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
     ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),
     ...(welfareGrantVerifier ? { welfareGrantVerifier } : {}),
+    ...(fleetAuthPersistence?.contactLifecycleAuthority
+      ? { contactLifecycleAuthority: fleetAuthPersistence.contactLifecycleAuthority }
+      : {}),
   });
   const detachTurnPerformanceForwarder = attachGatewayTurnPerformanceForwarder({
     eventBus,

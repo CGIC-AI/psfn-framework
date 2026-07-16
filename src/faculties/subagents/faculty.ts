@@ -359,6 +359,16 @@ export class SubagentFaculty implements SubagentControlPort {
   private async runHandle(handle: ActiveSubagentHandle): Promise<void> {
     if (handle.settled) return;
 
+    // mmo9.7.7: hoisted above the try so a mid-turn cancel that aborts the
+    // in-flight handleMessage (surfacing as a throw) preserves the accumulated
+    // partial in the catch path — otherwise the cancelled result would discard
+    // every completed turn's tokens/checkpoint (psfn-framework-mmo9.7.7 P1).
+    let totalInput = 0;
+    let totalOutput = 0;
+    let lastModel = '';
+    let lastContent = '';
+    let turns = 0;
+
     try {
       const sessionManager = new SessionManager(
         this.deps.sessionStore,
@@ -406,12 +416,6 @@ export class SubagentFaculty implements SubagentControlPort {
 
       this.transitionTask(handle.subagentId, 'running', 'agent_initialized', handle.startTime);
       this.flushPendingMessages(handle);
-
-      let totalInput = 0;
-      let totalOutput = 0;
-      let lastModel = '';
-      let lastContent = '';
-      let turns = 0;
 
       for (let turn = 0; turn < handle.maxTurns; turn++) {
         const turnMessage = turn === 0
@@ -473,7 +477,16 @@ export class SubagentFaculty implements SubagentControlPort {
       ));
     } catch (error) {
       if (this.isCancellationRequested(handle)) {
-        await this.finishHandle(handle, this.finalizeCancelled(handle, 0, 0, '', '', 0));
+        // Preserve the accumulated partial: a cancel that aborted an in-flight
+        // turn still discarded no completed work.
+        await this.finishHandle(handle, this.finalizeCancelled(
+          handle,
+          totalInput,
+          totalOutput,
+          lastModel,
+          lastContent,
+          turns,
+        ));
         return;
       }
       await this.finishHandle(handle, this.finalizeFailed(handle, toErrorMessage(error)));

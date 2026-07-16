@@ -579,6 +579,74 @@ describe('SubagentFaculty', () => {
     });
   });
 
+  // mmo9.7.7 (P1 regression): a cancel that aborts an in-flight turn — surfacing
+  // as a throw from handleMessage — must preserve the accumulated partial. The
+  // catch path reads the hoisted accumulators, so tokens/turns and the last
+  // completed turn's checkpoint survive rather than being zeroed.
+  it('preserves the accumulated partial when cancel aborts an in-flight turn', async () => {
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    let subagentId = '';
+    promptSpy
+      // Turn 0 completes normally with real usage + content.
+      .mockImplementationOnce(async function (this: Agent) {
+        this.state.messages.push({
+          role: 'assistant',
+          content: [{ type: 'text' as const, text: 'turn one output' }],
+          api: '' as any,
+          provider: '' as any,
+          model: 'turn-0-model',
+          usage: {
+            input: 10,
+            output: 42,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 52,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: 'stop' as any,
+          timestamp: Date.now(),
+        });
+      })
+      // Turn 1 is in-flight when the cancel lands, then aborts (throws).
+      .mockImplementationOnce(async function (this: Agent) {
+        void faculty.cancel(subagentId, 'operator_cancelled');
+        throw new Error('aborted mid-turn');
+      });
+
+    const task = await faculty.spawn({
+      name: 'cancel-mid-turn',
+      task: 'run several turns',
+      maxTurns: 3,
+      workSpec: buildSubagentWorkSpec(),
+    });
+    subagentId = task.subagentId;
+    const result = await faculty.wait(task.subagentId);
+
+    expect(result.outcome).toBe('cancelled');
+    // The completed turn's work is preserved, not discarded (the bug reported 0).
+    expect(result.turns).toBe(1);
+    expect(result.content).toBe('turn one output');
+    expect(result.outputTokens).toBe(42);
+    expect(result.inputTokens).toBe(10);
+    // The completed turn's model is retained (the zeroing bug reported '').
+    expect(result.model).not.toBe('');
+    expect(result.partial?.latestCheckpoint).toMatchObject({
+      content: 'turn one output',
+      turnsCompleted: 1,
+    });
+    expect(result.partial?.latestCheckpoint.model).not.toBe('');
+    expect(result.partial?.remainingBudget.remainingTurns).toBe(2);
+  });
+
   it('emits blocked handoff when subagent spawn policy rejects required capabilities', async () => {
     const events: unknown[] = [];
     eventBus.on('agent.completion_handoff', event => {

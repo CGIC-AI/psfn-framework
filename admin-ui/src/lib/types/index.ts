@@ -353,6 +353,7 @@ export type CompactionAuditView = CanonicalAdminSessionMessagesData['compactionA
 export interface MemoryWithheldSummary {
   totalCount: number;
   reasonCounts: Record<string, number>;
+  relevanceBands?: Record<string, number>;
 }
 
 export interface AdminObservedMemory {
@@ -364,12 +365,17 @@ export interface AdminObservedMemory {
   emotionalValence: number;
   formationVAD?: unknown;
   salience: number;
+  salienceDecayAnchorAt?: number;
   sourceRef: string;
+  sourceType?: string;
+  provenance?: unknown;
   extractedAt: number;
   lastAccessed: number;
   accessCount: number;
   supersededBy?: string;
   tags: string[];
+  scopeRef?: unknown;
+  scopeTags?: string[];
   provenanceRefs?: string[];
   retentionClass?: string;
   sensitivity: string;
@@ -387,8 +393,14 @@ export interface AdminObservedScoredMemory extends AdminObservedMemory {
 export interface AdminTurnPromptSnapshotData {
   staticPrefixTemplate: string;
   dynamicSuffixTemplate: string;
+  dynamicSuffixSections?: Array<{
+    identifier: string;
+    required: boolean;
+    content: string;
+  }>;
   staticHash: string;
   versionPointer: string;
+  sectionCacheability?: AdminPromptSectionCacheability[];
 }
 
 export type AdminAuthenticityProvenanceKind =
@@ -506,6 +518,23 @@ export interface AdminTurnPromptCachingObservabilityData {
   scope?: string;
   sessionId?: string;
   reason?: string;
+  mechanism?: string;
+  appliedBreakpoints?: number;
+  boundaries?: {
+    staticPrefixChars: number;
+    sessionStablePrefixChars: number;
+  };
+  usage?: {
+    cacheReadTokens: number;
+    cacheWriteTokens: number;
+  };
+  prefixStability?: {
+    checked: boolean;
+    stable?: boolean;
+    firstObservation?: boolean;
+    scopeKey?: string;
+    changedBlockIds?: string[];
+  };
 }
 
 /**
@@ -619,9 +648,15 @@ export interface AdminTurnToolContextSnapshotData {
 export interface AdminTurnSessionContextSnapshotData {
   channelId: string;
   recentEntries: SessionEntry[];
+  sourceEntryCount?: number;
+  historySummaryText?: string;
+  historySummaryEntryCount?: number;
   compactionSummaryTexts: string[];
   focusKnowledgeTexts: string[];
   continuityEntries: SessionEntry[];
+  wakeReturnArtifacts?: unknown[];
+  orientation?: unknown;
+  intentionAppraisalArtifactCount?: number;
   compactionPromptText?: string;
   versionPointer: string;
 }
@@ -633,6 +668,7 @@ export interface AdminTurnMemorySnapshotData {
   contactEmotionalMemories: AdminObservedMemory[];
   semanticCandidates: AdminObservedScoredMemory[];
   lexicalCandidates: AdminObservedScoredMemory[];
+  episodicChains?: unknown[];
   proactiveCandidates: AdminObservedMemory[];
   withheldSummary?: MemoryWithheldSummary;
   versionPointer: string;
@@ -672,6 +708,7 @@ export interface AdminTurnSnapshotData {
   toolContext?: AdminTurnToolContextSnapshotData;
   sessionContext?: AdminTurnSessionContextSnapshotData;
   memory?: AdminTurnMemorySnapshotData;
+  fatigue?: unknown;
 }
 
 export interface SessionRoleEnvelopePreview {

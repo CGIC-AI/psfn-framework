@@ -261,9 +261,6 @@ test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dro
     promptDurationMs: 140,
   });
 
-  const activeTool = turn.snapshot?.toolContext?.activeTools?.[0];
-  assert.ok(activeTool);
-  activeTool.inputSchema = proxiedSchema as Record<string, unknown>;
   turn.promptLoom = {
     source: 'turn_snapshot',
     snapshotCapturedAt: 3_950,
@@ -546,6 +543,12 @@ test('mergePromptMonitorEvent overlays live snapshots and stages onto the select
           scope: {
             kind: 'group',
             channelId: 'api:monitor',
+            envelope: {
+              channelPrivacy: 'invite_only',
+              audienceScope: 'few',
+              audienceKnowledge: 'partially_known',
+              broadcast: false,
+            },
             recentSpeakers: [],
             key: 'room:api:monitor',
           },
@@ -854,7 +857,19 @@ function buildPlanFixture(seed: {
     messages: [{ role: 'user', content: 'hello' }],
     toolDefinitions: [],
     cachePlan: { staticBoundary: 1, sessionStableBoundary: 2 },
-    scope: { kind: 'dm', channelId: 'api:dm', recentSpeakers: [], key: 'dm:contact-1' },
+    scope: {
+      kind: 'dm',
+      channelId: 'api:dm',
+      envelope: {
+        channelPrivacy: 'private',
+        audienceScope: 'one',
+        audienceKnowledge: 'all_known',
+        broadcast: false,
+      },
+      recentSpeakers: [],
+      key: 'dm:contact-1',
+      contact: { contactId: 'contact-1' },
+    },
   };
 }
 

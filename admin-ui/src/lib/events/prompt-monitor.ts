@@ -11,6 +11,10 @@ import type {
   AdminTurnStageTelemetry,
 } from '../types';
 import type { GardenEventEnvelope } from './envelope';
+import {
+  parsePersistedTurnSnapshot,
+  parsePersistedTurnSnapshotEventData,
+} from './turn-snapshot-parser';
 import { serializePromptPlanForProvider } from '../../../../src/core/agent/substrate-agent/turn-execution/prompt-plan.js';
 import type { Role } from '../../../../src/shared/contracts/runtime.js';
 
@@ -34,6 +38,16 @@ export interface PromptMonitorTurn {
   snapshot: AdminTurnSnapshotData | null;
   promptLoom: AdminPromptLoomData | null;
   stages: AdminTurnStageTelemetry[];
+}
+
+export interface PromptMonitorSnapshotRejection {
+  source: 'replay' | 'live';
+  message: string;
+  turnId?: string;
+}
+
+export interface PromptMonitorIngestionOptions {
+  onRejectedSnapshot?: (rejection: PromptMonitorSnapshotRejection) => void;
 }
 
 export interface PromptMonitorMetrics {
@@ -327,14 +341,62 @@ function findStage(
   return turn.stages.find(stage => stage.stage === stageName) ?? null;
 }
 
-function buildTurnFromSession(turn: AdminSessionTurnData): PromptMonitorTurn {
+function reportRejectedSnapshot(
+  options: PromptMonitorIngestionOptions,
+  rejection: PromptMonitorSnapshotRejection,
+): void {
+  try {
+    if (options.onRejectedSnapshot) {
+      options.onRejectedSnapshot(rejection);
+      return;
+    }
+    console.error('Prompt monitor rejected malformed turn snapshot', rejection);
+  } catch (cause) {
+    console.error('Prompt monitor snapshot rejection reporter failed', cause, rejection);
+  }
+}
+
+function parseReplaySnapshot(
+  turn: AdminSessionTurnData,
+  options: PromptMonitorIngestionOptions,
+): AdminTurnSnapshotData | null {
+  if (turn.snapshot === null) return null;
+  const parsed = parsePersistedTurnSnapshot(turn.snapshot);
+  if (!parsed.ok) {
+    reportRejectedSnapshot(options, {
+      source: 'replay',
+      message: parsed.error,
+      turnId: turn.record.turnId,
+    });
+    return null;
+  }
+  if (
+    parsed.value.turnId !== turn.record.turnId
+    || parsed.value.requestId !== turn.record.requestId
+    || parsed.value.channelId !== turn.record.channelId
+  ) {
+    reportRejectedSnapshot(options, {
+      source: 'replay',
+      message: 'snapshot identity does not match its persisted turn record',
+      turnId: turn.record.turnId,
+    });
+    return null;
+  }
+  return parsed.value;
+}
+
+function buildTurnFromSession(
+  turn: AdminSessionTurnData,
+  options: PromptMonitorIngestionOptions,
+): PromptMonitorTurn {
+  const snapshot = parseReplaySnapshot(turn, options);
   const latestStageAt = turn.stages.reduce(
     (latest, stage) => Math.max(latest, stage.observedAt),
     0,
   );
   const latestEventAt = Math.max(
     turn.record.completedAt,
-    turn.snapshot?.capturedAt ?? 0,
+    snapshot?.capturedAt ?? 0,
     latestStageAt,
   );
 
@@ -344,7 +406,7 @@ function buildTurnFromSession(turn: AdminSessionTurnData): PromptMonitorTurn {
     channelId: turn.record.channelId,
     latestEventAt,
     record: { ...turn.record },
-    snapshot: turn.snapshot ? cloneSnapshot(turn.snapshot) : null,
+    snapshot,
     promptLoom: turn.promptLoom ? clonePromptLoom(turn.promptLoom) : null,
     stages: sortStages(turn.stages),
   };
@@ -852,15 +914,31 @@ export function buildStaticPrefixHashTimeline(
 
 function readSnapshotEnvelopeData(
   event: GardenEventEnvelope,
+  options: PromptMonitorIngestionOptions,
 ): AdminTurnSnapshotData | null {
-  if (event.type !== 'agent.turn.snapshot' || typeof event.data !== 'object' || event.data === null) {
+  if (event.type !== 'agent.turn.snapshot') return null;
+  const parsed = parsePersistedTurnSnapshotEventData(event.data);
+  if (!parsed.ok) {
+    reportRejectedSnapshot(options, {
+      source: 'live',
+      message: parsed.error,
+      ...(event.correlation.turnId ? { turnId: event.correlation.turnId } : {}),
+    });
     return null;
   }
-  const snapshot = (event.data as { snapshot?: AdminTurnSnapshotData }).snapshot;
-  if (!snapshot || typeof snapshot.turnId !== 'string' || typeof snapshot.channelId !== 'string') {
+  if (
+    (event.correlation.turnId && event.correlation.turnId !== parsed.value.turnId)
+    || (event.correlation.requestId && event.correlation.requestId !== parsed.value.requestId)
+    || (event.correlation.channelId && event.correlation.channelId !== parsed.value.channelId)
+  ) {
+    reportRejectedSnapshot(options, {
+      source: 'live',
+      message: 'snapshot identity does not match its WebSocket event correlation',
+      ...(event.correlation.turnId ? { turnId: event.correlation.turnId } : {}),
+    });
     return null;
   }
-  return cloneSnapshot(snapshot);
+  return parsed.value;
 }
 
 function readStageEnvelopeData(
@@ -882,15 +960,17 @@ function readStageEnvelopeData(
 
 export function buildPromptMonitorTurns(
   turns: readonly AdminSessionTurnData[],
+  options: PromptMonitorIngestionOptions = {},
 ): PromptMonitorTurn[] {
-  return sortTurns(turns.map(buildTurnFromSession));
+  return sortTurns(turns.map(turn => buildTurnFromSession(turn, options)));
 }
 
 export function mergePromptMonitorEvent(
   turns: readonly PromptMonitorTurn[],
   event: GardenEventEnvelope,
+  options: PromptMonitorIngestionOptions = {},
 ): PromptMonitorTurn[] {
-  const snapshot = readSnapshotEnvelopeData(event);
+  const snapshot = readSnapshotEnvelopeData(event, options);
   const stage = readStageEnvelopeData(event);
   if (!snapshot && !stage) {
     return [...turns];

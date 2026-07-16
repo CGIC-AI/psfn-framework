@@ -223,6 +223,8 @@ describe('FleetWebAuthnUvBoundary', () => {
     await expect(service.finishAuthentication({
       response: authenticationResponse(),
       expectedChallenge: CHALLENGE,
+      expectedPrincipalId: PRINCIPAL_ID,
+      expectedProviderSubjectId: SUBJECT_ID,
     })).resolves.toEqual({ credentialIdHash: CREDENTIAL_HASH, generation: 9 });
     expect(authorityPort.readPasskeys().credentials[0]).toMatchObject({
       signCount: 5,
@@ -246,6 +248,8 @@ describe('FleetWebAuthnUvBoundary', () => {
     await expect(service.finishAuthentication({
       response: authenticationResponse(),
       expectedChallenge: CHALLENGE,
+      expectedPrincipalId: PRINCIPAL_ID,
+      expectedProviderSubjectId: SUBJECT_ID,
     })).rejects.toMatchObject({ code: 'credential_not_current' });
     expect(verifyAuthentication).not.toHaveBeenCalled();
   });
@@ -260,6 +264,8 @@ describe('FleetWebAuthnUvBoundary', () => {
     await expect(boundary({ authority: authorityPort }).finishAuthentication({
       response: authenticationResponse(),
       expectedChallenge: CHALLENGE,
+      expectedPrincipalId: PRINCIPAL_ID,
+      expectedProviderSubjectId: SUBJECT_ID,
     })).rejects.toThrow(/generation is stale/i);
   });
 });

@@ -12,6 +12,10 @@ import {
 import { isRecord } from '../../../shared/utils/types.js';
 import { FLEET_AUTH_SESSION_COOKIE_NAME } from './fleet-auth-cookie.js';
 import { resolveFleetSsoBrowserOrigin } from '../../../boundary/gateway/fleet-sso-router.js';
+import {
+  FleetAuthJitHttpRoutes,
+} from './fleet-auth-jit-routes.js';
+import type { FleetJitStepUpCoordinator } from '../../../boundary/fleet-auth/jit-step-up.js';
 
 const LOGIN_PATH = '/v1/fleet-auth/login';
 export const FLEET_AUTH_LIFECYCLE_OAUTH_PATH = '/v1/fleet-auth/lifecycle/oauth';
@@ -116,21 +120,27 @@ export class FleetAuthHttpRoutes {
   private readonly canonicalOrigin: string;
   private readonly callbackPath: string;
   private readonly trustProxy: boolean;
+  private readonly jitRoutes?: FleetAuthJitHttpRoutes;
 
   constructor(options: {
     broker: GatewayFleetAuthBroker;
     canonicalOrigin: string;
     callbackPath: string;
+    jitStepUp?: FleetJitStepUpCoordinator;
     trustProxy?: boolean;
   }) {
     this.broker = options.broker;
     this.canonicalOrigin = options.canonicalOrigin;
     this.callbackPath = options.callbackPath;
     this.trustProxy = options.trustProxy === true;
+    this.jitRoutes = options.jitStepUp
+      ? new FleetAuthJitHttpRoutes(options.jitStepUp)
+      : undefined;
   }
 
   matches(method: string | undefined, path: string): boolean {
-    return (method === 'GET' && (path === LOGIN_PATH || path === CSRF_PATH || path === this.callbackPath))
+    return (this.jitRoutes?.matches(method, path) ?? false)
+      || (method === 'GET' && (path === LOGIN_PATH || path === CSRF_PATH || path === this.callbackPath))
       || (method === 'POST'
         && (path === FLEET_AUTH_LIFECYCLE_OAUTH_PATH || path === REFRESH_PATH
           || path === LOGOUT_PATH || path === PROVIDER_REVOKE_PATH));
@@ -252,6 +262,17 @@ export class FleetAuthHttpRoutes {
       const csrfToken = singleHeader(request.headers[CSRF_HEADER_NAME]);
       if (!csrfToken || !/^[A-Za-z0-9_-]{43}$/u.test(csrfToken)) {
         throw new FleetAuthBrokerError('invalid_csrf', 403, 'Session-bound CSRF token is required');
+      }
+      if (this.jitRoutes?.matches(request.method, url.pathname)) {
+        await this.jitRoutes.handle({
+          request,
+          response,
+          path: url.pathname,
+          token,
+          csrfToken,
+          requestOrigin: mutationOrigin(request),
+        });
+        return;
       }
       if (request.method === 'POST' && url.pathname === FLEET_AUTH_LIFECYCLE_OAUTH_PATH) {
         const body = await readJsonBodyWithLimit(request, response, { maxBytes: MUTATION_BODY_LIMIT });

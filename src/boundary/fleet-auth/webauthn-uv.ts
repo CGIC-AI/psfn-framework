@@ -173,7 +173,10 @@ export const simpleWebAuthnCrypto: FleetWebAuthnCryptoPort = {
       expectedType: 'webauthn.get',
       requireUserVerification: true,
       advancedFIDOConfig: { userVerification: 'required' },
-      credential: input.credential,
+      credential: {
+        ...input.credential,
+        publicKey: new Uint8Array(Buffer.from(input.credential.publicKey)),
+      },
     });
     return {
       verified: result.verified,
@@ -260,7 +263,8 @@ export function parseRegistrationResponse(value: unknown): RegistrationResponseJ
   ]);
   const response = parsed.response;
   const publicKeyAlgorithm = response.publicKeyAlgorithm;
-  if (publicKeyAlgorithm !== undefined && !Number.isSafeInteger(publicKeyAlgorithm)) {
+  if (publicKeyAlgorithm !== undefined
+    && (typeof publicKeyAlgorithm !== 'number' || !Number.isSafeInteger(publicKeyAlgorithm))) {
     throw new FleetWebAuthnError('invalid_request', 'publicKeyAlgorithm is invalid');
   }
   return {
@@ -353,7 +357,7 @@ export class FleetWebAuthnUvBoundary {
     if (origin.protocol !== 'https:' || origin.origin !== options.canonicalOrigin
       || origin.hostname !== options.rpId || !options.rpName.trim()
       || !Number.isSafeInteger(options.timeoutMs) || options.timeoutMs < 10_000
-      || options.timeoutMs > 300_000) {
+      || options.timeoutMs > 600_000) {
       throw new FleetWebAuthnError('invalid_configuration', 'WebAuthn RP configuration is invalid');
     }
     this.origin = origin.origin;
@@ -425,12 +429,21 @@ export class FleetWebAuthnUvBoundary {
   async finishAuthentication(input: {
     response: unknown;
     expectedChallenge: string;
+    expectedPrincipalId: string;
+    expectedProviderSubjectId: string;
   }): Promise<{ credentialIdHash: string; generation: number }> {
     validateChallenge(input.expectedChallenge);
+    if (!isRfc4122Uuid(input.expectedPrincipalId)
+      || !PROVIDER_SUBJECT_PATTERN.test(input.expectedProviderSubjectId)) {
+      throw new FleetWebAuthnError('invalid_request', 'Passkey identity binding is invalid');
+    }
     const response = parseAuthenticationResponse(input.response);
     const idHash = credentialHash(response.id);
     const current = this.options.authority.readPasskeys().credentials.find(entry => (
-      entry.credentialIdHash === idHash && entry.status === 'current'
+      entry.credentialIdHash === idHash
+      && entry.status === 'current'
+      && entry.principalId === input.expectedPrincipalId
+      && entry.expectedProviderSubjectId === input.expectedProviderSubjectId
     ));
     if (!current) {
       throw new FleetWebAuthnError('credential_not_current', 'Passkey credential is not current');

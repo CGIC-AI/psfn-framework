@@ -65,6 +65,9 @@ import { GatewayFleetAuthChildAssertionBroker } from '../../../boundary/gateway/
 import { PostgresChildAssertionAuthority } from './child-assertion-authority.js';
 import type { PrimaryEmbodimentAuthorityPort } from '../../../boundary/fleet-auth/primary-embodiment.js';
 import { PostgresPrimaryEmbodimentStore } from './primary-embodiment-store.js';
+import { FleetWebAuthnUvBoundary } from '../../../boundary/fleet-auth/webauthn-uv.js';
+import { FleetJitStepUpCoordinator } from '../../../boundary/fleet-auth/jit-step-up.js';
+import { PostgresFleetJitStepUpStore } from './jit-step-up-store.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -80,6 +83,7 @@ export interface GatewayFleetAuthPersistence {
   requestCapabilityReplay: RequestCapabilityReplayPort;
   childAssertions: GatewayFleetAuthChildAssertionBroker;
   primaryEmbodiments: PrimaryEmbodimentAuthorityPort;
+  jitStepUp: FleetJitStepUpCoordinator;
   authorityLifecycle: GatewayFleetAuthAuthorityLifecycleStore;
   contactLifecycleAuthority: GatewayContactLifecycleAuthorityPort;
   discordEvidence?: DiscordEvidenceRuntime;
@@ -389,6 +393,27 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       tokenEncryptionKey: secrets.tokenEncryptionKey,
       providerRevocationAuthority: accountAuthority,
     });
+    const webAuthn = new FleetWebAuthnUvBoundary({
+      canonicalOrigin: config.canonicalOrigin,
+      rpId: new URL(config.canonicalOrigin).hostname,
+      rpName: 'PSFN Fleet',
+      timeoutMs: config.ttls.stepUpChallengeMs,
+      authority: authorityFloors,
+    });
+    const jitStepUp = new FleetJitStepUpCoordinator({
+      canonicalOrigin: config.canonicalOrigin,
+      challengeTtlMs: config.ttls.stepUpChallengeMs,
+      grantTtlMs: config.ttls.jitGrantMs,
+      store: new PostgresFleetJitStepUpStore({
+        pool,
+        sessionPepper: secrets.sessionPepper,
+        tokenEncryptionKey: secrets.tokenEncryptionKey,
+        providerRevocationAuthority: accountAuthority,
+        passkeyAuthority: authorityFloors,
+      }),
+      webAuthn,
+      readCredentialFloorGeneration: () => authorityFloors.readPasskeys().generation,
+    });
     const authorityLifecycle = new GatewayFleetAuthAuthorityLifecycleStore({
       pool: authorityPool,
       accountAuthority,
@@ -458,6 +483,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       requestCapabilityReplay,
       childAssertions,
       primaryEmbodiments,
+      jitStepUp,
       authorityLifecycle,
       contactLifecycleAuthority,
       ...(discordEvidence ? { discordEvidence } : {}),

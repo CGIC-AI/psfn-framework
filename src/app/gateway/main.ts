@@ -600,6 +600,7 @@ async function main(): Promise<void> {
     ...(fleetAuthPersistence
       ? {
           fleetAuthBroker: fleetAuthPersistence.broker,
+          fleetAuthJitStepUp: fleetAuthPersistence.jitStepUp,
           fleetAuthChildAssertions: fleetAuthPersistence.childAssertions,
           fleetAuthRequestCapabilities: fleetAuthPersistence.requestCapabilities,
           fleetAuthRequestCapabilityVerifier: fleetAuthPersistence.requestCapabilityVerifier,

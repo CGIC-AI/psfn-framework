@@ -82,6 +82,8 @@ import {
   type FleetContactAuthorityPort,
   type FleetLifecycleCeremonyDenialAuditPort,
 } from '../../../boundary/fleet-auth/lifecycle-ceremony.js';
+import { TrustedHostAccountReapprovalService } from '../../../boundary/fleet-auth/trusted-host-account-reapproval.js';
+import { PostgresAccountReapprovalCeremonyStore } from './account-reapproval-ceremony-store.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -101,6 +103,7 @@ export interface GatewayFleetAuthPersistence {
   jitStepUp: FleetJitStepUpCoordinator;
   passkeyCeremonies: TrustedHostPasskeyCeremonyService;
   trustedHostRecovery: GatewayTrustedHostGardenRecoveryService;
+  accountReapprovalCeremonies: TrustedHostAccountReapprovalService;
   authorityLifecycle: GatewayFleetAuthAuthorityLifecycleStore;
   contactLifecycleAuthority: GatewayContactLifecycleAuthorityPort;
   createLifecycleCeremonies(
@@ -535,6 +538,22 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       authority: authorityFloors,
       webAuthn,
     });
+    const reapproveAccountAuthority = createGatewayAccountReapprovalAuthority(pool, authorityFloors);
+    const accountReapprovalCeremonies = new TrustedHostAccountReapprovalService({
+      canonicalOrigin: config.canonicalOrigin,
+      rpId: new URL(config.canonicalOrigin).hostname,
+      ttlMs: config.ttls.stepUpChallengeMs,
+      store: new PostgresAccountReapprovalCeremonyStore({
+        authorityPool,
+        sessionPepper: secrets.sessionPepper,
+        tokenEncryptionKey: secrets.tokenEncryptionKey,
+        providerRevocationAuthority: accountAuthority,
+        passkeyAuthority: authorityFloors,
+      }),
+      authority: authorityFloors,
+      webAuthn,
+      reapprove: reapproveAccountAuthority,
+    });
     const authorityLifecycle = new GatewayFleetAuthAuthorityLifecycleStore({
       pool: authorityPool,
       accountAuthority,
@@ -654,6 +673,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       jitStepUp,
       passkeyCeremonies,
       trustedHostRecovery,
+      accountReapprovalCeremonies,
       authorityLifecycle,
       contactLifecycleAuthority,
       createLifecycleCeremonies: (contactAuthority) => {
@@ -676,7 +696,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       },
       ...(discordEvidence ? { discordEvidence } : {}),
       ...(discordEvidenceLifecycle ? { discordEvidenceLifecycle } : {}),
-      reapproveAccountAuthority: createGatewayAccountReapprovalAuthority(pool, authorityFloors),
+      reapproveAccountAuthority,
       reapproveCompanionAuthority: createGatewayCompanionReapprovalAuthority(pool, authorityFloors),
       verifyAndConsumeHubDeviceAssertion: (token, expected) => verifyAndConsumeHubDeviceAssertion({
         token,

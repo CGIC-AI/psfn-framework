@@ -25,6 +25,9 @@ import {
 } from '../../../boundary/fleet-auth/hub-device-ingress.js';
 import { TrustedHostPasskeyCeremonyService } from '../../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
 import { PostgresTrustedHostPasskeyCeremonyStore } from './trusted-host-passkey-ceremony-store.js';
+import { TrustedHostAccountReapprovalService } from '../../../boundary/fleet-auth/trusted-host-account-reapproval.js';
+import { PostgresAccountReapprovalCeremonyStore } from './account-reapproval-ceremony-store.js';
+import { digestFleetAuthVerifiedProviderProof } from '../../../shared/contracts/fleet-auth-lifecycle-oauth.js';
 
 const TIMEOUT_MS = 120_000;
 const ROLES = {
@@ -280,6 +283,7 @@ async function seedAttachableHuman(
   context: GatewayTestContext,
   input: {
     token: string;
+    csrfToken?: string;
     subjectId: string;
     companionId?: string;
     role?: 'owner' | 'admin' | 'member' | 'guest';
@@ -332,7 +336,9 @@ async function seedAttachableHuman(
     `, [
       sessionId,
       createHmac('sha256', 's'.repeat(32)).update(input.token).digest('hex'),
-      createHash('sha256').update(`csrf:${sessionId}`).digest('hex'),
+      input.csrfToken
+        ? createHmac('sha256', 's'.repeat(32)).update(input.csrfToken).digest('hex')
+        : createHash('sha256').update(`csrf:${sessionId}`).digest('hex'),
       principalId,
       input.subjectId,
     ]);
@@ -558,6 +564,357 @@ describe('gateway fleet-auth lifecycle publication', () => {
         ceremony_status: 'consumed',
         projection_state: 'quarantined',
       });
+    } finally {
+      await Promise.all([runtime.end(), authorityPool.end(), persistence.close()]);
+    }
+  }, TIMEOUT_MS);
+
+  it('completes one exact account restore with OAuth+UV, fences ephemeral authority, and denies the concurrent replay', async () => {
+    const context = await freshContext();
+    const persistence = await startEnabled(context);
+    const runtime = createPostgresPool(context.runtimeUrl, { max: 3 });
+    const authorityPool = createPostgresPool(
+      roleUrl(context.migrationUrl, ROLES.backupRestore),
+      { max: 3 },
+    );
+    const token = 'R'.repeat(43);
+    const csrfToken = 'Q'.repeat(43);
+    const actorSubjectId = '123456789012345679';
+    const targetSubjectId = '123456789012345678';
+    const targetPrincipalId = randomUUID();
+    const bindingId = randomUUID();
+    const roleGrantId = randomUUID();
+    const contactId = 'contact/restored-owner';
+    const contactIntentId = randomUUID();
+    const contactAuditId = randomUUID();
+    const contactRequestDigest = '8'.repeat(64);
+    const credentialIdHash = 'd'.repeat(64);
+    try {
+      const actor = await seedAttachableHuman(context, {
+        token,
+        csrfToken,
+        subjectId: actorSubjectId,
+        role: 'admin',
+      });
+      await runtime.query(`
+        INSERT INTO fleet_auth.human_principals
+          (principal_id, status, authn_version, authz_version, binding_version,
+           grant_version, policy_version, authority_generation, restore_state)
+        VALUES ($1, 'quarantined', 1, 1, 1, 1, 1, 1, 'quarantined')
+      `, [targetPrincipalId]);
+      await runtime.query(`
+        INSERT INTO fleet_auth.provider_subjects
+          (provider, subject_id, principal_id, state, authority_generation, restore_state)
+        VALUES ('discord', $1, $2, 'quarantined', 1, 'quarantined')
+      `, [targetSubjectId, targetPrincipalId]);
+      await runtime.query(`
+        INSERT INTO fleet_auth.principal_contact_bindings
+          (binding_id, principal_id, companion_id, contact_id, state,
+           verification_provenance, version, authority_generation, restore_state)
+        VALUES ($1, $2, $3, $4, 'quarantined',
+                '{"kind":"verified_restore"}'::jsonb, 1, 1, 'quarantined')
+      `, [bindingId, targetPrincipalId, KNOWN_COMPANION_ID, contactId]);
+      await runtime.query(`
+        INSERT INTO fleet_auth.principal_role_grants
+          (grant_id, principal_id, companion_id, role, lifecycle,
+           version, authority_generation, restore_state)
+        VALUES ($1, $2, $3, 'owner', 'quarantined', 1, 1, 'quarantined')
+      `, [roleGrantId, targetPrincipalId, KNOWN_COMPANION_ID]);
+      await runtime.query(`
+        INSERT INTO fleet_auth.passkey_credentials
+          (credential_id_hash, principal_id, expected_provider_subject_id, rp_id,
+           public_key_projection, credential_generation, state,
+           authority_floor_generation, restore_state)
+        VALUES ($1, $2, $3, 'fleet.example.test', 'restored-projection', 1,
+                'quarantined', 1, 'quarantined')
+      `, [credentialIdHash, targetPrincipalId, targetSubjectId]);
+      await runtime.query(`
+        INSERT INTO fleet_auth.jit_authorization_grants
+          (grant_id, principal_id, browser_session_id, companion_id, subject_scope,
+           action, resource_selector, purpose, assurance, memory_revision,
+           classifier_evidence_digest, authz_version, binding_version, grant_version,
+           policy_version, global_auth_epoch, expires_at)
+        VALUES ($1, $2, $3, $4, '{}'::jsonb, 'memory.read.self', '{}'::jsonb,
+                'pre-restore authority', 'webauthn_uv', 1, $5, 1, 1, 1, 1, 1,
+                clock_timestamp() + interval '5 minutes')
+      `, [randomUUID(), actor.principalId, actor.sessionId, KNOWN_COMPANION_ID, '7'.repeat(64)]);
+      await authorityPool.query(`
+        INSERT INTO fleet_auth.authorization_audit_events
+          (event_id, actor_context, action, resource, decision, reason_code,
+           companion_id, authority_generation, global_auth_epoch,
+           correlation_id, occurred_at, decision_context)
+        VALUES ($1, '{"kind":"system_companion"}'::jsonb,
+                'contact.reapprove', 'contact_digest:restore-test', 'allow',
+                'contact_authority_finalized', $2, 1, 1, $3,
+                clock_timestamp(),
+                '{"schemaVersion":1,"phase":"finalize","status":"finalized"}'::jsonb)
+      `, [contactAuditId, KNOWN_COMPANION_ID, contactIntentId]);
+      await authorityPool.query(`
+        INSERT INTO fleet_auth.contact_authority_intents
+          (companion_id, intent_id, schema_version, intent_digest, action,
+           contact_id, provider_subject_id, state, authority_generation,
+           restore_state, created_at, updated_at)
+        VALUES ($1, $2, 1, $3, 'contact.reapprove', $4, $5,
+                'released', 1, 'live', clock_timestamp(), clock_timestamp())
+      `, [
+        KNOWN_COMPANION_ID,
+        contactIntentId,
+        '6'.repeat(64),
+        contactId,
+        targetSubjectId,
+      ]);
+      await authorityPool.query(`
+        INSERT INTO fleet_auth.contact_authority_receipts
+          (companion_id, intent_id, phase, request_digest, result,
+           authority_generation, global_auth_epoch, audit_event_id, restore_state)
+        VALUES ($1, $2, 'finalize', $3, $4::jsonb, 1, 1, $5, 'live')
+      `, [
+        KNOWN_COMPANION_ID,
+        contactIntentId,
+        contactRequestDigest,
+        JSON.stringify({
+          schemaVersion: 1,
+          intentId: contactIntentId,
+          phase: 'finalize',
+          action: 'contact.reapprove',
+          status: 'finalized',
+          authorityGeneration: 1,
+          globalAuthEpoch: 1,
+          auditEventId: contactAuditId,
+        }),
+        contactAuditId,
+      ]);
+      persistence.authorityFloors.enrollPasskey({
+        credentialIdHash,
+        publicKeyVerifier: 'AQID',
+        rpId: 'fleet.example.test',
+        principalId: targetPrincipalId,
+        expectedProvider: 'discord',
+        expectedProviderSubjectId: targetSubjectId,
+        signCount: 4,
+        backupEligible: false,
+        backupState: false,
+      }, new Date().toISOString());
+
+      const accountAuthority = createGatewayAccountAuthorityFencePort(
+        persistence.authorityFloors,
+      );
+      const service = new TrustedHostAccountReapprovalService({
+        canonicalOrigin: context.config.canonicalOrigin,
+        rpId: 'fleet.example.test',
+        ttlMs: 60_000,
+        store: new PostgresAccountReapprovalCeremonyStore({
+          authorityPool,
+          sessionPepper: 's'.repeat(32),
+          tokenEncryptionKey: 't'.repeat(32),
+          providerRevocationAuthority: accountAuthority,
+          passkeyAuthority: persistence.authorityFloors,
+        }),
+        authority: persistence.authorityFloors,
+        webAuthn: {
+          startAuthentication: async input => ({ challenge: input.challenge }),
+          finishAuthentication: async () => ({
+            credentialIdHash,
+            generation: 1,
+          }),
+        },
+        reapprove: input => persistence.reapproveAccountAuthority(input),
+      });
+      const publishProviderProof = async (ceremonyId: string) => {
+        const oauthTransactionId = randomUUID();
+        const providerProof = {
+          provider: 'discord',
+          subjectId: targetSubjectId,
+          callbackTransactionId: oauthTransactionId,
+          proofDigest: digestFleetAuthVerifiedProviderProof({
+            provider: 'discord',
+            subjectId: targetSubjectId,
+            callbackTransactionId: oauthTransactionId,
+          }),
+        } as const;
+        await authorityPool.query(`
+          INSERT INTO fleet_auth.oauth_transactions
+            (transaction_id, state_digest, pkce_verifier_digest, callback_uri,
+             return_path, kind, status, global_auth_epoch, created_at, expires_at,
+             consumed_at, verified_provider, verified_provider_subject_id,
+             lifecycle_ceremony_id, lifecycle_action, lifecycle_proof_role,
+             initiating_principal_id, initiating_session_id)
+          VALUES ($1, $2, $3, 'https://fleet.example.test/auth/discord/callback',
+                  '/settings/security', 'recovery', 'consumed', 1,
+                  clock_timestamp(), clock_timestamp() + interval '5 minutes',
+                  clock_timestamp(), 'discord', $4, $5, 'provider.relink', 'new', $6, $7)
+        `, [
+          oauthTransactionId,
+          createHash('sha256').update(`state:${oauthTransactionId}`).digest('hex'),
+          createHash('sha256').update(`pkce:${oauthTransactionId}`).digest('hex'),
+          targetSubjectId,
+          ceremonyId,
+          actor.principalId,
+          actor.sessionId,
+        ]);
+        return providerProof;
+      };
+      const ceremonyInput = {
+        expectedProviderSubjectId: targetSubjectId,
+        expectedPrincipalId: targetPrincipalId,
+        expectedCompanionId: KNOWN_COMPANION_ID,
+        expectedContactId: contactId,
+        expectedBindingId: bindingId,
+        expectedRoleGrantId: roleGrantId,
+        reason: 'operator reviewed exact restored owner authority',
+      };
+      const stale = await service.create(ceremonyInput);
+      const staleProviderProof = await publishProviderProof(stale.ceremonyId);
+      await service.startAuthentication({
+        nonce: stale.nonce,
+        token,
+        csrfToken,
+        requestOrigin: context.config.canonicalOrigin,
+        providerProof: staleProviderProof,
+      });
+      await authorityPool.query(`
+        UPDATE fleet_auth.principal_contact_bindings
+        SET verification_provenance = '{"kind":"changed_after_start"}'::jsonb
+        WHERE binding_id = $1
+      `, [bindingId]);
+      await expect(service.finishAuthentication({
+        nonce: stale.nonce,
+        token,
+        csrfToken,
+        requestOrigin: context.config.canonicalOrigin,
+        providerProof: staleProviderProof,
+        response: { id: 'stale-contact-snapshot' },
+      })).rejects.toMatchObject({ code: 'reapproval_denied' });
+      const staleDenial = await runtime.query<{
+        reason_code: string;
+        decision_context: Record<string, unknown>;
+      }>(`
+        SELECT reason_code, decision_context
+        FROM fleet_auth.authorization_audit_events
+        WHERE correlation_id = $1 AND decision = 'deny'
+      `, [stale.ceremonyId]);
+      expect(staleDenial.rows).toEqual([{
+        reason_code: 'account_reapproval_finish_reapproval_denied',
+        decision_context: expect.objectContaining({
+          bindingVersion: 1,
+          roleGrantVersion: 1,
+          contactVerificationDigest: expect.stringMatching(/^[0-9a-f]{64}$/u),
+        }),
+      }]);
+      const serializedDenial = JSON.stringify(staleDenial.rows);
+      expect(serializedDenial).not.toContain(stale.nonce);
+      expect(serializedDenial).not.toContain(targetSubjectId);
+      expect(serializedDenial).not.toContain('changed_after_start');
+      await authorityPool.query(`
+        UPDATE fleet_auth.principal_contact_bindings
+        SET verification_provenance = '{"kind":"verified_restore"}'::jsonb
+        WHERE binding_id = $1
+      `, [bindingId]);
+
+      const created = await service.create(ceremonyInput);
+      const providerProof = await publishProviderProof(created.ceremonyId);
+      await expect(service.startAuthentication({
+        nonce: created.nonce,
+        token,
+        csrfToken,
+        requestOrigin: context.config.canonicalOrigin,
+        providerProof,
+      })).resolves.toMatchObject({ ceremonyId: created.ceremonyId });
+
+      const completions = await Promise.allSettled([
+        service.finishAuthentication({
+          nonce: created.nonce,
+          token,
+          csrfToken,
+          requestOrigin: context.config.canonicalOrigin,
+          providerProof,
+          response: { id: 'concurrent-a' },
+        }),
+        service.finishAuthentication({
+          nonce: created.nonce,
+          token,
+          csrfToken,
+          requestOrigin: context.config.canonicalOrigin,
+          providerProof,
+          response: { id: 'concurrent-b' },
+        }),
+      ]);
+      expect(completions.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+      expect(completions.filter(result => result.status === 'rejected')).toHaveLength(1);
+      expect(completions.find(result => result.status === 'fulfilled')).toMatchObject({
+        value: {
+          principalId: targetPrincipalId,
+          globalAuthEpoch: 2,
+          reauthenticationRequired: true,
+        },
+      });
+
+      const state = await runtime.query<{
+        principal_status: string;
+        provider_state: string;
+        binding_state: string;
+        grant_lifecycle: string;
+        ceremony_status: string;
+        session_fenced: boolean;
+        jit_fenced: boolean;
+        passkey_state: string;
+        passkey_restore_state: string;
+        allow_count: string;
+        deny_count: string;
+      }>(`
+        SELECT
+          (SELECT status FROM fleet_auth.human_principals WHERE principal_id = $1)
+            AS principal_status,
+          (SELECT state FROM fleet_auth.provider_subjects
+           WHERE provider = 'discord' AND subject_id = $2) AS provider_state,
+          (SELECT state FROM fleet_auth.principal_contact_bindings WHERE binding_id = $3)
+            AS binding_state,
+          (SELECT lifecycle FROM fleet_auth.principal_role_grants WHERE grant_id = $4)
+            AS grant_lifecycle,
+          (SELECT status FROM fleet_auth.trusted_host_ceremonies WHERE ceremony_id = $5)
+            AS ceremony_status,
+          (SELECT session.revoked_at IS NOT NULL
+                    OR session.global_auth_epoch < authority.global_auth_epoch
+           FROM fleet_auth.browser_sessions AS session
+           CROSS JOIN fleet_auth.authority_state AS authority
+           WHERE session.record_id = $6 AND authority.singleton = TRUE) AS session_fenced,
+          (SELECT bool_and(grant_row.revoked_at IS NOT NULL
+                    OR grant_row.global_auth_epoch < authority.global_auth_epoch)
+           FROM fleet_auth.jit_authorization_grants AS grant_row
+           CROSS JOIN fleet_auth.authority_state AS authority
+           WHERE grant_row.browser_session_id = $6 AND authority.singleton = TRUE) AS jit_fenced,
+          (SELECT state FROM fleet_auth.passkey_credentials WHERE credential_id_hash = $7)
+            AS passkey_state,
+          (SELECT restore_state FROM fleet_auth.passkey_credentials WHERE credential_id_hash = $7)
+            AS passkey_restore_state,
+          (SELECT COUNT(*)::text FROM fleet_auth.authorization_audit_events
+           WHERE correlation_id = $5::text AND decision = 'allow') AS allow_count,
+          (SELECT COUNT(*)::text FROM fleet_auth.authorization_audit_events
+           WHERE correlation_id = $5::text AND decision = 'deny') AS deny_count
+      `, [
+        targetPrincipalId,
+        targetSubjectId,
+        bindingId,
+        roleGrantId,
+        created.ceremonyId,
+        actor.sessionId,
+        credentialIdHash,
+      ]);
+      expect(state.rows[0]).toEqual({
+        principal_status: 'active',
+        provider_state: 'active',
+        binding_state: 'active',
+        grant_lifecycle: 'active',
+        ceremony_status: 'consumed',
+        session_fenced: true,
+        jit_fenced: true,
+        passkey_state: 'quarantined',
+        passkey_restore_state: 'quarantined',
+        allow_count: '3',
+        deny_count: '1',
+      });
+      expect(JSON.stringify(state.rows)).not.toContain(created.nonce);
+      expect(JSON.stringify(state.rows)).not.toContain(targetSubjectId);
     } finally {
       await Promise.all([runtime.end(), authorityPool.end(), persistence.close()]);
     }

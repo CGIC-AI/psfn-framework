@@ -1446,6 +1446,95 @@ ALTER TABLE trusted_host_ceremonies
   );
 `;
 
+const ACCOUNT_REAPPROVAL_WEBAUTHN_SQL = `
+ALTER TABLE trusted_host_ceremonies
+  DROP CONSTRAINT trusted_host_ceremonies_passkey_v1_exact,
+  ADD COLUMN reapproval_verified_at TIMESTAMPTZ,
+  ADD COLUMN reapproval_actor_principal_id UUID,
+  ADD COLUMN reapproval_actor_session_id UUID,
+  ADD COLUMN reapproval_oauth_transaction_id UUID,
+  ADD COLUMN reapproval_oauth_proof_digest TEXT CHECK (
+    reapproval_oauth_proof_digest IS NULL
+    OR reapproval_oauth_proof_digest ~ '^[0-9a-f]{64}$'
+  ),
+  ADD COLUMN reapproval_credential_id_hash TEXT CHECK (
+    reapproval_credential_id_hash IS NULL
+    OR reapproval_credential_id_hash ~ '^[0-9a-f]{64}$'
+  ),
+  ADD COLUMN reapproval_credential_generation BIGINT CHECK (
+    reapproval_credential_generation IS NULL OR reapproval_credential_generation >= 1
+  ),
+  ADD COLUMN reapproval_credential_floor_generation BIGINT CHECK (
+    reapproval_credential_floor_generation IS NULL
+    OR reapproval_credential_floor_generation >= 1
+  ),
+  ADD CONSTRAINT trusted_host_ceremonies_passkey_v1_exact CHECK (
+    (protocol_version = 0
+      AND webauthn_challenge_digest IS NULL
+      AND webauthn_challenge_ciphertext IS NULL
+      AND exact_origin IS NULL
+      AND rp_id IS NULL
+      AND credential_floor_generation IS NULL
+      AND prior_credential_id_hash IS NULL
+      AND confirmed_at IS NULL
+      AND reapproval_verified_at IS NULL
+      AND reapproval_actor_principal_id IS NULL
+      AND reapproval_actor_session_id IS NULL
+      AND reapproval_oauth_transaction_id IS NULL
+      AND reapproval_oauth_proof_digest IS NULL
+      AND reapproval_credential_id_hash IS NULL
+      AND reapproval_credential_generation IS NULL
+      AND reapproval_credential_floor_generation IS NULL)
+    OR
+    (protocol_version = 1
+      AND kind IN (
+        'first_owner', 'account_reapproval', 'passkey_enrollment', 'passkey_recovery'
+      )
+      AND webauthn_challenge_digest IS NOT NULL
+      AND webauthn_challenge_ciphertext IS NOT NULL
+      AND exact_origin IS NOT NULL
+      AND rp_id IS NOT NULL
+      AND credential_floor_generation IS NOT NULL
+      AND confirmed_at IS NOT NULL
+      AND (
+        (kind = 'passkey_recovery' AND prior_credential_id_hash IS NOT NULL)
+        OR (kind <> 'passkey_recovery' AND prior_credential_id_hash IS NULL)
+      )
+      AND (
+        (kind <> 'account_reapproval'
+          AND reapproval_verified_at IS NULL
+          AND reapproval_actor_principal_id IS NULL
+          AND reapproval_actor_session_id IS NULL
+          AND reapproval_oauth_transaction_id IS NULL
+          AND reapproval_oauth_proof_digest IS NULL
+          AND reapproval_credential_id_hash IS NULL
+          AND reapproval_credential_generation IS NULL
+          AND reapproval_credential_floor_generation IS NULL)
+        OR
+        (kind = 'account_reapproval'
+          AND (
+            (reapproval_verified_at IS NULL
+              AND reapproval_actor_principal_id IS NULL
+              AND reapproval_actor_session_id IS NULL
+              AND reapproval_oauth_transaction_id IS NULL
+              AND reapproval_oauth_proof_digest IS NULL
+              AND reapproval_credential_id_hash IS NULL
+              AND reapproval_credential_generation IS NULL
+              AND reapproval_credential_floor_generation IS NULL)
+            OR
+            (reapproval_verified_at IS NOT NULL
+              AND reapproval_actor_principal_id IS NOT NULL
+              AND reapproval_actor_session_id IS NOT NULL
+              AND reapproval_oauth_transaction_id IS NOT NULL
+              AND reapproval_oauth_proof_digest IS NOT NULL
+              AND reapproval_credential_id_hash IS NOT NULL
+              AND reapproval_credential_generation IS NOT NULL
+              AND reapproval_credential_floor_generation IS NOT NULL)
+          ))
+      ))
+  );
+`;
+
 export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 1, name: 'durable_authority', sql: DURABLE_AUTHORITY_SQL },
   { version: 2, name: 'ephemeral_authority', sql: EPHEMERAL_AUTHORITY_SQL },
@@ -1480,4 +1569,9 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 23, name: 'request_capability_replay_ledger', sql: REQUEST_CAPABILITY_REPLAY_SQL },
   { version: 24, name: 'primary_embodiment_authority', sql: PRIMARY_EMBODIMENT_AUTHORITY_SQL },
   { version: 25, name: 'jit_step_up_authority', sql: JIT_STEP_UP_AUTHORITY_SQL },
+  {
+    version: 26,
+    name: 'account_reapproval_webauthn_confirmation',
+    sql: ACCOUNT_REAPPROVAL_WEBAUTHN_SQL,
+  },
 ] as const;

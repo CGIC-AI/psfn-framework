@@ -136,12 +136,14 @@ function accountReapprovalScope(input: {
   restoreCheckpoint: number;
   contactOwnershipIntentId: string;
   contactOwnershipRequestDigest: string;
+  contactVerificationDigest?: string;
+  reasonDigest?: string;
   companionVersion?: number;
   bindingVersion?: number;
   roleGrantVersion?: number;
 }): Record<string, unknown> {
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     principalId: input.principalId,
     provider: 'discord',
     providerSubjectId: input.providerSubjectId,
@@ -155,9 +157,13 @@ function accountReapprovalScope(input: {
     roleGrantVersion: input.roleGrantVersion ?? 1,
     contactOwnershipIntentId: input.contactOwnershipIntentId,
     contactOwnershipRequestDigest: input.contactOwnershipRequestDigest,
+    contactVerificationDigest: input.contactVerificationDigest ?? createHash('sha256')
+      .update('{"kind": "verified"}')
+      .digest('hex'),
     authorityLineageId: input.authorityLineageId,
     authorityGeneration: input.authorityGeneration,
     restoreCheckpoint: input.restoreCheckpoint,
+    reasonDigest: input.reasonDigest ?? '9'.repeat(64),
   };
 }
 
@@ -238,7 +244,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         `SELECT version, checksum FROM ${FLEET_AUTH_SCHEMA_NAME}.schema_migrations ORDER BY version`,
       );
       expect(ledger.rows.map(row => row.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
       ]);
       expect(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum))).toBe(true);
 
@@ -3006,6 +3012,8 @@ describe('fleet_auth Postgres authority boundary', () => {
     const passkeyHash = 'd'.repeat(64);
     const contactOwnershipIntentId = randomUUID();
     const contactOwnershipRequestDigest = '8'.repeat(64);
+    const actorPrincipalId = randomUUID();
+    const actorSubjectId = '923456789012345678';
     try {
       const floors = new FleetAuthAuthorityFloorStore(floorRoot);
       const floor = floors.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
@@ -3024,6 +3032,94 @@ describe('fleet_auth Postgres authority boundary', () => {
         contactOwnershipIntentId,
         contactOwnershipRequestDigest,
       });
+
+      await runtime.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+          (principal_id, status, authn_version, authz_version, binding_version,
+           grant_version, policy_version, authority_generation, restore_state)
+        VALUES ($1, 'active', 1, 1, 1, 1, 1, 1, 'live')
+      `, [actorPrincipalId]);
+      await runtime.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+          (provider, subject_id, principal_id, state, authority_generation, restore_state)
+        VALUES ('discord', $1, $2, 'active', 1, 'live')
+      `, [actorSubjectId, actorPrincipalId]);
+      const confirmAccountCeremony = async (
+        ceremonyId: string,
+        expectedSubjectId: string,
+        globalAuthEpoch: number,
+      ): Promise<void> => {
+        const sessionId = randomUUID();
+        const oauthTransactionId = randomUUID();
+        const oauthProofDigest = createHash('sha256').update(
+          `fleet-auth-verified-provider-proof:v1:discord:${expectedSubjectId}:${oauthTransactionId}`,
+        ).digest('hex');
+        await migration.query(`
+          INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions
+            (record_id, token_digest, csrf_digest, principal_id, provider,
+             provider_subject_id, audience, assurance, authn_version, authz_version,
+             binding_version, grant_version, policy_version, global_auth_epoch,
+             idle_expires_at, absolute_expires_at)
+          VALUES ($1, $2, $3, $4, 'discord', $5, 'fleet', 'webauthn_uv',
+                  1, 1, 1, 1, 1, $6, clock_timestamp() + interval '5 minutes',
+                  clock_timestamp() + interval '1 hour')
+        `, [
+          sessionId,
+          createHash('sha256').update(`session:${sessionId}`).digest('hex'),
+          createHash('sha256').update(`csrf:${sessionId}`).digest('hex'),
+          actorPrincipalId,
+          actorSubjectId,
+          globalAuthEpoch,
+        ]);
+        await migration.query(`
+          INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions
+            (transaction_id, state_digest, pkce_verifier_digest, callback_uri,
+             return_path, kind, status, global_auth_epoch, expires_at, consumed_at,
+             verified_provider, verified_provider_subject_id, lifecycle_ceremony_id,
+             lifecycle_action, lifecycle_proof_role, initiating_principal_id,
+             initiating_session_id)
+          VALUES ($1, $2, $3, 'https://fleet.example.test/auth/discord/callback',
+                  '/settings/security', 'recovery', 'consumed', $4,
+                  clock_timestamp() + interval '5 minutes', clock_timestamp(),
+                  'discord', $5, $6, 'provider.relink', 'new', $7, $8)
+        `, [
+          oauthTransactionId,
+          createHash('sha256').update(`state:${oauthTransactionId}`).digest('hex'),
+          createHash('sha256').update(`pkce:${oauthTransactionId}`).digest('hex'),
+          globalAuthEpoch,
+          expectedSubjectId,
+          ceremonyId,
+          actorPrincipalId,
+          sessionId,
+        ]);
+        await migration.query(`
+          UPDATE ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies
+          SET protocol_version = 1,
+              webauthn_challenge_digest = $2,
+              webauthn_challenge_ciphertext = decode('01', 'hex'),
+              exact_origin = 'https://fleet.example.test',
+              rp_id = 'fleet.example.test',
+              credential_floor_generation = 1,
+              confirmed_at = clock_timestamp(),
+              reapproval_verified_at = clock_timestamp(),
+              reapproval_actor_principal_id = $3,
+              reapproval_actor_session_id = $4,
+              reapproval_oauth_transaction_id = $5,
+              reapproval_oauth_proof_digest = $6,
+              reapproval_credential_id_hash = $7,
+              reapproval_credential_generation = 1,
+              reapproval_credential_floor_generation = 1
+          WHERE ceremony_id = $1
+        `, [
+          ceremonyId,
+          createHash('sha256').update(`challenge:${ceremonyId}`).digest('hex'),
+          actorPrincipalId,
+          sessionId,
+          oauthTransactionId,
+          oauthProofDigest,
+          passkeyHash,
+        ]);
+      };
 
       await migration.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
@@ -3421,6 +3517,7 @@ describe('fleet_auth Postgres authority boundary', () => {
                  clock_timestamp() + interval '5 minutes')`,
         [ceremonyId, 'f'.repeat(64), subjectId, companionId, JSON.stringify(exactScope)],
       );
+      await confirmAccountCeremony(ceremonyId, subjectId, 1);
       const result = await executeAccountReapproval(runtime, {
         ceremonyId,
         principalId,
@@ -3613,6 +3710,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         companionId,
         JSON.stringify(secondScope),
       ]);
+      await confirmAccountCeremony(secondCeremonyId, secondSubjectId, 2);
       await expect(executeAccountReapproval(runtime, {
         ceremonyId: secondCeremonyId,
         principalId: secondPrincipalId,

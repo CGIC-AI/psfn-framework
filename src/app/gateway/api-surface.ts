@@ -63,6 +63,7 @@ import type { FleetJitStepUpCoordinator } from '../../boundary/fleet-auth/jit-st
 import type { TrustedHostPasskeyCeremonyService } from '../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
 import type { GatewayTrustedHostGardenRecoveryService } from '../../boundary/gateway/trusted-host-garden-recovery.js';
 import type { GatewayFleetAuthLifecycleCeremonyService } from '../../boundary/fleet-auth/lifecycle-ceremony.js';
+import type { TrustedHostAccountReapprovalService } from '../../boundary/fleet-auth/trusted-host-account-reapproval.js';
 import {
   GatewayHubDeviceIngressService,
   type HubDeviceHumanAttachmentPort,
@@ -118,6 +119,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   fleetAuthPasskeyCeremonies?: TrustedHostPasskeyCeremonyService;
   fleetAuthTrustedHostRecovery?: GatewayTrustedHostGardenRecoveryService;
   fleetAuthLifecycleCeremonies?: GatewayFleetAuthLifecycleCeremonyService;
+  fleetAuthAccountReapprovalCeremonies?: TrustedHostAccountReapprovalService;
   fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
   fleetAuthRequestCapabilities?: GatewayRequestCapabilitySigner;
   fleetAuthRequestCapabilityVerifier?: RequestCapabilityVerifier;
@@ -409,6 +411,7 @@ export async function startOptionalGatewayApiServer(
     && options.fleetAuthPasskeyCeremonies !== undefined
     && options.fleetAuthTrustedHostRecovery !== undefined
     && options.fleetAuthLifecycleCeremonies !== undefined
+    && options.fleetAuthAccountReapprovalCeremonies !== undefined
     && options.fleetAuthChildAssertions !== undefined
     && options.fleetAuthRequestCapabilities !== undefined
     && options.fleetAuthRequestCapabilityVerifier !== undefined
@@ -775,6 +778,9 @@ export async function startOptionalGatewayApiServer(
               : {}),
             ...(options.fleetAuthLifecycleCeremonies
               ? { lifecycleCeremonies: options.fleetAuthLifecycleCeremonies }
+              : {}),
+            ...(options.fleetAuthAccountReapprovalCeremonies
+              ? { accountReapprovalCeremonies: options.fleetAuthAccountReapprovalCeremonies }
               : {}),
             trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
             ...(fleetSsoCompanionUi ? {

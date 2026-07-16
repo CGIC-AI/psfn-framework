@@ -618,6 +618,8 @@ async function main(): Promise<void> {
           fleetAuthPasskeyCeremonies: fleetAuthPersistence.passkeyCeremonies,
           fleetAuthTrustedHostRecovery: fleetAuthPersistence.trustedHostRecovery,
           ...(fleetAuthLifecycleCeremonies ? { fleetAuthLifecycleCeremonies } : {}),
+          fleetAuthAccountReapprovalCeremonies:
+            fleetAuthPersistence.accountReapprovalCeremonies,
           fleetAuthChildAssertions: fleetAuthPersistence.childAssertions,
           fleetAuthRequestCapabilities: fleetAuthPersistence.requestCapabilities,
           fleetAuthRequestCapabilityVerifier: fleetAuthPersistence.requestCapabilityVerifier,

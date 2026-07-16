@@ -293,7 +293,12 @@ export class Scheduler {
     const lastRun = task.type === 'every' && isWallClockCadence(task.cadence)
       ? now
       : (opts?.skipFirstRun ? now : 0);
-    this.tasks.set(task.id, { ...task, lastRun });
+    const entry: RuntimeScheduledTask = { ...task, lastRun };
+    this.tasks.set(task.id, entry);
+    // Re-arm the adaptive wake if this task is due sooner than the currently
+    // armed wake. requestWake no-ops while stopped or when already waking at/
+    // before the computed due time, so register-before-start is unaffected.
+    this.requestWake(this.taskNextDueAt(now, entry));
   }
 
   updateTask(
@@ -335,6 +340,10 @@ export class Scheduler {
     if (updates.state !== undefined) entry.state = updates.state;
     if (updates.name !== undefined) entry.name = updates.name;
     if (updates.runAt !== undefined) entry.runAt = updates.runAt;
+    // Re-arm the adaptive wake if the update moved this task's due time nearer
+    // than the currently armed wake. requestWake handles the earlier-than-armed
+    // decision and no-ops while stopped.
+    this.requestWake(this.taskNextDueAt(Date.now(), entry));
     return true;
   }
 

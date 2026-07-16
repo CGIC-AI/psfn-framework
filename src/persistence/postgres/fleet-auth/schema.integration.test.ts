@@ -35,7 +35,12 @@ import { executeCompanionReapproval } from './companion-reapproval.js';
 import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
 import { PostgresFleetAuthBrokerStore } from './oauth-session-store.js';
 import { PostgresHubDeviceAssertionReplayStore } from './hub-device-assertion-replay.js';
+import { FLEET_AUTH_MIGRATIONS } from './migrations.js';
 import { FLEET_AUTH_RECONCILE_FUNCTION_NAME } from './authority-reconciliation-sql.js';
+import {
+  FLEET_AUTH_CONSUME_HUB_REPLAY_FUNCTION_NAME,
+  FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_NAME,
+} from './hub-device-assertion-replay-sql.js';
 import { PostgresDiscordEvidenceStore } from './discord-evidence-store.js';
 import { digestDiscordEvidence } from '../../../boundary/fleet-auth/discord-evidence-types.js';
 import {
@@ -220,7 +225,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         `SELECT version, checksum FROM ${FLEET_AUTH_SCHEMA_NAME}.schema_migrations ORDER BY version`,
       );
       expect(ledger.rows.map(row => row.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
       ]);
       expect(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum))).toBe(true);
 
@@ -252,6 +257,69 @@ describe('fleet_auth Postgres authority boundary', () => {
         'schema_migrations',
         'step_up_challenges',
       ]));
+    } finally {
+      await migration.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('canonicalizes an existing v16 Hub replay audit before enforcing the v17 constraint', async () => {
+    const db = await freshDatabase();
+    const migration = createPostgresPool(db.migrationUrl, { max: 1 });
+    const oldCorrelation = 'a'.repeat(64);
+    const context = {
+      schemaVersion: 1,
+      issuerDigest: '1'.repeat(64),
+      keyIdDigest: '2'.repeat(64),
+      audienceDigest: '3'.repeat(64),
+      companionIdDigest: '4'.repeat(64),
+      deviceIdDigest: '5'.repeat(64),
+      sessionIdDigest: '6'.repeat(64),
+      enrollmentVersionDigest: '7'.repeat(64),
+      jtiDigest: '8'.repeat(64),
+      acceptedAssertionDigest: '9'.repeat(64),
+      mutatedAssertionDigest: 'b'.repeat(64),
+    };
+    try {
+      await migration.query('BEGIN');
+      await migration.query(`CREATE SCHEMA ${FLEET_AUTH_SCHEMA_NAME}`);
+      await migration.query(`SET LOCAL search_path TO ${FLEET_AUTH_SCHEMA_NAME}, public`);
+      await migration.query(`
+        CREATE TABLE schema_migrations (
+          version INTEGER PRIMARY KEY,
+          name TEXT NOT NULL UNIQUE,
+          checksum TEXT NOT NULL,
+          applied_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+        )
+      `);
+      for (const entry of FLEET_AUTH_MIGRATIONS.filter(entry => entry.version <= 16)) {
+        await migration.query(entry.sql);
+        await migration.query(
+          'INSERT INTO schema_migrations (version, name, checksum) VALUES ($1, $2, $3)',
+          [entry.version, entry.name, createHash('sha256').update(entry.sql).digest('hex')],
+        );
+      }
+      await migration.query(`
+        INSERT INTO authorization_audit_events
+          (event_id, actor_context, action, resource, decision, reason_code,
+           authority_generation, global_auth_epoch, correlation_id, decision_context)
+        VALUES ($1, '{"kind":"hub_device_assertion"}'::jsonb,
+                'hub_device_assertion.verify', 'hub-device-assertion-replay',
+                'deny', 'mutated_replay', 1, 1, $2, $3::jsonb)
+      `, [randomUUID(), oldCorrelation, JSON.stringify(context)]);
+      await migration.query('COMMIT');
+
+      await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
+      const upgraded = await migration.query<{ correlation_id: string }>(`
+        SELECT correlation_id
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+        WHERE action = 'hub_device_assertion.verify'
+      `);
+      expect(upgraded.rows).toHaveLength(1);
+      expect(upgraded.rows[0]?.correlation_id).toMatch(/^[0-9a-f]{64}$/);
+      expect(upgraded.rows[0]?.correlation_id).not.toBe(oldCorrelation);
+    } catch (error) {
+      await migration.query('ROLLBACK').catch(() => undefined);
+      throw error;
     } finally {
       await migration.end();
     }
@@ -367,6 +435,7 @@ describe('fleet_auth Postgres authority boundary', () => {
     await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
     const pool = createPostgresPool(db.runtimeUrl, { max: 8, allowExitOnIdle: true });
     const migration = createPostgresPool(db.migrationUrl, { max: 1, allowExitOnIdle: true });
+    const backup = createPostgresPool(db.backupUrl, { max: 1, allowExitOnIdle: true });
     const store = new PostgresHubDeviceAssertionReplayStore(pool);
     const digest = (value: string): string => createHash('sha256').update(value).digest('hex');
     const context = {
@@ -435,17 +504,22 @@ describe('fleet_auth Postgres authority boundary', () => {
         last_mismatch_at: expect.any(Date),
       })]);
 
-      await pool.query(`
+      await migration.query(`
         UPDATE ${FLEET_AUTH_SCHEMA_NAME}.hub_device_assertion_replays
         SET consumed_at = clock_timestamp() - interval '2 seconds',
             expires_at = clock_timestamp() - interval '1 second'
         WHERE issuer = $1 AND jti = $2
       `, [input.issuer, input.jti]);
+      const cleanupJti = randomUUID();
       await store.consume({
         ...input,
-        jti: randomUUID(),
+        jti: cleanupJti,
         assertionDigest: 'c'.repeat(64),
         expiresAt: new Date(Date.now() + 30_000),
+        auditContext: {
+          ...input.auditContext,
+          jtiDigest: digest(cleanupJti),
+        },
       });
 
       const durableAudit = await pool.query<{
@@ -502,6 +576,81 @@ describe('fleet_auth Postgres authority boundary', () => {
       expect(JSON.stringify(durableAudit.rows)).not.toContain(input.deviceId);
       expect(JSON.stringify(durableAudit.rows)).not.toContain(context.sessionId);
 
+      const durableEvent = durableAudit.rows.at(0);
+      if (!durableEvent) throw new Error('Durable Hub replay audit fixture is unavailable');
+      for (const authority of [pool, backup]) {
+        await expect(authority.query(`
+          INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.hub_device_assertion_replays
+            (issuer, jti, assertion_digest, device_id, enrollment_version, expires_at,
+             key_id_digest, audience_digest, companion_id_digest, session_id_digest)
+          VALUES ('forged-hub', $1, $2, 'forged-device', 1,
+                  clock_timestamp() + interval '1 minute', $2, $2, $2, $2)
+        `, [randomUUID(), 'f'.repeat(64)])).rejects.toThrow(/permission denied/);
+        await expect(authority.query(`
+          UPDATE ${FLEET_AUTH_SCHEMA_NAME}.hub_device_assertion_replays
+          SET mismatch_count = mismatch_count + 1
+          WHERE issuer = $1 AND jti = $2
+        `, [mutated.issuer, mutated.jti])).rejects.toThrow(/permission denied/);
+        await expect(authority.query(`
+          DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.hub_device_assertion_replays
+          WHERE issuer = $1 AND jti = $2
+        `, [mutated.issuer, mutated.jti])).rejects.toThrow(/permission denied/);
+        await expect(authority.query(`
+          INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+            (event_id, actor_context, action, resource, decision, reason_code,
+             authority_generation, global_auth_epoch, correlation_id, decision_context)
+          VALUES ($1, '{"kind":"hub_device_assertion"}'::jsonb,
+                  'hub_device_assertion.verify', 'hub-device-assertion-replay',
+                  'deny', 'mutated_replay', 1, 1, $2, $3::jsonb)
+        `, [
+          randomUUID(),
+          durableEvent.correlation_id,
+          JSON.stringify(durableEvent.decision_context),
+        ])).rejects.toThrow(/bounded fleet_auth procedure/);
+      }
+      await expect(backup.query(`
+        SELECT ${FLEET_AUTH_CONSUME_HUB_REPLAY_FUNCTION_NAME}(
+          $1, $2, $3, $4, $5, $6,
+          $7, $8, $9, $10, $11, $12, $13, $14
+        )
+      `, [
+        input.issuer, input.jti, input.assertionDigest, input.deviceId,
+        input.enrollmentVersion, input.expiresAt,
+        ...Object.values(input.auditContext),
+      ])).rejects.toThrow(/permission denied/);
+      await expect(pool.query(`
+        SELECT ${FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_NAME}(
+          $1, 1, 1, clock_timestamp(), $2::jsonb
+        )
+      `, [
+        randomUUID(),
+        JSON.stringify(durableEvent.decision_context),
+      ])).rejects.toThrow(/permission denied/);
+
+      await expect(migration.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+          (event_id, actor_context, action, resource, decision, reason_code,
+           authority_generation, global_auth_epoch, correlation_id, decision_context)
+        VALUES ($1, '{"kind":"hub_device_assertion"}'::jsonb,
+                'hub_device_assertion.verify', 'hub-device-assertion-replay',
+                'deny', 'mutated_replay', 1, 1, NULL, $2::jsonb)
+      `, [
+        randomUUID(),
+        JSON.stringify(durableEvent.decision_context),
+      ])).rejects.toThrow(/authorization_audit_hub_mutated_replay_canonical/);
+      await expect(migration.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+          (event_id, actor_context, action, resource, decision, reason_code,
+           authority_generation, global_auth_epoch, correlation_id, decision_context)
+        VALUES ($1, '{"kind":"hub_device_assertion"}'::jsonb,
+                'hub_device_assertion.verify', 'hub-device-assertion-replay',
+                'deny', 'mutated_replay', 1, 1, $2, $3::jsonb)
+      `, [
+        randomUUID(),
+        durableEvent.correlation_id,
+        JSON.stringify(durableEvent.decision_context),
+      ])).rejects.toThrow(/authorization_audit_hub_mutated_replay_unique/);
+
       const rejectedJti = randomUUID();
       const rejectedInput = {
         ...input,
@@ -544,7 +693,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       `, [rejectedInput.issuer, rejectedInput.auditContext.jtiDigest, rejectedInput.jti]);
       expect(failedAudit.rows).toEqual([{ mismatch_count: '0', audit_count: '0' }]);
     } finally {
-      await Promise.all([pool.end(), migration.end()]);
+      await Promise.all([pool.end(), migration.end(), backup.end()]);
     }
   }, TIMEOUT_MS);
 
@@ -1032,7 +1181,7 @@ describe('fleet_auth Postgres authority boundary', () => {
          VALUES ($1, '{"kind":"browser"}'::jsonb, 'hub_device_assertion.verify',
                  'raw-assertion', 'deny', 'mutated_replay', 1, 1, $2, '{}'::jsonb)`,
         [randomUUID(), 'c'.repeat(64)],
-      )).rejects.toThrow(/authorization_audit_hub_mutated_replay_shape/);
+      )).rejects.toThrow(/bounded fleet_auth procedure|authorization_audit_hub_mutated_replay_shape/);
 
       await expect(runtime.query(
         `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.passkey_credentials

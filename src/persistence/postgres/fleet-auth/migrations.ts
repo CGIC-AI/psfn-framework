@@ -716,6 +716,68 @@ CREATE UNIQUE INDEX authorization_audit_hub_mutated_replay_unique
     AND reason_code = 'mutated_replay';
 `;
 
+const HUB_DEVICE_ASSERTION_REPLAY_PROCEDURE_BOUNDARY_SQL = `
+-- Replay fences are short-lived enforcement state. Drop any pre-boundary rows
+-- instead of guessing missing audit bindings during upgrade; signed assertions
+-- must be verified and consumed again against the new procedure-owned ledger.
+TRUNCATE TABLE hub_device_assertion_replays;
+
+ALTER TABLE hub_device_assertion_replays
+  ADD COLUMN key_id_digest TEXT NOT NULL CHECK (key_id_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN audience_digest TEXT NOT NULL CHECK (audience_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN companion_id_digest TEXT NOT NULL CHECK (companion_id_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN session_id_digest TEXT NOT NULL CHECK (session_id_digest ~ '^[0-9a-f]{64}$');
+
+-- v16 generated its dedup key from raw issuer/JTI values that are deliberately
+-- absent from the durable audit. Canonicalize that metadata once from the
+-- complete sanitized context so future restores can independently derive it.
+-- The table lock held by these DDL statements prevents an append gap while the
+-- immutable trigger is replaced inside the migration transaction.
+DROP TRIGGER authorization_audit_events_append_only ON authorization_audit_events;
+UPDATE authorization_audit_events
+SET correlation_id = encode(sha256(convert_to(jsonb_build_array(
+  decision_context->>'issuerDigest',
+  decision_context->>'keyIdDigest',
+  decision_context->>'audienceDigest',
+  decision_context->>'companionIdDigest',
+  decision_context->>'deviceIdDigest',
+  decision_context->>'sessionIdDigest',
+  decision_context->>'enrollmentVersionDigest',
+  decision_context->>'jtiDigest',
+  decision_context->>'acceptedAssertionDigest',
+  decision_context->>'mutatedAssertionDigest'
+)::text, 'UTF8')), 'hex')
+WHERE action = 'hub_device_assertion.verify'
+  AND reason_code = 'mutated_replay';
+CREATE TRIGGER authorization_audit_events_append_only
+  BEFORE UPDATE OR DELETE ON authorization_audit_events
+  FOR EACH ROW EXECUTE FUNCTION reject_immutable_mutation();
+
+ALTER TABLE authorization_audit_events
+  ADD CONSTRAINT authorization_audit_hub_mutated_replay_canonical CHECK (
+    (action <> 'hub_device_assertion.verify'
+      AND reason_code IS DISTINCT FROM 'mutated_replay')
+    OR (
+      action = 'hub_device_assertion.verify'
+      AND reason_code = 'mutated_replay'
+      AND correlation_id IS NOT NULL
+      AND correlation_id ~ '^[0-9a-f]{64}$'
+      AND correlation_id = encode(sha256(convert_to(jsonb_build_array(
+        decision_context->>'issuerDigest',
+        decision_context->>'keyIdDigest',
+        decision_context->>'audienceDigest',
+        decision_context->>'companionIdDigest',
+        decision_context->>'deviceIdDigest',
+        decision_context->>'sessionIdDigest',
+        decision_context->>'enrollmentVersionDigest',
+        decision_context->>'jtiDigest',
+        decision_context->>'acceptedAssertionDigest',
+        decision_context->>'mutatedAssertionDigest'
+      )::text, 'UTF8')), 'hex')
+    )
+  );
+`;
+
 const DISCORD_EVIDENCE_COMPLETENESS_SQL = `
 -- Pre-v10 evidence lacks the complete thread/config/reason contract and must
 -- never survive as positive authorization input after this migration.
@@ -1039,4 +1101,5 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 14, name: 'lifecycle_oauth_purpose', sql: LIFECYCLE_OAUTH_PURPOSE_SQL },
   { version: 15, name: 'companion_authority_lineage', sql: COMPANION_AUTHORITY_LINEAGE_SQL },
   { version: 16, name: 'hub_device_assertion_durable_denial_audit', sql: HUB_DEVICE_ASSERTION_DURABLE_DENIAL_AUDIT_SQL },
+  { version: 17, name: 'hub_device_assertion_replay_procedure_boundary', sql: HUB_DEVICE_ASSERTION_REPLAY_PROCEDURE_BOUNDARY_SQL },
 ] as const;

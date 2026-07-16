@@ -15,6 +15,7 @@ import {
   FleetAuthAuthorityFloorStore,
 } from '../postgres/fleet-auth/authority-floor.js';
 import { reconcileFleetAuthAuthorityStateInTransaction } from '../postgres/fleet-auth/gateway-persistence.js';
+import { FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_NAME } from '../postgres/fleet-auth/hub-device-assertion-replay-sql.js';
 import {
   FLEET_AUTH_SCHEMA_NAME,
   assertFleetAuthBackupRestorePrivileges,
@@ -752,14 +753,66 @@ async function importDurableRows(
   }
 
   for (const [index, row] of durable.authorizationAuditEvents.entries()) {
+    const actorContext = jsonObject(
+      row,
+      'actor_context',
+      `durable.authorizationAuditEvents[${index}]`,
+    );
+    const decisionContext = jsonObject(
+      row,
+      'decision_context',
+      `durable.authorizationAuditEvents[${index}]`,
+    );
+    const isHubMutatedReplay = row.action === 'hub_device_assertion.verify'
+      || row.reason_code === 'mutated_replay';
+    if (isHubMutatedReplay) {
+      const malformedFields = [
+        actorContext === '{"kind":"hub_device_assertion"}' ? null : 'actor_context',
+        row.action === 'hub_device_assertion.verify' ? null : 'action',
+        row.resource === 'hub-device-assertion-replay' ? null : 'resource',
+        row.decision === 'deny' ? null : 'decision',
+        row.reason_code === 'mutated_replay' ? null : 'reason_code',
+        row.companion_id === null ? null : 'companion_id',
+        row.principal_id === null ? null : 'principal_id',
+        row.decision_id === null ? null : 'decision_id',
+        row.ceremony_id === null ? null : 'ceremony_id',
+        row.reason_digest === null ? null : 'reason_digest',
+      ].filter((field): field is string => field !== null);
+      if (malformedFields.length > 0) {
+        throw new Error(
+          `Invalid fleet auth snapshot: durable.authorizationAuditEvents[${index}] `
+          + `has malformed Hub mutated-replay denial fields: ${malformedFields.join(', ')}`,
+        );
+      }
+      if (typeof row.correlation_id !== 'string'
+        || !/^[0-9a-f]{64}$/u.test(row.correlation_id)) {
+        throw new Error(
+          `Invalid fleet auth snapshot: durable.authorizationAuditEvents[${index}] `
+          + 'has a non-canonical Hub mutated-replay correlation',
+        );
+      }
+      const imported = await client.query<{ imported: boolean }>(`
+        SELECT ${FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_NAME}(
+          $1, $2, $3, $4, $5::jsonb
+        ) AS imported
+      `, [
+        row.event_id,
+        row.authority_generation,
+        row.global_auth_epoch,
+        row.occurred_at,
+        decisionContext,
+      ]);
+      if (imported.rows.at(0)?.imported === true) importedRows += 1;
+      continue;
+    }
     const values = [
       row.event_id,
-      jsonObject(row, 'actor_context', `durable.authorizationAuditEvents[${index}]`),
+      actorContext,
       row.action, row.resource, row.decision, row.reason_code, row.companion_id,
       row.principal_id, row.authority_generation, row.global_auth_epoch,
       row.correlation_id, row.occurred_at, row.decision_id, row.ceremony_id,
       row.reason_digest,
-      jsonObject(row, 'decision_context', `durable.authorizationAuditEvents[${index}]`),
+      decisionContext,
     ];
     await record(insertOrAssertCompatibleConflict({
       client,

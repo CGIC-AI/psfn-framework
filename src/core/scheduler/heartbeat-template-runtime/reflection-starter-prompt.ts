@@ -106,7 +106,8 @@ function formatHighSignalClues(context: ReflectionInternalStateContext | null): 
   }
 
   const concern = [...state.attention.activeConcerns]
-    .sort((left, right) => right.salience - left.salience)[0];
+    .sort((left, right) => right.salience - left.salience)
+    .at(0);
   if (concern) {
     clues.push(`A currently salient thread: ${truncateStarterLine(concern.text)}`);
   }

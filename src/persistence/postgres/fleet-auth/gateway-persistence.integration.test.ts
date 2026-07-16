@@ -35,6 +35,7 @@ const publicKeyPem = keyPair.publicKey.export({ type: 'spki', format: 'pem' }).t
 const privateKeyPem = keyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
 const hubKeyPair = generateKeyPairSync('ed25519');
 const hubPublicKeyPem = hubKeyPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+const KNOWN_COMPANION_ID = '7f87ee85-9fcc-4520-91a8-b728293eca76';
 
 interface GatewayTestContext {
   databaseName: string;
@@ -213,6 +214,7 @@ async function startEnabled(context: GatewayTestContext): Promise<GatewayFleetAu
   const persistence = await initializeGatewayFleetAuthPersistence({
     config: context.config,
     credentialVault: context.credentialVault,
+    knownCompanionIds: [KNOWN_COMPANION_ID],
     protectedRestoreRoots: context.protectedRestoreRoots,
     lifecycleWitnessRoot: context.systemDataDir,
   });
@@ -347,6 +349,28 @@ afterAll(async () => {
 }, TIMEOUT_MS);
 
 describe('gateway fleet-auth lifecycle publication', () => {
+  it('composes authorization resolution only for enabled fleet auth', async () => {
+    const context = await freshContext();
+    const enabled = await startEnabled(context);
+    try {
+      await expect(enabled.broker.resolveAuthorizationContext({
+        sessionToken: 'S'.repeat(43),
+        audience: 'fleet',
+        companionId: KNOWN_COMPANION_ID,
+        action: 'memory.read.self',
+      })).rejects.toMatchObject({ code: 'session_absent' });
+    } finally {
+      await enabled.close();
+    }
+
+    const disabled = await initializeGatewayFleetAuthPersistence({
+      knownCompanionIds: [],
+      protectedRestoreRoots: context.protectedRestoreRoots,
+      lifecycleWitnessRoot: context.systemDataDir,
+    });
+    expect(disabled).toBeUndefined();
+  }, TIMEOUT_MS);
+
   it('starts Discord evidence authority only when validated mappings enable it', async () => {
     const context = await freshContext();
     const featureOff = await startEnabled(context);
@@ -533,6 +557,7 @@ describe('gateway fleet-auth lifecycle publication', () => {
     try {
       await waitForBlockedBroker(context);
       const disabled = await initializeGatewayFleetAuthPersistence({
+        knownCompanionIds: [],
         protectedRestoreRoots: context.protectedRestoreRoots,
         lifecycleWitnessRoot: context.systemDataDir,
       });

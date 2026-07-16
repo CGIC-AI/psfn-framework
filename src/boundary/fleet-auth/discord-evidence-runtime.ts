@@ -107,7 +107,7 @@ function observationTargetIdentity(target: DiscordEvidenceTarget): string {
   return `${target.guildId}\u0000${target.channelId ?? ''}`;
 }
 
-function configDigest(config: FleetAuthConfig): string {
+export function digestDiscordEvidenceConfig(config: FleetAuthConfig): string {
   return digestDiscordEvidence({
     schemaVersion: config.schemaVersion,
     activationGeneration: config.activationGeneration,
@@ -151,7 +151,7 @@ export class DiscordEvidenceRuntime {
     this.observer = options.observer;
     this.store = options.store;
     this.now = options.now ?? (() => new Date());
-    this.currentConfigDigest = configDigest(options.config);
+    this.currentConfigDigest = digestDiscordEvidenceConfig(options.config);
   }
 
   async refreshPrincipalEvidence(input: {

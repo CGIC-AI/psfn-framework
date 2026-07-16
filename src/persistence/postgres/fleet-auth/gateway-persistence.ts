@@ -53,6 +53,10 @@ import type { GatewayContactLifecycleAuthorityPort } from '../../../boundary/gat
 import { PostgresContactLifecycleAuthorityStore } from './contact-lifecycle-authority-store.js';
 import type { HubDeviceHumanAttachmentPort } from '../../../boundary/fleet-auth/hub-device-ingress.js';
 import { PostgresHubDeviceHumanAttachmentStore } from './hub-device-human-attachment-store.js';
+import {
+  createGatewayRequestCapabilitySigner,
+  type GatewayRequestCapabilitySigner,
+} from '../../../boundary/fleet-auth/request-capability.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -63,6 +67,7 @@ import { PostgresHubDeviceHumanAttachmentStore } from './hub-device-human-attach
 export interface GatewayFleetAuthPersistence {
   authorityFloors: FleetAuthAuthorityFloorStore;
   broker: GatewayFleetAuthBroker;
+  requestCapabilities: GatewayRequestCapabilitySigner;
   authorityLifecycle: GatewayFleetAuthAuthorityLifecycleStore;
   contactLifecycleAuthority: GatewayContactLifecycleAuthorityPort;
   discordEvidence?: DiscordEvidenceRuntime;
@@ -309,6 +314,13 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       ? { companionDatabaseUrl: options.companionDatabaseUrl }
       : {}),
   });
+  const activeRequestCapabilityKey = config.verifierKeys.find(key => key.status === 'active')!;
+  const requestCapabilities = createGatewayRequestCapabilitySigner({
+    issuer: activeRequestCapabilityKey.issuer,
+    kid: secrets.assertionSigningKid,
+    privateKeyPem: secrets.assertionPrivateKeyPem,
+    ttlSeconds: config.ttls.internalAssertionMs / 1_000,
+  });
   await migrateFleetAuthSchema({
     databaseUrl: secrets.database.migrationUrl,
     roles: config.databaseRoles,
@@ -416,6 +428,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
     return {
       authorityFloors,
       broker,
+      requestCapabilities,
       authorityLifecycle,
       contactLifecycleAuthority,
       ...(discordEvidence ? { discordEvidence } : {}),

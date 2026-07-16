@@ -258,7 +258,7 @@ async function createHarness(options: {
             kind: 'verifier' as const,
             enabled: true as const,
             canonicalOrigin: 'https://fleet.example.test',
-            verifierKeys: [],
+            requestCapabilities: { issuer: 'psfn-fleet-auth', maxTtlSeconds: 30, keys: [] },
             hubDeviceAssertions: {
               issuer: 'psfn-satellite-hub', audience: 'https://fleet.example.test',
               maxTtlSeconds: 60, clockSkewSeconds: 2, keys: [],

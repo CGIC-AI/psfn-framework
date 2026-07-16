@@ -128,7 +128,11 @@ export interface FleetAuthVerifierConfig {
   kind: 'verifier';
   enabled: true;
   canonicalOrigin: string;
-  verifierKeys: FleetAuthVerifierKey[];
+  requestCapabilities: {
+    issuer: string;
+    maxTtlSeconds: number;
+    keys: FleetAuthVerifierKey[];
+  };
   hubDeviceAssertions: HubDeviceAssertionVerifierConfig;
 }
 
@@ -418,6 +422,9 @@ function parseTtls(value: unknown): FleetAuthConfig['ttls'] {
   if (result.internalAssertionMs >= result.stepUpChallengeMs) {
     fail('ttls.internalAssertionMs must be less than stepUpChallengeMs');
   }
+  if (result.internalAssertionMs % 1_000 !== 0) {
+    fail('ttls.internalAssertionMs must resolve to whole seconds');
+  }
   if (result.stepUpChallengeMs > result.oauthTransactionMs) {
     fail('ttls.stepUpChallengeMs must not exceed oauthTransactionMs');
   }
@@ -555,6 +562,10 @@ export function validateFleetAuthConfig(value: unknown, sourcePath: string): Fle
   }
 
   const verifierKeys = parseVerifierKeys(root.verifierKeys);
+  const requestCapabilityIssuer = verifierKeys[0]!.issuer;
+  if (verifierKeys.some(key => key.issuer !== requestCapabilityIssuer)) {
+    fail('verifierKeys must use one request-capability issuer');
+  }
   const hubDeviceAssertions = parseHubDeviceAssertions(root.hubDeviceAssertions);
   assertFleetAuthPublicKeyBoundary({
     brokerKeys: verifierKeys,
@@ -641,7 +652,11 @@ export function resolveFleetAuthOwnerFile(options: {
     kind: 'verifier',
     enabled: true,
     canonicalOrigin: config.canonicalOrigin,
-    verifierKeys: config.verifierKeys.map(key => ({ ...key })),
+    requestCapabilities: {
+      issuer: config.verifierKeys[0]!.issuer,
+      maxTtlSeconds: config.ttls.internalAssertionMs / 1_000,
+      keys: config.verifierKeys.map(key => ({ ...key })),
+    },
     hubDeviceAssertions: {
       ...config.hubDeviceAssertions,
       keys: config.hubDeviceAssertions.keys.map(key => ({ ...key })),

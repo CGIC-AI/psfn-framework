@@ -165,10 +165,14 @@ describe('fleet-auth owner-file configuration', () => {
       kind: 'verifier',
       enabled: true,
       canonicalOrigin: 'https://fleet.example.test',
-      verifierKeys: validateFleetAuthConfig(
-        validConfig(publicKeyPem, hubPublicKeyPem),
-        FLEET_AUTH_FILE_NAME,
-      ).verifierKeys,
+      requestCapabilities: {
+        issuer: 'psfn-fleet-auth',
+        maxTtlSeconds: 30,
+        keys: validateFleetAuthConfig(
+          validConfig(publicKeyPem, hubPublicKeyPem),
+          FLEET_AUTH_FILE_NAME,
+        ).verifierKeys,
+      },
       hubDeviceAssertions: validateFleetAuthConfig(
         validConfig(publicKeyPem, hubPublicKeyPem),
         FLEET_AUTH_FILE_NAME,
@@ -177,6 +181,28 @@ describe('fleet-auth owner-file configuration', () => {
     expect(operator).toEqual(agent);
     expect(JSON.stringify(agent)).not.toContain('clientSecretRef');
     expect(JSON.stringify(agent)).not.toContain('DatabaseUrlRef');
+    expect(JSON.stringify(agent)).not.toContain('PRIVATE KEY');
+    expect(JSON.stringify(agent)).not.toContain('sessionPepper');
+  });
+
+  it('requires one request-capability issuer and whole-second assertion TTLs', () => {
+    const config = validConfig(publicKeyPem, hubPublicKeyPem);
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      verifierKeys: [
+        ...config.verifierKeys,
+        {
+          ...config.verifierKeys[0],
+          issuer: 'other-fleet',
+          kid: 'other-retiring',
+          status: 'retiring',
+        },
+      ],
+    }, FLEET_AUTH_FILE_NAME)).toThrow(/one request-capability issuer/u);
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      ttls: { ...config.ttls, internalAssertionMs: 30_001 },
+    }, FLEET_AUTH_FILE_NAME)).toThrow(/whole seconds/u);
   });
 
   it('rejects unknown keys, unsafe origins, partial mappings, duplicates, and widening vocabulary', () => {
@@ -285,7 +311,7 @@ describe('fleet-auth owner-file configuration', () => {
       verifierKeys: [
         ...config.verifierKeys,
         {
-          issuer: 'retired-broker-issuer',
+          issuer: config.verifierKeys[0]!.issuer,
           kid: 'retired-broker-kid',
           publicKeyPem: sharedRotation,
           notBefore: '2025-01-01T00:00:00.000Z',
@@ -314,7 +340,7 @@ describe('fleet-auth owner-file configuration', () => {
         ...config.verifierKeys,
         {
           ...config.verifierKeys[0],
-          issuer: 'retired-broker-issuer',
+          issuer: config.verifierKeys[0]!.issuer,
           kid: 'duplicate-broker-key',
           publicKeyPem: rewrapPublicKeyPem(publicKeyPem),
           notBefore: '2025-01-01T00:00:00.000Z',

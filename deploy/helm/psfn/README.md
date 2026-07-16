@@ -95,6 +95,10 @@ helm upgrade --install psfn deploy/helm/psfn \
   --namespace psfn \
   --set fleetAuth.enabled=true \
   --set-string runtime.companionId=<registered-companion-uuid> \
+  --set networkPolicy.enabled=true \
+  --set hostPorts.gatewayApi.enabled=false \
+  --set-string ingress.gateway.path=/ \
+  --set-string ingress.gateway.pathType=Prefix \
   --set ingress.gateway.tls.enabled=true \
   --set-string ingress.gateway.tls.secretName=psfn-public-origin-tls
 ```
@@ -102,8 +106,10 @@ helm upgrade --install psfn deploy/helm/psfn \
 `ingress.gateway.host` must be the exact host in `fleet-auth.json`
 `canonicalOrigin`, and the named Secret must contain a browser-trusted
 certificate for that host. Fleet-on rendering fails if gateway Ingress or TLS
-is absent. The ingress controller is the only trusted proxy hop; the runtime
-checks exact Host/forwarded HTTPS provenance and OAuth callback origin.
+is absent, NetworkPolicy is disabled, the gateway hostPort is enabled, or the
+Ingress does not route the root Prefix. The ingress controller is the only
+trusted proxy hop; the runtime checks exact Host/forwarded HTTPS provenance and
+OAuth callback origin.
 
 The chart issues a Garden server identity and Gateway client identity through
 cert-manager. Gateway-to-Garden requests use TLS 1.3 mTLS with exact SPIFFE URI
@@ -114,6 +120,8 @@ Authorized Gardens are exposed only at
 request-capability issuance. See
 [`../../../docs/operations.md`](../../../docs/operations.md#unified-fleet-human-origin)
 for validation and rollback requirements.
+The chart does not set `FLEET_STATUS_PORT`: raw fleet status remains a distinct
+loopback-only operator listener and is never a portal backend or Ingress route.
 
 ## Runtime Layout
 

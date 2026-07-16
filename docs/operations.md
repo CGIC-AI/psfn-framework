@@ -157,9 +157,15 @@ The local fleet launcher uses loopback Garden upstreams. Any non-loopback
 the gateway validates the Garden SPIFFE URI and Garden validates the gateway
 SPIFFE URI. Partial TLS configuration aborts startup. In Helm, set
 `fleetAuth.enabled=true`, enable `ingress.gateway.tls`, and name an existing
-browser-trusted TLS Secret. The chart renders that gateway as the sole browser
-Ingress, cert-manager identities for gateway-to-Garden mTLS, and NetworkPolicy
-allowing Garden and the optional Companion UI only from gateway pods.
+browser-trusted TLS Secret. Fleet auth also requires `networkPolicy.enabled=true`,
+`hostPorts.gatewayApi.enabled=false`, and the exact root
+`ingress.gateway.path=/` with `pathType=Prefix`; any other combination fails
+rendering rather than creating a second or incomplete browser edge. The chart
+renders that gateway as the sole browser Ingress, cert-manager identities for
+gateway-to-Garden mTLS, and NetworkPolicy allowing Garden and the optional
+Companion UI only from gateway pods. It does not inject `FLEET_STATUS_PORT`;
+the raw status listener remains a separately managed loopback-only operator
+surface.
 
 Rollback keeps the same edge invariant. Capture the current values, certificate
 Secrets, and fleet owner backup before changing the flag. A fleet-on rollback
@@ -169,7 +175,10 @@ Garden remains a ClusterIP/loopback internal service protected by
 `ADMIN_TOKEN`, with no Garden or Companion UI Ingress or hostPort. Never restore
 a historical direct privileged Garden edge. After either change, verify the
 gateway TLS host, `/fleet` login/callback, one authorized Garden, one denied
-cross-companion route, and a revoked session before declaring recovery.
+cross-companion route, logout while one companion is unavailable, the absence
+of direct Garden/Companion UI ingress, and a revoked session before declaring
+recovery. Run `helm lint deploy/helm/psfn` and `npm run verify:helm-chart` on
+the exact rollback values before applying them.
 
 ### Fleet backups
 

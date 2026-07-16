@@ -293,6 +293,11 @@ forwarding headers. A single reverse proxy requires
 host/proto metadata, and an independent network restriction that admits only
 that proxy. Non-loopback gateway-to-Garden traffic must configure the complete
 `FLEET_SSO_GARDEN_TLS_*` mTLS tuple; partial configuration fails startup.
+For Helm fleet mode, keep `networkPolicy.enabled=true`,
+`hostPorts.gatewayApi.enabled=false`, `ingress.gateway.path=/`, and
+`ingress.gateway.pathType=Prefix`; the chart rejects fleet auth if any of these
+sole-origin requirements is weakened. The chart never wires the raw
+`FLEET_STATUS_PORT` listener into the public workload.
 
 The optional static Companion UI may be registered with
 `FLEET_SSO_COMPANION_UI_ORIGIN`. If the fleet has more than one companion, also
@@ -320,6 +325,9 @@ loopback admin host root, for example `http://127.0.0.1:3001/`. With fleet auth
 enabled, the same Garden is reachable only through
 `/companions/<companion-uuid>/garden/` on the canonical gateway HTTPS origin;
 `ADMIN_TOKEN` and `ADMIN_ALLOW_INSECURE` are rejected on that operator process.
+The repo launcher also scrubs those legacy variables from the fleet-auth
+gateway and keeps proxy trust and raw fleet-status wiring gateway-owned; child
+agent/operator allowlists do not inherit them.
 
 ### Discord voice
 

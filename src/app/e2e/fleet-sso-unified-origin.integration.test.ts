@@ -20,12 +20,22 @@ import {
   validateGardenRequestMetadata,
 } from '../../boundary/fleet-auth/request-capability-target.js';
 import { GatewayFleetSsoRouter } from '../../boundary/gateway/fleet-sso-router.js';
-import type { FleetAuthorizationContext } from '../../boundary/gateway/fleet-authorization-context.js';
+import {
+  FleetAuthorizationDeniedError,
+  type FleetAuthorizationContext,
+} from '../../boundary/gateway/fleet-authorization-context.js';
+import { GatewayFleetPortalProjection } from '../../boundary/gateway/fleet-portal-projection.js';
+import { FleetStatusServer } from '../../boundary/gateway/fleet-status.js';
+import { fleetAuthRoleAllowsAction } from '../../boundary/fleet-auth/role-action-policy.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { isRecord } from '../../shared/utils/types.js';
+import type { FleetAuthRole } from '../../system/config/fleet-auth-config.js';
 
 const COMPANION_A = createCompanionId('11111111-1111-4111-8111-111111111111');
 const COMPANION_B = createCompanionId('22222222-2222-4222-8222-222222222222');
+const COMPANION_C = createCompanionId('33333333-3333-4333-8333-333333333333');
+const COMPANION_D = createCompanionId('44444444-4444-4444-8444-444444444444');
+const UNKNOWN_COMPANION = createCompanionId('55555555-5555-4555-8555-555555555555');
 const SESSION_A = 'a'.repeat(43);
 const SESSION_B = 'b'.repeat(43);
 const CANONICAL_ORIGIN = 'https://fleet.example.test';
@@ -66,6 +76,7 @@ process.on('SIGTERM', () => server.close(() => process.exit(0)));
 function context(
   companionId: string,
   action: FleetAuthorizationContext['authorization']['action'],
+  role: FleetAuthRole = 'owner',
 ): FleetAuthorizationContext {
   return Object.freeze({
     principalId: companionId === COMPANION_A
@@ -78,7 +89,7 @@ function context(
       contactId: randomUUID(),
       bindingVersion: 1,
     }),
-    operator: Object.freeze({ grantId: randomUUID(), role: 'owner', grantVersion: 1 }),
+    operator: Object.freeze({ grantId: randomUUID(), role, grantVersion: 1 }),
     session: Object.freeze({
       recordId: randomUUID(),
       audience: 'fleet',
@@ -146,7 +157,12 @@ function getHitCount(port: number): Promise<{ hits: number; pid: number }> {
   });
 }
 
-function get(port: number, path: string, session: string): Promise<{
+function get(
+  port: number,
+  path: string,
+  session: string,
+  headerOverrides: IncomingHttpHeaders = {},
+): Promise<{
   status: number;
   headers: IncomingHttpHeaders;
   body: string;
@@ -165,6 +181,7 @@ function get(port: number, path: string, session: string): Promise<{
         'x-forwarded-proto': 'https',
         'x-forwarded-port': '443',
         'x-forwarded-for': '198.51.100.9',
+        ...headerOverrides,
       },
     }, (response) => {
       const chunks: Buffer[] = [];
@@ -184,8 +201,10 @@ describe('unified Fleet SSO two-companion process boundary', () => {
   const servers: Server[] = [];
   const children: ChildProcess[] = [];
   const workloadRoots: string[] = [];
+  const fleetStatusServers: FleetStatusServer[] = [];
 
   afterEach(async () => {
+    await Promise.all(fleetStatusServers.splice(0).map(server => server.stop()));
     await Promise.all(servers.splice(0).map(server => new Promise<void>((resolve) => {
       server.close(() => resolve());
     })));
@@ -355,5 +374,225 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     );
     expect(revoked.status).toBe(404);
     expect(await getHitCount(workloadA.port)).toEqual({ hits: 1, pid: workloadA.pid });
+  });
+
+  it('certifies disjoint portal projections, stateless links, outages, and raw-status separation', async () => {
+    const workloadA = await spawnWorkload('workspace-a/portal-owner');
+    const workloadB = await spawnWorkload('workspace-b/portal-admin');
+    children.push(workloadA.child, workloadB.child);
+    workloadRoots.push(workloadA.root, workloadB.root);
+
+    const unavailable = createServer();
+    const unavailablePort = await listen(unavailable);
+    await new Promise<void>((resolve, reject) => unavailable.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    }));
+
+    const generatedAt = NOW_SECONDS * 1_000;
+    const snapshot = () => ({
+      generatedAt,
+      connections: [
+        {
+          companionId: COMPANION_A,
+          state: 'ready' as const,
+          health: 'healthy' as const,
+          stateReason: 'rpc_message_received',
+          connectedAt: generatedAt - 10_000,
+          lastSeenAt: generatedAt - 1_000,
+        },
+        {
+          companionId: COMPANION_B,
+          state: 'degraded' as const,
+          health: 'stale' as const,
+          stateReason: 'heartbeat_stale',
+          connectedAt: generatedAt - 20_000,
+          lastSeenAt: generatedAt - 5_000,
+        },
+      ],
+      lastSeenByCompanionId: { [COMPANION_C]: generatedAt - 60_000 },
+      recentViolationsByCompanionId: { [COMPANION_C]: 2 },
+      unattributedRecentViolationCount: 1,
+      recentViolationWindowMs: 3_600_000,
+    });
+    const fleet = [
+      { companionId: COMPANION_A, gardenPort: workloadA.port },
+      { companionId: COMPANION_B, gardenPort: workloadB.port },
+      { companionId: COMPANION_C, gardenPort: unavailablePort },
+      { companionId: COMPANION_D },
+    ];
+    const grants = new Map<string, readonly { companionId: string; role: FleetAuthRole }[]>([
+      [SESSION_A, [
+        { companionId: COMPANION_A, role: 'owner' },
+        { companionId: COMPANION_C, role: 'guest' },
+      ]],
+      [SESSION_B, [
+        { companionId: COMPANION_B, role: 'admin' },
+        { companionId: COMPANION_D, role: 'member' },
+      ]],
+    ]);
+    const revokedSessions = new Set<string>();
+    const portalProjection = new GatewayFleetPortalProjection({
+      authorizer: {
+        resolve: async (input: unknown) => {
+          if (!isRecord(input) || typeof input.sessionToken !== 'string') {
+            throw new FleetAuthorizationDeniedError('malformed_request');
+          }
+          if (revokedSessions.has(input.sessionToken)) {
+            throw new FleetAuthorizationDeniedError('session_revoked');
+          }
+          const sessionGrants = grants.get(input.sessionToken);
+          if (!sessionGrants) throw new FleetAuthorizationDeniedError('session_absent');
+          return {
+            companions: sessionGrants.map(grant => ({
+              companionId: grant.companionId,
+              gardenLinkEligible: fleetAuthRoleAllowsAction(grant.role, 'garden.read'),
+            })),
+          };
+        },
+      },
+      fleet,
+      source: { getFleetConnectionSnapshot: snapshot },
+      now: () => new Date(generatedAt),
+    });
+
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const signer = createGatewayRequestCapabilitySigner({
+      issuer: 'fleet-portal-production-e2e',
+      kid: 'production-e2e-key',
+      privateKeyPem: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
+      ttlSeconds: 30,
+      nowSeconds: () => NOW_SECONDS,
+    });
+    const verifier = createRequestCapabilityVerifier({
+      issuer: 'fleet-portal-production-e2e',
+      maxTtlSeconds: 30,
+      keys: [{
+        issuer: 'fleet-portal-production-e2e',
+        kid: 'production-e2e-key',
+        publicKeyPem: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+        notBefore: new Date((NOW_SECONDS - 60) * 1_000).toISOString(),
+        notAfter: new Date((NOW_SECONDS + 3_600) * 1_000).toISOString(),
+        status: 'active',
+      }],
+    });
+    const router = new GatewayFleetSsoRouter({
+      canonicalOrigin: CANONICAL_ORIGIN,
+      trustProxy: true,
+      upstreams: [
+        { companionId: COMPANION_A, origin: new URL(`http://127.0.0.1:${workloadA.port}`) },
+        { companionId: COMPANION_B, origin: new URL(`http://127.0.0.1:${workloadB.port}`) },
+        { companionId: COMPANION_C, origin: new URL(`http://127.0.0.1:${unavailablePort}`) },
+      ],
+      broker: {
+        resolveAuthorizationContext: async (input: unknown) => {
+          if (!isRecord(input) || typeof input.sessionToken !== 'string'
+            || typeof input.companionId !== 'string' || typeof input.action !== 'string') {
+            throw new Error('denied');
+          }
+          const role = grants.get(input.sessionToken)
+            ?.find(grant => grant.companionId === input.companionId)?.role;
+          if (!role || revokedSessions.has(input.sessionToken)) throw new Error('denied');
+          return context(
+            input.companionId,
+            input.action as FleetAuthorizationContext['authorization']['action'],
+            role,
+          );
+        },
+      },
+      signer,
+      verifier,
+      replay: { consume: async input => ({ outcome: 'consumed', result: input.consumeResult }) },
+      portalProjection,
+      nowSeconds: () => NOW_SECONDS,
+    });
+    const edge = createServer((request, response) => { void router.handle(request, response); });
+    servers.push(edge);
+    const edgePort = await listen(edge);
+
+    const rawStatus = new FleetStatusServer({
+      port: 0,
+      fleet,
+      source: { getFleetConnectionSnapshot: snapshot },
+    });
+    await rawStatus.start();
+    fleetStatusServers.push(rawStatus);
+
+    const ownerPortal = await get(edgePort, '/v1/fleet/portal', SESSION_A);
+    expect(ownerPortal.status).toBe(200);
+    expect(JSON.parse(ownerPortal.body)).toMatchObject({
+      companions: [
+        {
+          companionId: COMPANION_A,
+          availability: 'online',
+          headless: false,
+          gardenPath: `/companions/${COMPANION_A}/garden`,
+        },
+        { companionId: COMPANION_C, availability: 'offline', headless: false },
+      ],
+    });
+    expect(JSON.parse(ownerPortal.body).companions[1]).not.toHaveProperty('gardenPath');
+    expect(ownerPortal.body).not.toContain(COMPANION_B);
+    expect(ownerPortal.body).not.toContain(COMPANION_D);
+    expect(ownerPortal.body).not.toMatch(/gardenPort|stateReason|violation/u);
+
+    const adminPortal = await get(edgePort, '/v1/fleet/portal', SESSION_B);
+    expect(adminPortal.status).toBe(200);
+    expect(JSON.parse(adminPortal.body)).toMatchObject({
+      companions: [
+        {
+          companionId: COMPANION_B,
+          availability: 'degraded',
+          headless: false,
+          gardenPath: `/companions/${COMPANION_B}/garden`,
+        },
+        { companionId: COMPANION_D, availability: 'offline', headless: true },
+      ],
+    });
+    expect(JSON.parse(adminPortal.body).companions[1]).not.toHaveProperty('gardenPath');
+    expect(adminPortal.body).not.toContain(COMPANION_A);
+    expect(adminPortal.body).not.toContain(COMPANION_C);
+
+    const ownerGardenPath = `/companions/${COMPANION_A}/garden/api/admin/dashboard`;
+    const adminGardenPath = `/companions/${COMPANION_B}/garden/api/admin/dashboard`;
+    expect((await get(edgePort, ownerGardenPath, SESSION_A)).status).toBe(200);
+    expect((await get(edgePort, adminGardenPath, SESSION_B)).status).toBe(200);
+
+    const unauthorized = await get(edgePort, adminGardenPath, SESSION_A);
+    const unknown = await get(
+      edgePort,
+      `/companions/${UNKNOWN_COMPANION}/garden/api/admin/dashboard`,
+      SESSION_A,
+    );
+    expect({ status: unauthorized.status, body: unauthorized.body }).toEqual({
+      status: unknown.status,
+      body: unknown.body,
+    });
+    expect(await getHitCount(workloadB.port)).toEqual({ hits: 1, pid: workloadB.pid });
+
+    const spoofedHost = await get(edgePort, '/fleet', SESSION_A, {
+      'x-forwarded-host': 'attacker.example.test',
+    });
+    expect(spoofedHost.status).toBe(400);
+
+    revokedSessions.add(SESSION_A);
+    const revokedNavigation = await get(edgePort, ownerGardenPath, SESSION_A);
+    expect(revokedNavigation.status).toBe(404);
+    expect(await getHitCount(workloadA.port)).toEqual({ hits: 1, pid: workloadA.pid });
+
+    const publicRawAttempt = await get(edgePort, '/fleet/status.json', SESSION_B);
+    expect(publicRawAttempt.status).toBe(404);
+    expect(publicRawAttempt.body).not.toMatch(/gardenPort|recentViolationWindowMs/u);
+    const operatorRaw = await get(
+      rawStatus.boundPort(),
+      '/fleet/status.json',
+      SESSION_B,
+    );
+    expect(operatorRaw.status).toBe(200);
+    const operatorRawBody = operatorRaw.body;
+    for (const companionId of [COMPANION_A, COMPANION_B, COMPANION_C, COMPANION_D]) {
+      expect(operatorRawBody).toContain(companionId);
+    }
+    expect(operatorRawBody).toMatch(/gardenPort|recentViolationWindowMs/u);
   });
 });

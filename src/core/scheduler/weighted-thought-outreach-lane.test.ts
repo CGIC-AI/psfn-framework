@@ -1,9 +1,31 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const logSpies = vi.hoisted(() => ({ info: vi.fn() }));
+
+// Preserve every real logger.js export (winston instance, diagnostic ring, …)
+// and only swap createComponentLogger for a spy so the registration log line
+// can be asserted (psfn-framework-yszc).
+vi.mock('../../shared/logger.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../shared/logger.js')>();
+  return {
+    ...actual,
+    createComponentLogger: () => ({
+      info: logSpies.info,
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+      trace: vi.fn(),
+    }),
+  };
+});
+
 import { EventBus } from '../../shared/event-bus.js';
 import {
+  registerWeightedThoughtOutreachTask,
   runWeightedThoughtOutreachTick,
   type WeightedThoughtOutreachTaskOptions,
 } from './weighted-thought-outreach-lane.js';
+import type { ScheduledTask } from './scheduler.js';
 import {
   createInMemoryWeightedThoughtBackend,
   createWeightedThoughtStorePort,
@@ -120,5 +142,69 @@ describe('weighted-thought outreach lane', () => {
     expect(gateEvent?.open).toBe(false);
     expect(inferredCount).toBe(0);
     expect(nudgeCalls).toBe(0); // zero LLM
+  });
+});
+
+describe('registerWeightedThoughtOutreachTask startup logging parity', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function makeFakeScheduler(): { scheduler: Scheduler; register: ReturnType<typeof vi.fn> } {
+    const tasks = new Map<string, ScheduledTask>();
+    const register = vi.fn((task: ScheduledTask) => {
+      tasks.set(task.id, task);
+    });
+    const scheduler = {
+      register,
+      getTask: (id: string) => tasks.get(id),
+    } as unknown as Scheduler;
+    return { scheduler, register };
+  }
+
+  function buildRegistrationOptions(
+    scheduler: Scheduler,
+    config: WeightedThoughtOutreachConfig,
+  ): WeightedThoughtOutreachTaskOptions {
+    const store = createWeightedThoughtStorePort(createInMemoryWeightedThoughtBackend([]));
+    const nudgeEvaluator: NudgeEvaluator = { evaluate: async () => ({ action: 'decline' }) };
+    return {
+      scheduler,
+      eventBus: new EventBus(),
+      config,
+      store,
+      nudgeEvaluator,
+      channelPolicy: { primaryChannelId: 'dm-primary', primaryChannelType: 'discord' },
+    };
+  }
+
+  it('emits a registered log line on the enabled path (psfn-framework-yszc)', () => {
+    const { scheduler, register } = makeFakeScheduler();
+    registerWeightedThoughtOutreachTask(
+      buildRegistrationOptions(scheduler, { ...CONFIG, enabled: true }),
+    );
+
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(logSpies.info).toHaveBeenCalledWith('Weighted-thought outreach lane registered', {
+      checkIntervalMs: 300_000,
+      nudgeThreshold: 0.5,
+      maxNudgesPerRun: 1,
+    });
+  });
+
+  it('logs the disabled line and never registers when disabled', () => {
+    const { scheduler, register } = makeFakeScheduler();
+    registerWeightedThoughtOutreachTask(
+      buildRegistrationOptions(scheduler, { ...CONFIG, enabled: false }),
+    );
+
+    expect(register).not.toHaveBeenCalled();
+    expect(logSpies.info).toHaveBeenCalledWith(
+      'Weighted-thought outreach lane disabled by scheduler.json weightedThoughtOutreach.enabled',
+    );
+    expect(logSpies.info).not.toHaveBeenCalledWith(
+      'Weighted-thought outreach lane registered',
+      expect.anything(),
+    );
   });
 });

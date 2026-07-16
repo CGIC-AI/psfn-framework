@@ -2,7 +2,7 @@
 // Runs inside an isolated container. Connects to gateway via the configured RPC endpoint.
 // Run: npx tsx src/app/agent/main.ts
 
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { GatewayClient } from '../../boundary/gateway/client.js';
@@ -45,6 +45,7 @@ import {
 import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring.js';
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
 import { registerBeadsTools } from '../../boundary/integrations/beads/runtime-wiring.js';
+import { resolveBeadsToolsEnabled } from '../../boundary/integrations/beads/enablement.js';
 import { GatewayBeadsOps } from '../../boundary/integrations/beads/gateway-ops.js';
 import { registerWorldTools } from '../../boundary/integrations/world/runtime-wiring.js';
 import { GatewayWorldOps } from '../../boundary/integrations/world/gateway-ops.js';
@@ -780,9 +781,21 @@ async function main(): Promise<void> {
   });
   log.info('Git repository inspection tools enabled for parent agent');
 
-  // Beads issue-management tools — policy-scoped gateway RPC access (no shell passthrough)
-  registerBeadsTools(agentLoop, new GatewayBeadsOps(gatewayOps), { gatewayMode: true });
-  log.info('Beads issue-management tools enabled');
+  // Beads issue-management tools — policy-scoped gateway RPC access (no shell
+  // passthrough). Gate registration on the same enablement signal the gateway
+  // policy uses so registration and policy agree; the gateway DENYs beads.*
+  // when disabled, so advertising the tool anyway makes it fail at every call
+  // (psfn-framework-e7s0). Fail-closed: policy wins.
+  const beadsToolsEnabled = resolveBeadsToolsEnabled(process.env.BEADS_TOOLS_ENABLED, {
+    workspaceRoot: pathSnapshot.workspaceRoot,
+    codebaseRoot: resolve('.'),
+  });
+  if (beadsToolsEnabled) {
+    registerBeadsTools(agentLoop, new GatewayBeadsOps(gatewayOps), { gatewayMode: true });
+    log.info('Beads issue-management tools enabled');
+  } else {
+    log.info('Beads issue-management tools disabled by policy (gateway denies beads.*)');
+  }
 
   // World tool — perceive/list/control physical & virtual affordances via the
   // places registry and the privileged Satellite Hub world transport,

@@ -34,6 +34,7 @@ import { executeAccountReapproval } from './reapproval.js';
 import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
 import { PostgresFleetAuthBrokerStore } from './oauth-session-store.js';
 import { PostgresHubDeviceAssertionReplayStore } from './hub-device-assertion-replay.js';
+import { FLEET_AUTH_RECONCILE_FUNCTION_NAME } from './authority-reconciliation-sql.js';
 import {
   runFleetAuthConsistentBackup,
   restoreFleetAuthSnapshot,
@@ -516,6 +517,10 @@ describe('fleet_auth Postgres authority boundary', () => {
       )).rejects.toThrow(/permission denied/);
       await expect(runtime.query(
         `DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state WHERE singleton = TRUE`,
+      )).rejects.toThrow(/permission denied/);
+      await expect(runtime.query(
+        `SELECT * FROM ${FLEET_AUTH_RECONCILE_FUNCTION_NAME}($1, 1000, 1000, 1, $2)`,
+        ['a'.repeat(64), randomUUID()],
       )).rejects.toThrow(/permission denied/);
       await expect(companion.query(
         `SELECT * FROM ${FLEET_AUTH_SCHEMA_NAME}.human_principals`,
@@ -1120,6 +1125,7 @@ describe('fleet_auth Postgres authority boundary', () => {
     await migrateFleetAuthSchema({ databaseUrl: source.migrationUrl, roles: ROLES });
     const sourceMigration = createPostgresPool(source.migrationUrl, { max: 1 });
     const sourceRuntime = createPostgresPool(source.runtimeUrl, { max: 1 });
+    const sourceCoordinator = createPostgresPool(source.backupUrl, { max: 1 });
     const root = mkdtempSync(join(tmpdir(), 'psfn-fleet-auth-restore-'));
     const systemDataDir = join(root, 'system-data');
     const backupDir = join(root, 'backup');
@@ -1216,6 +1222,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       });
       const browserStore = new PostgresFleetAuthBrokerStore({
         pool: sourceRuntime,
+        providerAuthorityPool: sourceCoordinator,
         sessionPepper: 'browser-revocation-session-pepper-32-bytes',
         tokenEncryptionKey: 'browser-revocation-token-key-32-bytes',
         providerRevocationAuthority: createGatewayProviderRevocationAuthorityPort(floors),
@@ -1365,6 +1372,7 @@ describe('fleet_auth Postgres authority boundary', () => {
     } finally {
       await sourceMigration.end();
       await sourceRuntime.end();
+      await sourceCoordinator.end();
       rmSync(root, { recursive: true, force: true });
     }
   }, TIMEOUT_MS);

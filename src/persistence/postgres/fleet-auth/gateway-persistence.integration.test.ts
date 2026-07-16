@@ -269,7 +269,7 @@ async function waitForBlockedBroker(
         SELECT COUNT(*)::int AS waiting
         FROM pg_stat_activity
         WHERE datname = $1
-          AND application_name = 'fleet-auth-authority-reconciliation'
+          AND application_name = 'fleet-auth-authority-coordinator'
           AND wait_event_type = 'Lock'
       `, [context.databaseName]);
       if ((result.rows[0]?.waiting ?? 0) >= expectedCount) return;
@@ -278,7 +278,7 @@ async function waitForBlockedBroker(
   } finally {
     await admin.end();
   }
-  throw new Error('Timed out waiting for fleet-auth broker reconciliation lock');
+  throw new Error('Timed out waiting for fleet-auth authority coordinator lock');
 }
 
 beforeAll(async () => {

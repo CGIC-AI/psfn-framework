@@ -94,6 +94,7 @@ async function createStore(options: { failDuringReconcile?: boolean } = {}): Pro
     authorityFloors,
     store: new PostgresFleetAuthBrokerStore({
       pool: runtime,
+      providerAuthorityPool: coordinator,
       sessionPepper: 'session-pepper-at-least-thirty-two-bytes',
       tokenEncryptionKey: 'token-encryption-key-at-least-thirty-two-bytes',
       providerRevocationAuthority: {

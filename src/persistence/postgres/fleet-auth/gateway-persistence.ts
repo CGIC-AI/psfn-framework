@@ -227,6 +227,11 @@ export async function initializeGatewayFleetAuthPersistence(options: {
     allowExitOnIdle: true,
     max: 8,
   });
+  const authorityPool = createPostgresPool(secrets.database.backupRestoreUrl, {
+    applicationName: 'fleet-auth-authority-coordinator',
+    allowExitOnIdle: true,
+    max: 2,
+  });
   try {
     const databaseHasDurableAuthority = await hasDurableFleetAuthAuthority(pool);
     const authorityFloors = new FleetAuthAuthorityFloorStore(secrets.authorityFloorRoot);
@@ -241,16 +246,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
         ? { lifecycleTransitionId: lifecyclePreparation.lifecycleTransitionId }
         : {}),
     });
-    const reconciliationPool = createPostgresPool(secrets.database.backupRestoreUrl, {
-      applicationName: 'fleet-auth-authority-reconciliation',
-      allowExitOnIdle: true,
-      max: 1,
-    });
-    try {
-      await reconcileFleetAuthAuthorityState(reconciliationPool, floor, randomUUID());
-    } finally {
-      await reconciliationPool.end();
-    }
+    await reconcileFleetAuthAuthorityState(authorityPool, floor, randomUUID());
     lifecycleWitness.publishEnabled(
       lifecyclePreparation,
       floor.trustedHost.lineageId,
@@ -260,6 +256,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       config: options.config,
       store: new PostgresFleetAuthBrokerStore({
         pool,
+        providerAuthorityPool: authorityPool,
         sessionPepper: secrets.sessionPepper,
         tokenEncryptionKey: secrets.tokenEncryptionKey,
         providerRevocationAuthority: createGatewayProviderRevocationAuthorityPort(authorityFloors),
@@ -277,10 +274,15 @@ export async function initializeGatewayFleetAuthPersistence(options: {
         config: config.hubDeviceAssertions,
         replayStore: new PostgresHubDeviceAssertionReplayStore(pool),
       }),
-      close: async () => await pool.end(),
+      close: async () => {
+        await Promise.all([pool.end(), authorityPool.end()]);
+      },
     };
   } catch (error) {
-    await pool.end().catch(() => undefined);
+    await Promise.all([
+      pool.end().catch(() => undefined),
+      authorityPool.end().catch(() => undefined),
+    ]);
     throw error;
   }
 }

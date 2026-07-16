@@ -24,6 +24,7 @@ import {
 
 export interface PostgresFleetAuthBrokerStoreOptions {
   pool: Pool;
+  providerAuthorityPool: Pool;
   sessionPepper: string;
   tokenEncryptionKey: string;
   providerRevocationAuthority: ProviderRevocationAuthorityPort;
@@ -53,11 +54,13 @@ function safeInteger(value: string, field: string): number {
 
 export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
   private readonly pool: Pool;
+  private readonly providerAuthorityPool: Pool;
   private readonly codec: FleetAuthSecretCodec;
   private readonly providerRevocationAuthority: ProviderRevocationAuthorityPort;
 
   constructor(options: PostgresFleetAuthBrokerStoreOptions) {
     this.pool = options.pool;
+    this.providerAuthorityPool = options.providerAuthorityPool;
     this.codec = new FleetAuthSecretCodec(options);
     this.providerRevocationAuthority = options.providerRevocationAuthority;
   }
@@ -281,7 +284,7 @@ export class PostgresFleetAuthBrokerStore implements FleetAuthBrokerStore {
     input: Parameters<FleetAuthBrokerStore['revokeProvider']>[0],
   ): Promise<void> {
     await revokeProviderAuthority(
-      this.pool,
+      this.providerAuthorityPool,
       this.providerRevocationAuthority,
       (client, token, csrfToken, now) => this.lockValidSession(
         client,

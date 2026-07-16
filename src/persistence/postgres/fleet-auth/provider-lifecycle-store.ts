@@ -6,6 +6,7 @@ import {
   type FleetAuthSessionRecord,
 } from '../../../boundary/gateway/fleet-auth-broker.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
 import { FLEET_AUTH_FIRST_OWNER_FUNCTION_NAME } from './first-owner-sql.js';
 import type { InsertSession, LockValidSession } from './oauth-session-store-types.js';
 import type { ProviderRevocationAuthorityPort } from './oauth-session-store.js';
@@ -20,6 +21,12 @@ export async function revokeProviderAuthority(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query(`
+      SELECT global_auth_epoch
+      FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+      WHERE singleton = TRUE
+      FOR UPDATE
+    `);
     const current = await lockValidSession(client, input.token, input.csrfToken, input.now);
     const provider = await client.query<{ subject_id: string; state: string }>(`
       SELECT subject_id, state
@@ -107,6 +114,10 @@ export async function revokeProviderAuthority(
       DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots
       WHERE principal_id = $1
     `, [current.principal_id]);
+    await client.query(`
+      DELETE FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_lifecycle_fences
+      WHERE principal_id = $1
+    `, [current.principal_id]);
     // Reconcile only after the explicit revocation mutations have run because
     // reconciliation quarantines all remaining durable authority. It still
     // runs inside this transaction and therefore precedes COMMIT.
@@ -142,6 +153,10 @@ export async function completeFirstOwnerAuthority(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query(`
+      SELECT global_auth_epoch
+      FROM ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}()
+    `);
     const current = await lockValidSession(client, input.token, input.csrfToken, input.now);
     if (current.principal_id !== input.principalId
       || current.principal_status !== 'pending') {

@@ -60,6 +60,7 @@ import { createGatewayContactBlockGate } from '../../boundary/gateway/contact-bl
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { attachGatewayTurnPerformanceForwarder } from '../../boundary/gateway/turn-performance-forwarder.js';
 import { initializeGatewayFleetAuthPersistence } from '../../persistence/postgres/fleet-auth/gateway-persistence.js';
+import { DiscordEvidenceObserverRegistry } from '../../boundary/fleet-auth/discord-evidence-observer-registry.js';
 import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import { resolveGatewayFleetAuthSecrets } from '../../system/config/fleet-auth-config.js';
 import { resolveBackupRuntimeConfig } from '../../persistence/backups/config.js';
@@ -132,6 +133,7 @@ async function main(): Promise<void> {
     startupHydration.pathSnapshot.workspacePath,
     startupHydration.pathSnapshot.runtimePathLayout.backupsDir,
   ];
+  const discordEvidenceObservers = new DiscordEvidenceObserverRegistry();
   const fleetAuthPersistence = await initializeGatewayFleetAuthPersistence({
     config: config.fleetAuth,
     credentialVault: config.credentialVault,
@@ -140,6 +142,7 @@ async function main(): Promise<void> {
       : {}),
     protectedRestoreRoots: fleetAuthProtectedRestoreRoots,
     lifecycleWitnessRoot: startupHydration.pathSnapshot.systemDataDir,
+    discordEvidenceObserver: discordEvidenceObservers,
   });
   if (config.fleetAuth && !config.companionFleet) {
     throw new Error(
@@ -336,12 +339,35 @@ async function main(): Promise<void> {
     eligibilityGate,
     intakeScreening: privilegedCore.intakeScreening.screening,
     log,
+    enableDiscordEvidenceLifecycle: fleetAuthPersistence?.discordEvidenceLifecycle !== undefined,
   });
   log.info('Embedding provider initialized', {
     provider: privilegedServices.embeddingProvider.kind,
     dims: privilegedServices.embeddingProvider.dims,
   });
   const { discord, telegram } = channelSurfaces;
+  const discordEvidenceLifecycle = fleetAuthPersistence?.discordEvidenceLifecycle;
+  if (channelSurfaces.discordAccounts && discordEvidenceLifecycle) {
+    for (const account of channelSurfaces.discordAccounts) {
+      discordEvidenceObservers.register(account.companionId, account.adapter.discordEvidence);
+      discordEvidenceLifecycle.registerCompanionEventSource(
+        account.companionId,
+        account.adapter.discordEvidence,
+      );
+    }
+  } else if (discordEvidenceLifecycle) {
+    const singleCompanionId = bootstrap.channelsConfig.discord.companionId
+      ?? (config.companionFleet?.companions.length === 1
+        ? config.companionFleet.companions.at(0)?.companionId
+        : undefined);
+    if (singleCompanionId) {
+      discordEvidenceObservers.register(singleCompanionId, discord.discordEvidence);
+      discordEvidenceLifecycle.registerCompanionEventSource(
+        singleCompanionId,
+        discord.discordEvidence,
+      );
+    }
+  }
 
   log.info('Gateway audit persistence backend', {
     persistenceBackend: config.persistenceBackend,

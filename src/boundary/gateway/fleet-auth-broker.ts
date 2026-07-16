@@ -6,6 +6,10 @@ import {
 } from 'node:crypto';
 import type { FleetAuthConfig } from '../../system/config/fleet-auth-config.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { DiscordEvidenceBrokerBoundary, type DiscordEvidenceBrokerOptions } from './discord-evidence-broker-boundary.js';
+import type { DiscordEvidenceAdmissionStore } from './discord-evidence-admission.js';
+import { FleetAuthBrokerError } from './fleet-auth-errors.js';
+export { FleetAuthBrokerError };
 
 const DISCORD_AUTHORIZE_URL = 'https://discord.com/oauth2/authorize';
 const DISCORD_TOKEN_URL = 'https://discord.com/api/v10/oauth2/token';
@@ -15,17 +19,6 @@ const OPAQUE_TOKEN_BYTES = 32;
 const OAUTH_CODE_MAX_LENGTH = 2048;
 
 export type OAuthTransactionKind = 'login' | 'provider_link' | 'provider_replace' | 'first_owner' | 'recovery';
-
-export class FleetAuthBrokerError extends Error {
-  constructor(
-    readonly code: string,
-    readonly status: number,
-    message = code,
-  ) {
-    super(message);
-    this.name = 'FleetAuthBrokerError';
-  }
-}
 
 export interface OAuthTransactionInput {
   transactionId: string;
@@ -57,7 +50,7 @@ export interface FleetAuthSessionRecord {
   absoluteExpiresAt: Date;
 }
 
-export interface FleetAuthBrokerStore {
+export interface FleetAuthBrokerStore extends DiscordEvidenceAdmissionStore {
   createOAuthTransaction(input: OAuthTransactionInput): Promise<void>;
   consumeOAuthTransaction(input: {
     stateDigest: string;
@@ -148,9 +141,7 @@ interface DiscordIdentity {
   mfaEnabled?: boolean;
 }
 
-export interface GatewayFleetAuthBrokerOptions {
-  config: FleetAuthConfig;
-  store: FleetAuthBrokerStore;
+export interface GatewayFleetAuthBrokerOptions extends DiscordEvidenceBrokerOptions<FleetAuthBrokerStore> {
   oauthClientSecret: string;
   sessionPepper: string;
   fetchImpl?: typeof fetch;
@@ -211,6 +202,7 @@ export class GatewayFleetAuthBroker {
   private readonly now: () => Date;
   private readonly randomBytes: (length: number) => Buffer;
   private readonly firstOwnerAssurance?: FirstOwnerAssurancePort;
+  private readonly discordEvidence: DiscordEvidenceBrokerBoundary;
 
   constructor(options: GatewayFleetAuthBrokerOptions) {
     this.config = options.config;
@@ -221,6 +213,7 @@ export class GatewayFleetAuthBroker {
     this.now = options.now ?? (() => new Date());
     this.randomBytes = options.randomBytes ?? cryptoRandomBytes;
     this.firstOwnerAssurance = options.firstOwnerAssurance;
+    this.discordEvidence = new DiscordEvidenceBrokerBoundary(options, this.fetchImpl, this.now);
   }
 
   async beginLogin(input: { returnPath: string }): Promise<{
@@ -293,6 +286,7 @@ export class GatewayFleetAuthBroker {
     }
     const providerTokens = await this.exchangeCode(input.code, transaction);
     const identity = await this.resolveDiscordIdentity(providerTokens.accessToken);
+    const providerMembershipEvidence = await this.discordEvidence.collectOAuthMembership(providerTokens.accessToken, identity.subjectId);
     if (this.config.provider.tokenCustody === 'encrypted_refresh'
       && providerTokens.refreshToken === undefined) {
       throw new FleetAuthBrokerError(
@@ -324,6 +318,7 @@ export class GatewayFleetAuthBroker {
           }
         : {}),
     });
+    await this.discordEvidence.admitActiveOAuthSession(session, identity.subjectId, providerMembershipEvidence);
     return { returnPath: transaction.returnPath, session };
   }
 
@@ -333,14 +328,14 @@ export class GatewayFleetAuthBroker {
     requestOrigin: string;
   }): Promise<FleetAuthSessionRecord> {
     this.assertMutationOrigin(input.requestOrigin);
-    return await this.store.rotateSession({
+    return await this.discordEvidence.admitSessionRotation(await this.store.rotateSession({
       token: input.token,
       csrfToken: input.csrfToken,
       nextToken: opaqueToken(this.randomBytes),
       nextCsrfToken: opaqueToken(this.randomBytes),
       now: this.now(),
       idleTtlMs: this.config.ttls.sessionIdleMs,
-    });
+    }));
   }
 
   async issueCsrf(input: {
@@ -378,12 +373,12 @@ export class GatewayFleetAuthBroker {
     if (!input.reason.trim() || input.reason.length > 512) {
       throw new FleetAuthBrokerError('invalid_revocation_reason', 400);
     }
-    await this.store.revokeProvider({
+    await this.discordEvidence.commitGlobalAuthorityReset(() => this.store.revokeProvider({
       token: input.token,
       csrfToken: input.csrfToken,
       now: this.now(),
       reasonDigest: createHash('sha256').update(input.reason.trim()).digest('hex'),
-    });
+    }));
   }
 
   async completeFirstOwnerBootstrap(input: {
@@ -404,16 +399,18 @@ export class GatewayFleetAuthBroker {
       evidence: input.assuranceEvidence,
       expectedOrigin: this.config.canonicalOrigin,
     });
-    return await this.store.completeFirstOwnerBootstrap({
-      token: input.token,
-      csrfToken: input.csrfToken,
-      ...verified,
-      nextToken: opaqueToken(this.randomBytes),
-      nextCsrfToken: opaqueToken(this.randomBytes),
-      now: this.now(),
-      idleTtlMs: this.config.ttls.sessionIdleMs,
-      absoluteTtlMs: this.config.ttls.sessionAbsoluteMs,
-    });
+    return await this.discordEvidence.fenceFirstOwnerActivation(
+      await this.store.completeFirstOwnerBootstrap({
+        token: input.token,
+        csrfToken: input.csrfToken,
+        ...verified,
+        nextToken: opaqueToken(this.randomBytes),
+        nextCsrfToken: opaqueToken(this.randomBytes),
+        now: this.now(),
+        idleTtlMs: this.config.ttls.sessionIdleMs,
+        absoluteTtlMs: this.config.ttls.sessionAbsoluteMs,
+      }),
+    );
   }
 
   private assertMutationOrigin(requestOrigin: string): void {

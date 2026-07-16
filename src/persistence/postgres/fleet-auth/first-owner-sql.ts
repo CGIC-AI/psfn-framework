@@ -156,6 +156,8 @@ BEGIN
   WHERE principal_id = p_principal_id;
   DELETE FROM fleet_auth.discord_evidence_snapshots
   WHERE principal_id = p_principal_id;
+  DELETE FROM fleet_auth.discord_evidence_lifecycle_fences
+  WHERE principal_id = p_principal_id;
 
   UPDATE fleet_auth.trusted_host_ceremonies
   SET status = 'consumed', consumed_at = p_at

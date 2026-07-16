@@ -35,6 +35,8 @@ import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
 import { PostgresFleetAuthBrokerStore } from './oauth-session-store.js';
 import { PostgresHubDeviceAssertionReplayStore } from './hub-device-assertion-replay.js';
 import { FLEET_AUTH_RECONCILE_FUNCTION_NAME } from './authority-reconciliation-sql.js';
+import { PostgresDiscordEvidenceStore } from './discord-evidence-store.js';
+import { digestDiscordEvidence } from '../../../boundary/fleet-auth/discord-evidence-types.js';
 import {
   runFleetAuthConsistentBackup,
   restoreFleetAuthSnapshot,
@@ -172,7 +174,7 @@ describe('fleet_auth Postgres authority boundary', () => {
       const ledger = await migration.query<{ version: number; checksum: string }>(
         `SELECT version, checksum FROM ${FLEET_AUTH_SCHEMA_NAME}.schema_migrations ORDER BY version`,
       );
-      expect(ledger.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+      expect(ledger.rows.map(row => row.version)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
       expect(ledger.rows.every(row => /^[0-9a-f]{64}$/.test(row.checksum))).toBe(true);
 
       const tables = await migration.query<{ table_name: string }>(`
@@ -185,6 +187,7 @@ describe('fleet_auth Postgres authority boundary', () => {
         'authority_state',
         'authorization_audit_events',
         'browser_sessions',
+        'discord_evidence_lifecycle_fences',
         'discord_evidence_snapshots',
         'human_principals',
         'hub_device_assertion_replays',
@@ -201,6 +204,111 @@ describe('fleet_auth Postgres authority boundary', () => {
       ]));
     } finally {
       await migration.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('persists and loads only exact, current, positive Discord evidence', async () => {
+    const db = await freshDatabase();
+    await migrateFleetAuthSchema({ databaseUrl: db.migrationUrl, roles: ROLES });
+    const runtime = createPostgresPool(db.runtimeUrl, { max: 1, allowExitOnIdle: true });
+    const principalId = randomUUID();
+    const companionId = randomUUID();
+    const providerSubjectId = '123456789012345678';
+    const guildId = '223456789012345678';
+    const channelId = '323456789012345678';
+    const lifecycleId = randomUUID();
+    const permissionInputs = {
+      oauthGuildMembership: { guildId, roleIds: [], observedAt: '2026-07-16T12:00:00.000Z' },
+      observation: { status: 'observed', botUserId: '423456789012345678' },
+      target: { status: 'current' },
+    };
+    const inputDigest = digestDiscordEvidence(permissionInputs);
+    const configDigest = 'a'.repeat(64);
+    const fetchedAt = new Date('2026-07-16T12:00:00.000Z');
+    const expiresAt = new Date('2026-07-16T12:05:00.000Z');
+    try {
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
+           (principal_id, status, authority_generation)
+         VALUES ($1, 'active', 1)`,
+        [principalId],
+      );
+      await runtime.query(
+        `INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+           (provider, subject_id, principal_id, state, authority_generation)
+         VALUES ('discord', $1, $2, 'active', 1)`,
+        [providerSubjectId, principalId],
+      );
+      const store = new PostgresDiscordEvidenceStore(runtime, {
+        sessionAuthorityGenerationIsCurrent: generation => generation === 1,
+      });
+      await store.activatePrincipalEvidenceLifecycle({
+        principalId,
+        providerSubjectId,
+        lifecycleId,
+      });
+      await store.replacePrincipalEvidence({
+        principalId,
+        providerSubjectId,
+        mutation: { lifecycleId, generation: 1 },
+        snapshots: [{
+          evidenceId: randomUUID(),
+          principalId,
+          provider: 'discord',
+          providerSubjectId,
+          companionId,
+          guildId,
+          channelId,
+          permissionInputs,
+          discordPermissionResult: true,
+          memberSpecificDenyVeto: false,
+          psfnEvidenceResult: true,
+          inputDigest,
+          configDigest,
+          mappingConfigVersion: 1,
+          provenance: {
+            source: 'discord_oauth_and_bot_observation',
+            provider: 'discord',
+            providerSubjectId,
+            observationStatus: 'observed',
+            observedAt: fetchedAt.toISOString(),
+            oauthObservedAt: fetchedAt.toISOString(),
+            observationId: 'integration-observation',
+            botUserId: '423456789012345678',
+          },
+          fetchedAt,
+          expiresAt,
+        }],
+      });
+      const lookup = {
+        principalId,
+        providerSubjectId,
+        companionId,
+        guildId,
+        channelId,
+        expectedInputDigest: inputDigest,
+        expectedConfigDigest: configDigest,
+        expectedMappingConfigVersion: 1,
+        now: new Date('2026-07-16T12:04:59.999Z'),
+      };
+      await expect(store.loadUsablePositiveEvidence(lookup)).resolves.toMatchObject({
+        providerSubjectId,
+        companionId,
+        permissionInputs,
+        provenance: { source: 'discord_oauth_and_bot_observation' },
+        fetchedAt,
+        expiresAt,
+      });
+      await expect(store.loadUsablePositiveEvidence({
+        ...lookup,
+        expectedInputDigest: 'b'.repeat(64),
+      })).resolves.toBeUndefined();
+      await expect(store.loadUsablePositiveEvidence({
+        ...lookup,
+        now: expiresAt,
+      })).resolves.toBeUndefined();
+    } finally {
+      await runtime.end();
     }
   }, TIMEOUT_MS);
 
@@ -921,8 +1029,11 @@ describe('fleet_auth Postgres authority boundary', () => {
            permission_inputs, discord_permission_result, member_specific_deny_veto,
            psfn_evidence_result, input_digest, config_digest, provenance, global_auth_epoch,
            fetched_at, expires_at)
-         VALUES ($1, $2, '123456789012345678', $3, '223456789012345678', '{}', TRUE,
-                 FALSE, TRUE, $4, $5, '{}', 1, clock_timestamp(),
+         VALUES ($1, $2, '123456789012345678', $3, '223456789012345678',
+                 '{"oauthGuildMembership":{},"observation":{},"target":{}}', TRUE,
+                 FALSE, TRUE, $4, $5,
+                 '{"source":"discord_oauth_and_bot_observation","provider":"discord","providerSubjectId":"123456789012345678","observationStatus":"observed","observedAt":"2026-07-16T12:00:00.000Z","oauthObservedAt":"2026-07-16T12:00:00.000Z","observationId":"fixture","botUserId":"423456789012345678"}',
+                 1, clock_timestamp(),
                  clock_timestamp() + interval '5 minutes')`,
         [randomUUID(), principalId, companionId, '5'.repeat(64), '6'.repeat(64)],
       );
@@ -1004,6 +1115,7 @@ describe('fleet_auth Postgres authority boundary', () => {
            ('browser_sessions', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions)),
            ('oauth_transactions', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.oauth_transactions)),
            ('provider_token_custody', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_token_custody)),
+           ('discord_evidence_lifecycle_fences', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_lifecycle_fences)),
            ('discord_evidence_snapshots', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.discord_evidence_snapshots)),
            ('step_up_challenges', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.step_up_challenges)),
            ('jit_authorization_grants', (SELECT COUNT(*) FROM ${FLEET_AUTH_SCHEMA_NAME}.jit_authorization_grants)),

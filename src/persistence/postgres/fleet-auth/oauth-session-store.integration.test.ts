@@ -165,6 +165,95 @@ afterAll(async () => {
 }, TIMEOUT_MS);
 
 describe('Postgres gateway OAuth/session authority', () => {
+  it('durably fences Discord reauthentication against rotation with redacted audit evidence', async () => {
+    const { store, runtime, coordinator, migration } = await createStore();
+    try {
+      const loginInput = await authenticate(store, 'discord-reauthentication-fence');
+      const login = await store.createLoginSession({
+        ...loginInput,
+        providerSubjectId: PROVIDER_SUBJECT_ID,
+        providerMetadata: {},
+        audience: 'fleet',
+        now: NOW,
+        idleTtlMs: 1_800_000,
+        absoluteTtlMs: 28_800_000,
+      });
+      const fenceAt = new Date(NOW.getTime() + 1000);
+      const concurrent = await Promise.allSettled([
+        store.rotateSession({
+          token: login.token,
+          csrfToken: login.csrfToken,
+          nextToken: 'must-be-fenced-rotated-token',
+          nextCsrfToken: 'must-be-fenced-rotated-csrf',
+          now: fenceAt,
+          idleTtlMs: 1_800_000,
+        }),
+        store.fencePrincipalSessionsForDiscordReauthentication({
+          principalId: login.principalId,
+          now: fenceAt,
+        }),
+      ]);
+      expect(concurrent[1]).toMatchObject({ status: 'fulfilled' });
+
+      await store.revokeIssuedSessionForReauthentication({
+        recordId: login.recordId,
+        principalId: login.principalId,
+        now: new Date(fenceAt.getTime() + 1),
+      });
+      const durable = await runtime.query<{
+        live_sessions: string;
+        audit_count: string;
+        audit_projection: unknown;
+      }>(`
+        SELECT
+          (SELECT count(*)::text FROM fleet_auth.browser_sessions
+           WHERE principal_id = $1 AND revoked_at IS NULL) AS live_sessions,
+          (SELECT count(*)::text FROM fleet_auth.authorization_audit_events
+           WHERE principal_id = $1 AND action = 'session.reauthentication') AS audit_count,
+          (SELECT jsonb_agg(jsonb_build_object(
+             'actor', actor_context,
+             'action', action,
+             'resource', resource,
+             'decision', decision,
+             'reason', reason_code
+           ) ORDER BY occurred_at, event_id)
+           FROM fleet_auth.authorization_audit_events
+           WHERE principal_id = $1 AND action = 'session.reauthentication') AS audit_projection
+      `, [login.principalId]);
+      expect(durable.rows[0]).toMatchObject({ live_sessions: '0', audit_count: '2' });
+      expect(durable.rows[0]?.audit_projection).toEqual([
+        {
+          actor: { kind: 'system', boundary: 'discord_evidence_lifecycle' },
+          action: 'session.reauthentication',
+          resource: 'fleet',
+          decision: 'deny',
+          reason: 'discord_evidence_reauthentication_required',
+        },
+        {
+          actor: { kind: 'system', boundary: 'discord_evidence_lifecycle' },
+          action: 'session.reauthentication',
+          resource: 'fleet',
+          decision: 'deny',
+          reason: 'discord_evidence_reauthentication_required',
+        },
+      ]);
+      expect(JSON.stringify(durable.rows[0]?.audit_projection))
+        .not.toMatch(new RegExp(`${PROVIDER_SUBJECT_ID}|must-be-fenced|token|csrf`, 'iu'));
+      await expect(store.rotateSession({
+        token: 'must-be-fenced-rotated-token',
+        csrfToken: 'must-be-fenced-rotated-csrf',
+        nextToken: 'must-not-survive-fence',
+        nextCsrfToken: 'must-not-survive-fence-csrf',
+        now: new Date(fenceAt.getTime() + 2),
+        idleTtlMs: 1_800_000,
+      })).rejects.toMatchObject({ code: 'invalid_session' });
+    } finally {
+      await migration.end();
+      await coordinator.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
   it('creates pending no-role principals, rotates once under races, and tombstones provider revocation', async () => {
     const { store, runtime, coordinator, migration, authorityFloors } = await createStore();
     try {

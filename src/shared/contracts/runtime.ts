@@ -1421,7 +1421,29 @@ export interface ModelBudgetBlockedEvent extends Partial<CorrelationMetadata> {
 }
 
 export type ModelPurpose = 'chat' | 'background' | 'memory' | 'context' | 'reasoning' | 'longContext' | 'vision' | 'moa';
-export type CompletionPurpose = 'chat' | 'background' | 'memory' | 'context' | 'extraction' | 'summary' | 'reasoning' | 'import_processing' | 'vision';
+/**
+ * Canonical set of completion purposes. `CompletionPurpose` is derived from this
+ * tuple so the runtime union and the runtime-validatable list can never drift
+ * (used by the gateway RPC boundary to fail closed on a malformed wire purpose).
+ */
+export const COMPLETION_PURPOSES = [
+  'chat',
+  'background',
+  'memory',
+  'context',
+  'extraction',
+  'summary',
+  'reasoning',
+  'import_processing',
+  'vision',
+] as const;
+export type CompletionPurpose = typeof COMPLETION_PURPOSES[number];
+
+/** Runtime type guard for a wire-supplied completion purpose. Fails closed. */
+export function isCompletionPurpose(value: unknown): value is CompletionPurpose {
+  return typeof value === 'string'
+    && (COMPLETION_PURPOSES as readonly string[]).includes(value);
+}
 
 /**
  * Retry disposition an autonomous work item declares to the LLM client.

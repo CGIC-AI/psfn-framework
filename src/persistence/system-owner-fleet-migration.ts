@@ -315,7 +315,7 @@ function requireExpectedDigests(
     );
   }
   for (const file of files) {
-    const expected = expectedSourceDigests[file.ownerFile]?.trim();
+    const expected = expectedSourceDigests[file.ownerFile].trim();
     if (!expected || !SHA256_PATTERN.test(expected)) {
       throw new Error(`Approval for ${file.ownerFile} must be an exact lowercase SHA-256 digest`);
     }

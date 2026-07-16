@@ -525,6 +525,7 @@ export class SubstrateAgent {
     this.emotionSelfModelRuntime = new EmotionSelfModelRuntime({
       sessionManager: this.sessionManager,
       llmProvider: this.llmClient,
+      ...(this.config.companionId ? { companionId: this.config.companionId } : {}),
       emotionRuntime: options.emotionRuntime,
       ...(config.emotionScoping ? { emotionScopingConfig: config.emotionScoping } : {}),
       getActiveConcernProvider: () => this.activeConcernProvider,

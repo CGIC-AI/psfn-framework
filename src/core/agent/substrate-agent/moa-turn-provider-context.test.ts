@@ -30,7 +30,10 @@ describe('runMoaTurn provider prompt authority', () => {
         { role: 'assistant', content: 'EARLIER_ASSISTANT_SENTINEL' },
       ],
     };
-    const currentTurn = { role: 'user' as const, content: 'CURRENT_TURN_SENTINEL' };
+    const currentTurn: Parameters<typeof buildMoaPrompt>[1] = {
+      role: 'user',
+      content: 'CURRENT_TURN_SENTINEL',
+    };
     const prompt = buildMoaPrompt(context, currentTurn);
     const providerContexts: LLMContext[] = [];
     const providerOptions: Array<LLMProviderCompletionOptions | undefined> = [];

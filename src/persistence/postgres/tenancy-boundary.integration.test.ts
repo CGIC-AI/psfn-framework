@@ -152,10 +152,14 @@ describe('PostgreSQL flagship adoption boundary', () => {
           verifyRestore: true,
           now: () => Date.UTC(2026, 6, 16, 3, 0, 0),
         });
+        const postgresDumpPath = backup.postgresDumpPath;
+        if (!postgresDumpPath) {
+          throw new Error('Flagship schema backup did not produce a PostgreSQL dump path');
+        }
         const restoreDatabaseUrl = await freshDatabaseUrl();
         try {
           await restorePostgresSchemaSlice({
-            dumpPath: backup.postgresDumpPath!,
+            dumpPath: postgresDumpPath,
             schema: plan.targetSchema,
             postgres: { databaseUrl: restoreDatabaseUrl, pgRestoreBinary },
           });
@@ -347,7 +351,11 @@ describe('PostgreSQL shard schema lifecycle', () => {
       shardExists = false;
       expect(firstCleanup.droppedObjectCount).toBeGreaterThan(0);
 
-      await lifecycle.restore(binding, backup.postgresDumpPath!);
+      const postgresDumpPath = backup.postgresDumpPath;
+      if (!postgresDumpPath) {
+        throw new Error('Shard schema backup did not produce a PostgreSQL dump path');
+      }
+      await lifecycle.restore(binding, postgresDumpPath);
       shardExists = true;
       shardPool = lifecycle.openPool(binding, 'psfn-shard-lifecycle-restored-e2e');
       expect(await shardPool.query<{ count: string }>(

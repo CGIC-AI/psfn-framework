@@ -391,18 +391,18 @@ export function buildPublicAdoptionPlan(
       }
     }
   }
-  const unsigned = {
-    schemaVersion: ADOPTION_PLAN_VERSION as typeof ADOPTION_PLAN_VERSION,
-    sourceSchema: 'public' as const,
+  const unsigned: Omit<PublicAdoptionPlan, 'planChecksum'> = {
+    schemaVersion: ADOPTION_PLAN_VERSION,
+    sourceSchema: 'public',
     targetSchema,
     sourceInventoryChecksum: inventoryChecksum({ sourceSchema: 'public', objects }),
     objects,
     rollback: {
       metadataSchema: ADOPTION_METADATA_SCHEMA,
-      sourceSchema: 'public' as const,
+      sourceSchema: 'public',
       targetSchema,
-      sourcePreserved: true as const,
-      rollbackAction: 'drop_target_schema' as const,
+      sourcePreserved: true,
+      rollbackAction: 'drop_target_schema',
     },
   };
   return { ...unsigned, planChecksum: sha256(JSON.stringify(unsigned)) };

@@ -17,6 +17,15 @@ import {
 import { buildSettingsContractData } from './settings-contract.js';
 import { verifySettingsContractGuard } from './settings-contract-guard.js';
 import { COMPANION_SETTINGS_OVERLAY_WHITELIST } from './settings-overlay.js';
+import { isRecord } from '../../shared/utils/types.js';
+
+function readSettingsSeed(): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(readFileSync('config/settings.seed.json', 'utf-8'));
+  if (!isRecord(parsed)) {
+    throw new Error('Canonical settings seed must contain a JSON object');
+  }
+  return parsed;
+}
 
 describe('settings contract guard', () => {
   it('keeps backend schema, Garden exposure metadata, and owner files aligned', () => {
@@ -282,9 +291,7 @@ describe('memory retrieval policy settings compliance', () => {
     });
     expect(SETTINGS_GARDEN_SECTION_FIELDS.voice).toContain('voiceReplySegmenter');
 
-    const seed = JSON.parse(readFileSync('config/settings.seed.json', 'utf-8')) as {
-      voiceReplySegmenter?: Record<string, unknown>;
-    };
+    const seed = readSettingsSeed();
     expect(seed.voiceReplySegmenter).toEqual({
       minSegmentLength: 24,
       maxBufferLength: 240,
@@ -307,9 +314,7 @@ describe('memory retrieval policy settings compliance', () => {
     });
     expect(SETTINGS_GARDEN_SECTION_FIELDS.memory).toContain('wikiStartupHydration');
 
-    const seed = JSON.parse(readFileSync('config/settings.seed.json', 'utf-8')) as {
-      wikiStartupHydration?: Record<string, unknown>;
-    };
+    const seed = readSettingsSeed();
     expect(seed.wikiStartupHydration).toEqual({
       recentSessionLimit: 4,
       recentMessageLimit: 18,
@@ -350,9 +355,7 @@ describe('memory retrieval policy settings compliance', () => {
     });
     expect(SETTINGS_GARDEN_SECTION_FIELDS.sessions).toContain('lifecycleKubernetes');
 
-    const seed = JSON.parse(readFileSync('config/settings.seed.json', 'utf-8')) as {
-      lifecycleKubernetes?: Record<string, unknown>;
-    };
+    const seed = readSettingsSeed();
     expect(seed.lifecycleKubernetes).toEqual(expect.objectContaining({
       lifecycleCommandTimeoutMs: 30_000,
       operatorCommandTimeoutMs: 600_000,

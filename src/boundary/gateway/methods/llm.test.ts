@@ -6,6 +6,7 @@ import type { ModelUsageEventInput } from '../../../shared/telemetry/model-usage
 import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import { IcpConversationCostBreakerError } from '../../../primitives/llm/icp-conversation-cost-breaker.js';
 import { GatewayErrors } from '../protocol.js';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -19,7 +20,7 @@ function createHarness(options: {
   authorizeIcpConversationCorrelation?: GatewayMethodRuntime['authorizeIcpConversationCorrelation'];
 } = {}) {
   const methods = new Map<string, (params: any) => Promise<any>>();
-  const stream = vi.fn(async () => ({
+  const stream = vi.fn<LLMProviderPort['stream']>(async () => ({
     content: 'streamed',
     reasoning: 'stream-thinking',
     providerObservability: {
@@ -45,7 +46,7 @@ function createHarness(options: {
     outputTokens: 3,
     stopReason: 'stop',
   }));
-  const complete = vi.fn(async () => ({
+  const complete = vi.fn<LLMProviderPort['complete']>(async () => ({
     content: 'completed',
     reasoning: 'complete-thinking',
     providerObservability: {
@@ -84,7 +85,7 @@ function createHarness(options: {
     llmProvider: {
       stream,
       complete,
-    } as any,
+    },
     embeddingService: options.embeddingService ?? {
       embed: vi.fn(),
       embedBatch: vi.fn(async () => []),

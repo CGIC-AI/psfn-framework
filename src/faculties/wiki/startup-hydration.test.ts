@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { StartupSessionMetadata } from '../../core/session/manager.js';
+import type { SessionEntry } from '../../core/session/types.js';
 import { hydrateStartupWikiContexts } from './startup-hydration.js';
 
 const WIKI_HYDRATION_TUNING = {
@@ -127,10 +129,10 @@ describe('hydrateStartupWikiContexts', () => {
       block: '## Reference Wiki',
       refreshStatus: 'ready',
     });
-    const getRecentMessages = vi.fn(() => [{
+    const getRecentMessages = vi.fn((): SessionEntry[] => [{
       id: 1,
       channelId: 'discord:restored',
-      role: 'user' as const,
+      role: 'user',
       content: 'prefix-which-must-be-trimmed owned-context-tail',
       timestamp: 1,
     }]);
@@ -141,9 +143,9 @@ describe('hydrateStartupWikiContexts', () => {
         refreshWikiContextBlock,
       },
       sessionManager: {
-        resolveStartupSessionMetadata: vi.fn(() => ({
+        resolveStartupSessionMetadata: vi.fn((): StartupSessionMetadata => ({
           sessionId: 'discord:restored',
-          channelType: 'discord' as const,
+          channelType: 'discord',
           timestamp: 1,
         })),
         listRecentSessions: vi.fn(() => []),

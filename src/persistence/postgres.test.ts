@@ -85,7 +85,7 @@ describe('createPostgresPool schema pinning', () => {
       role: 'psfn_companion_a',
     });
     try {
-      expect((pool.options as { options?: string }).options).toBe(
+      expect(pool.options.options).toBe(
         `-c role=psfn_companion_a -c search_path=companion_a,${POSTGRES_EXTENSION_SCHEMA_NAME}`,
       );
     } finally {

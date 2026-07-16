@@ -35,6 +35,8 @@ import {
   resolveCompressionGuidelinePath,
 } from '../../persistence/layout.js';
 import type { PostgresShardSchemaLifecycle } from '../../persistence/postgres/shard-schema-lifecycle.js';
+import type { PostgresShardSchemaBinding } from '../../persistence/postgres/shard-schema-lifecycle.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
 
 // ── Mock pi-agent-core Agent ──
 // We mock Agent.prototype.prompt so it doesn't actually call the LLM.
@@ -452,33 +454,41 @@ describe('ShardManager', () => {
   });
 
   it('prepares and cleans one lineage-bound Postgres schema for a multi-companion shard', async () => {
-    const binding = {
-      parentCompanionId: 'companion-test',
+    const binding: PostgresShardSchemaBinding = {
+      parentCompanionId: createCompanionId('companion-test'),
       parentSchema: 'companion_alpha',
       shardId: 'derived-by-test',
       schema: 'companion_alpha_shard_0123456789012345678901234567890123456789',
       role: 'psfn_companion_alpha_shard_test',
-    } as const;
-    const derive = vi.fn((_parentCompanionId: string, _parentSchema: string, shardId: string) => ({
+    };
+    const derive: PostgresShardSchemaLifecycle['derive'] = vi.fn((
+      _parentCompanionId,
+      _parentSchema,
+      shardId,
+    ) => ({
       ...binding,
       shardId,
     }));
-    const prepare = vi.fn(async () => undefined);
-    const cleanup = vi.fn(async () => ({
+    const prepare: PostgresShardSchemaLifecycle['prepare'] = vi.fn(async () => undefined);
+    const cleanup: PostgresShardSchemaLifecycle['cleanup'] = vi.fn(async () => ({
       schema: binding.schema,
       role: binding.role,
       droppedObjectCount: 3,
-      dropped: true as const,
+      dropped: true,
     }));
-    const lifecycle = {
+    const lifecycle: PostgresShardSchemaLifecycle = {
       derive,
       prepare,
       cleanup,
-      openPool: vi.fn(),
-      migrate: vi.fn(),
-      backup: vi.fn(),
-      restore: vi.fn(),
-    } as unknown as PostgresShardSchemaLifecycle;
+      openPool: () => {
+        throw new Error('Shard pool creation is outside this manager lifecycle test');
+      },
+      migrate: async () => undefined,
+      backup: async () => {
+        throw new Error('Shard backup is outside this manager lifecycle test');
+      },
+      restore: async () => undefined,
+    };
     const manager = new ShardManager({
       eventBus,
       llmProvider: mockLLM(),

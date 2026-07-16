@@ -6,6 +6,7 @@ import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { resolveChargeLedgerPath, resolveFatigueLedgerPath } from '../../persistence/layout.js';
 import { readRunChargeRollingWindowFromLedger } from '../../shared/telemetry/charge-ledger.js';
 import { FatigueLedger } from '../../shared/telemetry/fatigue-ledger.js';
+import { isRecord } from '../../shared/utils/types.js';
 import {
   PGVECTOR_POSTGRES_TEST_IMAGE,
   startPostgresTestHarness,
@@ -73,6 +74,11 @@ function requireInvariant(condition: unknown, code: string): asserts condition {
   if (!condition) throw new ValidationFailure(code);
 }
 
+function requireDefined<T>(value: T | undefined, code: string): T {
+  if (value === undefined) throw new ValidationFailure(code);
+  return value;
+}
+
 function currentRevision(): string {
   return execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
 }
@@ -86,7 +92,7 @@ function processIsRunning(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
+    return !isRecord(error) || error.code !== 'ESRCH';
   }
 }
 
@@ -139,14 +145,65 @@ async function readChannelSnapshot(
   agent: CertificationAgent,
   channelId: string,
 ): Promise<ChannelSnapshot> {
-  return await agent.channelSnapshot(channelId) as unknown as ChannelSnapshot;
+  const snapshot = await agent.channelSnapshot(channelId);
+  requireInvariant(Array.isArray(snapshot.entries), 'channel_snapshot_entries_invalid');
+  requireInvariant(Array.isArray(snapshot.memories), 'channel_snapshot_memories_invalid');
+  requireInvariant(Array.isArray(snapshot.summaries), 'channel_snapshot_summaries_invalid');
+  const entries = snapshot.entries.map((entry) => {
+    requireInvariant(isRecord(entry), 'channel_snapshot_entry_invalid');
+    requireInvariant(typeof entry.role === 'string', 'channel_snapshot_entry_role_invalid');
+    requireInvariant(
+      entry.authorId === undefined || typeof entry.authorId === 'string',
+      'channel_snapshot_entry_author_invalid',
+    );
+    return {
+      role: entry.role,
+      ...(typeof entry.authorId === 'string' ? { authorId: entry.authorId } : {}),
+    };
+  });
+  return { entries, memories: snapshot.memories, summaries: snapshot.summaries };
 }
 
 async function readTurnRecords(
   agent: CertificationAgent,
   channelId: string,
 ): Promise<TurnRecordsSnapshot> {
-  return await agent.turnRecordsSnapshot(channelId) as unknown as TurnRecordsSnapshot;
+  const snapshot = await agent.turnRecordsSnapshot(channelId);
+  requireInvariant(Array.isArray(snapshot.records), 'turn_records_snapshot_invalid');
+  const records = snapshot.records.map((record) => {
+    requireInvariant(isRecord(record), 'turn_record_invalid');
+    requireInvariant(typeof record.requestId === 'string', 'turn_record_request_id_invalid');
+    requireInvariant(typeof record.status === 'string', 'turn_record_status_invalid');
+    if (record.correlation === undefined) {
+      return { requestId: record.requestId, status: record.status };
+    }
+    requireInvariant(isRecord(record.correlation), 'turn_record_correlation_invalid');
+    requireInvariant(
+      typeof record.correlation.fatigueDecision === 'string',
+      'turn_record_fatigue_decision_invalid',
+    );
+    requireInvariant(
+      typeof record.correlation.rootInitiationId === 'string',
+      'turn_record_root_initiation_invalid',
+    );
+    requireInvariant(
+      record.correlation.fatigueReasonCode === undefined
+        || typeof record.correlation.fatigueReasonCode === 'string',
+      'turn_record_fatigue_reason_invalid',
+    );
+    return {
+      requestId: record.requestId,
+      status: record.status,
+      correlation: {
+        fatigueDecision: record.correlation.fatigueDecision,
+        rootInitiationId: record.correlation.rootInitiationId,
+        ...(typeof record.correlation.fatigueReasonCode === 'string'
+          ? { fatigueReasonCode: record.correlation.fatigueReasonCode }
+          : {}),
+      },
+    };
+  });
+  return { records };
 }
 
 function readFatigueSnapshot(companionDataDir: string): FatigueSnapshot {
@@ -300,9 +357,15 @@ async function validateCompanionRoom(
     readCompanionSocialCharge(companion.companionDataDir)
   ));
   const fatigueDeltas = fatigueAfter.map((after, index) => (
-    fatigueDelta(fatigueBefore[index]!, after)
+    fatigueDelta(
+      requireDefined(fatigueBefore[index], 'companion_room_fatigue_baseline_missing'),
+      after,
+    )
   ));
-  const chargeDeltas = chargeAfter.map((after, index) => after - chargeBefore[index]!);
+  const chargeDeltas = chargeAfter.map((after, index) => after - requireDefined(
+    chargeBefore[index],
+    'companion_room_charge_baseline_missing',
+  ));
   for (const delta of fatigueDeltas) {
     requireInvariant(delta.amount > 0, 'companion_room_fatigue_ledger_did_not_charge');
     requireInvariant(delta.eventCount > 0, 'companion_room_fatigue_event_missing');
@@ -316,15 +379,38 @@ async function validateCompanionRoom(
     readTurnRecords(agentA, CERTIFICATION_PRIVATE_ROOM),
     readTurnRecords(agentB, CERTIFICATION_PRIVATE_ROOM),
   ]);
-  const rootTurns = [turnsA, turnsB].map(snapshot => snapshot.records.filter(record => (
+  const rootTurnsA = turnsA.records.filter(record => (
     record.correlation?.rootInitiationId === rootInitiationId
-  )));
-  const suppressionCounts = rootTurns.map(records => records.filter(record => (
+  ));
+  const rootTurnsB = turnsB.records.filter(record => (
+    record.correlation?.rootInitiationId === rootInitiationId
+  ));
+  const suppressionCountA = rootTurnsA.filter(record => (
     record.correlation?.fatigueDecision === 'suppress'
-  )).length);
+  )).length;
+  const suppressionCountB = rootTurnsB.filter(record => (
+    record.correlation?.fatigueDecision === 'suppress'
+  )).length;
   requireInvariant(
-    suppressionCounts.reduce((sum, count) => sum + count, 0) > 0,
+    suppressionCountA + suppressionCountB > 0,
     'companion_room_exchange_did_not_stop_by_suppression',
+  );
+
+  const fatigueDeltaA = requireDefined(
+    fatigueDeltas[0],
+    'companion_room_companion_a_fatigue_delta_missing',
+  );
+  const fatigueDeltaB = requireDefined(
+    fatigueDeltas[1],
+    'companion_room_companion_b_fatigue_delta_missing',
+  );
+  const chargeDeltaA = requireDefined(
+    chargeDeltas[0],
+    'companion_room_companion_a_charge_delta_missing',
+  );
+  const chargeDeltaB = requireDefined(
+    chargeDeltas[1],
+    'companion_room_companion_b_charge_delta_missing',
   );
 
   const fleet = harness.gateway.getFleetConnectionSnapshot();
@@ -337,20 +423,20 @@ async function validateCompanionRoom(
     initiationStatus: initiated.status,
     deliveryDisposition: initiated.deliveryDisposition,
     turnCountsByCompanion: {
-      [CERTIFICATION_COMPANION_A]: rootTurns[0]!.length,
-      [CERTIFICATION_COMPANION_B]: rootTurns[1]!.length,
+      [CERTIFICATION_COMPANION_A]: rootTurnsA.length,
+      [CERTIFICATION_COMPANION_B]: rootTurnsB.length,
     },
     fatigueLedgerDeltasByCompanion: {
-      [CERTIFICATION_COMPANION_A]: fatigueDeltas[0],
-      [CERTIFICATION_COMPANION_B]: fatigueDeltas[1],
+      [CERTIFICATION_COMPANION_A]: fatigueDeltaA,
+      [CERTIFICATION_COMPANION_B]: fatigueDeltaB,
     },
     companionSocialChargeDeltasByCompanion: {
-      [CERTIFICATION_COMPANION_A]: chargeDeltas[0],
-      [CERTIFICATION_COMPANION_B]: chargeDeltas[1],
+      [CERTIFICATION_COMPANION_A]: chargeDeltaA,
+      [CERTIFICATION_COMPANION_B]: chargeDeltaB,
     },
     suppressionCountsByCompanion: {
-      [CERTIFICATION_COMPANION_A]: suppressionCounts[0],
-      [CERTIFICATION_COMPANION_B]: suppressionCounts[1],
+      [CERTIFICATION_COMPANION_A]: suppressionCountA,
+      [CERTIFICATION_COMPANION_B]: suppressionCountB,
     },
     modelRequestDelta: modelRequestsAfter - modelRequestsBefore,
     stopReason: 'both_fatigue_ledgers_exhausted_and_model_suppressed',

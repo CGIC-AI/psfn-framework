@@ -1271,7 +1271,10 @@ describe('executePostTurnBackgroundWork', () => {
       }, dependencies);
       // maybeExtract now receives a trailing non-crossing pre-write fence after
       // recentEntries, so the bounded snapshot is the second-to-last argument.
-      const memoryEntries = maybeExtract.mock.calls[0]?.at(-2) as SessionEntry[];
+      const memoryEntries = maybeExtract.mock.calls[0]?.at(-2);
+      if (!Array.isArray(memoryEntries)) {
+        throw new Error('Memory extraction did not receive a bounded session snapshot');
+      }
 
       const emotionPayload: EmotionAppraisalBackgroundPayload = {
         schemaVersion: 1,
@@ -1394,7 +1397,10 @@ describe('executePostTurnBackgroundWork', () => {
 
     expect(maybeExtract).toHaveBeenCalledTimes(1);
     expect(error).toBeInstanceOf(BackgroundWorkDeferredError);
-    expect((error as BackgroundWorkDeferredError).reasonCode).toBe('foreground_active');
-    expect((error as BackgroundWorkDeferredError).delayMs).toBe(2_345);
+    if (!(error instanceof BackgroundWorkDeferredError)) {
+      throw new Error('Expected foreground preemption to defer background work');
+    }
+    expect(error.reasonCode).toBe('foreground_active');
+    expect(error.delayMs).toBe(2_345);
   });
 });

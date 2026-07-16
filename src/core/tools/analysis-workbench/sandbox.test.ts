@@ -8,7 +8,7 @@ import type {
   MemorySubjectAuthorizedQueryResult,
 } from '../../../faculties/memory/memory-store-port.js';
 import type { SessionManager } from '../../session/manager.js';
-import type { LLMResponse } from '../../../shared/contracts/runtime.js';
+import type { CorrelationMetadata, LLMResponse } from '../../../shared/contracts/runtime.js';
 import { EventBus } from '../../../shared/event-bus.js';
 import { Scheduler } from '../../scheduler/scheduler.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
@@ -107,12 +107,12 @@ function makeExecutionPort(
   };
 }
 
-const AUTHORIZED_REFLECTION_CONTEXT = {
+const AUTHORIZED_REFLECTION_CONTEXT: Partial<CorrelationMetadata> = {
   channelId: 'internal:reflection:analysis-workbench-test',
   callType: 'background',
   purpose: 'analysis-workbench.subject-authorization.test',
   requesterProvenance: 'self_directed',
-} as const;
+};
 
 function memoryResult(
   id: string,

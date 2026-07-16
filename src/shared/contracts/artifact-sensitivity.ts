@@ -33,7 +33,7 @@ export interface ArtifactSensitivityClassification {
 
 export function isSensitivityLevel(value: unknown): value is SensitivityLevel {
   return typeof value === 'string'
-    && (SENSITIVITY_LEVELS as readonly string[]).includes(value);
+    && SENSITIVITY_LEVELS.some(level => level === value);
 }
 
 function normalizeSource(source: ArtifactSensitivitySource): ArtifactSensitivitySource | null {

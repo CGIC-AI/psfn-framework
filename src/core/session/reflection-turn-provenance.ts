@@ -4,13 +4,13 @@ import type { SessionEntry } from './types.js';
 
 export const SESSION_METADATA_REFLECTION_TURN_KEY = 'reflectionTurn';
 
-const REFLECTION_TURN_KEYS = [
+const REFLECTION_TURN_KEYS: readonly string[] = [
   'schemaVersion',
   'stage',
   'templateId',
   'mode',
   'journalEntryId',
-] as const;
+];
 
 interface SessionMetadataEnvelope {
   [key: string]: unknown;

@@ -4,8 +4,9 @@ import {
   buildReflectionStarterPromptBundle,
   REFLECTION_STARTER_PROMPT_VERSION,
 } from './reflection-starter-prompt.js';
+import type { ReflectionInternalStateContext } from './prompt-formatting.js';
 
-function buildInternalStateContext() {
+function buildInternalStateContext(): ReflectionInternalStateContext {
   const internalState = new InternalStateComputer().computeState({
     emotionState: {
       vad: { valence: 0.2, arousal: 0.15, dominance: 0.1 },
@@ -46,7 +47,7 @@ function buildInternalStateContext() {
       confidence: 0.8,
       evidence: 'METACOGNITIVE_FLAG_SENTINEL',
     }],
-    snapshotSource: 'runtime' as const,
+    snapshotSource: 'runtime',
   };
 }
 

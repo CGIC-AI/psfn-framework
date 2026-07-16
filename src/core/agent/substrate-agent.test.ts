@@ -3567,10 +3567,12 @@ describe('SubstrateAgent.handleMessage', () => {
     });
   });
 
-  it.each([
+  const defaultPromptIdentityCases: Array<[string, string, string | undefined]> = [
     ['ordinary reflection', 'internal:reflection:daily-review', 'reflection'],
     ['free time', 'internal:free-time:idle', undefined],
-  ] as const)(
+  ];
+
+  it.each(defaultPromptIdentityCases)(
     'keeps the default composed identity system prompt for %s turns',
     async (_lane, channelId, taskKind) => {
       const config = makeConfig();

@@ -2,10 +2,10 @@ import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.
 
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
 const INTERNAL_REFLECTION_SESSION_PREFIX = 'internal:reflection:';
-const EXPERIENTIAL_SELF_DIRECTED_SESSION_PREFIXES = [
+const EXPERIENTIAL_SELF_DIRECTED_SESSION_PREFIXES: readonly string[] = [
   'internal:free-time:',
   INTERNAL_REFLECTION_SESSION_PREFIX,
-] as const;
+];
 export type InferredSessionChannelType = ChannelType | 'subagent';
 
 function normalizePrefix(prefix: string): string | null {

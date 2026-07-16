@@ -1,44 +1,15 @@
-import type { FleetAuthAction } from '../../system/config/fleet-auth-config.js';
-
-export const GARDEN_FORWARD_METHODS = [
-  'GET',
-  'HEAD',
-  'POST',
-  'PUT',
-  'PATCH',
-  'DELETE',
-  'WS',
-] as const;
-export type GardenForwardMethod = typeof GARDEN_FORWARD_METHODS[number];
-
-export type GardenWorkspaceScope =
-  | 'personal_workspace'
-  | 'governed_shared_workspace'
-  | 'garden_surface';
-
-export type GardenResourceArea =
-  | 'action_pipe'
-  | 'attachments'
-  | 'audit'
-  | 'beads'
-  | 'channels'
-  | 'channel_artifacts'
-  | 'cognitive_security'
-  | 'contacts'
-  | 'devices'
-  | 'filesystem'
-  | 'garden_ui'
-  | 'identity'
-  | 'images'
-  | 'memory'
-  | 'models'
-  | 'personal_settings'
-  | 'scheduler'
-  | 'shared_workspace'
-  | 'shell'
-  | 'skills'
-  | 'telemetry'
-  | 'wiki';
+import {
+  GARDEN_ROUTE_AUTHORIZATION,
+  requireGardenRouteAuthorization,
+  type GardenRouteAuthorization,
+} from './garden-route-authorization.js';
+import type { GardenForwardMethod } from './garden-route-types.js';
+export {
+  GARDEN_FORWARD_METHODS,
+  type GardenForwardMethod,
+  type GardenResourceArea,
+  type GardenWorkspaceScope,
+} from './garden-route-types.js';
 
 export interface GardenQueryFieldPolicy {
   readonly cardinality: 'singleton' | 'multiple';
@@ -57,17 +28,18 @@ export interface GardenRouteCapability {
   readonly pattern: string;
   readonly query: Readonly<Partial<Record<string, GardenQueryFieldPolicy>>>;
   readonly body: GardenBodyPolicy;
-  readonly action: FleetAuthAction;
-  readonly resource: {
-    readonly scope: GardenWorkspaceScope;
-    readonly area: GardenResourceArea;
-  };
+  readonly authorization: GardenRouteAuthorization;
 }
 
 export interface ResolvedGardenRouteCapability {
   readonly capability: GardenRouteCapability;
   readonly pathParams: Readonly<Record<string, string>>;
 }
+
+export type AuthorizedGardenRoute<Route extends {
+  readonly method: string;
+  readonly match: { readonly capabilityPattern: string };
+}> = Route & { readonly capability: GardenRouteCapability };
 
 const NO_QUERY = Object.freeze({}) as Readonly<Partial<Record<string, GardenQueryFieldPolicy>>>;
 const NO_BODY = Object.freeze({ mode: 'forbidden', maxBytes: 0 }) as GardenBodyPolicy;
@@ -207,66 +179,6 @@ const noBodyMutationPatterns = new Set([
   'POST /api/admin/wiki/shared-world/:siteId/publish',
 ]);
 
-function classifyAction(method: GardenForwardMethod, pattern: string): FleetAuthAction {
-  if (pattern.startsWith('/api/admin/settings') || pattern.startsWith('/api/settings/')) {
-    return method === 'GET' ? 'settings.read' : 'settings.write';
-  }
-  if (pattern.startsWith('/api/admin/memory')) {
-    if (pattern.endsWith('/reveal') || pattern.endsWith('/elevation')) return 'memory.jit.self';
-    if (method === 'GET') return 'memory.read.self';
-  }
-  if (pattern.startsWith('/api/admin/contacts') || pattern.startsWith('/api/admin/contact-approvals')) {
-    return method === 'GET' ? 'garden.read' : 'contacts.bind';
-  }
-  if (pattern.startsWith('/api/admin/enrollments')) return method === 'GET' ? 'garden.read' : 'devices.manage';
-  if (method === 'GET' || method === 'HEAD' || method === 'WS') return 'garden.read';
-  return 'tools.execute';
-}
-
-function classifyResource(pattern: string): GardenRouteCapability['resource'] {
-  if (pattern === '/' || pattern === '/login' || pattern === '/health' || pattern.startsWith('/_app/')) {
-    return { scope: 'garden_surface', area: 'garden_ui' };
-  }
-  if (pattern === '/api/admin/events') return { scope: 'garden_surface', area: 'telemetry' };
-  if (pattern.startsWith('/api/admin/shared-workspace')) {
-    return { scope: 'governed_shared_workspace', area: 'shared_workspace' };
-  }
-  if (pattern.startsWith('/api/admin/wiki/shared-world')) {
-    return { scope: 'governed_shared_workspace', area: 'wiki' };
-  }
-  if (pattern.includes('/image')) return { scope: 'personal_workspace', area: 'images' };
-  if (pattern.startsWith('/api/admin/wiki')) return { scope: 'personal_workspace', area: 'wiki' };
-  if (pattern.startsWith('/api/admin/memory') || pattern.includes('episodic-memory') || pattern.includes('group-memory')) {
-    return { scope: 'personal_workspace', area: 'memory' };
-  }
-  if (pattern.includes('/settings') || pattern.startsWith('/api/settings/')) {
-    return { scope: 'personal_workspace', area: 'personal_settings' };
-  }
-  if (pattern.includes('/contacts') || pattern.includes('/contact-approvals')) {
-    return { scope: 'personal_workspace', area: 'contacts' };
-  }
-  if (pattern.includes('/enrollments')) return { scope: 'personal_workspace', area: 'devices' };
-  if (pattern.includes('/sessions') || pattern.includes('/rooms') || pattern.includes('/channels')) {
-    return { scope: 'personal_workspace', area: 'channel_artifacts' };
-  }
-  if (pattern.includes('/models') || pattern.includes('/model-')) {
-    return { scope: 'personal_workspace', area: 'models' };
-  }
-  if (pattern.includes('/scheduler')) return { scope: 'personal_workspace', area: 'scheduler' };
-  if (pattern.includes('/skills')) return { scope: 'personal_workspace', area: 'skills' };
-  if (pattern.includes('/audit') || pattern.includes('/charges') || pattern.includes('/evals/')) {
-    return { scope: 'personal_workspace', area: 'audit' };
-  }
-  if (pattern.includes('/intake/') || pattern.includes('/concerns') || pattern.includes('/confirmations')) {
-    return { scope: 'personal_workspace', area: 'cognitive_security' };
-  }
-  if (pattern.includes('/identity')) return { scope: 'personal_workspace', area: 'identity' };
-  if (pattern.includes('/action-pipe') || pattern.includes('/tool')) {
-    return { scope: 'personal_workspace', area: 'action_pipe' };
-  }
-  return { scope: 'personal_workspace', area: 'channels' };
-}
-
 type RouteTuple = readonly [GardenForwardMethod | readonly GardenForwardMethod[], string];
 
 const fixedRoutes: readonly RouteTuple[] = [
@@ -397,21 +309,51 @@ function buildCatalogue(): readonly GardenRouteCapability[] {
       const id = `${method} ${pattern}`;
       if (ids.has(id)) throw new Error(`Duplicate Garden route capability: ${id}`);
       ids.add(id);
+      const authorization = requireGardenRouteAuthorization(id);
       capabilities.push(Object.freeze({
         id,
         method,
         pattern,
         query: queryPolicies[pattern] ?? NO_QUERY,
         body: bodyPolicy(method, pattern),
-        action: classifyAction(method, pattern),
-        resource: Object.freeze(classifyResource(pattern)),
+        authorization,
       }));
     }
+  }
+  if (GARDEN_ROUTE_AUTHORIZATION.size !== capabilities.length) {
+    const capabilityIds = new Set(capabilities.map(({ id }) => id));
+    const stale = [...GARDEN_ROUTE_AUTHORIZATION.keys()].filter((id) => !capabilityIds.has(id));
+    throw new Error(`Garden authorization classifies absent routes: ${stale.join(', ')}`);
   }
   return Object.freeze(capabilities);
 }
 
 export const GARDEN_ROUTE_CAPABILITIES = buildCatalogue();
+
+const GARDEN_ROUTE_CAPABILITY_BY_ID = new Map(
+  GARDEN_ROUTE_CAPABILITIES.map((capability) => [capability.id, capability]),
+);
+
+export function requireGardenRouteCapability(routeId: string): GardenRouteCapability {
+  const capability = GARDEN_ROUTE_CAPABILITY_BY_ID.get(routeId);
+  if (!capability) throw new Error(`Garden route capability is not declared: ${routeId}`);
+  return capability;
+}
+
+export function compileGardenRouteDeclarations<Route extends {
+  readonly method: string;
+  readonly match: { readonly capabilityPattern: string };
+}>(routes: readonly Route[]): Array<AuthorizedGardenRoute<Route>> {
+  const seen = new Set<string>();
+  return routes.map((route) => {
+    const id = `${route.method} ${route.match.capabilityPattern}`;
+    if (seen.has(id)) throw new Error(`Duplicate active Garden route declaration: ${id}`);
+    seen.add(id);
+    const capability = GARDEN_ROUTE_CAPABILITY_BY_ID.get(id);
+    if (!capability) throw new Error(`Garden route is absent from capability catalogue: ${id}`);
+    return Object.freeze({ ...route, capability });
+  });
+}
 
 function matchPattern(
   pattern: string,
@@ -448,11 +390,18 @@ export function resolveGardenRouteCapability(
 }
 
 export function assertGardenRouteDeclarationsCovered(
-  routes: readonly { readonly method: string; readonly match: { readonly capabilityPattern: string } }[],
+  routes: readonly AuthorizedGardenRoute<{
+    readonly method: string;
+    readonly match: { readonly capabilityPattern: string };
+  }>[],
 ): void {
-  const declared = new Set(GARDEN_ROUTE_CAPABILITIES.map(({ method, pattern }) => `${method} ${pattern}`));
+  const seen = new Set<string>();
   for (const route of routes) {
     const key = `${route.method} ${route.match.capabilityPattern}`;
-    if (!declared.has(key)) throw new Error(`Garden route is absent from capability catalogue: ${key}`);
+    if (seen.has(key)) throw new Error(`Duplicate active Garden route declaration: ${key}`);
+    seen.add(key);
+    if (route.capability !== GARDEN_ROUTE_CAPABILITY_BY_ID.get(key)) {
+      throw new Error(`Garden route carries mismatched capability metadata: ${key}`);
+    }
   }
 }

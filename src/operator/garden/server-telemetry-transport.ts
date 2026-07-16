@@ -12,8 +12,12 @@ import {
   GardenRequestTargetError,
   validateGardenRequestMetadata,
 } from '../../boundary/fleet-auth/request-capability-target.js';
+import { requireGardenRouteCapability } from '../../boundary/fleet-auth/garden-route-capabilities.js';
 
 const TELEMETRY_WEBSOCKET_PATH = '/api/admin/events';
+export const ADMIN_TELEMETRY_ROUTE_CAPABILITY = requireGardenRouteCapability(
+  'WS /api/admin/events',
+);
 
 // ── Sprint-10 H5 (defense-in-depth): external telemetry projection ──
 // The ingest boundary (channels/api/server.ts) already fails closed on raw
@@ -150,7 +154,11 @@ export class AdminServerTelemetryTransport {
       socket.destroy();
       return;
     }
-    if (target.canonicalPath !== TELEMETRY_WEBSOCKET_PATH || target.canonicalQuery) {
+    if (
+      target.routeId !== ADMIN_TELEMETRY_ROUTE_CAPABILITY.id
+      || target.canonicalPath !== TELEMETRY_WEBSOCKET_PATH
+      || target.canonicalQuery
+    ) {
       socket.write('HTTP/1.1 404 Not Found\\r\\n\\r\\n');
       socket.destroy();
       return;

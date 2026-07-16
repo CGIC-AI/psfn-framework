@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+  compileGardenRouteDeclarations,
   GARDEN_CLIENT_ROUTES,
   GARDEN_ROUTE_CAPABILITIES,
   resolveGardenRouteCapability,
 } from './garden-route-capabilities.js';
+import { FLEET_AUTH_ROLES } from '../../system/config/fleet-auth-config.js';
+import {
+  FLEET_AUTH_ACTION_BASE_ROLE,
+  FLEET_AUTH_DEFAULT_ROLE_ACTION_POLICY,
+  fleetAuthRoleAllowsAction,
+} from './role-action-policy.js';
 
 describe('Garden route capability catalogue', () => {
   it('has one exact declaration per method and canonical pattern', () => {
@@ -11,11 +18,74 @@ describe('Garden route capability catalogue', () => {
     expect(new Set(ids).size).toBe(ids.length);
     for (const capability of GARDEN_ROUTE_CAPABILITIES) {
       expect(capability.id).toBe(`${capability.method} ${capability.pattern}`);
-      expect(capability.action).toBeTruthy();
-      expect(capability.resource.scope).toBeTruthy();
-      expect(capability.resource.area).toBeTruthy();
+      expect(capability.authorization.action).toBeTruthy();
+      expect(capability.authorization.resource.scope).toBeTruthy();
+      expect(capability.authorization.resource.area).toBeTruthy();
+      expect(capability.authorization.requirements.assurance).toBeTruthy();
+      expect(capability.authorization.publicAccess).toBeTruthy();
+      expect(capability.authorization.recoveryAccess).toBeTruthy();
+      expect(capability.authorization.baseRole)
+        .toBe(FLEET_AUTH_ACTION_BASE_ROLE[capability.authorization.action]);
       expect(capability.body.maxBytes).toBeGreaterThanOrEqual(0);
+      for (const role of FLEET_AUTH_ROLES) {
+        expect(
+          fleetAuthRoleAllowsAction(role, capability.authorization.action),
+          `${capability.id} ${role}`,
+        ).toBe(FLEET_AUTH_DEFAULT_ROLE_ACTION_POLICY[role]
+          .includes(capability.authorization.action));
+      }
     }
+  });
+
+  it('keeps public, recovery, sensitive, and conjunctive policy classifications exact', () => {
+    expect(resolveGardenRouteCapability('GET', '/health')?.capability.authorization)
+      .toMatchObject({ baseRole: null, publicAccess: 'always', recoveryAccess: 'forbidden' });
+    expect(resolveGardenRouteCapability('POST', '/login')?.capability.authorization)
+      .toMatchObject({ baseRole: null, publicAccess: 'feature_off_only' });
+    expect(resolveGardenRouteCapability('GET', '/')?.capability.authorization)
+      .toMatchObject({ action: 'companion.read', baseRole: 'guest', publicAccess: 'never' });
+    expect(resolveGardenRouteCapability('GET', '/session-recovery')?.capability.authorization)
+      .toMatchObject({
+        action: 'recovery.begin',
+        baseRole: null,
+        publicAccess: 'never',
+        recoveryAccess: 'trusted_host_exact_scope',
+      });
+    expect(resolveGardenRouteCapability('PATCH', '/api/admin/settings')?.capability.authorization)
+      .toMatchObject({ action: 'settings.write', baseRole: 'admin' });
+    expect(resolveGardenRouteCapability('POST', '/api/admin/contacts/contact-a/merge')?.capability.authorization)
+      .toMatchObject({
+        action: 'contacts.manage',
+        baseRole: 'admin',
+        requirements: {
+          assurance: 'webauthn_uv',
+          confirmation: 'explicit',
+          approvals: ['contact_approval'],
+        },
+      });
+    expect(
+      resolveGardenRouteCapability(
+        'POST',
+        '/api/admin/shared-workspace/reviews/review-a/decision',
+      )?.capability.authorization,
+    ).toMatchObject({
+      action: 'shared_workspace.manage',
+      baseRole: 'admin',
+      requirements: {
+        assurance: 'webauthn_uv',
+        confirmation: 'explicit',
+        approvals: ['cogsec', 'independent_reviewer'],
+      },
+    });
+    expect(resolveGardenRouteCapability('WS', '/api/admin/events')?.capability.authorization)
+      .toMatchObject({ action: 'telemetry.read', baseRole: 'admin' });
+  });
+
+  it('fails construction for an active route without an exact catalogue declaration', () => {
+    expect(() => compileGardenRouteDeclarations([{
+      method: 'GET',
+      match: { capabilityPattern: '/api/admin/unclassified' },
+    }])).toThrow(/absent from capability catalogue/u);
   });
 
   it('declares every public Garden UI route for GET and HEAD', () => {
@@ -41,15 +111,15 @@ describe('Garden route capability catalogue', () => {
   });
 
   it('scopes personal artifacts and governed shared material separately', () => {
-    expect(resolveGardenRouteCapability('GET', '/api/admin/images/generated')?.capability.resource)
+    expect(resolveGardenRouteCapability('GET', '/api/admin/images/generated')?.capability.authorization.resource)
       .toEqual({ scope: 'personal_workspace', area: 'images' });
-    expect(resolveGardenRouteCapability('GET', '/api/admin/sessions/channel-a')?.capability.resource)
-      .toEqual({ scope: 'personal_workspace', area: 'channel_artifacts' });
-    expect(resolveGardenRouteCapability('GET', '/api/admin/wiki/document-a')?.capability.resource)
+    expect(resolveGardenRouteCapability('GET', '/api/admin/sessions/channel-a')?.capability.authorization.resource)
+      .toEqual({ scope: 'personal_workspace', area: 'sessions' });
+    expect(resolveGardenRouteCapability('GET', '/api/admin/wiki/document-a')?.capability.authorization.resource)
       .toEqual({ scope: 'personal_workspace', area: 'wiki' });
-    expect(resolveGardenRouteCapability('GET', '/api/admin/shared-workspace/artifact')?.capability.resource)
+    expect(resolveGardenRouteCapability('GET', '/api/admin/shared-workspace/artifact')?.capability.authorization.resource)
       .toEqual({ scope: 'governed_shared_workspace', area: 'shared_workspace' });
-    expect(resolveGardenRouteCapability('GET', '/api/admin/wiki/shared-world/site-a')?.capability.resource)
+    expect(resolveGardenRouteCapability('GET', '/api/admin/wiki/shared-world/site-a')?.capability.authorization.resource)
       .toEqual({ scope: 'governed_shared_workspace', area: 'wiki' });
   });
 });

@@ -164,9 +164,10 @@ export class AdminMemoryBodyGate {
   }
 
   /**
-   * Routine fleet view. The SQL projection has already hidden non-subject
-   * rows; this second check makes the reveal binding available only for a
-   * current single-contact self/co-subject projection.
+   * Routine fleet view at every sensitivity. The SQL projection has already
+   * hidden non-subject rows before IDs and counts are constructed; this
+   * second check fails closed if the classification changed before response
+   * construction. Only high-intimacy rows receive a reveal binding.
    */
   toFleetAdminView(
     context: Omit<FleetMemoryBodyAuthorizationContext, 'action' | 'resourceMemoryId'

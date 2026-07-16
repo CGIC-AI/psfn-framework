@@ -147,7 +147,8 @@ function filterAdminMemories(
 
 /**
  * Project the broad maintenance store into a subject-scoped product store.
- * Sensitive reads and mutations never fall back to the hydrated/raw methods.
+ * Named reads and mutations at every sensitivity never fall back to the
+ * hydrated/raw methods.
  */
 export function createSubjectAuthorizedMemoryStore(
   store: MemoryStorePort,

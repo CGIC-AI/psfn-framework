@@ -19,7 +19,7 @@ function discordApiErrorCode(error: unknown): number | undefined {
   return error.code;
 }
 
-/** Collects complete current Discord permission inputs without making a PSFN decision. */
+/** Collects complete current Discord permission inputs without making an authorization decision. */
 export class DiscordEvidenceObserver {
   constructor(private readonly client: Client) {}
 

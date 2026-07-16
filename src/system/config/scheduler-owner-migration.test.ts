@@ -1,11 +1,13 @@
 import {
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -38,6 +40,37 @@ afterEach(() => {
 });
 
 describe('migrateLegacySchedulerOwner', () => {
+  it('CLI defaults to the companion owner root in split layout', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'scheduler-owner-cli-'));
+    const systemDataDir = join(tempDir, 'system-data');
+    const companionDataDir = join(tempDir, 'companion-data');
+    mkdirSync(systemDataDir, { recursive: true });
+    mkdirSync(companionDataDir, { recursive: true });
+    const legacyBytes = readFileSync(fixturePath, 'utf8');
+    writeFileSync(join(systemDataDir, SCHEDULER_FILE_NAME), legacyBytes, 'utf8');
+    writeFileSync(join(companionDataDir, SCHEDULER_FILE_NAME), legacyBytes, 'utf8');
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+
+    const result = spawnSync(
+      resolve(repoRoot, 'node_modules/.bin/tsx'),
+      [resolve(repoRoot, 'src/app/maintenance/migrate-scheduler-owner.ts'), '--apply'],
+      {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PSFN_SKIP_DOTENV: 'true',
+          SYSTEM_DATA_DIR: systemDataDir,
+          COMPANION_DATA_DIR: companionDataDir,
+        },
+      },
+    );
+
+    expect(result.status, `${result.stderr}${result.stdout}`).toBe(0);
+    expect(readFileSync(join(systemDataDir, SCHEDULER_FILE_NAME), 'utf8')).toBe(legacyBytes);
+    expect(loadSchedulerConfig(companionDataDir).backgroundMaintenance.intervalMs).toBe(3_600_000);
+  });
+
   it('dry-runs the deterministic pre-bundled owner without touching it', () => {
     const { dataDir, filePath } = prepareOwner();
     const before = readFileSync(filePath, 'utf8');

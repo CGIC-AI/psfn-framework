@@ -187,8 +187,13 @@ Before upgrading each release:
    `bootstrap.seedOwnerFiles=false` for an existing release. The init container
    copies each legacy owner byte-for-byte, records its source SHA-256 under
    `companion-data/.owner-migrations/`, and retains the old source as a rollback
-   snapshot. The operation is idempotent across the agent, gateway, and Garden
-   init containers. For a local k3d image, use the exact commit tag below;
+   snapshot. It then runs the compiled scheduler owner migrator, which
+   validates and atomically replaces the retired `salienceDecayIntervalMs` /
+   `socialGraphBuilder.intervalMs` shape with
+   `backgroundMaintenance.intervalMs`. Already-canonical files are validated
+   without a rewrite; mixed or invalid shapes fail closed. The operation is
+   idempotent across the agent, gateway, and Garden init containers. For a
+   local k3d image, use the exact commit tag below;
    production registries should additionally set the immutable digest instead
    of leaving it empty.
 
@@ -205,6 +210,10 @@ Before upgrading each release:
      --set bootstrap.seedOwnerFiles=false \
      --wait --timeout 10m
    ```
+
+   This is the complete forward migration for both boundaries. Do not manually
+   rewrite the live scheduler or run an off-chart workaround. Apply it once to
+   every Helm release/companion root when updating the other clusters.
 
 4. Require all app rollouts, normal service smokes, and the owner checks:
 

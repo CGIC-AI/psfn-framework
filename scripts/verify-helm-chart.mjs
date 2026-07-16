@@ -134,8 +134,16 @@ function renderOwnerMigrationFixture(rootDir, seedOwnerFiles) {
     '--set-string', `runtime.characterCardPath=${join(companionDataDir, 'companion.json')}`,
     '--set', `bootstrap.seedOwnerFiles=${seedOwnerFiles}`,
   ]);
+  const containerMigrationCommand = 'node /app/dist/migrate-scheduler-owner.js';
+  const testMigrationCommand = [
+    resolve(repoRoot, 'node_modules/.bin/tsx'),
+    resolve(repoRoot, 'src/app/maintenance/migrate-scheduler-owner.ts'),
+  ].join(' ');
   return {
-    command: renderedSeedCommand(renderedFixture),
+    command: renderedSeedCommand(renderedFixture).replace(
+      containerMigrationCommand,
+      testMigrationCommand,
+    ),
     systemDataDir,
     companionDataDir,
   };
@@ -577,6 +585,11 @@ assertIncludes(
 );
 assertIncludes(
   seededRender,
+  'node /app/dist/migrate-scheduler-owner.js',
+  'compiled scheduler schema migration before runtime startup',
+);
+assertIncludes(
+  seededRender,
   'scheduler|capability-tier)',
   'per-companion owner-file routing registry',
 );
@@ -592,6 +605,10 @@ assertIncludes(
 );
 
 const schedulerSeed = readFileSync(resolve(repoRoot, 'config/scheduler.seed.json'), 'utf8');
+const preBundledScheduler = readFileSync(
+  resolve(repoRoot, 'src/system/config/fixtures/scheduler.pre-bundled-owner.json'),
+  'utf8',
+);
 const capabilityTierSeed = readFileSync(
   resolve(repoRoot, 'config/capability-tier.seed.json'),
   'utf8',
@@ -606,7 +623,10 @@ try {
   const fixture = renderOwnerMigrationFixture(upgradeRoot, false);
   mkdirSync(fixture.systemDataDir, { recursive: true });
   mkdirSync(fixture.companionDataDir, { recursive: true });
-  const legacyScheduler = schedulerSeed.replace('"tickIntervalMs": 60000', '"tickIntervalMs": 61000');
+  const legacyScheduler = preBundledScheduler.replace(
+    '"tickIntervalMs": 60000',
+    '"tickIntervalMs": 61000',
+  );
   const legacyCapabilityTier = capabilityTierSeed.replace('"nursery"', '"mature"');
   const legacyOwners = new Map([
     ['scheduler.json', legacyScheduler],
@@ -625,8 +645,11 @@ try {
   ]);
   for (const [fileName, contents] of legacyOwners) {
     const targetPath = join(fixture.companionDataDir, fileName);
-    if (!existsSync(targetPath) || readFileSync(targetPath, 'utf8') !== contents) {
-      throw new Error(`${fileName} was not migrated byte-for-byte into companion-data`);
+    if (!existsSync(targetPath)) {
+      throw new Error(`${fileName} was not migrated into companion-data`);
+    }
+    if (fileName === 'capability-tier.json' && readFileSync(targetPath, 'utf8') !== contents) {
+      throw new Error('capability-tier.json was not migrated byte-for-byte');
     }
     const markerPath = join(
       fixture.companionDataDir,
@@ -637,11 +660,17 @@ try {
       throw new Error(`${fileName} migration marker was not recorded`);
     }
   }
-
-  const companionScheduler = legacyScheduler.replace(
-    '"tickIntervalMs": 61000',
-    '"tickIntervalMs": 62000',
+  const migratedScheduler = JSON.parse(
+    readFileSync(join(fixture.companionDataDir, 'scheduler.json'), 'utf8'),
   );
+  if (migratedScheduler.salienceDecayIntervalMs !== undefined
+    || migratedScheduler.socialGraphBuilder?.intervalMs !== undefined
+    || migratedScheduler.backgroundMaintenance?.intervalMs !== 3_600_000) {
+    throw new Error('legacy scheduler owner was not converted to backgroundMaintenance');
+  }
+
+  migratedScheduler.tickIntervalMs = 62_000;
+  const companionScheduler = `${JSON.stringify(migratedScheduler, null, 2)}\n`;
   writeFileSync(
     join(fixture.companionDataDir, 'scheduler.json'),
     companionScheduler,

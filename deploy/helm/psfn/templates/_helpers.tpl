@@ -671,6 +671,12 @@ group: cert-manager.io
           exit 1
         fi
       done
+      # The owner-root cutover and scheduler schema cutover landed separately.
+      # Run the canonical validated/atomic migrator after routing the file into
+      # companion-data and before any runtime process loads it.
+      node /app/dist/migrate-scheduler-owner.js \
+        --apply \
+        --data-dir {{ .Values.runtime.companionDataDir }}
       if [ ! -e {{ .Values.runtime.characterCardPath }} ] && [ -e /seed/companion.json ]; then
         cp /seed/companion.json {{ .Values.runtime.characterCardPath }}
       fi

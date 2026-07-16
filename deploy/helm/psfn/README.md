@@ -120,8 +120,13 @@ Mutable owner JSON stays on PVCs, not in ConfigMaps.
 Every app workload runs the same idempotent init migration before startup:
 
 - If the companion-owned target is absent and a legacy system-owned file
-  exists, the file is copied byte-for-byte and a source-hash marker is written
-  under `companion-data/.owner-migrations/`.
+  exists, the file is first copied byte-for-byte and a source-hash marker is
+  written under `companion-data/.owner-migrations/`.
+- After owner routing, the compiled `migrate-scheduler-owner` entrypoint
+  validates and atomically upgrades the retired `salienceDecayIntervalMs` /
+  `socialGraphBuilder.intervalMs` shape to
+  `backgroundMaintenance.intervalMs`. An already-canonical scheduler is
+  validated without being rewritten; mixed or invalid shapes fail closed.
 - The legacy source is retained as the rollback snapshot. The runtime never
   reads it as a fallback after the upgrade.
 - A later companion-owned edit is preserved. The marker binds the unchanged
@@ -187,6 +192,11 @@ helm upgrade --install "$RELEASE" deploy/helm/psfn \
   --set bootstrap.seedOwnerFiles=false \
   --wait --timeout 10m
 ```
+
+This one upgrade handles both historical boundaries in order: system-to-
+companion owner routing, then the scheduler schema conversion. Do not edit the
+PVC JSON by hand or run a separate schema rewrite before Helm. Repeat this
+command for every release/companion root in a multi-release cluster.
 
 After the Helm upgrade, require all three app rollouts and verify the new owner
 paths and markers:

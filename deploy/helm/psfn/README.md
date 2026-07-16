@@ -693,6 +693,8 @@ convenience, not a constraint. The runtime stage uses the pinned
 `nginxinc/nginx-unprivileged` image (manifest-list digest, resolves the ARM64
 sub-image on the Pi) and serves on port 8080 as uid 999, with the service worker
 served no-cache and the PWA manifest served as `application/manifest+json`.
+The container and chart expose the UI only at the fixed `/companion-ui/`
+subpath; other same-origin paths return 404 instead of falling back to the PWA.
 
 Import the image into k3s (containerd) and retag it under the `localhost/`
 prefix the chart expects, then enable the workload:
@@ -727,7 +729,7 @@ for a quick check:
 
 ```bash
 kubectl -n psfn port-forward svc/psfn-companion-ui-test 8080:8080
-# open http://127.0.0.1:8080/ in a browser
+# open http://127.0.0.1:8080/companion-ui/ in a browser
 ```
 
 Then open the in-app Settings drawer (floating gear button) and point the hub

@@ -99,10 +99,17 @@ The client checks for a new worker at startup, once per minute, and when the app
 returns online or to the foreground, so a deployed build is ready before that
 operator-chosen reload.
 Clients still controlled by the original cache-first worker recover during the
-first operator-chosen reload: the replacement worker removes the legacy cache
-and redirects only the foreground legacy client (or the sole open client) after
-activation. Generated-worker updates remain passive and never navigate an open
-client.
+first operator navigation to `/companion-ui/`: the client retires only the
+known legacy root registration, and the replacement worker removes its legacy
+cache and redirects only a foreground client already at the canonical shell.
+Generated-worker updates remain passive and never navigate an open client.
+
+Every production URL is rooted at `/companion-ui/`. The service worker is
+registered with that exact scope and handles only the query-free shell and its
+build-generated static allowlist. Fleet, Garden, callback, authentication,
+WebSocket, query-bearing, credential-header, and no-store request traffic stays
+on the browser network. Online shell responses are never written to Cache
+Storage; offline mode serves only the build-time unauthenticated shell.
 
 ## In-Cluster Test Deployment
 
@@ -112,7 +119,8 @@ stopgap test surface, to be replaced by a packaged app; it serves the built
 `dist/` tree only and holds no server logic.
 
 - Image: `docker/companion-ui/Dockerfile` (multi-stage — builds this package,
-  serves it with a pinned `nginx-unprivileged` base on port 8080 as uid 999).
+  serves only `/companion-ui/` with a pinned `nginx-unprivileged` base on port
+  8080 as uid 999).
 - Build script: `docker/companion-ui/build-image.sh` (ARM64 by default for the
   Pi; commit-tied tag; refuses dirty tree and floating tags).
 - Chart workload: `companionUiTest.enabled` in `deploy/helm/psfn` (disabled by
@@ -136,10 +144,11 @@ npm run build
 npm audit --omit=dev
 ```
 
-The browser gate runs the legacy-worker-to-current-worker migration in real
-Chromium, then verifies one ordinary reload reaches the current shell and an
-offline reload still works. Install the pinned Playwright Chromium runtime once
-with `npx playwright install chromium` when preparing a fresh test machine.
+The browser gate runs the legacy-root-worker-to-scoped-worker migration in real
+Chromium, proves fleet/Garden/callback pages are uncontrolled, audits cache keys
+and bodies for secrets, and verifies install, update, rollback, and offline
+reloads. Install the pinned Playwright Chromium runtime once with
+`npx playwright install chromium` when preparing a fresh test machine.
 
 For tracked repo work, the parent repository requires `npm run lint` before
 closing the bead. Run that from the repo root:

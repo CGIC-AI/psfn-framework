@@ -19,20 +19,21 @@ const MIME_TYPES: Readonly<Record<string, string>> = {
 
 interface BuiltFixture {
   directory: string;
+  legacyWorker: boolean;
   marker: string;
   revision: string;
 }
 
 class MutableBuildServer {
-  private activeDirectory: string;
+  private activeFixture: BuiltFixture;
   private server: Server | null = null;
 
-  constructor(initialDirectory: string) {
-    this.activeDirectory = initialDirectory;
+  constructor(initialFixture: BuiltFixture) {
+    this.activeFixture = initialFixture;
   }
 
-  use(directory: string): void {
-    this.activeDirectory = directory;
+  use(fixture: BuiltFixture): void {
+    this.activeFixture = fixture;
   }
 
   async start(): Promise<string> {
@@ -40,9 +41,35 @@ class MutableBuildServer {
       try {
         const url = new URL(request.url ?? '/', 'http://127.0.0.1');
         const requestedPath = decodeURIComponent(url.pathname);
-        const relativePath = requestedPath === '/' ? 'index.html' : requestedPath.slice(1);
-        let filePath = resolve(this.activeDirectory, relativePath);
-        if (!filePath.startsWith(`${resolve(this.activeDirectory)}${sep}`)) {
+        if (requestedPath === '/companion-ui') {
+          response.writeHead(308, { Location: '/companion-ui/' }).end();
+          return;
+        }
+        const outsideScopeBodies: Readonly<Record<string, string>> = {
+          '/fleet': '<!doctype html><title>Fleet route</title><p>fleet route</p>',
+          '/garden': '<!doctype html><title>Garden route</title><p>garden route</p>',
+          '/oauth/callback': '<!doctype html><title>OAuth callback</title><p>callback route</p>',
+        };
+        const outsideScopeBody = outsideScopeBodies[requestedPath];
+        if (outsideScopeBody) {
+          response.writeHead(200, {
+            'Cache-Control': 'no-store, private',
+            'Content-Type': 'text/html; charset=utf-8',
+            Vary: 'Cookie',
+          }).end(outsideScopeBody);
+          return;
+        }
+        const canonicalRequest = requestedPath.startsWith('/companion-ui/');
+        const legacyRootRequest = this.activeFixture.legacyWorker && !canonicalRequest;
+        if (!canonicalRequest && !legacyRootRequest) {
+          response.writeHead(404, { 'Cache-Control': 'no-store' }).end('not found');
+          return;
+        }
+        const relativePath = canonicalRequest
+          ? requestedPath.slice('/companion-ui/'.length) || 'index.html'
+          : requestedPath === '/' ? 'index.html' : requestedPath.slice(1);
+        let filePath = resolve(this.activeFixture.directory, relativePath);
+        if (!filePath.startsWith(`${resolve(this.activeFixture.directory)}${sep}`)) {
           response.writeHead(400).end('invalid path');
           return;
         }
@@ -53,16 +80,16 @@ class MutableBuildServer {
           if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
         }
         if (!requestedFileExists) {
-          if (requestedPath.startsWith('/assets/')) {
+          if (relativePath.startsWith('assets/')) {
             response.writeHead(404).end('not found');
             return;
           }
-          filePath = resolve(this.activeDirectory, 'index.html');
+          filePath = resolve(this.activeFixture.directory, 'index.html');
         }
         const extension = extname(filePath);
-        const cacheControl = requestedPath === '/sw.js'
+        const cacheControl = relativePath === 'sw.js'
           ? 'no-cache, no-store, must-revalidate'
-          : requestedPath.startsWith('/assets/')
+          : relativePath.startsWith('assets/')
             ? 'public, max-age=31536000, immutable'
             : 'no-cache';
         response.writeHead(200, {
@@ -86,9 +113,11 @@ class MutableBuildServer {
   async stop(): Promise<void> {
     const server = this.server;
     if (!server) return;
-    await new Promise<void>((resolveClosed, reject) => {
+    const closed = new Promise<void>((resolveClosed, reject) => {
       server.close((error) => error ? reject(error) : resolveClosed());
     });
+    server.closeAllConnections();
+    await closed;
     this.server = null;
   }
 }
@@ -106,7 +135,7 @@ async function buildFixture(
       name: 'psfn-legacy-client-entry',
       enforce: 'pre',
       resolveId(source) {
-        return options.legacyClient && source === '/src/main.tsx'
+        return options.legacyClient && ['/src/main.tsx', './src/main.tsx'].includes(source)
           ? LEGACY_CLIENT_PATH
           : null;
       },
@@ -140,7 +169,7 @@ async function buildFixture(
   if (options.legacyWorker) {
     await writeFile(resolve(directory, 'sw.js'), await readFile(LEGACY_WORKER_PATH));
   }
-  return { directory, marker, revision };
+  return { directory, legacyWorker: options.legacyWorker ?? false, marker, revision };
 }
 
 async function installNavigationRecorder(
@@ -186,7 +215,25 @@ async function waitForWorkerRevision(
   }, { expectedRevision: revision, staleName: staleCacheName })).toBe(true);
 }
 
-test('one ordinary reload migrates the actual legacy client to B and remains available offline', async ({
+async function cacheSnapshot(page: import('@playwright/test').Page): Promise<{
+  cacheNames: string[];
+  entries: Array<{ body: string; url: string }>;
+}> {
+  return await page.evaluate(async () => {
+    const cacheNames = await caches.keys();
+    const entries = [];
+    for (const cacheName of cacheNames) {
+      const cache = await caches.open(cacheName);
+      for (const request of await cache.keys()) {
+        const response = await cache.match(request);
+        entries.push({ body: response ? await response.text() : '', url: request.url });
+      }
+    }
+    return { cacheNames, entries };
+  });
+}
+
+test('legacy root control is retired when the client migrates to the subpath', async ({
   context,
   page,
 }) => {
@@ -195,11 +242,11 @@ test('one ordinary reload migrates the actual legacy client to B and remains ava
     legacyWorker: true,
   });
   const current = await buildFixture('current-B', 'current-b');
-  const server = new MutableBuildServer(legacy.directory);
-  const url = await server.start();
+  const server = new MutableBuildServer(legacy);
+  const origin = await server.start();
   try {
     await installNavigationRecorder(page);
-    await page.goto(url);
+    await page.goto(origin);
     await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
     await expect(page.locator('html')).toHaveAttribute('data-test-build', legacy.marker);
     await page.getByLabel('Open settings').click();
@@ -215,19 +262,31 @@ test('one ordinary reload migrates the actual legacy client to B and remains ava
       buffer: Buffer.from('unfinished attachment'),
     });
 
-    server.use(current.directory);
-    // This is deliberately the first browser action after deploy. The legacy
-    // client has no registration.update() loop that can preactivate B.
-    await page.reload().catch((error: unknown) => {
+    server.use(current);
+    // This is deliberately the first browser action after deploy. The current
+    // client retires the legacy root registration before installing its exact
+    // subpath worker.
+    await page.goto(`${origin}/companion-ui/`).catch((error: unknown) => {
       if (!(error instanceof Error) || !error.message.includes('ERR_ABORTED')) throw error;
     });
     await expect(page.locator('html')).toHaveAttribute('data-test-build', current.marker);
     await waitForWorkerRevision(page, current.revision, 'psfn-satellite-mobile-chat-app-v1');
-    expect(await navigationHistory(page)).toEqual([
-      legacy.marker,
-      legacy.marker,
-      current.marker,
-    ]);
+    await expect.poll(async () => page.evaluate(async () => (
+      (await navigator.serviceWorker.getRegistrations()).map(({ scope }) => scope)
+    ))).toEqual([`${origin}/companion-ui/`]);
+
+    for (const path of ['/fleet', '/garden', '/oauth/callback?code=secret-code&state=secret-state']) {
+      const outsidePage = await context.newPage();
+      await outsidePage.goto(`${origin}${path}`);
+      expect(await outsidePage.evaluate(() => navigator.serviceWorker.controller === null)).toBe(true);
+      await outsidePage.close();
+    }
+
+    const snapshot = await cacheSnapshot(page);
+    expect(JSON.stringify(snapshot)).not.toMatch(/secret-code|secret-state|operator-credential/u);
+    expect(snapshot.entries.every(({ url: entryUrl }) => (
+      entryUrl.startsWith(`${origin}/companion-ui/`) && !new URL(entryUrl).search
+    ))).toBe(true);
 
     await context.setOffline(true);
     await page.reload();
@@ -247,11 +306,11 @@ test('generated A to B ignores a legacy cache, keeps active state, and remains a
 }) => {
   const buildA = await buildFixture('generated-A', 'generated-a');
   const buildB = await buildFixture('generated-B', 'generated-b');
-  const server = new MutableBuildServer(buildA.directory);
-  const url = await server.start();
+  const server = new MutableBuildServer(buildA);
+  const origin = await server.start();
   try {
     await installNavigationRecorder(page);
-    await page.goto(url);
+    await page.goto(`${origin}/companion-ui/`);
     await page.waitForFunction(() => Boolean(navigator.serviceWorker.controller));
     await expect(page.locator('html')).toHaveAttribute('data-test-build', buildA.marker);
     await expect(page.getByText('Update ready')).toHaveCount(0);
@@ -271,7 +330,11 @@ test('generated A to B ignores a legacy cache, keeps active state, and remains a
       await caches.open('psfn-satellite-mobile-chat-app-v1');
     });
 
-    server.use(buildB.directory);
+    expect(await page.evaluate(async () => (
+      (await navigator.serviceWorker.getRegistration('/companion-ui/'))?.scope ?? null
+    ))).toBe(`${origin}/companion-ui/`);
+
+    server.use(buildB);
     await waitForWorkerRevision(page, buildB.revision, 'psfn-satellite-mobile-chat-app-v1');
 
     await expect(page.locator('html')).toHaveAttribute('data-test-build', buildA.marker);
@@ -290,6 +353,26 @@ test('generated A to B ignores a legacy cache, keeps active state, and remains a
     await context.setOffline(true);
     await page.reload();
     await expect(page.locator('html')).toHaveAttribute('data-test-build', buildB.marker);
+
+    const snapshot = await cacheSnapshot(page);
+    expect(JSON.stringify(snapshot)).not.toMatch(/active-session|active-channel|active-credential/u);
+    expect(snapshot.entries.every(({ url: entryUrl }) => (
+      entryUrl.startsWith(`${origin}/companion-ui/`) && !new URL(entryUrl).search
+    ))).toBe(true);
+
+    await context.setOffline(false);
+    server.use(buildA);
+    await page.evaluate(async () => {
+      const registration = await navigator.serviceWorker.getRegistration('/companion-ui/');
+      if (!registration) throw new Error('Missing companion-ui service-worker registration');
+      await registration.update();
+    });
+    await waitForWorkerRevision(page, buildA.revision);
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('data-test-build', buildA.marker);
+    await context.setOffline(true);
+    await page.reload();
+    await expect(page.locator('html')).toHaveAttribute('data-test-build', buildA.marker);
   } finally {
     await context.setOffline(false);
     await server.stop();

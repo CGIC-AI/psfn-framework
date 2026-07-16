@@ -208,6 +208,9 @@ never back a ClusterIssuer. */ -}}
 {{- end -}}
 {{- end -}}
 {{- if .Values.companionUiTest.enabled -}}
+{{- if ne .Values.ingress.companionUiTest.path "/companion-ui/" -}}
+{{- fail "ingress.companionUiTest.path must be exactly /companion-ui/" -}}
+{{- end -}}
 {{- if not (has .Values.companionUiTest.service.type (list "ClusterIP" "NodePort")) -}}
 {{- fail "companionUiTest.service.type must be ClusterIP or NodePort" -}}
 {{- end -}}

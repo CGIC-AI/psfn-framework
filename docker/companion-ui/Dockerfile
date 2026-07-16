@@ -47,7 +47,7 @@ LABEL org.opencontainers.image.description="PSFN companion-ui PWA static test su
 LABEL org.opencontainers.image.revision="${SOURCE_REVISION}"
 
 COPY docker/companion-ui/nginx.conf /etc/nginx/nginx.conf
-COPY --from=build /build/companion-ui/dist/ /usr/share/nginx/html/
+COPY --from=build /build/companion-ui/dist/ /usr/share/nginx/html/companion-ui/
 
 # Match the chart's pinned non-root uid/gid so runtime paths are owned correctly.
 USER 999:999

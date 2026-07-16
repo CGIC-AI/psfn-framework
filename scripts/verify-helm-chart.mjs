@@ -1385,8 +1385,6 @@ const companionUiRendered = render([
   `companionUiTest.image.digest=${companionUiDigest}`,
   '--set',
   'ingress.companionUiTest.enabled=true',
-  '--set',
-  'ingress.companionUiTest.path=/companion',
 ]);
 
 const companionUiDeployment = findDocumentByKindName(companionUiRendered, 'Deployment', 'psfn-companion-ui-test');
@@ -1395,7 +1393,7 @@ assertIncludes(companionUiDeployment, 'runAsUser: 999', 'companion-ui test numer
 assertIncludes(companionUiDeployment, 'runAsGroup: 999', 'companion-ui test numeric group');
 assertIncludes(companionUiDeployment, 'name: http-ui', 'companion-ui test port name');
 assertIncludes(companionUiDeployment, 'containerPort: 8080', 'companion-ui test container port');
-assertIncludes(companionUiDeployment, 'path: /', 'companion-ui test health probe path');
+assertIncludes(companionUiDeployment, 'path: /companion-ui/', 'companion-ui test health probe path');
 assertNotIncludes(companionUiDeployment, 'POSTGRES_DATABASE_URL', 'companion-ui test has no runtime secret wiring');
 assertNotIncludes(companionUiDeployment, 'secretKeyRef', 'companion-ui test has no secret references');
 
@@ -1405,7 +1403,7 @@ assertIncludes(companionUiService, 'port: 8080', 'companion-ui test Service port
 assertIncludes(companionUiService, 'targetPort: http-ui', 'companion-ui test Service target port');
 
 const companionUiIngress = findDocumentByKindName(companionUiRendered, 'Ingress', 'psfn-companion-ui-test');
-assertIncludes(companionUiIngress, 'path: "/companion"', 'companion-ui test configured Ingress path');
+assertIncludes(companionUiIngress, 'path: "/companion-ui/"', 'companion-ui canonical Ingress path');
 assertIncludes(companionUiIngress, 'name: http-ui', 'companion-ui test Ingress service port');
 
 const companionUiPolicy = findDocumentByKindName(companionUiRendered, 'NetworkPolicy', 'psfn-companion-ui-test');
@@ -1425,6 +1423,17 @@ const companionUiDigestOnlyRendered = render([
 ]);
 const companionUiDigestOnlyDeployment = findDocumentByKindName(companionUiDigestOnlyRendered, 'Deployment', 'psfn-companion-ui-test');
 assertIncludes(companionUiDigestOnlyDeployment, `image: "localhost/psfn-companion-ui@${companionUiDigest}"`, 'companion-ui test digest-only image');
+
+assertRenderFails([
+  '--set',
+  'companionUiTest.enabled=true',
+  '--set',
+  'companionUiTest.image.repository=localhost/psfn-companion-ui',
+  '--set-string',
+  `companionUiTest.image.digest=${companionUiDigest}`,
+  '--set',
+  'ingress.companionUiTest.path=/companion',
+], 'ingress.companionUiTest.path must be exactly /companion-ui/');
 
 const prefetchRendered = render([
   '--set',

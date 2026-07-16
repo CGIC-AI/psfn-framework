@@ -775,13 +775,13 @@ spec:
               containerPort: {{ .Values.ports.companionUiTest }}
           readinessProbe:
             httpGet:
-              path: /
+              path: /companion-ui/
               port: http-ui
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /
+              path: /companion-ui/
               port: http-ui
             initialDelaySeconds: 15
             periodSeconds: 20

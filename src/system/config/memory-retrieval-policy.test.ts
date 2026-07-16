@@ -44,6 +44,28 @@ describe('memory retrieval policy', () => {
       lexicalAugment: { pageSize: 256, maxScan: 2_048, selectedLimit: 12 },
       emotionalIntensityPersistenceMaxMultiplier: 6,
     });
+    expect(policy.lexicalAugment).toEqual({
+      pageSize: 256,
+      maxScan: 2_048,
+      selectedLimit: 12,
+      minOverlap: 2,
+      baseSimilarity: 0.62,
+    });
+    expect(policy.scoreGuaranteeMinK).toBe(3);
+    expect(policy.scoreGuaranteeFloor).toBe(0.01);
+    expect(policy.episodic).toEqual({
+      scanLimit: 1_000,
+      maxChains: 3,
+      maxDepth: 2,
+      maxEpisodesPerChain: 5,
+      timelineLimit: 8,
+      timelineScanLimit: 200,
+      timelineMaxDepth: 1,
+      timelineMaxEpisodesPerRoot: 3,
+      arcScanLimit: 8,
+      minRootMatchScore: 0.18,
+      minRelatedMatchScore: 0.08,
+    });
     expect(resolveMemorySalienceFloor(policy, 'emotional', -1)).toBe(0.6);
     expect(resolveMemorySalienceFloor(policy, 'emotional', 0.9)).toBeCloseTo(0.565, 10);
     expect(resolveMemorySalienceFloor(policy, 'relational', 0.49)).toBe(0.05);
@@ -83,6 +105,30 @@ describe('memory retrieval policy', () => {
     invalidPage.lexicalAugment.pageSize = 501;
     expect(() => normalizeMemoryRetrievalPolicy(invalidPage)).toThrow(
       /lexicalAugment\.pageSize/,
+    );
+
+    const missingEpisodic = createDefaultMemoryRetrievalPolicy() as unknown as Record<string, unknown>;
+    delete missingEpisodic.episodic;
+    expect(() => normalizeMemoryRetrievalPolicy(missingEpisodic)).toThrow(
+      /missing episodic/,
+    );
+
+    const invalidEpisodicDepth = createDefaultMemoryRetrievalPolicy();
+    invalidEpisodicDepth.episodic.maxDepth = -1;
+    expect(() => normalizeMemoryRetrievalPolicy(invalidEpisodicDepth)).toThrow(
+      /episodic\.maxDepth/,
+    );
+
+    const invalidOverlap = createDefaultMemoryRetrievalPolicy();
+    invalidOverlap.lexicalAugment.minOverlap = 0;
+    expect(() => normalizeMemoryRetrievalPolicy(invalidOverlap)).toThrow(
+      /lexicalAugment\.minOverlap/,
+    );
+
+    const invalidScoreFloor = createDefaultMemoryRetrievalPolicy();
+    invalidScoreFloor.scoreGuaranteeFloor = 1.5;
+    expect(() => normalizeMemoryRetrievalPolicy(invalidScoreFloor)).toThrow(
+      /scoreGuaranteeFloor/,
     );
   });
 

@@ -24,6 +24,17 @@ describe('sanitizeCoreSubstrateConfig', () => {
       gatewayCompanionAuthToken: 'gateway-agent-secret',
       gatewaySessionIntegrityAuthToken: 'gateway-worker-secret',
       postgresDatabaseUrl: 'postgres://user:database-secret@localhost/psfn',
+      fleetAuth: {} as NonNullable<SubstrateConfig['fleetAuth']>,
+      fleetAuthVerifier: {
+        kind: 'verifier',
+        enabled: true,
+        canonicalOrigin: 'https://fleet.example.test',
+        verifierKeys: [],
+        hubDeviceAssertions: {
+          issuer: 'psfn-satellite-hub', audience: 'https://fleet.example.test',
+          maxTtlSeconds: 60, clockSkewSeconds: 2, keys: [],
+        },
+      },
       credentialVault: { resolve: () => undefined },
       litellmApiKeyRef: { env: 'LITELLM_API_KEY' },
       openRouterApiKeyRef: { env: 'OPENROUTER_API_KEY' },
@@ -41,6 +52,11 @@ describe('sanitizeCoreSubstrateConfig', () => {
     expect(sanitized.gatewayCompanionAuthToken).toBeUndefined();
     expect(sanitized.gatewaySessionIntegrityAuthToken).toBeUndefined();
     expect(sanitized.postgresDatabaseUrl).toBeUndefined();
+    expect(sanitized.fleetAuth).toBeUndefined();
+    expect(sanitized.fleetAuthVerifier).toMatchObject({
+      kind: 'verifier',
+      canonicalOrigin: 'https://fleet.example.test',
+    });
     expect(sanitized.litellmApiKeyRef).toBeUndefined();
     expect(sanitized.openRouterApiKeyRef).toBeUndefined();
     expect(sanitized.deepgramApiKey).toBeUndefined();

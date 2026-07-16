@@ -88,11 +88,11 @@ function toManifestPath(path: string): string {
   return path.split(sep).join('/');
 }
 
-function normalizeSensitiveKey(key: string): string {
+export function normalizeSensitiveKey(key: string): string {
   return key.replace(/[^a-z0-9]/gi, '').toLowerCase();
 }
 
-function isSensitiveValueKey(key: string): boolean {
+export function isSensitiveValueKey(key: string): boolean {
   const normalizedKey = normalizeSensitiveKey(key);
   return SENSITIVE_VALUE_KEYS.has(normalizedKey)
     || SENSITIVE_VALUE_KEY_SUFFIXES.some(suffix => normalizedKey.endsWith(suffix));
@@ -152,6 +152,19 @@ function isSafeHelmSecretExpression(rawValue: string): boolean {
   return /^secrets\.values\.[A-Za-z_][A-Za-z0-9_]*$/.test(valuePath)
     || valuePath === 'postgres.auth.password'
     || valuePath === 'redis.auth.password';
+}
+
+function isSafeServiceAccountTokenAutomount(
+  key: string,
+  rawValue: string,
+  allowHelmExpressions: boolean,
+): boolean {
+  if (!/^automountserviceaccounttoken$/.test(normalizeSensitiveKey(key))) return false;
+  if (allowHelmExpressions
+    && /^{{-?\s*\.Values\.kubeSelfManagement\.enabled\s*-?}}$/.test(rawValue)) {
+    return true;
+  }
+  return typeof parseAssignmentScalar(rawValue) === 'boolean';
 }
 
 function assertSecretAssignmentValueIsSafe(path: string, key: string, rawValue: string): void {
@@ -287,6 +300,10 @@ function assertCredentialAssignmentsAreSafe(
     }
     if (!isSensitiveValueKey(key)) continue;
     const rawValue = match[4].replace(/\s+#.*$/, '').trim();
+    // This Kubernetes API field is a boolean policy switch, not credential
+    // material. Keep the exception schema-specific and reject every non-boolean
+    // value, including arbitrary Helm expressions.
+    if (isSafeServiceAccountTokenAutomount(key, rawValue, allowHelmExpressions)) continue;
     if (allowHelmExpressions && isSafeHelmSecretExpression(rawValue)) continue;
     if (allowHelmExpressions && /^{{-?[\s\S]*-?}}$/.test(rawValue)) {
       throw new Error(

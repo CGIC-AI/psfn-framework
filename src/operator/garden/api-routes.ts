@@ -1022,6 +1022,10 @@ export function buildAdminApiRoutes(options: {
             resolveParams.modifiedParams = payload.modifiedParams as Record<string, unknown>;
           }
 
+          // This agent-hosted route resolves agent-local confirmations only.
+          // Operator-only gateway confirmations are resolved by the Garden
+          // operator process on a direct operator→gateway path, so no operator
+          // ADMIN_TOKEN is read from or forwarded through this agent (x5rt.10).
           confirmationQueueApi!.resolveConfirmationQueue(resolveParams).then(
             (result) => {
               appendAuditTimelineEntry?.(

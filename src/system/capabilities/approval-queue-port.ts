@@ -3,6 +3,8 @@ import type {
   ConfirmationQueueEntry,
   ConfirmationQueueHistoryEntry,
   ConfirmationQueueRequest,
+  ConfirmationExecutionContext,
+  ConfirmationResolverIdentity,
   ConfirmationResolveRequest,
   ConfirmationResolveResult,
 } from './confirmation-queue.js';
@@ -11,6 +13,8 @@ export type {
   ConfirmationQueueEntry,
   ConfirmationQueueHistoryEntry,
   ConfirmationQueueRequest,
+  ConfirmationExecutionContext,
+  ConfirmationResolverIdentity,
   ConfirmationResolveRequest,
   ConfirmationResolveResult,
 };
@@ -19,11 +23,15 @@ export interface ApprovalQueuePort {
   enqueue(request: ConfirmationQueueRequest, execute: (
     params: Record<string, unknown>,
     entry: ConfirmationQueueEntry,
+    context: ConfirmationExecutionContext,
   ) => Promise<unknown>): ConfirmationQueueEntry;
   listPending(): ConfirmationQueueEntry[];
   listHistory(): ConfirmationQueueHistoryEntry[];
   getPending(id: string): ConfirmationQueueEntry | null;
-  resolve(request: ConfirmationResolveRequest): Promise<ConfirmationResolveResult>;
+  resolve(
+    request: ConfirmationResolveRequest,
+    resolver?: ConfirmationResolverIdentity,
+  ): Promise<ConfirmationResolveResult>;
 }
 
 export function createApprovalQueuePort(queue: ApprovalQueuePort): ApprovalQueuePort {
@@ -32,7 +40,7 @@ export function createApprovalQueuePort(queue: ApprovalQueuePort): ApprovalQueue
     listPending: () => queue.listPending(),
     listHistory: () => queue.listHistory(),
     getPending: (id) => queue.getPending(id),
-    resolve: (request) => queue.resolve(request),
+    resolve: (request, resolver) => queue.resolve(request, resolver),
   };
 }
 

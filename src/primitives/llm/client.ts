@@ -66,6 +66,7 @@ import {
   resolveModelUsageCostRates,
 } from './model-budget.js';
 import { countMessageTokens } from './tokens.js';
+import { captureProviderWirePayload } from './wire-payload-capture.js';
 import {
   type CredentialReference,
   resolveProviderApiKey,
@@ -490,6 +491,40 @@ export class LLMClient {
       });
     }
     return messages;
+  }
+
+  /**
+   * Capture the true provider wire body as-sent (bead hgw3-80f6). Chains a
+   * pass-through `onPayload` that clones the outbound payload — after any
+   * prompt-cache breakpoint transform already chained onto `requestOptions` —
+   * onto `providerObservability.capturedWirePayload`. The response threads the
+   * same `providerObservability` reference, so the capture rides back to the
+   * turn snapshot and (in split mode) across the gateway RPC.
+   *
+   * Heal-not-block: a capture failure logs loudly but never mutates the payload
+   * or throws into the live turn (the reply must ship regardless).
+   */
+  private attachWirePayloadCapture(
+    requestOptions: LLMRequestOptions,
+    providerObservability: LLMProviderObservability,
+    model: Model<any>,
+  ): void {
+    const priorOnPayload = requestOptions.onPayload;
+    requestOptions.onPayload = async (payload, payloadModel) => {
+      const prior = await priorOnPayload?.(payload, payloadModel);
+      // pi-ai sends `prior` when a prior hook returns a replacement, else the
+      // original payload unchanged. Capture whatever will actually be sent.
+      const sent = prior ?? payload;
+      try {
+        providerObservability.capturedWirePayload = captureProviderWirePayload(sent, model);
+      } catch (error) {
+        log.warn('Failed to capture provider wire payload', {
+          error: error instanceof Error ? error.message : String(error),
+          model: String(model.id),
+        });
+      }
+      return prior;
+    };
   }
 
   private buildProviderObservability(
@@ -1135,6 +1170,7 @@ export class LLMClient {
             correlation,
             promptCaching ?? undefined,
           );
+          this.attachWirePayloadCapture(requestOptions, providerObservability, model);
 
           return retryCompletionOnCorruptEmptyToolArgs<LLMResponse>({
             tools: context.tools,
@@ -1609,6 +1645,7 @@ export class LLMClient {
           correlation,
           promptCaching ?? undefined,
         );
+        this.attachWirePayloadCapture(requestOptions, providerObservability, model);
 
         const request = async (emptyArgsRetries: number) => {
           physicalAttempt += 1;

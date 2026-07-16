@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { EventBus } from '../../../shared/event-bus.js';
+import {
+  runIntentionPostTurnHooks,
+  type IntentionPostTurnHookContext,
+} from '../substrate-agent/post-turn-actions.js';
 import type {
   BackgroundWorkClaimFence,
   BackgroundWorkEnqueueResult,
@@ -61,6 +65,33 @@ function makeInput(sessionId: string, turnId: string): EnqueueBackgroundWorkInpu
   };
 }
 
+function makeIntentionContext(): IntentionPostTurnHookContext {
+  return {
+    message: {
+      id: 'intention-source-1',
+      channelId: 'session-a',
+      channelType: 'api',
+      authorId: 'partner-1',
+      authorName: 'Partner',
+      content: 'hello',
+      timestamp: new Date(100),
+    },
+    response: {
+      content: 'hi',
+      channelId: 'session-a',
+      metadata: {
+        model: 'test',
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: 1,
+      },
+    },
+    turnMessages: [],
+    turnId: '019d2326-d9e1-701d-bcee-250d2cbb0e4e',
+    completedAt: 100,
+  };
+}
+
 class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
   private jobs = new Map<string, StoredBackgroundWorkJob>();
   private foreground = new Map<string, {
@@ -74,6 +105,11 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     revision: number;
   }>();
   private foregroundRenewalLoss = false;
+  private requeueFailuresRemaining = 0;
+
+  failNextRequeuePreBoundaryClaims(count = 1): void {
+    this.requeueFailuresRemaining = count;
+  }
 
   async enqueue(input: EnqueueBackgroundWorkInput): Promise<BackgroundWorkJobEnqueueResult> {
     const incumbent = [...this.jobs.values()].find(job => job.idempotencyKey === input.idempotencyKey);
@@ -433,6 +469,10 @@ class MemoryBackgroundWorkStore implements BackgroundWorkStorePort {
     nowMs: number;
     reasonCode: 'shutdown';
   }): Promise<StoredBackgroundWorkJob[]> {
+    if (this.requeueFailuresRemaining > 0) {
+      this.requeueFailuresRemaining -= 1;
+      throw new Error('injected shutdown requeue failure');
+    }
     const requeued: StoredBackgroundWorkJob[] = [];
     for (const job of [...this.jobs.values()]) {
       if (job.state !== 'running' || job.leaseOwner !== input.leaseOwner) continue;
@@ -763,7 +803,8 @@ describe('BackgroundWorkSupervisor', () => {
     });
   });
 
-  it('signals foreground ownership loss before another replica may cross an effect boundary', async () => {
+  it('stops renewing a locally lost foreground lease after one quarantine window', async () => {
+    vi.useFakeTimers();
     let now = 1_000;
     const store = new MemoryBackgroundWorkStore();
     const first = new BackgroundWorkSupervisor({
@@ -786,27 +827,41 @@ describe('BackgroundWorkSupervisor', () => {
       },
     });
     const foreground = first.beginForeground('session-a');
-    await foreground.ready;
-    const ownershipLost = deferred();
-    foreground.signal.addEventListener('abort', () => ownershipLost.resolve(), { once: true });
-    store.forceForegroundRenewalLoss();
-    now = 1_010;
-    await ownershipLost.promise;
-    expect(foreground.signal.aborted).toBe(true);
+    try {
+      await foreground.ready;
+      store.forceForegroundRenewalLoss();
+      now = 1_031;
+      await expect(first.tick()).rejects.toThrow('Foreground work lease ownership was lost');
+      expect(foreground.signal.aborted).toBe(true);
 
-    const input = makeInput('session-a', 'turn-a');
-    await second.enqueue([input]);
-    await second.tick();
-    await second.waitForIdle();
-    expect(effect).not.toHaveBeenCalled();
+      const input = makeInput('session-a', 'turn-a');
+      await second.enqueue([input]);
+      await second.tick();
+      await second.waitForIdle();
+      expect(effect).not.toHaveBeenCalled();
 
-    // The turn lifecycle consumes the loss signal by ending local foreground
-    // capability before another replica is allowed to execute the effect.
-    await first.endForeground(foreground);
-    await first.waitForSessionTransitions();
-    await second.tick();
-    await second.waitForIdle();
-    expect(effect).toHaveBeenCalledTimes(1);
+      // Two later heartbeats must not renew the locally lost lease. A foreground
+      // operation may ignore its abort signal, but another replica still recovers
+      // after exactly the one durable quarantine window created above.
+      now = 1_041;
+      await first.tick();
+      now = 1_051;
+      await first.tick();
+      now = 1_062;
+      await second.tick();
+      await second.waitForIdle();
+      expect(effect).toHaveBeenCalledTimes(1);
+
+      await first.endForeground(foreground);
+      await first.endForeground(foreground);
+      await first.waitForSessionTransitions();
+      await second.tick();
+      await second.waitForIdle();
+      expect(effect).toHaveBeenCalledTimes(1);
+    } finally {
+      await Promise.allSettled([first.stop(), second.stop()]);
+      vi.useRealTimers();
+    }
   });
 
   it('commits an effect receipt once when foreground arrives after the effect boundary', async () => {
@@ -866,6 +921,93 @@ describe('BackgroundWorkSupervisor', () => {
     expect(executor).toHaveBeenCalledTimes(2);
   });
 
+  it('abandons a pre-write intention receipt and retries the hook once', async () => {
+    let now = 1_000;
+    let hookAttempts = 0;
+    let sinkWrites = 0;
+    const store = new MemoryBackgroundWorkStore();
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => now,
+      retryBaseDelayMs: 100,
+      executor: async ({ effects }) => {
+        await runIntentionPostTurnHooks({
+          hooks: [async (_context, hookEffects) => {
+            hookAttempts += 1;
+            if (hookAttempts === 1) throw new Error('connection unavailable before write');
+            await hookEffects.crossBoundary();
+            sinkWrites += 1;
+          }],
+          context: makeIntentionContext(),
+          logger: { warn: vi.fn() },
+          options: {
+            propagateFailures: true,
+            assertOwned: effects.assertOwned,
+            runEffect: effects.run,
+          },
+        });
+      },
+    });
+    const input = makeInput('session-a', 'turn-a');
+    await supervisor.enqueue([input]);
+
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+    expect(await store.get(input.jobId)).toMatchObject({ state: 'retry_wait' });
+    expect(sinkWrites).toBe(0);
+
+    now += 100;
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+    expect(await store.get(input.jobId)).toMatchObject({ state: 'succeeded' });
+    expect(hookAttempts).toBe(2);
+    expect(sinkWrites).toBe(1);
+  });
+
+  it('fails an ambiguous post-write intention outcome without replaying the sink', async () => {
+    let now = 1_000;
+    let sinkWrites = 0;
+    const store = new MemoryBackgroundWorkStore();
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      now: () => now,
+      retryBaseDelayMs: 100,
+      executor: async ({ effects }) => {
+        await runIntentionPostTurnHooks({
+          hooks: [async (_context, hookEffects) => {
+            await hookEffects.crossBoundary();
+            sinkWrites += 1;
+            throw new Error('connection lost after write began');
+          }],
+          context: makeIntentionContext(),
+          logger: { warn: vi.fn() },
+          options: {
+            propagateFailures: true,
+            assertOwned: effects.assertOwned,
+            runEffect: effects.run,
+          },
+        });
+      },
+    });
+    const input = makeInput('session-a', 'turn-a');
+    await supervisor.enqueue([input]);
+
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+    expect(await store.get(input.jobId)).toMatchObject({ state: 'retry_wait' });
+
+    now += 100;
+    await supervisor.tick();
+    await supervisor.waitForIdle();
+    expect(await store.get(input.jobId)).toMatchObject({
+      state: 'failed',
+      reasonCode: 'effect_outcome_unknown',
+    });
+    expect(sinkWrites).toBe(1);
+  });
+
   it('durably requeues pre-boundary work on shutdown and a fresh supervisor completes it once', async () => {
     const store = new MemoryBackgroundWorkStore();
     let firstSinkWrites = 0;
@@ -919,6 +1061,42 @@ describe('BackgroundWorkSupervisor', () => {
     expect((await store.get(input.jobId))?.state).toBe('succeeded');
     expect(secondSinkWrites).toBe(1);
     expect(firstSinkWrites).toBe(0);
+  });
+
+  it('surfaces a shutdown requeue failure and permits a bounded retry without consuming an attempt', async () => {
+    const store = new MemoryBackgroundWorkStore();
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      leaseOwner: 'first',
+      now: () => 1_000,
+      shutdownTimeoutMs: 0,
+      executor: async ({ effects, signal }) => {
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+        await effects.run('durable-sink', async (crossBoundary) => {
+          await crossBoundary();
+        });
+      },
+    });
+    const input = { ...makeInput('session-a', 'turn-a'), maxAttempts: 1 };
+    await supervisor.enqueue([input]);
+    await supervisor.tick();
+    await flush();
+    expect(await store.get(input.jobId)).toMatchObject({ state: 'running', attemptCount: 0 });
+
+    store.failNextRequeuePreBoundaryClaims();
+    await expect(supervisor.stop()).rejects.toThrow('injected shutdown requeue failure');
+    expect(await store.get(input.jobId)).toMatchObject({ state: 'running', attemptCount: 0 });
+
+    await supervisor.stop();
+    expect(await store.get(input.jobId)).toMatchObject({
+      state: 'queued',
+      reasonCode: 'shutdown',
+      attemptCount: 0,
+    });
   });
 
   it('fails malformed persisted payloads closed without invoking a handler', async () => {

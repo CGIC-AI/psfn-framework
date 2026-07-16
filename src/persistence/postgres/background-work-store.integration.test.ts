@@ -113,7 +113,7 @@ function makeCompactionInput(
   logicalSessionId: string,
   turnId: string,
   createdAtMs: number,
-): EnqueueBackgroundWorkInput {
+): EnqueueBackgroundWorkInput & { payload: AutoCompactionBackgroundPayload } {
   const payload: AutoCompactionBackgroundPayload = {
     schemaVersion: 1,
     kind: 'auto_compaction',
@@ -291,6 +291,196 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
+  it('fails a privacy-unsafe persisted compaction payload without running its handler', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const inspectionPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 1,
+    });
+    const executor = vi.fn(async () => undefined);
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      leaseOwner: 'payload-validation-worker',
+      now: () => 1_000,
+      executor,
+    });
+    try {
+      const input = makeCompactionInput('session-a', 'turn-a', 100);
+      input.payload.turnBudgetCharacteristics.modelSelection = {
+        purpose: 'chat',
+        slotKey: 'chat-primary',
+        provider: 'test-provider',
+        model: 'test-model',
+        contextWindow: 16_384,
+      };
+      input.payloadFingerprint = fingerprintBackgroundWorkPayload(input.payload);
+
+      const malformedInput = structuredClone(input);
+      (malformedInput.payload.turnBudgetCharacteristics.modelSelection as Record<string, unknown>)
+        .partnerMessage = 'private partner text';
+      malformedInput.payloadFingerprint = fingerprintBackgroundWorkPayload(malformedInput.payload);
+      await expect(store.enqueue(malformedInput)).rejects.toThrow(
+        'modelSelection contains unsupported field partnerMessage',
+      );
+      const beforeValidEnqueue = await inspectionPool.query<{ count: string }>(
+        'SELECT COUNT(*)::text AS count FROM agent_background_work_jobs',
+      );
+      expect(beforeValidEnqueue.rows[0]?.count).toBe('0');
+
+      await store.enqueue(input);
+
+      const persisted = await inspectionPool.query<{ payload: unknown }>(
+        'SELECT payload FROM agent_background_work_jobs WHERE job_id = $1',
+        [input.jobId],
+      );
+      expect(persisted.rows[0]?.payload).toEqual(input.payload);
+      expect(JSON.stringify(persisted.rows[0]?.payload)).not.toContain('private partner text');
+
+      await inspectionPool.query(`
+        UPDATE agent_background_work_jobs
+        SET payload = jsonb_set(
+          payload,
+          '{turnBudgetCharacteristics,modelSelection,partnerMessage}',
+          to_jsonb($2::text),
+          true
+        )
+        WHERE job_id = $1
+      `, [input.jobId, 'private partner text']);
+
+      await supervisor.tick();
+      await supervisor.waitForIdle();
+
+      expect(executor).not.toHaveBeenCalled();
+      expect(await store.get(input.jobId)).toMatchObject({
+        state: 'failed',
+        reasonCode: 'malformed_payload',
+      });
+    } finally {
+      await supervisor.stop();
+      await inspectionPool.end();
+      await store.close();
+    }
+  });
+
+  it('fails producer-impossible persisted compaction payloads without running their handler', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const inspectionPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 1,
+    });
+    const executor = vi.fn(async () => undefined);
+    const supervisor = new BackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      leaseOwner: 'payload-shape-validation-worker',
+      now: () => 1_000,
+      executor,
+    });
+    const malformedPayloads: Array<[
+      string,
+      (payload: AutoCompactionBackgroundPayload) => void,
+    ]> = [
+      ['fractional session percentage', (payload) => {
+        payload.adaptiveProfile.sessionHistoryBudgetPct = 6.5;
+      }],
+      ['fractional memory percentage', (payload) => {
+        payload.adaptiveProfile.memoryRetrievalBudgetPct = 2.5;
+      }],
+      ['enabled disabled-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: true,
+          source: 'disabled',
+          category: 'default',
+        };
+      }],
+      ['categorized disabled-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: false,
+          source: 'disabled',
+          category: 'task',
+        };
+      }],
+      ['disabled default-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: false,
+          source: 'default',
+          category: 'default',
+        };
+      }],
+      ['categorized default-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: true,
+          source: 'default',
+          category: 'task',
+        };
+      }],
+      ['disabled adaptive-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: false,
+          source: 'adaptive',
+          category: 'task',
+        };
+      }],
+      ['default-category adaptive-source profile', (payload) => {
+        payload.adaptiveProfile = {
+          ...payload.adaptiveProfile,
+          enabled: true,
+          source: 'adaptive',
+          category: 'default',
+        };
+      }],
+      ['unsupported model purpose', (payload) => {
+        payload.turnBudgetCharacteristics.modelSelection = {
+          purpose: 'summary',
+          slotKey: 'summary-primary',
+          provider: 'test-provider',
+          model: 'test-model',
+          contextWindow: 16_384,
+        };
+      }],
+    ];
+
+    try {
+      for (const [index, [label, mutate]] of malformedPayloads.entries()) {
+        const input = makeCompactionInput(`session-${String(index)}`, `turn-${String(index)}`, 100);
+        await store.enqueue(input);
+
+        const malformedPayload = structuredClone(input.payload);
+        mutate(malformedPayload);
+        await inspectionPool.query(`
+          UPDATE agent_background_work_jobs
+          SET payload = $2::jsonb
+          WHERE job_id = $1
+        `, [input.jobId, JSON.stringify(malformedPayload)]);
+
+        await supervisor.tick();
+        await supervisor.waitForIdle();
+
+        expect(executor, label).not.toHaveBeenCalled();
+        expect(await store.get(input.jobId), label).toMatchObject({
+          state: 'failed',
+          reasonCode: 'malformed_payload',
+        });
+      }
+    } finally {
+      await supervisor.stop();
+      await inspectionPool.end();
+      await store.close();
+    }
+  });
+
   it('allows only one of two store instances to claim a durable job', async () => {
     const database = await harness.createDatabase();
     const first = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
@@ -354,6 +544,24 @@ describe('PostgresBackgroundWorkStore', () => {
       } finally {
         await Promise.all([inspectionPool.end(), store.close()]);
       }
+    }
+  });
+
+  it('fails closed when a recovered turn reuses an accepted handoff with a different fingerprint', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    try {
+      const accepted = makeFourJobBatch('session-a', 'turn-fingerprint');
+      await store.enqueueBatch(accepted);
+      await expect(store.enqueueBatch(accepted.map((input, index) => (
+        index === 0 ? { ...input, maxAttempts: input.maxAttempts + 1 } : input
+      )))).rejects.toThrow('Background work handoff replay fingerprint mismatch');
+      expect((await Promise.all(accepted.map(input => store.get(input.jobId))))
+        .filter((job) => job !== null)).toHaveLength(4);
+    } finally {
+      await store.close();
     }
   });
 
@@ -579,7 +787,7 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
-  it('surfaces expired foreground ownership before a second replica executes an effect', async () => {
+  it('lets a second supervisor claim after one lost-foreground quarantine window', async () => {
     const database = await harness.createDatabase();
     const firstStore = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
       schema: 'companion_a',
@@ -589,20 +797,25 @@ describe('PostgresBackgroundWorkStore', () => {
     });
     let now = 1_000;
     let foregroundEffectCapable = true;
+    let firstReplicaEffects = 0;
     let secondReplicaEffects = 0;
     const first = new BackgroundWorkSupervisor({
       store: firstStore,
       eventBus: new EventBus(),
       leaseOwner: 'foreground-replica',
-      leaseDurationMs: 30,
+      leaseDurationMs: 300_000,
       now: () => now,
-      executor: async () => undefined,
+      executor: async ({ effects }) => {
+        await effects.run('durable-sink', async () => {
+          firstReplicaEffects += 1;
+        });
+      },
     });
     const second = new BackgroundWorkSupervisor({
       store: secondStore,
       eventBus: new EventBus(),
       leaseOwner: 'background-replica',
-      leaseDurationMs: 30,
+      leaseDurationMs: 300_000,
       now: () => now,
       executor: async ({ effects }) => {
         await effects.run('durable-sink', async () => {
@@ -619,7 +832,7 @@ describe('PostgresBackgroundWorkStore', () => {
       }, { once: true });
       await second.enqueue([makeInput('session-a', 'turn-a')]);
 
-      now = 1_031;
+      now = 301_001;
       await expect(first.tick()).rejects.toThrow('Foreground work lease ownership was lost');
       expect(foreground.signal.aborted).toBe(true);
       expect(foregroundEffectCapable).toBe(false);
@@ -627,8 +840,36 @@ describe('PostgresBackgroundWorkStore', () => {
       await second.tick();
       await second.waitForIdle();
       expect(secondReplicaEffects).toBe(0);
+
+      // The foreground operation deliberately ignores abort. Later heartbeats
+      // must not extend its lost lease beyond the one durable quarantine window.
+      now = 401_001;
+      await first.tick();
+      now = 501_001;
+      await first.tick();
+      now = 601_002;
+      await second.tick();
+      await second.waitForIdle();
+      expect(secondReplicaEffects).toBe(1);
+
+      // A replacement foreground owner may arrive before the stale local turn
+      // finally cleans up. Ending the lost lease is idempotent and must leave
+      // that replacement fence intact.
+      const replacementForeground = second.beginForeground('session-a');
+      await replacementForeground.ready;
+      await first.endForeground(foreground);
       await first.endForeground(foreground);
       await first.waitForSessionTransitions();
+      await first.enqueue([makeInput('session-a', 'turn-b')]);
+      await first.tick();
+      await first.waitForIdle();
+      expect(firstReplicaEffects).toBe(0);
+
+      await second.endForeground(replacementForeground);
+      await second.waitForSessionTransitions();
+      await first.tick();
+      await first.waitForIdle();
+      expect(firstReplicaEffects).toBe(1);
       await second.tick();
       await second.waitForIdle();
       expect(secondReplicaEffects).toBe(1);
@@ -814,6 +1055,85 @@ describe('PostgresBackgroundWorkStore', () => {
       expect(secondSinkWrites).toBe(1);
       expect(firstSinkWrites).toBe(0);
     } finally {
+      await Promise.allSettled([first.stop(), second.stop()]);
+      await Promise.all([firstStore.close(), secondStore.close()]);
+    }
+  }, 30_000);
+
+  it('keeps a max-attempt pre-boundary claim retryable when the first shutdown requeue fails', async () => {
+    const database = await harness.createDatabase();
+    const firstStore = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const secondStore = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const originalRequeue = firstStore.requeuePreBoundaryClaims.bind(firstStore);
+    let requeueAttempts = 0;
+    const requeueSpy = vi.spyOn(firstStore, 'requeuePreBoundaryClaims').mockImplementation(async input => {
+      requeueAttempts += 1;
+      if (requeueAttempts === 1) throw new Error('injected PostgreSQL requeue failure');
+      return originalRequeue(input);
+    });
+    const providerEntered = deferred();
+    const first = new BackgroundWorkSupervisor({
+      store: firstStore,
+      eventBus: new EventBus(),
+      leaseOwner: 'first-replica',
+      leaseDurationMs: 60_000,
+      shutdownTimeoutMs: 1_000,
+      now: () => 1_000,
+      executor: async ({ effects, signal }) => {
+        providerEntered.resolve();
+        await new Promise<void>((resolve) => {
+          if (signal.aborted) resolve();
+          else signal.addEventListener('abort', () => resolve(), { once: true });
+        });
+        await effects.run('durable-sink', async (crossBoundary) => {
+          await crossBoundary();
+        });
+      },
+    });
+    let sinkWrites = 0;
+    const second = new BackgroundWorkSupervisor({
+      store: secondStore,
+      eventBus: new EventBus(),
+      leaseOwner: 'second-replica',
+      now: () => 2_000,
+      executor: async ({ effects }) => {
+        await effects.run('durable-sink', async (crossBoundary) => {
+          await crossBoundary();
+          sinkWrites += 1;
+        });
+      },
+    });
+    const input = { ...makeInput('session-a', 'turn-a'), maxAttempts: 1 };
+    try {
+      await first.enqueue([input]);
+      await first.tick();
+      await providerEntered.promise;
+      expect(await firstStore.get(input.jobId)).toMatchObject({ state: 'running', attemptCount: 0 });
+
+      await expect(first.stop()).rejects.toThrow('injected PostgreSQL requeue failure');
+      expect(await firstStore.get(input.jobId)).toMatchObject({ state: 'running', attemptCount: 0 });
+
+      await first.stop();
+      expect(requeueAttempts).toBe(2);
+      expect(await secondStore.get(input.jobId)).toMatchObject({
+        state: 'queued',
+        reasonCode: 'shutdown',
+        attemptCount: 0,
+      });
+
+      await second.tick();
+      await second.waitForIdle();
+      expect(await secondStore.get(input.jobId)).toMatchObject({
+        state: 'succeeded',
+        attemptCount: 0,
+      });
+      expect(sinkWrites).toBe(1);
+    } finally {
+      requeueSpy.mockRestore();
       await Promise.allSettled([first.stop(), second.stop()]);
       await Promise.all([firstStore.close(), secondStore.close()]);
     }
@@ -2236,13 +2556,13 @@ describe('PostgresBackgroundWorkStore', () => {
     }
   });
 
-  it('recovers an expired lease with a bounded attempt and permits restart claim', async () => {
+  it('recovers a pre-boundary expired lease without consuming its final attempt', async () => {
     const database = await harness.createDatabase();
     const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
       schema: 'companion_a',
     });
     try {
-      const input = makeInput('session-a', 'turn-a');
+      const input = { ...makeInput('session-a', 'turn-a'), maxAttempts: 1 };
       await store.enqueue(input);
       const firstClaim = await store.claimNext({
         leaseOwner: 'crashed-worker',
@@ -2252,8 +2572,11 @@ describe('PostgresBackgroundWorkStore', () => {
       });
       expect(firstClaim?.state).toBe('running');
       expect(await store.recoverExpired({ nowMs: 111 })).toBe(1);
-      expect((await store.get(input.jobId))?.state).toBe('retry_wait');
-      expect((await store.get(input.jobId))?.attemptCount).toBe(1);
+      expect(await store.get(input.jobId)).toMatchObject({
+        state: 'retry_wait',
+        reasonCode: 'lease_expired',
+        attemptCount: 0,
+      });
 
       const restartClaim = await store.claimNext({
         leaseOwner: 'restart-worker',

@@ -7,6 +7,7 @@ import type {
   TurnUsage,
   InferredPostTurnAction,
   CorrelationMetadata,
+  LLMCapturedProviderWirePayload,
   LLMStreamFirstOutputObservation,
   RunChargeEvent,
   FatigueBudgetEvent,
@@ -383,6 +384,12 @@ export interface EventMap {
   'agent.turn.performance': TurnPerformanceEvent;
   /** First substantive text/thinking/tool event observed at the provider stream boundary. */
   'agent.provider.first_output': LLMStreamFirstOutputObservation & {
+    provider: string;
+    model: string;
+  } & EventCorrelationFields;
+  /** True provider wire body captured as-sent for one provider call (bead hgw3-80f6). */
+  'agent.provider.payload_captured': {
+    payload: LLMCapturedProviderWirePayload;
     provider: string;
     model: string;
   } & EventCorrelationFields;

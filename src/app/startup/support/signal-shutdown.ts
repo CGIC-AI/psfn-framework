@@ -72,27 +72,28 @@ export function createSignalShutdownHandler(
 
   return async (signal: string): Promise<void> => {
     if (shutdownPromise) {
-      options.logger.warn('Shutdown already in progress; forcing exit on additional signal', { signal });
-      options.exit(1);
+      options.logger.warn('Shutdown already in progress; waiting for its durable release', { signal });
       return;
     }
 
     armForceExitTimer(signal);
 
-    shutdownPromise = (async () => {
+    const attempt = (async () => {
       options.logger.info(`Received ${signal}, shutting down...`);
       await options.runGracefulShutdown();
       clearForceExitTimer();
       options.exit(0);
-    })().catch((error) => {
+    })();
+    shutdownPromise = attempt;
+    try {
+      await attempt;
+    } catch (error) {
       clearForceExitTimer();
-      options.logger.error('Graceful shutdown failed; forcing exit', {
+      options.logger.error('Graceful shutdown failed; leaving process running for retry', {
         signal,
         error: String(error),
       });
-      options.exit(1);
-    });
-
-    await shutdownPromise;
+      if (shutdownPromise === attempt) shutdownPromise = null;
+    }
   };
 }

@@ -1030,6 +1030,39 @@ describe('executePostTurnBackgroundWork', () => {
     expect(fixture.getRecentMessagesAtOrBefore).not.toHaveBeenCalled();
   });
 
+  it('passes distinct ownership and durable-boundary functions to intention hooks', async () => {
+    const record = makeTurnRecord();
+    const base = makeExecution(record);
+    const payload = {
+      schemaVersion: 1,
+      kind: 'intention_post_turn_hooks',
+      source: base.payload.source,
+    } as const;
+    const execution = {
+      payload,
+      effects: base.effects,
+      signal: base.signal,
+      job: {
+        ...base.job,
+        kind: payload.kind,
+        payload,
+        payloadFingerprint: fingerprintBackgroundWorkPayload(payload),
+      },
+    };
+    const fixture = makeDependencies({ record });
+
+    await executePostTurnBackgroundWork(execution, fixture.dependencies);
+
+    expect(fixture.runIntentionPostTurnHooks).toHaveBeenCalledWith(
+      expect.objectContaining({ turnId: record.turnId }),
+      {
+        propagateFailures: true,
+        assertOwned: base.effects.assertOwned,
+        runEffect: base.effects.run,
+      },
+    );
+  });
+
   it('keeps failed ICP output out of real bounded memory, emotion, and compaction effects', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-post-turn-icp-projection-'));
     const store = new SessionStore(join(root, 'sessions'), {

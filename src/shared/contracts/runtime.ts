@@ -369,6 +369,8 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
   requesterProvenance?: RequesterProvenance;
   viewerChannelPrivacy?: ChannelPrivacy;
   viewerIsDirectMessage?: boolean;
+  /** Canonical contact resolved at ingress for subject-authorized memory access. Never model supplied. */
+  viewerMemorySubjectContactId?: string;
   embodimentContext?: EmbodimentPresenceMetadata;
   /** Preserved across the turn, its nested model/tool calls, and post-turn work. */
   icpCorrelation?: IcpConversationCorrelation;
@@ -1127,6 +1129,45 @@ export interface LLMSystemPromptCacheBoundaries {
   sessionStablePrefixHash: string;
 }
 
+/**
+ * The actual provider request body captured as-sent via the pi-ai `onPayload`
+ * hook (bead hgw3-80f6). This is the ground truth for the Loom "raw wire" view:
+ * unlike the pre-call `providerWireMessages` reconstructions, it includes the
+ * tool schemas (each serialized once), `cache_control` breakpoints, and any
+ * provider-specific transforms exactly as they went over the network.
+ *
+ * Diet: `body` is large (full system prompt + messages + tool schemas). Live
+ * captures on the event bus always carry it. The persisted turn record
+ * content-addresses the body into the shared sidecar store and replaces the
+ * inline `body` with `bodyRef`; the small summary fields stay inline so every
+ * persisted record still attests what shipped (byte length, tool count) without
+ * the bloat. Read paths resolve `bodyRef` back into `body`.
+ */
+export interface LLMCapturedProviderWirePayload {
+  /** Provider API family the body targets (`model.api`), e.g. 'anthropic-messages'. */
+  api: string;
+  /** Backend model id the body was sent to. */
+  model: string;
+  /** Wall-clock capture time (ms). */
+  capturedAtMs: number;
+  /** utf-8 byte length of the JSON-serialized body exactly as sent. */
+  byteLength: number;
+  /** Count of tool definitions in the body — each tool serialized exactly once. */
+  toolCount: number;
+  /**
+   * The provider request body exactly as handed to the transport, deep-cloned.
+   * Present on live captures; absent on diet-slimmed persisted records, where it
+   * is recoverable through `bodyRef`.
+   */
+  body?: unknown;
+  /**
+   * Content-addressed reference to the sidecar-stored body on diet-slimmed
+   * persisted records. Mutually exclusive with an inline `body`; read paths
+   * resolve it back before the record leaves the persistence layer.
+   */
+  bodyRef?: string;
+}
+
 export interface LLMProviderObservability {
   routeKind: 'registered_model' | 'configured_litellm_proxy' | 'request_base_url';
   requestedProvider: string;
@@ -1145,6 +1186,12 @@ export interface LLMProviderObservability {
    * as "derive from the plan" and an empty array as "captured empty").
    */
   providerWireMessages?: LLMProviderWireMessage[];
+  /**
+   * The true provider wire body captured as-sent via pi-ai `onPayload`
+   * (bead hgw3-80f6). Authoritative "raw wire" source for the Loom, replacing
+   * the pre-call reconstructions. Absent on legacy records that predate capture.
+   */
+  capturedWirePayload?: LLMCapturedProviderWirePayload;
 }
 
 export interface ToolCall {

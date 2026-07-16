@@ -31,21 +31,39 @@ export interface IntentionPostTurnHookContext {
   icpCorrelation?: IcpConversationCorrelation;
 }
 
+export interface IntentionPostTurnHookEffects {
+  /** Recheck ownership without promoting the durable receipt to started. */
+  assertOwned(): Promise<void>;
+  /** Promote the durable receipt immediately before the hook's idempotent sink write. */
+  crossBoundary(): Promise<void>;
+}
+
 export type IntentionPostTurnHook = (
   context: IntentionPostTurnHookContext,
+  effects: IntentionPostTurnHookEffects,
 ) => Promise<void> | void;
 
-export interface IntentionPostTurnHookRunOptions {
+export type IntentionPostTurnHookRunOptions = {
   propagateFailures?: boolean;
-  runEffect?: (
+} & ({
+  assertOwned: () => Promise<void>;
+  runEffect: (
     effectKey: string,
-    operation: (assertOwned: () => Promise<void>) => Promise<void>,
+    operation: (crossBoundary: () => Promise<void>) => Promise<void>,
   ) => Promise<void>;
-}
+} | {
+  assertOwned?: undefined;
+  runEffect?: undefined;
+});
 
 interface PostTurnLogger {
   warn: (message: string, payload: Record<string, unknown>) => void;
 }
+
+const IMMEDIATE_INTENTION_EFFECTS: IntentionPostTurnHookEffects = {
+  assertOwned: async () => undefined,
+  crossBoundary: async () => undefined,
+};
 
 export async function inferPostTurnActions(input: {
   inferers: readonly PostTurnActionInferer[];
@@ -101,12 +119,13 @@ export async function runIntentionPostTurnHooks(input: {
     const hook = input.hooks[index]!;
     try {
       if (input.options?.runEffect) {
-        await input.options.runEffect(`intention-hook:${String(index)}`, async (assertOwned) => {
+        const { assertOwned } = input.options;
+        await input.options.runEffect(`intention-hook:${String(index)}`, async (crossBoundary) => {
           await assertOwned();
-          await hook(input.context);
+          await hook(input.context, { assertOwned, crossBoundary });
         });
       } else {
-        await hook(input.context);
+        await hook(input.context, IMMEDIATE_INTENTION_EFFECTS);
       }
     } catch (error) {
       input.logger.warn('Intention post-turn hook failed', {

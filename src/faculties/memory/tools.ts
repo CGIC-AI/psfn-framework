@@ -37,6 +37,10 @@ import {
   type EpisodicTimelineEntry,
   type EpisodicTimelineStore,
 } from './retrieval/episodic.js';
+import {
+  resolveMemoryRetrievalPolicy,
+  type MemoryRetrievalPolicy,
+} from '../../system/config/memory-retrieval-policy.js';
 import type { SharedBackgroundProvider } from './retrieval/shared-background.js';
 import {
   filterTopicMatches,
@@ -274,6 +278,13 @@ export interface MemoryToolOptions extends MemoryWriteToolOptions {
    * absent the action fails closed with an explicit not-configured error.
    */
   sharedBackgroundProvider?: SharedBackgroundProvider | null;
+  /**
+   * Live episodic/timeline retrieval policy (zet.2). Threaded from the same
+   * config authority the retrieval faculty uses so the `action=timeline` tool
+   * path applies operator-set timeline knobs instead of compiled defaults.
+   * Accepts a resolver so late-bound runtime config is honored per call.
+   */
+  memoryRetrievalPolicy?: MemoryRetrievalPolicy | (() => MemoryRetrievalPolicy | undefined);
 }
 
 interface MemoryToolParams {
@@ -1130,8 +1141,17 @@ export function createMemoryTool(
               return textResultWithError(visibility.error, true);
             }
 
-            const limit = normalizedParams.limit === undefined
-              ? MEMORY_TIMELINE_DEFAULT_LIMIT
+            const memoryRetrievalPolicy = resolveMemoryRetrievalPolicy(
+              typeof options.memoryRetrievalPolicy === 'function'
+                ? options.memoryRetrievalPolicy()
+                : options.memoryRetrievalPolicy,
+            );
+            // An explicit user/tool limit wins (clamped to the tool ceiling);
+            // when absent, the policy's timelineLimit is the default — applied
+            // inside retrieveEpisodicTimeline via the threaded policy, not a
+            // compiled constant.
+            const explicitLimit = normalizedParams.limit === undefined
+              ? undefined
               : clampInt(normalizedParams.limit, 1, MEMORY_TIMELINE_MAX_LIMIT);
             const entries = await retrieveEpisodicTimeline(options.episodicStore, {
               ...(range.from ? { from: range.from } : {}),
@@ -1143,7 +1163,8 @@ export function createMemoryTool(
                 broadcast: visibility.broadcast,
               },
               ...(visibility.canonicalContactId ? { canonicalContactId: visibility.canonicalContactId } : {}),
-              limit,
+              ...(explicitLimit !== undefined ? { limit: explicitLimit } : {}),
+              memoryRetrievalPolicy,
             });
             return textResult(formatEpisodicTimeline(entries, range.label));
           }

@@ -11,6 +11,7 @@ import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';
 import { attachCompanionEventForwarder } from '../../channels/backplane/companion-relay/agent-forwarder.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
+import { resolveDocumentIngestLimits } from '../../faculties/file-ingest/index.js';
 import { EpisodicSynthesizer } from '../../faculties/memory/episodic/index.js';
 import { SleepCycleEpisodeConsolidator } from '../../faculties/memory/episodic/sleep-consolidation.js';
 import { EpisodeArcWeaver } from '../../faculties/memory/episodic/arc-formation.js';
@@ -37,6 +38,10 @@ import { summarizeRecentSessionEntries } from '../../core/session/manager/compac
 import type { ChannelType } from '../../shared/contracts/runtime.js';
 import { createFileOutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import { registerMemoryTools } from '../../faculties/memory/runtime-wiring.js';
+import {
+  createSubjectAuthorizedMemoryStore,
+  memorySubjectAccessContextFromCorrelation,
+} from '../../faculties/memory/subject-authorized-store.js';
 import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring.js';
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
 import { registerBeadsTools } from '../../boundary/integrations/beads/runtime-wiring.js';
@@ -121,6 +126,7 @@ import {
 } from '../../faculties/introspection/model-runtime.js';
 import { IntrospectionAuditRuntime } from '../../faculties/introspection/runtime.js';
 import { registerIntrospectionAuditTask } from '../../faculties/introspection/scheduler-lane.js';
+import { registerToolUsageEvaluatorTask } from '../../core/agent/tool-surface/usage-evaluator-scheduler-lane.js';
 import { createTurnRecordIntrospectionSource } from '../../faculties/introspection/source.js';
 import {
   createLLMValuesConsistencyEvaluator,
@@ -213,9 +219,14 @@ async function main(): Promise<void> {
     });
     try {
       await stopFn();
-    } finally {
-      process.exit(1);
+    } catch (error) {
+      shuttingDown = false;
+      log.error('Gateway disconnect shutdown failed; leaving process running for retry', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return;
     }
+    process.exit(1);
   });
 
   const persistenceRuntime = await createAgentPersistenceRuntime({
@@ -587,6 +598,24 @@ async function main(): Promise<void> {
   // htm9.3: direct memory-write tools gate at the memory_write sink (explicit
   // unscreened path until envelopes flow into tool params).
   memoryWriter.intakeSinkGateProvider = () => sessionManager.intakeSinkGate;
+  // Durable tool-usage evaluator lane (psfn-framework-b0yl.5): closes the LOD
+  // loop by aggregating ACTUAL per-tool invocations from the durable turn-record
+  // stream (every catalog tool, per-companion) to feed presentation ordering +
+  // operator-visible pin suggestions. Opt-in via scheduler.json (registers only
+  // when enabled); registered here so it can use the real MemoryWriter for its
+  // autonomous-action suggestion records and the session store's turn records.
+  if (schedulerConfig.toolUsageEvaluator) {
+    registerToolUsageEvaluatorTask({
+      scheduler,
+      agent: agentLoop,
+      turnRecordAccess: {
+        listChannelKeys: () => sessionStore.listChannels().map(channel => channel.sessionId),
+        readRecentTurnRecords: (channelKey, limit) => sessionStore.getRecentTurnRecords(channelKey, limit),
+      },
+      getMemoryWriter: () => memoryWriter,
+      config: schedulerConfig.toolUsageEvaluator,
+    });
+  }
   const episodicStore = companionEpisodicStore;
   // Episodic lane tuning is JSON-owned (scheduler.json episodeSynthesis /
   // sleepConsolidation / arcFormation) — no hardcoded cadences or windows.
@@ -596,6 +625,7 @@ async function main(): Promise<void> {
   const episodicSynthesizer = new EpisodicSynthesizer(episodicStore, sessionManager, {
     transcriptMessageLimit: schedulerConfig.episodeSynthesis.transcriptMessageLimit,
     maxEpisodesPerRun: schedulerConfig.episodeSynthesis.maxEpisodesPerRun,
+    maxPriorCandidates: schedulerConfig.episodeSynthesis.maxPriorCandidates,
     gapSplitMinutes: schedulerConfig.episodeSynthesis.gapSplitMinutes,
     maxEntriesPerEpisode: schedulerConfig.episodeSynthesis.maxEntriesPerEpisode,
     minConversationalEntries: schedulerConfig.episodeSynthesis.minConversationalEntries,
@@ -625,6 +655,8 @@ async function main(): Promise<void> {
     adjacencyGapMs: schedulerConfig.sleepConsolidation.adjacencyGapMinutes * MINUTE_MS,
     maxRefinementsPerRun: schedulerConfig.sleepConsolidation.maxRefinementsPerRun,
     maxConsolidationsPerRun: schedulerConfig.sleepConsolidation.maxConsolidationsPerRun,
+    transcriptMessageLimit: schedulerConfig.sleepConsolidation.transcriptMessageLimit,
+    maxTranscriptCharsPerEpisode: schedulerConfig.sleepConsolidation.maxTranscriptCharsPerEpisode,
     personaPreamble,
     // Fail-closed consolidation failures are typed events, never silence.
     onConsolidationFailure: (failure) => {
@@ -686,11 +718,23 @@ async function main(): Promise<void> {
   intentionRuntime.behavioralPatternTracker.setPromotionHook(
     createBehavioralPatternMemoryPromotionHook(memoryWriter),
   );
-  registerMemoryTools(agentLoop, {
-    writer: memoryWriter,
+  const toolMemoryStore = createSubjectAuthorizedMemoryStore(
     memoryStore,
+    () => memorySubjectAccessContextFromCorrelation(getRequestContext()),
+  );
+  const toolMemoryWriter = new MemoryWriter(toolMemoryStore, gateway, {
+    memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
+  });
+  toolMemoryWriter.intakeSinkGateProvider = () => sessionManager.intakeSinkGate;
+  registerMemoryTools(agentLoop, {
+    writer: toolMemoryWriter,
+    memoryStore: toolMemoryStore,
     episodicStore,
     contactStore,
+    // Same config authority the MemoryWriter and retrieval faculty resolve
+    // from, so the action=timeline tool path honors operator-set timeline
+    // knobs instead of compiled defaults (zet.2).
+    memoryRetrievalPolicy: () => config.memoryRetrievalPolicy,
   });
   log.info('Context feedback runtime deferred (Phase VI): background context-scoring LLM calls disabled');
 
@@ -805,6 +849,8 @@ async function main(): Promise<void> {
     documentIngest: {
       personalFilesDir: pathSnapshot.workspaceRoot,
       intakeScreening,
+      // Owner-file backed ingest caps (zet.7).
+      limits: resolveDocumentIngestLimits(config),
     },
   });
   gateway.onApiChatCompletion((params) => apiBackend.handleChatCompletion(params));

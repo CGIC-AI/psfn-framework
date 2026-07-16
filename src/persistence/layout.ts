@@ -481,6 +481,34 @@ export function resolveToolConformanceHistoryPath(systemDataDir: string): string
   return join(resolveSystemStateDir(systemDataDir), 'tool-conformance-history.jsonl');
 }
 
+/**
+ * Latest post-rollout validation verdict (system-owned, cross-workstream
+ * contract). The Helm-rollback surface reads this to decide whether a freshly
+ * rolled companion container proved itself healthy; keep the schema stable.
+ */
+export function resolvePostRolloutValidationLatestPath(systemDataDir: string): string {
+  return join(resolveSystemStateDir(systemDataDir), 'post-rollout-validation-latest.json');
+}
+
+/** Bounded JSONL history of the last post-rollout validation verdicts. */
+export function resolvePostRolloutValidationHistoryPath(systemDataDir: string): string {
+  return join(resolveSystemStateDir(systemDataDir), 'post-rollout-validation-history.jsonl');
+}
+
+/**
+ * Latest Helm rollback action record (system-owned). Manual and automatic
+ * rollbacks record here; the automatic surface reads the bounded history to
+ * enforce act-once-per-revision (never rollback-loop). Keep the schema stable.
+ */
+export function resolveKubeRollbackLatestPath(systemDataDir: string): string {
+  return join(resolveSystemStateDir(systemDataDir), 'kube-rollback-latest.json');
+}
+
+/** Bounded JSONL history of the last Helm rollback actions (act-once ledger). */
+export function resolveKubeRollbackHistoryPath(systemDataDir: string): string {
+  return join(resolveSystemStateDir(systemDataDir), 'kube-rollback-history.jsonl');
+}
+
 export function resolveCompanionDocsDir(companionDataDir: string): string {
   return join(companionDataDir, COMPANION_DOCS_DIRNAME);
 }

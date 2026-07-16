@@ -374,6 +374,7 @@ async function runPostTurnBackgroundWork(
         rehydrateIntentionContext(record, payload),
         {
           propagateFailures: true,
+          assertOwned: input.effects.assertOwned,
           runEffect: input.effects.run,
         },
       );

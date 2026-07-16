@@ -1,4 +1,7 @@
-import { SETTINGS_GARDEN_SECTION_FIELDS } from '$lib/settings-garden-contract';
+import {
+  SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS,
+  SETTINGS_GARDEN_SECTION_FIELDS,
+} from '$lib/settings-garden-contract';
 import type { SettingsSimpleSectionId } from '$lib/components/settings/navigation';
 
 export interface SettingsAdvancedSection {
@@ -10,62 +13,66 @@ export interface SettingsAdvancedSection {
 
 export const MODEL_OWNED_FIELDS = new Set<string>(SETTINGS_GARDEN_SECTION_FIELDS.models);
 
+// The generic "All Fields" editor renders only advanced-surface fields per
+// section. Custom-surface fields (model catalog, capability tier, scheduler
+// slots) keep their dedicated editors and are intentionally excluded here so
+// admins never see a generic input that the runtime write path would reject.
 export const SETTINGS_ADVANCED_SECTIONS: SettingsAdvancedSection[] = [
   {
     id: 'budget', title: 'Context Budget', icon: 'B',
-    keys: SETTINGS_GARDEN_SECTION_FIELDS.budget,
+    keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.budget,
   },
   {
     id: 'memory', title: 'Memory & Extraction', icon: 'E',
-    keys: SETTINGS_GARDEN_SECTION_FIELDS.memory,
+    keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.memory,
   },
   {
     id: 'sessions', title: 'Sessions & Compaction', icon: 'S',
-    keys: SETTINGS_GARDEN_SECTION_FIELDS.sessions,
+    keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.sessions,
   },
   {
     id: 'extraction-tuning', title: 'Memory Extraction Tuning', icon: 'X',
-    keys: SETTINGS_GARDEN_SECTION_FIELDS['extraction-tuning'],
+    keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS['extraction-tuning'],
   },
   {
     id: 'profile', title: 'Profile Synthesis', icon: 'P',
-    keys: SETTINGS_GARDEN_SECTION_FIELDS.profile,
+    keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.profile,
   },
   {
     id: 'analysis-workbench', title: 'Analysis Workbench', icon: 'R',
-    keys: SETTINGS_GARDEN_SECTION_FIELDS['analysis-workbench'],
+    keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS['analysis-workbench'],
   },
   {
     id: 'compositional', title: 'Compositional Cognition', icon: 'K',
-    keys: SETTINGS_GARDEN_SECTION_FIELDS.compositional,
+    keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.compositional,
   },
   {
     id: 'trust', title: 'Trust & Capabilities', icon: 'T',
-    keys: SETTINGS_GARDEN_SECTION_FIELDS.trust,
+    keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.trust,
   },
   {
     id: 'llm', title: 'LLM Retries & Behavior', icon: 'L',
-    keys: SETTINGS_GARDEN_SECTION_FIELDS.llm,
+    keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.llm,
   },
   {
     id: 'import', title: 'Import Processing', icon: 'I',
-    keys: SETTINGS_GARDEN_SECTION_FIELDS.import,
+    keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.import,
   },
   {
     id: 'fetch', title: 'Web Fetch Policy', icon: 'W',
-    keys: SETTINGS_GARDEN_SECTION_FIELDS.fetch,
+    keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.fetch,
   },
   {
     id: 'voice', title: 'Voice & Speech', icon: 'V',
-    keys: SETTINGS_GARDEN_SECTION_FIELDS.voice,
+    keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.voice,
   },
   {
     id: 'obsidian', title: 'External Obsidian', icon: 'O',
-    keys: SETTINGS_GARDEN_SECTION_FIELDS.obsidian,
+    keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.obsidian,
   },
   {
     id: 'channels', title: 'Channels', icon: 'C',
-    keys: SETTINGS_GARDEN_SECTION_FIELDS.channels,
+    keys: SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS.channels,
   },
 ];
 

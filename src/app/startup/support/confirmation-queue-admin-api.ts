@@ -10,7 +10,7 @@ type LocalConfirmationQueue = Pick<ApprovalQueuePort, 'listPending' | 'resolve'>
 type LocalConfirmationQueueWithLookup = Pick<ApprovalQueuePort, 'getPending' | 'listPending' | 'resolve'>;
 type GatewayConfirmationQueueClient = Pick<
   ConfirmationQueueAdminApi,
-  'listConfirmationQueue' | 'resolveConfirmationQueue'
+  'listConfirmationQueue'
 >;
 
 export function createLocalConfirmationQueueAdminApi(
@@ -47,7 +47,18 @@ export function createGatewayConfirmationQueueAdminApi(
       if (localQueue.getPending(params.id)) {
         return localQueue.resolve(params);
       }
-      return gateway.resolveConfirmationQueue(params);
+      // Operator-owned (gateway) confirmations are never resolvable from the
+      // less-trusted agent process. Resolving them requires the operator
+      // ADMIN_TOKEN, which must never traverse the agent (x5rt.10): the
+      // independently authenticated Garden operator process resolves them
+      // directly against the gateway. Fail closed here — the entry stays
+      // pending rather than the agent capturing/replaying a credential.
+      return {
+        id: params.id,
+        status: 'not_found',
+        message: 'Confirmation is not resolvable by the agent; operator authority is required.',
+        executed: false,
+      };
     },
   };
 }

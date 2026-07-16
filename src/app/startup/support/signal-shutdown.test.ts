@@ -34,10 +34,12 @@ describe('createSignalShutdownHandler', () => {
     expect(exit).toHaveBeenCalledTimes(1);
   });
 
-  it('forces exit with code 1 when graceful shutdown throws', async () => {
+  it('leaves the process running after failure and permits a later signal to retry', async () => {
     const logger = createLogger();
+    let attempts = 0;
     const runGracefulShutdown = vi.fn(async () => {
-      throw new Error('boom');
+      attempts += 1;
+      if (attempts === 1) throw new Error('boom');
     });
     const exit = vi.fn();
     const shutdown = createSignalShutdownHandler({
@@ -49,17 +51,22 @@ describe('createSignalShutdownHandler', () => {
 
     await shutdown('SIGTERM');
 
-    expect(exit).toHaveBeenCalledWith(1);
+    expect(exit).not.toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalledWith(
-      'Graceful shutdown failed; forcing exit',
+      'Graceful shutdown failed; leaving process running for retry',
       expect.objectContaining({
         signal: 'SIGTERM',
         error: 'Error: boom',
       }),
     );
+
+    await shutdown('SIGTERM');
+    expect(runGracefulShutdown).toHaveBeenCalledTimes(2);
+    expect(exit).toHaveBeenCalledOnce();
+    expect(exit).toHaveBeenCalledWith(0);
   });
 
-  it('forces exit immediately on additional signal while shutdown is in progress', async () => {
+  it('does not bypass an in-progress durable release on an additional signal', async () => {
     const logger = createLogger();
     let resolveShutdown: (() => void) | null = null;
     const runGracefulShutdown = vi.fn(() => new Promise<void>((resolve) => {
@@ -79,13 +86,14 @@ describe('createSignalShutdownHandler', () => {
     await shutdown('SIGTERM');
 
     expect(logger.warn).toHaveBeenCalledWith(
-      'Shutdown already in progress; forcing exit on additional signal',
+      'Shutdown already in progress; waiting for its durable release',
       { signal: 'SIGTERM' },
     );
-    expect(exit).toHaveBeenCalledWith(1);
+    expect(exit).not.toHaveBeenCalled();
 
     resolveShutdown?.();
     await first;
+    expect(exit).toHaveBeenCalledWith(0);
   });
 
   it('forces exit when graceful shutdown exceeds timeout', async () => {

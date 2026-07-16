@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { PurrMemory } from '../types.js';
-import { selectWithinRelevanceAndTokenBudget } from './budget.js';
+import { resolveGuaranteedSelectionFloor, selectWithinRelevanceAndTokenBudget } from './budget.js';
 import type { ScoredMemory } from './types.js';
+import { createDefaultMemoryRetrievalPolicy } from '../../../system/config/memory-retrieval-policy.js';
 
 function scored(id: string, type: PurrMemory['type'], score: number): ScoredMemory {
   return {
@@ -41,6 +42,22 @@ function scored(id: string, type: PurrMemory['type'], score: number): ScoredMemo
     score,
   };
 }
+
+describe('score-guaranteed selection floor honours the owned policy', () => {
+  it('uses the default scoreGuaranteeMinK when no override is provided', () => {
+    // Default MEMORY_RETRIEVAL_MIN_ITEMS is lower than the guarantee, so a
+    // rescued set lifts the floor up to scoreGuaranteeMinK (default 3).
+    expect(resolveGuaranteedSelectionFloor(10, 1)).toBe(3);
+  });
+
+  it('honours a tuned scoreGuaranteeMinK from the memory retrieval policy', () => {
+    const policy = createDefaultMemoryRetrievalPolicy();
+    policy.scoreGuaranteeMinK = 6;
+    expect(resolveGuaranteedSelectionFloor(10, 1, policy)).toBe(6);
+    // No rescue → guarantee does not apply regardless of the tuned value.
+    expect(resolveGuaranteedSelectionFloor(10, 0, policy)).toBeLessThan(6);
+  });
+});
 
 describe('memory retrieval selection caps', () => {
   it('caps reflections and procedurals at two without starving later eligible engrams', () => {

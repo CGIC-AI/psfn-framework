@@ -47,6 +47,7 @@ import type {
   ForegroundWorkLease,
 } from '../background-work/supervisor.js';
 import type { EnqueueBackgroundWorkInput } from '../background-work/types.js';
+import type { TurnSessionIdentity } from './turn-execution-runtime.js';
 
 const log = createComponentLogger('SubstrateAgent');
 
@@ -80,6 +81,7 @@ export class TurnSupportRuntime {
   private activeTurnCorrelation: CorrelationMetadata | null = null;
   private activeTurnTaskKind: string | null = null;
   private activeTurnIntent: string | null = null;
+  private activeTurnSessionIdentity: TurnSessionIdentity | null = null;
 
   private readonly postTurnActionInferers: PostTurnActionInferer[] = [];
   private readonly intentionPostTurnHooks: IntentionPostTurnHook[] = [];
@@ -114,20 +116,27 @@ export class TurnSupportRuntime {
     return this.activeTurnIntent;
   }
 
+  getActiveTurnSessionIdentity(): TurnSessionIdentity | null {
+    return this.activeTurnSessionIdentity;
+  }
+
   setActiveTurnContext(
     correlation: CorrelationMetadata,
     taskKind: string | null,
     intent: string | null,
+    turnSessionIdentity: TurnSessionIdentity,
   ): void {
     this.activeTurnCorrelation = correlation;
     this.activeTurnTaskKind = taskKind;
     this.activeTurnIntent = intent;
+    this.activeTurnSessionIdentity = turnSessionIdentity;
   }
 
   clearActiveTurnContext(): void {
     this.activeTurnCorrelation = null;
     this.activeTurnTaskKind = null;
     this.activeTurnIntent = null;
+    this.activeTurnSessionIdentity = null;
   }
 
   setActiveTurnCorrelation(correlation: CorrelationMetadata | null): void {
@@ -336,6 +345,7 @@ export class TurnSupportRuntime {
 
   recordUserMessage(
     message: SubstrateMessage,
+    turnSessionIdentity: TurnSessionIdentity,
     turnId: TurnID,
     requestId: string,
     trustLevel: TrustLevel,
@@ -346,6 +356,7 @@ export class TurnSupportRuntime {
     return recordUserMessageForTurn({
       sessionManager: this.sessionManager,
       message,
+      turnSessionIdentity,
       turnId,
       requestId,
       trustLevel,
@@ -357,13 +368,14 @@ export class TurnSupportRuntime {
 
   recordSystemMessage(
     message: SubstrateMessage,
+    turnSessionIdentity: TurnSessionIdentity,
     turnId: TurnID,
     requestId: string,
     content: string,
     continuityUserId?: string,
   ): number | null {
     return this.sessionManager.recordSystemMessage(
-      message.channelId,
+      turnSessionIdentity.logicalSessionId,
       content,
       message.authorId,
       message.authorName,
@@ -373,6 +385,7 @@ export class TurnSupportRuntime {
         turnId,
         requestId,
         sourceMessageId: message.id,
+        sourceChannelId: turnSessionIdentity.sourceChannelId,
         channelMeta: resolveSessionChannelMeta(message),
       },
     );
@@ -380,6 +393,7 @@ export class TurnSupportRuntime {
 
   recordAssistantMessage(
     message: SubstrateMessage,
+    turnSessionIdentity: TurnSessionIdentity,
     turnId: TurnID,
     requestId: string,
     responseText: string,
@@ -392,6 +406,7 @@ export class TurnSupportRuntime {
     return recordAssistantMessageForTurn({
       sessionManager: this.sessionManager,
       message,
+      turnSessionIdentity,
       turnId,
       requestId,
       responseText,
@@ -405,6 +420,7 @@ export class TurnSupportRuntime {
 
   recordToolObservations(
     message: SubstrateMessage,
+    turnSessionIdentity: TurnSessionIdentity,
     turnId: TurnID,
     requestId: string,
     turnMessages: AgentMessage[],
@@ -413,6 +429,7 @@ export class TurnSupportRuntime {
     recordToolObservationsForTurn({
       sessionManager: this.sessionManager,
       message,
+      turnSessionIdentity,
       turnId,
       requestId,
       turnMessages,
@@ -422,6 +439,7 @@ export class TurnSupportRuntime {
 
   buildTurnRecord(input: {
     message: SubstrateMessage;
+    turnSessionIdentity: TurnSessionIdentity;
     turnId: TurnID;
     requestId: string;
     startedAt: number;
@@ -447,8 +465,11 @@ export class TurnSupportRuntime {
     internalStateSnapshotRef?: string;
     persistedUserMessageContent?: string;
   }): TurnRecord {
+    if (input.message.channelId !== input.turnSessionIdentity.sourceChannelId) {
+      throw new Error('TurnRecord physical source does not match the captured turn identity');
+    }
     const roleEnvelopeRefs = this.sessionManager.getRoleEnvelopeRefsForEntries(
-      input.message.channelId,
+      input.turnSessionIdentity.logicalSessionId,
       [
         ...(input.userSessionEntryId != null ? [input.userSessionEntryId] : []),
         ...(input.assistantSessionEntryId != null ? [input.assistantSessionEntryId] : []),
@@ -458,9 +479,10 @@ export class TurnSupportRuntime {
       turnId: input.turnId,
       requestId: input.requestId,
     });
+    const { turnSessionIdentity, ...turnRecordInput } = input;
     return buildTurnRecordForTurn({
-      ...input,
-      sessionId: this.sessionManager.resolveSessionChannelId(input.message.channelId),
+      ...turnRecordInput,
+      sessionId: turnSessionIdentity.logicalSessionId,
       roleEnvelopeRefs,
       hashPromptText: this.hashPromptText,
       ...(introspectionSensitivityDecision ? { introspectionSensitivityDecision } : {}),

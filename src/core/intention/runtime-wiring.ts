@@ -1,6 +1,9 @@
 import type { ChannelType } from '../../shared/contracts/runtime.js';
 import type { ToolRegistrar } from '../agent/tool-registrar.js';
-import type { IntentionPostTurnHook } from '../agent/substrate-agent.js';
+import type {
+  IntentionPostTurnHook,
+  IntentionPostTurnHookEffects,
+} from '../agent/substrate-agent.js';
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import type {
   ActiveConcernContextProvider,
@@ -109,7 +112,7 @@ export interface IntentionBehavioralPatternHooks {
     sourceMessageId: string;
     responseContent: string;
     completedAtMs?: number;
-  }): Promise<void>;
+  }, effects?: IntentionPostTurnHookEffects): Promise<void>;
 }
 
 function normalizeOptionalText(value: string | undefined): string | undefined {
@@ -316,7 +319,7 @@ export function createIntentionBehavioralPatternHooks(
       sourceMessageId,
       responseContent,
       completedAtMs,
-    }) => {
+    }, effects) => {
       const contactId = normalizeOptionalText(canonicalContactKey);
       if (!contactId) {
         return;
@@ -331,12 +334,19 @@ export function createIntentionBehavioralPatternHooks(
       }
       const createdAt = normalizeObservedAtIso(completedAtMs);
 
-      await patternTracker.recordResponseStrategy({
+      const recordInput = {
         contactId,
         sourceMessageId: sourceId,
         responseContent: normalizedResponse,
         ...(createdAt ? { createdAt } : {}),
-      });
+      };
+      if (effects) {
+        await patternTracker.recordResponseStrategy(recordInput, {
+          crossEffectBoundary: effects.crossBoundary,
+        });
+      } else {
+        await patternTracker.recordResponseStrategy(recordInput);
+      }
     },
   };
 }
@@ -377,13 +387,13 @@ export function wireIntentionRuntimeStores(
   }
 
   if (typeof target.registerIntentionPostTurnHook === 'function') {
-    target.registerIntentionPostTurnHook(async (context) => {
+    target.registerIntentionPostTurnHook(async (context, effects) => {
       await behavioralHooks.onTurnResponseRecorded({
         canonicalContactKey: context.canonicalContactKey,
         sourceMessageId: context.message.id,
         responseContent: context.response.content,
         completedAtMs: context.completedAt,
-      });
+      }, effects);
     });
   }
 

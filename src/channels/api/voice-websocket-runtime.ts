@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+import { createTurnId } from '../../core/turns/id.js';
 import {
   EligibilityDeniedError,
   type EligibilityGate,
@@ -523,7 +524,7 @@ async function runAgentAssistantTurn(params: {
  * hold / notification-ack / empty resolve to `withhold` (stop, don't speak the
  * tail). Barge-in aborts the turn and cancels the bridge.
  */
-function runAgentAssistantStream(params: {
+export function runAgentAssistantStream(params: {
   agentLoop: SubstrateAgent;
   eventBus: EventBus;
   request: IncomingMessage;
@@ -540,7 +541,8 @@ function runAgentAssistantStream(params: {
     request,
     principal,
     transportSession,
-    sessionId,
+    // `sessionId` is still part of the surface (deriveChannelId reads x-session-id
+    // off the request); the turn id no longer embeds it — see below.
     transcript,
     signal,
     channelPrefix,
@@ -548,7 +550,15 @@ function runAgentAssistantStream(params: {
 
   const actor = deriveActor(principal);
   const channelId = deriveChannelId(request, transportSession.connectionId, channelPrefix, principal);
-  const turnId = `api-voice-${transportSession.connectionId}-${sessionId}-${Date.now()}`;
+  // mmo9.8.3: mint a REAL UUIDv7 turn id and thread it to the agent via routing
+  // (executeTurn stamps it on every `agent.stream.delta`). Handing the SAME id
+  // to the bridge below makes its per-turn/channel filter match the agent's
+  // actual delta identity — the fix for the "streamed path emits zero audio"
+  // blocker, where a fabricated `api-voice-...` id could NEVER equal the agent's
+  // independently-generated UUIDv7, so 100% of real deltas were dropped. Because
+  // each turn's id is globally unique, a concurrent turn's deltas — even one
+  // sharing this channelId via a collapsed x-session-id — can never leak in.
+  const turnId = createTurnId();
 
   const message: SubstrateMessage = {
     id: `api-voice-msg-${randomUUID()}`,
@@ -561,6 +571,7 @@ function runAgentAssistantStream(params: {
     routing: {
       source: 'api',
       responseStyle: 'concise',
+      turnId,
     },
     timestamp: new Date(),
   };

@@ -513,6 +513,17 @@ export interface MessageRoutingMetadata {
    * turn. Reused by preemptive voice control frames (mmo9.6.2/mmo9.8).
    */
   cancellationId?: string;
+  /**
+   * mmo9.8.3: caller-supplied UUIDv7 turn-correlation identity. A transport that
+   * must correlate the agent's stamped `agent.stream.delta` turnId BEFORE the
+   * turn executes (the live voice reply-stream bridge) mints a real UUIDv7 and
+   * threads it here so `executeTurn` stamps THAT id on every delta instead of an
+   * independently-generated one. Honored only when the turn is not bound to an
+   * authoritative ICP correlation (which always wins); validated as UUIDv7 and
+   * fails closed on a malformed value. Absent → the agent mints its own id as
+   * before. NOT a cancellation identity — see `cancellationId` for barge-in.
+   */
+  turnId?: string;
 }
 
 export interface SubstrateMessage {

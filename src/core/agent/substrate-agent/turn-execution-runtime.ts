@@ -693,12 +693,19 @@ export async function handleMessageForTurn(
         message.id,
       ].join(':'))
     : null;
+  // mmo9.8.3: a transport that must correlate the agent's stamped delta turnId
+  // ahead of turn execution (the live voice reply-stream bridge) may supply a
+  // real UUIDv7 on routing. It is honored ONLY when no authoritative ICP
+  // correlation binds the turn; parseTurnId fails closed on a malformed value.
+  const suppliedTurnId = message.routing?.turnId
+    ? parseTurnId(message.routing.turnId, 'routing.turnId')
+    : null;
   const turnId = privateIcpCorrelation || recoveredCorrelation
     ? parseTurnId(
         (privateIcpCorrelation ?? recoveredCorrelation)!.turnId,
         'ICP delivery turn correlation.turnId',
       )
-    : deterministicReplyTurnId ?? createTurnId();
+    : deterministicReplyTurnId ?? suppliedTurnId ?? createTurnId();
   if (!turnId) throw new Error('Private ICP target turn requires a UUIDv7 turnId');
   const taskKind = runtime.resolveTaskKind(message);
   const turnBudgetCharacteristics = runtime.buildTurnBudgetCharacteristics(message, taskKind);

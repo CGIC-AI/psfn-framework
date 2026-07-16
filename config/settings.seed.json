@@ -289,6 +289,10 @@
   "voiceSessionTimeoutMs": 30000,
   "voiceMaxFrameBytes": 262144,
   "voiceMaxPendingFrames": 32,
+  "voiceReplySegmenter": {
+    "minSegmentLength": 24,
+    "maxBufferLength": 240
+  },
   "wyomingShardRouting": {
     "enabled": false
   },

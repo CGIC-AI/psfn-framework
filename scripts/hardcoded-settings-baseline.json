@@ -3892,18 +3892,6 @@
       "value": "128"
     },
     {
-      "file": "src/primitives/voice/reply-stream/segmenter.ts",
-      "name": "DEFAULT_MAX_BUFFER_LENGTH",
-      "value": "240",
-      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-4k3h; live voice runaway-break threshold is mutable runtime policy."
-    },
-    {
-      "file": "src/primitives/voice/reply-stream/segmenter.ts",
-      "name": "DEFAULT_MIN_SEGMENT_LENGTH",
-      "value": "24",
-      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-4k3h; live voice minimum segment length is mutable runtime policy."
-    },
-    {
       "file": "src/primitives/voice/transports/discord-output.ts",
       "name": "PLAYBACK_FINISH_TIMEOUT_MS",
       "value": "120_000"

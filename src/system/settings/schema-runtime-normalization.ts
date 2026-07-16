@@ -1008,6 +1008,40 @@ function normalizeVoiceSettings(
   normalizeTrimmedStringSetting(normalized, settings, 'deepgramListenEndpoint');
   normalizeTrimmedStringSetting(normalized, settings, 'elevenLabsModelId');
   normalizeTrimmedStringSetting(normalized, settings, 'elevenLabsEndpointBase');
+  if ('voiceReplySegmenter' in settings) {
+    const value = expectRecord(
+      settings.voiceReplySegmenter,
+      'voiceReplySegmenter',
+    );
+    assertNoUnknownKeys(
+      value,
+      ['minSegmentLength', 'maxBufferLength'],
+      'voiceReplySegmenter',
+      { errorPrefix: 'Invalid settings' },
+    );
+    const minSegmentLength = expectIntegerInRange(
+      value.minSegmentLength,
+      'voiceReplySegmenter.minSegmentLength',
+      1,
+      10_000,
+    );
+    const maxBufferLength = expectIntegerInRange(
+      value.maxBufferLength,
+      'voiceReplySegmenter.maxBufferLength',
+      2,
+      100_000,
+    );
+    if (maxBufferLength <= minSegmentLength) {
+      throw new Error(
+        'Invalid settings at voiceReplySegmenter.maxBufferLength: '
+        + 'must be greater than voiceReplySegmenter.minSegmentLength',
+      );
+    }
+    normalized.voiceReplySegmenter = {
+      minSegmentLength,
+      maxBufferLength,
+    };
+  }
 }
 
 function normalizeShardSettings(

@@ -154,6 +154,7 @@ export const SETTINGS_GARDEN_FIELD_EXPOSURE = {
   voiceSessionTimeoutMs: { sectionId: 'voice', surface: 'advanced' },
   voiceMaxFrameBytes: { sectionId: 'voice', surface: 'advanced' },
   voiceMaxPendingFrames: { sectionId: 'voice', surface: 'advanced' },
+  voiceReplySegmenter: { sectionId: 'voice', surface: 'advanced' },
   obsidianVaultName: { sectionId: 'obsidian', surface: 'advanced' },
   obsidianCliPath: { sectionId: 'obsidian', surface: 'advanced' },
   obsidianAutoPublish: { sectionId: 'obsidian', surface: 'advanced' },

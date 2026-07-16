@@ -266,6 +266,31 @@ describe('settings contract guard', () => {
 });
 
 describe('memory retrieval policy settings compliance', () => {
+  it('exposes committed voice segmenter tuning through the Garden voice editor', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.fields.voiceReplySegmenter).toEqual({
+      key: 'voiceReplySegmenter',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'object',
+      scope: 'global',
+    });
+    expect(SETTINGS_GARDEN_FIELD_EXPOSURE.voiceReplySegmenter).toEqual({
+      sectionId: 'voice',
+      surface: 'advanced',
+    });
+    expect(SETTINGS_GARDEN_SECTION_FIELDS.voice).toContain('voiceReplySegmenter');
+
+    const seed = JSON.parse(readFileSync('config/settings.seed.json', 'utf-8')) as {
+      voiceReplySegmenter?: Record<string, unknown>;
+    };
+    expect(seed.voiceReplySegmenter).toEqual({
+      minSegmentLength: 24,
+      maxBufferLength: 240,
+    });
+  });
+
   it('exposes strict wiki startup hydration tuning through the Garden memory editor', () => {
     const contractData = buildSettingsContractData();
 

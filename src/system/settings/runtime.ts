@@ -126,6 +126,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'voiceSessionTimeoutMs',
   'voiceMaxFrameBytes',
   'voiceMaxPendingFrames',
+  'voiceReplySegmenter',
   'subagentMaxConcurrent',
   'shardMaxConcurrent',
   'shardHeartbeatStaleAfterMs',
@@ -420,6 +421,9 @@ function getVoiceSettingsSnapshot(config: SubstrateConfig) {
     voiceSessionTimeoutMs: config.voiceSessionTimeoutMs ?? null,
     voiceMaxFrameBytes: config.voiceMaxFrameBytes ?? null,
     voiceMaxPendingFrames: config.voiceMaxPendingFrames ?? null,
+    voiceReplySegmenter: config.voiceReplySegmenter
+      ? structuredClone(config.voiceReplySegmenter)
+      : null,
   } satisfies SnapshotSection<
     | 'voiceEnabled'
     | 'ttsProvider'
@@ -439,6 +443,7 @@ function getVoiceSettingsSnapshot(config: SubstrateConfig) {
     | 'voiceSessionTimeoutMs'
     | 'voiceMaxFrameBytes'
     | 'voiceMaxPendingFrames'
+    | 'voiceReplySegmenter'
   >;
 }
 
@@ -885,6 +890,11 @@ function applyVoiceSettings(
     settings,
     'elevenLabsEndpointBase',
   );
+  if ('voiceReplySegmenter' in settings) {
+    config.voiceReplySegmenter = settings.voiceReplySegmenter
+      ? structuredClone(settings.voiceReplySegmenter)
+      : undefined;
+  }
   if ('wyomingShardRouting' in settings) {
     config.wyomingShardRouting = structuredClone(
       (getRawSetting(

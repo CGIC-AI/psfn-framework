@@ -317,6 +317,8 @@ export interface SubstrateConfig {
   voiceMaxFrameBytes?: number;
   /** Backpressure cap on queued inbound voice frames before overflow close. */
   voiceMaxPendingFrames?: number;
+  /** settings.json-owned committed voice reply segmentation thresholds. */
+  voiceReplySegmenter?: VoiceReplySegmenterSettings;
   sttProvider?: StreamingSttProvider | 'disabled';
   ttsProvider?: StreamingTtsProvider | 'disabled';
   deepgramApiKey?: string;
@@ -412,6 +414,11 @@ export interface WikiStartupHydrationSettings {
   recentSessionLimit: number;
   recentMessageLimit: number;
   maxContextChars: number;
+}
+
+export interface VoiceReplySegmenterSettings {
+  minSegmentLength: number;
+  maxBufferLength: number;
 }
 export const DEFAULT_MOOD_CONGRUENCE_WEIGHT = 0.15;
 export const DEFAULT_UI_THEME_ID = 'garden';

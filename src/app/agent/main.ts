@@ -88,6 +88,7 @@ import { OutboundReplyDeduper } from '../../system/lifecycle/outbound-reply-dedu
 import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/group-observed-scheduler.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import { createNoopSatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
+import { createRequestCapabilityVerifier } from '../../boundary/fleet-auth/request-capability.js';
 import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../startup/support/signal-shutdown.js';
 import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
@@ -186,6 +187,13 @@ async function main(): Promise<void> {
   log.info(`Connecting to gateway at ${formatGatewayRpcEndpoint(gatewayRpcEndpoint)}...`);
   const gateway = await GatewayClient.connectEndpoint(gatewayRpcEndpoint, embeddingDims, {
     companionId: resolveCoreCompanionIdFromConfig(config),
+    ...(config.fleetAuthVerifier
+      ? {
+          requestCapabilityVerifier: createRequestCapabilityVerifier(
+            config.fleetAuthVerifier.requestCapabilities,
+          ),
+        }
+      : {}),
     ...(config.gatewayCompanionAuthToken
       ? { companionAuthToken: config.gatewayCompanionAuthToken }
       : {}),

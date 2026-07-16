@@ -3,6 +3,13 @@ import { EventBus } from '../../shared/event-bus.js';
 import { AgentApiBackend } from './agent-backend.js';
 import { parseSatelliteRegistryConfig } from '../backplane/satellite-registry.js';
 import { deriveApiKeyPrincipalId } from '../backplane/http/auth.js';
+import { generateKeyPairSync, randomUUID } from 'node:crypto';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
+import { compileCompanionUiAction } from '../../boundary/fleet-auth/companion-ui-action.js';
+import {
+  createGatewayRequestCapabilitySigner,
+  createRequestCapabilityVerifier,
+} from '../../boundary/fleet-auth/request-capability.js';
 
 function createSessionManagerStub() {
   return {
@@ -53,10 +60,26 @@ describe('AgentApiBackend Hub device principal boundary', () => {
       content: 'device reply', channelId: message.channelId,
       metadata: { inputTokens: 1, outputTokens: 1 },
     }));
+    const assertionKeys = generateKeyPairSync('ed25519');
+    const assertionSigner = createGatewayRequestCapabilitySigner({
+      issuer: 'fleet-auth', kid: 'agent-key',
+      privateKeyPem: assertionKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+      ttlSeconds: 30,
+    });
+    const assertionVerifier = createRequestCapabilityVerifier({
+      issuer: 'fleet-auth', maxTtlSeconds: 30,
+      keys: [{
+        issuer: 'fleet-auth', kid: 'agent-key',
+        publicKeyPem: assertionKeys.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+        notBefore: '2025-01-01T00:00:00.000Z',
+        notAfter: '2030-01-01T00:00:00.000Z', status: 'active',
+      }],
+    });
     const backend = new AgentApiBackend({
       agentLoop: { handleMessage, abort: vi.fn() } as any,
       eventBus: new EventBus(), sessionManager,
       companionId,
+      requestCapabilityVerifier: assertionVerifier,
       satelliteRegistry: parseSatelliteRegistryConfig({
         schemaVersion: 1, enabled: true,
         satellites: [{
@@ -201,6 +224,85 @@ describe('AgentApiBackend Hub device principal boundary', () => {
         satellite: { hubDevicePrincipal },
       },
     });
+
+    const rawUiBody = Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      requestId: 'ui-turn-1',
+      action: 'companion.interact',
+      resource: 'conversation.interact',
+      body: { content: 'browser text remains untrusted' },
+    }));
+    const compiled = compileCompanionUiAction(
+      rawUiBody,
+      createCompanionId(companionId),
+      { capabilities: ['text'], telemetryScopes: [] },
+    );
+    const versions = {
+      authorityGeneration: 1, globalAuthEpoch: 1, sessionAuthnVersion: 1,
+      sessionAuthzVersion: 1, bindingVersion: 1, grantVersion: 1, policyVersion: 1,
+    };
+    const parentInput = { target: compiled.target, requestId: randomUUID(), decisionId: randomUUID(), versions };
+    const parentToken = assertionSigner.signOperator(parentInput);
+    const verifiedParent = assertionVerifier.verifyOperator({ token: parentToken, ...parentInput });
+    const parent = {
+      audience: verifiedParent.audience as `operator:${string}`,
+      requestId: verifiedParent.requestId,
+      decisionId: verifiedParent.decisionId,
+      jti: verifiedParent.jti,
+      targetDigest: verifiedParent.targetDigest,
+    };
+    const childInput = { target: compiled.target, requestId: randomUUID(), decisionId: randomUUID(), versions, parent };
+    const childToken = assertionSigner.signAgent(childInput);
+    const capability = {
+      token: childToken,
+      requestId: childInput.requestId,
+      decisionId: childInput.decisionId,
+      versions,
+      parent,
+      rawBodyBase64Url: rawUiBody.toString('base64url'),
+    };
+    const uiHeaders = {
+      'x-psfn-satellite-claim-type': 'hub-device',
+      'x-psfn-satellite-id': 'office',
+      'x-psfn-satellite-endpoint-id': 'office-device',
+      'x-psfn-satellite-session-id': 'realtime:office-device:session',
+      'x-psfn-satellite-capabilities': 'text',
+    };
+    await expect(backend.handleChatCompletion({
+      requestId: 'companion-ui-child',
+      request: {
+        model: companionId,
+        messages: [{ role: 'user', content: 'browser text remains untrusted' }],
+        system_prompt_mode: 'default',
+      },
+      principal,
+      headers: uiHeaders,
+      hubDevicePrincipal,
+      hubDeviceAttachment: humanAttachment,
+      companionUiCapability: capability,
+    })).resolves.toMatchObject({ ok: true });
+    const uiMessage = handleMessage.mock.calls.at(-1)?.[0];
+    expect(uiMessage).toMatchObject({
+      content: 'browser text remains untrusted',
+      routing: {
+        hubDeviceAttachment: humanAttachment,
+        satellite: { hubDevicePrincipal },
+      },
+    });
+    expect(JSON.stringify(uiMessage)).not.toMatch(/"trusted"|"trustLevel"/u);
+
+    await expect(backend.handleChatCompletion({
+      requestId: 'companion-ui-mutated-body',
+      request: { model: companionId, messages: [{ role: 'user', content: 'mutated prompt' }] },
+      principal, headers: uiHeaders, hubDevicePrincipal, hubDeviceAttachment: humanAttachment,
+      companionUiCapability: capability,
+    })).resolves.toMatchObject({ ok: false, error: { type: 'companion_ui_capability_denied' } });
+    await expect(backend.handleChatCompletion({
+      requestId: 'companion-ui-operator-token',
+      request: { model: companionId, messages: [{ role: 'user', content: 'browser text remains untrusted' }] },
+      principal, headers: uiHeaders, hubDevicePrincipal, hubDeviceAttachment: humanAttachment,
+      companionUiCapability: { ...capability, token: parentToken },
+    })).resolves.toMatchObject({ ok: false, error: { type: 'companion_ui_capability_denied' } });
   });
 });
 

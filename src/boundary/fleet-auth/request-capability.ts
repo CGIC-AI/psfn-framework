@@ -25,6 +25,7 @@ import {
   type GardenWorkspaceScope,
 } from './garden-route-capabilities.js';
 import type { CompiledGardenRequestTarget } from './request-capability-target.js';
+import { resolveCompanionUiActionClassification } from './companion-ui-action.js';
 
 const HEADER_KEYS = ['alg', 'typ', 'v', 'kid'] as const;
 const OPERATOR_CLAIM_KEYS = [
@@ -428,11 +429,25 @@ function assertTarget(target: CompiledGardenRequestTarget): void {
   if (!METHODS.has(target.method)) reject('target method is invalid');
   requireUuid(target.companionId, 'target.companionId');
   if (!ACTIONS.has(target.action)) reject('target action is invalid');
-  const resolved = resolveGardenRouteCapability(target.method, target.canonicalPath);
-  if (!resolved || resolved.capability.id !== target.resource.routeId) {
+  const gardenResolved = resolveGardenRouteCapability(target.method, target.canonicalPath);
+  const companionUiResolved = resolveCompanionUiActionClassification(target.method, target.canonicalPath);
+  const routeId = gardenResolved?.capability.id ?? companionUiResolved?.routeId;
+  if (!routeId || routeId !== target.resource.routeId) {
     reject('target route classification is invalid');
   }
-  const canonicalAuthorization = resolved.capability.authorization;
+  const canonicalAuthorization = gardenResolved?.capability.authorization
+    ?? companionUiResolved?.authorization;
+  if (!canonicalAuthorization) reject('target authorization classification is absent');
+  if (companionUiResolved) {
+    const expectedPathParams = JSON.stringify({
+      companionId: target.companionId,
+      resource: companionUiResolved.resource,
+    });
+    if (JSON.stringify(target.resource.pathParams) !== expectedPathParams
+      || Object.keys(target.resource.query).length !== 0) {
+      reject('Companion UI target resource selectors are invalid');
+    }
+  }
   const suppliedAuthorizationDigest = digest(JSON.stringify(target.authorization));
   const canonicalAuthorizationDigest = digest(JSON.stringify(canonicalAuthorization));
   if (!equalDigest(suppliedAuthorizationDigest, canonicalAuthorizationDigest)

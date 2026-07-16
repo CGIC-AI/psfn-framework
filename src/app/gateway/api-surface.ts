@@ -41,6 +41,10 @@ import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.
 import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
 import type { GatewayFleetAuthChildAssertionBroker } from '../../boundary/gateway/fleet-auth-child-assertions.js';
+import { GatewayCompanionUiActionBroker } from '../../boundary/gateway/companion-ui-action-broker.js';
+import type { GatewayRequestCapabilitySigner } from '../../boundary/fleet-auth/request-capability.js';
+import { CompanionUiWebSocketAdapter } from '../../channels/api/companion-ui-websocket.js';
+import { companionUiPromptContent } from '../../boundary/fleet-auth/companion-ui-action.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
 import {
   GatewayHubDeviceIngressService,
@@ -74,6 +78,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
     | 'invalidateIcpAutonomyForCompanion'
     | 'isIcpAutonomyConfigured'
     | 'resolveOperatorApproval'
+    | 'listOperatorConfirmations'
   >;
   channelsConfig?: RuntimeChannelsConfig;
   satelliteRegistry?: SatelliteRegistryConfig;
@@ -88,6 +93,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   /** Present only in gateway fleet-auth mode; owns all browser OAuth/session authority. */
   fleetAuthBroker?: GatewayFleetAuthBroker;
   fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
+  fleetAuthRequestCapabilities?: GatewayRequestCapabilitySigner;
   /** Persistence-backed verifier/consumer required by authenticated Hub device ingress. */
   hubDeviceAssertionVerifier?: {
     verifyAndConsumeHubDeviceAssertion(
@@ -103,13 +109,13 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   };
 }
 
-function resolveGatewayHubDeviceCompanionId(options: StartOptionalGatewayApiServerOptions): string {
+function resolveGatewayHubDeviceCompanionId(options: StartOptionalGatewayApiServerOptions): string | undefined {
   const channelCompanionId = options.channelsConfig?.api.companionId;
   if (channelCompanionId) return channelCompanionId;
   const fleet = options.config.companionFleet?.companions ?? [];
   if (fleet.length === 1) return fleet[0]!.companionId;
   if (!options.config.companionFleet && options.config.companionId) return options.config.companionId;
-  throw new Error('Fleet Hub device ingress requires one server-owned API companion binding');
+  return undefined;
 }
 
 /**
@@ -377,6 +383,101 @@ export async function startOptionalGatewayApiServer(
     adminHost: options.adminHost,
     adminPort: options.adminPort,
   });
+  const gatewayApiRuntime = new GatewayApiRuntime(options.gateway, {
+    chatRequestTimeoutMs: computeGatewayChatRequestTimeoutMs(GATEWAY_API_REQUEST_TIMEOUT_MS),
+  });
+  const activeCompanionUiInteractions = new Map<string, AbortController>();
+  const companionUiWebSocket = fleetAuthBootstrapOnly
+    && options.config.fleetAuth
+    && options.fleetAuthBroker
+    && options.fleetAuthChildAssertions
+    && options.fleetAuthRequestCapabilities
+    && hubDeviceIngress
+    && options.satelliteRegistry
+    ? new CompanionUiWebSocketAdapter({
+        canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
+        satelliteApiKeys,
+        satelliteRegistry: options.satelliteRegistry,
+        ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
+        hubDeviceIngress,
+        actionBroker: new GatewayCompanionUiActionBroker({
+          resolveAuthorizationContext: input => options.fleetAuthBroker!.resolveAuthorizationContext(input),
+          signer: options.fleetAuthRequestCapabilities,
+          childAssertions: options.fleetAuthChildAssertions,
+          dispatch: {
+            dispatch: async input => {
+              const frame = input.compiled.frame;
+              const body = frame.body as Record<string, unknown>;
+              if (frame.resource === 'conversation.status') {
+                return await gatewayApiRuntime.handleHealth();
+              }
+              if (frame.resource === 'confirmations.list') {
+                return options.gateway.listOperatorConfirmations();
+              }
+              if (frame.resource === 'confirmations.resolve') {
+                return await options.gateway.resolveOperatorApproval({
+                  id: String(body.id),
+                  decision: body.decision as 'approve' | 'deny',
+                });
+              }
+              if (frame.resource === 'artifact.preview') {
+                const preview = options.companionRelay?.relay.getPreviewSource(
+                  String(body.id),
+                  input.compiled.target.companionId,
+                );
+                if (!preview?.previewable || !preview.bytes) throw new Error('Artifact preview unavailable');
+                return {
+                  artifactId: preview.artifactId,
+                  mediaType: preview.mediaType,
+                  sizeBytes: preview.sizeBytes,
+                  dataBase64: preview.bytes.toString('base64'),
+                };
+              }
+              if (frame.resource === 'tool_activity.subscribe') return { subscribed: true };
+              if (frame.resource === 'conversation.interrupt') {
+                const interactionId = String(body.interactionId);
+                const active = activeCompanionUiInteractions.get(interactionId);
+                active?.abort();
+                return { interrupted: active !== undefined, interactionId };
+              }
+              const content = companionUiPromptContent(frame);
+              if (!content) throw new Error('Companion UI action has no dispatcher');
+              const controller = new AbortController();
+              activeCompanionUiInteractions.set(frame.requestId, controller);
+              try {
+                const result = await gatewayApiRuntime.handleChatCompletion({
+                  request: {
+                    model: input.compiled.target.companionId,
+                    messages: [{ role: 'user', content }],
+                    system_prompt_mode: 'default',
+                  },
+                  principal: input.deviceTransport.principal,
+                  headers: { ...input.deviceTransport.headers },
+                  ...(input.deviceTransport.clientCert ? { clientCert: input.deviceTransport.clientCert } : {}),
+                  hubDevicePrincipal: input.attachment.deviceActor.principal,
+                  hubDeviceAttachment: input.attachment,
+                  companionUiCapability: {
+                    token: input.childAssertion.token,
+                    requestId: input.childAssertion.requestId,
+                    decisionId: input.childAssertion.decisionId,
+                    versions: input.childAssertion.versions,
+                    parent: input.childAssertion.parent,
+                    rawBodyBase64Url: Buffer.from(input.compiled.target.body).toString('base64url'),
+                  },
+                  signal: controller.signal,
+                });
+                if (!result.ok) throw new Error(result.error.type);
+                return result.response;
+              } finally {
+                if (activeCompanionUiInteractions.get(frame.requestId) === controller) {
+                  activeCompanionUiInteractions.delete(frame.requestId);
+                }
+              }
+            },
+          },
+        }),
+      })
+    : undefined;
   const voiceWebSocketRuntime = fleetAuthBootstrapOnly ? undefined : createApiVoiceWebSocketRuntime({
     config: options.config,
     eligibilityGate: options.eligibilityGate,
@@ -450,14 +551,15 @@ export async function startOptionalGatewayApiServer(
       : {}),
     ...(hubDeviceIngress ? { hubDeviceIngress } : {}),
     ...(hubDeviceCompanionId ? { hubDeviceCompanionId } : {}),
+    ...(companionUiWebSocket ? { companionUiWebSocket } : {}),
     corsAllowedOrigins,
     voiceWebSocketPath,
     voiceWebSocketRuntime,
     requestTimeoutMs: GATEWAY_API_REQUEST_TIMEOUT_MS,
-    runtime: new GatewayApiRuntime(options.gateway, {
-      chatRequestTimeoutMs: computeGatewayChatRequestTimeoutMs(GATEWAY_API_REQUEST_TIMEOUT_MS),
-    }),
-    modelName: options.config.companionId ?? hubDeviceCompanionId,
+    runtime: gatewayApiRuntime,
+    modelName: options.config.companionId
+      ?? hubDeviceCompanionId
+      ?? options.config.companionFleet?.companions[0]?.companionId,
     companionName: resolveCompanionNameFromConfig(options.config),
     externalChannelProfiles: options.channelsConfig
       ? buildExternalChannelProfiles(options.channelsConfig)

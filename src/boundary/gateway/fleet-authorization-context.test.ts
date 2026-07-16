@@ -27,11 +27,14 @@ function snapshot(overrides: Partial<FleetAuthorizationSnapshot> = {}): FleetAut
     sessions: [{
       recordId: SESSION_ID,
       principalId: PRINCIPAL_ID,
+      provider: 'discord',
+      providerSubjectId: SUBJECT_ID,
       audience: 'fleet',
       assurance: 'oauth',
       authnVersion: 3,
       authzVersion: 6,
       bindingVersion: 2,
+      grantVersion: 4,
       policyVersion: 5,
       globalAuthEpoch: 9,
       idleExpiresAt: new Date('2026-07-16T12:05:00.000Z'),
@@ -42,8 +45,13 @@ function snapshot(overrides: Partial<FleetAuthorizationSnapshot> = {}): FleetAut
         status: 'active',
         authnVersion: 3,
         authzVersion: 6,
+        bindingVersion: 2,
+        grantVersion: 4,
+        policyVersion: 5,
         authorityGeneration: 4,
         restoreState: 'live',
+        mergedIntoPrincipalId: null,
+        tombstoned: false,
       },
     }],
     providerSubjects: [{
@@ -54,6 +62,16 @@ function snapshot(overrides: Partial<FleetAuthorizationSnapshot> = {}): FleetAut
       restoreState: 'live',
       tombstoned: false,
     }],
+    companions: [{
+      companionId: COMPANION_ID,
+      lifecycle: 'active',
+      version: 7,
+      authorityGeneration: 4,
+      restoreState: 'live',
+      hasAuthorityLineage: false,
+      lineageFloorCurrent: false,
+      tombstoned: false,
+    }],
     bindings: [{
       bindingId: BINDING_ID,
       companionId: COMPANION_ID,
@@ -62,6 +80,7 @@ function snapshot(overrides: Partial<FleetAuthorizationSnapshot> = {}): FleetAut
       version: 2,
       authorityGeneration: 4,
       restoreState: 'live',
+      tombstoned: false,
     }],
     grants: [{
       grantId: GRANT_ID,
@@ -71,6 +90,7 @@ function snapshot(overrides: Partial<FleetAuthorizationSnapshot> = {}): FleetAut
       version: 5,
       authorityGeneration: 4,
       restoreState: 'live',
+      tombstoned: false,
     }],
     evidence: undefined,
     ...overrides,
@@ -140,19 +160,59 @@ describe('fleet authorization context policy', () => {
     ['pending principal', snapshot({ sessions: [sessionWithPrincipal({ status: 'pending' })] }), 'principal_not_active'],
     ['restored principal', snapshot({ sessions: [sessionWithPrincipal({ restoreState: 'quarantined' })] }), 'principal_not_live'],
     ['absent provider', snapshot({ providerSubjects: [] }), 'provider_subject_absent'],
-    ['multiple providers', snapshot({ providerSubjects: [...snapshot().providerSubjects, { ...snapshot().providerSubjects[0]!, subjectId: '123456789012345679' }] }), 'provider_subject_ambiguous'],
+    ['provider substitution', snapshot({ sessions: [{ ...snapshot().sessions[0]!, providerSubjectId: '123456789012345679' }] }), 'provider_subject_absent'],
     ['suspended provider', snapshot({ providerSubjects: [{ ...snapshot().providerSubjects[0]!, state: 'suspended' }] }), 'provider_subject_not_active'],
     ['tombstoned provider', snapshot({ providerSubjects: [{ ...snapshot().providerSubjects[0]!, tombstoned: true }] }), 'provider_subject_tombstoned'],
     ['absent binding', snapshot({ bindings: [] }), 'binding_absent'],
     ['multiple bindings', snapshot({ bindings: [...snapshot().bindings, { ...snapshot().bindings[0]!, bindingId: OTHER_BINDING_ID, contactId: 'contact/other' }] }), 'binding_ambiguous'],
     ['conflicted binding', snapshot({ bindings: [{ ...snapshot().bindings[0]!, state: 'conflict' }] }), 'binding_not_active'],
-    ['stale binding version', snapshot({ bindings: [{ ...snapshot().bindings[0]!, version: 3 }] }), 'binding_version_stale'],
+    ['stale principal binding counter', snapshot({ sessions: [{ ...snapshot().sessions[0]!, bindingVersion: 1 }] }), 'binding_version_stale'],
     ['absent role', snapshot({ grants: [] }), 'role_absent'],
     ['suspended role', snapshot({ grants: [{ ...snapshot().grants[0]!, lifecycle: 'suspended' }] }), 'role_not_active'],
-    ['stale policy version', snapshot({ grants: [{ ...snapshot().grants[0]!, version: 6 }] }), 'policy_version_stale'],
-    ['stale authority generation', snapshot({ grants: [{ ...snapshot().grants[0]!, authorityGeneration: 3 }] }), 'authority_generation_stale'],
+    ['stale principal grant counter', snapshot({ sessions: [{ ...snapshot().sessions[0]!, grantVersion: 3 }] }), 'grant_version_stale'],
+    ['stale principal policy counter', snapshot({ sessions: [{ ...snapshot().sessions[0]!, policyVersion: 4 }] }), 'policy_version_stale'],
+    ['merged source principal', snapshot({ sessions: [sessionWithPrincipal({ mergedIntoPrincipalId: '59b00741-2f3e-4f45-b359-9d95fe84bad0' })] }), 'principal_merged'],
+    ['tombstoned principal', snapshot({ sessions: [sessionWithPrincipal({ tombstoned: true })] }), 'principal_tombstoned'],
+    ['removed companion', snapshot({ companions: [{ ...snapshot().companions[0]!, lifecycle: 'removed' }] }), 'companion_not_active'],
+    ['restored companion', snapshot({ companions: [{ ...snapshot().companions[0]!, restoreState: 'quarantined' }] }), 'companion_not_live'],
+    ['stale companion lineage floor', snapshot({ companions: [{ ...snapshot().companions[0]!, hasAuthorityLineage: true }] }), 'companion_tombstoned'],
+    ['tombstoned binding', snapshot({ bindings: [{ ...snapshot().bindings[0]!, tombstoned: true }] }), 'binding_tombstoned'],
+    ['tombstoned role', snapshot({ grants: [{ ...snapshot().grants[0]!, tombstoned: true }] }), 'role_tombstoned'],
   ])('denies %s', (_label, candidate, reasonCode) => {
     expect(decide(candidate)).toEqual({ decision: 'deny', reasonCode });
+  });
+
+  it('selects the exact session provider and ignores other live provider subjects', () => {
+    const other = { ...snapshot().providerSubjects[0]!, subjectId: '123456789012345679' };
+    expect(decide(snapshot({ providerSubjects: [snapshot().providerSubjects[0]!, other] })))
+      .toMatchObject({ decision: 'allow', facts: { providerSubjectId: SUBJECT_ID } });
+  });
+
+  it('treats row-local versions and generations independently from principal-wide counters', () => {
+    const candidate = snapshot({
+      sessions: [sessionWithPrincipal({ authorityGeneration: 1 })],
+      providerSubjects: [{ ...snapshot().providerSubjects[0]!, authorityGeneration: 1 }],
+      companions: [{ ...snapshot().companions[0]!, authorityGeneration: 2, version: 11 }],
+      bindings: [{ ...snapshot().bindings[0]!, authorityGeneration: 1, version: 23 }],
+      grants: [{ ...snapshot().grants[0]!, authorityGeneration: 2, version: 29 }],
+    });
+    expect(decide(candidate)).toMatchObject({
+      decision: 'allow',
+      facts: {
+        contact: { bindingVersion: 23 },
+        operator: { grantVersion: 29 },
+      },
+    });
+  });
+
+  it('admits a reapproved companion only when its exact lineage remains current in the floor', () => {
+    const companion = {
+      ...snapshot().companions[0]!,
+      hasAuthorityLineage: true,
+      lineageFloorCurrent: true,
+      tombstoned: true,
+    };
+    expect(decide(snapshot({ companions: [companion] }))).toMatchObject({ decision: 'allow' });
   });
 
   it('keeps same contact identifiers companion-local and denies cross-companion requests', () => {
@@ -173,7 +233,7 @@ describe('fleet authorization context policy', () => {
       snapshot: snapshot({ bindings: [snapshot().bindings[0]!, sameContactElsewhere] }),
       disabledActionsByRole: { owner: [], admin: [], member: [], guest: [] },
       now: NOW,
-    })).toEqual({ decision: 'deny', reasonCode: 'role_absent' });
+    })).toEqual({ decision: 'deny', reasonCode: 'companion_absent' });
   });
 
   it('defaults every role/action pair to deny unless the closed code policy explicitly allows it', () => {

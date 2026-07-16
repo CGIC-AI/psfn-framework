@@ -19,17 +19,22 @@ import {
 } from '../../../boundary/fleet-auth/discord-evidence-runtime.js';
 import { isCanonicalIsoTimestamp, isRecord } from '../../../shared/utils/types.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
+import { FLEET_AUTH_LOCK_COMPANION_AUTHORITY_FUNCTION_NAME } from './companion-authority-lock-sql.js';
+import { FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME } from './authority-floor-read-sql.js';
 import type { ProviderRevocationAuthorityPort } from './oauth-session-store.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 
 interface SessionRow {
   record_id: string;
   principal_id: string;
+  provider: 'discord' | null;
+  provider_subject_id: string | null;
   audience: string;
   assurance: 'oauth' | 'webauthn_uv' | 'break_glass';
   session_authn_version: string;
   session_authz_version: string;
   binding_version: string;
+  grant_version: string;
   policy_version: string;
   session_global_auth_epoch: string;
   idle_expires_at: Date;
@@ -39,8 +44,13 @@ interface SessionRow {
   principal_status: FleetAuthorizationSnapshot['sessions'][number]['principal']['status'];
   principal_authn_version: string;
   principal_authz_version: string;
+  principal_binding_version: string;
+  principal_grant_version: string;
+  principal_policy_version: string;
   principal_authority_generation: string;
   principal_restore_state: 'live' | 'quarantined';
+  merged_into_principal_id: string | null;
+  principal_tombstoned: boolean;
 }
 
 interface ProviderSubjectRow {
@@ -52,6 +62,17 @@ interface ProviderSubjectRow {
   tombstoned: boolean;
 }
 
+interface CompanionRow {
+  companion_id: string;
+  lifecycle: FleetAuthorizationSnapshot['companions'][number]['lifecycle'];
+  version: string;
+  authority_generation: string;
+  restore_state: 'live' | 'quarantined';
+  authority_lineage_id: string | null;
+  lineage_floor_current: boolean;
+  tombstoned: boolean;
+}
+
 interface BindingRow {
   binding_id: string;
   companion_id: string;
@@ -60,6 +81,7 @@ interface BindingRow {
   version: string;
   authority_generation: string;
   restore_state: 'live' | 'quarantined';
+  tombstoned: boolean;
 }
 
 interface GrantRow {
@@ -70,6 +92,7 @@ interface GrantRow {
   version: string;
   authority_generation: string;
   restore_state: 'live' | 'quarantined';
+  tombstoned: boolean;
 }
 
 interface EvidenceRow {
@@ -261,32 +284,45 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
   ): Promise<FleetAuthorizationSnapshot> {
     const authority = await this.lockAuthority(client);
     const sessions = await client.query<SessionRow>(`
-      SELECT session.record_id, session.principal_id, session.audience, session.assurance,
+      SELECT session.record_id, session.principal_id, session.provider,
+             session.provider_subject_id, session.audience, session.assurance,
              session.authn_version AS session_authn_version,
              session.authz_version AS session_authz_version,
-             session.binding_version, session.policy_version,
+             session.binding_version, session.grant_version, session.policy_version,
              session.global_auth_epoch AS session_global_auth_epoch,
              session.idle_expires_at, session.absolute_expires_at,
              session.replaced_by, session.revoked_at,
              principal.status AS principal_status,
              principal.authn_version AS principal_authn_version,
              principal.authz_version AS principal_authz_version,
+             principal.binding_version AS principal_binding_version,
+             principal.grant_version AS principal_grant_version,
+             principal.policy_version AS principal_policy_version,
              principal.authority_generation AS principal_authority_generation,
-             principal.restore_state AS principal_restore_state
+             principal.restore_state AS principal_restore_state,
+             alias.canonical_principal_id AS merged_into_principal_id,
+             ${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME}(
+               'principal', principal.principal_id::text
+             ) AS principal_tombstoned
       FROM ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions AS session
       JOIN ${FLEET_AUTH_SCHEMA_NAME}.human_principals AS principal
         ON principal.principal_id = session.principal_id
+      LEFT JOIN ${FLEET_AUTH_SCHEMA_NAME}.principal_merge_aliases AS alias
+        ON alias.source_principal_id = principal.principal_id
       WHERE session.token_digest = $1
       FOR UPDATE OF session, principal
     `, [this.digest(request.sessionToken)]);
     const sessionRows = sessions.rows.map(row => ({
       recordId: row.record_id,
       principalId: row.principal_id,
+      provider: row.provider,
+      providerSubjectId: row.provider_subject_id,
       audience: row.audience,
       assurance: row.assurance,
       authnVersion: positiveInteger(row.session_authn_version, 'session.authn_version'),
       authzVersion: positiveInteger(row.session_authz_version, 'session.authz_version'),
       bindingVersion: positiveInteger(row.binding_version, 'session.binding_version'),
+      grantVersion: positiveInteger(row.grant_version, 'session.grant_version'),
       policyVersion: positiveInteger(row.policy_version, 'session.policy_version'),
       globalAuthEpoch: positiveInteger(row.session_global_auth_epoch, 'session.global_auth_epoch'),
       idleExpiresAt: row.idle_expires_at,
@@ -297,11 +333,19 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
         status: row.principal_status,
         authnVersion: positiveInteger(row.principal_authn_version, 'principal.authn_version'),
         authzVersion: positiveInteger(row.principal_authz_version, 'principal.authz_version'),
+        bindingVersion: positiveInteger(
+          row.principal_binding_version,
+          'principal.binding_version',
+        ),
+        grantVersion: positiveInteger(row.principal_grant_version, 'principal.grant_version'),
+        policyVersion: positiveInteger(row.principal_policy_version, 'principal.policy_version'),
         authorityGeneration: positiveInteger(
           row.principal_authority_generation,
           'principal.authority_generation',
         ),
         restoreState: row.principal_restore_state,
+        mergedIntoPrincipalId: row.merged_into_principal_id,
+        tombstoned: row.principal_tombstoned,
       },
     }));
     const principalId = sessionRows.at(0)?.principalId;
@@ -310,12 +354,16 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
         authority,
         sessions: sessionRows,
         providerSubjects: [],
+        companions: [],
         bindings: [],
         grants: [],
       };
     }
 
-    const subjects = await client.query<ProviderSubjectRow>(`
+    const sessionProvider = sessionRows[0]?.provider;
+    const sessionProviderSubjectId = sessionRows[0]?.providerSubjectId;
+    const subjects = sessionProvider && sessionProviderSubjectId
+      ? await client.query<ProviderSubjectRow>(`
       SELECT subject.provider, subject.subject_id, subject.state,
              subject.authority_generation, subject.restore_state,
              EXISTS (
@@ -323,32 +371,44 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
                FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subject_tombstones AS tombstone
                WHERE tombstone.provider = subject.provider
                  AND tombstone.subject_id = subject.subject_id
+             ) OR ${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME}(
+               'provider_subject', subject.provider || ':' || subject.subject_id
              ) AS tombstoned
       FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects AS subject
-      WHERE subject.principal_id = $1 AND subject.provider = 'discord'
-      ORDER BY subject.subject_id
+      WHERE subject.principal_id = $1
+        AND subject.provider = $2
+        AND subject.subject_id = $3
       FOR UPDATE OF subject
-    `, [principalId]);
+    `, [principalId, sessionProvider, sessionProviderSubjectId])
+      : { rows: [] as ProviderSubjectRow[] };
+    const companions = await client.query<CompanionRow>(`
+      SELECT companion_id, lifecycle, version, authority_generation, restore_state,
+             authority_lineage_id, lineage_floor_current, tombstoned
+      FROM ${FLEET_AUTH_LOCK_COMPANION_AUTHORITY_FUNCTION_NAME}($1)
+    `, [request.companionId]);
     const bindings = await client.query<BindingRow>(`
       SELECT binding_id, companion_id, contact_id, state, version,
-             authority_generation, restore_state
-      FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
-      WHERE principal_id = $1 AND companion_id = $2
+             authority_generation, restore_state,
+             ${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME}(
+               'contact_binding', binding.binding_id::text
+             ) AS tombstoned
+      FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings AS binding
+      WHERE binding.principal_id = $1 AND binding.companion_id = $2
       ORDER BY binding_id
-      FOR UPDATE
+      FOR UPDATE OF binding
     `, [principalId, request.companionId]);
     const grants = await client.query<GrantRow>(`
       SELECT grant_id, companion_id, role, lifecycle, version,
-             authority_generation, restore_state
-      FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
-      WHERE principal_id = $1 AND companion_id = $2
+             authority_generation, restore_state,
+             ${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME}(
+               'role_grant', role_grant.grant_id::text
+             ) AS tombstoned
+      FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants AS role_grant
+      WHERE role_grant.principal_id = $1 AND role_grant.companion_id = $2
       ORDER BY grant_id
-      FOR UPDATE
+      FOR UPDATE OF role_grant
     `, [principalId, request.companionId]);
-    const activeSubject = subjects.rows.filter(row => (
-      row.state === 'active' && row.restore_state === 'live'
-    ));
-    const evidenceSubject = activeSubject.length === 1 ? activeSubject.at(0) : undefined;
+    const evidenceSubject = subjects.rows.length === 1 ? subjects.rows[0] : undefined;
     const evidence = request.discordEvidence && evidenceSubject
       ? await this.loadEvidence(
           client,
@@ -371,6 +431,19 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
         restoreState: row.restore_state,
         tombstoned: row.tombstoned,
       })),
+      companions: companions.rows.map(row => ({
+        companionId: row.companion_id,
+        lifecycle: row.lifecycle,
+        version: positiveInteger(row.version, 'companion.version'),
+        authorityGeneration: positiveInteger(
+          row.authority_generation,
+          'companion.authority_generation',
+        ),
+        restoreState: row.restore_state,
+        hasAuthorityLineage: row.authority_lineage_id !== null,
+        lineageFloorCurrent: row.lineage_floor_current,
+        tombstoned: row.tombstoned,
+      })),
       bindings: bindings.rows.map(row => ({
         bindingId: row.binding_id,
         companionId: row.companion_id,
@@ -382,6 +455,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
           'binding.authority_generation',
         ),
         restoreState: row.restore_state,
+        tombstoned: row.tombstoned,
       })),
       grants: grants.rows.map(row => ({
         grantId: row.grant_id,
@@ -394,6 +468,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
           'grant.authority_generation',
         ),
         restoreState: row.restore_state,
+        tombstoned: row.tombstoned,
       })),
       ...(evidence ? { evidence } : {}),
     };

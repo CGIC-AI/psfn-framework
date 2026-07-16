@@ -1,4 +1,6 @@
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_DDL_SQL } from './authority-state-lock-sql.js';
+import { FLEET_AUTH_LOCK_COMPANION_AUTHORITY_DDL_SQL } from './companion-authority-lock-sql.js';
+import { FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_DDL_SQL } from './authority-floor-read-sql.js';
 
 export interface FleetAuthMigration {
   version: number;
@@ -1143,4 +1145,9 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
   { version: 17, name: 'hub_device_assertion_replay_procedure_boundary', sql: HUB_DEVICE_ASSERTION_REPLAY_PROCEDURE_BOUNDARY_SQL },
   { version: 18, name: 'companion_restore_projection', sql: COMPANION_RESTORE_PROJECTION_SQL },
   { version: 19, name: 'companion_restore_receipts', sql: COMPANION_RESTORE_RECEIPTS_SQL },
+  {
+    version: 20,
+    name: 'broker_authorization_snapshot_locks',
+    sql: `${FLEET_AUTH_LOCK_COMPANION_AUTHORITY_DDL_SQL}\n${FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_DDL_SQL}`,
+  },
 ] as const;

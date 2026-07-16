@@ -21,21 +21,31 @@ export type FleetAuthorizationDenialReason =
   | 'session_epoch_stale'
   | 'principal_not_active'
   | 'principal_not_live'
+  | 'principal_merged'
+  | 'principal_tombstoned'
   | 'authority_generation_stale'
   | 'provider_subject_absent'
   | 'provider_subject_ambiguous'
   | 'provider_subject_not_active'
   | 'provider_subject_not_live'
   | 'provider_subject_tombstoned'
+  | 'companion_absent'
+  | 'companion_ambiguous'
+  | 'companion_not_active'
+  | 'companion_not_live'
+  | 'companion_tombstoned'
   | 'binding_absent'
   | 'binding_ambiguous'
   | 'binding_not_active'
   | 'binding_not_live'
+  | 'binding_tombstoned'
   | 'binding_version_stale'
   | 'role_absent'
   | 'role_ambiguous'
   | 'role_not_active'
   | 'role_not_live'
+  | 'role_tombstoned'
+  | 'grant_version_stale'
   | 'policy_version_stale'
   | 'role_action_denied'
   | 'evidence_absent'
@@ -74,11 +84,14 @@ export interface FleetAuthorizationSnapshot {
   sessions: Array<{
     recordId: string;
     principalId: string;
+    provider: 'discord' | null;
+    providerSubjectId: string | null;
     audience: string;
     assurance: 'oauth' | 'webauthn_uv' | 'break_glass';
     authnVersion: number;
     authzVersion: number;
     bindingVersion: number;
+    grantVersion: number;
     policyVersion: number;
     globalAuthEpoch: number;
     idleExpiresAt: Date;
@@ -89,8 +102,13 @@ export interface FleetAuthorizationSnapshot {
       status: 'pending' | 'active' | 'suspended' | 'revoked' | 'quarantined';
       authnVersion: number;
       authzVersion: number;
+      bindingVersion: number;
+      grantVersion: number;
+      policyVersion: number;
       authorityGeneration: number;
       restoreState: 'live' | 'quarantined';
+      mergedIntoPrincipalId: string | null;
+      tombstoned: boolean;
     };
   }>;
   providerSubjects: Array<{
@@ -101,6 +119,16 @@ export interface FleetAuthorizationSnapshot {
     restoreState: 'live' | 'quarantined';
     tombstoned: boolean;
   }>;
+  companions: Array<{
+    companionId: string;
+    lifecycle: 'active' | 'removed' | 'quarantined';
+    version: number;
+    authorityGeneration: number;
+    restoreState: 'live' | 'quarantined';
+    hasAuthorityLineage: boolean;
+    lineageFloorCurrent: boolean;
+    tombstoned: boolean;
+  }>;
   bindings: Array<{
     bindingId: string;
     companionId: string;
@@ -109,6 +137,7 @@ export interface FleetAuthorizationSnapshot {
     version: number;
     authorityGeneration: number;
     restoreState: 'live' | 'quarantined';
+    tombstoned: boolean;
   }>;
   grants: Array<{
     grantId: string;
@@ -118,6 +147,7 @@ export interface FleetAuthorizationSnapshot {
     version: number;
     authorityGeneration: number;
     restoreState: 'live' | 'quarantined';
+    tombstoned: boolean;
   }>;
   evidence?: {
     evidenceId: string;
@@ -164,7 +194,10 @@ export interface FleetAuthorizationFacts {
     authnVersion: number;
     authzVersion: number;
     bindingVersion: number;
+    grantVersion: number;
     policyVersion: number;
+    provider: 'discord';
+    providerSubjectId: string;
   };
   authority: {
     authorityGeneration: number;
@@ -402,33 +435,42 @@ export function evaluateFleetAuthorizationSnapshot(input: {
   if (session.replacedBy !== null) return deny('session_replaced');
   if (session.idleExpiresAt.getTime() <= now.getTime()
     || session.absoluteExpiresAt.getTime() <= now.getTime()) return deny('session_expired');
+  if (session.principal.mergedIntoPrincipalId !== null) return deny('principal_merged');
+  if (session.principal.tombstoned) return deny('principal_tombstoned');
   if (session.principal.status !== 'active') return deny('principal_not_active');
   if (session.principal.restoreState !== 'live') return deny('principal_not_live');
   if (session.authnVersion !== session.principal.authnVersion) return deny('session_authn_stale');
   if (session.authzVersion !== session.principal.authzVersion) return deny('session_authz_stale');
+  if (session.bindingVersion !== session.principal.bindingVersion) {
+    return deny('binding_version_stale');
+  }
+  if (session.grantVersion !== session.principal.grantVersion) return deny('grant_version_stale');
+  if (session.policyVersion !== session.principal.policyVersion) return deny('policy_version_stale');
   if (session.globalAuthEpoch !== snapshot.authority.globalAuthEpoch) return deny('session_epoch_stale');
-  if (session.principal.authorityGeneration !== snapshot.authority.authorityGeneration) {
-    return deny('authority_generation_stale');
-  }
 
-  const activeSubjects = snapshot.providerSubjects.filter(subject => (
-    subject.state === 'active' && subject.restoreState === 'live'
+  const exactSubjects = snapshot.providerSubjects.filter(subject => (
+    subject.provider === session.provider && subject.subjectId === session.providerSubjectId
   ));
-  if (activeSubjects.length === 0) {
-    if (snapshot.providerSubjects.length === 0) return deny('provider_subject_absent');
-    if (snapshot.providerSubjects.some(subject => subject.tombstoned)) {
-      return deny('provider_subject_tombstoned');
-    }
-    if (snapshot.providerSubjects.some(subject => subject.restoreState !== 'live')) {
-      return deny('provider_subject_not_live');
-    }
-    return deny('provider_subject_not_active');
-  }
-  if (activeSubjects.length !== 1) return deny('provider_subject_ambiguous');
-  const subject = activeSubjects[0]!;
+  if (exactSubjects.length === 0) return deny('provider_subject_absent');
+  if (exactSubjects.length !== 1) return deny('provider_subject_ambiguous');
+  const subject = exactSubjects[0]!;
   if (subject.tombstoned) return deny('provider_subject_tombstoned');
-  if (subject.authorityGeneration !== snapshot.authority.authorityGeneration) {
-    return deny('authority_generation_stale');
+  if (subject.restoreState !== 'live') return deny('provider_subject_not_live');
+  if (subject.state !== 'active') return deny('provider_subject_not_active');
+
+  const exactCompanions = snapshot.companions.filter(companion => (
+    companion.companionId === request.companionId
+  ));
+  if (exactCompanions.length === 0) return deny('companion_absent');
+  if (exactCompanions.length !== 1) return deny('companion_ambiguous');
+  const companion = exactCompanions[0]!;
+  if (companion.restoreState !== 'live') return deny('companion_not_live');
+  if (companion.lifecycle !== 'active') return deny('companion_not_active');
+  if (companion.hasAuthorityLineage && !companion.lineageFloorCurrent) {
+    return deny('companion_tombstoned');
+  }
+  if (companion.tombstoned && !companion.lineageFloorCurrent) {
+    return deny('companion_tombstoned');
   }
 
   const companionBindings = snapshot.bindings.filter(binding => (
@@ -446,10 +488,7 @@ export function evaluateFleetAuthorizationSnapshot(input: {
   }
   if (activeBindings.length !== 1) return deny('binding_ambiguous');
   const binding = activeBindings[0]!;
-  if (binding.authorityGeneration !== snapshot.authority.authorityGeneration) {
-    return deny('authority_generation_stale');
-  }
-  if (binding.version !== session.bindingVersion) return deny('binding_version_stale');
+  if (binding.tombstoned) return deny('binding_tombstoned');
 
   const companionGrants = snapshot.grants.filter(grant => grant.companionId === request.companionId);
   const activeGrants = companionGrants.filter(grant => (
@@ -462,10 +501,7 @@ export function evaluateFleetAuthorizationSnapshot(input: {
   }
   if (activeGrants.length !== 1) return deny('role_ambiguous');
   const grant = activeGrants[0]!;
-  if (grant.authorityGeneration !== snapshot.authority.authorityGeneration) {
-    return deny('authority_generation_stale');
-  }
-  if (grant.version !== session.policyVersion) return deny('policy_version_stale');
+  if (grant.tombstoned) return deny('role_tombstoned');
   if (!roleAllowsAction(grant.role, request.action)
     || input.disabledActionsByRole[grant.role].includes(request.action)) {
     return deny('role_action_denied');
@@ -510,9 +546,12 @@ export function evaluateFleetAuthorizationSnapshot(input: {
         recordId: session.recordId,
         audience: 'fleet',
         assurance: session.assurance,
+        provider: 'discord',
+        providerSubjectId: subject.subjectId,
         authnVersion: session.authnVersion,
         authzVersion: session.authzVersion,
         bindingVersion: session.bindingVersion,
+        grantVersion: session.grantVersion,
         policyVersion: session.policyVersion,
       },
       authority: { ...snapshot.authority },

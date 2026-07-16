@@ -72,6 +72,7 @@ import type { FleetPortalAuthorizationBatchPort } from '../../../boundary/gatewa
 import { createPostgresFleetPortalAuthorization } from './portal-authorization-store.js';
 import { TrustedHostPasskeyCeremonyService } from '../../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
 import { PostgresTrustedHostPasskeyCeremonyStore } from './trusted-host-passkey-ceremony-store.js';
+import { GatewayTrustedHostGardenRecoveryService } from '../../../boundary/gateway/trusted-host-garden-recovery.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -90,6 +91,7 @@ export interface GatewayFleetAuthPersistence {
   primaryEmbodiments: PrimaryEmbodimentAuthorityPort;
   jitStepUp: FleetJitStepUpCoordinator;
   passkeyCeremonies: TrustedHostPasskeyCeremonyService;
+  trustedHostRecovery: GatewayTrustedHostGardenRecoveryService;
   authorityLifecycle: GatewayFleetAuthAuthorityLifecycleStore;
   contactLifecycleAuthority: GatewayContactLifecycleAuthorityPort;
   discordEvidence?: DiscordEvidenceRuntime;
@@ -498,6 +500,14 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       resolveAuthorizationContext: input => broker.resolveAuthorizationContext(input),
     });
     const requestCapabilityReplay = new PostgresRequestCapabilityReplayStore(pool);
+    const trustedHostRecovery = new GatewayTrustedHostGardenRecoveryService({
+      configuredCredential: secrets.trustedHostRecoveryCredential,
+      knownCompanionIds: new Set(knownCompanionIds),
+      signer: requestCapabilities,
+      verifier: requestCapabilityVerifier,
+      replay: requestCapabilityReplay,
+      authority: authorityFloors,
+    });
     const primaryEmbodiments = new PostgresPrimaryEmbodimentStore({ pool });
     const childAssertions = new GatewayFleetAuthChildAssertionBroker({
       verifier: requestCapabilityVerifier,
@@ -516,6 +526,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       primaryEmbodiments,
       jitStepUp,
       passkeyCeremonies,
+      trustedHostRecovery,
       authorityLifecycle,
       contactLifecycleAuthority,
       ...(discordEvidence ? { discordEvidence } : {}),

@@ -148,6 +148,32 @@ describe('non-restored fleet auth authority floors', () => {
     })).toThrow(/activation generation.*cannot move backward/i);
   });
 
+  it('revokes recovery credentials without advancing ordinary account authority', () => {
+    const floor = store();
+    const initial = floor.open({ activationGeneration: 1, databaseHasDurableAuthority: false });
+    const credentialId = 'a'.repeat(64);
+    const revoked = floor.revokeRecoveryCredential({
+      credentialId,
+      reason: 'trusted host credential rotation',
+      at: '2026-07-15T12:00:00.000Z',
+    });
+    expect(revoked.trustedHost.authorityGeneration)
+      .toBe(initial.trustedHost.authorityGeneration);
+    expect(revoked.trustedHost.revocationCheckpoint).toBe(1);
+    expect(floor.isAccountAuthorityTombstoned('recovery_credential', credentialId)).toBe(true);
+    expect(() => floor.revokeAccountAuthority({
+      kind: 'recovery_credential',
+      resourceId: credentialId,
+      reason: 'generic mutation forbidden',
+      at: '2026-07-15T12:01:00.000Z',
+    })).toThrow(/dedicated authority floors/i);
+    expect(() => floor.prepareRestore({
+      activationGeneration: 2,
+      restoredTombstones: [{ kind: 'recovery_credential', resourceId: credentialId }],
+      at: '2026-07-15T12:02:00.000Z',
+    })).toThrow(/non-restored dedicated floors/i);
+  });
+
   it('allocates a fresh monotonic same-id companion lineage without weakening the removal floor', () => {
     const floor = store();
     floor.open({ activationGeneration: 1, databaseHasDurableAuthority: false });

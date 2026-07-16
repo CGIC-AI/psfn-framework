@@ -30,7 +30,8 @@ export type AccountAuthorityTombstoneKind =
   | 'principal'
   | 'companion'
   | 'contact_authority_fence'
-  | 'companion_lineage_floor';
+  | 'companion_lineage_floor'
+  | 'recovery_credential';
 
 export interface CompanionReaddFloorClaim {
   principalId: string;
@@ -160,7 +161,8 @@ function assertAccountAuthorityTombstoneKind(
     && value !== 'principal'
     && value !== 'companion'
     && value !== 'contact_authority_fence'
-    && value !== 'companion_lineage_floor') {
+    && value !== 'companion_lineage_floor'
+    && value !== 'recovery_credential') {
     throw new Error(`Invalid fleet auth authority floor: ${field} is unknown`);
   }
 }
@@ -614,6 +616,10 @@ export class FleetAuthAuthorityFloorStore {
     return this.read().passkeys;
   }
 
+  readTrustedHost(): TrustedHostAuthorityFloor {
+    return this.read().trustedHost;
+  }
+
   open(input: {
     activationGeneration: number;
     databaseHasDurableAuthority: boolean;
@@ -695,8 +701,8 @@ export class FleetAuthAuthorityFloorStore {
         resource.kind,
         `revokeAccountAuthorities.resources[${index}].kind`,
       );
-      if (resource.kind === 'companion_lineage_floor') {
-        throw new Error('Companion lineage floors require the exact re-add authority operation');
+      if (resource.kind === 'companion_lineage_floor' || resource.kind === 'recovery_credential') {
+        throw new Error('Dedicated authority floors require their exact mutation operation');
       }
     }
     return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
@@ -721,6 +727,52 @@ export class FleetAuthAuthorityFloorStore {
             revokedAt: input.at,
             reasonHash: digest(resource.reason),
           }))],
+        },
+        updatedAt: input.at,
+      };
+      this.write(next);
+      return next;
+    });
+  }
+
+  /**
+   * Fence the configured trusted-host recovery credential without advancing
+   * ordinary human authority. The revocation checkpoint is non-restored and
+   * is signed into every recovery capability, so issued/unconsumed tokens are
+   * defeated while routine sessions and roles retain their existing floor.
+   */
+  revokeRecoveryCredential(input: {
+    credentialId: string;
+    reason: string;
+    at: string;
+  }): FleetAuthAuthorityFloor {
+    assertTimestamp(input.at, 'revokeRecoveryCredential.at');
+    const credentialId = assertString(input.credentialId, 'revokeRecoveryCredential.credentialId');
+    if (!HASH_PATTERN.test(credentialId)) {
+      throw new Error('Invalid fleet auth authority floor: recovery credential id must be SHA-256 hex');
+    }
+    assertString(input.reason, 'revokeRecoveryCredential.reason');
+    return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
+      const current = this.read();
+      const resourceHash = digest(credentialId);
+      const nextCheckpoint = current.trustedHost.revocationCheckpoint + 1;
+      const next: FleetAuthAuthorityFloor = {
+        ...current,
+        trustedHost: {
+          ...current.trustedHost,
+          revocationCheckpoint: nextCheckpoint,
+          tombstones: [
+            ...current.trustedHost.tombstones.filter(entry => (
+              entry.kind !== 'recovery_credential' || entry.resourceHash !== resourceHash
+            )),
+            {
+              kind: 'recovery_credential',
+              resourceHash,
+              generation: current.trustedHost.authorityGeneration,
+              revokedAt: input.at,
+              reasonHash: digest(input.reason),
+            },
+          ],
         },
         updatedAt: input.at,
       };
@@ -901,8 +953,9 @@ export class FleetAuthAuthorityFloorStore {
         restored.kind,
         `prepareRestore.restoredTombstones[${index}].kind`,
       );
-      if (restored.kind === 'companion_lineage_floor') {
-        throw new Error('Companion lineage floors cannot be synthesized from restored authority');
+      if (restored.kind === 'companion_lineage_floor'
+        || restored.kind === 'recovery_credential') {
+        throw new Error('Non-restored dedicated floors cannot be synthesized from restored authority');
       }
     }
     return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {

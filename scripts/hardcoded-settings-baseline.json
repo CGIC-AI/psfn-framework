@@ -52,6 +52,24 @@
       "value": "240_000"
     },
     {
+      "file": "src/app/operator/kube-self-update-transport.ts",
+      "name": "DEFAULT_COMMAND_TIMEOUT_MS",
+      "value": "600_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-zhg9; operator-job command timeout is mutable lifecycle policy."
+    },
+    {
+      "file": "src/app/operator/kube-self-update-transport.ts",
+      "name": "DEFAULT_MAX_BUFFER",
+      "value": "16 * 1024 * 1024",
+      "note": "Code-owned child-process output allocation ceiling that limits operator-job memory exhaustion."
+    },
+    {
+      "file": "src/app/operator/kube-self-update-validation-transport.ts",
+      "name": "HTTP_TIMEOUT_MS",
+      "value": "8_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-zhg9; post-rollout HTTP timeout is mutable lifecycle policy."
+    },
+    {
       "file": "src/app/operator/main.ts",
       "name": "DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS",
       "value": "15_000"
@@ -60,6 +78,30 @@
       "file": "src/app/startup/composition/post-turn-actions.ts",
       "name": "MAX_STATUS_HISTORY",
       "value": "25"
+    },
+    {
+      "file": "src/app/startup/support/gateway-operator-confirmation-client.ts",
+      "name": "MAX_AUTHORIZATION_LENGTH",
+      "value": "1_024",
+      "note": "Code-owned credential-header bound paired with control-character rejection to prevent header abuse."
+    },
+    {
+      "file": "src/app/startup/support/gateway-operator-confirmation-client.ts",
+      "name": "MAX_COOKIE_LENGTH",
+      "value": "2_048",
+      "note": "Code-owned cookie credential bound paired with control-character rejection to prevent header abuse."
+    },
+    {
+      "file": "src/app/startup/support/gateway-operator-confirmation-client.ts",
+      "name": "MAX_RESPONSE_BYTES",
+      "value": "64 * 1024",
+      "note": "Code-owned untrusted gateway-response allocation ceiling enforced while streaming to prevent memory exhaustion."
+    },
+    {
+      "file": "src/app/startup/support/gateway-operator-confirmation-client.ts",
+      "name": "REQUEST_TIMEOUT_MS",
+      "value": "5_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-zhg9; operator-to-gateway request timeout is mutable lifecycle policy."
     },
     {
       "file": "src/boundary/custody/runtime-credential-source.ts",
@@ -115,6 +157,12 @@
       "file": "src/boundary/gateway/filesystem-paths.ts",
       "name": "MAX_FS_LIST_GLOB_LENGTH",
       "value": "512"
+    },
+    {
+      "file": "src/boundary/gateway/fleet-auth-broker.ts",
+      "name": "OAUTH_CODE_MAX_LENGTH",
+      "value": "2048",
+      "note": "Code-owned OAuth callback input bound paired with control-character rejection at the authentication trust boundary."
     },
     {
       "file": "src/boundary/gateway/inline-image-reference-hints.ts",
@@ -200,6 +248,24 @@
       "file": "src/boundary/gateway/intake/vision-screener.ts",
       "name": "MAX_OCR_CHARS",
       "value": "16000"
+    },
+    {
+      "file": "src/boundary/gateway/kubernetes-read-api.ts",
+      "name": "MAX_RESPONSE_BYTES",
+      "value": "2 * 1024 * 1024",
+      "note": "Code-owned Kubernetes API response allocation ceiling enforced during streaming to prevent memory exhaustion."
+    },
+    {
+      "file": "src/boundary/gateway/kubernetes-read-api.ts",
+      "name": "REQUEST_TIMEOUT_MS",
+      "value": "5_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-zhg9; Kubernetes read timeout is mutable lifecycle policy."
+    },
+    {
+      "file": "src/boundary/gateway/kubernetes-rollout-api.ts",
+      "name": "REQUEST_TIMEOUT_MS",
+      "value": "5_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-zhg9; Kubernetes rollout request timeout is mutable lifecycle policy."
     },
     {
       "file": "src/boundary/gateway/methods/beads-github-project-sync.ts",
@@ -706,6 +772,12 @@
     },
     {
       "file": "src/channels/api/server.ts",
+      "name": "CONFIRMATION_OPERATOR_MAX_BODY_BYTES",
+      "value": "16 * 1024",
+      "note": "Code-owned authenticated confirmation request-body ceiling that bounds JSON parsing and memory use."
+    },
+    {
+      "file": "src/channels/api/server.ts",
       "name": "TELEMETRY_MAX_SKEW_MS",
       "value": "5 * 60_000"
     },
@@ -753,6 +825,12 @@
       "file": "src/channels/api/server/companion-touch-stimulus-route.ts",
       "name": "TOUCH_STIMULUS_MAX_BODY_BYTES",
       "value": "16 * 1024"
+    },
+    {
+      "file": "src/channels/api/server/fleet-auth-routes.ts",
+      "name": "MUTATION_BODY_LIMIT",
+      "value": "2048",
+      "note": "Code-owned fleet-auth mutation request-body ceiling that bounds attacker-controlled JSON parsing."
     },
     {
       "file": "src/channels/api/server/http.ts",
@@ -990,6 +1068,48 @@
       "value": "512 * 1_024"
     },
     {
+      "file": "src/core/agent/background-work/post-turn-runtime.ts",
+      "name": "EXTRACTION_DRAIN_REQUEUE_DELAY_MS",
+      "value": "1_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-leg6; extraction drain requeue cadence is mutable scheduler policy."
+    },
+    {
+      "file": "src/core/agent/background-work/post-turn-runtime.ts",
+      "name": "FOREGROUND_PREEMPTION_DEFER_DELAY_MS",
+      "value": "1_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-leg6; foreground preemption defer cadence is mutable scheduler policy."
+    },
+    {
+      "file": "src/core/agent/background-work/supervisor.ts",
+      "name": "DEFAULT_CLEANUP_INTERVAL_MS",
+      "value": "60 * 60_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-leg6; terminal cleanup cadence is mutable scheduler policy."
+    },
+    {
+      "file": "src/core/agent/background-work/supervisor.ts",
+      "name": "DEFAULT_MAX_CONCURRENT_SESSIONS",
+      "value": "4",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-leg6; background session concurrency is mutable scheduler policy."
+    },
+    {
+      "file": "src/core/agent/background-work/supervisor.ts",
+      "name": "DEFAULT_RETRY_BASE_DELAY_MS",
+      "value": "1_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-leg6; retry backoff base delay is mutable scheduler policy."
+    },
+    {
+      "file": "src/core/agent/background-work/supervisor.ts",
+      "name": "DEFAULT_RETRY_MAX_DELAY_MS",
+      "value": "5 * 60_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-leg6; retry backoff maximum is mutable scheduler policy."
+    },
+    {
+      "file": "src/core/agent/background-work/supervisor.ts",
+      "name": "DEFAULT_SHUTDOWN_TIMEOUT_MS",
+      "value": "5_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-leg6; supervisor shutdown drain timeout is mutable scheduler policy."
+    },
+    {
       "file": "src/core/agent/completion-handoff.ts",
       "name": "MAX_SUMMARY_CHARS",
       "value": "700"
@@ -1123,11 +1243,6 @@
       "file": "src/core/agent/substrate-agent/turn-execution/prompt-cache-runtime.ts",
       "name": "MAX_TRACKED_SCOPES",
       "value": "256"
-    },
-    {
-      "file": "src/core/agent/substrate-agent/turn-support-runtime.ts",
-      "name": "DEFAULT_POST_TURN_DRAIN_TIMEOUT_MS",
-      "value": "5_000"
     },
     {
       "file": "src/core/agent/substrate-agent/vision-attachments.ts",
@@ -1433,6 +1548,24 @@
       "file": "src/core/emotion/acac.ts",
       "name": "MAX_RATIONALE_LENGTH",
       "value": "500"
+    },
+    {
+      "file": "src/core/emotion/appraisal-state.ts",
+      "name": "MAX_CONTACT_REF_CHARS",
+      "value": "256",
+      "note": "Code-owned durable appraisal-schema bound on contact references at the background-job trust boundary."
+    },
+    {
+      "file": "src/core/emotion/appraisal-state.ts",
+      "name": "MAX_DISCRETE_EMOTIONS",
+      "value": "32",
+      "note": "Code-owned durable appraisal-schema cardinality bound that limits untrusted queue payload expansion."
+    },
+    {
+      "file": "src/core/emotion/appraisal-state.ts",
+      "name": "MAX_DISCRETE_LABEL_CHARS",
+      "value": "64",
+      "note": "Code-owned durable appraisal-schema label bound that limits untrusted queue payload expansion."
     },
     {
       "file": "src/core/emotion/appraisal.ts",
@@ -2125,6 +2258,12 @@
       "value": "500"
     },
     {
+      "file": "src/core/scheduler/scheduler.ts",
+      "name": "MIN_WAKE_MS",
+      "value": "50",
+      "note": "Code-owned anti-busy-loop safety floor that prevents overdue scheduler tasks from rearming at zero delay."
+    },
+    {
       "file": "src/core/self-model/situated-location.ts",
       "name": "SITUATED_LOCATION_STALE_THRESHOLD_MS",
       "value": "6 * 60 * 60 * 1000"
@@ -2789,6 +2928,12 @@
       "value": "80"
     },
     {
+      "file": "src/faculties/memory/extraction/coverage-ranges.ts",
+      "name": "MAX_COVERAGE_INTERVALS",
+      "value": "128",
+      "note": "Code-owned bounded-memory safety valve for pathological out-of-order extraction coverage without bridging gaps."
+    },
+    {
       "file": "src/faculties/memory/extraction/orchestrator.ts",
       "name": "EXTRACTION_CHUNK_LLM_CONCURRENCY",
       "value": "2"
@@ -2912,6 +3057,12 @@
       "file": "src/faculties/memory/postgres-store.ts",
       "name": "SCRATCHPAD_MAX_ENTRIES",
       "value": "64"
+    },
+    {
+      "file": "src/faculties/memory/postgres-store/subject-backfill.ts",
+      "name": "MAX_BATCH_SIZE",
+      "value": "500",
+      "note": "Code-owned database transaction ceiling that bounds subject-backfill lock duration and resource use."
     },
     {
       "file": "src/faculties/memory/research-library/store.ts",
@@ -3169,6 +3320,24 @@
       "value": "8_000"
     },
     {
+      "file": "src/faculties/wiki/startup-hydration.ts",
+      "name": "DEFAULT_RECENT_MESSAGE_LIMIT",
+      "value": "18",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-6n8w; wiki startup message volume is mutable runtime policy."
+    },
+    {
+      "file": "src/faculties/wiki/startup-hydration.ts",
+      "name": "DEFAULT_RECENT_SESSION_LIMIT",
+      "value": "4",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-6n8w; wiki startup session volume is mutable runtime policy."
+    },
+    {
+      "file": "src/faculties/wiki/startup-hydration.ts",
+      "name": "MAX_HYDRATION_CONTEXT_CHARS",
+      "value": "6_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-6n8w; wiki startup context volume is mutable runtime policy."
+    },
+    {
       "file": "src/faculties/wiki/store.ts",
       "name": "DEFAULT_SEARCH_LIMIT",
       "value": "20"
@@ -3212,6 +3381,18 @@
       "file": "src/operator/garden/operator-surface.ts",
       "name": "ADMIN_MAX_BODY_SIZE",
       "value": "65_536"
+    },
+    {
+      "file": "src/operator/garden/operator-surface.ts",
+      "name": "MAX_OPERATOR_AUTHORIZATION_LENGTH",
+      "value": "1_024",
+      "note": "Code-owned operator credential propagation bound that prevents oversized Authorization headers crossing processes."
+    },
+    {
+      "file": "src/operator/garden/operator-surface.ts",
+      "name": "MAX_OPERATOR_COOKIE_TOKEN_LENGTH",
+      "value": "512",
+      "note": "Code-owned operator credential propagation bound that prevents oversized cookie tokens crossing processes."
     },
     {
       "file": "src/operator/garden/routes/drift-review-routes.ts",
@@ -3479,6 +3660,24 @@
       "value": "63"
     },
     {
+      "file": "src/persistence/postgres/background-work-store.ts",
+      "name": "MAX_FINGERPRINT_LENGTH",
+      "value": "128",
+      "note": "Code-owned durable queue fingerprint protocol bound applied when mapping and accepting persisted jobs."
+    },
+    {
+      "file": "src/persistence/postgres/background-work-store.ts",
+      "name": "MAX_PURGE_LIMIT",
+      "value": "10_000",
+      "note": "Code-owned database deletion ceiling that bounds a single terminal-job purge transaction."
+    },
+    {
+      "file": "src/persistence/postgres/background-work-store.ts",
+      "name": "MAX_TEXT_LENGTH",
+      "value": "2_048",
+      "note": "Code-owned durable queue identifier and metadata bound at the persistence trust boundary."
+    },
+    {
       "file": "src/persistence/postgres/companion-presence-store.ts",
       "name": "MAX_ID_CHARS",
       "value": "256"
@@ -3603,6 +3802,12 @@
       "file": "src/persistence/sessions/store.ts",
       "name": "MAX_RECENT_ENTRY_CACHE_LIMITS",
       "value": "8"
+    },
+    {
+      "file": "src/persistence/sessions/store.ts",
+      "name": "MAX_TURN_RECORD_ELIGIBILITY_SNAPSHOT_FENCES",
+      "value": "512",
+      "note": "Code-owned lock-set safety ceiling preventing one post-turn effect from acquiring unbounded eligibility fences."
     },
     {
       "file": "src/persistence/sessions/store.ts",
@@ -3745,6 +3950,18 @@
       "file": "src/primitives/voice/connectors/stt/deepgram-stream.ts",
       "name": "DEFAULT_TRANSCRIPT_QUEUE_MAX_ENTRIES",
       "value": "128"
+    },
+    {
+      "file": "src/primitives/voice/reply-stream/segmenter.ts",
+      "name": "DEFAULT_MAX_BUFFER_LENGTH",
+      "value": "240",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-4k3h; live voice runaway-break threshold is mutable runtime policy."
+    },
+    {
+      "file": "src/primitives/voice/reply-stream/segmenter.ts",
+      "name": "DEFAULT_MIN_SEGMENT_LENGTH",
+      "value": "24",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-4k3h; live voice minimum segment length is mutable runtime policy."
     },
     {
       "file": "src/primitives/voice/transports/discord-output.ts",
@@ -4289,6 +4506,60 @@
       "file": "src/system/config/runtime-config-contracts.ts",
       "name": "PROMOTED_EXTENDED_TOOL_SLOTS_MAX",
       "value": "4"
+    },
+    {
+      "file": "src/system/lifecycle/command-runner.ts",
+      "name": "DEFAULT_MAX_OUTPUT_CHARS",
+      "value": "10_000",
+      "note": "Code-owned child-process diagnostic capture ceiling that bounds memory and error-message amplification."
+    },
+    {
+      "file": "src/system/lifecycle/command-runner.ts",
+      "name": "DEFAULT_TIMEOUT_MS",
+      "value": "30_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-zhg9; lifecycle command timeout is mutable operational policy."
+    },
+    {
+      "file": "src/system/lifecycle/kube-helm-rollback.ts",
+      "name": "DEFAULT_ROLLBACK_POLL_INTERVAL_MS",
+      "value": "3_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-zhg9; rollback readiness poll cadence is mutable lifecycle policy."
+    },
+    {
+      "file": "src/system/lifecycle/kube-helm-rollback.ts",
+      "name": "DEFAULT_ROLLBACK_WAIT_TIMEOUT_MS",
+      "value": "180_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-zhg9; rollback readiness timeout is mutable lifecycle policy."
+    },
+    {
+      "file": "src/system/lifecycle/kube-post-rollout-validation-store.ts",
+      "name": "POST_ROLLOUT_VALIDATION_HISTORY_LIMIT",
+      "value": "20",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-zhg9; validation history retention is mutable lifecycle policy."
+    },
+    {
+      "file": "src/system/lifecycle/kube-post-rollout-validation.ts",
+      "name": "DEFAULT_MAX_LOG_RECORDS",
+      "value": "10",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-zhg9; validation diagnostic log volume is mutable lifecycle policy."
+    },
+    {
+      "file": "src/system/lifecycle/kube-rollback-store.ts",
+      "name": "KUBE_ROLLBACK_HISTORY_LIMIT",
+      "value": "50",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-zhg9; rollback history retention is mutable lifecycle policy."
+    },
+    {
+      "file": "src/system/lifecycle/kube-rollout-restart.ts",
+      "name": "DEFAULT_POLL_INTERVAL_MS",
+      "value": "3_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-zhg9; rollout readiness poll cadence is mutable lifecycle policy."
+    },
+    {
+      "file": "src/system/lifecycle/kube-rollout-restart.ts",
+      "name": "DEFAULT_WAIT_TIMEOUT_MS",
+      "value": "180_000",
+      "note": "Temporary owner-plumbing deferral tracked by psfn-framework-zhg9; rollout readiness timeout is mutable lifecycle policy."
     },
     {
       "file": "src/system/security/policy-constants.ts",

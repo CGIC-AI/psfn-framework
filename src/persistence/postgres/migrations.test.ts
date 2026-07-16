@@ -12,7 +12,7 @@ import {
   POSTGRES_SHARED_WIKI_MIGRATIONS,
 } from './migrations.js';
 import { MODEL_USAGE_RUNTIME_LANE_CLASSES } from '../../shared/telemetry/model-usage-attribution.js';
-import { RUNTIME_LANE_CLASSES } from '../../core/agent/worker-lanes.js';
+import { RUNTIME_LANE_CLASSES } from '../../shared/contracts/runtime-lanes.js';
 
 function migrationSql(statements: readonly string[]): string {
   return statements.join('\n');
@@ -221,8 +221,11 @@ describe('Postgres live schema migrations', () => {
     expect(sql).toContain("CHECK (scope = 'shared_world:' || site_id)");
     expect(sql).toContain('CREATE INDEX IF NOT EXISTS idx_shared_wiki_chunks_site ON shared_wiki_chunks(site_id)');
     expect(sql).toContain('CREATE INDEX IF NOT EXISTS idx_shared_wiki_chunks_scope ON shared_wiki_chunks(scope)');
-    // Deterministic pgvector placement for the shared chain.
-    expect(sql).toContain('CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;');
+    // Deterministic pgvector placement for public flag-off or the explicit
+    // extensions schema under tenant/shared search paths.
+    expect(sql).toContain("current_schema() = 'public'");
+    expect(sql).toContain("CREATE EXTENSION vector WITH SCHEMA %I");
+    expect(sql).toContain('expected %');
     // Ledger discipline: table before its version registration.
     expect(sql.indexOf('CREATE TABLE IF NOT EXISTS shared_wiki_chunks')).toBeLessThan(
       sql.indexOf("VALUES (3, 'shared-wiki-chunks')"),
@@ -235,6 +238,24 @@ describe('Postgres live schema migrations', () => {
     const baseSql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
     expect(baseSql).not.toMatch(/vector/i);
     expect(baseSql).not.toContain('shared_wiki_chunks');
+  });
+
+  it('adds the durable shared-world caretaker proposal state machine as shared migration 8', () => {
+    const sql = migrationSql(POSTGRES_SHARED_WIKI_MIGRATIONS);
+
+    expect(sql).toContain('CREATE TABLE IF NOT EXISTS shared_wiki_proposals');
+    expect(sql).toContain('UNIQUE (site_id, content_digest)');
+    expect(sql).toContain("CHECK (review_state IN ('pending', 'approved', 'rejected'))");
+    expect(sql).toContain("CHECK (apply_state IN ('unreviewed', 'ready', 'applying', 'retryable', 'applied', 'rejected'))");
+    expect(sql).toContain("CHECK (sensitivity = 'public')");
+    expect(sql).toContain('apply_lease_token UUID');
+    expect(sql).toContain('projection_body_sha256 TEXT');
+    expect(sql).toContain('idx_shared_wiki_proposals_review');
+    expect(sql).toContain('idx_shared_wiki_proposals_apply');
+    expect(sql).toContain('idx_shared_wiki_proposals_cleanup');
+    expect(sql.indexOf('CREATE TABLE IF NOT EXISTS shared_wiki_proposals')).toBeLessThan(
+      sql.indexOf("VALUES (8, 'shared-wiki-caretaker-proposals')"),
+    );
   });
 
   it('creates the hub-identity enrollment binding + audit tables bound to contacts', () => {

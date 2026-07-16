@@ -18,6 +18,7 @@ export interface MemoryExtractorDrainOptions {
 
 export type ExtractionTriggerReason =
   | 'manual'
+  | 'reflection_output'
   | 'response_turn'
   | 'interval'
   | 'context_threshold'

@@ -5,9 +5,11 @@ import { tmpdir } from 'node:os';
 import type { SubstrateConfig } from '../../../system/config/runtime-config-contracts.js';
 import { saveSettings } from '../../../system/settings.js';
 import {
+  DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG,
   loadSchedulerSeedDefaults,
   saveSchedulerConfig,
 } from '../../../system/config/scheduler-config.js';
+import { PER_COMPANION_OWNER_FILES } from '../../../system/config/settings-contract.js';
 import {
   RUNTIME_MODE,
   resolveRuntimeModeContract,
@@ -103,9 +105,16 @@ describe('resolveStartupPreflightBundle', () => {
     }
   });
 
-  function copyOwnerExample(systemDataDir: string, ownerFile: typeof requiredOwnerFiles[number]): void {
+  function copyOwnerExample(
+    systemDataDir: string,
+    companionDataDir: string,
+    ownerFile: typeof requiredOwnerFiles[number],
+  ): void {
+    const ownerDir = PER_COMPANION_OWNER_FILES.has(ownerFile)
+      ? companionDataDir
+      : systemDataDir;
     writeFileSync(
-      join(systemDataDir, ownerFile),
+      join(ownerDir, ownerFile),
       readFileSync(
         join(process.cwd(), 'config', ownerFile.replace(/\.json$/, '.seed.json')),
         'utf8',
@@ -124,14 +133,14 @@ describe('resolveStartupPreflightBundle', () => {
     mkdirSync(legacyDataDir, { recursive: true });
     tempDirs.push(rootDir);
     for (const ownerFile of requiredOwnerFiles) {
-      copyOwnerExample(systemDataDir, ownerFile);
+      copyOwnerExample(systemDataDir, companionDataDir, ownerFile);
     }
 
     saveSettings(systemDataDir, {
       sessionMessageLimit: 41,
       memoryRetrievalLimit: 12,
     });
-    saveSchedulerConfig(systemDataDir, {
+    saveSchedulerConfig(companionDataDir, {
       ...loadSchedulerSeedDefaults(),
       tickIntervalMs: 2_000,
       heartbeatIntervalMs: 8_000,
@@ -139,6 +148,7 @@ describe('resolveStartupPreflightBundle', () => {
         ...loadSchedulerSeedDefaults().backgroundMaintenance,
         intervalMs: 123_000,
       },
+      backgroundWorkWelfare: { ...DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG },
     });
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
@@ -175,6 +185,8 @@ describe('resolveStartupPreflightBundle', () => {
     expect(bundle.startupHydration.pathSnapshot.systemDataDir).toBe(systemDataDir);
     expect(bundle.startupHydration.pathSnapshot.companionDataDir).toBe(companionDataDir);
     expect(bundle.startupHydration.schedulerConfig.backgroundMaintenance.intervalMs).toBe(123_000);
+    expect(bundle.startupHydration.schedulerConfig.backgroundWorkWelfare)
+      .toEqual(DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG);
     expect(config.sessionMessageLimit).toBe(30);
     expect(config.memoryRetrievalLimit).toBe(15);
     expect(config.maintenanceIntervalMs).toBe(300_000);
@@ -192,10 +204,10 @@ describe('resolveStartupPreflightBundle', () => {
     mkdirSync(configDir, { recursive: true });
     tempDirs.push(rootDir);
     for (const ownerFile of requiredOwnerFiles) {
-      copyOwnerExample(systemDataDir, ownerFile);
+      copyOwnerExample(systemDataDir, companionDataDir, ownerFile);
     }
     saveSettings(systemDataDir, {});
-    saveSchedulerConfig(systemDataDir, loadSchedulerSeedDefaults());
+    saveSchedulerConfig(companionDataDir, loadSchedulerSeedDefaults());
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
 
@@ -218,10 +230,10 @@ describe('resolveStartupPreflightBundle', () => {
     mkdirSync(companionDataDir, { recursive: true });
     tempDirs.push(rootDir);
     for (const ownerFile of requiredOwnerFiles) {
-      copyOwnerExample(systemDataDir, ownerFile);
+      copyOwnerExample(systemDataDir, companionDataDir, ownerFile);
     }
     saveSettings(systemDataDir, {});
-    saveSchedulerConfig(systemDataDir, loadSchedulerSeedDefaults());
+    saveSchedulerConfig(companionDataDir, loadSchedulerSeedDefaults());
 
     const config = makeStartupHydrationConfig(systemDataDir, companionDataDir);
     const env = {

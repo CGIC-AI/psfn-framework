@@ -75,7 +75,8 @@ import { loadCharacterCard, composeSystemPrompt } from '../../../core/identity/l
 import { resolveCompanionIdFromConfig } from '../../../core/identity/companion-runtime.js';
 import type { RuntimeCompanionId } from '../../../shared/routing/companion-id.js';
 import type { CharacterCardV2 } from '../../../core/identity/types.js';
-import type { LLMProviderPort, EmbeddingProviderPort } from '../../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { PromptRegistryStatePort } from '../../../core/identity/prompt-state-port.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import type { ShardAuditTrail } from '../../../faculties/shards/manager.js';
@@ -99,6 +100,8 @@ import {
   resolveValuesJournalPath,
 } from '../../../persistence/layout.js';
 import { createDefaultPostgresSessionAdapters } from '../../../persistence/sessions/postgres-adapters.js';
+import { derivePostgresTenantRole } from '../../../persistence/postgres/tenancy.js';
+import { createPostgresShardSchemaLifecycle } from '../../../persistence/postgres/shard-schema-lifecycle.js';
 import { FatigueLedger } from '../../../shared/telemetry/fatigue-ledger.js';
 
 export interface SessionComposition {
@@ -217,9 +220,13 @@ export async function composeSessionRuntimeAsync(
     throw new Error('PostgreSQL session composition requires config.postgresDatabaseUrl');
   }
   const postgresSchema = options.config.postgresSchema?.trim();
+  const postgresRole = options.config.multiCompanion === true && postgresSchema
+    ? derivePostgresTenantRole(postgresSchema)
+    : undefined;
   const sessionAdapters = await createDefaultPostgresSessionAdapters(databaseUrl, {
     sessionsDir,
     ...(postgresSchema ? { schema: postgresSchema } : {}),
+    ...(postgresRole ? { role: postgresRole } : {}),
   });
   const sessionTailCache = await composeSessionTailCache(options.config, options.sessionTailCache);
   return createSessionComposition(options, sessionAdapters, sessionsDir, sessionTailCache);
@@ -244,6 +251,14 @@ export async function composeMemoryStoreAsync(
     notesDir: resolveNotesDir(companionDataDir),
     scratchpadMirrorPath: resolveScratchpadMirrorPath(companionDataDir),
     journal: new MemoryJournal(resolveMemoryJournalPath(companionDataDir)),
+    ...(config.postgresSchema?.trim()
+      ? {
+          schema: config.postgresSchema.trim(),
+          ...(config.multiCompanion === true
+            ? { role: derivePostgresTenantRole(config.postgresSchema.trim()) }
+            : {}),
+        }
+      : {}),
   });
 }
 
@@ -284,6 +299,7 @@ export interface SubstrateAgentCompositionOptions {
   /** Places soft-registry (S10). Absent behaves as an empty registry. */
   placesRegistryConfig?: PlacesRegistryConfig;
   backgroundWorkStore?: SubstrateAgentOptions['backgroundWorkStore'];
+  backgroundWorkTuning?: SubstrateAgentOptions['backgroundWorkTuning'];
   backgroundWorkDisabled?: boolean;
   backgroundWorkWelfare?: SubstrateAgentOptions['backgroundWorkWelfare'];
 }
@@ -314,6 +330,9 @@ export function composeSubstrateAgent(options: SubstrateAgentCompositionOptions)
       ...(options.contactTrackingGate ? { contactTrackingGate: options.contactTrackingGate } : {}),
       ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
       ...(options.backgroundWorkStore ? { backgroundWorkStore: options.backgroundWorkStore } : {}),
+      ...(options.backgroundWorkTuning
+        ? { backgroundWorkTuning: options.backgroundWorkTuning }
+        : {}),
       ...(options.backgroundWorkDisabled ? { backgroundWorkDisabled: true } : {}),
       ...(options.backgroundWorkWelfare ? { backgroundWorkWelfare: options.backgroundWorkWelfare } : {}),
     },
@@ -508,6 +527,13 @@ export interface ToolRuntimeOptions {
 
 export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExecutionPort {
   const companionDataDir = options.companionDataDir ?? resolveConfiguredCompanionDataDir(options.config);
+  const shardPostgresLifecycle = options.config.multiCompanion === true
+    ? createPostgresShardSchemaLifecycle(
+        options.config.postgresDatabaseUrl?.trim() ?? (() => {
+          throw new Error('Multi-companion shard execution requires config.postgresDatabaseUrl');
+        })(),
+      )
+    : null;
   // htm9.3: shard fold-back memory writes gate at the memory_write sink; the
   // gate is late-bound onto the session manager by composition.
   const foldReviewMemoryWriter = new MemoryWriter(options.memoryStore, options.embeddingService, {
@@ -534,6 +560,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     shardSessionMemorySyncAuditPath: resolveShardSessionMemorySyncAuditPath(companionDataDir),
     foldReviewController,
     compressionGuidelineEvolution: options.compressionGuidelineEvolution ?? undefined,
+    shardPostgresLifecycle,
   });
   const subagentFaculty = new SubagentFaculty({
     eventBus: options.eventBus,

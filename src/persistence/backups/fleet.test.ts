@@ -19,12 +19,13 @@ import {
   FLEET_GROUP_DIR_NAME,
   FleetBackupPartialFailureError,
   runFleetBackupCycle,
-  type FleetBackupCompanionUnit,
 } from './service.js';
+import type { FleetBackupCompanionUnit } from './fleet-backup-contracts.js';
 import {
-  restoreFleetClusterArtifact,
-  restoreFleetCompanionSlice,
-  restoreFleetGroupArtifact,
+  restoreFleetClusterArtifact as restoreFleetClusterArtifactProduction,
+  restoreFleetCompanionSlice as restoreFleetCompanionSliceProduction,
+  restoreFleetGroupArtifact as restoreFleetGroupArtifactProduction,
+  type FleetRestoreProjectionLifecycle,
 } from './fleet-restore.js';
 import {
   KUBERNETES_HELM_RECOVERY_MANIFEST_NAME,
@@ -36,6 +37,37 @@ import {
 } from './kubernetes-helm-chart.js';
 
 const FIXED_NOW = () => Date.UTC(2026, 1, 26, 10, 11, 12, 123);
+const UNIT_PROJECTION_LIFECYCLE: FleetRestoreProjectionLifecycle = {
+  invalidate: async () => undefined,
+  backfill: async () => undefined,
+};
+
+function restoreFleetCompanionSlice(
+  options: Parameters<typeof restoreFleetCompanionSliceProduction>[0],
+) {
+  return restoreFleetCompanionSliceProduction({
+    ...options,
+    projectionLifecycle: UNIT_PROJECTION_LIFECYCLE,
+  });
+}
+
+function restoreFleetClusterArtifact(
+  options: Parameters<typeof restoreFleetClusterArtifactProduction>[0],
+) {
+  return restoreFleetClusterArtifactProduction({
+    ...options,
+    projectionLifecycle: UNIT_PROJECTION_LIFECYCLE,
+  });
+}
+
+function restoreFleetGroupArtifact(
+  options: Parameters<typeof restoreFleetGroupArtifactProduction>[0],
+) {
+  return restoreFleetGroupArtifactProduction({
+    ...options,
+    projectionLifecycle: UNIT_PROJECTION_LIFECYCLE,
+  });
+}
 
 /**
  * A pg_dump stub that records every invocation's `--schema` (or `ALL` when the

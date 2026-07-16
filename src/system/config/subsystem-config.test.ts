@@ -290,12 +290,30 @@ describe('subsystem config round-trip', () => {
       heartbeatIntervalMs: 9_000,
       backgroundMaintenance: {
         intervalMs: 12_000,
+        sharedWorldWikiCaretaker: {
+          batchSize: 25,
+        },
         ambientPresence: {
           minIdleMinutes: 180,
           minNoteIntervalMinutes: 360,
         },
         concernGrooming: {
           maxActiveConcerns: 7,
+        },
+      },
+      backgroundWork: {
+        supervisor: {
+          maxConcurrentSessions: 4,
+          leaseDurationMs: 300_000,
+          retryBaseDelayMs: 1_000,
+          retryMaxDelayMs: 300_000,
+          shutdownTimeoutMs: 5_000,
+          terminalRetentionMs: 604_800_000,
+          cleanupIntervalMs: 3_600_000,
+        },
+        postTurn: {
+          extractionDrainRequeueDelayMs: 1_000,
+          foregroundPreemptionDeferDelayMs: 1_000,
         },
       },
       artifactLifecycle: {

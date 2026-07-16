@@ -3,7 +3,7 @@ import type { IncomingMessage } from 'node:http';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type {
   SatelliteClientCertIdentity,
-  SatelliteRegistryConfig,
+  SatelliteRegistryProvider,
 } from '../../shared/contracts/satellite-registry.js';
 import { ApiServer } from '../../channels/api/server.js';
 import { clampHttpHeader, resolveApiCorsAllowedOrigins } from '../../channels/api/http-policy.js';
@@ -67,7 +67,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
     | 'resolveOperatorApproval'
   >;
   channelsConfig?: RuntimeChannelsConfig;
-  satelliteRegistry?: SatelliteRegistryConfig;
+  satelliteRegistryProvider: SatelliteRegistryProvider;
   /**
    * htm9.9: intake screening for voice transcripts (sourceClass
    * 'audio_transcript') — a transcript becomes prompt text, so audio is a
@@ -211,7 +211,7 @@ function buildVoiceMessage(params: {
   sessionId: string;
   transcript: string;
   channelPrefix: string;
-  satelliteRegistry?: SatelliteRegistryConfig;
+  satelliteRegistryProvider: SatelliteRegistryProvider;
   trustedProxyClientCertToken?: string;
 }): SubstrateMessage {
   // Derive the authenticated client-cert identity from the original request
@@ -227,7 +227,7 @@ function buildVoiceMessage(params: {
     const satelliteClaim = resolveSatelliteClaim({
       headers: satelliteHeaders,
       principal: params.principal,
-      registry: params.satelliteRegistry,
+      registry: params.satelliteRegistryProvider(),
       ...(clientCert ? { clientCert } : {}),
     });
     if (!satelliteClaim.ok) {
@@ -337,7 +337,7 @@ export async function startOptionalGatewayApiServer(
         sessionId,
         transcript,
         channelPrefix,
-        satelliteRegistry: options.satelliteRegistry,
+        satelliteRegistryProvider: options.satelliteRegistryProvider,
         ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
       }), options.intakeScreening);
       const result = await options.gateway.requestAgentVoiceStream(message, { signal });
@@ -406,7 +406,7 @@ export async function startOptionalGatewayApiServer(
     externalChannelProfiles: options.channelsConfig
       ? buildExternalChannelProfiles(options.channelsConfig)
       : {},
-    ...(options.satelliteRegistry ? { satelliteRegistry: options.satelliteRegistry } : {}),
+    satelliteRegistryProvider: options.satelliteRegistryProvider,
     ...(companionRelay ? { companionRelay } : {}),
     ...(options.gateway.isIcpAutonomyConfigured()
       ? {

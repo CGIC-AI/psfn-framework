@@ -414,7 +414,7 @@ the full self-update → validate → auto/manual rollback flow is
 `src/app/e2e/kube-self-update-e2e.test.ts`, gated behind `PSFN_K3D_E2E` (`npm run
 e2e:kube-self-update`) so normal unit runs need no cluster or docker daemon; it
 provisions and tears down its own disposable k3d cluster and never touches
-psfn-shard, live namespaces, or any real PVC.
+any live host, live namespace, or real PVC.
 
 ## Host-Specific Storage Validation
 

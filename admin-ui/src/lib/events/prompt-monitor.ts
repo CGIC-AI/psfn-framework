@@ -6,6 +6,7 @@ import type {
   AdminPromptSectionTelemetry,
   AdminSessionTurnData,
   AdminTurnPromptContextMessage,
+  AdminTurnProviderObservabilityData,
   AdminTurnProviderWireMessage,
   AdminTurnSnapshotData,
   AdminTurnStageTelemetry,
@@ -161,7 +162,39 @@ function clonePromptLoom(loom: AdminPromptLoomData): AdminPromptLoomData {
   return cloneJsonSafe(loom);
 }
 
-function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
+type SessionTurnSnapshot = NonNullable<AdminSessionTurnData['snapshot']>;
+type SessionProviderObservability = NonNullable<
+  NonNullable<SessionTurnSnapshot['promptContext']>['providerObservability']
+>;
+
+function cloneSessionProviderObservability(
+  provider: SessionProviderObservability,
+  derivedProviderWireMessages: readonly AdminTurnProviderWireMessage[] | undefined,
+): AdminTurnProviderObservabilityData {
+  const providerWireMessages = provider.providerWireMessages ?? derivedProviderWireMessages;
+  if (providerWireMessages === undefined) {
+    throw new Error(
+      'Prompt monitor provider observability requires embedded or canonically derived wire messages',
+    );
+  }
+  return {
+    ...provider,
+    systemRole: { ...provider.systemRole },
+    providerWireMessages: providerWireMessages.map(message => ({ ...message })),
+  };
+}
+
+function omitSessionProviderObservability(
+  promptContext: NonNullable<SessionTurnSnapshot['promptContext']>,
+): Omit<typeof promptContext, 'providerObservability'> {
+  const promptContextWithoutProvider = { ...promptContext };
+  delete promptContextWithoutProvider.providerObservability;
+  return promptContextWithoutProvider;
+}
+
+function cloneSnapshot(
+  snapshot: AdminTurnSnapshotData,
+): AdminTurnSnapshotData {
   return {
     ...snapshot,
     ...(snapshot.prompt ? { prompt: { ...snapshot.prompt } } : {}),
@@ -217,6 +250,130 @@ function cloneSnapshot(snapshot: AdminTurnSnapshotData): AdminTurnSnapshotData {
       ? {
         toolContext: {
           activeTools: snapshot.toolContext.activeTools.map(tool => ({
+            ...tool,
+            inputSchema: cloneJsonObject(tool.inputSchema),
+          })),
+          ...(snapshot.toolContext.adaptiveSnapshot
+            ? {
+              adaptiveSnapshot: {
+                ...snapshot.toolContext.adaptiveSnapshot,
+                tools: snapshot.toolContext.adaptiveSnapshot.tools.map(tool => ({ ...tool })),
+                skipped: snapshot.toolContext.adaptiveSnapshot.skipped.map(skip => ({
+                  ...skip,
+                  ...(skip.missingTokens ? { missingTokens: [...skip.missingTokens] } : {}),
+                })),
+                counts: { ...snapshot.toolContext.adaptiveSnapshot.counts },
+              },
+            }
+            : {}),
+        },
+      }
+      : {}),
+    ...(snapshot.sessionContext
+      ? {
+        sessionContext: {
+          ...snapshot.sessionContext,
+          recentEntries: [...snapshot.sessionContext.recentEntries],
+          compactionSummaryTexts: [...snapshot.sessionContext.compactionSummaryTexts],
+          focusKnowledgeTexts: [...snapshot.sessionContext.focusKnowledgeTexts],
+          continuityEntries: [...snapshot.sessionContext.continuityEntries],
+        },
+      }
+      : {}),
+    ...(snapshot.memory
+      ? {
+        memory: {
+          ...snapshot.memory,
+          contactEmotionalMemories: [...snapshot.memory.contactEmotionalMemories],
+          semanticCandidates: [...snapshot.memory.semanticCandidates],
+          lexicalCandidates: [...snapshot.memory.lexicalCandidates],
+          proactiveCandidates: [...snapshot.memory.proactiveCandidates],
+          ...(snapshot.memory.withheldSummary
+            ? {
+              withheldSummary: {
+                ...snapshot.memory.withheldSummary,
+                reasonCounts: { ...snapshot.memory.withheldSummary.reasonCounts },
+              },
+            }
+            : {}),
+        },
+      }
+      : {}),
+  };
+}
+
+function cloneSessionSnapshot(
+  snapshot: SessionTurnSnapshot,
+  promptLoom: AdminPromptLoomData | undefined,
+): AdminTurnSnapshotData {
+  const activeTools = snapshot.toolContext?.activeTools
+    ?? snapshot.plan?.toolDefinitions
+    ?? promptLoom?.providerWire.toolDefinitions;
+  if (snapshot.toolContext && activeTools === undefined) {
+    throw new Error(
+      'Prompt monitor tool context requires embedded or canonically derived active tools',
+    );
+  }
+
+  return {
+    turnId: snapshot.turnId,
+    requestId: snapshot.requestId,
+    channelId: snapshot.channelId,
+    capturedAt: snapshot.capturedAt,
+    trustLevel: snapshot.trustLevel,
+    ...(snapshot.canonicalContactKey
+      ? { canonicalContactKey: snapshot.canonicalContactKey }
+      : {}),
+    ...(snapshot.prompt ? { prompt: { ...snapshot.prompt } } : {}),
+    ...(snapshot.plan ? { plan: cloneJsonSafe(snapshot.plan) } : {}),
+    ...(snapshot.promptContext
+      ? {
+        promptContext: {
+          ...cloneJsonSafe(omitSessionProviderObservability(snapshot.promptContext)),
+          ...(snapshot.promptContext.inputSections
+            ? { inputSections: snapshot.promptContext.inputSections.map(clonePromptSection) }
+            : {}),
+          ...(snapshot.promptContext.runtimeContextSections
+            ? {
+              runtimeContextSections: snapshot.promptContext.runtimeContextSections
+                .map(clonePromptSection),
+            }
+            : {}),
+          ...(snapshot.promptContext.memoryContextSections
+            ? {
+              memoryContextSections: snapshot.promptContext.memoryContextSections
+                .map(clonePromptSection),
+            }
+            : {}),
+          ...(snapshot.promptContext.finalSystemSections
+            ? {
+              finalSystemSections: snapshot.promptContext.finalSystemSections
+                .map(clonePromptSection),
+            }
+            : {}),
+          ...(snapshot.promptContext.sectionCacheability
+            ? {
+              sectionCacheability: cloneJsonSafe(snapshot.promptContext.sectionCacheability),
+            }
+            : {}),
+          ...(snapshot.promptContext.providerObservability
+            ? {
+              providerObservability: cloneSessionProviderObservability(
+                snapshot.promptContext.providerObservability,
+                promptLoom?.providerWire.messages,
+              ),
+            }
+            : {}),
+          ...(snapshot.promptContext.response
+            ? { response: { ...snapshot.promptContext.response } }
+            : {}),
+        },
+      }
+      : {}),
+    ...(snapshot.toolContext && activeTools
+      ? {
+        toolContext: {
+          activeTools: activeTools.map(tool => ({
             ...tool,
             inputSchema: cloneJsonObject(tool.inputSchema),
           })),
@@ -333,7 +490,9 @@ function buildTurnFromSession(turn: AdminSessionTurnData): PromptMonitorTurn {
     channelId: turn.record.channelId,
     latestEventAt,
     record: { ...turn.record },
-    snapshot: turn.snapshot ? cloneSnapshot(turn.snapshot) : null,
+    snapshot: turn.snapshot
+      ? cloneSessionSnapshot(turn.snapshot, turn.promptLoom)
+      : null,
     promptLoom: turn.promptLoom ? clonePromptLoom(turn.promptLoom) : null,
     stages: sortStages(turn.stages),
   };

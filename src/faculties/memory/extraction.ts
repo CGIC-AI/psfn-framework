@@ -1,9 +1,12 @@
-import type { EmbeddingProviderPort, LLMProviderPort } from '../../core/agent/contracts.js';
+import type {
+  FinalReflectionExtractionInput,
+  LLMProviderPort,
+} from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type { PromptRegistryStatePort } from '../../core/identity/prompt-state-port.js';
 import type { PersonaPreamblePort } from '../../core/identity/persona-preamble.js';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import { resolvePreferredContactName } from '../../core/contacts/preferred-name.js';
-import type { SessionManager } from '../../core/session/manager.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -81,6 +84,8 @@ import {
   evaluateFactAcceptance,
 } from './extraction/signals.js';
 import { parseFactsXml } from './extraction/parser.js';
+import type { MemoryExtractionSessionPort } from './extraction/session-port.js';
+import { projectFinalReflectionForExtraction } from './extraction/reflection-output.js';
 
 const log = createComponentLogger('Extraction');
 
@@ -121,13 +126,16 @@ export interface GroupBackfillExtractionOptions {
   groupWriteCaps: GroupMemoryWriteCapSettings;
 }
 
-type MemoryExtractorGroupOptions =
+type MemoryExtractorRunOptions =
   Pick<ExtractionRunOptions, 'groupWriteCaps' | 'groupWriteCapContext'>
-  & { forceLegacyExtraction?: boolean };
+  & {
+    forceLegacyExtraction?: boolean;
+    reflectionSource?: FinalReflectionExtractionInput;
+  };
 
 export class MemoryExtractor {
   private llmClient: LLMProviderPort;
-  private sessionManager: SessionManager;
+  private sessionManager: MemoryExtractionSessionPort;
   private memoryStore: MemoryStorePort;
   private writer: MemoryWriter;
   private costTelemetry: CostTelemetryPort;
@@ -154,7 +162,7 @@ export class MemoryExtractor {
 
   constructor(
     llmClient: LLMProviderPort,
-    sessionManager: SessionManager,
+    sessionManager: MemoryExtractionSessionPort,
     memoryStore: MemoryStorePort,
     embeddingService: EmbeddingProviderPort,
     costTelemetry: CostTelemetryInput,
@@ -366,6 +374,30 @@ export class MemoryExtractor {
     await this.trackExtraction(channelId, 'manual', canonicalContactId, undefined, turnId, undefined, placeId);
   }
 
+  async extractFinalReflection(input: FinalReflectionExtractionInput): Promise<void> {
+    if (!this.acceptingExtractions) {
+      log.debug('Skipping final reflection extraction while extractor is draining', {
+        channelId: input.channelId,
+        journalEntryId: input.journalEntryId,
+      });
+      return;
+    }
+
+    const entry = projectFinalReflectionForExtraction(input, this.sessionManager.characterName);
+    await this.trackExtraction(
+      input.channelId,
+      'reflection_output',
+      undefined,
+      [entry],
+      undefined,
+      { reflectionSource: input },
+      undefined,
+      undefined,
+      undefined,
+      'serialize',
+    );
+  }
+
   async extractObservedGroupRange(options: ObservedGroupExtractionOptions): Promise<boolean> {
     if (options.recoveredEntries.length === 0) return false;
     if (!this.acceptingExtractions) {
@@ -486,7 +518,7 @@ export class MemoryExtractor {
     canonicalContactId?: string,
     recoveredEntries?: SessionEntry[],
     turnId?: TurnID,
-    groupOptions?: MemoryExtractorGroupOptions,
+    groupOptions?: MemoryExtractorRunOptions,
     placeId?: string,
     icpCorrelation?: IcpConversationCorrelation,
     assertEffectAllowed?: () => Promise<void>,
@@ -565,7 +597,7 @@ export class MemoryExtractor {
     canonicalContactId?: string,
     recoveredEntries?: SessionEntry[],
     turnId?: TurnID,
-    groupOptions?: MemoryExtractorGroupOptions,
+    groupOptions?: MemoryExtractorRunOptions,
     placeId?: string,
     icpCorrelation?: IcpConversationCorrelation,
     assertEffectAllowed?: () => Promise<void>,
@@ -617,13 +649,17 @@ export class MemoryExtractor {
       && typeof this.contactStore.getById === 'function'
       ? resolvePreferredContactName(await this.contactStore.getById(canonicalContactId))
       : undefined;
+    const reflectionSource = groupOptions?.reflectionSource;
+    const extractionSourceSessionId = reflectionSource
+      ? `reflection-journal:${reflectionSource.journalEntryId}`
+      : logicalSessionId;
 
     await runExtractionOrchestration({
       channelId,
       triggerReason,
       canonicalContactId,
       turnId,
-      sourceSessionId: logicalSessionId,
+      sourceSessionId: extractionSourceSessionId,
       recoveredEntries,
       icpCorrelation,
       ...(preemptionProtected ? { preemptionProtected: true } : {}),
@@ -673,7 +709,7 @@ export class MemoryExtractor {
           maybeContactId,
           resolveFormationVAD(),
           channelId,
-          logicalSessionId,
+          extractionSourceSessionId,
           canonicalContactName,
           this.sessionManager.characterName,
           triggerReason,
@@ -681,6 +717,7 @@ export class MemoryExtractor {
           routing,
           placeId,
           assertEffectAllowed,
+          reflectionSource,
         )
       ),
       emitExtractionStart: (extractionChannelId, reason, extractionTurnId) => (
@@ -693,7 +730,9 @@ export class MemoryExtractor {
         resolveCoveredMarker(this.sessionManager, extractionChannelId, entries)
       ),
       recordExtractionMarker: (_extractionChannelId, coveredUpToMessageId) => (
-        persistExtractionMarker(this.sessionStore, logicalSessionId, coveredUpToMessageId)
+        reflectionSource
+          ? undefined
+          : persistExtractionMarker(this.sessionStore, logicalSessionId, coveredUpToMessageId)
       ),
       maybePersistEmotionalState: (contactId, acceptedFacts, recentEntries) => (
         this.maybePersistEmotionalState(contactId, acceptedFacts, recentEntries)
@@ -791,8 +830,10 @@ export class MemoryExtractor {
     routing?: ExtractionFactRouting,
     placeId?: string,
     assertEffectAllowed?: () => Promise<void>,
+    reflectionSource?: FinalReflectionExtractionInput,
   ): Promise<WriteResult> {
     await assertEffectAllowed?.();
+    const selfDirectedMemory = routing?.routingReason === 'self_directed_companion';
     let factContactId = canonicalContactId;
     // Contact-tracking policy gate (E3.4): non-'auto' channels must not have
     // extraction create contact rows (mention-only path included). Facts keep
@@ -877,15 +918,25 @@ export class MemoryExtractor {
       tags: applyLocationTag(fact.tags, placeId),
       retentionClass: fact.retentionClass,
       sourceRef,
-      sourceType: triggerReason === 'pre_compaction' ? 'compaction_summary' : undefined,
+      sourceType: selfDirectedMemory
+        ? 'reflection'
+        : triggerReason === 'pre_compaction'
+          ? 'compaction_summary'
+          : undefined,
       ...(routing?.scopeRef ? { scopeRef: routing.scopeRef } : {}),
       ...(routing?.scopeTags ? { scopeTags: routing.scopeTags } : {}),
         provenance: channelId
           ? {
             channelId,
             ...(logicalSessionId ? { sessionId: logicalSessionId } : {}),
+            ...(reflectionSource ? {
+              templateId: reflectionSource.templateId,
+              templateName: reflectionSource.templateName,
+              mode: reflectionSource.mode,
+            } : {}),
             ...(turnId ? { turnId } : {}),
             ...(triggerReason ? { reason: triggerReason } : {}),
+          ...(selfDirectedMemory ? { actor: 'companion' } : {}),
           ...(routing?.triggerContactId ? { triggerContactId: routing.triggerContactId } : {}),
           ...(routing?.routedContactId ? { routedContactId: routing.routedContactId } : {}),
           ...(routing?.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),

@@ -21,12 +21,14 @@ import {
   migrateFleetAuthSchema,
   type FleetAuthDatabaseRoles,
 } from '../postgres/fleet-auth/schema.js';
-import { runFleetAuthConsistentBackup } from './fleet-auth-coordinator.js';
 import {
-  restoreFleetAuthConsistentFamily,
-  verifyFleetAuthConsistentFamilyRestore,
+  runFleetAuthConsistentBackup as runFleetAuthConsistentBackupProduction,
+} from './fleet-auth-coordinator.js';
+import {
+  restoreFleetAuthConsistentFamily as restoreFleetAuthConsistentFamilyProduction,
+  verifyFleetAuthConsistentFamilyRestore as verifyFleetAuthConsistentFamilyRestoreProduction,
 } from './fleet-restore.js';
-import { runFleetBackupCycle } from './service.js';
+import { runFleetBackupCycle as runFleetBackupCycleProduction } from './service.js';
 import { resolveFleetAuthSchemaAccessContracts } from './fleet-auth-schema-access.js';
 
 const TIMEOUT_MS = 120_000;
@@ -58,6 +60,53 @@ function roleUrl(databaseUrl: string, role: keyof typeof PASSWORDS): string {
   url.username = role;
   url.password = PASSWORDS[role];
   return url.toString();
+}
+
+function requirePostgresClients() {
+  if (!harness) throw new Error('Postgres integration harness is not available');
+  return harness.clientBinaries;
+}
+
+function runFleetAuthConsistentBackup(
+  options: Parameters<typeof runFleetAuthConsistentBackupProduction>[0],
+) {
+  const clients = requirePostgresClients();
+  return runFleetAuthConsistentBackupProduction({
+    ...options,
+    pgDumpBinary: clients.pgDumpBinary,
+  });
+}
+
+function runFleetBackupCycle(
+  options: Parameters<typeof runFleetBackupCycleProduction>[0],
+) {
+  const clients = requirePostgresClients();
+  return runFleetBackupCycleProduction({
+    ...options,
+    postgres: { ...options.postgres, pgDumpBinary: clients.pgDumpBinary },
+  });
+}
+
+function restoreFleetAuthConsistentFamily(
+  options: Parameters<typeof restoreFleetAuthConsistentFamilyProduction>[0],
+) {
+  const clients = requirePostgresClients();
+  return restoreFleetAuthConsistentFamilyProduction({
+    ...options,
+    pgRestoreBinary: clients.pgRestoreBinary,
+    psqlBinary: clients.psqlBinary,
+  });
+}
+
+function verifyFleetAuthConsistentFamilyRestore(
+  options: Parameters<typeof verifyFleetAuthConsistentFamilyRestoreProduction>[0],
+) {
+  const clients = requirePostgresClients();
+  return verifyFleetAuthConsistentFamilyRestoreProduction({
+    ...options,
+    pgRestoreBinary: clients.pgRestoreBinary,
+    psqlBinary: clients.psqlBinary,
+  });
 }
 
 beforeAll(async () => {

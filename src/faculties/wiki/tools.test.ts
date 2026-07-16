@@ -3,9 +3,16 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { AgentToolResult } from '../../boundary/pi-agent/index.js';
 import type { TextContent } from '@mariozechner/pi-ai';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WikiStore } from './store.js';
 import { createWikiTool } from './tools.js';
+import { isRecord } from '../../shared/utils/types.js';
+import type {
+  SharedWorldWikiProposalInput,
+  SharedWorldWikiProposalSubmissionResult,
+} from './shared-world-caretaker-types.js';
+import { PersonalProjectLibrary } from './personal-projects.js';
+import { PersonalWishlist } from './personal-wishlist.js';
 
 function resultText(result: AgentToolResult<any>): string {
   return result.content
@@ -89,5 +96,155 @@ describe('wiki tool', () => {
     }))) as { document: { sourceClass: string; provenanceRefs: string[] } };
     expect(imported.document.sourceClass).toBe('imported_partner_vault_note');
     expect(imported.document.provenanceRefs).toEqual(['vault:partner:Vault Import.md']);
+  });
+
+  it('manages resumable projects and named looks through the existing wiki tool', async () => {
+    const personalProjects = new PersonalProjectLibrary(store);
+    const tool = createWikiTool(store, { personalProjects });
+
+    const projectResult: unknown = JSON.parse(resultText(await tool.execute('project-create', {
+      action: 'project_create',
+      project_id: 'story-panels',
+      title: 'Story Panels',
+      next_step: 'Render the opening scene.',
+      visibility: 'self',
+    })));
+    if (!isRecord(projectResult) || !isRecord(projectResult.project)) {
+      throw new Error('project_create returned malformed data');
+    }
+    expect(projectResult.project.ref).toBe('project:story-panels');
+
+    const lookResult: unknown = JSON.parse(resultText(await tool.execute('look-save', {
+      action: 'wardrobe_save',
+      look_id: 'starlight-study',
+      look_name: 'Starlight Study',
+      look_prompt: 'navy cardigan with silver star embroidery',
+      visibility: 'primary_contact',
+    })));
+    if (!isRecord(lookResult) || !isRecord(lookResult.look)) {
+      throw new Error('wardrobe_save returned malformed data');
+    }
+    expect(lookResult.look.ref).toBe('wardrobe:starlight-study');
+    expect(store.list().map(document => document.id)).toEqual([
+      'wardrobe.look.starlight-study',
+      'project.story-panels',
+    ]);
+  });
+
+  it('fails closed when project actions are unwired', async () => {
+    const tool = createWikiTool(store);
+    const result = await tool.execute('project-list', { action: 'project_list' });
+    expect(resultText(result)).toContain('personal project storage is unavailable');
+    expect(result.details?.isError).toBe(true);
+  });
+
+  it('round-trips a companion wish through the canonical wiki tool and operator library', async () => {
+    const timestamps = [
+      new Date('2026-07-16T10:00:00.000Z'),
+      new Date('2026-07-16T10:01:00.000Z'),
+      new Date('2026-07-16T10:02:00.000Z'),
+    ];
+    const personalWishlist = new PersonalWishlist(
+      store,
+      () => timestamps.shift() ?? new Date('2026-07-16T10:03:00.000Z'),
+      () => '22222222-2222-4222-8222-222222222222',
+    );
+    const tool = createWikiTool(store, { personalWishlist });
+
+    const created: unknown = JSON.parse(resultText(await tool.execute('wish-create', {
+      action: 'wish_create',
+      wish_text: 'I would love a quiet afternoon for watercolor practice.',
+      wish_context: 'The new landscape palette has been sitting unopened.',
+    })));
+    if (!isRecord(created) || !isRecord(created.wish) || typeof created.boundary !== 'string') {
+      throw new Error('wish_create returned malformed data');
+    }
+    expect(created.wish.ref).toBe('wish:22222222-2222-4222-8222-222222222222');
+    expect(created.wish.state).toBe('open');
+    expect(created.boundary).toContain('No push notification or operator interruption');
+
+    personalWishlist.respondToWish(
+      'wish:22222222-2222-4222-8222-222222222222',
+      'That sounds lovely. Let us protect Saturday afternoon.',
+    );
+    personalWishlist.planWish(
+      'wish:22222222-2222-4222-8222-222222222222',
+      'wishlist-watercolor',
+    );
+
+    const listed: unknown = JSON.parse(resultText(await tool.execute('wish-list', {
+      action: 'wish_list',
+    })));
+    if (!isRecord(listed) || !Array.isArray(listed.wishes) || !isRecord(listed.wishes[0])) {
+      throw new Error('wish_list returned malformed data');
+    }
+    expect(listed.wishes).toHaveLength(1);
+    expect(listed.wishes[0]).toMatchObject({
+      state: 'planned',
+      beadId: 'wishlist-watercolor',
+      operatorResponse: 'That sounds lovely. Let us protect Saturday afternoon.',
+    });
+    expect(store.list()).toHaveLength(1);
+  });
+
+  it('fails closed when wish actions are unwired', async () => {
+    const tool = createWikiTool(store);
+    const result = await tool.execute('wish-list', { action: 'wish_list' });
+    expect(resultText(result)).toContain('personal wishlist storage is unavailable');
+    expect(result.details?.isError).toBe(true);
+  });
+
+  it('queues a shared-world proposal through an enqueue-only dependency', async () => {
+    const submit = vi.fn(async (
+      input: SharedWorldWikiProposalInput,
+    ): Promise<SharedWorldWikiProposalSubmissionResult> => ({
+      proposal: {
+        ...input,
+        documentId: input.documentId ?? 'kitchen-toaster',
+        tags: [...(input.tags ?? [])],
+        provenanceRefs: [...input.provenanceRefs],
+        sensitivity: 'public',
+        contentDigest: 'digest',
+        proposalId: '11111111-1111-4111-8111-111111111111',
+        reviewState: 'pending',
+        applyState: 'unreviewed',
+        revision: 1,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+      },
+      deduplicated: false,
+    }));
+    const tool = createWikiTool(store, {
+      sharedWorldProposal: {
+        actorId: 'companion-a',
+        submitter: { submit },
+      },
+    });
+
+    const result: unknown = JSON.parse(resultText(await tool.execute('proposal', {
+      action: 'propose_shared_world',
+      site_id: 'studio',
+      id: 'kitchen-toaster',
+      title: 'Kitchen toaster',
+      body: 'A toaster is installed in the kitchen.',
+      source_ref: 'world-observation:turn-7',
+      provenance_refs: ['world-observation:sensor-4'],
+      sensitivity: 'public',
+    })));
+    if (!isRecord(result)
+      || !isRecord(result.proposal)
+      || typeof result.proposal.reviewState !== 'string'
+      || typeof result.boundary !== 'string') {
+      throw new Error('wiki proposal tool result is malformed');
+    }
+
+    expect(submit).toHaveBeenCalledWith(expect.objectContaining({
+      siteId: 'studio',
+      actorId: 'companion-a',
+      sensitivity: 'public',
+    }));
+    expect(result.proposal.reviewState).toBe('pending');
+    expect(result.boundary).toContain('no shared-world document was written');
+    expect(store.list()).toEqual([]);
   });
 });

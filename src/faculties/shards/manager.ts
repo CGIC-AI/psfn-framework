@@ -9,7 +9,8 @@ import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { resolvePresenceSubjectId } from '../../core/agent/presence-metadata.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import type { LLMProviderPort, EmbeddingProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
+import type { LLMProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import {
   createActiveEmanationSatellitePresencePort,
@@ -62,6 +63,11 @@ import {
 import { ShardToolSyncHelper } from './tool-sync.js';
 import type { CompressionGuidelineEvolutionPort } from '../../core/session/compression-guideline-evolution.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
+import type {
+  PostgresShardSchemaBinding,
+  PostgresShardSchemaLifecycle,
+} from '../../persistence/postgres/shard-schema-lifecycle.js';
 
 const log = createComponentLogger('ShardManager');
 const DEFAULT_MAX_CONCURRENT = 5;
@@ -150,6 +156,7 @@ export interface ShardManagerDeps {
   satellitePresencePort?: SatellitePresencePort;
   foldReviewController?: ShardFoldReviewController | null;
   compressionGuidelineEvolution?: CompressionGuidelineEvolutionPort | null;
+  shardPostgresLifecycle?: PostgresShardSchemaLifecycle | null;
 }
 
 export interface SatelliteDelegationRequest {
@@ -193,6 +200,9 @@ export class ShardManager implements ShardExecutionPort {
 
   constructor(deps: ShardManagerDeps) {
     this.deps = deps;
+    if (deps.config.multiCompanion === true && !deps.shardPostgresLifecycle) {
+      throw new Error('Multi-companion shard execution requires a Postgres shard schema lifecycle');
+    }
     // Owner-file settings (zet.7): explicit deps override wins (tests/embedding),
     // then the operator's settings.json value, then the compiled default.
     this.maxConcurrent = deps.maxConcurrent ?? deps.config.shardMaxConcurrent ?? DEFAULT_MAX_CONCURRENT;
@@ -260,9 +270,11 @@ export class ShardManager implements ShardExecutionPort {
     const coreCompanionId = resolveCoreCompanionIdFromConfig(this.deps.config);
     const coreCompanionName = resolveCompanionNameFromConfig(this.deps.config);
     const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
+    const shardPostgres = this.resolveShardPostgresBinding(coreCompanionId, shardId);
     const shardRuntimeConfig: SubstrateConfig = {
       ...this.deps.config,
       companionId: shardCompanionId,
+      ...(shardPostgres ? { postgresSchema: shardPostgres.schema } : {}),
     };
     const contextPack = shardConfig.contextPack
       ? this.contextPackHelper.withCompanionNameForContextPack(shardConfig.contextPack, coreCompanionName)
@@ -292,6 +304,24 @@ export class ShardManager implements ShardExecutionPort {
       sourceMessage: baseMessage,
       ...(shardConfig.sourceContext ? { sourceContext: shardConfig.sourceContext } : {}),
     });
+    const execute = () => shardPostgres
+      ? this.executeShard(
+        shardId,
+        channelId,
+        preparedConfig,
+        baseMessage,
+        lineage,
+        shardRuntimeConfig,
+        shardPostgres,
+      )
+      : this.executeShard(
+        shardId,
+        channelId,
+        preparedConfig,
+        baseMessage,
+        lineage,
+        shardRuntimeConfig,
+      );
     if (chargePolicy) {
       return runWithChargeContext({
         chargePolicy,
@@ -299,9 +329,9 @@ export class ShardManager implements ShardExecutionPort {
         lane: 'shard',
         runId: shardId,
         correlation: getRequestContext(),
-      }, async () => this.executeShard(shardId, channelId, preparedConfig, baseMessage, lineage, shardRuntimeConfig));
+      }, execute);
     }
-    return this.executeShard(shardId, channelId, preparedConfig, baseMessage, lineage, shardRuntimeConfig);
+    return execute();
   }
 
   async delegateSatelliteSession(request: SatelliteDelegationRequest): Promise<ShardResult> {
@@ -326,9 +356,11 @@ export class ShardManager implements ShardExecutionPort {
     const shardId = `wyoming-shard-${randomUUID()}`;
     const coreCompanionId = resolveCoreCompanionIdFromConfig(this.deps.config);
     const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
+    const shardPostgres = this.resolveShardPostgresBinding(coreCompanionId, shardId);
     const shardRuntimeConfig: SubstrateConfig = {
       ...this.deps.config,
       companionId: shardCompanionId,
+      ...(shardPostgres ? { postgresSchema: shardPostgres.schema } : {}),
     };
     const presenceSubjectId = resolvePresenceSubjectId(routing?.presence) ?? routing?.satelliteId?.trim();
     const routeCapabilities = this.resolveWyomingRouteCapabilities(routing, presenceSubjectId);
@@ -367,6 +399,24 @@ export class ShardManager implements ShardExecutionPort {
       sourceMessage: request.message,
       ...(routing ? { satelliteRouting: routing } : {}),
     });
+    const execute = () => shardPostgres
+      ? this.executeShard(
+        shardId,
+        request.message.channelId,
+        shardConfig,
+        request.message,
+        lineage,
+        shardRuntimeConfig,
+        shardPostgres,
+      )
+      : this.executeShard(
+        shardId,
+        request.message.channelId,
+        shardConfig,
+        request.message,
+        lineage,
+        shardRuntimeConfig,
+      );
 
     try {
       const result = chargePolicy
@@ -376,22 +426,8 @@ export class ShardManager implements ShardExecutionPort {
           lane: 'shard',
           runId: shardId,
           correlation: getRequestContext(),
-        }, async () => this.executeShard(
-          shardId,
-          request.message.channelId,
-          shardConfig,
-          request.message,
-          lineage,
-          shardRuntimeConfig,
-        ))
-        : await this.executeShard(
-          shardId,
-          request.message.channelId,
-          shardConfig,
-          request.message,
-          lineage,
-          shardRuntimeConfig,
-        );
+        }, execute)
+        : await execute();
       this.auditTrail?.append('satellite.shard.delegate.end', {
         shardId,
         status: 'completed',
@@ -426,6 +462,7 @@ export class ShardManager implements ShardExecutionPort {
     baseMessage: SubstrateMessage,
     lineage: ShardResult['lineage'],
     runtimeConfig: SubstrateConfig,
+    shardPostgres?: PostgresShardSchemaBinding,
   ): Promise<ShardResult> {
     this.refreshShardHealth();
     if (this.activeCount >= this.maxConcurrent) {
@@ -511,7 +548,22 @@ export class ShardManager implements ShardExecutionPort {
       capabilities,
       requiredCapabilities,
     });
+    let shardPostgresPrepared = false;
+    let executionFailure: Error | undefined;
     try {
+      if (shardPostgres) {
+        const lifecycle = this.deps.shardPostgresLifecycle;
+        if (!lifecycle) {
+          throw new Error('Multi-companion shard execution requires a Postgres shard schema lifecycle');
+        }
+        await lifecycle.prepare(shardPostgres);
+        shardPostgresPrepared = true;
+        this.auditTrail?.append('shard.postgres.prepared', {
+          shardId,
+          postgresSchema: shardPostgres.schema,
+          postgresRole: shardPostgres.role,
+        });
+      }
       const shardMemoryReviewContext: Pick<ShardRuntimeRecord, 'channelId' | 'task' | 'lineage'> = {
         channelId,
         task: shardConfig.task,
@@ -639,6 +691,25 @@ export class ShardManager implements ShardExecutionPort {
         turns++;
         this.touchShardHeartbeat(shardId);
 
+        // Shards are ephemeral and intentionally do not own a durable post-turn
+        // worker. For a bounded multi-turn shard, the manager therefore owns
+        // compaction between turns so the next turn sees a committed summary
+        // and compression-guideline review retains the exact shard trajectory.
+        const recordedTurn = response.metadata.turnId
+          ? sessionManager.findRecordedTurn(channelId, response.metadata.turnId)
+          : null;
+        const autoCompactionEligible = recordedTurn?.observability
+          ?.snapshot?.sessionContext?.autoCompactionEligible === true;
+        if (turn + 1 < maxTurns && autoCompactionEligible) {
+          await sessionManager.scheduleAutoCompactionBetweenTurns({
+            channelId,
+            systemPrompt,
+            memoriesBlock: '',
+            llmProvider: this.deps.llmProvider,
+            throwOnFailure: true,
+          });
+        }
+
         // For a one-turn shard, we break after the first turn.
         // Multi-turn shards continue only if the response suggests more work.
         if (turn === 0 && maxTurns === 1) break;
@@ -695,10 +766,52 @@ export class ShardManager implements ShardExecutionPort {
         lineage,
         error: msg,
       });
-      throw new Error(`Shard "${shardConfig.name}" failed (execution_failed): ${msg}`);
+      executionFailure = new Error(
+        `Shard "${shardConfig.name}" failed (execution_failed): ${msg}`,
+        { cause: error },
+      );
+      throw executionFailure;
     } finally {
       this.releaseActiveShard(shardId, channelId);
+      if (shardPostgres && shardPostgresPrepared) {
+        const lifecycle = this.deps.shardPostgresLifecycle;
+        if (!lifecycle) {
+          throw new Error('Multi-companion shard cleanup lost its Postgres schema lifecycle');
+        }
+        try {
+          const evidence = await lifecycle.cleanup(shardPostgres);
+          this.auditTrail?.append('shard.postgres.cleaned', {
+            shardId,
+            postgresSchema: shardPostgres.schema,
+            droppedObjectCount: evidence.droppedObjectCount,
+          });
+        } catch (cleanupError) {
+          if (executionFailure) {
+            throw new AggregateError(
+              [executionFailure, cleanupError],
+              `Shard "${shardConfig.name}" failed and its Postgres cleanup remains pending`,
+            );
+          }
+          throw cleanupError;
+        }
+      }
     }
+  }
+
+  private resolveShardPostgresBinding(
+    parentCompanionId: CompanionId,
+    shardId: string,
+  ): PostgresShardSchemaBinding | null {
+    if (this.deps.config.multiCompanion !== true) return null;
+    const parentSchema = this.deps.config.postgresSchema?.trim();
+    if (!parentSchema) {
+      throw new Error('Multi-companion shard execution requires the parent Postgres schema');
+    }
+    const lifecycle = this.deps.shardPostgresLifecycle;
+    if (!lifecycle) {
+      throw new Error('Multi-companion shard execution requires a Postgres shard schema lifecycle');
+    }
+    return lifecycle.derive(parentCompanionId, parentSchema, shardId);
   }
 
   getActiveCount(): number {

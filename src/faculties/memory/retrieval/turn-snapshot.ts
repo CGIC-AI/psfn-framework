@@ -1,4 +1,4 @@
-import type { EmbeddingProviderPort } from '../../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { TurnMemorySnapshot } from '../../../core/turns/snapshot.js';
 import {
   buildSnapshotVersionPointer,
@@ -20,6 +20,7 @@ import type { ContactProfileArtifact, MemoryStorePort } from '../memory-store-po
 import type {
   MemoryScopeQuery,
   PurrMemory,
+  RetrievalAccessScope,
   RetrievalCallerContext,
   RetrievalModeInput,
 } from '../types.js';
@@ -34,6 +35,7 @@ import {
   cloneRetrievalModeInput,
   serializeRetrievalModes,
 } from './modes.js';
+import { resolveAuthorizedRetrievalAccessScope } from './access-scope.js';
 import {
   collectRecentLexicalMemoryCandidates,
   mergeScoredMemoryCandidates,
@@ -87,6 +89,7 @@ export interface CaptureTurnMemorySnapshotDeps {
   resolveContactProfileAccess(
     profile: ContactProfileArtifact | undefined,
     options: {
+      accessScope?: RetrievalAccessScope;
       trustLevel: TrustLevel;
       channelPrivacy: ReturnType<typeof classifyChannelDisclosure>['channelPrivacy'];
       broadcast: boolean;
@@ -141,6 +144,10 @@ export async function captureTurnMemorySnapshot(
   const budget = deps.resolveRetrievalBudget(effectiveBudgetTurn);
   const limit = budget.estimatedCount;
   const effectiveTrust = trustLevel ?? 'regular';
+  const effectiveAccessScope = resolveAuthorizedRetrievalAccessScope(
+    channelId,
+    callerContext?.accessScope,
+  );
   const channelDisclosure = classifyChannelDisclosure(channelId, channelMeta);
   const { channelPrivacy, broadcast } = channelDisclosure;
   const visibilityScope = resolveBroadcastVisibilityScope(channelId, channelMeta) ?? 'non_broadcast';
@@ -151,6 +158,7 @@ export async function captureTurnMemorySnapshot(
     ? await deps.memoryStore.getContactProfile(canonicalContactId)
     : undefined;
   const profileAccess = await deps.resolveContactProfileAccess(rawProfile, {
+    accessScope: effectiveAccessScope,
     trustLevel: effectiveTrust,
     channelPrivacy,
     broadcast,
@@ -260,6 +268,7 @@ export async function captureTurnMemorySnapshot(
   } = summarizeWithheldMemories(
     [...retrievalCandidates, ...contactEmotionalMemories, ...proactiveCandidates],
     {
+      accessScope: effectiveAccessScope,
       trustLevel: effectiveTrust,
       channelPrivacy,
       broadcast,
@@ -310,6 +319,7 @@ export async function captureTurnMemorySnapshot(
       proactiveCandidates.map(memory => memory.id).join(','),
       serializeMemoryWithheldSummary(withheldSummary),
       serializeRetrievalModes(callerContext, retrievalMode),
+      effectiveAccessScope,
     ]),
   };
 }

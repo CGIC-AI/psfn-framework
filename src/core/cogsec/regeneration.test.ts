@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { EmbeddingProviderPort } from '../agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { DEFAULT_EMBEDDING_CONFIG } from '../../faculties/memory/embedding.js';
 import { MemoryRetriever } from '../../faculties/memory/retrieval.js';
 import type { PurrMemory } from '../../faculties/memory/types.js';

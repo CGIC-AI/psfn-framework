@@ -34,6 +34,7 @@ import type { ApiAuthPrincipal } from './http/auth.js';
 import { normalizeChannelPrivacy, type ChannelPrivacy } from '../../system/trust/context-envelope.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { assertNoUnknownKeys } from './config-validation.js';
 
 const ID_TOKEN_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
@@ -461,7 +462,7 @@ function parseSatelliteConfig(value: unknown, fieldName: string): SatelliteConfi
   }
   assertNoUnknownKeys(
     value,
-    ['satelliteId', 'displayName', 'mobility', 'staticLocationLabel', 'placeId', 'endpoints'],
+    ['satelliteId', 'displayName', 'mobility', 'staticLocationLabel', 'placeId', 'companionId', 'endpoints'],
     fieldName,
   );
   const satelliteId = assertIdToken(
@@ -474,6 +475,9 @@ function parseSatelliteConfig(value: unknown, fieldName: string): SatelliteConfi
   const placeId = value.placeId === undefined
     ? undefined
     : assertIdToken(parseConfiguredString(value.placeId, `${fieldName}.placeId`), `${fieldName}.placeId`);
+  const companionId = value.companionId === undefined
+    ? undefined
+    : createCompanionId(value.companionId, `${fieldName}.companionId`);
   if (!Array.isArray(value.endpoints)) {
     throw new Error(`${fieldName}.endpoints must be an array`);
   }
@@ -488,6 +492,7 @@ function parseSatelliteConfig(value: unknown, fieldName: string): SatelliteConfi
     mobility,
     ...(staticLocationLabel ? { staticLocationLabel } : {}),
     ...(placeId ? { placeId } : {}),
+    ...(companionId ? { companionId } : {}),
     endpoints,
   };
 }
@@ -560,8 +565,8 @@ export function parseSatelliteRegistryConfig(
  * config that was actually written.
  *
  * This is the single write path used by the Garden static satellite re-bind
- * surface (Sprint 10 Workstream F1 / Decision 6). Cross-registry place-binding
- * validation (`assertSatellitePlaceBindings`) is the caller's responsibility —
+ * surface (Sprint 10 Workstream F1 / Decision 6). Cross-registry place/companion
+ * validation is the caller's responsibility —
  * this function only owns the satellites.json owner-file contract.
  */
 /**
@@ -581,6 +586,7 @@ function toSerializableSatelliteRegistry(config: SatelliteRegistryConfig): unkno
       mobility: satellite.mobility,
       ...(satellite.staticLocationLabel ? { staticLocationLabel: satellite.staticLocationLabel } : {}),
       ...(satellite.placeId ? { placeId: satellite.placeId } : {}),
+      ...(satellite.companionId ? { companionId: satellite.companionId } : {}),
       endpoints: satellite.endpoints.map((endpoint) => ({
         endpointId: endpoint.endpointId,
         displayName: endpoint.displayName,
@@ -973,6 +979,7 @@ export function resolveSatelliteClaim(options: {
     promptChannelType: match.endpoint.promptChannelType,
     ...(match.satellite.staticLocationLabel ? { staticLocationLabel: match.satellite.staticLocationLabel } : {}),
     ...(match.satellite.placeId ? { placeId: match.satellite.placeId } : {}),
+    ...(match.satellite.companionId ? { companionId: match.satellite.companionId } : {}),
     capabilities,
     telemetryScopes,
     auth: {

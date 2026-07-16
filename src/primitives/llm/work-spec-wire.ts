@@ -1,4 +1,4 @@
-// psfn-framework-d8vq.2 — serializable wire form of an LLMWorkSpec for the
+// d8vq.2 — serializable wire form of an LLMWorkSpec for the
 // gateway RPC contract, plus a fail-closed boundary parser.
 //
 // In the split gateway/agent topology the accountability guard

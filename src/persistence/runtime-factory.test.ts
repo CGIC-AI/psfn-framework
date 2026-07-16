@@ -33,6 +33,13 @@ const runtimeFactoryMocks = vi.hoisted(() => ({
   createPostgresPool: vi.fn(() => runtimeFactoryMocks.bootstrapPool),
   ensurePostgresSchemaExists: vi.fn(async () => undefined),
   ensurePostgresSchema: vi.fn(async () => undefined),
+  derivePostgresTenantRole: vi.fn((schema: string) => `psfn_role_${schema}`),
+  planPostgresTenantAccess: vi.fn((plan: { schema: string; role: string }) => ({
+    ...plan,
+    extensionSchema: 'extensions',
+    searchPath: `${plan.schema},extensions`,
+  })),
+  assertPostgresTenantAccessProvisioned: vi.fn(async () => undefined),
   createReflectionMetacognitionJournalStore: vi.fn(function ReflectionMetacognitionJournalStore(path: string, options: unknown) {
     return {
       kind: 'reflection-metacognition-journal-store',
@@ -104,6 +111,12 @@ vi.mock('./postgres.js', () => ({
   ensurePostgresSchema: runtimeFactoryMocks.ensurePostgresSchema,
 }));
 
+vi.mock('./postgres/tenancy.js', () => ({
+  derivePostgresTenantRole: runtimeFactoryMocks.derivePostgresTenantRole,
+  planPostgresTenantAccess: runtimeFactoryMocks.planPostgresTenantAccess,
+  assertPostgresTenantAccessProvisioned: runtimeFactoryMocks.assertPostgresTenantAccessProvisioned,
+}));
+
 beforeEach(() => {
   runtimeFactoryMocks.createPostgresMemoryStore.mockClear();
   runtimeFactoryMocks.createPostgresEpisodicStore.mockClear();
@@ -118,6 +131,9 @@ beforeEach(() => {
   runtimeFactoryMocks.connectPostgresParticipantTrendStore.mockClear();
   runtimeFactoryMocks.createPostgresPool.mockClear();
   runtimeFactoryMocks.ensurePostgresSchemaExists.mockClear();
+  runtimeFactoryMocks.derivePostgresTenantRole.mockClear();
+  runtimeFactoryMocks.planPostgresTenantAccess.mockClear();
+  runtimeFactoryMocks.assertPostgresTenantAccessProvisioned.mockClear();
   runtimeFactoryMocks.bootstrapPool.end.mockClear();
 });
 
@@ -265,6 +281,14 @@ describe('createAgentPersistenceRuntime', () => {
 
     expect(runtimeFactoryMocks.connectPostgresCompanionPresenceStore).toHaveBeenCalledWith(
       'postgres://postgres:secret@localhost:5432/psfn',
+    );
+    expect(runtimeFactoryMocks.assertPostgresTenantAccessProvisioned).toHaveBeenCalledWith(
+      runtimeFactoryMocks.bootstrapPool,
+      expect.objectContaining({
+        schema: 'companion_x',
+        role: 'psfn_role_companion_x',
+        searchPath: 'companion_x,extensions',
+      }),
     );
     expect(runtime.companionPresenceStore).toBe(runtimeFactoryMocks.postgresCompanionPresenceStore);
   });

@@ -3,10 +3,14 @@ import type { TelemetryEvent } from '$lib/types';
 import type { GardenEventEnvelope, GardenEventFilter } from './envelope';
 import {
   matchesGardenEventFilter,
-  normalizeGardenEventEnvelope,
+  normalizeGardenWebSocketMessage,
 } from './envelope';
+import {
+  GardenTelemetryCache,
+  MAX_CACHED_GARDEN_EVENTS,
+} from '$lib/cache/telemetry-cache';
 
-const MAX_GARDEN_EVENTS = 750;
+const MAX_GARDEN_EVENTS = MAX_CACHED_GARDEN_EVENTS;
 
 type GardenEventListener = (event: GardenEventEnvelope) => void;
 type GardenEventConnectionListener = (connected: boolean) => void;
@@ -22,6 +26,27 @@ let paused = $state(false);
 let socket: ReconnectingWebSocket | null = null;
 const subscriptions = new Set<GardenEventSubscription>();
 const connectionSubscriptions = new Set<GardenEventConnectionListener>();
+const telemetryCache = new GardenTelemetryCache();
+let telemetryCacheHydrated = false;
+let telemetryCacheHydration: Promise<void> | null = null;
+let telemetryCacheWrite: Promise<void> = Promise.resolve();
+let telemetryCacheError = $state<string | null>(null);
+
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function persistGardenEvents(): void {
+  const snapshot = [...events];
+  telemetryCacheWrite = telemetryCacheWrite
+    .then(() => telemetryCache.write(snapshot))
+    .then(() => {
+      telemetryCacheError = null;
+    })
+    .catch((error: unknown) => {
+      telemetryCacheError = toErrorMessage(error);
+    });
+}
 
 function setGardenEventBusConnected(nextConnected: boolean): void {
   if (connected === nextConnected) return;
@@ -34,6 +59,7 @@ function setGardenEventBusConnected(nextConnected: boolean): void {
 function publishGardenEvent(event: GardenEventEnvelope): void {
   if (!paused) {
     events = [...events, event].slice(-MAX_GARDEN_EVENTS);
+    persistGardenEvents();
   }
 
   for (const subscription of subscriptions) {
@@ -45,18 +71,7 @@ function publishGardenEvent(event: GardenEventEnvelope): void {
 }
 
 function handleSocketMessage(message: MessageEvent): void {
-  if (typeof message.data !== 'string') {
-    return;
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(message.data);
-  } catch {
-    return;
-  }
-
-  const event = normalizeGardenEventEnvelope(parsed);
+  const event = normalizeGardenWebSocketMessage(message.data);
   if (!event) {
     return;
   }
@@ -70,6 +85,30 @@ export function getGardenEvents(): GardenEventEnvelope[] {
 
 export function getTelemetryEvents(): TelemetryEvent[] {
   return events as TelemetryEvent[];
+}
+
+export function getGardenEventCacheError(): string | null {
+  return telemetryCacheError;
+}
+
+export function hydrateGardenEventBus(): Promise<void> {
+  if (telemetryCacheHydrated) return Promise.resolve();
+  if (telemetryCacheHydration) return telemetryCacheHydration;
+  const current = telemetryCache.read()
+    .then((cached) => {
+      events = [...cached, ...events].slice(-MAX_GARDEN_EVENTS);
+      telemetryCacheHydrated = true;
+      telemetryCacheError = null;
+    })
+    .catch((error: unknown) => {
+      telemetryCacheError = toErrorMessage(error);
+      throw error;
+    })
+    .finally(() => {
+      if (telemetryCacheHydration === current) telemetryCacheHydration = null;
+    });
+  telemetryCacheHydration = current;
+  return current;
 }
 
 export function isGardenEventBusConnected(): boolean {
@@ -108,6 +147,14 @@ export function disconnectGardenEventBus(): void {
 
 export function clearGardenEventBus(): void {
   events = [];
+  telemetryCacheWrite = telemetryCacheWrite
+    .then(() => telemetryCache.clear())
+    .then(() => {
+      telemetryCacheError = null;
+    })
+    .catch((error: unknown) => {
+      telemetryCacheError = toErrorMessage(error);
+    });
 }
 
 export function pauseGardenEventBus(): void {

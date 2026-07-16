@@ -22,9 +22,6 @@ import {
   resolveKubeRollbackLatestPath,
 } from '../../persistence/layout.js';
 
-/** Maximum number of rollback records retained in the history JSONL file. */
-export const KUBE_ROLLBACK_HISTORY_LIMIT = 50;
-
 export const KUBE_ROLLBACK_RECORD_SCHEMA_VERSION = 1 as const;
 
 export interface KubeRollbackRecord {
@@ -60,12 +57,16 @@ export interface KubeRollbackRecord {
   detail?: string;
 }
 
-function appendBoundedHistory(historyPath: string, record: KubeRollbackRecord): void {
+function appendBoundedHistory(
+  historyPath: string,
+  record: KubeRollbackRecord,
+  historyLimit: number,
+): void {
   const existingLines = existsSync(historyPath)
     ? readFileSync(historyPath, 'utf-8').split('\n').map(line => line.trim()).filter(Boolean)
     : [];
   existingLines.push(JSON.stringify(record));
-  const bounded = existingLines.slice(-KUBE_ROLLBACK_HISTORY_LIMIT);
+  const bounded = existingLines.slice(-historyLimit);
   writeFileDurableAtomicSync(historyPath, `${bounded.join('\n')}\n`);
 }
 
@@ -78,12 +79,20 @@ function appendBoundedHistory(historyPath: string, record: KubeRollbackRecord): 
 export function writeKubeRollbackRecord(
   systemDataDir: string,
   record: KubeRollbackRecord,
+  historyLimit: number,
 ): void {
+  if (!Number.isSafeInteger(historyLimit) || historyLimit <= 0) {
+    throw new Error('Kubernetes rollback history limit must be a positive integer.');
+  }
   writeFileDurableAtomicSync(
     resolveKubeRollbackLatestPath(systemDataDir),
     `${JSON.stringify(record, null, 2)}\n`,
   );
-  appendBoundedHistory(resolveKubeRollbackHistoryPath(systemDataDir), record);
+  appendBoundedHistory(
+    resolveKubeRollbackHistoryPath(systemDataDir),
+    record,
+    historyLimit,
+  );
 }
 
 /** Read the latest persisted rollback record, or null if none exists. */

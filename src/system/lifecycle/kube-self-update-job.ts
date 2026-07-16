@@ -57,6 +57,7 @@ import {
   type KubeRollbackTargetResolution,
 } from './kube-auto-rollback.js';
 import type { KubeHelmRollbackApiPort } from './kube-helm-rollback.js';
+import type { LifecycleKubernetesSettings } from '../config/runtime-config-contracts.js';
 
 /** The auto-rollback disposition for a self-update job. */
 export type KubeSelfUpdateAutoRollbackDisposition =
@@ -77,8 +78,6 @@ export interface KubeSelfUpdateAutoRollbackConfig {
   api: KubeHelmRollbackApiPort;
   /** Resolves the strictly-earlier known-good revision from `helm history`. */
   resolveRollbackTarget: (failedRevision: number) => Promise<KubeRollbackTargetResolution>;
-  waitTimeoutMs?: number;
-  pollIntervalMs?: number;
 }
 
 export interface KubeSelfUpdateJobOptions {
@@ -88,6 +87,8 @@ export interface KubeSelfUpdateJobOptions {
   systemDataDir: string;
   /** Exact Helm fullname prefix for the three managed Deployments. */
   resourcePrefix: string;
+  /** Canonical settings.json operational policy for this live job. */
+  lifecycleKubernetes: LifecycleKubernetesSettings;
   /** Live build/import/helm transport (operator-job credentials). */
   deployRunner: DeployPipelineRunner;
   /**
@@ -163,12 +164,18 @@ export async function runKubeSelfUpdateJob(
     );
   }
 
-  const persistVerdict = options.persistVerdict ?? writePostRolloutValidationVerdict;
+  const persistVerdict = options.persistVerdict
+    ?? ((systemDataDir, record) => writePostRolloutValidationVerdict(
+      systemDataDir,
+      record,
+      options.lifecycleKubernetes.postRolloutValidationHistoryLimit,
+    ));
 
   let postRolloutValidation: DeployPipelinePostRolloutValidation | undefined;
   if (options.postRolloutValidationRunner) {
     postRolloutValidation = {
       runner: options.postRolloutValidationRunner,
+      maxLogRecords: options.lifecycleKubernetes.postRolloutMaxLogRecords,
       // Always wire persist: the whole safety net depends on the verdict being
       // durably written (on both healthy and unhealthy paths) before
       // executeAutoRollback reads it.
@@ -239,8 +246,9 @@ export async function runKubeSelfUpdateJob(
     api: autoRollback.api,
     resolveRollbackTarget: autoRollback.resolveRollbackTarget,
     ...(options.audit ? { audit: options.audit } : {}),
-    ...(autoRollback.waitTimeoutMs !== undefined ? { waitTimeoutMs: autoRollback.waitTimeoutMs } : {}),
-    ...(autoRollback.pollIntervalMs !== undefined ? { pollIntervalMs: autoRollback.pollIntervalMs } : {}),
+    waitTimeoutMs: options.lifecycleKubernetes.rollbackWaitTimeoutMs,
+    pollIntervalMs: options.lifecycleKubernetes.rollbackPollIntervalMs,
+    rollbackHistoryLimit: options.lifecycleKubernetes.rollbackHistoryLimit,
     ...(options.now ? { now: options.now } : {}),
     ...(options.sleep ? { sleep: options.sleep } : {}),
   }));

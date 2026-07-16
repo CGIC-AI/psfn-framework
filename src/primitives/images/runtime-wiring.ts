@@ -6,6 +6,7 @@ import {
   createGenerateImageTool,
   createSelfieTool,
   type ImageReferenceResolver,
+  type WardrobeLookResolver,
 } from './tools.js';
 import type { ImageVisionReviewer } from './types.js';
 
@@ -39,6 +40,7 @@ export interface RegisterImagesToolsOptions {
   gatewayMode?: boolean;
   reviewer?: ImageVisionReviewer;
   referenceResolver?: ImageReferenceResolver;
+  wardrobeLookResolver?: WardrobeLookResolver;
 }
 
 export function registerImageTools(
@@ -50,8 +52,14 @@ export function registerImageTools(
   // selfie tool first, then generic generation. Core registration keeps them
   // always active instead of hidden behind toolset activation.
   const tools: AgentTool<any>[] = [
-    createSelfieTool(ops, options?.reviewer, { referenceResolver: options?.referenceResolver }),
-    createGenerateImageTool(ops, options?.reviewer, { referenceResolver: options?.referenceResolver }),
+    createSelfieTool(ops, options?.reviewer, {
+      referenceResolver: options?.referenceResolver,
+      wardrobeLookResolver: options?.wardrobeLookResolver,
+    }),
+    createGenerateImageTool(ops, options?.reviewer, {
+      referenceResolver: options?.referenceResolver,
+      wardrobeLookResolver: options?.wardrobeLookResolver,
+    }),
   ];
 
   for (const tool of tools) {

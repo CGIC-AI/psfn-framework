@@ -17,7 +17,7 @@ import type { BackupRuntimeConfig } from './config.js';
 import type {
   FleetBackupRunOptions,
   FleetBackupRunResult,
-} from './service.js';
+} from './fleet-backup-contracts.js';
 import {
   assertEncryptedBackupPackage,
   encryptBackupDirectory,

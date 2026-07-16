@@ -16,9 +16,6 @@ import {
 } from '../../persistence/layout.js';
 import type { PostRolloutValidationRecord } from './kube-post-rollout-validation.js';
 
-/** Maximum number of verdicts retained in the history JSONL file. */
-export const POST_ROLLOUT_VALIDATION_HISTORY_LIMIT = 20;
-
 function atomicWriteText(path: string, body: string): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmpPath = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
@@ -35,12 +32,16 @@ function atomicWriteText(path: string, body: string): void {
   }
 }
 
-function appendBoundedHistory(historyPath: string, record: PostRolloutValidationRecord): void {
+function appendBoundedHistory(
+  historyPath: string,
+  record: PostRolloutValidationRecord,
+  historyLimit: number,
+): void {
   const existingLines = existsSync(historyPath)
     ? readFileSync(historyPath, 'utf-8').split('\n').map(line => line.trim()).filter(Boolean)
     : [];
   existingLines.push(JSON.stringify(record));
-  const bounded = existingLines.slice(-POST_ROLLOUT_VALIDATION_HISTORY_LIMIT);
+  const bounded = existingLines.slice(-historyLimit);
   atomicWriteText(historyPath, `${bounded.join('\n')}\n`);
 }
 
@@ -52,9 +53,17 @@ function appendBoundedHistory(historyPath: string, record: PostRolloutValidation
 export function writePostRolloutValidationVerdict(
   systemDataDir: string,
   record: PostRolloutValidationRecord,
+  historyLimit: number,
 ): void {
+  if (!Number.isSafeInteger(historyLimit) || historyLimit <= 0) {
+    throw new Error('Post-rollout validation history limit must be a positive integer.');
+  }
   writeJsonAtomic(resolvePostRolloutValidationLatestPath(systemDataDir), record);
-  appendBoundedHistory(resolvePostRolloutValidationHistoryPath(systemDataDir), record);
+  appendBoundedHistory(
+    resolvePostRolloutValidationHistoryPath(systemDataDir),
+    record,
+    historyLimit,
+  );
 }
 
 /** Read the latest persisted verdict, or null if none exists. */

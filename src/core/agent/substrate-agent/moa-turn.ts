@@ -75,12 +75,16 @@ export function buildMoaPrompt(
   context: LLMContext,
   currentTurn: { role: 'user' | 'system'; content: string },
 ): string {
+  const sessionContext = (context.sessionPromptBlocks ?? [])
+    .map(block => block.content.trim())
+    .filter(content => content.length > 0)
+    .join('\n\n');
   const transcript = context.messages
     .map(message => `${message.role}:\n${message.content}`)
     .join('\n\n');
   return [
     'Produce the best final assistant reply for the latest user turn.',
-    `System instructions:\n${context.systemPrompt}`,
+    sessionContext.length > 0 ? `Session context:\n${sessionContext}` : '',
     transcript.length > 0 ? `Conversation transcript:\n${transcript}` : '',
     `Current turn:\n${currentTurn.role}:\n${currentTurn.content}`,
     'Return only the assistant response text to send back.',
@@ -178,6 +182,7 @@ export async function runMoaTurn(input: {
   context: LLMContext;
   message: SubstrateMessage;
   prompt: string;
+  authoritativeSystemPrompt: string;
   settings: ResolvedMoaSettings;
   config?: SubstrateConfig;
   turnId: TurnID;
@@ -233,6 +238,7 @@ export async function runMoaTurn(input: {
     input.llmClient,
     input.prompt,
     {
+      authoritativeSystemPrompt: input.authoritativeSystemPrompt,
       correlation,
       ...(input.settings.referenceModels.length > 0 ? { referenceModels: input.settings.referenceModels } : {}),
       ...(input.settings.aggregatorModel ? { aggregatorModel: input.settings.aggregatorModel } : {}),

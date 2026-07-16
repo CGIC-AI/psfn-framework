@@ -68,7 +68,7 @@ const VISION_CONTENT_BUILD_FAILURE_DIAGNOSTIC = 'Vision content build failed.';
 const VISION_PROMPT_FAILURE_DIAGNOSTIC = 'Vision prompt failed.';
 const VISION_RECOVERY_FAILURE_DIAGNOSTIC = 'Vision recovery replay failed.';
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
-type TurnSessionIdentity = import('../turn-execution-runtime.js').TurnSessionIdentity;
+type TurnSessionIdentity = import('./contracts.js').TurnSessionIdentity;
 type RuntimeContradictionDiagnostic = NonNullable<
 NonNullable<AgentResponse['metadata']['diagnostics']>['runtimeContradiction']
 >;
@@ -408,6 +408,7 @@ export async function invokeAgentForTurn(input: {
   message: SubstrateMessage;
   turnSessionIdentity: TurnSessionIdentity;
   context: Awaited<ReturnType<TurnExecutionRuntime['sessionManager']['buildContext']>>;
+  authoritativeSystemPrompt: string;
   providerSystemPrompt: string;
   piMessages: ReturnType<typeof contextMessagesToPiMessages>;
   startTime: number;
@@ -437,6 +438,7 @@ export async function invokeAgentForTurn(input: {
     message,
     turnSessionIdentity,
     context,
+    authoritativeSystemPrompt,
     providerSystemPrompt,
     piMessages,
     startTime,
@@ -519,6 +521,7 @@ export async function invokeAgentForTurn(input: {
         context,
         message,
         prompt: moaProviderPrompt,
+        authoritativeSystemPrompt,
         settings: moaSettings,
         config: runtime.config,
         turnId,

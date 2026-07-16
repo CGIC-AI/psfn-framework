@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import {
   type ContactProfileArtifact,
   type MemoryAdminListOptions,

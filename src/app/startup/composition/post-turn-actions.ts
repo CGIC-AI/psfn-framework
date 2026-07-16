@@ -42,13 +42,15 @@ import {
 } from '../../../core/agent/post-turn-subagent-spawn.js';
 import {
   POST_TURN_APPRAISAL_RUNTIME_CLASS,
-  RUNTIME_LANE_CLASSES,
   compareRuntimeLanePriority,
   isRuntimeLaneClass,
   resolveRuntimeLaneBudgetProfile,
   resolveRuntimeLaneClassForPostTurnActionKind,
-  type RuntimeLaneClass,
 } from '../../../core/agent/worker-lanes.js';
+import {
+  RUNTIME_LANE_CLASSES,
+  type RuntimeLaneClass,
+} from '../../../shared/contracts/runtime-lanes.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { writeJsonAtomic } from '../../../shared/utils/fs.js';
 import { isRecord } from '../../../shared/utils/types.js';

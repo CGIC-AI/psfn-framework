@@ -1,4 +1,4 @@
-import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { join } from 'node:path';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { PendingContactApprovalStore } from '../../core/contacts/pending-contact-approvals.js';
@@ -24,7 +24,10 @@ import type { ConcernStorePort } from '../../core/intention/concern-store-port.j
 import type { OutreachOutboxStore } from '../../core/intention/outreach-outbox.js';
 import { NorthStarStore } from '../../faculties/north-star/store.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
-import { createSubjectAuthorizedMemoryStore } from '../../faculties/memory/subject-authorized-store.js';
+import {
+  createSubjectAuthorizedMemoryStore,
+  type MemorySubjectAccessContext,
+} from '../../faculties/memory/subject-authorized-store.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import type { GroupMemoryBackfillExtractorPort } from '../../faculties/memory/extraction/group-backfill.js';
 import type {
@@ -120,6 +123,8 @@ import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { AdminShardFoldReviewDataService } from './services/shard-fold-review-service.js';
 import { AdminWikiDataService } from './services/wiki-service.js';
+import { AdminWishlistDataService } from './services/wishlist-service.js';
+import type { AdminWishlistBeadCreatePort } from './services/types.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
 import type { GatewayCredentialPresenceResult } from '../../boundary/gateway/protocol.js';
 import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-store-ports.js';
@@ -138,6 +143,11 @@ export interface InProcessGardenAdminContractOptions {
   apiHost?: string;
   apiPort?: number;
   memoryStore: MemoryStorePort;
+  /**
+   * Resolve trusted Garden memory subject authority from authenticated runtime
+   * context. Absence deliberately leaves subject-classified memory fail closed.
+   */
+  resolveMemorySubjectAccessContext?: () => MemorySubjectAccessContext;
   episodicStore?: EpisodicStorePort | null;
   sessionStore: SessionStore;
   sessionManager: SessionManager;
@@ -184,6 +194,8 @@ export interface InProcessGardenAdminContractOptions {
   icpRuntimeEnablement?: IcpAutonomyRuntimeEnablement | null;
   /** Distinct authenticated principals for governed shared-workspace writes. */
   sharedWorkspaceCredentials?: SharedWorkspaceCredentials;
+  /** Existing gateway-backed Beads create primitive used for explicit wish conversion. */
+  wishlistBeadCreator?: AdminWishlistBeadCreatePort;
 }
 
 export function createInProcessGardenAdminContract(
@@ -351,7 +363,10 @@ export function createInProcessGardenAdminContract(
   // The legacy admin session proves operator access but carries no subject
   // identity. Fleet-auth must supply that authority before Garden may expose
   // or mutate subject-classified memories.
-  const gardenMemoryStore = createSubjectAuthorizedMemoryStore(options.memoryStore, {});
+  const gardenMemoryStore = createSubjectAuthorizedMemoryStore(
+    options.memoryStore,
+    options.resolveMemorySubjectAccessContext ?? (() => ({})),
+  );
   const driftReviews = createAdminDriftReviewService({
     store: createDriftReviewCardStore(resolveDriftReviewCardsPath(companionDataDir)),
     memoryStore: gardenMemoryStore,
@@ -413,6 +428,12 @@ export function createInProcessGardenAdminContract(
           eventBus: options.eventBus,
         },
       })
+      : null,
+    wishlist: options.config.workspacePath
+      ? new AdminWishlistDataService(
+        options.config.workspacePath,
+        options.wishlistBeadCreator,
+      )
       : null,
     episodicMemory: options.episodicStore
       ? new AdminEpisodicMemoryDataService(options.episodicStore)
@@ -476,7 +497,12 @@ export function createInProcessGardenAdminContract(
     rooms: createAdminRoomsService({
       contactStore: options.contactStore ?? null,
     }),
-    places: createAdminPlacesService({ dataDir: options.config.dataDir }),
+    places: createAdminPlacesService({
+      dataDir: options.config.dataDir,
+      fleetCompanionIds: options.config.companionFleet?.companions.map(
+        companion => companion.companionId,
+      ) ?? [],
+    }),
     enrollment: options.hubIdentityEnrollmentStore && options.contactStore
       ? createAdminEnrollmentService({
         enrollmentService: new HubIdentityEnrollmentService(

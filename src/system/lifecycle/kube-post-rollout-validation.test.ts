@@ -4,17 +4,28 @@ import {
   classifyToolConformance,
   POST_ROLLOUT_CHECK_IDS,
   PostRolloutValidationError,
-  runPostRolloutValidation,
+  runPostRolloutValidation as runOwnedPostRolloutValidation,
   summarizePostRolloutValidationRecord,
   type PostRolloutValidationPlan,
   type PostRolloutValidationRunner,
   type RawCheckResult,
+  type RunPostRolloutValidationOptions,
 } from './kube-post-rollout-validation.js';
 import type { ToolConformanceRunResult } from '../../core/agent/tool-conformance/types.js';
 import type { RuntimeDiagnosticsSnapshot } from '../../shared/diagnostics/runtime-diagnostics.js';
 
 const COMMIT = 'a'.repeat(40);
 const IMAGE = 'localhost/psfn-framework:0.1.0-kube-aaaaaaaa';
+
+type TestValidationOptions = Omit<RunPostRolloutValidationOptions, 'maxLogRecords'>
+  & Partial<Pick<RunPostRolloutValidationOptions, 'maxLogRecords'>>;
+
+function runPostRolloutValidation(
+  plan: PostRolloutValidationPlan,
+  options: TestValidationOptions,
+) {
+  return runOwnedPostRolloutValidation(plan, { maxLogRecords: 10, ...options });
+}
 
 function basePlan(overrides: Partial<PostRolloutValidationPlan> = {}): PostRolloutValidationPlan {
   return {

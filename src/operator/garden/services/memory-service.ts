@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { EmbeddingProviderPort } from '../../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import { DEFAULT_COMPANION_NAME } from '../../../core/identity/companion-naming.js';
 import { isInternalMemoryArtifact } from '../../../faculties/memory/internal-artifacts.js';

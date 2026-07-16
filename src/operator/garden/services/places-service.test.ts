@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildAdminPlacesRoutes } from '../api-routes-places.js';
 import { checkAdminRequestAuth } from '../server-auth.js';
 import { createAdminPlacesService } from './places-service.js';
+import { createCompanionId } from '../../../shared/routing/companion-id.js';
 
 const ENDPOINT = {
   endpointId: 'ep-1',
@@ -21,6 +22,10 @@ const ENDPOINT = {
   },
   maxCapabilities: ['text'],
 };
+
+const COMPANION_A = createCompanionId('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+const COMPANION_B = createCompanionId('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+const NO_COMPANIONS = [];
 
 const SATELLITES = {
   schemaVersion: 1,
@@ -67,7 +72,9 @@ function seed(satellites: unknown = SATELLITES, places: unknown = PLACES): void 
   writeFileSync(join(dataDir, 'places.json'), JSON.stringify(places), 'utf8');
 }
 
-function readSatellites(): { satellites: Array<{ satelliteId: string; placeId?: string }> } {
+function readSatellites(): {
+  satellites: Array<{ satelliteId: string; placeId?: string; companionId?: string }>;
+} {
   return JSON.parse(readFileSync(join(dataDir, 'satellites.json'), 'utf8'));
 }
 
@@ -121,7 +128,7 @@ async function invokeRoute(
 describe('AdminPlacesService', () => {
   it('joins places, affordances, and bound satellites', async () => {
     seed();
-    const data = await createAdminPlacesService({ dataDir }).listPlaces();
+    const data = await createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS }).listPlaces();
     expect(data.places.map(p => p.placeId)).toEqual(['place-kitchen', 'place-living']);
     const kitchen = data.places.find(p => p.placeId === 'place-kitchen')!;
     expect(kitchen.affordances.map(a => a.affordanceId)).toEqual(['aff-light', 'aff-presence']);
@@ -131,7 +138,7 @@ describe('AdminPlacesService', () => {
   });
 
   it('degrades to an empty registry when the owner files are absent', async () => {
-    const data = await createAdminPlacesService({ dataDir }).listPlaces();
+    const data = await createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS }).listPlaces();
     expect(data.sites).toEqual([]);
     expect(data.places).toEqual([]);
     expect(data.unboundSatellites).toEqual([]);
@@ -139,7 +146,7 @@ describe('AdminPlacesService', () => {
 
   it('re-binds a satellite to a known place and persists it', async () => {
     seed();
-    const service = createAdminPlacesService({ dataDir });
+    const service = createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS });
     const result = await service.rebindSatellite({ satelliteId: 'sat-roamer', placeId: 'place-living' });
     expect(result.placeId).toBe('place-living');
     expect(readSatellites().satellites.find(s => s.satelliteId === 'sat-roamer')?.placeId).toBe('place-living');
@@ -150,7 +157,7 @@ describe('AdminPlacesService', () => {
 
   it('unbinds a satellite when placeId is null', async () => {
     seed();
-    const service = createAdminPlacesService({ dataDir });
+    const service = createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS });
     const result = await service.rebindSatellite({ satelliteId: 'sat-kitchen', placeId: null });
     expect(result.placeId).toBeNull();
     expect(readSatellites().satellites.find(s => s.satelliteId === 'sat-kitchen')?.placeId).toBeUndefined();
@@ -160,7 +167,7 @@ describe('AdminPlacesService', () => {
   it('fails closed on an unknown placeId and leaves the owner file untouched', async () => {
     seed();
     const before = readFileSync(join(dataDir, 'satellites.json'), 'utf8');
-    const service = createAdminPlacesService({ dataDir });
+    const service = createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS });
     await expect(service.rebindSatellite({ satelliteId: 'sat-roamer', placeId: 'place-ghost' }))
       .rejects.toThrow(/does not exist in places.json/);
     expect(readFileSync(join(dataDir, 'satellites.json'), 'utf8')).toBe(before);
@@ -168,15 +175,41 @@ describe('AdminPlacesService', () => {
 
   it('fails closed on an unknown satellite', async () => {
     seed();
-    await expect(createAdminPlacesService({ dataDir }).rebindSatellite({ satelliteId: 'sat-nope', placeId: 'place-living' }))
+    await expect(createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS })
+      .rebindSatellite({ satelliteId: 'sat-nope', placeId: 'place-living' }))
       .rejects.toThrow(/unknown satellite/);
+  });
+
+  it('rejects a second companion binding to an occupied satellite and preserves the owner file', async () => {
+    seed({
+      ...SATELLITES,
+      satellites: SATELLITES.satellites.map((satellite) => (
+        satellite.satelliteId === 'sat-kitchen'
+          ? { ...satellite, companionId: COMPANION_A }
+          : satellite
+      )),
+    });
+    const before = readFileSync(join(dataDir, 'satellites.json'), 'utf8');
+    const service = createAdminPlacesService({
+      dataDir,
+      fleetCompanionIds: [COMPANION_A, COMPANION_B],
+    });
+
+    await expect(service.rebindSatellite({
+      satelliteId: 'sat-kitchen',
+      companionId: COMPANION_B,
+    })).rejects.toThrow(/already bound.*explicitly unbind/i);
+    expect(readFileSync(join(dataDir, 'satellites.json'), 'utf8')).toBe(before);
   });
 });
 
 describe('buildAdminPlacesRoutes', () => {
   it('serves GET /api/admin/places', async () => {
     seed();
-    const routes = buildAdminPlacesRoutes({ placesService: createAdminPlacesService({ dataDir }), withBody });
+    const routes = buildAdminPlacesRoutes({
+      placesService: createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS }),
+      withBody,
+    });
     const res = await invokeRoute(routes, 'GET', '/api/admin/places');
     expect(res.status).toBe(200);
     expect(res.headers['Cache-Control']).toBe('no-store');
@@ -185,7 +218,10 @@ describe('buildAdminPlacesRoutes', () => {
 
   it('re-binds via PATCH /api/admin/places/satellites/:satelliteId/binding', async () => {
     seed();
-    const routes = buildAdminPlacesRoutes({ placesService: createAdminPlacesService({ dataDir }), withBody });
+    const routes = buildAdminPlacesRoutes({
+      placesService: createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS }),
+      withBody,
+    });
     const res = await invokeRoute(
       routes,
       'PATCH',
@@ -196,9 +232,35 @@ describe('buildAdminPlacesRoutes', () => {
     expect(JSON.parse(res.body).placeId).toBe('place-living');
   });
 
+  it('binds an unoccupied satellite to a fleet companion via PATCH', async () => {
+    seed();
+    const routes = buildAdminPlacesRoutes({
+      placesService: createAdminPlacesService({
+        dataDir,
+        fleetCompanionIds: [COMPANION_A],
+      }),
+      withBody,
+    });
+    const res = await invokeRoute(
+      routes,
+      'PATCH',
+      '/api/admin/places/satellites/sat-roamer/binding',
+      JSON.stringify({ companionId: COMPANION_A }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(res.body).companionId).toBe(COMPANION_A);
+    expect(readSatellites().satellites.find(
+      satellite => satellite.satelliteId === 'sat-roamer',
+    )?.companionId).toBe(COMPANION_A);
+  });
+
   it('rejects a PATCH re-bind to an unknown place with 400', async () => {
     seed();
-    const routes = buildAdminPlacesRoutes({ placesService: createAdminPlacesService({ dataDir }), withBody });
+    const routes = buildAdminPlacesRoutes({
+      placesService: createAdminPlacesService({ dataDir, fleetCompanionIds: NO_COMPANIONS }),
+      withBody,
+    });
     const res = await invokeRoute(
       routes,
       'PATCH',

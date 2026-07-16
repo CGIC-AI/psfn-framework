@@ -2,7 +2,7 @@
 // Shared write/dedup/contradiction logic used by both MemoryExtractor and tools.
 
 import { v7 as uuidv7 } from 'uuid';
-import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type {
   MemoryEvolutionLink,
   MemoryStorePort,

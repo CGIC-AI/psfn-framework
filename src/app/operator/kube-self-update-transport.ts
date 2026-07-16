@@ -20,7 +20,6 @@ import type { KubeHelmRollbackApiPort } from '../../system/lifecycle/kube-helm-r
 import type { KubeRollbackTargetResolution } from '../../system/lifecycle/kube-auto-rollback.js';
 
 const DNS_LABEL_PATTERN = /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/;
-const DEFAULT_COMMAND_TIMEOUT_MS = 600_000;
 const DEFAULT_MAX_BUFFER = 16 * 1024 * 1024;
 
 export interface CommandResult {
@@ -44,16 +43,17 @@ export type CommandRunner = (
   options?: CommandOptions,
 ) => Promise<CommandResult>;
 
-/** Default runner: execFile (no shell), captured stdio, non-zero exit is data not a throw. */
-export const execFileCommandRunner: CommandRunner = (file, args, options = {}) =>
-  new Promise<CommandResult>((resolve, reject) => {
+/** Build an execFile runner with its default timeout owned by settings.json. */
+export function createExecFileCommandRunner(commandTimeoutMs: number): CommandRunner {
+  requirePositiveInt('commandTimeoutMs', commandTimeoutMs);
+  return (file, args, options = {}) => new Promise<CommandResult>((resolve, reject) => {
     const child = execFile(
       file,
       [...args],
       {
         cwd: options.cwd,
         env: options.env ?? process.env,
-        timeout: options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS,
+        timeout: options.timeoutMs ?? commandTimeoutMs,
         maxBuffer: options.maxBuffer ?? DEFAULT_MAX_BUFFER,
         encoding: 'utf8',
       },
@@ -71,6 +71,7 @@ export const execFileCommandRunner: CommandRunner = (file, args, options = {}) =
       child.stdin?.end(options.input);
     }
   });
+}
 
 function requireDnsLabel(field: string, value: string): void {
   if (!DNS_LABEL_PATTERN.test(value)) {
@@ -115,7 +116,7 @@ export interface HelmKubectlConfig {
   /** Extra args prepended to every helm/kubectl call (e.g. --kubeconfig=…). */
   helmGlobalArgs?: readonly string[];
   kubectlGlobalArgs?: readonly string[];
-  run?: CommandRunner;
+  run: CommandRunner;
 }
 
 interface HelmHistoryEntry {
@@ -149,7 +150,7 @@ export async function readHelmHistory(
   requireDnsLabel('namespace', namespace);
   requireDnsLabel('release', release);
   const helm = config.helmBin ?? 'helm';
-  const run = config.run ?? execFileCommandRunner;
+  const run = config.run;
   const result = await run(helm, [
     ...(config.helmGlobalArgs ?? []),
     'history', release, '-n', namespace, '--max', '100', '-o', 'json',
@@ -211,7 +212,7 @@ export function createLiveHelmRollbackApi(
 ): KubeHelmRollbackApiPort {
   const helm = config.helmBin ?? 'helm';
   const kubectl = config.kubectlBin ?? 'kubectl';
-  const run = config.run ?? execFileCommandRunner;
+  const run = config.run;
   const rollbackTimeout = config.rollbackTimeout ?? '5m';
   return {
     rollback: async (namespace, release, targetRevision) => {
@@ -270,7 +271,7 @@ export interface LiveDeployPipelineRunnerConfig extends HelmKubectlConfig {
 export function createLiveDeployPipelineRunner(
   config: LiveDeployPipelineRunnerConfig,
 ): DeployPipelineRunner {
-  const run = config.run ?? execFileCommandRunner;
+  const run = config.run;
   const helm = config.helmBin ?? 'helm';
   const docker = config.dockerBin ?? 'docker';
   const now = config.now ?? (() => new Date());

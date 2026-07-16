@@ -5,11 +5,9 @@ import type { SessionEntry } from '../../core/session/types.js';
 import type { SessionActivitySummary } from '../../persistence/sessions/store.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import type { WikiStartupHydrationSettings } from '../../system/config/runtime-config-contracts.js';
 
 const log = createComponentLogger('StartupWikiHydration');
-const DEFAULT_RECENT_SESSION_LIMIT = 4;
-const DEFAULT_RECENT_MESSAGE_LIMIT = 18;
-const MAX_HYDRATION_CONTEXT_CHARS = 6_000;
 
 /**
  * The subset of the session manager the wiki hydration hook needs. Structurally
@@ -33,7 +31,10 @@ export interface StartupWikiHydrationResult {
   }>;
 }
 
-function buildHydrationContextText(entries: readonly SessionEntry[]): string {
+function buildHydrationContextText(
+  entries: readonly SessionEntry[],
+  maxContextChars: number,
+): string {
   const lines = entries
     .filter(entry => entry.role === 'user' || entry.role === 'assistant')
     .map((entry) => {
@@ -43,10 +44,10 @@ function buildHydrationContextText(entries: readonly SessionEntry[]): string {
     })
     .filter(line => line.trim().length > 0);
   const context = lines.join('\n');
-  if (context.length <= MAX_HYDRATION_CONTEXT_CHARS) {
+  if (context.length <= maxContextChars) {
     return context;
   }
-  return context.slice(context.length - MAX_HYDRATION_CONTEXT_CHARS);
+  return context.slice(context.length - maxContextChars);
 }
 
 function collectHydrationChannelIds(
@@ -84,8 +85,7 @@ function collectHydrationChannelIds(
 export async function hydrateStartupWikiContexts(options: {
   wikiRetrieval: WikiRetrievalPort | null | undefined;
   sessionManager: StartupWikiHydrationSessionManager;
-  recentSessionLimit?: number;
-  recentMessageLimit?: number;
+  tuning: WikiStartupHydrationSettings;
 }): Promise<StartupWikiHydrationResult> {
   const refresh = options.wikiRetrieval?.refreshWikiContextBlock.bind(options.wikiRetrieval);
   if (!refresh) {
@@ -94,7 +94,7 @@ export async function hydrateStartupWikiContexts(options: {
 
   const channelIds = collectHydrationChannelIds(
     options.sessionManager,
-    options.recentSessionLimit ?? DEFAULT_RECENT_SESSION_LIMIT,
+    options.tuning.recentSessionLimit,
   );
   let attempted = 0;
   let hydrated = 0;
@@ -103,9 +103,12 @@ export async function hydrateStartupWikiContexts(options: {
   for (const channelId of channelIds) {
     const entries = options.sessionManager.getRecentMessages(
       channelId,
-      options.recentMessageLimit ?? DEFAULT_RECENT_MESSAGE_LIMIT,
+      options.tuning.recentMessageLimit,
     );
-    const contextText = buildHydrationContextText(entries);
+    const contextText = buildHydrationContextText(
+      entries,
+      options.tuning.maxContextChars,
+    );
     if (!contextText.trim()) continue;
     attempted += 1;
     try {

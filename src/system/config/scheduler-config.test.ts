@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_FREE_TIME_CONFIG,
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
   DEFAULT_WEIGHTED_THOUGHT_OUTREACH_CONFIG,
@@ -11,6 +12,7 @@ import {
 } from './scheduler-config.js';
 import { assertPositiveInteger } from './validators.js';
 import { DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG } from './icp-autonomy-scheduler-config.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, 'utf-8');
@@ -22,6 +24,9 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
     heartbeatIntervalMs: 90_000,
     backgroundMaintenance: {
       intervalMs: 3_600_000,
+      sharedWorldWikiCaretaker: {
+        batchSize: 25,
+      },
       ambientPresence: {
         minIdleMinutes: 180,
         minNoteIntervalMinutes: 360,
@@ -30,6 +35,7 @@ function buildValidSchedulerConfig(): Record<string, unknown> {
         maxActiveConcerns: 7,
       },
     },
+    backgroundWork: structuredClone(DEFAULT_BACKGROUND_WORK_TUNING),
     artifactLifecycle: {
       scratchpadRetentionDays: 10,
       generatedMediaRetentionDays: 20,
@@ -134,9 +140,77 @@ describe('config validators', () => {
 });
 
 describe('scheduler config seed defaults', () => {
+  it('owns the complete durable background-work tuning group', () => {
+    expect(loadSchedulerSeedDefaults().backgroundWork).toEqual(DEFAULT_BACKGROUND_WORK_TUNING);
+  });
+
+  it('fails closed on missing, unknown, unsafe, or incoherent background-work tuning', () => {
+    withSeedDir((seedDir) => {
+      const missing = buildValidSchedulerConfig();
+      delete missing.backgroundWork;
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), missing);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'backgroundWork must be an object',
+      );
+
+      const unknown = buildValidSchedulerConfig();
+      unknown.backgroundWork = {
+        ...structuredClone(DEFAULT_BACKGROUND_WORK_TUNING),
+        parallelFallback: 8,
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), unknown);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        /backgroundWork contains unknown keys: parallelFallback/u,
+      );
+
+      const unsafe = buildValidSchedulerConfig();
+      unsafe.backgroundWork = {
+        ...structuredClone(DEFAULT_BACKGROUND_WORK_TUNING),
+        supervisor: {
+          ...DEFAULT_BACKGROUND_WORK_TUNING.supervisor,
+          leaseDurationMs: Number.MAX_SAFE_INTEGER + 1,
+        },
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), unsafe);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'backgroundWork.supervisor.leaseDurationMs must be a positive safe integer',
+      );
+
+      const incoherent = buildValidSchedulerConfig();
+      incoherent.backgroundWork = {
+        ...structuredClone(DEFAULT_BACKGROUND_WORK_TUNING),
+        supervisor: {
+          ...DEFAULT_BACKGROUND_WORK_TUNING.supervisor,
+          retryBaseDelayMs: 2_000,
+          retryMaxDelayMs: 1_000,
+        },
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), incoherent);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        /retryMaxDelayMs must be greater than or equal to .*retryBaseDelayMs/u,
+      );
+
+      const negativeShutdown = buildValidSchedulerConfig();
+      negativeShutdown.backgroundWork = {
+        ...structuredClone(DEFAULT_BACKGROUND_WORK_TUNING),
+        supervisor: {
+          ...DEFAULT_BACKGROUND_WORK_TUNING.supervisor,
+          shutdownTimeoutMs: -1,
+        },
+      };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), negativeShutdown);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'backgroundWork.supervisor.shutdownTimeoutMs must be a non-negative safe integer',
+      );
+    });
+  });
+
   it('checks in one hourly background-maintenance cadence with owned ambient thresholds', () => {
     expect(loadSchedulerSeedDefaults().backgroundMaintenance).toEqual({
       intervalMs: 3_600_000,
+      sharedWorldWikiCaretaker: {
+        batchSize: 25,
+      },
       ambientPresence: {
         minIdleMinutes: 180,
         minNoteIntervalMinutes: 360,
@@ -146,6 +220,32 @@ describe('scheduler config seed defaults', () => {
       },
     });
     expect(loadSchedulerSeedDefaults().socialGraphBuilder).not.toHaveProperty('intervalMs');
+  });
+
+  it('requires an owner-file caretaker cleanup batch with no runtime default', () => {
+    withSeedDir((seedDir) => {
+      const missing = buildValidSchedulerConfig();
+      const backgroundMaintenance = missing.backgroundMaintenance;
+      if (!isRecord(backgroundMaintenance)) {
+        throw new Error('test scheduler config backgroundMaintenance is malformed');
+      }
+      delete backgroundMaintenance.sharedWorldWikiCaretaker;
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), missing);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'backgroundMaintenance.sharedWorldWikiCaretaker must be an object',
+      );
+
+      const invalid = buildValidSchedulerConfig();
+      const invalidMaintenance = invalid.backgroundMaintenance;
+      if (!isRecord(invalidMaintenance)) {
+        throw new Error('test scheduler config backgroundMaintenance is malformed');
+      }
+      invalidMaintenance.sharedWorldWikiCaretaker = { batchSize: 0 };
+      writeJson(join(seedDir, SCHEDULER_SEED_FILE_NAME), invalid);
+      expect(() => loadSchedulerSeedDefaults({ seedDir })).toThrow(
+        'backgroundMaintenance.sharedWorldWikiCaretaker.batchSize',
+      );
+    });
   });
 
   it('rejects retired per-operation cadence keys instead of silently aliasing them', () => {

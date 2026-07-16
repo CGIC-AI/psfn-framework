@@ -6,7 +6,10 @@ import type { Contact } from '../../../core/contacts/types.js';
 import type { ConversationScope } from '../../../core/session/conversation-scope.js';
 import { cloneContactProfileArtifact } from '../../../core/turns/snapshot.js';
 import type { ContactProfileArtifact, MemoryStorePort } from '../memory-store-port.js';
-import type { PurrMemory } from '../types.js';
+import type {
+  PurrMemory,
+  RetrievalAccessScope,
+} from '../types.js';
 import {
   type MemoryWithheldSummary,
 } from '../withheld-summary.js';
@@ -75,6 +78,7 @@ export async function resolveContactProfileAccess(input: {
   sessionQuarantineFilter: MemorySessionQuarantineFilter | null;
   profile: ContactProfileArtifact | undefined;
   options: {
+    accessScope?: RetrievalAccessScope;
     trustLevel: TrustLevel;
     channelPrivacy: ChannelPrivacy;
     broadcast: boolean;

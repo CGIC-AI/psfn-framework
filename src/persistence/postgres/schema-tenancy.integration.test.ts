@@ -193,7 +193,7 @@ describe('Postgres schema tenancy plumbing', () => {
       try {
         const searchPath = await pool.query<{ search_path: string }>('SHOW search_path');
         // Set via the libpq `options` param, Postgres reports it without spaces.
-        expect(searchPath.rows[0]?.search_path.replace(/\s/g, '')).toBe('companion_a,public');
+        expect(searchPath.rows[0]?.search_path.replace(/\s/g, '')).toBe('companion_a,extensions');
 
         await runPostgresMigrations(pool, POSTGRES_CONTACT_MIGRATIONS, { schema: 'companion_a' });
 
@@ -317,7 +317,7 @@ describe('Postgres schema tenancy plumbing', () => {
             },
           } as never,
           runtime: source.runtime,
-          resolveOriginActivationSource: () => 'extended_loaded',
+          resolveOriginCatalogSource: () => 'extended',
           isExecutionAuthorized: () => true,
         });
         const candidateActions = inferIcpInitiationCandidateActions({
@@ -359,7 +359,7 @@ describe('Postgres schema tenancy plumbing', () => {
           ],
           turnId: 'generated-follow-up-turn' as never,
           completedAt: Date.parse('2026-07-13T20:01:00.000Z'),
-        }, 'extended_loaded');
+        }, 'extended');
         if (!handler || !candidateActions[0]) throw new Error('candidate action handler is missing');
 
         await expect(handler({

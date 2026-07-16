@@ -31,15 +31,12 @@ export interface KubeRolloutRestartExecutorOptions {
   resourcePrefix: string;
   api: KubeRolloutApiPort;
   /** Total time to wait for all three Deployments to become ready. */
-  waitTimeoutMs?: number;
+  waitTimeoutMs: number;
   /** Delay between readiness polls. */
-  pollIntervalMs?: number;
+  pollIntervalMs: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
-
-const DEFAULT_WAIT_TIMEOUT_MS = 180_000;
-const DEFAULT_POLL_INTERVAL_MS = 3_000;
 
 const MANAGED_COMPONENTS = ['agent', 'gateway', 'garden'] as const;
 
@@ -66,8 +63,8 @@ export function createKubeRolloutRestartExecutor(
   options: KubeRolloutRestartExecutorOptions,
 ): KubeSelfManagementExecutor {
   const deploymentNames = MANAGED_COMPONENTS.map(component => `${options.resourcePrefix}-${component}`);
-  const waitTimeoutMs = options.waitTimeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS;
-  const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+  const waitTimeoutMs = options.waitTimeoutMs;
+  const pollIntervalMs = options.pollIntervalMs;
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? defaultSleep;
 

@@ -42,8 +42,6 @@ import {
 import {
   managedRollbackDeploymentNames,
   waitForDeploymentsReady,
-  DEFAULT_ROLLBACK_POLL_INTERVAL_MS,
-  DEFAULT_ROLLBACK_WAIT_TIMEOUT_MS,
   type KubeHelmRollbackApiPort,
 } from './kube-helm-rollback.js';
 
@@ -217,8 +215,9 @@ export interface ExecuteAutoRollbackOptions {
   resolveRollbackTarget: (failedRevision: number) => Promise<KubeRollbackTargetResolution>;
   /** Emitted for every terminal decision (audit trail), including no-op decisions. */
   audit?: (event: AutoRollbackAuditEvent) => Promise<void>;
-  waitTimeoutMs?: number;
-  pollIntervalMs?: number;
+  waitTimeoutMs: number;
+  pollIntervalMs: number;
+  rollbackHistoryLimit: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
@@ -243,8 +242,8 @@ export async function executeAutoRollback(
 ): Promise<AutoRollbackOutcome> {
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? defaultSleep;
-  const waitTimeoutMs = options.waitTimeoutMs ?? DEFAULT_ROLLBACK_WAIT_TIMEOUT_MS;
-  const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_ROLLBACK_POLL_INTERVAL_MS;
+  const waitTimeoutMs = options.waitTimeoutMs;
+  const pollIntervalMs = options.pollIntervalMs;
 
   const emit = async (event: AutoRollbackAuditEvent): Promise<void> => {
     if (options.audit) await options.audit(event);
@@ -355,7 +354,7 @@ export async function executeAutoRollback(
     };
     // Persist BEFORE surfacing so the act-once ledger records the attempt even on
     // a failed recovery — a failed rollback must not be silently re-fired.
-    writeKubeRollbackRecord(options.systemDataDir, record);
+    writeKubeRollbackRecord(options.systemDataDir, record, options.rollbackHistoryLimit);
     await emit({
       ...auditBase,
       status: 'rollback_failed',
@@ -374,7 +373,7 @@ export async function executeAutoRollback(
     outcome: 'succeeded',
     completedAt: now(),
   };
-  writeKubeRollbackRecord(options.systemDataDir, record);
+  writeKubeRollbackRecord(options.systemDataDir, record, options.rollbackHistoryLimit);
   await emit({
     ...auditBase,
     status: 'rolled_back',

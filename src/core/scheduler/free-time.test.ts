@@ -202,12 +202,15 @@ describe('evaluateFreeTimeGate', () => {
 // ── Framing ──
 
 describe('free-time framing', () => {
-  it('leads with the full persona and open seed, with no forced-task language', () => {
+  it('uses only free-time framing and the open seed, with no duplicated persona text', () => {
     const prompt = buildFreeTimeFramingPrompt({
-      personaBlock: 'I am Purrsephone, and this is me.',
       seedText: 'You have some time to yourself. You can do nothing if you want.',
     });
-    expect(prompt).toContain('I am Purrsephone');
+    expect(prompt.startsWith('[Free time]\n\n')).toBe(true);
+    expect(prompt).not.toContain('I am Purrsephone');
+    expect(prompt).not.toContain('PERSONALITY_SENTINEL');
+    expect(prompt).not.toContain('DESCRIPTION_SENTINEL');
+    expect(prompt).not.toContain('SCENARIO_SENTINEL');
     expect(prompt).toContain('some time to yourself');
     expect(prompt).toContain(HEARTBEAT_SILENT_REFLECTION_TOKEN);
     expect(prompt).toContain('nothing here is sent to anyone');
@@ -219,6 +222,23 @@ describe('free-time framing', () => {
     const prompt = buildFreeTimeContinuationPrompt();
     expect(prompt).toContain(HEARTBEAT_SILENT_REFLECTION_TOKEN);
     expect(prompt.toLowerCase()).not.toContain('you must');
+  });
+
+  it('places an active project intention and recent artifacts in the opening frame', () => {
+    const prompt = buildFreeTimeFramingPrompt({
+      seedText: 'You have some time to yourself.',
+      projectContext: [
+        '[Returning to one of your projects]',
+        'Project: Moon Garden (project:moon-garden)',
+        'Your last intention: paint the second panel.',
+        'Recent artifacts: panel-one.png',
+      ].join('\n'),
+    });
+
+    expect(prompt).toContain('project:moon-garden');
+    expect(prompt).toContain('Your last intention: paint the second panel.');
+    expect(prompt.indexOf('Returning to one of your projects'))
+      .toBeLessThan(prompt.indexOf('There is no task and nothing to prove'));
   });
 });
 
@@ -331,7 +351,12 @@ function buildRuntime(options: {
   const transcript = options.freeTimeTranscript ?? [];
 
   let turnIndex = 0;
-  const invokeTurn = vi.fn().mockImplementation(async () => {
+  const invokeTurn = vi.fn(async (_input: {
+    lane: 'quiet_hours' | 'idle';
+    channelId: string;
+    turnIndex: number;
+    content: string;
+  }) => {
     const content = options.turnScript[turnIndex] ?? HEARTBEAT_SILENT_REFLECTION_TOKEN;
     turnIndex += 1;
     return { content };
@@ -351,7 +376,6 @@ function buildRuntime(options: {
     config: options.config ?? freeTimeConfig(),
     restWindow,
     eventBus,
-    resolvePersonaBlock: () => 'I am Purrsephone, and this is me.',
     runBlock: ({ run }) => run(() => 0),
     invokeTurn,
     summarizeActivity: async () => 'I worked on a small poem.',
@@ -451,15 +475,41 @@ describe('registerFreeTimeTasks', () => {
       expect(invokeTurn).toHaveBeenCalled();
       // Every turn ran on an internal free-time channel — structurally unable to leak.
       for (const call of invokeTurn.mock.calls) {
-        const channelId = (call[0] as { channelId: string }).channelId;
+        const turn = call[0];
+        const channelId = turn.channelId;
         expect(channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)).toBe(true);
         expect(isInternalSessionId(channelId)).toBe(true);
+        expect(turn.audience).toBe('self');
+        expect(turn.content).not.toContain('I am Purrsephone');
       }
       // No outbound message was emitted by the block.
       expect(sent).toHaveLength(0);
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('loads one active project before the first free-time turn', async () => {
+    const nowMs = Date.parse('2026-06-11T06:00:00.000Z');
+    const { scheduler, invokeTurn, runtime } = buildRuntime({
+      turnScript: [HEARTBEAT_SILENT_REFLECTION_TOKEN],
+      now: () => nowMs,
+    });
+    const loadProjectContext = vi.fn(async () => [
+      '[Returning to one of your projects]',
+      'Project: Story Panels (project:story-panels)',
+      'Your last intention: render the opening scene.',
+    ].join('\n'));
+    runtime.loadProjectContext = loadProjectContext;
+    registerFreeTimeTasks(runtime);
+
+    const handler = scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)?.handler;
+    if (!handler) throw new Error('quiet-hours free-time task was not registered');
+    await handler();
+
+    expect(loadProjectContext).toHaveBeenCalledTimes(1);
+    expect(invokeTurn.mock.calls[0]?.[0].content).toContain('project:story-panels');
+    expect(invokeTurn.mock.calls[0]?.[0].content).toContain('render the opening scene');
   });
 
   it('surfaces a "while you were away" note on the partner session after an ACTIVE block', async () => {
@@ -645,7 +695,6 @@ describe('registerFreeTimeTasks', () => {
         config: freeTimeConfig(),
         restWindow,
         eventBus,
-        resolvePersonaBlock: () => 'persona',
         runBlock: ({ run }) => run(() => 0),
         invokeTurn,
         now: () => nowMs,
@@ -669,27 +718,21 @@ describe('registerFreeTimeTasks', () => {
 
 describe('free-time return summary lane', () => {
   it('summarizeRecentSessionEntries carries the free_time_return purpose into correlation metadata', async () => {
-    const complete = vi.fn(async (context: {
-      correlation?: Record<string, unknown>;
-    }, callType: string) => {
-      // Shared summary completion convention: positional callType 'background',
-      // correlation callType 'summary', lane-specific purpose in originStage.
-      expect(callType).toBe('background');
-      expect(context.correlation).toMatchObject({
-        callType: 'summary',
-        purpose: 'session.recent.summary',
-        originStage: 'session.recent.summary.free_time_return',
-        channelId: 'internal:free-time:quiet-hours',
-      });
-      expect(String(context.correlation?.requestId)).toContain('free_time_return');
-      return {
-        content: 'Wandered the wiki and wrote a poem.',
-        model: 'test',
-        inputTokens: 0,
-        outputTokens: 0,
-        toolCalls: [],
-        stopReason: 'end_turn',
-      };
+    const complete = vi.fn<LLMProviderPort['complete']>().mockResolvedValue({
+      content: 'Wandered the wiki and wrote a poem.',
+      model: 'test',
+      inputTokens: 0,
+      outputTokens: 0,
+      toolCalls: [],
+      stopReason: 'end_turn',
+    });
+    const stream = vi.fn<LLMProviderPort['stream']>().mockResolvedValue({
+      content: 'Wandered the wiki and wrote a poem.',
+      model: 'test',
+      inputTokens: 0,
+      outputTokens: 0,
+      toolCalls: [],
+      stopReason: 'end_turn',
     });
 
     const summary = await summarizeRecentSessionEntries({
@@ -698,13 +741,32 @@ describe('free-time return summary lane', () => {
         entry({ role: 'assistant', timestamp: 1_000, content: 'I wrote a poem about sunbeams.' }),
       ],
       characterName: 'Companion',
-      llmProvider: { complete } as unknown as LLMProviderPort,
+      llmProvider: { complete, stream },
       promptRegistry: null,
       maxTokens: 160,
       purpose: 'free_time_return',
     });
 
     expect(complete).toHaveBeenCalledTimes(1);
+    expect(stream).not.toHaveBeenCalled();
+    const [context, positionalPurpose, options] = complete.mock.calls[0] ?? [];
+    // completeWithWorkSpec strips correlation from prompt context and owns it
+    // on the typed completion options/work spec.
+    expect(context.correlation).toBeUndefined();
+    expect(positionalPurpose).toBe('background');
+    expect(options?.workSpec).toMatchObject({
+      purpose: 'background',
+      durable: false,
+      correlation: {
+        callType: 'summary',
+        purpose: 'session.recent.summary',
+        originType: 'summary',
+        originStage: 'session.recent.summary.free_time_return',
+        channelId: 'internal:free-time:quiet-hours',
+        requestId: expect.stringContaining('free_time_return'),
+      },
+    });
+    expect(options?.correlation).toEqual(options?.workSpec?.correlation);
     expect(summary).toBe('Wandered the wiki and wrote a poem.');
   });
 

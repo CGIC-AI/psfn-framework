@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { principalFromApiKeyToken, principalFromSatelliteApiKeyToken } from './http/auth.js';
@@ -147,23 +147,118 @@ function exampleRegistry(overrides: Record<string, unknown> = {}) {
 }
 
 describe('satellite registry', () => {
-  it('authorizes touch for the canonical Hub and Waveshare owner-file endpoints', () => {
-    const registry = parseSatelliteRegistryConfig(JSON.parse(readFileSync(
-      join(process.cwd(), 'purrsephone', 'satellites.json'),
-      'utf8',
-    )));
+  it('parses and threads a satellite companion ownership binding into authenticated claims', () => {
+    const companionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const registry = exampleRegistry();
+    registry.satellites[0].companionId = companionId;
+
+    const reparsed = parseSatelliteRegistryConfig(registry);
+    const result = resolveSatelliteClaim({
+      registry: reparsed,
+      principal,
+      headers: {
+        'x-psfn-satellite-claim-type': 'voice-pi',
+        'x-psfn-satellite-id': 'pi-voice',
+        'x-psfn-satellite-endpoint-id': 'wyoming-voice',
+        'x-psfn-satellite-session-id': 'owned-voice-session',
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.value.satellite.companionId).toBe(companionId);
+    }
+  });
+
+  it('authorizes touch for synthetic canonical Hub and Waveshare endpoints', () => {
+    const hubPrincipal = principalFromSatelliteApiKeyToken('synthetic-hub-key-for-tests');
+    const wavesharePrincipal = principalFromSatelliteApiKeyToken('synthetic-waveshare-key-for-tests');
+    const registry = parseSatelliteRegistryConfig({
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [
+        {
+          satelliteId: 'test-hub',
+          displayName: 'Synthetic Hub',
+          mobility: 'static',
+          endpoints: [
+            {
+              endpointId: 'test-hub',
+              displayName: 'Synthetic Hub Text and Touch',
+              claimTypes: ['text-only'],
+              promptChannelType: 'api',
+              auth: {
+                mode: 'api_key',
+                apiKeyPrincipalIds: [hubPrincipal.id],
+              },
+              defaultIdentity: {
+                authorId: 'test-operator',
+                authorName: 'Test Operator',
+                canonicalContactId: 'contact-test-operator',
+                channelPrivacy: 'private',
+              },
+              maxCapabilities: ['text', 'touch'],
+            },
+          ],
+        },
+        {
+          satelliteId: 'test-bedroom',
+          displayName: 'Synthetic Bedroom Satellite',
+          mobility: 'static',
+          endpoints: [
+            {
+              endpointId: 'test-waveshare-bedroom',
+              displayName: 'Synthetic Waveshare Voice and Touch',
+              claimTypes: ['voice-only'],
+              promptChannelType: 'voice_satellite',
+              auth: {
+                mode: 'api_key',
+                apiKeyPrincipalIds: [wavesharePrincipal.id],
+              },
+              defaultIdentity: {
+                authorId: 'test-operator',
+                authorName: 'Test Operator',
+                canonicalContactId: 'contact-test-operator',
+                channelPrivacy: 'private',
+              },
+              maxCapabilities: [
+                'audio_input',
+                'speech_to_text',
+                'audio_output',
+                'text_to_speech',
+                'touch',
+              ],
+            },
+          ],
+        },
+      ],
+    });
 
     for (const expected of [
-      { satelliteId: 'hub', endpointId: 'hub', claimType: 'text-only' },
-      { satelliteId: 'bedroom', endpointId: 'waveshare-bedroom', claimType: 'voice-only' },
+      {
+        satelliteId: 'test-hub',
+        endpointId: 'test-hub',
+        claimType: 'text-only',
+        principal: hubPrincipal,
+      },
+      {
+        satelliteId: 'test-bedroom',
+        endpointId: 'test-waveshare-bedroom',
+        claimType: 'voice-only',
+        principal: wavesharePrincipal,
+      },
     ]) {
       const satellite = registry.satellites.find(entry => entry.satelliteId === expected.satelliteId);
       const endpoint = satellite?.endpoints.find(entry => entry.endpointId === expected.endpointId);
       const principalId = endpoint?.auth.apiKeyPrincipalIds?.[0];
-      expect(principalId).toBeTruthy();
+      expect(principalId).toBe(expected.principal.id);
+      if (principalId === undefined) {
+        throw new Error(`Synthetic endpoint ${expected.endpointId} has no API-key principal`);
+      }
+      expect(expected.principal.scope).toBe('satellite');
       const result = resolveSatelliteClaim({
         registry,
-        principal: { id: principalId!, mode: 'api_key', scope: 'satellite' },
+        principal: expected.principal,
         headers: {
           'x-psfn-satellite-claim-type': expected.claimType,
           'x-psfn-satellite-id': expected.satelliteId,
@@ -173,6 +268,10 @@ describe('satellite registry', () => {
         },
       });
       expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.satellite.auth.principalId).toBe(principalId);
+        expect(result.value.satellite.capabilities.effective).toEqual(['touch']);
+      }
     }
   });
 

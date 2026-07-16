@@ -63,7 +63,7 @@ export interface GatewayPrivilegedCore {
     icpAutonomyStore?: IcpSharedAutonomyStorePort;
     icpInitiationPolicyAuthority?: Pick<GatewayIcpInitiationPolicyAuthority, 'resolve' | 'authorizeHandoff'>;
     /**
-     * psfn-framework-fxt1: gateway-side welfare grant verifier. Injected by
+     * fxt1: gateway-side welfare grant verifier. Injected by
      * gateway main so the LLM RPC handlers can re-verify caller-asserted
      * `preemptionProtected` against the background-work store.
      */
@@ -128,6 +128,7 @@ export async function buildGatewayPrivilegedCore(
   const auditStore = await createPostgresGatewayAuditStore(databaseUrl);
   const kubeSelfManagement = resolveKubeSelfManagementController({
     env: input.env,
+    lifecycleKubernetes: input.config.lifecycleKubernetes,
     audit: entry => auditStore.recordSummary(entry),
   });
 

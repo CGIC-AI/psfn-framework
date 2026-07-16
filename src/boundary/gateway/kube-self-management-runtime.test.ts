@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { resolveKubeSelfManagementController } from './kube-self-management-runtime.js';
+import { lifecycleKubernetesSettingsFixture } from '../../test-support/lifecycle-kubernetes-settings.js';
+
+const lifecycleKubernetes = lifecycleKubernetesSettingsFixture();
 
 describe('resolveKubeSelfManagementController', () => {
   it('keeps the runtime surface disabled unless explicitly enabled', () => {
@@ -21,6 +24,7 @@ describe('resolveKubeSelfManagementController', () => {
 
     expect(() => resolveKubeSelfManagementController({
       env: { PSFN_KUBE_SELF_MANAGEMENT_ENABLED: 'true' },
+      lifecycleKubernetes,
       audit: vi.fn(async () => 1),
     })).toThrow('must be DNS labels');
 
@@ -34,6 +38,7 @@ describe('resolveKubeSelfManagementController', () => {
         PSFN_GIT_COMMIT: 'a'.repeat(40),
         PSFN_KUBE_CURRENT_IMAGE: 'localhost/psfn-framework:latest',
       },
+      lifecycleKubernetes,
       audit: vi.fn(async () => 1),
     })).toThrow('must be an exact pinned image reference');
 
@@ -46,6 +51,7 @@ describe('resolveKubeSelfManagementController', () => {
         PSFN_GIT_COMMIT: 'a'.repeat(40),
         PSFN_KUBE_CURRENT_IMAGE: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
       },
+      lifecycleKubernetes,
       audit: vi.fn(async () => 1),
     })).toThrow('PSFN_KUBE_RESOURCE_PREFIX');
   });
@@ -62,6 +68,11 @@ describe('resolveKubeSelfManagementController', () => {
       availableReplicas: 1,
     }));
     const listPods = vi.fn(async () => []);
+    const createApi = vi.fn(() => ({ getDeployment, listPods }));
+    const createRolloutApi = vi.fn(() => ({
+      getDeployment,
+      restartDeployment: vi.fn(async () => undefined),
+    }));
     const controller = resolveKubeSelfManagementController({
       env: {
         PSFN_KUBE_SELF_MANAGEMENT_ENABLED: 'true',
@@ -72,9 +83,10 @@ describe('resolveKubeSelfManagementController', () => {
         PSFN_GIT_COMMIT: 'a'.repeat(40),
         PSFN_KUBE_CURRENT_IMAGE: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
       },
+      lifecycleKubernetes,
       audit,
-      createApi: () => ({ getDeployment, listPods }),
-      createRolloutApi: () => ({ getDeployment, restartDeployment: vi.fn(async () => undefined) }),
+      createApi,
+      createRolloutApi,
     });
 
     await controller?.invoke({
@@ -92,6 +104,8 @@ describe('resolveKubeSelfManagementController', () => {
       'psfn-runtime-gateway',
       'psfn-runtime-garden',
     ]);
+    expect(createApi).toHaveBeenCalledWith(expect.any(Object), 5_000);
+    expect(createRolloutApi).toHaveBeenCalledWith(expect.any(Object), 5_000, 5_000);
     expect(audit).toHaveBeenCalledWith(expect.objectContaining({
       method: 'kube.self_management.attempt',
       decision: 'ALLOW',
@@ -129,6 +143,7 @@ describe('resolveKubeSelfManagementController', () => {
         PSFN_GIT_COMMIT: 'a'.repeat(40),
         PSFN_KUBE_CURRENT_IMAGE: 'localhost/psfn-framework:0.1.0-kube-aaaaaaaaaaaa',
       },
+      lifecycleKubernetes,
       audit: vi.fn(async () => 1),
       createApi: () => ({ getDeployment, listPods: vi.fn(async () => []) }),
       createRolloutApi: () => ({ getDeployment, restartDeployment }),
@@ -170,13 +185,14 @@ describe('resolveKubeSelfManagementController', () => {
 
     // Agent path (no operator-job runner): diagnose + restart only, credential-free.
     const diagnoseOnly = resolveKubeSelfManagementController({
-      env: { ...baseEnv }, audit: vi.fn(async () => 1), createApi, createRolloutApi,
+      env: { ...baseEnv }, lifecycleKubernetes, audit: vi.fn(async () => 1), createApi, createRolloutApi,
     });
     expect(diagnoseOnly).toBeDefined();
 
     // Operator-job composition: rebuild/deploy become available.
     const withPipeline = resolveKubeSelfManagementController({
       env: { ...baseEnv },
+      lifecycleKubernetes,
       audit: vi.fn(async () => 1),
       createApi,
       createRolloutApi,
@@ -218,7 +234,7 @@ describe('resolveKubeSelfManagementController', () => {
 
     // Agent path (no Helm transport): rollback is not wired, so it fails closed as unsupported.
     const agentOnly = resolveKubeSelfManagementController({
-      env: { ...baseEnv }, audit: vi.fn(async () => 1), createApi, createRolloutApi,
+      env: { ...baseEnv }, lifecycleKubernetes, audit: vi.fn(async () => 1), createApi, createRolloutApi,
     });
     await expect(agentOnly?.invoke({
       actor: 'companion',
@@ -236,6 +252,7 @@ describe('resolveKubeSelfManagementController', () => {
     const enqueue = vi.fn(async () => ({ id: 'approval-r', expiresAt: 456 }));
     const withRollback = resolveKubeSelfManagementController({
       env: { ...baseEnv },
+      lifecycleKubernetes,
       audit: vi.fn(async () => 1),
       createApi,
       createRolloutApi,

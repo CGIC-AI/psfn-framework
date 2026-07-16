@@ -5,6 +5,7 @@ import type {
 } from '../../../system/trust/types.js';
 import type { MemoryEvolutionRelation } from '../memory-store-port.js';
 import type {
+  RetrievalAccessScope,
   MemoryPrivacyRiskBreakdown,
   PurrMemory,
 } from '../types.js';
@@ -69,6 +70,7 @@ export interface RetrievalDecisionDiagnostics {
 
 export interface RetrievalTelemetry {
   channelId: string;
+  accessScope: RetrievalAccessScope;
   count: number;
   reason: 'ok' | 'empty_input' | 'no_candidates' | 'score_filtered' | 'trust_filtered' | 'error';
   retrievalSource: 'embedding' | 'lexical_fallback';

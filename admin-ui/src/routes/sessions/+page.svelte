@@ -2,10 +2,12 @@
   import { onMount, tick } from 'svelte';
   import {
     getCachedSessionList,
+    getCachedSessionMessages,
     getSessionDetail,
     getSessionMessages,
     getSessionTurnDetail,
     revalidateSessionList,
+    revalidateSessionMessages,
     SESSION_MESSAGE_PAGE_SIZE,
   } from '$lib/api/endpoints/sessions';
   import {
@@ -179,15 +181,21 @@
     compactionAudits = [];
     expandedToolCall = null;
     resetTurnDetail();
+    const initialRequest = {
+      limit: SESSION_MESSAGE_PAGE_SIZE,
+      includeTurns: false,
+    };
     try {
       await loadSelectedSessionData({
         sessionId,
-        loadMessages: requestSessionId => getSessionMessages(requestSessionId, {
-          // Initial page: keep compaction summaries but drop the up-to-50 full
-          // turn snapshots — turn detail is fetched lazily on expand.
-          limit: SESSION_MESSAGE_PAGE_SIZE,
-          includeTurns: false,
-        }),
+        loadCachedMessages: requestSessionId => getCachedSessionMessages(
+          requestSessionId,
+          initialRequest,
+        ),
+        loadMessages: requestSessionId => revalidateSessionMessages(
+          requestSessionId,
+          initialRequest,
+        ),
         loadDetail: getSessionDetail,
         onMessages: async (data) => {
           if (selectedSessionId !== requestSessionId) return;

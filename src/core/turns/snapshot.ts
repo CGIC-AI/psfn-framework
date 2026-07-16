@@ -76,6 +76,8 @@ export interface TurnPromptSnapshot {
 export interface TurnSessionContextSnapshot {
   channelId: string;
   recentEntries: SessionEntry[];
+  /** Exact deferred-compaction eligibility computed during context assembly. */
+  autoCompactionEligible?: boolean;
   /** Entries collected from the store before windowing/summarization. */
   sourceEntryCount?: number;
   /**

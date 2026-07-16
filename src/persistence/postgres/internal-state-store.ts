@@ -24,12 +24,13 @@ export class PostgresInternalStateStore implements InternalStateStorePort {
 
   static async connect(
     databaseUrl: string,
-    options: { schema?: string } = {},
+    options: { schema?: string; role?: string } = {},
   ): Promise<PostgresInternalStateStore> {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-internal-state',
       allowExitOnIdle: true,
       schema: options.schema,
+      role: options.role,
     });
     await ensurePostgresSchema(pool, POSTGRES_INTERNAL_STATE_MIGRATIONS);
     return new PostgresInternalStateStore(pool);

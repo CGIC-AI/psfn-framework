@@ -23,19 +23,24 @@ import {
   createLiveDeployPipelineRunner,
   createLiveHelmRollbackApi,
   createLiveRollbackTargetResolver,
-  execFileCommandRunner,
+  createExecFileCommandRunner,
+  type LiveDeployPipelineRunnerConfig,
   type CommandRunner,
 } from './kube-self-update-transport.js';
 import {
   createHttpChatTurnProbe,
   createKubectlExecProbe,
   createLivePostRolloutValidationRunner,
+  createNodeHttpJsonFetcher,
   type HttpJsonFetcher,
 } from './kube-self-update-validation-transport.js';
 import type { ToolConformanceRunResult } from '../../core/agent/tool-conformance/types.js';
 import type { RuntimeDiagnosticsSnapshot } from '../../shared/diagnostics/runtime-diagnostics.js';
 import type { ToolConformanceSkipped } from '../../system/lifecycle/kube-post-rollout-validation.js';
 import { runKubeSelfUpdateJob, type KubeSelfUpdateJobOptions } from '../../system/lifecycle/kube-self-update-job.js';
+import type { LifecycleKubernetesSettings } from '../../system/config/runtime-config-contracts.js';
+import { loadSettings } from '../../system/settings.js';
+import { requireLifecycleKubernetesSettings } from '../../system/lifecycle/lifecycle-kubernetes-settings.js';
 
 const log = createComponentLogger('KubeSelfUpdateJob');
 
@@ -81,6 +86,10 @@ export interface KubeSelfUpdateJobEnvConfig {
   helmGlobalArgs: string[];
   kubectlGlobalArgs: string[];
   autoRollbackEnabled: boolean;
+}
+
+export interface KubeSelfUpdateJobConfig extends KubeSelfUpdateJobEnvConfig {
+  lifecycleKubernetes: LifecycleKubernetesSettings;
 }
 
 function parseCommandArray(env: NodeJS.ProcessEnv, key: string): string[] {
@@ -176,17 +185,20 @@ export interface BuildKubeSelfUpdateJobOptionsDeps {
   run?: CommandRunner;
   http?: HttpJsonFetcher;
   /** Import the built+retagged image into the runtime; supplied by the operator env. */
-  importImage: KubeSelfUpdateJobOptions['deployRunner']['importImage'];
+  importImage: LiveDeployPipelineRunnerConfig['importImage'];
   /** Verify a fresh restorable backup exists before mutation. */
   verifyBackup: (context: { namespace: string; release: string }) => Promise<boolean>;
 }
 
 /** Compose the full self-update job options from resolved config + live transports. */
 export function buildKubeSelfUpdateJobOptions(
-  config: KubeSelfUpdateJobEnvConfig,
+  config: KubeSelfUpdateJobConfig,
   deps: BuildKubeSelfUpdateJobOptionsDeps,
 ): KubeSelfUpdateJobOptions {
-  const run = deps.run ?? execFileCommandRunner;
+  const run = deps.run
+    ?? createExecFileCommandRunner(config.lifecycleKubernetes.operatorCommandTimeoutMs);
+  const http = deps.http
+    ?? createNodeHttpJsonFetcher(config.lifecycleKubernetes.operatorHttpTimeoutMs);
   const helmKubectl = {
     run,
     helmGlobalArgs: config.helmGlobalArgs,
@@ -223,13 +235,13 @@ export function buildKubeSelfUpdateJobOptions(
     namespace: config.namespace,
     resourcePrefix: config.resourcePrefix,
     run,
-    ...(deps.http ? { http: deps.http } : {}),
+    http,
     kubectlGlobalArgs: config.kubectlGlobalArgs,
     gardenHealthUrl: config.gardenHealthUrl,
     modelRouteUrl: config.modelRouteUrl,
     expectedModelId: config.expectedModelId,
     chatTurnProbe: createHttpChatTurnProbe({
-      ...(deps.http ? { http: deps.http } : {}),
+      http,
       chatCompletionsUrl: config.chatCompletionsUrl,
       model: config.expectedModelId,
     }),
@@ -272,6 +284,7 @@ export function buildKubeSelfUpdateJobOptions(
     plan: config.plan,
     systemDataDir: config.systemDataDir,
     resourcePrefix: config.resourcePrefix,
+    lifecycleKubernetes: config.lifecycleKubernetes,
     deployRunner,
     postRolloutValidationRunner: validationRunner,
     ...(config.autoRollbackEnabled
@@ -290,15 +303,23 @@ export function buildKubeSelfUpdateJobOptions(
 }
 
 async function main(): Promise<void> {
-  const config = resolveKubeSelfUpdateJobEnvConfig(process.env);
+  const envConfig = resolveKubeSelfUpdateJobEnvConfig(process.env);
+  const lifecycleKubernetes = requireLifecycleKubernetesSettings(
+    loadSettings(envConfig.systemDataDir),
+  );
+  const config: KubeSelfUpdateJobConfig = { ...envConfig, lifecycleKubernetes };
+  const run = createExecFileCommandRunner(lifecycleKubernetes.operatorCommandTimeoutMs);
+  const http = createNodeHttpJsonFetcher(lifecycleKubernetes.operatorHttpTimeoutMs);
   const options = buildKubeSelfUpdateJobOptions(config, {
+    run,
+    http,
     // The concrete image import + backup verification are operator-environment
     // specific; they are wired here from env-provided commands so the agent
     // never carries them. Absent configuration fails closed.
     importImage: async (context, retag) => {
       const cmd = process.env.PSFN_IMPORT_IMAGE_CMD?.trim();
       if (!cmd) throw new Error('Kube self-update job requires PSFN_IMPORT_IMAGE_CMD to import the built image.');
-      const result = await execFileCommandRunner('sh', ['-c', cmd], {
+      const result = await run('sh', ['-c', cmd], {
         env: {
           ...process.env,
           PSFN_IMPORT_FROM: retag.from,
@@ -313,7 +334,7 @@ async function main(): Promise<void> {
     verifyBackup: async () => {
       const cmd = process.env.PSFN_VERIFY_BACKUP_CMD?.trim();
       if (!cmd) throw new Error('Kube self-update job requires PSFN_VERIFY_BACKUP_CMD to verify a restorable backup.');
-      const result = await execFileCommandRunner('sh', ['-c', cmd]);
+      const result = await run('sh', ['-c', cmd]);
       return result.code === 0;
     },
   });

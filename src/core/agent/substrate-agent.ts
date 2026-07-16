@@ -4,7 +4,7 @@
 // calling/execution/looping
 // internally — we just configure it and subscribe to events for streaming.
 //
-// Provider interfaces (LLMProviderPort, EmbeddingProviderPort, MemoryProvider,
+// Provider interfaces (LLMProviderPort, MemoryProvider,
 // MemoryExtractor) are re-exported here for callers that import contracts
 // from the SubstrateAgent module.
 
@@ -28,7 +28,7 @@ import {
   INTENTION_FOLLOW_UP_AUTHOR_ID,
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
 } from '../intention/appraisal.js';
-import type { AgentResponse, CorrelationMetadata, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, Attachment, CorrelationMetadata, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
@@ -44,9 +44,7 @@ import {
 } from '../../system/trust/policy.js';
 import type { ChannelPromptRegistryPort } from '../../channels/backplane/registry-port.js';
 import type { MessageHandlerOptions } from '../../channels/backplane/types.js';
-import {
-  type PromptComposer,
-} from '../identity/prompt-composer.js';
+import type { PromptComposer } from '../identity/prompt-composer.js';
 import { resolveCompanionIdFromConfig } from '../identity/companion-runtime.js';
 import {
   createSubstrateStreamFn,
@@ -160,10 +158,11 @@ import { EmotionSelfModelRuntime } from './substrate-agent/emotion-self-model-ru
 import {
   handleMessageForTurn,
   type TurnDeliveryLifecycle,
-  type TurnSessionIdentity,
 } from './substrate-agent/turn-execution-runtime.js';
+import type { TurnSessionIdentity } from './substrate-agent/turn-execution/contracts.js';
 import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
 import { parseTurnRecordBackgroundWorkHandoff } from './background-work/types.js';
+import type { BackgroundWorkRuntimeTuning } from './background-work/config.js';
 import { CompletionNoticeBuffer } from './completion-notices.js';
 import {
   refreshModelFromConfig as refreshModelFromConfigForRuntime,
@@ -184,6 +183,9 @@ import {
   type PromotedToolMutationResult,
 } from './substrate-agent/tool-runtime-facade.js';
 import { createResponseControlTool } from './no-reply-tool.js';
+import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
+import type { NotificationPort } from '../../boundary/gateway/notification-port.js';
+import type { ArtifactEgressDestination } from '../artifacts/sensitivity-egress.js';
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 import { BackgroundWorkSupervisor } from './background-work/supervisor.js';
 import type {
@@ -205,7 +207,6 @@ const log = createComponentLogger('SubstrateAgent');
 
 export type {
   LLMProviderPort,
-  EmbeddingProviderPort,
   MemoryProvider,
   MemoryExtractor,
   ScratchpadProvider,
@@ -254,10 +255,36 @@ export interface SubstrateAgentOptions {
    */
   placesRegistryConfig?: PlacesRegistryConfig;
   backgroundWorkStore?: BackgroundWorkStorePort;
+  /** Required scheduler.json-owned tuning whenever durable background work is enabled. */
+  backgroundWorkTuning?: BackgroundWorkRuntimeTuning;
   /** Explicitly omit post-turn jobs for ephemeral/test agents with no durable owner. */
   backgroundWorkDisabled?: boolean;
   /** Anti-starvation welfare policy (mmo9.7.4), owner-file backed (scheduler.json). */
   backgroundWorkWelfare?: Partial<BackgroundWorkWelfarePolicy>;
+}
+
+function requireBackgroundWorkTuning(
+  tuning: BackgroundWorkRuntimeTuning | undefined,
+): BackgroundWorkRuntimeTuning {
+  if (!tuning) {
+    throw new Error('SubstrateAgent requires scheduler-owned durable background work tuning');
+  }
+  return tuning;
+}
+
+function requireBackgroundWorkWelfare(
+  welfare: Partial<BackgroundWorkWelfarePolicy> | undefined,
+): BackgroundWorkWelfarePolicy {
+  if (welfare?.deferThreshold === undefined
+    || welfare.ageThresholdMs === undefined
+    || welfare.reserveSlots === undefined) {
+    throw new Error('SubstrateAgent requires scheduler-owned durable background work welfare policy');
+  }
+  return {
+    deferThreshold: welfare.deferThreshold,
+    ageThresholdMs: welfare.ageThresholdMs,
+    reserveSlots: welfare.reserveSlots,
+  };
 }
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
 const BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE = 32;
@@ -302,6 +329,7 @@ export class SubstrateAgent {
   private currentInternalState: InternalState | null = null;
   private currentInternalStateSnapshotRef: string | null = null;
   private currentMetacognitiveFlags: MetacognitiveFlag[] = [];
+  private currentAuthoritativeSystemPrompt: string | null = null;
   private internalStateStore: InternalStateStorePort | null = null;
   private internalStateContinuityGap: InternalStateContinuityGap | null = null;
   private internalStateContinuityGapRenderCount = 0;
@@ -334,6 +362,12 @@ export class SubstrateAgent {
 
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
+  artifactApprovalQueue: ApprovalQueuePort | null = null;
+  artifactApprovalNotifier: NotificationPort | null = null;
+  shareApprovedArtifacts: ((
+    attachments: readonly Attachment[],
+    destination: ArtifactEgressDestination,
+  ) => Promise<void>) | null = null;
   memoryExtractor: MemoryExtractor | null = null;
   // E8.3: supplemental wiki RAG — null until the pgvector projection is wired.
   wikiRetrieval: WikiRetrievalPort | null = null;
@@ -492,9 +526,16 @@ export class SubstrateAgent {
     config: CoreSubstrateConfig,
     options?: SubstrateAgentOptions,
   ) {
-    if (!options?.backgroundWorkStore && options?.backgroundWorkDisabled !== true) {
+    const backgroundWorkStore = options?.backgroundWorkStore;
+    if (!backgroundWorkStore && options?.backgroundWorkDisabled !== true) {
       throw new Error('SubstrateAgent requires a durable background work store');
     }
+    const backgroundWorkTuning = backgroundWorkStore
+      ? requireBackgroundWorkTuning(options.backgroundWorkTuning)
+      : null;
+    const backgroundWorkWelfare = backgroundWorkStore
+      ? requireBackgroundWorkWelfare(options.backgroundWorkWelfare)
+      : null;
     this.eventBus = eventBus;
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
@@ -544,11 +585,12 @@ export class SubstrateAgent {
     });
     this.emotionSelfModelRuntime.assertEmotionRuntimeConfigured();
 
-    this.backgroundWorkSupervisor = options.backgroundWorkStore
-      ? new BackgroundWorkSupervisor({
-        store: options.backgroundWorkStore,
+    if (backgroundWorkStore && backgroundWorkTuning && backgroundWorkWelfare) {
+      this.backgroundWorkSupervisor = new BackgroundWorkSupervisor({
+        ...backgroundWorkTuning.supervisor,
+        store: backgroundWorkStore,
         eventBus: this.eventBus,
-        ...(options.backgroundWorkWelfare ? { welfare: options.backgroundWorkWelfare } : {}),
+        welfare: backgroundWorkWelfare,
         executor: (input) => executePostTurnBackgroundWork(input, {
           sessionManager: this.sessionManager,
           llmProvider: this.llmClient,
@@ -557,9 +599,12 @@ export class SubstrateAgent {
             .runIntentionPostTurnHooks(context, runOptions),
           emotionRuntime: this.emotionSelfModelRuntime,
           getEmotionTemplateVariables: () => this.resolveCharacterPromptVariables(),
+          tuning: backgroundWorkTuning.postTurn,
         }),
-      })
-      : null;
+      });
+    } else {
+      this.backgroundWorkSupervisor = null;
+    }
 
     const defaultStreamTransport = options.streamTransport ?? {
       stream: this.llmClient.stream.bind(this.llmClient),
@@ -1197,6 +1242,10 @@ export class SubstrateAgent {
     return cloneMetacognitiveFlags(this.currentMetacognitiveFlags);
   }
 
+  getCurrentAuthoritativeSystemPrompt(): string | null {
+    return this.currentAuthoritativeSystemPrompt;
+  }
+
   setInternalStateStore(store: InternalStateStorePort | null): void {
     this.internalStateStore = store;
   }
@@ -1424,6 +1473,11 @@ export class SubstrateAgent {
       bridge: this.bridge,
       systemPrompt: this.systemPrompt,
       memoryProvider: this.memoryProvider,
+      artifactApprovalQueue: this.artifactApprovalQueue,
+      artifactApprovalNotifier: this.artifactApprovalNotifier,
+      ...(this.shareApprovedArtifacts
+        ? { shareApprovedArtifacts: this.shareApprovedArtifacts }
+        : {}),
       memoryExtractor: this.memoryExtractor,
       wikiRetrieval: this.wikiRetrieval,
       placesRegistry: this.placesRegistryConfig,
@@ -1462,6 +1516,9 @@ export class SubstrateAgent {
           composeContext: ctx,
           systemPrompt: this.systemPrompt,
         }),
+        captureAuthoritativeSystemPrompt: (systemPrompt) => {
+          this.currentAuthoritativeSystemPrompt = systemPrompt.trim() || null;
+        },
         buildScratchpadContextBlock: () => this.buildScratchpadContextBlock(),
         normalizeTurnPromptOverride: (turnMessage) => this.normalizeTurnPromptOverride(turnMessage),
         resolveResponseStyle: (turnMessage, channelType, channelMeta) => this.resolveResponseStyle(

@@ -19,6 +19,17 @@ describe('visibility-aware page adoption', () => {
   });
 
   it.each([
+    ['confirmations/+page.svelte', 'loadConfirmationsLocalFirst'],
+    ['contact-approvals/+page.svelte', 'loadContactApprovalsLocalFirst'],
+    ['graph-proposals/+page.svelte', 'loadGraphProposalsLocalFirst'],
+    ['cognitive-security/approvals/+page.svelte', 'loadIntakeQuarantineLocalFirst'],
+  ])('%s renders its persisted queue snapshot before revalidation', (relativePath, loaderName) => {
+    const source = routeSource(relativePath);
+    expect(source).toContain(loaderName);
+    expect(source).toContain("source === 'cache'");
+  });
+
+  it.each([
     'cognitive-security/drift/+page.svelte',
     'scheduler/+page.svelte',
     'chat/+page.svelte',

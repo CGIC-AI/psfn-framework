@@ -1,9 +1,30 @@
+const POSTGRES_VECTOR_EXTENSION_MIGRATION = `
+  DO $$
+  DECLARE
+    target_schema TEXT := CASE WHEN current_schema() = 'public' THEN 'public' ELSE 'extensions' END;
+    installed_schema TEXT;
+  BEGIN
+    SELECT namespace.nspname INTO installed_schema
+    FROM pg_extension extension
+    JOIN pg_namespace namespace ON namespace.oid = extension.extnamespace
+    WHERE extension.extname = 'vector';
+
+    IF target_schema = 'extensions' AND to_regnamespace('extensions') IS NULL THEN
+      RAISE EXCEPTION 'Tenant migrations require the explicitly provisioned extensions schema';
+    END IF;
+    IF installed_schema IS NULL THEN
+      EXECUTE format('CREATE EXTENSION vector WITH SCHEMA %I', target_schema);
+    ELSIF installed_schema <> target_schema THEN
+      RAISE EXCEPTION 'pgvector is installed in schema %, expected %', installed_schema, target_schema;
+    END IF;
+  END
+  $$;
+`;
+
 export const POSTGRES_MEMORY_MIGRATIONS = [
-  // Companion pools pin search_path to `<companion>, public`. Extension types
-  // must live in public so the first companion to migrate cannot strand the
-  // singleton pgvector extension inside its private schema and break every
-  // subsequently-starting companion.
-  `CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;`,
+  // Tenant search paths exclude public. Deployment provisioning creates the
+  // explicit extension schema before runtime migrations begin.
+  POSTGRES_VECTOR_EXTENSION_MIGRATION,
   `
   CREATE TABLE IF NOT EXISTS l2_memories (
     id TEXT PRIMARY KEY,
@@ -630,7 +651,7 @@ export const POSTGRES_MEMORY_MIGRATIONS = [
 // the canonical files at any time. Projection loss never corrupts the archive;
 // it only degrades semantic search until rebuilt.
 export const POSTGRES_WIKI_PROJECTION_MIGRATIONS = [
-  `CREATE EXTENSION IF NOT EXISTS vector;`,
+  POSTGRES_VECTOR_EXTENSION_MIGRATION,
   `
   CREATE TABLE IF NOT EXISTS wiki_document_chunks (
     document_id TEXT NOT NULL,
@@ -1335,7 +1356,7 @@ export const POSTGRES_BACKGROUND_WORK_MIGRATIONS = [
     ON agent_background_work_jobs (completed_at_ms ASC, job_id ASC)
     WHERE state IN ('succeeded', 'failed', 'stale_discarded');
   `,
-  // Anti-starvation welfare aging (psfn-framework-mmo9.7.4). A background job that
+  // Anti-starvation welfare aging (mmo9.7.4). A background job that
   // is repeatedly deferred by sustained foreground turns accrues durable defer
   // pressure so it can eventually be admitted into a bounded welfare-reserve slot
   // instead of starving forever. `defer_count`/`first_deferred_at_ms` are the
@@ -2540,9 +2561,9 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
 // W5b world-info leak surface, enforced fail-closed in the schema itself.
 export const POSTGRES_SHARED_WIKI_MIGRATIONS: readonly string[] = [
   // Deterministic extension placement: shared migrations run with search_path
-  // pinned to `shared, public`, and shared/per-companion chains alike resolve
-  // vector types through `public`.
-  `CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public;`,
+  // pinned to `shared, extensions`, and shared/per-companion chains alike
+  // resolve vector types without exposing legacy public tenant objects.
+  POSTGRES_VECTOR_EXTENSION_MIGRATION,
   `
   CREATE TABLE IF NOT EXISTS shared_wiki_chunks (
     site_id TEXT NOT NULL,
@@ -2565,8 +2586,63 @@ export const POSTGRES_SHARED_WIKI_MIGRATIONS: readonly string[] = [
   `CREATE INDEX IF NOT EXISTS idx_shared_wiki_chunks_site ON shared_wiki_chunks(site_id);`,
   `CREATE INDEX IF NOT EXISTS idx_shared_wiki_chunks_scope ON shared_wiki_chunks(scope);`,
   `
+  CREATE TABLE IF NOT EXISTS shared_wiki_proposals (
+    proposal_id UUID PRIMARY KEY,
+    site_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    actor_id TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    tags_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    provenance_refs_json JSONB NOT NULL,
+    sensitivity TEXT NOT NULL,
+    content_digest TEXT NOT NULL,
+    review_state TEXT NOT NULL DEFAULT 'pending',
+    rejection_code TEXT,
+    reviewed_by TEXT,
+    reviewed_at_ms BIGINT,
+    apply_state TEXT NOT NULL DEFAULT 'unreviewed',
+    apply_lease_token UUID,
+    apply_lease_until_ms BIGINT,
+    applied_at_ms BIGINT,
+    applied_document_version INTEGER,
+    applied_body_sha256 TEXT,
+    projection_body_sha256 TEXT,
+    cleanup_checked_at_ms BIGINT,
+    revision INTEGER NOT NULL DEFAULT 1,
+    created_at_ms BIGINT NOT NULL,
+    updated_at_ms BIGINT NOT NULL,
+    UNIQUE (site_id, content_digest),
+    CHECK (review_state IN ('pending', 'approved', 'rejected')),
+    CHECK (apply_state IN ('unreviewed', 'ready', 'applying', 'retryable', 'applied', 'rejected')),
+    CHECK (sensitivity = 'public'),
+    CHECK (jsonb_typeof(tags_json) = 'array'),
+    CHECK (jsonb_typeof(provenance_refs_json) = 'array'),
+    CHECK (
+      (review_state = 'pending' AND reviewed_by IS NULL AND reviewed_at_ms IS NULL AND rejection_code IS NULL)
+      OR (review_state = 'approved' AND reviewed_by IS NOT NULL AND reviewed_at_ms IS NOT NULL AND rejection_code IS NULL)
+      OR (review_state = 'rejected' AND reviewed_by IS NOT NULL AND reviewed_at_ms IS NOT NULL AND rejection_code IS NOT NULL)
+    ),
+    CHECK (
+      (apply_state = 'applying' AND apply_lease_token IS NOT NULL AND apply_lease_until_ms IS NOT NULL)
+      OR (apply_state <> 'applying' AND apply_lease_token IS NULL AND apply_lease_until_ms IS NULL)
+    ),
+    CHECK ((review_state = 'approved') OR apply_state IN ('unreviewed', 'rejected')),
+    CHECK ((review_state = 'rejected') = (apply_state = 'rejected'))
+  );
+  `,
+  `CREATE INDEX IF NOT EXISTS idx_shared_wiki_proposals_review ON shared_wiki_proposals(review_state, created_at_ms);`,
+  `CREATE INDEX IF NOT EXISTS idx_shared_wiki_proposals_apply ON shared_wiki_proposals(apply_state, apply_lease_until_ms);`,
+  `CREATE INDEX IF NOT EXISTS idx_shared_wiki_proposals_cleanup ON shared_wiki_proposals(cleanup_checked_at_ms NULLS FIRST) WHERE review_state = 'approved' AND apply_state = 'applied';`,
+  `
   INSERT INTO shared_schema_migrations (version, name)
   VALUES (3, 'shared-wiki-chunks')
+  ON CONFLICT (version) DO NOTHING;
+  `,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (8, 'shared-wiki-caretaker-proposals')
   ON CONFLICT (version) DO NOTHING;
   `,
 ];

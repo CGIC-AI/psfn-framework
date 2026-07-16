@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import {
+  DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_FREE_TIME_CONFIG,
   DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
   DEFAULT_TEMPORAL_WAKEUP_CONFIG,
@@ -69,6 +70,9 @@ const MEMORY_LANE_BLOCKS = {
 function backgroundMaintenance(intervalMs: number) {
   return {
     intervalMs,
+    sharedWorldWikiCaretaker: {
+      batchSize: 25,
+    },
     ambientPresence: {
       minIdleMinutes: 180,
       minNoteIntervalMinutes: 360,
@@ -99,6 +103,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
         tickIntervalMs: 45_000,
         heartbeatIntervalMs: 900_000,
         backgroundMaintenance: backgroundMaintenance(120_000),
+        backgroundWork: DEFAULT_BACKGROUND_WORK_TUNING,
         artifactLifecycle: {
           scratchpadRetentionDays: 7,
           generatedMediaRetentionDays: 21,
@@ -166,6 +171,7 @@ describe('resolveRuntimeSchedulerConfig', () => {
         tickIntervalMs: 10_000,
         heartbeatIntervalMs: 20_000,
         backgroundMaintenance: backgroundMaintenance(30_000),
+        backgroundWork: DEFAULT_BACKGROUND_WORK_TUNING,
         artifactLifecycle: {
           scratchpadRetentionDays: 3,
           generatedMediaRetentionDays: 4,

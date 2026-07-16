@@ -20,9 +20,6 @@
 
 import type { SegmenterConfig } from './types.js';
 
-const DEFAULT_MIN_SEGMENT_LENGTH = 24;
-const DEFAULT_MAX_BUFFER_LENGTH = 240;
-
 const SENTENCE_TERMINATORS = new Set(['.', '!', '?']);
 const CLAUSE_TERMINATORS = new Set([',', ';', ':', '—', '–']);
 // Closing quotes/brackets that belong to the sentence they follow.
@@ -57,16 +54,21 @@ export interface ReplySegmenter {
   readonly buffered: string;
 }
 
-export function createReplySegmenter(config?: Partial<SegmenterConfig>): ReplySegmenter {
-  const minSegmentLength = config?.minSegmentLength ?? DEFAULT_MIN_SEGMENT_LENGTH;
-  const maxBufferLength = config?.maxBufferLength ?? DEFAULT_MAX_BUFFER_LENGTH;
+export function createReplySegmenter(config: SegmenterConfig): ReplySegmenter {
+  const { minSegmentLength, maxBufferLength } = config;
+  if (!Number.isSafeInteger(minSegmentLength) || minSegmentLength < 1) {
+    throw new Error('ReplySegmenter: minSegmentLength must be a positive safe integer');
+  }
+  if (!Number.isSafeInteger(maxBufferLength) || maxBufferLength < 1) {
+    throw new Error('ReplySegmenter: maxBufferLength must be a positive safe integer');
+  }
   if (!(maxBufferLength > minSegmentLength)) {
     throw new Error(
       `ReplySegmenter: maxBufferLength (${maxBufferLength}) must be greater than minSegmentLength (${minSegmentLength})`,
     );
   }
   const abbreviations = new Set(BUILTIN_ABBREVIATIONS);
-  for (const raw of config?.extraAbbreviations ?? []) {
+  for (const raw of config.extraAbbreviations ?? []) {
     const normalized = raw.replace(/\./g, '').toLowerCase();
     if (normalized) abbreviations.add(normalized);
   }

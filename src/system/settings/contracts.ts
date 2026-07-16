@@ -2,7 +2,7 @@ import type { CanonicalModelRegistry, ImportProcessingRouteMode, ModelCatalogEnt
 import type { GroupMemorySettings } from '../config/group-memory-config.js';
 import type { EmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import type { MemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
-import type { CapabilityTier, CompositionalPolicyConfig, SessionRestartBehavior, SessionTailCacheSettings, SubstrateConfig } from '../config/runtime-config-contracts.js';
+import type { CapabilityTier, CompositionalPolicyConfig, LifecycleKubernetesSettings, SessionRestartBehavior, SessionTailCacheSettings, SubstrateConfig, VoiceReplySegmenterSettings, WikiStartupHydrationSettings } from '../config/runtime-config-contracts.js';
 import type { ImageWorkflowSettings } from '../../primitives/images/types.js';
 
 export const SETTINGS_FILE_NAME = 'settings.json';
@@ -127,6 +127,8 @@ export interface EditableSettings {
   wikiRetrievalFocusTokenCap?: number;
   wikiRetrievalSimilarityThreshold?: number;
   wikiRetrievalGroupSimilarityThreshold?: number;
+  wikiStartupHydration?: WikiStartupHydrationSettings;
+  lifecycleKubernetes?: LifecycleKubernetesSettings;
   sessionMirrorEnabled?: boolean;
   sessionMirrorMaxChars?: number;
   sessionMirrorActiveWindowMs?: number;
@@ -252,6 +254,7 @@ export interface EditableSettings {
   voiceSessionTimeoutMs?: number;
   voiceMaxFrameBytes?: number;
   voiceMaxPendingFrames?: number;
+  voiceReplySegmenter?: VoiceReplySegmenterSettings;
 
   // Channel configuration (non-secret — bot tokens stay in .env)
   discordTriggerWords?: string;
@@ -292,6 +295,8 @@ export const RUNTIME_SETTINGS_KEYS = [
   'wikiRetrievalFocusTokenCap',
   'wikiRetrievalSimilarityThreshold',
   'wikiRetrievalGroupSimilarityThreshold',
+  'wikiStartupHydration',
+  'lifecycleKubernetes',
   'sessionMirrorEnabled',
   'sessionMirrorMaxChars',
   'sessionMirrorActiveWindowMs',
@@ -386,6 +391,7 @@ export const RUNTIME_SETTINGS_KEYS = [
   'voiceSessionTimeoutMs',
   'voiceMaxFrameBytes',
   'voiceMaxPendingFrames',
+  'voiceReplySegmenter',
   // Channels
   'discordTriggerWords',
   'discordTriggerReactions',
@@ -434,6 +440,9 @@ export type RuntimeSettingValue =
   | MemoryRetrievalPolicy
   | ObserverEvalSidecarSettings
   | SessionTailCacheSettings
+  | WikiStartupHydrationSettings
+  | LifecycleKubernetesSettings
+  | VoiceReplySegmenterSettings
   | ImageWorkflowSettings
   | Record<string, boolean>
   | Partial<Record<'nursery' | 'apprentice' | 'autonomous' | 'custom', string[]>>

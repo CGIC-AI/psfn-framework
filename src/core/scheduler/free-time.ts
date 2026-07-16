@@ -204,9 +204,9 @@ export function evaluateFreeTimeGate(input: FreeTimeGateInput): GateDecision {
 }
 
 // ── Framing ──
-// The full persona (E6.2) leads; the operator-editable open seed follows as
-// gentle permission; a closing line establishes that nothing is required and
-// how to end the block. No forced-task language anywhere.
+// The operator-editable open seed is gentle permission; a closing line
+// establishes that nothing is required and how to end the block. The ordinary
+// agent loop supplies the authoritative base identity system prompt.
 
 const FREE_TIME_CLOSING = 'There is no task and nothing to prove. When you feel done — or if you '
   + `would simply rather rest — reply with only "${HEARTBEAT_SILENT_REFLECTION_TOKEN}" and the time is `
@@ -214,15 +214,14 @@ const FREE_TIME_CLOSING = 'There is no task and nothing to prove. When you feel 
   + 'through your normal tools; nothing here is sent to anyone.';
 
 export function buildFreeTimeFramingPrompt(input: {
-  personaBlock: string;
   seedText: string;
+  projectContext?: string | null;
 }): string {
-  const persona = input.personaBlock.trim();
   const seed = input.seedText.trim();
   return [
-    ...(persona ? [persona] : []),
     '[Free time]',
     seed,
+    ...(input.projectContext?.trim() ? [input.projectContext.trim()] : []),
     FREE_TIME_CLOSING,
   ].join('\n\n');
 }
@@ -373,11 +372,10 @@ export interface FreeTimeRuntimeOptions {
   invokeTurn: (input: {
     lane: FreeTimeLane;
     channelId: string;
+    audience: 'self';
     turnIndex: number;
     content: string;
   }) => Promise<{ content: string }>;
-  /** Full-persona block provider (E6.2 formatReflectionPersonaBlock). */
-  resolvePersonaBlock: () => string;
   /**
    * Shared session summarizer for the "while you were away" note. Wire to
    * summarizeRecentSessionEntries with purpose 'free_time_return' and the
@@ -387,6 +385,8 @@ export interface FreeTimeRuntimeOptions {
     channelId: string;
     entries: readonly SessionEntry[];
   }) => Promise<string>;
+  /** Resume one active personal project from the existing personal-wiki tier. */
+  loadProjectContext?: () => Promise<string | null>;
   /** Optional recorder for the Garden read surface (recent blocks + spend). */
   recordBlock?: (record: FreeTimeBlockRecord) => void;
   now?: () => number;
@@ -615,9 +615,12 @@ function makeLaneHandler(
       return;
     }
 
+    const projectContext = options.loadProjectContext
+      ? await options.loadProjectContext()
+      : null;
     const framingPrompt = buildFreeTimeFramingPrompt({
-      personaBlock: options.resolvePersonaBlock(),
       seedText: options.config.seedText,
+      projectContext,
     });
 
     const result = await options.runBlock({
@@ -632,6 +635,7 @@ function makeLaneHandler(
         invokeTurn: ({ turnIndex, content }) => options.invokeTurn({
           lane,
           channelId,
+          audience: 'self',
           turnIndex,
           content,
         }),

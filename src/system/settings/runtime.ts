@@ -89,6 +89,8 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'wikiRetrievalFocusTokenCap',
   'wikiRetrievalSimilarityThreshold',
   'wikiRetrievalGroupSimilarityThreshold',
+  'wikiStartupHydration',
+  'lifecycleKubernetes',
   'sessionMirrorEnabled',
   'sessionMirrorMaxChars',
   'sessionMirrorActiveWindowMs',
@@ -125,6 +127,7 @@ const DIRECT_DEFINED_CONFIG_SETTINGS = [
   'voiceSessionTimeoutMs',
   'voiceMaxFrameBytes',
   'voiceMaxPendingFrames',
+  'voiceReplySegmenter',
   'subagentMaxConcurrent',
   'shardMaxConcurrent',
   'shardHeartbeatStaleAfterMs',
@@ -178,6 +181,12 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
       config.wikiRetrievalSimilarityThreshold ?? 0.6,
     wikiRetrievalGroupSimilarityThreshold:
       config.wikiRetrievalGroupSimilarityThreshold ?? 0.78,
+    wikiStartupHydration: config.wikiStartupHydration
+      ? structuredClone(config.wikiStartupHydration)
+      : null,
+    lifecycleKubernetes: config.lifecycleKubernetes
+      ? structuredClone(config.lifecycleKubernetes)
+      : null,
     sessionMirrorEnabled: config.sessionMirrorEnabled ?? true,
     sessionMirrorMaxChars: config.sessionMirrorMaxChars ?? 220,
     sessionMirrorActiveWindowMs:
@@ -208,6 +217,8 @@ function getContextSettingsSnapshot(config: SubstrateConfig) {
     | 'wikiRetrievalFocusTokenCap'
     | 'wikiRetrievalSimilarityThreshold'
     | 'wikiRetrievalGroupSimilarityThreshold'
+    | 'wikiStartupHydration'
+    | 'lifecycleKubernetes'
     | 'sessionMirrorEnabled'
     | 'sessionMirrorMaxChars'
     | 'sessionMirrorActiveWindowMs'
@@ -415,6 +426,9 @@ function getVoiceSettingsSnapshot(config: SubstrateConfig) {
     voiceSessionTimeoutMs: config.voiceSessionTimeoutMs ?? null,
     voiceMaxFrameBytes: config.voiceMaxFrameBytes ?? null,
     voiceMaxPendingFrames: config.voiceMaxPendingFrames ?? null,
+    voiceReplySegmenter: config.voiceReplySegmenter
+      ? structuredClone(config.voiceReplySegmenter)
+      : null,
   } satisfies SnapshotSection<
     | 'voiceEnabled'
     | 'ttsProvider'
@@ -434,6 +448,7 @@ function getVoiceSettingsSnapshot(config: SubstrateConfig) {
     | 'voiceSessionTimeoutMs'
     | 'voiceMaxFrameBytes'
     | 'voiceMaxPendingFrames'
+    | 'voiceReplySegmenter'
   >;
 }
 
@@ -615,6 +630,16 @@ function applyCoreSettings(
     config.sessionMirrorChannelOverrides = structuredClone(
       settings.sessionMirrorChannelOverrides ?? {},
     );
+  }
+  if ('wikiStartupHydration' in settings) {
+    config.wikiStartupHydration = settings.wikiStartupHydration
+      ? structuredClone(settings.wikiStartupHydration)
+      : undefined;
+  }
+  if ('lifecycleKubernetes' in settings) {
+    config.lifecycleKubernetes = settings.lifecycleKubernetes
+      ? structuredClone(settings.lifecycleKubernetes)
+      : undefined;
   }
   if ('sessionTailCache' in settings) {
     config.sessionTailCache = structuredClone(
@@ -875,6 +900,11 @@ function applyVoiceSettings(
     settings,
     'elevenLabsEndpointBase',
   );
+  if ('voiceReplySegmenter' in settings) {
+    config.voiceReplySegmenter = settings.voiceReplySegmenter
+      ? structuredClone(settings.voiceReplySegmenter)
+      : undefined;
+  }
   if ('wyomingShardRouting' in settings) {
     config.wyomingShardRouting = structuredClone(
       (getRawSetting(

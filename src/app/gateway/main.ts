@@ -162,6 +162,7 @@ async function main(): Promise<void> {
     config,
     env,
     startupHydration,
+    satelliteRegistryConfig,
   });
   log.info('Loaded trust policy configuration', {
     exactOverrideCount: Object.keys(
@@ -422,7 +423,7 @@ async function main(): Promise<void> {
     });
   }
 
-  // psfn-framework-fxt1: gateway-side welfare grant verifier. Re-verifies a
+  // fxt1: gateway-side welfare grant verifier. Re-verifies a
   // caller-asserted `preemptionProtected` LLMWorkSpec against the background-work
   // store (`welfare_claimed = true AND state = 'running'`, scoped to the
   // authenticated companion's schema) before the gate honors it; the RPC
@@ -537,7 +538,9 @@ async function main(): Promise<void> {
     eligibilityGate,
     gateway,
     channelsConfig: bootstrap.channelsConfig,
-    satelliteRegistry: satelliteRegistryConfig,
+    satelliteRegistryProvider: () => loadSatelliteRegistryConfig(
+      startupHydration.pathSnapshot.systemDataDir,
+    ),
     // htm9.9: voice transcripts are screened as 'audio_transcript' intake.
     intakeScreening: privilegedCore.intakeScreening.screening,
     companionRelay: {

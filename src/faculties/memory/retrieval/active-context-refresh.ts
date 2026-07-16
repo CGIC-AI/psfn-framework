@@ -42,6 +42,26 @@ import type {
   RetrievalSocialContext,
   ScoredMemory,
 } from './types.js';
+import type { ArtifactSensitivitySource } from '../../../shared/contracts/artifact-sensitivity.js';
+
+function collectArtifactSensitivitySources(input: {
+  selectedForPrompt: readonly ScoredMemory[];
+  emotionalContinuityMemories: readonly PurrMemory[];
+}): ArtifactSensitivitySource[] {
+  const byRef = new Map<string, ArtifactSensitivitySource>();
+  const addMemory = (memory: PurrMemory): void => {
+    byRef.set(`memory:${memory.id}`, {
+      ref: `memory:${memory.id}`,
+      sensitivity: memory.sensitivity,
+    });
+  };
+  for (const scored of input.selectedForPrompt) {
+    addMemory(scored.memory);
+    for (const link of scored.evolutionChain ?? []) addMemory(link.memory);
+  }
+  for (const memory of input.emotionalContinuityMemories) addMemory(memory);
+  return [...byRef.values()].sort((left, right) => left.ref.localeCompare(right.ref));
+}
 
 const log = createComponentLogger('Retrieval');
 
@@ -261,6 +281,10 @@ function applyActiveMemoryContextRefresh(
     episodicChains,
   });
   const selectedMemoryIds = [...cappedEntries.keys()];
+  const artifactSensitivitySources = collectArtifactSensitivitySources({
+    selectedForPrompt: selectedForActivePrompt,
+    emotionalContinuityMemories,
+  });
   const refreshSerial = (existing?.refreshSerial ?? 0) + 1;
   const snapshot: ActiveMemoryContextSnapshot = {
     key: target.identity.key,
@@ -272,6 +296,7 @@ function applyActiveMemoryContextRefresh(
     contextBlock,
     contextChars: contextBlock.length,
     selectedMemoryIds,
+    artifactSensitivitySources,
     generatedAt: now,
     lastRefreshStartedAt: target.startedAt,
     lastRefreshCompletedAt: now,

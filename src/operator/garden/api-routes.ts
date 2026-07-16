@@ -22,6 +22,7 @@ import type { AdminPlacesService } from './services/places-service.js';
 import type { AdminEnrollmentService } from './services/enrollment-service.js';
 import type { AdminGraphProposalsService } from './services/graph-proposals-service.js';
 import { buildAdminConcernRoutes } from './routes/concern-routes.js';
+import { buildAdminWishlistRoutes } from './routes/wishlist-routes.js';
 import { buildAdminIdentityRoutes } from './routes/identity-routes.js';
 import { buildAdminImageRoutes } from './routes/image-routes.js';
 import { buildAdminOverviewRoutes } from './routes/overview-routes.js';
@@ -62,6 +63,7 @@ import type {
   AdminSessionService,
   AdminSettingsService,
   AdminWikiService,
+  AdminWishlistService,
 } from './services/types.js';
 import type { AdminSubsystemHealthService } from './services/subsystem-health-service.js';
 import type { AdminToolConformanceService } from './services/tool-conformance-service.js';
@@ -267,6 +269,7 @@ export function buildAdminApiRoutes(options: {
   shardFoldReviewService: AdminShardFoldReviewService;
   adaptiveToolsService?: AdminAdaptiveToolsService | null;
   wikiService?: AdminWikiService | null;
+  wishlistService?: AdminWishlistService | null;
   episodicMemoryService?: AdminEpisodicMemoryService | null;
   groupMemoryService?: AdminGroupMemoryService | null;
   memoryService: AdminMemoryService;
@@ -321,6 +324,7 @@ export function buildAdminApiRoutes(options: {
     shardFoldReviewService,
     adaptiveToolsService,
     wikiService,
+    wishlistService,
     episodicMemoryService,
     groupMemoryService,
     memoryService,
@@ -420,6 +424,11 @@ export function buildAdminApiRoutes(options: {
   };
 
   return [
+    ...buildAdminWishlistRoutes({
+      wishlistService,
+      withBody,
+      ...(appendAuditTimelineEntry ? { appendAuditTimelineEntry } : {}),
+    }),
     ...(sharedWorkspaceService
       ? buildAdminSharedWorkspaceRoutes({ service: sharedWorkspaceService, withBody })
       : []),

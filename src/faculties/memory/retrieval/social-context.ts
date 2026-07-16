@@ -7,7 +7,10 @@ import type { Contact, SocialRelationshipEdge } from '../../../core/contacts/typ
 import type { EmotionalSnapshot } from '../../../core/contacts/store/emotional-baseline.js';
 import { cloneMemory } from '../../../core/turns/snapshot.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
-import type { PurrMemory } from '../types.js';
+import type {
+  PurrMemory,
+  RetrievalAccessScope,
+} from '../types.js';
 import { isInternalMemoryArtifact } from '../internal-artifacts.js';
 import { evaluateRetrievalAccessDecision, type RetrievalRoomVisibilityContext } from './access.js';
 import {
@@ -155,6 +158,7 @@ export async function attachEvolutionChains(
   selected: readonly ScoredMemory[],
   options: {
     contextText: string;
+    accessScope?: RetrievalAccessScope;
     trustLevel: TrustLevel;
     channelPrivacy: ChannelPrivacy;
     broadcast: boolean;
@@ -182,6 +186,7 @@ export async function attachEvolutionChains(
       if (!target || target.deletedAt !== undefined) continue;
       if (isMemoryQuarantined(target)) continue;
       const accessDecision = evaluateRetrievalAccessDecision(target, {
+        accessScope: options.accessScope,
         trustLevel: options.trustLevel,
         channelPrivacy: options.channelPrivacy,
         broadcast: options.broadcast,
@@ -241,6 +246,7 @@ export async function collectEmotionalContinuityMemories(
   sourceOverride: readonly PurrMemory[] | undefined,
   roomVisibility: RetrievalRoomVisibilityContext | undefined,
   filterQuarantinedMemories: (memories: readonly PurrMemory[]) => PurrMemory[],
+  accessScope: RetrievalAccessScope = 'channel_participant',
 ): Promise<PurrMemory[]> {
   const source = filterQuarantinedMemories(
     (sourceOverride?.map(cloneMemory) ?? await collectContactEmotionalMemories(memoryStore, canonicalContactId))
@@ -252,6 +258,7 @@ export async function collectEmotionalContinuityMemories(
     .filter(memory => memory.type === 'emotional')
     .filter(memory => !selectedIds.has(memory.id))
     .filter((memory) => evaluateRetrievalAccessDecision(memory, {
+      accessScope,
       trustLevel,
       channelPrivacy: channelDisclosure.channelPrivacy,
       broadcast: channelDisclosure.broadcast,

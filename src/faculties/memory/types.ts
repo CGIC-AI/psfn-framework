@@ -57,6 +57,10 @@ export type MemoryScopeKind =
 export type MemoryScopeQueryMode = 'prefer' | 'only';
 export type RetrievalMode = 'default' | 'temporal' | 'reflection';
 export type RetrievalModeInput = RetrievalMode | readonly RetrievalMode[];
+export type RetrievalAccessScope =
+  | 'channel_participant'
+  | 'companion_self_reflection'
+  | 'companion_self_creation';
 export interface MemoryFormationVAD {
   valence: number;
   arousal: number;
@@ -103,6 +107,12 @@ export interface MemoryScopeQuery {
 
 export interface RetrievalCallerContext {
   retrievalMode?: RetrievalModeInput;
+  /**
+   * Access purpose is explicit and internal-only. Normal turns remain scoped
+   * to the channel participant; scheduled private reflection may inspect the
+   * companion's subject-authorized memory without external disclosure gates.
+   */
+  accessScope?: RetrievalAccessScope;
 }
 
 export interface AutonomousActionMemoryContext {

@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import type { StartupConfigHydrationResult } from '../../app/startup/support/bootstrap-helpers.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 import {
   buildGatewayChannelsConfigOverrides,
   resolveGatewayBootstrapInput,
 } from './bootstrap-input.js';
+
+const EMPTY_SATELLITE_REGISTRY: SatelliteRegistryConfig = {
+  schemaVersion: 1,
+  enabled: false,
+  satellites: [],
+};
 
 function createStartupHydration(): StartupConfigHydrationResult {
   return {
@@ -70,6 +77,7 @@ describe('resolveGatewayBootstrapInput', () => {
   it('resolves a structured gateway bootstrap contract from env and hydration', () => {
     const bootstrap = resolveGatewayBootstrapInput({
       config: createConfig(),
+      satelliteRegistryConfig: EMPTY_SATELLITE_REGISTRY,
       env: {
         PSFN_RUNTIME_MODE: 'gateway-agent',
         GATEWAY_SOCKET: '/run/psfn/gateway.sock',
@@ -152,6 +160,7 @@ describe('resolveGatewayBootstrapInput', () => {
 
     const flagOff = resolveGatewayBootstrapInput({
       config: createConfig(),
+      satelliteRegistryConfig: EMPTY_SATELLITE_REGISTRY,
       env: { ...baseEnv },
       startupHydration: createStartupHydration(),
     });
@@ -180,6 +189,7 @@ describe('resolveGatewayBootstrapInput', () => {
           }],
         },
       },
+      satelliteRegistryConfig: EMPTY_SATELLITE_REGISTRY,
       env: { ...baseEnv },
       startupHydration: createStartupHydration(),
     });
@@ -217,6 +227,7 @@ describe('resolveGatewayBootstrapInput', () => {
   it('honors an explicit BEADS_TOOLS_ENABLED=false override', () => {
     const bootstrap = resolveGatewayBootstrapInput({
       config: createConfig(),
+      satelliteRegistryConfig: EMPTY_SATELLITE_REGISTRY,
       env: {
         PSFN_RUNTIME_MODE: 'split',
         WORKSPACE_PATH: '/workspace',
@@ -234,6 +245,7 @@ describe('resolveGatewayBootstrapInput', () => {
   it('parses explicit WSS gateway RPC endpoint configuration', () => {
     const bootstrap = resolveGatewayBootstrapInput({
       config: createConfig(),
+      satelliteRegistryConfig: EMPTY_SATELLITE_REGISTRY,
       env: {
         PSFN_RUNTIME_MODE: 'split',
         WORKSPACE_PATH: '/workspace',
@@ -265,6 +277,7 @@ describe('resolveGatewayBootstrapInput', () => {
   it('rejects WSS gateway RPC selection without TLS file configuration', () => {
     expect(() => resolveGatewayBootstrapInput({
       config: createConfig(),
+      satelliteRegistryConfig: EMPTY_SATELLITE_REGISTRY,
       env: {
         PSFN_RUNTIME_MODE: 'split',
         WORKSPACE_PATH: '/workspace',
@@ -278,6 +291,7 @@ describe('resolveGatewayBootstrapInput', () => {
   it('only enables legacy vault tools when explicitly requested', () => {
     const bootstrap = resolveGatewayBootstrapInput({
       config: createConfig(),
+      satelliteRegistryConfig: EMPTY_SATELLITE_REGISTRY,
       env: {
         PSFN_RUNTIME_MODE: 'split',
         WORKSPACE_PATH: '/workspace',

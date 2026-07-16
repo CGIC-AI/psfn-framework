@@ -7,6 +7,7 @@ import { loadModelsConfig, saveModelsConfig } from './models-config.js';
 import { loadProvidersConfig, saveProvidersConfig } from './providers-config.js';
 import { loadTrustPolicyConfig, saveTrustPolicyConfig } from './trust-policy-config.js';
 import {
+  DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
   saveSchedulerConfig,
 } from './scheduler-config.js';
@@ -100,6 +101,9 @@ describe('startup owner-file loaders', () => {
       heartbeatIntervalMs: 8_000,
       backgroundMaintenance: {
         intervalMs: 123_000,
+        sharedWorldWikiCaretaker: {
+          batchSize: 25,
+        },
         ambientPresence: {
           minIdleMinutes: 180,
           minNoteIntervalMinutes: 360,
@@ -108,6 +112,7 @@ describe('startup owner-file loaders', () => {
           maxActiveConcerns: 7,
         },
       },
+      backgroundWork: structuredClone(DEFAULT_BACKGROUND_WORK_TUNING),
       artifactLifecycle: {
         scratchpadRetentionDays: 7,
         generatedMediaRetentionDays: 30,

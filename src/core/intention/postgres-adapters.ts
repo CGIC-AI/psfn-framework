@@ -77,6 +77,7 @@ export async function createPostgresIntentionPorts(
   const pool = options.pool ?? createIntentionPostgresPool(databaseUrl, {
     applicationName: options.applicationName,
     schema: options.schema,
+    role: options.role,
   });
   await ensureIntentionPostgresSchema(pool);
   const state = createPostgresIntentionRuntimeState(pool, options);

@@ -9,6 +9,7 @@ import type { RuntimeChannelsConfig } from '../../channels/backplane/config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { MULTI_COMPANION_ENV_VAR } from '../../system/config/companions-config.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 
 /** Gateway-facing channel surfaces that can be routed to a companion. */
 export const GATEWAY_CHANNEL_SURFACES = ['discord', 'telegram', 'api'] as const;
@@ -74,6 +75,7 @@ export function resolveGatewaySurfaceForChannelType(
 export function resolveGatewayMultiCompanionConfig(
   config: Pick<SubstrateConfig, 'multiCompanion' | 'companionFleet'>,
   channelsConfig: RuntimeChannelsConfig,
+  satelliteRegistryConfig: SatelliteRegistryConfig,
 ): GatewayMultiCompanionConfig {
   const enabled = config.multiCompanion === true;
   const fleetCompanionIds = config.companionFleet?.companions.map(entry => entry.companionId) ?? [];
@@ -116,6 +118,18 @@ export function resolveGatewayMultiCompanionConfig(
     );
   }
 
+  const companionBoundSatellites = satelliteRegistryConfig.satellites.filter(
+    satellite => satellite.companionId !== undefined,
+  );
+  if (!enabled && companionBoundSatellites.length > 0) {
+    throw new Error(
+      `satellites.json declares companionId routing for [${companionBoundSatellites
+        .map(satellite => satellite.satelliteId)
+        .join(', ')}] but ${MULTI_COMPANION_ENV_VAR} is not enabled. Enable the flag or remove the `
+      + 'companionId fields — single-companion mode must not silently ignore satellite ownership.',
+    );
+  }
+
   if (enabled) {
     for (const [surface, companionId] of Object.entries(channelRouting)) {
       if (!fleetIds.has(companionId)) {
@@ -132,6 +146,15 @@ export function resolveGatewayMultiCompanionConfig(
           + `${JSON.stringify(companionId)}, which is absent from companions.json`,
         );
       }
+    }
+    for (const satellite of companionBoundSatellites) {
+      if (!satellite.companionId || fleetIds.has(satellite.companionId)) {
+        continue;
+      }
+      throw new Error(
+        `satellites.json routes satellite ${JSON.stringify(satellite.satelliteId)} to companionId `
+        + `${JSON.stringify(satellite.companionId)}, which is absent from companions.json`,
+      );
     }
   }
 

@@ -1,7 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createPostgresPool } from '../persistence/postgres.js';
+import {
+  POSTGRES_EXTENSION_SCHEMA_NAME,
+  createPostgresPool,
+  ensurePostgresSchemaExists,
+} from '../persistence/postgres.js';
 
 export const DEFAULT_POSTGRES_TEST_IMAGE = 'postgres:16.8-alpine';
 export const PGVECTOR_POSTGRES_TEST_IMAGE = 'pgvector/pgvector:0.8.2-pg16-bookworm@sha256:6f2fedef8e4311682b3a5989a21bf527d3310ab5421258ad6e41e52955c16294';
@@ -19,9 +26,16 @@ export interface PostgresTestDatabase {
 
 export interface PostgresTestHarness {
   readonly adminDatabaseUrl: string;
+  readonly clientBinaries: PostgresTestClientBinaries;
   readonly image: string;
   createDatabase(): Promise<PostgresTestDatabase>;
   stop(): Promise<void>;
+}
+
+export interface PostgresTestClientBinaries {
+  pgDumpBinary: string;
+  pgRestoreBinary: string;
+  psqlBinary: string;
 }
 
 export interface PostgresTestHarnessOptions {
@@ -41,6 +55,39 @@ function quoteIdentifier(identifier: string): string {
   return `"${identifier.replaceAll('"', '""')}"`;
 }
 
+function writeDockerPostgresClient(
+  root: string,
+  image: string,
+  command: 'pg_dump' | 'pg_restore' | 'psql',
+): string {
+  const path = join(root, `${command}.mjs`);
+  const source = [
+    '#!/usr/bin/env node',
+    "import { spawnSync } from 'node:child_process';",
+    "import { dirname, isAbsolute } from 'node:path';",
+    `const image = ${JSON.stringify(image)};`,
+    `const command = ${JSON.stringify(command)};`,
+    'const forwardedArgs = process.argv.slice(2);',
+    'const mountedDirectories = new Set();',
+    'for (const argument of forwardedArgs) {',
+    "  const candidate = argument.startsWith('--file=') ? argument.slice('--file='.length) : argument;",
+    "  if (candidate !== '-' && isAbsolute(candidate)) mountedDirectories.add(dirname(candidate));",
+    '}',
+    'const volumeArgs = [...mountedDirectories].flatMap(directory => [\'--volume\', `${directory}:${directory}`]);',
+    'const result = spawnSync(\'docker\', [',
+    "  'run', '--rm', '--pull=never', '--network=host',",
+    "  '--env', 'PGPASSWORD', '--env', 'PGPASSFILE', '--env', 'KRB5CCNAME',",
+    "  ...volumeArgs, '--entrypoint', command, image, ...forwardedArgs,",
+    "], { stdio: 'inherit', env: process.env });",
+    'if (result.error) throw result.error;',
+    'process.exit(result.status ?? 1);',
+    '',
+  ].join('\n');
+  writeFileSync(path, source, { mode: 0o700 });
+  chmodSync(path, 0o700);
+  return path;
+}
+
 async function waitForDatabaseReady(databaseUrl: string): Promise<void> {
   for (let attempt = 1; attempt <= READY_RETRY_LIMIT; attempt += 1) {
     const pool = createPostgresPool(databaseUrl, {
@@ -57,8 +104,21 @@ async function waitForDatabaseReady(databaseUrl: string): Promise<void> {
       }
       await delay(READY_RETRY_DELAY_MS);
     } finally {
-      await pool.end().catch(() => undefined);
+      await pool.end();
     }
+  }
+}
+
+async function provisionTestDatabase(databaseUrl: string): Promise<void> {
+  const pool = createPostgresPool(databaseUrl, {
+    applicationName: 'psfn-memory-test-provision',
+    allowExitOnIdle: true,
+    max: 1,
+  });
+  try {
+    await ensurePostgresSchemaExists(pool, POSTGRES_EXTENSION_SCHEMA_NAME);
+  } finally {
+    await pool.end();
   }
 }
 
@@ -103,23 +163,35 @@ export async function startPostgresTestHarness(options: PostgresTestHarnessOptio
     allowExitOnIdle: true,
     max: 1,
   });
+  const clientRoot = mkdtempSync(join(tmpdir(), 'postgres-test-clients-'));
+  const clientBinaries: PostgresTestClientBinaries = {
+    pgDumpBinary: writeDockerPostgresClient(clientRoot, image, 'pg_dump'),
+    pgRestoreBinary: writeDockerPostgresClient(clientRoot, image, 'pg_restore'),
+    psqlBinary: writeDockerPostgresClient(clientRoot, image, 'psql'),
+  };
 
   return {
     adminDatabaseUrl,
+    clientBinaries,
     image,
     async createDatabase(): Promise<PostgresTestDatabase> {
       const databaseName = `psfn_${randomUUID().replaceAll('-', '')}`;
       await adminPool.query(`CREATE DATABASE ${quoteIdentifier(databaseName)}`);
       const databaseUrl = resolveDatabaseUrl(adminDatabaseUrl, databaseName);
       await waitForDatabaseReady(databaseUrl);
+      await provisionTestDatabase(databaseUrl);
       return {
         databaseName,
         databaseUrl,
       };
     },
     async stop(): Promise<void> {
-      await adminPool.end().catch(() => undefined);
-      runDocker(['stop', containerId]);
+      await adminPool.end();
+      try {
+        runDocker(['stop', containerId]);
+      } finally {
+        rmSync(clientRoot, { recursive: true, force: true });
+      }
     },
   };
 }

@@ -2,6 +2,12 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it, vi } from 'vitest';
 import { hydrateStartupContinuity } from './startup-continuity.js';
 
+const WIKI_HYDRATION_TUNING = {
+  recentSessionLimit: 4,
+  recentMessageLimit: 18,
+  maxContextChars: 6_000,
+};
+
 describe('hydrateStartupContinuity', () => {
   it('aborts startup when active-memory hydration degrades', async () => {
     const sessionManager = {
@@ -28,6 +34,7 @@ describe('hydrateStartupContinuity', () => {
       },
       wikiRetrieval: null,
       sessionManager,
+      wikiHydrationTuning: WIKI_HYDRATION_TUNING,
     })).rejects.toThrow(
       'Startup continuity hydration failed: active memory [discord:restored: embedding unavailable]',
     );
@@ -74,6 +81,7 @@ describe('hydrateStartupContinuity', () => {
         refreshWikiContextBlock,
       },
       sessionManager,
+      wikiHydrationTuning: WIKI_HYDRATION_TUNING,
     })).resolves.toBeUndefined();
 
     expect(refreshActiveMemoryContext).toHaveBeenCalledOnce();
@@ -109,6 +117,7 @@ describe('hydrateStartupContinuity', () => {
         refreshWikiContextBlock: vi.fn().mockRejectedValue(new Error('pgvector down')),
       },
       sessionManager,
+      wikiHydrationTuning: WIKI_HYDRATION_TUNING,
     })).resolves.toBeUndefined();
   });
 
@@ -132,6 +141,7 @@ describe('hydrateStartupContinuity', () => {
       memoryProvider: null,
       wikiRetrieval: null,
       sessionManager,
+      wikiHydrationTuning: WIKI_HYDRATION_TUNING,
     })).rejects.toThrow(
       'Startup continuity hydration failed: active core memory [discord:restored: core-memory store unreadable]',
     );
@@ -146,5 +156,8 @@ describe('hydrateStartupContinuity', () => {
     expect(hydrationIndex).toBeLessThan(internalStateWiringIndex);
     expect(mainSource).not.toContain("log.warn('Startup active memory hydration failed'");
     expect(mainSource).not.toContain("log.warn('Startup active core-memory hydration failed'");
+    expect(mainSource).toContain(
+      'wikiHydrationTuning: requireWikiStartupHydrationTuning(',
+    );
   });
 });

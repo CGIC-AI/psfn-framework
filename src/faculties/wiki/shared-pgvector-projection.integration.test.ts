@@ -8,7 +8,7 @@
 
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createPostgresPool, ensurePostgresSchema } from '../../persistence/postgres.js';
+import { createPostgresPool, runPostgresMigrations } from '../../persistence/postgres.js';
 import {
   POSTGRES_WIKI_PROJECTION_MIGRATIONS,
   SHARED_SCHEMA_NAME,
@@ -18,7 +18,7 @@ import {
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
-import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { WikiPgvectorProjectionStore } from './pgvector-projection.js';
 import {
   createSharedWikiPgvectorProjectionStore,
@@ -139,6 +139,7 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
           { version: 5, name: 'icp-autonomy-invalidation-fences' },
           { version: 6, name: 'icp-fatigue-turn-reservations' },
           { version: 7, name: 'icp-fatigue-delivery-fence' },
+          { version: 8, name: 'shared-wiki-caretaker-proposals' },
         ]);
 
         // Idempotent re-provisioning (advisory-lock serialized).
@@ -146,7 +147,7 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
         const ledgerAgain = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(ledgerAgain.rows[0]?.count).toBe('7');
+        expect(ledgerAgain.rows[0]?.count).toBe('8');
       } finally {
         await pool.end();
         await store.close();
@@ -264,9 +265,14 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
       const personalPool = createPostgresPool(databaseUrl, {
         applicationName: 'psfn-wiki-personal',
         allowExitOnIdle: true,
+        schema: 'companion_test',
       });
       try {
-        await ensurePostgresSchema(personalPool, POSTGRES_WIKI_PROJECTION_MIGRATIONS);
+        await runPostgresMigrations(
+          personalPool,
+          POSTGRES_WIKI_PROJECTION_MIGRATIONS,
+          { schema: 'companion_test' },
+        );
         const personalStore = new WikiPgvectorProjectionStore(personalPool, deterministicEmbedding);
 
         await personalStore.syncDocument(
@@ -300,6 +306,7 @@ describe('shared_wiki_chunks shared-schema integration (s10f9)', () => {
         applicationName: 'psfn-shared-wiki-check',
         allowExitOnIdle: true,
         max: 1,
+        schema: SHARED_SCHEMA_NAME,
       });
       try {
         // A personal-scoped document can never be projected into the shared table.

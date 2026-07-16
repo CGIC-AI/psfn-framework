@@ -5,23 +5,54 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { KubeDeploymentDiagnostic } from './kube-diagnostics.js';
 import {
   decideAutoRollback,
-  executeAutoRollback,
+  executeAutoRollback as executeAutoRollbackOwned,
   type CurrentRolloutBinding,
+  type ExecuteAutoRollbackOptions,
   type KubeRollbackTargetResolution,
 } from './kube-auto-rollback.js';
 import type { PostRolloutValidationRecord } from './kube-post-rollout-validation.js';
-import { writePostRolloutValidationVerdict } from './kube-post-rollout-validation-store.js';
+import { writePostRolloutValidationVerdict as writeOwnedVerdict } from './kube-post-rollout-validation-store.js';
 import {
   readKubeRollbackHistory,
   type KubeRollbackRecord,
 } from './kube-rollback-store.js';
 import type { KubeHelmRollbackApiPort } from './kube-helm-rollback.js';
+import { lifecycleKubernetesSettingsFixture } from '../../test-support/lifecycle-kubernetes-settings.js';
 
 const RELEASE = 'psfn';
 const NAMESPACE = 'psfn';
 const RESOURCE_PREFIX = 'psfn';
 const COMMIT_N = 'a'.repeat(40);
 const COMMIT_PRIOR = 'b'.repeat(40);
+const lifecycleSettings = lifecycleKubernetesSettingsFixture();
+
+function writePostRolloutValidationVerdict(
+  systemDataDir: string,
+  record: PostRolloutValidationRecord,
+): void {
+  writeOwnedVerdict(
+    systemDataDir,
+    record,
+    lifecycleSettings.postRolloutValidationHistoryLimit,
+  );
+}
+
+type TestAutoRollbackOptions = Omit<
+  ExecuteAutoRollbackOptions,
+  'waitTimeoutMs' | 'pollIntervalMs' | 'rollbackHistoryLimit'
+> & Partial<Pick<
+  ExecuteAutoRollbackOptions,
+  'waitTimeoutMs' | 'pollIntervalMs' | 'rollbackHistoryLimit'
+>>;
+
+function executeAutoRollback(options: TestAutoRollbackOptions) {
+  return executeAutoRollbackOwned({
+    waitTimeoutMs: lifecycleSettings.rollbackWaitTimeoutMs,
+    pollIntervalMs: lifecycleSettings.rollbackPollIntervalMs,
+    rollbackHistoryLimit: lifecycleSettings.rollbackHistoryLimit,
+    ...options,
+  });
+}
 
 function ready(name: string): KubeDeploymentDiagnostic {
   return {

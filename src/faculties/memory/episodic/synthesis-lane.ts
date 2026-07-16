@@ -2,6 +2,7 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import type { InferredPostTurnAction, PostTurnActionCandidate, SubstrateMessage } from '../../../shared/contracts/runtime.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import type { SessionManager } from '../../../core/session/manager.js';
+import { isExperientialSelfDirectedSessionId } from '../../../core/session/session-id.js';
 import type { EpisodeSynthesisLaneConfig } from '../../../system/config/scheduler-config.js';
 import type { MemoryWriteOptions, MemoryWriter } from '../writer.js';
 import type { NearTurnMemoryScopeClassifierPort } from '../near-turn-memory-lane.js';
@@ -191,7 +192,10 @@ export class EpisodeSynthesisLane {
     message: Pick<SubstrateMessage, 'id' | 'channelId'>
       & Partial<Pick<SubstrateMessage, 'channelType'>>,
   ): PostTurnActionCandidate | null {
-    if (message.channelId.startsWith('internal:')) {
+    if (
+      message.channelId.startsWith('internal:')
+      && !isExperientialSelfDirectedSessionId(message.channelId)
+    ) {
       return null;
     }
     const sessionId = this.sessionManager.resolveSessionChannelId(message.channelId);
@@ -218,7 +222,7 @@ export class EpisodeSynthesisLane {
     const actions: PostTurnActionCandidate[] = [];
     for (const session of this.sessionManager.listRecentSessions(limit)) {
       const sessionId = this.sessionManager.resolveSessionChannelId(session.channelId);
-      if (sessionId.startsWith('internal:')) continue;
+      if (sessionId.startsWith('internal:') && !isExperientialSelfDirectedSessionId(sessionId)) continue;
       if (this.sessionManager.isSessionRetiredOrQuarantined?.(sessionId)) continue;
       const channelType = 'channelType' in session
         ? (session as { channelType?: SubstrateMessage['channelType'] }).channelType
@@ -366,6 +370,9 @@ export class EpisodeSynthesisLane {
     channelId: string,
     channelType: SubstrateMessage['channelType'] | undefined,
   ): Promise<'direct' | 'group'> {
+    if (isExperientialSelfDirectedSessionId(channelId)) {
+      return 'direct';
+    }
     if (!this.scopeClassifier || !channelType) {
       return 'direct';
     }

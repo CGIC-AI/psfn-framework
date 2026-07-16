@@ -13,6 +13,7 @@ export async function createPostgresContactStore(
     applicationName: options.applicationName ?? 'psfn-contacts',
     allowExitOnIdle: true,
     schema: options.schema,
+    role: options.role,
   });
   await ensurePostgresContactSchema(pool);
   return new PostgresContactStore(pool, primaryUserId, options.exportDir);

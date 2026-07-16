@@ -4,6 +4,7 @@ import { Pool, type PoolClient, type PoolConfig, type QueryResult, type QueryRes
 // stay inside that limit and only admit a strict, lowercase-first identifier so a
 // schema name can never be used to smuggle SQL into a search_path or DDL string.
 export const POSTGRES_SCHEMA_NAME_MAX_LENGTH = 63;
+export const POSTGRES_EXTENSION_SCHEMA_NAME = 'extensions';
 const POSTGRES_SCHEMA_NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
 const POSTGRES_ROLE_NAME_PATTERN = /^[a-z][a-z0-9_]*$/;
 
@@ -45,6 +46,16 @@ export function assertValidPostgresRoleName(role: string): string {
   return role;
 }
 
+/** Quote an identifier only after it has passed the canonical schema validator. */
+export function quotePostgresSchemaName(schema: string): string {
+  return `"${assertValidPostgresSchemaName(schema)}"`;
+}
+
+/** Quote an identifier only after it has passed the canonical role validator. */
+export function quotePostgresRoleName(role: string): string {
+  return `"${assertValidPostgresRoleName(role)}"`;
+}
+
 export interface PostgresConnectionOptions {
   applicationName?: string;
   allowExitOnIdle?: boolean;
@@ -54,15 +65,20 @@ export interface PostgresConnectionOptions {
    * Optional companion/world schema. When provided it is strictly validated and
    * pinned as the pool's search_path at connection startup (libpq `options`), so
    * every connection handed out by the pool operates inside that schema and no
-   * connection can escape it. `public` is retained after the schema so shared
-   * extension types (e.g. pgvector's VECTOR) still resolve; because the
-   * migration chain creates every table inside the companion schema, those
-   * tables always shadow any same-named table in `public`.
+   * connection can escape it. Extension types resolve only through the
+   * dedicated `extensions` schema. `public` is deliberately absent so a
+   * missing tenant table fails instead of falling through to legacy data.
    *
    * When absent, no search_path is set and behavior is byte-identical to the
    * default (`"$user", public`).
    */
   schema?: string;
+  /**
+   * Optional least-privilege role selected at connection startup. A role is
+   * accepted only together with an explicit schema so it can never inherit the
+   * database's public search path.
+   */
+  role?: string;
 }
 
 export function createPostgresPool(
@@ -78,12 +94,21 @@ export function createPostgresPool(
       : {}),
     ...(options.max !== undefined ? { max: options.max } : {}),
   };
+  if (options.role !== undefined && options.schema === undefined) {
+    throw new Error('A PostgreSQL runtime role requires an explicit tenant schema');
+  }
   if (options.schema !== undefined) {
     const schema = assertValidPostgresSchemaName(options.schema);
+    const role = options.role !== undefined
+      ? assertValidPostgresRoleName(options.role)
+      : undefined;
     // Pin search_path at connection startup for every connection in the pool.
     // libpq option tokens are whitespace-separated; the validated identifier
     // contains no whitespace or metacharacters, so this is injection-safe.
-    config.options = `-c search_path=${schema},public`;
+    config.options = [
+      ...(role ? [`-c role=${role}`] : []),
+      `-c search_path=${schema},${POSTGRES_EXTENSION_SCHEMA_NAME}`,
+    ].join(' ');
   }
   return new Pool(config);
 }
@@ -101,8 +126,11 @@ export async function withPostgresClient<T>(
   } catch (error) {
     try {
       await client.query('ROLLBACK');
-    } catch {
-      // Best effort rollback only.
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        'PostgreSQL operation failed and its transaction rollback also failed',
+      );
     }
     throw error;
   } finally {
@@ -161,6 +189,11 @@ export async function ensurePostgresSchemaWithAdvisoryLock(
  */
 export async function ensurePostgresSchemaExists(pool: Pool, schema: string): Promise<void> {
   const validated = assertValidPostgresSchemaName(schema);
+  const existing = await pool.query<{ exists: boolean }>(
+    'SELECT to_regnamespace($1) IS NOT NULL AS exists',
+    [validated],
+  );
+  if (existing.rows[0]?.exists === true) return;
   // The identifier is already restricted to a safe character set; the quotes
   // are belt-and-suspenders so reserved words would still be legal.
   await pool.query(`CREATE SCHEMA IF NOT EXISTS "${validated}"`);

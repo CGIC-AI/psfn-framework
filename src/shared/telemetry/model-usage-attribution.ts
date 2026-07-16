@@ -12,7 +12,7 @@ import {
 import {
   RUNTIME_LANE_CLASSES,
   type RuntimeLaneClass,
-} from '../../core/agent/worker-lanes.js';
+} from '../contracts/runtime-lanes.js';
 
 export const MODEL_USAGE_UNKNOWN_DIMENSION = 'unknown' as const;
 

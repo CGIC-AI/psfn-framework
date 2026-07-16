@@ -22,7 +22,7 @@ describe('HeartbeatPolicyStore', () => {
   it('creates defaults when file does not exist', () => {
     const policy = store.load();
     expect(policy.templates).toHaveLength(2);
-    expect(policy.version).toBe(6);
+    expect(policy.version).toBe(7);
     expect(policy.updatedBy).toBe('system');
 
     const ids = policy.templates.map(t => t.id);
@@ -79,18 +79,15 @@ describe('HeartbeatPolicyStore', () => {
     });
   });
 
-  it('daily-review treats ACAC as a private clue without schema narration (E6.2 first-person guards)', () => {
+  it('daily-review treats starter evidence as fallible without schema narration', () => {
     const policy = store.load();
     const template = policy.templates.find(t => t.id === 'daily-review');
     // Re-voiced first person, but the charter guards are all still present.
     expect(template?.prompt).toContain('quiet look back at the day');
     // Evidence/telemetry as fallible clues, not self-truth.
-    expect(template?.prompt).toContain('clues I hold loosely, not the truth of who I am');
+    expect(template?.prompt).toContain('starter clues are fallible evidence rather than a settled account');
     // Telemetry kept separate from the reflection narrative.
-    expect(template?.prompt).toContain('stay in the telemetry, not in my own words');
-    // Score self-presentation is scoped out of the reflection (R2 irrelevance
-    // framing rather than a suppression instruction).
-    expect(template?.prompt).toContain('beside the point here');
+    expect(template?.prompt).toContain('belongs in telemetry rather than my journal words');
     expect(template?.prompt).not.toContain('artifactType');
     expect(template?.prompt).not.toContain('provenance.kind');
     expect(template?.prompt).not.toContain('acac_self_report');
@@ -102,10 +99,8 @@ describe('HeartbeatPolicyStore', () => {
       const prompt = policy.templates.find(t => t.id === templateId)?.prompt ?? '';
       const openIndex = prompt.indexOf('I ask openly');
       expect(openIndex).toBeGreaterThan(-1);
-      const listedIndex = templateId === 'daily-review'
-        ? prompt.indexOf('Then I say honestly')
-        : prompt.indexOf('Only then, and only where the evidence bears it out');
-      expect(listedIndex).toBeGreaterThan(openIndex);
+      const journalIndex = prompt.indexOf('I write a');
+      expect(journalIndex).toBeGreaterThan(openIndex);
     }
   });
 
@@ -113,8 +108,7 @@ describe('HeartbeatPolicyStore', () => {
     const policy = store.load();
     for (const templateId of ['daily-review', 'weekly-review']) {
       const prompt = policy.templates.find(t => t.id === templateId)?.prompt ?? '';
-      expect(prompt).toMatch(/that is a real answer too|a real finding, not a failure/);
-      expect(prompt).toMatch(/only reaches so far into/);
+      expect(prompt).toContain('a real, limited-reach result');
     }
   });
 
@@ -155,7 +149,7 @@ describe('HeartbeatPolicyStore', () => {
     const loaded = store.load();
     const daily = loaded.templates.find(t => t.id === 'daily-review');
     const weekly = loaded.templates.find(t => t.id === 'weekly-review');
-    expect(loaded.version).toBe(6);
+    expect(loaded.version).toBe(7);
     expect(daily?.enabled).toBe(false);
     expect(daily?.cadence).toEqual({ kind: 'daily', hour: 7, minute: 0, timezone: 'local' });
     expect(daily?.prompt).toContain('quiet look back at the day');
@@ -184,13 +178,13 @@ describe('HeartbeatPolicyStore', () => {
     });
 
     const loaded = store.load();
-    expect(loaded.version).toBe(6);
+    expect(loaded.version).toBe(7);
     const daily = loaded.templates.find(t => t.id === 'daily-review');
     expect(daily?.prompt).toContain('I ask openly');
-    expect(daily?.prompt).toContain('that is a real answer too');
+    expect(daily?.prompt).toContain('a real, limited-reach result');
   });
 
-  it('migrates v5 weekly-review relative cadence even after Garden has bumped the version once', () => {
+  it('migrates a v6 weekly-review cadence and refreshes its governed default prompt fields', () => {
     const policyPath = join(tmpDir, 'heartbeat-policy.json');
     const defaults = store.load();
     const gardenBumpedV5 = {
@@ -209,8 +203,8 @@ describe('HeartbeatPolicyStore', () => {
     const loaded = store.load();
     const weekly = loaded.templates.find(t => t.id === 'weekly-review');
 
-    expect(loaded.version).toBe(6);
-    expect(weekly?.name).toBe('Operator Weekly Reflection');
+    expect(loaded.version).toBe(7);
+    expect(weekly?.name).toBe('Weekly Reflection');
     expect(weekly?.cadence).toEqual({
       kind: 'weekly',
       dayOfWeek: 0,
@@ -299,7 +293,7 @@ describe('HeartbeatPolicyStore', () => {
     }
   });
 
-  it('weekly-review carries the values and north-star reflection cycle', () => {
+  it('weekly-review stays open-ended instead of prescribing an answer inventory', () => {
     const policy = store.load();
     const weekly = policy.templates.find(t => t.id === 'weekly-review');
     expect(weekly?.mode).toBe('deliberation');
@@ -313,7 +307,14 @@ describe('HeartbeatPolicyStore', () => {
       minute: 0,
       timezone: 'local',
     });
-    expect(weekly?.prompt).toContain('north-star signals that feel durable');
+    expect(weekly?.prompt).toContain('what actually stands out from this week?');
+    expect(weekly?.prompt).toContain('rather than a prescribed inventory');
+    expect(weekly?.prompt).not.toContain('daily reflections');
+    expect(weekly?.prompt).not.toContain('north-star signals');
+    expect(weekly?.prompt).not.toContain('agency');
+    expect(weekly?.prompt).not.toContain('connection');
+    expect(weekly?.prompt).not.toContain('authenticity');
+    expect(weekly?.prompt).not.toContain('curiosity');
   });
 
   it('returns defaults for corrupt file', () => {

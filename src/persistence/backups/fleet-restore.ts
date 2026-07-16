@@ -42,9 +42,11 @@ import {
   FLEET_CLUSTER_DIR_NAME,
   FLEET_COMPANIONS_DIR_NAME,
   FLEET_GROUP_DIR_NAME,
-  type FleetArtifactIdentity,
-  type FleetBackupUnitOutcome,
 } from './service.js';
+import type {
+  FleetArtifactIdentity,
+  FleetBackupUnitOutcome,
+} from './fleet-backup-contracts.js';
 import {
   executeFleetRestoreTransaction,
   type FleetRestoreFaultInjectionOptions,
@@ -158,6 +160,11 @@ export interface FleetRestorePostgresOptions {
   psqlBinary?: string;
 }
 
+export interface FleetRestoreProjectionLifecycle {
+  invalidate(postgres: FleetRestorePostgresOptions, schemas: readonly string[]): Promise<void>;
+  backfill(postgres: FleetRestorePostgresOptions, schemas: readonly string[]): Promise<void>;
+}
+
 export interface FleetRestoreResult {
   kind: 'companion' | 'cluster' | 'group';
   artifactDir: string;
@@ -178,6 +185,7 @@ export interface FleetAuthConsistentFamilyRestoreVerificationOptions {
   authorityFloors: FleetAuthAuthorityFloorStore;
   activationGeneration: number;
   pgRestoreBinary?: string;
+  psqlBinary?: string;
 }
 
 const FLEET_ARTIFACT_TIMESTAMP_PATTERN = /^\d{8}T\d{9}Z$/u;
@@ -380,7 +388,7 @@ export async function invalidateRestoredMemorySubjectProjections(
         // The subject-evidence invalidation trigger intentionally addresses
         // companion-local projection tables without schema qualification.
         // Pin its lookup to the restored schema for this transaction.
-        await client.query(`SET LOCAL search_path TO ${qualified}, public`);
+        await client.query(`SET LOCAL search_path TO ${qualified}, extensions`);
         await client.query(`
           UPDATE ${qualified}.l2_memories
           SET authorization_revision = authorization_revision + 1,
@@ -498,6 +506,58 @@ async function assertDumpScope(
     );
   }
   return expectedSchemas;
+}
+
+/**
+ * Restore one validated schema-only archive without any filesystem side
+ * effects. Used by ephemeral shard lifecycle rehearsals and operator tooling.
+ */
+export async function restorePostgresSchemaSlice(options: {
+  dumpPath: string;
+  schema: string;
+  postgres: FleetRestorePostgresOptions;
+}): Promise<{ schema: string; dumpPath: string }> {
+  const schema = assertValidPostgresSchemaName(options.schema);
+  const unit: FleetBackupUnitOutcome = {
+    kind: 'companion',
+    postgresSchema: schema,
+    status: 'success',
+  };
+  await assertDumpScope(options.dumpPath, unit, options.postgres);
+  const pool = createPostgresPool(options.postgres.databaseUrl, {
+    applicationName: 'fleet-schema-slice-restore-preflight',
+    allowExitOnIdle: true,
+    max: 1,
+  });
+  try {
+    const existing = await pool.query<{ exists: boolean }>(
+      'SELECT to_regnamespace($1) IS NOT NULL AS exists',
+      [schema],
+    );
+    if (existing.rows[0]?.exists === true) {
+      throw new Error(`PostgreSQL schema-slice restore requires absent target schema ${schema}`);
+    }
+  } finally {
+    await pool.end();
+  }
+  try {
+    await restorePostgresDump(options.dumpPath, options.postgres);
+  } catch (error) {
+    try {
+      await dropOwnedPostgresSchema(
+        schema,
+        options.postgres.databaseUrl,
+        options.postgres.psqlBinary,
+      );
+    } catch (rollbackError) {
+      throw new AggregateError(
+        [error, rollbackError],
+        `PostgreSQL schema-slice restore failed and rollback remains pending for ${schema}`,
+      );
+    }
+    throw error;
+  }
+  return { schema, dumpPath: options.dumpPath };
 }
 
 async function assertFleetAuthFamilyDumpScope(
@@ -721,6 +781,7 @@ async function dropScratchSchemas(
   databaseUrl: string,
   schemas: readonly string[],
   expectedDatabaseName: string,
+  psqlBinary?: string,
 ): Promise<void> {
   const validated = [...new Set(schemas.map(assertValidPostgresSchemaName))];
   const expectedDatabaseLiteral = `'${expectedDatabaseName.replaceAll("'", "''")}'`;
@@ -743,7 +804,7 @@ async function dropScratchSchemas(
     'Fleet auth restore verification',
   );
   try {
-    await execFileAsync('psql', [
+    await execFileAsync(psqlBinary?.trim() || 'psql', [
       '--no-password',
       '--no-psqlrc',
       '--set=ON_ERROR_STOP=1',
@@ -794,6 +855,7 @@ export async function verifyFleetAuthConsistentFamilyRestore(
       options.scratchDatabaseUrl,
       expectedSchemas,
       scratchDatabaseName,
+      options.psqlBinary,
     );
     for (const unit of manifest.units.filter(
       (candidate): candidate is typeof candidate & { companionId: string } => (
@@ -810,6 +872,7 @@ export async function verifyFleetAuthConsistentFamilyRestore(
         postgres: {
           databaseUrl: options.scratchDatabaseUrl,
           ...(options.pgRestoreBinary ? { pgRestoreBinary: options.pgRestoreBinary } : {}),
+          ...(options.psqlBinary ? { psqlBinary: options.psqlBinary } : {}),
         },
       });
     }
@@ -822,6 +885,7 @@ export async function verifyFleetAuthConsistentFamilyRestore(
       postgres: {
         databaseUrl: options.scratchDatabaseUrl,
         ...(options.pgRestoreBinary ? { pgRestoreBinary: options.pgRestoreBinary } : {}),
+        ...(options.psqlBinary ? { psqlBinary: options.psqlBinary } : {}),
       },
     });
     const clusterContents = verifyBackupContentsManifest(clusterRestore.artifactDir);
@@ -843,6 +907,7 @@ export async function verifyFleetAuthConsistentFamilyRestore(
       options.scratchDatabaseUrl,
       expectedSchemas,
       scratchDatabaseName,
+      options.psqlBinary,
     );
   } catch (cleanupError) {
     failure = failure
@@ -957,6 +1022,7 @@ async function commitRestore(options: {
   unit: FleetBackupUnitOutcome;
   specs: ReadonlyArray<{ treeDirName: string; destination: string }>;
   prepareStaging?: (trees: readonly StagedRestoreTree[]) => void;
+  projectionLifecycle?: FleetRestoreProjectionLifecycle;
   faultInjection?: FleetRestoreFaultInjectionOptions['faultInjection'];
 }): Promise<FleetRestoreResult> {
   const expectedSchemas = await assertDumpScope(options.dumpPath, options.unit, options.postgres);
@@ -998,8 +1064,12 @@ async function commitRestore(options: {
     ),
     restoreDatabase: async () => {
       await restorePostgresDump(options.dumpPath, options.postgres);
-      await invalidateRestoredMemorySubjectProjections(options.postgres, expectedSchemas);
-      await backfillRestoredMemorySubjectProjections(options.postgres, expectedSchemas);
+      const projectionLifecycle = options.projectionLifecycle ?? {
+        invalidate: invalidateRestoredMemorySubjectProjections,
+        backfill: backfillRestoredMemorySubjectProjections,
+      };
+      await projectionLifecycle.invalidate(options.postgres, expectedSchemas);
+      await projectionLifecycle.backfill(options.postgres, expectedSchemas);
     },
     rollbackDatabase: async operation => await rollbackFleetRestoreDatabaseSchemas(
       options.postgres,
@@ -1032,6 +1102,7 @@ export async function restoreFleetCompanionSlice(options: {
   companionId: string;
   destinations: { companionDataDir: string; personalWorkspacePath: string };
   postgres: FleetRestorePostgresOptions;
+  projectionLifecycle?: FleetRestoreProjectionLifecycle;
 } & FleetRestoreFaultInjectionOptions): Promise<FleetRestoreResult> {
   const manifest = parseFleetManifest(options.fleetManifestPath);
   if (manifest.mode !== 'per-companion') throw new Error('Companion-slice restore requires a per-companion fleet backup');
@@ -1051,6 +1122,7 @@ export async function restoreFleetCompanionSlice(options: {
     dumpPath,
     postgres: options.postgres,
     unit,
+    projectionLifecycle: options.projectionLifecycle,
     specs: [
       { treeDirName: COMPANION_TREE_DIR_NAME, destination: options.destinations.companionDataDir },
       { treeDirName: WORKSPACE_TREE_DIR_NAME, destination: options.destinations.personalWorkspacePath },
@@ -1074,6 +1146,7 @@ export async function restoreFleetClusterArtifact(options: {
   fleetManifestPath: string;
   destinations: { systemDataDir: string; sharedWorkspacePath: string };
   postgres: FleetRestorePostgresOptions;
+  projectionLifecycle?: FleetRestoreProjectionLifecycle;
 } & FleetRestoreFaultInjectionOptions): Promise<FleetRestoreResult> {
   const manifest = parseFleetManifest(options.fleetManifestPath);
   if (manifest.mode !== 'per-companion') throw new Error('Cluster restore requires a per-companion fleet backup');
@@ -1089,6 +1162,7 @@ export async function restoreFleetClusterArtifact(options: {
     dumpPath,
     postgres: options.postgres,
     unit,
+    projectionLifecycle: options.projectionLifecycle,
     specs: [
       { treeDirName: SYSTEM_CONFIG_DIR_NAME, destination: options.destinations.systemDataDir },
       { treeDirName: WORKSPACE_TREE_DIR_NAME, destination: options.destinations.sharedWorkspacePath },
@@ -1101,6 +1175,7 @@ export async function restoreFleetGroupArtifact(options: {
   fleetManifestPath: string;
   destinations: { groupCompanionDataDir: string; groupWorkspacesRoot: string; systemDataDir: string };
   postgres: FleetRestorePostgresOptions;
+  projectionLifecycle?: FleetRestoreProjectionLifecycle;
 } & FleetRestoreFaultInjectionOptions): Promise<FleetRestoreResult> {
   const manifest = parseFleetManifest(options.fleetManifestPath);
   if (manifest.mode !== 'group') throw new Error('Group restore requires a group fleet backup');
@@ -1117,6 +1192,7 @@ export async function restoreFleetGroupArtifact(options: {
     dumpPath,
     postgres: options.postgres,
     unit,
+    projectionLifecycle: options.projectionLifecycle,
     specs: [
       { treeDirName: COMPANION_TREE_DIR_NAME, destination: options.destinations.groupCompanionDataDir },
       { treeDirName: WORKSPACE_TREE_DIR_NAME, destination: options.destinations.groupWorkspacesRoot },

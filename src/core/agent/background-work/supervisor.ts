@@ -4,11 +4,8 @@ import type { EventBus } from '../../../shared/event-bus.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { emitTurnPerformance } from '../../../shared/telemetry/turn-performance.js';
 import type { TurnPerformanceDeferReason } from '../../../shared/telemetry/turn-performance.js';
-import {
-  MAINTENANCE_REFLECTION_RUNTIME_CLASS,
-  resolveRuntimeLaneBudgetProfile,
-} from '../worker-lanes.js';
 import type { BackgroundWorkStorePort, BackgroundWorkWelfarePolicy } from './store-port.js';
+import type { BackgroundWorkSupervisorTuning } from './config.js';
 import {
   BACKGROUND_WORK_KINDS,
   assertClaimedBackgroundWorkBinding,
@@ -21,25 +18,7 @@ import {
 } from './types.js';
 
 const log = createComponentLogger('BackgroundWorkSupervisor');
-const DEFAULT_MAX_CONCURRENT_SESSIONS = 4;
-const DEFAULT_LEASE_DURATION_MS = 5 * 60_000;
-const DEFAULT_RETRY_BASE_DELAY_MS = 1_000;
-const DEFAULT_RETRY_MAX_DELAY_MS = 5 * 60_000;
-const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
-const DEFAULT_TERMINAL_RETENTION_MS = 7 * 24 * 60 * 60_000;
-const DEFAULT_CLEANUP_INTERVAL_MS = 60 * 60_000;
 const TERMINAL_PURGE_BATCH_SIZE = 500;
-// Anti-starvation welfare defaults (mmo9.7.4). Conservative: a background job
-// must be foreground-deferred many times OR wait several minutes before it is
-// admitted past the foreground exclusion, and only into a small bounded reserve.
-// The reserve-slot default is sourced from the lane budget profile so the
-// welfare-reserve policy has a single home (Law 12.4); a deployment may override
-// all three through the scheduler owner file.
-const DEFAULT_WELFARE_DEFER_THRESHOLD = 8;
-const DEFAULT_WELFARE_AGE_THRESHOLD_MS = 5 * 60_000;
-const DEFAULT_WELFARE_RESERVE_SLOTS = resolveRuntimeLaneBudgetProfile(
-  MAINTENANCE_REFLECTION_RUNTIME_CLASS,
-).welfareReserveSlots;
 
 export interface BackgroundWorkExecutionInput {
   job: ClaimedBackgroundWorkJob;
@@ -64,25 +43,18 @@ export type BackgroundWorkExecutor = (
   input: BackgroundWorkExecutionInput,
 ) => Promise<void>;
 
-export interface BackgroundWorkSupervisorOptions {
+export interface BackgroundWorkSupervisorOptions extends BackgroundWorkSupervisorTuning {
   store: BackgroundWorkStorePort;
   eventBus: EventBus;
   executor: BackgroundWorkExecutor;
   now?: () => number;
   leaseOwner?: string;
-  maxConcurrentSessions?: number;
-  leaseDurationMs?: number;
-  retryBaseDelayMs?: number;
-  retryMaxDelayMs?: number;
-  shutdownTimeoutMs?: number;
-  terminalRetentionMs?: number;
-  cleanupIntervalMs?: number;
   /**
-   * Anti-starvation welfare policy (mmo9.7.4). Owner-file backed (scheduler.json)
-   * with conservative defaults. `reserveSlots: 0` disables welfare admission
+   * Required anti-starvation welfare policy (mmo9.7.4), resolved from the
+   * scheduler.json owner contract. `reserveSlots: 0` disables welfare admission
    * entirely (fail-closed to pre-welfare FIFO behavior).
    */
-  welfare?: Partial<BackgroundWorkWelfarePolicy>;
+  welfare: BackgroundWorkWelfarePolicy;
 }
 
 export interface ForegroundWorkLease {
@@ -155,20 +127,18 @@ export class BackgroundWorkPermanentError extends Error {
   }
 }
 
-function normalizePositiveInteger(value: number | undefined, fallback: number, field: string): number {
-  const normalized = value ?? fallback;
-  if (!Number.isSafeInteger(normalized) || normalized < 1) {
+function requirePositiveInteger(value: number, field: string): number {
+  if (!Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${field} must be a positive safe integer`);
   }
-  return normalized;
+  return value;
 }
 
-function normalizeNonNegativeInteger(value: number | undefined, fallback: number, field: string): number {
-  const normalized = value ?? fallback;
-  if (!Number.isSafeInteger(normalized) || normalized < 0) {
+function requireNonNegativeInteger(value: number, field: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${field} must be a non-negative safe integer`);
   }
-  return normalized;
+  return value;
 }
 
 function isBackgroundWorkKind(value: string): value is BackgroundWorkKind {
@@ -226,61 +196,52 @@ export class BackgroundWorkSupervisor {
     this.executor = options.executor;
     this.now = options.now ?? Date.now;
     this.leaseOwner = options.leaseOwner?.trim() || `background-supervisor:${randomUUID()}`;
-    this.maxConcurrentSessions = normalizePositiveInteger(
+    this.maxConcurrentSessions = requirePositiveInteger(
       options.maxConcurrentSessions,
-      DEFAULT_MAX_CONCURRENT_SESSIONS,
       'maxConcurrentSessions',
     );
-    this.leaseDurationMs = normalizePositiveInteger(
+    this.leaseDurationMs = requirePositiveInteger(
       options.leaseDurationMs,
-      DEFAULT_LEASE_DURATION_MS,
       'leaseDurationMs',
     );
-    this.retryBaseDelayMs = normalizePositiveInteger(
+    this.retryBaseDelayMs = requirePositiveInteger(
       options.retryBaseDelayMs,
-      DEFAULT_RETRY_BASE_DELAY_MS,
       'retryBaseDelayMs',
     );
-    this.retryMaxDelayMs = normalizePositiveInteger(
+    this.retryMaxDelayMs = requirePositiveInteger(
       options.retryMaxDelayMs,
-      DEFAULT_RETRY_MAX_DELAY_MS,
       'retryMaxDelayMs',
     );
-    this.shutdownTimeoutMs = normalizeNonNegativeInteger(
+    if (this.retryMaxDelayMs < this.retryBaseDelayMs) {
+      throw new Error('retryMaxDelayMs must be greater than or equal to retryBaseDelayMs');
+    }
+    this.shutdownTimeoutMs = requireNonNegativeInteger(
       options.shutdownTimeoutMs,
-      DEFAULT_SHUTDOWN_TIMEOUT_MS,
       'shutdownTimeoutMs',
     );
-    this.terminalRetentionMs = normalizePositiveInteger(
+    this.terminalRetentionMs = requirePositiveInteger(
       options.terminalRetentionMs,
-      DEFAULT_TERMINAL_RETENTION_MS,
       'terminalRetentionMs',
     );
-    this.cleanupIntervalMs = normalizePositiveInteger(
+    this.cleanupIntervalMs = requirePositiveInteger(
       options.cleanupIntervalMs,
-      DEFAULT_CLEANUP_INTERVAL_MS,
       'cleanupIntervalMs',
     );
-    const reserveSlots = normalizeNonNegativeInteger(
-      options.welfare?.reserveSlots,
-      DEFAULT_WELFARE_RESERVE_SLOTS,
+    const reserveSlots = requireNonNegativeInteger(
+      options.welfare.reserveSlots,
       'welfare.reserveSlots',
     );
-    this.welfare = reserveSlots === 0
-      ? { deferThreshold: 1, ageThresholdMs: 0, reserveSlots: 0 }
-      : {
-        deferThreshold: normalizePositiveInteger(
-          options.welfare?.deferThreshold,
-          DEFAULT_WELFARE_DEFER_THRESHOLD,
-          'welfare.deferThreshold',
-        ),
-        ageThresholdMs: normalizeNonNegativeInteger(
-          options.welfare?.ageThresholdMs,
-          DEFAULT_WELFARE_AGE_THRESHOLD_MS,
-          'welfare.ageThresholdMs',
-        ),
-        reserveSlots,
-      };
+    this.welfare = {
+      deferThreshold: requirePositiveInteger(
+        options.welfare.deferThreshold,
+        'welfare.deferThreshold',
+      ),
+      ageThresholdMs: requireNonNegativeInteger(
+        options.welfare.ageThresholdMs,
+        'welfare.ageThresholdMs',
+      ),
+      reserveSlots,
+    };
   }
 
   async enqueue(inputs: readonly EnqueueBackgroundWorkInput[]): Promise<void> {

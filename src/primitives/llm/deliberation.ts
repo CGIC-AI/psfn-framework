@@ -147,6 +147,12 @@ export interface DeliberationResult {
 export interface DeliberationOptions {
   sessionId?: string;
   episode?: DeliberationEpisodeOptions;
+  /**
+   * Canonical agent-owned identity and policy prompt. When present, it is
+   * prepended to every provider system prompt while each voice/stage keeps its
+   * own deliberation instruction as the lower-priority suffix.
+   */
+  authoritativeSystemPrompt?: string;
   voices?: DeliberationPurpose[];
   referenceModels?: string[];
   aggregatorModel?: string;
@@ -175,6 +181,7 @@ interface ResolvedDeliberationConfig {
     kind: DeliberationEpisodeKind;
     mode: DeliberationEpisodeMode;
   };
+  authoritativeSystemPrompt?: string;
   voices: DeliberationVoiceConfig[];
   aggregatorModel?: string;
   aggregatorPurpose: DeliberationPurpose;
@@ -266,6 +273,10 @@ function estimateCostUsd(
 }
 
 function resolveDeliberationConfig(options: DeliberationOptions = {}): ResolvedDeliberationConfig {
+  const authoritativeSystemPrompt = options.authoritativeSystemPrompt?.trim();
+  if (options.authoritativeSystemPrompt !== undefined && !authoritativeSystemPrompt) {
+    throw new Error('authoritativeSystemPrompt must be a non-empty string when provided');
+  }
   const voices = normalizePurposes(options.voices);
   const referenceModels = normalizeModelHints(options.referenceModels);
   const aggregatorModel = options.aggregatorModel?.trim() || undefined;
@@ -306,6 +317,7 @@ function resolveDeliberationConfig(options: DeliberationOptions = {}): ResolvedD
       kind: episodeKind,
       mode: episodeMode,
     },
+    ...(authoritativeSystemPrompt ? { authoritativeSystemPrompt } : {}),
     voices: resolveVoiceConfigs(voices, referenceModels),
     ...(aggregatorModel ? { aggregatorModel } : {}),
     aggregatorPurpose: options.aggregatorPurpose === 'background'
@@ -317,6 +329,15 @@ function resolveDeliberationConfig(options: DeliberationOptions = {}): ResolvedD
     cost,
     now: options.now ?? Date.now,
   };
+}
+
+function buildProviderSystemPrompt(
+  authoritativeSystemPrompt: string | undefined,
+  deliberationInstruction: string,
+): string {
+  return [authoritativeSystemPrompt, deliberationInstruction.trim()]
+    .filter((section): section is string => typeof section === 'string' && section.length > 0)
+    .join('\n\n');
 }
 
 function buildVoiceMessages(
@@ -562,7 +583,10 @@ async function runStagedDeliberation(
     const { systemPrompt, messages } = stage.buildTurn({ prompt, stageIndex, stageOutputs });
     const response = await completeForDeliberation(
       llmProvider,
-      { systemPrompt, messages },
+      {
+        systemPrompt: buildProviderSystemPrompt(config.authoritativeSystemPrompt, systemPrompt),
+        messages,
+      },
       stage.purpose,
       buildCompletionOptions(
         undefined,
@@ -698,7 +722,10 @@ export async function runDeliberation(
       const response = await completeForDeliberation(
         llmProvider,
         {
-          systemPrompt: buildVoiceSystemPrompt(voice.purpose),
+          systemPrompt: buildProviderSystemPrompt(
+            config.authoritativeSystemPrompt,
+            buildVoiceSystemPrompt(voice.purpose),
+          ),
           messages: buildVoiceMessages(prompt, previousSynthesis, roundIndex),
         },
         voice.purpose,
@@ -762,8 +789,10 @@ export async function runDeliberation(
         const synthesisResponse = await completeForDeliberation(
           llmProvider,
           {
-            systemPrompt:
+            systemPrompt: buildProviderSystemPrompt(
+              config.authoritativeSystemPrompt,
               'You are an inner synthesis layer. Merge multiple perspectives into a single reflection that preserves nuance and avoids repetition.',
+            ),
             messages: buildAggregatorMessages(prompt, voices, previousSynthesis),
           },
           config.aggregatorPurpose,

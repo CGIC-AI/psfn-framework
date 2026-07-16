@@ -8,7 +8,7 @@ import {
 import { isRecord } from '../../../shared/utils/types.js';
 import { FLEET_AUTH_FIRST_OWNER_FUNCTION_NAME } from './first-owner-sql.js';
 import type { InsertSession, LockValidSession } from './oauth-session-store-types.js';
-import type { ProviderRevocationAuthorityPort } from './oauth-session-store.js';
+import type { ProviderRevocationAuthorityPort } from './provider-lifecycle-contracts.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 
 export async function revokeProviderAuthority(

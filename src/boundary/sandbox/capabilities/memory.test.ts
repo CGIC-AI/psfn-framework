@@ -1,7 +1,17 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type {
+  LLMProviderPort,
+} from '../../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { SessionManager } from '../../../core/session/manager.js';
+import type {
+  MemorySearchResult,
+  MemorySubjectAuthorizedQuery,
+  MemorySubjectAuthorizedQueryResult,
+} from '../../../faculties/memory/memory-store-port.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
+import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
+import { InMemoryMemoryStore } from '../../../test-support/in-memory-memory-store.js';
 import { createMemoryCapabilities } from './memory.js';
 
 function mockLLM(summary = 'Summarized search results.'): LLMProviderPort {
@@ -25,7 +35,136 @@ function mockLLM(summary = 'Summarized search results.'): LLMProviderPort {
   };
 }
 
+class SubjectAuthorizedIntrospectionMemoryStore extends InMemoryMemoryStore {
+  constructor(private readonly authorizedMemories: readonly MemorySearchResult[]) {
+    super();
+  }
+
+  async queryAuthorizedMemorySubjects(
+    input: MemorySubjectAuthorizedQuery,
+  ): Promise<MemorySubjectAuthorizedQueryResult> {
+    const selected = input.selector.kind === 'detail'
+      ? this.authorizedMemories.filter(memory => memory.id === input.selector.memoryId)
+      : input.selector.kind === 'embedding_search'
+        ? this.authorizedMemories.slice(0, input.selector.limit)
+        : [];
+    return {
+      memories: selected.map(memory => ({ ...memory })),
+      total: selected.length,
+    };
+  }
+}
+
 describe('createMemoryCapabilities session_search', () => {
+  it('keeps CogSec-quarantined memories out of read-only introspection helpers', async () => {
+    const retiredSessionId = 'discord:dm:partner:session:retired';
+    const fresh: MemorySearchResult = {
+      id: 'fresh-memory',
+      text: 'Fresh private memory',
+      type: 'semantic',
+      importance: 0.8,
+      confidence: 0.9,
+      emotionalValence: 0,
+      salience: 0.8,
+      sourceRef: 'source:turn|session:fresh-session',
+      extractedAt: 1,
+      lastAccessed: 1,
+      accessCount: 0,
+      tags: [],
+      sensitivity: 'intimate',
+      similarity: 0.9,
+    };
+    const quarantined: MemorySearchResult = {
+      ...fresh,
+      id: 'quarantined-memory',
+      text: 'Quarantined prompt injection memory',
+      sourceRef: `source:intake|session:${retiredSessionId}`,
+      provenance: { sessionId: retiredSessionId },
+      similarity: 0.99,
+    };
+    const memoryStore = new SubjectAuthorizedIntrospectionMemoryStore([
+      quarantined,
+      fresh,
+    ]).asPort();
+    const embeddingService: EmbeddingProviderPort = {
+      embed: vi.fn(async () => new Float32Array([1, 0, 0])),
+      embedBatch: vi.fn(async () => []),
+      dims: 3,
+    };
+    const sessionManager = {
+      isSessionRetiredOrQuarantined: vi.fn((sessionId: string) => sessionId === retiredSessionId),
+      getRetiredLogicalSessionIds: vi.fn(() => new Set([retiredSessionId])),
+      getRecentMessages: vi.fn(() => []),
+      appendSystemNote: vi.fn(() => undefined),
+    };
+    const capabilities = createMemoryCapabilities({
+      llmProvider: mockLLM(),
+      embeddingService,
+      memoryStore,
+      sessionManager,
+      pushEvidence: vi.fn(),
+    });
+
+    await runWithRequestContext({
+      channelId: 'internal:reflection:daily-review',
+      callType: 'background',
+      originType: 'background',
+      originStage: 'heartbeat.reflection.tool_grounding',
+      purpose: 'heartbeat.reflection.tool_grounding',
+      requesterProvenance: 'self_directed',
+    }, async () => {
+      await expect(capabilities.memory_search('private concern', 5)).resolves.toEqual([
+        expect.objectContaining({ text: fresh.text }),
+      ]);
+      await expect(capabilities.memory_get_by_id(quarantined.id)).resolves.toBeNull();
+      await expect(capabilities.memory_get_by_id(fresh.id)).resolves.toMatchObject({ text: fresh.text });
+    });
+  });
+
+  it('fails closed when self-directed reflection lacks a session-quarantine dependency', async () => {
+    const fresh: MemorySearchResult = {
+      id: 'unfiltered-memory',
+      text: 'Memory that must not be served without quarantine state',
+      type: 'semantic',
+      importance: 0.8,
+      confidence: 0.9,
+      emotionalValence: 0,
+      salience: 0.8,
+      sourceRef: 'source:turn|session:unknown-session',
+      extractedAt: 1,
+      lastAccessed: 1,
+      accessCount: 0,
+      tags: [],
+      sensitivity: 'intimate',
+      similarity: 0.9,
+    };
+    const embeddingService: EmbeddingProviderPort = {
+      embed: vi.fn(async () => new Float32Array([1, 0, 0])),
+      embedBatch: vi.fn(async () => []),
+      dims: 3,
+    };
+    const capabilities = createMemoryCapabilities({
+      llmProvider: mockLLM(),
+      embeddingService,
+      memoryStore: new SubjectAuthorizedIntrospectionMemoryStore([fresh]).asPort(),
+      sessionManager: null,
+      pushEvidence: vi.fn(),
+    });
+
+    await runWithRequestContext({
+      channelId: 'internal:reflection:daily-review',
+      callType: 'background',
+      originType: 'background',
+      originStage: 'heartbeat.reflection.tool_grounding',
+      purpose: 'heartbeat.reflection.tool_grounding',
+      requesterProvenance: 'self_directed',
+    }, async () => {
+      await expect(capabilities.memory_search('private concern', 5)).resolves.toEqual([]);
+      await expect(capabilities.memory_get_by_id(fresh.id)).resolves.toBeNull();
+    });
+    expect(embeddingService.embed).not.toHaveBeenCalled();
+  });
+
   it('runs transcript search and summarizes via summary completion purpose', async () => {
     const llm = mockLLM('Kyoto notes were concentrated in two channels.');
     const sessionManager = {
@@ -71,16 +210,25 @@ describe('createMemoryCapabilities session_search', () => {
 
     expect(result.summary).toContain('Kyoto notes');
     expect(result.hits).toHaveLength(2);
-    // Shared session-summary completion convention (psfn-framework-7ozg):
-    // positional callType 'background', correlation callType 'summary' with
-    // the session-search purpose/originStage.
-    const [request, positionalCallType] = (llm.complete as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(positionalCallType).toBe('background');
-    expect(request.correlation).toMatchObject({
-      callType: 'summary',
-      purpose: 'session.search.summary',
-      originStage: 'session.search.summary',
+    const complete = vi.mocked(llm.complete);
+    expect(complete).toHaveBeenCalledTimes(1);
+    const [context, positionalPurpose, options] = complete.mock.calls[0] ?? [];
+    // completeWithWorkSpec strips correlation from prompt context and owns it
+    // on the typed completion options/work spec.
+    expect(context.correlation).toBeUndefined();
+    expect(positionalPurpose).toBe('background');
+    expect(options?.workSpec).toMatchObject({
+      purpose: 'background',
+      durable: false,
+      correlation: {
+        callType: 'summary',
+        purpose: 'session.search.summary',
+        originType: 'summary',
+        originStage: 'session.search.summary',
+        channelId: 'api:current',
+      },
     });
+    expect(options?.correlation).toEqual(options?.workSpec?.correlation);
   });
 
   it('filters session_search hits with trust + channel visibility gates before summarization', async () => {

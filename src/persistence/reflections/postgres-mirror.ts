@@ -19,12 +19,13 @@ export class PostgresReflectionMetacognitionMirrorStore implements ReflectionMet
 
   static async connect(
     databaseUrl: string,
-    options: { schema?: string } = {},
+    options: { schema?: string; role?: string } = {},
   ): Promise<PostgresReflectionMetacognitionMirrorStore> {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-reflections',
       allowExitOnIdle: true,
       schema: options.schema,
+      role: options.role,
     });
     await ensurePostgresSchema(pool, POSTGRES_REFLECTION_MIGRATIONS);
     return new PostgresReflectionMetacognitionMirrorStore(pool);

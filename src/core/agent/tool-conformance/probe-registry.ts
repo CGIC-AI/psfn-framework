@@ -77,6 +77,7 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   // ── Knowledge / scheduling / orientation-extended ──
   skill: { kind: 'read_only', action: 'list', args: { action: 'list' } },
   wiki: { kind: 'read_only', action: 'list', args: { action: 'list' } },
+  library: { kind: 'read_only', action: 'list', args: { action: 'list' } },
   schedule: { kind: 'read_only', action: 'list', args: { action: 'list' } },
   north_star: { kind: 'read_only', action: 'list', args: { action: 'list' } },
 

@@ -25,6 +25,8 @@ const DEFAULT_BD_TIMEOUT_MS = 12_000;
 const MAX_BD_OUTPUT_CHARS = 250_000;
 const MAX_ISSUE_REF_CHARS = 128;
 const MAX_TITLE_CHARS = 200;
+const MAX_DESCRIPTION_CHARS = 20_000;
+const MAX_ACCEPTANCE_CHARS = 10_000;
 const MAX_REASON_CHARS = 400;
 const MAX_ACTOR_CHARS = 64;
 const MAX_DEPENDENCIES = 16;
@@ -80,6 +82,22 @@ function parseIssueTitle(value: unknown): string {
     deny('beads.create title is invalid or too long');
   }
   return title;
+}
+
+function parseOptionalIssueText(
+  value: unknown,
+  field: 'description' | 'acceptance',
+  maxChars: number,
+): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') {
+    deny(`beads.create ${field} must be a string`);
+  }
+  const text = value.trim();
+  if (!text || text.length > maxChars || text.includes('\0')) {
+    deny(`beads.create ${field} must be non-empty and at most ${maxChars} characters`);
+  }
+  return text;
 }
 
 function parseCloseReason(value: unknown): string {
@@ -380,6 +398,16 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         'new',
         () => {
           const title = parseIssueTitle(params.title);
+          const description = parseOptionalIssueText(
+            params.description,
+            'description',
+            MAX_DESCRIPTION_CHARS,
+          );
+          const acceptance = parseOptionalIssueText(
+            params.acceptance,
+            'acceptance',
+            MAX_ACCEPTANCE_CHARS,
+          );
           const issueType = parseIssueType(params.issueType);
           const priority = parsePriority(params.priority, 'beads.create priority');
           const deps = parseDependencies(params.deps);
@@ -388,6 +416,12 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
             : parseIssueRef(params.parent, 'parent');
 
           const args = [title];
+          if (description) {
+            args.push('--description', description);
+          }
+          if (acceptance) {
+            args.push('--acceptance', acceptance);
+          }
           if (issueType) {
             args.push('-t', issueType);
           }
@@ -415,6 +449,8 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       action: 'create',
       target: 'new',
       issueType: params.issueType,
+      hasDescription: typeof params.description === 'string' && params.description.trim().length > 0,
+      hasAcceptance: typeof params.acceptance === 'string' && params.acceptance.trim().length > 0,
       hasParent: typeof params.parent === 'string' && params.parent.trim().length > 0,
       dependencyCount: Array.isArray(params.deps) ? params.deps.length : 0,
     }),

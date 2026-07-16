@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
-import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import {
   createPostgresPool,
   ensurePostgresSchema,

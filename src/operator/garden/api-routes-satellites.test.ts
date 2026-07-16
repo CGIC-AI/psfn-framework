@@ -78,6 +78,7 @@ describe('satellite registry admin API route', () => {
           displayName: 'Amica',
           mobility: 'portable',
           staticLocationLabel: 'Live test desk',
+          companionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
           endpoints: [
             {
               endpointId: 'amica-browser',
@@ -124,6 +125,7 @@ describe('satellite registry admin API route', () => {
           displayName: 'Amica',
           mobility: 'portable',
           staticLocationLabel: 'Live test desk',
+          companionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
           endpoints: [
             {
               endpointId: 'amica-browser',

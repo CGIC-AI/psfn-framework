@@ -34,6 +34,9 @@ import {
   resolveCompressionFailureLogPath,
   resolveCompressionGuidelinePath,
 } from '../../persistence/layout.js';
+import type { PostgresShardSchemaLifecycle } from '../../persistence/postgres/shard-schema-lifecycle.js';
+import type { PostgresShardSchemaBinding } from '../../persistence/postgres/shard-schema-lifecycle.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
 
 // ── Mock pi-agent-core Agent ──
 // We mock Agent.prototype.prompt so it doesn't actually call the LLM.
@@ -324,6 +327,16 @@ describe('ShardManager', () => {
         chat: { model: 'test-model', provider: 'test', maxTokens: 512, contextWindow: 1_000 },
       },
     };
+    const complete = vi.fn<LLMProviderPort['complete']>(async (_context, _purpose, options) => ({
+      content: options?.correlation?.purpose === 'session.compression_guideline.update'
+        ? '{"updatedGuideline":"Preserve task lineage and the active thread explicitly."}'
+        : 'Summary of the pre-shard trajectory.',
+      toolCalls: [],
+      model: 'test-model',
+      inputTokens: 0,
+      outputTokens: 0,
+      stopReason: 'end_turn',
+    }));
     const llmProvider: LLMProviderPort = {
       stream: vi.fn(async () => ({
         content: '',
@@ -333,16 +346,7 @@ describe('ShardManager', () => {
         outputTokens: 0,
         stopReason: 'end_turn',
       })),
-      complete: vi.fn(async (request) => ({
-        content: request.correlation?.purpose === 'session.compression_guideline.update'
-          ? '{"updatedGuideline":"Preserve task lineage and the active thread explicitly."}'
-          : 'Summary of the pre-shard trajectory.',
-        toolCalls: [],
-        model: 'test-model',
-        inputTokens: 0,
-        outputTokens: 0,
-        stopReason: 'end_turn',
-      })),
+      complete,
     };
     const eligibilityGate = createEligibilityGate(() => ({
       getTier: () => 'autonomous',
@@ -403,11 +407,14 @@ describe('ShardManager', () => {
       version: 2,
       guideline: 'Preserve task lineage and the active thread explicitly.',
     });
-    expect(llmProvider.complete).toHaveBeenCalledTimes(3);
-    expect((llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls.filter(
-      ([request]) => request.correlation?.purpose === 'session.compression_guideline.update',
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(complete.mock.calls.filter(
+      ([, , options]) => options?.correlation?.purpose === 'session.compaction.summary',
     )).toHaveLength(1);
-  });
+    expect(complete.mock.calls.filter(
+      ([, , options]) => options?.correlation?.purpose === 'session.compression_guideline.update',
+    )).toHaveLength(1);
+  }, 60_000);
 
   it('spawns a shard and returns result', async () => {
     mockShardContent = 'Hello from shard';
@@ -448,6 +455,90 @@ describe('ShardManager', () => {
         isDirectMessage: false,
       }),
       }));
+  });
+
+  it('prepares and cleans one lineage-bound Postgres schema for a multi-companion shard', async () => {
+    const binding: PostgresShardSchemaBinding = {
+      parentCompanionId: createCompanionId('companion-test'),
+      parentSchema: 'companion_alpha',
+      shardId: 'derived-by-test',
+      schema: 'companion_alpha_shard_0123456789012345678901234567890123456789',
+      role: 'psfn_companion_alpha_shard_test',
+    };
+    const derive: PostgresShardSchemaLifecycle['derive'] = vi.fn((
+      _parentCompanionId,
+      _parentSchema,
+      shardId,
+    ) => ({
+      ...binding,
+      shardId,
+    }));
+    const prepare: PostgresShardSchemaLifecycle['prepare'] = vi.fn(async () => undefined);
+    const cleanup: PostgresShardSchemaLifecycle['cleanup'] = vi.fn(async () => ({
+      schema: binding.schema,
+      role: binding.role,
+      droppedObjectCount: 3,
+      dropped: true,
+    }));
+    const lifecycle: PostgresShardSchemaLifecycle = {
+      derive,
+      prepare,
+      cleanup,
+      openPool: () => {
+        throw new Error('Shard pool creation is outside this manager lifecycle test');
+      },
+      migrate: async () => undefined,
+      backup: async () => {
+        throw new Error('Shard backup is outside this manager lifecycle test');
+      },
+      restore: async () => undefined,
+    };
+    const manager = new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: {
+        ...TEST_CONFIG,
+        multiCompanion: true,
+        postgresSchema: 'companion_alpha',
+      },
+      parentSystemPrompt: 'You are a helpful assistant.',
+      shardPostgresLifecycle: lifecycle,
+    });
+
+    const result = await manager.spawn({ name: 'postgres-bound', task: 'Use isolated state' });
+
+    expect(derive).toHaveBeenCalledWith(
+      'companion-test',
+      'companion_alpha',
+      result.shardId,
+    );
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({
+      shardId: result.shardId,
+      schema: binding.schema,
+    }));
+    expect(cleanup).toHaveBeenCalledWith(expect.objectContaining({
+      shardId: result.shardId,
+      schema: binding.schema,
+    }));
+  });
+
+  it('rejects multi-companion shard construction without a Postgres lifecycle', () => {
+    expect(() => new ShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: {
+        ...TEST_CONFIG,
+        multiCompanion: true,
+        postgresSchema: 'companion_alpha',
+      },
+      parentSystemPrompt: 'test',
+    })).toThrow('requires a Postgres shard schema lifecycle');
   });
 
   it('emits a structured completion handoff for shard results with source context', async () => {

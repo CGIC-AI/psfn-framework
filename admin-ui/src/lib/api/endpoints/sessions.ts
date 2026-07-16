@@ -1,4 +1,15 @@
-import { apiGet, apiPost } from '$lib/api/client';
+import { apiGet, apiGetConditional, apiPost } from '$lib/api/client';
+import { getGardenCacheStorage } from '$lib/cache/indexeddb';
+import {
+  LocalFirstResource,
+  type ConditionalFetchResponse,
+} from '$lib/cache/local-first';
+import {
+  isAdminSessionListData,
+  isAdminSessionMessagesData,
+  mergeSessionMessagePages,
+  sessionMessageCursor,
+} from '$lib/cache/session-cache';
 import type {
   AdminCogSecEventListData,
   AdminCogSecRemediationApplyData,
@@ -17,8 +28,29 @@ import type {
 export const SESSION_MESSAGE_PAGE_SIZE = 100;
 export const SESSION_SEARCH_LIMIT = 100;
 
-let cachedSessionList: AdminSessionListData | null = null;
 let sessionListRevalidation: Promise<AdminSessionListData> | null = null;
+const sessionMessageRevalidations = new Map<string, Promise<AdminSessionMessagesData>>();
+
+async function fetchConditional(
+  path: string,
+  etag: string | undefined,
+): Promise<ConditionalFetchResponse> {
+  const response = await apiGetConditional(path, etag);
+  if (response.kind === 'data') return response;
+  return response.etag === null
+    ? { kind: 'not_modified' }
+    : { kind: 'not_modified', etag: response.etag };
+}
+
+const sessionListCache = new LocalFirstResource({
+  key: 'sessions:list',
+  storage: getGardenCacheStorage(),
+  validate: isAdminSessionListData,
+  fetch: request => fetchConditional(
+    '/api/admin/sessions',
+    request.forceFull ? undefined : request.etag,
+  ),
+});
 
 export interface SessionMessagesRequest {
   limit?: number;
@@ -37,28 +69,22 @@ export function listSessions(): Promise<AdminSessionListData> {
 }
 
 /**
- * The cache lives only for the current Garden JavaScript session. Revalidation
- * still uses apiGet, whose `no-cache` request contract lets the browser send
- * the shared admin ETag and reuse the body after a 304 response.
+ * Read the origin-scoped persisted session index. Invalid records are removed
+ * by the cache boundary and are never surfaced to the page.
  */
-export function getCachedSessionList(): AdminSessionListData | null {
-  return cachedSessionList;
+export async function getCachedSessionList(): Promise<AdminSessionListData | null> {
+  return (await sessionListCache.read())?.data ?? null;
 }
 
-export function clearSessionListCache(): void {
-  cachedSessionList = null;
+export async function clearSessionListCache(): Promise<void> {
+  await sessionListCache.remove();
   sessionListRevalidation = null;
 }
 
-export function revalidateSessionList(
-  fetchList: () => Promise<AdminSessionListData> = listSessions,
-): Promise<AdminSessionListData> {
+export function revalidateSessionList(): Promise<AdminSessionListData> {
   if (sessionListRevalidation) return sessionListRevalidation;
-  const current = fetchList()
-    .then((data) => {
-      cachedSessionList = data;
-      return data;
-    })
+  const current = sessionListCache.revalidate()
+    .then(result => result.data)
     .finally(() => {
       if (sessionListRevalidation === current) sessionListRevalidation = null;
     });
@@ -101,6 +127,59 @@ export function getSessionMessages(
   request: SessionMessagesRequest = {},
 ): Promise<AdminSessionMessagesData> {
   return apiGet<AdminSessionMessagesData>(buildSessionMessagesPath(sessionId, request));
+}
+
+function requireCacheableSessionMessagesRequest(request: SessionMessagesRequest): void {
+  if ((request.beforeId !== undefined && request.beforeId !== null)
+    || request.messagesOnly
+    || request.includeTurns !== false) {
+    throw new Error('Session transcript cache only accepts the lean newest-message page');
+  }
+}
+
+function createSessionMessagesCache(
+  sessionId: string,
+  request: SessionMessagesRequest,
+): LocalFirstResource<AdminSessionMessagesData> {
+  requireCacheableSessionMessagesRequest(request);
+  const path = buildSessionMessagesPath(sessionId, request);
+  return new LocalFirstResource({
+    key: `sessions:transcript:${path}`,
+    storage: getGardenCacheStorage(),
+    validate: isAdminSessionMessagesData,
+    cursor: sessionMessageCursor,
+    merge: mergeSessionMessagePages,
+    fetch: conditional => fetchConditional(
+      path,
+      conditional.forceFull ? undefined : conditional.etag,
+    ),
+  });
+}
+
+export async function getCachedSessionMessages(
+  sessionId: string,
+  request: SessionMessagesRequest,
+): Promise<AdminSessionMessagesData | null> {
+  return (await createSessionMessagesCache(sessionId, request).read())?.data ?? null;
+}
+
+export function revalidateSessionMessages(
+  sessionId: string,
+  request: SessionMessagesRequest,
+): Promise<AdminSessionMessagesData> {
+  const path = buildSessionMessagesPath(sessionId, request);
+  const active = sessionMessageRevalidations.get(path);
+  if (active) return active;
+  const current = createSessionMessagesCache(sessionId, request)
+    .revalidate()
+    .then(result => result.data)
+    .finally(() => {
+      if (sessionMessageRevalidations.get(path) === current) {
+        sessionMessageRevalidations.delete(path);
+      }
+    });
+  sessionMessageRevalidations.set(path, current);
+  return current;
 }
 
 export function buildSessionTurnDetailPath(sessionId: string, turnId: string): string {

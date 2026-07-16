@@ -14,16 +14,14 @@ import {
   startPostgresTestHarness,
   type PostgresTestHarness,
 } from '../../test-support/postgres-test-harness.js';
-import {
-  runFleetBackupCycle,
-  type FleetBackupCompanionUnit,
-} from './service.js';
+import { runFleetBackupCycle as runFleetBackupCycleProduction } from './service.js';
+import type { FleetBackupCompanionUnit } from './fleet-backup-contracts.js';
 import {
   backfillRestoredMemorySubjectProjections,
   invalidateRestoredMemorySubjectProjections,
-  restoreFleetClusterArtifact,
-  restoreFleetCompanionSlice,
-  restoreFleetGroupArtifact,
+  restoreFleetClusterArtifact as restoreFleetClusterArtifactProduction,
+  restoreFleetCompanionSlice as restoreFleetCompanionSliceProduction,
+  restoreFleetGroupArtifact as restoreFleetGroupArtifactProduction,
 } from './fleet-restore.js';
 import { createPostgresMemoryStoreFromPool } from '../../faculties/memory/postgres-store.js';
 import { MEMORY_SUBJECT_CLASSIFIER_VERSION } from '../../shared/contracts/memory-subject.js';
@@ -55,6 +53,78 @@ afterAll(async () => {
 async function freshDatabaseUrl(): Promise<string> {
   if (!harness) throw new Error('Postgres integration harness is not available');
   return (await harness.createDatabase()).databaseUrl;
+}
+
+async function freshFleetArtifactDatabaseUrl(): Promise<string> {
+  const databaseUrl = await freshDatabaseUrl();
+  const pool = createPostgresPool(databaseUrl, { max: 1 });
+  try {
+    await pool.query('DROP SCHEMA extensions');
+  } finally {
+    await pool.end();
+  }
+  return databaseUrl;
+}
+
+function requirePostgresClients() {
+  if (!harness) throw new Error('Postgres integration harness is not available');
+  return harness.clientBinaries;
+}
+
+function markerPostgres(databaseUrl: string) {
+  return { databaseUrl, psqlBinary: requirePostgresClients().psqlBinary };
+}
+
+function runFleetBackupCycle(
+  options: Parameters<typeof runFleetBackupCycleProduction>[0],
+) {
+  const clients = requirePostgresClients();
+  return runFleetBackupCycleProduction({
+    ...options,
+    postgres: { ...options.postgres, pgDumpBinary: clients.pgDumpBinary },
+  });
+}
+
+function restoreFleetCompanionSlice(
+  options: Parameters<typeof restoreFleetCompanionSliceProduction>[0],
+) {
+  const clients = requirePostgresClients();
+  return restoreFleetCompanionSliceProduction({
+    ...options,
+    postgres: {
+      ...options.postgres,
+      pgRestoreBinary: clients.pgRestoreBinary,
+      psqlBinary: clients.psqlBinary,
+    },
+  });
+}
+
+function restoreFleetClusterArtifact(
+  options: Parameters<typeof restoreFleetClusterArtifactProduction>[0],
+) {
+  const clients = requirePostgresClients();
+  return restoreFleetClusterArtifactProduction({
+    ...options,
+    postgres: {
+      ...options.postgres,
+      pgRestoreBinary: clients.pgRestoreBinary,
+      psqlBinary: clients.psqlBinary,
+    },
+  });
+}
+
+function restoreFleetGroupArtifact(
+  options: Parameters<typeof restoreFleetGroupArtifactProduction>[0],
+) {
+  const clients = requirePostgresClients();
+  return restoreFleetGroupArtifactProduction({
+    ...options,
+    postgres: {
+      ...options.postgres,
+      pgRestoreBinary: clients.pgRestoreBinary,
+      psqlBinary: clients.psqlBinary,
+    },
+  });
 }
 
 function createFleetFiles(root: string): {
@@ -174,7 +244,10 @@ describe('fleet restore against real Postgres', () => {
     const admin = createPostgresPool(databaseUrl, { max: 1 });
     const pool = createPostgresPool(databaseUrl, { schema: 'companion_alpha', max: 2 });
     try {
-      await admin.query('CREATE SCHEMA companion_alpha');
+      await admin.query(`
+        CREATE EXTENSION vector WITH SCHEMA extensions;
+        CREATE SCHEMA companion_alpha;
+      `);
       const store = await createPostgresMemoryStoreFromPool(pool, 4);
       await store.insertMemory({
         id: 'restored-subject-memory',
@@ -233,10 +306,10 @@ describe('fleet restore against real Postgres', () => {
       operationIdentity: 'abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789',
     };
     try {
-      await prepareFleetRestoreDatabaseMarker({ databaseUrl }, operation);
+      await prepareFleetRestoreDatabaseMarker(markerPostgres(databaseUrl), operation);
       await pool.query('CREATE SCHEMA companion_alpha');
       await expect(rollbackFleetRestoreDatabaseSchemas(
-        { databaseUrl },
+        markerPostgres(databaseUrl),
         foreignOperation,
         ['companion_alpha'],
       )).rejects.toThrow(/marker is missing or foreign/);
@@ -244,13 +317,13 @@ describe('fleet restore against real Postgres', () => {
         "SELECT to_regnamespace('companion_alpha') IS NOT NULL AS exists",
       )).toMatchObject({ rows: [{ exists: true }] });
 
-      await rollbackFleetRestoreDatabaseSchemas({ databaseUrl }, operation, ['companion_alpha']);
+      await rollbackFleetRestoreDatabaseSchemas(markerPostgres(databaseUrl), operation, ['companion_alpha']);
       expect(await pool.query<{ exists: boolean }>(
         "SELECT to_regnamespace('companion_alpha') IS NOT NULL AS exists",
       )).toMatchObject({ rows: [{ exists: false }] });
-      await expect(inspectFleetRestoreDatabaseMarker({ databaseUrl }, operation))
+      await expect(inspectFleetRestoreDatabaseMarker(markerPostgres(databaseUrl), operation))
         .resolves.toBe('prepared');
-      await removeFleetRestoreDatabaseMarker({ databaseUrl }, operation);
+      await removeFleetRestoreDatabaseMarker(markerPostgres(databaseUrl), operation);
     } finally {
       await pool.end();
     }
@@ -283,7 +356,7 @@ describe('fleet restore against real Postgres', () => {
         target.password = '';
         target.search = `?password=${encodedPassword}`;
         await expect(inspectFleetRestoreDatabaseMarker(
-          { databaseUrl: target.toString() },
+          markerPostgres(target.toString()),
           operation,
         )).resolves.toBe('absent');
       }
@@ -296,7 +369,7 @@ describe('fleet restore against real Postgres', () => {
   it('restores exact companion/shared/group scopes and rolls back collisions and partial failures', async () => {
     const root = join(tmpdir(), `psfn-fleet-restore-pg-${Date.now()}`);
     roots.push(root);
-    const sourceDatabaseUrl = await freshDatabaseUrl();
+    const sourceDatabaseUrl = await freshFleetArtifactDatabaseUrl();
     const sourcePool = createPostgresPool(sourceDatabaseUrl, { max: 1 });
     try {
       await sourcePool.query(`
@@ -369,7 +442,7 @@ describe('fleet restore against real Postgres', () => {
       groupWorkspacesRoot: join(root, 'workspaces'),
       now: () => Date.UTC(2026, 6, 14, 5, 1, 0),
     });
-    const groupTargetUrl = await freshDatabaseUrl();
+    const groupTargetUrl = await freshFleetArtifactDatabaseUrl();
     await restoreFleetGroupArtifact({
       fleetManifestPath: group.fleetManifestPath,
       destinations: {

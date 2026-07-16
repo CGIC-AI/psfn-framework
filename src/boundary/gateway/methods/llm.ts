@@ -91,13 +91,13 @@ export async function exposeModelCallGateBlocks<T>(operation: () => Promise<T>):
 }
 
 /**
- * psfn-framework-d8vq.2: parse an RPC-transported LLMWorkSpec fail-closed at the
+ * d8vq.2: parse an RPC-transported LLMWorkSpec fail-closed at the
  * boundary. A malformed spec is rejected as a typed JSON-RPC error BEFORE any
  * provider I/O; an absent spec is simply undefined (legacy non-work-spec calls
  * are untouched). The parsed spec is forwarded to the serving-side LLMClient so
  * its accountability guard + lane reconciliation fire in the split topology.
  *
- * psfn-framework-fxt1: additionally re-verify a caller-asserted
+ * fxt1: additionally re-verify a caller-asserted
  * `preemptionProtected` against the welfare-grant authority (the background-work
  * store) and STRIP it on any failure before the gate can honor it.
  */
@@ -119,7 +119,7 @@ export async function resolveRpcWorkSpec(
 }
 
 /**
- * psfn-framework-fxt1: honor `preemptionProtected` only when its welfare grant
+ * fxt1: honor `preemptionProtected` only when its welfare grant
  * verifies; strip it (and always the gateway-only `welfareGrantJobId` token)
  * otherwise. Fail closed: absent verifier, absent/invalid grant id, non-welfare
  * or non-running row, wrong companion, or a verify throw all resolve to a
@@ -236,7 +236,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
               } satisfies LLMFirstOutputNotification);
             },
           } : undefined,
-          // psfn-framework-d8vq.2: forward the parsed work spec so the
+          // d8vq.2: forward the parsed work spec so the
           // gateway-side LLMClient enforces the accountability guard + lane
           // reconciliation for an autonomous streamed call. undefined when
           // absent so the interactive chat path is unchanged.
@@ -316,7 +316,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
             correlation,
           },
           params.purpose,
-          // psfn-framework-d8vq.2: forward the parsed work spec so the
+          // d8vq.2: forward the parsed work spec so the
           // gateway-side LLMClient enforces the fail-closed accountability guard
           // + lane reconciliation for an autonomous completion. undefined when
           // absent so legacy non-work-spec calls are unchanged.

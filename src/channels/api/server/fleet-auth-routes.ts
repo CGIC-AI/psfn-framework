@@ -5,9 +5,14 @@ import {
   type GatewayFleetAuthBroker,
 } from '../../../boundary/gateway/fleet-auth-broker.js';
 import { readJsonBodyWithLimit, sendJson } from '../../backplane/http/primitives.js';
+import {
+  isLifecycleOAuthAction,
+  isLifecycleOAuthProofRole,
+} from '../../../shared/contracts/fleet-auth-lifecycle-oauth.js';
 import { isRecord } from '../../../shared/utils/types.js';
 
 const LOGIN_PATH = '/v1/fleet-auth/login';
+const LIFECYCLE_OAUTH_PATH = '/v1/fleet-auth/lifecycle/oauth';
 const REFRESH_PATH = '/v1/fleet-auth/session/refresh';
 const CSRF_PATH = '/v1/fleet-auth/session/csrf';
 const LOGOUT_PATH = '/v1/fleet-auth/logout';
@@ -105,7 +110,8 @@ export class FleetAuthHttpRoutes {
   matches(method: string | undefined, path: string): boolean {
     return (method === 'GET' && (path === LOGIN_PATH || path === CSRF_PATH || path === this.callbackPath))
       || (method === 'POST'
-        && (path === REFRESH_PATH || path === LOGOUT_PATH || path === PROVIDER_REVOKE_PATH));
+        && (path === LIFECYCLE_OAUTH_PATH || path === REFRESH_PATH
+          || path === LOGOUT_PATH || path === PROVIDER_REVOKE_PATH));
   }
 
   async handle(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
@@ -134,19 +140,31 @@ export class FleetAuthHttpRoutes {
         if (!state || !code || [...url.searchParams.keys()].some(key => key !== 'state' && key !== 'code')) {
           throw new FleetAuthBrokerError('invalid_oauth_callback', 400, 'OAuth callback is malformed');
         }
-        const completed = await this.broker.completeCallback({
+        const completed = await this.broker.completeOAuthCallback({
           state,
           code,
           requestOrigin: requestCallbackOrigin(request, this.canonicalOrigin),
           initiatingBrowserToken: readOpaqueCookie(request, PREAUTH_COOKIE_NAME) ?? '',
         });
-        response.statusCode = 303;
-        response.setHeader('Set-Cookie', [
-          clearPreauthCookie(),
-          sessionCookie(completed.session.token, completed.session.absoluteExpiresAt),
-        ]);
-        response.setHeader('Location', completed.returnPath);
-        response.end();
+        if (completed.kind === 'login') {
+          response.statusCode = 303;
+          response.setHeader('Set-Cookie', [
+            clearPreauthCookie(),
+            sessionCookie(completed.session.token, completed.session.absoluteExpiresAt),
+          ]);
+          response.setHeader('Location', completed.returnPath);
+          response.end();
+          return;
+        }
+        response.setHeader('Set-Cookie', clearPreauthCookie());
+        sendJson(response, 200, {
+          kind: completed.kind,
+          returnPath: completed.returnPath,
+          ceremonyId: completed.ceremonyId,
+          action: completed.action,
+          proofRole: completed.proofRole,
+          proof: completed.proof,
+        }, { 'Cache-Control': 'no-store' });
         return;
       }
       const token = readSessionCookie(request);
@@ -164,6 +182,40 @@ export class FleetAuthHttpRoutes {
       const csrfToken = singleHeader(request.headers[CSRF_HEADER_NAME]);
       if (!csrfToken || !/^[A-Za-z0-9_-]{43}$/u.test(csrfToken)) {
         throw new FleetAuthBrokerError('invalid_csrf', 403, 'Session-bound CSRF token is required');
+      }
+      if (request.method === 'POST' && url.pathname === LIFECYCLE_OAUTH_PATH) {
+        const body = await readJsonBodyWithLimit(request, response, { maxBytes: MUTATION_BODY_LIMIT });
+        if (!body.ok || !isRecord(body.value) || Object.keys(body.value).length !== 4
+          || typeof body.value.returnPath !== 'string'
+          || typeof body.value.ceremonyId !== 'string'
+          || !isLifecycleOAuthAction(body.value.action)
+          || !isLifecycleOAuthProofRole(body.value.proofRole)) {
+          if (!response.writableEnded) {
+            throw new FleetAuthBrokerError(
+              'invalid_lifecycle_oauth_request',
+              400,
+              'Lifecycle OAuth request is malformed',
+            );
+          }
+          return;
+        }
+        const started = await this.broker.beginLifecycleOAuth({
+          token,
+          csrfToken,
+          requestOrigin: mutationOrigin(request),
+          returnPath: body.value.returnPath,
+          ceremonyId: body.value.ceremonyId,
+          action: body.value.action,
+          proofRole: body.value.proofRole,
+        });
+        response.statusCode = 302;
+        response.setHeader('Location', started.authorizationUrl);
+        response.setHeader('Set-Cookie', preauthCookie(
+          started.initiatingBrowserToken,
+          started.expiresAt,
+        ));
+        response.end();
+        return;
       }
       if (request.method === 'POST' && url.pathname === REFRESH_PATH) {
         const rotated = await this.broker.rotateSession({

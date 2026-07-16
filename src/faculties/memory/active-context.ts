@@ -12,6 +12,7 @@ import type {
 import { normalizeMemoryScopeQuery } from './types.js';
 import type { ConversationScope } from '../../core/session/conversation-scope.js';
 import type { TurnRetrievalQueryEmbedding } from '../../shared/retrieval-query-embedding.js';
+import type { ArtifactSensitivitySource } from '../../shared/contracts/artifact-sensitivity.js';
 
 export type ActiveMemoryRefreshStatus = 'ready' | 'refreshing' | 'degraded';
 
@@ -48,6 +49,8 @@ export interface ActiveMemoryContextSnapshot {
   contextBlock: string;
   contextChars: number;
   selectedMemoryIds: string[];
+  /** Content-free sensitivity provenance for every memory rendered into this context block. */
+  artifactSensitivitySources?: ArtifactSensitivitySource[];
   generatedAt: number;
   lastRefreshStartedAt: number;
   lastRefreshCompletedAt?: number;

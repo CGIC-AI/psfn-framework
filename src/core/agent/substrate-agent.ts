@@ -28,7 +28,7 @@ import {
   INTENTION_FOLLOW_UP_AUTHOR_ID,
   INTENTION_FOLLOW_UP_AUTHOR_NAME,
 } from '../intention/appraisal.js';
-import type { AgentResponse, CorrelationMetadata, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, Attachment, CorrelationMetadata, MessagePromptOverride, ResponseStyle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type { CapabilityTier, CoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
@@ -183,6 +183,9 @@ import {
   type PromotedToolMutationResult,
 } from './substrate-agent/tool-runtime-facade.js';
 import { createResponseControlTool } from './no-reply-tool.js';
+import type { ApprovalQueuePort } from '../../system/capabilities/approval-queue-port.js';
+import type { NotificationPort } from '../../boundary/gateway/notification-port.js';
+import type { ArtifactEgressDestination } from '../artifacts/sensitivity-egress.js';
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 import { BackgroundWorkSupervisor } from './background-work/supervisor.js';
 import type { BackgroundWorkStorePort } from './background-work/store-port.js';
@@ -340,6 +343,12 @@ export class SubstrateAgent {
 
   // Pluggable memory — null until memory system is wired
   memoryProvider: MemoryProvider | null = null;
+  artifactApprovalQueue: ApprovalQueuePort | null = null;
+  artifactApprovalNotifier: NotificationPort | null = null;
+  shareApprovedArtifacts: ((
+    attachments: readonly Attachment[],
+    destination: ArtifactEgressDestination,
+  ) => Promise<void>) | null = null;
   memoryExtractor: MemoryExtractor | null = null;
   // E8.3: supplemental wiki RAG — null until the pgvector projection is wired.
   wikiRetrieval: WikiRetrievalPort | null = null;
@@ -1439,6 +1448,11 @@ export class SubstrateAgent {
       bridge: this.bridge,
       systemPrompt: this.systemPrompt,
       memoryProvider: this.memoryProvider,
+      artifactApprovalQueue: this.artifactApprovalQueue,
+      artifactApprovalNotifier: this.artifactApprovalNotifier,
+      ...(this.shareApprovedArtifacts
+        ? { shareApprovedArtifacts: this.shareApprovedArtifacts }
+        : {}),
       memoryExtractor: this.memoryExtractor,
       wikiRetrieval: this.wikiRetrieval,
       placesRegistry: this.placesRegistryConfig,

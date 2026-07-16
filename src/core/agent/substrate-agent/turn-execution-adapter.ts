@@ -36,6 +36,10 @@ import type { ObserverEvalSidecarRuntime } from '../../eval/observer-sidecar/typ
 import type { FatigueBudgetPort } from '../fatigue/fatigue-budget.js';
 import type { IcpFatigueRegulationReservationPort } from '../fatigue/regulation-reservation.js';
 import type { IntakeFirewallMode } from '../../../system/config/intake-policy-config.js';
+import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
+import type { NotificationPort } from '../../../boundary/gateway/notification-port.js';
+import type { Attachment } from '../../../shared/contracts/runtime.js';
+import type { ArtifactEgressDestination } from '../../artifacts/sensitivity-egress.js';
 
 interface TurnExecutionAdapterCallbacks {
   resolveTaskKind: (message: SubstrateMessage) => string | undefined;
@@ -166,6 +170,12 @@ export interface TurnExecutionAdapterOptions {
   bridge: EventBridge;
   systemPrompt: string;
   memoryProvider: MemoryProvider | null;
+  artifactApprovalQueue?: ApprovalQueuePort | null;
+  artifactApprovalNotifier?: NotificationPort | null;
+  shareApprovedArtifacts?: (
+    attachments: readonly Attachment[],
+    destination: ArtifactEgressDestination,
+  ) => Promise<void>;
   memoryExtractor: MemoryExtractor | null;
   wikiRetrieval: WikiRetrievalPort | null;
   placesRegistry?: import('../../../shared/contracts/places-registry.js').PlacesRegistryConfig | undefined;
@@ -212,6 +222,11 @@ export function createTurnExecutionRuntimeAdapter(
     promptCacheRuntime: options.promptCacheRuntime,
     completionNotices: options.completionNotices ?? new CompletionNoticeBuffer(),
     memoryProvider: options.memoryProvider,
+    artifactApprovalQueue: options.artifactApprovalQueue ?? null,
+    artifactApprovalNotifier: options.artifactApprovalNotifier ?? null,
+    ...(options.shareApprovedArtifacts
+      ? { shareApprovedArtifacts: options.shareApprovedArtifacts }
+      : {}),
     memoryExtractor: options.memoryExtractor,
     wikiRetrieval: options.wikiRetrieval,
     placesRegistry: options.placesRegistry,

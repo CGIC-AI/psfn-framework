@@ -308,6 +308,18 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     contactTrackingGate,
     ...(options.placesRegistryConfig ? { placesRegistryConfig: options.placesRegistryConfig } : {}),
   });
+  agentLoop.artifactApprovalQueue = cardProposalQueue;
+  agentLoop.artifactApprovalNotifier = operatorNotifier;
+  agentLoop.shareApprovedArtifacts = async (attachments, destination) => {
+    if (destination.channelType !== 'discord') {
+      throw new Error(
+        `Approved artifact delivery is not supported for channel type ${destination.channelType}`,
+      );
+    }
+    for (const attachment of attachments) {
+      await gateway.discordSendMedia(destination.channelId, attachment);
+    }
+  };
   agentLoop.scratchpadProvider = memoryStore;
   agentLoop.intakeSinkGate = intakeSinkGate;
   agentLoop.setCapabilityRuntime(capabilityRuntime);

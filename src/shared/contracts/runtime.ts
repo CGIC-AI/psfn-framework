@@ -356,6 +356,7 @@ export interface LLMRequestMetadata {
  *   - 'system'       system-injected turn (system: author, e.g. deferred handoff)
  */
 export type RequesterProvenance = 'human' | 'self_directed' | 'system';
+export type RequestAudience = 'self' | 'primary_contact' | 'external';
 
 export interface CorrelationMetadata extends LLMRequestMetadata {
   callType: ObservabilityCallType;
@@ -367,6 +368,11 @@ export interface CorrelationMetadata extends LLMRequestMetadata {
    * are refused even at `viewerTrustLevel: 'primary'`. See {@link RequesterProvenance}.
    */
   requesterProvenance?: RequesterProvenance;
+  /**
+   * Audience of the work product, resolved by the runtime rather than the
+   * model. Absence is deliberately ambiguous and must never grant self access.
+   */
+  requestAudience?: RequestAudience;
   viewerChannelPrivacy?: ChannelPrivacy;
   viewerIsDirectMessage?: boolean;
   /** Canonical contact resolved at ingress for subject-authorized memory access. Never model supplied. */

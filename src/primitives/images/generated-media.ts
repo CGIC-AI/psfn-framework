@@ -17,6 +17,12 @@ import type {
   PendingPaidDeliverable,
   PendingPaidDeliverableArtifact,
 } from '../../shared/paid-deliverable-tracking.js';
+import {
+  classifyArtifactSensitivity,
+  parseArtifactSensitivityClassification,
+  type ArtifactSensitivityClassification,
+  type ArtifactSensitivitySource,
+} from '../../shared/contracts/artifact-sensitivity.js';
 
 const log = createComponentLogger('ImageGeneratedMedia');
 // Live tool names first; retired names ('media', 'image_create', 'image_edit')
@@ -32,6 +38,10 @@ export interface GeneratedImageGalleryContext {
   sourceMessageId?: string;
   userSessionEntryId?: number;
   assistantSessionEntryId?: number;
+  /** Content-free sources actually present in the context used to create the image. */
+  sensitivitySources?: readonly ArtifactSensitivitySource[];
+  /** Precomputed once so the durable sidecar and egress approval fingerprint are identical. */
+  sensitivityClassification?: ArtifactSensitivityClassification;
 }
 
 interface CollectedImageGenerationResult {
@@ -343,6 +353,8 @@ async function writeGeneratedImageGalleryMetadata(params: {
   const { localPath, asset, attachment, result, message, index, context } = params;
   const existing = await readExistingMetadata(localPath);
   const conversation = cleanContext(context);
+  const sensitivityClassification = context?.sensitivityClassification
+    ?? classifyArtifactSensitivity(context?.sensitivitySources ?? []);
   const contentType = attachment.contentType || asset.contentType || 'image/png';
   const artifactRefId = result.requestId || message.toolCallId || attachment.name;
   const base: Record<string, unknown> = {
@@ -364,6 +376,7 @@ async function writeGeneratedImageGalleryMetadata(params: {
     sourceToolName: message.toolName,
     ...(message.toolCallId ? { toolCallId: message.toolCallId } : {}),
     ...(conversation ? { conversation } : {}),
+    sensitivityClassification,
     artifactRefs: [
       ...(
         Array.isArray(existing.artifactRefs)
@@ -379,6 +392,33 @@ async function writeGeneratedImageGalleryMetadata(params: {
     ],
   };
   writeJsonAtomic(`${localPath}${GENERATED_IMAGE_META_SUFFIX}`, base);
+}
+
+export async function readGeneratedImageSensitivityClassifications(
+  attachments: readonly Attachment[],
+): Promise<ArtifactSensitivityClassification[]> {
+  const classifications: ArtifactSensitivityClassification[] = [];
+  for (const attachment of attachments) {
+    const localPath = attachment.localPath?.trim();
+    if (!localPath) {
+      throw new Error('Artifact sensitivity verification requires a persisted local image');
+    }
+    let metadata: unknown;
+    try {
+      metadata = JSON.parse(await readFile(`${localPath}${GENERATED_IMAGE_META_SUFFIX}`, 'utf-8')) as unknown;
+    } catch (error) {
+      throw new Error(`Artifact sensitivity metadata is unavailable: ${String(error)}`);
+    }
+    if (!isRecord(metadata)) {
+      throw new Error('Artifact sensitivity metadata must be a JSON object');
+    }
+    const classification = parseArtifactSensitivityClassification(metadata.sensitivityClassification);
+    if (!classification) {
+      throw new Error('Artifact sensitivity metadata is missing or invalid');
+    }
+    classifications.push(classification);
+  }
+  return classifications;
 }
 
 export interface ChargedImageDeliverableSummary {

@@ -68,6 +68,9 @@ import { resolveTaskKind as resolveChannelTaskKind } from './channel-routing-run
 import { createInteractiveTerminalMessage } from '../../../app/cli/interactive-terminal-message.js';
 import { ParentTurnContinuationBudgetExceededError } from '../turn-limits.js';
 import { parseTurnRecordBackgroundWorkHandoff } from '../background-work/types.js';
+import { getRequestContext } from '../../../primitives/llm/request-context.js';
+import { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
+import { createApprovalQueuePortFromConfirmationQueue } from '../../../system/capabilities/approval-queue-port.js';
 
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
@@ -1186,6 +1189,108 @@ describe('handleMessageForTurn generated media delivery', () => {
         attachments: [expectedAttachment],
       }),
     }));
+  });
+
+  it('queues high-sensitivity generated media instead of sending it to a public audience', async () => {
+    const eventBus = new EventBus();
+    const companionDataDir = makeTempDir();
+    const personalImagesDir = join(companionDataDir, 'images');
+    mkdirSync(personalImagesDir);
+    const localPath = join(personalImagesDir, 'private-art.png');
+    writeFileSync(localPath, Buffer.from('png-bytes'));
+    const queue = new ConfirmationQueue({ idFactory: () => 'artifact-public-approval' });
+    const notify = vi.fn(async () => ({ messageId: 'notice-public-art' }));
+    const shareApprovedArtifacts = vi.fn(async () => {});
+    const appendSystemNote = vi.fn();
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: { appendSystemNote } as unknown as SessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: undefined,
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      memoryProvider: {
+        getActiveMemoryContext: vi.fn(() => ({
+          key: 'active-memory:public-art',
+          subjectKey: 'channel:public-art',
+          channelId: 'discord:public-art',
+          trustLevel: 'regular',
+          channelVisibility: 'public',
+          visibilityScope: 'non_broadcast',
+          contextBlock: 'private relationship context',
+          contextChars: 28,
+          selectedMemoryIds: ['private-memory'],
+          artifactSensitivitySources: [{
+            ref: 'memory:private-memory',
+            sensitivity: 'confidential',
+          }],
+          generatedAt: Date.now(),
+          lastRefreshStartedAt: Date.now(),
+          refreshStatus: 'ready',
+          versionPointer: 'active-memory-public-art-v1',
+        })),
+        refreshActiveMemoryContext: vi.fn(async () => null),
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+      configOverrides: {
+        companionDataDir,
+        workspacePath: companionDataDir,
+      },
+    });
+    runtime.artifactApprovalQueue = createApprovalQueuePortFromConfirmationQueue(queue);
+    runtime.artifactApprovalNotifier = { notify };
+    runtime.shareApprovedArtifacts = shareApprovedArtifacts;
+    (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async (promptMessage: { content: string }) => {
+      runtime.agent.state.messages.push({ role: 'user', content: promptMessage.content });
+      runtime.agent.state.messages.push({
+        role: 'toolResult',
+        toolCallId: 'call-private-art',
+        toolName: 'generate_image',
+        isError: false,
+        content: [{ type: 'text', text: 'Generated 1 image.' }],
+        details: {
+          imageResult: {
+            provider: 'fal',
+            mode: 'create',
+            requestId: 'private-art-request',
+            fallbackUsed: false,
+            images: [{
+              url: 'https://images.example.test/private-art.png',
+              contentType: 'image/png',
+              fileName: 'private-art.png',
+              localPath,
+            }],
+          },
+        },
+      });
+      runtime.agent.state.messages.push({ role: 'assistant', content: 'Here is the art.' });
+    });
+    runtime.extractResponseText = vi.fn(() => 'Here is the art.');
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-public-art', {
+      channelId: 'discord:public-art',
+      channelType: 'discord',
+      isDirectMessage: false,
+      routing: { channelPrivacy: 'public' },
+    }));
+
+    expect(response.content).toBe('');
+    expect(response.attachments).toBeUndefined();
+    expect(queue.listPending()).toEqual([
+      expect.objectContaining({ id: 'artifact-public-approval', method: 'artifact.share' }),
+    ]);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(shareApprovedArtifacts).not.toHaveBeenCalled();
+    expect(appendSystemNote).toHaveBeenCalledWith(
+      'discord:public-art',
+      expect.stringContaining('inherited confidential context'),
+      'artifact_egress_approval',
+      'discord:public-art',
+    );
   });
 
   it('recovers response attachments from tracked paid deliverables when the turn transcript misses the tool result', async () => {
@@ -5686,6 +5791,138 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       turnBudgetCharacteristics: expect.any(Object),
       scopeQuery: focusScopeQuery,
     }));
+  });
+
+  it('threads typed audience=self access into free-time active-memory refreshes', async () => {
+    const eventBus = new EventBus();
+    const observedRequestContexts: Array<ReturnType<typeof getRequestContext>> = [];
+    const refreshActiveMemoryContext = vi.fn(async () => {
+      observedRequestContexts.push(getRequestContext());
+      return null;
+    });
+    const getActiveMemoryContext = vi.fn(() => null);
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      resolveAuthorContext: vi.fn(() => ({
+        trustLevel: 'primary',
+        speakerRole: 'system',
+        actorKind: 'unknown',
+        resolvedUserName: 'Free Time',
+        continuityFallbackKeys: [],
+      })),
+      memoryProvider: {
+        getActiveMemoryContext,
+        refreshActiveMemoryContext,
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-free-time-self', {
+      channelId: 'internal:free-time:idle',
+      authorId: 'scheduler',
+      authorName: 'Free Time',
+    }));
+    await vi.waitFor(() => expect(refreshActiveMemoryContext).toHaveBeenCalledTimes(1));
+
+    expect(getActiveMemoryContext).toHaveBeenCalledWith(expect.objectContaining({
+      callerContext: { accessScope: 'companion_self_creation' },
+    }));
+    expect(refreshActiveMemoryContext).toHaveBeenCalledWith(expect.objectContaining({
+      callerContext: { accessScope: 'companion_self_creation' },
+    }));
+    expect(observedRequestContexts[0]).toMatchObject({
+      channelId: 'internal:free-time:idle',
+      requesterProvenance: 'self_directed',
+      requestAudience: 'self',
+      purpose: 'free_time.creation.memory_retrieval',
+    });
+  });
+
+  it('does not grant self access to an ambiguous internal audience', async () => {
+    const eventBus = new EventBus();
+    const refreshActiveMemoryContext = vi.fn(async () => null);
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: undefined,
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      resolveAuthorContext: vi.fn(() => ({
+        trustLevel: 'primary',
+        speakerRole: 'system',
+        actorKind: 'unknown',
+        resolvedUserName: 'System',
+        continuityFallbackKeys: [],
+      })),
+      memoryProvider: {
+        getActiveMemoryContext: vi.fn(() => null),
+        refreshActiveMemoryContext,
+      } as unknown as TurnExecutionRuntime['memoryProvider'],
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-internal-ambiguous', {
+      channelId: 'internal:unclassified-work',
+      authorId: 'scheduler',
+    }));
+    await vi.waitFor(() => expect(refreshActiveMemoryContext).toHaveBeenCalledTimes(1));
+
+    expect(refreshActiveMemoryContext).toHaveBeenCalledWith(expect.not.objectContaining({
+      callerContext: expect.objectContaining({ accessScope: 'companion_self_creation' }),
+    }));
+  });
+
+  it('classifies a primary private human DM as the ungated primary-contact audience', async () => {
+    const observedAudiences: unknown[] = [];
+    const runtime = createRuntime({
+      eventBus: new EventBus(),
+      sessionManager: {} as SessionManager,
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: undefined,
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      resolveAuthorContext: vi.fn(() => ({
+        trustLevel: 'primary',
+        speakerRole: 'user',
+        actorKind: 'human',
+        resolvedUserName: 'V',
+        canonicalContactKey: 'contact-v',
+        continuityFallbackKeys: [],
+      })),
+    });
+    (runtime.agent.prompt as ReturnType<typeof vi.fn>).mockImplementationOnce(async () => {
+      observedAudiences.push(getRequestContext()?.requestAudience);
+      runtime.agent.state.messages.push({ role: 'assistant', content: 'hello V' });
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-primary-contact', {
+      channelId: 'api:primary-contact',
+      isDirectMessage: true,
+      routing: { channelPrivacy: 'private' },
+    }));
+
+    expect(observedAudiences).toEqual(['primary_contact']);
   });
 
   it('keeps the foreground response path open when active memory refresh rejects', async () => {

@@ -370,6 +370,7 @@ export interface FreeTimeRuntimeOptions {
   invokeTurn: (input: {
     lane: FreeTimeLane;
     channelId: string;
+    audience: 'self';
     turnIndex: number;
     content: string;
   }) => Promise<{ content: string }>;
@@ -626,6 +627,7 @@ function makeLaneHandler(
         invokeTurn: ({ turnIndex, content }) => options.invokeTurn({
           lane,
           channelId,
+          audience: 'self',
           turnIndex,
           content,
         }),

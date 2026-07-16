@@ -1,4 +1,9 @@
-import type { CorrelationMetadata, SubstrateMessage, TurnID } from '../../../../shared/contracts/runtime.js';
+import type {
+  CorrelationMetadata,
+  RequestAudience,
+  SubstrateMessage,
+  TurnID,
+} from '../../../../shared/contracts/runtime.js';
 import type { ContextBudgetTurnCharacteristics } from '../../../../shared/context-budget.js';
 import { resolveBroadcastVisibilityScope, type BroadcastVisibilityScope } from '../../../../system/trust/broadcast-safety.js';
 import { getVisibilityDisclosureCeiling, type ChannelMeta } from '../../../../system/trust/policy.js';
@@ -36,6 +41,11 @@ import type { TurnExecutionObservability } from './observability.js';
 import type { TurnRetrievalQueryEmbedding } from '../../../../shared/retrieval-query-embedding.js';
 import { resolveCompanionIdFromConfig } from '../../../identity/companion-runtime.js';
 import type { SessionActorKind } from '../../../session/turn-provenance.js';
+import { runWithRequestContext } from '../../../../primitives/llm/request-context.js';
+import {
+  COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE,
+} from '../../../../faculties/memory/retrieval/access-scope.js';
+import type { ArtifactSensitivitySource } from '../../../../shared/contracts/artifact-sensitivity.js';
 
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
@@ -92,6 +102,7 @@ export interface PreTurnComputationResult {
   preTurnInternalState: InternalState;
   memoryContextBlock: string;
   memoryContextChars: number;
+  artifactSensitivitySources: ArtifactSensitivitySource[];
   memoryManifestSeed?: ContextManifestMemorySeed;
   /**
    * E8.3: supplemental wiki RAG block. Empty unless wiki retrieval is wired,
@@ -469,12 +480,33 @@ export async function prepareTurnIdentityState(input: {
         : {}),
     });
 
+  const requesterProvenance = resolveRequesterProvenance(authorContext, message);
+  let requestAudience: RequestAudience | undefined;
+  if (
+    requesterProvenance === 'self_directed'
+    && message.channelId.startsWith('internal:free-time:')
+    && message.channelId.length > 'internal:free-time:'.length
+  ) {
+    requestAudience = 'self';
+  } else if (
+    requesterProvenance === 'human'
+    && authorContext.trustLevel === 'primary'
+    && conversationScope.kind === 'dm'
+    && conversationScope.envelope.channelPrivacy === 'private'
+    && conversationScope.envelope.broadcast === false
+  ) {
+    requestAudience = 'primary_contact';
+  } else if (!message.channelId.startsWith('internal:')) {
+    requestAudience = 'external';
+  }
+
   const viewerRequestContext: Partial<CorrelationMetadata> = {
     viewerTrustLevel: authorContext.trustLevel,
     // Requester provenance is orthogonal to trust level: self-directed/system
     // turns carry trustLevel 'primary' for scoping but have no human in the loop.
     // Human-in-the-loop effector gates (world.control Gate 2) read THIS, not trust.
-    requesterProvenance: resolveRequesterProvenance(authorContext, message),
+    requesterProvenance,
+    ...(requestAudience ? { requestAudience } : {}),
     viewerChannelPrivacy: conversationScope.envelope.channelPrivacy,
     ...(authorContext.canonicalContactKey
       ? { viewerMemorySubjectContactId: authorContext.canonicalContactKey }
@@ -676,6 +708,14 @@ export async function computePreTurnState(input: {
       : {}),
     queryText: memoryRetrievalContextText,
   });
+  const selfCreationCallerContext: RetrievalCallerContext | undefined =
+    input.viewerRequestContext.requestAudience === 'self'
+      ? {
+          accessScope: 'companion_self_creation',
+          ...(temporalRetrievalMode ? { retrievalMode: temporalRetrievalMode } : {}),
+        }
+      : undefined;
+  const effectiveRetrievalCallerContext = selfCreationCallerContext ?? temporalRetrievalCallerContext;
   const activeMemoryRequest = {
     contextText: memoryRetrievalContextText,
     channelId: message.channelId,
@@ -689,7 +729,7 @@ export async function computePreTurnState(input: {
       : {}),
     ...(authorContext.canonicalContactKey ? { canonicalContactId: authorContext.canonicalContactKey } : {}),
     ...(focusMemoryScopeQuery ? { scopeQuery: focusMemoryScopeQuery } : {}),
-    ...(temporalRetrievalCallerContext ? { callerContext: temporalRetrievalCallerContext } : {}),
+    ...(effectiveRetrievalCallerContext ? { callerContext: effectiveRetrievalCallerContext } : {}),
     ...(temporalRetrievalMode ? { retrievalMode: temporalRetrievalMode } : {}),
   };
   const activeMemoryContext = activeMemorySurface && !bypassMemoryForVisionTurn
@@ -730,7 +770,22 @@ export async function computePreTurnState(input: {
     : undefined;
   const activeMemoryRefreshScheduled = refreshActiveMemoryContext !== undefined;
   if (refreshActiveMemoryContext) {
-    void refreshActiveMemoryContext(activeMemoryRequest).catch((error: unknown) => {
+    const refresh = (): Promise<ActiveMemoryContextSnapshot | null> => (
+      refreshActiveMemoryContext(activeMemoryRequest)
+    );
+    const refreshPromise = selfCreationCallerContext
+      ? runWithRequestContext({
+          ...turnCorrelationBase,
+          channelId: message.channelId,
+          callType: 'background',
+          originType: 'background',
+          originStage: COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE,
+          purpose: COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE,
+          requesterProvenance: 'self_directed',
+          requestAudience: 'self',
+        }, refresh)
+      : refresh();
+    void refreshPromise.catch((error: unknown) => {
       const errorText = toErrorMessage(error);
       log.error('Active memory context refresh failed after scheduling', {
         channelId: message.channelId,
@@ -944,6 +999,7 @@ export async function computePreTurnState(input: {
     preTurnInternalState,
     memoryContextBlock,
     memoryContextChars,
+    artifactSensitivitySources: activeMemoryContext?.artifactSensitivitySources?.map(source => ({ ...source })) ?? [],
     ...(activeMemoryContext?.manifestSeed ? { memoryManifestSeed: activeMemoryContext.manifestSeed } : {}),
     wikiContextBlock,
     scratchpadBlock,

@@ -597,7 +597,7 @@ export interface EventMap {
   } & EventCorrelationFields;
   'memory.retrieval': {
     channelId: string;
-    accessScope?: 'channel_participant' | 'companion_self_reflection';
+    accessScope?: 'channel_participant' | 'companion_self_reflection' | 'companion_self_creation';
     count: number;
     candidates?: number;
     ranked?: number;

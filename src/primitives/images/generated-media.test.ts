@@ -43,6 +43,10 @@ describe('collectGeneratedImageAttachments', () => {
         requestId: 'turn-request-1',
         sourceMessageId: 'message-gallery-1',
         userSessionEntryId: 42,
+        sensitivitySources: [
+          { ref: 'turn:turn-gallery-1', sensitivity: 'personal' },
+          { ref: 'memory:private-relationship', sensitivity: 'intimate' },
+        ],
       },
       turnMessages: [
         {
@@ -96,6 +100,11 @@ describe('collectGeneratedImageAttachments', () => {
         userSessionEntryId: number;
       };
       artifactRefs: Array<{ kind: string; url: string; localPath: string }>;
+      sensitivityClassification: {
+        sensitivity: string;
+        basis: string;
+        sources: Array<{ ref: string; sensitivity: string }>;
+      };
     };
     expect(metadata).toMatchObject({
       sourceToolName: 'selfie_create',
@@ -115,6 +124,14 @@ describe('collectGeneratedImageAttachments', () => {
         localPath: attachments[0]!.localPath,
       }),
     ]));
+    expect(metadata.sensitivityClassification).toMatchObject({
+      sensitivity: 'intimate',
+      basis: 'max_input_sensitivity',
+      sources: expect.arrayContaining([
+        { ref: 'memory:private-relationship', sensitivity: 'intimate' },
+        { ref: 'turn:turn-gallery-1', sensitivity: 'personal' },
+      ]),
+    });
   });
 
   it('attaches generate_image results from structured tool details', async () => {

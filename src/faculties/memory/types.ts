@@ -59,7 +59,8 @@ export type RetrievalMode = 'default' | 'temporal' | 'reflection';
 export type RetrievalModeInput = RetrievalMode | readonly RetrievalMode[];
 export type RetrievalAccessScope =
   | 'channel_participant'
-  | 'companion_self_reflection';
+  | 'companion_self_reflection'
+  | 'companion_self_creation';
 export interface MemoryFormationVAD {
   valence: number;
   arousal: number;

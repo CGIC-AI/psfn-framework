@@ -76,9 +76,21 @@ import {
 } from '../../cogsec/canary/canary-token.js';
 import {
   mergeChargedImageDeliverableSummaries,
+  readGeneratedImageSensitivityClassifications,
   summarizeChargedImageDeliverables,
   summarizePendingPaidImageDeliverables,
 } from '../../../primitives/images/generated-media.js';
+import {
+  classifyArtifactSensitivity,
+  type ArtifactSensitivitySource,
+} from '../../../shared/contracts/artifact-sensitivity.js';
+import {
+  authorizeArtifactEgress,
+  type ArtifactEgressDestination,
+} from '../../artifacts/sensitivity-egress.js';
+import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
+import type { NotificationPort } from '../../../boundary/gateway/notification-port.js';
+import type { Attachment } from '../../../shared/contracts/runtime.js';
 import {
   MISSING_IMAGE_ATTACHMENT_CORRECTION,
   rejectsMissingImageAttachmentClaim,
@@ -169,6 +181,12 @@ export interface TurnExecutionRuntime {
   /** Ephemeral background-completion notices rendered once into the next prompt. */
   completionNotices: CompletionNoticeBuffer;
   memoryProvider: MemoryProvider | null;
+  artifactApprovalQueue?: ApprovalQueuePort | null;
+  artifactApprovalNotifier?: NotificationPort | null;
+  shareApprovedArtifacts?: (
+    attachments: readonly Attachment[],
+    destination: ArtifactEgressDestination,
+  ) => Promise<void>;
   memoryExtractor: MemoryExtractor | null;
   /** E8.3: supplemental wiki RAG provider; null until the projection is wired. */
   wikiRetrieval: WikiRetrievalPort | null;
@@ -1376,7 +1394,17 @@ export async function handleMessageForTurn(
       turnMessages,
       trustLevel,
     );
-    const responseAttachments = honorNoReply
+    const artifactSensitivitySources: ArtifactSensitivitySource[] = [
+      ...preTurnState.artifactSensitivitySources,
+      {
+        ref: `turn:${turnId}`,
+        sensitivity: contextEnvelope.channelPrivacy === 'public' ? 'public' : 'personal',
+      },
+    ];
+    const artifactSensitivityClassification = classifyArtifactSensitivity(
+      artifactSensitivitySources,
+    );
+    let responseAttachments = honorNoReply
       ? []
       : recoveredResponse?.attachments
         ? [...recoveredResponse.attachments]
@@ -1391,8 +1419,55 @@ export async function handleMessageForTurn(
             requestId,
             sourceMessageId: message.id,
             ...(userSessionEntryId !== null ? { userSessionEntryId } : {}),
+            sensitivitySources: artifactSensitivitySources,
+            sensitivityClassification: artifactSensitivityClassification,
           },
         });
+
+    if (!recoveredResponse && responseAttachments.length > 0) {
+      const requestAudience = viewerRequestContext.requestAudience;
+      const destination: ArtifactEgressDestination = {
+        audience: requestAudience ?? 'ambiguous',
+        channelId: message.channelId,
+        channelType: message.channelType,
+        surface: message.channelType === 'psfn-amica'
+          ? 'satellite'
+          : message.channelType === 'api'
+            ? 'pwa'
+            : contextEnvelope.broadcast || contextEnvelope.channelPrivacy === 'public'
+              ? 'public_channel'
+              : requestAudience === 'self' || requestAudience === 'primary_contact'
+                ? 'conversation'
+                : 'external',
+      };
+      const egress = await authorizeArtifactEgress({
+        attachments: responseAttachments,
+        classification: artifactSensitivityClassification,
+        destination,
+        deps: {
+          approvalQueue: runtime.artifactApprovalQueue,
+          notifier: runtime.artifactApprovalNotifier,
+          readCurrentClassifications: readGeneratedImageSensitivityClassifications,
+          executeApprovedShare: async (approvedAttachments, approvedDestination) => {
+            if (!runtime.shareApprovedArtifacts) {
+              throw new Error('Approved artifact egress is not wired for this runtime');
+            }
+            await runtime.shareApprovedArtifacts(approvedAttachments, approvedDestination);
+          },
+        },
+      });
+      responseAttachments = egress.attachments;
+      if (egress.disposition === 'queued') {
+        safeResponseText = '';
+        runtime.sessionManager.appendSystemNote(
+          turnSessionIdentity.logicalSessionId,
+          `Artifact share held for V's review because it inherited ${egress.sensitivity} context. `
+            + `Confirmation ${egress.queueEntry.id} is pending; the artifact remains in the personal gallery.`,
+          'artifact_egress_approval',
+          turnSessionIdentity.sourceChannelId,
+        );
+      }
+    }
 
     if (rejectsMissingImageAttachmentClaim({
       responseText: safeResponseText,

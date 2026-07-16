@@ -803,6 +803,76 @@ describe('MemoryRetriever trust-gated filtering', () => {
     }
   });
 
+  it('gives an audience=self free-time creation full memory access', async () => {
+    const intimateSelfMemory = makeMemory({
+      id: 'self-creation-private-context',
+      text: 'A private relationship detail available during self-creation.',
+      sensitivity: 'confidential',
+      tags: ['self_experience'],
+      similarity: 0.99,
+    });
+    const eventBus = new EventBus();
+    const telemetry: Array<EventMap['memory.retrieval']> = [];
+    eventBus.on('memory.retrieval', payload => telemetry.push(payload));
+    const retriever = new MemoryRetriever(
+      makeMockStore([intimateSelfMemory]),
+      makeMockEmbedding(),
+      { retrievalLimit: 20 },
+      eventBus,
+    );
+
+    const result = await runWithRequestContext({
+      channelId: 'internal:free-time:idle',
+      callType: 'background',
+      originType: 'background',
+      originStage: 'free_time.creation.memory_retrieval',
+      purpose: 'free_time.creation.memory_retrieval',
+      requesterProvenance: 'self_directed',
+      requestAudience: 'self',
+    }, () => retriever.retrieve(
+      'make something about the relationship',
+      'internal:free-time:idle',
+      'regular',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { accessScope: 'companion_self_creation' },
+    ));
+
+    expect(result).toContain(intimateSelfMemory.text);
+    expect(telemetry[0]).toMatchObject({
+      accessScope: 'companion_self_creation',
+      sensitivityRejectedCount: 0,
+    });
+  });
+
+  it('fails closed when a free-time self-creation audience is ambiguous', async () => {
+    const retriever = new MemoryRetriever(makeMockStore([]), makeMockEmbedding(), { retrievalLimit: 20 });
+
+    await expect(runWithRequestContext({
+      channelId: 'internal:free-time:idle',
+      callType: 'background',
+      originType: 'background',
+      originStage: 'free_time.creation.memory_retrieval',
+      purpose: 'free_time.creation.memory_retrieval',
+      requesterProvenance: 'self_directed',
+    }, () => retriever.retrieve(
+      'ambiguous audience',
+      'internal:free-time:idle',
+      'regular',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { accessScope: 'companion_self_creation' },
+    ))).rejects.toThrow('trusted audience=self free-time context');
+  });
+
   it('expands bounded evolution chains for useful high-trust private retrieval', async () => {
     const current = makeMemory({
       id: 'workspace-current',

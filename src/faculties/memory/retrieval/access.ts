@@ -245,8 +245,9 @@ export function evaluateRetrievalAccessDecision(
     roomVisibility?: RetrievalRoomVisibilityContext;
   },
 ): RetrievalAccessDecision {
-  const companionSelfReflection = options.accessScope === 'companion_self_reflection';
-  if (!companionSelfReflection) {
+  const companionSelfAccess = options.accessScope === 'companion_self_reflection'
+    || options.accessScope === 'companion_self_creation';
+  if (!companionSelfAccess) {
     const roomDecision = evaluateRoomVisibilityDecision(memory, options);
     if (roomDecision) return roomDecision;
 
@@ -277,7 +278,7 @@ export function evaluateRetrievalAccessDecision(
     || policy.reasonTag === 'visibility.channel_restricted'
     || policy.reasonTag === 'visibility.broadcast_restricted'
   ) {
-    if (companionSelfReflection) {
+    if (companionSelfAccess) {
       return { allowed: true };
     }
     return {

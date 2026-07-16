@@ -462,6 +462,7 @@ describe('registerFreeTimeTasks', () => {
         const channelId = turn.channelId;
         expect(channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)).toBe(true);
         expect(isInternalSessionId(channelId)).toBe(true);
+        expect(turn.audience).toBe('self');
         expect(turn.content).not.toContain('I am Purrsephone');
       }
       // No outbound message was emitted by the block.

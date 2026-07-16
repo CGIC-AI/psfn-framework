@@ -11,6 +11,7 @@
 import type { CorrelationMetadata, LLMWorkSpec } from '../../shared/contracts/runtime.js';
 import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import { buildLLMWorkSpec } from '../../primitives/llm/work-spec.js';
+import { COMPANION_PRIVATE_BACKGROUND_TELEMETRY } from '../../shared/telemetry/model-usage.js';
 
 /**
  * The completion purpose every subagent model call declares. Mirrors the
@@ -21,11 +22,18 @@ import { buildLLMWorkSpec } from '../../primitives/llm/work-spec.js';
 export const SUBAGENT_WORK_SPEC_PURPOSE = 'background' as const;
 
 /**
- * Stable origin stage stamped on the subagent work spec's correlation. Forcing
- * `callType`/`originStage` here (they win the client's correlation merge) keeps
- * the lane derivation deterministic and parity-safe regardless of whatever the
- * bounded turn's own context correlation carries — the only lane-relevant fields
- * that could otherwise leak from context are overridden to background values.
+ * Stable origin stage stamped on a subagent work spec's correlation in the normal
+ * (operator-visible) case. Forcing `callType`/`originStage` (they win the client's
+ * correlation merge) keeps lane derivation deterministic for a non-private context
+ * — those are the lane-relevant fields the single resolver reads on that path.
+ *
+ * This does NOT cover the companion_private case: a `companion_private`
+ * telemetryVisibility short-circuits the single lane resolver, collapsing
+ * origin/purpose to {@link COMPANION_PRIVATE_BACKGROUND_PURPOSE} and thereby
+ * *overriding* this origin stage. That field is lane-relevant too, so it cannot be
+ * neutralized by stamping callType/originStage. {@link buildSubagentWorkSpec}
+ * handles it by adopting the canonical collapsed telemetry shape below, so the
+ * stored correlation agrees with the resolver's short-circuit by construction.
  */
 export const SUBAGENT_WORK_SPEC_ORIGIN_STAGE = 'subagent.turn' as const;
 
@@ -46,14 +54,26 @@ export interface BuildSubagentWorkSpecInput {
  * admission lane (Law 12.4).
  */
 export function buildSubagentWorkSpec(input: BuildSubagentWorkSpecInput = {}): LLMWorkSpec {
+  const context = input.correlation ?? {};
+  // Resolve telemetry visibility deterministically so the declared lane holds
+  // parity by construction. When the context carries companion_private, the single
+  // lane resolver takes its private short-circuit and derives the lane from
+  // COMPANION_PRIVATE_BACKGROUND_PURPOSE — silently overriding a stamped
+  // callType/originStage. Adopt the canonical collapsed background telemetry shape
+  // in that case so the correlation we store is self-consistent with that
+  // short-circuit (originStage/purpose already collapsed); the resolved lane is
+  // then invariant to the short-circuit and the client's private collapse reflects
+  // the spec byte-for-byte. Non-private contexts keep the subagent's background
+  // stamp. Either way the built spec's `lane` is derived from — and stored
+  // alongside — this same correlation, so `assertWorkSpecLaneParity` reconciles by
+  // construction and can never brick a spawn.
+  const correlation: Partial<CorrelationMetadata> = context.telemetryVisibility === 'companion_private'
+    ? { ...context, ...COMPANION_PRIVATE_BACKGROUND_TELEMETRY }
+    : { ...context, callType: 'background', originStage: SUBAGENT_WORK_SPEC_ORIGIN_STAGE };
   return buildLLMWorkSpec({
     purpose: SUBAGENT_WORK_SPEC_PURPOSE,
     durable: false,
-    correlation: {
-      ...(input.correlation ?? {}),
-      callType: 'background',
-      originStage: SUBAGENT_WORK_SPEC_ORIGIN_STAGE,
-    },
+    correlation,
     ...(input.deadlineMs !== undefined ? { deadlineMs: input.deadlineMs } : {}),
     ...(input.maxOutputTokens !== undefined ? { maxOutputTokens: input.maxOutputTokens } : {}),
   });

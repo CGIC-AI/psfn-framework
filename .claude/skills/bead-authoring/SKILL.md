@@ -55,6 +55,23 @@ as evidence.
   file P2 and say why in the description — priority inflation buries
   real P1s.
 
+## Labels
+
+Every bead carries two labels, applied at creation with
+`bd create ... -l kind:<kind>,system:<system>`:
+
+- `kind` — one of `bug`, `feat`, `chore`, `design`. This is the scannable
+  category and is orthogonal to bd's `-t` type (which stays
+  `bug`/`feature`/`task`/`epic` for workflow).
+- `system` — the subsystem the bead touches, one of: `memory`, `session`,
+  `scheduler`, `garden`, `helm-ops`, `agent-tooling`, `metacog`, `emotion`,
+  `channels`, `cogsec`, `persistence`, `voice`, `world`, `docs`, `fleet-auth`,
+  `companion-ui`, `icp`, `shards`, `prompts`, `testing`.
+
+Two labels make a bare `bd list` row identify kind and system without a
+`bd show`. Pick the single closest `system`; if a bead genuinely spans two,
+label the primary one and name the other in the description.
+
 ## Linking
 
 - Child of an epic: use the parent's ID scheme or note the parent in the

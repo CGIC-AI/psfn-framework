@@ -46,6 +46,11 @@ Rules:
 - If `bd ready --json` is empty but you are doing user-requested tracked work, create a self-contained issue before editing code.
 - Link discovered follow-up work with `discovered-from:<parent-id>`.
 - Keep issue descriptions self-contained: summary, files, concrete steps, and an example when useful.
+- **Label taxonomy (apply at creation).** Every bead carries two labels — a `kind` and a `system` — set with `bd create ... -l kind:<kind>,system:<system>`:
+  - `kind` ∈ `bug` | `feat` | `chore` | `design` (the scannable category; orthogonal to bd's `-t` type, which stays `bug`/`feature`/`task`/`epic` for workflow).
+  - `system` ∈ `memory` | `session` | `scheduler` | `garden` | `helm-ops` | `agent-tooling` | `metacog` | `emotion` | `channels` | `cogsec` | `persistence` | `voice` | `world` | `docs` | `fleet-auth` | `companion-ui` | `icp` | `shards` | `prompts` | `testing`.
+
+  This makes a bare `bd list` row self-describing and lets triage filter, e.g. `bd list --label kind:bug --label system:memory` (AND) or `bd list --label-pattern 'system:*'`.
 
 ## Source Of Truth
 

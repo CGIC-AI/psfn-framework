@@ -412,8 +412,10 @@ describe('wireHeartbeatRuntime', () => {
       const valuesCall = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls.find(
         (call) => call[0]?.channelId === 'internal:reflection:weekly-review',
       );
-      expect(valuesCall?.[0]?.content).toContain('[Reflection Self Evidence]');
-      expect(valuesCall?.[0]?.content).toContain('[What this evidence is]');
+      expect(valuesCall?.[0]?.content).toContain('[Reflection Introspection Policy]');
+      expect(valuesCall?.[0]?.content).toContain('memory_access_scope: companion_self_reflection');
+      expect(valuesCall?.[0]?.content).toContain('[Week Events Starter]');
+      expect(valuesCall?.[0]?.content).toContain('[High-Signal Starter Clues]');
       expect(valuesCall?.[0]?.content).not.toContain('serialized_internal_state:');
     } finally {
       nowSpy.mockRestore();
@@ -445,11 +447,17 @@ describe('wireHeartbeatRuntime', () => {
       registerTool: vi.fn(),
     };
     const narrative = createInternalStateNarrativeFixture();
+    const authoritativeSystemPrompt = [
+      '<immutable_human_safety_amendments>PARITY_POLICY_SENTINEL</immutable_human_safety_amendments>',
+      '<identity>PARITY_IDENTITY_SENTINEL</identity>',
+      '<runtime_emotional_affect>PARITY_AFFECT_SENTINEL</runtime_emotional_affect>',
+    ].join('\n\n');
     const agentLoop = {
       handleMessage: vi.fn().mockResolvedValue({ content: 'fallback response' }),
       getCurrentInternalState: vi.fn(() => narrative.internalState),
       getCurrentInternalStateSnapshotRef: vi.fn(() => narrative.snapshotRef),
       getCurrentMetacognitiveFlags: vi.fn(() => narrative.metacognitiveFlags),
+      getCurrentAuthoritativeSystemPrompt: vi.fn(() => authoritativeSystemPrompt),
     };
     const sender = {
       send: vi.fn().mockResolvedValue(undefined),
@@ -535,17 +543,27 @@ describe('wireHeartbeatRuntime', () => {
       nowSpy.mockReturnValue(1_700_000_000_000 + task!.intervalMs + 1);
       await scheduler.tick();
 
-      const handledChannels = (agentLoop.handleMessage as ReturnType<typeof vi.fn>).mock.calls
-        .map(call => call[0]?.channelId);
-      expect(handledChannels).not.toContain('internal:reflection:weekly-review');
+      const reflectionCalls = agentLoop.handleMessage.mock.calls
+        .filter(call => call[0]?.channelId === 'internal:reflection:weekly-review');
+      expect(reflectionCalls).toHaveLength(1);
+      expect(reflectionCalls[0]?.[0]?.routing?.reflectionTurn).toMatchObject({
+        schemaVersion: 1,
+        stage: 'tool_grounding',
+        templateId: 'weekly-review',
+        mode: 'deliberation',
+      });
+      expect(reflectionCalls[0]?.[0]?.content).toContain('[Reflection Introspection Policy]');
+      expect(reflectionCalls[0]?.[0]?.content).toContain('[Week Events Starter]');
+      expect(reflectionCalls[0]?.[0]?.content).toContain('[Read-only Tool Grounding Task]');
       const valuesDeliberationCalls = (llmProvider.complete as ReturnType<typeof vi.fn>).mock.calls
-        .filter((call) => (
-          typeof call[0]?.messages?.[0]?.content === 'string'
-          && call[0].messages[0].content.includes('north-star signals that feel durable')
+        .filter(call => (
+          call[2]?.correlation?.originStage === 'heartbeat.deliberation.evidence'
+          && call[2]?.correlation?.channelId === 'internal:reflection:weekly-review'
         ));
       expect(valuesDeliberationCalls.map((call) => call[1])).toEqual(['reasoning']);
       const firstDeliberationCall = valuesDeliberationCalls[0]?.[0] as
         | {
+          systemPrompt?: string;
           messages?: Array<{ content?: string }>;
         }
         | undefined;
@@ -557,8 +575,13 @@ describe('wireHeartbeatRuntime', () => {
       expect(firstDeliberationCall?.messages?.[0]?.content).not.toContain(
         '<appearance_context>',
       );
-      expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Reflection Self Evidence]');
+      expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Reflection Introspection Policy]');
+      expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Week Events Starter]');
+      expect(firstDeliberationCall?.messages?.[0]?.content).toContain('[Read-only Tool Grounding]');
       expect(firstDeliberationCall?.messages?.[0]?.content).not.toContain(`snapshot_ref: ${narrative.snapshotRef}`);
+      expect(firstDeliberationCall?.systemPrompt).toContain('PARITY_POLICY_SENTINEL');
+      expect(firstDeliberationCall?.systemPrompt).toContain('PARITY_IDENTITY_SENTINEL');
+      expect(firstDeliberationCall?.systemPrompt).toContain('PARITY_AFFECT_SENTINEL');
       expect(firstDeliberationOptions?.correlation).toMatchObject({
         callType: 'scheduled',
         originType: 'scheduled',
@@ -659,7 +682,9 @@ describe('wireHeartbeatRuntime', () => {
       expect(metacognitionEntry.initiatorSurface).toBe('scheduler:reflection_template');
       expect(metacognitionEntry.reason).toBe('Scheduled reflection run');
       expect(metacognitionEntry.reflectionJournalEntryId).toBeDefined();
-      expect(metacognitionEntry.prompt).toContain('[Reflection Self Evidence]');
+      expect(metacognitionEntry.prompt).toContain('[Reflection Introspection Policy]');
+      expect(metacognitionEntry.prompt).toContain('[Week Events Starter]');
+      expect(metacognitionEntry.prompt).toContain('[Read-only Tool Grounding]');
       expect(metacognitionEntry.prompt).not.toContain('serialized_internal_state:');
     } finally {
       nowSpy.mockRestore();
@@ -710,10 +735,15 @@ describe('wireHeartbeatRuntime', () => {
       (call) => call[0]?.channelId === 'internal:reflection:daily-review',
     );
     expect(experientialCall).toBeDefined();
-    expect(experientialCall?.[0]?.content).toContain('[Reflection Self Evidence]');
+    expect(experientialCall?.[0]?.content).toContain('[Reflection Introspection Policy]');
+    expect(experientialCall?.[0]?.content).toContain('memory_access_scope: companion_self_reflection');
+    expect(experientialCall?.[0]?.content).toContain('[Day Events Starter]');
+    expect(experientialCall?.[0]?.content).toContain('[High-Signal Starter Clues]');
     expect(experientialCall?.[0]?.content).not.toContain(`snapshot_ref: ${narrative.snapshotRef}`);
-    expect(experientialCall?.[0]?.content).toContain('[Recent Metacognitive Flags]');
-    expect(experientialCall?.[0]?.content).toContain('[Active Concerns]');
+    expect(experientialCall?.[0]?.content).toContain('Keep reflections grounded in lived experience');
+    expect(experientialCall?.[0]?.content).not.toContain('[Reflection Self Evidence]');
+    expect(experientialCall?.[0]?.content).not.toContain('[Recent Metacognitive Flags]');
+    expect(experientialCall?.[0]?.content).not.toContain('[Active Concerns]');
   });
 
   it('defers manual template runs when the agent is busy and executes them after idle', async () => {

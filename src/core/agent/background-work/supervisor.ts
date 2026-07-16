@@ -5,6 +5,7 @@ import { createComponentLogger } from '../../../shared/logger.js';
 import { emitTurnPerformance } from '../../../shared/telemetry/turn-performance.js';
 import type { TurnPerformanceDeferReason } from '../../../shared/telemetry/turn-performance.js';
 import type { BackgroundWorkStorePort } from './store-port.js';
+import type { BackgroundWorkSupervisorTuning } from './config.js';
 import {
   BACKGROUND_WORK_KINDS,
   assertClaimedBackgroundWorkBinding,
@@ -17,13 +18,6 @@ import {
 } from './types.js';
 
 const log = createComponentLogger('BackgroundWorkSupervisor');
-const DEFAULT_MAX_CONCURRENT_SESSIONS = 4;
-const DEFAULT_LEASE_DURATION_MS = 5 * 60_000;
-const DEFAULT_RETRY_BASE_DELAY_MS = 1_000;
-const DEFAULT_RETRY_MAX_DELAY_MS = 5 * 60_000;
-const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
-const DEFAULT_TERMINAL_RETENTION_MS = 7 * 24 * 60 * 60_000;
-const DEFAULT_CLEANUP_INTERVAL_MS = 60 * 60_000;
 const TERMINAL_PURGE_BATCH_SIZE = 500;
 
 export interface BackgroundWorkExecutionInput {
@@ -49,19 +43,12 @@ export type BackgroundWorkExecutor = (
   input: BackgroundWorkExecutionInput,
 ) => Promise<void>;
 
-export interface BackgroundWorkSupervisorOptions {
+export interface BackgroundWorkSupervisorOptions extends BackgroundWorkSupervisorTuning {
   store: BackgroundWorkStorePort;
   eventBus: EventBus;
   executor: BackgroundWorkExecutor;
   now?: () => number;
   leaseOwner?: string;
-  maxConcurrentSessions?: number;
-  leaseDurationMs?: number;
-  retryBaseDelayMs?: number;
-  retryMaxDelayMs?: number;
-  shutdownTimeoutMs?: number;
-  terminalRetentionMs?: number;
-  cleanupIntervalMs?: number;
 }
 
 export interface ForegroundWorkLease {
@@ -134,20 +121,18 @@ export class BackgroundWorkPermanentError extends Error {
   }
 }
 
-function normalizePositiveInteger(value: number | undefined, fallback: number, field: string): number {
-  const normalized = value ?? fallback;
-  if (!Number.isSafeInteger(normalized) || normalized < 1) {
+function requirePositiveInteger(value: number, field: string): number {
+  if (!Number.isSafeInteger(value) || value < 1) {
     throw new Error(`${field} must be a positive safe integer`);
   }
-  return normalized;
+  return value;
 }
 
-function normalizeNonNegativeInteger(value: number | undefined, fallback: number, field: string): number {
-  const normalized = value ?? fallback;
-  if (!Number.isSafeInteger(normalized) || normalized < 0) {
+function requireNonNegativeInteger(value: number, field: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${field} must be a non-negative safe integer`);
   }
-  return normalized;
+  return value;
 }
 
 function isBackgroundWorkKind(value: string): value is BackgroundWorkKind {
@@ -204,39 +189,35 @@ export class BackgroundWorkSupervisor {
     this.executor = options.executor;
     this.now = options.now ?? Date.now;
     this.leaseOwner = options.leaseOwner?.trim() || `background-supervisor:${randomUUID()}`;
-    this.maxConcurrentSessions = normalizePositiveInteger(
+    this.maxConcurrentSessions = requirePositiveInteger(
       options.maxConcurrentSessions,
-      DEFAULT_MAX_CONCURRENT_SESSIONS,
       'maxConcurrentSessions',
     );
-    this.leaseDurationMs = normalizePositiveInteger(
+    this.leaseDurationMs = requirePositiveInteger(
       options.leaseDurationMs,
-      DEFAULT_LEASE_DURATION_MS,
       'leaseDurationMs',
     );
-    this.retryBaseDelayMs = normalizePositiveInteger(
+    this.retryBaseDelayMs = requirePositiveInteger(
       options.retryBaseDelayMs,
-      DEFAULT_RETRY_BASE_DELAY_MS,
       'retryBaseDelayMs',
     );
-    this.retryMaxDelayMs = normalizePositiveInteger(
+    this.retryMaxDelayMs = requirePositiveInteger(
       options.retryMaxDelayMs,
-      DEFAULT_RETRY_MAX_DELAY_MS,
       'retryMaxDelayMs',
     );
-    this.shutdownTimeoutMs = normalizeNonNegativeInteger(
+    if (this.retryMaxDelayMs < this.retryBaseDelayMs) {
+      throw new Error('retryMaxDelayMs must be greater than or equal to retryBaseDelayMs');
+    }
+    this.shutdownTimeoutMs = requireNonNegativeInteger(
       options.shutdownTimeoutMs,
-      DEFAULT_SHUTDOWN_TIMEOUT_MS,
       'shutdownTimeoutMs',
     );
-    this.terminalRetentionMs = normalizePositiveInteger(
+    this.terminalRetentionMs = requirePositiveInteger(
       options.terminalRetentionMs,
-      DEFAULT_TERMINAL_RETENTION_MS,
       'terminalRetentionMs',
     );
-    this.cleanupIntervalMs = normalizePositiveInteger(
+    this.cleanupIntervalMs = requirePositiveInteger(
       options.cleanupIntervalMs,
-      DEFAULT_CLEANUP_INTERVAL_MS,
       'cleanupIntervalMs',
     );
   }

@@ -15,7 +15,9 @@ import {
   BackgroundWorkDeferredError,
   BackgroundWorkPermanentError,
   BackgroundWorkSupervisor,
+  type BackgroundWorkSupervisorOptions,
 } from './supervisor.js';
+import type { BackgroundWorkSupervisorTuning } from './config.js';
 import type {
   BackgroundWorkReasonCode,
   ClaimedBackgroundWorkJob,
@@ -27,6 +29,29 @@ import {
   fingerprintBackgroundWorkPayload,
   type MemoryExtractionBackgroundPayload,
 } from './types.js';
+
+const TEST_BACKGROUND_WORK_SUPERVISOR_TUNING: BackgroundWorkSupervisorTuning = {
+  maxConcurrentSessions: 4,
+  leaseDurationMs: 300_000,
+  retryBaseDelayMs: 1_000,
+  retryMaxDelayMs: 300_000,
+  shutdownTimeoutMs: 5_000,
+  terminalRetentionMs: 604_800_000,
+  cleanupIntervalMs: 3_600_000,
+};
+
+type TestBackgroundWorkSupervisorOptions =
+  Omit<BackgroundWorkSupervisorOptions, keyof BackgroundWorkSupervisorTuning>
+  & Partial<BackgroundWorkSupervisorTuning>;
+
+function createBackgroundWorkSupervisor(
+  options: TestBackgroundWorkSupervisorOptions,
+): BackgroundWorkSupervisor {
+  return new BackgroundWorkSupervisor({
+    ...TEST_BACKGROUND_WORK_SUPERVISOR_TUNING,
+    ...options,
+  });
+}
 
 function deferred<T = void>(): {
   promise: Promise<T>;
@@ -609,7 +634,7 @@ describe('BackgroundWorkSupervisor', () => {
     const store = new MemoryBackgroundWorkStore();
     const slow = deferred();
     const started: string[] = [];
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => 1_000,
@@ -636,7 +661,7 @@ describe('BackgroundWorkSupervisor', () => {
   it('durably defers unstarted same-session work during foreground activity and resumes it', async () => {
     const store = new MemoryBackgroundWorkStore();
     const executor = vi.fn(async () => undefined);
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => 1_000,
@@ -666,7 +691,7 @@ describe('BackgroundWorkSupervisor', () => {
     const claimEnteredExecutor = deferred();
     const continueToEffect = deferred();
     const effect = vi.fn(async () => undefined);
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => now,
@@ -710,7 +735,7 @@ describe('BackgroundWorkSupervisor', () => {
     const store = new MemoryBackgroundWorkStore();
     let attempts = 0;
     let writes = 0;
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => now,
@@ -760,7 +785,7 @@ describe('BackgroundWorkSupervisor', () => {
     const store = new MemoryBackgroundWorkStore();
     let attempts = 0;
     let writes = 0;
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => now,
@@ -807,7 +832,7 @@ describe('BackgroundWorkSupervisor', () => {
     vi.useFakeTimers();
     let now = 1_000;
     const store = new MemoryBackgroundWorkStore();
-    const first = new BackgroundWorkSupervisor({
+    const first = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       leaseOwner: 'foreground-replica',
@@ -816,7 +841,7 @@ describe('BackgroundWorkSupervisor', () => {
       executor: async () => undefined,
     });
     const effect = vi.fn(async () => undefined);
-    const second = new BackgroundWorkSupervisor({
+    const second = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       leaseOwner: 'background-replica',
@@ -872,7 +897,7 @@ describe('BackgroundWorkSupervisor', () => {
       effectStarted.resolve();
       await completeEffect.promise;
     });
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => 1_000,
@@ -901,7 +926,7 @@ describe('BackgroundWorkSupervisor', () => {
     const executor = vi.fn()
       .mockRejectedValueOnce(new Error('transient'))
       .mockResolvedValue(undefined);
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => now,
@@ -926,7 +951,7 @@ describe('BackgroundWorkSupervisor', () => {
     let hookAttempts = 0;
     let sinkWrites = 0;
     const store = new MemoryBackgroundWorkStore();
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => now,
@@ -969,7 +994,7 @@ describe('BackgroundWorkSupervisor', () => {
     let now = 1_000;
     let sinkWrites = 0;
     const store = new MemoryBackgroundWorkStore();
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => now,
@@ -1012,7 +1037,7 @@ describe('BackgroundWorkSupervisor', () => {
     const store = new MemoryBackgroundWorkStore();
     let firstSinkWrites = 0;
     let secondSinkWrites = 0;
-    const first = new BackgroundWorkSupervisor({
+    const first = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       leaseOwner: 'first',
@@ -1044,7 +1069,7 @@ describe('BackgroundWorkSupervisor', () => {
     expect(await store.get(input.jobId)).toMatchObject({ state: 'queued', reasonCode: 'shutdown' });
     expect(firstSinkWrites).toBe(0);
 
-    const second = new BackgroundWorkSupervisor({
+    const second = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       leaseOwner: 'second',
@@ -1065,7 +1090,7 @@ describe('BackgroundWorkSupervisor', () => {
 
   it('surfaces a shutdown requeue failure and permits a bounded retry without consuming an attempt', async () => {
     const store = new MemoryBackgroundWorkStore();
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       leaseOwner: 'first',
@@ -1102,7 +1127,7 @@ describe('BackgroundWorkSupervisor', () => {
   it('fails malformed persisted payloads closed without invoking a handler', async () => {
     const store = new MemoryBackgroundWorkStore();
     const executor = vi.fn(async () => undefined);
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => 1_000,
@@ -1125,7 +1150,7 @@ describe('BackgroundWorkSupervisor', () => {
   it('recomputes claim-time fingerprints and rejects valid payloads rebound to another session', async () => {
     const store = new MemoryBackgroundWorkStore();
     const executor = vi.fn(async () => undefined);
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => 1_000,
@@ -1157,7 +1182,7 @@ describe('BackgroundWorkSupervisor', () => {
 
   it('records a permanent source failure as failed, never stale-discarded', async () => {
     const store = new MemoryBackgroundWorkStore();
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => 1_000,
@@ -1183,7 +1208,7 @@ describe('BackgroundWorkSupervisor', () => {
     const eventBus = new EventBus();
     const events: Array<Record<string, unknown>> = [];
     eventBus.on('agent.turn.performance', event => { events.push(event); });
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus,
       now: () => now,

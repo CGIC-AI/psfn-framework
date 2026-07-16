@@ -21,6 +21,7 @@ import { MemoryExtractor as RealMemoryExtractor } from '../../../faculties/memor
 import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
 import { ModelCallPreemptedError } from '../../../primitives/llm/model-call-gate.js';
 import { executePostTurnBackgroundWork } from './post-turn-runtime.js';
+import type { BackgroundWorkPostTurnTuning } from './config.js';
 import {
   BackgroundWorkDeferredError,
   BackgroundWorkPermanentError,
@@ -36,6 +37,10 @@ import {
 } from './types.js';
 
 const TURN_ID = '019d2326-d9e1-701d-bcee-250d2cbb0e4e';
+const TEST_POST_TURN_TUNING: BackgroundWorkPostTurnTuning = {
+  extractionDrainRequeueDelayMs: 1_000,
+  foregroundPreemptionDeferDelayMs: 1_000,
+};
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -211,6 +216,7 @@ function makeDependencies(input: {
   recentEntries?: SessionEntry[];
   liveRecentEntries?: SessionEntry[];
   boundedSnapshotLimit?: number;
+  tuning?: BackgroundWorkPostTurnTuning;
 }) {
   const findSourceRecordedTurn = vi.fn(() => input.record);
   const isSourceRecordedTurnEligible = vi.fn(() => true);
@@ -260,6 +266,7 @@ function makeDependencies(input: {
       runIntentionPostTurnHooks,
       emotionRuntime: { triggerEmotionAppraisal },
       getEmotionTemplateVariables: () => ({ personality: 'current canonical personality' }),
+      tuning: input.tuning ?? TEST_POST_TURN_TUNING,
       now: () => input.now ?? 100,
     },
     findSourceRecordedTurn,
@@ -625,7 +632,14 @@ describe('executePostTurnBackgroundWork', () => {
         }),
       },
     ];
-    const fixture = makeDependencies({ record, recentEntries: sourceEntries });
+    const fixture = makeDependencies({
+      record,
+      recentEntries: sourceEntries,
+      tuning: {
+        ...TEST_POST_TURN_TUNING,
+        extractionDrainRequeueDelayMs: 1_234,
+      },
+    });
     const groupStarted = deferred();
     const releaseGroup = deferred();
     const complete = vi.fn(async () => {
@@ -698,6 +712,7 @@ describe('executePostTurnBackgroundWork', () => {
       expect.objectContaining<Partial<BackgroundWorkDeferredError>>({
         name: 'BackgroundWorkDeferredError',
         reasonCode: 'source_not_ready',
+        delayMs: 1_234,
       }),
     );
     // B never ran its own extraction LLM (threw before the boundary crossing).
@@ -1245,6 +1260,7 @@ describe('executePostTurnBackgroundWork', () => {
         runIntentionPostTurnHooks: vi.fn(async () => undefined),
         emotionRuntime: { triggerEmotionAppraisal },
         getEmotionTemplateVariables: () => ({ personality: 'canonical personality' }),
+        tuning: TEST_POST_TURN_TUNING,
       };
 
       await executePostTurnBackgroundWork({
@@ -1362,7 +1378,15 @@ describe('executePostTurnBackgroundWork', () => {
       'foreground_chat',
     );
     const maybeExtract = vi.fn(async () => { throw preempted; });
-    const { dependencies } = makeDependencies({ record, recentEntries, maybeExtract });
+    const { dependencies } = makeDependencies({
+      record,
+      recentEntries,
+      maybeExtract,
+      tuning: {
+        ...TEST_POST_TURN_TUNING,
+        foregroundPreemptionDeferDelayMs: 2_345,
+      },
+    });
 
     const error = await executePostTurnBackgroundWork(execution, dependencies)
       .then(() => null)
@@ -1371,5 +1395,6 @@ describe('executePostTurnBackgroundWork', () => {
     expect(maybeExtract).toHaveBeenCalledTimes(1);
     expect(error).toBeInstanceOf(BackgroundWorkDeferredError);
     expect((error as BackgroundWorkDeferredError).reasonCode).toBe('foreground_active');
+    expect((error as BackgroundWorkDeferredError).delayMs).toBe(2_345);
   });
 });

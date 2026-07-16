@@ -162,6 +162,7 @@ import {
 } from './substrate-agent/turn-execution-runtime.js';
 import { createTurnExecutionRuntimeAdapter } from './substrate-agent/turn-execution-adapter.js';
 import { parseTurnRecordBackgroundWorkHandoff } from './background-work/types.js';
+import type { BackgroundWorkRuntimeTuning } from './background-work/config.js';
 import { CompletionNoticeBuffer } from './completion-notices.js';
 import {
   refreshModelFromConfig as refreshModelFromConfigForRuntime,
@@ -249,8 +250,19 @@ export interface SubstrateAgentOptions {
    */
   placesRegistryConfig?: PlacesRegistryConfig;
   backgroundWorkStore?: BackgroundWorkStorePort;
+  /** Required scheduler.json-owned tuning whenever durable background work is enabled. */
+  backgroundWorkTuning?: BackgroundWorkRuntimeTuning;
   /** Explicitly omit post-turn jobs for ephemeral/test agents with no durable owner. */
   backgroundWorkDisabled?: boolean;
+}
+
+function requireBackgroundWorkTuning(
+  tuning: BackgroundWorkRuntimeTuning | undefined,
+): BackgroundWorkRuntimeTuning {
+  if (!tuning) {
+    throw new Error('SubstrateAgent requires scheduler-owned durable background work tuning');
+  }
+  return tuning;
 }
 const DEFAULT_TOOL_SCHEDULER_MAX_PARALLEL = 5;
 const BACKGROUND_WORK_HANDOFF_RECOVERY_BATCH_SIZE = 32;
@@ -486,9 +498,13 @@ export class SubstrateAgent {
     config: CoreSubstrateConfig,
     options?: SubstrateAgentOptions,
   ) {
-    if (!options?.backgroundWorkStore && options?.backgroundWorkDisabled !== true) {
+    const backgroundWorkStore = options?.backgroundWorkStore;
+    if (!backgroundWorkStore && options?.backgroundWorkDisabled !== true) {
       throw new Error('SubstrateAgent requires a durable background work store');
     }
+    const backgroundWorkTuning = backgroundWorkStore
+      ? requireBackgroundWorkTuning(options.backgroundWorkTuning)
+      : null;
     this.eventBus = eventBus;
     this.llmClient = llmClient;
     this.sessionManager = sessionManager;
@@ -537,9 +553,10 @@ export class SubstrateAgent {
     });
     this.emotionSelfModelRuntime.assertEmotionRuntimeConfigured();
 
-    this.backgroundWorkSupervisor = options.backgroundWorkStore
-      ? new BackgroundWorkSupervisor({
-        store: options.backgroundWorkStore,
+    if (backgroundWorkStore && backgroundWorkTuning) {
+      this.backgroundWorkSupervisor = new BackgroundWorkSupervisor({
+        ...backgroundWorkTuning.supervisor,
+        store: backgroundWorkStore,
         eventBus: this.eventBus,
         executor: (input) => executePostTurnBackgroundWork(input, {
           sessionManager: this.sessionManager,
@@ -549,9 +566,12 @@ export class SubstrateAgent {
             .runIntentionPostTurnHooks(context, runOptions),
           emotionRuntime: this.emotionSelfModelRuntime,
           getEmotionTemplateVariables: () => this.resolveCharacterPromptVariables(),
+          tuning: backgroundWorkTuning.postTurn,
         }),
-      })
-      : null;
+      });
+    } else {
+      this.backgroundWorkSupervisor = null;
+    }
 
     const defaultStreamTransport = options.streamTransport ?? {
       stream: this.llmClient.stream.bind(this.llmClient),

@@ -37,6 +37,7 @@ import type {
   IntentionRuntimeWiring,
 } from '../../core/intention/runtime-wiring.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
+import type { BackgroundWorkRuntimeTuning } from '../../core/agent/background-work/config.js';
 
 const log = createComponentLogger('Agent');
 
@@ -64,6 +65,7 @@ export interface BootstrapAgentCoreRuntimeOptions {
   memoryStore: MemoryStorePort;
   episodicStore: EpisodicStorePort;
   backgroundWorkStore: BackgroundWorkStorePort;
+  backgroundWorkTuning: BackgroundWorkRuntimeTuning;
   contactStore?: ContactStorePort;
   /** Hub identity ↔ contact enrollment store (S10 D2a). Enables face identity-claim resolution (bead .13). */
   hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort;
@@ -90,6 +92,7 @@ export async function bootstrapAgentCoreRuntime(
     memoryStore,
     episodicStore,
     backgroundWorkStore,
+    backgroundWorkTuning,
     contactStore,
     intentionRuntime,
     intentionProviders,
@@ -141,6 +144,7 @@ export async function bootstrapAgentCoreRuntime(
     memoryStore,
     episodicStore,
     backgroundWorkStore,
+    backgroundWorkTuning,
     contactStore,
     ...(options.hubIdentityEnrollmentStore
       ? { hubIdentityEnrollmentStore: options.hubIdentityEnrollmentStore }

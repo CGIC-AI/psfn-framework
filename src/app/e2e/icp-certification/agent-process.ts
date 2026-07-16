@@ -228,6 +228,7 @@ async function main(): Promise<void> {
     fatigueBudget: fatigue.fatigueBudget,
     fatigueRegulationReservations: fatigueReservations,
     backgroundWorkStore: persistence.backgroundWorkStore,
+    backgroundWorkTuning: startup.schedulerConfig.backgroundWork,
     streamTransport: { stream: gateway.stream.bind(gateway) },
   });
   const chargeLedger = new RunChargeLedger(

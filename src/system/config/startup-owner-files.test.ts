@@ -7,6 +7,7 @@ import { loadModelsConfig, saveModelsConfig } from './models-config.js';
 import { loadProvidersConfig, saveProvidersConfig } from './providers-config.js';
 import { loadTrustPolicyConfig, saveTrustPolicyConfig } from './trust-policy-config.js';
 import {
+  DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
   saveSchedulerConfig,
 } from './scheduler-config.js';
@@ -107,6 +108,7 @@ describe('startup owner-file loaders', () => {
           maxActiveConcerns: 7,
         },
       },
+      backgroundWork: structuredClone(DEFAULT_BACKGROUND_WORK_TUNING),
       artifactLifecycle: {
         scratchpadRetentionDays: 7,
         generatedMediaRetentionDays: 30,
@@ -381,6 +383,14 @@ describe('startup owner-file loaders', () => {
           concernGrooming: {
             maxActiveConcerns: 7,
           },
+        },
+        backgroundWork: structuredClone(DEFAULT_BACKGROUND_WORK_TUNING),
+        episodicProcessing: {
+          enabled: true,
+          startLocalTime: '00:00',
+          endLocalTime: '09:00',
+          timeZone: 'local',
+          inactivityThresholdMinutes: 60,
         },
       }, null, 2)}\n`,
       'utf-8',

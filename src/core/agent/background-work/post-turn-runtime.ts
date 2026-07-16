@@ -20,14 +20,9 @@ import {
   type BackgroundWorkPayload,
   type BackgroundWorkSourceRef,
 } from './types.js';
+import type { BackgroundWorkPostTurnTuning } from './config.js';
 
 const SOURCE_RECORD_GRACE_MS = 60_000;
-// u5bv.11: a durable bounded extraction that failed closed because the extractor
-// drained defers rather than consuming a retry attempt. A slightly longer delay
-// than the source-not-ready grace avoids a hot re-defer loop if the extractor is
-// drained while the supervisor is still claiming; the job survives shutdown as a
-// deferred row and its exact snapshot re-runs on a fresh (accepting) process.
-const EXTRACTION_DRAIN_REQUEUE_DELAY_MS = 1_000;
 
 export interface PostTurnBackgroundRuntimeDependencies {
   sessionManager: SessionManager;
@@ -39,6 +34,7 @@ export interface PostTurnBackgroundRuntimeDependencies {
   ) => Promise<void>;
   emotionRuntime: Pick<EmotionSelfModelRuntime, 'triggerEmotionAppraisal'>;
   getEmotionTemplateVariables: () => Record<string, string>;
+  tuning: BackgroundWorkPostTurnTuning;
   now?: () => number;
 }
 
@@ -180,12 +176,6 @@ function requireSourceSessionEntry(
   }
 }
 
-// A preempted background model call defers by this delay: enough for the
-// foreground turn that preempted it to progress before the job is re-claimed.
-// This mirrors the supervisor's own foreground_active defer delay and consumes
-// NO attempt (defer, not failOrRetry).
-const FOREGROUND_PREEMPTION_DEFER_DELAY_MS = 1_000;
-
 /**
  * Post-turn background executor with model-call-gate preemption mapping.
  *
@@ -209,7 +199,7 @@ export async function executePostTurnBackgroundWork(
     if (error instanceof Error && error.name === 'ModelCallPreemptedError') {
       throw new BackgroundWorkDeferredError(
         'foreground_active',
-        FOREGROUND_PREEMPTION_DEFER_DELAY_MS,
+        dependencies.tuning.foregroundPreemptionDeferDelayMs,
       );
     }
     throw error;
@@ -274,7 +264,7 @@ async function runPostTurnBackgroundWork(
           if (error instanceof Error && error.name === 'ExtractionDrainRequeueError') {
             throw new BackgroundWorkDeferredError(
               'source_not_ready',
-              EXTRACTION_DRAIN_REQUEUE_DELAY_MS,
+              dependencies.tuning.extractionDrainRequeueDelayMs,
             );
           }
           throw error;

@@ -333,6 +333,7 @@ async function main(): Promise<void> {
     memoryStore: companionMemoryStore,
     episodicStore: companionEpisodicStore,
     backgroundWorkStore,
+    backgroundWorkTuning: schedulerConfig.backgroundWork,
     contactStore: persistedContactStore,
     intentionRuntime: persistedIntentionRuntime,
     intentionProviders,

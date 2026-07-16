@@ -15,7 +15,9 @@ import {
 import {
   BackgroundWorkDeferredError,
   BackgroundWorkSupervisor,
+  type BackgroundWorkSupervisorOptions,
 } from '../../core/agent/background-work/supervisor.js';
+import type { BackgroundWorkSupervisorTuning } from '../../core/agent/background-work/config.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { createPostgresPool } from '../postgres.js';
 import {
@@ -43,6 +45,29 @@ import {
   runExtractionOrchestration,
   type ExtractionRunOptions,
 } from '../../faculties/memory/extraction/orchestrator.js';
+
+const TEST_BACKGROUND_WORK_SUPERVISOR_TUNING: BackgroundWorkSupervisorTuning = {
+  maxConcurrentSessions: 4,
+  leaseDurationMs: 300_000,
+  retryBaseDelayMs: 1_000,
+  retryMaxDelayMs: 300_000,
+  shutdownTimeoutMs: 5_000,
+  terminalRetentionMs: 604_800_000,
+  cleanupIntervalMs: 3_600_000,
+};
+
+type TestBackgroundWorkSupervisorOptions =
+  Omit<BackgroundWorkSupervisorOptions, keyof BackgroundWorkSupervisorTuning>
+  & Partial<BackgroundWorkSupervisorTuning>;
+
+function createBackgroundWorkSupervisor(
+  options: TestBackgroundWorkSupervisorOptions,
+): BackgroundWorkSupervisor {
+  return new BackgroundWorkSupervisor({
+    ...TEST_BACKGROUND_WORK_SUPERVISOR_TUNING,
+    ...options,
+  });
+}
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -301,7 +326,7 @@ describe('PostgresBackgroundWorkStore', () => {
       max: 1,
     });
     const executor = vi.fn(async () => undefined);
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       leaseOwner: 'payload-validation-worker',
@@ -376,7 +401,7 @@ describe('PostgresBackgroundWorkStore', () => {
       max: 1,
     });
     const executor = vi.fn(async () => undefined);
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       leaseOwner: 'payload-shape-validation-worker',
@@ -799,7 +824,7 @@ describe('PostgresBackgroundWorkStore', () => {
     let foregroundEffectCapable = true;
     let firstReplicaEffects = 0;
     let secondReplicaEffects = 0;
-    const first = new BackgroundWorkSupervisor({
+    const first = createBackgroundWorkSupervisor({
       store: firstStore,
       eventBus: new EventBus(),
       leaseOwner: 'foreground-replica',
@@ -811,7 +836,7 @@ describe('PostgresBackgroundWorkStore', () => {
         });
       },
     });
-    const second = new BackgroundWorkSupervisor({
+    const second = createBackgroundWorkSupervisor({
       store: secondStore,
       eventBus: new EventBus(),
       leaseOwner: 'background-replica',
@@ -994,7 +1019,7 @@ describe('PostgresBackgroundWorkStore', () => {
     let firstSinkWrites = 0;
     let secondSinkWrites = 0;
     const providerEntered = deferred();
-    const first = new BackgroundWorkSupervisor({
+    const first = createBackgroundWorkSupervisor({
       store: firstStore,
       eventBus: new EventBus(),
       leaseOwner: 'first-replica',
@@ -1015,7 +1040,7 @@ describe('PostgresBackgroundWorkStore', () => {
         });
       },
     });
-    const second = new BackgroundWorkSupervisor({
+    const second = createBackgroundWorkSupervisor({
       store: secondStore,
       eventBus: new EventBus(),
       leaseOwner: 'second-replica',
@@ -1076,7 +1101,7 @@ describe('PostgresBackgroundWorkStore', () => {
       return originalRequeue(input);
     });
     const providerEntered = deferred();
-    const first = new BackgroundWorkSupervisor({
+    const first = createBackgroundWorkSupervisor({
       store: firstStore,
       eventBus: new EventBus(),
       leaseOwner: 'first-replica',
@@ -1095,7 +1120,7 @@ describe('PostgresBackgroundWorkStore', () => {
       },
     });
     let sinkWrites = 0;
-    const second = new BackgroundWorkSupervisor({
+    const second = createBackgroundWorkSupervisor({
       store: secondStore,
       eventBus: new EventBus(),
       leaseOwner: 'second-replica',
@@ -1153,7 +1178,7 @@ describe('PostgresBackgroundWorkStore', () => {
     let nowMs = 1_000;
     let attempts = 0;
     const sinkWrites: string[] = [];
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       leaseOwner: 'worker',
@@ -1499,7 +1524,7 @@ describe('PostgresBackgroundWorkStore', () => {
     `);
     let sinkWrites = 0;
     let now = 1_000;
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => now,

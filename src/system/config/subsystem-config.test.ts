@@ -298,6 +298,21 @@ describe('subsystem config round-trip', () => {
           maxActiveConcerns: 7,
         },
       },
+      backgroundWork: {
+        supervisor: {
+          maxConcurrentSessions: 4,
+          leaseDurationMs: 300_000,
+          retryBaseDelayMs: 1_000,
+          retryMaxDelayMs: 300_000,
+          shutdownTimeoutMs: 5_000,
+          terminalRetentionMs: 604_800_000,
+          cleanupIntervalMs: 3_600_000,
+        },
+        postTurn: {
+          extractionDrainRequeueDelayMs: 1_000,
+          foregroundPreemptionDeferDelayMs: 1_000,
+        },
+      },
       artifactLifecycle: {
         scratchpadRetentionDays: 14,
         generatedMediaRetentionDays: 30,

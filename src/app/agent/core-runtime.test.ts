@@ -43,6 +43,36 @@ describe('agent core runtime builder', () => {
     expect(coreRuntimeSource).toContain('fatigueLedger: fatigueRuntime.fatigueLedger');
   });
 
+  it('threads scheduler-owned durable background-work tuning into every live runtime layer', () => {
+    const agentMainSource = readSource('main.ts');
+    const coreBootstrapSource = readSource('core-bootstrap.ts');
+    const coreRuntimeSource = readSource('core-runtime.ts');
+    const compositionSource = readFileSync(
+      join(SRC_DIR, '../startup/composition/composition.ts'),
+      'utf-8',
+    );
+    const substrateAgentSource = readFileSync(
+      join(SRC_DIR, '../../core/agent/substrate-agent.ts'),
+      'utf-8',
+    );
+
+    expect(agentMainSource).toContain(
+      'backgroundWorkTuning: schedulerConfig.backgroundWork',
+    );
+    expect(coreBootstrapSource).toContain('backgroundWorkTuning,');
+    expect(coreRuntimeSource).toContain(
+      'backgroundWorkTuning: options.backgroundWorkTuning',
+    );
+    expect(compositionSource).toContain(
+      'backgroundWorkTuning: options.backgroundWorkTuning',
+    );
+    expect(substrateAgentSource).toContain('...backgroundWorkTuning.supervisor');
+    expect(substrateAgentSource).toContain('tuning: backgroundWorkTuning.postTurn');
+    expect(substrateAgentSource).toContain(
+      'SubstrateAgent requires scheduler-owned durable background work tuning',
+    );
+  });
+
   it('threads injected episodic stores instead of disabling L0.1 when sqlite db is absent', () => {
     const agentMainSource = readSource('main.ts');
     const coreRuntimeSource = readSource('core-runtime.ts');

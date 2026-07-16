@@ -134,6 +134,18 @@ Guardrails:
 
 For the live running app in this repo, everything operationally authoritative must live under this repo tree.
 
+**Live authority is k3s, not host systemd.** The live companion runs as the k3s
+deployment in namespace `psfn` (agent, gateway, and Garden workloads from
+`deploy/helm/psfn`), with the system-owned owner files mounted at
+`/app/system-data` from the system-data PVC and all persistent state on
+Kubernetes PVCs. The host `psfn.service` systemd unit and its on-host
+`/var/lib/psfn/runtime/system-data` tree are disabled, non-authoritative legacy
+unless an operator explicitly reactivates them. Before any live owner-file or
+persistence change, discover the running workloads and inspect owner-file hashes
+read-only against the k3s namespace (see `docs/operations.md` → "Live deployment
+authority" for the exact commands); do not mutate the host tree assuming it is
+live.
+
 Rules:
 
 - Do not create, edit, or rely on live runtime/service/env config outside this repo tree without explicit user permission.

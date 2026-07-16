@@ -5,6 +5,13 @@ import {
   randomUUID,
 } from 'node:crypto';
 import type { FleetAuthConfig } from '../../system/config/fleet-auth-config.js';
+import {
+  digestFleetAuthVerifiedProviderProof,
+  lifecycleOAuthKindFor,
+  type LifecycleOAuthAction,
+  type LifecycleOAuthProofRole,
+  type LifecycleOAuthPurpose,
+} from '../../shared/contracts/fleet-auth-lifecycle-oauth.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { DiscordEvidenceBrokerBoundary, type DiscordEvidenceBrokerOptions } from './discord-evidence-broker-boundary.js';
 import type { DiscordEvidenceAdmissionStore } from './discord-evidence-admission.js';
@@ -38,6 +45,13 @@ export interface ConsumedOAuthTransaction {
   callbackUri: string;
   returnPath: string;
   kind: OAuthTransactionKind;
+  lifecyclePurpose?: LifecycleOAuthPurpose;
+}
+
+export interface LifecycleOAuthTransactionInput extends OAuthTransactionInput {
+  token: string;
+  csrfToken: string;
+  lifecyclePurpose: Pick<LifecycleOAuthPurpose, 'ceremonyId' | 'action' | 'proofRole'>;
 }
 
 export interface FleetAuthSessionRecord {
@@ -57,6 +71,12 @@ export interface FleetAuthBrokerStore extends DiscordEvidenceAdmissionStore {
     initiatingBrowserDigest: string;
     now: Date;
   }): Promise<ConsumedOAuthTransaction>;
+  createLifecycleOAuthTransaction(input: LifecycleOAuthTransactionInput): Promise<void>;
+  completeLifecycleOAuthEvidence(input: {
+    transactionId: string;
+    providerSubjectId: string;
+    now: Date;
+  }): Promise<LifecycleOAuthPurpose>;
   createLoginSession(input: {
     transactionId: string;
     providerSubjectId: string;
@@ -254,6 +274,54 @@ export class GatewayFleetAuthBroker {
     return { authorizationUrl: authorization.toString(), initiatingBrowserToken, expiresAt };
   }
 
+  async beginLifecycleOAuth(input: {
+    token: string;
+    csrfToken: string;
+    requestOrigin: string;
+    returnPath: string;
+    ceremonyId: string;
+    action: LifecycleOAuthAction;
+    proofRole: LifecycleOAuthProofRole;
+  }): Promise<{
+    authorizationUrl: string;
+    initiatingBrowserToken: string;
+    expiresAt: Date;
+  }> {
+    this.assertMutationOrigin(input.requestOrigin);
+    const returnPath = parseReturnPath(input.returnPath, this.config.canonicalOrigin);
+    const kind = lifecycleOAuthKindFor(input.action, input.proofRole);
+    const state = opaqueToken(this.randomBytes);
+    const initiatingBrowserToken = opaqueToken(this.randomBytes);
+    const pkceVerifier = opaqueToken(this.randomBytes);
+    const callbackUri = `${this.config.canonicalOrigin}${this.config.callbackPath}`;
+    const createdAt = this.now();
+    const expiresAt = new Date(createdAt.getTime() + this.config.ttls.oauthTransactionMs);
+    await this.store.createLifecycleOAuthTransaction({
+      transactionId: randomUUID(),
+      stateDigest: this.digest(state),
+      initiatingBrowserDigest: this.digest(initiatingBrowserToken),
+      pkceVerifier,
+      callbackUri,
+      returnPath,
+      kind,
+      createdAt,
+      expiresAt,
+      token: input.token,
+      csrfToken: input.csrfToken,
+      lifecyclePurpose: {
+        ceremonyId: input.ceremonyId,
+        action: input.action,
+        proofRole: input.proofRole,
+      },
+    });
+
+    return {
+      authorizationUrl: this.authorizationUrl(state, pkceVerifier, callbackUri),
+      initiatingBrowserToken,
+      expiresAt,
+    };
+  }
+
   async completeCallback(input: {
     state: string;
     code: string;
@@ -320,6 +388,88 @@ export class GatewayFleetAuthBroker {
     });
     await this.discordEvidence.admitActiveOAuthSession(session, identity.subjectId, providerMembershipEvidence);
     return { returnPath: transaction.returnPath, session };
+  }
+
+  async completeLifecycleOAuthCallback(input: {
+    state: string;
+    code: string;
+    requestOrigin: string;
+    initiatingBrowserToken: string;
+  }): Promise<{
+    returnPath: string;
+    ceremonyId: string;
+    action: LifecycleOAuthAction;
+    proofRole: LifecycleOAuthProofRole;
+    proof: {
+      provider: 'discord';
+      subjectId: string;
+      callbackTransactionId: string;
+      proofDigest: string;
+    };
+  }> {
+    if (input.requestOrigin !== this.config.canonicalOrigin) {
+      throw new FleetAuthBrokerError(
+        'callback_origin_mismatch',
+        400,
+        'OAuth callback origin does not match the configured fleet origin',
+      );
+    }
+    if (!isSafeOAuthValue(input.state, 128) || !isSafeOAuthValue(input.code)
+      || !/^[A-Za-z0-9_-]{43}$/u.test(input.initiatingBrowserToken)) {
+      throw new FleetAuthBrokerError('invalid_oauth_callback', 400, 'OAuth callback is malformed');
+    }
+    const now = this.now();
+    const transaction = await this.store.consumeOAuthTransaction({
+      stateDigest: this.digest(input.state),
+      initiatingBrowserDigest: this.digest(input.initiatingBrowserToken),
+      now,
+    });
+    if (!transaction.lifecyclePurpose
+      || transaction.kind !== lifecycleOAuthKindFor(
+        transaction.lifecyclePurpose.action,
+        transaction.lifecyclePurpose.proofRole,
+      )) {
+      throw new FleetAuthBrokerError(
+        'oauth_transaction_kind_mismatch',
+        400,
+        'OAuth transaction is not bound to a lifecycle proof purpose',
+      );
+    }
+    const providerTokens = await this.exchangeCode(input.code, transaction);
+    const identity = await this.resolveDiscordIdentity(providerTokens.accessToken);
+    const purpose = await this.store.completeLifecycleOAuthEvidence({
+      transactionId: transaction.transactionId,
+      providerSubjectId: identity.subjectId,
+      now,
+    });
+    if (purpose.ceremonyId !== transaction.lifecyclePurpose.ceremonyId
+      || purpose.action !== transaction.lifecyclePurpose.action
+      || purpose.proofRole !== transaction.lifecyclePurpose.proofRole
+      || purpose.initiatingPrincipalId !== transaction.lifecyclePurpose.initiatingPrincipalId
+      || purpose.initiatingSessionId !== transaction.lifecyclePurpose.initiatingSessionId) {
+      throw new FleetAuthBrokerError(
+        'oauth_transaction_kind_mismatch',
+        400,
+        'OAuth lifecycle purpose changed during callback completion',
+      );
+    }
+    const proof = {
+      provider: 'discord' as const,
+      subjectId: identity.subjectId,
+      callbackTransactionId: transaction.transactionId,
+      proofDigest: digestFleetAuthVerifiedProviderProof({
+        provider: 'discord',
+        subjectId: identity.subjectId,
+        callbackTransactionId: transaction.transactionId,
+      }),
+    };
+    return {
+      returnPath: transaction.returnPath,
+      ceremonyId: purpose.ceremonyId,
+      action: purpose.action,
+      proofRole: purpose.proofRole,
+      proof,
+    };
   }
 
   async rotateSession(input: {
@@ -425,6 +575,21 @@ export class GatewayFleetAuthBroker {
 
   private digest(value: string): string {
     return createHmac('sha256', this.sessionPepper).update(value).digest('hex');
+  }
+
+  private authorizationUrl(state: string, pkceVerifier: string, callbackUri: string): string {
+    const authorization = new URL(DISCORD_AUTHORIZE_URL);
+    authorization.searchParams.set('response_type', 'code');
+    authorization.searchParams.set('client_id', this.config.provider.clientId);
+    authorization.searchParams.set('scope', this.config.provider.scopes.join(' '));
+    authorization.searchParams.set('redirect_uri', callbackUri);
+    authorization.searchParams.set('state', state);
+    authorization.searchParams.set(
+      'code_challenge',
+      createHash('sha256').update(pkceVerifier).digest('base64url'),
+    );
+    authorization.searchParams.set('code_challenge_method', 'S256');
+    return authorization.toString();
   }
 
   private async exchangeCode(

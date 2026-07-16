@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { FleetAuthConfig } from '../../system/config/fleet-auth-config.js';
 import type { DiscordEvidenceLifecyclePort } from './discord-evidence-broker-boundary.js';
+import type { LifecycleOAuthPurpose } from '../../shared/contracts/fleet-auth-lifecycle-oauth.js';
 import {
   FleetAuthBrokerError,
   GatewayFleetAuthBroker,
@@ -96,9 +97,21 @@ class FakeStore implements FleetAuthBrokerStore {
   principalStatus: 'pending' | 'active' = 'pending';
   lastProviderSubject: string | null = null;
   providerRevocationError: Error | undefined;
+  lifecyclePurpose: LifecycleOAuthPurpose | null = null;
 
   async createOAuthTransaction(input: OAuthTransactionInput): Promise<void> {
     this.transaction = input;
+  }
+
+  async createLifecycleOAuthTransaction(
+    input: Parameters<FleetAuthBrokerStore['createLifecycleOAuthTransaction']>[0],
+  ): Promise<void> {
+    this.transaction = input;
+    this.lifecyclePurpose = {
+      ...input.lifecyclePurpose,
+      initiatingPrincipalId: '00000000-0000-4000-8000-000000000102',
+      initiatingSessionId: '00000000-0000-4000-8000-000000000101',
+    };
   }
 
   async consumeOAuthTransaction(
@@ -119,7 +132,19 @@ class FakeStore implements FleetAuthBrokerStore {
       pkceVerifier: this.transaction.pkceVerifier,
       callbackUri: this.transaction.callbackUri,
       returnPath: this.transaction.returnPath,
+      ...(this.lifecyclePurpose ? { lifecyclePurpose: this.lifecyclePurpose } : {}),
     };
+  }
+
+  async completeLifecycleOAuthEvidence(
+    input: Parameters<FleetAuthBrokerStore['completeLifecycleOAuthEvidence']>[0],
+  ): ReturnType<FleetAuthBrokerStore['completeLifecycleOAuthEvidence']> {
+    if (!this.transaction || !this.lifecyclePurpose
+      || this.transaction.transactionId !== input.transactionId) {
+      throw new FleetAuthBrokerError('invalid_oauth_state', 400);
+    }
+    this.lastProviderSubject = input.providerSubjectId;
+    return this.lifecyclePurpose;
   }
 
   async createLoginSession(input: Parameters<FleetAuthBrokerStore['createLoginSession']>[0]) {
@@ -243,6 +268,46 @@ function makeBroker(
 }
 
 describe('gateway fleet auth broker', () => {
+  it('produces lifecycle-scoped OAuth proof without creating a login session', async () => {
+    const { broker, store } = makeBroker(new FakeStore(), vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response(200, {
+        access_token: 'provider-access-secret',
+        token_type: 'Bearer',
+        expires_in: 3600,
+        scope: 'identify',
+      }))
+      .mockResolvedValueOnce(response(200, { id: '123456789012345679' })));
+
+    const started = await broker.beginLifecycleOAuth({
+      token: 'session-token',
+      csrfToken: 'csrf-token',
+      requestOrigin: config.canonicalOrigin,
+      returnPath: '/fleet/security',
+      ceremonyId: '00000000-0000-4000-8000-000000000301',
+      action: 'provider.add',
+      proofRole: 'new',
+    });
+    const state = new URL(started.authorizationUrl).searchParams.get('state')!;
+    const completed = await broker.completeLifecycleOAuthCallback({
+      state,
+      code: 'discord-code',
+      requestOrigin: config.canonicalOrigin,
+      initiatingBrowserToken: started.initiatingBrowserToken,
+    });
+
+    expect(completed).toMatchObject({
+      returnPath: '/fleet/security',
+      ceremonyId: '00000000-0000-4000-8000-000000000301',
+      action: 'provider.add',
+      proofRole: 'new',
+      proof: {
+        provider: 'discord',
+        subjectId: '123456789012345679',
+      },
+    });
+    expect(store.session).toBeNull();
+  });
+
   it('starts only login transactions with exact callback, allowlisted return path, and PKCE S256', async () => {
     const { broker, store } = makeBroker();
 

@@ -24,8 +24,11 @@ import {
 import { FleetAuthLifecycleWitnessStore } from './lifecycle-witness.js';
 import {
   PostgresFleetAuthBrokerStore,
-  type ProviderRevocationAuthorityPort,
 } from './oauth-session-store.js';
+import type {
+  AccountAuthorityFencePort,
+  ProviderRevocationAuthorityPort,
+} from './provider-revocation-authority.js';
 import {
   verifyAndConsumeHubDeviceAssertion,
   type HubDeviceAssertionExpectedBinding,
@@ -37,6 +40,8 @@ import { DiscordEvidenceRuntime } from '../../../boundary/fleet-auth/discord-evi
 import type { DiscordEvidenceObservationPort } from '../../../boundary/fleet-auth/discord-evidence-types.js';
 import { PostgresDiscordEvidenceStore } from './discord-evidence-store.js';
 import { DiscordEvidenceLifecycleCoordinator } from '../../../boundary/fleet-auth/discord-evidence-lifecycle.js';
+import { GatewayFleetAuthAuthorityLifecycleStore } from './authority-lifecycle-store.js';
+import { replaceAccountAuthorityFloorProjection } from './authority-floor-projection.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -47,6 +52,7 @@ import { DiscordEvidenceLifecycleCoordinator } from '../../../boundary/fleet-aut
 export interface GatewayFleetAuthPersistence {
   authorityFloors: FleetAuthAuthorityFloorStore;
   broker: GatewayFleetAuthBroker;
+  authorityLifecycle: GatewayFleetAuthAuthorityLifecycleStore;
   discordEvidence?: DiscordEvidenceRuntime;
   discordEvidenceLifecycle?: DiscordEvidenceLifecycleCoordinator;
   reapproveAccountAuthority(
@@ -102,6 +108,7 @@ export async function reconcileFleetAuthAuthorityStateInTransaction(
   auditEventId: string,
 ): Promise<void> {
   const trusted = floor.trustedHost;
+  await replaceAccountAuthorityFloorProjection(client, trusted.tombstones);
   const result = await client.query<{ global_auth_epoch: string }>(`
     SELECT global_auth_epoch
     FROM ${FLEET_AUTH_RECONCILE_FUNCTION_NAME}($1, $2, $3, $4, $5)
@@ -121,6 +128,12 @@ export async function reconcileFleetAuthAuthorityStateInTransaction(
 export function createGatewayProviderRevocationAuthorityPort(
   authorityFloors: FleetAuthAuthorityFloorStore,
 ): ProviderRevocationAuthorityPort {
+  return createGatewayAccountAuthorityFencePort(authorityFloors);
+}
+
+export function createGatewayAccountAuthorityFencePort(
+  authorityFloors: FleetAuthAuthorityFloorStore,
+): AccountAuthorityFencePort {
   // Read on every validation for cross-process advances, while retaining the
   // highest observed generation so this gateway can never accept a regression.
   let observedAuthorityGeneration = authorityFloors.read().trustedHost.authorityGeneration;
@@ -149,23 +162,37 @@ export function createGatewayProviderRevocationAuthorityPort(
       return {
         authorityGeneration: fencedFloor.trustedHost.authorityGeneration,
         reconcile: async (client) => {
-          await reconcileFleetAuthAuthorityStateInTransaction(
-            client,
-            fencedFloor,
-            randomUUID(),
-          );
           const state = await client.query<{ global_auth_epoch: string }>(`
-            SELECT global_auth_epoch
-            FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
-            WHERE singleton = TRUE
-          `);
+            UPDATE ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+            SET authority_generation = $1,
+                global_auth_epoch = global_auth_epoch + 1,
+                updated_at = $2
+            WHERE singleton = TRUE AND authority_generation = $1::bigint - 1
+            RETURNING global_auth_epoch
+          `, [fencedFloor.trustedHost.authorityGeneration, input.at]);
           const row = state.rows.at(0);
-          if (!row) throw new Error('fleet_auth authority_state singleton is missing');
+          if (!row) {
+            throw new Error('fleet_auth authority changed during provider revocation');
+          }
           return {
             globalAuthEpoch: parseStateInteger(row.global_auth_epoch, 'global_auth_epoch'),
           };
         },
       };
+    },
+    fenceMany: async (input) => {
+      const fencedFloor = authorityFloors.revokeAccountAuthorities({
+        resources: input.resources.map(resource => ({
+          ...resource,
+          reason: input.reasonDigest,
+        })),
+        at: input.at.toISOString(),
+      });
+      observedAuthorityGeneration = Math.max(
+        observedAuthorityGeneration,
+        fencedFloor.trustedHost.authorityGeneration,
+      );
+      return { authorityGeneration: fencedFloor.trustedHost.authorityGeneration };
     },
   };
 }
@@ -180,12 +207,17 @@ export function createGatewayAccountReapprovalAuthority(
   authorityFloors: FleetAuthAuthorityFloorStore,
 ): GatewayFleetAuthPersistence['reapproveAccountAuthority'] {
   return async (request) => {
-    const providerResourceId = `${request.provider}:${request.providerSubjectId}`;
-    if (authorityFloors.isAccountAuthorityTombstoned(
-      'provider_subject',
-      providerResourceId,
-    )) {
-      throw new Error('Provider subject is permanently tombstoned by non-restored authority');
+    const resources = [
+      ['provider_subject', `${request.provider}:${request.providerSubjectId}`],
+      ['principal', request.principalId],
+      ['companion', request.companionId],
+      ['contact_binding', request.bindingId],
+      ['role_grant', request.roleGrantId],
+    ] as const;
+    if (resources.some(([kind, resourceId]) => (
+      authorityFloors.isAccountAuthorityTombstoned(kind, resourceId)
+    ))) {
+      throw new Error('Account authority is permanently tombstoned by non-restored authority');
     }
     return await executeAccountReapproval(pool, request);
   };
@@ -259,18 +291,22 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       floor.trustedHost.lineageId,
       floor.trustedHost.lastLifecycleTransitionId,
     );
-    const providerRevocationAuthority = createGatewayProviderRevocationAuthorityPort(authorityFloors);
+    const accountAuthority = createGatewayAccountAuthorityFencePort(authorityFloors);
     const brokerStore = new PostgresFleetAuthBrokerStore({
       pool,
       providerAuthorityPool: authorityPool,
       sessionPepper: secrets.sessionPepper,
       tokenEncryptionKey: secrets.tokenEncryptionKey,
-      providerRevocationAuthority,
+      providerRevocationAuthority: accountAuthority,
+    });
+    const authorityLifecycle = new GatewayFleetAuthAuthorityLifecycleStore({
+      pool: authorityPool,
+      accountAuthority,
     });
     let discordEvidence: DiscordEvidenceRuntime | undefined;
     let discordEvidenceLifecycle: DiscordEvidenceLifecycleCoordinator | undefined;
     if (config.discordEvidenceMappings.length > 0) {
-      const discordEvidenceStore = new PostgresDiscordEvidenceStore(pool, providerRevocationAuthority);
+      const discordEvidenceStore = new PostgresDiscordEvidenceStore(pool, accountAuthority);
       discordEvidence = new DiscordEvidenceRuntime({
         config,
         observer: options.discordEvidenceObserver ?? {
@@ -296,6 +332,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
     return {
       authorityFloors,
       broker,
+      authorityLifecycle,
       ...(discordEvidence ? { discordEvidence } : {}),
       ...(discordEvidenceLifecycle ? { discordEvidenceLifecycle } : {}),
       reapproveAccountAuthority: createGatewayAccountReapprovalAuthority(pool, authorityFloors),

@@ -73,8 +73,10 @@ export const FLEET_AUTH_DURABLE_TABLES = [
   'provider_subjects',
   'provider_subject_history',
   'provider_subject_tombstones',
+  'companion_authority_state',
   'principal_contact_bindings',
   'principal_role_grants',
+  'principal_merge_aliases',
   'passkey_credentials',
   'authorization_audit_events',
 ] as const;
@@ -89,10 +91,13 @@ export const FLEET_AUTH_EPHEMERAL_TABLES = [
   'jit_authorization_grants',
   'trusted_host_ceremonies',
   'hub_device_assertion_replays',
+  'lifecycle_decision_receipts',
 ] as const;
 
 const FLEET_AUTH_MUTABLE_TABLES = [
   'authority_state',
+  'authority_floor_tombstone_projection',
+  'companion_authority_state',
   'human_principals',
   'provider_subjects',
   'principal_contact_bindings',
@@ -102,13 +107,26 @@ const FLEET_AUTH_MUTABLE_TABLES = [
 ] as const;
 
 const FLEET_AUTH_RUNTIME_MUTABLE_TABLES = FLEET_AUTH_MUTABLE_TABLES.filter(
-  table => table !== 'authority_state',
+  table => table !== 'authority_state'
+    && table !== 'authority_floor_tombstone_projection'
+    && table !== 'companion_authority_state'
+    && table !== 'lifecycle_decision_receipts',
 );
 
 const FLEET_AUTH_IMMUTABLE_TABLES = [
   'provider_subject_history',
   'provider_subject_tombstones',
   'authorization_audit_events',
+  'principal_merge_aliases',
+] as const;
+
+const FLEET_AUTH_RUNTIME_IMMUTABLE_TABLES = FLEET_AUTH_IMMUTABLE_TABLES.filter(
+  table => table !== 'principal_merge_aliases',
+);
+
+const FLEET_AUTH_RUNTIME_READ_ONLY_TABLES = [
+  'companion_authority_state',
+  'principal_merge_aliases',
 ] as const;
 
 const FLEET_AUTH_INTERNAL_TABLES = [
@@ -264,7 +282,10 @@ async function applyRoleGrants(
   // trusted-host reapproval changes the epoch only inside the constrained
   // SECURITY DEFINER procedure.
   await client.query(
-    `GRANT SELECT ON ${qualifiedTable('authority_state')} TO ${runtime}`,
+    `GRANT SELECT ON ${[
+      qualifiedTable('authority_state'),
+      ...FLEET_AUTH_RUNTIME_READ_ONLY_TABLES.map(qualifiedTable),
+    ].join(', ')} TO ${runtime}`,
   );
   // The runtime broker may invalidate pending trusted-host ceremonies during
   // reconciliation (DELETE) and observe them (SELECT), but it must never author
@@ -278,7 +299,7 @@ async function applyRoleGrants(
     `REVOKE INSERT, UPDATE ON ${qualifiedTable('trusted_host_ceremonies')} FROM ${runtime}`,
   );
   await client.query(
-    `GRANT SELECT, INSERT ON ${FLEET_AUTH_IMMUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${runtime}`,
+    `GRANT SELECT, INSERT ON ${FLEET_AUTH_RUNTIME_IMMUTABLE_TABLES.map(qualifiedTable).join(', ')} TO ${runtime}`,
   );
   // The repo-owned coordinator alone restores durable rows and invalidates
   // ephemeral rows. It receives DML but never schema/migration authority.
@@ -495,9 +516,17 @@ async function assertExactDml(
   `, [FLEET_AUTH_SCHEMA_NAME, tables, TABLE_PRIVILEGES]);
   const mutable = new Set<string>(FLEET_AUTH_MUTABLE_TABLES);
   const immutable = new Set<string>(FLEET_AUTH_IMMUTABLE_TABLES);
+  const runtimeReadOnly = new Set<string>(FLEET_AUTH_RUNTIME_READ_ONLY_TABLES);
+  const runtimeImmutable = new Set<string>(FLEET_AUTH_RUNTIME_IMMUTABLE_TABLES);
   const expectedPrivileges = (tableName: string): ReadonlySet<string> => {
     if (mutable.has(tableName)) {
-      if (expectedRole === roles.runtime && tableName === 'authority_state') {
+      if (expectedRole === roles.runtime
+        && (tableName === 'lifecycle_decision_receipts'
+          || tableName === 'authority_floor_tombstone_projection')) {
+        return new Set<string>();
+      }
+      if (expectedRole === roles.runtime
+        && (tableName === 'authority_state' || runtimeReadOnly.has(tableName))) {
         return new Set(['SELECT']);
       }
       // The runtime broker cannot author or tamper with trusted-host ceremonies;
@@ -509,6 +538,12 @@ async function assertExactDml(
       return new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE']);
     }
     if (immutable.has(tableName)) {
+      if (expectedRole === roles.runtime && runtimeReadOnly.has(tableName)) {
+        return new Set(['SELECT']);
+      }
+      if (expectedRole === roles.runtime && !runtimeImmutable.has(tableName)) {
+        return new Set<string>();
+      }
       return new Set(['SELECT', 'INSERT']);
     }
     return new Set<string>();

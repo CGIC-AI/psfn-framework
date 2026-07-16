@@ -31,14 +31,16 @@ interface FleetAuthDurableSnapshot {
   providerSubjects: SnapshotRow[];
   providerSubjectHistory: SnapshotRow[];
   providerSubjectTombstones: SnapshotRow[];
+  companionAuthorityState: SnapshotRow[];
   principalContactBindings: SnapshotRow[];
   principalRoleGrants: SnapshotRow[];
+  principalMergeAliases: SnapshotRow[];
   passkeyCredentials: SnapshotRow[];
   authorizationAuditEvents: SnapshotRow[];
 }
 
 interface FleetAuthSnapshot {
-  schemaVersion: 2;
+  schemaVersion: 3;
   capturedAt: string;
   postgresSnapshot: string;
   authorityLineageId: string;
@@ -78,8 +80,10 @@ const SNAPSHOT_COLLECTION_KEYS = [
   'providerSubjects',
   'providerSubjectHistory',
   'providerSubjectTombstones',
+  'companionAuthorityState',
   'principalContactBindings',
   'principalRoleGrants',
+  'principalMergeAliases',
   'passkeyCredentials',
   'authorizationAuditEvents',
 ] as const;
@@ -91,7 +95,8 @@ const ROW_KEYS = {
     'activation_generation', 'updated_at',
   ],
   humanPrincipals: [
-    'principal_id', 'status', 'authn_version', 'authz_version', 'authority_generation',
+    'principal_id', 'status', 'authn_version', 'authz_version', 'binding_version',
+    'grant_version', 'policy_version', 'authority_generation',
     'restore_state', 'created_at', 'updated_at',
   ],
   providerSubjects: [
@@ -106,6 +111,10 @@ const ROW_KEYS = {
     'provider', 'subject_id', 'prior_principal_id', 'authority_generation', 'revoked_at',
     'reason_digest',
   ],
+  companionAuthorityState: [
+    'companion_id', 'lifecycle', 'version', 'authority_generation', 'restore_state',
+    'created_at', 'updated_at',
+  ],
   principalContactBindings: [
     'binding_id', 'principal_id', 'companion_id', 'contact_id', 'state',
     'verification_provenance', 'version', 'authority_generation', 'restore_state',
@@ -114,6 +123,10 @@ const ROW_KEYS = {
   principalRoleGrants: [
     'grant_id', 'principal_id', 'companion_id', 'role', 'lifecycle', 'version',
     'authority_generation', 'restore_state', 'created_at', 'updated_at',
+  ],
+  principalMergeAliases: [
+    'source_principal_id', 'canonical_principal_id', 'decision_id',
+    'authority_generation', 'reason_digest', 'restore_state', 'created_at',
   ],
   passkeyCredentials: [
     'credential_id_hash', 'principal_id', 'expected_provider',
@@ -124,7 +137,8 @@ const ROW_KEYS = {
   authorizationAuditEvents: [
     'event_id', 'actor_context', 'action', 'resource', 'decision', 'reason_code',
     'companion_id', 'principal_id', 'authority_generation', 'global_auth_epoch',
-    'correlation_id', 'occurred_at',
+    'correlation_id', 'occurred_at', 'decision_id', 'ceremony_id', 'reason_digest',
+    'decision_context',
   ],
 } as const;
 
@@ -173,7 +187,7 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
     ['schemaVersion', 'capturedAt', 'postgresSnapshot', 'authorityLineageId', 'durable'],
     'root',
   );
-  if (value.schemaVersion !== 2
+  if (value.schemaVersion !== 3
     || !isCanonicalIsoTimestamp(value.capturedAt)
     || value.capturedAt !== manifest.capturedAt
     || typeof value.postgresSnapshot !== 'string'
@@ -200,6 +214,11 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
       'providerSubjectTombstones',
       ROW_KEYS.providerSubjectTombstones,
     ),
+    companionAuthorityState: parseCollection(
+      durable.companionAuthorityState,
+      'companionAuthorityState',
+      ROW_KEYS.companionAuthorityState,
+    ),
     principalContactBindings: parseCollection(
       durable.principalContactBindings,
       'principalContactBindings',
@@ -209,6 +228,11 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
       durable.principalRoleGrants,
       'principalRoleGrants',
       ROW_KEYS.principalRoleGrants,
+    ),
+    principalMergeAliases: parseCollection(
+      durable.principalMergeAliases,
+      'principalMergeAliases',
+      ROW_KEYS.principalMergeAliases,
     ),
     passkeyCredentials: parseCollection(
       durable.passkeyCredentials,
@@ -231,7 +255,7 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
     throw new Error('Invalid fleet auth snapshot: authority lineage does not match its manifest');
   }
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     capturedAt: value.capturedAt,
     postgresSnapshot: value.postgresSnapshot,
     authorityLineageId: value.authorityLineageId,
@@ -337,16 +361,19 @@ async function importDurableRows(
 
   for (const row of durable.humanPrincipals) {
     const values = [
-      row.principal_id, row.authn_version, row.authz_version,
-      floor.trustedHost.authorityGeneration, row.created_at, restoredAt,
+      row.principal_id, row.authn_version, row.authz_version, row.binding_version,
+      row.grant_version, row.policy_version, floor.trustedHost.authorityGeneration,
+      row.created_at, restoredAt,
     ];
     await record(insertOrAssertCompatibleConflict({
       client,
       insertSql: `
         INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.human_principals
-          (principal_id, status, authn_version, authz_version, authority_generation,
-           restore_state, created_at, updated_at)
-        VALUES ($1, 'quarantined', $2, $3, $4, 'quarantined', $5, $6)
+          (principal_id, status, authn_version, authz_version, binding_version,
+           grant_version, policy_version, authority_generation, restore_state,
+           created_at, updated_at)
+        VALUES ($1, 'quarantined', $2, $3, $4, $5, $6, $7,
+                'quarantined', $8, $9)
         ON CONFLICT DO NOTHING
       `,
       insertValues: values,
@@ -356,13 +383,72 @@ async function importDurableRows(
           WHERE principal_id = $1
             AND authn_version >= $2::bigint
             AND authz_version >= $3::bigint
-            AND authority_generation <= $4::bigint
-            AND created_at <= $5::timestamptz
+            AND binding_version >= $4::bigint
+            AND grant_version >= $5::bigint
+            AND policy_version >= $6::bigint
+            AND authority_generation <= $7::bigint
+            AND created_at <= $8::timestamptz
           FOR UPDATE
         ) AS compatible
       `,
-      compatibilityValues: values.slice(0, 5),
+      compatibilityValues: values.slice(0, 8),
       description: 'human principal',
+    }));
+  }
+
+  for (const row of durable.companionAuthorityState) {
+    const values = [
+      row.companion_id, row.version, floor.trustedHost.authorityGeneration,
+      row.created_at, restoredAt,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          (companion_id, lifecycle, version, authority_generation, restore_state,
+           created_at, updated_at)
+        VALUES ($1, 'quarantined', $2, $3, 'quarantined', $4, $5)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state
+          WHERE companion_id = $1::uuid AND version >= $2::bigint
+            AND authority_generation <= $3::bigint AND created_at <= $4::timestamptz
+          FOR UPDATE
+        ) AS compatible
+      `,
+      compatibilityValues: values.slice(0, 4),
+      description: 'companion authority state',
+    }));
+  }
+
+  for (const row of durable.principalMergeAliases) {
+    const values = [
+      row.source_principal_id, row.canonical_principal_id, row.decision_id,
+      floor.trustedHost.authorityGeneration, row.reason_digest, row.created_at,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_merge_aliases
+          (source_principal_id, canonical_principal_id, decision_id,
+           authority_generation, reason_digest, restore_state, created_at)
+        VALUES ($1, $2, $3, $4, $5, 'quarantined', $6)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_merge_aliases
+          WHERE source_principal_id = $1::uuid AND canonical_principal_id = $2::uuid
+            AND decision_id = $3::uuid AND authority_generation <= $4::bigint
+            AND reason_digest = $5 AND created_at <= $6::timestamptz
+        ) AS compatible
+      `,
+      compatibilityValues: values,
+      description: 'principal merge alias',
     }));
   }
 
@@ -613,7 +699,9 @@ async function importDurableRows(
       jsonObject(row, 'actor_context', `durable.authorizationAuditEvents[${index}]`),
       row.action, row.resource, row.decision, row.reason_code, row.companion_id,
       row.principal_id, row.authority_generation, row.global_auth_epoch,
-      row.correlation_id, row.occurred_at,
+      row.correlation_id, row.occurred_at, row.decision_id, row.ceremony_id,
+      row.reason_digest,
+      jsonObject(row, 'decision_context', `durable.authorizationAuditEvents[${index}]`),
     ];
     await record(insertOrAssertCompatibleConflict({
       client,
@@ -621,8 +709,10 @@ async function importDurableRows(
         INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
           (event_id, actor_context, action, resource, decision, reason_code,
            companion_id, principal_id, authority_generation, global_auth_epoch,
-           correlation_id, occurred_at)
-        VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+           correlation_id, occurred_at, decision_id, ceremony_id, reason_digest,
+           decision_context)
+        VALUES ($1, $2::jsonb, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                $13, $14, $15, $16::jsonb)
         ON CONFLICT DO NOTHING
       `,
       insertValues: values,
@@ -637,6 +727,10 @@ async function importDurableRows(
             AND authority_generation = $9::bigint AND global_auth_epoch = $10::bigint
             AND correlation_id IS NOT DISTINCT FROM $11::text
             AND occurred_at = $12::timestamptz
+            AND decision_id IS NOT DISTINCT FROM $13::uuid
+            AND ceremony_id IS NOT DISTINCT FROM $14::uuid
+            AND reason_digest IS NOT DISTINCT FROM $15::text
+            AND decision_context = $16::jsonb
         ) AS compatible
       `,
       compatibilityValues: values,

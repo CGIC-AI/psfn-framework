@@ -66,6 +66,7 @@ BEGIN
 
   v_lifecycle_column := CASE TG_TABLE_NAME
     WHEN 'human_principals' THEN 'status'
+    WHEN 'companion_authority_state' THEN 'lifecycle'
     WHEN 'provider_subjects' THEN 'state'
     WHEN 'principal_contact_bindings' THEN 'state'
     WHEN 'principal_role_grants' THEN 'lifecycle'
@@ -105,6 +106,9 @@ BEGIN
      OR (v_new->>'authority_generation') IS DISTINCT FROM (v_old->>'authority_generation')
      OR (v_new->>'authn_version') IS DISTINCT FROM (v_old->>'authn_version')
      OR (v_new->>'authz_version') IS DISTINCT FROM (v_old->>'authz_version')
+     OR (v_new->>'binding_version') IS DISTINCT FROM (v_old->>'binding_version')
+     OR (v_new->>'grant_version') IS DISTINCT FROM (v_old->>'grant_version')
+     OR (v_new->>'policy_version') IS DISTINCT FROM (v_old->>'policy_version')
      OR (v_new->>'version') IS DISTINCT FROM (v_old->>'version') THEN
     RAISE EXCEPTION 'quarantined fleet_auth authority can only be reactivated through fleet_auth.reapprove_account_authority'
       USING ERRCODE = '42501';
@@ -116,6 +120,11 @@ $$;
 DROP TRIGGER IF EXISTS restore_quarantine_activation_guard ON human_principals;
 CREATE TRIGGER restore_quarantine_activation_guard
   BEFORE UPDATE ON human_principals
+  FOR EACH ROW EXECUTE FUNCTION restore_quarantine_activation_guard();
+
+DROP TRIGGER IF EXISTS restore_quarantine_activation_guard ON companion_authority_state;
+CREATE TRIGGER restore_quarantine_activation_guard
+  BEFORE UPDATE ON companion_authority_state
   FOR EACH ROW EXECUTE FUNCTION restore_quarantine_activation_guard();
 
 DROP TRIGGER IF EXISTS restore_quarantine_activation_guard ON provider_subjects;
@@ -273,6 +282,7 @@ DECLARE
   v_expected_scope jsonb;
   v_ceremony fleet_auth.trusted_host_ceremonies%ROWTYPE;
   v_principal fleet_auth.human_principals%ROWTYPE;
+  v_companion fleet_auth.companion_authority_state%ROWTYPE;
   v_subject fleet_auth.provider_subjects%ROWTYPE;
   v_binding fleet_auth.principal_contact_bindings%ROWTYPE;
   v_grant fleet_auth.principal_role_grants%ROWTYPE;
@@ -335,6 +345,30 @@ BEGIN
     RAISE EXCEPTION 'principal is not a quarantined restore candidate' USING ERRCODE = '42501';
   END IF;
 
+  -- Recheck the database projection of the non-restored authority floor. This
+  -- keeps even direct invocation of the constrained procedure subordinate to
+  -- principal/companion/provider/binding/grant tombstones; the gateway wrapper
+  -- performs the same check against the authoritative file before connecting.
+  IF EXISTS (
+    SELECT 1
+    FROM fleet_auth.authority_floor_tombstone_projection AS tombstone
+    WHERE (tombstone.kind = 'provider_subject'
+      AND tombstone.resource_hash = encode(sha256(convert_to(
+        p_provider || ':' || p_provider_subject_id, 'UTF8'
+      )), 'hex'))
+      OR (tombstone.kind = 'principal'
+        AND tombstone.resource_hash = encode(sha256(convert_to(p_principal_id::text, 'UTF8')), 'hex'))
+      OR (tombstone.kind = 'companion'
+        AND tombstone.resource_hash = encode(sha256(convert_to(p_companion_id::text, 'UTF8')), 'hex'))
+      OR (tombstone.kind = 'contact_binding'
+        AND tombstone.resource_hash = encode(sha256(convert_to(p_binding_id::text, 'UTF8')), 'hex'))
+      OR (tombstone.kind = 'role_grant'
+        AND tombstone.resource_hash = encode(sha256(convert_to(p_role_grant_id::text, 'UTF8')), 'hex'))
+  ) THEN
+    RAISE EXCEPTION 'account authority is tombstoned by the non-restored floor'
+      USING ERRCODE = '42501';
+  END IF;
+
   -- Provider subject binding, not tombstoned.
   SELECT * INTO v_subject
   FROM fleet_auth.provider_subjects
@@ -354,6 +388,24 @@ BEGIN
   END IF;
   IF v_subject.restore_state <> 'quarantined' OR v_subject.state <> 'quarantined' THEN
     RAISE EXCEPTION 'provider subject is not a quarantined restore candidate' USING ERRCODE = '42501';
+  END IF;
+
+  -- The companion is an independent versioned authority resource. A restored
+  -- companion is promoted exactly once with the account; an already-live
+  -- active companion remains unchanged so another restored account can be
+  -- reapproved without spuriously advancing the companion version.
+  SELECT * INTO v_companion
+  FROM fleet_auth.companion_authority_state
+  WHERE companion_id = p_companion_id
+  FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'companion authority not found' USING ERRCODE = '42501';
+  END IF;
+  IF NOT (
+    (v_companion.restore_state = 'quarantined' AND v_companion.lifecycle = 'quarantined')
+    OR (v_companion.restore_state = 'live' AND v_companion.lifecycle = 'active')
+  ) THEN
+    RAISE EXCEPTION 'companion authority is not reapprovable' USING ERRCODE = '42501';
   END IF;
 
   -- Contact binding, exact and conflict-free.
@@ -407,7 +459,7 @@ BEGIN
   -- is intentionally exact: missing or extra fields reject rather than being
   -- ignored by a permissive partial parser.
   v_expected_scope := jsonb_build_object(
-    'schemaVersion', 1,
+    'schemaVersion', 2,
     'principalId', p_principal_id::text,
     'provider', p_provider,
     'providerSubjectId', p_provider_subject_id,
@@ -416,6 +468,9 @@ BEGIN
     'bindingId', p_binding_id::text,
     'roleGrantId', p_role_grant_id::text,
     'role', v_grant.role,
+    'companionVersion', v_companion.version,
+    'bindingVersion', v_binding.version,
+    'roleGrantVersion', v_grant.version,
     'authorityLineageId', v_lineage,
     'authorityGeneration', v_generation,
     'restoreCheckpoint', v_restore_checkpoint
@@ -443,6 +498,13 @@ BEGIN
     RAISE EXCEPTION 'trusted-host ceremony has expired' USING ERRCODE = '42501';
   END IF;
 
+  IF v_companion.restore_state = 'quarantined' THEN
+    UPDATE fleet_auth.companion_authority_state
+    SET lifecycle = 'active', restore_state = 'live', version = version + 1,
+        authority_generation = v_generation, updated_at = v_now
+    WHERE companion_id = p_companion_id;
+  END IF;
+
   UPDATE fleet_auth.provider_subjects
   SET state = 'active', restore_state = 'live',
       authority_generation = v_generation, updated_at = v_now
@@ -451,6 +513,9 @@ BEGIN
   UPDATE fleet_auth.human_principals
   SET status = 'active', restore_state = 'live',
       authn_version = v_new_authn, authz_version = v_new_authz,
+      binding_version = binding_version + 1,
+      grant_version = grant_version + 1,
+      policy_version = policy_version + 1,
       authority_generation = v_generation, updated_at = v_now
   WHERE principal_id = p_principal_id;
 

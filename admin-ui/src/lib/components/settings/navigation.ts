@@ -111,6 +111,12 @@ export const SETTINGS_SIMPLE_SECTIONS = [
     groupId: 'trust',
   },
   {
+    id: 'advanced-fleet-auth',
+    title: 'Fleet Authentication',
+    description: 'Read-only effective and canonical owner state',
+    groupId: 'trust',
+  },
+  {
     id: 'advanced-backup',
     title: 'Backups',
     description: 'Backup schedule, rotation, and mirror settings',

@@ -111,7 +111,7 @@ export const SETTINGS_TAB_DEFINITIONS = [
   {
     id: 'trust',
     label: 'Trust & Backup',
-    sections: ['advanced-trust', 'advanced-secrets', 'advanced-backup'],
+    sections: ['advanced-trust', 'advanced-fleet-auth', 'advanced-secrets', 'advanced-backup'],
   },
   {
     id: 'advanced',

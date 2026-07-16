@@ -14,7 +14,6 @@ import {
   resetRuntimeChannelEnvelopeLabels,
   setRuntimeChannelEnvelopeLabels,
 } from '../../system/trust/runtime-channel-labels.js';
-import type { ContextManifest } from '../session/context-manifest.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
 import type { ChannelPromptDock } from '../../channels/backplane/types.js';
 import { agentLoopWithScheduler } from './scheduled-agent-loop.js';
@@ -52,6 +51,7 @@ import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
 import { PromptComposer } from '../identity/prompt-composer.js';
 import { PromptLayerStore } from '../identity/prompt-store.js';
 import { lifecycleKubernetesSettingsFixture } from '../../test-support/lifecycle-kubernetes-settings.js';
+import { makeContextManifestFixture } from '../../test-support/context-manifest.js';
 
 class SubstrateAgent extends RuntimeSubstrateAgent {
   constructor(...args: ConstructorParameters<typeof RuntimeSubstrateAgent>) {
@@ -412,6 +412,7 @@ function makeMockSessionManager(): SessionManager {
       messages: [
         { role: 'user', content: 'Hello' },
       ],
+      manifest: makeContextManifestFixture(),
     } satisfies LLMContext),
     getRecentMessages: vi.fn().mockReturnValue([]),
     getRoleEnvelopeRefsForEntries: vi.fn().mockReturnValue([]),
@@ -447,81 +448,6 @@ function makeMockLLMProvider(): LLMProviderPort {
   return {
     stream: vi.fn<any>().mockResolvedValue(response),
     complete: vi.fn<any>().mockResolvedValue(response),
-  };
-}
-
-function makeContextManifest(): ContextManifest {
-  return {
-    channelId: 'test-channel',
-    generatedAt: 1_700_000_000_000,
-    session: {
-      sourceEntryCount: 4,
-      trimmedEntryCount: 0,
-      maskedEntryCount: 0,
-      compactedEntryCount: 0,
-      finalEntryCount: 4,
-      finalMessageCount: 4,
-      compactionSummaryCount: 0,
-      continuityEntryCount: 0,
-    },
-    memory: {
-      includedCount: 1,
-      includedTypes: { semantic: 1 },
-      includedTokenCount: 120,
-      reason: 'test',
-      candidateCount: 1,
-      policyAllowedCount: 1,
-      rankedCount: 1,
-      returnedCount: 1,
-      excluded: {
-        sensitivityRejectedCount: 0,
-        policyRejectedCount: 0,
-        scoreRejectedCount: 0,
-        budgetCappedCount: 0,
-      },
-      retrieval: {
-        mode: 'budget',
-        budgetPct: 2,
-        tokenBudget: 500,
-        limit: 3,
-      },
-    },
-    budgets: {
-      contextWindow: 128_000,
-      adaptive: {
-        enabled: true,
-        source: 'default',
-        category: 'default',
-      },
-      sessionHistory: {
-        mode: 'budget',
-        budgetPct: 6,
-        tokenBudget: 8_000,
-        estimatedCount: 24,
-        actualCount: 4,
-        actualTokenCount: 420,
-      },
-      memoryRetrieval: {
-        mode: 'budget',
-        budgetPct: 2,
-        tokenBudget: 500,
-        estimatedCount: 3,
-        actualCount: 1,
-        actualTokenCount: 120,
-      },
-      sections: [
-        { section: 'system_prompt', tokenCount: 250 },
-        { section: 'memories', tokenCount: 120 },
-        { section: 'session_history', tokenCount: 420 },
-      ],
-    },
-    compaction: {
-      triggered: false,
-      thresholdPct: 70,
-      tokenBudget: 90_000,
-      totalTokensBefore: 790,
-      totalTokensAfter: 790,
-    },
   };
 }
 
@@ -1594,6 +1520,7 @@ describe('SubstrateAgent.handleMessage', () => {
         { id: 'session.compaction_summary', content: compactionSummaryBlock },
       ],
       messages: [{ role: 'user', content: 'Hello' }],
+      manifest: makeContextManifestFixture(),
     } satisfies LLMContext);
 
     const agent = new SubstrateAgent(
@@ -1782,7 +1709,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const config = makeConfig();
     const eventBus = new EventBus();
     const sessionManager = makeMockSessionManager();
-    const manifest = makeContextManifest();
+    const manifest = makeContextManifestFixture();
     (sessionManager.buildContext as any).mockResolvedValue({
       systemPrompt: TEST_SYSTEM_PROMPT,
       messages: [

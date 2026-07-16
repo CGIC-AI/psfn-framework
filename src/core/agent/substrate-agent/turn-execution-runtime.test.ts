@@ -72,6 +72,7 @@ import { getRequestContext } from '../../../primitives/llm/request-context.js';
 import { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
 import { createApprovalQueuePortFromConfirmationQueue } from '../../../system/capabilities/approval-queue-port.js';
 import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
+import { makeContextManifestFixture } from '../../../test-support/context-manifest.js';
 
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
@@ -383,7 +384,7 @@ describe('handleMessageForTurn presence canonicalization', () => {
     const buildContext = vi.fn<SessionManager['buildContext']>(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
     const awaitPendingAutoCompaction = vi.fn(async () => undefined);
@@ -463,7 +464,7 @@ describe('handleMessageForTurn presence canonicalization', () => {
         { role: 'user', content: 'Earlier request' },
         { role: 'assistant', content: 'Earlier assistant reply' },
       ],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
     const awaitPendingAutoCompaction = vi.fn(async () => undefined);
@@ -854,7 +855,7 @@ function createPersistenceBackedRuntime(
   const buildContext = vi.fn(async () => ({
     systemPrompt: 'System prompt',
     messages: [],
-    manifest: undefined,
+    manifest: makeContextManifestFixture(),
   }));
   const runtime = createRuntime({
     eventBus,
@@ -896,7 +897,7 @@ describe('handleMessageForTurn intentional no-reply', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const recordAssistantMessage = vi.fn(() => 2);
     const noReply: IntentionalNoReplyMetadata = {
@@ -946,7 +947,7 @@ describe('handleMessageForTurn intentional no-reply', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const recordAssistantMessage = vi.fn(() => 2);
     const noReply: IntentionalNoReplyMetadata = {
@@ -994,7 +995,7 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const recordAssistantMessage = vi.fn(() => 2);
     const runtime = createRuntime({
@@ -1027,7 +1028,7 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const recordAssistantMessage = vi.fn(() => 2);
     const runtime = createRuntime({
@@ -1055,7 +1056,7 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const recordAssistantMessage = vi.fn(() => 2);
     const runtime = createRuntime({
@@ -1102,7 +1103,7 @@ describe('handleMessageForTurn generated media delivery', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -1215,7 +1216,7 @@ describe('handleMessageForTurn generated media delivery', () => {
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       })),
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -1311,7 +1312,7 @@ describe('handleMessageForTurn generated media delivery', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -1396,7 +1397,7 @@ describe('handleMessageForTurn generated media delivery', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const noReply: IntentionalNoReplyMetadata = {
       schemaVersion: 1,
@@ -1475,7 +1476,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     const buildContext = params.buildContext ?? vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus: params.eventBus ?? new EventBus(),
@@ -1829,7 +1830,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     const buildContext = vi.fn(async (_channelId: string, fullPrompt: string) => ({
       systemPrompt: fullPrompt,
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const { runtime } = createFatigueRuntime({
       fatigueBudget,
@@ -2975,7 +2976,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     const buildContext = vi.fn(async (_channelId: string, fullPrompt: string) => ({
       systemPrompt: fullPrompt,
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const { runtime } = createFatigueRuntime({ fatigueBudget, buildContext });
     const modelAuthoredText = 'I can wrap this thought up from here.';
@@ -3017,7 +3018,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const { runtime } = createFatigueRuntime({
       fatigueBudget,
@@ -3051,7 +3052,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     const buildContext = vi.fn(async (_channelId: string, fullPrompt: string) => ({
       systemPrompt: fullPrompt,
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const { runtime } = createFatigueRuntime({
       fatigueBudget,
@@ -3315,7 +3316,7 @@ async function runObserverSidecarTurn(
   const buildContext = vi.fn(async () => ({
     systemPrompt: 'System prompt',
     messages: [],
-    manifest: undefined,
+    manifest: makeContextManifestFixture(),
   }));
   const recordAssistantMessage = vi.fn(() => 2);
   const runtime = createRuntime({
@@ -3710,7 +3711,11 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const runtime = createRuntime({
       eventBus,
       sessionManager: {} as SessionManager,
-      buildContext: vi.fn(async () => ({ systemPrompt: 'System prompt', messages: [] })),
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: makeContextManifestFixture(),
+      })),
       scheduleAutoCompactionBetweenTurns,
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
       recordUserMessage: vi.fn(() => null),
@@ -3830,7 +3835,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       })),
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -3905,7 +3910,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       })),
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -3953,7 +3958,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       })),
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -3998,7 +4003,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
     const awaitPendingAutoCompaction = vi.fn(async () => undefined);
@@ -4392,7 +4397,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
     const awaitPendingAutoCompaction = vi.fn(async () => undefined);
@@ -4483,7 +4488,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const recordUserMessage = vi.fn(() => null);
     const recordSystemMessage = vi.fn(() => 1);
@@ -4546,7 +4551,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
     const awaitPendingAutoCompaction = vi.fn(async () => undefined);
@@ -4639,7 +4644,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
         { role: 'user', content: 'Earlier user message' },
         { role: 'assistant', content: 'Earlier assistant reply' },
       ],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -4855,7 +4860,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
         { role: 'user', content: 'Earlier user message' },
         { role: 'assistant', content: 'Earlier assistant reply' },
       ],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -4899,7 +4904,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'Final system prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const recordUserMessage = vi.fn(() => 1);
     const runtime = createRuntime({
@@ -4980,7 +4985,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5011,7 +5016,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
         { role: 'system', content: '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.' },
         { role: 'assistant', content: 'Earlier assistant reply' },
       ],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5096,7 +5101,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
         { role: 'system', content: '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.' },
         { role: 'user', content: 'Current user message' },
       ],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5219,7 +5224,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'Final system prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus: new EventBus(),
@@ -5270,7 +5275,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'Final system prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus: new EventBus(),
@@ -5325,7 +5330,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5387,7 +5392,7 @@ describe('handleMessageForTurn failure persistence', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5507,7 +5512,7 @@ describe('handleMessageForTurn failure persistence', () => {
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       })),
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -5632,7 +5637,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5678,7 +5683,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5712,7 +5717,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5800,7 +5805,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       const buildContext = vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       }));
       const runtime = createRuntime({
         eventBus,
@@ -5907,7 +5912,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5947,7 +5952,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5998,7 +6003,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -6041,7 +6046,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       })),
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -6075,7 +6080,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -6119,7 +6124,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -6149,7 +6154,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -6189,7 +6194,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -6263,7 +6268,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       })),
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -6300,7 +6305,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -6336,7 +6341,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
     const awaitPendingAutoCompaction = vi.fn(async () => undefined);
@@ -6398,7 +6403,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       })),
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -6432,7 +6437,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const recordUserMessage = vi.fn(() => 1);
     const analyze = vi.fn(async () => {
@@ -6485,7 +6490,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       })),
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -6523,7 +6528,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -6562,7 +6567,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -6614,7 +6619,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -6657,7 +6662,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const analyze = vi.fn(async () => ({
       question: 'Describe exactly what is visible in the current image input.',
@@ -6816,7 +6821,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -6878,7 +6883,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       const buildContext = vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       }));
       const runtime = createRuntime({
         eventBus,

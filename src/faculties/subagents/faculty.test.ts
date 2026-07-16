@@ -17,6 +17,12 @@ import type {
 } from '../../shared/contracts/runtime.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { SubagentFaculty } from './faculty.js';
+import {
+  buildSubagentWorkSpec,
+  createSubagentWorkSpecProvider,
+  SUBAGENT_WORK_SPEC_PURPOSE,
+} from './work-spec.js';
+import { assertWorkSpecLaneParity } from '../../primitives/llm/work-spec.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import { resetCompletionHandoffDedupeForTests } from '../../core/agent/completion-handoff.js';
 import {
@@ -242,11 +248,14 @@ describe('SubagentFaculty', () => {
     const result = await faculty.execute({
       name: 'inspect',
       task: 'inspect runtime state',
+      workSpec: buildSubagentWorkSpec(),
     });
 
     expect(result.subagentId).toMatch(/^subagent-/);
     expect(result.workerLane).toBe('subagent');
     expect(result.lifecycleState).toBe('completed');
+    expect(result.outcome).toBe('completed');
+    expect(result.partial).toBeUndefined();
     expect(result.content).toBe('task completed');
     expect(faculty.getActiveCount()).toBe(0);
     expect(faculty.getRecentTasks(1)).toEqual([
@@ -335,7 +344,7 @@ describe('SubagentFaculty', () => {
       auditTrail,
     });
 
-    await faculty.execute({ name: `${tier}-catalog`, task: 'exercise the first-turn catalog' });
+    await faculty.execute({ name: `${tier}-catalog`, task: 'exercise the first-turn catalog', workSpec: buildSubagentWorkSpec() });
 
     const catalogNames = definitions.map(definition => definition.name);
     const firstTurnTools = new Map(
@@ -375,6 +384,7 @@ describe('SubagentFaculty', () => {
       name: 'deep-inspect',
       task: 'inspect until complete',
       maxTurns: 999,
+      workSpec: buildSubagentWorkSpec(),
     });
 
     expect(result.turns).toBe(AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN);
@@ -396,6 +406,7 @@ describe('SubagentFaculty', () => {
     const result = await faculty.execute({
       name: 'snapshot',
       task: 'capture runtime state',
+      workSpec: buildSubagentWorkSpec(),
     });
 
     const snapshot = faculty.getRuntimeSnapshot({ transcriptLimit: 10 });
@@ -454,6 +465,7 @@ describe('SubagentFaculty', () => {
     const task = await faculty.spawn({
       name: 'inspect',
       task: 'inspect runtime state',
+      workSpec: buildSubagentWorkSpec(),
     });
     expect(task.lifecycleState).toBe('queued');
 
@@ -502,6 +514,7 @@ describe('SubagentFaculty', () => {
     const result = await faculty.execute({
       name: 'handoff',
       task: 'inspect completion handoff behavior',
+      workSpec: buildSubagentWorkSpec(),
       sourceContext: {
         channelId: 'api:parent',
         requestId: 'msg-parent',
@@ -547,11 +560,15 @@ describe('SubagentFaculty', () => {
     const task = await faculty.spawn({
       name: 'cancel-me',
       task: 'hold position',
+      workSpec: buildSubagentWorkSpec(),
     });
 
     const cancelled = await faculty.cancel(task.subagentId, 'operator_cancelled');
 
     expect(cancelled.lifecycleState).toBe('cancelled');
+    expect(cancelled.outcome).toBe('cancelled');
+    expect(cancelled.partial).toBeDefined();
+    expect(cancelled.partial?.remainingBudget.remainingTurns).toBeGreaterThanOrEqual(0);
     expect(cancelled.stateReason).toBe('cancel_requested');
     expect(cancelled.failureReason).toBe('operator_cancelled');
     expect(faculty.getActiveCount()).toBe(0);
@@ -560,6 +577,74 @@ describe('SubagentFaculty', () => {
       lifecycleState: 'cancelled',
       workerLane: 'subagent',
     });
+  });
+
+  // mmo9.7.7 (P1 regression): a cancel that aborts an in-flight turn — surfacing
+  // as a throw from handleMessage — must preserve the accumulated partial. The
+  // catch path reads the hoisted accumulators, so tokens/turns and the last
+  // completed turn's checkpoint survive rather than being zeroed.
+  it('preserves the accumulated partial when cancel aborts an in-flight turn', async () => {
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    let subagentId = '';
+    promptSpy
+      // Turn 0 completes normally with real usage + content.
+      .mockImplementationOnce(async function (this: Agent) {
+        this.state.messages.push({
+          role: 'assistant',
+          content: [{ type: 'text' as const, text: 'turn one output' }],
+          api: '' as any,
+          provider: '' as any,
+          model: 'turn-0-model',
+          usage: {
+            input: 10,
+            output: 42,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 52,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: 'stop' as any,
+          timestamp: Date.now(),
+        });
+      })
+      // Turn 1 is in-flight when the cancel lands, then aborts (throws).
+      .mockImplementationOnce(async function (this: Agent) {
+        void faculty.cancel(subagentId, 'operator_cancelled');
+        throw new Error('aborted mid-turn');
+      });
+
+    const task = await faculty.spawn({
+      name: 'cancel-mid-turn',
+      task: 'run several turns',
+      maxTurns: 3,
+      workSpec: buildSubagentWorkSpec(),
+    });
+    subagentId = task.subagentId;
+    const result = await faculty.wait(task.subagentId);
+
+    expect(result.outcome).toBe('cancelled');
+    // The completed turn's work is preserved, not discarded (the bug reported 0).
+    expect(result.turns).toBe(1);
+    expect(result.content).toBe('turn one output');
+    expect(result.outputTokens).toBe(42);
+    expect(result.inputTokens).toBe(10);
+    // The completed turn's model is retained (the zeroing bug reported '').
+    expect(result.model).not.toBe('');
+    expect(result.partial?.latestCheckpoint).toMatchObject({
+      content: 'turn one output',
+      turnsCompleted: 1,
+    });
+    expect(result.partial?.latestCheckpoint.model).not.toBe('');
+    expect(result.partial?.remainingBudget.remainingTurns).toBe(2);
   });
 
   it('emits blocked handoff when subagent spawn policy rejects required capabilities', async () => {
@@ -580,6 +665,7 @@ describe('SubagentFaculty', () => {
     await expect(faculty.execute({
       name: 'blocked',
       task: 'requires unavailable capability',
+      workSpec: buildSubagentWorkSpec(),
       capabilities: ['general'],
       requiredCapabilities: ['missing-capability'],
       sourceContext: {
@@ -782,6 +868,200 @@ describe('SubagentFaculty', () => {
     await expect(faculty.execute({
       name: 'inspect',
       task: 'inspect runtime state',
+      workSpec: buildSubagentWorkSpec(),
     })).rejects.toThrow(/No eligible model configured for purpose 'background'/);
+  });
+
+  // mmo9.7.7: a bounded run that throws mid-execution reports the honest
+  // `blocked` outcome (never masquerading as completed) with a partial record.
+  it('reports a blocked outcome with a partial record when execution throws', async () => {
+    mockSubagentError = new Error('worker crashed');
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    const task = await faculty.spawn({
+      name: 'crasher',
+      task: 'do work that fails',
+      maxTurns: 3,
+      workSpec: buildSubagentWorkSpec(),
+    });
+    const result = await faculty.wait(task.subagentId);
+
+    expect(result.lifecycleState).toBe('failed');
+    expect(result.outcome).toBe('blocked');
+    expect(result.failureReason).toContain('worker crashed');
+    expect(result.partial).toBeDefined();
+    expect(result.partial?.latestCheckpoint).toMatchObject({
+      content: '',
+      turnsCompleted: 0,
+      model: '',
+    });
+    // No turns ran, so the full turn budget remains.
+    expect(result.partial?.remainingBudget.remainingTurns).toBe(3);
+
+    // execute() surfaces the honest non-completed outcome as a throw.
+    await expect(faculty.execute({
+      name: 'crasher-2',
+      task: 'fail again',
+      workSpec: buildSubagentWorkSpec(),
+    })).rejects.toThrow(/blocked/);
+  });
+
+  // mmo9.7.7: a multi-turn run curtailed by a declared work-spec deadline reports
+  // `budget_limited` with remaining budget + the latest checkpoint, so a caller
+  // can resume or account for the work done.
+  it('reports budget_limited with remaining budget and a checkpoint when the deadline is crossed', async () => {
+    mockSubagentContent = 'partial progress';
+    mockSubagentDelayMs = 25;
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    const task = await faculty.spawn({
+      name: 'budgeted',
+      task: 'work until the budget runs out',
+      maxTurns: 5,
+      workSpec: buildSubagentWorkSpec({ deadlineMs: 5 }),
+    });
+    const result = await faculty.wait(task.subagentId);
+
+    expect(result.lifecycleState).toBe('failed');
+    expect(result.outcome).toBe('budget_limited');
+    expect(result.failureReason).toContain('deadline');
+    // Curtailed after the first turn, well before the 5-turn ceiling.
+    expect(result.turns).toBe(1);
+    expect(result.content).toBe('partial progress');
+    expect(result.partial).toBeDefined();
+    expect(result.partial?.remainingBudget.remainingTurns).toBe(4);
+    expect(result.partial?.remainingBudget.remainingDeadlineMs).toBeLessThanOrEqual(0);
+    expect(result.partial?.latestCheckpoint).toMatchObject({
+      content: 'partial progress',
+      turnsCompleted: 1,
+    });
+  });
+
+  // mmo9.7.7: an output-token ceiling curtails a multi-turn run the same way.
+  it('reports budget_limited when the output-token ceiling is reached', async () => {
+    mockSubagentContent = 'token-heavy output';
+    const faculty = new SubagentFaculty({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test prompt',
+    });
+
+    // The mocked worker turn accumulates 0 output tokens, so a ceiling of 0 is
+    // reached immediately (>= comparison) — deterministic without real usage.
+    const task = await faculty.spawn({
+      name: 'token-budgeted',
+      task: 'emit until the token budget runs out',
+      maxTurns: 4,
+      workSpec: buildSubagentWorkSpec({ maxOutputTokens: 0 }),
+    });
+    const result = await faculty.wait(task.subagentId);
+
+    expect(result.outcome).toBe('budget_limited');
+    expect(result.failureReason).toContain('output-token');
+    expect(result.partial?.remainingBudget.remainingOutputTokens).toBe(0);
+    expect(result.partial?.remainingBudget.remainingTurns).toBe(3);
+  });
+});
+
+describe('subagent work spec seam (mmo9.7.7)', () => {
+  it('builds a background work spec whose declared lane reconciles with the resolver', () => {
+    const spec = buildSubagentWorkSpec();
+    expect(spec.purpose).toBe(SUBAGENT_WORK_SPEC_PURPOSE);
+    expect(spec.durable).toBe(false);
+    // Fails closed (throws) if the declared lane drifts from the single resolver.
+    expect(() => assertWorkSpecLaneParity(spec)).not.toThrow();
+
+    const seeded = buildSubagentWorkSpec({
+      correlation: { channelId: 'api:parent', requestId: 'req-1' },
+      deadlineMs: 1000,
+      maxOutputTokens: 4096,
+    });
+    expect(seeded.deadlineMs).toBe(1000);
+    expect(seeded.maxOutputTokens).toBe(4096);
+    expect(seeded.correlation?.channelId).toBe('api:parent');
+    expect(() => assertWorkSpecLaneParity(seeded)).not.toThrow();
+  });
+
+  it('threads the work spec onto stream calls that carry no spec of their own', async () => {
+    const spec = buildSubagentWorkSpec();
+    const response: LLMResponse = {
+      content: 'x',
+      toolCalls: [],
+      model: 'm',
+      inputTokens: 0,
+      outputTokens: 0,
+      stopReason: 'stop',
+    };
+    const inner: LLMProvider = {
+      stream: vi.fn(async () => response),
+      complete: vi.fn(async () => response),
+    };
+    const wrapped = createSubagentWorkSpecProvider(inner, spec);
+
+    await wrapped.stream({ messages: [] } as any);
+    expect(inner.stream).toHaveBeenCalledWith(
+      { messages: [] },
+      undefined,
+      expect.objectContaining({ workSpec: spec }),
+    );
+
+    // An already-declared stream spec is never overridden.
+    const otherSpec = buildSubagentWorkSpec({ correlation: { channelId: 'api:other' } });
+    await wrapped.stream({ messages: [] } as any, undefined, { workSpec: otherSpec });
+    expect(inner.stream).toHaveBeenLastCalledWith(
+      { messages: [] },
+      undefined,
+      expect.objectContaining({ workSpec: otherSpec }),
+    );
+  });
+
+  it('threads the spec onto complete calls only when the purpose matches', async () => {
+    const spec = buildSubagentWorkSpec();
+    const response: LLMResponse = {
+      content: 'x',
+      toolCalls: [],
+      model: 'm',
+      inputTokens: 0,
+      outputTokens: 0,
+      stopReason: 'stop',
+    };
+    const inner: LLMProvider = {
+      stream: vi.fn(async () => response),
+      complete: vi.fn(async () => response),
+    };
+    const wrapped = createSubagentWorkSpecProvider(inner, spec);
+
+    // Purpose matches the spec (background) → attributed.
+    await wrapped.complete({ messages: [] } as any, 'background');
+    expect(inner.complete).toHaveBeenLastCalledWith(
+      { messages: [] },
+      'background',
+      expect.objectContaining({ workSpec: spec }),
+    );
+
+    // Purpose differs → never mis-attributed (fail closed): no workSpec injected.
+    await wrapped.complete({ messages: [] } as any, 'memory');
+    const memoryCallOptions = (inner.complete as any).mock.calls.at(-1)?.[2];
+    expect(memoryCallOptions?.workSpec).toBeUndefined();
   });
 });

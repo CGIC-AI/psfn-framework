@@ -43,6 +43,7 @@ import type { ContactRuntimeOptions } from '../../core/contacts/runtime-wiring.j
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import { wireSkillsRuntime } from '../../faculties/skills/runtime-wiring.js';
 import { wireWikiRuntime } from '../../faculties/wiki/runtime-wiring.js';
+import type { PersonalProjectLibrary } from '../../faculties/wiki/personal-projects.js';
 import { registerFilesystemTools } from '../../boundary/integrations/filesystem/runtime-wiring.js';
 import { GatewayFilesystemOps } from '../../boundary/integrations/filesystem/gateway-ops.js';
 import { registerImageTools } from '../../primitives/images/runtime-wiring.js';
@@ -177,6 +178,7 @@ export interface AgentCoreRuntime {
   memoryExtractor: MemoryExtractor;
   personaPreamble: PersonaPreamblePort;
   imageVisionReviewer: DefaultImageVisionReviewer;
+  personalProjects: PersonalProjectLibrary;
   appCache: AppCache;
   /** Redis-backed hot session tail; null unless settings.json enables it (psfn-framework-hgw3.5). */
   sessionTailCache: SessionTailCachePort | null;
@@ -425,6 +427,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     gatewayMode: true,
     reviewer: imageVisionReviewer,
     referenceResolver: new ImageReferenceStore(pathSnapshot.companionDataDir),
+    wardrobeLookResolver: wikiRuntime.personalProjects,
   });
   agentLoop.imageVisionReviewer = imageVisionReviewer;
   // htm9.8: vision intake screening — every inbound image attachment is
@@ -607,6 +610,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     memoryExtractor,
     personaPreamble,
     imageVisionReviewer,
+    personalProjects: wikiRuntime.personalProjects,
     appCache,
     sessionTailCache: sessionComposition.sessionTailCache,
     fatigueBudget: fatigueRuntime.fatigueBudget,

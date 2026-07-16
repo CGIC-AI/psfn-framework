@@ -99,10 +99,19 @@ interface MediaToolParams {
   reference_image_id?: string;
   reference_image_tags?: string[];
   use_default_reference?: boolean;
+  wardrobe_look_ref?: string;
 }
 
 export interface ImageReferenceResolver {
   resolveForTool(selector: ImageReferenceSelector): Promise<ResolvedImageReference | null>;
+}
+
+export interface WardrobeLookResolver {
+  resolveWardrobeLook(ref: string, audience?: 'self' | 'primary_contact' | 'public'): {
+    ref: string;
+    name: string;
+    promptFragment: string;
+  };
 }
 
 function resolveGenerationId(result: ImageGenerationResult): string | undefined {
@@ -325,6 +334,18 @@ function appendReferenceImageUrl(
   return [...inputUrls, reference.dataUrl];
 }
 
+function applyWardrobeLook(
+  prompt: string,
+  ref: string | undefined,
+  resolver: WardrobeLookResolver | undefined,
+): string {
+  const normalizedRef = ref?.trim();
+  if (!normalizedRef) return prompt;
+  if (!resolver) throw new Error('Named wardrobe looks are unavailable in this runtime');
+  const look = resolver.resolveWardrobeLook(normalizedRef, 'self');
+  return [prompt, `Named look ${look.ref} (${look.name}): ${look.promptFragment}`].join('\n\n');
+}
+
 async function reviewGeneratedImages(
   reviewer: ImageVisionReviewer | undefined,
   input: {
@@ -536,15 +557,18 @@ async function executeMediaGenerate(
   reviewer: ImageVisionReviewer | undefined,
   params: MediaToolParams,
   toolCallId: string,
+  wardrobeLookResolver?: WardrobeLookResolver,
 ): Promise<AgentToolResult<MediaToolResultDetails>> {
-  const prompt = normalizePrompt(params.prompt);
-  if (!prompt) {
+  const basePrompt = normalizePrompt(params.prompt);
+  if (!basePrompt) {
     return textResultWithError(
       `Missing required field "prompt" for ${GENERATE_IMAGE_TOOL_NAME} action="generate". `
       + 'Minimal valid JSON: {"action":"generate","prompt":"full image description"}.',
       true,
     );
   }
+
+  const prompt = applyWardrobeLook(basePrompt, params.wardrobe_look_ref, wardrobeLookResolver);
 
   const invalidModelError = resolveInvalidFalModelError(
     'generate',
@@ -613,15 +637,19 @@ async function executeMediaEdit(
   params: MediaToolParams,
   toolCallId: string,
   referenceResolver?: ImageReferenceResolver,
+  wardrobeLookResolver?: WardrobeLookResolver,
 ): Promise<AgentToolResult<MediaToolResultDetails>> {
-  const prompt = normalizePrompt(params.prompt);
-  if (!prompt) {
+  const basePrompt = normalizePrompt(params.prompt);
+  if (!basePrompt) {
     return textResultWithError(
       `Missing required field "prompt" for ${GENERATE_IMAGE_TOOL_NAME} action="edit". `
       + 'Minimal valid JSON: {"action":"edit","prompt":"edit instruction","input_urls":["https://example.test/image.png"]}.',
       true,
     );
   }
+
+
+  const prompt = applyWardrobeLook(basePrompt, params.wardrobe_look_ref, wardrobeLookResolver);
 
   const inputUrls = normalizeInputUrls(params.input_urls);
   if (inputUrls.length === 0) {
@@ -752,6 +780,7 @@ export function createGenerateImageTool(
   reviewer?: ImageVisionReviewer,
   options?: {
     referenceResolver?: ImageReferenceResolver;
+    wardrobeLookResolver?: WardrobeLookResolver;
   },
 ): SubstrateAgentTool {
   const tool: SubstrateAgentTool = {
@@ -802,6 +831,10 @@ export function createGenerateImageTool(
       use_default_reference: Type.Optional(Type.Boolean({
         description: 'Include the configured default reference photo as an additional edit input.',
       })),
+      wardrobe_look_ref: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Stable wardrobe:<id> reference. Its saved prompt fragment is appended before generation.',
+      })),
     }),
     execute: async (
       toolCallId: string,
@@ -809,9 +842,16 @@ export function createGenerateImageTool(
     ): Promise<AgentToolResult<MediaToolResultDetails>> => {
       switch (params.action) {
         case 'generate':
-          return await executeMediaGenerate(ops, reviewer, params, toolCallId);
+          return await executeMediaGenerate(ops, reviewer, params, toolCallId, options?.wardrobeLookResolver);
         case 'edit':
-          return await executeMediaEdit(ops, reviewer, params, toolCallId, options?.referenceResolver);
+          return await executeMediaEdit(
+            ops,
+            reviewer,
+            params,
+            toolCallId,
+            options?.referenceResolver,
+            options?.wardrobeLookResolver,
+          );
         case 'analyze':
           return await executeMediaAnalyze(reviewer, params);
         default:
@@ -834,6 +874,7 @@ function createImageGenerationTool(
     selfImage?: boolean;
     toolName?: string;
     referenceResolver?: ImageReferenceResolver;
+    wardrobeLookResolver?: WardrobeLookResolver;
   },
 ): SubstrateAgentTool {
   const selfImage = options?.selfImage ?? false;
@@ -860,6 +901,10 @@ function createImageGenerationTool(
     enable_safety_checker: Type.Optional(Type.Boolean()),
     negative_prompt: Type.Optional(Type.String()),
     use_turbo: Type.Optional(Type.Boolean()),
+    wardrobe_look_ref: Type.Optional(Type.String({
+      minLength: 1,
+      description: 'Stable wardrobe:<id> reference. Its saved prompt fragment is appended before generation.',
+    })),
     ...(selfImage
       ? {
           ...referenceSelectionSchema(),
@@ -906,16 +951,22 @@ function createImageGenerationTool(
         reference_image_tags?: string[];
         use_reference_image?: boolean;
         edit_model?: typeof FAL_EDIT_MODELS[number];
+        wardrobe_look_ref?: string;
       },
     ): Promise<AgentToolResult<ImageToolResultDetails>> => {
       try {
+        const prompt = applyWardrobeLook(
+          params.prompt,
+          params.wardrobe_look_ref,
+          options?.wardrobeLookResolver,
+        );
         const reference = selfImage
           ? await resolveReferenceImage(options?.referenceResolver, params, {
               defaultToSavedReference: true,
             })
           : null;
         let mode: 'create' | 'edit' = reference ? 'edit' : 'create';
-        let reviewPrompt = params.prompt;
+        let reviewPrompt = prompt;
         let notice: string | undefined;
         let result: ImageGenerationResult;
         if (reference) {
@@ -952,7 +1003,7 @@ function createImageGenerationTool(
           let chainResult: ImageGenerationResult | null = null;
           for (const editModel of editChain) {
             try {
-              chainResult = await runReferenceEdit(editModel, params.prompt);
+              chainResult = await runReferenceEdit(editModel, prompt);
               break;
             } catch (error) {
               if (!shouldFallThroughSelfieEditChain(error)) {
@@ -978,7 +1029,7 @@ function createImageGenerationTool(
             }
             // Every tier blocked the original prompt; last resort is a sanitized
             // prompt on the last configured tier, still anchored to the reference.
-            const fallbackPrompt = buildSelfImageContentPolicyFallbackPrompt(params.prompt);
+            const fallbackPrompt = buildSelfImageContentPolicyFallbackPrompt(prompt);
             const finalModel = editChain[editChain.length - 1]!;
             try {
               chainResult = await runReferenceEdit(finalModel, fallbackPrompt);
@@ -1024,7 +1075,7 @@ function createImageGenerationTool(
             imageCount: params.num_images,
           });
           result = await ops.create({
-              prompt: params.prompt,
+              prompt,
               provider: params.provider,
               model: params.model,
               numImages: params.num_images,
@@ -1079,11 +1130,13 @@ export function createSelfieTool(
   reviewer?: ImageVisionReviewer,
   options?: {
     referenceResolver?: ImageReferenceResolver;
+    wardrobeLookResolver?: WardrobeLookResolver;
   },
 ): SubstrateAgentTool {
   return createImageGenerationTool(ops, reviewer, {
     selfImage: true,
     toolName: 'selfie_create',
     referenceResolver: options?.referenceResolver,
+    wardrobeLookResolver: options?.wardrobeLookResolver,
   });
 }

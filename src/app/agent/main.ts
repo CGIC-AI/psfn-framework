@@ -26,6 +26,7 @@ import {
 import { registerFreeTimeTasks } from '../../core/scheduler/free-time.js';
 import { registerWeightedThoughtOutreachTask } from '../../core/scheduler/weighted-thought-outreach-lane.js';
 import { createLlmNudgeEvaluator } from '../../core/intention/weighted-thought-nudge-evaluator.js';
+import { recordWeightedThought } from '../../core/intention/weighted-thought-store-port.js';
 import { HEARTBEAT_SILENT_REFLECTION_TOKEN } from '../../core/scheduler/heartbeat-policy.js';
 import {
   getRunChargeSnapshot,
@@ -372,7 +373,29 @@ async function main(): Promise<void> {
     observerEvalSidecar,
     appCache,
     toolConformanceRunner,
+    personalProjects,
   } = coreRuntime;
+
+  personalProjects.setActivitySink({
+    recordProjectActivity: async (project) => {
+      const weightedThoughtStore = persistenceRuntime.weightedThoughtStore;
+      if (!weightedThoughtStore) {
+        throw new Error('Personal project activity requires the durable weighted-thought store');
+      }
+      await recordWeightedThought(
+        weightedThoughtStore,
+        schedulerConfig.weightedThoughtOutreach.lifecycle,
+        {
+          id: `personal-project:${project.id}`,
+          content: `Return to ${project.title}: ${project.nextStep}`,
+          source: 'personal_project',
+          thoughtClass: 'standard',
+          provenance: { sourceChannelId: 'internal:free-time:project' },
+        },
+        Date.now(),
+      );
+    },
+  });
 
   wireCompanionPresenceContext({
     agentLoop,
@@ -1162,6 +1185,9 @@ async function main(): Promise<void> {
       maxTokens: schedulerConfig.freeTime.returnNote.summaryMaxTokens,
       purpose: 'free_time_return',
     }),
+    loadProjectContext: async () => (
+      await personalProjects.resumeNextActiveProject()
+    )?.context ?? null,
   });
   // ── Weighted-thought outreach lane (E?/1xb.2) ──
   // Internal-state-driven outreach: a weighted thought crossing threshold

@@ -27,6 +27,7 @@ import type { RetrievalQueryEmbeddingProvenance } from '../../shared/retrieval-q
 import { loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
 import { SharedWorldWikiProposalStore } from './shared-world-caretaker-store.js';
 import { SharedWorldWikiProposalService } from './shared-world-caretaker.js';
+import { PersonalProjectLibrary } from './personal-projects.js';
 
 const log = createComponentLogger('WikiRuntime');
 
@@ -76,6 +77,7 @@ export interface WikiRuntimeDeps {
 
 export interface WikiRuntimeWiring {
   store: WikiStore;
+  personalProjects: PersonalProjectLibrary;
   projection: WikiPgvectorProjectionStore | null;
   /**
    * s10f9: read-side handle on `shared.shared_wiki_chunks` for the retrieval
@@ -213,10 +215,13 @@ export async function wireWikiRuntime(
     };
   }
 
+  const personalProjects = new PersonalProjectLibrary(store);
+
   target.registerTool(createWikiTool(store, {
     ...(semanticSearch ? { semanticSearch } : {}),
     ...(deps.getIntakeSinkGate ? { getIntakeSinkGate: deps.getIntakeSinkGate } : {}),
     ...(sharedWorldProposal ? { sharedWorldProposal } : {}),
+    personalProjects,
   }), 'core');
 
   if (projection) {
@@ -247,5 +252,5 @@ export async function wireWikiRuntime(
     })();
   }
 
-  return { store, projection, sharedProjection, retrievalService, proposalStore };
+  return { store, personalProjects, projection, sharedProjection, retrievalService, proposalStore };
 }

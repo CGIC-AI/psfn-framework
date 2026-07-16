@@ -215,11 +215,13 @@ const FREE_TIME_CLOSING = 'There is no task and nothing to prove. When you feel 
 
 export function buildFreeTimeFramingPrompt(input: {
   seedText: string;
+  projectContext?: string | null;
 }): string {
   const seed = input.seedText.trim();
   return [
     '[Free time]',
     seed,
+    ...(input.projectContext?.trim() ? [input.projectContext.trim()] : []),
     FREE_TIME_CLOSING,
   ].join('\n\n');
 }
@@ -383,6 +385,8 @@ export interface FreeTimeRuntimeOptions {
     channelId: string;
     entries: readonly SessionEntry[];
   }) => Promise<string>;
+  /** Resume one active personal project from the existing personal-wiki tier. */
+  loadProjectContext?: () => Promise<string | null>;
   /** Optional recorder for the Garden read surface (recent blocks + spend). */
   recordBlock?: (record: FreeTimeBlockRecord) => void;
   now?: () => number;
@@ -611,8 +615,12 @@ function makeLaneHandler(
       return;
     }
 
+    const projectContext = options.loadProjectContext
+      ? await options.loadProjectContext()
+      : null;
     const framingPrompt = buildFreeTimeFramingPrompt({
       seedText: options.config.seedText,
+      projectContext,
     });
 
     const result = await options.runBlock({

@@ -11,6 +11,7 @@ import type {
   SharedWorldWikiProposalInput,
   SharedWorldWikiProposalSubmissionResult,
 } from './shared-world-caretaker-types.js';
+import { PersonalProjectLibrary } from './personal-projects.js';
 
 function resultText(result: AgentToolResult<any>): string {
   return result.content
@@ -94,6 +95,46 @@ describe('wiki tool', () => {
     }))) as { document: { sourceClass: string; provenanceRefs: string[] } };
     expect(imported.document.sourceClass).toBe('imported_partner_vault_note');
     expect(imported.document.provenanceRefs).toEqual(['vault:partner:Vault Import.md']);
+  });
+
+  it('manages resumable projects and named looks through the existing wiki tool', async () => {
+    const personalProjects = new PersonalProjectLibrary(store);
+    const tool = createWikiTool(store, { personalProjects });
+
+    const projectResult: unknown = JSON.parse(resultText(await tool.execute('project-create', {
+      action: 'project_create',
+      project_id: 'story-panels',
+      title: 'Story Panels',
+      next_step: 'Render the opening scene.',
+      visibility: 'self',
+    })));
+    if (!isRecord(projectResult) || !isRecord(projectResult.project)) {
+      throw new Error('project_create returned malformed data');
+    }
+    expect(projectResult.project.ref).toBe('project:story-panels');
+
+    const lookResult: unknown = JSON.parse(resultText(await tool.execute('look-save', {
+      action: 'wardrobe_save',
+      look_id: 'starlight-study',
+      look_name: 'Starlight Study',
+      look_prompt: 'navy cardigan with silver star embroidery',
+      visibility: 'primary_contact',
+    })));
+    if (!isRecord(lookResult) || !isRecord(lookResult.look)) {
+      throw new Error('wardrobe_save returned malformed data');
+    }
+    expect(lookResult.look.ref).toBe('wardrobe:starlight-study');
+    expect(store.list().map(document => document.id)).toEqual([
+      'wardrobe.look.starlight-study',
+      'project.story-panels',
+    ]);
+  });
+
+  it('fails closed when project actions are unwired', async () => {
+    const tool = createWikiTool(store);
+    const result = await tool.execute('project-list', { action: 'project_list' });
+    expect(resultText(result)).toContain('personal project storage is unavailable');
+    expect(result.details?.isError).toBe(true);
   });
 
   it('queues a shared-world proposal through an enqueue-only dependency', async () => {

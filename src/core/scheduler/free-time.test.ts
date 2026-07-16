@@ -223,6 +223,23 @@ describe('free-time framing', () => {
     expect(prompt).toContain(HEARTBEAT_SILENT_REFLECTION_TOKEN);
     expect(prompt.toLowerCase()).not.toContain('you must');
   });
+
+  it('places an active project intention and recent artifacts in the opening frame', () => {
+    const prompt = buildFreeTimeFramingPrompt({
+      seedText: 'You have some time to yourself.',
+      projectContext: [
+        '[Returning to one of your projects]',
+        'Project: Moon Garden (project:moon-garden)',
+        'Your last intention: paint the second panel.',
+        'Recent artifacts: panel-one.png',
+      ].join('\n'),
+    });
+
+    expect(prompt).toContain('project:moon-garden');
+    expect(prompt).toContain('Your last intention: paint the second panel.');
+    expect(prompt.indexOf('Returning to one of your projects'))
+      .toBeLessThan(prompt.indexOf('There is no task and nothing to prove'));
+  });
 });
 
 // ── Block runner budget ──
@@ -470,6 +487,29 @@ describe('registerFreeTimeTasks', () => {
     } finally {
       nowSpy.mockRestore();
     }
+  });
+
+  it('loads one active project before the first free-time turn', async () => {
+    const nowMs = Date.parse('2026-06-11T06:00:00.000Z');
+    const { scheduler, invokeTurn, runtime } = buildRuntime({
+      turnScript: [HEARTBEAT_SILENT_REFLECTION_TOKEN],
+      now: () => nowMs,
+    });
+    const loadProjectContext = vi.fn(async () => [
+      '[Returning to one of your projects]',
+      'Project: Story Panels (project:story-panels)',
+      'Your last intention: render the opening scene.',
+    ].join('\n'));
+    runtime.loadProjectContext = loadProjectContext;
+    registerFreeTimeTasks(runtime);
+
+    const handler = scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)?.handler;
+    if (!handler) throw new Error('quiet-hours free-time task was not registered');
+    await handler();
+
+    expect(loadProjectContext).toHaveBeenCalledTimes(1);
+    expect(invokeTurn.mock.calls[0]?.[0].content).toContain('project:story-panels');
+    expect(invokeTurn.mock.calls[0]?.[0].content).toContain('render the opening scene');
   });
 
   it('surfaces a "while you were away" note on the partner session after an ACTIVE block', async () => {

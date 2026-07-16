@@ -603,6 +603,8 @@ async function main(): Promise<void> {
           fleetAuthBroker: fleetAuthPersistence.broker,
           fleetAuthJitStepUp: fleetAuthPersistence.jitStepUp,
           fleetAuthPasskeyCeremonies: fleetAuthPersistence.passkeyCeremonies,
+          fleetAuthAccountReapprovalCeremonies:
+            fleetAuthPersistence.accountReapprovalCeremonies,
           fleetAuthChildAssertions: fleetAuthPersistence.childAssertions,
           fleetAuthRequestCapabilities: fleetAuthPersistence.requestCapabilities,
           fleetAuthRequestCapabilityVerifier: fleetAuthPersistence.requestCapabilityVerifier,

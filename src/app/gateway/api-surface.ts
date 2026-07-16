@@ -58,6 +58,7 @@ import { dispatchCompanionUiPrimaryEmbodiment } from '../../boundary/gateway/com
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
 import type { FleetJitStepUpCoordinator } from '../../boundary/fleet-auth/jit-step-up.js';
 import type { TrustedHostPasskeyCeremonyService } from '../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
+import type { TrustedHostAccountReapprovalService } from '../../boundary/fleet-auth/trusted-host-account-reapproval.js';
 import {
   GatewayHubDeviceIngressService,
   type HubDeviceHumanAttachmentPort,
@@ -110,6 +111,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   fleetAuthBroker?: GatewayFleetAuthBroker;
   fleetAuthJitStepUp?: FleetJitStepUpCoordinator;
   fleetAuthPasskeyCeremonies?: TrustedHostPasskeyCeremonyService;
+  fleetAuthAccountReapprovalCeremonies?: TrustedHostAccountReapprovalService;
   fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
   fleetAuthRequestCapabilities?: GatewayRequestCapabilitySigner;
   fleetAuthRequestCapabilityVerifier?: RequestCapabilityVerifier;
@@ -678,6 +680,9 @@ export async function startOptionalGatewayApiServer(
             ...(options.fleetAuthJitStepUp ? { jitStepUp: options.fleetAuthJitStepUp } : {}),
             ...(options.fleetAuthPasskeyCeremonies
               ? { passkeyCeremonies: options.fleetAuthPasskeyCeremonies }
+              : {}),
+            ...(options.fleetAuthAccountReapprovalCeremonies
+              ? { accountReapprovalCeremonies: options.fleetAuthAccountReapprovalCeremonies }
               : {}),
             trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
           }),

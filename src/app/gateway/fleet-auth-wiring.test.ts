@@ -21,6 +21,12 @@ describe('gateway fleet authorization context wiring', () => {
     expect(apiSurfaceSource).toContain('principalAuthenticationWired: false,');
     expect(mainSource).toContain('hubDeviceAssertionVerifier: fleetAuthPersistence,');
     expect(mainSource).toContain('primaryEmbodiments: fleetAuthPersistence.primaryEmbodiments,');
+    expect(mainSource).toContain(
+      'fleetAuthAccountReapprovalCeremonies:\n            fleetAuthPersistence.accountReapprovalCeremonies,',
+    );
+    expect(apiSurfaceSource).toContain(
+      '{ accountReapprovalCeremonies: options.fleetAuthAccountReapprovalCeremonies }',
+    );
     expect(apiSurfaceSource).toContain('new GatewayHubDeviceIngressService({');
     expect(apiSurfaceSource).toContain('.verifyAndConsumeHubDeviceAssertion(assertion, expected)');
   });

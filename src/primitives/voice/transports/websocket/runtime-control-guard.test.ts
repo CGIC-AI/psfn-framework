@@ -145,6 +145,28 @@ function sessionEndAck(frames: VoiceWireOutboundFrame[]): VoiceWireOutboundFrame
   return frames.find((frame) => frame.type === 'ack' && frame.ackType === 'session.end');
 }
 
+// Drive one STT session that emits several `final` transcripts before end.
+async function runMultiFinalTurn(
+  harness: ControlHarness,
+  sessionId: string,
+  finals: string[],
+): Promise<void> {
+  await harness.runtime.handleFrame(harness.session, {
+    wire: VOICE_WIRE_PROTOCOL,
+    type: 'session.start',
+    sessionId,
+  });
+  const queue = harness.sttQueues[harness.sttQueues.length - 1]!;
+  for (const text of finals) {
+    queue.push({ type: 'final', text });
+  }
+  await harness.runtime.handleFrame(harness.session, {
+    wire: VOICE_WIRE_PROTOCOL,
+    type: 'session.end',
+    sessionId,
+  });
+}
+
 describe('WebSocketVoiceRuntime deterministic control-intent guard (mmo9.7.5)', () => {
   it.each(['stop', 'be quiet', 'wait wait', 'hold on', 'never mind'])(
     'handles spoken control "%s" locally with zero model invocations',
@@ -162,30 +184,66 @@ describe('WebSocketVoiceRuntime deterministic control-intent guard (mmo9.7.5)', 
     },
   );
 
-  it('guards a control that arrives as the second STT final (d8vq.1 multi-final coverage)', async () => {
+  it('guards a control-only multi-final session (d8vq.1 stacked controls)', async () => {
     const harness = createControlHarness();
 
-    // One STT session emitting two finals: earlier content, then a bare "stop".
-    // The joined transcript ("what time is it stop") is not a control, but the
-    // second final is — it must be guarded so ZERO model/synthesis calls fire.
-    await harness.runtime.handleFrame(harness.session, {
-      wire: VOICE_WIRE_PROTOCOL,
-      type: 'session.start',
-      sessionId: 'voice-1',
-    });
-    const queue = harness.sttQueues[harness.sttQueues.length - 1]!;
-    queue.push({ type: 'final', text: 'what time is it' });
-    queue.push({ type: 'final', text: 'stop' });
-    await harness.runtime.handleFrame(harness.session, {
-      wire: VOICE_WIRE_PROTOCOL,
-      type: 'session.end',
-      sessionId: 'voice-1',
-    });
+    // Every final is a control ("stop","stop") — deterministic silence, ZERO
+    // model/synthesis calls, clean close.
+    await runMultiFinalTurn(harness, 'voice-1', ['stop', 'stop']);
 
     expect(harness.onAssistantTurn).not.toHaveBeenCalled();
     expect(harness.synthesizeStream).not.toHaveBeenCalled();
     expect(sessionEndAck(harness.outboundFrames)).toBeDefined();
     expect(playbackFrames(harness.outboundFrames)).toHaveLength(0);
+  });
+
+  it('takes the last final on a control-only session with differing intents (d8vq.1 last-wins)', async () => {
+    const harness = createControlHarness();
+
+    // First turn: a real reply so a subsequent "repeat" would have something to
+    // replay — this proves the session resolves to "stop" (silence), not repeat.
+    await harness.runTurn('voice-1', 'what time is it');
+    expect(harness.onAssistantTurn).toHaveBeenCalledTimes(1);
+    expect(harness.synthesizeStream).toHaveBeenCalledTimes(1);
+
+    harness.onAssistantTurn.mockClear();
+    harness.synthesizeStream.mockClear();
+    harness.outboundFrames.length = 0;
+
+    // Control-only ["repeat","stop"]: last-wins -> stop -> deterministic silence,
+    // NOT a replay of the prior utterance.
+    await runMultiFinalTurn(harness, 'voice-2', ['repeat', 'stop']);
+
+    expect(harness.onAssistantTurn).not.toHaveBeenCalled();
+    expect(harness.synthesizeStream).not.toHaveBeenCalled();
+    expect(playbackFrames(harness.outboundFrames)).toHaveLength(0);
+    expect(sessionEndAck(harness.outboundFrames)).toBeDefined();
+  });
+
+  it('sends a content-then-control multi-final session to the model, never swallowing it (d8vq.1)', async () => {
+    const harness = createControlHarness();
+
+    // "don't stop": STT splits into ["don't","stop"]. The joined transcript is
+    // not a control and a non-control final is present, so the whole turn must
+    // reach the model — the pre-existing safe-direction limitation. Never a
+    // silent drop.
+    await runMultiFinalTurn(harness, 'voice-1', ["don't", 'stop']);
+
+    expect(harness.onAssistantTurn).toHaveBeenCalledTimes(1);
+    expect(harness.onAssistantTurn).toHaveBeenCalledWith(expect.objectContaining({
+      transcript: "don't stop",
+    }));
+  });
+
+  it('sends longer content-then-control multi-final speech to the model (d8vq.1)', async () => {
+    const harness = createControlHarness();
+
+    await runMultiFinalTurn(harness, 'voice-1', ['tell me about cats', 'stop']);
+
+    expect(harness.onAssistantTurn).toHaveBeenCalledTimes(1);
+    expect(harness.onAssistantTurn).toHaveBeenCalledWith(expect.objectContaining({
+      transcript: 'tell me about cats stop',
+    }));
   });
 
   it('does not treat ordinary speech containing a control word as a control', async () => {

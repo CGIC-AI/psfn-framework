@@ -45,6 +45,14 @@ Supported until beta:
   the unchanged fleet. Remove the command and receipt reader before beta after
   every split fleet has a completed receipt (or a plan proving no system-root
   per-companion owners remain).
+- Explicit scheduler owner-shape migration through
+  `npm run migrate:scheduler-owner -- --data-dir <exact-companion-data-dir>`.
+  This operator-only command may migrate retired scheduler cadence keys in one
+  named companion root; it is never part of launcher startup and may not infer
+  `SYSTEM_DATA_DIR`, `DATA_DIR`, or another companion's root. Validate the
+  resulting `scheduler.json` through the canonical startup-owner preflight.
+  Remove the command before beta after every companion owner has the canonical
+  scheduler shape.
 - Startup owner-file hydration for currently supported legacy owner data. Hydration may seed missing owner files on first boot, migrate or warn on existing owner-file drift, and load model/provider registries with the existing migration paths, but it must not restore `.env` as mutable-settings authority.
 - Existing companion persistence migrations for legacy continuity files, session channel filenames, opaque pre-cutover SQLite database placement, contact `discord_user_id` identity rows, and the `core_memory.json` orientation filename. These flows may preserve or move opaque files but do not open them through a SQLite reader; they are not permission to add new parallel artifact names.
 - Tool-surface migration aliases documented in `docs/tool-surface.md`. They preserve model-facing continuity while unified tools roll out, and should be removed after canonical actions have stable adoption.

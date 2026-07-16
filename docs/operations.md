@@ -426,6 +426,11 @@ The live alpha migration boundary is defined in [`docs/specifications.md`](./spe
   fan-out of registered per-companion owner files left in a current split
   fleet's system root. Do not point the single-companion persistence cutover at
   `SYSTEM_DATA_DIR` and do not retain a shared fallback reader.
+- Use `npm run migrate:scheduler-owner -- --data-dir <exact-companion-data-dir>`
+  only as an explicit one-companion alpha owner-shape migration. The standard
+  launcher never runs it, and the command refuses to infer a system, shared, or
+  companion root. Run it separately for each intended companion, then run the
+  startup-owner preflight before restarting the fleet.
 - Use continuous/local `DATA_DIR` only for local development and smoke testing. Production must use split roots and fail closed on shared-root or partial split-root wiring.
 - Keep `WORKSPACE_PATH` as one companion's Personal Workspace. It must not
   overlap runtime data roots; live Purrsephone personal files live under

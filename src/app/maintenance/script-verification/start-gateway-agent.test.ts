@@ -55,16 +55,11 @@ describe('start-gateway-agent launcher supervision', () => {
         '',
         'provision_companion_fleet',
         '',
-        'echo "[${MODE_LABEL}] migrating legacy scheduler owner if needed..."',
-        'if [ -x "./node_modules/.bin/tsx" ]; then',
-        '  ./node_modules/.bin/tsx src/app/maintenance/migrate-scheduler-owner.ts --apply',
-        'else',
-        '  npm run --silent migrate:scheduler-owner -- --apply',
-        'fi',
-        '',
         'echo "[${MODE_LABEL}] verifying startup owner files..."',
       ].join('\n'),
     );
+    expect(launcher).not.toContain('migrate-scheduler-owner');
+    expect(launcher).not.toContain('migrate:scheduler-owner');
     expect(launcher).toContain(
       [
         'echo "[${MODE_LABEL}] verifying startup owner files..."',
@@ -85,6 +80,19 @@ describe('start-gateway-agent launcher supervision', () => {
         '  exec "$0" "$@"',
       ].join('\n'),
     );
+  });
+
+  it('keeps the alpha scheduler migration manual and exact-companion-root only', () => {
+    const migration = readFileSync(
+      join(repoRoot, 'src/app/maintenance/migrate-scheduler-owner.ts'),
+      'utf8',
+    );
+    expect(migration).toContain(
+      "throw new Error('--data-dir is required; pass the exact companion owner-file directory')",
+    );
+    expect(migration).not.toContain('resolveConfiguredSystemDataDir');
+    expect(migration).not.toContain('SYSTEM_DATA_DIR');
+    expect(migration).not.toContain('process.env.DATA_DIR');
   });
 
   it('prevents a concurrent launcher from mutating fleet workspaces', () => {
@@ -115,7 +123,7 @@ describe('start-gateway-agent launcher supervision', () => {
       '  scripts/provision-companion-fleet.ts)',
       `    printf 'provisioned\\n' >> '${markerPath}'`,
       '    ;;',
-      '  src/app/maintenance/migrate-scheduler-owner.ts) exit 0 ;;',
+      '  src/app/maintenance/migrate-scheduler-owner.ts) exit 97 ;;',
       '  scripts/verify-startup-owner-files.ts) exit 0 ;;',
       '  *) sleep 30 ;;',
       'esac',
@@ -177,7 +185,7 @@ describe('start-gateway-agent launcher supervision', () => {
       [
         '#!/usr/bin/env bash',
         'case "$1" in',
-        '  src/app/maintenance/migrate-scheduler-owner.ts) exit 0 ;;',
+        '  src/app/maintenance/migrate-scheduler-owner.ts) exit 97 ;;',
         '  scripts/verify-startup-owner-files.ts) exit 0 ;;',
         '  scripts/resolve-single-companion-auth.ts) printf "v1.agent-proof\\tv1.worker-proof\\n"; exit 0 ;;',
         '  *) sleep 30 ;;',
@@ -329,7 +337,7 @@ describe('start-gateway-agent launcher supervision', () => {
       [
         '#!/usr/bin/env bash',
         'case "$1" in',
-        '  src/app/maintenance/migrate-scheduler-owner.ts) exit 0 ;;',
+        '  src/app/maintenance/migrate-scheduler-owner.ts) exit 97 ;;',
         '  scripts/verify-startup-owner-files.ts) exit 0 ;;',
         `  scripts/resolve-single-companion-auth.ts) printf "v1.${'a'.repeat(64)}\\tv1.${'b'.repeat(64)}\\n"; exit 0 ;;`,
         '  src/app/gateway/main.ts)',

@@ -2,7 +2,11 @@ import { afterAll, beforeAll, describe, it, expect, vi } from 'vitest';
 import { REPLSandbox, FinalAnswerSignal } from './sandbox.js';
 import type { SandboxBudgetRef } from './sandbox.js';
 import type { LLMProviderPort, EmbeddingProviderPort } from '../../agent/contracts.js';
-import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
+import type {
+  MemorySearchResult,
+  MemorySubjectAuthorizedQuery,
+  MemorySubjectAuthorizedQueryResult,
+} from '../../../faculties/memory/memory-store-port.js';
 import type { SessionManager } from '../../session/manager.js';
 import type { LLMResponse } from '../../../shared/contracts/runtime.js';
 import { EventBus } from '../../../shared/event-bus.js';
@@ -10,6 +14,8 @@ import { Scheduler } from '../../scheduler/scheduler.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
 import { withChildProcessSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
 import type { REPLMutationPolicy } from './types.js';
+import { runWithRequestContext } from '../../../primitives/llm/request-context.js';
+import { InMemoryMemoryStore } from '../../../test-support/in-memory-memory-store.js';
 
 const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
 
@@ -99,6 +105,87 @@ function makeExecutionPort(
     shellExec: overrides.shellExec ?? base.shellExec,
     executeCode: overrides.executeCode ?? base.executeCode,
   };
+}
+
+const AUTHORIZED_REFLECTION_CONTEXT = {
+  channelId: 'internal:reflection:analysis-workbench-test',
+  callType: 'background',
+  purpose: 'analysis-workbench.subject-authorization.test',
+  requesterProvenance: 'self_directed',
+} as const;
+
+function memoryResult(
+  id: string,
+  text: string,
+  overrides: Partial<MemorySearchResult> = {},
+): MemorySearchResult {
+  return {
+    type: 'semantic',
+    importance: 0.8,
+    confidence: 0.9,
+    emotionalValence: 0,
+    salience: 0.8,
+    sourceRef: 'test:analysis-workbench',
+    extractedAt: 1,
+    lastAccessed: 1,
+    accessCount: 0,
+    tags: [],
+    sensitivity: 'personal',
+    similarity: 0.9,
+    ...overrides,
+    id,
+    text,
+  };
+}
+
+class SubjectAuthorizedSandboxMemoryStore extends InMemoryMemoryStore {
+  readonly authorizedQueries: MemorySubjectAuthorizedQuery[] = [];
+
+  constructor(private readonly authorizedMemories: readonly MemorySearchResult[]) {
+    super();
+  }
+
+  async queryAuthorizedMemorySubjects(
+    input: MemorySubjectAuthorizedQuery,
+  ): Promise<MemorySubjectAuthorizedQueryResult> {
+    this.authorizedQueries.push(input);
+    switch (input.selector.kind) {
+      case 'count':
+        return { memories: [], total: this.authorizedMemories.length };
+      case 'detail': {
+        const memories = this.authorizedMemories.filter(memory => memory.id === input.selector.memoryId);
+        return { memories, total: memories.length };
+      }
+      case 'embedding_search': {
+        const memories = this.authorizedMemories
+          .filter(memory => memory.similarity >= input.selector.threshold)
+          .slice(input.selector.offset ?? 0, input.selector.limit);
+        return { memories, total: memories.length };
+      }
+      case 'text_search':
+      case 'list': {
+        const offset = input.selector.offset ?? 0;
+        const memories = this.authorizedMemories.slice(offset, input.selector.limit);
+        return { memories, total: memories.length };
+      }
+    }
+  }
+}
+
+function reflectionSessionManager() {
+  return {
+    getRecentMessages: vi.fn(() => []),
+    appendSystemNote: vi.fn(() => undefined),
+    isSessionRetiredOrQuarantined: vi.fn(() => false),
+    getRetiredLogicalSessionIds: vi.fn(() => new Set<string>()),
+  };
+}
+
+function executeAsAuthorizedReflection(sandbox: REPLSandbox, code: string) {
+  return runWithRequestContext(
+    AUTHORIZED_REFLECTION_CONTEXT,
+    () => sandbox.execute(code, 5000, 8192),
+  );
 }
 
 describe('REPLSandbox', () => {
@@ -727,32 +814,39 @@ describe('REPLSandbox', () => {
 
   it('memory_search queries store when available', async () => {
     const embedding = new Float32Array([1, 0, 0]);
-    const embeddingService = {
+    const embeddingService: EmbeddingProviderPort = {
       embed: vi.fn(async () => embedding),
-      embedBatch: vi.fn(),
+      embedBatch: vi.fn(async () => []),
       dims: 3,
-    } as unknown as EmbeddingProviderPort;
-
-    const memoryStore = {
-      searchByEmbedding: vi.fn(() => [
-        { text: 'memory text', type: 'semantic', importance: 0.8, similarity: 0.9 },
-      ]),
-      getAllActiveMemories: vi.fn(() => []),
-    } as unknown as MemoryStorePort;
+    };
+    const memoryStore = new SubjectAuthorizedSandboxMemoryStore([
+      memoryResult('memory-1', 'memory text'),
+    ]);
 
     const sandbox = new REPLSandbox({
       llmProvider: mockLLM(),
       embeddingService,
-      memoryStore,
-      sessionManager: null,
+      memoryStore: memoryStore.asPort(),
+      sessionManager: reflectionSessionManager(),
     });
 
-    const result = await sandbox.execute(
+    const result = await executeAsAuthorizedReflection(
+      sandbox,
       'const r = await memory_search("test", 5); print(r[0].text);',
-      5000, 8192,
     );
     expect(result.output).toBe('memory text');
     expect(embeddingService.embed).toHaveBeenCalledWith('test');
+    expect(memoryStore.authorizedQueries).toEqual([
+      expect.objectContaining({
+        authorization: expect.objectContaining({
+          action: 'embedding',
+          viewerContactIds: ['companion:internal'],
+          allowedSubjectClasses: ['companion_private'],
+          allowedViewerRelations: ['none'],
+        }),
+        selector: expect.objectContaining({ kind: 'embedding_search', limit: 5 }),
+      }),
+    ]);
   });
 
   it('memory_count returns 0 when no store', async () => {
@@ -762,21 +856,59 @@ describe('REPLSandbox', () => {
   });
 
   it('memory_count uses countActiveMemories when available', async () => {
-    const memoryStore = {
-      countActiveMemories: vi.fn(async () => 7),
-    } as unknown as MemoryStorePort;
+    const memoryStore = new SubjectAuthorizedSandboxMemoryStore(
+      Array.from({ length: 7 }, (_, index) => memoryResult(`memory-${index}`, `memory ${index}`)),
+    );
 
     const sandbox = new REPLSandbox({
       llmProvider: mockLLM(),
       embeddingService: null,
-      memoryStore,
-      sessionManager: null,
+      memoryStore: memoryStore.asPort(),
+      sessionManager: reflectionSessionManager(),
     });
 
-    const result = await sandbox.execute('print(await memory_count());', 5000, 8192);
+    const result = await executeAsAuthorizedReflection(sandbox, 'print(await memory_count());');
 
     expect(result.output).toBe('7');
-    expect((memoryStore.countActiveMemories as ReturnType<typeof vi.fn>)).toHaveBeenCalledTimes(1);
+    expect(memoryStore.authorizedQueries).toEqual([
+      expect.objectContaining({
+        authorization: expect.objectContaining({ action: 'count' }),
+        selector: { kind: 'count' },
+      }),
+    ]);
+  });
+
+  it('memory helpers fail closed without a trusted subject context', async () => {
+    const embeddingService: EmbeddingProviderPort = {
+      embed: vi.fn(async () => new Float32Array([1, 0, 0])),
+      embedBatch: vi.fn(async () => []),
+      dims: 3,
+    };
+    const memoryStore = new SubjectAuthorizedSandboxMemoryStore([
+      memoryResult('private-memory', 'private memory text'),
+    ]);
+    const sandbox = new REPLSandbox({
+      llmProvider: mockLLM(),
+      embeddingService,
+      memoryStore: memoryStore.asPort(),
+      sessionManager: reflectionSessionManager(),
+    });
+
+    const result = await sandbox.execute(
+      [
+        'const rows = await memory_search("private", 5); print(rows.length);',
+        'print(await memory_count());',
+        'print(await memory_get_by_id("private-memory"));',
+      ].join('\n'),
+      5000,
+      8192,
+    );
+
+    expect(result.output).toBe('0\n0\nnull');
+    expect(memoryStore.authorizedQueries).toEqual([]);
+    expect(sandbox.collectEvidence()).toEqual([
+      expect.objectContaining({ source: 'memory_search', snippet: '', resultCount: 0 }),
+    ]);
   });
 
   it('getLocals returns user-defined variables', async () => {
@@ -1034,32 +1166,33 @@ describe('REPLSandbox', () => {
 describe('evidence collection', () => {
   it('collectEvidence drains accumulated evidence', async () => {
     const embedding = new Float32Array([1, 0, 0]);
-    const embeddingService = {
+    const embeddingService: EmbeddingProviderPort = {
       embed: vi.fn(async () => embedding),
-      embedBatch: vi.fn(),
+      embedBatch: vi.fn(async () => []),
       dims: 3,
-    } as unknown as EmbeddingProviderPort;
-    const memoryStore = {
-      searchByEmbedding: vi.fn(() => [
-        { text: 'found memory', type: 'semantic', importance: 0.8, similarity: 0.9 },
-      ]),
-      getAllActiveMemories: vi.fn(() => []),
-    } as unknown as MemoryStorePort;
+    };
+    const memoryStore = new SubjectAuthorizedSandboxMemoryStore([
+      memoryResult('found-memory', 'found memory'),
+    ]);
 
     const sandbox = new REPLSandbox({
       llmProvider: mockLLM(),
       embeddingService,
-      memoryStore,
-      sessionManager: null,
+      memoryStore: memoryStore.asPort(),
+      sessionManager: reflectionSessionManager(),
     });
 
-    await sandbox.execute('await memory_search("test query");', 5000, 8192);
+    await executeAsAuthorizedReflection(sandbox, 'await memory_search("test query");');
     const evidence = sandbox.collectEvidence();
     expect(evidence).toHaveLength(1);
     expect(evidence[0].source).toBe('memory_search');
     expect(evidence[0].query).toBe('test query');
     expect(evidence[0].resultCount).toBe(1);
     expect(evidence[0].snippet).toBe('found memory');
+    expect(memoryStore.authorizedQueries[0]).toMatchObject({
+      authorization: { action: 'embedding' },
+      selector: { kind: 'embedding_search' },
+    });
 
     // Second call should return empty (drained)
     const evidence2 = sandbox.collectEvidence();
@@ -1102,54 +1235,53 @@ describe('evidence collection', () => {
   });
 
   it('records memory_get_by_id evidence', async () => {
-    const memoryStore = {
-      getById: vi.fn(() => ({
-        id: 'mem-123',
-        text: 'remembered fact about cats',
-        type: 'semantic',
+    const memoryStore = new SubjectAuthorizedSandboxMemoryStore([
+      memoryResult('mem-123', 'remembered fact about cats', {
         importance: 0.7,
-        confidence: 0.9,
         emotionalValence: 0.3,
-        salience: 0.8,
-        sourceRef: 'test',
         tags: ['cats'],
-      })),
-      searchByEmbedding: vi.fn(() => []),
-      getAllActiveMemories: vi.fn(() => []),
-    } as unknown as MemoryStorePort;
+      }),
+    ]);
 
     const sandbox = new REPLSandbox({
       llmProvider: mockLLM(),
       embeddingService: null,
-      memoryStore,
-      sessionManager: null,
+      memoryStore: memoryStore.asPort(),
+      sessionManager: reflectionSessionManager(),
     });
 
-    await sandbox.execute('const m = memory_get_by_id("mem-123"); print(m.text);', 5000, 8192);
+    await executeAsAuthorizedReflection(
+      sandbox,
+      'const m = await memory_get_by_id("mem-123"); print(m.text);',
+    );
     const evidence = sandbox.collectEvidence();
     expect(evidence).toHaveLength(1);
     expect(evidence[0].source).toBe('memory_get_by_id');
     expect(evidence[0].query).toBe('mem-123');
     expect(evidence[0].snippet).toBe('remembered fact about cats');
     expect(evidence[0].resultCount).toBe(1);
+    expect(memoryStore.authorizedQueries[0]).toMatchObject({
+      authorization: { action: 'detail' },
+      selector: { kind: 'detail', memoryId: 'mem-123' },
+    });
   });
 
   it('memory_get_by_id records no evidence when memory not found', async () => {
-    const memoryStore = {
-      getById: vi.fn(() => null),
-      searchByEmbedding: vi.fn(() => []),
-      getAllActiveMemories: vi.fn(() => []),
-    } as unknown as MemoryStorePort;
+    const memoryStore = new SubjectAuthorizedSandboxMemoryStore([]);
 
     const sandbox = new REPLSandbox({
       llmProvider: mockLLM(),
       embeddingService: null,
-      memoryStore,
-      sessionManager: null,
+      memoryStore: memoryStore.asPort(),
+      sessionManager: reflectionSessionManager(),
     });
 
-    await sandbox.execute('const m = memory_get_by_id("nonexistent"); print(m);', 5000, 8192);
+    await executeAsAuthorizedReflection(
+      sandbox,
+      'const m = await memory_get_by_id("nonexistent"); print(m);',
+    );
     expect(sandbox.collectEvidence()).toHaveLength(0);
+    expect(memoryStore.authorizedQueries).toHaveLength(1);
   });
 
   it('collects no evidence for operations without hooks', async () => {

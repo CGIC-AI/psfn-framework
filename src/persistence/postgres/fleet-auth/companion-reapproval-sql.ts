@@ -60,6 +60,76 @@ BEGIN
       RAISE EXCEPTION 'companion reapproval idempotency key conflicts with prior authority'
         USING ERRCODE = '42501';
     END IF;
+
+    -- An immutable allow event is a replay receipt only while its exact
+    -- post-state is still current. Backups deliberately retain audit history,
+    -- but restore advances the checkpoint, quarantines durable authority and
+    -- clears ceremonies. Rechecking all three under lock prevents that inert
+    -- history from becoming an executable success receipt, including through
+    -- direct SECURITY DEFINER invocation.
+    SELECT authority_generation, global_auth_epoch, restore_checkpoint, authority_lineage_id
+      INTO v_generation, v_epoch, v_restore_checkpoint, v_authority_lineage
+    FROM fleet_auth.authority_state
+    WHERE singleton = TRUE
+    FOR UPDATE;
+    SELECT * INTO v_companion
+    FROM fleet_auth.companion_authority_state
+    WHERE companion_id = p_companion_id
+    FOR UPDATE;
+    SELECT * INTO v_ceremony
+    FROM fleet_auth.trusted_host_ceremonies
+    WHERE ceremony_id = p_ceremony_id
+    FOR UPDATE;
+    IF v_prior_audit.reason_code IS DISTINCT FROM 'trusted_host_companion_reapproval'
+       OR v_prior_audit.resource IS DISTINCT FROM format(
+         'companion:%s;lineage:%s', p_companion_id, p_lineage_id
+       )
+       OR v_prior_audit.ceremony_id IS DISTINCT FROM p_ceremony_id
+       OR v_prior_audit.decision_context->>'schemaVersion' IS DISTINCT FROM '2'
+       OR v_prior_audit.decision_context->>'companionDigest' IS DISTINCT FROM
+          encode(sha256(convert_to(p_companion_id::text, 'UTF8')), 'hex')
+       OR v_prior_audit.decision_context->>'authorityLineageId'
+          IS DISTINCT FROM v_authority_lineage
+       OR (v_prior_audit.decision_context->>'authorityGeneration')::bigint
+          IS DISTINCT FROM v_generation
+       OR (v_prior_audit.decision_context->>'restoreCheckpoint')::bigint
+          IS DISTINCT FROM v_restore_checkpoint
+       OR v_prior_audit.authority_generation IS DISTINCT FROM v_generation
+       OR v_prior_audit.global_auth_epoch IS DISTINCT FROM v_epoch
+       OR v_companion.companion_id IS NULL
+       OR v_companion.lifecycle IS DISTINCT FROM 'active'
+       OR v_companion.restore_state IS DISTINCT FROM 'live'
+       OR v_companion.version IS DISTINCT FROM
+          (v_prior_audit.decision_context->>'afterVersion')::bigint
+       OR v_companion.authority_generation IS DISTINCT FROM v_generation
+       OR v_companion.authority_lineage_id IS DISTINCT FROM p_lineage_id
+       OR v_companion.lineage_generation IS DISTINCT FROM p_lineage_generation
+       OR v_companion.readd_decision_id IS DISTINCT FROM p_readd_decision_id
+       OR v_ceremony.ceremony_id IS NULL
+       OR v_ceremony.kind IS DISTINCT FROM 'companion_reapproval'
+       OR v_ceremony.status IS DISTINCT FROM 'consumed'
+       OR v_ceremony.expected_companion_id IS DISTINCT FROM p_companion_id
+       OR NOT EXISTS (
+         SELECT 1
+         FROM fleet_auth.authority_floor_tombstone_projection AS lineage
+         WHERE lineage.kind = 'companion_lineage_floor'
+           AND lineage.resource_hash = encode(
+             sha256(convert_to(p_companion_id::text, 'UTF8')), 'hex'
+           )
+           AND lineage.authority_generation = p_lineage_generation
+           AND lineage.companion_lineage_id = p_lineage_id
+       ) OR NOT EXISTS (
+         SELECT 1
+         FROM fleet_auth.authority_floor_tombstone_projection AS removal
+         WHERE removal.kind = 'companion'
+           AND removal.resource_hash = encode(
+             sha256(convert_to(p_companion_id::text, 'UTF8')), 'hex'
+           )
+           AND removal.authority_generation < p_lineage_generation
+       ) THEN
+      RAISE EXCEPTION 'companion reapproval receipt does not match current companion authority'
+        USING ERRCODE = '42501';
+    END IF;
     RETURN jsonb_build_object(
       'companionId', p_companion_id::text,
       'lineageId', p_lineage_id,
@@ -201,7 +271,7 @@ BEGIN
     p_at,
     p_ceremony_id,
     jsonb_build_object(
-      'schemaVersion', 1,
+      'schemaVersion', 2,
       'ceremonyId', p_ceremony_id::text,
       'companionDigest', encode(sha256(convert_to(p_companion_id::text, 'UTF8')), 'hex'),
       'lineageId', p_lineage_id,
@@ -213,7 +283,9 @@ BEGIN
       'beforeVersion', p_companion_version,
       'afterVersion', p_companion_version + 1,
       'readdDecisionId', p_readd_decision_id::text,
+      'authorityLineageId', v_authority_lineage,
       'authorityGeneration', v_generation,
+      'restoreCheckpoint', v_restore_checkpoint,
       'globalAuthEpoch', v_new_epoch
     )
   );

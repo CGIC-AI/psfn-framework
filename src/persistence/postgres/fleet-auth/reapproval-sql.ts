@@ -57,19 +57,18 @@ DECLARE
   v_lifecycle_column text;
   v_new_lifecycle text;
   v_schema_owner text;
-  v_companion_lineage_quarantine boolean;
+  v_companion_lineage_non_active boolean;
 BEGIN
   -- Restored quarantine and a newly allocated companion lineage are both
   -- activation gates. The latter deliberately remains restore_state='live':
   -- it was not restored, but still requires its exact trusted-host ceremony.
-  v_companion_lineage_quarantine := TG_TABLE_NAME = 'companion_authority_state'
-    AND (v_old->>'restore_state') = 'live'
-    AND (v_old->>'lifecycle') = 'quarantined'
+  v_companion_lineage_non_active := TG_TABLE_NAME = 'companion_authority_state'
+    AND (v_old->>'lifecycle') <> 'active'
     AND (v_old->>'authority_lineage_id') IS NOT NULL
     AND (v_old->>'lineage_generation') IS NOT NULL
     AND (v_old->>'readd_decision_id') IS NOT NULL;
   IF (v_old->>'restore_state') IS DISTINCT FROM 'quarantined'
-     AND NOT v_companion_lineage_quarantine THEN
+     AND NOT v_companion_lineage_non_active THEN
     RETURN NEW;
   END IF;
 
@@ -110,9 +109,54 @@ BEGIN
     RETURN NEW;
   END IF;
 
-  IF v_companion_lineage_quarantine THEN
-    IF (v_new->>'restore_state') NOT IN ('live', 'quarantined')
-       OR v_new_lifecycle NOT IN ('quarantined', 'removed')
+  IF v_companion_lineage_non_active THEN
+    -- A legitimately removed, previously reapproved companion may be re-added
+    -- on a strictly newer projected lineage. This transition remains
+    -- quarantined and is the only non-owner mutation of the protected tuple.
+    IF (v_old->>'restore_state') = 'live'
+       AND (v_old->>'lifecycle') = 'removed'
+       AND (v_new->>'restore_state') = 'live'
+       AND v_new_lifecycle = 'quarantined'
+       AND (v_new->>'version')::bigint = (v_old->>'version')::bigint + 1
+       AND (v_new->>'authority_generation')::bigint =
+          (v_new->>'lineage_generation')::bigint
+       AND (v_new->>'lineage_generation')::bigint >
+          (v_old->>'lineage_generation')::bigint
+       AND (v_new->>'authority_lineage_id') IS NOT NULL
+       AND (v_new->>'authority_lineage_id') IS DISTINCT FROM
+          (v_old->>'authority_lineage_id')
+       AND (v_new->>'readd_decision_id') IS NOT NULL
+       AND (v_new->>'readd_decision_id') IS DISTINCT FROM
+          (v_old->>'readd_decision_id')
+       AND EXISTS (
+         SELECT 1
+         FROM fleet_auth.authority_floor_tombstone_projection AS lineage
+         WHERE lineage.kind = 'companion_lineage_floor'
+           AND lineage.resource_hash = encode(
+             sha256(convert_to(v_old->>'companion_id', 'UTF8')), 'hex'
+           )
+           AND lineage.authority_generation =
+             (v_new->>'lineage_generation')::bigint
+           AND lineage.companion_lineage_id = v_new->>'authority_lineage_id'
+       ) AND EXISTS (
+         SELECT 1
+         FROM fleet_auth.authority_floor_tombstone_projection AS removal
+         WHERE removal.kind = 'companion'
+           AND removal.resource_hash = encode(
+             sha256(convert_to(v_old->>'companion_id', 'UTF8')), 'hex'
+           )
+           AND removal.authority_generation <
+             (v_new->>'lineage_generation')::bigint
+       ) THEN
+      RETURN NEW;
+    END IF;
+
+    -- Every other update must preserve the complete non-active authority
+    -- state. In particular, changing quarantined -> removed no longer creates
+    -- an unguarded second hop to active, and a restored lineage cannot shed
+    -- restore quarantine or its exact tuple.
+    IF v_new_lifecycle IS DISTINCT FROM (v_old->>'lifecycle')
+       OR (v_new->>'restore_state') IS DISTINCT FROM (v_old->>'restore_state')
        OR (v_new->>'authority_generation') IS DISTINCT FROM (v_old->>'authority_generation')
        OR (v_new->>'version') IS DISTINCT FROM (v_old->>'version')
        OR (v_new->>'authority_lineage_id') IS DISTINCT FROM (v_old->>'authority_lineage_id')

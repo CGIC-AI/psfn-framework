@@ -740,6 +740,18 @@
       "value": "8"
     },
     {
+      "file": "src/channels/api/server/fleet-auth-child-assertion-route.ts",
+      "name": "MAX_EXCHANGE_BODY_BYTES",
+      "value": "256 * 1024",
+      "note": "Protocol-owned denial-of-service ceiling for the authenticated internal exchange envelope, not a mutable product tuning setting."
+    },
+    {
+      "file": "src/channels/api/server/fleet-auth-child-assertion-route.ts",
+      "name": "MAX_TARGET_BODY_BYTES",
+      "value": "128 * 1024",
+      "note": "Protocol-owned denial-of-service ceiling below the exchange envelope cap, not a mutable product tuning setting."
+    },
+    {
       "file": "src/channels/api/server/companion-relay-routes.ts",
       "name": "APPROVAL_DECISION_MAX_BODY_BYTES",
       "value": "16 * 1024"

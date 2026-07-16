@@ -13,6 +13,7 @@ import {
   validateGardenRequestMetadata,
 } from '../../boundary/fleet-auth/request-capability-target.js';
 import { requireGardenRouteCapability } from '../../boundary/fleet-auth/garden-route-capabilities.js';
+import { stripBrowserRequestCapabilityHeaders } from '../../boundary/fleet-auth/request-capability-transport.js';
 
 const TELEMETRY_WEBSOCKET_PATH = '/api/admin/events';
 export const ADMIN_TELEMETRY_ROUTE_CAPABILITY = requireGardenRouteCapability(
@@ -139,6 +140,7 @@ export class AdminServerTelemetryTransport {
   }
 
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    stripBrowserRequestCapabilityHeaders(req.headers);
     let target;
     try {
       target = validateGardenRequestMetadata({

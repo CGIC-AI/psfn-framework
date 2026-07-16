@@ -155,6 +155,10 @@ export interface VerifiedRequestCapability {
   readonly requestId: string;
   readonly decisionId: string;
   readonly jti: string;
+  readonly action: FleetAuthAction;
+  readonly bodyDigest: string;
+  readonly resourceDigest: string;
+  readonly versions: RequestCapabilityAuthorityVersions;
   readonly targetDigest: string;
   readonly authorizationDigest: string;
   readonly issuedAt: number;
@@ -896,6 +900,18 @@ export function createRequestCapabilityVerifier(
       requestId: claims.request_id,
       decisionId: claims.decision_id,
       jti: claims.jti,
+      action: claims.action,
+      bodyDigest: claims.body_digest,
+      resourceDigest: claims.resource_digest,
+      versions: Object.freeze({
+        authorityGeneration: claims.versions.authority_generation,
+        globalAuthEpoch: claims.versions.global_auth_epoch,
+        sessionAuthnVersion: claims.versions.session_authn_version,
+        sessionAuthzVersion: claims.versions.session_authz_version,
+        bindingVersion: claims.versions.binding_version,
+        grantVersion: claims.versions.grant_version,
+        policyVersion: claims.versions.policy_version,
+      }),
       targetDigest: claims.target_digest,
       authorizationDigest: claims.authorization_digest,
       issuedAt: claims.iat,

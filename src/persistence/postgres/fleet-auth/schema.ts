@@ -45,6 +45,11 @@ import {
   FLEET_AUTH_IMPORT_HUB_REPLAY_AUDIT_FUNCTION_NAME,
 } from './hub-device-assertion-replay-sql.js';
 import {
+  FLEET_AUTH_CONSUME_REQUEST_CAPABILITY_FUNCTION_ARG_TYPES,
+  FLEET_AUTH_CONSUME_REQUEST_CAPABILITY_FUNCTION_NAME,
+  FLEET_AUTH_REQUEST_CAPABILITY_REPLAY_DDL_SQL,
+} from './request-capability-replay-sql.js';
+import {
   FLEET_AUTH_COMPANION_RESTORE_DDL_SQL,
   FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_ARG_TYPES,
   FLEET_AUTH_IMPORT_RESTORED_COMPANION_FUNCTION_NAME,
@@ -134,6 +139,7 @@ export const FLEET_AUTH_EPHEMERAL_TABLES = [
   'jit_authorization_grants',
   'trusted_host_ceremonies',
   'hub_device_assertion_replays',
+  'request_capability_consumptions',
   'lifecycle_decision_receipts',
 ] as const;
 
@@ -334,6 +340,9 @@ async function applyRoleGrants(
     `REVOKE INSERT, UPDATE, DELETE ON ${qualifiedTable('hub_device_assertion_replays')} FROM ${runtime}`,
   );
   await client.query(
+    `REVOKE INSERT, UPDATE, DELETE ON ${qualifiedTable('request_capability_consumptions')} FROM ${runtime}`,
+  );
+  await client.query(
     `REVOKE INSERT, UPDATE, DELETE ON ${qualifiedTable('hub_device_human_attachments')} FROM ${runtime}`,
   );
   // The restorable database copy of the non-restored authority floor is
@@ -371,6 +380,9 @@ async function applyRoleGrants(
   // no reason to mutate a live replay fence directly.
   await client.query(
     `REVOKE INSERT, UPDATE, DELETE ON ${qualifiedTable('hub_device_assertion_replays')} FROM ${backup}`,
+  );
+  await client.query(
+    `REVOKE INSERT, UPDATE, DELETE ON ${qualifiedTable('request_capability_consumptions')} FROM ${backup}`,
   );
   // Companion creation is narrower than ordinary restore DML. The coordinator
   // retains SELECT/UPDATE for lifecycle reconciliation, while restore INSERT is
@@ -415,6 +427,9 @@ async function applyRoleGrants(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_CONSUME_HUB_REPLAY_FUNCTION_NAME}(${FLEET_AUTH_CONSUME_HUB_REPLAY_FUNCTION_ARG_TYPES}) TO ${runtime}`,
   );
   await client.query(
+    `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_CONSUME_REQUEST_CAPABILITY_FUNCTION_NAME}(${FLEET_AUTH_CONSUME_REQUEST_CAPABILITY_FUNCTION_ARG_TYPES}) TO ${runtime}`,
+  );
+  await client.query(
     `GRANT EXECUTE ON FUNCTION ${FLEET_AUTH_ATTACH_HUB_DEVICE_HUMAN_FUNCTION_NAME}(${FLEET_AUTH_ATTACH_HUB_DEVICE_HUMAN_FUNCTION_ARG_TYPES}) TO ${runtime}`,
   );
   await client.query(
@@ -448,6 +463,7 @@ async function applyFleetAuthReapprovalBoundary(
   await client.query(FLEET_AUTH_CONTACT_AUTHORITY_DDL_SQL);
   await client.query(FLEET_AUTH_RECONCILIATION_DDL_SQL);
   await client.query(FLEET_AUTH_HUB_REPLAY_BOUNDARY_DDL_SQL);
+  await client.query(FLEET_AUTH_REQUEST_CAPABILITY_REPLAY_DDL_SQL);
   await client.query(FLEET_AUTH_COMPANION_RESTORE_DDL_SQL);
 }
 
@@ -642,7 +658,8 @@ async function assertExactDml(
       if (expectedRole === roles.runtime && tableName === 'trusted_host_ceremonies') {
         return new Set(['SELECT', 'DELETE']);
       }
-      if (tableName === 'hub_device_assertion_replays'
+      if ((tableName === 'hub_device_assertion_replays'
+          || tableName === 'request_capability_consumptions')
         && (expectedRole === roles.runtime || expectedRole === roles.backupRestore)) {
         return new Set(['SELECT']);
       }

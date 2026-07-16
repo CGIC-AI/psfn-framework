@@ -40,6 +40,7 @@ import { isExplicitTrue, parseCommaSeparatedEnv } from '../startup/support/env-p
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
+import type { GatewayFleetAuthChildAssertionBroker } from '../../boundary/gateway/fleet-auth-child-assertions.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
 import {
   GatewayHubDeviceIngressService,
@@ -86,6 +87,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   companionRelay?: Omit<CompanionRelayHttpDeps, 'stimuli'>;
   /** Present only in gateway fleet-auth mode; owns all browser OAuth/session authority. */
   fleetAuthBroker?: GatewayFleetAuthBroker;
+  fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
   /** Persistence-backed verifier/consumer required by authenticated Hub device ingress. */
   hubDeviceAssertionVerifier?: {
     verifyAndConsumeHubDeviceAssertion(
@@ -443,6 +445,9 @@ export async function startOptionalGatewayApiServer(
     ...(apiTlsConfig ? { tls: apiTlsConfig } : {}),
     allowInsecureWithoutAuth,
     fleetAuthBootstrapOnly,
+    ...(options.fleetAuthChildAssertions
+      ? { fleetAuthChildAssertions: options.fleetAuthChildAssertions }
+      : {}),
     ...(hubDeviceIngress ? { hubDeviceIngress } : {}),
     ...(hubDeviceCompanionId ? { hubDeviceCompanionId } : {}),
     corsAllowedOrigins,

@@ -6,6 +6,7 @@ import {
   parseCanonicalGardenRequestPath,
   validateGardenRequestMetadata,
 } from '../../boundary/fleet-auth/request-capability-target.js';
+import { stripBrowserRequestCapabilityHeaders } from '../../boundary/fleet-auth/request-capability-transport.js';
 
 export const GARDEN_PREFIX = '/';
 
@@ -55,6 +56,7 @@ export function handleAdminRequest(
   res: ServerResponse,
   deps: AdminRequestRoutingDependencies,
 ): void {
+  stripBrowserRequestCapabilityHeaders(req.headers);
   let requestPath: string;
   try {
     requestPath = validateGardenRequestMetadata({

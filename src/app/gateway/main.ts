@@ -509,7 +509,9 @@ async function main(): Promise<void> {
     eligibilityGate,
     gateway,
     channelsConfig: bootstrap.channelsConfig,
-    satelliteRegistry: satelliteRegistryConfig,
+    satelliteRegistryProvider: () => loadSatelliteRegistryConfig(
+      startupHydration.pathSnapshot.systemDataDir,
+    ),
     // htm9.9: voice transcripts are screened as 'audio_transcript' intake.
     intakeScreening: privilegedCore.intakeScreening.screening,
     companionRelay: {

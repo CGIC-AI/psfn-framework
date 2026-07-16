@@ -5,6 +5,7 @@ import { isIntentionalNoReplyResponse } from '../../../shared/agent-response-dis
 import type {
   SatelliteClientCertIdentity,
   SatelliteRegistryConfig,
+  SatelliteRegistryProvider,
 } from '../../../shared/contracts/satellite-registry.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { SubstrateAgent } from '../../../core/agent/substrate-agent.js';
@@ -113,6 +114,7 @@ export interface ApiChatCompletionsHandlerConfig {
   requestTimeoutMs: number;
   externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   satelliteRegistry: SatelliteRegistryConfig | undefined;
+  satelliteRegistryProvider: SatelliteRegistryProvider | undefined;
   logger: ApiServerLogger;
   /** htm9.9: shared document file-part ingestion; null when not configured. */
   documentIngest: ApiDocumentIngestConfig | null;
@@ -128,6 +130,7 @@ export class ApiChatCompletionsHandler {
   private readonly requestTimeoutMs: number;
   private readonly externalChannelProfiles: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   private readonly satelliteRegistry: SatelliteRegistryConfig | undefined;
+  private readonly satelliteRegistryProvider: SatelliteRegistryProvider | undefined;
   private readonly logger: ApiServerLogger;
   private readonly documentIngest: ApiDocumentIngestConfig | null;
   private readonly channelTurnLock = new FifoChannelLock();
@@ -143,6 +146,7 @@ export class ApiChatCompletionsHandler {
     this.requestTimeoutMs = config.requestTimeoutMs;
     this.externalChannelProfiles = config.externalChannelProfiles;
     this.satelliteRegistry = config.satelliteRegistry;
+    this.satelliteRegistryProvider = config.satelliteRegistryProvider;
     this.logger = config.logger;
     this.documentIngest = config.documentIngest;
   }
@@ -672,6 +676,7 @@ export class ApiChatCompletionsHandler {
       defaultAuthorName: defaultAuthor.authorName,
       externalChannelProfiles: this.externalChannelProfiles,
       satelliteRegistry: this.satelliteRegistry,
+      satelliteRegistryProvider: this.satelliteRegistryProvider,
       ...(clientCert ? { clientCert } : {}),
     });
     if (!turnIdentity.ok) {

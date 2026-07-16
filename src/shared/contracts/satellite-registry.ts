@@ -312,6 +312,9 @@ export interface SatelliteRegistryConfig {
   satellites: SatelliteConfig[];
 }
 
+/** Reads the current canonical satellite owner state at an ingress boundary. */
+export type SatelliteRegistryProvider = () => SatelliteRegistryConfig;
+
 export interface AdminSatelliteEndpointAuthView {
   mode: SatelliteAuthMode;
   allowedPrincipalCount: number;

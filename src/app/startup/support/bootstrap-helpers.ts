@@ -293,6 +293,10 @@ export function hydrateCanonicalStartupConfig(
       ambientPresence: { ...persistedScheduler.backgroundMaintenance.ambientPresence },
       concernGrooming: { ...persistedScheduler.backgroundMaintenance.concernGrooming },
     },
+    backgroundWork: {
+      supervisor: { ...persistedScheduler.backgroundWork.supervisor },
+      postTurn: { ...persistedScheduler.backgroundWork.postTurn },
+    },
     artifactLifecycle: { ...persistedScheduler.artifactLifecycle },
     episodicProcessing: { ...persistedScheduler.episodicProcessing },
     nearTurnMemory: {

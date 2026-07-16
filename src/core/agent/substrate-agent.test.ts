@@ -3613,6 +3613,7 @@ describe('SubstrateAgent.handleMessage', () => {
         });
         const composeSplit = vi.spyOn(promptComposer, 'composeSplit');
         agent.promptComposer = promptComposer;
+        expect(agent.getCurrentAuthoritativeSystemPrompt()).toBeNull();
 
         await agent.handleMessage(makeMessage({
           id: `default-prompt-${channelId}`,
@@ -3632,6 +3633,11 @@ describe('SubstrateAgent.handleMessage', () => {
         }
         for (const identitySection of identityStack.split('\n')) {
           expect(systemPrompt).toContain(identitySection);
+        }
+        const authoritativeSystemPrompt = agent.getCurrentAuthoritativeSystemPrompt();
+        expect(authoritativeSystemPrompt).toBe(systemPrompt);
+        for (const identitySection of identityStack.split('\n')) {
+          expect(authoritativeSystemPrompt).toContain(identitySection);
         }
         expect(systemPrompt).not.toContain('LANE_USER_PROMPT_WITHOUT_PERSONA');
         expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();

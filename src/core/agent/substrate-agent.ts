@@ -44,9 +44,7 @@ import {
 } from '../../system/trust/policy.js';
 import type { ChannelPromptRegistryPort } from '../../channels/backplane/registry-port.js';
 import type { MessageHandlerOptions } from '../../channels/backplane/types.js';
-import {
-  type PromptComposer,
-} from '../identity/prompt-composer.js';
+import type { PromptComposer } from '../identity/prompt-composer.js';
 import { resolveCompanionIdFromConfig } from '../identity/companion-runtime.js';
 import {
   createSubstrateStreamFn,
@@ -297,6 +295,7 @@ export class SubstrateAgent {
   private currentInternalState: InternalState | null = null;
   private currentInternalStateSnapshotRef: string | null = null;
   private currentMetacognitiveFlags: MetacognitiveFlag[] = [];
+  private currentAuthoritativeSystemPrompt: string | null = null;
   private internalStateStore: InternalStateStorePort | null = null;
   private internalStateContinuityGap: InternalStateContinuityGap | null = null;
   private internalStateContinuityGapRenderCount = 0;
@@ -1189,6 +1188,10 @@ export class SubstrateAgent {
     return cloneMetacognitiveFlags(this.currentMetacognitiveFlags);
   }
 
+  getCurrentAuthoritativeSystemPrompt(): string | null {
+    return this.currentAuthoritativeSystemPrompt;
+  }
+
   setInternalStateStore(store: InternalStateStorePort | null): void {
     this.internalStateStore = store;
   }
@@ -1454,6 +1457,9 @@ export class SubstrateAgent {
           composeContext: ctx,
           systemPrompt: this.systemPrompt,
         }),
+        captureAuthoritativeSystemPrompt: (systemPrompt) => {
+          this.currentAuthoritativeSystemPrompt = systemPrompt.trim() || null;
+        },
         buildScratchpadContextBlock: () => this.buildScratchpadContextBlock(),
         normalizeTurnPromptOverride: (turnMessage) => this.normalizeTurnPromptOverride(turnMessage),
         resolveResponseStyle: (turnMessage, channelType, channelMeta) => this.resolveResponseStyle(

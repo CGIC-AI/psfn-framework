@@ -280,6 +280,7 @@ export interface TurnExecutionRuntime {
   resolveChannelType: (message: SubstrateMessage) => string | undefined;
   ensureModel: (message?: SubstrateMessage) => void;
   captureTurnPromptSnapshot: (ctx: ComposeContext) => TurnPromptSnapshot;
+  captureAuthoritativeSystemPrompt?: (systemPrompt: string) => void;
   buildScratchpadContextBlock: () => string;
   normalizeTurnPromptOverride: (message: SubstrateMessage) => MessagePromptOverride;
   resolveResponseStyle: (

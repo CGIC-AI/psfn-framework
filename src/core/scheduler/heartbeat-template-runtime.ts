@@ -386,11 +386,13 @@ export function createHeartbeatTemplateRuntime(
     source: HeartbeatExecutionSource,
     reflectionChannelId: string,
     processId: string,
+    authoritativeSystemPrompt: string,
   ) => ({
     episode: {
       kind: 'maintenance_reflection' as const,
       mode: 'background_bounded' as const,
     },
+    authoritativeSystemPrompt,
     correlation: buildReflectionDeliberationCorrelation(source, reflectionChannelId, processId),
     ...(template.deliberation?.voices ? { voices: template.deliberation.voices } : {}),
     caps: {
@@ -598,11 +600,21 @@ export function createHeartbeatTemplateRuntime(
     reflectionChannelId: string,
     processId: string,
   ): Promise<ReflectionDeliberationExecutionResult> => {
+    const authoritativeSystemPrompt = agentLoop
+      .getCurrentAuthoritativeSystemPrompt?.()
+      ?.trim();
+    if (!authoritativeSystemPrompt) {
+      throw new Error(
+        'Deliberation reflection requires a canonical authoritative system prompt from an assembled default agent turn',
+      );
+    }
+
     if (isExperientialDeliberationTemplate(template)) {
       return runExperientialTemplateDeliberation({
         llmProvider: runtimeOptions.llmProvider,
         template,
         prompt,
+        authoritativeSystemPrompt,
         correlation: buildReflectionDeliberationCorrelation(source, reflectionChannelId, processId),
         logger: log,
         toDeliberationMetadata,
@@ -616,7 +628,13 @@ export function createHeartbeatTemplateRuntime(
     const result = await runDeliberation(
       llmProvider,
       prompt,
-      buildReflectionDeliberationOptions(template, source, reflectionChannelId, processId),
+      buildReflectionDeliberationOptions(
+        template,
+        source,
+        reflectionChannelId,
+        processId,
+        authoritativeSystemPrompt,
+      ),
     );
     return {
       reflection: result.output,

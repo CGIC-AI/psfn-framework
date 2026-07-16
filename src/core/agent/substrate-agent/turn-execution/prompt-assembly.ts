@@ -477,6 +477,12 @@ export async function assembleTurnPrompt(input: {
     }));
   }
   const fullPrompt = renderPromptPlanAssembledPrompt({ blocks: planBlocks });
+  // Preserve this exact canonical identity/policy/runtime boundary for
+  // background deliberation. Session memories, prior chat, completion notices,
+  // and the turn's provider-only datetime anchor deliberately stay out.
+  if (promptMode === 'default') {
+    runtime.captureAuthoritativeSystemPrompt?.(fullPrompt);
+  }
 
   const contextStageStart = Date.now();
   const context = await runWithRequestContext(

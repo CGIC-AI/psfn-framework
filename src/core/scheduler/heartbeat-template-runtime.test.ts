@@ -39,6 +39,13 @@ import { getRequestContext } from '../../primitives/llm/request-context.js';
 describe('createHeartbeatTemplateRuntime reflection metacognition journal', () => {
   let tempDir: string;
 
+  const authoritativeDeliberationSystemPrompt = [
+    '<immutable_human_safety_amendments>IMMUTABLE_POLICY_SENTINEL</immutable_human_safety_amendments>',
+    '<identity>CHARACTER_IDENTITY_SENTINEL</identity>',
+    '<personality>PERSONALITY_SENTINEL</personality>',
+    '<runtime_emotional_affect>CURRENT_AFFECT_SENTINEL</runtime_emotional_affect>',
+  ].join('\n\n');
+
   afterEach(() => {
     if (tempDir) {
       rmSync(tempDir, { recursive: true, force: true });
@@ -310,6 +317,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
           getCurrentInternalState: () => internalState,
           getCurrentInternalStateSnapshotRef: () => snapshotRef,
           getCurrentMetacognitiveFlags: () => metacognitiveFlags,
+          getCurrentAuthoritativeSystemPrompt: () => authoritativeDeliberationSystemPrompt,
         },
         sender: { send: vi.fn(async () => undefined) },
         dataDir: tempDir,
@@ -449,6 +457,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
   it('runs experiential deliberation across evidence, synthesis, and contradiction stages and persists unsupported-claim flags', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
     const capturedPrompts: string[] = [];
+    const capturedSystemPrompts: string[] = [];
     const currentContact = {
       id: 'contact-1',
       displayName: 'Ari',
@@ -497,6 +506,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         purpose,
         requestOptions?: { correlation?: { originStage?: string; channelId?: string } },
       ) => {
+        capturedSystemPrompts.push(context.systemPrompt);
         capturedPrompts.push(context.messages.map((message) => message.content).join('\n\n'));
         const index = capturedPrompts.length;
         expect(requestOptions?.correlation?.originStage).toBe(`heartbeat.deliberation.${index === 1 ? 'evidence' : index === 2 ? 'synthesis' : 'contradiction'}`);
@@ -567,6 +577,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
         getCurrentInternalState: () => currentInternalState,
         getCurrentInternalStateSnapshotRef: () => snapshotRef,
         getCurrentMetacognitiveFlags: () => [{ flag: 'continuity', confidence: 0.51 }],
+        getCurrentAuthoritativeSystemPrompt: () => authoritativeDeliberationSystemPrompt,
       } as any,
       sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,
@@ -655,6 +666,22 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     expect(capturedPrompts[0]).toContain('trust-filtered contact memory');
     expect(capturedPrompts[1]).toContain('Stage: synthesis');
     expect(capturedPrompts[2]).toContain('Stage: contradiction');
+    expect(capturedSystemPrompts).toHaveLength(3);
+    for (const systemPrompt of capturedSystemPrompts) {
+      expect(systemPrompt.startsWith(authoritativeDeliberationSystemPrompt)).toBe(true);
+      expect(systemPrompt).toContain('IMMUTABLE_POLICY_SENTINEL');
+      expect(systemPrompt).toContain('CHARACTER_IDENTITY_SENTINEL');
+      expect(systemPrompt).toContain('PERSONALITY_SENTINEL');
+      expect(systemPrompt).toContain('CURRENT_AFFECT_SENTINEL');
+    }
+    expect(capturedSystemPrompts[0]).toContain('evidence pass');
+    expect(capturedSystemPrompts[1]).toContain('synthesis pass');
+    expect(capturedSystemPrompts[2]).toContain('contradiction pass');
+    for (const userPrompt of capturedPrompts) {
+      expect(userPrompt).not.toContain('PERSONALITY_SENTINEL');
+      expect(userPrompt).not.toContain('DESCRIPTION_SENTINEL');
+      expect(userPrompt).not.toContain('SCENARIO_SENTINEL');
+    }
 
     const metacognitionRaw = readFileSync(resolveReflectionMetacognitionJournalPath(tempDir), 'utf-8').trim();
     const metacognitionEntry = JSON.parse(metacognitionRaw.split('\n').at(-1) ?? '{}') as {
@@ -735,6 +762,84 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
     )).toBe(true);
   });
 
+  it('keeps the authoritative identity stack on non-experiential deliberation voices and synthesis', async () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
+    const policyStore = new HeartbeatPolicyStore(resolveHeartbeatPolicyPath(tempDir));
+    const policy = policyStore.load();
+    policy.templates.push({
+      id: 'custom-deliberation',
+      name: 'Custom Deliberation',
+      prompt: 'Reflect on one grounded tension without forcing a conclusion.',
+      intervalMs: 300_000,
+      enabled: true,
+      sendToDiscord: false,
+      mode: 'deliberation',
+      deliberation: {
+        maxRounds: 1,
+        maxTotalTokens: 2_000,
+        maxWallTimeMs: 5_000,
+        voices: ['reasoning'],
+      },
+    });
+    policyStore.save(policy);
+
+    const providerContexts: LLMContext[] = [];
+    const llmProvider: LLMProviderPort = {
+      stream: vi.fn(async () => ({
+        content: '',
+        toolCalls: [],
+        model: 'mock-stream',
+        inputTokens: 0,
+        outputTokens: 0,
+        stopReason: 'stop',
+      })),
+      complete: vi.fn(async (context, purpose) => {
+        providerContexts.push(context);
+        return {
+          content: purpose === 'reasoning'
+            ? 'A grounded tension remains worth holding.'
+            : 'The tension can stay unresolved for now.',
+          toolCalls: [],
+          model: `mock-${purpose}`,
+          inputTokens: 12,
+          outputTokens: 18,
+          stopReason: 'stop',
+        };
+      }),
+    };
+
+    const runtime = createHeartbeatTemplateRuntime({
+      scheduler: new Scheduler(new EventBus(), { tickIntervalMs: 100, heartbeatIntervalMs: 1_000 }),
+      agentLoop: {
+        handleMessage: vi.fn(async () => ({ content: 'unused' })),
+        getCurrentAuthoritativeSystemPrompt: () => authoritativeDeliberationSystemPrompt,
+      },
+      sender: { send: vi.fn(async () => undefined) },
+      dataDir: tempDir,
+      runtimeOptions: { llmProvider },
+    });
+
+    await runtime.runTemplateNow('custom-deliberation', {
+      sendToDiscordOverride: false,
+      deferIfBusy: false,
+    });
+
+    expect(providerContexts).toHaveLength(2);
+    for (const context of providerContexts) {
+      expect(context.systemPrompt.startsWith(authoritativeDeliberationSystemPrompt)).toBe(true);
+      expect(context.systemPrompt).toContain('IMMUTABLE_POLICY_SENTINEL');
+      expect(context.systemPrompt).toContain('CHARACTER_IDENTITY_SENTINEL');
+      expect(context.systemPrompt).toContain('PERSONALITY_SENTINEL');
+      expect(context.systemPrompt).toContain('CURRENT_AFFECT_SENTINEL');
+      const userPrompt = context.messages.map(message => message.content).join('\n\n');
+      expect(userPrompt).not.toContain('CHARACTER_IDENTITY_SENTINEL');
+      expect(userPrompt).not.toContain('PERSONALITY_SENTINEL');
+      expect(userPrompt).not.toContain('CURRENT_AFFECT_SENTINEL');
+    }
+    expect(providerContexts[0]?.systemPrompt).toContain('analytical inner voice');
+    expect(providerContexts[1]?.systemPrompt).toContain('inner synthesis layer');
+  });
+
   it('does not inject appearance context into deliberation heartbeat prompts', async () => {
     tempDir = mkdtempSync(join(tmpdir(), 'heartbeat-template-runtime-'));
     const capturedPrompts: string[] = [];
@@ -811,6 +916,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
           getCurrentInternalState: () => internalState,
           getCurrentInternalStateSnapshotRef: () => snapshotRef,
           getCurrentMetacognitiveFlags: () => [],
+          getCurrentAuthoritativeSystemPrompt: () => authoritativeDeliberationSystemPrompt,
         },
         sender: { send: vi.fn(async () => undefined) },
         dataDir: tempDir,
@@ -2072,6 +2178,7 @@ describe('createHeartbeatTemplateRuntime reflection metacognition journal', () =
           getCurrentInternalState: () => currentInternalState,
           getCurrentInternalStateSnapshotRef: () => snapshotRef,
           getCurrentMetacognitiveFlags: () => [],
+          getCurrentAuthoritativeSystemPrompt: () => authoritativeDeliberationSystemPrompt,
         } as any,
         sender: { send: vi.fn(async () => undefined) },
         dataDir: tempDir,
@@ -2274,6 +2381,11 @@ describe('createHeartbeatTemplateRuntime reflection novelty gate', () => {
         getCurrentInternalState: () => currentInternalState,
         getCurrentInternalStateSnapshotRef: () => snapshotRef,
         getCurrentMetacognitiveFlags: () => [],
+        getCurrentAuthoritativeSystemPrompt: () => [
+          '<immutable_human_safety_amendments>test policy</immutable_human_safety_amendments>',
+          '<identity>test identity</identity>',
+          '<runtime_emotional_affect>test affect</runtime_emotional_affect>',
+        ].join('\n\n'),
       } as any,
       sender: { send: vi.fn(async () => undefined) },
       dataDir: tempDir,

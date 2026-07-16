@@ -56,6 +56,7 @@ interface TurnExecutionAdapterCallbacks {
   resolveChannelType: (message: SubstrateMessage) => string | undefined;
   ensureModel: (message?: SubstrateMessage) => void;
   captureTurnPromptSnapshot: (ctx: ComposeContext) => import('../../turns/snapshot.js').TurnPromptSnapshot;
+  captureAuthoritativeSystemPrompt?: (systemPrompt: string) => void;
   buildScratchpadContextBlock: () => string;
   normalizeTurnPromptOverride: (message: SubstrateMessage) => MessagePromptOverride;
   resolveResponseStyle: (
@@ -292,6 +293,12 @@ export function createTurnExecutionRuntimeAdapter(
     resolveChannelType: (message) => options.callbacks.resolveChannelType(message),
     ensureModel: (message) => options.callbacks.ensureModel(message),
     captureTurnPromptSnapshot: (ctx) => options.callbacks.captureTurnPromptSnapshot(ctx),
+    ...(options.callbacks.captureAuthoritativeSystemPrompt
+      ? {
+        captureAuthoritativeSystemPrompt: (systemPrompt: string) => options.callbacks
+          .captureAuthoritativeSystemPrompt?.(systemPrompt),
+      }
+      : {}),
     buildScratchpadContextBlock: () => options.callbacks.buildScratchpadContextBlock(),
     normalizeTurnPromptOverride: (message) => options.callbacks.normalizeTurnPromptOverride(message),
     resolveResponseStyle: (message, channelType, channelMeta) => options.callbacks

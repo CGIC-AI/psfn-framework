@@ -27,6 +27,7 @@ export interface RunExperientialTemplateDeliberationInput {
   llmProvider?: LLMProviderPort;
   template: ReflectionTemplate;
   prompt: string;
+  authoritativeSystemPrompt: string;
   correlation: Partial<CorrelationMetadata>;
   logger: ExperientialDeliberationLogger;
   toDeliberationMetadata(result: DeliberationResult): ValuesDeliberationMetadata;
@@ -206,6 +207,7 @@ export async function runExperientialTemplateDeliberation({
   llmProvider,
   template,
   prompt,
+  authoritativeSystemPrompt,
   correlation,
   logger,
   toDeliberationMetadata,
@@ -219,6 +221,7 @@ export async function runExperientialTemplateDeliberation({
       kind: 'maintenance_reflection',
       mode: 'background_bounded',
     },
+    authoritativeSystemPrompt,
     correlation,
     stages: buildExperientialDeliberationStages(template),
     caps: {

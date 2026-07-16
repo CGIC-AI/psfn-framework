@@ -142,10 +142,28 @@ Review and use the approvals printed by the dry run; do not substitute the
 example digests. The command validates both owner schemas before creating any
 migration state, copies exact bytes to every manifest root, records durable
 provenance, and retires each source only after the full fan-out verifies. An
-individual Helm release mounts only its own companion-data PVC, so the chart
-cannot safely perform this fleet transaction. Keep
-`bootstrap.seedOwnerFiles=false`: seeding is not migration. Complete the
-fleet transaction and preflight before upgrading any individual release. The
+ordinary Helm release mounts only its own companion-data PVC and therefore
+cannot infer or safely perform this fleet transaction.
+
+For an orchestrated Helm cutover, set `ownerMigration.required=true` and
+`ownerMigration.enabled=true`, provide the exact digest map under
+`ownerMigration.approvals`, and enumerate every manifest companion with its
+existing PVC and canonical `<runtimeRoot>/companions/...` mount path. Also set
+the chart's normal persistence claims through each `existingClaim` field. The
+pre-upgrade Hook Job captures `snapshotOutputDir`, runs the same compiled
+approval-bound fleet migrator as its next init container, and (when
+`ownerMigration.verification.enabled=true`) runs one packaged probe per
+companion. The probes begin with the exact migrated values, make distinct
+read-only owner and companion-identity observations behind a shared barrier,
+and fail if claims or owner inodes are accidentally shared across companion
+roots. Receipt-recorded recovery hard links within one root remain valid. Helm
+does not admit the new revision until the hook succeeds.
+`ownerMigration.required=true` makes omission of the hook a
+render failure; missing claims, a wrong mount path, or an unavailable immutable
+image fails the old revision closed in place.
+
+Keep `bootstrap.seedOwnerFiles=false`: seeding is not migration. After a
+successful one-time rollout, disable and remove the owner-migration values. The
 full operator and rollback procedure is in
 [`docs/operations.md`](../../../docs/operations.md#existing-split-fleets-with-shared-per-companion-owners).
 
@@ -153,10 +171,11 @@ The chart's guarded automatic legacy cutover covers `scheduler.json` and
 `capability-tier.json`, which used to live under `system-data`. Every app
 workload runs the same idempotent init migration before startup:
 
-This Helm compatibility path deliberately does not migrate legacy system-root
-`charge-policy.json` or `skills.json`; the fleet transaction above owns that
-boundary. Current releases require both files under `companion-data` and fail
-closed when the fleet procedure is incomplete.
+The normal per-workload init path deliberately does not migrate legacy
+system-root `charge-policy.json` or `skills.json`; only the explicit whole-fleet
+command or approval-bound pre-upgrade hook above owns that boundary. Current
+releases require both files under `companion-data` and fail closed when the
+fleet procedure is incomplete.
 
 - If the companion-owned target is absent and a legacy system-owned file
   exists, the file is first copied byte-for-byte and a source-hash marker is

@@ -86,6 +86,31 @@ bootstrap:
   # system-owner fleet migration; this Helm compatibility path does not move them.
   seedOwnerFiles: false
 
+# Explicit, one-rollout compatibility boundary for legacy fleets whose
+# charge-policy.json and skills.json still live under system-data. This is
+# disabled after the approval-bound fan-out succeeds. `required` lets a
+# deployment pipeline fail rendering instead of accidentally omitting the
+# migration hook for a rollout that is known to need it.
+ownerMigration:
+  required: false
+  enabled: false
+  runtimeRoot: /runtime
+  systemDataDir: /runtime/system-data
+  systemDataClaim: ""
+  backupsDir: /backups
+  backupsClaim: ""
+  snapshotOutputDir: /backups/pre-owner-migration
+  activeDeadlineSeconds: 300
+  approvals: {}
+  # Every companion in companions.json must appear exactly once with its
+  # existing claim and exact runtime-root-relative mount path.
+  companions: []
+  verification:
+    enabled: false
+    initialChargeQuota: 1
+    initialMaxLoadedSkills: 1
+    timeoutSeconds: 60
+
 ports:
   gatewayApi: 10053
   gatewayRpc: 10054
@@ -190,15 +215,20 @@ persistence:
     - ReadWriteOnce
   systemData:
     size: 2Gi
+    existingClaim: ""
   companionData:
     size: 10Gi
+    existingClaim: ""
   workspace:
     size: 10Gi
+    existingClaim: ""
   runtime:
     size: 10Gi
+    existingClaim: ""
   modelCache:
     enabled: true
     size: 8Gi
+    existingClaim: ""
 
 repositoryCheckout:
   enabled: false

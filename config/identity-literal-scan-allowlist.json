@@ -121,6 +121,12 @@
       "pattern": "identity-legacy-slug"
     },
     {
+      "path": "scripts/verify-helm-charge-skills-owner-upgrade-k3d.mjs",
+      "contains": "psfn",
+      "reason": "The real k3d owner-upgrade proof uses project-scoped chart, cluster, release, image, and container names; these are infrastructure identifiers rather than companion identity defaults.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "scripts/verify-helm-chart.mjs",
       "contains": "PSFN",
       "reason": "Helm chart verification asserts PSFN-specific Kubernetes environment contracts.",

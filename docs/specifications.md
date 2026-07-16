@@ -49,8 +49,17 @@ Supported until beta:
   prefix. An unbound crash remnant is preserved and durably superseded under a
   new recorded identifier, while unknown or replaced artifacts fail closed.
   Retries must match the receipt, its pinned directory identities, and the
-  unchanged fleet. Remove the
-  command and receipt reader before beta after
+  unchanged fleet. A Helm deployment may invoke the same compiled command only
+  through the explicit `ownerMigration` pre-upgrade hook: the rollout must set
+  `required=true`, disable bootstrap seeding, bind every source digest, mount
+  the exact system, backup, and every manifest companion PVC at its canonical
+  path, capture the whole-fleet snapshot first, and complete the packaged
+  per-companion readiness probes before Helm admits the new revision. Missing
+  claims, wrong paths, image-digest resolution failures, shared companion
+  claims, and an omitted required hook fail the upgrade while the old revision
+  remains deployed. Validate this path with `npm run verify:helm-chart` and
+  `npm run e2e:kube-owner-upgrade`. Remove the command, Helm hook, packaged
+  probe, and receipt reader before beta after
   every split fleet has a completed receipt (or a plan proving no system-root
   per-companion owners remain).
 - Explicit scheduler owner-shape migration through

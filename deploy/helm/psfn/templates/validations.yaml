@@ -1,6 +1,81 @@
 {{- if not .Values.certificates.enabled -}}
 {{- fail "certificates.enabled must be true because PSFN Kubernetes network transports require mTLS certificates" -}}
 {{- end -}}
+{{- if and .Values.ownerMigration.required (not .Values.ownerMigration.enabled) -}}
+{{- fail "ownerMigration.required=true requires ownerMigration.enabled=true" -}}
+{{- end -}}
+{{- if .Values.ownerMigration.enabled -}}
+{{- if .Values.bootstrap.seedOwnerFiles -}}
+{{- fail "ownerMigration.enabled=true requires bootstrap.seedOwnerFiles=false" -}}
+{{- end -}}
+{{- if lt (len .Values.ownerMigration.companions) 2 -}}
+{{- fail "ownerMigration.enabled=true requires at least two explicit companion PVCs" -}}
+{{- end -}}
+{{- if not .Values.ownerMigration.systemDataClaim -}}
+{{- fail "ownerMigration.systemDataClaim is required when ownerMigration.enabled=true" -}}
+{{- end -}}
+{{- if not .Values.ownerMigration.backupsClaim -}}
+{{- fail "ownerMigration.backupsClaim is required when ownerMigration.enabled=true" -}}
+{{- end -}}
+{{- if not (hasPrefix "/" .Values.ownerMigration.runtimeRoot) -}}
+{{- fail "ownerMigration.runtimeRoot must be absolute" -}}
+{{- end -}}
+{{- if not (hasPrefix (printf "%s/" (trimSuffix "/" .Values.ownerMigration.runtimeRoot)) .Values.ownerMigration.systemDataDir) -}}
+{{- fail "ownerMigration.systemDataDir must be beneath ownerMigration.runtimeRoot" -}}
+{{- end -}}
+{{- if not (hasPrefix "/" .Values.ownerMigration.backupsDir) -}}
+{{- fail "ownerMigration.backupsDir must be absolute" -}}
+{{- end -}}
+{{- if eq (len .Values.ownerMigration.approvals) 0 -}}
+{{- fail "ownerMigration.approvals must bind every legacy owner source digest" -}}
+{{- end -}}
+{{- range $ownerFile, $digest := .Values.ownerMigration.approvals -}}
+{{- if not (has $ownerFile (list "capability-tier.json" "scheduler.json" "charge-policy.json" "skills.json")) -}}
+{{- fail (printf "ownerMigration.approvals contains an unregistered per-companion owner: %s" $ownerFile) -}}
+{{- end -}}
+{{- if not (regexMatch "^[a-f0-9]{64}$" $digest) -}}
+{{- fail (printf "ownerMigration.approvals.%s must be an exact lowercase SHA-256" $ownerFile) -}}
+{{- end -}}
+{{- end -}}
+{{- $claims := dict -}}
+{{- $paths := dict -}}
+{{- $ids := dict -}}
+{{- range $index, $companion := .Values.ownerMigration.companions -}}
+{{- if not $companion.companionId -}}
+{{- fail (printf "ownerMigration.companions[%d].companionId is required" $index) -}}
+{{- end -}}
+{{- if not $companion.claimName -}}
+{{- fail (printf "ownerMigration.companions[%d].claimName is required" $index) -}}
+{{- end -}}
+{{- if not (hasPrefix (printf "%s/companions/" (trimSuffix "/" $.Values.ownerMigration.runtimeRoot)) $companion.mountPath) -}}
+{{- fail (printf "ownerMigration.companions[%d].mountPath must be beneath <runtimeRoot>/companions" $index) -}}
+{{- end -}}
+{{- if hasKey $claims $companion.claimName -}}
+{{- fail (printf "ownerMigration companion claimName is duplicated: %s" $companion.claimName) -}}
+{{- end -}}
+{{- if hasKey $paths $companion.mountPath -}}
+{{- fail (printf "ownerMigration companion mountPath is duplicated: %s" $companion.mountPath) -}}
+{{- end -}}
+{{- if hasKey $ids $companion.companionId -}}
+{{- fail (printf "ownerMigration companionId is duplicated: %s" $companion.companionId) -}}
+{{- end -}}
+{{- $_ := set $claims $companion.claimName true -}}
+{{- $_ := set $paths $companion.mountPath true -}}
+{{- $_ := set $ids $companion.companionId true -}}
+{{- if $.Values.ownerMigration.verification.enabled -}}
+{{- if not $companion.expectedIdentity -}}
+{{- fail (printf "ownerMigration.companions[%d].expectedIdentity is required for verification" $index) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Values.ownerMigration.verification.enabled (or (lt (int .Values.ownerMigration.verification.initialChargeQuota) 1) (lt (int .Values.ownerMigration.verification.initialMaxLoadedSkills) 1)) -}}
+{{- fail "ownerMigration verification initial values must be positive integers" -}}
+{{- end -}}
+{{- $migrationDigest := default .Values.psfnAppImage.digest .Values.workloads.agent.image.digest -}}
+{{- if not (regexMatch "^sha256:[a-f0-9]{64}$" $migrationDigest) -}}
+{{- fail "ownerMigration requires an exact psfnAppImage/workloads.agent image digest" -}}
+{{- end -}}
+{{- end -}}
 {{- if and .Values.certificates.enabled (not .Values.certificates.issuer.create) (not .Values.certificates.issuer.existingIssuerRef.name) (not .Values.certificates.issuer.name) -}}
 {{- fail "certificates.issuer.existingIssuerRef.name or certificates.issuer.name is required when certificates.issuer.create=false" -}}
 {{- end -}}

@@ -71,6 +71,34 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 {{- end -}}
 
+{{- define "psfn.systemDataClaimName" -}}
+{{- default (printf "%s-system-data" (include "psfn.fullname" .)) .Values.persistence.systemData.existingClaim -}}
+{{- end -}}
+
+{{- define "psfn.companionDataClaimName" -}}
+{{- default (printf "%s-companion-data" (include "psfn.fullname" .)) .Values.persistence.companionData.existingClaim -}}
+{{- end -}}
+
+{{- define "psfn.workspaceClaimName" -}}
+{{- default (printf "%s-workspace" (include "psfn.fullname" .)) .Values.persistence.workspace.existingClaim -}}
+{{- end -}}
+
+{{- define "psfn.runtimeClaimName" -}}
+{{- default (printf "%s-runtime" (include "psfn.fullname" .)) .Values.persistence.runtime.existingClaim -}}
+{{- end -}}
+
+{{- define "psfn.modelCacheClaimName" -}}
+{{- default (printf "%s-model-cache" (include "psfn.fullname" .)) .Values.persistence.modelCache.existingClaim -}}
+{{- end -}}
+
+{{- define "psfn.ownerMigrationImage" -}}
+{{- $root := .root -}}
+{{- $image := .image -}}
+{{- $repository := default $root.Values.psfnAppImage.repository $image.repository -}}
+{{- $digest := default $root.Values.psfnAppImage.digest $image.digest -}}
+{{- printf "%s@%s" $repository $digest -}}
+{{- end -}}
+
 {{- define "psfn.postgresImage" -}}
 {{- $image := .Values.postgres.image -}}
 {{- printf "%s:%s@%s" $image.repository $image.tag $image.digest -}}
@@ -751,13 +779,13 @@ capability-tier.json|scheduler.json|charge-policy.json|skills.json
 {{- define "psfn.commonVolumes" -}}
 - name: system-data
   persistentVolumeClaim:
-    claimName: {{ include "psfn.fullname" . }}-system-data
+    claimName: {{ include "psfn.systemDataClaimName" . }}
 - name: companion-data
   persistentVolumeClaim:
-    claimName: {{ include "psfn.fullname" . }}-companion-data
+    claimName: {{ include "psfn.companionDataClaimName" . }}
 - name: workspace
   persistentVolumeClaim:
-    claimName: {{ include "psfn.fullname" . }}-workspace
+    claimName: {{ include "psfn.workspaceClaimName" . }}
 - name: postgres-database-url
   secret:
     secretName: {{ include "psfn.databaseUrlSecretName" . }}
@@ -766,11 +794,11 @@ capability-tier.json|scheduler.json|charge-policy.json|skills.json
         path: database-url
 - name: runtime
   persistentVolumeClaim:
-    claimName: {{ include "psfn.fullname" . }}-runtime
+    claimName: {{ include "psfn.runtimeClaimName" . }}
 {{- if .Values.persistence.modelCache.enabled }}
 - name: model-cache
   persistentVolumeClaim:
-    claimName: {{ include "psfn.fullname" . }}-model-cache
+    claimName: {{ include "psfn.modelCacheClaimName" . }}
 {{- end }}
 {{- if .Values.identity.seedStarterCard }}
 - name: identity-seed

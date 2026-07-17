@@ -64,6 +64,7 @@
     buildCapabilitiesSettingsPayload,
     buildRawEditorJsonMap,
     buildSettingsSnapshot,
+    buildValidationNavigationNotice,
     collectSimpleSettingsPayload,
     formatSettingOptionLabel,
     humanizeSettingValue,
@@ -75,15 +76,20 @@
     rebaselineRawJsonByKey,
     resolveRawEditorOwnerFile,
     resolveReloadedRawJsonByKey,
+    resolveSaveFeedback,
+    resolveValidationNavigation,
     syncCuratedSettingsField,
     summarizeCompositionalPolicy,
     tryPrettyPrint,
+    RAW_SAVE_SUCCESS_AUTO_DISMISS_MS,
     type CapabilitiesEditorConfig,
     type CompositionalListKey,
     type CompositionalPolicyFormValue,
     type RawEditorKey,
+    type SaveFeedbackState,
     type SchedulerEditorConfig,
     type SettingsSimpleFormState,
+    type UnifiedSaveOwnerFileKey,
   } from './settings-page-helpers';
 
   // ── Core state ──
@@ -91,8 +97,13 @@
   let loading = $state(true);
   let error = $state('');
   let saving = $state(false);
-  let saveMessage = $state('');
-  let saveOk = $state(true);
+  // Persistent save feedback (qq67): a single banner in SettingsPageChrome,
+  // but errors (and successes that skipped owner files) persist until the
+  // operator dismisses them or starts the next save. Only plain successes
+  // auto-dismiss. The timer handle is stored so it is cleared on every new
+  // flash and on destroy — no leaked timers.
+  let saveFeedback = $state<SaveFeedbackState | null>(null);
+  let saveFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
   let settingsSchema = $state<SettingsContractData | null>(null);
   let providerRegistry = $state<CanonicalProviderRegistry>({ schemaVersion: 1, providers: [] });
   let providerRegistryInitialJson = $state('{"schemaVersion":1,"providers":[]}');
@@ -245,6 +256,10 @@
   let backupMirrorDir = $state('');
   let backupVerifyRestore = $state(true);
   let rawSaveStatus = $state<Record<string, { ok: boolean; msg: string }>>({});
+  // Per-editor auto-dismiss timers for raw save confirmations. Errors persist
+  // (no timer); only successes schedule a clear. Handles are stored so they can
+  // be cleared on re-flash and on destroy (qq67).
+  const rawSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
   let validationErrorsByField = $state<Record<string, string[]>>({});
 
   function currentSimpleFormState(): SettingsSimpleFormState {
@@ -665,19 +680,56 @@
     applySimpleFormState(populateSimpleSettingsForm(settingsData));
   }
 
+  function clearSaveFeedbackTimer(): void {
+    if (saveFeedbackTimer !== null) {
+      clearTimeout(saveFeedbackTimer);
+      saveFeedbackTimer = null;
+    }
+  }
+
+  // Single entry point for save feedback: clears any pending auto-dismiss timer
+  // (so a prior success timer can't wipe a fresh error), sets the new state, and
+  // only schedules a new timer when the state opts into auto-dismiss.
+  function setSaveFeedback(next: SaveFeedbackState | null): void {
+    clearSaveFeedbackTimer();
+    saveFeedback = next;
+    if (next && next.autoDismissMs !== null) {
+      saveFeedbackTimer = setTimeout(() => {
+        saveFeedback = null;
+        saveFeedbackTimer = null;
+      }, next.autoDismissMs);
+    }
+  }
+
+  function dismissSaveFeedback(): void {
+    setSaveFeedback(null);
+  }
+
   function flash(ok: boolean, msg: string) {
-    saveOk = ok;
-    saveMessage = msg;
-    setTimeout(() => { saveMessage = ''; }, 4000);
+    setSaveFeedback(resolveSaveFeedback({ ok, message: msg }));
+  }
+
+  function clearRawSaveTimer(key: string): void {
+    const timer = rawSaveTimers.get(key);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      rawSaveTimers.delete(key);
+    }
   }
 
   function flashRaw(key: string, ok: boolean, msg: string) {
+    clearRawSaveTimer(key);
     rawSaveStatus = { ...rawSaveStatus, [key]: { ok, msg } };
-    setTimeout(() => {
-      const next = { ...rawSaveStatus };
-      delete next[key];
-      rawSaveStatus = next;
-    }, 4000);
+    // Errors persist until the next save of this editor re-flashes; only
+    // successes auto-dismiss.
+    if (ok) {
+      rawSaveTimers.set(key, setTimeout(() => {
+        const next = { ...rawSaveStatus };
+        delete next[key];
+        rawSaveStatus = next;
+        rawSaveTimers.delete(key);
+      }, RAW_SAVE_SUCCESS_AUTO_DISMISS_MS));
+    }
   }
 
   function configValue(key: string): unknown {
@@ -924,7 +976,12 @@
 
   async function saveSettingsContract(
     runtimePayload: Record<string, unknown>,
-  ): Promise<{ ok: boolean; invalidFieldCount: number; message: string }> {
+  ): Promise<{
+    ok: boolean;
+    invalidFieldCount: number;
+    message: string;
+    skippedOwnerFiles: UnifiedSaveOwnerFileKey[];
+  }> {
     const hasRuntimePayload = Object.keys(runtimePayload).length > 0;
     let invalidFieldCount = 0;
     // An owner file with a dirty raw editor is being hand-edited on the Raw
@@ -964,6 +1021,7 @@
           ok: false,
           invalidFieldCount,
           message: runtimeResult.message || 'Failed to save runtime settings',
+          skippedOwnerFiles,
         };
       }
     } else {
@@ -981,6 +1039,7 @@
         message: error instanceof Error
           ? `Runtime settings saved, but canonical config save failed: ${error.message}`
           : 'Runtime settings saved, but canonical config save failed',
+        skippedOwnerFiles,
       };
     }
 
@@ -992,6 +1051,7 @@
       ok: true,
       invalidFieldCount,
       message: `Settings updated.${skippedNote}`,
+      skippedOwnerFiles,
     };
   }
 
@@ -1005,17 +1065,37 @@
   // save's reload, and its owner file is skipped by the structured owner-file
   // saves so form-derived JSON never stomps the staged hand edits.
   async function saveSettings() {
+    // A new save attempt supersedes any lingering feedback.
+    setSaveFeedback(null);
     saving = true;
     try {
       const result = await saveSettingsContract(
         advancedDirty ? collectCanonicalPayload() : collectSimplePayload(),
       );
-      flash(result.ok, result.message);
+      let message = result.message;
+      // Validation failures render inline at the curated control for each
+      // invalid field (see SettingFieldLabel). Only fall back to the All Fields
+      // view for invalid fields that have no curated control anywhere, and say
+      // so explicitly rather than teleporting the operator off their tab (ybm3).
       if (!result.ok && result.invalidFieldCount > 0) {
-        void jumpToSection('advanced-fields');
+        const invalidFields = Object.keys(validationErrorsByField).filter((field) => field !== '$root');
+        const navigation = resolveValidationNavigation({ invalidFields });
+        if (navigation.navigate) {
+          void jumpToSection('advanced-fields');
+          const notice = buildValidationNavigationNotice(navigation.uncoveredFields);
+          message = notice ? `${message} ${notice}`.trim() : message;
+        }
       }
+      setSaveFeedback(resolveSaveFeedback({
+        ok: result.ok,
+        message,
+        hasSkippedOwnerFiles: result.skippedOwnerFiles.length > 0,
+      }));
     } catch (e) {
-      flash(false, e instanceof Error ? e.message : 'Failed to save');
+      setSaveFeedback(resolveSaveFeedback({
+        ok: false,
+        message: e instanceof Error ? e.message : 'Failed to save',
+      }));
     } finally {
       saving = false;
     }
@@ -1127,6 +1207,12 @@
         window.removeEventListener('hashchange', hashChangeHandler);
       }
     }
+    // Clear pending auto-dismiss timers so they cannot fire after teardown.
+    clearSaveFeedbackTimer();
+    for (const timer of rawSaveTimers.values()) {
+      clearTimeout(timer);
+    }
+    rawSaveTimers.clear();
   });
 
   // ── Style constants ──
@@ -1153,8 +1239,8 @@
 <div class="space-y-5">
   <SettingsPageChrome
     {dirty}
-    {saveMessage}
-    {saveOk}
+    feedback={saveFeedback}
+    onDismiss={dismissSaveFeedback}
   />
 
   <!-- Loading -->
@@ -1194,7 +1280,7 @@
             {openSections} {sessionRestartBehaviorOptions}
             inputClass={INPUT_CLS} labelClass={LABEL_CLS} sliderClass={SLIDER_CLS}
             compactInputClass={COMPACT_INPUT_CLS} toggleClass={TOGGLE_CLS}
-            {getSource} {getSettingAuthority} {toggleSection}
+            {getSource} {getSettingAuthority} {fieldErrors} {toggleSection}
             bind:sessionRestartBehavior bind:sessionHistoryBudgetPct bind:memoryRetrievalBudgetPct
             bind:extractionThresholdPct bind:compactionThresholdPct bind:extractionInterval
             bind:compactionEmotionalSalienceThresholdPct bind:backgroundMaintenanceIntervalMs
@@ -1209,7 +1295,7 @@
           <SettingsRuntimePanels
             {openSections} {importRouteModeOptions}
             inputClass={INPUT_CLS} labelClass={LABEL_CLS} toggleClass={TOGGLE_CLS}
-            {getSource} {toggleSection}
+            {getSource} {fieldErrors} {toggleSection}
             bind:retryMaxAttempts bind:retryBaseDelayMs
             bind:importRouteMode bind:importStrictPolicy bind:importLocalEndpointUrl bind:importLocalModel
             bind:openRouterProviderOrder
@@ -1219,7 +1305,7 @@
           <SettingsIntegrationsPanels
             {openSections}
             inputClass={INPUT_CLS} labelClass={LABEL_CLS} toggleClass={TOGGLE_CLS}
-            {toggleSection}
+            {fieldErrors} {toggleSection}
             bind:ttsProvider bind:sttProvider bind:voiceId bind:deepgramModel
             bind:echoTtsUrl bind:echoTtsVoice bind:echoTtsPreset
             bind:obsidianVaultName bind:obsidianCliPath bind:obsidianAutoPublish bind:obsidianTimeoutMs
@@ -1230,7 +1316,7 @@
           <SettingsTrustBackupPanels
             {data} {openSections} {capabilityTierOptions}
             inputClass={INPUT_CLS} labelClass={LABEL_CLS} toggleClass={TOGGLE_CLS}
-            {getSource} {getSettingAuthority} {rawEditorLabel} {toggleSection}
+            {getSource} {getSettingAuthority} {rawEditorLabel} {fieldErrors} {toggleSection}
             bind:capabilityTier bind:capabilityCustomTokens
             bind:backupIntervalHours bind:backupMaxRotating bind:backupMaxWeekly bind:backupMaxMonthly
             bind:backupMirrorDir bind:backupVerifyRestore

@@ -265,11 +265,6 @@ button:focus-visible {
   color: var(--color-gold-deep);
 }
 
-.companions-button {
-  left: calc(max(1rem, env(safe-area-inset-left)) + 116px);
-  color: var(--color-gold-deep);
-}
-
 .settings-button {
   right: max(1rem, env(safe-area-inset-right));
 }

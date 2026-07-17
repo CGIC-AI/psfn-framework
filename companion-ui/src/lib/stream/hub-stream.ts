@@ -500,7 +500,7 @@ function applyInboundMessage(
       // framing parser tolerated are dropped here (never enter store state).
       const { data } = message;
       const existing = base.approvals.find(entry => entry.id === data.id);
-      if (base.approvalResolutions[data.id] || (existing && existing.status !== 'pending')) {
+      if (base.approvalResolutions[data.id] || existing) {
         return base;
       }
       const entry: ApprovalStreamEntry = {

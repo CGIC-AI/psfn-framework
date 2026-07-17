@@ -196,8 +196,9 @@ export function App() {
       streamState,
       access.state === 'signed_in' ? fleet.approvals : [],
       now,
+      access.state === 'signed_in' ? fleet.approvalHistory : [],
     ),
-    [access.state, fleet.approvals, now, streamState],
+    [access.state, fleet.approvalHistory, fleet.approvals, now, streamState],
   );
   const artifacts = useMemo(() => deriveArtifactShelfState(streamState), [streamState]);
   const canSend = (access.state === 'signed_in' || access.state === 'guest')
@@ -507,7 +508,7 @@ export function App() {
           ) : overlay === 'companions' ? (
             <CompanionSelectorPage
               activeCompanionId={fleet.activeCompanionId}
-              approvals={fleet.approvals}
+              approvals={approvals}
               companions={fleet.roster}
               connecting={connecting}
               onApprovalDecision={(id, decision) => { void decideApproval(id, decision); }}

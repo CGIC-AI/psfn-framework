@@ -19,6 +19,7 @@ const MAX_DISPLAY_NAME_LENGTH = 120;
 const MAX_AVATAR_REF_LENGTH = 512;
 const MAX_COMPANIONS = 256;
 const MAX_APPROVALS = 1024;
+const AVATAR_REF_SEGMENT = /^[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
 
 /**
  * One companion the signed-in human may reach. `websocketPath` is the single
@@ -68,6 +69,14 @@ export class FleetRosterProtocolError extends Error {
   }
 }
 
+/** Converts an opaque local asset reference into a canonical same-origin URL. */
+export function companionAvatarUrl(avatarRef: string): string | null {
+  if (!isBoundedString(avatarRef, MAX_AVATAR_REF_LENGTH)) return null;
+  const segments = avatarRef.split('/');
+  if (segments.some(segment => !AVATAR_REF_SEGMENT.test(segment))) return null;
+  return `/companion-ui/${segments.map(segment => encodeURIComponent(segment)).join('/')}`;
+}
+
 function parseRosterCompanion(value: unknown): FleetRosterCompanion {
   if (!isRecord(value)) throw new FleetRosterProtocolError();
   const hasAvatar = Object.hasOwn(value, 'avatarRef');
@@ -82,7 +91,8 @@ function parseRosterCompanion(value: unknown): FleetRosterCompanion {
     // The stream path must belong to exactly this companion; a mismatch is a
     // server/tamper inconsistency and fails closed.
     || value.websocketPath !== `/companion-ui/companions/${value.companionId}/ws`
-    || (hasAvatar && !isBoundedString(value.avatarRef, MAX_AVATAR_REF_LENGTH))) {
+    || (hasAvatar && (typeof value.avatarRef !== 'string'
+      || companionAvatarUrl(value.avatarRef) === null))) {
     throw new FleetRosterProtocolError();
   }
   return Object.freeze({

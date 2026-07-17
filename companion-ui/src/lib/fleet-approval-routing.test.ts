@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   hasPendingApprovalExpiry,
   mergeFleetApprovals,
+  mergeFleetApprovalHistory,
   routeFleetApprovalDecision,
 } from './fleet-approval-routing.js';
 import type { FleetApprovalEntry } from './fleet-roster.js';
@@ -112,7 +113,7 @@ describe('mergeFleetApprovals', () => {
     })]);
   });
 
-  it('applies a correlated server resolution to a fleet-only approval card', () => {
+  it('keeps a correlated terminal fleet card after the pending snapshot removes it', () => {
     const state = reduceHubStreamState(readyState(), {
       type: 'hub.inbound',
       at: '2026-07-17T00:00:02.000Z',
@@ -130,15 +131,55 @@ describe('mergeFleetApprovals', () => {
 
     const panel = mergeFleetApprovals(
       state,
-      [APPROVAL],
+      [],
       Date.parse('2026-07-17T00:00:03.000Z'),
+      [APPROVAL],
     );
 
     expect(panel.requests[0]).toMatchObject({
       id: APPROVAL.id,
+      title: APPROVAL.title,
       status: 'approved',
       resolvedAt: '2026-07-17T00:00:02.000Z',
+      redactedContext: APPROVAL.redactedContext,
+      attribution: APPROVAL.attribution,
     });
+  });
+
+  it('does not retain a removed fleet approval without a correlated terminal resolution', () => {
+    const panel = mergeFleetApprovals(
+      readyState(),
+      [],
+      Date.parse('2026-07-17T00:00:03.000Z'),
+      [APPROVAL],
+    );
+
+    expect(panel.requests).toEqual([]);
+  });
+});
+
+describe('mergeFleetApprovalHistory', () => {
+  it('retains removed redacted envelopes and lets the current snapshot win by immutable id', () => {
+    const history = mergeFleetApprovalHistory(
+      [APPROVAL],
+      [{ ...APPROVAL, title: 'Current title' }],
+    );
+
+    expect(history).toEqual([{ ...APPROVAL, title: 'Current title' }]);
+    expect(mergeFleetApprovalHistory(history, [])).toEqual(history);
+  });
+
+  it('bounds retained envelopes to the fleet snapshot contract limit', () => {
+    const approvals = Array.from({ length: 1_025 }, (_, index) => ({
+      ...APPROVAL,
+      id: `approval-${index}`,
+    }));
+
+    const history = mergeFleetApprovalHistory([], approvals);
+
+    expect(history).toHaveLength(1_024);
+    expect(history[0]?.id).toBe('approval-1');
+    expect(history.at(-1)?.id).toBe('approval-1024');
   });
 });
 

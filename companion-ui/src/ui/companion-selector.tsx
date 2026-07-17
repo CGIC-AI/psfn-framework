@@ -1,8 +1,11 @@
+import { useState } from 'react';
 import { Users } from 'lucide-react';
-import type {
-  FleetApprovalEntry,
-  FleetRosterCompanion,
+import type { ApprovalPanelState, ApprovalRequestView } from '../lib/approvals.js';
+import {
+  companionAvatarUrl,
+  type FleetRosterCompanion,
 } from '../lib/fleet-roster.js';
+import { ApprovalCard } from './context-layers.js';
 import { DrawerHeader } from './overlay-drawer.js';
 
 /**
@@ -27,14 +30,18 @@ export function CompanionSelectorPage({
   onSelect,
 }: {
   activeCompanionId: string | null;
-  approvals: readonly FleetApprovalEntry[];
+  approvals: ApprovalPanelState;
   companions: readonly FleetRosterCompanion[];
   connecting: boolean;
   onApprovalDecision: (id: string, decision: 'approve' | 'deny') => void;
   onClose: () => void;
   onSelect: (companionId: string) => void;
 }) {
-  const approvalsByCompanion = groupApprovalsByCompanion(approvals);
+  const approvalsByCompanion = groupApprovalsByCompanion(
+    approvals.capability === 'available'
+      ? approvals.requests.filter(request => request.status === 'pending')
+      : [],
+  );
   return (
     <aside className="overlay-drawer companion-selector" aria-label="Choose a companion">
       <DrawerHeader icon={<Users aria-hidden />} onClose={onClose} title="Companions" />
@@ -68,9 +75,9 @@ export function CompanionSelectorPage({
                   {active && <span className="companion-active-tag">Active</span>}
                 </button>
                 {pending.map((approval) => (
-                  <CompanionApprovalCard
+                  <ApprovalCard
                     key={approval.id}
-                    approval={approval}
+                    request={approval}
                     onDecision={onApprovalDecision}
                   />
                 ))}
@@ -84,14 +91,17 @@ export function CompanionSelectorPage({
 }
 
 function CompanionAvatar({ companion }: { companion: FleetRosterCompanion }) {
-  if (companion.avatarRef) {
+  const [failedRef, setFailedRef] = useState<string | null>(null);
+  const avatarUrl = companion.avatarRef ? companionAvatarUrl(companion.avatarRef) : null;
+  if (avatarUrl && companion.avatarRef !== failedRef) {
     return (
       <img
         className="companion-avatar"
-        src={companion.avatarRef}
+        src={avatarUrl}
         alt=""
         loading="lazy"
         referrerPolicy="no-referrer"
+        onError={() => setFailedRef(companion.avatarRef ?? null)}
       />
     );
   }
@@ -102,38 +112,16 @@ function CompanionAvatar({ companion }: { companion: FleetRosterCompanion }) {
   );
 }
 
-function CompanionApprovalCard({
-  approval,
-  onDecision,
-}: {
-  approval: FleetApprovalEntry;
-  onDecision: (id: string, decision: 'approve' | 'deny') => void;
-}) {
-  return (
-    <article className="companion-approval-card">
-      <strong>{approval.companionDisplayName}</strong>
-      <p className="companion-approval-title">{approval.title}</p>
-      <p className="companion-approval-context">{approval.redactedContext}</p>
-      <div className="toast-actions">
-        <button type="button" onClick={() => onDecision(approval.id, 'deny')}>
-          Deny
-        </button>
-        <button type="button" onClick={() => onDecision(approval.id, 'approve')}>
-          Approve
-        </button>
-      </div>
-    </article>
-  );
-}
-
 function groupApprovalsByCompanion(
-  approvals: readonly FleetApprovalEntry[],
-): Map<string, FleetApprovalEntry[]> {
-  const grouped = new Map<string, FleetApprovalEntry[]>();
+  approvals: readonly ApprovalRequestView[],
+): Map<string, ApprovalRequestView[]> {
+  const grouped = new Map<string, ApprovalRequestView[]>();
   for (const approval of approvals) {
-    const bucket = grouped.get(approval.companionId);
+    const companionId = approval.attribution?.parentId;
+    if (!companionId) continue;
+    const bucket = grouped.get(companionId);
     if (bucket) bucket.push(approval);
-    else grouped.set(approval.companionId, [approval]);
+    else grouped.set(companionId, [approval]);
   }
   return grouped;
 }

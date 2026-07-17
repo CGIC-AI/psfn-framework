@@ -176,6 +176,53 @@ describe('hub stream reducer', () => {
     })]);
   });
 
+  it('does not extend or replace a pending approval when its immutable id is replayed', () => {
+    let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:01.000Z',
+      event: {
+        message: {
+          type: 'approval.requested',
+          data: {
+            id: 'ap-pending-replay',
+            title: 'Original request',
+            requestedAt: '2026-06-17T00:00:01.000Z',
+            expiresAt: '2026-06-17T00:00:02.000Z',
+            redactedContext: 'Original context',
+            status: 'pending',
+          },
+        },
+      },
+    });
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:03.000Z',
+      event: {
+        message: {
+          type: 'approval.requested',
+          data: {
+            id: 'ap-pending-replay',
+            title: 'Replacement request',
+            requestedAt: '2026-06-17T00:00:03.000Z',
+            expiresAt: '2026-06-17T01:00:00.000Z',
+            redactedContext: 'Replacement context',
+            status: 'pending',
+          },
+        },
+      },
+    });
+
+    expect(state.approvals).toEqual([expect.objectContaining({
+      id: 'ap-pending-replay',
+      title: 'Original request',
+      requestedAt: '2026-06-17T00:00:01.000Z',
+      expiresAt: '2026-06-17T00:00:02.000Z',
+      redactedContext: 'Original context',
+      status: 'pending',
+    })]);
+  });
+
   it('accumulates assistant live deltas and clears them on final text', () => {
     let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
     state = {

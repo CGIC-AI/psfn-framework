@@ -78,7 +78,7 @@ export function ToastLayer({
   );
 }
 
-function ApprovalCard({
+export function ApprovalCard({
   request,
   onDecision,
 }: {

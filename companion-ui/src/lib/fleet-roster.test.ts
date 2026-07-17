@@ -44,12 +44,12 @@ describe('fleet roster protocol', () => {
       schemaVersion: 1,
       companions: [
         { companionId: COMPANION_A, displayName: 'Flagship', websocketPath: WS_A },
-        { companionId: COMPANION_B, displayName: 'Aria', websocketPath: WS_B, avatarRef: 'a/b.png' },
+        { companionId: COMPANION_B, displayName: 'Aria', websocketPath: WS_B, avatarRef: 'avatars/aria.png' },
       ],
     });
     expect(roster.companions).toHaveLength(2);
     expect(roster.companions[0]).not.toHaveProperty('avatarRef');
-    expect(roster.companions[1]!.avatarRef).toBe('a/b.png');
+    expect(roster.companions[1]!.avatarRef).toBe('avatars/aria.png');
   });
 
   it('accepts an empty roster (session may reach nothing)', () => {
@@ -82,6 +82,26 @@ describe('fleet roster protocol', () => {
     ] },
   ])('rejects a malformed or hostile roster %#', (value) => {
     expect(() => parseFleetRoster(value)).toThrow(FleetRosterProtocolError);
+  });
+
+  it.each([
+    'https://attacker.example/avatar.png',
+    '//attacker.example/avatar.png',
+    '/outside-the-app.png',
+    'avatars/../secret.png',
+    'avatars/a.png?tracking=1',
+    'data:image/svg+xml,<svg/>',
+    'avatars\\a.png',
+  ])('rejects avatarRef that is not a canonical Companion UI asset path: %s', (avatarRef) => {
+    expect(() => parseFleetRoster({
+      schemaVersion: 1,
+      companions: [{
+        companionId: COMPANION_A,
+        displayName: 'Flagship',
+        websocketPath: WS_A,
+        avatarRef,
+      }],
+    })).toThrow(FleetRosterProtocolError);
   });
 
   it('accepts a valid approvals view and drops nothing it is given', () => {

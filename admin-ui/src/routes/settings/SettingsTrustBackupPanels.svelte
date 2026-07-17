@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { setContext } from 'svelte';
   import SettingAuthorityHint from '$lib/components/settings/SettingAuthorityHint.svelte';
   import SettingFieldLabel from '$lib/components/settings/SettingFieldLabel.svelte';
   import SettingsCollapsibleSection from '$lib/components/settings/SettingsCollapsibleSection.svelte';
@@ -6,9 +7,11 @@
   import type { AdminSettingsData } from '$lib/types';
   import type { SettingAuthorityInfo } from '$lib/settings/authority';
   import {
+    SETTINGS_FIELD_ERRORS_CONTEXT,
     formatSettingOptionLabel,
     settingControlId,
     type RawEditorKey,
+    type SettingsFieldErrorsAccessor,
   } from './settings-page-helpers';
 
   let {
@@ -21,6 +24,7 @@
     getSource,
     getSettingAuthority,
     rawEditorLabel,
+    fieldErrors,
     toggleSection,
     capabilityTier = $bindable('apprentice'),
     capabilityCustomTokens = $bindable(''),
@@ -40,6 +44,7 @@
     getSource: (key: string) => string;
     getSettingAuthority: (key: string) => SettingAuthorityInfo;
     rawEditorLabel: (key: RawEditorKey) => string;
+    fieldErrors: SettingsFieldErrorsAccessor;
     toggleSection: (id: string) => void;
     capabilityTier: string;
     capabilityCustomTokens: string;
@@ -50,6 +55,10 @@
     backupMirrorDir: string;
     backupVerifyRestore: boolean;
   }>();
+
+  // Publish the validation-error accessor to descendant SettingFieldLabels so
+  // curated controls render their field's errors inline (ybm3).
+  setContext<SettingsFieldErrorsAccessor>(SETTINGS_FIELD_ERRORS_CONTEXT, (key) => fieldErrors(key));
 </script>
 
 <section

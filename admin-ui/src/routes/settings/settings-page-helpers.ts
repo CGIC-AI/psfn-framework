@@ -746,3 +746,151 @@ export function buildSettingsSnapshot(input: {
     providerRegistry: input.providerRegistry,
   });
 }
+
+// ── Persistent save feedback (qq67) ──
+// Save confirmations and failures share the same banner in SettingsPageChrome,
+// but they must not share the same lifetime: a validation failure vanishing on
+// a 4s timer while the dirty form remains is the bug. Success messages may
+// auto-dismiss; errors — and successes that skipped owner files (they carry an
+// actionable "save/discard your staged raw edits" note) — persist until the
+// operator dismisses them or starts the next save.
+export const SAVE_SUCCESS_AUTO_DISMISS_MS = 4000;
+export const RAW_SAVE_SUCCESS_AUTO_DISMISS_MS = 4000;
+
+export interface SaveFeedbackState {
+  tone: 'success' | 'error';
+  message: string;
+  // null means "persist until dismissed or the next save attempt".
+  autoDismissMs: number | null;
+}
+
+export function resolveSaveFeedback(input: {
+  ok: boolean;
+  message: string;
+  hasSkippedOwnerFiles?: boolean;
+}): SaveFeedbackState {
+  if (!input.ok) {
+    return { tone: 'error', message: input.message, autoDismissMs: null };
+  }
+  if (input.hasSkippedOwnerFiles) {
+    return { tone: 'success', message: input.message, autoDismissMs: null };
+  }
+  return { tone: 'success', message: input.message, autoDismissMs: SAVE_SUCCESS_AUTO_DISMISS_MS };
+}
+
+// ── Validation error routing (ybm3) ──
+// The context key curated panels use to expose per-field validation errors to
+// their SettingFieldLabel descendants. Set only inside curated panels so the
+// provider-registry labels (which have their own validation surface) never pick
+// up unrelated runtime validation errors.
+export const SETTINGS_FIELD_ERRORS_CONTEXT = Symbol('settings:field-errors');
+export type SettingsFieldErrorsAccessor = (key: string) => string[];
+
+// Every settings contract field that has a curated (non-"All Fields") control.
+// This is the source of truth for "does this field render an inline error on a
+// curated tab?" — and therefore for whether a validation failure needs to fall
+// back to the All Fields view. Keys mirror the `keys=` props on the curated
+// panels' SettingFieldLabel controls (which match the runtime payload field
+// names). Backup/capabilities keys route to owner files, but their curated
+// controls still live here so an inline error can render if one ever surfaces.
+export const CURATED_SETTINGS_FIELD_KEYS: ReadonlySet<string> = new Set<string>([
+  // Memory panel
+  'sessionHistoryBudgetPct',
+  'memoryRetrievalBudgetPct',
+  'extractionThresholdPct',
+  'extractionInterval',
+  'compactionEmotionalSalienceThresholdPct',
+  'compactionThresholdPct',
+  'backgroundMaintenanceIntervalMs',
+  'sessionRestartBehavior',
+  'memoryExtractionMinImportance',
+  'memoryExtractionMinConfidence',
+  'memoryExtractionMinNovelty',
+  'memoryExtractionMaxWrites',
+  'memoryExtractionTelemetryEnabled',
+  'memoryRetrievalTelemetryEnabled',
+  'profileSynthesisEnabled',
+  'profileSynthesisRefreshIntervalMs',
+  'profileSynthesisCooldownMs',
+  'profileSynthesisMinWrites',
+  'profileSynthesisMinImportance',
+  'profileSynthesisMinConfidence',
+  'profileSynthesisMinNovelty',
+  'profileSynthesisSourceMemoryLimit',
+  'profileSynthesisMinSourceMemories',
+  'analysisWorkbenchMaxTokens',
+  'analysisWorkbenchMaxWallTimeMs',
+  'analysisWorkbenchMaxSubQueries',
+  // Runtime panel
+  'retryMaxAttempts',
+  'retryBaseDelayMs',
+  'importProcessingRouteMode',
+  'importProcessingStrictPolicy',
+  'openRouterProviderOrder',
+  'importProcessingLocalEndpointUrl',
+  'importProcessingLocalModel',
+  'webFetchAllowInternalNetwork',
+  'webFetchAllowHttp',
+  'webFetchDomainAllowlist',
+  'webFetchTlsCaCertPaths',
+  // Integrations panel
+  'ttsProvider',
+  'sttProvider',
+  'voiceId',
+  'deepgramModel',
+  'echoTtsUrl',
+  'echoTtsVoice',
+  'echoTtsPreset',
+  'obsidianVaultName',
+  'obsidianCliPath',
+  'obsidianTimeoutMs',
+  'discordTriggerWords',
+  'discordTriggerReactions',
+  'discordTriggerListenWindowMs',
+  'telegramEnabled',
+  'telegramAuthorizedUsers',
+  // Trust & Backup panel
+  'capabilityTier',
+  'customTokens',
+  'intervalHours',
+  'maxRotatingBackups',
+  'maxWeeklyBackups',
+  'maxMonthlyBackups',
+  'mirrorDir',
+]);
+
+// A validation error field is "covered" by a curated control when the field is
+// exactly a curated key or a nested path under one (e.g. array-element paths
+// like `webFetchDomainAllowlist.0`).
+export function hasCuratedControl(
+  field: string,
+  curatedFieldKeys: ReadonlySet<string> = CURATED_SETTINGS_FIELD_KEYS,
+): boolean {
+  if (curatedFieldKeys.has(field)) return true;
+  for (const key of curatedFieldKeys) {
+    if (field.startsWith(`${key}.`)) return true;
+  }
+  return false;
+}
+
+// Decide whether a validation failure must fall back to the All Fields view.
+// It only does so for fields that have NO curated control anywhere; if every
+// invalid field owns a curated control the operator stays on their tab and the
+// errors render inline there instead of teleporting to All Fields.
+export function resolveValidationNavigation(input: {
+  invalidFields: readonly string[];
+  curatedFieldKeys?: ReadonlySet<string>;
+}): { navigate: boolean; uncoveredFields: string[] } {
+  const curatedFieldKeys = input.curatedFieldKeys ?? CURATED_SETTINGS_FIELD_KEYS;
+  const uncoveredFields = input.invalidFields.filter(
+    (field) => field !== '$root' && !hasCuratedControl(field, curatedFieldKeys),
+  );
+  return { navigate: uncoveredFields.length > 0, uncoveredFields };
+}
+
+export function buildValidationNavigationNotice(uncoveredFields: readonly string[]): string {
+  if (uncoveredFields.length === 0) return '';
+  return `No curated control exists for ${uncoveredFields.join(', ')}; showing ${
+    uncoveredFields.length === 1 ? 'it' : 'them'
+  } in All Fields.`;
+}

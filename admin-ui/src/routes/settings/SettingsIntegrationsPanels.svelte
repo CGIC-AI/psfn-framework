@@ -1,11 +1,14 @@
 <script lang="ts">
+  import { setContext } from 'svelte';
   import SettingFieldLabel from '$lib/components/settings/SettingFieldLabel.svelte';
   import SettingsCollapsibleSection from '$lib/components/settings/SettingsCollapsibleSection.svelte';
   import { settingsSimpleSectionAnchorId } from '$lib/components/settings/navigation';
   import {
+    SETTINGS_FIELD_ERRORS_CONTEXT,
     normalizeDiscordListenWindowSeconds,
     settingControlId,
     settingLabelId,
+    type SettingsFieldErrorsAccessor,
   } from './settings-page-helpers';
 
   let {
@@ -13,6 +16,7 @@
     inputClass,
     labelClass,
     toggleClass,
+    fieldErrors,
     toggleSection,
     ttsProvider = $bindable('disabled'),
     sttProvider = $bindable('disabled'),
@@ -35,6 +39,7 @@
     inputClass: string;
     labelClass: string;
     toggleClass: string;
+    fieldErrors: SettingsFieldErrorsAccessor;
     toggleSection: (id: string) => void;
     ttsProvider: string;
     sttProvider: string;
@@ -53,6 +58,10 @@
     telegramEnabled: boolean;
     telegramAuthorizedUsers: string;
   }>();
+
+  // Publish the validation-error accessor to descendant SettingFieldLabels so
+  // curated controls render their field's errors inline (ybm3).
+  setContext<SettingsFieldErrorsAccessor>(SETTINGS_FIELD_ERRORS_CONTEXT, (key) => fieldErrors(key));
 </script>
 
 <section

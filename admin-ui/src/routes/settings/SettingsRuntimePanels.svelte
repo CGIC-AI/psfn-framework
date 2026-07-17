@@ -1,11 +1,14 @@
 <script lang="ts">
+  import { setContext } from 'svelte';
   import SettingFieldLabel from '$lib/components/settings/SettingFieldLabel.svelte';
   import SettingsCollapsibleSection from '$lib/components/settings/SettingsCollapsibleSection.svelte';
   import { settingsSimpleSectionAnchorId } from '$lib/components/settings/navigation';
   import {
+    SETTINGS_FIELD_ERRORS_CONTEXT,
     formatSettingOptionLabel,
     settingControlId,
     settingLabelId,
+    type SettingsFieldErrorsAccessor,
   } from './settings-page-helpers';
 
   let {
@@ -15,6 +18,7 @@
     labelClass,
     toggleClass,
     getSource,
+    fieldErrors,
     toggleSection,
     retryMaxAttempts = $bindable(3),
     retryBaseDelayMs = $bindable(2000),
@@ -34,6 +38,7 @@
     labelClass: string;
     toggleClass: string;
     getSource: (key: string) => string;
+    fieldErrors: SettingsFieldErrorsAccessor;
     toggleSection: (id: string) => void;
     retryMaxAttempts: number;
     retryBaseDelayMs: number;
@@ -47,6 +52,10 @@
     webFetchAllowInternalNetwork: boolean;
     webFetchTlsCaCertPaths: string;
   }>();
+
+  // Publish the validation-error accessor to descendant SettingFieldLabels so
+  // curated controls render their field's errors inline (ybm3).
+  setContext<SettingsFieldErrorsAccessor>(SETTINGS_FIELD_ERRORS_CONTEXT, (key) => fieldErrors(key));
 </script>
 
 <section

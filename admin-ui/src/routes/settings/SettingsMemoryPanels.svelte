@@ -1,16 +1,19 @@
 <script lang="ts">
   import { base } from '$app/paths';
+  import { setContext } from 'svelte';
   import SettingAuthorityHint from '$lib/components/settings/SettingAuthorityHint.svelte';
   import SettingFieldLabel from '$lib/components/settings/SettingFieldLabel.svelte';
   import SettingsCollapsibleSection from '$lib/components/settings/SettingsCollapsibleSection.svelte';
   import { settingsSimpleSectionAnchorId } from '$lib/components/settings/navigation';
   import type { SettingAuthorityInfo } from '$lib/settings/authority';
   import {
+    SETTINGS_FIELD_ERRORS_CONTEXT,
     fmtMs,
     fmtTokens,
     formatSettingOptionLabel,
     settingControlId,
     settingLabelId,
+    type SettingsFieldErrorsAccessor,
   } from './settings-page-helpers';
 
   let {
@@ -23,6 +26,7 @@
     toggleClass,
     getSource,
     getSettingAuthority,
+    fieldErrors,
     toggleSection,
     sessionRestartBehavior = $bindable<'reuse_latest_session' | 'new_session'>('reuse_latest_session'),
     sessionHistoryBudgetPct = $bindable(6),
@@ -60,6 +64,7 @@
     toggleClass: string;
     getSource: (key: string) => string;
     getSettingAuthority: (key: string) => SettingAuthorityInfo;
+    fieldErrors: SettingsFieldErrorsAccessor;
     toggleSection: (id: string) => void;
     sessionRestartBehavior: 'reuse_latest_session' | 'new_session';
     sessionHistoryBudgetPct: number;
@@ -88,6 +93,10 @@
     analysisWorkbenchMaxWallTimeMs: number;
     analysisWorkbenchMaxSubQueries: number;
   }>();
+
+  // Publish the validation-error accessor to descendant SettingFieldLabels so
+  // curated controls render their field's errors inline (ybm3).
+  setContext<SettingsFieldErrorsAccessor>(SETTINGS_FIELD_ERRORS_CONTEXT, (key) => fieldErrors(key));
 </script>
 
 <section

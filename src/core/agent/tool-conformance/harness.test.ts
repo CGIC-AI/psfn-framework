@@ -103,6 +103,97 @@ describe('tool conformance harness', () => {
     expect(bad.results[0]).toMatchObject({ probeKind: 'schema_only', ok: false, classification: 'schema_invalid' });
   });
 
+  describe('union parameter schemas (bead an52.4)', () => {
+    // A top-level TypeBox `Type.Union([...])` emits `{anyOf:[...]}` with no
+    // top-level type:'object' and no top-level properties (they live in each
+    // branch). validateSchema must accept these instead of falsely flagging
+    // schema_invalid — the false positive that made `notify` fail every sweep.
+    const objBranch = (action: string) => ({
+      type: 'object',
+      properties: { action: { const: action }, message: { type: 'string' } },
+      required: ['action'],
+      additionalProperties: false,
+    });
+
+    it('accepts a top-level anyOf of object branches', async () => {
+      const result = await sweep(
+        [tool('uni_any', async () => okResult(), { anyOf: [objBranch('a'), objBranch('b')] })],
+        { uni_any: { kind: 'schema_only' } },
+      );
+      expect(result.results[0]).toMatchObject({ probeKind: 'schema_only', ok: true });
+      expect(result.results[0].classification).toBeUndefined();
+    });
+
+    it('accepts a top-level oneOf of object branches', async () => {
+      const result = await sweep(
+        [tool('uni_one', async () => okResult(), { oneOf: [objBranch('a'), objBranch('b')] })],
+        { uni_one: { kind: 'schema_only' } },
+      );
+      expect(result.results[0]).toMatchObject({ probeKind: 'schema_only', ok: true });
+    });
+
+    it('accepts a top-level allOf of object branches', async () => {
+      const result = await sweep(
+        [tool('uni_all', async () => okResult(), { allOf: [objBranch('a'), objBranch('b')] })],
+        { uni_all: { kind: 'schema_only' } },
+      );
+      expect(result.results[0]).toMatchObject({ probeKind: 'schema_only', ok: true });
+    });
+
+    it('accepts a nested union-of-union of object branches', async () => {
+      const result = await sweep(
+        [tool('uni_nest', async () => okResult(), { anyOf: [{ oneOf: [objBranch('a')] }, objBranch('b')] })],
+        { uni_nest: { kind: 'schema_only' } },
+      );
+      expect(result.results[0]).toMatchObject({ probeKind: 'schema_only', ok: true });
+    });
+
+    it('accepts a fixture mirroring notify\'s five-variant union shape', async () => {
+      const notifyLike = {
+        anyOf: [
+          objBranch('brief'),
+          objBranch('send'),
+          objBranch('send'),
+          objBranch('consider'),
+          objBranch('approval_request'),
+        ],
+      };
+      const result = await sweep(
+        [tool('notify_like', async () => okResult(), notifyLike)],
+        { notify_like: { kind: 'schema_only' } },
+      );
+      expect(result.results[0]).toMatchObject({ probeKind: 'schema_only', ok: true });
+    });
+
+    it('still rejects a genuinely malformed non-object non-union schema (fail-closed)', async () => {
+      const scalar = await sweep(
+        [tool('scalar', async () => okResult(), { type: 'string' })],
+        { scalar: { kind: 'schema_only' } },
+      );
+      expect(scalar.results[0]).toMatchObject({ probeKind: 'schema_only', ok: false, classification: 'schema_invalid' });
+
+      const empty = await sweep(
+        [tool('empty', async () => okResult(), {})],
+        { empty: { kind: 'schema_only' } },
+      );
+      expect(empty.results[0]).toMatchObject({ probeKind: 'schema_only', ok: false, classification: 'schema_invalid' });
+    });
+
+    it('rejects an empty union and a union with a malformed branch (fail-closed)', async () => {
+      const emptyUnion = await sweep(
+        [tool('empty_union', async () => okResult(), { anyOf: [] })],
+        { empty_union: { kind: 'schema_only' } },
+      );
+      expect(emptyUnion.results[0]).toMatchObject({ probeKind: 'schema_only', ok: false, classification: 'schema_invalid' });
+
+      const badBranch = await sweep(
+        [tool('bad_branch', async () => okResult(), { anyOf: [objBranch('a'), { type: 'string' }] })],
+        { bad_branch: { kind: 'schema_only' } },
+      );
+      expect(badBranch.results[0]).toMatchObject({ probeKind: 'schema_only', ok: false, classification: 'schema_invalid' });
+    });
+  });
+
   describe('required-action rejection_check (bead gu8m regression)', () => {
     it('passes when the tool rejects empty args by throwing', async () => {
       const result = await sweep(

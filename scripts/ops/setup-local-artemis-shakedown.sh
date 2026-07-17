@@ -19,6 +19,8 @@ PREPARED_ROOT=""
 SEED_ROOT=""
 COMPANION_AUTH_TOKEN=""
 SESSION_INTEGRITY_AUTH_TOKEN=""
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PORT_FORWARD_RUNNER="${SCRIPT_DIR}/keep-kube-port-forward.sh"
 
 usage() {
   cat <<'EOF'
@@ -33,6 +35,8 @@ Defaults:
   namespace:      psfn-test
   release:        psfn
   companion id:   shakedown-artemis
+  gateway URL:    http://127.0.0.1:10153
+  Garden URL:     http://127.0.0.1:10154
 
 Options:
   --shakedown-root PATH   Artemis fixture root.
@@ -549,12 +553,22 @@ start_port_forward() {
   if [[ -f "$pidfile" ]]; then
     local old_pid
     old_pid="$(cat "$pidfile" 2>/dev/null || true)"
-    if [[ "$old_pid" =~ ^[0-9]+$ ]] && ps -p "$old_pid" -o comm= 2>/dev/null | grep -q kubectl; then
-      kill "$old_pid" 2>/dev/null || true
+    if [[ "$old_pid" =~ ^[0-9]+$ ]]; then
+      local old_command
+      old_command="$(ps -p "$old_pid" -o args= 2>/dev/null || true)"
+      if [[ "$old_command" == *"keep-kube-port-forward.sh"* || "$old_command" == kubectl\ *port-forward* ]]; then
+        kill "$old_pid" 2>/dev/null || true
+        wait "$old_pid" 2>/dev/null || true
+      fi
     fi
     rm -f "$pidfile"
   fi
-  nohup kubectl -n "$NAMESPACE" port-forward "$target" "$mapping" >"${dir}/${name}.log" 2>&1 &
+  nohup setsid "$PORT_FORWARD_RUNNER" \
+    --context "k3d-${CLUSTER}" \
+    --namespace "$NAMESPACE" \
+    --target "$target" \
+    --mapping "$mapping" \
+    >"${dir}/${name}.log" 2>&1 &
   echo "$!" >"$pidfile"
 }
 
@@ -577,6 +591,7 @@ require_command helm
 require_command kubectl
 require_command k3d
 require_command node
+require_command setsid
 
 [[ -d "$SHAKEDOWN_ROOT/system-data" ]] || { echo "missing system-data under $SHAKEDOWN_ROOT" >&2; exit 2; }
 [[ -d "$SHAKEDOWN_ROOT/companion-data" ]] || { echo "missing companion-data under $SHAKEDOWN_ROOT" >&2; exit 2; }

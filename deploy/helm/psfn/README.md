@@ -876,6 +876,19 @@ kubectl -n psfn-test port-forward svc/psfn-garden 10054:10054
 curl http://127.0.0.1:10054/health
 ```
 
+Those manual commands occupy the foreground. The repository's persistent local
+Artemis setup starts resilient loopback forwards instead:
+
+```text
+Gateway: http://127.0.0.1:10153
+Garden:  http://127.0.0.1:10154
+```
+
+The `10053` and `10054` ports are Kubernetes Service ports; a k3d cluster does
+not expose them on the physical host unless it was created with matching Docker
+port publications. `scripts/ops/setup-local-artemis-shakedown.sh` owns the
+`10153`/`10154` local forwards and reconnects them when a selected pod rolls.
+
 If the satellite hub is enabled, also verify:
 
 ```bash

@@ -206,6 +206,55 @@ describe('companions owner-file config', () => {
       expect(() => validateCompanionsConfig(fleet, 'companions.json'))
         .toThrow(/duplicate gardenPort 10061/);
     });
+
+    it('accepts optional displayName and avatarRef roster fields', () => {
+      const fleet = clone(VALID_FLEET);
+      fleet.companions[0].displayName = 'Flagship';
+      fleet.companions[1].displayName = 'Aria';
+      fleet.companions[1].avatarRef = 'avatars/aria.png';
+      const validated = validateCompanionsConfig(fleet, 'companions.json');
+      expect(validated.companions[0].displayName).toBe('Flagship');
+      expect(validated.companions[1].avatarRef).toBe('avatars/aria.png');
+      // Absent fields stay absent (no character-card reads, no synthetic default).
+      expect(validated.companions[0]).not.toHaveProperty('avatarRef');
+    });
+
+    it('trims displayName and avatarRef like the other string fields', () => {
+      const fleet = clone(VALID_FLEET);
+      fleet.companions[0].displayName = '  Flagship  ' as string;
+      fleet.companions[0].avatarRef = '  avatars/a.png  ' as string;
+      const validated = validateCompanionsConfig(fleet, 'companions.json');
+      expect(validated.companions[0].displayName).toBe('Flagship');
+      expect(validated.companions[0].avatarRef).toBe('avatars/a.png');
+    });
+
+    it('rejects an empty displayName', () => {
+      const fleet = clone(VALID_FLEET) as unknown as { companions: Record<string, unknown>[] };
+      fleet.companions[0].displayName = '   ';
+      expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+        .toThrow(/displayName must be a non-empty string/);
+    });
+
+    it('rejects a non-string avatarRef', () => {
+      const fleet = clone(VALID_FLEET) as unknown as { companions: Record<string, unknown>[] };
+      fleet.companions[0].avatarRef = 42;
+      expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+        .toThrow(/avatarRef must be a string/);
+    });
+
+    it('rejects an over-long displayName', () => {
+      const fleet = clone(VALID_FLEET);
+      fleet.companions[0].displayName = 'x'.repeat(121);
+      expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+        .toThrow(/displayName must be at most 120 characters/);
+    });
+
+    it('rejects control characters in a displayName', () => {
+      const fleet = clone(VALID_FLEET);
+      fleet.companions[0].displayName = 'bad\nname';
+      expect(() => validateCompanionsConfig(fleet, 'companions.json'))
+        .toThrow(/displayName must not contain control characters/);
+    });
   });
 
   describe('loadCompanionsConfig', () => {

@@ -1,4 +1,10 @@
 <script lang="ts">
+  import { getContext } from 'svelte';
+  import {
+    SETTINGS_FIELD_ERRORS_CONTEXT,
+    type SettingsFieldErrorsAccessor,
+  } from '../../../routes/settings/settings-page-helpers';
+
   let {
     label,
     keys,
@@ -20,6 +26,20 @@
       ? [keys]
       : [...(keys ?? [])],
   );
+
+  // Curated panels publish a validation-error accessor through context; labels
+  // outside a curated panel (e.g. the provider registry editor) get undefined
+  // and render no inline errors. Reading the accessor here keeps the errors
+  // reactive to the controller's validationErrorsByField state.
+  const fieldErrorsAccessor = getContext<SettingsFieldErrorsAccessor | undefined>(
+    SETTINGS_FIELD_ERRORS_CONTEXT,
+  );
+
+  let fieldErrors = $derived(
+    fieldErrorsAccessor
+      ? [...new Set(keyList.flatMap((key) => fieldErrorsAccessor(key)))]
+      : [],
+  );
 </script>
 
 {#snippet labelContent()}
@@ -32,6 +52,13 @@
       {key}
     </code>
   {/each}
+  {#if fieldErrors.length > 0}
+    <span class="mt-1 block space-y-0.5 font-normal">
+      {#each fieldErrors as message}
+        <span class="block text-sm text-wilt-600">{message}</span>
+      {/each}
+    </span>
+  {/if}
 {/snippet}
 
 {#if forId}

@@ -3,9 +3,12 @@ import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../../src/shared/contracts
 
 export type ApprovalCapabilityState = 'available' | 'unsupported';
 
-export type ApprovalRequestStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'blocked';
+export type ApprovalRequestStatus = ApprovalStreamEntry['status'];
 
-export interface ApprovalRequestView {
+export interface ApprovalRequestView extends Pick<
+  ApprovalStreamEntry,
+  'sourceSystem' | 'attribution' | 'action' | 'scope' | 'reason' | 'grantMode'
+> {
   id: string;
   title: string;
   status: ApprovalRequestStatus;
@@ -86,6 +89,12 @@ function toRequestView(entry: ApprovalStreamEntry, now: number): ApprovalRequest
     redactedContext: entry.redactedContext,
     resolvedAt: entry.resolvedAt,
     expiresInSeconds: null,
+    sourceSystem: entry.sourceSystem,
+    attribution: entry.attribution,
+    action: entry.action,
+    scope: entry.scope,
+    reason: entry.reason,
+    grantMode: entry.grantMode,
   };
 
   if (entry.status !== 'pending' || !entry.expiresAt) {

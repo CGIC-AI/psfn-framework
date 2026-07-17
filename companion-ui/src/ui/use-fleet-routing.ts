@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FleetSessionStatus } from '../lib/fleet-session.js';
+import { mergeFleetApprovalHistory } from '../lib/fleet-approval-routing.js';
 import {
   FleetRosterClient,
   type FleetApprovalEntry,
@@ -23,6 +24,7 @@ export function useFleetRouting(input: {
   const [roster, setRoster] = useState<readonly FleetRosterCompanion[]>([]);
   const [activeCompanionId, setActiveCompanionId] = useState<string | null>(null);
   const [approvals, setApprovals] = useState<readonly FleetApprovalEntry[]>([]);
+  const [approvalHistory, setApprovalHistory] = useState<readonly FleetApprovalEntry[]>([]);
 
   useEffect(() => {
     if (input.accessState !== 'signed_in') return undefined;
@@ -54,7 +56,7 @@ export function useFleetRouting(input: {
     activeCompanionIdRef.current = selected.companionId;
     setRoster(nextRoster.companions);
     setActiveCompanionId(selected.companionId);
-    setApprovals(nextApprovals.approvals);
+    rememberApprovals(nextApprovals.approvals);
     if (connectWhenAllowed) await connectRef.current(selected.websocketPath, authorityEpoch);
   }
 
@@ -63,10 +65,15 @@ export function useFleetRouting(input: {
     if (!client || input.accessState !== 'signed_in') return;
     try {
       const next = await client.readApprovals();
-      setApprovals(next.approvals);
+      rememberApprovals(next.approvals);
     } catch (error) {
       reportErrorRef.current(error instanceof Error ? error.message : 'Fleet approvals refresh failed');
     }
+  }
+
+  function rememberApprovals(next: readonly FleetApprovalEntry[]): void {
+    setApprovals(next);
+    setApprovalHistory(current => mergeFleetApprovalHistory(current, next));
   }
 
   async function select(companionId: string): Promise<boolean> {
@@ -90,6 +97,7 @@ export function useFleetRouting(input: {
   function clear(): void {
     setRoster([]);
     setApprovals([]);
+    setApprovalHistory([]);
     setActiveCompanionId(null);
     activeCompanionIdRef.current = null;
   }
@@ -97,10 +105,10 @@ export function useFleetRouting(input: {
   return {
     activeCompanionId,
     activeCompanionIdRef,
+    approvalHistory,
     approvals,
     clear,
     load,
-    removeApproval: (id: string) => setApprovals(current => current.filter(entry => entry.id !== id)),
     roster,
     select,
   };

@@ -418,6 +418,34 @@ Mode semantics mirror screening: `shadow` evaluates and audits every gate but
 always allows; `enforce` honors verdicts fail-closed; `off` constructs no
 gate at all.
 
+### Capability tiers vs. the intake firewall (an52.1)
+
+The intake firewall and the capability-tier system are **orthogonal** and guard
+different directions of flow. The tier system (`src/system/capabilities/`) gates
+what a companion may *do* — egress and state mutation — by granting tokens per
+tier (`nursery`/`apprentice`/`autonomous`). The firewall gates what untrusted
+*inbound* content may *reach*, regardless of tier.
+
+This is why `web` and `web_fetch` are deliberately `NO_CAPABILITY_REQUIREMENT`
+(`src/system/capabilities/requirements.ts`) and callable even at `nursery`. A web
+read is ingress: every web return is wrapped in a taint-tracked intake envelope
+and screened before it can reach any sink
+(`src/boundary/gateway/methods/web.ts:695-742`; web return paths at `:793`,
+`:846`, `:1050`). That screening runs in the gateway process and never consults
+the capability tier — a nursery companion's fetch is firewalled identically to an
+autonomous one. Web content is labelled `untrusted`, which triggers `hard`
+(deny) trifecta enforcement at egress sinks. Gating web behind a tier token would
+add no protection the firewall does not already provide, and would falsely imply
+the tier is the control for untrusted-content risk.
+
+The tier *does* gate the egress side, which is where the trifecta bites:
+operator notification (`external.web`), Discord/email (`external.discord`/
+`external.email`), git writes, REPL, and world control are all egress-capable
+tokens (`INTAKE_EGRESS_CAPABILITY_TOKENS`) and are withheld from lower tiers. The
+deliberate asymmetry — web reads ungated, egress gated — is recorded in
+`sink-gates.ts` ("web fetch is ingress and deliberately absent" from the egress
+token set).
+
 ## Source Lists and Datamarking (htm9.13)
 
 `src/core/cogsec/intake/source-lists.ts` scales scrutiny by **source** risk,

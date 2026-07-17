@@ -25,6 +25,18 @@ type UnifiedToolRequirementResolver = (
 ) => CapabilityRequirement | null;
 
 const IDENTITY_READ_RUNTIME_WRITE = ['identity.read', 'identity.write.runtime'] as const;
+// A tool mapped to NO_CAPABILITY_REQUIREMENT is callable at every tier, including
+// nursery, because its risk is governed by a mechanism other than the capability
+// tier. `web`/`web_fetch` are the deliberate case: web reads are INGRESS, and every
+// web return is wrapped in a taint-tracked intake envelope and screened by the
+// cognitive-security firewall before it can reach any prompt/memory/tool sink
+// (src/boundary/gateway/methods/web.ts:695-742; contract src/shared/contracts/
+// intake-envelope.ts). That screening is orthogonal to the capability tier — a
+// nursery companion's fetch is firewalled identically — so gating web behind a
+// tier token would add no protection the firewall does not already provide. The
+// trifecta enforcement bites on EGRESS instead (notify_operator -> external.web,
+// discord, email, etc.), which the tier system does gate. See docs/cognitive-
+// security.md "Capability tiers vs. the intake firewall" and bead an52.1.
 export const NO_CAPABILITY_REQUIREMENT: readonly CapabilityToken[] = Object.freeze([]);
 const IDENTITY_LAYER_WRITE_REQUIREMENTS = [
   'identity.write.runtime',

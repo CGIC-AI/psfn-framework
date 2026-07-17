@@ -47,11 +47,25 @@ export interface RuntimeVoiceConnectorBinding<TProvider, TConnector> {
 export interface RuntimeVoiceSttConnectorOptions extends RuntimeVoiceProviderGateOptions {
   provider?: RuntimeVoiceSttProvider;
   eligibilityGate?: EligibilityGate;
+  /**
+   * an52.5: server/composition-derived companion identity for per-account voice
+   * surfaces (the Discord account binding). When set, activation and per-stream
+   * eligibility resolve against this companion's own capability tier rather than
+   * the gateway root; absent for single-account/global callers.
+   */
+  companionId?: string;
 }
 
 export interface RuntimeVoiceTtsConnectorOptions extends RuntimeVoiceProviderGateOptions {
   provider?: RuntimeVoiceTtsProvider;
   eligibilityGate?: EligibilityGate;
+  /**
+   * an52.5: server/composition-derived companion identity for per-account voice
+   * surfaces (the Discord account binding). When set, activation and per-synthesis
+   * eligibility resolve against this companion's own capability tier rather than
+   * the gateway root; absent for single-account/global callers.
+   */
+  companionId?: string;
   fetchImpl?: typeof fetch;
 }
 
@@ -146,6 +160,7 @@ export function createRuntimeVoiceSttConnector(
       'stt',
       provider,
       providerMetadata?.eligibility,
+      options.companionId,
     );
   } catch (error) {
     if (shouldFailClosed) {
@@ -162,6 +177,7 @@ export function createRuntimeVoiceSttConnector(
       provider,
       options.eligibilityGate,
       providerMetadata?.eligibility,
+      options.companionId,
     ),
   };
 }
@@ -193,6 +209,7 @@ export function createRuntimeVoiceTtsConnector(
       'tts',
       provider,
       providerMetadata?.eligibility,
+      options.companionId,
     );
   } catch (error) {
     if (shouldFailClosed) {
@@ -214,6 +231,7 @@ export function createRuntimeVoiceTtsConnector(
       provider,
       options.eligibilityGate,
       providerMetadata?.eligibility,
+      options.companionId,
     ),
   };
 }

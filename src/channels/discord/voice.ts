@@ -93,6 +93,14 @@ export class DiscordVoiceRuntime {
   private readonly eventBus: EventBus;
   private readonly getHandler: () => MessageHandler | null;
   private readonly eligibilityGate?: EligibilityGate;
+  /**
+   * an52.5: per-account companion identity, injected into `config` by the
+   * DiscordAdapter from its account binding (composition-derived, never from a
+   * request). Threaded into voice STT/TTS eligibility so a per-account surface
+   * resolves the account companion's own capability tier — not the gateway root
+   * — for external.web-gated egress. Undefined in single-account mode.
+   */
+  private readonly voiceCompanionId?: string;
 
   private readonly enabled: boolean;
   private readonly targetGuildId: string;
@@ -137,6 +145,7 @@ export class DiscordVoiceRuntime {
     this.eventBus = eventBus;
     this.getHandler = getHandler;
     this.eligibilityGate = eligibilityGate;
+    this.voiceCompanionId = config.companionId;
     this.intakeScreening = intakeScreening ?? null;
     this.reliabilityBudgets = resolveVoiceReliabilityBudgets();
     this.securityLimits = resolveVoiceSecurityLimits();
@@ -171,6 +180,7 @@ export class DiscordVoiceRuntime {
     try {
       sttBinding = createRuntimeVoiceSttConnector(config, {
         eligibilityGate: this.eligibilityGate,
+        ...(this.voiceCompanionId ? { companionId: this.voiceCompanionId } : {}),
       });
     } catch (error) {
       log.warn('Discord voice STT connector initialization failed', {
@@ -206,7 +216,12 @@ export class DiscordVoiceRuntime {
 
     const ttsConnectors = this.preferredTtsProviderId === 'disabled'
       ? []
-      : buildConfiguredTtsConnectors(config, this.preferredTtsProviderId, this.eligibilityGate);
+      : buildConfiguredTtsConnectors(
+        config,
+        this.preferredTtsProviderId,
+        this.eligibilityGate,
+        this.voiceCompanionId,
+      );
     if (ttsConnectors.length === 0) {
       this.enabled = false;
       this.ttsConnectors = [];

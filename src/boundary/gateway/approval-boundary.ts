@@ -79,6 +79,14 @@ export interface ApprovalBoundaryGateOptions<P, R> {
 export interface ApprovalBoundaryService {
   listPendingConfirmations(): ConfirmationQueueEntry[];
   listConfirmationHistory(): ConfirmationQueueHistoryEntry[];
+  /**
+   * Read-only owner lookup for a pending/resolved confirmation id (companion
+   * roster wire). Returns the authenticated companion that enqueued the
+   * confirmation, or `undefined` when none is recorded. Used to attribute
+   * approvals in the fleet-wide approvals view; a `undefined` result excludes
+   * the entry (fail closed, never mis-attributed).
+   */
+  ownerOfConfirmation(id: string): string | undefined;
   resolveConfirmation(params: { id: string; decision: 'approve' | 'deny' | 'modify'; modifiedParams?: Record<string, unknown> }, resolver?: ConfirmationResolverIdentity): Promise<{
     id: string;
     status: 'approved' | 'denied' | 'modified' | 'expired' | 'failed' | 'not_found';
@@ -193,6 +201,7 @@ export function createGatewayApprovalBoundaryService(
   return {
     listPendingConfirmations: () => confirmationQueue.listPending(),
     listConfirmationHistory: () => confirmationQueue.listHistory(),
+    ownerOfConfirmation: (id: string) => confirmationOwners.get(id),
     resolveConfirmation: (params, resolver) => confirmationQueue.resolve(params, resolver),
     requestExplicitApproval,
     gate<P, R>(gateOptions: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R> {

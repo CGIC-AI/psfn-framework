@@ -249,8 +249,22 @@ describe('AgentApiBackend Hub device principal boundary', () => {
       authorityGeneration: 1, globalAuthEpoch: 1, sessionAuthnVersion: 1,
       sessionAuthzVersion: 1, bindingVersion: 1, grantVersion: 1, policyVersion: 1,
     };
+    const authContext = {
+      principalId: '33333333-3333-4333-8333-333333333333',
+      provider: 'discord' as const,
+      providerSubjectId: '12345678901234567',
+      companionId,
+      contactBindingId: '44444444-4444-4444-8444-444444444444',
+      contactId: 'contact-a',
+      operatorGrantId: '55555555-5555-4555-8555-555555555555',
+      role: 'owner' as const,
+      sessionRecordId: '66666666-6666-4666-8666-666666666666',
+      sessionAssurance: 'oauth' as const,
+      authorizationEventId: '77777777-7777-4777-8777-777777777777',
+      resolvedAt: new Date().toISOString(),
+    };
     const parentInput = { target: compiled.target, requestId: randomUUID(), decisionId: randomUUID(), versions };
-    const parentToken = assertionSigner.signOperator(parentInput);
+    const parentToken = assertionSigner.signOperator({ ...parentInput, authContext });
     const verifiedParent = assertionVerifier.verifyOperator({ token: parentToken, ...parentInput });
     const parent = {
       audience: verifiedParent.audience as `operator:${string}`,
@@ -260,7 +274,7 @@ describe('AgentApiBackend Hub device principal boundary', () => {
       targetDigest: verifiedParent.targetDigest,
     };
     const childInput = { target: compiled.target, requestId: randomUUID(), decisionId: randomUUID(), versions, parent };
-    const childToken = assertionSigner.signAgent(childInput);
+    const childToken = assertionSigner.signAgent({ ...childInput, authContext });
     const capability = {
       token: childToken,
       requestId: childInput.requestId,

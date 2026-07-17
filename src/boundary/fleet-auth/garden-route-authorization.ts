@@ -135,7 +135,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     ],
   },
   {
-    action: 'garden.read', area: 'companion', routeIds: ids('GET', ['/api/admin/dashboard']),
+    action: 'garden.read', area: 'companion', routeIds: ids('GET', ['/api/admin/dashboard', '/api/admin/dashboard/analysis-workbench-traces']),
   },
   {
     action: 'diagnostics.read', area: 'diagnostics', routeIds: [

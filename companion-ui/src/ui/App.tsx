@@ -2,6 +2,7 @@ import {
   Menu,
   Heart,
   Settings,
+  Users,
   Wifi,
   WifiOff,
 } from 'lucide-react';
@@ -15,9 +16,7 @@ import {
 import { PSFN_SATELLITE_MOBILE_CHAT_APP_NAME } from '../lib/api/auth.js';
 import { CompanionGatewayClient } from '../lib/api/gateway-client.js';
 import {
-  deriveApprovalPanelState,
-} from '../lib/approvals.js';
-import {
+  hasPendingApprovalExpiry,
   mergeFleetApprovals,
   routeFleetApprovalDecision,
 } from '../lib/fleet-approval-routing.js';
@@ -38,6 +37,7 @@ import {
 import { deriveOperationalTraces } from '../lib/traces.js';
 import { HeadpatCoalescer } from '../lib/touch-interactions.js';
 import { ActivityDrawer, traceMatchesFilter } from './activity-drawer.js';
+import { CompanionSelectorPage } from './companion-selector.js';
 import { CompanionSprite, deriveSpriteState } from './companion-sprite.js';
 import { Composer } from './composer.js';
 import { useComposerController } from './composer-controller.js';
@@ -173,8 +173,11 @@ export function App() {
   );
   const accessPresentation = useMemo(() => presentAccess(access), [access]);
   const hasPendingExpiry = useMemo(
-    () => streamState.approvals.some(entry => entry.status === 'pending' && Boolean(entry.expiresAt)),
-    [streamState.approvals],
+    () => hasPendingApprovalExpiry(
+      streamState,
+      access.state === 'signed_in' ? fleet.approvals : [],
+    ),
+    [access.state, fleet.approvals, streamState],
   );
 
   useEffect(() => {
@@ -190,7 +193,7 @@ export function App() {
   );
   const approvals = useMemo(
     () => mergeFleetApprovals(
-      deriveApprovalPanelState(streamState, now),
+      streamState,
       access.state === 'signed_in' ? fleet.approvals : [],
       now,
     ),
@@ -373,16 +376,14 @@ export function App() {
     if (access.state !== 'signed_in') return;
     const fleetApproval = fleet.approvals.find(entry => entry.id === id);
     try {
-      if (await routeFleetApprovalDecision({
+      await routeFleetApprovalDecision({
         id,
         decision,
         ...(fleetApproval ? { fleetApproval } : {}),
         activeCompanionId: fleet.activeCompanionIdRef.current,
         switchCompanion: fleet.select,
         currentStore: () => storeRef.current,
-      })) {
-        fleet.removeApproval(id);
-      }
+      });
     } catch {
       // The transport error event owns user-visible denial state.
     }
@@ -412,6 +413,14 @@ export function App() {
         aria-label="Open wishlist"
       >
         <Heart aria-hidden />
+      </button>
+      <button
+        className="floating-button companions-button"
+        type="button"
+        onClick={() => setOverlay('companions')}
+        aria-label="Choose a companion"
+      >
+        <Users aria-hidden />
       </button>
 
       <div className="floating-status" aria-label={`Connection ${streamState.connection}`}>
@@ -493,6 +502,20 @@ export function App() {
               onRequestReview={(prompt) => {
                 sendUserText(prompt);
                 setOverlay(null);
+              }}
+            />
+          ) : overlay === 'companions' ? (
+            <CompanionSelectorPage
+              activeCompanionId={fleet.activeCompanionId}
+              approvals={fleet.approvals}
+              companions={fleet.roster}
+              connecting={connecting}
+              onApprovalDecision={(id, decision) => { void decideApproval(id, decision); }}
+              onClose={() => setOverlay(null)}
+              onSelect={(companionId) => {
+                void fleet.select(companionId).then((selected) => {
+                  if (selected) setOverlay(null);
+                });
               }}
             />
           ) : (

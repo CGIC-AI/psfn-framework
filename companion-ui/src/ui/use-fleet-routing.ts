@@ -100,7 +100,6 @@ export function useFleetRouting(input: {
     approvals,
     clear,
     load,
-    removeApproval: (id: string) => setApprovals(current => current.filter(entry => entry.id !== id)),
     roster,
     select,
   };

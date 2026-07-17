@@ -96,6 +96,15 @@ function ApprovalCard({
         <strong>{attribution ?? 'Approval Request'}</strong>
         <p>{request.title}</p>
         <p>{request.redactedContext}</p>
+        <p className="approval-timing">
+          Requested <time dateTime={request.requestedAt}>{formatApprovalTimestamp(request.requestedAt)}</time>
+          {request.expiresAt && (
+            <>
+              {' · Expires '}
+              <time dateTime={request.expiresAt}>{formatApprovalTimestamp(request.expiresAt)}</time>
+            </>
+          )}
+        </p>
         {details.length > 0 && (
           <dl className="approval-details">
             {details.map((row) => (
@@ -154,11 +163,24 @@ function approvalGrantModeLabel(request: ApprovalRequestView): string | null {
 /** Redacted action/scope/reason/source rows, in stable order. */
 function approvalDetailRows(request: ApprovalRequestView): Array<{ label: string; value: string }> {
   const rows: Array<{ label: string; value: string }> = [];
+  if (request.attribution) {
+    rows.push({ label: 'Parent ID', value: request.attribution.parentId });
+    if (request.attribution.shardId) {
+      rows.push({ label: 'Shard ID', value: request.attribution.shardId });
+    }
+  }
   if (request.action) rows.push({ label: 'Action', value: request.action });
   if (request.scope) rows.push({ label: 'Scope', value: request.scope });
   if (request.reason) rows.push({ label: 'Reason', value: request.reason });
   if (request.sourceSystem) rows.push({ label: 'Source', value: request.sourceSystem });
   return rows;
+}
+
+function formatApprovalTimestamp(timestamp: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(Date.parse(timestamp));
 }
 
 function ArtifactCard({

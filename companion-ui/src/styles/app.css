@@ -265,6 +265,11 @@ button:focus-visible {
   color: var(--color-gold-deep);
 }
 
+.companions-button {
+  left: calc(max(1rem, env(safe-area-inset-left)) + 116px);
+  color: var(--color-gold-deep);
+}
+
 .settings-button {
   right: max(1rem, env(safe-area-inset-right));
 }
@@ -717,79 +722,6 @@ button:focus-visible {
   justify-content: flex-end;
   gap: 0.4rem;
   margin-top: 0.55rem;
-}
-
-.approval-toast {
-  border-color: rgba(201, 163, 90, 0.5);
-}
-
-.approval-toast > svg {
-  color: var(--color-gold-deep);
-}
-
-.approval-expiry {
-  margin-top: 0.3rem;
-  font-size: 0.78rem;
-  color: var(--color-gold-deep);
-}
-
-.approval-details {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  margin: 0.45rem 0 0;
-}
-
-.approval-detail {
-  display: flex;
-  gap: 0.5rem;
-  font-size: 0.8rem;
-  line-height: 1.35;
-}
-
-.approval-detail dt {
-  flex: none;
-  min-width: 3.4rem;
-  font-weight: 600;
-  color: var(--color-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.03em;
-  font-size: 0.7rem;
-}
-
-.approval-detail dd {
-  margin: 0;
-  color: inherit;
-  word-break: break-word;
-}
-
-.approval-grant {
-  margin-top: 0.4rem;
-  font-size: 0.8rem;
-  font-weight: 600;
-  color: var(--color-gold-deep);
-}
-
-.approval-resolution {
-  margin-top: 0.4rem;
-  font-size: 0.82rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--color-muted);
-}
-
-.approval-resolution.approved {
-  color: #2f7a45;
-}
-
-.approval-resolution.denied,
-.approval-resolution.blocked {
-  color: var(--color-error);
-}
-
-.approval-resolution.expired {
-  color: var(--color-muted);
 }
 
 .artifact-provenance {

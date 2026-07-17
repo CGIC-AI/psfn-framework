@@ -35,6 +35,44 @@ describe('ConfirmationQueue', () => {
     expect(queue.getPending(entry.id)?.id).toBe(entry.id);
   });
 
+  it('carries optional unified-envelope provenance immutably and omits it by default', () => {
+    const queue = new ConfirmationQueue({ now: () => 1, idFactory: () => 'prov-1' });
+
+    const plain = queue.enqueue(
+      {
+        method: 'fs.write',
+        action: 'write',
+        scope: '/tmp/a.txt',
+        params: {},
+        companionReason: 'plain entry',
+      },
+      async () => undefined,
+    );
+    expect(plain).not.toHaveProperty('sourceSystem');
+    expect(plain).not.toHaveProperty('attribution');
+
+    const attribution = { parentId: 'parent-1', parentLabel: 'Parent', shardId: 'shard-1' };
+    const rich = queue.enqueue(
+      {
+        method: 'world.control',
+        action: 'toggle',
+        scope: 'living-room',
+        params: {},
+        companionReason: 'shard entry',
+        sourceSystem: 'shard',
+        attribution,
+      },
+      async () => undefined,
+    );
+    expect(rich.sourceSystem).toBe('shard');
+    expect(rich.attribution).toEqual(attribution);
+    // Snapshot must be a defensive copy — mutating the returned entry or the
+    // source attribution must not bleed into queue state.
+    expect(rich.attribution).not.toBe(attribution);
+    attribution.parentId = 'tampered';
+    expect(queue.getPending('prov-1')?.attribution?.parentId).toBe('parent-1');
+  });
+
   it('approves and executes queued action', async () => {
     const execute = vi.fn().mockResolvedValue(undefined);
     const queue = new ConfirmationQueue({

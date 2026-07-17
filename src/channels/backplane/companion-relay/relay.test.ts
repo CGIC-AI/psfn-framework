@@ -35,6 +35,7 @@ describe('CompanionEventRelay', () => {
     eventBus = new EventBus();
     relay = new CompanionEventRelay({
       eventBus,
+      defaultCompanionId: 'test-companion',
       previewRoots: [tempDir],
       maxPreviewBytes: 1_000,
     });
@@ -47,7 +48,11 @@ describe('CompanionEventRelay', () => {
 
   function collect(kinds: Parameters<CompanionEventRelay['subscribe']>[0]['allowedKinds']): CompanionEventEnvelope[] {
     const received: CompanionEventEnvelope[] = [];
-    relay.subscribe({ allowedKinds: kinds, onEvent: (e) => received.push(e) });
+    relay.subscribe({
+      companionId: 'test-companion',
+      allowedKinds: kinds,
+      onEvent: (e) => received.push(e),
+    });
     return received;
   }
 
@@ -240,12 +245,14 @@ describe('CompanionEventRelay', () => {
   it('drops a subscriber whose handler throws instead of failing the publish', async () => {
     let healthyDeliveries = 0;
     relay.subscribe({
+      companionId: 'test-companion',
       allowedKinds: ['tool.activity'],
       onEvent: () => {
         throw new Error('subscriber boom');
       },
     });
     relay.subscribe({
+      companionId: 'test-companion',
       allowedKinds: ['tool.activity'],
       onEvent: () => {
         healthyDeliveries += 1;

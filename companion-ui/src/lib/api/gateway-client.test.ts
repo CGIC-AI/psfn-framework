@@ -48,6 +48,7 @@ const READY = Object.freeze({
   place: { id: 'office', label: 'Office' },
   capabilities: ['text', 'audio_output', 'touch'],
   telemetryScopes: ['status', 'approvals', 'artifacts', 'tool_activity'],
+  eventCapabilities: ['approvals.v2'],
 });
 
 async function connectClient(socket: FakeSocket, requestIds = ['request-1']) {
@@ -58,9 +59,14 @@ async function connectClient(socket: FakeSocket, requestIds = ['request-1']) {
   });
   const connecting = client.connect();
   socket.open();
-  expect(socket.sent).toEqual([]);
+  expect(socket.sent.map(frame => JSON.parse(frame))).toEqual([{
+    schemaVersion: 1,
+    type: 'session.configure',
+    eventCapabilities: ['approvals.v2'],
+  }]);
   socket.message(READY);
   await connecting;
+  socket.sent.length = 0;
   return client;
 }
 

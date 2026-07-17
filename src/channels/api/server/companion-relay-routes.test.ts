@@ -260,6 +260,7 @@ describe('companion relay routes', () => {
     });
     relay = new CompanionEventRelay({
       eventBus,
+      defaultCompanionId: DEFAULT_COMPANION_ID,
       previewRoots: [tempDir],
       maxPreviewBytes: 1_000,
     });
@@ -435,6 +436,65 @@ describe('companion relay routes', () => {
 
       fullStream.close();
       approvalsStream.close();
+    });
+
+    it('gates v2 approval fields behind the approvals.v2 capability advertisement', async () => {
+      const v2Stream = await openSseStream(
+        port,
+        `/v1/companion/events?${HUB_QUERY}&caps=approvals.v2`,
+        AUTH,
+      );
+      const legacyStream = await openSseStream(port, `/v1/companion/events?${HUB_QUERY}`, AUTH);
+      expect(v2Stream.status).toBe(200);
+      expect(legacyStream.status).toBe(200);
+
+      // A fully-populated v2 payload straight onto the bus (server-resolved).
+      const requestedAt = nowMs;
+      await eventBus.emit('companion.approval.requested', {
+        companionId: DEFAULT_COMPANION_ID,
+        payload: redactApprovalRequested(
+          {
+            id: 'approval-v2-1',
+            action: 'write file',
+            scope: '/workspace/todo.txt',
+            companionReason: 'Updating the shared todo list',
+            requestedAt,
+            expiresAt: requestedAt + 60_000,
+          } as Parameters<typeof redactApprovalRequested>[0],
+          {
+            sourceSystem: 'tool-access',
+            attribution: { parentId: DEFAULT_COMPANION_ID, parentLabel: DEFAULT_COMPANION_ID },
+            grantMode: { kind: 'once' },
+          },
+        ),
+        timestamp: Date.now(),
+      });
+
+      await waitFor(() => v2Stream.frames.length >= 1, 'v2 stream frame');
+      await waitFor(() => legacyStream.frames.length >= 1, 'legacy stream frame');
+
+      const v2Payload = JSON.parse(v2Stream.frames[0].data).payload;
+      const legacyPayload = JSON.parse(legacyStream.frames[0].data).payload;
+
+      // v2 client sees the additive fields.
+      expect(v2Payload.sourceSystem).toBe('tool-access');
+      expect(v2Payload.attribution).toEqual({
+        parentId: DEFAULT_COMPANION_ID,
+        parentLabel: DEFAULT_COMPANION_ID,
+      });
+      expect(v2Payload.action).toBe('write file');
+      expect(v2Payload.grantMode).toEqual({ kind: 'once' });
+
+      // Old client sees the exact v1 subset — no v2 field leaks through.
+      expect(Object.keys(legacyPayload).sort()).toEqual(
+        ['expiresAt', 'id', 'redactedContext', 'requestedAt', 'status', 'title'].sort(),
+      );
+      expect(legacyPayload).not.toHaveProperty('sourceSystem');
+      expect(legacyPayload).not.toHaveProperty('attribution');
+      expect(legacyPayload).not.toHaveProperty('grantMode');
+
+      v2Stream.close();
+      legacyStream.close();
     });
   });
 

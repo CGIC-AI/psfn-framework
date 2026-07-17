@@ -27,7 +27,10 @@ import type { StartupConfigHydrationResult } from '../../app/startup/support/boo
 import type { IcpSharedAutonomyStorePort } from '../../core/icp/autonomy-store-ports.js';
 import type { GatewayIcpInitiationPolicyAuthority } from './icp-initiation-policy-authority.js';
 import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
-import { resolveCoreCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
+import {
+  resolveCompanionNameFromConfig,
+  resolveCoreCompanionIdFromConfig,
+} from '../../core/identity/companion-runtime.js';
 import { resolveKubeSelfManagementController } from './kube-self-management-runtime.js';
 import type { IcpConversationChargePolicyResolver } from '../../primitives/llm/icp-conversation-cost-breaker.js';
 import type { GatewayContactLifecycleAuthorityPort } from './contact-lifecycle-authority.js';
@@ -233,6 +236,14 @@ export async function buildGatewayPrivilegedCore(
       ntfy: input.bootstrap.server.ntfy,
       confirmation: input.bootstrap.server.confirmation,
       capabilityTierProvider: (companionId) => capabilityTierResolver.resolveTier(companionId),
+      approvalParentLabelProvider: (companionId) => {
+        const fleetEntry = input.config.companionFleet?.companions
+          .find(entry => entry.companionId === companionId);
+        if (fleetEntry) return fleetEntry.displayName?.trim() || undefined;
+        return companionId === input.config.companionId
+          ? resolveCompanionNameFromConfig(input.config)
+          : undefined;
+      },
       auditStore,
       ...(kubeSelfManagement ? { kubeSelfManagement } : {}),
       sessionHmacKeyring: input.bootstrap.server.sessionHmacKeyring,

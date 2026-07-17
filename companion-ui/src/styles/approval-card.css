@@ -1,0 +1,78 @@
+.approval-toast {
+  border-color: rgba(201, 163, 90, 0.5);
+}
+
+.approval-toast > svg {
+  color: var(--color-gold-deep);
+}
+
+.approval-timing {
+  margin-top: 0.35rem;
+  font-size: 0.76rem;
+  color: var(--color-muted);
+}
+
+.approval-expiry {
+  margin-top: 0.3rem;
+  font-size: 0.78rem;
+  color: var(--color-gold-deep);
+}
+
+.approval-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.45rem 0 0;
+}
+
+.approval-detail {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.approval-detail dt {
+  flex: none;
+  min-width: 4.8rem;
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 0.7rem;
+}
+
+.approval-detail dd {
+  margin: 0;
+  color: inherit;
+  word-break: break-word;
+}
+
+.approval-grant {
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-gold-deep);
+}
+
+.approval-resolution {
+  margin-top: 0.4rem;
+  font-size: 0.82rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-muted);
+}
+
+.approval-resolution.approved {
+  color: #2f7a45;
+}
+
+.approval-resolution.denied,
+.approval-resolution.blocked {
+  color: var(--color-error);
+}
+
+.approval-resolution.expired {
+  color: var(--color-muted);
+}

@@ -581,6 +581,7 @@ async function main(): Promise<void> {
   // `companion.event.publish` and are re-published on the same bus.
   const companionRelay = new CompanionEventRelay({
     eventBus,
+    ...(config.companionId ? { defaultCompanionId: config.companionId } : {}),
     ...(config.companionFleet
       ? {
         previewRootByCompanionId: Object.fromEntries(config.companionFleet.companions.map(companion => [

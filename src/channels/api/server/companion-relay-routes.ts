@@ -6,11 +6,14 @@ import type {
 } from '../../../shared/contracts/satellite-registry.js';
 import type {
   CompanionApprovalDecisionRequest,
+  CompanionApprovalRequestedPayload,
   CompanionEventEnvelope,
 } from '../../../shared/contracts/companion-relay.js';
 import {
+  COMPANION_APPROVALS_V2_CAPABILITY,
   companionEventKindsForScopes,
 } from '../../../shared/contracts/companion-relay.js';
+import { projectApprovalRequestedPayload } from '../../backplane/companion-relay/redaction.js';
 import {
   resolveCompanionApprovalActor,
   resolveCompanionRelayAccess,
@@ -31,6 +34,14 @@ const log = createComponentLogger('CompanionRelayRoutes');
 
 const APPROVAL_DECISION_MAX_BODY_BYTES = 16 * 1024;
 const SSE_HEARTBEAT_INTERVAL_MS = 25_000;
+/**
+ * Control-capability token a client advertises (via the `caps` query param on
+ * the events stream) to opt into the additive v2 approval-request fields
+ * (psfn-framework-13sk). Deny by default: without it, only the v1 payload subset
+ * is emitted, so deployed old clients (whose strict parser rejects unknown keys)
+ * keep working. The Satellite Hub forwards its client's advertisement here — see
+ * docs/approval-envelope.md.
+ */
 const APPROVAL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u;
 const ARTIFACT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u;
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/u;
@@ -124,6 +135,33 @@ function relayQueryParam(url: URL, name: string): string | undefined {
   return value ? value : undefined;
 }
 
+/** True when the subscriber advertised the `approvals.v2` capability token. */
+function advertisesApprovalsV2(url: URL): boolean {
+  return url.searchParams
+    .getAll('caps')
+    .flatMap((value) => value.split(','))
+    .some((token) => token.trim() === COMPANION_APPROVALS_V2_CAPABILITY);
+}
+
+/**
+ * Project one outbound envelope for this subscriber's capabilities. Only
+ * `approval.requested` carries capability-gated v2 fields; everything else
+ * passes through unchanged.
+ */
+function projectEnvelopeForSubscriber(
+  envelope: CompanionEventEnvelope,
+  includeApprovalsV2: boolean,
+): CompanionEventEnvelope {
+  if (envelope.kind !== 'approval.requested') return envelope;
+  return {
+    ...envelope,
+    payload: projectApprovalRequestedPayload(
+      envelope.payload as CompanionApprovalRequestedPayload,
+      { includeV2: includeApprovalsV2 },
+    ),
+  };
+}
+
 /** `GET /v1/companion/events` — scope-gated SSE stream of redacted events. */
 export function handleCompanionEventsStream(ctx: CompanionRelayRequestContext): void {
   const access = resolveCompanionRelayAccess({
@@ -150,12 +188,16 @@ export function handleCompanionEventsStream(ctx: CompanionRelayRequestContext): 
     return;
   }
 
+  const includeApprovalsV2 = advertisesApprovalsV2(ctx.url);
+
   let unsubscribe: (() => void) | null = null;
   try {
     unsubscribe = ctx.deps.relay.subscribe({
+      companionId: ctx.companionId,
       allowedKinds,
       onEvent: (envelope: CompanionEventEnvelope) => {
-        ctx.res.write(`event: companion\ndata: ${JSON.stringify(envelope)}\n\n`);
+        const projected = projectEnvelopeForSubscriber(envelope, includeApprovalsV2);
+        ctx.res.write(`event: companion\ndata: ${JSON.stringify(projected)}\n\n`);
       },
     });
   } catch (error) {

@@ -1,4 +1,4 @@
-export type OverlayDrawer = 'activity' | 'settings' | 'wishlist' | null;
+export type OverlayDrawer = 'activity' | 'companions' | 'settings' | 'wishlist' | null;
 
 export type ActivityFilter =
   | 'all'

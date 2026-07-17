@@ -12,19 +12,12 @@ import {
 import type { RequestCapabilityAuthorityVersions } from '../../../boundary/fleet-auth/request-capability.js';
 import { readJsonBodyWithLimit, sendJson } from '../../backplane/http/primitives.js';
 import { createCompanionId } from '../../../shared/routing/companion-id.js';
-import { isRecord, isRfc4122Uuid } from '../../../shared/utils/types.js';
+import { hasExactKeys, isRecord, isRfc4122Uuid } from '../../../shared/utils/types.js';
 
 export const FLEET_AUTH_CHILD_ASSERTION_EXCHANGE_PATH =
   '/v1/internal/fleet-auth/child-assertions';
 const MAX_EXCHANGE_BODY_BYTES = 256 * 1024;
 const MAX_TARGET_BODY_BYTES = 128 * 1024;
-
-function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length
-    && actual.every((key, index) => key === expected[index]);
-}
 
 function parseVersions(value: unknown): RequestCapabilityAuthorityVersions {
   const keys = [

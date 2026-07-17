@@ -59,8 +59,13 @@ describe('satellite hub auth', () => {
         control: ['interrupt', 'presence', 'session_attach', 'approvals', 'touch'],
         safety: ['confirmation_required', 'local_only'],
       },
+      eventCapabilities: ['approvals.v2'],
     });
-    expect(Object.keys(buildSatelliteHello()).sort()).toEqual(['capabilities', 'type']);
+    expect(Object.keys(buildSatelliteHello()).sort()).toEqual([
+      'capabilities',
+      'eventCapabilities',
+      'type',
+    ]);
   });
 });
 
@@ -106,6 +111,7 @@ describe('satellite hub websocket client', () => {
       satelliteId: 'phone',
       satelliteName: 'Phone',
       capabilities: { input: ['text'], output: ['text'] },
+      eventCapabilities: ['approvals.v2'],
       place: { id: 'office', name: 'Office' },
       identity: {
         source: 'framework',
@@ -117,6 +123,7 @@ describe('satellite hub websocket client', () => {
     expect(client.snapshot().ready).toBe(true);
     expect(client.snapshot().session.identity?.companion?.name).toBe('Purrsephone');
     expect(client.snapshot().session.place).toEqual({ id: 'office', name: 'Office' });
+    expect(client.snapshot().session.eventCapabilities).toEqual(['approvals.v2']);
     expect(sessions).toHaveLength(1);
   });
 

@@ -7,6 +7,7 @@ import type {
   FleetPortalAuthorizedCompanion,
 } from './fleet-portal-authorization.js';
 import { compileFleetSsoGardenPath } from './fleet-sso-route-compiler.js';
+import { compileCompanionUiWebSocketPath } from './companion-ui-websocket-path.js';
 
 const FLEET_PORTAL_PROTOCOL = Object.freeze({
   schemaVersion: 1 as const,
@@ -37,13 +38,35 @@ export interface FleetPortalProjection {
   readonly companions: readonly FleetPortalCompanionProjection[];
 }
 
+/**
+ * Roster entry for the Companion UI switcher (sprint-10 companion roster wire).
+ * Display-only: `displayName` is the required manifest label, `avatarRef` is
+ * an opaque display ref, and `websocketPath` is the one
+ * canonical stream URL a browser may open for this companion. Carries no
+ * authority, topology, or availability posture.
+ */
+export interface FleetPortalRosterCompanion {
+  readonly companionId: string;
+  readonly displayName: string;
+  readonly websocketPath: string;
+  readonly avatarRef?: string;
+}
+
+export interface FleetPortalRoster {
+  readonly schemaVersion: 1;
+  readonly companions: readonly FleetPortalRosterCompanion[];
+}
+
 export interface FleetPortalConnectionSnapshotSource {
   getFleetConnectionSnapshot(): GatewayFleetConnectionSnapshot;
 }
 
 export interface GatewayFleetPortalProjectionOptions {
   readonly authorizer: FleetPortalAuthorizationBatchPort;
-  readonly fleet: readonly Pick<CompanionFleetEntry, 'companionId' | 'gardenPort'>[];
+  readonly fleet: readonly Pick<
+  CompanionFleetEntry,
+  'companionId' | 'gardenPort' | 'displayName' | 'avatarRef'
+  >[];
   readonly source: FleetPortalConnectionSnapshotSource;
   readonly now?: () => Date;
 }
@@ -82,18 +105,20 @@ function indexConnections(
   return indexed;
 }
 
+type ProjectionManifestEntry = Pick<
+  CompanionFleetEntry,
+  'companionId' | 'gardenPort' | 'displayName' | 'avatarRef'
+>;
+
 export class GatewayFleetPortalProjection {
-  private readonly fleetByCompanionId: ReadonlyMap<
-  string,
-  Pick<CompanionFleetEntry, 'companionId' | 'gardenPort'>
-  >;
+  private readonly fleetByCompanionId: ReadonlyMap<string, ProjectionManifestEntry>;
   private readonly now: () => Date;
 
   constructor(private readonly options: GatewayFleetPortalProjectionOptions) {
     if (options.fleet.length === 0 || options.fleet.length > FLEET_PORTAL_PROTOCOL.maxCompanions) {
       throw new Error('Fleet portal projection requires a bounded non-empty manifest');
     }
-    const fleet = new Map<string, Pick<CompanionFleetEntry, 'companionId' | 'gardenPort'>>();
+    const fleet = new Map<string, ProjectionManifestEntry>();
     for (const companion of options.fleet) {
       if (!isRfc4122Uuid(companion.companionId)) {
         throw new Error('Fleet portal projection manifest contains an invalid companion');
@@ -104,6 +129,8 @@ export class GatewayFleetPortalProjection {
       fleet.set(companion.companionId, Object.freeze({
         companionId: companion.companionId,
         ...(companion.gardenPort !== undefined ? { gardenPort: companion.gardenPort } : {}),
+        ...(companion.displayName !== undefined ? { displayName: companion.displayName } : {}),
+        ...(companion.avatarRef !== undefined ? { avatarRef: companion.avatarRef } : {}),
       }));
     }
     this.fleetByCompanionId = fleet;
@@ -142,6 +169,41 @@ export class GatewayFleetPortalProjection {
       schemaVersion: FLEET_PORTAL_PROTOCOL.schemaVersion,
       generatedAt: now.toISOString(),
       session: Object.freeze({ state: 'authenticated' as const }),
+      companions: Object.freeze(companions),
+    });
+  }
+
+  /**
+   * Roster for the Companion UI switcher. Reuses the SAME authorizer as
+   * {@link resolve}: least-authority, non-enumerating — only the companions the
+   * session may access appear, and unknown/unauthorized manifest data never
+   * leaks. Adds display identity (`displayName`, `avatarRef`) and the canonical
+   * per-companion WebSocket path; carries no availability posture or topology.
+   */
+  async resolveRoster(input: unknown): Promise<FleetPortalRoster> {
+    const request = parseProjectionRequest(input);
+    const authorized = await this.options.authorizer.resolve(request);
+    const seen = new Set<string>();
+    const companions: FleetPortalRosterCompanion[] = [];
+    for (const authority of authorized.companions) {
+      this.assertSafeAuthority(authority, seen);
+      const manifest = this.fleetByCompanionId.get(authority.companionId);
+      if (!manifest) {
+        throw new Error('Fleet portal authorization returned an unknown manifest companion');
+      }
+      if (!manifest.displayName?.trim()) {
+        throw new Error('Companion UI roster requires a canonical displayName for every authorized companion');
+      }
+      companions.push(Object.freeze({
+        companionId: manifest.companionId,
+        displayName: manifest.displayName,
+        websocketPath: compileCompanionUiWebSocketPath(manifest.companionId),
+        ...(manifest.avatarRef !== undefined ? { avatarRef: manifest.avatarRef } : {}),
+      }));
+    }
+    companions.sort((left, right) => left.companionId.localeCompare(right.companionId));
+    return Object.freeze({
+      schemaVersion: FLEET_PORTAL_PROTOCOL.schemaVersion,
       companions: Object.freeze(companions),
     });
   }

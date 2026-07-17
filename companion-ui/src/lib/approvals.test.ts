@@ -12,7 +12,7 @@ import {
 } from './stream/hub-stream.js';
 
 function ackedState(at = '2026-06-17T00:00:00.000Z'): HubStreamState {
-  return reduceHubStreamState(createInitialHubStreamState(at), {
+  const state = reduceHubStreamState(createInitialHubStreamState(at), {
     type: 'hub.inbound',
     at,
     event: {
@@ -33,11 +33,23 @@ function ackedState(at = '2026-06-17T00:00:00.000Z'): HubStreamState {
       },
     },
   });
+  return {
+    ...state,
+    session: state.session
+      ? { ...state.session, eventCapabilities: ['approvals.v2'] }
+      : null,
+  };
 }
 
 function withApprovalRequested(
   state: HubStreamState,
-  data: { id: string; title: string; requestedAt: string; expiresAt?: string; redactedContext: string },
+  data: {
+    id: string; title: string; requestedAt: string; expiresAt?: string; redactedContext: string;
+    sourceSystem?: string;
+    attribution?: { parentLabel: string; parentId: string; shardLabel?: string; shardId?: string };
+    action?: string; scope?: string; reason?: string;
+    grantMode?: { kind: 'once' } | { kind: 'ttl'; ttlSeconds: number };
+  },
   at = '2026-06-17T00:00:01.000Z',
 ): HubStreamState {
   return reduceHubStreamState(state, {
@@ -80,6 +92,36 @@ describe('approval panel fail-closed state', () => {
     expect(panel.blockedReason).toBeNull();
     expect(panel.requests).toHaveLength(1);
     expect(panel.requests[0]).toMatchObject({ id: 'ap-1', status: 'pending' });
+  });
+
+  it('carries wire contract v2 attribution and grant mode from stream to view', () => {
+    const state = withApprovalRequested(ackedState(), {
+      id: 'ap-v2',
+      title: 'Grant web access',
+      requestedAt: '2026-06-17T00:00:01.000Z',
+      expiresAt: '2026-06-17T00:05:01.000Z',
+      redactedContext: 'Shard requests outbound fetch',
+      sourceSystem: 'shard',
+      attribution: {
+        parentLabel: 'Purrsephone', parentId: 'p-1', shardLabel: 'research-shard', shardId: 's-1',
+      },
+      action: 'http.get https://example.com',
+      scope: 'network:egress',
+      reason: 'operator-approved research',
+      grantMode: { kind: 'ttl', ttlSeconds: 300 },
+    });
+
+    const request = deriveApprovalPanelState(state, Date.parse('2026-06-17T00:01:00.000Z')).requests[0];
+    expect(request).toMatchObject({
+      id: 'ap-v2',
+      status: 'pending',
+      sourceSystem: 'shard',
+      attribution: { parentLabel: 'Purrsephone', parentId: 'p-1', shardLabel: 'research-shard', shardId: 's-1' },
+      action: 'http.get https://example.com',
+      scope: 'network:egress',
+      reason: 'operator-approved research',
+      grantMode: { kind: 'ttl', ttlSeconds: 300 },
+    });
   });
 
   it('transitions a pending request to its resolved status', () => {

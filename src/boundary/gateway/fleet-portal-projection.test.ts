@@ -204,4 +204,87 @@ describe('gateway fleet portal projection', () => {
     await expect(projection.resolve({ sessionToken: SESSION_TOKEN }))
       .rejects.toThrow(/colliding/i);
   });
+
+  describe('resolveRoster', () => {
+    it('projects display identity + websocket path for authorized companions only', async () => {
+      const authorize = vi.fn(async () => Object.freeze({
+        companions: Object.freeze([
+          Object.freeze({ companionId: COMPANION_B, gardenLinkEligible: true }),
+          Object.freeze({ companionId: COMPANION_A, gardenLinkEligible: false }),
+        ]),
+      }));
+      const projection = new GatewayFleetPortalProjection({
+        authorizer: { resolve: authorize },
+        fleet: [
+          { companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' },
+          { companionId: COMPANION_B, displayName: 'Aria', avatarRef: 'avatars/b.png' },
+          { companionId: COMPANION_C, gardenPort: 3213, displayName: 'private-c' },
+        ],
+        source: { getFleetConnectionSnapshot: () => snapshot([]) },
+        now: () => GENERATED_AT,
+      });
+
+      const roster = await projection.resolveRoster({ sessionToken: SESSION_TOKEN });
+      expect(roster).toEqual({
+        schemaVersion: 1,
+        companions: [
+          {
+            companionId: COMPANION_A,
+            displayName: 'Flagship',
+            websocketPath: `/companion-ui/companions/${COMPANION_A}/ws`,
+          },
+          {
+            companionId: COMPANION_B,
+            displayName: 'Aria',
+            websocketPath: `/companion-ui/companions/${COMPANION_B}/ws`,
+            avatarRef: 'avatars/b.png',
+          },
+        ],
+      });
+      // COMPANION_C is in the manifest but not authorized: it never appears.
+      expect(JSON.stringify(roster)).not.toContain(COMPANION_C);
+      expect(JSON.stringify(roster)).not.toContain('private-c');
+      expect(authorize).toHaveBeenCalledWith({ sessionToken: SESSION_TOKEN });
+    });
+
+    it('fails closed on a malformed request', async () => {
+      const projection = new GatewayFleetPortalProjection({
+        authorizer: { resolve: async () => ({ companions: [] }) },
+        fleet: [{ companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' }],
+        source: { getFleetConnectionSnapshot: () => snapshot([]) },
+        now: () => GENERATED_AT,
+      });
+      await expect(projection.resolveRoster({ sessionToken: 'too-short' }))
+        .rejects.toMatchObject({ code: 'malformed_request' });
+    });
+
+    it('fails closed when the authorizer returns an unknown or colliding companion', async () => {
+      const unknownManifest = new GatewayFleetPortalProjection({
+        authorizer: {
+          resolve: async () => ({ companions: [{ companionId: COMPANION_D, gardenLinkEligible: true }] }),
+        },
+        fleet: [{ companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' }],
+        source: { getFleetConnectionSnapshot: () => snapshot([]) },
+        now: () => GENERATED_AT,
+      });
+      await expect(unknownManifest.resolveRoster({ sessionToken: SESSION_TOKEN }))
+        .rejects.toThrow(/unknown manifest companion/i);
+
+      const colliding = new GatewayFleetPortalProjection({
+        authorizer: {
+          resolve: async () => ({
+            companions: [
+              { companionId: COMPANION_A, gardenLinkEligible: true },
+              { companionId: COMPANION_A, gardenLinkEligible: false },
+            ],
+          }),
+        },
+        fleet: [{ companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' }],
+        source: { getFleetConnectionSnapshot: () => snapshot([]) },
+        now: () => GENERATED_AT,
+      });
+      await expect(colliding.resolveRoster({ sessionToken: SESSION_TOKEN }))
+        .rejects.toThrow(/colliding/i);
+    });
+  });
 });

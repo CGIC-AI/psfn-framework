@@ -1,6 +1,7 @@
 import type { TouchInteraction } from '../touch-interactions.js';
 import type { HubToClientMessage } from '../protocol/events.js';
 import { buildSatelliteHello } from './auth.js';
+import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../../../src/shared/contracts/companion-relay.js';
 import type {
   SatelliteHubClientEventMap,
   SatelliteHubConnectionState,
@@ -19,6 +20,7 @@ import {
   parseArtifactPreview,
   parseAttachmentReady,
   parseConfirmationResolution,
+  parseGatewayEvent,
   parseGatewayResult,
   parseInterruptResult,
   validCompanionRequestId,
@@ -113,7 +115,14 @@ export class CompanionGatewayClient {
       }, this.handshakeTimeoutMs);
       const socket = this.createSocket(this.options.url);
       this.socket = socket;
-      this.attachSocketListener(socket, 'open', () => this.setState('connected'));
+      this.attachSocketListener(socket, 'open', () => {
+        this.setState('connected');
+        socket.send(JSON.stringify({
+          schemaVersion: 1,
+          type: 'session.configure',
+          eventCapabilities: [COMPANION_APPROVALS_V2_CAPABILITY],
+        }));
+      });
       this.attachSocketListener(socket, 'message', (raw) => {
         void this.handleRawSocketMessage(raw).then((becameReady) => {
           if (becameReady) settle();
@@ -227,6 +236,15 @@ export class CompanionGatewayClient {
       this.applyReady(ready);
       return true;
     }
+    const event = parseGatewayEvent(value);
+    if (event) {
+      if (!this.ready || (event.type === 'approval.requested'
+        && !this.session.eventCapabilities?.includes(COMPANION_APPROVALS_V2_CAPABILITY))) {
+        return this.failProtocol('Companion event arrived before approvals.v2 was acknowledged');
+      }
+      this.emitInbound(event);
+      return false;
+    }
     const result = parseGatewayResult(value);
     if (!result) return this.failProtocol('Companion gateway frame was malformed');
     if (!result.ok) {
@@ -247,6 +265,7 @@ export class CompanionGatewayClient {
       deviceName: ready.device.label,
       ...(ready.place ? { place: { id: ready.place.id, name: ready.place.label } } : {}),
       capabilities,
+      eventCapabilities: [...ready.eventCapabilities],
     };
     this.ready = true;
     this.setState('ready');

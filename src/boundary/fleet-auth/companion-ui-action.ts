@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
-import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
+import { hasExactKeys, isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import type { SatelliteCapability, SatelliteTelemetryScope } from '../../shared/contracts/satellite-registry.js';
 import type { FleetAuthAction } from '../../system/config/fleet-auth-config.js';
 import type { CompiledGardenRequestTarget } from './request-capability-target.js';
 import type { GardenRouteAuthorization } from './garden-route-authorization.js';
 import { FLEET_AUTH_ACTION_BASE_ROLE } from './role-action-policy.js';
 import { PRIMARY_EMBODIMENT_HANDOFF_REASONS } from './primary-embodiment.js';
+import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../shared/contracts/companion-relay.js';
 
 export const COMPANION_UI_ACTION_RESOURCES = [
   'conversation.status',
@@ -101,6 +102,12 @@ export interface CompanionUiActionFrame {
   readonly body: CompanionUiActionBody;
 }
 
+export interface CompanionUiSessionConfigureFrame {
+  readonly schemaVersion: 1;
+  readonly type: 'session.configure';
+  readonly eventCapabilities: readonly [typeof COMPANION_APPROVALS_V2_CAPABILITY];
+}
+
 export interface CompanionUiPhysicalCapabilityCeiling {
   readonly capabilities: readonly SatelliteCapability[];
   readonly telemetryScopes: readonly SatelliteTelemetryScope[];
@@ -124,12 +131,6 @@ export class CompanionUiProtocolError extends Error {
 
 function deny(code: CompanionUiProtocolError['code'] = 'invalid_frame'): never {
   throw new CompanionUiProtocolError(code);
-}
-
-function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && expected.every((key, index) => actual[index] === key);
 }
 
 function rejectAuthorityFields(value: unknown): void {
@@ -233,6 +234,36 @@ export function parseCompanionUiActionFrame(rawBody: Uint8Array): CompanionUiAct
     action: expectedAction,
     resource,
     body: parseBody(resource, value.body),
+  });
+}
+
+/**
+ * First browser frame on the gateway-owned WebSocket. Event versions are
+ * negotiated explicitly before the server sends session.ready or any event.
+ */
+export function parseCompanionUiSessionConfigureFrame(
+  rawBody: Uint8Array,
+): CompanionUiSessionConfigureFrame {
+  if (rawBody.byteLength === 0 || rawBody.byteLength > COMPANION_UI_PROTOCOL_LIMITS.maxFrameBytes) deny();
+  let value: unknown;
+  try {
+    value = JSON.parse(Buffer.from(rawBody).toString('utf8')) as unknown;
+  } catch {
+    return deny();
+  }
+  if (!isRecord(value)
+    || !hasExactKeys(value, ['schemaVersion', 'type', 'eventCapabilities'])
+    || value.schemaVersion !== 1
+    || value.type !== 'session.configure'
+    || !Array.isArray(value.eventCapabilities)
+    || value.eventCapabilities.length !== 1
+    || value.eventCapabilities[0] !== COMPANION_APPROVALS_V2_CAPABILITY) {
+    deny();
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    type: 'session.configure',
+    eventCapabilities: Object.freeze([COMPANION_APPROVALS_V2_CAPABILITY] as const),
   });
 }
 

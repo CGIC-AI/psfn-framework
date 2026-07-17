@@ -136,6 +136,7 @@ function createMinimalOptions(): GatewayServerOptions {
     sessionHmacKeyring: TEST_SESSION_HMAC_KEYRING,
     wyomingShardRouting: TEST_WYOMING_SHARD_ROUTING,
     eventBus: new EventBus(),
+    approvalParentLabelProvider: (companionId) => `Test ${companionId}`,
   };
 }
 

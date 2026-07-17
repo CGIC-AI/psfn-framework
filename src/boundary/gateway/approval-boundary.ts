@@ -55,6 +55,8 @@ interface ApprovalBoundaryOptions extends ApprovalBoundaryAuditHooks {
    * typed `companion.approval.*` event.
    */
   eventBus: EventBus;
+  /** Canonical presentation label resolved from runtime identity/roster data. */
+  parentLabelProvider?: (companionId: string) => string | undefined;
 }
 
 export interface GatewayConfirmationConfig {
@@ -79,6 +81,14 @@ export interface ApprovalBoundaryGateOptions<P, R> {
 export interface ApprovalBoundaryService {
   listPendingConfirmations(): ConfirmationQueueEntry[];
   listConfirmationHistory(): ConfirmationQueueHistoryEntry[];
+  /**
+   * Read-only owner lookup for a pending/resolved confirmation id (companion
+   * roster wire). Returns the authenticated companion that enqueued the
+   * confirmation, or `undefined` when none is recorded. Used to attribute
+   * approvals in the fleet-wide approvals view; a `undefined` result excludes
+   * the entry (fail closed, never mis-attributed).
+   */
+  ownerOfConfirmation(id: string): string | undefined;
   resolveConfirmation(params: { id: string; decision: 'approve' | 'deny' | 'modify'; modifiedParams?: Record<string, unknown> }, resolver?: ConfirmationResolverIdentity): Promise<{
     id: string;
     status: 'approved' | 'denied' | 'modified' | 'expired' | 'failed' | 'not_found';
@@ -114,10 +124,34 @@ export function createGatewayApprovalBoundaryService(
           });
           return;
         }
+        // Unified-envelope attribution (psfn-framework-13sk) is server-resolved:
+        // the parent id is ALWAYS the authenticated enqueue owner. If the
+        // enqueuer supplied its own attribution (e.g. a future shard path with
+        // added provenance), its parentId MUST equal that owner — otherwise we
+        // refuse to emit rather than route to a spoofed parent (fail closed).
+        const parentLabel = options.parentLabelProvider?.(enqueueOwner)?.trim();
+        const attribution = entry.attribution
+          ?? (parentLabel ? { parentId: enqueueOwner, parentLabel } : undefined);
+        if (!attribution) {
+          approvalLog.error('Refusing to emit companion.approval.requested without a canonical parent label', {
+            id: entry.id,
+          });
+          return;
+        }
+        if (attribution.parentId !== enqueueOwner) {
+          approvalLog.error('Refusing to emit companion.approval.requested with mismatched attribution parent', {
+            id: entry.id,
+          });
+          return;
+        }
         confirmationOwners.set(entry.id, enqueueOwner);
         options.eventBus.emit('companion.approval.requested', {
           companionId: enqueueOwner,
-          payload: redactApprovalRequested(entry),
+          payload: redactApprovalRequested(entry, {
+            sourceSystem: entry.sourceSystem ?? 'tool-access',
+            attribution,
+            grantMode: { kind: 'once' },
+          }),
           timestamp: Date.now(),
         }).catch((error) => {
           approvalLog.error('Failed to emit companion.approval.requested', {
@@ -193,6 +227,7 @@ export function createGatewayApprovalBoundaryService(
   return {
     listPendingConfirmations: () => confirmationQueue.listPending(),
     listConfirmationHistory: () => confirmationQueue.listHistory(),
+    ownerOfConfirmation: (id: string) => confirmationOwners.get(id),
     resolveConfirmation: (params, resolver) => confirmationQueue.resolve(params, resolver),
     requestExplicitApproval,
     gate<P, R>(gateOptions: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R> {
@@ -242,6 +277,10 @@ export function createGatewayApprovalBoundaryService(
                   gateOptions.approvalReason?.(params) ?? 'Outside workspace',
                 ),
                 expiresInMs: confirmationConfig.expiryMs,
+                // Gateway confirmation gate is the tool / information-access
+                // escalation surface (psfn-framework-13sk). Attribution is
+                // resolved from the authenticated owner in the emission observer.
+                sourceSystem: 'tool-access',
               },
               execute: async (approvedParams, entry) => executeQueuedAction({
                 method: gateOptions.method,

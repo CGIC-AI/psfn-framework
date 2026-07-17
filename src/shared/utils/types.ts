@@ -14,6 +14,28 @@ export function isRfc4122Uuid(value: unknown): value is string {
   return typeof value === 'string' && RFC_4122_UUID_PATTERN.test(value);
 }
 
+/** Fail closed unless every required key is present and every key is allowlisted. */
+export function hasExactKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
+  const allowed = new Set([...required, ...optional]);
+  return required.every(key => Object.hasOwn(value, key))
+    && Object.keys(value).every(key => allowed.has(key));
+}
+
+/** Bounded non-empty string guard for strict external protocol parsing. */
+export function isBoundedString(
+  value: unknown,
+  maximum = 65_536,
+  minimum = 1,
+): value is string {
+  return typeof value === 'string'
+    && value.length >= minimum
+    && value.length <= maximum;
+}
+
 /** Canonical UTC ISO-8601 timestamp with millisecond precision. */
 export function isCanonicalIsoTimestamp(value: unknown): value is string {
   if (typeof value !== 'string') return false;

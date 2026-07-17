@@ -60,6 +60,15 @@ carries exactly:
 | `characterCardPath` | companion's character card, relative to the same canonical persistence root | relative path, may not escape the root |
 | `postgresSchema` | Postgres schema owning this companion's tenant tables | lowercase identifier, ≤63 chars, no `pg_` prefix |
 | `gardenPort` | optional TCP port for this companion's own Garden operator surface | integer 1–65535, unique across the fleet |
+| `displayName` | optional human-facing roster label (display-only, no authority) | non-empty string, ≤120 chars, no control characters |
+| `avatarRef` | optional opaque avatar reference for the roster (display-only) | non-empty string, ≤512 chars, no control characters |
+
+`displayName` and `avatarRef` are surfaced **only** through the authenticated
+fleet portal roster (`GET /v1/fleet-auth/companions`; see
+[garden-control-plane.md](./garden-control-plane.md)). They are never routing
+keys or authorization inputs. The roster's display name resolves as
+`displayName` when present, otherwise the `companionId` — no character-card file
+is read at request time.
 
 Cross-entry validation rejects duplicate `companionId`, duplicate
 `postgresSchema`, duplicate `gardenPort`, and overlapping `companionDataDir`.
@@ -289,6 +298,50 @@ Each companion has its own Discord bot identity. Discord accounts in
   bot account (duplicates rejected). The gateway holds all tokens and routes each
   companion's inbound/outbound traffic to that companion only
   (`src/boundary/gateway/companion-channels.ts`).
+
+## Companion UI channel (`companion-ui`)
+
+The companion-ui PWA reaches the runtime through the satellite hub relay and the
+companion-ui WebSocket (`src/channels/api/companion-ui-websocket.ts` →
+`src/app/gateway/api-surface.ts` action dispatch →
+`gatewayApiRuntime.handleChatCompletion`). Browser turns land as the first-class
+`companion-ui` channel type (`CHANNEL_TYPES`, `src/shared/contracts/runtime.ts`),
+not generic `api` traffic.
+
+- **Server-authored classification.** The channel type is stamped in
+  `AgentApiBackend.prepareTurn` (`src/channels/api/agent-backend.ts`) whenever a
+  turn carries a validated hub-device attachment — the authenticated proof that
+  it originated from the PWA. It is **never** claimable via an
+  `X-PSFN-Channel-Type` header: `companion-ui` is deliberately absent from the
+  external-claim allowlist (`external-channel-claim.ts`), so a browser or API
+  client cannot self-mint the trusted channel. The satellite hub is a read-only
+  vendored dependency this wave; if a future hub revision emits a signed
+  channel-type claim it can replace the attachment-derived classification without
+  changing the downstream stamp.
+- **Contact binding.** A Discord-SSO'd human binds to their existing canonical
+  contact via the attachment's validated contact binding
+  (`hubDeviceAttachment.actor.contact.contactId`) — never minted as a new person
+  or an `api` principal. `isHubDeviceAttachmentSnapshot` guarantees a non-empty
+  contact id, so the binding is fail-closed. Guests (`guestMode: 'explicit'`)
+  author as `hub-device-guest:<deviceId>` with no contact.
+- **Channel privacy.** companion-ui is a 1:1 human↔companion surface, so turns
+  carry a non-null `channelPrivacy` (default `private`) sourced from the
+  operator-owned `channels.json > companionUi` section. This clears the
+  observer-eval sidecar privacy gate
+  (`src/core/eval/observer-sidecar/privacy.ts`) instead of failing closed on
+  `missing_channel_privacy_metadata`.
+- **Owner file.** `channels.json > companionUi` owns `{ channelPrivacy }`.
+  Contact identity comes only from the authenticated human attachment; the
+  owner file cannot override it. Unknown keys are rejected on load and save
+  (`src/channels/backplane/config.ts`,
+  `parseCompanionUiSection`). Availability is decided by the fleet-auth/hub-device
+  wiring, not an `enabled` flag. The section is exposed through the raw
+  `channels.json` editor in Garden settings.
+- **Not a scheduling destination.** Like the inter-companion `companion` lane,
+  `companion-ui` is excluded from the schedule-tool reminder/follow-up channel
+  enum (`src/core/scheduler/schedule-tool.ts`): it is a live surface, and the
+  `scheduled_prompts` / follow-up tables' `channel_type` CHECK constraints omit
+  it.
 
 ## Gardens: one per companion + a fleet-status page
 

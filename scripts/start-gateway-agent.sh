@@ -144,6 +144,13 @@ append_agent_env() {
 
 append_operator_env() {
   local name="$1"
+  if psfn_is_truthy_env_value "${PSFN_FLEET_AUTH:-}"; then
+    case "${name}" in
+      ADMIN_ALLOW_INSECURE|ADMIN_TOKEN)
+        return
+        ;;
+    esac
+  fi
   if [ "${!name+x}" = "x" ]; then
     OPERATOR_ENV+=("${name}=${!name}")
   fi
@@ -231,9 +238,6 @@ build_agent_env() {
     SHELL_EXEC_ENV_ALLOWLIST \
     SHELL_EXEC_MAX_OUTPUT_CHARS \
     SHELL_EXEC_MAX_TIMEOUT_MS \
-    SHARED_WORKSPACE_COGSEC_TOKEN \
-    SHARED_WORKSPACE_PROPOSER_TOKEN \
-    SHARED_WORKSPACE_REVIEWER_TOKEN \
     SHUTDOWN_FORCE_EXIT_TIMEOUT_MS \
     SYSTEM_DATA_DIR \
     TELEGRAM_PRIMARY_USER_ID \
@@ -276,6 +280,11 @@ build_operator_env() {
     COMPANION_PG_SCHEMA \
     CONFIG_DIR \
     DATA_DIR \
+    FLEET_SSO_GARDEN_TLS_CA_PATH \
+    FLEET_SSO_GARDEN_TLS_CERT_PATH \
+    FLEET_SSO_GARDEN_TLS_EXPECTED_PEER_SPIFFE_URI \
+    FLEET_SSO_GARDEN_TLS_KEY_PATH \
+    FLEET_SSO_GARDEN_TLS_SERVER_NAME \
     GATEWAY_OPERATOR_API_BASE_URL \
     GATEWAY_SOCKET \
     HOME \
@@ -459,9 +468,18 @@ release_launcher_lock() {
 
 start_gateway() {
   if [ -x "./node_modules/.bin/tsx" ]; then
-    launch_background ./node_modules/.bin/tsx src/app/gateway/main.ts
+    if psfn_is_truthy_env_value "${PSFN_FLEET_AUTH:-}"; then
+      launch_background env -u ADMIN_TOKEN -u ADMIN_ALLOW_INSECURE \
+        ./node_modules/.bin/tsx src/app/gateway/main.ts
+    else
+      launch_background ./node_modules/.bin/tsx src/app/gateway/main.ts
+    fi
   else
-    launch_background npm run gateway
+    if psfn_is_truthy_env_value "${PSFN_FLEET_AUTH:-}"; then
+      launch_background env -u ADMIN_TOKEN -u ADMIN_ALLOW_INSECURE npm run gateway
+    else
+      launch_background npm run gateway
+    fi
   fi
   GATEWAY_PID="${LAUNCHED_PID}"
 }
@@ -803,7 +821,11 @@ start_agent
 echo "[${MODE_LABEL}] starting operator..."
 start_operator
 
-echo "[${MODE_LABEL}] admin ui: http://${ADMIN_HOST}:${ADMIN_PORT}"
+if psfn_is_truthy_env_value "${PSFN_FLEET_AUTH:-}"; then
+  echo "[${MODE_LABEL}] fleet ui: canonical HTTPS origin from fleet-auth.json (/fleet)"
+else
+  echo "[${MODE_LABEL}] admin ui: http://${ADMIN_HOST}:${ADMIN_PORT}"
+fi
 echo "[${MODE_LABEL}] running (gateway pid=${GATEWAY_PID}, agent pid=${AGENT_PID}, operator pid=${OPERATOR_PID})"
 set +e
 wait -n "${GATEWAY_PID}" "${AGENT_PID}" "${OPERATOR_PID}"

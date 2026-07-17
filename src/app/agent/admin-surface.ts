@@ -34,7 +34,6 @@ import type { SchedulerRuntimeConfig } from '../../system/config/scheduler-confi
 import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-store-ports.js';
 import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
 import { PostgresIcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
-import { resolveSharedWorkspaceCredentials } from '../../operator/garden/services/shared-workspace-service.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 
 export interface StartOptionalAdminTransportServerOptions {
@@ -172,9 +171,6 @@ export async function startOptionalAdminTransportServer(
         actor: input.actor,
       }),
     },
-    ...(adminConfig.sharedWorkspacePath
-      ? { sharedWorkspaceCredentials: resolveSharedWorkspaceCredentials(env) }
-      : {}),
   });
   const adminTransport = new GardenAdminTransportServer({
     endpoint: resolveAdminTransportServerEndpoint(env),

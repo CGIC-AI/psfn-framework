@@ -1,15 +1,20 @@
 # PSFN Helm Chart
 
+Before upgrading an existing release, read the canonical
+[Helm Fleet Upgrade Guide](../../../docs/helm-upgrades.md). It records required
+component ordering and operator-visible exposure changes; this README remains
+the chart value and topology reference.
+
 This chart renders the first PSFN Kubernetes/k3s topology for one companion:
 
-- gateway Deployment and public API Service/Ingress
+- gateway Deployment and the sole privileged browser Service/Ingress
 - agent Deployment and internal mTLS Garden admin transport Service
-- Garden Deployment and browser UI Service/Ingress
+- Garden Deployment and internal-only ClusterIP Service
 - bundled Postgres + pgvector StatefulSet, or external Postgres Secret reference
 - bundled Redis StatefulSet for app cache, or external Redis Secret reference
 - bundled LiteLLM Deployment/Service for provider routing, or external LiteLLM URL
 - optional emo_sim observer-eval engine Deployment/Service/PVC (`emosim.enabled`)
-- optional companion-ui test web Deployment/Service/Ingress serving the PWA
+- optional internal companion-ui test web Deployment/Service serving the PWA
   static build (`companionUiTest.enabled`)
 - PVC-backed system-data, companion-data, workspace, runtime, and model-cache roots
 - cert-manager Issuer/Certificate resources for internal SPIFFE mTLS
@@ -53,7 +58,8 @@ Default values render with `CHANGE_ME_*` placeholders so `helm lint` and
 - `secrets.values.satelliteHubApiKey` -> `SATELLITE_HUB_API_KEY` (hub
   `PSFN_API_KEY`) and the gateway `API_SATELLITE_KEYS` list; required when
   `satelliteHub.enabled=true` and never the same value as `apiKey`/`adminToken`
-- `secrets.values.adminToken` -> `ADMIN_TOKEN`, consumed by gateway/Garden
+- `secrets.values.adminToken` -> `ADMIN_TOKEN`, consumed by the internal
+  legacy Garden path only when fleet auth is disabled
 - `secrets.values.gatewaySessionHmacKey` -> `GATEWAY_SESSION_HMAC_KEY`, consumed by gateway
 - `secrets.values.gatewaySessionIntegrityAuthToken` ->
   `GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN`, the role-bound worker proof consumed
@@ -79,6 +85,48 @@ early when the required app keys are absent. You may also set
 
 Secrets are rendered only as Kubernetes Secrets. The chart does not copy secret
 material into ConfigMaps, annotations, labels, or NOTES.
+
+## Unified Fleet HTTPS Origin
+
+`fleetAuth.enabled=false` keeps the legacy application behavior but does not
+restore a privileged public Garden edge: Garden is an internal ClusterIP with
+`ADMIN_TOKEN`, and the chart renders no Garden Ingress or Garden hostPort.
+
+For fleet human authentication, provision the canonical `fleet-auth.json`
+owner file and enable the repository-owned topology:
+
+```bash
+helm upgrade --install psfn deploy/helm/psfn \
+  --namespace psfn \
+  --set fleetAuth.enabled=true \
+  --set-string runtime.companionId=<registered-companion-uuid> \
+  --set networkPolicy.enabled=true \
+  --set hostPorts.gatewayApi.enabled=false \
+  --set-string ingress.gateway.path=/ \
+  --set-string ingress.gateway.pathType=Prefix \
+  --set ingress.gateway.tls.enabled=true \
+  --set-string ingress.gateway.tls.secretName=psfn-public-origin-tls
+```
+
+`ingress.gateway.host` must be the exact host in `fleet-auth.json`
+`canonicalOrigin`, and the named Secret must contain a browser-trusted
+certificate for that host. Fleet-on rendering fails if gateway Ingress or TLS
+is absent, NetworkPolicy is disabled, the gateway hostPort is enabled, or the
+Ingress does not route the root Prefix. The ingress controller is the only
+trusted proxy hop; the runtime checks exact Host/forwarded HTTPS provenance and
+OAuth callback origin.
+
+The chart issues a Garden server identity and Gateway client identity through
+cert-manager. Gateway-to-Garden requests use TLS 1.3 mTLS with exact SPIFFE URI
+checks in both directions. NetworkPolicy admits Garden only from gateway pods;
+there is no direct Garden or Companion UI Ingress in either feature state.
+Authorized Gardens are exposed only at
+`/companions/<companion-uuid>/garden/` after live authorization and exact
+request-capability issuance. See
+[`../../../docs/operations.md`](../../../docs/operations.md#unified-fleet-human-origin)
+for validation and rollback requirements.
+The chart does not set `FLEET_STATUS_PORT`: raw fleet status remains a distinct
+loopback-only operator listener and is never a portal backend or Ingress route.
 
 ## Runtime Layout
 
@@ -672,8 +720,13 @@ NetworkPolicy remains separate and still has no broad outbound egress.
 static web container that serves the `companion-ui` PWA so the operator can open
 it in a browser and chat through the Satellite Hub. The container serves the
 pre-built Vite `dist/` tree only — no server logic, no admin API, no outbound
-calls. The browser talks to the hub directly. This is a stopgap test surface to
-be replaced by a packaged app.
+calls. The gateway serves a public signed-out shell at `/companion-ui/`, exposes
+same-origin fleet login/session/logout routes, and binds the browser to one
+server-owned companion. The more-specific same-origin realtime path routes to
+the enrolled Satellite Hub, which authenticates its gateway backchannel and
+mints a fresh device assertion for each connection. The browser never owns a
+Hub URL, device credential, session ID, or channel ID. This is a stopgap test
+surface to be replaced by a packaged app.
 
 Build the image (ARM64 for the Pi) from this repo's `companion-ui/` source with
 the repo-owned Dockerfile and build script:
@@ -686,13 +739,13 @@ docker/companion-ui/build-image.sh
 The script tags the image `0.1.0-kube-<repo-sha12>`, refuses a dirty tree
 (override with `COMPANION_UI_ALLOW_DIRTY=true` only for throwaway probes) and
 floating tags, and passes the source commit as `SOURCE_REVISION`. The hub
-websocket URL is baked as a build-time default
-(`COMPANION_UI_HUB_WS_URL`, default `ws://psfn-hub.local:8787/`) but stays
-editable at runtime in the in-app Settings drawer, so the baked value is a
-convenience, not a constraint. The runtime stage uses the pinned
+websocket URL is not a build argument: runtime uses only the exact
+server-issued path on the canonical gateway origin. The runtime stage uses the pinned
 `nginxinc/nginx-unprivileged` image (manifest-list digest, resolves the ARM64
 sub-image on the Pi) and serves on port 8080 as uid 999, with the service worker
 served no-cache and the PWA manifest served as `application/manifest+json`.
+The container and chart expose the UI only at the fixed `/companion-ui/`
+subpath; other same-origin paths return 404 instead of falling back to the PWA.
 
 Import the image into k3s (containerd) and retag it under the `localhost/`
 prefix the chart expects, then enable the workload:
@@ -711,7 +764,19 @@ helm upgrade --install psfn deploy/helm/psfn \
   --set companionUiTest.image.repository=localhost/psfn-companion-ui \
   --set companionUiTest.image.tag=0.1.0-kube-<repo-sha12> \
   --set companionUiTest.image.pullPolicy=Never \
-  --set ingress.companionUiTest.enabled=true
+  --set fleetAuth.enabled=true \
+  --set-string runtime.companionId=<registered-companion-uuid> \
+  --set ingress.gateway.tls.enabled=true \
+  --set-string ingress.gateway.tls.secretName=psfn-public-origin-tls \
+  --set-string fleetAuth.companionUiCompanionId=<registered-companion-uuid> \
+  --set satelliteHub.enabled=true \
+  --set satelliteHub.textOnly=true \
+  --set-string satelliteHub.image.repository=<pinned-hub-image-repository> \
+  --set-string satelliteHub.image.tag=<pinned-hub-image-tag> \
+  --set-string satelliteHub.identity.satelliteId=<registered-hub-satellite-id> \
+  --set-string satelliteHub.identity.endpointId=<registered-hub-endpoint-id> \
+  --set-string satelliteHub.identity.claimType=<registered-hub-claim-type> \
+  --set-string secrets.values.satelliteHubApiKey=<dedicated-hub-key-16plus-chars>
 
 kubectl -n psfn rollout status deploy/psfn-companion-ui-test
 ```
@@ -721,25 +786,27 @@ tag/digest, floating tags (`latest`/`main`/`main-latest`), and a digest that
 does not start with `sha256:` when the workload is enabled. Prefer setting
 `companionUiTest.image.digest` for a fully pinned deploy.
 
-Reach it from a browser through the enabled Ingress host
-(`ingress.companionUiTest.host`, default `psfn-companion.local`), or port-forward
-for a quick check:
+Reach it at `/companion-ui/` on the canonical gateway HTTPS host. The
+`fleetAuth.companionUiCompanionId` value is optional only when the canonical
+fleet contains exactly one companion. A port-forward reaches the internal
+static server for a non-production content probe, but bypasses fleet auth and
+must not be used as the deployed browser edge:
 
 ```bash
 kubectl -n psfn port-forward svc/psfn-companion-ui-test 8080:8080
-# open http://127.0.0.1:8080/ in a browser
+# open http://127.0.0.1:8080/companion-ui/ in a browser
 ```
 
-Then open the in-app Settings drawer (floating gear button) and point the hub
-websocket URL at the Satellite Hub — for example the in-cluster hub Ingress
-(`ws://psfn-hub.local:8787/`, per `ingress.satelliteHub.host`) or a
-port-forwarded hub. The companion-ui test pod itself needs the Satellite Hub
-enabled (`satelliteHub.enabled=true`, see above) to have something to chat with.
+Open the canonical gateway HTTPS origin at `/companion-ui/` and sign in with
+Discord (or enable `companionUiTest.guestMode=explicit` deliberately). The Hub
+URL and device/session authority are not editable: the chart routes the exact
+same-origin `/companion-ui/companions/<uuid>/ws` path to the enabled Satellite
+Hub. A direct Hub ingress or port-forward is not a supported browser authority
+path.
 
-The companion-ui test NetworkPolicy allows ingress only from the configured
-ingress controller selector on port 8080 and denies all egress: the static
-server never makes outbound calls, so the browser — not the pod — connects to
-the hub.
+The companion-ui test NetworkPolicy allows ingress only from gateway pods on
+port 8080 and denies all egress. Its Service must remain `ClusterIP`; the chart
+rejects NodePort and never renders a direct Companion UI Ingress.
 
 ## Shakedown Runbook
 

@@ -21,6 +21,10 @@ import type {
   IntakeSourceListsConfig,
 } from '../../../../system/config/intake-policy-config.js';
 import type { EnvInfo } from '../../types.js';
+import type {
+  FleetAuthConfigRevision,
+  FleetAuthGardenMetadata,
+} from '../../../../system/config/fleet-auth-garden-projection.js';
 
 export interface SettingsConfigEditors {
   models: ModelsRuntimeConfig;
@@ -103,6 +107,42 @@ export interface EffectiveIcpAutonomySettingsState {
   };
 }
 
+export interface LoadedFleetAuthOwnerSnapshot {
+  state: 'loaded';
+  revision: FleetAuthConfigRevision;
+  value: FleetAuthGardenMetadata;
+}
+
+export interface UnloadedFleetAuthOwnerSnapshot {
+  state: 'off' | 'absent' | 'unavailable';
+  detail: string;
+}
+
+export type FleetAuthOwnerSnapshot =
+  | LoadedFleetAuthOwnerSnapshot
+  | UnloadedFleetAuthOwnerSnapshot;
+
+export interface EffectiveFleetAuthOwnerProjection {
+  ownerFile: 'fleet-auth.json';
+  scope: 'global';
+  access: {
+    mode: 'read_only';
+    editableFields: [];
+    omittedCategories: string[];
+  };
+  featureState: 'enabled' | 'off' | 'unavailable';
+  status: 'healthy' | 'restart_required' | 'off' | 'unavailable';
+  effective: FleetAuthOwnerSnapshot;
+  onDisk: FleetAuthOwnerSnapshot;
+  restartRequired: boolean | null;
+  restartStatus: 'not_required' | 'required' | 'blocked' | 'unknown';
+  provenance: {
+    parser: 'validateFleetAuthConfig';
+    effectiveSource: 'startup_runtime';
+    onDiskSource: 'canonical_owner_file';
+  };
+}
+
 export interface AdminSettingsData {
   config: EditableSettings;
   env: EnvInfo;
@@ -112,6 +152,7 @@ export interface AdminSettingsData {
   effectiveChargeQuota: EffectiveChargeQuotaState;
   effectiveBackgroundMaintenance: EffectiveBackgroundMaintenanceState;
   effectiveIcpAutonomy: EffectiveIcpAutonomySettingsState;
+  fleetAuth: EffectiveFleetAuthOwnerProjection;
   workspaceLayout?: {
     mode: 'single' | 'fleet';
     personalWorkspacePath: string | null;
@@ -144,23 +185,26 @@ export interface AdminIntakeSourceListMutationInput {
 }
 
 export interface AdminSettingsService {
-  getSettingsData(): Promise<AdminSettingsData>;
-  getSettingsContractData(): SettingsContractData;
-  updateSettings(body: string): ConfigUpdateResult;
-  getSubConfigJson(key: string): string | null;
-  saveSubConfigJson(key: string, json: string): ConfigUpdateResult;
+  getSettingsData(context?: import('../../garden-request-context.js').GardenRequestContext): Promise<AdminSettingsData>;
+  getSettingsContractData(context?: import('../../garden-request-context.js').GardenRequestContext): SettingsContractData;
+  updateSettings(body: string, context?: import('../../garden-request-context.js').GardenRequestContext): ConfigUpdateResult;
+  getSubConfigJson(key: string, context?: import('../../garden-request-context.js').GardenRequestContext): string | null;
+  saveSubConfigJson(key: string, json: string, context?: import('../../garden-request-context.js').GardenRequestContext): ConfigUpdateResult;
   getChannelEnvelopeData(): AdminChannelEnvelopeData;
   saveChannelEnvelopeLabel(channelId: string, label: unknown): ConfigUpdateResult;
   /** Intake-policy source lists (htm9.13); the htm9.11 Garden tab builds on these. */
-  getIntakeSourceLists(): IntakeSourceListsConfig;
-  mutateIntakeSourceList(input: AdminIntakeSourceListMutationInput): ConfigUpdateResult;
+  getIntakeSourceLists(context?: import('../../garden-request-context.js').GardenRequestContext): IntakeSourceListsConfig;
+  mutateIntakeSourceList(
+    input: AdminIntakeSourceListMutationInput,
+    context?: import('../../garden-request-context.js').GardenRequestContext,
+  ): ConfigUpdateResult;
   /**
    * Read-only typed view of intake-policy.json (mode, tiers, thresholds,
    * quarantine limits, sink gates) for the Garden Cognitive Security firewall
    * page (htm9.11). Mutations go through the owner-file editor / source-list
    * routes, never through this read.
    */
-  getIntakePolicyOverview(): IntakePolicyConfig;
+  getIntakePolicyOverview(context?: import('../../garden-request-context.js').GardenRequestContext): IntakePolicyConfig;
 }
 
 /**

@@ -1,5 +1,8 @@
 import { MEMORY_SUBJECT_CLASSIFIER_VERSION } from '../../shared/contracts/memory-subject.js';
-import type { MemorySubjectQueryAuthorization } from '../../shared/contracts/memory-subject.js';
+import type {
+  MemorySubjectGrantBinding,
+  MemorySubjectQueryAuthorization,
+} from '../../shared/contracts/memory-subject.js';
 import type { CorrelationMetadata } from '../../shared/contracts/runtime.js';
 import {
   ADMIN_DURABLE_MEMORY_TAGS,
@@ -16,6 +19,10 @@ import { isInternalMemoryArtifact } from './internal-artifacts.js';
 export interface MemorySubjectAccessContext {
   /** Must come from resolved ingress/contact context, never tool or request parameters. */
   viewerContactId?: string;
+  /** Additional contacts proven by the authorization layer to be co-subjects. */
+  viewerCoSubjectContactIds?: readonly string[];
+  /** Exact JIT bindings supplied only after gateway grant consumption. */
+  grantBindings?: readonly MemorySubjectGrantBinding[];
   /** Only process-local companion work may opt into companion-private rows. */
   companionInternal?: boolean;
   /**
@@ -50,6 +57,14 @@ function normalizedSubject(context: MemorySubjectAccessContext): string | undefi
   return context.companionInternal ? 'companion:internal' : undefined;
 }
 
+function normalizedViewerContacts(context: MemorySubjectAccessContext): string[] {
+  const contacts = [
+    context.viewerContactId,
+    ...(context.viewerCoSubjectContactIds ?? []),
+  ].map(value => value?.trim()).filter((value): value is string => Boolean(value));
+  return [...new Set(contacts)].sort();
+}
+
 function authorization(
   context: MemorySubjectAccessContext,
   action: MemorySubjectQueryAuthorization['action'],
@@ -57,6 +72,10 @@ function authorization(
   const subject = normalizedSubject(context);
   if (!subject) return undefined;
   const companionInternal = context.companionInternal && !context.viewerContactId?.trim();
+  const viewerContactIds = companionInternal
+    ? [subject]
+    : normalizedViewerContacts(context);
+  if (viewerContactIds.length === 0) return undefined;
   const includeCompanionPrivateRecall = Boolean(
     context.viewerContactId?.trim()
     && context.includeCompanionPrivateRecallCandidates
@@ -64,19 +83,19 @@ function authorization(
   );
   return {
     action,
-    viewerContactIds: [subject],
+    viewerContactIds,
     allowedSubjectClasses: companionInternal
       ? ['companion_private']
       : includeCompanionPrivateRecall
         ? ['single_contact', 'multiple_contacts', 'companion_private']
-        : ['single_contact', 'multiple_contacts'],
+        : ['single_contact'],
     allowedViewerRelations: companionInternal
       ? ['none']
       : includeCompanionPrivateRecall
         ? ['self', 'co_subject', 'none']
-        : ['self', 'co_subject'],
+        : ['self'],
     classifierVersion: MEMORY_SUBJECT_CLASSIFIER_VERSION,
-    grantBindings: [],
+    grantBindings: [...(context.grantBindings ?? [])],
   };
 }
 
@@ -151,7 +170,8 @@ function filterAdminMemories(
 
 /**
  * Project the broad maintenance store into a subject-scoped product store.
- * Sensitive reads and mutations never fall back to the hydrated/raw methods.
+ * Named reads and mutations at every sensitivity never fall back to the
+ * hydrated/raw methods.
  */
 export function createSubjectAuthorizedMemoryStore(
   store: MemoryStorePort,
@@ -458,9 +478,47 @@ export function createSubjectAuthorizedMemoryStore(
         || property === 'getAbstractionLinksForAbstractedMemory'
       ) {
         return async (...args: unknown[]) => {
-          if (!normalizedSubject(currentContext())) return [];
+          const auth = authorization(currentContext(), 'detail');
+          const sourceMemoryId = String(args[0] ?? '').trim();
+          if (!auth || !sourceMemoryId) return [];
+          const source = await target.queryAuthorizedMemorySubjects({
+            authorization: auth,
+            selector: { kind: 'detail', memoryId: sourceMemoryId },
+          });
+          if (source.total !== 1) return [];
           const method = Reflect.get(target, property, target) as (...methodArgs: unknown[]) => unknown;
-          return await method.apply(target, args);
+          const links = await method.apply(target, args);
+          if (!Array.isArray(links)) return [];
+          const authorizedById = new Map<string, boolean>([[sourceMemoryId, true]]);
+          const authorizeId = async (memoryId: string): Promise<boolean> => {
+            const normalizedId = memoryId.trim();
+            if (!normalizedId) return false;
+            const cached = authorizedById.get(normalizedId);
+            if (cached !== undefined) return cached;
+            const selected = await target.queryAuthorizedMemorySubjects({
+              authorization: auth,
+              selector: { kind: 'detail', memoryId: normalizedId },
+            });
+            const allowed = selected.total === 1;
+            authorizedById.set(normalizedId, allowed);
+            return allowed;
+          };
+          const visible: unknown[] = [];
+          for (const link of links) {
+            if (!link || typeof link !== 'object') continue;
+            const row = link as Record<string, unknown>;
+            const referencedIds = [
+              row.id1,
+              row.id2,
+              row.sourceMemoryId,
+              row.targetMemoryId,
+              row.abstractedMemoryId,
+            ].filter((value): value is string => typeof value === 'string');
+            if (referencedIds.length === 0) continue;
+            const decisions = await Promise.all(referencedIds.map(authorizeId));
+            if (decisions.every(Boolean)) visible.push(link);
+          }
+          return visible;
         };
       }
       if (

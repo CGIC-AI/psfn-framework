@@ -40,12 +40,42 @@ import { isExplicitTrue, parseCommaSeparatedEnv } from '../startup/support/env-p
 import type { IntakeScreeningService } from '../../core/cogsec/intake/screening.js';
 import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import type { GatewayFleetAuthBroker } from '../../boundary/gateway/fleet-auth-broker.js';
+import type { GatewayFleetAuthChildAssertionBroker } from '../../boundary/gateway/fleet-auth-child-assertions.js';
+import { GatewayCompanionUiActionBroker } from '../../boundary/gateway/companion-ui-action-broker.js';
+import type {
+  GatewayRequestCapabilitySigner,
+  RequestCapabilityVerifier,
+} from '../../boundary/fleet-auth/request-capability.js';
+import { CompanionUiWebSocketAdapter } from '../../channels/api/companion-ui-websocket.js';
+import {
+  companionUiPromptContent,
+  compileCompanionUiAction,
+} from '../../boundary/fleet-auth/companion-ui-action.js';
+import type { RequestCapabilityReplayPort } from '../../boundary/fleet-auth/request-capability-replay.js';
+import { GatewayFleetSsoRouter } from '../../boundary/gateway/fleet-sso-router.js';
+import { resolveFleetSsoGardenUpstreams } from '../../boundary/fleet-auth/fleet-sso-transport.js';
+import type {
+  PrimaryEmbodimentAuthorityPort,
+} from '../../boundary/fleet-auth/primary-embodiment.js';
+import { dispatchCompanionUiPrimaryEmbodiment } from '../../boundary/gateway/companion-ui-primary-embodiment.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
-import { GatewayHubDeviceIngressService } from '../../boundary/fleet-auth/hub-device-ingress.js';
+import type { FleetJitStepUpCoordinator } from '../../boundary/fleet-auth/jit-step-up.js';
+import type { TrustedHostPasskeyCeremonyService } from '../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
+import type { GatewayTrustedHostGardenRecoveryService } from '../../boundary/gateway/trusted-host-garden-recovery.js';
+import type { GatewayFleetAuthLifecycleCeremonyService } from '../../boundary/fleet-auth/lifecycle-ceremony.js';
+import type { TrustedHostAccountReapprovalService } from '../../boundary/fleet-auth/trusted-host-account-reapproval.js';
+import type { TrustedHostProviderRecoveryService } from '../../boundary/fleet-auth/trusted-host-provider-recovery.js';
+import {
+  GatewayHubDeviceIngressService,
+  type HubDeviceHumanAttachmentPort,
+} from '../../boundary/fleet-auth/hub-device-ingress.js';
 import type {
   HubDeviceAssertionExpectedBinding,
   HubDevicePrincipal,
 } from '../../shared/contracts/hub-device-ingress.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
+import type { FleetPortalAuthorizationBatchPort } from '../../boundary/gateway/fleet-portal-authorization.js';
+import { createGatewayFleetPortalProjection } from './fleet-portal-composition.js';
 
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const GATEWAY_API_REQUEST_TIMEOUT_MS = 240_000;
@@ -70,6 +100,9 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
     | 'invalidateIcpAutonomyForCompanion'
     | 'isIcpAutonomyConfigured'
     | 'resolveOperatorApproval'
+    | 'listOperatorConfirmations'
+    | 'getFleetConnectionSnapshot'
+    | 'requestCompanionAgent'
   >;
   channelsConfig?: RuntimeChannelsConfig;
   satelliteRegistryProvider: SatelliteRegistryProvider;
@@ -83,22 +116,75 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   companionRelay?: Omit<CompanionRelayHttpDeps, 'stimuli'>;
   /** Present only in gateway fleet-auth mode; owns all browser OAuth/session authority. */
   fleetAuthBroker?: GatewayFleetAuthBroker;
+  fleetAuthJitStepUp?: FleetJitStepUpCoordinator;
+  fleetAuthPasskeyCeremonies?: TrustedHostPasskeyCeremonyService;
+  fleetAuthTrustedHostRecovery?: GatewayTrustedHostGardenRecoveryService;
+  fleetAuthLifecycleCeremonies?: GatewayFleetAuthLifecycleCeremonyService;
+  fleetAuthAccountReapprovalCeremonies?: TrustedHostAccountReapprovalService;
+  fleetAuthProviderRecovery?: TrustedHostProviderRecoveryService;
+  fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
+  fleetAuthRequestCapabilities?: GatewayRequestCapabilitySigner;
+  fleetAuthRequestCapabilityVerifier?: RequestCapabilityVerifier;
+  fleetAuthRequestCapabilityReplay?: RequestCapabilityReplayPort;
+  fleetPortalAuthorization?: FleetPortalAuthorizationBatchPort;
+  primaryEmbodiments?: PrimaryEmbodimentAuthorityPort;
   /** Persistence-backed verifier/consumer required by authenticated Hub device ingress. */
   hubDeviceAssertionVerifier?: {
     verifyAndConsumeHubDeviceAssertion(
       token: string,
       expected: HubDeviceAssertionExpectedBinding,
     ): Promise<HubDevicePrincipal>;
+    attachHubDeviceHuman(
+      input: Parameters<HubDeviceHumanAttachmentPort['attach']>[0],
+    ): ReturnType<HubDeviceHumanAttachmentPort['attach']>;
+    fenceHubDeviceAttachment(
+      input: Parameters<HubDeviceHumanAttachmentPort['fenceDevice']>[0],
+    ): ReturnType<HubDeviceHumanAttachmentPort['fenceDevice']>;
   };
 }
 
-function resolveGatewayHubDeviceCompanionId(options: StartOptionalGatewayApiServerOptions): string {
+function resolveGatewayHubDeviceCompanionId(options: StartOptionalGatewayApiServerOptions): string | undefined {
   const channelCompanionId = options.channelsConfig?.api.companionId;
   if (channelCompanionId) return channelCompanionId;
   const fleet = options.config.companionFleet?.companions ?? [];
   if (fleet.length === 1) return fleet[0]!.companionId;
   if (!options.config.companionFleet && options.config.companionId) return options.config.companionId;
-  throw new Error('Fleet Hub device ingress requires one server-owned API companion binding');
+  return undefined;
+}
+
+function resolveFleetSsoCompanionUi(
+  config: SubstrateConfig,
+  env: NodeJS.ProcessEnv,
+): {
+  companionId: ReturnType<typeof createCompanionId>;
+  origin: URL;
+  guestMode: 'disabled' | 'explicit';
+} | undefined {
+  const rawOrigin = env.FLEET_SSO_COMPANION_UI_ORIGIN?.trim();
+  if (!rawOrigin) return undefined;
+  const fleet = config.companionFleet?.companions
+    ?? (config.companionId ? [{ companionId: config.companionId }] : []);
+  const rawCompanionId = env.FLEET_SSO_COMPANION_UI_COMPANION_ID?.trim()
+    || (fleet.length === 1 ? fleet[0]!.companionId : undefined);
+  if (!rawCompanionId || !fleet.some(entry => entry.companionId === rawCompanionId)) {
+    throw new Error(
+      'Fleet SSO Companion UI requires one exact registered FLEET_SSO_COMPANION_UI_COMPANION_ID',
+    );
+  }
+  const origin = new URL(rawOrigin);
+  if (origin.origin !== rawOrigin || origin.protocol !== 'http:' || origin.username
+    || origin.password || origin.pathname !== '/' || origin.search || origin.hash) {
+    throw new Error('FLEET_SSO_COMPANION_UI_ORIGIN must be one exact internal HTTP origin');
+  }
+  const rawGuestMode = env.FLEET_SSO_COMPANION_UI_GUEST_MODE?.trim() || 'disabled';
+  if (rawGuestMode !== 'disabled' && rawGuestMode !== 'explicit') {
+    throw new Error('FLEET_SSO_COMPANION_UI_GUEST_MODE must be disabled or explicit');
+  }
+  return {
+    companionId: createCompanionId(rawCompanionId, 'Fleet SSO Companion UI companion binding'),
+    origin,
+    guestMode: rawGuestMode,
+  };
 }
 
 /**
@@ -322,11 +408,30 @@ export async function startOptionalGatewayApiServer(
 
   const env = options.env ?? process.env;
   const fleetAuthBootstrapOnly = options.config.fleetAuth !== undefined;
+  const principalAuthenticationWired = options.fleetAuthBroker !== undefined
+    && options.fleetAuthJitStepUp !== undefined
+    && options.fleetAuthPasskeyCeremonies !== undefined
+    && options.fleetAuthTrustedHostRecovery !== undefined
+    && options.fleetAuthLifecycleCeremonies !== undefined
+    && options.fleetAuthAccountReapprovalCeremonies !== undefined
+    && options.fleetAuthProviderRecovery !== undefined
+    && options.fleetAuthChildAssertions !== undefined
+    && options.fleetAuthRequestCapabilities !== undefined
+    && options.fleetAuthRequestCapabilityVerifier !== undefined
+    && options.fleetAuthRequestCapabilityReplay !== undefined
+    && options.fleetPortalAuthorization !== undefined
+    && options.primaryEmbodiments !== undefined
+    && options.hubDeviceAssertionVerifier !== undefined;
+  if (fleetAuthBootstrapOnly && !principalAuthenticationWired) {
+    throw new Error(
+      'Fleet-auth principal composition is incomplete; refusing to expose the gateway API',
+    );
+  }
   assertFleetAuthLegacySurfacesUnavailable({
     fleetAuthEnabled: options.config.fleetAuth !== undefined,
     processMode: 'gateway',
     env: { ...env, API_PORT: String(options.apiPort) },
-    principalAuthenticationWired: false,
+    principalAuthenticationWired,
     fleetAuthBootstrapRoutesWired: options.fleetAuthBroker !== undefined,
   });
   const allowInsecureWithoutAuth = !fleetAuthBootstrapOnly
@@ -346,14 +451,222 @@ export async function startOptionalGatewayApiServer(
     ? new GatewayHubDeviceIngressService({
         verifyAndConsume: (assertion, expected) => options.hubDeviceAssertionVerifier!
           .verifyAndConsumeHubDeviceAssertion(assertion, expected),
+        enrollmentAuthority: {
+          resolve: async ({ connectionId, authenticatedConnection }) => {
+            if (connectionId !== authenticatedConnection.connectionId) {
+              throw new Error('Authenticated Hub enrollment authority connection changed');
+            }
+            return Object.freeze({ ...authenticatedConnection });
+          },
+        },
+        attachments: {
+          attach: input => options.hubDeviceAssertionVerifier!.attachHubDeviceHuman(input),
+          fenceDevice: input => options.hubDeviceAssertionVerifier!.fenceHubDeviceAttachment(input),
+        },
       })
     : undefined;
   const apiTlsConfig = resolveApiHttpServerTlsConfig(env);
+  const fleetSsoCompanionUi = options.config.fleetAuth
+    ? resolveFleetSsoCompanionUi(options.config, env)
+    : undefined;
+  const fleetPortalProjection = createGatewayFleetPortalProjection({
+    fleetAuthEnabled: fleetAuthBootstrapOnly,
+    ...(options.fleetPortalAuthorization
+      ? { authorization: options.fleetPortalAuthorization }
+      : {}),
+    ...(options.config.companionFleet
+      ? { fleet: options.config.companionFleet.companions }
+      : {}),
+    source: options.gateway,
+  });
+  const fleetSsoRouter = options.config.fleetAuth && options.fleetAuthBroker
+    && options.fleetAuthRequestCapabilities
+    && options.fleetAuthRequestCapabilityVerifier && options.fleetAuthRequestCapabilityReplay
+    && fleetPortalProjection
+    ? new GatewayFleetSsoRouter({
+        canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
+        trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
+        broker: options.fleetAuthBroker,
+        signer: options.fleetAuthRequestCapabilities,
+        verifier: options.fleetAuthRequestCapabilityVerifier,
+        replay: options.fleetAuthRequestCapabilityReplay,
+        portalProjection: fleetPortalProjection,
+        ...(options.fleetAuthJitStepUp ? { jitStepUp: options.fleetAuthJitStepUp } : {}),
+        upstreams: resolveFleetSsoGardenUpstreams({
+          ...(options.config.companionFleet ? { fleet: options.config.companionFleet } : {}),
+          ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
+          ...(options.adminPort ? { gardenPort: options.adminPort } : {}),
+          env,
+        }),
+        ...(fleetSsoCompanionUi ? {
+          companionUi: {
+            companionId: fleetSsoCompanionUi.companionId,
+            origin: fleetSsoCompanionUi.origin,
+          },
+        } : {}),
+      })
+    : undefined;
+  if (fleetAuthBootstrapOnly && !fleetSsoRouter) {
+    throw new Error('Fleet authentication requires the complete unified-origin router wiring');
+  }
   const corsAllowedOrigins = resolveApiCorsAllowedOrigins({
     explicitAllowlist: parseCommaSeparatedEnv(env.API_CORS_ALLOWLIST),
     adminHost: options.adminHost,
     adminPort: options.adminPort,
   });
+  const gatewayApiRuntime = new GatewayApiRuntime(options.gateway, {
+    chatRequestTimeoutMs: computeGatewayChatRequestTimeoutMs(GATEWAY_API_REQUEST_TIMEOUT_MS),
+  });
+  const activeCompanionUiInteractions = new Map<string, AbortController>();
+  const companionUiWebSocket = fleetAuthBootstrapOnly
+    && options.config.fleetAuth
+    && options.fleetAuthBroker
+    && options.fleetAuthChildAssertions
+    && options.fleetAuthRequestCapabilities
+    && hubDeviceIngress
+    && options.satelliteRegistry
+    ? new CompanionUiWebSocketAdapter({
+        canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
+        satelliteApiKeys,
+        satelliteRegistry: options.satelliteRegistry,
+        guestMode: fleetSsoCompanionUi?.guestMode ?? 'disabled',
+        ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
+        hubDeviceIngress,
+        actionBroker: new GatewayCompanionUiActionBroker({
+          resolveAuthorizationContext: input => options.fleetAuthBroker!.resolveAuthorizationContext(input),
+          signer: options.fleetAuthRequestCapabilities,
+          childAssertions: options.fleetAuthChildAssertions,
+          dispatch: {
+            dispatch: async input => {
+              const frame = input.compiled.frame;
+              const body = frame.body as Record<string, unknown>;
+              const embodiment = await dispatchCompanionUiPrimaryEmbodiment({
+                compiled: input.compiled,
+                attachment: input.attachment,
+                ...(options.primaryEmbodiments ? { authority: options.primaryEmbodiments } : {}),
+              });
+              if (embodiment.handled) return embodiment.result;
+              if (frame.resource === 'conversation.status') {
+                return await gatewayApiRuntime.handleHealth();
+              }
+              if (frame.resource === 'confirmations.list') {
+                return options.gateway.listOperatorConfirmations();
+              }
+              if (frame.resource === 'confirmations.resolve') {
+                return await options.gateway.resolveOperatorApproval({
+                  id: String(body.id),
+                  decision: body.decision as 'approve' | 'deny',
+                });
+              }
+              if (frame.resource === 'artifact.preview') {
+                const preview = options.companionRelay?.relay.getPreviewSource(
+                  String(body.id),
+                  input.compiled.target.companionId,
+                );
+                if (!preview?.previewable || !preview.bytes) throw new Error('Artifact preview unavailable');
+                return {
+                  artifactId: preview.artifactId,
+                  mediaType: preview.mediaType,
+                  sizeBytes: preview.sizeBytes,
+                  dataBase64: preview.bytes.toString('base64'),
+                };
+              }
+              if (frame.resource === 'tool_activity.subscribe') return { subscribed: true };
+              if (frame.resource === 'conversation.interrupt') {
+                const interactionId = String(body.interactionId);
+                const active = activeCompanionUiInteractions.get(interactionId);
+                active?.abort();
+                return { interrupted: active !== undefined, interactionId };
+              }
+              const content = companionUiPromptContent(frame);
+              if (!content) throw new Error('Companion UI action has no dispatcher');
+              const controller = new AbortController();
+              activeCompanionUiInteractions.set(frame.requestId, controller);
+              try {
+                const result = await gatewayApiRuntime.handleChatCompletion({
+                  request: {
+                    model: input.compiled.target.companionId,
+                    messages: [{ role: 'user', content }],
+                    system_prompt_mode: 'default',
+                  },
+                  principal: input.deviceTransport.principal,
+                  headers: { ...input.deviceTransport.headers },
+                  ...(input.deviceTransport.clientCert ? { clientCert: input.deviceTransport.clientCert } : {}),
+                  hubDevicePrincipal: input.attachment.deviceActor.principal,
+                  hubDeviceAttachment: input.attachment,
+                  companionUiCapability: {
+                    token: input.childAssertion.token,
+                    requestId: input.childAssertion.requestId,
+                    decisionId: input.childAssertion.decisionId,
+                    versions: input.childAssertion.versions,
+                    parent: input.childAssertion.parent,
+                    rawBodyBase64Url: Buffer.from(input.compiled.target.body).toString('base64url'),
+                  },
+                  signal: controller.signal,
+                });
+                if (!result.ok) throw new Error(result.error.type);
+                return result.response;
+              } finally {
+                if (activeCompanionUiInteractions.get(frame.requestId) === controller) {
+                  activeCompanionUiInteractions.delete(frame.requestId);
+                }
+              }
+            },
+          },
+        }),
+        ...(fleetSsoCompanionUi?.guestMode === 'explicit' ? {
+          guestActionBroker: {
+            execute: async input => {
+              if (input.attachment.actor.kind !== 'guest') throw new Error('guest attachment required');
+              const compiled = compileCompanionUiAction(
+                input.rawBody,
+                input.companionId,
+                input.physicalCeiling,
+              );
+              const frame = compiled.frame;
+              const body = frame.body as Record<string, unknown>;
+              if (frame.resource === 'conversation.status') return await gatewayApiRuntime.handleHealth();
+              if (frame.resource === 'conversation.interrupt') {
+                const interactionId = String(body.interactionId);
+                const active = activeCompanionUiInteractions.get(interactionId);
+                active?.abort();
+                return { interrupted: active !== undefined, interactionId };
+              }
+              if (frame.resource !== 'conversation.interact'
+                && frame.resource !== 'conversation.audio'
+                && frame.resource !== 'conversation.touch') {
+                throw new Error('guest action denied');
+              }
+              const content = companionUiPromptContent(frame);
+              if (!content) throw new Error('Companion UI guest action has no dispatcher');
+              const controller = new AbortController();
+              activeCompanionUiInteractions.set(frame.requestId, controller);
+              try {
+                const result = await gatewayApiRuntime.handleChatCompletion({
+                  request: {
+                    model: input.companionId,
+                    messages: [{ role: 'user', content }],
+                    system_prompt_mode: 'default',
+                  },
+                  principal: input.deviceTransport.principal,
+                  headers: { ...input.deviceTransport.headers },
+                  ...(input.deviceTransport.clientCert ? { clientCert: input.deviceTransport.clientCert } : {}),
+                  hubDevicePrincipal: input.attachment.deviceActor.principal,
+                  hubDeviceAttachment: input.attachment,
+                  signal: controller.signal,
+                });
+                if (!result.ok) throw new Error(result.error.type);
+                return result.response;
+              } finally {
+                if (activeCompanionUiInteractions.get(frame.requestId) === controller) {
+                  activeCompanionUiInteractions.delete(frame.requestId);
+                }
+              }
+            },
+          },
+        } : {}),
+      })
+    : undefined;
   const voiceWebSocketRuntime = fleetAuthBootstrapOnly ? undefined : createApiVoiceWebSocketRuntime({
     config: options.config,
     eligibilityGate: options.eligibilityGate,
@@ -422,16 +735,21 @@ export async function startOptionalGatewayApiServer(
     ...(apiTlsConfig ? { tls: apiTlsConfig } : {}),
     allowInsecureWithoutAuth,
     fleetAuthBootstrapOnly,
+    ...(fleetSsoRouter ? { fleetSsoRouter } : {}),
+    ...(options.fleetAuthChildAssertions
+      ? { fleetAuthChildAssertions: options.fleetAuthChildAssertions }
+      : {}),
     ...(hubDeviceIngress ? { hubDeviceIngress } : {}),
     ...(hubDeviceCompanionId ? { hubDeviceCompanionId } : {}),
+    ...(companionUiWebSocket ? { companionUiWebSocket } : {}),
     corsAllowedOrigins,
     voiceWebSocketPath,
     voiceWebSocketRuntime,
     requestTimeoutMs: GATEWAY_API_REQUEST_TIMEOUT_MS,
-    runtime: new GatewayApiRuntime(options.gateway, {
-      chatRequestTimeoutMs: computeGatewayChatRequestTimeoutMs(GATEWAY_API_REQUEST_TIMEOUT_MS),
-    }),
-    modelName: options.config.companionId ?? hubDeviceCompanionId,
+    runtime: gatewayApiRuntime,
+    modelName: options.config.companionId
+      ?? hubDeviceCompanionId
+      ?? options.config.companionFleet?.companions[0]?.companionId,
     companionName: resolveCompanionNameFromConfig(options.config),
     externalChannelProfiles: options.channelsConfig
       ? buildExternalChannelProfiles(options.channelsConfig)
@@ -455,6 +773,29 @@ export async function startOptionalGatewayApiServer(
             broker: options.fleetAuthBroker,
             canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
             callbackPath: options.config.fleetAuth.callbackPath,
+            ...(options.fleetAuthJitStepUp ? { jitStepUp: options.fleetAuthJitStepUp } : {}),
+            ...(options.fleetAuthPasskeyCeremonies
+              ? { passkeyCeremonies: options.fleetAuthPasskeyCeremonies }
+              : {}),
+            ...(options.fleetAuthTrustedHostRecovery
+              ? { trustedHostRecovery: options.fleetAuthTrustedHostRecovery }
+              : {}),
+            ...(options.fleetAuthLifecycleCeremonies
+              ? { lifecycleCeremonies: options.fleetAuthLifecycleCeremonies }
+              : {}),
+            ...(options.fleetAuthAccountReapprovalCeremonies
+              ? { accountReapprovalCeremonies: options.fleetAuthAccountReapprovalCeremonies }
+              : {}),
+            ...(options.fleetAuthProviderRecovery
+              ? { providerRecovery: options.fleetAuthProviderRecovery }
+              : {}),
+            trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
+            ...(fleetSsoCompanionUi ? {
+              companionUi: {
+                companionId: fleetSsoCompanionUi.companionId,
+                guestMode: fleetSsoCompanionUi.guestMode,
+              },
+            } : {}),
           }),
         }
       : {}),

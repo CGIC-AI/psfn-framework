@@ -3,6 +3,7 @@
   import SettingAuthorityHint from '$lib/components/settings/SettingAuthorityHint.svelte';
   import SettingFieldLabel from '$lib/components/settings/SettingFieldLabel.svelte';
   import SettingsCollapsibleSection from '$lib/components/settings/SettingsCollapsibleSection.svelte';
+  import FleetAuthOwnerProjection from '$lib/components/settings/FleetAuthOwnerProjection.svelte';
   import { settingsSimpleSectionAnchorId } from '$lib/components/settings/navigation';
   import type { AdminSettingsData } from '$lib/types';
   import type { SettingAuthorityInfo } from '$lib/settings/authority';
@@ -114,6 +115,8 @@
     </div>
   </SettingsCollapsibleSection>
 </section>
+
+<FleetAuthOwnerProjection projection={data?.fleetAuth ?? null} />
 
 {#if data?.env}
   {@const env = data.env as unknown as Record<string, unknown>}

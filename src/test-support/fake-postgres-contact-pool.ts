@@ -85,8 +85,19 @@ export class FakePostgresPool {
     if (
       normalized.startsWith('create table')
       || normalized.startsWith('create index')
+      || normalized.startsWith('create unique index')
       || normalized.startsWith('alter table')
+      || normalized.startsWith('create or replace function')
+      || normalized.startsWith('drop trigger')
+      || normalized.startsWith('create trigger')
     ) {
+      return result();
+    }
+
+    if (normalized.startsWith('select * from contact_lifecycle_intents order by created_at, intent_id')
+      || normalized.startsWith('select result.intent_id, result.gateway_phase')
+      || normalized.startsWith('select lock.intent_id, lock.target_kind, lock.target_id')
+      || normalized.startsWith('select ownership.contact_id, ownership.channel')) {
       return result();
     }
 

@@ -1,6 +1,30 @@
 {
   "entries": [
     {
+      "path": "src/boundary/gateway/fleet-sso-router.ts",
+      "contains": "x-psfn-jit-grant",
+      "reason": "The unified-origin proxy consumes this opaque single-use fleet JIT grant header and never forwards it to companion workloads.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/fleet-auth/recovery-request-capability.ts",
+      "contains": "PSFN-RECOVERY",
+      "reason": "The distinct signed recovery-capability type is an internal protocol discriminator, not a companion identity default.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/api/server/fleet-auth-recovery-routes.ts",
+      "contains": "x-psfn-trusted-host-recovery-credential",
+      "reason": "The loopback-only trusted-host credential header uses the established project protocol namespace and is stripped immediately on receipt.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/fleet-auth/request-capability-transport.ts",
+      "contains": "x-psfn-",
+      "reason": "Internal request-capability headers use the established project protocol namespace and are stripped at browser-facing listeners.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "admin-ui/src/app.css",
       "contains": "PSFN's Garden",
       "reason": "Legacy UI branding pending follow-up customization epic.",

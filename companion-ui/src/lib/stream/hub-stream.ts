@@ -421,6 +421,7 @@ function applyInboundMessage(
           sessionId: message.sessionId,
           channelId: message.channelId,
           audioFormat: message.audioFormat,
+          place: message.place ? { ...message.place } : undefined,
           identity: message.identity,
         },
       };
@@ -437,6 +438,7 @@ function applyInboundMessage(
           sessionId: message.sessionId,
           channelId: message.channelId,
           capabilities: cloneCapabilities(message.capabilities),
+          place: message.place ? { ...message.place } : undefined,
           identity: message.identity,
         },
       };
@@ -460,7 +462,7 @@ function applyInboundMessage(
         connection: 'failed',
         phase: 'failed',
         failure: {
-          message: message.data.message,
+          message: 'Satellite Hub reported an error',
           recoverable: true,
           at,
         },
@@ -657,6 +659,7 @@ function cloneSession(session: SatelliteHubSession | undefined): SatelliteHubSes
           user: session.identity.user ? { ...session.identity.user } : undefined,
         }
       : undefined,
+    place: session.place ? { ...session.place } : undefined,
   };
 }
 

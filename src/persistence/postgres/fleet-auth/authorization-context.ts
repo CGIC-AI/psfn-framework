@@ -2,7 +2,7 @@ import type { Pool } from 'pg';
 import { GatewayFleetAuthorizationContextResolver } from '../../../boundary/gateway/fleet-authorization-context.js';
 import type { FleetAuthConfig } from '../../../system/config/fleet-auth-config.js';
 import { PostgresFleetAuthorizationContextStore } from './authorization-context-store.js';
-import type { ProviderRevocationAuthorityPort } from './oauth-session-store.js';
+import type { ProviderRevocationAuthorityPort } from './provider-revocation-authority.js';
 
 /**
  * Narrow gateway composition seam. The caller retains the Pool and authority

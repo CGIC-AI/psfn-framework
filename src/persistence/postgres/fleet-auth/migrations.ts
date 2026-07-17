@@ -1135,6 +1135,552 @@ ALTER TABLE authority_floor_tombstone_projection
   ));
 `;
 
+const HUB_DEVICE_HUMAN_ATTACHMENT_SQL = `
+CREATE TABLE hub_device_human_attachments (
+  attachment_id UUID PRIMARY KEY,
+  assertion_digest TEXT NOT NULL UNIQUE CHECK (assertion_digest ~ '^[0-9a-f]{64}$'),
+  assertion_jti UUID NOT NULL UNIQUE,
+  device_id TEXT NOT NULL CHECK (length(device_id) BETWEEN 1 AND 256),
+  enrollment_version BIGINT NOT NULL CHECK (enrollment_version >= 1),
+  place_id TEXT CHECK (place_id IS NULL OR length(place_id) BETWEEN 1 AND 256),
+  key_id TEXT NOT NULL CHECK (length(key_id) BETWEEN 1 AND 128),
+  companion_id UUID NOT NULL,
+  hub_session_id TEXT NOT NULL CHECK (length(hub_session_id) BETWEEN 1 AND 256),
+  connection_id TEXT NOT NULL CHECK (length(connection_id) BETWEEN 1 AND 256),
+  channel_id TEXT NOT NULL CHECK (channel_id ~ '^hub-device:[0-9a-f]{64}$'),
+  human_binding_digest TEXT CHECK (
+    human_binding_digest IS NULL OR human_binding_digest ~ '^[0-9a-f]{64}$'
+  ),
+  principal_id UUID,
+  session_record_id UUID,
+  provider_subject_id TEXT CHECK (
+    provider_subject_id IS NULL OR provider_subject_id ~ '^[1-9][0-9]{16,19}$'
+  ),
+  binding_id UUID,
+  contact_id TEXT CHECK (contact_id IS NULL OR length(contact_id) BETWEEN 1 AND 256),
+  binding_version BIGINT CHECK (binding_version IS NULL OR binding_version >= 1),
+  grant_id UUID,
+  role TEXT CHECK (role IS NULL OR role IN ('owner', 'admin', 'member', 'guest')),
+  grant_version BIGINT CHECK (grant_version IS NULL OR grant_version >= 1),
+  authority_generation BIGINT CHECK (authority_generation IS NULL OR authority_generation >= 1),
+  global_auth_epoch BIGINT CHECK (global_auth_epoch IS NULL OR global_auth_epoch >= 1),
+  device_state TEXT NOT NULL CHECK (device_state IN ('active', 'fenced')),
+  human_state TEXT NOT NULL CHECK (human_state IN ('attached', 'guest', 'detached')),
+  retry_count BIGINT NOT NULL DEFAULT 0 CHECK (retry_count >= 0),
+  last_retry_at TIMESTAMPTZ,
+  human_detached_at TIMESTAMPTZ,
+  fenced_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  CONSTRAINT hub_device_human_binding_exact CHECK (
+    (human_binding_digest IS NULL AND principal_id IS NULL AND session_record_id IS NULL
+      AND provider_subject_id IS NULL
+      AND binding_id IS NULL AND contact_id IS NULL AND binding_version IS NULL
+      AND grant_id IS NULL AND role IS NULL AND grant_version IS NULL
+      AND authority_generation IS NULL AND global_auth_epoch IS NULL)
+    OR
+    (human_binding_digest IS NOT NULL AND principal_id IS NOT NULL
+      AND session_record_id IS NOT NULL AND provider_subject_id IS NOT NULL
+      AND binding_id IS NOT NULL AND contact_id IS NOT NULL AND binding_version IS NOT NULL
+      AND grant_id IS NOT NULL AND role IS NOT NULL AND grant_version IS NOT NULL
+      AND authority_generation IS NOT NULL AND global_auth_epoch IS NOT NULL)
+  )
+);
+
+CREATE INDEX hub_device_human_attachments_device_session_idx
+  ON hub_device_human_attachments (companion_id, device_id, hub_session_id);
+CREATE INDEX hub_device_human_attachments_human_session_idx
+  ON hub_device_human_attachments (session_record_id)
+  WHERE session_record_id IS NOT NULL;
+`;
+
+const REQUEST_CAPABILITY_REPLAY_SQL = `
+CREATE TABLE request_capability_consumptions (
+  issuer TEXT NOT NULL CHECK (length(issuer) BETWEEN 1 AND 128),
+  jti TEXT NOT NULL CHECK (length(jti) BETWEEN 1 AND 256),
+  capability_digest TEXT NOT NULL CHECK (capability_digest ~ '^[0-9a-f]{64}$'),
+  target_digest TEXT NOT NULL CHECK (target_digest ~ '^[0-9a-f]{64}$'),
+  body_digest TEXT NOT NULL CHECK (body_digest ~ '^[0-9a-f]{64}$'),
+  audience_digest TEXT NOT NULL CHECK (audience_digest ~ '^[0-9a-f]{64}$'),
+  companion_digest TEXT NOT NULL CHECK (companion_digest ~ '^[0-9a-f]{64}$'),
+  action_digest TEXT NOT NULL CHECK (action_digest ~ '^[0-9a-f]{64}$'),
+  resource_digest TEXT NOT NULL CHECK (resource_digest ~ '^[0-9a-f]{64}$'),
+  parent_digest TEXT NOT NULL CHECK (parent_digest ~ '^[0-9a-f]{64}$'),
+  decision_digest TEXT NOT NULL CHECK (decision_digest ~ '^[0-9a-f]{64}$'),
+  authority_versions_digest TEXT NOT NULL CHECK (authority_versions_digest ~ '^[0-9a-f]{64}$'),
+  consume_result JSONB NOT NULL CHECK (jsonb_typeof(consume_result) = 'object'),
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+  replay_count BIGINT NOT NULL DEFAULT 0 CHECK (replay_count >= 0),
+  last_replayed_at TIMESTAMPTZ,
+  mismatch_count BIGINT NOT NULL DEFAULT 0 CHECK (mismatch_count >= 0),
+  last_mismatch_digest TEXT CHECK (
+    last_mismatch_digest IS NULL OR last_mismatch_digest ~ '^[0-9a-f]{64}$'
+  ),
+  last_mismatch_at TIMESTAMPTZ,
+  PRIMARY KEY (issuer, jti)
+);
+
+CREATE INDEX request_capability_consumptions_expiry_idx
+  ON request_capability_consumptions (expires_at);
+
+CREATE UNIQUE INDEX authorization_audit_request_capability_mutated_replay_unique
+  ON authorization_audit_events (correlation_id)
+  WHERE action = 'request_capability.consume'
+    AND reason_code = 'request_capability_mutated_replay';
+`;
+
+const PRIMARY_EMBODIMENT_AUTHORITY_SQL = `
+CREATE TABLE primary_embodiment_authority (
+  companion_id UUID PRIMARY KEY,
+  generation BIGINT NOT NULL CHECK (generation >= 1),
+  version BIGINT NOT NULL CHECK (version >= 1),
+  current_attachment_id UUID,
+  current_device_id TEXT CHECK (
+    current_device_id IS NULL OR length(current_device_id) BETWEEN 1 AND 256
+  ),
+  current_enrollment_version BIGINT CHECK (
+    current_enrollment_version IS NULL OR current_enrollment_version >= 1
+  ),
+  current_hub_session_id TEXT CHECK (
+    current_hub_session_id IS NULL OR length(current_hub_session_id) BETWEEN 1 AND 256
+  ),
+  last_decision_id UUID NOT NULL,
+  last_decision TEXT NOT NULL CHECK (last_decision IN ('handoff', 'invalidated')),
+  last_reason TEXT NOT NULL CHECK (last_reason IN (
+    'user_requested', 'device_replacement', 'recovery',
+    'device_revoked', 'enrollment_revoked'
+  )),
+  decided_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL,
+  CONSTRAINT primary_embodiment_current_tuple_exact CHECK (
+    (current_attachment_id IS NULL AND current_device_id IS NULL
+      AND current_enrollment_version IS NULL AND current_hub_session_id IS NULL
+      AND last_decision = 'invalidated')
+    OR
+    (current_attachment_id IS NOT NULL AND current_device_id IS NOT NULL
+      AND current_enrollment_version IS NOT NULL AND current_hub_session_id IS NOT NULL
+      AND last_decision = 'handoff')
+  )
+);
+
+CREATE TABLE primary_embodiment_handoff_decisions (
+  decision_id UUID PRIMARY KEY,
+  companion_id UUID NOT NULL,
+  expected_generation BIGINT NOT NULL CHECK (expected_generation >= 0),
+  target_attachment_id UUID NOT NULL,
+  target_device_digest TEXT NOT NULL CHECK (target_device_digest ~ '^[0-9a-f]{64}$'),
+  decision TEXT NOT NULL CHECK (decision IN ('allow', 'deny')),
+  reason_code TEXT NOT NULL CHECK (reason_code IN (
+    'handoff', 'decision_replay', 'decision_cross_companion', 'stale_generation',
+    'attachment_not_current', 'human_authority_required', 'already_primary'
+  )),
+  resulting_generation BIGINT NOT NULL CHECK (resulting_generation >= 0),
+  resulting_version BIGINT NOT NULL CHECK (resulting_version >= 0),
+  occurred_at TIMESTAMPTZ NOT NULL
+);
+
+CREATE INDEX primary_embodiment_handoff_decisions_companion_idx
+  ON primary_embodiment_handoff_decisions (companion_id, occurred_at, decision_id);
+`;
+
+const JIT_STEP_UP_AUTHORITY_SQL = `
+ALTER TABLE step_up_challenges
+  DROP CONSTRAINT step_up_challenges_status_check,
+  ADD COLUMN protocol_version SMALLINT NOT NULL DEFAULT 0
+    CHECK (protocol_version IN (0, 1)),
+  ADD COLUMN request_nonce_digest TEXT
+    CHECK (request_nonce_digest IS NULL OR request_nonce_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN challenge_ciphertext BYTEA,
+  ADD COLUMN companion_id UUID,
+  ADD COLUMN target_digest TEXT
+    CHECK (target_digest IS NULL OR target_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN authorization_digest TEXT
+    CHECK (authorization_digest IS NULL OR authorization_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN assurance_requirement TEXT CHECK (
+    assurance_requirement IS NULL OR assurance_requirement IN (
+      'none', 'oauth', 'webauthn_uv', 'privacy_break_glass'
+    )
+  ),
+  ADD COLUMN subject_scope_digest TEXT
+    CHECK (subject_scope_digest IS NULL OR subject_scope_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN purpose_digest TEXT
+    CHECK (purpose_digest IS NULL OR purpose_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN memory_revision BIGINT
+    CHECK (memory_revision IS NULL OR memory_revision >= 1),
+  ADD COLUMN classifier_evidence_digest TEXT CHECK (
+    classifier_evidence_digest IS NULL OR classifier_evidence_digest ~ '^[0-9a-f]{64}$'
+  ),
+  ADD COLUMN exact_origin TEXT,
+  ADD COLUMN credential_floor_generation BIGINT
+    CHECK (credential_floor_generation IS NULL OR credential_floor_generation >= 0),
+  ADD COLUMN attempt_count SMALLINT NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 5),
+  ADD COLUMN cancelled_at TIMESTAMPTZ,
+  ADD CONSTRAINT step_up_challenges_status_check
+    CHECK (status IN ('pending', 'consumed', 'expired', 'revoked', 'cancelled', 'failed')),
+  ADD CONSTRAINT step_up_challenges_v1_exact CHECK (
+    (protocol_version = 0
+      AND request_nonce_digest IS NULL
+      AND challenge_ciphertext IS NULL
+      AND companion_id IS NULL
+      AND target_digest IS NULL
+      AND authorization_digest IS NULL
+      AND assurance_requirement IS NULL
+      AND subject_scope_digest IS NULL
+      AND purpose_digest IS NULL
+      AND memory_revision IS NULL
+      AND classifier_evidence_digest IS NULL
+      AND exact_origin IS NULL
+      AND credential_floor_generation IS NULL)
+    OR
+    (protocol_version = 1
+      AND request_nonce_digest IS NOT NULL
+      AND challenge_ciphertext IS NOT NULL
+      AND companion_id IS NOT NULL
+      AND target_digest IS NOT NULL
+      AND authorization_digest IS NOT NULL
+      AND assurance_requirement IS NOT NULL
+      AND subject_scope_digest IS NOT NULL
+      AND purpose_digest IS NOT NULL
+      AND memory_revision IS NOT NULL
+      AND classifier_evidence_digest IS NOT NULL
+      AND exact_origin IS NOT NULL
+      AND credential_floor_generation IS NOT NULL)
+  ),
+  ADD CONSTRAINT step_up_challenges_assurance_method CHECK (
+    protocol_version = 0
+    OR kind = 'webauthn_uv'
+    OR assurance_requirement IN ('none', 'oauth')
+  ),
+  ADD CONSTRAINT step_up_challenges_terminal_timestamps CHECK (
+    (status = 'consumed' AND consumed_at IS NOT NULL AND cancelled_at IS NULL)
+    OR (status = 'cancelled' AND consumed_at IS NULL AND cancelled_at IS NOT NULL)
+    OR (status NOT IN ('consumed', 'cancelled') AND consumed_at IS NULL AND cancelled_at IS NULL)
+  );
+
+CREATE INDEX step_up_challenges_v1_rate_limit_idx
+  ON step_up_challenges (browser_session_id, created_at)
+  WHERE protocol_version = 1 AND status = 'pending';
+
+ALTER TABLE jit_authorization_grants
+  ADD COLUMN protocol_version SMALLINT NOT NULL DEFAULT 0
+    CHECK (protocol_version IN (0, 1)),
+  ADD COLUMN challenge_id UUID UNIQUE REFERENCES step_up_challenges(challenge_id),
+  ADD COLUMN target_digest TEXT
+    CHECK (target_digest IS NULL OR target_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN authorization_digest TEXT
+    CHECK (authorization_digest IS NULL OR authorization_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN subject_scope_digest TEXT
+    CHECK (subject_scope_digest IS NULL OR subject_scope_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN purpose_digest TEXT
+    CHECK (purpose_digest IS NULL OR purpose_digest ~ '^[0-9a-f]{64}$'),
+  ADD COLUMN exact_origin TEXT,
+  ADD COLUMN credential_floor_generation BIGINT
+    CHECK (credential_floor_generation IS NULL OR credential_floor_generation >= 0),
+  ADD COLUMN consumed_at TIMESTAMPTZ,
+  ADD CONSTRAINT jit_authorization_grants_v1_exact CHECK (
+    (protocol_version = 0
+      AND challenge_id IS NULL
+      AND target_digest IS NULL
+      AND authorization_digest IS NULL
+      AND subject_scope_digest IS NULL
+      AND purpose_digest IS NULL
+      AND exact_origin IS NULL
+      AND credential_floor_generation IS NULL
+      AND consumed_at IS NULL)
+    OR
+    (protocol_version = 1
+      AND challenge_id IS NOT NULL
+      AND target_digest IS NOT NULL
+      AND authorization_digest IS NOT NULL
+      AND subject_scope_digest IS NOT NULL
+      AND purpose_digest IS NOT NULL
+      AND exact_origin IS NOT NULL
+      AND credential_floor_generation IS NOT NULL)
+  );
+
+CREATE INDEX jit_authorization_grants_v1_consume_idx
+  ON jit_authorization_grants (grant_id, browser_session_id, expires_at)
+  WHERE protocol_version = 1 AND revoked_at IS NULL AND consumed_at IS NULL;
+
+ALTER TABLE trusted_host_ceremonies
+  ADD COLUMN protocol_version SMALLINT NOT NULL DEFAULT 0
+    CHECK (protocol_version IN (0, 1)),
+  ADD COLUMN webauthn_challenge_digest TEXT CHECK (
+    webauthn_challenge_digest IS NULL OR webauthn_challenge_digest ~ '^[0-9a-f]{64}$'
+  ),
+  ADD COLUMN webauthn_challenge_ciphertext BYTEA,
+  ADD COLUMN exact_origin TEXT,
+  ADD COLUMN rp_id TEXT,
+  ADD COLUMN credential_floor_generation BIGINT CHECK (
+    credential_floor_generation IS NULL OR credential_floor_generation >= 0
+  ),
+  ADD COLUMN prior_credential_id_hash TEXT CHECK (
+    prior_credential_id_hash IS NULL OR prior_credential_id_hash ~ '^[0-9a-f]{64}$'
+  ),
+  ADD COLUMN confirmed_at TIMESTAMPTZ,
+  ADD COLUMN attempt_count SMALLINT NOT NULL DEFAULT 0 CHECK (attempt_count BETWEEN 0 AND 5),
+  ADD CONSTRAINT trusted_host_ceremonies_passkey_v1_exact CHECK (
+    (protocol_version = 0
+      AND webauthn_challenge_digest IS NULL
+      AND webauthn_challenge_ciphertext IS NULL
+      AND exact_origin IS NULL
+      AND rp_id IS NULL
+      AND credential_floor_generation IS NULL
+      AND prior_credential_id_hash IS NULL
+      AND confirmed_at IS NULL)
+    OR
+    (protocol_version = 1
+      AND kind IN ('first_owner', 'passkey_enrollment', 'passkey_recovery')
+      AND webauthn_challenge_digest IS NOT NULL
+      AND webauthn_challenge_ciphertext IS NOT NULL
+      AND exact_origin IS NOT NULL
+      AND rp_id IS NOT NULL
+      AND credential_floor_generation IS NOT NULL
+      AND confirmed_at IS NOT NULL
+      AND (
+        (kind = 'passkey_recovery' AND prior_credential_id_hash IS NOT NULL)
+        OR (kind <> 'passkey_recovery' AND prior_credential_id_hash IS NULL)
+      ))
+  );
+`;
+
+const ACCOUNT_REAPPROVAL_WEBAUTHN_SQL = `
+ALTER TABLE trusted_host_ceremonies
+  DROP CONSTRAINT trusted_host_ceremonies_passkey_v1_exact,
+  ADD COLUMN reapproval_verified_at TIMESTAMPTZ,
+  ADD COLUMN reapproval_actor_principal_id UUID,
+  ADD COLUMN reapproval_actor_session_id UUID,
+  ADD COLUMN reapproval_oauth_transaction_id UUID,
+  ADD COLUMN reapproval_oauth_proof_digest TEXT CHECK (
+    reapproval_oauth_proof_digest IS NULL
+    OR reapproval_oauth_proof_digest ~ '^[0-9a-f]{64}$'
+  ),
+  ADD COLUMN reapproval_credential_id_hash TEXT CHECK (
+    reapproval_credential_id_hash IS NULL
+    OR reapproval_credential_id_hash ~ '^[0-9a-f]{64}$'
+  ),
+  ADD COLUMN reapproval_credential_generation BIGINT CHECK (
+    reapproval_credential_generation IS NULL OR reapproval_credential_generation >= 1
+  ),
+  ADD COLUMN reapproval_credential_floor_generation BIGINT CHECK (
+    reapproval_credential_floor_generation IS NULL
+    OR reapproval_credential_floor_generation >= 1
+  ),
+  ADD CONSTRAINT trusted_host_ceremonies_passkey_v1_exact CHECK (
+    (protocol_version = 0
+      AND webauthn_challenge_digest IS NULL
+      AND webauthn_challenge_ciphertext IS NULL
+      AND exact_origin IS NULL
+      AND rp_id IS NULL
+      AND credential_floor_generation IS NULL
+      AND prior_credential_id_hash IS NULL
+      AND confirmed_at IS NULL
+      AND reapproval_verified_at IS NULL
+      AND reapproval_actor_principal_id IS NULL
+      AND reapproval_actor_session_id IS NULL
+      AND reapproval_oauth_transaction_id IS NULL
+      AND reapproval_oauth_proof_digest IS NULL
+      AND reapproval_credential_id_hash IS NULL
+      AND reapproval_credential_generation IS NULL
+      AND reapproval_credential_floor_generation IS NULL)
+    OR
+    (protocol_version = 1
+      AND kind IN (
+        'first_owner', 'account_reapproval', 'passkey_enrollment', 'passkey_recovery'
+      )
+      AND webauthn_challenge_digest IS NOT NULL
+      AND webauthn_challenge_ciphertext IS NOT NULL
+      AND exact_origin IS NOT NULL
+      AND rp_id IS NOT NULL
+      AND credential_floor_generation IS NOT NULL
+      AND confirmed_at IS NOT NULL
+      AND (
+        (kind = 'passkey_recovery' AND prior_credential_id_hash IS NOT NULL)
+        OR (kind <> 'passkey_recovery' AND prior_credential_id_hash IS NULL)
+      )
+      AND (
+        (kind <> 'account_reapproval'
+          AND reapproval_verified_at IS NULL
+          AND reapproval_actor_principal_id IS NULL
+          AND reapproval_actor_session_id IS NULL
+          AND reapproval_oauth_transaction_id IS NULL
+          AND reapproval_oauth_proof_digest IS NULL
+          AND reapproval_credential_id_hash IS NULL
+          AND reapproval_credential_generation IS NULL
+          AND reapproval_credential_floor_generation IS NULL)
+        OR
+        (kind = 'account_reapproval'
+          AND (
+            (reapproval_verified_at IS NULL
+              AND reapproval_actor_principal_id IS NULL
+              AND reapproval_actor_session_id IS NULL
+              AND reapproval_oauth_transaction_id IS NULL
+              AND reapproval_oauth_proof_digest IS NULL
+              AND reapproval_credential_id_hash IS NULL
+              AND reapproval_credential_generation IS NULL
+              AND reapproval_credential_floor_generation IS NULL)
+            OR
+            (reapproval_verified_at IS NOT NULL
+              AND reapproval_actor_principal_id IS NOT NULL
+              AND reapproval_actor_session_id IS NOT NULL
+              AND reapproval_oauth_transaction_id IS NOT NULL
+              AND reapproval_oauth_proof_digest IS NOT NULL
+              AND reapproval_credential_id_hash IS NOT NULL
+              AND reapproval_credential_generation IS NOT NULL
+              AND reapproval_credential_floor_generation IS NOT NULL)
+          ))
+      ))
+  );
+`;
+
+const TRUSTED_HOST_PROVIDER_RECOVERY_SQL = `
+ALTER TABLE oauth_transactions
+  DROP CONSTRAINT oauth_transaction_lifecycle_purpose_exact,
+  ADD CONSTRAINT oauth_transaction_lifecycle_purpose_exact CHECK (
+    lifecycle_action IS NULL OR (
+      (lifecycle_action IN ('binding.activate', 'provider.add')
+        AND lifecycle_proof_role = 'new'
+        AND kind = 'provider_link')
+      OR (lifecycle_action = 'provider.relink'
+        AND lifecycle_proof_role = 'new'
+        AND kind = 'recovery')
+      OR (lifecycle_action = 'provider.replace'
+        AND lifecycle_proof_role IN ('current', 'new')
+        AND kind = 'provider_replace')
+      OR (lifecycle_action = 'provider.recover'
+        AND lifecycle_proof_role = 'new'
+        AND kind = 'recovery')
+      OR (lifecycle_action = 'provider.unlink'
+        AND lifecycle_proof_role = 'current'
+        AND kind = 'recovery')
+      OR (lifecycle_action = 'principal.merge'
+        AND lifecycle_proof_role IN ('canonical', 'source')
+        AND kind = 'recovery')
+    )
+  );
+
+ALTER TABLE trusted_host_ceremonies
+  DROP CONSTRAINT trusted_host_ceremonies_kind_check,
+  DROP CONSTRAINT trusted_host_ceremonies_protocol_version_check,
+  DROP CONSTRAINT trusted_host_ceremonies_passkey_v1_exact,
+  ADD COLUMN recovery_receipt_digest TEXT CHECK (
+    recovery_receipt_digest IS NULL OR recovery_receipt_digest ~ '^[0-9a-f]{64}$'
+  ),
+  ADD COLUMN recovery_credential_id_hash TEXT CHECK (
+    recovery_credential_id_hash IS NULL OR recovery_credential_id_hash ~ '^[0-9a-f]{64}$'
+  ),
+  ADD COLUMN recovery_credential_generation BIGINT CHECK (
+    recovery_credential_generation IS NULL OR recovery_credential_generation >= 1
+  ),
+  ADD CONSTRAINT trusted_host_ceremonies_kind_check CHECK (kind IN (
+    'first_owner', 'account_reapproval', 'companion_reapproval',
+    'passkey_enrollment', 'passkey_recovery', 'provider_recovery'
+  )),
+  ADD CONSTRAINT trusted_host_ceremonies_protocol_version_check CHECK (
+    protocol_version IN (0, 1, 2)
+  ),
+  ADD CONSTRAINT trusted_host_ceremonies_protocol_exact CHECK (
+    (protocol_version = 0
+      AND webauthn_challenge_digest IS NULL
+      AND webauthn_challenge_ciphertext IS NULL
+      AND exact_origin IS NULL
+      AND rp_id IS NULL
+      AND credential_floor_generation IS NULL
+      AND prior_credential_id_hash IS NULL
+      AND confirmed_at IS NULL
+      AND reapproval_verified_at IS NULL
+      AND reapproval_actor_principal_id IS NULL
+      AND reapproval_actor_session_id IS NULL
+      AND reapproval_oauth_transaction_id IS NULL
+      AND reapproval_oauth_proof_digest IS NULL
+      AND reapproval_credential_id_hash IS NULL
+      AND reapproval_credential_generation IS NULL
+      AND reapproval_credential_floor_generation IS NULL
+      AND recovery_receipt_digest IS NULL
+      AND recovery_credential_id_hash IS NULL
+      AND recovery_credential_generation IS NULL)
+    OR
+    (protocol_version = 1
+      AND kind IN (
+        'first_owner', 'account_reapproval', 'passkey_enrollment', 'passkey_recovery'
+      )
+      AND webauthn_challenge_digest IS NOT NULL
+      AND webauthn_challenge_ciphertext IS NOT NULL
+      AND exact_origin IS NOT NULL
+      AND rp_id IS NOT NULL
+      AND credential_floor_generation IS NOT NULL
+      AND confirmed_at IS NOT NULL
+      AND recovery_receipt_digest IS NULL
+      AND recovery_credential_id_hash IS NULL
+      AND recovery_credential_generation IS NULL
+      AND (
+        (kind = 'passkey_recovery' AND prior_credential_id_hash IS NOT NULL)
+        OR (kind <> 'passkey_recovery' AND prior_credential_id_hash IS NULL)
+      )
+      AND (
+        (kind <> 'account_reapproval'
+          AND reapproval_verified_at IS NULL
+          AND reapproval_actor_principal_id IS NULL
+          AND reapproval_actor_session_id IS NULL
+          AND reapproval_oauth_transaction_id IS NULL
+          AND reapproval_oauth_proof_digest IS NULL
+          AND reapproval_credential_id_hash IS NULL
+          AND reapproval_credential_generation IS NULL
+          AND reapproval_credential_floor_generation IS NULL)
+        OR
+        (kind = 'account_reapproval'
+          AND (
+            (reapproval_verified_at IS NULL
+              AND reapproval_actor_principal_id IS NULL
+              AND reapproval_actor_session_id IS NULL
+              AND reapproval_oauth_transaction_id IS NULL
+              AND reapproval_oauth_proof_digest IS NULL
+              AND reapproval_credential_id_hash IS NULL
+              AND reapproval_credential_generation IS NULL
+              AND reapproval_credential_floor_generation IS NULL)
+            OR
+            (reapproval_verified_at IS NOT NULL
+              AND reapproval_actor_principal_id IS NOT NULL
+              AND reapproval_actor_session_id IS NOT NULL
+              AND reapproval_oauth_transaction_id IS NOT NULL
+              AND reapproval_oauth_proof_digest IS NOT NULL
+              AND reapproval_credential_id_hash IS NOT NULL
+              AND reapproval_credential_generation IS NOT NULL
+              AND reapproval_credential_floor_generation IS NOT NULL)
+          ))
+      ))
+    OR
+    (protocol_version = 2
+      AND kind = 'provider_recovery'
+      AND expected_companion_id IS NOT NULL
+      AND expected_contact_id IS NULL
+      AND exact_origin IS NOT NULL
+      AND rp_id IS NOT NULL
+      AND credential_floor_generation IS NOT NULL
+      AND prior_credential_id_hash IS NOT NULL
+      AND confirmed_at IS NOT NULL
+      AND reapproval_verified_at IS NULL
+      AND reapproval_actor_principal_id IS NULL
+      AND reapproval_actor_session_id IS NULL
+      AND reapproval_oauth_transaction_id IS NULL
+      AND reapproval_oauth_proof_digest IS NULL
+      AND reapproval_credential_id_hash IS NULL
+      AND reapproval_credential_generation IS NULL
+      AND reapproval_credential_floor_generation IS NULL
+      AND ((webauthn_challenge_digest IS NULL AND webauthn_challenge_ciphertext IS NULL)
+        OR (webauthn_challenge_digest IS NOT NULL AND webauthn_challenge_ciphertext IS NOT NULL))
+      AND ((recovery_receipt_digest IS NULL
+          AND recovery_credential_id_hash IS NULL
+          AND recovery_credential_generation IS NULL)
+        OR (webauthn_challenge_digest IS NOT NULL
+          AND recovery_receipt_digest IS NOT NULL
+          AND recovery_credential_id_hash IS NOT NULL
+          AND recovery_credential_generation IS NOT NULL)))
+  );
+`;
+
 const HUB_REPLAY_KEYED_AUDIT_DIGEST_SQL = `
 -- psfn-framework-5wrp: audit/replay identifier digests move from unkeyed SHA-256
 -- to app-side keyed HMAC-SHA256 under the fleet-auth session pepper, closing a
@@ -1203,4 +1749,14 @@ export const FLEET_AUTH_MIGRATIONS: readonly FleetAuthMigration[] = [
     name: 'hub_replay_keyed_audit_digests',
     sql: HUB_REPLAY_KEYED_AUDIT_DIGEST_SQL,
   },
+  { version: 23, name: 'hub_device_human_attachment_ledger', sql: HUB_DEVICE_HUMAN_ATTACHMENT_SQL },
+  { version: 24, name: 'request_capability_replay_ledger', sql: REQUEST_CAPABILITY_REPLAY_SQL },
+  { version: 25, name: 'primary_embodiment_authority', sql: PRIMARY_EMBODIMENT_AUTHORITY_SQL },
+  { version: 26, name: 'jit_step_up_authority', sql: JIT_STEP_UP_AUTHORITY_SQL },
+  {
+    version: 27,
+    name: 'account_reapproval_webauthn_confirmation',
+    sql: ACCOUNT_REAPPROVAL_WEBAUTHN_SQL,
+  },
+  { version: 28, name: 'trusted_host_provider_recovery', sql: TRUSTED_HOST_PROVIDER_RECOVERY_SQL },
 ] as const;

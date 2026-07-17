@@ -89,6 +89,7 @@ import {
   validateFleetAuthSchemaAccessContracts,
 } from './fleet-auth-schema-access.js';
 import { runMemorySubjectBackfillToCompletion } from '../../faculties/memory/postgres-store/subject-backfill.js';
+import { quarantineRestoredContactLifecycleAuthority } from './contact-lifecycle-restore.js';
 
 export type { FleetRestoreFaultInjectionOptions, FleetRestoreFaultStage };
 
@@ -730,6 +731,7 @@ export async function restoreFleetAuthConsistentFamily(options: {
           ...(options.pgRestoreBinary ? { pgRestoreBinary: options.pgRestoreBinary } : {}),
         };
         await invalidateRestoredMemorySubjectProjections(restoredPostgres, [schema]);
+        await quarantineRestoredContactLifecycleAuthority(restoredPostgres, [schema]);
         await backfillRestoredMemorySubjectProjections(restoredPostgres, [schema]);
       }
 
@@ -1069,7 +1071,10 @@ async function commitRestore(options: {
     restoreDatabase: async () => {
       await restorePostgresDump(options.dumpPath, options.postgres);
       const projectionLifecycle = options.projectionLifecycle ?? {
-        invalidate: invalidateRestoredMemorySubjectProjections,
+        invalidate: async (postgres, schemas) => {
+          await invalidateRestoredMemorySubjectProjections(postgres, schemas);
+          await quarantineRestoredContactLifecycleAuthority(postgres, schemas);
+        },
         backfill: backfillRestoredMemorySubjectProjections,
       };
       await projectionLifecycle.invalidate(options.postgres, expectedSchemas);

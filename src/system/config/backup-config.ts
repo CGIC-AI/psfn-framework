@@ -11,6 +11,13 @@ export const BACKUP_SEED_FILE_NAME = 'backup.seed.json';
 export interface BackupJsonConfig {
   intervalHours: number;
   maxRotatingBackups: number;
+  /**
+   * Daily GFS tier: newest backup per UTC calendar day, kept up to this count.
+   * Optional for backward compatibility — existing owner files predate the daily
+   * tier; an absent value defaults from DEFAULT_BACKUP_DAILY_COUNT at load
+   * (see resolveBackupRuntimeConfig). 0 disables the tier.
+   */
+  maxDailyBackups?: number;
   maxWeeklyBackups: number;
   maxMonthlyBackups: number;
   mirrorDir: string;
@@ -106,6 +113,11 @@ function validateBackupConfig(raw: unknown, sourcePath: string): BackupJsonConfi
   return {
     intervalHours: toPositiveNumber(raw.intervalHours, 'intervalHours', 1),
     maxRotatingBackups: toPositiveNumber(raw.maxRotatingBackups, 'maxRotatingBackups', 1),
+    // Optional for backward compatibility: absent means the daily tier default is
+    // applied at runtime resolution (see resolveBackupRuntimeConfig).
+    maxDailyBackups: raw.maxDailyBackups === undefined
+      ? undefined
+      : toPositiveNumber(raw.maxDailyBackups, 'maxDailyBackups', 0),
     maxWeeklyBackups: toPositiveNumber(raw.maxWeeklyBackups, 'maxWeeklyBackups', 0),
     maxMonthlyBackups: toPositiveNumber(raw.maxMonthlyBackups, 'maxMonthlyBackups', 0),
     mirrorDir: toString(raw.mirrorDir, 'mirrorDir'),

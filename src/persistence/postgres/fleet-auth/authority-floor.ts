@@ -9,6 +9,13 @@ import {
   isRfc4122Uuid,
 } from '../../../shared/utils/types.js';
 import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
+import type {
+  PasskeyAuthorityCandidate,
+  PasskeyAuthorityEntry,
+  PasskeyAuthorityFloor,
+  PasskeyAuthorityTombstone,
+  PasskeyVerificationResult,
+} from '../../../boundary/fleet-auth/passkey-authority.js';
 import { withCrossProcessWriteLock } from '../../sessions/cross-process-write-lock.js';
 
 export const FLEET_AUTH_AUTHORITY_FLOOR_FILE_NAME = 'fleet-auth-authority-floor.json';
@@ -23,7 +30,8 @@ export type AccountAuthorityTombstoneKind =
   | 'principal'
   | 'companion'
   | 'contact_authority_fence'
-  | 'companion_lineage_floor';
+  | 'companion_lineage_floor'
+  | 'recovery_credential';
 
 export interface CompanionReaddFloorClaim {
   principalId: string;
@@ -74,52 +82,12 @@ export interface TrustedHostAuthorityFloor {
   tombstones: AccountAuthorityTombstone[];
 }
 
-export interface PasskeyAuthorityCandidate {
-  credentialIdHash: string;
-  publicKeyVerifier: string;
-  rpId: string;
-  principalId: string;
-  expectedProvider: 'discord';
-  expectedProviderSubjectId: string;
-  signCount: number;
-  backupEligible: boolean;
-  backupState: boolean;
-}
-
-export type PasskeyAuthorityStatus = 'current' | 'revoked' | 'replaced' | 'compromised';
-
-export interface PasskeyAuthorityEntry extends PasskeyAuthorityCandidate {
-  generation: number;
-  status: PasskeyAuthorityStatus;
-  createdAt: string;
-  revokedAt?: string;
-  replacedByCredentialIdHash?: string;
-}
-
-export interface PasskeyAuthorityTombstone {
-  credentialIdHash: string;
-  generation: number;
-  status: Exclude<PasskeyAuthorityStatus, 'current'>;
-  at: string;
-  replacedByCredentialIdHash?: string;
-}
-
-export interface PasskeyAuthorityFloor {
-  generation: number;
-  credentials: PasskeyAuthorityEntry[];
-  tombstones: PasskeyAuthorityTombstone[];
-}
-
 export interface FleetAuthAuthorityFloor {
   schemaVersion: 2;
   trustedHost: TrustedHostAuthorityFloor;
   passkeys: PasskeyAuthorityFloor;
   updatedAt: string;
 }
-
-export type PasskeyVerificationResult =
-  | { allowed: true; generation: number }
-  | { allowed: false; reason: 'not_found' | 'not_current' | 'metadata_mismatch' };
 
 const LOCK_OPTIONS = {
   pollMs: 10,
@@ -193,7 +161,8 @@ function assertAccountAuthorityTombstoneKind(
     && value !== 'principal'
     && value !== 'companion'
     && value !== 'contact_authority_fence'
-    && value !== 'companion_lineage_floor') {
+    && value !== 'companion_lineage_floor'
+    && value !== 'recovery_credential') {
     throw new Error(`Invalid fleet auth authority floor: ${field} is unknown`);
   }
 }
@@ -643,6 +612,14 @@ export class FleetAuthAuthorityFloorStore {
     return validateFleetAuthAuthorityFloor(value);
   }
 
+  readPasskeys(): PasskeyAuthorityFloor {
+    return this.read().passkeys;
+  }
+
+  readTrustedHost(): TrustedHostAuthorityFloor {
+    return this.read().trustedHost;
+  }
+
   open(input: {
     activationGeneration: number;
     databaseHasDurableAuthority: boolean;
@@ -724,8 +701,8 @@ export class FleetAuthAuthorityFloorStore {
         resource.kind,
         `revokeAccountAuthorities.resources[${index}].kind`,
       );
-      if (resource.kind === 'companion_lineage_floor') {
-        throw new Error('Companion lineage floors require the exact re-add authority operation');
+      if (resource.kind === 'companion_lineage_floor' || resource.kind === 'recovery_credential') {
+        throw new Error('Dedicated authority floors require their exact mutation operation');
       }
     }
     return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
@@ -750,6 +727,143 @@ export class FleetAuthAuthorityFloorStore {
             revokedAt: input.at,
             reasonHash: digest(resource.reason),
           }))],
+        },
+        updatedAt: input.at,
+      };
+      this.write(next);
+      return next;
+    });
+  }
+
+  /**
+   * Fence the configured trusted-host recovery credential without advancing
+   * ordinary human authority. The revocation checkpoint is non-restored and
+   * is signed into every recovery capability, so issued/unconsumed tokens are
+   * defeated while routine sessions and roles retain their existing floor.
+   */
+  revokeRecoveryCredential(input: {
+    credentialId: string;
+    reason: string;
+    at: string;
+  }): FleetAuthAuthorityFloor {
+    assertTimestamp(input.at, 'revokeRecoveryCredential.at');
+    const credentialId = assertString(input.credentialId, 'revokeRecoveryCredential.credentialId');
+    if (!HASH_PATTERN.test(credentialId)) {
+      throw new Error('Invalid fleet auth authority floor: recovery credential id must be SHA-256 hex');
+    }
+    assertString(input.reason, 'revokeRecoveryCredential.reason');
+    return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
+      const current = this.read();
+      const resourceHash = digest(credentialId);
+      const nextCheckpoint = current.trustedHost.revocationCheckpoint + 1;
+      const next: FleetAuthAuthorityFloor = {
+        ...current,
+        trustedHost: {
+          ...current.trustedHost,
+          revocationCheckpoint: nextCheckpoint,
+          tombstones: [
+            ...current.trustedHost.tombstones.filter(entry => (
+              entry.kind !== 'recovery_credential' || entry.resourceHash !== resourceHash
+            )),
+            {
+              kind: 'recovery_credential',
+              resourceHash,
+              generation: current.trustedHost.authorityGeneration,
+              revokedAt: input.at,
+              reasonHash: digest(input.reason),
+            },
+          ],
+        },
+        updatedAt: input.at,
+      };
+      this.write(next);
+      return next;
+    });
+  }
+
+  recoverProviderAuthority(input: {
+    principalId: string;
+    currentProviderSubjectId: string;
+    expectedNewProviderSubjectId: string;
+    credentialIdHash: string;
+    credentialGeneration: number;
+    credentialFloorGeneration: number;
+    expectedAuthorityGeneration: number;
+    reasonDigest: string;
+    at: string;
+  }): FleetAuthAuthorityFloor {
+    assertUuid(input.principalId, 'recoverProviderAuthority.principalId');
+    assertTimestamp(input.at, 'recoverProviderAuthority.at');
+    assertInteger(
+      input.credentialGeneration,
+      'recoverProviderAuthority.credentialGeneration',
+      1,
+    );
+    assertInteger(
+      input.credentialFloorGeneration,
+      'recoverProviderAuthority.credentialFloorGeneration',
+      1,
+    );
+    assertInteger(
+      input.expectedAuthorityGeneration,
+      'recoverProviderAuthority.expectedAuthorityGeneration',
+      1,
+    );
+    if (!PROVIDER_SUBJECT_PATTERN.test(input.currentProviderSubjectId)
+      || !PROVIDER_SUBJECT_PATTERN.test(input.expectedNewProviderSubjectId)
+      || input.currentProviderSubjectId === input.expectedNewProviderSubjectId
+      || !HASH_PATTERN.test(input.credentialIdHash)
+      || !HASH_PATTERN.test(input.reasonDigest)) {
+      throw new Error('Provider recovery authority binding is invalid');
+    }
+    return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {
+      const current = this.read();
+      if (current.trustedHost.authorityGeneration !== input.expectedAuthorityGeneration
+        || current.passkeys.generation !== input.credentialFloorGeneration) {
+        throw new Error('Provider recovery authority floor changed before publication');
+      }
+      const credentialIndex = current.passkeys.credentials.findIndex(entry => (
+        entry.status === 'current'
+          && timingSafeStringEqual(entry.credentialIdHash, input.credentialIdHash)
+          && entry.principalId === input.principalId
+          && entry.expectedProviderSubjectId === input.currentProviderSubjectId
+          && entry.generation === input.credentialGeneration
+      ));
+      if (credentialIndex < 0) {
+        throw new Error('Provider recovery passkey authority is not exact and current');
+      }
+      const accountGeneration = current.trustedHost.authorityGeneration + 1;
+      const passkeyGeneration = current.passkeys.generation + 1;
+      const credentials = [...current.passkeys.credentials];
+      credentials[credentialIndex] = {
+        ...credentials[credentialIndex]!,
+        expectedProviderSubjectId: input.expectedNewProviderSubjectId,
+        generation: passkeyGeneration,
+      };
+      const resourceHash = digest(`discord:${input.currentProviderSubjectId}`);
+      const next: FleetAuthAuthorityFloor = {
+        ...current,
+        trustedHost: {
+          ...current.trustedHost,
+          authorityGeneration: accountGeneration,
+          revocationCheckpoint: current.trustedHost.revocationCheckpoint + 1,
+          tombstones: [
+            ...current.trustedHost.tombstones.filter(entry => (
+              entry.kind !== 'provider_subject' || entry.resourceHash !== resourceHash
+            )),
+            {
+              kind: 'provider_subject',
+              resourceHash,
+              generation: accountGeneration,
+              revokedAt: input.at,
+              reasonHash: digest(input.reasonDigest),
+            },
+          ],
+        },
+        passkeys: {
+          ...current.passkeys,
+          generation: passkeyGeneration,
+          credentials,
         },
         updatedAt: input.at,
       };
@@ -930,8 +1044,9 @@ export class FleetAuthAuthorityFloorStore {
         restored.kind,
         `prepareRestore.restoredTombstones[${index}].kind`,
       );
-      if (restored.kind === 'companion_lineage_floor') {
-        throw new Error('Companion lineage floors cannot be synthesized from restored authority');
+      if (restored.kind === 'companion_lineage_floor'
+        || restored.kind === 'recovery_credential') {
+        throw new Error('Non-restored dedicated floors cannot be synthesized from restored authority');
       }
     }
     return withCrossProcessWriteLock(this.lockPath, LOCK_OPTIONS, () => {

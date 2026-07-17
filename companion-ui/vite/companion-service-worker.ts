@@ -5,13 +5,14 @@ import type { OutputBundle } from 'rollup';
 import type { Plugin } from 'vite';
 
 const CACHE_PREFIX = 'psfn-companion-ui-';
+const APP_SCOPE = '/companion-ui/';
 const BUILD_REVISION_PATTERN = /^[A-Za-z0-9._-]{1,128}$/u;
 const STATIC_APP_SHELL = [
-  '/',
-  '/index.html',
-  '/manifest.webmanifest',
-  '/icon.svg',
-  '/icon-maskable.svg',
+  APP_SCOPE,
+  `${APP_SCOPE}index.html`,
+  `${APP_SCOPE}manifest.webmanifest`,
+  `${APP_SCOPE}icon.svg`,
+  `${APP_SCOPE}icon-maskable.svg`,
 ];
 
 function configuredBuildRevision(): string | null {
@@ -64,7 +65,7 @@ export function companionServiceWorker(): Plugin {
       const assetUrls = Object.keys(bundle)
         .filter((fileName) => fileName.startsWith('assets/') && !fileName.endsWith('.map'))
         .sort()
-        .map((fileName) => `/${fileName}`);
+        .map((fileName) => `${APP_SCOPE}${fileName}`);
       const precacheUrls = [...STATIC_APP_SHELL, ...assetUrls];
       const template = await readFile(resolve(projectRoot, 'service-worker/sw.js'), 'utf8');
       const withCacheName = replaceRequiredPlaceholder(
@@ -72,8 +73,13 @@ export function companionServiceWorker(): Plugin {
         '__PSFN_COMPANION_UI_CACHE_NAME__',
         JSON.stringify(`${CACHE_PREFIX}${buildRevision}`),
       );
-      const rendered = replaceRequiredPlaceholder(
+      const withAppScope = replaceRequiredPlaceholder(
         withCacheName,
+        '__PSFN_COMPANION_UI_APP_SCOPE__',
+        JSON.stringify(APP_SCOPE),
+      );
+      const rendered = replaceRequiredPlaceholder(
+        withAppScope,
         '__PSFN_COMPANION_UI_PRECACHE_URLS__',
         JSON.stringify(precacheUrls),
       );

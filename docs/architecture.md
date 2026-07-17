@@ -220,9 +220,16 @@ off.
 
 Tenancy is schema-per-companion (`config.postgresSchema` pins each agent's
 Postgres `search_path`) plus one `shared` schema for cross-companion world data.
-Operability adds one Garden per companion and a read-only gateway fleet-status
-page. The full topology, flag/manifest contract, launcher supervisor mode, and
-fleet operations are documented in [`docs/multi-companion.md`](./multi-companion.md).
+Operability adds one Garden per companion and two deliberately separate fleet
+surfaces. The public canonical HTTPS origin serves the authenticated `/fleet`
+portal and its bounded `/v1/fleet/portal` projection. An optional raw
+fleet-status listener is enabled by `FLEET_STATUS_PORT`, binds only a validated
+loopback address, and retains legacy `GET /`, `GET /fleet`, and
+`GET /fleet/status.json` operator routes containing full operational metadata.
+It is not composed into the public API server and must not be published through
+an unauthenticated proxy or tunnel. The full topology, flag/manifest contract,
+launcher supervisor mode, and fleet operations are documented in
+[`docs/multi-companion.md`](./multi-companion.md).
 
 Workspace-backed files are isolated by a deterministic Personal Workspace per
 companion. The supervisor injects only the authenticated companion's root and
@@ -231,7 +238,9 @@ Shared Companion Workspace is Garden-governed, reviewed, and never an implicit
 skills/modules/prompt/memory source.
 Key files: `src/system/config/companions-config.ts`,
 `src/persistence/postgres.ts`, `src/persistence/runtime-factory.ts`,
-`src/boundary/gateway/fleet-status.ts`, `scripts/start-gateway-agent.sh`.
+`src/boundary/gateway/fleet-status.ts`,
+`src/boundary/gateway/fleet-portal-http-routes.ts`,
+`scripts/start-gateway-agent.sh`.
 
 ## Persistence Ports
 

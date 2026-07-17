@@ -4,6 +4,7 @@ import type { BackupEncryptionRuntimeConfig } from './encryption.js';
 
 export const DEFAULT_BACKUP_INTERVAL_HOURS = 12;
 export const DEFAULT_BACKUP_ROTATING_COUNT = 9;
+export const DEFAULT_BACKUP_DAILY_COUNT = 7;
 export const DEFAULT_BACKUP_WEEKLY_COUNT = 2;
 export const DEFAULT_BACKUP_MONTHLY_COUNT = 1;
 export const DEFAULT_BACKUP_VERIFY_RESTORE = true;
@@ -19,6 +20,8 @@ export interface BackupRuntimeConfig {
   intervalMs: number;
   /** Number of rotating (most-recent) backup slots to keep. */
   maxRotatingBackups: number;
+  /** Number of daily backup slots to keep (newest backup per UTC calendar day). */
+  maxDailyBackups: number;
   /** Number of weekly backup slots to keep (derived from rotating cycle). */
   maxWeeklyBackups: number;
   /** Number of monthly backup slots to keep (derived from rotating cycle). */
@@ -93,6 +96,9 @@ export function resolveBackupRuntimeConfig(
   return {
     intervalMs,
     maxRotatingBackups,
+    // Owner files predating the daily tier omit the key; default from the
+    // constant at load rather than failing closed on a benign new field.
+    maxDailyBackups: jsonConfig.maxDailyBackups ?? DEFAULT_BACKUP_DAILY_COUNT,
     maxWeeklyBackups: jsonConfig.maxWeeklyBackups,
     maxMonthlyBackups: jsonConfig.maxMonthlyBackups,
     rootDir,

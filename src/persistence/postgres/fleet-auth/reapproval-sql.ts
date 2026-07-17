@@ -395,6 +395,15 @@ DECLARE
   v_new_authz bigint;
   v_new_binding_version bigint;
   v_new_role_version bigint;
+  v_contact_proof_intent_id uuid;
+  v_contact_proof_request_digest text;
+  v_contact_verification_digest text;
+  v_reason_digest text;
+  v_actor_session fleet_auth.browser_sessions%ROWTYPE;
+  v_actor_principal fleet_auth.human_principals%ROWTYPE;
+  v_actor_subject fleet_auth.provider_subjects%ROWTYPE;
+  v_oauth fleet_auth.oauth_transactions%ROWTYPE;
+  v_expected_oauth_proof_digest text;
 BEGIN
   IF p_at IS NULL THEN
     RAISE EXCEPTION 'reapproval timestamp is required' USING ERRCODE = '42501';
@@ -429,6 +438,9 @@ BEGIN
   END IF;
   IF v_ceremony.global_auth_epoch <> v_epoch THEN
     RAISE EXCEPTION 'trusted-host ceremony is bound to a stale auth epoch' USING ERRCODE = '42501';
+  END IF;
+  IF v_ceremony.expires_at <= clock_timestamp() THEN
+    RAISE EXCEPTION 'trusted-host ceremony has expired' USING ERRCODE = '42501';
   END IF;
   IF v_ceremony.expected_provider <> p_provider
      OR v_ceremony.expected_provider_subject_id <> p_provider_subject_id
@@ -558,12 +570,56 @@ BEGIN
     RAISE EXCEPTION 'role grant conflicts with a live grant' USING ERRCODE = '42501';
   END IF;
 
+  -- Restored fleet authority may become live only after the authenticated
+  -- companion has finalized one exact post-restore contact reapproval saga.
+  -- The finalize request digest commits the exact reapproved post-state and
+  -- contact version; the intent row binds companion/contact/Discord ownership.
+  SELECT intent.intent_id, receipt.request_digest
+    INTO v_contact_proof_intent_id, v_contact_proof_request_digest
+  FROM fleet_auth.contact_authority_intents AS intent
+  JOIN fleet_auth.contact_authority_receipts AS receipt
+    ON receipt.companion_id = intent.companion_id
+   AND receipt.intent_id = intent.intent_id
+   AND receipt.phase = 'finalize'
+  WHERE intent.companion_id = p_companion_id
+    AND intent.action = 'contact.reapprove'
+    AND intent.contact_id = p_contact_id
+    AND intent.provider_subject_id = p_provider_subject_id
+    AND intent.state = 'released'
+    AND intent.restore_state = 'live'
+    AND receipt.restore_state = 'live'
+    AND receipt.result->>'status' = 'finalized'
+    AND NOT EXISTS (
+      SELECT 1
+      FROM fleet_auth.contact_authority_intents AS newer
+      WHERE newer.companion_id = intent.companion_id
+        AND newer.intent_id <> intent.intent_id
+        AND newer.created_at > intent.updated_at
+        AND (newer.contact_id = intent.contact_id
+          OR newer.provider_subject_id = intent.provider_subject_id)
+    )
+  ORDER BY intent.updated_at DESC, intent.intent_id DESC
+  LIMIT 1
+  FOR UPDATE OF intent;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'finalized exact companion contact ownership proof is required'
+      USING ERRCODE = '42501';
+  END IF;
+
   -- The trusted host binds the exact authority being promoted, including the
   -- role value and the current non-restored floor projection. JSONB equality
   -- is intentionally exact: missing or extra fields reject rather than being
   -- ignored by a permissive partial parser.
+  v_contact_verification_digest := encode(sha256(convert_to(
+    v_binding.verification_provenance::text, 'UTF8'
+  )), 'hex');
+  v_reason_digest := v_ceremony.exact_scope->>'reasonDigest';
+  IF v_reason_digest IS NULL OR v_reason_digest !~ '^[0-9a-f]{64}$' THEN
+    RAISE EXCEPTION 'trusted-host ceremony reason digest is invalid'
+      USING ERRCODE = '42501';
+  END IF;
   v_expected_scope := jsonb_build_object(
-    'schemaVersion', 2,
+    'schemaVersion', 4,
     'principalId', p_principal_id::text,
     'provider', p_provider,
     'providerSubjectId', p_provider_subject_id,
@@ -575,12 +631,117 @@ BEGIN
     'companionVersion', v_companion.version,
     'bindingVersion', v_binding.version,
     'roleGrantVersion', v_grant.version,
+    'contactOwnershipIntentId', v_contact_proof_intent_id::text,
+    'contactOwnershipRequestDigest', v_contact_proof_request_digest,
+    'contactVerificationDigest', v_contact_verification_digest,
     'authorityLineageId', v_lineage,
     'authorityGeneration', v_generation,
-    'restoreCheckpoint', v_restore_checkpoint
+    'restoreCheckpoint', v_restore_checkpoint,
+    'reasonDigest', v_reason_digest
   );
   IF v_ceremony.exact_scope IS DISTINCT FROM v_expected_scope THEN
     RAISE EXCEPTION 'trusted-host ceremony exact scope does not match the requested authority'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF v_ceremony.protocol_version <> 1
+     OR v_ceremony.exact_origin IS NULL
+     OR v_ceremony.rp_id IS NULL
+     OR v_ceremony.confirmed_at IS NULL
+     OR v_ceremony.reapproval_verified_at IS NULL
+     OR v_ceremony.reapproval_actor_principal_id IS NULL
+     OR v_ceremony.reapproval_actor_session_id IS NULL
+     OR v_ceremony.reapproval_oauth_transaction_id IS NULL
+     OR v_ceremony.reapproval_oauth_proof_digest IS NULL
+     OR v_ceremony.reapproval_credential_id_hash IS NULL
+     OR v_ceremony.reapproval_credential_generation IS NULL
+     OR v_ceremony.reapproval_credential_floor_generation IS NULL THEN
+    RAISE EXCEPTION 'trusted-host ceremony lacks authenticated browser confirmation'
+      USING ERRCODE = '42501';
+  END IF;
+  IF v_ceremony.reapproval_credential_id_hash !~ '^[0-9a-f]{64}$'
+     OR v_ceremony.reapproval_credential_generation < 1
+     OR NOT (
+       v_ceremony.reapproval_credential_floor_generation =
+         v_ceremony.credential_floor_generation
+       OR v_ceremony.reapproval_credential_floor_generation =
+         v_ceremony.credential_floor_generation + 1
+     )
+     OR v_ceremony.reapproval_credential_generation >
+       v_ceremony.reapproval_credential_floor_generation THEN
+    RAISE EXCEPTION 'trusted-host WebAuthn confirmation is stale'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- The browser completion is an active same-origin session, a fresh Discord
+  -- lifecycle callback for the exact restored subject, and a UV assertion
+  -- confirmed by the coordinator role. Recheck the durable session and OAuth
+  -- rows under lock so revocation between WebAuthn and activation denies.
+  SELECT * INTO v_actor_session
+  FROM fleet_auth.browser_sessions
+  WHERE record_id = v_ceremony.reapproval_actor_session_id
+  FOR UPDATE;
+  IF NOT FOUND
+     OR v_actor_session.principal_id <> v_ceremony.reapproval_actor_principal_id
+     OR v_actor_session.provider <> 'discord'
+     OR v_actor_session.revoked_at IS NOT NULL
+     OR v_actor_session.replaced_by IS NOT NULL
+     OR v_actor_session.global_auth_epoch <> v_epoch THEN
+    RAISE EXCEPTION 'account reapproval browser session is unavailable'
+      USING ERRCODE = '42501';
+  END IF;
+
+  SELECT * INTO v_actor_principal
+  FROM fleet_auth.human_principals
+  WHERE principal_id = v_actor_session.principal_id
+  FOR UPDATE;
+  IF NOT FOUND
+     OR v_actor_principal.status <> 'active'
+     OR v_actor_principal.restore_state <> 'live'
+     OR v_actor_principal.authn_version <> v_actor_session.authn_version
+     OR v_actor_principal.authz_version <> v_actor_session.authz_version
+     OR v_actor_principal.binding_version <> v_actor_session.binding_version
+     OR v_actor_principal.grant_version <> v_actor_session.grant_version
+     OR v_actor_principal.policy_version <> v_actor_session.policy_version THEN
+    RAISE EXCEPTION 'account reapproval browser principal is unavailable'
+      USING ERRCODE = '42501';
+  END IF;
+
+  SELECT * INTO v_actor_subject
+  FROM fleet_auth.provider_subjects
+  WHERE provider = v_actor_session.provider
+    AND subject_id = v_actor_session.provider_subject_id
+    AND principal_id = v_actor_session.principal_id
+  FOR UPDATE;
+  IF NOT FOUND
+     OR v_actor_subject.state <> 'active'
+     OR v_actor_subject.restore_state <> 'live' THEN
+    RAISE EXCEPTION 'account reapproval browser provider is unavailable'
+      USING ERRCODE = '42501';
+  END IF;
+
+  SELECT * INTO v_oauth
+  FROM fleet_auth.oauth_transactions
+  WHERE transaction_id = v_ceremony.reapproval_oauth_transaction_id
+  FOR UPDATE;
+  v_expected_oauth_proof_digest := encode(sha256(convert_to(
+    'fleet-auth-verified-provider-proof:v1:discord:'
+      || p_provider_subject_id || ':' || v_ceremony.reapproval_oauth_transaction_id::text,
+    'UTF8'
+  )), 'hex');
+  IF NOT FOUND
+     OR v_oauth.status <> 'consumed'
+     OR v_oauth.kind <> 'recovery'
+     OR v_oauth.global_auth_epoch <> v_epoch
+     OR v_oauth.verified_provider <> 'discord'
+     OR v_oauth.verified_provider_subject_id <> p_provider_subject_id
+     OR v_oauth.lifecycle_ceremony_id <> p_ceremony_id
+     OR v_oauth.lifecycle_action <> 'provider.relink'
+     OR v_oauth.lifecycle_proof_role <> 'new'
+     OR v_oauth.initiating_principal_id <> v_actor_session.principal_id
+     OR v_oauth.initiating_session_id <> v_actor_session.record_id
+     OR v_ceremony.reapproval_oauth_proof_digest <> v_expected_oauth_proof_digest THEN
+    RAISE EXCEPTION 'account reapproval Discord proof is unavailable'
       USING ERRCODE = '42501';
   END IF;
 
@@ -598,7 +759,10 @@ BEGIN
   -- consumed after expiring during lock contention. This same instant stamps
   -- every atomic write below.
   v_now := clock_timestamp();
-  IF v_ceremony.expires_at <= v_now THEN
+  IF v_ceremony.expires_at <= v_now
+     OR v_actor_session.idle_expires_at <= v_now
+     OR v_actor_session.absolute_expires_at <= v_now
+     OR v_oauth.expires_at <= v_now THEN
     RAISE EXCEPTION 'trusted-host ceremony has expired' USING ERRCODE = '42501';
   END IF;
 
@@ -659,13 +823,15 @@ BEGIN
   -- One immutable audit event bound to the new epoch.
   INSERT INTO fleet_auth.authorization_audit_events
     (event_id, actor_context, action, resource, decision, reason_code,
-     companion_id, principal_id, authority_generation, global_auth_epoch)
+     companion_id, principal_id, authority_generation, global_auth_epoch,
+     correlation_id, occurred_at, decision_context)
   VALUES (
     p_audit_event_id,
     jsonb_build_object(
       'kind', 'trusted_host',
       'id', 'account_reapproval',
-      'ceremony', p_ceremony_id::text
+      'ceremony', p_ceremony_id::text,
+      'actorPrincipalId', v_actor_session.principal_id::text
     ),
     'authority.reapprove',
     format('principal:%s;binding:%s;role:%s', p_principal_id, p_binding_id, p_role_grant_id),
@@ -674,7 +840,27 @@ BEGIN
     p_companion_id,
     p_principal_id,
     v_generation,
-    v_new_epoch
+    v_new_epoch,
+    p_ceremony_id,
+    v_now,
+    jsonb_build_object(
+      'schemaVersion', 1,
+      'reasonDigest', v_reason_digest,
+      'companionVersion', v_companion.version,
+      'bindingVersion', v_binding.version,
+      'roleGrantVersion', v_grant.version,
+      'contactOwnershipRequestDigest', v_contact_proof_request_digest,
+      'contactVerificationDigest', v_contact_verification_digest,
+      'authorityLineageId', v_lineage,
+      'authorityGeneration', v_generation,
+      'restoreCheckpoint', v_restore_checkpoint,
+      'credentialIdDigest', encode(sha256(convert_to(
+        v_ceremony.reapproval_credential_id_hash, 'UTF8'
+      )), 'hex'),
+      'credentialGeneration', v_ceremony.reapproval_credential_generation,
+      'credentialFloorGeneration', v_ceremony.reapproval_credential_floor_generation,
+      'oauthProofDigest', v_ceremony.reapproval_oauth_proof_digest
+    )
   );
 
   RETURN jsonb_build_object(

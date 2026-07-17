@@ -29,6 +29,7 @@ import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { resolveCoreCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import { resolveKubeSelfManagementController } from './kube-self-management-runtime.js';
 import type { IcpConversationChargePolicyResolver } from '../../primitives/llm/icp-conversation-cost-breaker.js';
+import type { GatewayContactLifecycleAuthorityPort } from './contact-lifecycle-authority.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
@@ -70,6 +71,7 @@ export interface GatewayPrivilegedCore {
      * `preemptionProtected` against the background-work store.
      */
     welfareGrantVerifier?: WelfareGrantVerifier;
+    contactLifecycleAuthority?: GatewayContactLifecycleAuthorityPort;
   }): GatewayServer;
 }
 
@@ -175,12 +177,14 @@ export async function buildGatewayPrivilegedCore(
       icpAutonomyStore,
       icpInitiationPolicyAuthority,
       welfareGrantVerifier,
+      contactLifecycleAuthority,
     }) => new GatewayServer({
       ...(discordAccountDocks ? { discordAccountDocks } : {}),
       ...(companionChannels ? { companionChannels } : {}),
       ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
       ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),
       ...(welfareGrantVerifier ? { welfareGrantVerifier } : {}),
+      ...(contactLifecycleAuthority ? { contactLifecycleAuthority } : {}),
       socketPath: input.bootstrap.socketPath,
       companionId: resolveCoreCompanionIdFromConfig(input.config),
       gatewayRpcEndpoint: input.bootstrap.gatewayRpcEndpoint,

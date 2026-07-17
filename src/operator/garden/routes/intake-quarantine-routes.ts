@@ -31,6 +31,7 @@ import type { AdminSettingsService } from '../services/types.js';
 import type { AdminAuditDecision } from '../types.js';
 import { ADMIN_DYNAMIC_JSON_HEADERS, ADMIN_POLLED_QUEUE_JSON_HEADERS, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 
 const ADMIN_INTAKE_POLICY_API_PATH = '/api/admin/intake/policy';
 const ADMIN_INTAKE_QUARANTINE_API_PATH = '/api/admin/intake/quarantine';
@@ -107,24 +108,25 @@ export function buildAdminIntakeQuarantineRoutes(options: {
 }): AdminApiRoute[] {
   const { quarantineService, settingsService, appendAuditTimelineEntry, withBody } = options;
 
-  const appendQuarantineAudit = (
+  const appendRequestQuarantineAudit = (
     decision: AdminAuditDecision,
     narrative: string,
     details: Array<string | null | undefined> = [],
+    context?: GardenRequestContext,
   ): void => {
-    appendAuditTimelineEntry?.('gateway_policy', decision, narrative, details, 'operator');
+    appendAuditTimelineEntry?.('gateway_policy', decision, narrative, details, 'operator', context);
   };
 
   return [
     {
       method: 'GET',
       match: exactPath(ADMIN_INTAKE_POLICY_API_PATH),
-      handle: (_req, res) => {
+      handle: (_req, res, _params, context) => {
         try {
           sendJson(
             res,
             200,
-            { policy: settingsService.getIntakePolicyOverview() },
+            { policy: settingsService.getIntakePolicyOverview(context) },
             ADMIN_DYNAMIC_JSON_HEADERS,
           );
         } catch (error) {
@@ -137,9 +139,9 @@ export function buildAdminIntakeQuarantineRoutes(options: {
     {
       method: 'GET',
       match: exactPath(ADMIN_INTAKE_QUARANTINE_API_PATH),
-      handle: (_req, res) => {
+      handle: (_req, res, _params, context) => {
         try {
-          sendJson(res, 200, quarantineService.listItems(), ADMIN_POLLED_QUEUE_JSON_HEADERS);
+          sendJson(res, 200, quarantineService.listItems(context), ADMIN_POLLED_QUEUE_JSON_HEADERS);
         } catch (error) {
           sendJson(res, 500, {
             error: toSanitizedMessage(error, 'Failed to load quarantine queue'),
@@ -152,9 +154,9 @@ export function buildAdminIntakeQuarantineRoutes(options: {
       match: prefixedParamPath(ADMIN_INTAKE_QUARANTINE_ITEM_PREFIX, 'id', {
         exclude: (path) => path.endsWith('/confirm') || path.endsWith('/decide'),
       }),
-      handle: (_req, res, { id }) => {
+      handle: (_req, res, { id }, context) => {
         try {
-          const item = quarantineService.getItem(id);
+          const item = quarantineService.getItem(id, context);
           if (!item) {
             sendJson(res, 404, { error: 'Quarantine item not found' });
             return;
@@ -170,7 +172,12 @@ export function buildAdminIntakeQuarantineRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix(ADMIN_INTAKE_QUARANTINE_ITEM_PREFIX, 'id', '/confirm'),
-      handle: (req, res, { id }) => {
+      handle: (req, res, { id }, context) => {
+        const appendQuarantineAudit = (
+          decision: AdminAuditDecision,
+          narrative: string,
+          details: Array<string | null | undefined> = [],
+        ) => appendRequestQuarantineAudit(decision, narrative, details, context);
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -199,7 +206,7 @@ export function buildAdminIntakeQuarantineRoutes(options: {
               ...(input.value.sourceList !== undefined
                 ? { sourceList: input.value.sourceList }
                 : {}),
-            });
+            }, context);
             if (!result.ok) {
               appendQuarantineAudit(
                 'denied',
@@ -240,7 +247,12 @@ export function buildAdminIntakeQuarantineRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix(ADMIN_INTAKE_QUARANTINE_ITEM_PREFIX, 'id', '/decide'),
-      handle: (req, res, { id }) => {
+      handle: (req, res, { id }, context) => {
+        const appendQuarantineAudit = (
+          decision: AdminAuditDecision,
+          narrative: string,
+          details: Array<string | null | undefined> = [],
+        ) => appendRequestQuarantineAudit(decision, narrative, details, context);
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -271,7 +283,7 @@ export function buildAdminIntakeQuarantineRoutes(options: {
                 : {}),
               confirmToken: input.value.confirmToken ?? '',
               reason: input.value.reason ?? '',
-            });
+            }, context);
             if (!result.ok) {
               appendQuarantineAudit(
                 'denied',

@@ -15,8 +15,16 @@ import {
   type GroupMemoryWatermarkStorePort,
 } from '../../../faculties/memory/extraction/group-ranges.js';
 import { AdminGroupMemoryDataService } from './group-memory-diagnostics-service.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 
 const CHANNEL_ID = 'discord:room';
+
+function fleetContext(contactId: string): GardenRequestContext {
+  return {
+    kind: 'fleet_principal',
+    actor: { principalId: `principal-${contactId}`, contactId, role: 'owner' },
+  } as unknown as GardenRequestContext;
+}
 
 function makeSettings(): GroupMemorySettings {
   const defaults = createDefaultGroupMemorySettings();
@@ -144,6 +152,48 @@ function makeWatermarkStore(): GroupMemoryWatermarkStorePort {
 }
 
 describe('AdminGroupMemoryDataService', () => {
+  it('hides non-subject profile existence metadata even from an owner', async () => {
+    const entries = [
+      makeEntry(1, 'alice', 'Alice', 'Alice message'),
+      makeEntry(2, 'bob', 'Bob', 'Bob message'),
+    ];
+    const memoryStore = makeMemoryStore([
+      makeMemory('mem-alice', { contactId: 'contact-alice' }),
+      makeMemory('mem-bob', { contactId: 'contact-bob' }),
+    ], Object.fromEntries(['alice', 'bob'].map(name => [`contact-${name}`, {
+      contactId: `contact-${name}`,
+      summary: `${name} private profile`,
+      sourceMemoryIds: [`mem-${name}`],
+      confidenceScore: 0.9,
+      noveltyScore: 0.8,
+      updatedAt: 2_000,
+    }])));
+    const service = new AdminGroupMemoryDataService({
+      groupMemory: makeSettings(),
+      sessionStore: makeSessionStore(entries),
+      memoryStore,
+      fleetMemoryStore: memoryStore,
+      contactStore: makeContactStore([
+        makeContact('contact-alice', 'Alice'),
+        makeContact('contact-bob', 'Bob'),
+      ]),
+      watermarkStore: makeWatermarkStore(),
+      companionNames: ['Lyra'],
+    });
+
+    const diagnostics = await service.getGroupMemoryChannelDiagnostics(
+      CHANNEL_ID,
+      fleetContext('contact-alice'),
+    );
+    const alice = diagnostics?.coverage.perContact.find(item => item.contactId === 'contact-alice');
+    const bob = diagnostics?.coverage.perContact.find(item => item.contactId === 'contact-bob');
+
+    expect(alice).toMatchObject({ profileStatus: 'profile_ready', profileSourceMemoryCount: 1 });
+    expect(bob?.profileStatus).not.toBe('profile_ready');
+    expect(bob).not.toHaveProperty('profileSourceMemoryCount');
+    expect(bob).not.toHaveProperty('profileUpdatedAt');
+  });
+
   it('exposes resolved group-memory diagnostics without raw transcript or memory text', async () => {
     const eventBus = new EventBus();
     const settings = makeSettings();

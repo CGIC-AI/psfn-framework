@@ -28,6 +28,12 @@ import { isEgressCanaryMethod } from '../../core/cogsec/canary/egress-scan.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
 import { registerReverseGatewayMethods } from './reverse-methods.js';
 import type { MessageHandler, MessageHandlerOptions } from '../../channels/backplane/types.js';
+import {
+  parseContactAuthoritySnapshotRequest,
+  parseVerifiedDiscordContactAuthoritySnapshot,
+  type ContactAuthoritySnapshotRequest,
+  type VerifiedDiscordContactAuthoritySnapshot,
+} from '../../shared/contracts/contact-authority-snapshot.js';
 const log = createComponentLogger('GatewayClient');
 
 /**
@@ -161,7 +167,10 @@ import type {
   IcpPermitRevokeResult,
   IcpPermitInvalidateSelfParams,
   GatewayCorrelationParams,
+  ContactLifecycleExecuteResult,
 } from './protocol.js';
+import type { ContactAuthorityLifecycleRequest } from '../../shared/contracts/contact-authority-lifecycle.js';
+import { parseContactAuthorityLifecycleResult } from '../../shared/contracts/contact-authority-lifecycle.js';
 import type {
   IcpInitiationGateDecision,
   IcpInitiationHandoffPrepareResult,
@@ -431,6 +440,9 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private apiTelemetryIngestHandler: ((params: ApiTelemetryIngestRpcParams) => Promise<ApiTelemetryIngestRpcResult>) | null = null;
   private apiHealthHandler: (() => Promise<ApiHealthRpcResult>) | null = null;
   private turnPerformanceHandler: ((event: TurnPerformanceEvent) => Promise<void>) | null = null;
+  private contactAuthoritySnapshotHandler: ((
+    params: ContactAuthoritySnapshotRequest,
+  ) => Promise<VerifiedDiscordContactAuthoritySnapshot | undefined>) | null = null;
   private voiceStreams = new Map<string, VoiceStreamState>();
   private readonly voiceStreamQueueSize: number;
   private readonly voiceStreamOverflowPolicy: QueueOverflowPolicy;
@@ -855,6 +867,15 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
 
   async discordTyping(channelId: string): Promise<void> {
     await this.rpcInstance.request('discord.typing', { channelId });
+  }
+
+  /** Contact authority executes in the companion domain bound to this connection. */
+  async executeContactLifecycle(
+    request: ContactAuthorityLifecycleRequest,
+  ): Promise<ContactLifecycleExecuteResult> {
+    return parseContactAuthorityLifecycleResult(
+      await this.rpcInstance.request('contact.lifecycle.execute', { request }),
+    );
   }
 
   // ── Inter-companion channel lane (sprint 10, W6) ──
@@ -1572,6 +1593,13 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     this.registerReverseMethods();
   }
 
+  onContactAuthoritySnapshot(handler: (
+    params: ContactAuthoritySnapshotRequest,
+  ) => Promise<VerifiedDiscordContactAuthoritySnapshot | undefined>): void {
+    this.contactAuthoritySnapshotHandler = handler;
+    this.registerReverseMethods();
+  }
+
   notifyApiStreamDelta(requestId: string, text: string): void {
     this.conn.send({
       jsonrpc: '2.0',
@@ -1610,7 +1638,19 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       handleApiTelemetryIngest: (params) => this.handleApiTelemetryIngest(params),
       handleApiHealth: () => this.handleApiHealth(),
       handleTurnPerformance: (params) => this.handleTurnPerformance(params),
+      handleContactAuthoritySnapshot: (params) => this.handleContactAuthoritySnapshot(params),
     });
+  }
+
+  private async handleContactAuthoritySnapshot(
+    params: ContactAuthoritySnapshotRequest,
+  ): Promise<VerifiedDiscordContactAuthoritySnapshot | null> {
+    if (!this.contactAuthoritySnapshotHandler) {
+      throw new Error('No contact.authority.snapshot handler registered');
+    }
+    const request = parseContactAuthoritySnapshotRequest(params);
+    const snapshot = await this.contactAuthoritySnapshotHandler(request);
+    return snapshot ? parseVerifiedDiscordContactAuthoritySnapshot(snapshot) : null;
   }
 
   private async dispatchHandleMessage(

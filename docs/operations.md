@@ -2,7 +2,12 @@
 
 This is the operator-facing runtime guide for the current repo-owned deployment model.
 
-Last updated: 2026-07-12.
+Last updated: 2026-07-16.
+
+Before touching a Helm release, read the canonical
+[Helm Fleet Upgrade Guide](./helm-upgrades.md). It is the short, mandatory
+upgrade brief; this document holds the detailed subsystem and recovery
+procedures it links to.
 
 ## Daily Runtime Commands
 
@@ -92,20 +97,93 @@ credential vault) at load; an inline `token` field is rejected, and an
 unresolved/empty token fails closed. Add each companion's bot token to `.env`
 under the env var name its account references.
 
-### Fleet status page
+### Loopback fleet-status operator listener
 
-The gateway serves a read-only, loopback-only fleet-status surface when
+The gateway can serve a raw, read-only fleet-status operator surface when
 `FLEET_STATUS_PORT` is set (host `FLEET_STATUS_HOST`, default `127.0.0.1`):
 
 - `GET /` and `GET /fleet` — HTML overview of the cluster
 - `GET /fleet/status.json` — JSON
 
-It reports, per companion: up/down state, health, last-seen and connected
-timestamps, recent violation count, and a link to that companion's Garden. It is
-fed by the gateway connection registry plus the fleet roster. Setting
-`FLEET_STATUS_PORT` while `PSFN_MULTI_COMPANION` is off fails closed; a taken
-port fails closed. Fatigue/charge posture and tool-error counts are a documented
-follow-up and are not shown today.
+This is a separate HTTP listener, not the authenticated fleet portal. Its
+`GET /fleet` route exists only on the configured loopback status port; the
+public HTTPS origin's `/fleet` and `/v1/fleet/portal` routes are gateway-session
+authenticated and expose only the bounded authorized projection. The raw
+listener is never mounted on that public origin.
+
+The status payload intentionally contains the complete fleet roster, Garden
+ports, timestamps, state reasons, and violation counts for local operations.
+It has no browser-session authentication of its own. Do not expose it through
+a public ingress, unauthenticated reverse proxy, or remote tunnel. Any remote
+operator access requires a separate independently authenticated boundary and
+private network policy; the authenticated fleet portal is the normal remote
+human surface and must not consume this raw payload.
+
+The status listener is fed by the gateway connection registry plus the fleet
+roster. Setting `FLEET_STATUS_PORT` while `PSFN_MULTI_COMPANION` is off fails
+closed; a taken port, wildcard/public/ambiguous host, or non-loopback resolved
+address fails closed. Configure its host/port only through repository-owned
+runtime wiring. To roll it back, unset `FLEET_STATUS_PORT` (and
+`FLEET_STATUS_HOST` if present) there and restart the gateway; this does not
+disable the authenticated HTTPS portal. Fatigue/charge posture and tool-error
+counts are a documented follow-up and are not shown today.
+
+### Unified fleet human origin
+
+With `PSFN_FLEET_AUTH=1`, the gateway is the only browser origin. Open the
+exact HTTPS `canonicalOrigin` from `fleet-auth.json` at `/fleet`; unauthenticated
+browser requests are sent through the gateway-owned OAuth login. Authorized
+Garden routes are `/companions/<companion-uuid>/garden/...`. The optional static
+Companion UI is `/companion-ui/` and is bound by the server to one registered
+companion. The old direct Garden host/port is not a browser edge in this mode.
+
+For every Garden request, the gateway resolves the live OPL1.5 session/contact/
+grant/policy context for the companion encoded in the path. Only then does it
+mint and durably consume a short-lived, exact request capability and connect to
+that companion's Garden. Unknown companions, authorization denial, stale or
+revoked sessions, and missing upstream registrations all return the same 404
+before an upstream connection, so the edge does not enumerate the fleet.
+Browser cookies, bearer credentials, forwarding metadata, and caller-supplied
+capability assertions are stripped. Garden verifies the signed method, target,
+action, authorization digest, body length, request id, decision id, audience,
+and companion before stripping the assertion again at the agent boundary.
+
+There are two admitted HTTPS-origin shapes:
+
+- Direct TLS: exact canonical `Host`, no forwarding headers.
+- One trusted proxy: set `FLEET_SSO_TRUST_PROXY=true`; require exact canonical
+  `Host` and `X-Forwarded-Host`, `X-Forwarded-Proto: https`, optional exact
+  HTTPS port, and one IP-valued `X-Forwarded-For`. RFC `Forwarded`, lists, mixed
+  direct-TLS metadata, or mismatched callback origins fail closed. Restrict the
+  gateway listener to that proxy independently with NetworkPolicy/firewall.
+
+The local fleet launcher uses loopback Garden upstreams. Any non-loopback
+`FLEET_SSO_GARDEN_HOST` requires the complete `FLEET_SSO_GARDEN_TLS_*` tuple;
+the gateway validates the Garden SPIFFE URI and Garden validates the gateway
+SPIFFE URI. Partial TLS configuration aborts startup. In Helm, set
+`fleetAuth.enabled=true`, enable `ingress.gateway.tls`, and name an existing
+browser-trusted TLS Secret. Fleet auth also requires `networkPolicy.enabled=true`,
+`hostPorts.gatewayApi.enabled=false`, and the exact root
+`ingress.gateway.path=/` with `pathType=Prefix`; any other combination fails
+rendering rather than creating a second or incomplete browser edge. The chart
+renders that gateway as the sole browser Ingress, cert-manager identities for
+gateway-to-Garden mTLS, and NetworkPolicy allowing Garden and the optional
+Companion UI only from gateway pods. It does not inject `FLEET_STATUS_PORT`;
+the raw status listener remains a separately managed loopback-only operator
+surface.
+
+Rollback keeps the same edge invariant. Capture the current values, certificate
+Secrets, and fleet owner backup before changing the flag. A fleet-on rollback
+may target only a revision that still has the unified router and sole-gateway
+Ingress. To disable fleet auth, first render and inspect the feature-off chart:
+Garden remains a ClusterIP/loopback internal service protected by
+`ADMIN_TOKEN`, with no Garden or Companion UI Ingress or hostPort. Never restore
+a historical direct privileged Garden edge. After either change, verify the
+gateway TLS host, `/fleet` login/callback, one authorized Garden, one denied
+cross-companion route, logout while one companion is unavailable, the absence
+of direct Garden/Companion UI ingress, and a revoked session before declaring
+recovery. Run `helm lint deploy/helm/psfn` and `npm run verify:helm-chart` on
+the exact rollback values before applying them.
 
 ### Fleet backups
 
@@ -884,6 +962,13 @@ authorization and redaction contracts.
 ## Backups And Integrity
 
 - Backup cadence and retention live in `backup.json` and `scheduler.json`.
+
+### Generational retention (GFS)
+
+- Retention is a four-tier Grandfather-Father-Son roll applied by `applyTieredRetention` (`src/persistence/backups/retention.ts`): **rotating** (the most-recent 6-hour-cadence snapshots), **daily** (newest backup per UTC calendar day), **weekly** (newest per ISO week), and **monthly** (newest per calendar month). Tiers are additive and protective — a higher tier claims a shared snapshot first, so a snapshot kept as a monthly or weekly generation never consumes a daily or rotating slot. `maxRotatingBackups` / `maxDailyBackups` / `maxWeeklyBackups` / `maxMonthlyBackups` in `backup.json` size each tier; `maxDailyBackups` is optional and, when a pre-existing owner file omits it, defaults from `DEFAULT_BACKUP_DAILY_COUNT` at load (the daily tier is not silently disabled). Setting any tier count to `0` disables that tier.
+- The shipped seed policy (`config/backup.seed.json`) is 4 rotating / 7 daily / 4 weekly / 12 monthly — roughly 27 retained generations. The 12 monthly generations give a full 12-month recovery depth, which is what lets a cognitive-security event that is only detected months later still be rolled back to a pre-compromise snapshot.
+- Sizing is approximately the sum of the tier counts times the per-snapshot size: ~27 generations at the measured ~600 MB/snapshot is ~16 GB of retained backup footprint.
+- Fail-closed invariant: the single newest backup directory always survives pruning regardless of tier counts (even all-zeros), so at least one recent recovery point can never be rotated away. `maxRotatingBackups` also validates to a minimum of 1 in `backup.json`, and env/JSON resolution never lowers it below that.
 - Backups are encrypted at rest. `backup.json` declares `encryption.mode: "required"` and an env key reference; the actual key material stays in `PSFN_BACKUP_ENCRYPTION_KEY` or another configured env secret. Startup fails closed when the key is missing.
 - Under the PostgreSQL runtime backend the scheduled backup stages a `pg_dump` custom-format archive (requires `pg_dump`/`pg_restore` on PATH) plus session JSONL, memory mutation ledger, and character-card files; the scheduler refuses to start without a database backup source.
 - The scheduled backup also stages the full companion-data file tree (journals, generated media/selfies, vault notes, prompt and card history, scratchpad) into `companion-tree/` with a per-file sha256 manifest; the walk is exhaustive except for sessions (captured separately), backup targets, and repair snapshots, so new companion-authored file classes can never silently fall out of scope.

@@ -98,6 +98,22 @@ spec:
         - port: {{ .Values.ports.liteLlm }}
           protocol: TCP
     {{- end }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.garden }}
+          protocol: TCP
+    {{- if .Values.companionUiTest.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "psfn.componentLabels" (dict "root" . "component" "companion-ui-test") | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.companionUiTest }}
+          protocol: TCP
+    {{- end }}
     {{- if and .Values.satelliteHub.enabled .Values.satelliteHub.homeAssistant.enabled }}
     - to:
         - podSelector:
@@ -222,25 +238,12 @@ spec:
     - Egress
   ingress:
     - from:
-        - namespaceSelector:
+        - podSelector:
             matchLabels:
-              {{- toYaml .Values.networkPolicy.ingressController.namespaceSelector | nindent 14 }}
-          podSelector:
-            matchLabels:
-              {{- toYaml .Values.networkPolicy.ingressController.podSelector | nindent 14 }}
+              {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 14 }}
       ports:
         - port: {{ .Values.ports.garden }}
           protocol: TCP
-    {{- if and .Values.hostPorts.garden.enabled .Values.hostPorts.garden.sourceCIDRs }}
-    - from:
-        {{- range .Values.hostPorts.garden.sourceCIDRs }}
-        - ipBlock:
-            cidr: {{ . | quote }}
-        {{- end }}
-      ports:
-        - port: {{ .Values.ports.garden }}
-          protocol: TCP
-    {{- end }}
   egress:
     - to:
         - namespaceSelector:
@@ -543,17 +546,14 @@ spec:
     - Egress
   ingress:
     - from:
-        - namespaceSelector:
+        - podSelector:
             matchLabels:
-              {{- toYaml .Values.networkPolicy.ingressController.namespaceSelector | nindent 14 }}
-          podSelector:
-            matchLabels:
-              {{- toYaml .Values.networkPolicy.ingressController.podSelector | nindent 14 }}
+              {{- include "psfn.componentLabels" (dict "root" . "component" "gateway") | nindent 14 }}
       ports:
         - port: {{ .Values.ports.companionUiTest }}
           protocol: TCP
-  # The static web surface serves files only and makes no outbound calls; the
-  # browser talks to the hub directly. The empty list denies all egress.
+  # The static web surface serves files only. Browser ingress is mediated by
+  # the authenticated unified-origin gateway and the empty list denies egress.
   egress: []
 {{- end }}
 {{- end }}

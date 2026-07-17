@@ -12,12 +12,14 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
-import {
-  PSFN_SATELLITE_MOBILE_CHAT_APP_NAME,
-} from '../lib/api/auth.js';
-import { SatelliteHubClient } from '../lib/api/client.js';
+import { PSFN_SATELLITE_MOBILE_CHAT_APP_NAME } from '../lib/api/auth.js';
+import { CompanionGatewayClient } from '../lib/api/gateway-client.js';
 import { deriveApprovalPanelState, submitApprovalDecision } from '../lib/approvals.js';
 import { deriveArtifactShelfState, readArtifactPreview } from '../lib/artifacts.js';
+import {
+  FleetSessionClient,
+  type FleetSessionStatus,
+} from '../lib/fleet-session.js';
 import {
   getServiceWorkerUpdateReady,
   subscribeToServiceWorkerUpdates,
@@ -33,26 +35,33 @@ import { ActivityDrawer, traceMatchesFilter } from './activity-drawer.js';
 import { CompanionSprite, deriveSpriteState } from './companion-sprite.js';
 import { Composer } from './composer.js';
 import { useComposerController } from './composer-controller.js';
-import { readCompanionUiRuntimeConfig } from './config.js';
+import {
+  readCompanionUiRuntimeConfig,
+  resolveCompanionUiWebSocketUrl,
+  type CompanionUiRuntimeConfig,
+} from './config.js';
 import { AttachmentTray, ToastLayer } from './context-layers.js';
 import { OverlayFrame } from './overlay-drawer.js';
-import { SettingsDrawer } from './settings-drawer.js';
+import {
+  SettingsDrawer,
+  type CompanionUiAccessPresentation,
+} from './settings-drawer.js';
 import { ThreadView } from './thread-view.js';
 import type { ActivityFilter, OverlayDrawer } from './types.js';
 import { WishlistDrawer } from './wishlist-drawer.js';
 
+type AccessState = FleetSessionStatus
+  | Readonly<{ state: 'loading' | 'offline' }>
+  | Readonly<{ state: 'guest'; guestMode: 'explicit'; websocketPath: string }>;
+
 export function App() {
+  const [runtime, setRuntime] = useState<CompanionUiRuntimeConfig | null>(null);
+  const [access, setAccess] = useState<AccessState>({ state: 'loading' });
   const [configError, setConfigError] = useState<string | null>(null);
-  const [hubUrl, setHubUrl] = useState('');
-  const [sessionId, setSessionId] = useState('psfn-satellite-mobile-chat-app');
-  const [channelId, setChannelId] = useState('');
-  const [deviceCredential, setDeviceCredential] = useState('');
   const [streamState, setStreamState] = useState<HubStreamState>(() => createInitialHubStreamState());
   const [connecting, setConnecting] = useState(false);
   const [overlay, setOverlay] = useState<OverlayDrawer>(null);
   const [activityFilter, setActivityFilter] = useState<ActivityFilter>('all');
-  const [autoConnect, setAutoConnect] = useState(false);
-  const [autoReconnect, setAutoReconnect] = useState('exponential');
   const [spriteEnabled, setSpriteEnabled] = useState(true);
   const [spriteAnimations, setSpriteAnimations] = useState(true);
   const [spritePetted, setSpritePetted] = useState(false);
@@ -64,9 +73,14 @@ export function App() {
     getServiceWorkerUpdateReady,
     () => false,
   );
+  const fleetSessionRef = useRef<FleetSessionClient | null>(null);
   const storeRef = useRef<HubStreamStore | null>(null);
   const headpatCoalescerRef = useRef<HeadpatCoalescer | null>(null);
   const headpatReactionTimerRef = useRef<number | null>(null);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const reconnectAttemptRef = useRef(0);
+  const authorityEpochRef = useRef(0);
+  const manualDisconnectRef = useRef(false);
 
   useEffect(() => {
     const coalescer = new HeadpatCoalescer({
@@ -83,49 +97,71 @@ export function App() {
     });
     headpatCoalescerRef.current = coalescer;
     try {
-      const config = readCompanionUiRuntimeConfig();
-      setHubUrl(config.hubWsUrl);
+      setRuntime(readCompanionUiRuntimeConfig());
+      fleetSessionRef.current = new FleetSessionClient();
+      void refreshAuthority(true);
     } catch (error) {
-      setConfigError(error instanceof Error ? error.message : 'Missing Satellite Hub websocket URL');
+      setConfigError(error instanceof Error ? error.message : 'Companion UI configuration is invalid');
+      setAccess({ state: 'offline' });
     }
-
+    const onOffline = () => {
+      clearHumanScopedState();
+      setAccess({ state: 'offline' });
+      setConfigError('Offline shell: authentication and device authority are unavailable');
+    };
+    const onOnline = () => { void refreshAuthority(true); };
+    window.addEventListener('offline', onOffline);
+    window.addEventListener('online', onOnline);
     return () => {
+      window.removeEventListener('offline', onOffline);
+      window.removeEventListener('online', onOnline);
       coalescer.destroy();
       headpatCoalescerRef.current = null;
-      if (headpatReactionTimerRef.current !== null) {
-        window.clearTimeout(headpatReactionTimerRef.current);
-      }
-      storeRef.current?.destroy();
+      if (headpatReactionTimerRef.current !== null) window.clearTimeout(headpatReactionTimerRef.current);
+      if (reconnectTimerRef.current !== null) window.clearTimeout(reconnectTimerRef.current);
+      authorityEpochRef.current += 1;
+      const store = storeRef.current;
       storeRef.current = null;
+      store?.destroy();
+      store?.disconnect();
     };
   }, []);
 
   useEffect(() => {
     if (overlay === null) return undefined;
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        setOverlay(null);
-      }
+      if (event.key === 'Escape') setOverlay(null);
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [overlay]);
 
   useEffect(() => {
-    if (!autoConnect || !hubUrl || storeRef.current || connecting) return;
-    void connect();
-  }, [autoConnect, connecting, hubUrl]);
+    if (manualDisconnectRef.current || !navigator.onLine
+      || (access.state !== 'signed_in' && access.state !== 'guest')
+      || (streamState.connection !== 'disconnected' && streamState.connection !== 'failed')
+      || reconnectTimerRef.current !== null) return undefined;
+    const delay = Math.min(30_000, 500 * (2 ** reconnectAttemptRef.current));
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null;
+      reconnectAttemptRef.current += 1;
+      void refreshAuthority(true);
+    }, delay);
+    return () => {
+      if (reconnectTimerRef.current !== null) {
+        window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    };
+  }, [access.state, streamState.connection]);
 
-  const identityLabel = useMemo(() => {
-    const companion = streamState.session?.identity?.companion?.name;
-    const user = streamState.session?.identity?.user?.name;
-    if (companion && user) return `${companion} / ${user}`;
-    if (companion) return companion;
-    return PSFN_SATELLITE_MOBILE_CHAT_APP_NAME;
-  }, [streamState.session?.identity?.companion?.name, streamState.session?.identity?.user?.name]);
-
+  const identityLabel = useMemo(
+    () => streamState.session?.identity?.companion?.name ?? PSFN_SATELLITE_MOBILE_CHAT_APP_NAME,
+    [streamState.session?.identity?.companion?.name],
+  );
+  const accessPresentation = useMemo(() => presentAccess(access), [access]);
   const hasPendingExpiry = useMemo(
-    () => streamState.approvals.some((entry) => entry.status === 'pending' && Boolean(entry.expiresAt)),
+    () => streamState.approvals.some(entry => entry.status === 'pending' && Boolean(entry.expiresAt)),
     [streamState.approvals],
   );
 
@@ -137,12 +173,13 @@ export function App() {
 
   const traces = useMemo(() => deriveOperationalTraces(streamState), [streamState]);
   const filteredTraces = useMemo(
-    () => traces.filter((trace) => traceMatchesFilter(trace, activityFilter)),
+    () => traces.filter(trace => traceMatchesFilter(trace, activityFilter)),
     [activityFilter, traces],
   );
   const approvals = useMemo(() => deriveApprovalPanelState(streamState, now), [streamState, now]);
   const artifacts = useMemo(() => deriveArtifactShelfState(streamState), [streamState]);
-  const canSend = streamState.connection === 'ready' || streamState.connection === 'connected';
+  const canSend = (access.state === 'signed_in' || access.state === 'guest')
+    && streamState.connection === 'ready';
   const connectionTone = getConnectionTone(streamState.connection, connecting);
   const spriteState = deriveSpriteState(streamState, traces, composer.micActive, connecting);
   const latestTrace = traces.at(-1);
@@ -151,24 +188,71 @@ export function App() {
   const voiceStopActive = composer.micMode === 'voice' && companionTalking;
   const generationStopActive = Boolean(streamState.liveAssistant);
 
-  async function connect() {
-    if (!hubUrl || connecting) return;
+  async function refreshAuthority(connectWhenAllowed: boolean) {
+    const authorityEpoch = authorityEpochRef.current + 1;
+    authorityEpochRef.current = authorityEpoch;
+    const fleetSession = fleetSessionRef.current;
+    if (!fleetSession || !navigator.onLine) {
+      clearHumanScopedState();
+      setAccess({ state: 'offline' });
+      return;
+    }
+    try {
+      const status = await fleetSession.readStatus();
+      if (authorityEpoch !== authorityEpochRef.current) return;
+      setAccess(status);
+      setConfigError(null);
+      if (status.state === 'signed_out') {
+        clearHumanScopedState();
+      } else if (connectWhenAllowed) {
+        await connect(status.websocketPath, authorityEpoch);
+      }
+    } catch (error) {
+      if (authorityEpoch !== authorityEpochRef.current) return;
+      clearHumanScopedState();
+      setAccess({ state: 'offline' });
+      setConfigError(error instanceof Error ? error.message : 'Fleet session status failed');
+    }
+  }
+
+  async function connect(
+    path = websocketPath(access),
+    expectedAuthorityEpoch?: number,
+  ) {
+    if (!path) return;
+    const authorityEpoch = expectedAuthorityEpoch ?? authorityEpochRef.current + 1;
+    if (expectedAuthorityEpoch === undefined) authorityEpochRef.current = authorityEpoch;
+    if (authorityEpoch !== authorityEpochRef.current) return;
+    manualDisconnectRef.current = false;
     setConnecting(true);
-    storeRef.current?.destroy();
-    const client = new SatelliteHubClient({
-      url: hubUrl,
-      sessionId,
-      channelId: channelId.trim() || undefined,
-      credential: deviceCredential.trim() || undefined,
+    const oldStore = storeRef.current;
+    storeRef.current = null;
+    oldStore?.destroy();
+    oldStore?.disconnect();
+    const client = new CompanionGatewayClient({
+      url: resolveCompanionUiWebSocketUrl(path),
     });
     const store = new HubStreamStore(client);
     storeRef.current = store;
-    store.subscribe(setStreamState);
+    store.subscribe((state) => {
+      if (storeRef.current === store) setStreamState(state);
+    });
     try {
       await store.connect();
+      if (authorityEpoch !== authorityEpochRef.current) {
+        store.destroy();
+        store.disconnect();
+        return;
+      }
+      reconnectAttemptRef.current = 0;
       setConfigError(null);
     } catch (error) {
-      setStreamState((current) => ({
+      if (authorityEpoch !== authorityEpochRef.current) {
+        store.destroy();
+        store.disconnect();
+        return;
+      }
+      setStreamState(current => ({
         ...current,
         connection: 'failed',
         phase: 'failed',
@@ -180,53 +264,101 @@ export function App() {
         },
       }));
     } finally {
-      setConnecting(false);
+      if (authorityEpoch === authorityEpochRef.current) setConnecting(false);
     }
   }
 
+  function clearHumanScopedState() {
+    authorityEpochRef.current += 1;
+    const store = storeRef.current;
+    storeRef.current = null;
+    store?.destroy();
+    store?.disconnect();
+    setConnecting(false);
+    setStreamState(createInitialHubStreamState());
+    composer.clearHumanScopedState();
+    setTouchError(null);
+  }
+
   function disconnect() {
+    manualDisconnectRef.current = true;
     storeRef.current?.disconnect();
   }
 
+  function login() {
+    if (runtime) window.location.assign(runtime.loginPath);
+  }
+
+  async function logout() {
+    const wasGuest = access.state === 'guest';
+    const guestPath = (access.state === 'guest'
+      || (access.state === 'signed_in' && access.guestMode === 'explicit'))
+      ? access.websocketPath
+      : undefined;
+    clearHumanScopedState();
+    setAccess(guestPath
+      ? { schemaVersion: 1, state: 'signed_out', guestMode: 'explicit', websocketPath: guestPath }
+      : { schemaVersion: 1, state: 'signed_out', guestMode: 'disabled' });
+    if (wasGuest) return;
+    try {
+      await fleetSessionRef.current?.logout();
+      await refreshAuthority(false);
+    } catch (error) {
+      setConfigError(error instanceof Error ? error.message : 'Logout failed');
+    }
+  }
+
+  async function switchUser() {
+    clearHumanScopedState();
+    try {
+      await fleetSessionRef.current?.logout();
+      login();
+    } catch (error) {
+      setConfigError(error instanceof Error ? error.message : 'User switch failed');
+    }
+  }
+
+  function continueAsGuest() {
+    if (access.state !== 'signed_out' || access.guestMode !== 'explicit' || !access.websocketPath) return;
+    clearHumanScopedState();
+    const guest: AccessState = {
+      state: 'guest', guestMode: 'explicit', websocketPath: access.websocketPath,
+    };
+    setAccess(guest);
+    void connect(guest.websocketPath);
+  }
+
   function sendUserText(text: string) {
-    storeRef.current?.sendUserText(text, { interrupt: true });
+    if (canSend) storeRef.current?.sendUserText(text, { interrupt: true });
   }
 
   function giveHeadpat() {
     setSpritePetted(true);
-    if (headpatReactionTimerRef.current !== null) {
-      window.clearTimeout(headpatReactionTimerRef.current);
-    }
+    if (headpatReactionTimerRef.current !== null) window.clearTimeout(headpatReactionTimerRef.current);
     headpatReactionTimerRef.current = window.setTimeout(() => {
       setSpritePetted(false);
       headpatReactionTimerRef.current = null;
     }, 900);
-    if (canSend) {
-      headpatCoalescerRef.current?.tap();
-    }
-  }
-
-  function stopGeneration() {
-    storeRef.current?.interrupt();
+    if (canSend) headpatCoalescerRef.current?.tap();
   }
 
   function decideApproval(id: string, decision: 'approve' | 'deny') {
     const store = storeRef.current;
-    if (!store) return;
+    if (!store || access.state !== 'signed_in') return;
     try {
       submitApprovalDecision(store, streamState, id, decision);
     } catch {
-      // Fail closed: transport/capability errors surface via the hub error path.
+      // The transport error event owns user-visible denial state.
     }
   }
 
   function previewArtifact(artifactId: string) {
     const store = storeRef.current;
-    if (!store) return;
+    if (!store || access.state !== 'signed_in') return;
     try {
       readArtifactPreview(store, streamState, artifactId);
     } catch {
-      // Fail closed: non-previewable / unsupported artifacts never fetch.
+      // The transport error event owns user-visible denial state.
     }
   }
 
@@ -234,16 +366,9 @@ export function App() {
     <main className="app-shell">
       <div className="ornament ornament-left" aria-hidden />
       <div className="ornament ornament-right" aria-hidden />
-
-      <button
-        className="floating-button activity-button"
-        type="button"
-        onClick={() => setOverlay('activity')}
-        aria-label="Open activity and events"
-      >
+      <button className="floating-button activity-button" type="button" onClick={() => setOverlay('activity')} aria-label="Open activity and events">
         <Menu aria-hidden />
       </button>
-
       <button
         className="floating-button wishlist-button"
         type="button"
@@ -257,28 +382,20 @@ export function App() {
         {connectionTone === 'bad' ? <WifiOff aria-hidden /> : <Wifi aria-hidden />}
         <span>{connecting ? 'Connecting' : streamState.connection}</span>
       </div>
-
-      <button
-        className="floating-button settings-button"
-        type="button"
-        onClick={() => setOverlay('settings')}
-        aria-label="Open settings"
-      >
+      <button className="floating-button settings-button" type="button" onClick={() => setOverlay('settings')} aria-label="Open settings">
         <Settings aria-hidden />
       </button>
 
+      <section className="authority-summary" aria-label="Current human and device authority">
+        <span aria-label="Human authority">Human: {accessPresentation.humanLabel}</span>
+        <span aria-label="Device authority">Device: {streamState.session?.deviceName ?? 'not attached'}</span>
+        <span aria-label="Place authority">Place: {streamState.session?.place?.name ?? 'not available'}</span>
+      </section>
+
       <ThreadView streamState={streamState} />
-
       {spriteEnabled && (
-        <CompanionSprite
-          state={spriteState}
-          animated={spriteAnimations}
-          label={identityLabel}
-          onHeadpat={giveHeadpat}
-          petted={spritePetted}
-        />
+        <CompanionSprite state={spriteState} animated={spriteAnimations} label={identityLabel} onHeadpat={giveHeadpat} petted={spritePetted} />
       )}
-
       <ToastLayer
         approvals={approvals}
         artifacts={artifacts}
@@ -289,50 +406,46 @@ export function App() {
         updateReady={updateReady}
         voiceNotice={composer.voiceNotice}
       />
-
       {composer.pendingAttachments.length > 0 && (
         <AttachmentTray attachments={composer.pendingAttachments} onRemove={composer.removeAttachment} />
       )}
-
       <Composer
         canSend={canSend}
         controller={composer}
         generationStopActive={generationStopActive}
         onSendText={sendUserText}
-        onStopGeneration={stopGeneration}
+        onStopGeneration={() => storeRef.current?.interrupt()}
         voiceStopActive={voiceStopActive}
       />
-
       {overlay && (
-        <OverlayFrame
-          onClose={() => setOverlay(null)}
-          side={overlay === 'activity' ? 'left' : 'right'}
-        >
+        <OverlayFrame onClose={() => setOverlay(null)} side={overlay === 'activity' ? 'left' : 'right'}>
           {overlay === 'settings' ? (
             <SettingsDrawer
-              autoConnect={autoConnect}
-              autoReconnect={autoReconnect}
-              channelId={channelId}
+              access={accessPresentation}
               connecting={connecting}
-              deviceCredential={deviceCredential}
-              hubUrl={hubUrl}
               micMode={composer.micMode}
-              sessionId={sessionId}
               spriteAnimations={spriteAnimations}
               spriteEnabled={spriteEnabled}
               streamState={streamState}
-              onAutoConnectChange={setAutoConnect}
-              onAutoReconnectChange={setAutoReconnect}
-              onChannelIdChange={setChannelId}
               onClose={() => setOverlay(null)}
-              onConnect={() => void connect()}
+              onConnect={() => void refreshAuthority(true)}
               onDisconnect={disconnect}
-              onDeviceCredentialChange={setDeviceCredential}
-              onHubUrlChange={setHubUrl}
+              onGuest={() => {
+                setOverlay(null);
+                continueAsGuest();
+              }}
+              onLogin={login}
+              onLogout={() => {
+                setOverlay(null);
+                void logout();
+              }}
               onMicModeChange={composer.selectMicMode}
-              onSessionIdChange={setSessionId}
               onSpriteAnimationsChange={setSpriteAnimations}
               onSpriteEnabledChange={setSpriteEnabled}
+              onSwitchUser={() => {
+                setOverlay(null);
+                void switchUser();
+              }}
             />
           ) : overlay === 'wishlist' ? (
             <WishlistDrawer
@@ -344,19 +457,34 @@ export function App() {
               }}
             />
           ) : (
-            <ActivityDrawer
-              filter={activityFilter}
-              onClose={() => setOverlay(null)}
-              onFilterChange={setActivityFilter}
-              traces={filteredTraces}
-              totalCount={traces.length}
-            />
+            <ActivityDrawer filter={activityFilter} onClose={() => setOverlay(null)} onFilterChange={setActivityFilter} traces={filteredTraces} totalCount={traces.length} />
           )}
         </OverlayFrame>
       )}
-
     </main>
   );
+}
+
+function websocketPath(access: AccessState): string | undefined {
+  return access.state === 'signed_in' || access.state === 'guest'
+    || (access.state === 'signed_out' && access.guestMode === 'explicit')
+    ? access.websocketPath
+    : undefined;
+}
+
+function presentAccess(access: AccessState): CompanionUiAccessPresentation {
+  switch (access.state) {
+    case 'loading':
+      return { state: 'loading', humanLabel: 'Checking session', humanDetail: 'No authority yet', guestAvailable: false };
+    case 'offline':
+      return { state: 'offline', humanLabel: 'Unavailable offline', humanDetail: 'Offline shell is not authenticated', guestAvailable: false };
+    case 'signed_out':
+      return { state: 'signed_out', humanLabel: 'Signed out', humanDetail: 'No human attached', guestAvailable: access.guestMode === 'explicit' };
+    case 'signed_in':
+      return { state: 'signed_in', humanLabel: access.human.label, humanDetail: `Discord · ${access.human.role}`, guestAvailable: false };
+    case 'guest':
+      return { state: 'guest', humanLabel: 'Guest', humanDetail: 'No fleet human attached', guestAvailable: true };
+  }
 }
 
 function getConnectionTone(connection: HubStreamState['connection'], connecting: boolean): 'good' | 'wait' | 'bad' {

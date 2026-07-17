@@ -121,6 +121,49 @@ spec:
     - {{ include "psfn.spiffeGarden" . | quote }}
   issuerRef:
     {{- include "psfn.certIssuerRef" . | nindent 4 }}
+{{- if .Values.fleetAuth.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" . }}-garden-sso-server
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "psfn.gardenSsoServerCertSecretName" . }}
+  duration: {{ .Values.certificates.duration | quote }}
+  renewBefore: {{ .Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+    - {{ include "psfn.gardenServiceName" . | quote }}
+    - {{ printf "%s.%s" (include "psfn.gardenServiceName" .) .Release.Namespace | quote }}
+    - {{ include "psfn.gardenSsoServerName" . | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" (include "psfn.gardenServiceName" .) .Release.Namespace | quote }}
+  uris:
+    - {{ include "psfn.spiffeGarden" . | quote }}
+  issuerRef:
+    {{- include "psfn.certIssuerRef" . | nindent 4 }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" . }}-gateway-sso-client
+  labels:
+    {{- include "psfn.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "psfn.gatewaySsoClientCertSecretName" . }}
+  duration: {{ .Values.certificates.duration | quote }}
+  renewBefore: {{ .Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  uris:
+    - {{ include "psfn.spiffeGateway" . | quote }}
+  issuerRef:
+    {{- include "psfn.certIssuerRef" . | nindent 4 }}
+{{- end }}
 {{- if .Values.satelliteHub.enabled }}
 ---
 # Satellite-hub client identity for the mTLS satellite auth path (Sprint-10

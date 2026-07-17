@@ -19,6 +19,17 @@ export interface ProviderRevocationAuthorityPort {
 }
 
 export interface AccountAuthorityFencePort extends ProviderRevocationAuthorityPort {
+  recoverProvider(input: {
+    principalId: string;
+    currentProviderSubjectId: string;
+    expectedNewProviderSubjectId: string;
+    credentialIdHash: string;
+    credentialGeneration: number;
+    credentialFloorGeneration: number;
+    expectedAuthorityGeneration: number;
+    reasonDigest: string;
+    at: Date;
+  }): Promise<{ authorityGeneration: number }>;
   fenceMany(input: {
     resources: ReadonlyArray<{
       kind: 'provider_subject' | 'contact_binding' | 'role_grant' | 'principal' | 'companion'

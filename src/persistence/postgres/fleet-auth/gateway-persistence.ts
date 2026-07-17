@@ -1,7 +1,11 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import type { CredentialVaultPort } from '../../../boundary/custody/credential-vault.js';
-import { GatewayFleetAuthBroker } from '../../../boundary/gateway/fleet-auth-broker.js';
+import {
+  FleetAuthBrokerError,
+  GatewayFleetAuthBroker,
+  type VerifiedFirstOwnerAssurance,
+} from '../../../boundary/gateway/fleet-auth-broker.js';
 import type { FleetAuthConfig } from '../../../system/config/fleet-auth-config.js';
 import { resolveGatewayFleetAuthSecrets } from '../../../system/config/fleet-auth-config.js';
 import { createPostgresPool } from '../../postgres.js';
@@ -51,6 +55,37 @@ import { createPostgresFleetAuthorizationContextResolver } from './authorization
 import { reconcilePendingCompanionReadd } from './companion-readd-reconciliation.js';
 import type { GatewayContactLifecycleAuthorityPort } from '../../../boundary/gateway/contact-lifecycle-authority.js';
 import { PostgresContactLifecycleAuthorityStore } from './contact-lifecycle-authority-store.js';
+import type { HubDeviceHumanAttachmentPort } from '../../../boundary/fleet-auth/hub-device-ingress.js';
+import { PostgresHubDeviceHumanAttachmentStore } from './hub-device-human-attachment-store.js';
+import {
+  createGatewayRequestCapabilitySigner,
+  createRequestCapabilityVerifier,
+  type GatewayRequestCapabilitySigner,
+  type RequestCapabilityVerifier,
+} from '../../../boundary/fleet-auth/request-capability.js';
+import type { RequestCapabilityReplayPort } from '../../../boundary/fleet-auth/request-capability-replay.js';
+import { PostgresRequestCapabilityReplayStore } from './request-capability-replay.js';
+import { GatewayFleetAuthChildAssertionBroker } from '../../../boundary/gateway/fleet-auth-child-assertions.js';
+import { PostgresChildAssertionAuthority } from './child-assertion-authority.js';
+import type { PrimaryEmbodimentAuthorityPort } from '../../../boundary/fleet-auth/primary-embodiment.js';
+import { PostgresPrimaryEmbodimentStore } from './primary-embodiment-store.js';
+import { FleetWebAuthnUvBoundary } from '../../../boundary/fleet-auth/webauthn-uv.js';
+import { FleetJitStepUpCoordinator } from '../../../boundary/fleet-auth/jit-step-up.js';
+import { PostgresFleetJitStepUpStore } from './jit-step-up-store.js';
+import type { FleetPortalAuthorizationBatchPort } from '../../../boundary/gateway/fleet-portal-authorization.js';
+import { createPostgresFleetPortalAuthorization } from './portal-authorization-store.js';
+import { TrustedHostPasskeyCeremonyService } from '../../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
+import { PostgresTrustedHostPasskeyCeremonyStore } from './trusted-host-passkey-ceremony-store.js';
+import { GatewayTrustedHostGardenRecoveryService } from '../../../boundary/gateway/trusted-host-garden-recovery.js';
+import {
+  GatewayFleetAuthLifecycleCeremonyService,
+  type FleetContactAuthorityPort,
+  type FleetLifecycleCeremonyDenialAuditPort,
+} from '../../../boundary/fleet-auth/lifecycle-ceremony.js';
+import { TrustedHostAccountReapprovalService } from '../../../boundary/fleet-auth/trusted-host-account-reapproval.js';
+import { PostgresAccountReapprovalCeremonyStore } from './account-reapproval-ceremony-store.js';
+import { TrustedHostProviderRecoveryService } from '../../../boundary/fleet-auth/trusted-host-provider-recovery.js';
+import { PostgresTrustedHostProviderRecoveryStore } from './trusted-host-provider-recovery-store.js';
 
 /**
  * Deep gateway-owned fleet-auth persistence. The unrestricted runtime Pool is
@@ -61,8 +96,22 @@ import { PostgresContactLifecycleAuthorityStore } from './contact-lifecycle-auth
 export interface GatewayFleetAuthPersistence {
   authorityFloors: FleetAuthAuthorityFloorStore;
   broker: GatewayFleetAuthBroker;
+  portalAuthorization: FleetPortalAuthorizationBatchPort;
+  requestCapabilities: GatewayRequestCapabilitySigner;
+  requestCapabilityVerifier: RequestCapabilityVerifier;
+  requestCapabilityReplay: RequestCapabilityReplayPort;
+  childAssertions: GatewayFleetAuthChildAssertionBroker;
+  primaryEmbodiments: PrimaryEmbodimentAuthorityPort;
+  jitStepUp: FleetJitStepUpCoordinator;
+  passkeyCeremonies: TrustedHostPasskeyCeremonyService;
+  trustedHostRecovery: GatewayTrustedHostGardenRecoveryService;
+  accountReapprovalCeremonies: TrustedHostAccountReapprovalService;
+  providerRecovery: TrustedHostProviderRecoveryService;
   authorityLifecycle: GatewayFleetAuthAuthorityLifecycleStore;
   contactLifecycleAuthority: GatewayContactLifecycleAuthorityPort;
+  createLifecycleCeremonies(
+    contactAuthority: FleetContactAuthorityPort,
+  ): GatewayFleetAuthLifecycleCeremonyService;
   discordEvidence?: DiscordEvidenceRuntime;
   discordEvidenceLifecycle?: DiscordEvidenceLifecycleCoordinator;
   reapproveAccountAuthority(
@@ -75,7 +124,100 @@ export interface GatewayFleetAuthPersistence {
     token: string,
     expected: HubDeviceAssertionExpectedBinding,
   ): Promise<HubDevicePrincipal>;
+  attachHubDeviceHuman(
+    input: Parameters<HubDeviceHumanAttachmentPort['attach']>[0],
+  ): ReturnType<HubDeviceHumanAttachmentPort['attach']>;
+  fenceHubDeviceAttachment(
+    input: Parameters<HubDeviceHumanAttachmentPort['fenceDevice']>[0],
+  ): ReturnType<HubDeviceHumanAttachmentPort['fenceDevice']>;
   close(): Promise<void>;
+}
+
+async function auditFirstOwnerContactAuthorityDenial(
+  pool: Pool,
+  input: VerifiedFirstOwnerAssurance,
+  reasonCode: 'contact_authority_unavailable' | 'contact_authority_mismatch',
+): Promise<void> {
+  const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
+  const eventId = randomUUID();
+  const result = await pool.query(`
+    INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+      (event_id, actor_context, action, resource, decision, reason_code,
+       companion_id, principal_id, authority_generation, global_auth_epoch,
+       occurred_at, decision_id, ceremony_id, decision_context)
+    SELECT $1, $2::jsonb, 'authority.first_owner', 'first-owner-contact-authority',
+           'deny', $3, $4, $5, authority_generation, global_auth_epoch,
+           clock_timestamp(), $1, $6, $7::jsonb
+    FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+    WHERE singleton = TRUE
+  `, [
+    eventId,
+    JSON.stringify({ kind: 'trusted_host', id: 'first_owner' }),
+    reasonCode,
+    input.companionId,
+    input.principalId,
+    input.ceremonyId,
+    JSON.stringify({
+      schemaVersion: 1,
+      ceremonyDigest: sha256(input.ceremonyId),
+      principalDigest: sha256(input.principalId),
+      providerSubjectDigest: sha256(input.providerSubjectId),
+      companionDigest: sha256(input.companionId),
+      contactDigest: sha256(input.contactId),
+      decision: 'deny',
+      reasonCode,
+    }),
+  ]);
+  if (result.rowCount !== 1) {
+    throw new FleetAuthBrokerError(
+      'first_owner_denial_audit_failed',
+      503,
+      'First-owner contact-authority denial audit could not be persisted',
+    );
+  }
+}
+
+async function auditLifecycleCeremonyDenial(
+  pool: Pool,
+  input: Parameters<FleetLifecycleCeremonyDenialAuditPort['record']>[0],
+): Promise<void> {
+  const sha256 = (value: string): string => createHash('sha256').update(value).digest('hex');
+  const eventId = randomUUID();
+  const request = input.request;
+  const result = await pool.query(`
+    INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
+      (event_id, actor_context, action, resource, decision, reason_code,
+       companion_id, principal_id, authority_generation, global_auth_epoch,
+       occurred_at, decision_id, ceremony_id, reason_digest, decision_context)
+    SELECT $1, $2::jsonb, $3, 'lifecycle-ceremony', 'deny', $4,
+           $5, NULL, authority_generation, global_auth_epoch,
+           clock_timestamp(), $1, $6, $7, $8::jsonb
+    FROM ${FLEET_AUTH_SCHEMA_NAME}.authority_state
+    WHERE singleton = TRUE
+  `, [
+    eventId,
+    JSON.stringify({ kind: 'fleet_gateway', id: 'lifecycle_ceremony' }),
+    request.action,
+    input.reasonCode,
+    request.companionId,
+    request.ceremonyId,
+    sha256(request.reason),
+    JSON.stringify({
+      schemaVersion: 1,
+      action: request.action,
+      ceremonyDigest: sha256(request.ceremonyId),
+      companionDigest: sha256(request.companionId),
+      requestDigest: sha256(JSON.stringify(request)),
+      ...('targetPrincipalId' in request
+        ? { targetPrincipalDigest: sha256(request.targetPrincipalId) }
+        : {}),
+      decision: 'deny',
+      reasonCode: input.reasonCode,
+    }),
+  ]);
+  if (result.rowCount !== 1) {
+    throw new Error('Fleet lifecycle denial audit insert failed');
+  }
 }
 
 function parseStateInteger(value: string, field: string): number {
@@ -217,6 +359,17 @@ export function createGatewayAccountAuthorityFencePort(
       );
       return { authorityGeneration: fencedFloor.trustedHost.authorityGeneration };
     },
+    recoverProvider: async input => {
+      const recoveredFloor = authorityFloors.recoverProviderAuthority({
+        ...input,
+        at: input.at.toISOString(),
+      });
+      observedAuthorityGeneration = Math.max(
+        observedAuthorityGeneration,
+        recoveredFloor.trustedHost.authorityGeneration,
+      );
+      return { authorityGeneration: recoveredFloor.trustedHost.authorityGeneration };
+    },
     beginCompanionReadd: async input => {
       const lineage = authorityFloors.beginCompanionAuthorityReadd({
         ...input,
@@ -301,6 +454,18 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       ? { companionDatabaseUrl: options.companionDatabaseUrl }
       : {}),
   });
+  const activeRequestCapabilityKey = config.verifierKeys.find(key => key.status === 'active')!;
+  const requestCapabilities = createGatewayRequestCapabilitySigner({
+    issuer: activeRequestCapabilityKey.issuer,
+    kid: secrets.assertionSigningKid,
+    privateKeyPem: secrets.assertionPrivateKeyPem,
+    ttlSeconds: config.ttls.internalAssertionMs / 1_000,
+  });
+  const requestCapabilityVerifier = createRequestCapabilityVerifier({
+    issuer: activeRequestCapabilityKey.issuer,
+    maxTtlSeconds: config.ttls.internalAssertionMs / 1_000,
+    keys: config.verifierKeys,
+  });
   await migrateFleetAuthSchema({
     databaseUrl: secrets.database.migrationUrl,
     roles: config.databaseRoles,
@@ -352,10 +517,110 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       tokenEncryptionKey: secrets.tokenEncryptionKey,
       providerRevocationAuthority: accountAuthority,
     });
+    const webAuthn = new FleetWebAuthnUvBoundary({
+      canonicalOrigin: config.canonicalOrigin,
+      rpId: new URL(config.canonicalOrigin).hostname,
+      rpName: 'PSFN Fleet',
+      timeoutMs: config.ttls.stepUpChallengeMs,
+      authority: authorityFloors,
+    });
+    const jitStepUp = new FleetJitStepUpCoordinator({
+      canonicalOrigin: config.canonicalOrigin,
+      challengeTtlMs: config.ttls.stepUpChallengeMs,
+      grantTtlMs: config.ttls.jitGrantMs,
+      store: new PostgresFleetJitStepUpStore({
+        pool,
+        sessionPepper: secrets.sessionPepper,
+        tokenEncryptionKey: secrets.tokenEncryptionKey,
+        providerRevocationAuthority: accountAuthority,
+        passkeyAuthority: authorityFloors,
+      }),
+      webAuthn,
+      readCredentialFloorGeneration: () => authorityFloors.readPasskeys().generation,
+    });
+    const passkeyCeremonies = new TrustedHostPasskeyCeremonyService({
+      canonicalOrigin: config.canonicalOrigin,
+      rpId: new URL(config.canonicalOrigin).hostname,
+      ttlMs: config.ttls.stepUpChallengeMs,
+      store: new PostgresTrustedHostPasskeyCeremonyStore({
+        authorityPool,
+        sessionPepper: secrets.sessionPepper,
+        tokenEncryptionKey: secrets.tokenEncryptionKey,
+        providerRevocationAuthority: accountAuthority,
+        passkeyAuthority: authorityFloors,
+      }),
+      authority: authorityFloors,
+      webAuthn,
+    });
+    const reapproveAccountAuthority = createGatewayAccountReapprovalAuthority(pool, authorityFloors);
+    const accountReapprovalCeremonies = new TrustedHostAccountReapprovalService({
+      canonicalOrigin: config.canonicalOrigin,
+      rpId: new URL(config.canonicalOrigin).hostname,
+      ttlMs: config.ttls.stepUpChallengeMs,
+      store: new PostgresAccountReapprovalCeremonyStore({
+        authorityPool,
+        sessionPepper: secrets.sessionPepper,
+        tokenEncryptionKey: secrets.tokenEncryptionKey,
+        providerRevocationAuthority: accountAuthority,
+        passkeyAuthority: authorityFloors,
+      }),
+      authority: authorityFloors,
+      webAuthn,
+      reapprove: reapproveAccountAuthority,
+    });
     const authorityLifecycle = new GatewayFleetAuthAuthorityLifecycleStore({
       pool: authorityPool,
       accountAuthority,
       sessionPepper: secrets.sessionPepper,
+    });
+    const providerRecovery = new TrustedHostProviderRecoveryService({
+      canonicalOrigin: config.canonicalOrigin,
+      rpId: new URL(config.canonicalOrigin).hostname,
+      ttlMs: config.ttls.stepUpChallengeMs,
+      store: new PostgresTrustedHostProviderRecoveryStore({
+        authorityPool,
+        sessionPepper: secrets.sessionPepper,
+        tokenEncryptionKey: secrets.tokenEncryptionKey,
+        providerRevocationAuthority: accountAuthority,
+        passkeyAuthority: authorityFloors,
+      }),
+      authority: authorityFloors,
+      webAuthn,
+      execute: async input => {
+        const result = await authorityLifecycle.execute({
+          verification: 'gateway_verified',
+          action: 'provider.recover',
+          decisionId: input.decisionId,
+          ceremonyId: input.ceremonyId,
+          actor: input.principal,
+          actorSession: input.actorSession,
+          target: input.principal,
+          companionId: input.companionId,
+          unavailableProvider: {
+            provider: 'discord',
+            subjectId: input.currentProviderSubjectId,
+            authorityGeneration: input.currentProviderAuthorityGeneration,
+          },
+          newProvider: input.newProvider,
+          recovery: {
+            oneTimeCredential: input.oneTimeCredential,
+            confirmation: 'provider.recover',
+            webAuthnReceipt: input.webAuthnReceipt,
+            credentialIdHash: input.credentialIdHash,
+            credentialGeneration: input.credentialGeneration,
+            credentialFloorGeneration: input.completedCredentialFloorGeneration,
+          },
+          authorityGeneration: input.authorityGeneration,
+          globalAuthEpoch: input.globalAuthEpoch,
+          reasonDigest: input.reasonDigest,
+          decidedAt: input.decidedAt,
+        });
+        return {
+          decisionId: result.decisionId,
+          authorityGeneration: result.authorityGeneration,
+          globalAuthEpoch: result.globalAuthEpoch,
+        };
+      },
     });
     const contactLifecycleAuthority = new PostgresContactLifecycleAuthorityStore({
       pool: authorityPool,
@@ -368,7 +633,16 @@ export async function initializeGatewayFleetAuthPersistence(options: {
         );
       },
     });
+    let lifecycleContactAuthority: FleetContactAuthorityPort | undefined;
+    let lifecycleCeremoniesCreated = false;
     const authorizationContextResolver = createPostgresFleetAuthorizationContextResolver({
+      pool,
+      sessionPepper: secrets.sessionPepper,
+      config,
+      knownCompanionIds,
+      providerRevocationAuthority: accountAuthority,
+    });
+    const portalAuthorization = createPostgresFleetPortalAuthorization({
       pool,
       sessionPepper: secrets.sessionPepper,
       config,
@@ -399,17 +673,95 @@ export async function initializeGatewayFleetAuthPersistence(options: {
       store: brokerStore,
       oauthClientSecret: secrets.oauthClientSecret,
       sessionPepper: secrets.sessionPepper,
+      firstOwnerAssurance: {
+        verify: input => passkeyCeremonies.verifyFirstOwner(input),
+      },
+      firstOwnerContactAuthority: {
+        verify: async input => {
+          const snapshot = await lifecycleContactAuthority?.read({
+            companionId: input.companionId,
+            contactId: input.contactId,
+            providerSubjectId: input.providerSubjectId,
+          });
+          const denialReason = !snapshot
+            ? 'contact_authority_unavailable' as const
+            : snapshot.contactId !== input.contactId
+                || snapshot.providerSubjectId !== input.providerSubjectId
+              ? 'contact_authority_mismatch' as const
+              : undefined;
+          if (denialReason) {
+            await auditFirstOwnerContactAuthorityDenial(pool, input, denialReason);
+            throw new FleetAuthBrokerError(
+              denialReason === 'contact_authority_unavailable'
+                ? 'first_owner_contact_authority_unavailable'
+                : 'first_owner_binding_mismatch',
+              409,
+              'Exact first-owner contact authority is unavailable',
+            );
+          }
+          return snapshot!;
+        },
+      },
       authorizationContextResolver,
       ...(discordEvidenceLifecycle ? { discordEvidenceLifecycle } : {}),
+    });
+    const hubDeviceHumanAttachments = new PostgresHubDeviceHumanAttachmentStore({
+      pool,
+      resolveAuthorizationContext: input => broker.resolveAuthorizationContext(input),
+    });
+    const requestCapabilityReplay = new PostgresRequestCapabilityReplayStore(pool);
+    const trustedHostRecovery = new GatewayTrustedHostGardenRecoveryService({
+      configuredCredential: secrets.trustedHostRecoveryCredential,
+      knownCompanionIds: new Set(knownCompanionIds),
+      signer: requestCapabilities,
+      verifier: requestCapabilityVerifier,
+      replay: requestCapabilityReplay,
+      authority: authorityFloors,
+    });
+    const primaryEmbodiments = new PostgresPrimaryEmbodimentStore({ pool });
+    const childAssertions = new GatewayFleetAuthChildAssertionBroker({
+      verifier: requestCapabilityVerifier,
+      signer: requestCapabilities,
+      replay: requestCapabilityReplay,
+      authority: new PostgresChildAssertionAuthority(pool, config, accountAuthority),
     });
     return {
       authorityFloors,
       broker,
+      portalAuthorization,
+      requestCapabilities,
+      requestCapabilityVerifier,
+      requestCapabilityReplay,
+      childAssertions,
+      primaryEmbodiments,
+      jitStepUp,
+      passkeyCeremonies,
+      trustedHostRecovery,
+      accountReapprovalCeremonies,
+      providerRecovery,
       authorityLifecycle,
       contactLifecycleAuthority,
+      createLifecycleCeremonies: (contactAuthority) => {
+        if (lifecycleCeremoniesCreated) {
+          throw new Error('Fleet lifecycle ceremonies are already composed');
+        }
+        lifecycleCeremoniesCreated = true;
+        lifecycleContactAuthority = contactAuthority;
+        return new GatewayFleetAuthLifecycleCeremonyService({
+          pool,
+          sessionPepper: secrets.sessionPepper,
+          canonicalOrigin: config.canonicalOrigin,
+          lifecycle: authorityLifecycle,
+          jitStepUp,
+          contactAuthority,
+          denialAudit: {
+            record: input => auditLifecycleCeremonyDenial(pool, input),
+          },
+        });
+      },
       ...(discordEvidence ? { discordEvidence } : {}),
       ...(discordEvidenceLifecycle ? { discordEvidenceLifecycle } : {}),
-      reapproveAccountAuthority: createGatewayAccountReapprovalAuthority(pool, authorityFloors),
+      reapproveAccountAuthority,
       reapproveCompanionAuthority: createGatewayCompanionReapprovalAuthority(pool, authorityFloors),
       verifyAndConsumeHubDeviceAssertion: (token, expected) => verifyAndConsumeHubDeviceAssertion({
         token,
@@ -418,6 +770,8 @@ export async function initializeGatewayFleetAuthPersistence(options: {
         replayStore: new PostgresHubDeviceAssertionReplayStore(pool),
         sessionPepper: secrets.sessionPepper,
       }),
+      attachHubDeviceHuman: input => hubDeviceHumanAttachments.attach(input),
+      fenceHubDeviceAttachment: input => hubDeviceHumanAttachments.fenceDevice(input),
       close: async () => {
         await discordEvidenceLifecycle?.close();
         await Promise.all([pool.end(), authorityPool.end()]);

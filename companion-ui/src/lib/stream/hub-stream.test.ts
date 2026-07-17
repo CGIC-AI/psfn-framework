@@ -304,12 +304,7 @@ class FakeHubClient implements HubStreamClientLike {
       ready: false,
       url: 'ws://hub.local:8787/',
       hello: this.hello,
-      session: {
-        deviceId: this.hello.deviceId,
-        deviceName: this.hello.deviceName,
-        satelliteId: this.hello.satelliteId ?? this.hello.deviceId,
-        satelliteName: this.hello.satelliteName ?? this.hello.deviceName,
-      },
+      session: {},
     };
   }
 

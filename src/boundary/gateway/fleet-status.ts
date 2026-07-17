@@ -13,11 +13,13 @@
 //   - only starts when FLEET_STATUS_PORT is set AND multi-companion is active;
 //     FLEET_STATUS_PORT without the topology flag refuses startup.
 //   - binds loopback only (default 127.0.0.1); non-loopback hosts are rejected
-//     — front it with a reverse proxy/tunnel if remote access is needed.
+//     before listen and the resolved bound address is checked after listen.
+//     It must not be proxied or tunneled remotely without a separate,
+//     independently authenticated operator boundary.
 //   - a taken port rejects startup; the listener never picks another port.
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import type { AddressInfo } from 'node:net';
+import { isIP, type AddressInfo } from 'node:net';
 import { createComponentLogger } from '../../shared/logger.js';
 import { sendHtml, sendJson, sendText } from '../../channels/backplane/http/primitives.js';
 import { parseOptionalPositiveIntEnv, parseOptionalStringEnv } from '../../shared/utils/env.js';
@@ -29,6 +31,14 @@ const log = createComponentLogger('GatewayFleetStatus');
 export const FLEET_STATUS_PORT_ENV = 'FLEET_STATUS_PORT';
 export const FLEET_STATUS_HOST_ENV = 'FLEET_STATUS_HOST';
 const DEFAULT_FLEET_STATUS_HOST = '127.0.0.1';
+const FLEET_STATUS_RESPONSE_HEADERS = Object.freeze({
+  'Cache-Control': 'no-store',
+  'Content-Security-Policy': "frame-ancestors 'none'",
+  'Cross-Origin-Resource-Policy': 'same-origin',
+  'Referrer-Policy': 'no-referrer',
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+});
 
 /** The gateway-side live source: implemented by GatewayServer. */
 export interface FleetConnectionSnapshotSource {
@@ -70,10 +80,13 @@ export interface FleetStatusServerOptions {
 
 function isLoopbackHost(host: string): boolean {
   const normalized = host.trim().toLowerCase();
-  return normalized === 'localhost'
-    || normalized === '::1'
-    || normalized === '[::1]'
-    || normalized.startsWith('127.');
+  if (normalized === 'localhost') return true;
+  const address = normalized.startsWith('[') && normalized.endsWith(']')
+    ? normalized.slice(1, -1)
+    : normalized;
+  const family = isIP(address);
+  if (family === 4) return address.split('.')[0] === '127';
+  return family === 6 && address === '::1';
 }
 
 export function buildFleetStatusPayload(
@@ -123,7 +136,7 @@ export class FleetStatusServer {
     if (!isLoopbackHost(this.host)) {
       throw new Error(
         `${FLEET_STATUS_HOST_ENV}="${this.host}" is not a loopback address. The fleet-status `
-        + 'listener is loopback-only; front it with a reverse proxy or tunnel for remote access.',
+        + 'listener is loopback-only and must not be exposed through an unauthenticated proxy or tunnel.',
       );
     }
     this.server = createServer((req, res) => this.handleRequest(req, res));
@@ -142,6 +155,24 @@ export class FleetStatusServer {
       this.server.once('error', onError);
       this.server.listen(this.options.port, this.host, () => {
         this.server.off('error', onError);
+        const address = this.server.address();
+        if (!address || typeof address === 'string' || !isLoopbackHost(address.address)) {
+          const actual = address && typeof address === 'object' ? address.address : 'unknown';
+          const bindError = new Error(
+            `Fleet-status listener resolved to non-loopback address ${actual}; refusing startup`,
+          );
+          this.server.close((error) => {
+            if (error) {
+              reject(new AggregateError(
+                [bindError, error],
+                'Fleet-status listener failed closed after unsafe address resolution',
+              ));
+            } else {
+              reject(bindError);
+            }
+          });
+          return;
+        }
         log.info('Fleet-status surface listening', {
           host: this.host,
           port: this.boundPort(),
@@ -174,21 +205,24 @@ export class FleetStatusServer {
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     const path = new URL(req.url ?? '/', 'http://localhost').pathname;
     if (req.method !== 'GET') {
-      sendText(res, 405, 'Method Not Allowed', { Allow: 'GET' });
+      sendText(res, 405, 'Method Not Allowed', {
+        ...FLEET_STATUS_RESPONSE_HEADERS,
+        Allow: 'GET',
+      });
       return;
     }
     if (path === '/fleet/status.json') {
       sendJson(res, 200, buildFleetStatusPayload(
         this.options.fleet,
         this.options.source.getFleetConnectionSnapshot(),
-      ));
+      ), { ...FLEET_STATUS_RESPONSE_HEADERS });
       return;
     }
     if (path === '/' || path === '/fleet') {
-      sendHtml(res, 200, FLEET_STATUS_PAGE_HTML);
+      sendHtml(res, 200, FLEET_STATUS_PAGE_HTML, { ...FLEET_STATUS_RESPONSE_HEADERS });
       return;
     }
-    sendText(res, 404, `Not found: ${path}`);
+    sendText(res, 404, `Not found: ${path}`, { ...FLEET_STATUS_RESPONSE_HEADERS });
   }
 }
 

@@ -89,6 +89,7 @@ import { OutboundReplyDeduper } from '../../system/lifecycle/outbound-reply-dedu
 import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/group-observed-scheduler.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import { createNoopSatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
+import { createRequestCapabilityVerifier } from '../../boundary/fleet-auth/request-capability.js';
 import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../startup/support/signal-shutdown.js';
 import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
@@ -190,6 +191,13 @@ async function main(): Promise<void> {
   log.info(`Connecting to gateway at ${formatGatewayRpcEndpoint(gatewayRpcEndpoint)}...`);
   const gateway = await GatewayClient.connectEndpoint(gatewayRpcEndpoint, embeddingDims, {
     companionId: resolveCoreCompanionIdFromConfig(config),
+    ...(config.fleetAuthVerifier
+      ? {
+          requestCapabilityVerifier: createRequestCapabilityVerifier(
+            config.fleetAuthVerifier.requestCapabilities,
+          ),
+        }
+      : {}),
     ...(config.gatewayCompanionAuthToken
       ? { companionAuthToken: config.gatewayCompanionAuthToken }
       : {}),
@@ -241,6 +249,12 @@ async function main(): Promise<void> {
     pathSnapshot,
     embeddingDims,
     primaryUserId,
+    contactLifecycleGateway: gateway,
+    onContactLifecycleRecoveryFailure: (error) => {
+      log.error('Contact lifecycle recovery worker failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
   });
   const {
     backend: persistenceBackend,
@@ -381,6 +395,10 @@ async function main(): Promise<void> {
     toolConformanceRunner,
     personalProjects,
   } = coreRuntime;
+
+  gateway.onContactAuthoritySnapshot(async ({ contactId, providerSubjectId }) => (
+    await contactStore.readVerifiedDiscordContactAuthority(contactId, providerSubjectId)
+  ));
 
   personalProjects.setActivitySink({
     recordProjectActivity: async (project) => {
@@ -990,6 +1008,7 @@ async function main(): Promise<void> {
       }
     },
     closeDatabase: async () => {
+      await persistenceRuntime.contactLifecycleRecovery?.stop();
       await coreRuntime.closeWikiRuntime();
       await persistenceRuntime.icpInitiationCandidateStore?.close();
       await persistenceRuntime.backgroundWorkStore.close();

@@ -54,6 +54,10 @@ import type {
 import type { JournalEntry } from '../../core/session/types.js';
 import type { JournalIntegrityVerificationResult } from '../../persistence/journals/journal-utils.js';
 import type {
+  ContactAuthoritySnapshotRequest,
+  VerifiedDiscordContactAuthoritySnapshot,
+} from '../../shared/contracts/contact-authority-snapshot.js';
+import type {
   ApiChatCompletionCancelRpcParams,
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcParams,
@@ -84,6 +88,10 @@ import type {
   IcpConversationCorrelation,
 } from '../../shared/contracts/icp-autonomy.js';
 import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
+import type {
+  ContactAuthorityLifecycleRequest,
+  ContactAuthorityLifecycleResult,
+} from '../../shared/contracts/contact-authority-lifecycle.js';
 import type {
   KubeSelfManagementRequest,
   KubeSelfManagementResponse,
@@ -214,6 +222,12 @@ export interface LLMEmbedParams extends GatewayCorrelationParams {
 
 export type LLMDiscoverModelsParams = Record<string, never>;
 export type LLMInvalidateModelDiscoveryParams = Record<string, never>;
+
+export interface ContactLifecycleExecuteParams {
+  request: ContactAuthorityLifecycleRequest;
+}
+
+export type ContactLifecycleExecuteResult = ContactAuthorityLifecycleResult;
 
 export interface DiscordSendParams {
   channelId: string;
@@ -1047,6 +1061,10 @@ export interface VoiceStreamEndResult extends VoiceHandleMessageResult {
 }
 
 export interface AgentMethods {
+  'contact.authority.snapshot': [
+    ContactAuthoritySnapshotRequest,
+    VerifiedDiscordContactAuthoritySnapshot | null,
+  ];
   'voice.handleMessage': [VoiceHandleMessageParams, VoiceHandleMessageResult];
   // mmo9.8.6: inbound transcript-chunking family renamed voice.stream.* ->
   // voice.transcript.*. Both names are registered on the same handlers and kept

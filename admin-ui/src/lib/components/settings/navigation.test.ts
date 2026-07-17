@@ -22,6 +22,7 @@ test('section id guard accepts only known settings sections', () => {
 test('hash parsing accepts only known settings section anchors', () => {
   assert.equal(parseSettingsSimpleSectionHash('#settings-memory-budget'), 'memory-budget');
   assert.equal(parseSettingsSimpleSectionHash('#settings-advanced-fields'), 'advanced-fields');
+  assert.equal(parseSettingsSimpleSectionHash('#settings-advanced-fleet-auth'), 'advanced-fleet-auth');
   assert.equal(parseSettingsSimpleSectionHash('#settings-owner-files'), 'owner-files');
   assert.equal(parseSettingsSimpleSectionHash('#settings-missing'), null);
   assert.equal(parseSettingsSimpleSectionHash('#not-settings-memory-budget'), null);

@@ -5,6 +5,10 @@ import {
   isRecord,
   isRfc4122Uuid,
 } from '../../../shared/utils/types.js';
+import {
+  parseVerifiedDiscordContactAuthoritySnapshot,
+  type VerifiedDiscordContactAuthoritySnapshot,
+} from '../../../shared/contracts/contact-authority-snapshot.js';
 
 const DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const DISCORD_SUBJECT_PATTERN = /^[1-9][0-9]{16,19}$/u;
@@ -39,6 +43,21 @@ export interface ActorSessionAuthorityClaim {
   providerSubjectId: string;
 }
 
+export interface UnavailableProviderAuthorityClaim {
+  provider: 'discord';
+  subjectId: string;
+  authorityGeneration: number;
+}
+
+export interface TrustedHostProviderRecoveryEvidence {
+  oneTimeCredential: string;
+  confirmation: 'provider.recover';
+  webAuthnReceipt: string;
+  credentialIdHash: string;
+  credentialGeneration: number;
+  credentialFloorGeneration: number;
+}
+
 export function digestVerifiedProviderProof(input: {
   provider: 'discord';
   subjectId: string;
@@ -67,15 +86,29 @@ export type VerifiedFleetAuthLifecycleDecision =
     contactId: string;
     bindingId: string;
     newProvider: VerifiedProviderProof;
+    contactAuthority: VerifiedDiscordContactAuthoritySnapshot;
   })
   | (LifecycleDecisionBase & {
     action: 'provider.add' | 'provider.relink';
+    companionId: string;
+    contactId: string;
     newProvider: VerifiedProviderProof;
+    contactAuthority: VerifiedDiscordContactAuthoritySnapshot;
   })
   | (LifecycleDecisionBase & {
     action: 'provider.replace';
+    companionId: string;
+    contactId: string;
     currentProvider: VerifiedProviderProof;
     newProvider: VerifiedProviderProof;
+    contactAuthority: VerifiedDiscordContactAuthoritySnapshot;
+  })
+  | (LifecycleDecisionBase & {
+    action: 'provider.recover';
+    companionId: string;
+    unavailableProvider: UnavailableProviderAuthorityClaim;
+    newProvider: VerifiedProviderProof;
+    recovery: TrustedHostProviderRecoveryEvidence;
   })
   | (LifecycleDecisionBase & {
     action: 'provider.unlink';
@@ -231,6 +264,46 @@ function assertProviderProof(value: unknown, field: string): VerifiedProviderPro
   return proof as unknown as VerifiedProviderProof;
 }
 
+function assertUnavailableProvider(
+  value: unknown,
+  field: string,
+): UnavailableProviderAuthorityClaim {
+  const claim = assertRecord(value, field);
+  assertNoUnknownKeys(claim, ['provider', 'subjectId', 'authorityGeneration'], field, {
+    errorPrefix: 'Invalid fleet-auth lifecycle decision',
+  });
+  if (claim.provider !== 'discord'
+    || typeof claim.subjectId !== 'string'
+    || !DISCORD_SUBJECT_PATTERN.test(claim.subjectId)) {
+    throw new Error(`${field} provider binding is invalid`);
+  }
+  assertPositiveInteger(claim.authorityGeneration, `${field}.authorityGeneration`);
+  return claim as unknown as UnavailableProviderAuthorityClaim;
+}
+
+function assertProviderRecoveryEvidence(value: unknown): TrustedHostProviderRecoveryEvidence {
+  const evidence = assertRecord(value, 'recovery');
+  assertNoUnknownKeys(evidence, [
+    'oneTimeCredential',
+    'confirmation',
+    'webAuthnReceipt',
+    'credentialIdHash',
+    'credentialGeneration',
+    'credentialFloorGeneration',
+  ], 'recovery', { errorPrefix: 'Invalid fleet-auth lifecycle decision' });
+  if (typeof evidence.oneTimeCredential !== 'string'
+    || !/^[A-Za-z0-9_-]{43}$/u.test(evidence.oneTimeCredential)
+    || evidence.confirmation !== 'provider.recover'
+    || typeof evidence.webAuthnReceipt !== 'string'
+    || !/^[A-Za-z0-9_-]{43}$/u.test(evidence.webAuthnReceipt)) {
+    throw new Error('recovery trusted-host evidence is invalid');
+  }
+  assertDigest(evidence.credentialIdHash, 'recovery.credentialIdHash');
+  assertPositiveInteger(evidence.credentialGeneration, 'recovery.credentialGeneration');
+  assertPositiveInteger(evidence.credentialFloorGeneration, 'recovery.credentialFloorGeneration');
+  return evidence as unknown as TrustedHostProviderRecoveryEvidence;
+}
+
 function assertActorSession(value: unknown): ActorSessionAuthorityClaim {
   const session = assertRecord(value, 'actorSession');
   assertNoUnknownKeys(session, [
@@ -316,25 +389,93 @@ export function assertVerifiedFleetAuthLifecycleDecision(
   assertCommon(decision);
   switch (decision.action) {
     case 'binding.activate':
-      assertDecisionKeys(decision, ['companionId', 'contactId', 'bindingId', 'newProvider']);
+      assertDecisionKeys(decision, [
+        'companionId',
+        'contactId',
+        'bindingId',
+        'newProvider',
+        'contactAuthority',
+      ]);
       assertIds(decision, ['companionId', 'bindingId']);
       assertContactId(decision.contactId, 'contactId');
-      assertProviderProof(decision.newProvider, 'newProvider');
+      {
+        const provider = assertProviderProof(decision.newProvider, 'newProvider');
+        const contactAuthority = parseVerifiedDiscordContactAuthoritySnapshot(
+          decision.contactAuthority,
+        );
+        if (contactAuthority.contactId !== decision.contactId
+          || contactAuthority.providerSubjectId !== provider.subjectId) {
+          throw new Error('binding.activate contact authority does not match its exact tuple');
+        }
+      }
       break;
     case 'provider.add':
-    case 'provider.relink':
-      assertDecisionKeys(decision, ['newProvider']);
-      assertProviderProof(decision.newProvider, 'newProvider');
+    case 'provider.relink': {
+      assertDecisionKeys(decision, [
+        'companionId',
+        'contactId',
+        'newProvider',
+        'contactAuthority',
+      ]);
+      assertIds(decision, ['companionId']);
+      assertContactId(decision.contactId, 'contactId');
+      const provider = assertProviderProof(decision.newProvider, 'newProvider');
+      const contactAuthority = parseVerifiedDiscordContactAuthoritySnapshot(
+        decision.contactAuthority,
+      );
+      if (contactAuthority.contactId !== decision.contactId
+        || contactAuthority.providerSubjectId !== provider.subjectId) {
+        throw new Error(`${decision.action} contact authority does not match its exact tuple`);
+      }
       break;
+    }
     case 'provider.replace': {
-      assertDecisionKeys(decision, ['currentProvider', 'newProvider']);
+      assertDecisionKeys(decision, [
+        'companionId',
+        'contactId',
+        'currentProvider',
+        'newProvider',
+        'contactAuthority',
+      ]);
+      assertIds(decision, ['companionId']);
+      assertContactId(decision.contactId, 'contactId');
       const current = assertProviderProof(decision.currentProvider, 'currentProvider');
       const replacement = assertProviderProof(decision.newProvider, 'newProvider');
+      const contactAuthority = parseVerifiedDiscordContactAuthoritySnapshot(
+        decision.contactAuthority,
+      );
+      if (contactAuthority.contactId !== decision.contactId
+        || contactAuthority.providerSubjectId !== replacement.subjectId) {
+        throw new Error('provider.replace contact authority does not match its exact tuple');
+      }
       if (current.subjectId === replacement.subjectId) {
         throw new Error('provider.replace requires distinct current and new subjects');
       }
       if (current.callbackTransactionId === replacement.callbackTransactionId) {
         throw new Error('provider.replace requires distinct current and new callback proofs');
+      }
+      break;
+    }
+    case 'provider.recover': {
+      assertDecisionKeys(decision, [
+        'companionId',
+        'unavailableProvider',
+        'newProvider',
+        'recovery',
+      ]);
+      assertIds(decision, ['companionId']);
+      const unavailable = assertUnavailableProvider(
+        decision.unavailableProvider,
+        'unavailableProvider',
+      );
+      const replacement = assertProviderProof(decision.newProvider, 'newProvider');
+      assertProviderRecoveryEvidence(decision.recovery);
+      const actorSession = decision.actorSession as ActorSessionAuthorityClaim;
+      const actorSessionProvider: unknown = actorSession.provider;
+      if (unavailable.subjectId === replacement.subjectId
+        || actorSessionProvider !== unavailable.provider
+        || actorSession.providerSubjectId !== unavailable.subjectId) {
+        throw new Error('provider.recover provider subjects are not exactly bound');
       }
       break;
     }

@@ -18,6 +18,10 @@ import type {
   VoiceStreamCancelResult,
 } from './protocol.js';
 import { isRecord } from '../../shared/utils/types.js';
+import type {
+  ContactAuthoritySnapshotRequest,
+  VerifiedDiscordContactAuthoritySnapshot,
+} from '../../shared/contracts/contact-authority-snapshot.js';
 
 export interface ReverseGatewayMethodRuntime {
   target: JSONRPCServerAndClient;
@@ -31,6 +35,9 @@ export interface ReverseGatewayMethodRuntime {
   handleApiTelemetryIngest(params: ApiTelemetryIngestRpcParams): Promise<ApiTelemetryIngestRpcResult>;
   handleApiHealth(): Promise<ApiHealthRpcResult>;
   handleTurnPerformance(params: unknown): Promise<unknown>;
+  handleContactAuthoritySnapshot(
+    params: ContactAuthoritySnapshotRequest,
+  ): Promise<VerifiedDiscordContactAuthoritySnapshot | null>;
 }
 
 interface ReverseGatewayMethodDescriptor<P, R> {
@@ -39,6 +46,12 @@ interface ReverseGatewayMethodDescriptor<P, R> {
 }
 
 const reverseDescriptors: Array<ReverseGatewayMethodDescriptor<any, unknown>> = [
+  {
+    names: ['contact.authority.snapshot'],
+    handler: (params: ContactAuthoritySnapshotRequest, runtime) => (
+      runtime.handleContactAuthoritySnapshot(params)
+    ),
+  },
   {
     names: ['voice.handleMessage'],
     handler: (params: unknown, runtime) => {

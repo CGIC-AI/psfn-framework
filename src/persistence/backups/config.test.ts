@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  DEFAULT_BACKUP_DAILY_COUNT,
   DEFAULT_BACKUP_INTERVAL_HOURS,
   DEFAULT_BACKUP_MONTHLY_COUNT,
   DEFAULT_BACKUP_ROTATING_COUNT,
@@ -12,6 +13,41 @@ import {
   MIN_BACKUP_RETENTION_COUNT,
   resolveBackupRuntimeConfig,
 } from './config.js';
+
+/**
+ * Writes a backup.json owner file with the supplied overrides and runs the test
+ * against its data dir. Base shape mirrors the shipped seed contract.
+ */
+function withCustomBackupOwnerFile(
+  overrides: Record<string, unknown>,
+  test: (dataDir: string) => void,
+): void {
+  const root = mkdtempSync(join(tmpdir(), 'psfn-backup-config-daily-'));
+  const dataDir = join(root, 'system-data');
+  mkdirSync(dataDir, { recursive: true });
+  const base: Record<string, unknown> = {
+    intervalHours: DEFAULT_BACKUP_INTERVAL_HOURS,
+    maxRotatingBackups: DEFAULT_BACKUP_ROTATING_COUNT,
+    maxWeeklyBackups: DEFAULT_BACKUP_WEEKLY_COUNT,
+    maxMonthlyBackups: DEFAULT_BACKUP_MONTHLY_COUNT,
+    mirrorDir: '',
+    verifyRestore: DEFAULT_BACKUP_VERIFY_RESTORE,
+    encryption: {
+      mode: 'required',
+      keyRef: { kind: 'env', envName: 'PSFN_BACKUP_TEST_KEY' },
+    },
+  };
+  writeFileSync(
+    join(dataDir, 'backup.json'),
+    JSON.stringify({ ...base, ...overrides }),
+    'utf8',
+  );
+  try {
+    test(dataDir);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
 describe('resolveBackupRuntimeConfig', () => {
   function withBackupOwnerFile(test: (dataDir: string) => void): void {
@@ -138,6 +174,56 @@ describe('resolveBackupRuntimeConfig', () => {
       });
 
       expect(config.rootDir).toBe('/srv/psfn/runtime/production/backups');
+    });
+  });
+
+  it('passes a valid maxDailyBackups through to the runtime config', () => {
+    withCustomBackupOwnerFile({ maxDailyBackups: 5 }, (dataDir) => {
+      const config = resolveBackupRuntimeConfig({
+        dataDir,
+        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret' },
+      });
+      expect(config.maxDailyBackups).toBe(5);
+    });
+  });
+
+  it('accepts maxDailyBackups of zero (daily tier disabled)', () => {
+    withCustomBackupOwnerFile({ maxDailyBackups: 0 }, (dataDir) => {
+      const config = resolveBackupRuntimeConfig({
+        dataDir,
+        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret' },
+      });
+      expect(config.maxDailyBackups).toBe(0);
+    });
+  });
+
+  it('defaults maxDailyBackups from the constant when the owner file omits it', () => {
+    // Existing live backup.json files predate the daily tier — the absent key
+    // resolves to DEFAULT_BACKUP_DAILY_COUNT at load rather than failing closed.
+    withCustomBackupOwnerFile({}, (dataDir) => {
+      const config = resolveBackupRuntimeConfig({
+        dataDir,
+        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret' },
+      });
+      expect(config.maxDailyBackups).toBe(DEFAULT_BACKUP_DAILY_COUNT);
+    });
+  });
+
+  it('rejects a negative maxDailyBackups', () => {
+    withCustomBackupOwnerFile({ maxDailyBackups: -1 }, (dataDir) => {
+      expect(() => resolveBackupRuntimeConfig({
+        dataDir,
+        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret' },
+      })).toThrow('maxDailyBackups must be a number >= 0');
+    });
+  });
+
+  it('rejects a non-numeric maxDailyBackups', () => {
+    withCustomBackupOwnerFile({ maxDailyBackups: 'seven' }, (dataDir) => {
+      expect(() => resolveBackupRuntimeConfig({
+        dataDir,
+        env: { PSFN_BACKUP_TEST_KEY: 'backup-secret' },
+      })).toThrow('maxDailyBackups must be a number >= 0');
     });
   });
 });

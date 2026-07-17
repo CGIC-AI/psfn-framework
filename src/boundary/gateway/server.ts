@@ -77,6 +77,7 @@ import { createCanaryEgressGuard, type CanaryEgressGuard } from './canary-egress
 import type { GatewayVisionIntakeScreener } from './intake/compose-screening.js';
 import type { EventBus, GardenQueueName } from '../../shared/event-bus.js';
 import type {
+  ConfirmationQueueEntry,
   ConfirmationQueueHistoryEntry,
   ConfirmationResolveResult,
 } from '../../system/capabilities/confirmation-queue.js';
@@ -235,6 +236,8 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   ntfy?: GatewayNtfyConfig;
   auditStore?: GatewayAuditStorePort;
   kubeSelfManagement?: KubeSelfManagementController;
+  /** Gateway-owned exact contact authority lifecycle service. */
+  contactLifecycleAuthority?: import('./contact-lifecycle-authority.js').GatewayContactLifecycleAuthorityPort;
   sessionHmacKeyring: SessionHmacKeyring;
   confirmation?: Partial<GatewayConfirmationConfig>;
   capabilityTierProvider?: () => CapabilityTier;
@@ -533,6 +536,9 @@ export class GatewayServer {
       ...(this.options.kubeSelfManagement
         ? { kubeSelfManagement: this.options.kubeSelfManagement }
         : {}),
+      ...(this.options.contactLifecycleAuthority
+        ? { contactLifecycleAuthority: this.options.contactLifecycleAuthority }
+        : {}),
       authenticatedCompanionId: () => this.authenticatedCompanionId(conn),
       ...(this.options.welfareGrantVerifier
         ? {
@@ -755,6 +761,16 @@ export class GatewayServer {
     return this.approvalBoundary.resolveConfirmation(params, {
       kind: 'operator',
       id: 'garden-admin',
+    });
+  }
+
+  listOperatorConfirmations(): Readonly<{
+    pending: ConfirmationQueueEntry[];
+    history: ConfirmationQueueHistoryEntry[];
+  }> {
+    return Object.freeze({
+      pending: this.approvalBoundary.listPendingConfirmations(),
+      history: this.approvalBoundary.listConfirmationHistory(),
     });
   }
 
@@ -1978,6 +1994,29 @@ export class GatewayServer {
       client.request(method, params),
       new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error('Agent request timed out')), timeoutMs),
+      ),
+    ]);
+    return result as T;
+  }
+
+  /** Route one exact authority read to the authenticated companion agent. */
+  async requestCompanionAgent<T = unknown>(
+    companionId: string,
+    method: string,
+    params: unknown,
+    timeoutMs = DEFAULT_AGENT_TIMEOUT_MS,
+  ): Promise<T> {
+    const exactCompanionId = createCompanionId(
+      companionId,
+      'Explicit companion agent request companionId',
+    );
+    const client = this.multiCompanion.enabled
+      ? this.requireReadyCompanionRoute('api', exactCompanionId).client
+      : this.resolveReadyRpcClient();
+    const result = await Promise.race([
+      client.request(method, params),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Companion agent request timed out')), timeoutMs),
       ),
     ]);
     return result as T;

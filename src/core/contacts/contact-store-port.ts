@@ -5,6 +5,13 @@ import type {
 import type { TrustLevel, TrustMutationSource } from '../../system/trust/types.js';
 import type { EmotionalSnapshot, EmotionalTimeSeriesPoint } from './store/emotional-baseline.js';
 import type {
+  ContactLifecycleGatewayResultInput,
+  ContactLifecyclePrepareOutcome,
+  ContactLifecycleRecoveryClaimInput,
+  ContactLifecycleRecoveryDeferralInput,
+  ContactLifecycleRecoveryLease,
+} from '../../shared/contracts/contact-lifecycle-ledger.js';
+import type {
   ChannelPrivacyLevel,
   Contact,
   ContactChannel,
@@ -50,6 +57,31 @@ export interface ContactTrustDriftApplyResult {
   reason: string;
 }
 
+export type ContactLifecycleDiagnosticState = 'prepared' | 'over_fenced' | 'manual_hold';
+
+/**
+ * Bounded operator projection of durable contact-authority work. Deliberately
+ * omits intent, contact, companion, and provider-subject identifiers.
+ */
+export interface ContactLifecycleDiagnosticEntry {
+  action: 'contact.merge' | 'contact.delete' | 'contact.discord_unlink'
+    | 'contact.identity_conflict' | 'contact.verify' | 'contact.reapprove';
+  state: ContactLifecycleDiagnosticState;
+  phase: 'gateway_prepare_pending' | 'contact_commit_pending'
+    | 'gateway_finalize_pending' | 'manual_hold' | 'quarantined';
+  reason: string;
+  retryCount: number;
+  updatedAt: string;
+}
+
+export interface ContactLifecycleDiagnostics {
+  schemaVersion: 1;
+  total: number;
+  truncated: boolean;
+  counts: Record<ContactLifecycleDiagnosticState, number>;
+  entries: ContactLifecycleDiagnosticEntry[];
+}
+
 /**
  * Outcome of an atomic observation-driven machine-intelligence marking (E7.3).
  * `override_preserved` means the latest `is_machine_intelligence` audit entry
@@ -62,6 +94,31 @@ export type MachineIntelligenceObservationMarkResult =
   | 'not_found';
 
 export interface ContactStorePort {
+  /** Exact current companion-owned Discord/contact authority for fleet activation. */
+  readVerifiedDiscordContactAuthority(
+    contactId: string,
+    providerSubjectId: string,
+  ): Awaitable<import('../../shared/contracts/contact-authority-snapshot.js').VerifiedDiscordContactAuthoritySnapshot | undefined>;
+  /** Prepare or exactly resume one companion-local contact authority saga. */
+  prepareContactLifecycleIntent(input: unknown): Awaitable<ContactLifecyclePrepareOutcome>;
+  /** Append one exact gateway result and advance the durable companion phase. */
+  recordContactLifecycleGatewayResult(
+    input: ContactLifecycleGatewayResultInput,
+  ): Awaitable<ContactLifecyclePrepareOutcome>;
+  /** Claim bounded startup/retry work with database-owned leases. */
+  claimContactLifecycleRecovery(
+    input: ContactLifecycleRecoveryClaimInput,
+  ): Awaitable<ContactLifecycleRecoveryLease[]>;
+  /** Release a failed recovery lease with durable exponential backoff. */
+  deferContactLifecycleRecovery(
+    input: ContactLifecycleRecoveryDeferralInput,
+  ): Awaitable<ContactLifecyclePrepareOutcome>;
+  /** Startup integrity check; corrupt authority state fails store creation. */
+  assertContactLifecycleLedgerHealthy(): Awaitable<void>;
+  /** Resume a bounded batch of durable contact-authority mutations at startup. */
+  recoverContactLifecycleMutations(): Awaitable<ContactLifecyclePrepareOutcome[]>;
+  /** Identity-free, bounded projection of pending/over-fenced/manual-hold work. */
+  getContactLifecycleDiagnostics(limit?: number): Awaitable<ContactLifecycleDiagnostics>;
   upsert(
     partial: Partial<Contact> & { displayName: string },
     options?: ContactUpsertMutationOptions,
@@ -199,4 +256,6 @@ export interface ContactStorePort {
   getCanonicalContactKey(channel: ContactChannel, channelUserId: string): Awaitable<string | undefined>;
   deleteContact(id: string): Awaitable<boolean>;
   unlinkChannelIdentity(contactId: string, channel: string, channelUserId: string, actor?: string): Awaitable<boolean>;
+  /** Reapprove one exact restored Discord ownership through the authenticated saga. */
+  reapproveRestoredDiscordIdentity(contactId: string, channelUserId: string): Awaitable<boolean>;
 }

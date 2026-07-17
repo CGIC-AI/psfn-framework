@@ -346,6 +346,18 @@ group: cert-manager.io
 {{- printf "%s-garden-admin-client-tls" (include "psfn.fullname" .) -}}
 {{- end -}}
 
+{{- define "psfn.gardenSsoServerCertSecretName" -}}
+{{- printf "%s-garden-sso-server-tls" (include "psfn.fullname" .) -}}
+{{- end -}}
+
+{{- define "psfn.gatewaySsoClientCertSecretName" -}}
+{{- printf "%s-gateway-sso-client-tls" (include "psfn.fullname" .) -}}
+{{- end -}}
+
+{{- define "psfn.gardenSsoServerName" -}}
+{{- printf "%s.%s.svc" (include "psfn.gardenServiceName" .) .Release.Namespace -}}
+{{- end -}}
+
 {{- define "psfn.satelliteHubClientCertSecretName" -}}
 {{- printf "%s-satellite-hub-client-tls" (include "psfn.fullname" .) -}}
 {{- end -}}
@@ -438,6 +450,10 @@ group: cert-manager.io
   value: {{ .Values.runtime.characterCardPath | quote }}
 - name: PERSISTENCE_BACKEND
   value: postgres
+{{- if .Values.fleetAuth.enabled }}
+- name: PSFN_FLEET_AUTH
+  value: "true"
+{{- end }}
 {{- if .Values.repositoryCheckout.enabled }}
 - name: GIT_REPO_ROOT
   value: {{ .Values.repositoryCheckout.mountPath | quote }}
@@ -503,12 +519,14 @@ group: cert-manager.io
       name: {{ include "psfn.appSecretName" . }}
       key: {{ .Values.secrets.keys.apiKey }}
       optional: true
+{{- if not .Values.fleetAuth.enabled }}
 - name: ADMIN_TOKEN
   valueFrom:
     secretKeyRef:
       name: {{ include "psfn.appSecretName" . }}
       key: {{ .Values.secrets.keys.adminToken }}
       optional: true
+{{- end }}
 - name: OPENROUTER_API_KEY
   valueFrom:
     secretKeyRef:

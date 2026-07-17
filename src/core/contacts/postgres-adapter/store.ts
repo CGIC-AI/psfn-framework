@@ -25,12 +25,32 @@ import { installPostgresContactCrudOperations } from './crud-operations.js';
 import { installPostgresContactSharedOperations } from './shared-queries.js';
 import { installPostgresContactSocialGraphOperations } from './social-graph-queries.js';
 import { installPostgresContactTrustPolicyOperations } from './trust-policy-queries.js';
+import { installPostgresContactLifecycleLedgerOperations } from './contact-lifecycle-ledger-operations.js';
+import { installPostgresContactLifecycleRecoveryOperations } from './contact-lifecycle-recovery.js';
+import type { ContactLifecycleGatewayPort } from '../contact-lifecycle-gateway-port.js';
+import { installPostgresContactLifecycleCoordinatorOperations } from './contact-lifecycle-coordinator.js';
+import { installPostgresContactLifecycleMutationCommitOperations } from './contact-lifecycle-mutation-commit.js';
+import { installPostgresContactAuthoritySnapshotOperations } from './contact-authority-snapshot.js';
+import type { ContactLifecycleFaultStage } from './options.js';
 
 export class PostgresContactStore implements ContactStorePort {
   readonly pool: Pool;
   readonly primaryUserId?: string;
   readonly exportDir: string | null;
+  readonly contactLifecycleGateway: ContactLifecycleGatewayPort | null;
+  readonly contactLifecycleFaultInjection: ((
+    stage: ContactLifecycleFaultStage,
+    request: import('../../../shared/contracts/contact-authority-lifecycle.js').ContactAuthorityLifecycleRequest,
+  ) => Promise<void> | void) | null;
 
+  declare readVerifiedDiscordContactAuthority: ContactStorePort['readVerifiedDiscordContactAuthority'];
+  declare prepareContactLifecycleIntent: ContactStorePort['prepareContactLifecycleIntent'];
+  declare recordContactLifecycleGatewayResult: ContactStorePort['recordContactLifecycleGatewayResult'];
+  declare claimContactLifecycleRecovery: ContactStorePort['claimContactLifecycleRecovery'];
+  declare deferContactLifecycleRecovery: ContactStorePort['deferContactLifecycleRecovery'];
+  declare assertContactLifecycleLedgerHealthy: ContactStorePort['assertContactLifecycleLedgerHealthy'];
+  declare recoverContactLifecycleMutations: ContactStorePort['recoverContactLifecycleMutations'];
+  declare getContactLifecycleDiagnostics: ContactStorePort['getContactLifecycleDiagnostics'];
   declare upsert: ContactStorePort['upsert'];
   declare getById: ContactStorePort['getById'];
   declare getByDiscordUserId: ContactStorePort['getByDiscordUserId'];
@@ -80,6 +100,16 @@ export class PostgresContactStore implements ContactStorePort {
   declare getCanonicalContactKey: ContactStorePort['getCanonicalContactKey'];
   declare deleteContact: ContactStorePort['deleteContact'];
   declare unlinkChannelIdentity: ContactStorePort['unlinkChannelIdentity'];
+  declare reapproveRestoredDiscordIdentity: ContactStorePort['reapproveRestoredDiscordIdentity'];
+
+  declare mergeContactsDirect: (sourceContactId: string, targetContactId: string, lifecycleIntentId?: string, recoveryLeaseOwner?: string) => Promise<boolean>;
+  declare deleteContactDirect: (id: string, lifecycleIntentId?: string, recoveryLeaseOwner?: string) => Promise<boolean>;
+  declare unlinkChannelIdentityDirect: (contactId: string, channel: string, channelUserId: string, actor?: string, lifecycleIntentId?: string, recoveryLeaseOwner?: string) => Promise<boolean>;
+  declare commitVerifiedDiscordIdentity: (verificationId: string, lifecycleIntentId: string, recoveryLeaseOwner?: string) => Promise<number>;
+  declare commitReapprovedDiscordIdentity: (lifecycleIntentId: string, recoveryLeaseOwner?: string) => Promise<number>;
+  declare verifyDiscordIdentityLifecycle: (row: import('./rows.js').ContactIdentityVerificationRow, privacyLevel?: ChannelPrivacyLevel) => Promise<import('../types.js').ContactIdentityLinkVerificationResult>;
+  declare suspendVerifiedDiscordIdentityConflict: (contactId: string, providerSubjectId: string, discriminator: string) => Promise<void>;
+  declare resumeContactLifecycleIntent: (request: Extract<import('../../../shared/contracts/contact-authority-lifecycle.js').ContactAuthorityLifecycleRequest, { phase: 'prepare' }>) => Promise<import('../../../shared/contracts/contact-lifecycle-ledger.js').ContactLifecyclePrepareOutcome>;
 
   declare tableExists: (tableName: string) => Promise<boolean>;
   declare loadContactRow: (id: string) => Promise<ContactRow | undefined>;
@@ -102,14 +132,27 @@ export class PostgresContactStore implements ContactStorePort {
   declare toVerification: (row: import('./rows.js').ContactIdentityVerificationRow) => ContactIdentityLinkVerification;
   declare markIdentityLinkVerification: (verificationId: string, status: ContactIdentityLinkVerification['status'], failureReason?: string, verifiedAt?: string) => Promise<ContactIdentityLinkVerification | undefined>;
 
-  constructor(pool: Pool, primaryUserId?: string, exportDir?: string) {
+  constructor(
+    pool: Pool,
+    primaryUserId?: string,
+    exportDir?: string,
+    contactLifecycleGateway?: ContactLifecycleGatewayPort,
+    contactLifecycleFaultInjection?: PostgresContactStore['contactLifecycleFaultInjection'],
+  ) {
     this.pool = pool;
     this.primaryUserId = normalizeTrimmed(primaryUserId);
     this.exportDir = normalizeTrimmed(exportDir) ?? null;
+    this.contactLifecycleGateway = contactLifecycleGateway ?? null;
+    this.contactLifecycleFaultInjection = contactLifecycleFaultInjection ?? null;
   }
 }
 
 installPostgresContactSharedOperations(PostgresContactStore);
 installPostgresContactSocialGraphOperations(PostgresContactStore);
 installPostgresContactTrustPolicyOperations(PostgresContactStore);
+installPostgresContactAuthoritySnapshotOperations(PostgresContactStore);
 installPostgresContactCrudOperations(PostgresContactStore);
+installPostgresContactLifecycleLedgerOperations(PostgresContactStore);
+installPostgresContactLifecycleRecoveryOperations(PostgresContactStore);
+installPostgresContactLifecycleMutationCommitOperations(PostgresContactStore);
+installPostgresContactLifecycleCoordinatorOperations(PostgresContactStore);

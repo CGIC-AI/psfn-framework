@@ -80,6 +80,12 @@ export const SETTINGS_SIMPLE_SECTIONS = [
     description: 'Autonomy tier and capability tokens',
   },
   {
+    id: 'advanced-fleet-auth',
+    title: 'Fleet Authentication',
+    description: 'Read-only effective and canonical owner state',
+    groupId: 'trust',
+  },
+  {
     id: 'advanced-backup',
     title: 'Backups',
     description: 'Backup schedule, rotation, and mirror settings',

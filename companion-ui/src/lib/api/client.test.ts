@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildSatelliteHello, PSFN_SATELLITE_MOBILE_CHAT_APP_NAME } from './auth.js';
+import { buildSatelliteHello } from './auth.js';
 import {
   resolveHubWebSocketUrl,
   SatelliteHubClient,
@@ -50,14 +50,9 @@ class FakeSocket implements SatelliteHubWebSocketLike {
 }
 
 describe('satellite hub auth', () => {
-  it('builds the mobile chat app satellite principal', () => {
+  it('advertises only presentation capabilities and no browser authority', () => {
     expect(buildSatelliteHello()).toEqual({
       type: 'hello',
-      deviceId: 'psfn-satellite-mobile-chat-app',
-      deviceName: PSFN_SATELLITE_MOBILE_CHAT_APP_NAME,
-      sessionId: 'psfn-satellite-mobile-chat-app',
-      satelliteId: 'psfn-satellite-mobile-chat-app',
-      satelliteName: PSFN_SATELLITE_MOBILE_CHAT_APP_NAME,
       capabilities: {
         input: ['text'],
         output: ['text', 'subtitle', 'artifact', 'tool_activity'],
@@ -65,13 +60,7 @@ describe('satellite hub auth', () => {
         safety: ['confirmation_required', 'local_only'],
       },
     });
-  });
-
-  it('adds a trimmed device credential only when one is provided', () => {
-    expect(buildSatelliteHello({ credential: '  office-device-secret  ' })).toMatchObject({
-      credential: 'office-device-secret',
-    });
-    expect(buildSatelliteHello({ credential: '   ' })).not.toHaveProperty('credential');
+    expect(Object.keys(buildSatelliteHello()).sort()).toEqual(['capabilities', 'type']);
   });
 });
 
@@ -92,28 +81,8 @@ describe('satellite hub websocket client', () => {
     expect(states).toEqual(['connecting', 'connected']);
     expect(JSON.parse(socket.sent[0] ?? '')).toMatchObject({
       type: 'hello',
-      deviceName: PSFN_SATELLITE_MOBILE_CHAT_APP_NAME,
-      satelliteName: PSFN_SATELLITE_MOBILE_CHAT_APP_NAME,
+      capabilities: expect.any(Object),
     });
-  });
-
-  it('sends enrollment credentials without exposing them to snapshots or outbound observers', async () => {
-    const socket = new FakeSocket();
-    const client = new SatelliteHubClient({
-      url: 'ws://127.0.0.1:8787/',
-      credential: 'office-device-secret',
-      webSocketFactory: () => socket,
-    });
-    const outbound: unknown[] = [];
-    client.on('outbound', (event) => outbound.push(event.message));
-
-    const connecting = client.connect();
-    socket.open();
-    await connecting;
-
-    expect(JSON.parse(socket.sent[0] ?? '')).toMatchObject({ credential: 'office-device-secret' });
-    expect(client.snapshot().hello).not.toHaveProperty('credential');
-    expect(outbound[0]).not.toHaveProperty('credential');
   });
 
   it('surfaces session identity from hello ack without owning it', async () => {
@@ -137,6 +106,7 @@ describe('satellite hub websocket client', () => {
       satelliteId: 'phone',
       satelliteName: 'Phone',
       capabilities: { input: ['text'], output: ['text'] },
+      place: { id: 'office', name: 'Office' },
       identity: {
         source: 'framework',
         companion: { id: 'companion-1', name: 'Purrsephone' },
@@ -146,6 +116,7 @@ describe('satellite hub websocket client', () => {
 
     expect(client.snapshot().ready).toBe(true);
     expect(client.snapshot().session.identity?.companion?.name).toBe('Purrsephone');
+    expect(client.snapshot().session.place).toEqual({ id: 'office', name: 'Office' });
     expect(sessions).toHaveLength(1);
   });
 
@@ -206,6 +177,20 @@ describe('satellite hub websocket client', () => {
 
     expect(client.snapshot().state).toBe('error');
     expect(errors.at(-1)).toContain('Unknown hub->client message type');
+  });
+
+  it('rejects discriminator-only and authority-injected hello acknowledgements', async () => {
+    const socket = new FakeSocket();
+    const client = new SatelliteHubClient({
+      url: 'ws://127.0.0.1:8787/',
+      webSocketFactory: () => socket,
+    });
+    const connecting = client.connect();
+    socket.open();
+    await connecting;
+    socket.message({ type: 'hello.ack', deviceId: 'forged' });
+    await flushAsyncMessage();
+    expect(client.snapshot().state).toBe('error');
   });
 });
 

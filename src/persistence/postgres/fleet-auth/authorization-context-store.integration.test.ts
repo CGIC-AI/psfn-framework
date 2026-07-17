@@ -15,7 +15,10 @@ import {
 import { createPostgresPool } from '../../postgres.js';
 import { FleetAuthAuthorityFloorStore } from './authority-floor.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
-import { createPostgresFleetAuthorizationContextResolver } from './authorization-context.js';
+import {
+  createPostgresFleetAuthorizationContextResolver,
+} from './authorization-context.js';
+import { createPostgresFleetPortalAuthorization } from './portal-authorization-store.js';
 import {
   createGatewayProviderRevocationAuthorityPort,
   reconcileFleetAuthAuthorityState,
@@ -40,6 +43,8 @@ const SESSION_TOKEN = 'S'.repeat(43);
 const SUBJECT_ID = '123456789012345678';
 const OTHER_SUBJECT_ID = '123456789012345679';
 const COMPANION_ID = '7f87ee85-9fcc-4520-91a8-b728293eca76';
+const PORTAL_COMPANION_B = '8f87ee85-9fcc-4520-91a8-b728293eca77';
+const PORTAL_COMPANION_C = '9f87ee85-9fcc-4520-91a8-b728293eca78';
 const CONTACT_ID = 'contact/shared-id';
 const EVIDENCE_IDENTIFIER = '64a1d054-22dd-4e76-9bb3-3ac0d33c63c5';
 const CORRELATION_DIGEST_DOMAIN = 'fleet-authorization:correlation:v1\0';
@@ -129,6 +134,7 @@ function fleetConfig(): FleetAuthConfig {
 
 async function createContextRuntime(options: {
   now?: () => Date;
+  config?: FleetAuthConfig;
   configureProviderAuthority?: (
     authority: ProviderRevocationAuthorityPort,
     floors: FleetAuthAuthorityFloorStore,
@@ -139,6 +145,7 @@ async function createContextRuntime(options: {
   coordinator: Pool;
   migration: Pool;
   resolver: ReturnType<typeof createPostgresFleetAuthorizationContextResolver>;
+  portalAuthorization: ReturnType<typeof createPostgresFleetPortalAuthorization>;
   principalId: string;
 }> {
   if (!harness) throw new Error('Postgres harness unavailable');
@@ -229,21 +236,59 @@ async function createContextRuntime(options: {
   } finally {
     seeder.release();
   }
+  const resolver = createPostgresFleetAuthorizationContextResolver({
+    pool: runtime,
+    sessionPepper: SESSION_PEPPER,
+    config: options.config ?? fleetConfig(),
+    knownCompanionIds: [COMPANION_ID, PORTAL_COMPANION_B, PORTAL_COMPANION_C],
+    providerRevocationAuthority: authority,
+    ...(options.now ? { now: options.now } : {}),
+  });
+  const portalAuthorization = createPostgresFleetPortalAuthorization({
+    pool: runtime,
+    sessionPepper: SESSION_PEPPER,
+    config: options.config ?? fleetConfig(),
+    knownCompanionIds: [COMPANION_ID, PORTAL_COMPANION_B, PORTAL_COMPANION_C],
+    providerRevocationAuthority: authority,
+    ...(options.now ? { now: options.now } : {}),
+  });
   return {
     databaseName: database.databaseName,
     runtime,
     coordinator,
     migration,
     principalId,
-    resolver: createPostgresFleetAuthorizationContextResolver({
-      pool: runtime,
-      sessionPepper: SESSION_PEPPER,
-      config: fleetConfig(),
-      knownCompanionIds: [COMPANION_ID],
-      providerRevocationAuthority: authority,
-      ...(options.now ? { now: options.now } : {}),
-    }),
+    resolver,
+    portalAuthorization,
   };
+}
+
+async function seedPortalCompanion(input: {
+  runtime: Pool;
+  migration: Pool;
+  principalId: string;
+  companionId: string;
+  role: 'owner' | 'admin' | 'member' | 'guest';
+  lifecycle?: 'active' | 'removed' | 'quarantined';
+}): Promise<void> {
+  await input.migration.query(`
+    INSERT INTO fleet_auth.companion_authority_state
+      (companion_id, lifecycle, version, authority_generation, restore_state)
+    VALUES ($1, $2, 1, 1, 'live')
+  `, [input.companionId, input.lifecycle ?? 'active']);
+  await input.runtime.query(`
+    INSERT INTO fleet_auth.principal_contact_bindings
+      (binding_id, principal_id, companion_id, contact_id, state,
+       verification_provenance, version, authority_generation, restore_state)
+    VALUES ($1, $2, $3, $4, 'active',
+            '{"source":"portal_integration_test"}'::jsonb, 1, 1, 'live')
+  `, [randomUUID(), input.principalId, input.companionId, `contact/${input.companionId}`]);
+  await input.runtime.query(`
+    INSERT INTO fleet_auth.principal_role_grants
+      (grant_id, principal_id, companion_id, role, lifecycle,
+       version, authority_generation, restore_state)
+    VALUES ($1, $2, $3, $4, 'active', 1, 1, 'live')
+  `, [randomUUID(), input.principalId, input.companionId, input.role]);
 }
 
 async function waitForBlockedContextResolution(databaseName: string): Promise<void> {
@@ -1125,6 +1170,264 @@ describe('Postgres fleet authorization context snapshot', () => {
       }]);
       expect(JSON.stringify(audit.rows)).not.toContain(SUBJECT_ID);
     } finally {
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+});
+
+describe('Postgres fleet portal batch authorization', () => {
+  it('returns one privacy-bounded batch from current manifest authority and canonical role policy', async () => {
+    const {
+      runtime,
+      coordinator,
+      migration,
+      portalAuthorization,
+      principalId,
+    } = await createContextRuntime();
+    try {
+      await seedPortalCompanion({
+        runtime,
+        migration,
+        principalId,
+        companionId: PORTAL_COMPANION_B,
+        role: 'admin',
+      });
+      await seedPortalCompanion({
+        runtime,
+        migration,
+        principalId,
+        companionId: PORTAL_COMPANION_C,
+        role: 'owner',
+        lifecycle: 'removed',
+      });
+
+      const result = await portalAuthorization.resolve({ sessionToken: SESSION_TOKEN });
+      expect(result).toEqual({
+        companions: [
+          { companionId: COMPANION_ID, gardenLinkEligible: false },
+          { companionId: PORTAL_COMPANION_B, gardenLinkEligible: true },
+        ],
+      });
+      const serialized = JSON.stringify(result);
+      expect(serialized).not.toContain(PORTAL_COMPANION_C);
+      expect(serialized).not.toContain(principalId);
+      expect(serialized).not.toContain(SUBJECT_ID);
+      expect(serialized).not.toContain(CONTACT_ID);
+      expect(serialized).not.toContain('admin');
+      const audit = await runtime.query<{
+        action: string;
+        resource: string;
+        decision: string;
+        reason_code: string;
+        companion_id: string | null;
+      }>(`
+        SELECT action, resource, decision, reason_code, companion_id
+        FROM fleet_auth.authorization_audit_events
+        WHERE resource = 'fleet_portal'
+      `);
+      expect(audit.rows).toEqual([{
+        action: 'companion.read',
+        resource: 'fleet_portal',
+        decision: 'allow',
+        reason_code: 'portal_projection_allowed',
+        companion_id: null,
+      }]);
+    } finally {
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('removes ambiguous, revoked, quarantined, and disabled companion authority independently', async () => {
+    const config = fleetConfig();
+    config.rolePolicy.disabledActionsByRole.member.push('companion.read');
+    config.rolePolicy.disabledActionsByRole.admin.push('garden.read');
+    const {
+      runtime,
+      coordinator,
+      migration,
+      portalAuthorization,
+      principalId,
+    } = await createContextRuntime({ config });
+    try {
+      await seedPortalCompanion({
+        runtime,
+        migration,
+        principalId,
+        companionId: PORTAL_COMPANION_B,
+        role: 'admin',
+      });
+      await seedPortalCompanion({
+        runtime,
+        migration,
+        principalId,
+        companionId: PORTAL_COMPANION_C,
+        role: 'owner',
+      });
+      await runtime.query(`
+        INSERT INTO fleet_auth.principal_contact_bindings
+          (binding_id, principal_id, companion_id, contact_id, state,
+           verification_provenance, version, authority_generation, restore_state)
+        VALUES ($1, $2, $3, 'contact/collision', 'active',
+                '{"source":"portal_collision"}'::jsonb, 1, 1, 'live')
+      `, [randomUUID(), principalId, PORTAL_COMPANION_C]);
+
+      await expect(portalAuthorization.resolve({ sessionToken: SESSION_TOKEN })).resolves.toEqual({
+        companions: [{ companionId: PORTAL_COMPANION_B, gardenLinkEligible: false }],
+      });
+
+      await runtime.query(`
+        UPDATE fleet_auth.principal_contact_bindings
+        SET state = 'revoked'
+        WHERE principal_id = $1 AND companion_id = $2
+      `, [principalId, PORTAL_COMPANION_B]);
+      await expect(portalAuthorization.resolve({ sessionToken: SESSION_TOKEN })).resolves.toEqual({
+        companions: [],
+      });
+      await runtime.query(`
+        UPDATE fleet_auth.principal_contact_bindings
+        SET state = 'active'
+        WHERE principal_id = $1 AND companion_id = $2
+      `, [principalId, PORTAL_COMPANION_B]);
+      await expect(portalAuthorization.resolve({ sessionToken: SESSION_TOKEN })).resolves.toEqual({
+        companions: [{ companionId: PORTAL_COMPANION_B, gardenLinkEligible: false }],
+      });
+
+      await runtime.query(`
+        UPDATE fleet_auth.principal_role_grants
+        SET lifecycle = 'revoked'
+        WHERE principal_id = $1 AND companion_id = $2
+      `, [principalId, PORTAL_COMPANION_B]);
+      await expect(portalAuthorization.resolve({ sessionToken: SESSION_TOKEN })).resolves.toEqual({
+        companions: [],
+      });
+      await runtime.query(`
+        UPDATE fleet_auth.principal_role_grants
+        SET lifecycle = 'active'
+        WHERE principal_id = $1 AND companion_id = $2
+      `, [principalId, PORTAL_COMPANION_B]);
+      await runtime.query(`
+        DELETE FROM fleet_auth.principal_contact_bindings
+        WHERE principal_id = $1 AND companion_id = $2 AND contact_id = 'contact/collision'
+      `, [principalId, PORTAL_COMPANION_C]);
+      await expect(portalAuthorization.resolve({ sessionToken: SESSION_TOKEN })).resolves.toEqual({
+        companions: [
+          { companionId: PORTAL_COMPANION_B, gardenLinkEligible: false },
+          { companionId: PORTAL_COMPANION_C, gardenLinkEligible: true },
+        ],
+      });
+      await runtime.query(`
+        UPDATE fleet_auth.principal_contact_bindings
+        SET restore_state = 'quarantined'
+        WHERE principal_id = $1 AND companion_id = $2
+      `, [principalId, PORTAL_COMPANION_C]);
+      await expect(portalAuthorization.resolve({ sessionToken: SESSION_TOKEN })).resolves.toEqual({
+        companions: [{ companionId: PORTAL_COMPANION_B, gardenLinkEligible: false }],
+      });
+
+      await migration.query(`
+        UPDATE fleet_auth.companion_authority_state
+        SET lifecycle = 'quarantined'
+        WHERE companion_id = $1
+      `, [PORTAL_COMPANION_B]);
+      await expect(portalAuthorization.resolve({ sessionToken: SESSION_TOKEN })).resolves.toEqual({
+        companions: [],
+      });
+    } finally {
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('denies stale session counters, epoch changes, and merged principals before returning entries', async () => {
+    for (const mutation of [
+      `UPDATE fleet_auth.human_principals SET authz_version = authz_version + 1`,
+      `UPDATE fleet_auth.authority_state SET global_auth_epoch = global_auth_epoch + 1`,
+    ]) {
+      const {
+        runtime,
+        coordinator,
+        migration,
+        portalAuthorization,
+      } = await createContextRuntime();
+      try {
+        await migration.query(mutation);
+        await expect(portalAuthorization.resolve({ sessionToken: SESSION_TOKEN }))
+          .rejects.toBeInstanceOf(FleetAuthorizationDeniedError);
+      } finally {
+        await coordinator.end();
+        await migration.end();
+        await runtime.end();
+      }
+    }
+
+    const {
+      runtime,
+      coordinator,
+      migration,
+      portalAuthorization,
+      principalId,
+    } = await createContextRuntime();
+    try {
+      const canonicalPrincipalId = randomUUID();
+      await migration.query(`
+        INSERT INTO fleet_auth.human_principals
+          (principal_id, status, authn_version, authz_version, authority_generation, restore_state)
+        VALUES ($1, 'active', 1, 1, 1, 'live')
+      `, [canonicalPrincipalId]);
+      await migration.query(`
+        INSERT INTO fleet_auth.principal_merge_aliases
+          (source_principal_id, canonical_principal_id, decision_id,
+           authority_generation, reason_digest, restore_state)
+        VALUES ($1, $2, $3, 1, $4, 'live')
+      `, [principalId, canonicalPrincipalId, randomUUID(), 'b'.repeat(64)]);
+      await expect(portalAuthorization.resolve({ sessionToken: SESSION_TOKEN }))
+        .rejects.toMatchObject({ code: 'principal_merged' });
+    } finally {
+      await coordinator.end();
+      await migration.end();
+      await runtime.end();
+    }
+  }, TIMEOUT_MS);
+
+  it('fails closed when a competing authority mutation invalidates the one-shot snapshot', async () => {
+    const {
+      databaseName,
+      runtime,
+      coordinator,
+      migration,
+      portalAuthorization,
+      principalId,
+    } = await createContextRuntime();
+    const mutator = await runtime.connect();
+    try {
+      await mutator.query('BEGIN');
+      await mutator.query(`SELECT * FROM ${FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME}()`);
+      const pendingProjection = portalAuthorization.resolve({ sessionToken: SESSION_TOKEN });
+      await waitForBlockedContextResolution(databaseName);
+      await mutator.query(`
+        UPDATE fleet_auth.human_principals
+        SET authz_version = authz_version + 1, updated_at = clock_timestamp()
+        WHERE principal_id = $1
+      `, [principalId]);
+      await mutator.query('COMMIT');
+      await expect(pendingProjection).rejects.toMatchObject({ code: 'authorization_store_error' });
+      const audit = await runtime.query<{ decision: string; reason_code: string }>(`
+        SELECT decision, reason_code
+        FROM fleet_auth.authorization_audit_events
+        WHERE resource = 'fleet_portal'
+      `);
+      expect(audit.rows).toEqual([{
+        decision: 'deny',
+        reason_code: 'authorization_store_error',
+      }]);
+    } finally {
+      await mutator.query('ROLLBACK').catch(() => undefined);
+      mutator.release();
       await coordinator.end();
       await migration.end();
       await runtime.end();

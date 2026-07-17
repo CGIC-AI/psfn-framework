@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { TLSSocket } from 'node:tls';
 import {
   FleetAuthBrokerError,
   type GatewayFleetAuthBroker,
@@ -11,14 +10,33 @@ import {
   isLifecycleOAuthProofRole,
 } from '../../../shared/contracts/fleet-auth-lifecycle-oauth.js';
 import { isRecord } from '../../../shared/utils/types.js';
+import { FLEET_AUTH_SESSION_COOKIE_NAME } from './fleet-auth-cookie.js';
+import { resolveFleetSsoBrowserOrigin } from '../../../boundary/gateway/fleet-sso-router.js';
+import {
+  FleetAuthJitHttpRoutes,
+} from './fleet-auth-jit-routes.js';
+import type { FleetJitStepUpCoordinator } from '../../../boundary/fleet-auth/jit-step-up.js';
+import {
+  FleetAuthPasskeyHttpRoutes,
+} from './fleet-auth-passkey-routes.js';
+import type { TrustedHostPasskeyCeremonyService } from '../../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
+import { FleetAuthorizationDeniedError } from '../../../boundary/gateway/fleet-authorization-context.js';
+import type { GatewayTrustedHostGardenRecoveryService } from '../../../boundary/gateway/trusted-host-garden-recovery.js';
+import { FleetAuthRecoveryHttpRoutes } from './fleet-auth-recovery-routes.js';
+import type { GatewayFleetAuthLifecycleCeremonyService } from '../../../boundary/fleet-auth/lifecycle-ceremony.js';
+import { FleetAuthLifecycleCeremonyHttpRoutes } from './fleet-auth-lifecycle-ceremony-routes.js';
+import type { TrustedHostAccountReapprovalService } from '../../../boundary/fleet-auth/trusted-host-account-reapproval.js';
+import { FleetAuthAccountReapprovalHttpRoutes } from './fleet-auth-account-reapproval-routes.js';
+import type { TrustedHostProviderRecoveryService } from '../../../boundary/fleet-auth/trusted-host-provider-recovery.js';
+import { FleetAuthProviderRecoveryHttpRoutes } from './fleet-auth-provider-recovery-routes.js';
 
 const LOGIN_PATH = '/v1/fleet-auth/login';
 export const FLEET_AUTH_LIFECYCLE_OAUTH_PATH = '/v1/fleet-auth/lifecycle/oauth';
 const REFRESH_PATH = '/v1/fleet-auth/session/refresh';
 const CSRF_PATH = '/v1/fleet-auth/session/csrf';
+const STATUS_PATH = '/v1/fleet-auth/session/status';
 const LOGOUT_PATH = '/v1/fleet-auth/logout';
 const PROVIDER_REVOKE_PATH = '/v1/fleet-auth/provider/revoke';
-const SESSION_COOKIE_NAME = '__Host-psfn_session';
 const PREAUTH_COOKIE_NAME = '__Host-psfn_preauth';
 const CSRF_HEADER_NAME = 'x-psfn-csrf';
 const MUTATION_BODY_LIMIT = 2048;
@@ -46,7 +64,7 @@ function readOpaqueCookie(request: IncomingMessage, name: string): string | unde
 }
 
 function readSessionCookie(request: IncomingMessage): string | undefined {
-  return readOpaqueCookie(request, SESSION_COOKIE_NAME);
+  return readOpaqueCookie(request, FLEET_AUTH_SESSION_COOKIE_NAME);
 }
 
 function requireSingleQuery(url: URL, name: string): string | undefined {
@@ -54,12 +72,16 @@ function requireSingleQuery(url: URL, name: string): string | undefined {
   return values.length === 1 ? values[0] ?? undefined : undefined;
 }
 
-function requestCallbackOrigin(request: IncomingMessage, canonicalOrigin: string): string {
-  const expected = new URL(canonicalOrigin);
-  const host = singleHeader(request.headers.host);
-  const tls = request.socket instanceof TLSSocket;
-  if (!tls || host !== expected.host) return 'invalid://callback-origin';
-  return `https://${host}`;
+function requestCallbackOrigin(
+  request: IncomingMessage,
+  canonicalOrigin: string,
+  trustProxy: boolean,
+): string {
+  try {
+    return resolveFleetSsoBrowserOrigin(request, { canonicalOrigin, trustProxy });
+  } catch {
+    return 'invalid://callback-origin';
+  }
 }
 
 function mutationOrigin(request: IncomingMessage): string {
@@ -79,11 +101,11 @@ function requestedLifecycleCorsHeaders(request: IncomingMessage): string[] | und
 
 function sessionCookie(token: string, absoluteExpiresAt: Date, now = Date.now()): string {
   const maxAge = Math.max(0, Math.floor((absoluteExpiresAt.getTime() - now) / 1000));
-  return `${SESSION_COOKIE_NAME}=${token}; Path=/; Max-Age=${maxAge}; Secure; HttpOnly; SameSite=Lax`;
+  return `${FLEET_AUTH_SESSION_COOKIE_NAME}=${token}; Path=/; Max-Age=${maxAge}; Secure; HttpOnly; SameSite=Lax`;
 }
 
 function clearSessionCookie(): string {
-  return `${SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax`;
+  return `${FLEET_AUTH_SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax`;
 }
 
 function preauthCookie(token: string, expiresAt: Date, now = Date.now()): string {
@@ -111,19 +133,72 @@ export class FleetAuthHttpRoutes {
   private readonly broker: GatewayFleetAuthBroker;
   private readonly canonicalOrigin: string;
   private readonly callbackPath: string;
+  private readonly trustProxy: boolean;
+  private readonly jitRoutes?: FleetAuthJitHttpRoutes;
+  private readonly passkeyRoutes?: FleetAuthPasskeyHttpRoutes;
+  private readonly providerRecoveryRoutes?: FleetAuthProviderRecoveryHttpRoutes;
+  private readonly companionUi?: Readonly<{
+    companionId: string;
+    guestMode: 'disabled' | 'explicit';
+  }>;
+  private readonly recoveryRoutes?: FleetAuthRecoveryHttpRoutes;
+  private readonly lifecycleCeremonyRoutes?: FleetAuthLifecycleCeremonyHttpRoutes;
+  private readonly accountReapprovalRoutes?: FleetAuthAccountReapprovalHttpRoutes;
 
   constructor(options: {
     broker: GatewayFleetAuthBroker;
     canonicalOrigin: string;
     callbackPath: string;
+    jitStepUp?: FleetJitStepUpCoordinator;
+    passkeyCeremonies?: TrustedHostPasskeyCeremonyService;
+    trustedHostRecovery?: GatewayTrustedHostGardenRecoveryService;
+    lifecycleCeremonies?: GatewayFleetAuthLifecycleCeremonyService;
+    accountReapprovalCeremonies?: TrustedHostAccountReapprovalService;
+    providerRecovery?: TrustedHostProviderRecoveryService;
+    trustProxy?: boolean;
+    companionUi?: Readonly<{
+      companionId: string;
+      guestMode: 'disabled' | 'explicit';
+    }>;
   }) {
     this.broker = options.broker;
     this.canonicalOrigin = options.canonicalOrigin;
     this.callbackPath = options.callbackPath;
+    this.trustProxy = options.trustProxy === true;
+    this.jitRoutes = options.jitStepUp
+      ? new FleetAuthJitHttpRoutes(options.jitStepUp)
+      : undefined;
+    this.passkeyRoutes = options.passkeyCeremonies
+      ? new FleetAuthPasskeyHttpRoutes({
+        ceremonies: options.passkeyCeremonies,
+        broker: options.broker,
+      })
+      : undefined;
+    this.providerRecoveryRoutes = options.providerRecovery
+      ? new FleetAuthProviderRecoveryHttpRoutes(options.providerRecovery)
+      : undefined;
+    this.companionUi = options.companionUi;
+    this.recoveryRoutes = options.trustedHostRecovery
+      ? new FleetAuthRecoveryHttpRoutes(options.trustedHostRecovery)
+      : undefined;
+    this.lifecycleCeremonyRoutes = options.lifecycleCeremonies
+      ? new FleetAuthLifecycleCeremonyHttpRoutes(options.lifecycleCeremonies)
+      : undefined;
+    this.accountReapprovalRoutes = options.accountReapprovalCeremonies
+      ? new FleetAuthAccountReapprovalHttpRoutes(options.accountReapprovalCeremonies)
+      : undefined;
   }
 
   matches(method: string | undefined, path: string): boolean {
-    return (method === 'GET' && (path === LOGIN_PATH || path === CSRF_PATH || path === this.callbackPath))
+    return (this.jitRoutes?.matches(method, path) ?? false)
+      || (this.passkeyRoutes?.matches(method, path) ?? false)
+      || (this.recoveryRoutes?.matches(method, path) ?? false)
+      || (this.lifecycleCeremonyRoutes?.matches(method, path) ?? false)
+      || (this.accountReapprovalRoutes?.matches(method, path) ?? false)
+      || (this.providerRecoveryRoutes?.matches(method, path) ?? false)
+      || (method === 'GET' && (
+        path === LOGIN_PATH || path === CSRF_PATH || path === STATUS_PATH || path === this.callbackPath
+      ))
       || (method === 'POST'
         && (path === FLEET_AUTH_LIFECYCLE_OAUTH_PATH || path === REFRESH_PATH
           || path === LOGOUT_PATH || path === PROVIDER_REVOKE_PATH));
@@ -182,6 +257,10 @@ export class FleetAuthHttpRoutes {
     response.setHeader('Referrer-Policy', 'no-referrer');
     const isCallback = request.method === 'GET' && url.pathname === this.callbackPath;
     try {
+      if (this.recoveryRoutes?.matches(request.method, url.pathname)) {
+        await this.recoveryRoutes.handle(request, response, url);
+        return;
+      }
       if (request.method === 'GET' && url.pathname === LOGIN_PATH) {
         const returnPath = requireSingleQuery(url, 'return_to');
         if (!returnPath || [...url.searchParams.keys()].some(key => key !== 'return_to')) {
@@ -206,7 +285,7 @@ export class FleetAuthHttpRoutes {
         const completed = await this.broker.completeOAuthCallback({
           state,
           code,
-          requestOrigin: requestCallbackOrigin(request, this.canonicalOrigin),
+          requestOrigin: requestCallbackOrigin(request, this.canonicalOrigin, this.trustProxy),
           initiatingBrowserToken: readOpaqueCookie(request, PREAUTH_COOKIE_NAME) ?? '',
         });
         if (completed.kind === 'login') {
@@ -230,6 +309,60 @@ export class FleetAuthHttpRoutes {
         }, { 'Cache-Control': 'no-store' });
         return;
       }
+      if (request.method === 'GET' && url.pathname === STATUS_PATH) {
+        if (url.search || !this.companionUi) {
+          throw new FleetAuthBrokerError('fleet_auth_route_not_found', 404);
+        }
+        response.setHeader('Vary', 'Cookie');
+        const statusToken = readSessionCookie(request);
+        if (!statusToken) {
+          sendJson(response, 200, {
+            schemaVersion: 1,
+            state: 'signed_out',
+            guestMode: this.companionUi.guestMode,
+            ...(this.companionUi.guestMode === 'explicit'
+              ? { websocketPath: `/companion-ui/companions/${this.companionUi.companionId}/ws` }
+              : {}),
+          }, { 'Cache-Control': 'no-store, private' });
+          return;
+        }
+        try {
+          const context = await this.broker.resolveAuthorizationContext({
+            sessionToken: statusToken,
+            audience: 'fleet',
+            companionId: this.companionUi.companionId,
+            action: 'companion.read',
+          });
+          if (context.companionId !== this.companionUi.companionId
+            || context.authorization.action !== 'companion.read') {
+            throw new Error('Companion UI session authority changed');
+          }
+          sendJson(response, 200, {
+            schemaVersion: 1,
+            state: 'signed_in',
+            guestMode: this.companionUi.guestMode,
+            websocketPath: `/companion-ui/companions/${this.companionUi.companionId}/ws`,
+            human: {
+              provider: context.providerSubject.provider,
+              label: 'Discord user',
+              role: context.operator.role,
+            },
+          }, { 'Cache-Control': 'no-store, private' });
+          return;
+        } catch (error) {
+          if (!(error instanceof FleetAuthorizationDeniedError)) throw error;
+          response.setHeader('Set-Cookie', clearSessionCookie());
+          sendJson(response, 200, {
+            schemaVersion: 1,
+            state: 'signed_out',
+            guestMode: this.companionUi.guestMode,
+            ...(this.companionUi.guestMode === 'explicit'
+              ? { websocketPath: `/companion-ui/companions/${this.companionUi.companionId}/ws` }
+              : {}),
+          }, { 'Cache-Control': 'no-store, private' });
+          return;
+        }
+      }
       const token = readSessionCookie(request);
       if (!token) {
         throw new FleetAuthBrokerError('invalid_session', 401, 'Session is invalid or expired');
@@ -237,7 +370,7 @@ export class FleetAuthHttpRoutes {
       if (request.method === 'GET' && url.pathname === CSRF_PATH) {
         const csrfToken = await this.broker.issueCsrf({
           token,
-          requestOrigin: requestCallbackOrigin(request, this.canonicalOrigin),
+          requestOrigin: requestCallbackOrigin(request, this.canonicalOrigin, this.trustProxy),
         });
         sendJson(response, 200, { csrfToken }, { 'Cache-Control': 'no-store' });
         return;
@@ -245,6 +378,61 @@ export class FleetAuthHttpRoutes {
       const csrfToken = singleHeader(request.headers[CSRF_HEADER_NAME]);
       if (!csrfToken || !/^[A-Za-z0-9_-]{43}$/u.test(csrfToken)) {
         throw new FleetAuthBrokerError('invalid_csrf', 403, 'Session-bound CSRF token is required');
+      }
+      if (this.jitRoutes?.matches(request.method, url.pathname)) {
+        await this.jitRoutes.handle({
+          request,
+          response,
+          path: url.pathname,
+          token,
+          csrfToken,
+          requestOrigin: mutationOrigin(request),
+        });
+        return;
+      }
+      if (this.passkeyRoutes?.matches(request.method, url.pathname)) {
+        await this.passkeyRoutes.handle({
+          request,
+          response,
+          path: url.pathname,
+          token,
+          csrfToken,
+          requestOrigin: mutationOrigin(request),
+        });
+        return;
+      }
+      if (this.lifecycleCeremonyRoutes?.matches(request.method, url.pathname)) {
+        await this.lifecycleCeremonyRoutes.handle({
+          request,
+          response,
+          path: url.pathname,
+          token,
+          csrfToken,
+          requestOrigin: mutationOrigin(request),
+        });
+        return;
+      }
+      if (this.accountReapprovalRoutes?.matches(request.method, url.pathname)) {
+        await this.accountReapprovalRoutes.handle({
+          request,
+          response,
+          path: url.pathname,
+          token,
+          csrfToken,
+          requestOrigin: mutationOrigin(request),
+        });
+        return;
+      }
+      if (this.providerRecoveryRoutes?.matches(request.method, url.pathname)) {
+        await this.providerRecoveryRoutes.handle({
+          request,
+          response,
+          path: url.pathname,
+          token,
+          csrfToken,
+          requestOrigin: mutationOrigin(request),
+        });
+        return;
       }
       if (request.method === 'POST' && url.pathname === FLEET_AUTH_LIFECYCLE_OAUTH_PATH) {
         const body = await readJsonBodyWithLimit(request, response, { maxBytes: MUTATION_BODY_LIMIT });

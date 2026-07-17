@@ -7,6 +7,7 @@ import type {
   MessageEvent as HubMessageEvent,
   PongMessage,
   RuntimeIdentity,
+  RuntimePlaceIdentity,
   SatelliteCapabilities,
   SessionReadyMessage,
   TouchInteractionMessage,
@@ -30,10 +31,11 @@ export type SatelliteHubConnectionState =
 export interface SatelliteHubSession {
   sessionId?: string;
   channelId?: string;
-  deviceId: string;
-  deviceName: string;
-  satelliteId: string;
-  satelliteName: string;
+  deviceId?: string;
+  deviceName?: string;
+  satelliteId?: string;
+  satelliteName?: string;
+  place?: RuntimePlaceIdentity;
   audioFormat?: string;
   capabilities?: SatelliteCapabilities;
   identity?: RuntimeIdentity;
@@ -143,15 +145,7 @@ export class SatelliteHubClient {
     this.nowMs = options.nowMs ?? (() => Date.now());
     this.autoHello = options.autoHello ?? true;
     this.hello = buildSatelliteHello(options);
-    this.session = {
-      deviceId: this.hello.deviceId,
-      deviceName: this.hello.deviceName,
-      satelliteId: this.hello.satelliteId ?? this.hello.deviceId,
-      satelliteName: this.hello.satelliteName ?? this.hello.deviceName,
-      sessionId: this.hello.sessionId,
-      channelId: this.hello.channelId,
-      capabilities: cloneCapabilities(this.hello.capabilities),
-    };
+    this.session = { capabilities: cloneCapabilities(this.hello.capabilities) };
   }
 
   on<K extends keyof SatelliteHubClientEventMap>(
@@ -175,11 +169,12 @@ export class SatelliteHubClient {
       state: this.state,
       ready: this.ready,
       url: this.options.url,
-      hello: redactHello(this.hello),
+      hello: cloneHello(this.hello),
       session: {
         ...this.session,
         capabilities: cloneCapabilities(this.session.capabilities),
         identity: cloneIdentity(this.session.identity),
+        place: this.session.place ? { ...this.session.place } : undefined,
       },
     };
   }
@@ -389,7 +384,10 @@ export class SatelliteHubClient {
         return;
       case 'error-event':
         this.emit('error', {
-          message: message.data.message,
+          // Hub error text is untrusted diagnostic input and can accidentally
+          // contain credentials. Keep the detailed frame in volatile protocol
+          // state only; browser diagnostics receive a fixed summary.
+          message: 'Satellite Hub reported an error',
           recoverable: true,
         });
         return;
@@ -421,6 +419,7 @@ export class SatelliteHubClient {
       ...this.session,
       capabilities: cloneCapabilities(this.session.capabilities),
       identity: cloneIdentity(this.session.identity),
+      place: this.session.place ? { ...this.session.place } : undefined,
     });
   }
 
@@ -431,6 +430,7 @@ export class SatelliteHubClient {
     this.session.deviceName = message.deviceName;
     this.session.satelliteId = message.satelliteId;
     this.session.audioFormat = message.audioFormat;
+    this.session.place = message.place ? { ...message.place } : undefined;
     this.session.identity = cloneIdentity(message.identity);
   }
 
@@ -442,6 +442,7 @@ export class SatelliteHubClient {
     this.session.satelliteId = message.satelliteId;
     this.session.satelliteName = message.satelliteName;
     this.session.capabilities = cloneCapabilities(message.capabilities);
+    this.session.place = message.place ? { ...message.place } : undefined;
     this.session.identity = cloneIdentity(message.identity);
   }
 
@@ -524,16 +525,15 @@ function cloneCapabilities(capabilities: SatelliteCapabilities | undefined): Sat
   };
 }
 
-function redactHello(message: HelloMessage): HelloMessage {
-  const { credential: _credential, ...redacted } = message;
+function cloneHello(message: HelloMessage): HelloMessage {
   return {
-    ...redacted,
-    capabilities: cloneCapabilities(message.capabilities),
+    type: 'hello',
+    capabilities: cloneCapabilities(message.capabilities) ?? {},
   };
 }
 
 function redactClientMessage(message: ClientToHubMessage): ClientToHubMessage {
-  return message.type === 'hello' ? redactHello(message) : message;
+  return message.type === 'hello' ? cloneHello(message) : message;
 }
 
 function cloneIdentity(identity: RuntimeIdentity | undefined): RuntimeIdentity | undefined {

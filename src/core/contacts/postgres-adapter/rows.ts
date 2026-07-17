@@ -5,6 +5,9 @@ export interface ContactRow {
   nickname: string | null;
   trust_level: string;
   trust_version?: string;
+  contact_authority_version?: string;
+  contact_lifecycle_state?: string;
+  contact_restore_state?: string;
   relationship_type: string;
   is_machine_intelligence?: boolean | null;
   emotional_baseline: unknown;
@@ -22,6 +25,11 @@ export interface ContactIdentityRow {
   privacy_level: string | null;
   first_seen: string;
   last_seen: string;
+  identity_version?: string;
+  ownership_state?: string;
+  verification_id?: string | null;
+  verification_digest?: string | null;
+  restore_state?: string;
 }
 
 export interface ContactChannelActivityRow {

@@ -139,6 +139,18 @@ function redactedContext(
       callbackDigest: digest(proof.callbackTransactionId),
       proofDigest: proof.proofDigest,
     })),
+    ...('contactAuthority' in decision ? {
+      contactAuthority: {
+        contactDigest: digest(decision.contactAuthority.contactId),
+        providerSubjectDigest: digest(decision.contactAuthority.providerSubjectId),
+        contactAuthorityVersion: decision.contactAuthority.contactAuthorityVersion,
+        identityVersion: decision.contactAuthority.identityVersion,
+        verificationDigest: decision.contactAuthority.verificationDigest,
+        verificationIdDigest: digest(decision.contactAuthority.verificationId),
+        ownershipState: decision.contactAuthority.ownershipState,
+        restoreState: decision.contactAuthority.restoreState,
+      },
+    } : {}),
     ...(snapshots ? { resourceState: snapshots } : {}),
     ...(lifecycleResult ? {
       lifecycleResult: {

@@ -11,8 +11,11 @@ const COMPANION_UI_ROOT = resolve(import.meta.dirname, '..');
 const temporaryDirectories: string[] = [];
 
 interface TestResponse {
+  headers: Headers;
   label: string;
   ok: boolean;
+  redirected: boolean;
+  url: string;
   clone(): TestResponse;
 }
 
@@ -29,11 +32,27 @@ interface ServiceWorkerHarnessOptions {
   }>;
 }
 
-function testResponse(label: string): TestResponse {
+interface TestRequest {
+  cache?: string;
+  credentials?: string;
+  headers?: Headers;
+  method: string;
+  mode: string;
+  url: string;
+}
+
+function testResponse(
+  label: string,
+  headers: HeadersInit = {},
+  options: { redirected?: boolean; url?: string } = {},
+): TestResponse {
   return {
+    headers: new Headers(headers),
     label,
     ok: true,
-    clone: () => testResponse(label),
+    redirected: options.redirected ?? false,
+    url: options.url ?? 'https://companion.test/companion-ui/',
+    clone: () => testResponse(label, headers, options),
   };
 }
 
@@ -41,6 +60,10 @@ function createServiceWorkerHarness(
   source: string,
   options: ServiceWorkerHarnessOptions,
 ): {
+  cache: {
+    match: ReturnType<typeof vi.fn>;
+    put: ReturnType<typeof vi.fn>;
+  };
   cacheStorage: {
     delete: ReturnType<typeof vi.fn>;
   };
@@ -49,11 +72,8 @@ function createServiceWorkerHarness(
     matchAll: ReturnType<typeof vi.fn>;
   };
   dispatchActivate(): Promise<void>;
-  dispatchFetch(request: {
-    method: string;
-    mode: string;
-    url: string;
-  }): Promise<TestResponse | undefined>;
+  dispatchInstall(): Promise<void>;
+  dispatchFetch(request: TestRequest): Promise<TestResponse | undefined>;
   fetch: ReturnType<typeof vi.fn>;
 } {
   const listeners = new Map<string, (event: unknown) => void>();
@@ -68,9 +88,14 @@ function createServiceWorkerHarness(
     match: vi.fn(async () => options.cachedResponse),
     open: vi.fn(async () => cache),
   };
-  const fetch = vi.fn(async () => {
+  const fetch = vi.fn(async (request?: Request) => {
     if (options.fetchError) throw options.fetchError;
     if (!options.fetchResponse) throw new Error('Test fetch response was not configured');
+    if (request instanceof Request && !options.fetchResponse.redirected) {
+      const response = options.fetchResponse.clone();
+      response.url = request.url;
+      return response;
+    }
     return options.fetchResponse;
   });
   const clients = {
@@ -88,6 +113,8 @@ function createServiceWorkerHarness(
     skipWaiting: vi.fn(async () => undefined),
   };
   runInNewContext(source, {
+    Headers,
+    Request,
     URL,
     caches: cacheStorage,
     console,
@@ -97,6 +124,7 @@ function createServiceWorkerHarness(
   });
 
   return {
+    cache,
     cacheStorage,
     clients,
     fetch,
@@ -114,6 +142,17 @@ function createServiceWorkerHarness(
       dispatching = false;
       await Promise.all(lifetimePromises);
     },
+    async dispatchInstall() {
+      const listener = listeners.get('install');
+      if (!listener) throw new Error('Service worker did not register an install listener');
+      const lifetimePromises: Promise<unknown>[] = [];
+      listener({
+        waitUntil(value: Promise<unknown>) {
+          lifetimePromises.push(Promise.resolve(value));
+        },
+      });
+      await Promise.all(lifetimePromises);
+    },
     async dispatchFetch(request) {
       const listener = listeners.get('fetch');
       if (!listener) throw new Error('Service worker did not register a fetch listener');
@@ -122,7 +161,12 @@ function createServiceWorkerHarness(
       let dispatching = true;
       try {
         listener({
-          request,
+          request: {
+            cache: 'default',
+            credentials: 'same-origin',
+            headers: new Headers(),
+            ...request,
+          },
           respondWith(value: Promise<TestResponse>) {
             responsePromise = Promise.resolve(value);
           },
@@ -142,25 +186,27 @@ function createServiceWorkerHarness(
   };
 }
 
-async function buildCompanionUi(revision: string, hubUrl?: string): Promise<{
+async function buildCompanionUi(revision: string, bundleMarker?: string): Promise<{
   indexHtml: string;
+  manifest: string;
   serviceWorker: string;
 }> {
   const outDir = await mkdtemp(resolve(tmpdir(), 'psfn-companion-ui-build-'));
   temporaryDirectories.push(outDir);
   const previousRevision = process.env.COMPANION_UI_BUILD_REVISION;
-  const previousHubUrl = process.env.VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL;
   process.env.COMPANION_UI_BUILD_REVISION = revision;
-  if (hubUrl === undefined) {
-    delete process.env.VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL;
-  } else {
-    process.env.VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL = hubUrl;
-  }
   try {
     await build({
       root: COMPANION_UI_ROOT,
       configFile: resolve(COMPANION_UI_ROOT, 'vite.config.ts'),
       logLevel: 'silent',
+      ...(bundleMarker ? {
+        define: {
+          __PSFN_COMPANION_UI_SW_UPDATE_INTERVAL_MS__: JSON.stringify(
+            bundleMarker === 'bundle-a' ? 60_001 : 60_002,
+          ),
+        },
+      } : {}),
       build: {
         emptyOutDir: true,
         outDir,
@@ -172,14 +218,10 @@ async function buildCompanionUi(revision: string, hubUrl?: string): Promise<{
     } else {
       process.env.COMPANION_UI_BUILD_REVISION = previousRevision;
     }
-    if (previousHubUrl === undefined) {
-      delete process.env.VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL;
-    } else {
-      process.env.VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL = previousHubUrl;
-    }
   }
   return {
     indexHtml: await readFile(resolve(outDir, 'index.html'), 'utf8'),
+    manifest: await readFile(resolve(outDir, 'manifest.webmanifest'), 'utf8'),
     serviceWorker: await readFile(resolve(outDir, 'sw.js'), 'utf8'),
   };
 }
@@ -191,6 +233,49 @@ afterEach(async () => {
 });
 
 describe('companion-ui production service worker', () => {
+  it('packages nginx content only at the canonical companion-ui subpath', async () => {
+    const nginxConfig = await readFile(
+      resolve(COMPANION_UI_ROOT, '../docker/companion-ui/nginx.conf'),
+      'utf8',
+    );
+    const dockerfile = await readFile(
+      resolve(COMPANION_UI_ROOT, '../docker/companion-ui/Dockerfile'),
+      'utf8',
+    );
+
+    expect(nginxConfig).toContain('location = /companion-ui/sw.js');
+    expect(nginxConfig).toContain('location = /companion-ui/manifest.webmanifest');
+    expect(nginxConfig).toContain('location /companion-ui/assets/');
+    expect(nginxConfig).toContain('try_files $uri $uri/ /companion-ui/index.html;');
+    expect(nginxConfig).toMatch(/location \/ \{\s+return 404;/u);
+    expect(nginxConfig).not.toMatch(/location = \/(?:sw\.js|manifest\.webmanifest)/u);
+    expect(dockerfile).toContain(
+      'COPY --from=build /build/companion-ui/dist/ /usr/share/nginx/html/companion-ui/',
+    );
+  });
+
+  it('builds every production URL under the canonical companion-ui subpath', async () => {
+    const buildOutput = await buildCompanionUi('subpath-build');
+    const manifest = JSON.parse(buildOutput.manifest) as {
+      icons: Array<{ src: string }>;
+      scope: string;
+      start_url: string;
+    };
+
+    expect(manifest.scope).toBe('/companion-ui/');
+    expect(manifest.start_url).toBe('/companion-ui/');
+    expect(manifest.icons.map(({ src }) => src)).toEqual([
+      '/companion-ui/icon.svg',
+      '/companion-ui/icon-maskable.svg',
+    ]);
+    expect(buildOutput.indexHtml).toMatch(/href="\/companion-ui\/manifest\.webmanifest"/u);
+    expect(buildOutput.indexHtml).toMatch(/href="\/companion-ui\/icon\.svg"/u);
+    expect(buildOutput.indexHtml).toMatch(/(?:src|href)="\/companion-ui\/assets\//u);
+    expect(buildOutput.indexHtml).not.toMatch(/(?:src|href)="\/(?!companion-ui\/)/u);
+    expect(buildOutput.serviceWorker).toContain('const APP_SCOPE = "/companion-ui/";');
+    expect(buildOutput.serviceWorker).not.toMatch(/"\/(?:index\.html|manifest\.webmanifest|icon(?:-maskable)?\.svg|assets\/)/u);
+  });
+
   it('versions each deployment and precaches that build\'s immutable assets', async () => {
     const buildA = await buildCompanionUi('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
     const buildB = await buildCompanionUi('bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb');
@@ -201,7 +286,9 @@ describe('companion-ui production service worker', () => {
     expect(buildB.serviceWorker).not.toContain('__PSFN_COMPANION_UI_');
     expect(buildB.serviceWorker).not.toMatch(/\/assets\/[^"']+\.map/gu);
 
-    const assetPaths = [...buildB.indexHtml.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/gu)]
+    const assetPaths = [...buildB.indexHtml.matchAll(
+      /(?:src|href)="(\/companion-ui\/assets\/[^"]+)"/gu,
+    )]
       .map((match) => match[1]);
     expect(assetPaths.length).toBeGreaterThan(0);
     for (const assetPath of assetPaths) {
@@ -211,8 +298,8 @@ describe('companion-ui production service worker', () => {
 
   it('uses a distinct cache generation when one revision produces different bundles', async () => {
     const revision = '2222222222222222222222222222222222222222';
-    const buildA = await buildCompanionUi(revision, 'ws://hub-a.test:8787/');
-    const buildB = await buildCompanionUi(revision, 'ws://hub-b.test:8787/');
+    const buildA = await buildCompanionUi(revision, 'bundle-a');
+    const buildB = await buildCompanionUi(revision, 'bundle-b');
     const cacheA = buildA.serviceWorker.match(/const CACHE_NAME = "([^"]+)";/u)?.[1];
     const cacheB = buildB.serviceWorker.match(/const CACHE_NAME = "([^"]+)";/u)?.[1];
 
@@ -235,7 +322,7 @@ describe('companion-ui production service worker', () => {
     const response = await harness.dispatchFetch({
       method: 'GET',
       mode: 'navigate',
-      url: 'https://companion.test/',
+      url: 'https://companion.test/companion-ui/',
     });
 
     expect(response).toBe(current);
@@ -259,7 +346,7 @@ describe('companion-ui production service worker', () => {
       windowClients: [{
         focused: true,
         navigate,
-        url: 'https://companion.test/',
+        url: 'https://companion.test/companion-ui/',
         visibilityState: 'visible',
       }],
     });
@@ -287,7 +374,7 @@ describe('companion-ui production service worker', () => {
       windowClients: [{
         focused: true,
         navigate,
-        url: 'https://companion.test/',
+        url: 'https://companion.test/companion-ui/',
         visibilityState: 'visible',
       }],
     });
@@ -299,7 +386,7 @@ describe('companion-ui production service worker', () => {
       includeUncontrolled: true,
       type: 'window',
     });
-    expect(navigate).toHaveBeenCalledWith('https://companion.test/');
+    expect(navigate).toHaveBeenCalledWith('https://companion.test/companion-ui/');
   });
 
   it('falls back to the current cached shell when a navigation is offline', async () => {
@@ -315,16 +402,18 @@ describe('companion-ui production service worker', () => {
     const response = await harness.dispatchFetch({
       method: 'GET',
       mode: 'navigate',
-      url: 'https://companion.test/conversation',
+      url: 'https://companion.test/companion-ui/',
     });
 
     expect(response).toBe(cached);
   });
 
   it('serves hashed immutable assets cache-first', async () => {
-    const { serviceWorker } = await buildCompanionUi(
+    const { indexHtml, serviceWorker } = await buildCompanionUi(
       'ffffffffffffffffffffffffffffffffffffffff',
     );
+    const assetPath = indexHtml.match(/(?:src|href)="(\/companion-ui\/assets\/[^"]+)"/u)?.[1];
+    if (!assetPath) throw new Error('Built index did not reference a hashed asset');
     const cached = testResponse('cached immutable asset');
     const harness = createServiceWorkerHarness(serviceWorker, {
       cachedResponse: cached,
@@ -334,7 +423,7 @@ describe('companion-ui production service worker', () => {
     const response = await harness.dispatchFetch({
       method: 'GET',
       mode: 'same-origin',
-      url: 'https://companion.test/assets/index-AbCdEf12.js',
+      url: `https://companion.test${assetPath}`,
     });
 
     expect(response).toBe(cached);
@@ -358,5 +447,147 @@ describe('companion-ui production service worker', () => {
 
     expect(response).toBeUndefined();
     expect(harness.fetch).not.toHaveBeenCalled();
+  });
+
+  it('documents the legacy root worker interception regression', async () => {
+    const legacyWorker = await readFile(
+      resolve(COMPANION_UI_ROOT, 'e2e/fixtures/legacy-sw.js'),
+      'utf8',
+    );
+    const harness = createServiceWorkerHarness(legacyWorker, {
+      fetchResponse: testResponse('legacy network response'),
+    });
+
+    for (const url of [
+      'https://companion.test/fleet',
+      'https://companion.test/garden',
+      'https://companion.test/oauth/callback?code=secret-code&state=secret-state',
+    ]) {
+      expect(await harness.dispatchFetch({ method: 'GET', mode: 'navigate', url }))
+        .toBeDefined();
+    }
+  });
+
+  it('does not intercept requests outside the safe unauthenticated shell and static allowlist', async () => {
+    const { serviceWorker } = await buildCompanionUi('strict-fetch-boundary');
+    const harness = createServiceWorkerHarness(serviceWorker, {
+      cachedResponse: testResponse('cached response'),
+      fetchResponse: testResponse('network response'),
+    });
+    const requests: TestRequest[] = [
+      { method: 'GET', mode: 'navigate', url: 'https://companion.test/fleet' },
+      { method: 'GET', mode: 'navigate', url: 'https://companion.test/garden' },
+      {
+        method: 'GET',
+        mode: 'navigate',
+        url: 'https://companion.test/oauth/callback?code=secret-code&state=secret-state',
+      },
+      {
+        method: 'GET',
+        mode: 'navigate',
+        url: 'https://companion.test/companion-ui/?code=secret-code&state=secret-state',
+      },
+      { method: 'GET', mode: 'navigate', url: 'https://companion.test/companion-ui/auth' },
+      {
+        method: 'GET',
+        mode: 'navigate',
+        url: 'https://companion.test/companion-ui/oauth/callback',
+      },
+      {
+        cache: 'no-store',
+        method: 'GET',
+        mode: 'navigate',
+        url: 'https://companion.test/companion-ui/',
+      },
+      {
+        credentials: 'include',
+        method: 'GET',
+        mode: 'same-origin',
+        url: 'https://companion.test/companion-ui/icon.svg',
+      },
+      {
+        headers: new Headers({ Authorization: 'Bearer secret' }),
+        method: 'GET',
+        mode: 'same-origin',
+        url: 'https://companion.test/companion-ui/icon.svg',
+      },
+      {
+        headers: new Headers({ Cookie: 'fleet_session=secret' }),
+        method: 'GET',
+        mode: 'same-origin',
+        url: 'https://companion.test/companion-ui/icon.svg',
+      },
+      {
+        headers: new Headers({ Upgrade: 'websocket' }),
+        method: 'GET',
+        mode: 'websocket',
+        url: 'https://companion.test/companion-ui/',
+      },
+    ];
+
+    for (const request of requests) {
+      expect(await harness.dispatchFetch(request)).toBeUndefined();
+    }
+    expect(harness.fetch).not.toHaveBeenCalled();
+    expect(harness.cache.put).not.toHaveBeenCalled();
+  });
+
+  it('never persists runtime navigation responses with private cache or cookie policy', async () => {
+    const { serviceWorker } = await buildCompanionUi('private-response-boundary');
+    for (const headers of [
+      new Headers({ 'Cache-Control': 'no-store' }),
+      new Headers({ 'Cache-Control': 'private, max-age=60' }),
+      new Headers({ Vary: 'Cookie' }),
+      new Headers({ 'Set-Cookie': 'fleet_session=secret; HttpOnly; Secure' }),
+    ]) {
+      const network = testResponse('private response', headers);
+      const harness = createServiceWorkerHarness(serviceWorker, { fetchResponse: network });
+
+      expect(await harness.dispatchFetch({
+        method: 'GET',
+        mode: 'navigate',
+        url: 'https://companion.test/companion-ui/',
+      })).toBe(network);
+      expect(harness.cache.put).not.toHaveBeenCalled();
+    }
+  });
+
+  it('fails installation before caching a private or cookie-varying static response', async () => {
+    const { serviceWorker } = await buildCompanionUi('private-install-boundary');
+    for (const headers of [
+      new Headers({ 'Cache-Control': 'no-store' }),
+      new Headers({ 'Cache-Control': 'private, max-age=60' }),
+      new Headers({ Vary: 'Cookie' }),
+      new Headers({ 'Set-Cookie': 'fleet_session=secret; HttpOnly; Secure' }),
+    ]) {
+      const harness = createServiceWorkerHarness(serviceWorker, {
+        fetchResponse: testResponse('private static response', headers),
+      });
+
+      await expect(harness.dispatchInstall()).rejects.toThrow(
+        'Refusing to precache non-public companion-ui asset',
+      );
+      expect(harness.cache.put).not.toHaveBeenCalled();
+      expect(harness.fetch.mock.calls.every(([request]) => (
+        request instanceof Request && request.credentials === 'omit'
+      ))).toBe(true);
+    }
+  });
+
+  it('fails installation before caching a redirect or callback response', async () => {
+    const { serviceWorker } = await buildCompanionUi('redirect-install-boundary');
+    const callbackResponse = testResponse('callback response', {}, {
+      redirected: true,
+      url: 'https://companion.test/oauth/callback?code=secret-code&state=secret-state',
+    });
+    const harness = createServiceWorkerHarness(serviceWorker, {
+      fetchResponse: callbackResponse,
+    });
+
+    await expect(harness.dispatchInstall()).rejects.toThrow(
+      'Refusing to precache non-public companion-ui asset',
+    );
+    expect(harness.cache.put).not.toHaveBeenCalled();
+    expect(JSON.stringify(harness.cache.put.mock.calls)).not.toMatch(/secret-code|secret-state/u);
   });
 });

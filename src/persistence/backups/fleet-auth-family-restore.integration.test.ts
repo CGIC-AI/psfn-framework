@@ -1,6 +1,7 @@
 import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import {
   chmodSync,
+  mkdtempSync,
   mkdirSync,
   readFileSync,
   rmSync,
@@ -230,10 +231,7 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
     const sourceMigration = createPostgresPool(source.migrationUrl, { max: 1 });
     const sourceRuntime = createPostgresPool(source.runtimeUrl, { max: 1 });
     const sourceBackup = createPostgresPool(source.backupUrl, { max: 1 });
-    const root = join(
-      tmpdir(),
-      `psfn-family-restore-integration-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`,
-    );
+    const root = mkdtempSync(join(tmpdir(), 'psfn-family-restore-integration-'));
     const systemDataDir = join(root, 'system-data');
     const backupDir = join(root, 'backup');
     const floorRoot = join(root, 'authority');
@@ -243,6 +241,8 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
     writeFleetAuthTestConfig(systemDataDir);
     const principalId = randomUUID();
     const sourceAuditEventId = randomUUID();
+    const sourceAttachmentId = randomUUID();
+    const sourceAttachmentJti = randomUUID();
     let sourceCompanion: ReturnType<typeof createPostgresPool> | undefined;
     let sourceCompanionTwo: ReturnType<typeof createPostgresPool> | undefined;
     let sourceSharedOwner: ReturnType<typeof createPostgresPool> | undefined;
@@ -260,6 +260,32 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         CREATE SCHEMA companion_one;
         CREATE TABLE companion_one.restore_probe (marker TEXT NOT NULL);
         INSERT INTO companion_one.restore_probe VALUES ('companion-source');
+        CREATE TABLE companion_one.contacts (
+          contact_lifecycle_state TEXT NOT NULL,
+          contact_restore_state TEXT NOT NULL,
+          contact_authority_version BIGINT NOT NULL
+        );
+        INSERT INTO companion_one.contacts VALUES ('live', 'live', 4);
+        CREATE TABLE companion_one.contact_channel_ids (
+          ownership_state TEXT NOT NULL,
+          restore_state TEXT NOT NULL
+        );
+        INSERT INTO companion_one.contact_channel_ids VALUES ('verified', 'live');
+        CREATE TABLE companion_one.contact_lifecycle_intents (
+          phase TEXT NOT NULL,
+          reason TEXT NOT NULL,
+          restore_state TEXT NOT NULL,
+          lease_owner TEXT,
+          lease_expires_at TIMESTAMPTZ,
+          updated_at TIMESTAMPTZ NOT NULL
+        );
+        INSERT INTO companion_one.contact_lifecycle_intents
+          VALUES ('gateway_finalize_pending', 'pending_finalize', 'live', 'source-worker', now(), now());
+        CREATE TABLE companion_one.contact_lifecycle_target_locks (
+          lock_state TEXT NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL
+        );
+        INSERT INTO companion_one.contact_lifecycle_target_locks VALUES ('active', now());
         CREATE FUNCTION companion_one.restore_function() RETURNS TEXT
           LANGUAGE SQL AS 'SELECT ''companion-source''::text';
         GRANT USAGE ON SCHEMA companion_one TO ${quoteIdentifier(ROLES.backupRestore)};
@@ -323,6 +349,22 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
                  'authority.source', 'fleet_auth', 'deny', 'source_event', 1, 1)`,
         [sourceAuditEventId],
       );
+      await sourceBackup.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.hub_device_human_attachments
+          (attachment_id, assertion_digest, assertion_jti, device_id,
+           enrollment_version, place_id, key_id, companion_id, hub_session_id,
+           connection_id, channel_id, device_state, human_state, created_at, updated_at)
+        VALUES ($1, $2, $3, 'restore-device', 2, 'office', 'restore-key', $4,
+                'restore-hub-session', 'restore-connection', $5,
+                'active', 'guest', $6, $6)
+      `, [
+        sourceAttachmentId,
+        'd'.repeat(64),
+        sourceAttachmentJti,
+        '11111111-1111-4111-8111-111111111111',
+        `hub-device:${'e'.repeat(64)}`,
+        '2026-07-15T14:59:00.000Z',
+      ]);
       const backup = await runFleetAuthConsistentBackup({
         databaseUrl: source.backupUrl,
         roles: ROLES,
@@ -465,8 +507,51 @@ describe('fleet-auth consistent family restore against real Postgres', () => {
         )).resolves.toMatchObject({
           rows: [{ status: 'quarantined', restore_state: 'quarantined' }],
         });
+        await expect(targetRuntime.query(
+          `SELECT assertion_jti, device_state, human_state, fenced_at
+           FROM ${FLEET_AUTH_SCHEMA_NAME}.hub_device_human_attachments
+           WHERE attachment_id = $1`,
+          [sourceAttachmentId],
+        )).resolves.toMatchObject({
+          rows: [{
+            assertion_jti: sourceAttachmentJti,
+            device_state: 'fenced',
+            human_state: 'detached',
+            fenced_at: new Date('2026-07-15T16:00:00.000Z'),
+          }],
+        });
         await expect(targetCompanion.query('SELECT marker FROM companion_one.restore_probe'))
           .resolves.toMatchObject({ rows: [{ marker: 'companion-source' }] });
+        await expect(targetCompanion.query(`
+          SELECT contact_lifecycle_state, contact_restore_state, contact_authority_version
+          FROM companion_one.contacts
+        `)).resolves.toMatchObject({
+          rows: [{
+            contact_lifecycle_state: 'quarantined',
+            contact_restore_state: 'quarantined',
+            contact_authority_version: '5',
+          }],
+        });
+        await expect(targetCompanion.query(`
+          SELECT ownership_state, restore_state FROM companion_one.contact_channel_ids
+        `)).resolves.toMatchObject({
+          rows: [{ ownership_state: 'quarantined', restore_state: 'quarantined' }],
+        });
+        await expect(targetCompanion.query(`
+          SELECT phase, reason, restore_state, lease_owner, lease_expires_at
+          FROM companion_one.contact_lifecycle_intents
+        `)).resolves.toMatchObject({
+          rows: [{
+            phase: 'quarantined',
+            reason: 'restore_quarantine',
+            restore_state: 'quarantined',
+            lease_owner: null,
+            lease_expires_at: null,
+          }],
+        });
+        await expect(targetCompanion.query(`
+          SELECT lock_state FROM companion_one.contact_lifecycle_target_locks
+        `)).resolves.toMatchObject({ rows: [{ lock_state: 'quarantined' }] });
         const migrationPool = createPostgresPool(target.companionUrl, {
           max: 1,
           schema: 'companion_one',

@@ -1155,6 +1155,54 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
     client = new GatewayClient(conn.conn, 1024);
   });
 
+  it('serves only a strictly parsed exact contact-authority snapshot', async () => {
+    const handler = vi.fn(async (request) => ({
+      schemaVersion: 1 as const,
+      contactId: request.contactId,
+      channel: 'discord' as const,
+      providerSubjectId: request.providerSubjectId,
+      identityVersion: 3,
+      verificationId: '00000000-0000-4000-8000-000000000301',
+      verificationDigest: 'a'.repeat(64),
+      contactAuthorityVersion: 5,
+      ownershipState: 'verified' as const,
+      restoreState: 'live' as const,
+    }));
+    client.onContactAuthoritySnapshot(handler);
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 41,
+      method: 'contact.authority.snapshot',
+      params: {
+        contactId: 'contact-one',
+        providerSubjectId: '123456789012345679',
+      },
+    });
+    await vi.waitFor(() => expect(getRpcResponse(conn.sent, 41)?.result).toMatchObject({
+      contactId: 'contact-one',
+      providerSubjectId: '123456789012345679',
+      contactAuthorityVersion: 5,
+    }));
+    expect(handler).toHaveBeenCalledWith({
+      contactId: 'contact-one',
+      providerSubjectId: '123456789012345679',
+    });
+
+    conn._emit({
+      jsonrpc: '2.0',
+      id: 42,
+      method: 'contact.authority.snapshot',
+      params: {
+        contactId: 'contact-one',
+        providerSubjectId: '123456789012345679',
+        companionId: 'caller-controlled',
+      },
+    });
+    await vi.waitFor(() => expect(getRpcResponse(conn.sent, 42)?.error).toBeDefined());
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it('receives and processes voice.handleMessage requests from gateway', async () => {
     const handler = vi.fn().mockResolvedValue({
       content: 'voice response',

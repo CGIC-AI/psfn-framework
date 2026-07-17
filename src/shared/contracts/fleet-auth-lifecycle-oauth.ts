@@ -5,6 +5,7 @@ export type LifecycleOAuthAction =
   | 'provider.add'
   | 'provider.relink'
   | 'provider.replace'
+  | 'provider.recover'
   | 'provider.unlink'
   | 'principal.merge';
 
@@ -15,6 +16,7 @@ export function isLifecycleOAuthAction(value: unknown): value is LifecycleOAuthA
     || value === 'provider.add'
     || value === 'provider.relink'
     || value === 'provider.replace'
+    || value === 'provider.recover'
     || value === 'provider.unlink'
     || value === 'principal.merge';
 }
@@ -50,6 +52,9 @@ export function lifecycleOAuthKindFor(
       break;
     case 'provider.replace':
       if (proofRole === 'current' || proofRole === 'new') return 'provider_replace';
+      break;
+    case 'provider.recover':
+      if (proofRole === 'new') return 'recovery';
       break;
     case 'provider.unlink':
       if (proofRole === 'current') return 'recovery';

@@ -226,6 +226,8 @@ export function parseContactAuthorityLifecycleResult(
     || !ACTIONS.has(value.action as ContactAuthorityLifecycleAction)
     || (value.status !== 'prepared' && value.status !== 'reserved'
       && value.status !== 'no_binding' && value.status !== 'finalized')
+    || (value.phase === 'prepare' && value.status === 'finalized')
+    || (value.phase === 'finalize' && value.status !== 'finalized')
     || !Number.isSafeInteger(value.authorityGeneration)
     || Number(value.authorityGeneration) < 1
     || !Number.isSafeInteger(value.globalAuthEpoch)

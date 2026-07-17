@@ -57,6 +57,15 @@ type WebSocketTlsRequestOptions = Omit<TlsRequestOptions, 'checkServerIdentity'>
 };
 
 const PSFN_ADMIN_SESSION_COOKIE = 'psfn_token';
+const FLEET_FORWARD_HEADER_ALLOWLIST = Object.freeze(new Set([
+  'accept',
+  'accept-encoding',
+  'content-length',
+  'content-type',
+  'if-match',
+  'if-none-match',
+  'x-request-id',
+]));
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
@@ -81,8 +90,15 @@ function stripAdminSessionCookie(cookieHeader: string | undefined): string | und
   return kept.length > 0 ? kept.join('; ') : undefined;
 }
 
-function buildProxyHeaders(headers: IncomingHttpHeaders): IncomingHttpHeaders {
-  const forwardedHeaders: IncomingHttpHeaders = { ...headers };
+function buildProxyHeaders(
+  headers: IncomingHttpHeaders,
+  trustedAuthorityHeaders?: Readonly<Record<string, string>>,
+): IncomingHttpHeaders {
+  const forwardedHeaders: IncomingHttpHeaders = trustedAuthorityHeaders
+    ? Object.fromEntries(Object.entries(headers).filter(([name]) => (
+        FLEET_FORWARD_HEADER_ALLOWLIST.has(name.toLowerCase())
+      )))
+    : { ...headers };
   delete forwardedHeaders.connection;
   delete forwardedHeaders.upgrade;
   delete forwardedHeaders['proxy-connection'];
@@ -93,27 +109,39 @@ function buildProxyHeaders(headers: IncomingHttpHeaders): IncomingHttpHeaders {
   // process where it could be captured or replayed (x5rt.10). Strip the bearer
   // credential and the `psfn_token` session cookie; other cookies are kept.
   delete forwardedHeaders.authorization;
-  const strippedCookie = stripAdminSessionCookie(firstHeader(headers.cookie));
-  if (strippedCookie === undefined) {
-    delete forwardedHeaders.cookie;
-  } else {
-    forwardedHeaders.cookie = strippedCookie;
+  if (!trustedAuthorityHeaders) {
+    const strippedCookie = stripAdminSessionCookie(firstHeader(headers.cookie));
+    if (strippedCookie === undefined) {
+      delete forwardedHeaders.cookie;
+    } else {
+      forwardedHeaders.cookie = strippedCookie;
+    }
   }
 
-  const forwardedHost = firstHeader(headers['x-forwarded-host']) ?? firstHeader(headers.host);
+  const forwardedHost = trustedAuthorityHeaders
+    ? 'localhost'
+    : firstHeader(headers['x-forwarded-host']) ?? firstHeader(headers.host);
   if (forwardedHost) {
     forwardedHeaders['x-forwarded-host'] = forwardedHost;
   }
 
-  const forwardedProto = firstHeader(headers['x-forwarded-proto']) ?? 'http';
+  const forwardedProto = trustedAuthorityHeaders
+    ? 'http'
+    : firstHeader(headers['x-forwarded-proto']) ?? 'http';
   forwardedHeaders['x-forwarded-proto'] = forwardedProto;
   forwardedHeaders.host = forwardedHost ?? 'localhost';
+  for (const [name, value] of Object.entries(trustedAuthorityHeaders ?? {})) {
+    forwardedHeaders[name] = value;
+  }
   return forwardedHeaders;
 }
 
-function buildWebSocketHeaders(headers: IncomingHttpHeaders): Record<string, string> {
+function buildWebSocketHeaders(
+  headers: IncomingHttpHeaders,
+  trustedAuthorityHeaders?: Readonly<Record<string, string>>,
+): Record<string, string> {
   const normalized: Record<string, string> = {};
-  for (const [key, value] of Object.entries(buildProxyHeaders(headers))) {
+  for (const [key, value] of Object.entries(buildProxyHeaders(headers, trustedAuthorityHeaders))) {
     const firstValue = firstHeader(value);
     if (firstValue !== undefined) {
       normalized[key] = firstValue;
@@ -358,10 +386,15 @@ export class GardenAdminTransportProxy {
    * back to agent-local resolution (x5rt.10). Credential headers are stripped by
    * {@link buildProxyHeaders} exactly as in {@link proxyApiRequest}.
    */
-  proxyBufferedApiRequest(req: IncomingMessage, res: ServerResponse, body: Buffer): void {
+  proxyBufferedApiRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    body: Buffer,
+    trustedAuthorityHeaders?: Readonly<Record<string, string>>,
+  ): void {
     let timedOut = false;
     const requestPath = req.url ?? '/';
-    const headers = buildProxyHeaders(req.headers);
+    const headers = buildProxyHeaders(req.headers, trustedAuthorityHeaders);
     delete headers['transfer-encoding'];
     headers['content-length'] = String(body.byteLength);
     const proxyRequest = this.createRequest(
@@ -418,10 +451,12 @@ export class GardenAdminTransportProxy {
     req: IncomingMessage,
     socket: Duplex,
     head: Buffer,
+    trustedAuthorityHeaders?: Readonly<Record<string, string>>,
+    expiresAtSeconds?: number,
   ): void {
     const upstreamSocket = new WebSocket(
       this.resolveTelemetryWebSocketUrl(),
-      this.buildTelemetryWebSocketOptions(req),
+      this.buildTelemetryWebSocketOptions(req, trustedAuthorityHeaders),
     );
     let upgraded = false;
     let failed = false;
@@ -447,7 +482,7 @@ export class GardenAdminTransportProxy {
     upstreamSocket.once('open', () => {
       upgraded = true;
       this.webSocketServer.handleUpgrade(req, socket, head, (clientSocket) => {
-        this.attachTelemetryBridge(clientSocket, upstreamSocket);
+        this.attachTelemetryBridge(clientSocket, upstreamSocket, expiresAtSeconds);
       });
     });
     upstreamSocket.once('error', (error) => {
@@ -496,9 +531,12 @@ export class GardenAdminTransportProxy {
     return buildNetworkUrl(this.endpoint.wsUrl, '/api/admin/events').toString();
   }
 
-  private buildTelemetryWebSocketOptions(req: IncomingMessage): ClientOptions {
+  private buildTelemetryWebSocketOptions(
+    req: IncomingMessage,
+    trustedAuthorityHeaders?: Readonly<Record<string, string>>,
+  ): ClientOptions {
     const options: ClientOptions = {
-      headers: buildWebSocketHeaders(req.headers),
+      headers: buildWebSocketHeaders(req.headers, trustedAuthorityHeaders),
       handshakeTimeout: this.endpoint.timeoutMs,
     };
 
@@ -521,6 +559,7 @@ export class GardenAdminTransportProxy {
   private attachTelemetryBridge(
     clientSocket: WebSocket,
     upstreamSocket: WebSocket,
+    expiresAtSeconds?: number,
   ): void {
     const closeWithReason = (target: WebSocket, code: number, reason: string): void => {
       if (
@@ -561,5 +600,16 @@ export class GardenAdminTransportProxy {
       });
       closeWithReason(clientSocket, 1011, 'upstream_error');
     });
+
+    if (expiresAtSeconds !== undefined) {
+      const expiryTimer = setTimeout(() => {
+        closeWithReason(clientSocket, 1008, 'fleet_capability_expired');
+        closeWithReason(upstreamSocket, 1008, 'fleet_capability_expired');
+      }, Math.max(0, (expiresAtSeconds * 1_000) - Date.now()));
+      expiryTimer.unref();
+      const clearExpiry = (): void => clearTimeout(expiryTimer);
+      clientSocket.once('close', clearExpiry);
+      upstreamSocket.once('close', clearExpiry);
+    }
   }
 }

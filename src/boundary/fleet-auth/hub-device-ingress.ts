@@ -1,5 +1,7 @@
+import { createHash } from 'node:crypto';
 import type {
   HubDeviceAssertionExpectedBinding,
+  HubDeviceAttachmentSnapshot,
   HubDevicePrincipal,
   HubDevicePrincipalSnapshot,
 } from '../../shared/contracts/hub-device-ingress.js';
@@ -17,6 +19,17 @@ export interface HubDeviceAssertionVerifierPort {
   ): Promise<HubDevicePrincipal>;
 }
 
+/**
+ * Resolves enrollment state from an already authenticated Hub connection.
+ * The assertion and browser request are intentionally absent from this port.
+ */
+export interface HubDeviceEnrollmentAuthorityPort {
+  resolve(input: {
+    connectionId: string;
+    authenticatedConnection: AuthenticatedHubDeviceConnection;
+  }): Promise<AuthenticatedHubDeviceConnection>;
+}
+
 export type HubDeviceSessionDisposition = 'created' | 'continued' | 'retry';
 
 export interface HubDeviceSessionAdmissionPort {
@@ -26,21 +39,43 @@ export interface HubDeviceSessionAdmissionPort {
   }): HubDeviceSessionDisposition;
 }
 
-/**
- * Deliberately separate extension seam for OPL1.9. Device admission does not
- * resolve, accept, or manufacture a human principal.
- */
-export interface HubDeviceHumanAttachmentPort<HumanPrincipal> {
-  resolveForDeviceSession(input: {
-    companionId: string;
-    deviceId: string;
-    sessionId: string;
-  }): Promise<HumanPrincipal | null>;
+export type HubDeviceHumanAttachmentCommand =
+  | Readonly<{ kind: 'guest' }>
+  | Readonly<{ kind: 'fleet_browser_session'; sessionToken: string }>
+  | Readonly<{ kind: 'detach' }>;
+
+export type HubDeviceActorContext = HubDeviceAttachmentSnapshot['deviceActor'];
+export type HubHumanActorContext = Extract<HubDeviceAttachmentSnapshot['actor'], { kind: 'human' }>;
+export type HubGuestActorContext = Extract<HubDeviceAttachmentSnapshot['actor'], { kind: 'guest' }>;
+export type HubDeviceServerChannelContext = HubDeviceAttachmentSnapshot['channel'];
+export type HubDeviceAttachmentDisposition = HubDeviceAttachmentSnapshot['disposition'];
+export type HubDeviceHumanAttachment = HubDeviceAttachmentSnapshot;
+
+export interface HubDeviceHumanAttachmentPort {
+  attach(input: {
+    assertionDigest: string;
+    devicePrincipal: HubDevicePrincipalSnapshot;
+    connection: AuthenticatedHubDeviceConnection;
+    human: HubDeviceHumanAttachmentCommand;
+  }): Promise<HubDeviceHumanAttachment>;
+  fenceDevice(input: {
+    assertionDigest: string;
+    connectionId: string;
+    reason: 'assertion_rejected' | 'enrollment_authority_changed';
+  }): Promise<void>;
+}
+
+export class HubDeviceAttachmentRejectedError extends HubDeviceAssertionRejectedError {
+  constructor(readonly code: 'device_binding_mismatch' | 'device_fenced' | 'human_binding_mismatch') {
+    super('Hub device human attachment was denied');
+    this.name = 'HubDeviceAttachmentRejectedError';
+  }
 }
 
 export interface HubDeviceIngressAdmission {
   devicePrincipal: HubDevicePrincipalSnapshot;
   sessionDisposition: HubDeviceSessionDisposition;
+  attachment: HubDeviceHumanAttachment;
 }
 
 export class InMemoryHubDeviceSessionAdmissionStore implements HubDeviceSessionAdmissionPort {
@@ -74,49 +109,94 @@ export class InMemoryHubDeviceSessionAdmissionStore implements HubDeviceSessionA
 
 export class GatewayHubDeviceIngressService {
   private readonly verifier: HubDeviceAssertionVerifierPort;
+  private readonly enrollmentAuthority: HubDeviceEnrollmentAuthorityPort;
+  private readonly attachments: HubDeviceHumanAttachmentPort;
   private readonly sessions: HubDeviceSessionAdmissionPort;
 
   constructor(options: {
     verifyAndConsume: HubDeviceAssertionVerifierPort['verifyAndConsume'];
+    enrollmentAuthority: HubDeviceEnrollmentAuthorityPort;
+    attachments: HubDeviceHumanAttachmentPort;
     sessions?: HubDeviceSessionAdmissionPort;
   }) {
     this.verifier = { verifyAndConsume: options.verifyAndConsume };
+    this.enrollmentAuthority = options.enrollmentAuthority;
+    this.attachments = options.attachments;
     this.sessions = options.sessions ?? new InMemoryHubDeviceSessionAdmissionStore();
+  }
+
+  async fenceRejectedAssertion(assertion: string, connectionId: string): Promise<void> {
+    await this.attachments.fenceDevice({
+      assertionDigest: createHash('sha256').update(assertion).digest('hex'),
+      connectionId,
+      reason: 'enrollment_authority_changed',
+    });
   }
 
   async admit(input: {
     assertion: string;
     connection: AuthenticatedHubDeviceConnection;
+    human?: HubDeviceHumanAttachmentCommand;
   }): Promise<HubDeviceIngressAdmission> {
-    const expected = expectedBinding(input.connection);
+    const assertionDigest = createHash('sha256').update(input.assertion).digest('hex');
+    let connection: AuthenticatedHubDeviceConnection;
+    try {
+      connection = await this.enrollmentAuthority.resolve({
+        connectionId: input.connection.connectionId,
+        authenticatedConnection: input.connection,
+      });
+      if (connection.connectionId !== input.connection.connectionId) {
+        throw new HubDeviceAssertionRejectedError('Hub enrollment authority returned a different authenticated connection');
+      }
+    } catch (error) {
+      await this.attachments.fenceDevice({
+        assertionDigest,
+        connectionId: input.connection.connectionId,
+        reason: 'enrollment_authority_changed',
+      });
+      if (error instanceof HubDeviceAssertionRejectedError) throw error;
+      throw new HubDeviceAssertionRejectedError('Hub enrollment authority did not resolve the authenticated connection');
+    }
+    const expected = expectedBinding(connection);
     let verified: HubDevicePrincipal;
     try {
       verified = await this.verifier.verifyAndConsume(input.assertion, expected);
+      assertPrincipalMatchesConnection(verified, expected);
     } catch (error) {
+      await this.attachments.fenceDevice({
+        assertionDigest,
+        connectionId: connection.connectionId,
+        reason: 'assertion_rejected',
+      });
       if (error instanceof HubDeviceAssertionRejectedError) throw error;
       if (error instanceof Error && error.message.startsWith('Hub device assertion')) {
         throw new HubDeviceAssertionRejectedError(error.message);
       }
       throw error;
     }
-    assertPrincipalMatchesConnection(verified, expected);
     const devicePrincipal = serializeHubDevicePrincipal(verified);
+    const attachment = await this.attachments.attach({
+      assertionDigest,
+      devicePrincipal,
+      connection,
+      human: input.human ?? { kind: 'guest' },
+    });
     const sessionDisposition = this.sessions.admit({
-      connectionId: input.connection.connectionId,
+      connectionId: connection.connectionId,
       principal: devicePrincipal,
     });
-    return { devicePrincipal, sessionDisposition };
+    return { devicePrincipal, sessionDisposition, attachment };
   }
 }
 
 export function serializeHubDevicePrincipal(
   principal: HubDevicePrincipal,
 ): HubDevicePrincipalSnapshot {
-  return {
+  return Object.freeze({
     ...principal,
     issuedAt: principal.issuedAt.toISOString(),
     expiresAt: principal.expiresAt.toISOString(),
-  };
+  });
 }
 
 function expectedBinding(

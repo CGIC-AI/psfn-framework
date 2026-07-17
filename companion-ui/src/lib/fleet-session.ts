@@ -1,0 +1,140 @@
+import { isObjectRecord as isRecord } from '../../../src/shared/utils/types.js';
+
+const STATUS_PATH = '/v1/fleet-auth/session/status';
+const CSRF_PATH = '/v1/fleet-auth/session/csrf';
+const LOGOUT_PATH = '/v1/fleet-auth/logout';
+const ROLES = ['owner', 'admin', 'member', 'guest'] as const;
+const WEBSOCKET_PATH = /^\/companion-ui\/companions\/[0-9a-f-]{36}\/ws$/u;
+
+export type FleetSessionStatus = Readonly<{
+  schemaVersion: 1;
+  state: 'signed_out';
+  guestMode: 'disabled' | 'explicit';
+  websocketPath?: string;
+}> | Readonly<{
+  schemaVersion: 1;
+  state: 'signed_in';
+  guestMode: 'disabled' | 'explicit';
+  websocketPath: string;
+  human: Readonly<{
+    provider: 'discord';
+    label: string;
+    role: typeof ROLES[number];
+  }>;
+}>;
+
+export class FleetSessionProtocolError extends Error {
+  constructor(message = 'Fleet session response was malformed') {
+    super(message);
+    this.name = 'FleetSessionProtocolError';
+  }
+}
+
+function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
+}
+
+function validWebsocketPath(value: unknown): value is string {
+  return typeof value === 'string' && WEBSOCKET_PATH.test(value) && !value.includes('?');
+}
+
+export function parseFleetSessionStatus(value: unknown): FleetSessionStatus {
+  if (!isRecord(value) || value.schemaVersion !== 1
+    || (value.guestMode !== 'disabled' && value.guestMode !== 'explicit')) {
+    throw new FleetSessionProtocolError();
+  }
+  if (value.state === 'signed_out') {
+    const explicit = value.guestMode === 'explicit';
+    if (!exactKeys(value, explicit
+      ? ['schemaVersion', 'state', 'guestMode', 'websocketPath']
+      : ['schemaVersion', 'state', 'guestMode'])
+      || (explicit && !validWebsocketPath(value.websocketPath))) {
+      throw new FleetSessionProtocolError();
+    }
+    return Object.freeze({
+      schemaVersion: 1,
+      state: 'signed_out',
+      guestMode: value.guestMode,
+      ...(explicit ? { websocketPath: String(value.websocketPath) } : {}),
+    });
+  }
+  if (value.state !== 'signed_in'
+    || !exactKeys(value, ['schemaVersion', 'state', 'guestMode', 'websocketPath', 'human'])
+    || !validWebsocketPath(value.websocketPath)
+    || !isRecord(value.human)
+    || !exactKeys(value.human, ['provider', 'label', 'role'])
+    || value.human.provider !== 'discord'
+    || typeof value.human.label !== 'string'
+    || value.human.label.length < 1 || value.human.label.length > 80
+    || typeof value.human.role !== 'string'
+    || !ROLES.includes(value.human.role as typeof ROLES[number])) {
+    throw new FleetSessionProtocolError();
+  }
+  return Object.freeze({
+    schemaVersion: 1,
+    state: 'signed_in',
+    guestMode: value.guestMode,
+    websocketPath: value.websocketPath,
+    human: Object.freeze({
+      provider: 'discord',
+      label: value.human.label,
+      role: value.human.role as typeof ROLES[number],
+    }),
+  });
+}
+
+type FetchLike = typeof fetch;
+
+export class FleetSessionClient {
+  constructor(private readonly fetchImpl: FetchLike = (...args) => fetch(...args)) {}
+
+  async readStatus(): Promise<FleetSessionStatus> {
+    const response = await this.fetchImpl(STATUS_PATH, {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(10_000),
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok || response.headers.get('cache-control')?.toLowerCase().includes('no-store') !== true) {
+      throw new FleetSessionProtocolError('Fleet session status was unavailable');
+    }
+    return parseFleetSessionStatus(await response.json());
+  }
+
+  async logout(): Promise<void> {
+    const csrf = await this.readCsrf();
+    const response = await this.fetchImpl(LOGOUT_PATH, {
+      method: 'POST',
+      credentials: 'include',
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(10_000),
+      headers: {
+        Accept: 'application/json',
+        'X-PSFN-CSRF': csrf,
+      },
+    });
+    if (response.status !== 204) throw new FleetSessionProtocolError('Fleet logout was denied');
+  }
+
+  private async readCsrf(): Promise<string> {
+    const response = await this.fetchImpl(CSRF_PATH, {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(10_000),
+      headers: { Accept: 'application/json' },
+    });
+    const value: unknown = response.ok ? await response.json() : undefined;
+    if (!isRecord(value) || !exactKeys(value, ['csrfToken'])
+      || typeof value.csrfToken !== 'string' || !/^[A-Za-z0-9_-]{43}$/u.test(value.csrfToken)) {
+      throw new FleetSessionProtocolError('Fleet logout authorization was unavailable');
+    }
+    return value.csrfToken;
+  }
+}

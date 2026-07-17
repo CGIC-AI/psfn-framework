@@ -7,6 +7,7 @@ import type { Contact } from '../../../core/contacts/types.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { MemoryStorePort } from '../../../faculties/memory/memory-store-port.js';
 import type { PurrMemory } from '../../../faculties/memory/types.js';
+import { createSubjectAuthorizedMemoryStore } from '../../../faculties/memory/subject-authorized-store.js';
 import { isInternalMemoryArtifact } from '../../../faculties/memory/internal-artifacts.js';
 import {
   type ChannelGroupMemoryConfig,
@@ -36,6 +37,7 @@ import type {
   AdminGroupMemoryExtractionTelemetry,
   AdminGroupMemoryService,
 } from './types.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 
 const GROUP_MEMORY_EXTRACTION_TRIGGERS = new Set<string>([
   'observed_count',
@@ -53,6 +55,8 @@ export interface AdminGroupMemoryDataServiceOptions {
   channelGroupMemory?: ChannelGroupMemoryConfig;
   sessionStore: SessionStore;
   memoryStore: MemoryStorePort;
+  /** Raw product store; fleet requests project profiles through their exact subject. */
+  fleetMemoryStore?: MemoryStorePort;
   contactStore?: ContactStorePort | null;
   watermarkStore: GroupMemoryWatermarkStorePort;
   memoryExtractor?: GroupMemoryBackfillExtractorPort | null;
@@ -82,12 +86,19 @@ export class AdminGroupMemoryDataService implements AdminGroupMemoryService {
     });
   }
 
-  async listGroupMemoryDiagnostics(): Promise<AdminGroupMemoryDiagnosticsListData> {
+  async listGroupMemoryDiagnostics(
+    context?: GardenRequestContext,
+  ): Promise<AdminGroupMemoryDiagnosticsListData> {
     const diagnostics = (
       await Promise.all(
         this.deps.sessionStore
           .listChannels()
-          .map(channel => this.buildChannelDiagnostics(channel.channelId, channel.sessionId, channel.messageCount)),
+          .map(channel => this.buildChannelDiagnostics(
+            channel.channelId,
+            channel.sessionId,
+            channel.messageCount,
+            context,
+          )),
       )
     )
       .filter((item): item is AdminGroupMemoryChannelDiagnostics => item !== null)
@@ -111,6 +122,7 @@ export class AdminGroupMemoryDataService implements AdminGroupMemoryService {
 
   async getGroupMemoryChannelDiagnostics(
     channelId: string,
+    context?: GardenRequestContext,
   ): Promise<AdminGroupMemoryChannelDiagnostics | null> {
     const channel = this.deps.sessionStore
       .listChannels()
@@ -119,6 +131,7 @@ export class AdminGroupMemoryDataService implements AdminGroupMemoryService {
       channel?.channelId ?? channelId,
       channel?.sessionId,
       channel?.messageCount,
+      context,
     );
   }
 
@@ -133,6 +146,7 @@ export class AdminGroupMemoryDataService implements AdminGroupMemoryService {
     channelId: string,
     sessionId?: string,
     messageCount?: number,
+    context?: GardenRequestContext,
   ): Promise<AdminGroupMemoryChannelDiagnostics | null> {
     const channelType = resolveRuntimeChannelType(channelId);
     if (!channelType) return null;
@@ -179,6 +193,7 @@ export class AdminGroupMemoryDataService implements AdminGroupMemoryService {
       participants: classification.recentParticipants,
       contactsById,
       settings,
+      profileStore: this.profileStore(context),
     });
     const activity = this.deps.sessionStore.getSessionActivity(sessionId ?? channelId);
 
@@ -276,6 +291,7 @@ export class AdminGroupMemoryDataService implements AdminGroupMemoryService {
     participants: readonly { contactId?: string; entryIds: number[] }[];
     contactsById: ReadonlyMap<string, Contact>;
     settings: GroupMemorySettings;
+    profileStore: MemoryStorePort;
   }): Promise<AdminGroupMemoryChannelDiagnostics['coverage']> {
     const recentMessageCounts = new Map<string, number>();
     const contactIds = new Set<string>();
@@ -300,6 +316,7 @@ export class AdminGroupMemoryDataService implements AdminGroupMemoryService {
         recentMessageCount: recentMessageCounts.get(contactId) ?? 0,
         contact: params.contactsById.get(contactId),
         settings: params.settings,
+        profileStore: params.profileStore,
       })),
     );
 
@@ -319,6 +336,7 @@ export class AdminGroupMemoryDataService implements AdminGroupMemoryService {
     recentMessageCount: number;
     contact?: Contact;
     settings: GroupMemorySettings;
+    profileStore: MemoryStorePort;
   }): Promise<AdminGroupMemoryContactCoverage> {
     const sourceMemoryCount = params.memories
       .filter(memory => memory.provenance?.sourceContactId === params.contactId)
@@ -332,7 +350,7 @@ export class AdminGroupMemoryDataService implements AdminGroupMemoryService {
     const totalAttributedMemoryCount = params.memories
       .filter(memory => extractMemoryContactIds(memory).includes(params.contactId))
       .length;
-    const profile = await this.deps.memoryStore.getContactProfile(params.contactId);
+    const profile = await params.profileStore.getContactProfile(params.contactId);
     const profileStatus = resolveProfileStatus({
       profilePresent: Boolean(profile),
       attributedMemoryCount: totalAttributedMemoryCount,
@@ -360,6 +378,14 @@ export class AdminGroupMemoryDataService implements AdminGroupMemoryService {
         ? { skipReason: 'profile_refresh_not_observed_or_pending' }
         : {}),
     };
+  }
+
+  private profileStore(context?: GardenRequestContext): MemoryStorePort {
+    if (context?.kind !== 'fleet_principal') return this.deps.memoryStore;
+    return createSubjectAuthorizedMemoryStore(
+      this.deps.fleetMemoryStore ?? this.deps.memoryStore,
+      Object.freeze({ viewerContactId: context.actor.contactId }),
+    );
   }
 }
 

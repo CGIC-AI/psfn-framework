@@ -17,11 +17,14 @@ import {
 import {
   digestDiscordEvidenceConfig,
 } from '../../../boundary/fleet-auth/discord-evidence-runtime.js';
-import { isCanonicalIsoTimestamp, isRecord } from '../../../shared/utils/types.js';
+import {
+  isCanonicalIsoTimestamp,
+  isRecord,
+} from '../../../shared/utils/types.js';
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
 import { FLEET_AUTH_LOCK_COMPANION_AUTHORITY_FUNCTION_NAME } from './companion-authority-lock-sql.js';
 import { FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME } from './authority-floor-read-sql.js';
-import type { ProviderRevocationAuthorityPort } from './oauth-session-store.js';
+import type { ProviderRevocationAuthorityPort } from './provider-revocation-authority.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 
 const AUTHORIZATION_CORRELATION_DIGEST_DOMAIN = 'fleet-authorization:correlation:v1\0';

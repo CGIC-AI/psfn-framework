@@ -28,6 +28,7 @@ import type {
 } from './concern-route-handoff.js';
 import {
   MAX_ACTIVE_CONCERNS,
+  MAX_ACTIVE_CONCERN_LIFETIME_MS,
   MAX_LIST_LIMIT,
   isConcernAttentionStatus,
   type ActiveConcern,
@@ -1216,10 +1217,19 @@ async function countActiveAttentionConcerns(
   concernStore: ConcernStorePort,
   asOf: Date,
 ): Promise<number> {
+  // Mirror the DB admission trigger (enforce_active_concern_attention_cap) exactly
+  // so the app-side pre-check and the trigger cannot disagree about admission:
+  //   resolved_at IS NULL AND status IN attention
+  //   AND expires_at > asOf
+  //   AND created_at > asOf - 7 days (MAX_ACTIVE_CONCERN_LIFETIME_MS)
+  // asOf is the admission timestamp, which the trigger reads as NEW.last_reviewed_at.
+  const asOfMs = asOf.getTime();
+  const windowStartMs = asOfMs - MAX_ACTIVE_CONCERN_LIFETIME_MS;
   const active = await concernStore.getActiveConcerns();
   return active.filter(concern => (
     isConcernAttentionStatus(concern.status)
-    && Date.parse(concern.expiresAt) > asOf.getTime()
+    && Date.parse(concern.expiresAt) > asOfMs
+    && Date.parse(concern.createdAt) > windowStartMs
   )).length;
 }
 

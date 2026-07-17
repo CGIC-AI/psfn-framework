@@ -8,9 +8,17 @@ import {
   sanitizeTurnStageTelemetry,
 } from '../../core/turns/observability.js';
 import { resolveTelemetryCorrelation } from './telemetry-correlation.js';
-import { parseRequestUrl } from './request-url.js';
+import {
+  GardenRequestTargetError,
+  validateGardenRequestMetadata,
+} from '../../boundary/fleet-auth/request-capability-target.js';
+import { requireGardenRouteCapability } from '../../boundary/fleet-auth/garden-route-capabilities.js';
+import { stripBrowserRequestCapabilityHeaders } from '../../boundary/fleet-auth/request-capability-transport.js';
 
 const TELEMETRY_WEBSOCKET_PATH = '/api/admin/events';
+export const ADMIN_TELEMETRY_ROUTE_CAPABILITY = requireGardenRouteCapability(
+  'WS /api/admin/events',
+);
 
 // ── Sprint-10 H5 (defense-in-depth): external telemetry projection ──
 // The ingest boundary (channels/api/server.ts) already fails closed on raw
@@ -132,25 +140,63 @@ export class AdminServerTelemetryTransport {
   }
 
   handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
-    const url = parseRequestUrl(req);
-    if (url.pathname !== TELEMETRY_WEBSOCKET_PATH) {
+    this.handleUpgradeWithAuthority(req, socket, head, false);
+  }
+
+  handleAuthorizedUpgrade(
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+    expiresAtSeconds: number,
+  ): void {
+    this.handleUpgradeWithAuthority(req, socket, head, true, expiresAtSeconds);
+  }
+
+  private handleUpgradeWithAuthority(
+    req: IncomingMessage,
+    socket: Duplex,
+    head: Buffer,
+    preauthorized: boolean,
+    expiresAtSeconds?: number,
+  ): void {
+    stripBrowserRequestCapabilityHeaders(req.headers);
+    let target;
+    try {
+      target = validateGardenRequestMetadata({
+        rawTarget: req.url ?? '/',
+        method: 'WS',
+        headers: req.headers,
+      });
+    } catch (error) {
+      const status = error instanceof GardenRequestTargetError && error.code === 'route_not_declared'
+        ? '404 Not Found'
+        : '400 Bad Request';
+      socket.write(`HTTP/1.1 ${status}\r\n\r\n`);
+      socket.destroy();
+      return;
+    }
+    if (
+      target.routeId !== ADMIN_TELEMETRY_ROUTE_CAPABILITY.id
+      || target.canonicalPath !== TELEMETRY_WEBSOCKET_PATH
+      || target.canonicalQuery
+    ) {
       socket.write('HTTP/1.1 404 Not Found\\r\\n\\r\\n');
       socket.destroy();
       return;
     }
 
-    if (!this.checkUpgradeAuth(req)) {
+    if (!preauthorized && !this.checkUpgradeAuth(req)) {
       socket.write('HTTP/1.1 401 Unauthorized\\r\\n\\r\\n');
       socket.destroy();
       return;
     }
 
     this.webSocketServer.handleUpgrade(req, socket, head, (ws) => {
-      this.attachTelemetryWebSocket(ws);
+      this.attachTelemetryWebSocket(ws, expiresAtSeconds);
     });
   }
 
-  private attachTelemetryWebSocket(ws: WebSocket): void {
+  private attachTelemetryWebSocket(ws: WebSocket, expiresAtSeconds?: number): void {
     const telemetryEvents: EventName[] = [
       'agent.turn.usage',
       'agent.turn.snapshot',
@@ -195,7 +241,16 @@ export class AdminServerTelemetryTransport {
       unsubscribers.push(unsub);
     }
 
+    const expiryTimer = expiresAtSeconds === undefined
+      ? undefined
+      : setTimeout(() => ws.close(1008, 'Fleet capability expired'), Math.max(
+          0,
+          (expiresAtSeconds * 1_000) - Date.now(),
+        ));
+    expiryTimer?.unref();
+
     const cleanup = (): void => {
+      if (expiryTimer) clearTimeout(expiryTimer);
       for (const unsub of unsubscribers) {
         unsub();
       }

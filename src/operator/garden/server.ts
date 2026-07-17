@@ -14,7 +14,17 @@ import { handleAdminRequest } from './server-request-routing.js';
 import { AdminServerTransport } from './server-transport.js';
 import { AdminServerTelemetryTransport } from './server-telemetry-transport.js';
 import { validateAdminAuthStartupPolicy } from './auth-policy.js';
-import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
+import {
+  admitFleetGardenRequest,
+  isLegacyTokenGardenAdmission,
+  readFleetGardenBody,
+  resolveGardenAdmissionMode,
+  type GardenAdmissionMode,
+} from './garden-admission.js';
+import {
+  createFleetGardenRequestContext,
+  type GardenRequestContext,
+} from './garden-request-context.js';
 
 const log = createComponentLogger('AdminServer');
 const ADMIN_MAX_BODY_SIZE = 65_536; // 64KB
@@ -25,7 +35,9 @@ export class AdminServer implements Lifecycle {
   private host: string;
   private token?: string;
   private allowInsecureWithoutToken: boolean;
-  private fleetAuthEnabled: boolean;
+  private readonly admission: GardenAdmissionMode;
+  private readonly companionId?: string;
+  private readonly bufferedFleetBodies = new WeakMap<IncomingMessage, string>();
   private routes: AdminRoute[];
   private transport: AdminServerTransport;
   private telemetryTransport: AdminServerTelemetryTransport;
@@ -35,8 +47,14 @@ export class AdminServer implements Lifecycle {
     this.host = config.host ?? '127.0.0.1';
     this.token = config.token;
     this.allowInsecureWithoutToken = config.allowInsecureWithoutToken ?? false;
-    this.fleetAuthEnabled = config.config.fleetAuthVerifier !== undefined
-      || config.config.fleetAuth !== undefined;
+    const modeSelection = {
+      fleetAuthVerifier: config.config.fleetAuthVerifier,
+      companionId: config.config.companionId,
+      audience: 'operator' as const,
+      token: config.token,
+    };
+    this.admission = resolveGardenAdmissionMode(modeSelection);
+    this.companionId = config.config.companionId;
     this.transport = new AdminServerTransport(log);
     this.telemetryTransport = new AdminServerTelemetryTransport(
       config.eventBus,
@@ -44,6 +62,7 @@ export class AdminServer implements Lifecycle {
     );
     this.routes = buildAdminRoutes({
       token: this.token,
+      legacySessionRoutes: isLegacyTokenGardenAdmission(this.admission),
       services: config.services,
       config: config.config,
       withBody: (req, res, cb) => this.withBody(req, res, cb),
@@ -57,23 +76,16 @@ export class AdminServer implements Lifecycle {
   }
 
   async start(): Promise<void> {
-    assertFleetAuthLegacySurfacesUnavailable({
-      fleetAuthEnabled: this.fleetAuthEnabled,
-      processMode: 'operator',
-      env: {
-        ADMIN_PORT: String(this.port),
-        ...(this.token ? { ADMIN_TOKEN: this.token } : {}),
-        ...(this.allowInsecureWithoutToken ? { ADMIN_ALLOW_INSECURE: 'true' } : {}),
-      },
-    });
-    validateAdminAuthStartupPolicy({
-      host: this.host,
-      port: this.port,
-      token: this.token,
-      allowInsecureWithoutToken: this.allowInsecureWithoutToken,
-      componentLabel: 'admin server',
-      logger: log,
-    });
+    if (isLegacyTokenGardenAdmission(this.admission)) {
+      validateAdminAuthStartupPolicy({
+        host: this.host,
+        port: this.port,
+        token: this.token,
+        allowInsecureWithoutToken: this.allowInsecureWithoutToken,
+        componentLabel: 'admin server',
+        logger: log,
+      });
+    }
 
     return new Promise((resolve, reject) => {
       const onError = (err: NodeJS.ErrnoException) => {
@@ -92,7 +104,9 @@ export class AdminServer implements Lifecycle {
       this.server.listen(this.port, this.host, () => {
         this.server.off('error', onError);
         log.info(`Listening on ${this.host}:${this.port}`);
-        if (this.token) {
+        if (this.admission.kind === 'fleet-principal') {
+          log.info('Fleet principal Garden admission enabled');
+        } else if (this.token) {
           log.info('Admin authentication enabled');
         } else {
           log.warn('Admin authentication disabled by explicit ADMIN_ALLOW_INSECURE=true');
@@ -115,24 +129,100 @@ export class AdminServer implements Lifecycle {
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
+    if (this.admission.kind === 'fleet-principal') {
+      void this.handleFleetRequest(req, res);
+      return;
+    }
+    this.dispatchRequest(req, res, this.token);
+  }
+
+  private dispatchRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    token: string | undefined,
+    context?: GardenRequestContext,
+  ): void {
     handleAdminRequest(req, res, {
-      token: this.token,
+      token,
       checkAuth: (request, response) => this.checkAuth(request, response),
       isGardenUiEnabled: () => this.transport.isGardenUiEnabled(),
       serveGardenBuildAsset: (path, request, response) => this.transport.serveGardenBuildAsset(path, request, response),
       serveGardenPage: (path, request, response) => this.transport.serveGardenPage(path, request, response),
-      route: (method, path, request, response) => this.route(method, path, request, response),
+      route: (method, path, request, response) => this.route(method, path, request, response, context),
       sendNotFound: (path, response) => this.send404(response, path),
       onRequestError: (path, err) => log.error('Request error', { path, error: String(err) }),
     });
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    if (this.admission.kind === 'fleet-principal') {
+      void this.handleFleetUpgrade(req, socket, head);
+      return;
+    }
     this.telemetryTransport.handleUpgrade(req, socket, head);
   }
 
-  private route(method: string, path: string, req: IncomingMessage, res: ServerResponse): boolean {
-    return dispatchAdminRoute(this.routes, method, path, req, res);
+  private async handleFleetRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let body: Buffer | null;
+    try {
+      body = await readFleetGardenBody(req, res, {
+        maxBytes: ADMIN_MAX_BODY_SIZE,
+        logger: log,
+      });
+    } catch (error) {
+      this.send500('Fleet Garden request body read error', error, res);
+      return;
+    }
+    if (body === null) return;
+    const admitted = await admitFleetGardenRequest({
+      admission: this.admission as Extract<GardenAdmissionMode, { kind: 'fleet-principal' }>,
+      rawTarget: req.url ?? '/',
+      method: req.method ?? 'GET',
+      headers: req.headers,
+      body,
+    });
+    if (admitted.decision === 'deny') {
+      sendText(res, admitted.status, admitted.message);
+      return;
+    }
+    this.bufferedFleetBodies.set(req, body.toString('utf8'));
+    const context = createFleetGardenRequestContext({
+      target: admitted.target,
+      verified: admitted.verified,
+    });
+    this.dispatchRequest(req, res, undefined, context);
+  }
+
+  private async handleFleetUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+    const admitted = await admitFleetGardenRequest({
+      admission: this.admission as Extract<GardenAdmissionMode, { kind: 'fleet-principal' }>,
+      rawTarget: req.url ?? '/',
+      method: 'WS',
+      headers: req.headers,
+      body: Buffer.alloc(0),
+    });
+    if (admitted.decision === 'deny' || !admitted.verified) {
+      const status = admitted.decision === 'deny' ? admitted.status : 403;
+      socket.write(`HTTP/1.1 ${status} Unauthorized\r\n\r\n`);
+      socket.destroy();
+      return;
+    }
+    this.telemetryTransport.handleAuthorizedUpgrade(
+      req,
+      socket,
+      head,
+      admitted.verified.expiresAt,
+    );
+  }
+
+  private route(
+    method: string,
+    path: string,
+    req: IncomingMessage,
+    res: ServerResponse,
+    context?: GardenRequestContext,
+  ): boolean {
+    return dispatchAdminRoute(this.routes, method, path, req, res, context, this.companionId);
   }
 
   private checkAuth(req: IncomingMessage, res: ServerResponse): boolean {
@@ -152,6 +242,12 @@ export class AdminServer implements Lifecycle {
     res: ServerResponse,
     cb: (body: string) => void,
   ): void {
+    const bufferedBody = this.bufferedFleetBodies.get(req);
+    if (bufferedBody !== undefined) {
+      this.bufferedFleetBodies.delete(req);
+      cb(bufferedBody);
+      return;
+    }
     readBodyWithLimit(req, res, {
       maxBytes: ADMIN_MAX_BODY_SIZE,
       logger: log,

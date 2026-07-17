@@ -211,6 +211,7 @@ export async function runFleetAuthConsistentBackupCycleImplementation(
 
     const retention = applyTieredRetention(options.backupRootDir, {
       maxRotatingBackups: options.config.maxRotatingBackups,
+      maxDailyBackups: options.config.maxDailyBackups,
       maxWeeklyBackups: options.config.maxWeeklyBackups,
       maxMonthlyBackups: options.config.maxMonthlyBackups,
     });

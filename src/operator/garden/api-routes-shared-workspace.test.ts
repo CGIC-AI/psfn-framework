@@ -4,18 +4,9 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { buildAdminSharedWorkspaceRoutes } from './api-routes-shared-workspace.js';
-import {
-  AdminSharedWorkspaceService,
-  SHARED_WORKSPACE_CREDENTIAL_HEADER,
-  type SharedWorkspaceCredentials,
-} from './services/shared-workspace-service.js';
+import { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import type { AdminApiRoute } from './routes/types.js';
-
-const CREDENTIALS: SharedWorkspaceCredentials = {
-  proposerToken: 'proposal-credential-aaaaaaaaaaaaaaaa',
-  reviewerToken: 'reviewer-credential-bbbbbbbbbbbbbbbb',
-  cogSecToken: 'cogsec-credential-cccccccccccccccccc',
-};
+import type { GardenRequestContext } from './garden-request-context.js';
 
 class CapturingResponse {
   status = 0;
@@ -24,12 +15,11 @@ class CapturingResponse {
   end(body?: string): this { this.body = body ?? ''; return this; }
 }
 
-function makeRequest(url: string, body: string, credential?: string): IncomingMessage {
+function makeRequest(url: string, body: string): IncomingMessage {
   return {
     url,
     headers: {
       host: 'localhost',
-      ...(credential ? { [SHARED_WORKSPACE_CREDENTIAL_HEADER]: credential } : {}),
     },
     on(event: string, listener: (...args: unknown[]) => void) {
       if (event === 'data') listener(body);
@@ -43,14 +33,15 @@ async function invoke(
   route: AdminApiRoute,
   url: string,
   body: Record<string, unknown>,
-  credential?: string,
+  context?: GardenRequestContext,
 ): Promise<CapturingResponse> {
   const response = new CapturingResponse();
   const params = route.match(new URL(url, 'http://localhost').pathname);
   route.handle(
-    makeRequest(url, JSON.stringify(body), credential),
+    makeRequest(url, JSON.stringify(body)),
     response as unknown as ServerResponse,
     params ?? {},
+    context,
   );
   await new Promise(resolve => setImmediate(resolve));
   return response;
@@ -68,7 +59,7 @@ describe('shared workspace admin write authentication', () => {
     for (const path of [
       'artifacts', 'reviews', 'cogsec-decisions', 'provenance/events', 'transactions', '.locks',
     ]) mkdirSync(join(root, path), { recursive: true });
-    const service = new AdminSharedWorkspaceService(root, CREDENTIALS);
+    const service = new AdminSharedWorkspaceService(root);
     return {
       service,
       routes: buildAdminSharedWorkspaceRoutes({
@@ -82,7 +73,7 @@ describe('shared workspace admin write authentication', () => {
     };
   }
 
-  it('derives proposer, CogSec, and reviewer identities from distinct credentials', async () => {
+  it('derives proposer, CogSec, and reviewer identities from signed request contexts', async () => {
     const { service, routes } = fixture();
     const proposalRoute = routes.find(route => route.match('/api/admin/shared-workspace/proposals'))!;
     const proposed = await invoke(proposalRoute, '/api/admin/shared-workspace/proposals', {
@@ -90,11 +81,11 @@ describe('shared workspace admin write authentication', () => {
       content: '# Reviewed\n',
       mediaType: 'text/markdown',
       provenance: 'operator source',
-    }, CREDENTIALS.proposerToken);
+    }, context('POST /api/admin/shared-workspace/proposals'));
     expect(proposed.status).toBe(201);
     const proposal = JSON.parse(proposed.body);
     expect(proposal.proposer).toMatchObject({ role: 'proposer' });
-    expect(proposal.proposer.id).not.toContain(CREDENTIALS.proposerToken);
+    expect(proposal.proposer.id).toContain('principal-a');
 
     const decisionRoute = routes.find(route => route.match(
       `/api/admin/shared-workspace/reviews/${proposal.reviewId}/decision`,
@@ -103,7 +94,7 @@ describe('shared workspace admin write authentication', () => {
       decisionRoute,
       `/api/admin/shared-workspace/reviews/${proposal.reviewId}/decision`,
       { decision: 'approve' },
-      CREDENTIALS.proposerToken,
+      context('POST /api/admin/shared-workspace/proposals'),
     );
     expect(wrongRole.status).toBe(401);
 
@@ -114,7 +105,11 @@ describe('shared workspace admin write authentication', () => {
       cogSecRoute,
       `/api/admin/shared-workspace/reviews/${proposal.reviewId}/cogsec`,
       { decision: 'approved' },
-      CREDENTIALS.cogSecToken,
+      context(
+        'POST /api/admin/shared-workspace/reviews/:reviewId/cogsec',
+        ['cogsec'],
+        'principal-cogsec',
+      ),
     );
     expect(cogSec.status).toBe(201);
     expect(JSON.parse(cogSec.body).reviewer.role).toBe('cogsec');
@@ -123,14 +118,18 @@ describe('shared workspace admin write authentication', () => {
       decisionRoute,
       `/api/admin/shared-workspace/reviews/${proposal.reviewId}/decision`,
       { decision: 'approve' },
-      CREDENTIALS.reviewerToken,
+      context(
+        'POST /api/admin/shared-workspace/reviews/:reviewId/decision',
+        ['cogsec', 'independent_reviewer'],
+        'principal-reviewer',
+      ),
     );
     expect(reviewed.status).toBe(200);
     expect(JSON.parse(reviewed.body)).toMatchObject({ status: 'approved', reviewer: { role: 'reviewer' } });
     expect(service.readArtifact('guide.md').content).toBe('# Reviewed\n');
   });
 
-  it('rejects JSON identity assertions and missing credentials', async () => {
+  it('rejects JSON identity assertions and missing trusted contexts', async () => {
     const { routes } = fixture();
     const proposalRoute = routes.find(route => route.match('/api/admin/shared-workspace/proposals'))!;
     const assertedIdentity = await invoke(proposalRoute, '/api/admin/shared-workspace/proposals', {
@@ -139,7 +138,7 @@ describe('shared workspace admin write authentication', () => {
       mediaType: 'text/plain',
       provenance: 'source',
       actorId: 'forged-operator',
-    }, CREDENTIALS.proposerToken);
+    }, context('POST /api/admin/shared-workspace/proposals'));
     expect(assertedIdentity.status).toBe(400);
     expect(assertedIdentity.body).toContain('identity claims are forbidden');
 
@@ -152,15 +151,59 @@ describe('shared workspace admin write authentication', () => {
     expect(missingCredential.status).toBe(401);
   });
 
-  it('refuses to start with shared credentials that are not independent', () => {
+  it('does not accept a reusable browser credential as workflow identity', async () => {
     const root = mkdtempSync(join(tmpdir(), 'psfn-shared-routes-'));
     roots.push(root);
-    mkdirSync(join(root, 'transactions'), { recursive: true });
-    const same = 'same-credential-aaaaaaaaaaaaaaaaaa';
-    expect(() => new AdminSharedWorkspaceService(root, {
-      proposerToken: same,
-      reviewerToken: same,
-      cogSecToken: 'different-cogsec-cccccccccccccccc',
-    })).toThrow(/credentials must be distinct/);
+    for (const path of ['artifacts', 'reviews', 'cogsec-decisions', 'provenance/events', 'transactions', '.locks']) {
+      mkdirSync(join(root, path), { recursive: true });
+    }
+    const routes = buildAdminSharedWorkspaceRoutes({
+      service: new AdminSharedWorkspaceService(root),
+      withBody: (req, _res, callback) => {
+        let body = '';
+        req.on('data', chunk => { body += String(chunk); });
+        req.on('end', () => callback(body));
+      },
+    });
+    const proposalRoute = routes.find(route => route.match('/api/admin/shared-workspace/proposals'))!;
+    const response = await invoke(proposalRoute, '/api/admin/shared-workspace/proposals', {
+      artifactPath: 'guide.md', content: 'x', mediaType: 'text/plain', provenance: 'source',
+    });
+    expect(response.status).toBe(401);
   });
 });
+function context(
+  routeId: string,
+  approvals: Array<'cogsec' | 'independent_reviewer'> = [],
+  principalId = 'principal-a',
+): GardenRequestContext {
+  const strong = approvals.length > 0;
+  const authorization = Object.freeze({
+    action: 'shared_workspace.manage' as const,
+    baseRole: 'admin' as const,
+    resource: Object.freeze({ scope: 'governed_shared_workspace' as const, area: 'shared_workspace' as const }),
+    subjectRelation: 'current_companion' as const,
+    requirements: Object.freeze({
+      assurance: strong ? 'webauthn_uv' as const : 'oauth' as const,
+      confirmation: strong ? 'explicit' as const : 'none' as const,
+      approvals: Object.freeze(approvals),
+    }),
+    publicAccess: 'never' as const,
+    recoveryAccess: 'forbidden' as const,
+  });
+  return Object.freeze({
+    kind: 'fleet_principal', requestId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    decisionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', authorizationEventId: 'event-a',
+    resolvedAt: '2030-01-01T00:00:00.000Z', issuedAt: 1, expiresAt: 2,
+    versions: Object.freeze({ authorityGeneration: 1, globalAuthEpoch: 1, sessionAuthnVersion: 1,
+      sessionAuthzVersion: 1, bindingVersion: 1, grantVersion: 1, policyVersion: 1 }),
+    actor: Object.freeze({ kind: 'fleet_principal', principalId, provider: 'discord',
+      providerSubjectId: '12345678901234567', contactId: 'contact-a', contactBindingId: 'binding-a',
+      role: 'admin', operatorGrantId: 'grant-a', sessionRecordId: 'session-a',
+      sessionAssurance: strong ? 'webauthn_uv' : 'oauth' }),
+    action: 'shared_workspace.manage',
+    resource: Object.freeze({ routeId, scope: 'governed_shared_workspace', area: 'shared_workspace',
+      companionId: '11111111-1111-4111-8111-111111111111', pathParams: Object.freeze({}), query: Object.freeze({}) }),
+    subjectRelation: 'current_companion', authorization,
+  });
+}

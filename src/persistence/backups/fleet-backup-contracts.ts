@@ -51,6 +51,7 @@ export interface BackupRunOptions {
   backupRootDir: string;
   retentionCount?: number;
   maxRotatingBackups?: number;
+  maxDailyBackups?: number;
   maxWeeklyBackups?: number;
   maxMonthlyBackups?: number;
   memoriesJournalPath?: string;
@@ -116,6 +117,7 @@ export interface FleetBackupRunOptions {
   groupCompanionDataDir?: string;
   groupWorkspacesRoot?: string;
   maxRotatingBackups?: number;
+  maxDailyBackups?: number;
   maxWeeklyBackups?: number;
   maxMonthlyBackups?: number;
   mirrorDir?: string;

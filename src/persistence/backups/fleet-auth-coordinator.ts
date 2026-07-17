@@ -176,6 +176,11 @@ async function captureFleetAuthSnapshot(
         contactAuthorityIntents: await selectJsonRows(client, 'contact_authority_intents', 'created_at, companion_id, intent_id'),
         contactAuthorityResources: await selectJsonRows(client, 'contact_authority_resources', 'companion_id, intent_id, kind, resource_id'),
         contactAuthorityReceipts: await selectJsonRows(client, 'contact_authority_receipts', 'created_at, companion_id, intent_id, phase'),
+        hubDeviceHumanAttachments: await selectJsonRows(
+          client,
+          'hub_device_human_attachments',
+          'created_at, attachment_id',
+        ),
       },
     },
   };

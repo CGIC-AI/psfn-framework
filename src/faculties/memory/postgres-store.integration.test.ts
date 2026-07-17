@@ -271,21 +271,29 @@ describe('postgres memory store integration', () => {
     });
   }, INTEGRATION_TIMEOUT_MS);
 
-  it('filters list, detail, search, count, snippet, embedding, export, and prompt inputs in SQL', async () => {
+  it('filters every named-memory sensitivity from list, detail, search, count, snippet, embedding, export, and prompt inputs in SQL', async () => {
     await withMemoryDatabase(async (pool) => {
       const store = await createPostgresMemoryStoreFromPool(pool, 4);
-      await store.insertMemory(makeMemory({
-        id: 'authorized-a',
-        text: 'private alpha subject marker',
-        provenance: { subjectContactId: 'contact-a' },
-        scopeRef: { kind: 'project', id: 'alpha' },
-        scopeTags: ['private-alpha'],
-      }), DEFAULT_EMBEDDING);
-      await store.insertMemory(makeMemory({
-        id: 'unauthorized-b',
-        text: 'private beta subject marker',
-        provenance: { subjectContactId: 'contact-b' },
-      }), DEFAULT_EMBEDDING);
+      const sensitivities = ['public', 'personal', 'intimate', 'confidential'] as const;
+      const authorizedIds = sensitivities.map(sensitivity => `authorized-${sensitivity}`);
+      for (const sensitivity of sensitivities) {
+        await store.insertMemory(makeMemory({
+          id: `authorized-${sensitivity}`,
+          text: `private ${sensitivity} subject marker`,
+          sensitivity,
+          provenance: { subjectContactId: 'contact-a' },
+          ...(sensitivity === 'public' ? {
+            scopeRef: { kind: 'project' as const, id: 'alpha' },
+            scopeTags: ['private-alpha'],
+          } : {}),
+        }), DEFAULT_EMBEDDING);
+        await store.insertMemory(makeMemory({
+          id: `unauthorized-${sensitivity}`,
+          text: `private ${sensitivity} subject marker`,
+          sensitivity,
+          provenance: { subjectContactId: 'contact-b' },
+        }), DEFAULT_EMBEDDING);
+      }
       await store.insertMemory(makeMemory({
         id: 'unattributed',
         text: 'private unattributed marker',
@@ -293,7 +301,10 @@ describe('postgres memory store integration', () => {
 
       const requests = [
         { action: 'list' as const, selector: { kind: 'list' as const } },
-        { action: 'detail' as const, selector: { kind: 'detail' as const, memoryId: 'authorized-a' } },
+        {
+          action: 'detail' as const,
+          selector: { kind: 'detail' as const, memoryId: 'authorized-personal' },
+        },
         { action: 'search' as const, selector: { kind: 'text_search' as const, query: 'subject marker' } },
         { action: 'snippet' as const, selector: { kind: 'text_search' as const, query: 'marker' } },
         { action: 'embedding' as const, selector: {
@@ -309,14 +320,18 @@ describe('postgres memory store integration', () => {
           authorization: subjectAuthorization('contact-a', request.action),
           selector: request.selector,
         });
-        expect(result.total, request.action).toBe(1);
-        expect(result.memories.map(memory => memory.id), request.action).toEqual(['authorized-a']);
+        const expectedIds = request.selector.kind === 'detail'
+          ? ['authorized-personal']
+          : authorizedIds;
+        expect(result.total, request.action).toBe(expectedIds.length);
+        expect(result.memories.map(memory => memory.id).sort(), request.action)
+          .toEqual([...expectedIds].sort());
       }
       const count = await store.queryAuthorizedMemorySubjects({
         authorization: subjectAuthorization('contact-a', 'count'),
         selector: { kind: 'count' },
       });
-      expect(count).toEqual({ memories: [], total: 1 });
+      expect(count).toEqual({ memories: [], total: sensitivities.length });
 
       expect(await store.queryAuthorizedMemorySubjects({
         authorization: subjectAuthorization('contact-a', 'search'),
@@ -329,7 +344,7 @@ describe('postgres memory store integration', () => {
 
       const hiddenDetail = await store.queryAuthorizedMemorySubjects({
         authorization: subjectAuthorization('contact-a', 'detail'),
-        selector: { kind: 'detail', memoryId: 'unauthorized-b' },
+        selector: { kind: 'detail', memoryId: 'unauthorized-public' },
       });
       expect(hiddenDetail).toEqual({ memories: [], total: 0 });
 
@@ -443,15 +458,42 @@ describe('postgres memory store integration', () => {
     });
   }, INTEGRATION_TIMEOUT_MS);
 
+  it('hides internal derived artifacts from human subject authorization before counts and IDs', async () => {
+    await withMemoryDatabase(async (pool) => {
+      const store = await createPostgresMemoryStoreFromPool(pool, 4);
+      await store.insertMemory(makeMemory({
+        id: 'subject-visible',
+        provenance: { subjectContactId: 'contact-a' },
+      }), DEFAULT_EMBEDDING);
+      await store.insertMemory(makeMemory({
+        id: 'subject-derived-internal',
+        sourceRef: 'source:context_feedback|contact-a',
+        tags: ['context_feedback'],
+        provenance: { subjectContactId: 'contact-a' },
+      }), DEFAULT_EMBEDDING);
+
+      expect((await store.queryAuthorizedMemorySubjects({
+        authorization: subjectAuthorization('contact-a', 'count'),
+        selector: { kind: 'count' },
+      })).total).toBe(1);
+      expect(await store.queryAuthorizedMemorySubjects({
+        authorization: subjectAuthorization('contact-a', 'detail'),
+        selector: { kind: 'detail', memoryId: 'subject-derived-internal' },
+      })).toEqual({ memories: [], total: 0 });
+    });
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('preauthorizes every bulk target and mutates atomically without revealing inaccessible counts', async () => {
     await withMemoryDatabase(async (pool) => {
       const store = await createPostgresMemoryStoreFromPool(pool, 4);
       await store.insertMemory(makeMemory({
         id: 'bulk-a',
+        sensitivity: 'public',
         provenance: { subjectContactId: 'contact-a' },
       }), DEFAULT_EMBEDDING);
       await store.insertMemory(makeMemory({
         id: 'bulk-b',
+        sensitivity: 'personal',
         provenance: { subjectContactId: 'contact-b' },
       }), DEFAULT_EMBEDDING);
 
@@ -460,8 +502,8 @@ describe('postgres memory store integration', () => {
         memoryIds: ['bulk-a', 'bulk-b'],
         updates: { sensitivity: 'confidential' },
       })).rejects.toThrow('Memory subject authorization denied');
-      expect((await store.getById('bulk-a'))?.sensitivity).toBe('low');
-      expect((await store.getById('bulk-b'))?.sensitivity).toBe('low');
+      expect((await store.getById('bulk-a'))?.sensitivity).toBe('public');
+      expect((await store.getById('bulk-b'))?.sensitivity).toBe('personal');
 
       expect(await store.mutateAuthorizedMemorySubjects({
         authorization: subjectAuthorization('contact-a', 'update'),

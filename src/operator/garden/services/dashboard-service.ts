@@ -53,6 +53,9 @@ export class AdminDashboardDataService implements AdminDashboardService {
 
   private readonly turnPerformance = new TurnPerformanceTracker();
 
+  private static readonly ANALYSIS_WORKBENCH_TRACE_LIMIT = 50;
+  private static readonly ANALYSIS_WORKBENCH_DASHBOARD_LIMIT = 5;
+
   private analysisWorkbenchTraces: AnalysisWorkbenchTraceView[] = [];
 
   constructor(private readonly deps: {
@@ -114,8 +117,15 @@ export class AdminDashboardDataService implements AdminDashboardService {
         })),
       };
       this.analysisWorkbenchTraces.unshift(trace);
-      if (this.analysisWorkbenchTraces.length > 5) this.analysisWorkbenchTraces.length = 5;
+      if (this.analysisWorkbenchTraces.length > AdminDashboardDataService.ANALYSIS_WORKBENCH_TRACE_LIMIT) {
+        this.analysisWorkbenchTraces.length = AdminDashboardDataService.ANALYSIS_WORKBENCH_TRACE_LIMIT;
+      }
     });
+  }
+
+  /** Recent REPL traces with full step detail for the workbench drill-down page. */
+  listAnalysisWorkbenchTraces(): AnalysisWorkbenchTraceView[] {
+    return [...this.analysisWorkbenchTraces];
   }
 
   private static normalizeContextUtilization(value: number): number {
@@ -308,7 +318,10 @@ export class AdminDashboardDataService implements AdminDashboardService {
           activeSessionContextPressure: this.getActiveSessionContextPressure(),
         },
         toolStatus,
-        recentAnalysisWorkbenchTraces: this.analysisWorkbenchTraces,
+        recentAnalysisWorkbenchTraces: this.analysisWorkbenchTraces.slice(
+          0,
+          AdminDashboardDataService.ANALYSIS_WORKBENCH_DASHBOARD_LIMIT,
+        ),
       },
     };
   }

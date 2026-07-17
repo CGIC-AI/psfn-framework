@@ -117,6 +117,28 @@ which returns only companions for which the session has an active binding and
 eligible Garden access. The projection remains a gateway-owned authorization
 view even though the Garden UI renders it.
 
+The Companion UI app consumes the same projection through two cookie-authed,
+`no-store, private` gateway endpoints (`FleetAuthHttpRoutes`), both backed by
+`GatewayFleetPortalProjection.resolveRoster` and its least-authority,
+non-enumerating authorizer:
+
+- `GET /v1/fleet-auth/companions` — the roster: `{ companionId, displayName,
+  websocketPath, avatarRef? }` per companion the session may reach. `displayName`
+  resolves to the manifest label else the `companionId` (no character-card reads
+  at request time; see [multi-companion.md](./multi-companion.md)). The active
+  companion is expressed only by which `websocketPath` the app opens.
+- `GET /v1/fleet-auth/approvals` — the fleet-wide pending-approval view:
+  redacted `{ companionId, companionDisplayName, id, title, requestedAt,
+  expiresAt?, status }` entries, so an approval for companion X surfaces (with
+  attribution) even while the human talks to companion Y. Ownership is joined
+  from the approval boundary's owner map; entries with no resolvable owner, or
+  an owner outside the session's authorized roster, are excluded (fail closed,
+  never mis-attributed, non-enumerating). Redaction reuses the companion-relay
+  approval whitelist — raw tool params never appear.
+
+The app never enumerates the raw fleet manifest; both endpoints are filtered to
+the session's authorized companions.
+
 The selected companion stays in the URL for page routes, API calls, downloads,
 and WebSockets. The browser client derives request URLs from the current
 companion route. It does not send an unbound `companionId` header, body field, or

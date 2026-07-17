@@ -2,7 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import type { HubDeviceAttachmentSnapshot } from '../../shared/contracts/hub-device-ingress.js';
 import type { SatelliteClientCertIdentity } from '../../shared/contracts/satellite-registry.js';
-import type { FleetAuthorizationContext } from './fleet-authorization-context.js';
+import {
+  toRequestCapabilityAuthContext,
+  type FleetAuthorizationContext,
+} from './fleet-authorization-context.js';
 import {
   compileCompanionUiAction,
   type CompanionUiPhysicalCapabilityCeiling,
@@ -122,6 +125,7 @@ export class GatewayCompanionUiActionBroker {
       target: compiled.target,
       requestId: parentRequestId,
       decisionId: context.provenance.authorizationEventId,
+      authContext: toRequestCapabilityAuthContext(context),
       versions,
     });
     const parentToken = this.options.signer.signOperator(parent);

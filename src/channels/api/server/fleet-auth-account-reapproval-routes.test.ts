@@ -1,8 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createHash } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import type { TrustedHostAccountReapprovalService } from '../../../boundary/fleet-auth/trusted-host-account-reapproval.js';
+import { digestFleetAuthVerifiedProviderProof } from '../../../shared/contracts/fleet-auth-lifecycle-oauth.js';
 import {
   FLEET_AUTH_ACCOUNT_REAPPROVAL_FINISH_PATH,
   FLEET_AUTH_ACCOUNT_REAPPROVAL_START_PATH,
@@ -55,10 +55,11 @@ const providerProof = {
   provider: 'discord' as const,
   subjectId: '123456789012345678',
   callbackTransactionId: '11111111-1111-4111-8111-111111111111',
-  proofDigest: createHash('sha256').update(
-    'fleet-auth-verified-provider-proof:v1:discord:'
-    + '123456789012345678:11111111-1111-4111-8111-111111111111',
-  ).digest('hex'),
+  proofDigest: digestFleetAuthVerifiedProviderProof({
+    provider: 'discord',
+    subjectId: '123456789012345678',
+    callbackTransactionId: '11111111-1111-4111-8111-111111111111',
+  }),
 };
 const common = {
   token: 'session-token',

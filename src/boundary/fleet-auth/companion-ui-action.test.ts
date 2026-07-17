@@ -9,12 +9,27 @@ import {
 import {
   createGatewayRequestCapabilitySigner,
   createRequestCapabilityVerifier,
+  type RequestCapabilityAuthContext,
 } from './request-capability.js';
 
 const companionId = createCompanionId('11111111-1111-4111-8111-111111111111');
 const ceiling = Object.freeze({
   capabilities: ['text', 'audio_input', 'speech_to_text', 'audio_output', 'touch'] as const,
   telemetryScopes: ['status', 'approvals', 'artifacts', 'tool_activity'] as const,
+});
+const authContext: RequestCapabilityAuthContext = Object.freeze({
+  principalId: '22222222-2222-4222-8222-222222222222',
+  provider: 'discord',
+  providerSubjectId: '123456789012345678',
+  companionId,
+  contactBindingId: '33333333-3333-4333-8333-333333333333',
+  contactId: '77777777-7777-4777-8777-777777777777',
+  operatorGrantId: '44444444-4444-4444-8444-444444444444',
+  role: 'member',
+  sessionRecordId: '55555555-5555-4555-8555-555555555555',
+  sessionAssurance: 'oauth',
+  authorizationEventId: '66666666-6666-4666-8666-666666666666',
+  resolvedAt: '2030-01-01T00:00:00.000Z',
 });
 
 function raw(resource: string, action: string, body: unknown): Buffer {
@@ -124,7 +139,13 @@ describe('Companion UI action target', () => {
       authorityGeneration: 1, globalAuthEpoch: 1, sessionAuthnVersion: 1,
       sessionAuthzVersion: 1, bindingVersion: 1, grantVersion: 1, policyVersion: 1,
     };
-    const parentInput = { target: compiled.target, requestId: randomUUID(), decisionId: randomUUID(), versions };
+    const parentInput = {
+      target: compiled.target,
+      requestId: randomUUID(),
+      decisionId: randomUUID(),
+      authContext,
+      versions,
+    };
     const parentToken = signer.signOperator(parentInput);
     const parentVerified = verifier.verifyOperator({ token: parentToken, ...parentInput, nowSeconds: 1_893_456_000 });
     const parent = {
@@ -134,7 +155,14 @@ describe('Companion UI action target', () => {
       jti: parentVerified.jti,
       targetDigest: parentVerified.targetDigest,
     };
-    const childInput = { target: compiled.target, requestId: randomUUID(), decisionId: randomUUID(), versions, parent };
+    const childInput = {
+      target: compiled.target,
+      requestId: randomUUID(),
+      decisionId: randomUUID(),
+      authContext,
+      versions,
+      parent,
+    };
     const childToken = signer.signAgent(childInput);
     expect(verifier.verifyAgent({ token: childToken, ...childInput, nowSeconds: 1_893_456_000 }).parent)
       .toEqual(parent);

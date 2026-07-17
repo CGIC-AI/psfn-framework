@@ -130,6 +130,18 @@ async function freshContext() {
     VALUES ('discord', $1, $2, 'active', 1)
   `, [CURRENT_SUBJECT, PRINCIPAL_ID]);
   await seedPool.query(`
+    INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings
+      (binding_id, principal_id, companion_id, contact_id, state,
+       verification_provenance, authority_generation)
+    VALUES ($1, $2, $3, $4, 'active', $5::jsonb, 1)
+  `, [
+    randomUUID(),
+    PRINCIPAL_ID,
+    COMPANION_ID,
+    randomUUID(),
+    JSON.stringify({ source: 'provider_recovery_certification' }),
+  ]);
+  await seedPool.query(`
     INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
       (grant_id, principal_id, companion_id, role, lifecycle, authority_generation)
     VALUES ($1, $2, $3, 'owner', 'active', 1)

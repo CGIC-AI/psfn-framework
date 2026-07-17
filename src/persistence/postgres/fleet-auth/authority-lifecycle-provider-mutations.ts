@@ -99,7 +99,9 @@ export async function prepareProviderLifecycleMutation(
   if (decision.actor.principalId !== targetId) {
     denyLifecycleMutation('provider_actor_target_mismatch');
   }
-  if (decision.action !== 'provider.unlink') {
+  if (decision.action === 'provider.add'
+    || decision.action === 'provider.relink'
+    || decision.action === 'provider.replace') {
     await lockProviderCompanionContactScope(client, decision);
   }
   if (decision.action === 'provider.add' || decision.action === 'provider.relink') {
@@ -158,10 +160,14 @@ export async function prepareProviderLifecycleMutation(
       SELECT EXISTS (
         SELECT 1
         FROM ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants AS role_grant
+        JOIN ${FLEET_AUTH_SCHEMA_NAME}.principal_contact_bindings AS binding
+          ON binding.principal_id = role_grant.principal_id
+         AND binding.companion_id = role_grant.companion_id
         JOIN ${FLEET_AUTH_SCHEMA_NAME}.companion_authority_state AS companion
           ON companion.companion_id = role_grant.companion_id
         WHERE role_grant.principal_id = $1 AND role_grant.companion_id = $2
           AND role_grant.lifecycle = 'active' AND role_grant.restore_state = 'live'
+          AND binding.state = 'active' AND binding.restore_state = 'live'
           AND companion.lifecycle = 'active' AND companion.restore_state = 'live'
       ) AS present
     `, [targetId, decision.companionId]);

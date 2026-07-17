@@ -1,5 +1,6 @@
 import type { ApprovalStreamEntry, HubStreamState } from './stream/hub-stream.js';
 import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../../src/shared/contracts/companion-relay.js';
+import type { ApprovalAttribution, ApprovalGrantMode } from './protocol/events.js';
 
 export type ApprovalCapabilityState = 'available' | 'unsupported';
 
@@ -15,6 +16,13 @@ export interface ApprovalRequestView {
   resolvedAt?: string;
   /** Whole seconds until expiry for pending requests; null when not applicable. */
   expiresInSeconds: number | null;
+  // ── v2 (approvals.v2) — additive, optional; present only for v2 frames ──
+  sourceSystem?: string;
+  attribution?: ApprovalAttribution;
+  action?: string;
+  scope?: string;
+  reason?: string;
+  grantMode?: ApprovalGrantMode;
 }
 
 export interface ApprovalPanelState {
@@ -86,6 +94,12 @@ function toRequestView(entry: ApprovalStreamEntry, now: number): ApprovalRequest
     redactedContext: entry.redactedContext,
     resolvedAt: entry.resolvedAt,
     expiresInSeconds: null,
+    sourceSystem: entry.sourceSystem,
+    attribution: entry.attribution,
+    action: entry.action,
+    scope: entry.scope,
+    reason: entry.reason,
+    grantMode: entry.grantMode,
   };
 
   if (entry.status !== 'pending' || !entry.expiresAt) {

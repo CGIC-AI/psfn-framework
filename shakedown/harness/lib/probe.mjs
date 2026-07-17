@@ -20,6 +20,35 @@ const API_KEY_PRINCIPAL_DIGEST_LENGTH = 24;
 
 export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Build the OpenAI-compatible chat-completions URL from a gateway base. */
+export function chatCompletionsUrl(base) {
+  return `${base.replace(/\/$/, '')}/v1/chat/completions`;
+}
+
+/**
+ * Probe that the gateway is reachable at `base` (the local split runtime, or a
+ * kube gateway behind a port-forward). Hits GET /v1/models — the same signal the
+ * bootstrap health gate uses — with the API key attached. Never throws: returns
+ * { ok, status, detail } so callers can turn an unreachable port-forward into a
+ * clear fail-closed message instead of a raw fetch stack.
+ */
+export async function probeGatewayReady({ base, apiKey, timeoutMs = 10000 }) {
+  const url = `${base.replace(/\/$/, '')}/v1/models`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+      signal: controller.signal,
+    });
+    return { ok: response.ok, status: response.status, detail: response.ok ? null : `HTTP ${response.status}` };
+  } catch (error) {
+    return { ok: false, status: null, detail: error instanceof Error ? error.message : String(error) };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Derive the gateway principal id for an API key exactly the way the runtime
  * does (api-key-<sha256(key)[:24]>), so harness turn-record channel ids line up

@@ -518,6 +518,10 @@
     return (data?.editors?.capabilities as CapabilitiesEditorConfig | undefined) ?? {};
   }
 
+  function getBackupEditorConfig(): Record<string, unknown> {
+    return (data?.editors?.backup as Record<string, unknown> | undefined) ?? {};
+  }
+
   function fieldErrors(field: string): string[] {
     const nestedPrefix = `${field}.`;
     const collected = new Set<string>();
@@ -887,7 +891,7 @@
   }
 
   function buildBackupPayload(): Record<string, unknown> {
-    return buildBackupSettingsPayload(currentSimpleFormState());
+    return buildBackupSettingsPayload(getBackupEditorConfig(), currentSimpleFormState());
   }
 
   function buildCapabilitiesPayload(): Record<string, unknown> {
@@ -1192,7 +1196,10 @@
       // Rebasing the just-saved editor before any reload keeps it clean: the
       // reload refreshes it from server state instead of preserving it as dirty.
       markRawEditorsCommitted([key as RawEditorKey]);
-      if (key === 'scheduler' || key === 'capabilities' || key === 'providers') {
+      // Every owner file whose unified-save builder spreads data.editors.*
+      // must reload here, or the next unified save writes the stale spread
+      // over the raw edit that was just saved to disk.
+      if (key === 'scheduler' || key === 'capabilities' || key === 'providers' || key === 'backup') {
         await reloadSettingsState();
       }
       flashRaw(key, true, `${label} saved`);

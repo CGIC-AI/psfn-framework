@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  buildBackupSettingsPayload,
   buildRawEditorJsonMap,
   buildUnifiedSaveSkipNote,
   listDirtyRawEditorKeys,
@@ -266,4 +267,60 @@ test('unified save note is honest about dropped form changes on skipped owner fi
     listUnifiedSaveSkippedOwnerFiles(['scheduler', 'backup']),
     plan.skippedOwnerFiles,
   );
+});
+
+// Regression for irzz.1: the unified save's backup payload dropped every
+// owner-file field the curated form does not surface (encryption, groupMode,
+// maxDailyBackups). backup.json requires `encryption`, so the stripped payload
+// failed validateBackupConfig server-side and Save Settings errored on every
+// real deployment. The builder must overlay only the curated fields onto the
+// loaded config.
+const REALISTIC_BACKUP_CONFIG = {
+  intervalHours: 12,
+  maxRotatingBackups: 9,
+  maxDailyBackups: 7,
+  maxWeeklyBackups: 2,
+  maxMonthlyBackups: 1,
+  mirrorDir: '/mnt/backup',
+  verifyRestore: true,
+  groupMode: 'per-companion',
+  encryption: { mode: 'required', keyRef: { kind: 'env', envName: 'PSFN_BACKUP_KEY' } },
+};
+
+test('backup payload preserves non-curated owner fields and overlays curated changes', () => {
+  const payload = buildBackupSettingsPayload(REALISTIC_BACKUP_CONFIG, {
+    backupIntervalHours: 24,
+    backupMaxRotating: 4,
+    backupMaxWeekly: 4,
+    backupMaxMonthly: 12,
+    backupMirrorDir: '/mnt/backup',
+    backupVerifyRestore: false,
+  });
+
+  // The blocks that were dropped survive byte-for-byte.
+  assert.deepEqual(payload.encryption, REALISTIC_BACKUP_CONFIG.encryption);
+  assert.equal(payload.groupMode, REALISTIC_BACKUP_CONFIG.groupMode);
+  assert.equal(payload.maxDailyBackups, REALISTIC_BACKUP_CONFIG.maxDailyBackups);
+
+  // Curated fields overlay the loaded values.
+  assert.equal(payload.intervalHours, 24);
+  assert.equal(payload.maxRotatingBackups, 4);
+  assert.equal(payload.maxWeeklyBackups, 4);
+  assert.equal(payload.maxMonthlyBackups, 12);
+  assert.equal(payload.verifyRestore, false);
+});
+
+test('backup payload with no curated change round-trips the loaded config unchanged', () => {
+  const payload = buildBackupSettingsPayload(REALISTIC_BACKUP_CONFIG, {
+    backupIntervalHours: REALISTIC_BACKUP_CONFIG.intervalHours,
+    backupMaxRotating: REALISTIC_BACKUP_CONFIG.maxRotatingBackups,
+    backupMaxWeekly: REALISTIC_BACKUP_CONFIG.maxWeeklyBackups,
+    backupMaxMonthly: REALISTIC_BACKUP_CONFIG.maxMonthlyBackups,
+    backupMirrorDir: REALISTIC_BACKUP_CONFIG.mirrorDir,
+    backupVerifyRestore: REALISTIC_BACKUP_CONFIG.verifyRestore,
+  });
+
+  // Semantic identity: an untouched backup form must not diverge from the
+  // loaded owner file, so the unified save leaves backup.json alone.
+  assert.deepEqual(payload, REALISTIC_BACKUP_CONFIG);
 });

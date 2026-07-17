@@ -114,10 +114,27 @@ export function createGatewayApprovalBoundaryService(
           });
           return;
         }
+        // Unified-envelope attribution (psfn-framework-13sk) is server-resolved:
+        // the parent id is ALWAYS the authenticated enqueue owner. If the
+        // enqueuer supplied its own attribution (e.g. a future shard path with
+        // added provenance), its parentId MUST equal that owner — otherwise we
+        // refuse to emit rather than route to a spoofed parent (fail closed).
+        const attribution = entry.attribution
+          ?? { parentId: enqueueOwner, parentLabel: enqueueOwner };
+        if (attribution.parentId !== enqueueOwner) {
+          approvalLog.error('Refusing to emit companion.approval.requested with mismatched attribution parent', {
+            id: entry.id,
+          });
+          return;
+        }
         confirmationOwners.set(entry.id, enqueueOwner);
         options.eventBus.emit('companion.approval.requested', {
           companionId: enqueueOwner,
-          payload: redactApprovalRequested(entry),
+          payload: redactApprovalRequested(entry, {
+            sourceSystem: entry.sourceSystem ?? 'tool-access',
+            attribution,
+            grantMode: { kind: 'once' },
+          }),
           timestamp: Date.now(),
         }).catch((error) => {
           approvalLog.error('Failed to emit companion.approval.requested', {
@@ -242,6 +259,10 @@ export function createGatewayApprovalBoundaryService(
                   gateOptions.approvalReason?.(params) ?? 'Outside workspace',
                 ),
                 expiresInMs: confirmationConfig.expiryMs,
+                // Gateway confirmation gate is the tool / information-access
+                // escalation surface (psfn-framework-13sk). Attribution is
+                // resolved from the authenticated owner in the emission observer.
+                sourceSystem: 'tool-access',
               },
               execute: async (approvedParams, entry) => executeQueuedAction({
                 method: gateOptions.method,

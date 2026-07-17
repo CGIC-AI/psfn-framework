@@ -52,6 +52,71 @@ describe('hub stream reducer', () => {
     });
   });
 
+  it('stores an ordinary v1 approval.requested with no v2 fields', () => {
+    let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:01.000Z',
+      event: {
+        message: {
+          type: 'approval.requested',
+          data: {
+            id: 'ap-1',
+            title: 'Write file',
+            requestedAt: '2026-06-17T00:00:01.000Z',
+            redactedContext: 'ctx',
+            status: 'pending',
+          },
+        },
+      },
+    });
+    expect(state.approvals).toHaveLength(1);
+    const entry = state.approvals[0];
+    expect(entry).toMatchObject({ id: 'ap-1', status: 'pending' });
+    expect(entry.sourceSystem).toBeUndefined();
+    expect(entry.attribution).toBeUndefined();
+    expect(entry.grantMode).toBeUndefined();
+  });
+
+  it('passes v2 attribution/grant fields through and drops unknown future keys', () => {
+    let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:01.000Z',
+      event: {
+        message: {
+          type: 'approval.requested',
+          data: {
+            id: 'ap-2',
+            title: 'send email',
+            requestedAt: '2026-06-17T00:00:01.000Z',
+            redactedContext: 'ctx',
+            status: 'pending',
+            sourceSystem: 'shard',
+            attribution: { parentId: 'companion-1', parentLabel: 'Parent', shardId: 'shard-1', shardLabel: 'Shard' },
+            action: 'send email',
+            scope: 'outbound',
+            reason: 'ctx',
+            grantMode: { kind: 'once' },
+            // a tolerated-but-unknown key must not enter store state
+            futureField: 'ignore me',
+          } as never,
+        },
+      },
+    });
+    const entry = state.approvals[0];
+    expect(entry.sourceSystem).toBe('shard');
+    expect(entry.attribution).toEqual({
+      parentId: 'companion-1',
+      parentLabel: 'Parent',
+      shardId: 'shard-1',
+      shardLabel: 'Shard',
+    });
+    expect(entry.action).toBe('send email');
+    expect(entry.grantMode).toEqual({ kind: 'once' });
+    expect(entry).not.toHaveProperty('futureField');
+  });
+
   it('accumulates assistant live deltas and clears them on final text', () => {
     let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
     state = {

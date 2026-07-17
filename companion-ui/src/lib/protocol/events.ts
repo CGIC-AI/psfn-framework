@@ -261,6 +261,41 @@ export interface PongMessage {
 
 export type ApprovalResolvedStatus = 'approved' | 'denied' | 'expired' | 'blocked';
 
+/**
+ * Which subsystem raised the request (tag only, never authority). Open-ended so
+ * a new server-side projector does not break the client mirror.
+ */
+export type ApprovalSourceSystem =
+  | 'tool-access'
+  | 'expensive-usage'
+  | 'shard'
+  | 'cogsec'
+  // eslint-disable-next-line @typescript-eslint/ban-types -- keep known-member autocomplete while leaving the union open
+  | (string & {});
+
+/** Server-resolved lineage. Ids opaque; labels presentation only. */
+export interface ApprovalAttribution {
+  parentLabel: string;
+  parentId: string;
+  shardLabel?: string;
+  shardId?: string;
+}
+
+/**
+ * Offered grant mode. The server emits `{ kind: 'once' }` today; the `ttl`
+ * variant is contract-only until the JSON-owned TTL policy ships and MUST NOT
+ * be emitted by the server yet.
+ */
+export type ApprovalGrantMode =
+  | { kind: 'once' }
+  | { kind: 'ttl'; ttlSeconds: number };
+
+/**
+ * v1 fields are the original contract. The v2 fields (approvals.v2, server bead
+ * psfn-framework-13sk) are ADDITIVE and OPTIONAL — present only when the server
+ * saw this client advertise `approvals.v2`. The framing parser tolerates unknown
+ * future keys on this message so a newer server never drops the whole frame.
+ */
 export interface ApprovalRequestedMessage {
   type: 'approval.requested';
   data: {
@@ -270,6 +305,13 @@ export interface ApprovalRequestedMessage {
     expiresAt?: string;
     redactedContext: string;
     status: 'pending';
+    // ── v2 (approvals.v2) — additive, optional ──
+    sourceSystem?: ApprovalSourceSystem;
+    attribution?: ApprovalAttribution;
+    action?: string;
+    scope?: string;
+    reason?: string;
+    grantMode?: ApprovalGrantMode;
   };
 }
 

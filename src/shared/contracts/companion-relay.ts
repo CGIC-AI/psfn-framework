@@ -1,4 +1,15 @@
 import type { SatelliteTelemetryScope } from './satellite-registry.js';
+import type {
+  ApprovalAttribution,
+  ApprovalGrantMode,
+  ApprovalSourceSystem,
+} from './approval-envelope.js';
+
+export type {
+  ApprovalAttribution,
+  ApprovalGrantMode,
+  ApprovalSourceSystem,
+} from './approval-envelope.js';
 
 /**
  * Companion event relay contract (bead w9hj.1).
@@ -48,6 +59,17 @@ export const COMPANION_TOOL_ACTIVITY_PHASES = [
 
 export type CompanionToolActivityPhase = typeof COMPANION_TOOL_ACTIVITY_PHASES[number];
 
+/**
+ * Approval-request wire payload.
+ *
+ * v1 fields (`id`, `title`, `requestedAt`, `expiresAt?`, `redactedContext`,
+ * `status`) are the original contract and must never change shape. The v2
+ * fields below (bead psfn-framework-13sk) are the unified-envelope projection
+ * (`approval-envelope.ts`): all ADDITIVE and OPTIONAL, all server-resolved, all
+ * built through the redaction whitelist by explicit construction. Emission of
+ * the v2 fields is gated behind the client's `approvals.v2` advertisement at the
+ * relay/route boundary — an old client only ever sees the v1 subset.
+ */
 export interface CompanionApprovalRequestedPayload {
   id: string;
   title: string;
@@ -55,6 +77,19 @@ export interface CompanionApprovalRequestedPayload {
   expiresAt?: string;
   redactedContext: string;
   status: 'pending';
+  // ── v2 (approvals.v2) — additive, optional, server-resolved ──
+  /** Which subsystem raised the request (tag only, never authority). */
+  sourceSystem?: ApprovalSourceSystem;
+  /** Server-resolved lineage; ids opaque, labels presentation-only. */
+  attribution?: ApprovalAttribution;
+  /** Redacted action verb (also folded into `title`). */
+  action?: string;
+  /** Redacted normalized resource scope (also folded into `title`). */
+  scope?: string;
+  /** Redacted companion-authored reason (also carried as `redactedContext`). */
+  reason?: string;
+  /** Offered grant mode. Server emits `{ kind: 'once' }` until TTL policy ships. */
+  grantMode?: ApprovalGrantMode;
 }
 
 export interface CompanionApprovalResolvedPayload {

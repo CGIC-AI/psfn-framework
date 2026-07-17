@@ -221,6 +221,12 @@ replay cannot execute it again.
 
 ### TTL-scoped grant
 
+TTL mode is currently unavailable: it may not be offered until the separately
+approved canonical JSON-owned server policy (eligible actions, maximum TTL,
+revocation, and recovery rules) is implemented — see
+[`docs/shard-capability-tier-derivation.md`](../docs/shard-capability-tier-derivation.md).
+The remainder of this section specifies the contract that policy must satisfy.
+
 A TTL grant exists only when server policy explicitly offered it on the card
 and the human selected that offered mode. It is bound to:
 

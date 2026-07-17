@@ -82,12 +82,21 @@ is too shallow.
    a request for companion B.
 8. Shards inherit from one parent companion. A shard identifier without its
    verified parent companion is insufficient to read or mutate anything.
-9. The Garden receives no provider, channel, model-provider, database, shell,
+9. The Garden receives no provider, channel, model-provider, shell,
    companion-auth, or Personal Workspace credentials merely because it can
    switch companions.
 10. Fleet Auth remains the browser authentication and authorization authority.
     Consolidation must not recreate the retired shared-admin-token topology for
     a fleet-enabled deployment.
+11. Garden services that already read or write the database directly keep that
+    access (operator decision 2026-07-17: rerouting existing reads through
+    agent transports is not worth the rework). In exchange, every database
+    access in multi-companion mode is scoped to the request's authenticated
+    companion target: the schema, rows, and writes a Garden service touches are
+    derived from the immutable request context of the companion who generated
+    the request — never from a process-global selection, a cached prior
+    companion, or an unscoped query. A request for companion A can neither read
+    nor write companion B's data.
 
 ## Public route and switcher contract
 
@@ -342,7 +351,9 @@ fleet Garden listener and allows the Garden to reach only registered agent
 admin endpoints and the narrow gateway child-assertion/confirmation interface.
 
 The Garden pod mounts its image, required fleet/system configuration,
-certificates, logs/tmp as needed, and no provider/channel/database secrets. It
+certificates, logs/tmp as needed, and no provider/channel secrets. It retains
+the database credentials its existing services already use for direct reads
+and writes (invariant 11), scoped per request to the selected companion. It
 does not require direct writable mounts for every companion-data or Personal
 Workspace PVC; selected agents remain the adapters to those domains.
 
@@ -398,6 +409,10 @@ Implementation is not complete until the integrated branch proves:
 - a selected companion outage does not redirect or fall back to another;
 - owner-file reads and writes hit only the selected canonical owner and retain
   settings-contract validation;
+- direct database reads and writes issued by Garden services touch only the
+  selected companion's schema and rows, keyed by the request's authenticated
+  companion target; a request for companion A cannot read or write companion
+  B's data;
 - switching clears or companion-keys all browser state;
 - the authorized fleet projection omits inaccessible companions and internal
   topology;
@@ -430,9 +445,9 @@ implementation sequence is integrated.
 
 ## Implementation sequence
 
-The implementation work should be filed only after the sibling shard-tier and
-approval-routing specifications have landed, so their contracts can be named
-as dependencies rather than re-designed here.
+The implementation work is filed as `psfn-framework-mus2`, with the sibling
+shard-tier and approval-routing contracts named as dependencies rather than
+re-designed here.
 
 1. Deepen fleet Garden admission and target routing.
 2. Convert the operator surface from one fixed proxy to the immutable fleet

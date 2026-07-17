@@ -2,12 +2,30 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   buildRawEditorJsonMap,
+  buildUnifiedSaveSkipNote,
   listDirtyRawEditorKeys,
   listUnifiedSaveSkippedOwnerFiles,
+  planUnifiedOwnerConfigSaves,
   rebaselineRawJsonByKey,
   resolveReloadedRawJsonByKey,
+  resolveUnifiedSaveSettingsJsonConflict,
   UNIFIED_SAVE_OWNER_FILE_KEYS,
+  UNIFIED_SAVE_SETTINGS_JSON_CONFLICT_MESSAGE,
+  type UnifiedOwnerConfigSaveEntry,
 } from './settings-page-helpers';
+
+// The four owner-file save entries the unified save always constructs, keyed to
+// the real write surface. Tests build on this to exercise skip / drop behavior.
+function buildOwnerConfigEntries(
+  overrides: Partial<Record<UnifiedOwnerConfigSaveEntry['key'], { nextJson: string; currentJson: string }>> = {},
+): UnifiedOwnerConfigSaveEntry[] {
+  return UNIFIED_SAVE_OWNER_FILE_KEYS.map((key) => ({
+    key,
+    // Default: no pending form change (next === current).
+    nextJson: overrides[key]?.nextJson ?? JSON.stringify({ owner: key, form: 1 }),
+    currentJson: overrides[key]?.currentJson ?? JSON.stringify({ owner: key, form: 1 }),
+  }));
+}
 
 // Regression coverage for the 9lxg dual-review data-loss blockers: a staged
 // (dirty) raw owner-file edit must survive the unified saveSettings ->
@@ -119,4 +137,133 @@ test('dirty raw editors outside the unified-save owner files are preserved but s
     dirtyKeys,
   });
   assert.equal(reloaded.channels, stagedChannelsJson);
+});
+
+// ── Blocker 1: a dirty settings.json raw editor must FAIL the unified save ──
+// closed, before any write. settings.json is the runtime payload target, so it
+// can never be "skipped" — writing the runtime payload would clobber it.
+test('dirty settings.json raw editor blocks the unified save before any write', () => {
+  // Clean: unified save may proceed.
+  assert.equal(resolveUnifiedSaveSettingsJsonConflict([]), null);
+  assert.equal(resolveUnifiedSaveSettingsJsonConflict(['scheduler', 'backup']), null);
+
+  // Dirty settings.json: unified save is refused with the explicit message.
+  assert.equal(
+    resolveUnifiedSaveSettingsJsonConflict(['settings']),
+    UNIFIED_SAVE_SETTINGS_JSON_CONFLICT_MESSAGE,
+  );
+  assert.equal(
+    resolveUnifiedSaveSettingsJsonConflict(['settings', 'scheduler']),
+    UNIFIED_SAVE_SETTINGS_JSON_CONFLICT_MESSAGE,
+  );
+  assert.match(
+    UNIFIED_SAVE_SETTINGS_JSON_CONFLICT_MESSAGE,
+    /settings\.json .*save or discard them there/,
+  );
+
+  // Modelling the controller's fail-closed ordering: because the conflict is
+  // non-null, updateSettings and the owner-file saves must NOT run. The plan is
+  // only reached when the conflict check passes; assert it is never consulted
+  // by proving the guard short-circuits.
+  const dirtyKeys = ['settings'] as const;
+  const conflict = resolveUnifiedSaveSettingsJsonConflict(dirtyKeys);
+  assert.ok(conflict, 'a dirty settings.json editor must yield a blocking conflict');
+});
+
+// ── Blocker 2(a): the skip set must exactly equal the write surface ──
+test('unified owner-config plan enforces write-surface == skip-set invariant', () => {
+  // Entries covering exactly the skip-set keys are accepted.
+  const plan = planUnifiedOwnerConfigSaves({
+    entries: buildOwnerConfigEntries(),
+    dirtyRawEditorKeys: [],
+  });
+  assert.deepEqual(
+    plan.saves.map((entry) => entry.key),
+    [],
+    'no pending form changes -> nothing written',
+  );
+  assert.deepEqual(plan.skippedOwnerFiles, []);
+  assert.deepEqual(plan.skippedWithPendingChanges, []);
+
+  // Missing a write-surface key (drift) must fail closed.
+  assert.throws(
+    () =>
+      planUnifiedOwnerConfigSaves({
+        entries: buildOwnerConfigEntries().filter((entry) => entry.key !== 'backup'),
+        dirtyRawEditorKeys: [],
+      }),
+    /must equal the skip set/,
+  );
+
+  // A duplicate key must fail closed.
+  assert.throws(
+    () =>
+      planUnifiedOwnerConfigSaves({
+        entries: [...buildOwnerConfigEntries(), {
+          key: 'scheduler',
+          nextJson: '{}',
+          currentJson: '{}',
+        }],
+        dirtyRawEditorKeys: [],
+      }),
+    /duplicate keys/,
+  );
+
+  // Only changed, non-skipped entries are written.
+  const withChanges = planUnifiedOwnerConfigSaves({
+    entries: buildOwnerConfigEntries({
+      scheduler: { nextJson: '{"a":2}', currentJson: '{"a":1}' },
+      backup: { nextJson: '{"b":2}', currentJson: '{"b":1}' },
+    }),
+    dirtyRawEditorKeys: [],
+  });
+  assert.deepEqual(withChanges.saves.map((entry) => entry.key), ['scheduler', 'backup']);
+});
+
+// ── Blocker 2(b): a skipped owner file with pending FORM changes must be ──
+// reported as NOT saved, not merely "preserved".
+test('unified save note is honest about dropped form changes on skipped owner files', () => {
+  // scheduler.json is dirty in its raw editor AND has a pending form change
+  // (backgroundMaintenanceIntervalMs routes only there). backup.json is dirty
+  // in its raw editor with no pending form change.
+  const plan = planUnifiedOwnerConfigSaves({
+    entries: buildOwnerConfigEntries({
+      scheduler: { nextJson: '{"intervalMs":2}', currentJson: '{"intervalMs":1}' },
+      // backup unchanged (default next === current).
+    }),
+    dirtyRawEditorKeys: ['scheduler', 'backup'],
+  });
+  assert.deepEqual(plan.skippedOwnerFiles, ['scheduler', 'backup']);
+  assert.deepEqual(
+    plan.skippedWithPendingChanges,
+    ['scheduler'],
+    'only the skipped file with a real pending form change is flagged',
+  );
+  assert.deepEqual(plan.saves, [], 'skipped files are never written');
+
+  const note = buildUnifiedSaveSkipNote({
+    skippedOwnerFiles: plan.skippedOwnerFiles,
+    skippedWithPendingChanges: plan.skippedWithPendingChanges,
+    ownerFileLabel: (key) => `${key}.json`,
+  });
+  // Dropped form change must be reported as NOT saved.
+  assert.match(note, /Form changes to scheduler\.json were NOT saved/);
+  // The purely-preserved file keeps the softer "preserved" wording.
+  assert.match(note, /Skipped backup\.json — staged raw edits .* are preserved/);
+
+  // No skips -> no note.
+  assert.equal(
+    buildUnifiedSaveSkipNote({
+      skippedOwnerFiles: [],
+      skippedWithPendingChanges: [],
+      ownerFileLabel: (key) => `${key}.json`,
+    }),
+    '',
+  );
+
+  // Sanity: skip-set listing helper still agrees with the plan's skip set.
+  assert.deepEqual(
+    listUnifiedSaveSkippedOwnerFiles(['scheduler', 'backup']),
+    plan.skippedOwnerFiles,
+  );
 });

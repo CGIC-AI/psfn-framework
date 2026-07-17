@@ -64,11 +64,13 @@
     buildCapabilitiesSettingsPayload,
     buildRawEditorJsonMap,
     buildSettingsSnapshot,
+    buildUnifiedSaveSkipNote,
     collectSimpleSettingsPayload,
     formatSettingOptionLabel,
     humanizeSettingValue,
     listDirtyRawEditorKeys,
-    listUnifiedSaveSkippedOwnerFiles,
+    planUnifiedOwnerConfigSaves,
+    resolveUnifiedSaveSettingsJsonConflict,
     normalizeStringList,
     parseBackupSettings,
     populateSimpleSettingsForm,
@@ -415,6 +417,13 @@
   let activeTabHasPrimarySave = $derived(
     CURATED_SETTINGS_TAB_IDS.includes(activeTabId) || activeTabId === 'advanced',
   );
+
+  // settings.json is the one raw editor whose owner file IS the unified save's
+  // runtime payload target, so a dirty settings.json raw editor BLOCKS the
+  // unified save (it cannot be skipped like the other owner files). Surfaced as
+  // a distinct hint under the save button so the blocking consequence is
+  // visible from the tab where the user clicks save.
+  let settingsRawEditorDirty = $derived(dirtyRawEditorKeys().includes('settings'));
 
   function selectTab(tabId: string): void {
     if (!isSettingsTabId(tabId)) return;
@@ -927,34 +936,47 @@
   ): Promise<{ ok: boolean; invalidFieldCount: number; message: string }> {
     const hasRuntimePayload = Object.keys(runtimePayload).length > 0;
     let invalidFieldCount = 0;
+    const dirtyKeys = dirtyRawEditorKeys();
+
+    // Fail closed, before ANY write: the unified save's runtime payload IS
+    // settings.json, so a dirty settings.json raw editor cannot be "skipped" —
+    // running updateSettings would clobber the operator's staged hand edits.
+    // Refuse the whole save (no runtime write, no owner-file writes) until the
+    // raw edits are saved or discarded on the Raw JSON tab.
+    const settingsConflict = resolveUnifiedSaveSettingsJsonConflict(dirtyKeys);
+    if (settingsConflict) {
+      return { ok: false, invalidFieldCount: 0, message: settingsConflict };
+    }
+
     // An owner file with a dirty raw editor is being hand-edited on the Raw
-    // JSON tab; the unified save must not write form-derived JSON over it.
-    // Those files are skipped here (and reported to the user) until their raw
-    // edits are saved or discarded on the Raw JSON tab.
-    const skippedOwnerFiles = listUnifiedSaveSkippedOwnerFiles(dirtyRawEditorKeys());
-    const skipped = new Set<RawEditorKey>(skippedOwnerFiles);
-    const ownerConfigSaves = [
-      {
-        key: 'providers' as const,
-        nextJson: JSON.stringify(providerRegistry, null, 2),
-        currentJson: providerRegistryInitialJson,
-      },
-      {
-        key: 'scheduler' as const,
-        nextJson: JSON.stringify(buildSchedulerPayload(), null, 2),
-        currentJson: tryPrettyPrint(schedulerJson),
-      },
-      {
-        key: 'capabilities' as const,
-        nextJson: JSON.stringify(buildCapabilitiesPayload(), null, 2),
-        currentJson: tryPrettyPrint(capabilitiesJson),
-      },
-      {
-        key: 'backup' as const,
-        nextJson: JSON.stringify(buildBackupPayload(), null, 2),
-        currentJson: tryPrettyPrint(backupJson),
-      },
-    ].filter(entry => !skipped.has(entry.key) && entry.nextJson !== entry.currentJson);
+    // JSON tab; the unified save must not write form-derived JSON over it. The
+    // plan skips those files (and flags any that ALSO had pending form changes)
+    // and enforces that the write surface exactly equals the skip-set constant.
+    const ownerConfigPlan = planUnifiedOwnerConfigSaves({
+      entries: [
+        {
+          key: 'providers',
+          nextJson: JSON.stringify(providerRegistry, null, 2),
+          currentJson: providerRegistryInitialJson,
+        },
+        {
+          key: 'scheduler',
+          nextJson: JSON.stringify(buildSchedulerPayload(), null, 2),
+          currentJson: tryPrettyPrint(schedulerJson),
+        },
+        {
+          key: 'capabilities',
+          nextJson: JSON.stringify(buildCapabilitiesPayload(), null, 2),
+          currentJson: tryPrettyPrint(capabilitiesJson),
+        },
+        {
+          key: 'backup',
+          nextJson: JSON.stringify(buildBackupPayload(), null, 2),
+          currentJson: tryPrettyPrint(backupJson),
+        },
+      ],
+      dirtyRawEditorKeys: dirtyKeys,
+    });
 
     if (hasRuntimePayload) {
       const runtimeResult = await updateSettings(runtimePayload);
@@ -971,7 +993,7 @@
     }
 
     try {
-      for (const entry of ownerConfigSaves) {
+      for (const entry of ownerConfigPlan.saves) {
         await saveSubConfig(entry.key, entry.nextJson);
       }
     } catch (error) {
@@ -985,9 +1007,11 @@
     }
 
     await reloadSettingsState();
-    const skippedNote = skippedOwnerFiles.length > 0
-      ? ` Skipped ${skippedOwnerFiles.map((key) => rawEditorOwnerFile(key)).join(', ')} — staged raw edits on the Raw JSON tab are preserved; save or discard them there.`
-      : '';
+    const skippedNote = buildUnifiedSaveSkipNote({
+      skippedOwnerFiles: ownerConfigPlan.skippedOwnerFiles,
+      skippedWithPendingChanges: ownerConfigPlan.skippedWithPendingChanges,
+      ownerFileLabel: rawEditorOwnerFile,
+    });
     return {
       ok: true,
       invalidFieldCount,
@@ -1262,7 +1286,11 @@
             {#if dirty}
               <span class="text-sm text-shadow-500">You have unsaved changes</span>
             {/if}
-            {#if rawDirty}
+            {#if settingsRawEditorDirty}
+              <span class="text-sm text-wilt-600">
+                settings.json has staged raw edits on the Raw JSON tab — this save is blocked until you save or discard them there.
+              </span>
+            {:else if rawDirty}
               <span class="text-sm text-shadow-500">
                 Staged raw edits are preserved; their owner files are skipped by this save until you save or discard them on the Raw JSON tab.
               </span>

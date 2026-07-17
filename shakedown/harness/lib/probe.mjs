@@ -1,0 +1,253 @@
+// Shared chat-probe primitives for the shakedown harness.
+//
+// Every case file drives the runtime through this one module: the
+// /v1/chat/completions transport (with session / privacy / identity-claim
+// headers), turn-record lookup, and the agent-busy retry loop. It replaces the
+// copy-pasted probe code that used to live independently in live-chat-probe.mjs,
+// live-sweep.mjs, and live-system-shakedown.mjs. Proof always comes from the
+// persisted turn record, never the reply text.
+//
+// Nothing here reads process.env or module-global paths — callers pass the
+// turn-records directory and the resolved API principal id explicitly, so the
+// primitives stay reusable and fail-closed configuration stays with the
+// entrypoint.
+
+import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+
+export const INSECURE_LOCAL_API_PRINCIPAL_ID = 'local-insecure';
+const API_KEY_PRINCIPAL_DIGEST_LENGTH = 24;
+
+export const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Derive the gateway principal id for an API key exactly the way the runtime
+ * does (api-key-<sha256(key)[:24]>), so harness turn-record channel ids line up
+ * with what the gateway persists. Returns null for the insecure-local default.
+ */
+export function deriveApiKeyPrincipalId(apiToken) {
+  const normalized = typeof apiToken === 'string' ? apiToken.trim() : '';
+  if (normalized.length === 0) return null;
+  return `api-key-${createHash('sha256').update(normalized).digest('hex').slice(0, API_KEY_PRINCIPAL_DIGEST_LENGTH)}`;
+}
+
+export function resolveSessionChannelId(sessionId, apiUserId) {
+  const principal = typeof apiUserId === 'string' && apiUserId.trim().length > 0
+    ? apiUserId.trim()
+    : INSECURE_LOCAL_API_PRINCIPAL_ID;
+  return `api:${principal}:${sessionId}`;
+}
+
+export function turnRecordPath(turnRecordsDir, sessionId, apiUserId) {
+  return `${turnRecordsDir}/${encodeURIComponent(resolveSessionChannelId(sessionId, apiUserId))}.jsonl`;
+}
+
+/** Generic JSONL reader: tolerant of blank lines and partial trailing writes. */
+export function readJsonl(path) {
+  if (!existsSync(path)) return [];
+  return readFileSync(path, 'utf8')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .flatMap((line) => {
+      try {
+        return [JSON.parse(line)];
+      } catch {
+        return [];
+      }
+    });
+}
+
+export function turnRecordsForSession(turnRecordsDir, sessionId, apiUserId) {
+  return readJsonl(turnRecordPath(turnRecordsDir, sessionId, apiUserId));
+}
+
+export function lastTurnForSession(turnRecordsDir, sessionId, apiUserId) {
+  const records = turnRecordsForSession(turnRecordsDir, sessionId, apiUserId);
+  return records.length > 0 ? records.at(-1) : null;
+}
+
+export function isActiveTurnStatus(status) {
+  return status === 'pending' || status === 'started' || status === 'running';
+}
+
+export function lastTurnAfter(turnRecordsDir, sessionId, minStartedAtMs, apiUserId) {
+  const records = turnRecordsForSession(turnRecordsDir, sessionId, apiUserId);
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if (typeof record?.startedAt === 'number' && record.startedAt < (minStartedAtMs ?? 0)) continue;
+    return record;
+  }
+  return null;
+}
+
+export function findMatchingTurnRecord(turnRecordsDir, sessionId, message, minStartedAtMs, apiUserId) {
+  const records = turnRecordsForSession(turnRecordsDir, sessionId, apiUserId);
+  for (let index = records.length - 1; index >= 0; index -= 1) {
+    const record = records[index];
+    if ((record?.userMessage?.content ?? '') !== message) continue;
+    if (typeof record?.startedAt === 'number' && record.startedAt < (minStartedAtMs ?? 0)) continue;
+    return record;
+  }
+  return null;
+}
+
+export function isCompletedAssistantTurn(turn) {
+  return turn?.status === 'completed'
+    && typeof turn?.assistantMessage?.content === 'string'
+    && turn.assistantMessage.content.trim().length > 0;
+}
+
+/**
+ * Poll the turn-record journal until a completed turn for `message` appears, or
+ * the timeout elapses. Returns the best matching record found (completed if
+ * possible, else the last matching record).
+ */
+export async function waitForMatchingTurnRecord(
+  turnRecordsDir,
+  sessionId,
+  message,
+  minStartedAtMs,
+  timeoutMs,
+  apiUserId,
+  pollIntervalMs = 1500,
+) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    const record = findMatchingTurnRecord(turnRecordsDir, sessionId, message, minStartedAtMs, apiUserId);
+    if (record && record.status === 'completed' && record.assistantMessage?.content) {
+      return record;
+    }
+    await sleep(pollIntervalMs);
+  }
+  return findMatchingTurnRecord(turnRecordsDir, sessionId, message, minStartedAtMs, apiUserId);
+}
+
+/**
+ * Wait for the newest turn on a session to leave an active (pending/started/
+ * running) state, i.e. to settle. Used to recover a turn record when the HTTP
+ * response was aborted or returned busy but the turn still ran to completion.
+ */
+export async function waitForTurnSettlement(
+  turnRecordsDir,
+  sessionId,
+  minStartedAtMs,
+  timeoutMs,
+  apiUserId,
+  pollIntervalMs = 1500,
+) {
+  const deadline = Date.now() + timeoutMs;
+  let latest = null;
+  while (Date.now() <= deadline) {
+    latest = lastTurnAfter(turnRecordsDir, sessionId, minStartedAtMs, apiUserId);
+    if (latest && !isActiveTurnStatus(latest.status)) {
+      return latest;
+    }
+    await sleep(pollIntervalMs);
+  }
+  return latest;
+}
+
+export function isAgentBusyResponse(response) {
+  return response?.status === 503 && response?.body?.error?.type === 'agent_busy';
+}
+
+// Identity-claim headers the gateway understands. A caller may pass any subset;
+// only present values are attached. This is the enrollment/presence claim path
+// (canonical contact plus a signed hub identity claim).
+export const IDENTITY_CLAIM_HEADERS = [
+  'X-Canonical-Contact-ID',
+  'X-Identity-Claim-Channel',
+  'X-Identity-Claim-User-ID',
+  'X-Identity-Claim-Nonce',
+  'X-Identity-Claim-Expires',
+  'X-Identity-Claim-Signature',
+];
+
+/**
+ * Build the /v1/chat/completions headers: auth, session, channel privacy, and
+ * any identity-claim headers. `identityClaim` keys may be either the raw header
+ * name (X-Identity-Claim-Nonce) or its PSFN_HEADER_* env-suffix form; both are
+ * accepted so callers can forward sourced env directly.
+ */
+export function buildChatHeaders({ apiKey, sessionId, privacy = 'private', identityClaim = {}, extra = {} }) {
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    'Content-Type': 'application/json',
+    'X-Session-ID': sessionId,
+    'X-Channel-Privacy': privacy,
+  };
+  for (const headerName of IDENTITY_CLAIM_HEADERS) {
+    const envSuffixKey = `PSFN_HEADER_${headerName.replace(/-/g, '_')}`;
+    const value = identityClaim[headerName] ?? identityClaim[envSuffixKey];
+    if (typeof value === 'string' && value.length > 0) headers[headerName] = value;
+  }
+  return { ...headers, ...extra };
+}
+
+/** Collect identity-claim headers from the process env (PSFN_HEADER_* form). */
+export function identityClaimHeadersFromEnv(env = process.env) {
+  const claim = {};
+  for (const headerName of IDENTITY_CLAIM_HEADERS) {
+    const envKey = `PSFN_HEADER_${headerName.replace(/-/g, '_')}`;
+    const value = env[envKey];
+    if (typeof value === 'string' && value.length > 0) claim[headerName] = value;
+  }
+  return claim;
+}
+
+/**
+ * Low-level chat transport. Posts one turn and returns a normalized response
+ * envelope { status, ok, body, rawText, fetchError }. Never throws on transport
+ * failure — the abort/error is reported in the envelope so the caller can decide
+ * whether the turn nonetheless settled in the persisted record.
+ */
+export async function postChatCompletion({
+  apiUrl,
+  headers,
+  message,
+  model = 'psfn-live',
+  responseStyle = 'concise',
+  timeoutMs = 120000,
+}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const body = {
+    model,
+    stream: false,
+    ...(responseStyle ? { response_style: responseStyle } : {}),
+    messages: [{ role: 'user', content: message }],
+  };
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const rawText = await response.text();
+    let parsed;
+    try {
+      parsed = JSON.parse(rawText);
+    } catch {
+      parsed = { rawText };
+    }
+    return {
+      status: response.status,
+      ok: response.ok,
+      body: parsed,
+      rawText,
+      fetchError: null,
+    };
+  } catch (error) {
+    return {
+      status: null,
+      ok: false,
+      body: null,
+      rawText: '',
+      fetchError: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}

@@ -270,7 +270,7 @@ export type ApprovalSourceSystem =
   | 'expensive-usage'
   | 'shard'
   | 'cogsec'
-  // eslint-disable-next-line @typescript-eslint/ban-types -- keep known-member autocomplete while leaving the union open
+  // keep known-member autocomplete while leaving the union open
   | (string & {});
 
 /** Server-resolved lineage. Ids opaque; labels presentation only. */

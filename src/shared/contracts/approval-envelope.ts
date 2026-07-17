@@ -34,7 +34,7 @@ export type ApprovalSourceSystem =
   | 'expensive-usage'
   | 'shard'
   | 'cogsec'
-  // eslint-disable-next-line @typescript-eslint/ban-types -- keep known-member autocomplete while leaving the union open to future projectors
+  // keep known-member autocomplete while leaving the union open to future projectors
   | (string & {});
 
 /** Known, closed source-system tags — for validation / exhaustiveness helpers. */

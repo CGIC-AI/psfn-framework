@@ -72,6 +72,7 @@ describe('hub stream reducer', () => {
     });
     expect(state.approvals).toHaveLength(1);
     const entry = state.approvals[0];
+    if (!entry) throw new Error('missing approval entry');
     expect(entry).toMatchObject({ id: 'ap-1', status: 'pending' });
     expect(entry.sourceSystem).toBeUndefined();
     expect(entry.attribution).toBeUndefined();
@@ -105,6 +106,7 @@ describe('hub stream reducer', () => {
       },
     });
     const entry = state.approvals[0];
+    if (!entry) throw new Error('missing approval entry');
     expect(entry.sourceSystem).toBe('shard');
     expect(entry.attribution).toEqual({
       parentId: 'companion-1',

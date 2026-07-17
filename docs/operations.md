@@ -639,16 +639,20 @@ Production startup should not proceed until the cutover plan is clean.
 Per-companion owner files (`charge-policy.json`, `skills.json`, and the other
 registered per-companion owners) were once rooted under `SYSTEM_DATA_DIR`.
 Current runtime requires each under its companion root with no legacy fallback,
-so re-rooting an existing fleet is a one-time, digest-approved migration built
-from three pieces:
+so re-rooting an existing installation is a one-time, digest-approved migration
+built from three pieces. "Fleet" in command and receipt names includes the
+one-member installation set used by a default single-companion Helm release:
 
 - **CLI** — `npm run migrate:system-owner-fleet`
   (`src/app/maintenance/migrate-system-owner-fleet.ts`). The default mode is a
   read-only plan; `--apply` executes; each source is gated by an explicit
   `--approve <owner-file>=<exact-sha256>` argument so the operator confirms the
-  exact bytes being fanned out. It fans each approved source to every companion
-  enumerated in `companions.json` and retires the source only after all
-  destinations verify. Digests only — the command carries no secrets.
+  exact bytes being fanned out. In multi-companion mode it fans each approved
+  source to every companion enumerated in `companions.json`. In the default
+  topology it binds the explicit `COMPANION_ID` and `COMPANION_DATA_DIR` as the
+  one destination without inventing a fleet manifest. It retires the source
+  only after all destinations verify. Digests only — the command carries no
+  secrets.
 - **Helm pre-upgrade hook** —
   `deploy/helm/psfn/templates/owner-migration-upgrade.yaml`, gated by
   `ownerMigration.enabled`. It runs as a `pre-upgrade` Job that first snapshots
@@ -670,12 +674,14 @@ follows.
 
 ### Existing split fleets with shared per-companion owners
 
-Fleets created before per-companion owner-file rooting may still have
+Installations created before per-companion owner-file rooting may still have
 `charge-policy.json` or `skills.json` (and potentially the other registered
-per-companion owners) under `SYSTEM_DATA_DIR`. Stop every fleet process. Verify
-that every exact `companionDataDir` from `companions.json` is already mounted;
-the migration never creates a missing PVC root. Capture the mechanically
-verified whole-fleet snapshot before inspecting or applying the fan-out:
+per-companion owners) under `SYSTEM_DATA_DIR`. Stop every app process. For a
+single-companion release, verify its exact `COMPANION_ID` and
+`COMPANION_DATA_DIR`; do not create `companions.json`. For multi-companion,
+verify every exact `companionDataDir` from `companions.json` is already mounted.
+The migration never creates a missing PVC root. Capture the mechanically
+verified whole-install snapshot before inspecting or applying the fan-out:
 
 ```bash
 npm run snapshot:system-owner-fleet -- \
@@ -702,8 +708,10 @@ npm run migrate:system-owner-fleet -- --apply \
 The final Helm chart can rehearse the same transaction as one explicit
 pre-upgrade boundary. Set `ownerMigration.required=true`, keep
 `bootstrap.seedOwnerFiles=false`, bind the exact printed approvals, and list
-the system, backup, and every companion PVC with the same canonical paths used
-by `companions.json`. The hook captures the whole-fleet snapshot before its
+the system, backup, and every companion PVC. A single-companion release lists
+its one identity and root without creating `companions.json`; a multi-companion
+installation uses the same canonical paths as `companions.json` and lists every
+entry. The hook captures the whole-install snapshot before its
 canonical compiled migration init container runs; packaged per-companion probes
 must then prove distinct writable owners before Helm admits the new revision.
 This is not an automatic fallback: the feature is disabled by default, missing

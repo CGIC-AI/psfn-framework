@@ -2,8 +2,36 @@ import {
   isMultiCompanionEnabled,
   resolveCompanionFleet,
   resolveCompanionFleetPaths,
+  type CompanionsFleetConfig,
 } from '../../system/config/companions-config.js';
 import { resolveRuntimePathLayout } from '../../persistence/layout.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
+import { join, relative } from 'node:path';
+
+function resolveSingleCompanionConfig(input: {
+  companionId: string | undefined;
+  runtimeRootDir: string;
+  companionDataDir: string;
+}): CompanionsFleetConfig {
+  const companionId = createCompanionId(
+    input.companionId,
+    'COMPANION_ID for single-companion system-owner migration',
+  );
+  const companionDataDir = relative(input.runtimeRootDir, input.companionDataDir);
+  if (!companionDataDir || companionDataDir.startsWith('..')) {
+    throw new Error(
+      'Single-companion system-owner migration requires COMPANION_DATA_DIR beneath PSFN_RUNTIME_ROOT',
+    );
+  }
+  return {
+    companions: [{
+      companionId,
+      companionDataDir,
+      characterCardPath: join(companionDataDir, 'companion.json'),
+      postgresSchema: 'public',
+    }],
+  };
+}
 
 export function resolveSystemOwnerFleetContext(env: NodeJS.ProcessEnv) {
   const layout = resolveRuntimePathLayout({
@@ -21,14 +49,17 @@ export function resolveSystemOwnerFleetContext(env: NodeJS.ProcessEnv) {
   if (layout.systemDataDir === layout.companionDataDir) {
     throw new Error('System-owner fleet operation requires production split roots');
   }
-  const rawFleet = resolveCompanionFleet({
+  const multiCompanion = isMultiCompanionEnabled(env);
+  const configuredFleet = resolveCompanionFleet({
     dataDir: layout.systemDataDir,
-    multiCompanion: isMultiCompanionEnabled(env),
+    multiCompanion,
     seedDir: env.CONFIG_DIR?.trim() || undefined,
   });
-  if (!rawFleet) {
-    throw new Error('System-owner fleet operation requires an enabled companions.json fleet');
-  }
+  const rawFleet = configuredFleet ?? resolveSingleCompanionConfig({
+    companionId: env.COMPANION_ID,
+    runtimeRootDir: layout.runtimeRootDir,
+    companionDataDir: layout.companionDataDir,
+  });
   const fleet = resolveCompanionFleetPaths(rawFleet, layout.runtimeRootDir, [
     { label: 'systemDataDir', path: layout.systemDataDir },
     { label: 'companionDataDir', path: layout.companionDataDir },

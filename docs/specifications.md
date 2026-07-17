@@ -58,8 +58,9 @@ Supported until beta:
 - Explicit system-owner fleet re-rooting through
   `npm run migrate:system-owner-fleet`. This one-time operator command may read
   only `PER_COMPANION_OWNER_FILES` entries left at `SYSTEM_DATA_DIR`, fan their
-  exact approved bytes to every companion enumerated by `companions.json`, and
-  retire each source only after all destinations verify. Validation is the
+  exact approved bytes to the explicit single-companion identity/root or to
+  every companion enumerated by `companions.json`, and retire each source only
+  after all destinations verify. Validation is the
   exact source digest and filesystem identity per file, no-overwrite destination
   checks, descriptor-pinned receipt/staging/destination directories, durable
   receipt-owned source quarantine, and the durable schema-v4
@@ -73,8 +74,9 @@ Supported until beta:
   unchanged fleet. A Helm deployment may invoke the same compiled command only
   through the explicit `ownerMigration` pre-upgrade hook: the rollout must set
   `required=true`, disable bootstrap seeding, bind every source digest, mount
-  the exact system, backup, and every manifest companion PVC at its canonical
-  path, capture the whole-fleet snapshot first, and complete the packaged
+  the exact system and backup claims plus either the one explicit
+  single-companion PVC or every manifest companion PVC at its canonical path,
+  capture the whole-install snapshot first, and complete the packaged
   per-companion readiness probes before Helm admits the new revision. Missing
   claims, wrong paths, image-digest resolution failures, shared companion
   claims, and an omitted required hook fail the upgrade while the old revision

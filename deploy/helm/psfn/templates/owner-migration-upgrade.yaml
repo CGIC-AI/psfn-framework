@@ -59,8 +59,10 @@ spec:
               value: {{ .Values.ownerMigration.backupsDir | quote }}
             - name: CONFIG_DIR
               value: /app/config
+            - name: COMPANION_ID
+              value: {{ (index .Values.ownerMigration.companions 0).companionId | quote }}
             - name: PSFN_MULTI_COMPANION
-              value: "true"
+              value: {{ gt (len .Values.ownerMigration.companions) 1 | quote }}
             - name: PSFN_FLEET_AUTH
               value: "false"
             - name: DATA_DIR

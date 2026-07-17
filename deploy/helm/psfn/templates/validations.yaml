@@ -8,8 +8,8 @@
 {{- if .Values.bootstrap.seedOwnerFiles -}}
 {{- fail "ownerMigration.enabled=true requires bootstrap.seedOwnerFiles=false" -}}
 {{- end -}}
-{{- if lt (len .Values.ownerMigration.companions) 2 -}}
-{{- fail "ownerMigration.enabled=true requires at least two explicit companion PVCs" -}}
+{{- if lt (len .Values.ownerMigration.companions) 1 -}}
+{{- fail "ownerMigration.enabled=true requires at least one explicit companion PVC" -}}
 {{- end -}}
 {{- if not .Values.ownerMigration.systemDataClaim -}}
 {{- fail "ownerMigration.systemDataClaim is required when ownerMigration.enabled=true" -}}

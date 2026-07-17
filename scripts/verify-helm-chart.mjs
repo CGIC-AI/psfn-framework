@@ -311,6 +311,41 @@ for (const probe of ownerUpgradeJob.spec.template.spec.containers) {
     throw new Error(`${probe.name} must observe its companion owner root read-only`);
   }
 }
+
+const singleOwnerUpgradeRendered = render(ownerMigrationRenderArgs([
+  {
+    companionId: 'companion',
+    claimName: 'owner-one',
+    mountPath: '/runtime/companions/companion',
+    expectedIdentity: 'companion-1',
+  },
+]));
+const singleOwnerUpgradeJob = parseAllDocuments(singleOwnerUpgradeRendered)
+  .map(document => document.toJS())
+  .find(document => (
+    document?.kind === 'Job'
+    && document?.metadata?.labels?.['app.kubernetes.io/component'] === 'owner-migration'
+  ));
+if (!singleOwnerUpgradeJob) {
+  throw new Error('single-companion ownerMigration did not render the pre-upgrade Job');
+}
+const singleOwnerEnv = new Map(
+  singleOwnerUpgradeJob.spec.template.spec.initContainers[0].env
+    .map(entry => [entry.name, entry.value]),
+);
+if (singleOwnerEnv.get('PSFN_MULTI_COMPANION') !== 'false') {
+  throw new Error('single-companion ownerMigration must not impersonate multi-companion topology');
+}
+if (singleOwnerEnv.get('COMPANION_ID') !== 'companion') {
+  throw new Error('single-companion ownerMigration did not bind its explicit companion identity');
+}
+if (singleOwnerUpgradeJob.spec.template.spec.containers.length !== 1) {
+  throw new Error('single-companion ownerMigration must render one packaged readiness probe');
+}
+assertRenderFails(
+  ownerMigrationRenderArgs([]),
+  'ownerMigration.enabled=true requires at least one explicit companion PVC',
+);
 for (const claimName of ['psfn-system-data', 'psfn-companion-data', 'psfn-workspace', 'psfn-runtime']) {
   if (findDocumentByKindName(ownerUpgradeRendered, 'PersistentVolumeClaim', claimName)) {
     throw new Error(`existing owner claim was unexpectedly recreated: ${claimName}`);

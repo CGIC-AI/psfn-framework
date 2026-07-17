@@ -195,8 +195,12 @@ cannot infer or safely perform this fleet transaction.
 
 For an orchestrated Helm cutover, set `ownerMigration.required=true` and
 `ownerMigration.enabled=true`, provide the exact digest map under
-`ownerMigration.approvals`, and enumerate every manifest companion with its
-existing PVC and canonical `<runtimeRoot>/companions/...` mount path. Also set
+`ownerMigration.approvals`, and enumerate every companion with its existing PVC
+and canonical `<runtimeRoot>/companions/...` mount path. A default
+single-companion release lists exactly one companion and the hook runs with
+`PSFN_MULTI_COMPANION=false`; it does not require or create `companions.json`.
+A multi-companion installation must enumerate every manifest companion and the
+hook runs with `PSFN_MULTI_COMPANION=true`. Also set
 the chart's normal persistence claims through each `existingClaim` field. The
 pre-upgrade Hook Job captures `snapshotOutputDir`, runs the same compiled
 approval-bound fleet migrator as its next init container, and (when
@@ -300,10 +304,11 @@ helm upgrade --install "$RELEASE" deploy/helm/psfn \
 ```
 
 For scheduler/capability, this upgrade handles owner routing and then scheduler
-schema conversion. The charge/skills fleet transaction must already be
-complete. Do not edit PVC JSON by hand or run a separate schema rewrite before
-Helm. Repeat this command for every release/companion root in a multi-release
-cluster.
+schema conversion. The charge/skills installation transaction must already be
+complete: one explicit root for a single-companion release, or every manifest
+root for a multi-companion installation. Do not edit PVC JSON by hand or run a
+separate schema rewrite before Helm. Repeat this command for every
+release/companion root in a multi-release cluster.
 
 After the Helm upgrade, require all three app rollouts and verify the new owner
 paths and markers:

@@ -42,6 +42,76 @@ through the gateway rollout, then moves the agents to the same exact target
 image. Do not collapse the stages into an unreviewed `--components all`
 deployment for this boundary.
 
+### Migrate legacy charge and skills owners before app startup
+
+Existing releases may still have `charge-policy.json` and `skills.json` under
+the system-data PVC. The current runtime requires those files under each
+companion-data PVC. This is a fail-closed owner cutover, not a seed operation:
+keep `bootstrap.seedOwnerFiles=false` and use the digest-approved
+`ownerMigration` hook.
+
+The hook supports both chart topologies:
+
+- A single-companion release lists its one existing companion-data PVC. The
+  migration runs with `PSFN_MULTI_COMPANION=false` and binds the explicit
+  `companionId`; a `companions.json` file is neither created nor expected.
+- A multi-companion installation lists every companion from `companions.json`,
+  with a distinct existing claim and canonical mount path for each. Omitting a
+  companion or reusing a claim/path fails rendering or migration.
+
+For either topology, stop every app process that can read an old owner before
+the pre-upgrade hook runs. Dependencies such as Postgres and Redis stay up:
+
+```bash
+kubectl -n "$NAMESPACE" scale \
+  deploy/${RELEASE}-gateway deploy/${RELEASE}-agent deploy/${RELEASE}-garden \
+  --replicas=0
+```
+
+Take the whole-install snapshot and use the dry-run migrator's exact SHA-256
+approvals. A single-companion values fragment has this shape (substitute live
+claim names, paths, identity, and digests; never copy the examples):
+
+```yaml
+bootstrap:
+  seedOwnerFiles: false
+ownerMigration:
+  required: true
+  enabled: true
+  systemDataClaim: <existing-system-data-claim>
+  backupsClaim: <existing-backups-or-runtime-claim>
+  backupsDir: <absolute-mounted-backup-directory>
+  approvals:
+    charge-policy.json: <exact-dry-run-sha256>
+    skills.json: <exact-dry-run-sha256>
+  companions:
+    - companionId: <release-companion-id>
+      claimName: <existing-companion-data-claim>
+      mountPath: /runtime/companions/<release-companion-id>
+      expectedIdentity: <expected-character-identity>
+```
+
+The migration image must be pinned by digest. For a PVC whose normal backup
+mount uses a `backups` subdirectory, mount the claim at `/backups` and set
+`ownerMigration.backupsDir=/backups/backups`; do not silently redirect the
+snapshot outside the normal backup tree.
+
+When this owner cutover and the welfare-grant boundary ship together, preserve
+the gateway-first rule without letting an old agent read the new owner layout:
+
+1. Scale the old gateway, agent, and Garden to zero as above.
+2. Run the migration upgrade with the new gateway at one replica and the agent
+   and Garden at zero replicas.
+3. Verify the new gateway image and readiness.
+4. Run the final upgrade with `ownerMigration.required=false`,
+   `ownerMigration.enabled=false`, and the agent/Garden restored to their
+   intended replicas on the same exact image.
+
+Do not leave the one-time migration enabled in saved values. The receipt and
+quarantined legacy sources remain as recovery evidence. The complete snapshot,
+approval, receipt, retry, and restore procedure is in
+[Existing split fleets with shared per-companion owners](./operations.md#existing-split-fleets-with-shared-per-companion-owners).
+
 ### Direct Garden web exposure is removed
 
 The chart renders no direct Garden Ingress or Garden hostPort in either fleet

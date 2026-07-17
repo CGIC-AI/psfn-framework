@@ -1,10 +1,22 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GatewayMethodRuntime } from './types.js';
 import type { PolicyConfig } from '../policy.js';
+import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import { GatewayErrors } from '../protocol.js';
 import { registerShardBackendMethods } from './shard-backends.js';
 
-function createHarness(policyConfig: PolicyConfig): {
+interface HarnessOptions {
+  policyConfig: PolicyConfig;
+  /**
+   * Authoritative tier the gateway's own provider reports. `undefined` models a
+   * gateway with no tier provider wired (fail-closed refusal path).
+   */
+  capabilityTier?: CapabilityTier;
+  /** When true, omit capabilityTierProvider entirely (unwired gateway). */
+  omitTierProvider?: boolean;
+}
+
+function createHarness(options: HarnessOptions): {
   invoke(params: Record<string, unknown>): Promise<any>;
 } {
   const methods = new Map<string, (params: Record<string, unknown>) => Promise<any>>();
@@ -21,9 +33,12 @@ function createHarness(policyConfig: PolicyConfig): {
     llmProvider: {} as any,
     embeddingService: {} as any,
     discordAdapter: {} as any,
-    policyConfig,
+    policyConfig: options.policyConfig,
     workspacePath: process.cwd(),
     sessionHmacKeyring: keyring,
+    ...(options.omitTierProvider
+      ? {}
+      : { capabilityTierProvider: () => options.capabilityTier ?? 'nursery' }),
     notifyRequester: vi.fn(),
     listPendingConfirmations: () => [],
     resolveConfirmation: vi.fn(async () => ({
@@ -37,7 +52,7 @@ function createHarness(policyConfig: PolicyConfig): {
     nextStreamRequestId: () => 'stream-1',
     audited: (_method, handler) => handler,
     gated: (_method, handler) => handler,
-  };
+  } as GatewayMethodRuntime;
   registerShardBackendMethods(runtime);
   const method = methods.get('shard.backend.request');
   if (!method) {
@@ -50,9 +65,11 @@ function createHarness(policyConfig: PolicyConfig): {
   };
 }
 
+const POLICY: PolicyConfig = { workspacePath: process.cwd() };
+
 describe('registerShardBackendMethods', () => {
-  it('denies mediated shard backends outside autonomous tiers', async () => {
-    const harness = createHarness({ workspacePath: process.cwd() });
+  it('denies mediated shard backends when the authoritative tier is below autonomous', async () => {
+    const harness = createHarness({ policyConfig: POLICY, capabilityTier: 'apprentice' });
 
     await expect(harness.invoke({
       shardId: 'shard-1',
@@ -65,19 +82,52 @@ describe('registerShardBackendMethods', () => {
     });
   });
 
-  it('fails closed with explicit unavailable result when no executor is wired', async () => {
-    const harness = createHarness({ workspacePath: process.cwd() });
+  it('refuses a spoofed autonomous declaration when the runtime tier is apprentice', async () => {
+    // The agent process declares capabilityTier=autonomous in the RPC params,
+    // but the gateway's authoritative tier is apprentice: the boundary must
+    // ignore the caller-declared value and refuse.
+    const harness = createHarness({ policyConfig: POLICY, capabilityTier: 'apprentice' });
+
+    await expect(harness.invoke({
+      shardId: 'shard-spoof',
+      name: 'containerized-research',
+      backend: 'container',
+      capabilityTier: 'autonomous',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.POLICY_DENIED,
+      message: expect.stringContaining('(current: "apprentice")'),
+    });
+  });
+
+  it('allows the backend when the authoritative runtime tier is autonomous', async () => {
+    // Caller under-declares (nursery) but the gateway tier is autonomous: the
+    // authoritative value drives the decision, so the request is admitted.
+    const harness = createHarness({ policyConfig: POLICY, capabilityTier: 'autonomous' });
 
     await expect(harness.invoke({
       shardId: 'shard-2',
       name: 'orchestrated-research',
       backend: 'orchestrated',
-      capabilityTier: 'autonomous',
+      capabilityTier: 'nursery',
     })).resolves.toEqual({
       backend: 'orchestrated',
       controller: 'gateway',
       status: 'unavailable',
       reason: expect.stringContaining('no kubectl-backed shard executor is wired'),
+    });
+  });
+
+  it('fails closed when the gateway has no capability tier provider wired', async () => {
+    const harness = createHarness({ policyConfig: POLICY, omitTierProvider: true });
+
+    await expect(harness.invoke({
+      shardId: 'shard-3',
+      name: 'containerized-research',
+      backend: 'container',
+      capabilityTier: 'autonomous',
+    })).rejects.toMatchObject({
+      code: GatewayErrors.POLICY_DENIED,
+      message: expect.stringContaining('tier provider is unavailable'),
     });
   });
 });

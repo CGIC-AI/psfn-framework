@@ -532,6 +532,7 @@ export class GatewayServer {
       get workspacePath() { return resolveWorkspacePath(); },
       personalWorkspaceIsolation: this.multiCompanion.enabled,
       sessionHmacKeyring: this.sessionHmacKeyring,
+      capabilityTierProvider: this.capabilityTierProvider,
       approvalBoundary: this.approvalBoundary,
       ...(this.options.kubeSelfManagement
         ? { kubeSelfManagement: this.options.kubeSelfManagement }

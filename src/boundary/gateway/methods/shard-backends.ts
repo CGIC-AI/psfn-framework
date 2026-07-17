@@ -7,7 +7,6 @@ import type {
 import { GatewayErrors } from '../protocol.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
-import { normalizeCapabilityTier } from '../../../system/capabilities/tiers.js';
 
 const AUTONOMOUS_SHARD_BACKEND_TIERS = new Set(['autonomous', 'custom']);
 
@@ -45,12 +44,25 @@ const shardBackendDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     name: 'shard.backend.request',
     handler: async (
       params: ShardBackendRequestParams,
-      _runtime: GatewayMethodRuntime,
+      runtime: GatewayMethodRuntime,
     ): Promise<ShardBackendRequestResult> => {
       const backend = normalizeBackend(params.backend);
       const shardId = normalizeRequiredText(params.shardId, 'shardId');
       const name = normalizeRequiredText(params.name, 'name');
-      const capabilityTier = normalizeCapabilityTier(params.capabilityTier);
+
+      // The gateway boundary must not trust the agent process: resolve the
+      // capability tier from the gateway's own authoritative provider and
+      // ignore the caller-declared params.capabilityTier entirely. If the
+      // provider is unavailable the tier cannot be established, so autonomous
+      // backends are refused (fail closed) rather than default-allowed.
+      const tierProvider = runtime.capabilityTierProvider;
+      if (!tierProvider) {
+        deny(
+          `Shard backend "${backend}" for "${name}" (${shardId}) cannot be authorized: `
+          + `the gateway capability tier provider is unavailable (fail closed).`,
+        );
+      }
+      const capabilityTier = tierProvider();
 
       if (!AUTONOMOUS_SHARD_BACKEND_TIERS.has(capabilityTier)) {
         deny(

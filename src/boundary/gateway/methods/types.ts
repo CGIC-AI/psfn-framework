@@ -29,6 +29,7 @@ import type { GatewayInlineImageRetention } from '../inline-image-retention.js';
 import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import type { KubeSelfManagementController } from '../../../system/lifecycle/kube-self-management.js';
 import type { GatewayContactLifecycleAuthorityPort } from '../contact-lifecycle-authority.js';
+import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 
 export interface GatewayMethodRuntime {
   target: JSONRPCServerAndClient;
@@ -65,6 +66,14 @@ export interface GatewayMethodRuntime {
   kubeSelfManagement?: KubeSelfManagementController;
   /** Gateway-owned contact authority; companion identity remains connection-derived. */
   contactLifecycleAuthority?: GatewayContactLifecycleAuthorityPort;
+  /**
+   * Authoritative capability tier resolved from the gateway's own
+   * CapabilityRuntime (never the caller-declared value). Gateway methods that
+   * gate on tier (e.g. autonomous-only shard backends) MUST consult this
+   * instead of trusting RPC params. Absent ⇒ the tier cannot be resolved and
+   * tier-gated privileges must be refused (fail closed).
+   */
+  capabilityTierProvider?: () => CapabilityTier;
   /** Authenticated companion bound to the connection serving this RPC. */
   authenticatedCompanionId(): string | undefined;
   /**

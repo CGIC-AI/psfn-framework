@@ -1407,9 +1407,27 @@ export class AgentApiBackend {
         };
       }
       channelId = hubDeviceAttachment.channel.id;
+      // 8ora: a validated hub-device attachment is the server-side proof that
+      // this turn originated from the companion-ui PWA (relayed through the
+      // satellite hub). Classify it as the first-class `companion-ui` channel
+      // here — origin is decided by the authenticated attachment, never by a
+      // client-supplied X-PSFN-Channel-Type header (the hub is a read-only
+      // vendored dependency and cannot send new headers this wave). If a future
+      // hub revision emits a signed channel-type claim, it could replace this
+      // attachment-derived classification without changing the downstream stamp.
+      channelType = 'companion-ui';
+      source = 'companion-ui';
+      // Server-authored privacy for the 1:1 human↔companion surface. Sourced
+      // from the operator-owned companionUi profile (channels.json), defaulting
+      // to `private`; browser-supplied privacy headers are forbidden upstream.
+      claimedChannelPrivacy = this.externalChannelProfiles['companion-ui']?.channelPrivacy ?? 'private';
       if (hubDeviceAttachment.actor.kind === 'human') {
         authorId = hubDeviceAttachment.actor.principalId;
         authorName = 'Authenticated fleet human';
+        // A Discord-SSO'd human binds to their existing canonical contact via
+        // the attachment's validated contact binding — never minted as a new
+        // person or an api principal. `isHubDeviceAttachmentSnapshot` (checked
+        // above) guarantees a non-empty contactId, so this is fail-closed.
         hubDeviceCanonicalContactId = hubDeviceAttachment.actor.contact.contactId;
       } else {
         authorId = `hub-device-guest:${hubDevicePrincipal.deviceId}`;

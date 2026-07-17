@@ -148,6 +148,76 @@ describe('observer eval privacy boundary', () => {
     expectNoRawLeak(sanitized);
   });
 
+  it('passes the channel-privacy gate for a companion-ui turn carrying non-null privacy (8ora)', () => {
+    const input = withRawLeakFields(makeObserverInput({
+      turn: {
+        turnId: 'turn-companion-ui',
+        requestId: 'request-companion-ui',
+        sourceMessageId: 'source-message-companion-ui',
+        channelId: 'hub-device:companion-ui',
+        channelType: 'companion-ui',
+        messageTimestampMs: 1_780_000_000_000,
+      },
+      source: {
+        routingSource: 'companion-ui',
+        isDirectMessage: false,
+        channelPrivacy: 'private',
+      },
+      metadata: {
+        trustLevel: 'trusted',
+        speakerRole: 'user',
+        contactResolved: true,
+        contentLength: RAW_SECRET.length,
+        attachmentCount: 0,
+        hasVisionInput: false,
+        sensitivity: 'public',
+      },
+    }));
+
+    const sanitized = sanitizeObserverEvalInput(input);
+
+    // The turn's channelType surfaces in the sidecar observation, and the
+    // non-null channelPrivacy clears the gate (no missing_channel_privacy_metadata).
+    expect(sanitized.turn.channelType).toBe('companion-ui');
+    expect(sanitized.source.routingSource).toBe('companion-ui');
+    expect(sanitized.privacy).toMatchObject({
+      privacyClass: 'private',
+      sensitivity: 'public',
+      channelVisibility: 'private',
+      derivedTelemetryPermitted: true,
+      redactionReason: 'private_channel_metadata_only',
+    });
+    expect(sanitized.privacy.redactionReason).not.toBe('missing_channel_privacy_metadata');
+    expectNoRawLeak(sanitized);
+  });
+
+  it('still fails the channel-privacy gate for a companion-ui turn with undefined privacy (8ora)', () => {
+    const input = withRawLeakFields(makeObserverInput({
+      turn: {
+        turnId: 'turn-companion-ui-nopriv',
+        requestId: 'request-companion-ui-nopriv',
+        sourceMessageId: 'source-message-companion-ui-nopriv',
+        channelId: 'hub-device:companion-ui',
+        channelType: 'companion-ui',
+        messageTimestampMs: 1_780_000_000_000,
+      },
+      source: {
+        routingSource: 'companion-ui',
+        isDirectMessage: false,
+      },
+    }));
+
+    const sanitized = sanitizeObserverEvalInput(input);
+
+    expect(sanitized.privacy).toMatchObject({
+      privacyClass: 'fail_closed',
+      channelVisibility: null,
+      derivedTelemetryPermitted: false,
+      redactionReason: 'missing_channel_privacy_metadata',
+    });
+    expectNoRawLeak(sanitized);
+  });
+
   it('fails closed when sensitivity metadata is missing', () => {
     const input = withRawLeakFields(makeObserverInput({
       metadata: {

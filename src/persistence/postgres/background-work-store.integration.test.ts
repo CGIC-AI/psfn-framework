@@ -15,9 +15,11 @@ import {
 import {
   BackgroundWorkDeferredError,
   BackgroundWorkSupervisor,
+  type BackgroundWorkSupervisorOptions,
 } from '../../core/agent/background-work/supervisor.js';
+import type { BackgroundWorkSupervisorTuning } from '../../core/agent/background-work/config.js';
 import { EventBus } from '../../shared/event-bus.js';
-import { createPostgresPool } from '../postgres.js';
+import { createPostgresPool, ensurePostgresSchemaExists } from '../postgres.js';
 import {
   DEFAULT_POSTGRES_TEST_IMAGE,
   startPostgresTestHarness,
@@ -43,6 +45,48 @@ import {
   runExtractionOrchestration,
   type ExtractionRunOptions,
 } from '../../faculties/memory/extraction/orchestrator.js';
+import { buildSubsystemOutputRef } from '../../shared/contracts/subsystem-output-refs.js';
+import { schedulePostTurnWork } from '../../core/agent/substrate-agent/turn-execution/post-turn-scheduling.js';
+import { executePostTurnBackgroundWork } from '../../core/agent/background-work/post-turn-runtime.js';
+import { InMemoryMemoryStore } from '../../test-support/in-memory-memory-store.js';
+import { createTestPostgresContactStore } from '../../test-support/postgres-contact-store.js';
+import { createTestPostgresIntentionPorts } from '../../test-support/postgres-intention-ports.js';
+import { createAutomatedConcernRuntime } from '../../core/intention/concern-candidates.js';
+import { AdminSessionDataService } from '../../operator/garden/services/session-service.js';
+import { ensureIntentionPostgresSchema } from '../../core/intention/postgres-adapters/connection.js';
+import { PostgresActiveConcernStore } from '../../core/intention/postgres-adapters/concerns-adapter.js';
+import { createConcernStorePort } from '../../core/intention/concern-store-port.js';
+
+const TEST_BACKGROUND_WORK_SUPERVISOR_TUNING: BackgroundWorkSupervisorTuning = {
+  maxConcurrentSessions: 4,
+  leaseDurationMs: 300_000,
+  retryBaseDelayMs: 1_000,
+  retryMaxDelayMs: 300_000,
+  shutdownTimeoutMs: 5_000,
+  terminalRetentionMs: 604_800_000,
+  cleanupIntervalMs: 3_600_000,
+};
+
+const TEST_BACKGROUND_WORK_WELFARE_POLICY: BackgroundWorkSupervisorOptions['welfare'] = {
+  deferThreshold: 8,
+  ageThresholdMs: 300_000,
+  reserveSlots: 1,
+};
+
+type TestBackgroundWorkSupervisorOptions =
+  Omit<BackgroundWorkSupervisorOptions, keyof BackgroundWorkSupervisorTuning | 'welfare'>
+  & Partial<BackgroundWorkSupervisorTuning>
+  & { welfare?: BackgroundWorkSupervisorOptions['welfare'] };
+
+function createBackgroundWorkSupervisor(
+  options: TestBackgroundWorkSupervisorOptions,
+): BackgroundWorkSupervisor {
+  return new BackgroundWorkSupervisor({
+    ...TEST_BACKGROUND_WORK_SUPERVISOR_TUNING,
+    welfare: TEST_BACKGROUND_WORK_WELFARE_POLICY,
+    ...options,
+  });
+}
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -301,7 +345,7 @@ describe('PostgresBackgroundWorkStore', () => {
       max: 1,
     });
     const executor = vi.fn(async () => undefined);
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       leaseOwner: 'payload-validation-worker',
@@ -376,7 +420,7 @@ describe('PostgresBackgroundWorkStore', () => {
       max: 1,
     });
     const executor = vi.fn(async () => undefined);
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       leaseOwner: 'payload-shape-validation-worker',
@@ -508,6 +552,52 @@ describe('PostgresBackgroundWorkStore', () => {
       expect(claims.filter(Boolean)).toHaveLength(1);
     } finally {
       await Promise.all([first.close(), second.close()]);
+    }
+  });
+
+  it('runs role-bound migrations without database CREATE and never creates a missing tenant schema', async () => {
+    const database = await harness.createDatabase();
+    const adminPool = createPostgresPool(database.databaseUrl, { max: 1 });
+    const tenantSchema = 'background_work_tenant';
+    const tenantRole = 'background_work_tenant_role';
+    const missingSchema = 'background_work_missing_tenant';
+    const missingRole = 'background_work_missing_role';
+    let store: PostgresBackgroundWorkStore | undefined;
+    try {
+      await adminPool.query(`CREATE ROLE "${tenantRole}" NOLOGIN NOINHERIT`);
+      await adminPool.query(`CREATE SCHEMA "${tenantSchema}" AUTHORIZATION "${tenantRole}"`);
+      await adminPool.query(`GRANT "${tenantRole}" TO CURRENT_USER`);
+      const privileges = await adminPool.query<{ can_create_database_objects: boolean }>(`
+        SELECT has_database_privilege($1, current_database(), 'CREATE')
+          AS can_create_database_objects
+      `, [tenantRole]);
+      expect(privileges.rows[0]?.can_create_database_objects).toBe(false);
+
+      store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+        schema: tenantSchema,
+        role: tenantRole,
+      });
+      await store.enqueue(makeInput('tenant-session', 'tenant-turn'));
+      expect(await store.get(createBackgroundWorkIdentity({
+        logicalSessionId: 'tenant-session',
+        turnId: 'tenant-turn',
+        kind: 'memory_extraction',
+      }).jobId)).not.toBeNull();
+
+      await adminPool.query(`CREATE ROLE "${missingRole}" NOLOGIN NOINHERIT`);
+      await adminPool.query(`GRANT "${missingRole}" TO CURRENT_USER`);
+      await expect(PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+        schema: missingSchema,
+        role: missingRole,
+      })).rejects.toThrow();
+      const missing = await adminPool.query<{ exists: boolean }>(
+        'SELECT to_regnamespace($1) IS NOT NULL AS exists',
+        [missingSchema],
+      );
+      expect(missing.rows[0]?.exists).toBe(false);
+    } finally {
+      await store?.close();
+      await adminPool.end();
     }
   });
 
@@ -799,7 +889,7 @@ describe('PostgresBackgroundWorkStore', () => {
     let foregroundEffectCapable = true;
     let firstReplicaEffects = 0;
     let secondReplicaEffects = 0;
-    const first = new BackgroundWorkSupervisor({
+    const first = createBackgroundWorkSupervisor({
       store: firstStore,
       eventBus: new EventBus(),
       leaseOwner: 'foreground-replica',
@@ -811,7 +901,7 @@ describe('PostgresBackgroundWorkStore', () => {
         });
       },
     });
-    const second = new BackgroundWorkSupervisor({
+    const second = createBackgroundWorkSupervisor({
       store: secondStore,
       eventBus: new EventBus(),
       leaseOwner: 'background-replica',
@@ -994,7 +1084,7 @@ describe('PostgresBackgroundWorkStore', () => {
     let firstSinkWrites = 0;
     let secondSinkWrites = 0;
     const providerEntered = deferred();
-    const first = new BackgroundWorkSupervisor({
+    const first = createBackgroundWorkSupervisor({
       store: firstStore,
       eventBus: new EventBus(),
       leaseOwner: 'first-replica',
@@ -1015,7 +1105,7 @@ describe('PostgresBackgroundWorkStore', () => {
         });
       },
     });
-    const second = new BackgroundWorkSupervisor({
+    const second = createBackgroundWorkSupervisor({
       store: secondStore,
       eventBus: new EventBus(),
       leaseOwner: 'second-replica',
@@ -1076,7 +1166,7 @@ describe('PostgresBackgroundWorkStore', () => {
       return originalRequeue(input);
     });
     const providerEntered = deferred();
-    const first = new BackgroundWorkSupervisor({
+    const first = createBackgroundWorkSupervisor({
       store: firstStore,
       eventBus: new EventBus(),
       leaseOwner: 'first-replica',
@@ -1095,7 +1185,7 @@ describe('PostgresBackgroundWorkStore', () => {
       },
     });
     let sinkWrites = 0;
-    const second = new BackgroundWorkSupervisor({
+    const second = createBackgroundWorkSupervisor({
       store: secondStore,
       eventBus: new EventBus(),
       leaseOwner: 'second-replica',
@@ -1153,7 +1243,7 @@ describe('PostgresBackgroundWorkStore', () => {
     let nowMs = 1_000;
     let attempts = 0;
     const sinkWrites: string[] = [];
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       leaseOwner: 'worker',
@@ -1370,6 +1460,7 @@ describe('PostgresBackgroundWorkStore', () => {
         leaseOwner: crashedClaim!.leaseOwner,
         expectedRevision: crashedClaim!.revision,
         nowMs: 200,
+        projectsSubsystemOutputs: true,
       })).toBe('execute');
       // Cross the durable boundary before the sink write: a crash from here is
       // genuinely outcome-ambiguous and must stay terminal.
@@ -1386,6 +1477,18 @@ describe('PostgresBackgroundWorkStore', () => {
         state: 'failed',
         reasonCode: 'effect_outcome_unknown',
       });
+      await expect(second.listSubsystemOutputRefs({
+        logicalSessionId: crashedInput.logicalSessionId,
+        sourceChannelId: crashedInput.sourceChannelId,
+        sourceTurnId: crashedInput.sourceTurnId,
+        sourceRequestId: crashedInput.sourceRequestId,
+      })).resolves.toEqual([]);
+      await expect(second.getSubsystemOutputProjection({
+        logicalSessionId: crashedInput.logicalSessionId,
+        sourceChannelId: crashedInput.sourceChannelId,
+        sourceTurnId: crashedInput.sourceTurnId,
+        sourceRequestId: crashedInput.sourceRequestId,
+      })).resolves.toEqual({ status: 'outcome_unknown', outputRefs: [] });
       expect(await second.claimNext({
         leaseOwner: 'worker-b',
         nowMs: 211,
@@ -1499,7 +1602,7 @@ describe('PostgresBackgroundWorkStore', () => {
     `);
     let sinkWrites = 0;
     let now = 1_000;
-    const supervisor = new BackgroundWorkSupervisor({
+    const supervisor = createBackgroundWorkSupervisor({
       store,
       eventBus: new EventBus(),
       now: () => now,
@@ -1799,8 +1902,9 @@ describe('PostgresBackgroundWorkStore', () => {
     };
 
     try {
+      await ensurePostgresSchemaExists(inspectionPool, 'companion_a');
       await inspectionPool.query(`
-        CREATE TABLE cross_turn_derived_effects (
+        CREATE TABLE companion_a.cross_turn_derived_effects (
           id BIGSERIAL PRIMARY KEY,
           content TEXT NOT NULL
         )
@@ -1834,7 +1938,7 @@ describe('PostgresBackgroundWorkStore', () => {
         },
         async (entries) => {
           await inspectionPool.query(
-            'INSERT INTO cross_turn_derived_effects (content) VALUES ($1)',
+            'INSERT INTO companion_a.cross_turn_derived_effects (content) VALUES ($1)',
             [entries.map(entry => entry.content).join('|')],
           );
         },
@@ -1850,14 +1954,14 @@ describe('PostgresBackgroundWorkStore', () => {
         () => consumer.getRecent(logicalSessionId, 10),
         async (entries) => {
           await inspectionPool.query(
-            'INSERT INTO cross_turn_derived_effects (content) VALUES ($1)',
+            'INSERT INTO companion_a.cross_turn_derived_effects (content) VALUES ($1)',
             [entries.map(entry => entry.content).join('|')],
           );
         },
       );
 
       const effects = await inspectionPool.query<{ content: string }>(
-        'SELECT content FROM cross_turn_derived_effects ORDER BY id',
+        'SELECT content FROM companion_a.cross_turn_derived_effects ORDER BY id',
       );
       expect(effects.rows).toHaveLength(1);
       expect(effects.rows[0]?.content).not.toContain(privateOlderContent);
@@ -1986,8 +2090,9 @@ describe('PostgresBackgroundWorkStore', () => {
     const failedContent = 'FAILED ICP A MUST NOT ENTER THE PROJECTED POST-TURN SINK';
 
     try {
+      await ensurePostgresSchemaExists(inspectionPool, 'companion_a');
       await inspectionPool.query(`
-        CREATE TABLE projected_background_effects (
+        CREATE TABLE companion_a.projected_background_effects (
           id BIGSERIAL PRIMARY KEY,
           content TEXT NOT NULL
         )
@@ -2066,7 +2171,7 @@ describe('PostgresBackgroundWorkStore', () => {
           effectEntered.resolve();
           await allowEffect.promise;
           await inspectionPool.query(
-            'INSERT INTO projected_background_effects (content) VALUES ($1)',
+            'INSERT INTO companion_a.projected_background_effects (content) VALUES ($1)',
             [entries.map(entry => entry.content).join('|')],
           );
         },
@@ -2122,14 +2227,17 @@ describe('PostgresBackgroundWorkStore', () => {
         permitOutcome: 'consumed',
         recoveryResponse: icpRecoveryResponse,
       });
+      const changedSnapshotRejection = expect(changedSnapshot).rejects.toThrow(
+        'TurnRecord eligibility snapshot changed',
+      );
       releaseSuccessfulFence.resolve();
       await heldSuccessfulFence;
-      await expect(changedSnapshot).rejects.toThrow('TurnRecord eligibility snapshot changed');
+      await changedSnapshotRejection;
       expect(snapshotReads).toBe(2);
       expect(changedSnapshotEffectRan).toBe(false);
 
       const effects = await inspectionPool.query<{ content: string }>(
-        'SELECT content FROM projected_background_effects ORDER BY id',
+        'SELECT content FROM companion_a.projected_background_effects ORDER BY id',
       );
       expect(effects.rows).toEqual([{
         content: 'successful B input|successful B output',
@@ -2204,8 +2312,9 @@ describe('PostgresBackgroundWorkStore', () => {
     };
 
     try {
+      await ensurePostgresSchemaExists(inspectionPool, 'companion_a');
       await inspectionPool.query(`
-        CREATE TABLE empty_snapshot_memory_effects (
+        CREATE TABLE companion_a.empty_snapshot_memory_effects (
           id BIGSERIAL PRIMARY KEY,
           content TEXT NOT NULL
         )
@@ -2241,7 +2350,7 @@ describe('PostgresBackgroundWorkStore', () => {
       });
       const processFact = vi.fn(async (fact: { text: string }) => {
         await inspectionPool.query(
-          'INSERT INTO empty_snapshot_memory_effects (content) VALUES ($1)',
+          'INSERT INTO companion_a.empty_snapshot_memory_effects (content) VALUES ($1)',
           [fact.text],
         );
         return { action: 'created', memory: { id: 'memory-from-empty-snapshot' } };
@@ -2298,7 +2407,7 @@ describe('PostgresBackgroundWorkStore', () => {
       expect(complete).not.toHaveBeenCalled();
       expect(processFact).not.toHaveBeenCalled();
       const effects = await inspectionPool.query<{ content: string }>(
-        'SELECT content FROM empty_snapshot_memory_effects ORDER BY id',
+        'SELECT content FROM companion_a.empty_snapshot_memory_effects ORDER BY id',
       );
       expect(effects.rows).toEqual([]);
       expect(consumer.getRecent(logicalSessionId, 10).map(entry => entry.content))
@@ -2555,6 +2664,617 @@ describe('PostgresBackgroundWorkStore', () => {
       await store.close();
     }
   });
+
+  it('projects a completed production turn through real extraction into Garden detail', async () => {
+    const database = await harness.createDatabase();
+    const backgroundStore = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const fencePool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 2,
+    });
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'psfn-output-projection-e2e-'));
+    const sessionStore = new SessionStore(sessionsDir, {
+      turnRecordEligibilityFence: new PostgresTurnRecordEligibilityFence(
+        fencePool,
+        'companion_a',
+      ),
+    });
+    const config = {
+      dataDir: sessionsDir,
+      companionDataDir: sessionsDir,
+      workspacePath: sessionsDir,
+      sessionMessageLimit: 30,
+      memoryRetrievalLimit: 15,
+      extractionInterval: 1,
+      maintenanceIntervalMs: 300_000,
+      defaultContextWindow: 128_000,
+      extractionThresholdPct: 30,
+      compactionThresholdPct: 70,
+      modelRoster: {
+        chat: { provider: 'test', model: 'test', contextWindow: 128_000, maxTokens: 4_096 },
+      },
+    } as SubstrateConfig;
+    const sessionManager = new SessionManager(sessionStore, config);
+    const eventBus = new EventBus();
+    const memoryBackend = new InMemoryMemoryStore();
+    const memoryStore = memoryBackend.asPort();
+    const { store: contactStore } = await createTestPostgresContactStore('primary-owner');
+    const contact = await contactStore.upsert({
+      displayName: 'Alex',
+      relationshipType: 'friend',
+    });
+    const intention = createTestPostgresIntentionPorts({
+      now: () => new Date('2026-07-16T12:00:00.000Z'),
+    }).ports;
+    const llmProvider = {
+      complete: vi.fn(async () => ({
+        content: `<response>
+<fact>
+<text>Alex felt worried and asked for a check in tomorrow about the appointment.</text>
+<type>emotional</type>
+<importance>0.9</importance>
+<emotional_valence>-0.6</emotional_valence>
+<confidence>0.95</confidence>
+<tags>appointment,follow-up</tags>
+</fact>
+</response>`,
+      })),
+    } as unknown as LLMProviderPort;
+    const concernRuntime = await createAutomatedConcernRuntime({
+      eventBus,
+      llmProvider,
+      concernStore: intention.concernStore,
+      now: () => new Date('2026-07-16T12:00:00.000Z'),
+    });
+    const extractor = new MemoryExtractor(
+      llmProvider,
+      sessionManager,
+      memoryStore,
+      {
+        dims: 8,
+        embed: vi.fn(async () => new Float32Array(8).fill(0.25)),
+        embedBatch: vi.fn(),
+      },
+      { emit: vi.fn(async () => undefined) },
+      {
+        extractionInterval: 1,
+        minImportance: 0,
+        minConfidence: 0,
+        minNovelty: 0,
+        maxWrites: 3,
+      },
+      null,
+      sessionStore,
+      contactStore,
+      { emitConcernCandidates: concernRuntime.extractionSink },
+    );
+    const supervisor = createBackgroundWorkSupervisor({
+      store: backgroundStore,
+      eventBus,
+      leaseOwner: 'projection-e2e-worker',
+      now: () => 2_000,
+      executor: async (execution) => {
+        if (execution.payload.kind !== 'memory_extraction') return;
+        await executePostTurnBackgroundWork(execution, {
+          sessionManager,
+          llmProvider,
+          getMemoryExtractor: () => extractor,
+          runIntentionPostTurnHooks: async () => undefined,
+          emotionRuntime: { triggerEmotionAppraisal: async () => undefined },
+          getEmotionTemplateVariables: () => ({}),
+          tuning: {
+            extractionDrainRequeueDelayMs: 250,
+            foregroundPreemptionDeferDelayMs: 250,
+          },
+          now: () => 2_000,
+        });
+      },
+    });
+    const channelId = 'api:output-projection-e2e';
+    const turnId = createTurnId();
+    const requestId = `request-${turnId}`;
+    const userEntryId = sessionStore.append({
+      channelId,
+      role: 'user',
+      content: 'I feel worried. Please check in tomorrow about the appointment.',
+      authorId: 'primary-owner',
+      authorName: 'Alex',
+      timestamp: 1_000,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId,
+        requestId,
+        role: 'user',
+        actorKind: 'human',
+      }),
+    });
+    const assistantEntryId = sessionStore.append({
+      channelId,
+      role: 'assistant',
+      content: 'I will keep that in mind.',
+      authorId: 'companion',
+      authorName: 'Purrsephone',
+      timestamp: 1_001,
+      metadata: buildSessionMetadataWithTurn(undefined, {
+        turnId,
+        requestId,
+        role: 'assistant',
+        actorKind: 'companion',
+      }),
+    });
+    const turnRecord = {
+      ...makeCanonicalTurnRecord(channelId, turnId, 'I will keep that in mind.'),
+      requestId,
+      startedAt: 1_000,
+      completedAt: 1_100,
+      userMessage: {
+        role: 'user' as const,
+        content: 'I feel worried. Please check in tomorrow about the appointment.',
+        timestamp: 1_000,
+        authorId: 'primary-owner',
+        authorName: 'Alex',
+      },
+      internalStateSnapshotRef: 'internal-state-v1:projection-e2e',
+    };
+    const enqueuedInputs: EnqueueBackgroundWorkInput[] = [];
+    const internalState = {
+      emotional: {
+        vad: { valence: 0, arousal: 0, dominance: 0 },
+        mood: { valence: 0, arousal: 0, dominance: 0 },
+        discreteEmotions: {},
+        confidence: 1,
+        telemetry: {
+          status: 'trusted',
+          source: 'runtime_state',
+          reasons: [],
+          confidence: 1,
+          weight: 1,
+          observedAtMs: 1_000,
+          validatedAtMs: 1_000,
+          staleAfterMs: 60_000,
+          provenance: [],
+          rawSignal: { confidence: 1, topDiscreteLabels: [], strongestLabelScore: 0 },
+        },
+      },
+      cognitive: { certaintyLevel: 1, topicEngagement: 1, processingQuality: 'fluent' },
+      attention: { activeConcerns: [], salientEntities: [], conversationTrajectory: 'casual' },
+      relational: {
+        contactId: contact.id,
+        trustLevel: 'regular',
+        baselineValence: 0,
+        moodDrift: 0,
+        recentInteractionFrequency: 1,
+        lastSeenDeltaSeconds: 0,
+      },
+      situated: { location: null },
+    };
+
+    try {
+      await schedulePostTurnWork({
+        runtime: {
+          sessionManager,
+          memoryExtractor: extractor,
+          config,
+          eventBus,
+          inferPostTurnActions: async () => [],
+          buildTurnRecord: () => turnRecord,
+          enqueuePostTurnBackgroundWork: async (inputs) => {
+            enqueuedInputs.push(...inputs);
+            await supervisor.enqueue(inputs);
+          },
+          costTelemetry: { recordTurnUsage: async () => undefined },
+          withCorrelationPurpose: (correlation: unknown) => correlation,
+        } as never,
+        message: {
+          id: 'message-output-projection-e2e',
+          channelId,
+          channelType: 'api',
+          authorId: 'primary-owner',
+          authorName: 'Alex',
+          content: turnRecord.userMessage.content,
+          timestamp: new Date(1_000),
+        },
+        turnSessionIdentity: { logicalSessionId: channelId, sourceChannelId: channelId },
+        response: {
+          content: turnRecord.assistantMessage!.content,
+          channelId,
+          metadata: {
+            model: 'test-model',
+            inputTokens: 10,
+            outputTokens: 5,
+            durationMs: 100,
+            turnId,
+            requestId,
+          },
+        },
+        turnMessages: [],
+        turnId,
+        requestId,
+        startTime: 1_000,
+        completedAt: 1_100,
+        firstTokenAt: 1_050,
+        turnUsage: { inputTokens: 10, outputTokens: 5 },
+        context: { messages: [], manifest: {} } as never,
+        taskKind: undefined,
+        turnCorrelationBase: { turnId, requestId },
+        userSessionEntryId: userEntryId,
+        assistantSessionEntryId: assistantEntryId,
+        promptMode: 'default',
+        fullPrompt: 'test prompt',
+        contextMessageCount: 1,
+        memoryContextChars: 0,
+        memoryContextBlock: '',
+        trustLevel: 'regular',
+        speakerRole: 'user',
+        canonicalContactKey: contact.id,
+        continuitySubjectKey: 'primary-owner',
+        turnSnapshot: {} as never,
+        internalStateSnapshotRef: turnRecord.internalStateSnapshotRef,
+        internalState,
+        templateVariables: {},
+        emotionSessionId: channelId,
+        channelMeta: { isDirectMessage: true, privacyLevel: 'private' },
+        conversationScope: {} as never,
+        turnBudgetCharacteristics: { messageText: turnRecord.userMessage.content },
+        observability: {
+          emitObservedTurnStage: vi.fn(),
+          getObservedTurnStages: () => [],
+          getObservedTurnRetrievals: () => [],
+          getObservedTurnSnapshot: () => undefined,
+          getRetrievalProvenanceRefs: () => [],
+        },
+      });
+
+      const persisted = sessionManager.findSourceRecordedTurn(channelId, channelId, turnId)!;
+      expect(persisted.extractedMemoryIds).toHaveLength(1);
+      expect(persisted.concernDeltaRefs).toHaveLength(1);
+      expect(persisted.contactDeltaRefs).toHaveLength(1);
+      expect(JSON.stringify(persisted)).not.toContain('felt worried and asked');
+      expect(sessionStore.getRecentTurnRecords(channelId, 10).map(record => record.turnId))
+        .toEqual([turnId]);
+      expect(sessionManager.isSourceRecordedTurnEligible(channelId, channelId, turnId)).toBe(true);
+      await expect(sessionManager.withStableRecordedTurnEligibilitySnapshot(
+        channelId,
+        [turnId],
+        () => sessionManager.getRecentMessagesAtOrBefore(channelId, assistantEntryId, 10),
+        async entries => entries.map(entry => entry.id),
+      )).resolves.toContain(assistantEntryId);
+
+      for (let index = 0; index < 4; index += 1) {
+        await supervisor.tick();
+        await supervisor.waitForIdle();
+      }
+      await expect(Promise.all(enqueuedInputs.map(input => backgroundStore.get(input.jobId))))
+        .resolves.toEqual(enqueuedInputs.map(() => expect.objectContaining({ state: 'succeeded' })));
+
+      const service = new AdminSessionDataService({
+        sessionStore,
+        sessionManager,
+        eventBus,
+        memoryStore,
+        concernStore: intention.concernStore,
+        contactStore,
+        subsystemOutputRefStore: backgroundStore,
+      });
+      const detail = await service.getSessionTurnDetail(channelId, turnId);
+      expect(detail.turn.promptLoom?.subsystemOutputs.projectionStatus).toBe('applied');
+      expect(detail.turn.promptLoom?.subsystemOutputs.memoryWrites)
+        .toEqual([expect.objectContaining({ status: 'resolved' })]);
+      expect(detail.turn.promptLoom?.subsystemOutputs.concernDeltas)
+        .toEqual([expect.objectContaining({ status: 'resolved' })]);
+      expect(detail.turn.promptLoom?.subsystemOutputs.contactDeltas)
+        .toEqual([expect.objectContaining({ status: 'resolved' })]);
+      expect(detail.turn.promptLoom?.subsystemOutputs.contactDeltas[0]?.value)
+        .not.toHaveProperty('displayName');
+    } finally {
+      concernRuntime.dispose();
+      await Promise.allSettled([supervisor.stop()]);
+      await Promise.all([backgroundStore.close(), fencePool.end()]);
+      rmSync(sessionsDir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  it('commits stable output refs with the applied receipt and retains them after job purge', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const inspectionPool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 1,
+    });
+    try {
+      const input = makeInput('session-output', 'turn-output');
+      const memoryRef = buildSubsystemOutputRef('memory', 'memory-output-1');
+      const concernRef = buildSubsystemOutputRef('concern', 'concern-output-1');
+      const binding = {
+        logicalSessionId: input.logicalSessionId,
+        sourceChannelId: input.sourceChannelId,
+        sourceTurnId: input.sourceTurnId,
+        sourceRequestId: input.sourceRequestId,
+      };
+      await store.enqueue(input);
+      await expect(store.getSubsystemOutputProjection(binding)).resolves.toEqual({
+        status: 'pending',
+        outputRefs: [],
+      });
+      const claim = await store.claimNext({
+        leaseOwner: 'worker-output',
+        nowMs: 100,
+        leaseDurationMs: 100,
+        excludedLogicalSessionIds: [],
+      });
+      expect(await store.beginEffect({
+        jobId: claim!.jobId,
+        effectKey: 'memory-extraction',
+        leaseOwner: claim!.leaseOwner,
+        expectedRevision: claim!.revision,
+        nowMs: 100,
+        projectsSubsystemOutputs: true,
+      })).toBe('execute');
+      expect(await store.commitEffectBoundary({
+        jobId: claim!.jobId,
+        effectKey: 'memory-extraction',
+        leaseOwner: claim!.leaseOwner,
+        expectedRevision: claim!.revision,
+        nowMs: 101,
+      })).toBe('crossed');
+      await store.completeEffect({
+        jobId: claim!.jobId,
+        effectKey: 'memory-extraction',
+        leaseOwner: claim!.leaseOwner,
+        expectedRevision: claim!.revision,
+        nowMs: 102,
+        outputRefs: [memoryRef, concernRef, memoryRef],
+      });
+      expect(await store.beginEffect({
+        jobId: claim!.jobId,
+        effectKey: 'memory-extraction',
+        leaseOwner: claim!.leaseOwner,
+        expectedRevision: claim!.revision,
+        nowMs: 103,
+        projectsSubsystemOutputs: true,
+      })).toBe('applied');
+      await expect(store.getSubsystemOutputProjection(binding)).resolves.toEqual({
+        status: 'applied',
+        outputRefs: [concernRef, memoryRef].sort(),
+      });
+      await expect(store.listSubsystemOutputRefs(binding))
+        .resolves.toEqual([concernRef, memoryRef].sort());
+      await expect(store.listSubsystemOutputRefs({
+        ...binding,
+        sourceRequestId: 'wrong-request',
+      })).resolves.toEqual([]);
+
+      await store.complete({
+        jobId: claim!.jobId,
+        leaseOwner: claim!.leaseOwner,
+        expectedRevision: claim!.revision,
+        nowMs: 104,
+      });
+      expect(await store.purgeTerminal({ completedBeforeMs: 104, limit: 10 })).toBe(1);
+      await expect(store.listSubsystemOutputRefs(binding))
+        .resolves.toEqual([concernRef, memoryRef].sort());
+      await expect(inspectionPool.query(`
+        UPDATE agent_turn_subsystem_output_refs
+        SET recorded_at_ms = recorded_at_ms + 1
+      `)).rejects.toThrow('agent_turn_subsystem_output_refs is append-only');
+      await expect(inspectionPool.query(`
+        DELETE FROM agent_turn_subsystem_output_refs
+      `)).rejects.toThrow('agent_turn_subsystem_output_refs is append-only');
+      await expect(inspectionPool.query(`
+        TRUNCATE agent_turn_subsystem_output_refs
+      `)).rejects.toThrow('agent_turn_subsystem_output_refs is append-only');
+      await expect(inspectionPool.query(`
+        TRUNCATE agent_turn_subsystem_output_status
+      `)).rejects.toThrow('agent_turn_subsystem_output_status is append-only');
+    } finally {
+      await Promise.all([store.close(), inspectionPool.end()]);
+    }
+  }, 30_000);
+
+  it('serializes concurrent durable candidate promotions at the active concern cap', async () => {
+    const database = await harness.createDatabase();
+    const adminPool = createPostgresPool(database.databaseUrl, { max: 1 });
+    await ensurePostgresSchemaExists(adminPool, 'companion_a');
+    await adminPool.end();
+    const pool = createPostgresPool(database.databaseUrl, {
+      schema: 'companion_a',
+      max: 4,
+    });
+    await ensureIntentionPostgresSchema(pool);
+    let idCounter = 0;
+    const concernStore = createConcernStorePort(new PostgresActiveConcernStore(
+      pool,
+      () => new Date('2026-07-16T12:00:00.000Z'),
+      () => `concurrent-concern-${++idCounter}`,
+    ));
+    try {
+      for (const text of [
+        'Confirm Tuesday cardiology appointment logistics.',
+        'Review database migration rollback checklist.',
+        'Check whether voice latency regression returned.',
+        'Track hydration routine after medication change.',
+        'Revisit backup verification evidence tonight.',
+        'Clarify calendar scheduling conflict with Sam.',
+      ]) {
+        await concernStore.create({ text, priority: 'low' });
+      }
+      const firstCandidate = await concernStore.create({
+        text: 'Follow up concurrentcandidatealpha',
+        priority: 'high',
+        status: 'candidate',
+      });
+      const secondCandidate = await concernStore.create({
+        text: 'Follow up concurrentcandidatebeta',
+        priority: 'high',
+        status: 'candidate',
+      });
+
+      const promotions = await Promise.allSettled([
+        concernStore.transitionConcernStatus(firstCandidate.id, {
+          status: 'active',
+          transitionedAt: '2026-07-16T12:01:00.000Z',
+        }),
+        concernStore.transitionConcernStatus(secondCandidate.id, {
+          status: 'active',
+          transitionedAt: '2026-07-16T12:01:00.000Z',
+        }),
+      ]);
+
+      expect(promotions.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+      expect(promotions.filter(result => result.status === 'rejected')).toHaveLength(1);
+      expect(promotions.find(result => result.status === 'rejected')).toMatchObject({
+        reason: expect.objectContaining({ message: 'Active concern cap reached (7)' }),
+      });
+      await expect(concernStore.getActiveConcerns()).resolves.toHaveLength(7);
+      const candidateStatuses = await Promise.all([
+        concernStore.getById(firstCandidate.id),
+        concernStore.getById(secondCandidate.id),
+      ]);
+      expect(candidateStatuses.map(concern => concern?.status).sort()).toEqual(['active', 'candidate']);
+    } finally {
+      await pool.end();
+    }
+  }, 30_000);
+
+  it('marks a live post-boundary projecting failure outcome-unknown immediately', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      leaseOwner: 'worker-live-projection-failure',
+      now: () => 100,
+      executor: async ({ effects }) => {
+        await effects.run('memory-extraction', async (crossBoundary) => {
+          await crossBoundary();
+          throw new Error('contact persistence failed after the effect boundary');
+        }, { projectsSubsystemOutputs: true });
+      },
+    });
+    try {
+      const input = makeInput('session-live-projection-failure', 'turn-live-projection-failure');
+      const binding = {
+        logicalSessionId: input.logicalSessionId,
+        sourceChannelId: input.sourceChannelId,
+        sourceTurnId: input.sourceTurnId,
+        sourceRequestId: input.sourceRequestId,
+      };
+      await supervisor.enqueue([input]);
+      await supervisor.tick();
+      await supervisor.waitForIdle();
+
+      await expect(store.get(input.jobId)).resolves.toMatchObject({
+        state: 'failed',
+        reasonCode: 'effect_outcome_unknown',
+        attemptCount: 1,
+      });
+      await expect(store.getSubsystemOutputProjection(binding)).resolves.toEqual({
+        status: 'outcome_unknown',
+        outputRefs: [],
+      });
+    } finally {
+      await supervisor.stop();
+      await store.close();
+    }
+  }, 30_000);
+
+  it('marks terminal pre-boundary extraction failure distinctly from pending work', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    const supervisor = createBackgroundWorkSupervisor({
+      store,
+      eventBus: new EventBus(),
+      leaseOwner: 'worker-pre-boundary-projection-failure',
+      now: () => 100,
+      executor: async () => {
+        throw new Error('pre-boundary extraction failure');
+      },
+    });
+    try {
+      const input = {
+        ...makeInput('session-pre-boundary-failure', 'turn-pre-boundary-failure'),
+        maxAttempts: 1,
+      };
+      const binding = {
+        logicalSessionId: input.logicalSessionId,
+        sourceChannelId: input.sourceChannelId,
+        sourceTurnId: input.sourceTurnId,
+        sourceRequestId: input.sourceRequestId,
+      };
+      await supervisor.enqueue([input]);
+      await supervisor.tick();
+      await supervisor.waitForIdle();
+
+      await expect(store.get(input.jobId)).resolves.toMatchObject({
+        state: 'failed',
+        reasonCode: 'retry_exhausted',
+        attemptCount: 1,
+      });
+      await expect(store.getSubsystemOutputProjection(binding)).resolves.toEqual({
+        status: 'failed',
+        outputRefs: [],
+      });
+    } finally {
+      await supervisor.stop();
+      await store.close();
+    }
+  }, 30_000);
+
+  it('distinguishes an applied empty subsystem projection from pending work', async () => {
+    const database = await harness.createDatabase();
+    const store = await PostgresBackgroundWorkStore.connect(database.databaseUrl, {
+      schema: 'companion_a',
+    });
+    try {
+      const input = makeInput('session-output-empty', 'turn-output-empty');
+      const binding = {
+        logicalSessionId: input.logicalSessionId,
+        sourceChannelId: input.sourceChannelId,
+        sourceTurnId: input.sourceTurnId,
+        sourceRequestId: input.sourceRequestId,
+      };
+      await store.enqueue(input);
+      await expect(store.getSubsystemOutputProjection(binding)).resolves.toEqual({
+        status: 'pending',
+        outputRefs: [],
+      });
+      const claim = await store.claimNext({
+        leaseOwner: 'worker-output-empty',
+        nowMs: 100,
+        leaseDurationMs: 100,
+        excludedLogicalSessionIds: [],
+      });
+      expect(await store.beginEffect({
+        jobId: claim!.jobId,
+        effectKey: 'memory-extraction',
+        leaseOwner: claim!.leaseOwner,
+        expectedRevision: claim!.revision,
+        nowMs: 100,
+        projectsSubsystemOutputs: true,
+      })).toBe('execute');
+      await store.completeEffect({
+        jobId: claim!.jobId,
+        effectKey: 'memory-extraction',
+        leaseOwner: claim!.leaseOwner,
+        expectedRevision: claim!.revision,
+        nowMs: 101,
+        outputRefs: [],
+      });
+      await expect(store.getSubsystemOutputProjection(binding)).resolves.toEqual({
+        status: 'applied',
+        outputRefs: [],
+      });
+    } finally {
+      await store.close();
+    }
+  }, 30_000);
 
   it('recovers a pre-boundary expired lease without consuming its final attempt', async () => {
     const database = await harness.createDatabase();

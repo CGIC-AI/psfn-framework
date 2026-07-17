@@ -100,6 +100,7 @@ export function createPostgresEpisodicStore(
     applicationName: 'psfn-episodic-memory',
     allowExitOnIdle: true,
     schema: options.schema,
+    role: options.role,
   });
   return createPostgresEpisodicStoreFromPool(pool, options);
 }

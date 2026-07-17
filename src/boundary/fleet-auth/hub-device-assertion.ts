@@ -1,5 +1,6 @@
 import {
   createHash,
+  createHmac,
   createPublicKey,
   verify,
   type KeyObject,
@@ -92,8 +93,10 @@ export async function verifyAndConsumeHubDeviceAssertion(input: {
   config: HubDeviceAssertionVerifierConfig;
   expected: HubDeviceAssertionExpectedBinding;
   replayStore: HubDeviceAssertionReplayStore;
+  sessionPepper: string;
   nowSeconds?: number;
 }): Promise<HubDevicePrincipal> {
+  const auditDigest = createHubDeviceAuditDigest(input.sessionPepper);
   const nowSeconds = input.nowSeconds ?? Math.floor(Date.now() / 1000);
   if (!Number.isSafeInteger(nowSeconds) || nowSeconds < 1) {
     throw new Error('Hub device assertion verification time is invalid');
@@ -157,6 +160,9 @@ export async function verifyAndConsumeHubDeviceAssertion(input: {
   const replayFenceExpiresAt = new Date(
     (claims.exp + parsedConfig.clockSkewSeconds) * 1000,
   );
+  // The assertion digest fingerprints a full signed bearer token (high entropy,
+  // includes the Ed25519 signature), not an enumerable identifier, so plain
+  // SHA-256 is retained: it is the exact-match replay key and must stay stable.
   const assertionDigest = createHash('sha256').update(input.token, 'utf8').digest('hex');
   const consumption = await input.replayStore.consume({
     issuer: claims.iss,
@@ -197,8 +203,26 @@ export async function verifyAndConsumeHubDeviceAssertion(input: {
   };
 }
 
-function auditDigest(value: string): string {
-  return createHash('sha256').update(value, 'utf8').digest('hex');
+/**
+ * Versioned domain separator for Hub device-assertion audit digests. The audited
+ * fields (issuer, key id, audience, companion/device/session ids, enrollment
+ * version, jti) are low-entropy enumerable identifiers, so their audit digests
+ * are keyed HMAC-SHA256 under the fleet-auth session pepper — a privileged reader
+ * of authorization_audit_events cannot confirm a candidate identifier without the
+ * pepper. `v1` namespaces the keyed scheme away from the retired unkeyed digests
+ * (psfn-framework-5wrp).
+ */
+export const FLEET_AUTH_HUB_DEVICE_ASSERTION_DIGEST_DOMAIN =
+  'fleet-authorization:hub-device-assertion-digest:v1\0';
+
+function createHubDeviceAuditDigest(sessionPepper: string): (value: string) => string {
+  if (sessionPepper.length < 32) {
+    throw new Error('Hub device assertion audit requires the configured session pepper');
+  }
+  return (value: string): string => createHmac('sha256', sessionPepper)
+    .update(FLEET_AUTH_HUB_DEVICE_ASSERTION_DIGEST_DOMAIN)
+    .update(value, 'utf8')
+    .digest('hex');
 }
 
 interface ParsedVerifierConfig extends Omit<HubDeviceAssertionVerifierConfig, 'keys'> {

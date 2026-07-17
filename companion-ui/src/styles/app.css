@@ -260,6 +260,11 @@ button:focus-visible {
   left: max(1rem, env(safe-area-inset-left));
 }
 
+.wishlist-button {
+  left: calc(max(1rem, env(safe-area-inset-left)) + 58px);
+  color: var(--color-gold-deep);
+}
+
 .settings-button {
   right: max(1rem, env(safe-area-inset-right));
 }
@@ -1073,6 +1078,15 @@ button:focus-visible {
   min-height: 0;
   overflow: auto;
   padding: 0.85rem 1rem max(1rem, env(safe-area-inset-bottom));
+}
+
+.wishlist-review-actions {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.wishlist-review-actions button {
+  justify-content: flex-start;
 }
 
 .settings-section {

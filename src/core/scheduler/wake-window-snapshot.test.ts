@@ -105,6 +105,29 @@ function userEntries(timestamps: number[]): SessionEntry[] {
   }));
 }
 
+// Channel-aware port: per-channel recent entries plus a listRecentlyActiveChannels
+// enumeration surface, so the resolver can build a cross-channel projection.
+function multiChannelSessionManager(input: {
+  latestId: string;
+  entriesByChannel: Record<string, SessionEntry[]>;
+  activeChannels?: StartupSessionMetadata[];
+}): TemporalWakeupSessionManagerPort {
+  const latest: StartupSessionMetadata = {
+    sessionId: input.latestId,
+    channelType: 'api',
+  } as StartupSessionMetadata;
+  const port: TemporalWakeupSessionManagerPort = {
+    resolveStartupSessionMetadata: () => latest,
+    getRecentMessages: (channelId: string) => input.entriesByChannel[channelId] ?? [],
+    getRecentSessionEntries: (channelId: string) => input.entriesByChannel[channelId] ?? [],
+    appendContextSystemNote: () => {},
+  };
+  if (input.activeChannels) {
+    port.listRecentlyActiveChannels = () => input.activeChannels!;
+  }
+  return port;
+}
+
 describe('resolveMorningWakeSnapshot', () => {
   it('habit mode reads partner timestamps from the active session', () => {
     const port = stubSessionManager(userEntries(regularSleeperTimestamps(20, 7)));
@@ -127,6 +150,51 @@ describe('resolveMorningWakeSnapshot', () => {
     });
     expect(snapshot.source).toBe('fixed');
     expect(snapshot.effective.localTime).toBe('08:00');
+  });
+
+  // psfn-framework-7grh: the estimator must see partner activity across every
+  // recently-active channel, not just the single latest-active session tail.
+  describe('cross-channel habit projection (psfn-framework-7grh)', () => {
+    const CHANNEL_A = 'api:pwa-quiet'; // latest-active but sparse
+    const CHANNEL_B = 'discord:partner'; // months of regular history
+
+    // Two recent days only — below minSampleDays on its own.
+    const sparseLatest = (): SessionEntry[] => userEntries([dayAt(19, 9), dayAt(20, 9)]);
+
+    it('falls back when only the sparse latest channel is scanned (no enumeration)', () => {
+      const port = stubSessionManager(sparseLatest());
+      const snapshot = resolveMorningWakeSnapshot({
+        sessionManager: port,
+        morning: morning({ timing: 'habit' }),
+        nowMs: dayAt(21, 12),
+      });
+      // Reproduces the live habit_fallback: one low-traffic channel, no gaps.
+      expect(snapshot.source).toBe('habit_fallback');
+    });
+
+    it('returns a habit estimate by aggregating partner timestamps across channels', () => {
+      const port = multiChannelSessionManager({
+        latestId: CHANNEL_A,
+        entriesByChannel: {
+          [CHANNEL_A]: sparseLatest(),
+          [CHANNEL_B]: userEntries(regularSleeperTimestamps(20, 7)),
+        },
+        activeChannels: [
+          { sessionId: CHANNEL_B, channelType: 'discord' } as StartupSessionMetadata,
+          { sessionId: CHANNEL_A, channelType: 'api' } as StartupSessionMetadata,
+        ],
+      });
+      const snapshot = resolveMorningWakeSnapshot({
+        sessionManager: port,
+        morning: morning({ timing: 'habit' }),
+        nowMs: dayAt(20, 12),
+      });
+      expect(snapshot.source).toBe('habit');
+      expect(snapshot.window).toBeDefined();
+      expect(snapshot.sampleDays).toBeGreaterThanOrEqual(
+        DEFAULT_TEMPORAL_WAKEUP_CONFIG.morningWake.habit.minSampleDays,
+      );
+    });
   });
 
   it('habit mode ignores assistant/system entries (partner-only)', () => {

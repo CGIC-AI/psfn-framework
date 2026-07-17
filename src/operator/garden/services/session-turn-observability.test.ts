@@ -78,6 +78,8 @@ function minimalRecord(turnId: string, channelId: string): AdminSessionTurnData[
     userMessage: { role: 'user', content: 'hello' },
     toolCalls: [],
     extractedMemoryIds: [],
+    concernDeltaRefs: [],
+    contactDeltaRefs: [],
   } as unknown as AdminSessionTurnData['record'];
 }
 

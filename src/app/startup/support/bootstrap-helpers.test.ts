@@ -1181,6 +1181,21 @@ describe('hydrateCanonicalStartupConfig', () => {
         ...loadSchedulerSeedDefaults().backgroundMaintenance,
         intervalMs: 123_000,
       },
+      backgroundWork: {
+        supervisor: {
+          maxConcurrentSessions: 3,
+          leaseDurationMs: 45_000,
+          retryBaseDelayMs: 2_000,
+          retryMaxDelayMs: 60_000,
+          shutdownTimeoutMs: 4_000,
+          terminalRetentionMs: 90_000,
+          cleanupIntervalMs: 30_000,
+        },
+        postTurn: {
+          extractionDrainRequeueDelayMs: 1_500,
+          foregroundPreemptionDeferDelayMs: 2_500,
+        },
+      },
     });
     saveChargePolicyConfig(companionDataDir, {
       schemaVersion: 1,
@@ -1261,6 +1276,23 @@ describe('hydrateCanonicalStartupConfig', () => {
     expect(config.modelCatalog.chatslot.model).toBe('openai/gpt-4.1-mini');
     expect(config.modelRoster.chat?.contextWindow).toBe(65_536);
     expect(result.schedulerConfig.backgroundMaintenance.intervalMs).toBe(123_000);
+    expect(result.schedulerConfig.backgroundMaintenance.sharedWorldWikiCaretaker)
+      .toEqual({ batchSize: 25 });
+    expect(result.schedulerConfig.backgroundWork).toEqual({
+      supervisor: {
+        maxConcurrentSessions: 3,
+        leaseDurationMs: 45_000,
+        retryBaseDelayMs: 2_000,
+        retryMaxDelayMs: 60_000,
+        shutdownTimeoutMs: 4_000,
+        terminalRetentionMs: 90_000,
+        cleanupIntervalMs: 30_000,
+      },
+      postTurn: {
+        extractionDrainRequeueDelayMs: 1_500,
+        foregroundPreemptionDeferDelayMs: 2_500,
+      },
+    });
     expect(config.maintenanceIntervalMs).toBe(300_000);
     expect(config.providerRegistry?.providers.length).toBeGreaterThan(0);
     expect(config.litellmBaseUrl).toBeUndefined();

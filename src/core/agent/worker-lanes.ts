@@ -4,6 +4,14 @@ import type {
   ObservabilityCallType,
   ModelPurpose,
 } from '../../shared/contracts/runtime.js';
+import {
+  RUNTIME_LANE_CLASSES,
+  type BackgroundContinuationRuntimeClass,
+  type ForegroundChatRuntimeClass,
+  type MaintenanceReflectionRuntimeClass,
+  type PostTurnAppraisalRuntimeClass,
+  type RuntimeLaneClass,
+} from '../../shared/contracts/runtime-lanes.js';
 
 /**
  * Worker lanes are semantic runtime roles, not implementation shortcuts.
@@ -46,18 +54,6 @@ export const SUBCONSCIOUS_WORKER_PROFILE_CLASS: SubconsciousWorkerProfileClass =
  * - worker lanes classify dedicated worker identities like subagents/whisper
  * - runtime classes classify foreground and background cognition across the main runtime
  */
-export const RUNTIME_LANE_CLASSES = {
-  foregroundChat: 'foreground_chat',
-  postTurnAppraisal: 'post_turn_appraisal',
-  backgroundContinuation: 'background_continuation',
-  maintenanceReflection: 'maintenance_reflection',
-} as const;
-
-export type RuntimeLaneClass = typeof RUNTIME_LANE_CLASSES[keyof typeof RUNTIME_LANE_CLASSES];
-export type ForegroundChatRuntimeClass = typeof RUNTIME_LANE_CLASSES.foregroundChat;
-export type PostTurnAppraisalRuntimeClass = typeof RUNTIME_LANE_CLASSES.postTurnAppraisal;
-export type BackgroundContinuationRuntimeClass = typeof RUNTIME_LANE_CLASSES.backgroundContinuation;
-export type MaintenanceReflectionRuntimeClass = typeof RUNTIME_LANE_CLASSES.maintenanceReflection;
 export type ModelCallRuntimePurpose = CompletionPurpose | ModelPurpose | 'chat';
 
 export const FOREGROUND_CHAT_RUNTIME_CLASS: ForegroundChatRuntimeClass = RUNTIME_LANE_CLASSES.foregroundChat;

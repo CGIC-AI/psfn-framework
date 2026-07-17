@@ -40,6 +40,7 @@ export function buildAdminSatelliteRegistryView(
       displayName: satellite.displayName,
       mobility: satellite.mobility,
       ...(satellite.staticLocationLabel ? { staticLocationLabel: satellite.staticLocationLabel } : {}),
+      ...(satellite.companionId ? { companionId: satellite.companionId } : {}),
       endpoints: satellite.endpoints.map(endpoint => ({
         endpointId: endpoint.endpointId,
         displayName: endpoint.displayName,

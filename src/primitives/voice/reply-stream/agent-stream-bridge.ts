@@ -54,7 +54,7 @@ export interface AgentReplyStreamBridgeOptions {
   readonly turnId: string;
   readonly cancellationId: string;
   readonly gate: ContentGateConfig;
-  readonly segmenter?: Partial<SegmenterConfig>;
+  readonly segmenter: SegmenterConfig;
   /** Telemetry-only raw deltas — NEVER speakable (Law 18). */
   readonly onProvisionalDelta?: (delta: string) => void;
 }
@@ -140,7 +140,7 @@ export function createAgentReplyStreamBridge(
 ): AgentReplyStreamBridge {
   const queue = new SegmentQueue();
   const stream = createVoiceReplyStream({
-    ...(options.segmenter ? { segmenter: options.segmenter } : {}),
+    segmenter: options.segmenter,
     gate: options.gate,
     reconcileFinalContent: false,
     ...(options.onProvisionalDelta ? { onProvisionalDelta: options.onProvisionalDelta } : {}),

@@ -179,6 +179,7 @@ export function buildAdminRoutes(deps: AdminRouteDependencies): AdminRoute[] {
       shardFoldReviewService: deps.services.shards,
       adaptiveToolsService: deps.services.adaptiveTools,
       wikiService: deps.services.wiki,
+      wishlistService: deps.services.wishlist,
       episodicMemoryService: deps.services.episodicMemory,
       groupMemoryService: deps.services.groupMemory,
       memoryService: deps.services.memory,

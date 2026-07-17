@@ -8,8 +8,8 @@ import type {
   LLMProviderPort,
   LLMProviderStreamOptions,
   LLMProviderCompletionOptions,
-  EmbeddingProviderPort,
 } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { toWorkSpecWireParams } from '../../primitives/llm/work-spec-wire.js';
 import { CHANNEL_TYPES } from '../../shared/contracts/runtime.js';
 import type { Attachment, CompletionPurpose, CorrelationMetadata, LLMContext, LLMModelHint, LLMResponse, ModelBudgetBlockedEvent, StreamCallbacks, SubstrateMessage } from '../../shared/contracts/runtime.js';
@@ -649,7 +649,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
         ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
         ...(context.tools?.length ? { tools: context.tools } : {}),
         ...(context.accounting ? { accounting: context.accounting } : {}),
-        // psfn-framework-d8vq.2: carry the declared work spec (minus its
+        // d8vq.2: carry the declared work spec (minus its
         // correlation, which rides the flat correlation params) so the
         // gateway-side LLMClient enforces the accountability guard + lane
         // reconciliation on an autonomous streamed call.
@@ -759,7 +759,7 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       ...(modelHint?.frequencyPenalty !== undefined ? { frequencyPenalty: modelHint.frequencyPenalty } : {}),
       ...(modelHint?.repetitionPenalty !== undefined ? { repetitionPenalty: modelHint.repetitionPenalty } : {}),
       ...(context.accounting ? { accounting: context.accounting } : {}),
-      // psfn-framework-d8vq.2: carry the declared work spec (minus its
+      // d8vq.2: carry the declared work spec (minus its
       // correlation, which rides the flat correlation params) so the
       // gateway-side LLMClient enforces the fail-closed accountability guard +
       // lane reconciliation for an autonomous completion.

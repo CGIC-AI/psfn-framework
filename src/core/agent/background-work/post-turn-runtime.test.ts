@@ -21,6 +21,7 @@ import { MemoryExtractor as RealMemoryExtractor } from '../../../faculties/memor
 import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
 import { ModelCallPreemptedError } from '../../../primitives/llm/model-call-gate.js';
 import { executePostTurnBackgroundWork } from './post-turn-runtime.js';
+import type { BackgroundWorkPostTurnTuning } from './config.js';
 import {
   BackgroundWorkDeferredError,
   BackgroundWorkPermanentError,
@@ -36,6 +37,10 @@ import {
 } from './types.js';
 
 const TURN_ID = '019d2326-d9e1-701d-bcee-250d2cbb0e4e';
+const TEST_POST_TURN_TUNING: BackgroundWorkPostTurnTuning = {
+  extractionDrainRequeueDelayMs: 1_000,
+  foregroundPreemptionDeferDelayMs: 1_000,
+};
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolve!: () => void;
@@ -74,9 +79,10 @@ function makeExecution(record: TurnRecord): {
     assertOwned: () => Promise<void>;
     run: (
       effectKey: string,
-      operation: (assertOwned: () => Promise<void>) => Promise<void>,
+      operation: (assertOwned: () => Promise<void>) => Promise<readonly string[] | void>,
     ) => Promise<void>;
   };
+  committedOutputRefs: string[];
   signal: AbortSignal;
 } {
   const payload: MemoryExtractionBackgroundPayload = {
@@ -97,12 +103,17 @@ function makeExecution(record: TurnRecord): {
     placeId: 'living-room',
   };
   const assertOwned = vi.fn(async () => undefined);
+  const committedOutputRefs: string[] = [];
   return {
     payload,
     effects: {
       assertOwned,
-      run: vi.fn(async (_effectKey, operation) => operation(assertOwned)),
+      run: vi.fn(async (_effectKey, operation) => {
+        const refs = await operation(assertOwned);
+        committedOutputRefs.push(...(refs ?? []));
+      }),
     },
+    committedOutputRefs,
     signal: new AbortController().signal,
     job: {
       jobId: 'background-job-1',
@@ -213,6 +224,7 @@ function makeDependencies(input: {
   recentEntries?: SessionEntry[];
   liveRecentEntries?: SessionEntry[];
   boundedSnapshotLimit?: number;
+  tuning?: BackgroundWorkPostTurnTuning;
 }) {
   const findSourceRecordedTurn = vi.fn(() => input.record);
   const isSourceRecordedTurnEligible = vi.fn(() => true);
@@ -262,6 +274,7 @@ function makeDependencies(input: {
       runIntentionPostTurnHooks,
       emotionRuntime: { triggerEmotionAppraisal },
       getEmotionTemplateVariables: () => ({ personality: 'current canonical personality' }),
+      tuning: input.tuning ?? TEST_POST_TURN_TUNING,
       now: () => input.now ?? 100,
     },
     findSourceRecordedTurn,
@@ -280,6 +293,35 @@ function makeDependencies(input: {
 }
 
 describe('executePostTurnBackgroundWork', () => {
+  it('projects actual durable extraction targets as canonical typed refs', async () => {
+    const record = makeTurnRecord();
+    const execution = makeExecution(record);
+    const recentEntries: SessionEntry[] = [{
+      id: 2,
+      channelId: record.sessionId!,
+      role: 'assistant',
+      content: record.assistantMessage!.content,
+      timestamp: record.completedAt,
+    }];
+    const fixture = makeDependencies({
+      record,
+      recentEntries,
+      maybeExtract: vi.fn(async () => ({
+        memoryIds: ['memory-1'],
+        concernIds: ['concern-1'],
+        contactIds: ['contact-1'],
+      })),
+    });
+
+    await executePostTurnBackgroundWork(execution, fixture.dependencies);
+
+    expect(execution.committedOutputRefs).toEqual([
+      'loom-output:v1:memory:bWVtb3J5LTE',
+      'loom-output:v1:concern:Y29uY2Vybi0x',
+      'loom-output:v1:contact:Y29udGFjdC0x',
+    ]);
+  });
+
   it('runs memory extraction from the exact rechecked cross-turn snapshot', async () => {
     const record = makeTurnRecord();
     const execution = makeExecution(record);
@@ -628,7 +670,14 @@ describe('executePostTurnBackgroundWork', () => {
         }),
       },
     ];
-    const fixture = makeDependencies({ record, recentEntries: sourceEntries });
+    const fixture = makeDependencies({
+      record,
+      recentEntries: sourceEntries,
+      tuning: {
+        ...TEST_POST_TURN_TUNING,
+        extractionDrainRequeueDelayMs: 1_234,
+      },
+    });
     const groupStarted = deferred();
     const releaseGroup = deferred();
     const complete = vi.fn(async () => {
@@ -701,6 +750,7 @@ describe('executePostTurnBackgroundWork', () => {
       expect.objectContaining<Partial<BackgroundWorkDeferredError>>({
         name: 'BackgroundWorkDeferredError',
         reasonCode: 'source_not_ready',
+        delayMs: 1_234,
       }),
     );
     // B never ran its own extraction LLM (threw before the boundary crossing).
@@ -1249,6 +1299,7 @@ describe('executePostTurnBackgroundWork', () => {
         runIntentionPostTurnHooks: vi.fn(async () => undefined),
         emotionRuntime: { triggerEmotionAppraisal },
         getEmotionTemplateVariables: () => ({ personality: 'canonical personality' }),
+        tuning: TEST_POST_TURN_TUNING,
       };
 
       await executePostTurnBackgroundWork({
@@ -1260,7 +1311,10 @@ describe('executePostTurnBackgroundWork', () => {
       // maybeExtract receives, after recentEntries: a non-crossing pre-write
       // fence and (mmo9.7.4) a trailing welfare options object, so the bounded
       // snapshot is the third-to-last argument.
-      const memoryEntries = maybeExtract.mock.calls[0]?.at(-3) as SessionEntry[];
+      const memoryEntries = maybeExtract.mock.calls[0]?.at(-3);
+      if (!Array.isArray(memoryEntries)) {
+        throw new Error('Memory extraction did not receive a bounded session snapshot');
+      }
 
       const emotionPayload: EmotionAppraisalBackgroundPayload = {
         schemaVersion: 1,
@@ -1367,7 +1421,15 @@ describe('executePostTurnBackgroundWork', () => {
       'foreground_chat',
     );
     const maybeExtract = vi.fn(async () => { throw preempted; });
-    const { dependencies } = makeDependencies({ record, recentEntries, maybeExtract });
+    const { dependencies } = makeDependencies({
+      record,
+      recentEntries,
+      maybeExtract,
+      tuning: {
+        ...TEST_POST_TURN_TUNING,
+        foregroundPreemptionDeferDelayMs: 2_345,
+      },
+    });
 
     const error = await executePostTurnBackgroundWork(execution, dependencies)
       .then(() => null)
@@ -1375,6 +1437,10 @@ describe('executePostTurnBackgroundWork', () => {
 
     expect(maybeExtract).toHaveBeenCalledTimes(1);
     expect(error).toBeInstanceOf(BackgroundWorkDeferredError);
-    expect((error as BackgroundWorkDeferredError).reasonCode).toBe('foreground_active');
+    if (!(error instanceof BackgroundWorkDeferredError)) {
+      throw new Error('Expected foreground preemption to defer background work');
+    }
+    expect(error.reasonCode).toBe('foreground_active');
+    expect(error.delayMs).toBe(2_345);
   });
 });

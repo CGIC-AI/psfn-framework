@@ -157,7 +157,7 @@ export interface RunPostRolloutValidationOptions {
    */
   toolValidationFailureThreshold?: number;
   /** Max sanitized log records copied into the verdict record for rollback debugging. */
-  maxLogRecords?: number;
+  maxLogRecords: number;
 }
 
 export interface PostRolloutValidationLogContext {
@@ -200,8 +200,6 @@ export class PostRolloutValidationError extends Error {
     this.name = 'PostRolloutValidationError';
   }
 }
-
-const DEFAULT_MAX_LOG_RECORDS = 10;
 
 function assertValidPlan(plan: PostRolloutValidationPlan): void {
   if (!isKubeDnsLabel(plan.namespace) || !isKubeDnsLabel(plan.release)) {
@@ -499,7 +497,7 @@ export async function runPostRolloutValidation(
 
   const { runner } = options;
   const threshold = Math.max(1, Math.floor(options.toolValidationFailureThreshold ?? 1));
-  const maxLogRecords = Math.max(0, Math.floor(options.maxLogRecords ?? DEFAULT_MAX_LOG_RECORDS));
+  const maxLogRecords = Math.max(0, Math.floor(options.maxLogRecords));
 
   const liveSpecs: CheckSpec[] = [
     { id: 'rollout_status', run: ctx => runner.checkRolloutStatus(ctx) },

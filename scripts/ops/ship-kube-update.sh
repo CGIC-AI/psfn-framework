@@ -184,6 +184,23 @@ if [[ ${#SELECTED[@]} -gt 0 && ${#SELECTED[@]} -lt 3 ]]; then
   echo "==> contract-skew guard (selective rollout requested)"
   for c in agent gateway garden; do
     if [[ ! " ${SELECTED[*]} " == *" $c "* ]]; then
+      # Probe reachability first so an exec/readiness failure (pod restarting or
+      # mid crash-loop) is never conflated with a genuinely pre-hash image. Only
+      # a reachable pod that truly lacks the file is the real pre-hash case this
+      # guard is about; a failed exec must fail closed on its own error, not fall
+      # through to a bogus "pre-hash" verdict that forces a full-stack rebuild.
+      REACHABLE=0
+      for attempt in 1 2 3; do
+        if rkubectl exec "deploy/psfn-${c}" -- true >/dev/null 2>&1; then
+          REACHABLE=1
+          break
+        fi
+        sleep $((attempt * 5))
+      done
+      if [[ $REACHABLE -ne 1 ]]; then
+        echo "FAIL: cannot reach live psfn-${c} to read its contract hash: exec failed after 3 attempts (pod not ready / restarting). Resolve pod readiness and retry — a failed exec is NOT proof of a pre-hash image." >&2
+        exit 1
+      fi
       LIVE_HASH="$(rkubectl exec "deploy/psfn-${c}" -- cat /app/contract-hash.txt 2>/dev/null | tr -d '[:space:]' || true)"
       if [[ -z "$LIVE_HASH" ]]; then
         echo "FAIL: live psfn-${c} carries no contract hash (pre-hash image); first selective ship requires --components all" >&2
@@ -280,7 +297,23 @@ echo "==> refreshing companion self-management copies (repo checkout + beads)"
 if [[ -n "$SOURCE_CHECKOUT" ]] && remote "test -d ${SOURCE_CHECKOUT}/.git" 2>/dev/null; then
   git bundle create "$BUILD_DIR/repo.bundle" HEAD >/dev/null 2>&1
   scp "$BUILD_DIR/repo.bundle" "${HOST_ALIAS}:/tmp/psfn-repo-refresh.bundle"
-  remote "sudo git -C ${SOURCE_CHECKOUT} fetch /tmp/psfn-repo-refresh.bundle HEAD 2>/dev/null     && sudo git -C ${SOURCE_CHECKOUT} reset --hard FETCH_HEAD >/dev/null     && sudo chown -R 999:999 ${SOURCE_CHECKOUT} && rm -f /tmp/psfn-repo-refresh.bundle"     && echo "    source checkout refreshed to $(git rev-parse --short=8 HEAD)"     || echo "    WARNING: source checkout refresh failed (non-fatal)"
+  # Fail-closed, non-destructive refresh: the checkout is uid/gid 999-owned, so
+  # trust it inline (-c safe.directory=...) rather than writing global Git state.
+  # Fast-forward only — no 'reset --hard' — and refuse to move the branch when
+  # tracked files are dirty or history has diverged, so preserved untracked
+  # content (e.g. vendor/emosim) and local work are never discarded. The temp
+  # bundle is removed on every path via an EXIT trap.
+  remote "set -e
+    BUNDLE=/tmp/psfn-repo-refresh.bundle
+    trap 'rm -f \$BUNDLE' EXIT
+    GIT='sudo git -C ${SOURCE_CHECKOUT} -c safe.directory=${SOURCE_CHECKOUT}'
+    \$GIT fetch \$BUNDLE HEAD
+    if [ -n \"\$(\$GIT status --porcelain --untracked-files=no)\" ]; then
+      echo 'refusing to refresh: tracked changes present in checkout' >&2
+      exit 3
+    fi
+    \$GIT merge --ff-only FETCH_HEAD
+    sudo chown -R 999:999 ${SOURCE_CHECKOUT}"     && echo "    source checkout refreshed to $(git rev-parse --short=8 HEAD)"     || echo "    WARNING: source checkout refresh skipped — not fast-forwardable or has dirty tracked files; branch left unmoved and untracked content preserved. Reconcile manually (git -c safe.directory=${SOURCE_CHECKOUT} fetch + git merge --ff-only)."
 else
   echo "    no source checkout on host; skipping repo refresh"
 fi

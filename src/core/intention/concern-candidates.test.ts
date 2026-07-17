@@ -8,6 +8,7 @@ import {
   ConcernCandidateWorker,
   applyConcernCandidateReview,
   buildConcernCandidateReviewPrompt,
+  createAutomatedConcernRuntime,
   deriveConcernCandidatesFromExtraction,
   type ConcernCandidate,
 } from './concern-candidates.js';
@@ -70,6 +71,243 @@ const distinctConcernTexts = [
 ];
 
 describe('automated concern candidates', () => {
+  it('persists extracted candidates before returning resolvable output ids', async () => {
+    const concernStore = makeConcernStore();
+    const runtime = await createAutomatedConcernRuntime({
+      eventBus: new EventBus(),
+      llmProvider: { complete: vi.fn() } as unknown as LLMProviderPort,
+      concernStore,
+      now: () => new Date('2026-06-29T12:00:00.000Z'),
+    });
+
+    const ids = await runtime.extractionSink({
+      channelId: 'discord:group-1',
+      triggerReason: 'response_turn',
+      canonicalContactId: 'contact-a',
+      turnId: 'turn-durable',
+      sourceRef: 'source:durable',
+      recentEntries: [{
+        id: 10,
+        channelId: 'discord:group-1',
+        role: 'user',
+        content: 'Please check in tomorrow about the appointment.',
+        timestamp: 100,
+      }],
+      acceptedFacts: [{
+        text: 'Check in tomorrow about the appointment.',
+        type: 'semantic',
+        importance: 0.9,
+        emotionalValence: 0,
+        confidence: 0.9,
+        tags: [],
+      }],
+      acceptedWrites: [],
+      relatedMemories: [{
+        id: 'memory-durable-context',
+        type: 'semantic',
+        text: 'The appointment is scheduled for tomorrow morning.',
+        importance: 0.8,
+        confidence: 0.9,
+        salience: 0.7,
+        sourceRef: 'memory:durable-context',
+      }],
+    });
+
+    expect(ids).toEqual(['concern-1']);
+    await expect(concernStore.getById('concern-1')).resolves.toMatchObject({
+      id: 'concern-1',
+      status: 'candidate',
+      evidenceRefs: expect.arrayContaining([{ kind: 'turn', ref: 'turn-durable' }]),
+    });
+    await expect(concernStore.getActiveConcerns()).resolves.toEqual([]);
+    const [beforeRestart] = runtime.queue.drainPending();
+    expect(beforeRestart).toBeDefined();
+    runtime.queue.requeue([beforeRestart!]);
+    expect(await runtime.extractionSink({
+      channelId: 'discord:group-1',
+      triggerReason: 'response_turn',
+      canonicalContactId: 'contact-a',
+      turnId: 'turn-durable',
+      sourceRef: 'source:durable',
+      recentEntries: [{
+        id: 10,
+        channelId: 'discord:group-1',
+        role: 'user',
+        content: 'Please check in tomorrow about the appointment.',
+        timestamp: 100,
+      }],
+      acceptedFacts: [{
+        text: 'Check in tomorrow about the appointment.',
+        type: 'semantic',
+        importance: 0.9,
+        emotionalValence: 0,
+        confidence: 0.9,
+        tags: [],
+      }],
+      acceptedWrites: [],
+      relatedMemories: [{
+        id: 'memory-durable-context',
+        type: 'semantic',
+        text: 'The appointment is scheduled for tomorrow morning.',
+        importance: 0.8,
+        confidence: 0.9,
+        salience: 0.7,
+        sourceRef: 'memory:durable-context',
+      }],
+    })).toEqual(['concern-1']);
+    expect(runtime.queue.pendingCount()).toBe(1);
+    runtime.dispose();
+
+    const recoveredRuntime = await createAutomatedConcernRuntime({
+      eventBus: new EventBus(),
+      llmProvider: { complete: vi.fn() } as unknown as LLMProviderPort,
+      concernStore,
+      now: () => new Date('2026-06-29T12:01:00.000Z'),
+    });
+    const [candidate] = recoveredRuntime.queue.drainPending();
+    expect(candidate).toMatchObject({ id: 'concern-1', durableConcernId: 'concern-1' });
+    expect(buildConcernCandidateReviewPrompt([candidate!]))
+      .toBe(buildConcernCandidateReviewPrompt([beforeRestart!]));
+    await expect(applyConcernCandidateReview({
+      concernStore,
+      candidates: [candidate!],
+      decisions: [{
+        candidateId: candidate!.id,
+        action: 'create',
+        reason: 'keep the durable candidate',
+      }],
+    })).resolves.toEqual([expect.objectContaining({
+      concernId: 'concern-1',
+      status: 'created',
+    })]);
+    await expect(concernStore.getById('concern-1')).resolves.toMatchObject({ status: 'active' });
+    recoveredRuntime.dispose();
+  });
+
+  it('persists a review candidate without consuming the active concern cap', async () => {
+    const concernStore = makeConcernStore();
+    for (const text of distinctConcernTexts) {
+      await concernStore.create({ text, priority: 'low' });
+    }
+    const runtime = await createAutomatedConcernRuntime({
+      eventBus: new EventBus(),
+      llmProvider: { complete: vi.fn() } as unknown as LLMProviderPort,
+      concernStore,
+      now: () => new Date('2026-06-29T12:00:00.000Z'),
+    });
+
+    await expect(runtime.extractionSink({
+      channelId: 'discord:group-1',
+      triggerReason: 'response_turn',
+      turnId: 'turn-over-cap',
+      sourceRef: 'discord:group-1:extract|turn:turn-over-cap',
+      recentEntries: [{
+        id: 77,
+        channelId: 'discord:group-1',
+        role: 'user',
+        content: 'Please remind me tomorrow to replace the furnace filter.',
+        timestamp: 100,
+      }],
+      acceptedFacts: [{
+        text: 'Remind the user tomorrow to replace the furnace filter.',
+        type: 'semantic',
+        importance: 0.9,
+        emotionalValence: 0,
+        confidence: 0.9,
+        tags: [],
+      }],
+      acceptedWrites: [],
+      relatedMemories: [],
+    })).resolves.toEqual(['concern-8']);
+    await expect(concernStore.getActiveConcerns()).resolves.toHaveLength(7);
+    await expect(concernStore.getById('concern-8')).resolves.toMatchObject({ status: 'candidate' });
+    runtime.dispose();
+  });
+
+  it('keeps unreviewed candidate evidence isolated from a similar active concern', async () => {
+    const concernStore = makeConcernStore();
+    const active = await concernStore.create({
+      text: 'Check in tomorrow about the appointment.',
+      priority: 'low',
+      status: 'active',
+      evidenceRefs: [{ kind: 'operator', ref: 'approved-active-evidence' }],
+    });
+    const runtime = await createAutomatedConcernRuntime({
+      eventBus: new EventBus(),
+      llmProvider: { complete: vi.fn() } as unknown as LLMProviderPort,
+      concernStore,
+      now: () => new Date('2026-06-29T12:00:00.000Z'),
+    });
+
+    const ids = await runtime.extractionSink({
+      channelId: 'discord:group-1',
+      triggerReason: 'response_turn',
+      turnId: 'turn-isolated-candidate',
+      sourceRef: 'source:isolated-candidate',
+      recentEntries: [{
+        id: 12,
+        channelId: 'discord:group-1',
+        role: 'user',
+        content: 'Please check in tomorrow about the appointment.',
+        timestamp: 100,
+      }],
+      acceptedFacts: [{
+        text: 'Check in tomorrow about the appointment.',
+        type: 'semantic',
+        importance: 0.9,
+        emotionalValence: 0,
+        confidence: 0.9,
+        tags: [],
+      }],
+      acceptedWrites: [],
+      relatedMemories: [],
+    });
+
+    expect(ids).toEqual(['concern-2']);
+    await expect(concernStore.getById('concern-2')).resolves.toMatchObject({ status: 'candidate' });
+    await expect(concernStore.getById(active.id)).resolves.toMatchObject({
+      priority: 'low',
+      evidenceRefs: [{ kind: 'operator', ref: 'approved-active-evidence' }],
+    });
+    runtime.dispose();
+  });
+
+  it('rehydrates every durable candidate beyond one storage page', async () => {
+    const concernStore = makeConcernStore();
+    for (let index = 0; index < 201; index += 1) {
+      const text = `Follow up uniqueword${index}`;
+      await concernStore.create({
+        text,
+        status: 'candidate',
+        priority: index % 2 === 0 ? 'high' : 'medium',
+        evidenceRefs: [{ kind: 'runtime', ref: `candidate-page:${index}` }],
+        candidateReviewSnapshot: {
+          schemaVersion: 1,
+          title: text,
+          summary: text,
+          followUpHint: 'possible_follow_up',
+          channelId: 'api:candidate-page',
+          triggerReason: 'response_turn',
+          sourceRef: `source:candidate-page:${index}`,
+          sourceMessageIds: [index + 1],
+          conversationContext: [],
+          relatedMemoryContext: [],
+          turnId: `turn-candidate-page-${index}`,
+        },
+      });
+    }
+
+    const runtime = await createAutomatedConcernRuntime({
+      eventBus: new EventBus(),
+      llmProvider: { complete: vi.fn() } as unknown as LLMProviderPort,
+      concernStore,
+      now: () => new Date('2026-06-29T12:00:00.000Z'),
+    });
+
+    expect(runtime.queue.pendingCount()).toBe(201);
+    runtime.dispose();
+  });
+
   it('derives structured candidates from extraction with provenance and related context', () => {
     const candidates = deriveConcernCandidatesFromExtraction({
       now: () => new Date('2026-06-29T12:00:00.000Z'),
@@ -249,6 +487,16 @@ describe('automated concern candidates', () => {
 
   it('blocks candidate approval before creating an eighth active concern', async () => {
     const concernStore = makeConcernStore();
+    await concernStore.create({
+      text: 'Follow up highprioritycandidatealpha',
+      priority: 'high',
+      status: 'candidate',
+    });
+    await concernStore.create({
+      text: 'Follow up highprioritycandidatebeta',
+      priority: 'high',
+      status: 'candidate',
+    });
     for (const [i, text] of distinctConcernTexts.entries()) {
       await concernStore.create({
         text,

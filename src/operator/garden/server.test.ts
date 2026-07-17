@@ -775,6 +775,12 @@ describe('AdminServer Garden routing', () => {
 
       const reconciliationRes = await request(harness.port, 'GET', '/api/admin/charge-costs');
       expect(reconciliationRes.status).toBe(401);
+      const caretakerProposalRes = await request(
+        harness.port,
+        'GET',
+        '/api/admin/wiki/shared-world-proposals',
+      );
+      expect(caretakerProposalRes.status).toBe(401);
       const authorizedReconciliation = await request(
         harness.port,
         'GET',
@@ -783,6 +789,14 @@ describe('AdminServer Garden routing', () => {
         bearerHeaders,
       );
       expect(authorizedReconciliation.status).toBe(503);
+      const authorizedCaretakerProposal = await request(
+        harness.port,
+        'GET',
+        '/api/admin/wiki/shared-world-proposals',
+        undefined,
+        bearerHeaders,
+      );
+      expect(authorizedCaretakerProposal.status).toBe(503);
     });
 
     it('keeps login page reachable and sets auth cookie on successful login', async () => {

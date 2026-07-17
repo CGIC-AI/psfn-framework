@@ -1,4 +1,4 @@
-import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import { join } from 'node:path';
 import type { ContactStorePort } from '../../core/contacts/contact-store-port.js';
 import type { PendingContactApprovalStore } from '../../core/contacts/pending-contact-approvals.js';
@@ -125,6 +125,8 @@ import { createDriftReviewCardStore } from '../../core/cogsec/drift/drift-review
 import { CogSecEventStore } from '../../core/cogsec/events.js';
 import { AdminShardFoldReviewDataService } from './services/shard-fold-review-service.js';
 import { AdminWikiDataService } from './services/wiki-service.js';
+import { AdminWishlistDataService } from './services/wishlist-service.js';
+import type { AdminWishlistBeadCreatePort } from './services/types.js';
 import type { AdminToolHealthProvider } from './tool-health-provider.js';
 import type { GatewayCredentialPresenceResult } from '../../boundary/gateway/protocol.js';
 import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-store-ports.js';
@@ -133,6 +135,7 @@ import type { IcpAdminProjectionStore } from '../../persistence/postgres/icp-adm
 import { AdminIcpAutonomyDataService } from './services/icp-autonomy-service.js';
 import { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import { requireAuditOpaqueIdKeyring } from './audit-opaque-id-keyring.js';
+import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 
 export interface InProcessGardenAdminContractOptions {
   env?: NodeJS.ProcessEnv;
@@ -142,6 +145,13 @@ export interface InProcessGardenAdminContractOptions {
   memoryStore: MemoryStorePort;
   /** Fixed legacy-mode scope; fleet requests always use signed request context. */
   legacyMemorySubjectAccessContext?: Readonly<MemorySubjectAccessContext>;
+  subsystemOutputRefStore?: Pick<BackgroundWorkStorePort, 'getSubsystemOutputProjection'> | null;
+  /**
+   * Resolve the trusted subject scope for Garden memory access. The resolver
+   * must be bound by authenticated runtime authority, never request payloads.
+   * Absence intentionally leaves the Garden memory surface fail closed.
+   */
+  resolveMemorySubjectAccessContext?: () => MemorySubjectAccessContext;
   episodicStore?: EpisodicStorePort | null;
   sessionStore: SessionStore;
   sessionManager: SessionManager;
@@ -186,6 +196,8 @@ export interface InProcessGardenAdminContractOptions {
   icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
   icpAdminProjectionStore?: IcpAdminProjectionStore | null;
   icpRuntimeEnablement?: IcpAutonomyRuntimeEnablement | null;
+  /** Existing gateway-backed Beads create primitive used for explicit wish conversion. */
+  wishlistBeadCreator?: AdminWishlistBeadCreatePort;
 }
 
 export function createInProcessGardenAdminContract(
@@ -353,9 +365,14 @@ export function createInProcessGardenAdminContract(
   // The legacy admin session proves operator access but carries no subject
   // identity. Fleet-auth must supply that authority before Garden may expose
   // or mutate subject-classified memories.
+  const legacyMemorySubjectAccessContext = Object.freeze({
+    ...(options.legacyMemorySubjectAccessContext ?? {}),
+  });
   const gardenMemoryStore = createSubjectAuthorizedMemoryStore(
     options.memoryStore,
-    Object.freeze({ ...(options.legacyMemorySubjectAccessContext ?? {}) }),
+    options.legacyMemorySubjectAccessContext !== undefined
+      ? legacyMemorySubjectAccessContext
+      : options.resolveMemorySubjectAccessContext ?? legacyMemorySubjectAccessContext,
   );
   const driftReviews = createAdminDriftReviewService({
     store: createDriftReviewCardStore(resolveDriftReviewCardsPath(companionDataDir)),
@@ -420,6 +437,12 @@ export function createInProcessGardenAdminContract(
         },
       })
       : null,
+    wishlist: options.config.workspacePath
+      ? new AdminWishlistDataService(
+        options.config.workspacePath,
+        options.wishlistBeadCreator,
+      )
+      : null,
     episodicMemory: options.episodicStore
       ? new AdminEpisodicMemoryDataService(options.episodicStore)
       : null,
@@ -467,7 +490,9 @@ export function createInProcessGardenAdminContract(
       sessionManager: options.sessionManager,
       eventBus: options.eventBus,
       contactStore: options.contactStore,
+      concernStore: options.concernStore,
       memoryStore: gardenMemoryStore,
+      subsystemOutputRefStore: options.subsystemOutputRefStore,
       config: options.config,
     }),
     contacts: new AdminContactsDataService({
@@ -489,7 +514,12 @@ export function createInProcessGardenAdminContract(
     rooms: createAdminRoomsService({
       contactStore: options.contactStore ?? null,
     }),
-    places: createAdminPlacesService({ dataDir: options.config.dataDir }),
+    places: createAdminPlacesService({
+      dataDir: options.config.dataDir,
+      fleetCompanionIds: options.config.companionFleet?.companions.map(
+        companion => companion.companionId,
+      ) ?? [],
+    }),
     enrollment: options.hubIdentityEnrollmentStore && options.contactStore
       ? createAdminEnrollmentService({
         enrollmentService: new HubIdentityEnrollmentService(

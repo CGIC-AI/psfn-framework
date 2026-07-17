@@ -92,6 +92,8 @@ interface ResolveMentionOnlyContactParams {
   companionName?: string;
   contactStore: Pick<ContactStorePort, 'listAll' | 'upsert'> | null;
   memoryStore: Pick<MemoryStorePort, 'getMemoriesByChannel' | 'updateMemory'>;
+  onContactCreated?: (contactId: string) => void;
+  onMemoryRelinked?: (memoryId: string) => void;
 }
 
 function normalizeNameKey(value: string): string {
@@ -311,6 +313,7 @@ function relinkRecurringMemories(params: {
   canonicalContactName?: string;
   canonicalContactNames?: readonly string[];
   companionName?: string;
+  onMemoryRelinked?: (memoryId: string) => void;
 }): Promise<void> {
   return (async () => {
   for (const memory of params.channelMemories) {
@@ -318,6 +321,7 @@ function relinkRecurringMemories(params: {
     if (memory.contactId && memory.contactId !== params.canonicalContactId) continue;
     if (memory.contactId === params.contactId) continue;
     await params.memoryStore.updateMemory(memory.id, { contactId: params.contactId });
+    params.onMemoryRelinked?.(memory.id);
   }
   })();
 }
@@ -360,6 +364,7 @@ export async function resolveMentionOnlyContactForFact(
       canonicalContactName: params.canonicalContactName,
       canonicalContactNames,
       companionName: params.companionName,
+      onMemoryRelinked: params.onMemoryRelinked,
     });
     return existing;
   }
@@ -386,6 +391,7 @@ export async function resolveMentionOnlyContactForFact(
       actor: 'system:memory_extraction:mention_contact',
     },
   );
+  params.onContactCreated?.(created.id);
 
   await relinkRecurringMemories({
     memoryStore: params.memoryStore,
@@ -396,6 +402,7 @@ export async function resolveMentionOnlyContactForFact(
     canonicalContactName: params.canonicalContactName,
     canonicalContactNames,
     companionName: params.companionName,
+    ...(params.onMemoryRelinked ? { onMemoryRelinked: params.onMemoryRelinked } : {}),
   });
 
   return created;

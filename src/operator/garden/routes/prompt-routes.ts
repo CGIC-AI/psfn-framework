@@ -1,8 +1,22 @@
 import { sendJson } from '../../../channels/backplane/http/primitives.js';
+import { countTokens } from '../../../primitives/llm/tokens.js';
+import { assertNoUnknownKeys, isRecord } from '../../../shared/utils/types.js';
 import { parseAdminJsonBody } from '../request-body.js';
 import { exactPath, paramWithSuffix, prefixedParamPath } from '../route-matchers.js';
 import type { AdminPromptsService } from '../services/types.js';
+import { toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminBodyReader } from './types.js';
+
+function parsePromptTokenCountTexts(value: unknown): string[] {
+  if (!isRecord(value)) {
+    throw new Error('Prompt token-count payload must be a JSON object');
+  }
+  assertNoUnknownKeys(value, ['texts'], 'Prompt token-count payload');
+  if (!Array.isArray(value.texts) || !value.texts.every(text => typeof text === 'string')) {
+    throw new Error('texts must be an array of strings');
+  }
+  return value.texts;
+}
 
 export function buildAdminPromptRoutes(options: {
   promptsService: AdminPromptsService;
@@ -62,6 +76,27 @@ export function buildAdminPromptRoutes(options: {
             return;
           }
           sendJson(res, 200, result);
+        });
+      },
+    },
+    {
+      method: 'POST',
+      match: exactPath('/api/admin/prompts/count-tokens'),
+      handle: (req, res) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          try {
+            const texts = parsePromptTokenCountTexts(parsed.value);
+            sendJson(res, 200, { counts: texts.map(text => countTokens(text)) });
+          } catch (error) {
+            sendJson(res, 400, {
+              error: toSanitizedMessage(error, 'Invalid prompt token-count payload'),
+            });
+          }
         });
       },
     },

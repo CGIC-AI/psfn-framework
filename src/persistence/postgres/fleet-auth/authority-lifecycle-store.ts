@@ -1,8 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import {
+  createFleetAuthLifecycleAuditDigest,
   insertLifecycleAudit,
   readRedactedLifecycleResourceSnapshot,
+  type FleetAuthLifecycleAuditDigest,
 } from './authority-lifecycle-audit.js';
 import { appendAccountAuthorityFloorProjection } from './authority-floor-projection.js';
 import type { AccountAuthorityFencePort } from './provider-revocation-authority.js';
@@ -119,10 +121,16 @@ function denialReason(error: unknown): string {
 export class GatewayFleetAuthAuthorityLifecycleStore {
   private readonly pool: Pool;
   private readonly accountAuthority: AccountAuthorityFencePort;
+  private readonly digest: FleetAuthLifecycleAuditDigest;
 
-  constructor(options: { pool: Pool; accountAuthority: AccountAuthorityFencePort }) {
+  constructor(options: {
+    pool: Pool;
+    accountAuthority: AccountAuthorityFencePort;
+    sessionPepper: string;
+  }) {
     this.pool = options.pool;
     this.accountAuthority = options.accountAuthority;
+    this.digest = createFleetAuthLifecycleAuditDigest(options.sessionPepper);
   }
 
   async execute(input: VerifiedFleetAuthLifecycleDecision): Promise<FleetAuthLifecycleResult> {
@@ -180,6 +188,7 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
       ])].sort();
       const before = await readRedactedLifecycleResourceSnapshot(
         client,
+        this.digest,
         decision,
         principalIds,
         mutation.affectedPrincipalIds,
@@ -260,6 +269,7 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
       );
       const after = await readRedactedLifecycleResourceSnapshot(
         client,
+        this.digest,
         decision,
         principalIds,
         mutation.affectedPrincipalIds,
@@ -300,10 +310,16 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
         globalAuthEpoch,
         target,
       };
-      await insertLifecycleAudit(client, decision, 'allow', 'lifecycle_transition_applied', {
-        authorityGeneration,
-        globalAuthEpoch,
-      }, { before, after }, lifecycleResult);
+      await insertLifecycleAudit(
+        client,
+        this.digest,
+        decision,
+        'allow',
+        'lifecycle_transition_applied',
+        { authorityGeneration, globalAuthEpoch },
+        { before, after },
+        lifecycleResult,
+      );
       await client.query('COMMIT');
       return lifecycleResult;
     } catch (error) {
@@ -377,6 +393,10 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
       : undefined;
     const target = stored && isRecord(stored.target) ? stored.target : undefined;
     const fingerprint = fleetAuthLifecycleDecisionFingerprint(decision);
+    // principalId is a recovery-shared structural id written with unkeyed SHA-256
+    // by both the online transition (redactedClaim) and the offline recovery
+    // reconciliation, so the idempotency probe recomputes it the same way. See
+    // structuralDigest in authority-lifecycle-audit.ts (psfn-framework-5wrp).
     const targetDigest = createHash('sha256').update(decision.target.principalId).digest('hex');
     const exact = row.action === decision.action
       && row.decision === 'allow'
@@ -718,7 +738,7 @@ export class GatewayFleetAuthAuthorityLifecycleStore {
       throw new Error('fleet_auth authority_state singleton is missing during denial audit');
     }
     const authority = result.rows[0];
-    await insertLifecycleAudit(client, decision, 'deny', reasonCode, {
+    await insertLifecycleAudit(client, this.digest, decision, 'deny', reasonCode, {
       authorityGeneration: integer(authority.authority_generation, 'authority_generation'),
       globalAuthEpoch: integer(authority.global_auth_epoch, 'global_auth_epoch'),
     });

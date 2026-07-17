@@ -28,8 +28,18 @@ import { PostgresTrustedHostPasskeyCeremonyStore } from './trusted-host-passkey-
 import { TrustedHostAccountReapprovalService } from '../../../boundary/fleet-auth/trusted-host-account-reapproval.js';
 import { PostgresAccountReapprovalCeremonyStore } from './account-reapproval-ceremony-store.js';
 import { digestFleetAuthVerifiedProviderProof } from '../../../shared/contracts/fleet-auth-lifecycle-oauth.js';
+import { FLEET_AUTH_HUB_DEVICE_ASSERTION_DIGEST_DOMAIN } from '../../../boundary/fleet-auth/hub-device-assertion.js';
 
 const TIMEOUT_MS = 120_000;
+const HUB_SESSION_PEPPER = 's'.repeat(32);
+
+/** Keyed Hub audit digest mirroring the boundary scheme under the test pepper. */
+function keyedHubAuditDigest(value: string): string {
+  return createHmac('sha256', HUB_SESSION_PEPPER)
+    .update(FLEET_AUTH_HUB_DEVICE_ASSERTION_DIGEST_DOMAIN)
+    .update(value, 'utf8')
+    .digest('hex');
+}
 const ROLES = {
   runtime: 'fleet_auth_runtime',
   migration: 'fleet_auth_migration',
@@ -212,7 +222,7 @@ async function freshContext(): Promise<GatewayTestContext> {
     credentialVault: createStaticCredentialVault({
       FLEET_AUTH_DISCORD_CLIENT_SECRET: 'discord-client-secret',
       FLEET_AUTH_TOKEN_ENCRYPTION_KEY: 't'.repeat(32),
-      FLEET_AUTH_SESSION_PEPPER: 's'.repeat(32),
+      FLEET_AUTH_SESSION_PEPPER: HUB_SESSION_PEPPER,
       FLEET_AUTH_ASSERTION_PRIVATE_KEY: privateKeyPem,
       FLEET_AUTH_RECOVERY_CREDENTIAL: 'r'.repeat(32),
       FLEET_AUTH_RUNTIME_DATABASE_URL: runtimeUrl,
@@ -1041,11 +1051,17 @@ describe('gateway fleet-auth lifecycle publication', () => {
         decision: 'deny',
         decision_context: expect.objectContaining({
           schemaVersion: 1,
-          jtiDigest: createHash('sha256').update(jti).digest('hex'),
+          // Enumerable-identifier digests are keyed HMAC under the session pepper;
+          // a plain SHA-256 of the jti no longer matches the persisted digest.
+          jtiDigest: keyedHubAuditDigest(jti),
+          // Assertion-token digests fingerprint high-entropy bearer tokens and
+          // stay plain SHA-256 (the exact-match replay key).
           acceptedAssertionDigest: createHash('sha256').update(assertion).digest('hex'),
           mutatedAssertionDigest: createHash('sha256').update(mutatedAssertion).digest('hex'),
         }),
       }]);
+      expect(mutatedAudit.rows[0]?.decision_context.jtiDigest)
+        .not.toBe(createHash('sha256').update(jti).digest('hex'));
       const serializedAudit = JSON.stringify(mutatedAudit.rows);
       expect(serializedAudit).not.toContain('office');
       expect(serializedAudit).not.toContain(sessionA);

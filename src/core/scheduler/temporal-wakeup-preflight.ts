@@ -9,7 +9,7 @@ import type {
   IdleRefresherEvaluateInput,
   MorningWakeDecision,
   MorningWakeEvaluateInput,
-} from './temporal-wakeup.js';
+} from './temporal-wakeup-contracts.js';
 
 // These preflights return denials only. Any metadata state that cannot prove
 // the pure evaluator's ordered reason falls through to the real entry reads.

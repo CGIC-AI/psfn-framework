@@ -36,6 +36,7 @@ import {
 } from '../../persistence/layout.js';
 import {
   ReflectionJournalStore,
+  type ReflectionJournalEntry,
 } from '../../persistence/journals/reflection-journal.js';
 import { ReflectionMetacognitionJournalStore } from '../../persistence/journals/reflection-metacognition-journal.js';
 import {
@@ -43,6 +44,7 @@ import {
   buildReflectionProcessId,
   ReflectionDailyJournalStore,
   ReflectionProcessLogStore,
+  type ReflectionDailyJournalEntry,
   type ReflectionSubstrateContext,
 } from '../../persistence/journals/reflection-substrate.js';
 import { isBusyTurnError } from '../../system/lifecycle/turn-contention.js';
@@ -66,7 +68,6 @@ import {
 } from './reflection-introspection-policy.js';
 import {
   REFLECTION_PROMPT_TOKENS,
-  formatReflectionPersonaBlock,
   joinReflectionPromptSections,
   mergeMetacognitiveFlags,
   mergeReflectionGroundingProvenanceRefs,
@@ -74,7 +75,6 @@ import {
   promptUsesReflectionMacros,
   type ReflectionInternalStateContext,
   type ReflectionMetacognitiveFlag,
-  type ReflectionPromptContext,
   type ReflectionPromptSectionBundle,
 } from './heartbeat-template-runtime/prompt-formatting.js';
 import {
@@ -83,6 +83,7 @@ import {
   normalizeSnapshotRef,
   resolveInternalStateContext,
 } from './heartbeat-template-runtime/internal-state-prompt.js';
+import { buildReflectionStarterPromptBundle } from './heartbeat-template-runtime/reflection-starter-prompt.js';
 import { runExperientialTemplateDeliberation } from './heartbeat-template-runtime/experiential-deliberation.js';
 import {
   HeartbeatTemplateLoopGuardError,
@@ -104,8 +105,6 @@ import {
 } from './heartbeat-template-runtime/reflection-novelty-gate.js';
 
 const log = createComponentLogger('HeartbeatTemplates');
-
-export { formatReflectionPersonaBlock } from './heartbeat-template-runtime/prompt-formatting.js';
 
 const DEFERRED_REFLECTION_RUN_TASK_PREFIX = 'reflection-run:deferred:';
 const LEGACY_DEFERRED_REFLECTION_TASK_PREFIX = 'reflection:deferred:';
@@ -244,19 +243,31 @@ export function createHeartbeatTemplateRuntime(
 
   const resolveReflectionSubstratePromptContext = (
     template: ReflectionTemplate,
-  ): ReflectionSubstrateContext | null => {
+  ): {
+    context: ReflectionSubstrateContext | null;
+    recentDailyJournalEntries: ReflectionDailyJournalEntry[];
+  } => {
     if (!template.internalStateInput && template.mode !== 'deliberation') {
-      return null;
+      return {
+        context: null,
+        recentDailyJournalEntries: [],
+      };
     }
+    const recentDailyJournalEntries = reflectionDailyJournal.listRecent({
+      limit: template.id === 'weekly-review' ? 7 : 2,
+    });
     const context = assembleReflectionSubstrateContext({
       recentReflectionJournalEntries: reflectionJournal.listRecent({ limit: 2 }),
-      recentDailyJournalEntries: reflectionDailyJournal.listRecent({ limit: 2 }),
+      recentDailyJournalEntries,
       recentProcessLogEntries: reflectionProcessLog.listRecent({
         limit: 2,
         stages: ['completed', 'failed'],
       }),
     });
-    return context;
+    return {
+      context,
+      recentDailyJournalEntries,
+    };
   };
 
   const formatNarrativePromptInput = (
@@ -264,32 +275,23 @@ export function createHeartbeatTemplateRuntime(
     reflectionBundle: ReflectionPromptSectionBundle | null,
     reflectionPolicyBlock: string,
   ): string => {
-    // E6.2: her full persona leads the reflection (soft framing first), so a
-    // scheduled introspection turn reflects as HER rather than as a context
-    // analyzer. If the operator template places {{reflection_persona}} itself,
-    // we honor that placement; otherwise the persona block leads the prompt.
-    const personaBlock = formatReflectionPersonaBlock(
-      runtimeOptions.characterPromptVariablesProvider?.(),
-    );
-    const promptPlacesPersona = prompt.includes(REFLECTION_PROMPT_TOKENS.persona);
-
+    // Ordinary reflection turns use the same default system-prompt composition
+    // as foreground turns. Keep identity in that authoritative stack instead
+    // of copying character-card persona fields into this user message.
     if (promptUsesReflectionMacros(prompt)) {
       const expandedPrompt = prompt
-        .split(REFLECTION_PROMPT_TOKENS.persona).join(personaBlock)
         .split(REFLECTION_PROMPT_TOKENS.self).join(reflectionBundle?.self ?? '')
         .split(REFLECTION_PROMPT_TOKENS.relational).join(reflectionBundle?.relational ?? '')
         .split(REFLECTION_PROMPT_TOKENS.affect).join(reflectionBundle?.affect ?? '')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
       return joinReflectionPromptSections(
-        promptPlacesPersona ? undefined : personaBlock,
         reflectionPolicyBlock,
         expandedPrompt,
       );
     }
 
     return joinReflectionPromptSections(
-      personaBlock,
       reflectionPolicyBlock,
       prompt,
       reflectionBundle?.relational,
@@ -398,11 +400,13 @@ export function createHeartbeatTemplateRuntime(
     source: HeartbeatExecutionSource,
     reflectionChannelId: string,
     processId: string,
+    authoritativeSystemPrompt: string,
   ) => ({
     episode: {
       kind: 'maintenance_reflection' as const,
       mode: 'background_bounded' as const,
     },
+    authoritativeSystemPrompt,
     correlation: buildReflectionDeliberationCorrelation(source, reflectionChannelId, processId),
     ...(template.deliberation?.voices ? { voices: template.deliberation.voices } : {}),
     caps: {
@@ -610,11 +614,21 @@ export function createHeartbeatTemplateRuntime(
     reflectionChannelId: string,
     processId: string,
   ): Promise<ReflectionDeliberationExecutionResult> => {
+    const authoritativeSystemPrompt = agentLoop
+      .getCurrentAuthoritativeSystemPrompt?.()
+      ?.trim();
+    if (!authoritativeSystemPrompt) {
+      throw new Error(
+        'Deliberation reflection requires a canonical authoritative system prompt from an assembled default agent turn',
+      );
+    }
+
     if (isExperientialDeliberationTemplate(template)) {
       return runExperientialTemplateDeliberation({
         llmProvider: runtimeOptions.llmProvider,
         template,
         prompt,
+        authoritativeSystemPrompt,
         correlation: buildReflectionDeliberationCorrelation(source, reflectionChannelId, processId),
         logger: log,
         toDeliberationMetadata,
@@ -628,7 +642,13 @@ export function createHeartbeatTemplateRuntime(
     const result = await runDeliberation(
       llmProvider,
       prompt,
-      buildReflectionDeliberationOptions(template, source, reflectionChannelId, processId),
+      buildReflectionDeliberationOptions(
+        template,
+        source,
+        reflectionChannelId,
+        processId,
+        authoritativeSystemPrompt,
+      ),
     );
     return {
       reflection: result.output,
@@ -758,20 +778,26 @@ export function createHeartbeatTemplateRuntime(
       logger: log,
     });
     const reflectionContactContext = reflectionContactResolution.bundle;
-    const reflectionSubstrateContext = resolveReflectionSubstratePromptContext(template);
+    const reflectionSubstrateResolution = resolveReflectionSubstratePromptContext(template);
+    const reflectionSubstrateContext = reflectionSubstrateResolution.context;
     const reflectionCreatedAt = new Date(Date.now()).toISOString();
-    const reflectionPromptContext: ReflectionPromptContext = {
-      internalState: internalStateContext ?? undefined,
-      contactBundle: reflectionContactContext ?? undefined,
-      substrateContext: reflectionSubstrateContext ?? undefined,
-    };
-    const reflectionPromptBundle = mergeReflectionPromptBundles(
-      reflectionPromptContext.contactBundle,
-      buildInternalStatePromptBundle(reflectionPromptContext.internalState ?? null),
-      reflectionPromptContext.substrateContext,
+    const collectedEvidenceBundle = mergeReflectionPromptBundles(
+      reflectionContactContext,
+      buildInternalStatePromptBundle(internalStateContext),
+      reflectionSubstrateContext,
     );
+    const reflectionPromptBundle = template.id === 'daily-review' || template.id === 'weekly-review'
+      ? buildReflectionStarterPromptBundle({
+        templateId: template.id,
+        internalStateContext,
+        retrievedMemoryBlock: reflectionContactResolution.retrievedMemoryBlock,
+        recentSessionMessages: reflectionContactResolution.recentSessionMessages,
+        recentDailyJournalEntries: reflectionSubstrateResolution.recentDailyJournalEntries,
+        provenanceRefs: collectedEvidenceBundle?.provenanceRefs ?? [],
+      })
+      : collectedEvidenceBundle;
     let reflectionGroundingProvenanceRefs = reflectionPromptBundle?.provenanceRefs ?? [];
-    const reflectionPrompt = formatNarrativePromptInput(
+    let reflectionPrompt = formatNarrativePromptInput(
       template.prompt,
       reflectionPromptBundle,
       formatReflectionIntrospectionPolicyBlock(reflectionPolicy),
@@ -782,8 +808,55 @@ export function createHeartbeatTemplateRuntime(
     let reflectionMode: 'agent' | 'deliberation' = 'agent';
     let persistenceContext = internalStateContext;
     let reflectionProcessId: string | undefined;
+    const reflectionWorkerRouting = {
+      ...(reflectionScopeHint
+        ? { reflectionScope: reflectionScopeHint }
+        : (reflectionCanonicalContactId ? { canonicalContactId: reflectionCanonicalContactId } : {})),
+      workerExecution: createWorkerExecutionPolicy(WHISPER_WORKER_LANE),
+    };
 
     if (shouldUseDeliberation(template)) {
+      const groundingResponse = await agentLoop.handleMessage({
+        id: `reflection-grounding-${template.id}-${Date.now()}`,
+        channelId: reflectionChannelId,
+        channelType: 'terminal',
+        authorId: reflectionScopeHint ? 'scheduler' : (reflectionCanonicalContactId ?? 'scheduler'),
+        authorName: `${template.name} evidence grounding`,
+        content: joinReflectionPromptSections(
+          reflectionPrompt,
+          '[Read-only Tool Grounding Task]\n'
+            + 'Before deliberation, gather only additional evidence that materially helps this private reflection.\n'
+            + '- Use the core analysis_workbench only when deeper retrieval is useful.\n'
+            + '- Inside it, use only the read-only introspection helpers named in the policy above.\n'
+            + '- Do not mutate memory, sessions, settings, schedules, files, or external systems.\n'
+            + '- Return a concise evidence note, not the final reflection.',
+        ),
+        timestamp: new Date(),
+        routing: {
+          ...reflectionWorkerRouting,
+          reflectionTurn: {
+            schemaVersion: 1,
+            stage: 'tool_grounding',
+            templateId: template.id,
+            mode: 'deliberation',
+          },
+        },
+      });
+      const toolGrounding = groundingResponse.content.trim();
+      if (toolGrounding) {
+        reflectionPrompt = joinReflectionPromptSections(
+          reflectionPrompt,
+          `[Read-only Tool Grounding]\n${toolGrounding}`,
+        );
+      }
+      const groundingProvenanceRefs = groundingResponse.metadata?.retrievalProvenanceRefs ?? [];
+      if (groundingProvenanceRefs.length > 0) {
+        reflectionGroundingProvenanceRefs = [...new Set([
+          ...reflectionGroundingProvenanceRefs,
+          ...groundingProvenanceRefs.map(ref => ref.trim()).filter(Boolean),
+        ])];
+      }
+
       const processId = buildReflectionProcessId(`${template.id}-${source}`);
       reflectionProcessId = processId;
       try {
@@ -894,10 +967,13 @@ export function createHeartbeatTemplateRuntime(
         content: reflectionPrompt,
         timestamp: new Date(),
         routing: {
-          ...(reflectionScopeHint
-            ? { reflectionScope: reflectionScopeHint }
-            : (reflectionCanonicalContactId ? { canonicalContactId: reflectionCanonicalContactId } : {})),
-          workerExecution: createWorkerExecutionPolicy(WHISPER_WORKER_LANE),
+          ...reflectionWorkerRouting,
+          reflectionTurn: {
+            schemaVersion: 1,
+            stage: 'final_output',
+            templateId: template.id,
+            mode: 'agent',
+          },
         },
       });
       const normalizedReflection = normalizeTemplateReflectionOutput(template, response.content);
@@ -972,6 +1048,7 @@ export function createHeartbeatTemplateRuntime(
       : null;
 
     let reflectionJournalEntryId: string | undefined;
+    let finalReflectionJournalEntry: ReflectionJournalEntry | undefined;
     let dailyJournalEntryId: string | undefined;
     if (!silentInterval) {
       try {
@@ -995,10 +1072,30 @@ export function createHeartbeatTemplateRuntime(
           } : {}),
         });
         reflectionJournalEntryId = reflectionEntry.id;
+        finalReflectionJournalEntry = reflectionEntry;
       } catch (error) {
         log.warn(`Reflection "${template.id}" note journal persistence skipped`, {
           error: String(error),
         });
+      }
+
+      if (finalReflectionJournalEntry && agentLoop.memoryExtractor?.extractFinalReflection) {
+        try {
+          await agentLoop.memoryExtractor.extractFinalReflection({
+            source: 'reflection_journal',
+            journalEntryId: finalReflectionJournalEntry.id,
+            templateId: finalReflectionJournalEntry.templateId,
+            templateName: finalReflectionJournalEntry.templateName,
+            channelId: finalReflectionJournalEntry.channelId,
+            reflection: finalReflectionJournalEntry.reflection,
+            mode: finalReflectionJournalEntry.mode,
+            createdAt: finalReflectionJournalEntry.createdAt,
+          });
+        } catch (error) {
+          log.warn(`Reflection "${template.id}" experiential extraction skipped`, {
+            error: String(error),
+          });
+        }
       }
 
       try {

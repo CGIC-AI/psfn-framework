@@ -194,6 +194,10 @@ describe('model-call preemption across the gateway→agent JSON-RPC boundary (mm
       effects: {},
     } as unknown as BackgroundWorkExecutionInput;
     const dependencies = {
+      tuning: {
+        extractionDrainRequeueDelayMs: 1_000,
+        foregroundPreemptionDeferDelayMs: 1_000,
+      },
       // Surface the boundary-reconstructed preemption from where the extractor
       // is resolved (its llm.complete would raise it in production). The
       // disposition executePostTurnBackgroundWork produces is what matters.

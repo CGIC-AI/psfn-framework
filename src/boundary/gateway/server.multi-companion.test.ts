@@ -12,6 +12,8 @@ import {
   resolveGatewaySurfaceForChannelType,
 } from './multi-companion.js';
 import type { RuntimeChannelsConfig } from '../../channels/backplane/config.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -37,6 +39,12 @@ const TEST_SESSION_HMAC_KEYRING: SessionHmacKeyring = {
 
 const TEST_WYOMING_SHARD_ROUTING = {
   enabled: false,
+};
+
+const EMPTY_SATELLITE_REGISTRY: SatelliteRegistryConfig = {
+  schemaVersion: 1,
+  enabled: false,
+  satellites: [],
 };
 
 type MockConnection = {
@@ -269,6 +277,34 @@ function makeChannelMessage(channelType: 'discord' | 'telegram' | 'api' | 'termi
   } as any;
 }
 
+function makeSatelliteVoiceMessage(satelliteId: string, companionId?: string) {
+  const message = makeChannelMessage('api');
+  message.routing = {
+    source: 'satellite',
+    satellite: {
+      schemaVersion: 1,
+      satelliteId,
+      satelliteDisplayName: 'Satellite App',
+      endpointId: 'voice',
+      endpointDisplayName: 'Voice',
+      claimType: 'voice',
+      sessionId: `session-${satelliteId}`,
+      mobility: 'mobile',
+      promptChannelType: 'voice',
+      ...(companionId ? { companionId } : {}),
+      capabilities: {
+        advertised: ['audio_input'],
+        registryMax: ['audio_input'],
+        effective: ['audio_input'],
+        policyDenied: [],
+      },
+      telemetryScopes: [],
+      auth: { mode: 'api_key', principalId: 'principal-1', certBound: false },
+    },
+  };
+  return message;
+}
+
 function voiceStreamResponder(routed: { messages: any[] }) {
   return (msg: any, emit: (response: unknown) => void) => {
     if (!msg.id || typeof msg.method !== 'string') return;
@@ -325,7 +361,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
   } as RuntimeChannelsConfig);
 
   it('defaults to disabled with no routing', () => {
-    expect(resolveGatewayMultiCompanionConfig({}, baseChannels())).toEqual({
+    expect(resolveGatewayMultiCompanionConfig({}, baseChannels(), EMPTY_SATELLITE_REGISTRY)).toEqual({
       enabled: false,
       fleetCompanionIds: [],
       channelRouting: {},
@@ -342,7 +378,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     expect(resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
       companionFleet: resolvedFleet(['comp-a', 'comp-b']),
-    }, channels)).toEqual({
+    }, channels, EMPTY_SATELLITE_REGISTRY)).toEqual({
       enabled: true,
       fleetCompanionIds: ['comp-a', 'comp-b'],
       channelRouting: { discord: 'comp-a', telegram: 'comp-b', api: 'comp-b' },
@@ -380,7 +416,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     expect(resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
       companionFleet: resolvedFleet(['comp-a', 'comp-b']),
-    }, channels)).toEqual({
+    }, channels, EMPTY_SATELLITE_REGISTRY)).toEqual({
       enabled: true,
       fleetCompanionIds: ['comp-a', 'comp-b'],
       channelRouting: {},
@@ -396,7 +432,7 @@ describe('resolveGatewayMultiCompanionConfig', () => {
   it('fails closed when routing is declared while the flag is off', () => {
     const channels = baseChannels();
     channels.discord.companionId = 'comp-a';
-    expect(() => resolveGatewayMultiCompanionConfig({}, channels)).toThrow(
+    expect(() => resolveGatewayMultiCompanionConfig({}, channels, EMPTY_SATELLITE_REGISTRY)).toThrow(
       /PSFN_MULTI_COMPANION is not enabled/,
     );
   });
@@ -412,13 +448,15 @@ describe('resolveGatewayMultiCompanionConfig', () => {
       allowedBotUserIds: [],
       groupMemory: { channelOverrides: {} } as any,
     }];
-    expect(() => resolveGatewayMultiCompanionConfig({}, channels)).toThrow(
+    expect(() => resolveGatewayMultiCompanionConfig({}, channels, EMPTY_SATELLITE_REGISTRY)).toThrow(
       /discord\.accounts \[acct-a\] but PSFN_MULTI_COMPANION is not enabled/,
     );
   });
 
   it('fails closed when enabled without a resolved fleet', () => {
-    expect(() => resolveGatewayMultiCompanionConfig({ multiCompanion: true }, baseChannels()))
+    expect(() => resolveGatewayMultiCompanionConfig({
+      multiCompanion: true,
+    }, baseChannels(), EMPTY_SATELLITE_REGISTRY))
       .toThrow(/non-empty resolved companions\.json fleet/);
   });
 
@@ -428,7 +466,38 @@ describe('resolveGatewayMultiCompanionConfig', () => {
     expect(() => resolveGatewayMultiCompanionConfig({
       multiCompanion: true,
       companionFleet: resolvedFleet(['comp-a']),
-    }, channels)).toThrow(/absent from companions\.json/);
+    }, channels, EMPTY_SATELLITE_REGISTRY)).toThrow(/absent from companions\.json/);
+  });
+
+  it('fails closed when satellites.json binds a satellite to a companion outside the fleet', () => {
+    expect(() => resolveGatewayMultiCompanionConfig({
+      multiCompanion: true,
+      companionFleet: resolvedFleet(['comp-a']),
+    }, baseChannels(), {
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [{
+        satelliteId: 'sat-app',
+        displayName: 'Satellite App',
+        mobility: 'mobile',
+        companionId: 'comp-b',
+        endpoints: [],
+      }],
+    })).toThrow(/satellites\.json.*absent from companions\.json/);
+  });
+
+  it('does not silently ignore satellite ownership while multi-companion mode is off', () => {
+    expect(() => resolveGatewayMultiCompanionConfig({}, baseChannels(), {
+      schemaVersion: 1,
+      enabled: true,
+      satellites: [{
+        satelliteId: 'sat-app',
+        displayName: 'Satellite App',
+        mobility: 'mobile',
+        companionId: 'comp-a',
+        endpoints: [],
+      }],
+    })).toThrow(/PSFN_MULTI_COMPANION is not enabled/);
   });
 
   it('maps channel types onto routable surfaces fail-closed', () => {
@@ -450,6 +519,18 @@ describe('GatewayServer single-companion parity (flag off)', () => {
     const second = await identifyAgent(connB, 'comp-a', 902);
     expect(first.result).toEqual({ success: true, role: 'agent', companionId: 'comp-a' });
     expect(second.result).toEqual({ success: true, role: 'agent', companionId: 'comp-a' });
+  });
+
+  it('keeps satellite voice on the single ready-agent path while the flag is off', async () => {
+    const routed = { messages: new Array<SubstrateMessage>() };
+    const { server, connect } = await setupServer(createMinimalOptions());
+    const conn = await connect(voiceStreamResponder(routed));
+    await identifyAgent(conn, 'comp-a', 903);
+
+    await expect(server.requestAgentVoiceStream(
+      makeSatelliteVoiceMessage('sat-single', 'comp-b'),
+    )).resolves.toMatchObject({ content: 'voice response' });
+    expect(methodFrames(conn, 'voice.transcript.begin')).toHaveLength(1);
   });
 
   it('broadcasts inbound channel messages to every ready agent (characterizes existing behavior)', async () => {
@@ -1188,6 +1269,53 @@ describe('GatewayServer multi-companion routing (flag on)', () => {
     expect(result.content).toBe('voice response');
     expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
     expect(methodFrames(connB, 'voice.transcript.begin')).toHaveLength(1);
+  });
+
+  it('routes multi-companion satellite voice only to the companion bound to that satellite', async () => {
+    const routed = { messages: new Array<SubstrateMessage>() };
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({ api: 'comp-a' }),
+    });
+    const connA = await connect();
+    const connB = await connect(voiceStreamResponder(routed));
+    await identifyAgent(connA, 'comp-a', 1);
+    await identifyAgent(connB, 'comp-b', 2);
+    const result = await server.requestAgentVoiceStream(
+      makeSatelliteVoiceMessage('sat-app', 'comp-b'),
+    );
+
+    expect(result.content).toBe('voice response');
+    expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
+    expect(methodFrames(connB, 'voice.transcript.begin')).toHaveLength(1);
+    expect(routed.messages[0]?.routing?.gateway?.companionId).toBe('comp-b');
+  });
+
+  it('fails closed when multi-companion satellite voice has no companion binding', async () => {
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({ api: 'comp-a' }),
+    });
+    const connA = await connect();
+    await identifyAgent(connA, 'comp-a', 1);
+    await expect(server.requestAgentVoiceStream(makeSatelliteVoiceMessage('sat-unbound')))
+      .rejects.toThrow(/satellite "sat-unbound" has no companion binding/i);
+    expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
+  });
+
+  it('fails closed when a satellite voice source is missing authenticated satellite metadata', async () => {
+    const { server, connect } = await setupServer({
+      ...createMinimalOptions(),
+      multiCompanion: multiCompanion({ api: 'comp-a' }),
+    });
+    const connA = await connect();
+    await identifyAgent(connA, 'comp-a', 1);
+    const message = makeChannelMessage('api');
+    message.routing = { source: 'satellite' };
+
+    await expect(server.requestAgentVoiceStream(message))
+      .rejects.toThrow(/requires authenticated satellite metadata/i);
+    expect(methodFrames(connA, 'voice.transcript.begin')).toHaveLength(0);
   });
 
   it('stamps the routed companionId on wyoming-tagged api voice streams', async () => {

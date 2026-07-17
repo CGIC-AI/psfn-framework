@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { LLMProviderPort } from '../agent/contracts.js';
 import { buildLLMWorkSpec, completeWithWorkSpec } from '../../primitives/llm/work-spec.js';
@@ -8,7 +8,12 @@ import type {
   ConcernCandidateExtractionContext,
   ConcernCandidateExtractionSink,
 } from '../../faculties/memory/extraction/types.js';
-import type { ExtractedFact, MemoryFormationVAD, PurrMemory } from '../../faculties/memory/types.js';
+import {
+  VALID_MEMORY_TYPES,
+  type ExtractedFact,
+  type MemoryFormationVAD,
+  type PurrMemory,
+} from '../../faculties/memory/types.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
@@ -23,7 +28,9 @@ import type {
 } from './concern-route-handoff.js';
 import {
   MAX_ACTIVE_CONCERNS,
+  MAX_LIST_LIMIT,
   isConcernAttentionStatus,
+  type ActiveConcern,
   type ActiveConcernEvidenceRef,
   type ActiveConcernPriority,
   type ActiveConcernVAD,
@@ -34,6 +41,7 @@ const log = createComponentLogger('ConcernCandidates');
 const DEFAULT_REVIEW_TURN_INTERVAL = 3;
 const DEFAULT_MAX_REVIEW_BATCH = 7;
 const CONCERN_REVIEW_LANE = 'concern_candidate_review';
+const DURABLE_CANDIDATE_DEDUPE_PREFIX = 'concern-candidate-dedupe:';
 
 /**
  * Concern-candidate review gates (jpvd.4), expressed on the shared primitive
@@ -105,6 +113,8 @@ export interface ConcernCandidate {
   turnId?: string;
   dueAt?: string;
   formationVAD?: ActiveConcernVAD;
+  /** Durable candidate concern backing this review item. */
+  durableConcernId?: string;
 }
 
 export interface ConcernCandidateReviewDecision {
@@ -534,20 +544,39 @@ async function applyConcernCandidateDecision(input: {
   now?: () => Date;
 }): Promise<ConcernCandidateApplyOutcome> {
   switch (input.decision.action) {
-    case 'reject':
+    case 'reject': {
+      if (input.candidate.durableConcernId) {
+        await input.concernStore.transitionConcernStatus(input.candidate.durableConcernId, {
+          status: 'dismissed',
+          transitionedAt: (input.now?.() ?? new Date()).toISOString(),
+          evidenceRefs: input.candidate.evidenceRefs,
+        });
+      }
       return {
         candidateId: input.candidate.id,
         action: 'reject',
         status: 'rejected',
         reason: input.decision.reason,
       };
-    case 'defer':
+    }
+    case 'defer': {
+      if (input.candidate.durableConcernId) {
+        await input.concernStore.transitionConcernStatus(input.candidate.durableConcernId, {
+          status: 'deferred',
+          transitionedAt: (input.now?.() ?? new Date()).toISOString(),
+          evidenceRefs: input.candidate.evidenceRefs,
+          ...(input.decision.dueAt ?? input.candidate.dueAt
+            ? { nextReviewAt: input.decision.dueAt ?? input.candidate.dueAt }
+            : {}),
+        });
+      }
       return {
         candidateId: input.candidate.id,
         action: 'defer',
         status: 'deferred',
         reason: input.decision.reason,
       };
+    }
     case 'route': {
       const routeTarget = input.decision.routeTarget ?? 'other';
       if (!input.routeDispatcher) {
@@ -562,6 +591,13 @@ async function applyConcernCandidateDecision(input: {
       const outcome = await input.routeDispatcher.dispatch(
         buildCandidateRouteRequest(input.candidate, input.decision, routeTarget),
       );
+      if (input.candidate.durableConcernId && outcome.disposition === 'routed') {
+        await input.concernStore.transitionConcernStatus(input.candidate.durableConcernId, {
+          status: 'dismissed',
+          transitionedAt: (input.now?.() ?? new Date()).toISOString(),
+          evidenceRefs: input.candidate.evidenceRefs,
+        });
+      }
       return {
         candidateId: input.candidate.id,
         action: 'route',
@@ -591,6 +627,14 @@ async function applyConcernCandidateDecision(input: {
             reason: `target concern ${input.decision.targetConcernId} was not available for merge`,
           };
         }
+        if (input.candidate.durableConcernId
+          && input.candidate.durableConcernId !== merged.id) {
+          await input.concernStore.transitionConcernStatus(input.candidate.durableConcernId, {
+            status: 'dismissed',
+            transitionedAt: (input.now?.() ?? new Date()).toISOString(),
+            evidenceRefs: input.candidate.evidenceRefs,
+          });
+        }
         return {
           candidateId: input.candidate.id,
           action: 'merge',
@@ -605,6 +649,66 @@ async function applyConcernCandidateDecision(input: {
         decision: input.decision,
       });
     case 'create': {
+      if (input.candidate.durableConcernId) {
+        const activeCount = await countActiveAttentionConcerns(
+          input.concernStore,
+          input.now?.() ?? new Date(),
+        );
+        if (activeCount >= MAX_ACTIVE_CONCERNS) {
+          await input.concernStore.transitionConcernStatus(input.candidate.durableConcernId, {
+            status: 'dismissed',
+            transitionedAt: (input.now?.() ?? new Date()).toISOString(),
+            evidenceRefs: input.candidate.evidenceRefs,
+          });
+          return {
+            candidateId: input.candidate.id,
+            action: 'create',
+            status: 'blocked',
+            routeTarget: 'other',
+            reason: `active concern cap ${MAX_ACTIVE_CONCERNS} reached; candidate kept out of active concerns`,
+          };
+        }
+        let concern: ActiveConcern | null;
+        try {
+          concern = await input.concernStore.transitionConcernStatus(
+            input.candidate.durableConcernId,
+            {
+              status: 'active',
+              transitionedAt: (input.now?.() ?? new Date()).toISOString(),
+              evidenceRefs: input.candidate.evidenceRefs,
+              ...(input.decision.dueAt ?? input.candidate.dueAt
+                ? { nextReviewAt: input.decision.dueAt ?? input.candidate.dueAt }
+                : {}),
+            },
+          );
+        } catch (error) {
+          if (!String(error).includes(`Active concern cap reached (${MAX_ACTIVE_CONCERNS})`)) {
+            throw error;
+          }
+          await input.concernStore.transitionConcernStatus(input.candidate.durableConcernId, {
+            status: 'dismissed',
+            transitionedAt: (input.now?.() ?? new Date()).toISOString(),
+            evidenceRefs: input.candidate.evidenceRefs,
+          });
+          return {
+            candidateId: input.candidate.id,
+            action: 'create',
+            status: 'blocked',
+            routeTarget: 'other',
+            reason: `active concern cap ${MAX_ACTIVE_CONCERNS} reached; candidate kept out of active concerns`,
+          };
+        }
+        if (!concern) {
+          throw new Error(`Durable concern candidate ${input.candidate.durableConcernId} is missing`);
+        }
+        return {
+          candidateId: input.candidate.id,
+          action: 'create',
+          status: 'created',
+          reason: input.decision.reason,
+          concernId: concern.id,
+        };
+      }
       const activeCount = await countActiveAttentionConcerns(input.concernStore, input.now?.() ?? new Date());
       if (activeCount >= MAX_ACTIVE_CONCERNS) {
         return {
@@ -830,12 +934,210 @@ export interface CreateAutomatedConcernRuntimeOptions {
   routeDispatcher?: ConcernRouteDispatcher;
 }
 
-export function createAutomatedConcernRuntime(
+function candidateDedupeEvidenceRef(dedupeKey: string): ActiveConcernEvidenceRef {
+  const digest = createHash('sha256').update(dedupeKey).digest('hex');
+  return { kind: 'runtime', ref: `${DURABLE_CANDIDATE_DEDUPE_PREFIX}${digest}` };
+}
+
+function durableCandidateDedupeRef(concern: ActiveConcern): string | undefined {
+  return concern.evidenceRefs.find(ref => (
+    ref.kind === 'runtime' && ref.ref.startsWith(DURABLE_CANDIDATE_DEDUPE_PREFIX)
+  ))?.ref;
+}
+
+function buildDurableCandidateReviewSnapshot(candidate: ConcernCandidate): Record<string, unknown> {
+  return {
+    schemaVersion: 1,
+    title: candidate.title,
+    summary: candidate.summary,
+    followUpHint: candidate.followUpHint,
+    channelId: candidate.channelId,
+    triggerReason: candidate.triggerReason,
+    sourceRef: candidate.sourceRef,
+    sourceMessageIds: candidate.sourceMessageIds,
+    conversationContext: candidate.conversationContext,
+    relatedMemoryContext: candidate.relatedMemoryContext,
+    ...(candidate.turnId ? { turnId: candidate.turnId } : {}),
+  };
+}
+
+function parseDurableCandidateReviewSnapshot(value: unknown): Omit<
+  ConcernCandidate,
+  | 'id'
+  | 'dedupeKey'
+  | 'durableConcernId'
+  | 'source'
+  | 'priorityHint'
+  | 'evidenceRefs'
+  | 'createdAt'
+  | 'contactId'
+  | 'dueAt'
+  | 'formationVAD'
+> {
+  if (!isRecord(value) || value.schemaVersion !== 1) {
+    throw new Error('Durable concern candidate review snapshot must use schemaVersion 1');
+  }
+  const requireBoundedText = (field: string, maxChars = MAX_CANDIDATE_TEXT_CHARS): string => {
+    const raw = value[field];
+    if (typeof raw !== 'string' || raw.length === 0 || raw.length > maxChars) {
+      throw new Error(`Durable concern candidate review snapshot ${field} is invalid`);
+    }
+    return raw;
+  };
+  const triggerReason = value.triggerReason;
+  if (typeof triggerReason !== 'string' || ![
+    'manual',
+    'reflection_output',
+    'response_turn',
+    'interval',
+    'context_threshold',
+    'interval_and_threshold',
+    'observed_count',
+    'observed_time',
+    'direct_mention',
+    'high_salience',
+    'backlog_lag',
+  ].includes(triggerReason)) {
+    throw new Error('Durable concern candidate review snapshot triggerReason is invalid');
+  }
+  const followUpHint = value.followUpHint;
+  if (followUpHint !== 'internal_only' && followUpHint !== 'possible_follow_up') {
+    throw new Error('Durable concern candidate review snapshot followUpHint is invalid');
+  }
+  if (!Array.isArray(value.sourceMessageIds)
+    || value.sourceMessageIds.some(id => !Number.isSafeInteger(id))) {
+    throw new Error('Durable concern candidate review snapshot sourceMessageIds is invalid');
+  }
+  if (!Array.isArray(value.conversationContext)
+    || value.conversationContext.length > MAX_CONTEXT_MESSAGES) {
+    throw new Error('Durable concern candidate review snapshot conversationContext is invalid');
+  }
+  const conversationContext = value.conversationContext.map((entry, index) => {
+    if (!isRecord(entry)
+      || !Number.isSafeInteger(entry.id)
+      || typeof entry.content !== 'string'
+      || entry.content.length > MAX_CANDIDATE_TEXT_CHARS
+      || (entry.role !== 'user' && entry.role !== 'assistant' && entry.role !== 'system' && entry.role !== 'tool')
+      || (entry.authorId !== undefined && typeof entry.authorId !== 'string')
+      || (entry.authorName !== undefined && typeof entry.authorName !== 'string')
+      || (entry.timestamp !== undefined && !Number.isFinite(entry.timestamp))) {
+      throw new Error(`Durable concern candidate review snapshot conversationContext[${index}] is invalid`);
+    }
+    return {
+      id: entry.id as number,
+      role: entry.role,
+      content: entry.content,
+      ...(typeof entry.authorId === 'string' ? { authorId: entry.authorId } : {}),
+      ...(typeof entry.authorName === 'string' ? { authorName: entry.authorName } : {}),
+      ...(typeof entry.timestamp === 'number' ? { timestamp: entry.timestamp } : {}),
+    };
+  });
+  if (!Array.isArray(value.relatedMemoryContext)
+    || value.relatedMemoryContext.length > MAX_RELATED_MEMORIES) {
+    throw new Error('Durable concern candidate review snapshot relatedMemoryContext is invalid');
+  }
+  const relatedMemoryContext = value.relatedMemoryContext.map((memory, index) => {
+    if (!isRecord(memory)
+      || typeof memory.id !== 'string'
+      || typeof memory.type !== 'string'
+      || !VALID_MEMORY_TYPES.includes(memory.type as PurrMemory['type'])
+      || typeof memory.text !== 'string'
+      || memory.text.length > MAX_CANDIDATE_TEXT_CHARS
+      || !Number.isFinite(memory.importance)
+      || !Number.isFinite(memory.confidence)
+      || !Number.isFinite(memory.salience)
+      || typeof memory.sourceRef !== 'string') {
+      throw new Error(`Durable concern candidate review snapshot relatedMemoryContext[${index}] is invalid`);
+    }
+    return {
+      id: memory.id,
+      type: memory.type as PurrMemory['type'],
+      text: memory.text,
+      importance: memory.importance as number,
+      confidence: memory.confidence as number,
+      salience: memory.salience as number,
+      sourceRef: memory.sourceRef,
+    };
+  });
+  if (value.turnId !== undefined && typeof value.turnId !== 'string') {
+    throw new Error('Durable concern candidate review snapshot turnId is invalid');
+  }
+  return {
+    title: requireBoundedText('title'),
+    summary: requireBoundedText('summary'),
+    followUpHint,
+    channelId: requireBoundedText('channelId'),
+    triggerReason: triggerReason as ConcernCandidate['triggerReason'],
+    sourceRef: requireBoundedText('sourceRef'),
+    sourceMessageIds: [...value.sourceMessageIds] as number[],
+    conversationContext,
+    relatedMemoryContext,
+    ...(typeof value.turnId === 'string' ? { turnId: value.turnId } : {}),
+  };
+}
+
+function restoreDurableConcernCandidate(concern: ActiveConcern): ConcernCandidate {
+  const snapshot = parseDurableCandidateReviewSnapshot(concern.candidateReviewSnapshot);
+  return {
+    ...snapshot,
+    id: concern.id,
+    dedupeKey: `durable-concern:${concern.id}`,
+    durableConcernId: concern.id,
+    source: 'memory_extraction',
+    priorityHint: concern.priority,
+    evidenceRefs: concern.evidenceRefs.filter(ref => (
+      ref.kind !== 'runtime' || !ref.ref.startsWith(DURABLE_CANDIDATE_DEDUPE_PREFIX)
+    )),
+    createdAt: concern.createdAt,
+    ...(concern.contactId ? { contactId: concern.contactId } : {}),
+    ...(concern.nextReviewAt ? { dueAt: concern.nextReviewAt } : {}),
+    ...(concern.formationVAD ? { formationVAD: concern.formationVAD } : {}),
+  };
+}
+
+async function listAllDurableConcernCandidates(
+  concernStore: ConcernStorePort,
+  options: { includeExpired: boolean },
+): Promise<ActiveConcern[]> {
+  const candidates: ActiveConcern[] = [];
+  let offset = 0;
+  let hasMore = true;
+  while (hasMore) {
+    const batch = await concernStore.list({
+      includeResolved: false,
+      includeExpired: options.includeExpired,
+      limit: MAX_LIST_LIMIT,
+      offset,
+    });
+    candidates.push(...batch.filter(concern => concern.status === 'candidate'));
+    hasMore = batch.length === MAX_LIST_LIMIT;
+    if (hasMore) offset += batch.length;
+  }
+  return candidates;
+}
+
+export async function createAutomatedConcernRuntime(
   options: CreateAutomatedConcernRuntimeOptions,
-): AutomatedConcernRuntime {
+): Promise<AutomatedConcernRuntime> {
   const queue = new ConcernCandidateQueue({
     ...(options.now ? { now: options.now } : {}),
   });
+  const now = options.now?.() ?? new Date();
+  const durableCandidates = await listAllDurableConcernCandidates(options.concernStore, {
+    includeExpired: true,
+  });
+  for (const concern of durableCandidates) {
+    if (concern.status !== 'candidate') continue;
+    if (Date.parse(concern.expiresAt) <= now.getTime()) {
+      await options.concernStore.transitionConcernStatus(concern.id, {
+        status: 'dismissed',
+        transitionedAt: now.toISOString(),
+        evidenceRefs: [{ kind: 'runtime', ref: 'concern-candidate-expired-before-review' }],
+      });
+      continue;
+    }
+    queue.enqueueMany([restoreDurableConcernCandidate(concern)]);
+  }
   const reviewer = new ConcernCandidateReviewer(options.llmProvider, options.personaPreamble ?? null);
   const worker = new ConcernCandidateWorker({
     queue,
@@ -847,16 +1149,57 @@ export function createAutomatedConcernRuntime(
     ...(options.now ? { now: options.now } : {}),
   });
   const extractionSink: ConcernCandidateExtractionSink = async (context) => {
-    const enqueued = queue.enqueueFromExtraction(context);
-    if (enqueued.length === 0) return;
-    await options.eventBus.emit('intention.concern_candidate.enqueued', {
-      candidateCount: enqueued.length,
-      pendingCount: queue.pendingCount(),
-      candidateIds: enqueued.map(candidate => candidate.id),
-      channelId: context.channelId,
-      timestamp: (options.now?.() ?? new Date()).getTime(),
-      ...(context.turnId ? { turnId: context.turnId } : {}),
+    const derived = deriveConcernCandidatesFromExtraction({
+      context,
+      ...(options.now ? { now: options.now } : {}),
     });
+    const existingCandidates = await listAllDurableConcernCandidates(options.concernStore, {
+      includeExpired: false,
+    });
+    const candidatesByDedupeRef = new Map(existingCandidates.flatMap((concern) => {
+      const ref = durableCandidateDedupeRef(concern);
+      return ref ? [[ref, concern] as const] : [];
+    }));
+    const durableIds: string[] = [];
+    const durableCandidates: ConcernCandidate[] = [];
+    for (const candidate of derived) {
+      const dedupeEvidence = candidateDedupeEvidenceRef(candidate.dedupeKey);
+      const concern = candidatesByDedupeRef.get(dedupeEvidence.ref)
+        ?? await options.concernStore.create({
+          text: buildConcernText(candidate),
+          priority: candidate.priorityHint,
+          source: 'appraisal',
+          status: 'candidate',
+          createdAt: candidate.createdAt,
+          ...(candidate.contactId ? { contactId: candidate.contactId } : {}),
+          ...(candidate.formationVAD ? { formationVAD: candidate.formationVAD } : {}),
+          ...(candidate.dueAt ? { nextReviewAt: candidate.dueAt } : {}),
+          evidenceRefs: [...candidate.evidenceRefs, dedupeEvidence],
+          candidateReviewSnapshot: buildDurableCandidateReviewSnapshot(candidate),
+        });
+      candidatesByDedupeRef.set(dedupeEvidence.ref, concern);
+      durableIds.push(concern.id);
+      if (concern.status === 'candidate') {
+        durableCandidates.push({
+          ...candidate,
+          id: concern.id,
+          dedupeKey: `durable-concern:${concern.id}`,
+          durableConcernId: concern.id,
+        });
+      }
+    }
+    const enqueued = queue.enqueueMany(durableCandidates);
+    if (enqueued.length > 0) {
+      await options.eventBus.emit('intention.concern_candidate.enqueued', {
+        candidateCount: enqueued.length,
+        pendingCount: queue.pendingCount(),
+        candidateIds: enqueued.map(candidate => candidate.id),
+        channelId: context.channelId,
+        timestamp: (options.now?.() ?? new Date()).getTime(),
+        ...(context.turnId ? { turnId: context.turnId } : {}),
+      });
+    }
+    return [...new Set(durableIds)];
   };
   const unsubscribe = options.eventBus.on('agent.turn.end', () => {
     worker.notifyTurnCompleted();
@@ -873,13 +1216,11 @@ async function countActiveAttentionConcerns(
   concernStore: ConcernStorePort,
   asOf: Date,
 ): Promise<number> {
-  const active = await concernStore.list({
-    includeResolved: false,
-    includeExpired: false,
-    asOf: asOf.toISOString(),
-    limit: MAX_ACTIVE_CONCERNS + 1,
-  });
-  return active.filter(concern => isConcernAttentionStatus(concern.status)).length;
+  const active = await concernStore.getActiveConcerns();
+  return active.filter(concern => (
+    isConcernAttentionStatus(concern.status)
+    && Date.parse(concern.expiresAt) > asOf.getTime()
+  )).length;
 }
 
 function buildMessageContext(entries: readonly SessionEntry[]): ConcernCandidateMessageContext[] {

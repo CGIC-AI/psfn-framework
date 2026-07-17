@@ -193,6 +193,61 @@ describe('DiscordLifecycleNotifier', () => {
       expect(sentMessages[0].content).toContain("I'm back");
       expect(sentMessages[0].content).toMatch(/\d+s/);
     });
+
+    // psfn-framework-dq9c: a deploy boots the agent 2-3 times; only the first should announce.
+    it('suppresses a duplicate ready notification for the same image tag and channel', async () => {
+      const config = {
+        sender: mockSender,
+        heartbeatChannelId: 'hb-channel',
+        dataDir: tempDir,
+        startTime: Date.now(),
+        imageTag: '0.1.0-kube',
+      };
+
+      await new DiscordLifecycleNotifier(config).notifyReady();
+      await new DiscordLifecycleNotifier(config).notifyReady();
+      await new DiscordLifecycleNotifier(config).notifyReady();
+
+      expect(sentMessages).toHaveLength(1);
+    });
+
+    it('announces again when the image tag changes (new build)', async () => {
+      const base = {
+        sender: mockSender,
+        heartbeatChannelId: 'hb-channel',
+        dataDir: tempDir,
+        startTime: Date.now(),
+      };
+
+      await new DiscordLifecycleNotifier({ ...base, imageTag: '0.1.0-kube' }).notifyReady();
+      await new DiscordLifecycleNotifier({ ...base, imageTag: '0.2.0-kube' }).notifyReady();
+
+      expect(sentMessages).toHaveLength(2);
+    });
+
+    it('does not dedupe when no image tag is available', async () => {
+      const prev = process.env.PSFN_IMAGE_TAG;
+      delete process.env.PSFN_IMAGE_TAG;
+      try {
+        const config = {
+          sender: mockSender,
+          heartbeatChannelId: 'hb-channel',
+          dataDir: tempDir,
+          startTime: Date.now(),
+        };
+
+        await new DiscordLifecycleNotifier(config).notifyReady();
+        await new DiscordLifecycleNotifier(config).notifyReady();
+
+        expect(sentMessages).toHaveLength(2);
+      } finally {
+        if (prev === undefined) {
+          delete process.env.PSFN_IMAGE_TAG;
+        } else {
+          process.env.PSFN_IMAGE_TAG = prev;
+        }
+      }
+    });
   });
 
   describe('notifyShutdown', () => {

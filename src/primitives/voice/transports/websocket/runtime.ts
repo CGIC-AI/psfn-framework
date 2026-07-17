@@ -92,7 +92,7 @@ function toSessionKey(transportSession: WebSocketVoiceSession, frameSessionId: s
 export class WebSocketVoiceRuntime {
   private readonly sessions = new Map<string, RuntimeSessionState>();
   private readonly startsInFlight = new Map<string, SessionStartInFlight>();
-  // psfn-framework-mmo9.7.5: last spoken assistant utterance per connection,
+  // mmo9.7.5: last spoken assistant utterance per connection,
   // used to replay locally on a deterministic "repeat" control intent without a
   // model turn.
   private readonly lastAssistantUtterance = new Map<string, string>();
@@ -319,7 +319,7 @@ export class WebSocketVoiceRuntime {
       const transcript = this.security.validateTranscriptText(this.collectTranscript(state));
       this.throwIfInterrupted(state);
 
-      // psfn-framework-mmo9.7.5: deterministic transport-control guard. If the
+      // mmo9.7.5: deterministic transport-control guard. If the
       // finalized transcript is exactly a stop/interrupt/repeat command, handle
       // it locally with ZERO model invocations — it must never reach
       // onAssistantStream/onAssistantTurn. Detection is exact/local (no
@@ -405,7 +405,7 @@ export class WebSocketVoiceRuntime {
   }
 
   /**
-   * psfn-framework-d8vq.1: classify the session's finalized speech as a
+   * d8vq.1: classify the session's finalized speech as a
    * transport control. A single STT session can emit more than one `final`
    * (each pushed to `finalTranscripts`). Two verdicts combine, safe-direction:
    *
@@ -450,7 +450,7 @@ export class WebSocketVoiceRuntime {
   }
 
   /**
-   * psfn-framework-mmo9.7.5: local, model-free handling for a spoken transport
+   * mmo9.7.5: local, model-free handling for a spoken transport
    * control. `repeat` replays the last spoken assistant utterance verbatim;
    * `stop`/`interrupt` produce no reply for this utterance (the session.end
    * `finally` already cancels the in-flight STT). No model provider call is
@@ -564,7 +564,7 @@ export class WebSocketVoiceRuntime {
   }
 
   private async streamPlayback(state: RuntimeSessionState, assistantText: string): Promise<void> {
-    // psfn-framework-mmo9.7.5: remember the spoken utterance so a later "repeat"
+    // mmo9.7.5: remember the spoken utterance so a later "repeat"
     // control replays it locally without a model turn.
     this.lastAssistantUtterance.set(state.transportSession.connectionId, assistantText);
     // Final-only path (unchanged): synthesize the whole accepted turn text as a
@@ -597,7 +597,7 @@ export class WebSocketVoiceRuntime {
   ): Promise<void> {
     let totalBytes = 0;
     let seq = 0;
-    // psfn-framework-mmo9.7.5: accumulate spoken segments so a later "repeat"
+    // mmo9.7.5: accumulate spoken segments so a later "repeat"
     // control can replay the whole utterance locally (no model turn).
     const spokenSegments: string[] = [];
     for await (const segment of stream.segments) {

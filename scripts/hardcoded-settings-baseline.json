@@ -38,8 +38,32 @@
     },
     {
       "file": "src/app/e2e/icp-certification/process-harness.ts",
+      "name": "COMMAND_TIMEOUT_MS",
+      "value": "60_000",
+      "note": "Code-owned real-process certification command deadline that prevents a hung child RPC from stalling the test suite."
+    },
+    {
+      "file": "src/app/e2e/icp-certification/process-harness.ts",
       "name": "START_TIMEOUT_MS",
       "value": "60_000"
+    },
+    {
+      "file": "src/app/e2e/icp-certification/process-harness.ts",
+      "name": "STOP_TIMEOUT_MS",
+      "value": "15_000",
+      "note": "Code-owned certification child shutdown deadline used only by the real-process test harness."
+    },
+    {
+      "file": "src/app/e2e/multi-companion-runtime-validation.ts",
+      "name": "PROCESS_EXIT_TIMEOUT_MS",
+      "value": "10_000",
+      "note": "Code-owned multi-companion validation child-exit deadline that prevents a hung certification process."
+    },
+    {
+      "file": "src/app/e2e/multi-companion-runtime-validation.ts",
+      "name": "QUIESCENCE_TIMEOUT_MS",
+      "value": "30_000",
+      "note": "Code-owned multi-companion validation deadline bounding deterministic background-queue drain."
     },
     {
       "file": "src/app/gateway/api-surface.ts",
@@ -52,6 +76,12 @@
       "value": "240_000"
     },
     {
+      "file": "src/app/operator/kube-self-update-transport.ts",
+      "name": "DEFAULT_MAX_BUFFER",
+      "value": "16 * 1024 * 1024",
+      "note": "Code-owned child-process output allocation ceiling that limits operator-job memory exhaustion."
+    },
+    {
       "file": "src/app/operator/main.ts",
       "name": "DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS",
       "value": "15_000"
@@ -60,6 +90,24 @@
       "file": "src/app/startup/composition/post-turn-actions.ts",
       "name": "MAX_STATUS_HISTORY",
       "value": "25"
+    },
+    {
+      "file": "src/app/startup/support/gateway-operator-confirmation-client.ts",
+      "name": "MAX_AUTHORIZATION_LENGTH",
+      "value": "1_024",
+      "note": "Code-owned credential-header bound paired with control-character rejection to prevent header abuse."
+    },
+    {
+      "file": "src/app/startup/support/gateway-operator-confirmation-client.ts",
+      "name": "MAX_COOKIE_LENGTH",
+      "value": "2_048",
+      "note": "Code-owned cookie credential bound paired with control-character rejection to prevent header abuse."
+    },
+    {
+      "file": "src/app/startup/support/gateway-operator-confirmation-client.ts",
+      "name": "MAX_RESPONSE_BYTES",
+      "value": "64 * 1024",
+      "note": "Code-owned untrusted gateway-response allocation ceiling enforced while streaming to prevent memory exhaustion."
     },
     {
       "file": "src/boundary/custody/runtime-credential-source.ts",
@@ -115,6 +163,12 @@
       "file": "src/boundary/gateway/filesystem-paths.ts",
       "name": "MAX_FS_LIST_GLOB_LENGTH",
       "value": "512"
+    },
+    {
+      "file": "src/boundary/gateway/fleet-auth-broker.ts",
+      "name": "OAUTH_CODE_MAX_LENGTH",
+      "value": "2048",
+      "note": "Code-owned OAuth callback input bound paired with control-character rejection at the authentication trust boundary."
     },
     {
       "file": "src/boundary/gateway/inline-image-reference-hints.ts",
@@ -202,6 +256,12 @@
       "value": "16000"
     },
     {
+      "file": "src/boundary/gateway/kubernetes-read-api.ts",
+      "name": "MAX_RESPONSE_BYTES",
+      "value": "2 * 1024 * 1024",
+      "note": "Code-owned Kubernetes API response allocation ceiling enforced during streaming to prevent memory exhaustion."
+    },
+    {
       "file": "src/boundary/gateway/methods/beads-github-project-sync.ts",
       "name": "DEFAULT_COMMAND_TIMEOUT_MS",
       "value": "12_000"
@@ -223,6 +283,12 @@
     },
     {
       "file": "src/boundary/gateway/methods/beads.ts",
+      "name": "MAX_ACCEPTANCE_CHARS",
+      "value": "10_000",
+      "note": "Code-owned Beads CLI argument ceiling that bounds operator-authored acceptance payloads before process execution."
+    },
+    {
+      "file": "src/boundary/gateway/methods/beads.ts",
       "name": "MAX_ACTOR_CHARS",
       "value": "64"
     },
@@ -235,6 +301,12 @@
       "file": "src/boundary/gateway/methods/beads.ts",
       "name": "MAX_DEPENDENCIES",
       "value": "16"
+    },
+    {
+      "file": "src/boundary/gateway/methods/beads.ts",
+      "name": "MAX_DESCRIPTION_CHARS",
+      "value": "20_000",
+      "note": "Code-owned Beads CLI argument ceiling that bounds operator-authored issue descriptions before process execution."
     },
     {
       "file": "src/boundary/gateway/methods/beads.ts",
@@ -706,6 +778,12 @@
     },
     {
       "file": "src/channels/api/server.ts",
+      "name": "CONFIRMATION_OPERATOR_MAX_BODY_BYTES",
+      "value": "16 * 1024",
+      "note": "Code-owned authenticated confirmation request-body ceiling that bounds JSON parsing and memory use."
+    },
+    {
+      "file": "src/channels/api/server.ts",
       "name": "TELEMETRY_MAX_SKEW_MS",
       "value": "5 * 60_000"
     },
@@ -765,6 +843,12 @@
       "file": "src/channels/api/server/companion-touch-stimulus-route.ts",
       "name": "TOUCH_STIMULUS_MAX_BODY_BYTES",
       "value": "16 * 1024"
+    },
+    {
+      "file": "src/channels/api/server/fleet-auth-routes.ts",
+      "name": "MUTATION_BODY_LIMIT",
+      "value": "2048",
+      "note": "Code-owned fleet-auth mutation request-body ceiling that bounds attacker-controlled JSON parsing."
     },
     {
       "file": "src/channels/api/server/http.ts",
@@ -1137,11 +1221,6 @@
       "value": "256"
     },
     {
-      "file": "src/core/agent/substrate-agent/turn-support-runtime.ts",
-      "name": "DEFAULT_POST_TURN_DRAIN_TIMEOUT_MS",
-      "value": "5_000"
-    },
-    {
       "file": "src/core/agent/substrate-agent/vision-attachments.ts",
       "name": "DEDICATED_VISION_REVIEW_MAX_ATTEMPTS",
       "value": "3"
@@ -1445,6 +1524,24 @@
       "file": "src/core/emotion/acac.ts",
       "name": "MAX_RATIONALE_LENGTH",
       "value": "500"
+    },
+    {
+      "file": "src/core/emotion/appraisal-state.ts",
+      "name": "MAX_CONTACT_REF_CHARS",
+      "value": "256",
+      "note": "Code-owned durable appraisal-schema bound on contact references at the background-job trust boundary."
+    },
+    {
+      "file": "src/core/emotion/appraisal-state.ts",
+      "name": "MAX_DISCRETE_EMOTIONS",
+      "value": "32",
+      "note": "Code-owned durable appraisal-schema cardinality bound that limits untrusted queue payload expansion."
+    },
+    {
+      "file": "src/core/emotion/appraisal-state.ts",
+      "name": "MAX_DISCRETE_LABEL_CHARS",
+      "value": "64",
+      "note": "Code-owned durable appraisal-schema label bound that limits untrusted queue payload expansion."
     },
     {
       "file": "src/core/emotion/appraisal.ts",
@@ -2137,6 +2234,12 @@
       "value": "500"
     },
     {
+      "file": "src/core/scheduler/scheduler.ts",
+      "name": "MIN_WAKE_MS",
+      "value": "50",
+      "note": "Code-owned anti-busy-loop safety floor that prevents overdue scheduler tasks from rearming at zero delay."
+    },
+    {
       "file": "src/core/self-model/situated-location.ts",
       "name": "SITUATED_LOCATION_STALE_THRESHOLD_MS",
       "value": "6 * 60 * 60 * 1000"
@@ -2801,6 +2904,12 @@
       "value": "80"
     },
     {
+      "file": "src/faculties/memory/extraction/coverage-ranges.ts",
+      "name": "MAX_COVERAGE_INTERVALS",
+      "value": "128",
+      "note": "Code-owned bounded-memory safety valve for pathological out-of-order extraction coverage without bridging gaps."
+    },
+    {
       "file": "src/faculties/memory/extraction/orchestrator.ts",
       "name": "EXTRACTION_CHUNK_LLM_CONCURRENCY",
       "value": "2"
@@ -2924,6 +3033,12 @@
       "file": "src/faculties/memory/postgres-store.ts",
       "name": "SCRATCHPAD_MAX_ENTRIES",
       "value": "64"
+    },
+    {
+      "file": "src/faculties/memory/postgres-store/subject-backfill.ts",
+      "name": "MAX_BATCH_SIZE",
+      "value": "500",
+      "note": "Code-owned database transaction ceiling that bounds subject-backfill lock duration and resource use."
     },
     {
       "file": "src/faculties/memory/research-library/store.ts",
@@ -3146,6 +3261,24 @@
       "value": "200"
     },
     {
+      "file": "src/faculties/wiki/personal-wishlist-contracts.ts",
+      "name": "MAX_OPERATOR_RESPONSE_CHARS",
+      "value": "4_000",
+      "note": "Code-owned canonical wishlist document bound that rejects oversized operator responses consistently across tool and Garden reads."
+    },
+    {
+      "file": "src/faculties/wiki/personal-wishlist-contracts.ts",
+      "name": "MAX_WISH_CONTEXT_CHARS",
+      "value": "4_000",
+      "note": "Code-owned canonical wishlist document bound that rejects oversized optional context before persistence."
+    },
+    {
+      "file": "src/faculties/wiki/personal-wishlist-contracts.ts",
+      "name": "MAX_WISH_TEXT_CHARS",
+      "value": "2_000",
+      "note": "Code-owned canonical wishlist document bound that rejects oversized companion-authored wish text before persistence."
+    },
+    {
       "file": "src/faculties/wiki/pgvector-projection.ts",
       "name": "DEFAULT_WIKI_CHUNK_MAX_CHARS",
       "value": "1200"
@@ -3224,6 +3357,18 @@
       "file": "src/operator/garden/operator-surface.ts",
       "name": "ADMIN_MAX_BODY_SIZE",
       "value": "65_536"
+    },
+    {
+      "file": "src/operator/garden/operator-surface.ts",
+      "name": "MAX_OPERATOR_AUTHORIZATION_LENGTH",
+      "value": "1_024",
+      "note": "Code-owned operator credential propagation bound that prevents oversized Authorization headers crossing processes."
+    },
+    {
+      "file": "src/operator/garden/operator-surface.ts",
+      "name": "MAX_OPERATOR_COOKIE_TOKEN_LENGTH",
+      "value": "512",
+      "note": "Code-owned operator credential propagation bound that prevents oversized cookie tokens crossing processes."
     },
     {
       "file": "src/operator/garden/routes/drift-review-routes.ts",
@@ -3491,6 +3636,24 @@
       "value": "63"
     },
     {
+      "file": "src/persistence/postgres/background-work-store.ts",
+      "name": "MAX_FINGERPRINT_LENGTH",
+      "value": "128",
+      "note": "Code-owned durable queue fingerprint protocol bound applied when mapping and accepting persisted jobs."
+    },
+    {
+      "file": "src/persistence/postgres/background-work-store.ts",
+      "name": "MAX_PURGE_LIMIT",
+      "value": "10_000",
+      "note": "Code-owned database deletion ceiling that bounds a single terminal-job purge transaction."
+    },
+    {
+      "file": "src/persistence/postgres/background-work-store.ts",
+      "name": "MAX_TEXT_LENGTH",
+      "value": "2_048",
+      "note": "Code-owned durable queue identifier and metadata bound at the persistence trust boundary."
+    },
+    {
       "file": "src/persistence/postgres/companion-presence-store.ts",
       "name": "MAX_ID_CHARS",
       "value": "256"
@@ -3615,6 +3778,12 @@
       "file": "src/persistence/sessions/store.ts",
       "name": "MAX_RECENT_ENTRY_CACHE_LIMITS",
       "value": "8"
+    },
+    {
+      "file": "src/persistence/sessions/store.ts",
+      "name": "MAX_TURN_RECORD_ELIGIBILITY_SNAPSHOT_FENCES",
+      "value": "512",
+      "note": "Code-owned lock-set safety ceiling preventing one post-turn effect from acquiring unbounded eligibility fences."
     },
     {
       "file": "src/persistence/sessions/store.ts",
@@ -4301,6 +4470,12 @@
       "file": "src/system/config/runtime-config-contracts.ts",
       "name": "PROMOTED_EXTENDED_TOOL_SLOTS_MAX",
       "value": "4"
+    },
+    {
+      "file": "src/system/lifecycle/command-runner.ts",
+      "name": "DEFAULT_MAX_OUTPUT_CHARS",
+      "value": "10_000",
+      "note": "Code-owned child-process diagnostic capture ceiling that bounds memory and error-message amplification."
     },
     {
       "file": "src/system/security/policy-constants.ts",

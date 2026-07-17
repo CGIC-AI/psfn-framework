@@ -39,6 +39,7 @@ export interface ActiveConcernRow {
   merged_from_ids: unknown;
   split_from_id: string | null;
   origin_icp_root_initiation_id: string | null;
+  candidate_review_snapshot: unknown;
 }
 
 export interface PendingFollowUpRow {
@@ -348,6 +349,11 @@ function parseJsonValue(value: unknown, fieldName: string): unknown {
   }
 }
 
+export function parseOptionalJsonValue(value: unknown, fieldName: string): unknown {
+  if (value === null || value === undefined) return undefined;
+  return parseJsonValue(value, fieldName);
+}
+
 export function parseConcernEvidenceRefs(
   value: unknown,
   fieldName: string,
@@ -445,6 +451,10 @@ export function mapActiveConcernRow(row: ActiveConcernRow): ActiveConcern {
   const originIcpRootInitiationId = normalizeOptionalConcernIcpRootInitiationId(
     row.origin_icp_root_initiation_id,
   );
+  const candidateReviewSnapshot = parseOptionalJsonValue(
+    row.candidate_review_snapshot,
+    'candidate_review_snapshot',
+  );
   return {
     id: row.id,
     text: row.text,
@@ -470,6 +480,7 @@ export function mapActiveConcernRow(row: ActiveConcernRow): ActiveConcern {
     ...(mergedFromIds.length > 0 ? { mergedFromIds } : {}),
     ...(splitFromId ? { splitFromId } : {}),
     ...(originIcpRootInitiationId ? { originIcpRootInitiationId } : {}),
+    ...(candidateReviewSnapshot !== undefined ? { candidateReviewSnapshot } : {}),
   };
 }
 

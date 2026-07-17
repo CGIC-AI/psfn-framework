@@ -18,6 +18,7 @@ import {
 import { countTokens } from '../../../../primitives/llm/tokens.js';
 import { createComponentLogger } from '../../../../shared/logger.js';
 import { toErrorMessage } from '../../../../shared/utils/errors.js';
+import { buildTurnSubsystemProjectionRef } from '../../../../shared/contracts/subsystem-output-refs.js';
 import type { ChannelMeta } from '../../../../system/trust/policy.js';
 import type { TrustLevel } from '../../../../system/trust/types.js';
 import type { ConversationScope } from '../../../session/conversation-scope.js';
@@ -40,7 +41,7 @@ import {
 
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
-type TurnSessionIdentity = import('../turn-execution-runtime.js').TurnSessionIdentity;
+type TurnSessionIdentity = import('./contracts.js').TurnSessionIdentity;
 
 export async function collectTurnResponseAttachments(input: {
   runtime: TurnExecutionRuntime;
@@ -352,6 +353,17 @@ export async function schedulePostTurnWork(input: {
     payload,
     source,
   }));
+  if (payloads.some(payload => payload.kind === 'memory_extraction')) {
+    const projectionBinding = {
+      logicalSessionId: source.logicalSessionId,
+      sourceChannelId: source.channelId,
+      sourceTurnId: source.turnId,
+      sourceRequestId: source.requestId,
+    };
+    turnRecord.extractedMemoryIds = [buildTurnSubsystemProjectionRef('memory', projectionBinding)];
+    turnRecord.concernDeltaRefs = [buildTurnSubsystemProjectionRef('concern', projectionBinding)];
+    turnRecord.contactDeltaRefs = [buildTurnSubsystemProjectionRef('contact', projectionBinding)];
+  }
   turnRecord.backgroundWorkHandoff = createTurnRecordBackgroundWorkHandoff(backgroundWorkInputs);
   // Record first, then atomically enqueue the complete manifest. A crash on
   // either side is recoverable: no queue row can outlive its canonical source,

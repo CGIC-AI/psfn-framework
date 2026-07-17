@@ -1,4 +1,4 @@
-import { isObjectRecord as isRecord } from '../../../../src/shared/utils/types.js';
+import { isObjectRecord as isRecord } from '../utils/types.js';
 /**
  * Wire framing for the Companion Cockpit <-> PSFN-Satellite-Hub transport.
  *

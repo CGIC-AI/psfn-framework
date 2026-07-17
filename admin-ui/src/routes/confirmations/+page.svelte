@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { getConfirmations, resolveConfirmation } from '$lib/api/endpoints/confirmations';
+  import {
+    loadConfirmationsLocalFirst,
+    resolveConfirmation,
+  } from '$lib/api/endpoints/confirmations';
   import type { ConfirmationQueueEntry, ConfirmationDecision } from '$lib/types';
   import { pushToast } from '$lib/stores/toast.svelte';
   import { createGardenQueueRefresh } from '$lib/polling/garden-queue-refresh';
@@ -44,22 +47,27 @@
     loading = true;
     error = '';
     endpointMissing = false;
+    let rendered = false;
 
     try {
-      const data = await getConfirmations();
-      entries = data.entries;
-      available = data.available;
-      if (data.message) {
-        actionMessage = data.message;
-      }
-      // Initialize modified params for new entries
-      for (const entry of data.entries) {
-        if (!modifiedParams[entry.id]) {
-          modifiedParams[entry.id] = stringifyParams(entry.params);
+      await loadConfirmationsLocalFirst((data, source) => {
+        rendered = true;
+        entries = data.entries;
+        available = data.available;
+        if (data.message) {
+          actionMessage = data.message;
         }
-      }
+        for (const entry of data.entries) {
+          if (!modifiedParams[entry.id]) {
+            modifiedParams[entry.id] = stringifyParams(entry.params);
+          }
+        }
+        if (source === 'cache') loading = false;
+      });
     } catch (e) {
-      if (e instanceof Error && e.message.includes('404')) {
+      if (rendered) {
+        pushToast(e instanceof Error ? e.message : 'Failed to refresh confirmations', 'error');
+      } else if (e instanceof Error && e.message.includes('404')) {
         endpointMissing = true;
       } else {
         error = e instanceof Error ? e.message : 'Failed to load confirmations';

@@ -10,8 +10,6 @@
 # builder can read companion-ui/ source and this directory's nginx.conf.
 FROM node:22.22.2-slim@sha256:9f6d5975c7dca860947d3915877f85607946403fc55349f39b4bc3688448bb6e AS build
 
-# The layout mirrors the repo: companion-ui/ sits next to the parent src/ tree,
-# because companion-ui reaches into ../../../../src/shared/utils/types.js.
 WORKDIR /build/companion-ui
 
 # The build helper passes the commit SHA here. Vite injects it into sw.js so a
@@ -23,12 +21,6 @@ COPY companion-ui/package.json companion-ui/package-lock.json ./
 RUN npm ci
 
 COPY companion-ui/ ./
-# Cross-package dependency: companion-ui/src/lib/protocol/framing.ts and
-# .../api/client.ts import isObjectRecord from ../../../../src/shared/utils/types.js
-# in the parent repo. That module is self-contained (no further imports), so
-# providing just it at the path the relative import expects keeps the build
-# faithful without dragging in the whole runtime source tree.
-COPY src/shared/utils/types.ts /build/src/shared/utils/types.ts
 RUN npm run build
 
 # nginx-unprivileged is designed to run as a non-root uid and listens on 8080.

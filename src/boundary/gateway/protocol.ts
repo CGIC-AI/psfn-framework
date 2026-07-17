@@ -178,7 +178,7 @@ export interface LLMChatParams extends GatewayCorrelationParams {
   tools?: ToolSchema[];
   accounting?: LLMCallAccountingContext;
   /**
-   * psfn-framework-d8vq.2: declared work spec for an autonomous streamed call.
+   * d8vq.2: declared work spec for an autonomous streamed call.
    * Threads the typed LLMWorkSpec (minus its correlation, which rides the flat
    * correlation params) across the RPC boundary so the gateway-side LLMClient
    * enforces the same fail-closed accountability guard + lane reconciliation.
@@ -207,7 +207,7 @@ export interface LLMCompleteParams extends GatewayCorrelationParams {
   frequencyPenalty?: number;
   accounting?: LLMCallAccountingContext;
   /**
-   * psfn-framework-d8vq.2: declared work spec for an autonomous completion
+   * d8vq.2: declared work spec for an autonomous completion
    * (the `completeWithWorkSpec` entry). Threads the typed LLMWorkSpec (minus its
    * correlation, which rides the flat correlation params) across the RPC boundary
    * so the gateway-side LLMClient enforces the same fail-closed accountability
@@ -368,6 +368,8 @@ export interface BeadsShowParams extends BeadsBaseParams {
 
 export interface BeadsCreateParams extends BeadsBaseParams {
   title: string;
+  description?: string;
+  acceptance?: string;
   issueType?: BeadsIssueType;
   priority?: number;
   deps?: string[];
@@ -1116,7 +1118,7 @@ export const GatewayErrors = {
    */
   MODEL_CALL_PREEMPTED: -32018,
   /**
-   * psfn-framework-d8vq.2: an RPC-transported LLMWorkSpec was structurally
+   * d8vq.2: an RPC-transported LLMWorkSpec was structurally
    * malformed (missing/invalid required field or out-of-domain value). Rejected
    * at the boundary before any provider I/O — fail closed.
    */

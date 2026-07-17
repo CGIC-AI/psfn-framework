@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import type { PoolClient } from 'pg';
 import { LifecycleMutationDenied } from './authority-lifecycle-mutation-contract.js';
 import { lifecycleProviderProofs } from './authority-lifecycle-proof.js';
@@ -10,7 +10,51 @@ import type {
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 import { fleetAuthLifecycleDecisionFingerprint } from './authority-lifecycle-fingerprint.js';
 
-function digest(value: string): string {
+/**
+ * Versioned domain separator for lifecycle audit identifier digests. The keyed
+ * digester covers the enumerable / low-entropy identifiers that constitute the
+ * deanonymization oracle this bead closes — above all the Discord snowflakes
+ * (provider subject ids) — plus the remaining opaque identifiers. It is keyed
+ * HMAC-SHA256 under the fleet-auth session pepper, so a privileged reader of
+ * authorization_audit_events cannot confirm a candidate identifier without the
+ * pepper. `v1` namespaces the keyed scheme away from the retired unkeyed digests
+ * so old and new values never collide (psfn-framework-5wrp).
+ */
+export const FLEET_AUTH_LIFECYCLE_AUDIT_DIGEST_DOMAIN =
+  'fleet-authorization:lifecycle-audit-digest:v1\0';
+
+export type FleetAuthLifecycleAuditDigest = (value: string) => string;
+
+/** Build the keyed lifecycle-audit digester; fail closed on a missing pepper. */
+export function createFleetAuthLifecycleAuditDigest(
+  sessionPepper: string,
+): FleetAuthLifecycleAuditDigest {
+  if (sessionPepper.length < 32) {
+    throw new Error('Fleet auth lifecycle audit requires the configured session pepper');
+  }
+  return (value: string): string => createHmac('sha256', sessionPepper)
+    .update(FLEET_AUTH_LIFECYCLE_AUDIT_DIGEST_DOMAIN)
+    .update(value)
+    .digest('hex');
+}
+
+/**
+ * Unkeyed digest reserved for the four structural identifiers that the
+ * companion-readd recovery reconciliation path (companion-readd-reconciliation.ts)
+ * ALSO writes into the audit record — principal, ceremony, companion, and
+ * authority-lineage ids — plus the audit `resource` content hash. Keeping these
+ * unkeyed lets the two independent writers (the online lifecycle transition and
+ * the offline non-restored-floor recovery) emit byte-identical companion.readd
+ * audit rows, which readd idempotency (readIdempotentCompanionReaddResult)
+ * relies on. Keying them would instead demand threading the fleet-auth session
+ * pepper through the entire backup/restore/scheduler subsystem (which today has
+ * no auth-secret dependency) for no security gain: these are 122-bit random
+ * UUIDs (or a UUID-derived hash), not the enumerable identifiers that give the
+ * deanonymization oracle. Every enumerable / non-recovery identifier — the
+ * Discord snowflakes and the session/binding/grant/contact/callback ids — uses
+ * the keyed digester above.
+ */
+function structuralDigest(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
@@ -24,7 +68,8 @@ function positiveInteger(value: string, field: string): number {
 
 function redactedClaim(claim: PrincipalAuthorityClaim): Record<string, unknown> {
   return {
-    principalDigest: digest(claim.principalId),
+    // principalId is a recovery-shared structural id (see structuralDigest).
+    principalDigest: structuralDigest(claim.principalId),
     authnVersion: claim.authnVersion,
     authzVersion: claim.authzVersion,
     bindingVersion: claim.bindingVersion,
@@ -34,29 +79,36 @@ function redactedClaim(claim: PrincipalAuthorityClaim): Record<string, unknown> 
 }
 
 function redactedContext(
+  digest: FleetAuthLifecycleAuditDigest,
   decision: VerifiedFleetAuthLifecycleDecision,
   snapshots?: LifecycleAuditSnapshots,
   lifecycleResult?: FleetAuthLifecycleResult,
 ): Record<string, unknown> {
   const resourceClaims: Record<string, unknown> = {};
+  // companionId is recovery-shared (structural, unkeyed); every other resource
+  // id is keyed. Marked entries use the unkeyed structural digest.
   const resourceIds = [
-    ['companionDigest', 'companionId'],
-    ['bindingDigest', 'bindingId'],
-    ['grantDigest', 'grantId'],
-    ['replacementGrantDigest', 'newGrantId'],
-    ['contactDigest', 'contactId'],
-    ['sourceContactDigest', 'sourceContactId'],
-    ['canonicalContactDigest', 'canonicalContactId'],
+    ['companionDigest', 'companionId', true],
+    ['bindingDigest', 'bindingId', false],
+    ['grantDigest', 'grantId', false],
+    ['replacementGrantDigest', 'newGrantId', false],
+    ['contactDigest', 'contactId', false],
+    ['sourceContactDigest', 'sourceContactId', false],
+    ['canonicalContactDigest', 'canonicalContactId', false],
   ] as const;
   const decisionFields = decision as unknown as Record<string, unknown>;
-  for (const [output, input] of resourceIds) {
-    if (input in decisionFields) resourceClaims[output] = digest(String(decisionFields[input]));
+  for (const [output, input, structural] of resourceIds) {
+    if (input in decisionFields) {
+      const raw = String(decisionFields[input]);
+      resourceClaims[output] = structural ? structuralDigest(raw) : digest(raw);
+    }
   }
   return {
     schemaVersion: 2,
     decisionFingerprint: fleetAuthLifecycleDecisionFingerprint(decision),
     action: decision.action,
-    ceremonyDigest: digest(decision.ceremonyId),
+    // ceremonyId is recovery-shared (structural, unkeyed).
+    ceremonyDigest: structuralDigest(decision.ceremonyId),
     authorityClaim: {
       authorityGeneration: decision.authorityGeneration,
       globalAuthEpoch: decision.globalAuthEpoch,
@@ -82,6 +134,7 @@ function redactedContext(
     providerProofs: lifecycleProviderProofs(decision).map(({ role, proof }) => ({
       role,
       provider: proof.provider,
+      // proof.subjectId is the enumerable Discord snowflake -> keyed.
       subjectDigest: digest(proof.subjectId),
       callbackDigest: digest(proof.callbackTransactionId),
       proofDigest: proof.proofDigest,
@@ -116,6 +169,7 @@ export interface LifecycleAuditSnapshots {
 
 export async function readRedactedLifecycleResourceSnapshot(
   client: PoolClient,
+  digest: FleetAuthLifecycleAuditDigest,
   decision: VerifiedFleetAuthLifecycleDecision,
   principalIds: string[],
   resourcePrincipalIds: string[],
@@ -139,7 +193,7 @@ export async function readRedactedLifecycleResourceSnapshot(
     ORDER BY principal_id
   `, [principalIds]);
   snapshot.principals = principals.rows.map(row => ({
-    principalDigest: digest(row.principal_id),
+    principalDigest: structuralDigest(row.principal_id),
     status: row.status,
     authnVersion: positiveInteger(row.authn_version, 'authn_version'),
     authzVersion: positiveInteger(row.authz_version, 'authz_version'),
@@ -167,17 +221,19 @@ export async function readRedactedLifecycleResourceSnapshot(
     `, [decision.companionId]);
     const row = companion.rows.at(0);
     snapshot.companion = row ? {
-      companionDigest: digest(decision.companionId),
+      companionDigest: structuralDigest(decision.companionId),
       lifecycle: row.lifecycle,
       version: positiveInteger(row.version, 'companion version'),
       authorityGeneration: positiveInteger(row.authority_generation, 'authority_generation'),
       restoreState: row.restore_state,
-      ...(row.authority_lineage_id ? { authorityLineageDigest: digest(row.authority_lineage_id) } : {}),
+      ...(row.authority_lineage_id
+        ? { authorityLineageDigest: structuralDigest(row.authority_lineage_id) }
+        : {}),
       ...(row.lineage_generation
         ? { lineageGeneration: positiveInteger(row.lineage_generation, 'companion lineage generation') }
         : {}),
       ...(row.readd_decision_id ? { readdDecisionDigest: digest(row.readd_decision_id) } : {}),
-    } : { companionDigest: digest(decision.companionId), missing: true };
+    } : { companionDigest: structuralDigest(decision.companionId), missing: true };
   }
 
   if ('bindingId' in decision) {
@@ -268,8 +324,8 @@ export async function readRedactedLifecycleResourceSnapshot(
   snapshot.affectedAuthorityResources = {
     bindings: bindings.rows.map(row => ({
       bindingDigest: digest(row.binding_id),
-      principalDigest: digest(row.principal_id),
-      companionDigest: digest(row.companion_id),
+      principalDigest: structuralDigest(row.principal_id),
+      companionDigest: structuralDigest(row.companion_id),
       contactDigest: digest(row.contact_id),
       state: row.state,
       version: positiveInteger(row.version, 'binding version'),
@@ -278,8 +334,8 @@ export async function readRedactedLifecycleResourceSnapshot(
     })),
     grants: grants.rows.map(row => ({
       grantDigest: digest(row.grant_id),
-      principalDigest: digest(row.principal_id),
-      companionDigest: digest(row.companion_id),
+      principalDigest: structuralDigest(row.principal_id),
+      companionDigest: structuralDigest(row.companion_id),
       role: row.role,
       lifecycle: row.lifecycle,
       version: positiveInteger(row.version, 'grant version'),
@@ -318,6 +374,7 @@ export async function readRedactedLifecycleResourceSnapshot(
 
 export async function insertLifecycleAudit(
   client: PoolClient,
+  digest: FleetAuthLifecycleAuditDigest,
   decision: VerifiedFleetAuthLifecycleDecision,
   outcome: 'allow' | 'deny',
   reasonCode: string,
@@ -325,7 +382,7 @@ export async function insertLifecycleAudit(
   snapshots?: LifecycleAuditSnapshots,
   lifecycleResult?: FleetAuthLifecycleResult,
 ): Promise<void> {
-  const context = redactedContext(decision, snapshots, lifecycleResult);
+  const context = redactedContext(digest, decision, snapshots, lifecycleResult);
   const result = await client.query(`
     INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events
       (event_id, actor_context, action, resource, decision, reason_code,
@@ -336,9 +393,12 @@ export async function insertLifecycleAudit(
             $11, $12, $13, $14, $15, $16::jsonb)
   `, [
     randomUUID(),
-    JSON.stringify({ kind: 'principal', idDigest: digest(decision.actor.principalId) }),
+    // actor principalId is recovery-shared (structural, unkeyed); the resource
+    // is a content hash of the redacted context and follows the same unkeyed
+    // convention the recovery-reconciliation writer uses for its resource key.
+    JSON.stringify({ kind: 'principal', idDigest: structuralDigest(decision.actor.principalId) }),
     decision.action,
-    `lifecycle:${decision.action}:${digest(JSON.stringify(context))}`,
+    `lifecycle:${decision.action}:${structuralDigest(JSON.stringify(context))}`,
     outcome,
     reasonCode,
     null,

@@ -43,6 +43,11 @@ import { PostgresIcpInitiationCandidateStore } from './postgres/icp-initiation-c
 import type { IcpInitiationCandidateStorePort } from '../core/icp/autonomy-store-ports.js';
 import type { CompanionPresenceStorePort } from '../core/agent/companion-presence-store-port.js';
 import { createPostgresPool, ensurePostgresSchemaExists } from './postgres.js';
+import {
+  assertPostgresTenantAccessProvisioned,
+  derivePostgresTenantRole,
+  planPostgresTenantAccess,
+} from './postgres/tenancy.js';
 import { IntrospectionLandmarkPostgresStore } from '../faculties/introspection/postgres-store.js';
 import { PostgresBackgroundWorkStore } from './postgres/background-work-store.js';
 import type { BackgroundWorkStorePort } from '../core/agent/background-work/store-port.js';
@@ -108,15 +113,33 @@ export async function createAgentPersistenceRuntime(
   }
 
   // Multi-companion tenancy (sprint 10, W2). When a per-companion schema is
-  // configured, every runtime persistence pool below pins its search_path to it
-  // (via the shared `schema` option) so all queries run inside the schema
-  // unchanged. The schema is created here once, up front, before any store
-  // connects — otherwise a store's first DDL could land in `public` (the next
-  // existing entry in the search_path) instead of the not-yet-created schema.
-  // When unset, `schema` stays undefined and behavior is byte-identical to
-  // single-companion (the default `public` schema).
+  // configured, every runtime persistence pool below pins its role and
+  // search_path to the explicitly provisioned tenant boundary. Startup checks
+  // that boundary but never creates or repairs it. When unset, `schema` stays
+  // undefined and behavior is byte-identical to single-companion public mode.
   const schema = options.config.postgresSchema?.trim() || undefined;
-  if (schema) {
+  const tenantRole = options.config.multiCompanion === true
+    ? derivePostgresTenantRole(schema ?? (() => {
+        throw new Error('Multi-companion Postgres persistence requires config.postgresSchema');
+      })())
+    : undefined;
+  if (schema && options.config.multiCompanion === true) {
+    // Deployment provisioning is explicit. Startup only verifies the boundary
+    // and refuses to repair/migrate tenant roles, schemas, or extensions.
+    const bootstrapPool = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-tenant-boundary-preflight',
+      allowExitOnIdle: true,
+      max: 1,
+    });
+    try {
+      await assertPostgresTenantAccessProvisioned(
+        bootstrapPool,
+        planPostgresTenantAccess({ schema, role: tenantRole }),
+      );
+    } finally {
+      await bootstrapPool.end();
+    }
+  } else if (schema) {
     const bootstrapPool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-schema-bootstrap',
       allowExitOnIdle: true,
@@ -142,13 +165,18 @@ export async function createAgentPersistenceRuntime(
         schema: schema ?? (() => {
           throw new Error('Multi-companion ICP candidates require a companion-local postgresSchema');
         })(),
+        role: tenantRole,
       })
     : undefined;
 
-  const intentionRuntime = await createPostgresIntentionPorts(databaseUrl, { schema });
+  const intentionRuntime = await createPostgresIntentionPorts(databaseUrl, {
+    schema,
+    role: tenantRole,
+  });
   const contactStore = await createPostgresContactStore(databaseUrl, options.primaryUserId, {
     exportDir: resolveContactsDir(options.pathSnapshot.companionDataDir),
     schema,
+    role: tenantRole,
     ...(options.contactLifecycleGateway
       ? { contactLifecycleGateway: options.contactLifecycleGateway }
       : {}),
@@ -160,24 +188,31 @@ export async function createAgentPersistenceRuntime(
       scratchpadMirrorPath: resolveScratchpadMirrorPath(options.pathSnapshot.companionDataDir),
       journal: new MemoryJournal(resolveMemoryJournalPath(options.pathSnapshot.companionDataDir)),
       schema,
+      role: tenantRole,
     }),
-    episodicStore: createPostgresEpisodicStore(databaseUrl, { schema }),
+    episodicStore: createPostgresEpisodicStore(databaseUrl, { schema, role: tenantRole }),
     reflectionStore: new ReflectionMetacognitionJournalStore(
       resolveReflectionMetacognitionJournalPath(options.pathSnapshot.companionDataDir),
       {
-        mirror: await PostgresReflectionMetacognitionMirrorStore.connect(databaseUrl, { schema }),
+        mirror: await PostgresReflectionMetacognitionMirrorStore.connect(databaseUrl, {
+          schema,
+          role: tenantRole,
+        }),
       },
     ),
     contactStore,
-    hubIdentityEnrollmentStore: await createPostgresHubIdentityEnrollmentStore(databaseUrl, { schema }),
+    hubIdentityEnrollmentStore: await createPostgresHubIdentityEnrollmentStore(databaseUrl, {
+      schema,
+      role: tenantRole,
+    }),
     intentionRuntime,
     intentionProviders: intentionRuntime,
     weightedThoughtStore: intentionRuntime.weightedThoughtStore,
-    internalStateStore: await PostgresInternalStateStore.connect(databaseUrl, { schema }),
-    participantTrendStore: await PostgresParticipantTrendStore.connect(databaseUrl, { schema }),
-    scheduledPromptStore: await PostgresScheduledPromptStore.connect(databaseUrl, { schema }),
-    introspectionLandmarkStore: await IntrospectionLandmarkPostgresStore.connect(databaseUrl, { schema }),
-    backgroundWorkStore: await PostgresBackgroundWorkStore.connect(databaseUrl, { schema }),
+    internalStateStore: await PostgresInternalStateStore.connect(databaseUrl, { schema, role: tenantRole }),
+    participantTrendStore: await PostgresParticipantTrendStore.connect(databaseUrl, { schema, role: tenantRole }),
+    scheduledPromptStore: await PostgresScheduledPromptStore.connect(databaseUrl, { schema, role: tenantRole }),
+    introspectionLandmarkStore: await IntrospectionLandmarkPostgresStore.connect(databaseUrl, { schema, role: tenantRole }),
+    backgroundWorkStore: await PostgresBackgroundWorkStore.connect(databaseUrl, { schema, role: tenantRole }),
     ...(companionPresenceStore ? { companionPresenceStore } : {}),
     ...(icpInitiationCandidateStore ? { icpInitiationCandidateStore } : {}),
   };

@@ -52,4 +52,71 @@ describe('evaluateProactiveOutboundTimeGate', () => {
       timeZone: 'UTC',
     });
   });
+
+  // psfn-framework-2tli: quiet hours must follow the recipient's Contact.timezone
+  // when present, so a partner asleep in Berlin is not messaged just because it is
+  // still evening in the admin (global) timezone.
+  describe('per-recipient timezone (psfn-framework-2tli)', () => {
+    // Global window lives in the admin timezone (Eastern).
+    const easternQuietHours: ProactiveQuietHoursConfig = {
+      enabled: true,
+      startLocalTime: '00:00',
+      endLocalTime: '08:00',
+      timeZone: 'America/New_York',
+    };
+
+    // 2026-06-17T01:00Z === 21:00 Eastern (clear) but 03:00 Berlin (quiet).
+    const bedtimeInBerlin = Date.parse('2026-06-17T01:00:00.000Z');
+    // 2026-06-16T08:00Z === 10:00 Berlin (clear).
+    const morningInBerlin = Date.parse('2026-06-16T08:00:00.000Z');
+
+    it('blocks a send at 03:00 in the contact timezone though it is 21:00 globally', () => {
+      expect(evaluateProactiveOutboundTimeGate({
+        nowMs: bedtimeInBerlin,
+        quietHours: easternQuietHours,
+        contactTimeZone: 'Europe/Berlin',
+      })).toEqual({
+        allowed: false,
+        reason: 'quiet_hours',
+        nextEligibleAtMs: Date.parse('2026-06-17T06:00:00.000Z'), // 08:00 Berlin
+        timeZone: 'Europe/Berlin',
+      });
+    });
+
+    it('without a contact timezone the same moment clears the global (Eastern) window', () => {
+      expect(evaluateProactiveOutboundTimeGate({
+        nowMs: bedtimeInBerlin,
+        quietHours: easternQuietHours,
+      })).toEqual({
+        allowed: true,
+        sendAtMs: bedtimeInBerlin,
+        timeZone: 'America/New_York',
+      });
+    });
+
+    it('allows a send at 10:00 in the contact timezone', () => {
+      expect(evaluateProactiveOutboundTimeGate({
+        nowMs: morningInBerlin,
+        quietHours: easternQuietHours,
+        contactTimeZone: 'Europe/Berlin',
+      })).toEqual({
+        allowed: true,
+        sendAtMs: morningInBerlin,
+        timeZone: 'Europe/Berlin',
+      });
+    });
+
+    it('fails closed to the global window when the contact timezone is invalid', () => {
+      expect(evaluateProactiveOutboundTimeGate({
+        nowMs: Date.parse('2026-06-16T02:30:00.000Z'),
+        quietHours,
+        contactTimeZone: 'Mars/Phobos',
+      })).toEqual({
+        allowed: false,
+        reason: 'quiet_hours',
+        nextEligibleAtMs: Date.parse('2026-06-16T08:00:00.000Z'),
+        timeZone: 'UTC',
+      });
+    });
+  });
 });

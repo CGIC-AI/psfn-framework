@@ -2,7 +2,7 @@
 // Runs inside an isolated container. Connects to gateway via the configured RPC endpoint.
 // Run: npx tsx src/app/agent/main.ts
 
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { ensureActiveTimezone } from '../../shared/time/active-timezone.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { GatewayClient } from '../../boundary/gateway/client.js';
@@ -24,9 +24,9 @@ import {
   TEMPORAL_WAKEUP_MORNING_TASK_NAME,
 } from '../../core/scheduler/temporal-wakeup.js';
 import { registerFreeTimeTasks } from '../../core/scheduler/free-time.js';
-import { formatReflectionPersonaBlock } from '../../core/scheduler/heartbeat-template-runtime.js';
 import { registerWeightedThoughtOutreachTask } from '../../core/scheduler/weighted-thought-outreach-lane.js';
 import { createLlmNudgeEvaluator } from '../../core/intention/weighted-thought-nudge-evaluator.js';
+import { recordWeightedThought } from '../../core/intention/weighted-thought-store-port.js';
 import { HEARTBEAT_SILENT_REFLECTION_TOKEN } from '../../core/scheduler/heartbeat-policy.js';
 import {
   getRunChargeSnapshot,
@@ -45,6 +45,7 @@ import {
 import { registerGitTools } from '../../boundary/integrations/git/runtime-wiring.js';
 import { GatewayGitOps } from '../../boundary/integrations/git/gateway-ops.js';
 import { registerBeadsTools } from '../../boundary/integrations/beads/runtime-wiring.js';
+import { resolveBeadsToolsEnabled } from '../../boundary/integrations/beads/enablement.js';
 import { GatewayBeadsOps } from '../../boundary/integrations/beads/gateway-ops.js';
 import { registerWorldTools } from '../../boundary/integrations/world/runtime-wiring.js';
 import { GatewayWorldOps } from '../../boundary/integrations/world/gateway-ops.js';
@@ -138,7 +139,10 @@ import {
   ValuesConsistencyFindingStore,
 } from '../../faculties/introspection/values-consistency.js';
 import { ValuesJournalStore } from '../../faculties/values/store.js';
-import { hydrateStartupContinuity } from './startup-continuity.js';
+import {
+  hydrateStartupContinuity,
+  requireWikiStartupHydrationTuning,
+} from './startup-continuity.js';
 import {
   createOptionalJournalAutoPublisher,
   registerMarkdownJournalTools,
@@ -351,6 +355,7 @@ async function main(): Promise<void> {
     memoryStore: companionMemoryStore,
     episodicStore: companionEpisodicStore,
     backgroundWorkStore,
+    backgroundWorkTuning: schedulerConfig.backgroundWork,
     backgroundWorkWelfare:
       schedulerConfig.backgroundWorkWelfare ?? DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG,
     contactStore: persistedContactStore,
@@ -388,11 +393,33 @@ async function main(): Promise<void> {
     observerEvalSidecar,
     appCache,
     toolConformanceRunner,
+    personalProjects,
   } = coreRuntime;
 
   gateway.onContactAuthoritySnapshot(async ({ contactId, providerSubjectId }) => (
     await contactStore.readVerifiedDiscordContactAuthority(contactId, providerSubjectId)
   ));
+
+  personalProjects.setActivitySink({
+    recordProjectActivity: async (project) => {
+      const weightedThoughtStore = persistenceRuntime.weightedThoughtStore;
+      if (!weightedThoughtStore) {
+        throw new Error('Personal project activity requires the durable weighted-thought store');
+      }
+      await recordWeightedThought(
+        weightedThoughtStore,
+        schedulerConfig.weightedThoughtOutreach.lifecycle,
+        {
+          id: `personal-project:${project.id}`,
+          content: `Return to ${project.title}: ${project.nextStep}`,
+          source: 'personal_project',
+          thoughtClass: 'standard',
+          provenance: { sourceChannelId: 'internal:free-time:project' },
+        },
+        Date.now(),
+      );
+    },
+  });
 
   wireCompanionPresenceContext({
     agentLoop,
@@ -454,6 +481,9 @@ async function main(): Promise<void> {
     memoryProvider: agentLoop.memoryProvider,
     wikiRetrieval: agentLoop.wikiRetrieval,
     sessionManager,
+    wikiHydrationTuning: requireWikiStartupHydrationTuning(
+      config.wikiStartupHydration,
+    ),
   });
 
   agentLoop.setInternalStateStore(persistenceRuntime.internalStateStore);
@@ -501,6 +531,7 @@ async function main(): Promise<void> {
     contactStore,
     socialGraphProposalStore,
     socialGraphWatermarkStore,
+    sharedWorldWikiCaretaker: coreRuntime.sharedWorldWikiCaretaker,
   });
   const {
     runtimeEnablement: icpRuntimeEnablement,
@@ -768,9 +799,21 @@ async function main(): Promise<void> {
   });
   log.info('Git repository inspection tools enabled for parent agent');
 
-  // Beads issue-management tools — policy-scoped gateway RPC access (no shell passthrough)
-  registerBeadsTools(agentLoop, new GatewayBeadsOps(gatewayOps), { gatewayMode: true });
-  log.info('Beads issue-management tools enabled');
+  // Beads issue-management tools — policy-scoped gateway RPC access (no shell
+  // passthrough). Gate registration on the same enablement signal the gateway
+  // policy uses so registration and policy agree; the gateway DENYs beads.*
+  // when disabled, so advertising the tool anyway makes it fail at every call
+  // (psfn-framework-e7s0). Fail-closed: policy wins.
+  const beadsToolsEnabled = resolveBeadsToolsEnabled(process.env.BEADS_TOOLS_ENABLED, {
+    workspaceRoot: pathSnapshot.workspaceRoot,
+    codebaseRoot: resolve('.'),
+  });
+  if (beadsToolsEnabled) {
+    registerBeadsTools(agentLoop, new GatewayBeadsOps(gatewayOps), { gatewayMode: true });
+    log.info('Beads issue-management tools enabled');
+  } else {
+    log.info('Beads issue-management tools disabled by policy (gateway denies beads.*)');
+  }
 
   // World tool — perceive/list/control physical & virtual affordances via the
   // places registry and the privileged Satellite Hub world transport,
@@ -920,6 +963,7 @@ async function main(): Promise<void> {
     postTurnActions,
     outreachOutbox,
     episodicStore,
+    subsystemOutputRefStore: backgroundWorkStore,
     pendingContactApprovals,
     socialGraphProposals: socialGraphProposalStore,
     hubIdentityEnrollmentStore: persistedHubIdentityEnrollmentStore,
@@ -965,6 +1009,7 @@ async function main(): Promise<void> {
     },
     closeDatabase: async () => {
       await persistenceRuntime.contactLifecycleRecovery?.stop();
+      await coreRuntime.closeWikiRuntime();
       await persistenceRuntime.icpInitiationCandidateStore?.close();
       await persistenceRuntime.backgroundWorkStore.close();
       await persistenceRuntime.introspectionLandmarkStore.close();
@@ -1123,20 +1168,19 @@ async function main(): Promise<void> {
   // ── Free-time lanes (E8.1) ──
   // Self-directed time: two entry lanes (quiet-hours inside the rest window;
   // idle after a long partner gap) share one bounded, budget-capped, multi-turn
-  // agent-loop block on an INTERNAL channel. Full persona (E6.2), her normal
-  // tools under existing policy, outputs durable only. Deterministic gates run
+  // agent-loop block on an INTERNAL channel. The ordinary default prompt stack
+  // supplies identity and policy; her normal tools apply and outputs are
+  // durable only. Deterministic gates run
   // before any spend; the block runs inside a 'background' charge context and
   // ends gracefully when the per-block turn/charge budget is exhausted. After a
   // block WITH activity, a "while you were away" note is placed on the partner
   // session via the shared summarizer; empty "loafed" blocks surface nothing.
-  const freeTimePersonaVariablesProvider = buildCharacterPromptVariablesProvider(cardVersionStore);
   registerFreeTimeTasks({
     scheduler,
     sessionManager,
     config: schedulerConfig.freeTime,
     restWindow: schedulerConfig.episodicProcessing,
     eventBus,
-    resolvePersonaBlock: () => formatReflectionPersonaBlock(freeTimePersonaVariablesProvider()),
     // The whole block runs inside a 'background' charge context so per-turn LLM
     // spend accumulates against the background lane; getRunChargeSnapshot lets
     // the runner read cumulative spend before each turn for the hard cap.
@@ -1155,9 +1199,9 @@ async function main(): Promise<void> {
     },
     // One free-time turn through the ordinary agent loop on the internal
     // channel. Internal channelId => isInternalSessionId() true => the loop
-    // cannot dispatch outward to a partner channel. Full persona + her normal
-    // tools apply (no restricted reflection policy). A "silent" reply ends the
-    // block; staying quiet / loafing is a valid outcome.
+    // cannot dispatch outward to a partner channel. The default identity stack
+    // and her normal tools apply (no restricted reflection policy). A "silent"
+    // reply ends the block; staying quiet / loafing is a valid outcome.
     invokeTurn: async ({ lane, channelId, turnIndex, content }) => {
       const response = await agentLoop.handleMessage({
         id: `free-time-${lane}-${turnIndex}-${Date.now()}`,
@@ -1182,6 +1226,9 @@ async function main(): Promise<void> {
       maxTokens: schedulerConfig.freeTime.returnNote.summaryMaxTokens,
       purpose: 'free_time_return',
     }),
+    loadProjectContext: async () => (
+      await personalProjects.resumeNextActiveProject()
+    )?.context ?? null,
   });
   // ── Weighted-thought outreach lane (E?/1xb.2) ──
   // Internal-state-driven outreach: a weighted thought crossing threshold

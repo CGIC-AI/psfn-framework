@@ -3,7 +3,7 @@ import {
   loadRequiredJson,
   loadSeedJson,
 } from './load-or-seed.js';
-import { assertPositiveInteger } from './validators.js';
+import { assertNoUnknownKeys, assertPositiveInteger } from './validators.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
@@ -11,6 +11,7 @@ import {
   type IcpAutonomySchedulerConfig,
 } from './icp-autonomy-scheduler-config.js';
 import { MODEL_USAGE_RANGES, type ModelUsageRange } from '../../shared/telemetry/model-usage.js';
+import type { BackgroundWorkRuntimeTuning } from '../../core/agent/background-work/config.js';
 
 export {
   DEFAULT_ICP_AUTONOMY_SCHEDULER_CONFIG,
@@ -19,6 +20,22 @@ export {
 
 export const SCHEDULER_FILE_NAME = 'scheduler.json';
 export const SCHEDULER_SEED_FILE_NAME = 'scheduler.seed.json';
+
+export const DEFAULT_BACKGROUND_WORK_TUNING: BackgroundWorkRuntimeTuning = {
+  supervisor: {
+    maxConcurrentSessions: 4,
+    leaseDurationMs: 5 * 60_000,
+    retryBaseDelayMs: 1_000,
+    retryMaxDelayMs: 5 * 60_000,
+    shutdownTimeoutMs: 5_000,
+    terminalRetentionMs: 7 * 24 * 60 * 60_000,
+    cleanupIntervalMs: 60 * 60_000,
+  },
+  postTurn: {
+    extractionDrainRequeueDelayMs: 1_000,
+    foregroundPreemptionDeferDelayMs: 1_000,
+  },
+};
 
 export interface ArtifactLifecyclePolicyConfig {
   scratchpadRetentionDays: number;
@@ -241,6 +258,10 @@ export interface ArcFormationConfig {
 export interface BackgroundMaintenanceConfig {
   /** Shared poll interval for every operation listed by the bundled task. */
   intervalMs: number;
+  /** Bounded approved shared-world projection drift checks per maintenance tick. */
+  sharedWorldWikiCaretaker: {
+    batchSize: number;
+  };
   /** Ambient-presence eligibility thresholds evaluated on the shared tick. */
   ambientPresence: {
     minIdleMinutes: number;
@@ -254,6 +275,9 @@ export interface BackgroundMaintenanceConfig {
 
 export const DEFAULT_BACKGROUND_MAINTENANCE_CONFIG: BackgroundMaintenanceConfig = {
   intervalMs: 3_600_000,
+  sharedWorldWikiCaretaker: {
+    batchSize: 25,
+  },
   ambientPresence: {
     minIdleMinutes: 180,
     minNoteIntervalMinutes: 360,
@@ -692,6 +716,7 @@ export interface SchedulerRuntimeConfig {
   tickIntervalMs: number;
   heartbeatIntervalMs: number;
   backgroundMaintenance: BackgroundMaintenanceConfig;
+  backgroundWork: BackgroundWorkRuntimeTuning;
   artifactLifecycle: ArtifactLifecyclePolicyConfig;
   episodicProcessing: EpisodicProcessingRestWindowConfig;
   nearTurnMemory: NearTurnMemoryCadenceConfig;
@@ -728,6 +753,111 @@ function toInterval(value: unknown, field: string): number {
     throw new Error(`Invalid scheduler config: ${field} must be an integer >= 1000`);
   }
   return value;
+}
+
+function toBackgroundWorkPositiveInteger(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`Invalid scheduler config: ${field} must be a positive safe integer`);
+  }
+  return value;
+}
+
+function toBackgroundWorkNonNegativeInteger(value: unknown, field: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Invalid scheduler config: ${field} must be a non-negative safe integer`);
+  }
+  return value;
+}
+
+function validateBackgroundWorkConfig(
+  raw: unknown,
+  sourcePath: string,
+): BackgroundWorkRuntimeTuning {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid scheduler config at ${sourcePath}: backgroundWork must be an object`);
+  }
+  assertNoUnknownKeys(raw, ['supervisor', 'postTurn'], `${sourcePath}.backgroundWork`, {
+    errorPrefix: 'Invalid scheduler config',
+  });
+  if (!isRecord(raw.supervisor)) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: backgroundWork.supervisor must be an object`,
+    );
+  }
+  if (!isRecord(raw.postTurn)) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: backgroundWork.postTurn must be an object`,
+    );
+  }
+  assertNoUnknownKeys(
+    raw.supervisor,
+    [
+      'maxConcurrentSessions',
+      'leaseDurationMs',
+      'retryBaseDelayMs',
+      'retryMaxDelayMs',
+      'shutdownTimeoutMs',
+      'terminalRetentionMs',
+      'cleanupIntervalMs',
+    ],
+    `${sourcePath}.backgroundWork.supervisor`,
+    { errorPrefix: 'Invalid scheduler config' },
+  );
+  assertNoUnknownKeys(
+    raw.postTurn,
+    ['extractionDrainRequeueDelayMs', 'foregroundPreemptionDeferDelayMs'],
+    `${sourcePath}.backgroundWork.postTurn`,
+    { errorPrefix: 'Invalid scheduler config' },
+  );
+  const supervisor = {
+    maxConcurrentSessions: toBackgroundWorkPositiveInteger(
+      raw.supervisor.maxConcurrentSessions,
+      'backgroundWork.supervisor.maxConcurrentSessions',
+    ),
+    leaseDurationMs: toBackgroundWorkPositiveInteger(
+      raw.supervisor.leaseDurationMs,
+      'backgroundWork.supervisor.leaseDurationMs',
+    ),
+    retryBaseDelayMs: toBackgroundWorkPositiveInteger(
+      raw.supervisor.retryBaseDelayMs,
+      'backgroundWork.supervisor.retryBaseDelayMs',
+    ),
+    retryMaxDelayMs: toBackgroundWorkPositiveInteger(
+      raw.supervisor.retryMaxDelayMs,
+      'backgroundWork.supervisor.retryMaxDelayMs',
+    ),
+    shutdownTimeoutMs: toBackgroundWorkNonNegativeInteger(
+      raw.supervisor.shutdownTimeoutMs,
+      'backgroundWork.supervisor.shutdownTimeoutMs',
+    ),
+    terminalRetentionMs: toBackgroundWorkPositiveInteger(
+      raw.supervisor.terminalRetentionMs,
+      'backgroundWork.supervisor.terminalRetentionMs',
+    ),
+    cleanupIntervalMs: toBackgroundWorkPositiveInteger(
+      raw.supervisor.cleanupIntervalMs,
+      'backgroundWork.supervisor.cleanupIntervalMs',
+    ),
+  };
+  if (supervisor.retryMaxDelayMs < supervisor.retryBaseDelayMs) {
+    throw new Error(
+      'Invalid scheduler config: backgroundWork.supervisor.retryMaxDelayMs '
+      + 'must be greater than or equal to backgroundWork.supervisor.retryBaseDelayMs',
+    );
+  }
+  return {
+    supervisor,
+    postTurn: {
+      extractionDrainRequeueDelayMs: toBackgroundWorkPositiveInteger(
+        raw.postTurn.extractionDrainRequeueDelayMs,
+        'backgroundWork.postTurn.extractionDrainRequeueDelayMs',
+      ),
+      foregroundPreemptionDeferDelayMs: toBackgroundWorkPositiveInteger(
+        raw.postTurn.foregroundPreemptionDeferDelayMs,
+        'backgroundWork.postTurn.foregroundPreemptionDeferDelayMs',
+      ),
+    },
+  };
 }
 
 function toPositiveInteger(value: unknown, field: string, minimum: number): number {
@@ -1086,6 +1216,17 @@ function validateBackgroundMaintenanceConfig(
       `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.ambientPresence must be an object`,
     );
   }
+  if (!isRecord(raw.sharedWorldWikiCaretaker)) {
+    throw new Error(
+      `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.sharedWorldWikiCaretaker must be an object`,
+    );
+  }
+  assertNoUnknownKeys(
+    raw.sharedWorldWikiCaretaker,
+    ['batchSize'],
+    `${sourcePath}.backgroundMaintenance.sharedWorldWikiCaretaker`,
+    { errorPrefix: 'Invalid scheduler config' },
+  );
   if (!isRecord(raw.concernGrooming)) {
     throw new Error(
       `Invalid scheduler config at ${sourcePath}: backgroundMaintenance.concernGrooming must be an object`,
@@ -1093,6 +1234,13 @@ function validateBackgroundMaintenanceConfig(
   }
   return {
     intervalMs: toInterval(raw.intervalMs, 'backgroundMaintenance.intervalMs'),
+    sharedWorldWikiCaretaker: {
+      batchSize: toPositiveInteger(
+        raw.sharedWorldWikiCaretaker.batchSize,
+        'backgroundMaintenance.sharedWorldWikiCaretaker.batchSize',
+        1,
+      ),
+    },
     ambientPresence: {
       minIdleMinutes: toPositiveInteger(
         raw.ambientPresence.minIdleMinutes,
@@ -1681,6 +1829,7 @@ export function validateSchedulerConfig(raw: unknown, sourcePath: string): Sched
     tickIntervalMs,
     heartbeatIntervalMs: toInterval(raw.heartbeatIntervalMs, 'heartbeatIntervalMs'),
     backgroundMaintenance,
+    backgroundWork: validateBackgroundWorkConfig(raw.backgroundWork, sourcePath),
     artifactLifecycle: validateArtifactLifecycleConfig(raw.artifactLifecycle, sourcePath),
     episodicProcessing,
     nearTurnMemory: validateNearTurnMemoryConfig(raw.nearTurnMemory, sourcePath),

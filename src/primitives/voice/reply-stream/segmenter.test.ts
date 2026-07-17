@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { createReplySegmenter } from './segmenter.js';
+import type { SegmenterConfig } from './types.js';
+
+const TEST_SEGMENTER_CONFIG: SegmenterConfig = {
+  minSegmentLength: 24,
+  maxBufferLength: 240,
+};
 
 /** Feed text one char at a time (worst-case chunking) and collect all output. */
-function runCharwise(text: string, config?: Parameters<typeof createReplySegmenter>[0]): string[] {
+function runCharwise(text: string, config: SegmenterConfig = TEST_SEGMENTER_CONFIG): string[] {
   const seg = createReplySegmenter(config);
   const out: string[] = [];
   for (const ch of text) out.push(...seg.push(ch));
@@ -11,7 +17,7 @@ function runCharwise(text: string, config?: Parameters<typeof createReplySegment
 }
 
 /** Feed the whole text in one push, then flush. */
-function runWhole(text: string, config?: Parameters<typeof createReplySegmenter>[0]): string[] {
+function runWhole(text: string, config: SegmenterConfig = TEST_SEGMENTER_CONFIG): string[] {
   const seg = createReplySegmenter(config);
   const out = [...seg.push(text)];
   out.push(...seg.flush());
@@ -134,6 +140,14 @@ describe('createReplySegmenter — runaway relief', () => {
 });
 
 describe('createReplySegmenter — config guard', () => {
+  it.each([
+    { minSegmentLength: 0, maxBufferLength: 240 },
+    { minSegmentLength: 24, maxBufferLength: 0 },
+    { minSegmentLength: 1.5, maxBufferLength: 240 },
+  ])('rejects non-positive or non-integer thresholds: %j', (config) => {
+    expect(() => createReplySegmenter(config)).toThrow(/positive safe integer/u);
+  });
+
   it('rejects maxBufferLength <= minSegmentLength', () => {
     expect(() => createReplySegmenter({ minSegmentLength: 50, maxBufferLength: 50 })).toThrow();
   });

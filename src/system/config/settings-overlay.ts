@@ -128,7 +128,7 @@ export function loadCompanionSettingsOverlay(
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(
       `Invalid companion settings overlay at ${path}. Repair it in place; `
-      + `PSFN will not fall back to global settings for a malformed overlay. Cause: ${reason}`,
+      + `The runtime will not fall back to global settings for a malformed overlay. Cause: ${reason}`,
     );
   }
 

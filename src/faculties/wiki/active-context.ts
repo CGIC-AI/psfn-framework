@@ -1,5 +1,6 @@
-import type { WikiRetrievalContextClass } from './retrieval.js';
 import type { WikiScope } from './scope.js';
+
+export type WikiRetrievalContextClass = 'dm' | 'group' | 'focus';
 
 /**
  * mmo9.7.4: the wiki context cache mirrors active-memory's refresh lifecycle

@@ -9,6 +9,26 @@
   "wikiRetrievalFocusTokenCap": 2000,
   "wikiRetrievalSimilarityThreshold": 0.6,
   "wikiRetrievalGroupSimilarityThreshold": 0.78,
+  "wikiStartupHydration": {
+    "recentSessionLimit": 4,
+    "recentMessageLimit": 18,
+    "maxContextChars": 6000
+  },
+  "lifecycleKubernetes": {
+    "lifecycleCommandTimeoutMs": 30000,
+    "operatorCommandTimeoutMs": 600000,
+    "operatorHttpTimeoutMs": 8000,
+    "operatorConfirmationRequestTimeoutMs": 5000,
+    "kubernetesReadRequestTimeoutMs": 5000,
+    "kubernetesRolloutRequestTimeoutMs": 5000,
+    "rolloutWaitTimeoutMs": 180000,
+    "rolloutPollIntervalMs": 3000,
+    "rollbackWaitTimeoutMs": 180000,
+    "rollbackPollIntervalMs": 3000,
+    "postRolloutMaxLogRecords": 10,
+    "postRolloutValidationHistoryLimit": 20,
+    "rollbackHistoryLimit": 50
+  },
   "sessionMirrorEnabled": true,
   "sessionMirrorMaxChars": 220,
   "sessionMirrorActiveWindowMs": 1800000,
@@ -284,6 +304,10 @@
   "voiceSessionTimeoutMs": 30000,
   "voiceMaxFrameBytes": 262144,
   "voiceMaxPendingFrames": 32,
+  "voiceReplySegmenter": {
+    "minSegmentLength": 24,
+    "maxBufferLength": 240
+  },
   "wyomingShardRouting": {
     "enabled": false
   },

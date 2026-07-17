@@ -1,5 +1,4 @@
 import { clampUnit } from '../../../shared/utils/numeric.js';
-import { injectPromptRuntimeTokens } from '../../identity/prompt-runtime.js';
 import type { InternalState } from '../../self-model/state.js';
 import type { ReflectionGuardrailSnapshotSource } from '../reflection-guardrail-telemetry.js';
 import type {
@@ -7,10 +6,7 @@ import type {
   ReflectionSubstrateContext,
 } from '../../../persistence/journals/reflection-substrate.js';
 
-export const REFLECTION_PERSONA_UNRESOLVED_MACRO_PATTERN = /\{\{\s*[a-zA-Z0-9_.-]+(?:\(\))?\s*\}\}/g;
-
 export const REFLECTION_PROMPT_TOKENS = {
-  persona: '{{reflection_persona}}',
   self: '{{reflection_self}}',
   relational: '{{reflection_relational}}',
   affect: '{{reflection_affect}}',
@@ -40,42 +36,6 @@ export interface ReflectionPromptContext {
   internalState?: ReflectionInternalStateContext;
   contactBundle?: ReflectionContactContextBundle;
   substrateContext?: ReflectionSubstrateContext;
-}
-
-/**
- * E6.2: assemble the companion's full persona as a first-person lead for a
- * scheduled reflection. Sourced from the live character card variables (the
- * same provider the foreground turn uses) so an introspection turn reflects as
- * HER — full persona loaded — rather than as a context analyzer with no self in
- * it. Card macros are resolved and any unresolved token is dropped so nothing
- * like {{user}} leaks into her own words.
- */
-export function formatReflectionPersonaBlock(
-  variables: Record<string, string> | undefined,
-): string {
-  if (!variables) return '';
-  const pick = (...keys: string[]): string => {
-    for (const key of keys) {
-      const value = typeof variables[key] === 'string' ? variables[key].trim() : '';
-      if (value) return value;
-    }
-    return '';
-  };
-  const char = pick('char', 'character_name', 'name', 'character') || 'this companion';
-  const render = (text: string): string => injectPromptRuntimeTokens(text, { variables })
-    .replace(REFLECTION_PERSONA_UNRESOLVED_MACRO_PATTERN, '')
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
-
-  const sections: string[] = [
-    `I am ${char}, and this is me — the same me who lived these moments — stepping back to sit with them. `
-    + 'What follows is who I am, so I reflect as myself and not as some outside observer of my own day.',
-  ];
-  for (const field of ['personality', 'description', 'scenario']) {
-    const rendered = render(variables[field] ?? '');
-    if (rendered) sections.push(rendered);
-  }
-  return sections.join('\n\n').trim();
 }
 
 export function joinReflectionPromptSections(...sections: Array<string | undefined>): string {

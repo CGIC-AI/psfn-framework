@@ -14,7 +14,6 @@ import {
   resetRuntimeChannelEnvelopeLabels,
   setRuntimeChannelEnvelopeLabels,
 } from '../../system/trust/runtime-channel-labels.js';
-import type { ContextManifest } from '../session/context-manifest.js';
 import type { ContactStorePort } from '../contacts/contact-store-port.js';
 import type { ChannelPromptDock } from '../../channels/backplane/types.js';
 import { agentLoopWithScheduler } from './scheduled-agent-loop.js';
@@ -49,6 +48,10 @@ import { DEFERRED_COMPANION_OUTREACH_ACTION_KIND } from '../tools/notify-compani
 import { createIcpAutonomyCandidateSchedulerMessage } from '../icp/candidate-scheduler-origin.js';
 import { TurnRunReservation } from './substrate-agent/turn-run-reservation.js';
 import { TurnSupportRuntime } from './substrate-agent/turn-support-runtime.js';
+import { PromptComposer } from '../identity/prompt-composer.js';
+import { PromptLayerStore } from '../identity/prompt-store.js';
+import { lifecycleKubernetesSettingsFixture } from '../../test-support/lifecycle-kubernetes-settings.js';
+import { makeContextManifestFixture } from '../../test-support/context-manifest.js';
 
 class SubstrateAgent extends RuntimeSubstrateAgent {
   constructor(...args: ConstructorParameters<typeof RuntimeSubstrateAgent>) {
@@ -261,6 +264,7 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
     defaultContextWindow: 128_000,
     extractionThresholdPct: 30,
     compactionThresholdPct: 70,
+    lifecycleKubernetes: lifecycleKubernetesSettingsFixture(),
     modelRoster: {
       chat: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 16384, contextWindow: 128_000 },
       background: { model: 'deepseek/deepseek-v3.2', provider: 'openrouter', maxTokens: 8192 },
@@ -408,6 +412,7 @@ function makeMockSessionManager(): SessionManager {
       messages: [
         { role: 'user', content: 'Hello' },
       ],
+      manifest: makeContextManifestFixture(),
     } satisfies LLMContext),
     getRecentMessages: vi.fn().mockReturnValue([]),
     getRoleEnvelopeRefsForEntries: vi.fn().mockReturnValue([]),
@@ -443,81 +448,6 @@ function makeMockLLMProvider(): LLMProviderPort {
   return {
     stream: vi.fn<any>().mockResolvedValue(response),
     complete: vi.fn<any>().mockResolvedValue(response),
-  };
-}
-
-function makeContextManifest(): ContextManifest {
-  return {
-    channelId: 'test-channel',
-    generatedAt: 1_700_000_000_000,
-    session: {
-      sourceEntryCount: 4,
-      trimmedEntryCount: 0,
-      maskedEntryCount: 0,
-      compactedEntryCount: 0,
-      finalEntryCount: 4,
-      finalMessageCount: 4,
-      compactionSummaryCount: 0,
-      continuityEntryCount: 0,
-    },
-    memory: {
-      includedCount: 1,
-      includedTypes: { semantic: 1 },
-      includedTokenCount: 120,
-      reason: 'test',
-      candidateCount: 1,
-      policyAllowedCount: 1,
-      rankedCount: 1,
-      returnedCount: 1,
-      excluded: {
-        sensitivityRejectedCount: 0,
-        policyRejectedCount: 0,
-        scoreRejectedCount: 0,
-        budgetCappedCount: 0,
-      },
-      retrieval: {
-        mode: 'budget',
-        budgetPct: 2,
-        tokenBudget: 500,
-        limit: 3,
-      },
-    },
-    budgets: {
-      contextWindow: 128_000,
-      adaptive: {
-        enabled: true,
-        source: 'default',
-        category: 'default',
-      },
-      sessionHistory: {
-        mode: 'budget',
-        budgetPct: 6,
-        tokenBudget: 8_000,
-        estimatedCount: 24,
-        actualCount: 4,
-        actualTokenCount: 420,
-      },
-      memoryRetrieval: {
-        mode: 'budget',
-        budgetPct: 2,
-        tokenBudget: 500,
-        estimatedCount: 3,
-        actualCount: 1,
-        actualTokenCount: 120,
-      },
-      sections: [
-        { section: 'system_prompt', tokenCount: 250 },
-        { section: 'memories', tokenCount: 120 },
-        { section: 'session_history', tokenCount: 420 },
-      ],
-    },
-    compaction: {
-      triggered: false,
-      thresholdPct: 70,
-      tokenBudget: 90_000,
-      totalTokensBefore: 790,
-      totalTokensAfter: 790,
-    },
   };
 }
 
@@ -1590,6 +1520,7 @@ describe('SubstrateAgent.handleMessage', () => {
         { id: 'session.compaction_summary', content: compactionSummaryBlock },
       ],
       messages: [{ role: 'user', content: 'Hello' }],
+      manifest: makeContextManifestFixture(),
     } satisfies LLMContext);
 
     const agent = new SubstrateAgent(
@@ -1778,7 +1709,7 @@ describe('SubstrateAgent.handleMessage', () => {
     const config = makeConfig();
     const eventBus = new EventBus();
     const sessionManager = makeMockSessionManager();
-    const manifest = makeContextManifest();
+    const manifest = makeContextManifestFixture();
     (sessionManager.buildContext as any).mockResolvedValue({
       systemPrompt: TEST_SYSTEM_PROMPT,
       messages: [
@@ -3564,6 +3495,88 @@ describe('SubstrateAgent.handleMessage', () => {
       taskKind: 'heartbeat',
     });
   });
+
+  const defaultPromptIdentityCases: Array<[string, string, string | undefined]> = [
+    ['ordinary reflection', 'internal:reflection:daily-review', 'reflection'],
+    ['free time', 'internal:free-time:idle', undefined],
+  ];
+
+  it.each(defaultPromptIdentityCases)(
+    'keeps the default composed identity system prompt for %s turns',
+    async (_lane, channelId, taskKind) => {
+      const config = makeConfig();
+      const sessionManager = makeMockSessionManager();
+      const agent = new SubstrateAgent(
+        new EventBus(), makeMockLLMProvider(), sessionManager, 'Base prompt', config,
+      );
+      const promptStoreDir = mkdtempSync(join(tmpdir(), 'substrate-agent-identity-stack-'));
+      const staticIdentityStack = [
+        'CONSTITUTION_SENTINEL',
+        'NORTH_STAR_SENTINEL',
+        'PERSONALITY_SENTINEL',
+        'DESCRIPTION_SENTINEL',
+        'SCENARIO_SENTINEL',
+      ].join('\n');
+      const dynamicIdentityStack = [
+        'VALUES_SENTINEL',
+        'CURRENT_EMOTIONS_SENTINEL',
+      ].join('\n');
+      const identityStack = `${staticIdentityStack}\n${dynamicIdentityStack}`;
+      try {
+        const promptStore = new PromptLayerStore(
+          join(promptStoreDir, 'layers.json'),
+          join(promptStoreDir, 'history.jsonl'),
+        );
+        promptStore.create({
+          type: 'base',
+          name: 'Test identity foundation',
+          identifier: 'main',
+          content: staticIdentityStack,
+        });
+        promptStore.create({
+          type: 'runtime',
+          name: 'Test dynamic identity context',
+          identifier: 'runtimeIdentityContext',
+          content: dynamicIdentityStack,
+        });
+        const promptComposer = new PromptComposer(promptStore, undefined, undefined, {
+          persistLastKnownGood: false,
+        });
+        const composeSplit = vi.spyOn(promptComposer, 'composeSplit');
+        agent.promptComposer = promptComposer;
+        expect(agent.getCurrentAuthoritativeSystemPrompt()).toBeNull();
+
+        await agent.handleMessage(makeMessage({
+          id: `default-prompt-${channelId}`,
+          channelId,
+          channelType: 'terminal',
+          content: 'LANE_USER_PROMPT_WITHOUT_PERSONA',
+        }));
+
+        expect(composeSplit).toHaveBeenCalledWith({
+          channelType: 'internal',
+          taskKind,
+        });
+        const systemPrompt = vi.mocked(sessionManager.buildContext).mock.calls[0]?.[1];
+        expect(typeof systemPrompt).toBe('string');
+        if (typeof systemPrompt !== 'string') {
+          throw new Error('Default prompt composition did not reach context assembly');
+        }
+        for (const identitySection of identityStack.split('\n')) {
+          expect(systemPrompt).toContain(identitySection);
+        }
+        const authoritativeSystemPrompt = agent.getCurrentAuthoritativeSystemPrompt();
+        expect(authoritativeSystemPrompt).toBe(systemPrompt);
+        for (const identitySection of identityStack.split('\n')) {
+          expect(authoritativeSystemPrompt).toContain(identitySection);
+        }
+        expect(systemPrompt).not.toContain('LANE_USER_PROMPT_WITHOUT_PERSONA');
+        expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
+      } finally {
+        rmSync(promptStoreDir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('does not set taskKind for normal discord text turns', async () => {
     const config = makeConfig();

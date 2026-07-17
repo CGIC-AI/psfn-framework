@@ -571,6 +571,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
     const authorityLifecycle = new GatewayFleetAuthAuthorityLifecycleStore({
       pool: authorityPool,
       accountAuthority,
+      sessionPepper: secrets.sessionPepper,
     });
     const providerRecovery = new TrustedHostProviderRecoveryService({
       canonicalOrigin: config.canonicalOrigin,
@@ -767,6 +768,7 @@ export async function initializeGatewayFleetAuthPersistence(options: {
         expected,
         config: config.hubDeviceAssertions,
         replayStore: new PostgresHubDeviceAssertionReplayStore(pool),
+        sessionPepper: secrets.sessionPepper,
       }),
       attachHubDeviceHuman: input => hubDeviceHumanAttachments.attach(input),
       fenceHubDeviceAttachment: input => hubDeviceHumanAttachments.fenceDevice(input),

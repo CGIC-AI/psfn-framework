@@ -6,6 +6,7 @@ import type {
   BackgroundWorkJobEnqueueResult,
   BackgroundWorkStorePort,
   BackgroundWorkWelfarePolicy,
+  SubsystemOutputProjection,
 } from '../../core/agent/background-work/store-port.js';
 import {
   BACKGROUND_WORK_REASON_CODES,
@@ -32,6 +33,7 @@ import {
   POSTGRES_BACKGROUND_WORK_MIGRATION_ADVISORY_LOCK,
   POSTGRES_BACKGROUND_WORK_MIGRATIONS,
 } from './migrations.js';
+import { parseSubsystemOutputRef } from '../../shared/contracts/subsystem-output-refs.js';
 
 interface BackgroundWorkRow extends QueryResultRow {
   job_id: string;
@@ -312,16 +314,17 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
 
   static async connect(
     databaseUrl: string,
-    options: { schema?: string } = {},
+    options: { schema?: string; role?: string } = {},
   ): Promise<PostgresBackgroundWorkStore> {
     const pool = createPostgresPool(databaseUrl, {
       applicationName: 'psfn-background-work',
       allowExitOnIdle: true,
       max: 8,
       schema: options.schema,
+      role: options.role,
     });
     try {
-      const migrationStatements = options.schema === undefined
+      const migrationStatements = options.schema === undefined || options.role !== undefined
         ? POSTGRES_BACKGROUND_WORK_MIGRATIONS
         : [
           `CREATE SCHEMA IF NOT EXISTS "${assertValidPostgresSchemaName(options.schema)}"`,
@@ -1034,6 +1037,7 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     leaseOwner: string;
     expectedRevision: number;
     nowMs: number;
+    projectsSubsystemOutputs?: boolean;
   }): Promise<'execute' | 'applied' | 'outcome_unknown' | 'foreground_active' | 'lease_lost'> {
     return withPostgresClient(this.pool, async (client) => {
       const session = await client.query<{ logical_session_id: string }>(`
@@ -1077,8 +1081,9 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
       // safely requeue-able. commitEffectBoundary promotes it to `started`.
       const inserted = await client.query<{ state: string }>(`
         INSERT INTO agent_background_work_effect_receipts (
-          job_id, effect_key, state, lease_owner, lease_revision, started_at_ms, applied_at_ms
-        ) VALUES ($1, $2, 'pending', $3, $4, $5, NULL)
+          job_id, effect_key, state, lease_owner, lease_revision, started_at_ms, applied_at_ms,
+          projects_subsystem_outputs
+        ) VALUES ($1, $2, 'pending', $3, $4, $5, NULL, $6)
         ON CONFLICT (job_id, effect_key) DO NOTHING
         RETURNING state
       `, [
@@ -1087,20 +1092,25 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
         input.leaseOwner,
         input.expectedRevision,
         input.nowMs,
+        input.projectsSubsystemOutputs === true,
       ]);
       if (inserted.rows[0]) return 'execute';
       const incumbent = await client.query<{
         state: string;
         lease_owner: string;
         lease_revision: number | string;
+        projects_subsystem_outputs: boolean;
       }>(`
-        SELECT state, lease_owner, lease_revision
+        SELECT state, lease_owner, lease_revision, projects_subsystem_outputs
         FROM agent_background_work_effect_receipts
         WHERE job_id = $1 AND effect_key = $2
         FOR UPDATE
       `, [input.jobId, input.effectKey]);
       if (incumbent.rowCount === 0) return 'outcome_unknown';
       const receipt = incumbent.rows[0]!;
+      if (receipt.projects_subsystem_outputs !== (input.projectsSubsystemOutputs === true)) {
+        throw new Error(`Background work effect projection contract changed for ${input.jobId}:${input.effectKey}`);
+      }
       const ownedReceipt = receipt.lease_owner === input.leaseOwner
         && Number(receipt.lease_revision) === input.expectedRevision;
       if (receipt.state === 'applied') return 'applied';
@@ -1206,32 +1216,116 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     leaseOwner: string;
     expectedRevision: number;
     nowMs: number;
+    outputRefs?: readonly string[];
   }): Promise<void> {
+    const projectsSubsystemOutputs = input.outputRefs !== undefined;
+    const outputRefs = [...new Set(input.outputRefs ?? [])].sort();
+    if (outputRefs.length > 128) {
+      throw new Error('Background work effect output ref count exceeds 128');
+    }
+    for (const outputRef of outputRefs) parseSubsystemOutputRef(outputRef);
     // A handler may complete without ever crossing its write boundary (a
     // no-op effect leaves the receipt `pending`); completion applies from
     // either pre-terminal phase so the effect key is durably recorded once.
-    const result = await this.pool.query(`
-      UPDATE agent_background_work_effect_receipts receipt
-      SET state = 'applied', applied_at_ms = $5
-      WHERE receipt.job_id = $1 AND receipt.effect_key = $2
-        AND receipt.state IN ('pending', 'started') AND receipt.lease_owner = $3
-        AND receipt.lease_revision = $4
-        AND EXISTS (
-          SELECT 1 FROM agent_background_work_jobs job
-          WHERE job.job_id = receipt.job_id AND job.state = 'running'
-            AND job.lease_owner = $3 AND job.revision = $4
-            AND job.lease_expires_at_ms > $5
-        )
-    `, [
-      requireText(input.jobId, 'jobId'),
-      requireText(input.effectKey, 'effectKey'),
-      requireText(input.leaseOwner, 'leaseOwner'),
-      positiveInteger(input.expectedRevision, 'expectedRevision'),
-      safeInteger(input.nowMs, 'nowMs'),
-    ]);
-    if ((result.rowCount ?? 0) !== 1) {
-      throw new Error(`Background work effect completion conflict for ${input.jobId}:${input.effectKey}`);
-    }
+    // Projection rows and the applied receipt share this transaction: a reader
+    // can never observe an applied effect whose stable refs were not committed.
+    await withPostgresClient(this.pool, async (client) => {
+      const jobId = requireText(input.jobId, 'jobId');
+      const effectKey = requireText(input.effectKey, 'effectKey');
+      const leaseOwner = requireText(input.leaseOwner, 'leaseOwner');
+      const expectedRevision = positiveInteger(input.expectedRevision, 'expectedRevision');
+      const nowMs = safeInteger(input.nowMs, 'nowMs');
+      const job = await client.query<{
+        logical_session_id: string;
+        source_channel_id: string;
+        source_turn_id: string;
+        source_request_id: string;
+      }>(`
+        SELECT logical_session_id, source_channel_id, source_turn_id, source_request_id
+        FROM agent_background_work_jobs
+        WHERE job_id = $1 AND state = 'running' AND lease_owner = $2
+          AND revision = $3 AND lease_expires_at_ms > $4
+        FOR UPDATE
+      `, [jobId, leaseOwner, expectedRevision, nowMs]);
+      if (job.rowCount !== 1) {
+        throw new Error(`Background work effect completion conflict for ${jobId}:${effectKey}`);
+      }
+      const source = job.rows[0]!;
+      const result = await client.query(`
+        UPDATE agent_background_work_effect_receipts
+        SET state = 'applied', applied_at_ms = $5
+        WHERE job_id = $1 AND effect_key = $2
+          AND state IN ('pending', 'started') AND lease_owner = $3
+          AND lease_revision = $4
+          AND projects_subsystem_outputs = $6
+      `, [
+        jobId,
+        effectKey,
+        leaseOwner,
+        expectedRevision,
+        nowMs,
+        projectsSubsystemOutputs,
+      ]);
+      if ((result.rowCount ?? 0) !== 1) {
+        throw new Error(`Background work effect completion conflict for ${jobId}:${effectKey}`);
+      }
+      if (projectsSubsystemOutputs) {
+        const status = await client.query<{ status: string }>(`
+          INSERT INTO agent_turn_subsystem_output_status (
+            logical_session_id, source_channel_id, source_turn_id, source_request_id,
+            status, source_job_id, source_effect_key, recorded_at_ms
+          ) VALUES ($1, $2, $3, $4, 'applied', $5, $6, $7)
+          ON CONFLICT (
+            logical_session_id, source_channel_id, source_turn_id, source_request_id
+          ) DO NOTHING
+          RETURNING status
+        `, [
+          source.logical_session_id,
+          source.source_channel_id,
+          source.source_turn_id,
+          source.source_request_id,
+          jobId,
+          effectKey,
+          nowMs,
+        ]);
+        if (status.rowCount !== 1) {
+          const incumbent = await client.query<{ status: string }>(`
+            SELECT status
+            FROM agent_turn_subsystem_output_status
+            WHERE logical_session_id = $1 AND source_channel_id = $2
+              AND source_turn_id = $3 AND source_request_id = $4
+          `, [
+            source.logical_session_id,
+            source.source_channel_id,
+            source.source_turn_id,
+            source.source_request_id,
+          ]);
+          if (incumbent.rows[0]?.status !== 'applied') {
+            throw new Error(`Subsystem output projection conflict for ${jobId}:${effectKey}`);
+          }
+        }
+      }
+      for (const outputRef of outputRefs) {
+        await client.query(`
+          INSERT INTO agent_turn_subsystem_output_refs (
+            logical_session_id, source_channel_id, source_turn_id, source_request_id,
+            output_ref, source_job_id, source_effect_key, recorded_at_ms
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          ON CONFLICT (
+            logical_session_id, source_channel_id, source_turn_id, source_request_id, output_ref
+          ) DO NOTHING
+        `, [
+          source.logical_session_id,
+          source.source_channel_id,
+          source.source_turn_id,
+          source.source_request_id,
+          outputRef,
+          jobId,
+          effectKey,
+          nowMs,
+        ]);
+      }
+    });
   }
 
   async abandonEffect(input: {
@@ -1341,36 +1435,76 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     nowMs: number;
     retryAtMs: number;
   }): Promise<StoredBackgroundWorkJob> {
-    const row = await queryOne<BackgroundWorkRow>(this.pool, `
-      UPDATE agent_background_work_jobs
-      SET attempt_count = attempt_count + 1,
-          state = CASE WHEN attempt_count + 1 >= max_attempts THEN 'failed' ELSE 'retry_wait' END,
-          reason_code = CASE
-            WHEN attempt_count + 1 >= max_attempts THEN 'retry_exhausted'
-            ELSE 'retry_scheduled'
-          END,
-          available_at_ms = $5::bigint,
-          completed_at_ms = CASE
-            WHEN attempt_count + 1 >= max_attempts THEN $4::bigint
-            ELSE NULL::bigint
-          END,
-          updated_at_ms = $4::bigint,
-          lease_owner = NULL,
-          lease_expires_at_ms = NULL,
-          deferred_from_state = NULL,
-          deferred_from_available_at_ms = NULL,
-          welfare_claimed = false,
-          revision = revision + 1
-      WHERE job_id = $1 AND state = 'running' AND lease_owner = $2 AND revision = $3
-      RETURNING ${JOB_COLUMNS}
-    `, [
-      requireText(input.jobId, 'jobId'),
-      requireText(input.leaseOwner, 'leaseOwner'),
-      positiveInteger(input.expectedRevision, 'expectedRevision'),
-      safeInteger(input.nowMs, 'nowMs'),
-      safeInteger(input.retryAtMs, 'retryAtMs'),
-    ]);
-    return requireTransitionRow(row, input.jobId);
+    return withPostgresClient(this.pool, async (client) => {
+      const jobId = requireText(input.jobId, 'jobId');
+      const leaseOwner = requireText(input.leaseOwner, 'leaseOwner');
+      const expectedRevision = positiveInteger(input.expectedRevision, 'expectedRevision');
+      const nowMs = safeInteger(input.nowMs, 'nowMs');
+      const retryAtMs = safeInteger(input.retryAtMs, 'retryAtMs');
+      const locked = await client.query<BackgroundWorkRow>(`
+        SELECT ${JOB_COLUMNS}
+        FROM agent_background_work_jobs
+        WHERE job_id = $1 AND state = 'running' AND lease_owner = $2 AND revision = $3
+        FOR UPDATE
+      `, [jobId, leaseOwner, expectedRevision]);
+      if (locked.rowCount !== 1) return requireTransitionRow(undefined, jobId);
+      const current = locked.rows[0]!;
+      const startedProjection = await client.query<{ effect_key: string }>(`
+        SELECT effect_key
+        FROM agent_background_work_effect_receipts
+        WHERE job_id = $1 AND state = 'started' AND projects_subsystem_outputs = true
+        ORDER BY effect_key ASC
+        LIMIT 1
+      `, [jobId]);
+      const unknownEffectKey = startedProjection.rowCount === 1
+        ? startedProjection.rows[0]!.effect_key
+        : undefined;
+      const nextAttemptCount = Number(current.attempt_count) + 1;
+      const retryExhausted = nextAttemptCount >= Number(current.max_attempts);
+      const terminal = unknownEffectKey !== undefined || retryExhausted;
+      const reasonCode = unknownEffectKey !== undefined
+        ? 'effect_outcome_unknown'
+        : (retryExhausted ? 'retry_exhausted' : 'retry_scheduled');
+      const updated = await client.query<BackgroundWorkRow>(`
+        UPDATE agent_background_work_jobs
+        SET attempt_count = $5,
+            state = $6,
+            reason_code = $7,
+            available_at_ms = $8,
+            completed_at_ms = $9,
+            updated_at_ms = $4,
+            lease_owner = NULL,
+            lease_expires_at_ms = NULL,
+            deferred_from_state = NULL,
+            deferred_from_available_at_ms = NULL,
+            welfare_claimed = false,
+            revision = revision + 1
+        WHERE job_id = $1 AND state = 'running' AND lease_owner = $2 AND revision = $3
+        RETURNING ${JOB_COLUMNS}
+      `, [
+        jobId,
+        leaseOwner,
+        expectedRevision,
+        nowMs,
+        nextAttemptCount,
+        terminal ? 'failed' : 'retry_wait',
+        reasonCode,
+        retryAtMs,
+        terminal ? nowMs : null,
+      ]);
+      if (updated.rowCount !== 1) return requireTransitionRow(undefined, jobId);
+      const row = updated.rows[0]!;
+      if (row.kind === 'memory_extraction' && terminal) {
+        await this.recordTerminalSubsystemProjection(
+          client,
+          row,
+          unknownEffectKey ? 'outcome_unknown' : 'failed',
+          unknownEffectKey ?? 'memory-extraction',
+          nowMs,
+        );
+      }
+      return mapRow(row);
+    });
   }
 
   async markClaimMalformed(input: {
@@ -1486,6 +1620,32 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
         AND job.lease_expires_at_ms <= $1
     `, [nowMs]);
     const result = await this.pool.query(`
+      WITH unknown_projection AS (
+        SELECT
+          job.logical_session_id,
+          job.source_channel_id,
+          job.source_turn_id,
+          job.source_request_id,
+          job.job_id,
+          receipt.effect_key
+        FROM agent_background_work_jobs job
+        JOIN agent_background_work_effect_receipts receipt ON receipt.job_id = job.job_id
+        WHERE job.state = 'running' AND job.lease_expires_at_ms <= $1
+          AND receipt.state = 'started'
+          AND receipt.projects_subsystem_outputs = true
+      ), recorded_unknown_projection AS (
+        INSERT INTO agent_turn_subsystem_output_status (
+          logical_session_id, source_channel_id, source_turn_id, source_request_id,
+          status, source_job_id, source_effect_key, recorded_at_ms
+        )
+        SELECT
+          logical_session_id, source_channel_id, source_turn_id, source_request_id,
+          'outcome_unknown', job_id, effect_key, $1
+        FROM unknown_projection
+        ON CONFLICT (
+          logical_session_id, source_channel_id, source_turn_id, source_request_id
+        ) DO NOTHING
+      )
       UPDATE agent_background_work_jobs
       SET attempt_count = CASE
             WHEN EXISTS (
@@ -1560,6 +1720,15 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     return row ? safeInteger(row.count, 'runnable count') : 0;
   }
 
+  async countPending(): Promise<number> {
+    const row = await queryOne<{ count: string }>(this.pool, `
+      SELECT COUNT(*)::text AS count
+      FROM agent_background_work_jobs
+      WHERE state IN ('queued', 'deferred', 'retry_wait', 'running')
+    `);
+    return row ? safeInteger(row.count, 'pending count') : 0;
+  }
+
   async get(jobId: string): Promise<StoredBackgroundWorkJob | null> {
     const row = await queryOne<BackgroundWorkRow>(this.pool, `
       SELECT ${JOB_COLUMNS}
@@ -1567,6 +1736,54 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
       WHERE job_id = $1
     `, [requireText(jobId, 'jobId')]);
     return row ? mapRow(row) : null;
+  }
+
+  async listSubsystemOutputRefs(input: {
+    logicalSessionId: string;
+    sourceChannelId: string;
+    sourceTurnId: string;
+    sourceRequestId: string;
+  }): Promise<string[]> {
+    return (await this.getSubsystemOutputProjection(input)).outputRefs;
+  }
+
+  async getSubsystemOutputProjection(input: {
+    logicalSessionId: string;
+    sourceChannelId: string;
+    sourceTurnId: string;
+    sourceRequestId: string;
+  }): Promise<SubsystemOutputProjection> {
+    const params = [
+      requireText(input.logicalSessionId, 'logicalSessionId'),
+      requireText(input.sourceChannelId, 'sourceChannelId'),
+      requireText(input.sourceTurnId, 'sourceTurnId'),
+      requireText(input.sourceRequestId, 'sourceRequestId'),
+    ];
+    const row = await queryOne<{
+      status: 'applied' | 'failed' | 'outcome_unknown' | null;
+      output_refs: string[];
+    }>(this.pool, `
+      SELECT marker.status, ARRAY(
+        SELECT output.output_ref
+        FROM agent_turn_subsystem_output_refs output
+        WHERE output.logical_session_id = $1 AND output.source_channel_id = $2
+          AND output.source_turn_id = $3 AND output.source_request_id = $4
+        ORDER BY output.output_ref ASC
+      ) AS output_refs
+      FROM (SELECT 1) singleton
+      LEFT JOIN agent_turn_subsystem_output_status marker
+        ON marker.logical_session_id = $1 AND marker.source_channel_id = $2
+          AND marker.source_turn_id = $3 AND marker.source_request_id = $4
+    `, params);
+    if (!row) throw new Error('Subsystem output projection query returned no row');
+    const outputRefs = row.output_refs.map((outputRef) => {
+      parseSubsystemOutputRef(outputRef);
+      return outputRef;
+    });
+    if (!row.status && outputRefs.length > 0) {
+      throw new Error('Subsystem output refs exist without a projection status');
+    }
+    return { status: row.status ?? 'pending', outputRefs };
   }
 
   async close(): Promise<void> {
@@ -1598,30 +1815,86 @@ export class PostgresBackgroundWorkStore implements BackgroundWorkStorePort {
     reasonCode: BackgroundWorkReasonCode;
     nowMs: number;
   }, state: 'failed' | 'stale_discarded'): Promise<StoredBackgroundWorkJob> {
-    const row = await queryOne<BackgroundWorkRow>(this.pool, `
-      UPDATE agent_background_work_jobs
-      SET state = $5,
-          reason_code = $6,
-          completed_at_ms = $4,
-          updated_at_ms = $4,
-          lease_owner = NULL,
-          lease_expires_at_ms = NULL,
-          deferred_from_state = NULL,
-          deferred_from_available_at_ms = NULL,
-          welfare_claimed = false,
-          defer_count = 0,
-          first_deferred_at_ms = NULL,
-          revision = revision + 1
-      WHERE job_id = $1 AND state = 'running' AND lease_owner = $2 AND revision = $3
-      RETURNING ${JOB_COLUMNS}
+    return withPostgresClient(this.pool, async (client) => {
+      const jobId = requireText(input.jobId, 'jobId');
+      const leaseOwner = requireText(input.leaseOwner, 'leaseOwner');
+      const expectedRevision = positiveInteger(input.expectedRevision, 'expectedRevision');
+      const nowMs = safeInteger(input.nowMs, 'nowMs');
+      const updated = await client.query<BackgroundWorkRow>(`
+        UPDATE agent_background_work_jobs
+        SET state = $5,
+            reason_code = $6,
+            completed_at_ms = $4,
+            updated_at_ms = $4,
+            lease_owner = NULL,
+            lease_expires_at_ms = NULL,
+            deferred_from_state = NULL,
+            deferred_from_available_at_ms = NULL,
+            welfare_claimed = false,
+            defer_count = 0,
+            first_deferred_at_ms = NULL,
+            revision = revision + 1
+        WHERE job_id = $1 AND state = 'running' AND lease_owner = $2 AND revision = $3
+        RETURNING ${JOB_COLUMNS}
+      `, [jobId, leaseOwner, expectedRevision, nowMs, state, input.reasonCode]);
+      if (updated.rowCount !== 1) return requireTransitionRow(undefined, jobId);
+      const row = updated.rows[0]!;
+      if (row.kind === 'memory_extraction') {
+        const status = input.reasonCode === 'effect_outcome_unknown'
+          ? 'outcome_unknown'
+          : 'failed';
+        await this.recordTerminalSubsystemProjection(
+          client,
+          row,
+          status,
+          'memory-extraction',
+          nowMs,
+        );
+      }
+      return mapRow(row);
+    });
+  }
+
+  private async recordTerminalSubsystemProjection(
+    client: PoolClient,
+    job: BackgroundWorkRow,
+    status: 'failed' | 'outcome_unknown',
+    effectKey: string,
+    nowMs: number,
+  ): Promise<void> {
+    const inserted = await client.query<{ status: string }>(`
+      INSERT INTO agent_turn_subsystem_output_status (
+        logical_session_id, source_channel_id, source_turn_id, source_request_id,
+        status, source_job_id, source_effect_key, recorded_at_ms
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      ON CONFLICT (
+        logical_session_id, source_channel_id, source_turn_id, source_request_id
+      ) DO NOTHING
+      RETURNING status
     `, [
-      requireText(input.jobId, 'jobId'),
-      requireText(input.leaseOwner, 'leaseOwner'),
-      positiveInteger(input.expectedRevision, 'expectedRevision'),
-      safeInteger(input.nowMs, 'nowMs'),
-      state,
-      input.reasonCode,
+      job.logical_session_id,
+      job.source_channel_id,
+      job.source_turn_id,
+      job.source_request_id,
+      status,
+      job.job_id,
+      effectKey,
+      nowMs,
     ]);
-    return requireTransitionRow(row, input.jobId);
+    if (inserted.rowCount === 1) return;
+    const incumbent = await client.query<{ status: string }>(`
+      SELECT status
+      FROM agent_turn_subsystem_output_status
+      WHERE logical_session_id = $1 AND source_channel_id = $2
+        AND source_turn_id = $3 AND source_request_id = $4
+    `, [
+      job.logical_session_id,
+      job.source_channel_id,
+      job.source_turn_id,
+      job.source_request_id,
+    ]);
+    if (incumbent.rows[0]?.status !== status && incumbent.rows[0]?.status !== 'applied') {
+      throw new Error(`Subsystem output terminal projection conflict for ${job.job_id}`);
+    }
   }
 }

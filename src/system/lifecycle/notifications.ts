@@ -2,15 +2,22 @@
 // Sends Discord messages on pre-restart, ready, and shutdown events.
 // Uses the configured heartbeat channel or last-active channel.
 
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { createComponentLogger } from '../../shared/logger.js';
-import { resolveLastActiveSessionPath } from '../../persistence/layout.js';
+import {
+  resolveLastActiveSessionPath,
+  resolveReadyNotificationMarkerPath,
+} from '../../persistence/layout.js';
 import { inferSessionChannelType, isInternalSessionId } from '../../core/session/session-id.js';
 
 const log = createComponentLogger('Lifecycle');
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
+
+// Suppress duplicate "I'm back" announcements when a deploy boots the agent 2-3 times
+// (initial start + restart(s) on gateway RPC loss) for the same image tag + channel.
+const READY_NOTIFICATION_DEDUPE_WINDOW_MS = 15 * 60 * 1000;
 
 // ── Interfaces ──
 
@@ -30,6 +37,8 @@ export interface LifecycleNotifierConfig {
   heartbeatChannelId?: string;
   dataDir: string;
   startTime: number;
+  /** Deploy image tag used to dedupe ready notifications across boot restarts. Falls back to PSFN_IMAGE_TAG. */
+  imageTag?: string;
 }
 
 // ── Last-active session tracking ──
@@ -284,6 +293,45 @@ function resolveDiscordNotificationChannel(session: LastActiveSessionData | null
   return null;
 }
 
+// ── Ready-notification dedupe marker ──
+
+interface ReadyNotificationMarker {
+  imageTag: string;
+  channelId: string;
+  timestamp: number;
+}
+
+function readReadyNotificationMarker(dataDir: string): ReadyNotificationMarker | null {
+  const path = resolveReadyNotificationMarkerPath(dataDir);
+  try {
+    const data = JSON.parse(readFileSync(path, 'utf-8')) as Partial<ReadyNotificationMarker>;
+    if (
+      typeof data.imageTag === 'string'
+      && typeof data.channelId === 'string'
+      && typeof data.timestamp === 'number'
+      && Number.isFinite(data.timestamp)
+    ) {
+      return { imageTag: data.imageTag, channelId: data.channelId, timestamp: data.timestamp };
+    }
+    return null;
+  } catch (error) {
+    if (isMissingLastActiveSessionFile(error)) return null;
+    // Fail closed for dedupe: an unreadable marker must not silence the announcement.
+    log.warn('Failed to read ready-notification marker; will announce', { error: String(error) });
+    return null;
+  }
+}
+
+function writeReadyNotificationMarker(dataDir: string, marker: ReadyNotificationMarker): void {
+  const path = resolveReadyNotificationMarkerPath(dataDir);
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, JSON.stringify(marker) + '\n', 'utf-8');
+  } catch (error) {
+    log.error('Failed to persist ready-notification marker', { error: String(error) });
+  }
+}
+
 // ── Notifier implementation ──
 
 export class DiscordLifecycleNotifier implements LifecycleNotifier {
@@ -291,12 +339,14 @@ export class DiscordLifecycleNotifier implements LifecycleNotifier {
   private heartbeatChannelId: string | undefined;
   private dataDir: string;
   private startTime: number;
+  private imageTag: string | undefined;
 
   constructor(config: LifecycleNotifierConfig) {
     this.sender = config.sender;
     this.heartbeatChannelId = config.heartbeatChannelId;
     this.dataDir = config.dataDir;
     this.startTime = config.startTime;
+    this.imageTag = config.imageTag?.trim() || process.env.PSFN_IMAGE_TAG?.trim() || undefined;
   }
 
   /** Resolve which channel to send lifecycle messages to */
@@ -338,6 +388,14 @@ export class DiscordLifecycleNotifier implements LifecycleNotifier {
       return;
     }
 
+    if (this.shouldSuppressReadyNotification(channelId)) {
+      log.info(
+        `Ready notification suppressed for ${channelId} `
+          + `(duplicate boot of image ${this.imageTag} within dedupe window)`,
+      );
+      return;
+    }
+
     const uptimeMs = Date.now() - this.startTime;
     const uptimeSec = Math.round(uptimeMs / 1000);
     const msg = `I'm back~ (startup took ${uptimeSec}s)`;
@@ -345,9 +403,35 @@ export class DiscordLifecycleNotifier implements LifecycleNotifier {
     try {
       await this.sender.send(channelId, msg);
       log.info(`Ready notification sent to ${channelId}`);
+      this.recordReadyNotification(channelId);
     } catch (err) {
       log.error('Failed to send ready notification', { error: String(err) });
     }
+  }
+
+  /**
+   * Suppress a repeat "I'm back" only when a prior boot of the *same* image tag
+   * already announced to this channel inside the dedupe window. A new build, a
+   * different channel, an expired marker, or a missing image tag all announce.
+   */
+  private shouldSuppressReadyNotification(channelId: string): boolean {
+    if (!this.imageTag) return false;
+    const marker = readReadyNotificationMarker(this.dataDir);
+    if (!marker) return false;
+    if (marker.imageTag !== this.imageTag) return false;
+    if (marker.channelId !== channelId) return false;
+    const age = Date.now() - marker.timestamp;
+    if (!Number.isFinite(age) || age < 0) return false;
+    return age < READY_NOTIFICATION_DEDUPE_WINDOW_MS;
+  }
+
+  private recordReadyNotification(channelId: string): void {
+    if (!this.imageTag) return;
+    writeReadyNotificationMarker(this.dataDir, {
+      imageTag: this.imageTag,
+      channelId,
+      timestamp: Date.now(),
+    });
   }
 
   async notifyShutdown(reason?: string): Promise<void> {

@@ -25,7 +25,20 @@ export interface MemorySubjectAccessContext {
   grantBindings?: readonly MemorySubjectGrantBinding[];
   /** Only process-local companion work may opt into companion-private rows. */
   companionInternal?: boolean;
+  /**
+   * Add companion-private rows to product recall candidate queries. This is
+   * not a disclosure grant: the retriever's room, trust, sensitivity, consent,
+   * and policy gates still decide whether any candidate reaches a prompt.
+   */
+  includeCompanionPrivateRecallCandidates?: boolean;
 }
+
+const COMPANION_PRIVATE_RECALL_ACTIONS = new Set<MemorySubjectQueryAuthorization['action']>([
+  'list',
+  'detail',
+  'search',
+  'embedding',
+]);
 
 export function memorySubjectAccessContextFromCorrelation(
   context: Partial<CorrelationMetadata> | undefined,
@@ -58,19 +71,29 @@ function authorization(
 ): MemorySubjectQueryAuthorization | undefined {
   const subject = normalizedSubject(context);
   if (!subject) return undefined;
-  const viewerContactIds = context.companionInternal && !context.viewerContactId?.trim()
+  const companionInternal = context.companionInternal && !context.viewerContactId?.trim();
+  const viewerContactIds = companionInternal
     ? [subject]
     : normalizedViewerContacts(context);
   if (viewerContactIds.length === 0) return undefined;
+  const includeCompanionPrivateRecall = Boolean(
+    context.viewerContactId?.trim()
+    && context.includeCompanionPrivateRecallCandidates
+    && COMPANION_PRIVATE_RECALL_ACTIONS.has(action),
+  );
   return {
     action,
     viewerContactIds,
-    allowedSubjectClasses: context.companionInternal && !context.viewerContactId?.trim()
+    allowedSubjectClasses: companionInternal
       ? ['companion_private']
-      : ['single_contact'],
-    allowedViewerRelations: context.companionInternal && !context.viewerContactId?.trim()
+      : includeCompanionPrivateRecall
+        ? ['single_contact', 'multiple_contacts', 'companion_private']
+        : ['single_contact'],
+    allowedViewerRelations: companionInternal
       ? ['none']
-      : ['self'],
+      : includeCompanionPrivateRecall
+        ? ['self', 'co_subject', 'none']
+        : ['self'],
     classifierVersion: MEMORY_SUBJECT_CLASSIFIER_VERSION,
     grantBindings: [...(context.grantBindings ?? [])],
   };

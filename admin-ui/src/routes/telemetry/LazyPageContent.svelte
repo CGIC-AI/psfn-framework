@@ -7,6 +7,8 @@
   import { getAuditHistory, getAuditHistoryDetail } from '$lib/api/endpoints/audit-history';
   import {
     getEvents,
+    getTelemetryCacheError,
+    hydrateTelemetryCache,
     isConnected,
     isPaused,
     connectTelemetry,
@@ -331,7 +333,18 @@
   }
 
   // ── Connect/disconnect handlers ──
-  function handleConnect() {
+  async function hydrateCachedTelemetry(): Promise<void> {
+    try {
+      await hydrateTelemetryCache();
+    } catch {
+      // The reactive cache error is rendered below; malformed records are
+      // already removed by the cache boundary.
+    }
+  }
+
+  async function handleConnect() {
+    await hydrateCachedTelemetry();
+    if (getTelemetryCacheError()) return;
     connectTelemetry();
     connectedSince = Date.now();
   }
@@ -461,6 +474,7 @@
     if (isConnected()) {
       connectedSince = Date.now();
     }
+    void hydrateCachedTelemetry();
   });
 
   onDestroy(() => {
@@ -470,6 +484,11 @@
 </script>
 
 <div class="space-y-5 h-full flex flex-col">
+  {#if getTelemetryCacheError()}
+    <div class="card-garden p-4 border-l-4 border-l-wilt-400 text-sm text-wilt-600">
+      Local telemetry cache unavailable: {getTelemetryCacheError()}
+    </div>
+  {/if}
   {#snippet telemetryHeaderActions()}
     <div class="flex items-center gap-2">
       {#if isConnected()}

@@ -10,6 +10,12 @@
   import CardGrid from '$lib/components/garden/CardGrid.svelte';
   import CollapsibleSection from '$lib/components/garden/CollapsibleSection.svelte';
   import type { WikiDocument, WikiDocumentListEntry, WikiSearchMatch } from '../../../../src/faculties/wiki/types';
+  import {
+    parseNamedWardrobeLookDocument,
+    parsePersonalProjectDocument,
+    type NamedWardrobeLook,
+    type PersonalProjectManifest,
+  } from '../../../../src/faculties/wiki/personal-project-contracts';
 
   let data = $state<WikiListResponse | null>(null);
   let selected = $state<WikiDocument | null>(null);
@@ -19,6 +25,8 @@
   let loadingDocumentId = $state('');
   let errorMessage = $state('');
   let searchQuery = $state('');
+  let projects = $state<PersonalProjectManifest[]>([]);
+  let wardrobeLooks = $state<NamedWardrobeLook[]>([]);
 
   let documents = $derived(data?.documents ?? []);
   let selectedId = $derived(selected?.id ?? '');
@@ -27,6 +35,18 @@
     errorMessage = '';
     try {
       data = await listWikiDocuments();
+      const projectDocuments = await Promise.all(
+        data.documents
+          .filter((document) => document.tags.includes('psfn:personal-project'))
+          .map((document) => getWikiDocument(document.id)),
+      );
+      const lookDocuments = await Promise.all(
+        data.documents
+          .filter((document) => document.tags.includes('psfn:named-look'))
+          .map((document) => getWikiDocument(document.id)),
+      );
+      projects = projectDocuments.map(parsePersonalProjectDocument);
+      wardrobeLooks = lookDocuments.map(parseNamedWardrobeLookDocument);
       if (!selected && data.documents[0]) {
         await selectDocument(data.documents[0].id);
       }
@@ -158,6 +178,51 @@
           <p class="mt-2 text-sm font-semibold text-shadow-900">{documents.length}</p>
         </div>
       </div>
+    </CollapsibleSection>
+  {/if}
+
+  {#if projects.length}
+    <CollapsibleSection title="Personal projects" subtitle="Companion-owned, resumable work in the existing personal wiki" count={projects.length}>
+      <CardGrid>
+        {#each projects as project}
+          <article class="rounded-xl border border-bark-200 bg-bark-50 px-4 py-3">
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0">
+                <p class="truncate text-sm font-semibold text-shadow-900">{project.title}</p>
+                <code class="text-xs text-shadow-500">{project.ref}</code>
+              </div>
+              <span class="rounded-full border border-bark-200 px-2 py-0.5 text-xs text-shadow-600">{project.status}</span>
+            </div>
+            <p class="mt-3 text-xs uppercase tracking-[0.14em] text-shadow-500">Her next intention</p>
+            <p class="mt-1 text-sm text-shadow-700">{project.nextStep}</p>
+            <p class="mt-3 text-xs text-shadow-500">
+              {project.artifacts.length} artifact{project.artifacts.length === 1 ? '' : 's'} · resumed {project.resumeCount} time{project.resumeCount === 1 ? '' : 's'} · visibility {project.visibility}
+            </p>
+          </article>
+        {/each}
+      </CardGrid>
+    </CollapsibleSection>
+  {/if}
+
+  {#if wardrobeLooks.length}
+    <CollapsibleSection title="Wardrobe & style" subtitle="Read-only named looks with stable image-prompt references" count={wardrobeLooks.length}>
+      <CardGrid>
+        {#each wardrobeLooks as look}
+          <article class="rounded-xl border border-bark-200 bg-bark-50 px-4 py-3">
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0">
+                <p class="truncate text-sm font-semibold text-shadow-900">{look.name}</p>
+                <code class="text-xs text-shadow-500">{look.ref}</code>
+              </div>
+              <span class="rounded-full border border-bark-200 px-2 py-0.5 text-xs text-shadow-600">{look.visibility}</span>
+            </div>
+            <p class="mt-3 text-sm text-shadow-700">{look.promptFragment}</p>
+            {#if look.supersededByRef}
+              <p class="mt-2 text-xs text-wilt-700">Superseded by {look.supersededByRef}</p>
+            {/if}
+          </article>
+        {/each}
+      </CardGrid>
     </CollapsibleSection>
   {/if}
 

@@ -78,6 +78,7 @@ describe('satellite registry admin API route', () => {
           displayName: 'Amica',
           mobility: 'portable',
           staticLocationLabel: 'Live test desk',
+          companionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
           endpoints: [
             {
               endpointId: 'amica-browser',
@@ -91,9 +92,9 @@ describe('satellite registry admin API route', () => {
                 clientCertSubject: 'CN=amica-browser',
               },
               defaultIdentity: {
-                authorId: 'vega',
-                authorName: 'Vega',
-                canonicalContactId: 'contact-vega',
+                authorId: 'primary-user',
+                authorName: 'Primary User',
+                canonicalContactId: 'contact-primary-user',
                 channelPrivacy: 'private',
               },
               maxCapabilities: ['text', 'audio_input', 'speech_to_text', 'audio_output', 'text_to_speech', 'vision'],
@@ -124,6 +125,7 @@ describe('satellite registry admin API route', () => {
           displayName: 'Amica',
           mobility: 'portable',
           staticLocationLabel: 'Live test desk',
+          companionId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
           endpoints: [
             {
               endpointId: 'amica-browser',

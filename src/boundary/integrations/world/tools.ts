@@ -506,11 +506,15 @@ export function createWorldTool(ops: WorldOperations, deps: WorldToolDeps): Subs
         description: 'World action: perceive, list, control, or move.',
       })),
       placeId: Type.Optional(Type.String({
-        description: 'Target place id (e.g. place.living-room). Defaults to the situated place for '
-          + 'perceive/list; required for move (virtual destination).',
+        description: 'Target place id, matched exactly against places.json as authored. Ids are arbitrary '
+          + 'operator-defined strings with no guaranteed "place." prefix (e.g. "bedroom"); do not guess. '
+          + 'Use action=list to discover the exact ids. Defaults to the situated place for perceive/list; '
+          + 'required for move (virtual destination).',
       })),
       affordanceId: Type.Optional(Type.String({
-        description: 'Used with action=control. Registry affordance id (e.g. lr_lights). Resolved against places.json.',
+        description: 'Used with action=control. Registry affordance id, matched exactly against places.json as '
+          + 'authored. Ids are arbitrary operator-defined strings (e.g. "bedroom_lights"); do not guess '
+          + 'singular/plural or prefixes. Use action=list to discover the exact ids.',
       })),
       command: Type.Optional(Type.Union([
         Type.Literal('on'),

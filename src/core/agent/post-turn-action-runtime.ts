@@ -6,8 +6,8 @@ import type {
 } from './substrate-agent/bounded-subagent-contract.js';
 import type {
   RuntimeLaneBudgetProfile,
-  RuntimeLaneClass,
 } from './worker-lanes.js';
+import type { RuntimeLaneClass } from '../../shared/contracts/runtime-lanes.js';
 
 export const POST_TURN_SUBAGENT_SPAWN_ACTION_KIND = 'subagent.spawn' as const;
 

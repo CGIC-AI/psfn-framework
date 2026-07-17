@@ -6,6 +6,7 @@ import {
   assembleReflectionContactContextBundle,
   assembleReflectionSubstrateContext,
   buildReflectionProcessId,
+  REFLECTION_CONTEXT_GUIDANCE_VERSION,
   ReflectionDailyJournalStore,
   ReflectionProcessLogStore,
   toReflectionDailyJournalProvenanceRef,
@@ -245,6 +246,7 @@ describe('reflection substrate stores', () => {
     expect(bundle.relational).toContain('[Reflection Contact Evidence]');
     expect(bundle.relational).toContain('Current contact: Ari; trust scope trusted.');
     expect(bundle.relational).toContain('Recent contact status: active.');
+    expect(REFLECTION_CONTEXT_GUIDANCE_VERSION).toBe(3);
     expect(bundle.relational).not.toContain('contact_id:');
     expect(bundle.relational).not.toContain('last_seen_delta_seconds:');
     expect(bundle.relational).toContain('I wanted to follow up on yesterday.');
@@ -253,6 +255,7 @@ describe('reflection substrate stores', () => {
     expect(bundle.relational).toContain('Clarify the recovery timeline');
     expect(bundle.relational).toContain('Check in about the recovery plan');
     expect(bundle.relational).not.toContain('stale silence');
+    expect(bundle.relational).not.toContain('silence or absence framing');
     expect(bundle.self).toContain('contact-scoped recollection');
     expect(bundle.affect).toContain('[Reflection Affect Evidence]');
     expect(bundle.affect).toContain('Current affect appears slightly lifted, steady, and balanced.');

@@ -106,7 +106,7 @@ export interface VoiceTurnRuntimeContext extends VoiceRuntimeBaseContext {
   activeTurn: ActiveVoiceTurn | null;
   capturing: boolean;
   /**
-   * psfn-framework-mmo9.7.5: last spoken assistant utterance, replayed locally
+   * mmo9.7.5: last spoken assistant utterance, replayed locally
    * on a deterministic "repeat" control intent without a model turn.
    */
   lastAssistantUtterance: string | null;

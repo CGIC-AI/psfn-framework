@@ -16,6 +16,7 @@ export interface PostgresContactStoreOptions {
   exportDir?: string;
   /** Optional per-companion Postgres schema; pins the pool's search_path. */
   schema?: string;
+  role?: string;
   /** Authenticated gateway authority used by every fleet-authority mutation. */
   contactLifecycleGateway?: ContactLifecycleGatewayPort;
   /** Deterministic certification seam; never configured by runtime/env input. */

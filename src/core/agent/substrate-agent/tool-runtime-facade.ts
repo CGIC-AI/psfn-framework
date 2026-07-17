@@ -158,6 +158,9 @@ const MAINTENANCE_TOOL_POLICIES = new Map<string, MaintenanceToolPolicy>([
     allowedActions: ['read'],
     resolveAction: resolveMaintenanceSystemAction,
   }],
+  ['analysis_workbench', {
+    allowedTaskKinds: ['reflection'],
+  }],
   ['generate_image', {
     allowedTaskKinds: MAINTENANCE_EXPRESSIVE_TASK_KINDS,
   }],

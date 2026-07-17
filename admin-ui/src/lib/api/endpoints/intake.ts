@@ -3,6 +3,11 @@
 // server-side double-confirm flow.
 
 import { apiGet, apiPost } from '$lib/api/client';
+import {
+  createQueuePageCache,
+  isIntakeQuarantineListData,
+} from '$lib/cache/queue-cache';
+import type { LocalFirstDataSource, LocalFirstResult } from '$lib/cache/local-first';
 import type {
   AdminIntakeQuarantineItemDetail,
   AdminIntakeQuarantineItemView,
@@ -49,6 +54,12 @@ export interface IntakeQuarantineDecideResult {
   message: string;
 }
 
+const intakeQuarantineCache = createQueuePageCache({
+  key: 'intake-quarantine',
+  path: '/api/admin/intake/quarantine',
+  validate: isIntakeQuarantineListData,
+});
+
 /** Read-only intake-policy view (mode, tiers, thresholds, quarantine limits). */
 export function getIntakePolicy(): Promise<IntakePolicyOverviewData> {
   return apiGet<IntakePolicyOverviewData>('/api/admin/intake/policy');
@@ -68,6 +79,12 @@ export function mutateIntakeSourceList(
 /** The quarantine approval queue (held items first, newest first). */
 export function getIntakeQuarantine(): Promise<IntakeQuarantineListData> {
   return apiGet<IntakeQuarantineListData>('/api/admin/intake/quarantine');
+}
+
+export function loadIntakeQuarantineLocalFirst(
+  onData: (data: IntakeQuarantineListData, source: LocalFirstDataSource) => void,
+): Promise<LocalFirstResult<IntakeQuarantineListData>> {
+  return intakeQuarantineCache.load(onData);
 }
 
 export function getIntakeQuarantineItem(id: string): Promise<IntakeQuarantineItemData> {

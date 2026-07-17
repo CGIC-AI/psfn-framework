@@ -4,6 +4,7 @@
     AdminPromptSectionCacheability,
     AdminTurnPromptContextMessage,
   } from '$lib/types';
+  import PromptMonitorTextBlock from './PromptMonitorTextBlock.svelte';
 
   type DisplayMessage = Omit<AdminTurnPromptContextMessage, 'role'> & { role: string };
 
@@ -90,7 +91,9 @@
               </span>
             </div>
           {/if}
-          <pre class="mt-2 overflow-auto whitespace-pre-wrap font-mono text-sm text-shadow-800">{message.content}</pre>
+          <div class="mt-2">
+            <PromptMonitorTextBlock title={`${message.role} Content`} value={message.content} maxHeightClass="max-h-64" />
+          </div>
         </div>
       {/each}
     </div>

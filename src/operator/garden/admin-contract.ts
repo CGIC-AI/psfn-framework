@@ -43,6 +43,7 @@ import type {
   AdminSessionService,
   AdminSettingsService,
   AdminWikiService,
+  AdminWishlistService,
 } from './services/types.js';
 import type { AdminObserverEvalSidecarService } from './services/observer-eval-sidecar-service.js';
 import type { AdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
@@ -195,6 +196,7 @@ export interface GardenAdminDomainServices {
   shards: AdminShardFoldReviewService;
   adaptiveTools?: AdminAdaptiveToolsService | null;
   wiki?: AdminWikiService | null;
+  wishlist?: AdminWishlistService | null;
   episodicMemory?: AdminEpisodicMemoryService | null;
   groupMemory?: AdminGroupMemoryService | null;
   memory: AdminMemoryService;

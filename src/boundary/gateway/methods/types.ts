@@ -1,5 +1,6 @@
 import type { JSONRPCServerAndClient } from 'json-rpc-2.0';
-import type { LLMProviderPort, EmbeddingProviderPort } from '../../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { ChannelOutboundDock } from '../../../channels/backplane/types.js';
 import type { GitOperations } from '../../integrations/git/ops.js';
 import type { ImageRuntimeConfig } from '../../../primitives/images/types.js';
@@ -67,7 +68,7 @@ export interface GatewayMethodRuntime {
   /** Authenticated companion bound to the connection serving this RPC. */
   authenticatedCompanionId(): string | undefined;
   /**
-   * psfn-framework-fxt1: verify that a caller-asserted `preemptionProtected`
+   * fxt1: verify that a caller-asserted `preemptionProtected`
    * work spec is backed by a genuine welfare escalation — `jobId` names a
    * `welfare_claimed`, `running` background-work row owned (schema-scoped) by
    * `companionId`. Absent ⇒ the boundary cannot verify and strips the flag

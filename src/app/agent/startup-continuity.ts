@@ -12,12 +12,22 @@ import {
   type StartupWikiHydrationSessionManager,
 } from '../../faculties/wiki/startup-hydration.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import type { WikiStartupHydrationSettings } from '../../system/config/runtime-config-contracts.js';
 
 const log = createComponentLogger('StartupContinuity');
 
 type StartupContinuitySessionManager = StartupMemoryHydrationSessionManager
   & StartupCoreMemoryHydrationSessionManager
   & StartupWikiHydrationSessionManager;
+
+export function requireWikiStartupHydrationTuning(
+  tuning: WikiStartupHydrationSettings | undefined,
+): WikiStartupHydrationSettings {
+  if (!tuning) {
+    throw new Error('settings.json must define wikiStartupHydration');
+  }
+  return tuning;
+}
 
 function formatDegradedChannels(degraded: Array<{ channelId: string; error: string }>): string {
   return degraded
@@ -29,6 +39,7 @@ export async function hydrateStartupContinuity(options: {
   memoryProvider: MemoryProvider | null | undefined;
   wikiRetrieval: WikiRetrievalPort | null | undefined;
   sessionManager: StartupContinuitySessionManager;
+  wikiHydrationTuning: WikiStartupHydrationSettings;
 }): Promise<void> {
   const activeMemory = await hydrateStartupActiveMemoryContexts(options);
   const activeCoreMemory = hydrateStartupActiveCoreMemoryBlocks(options);
@@ -38,6 +49,7 @@ export async function hydrateStartupContinuity(options: {
   const wiki = await hydrateStartupWikiContexts({
     wikiRetrieval: options.wikiRetrieval,
     sessionManager: options.sessionManager,
+    tuning: options.wikiHydrationTuning,
   });
   if (wiki.degraded.length > 0) {
     log.warn('Startup wiki context hydration degraded on some channels (non-fatal)', {

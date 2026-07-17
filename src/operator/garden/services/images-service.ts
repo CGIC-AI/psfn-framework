@@ -28,6 +28,10 @@ import type {
   AdminImageBlob,
   AdminImagesService,
 } from './types.js';
+import {
+  contestArtifactSensitivity,
+  parseArtifactSensitivityClassification,
+} from '../../../shared/contracts/artifact-sensitivity.js';
 
 const GENERATED_IMAGE_META_SUFFIX = '.image-meta.json';
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.tiff']);
@@ -291,6 +295,17 @@ function mergeGeneratedImageUpdate(
     if (refs.length > 0) next.artifactRefs = refs;
     else delete next.artifactRefs;
   }
+  if (input.sensitivityContest !== undefined) {
+    const classification = parseArtifactSensitivityClassification(metadata.sensitivityClassification);
+    if (!classification) {
+      throw new Error('Generated image does not have a valid sensitivity classification to contest');
+    }
+    next.sensitivityClassification = contestArtifactSensitivity(classification, {
+      actor: 'operator',
+      sensitivity: input.sensitivityContest.sensitivity,
+      reason: input.sensitivityContest.reason,
+    });
+  }
 
   return next;
 }
@@ -537,6 +552,9 @@ export class AdminImagesDataService implements AdminImagesService {
         assistantSessionEntryId: metadata.assistantSessionEntryId,
       });
     const meaningfulMoment = normalizeMeaningfulMoment(metadata.meaningfulMoment);
+    const sensitivityClassification = parseArtifactSensitivityClassification(
+      metadata.sensitivityClassification,
+    );
     return {
       id,
       url,
@@ -551,6 +569,7 @@ export class AdminImagesDataService implements AdminImagesService {
       tags: galleryTagsFromMetadata(metadata),
       companionNoteRefs: normalizeCompanionNoteRefs(metadata.companionNoteRefs),
       artifactRefs: baseArtifactRefs({ metadata, filePath, imageUrl: url, relativePath }),
+      ...(sensitivityClassification ? { sensitivityClassification } : {}),
       ...(stringFromMetadata(metadata, 'prompt') ? { prompt: stringFromMetadata(metadata, 'prompt') } : {}),
       ...(stringFromMetadata(metadata, 'provider') ? { provider: stringFromMetadata(metadata, 'provider') } : {}),
       ...(stringFromMetadata(metadata, 'mode') ? { mode: stringFromMetadata(metadata, 'mode') } : {}),

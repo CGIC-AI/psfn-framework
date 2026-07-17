@@ -25,12 +25,14 @@ import {
   runFleetBackupCycle,
   SCHEDULED_BACKUP_TASK_ID,
   SCHEDULED_BACKUP_TASK_NAME,
-  type BackupPostgresOptions,
-  type FleetBackupCompanionUnit,
-  type FleetBackupRunOptions,
-  type FleetBackupRunResult,
   type FleetAuthConsistentBackupCycleOptions,
 } from './service.js';
+import type {
+  BackupPostgresOptions,
+  FleetBackupCompanionUnit,
+  FleetBackupRunOptions,
+  FleetBackupRunResult,
+} from './fleet-backup-contracts.js';
 
 const log = createComponentLogger('FleetBackupScheduler');
 

@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { AdminObservedMemory, AdminObservedScoredMemory } from '$lib/types';
+  import PromptMonitorTextBlock from './PromptMonitorTextBlock.svelte';
 
   type DisplayMemory = AdminObservedMemory | AdminObservedScoredMemory;
 
@@ -43,7 +44,9 @@
             </div>
             <p class="text-xs text-shadow-600">salience {memory.salience.toFixed(2)}</p>
           </div>
-          <pre class="mt-2 overflow-auto whitespace-pre-wrap font-mono text-sm text-shadow-800">{memory.text}</pre>
+          <div class="mt-2">
+            <PromptMonitorTextBlock title="Memory Text" value={memory.text} maxHeightClass="max-h-64" />
+          </div>
         </div>
       {/each}
     </div>

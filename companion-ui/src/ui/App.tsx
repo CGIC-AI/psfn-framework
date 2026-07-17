@@ -1,4 +1,10 @@
-import { Menu, Settings, Wifi, WifiOff } from 'lucide-react';
+import {
+  Menu,
+  Heart,
+  Settings,
+  Wifi,
+  WifiOff,
+} from 'lucide-react';
 import {
   useEffect,
   useMemo,
@@ -42,6 +48,7 @@ import {
 } from './settings-drawer.js';
 import { ThreadView } from './thread-view.js';
 import type { ActivityFilter, OverlayDrawer } from './types.js';
+import { WishlistDrawer } from './wishlist-drawer.js';
 
 type AccessState = FleetSessionStatus
   | Readonly<{ state: 'loading' | 'offline' }>
@@ -362,6 +369,15 @@ export function App() {
       <button className="floating-button activity-button" type="button" onClick={() => setOverlay('activity')} aria-label="Open activity and events">
         <Menu aria-hidden />
       </button>
+      <button
+        className="floating-button wishlist-button"
+        type="button"
+        onClick={() => setOverlay('wishlist')}
+        aria-label="Open wishlist"
+      >
+        <Heart aria-hidden />
+      </button>
+
       <div className="floating-status" aria-label={`Connection ${streamState.connection}`}>
         {connectionTone === 'bad' ? <WifiOff aria-hidden /> : <Wifi aria-hidden />}
         <span>{connecting ? 'Connecting' : streamState.connection}</span>
@@ -429,6 +445,15 @@ export function App() {
               onSwitchUser={() => {
                 setOverlay(null);
                 void switchUser();
+              }}
+            />
+          ) : overlay === 'wishlist' ? (
+            <WishlistDrawer
+              canSend={canSend}
+              onClose={() => setOverlay(null)}
+              onRequestReview={(prompt) => {
+                sendUserText(prompt);
+                setOverlay(null);
               }}
             />
           ) : (

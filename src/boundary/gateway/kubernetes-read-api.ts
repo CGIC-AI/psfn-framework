@@ -12,7 +12,6 @@ const SERVICE_ACCOUNT_TOKEN_PATH = `${SERVICE_ACCOUNT_ROOT}/token`;
 const SERVICE_ACCOUNT_CA_PATH = `${SERVICE_ACCOUNT_ROOT}/ca.crt`;
 const DNS_LABEL_PATTERN = /^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$/;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
-const REQUEST_TIMEOUT_MS = 5_000;
 
 export interface InClusterKubernetesRequestOptions {
   hostname: string;
@@ -23,6 +22,7 @@ export interface InClusterKubernetesRequestOptions {
 }
 
 export interface InClusterKubernetesReadApiDeps {
+  requestTimeoutMs: number;
   readToken?: (path: string) => string;
   readCa?: (path: string) => Buffer;
   requestJson?: (options: InClusterKubernetesRequestOptions) => Promise<unknown>;
@@ -162,6 +162,7 @@ function loadServiceAccountToken(readToken: (path: string) => string): string {
 
 function requestKubernetesJson(
   options: InClusterKubernetesRequestOptions,
+  requestTimeoutMs: number,
 ): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const request = httpsRequest({
@@ -198,7 +199,7 @@ function requestKubernetesJson(
         }
       });
     });
-    request.setTimeout(REQUEST_TIMEOUT_MS, () => {
+    request.setTimeout(requestTimeoutMs, () => {
       request.destroy(new Error('Kubernetes API read timed out.'));
     });
     request.once('error', reject);
@@ -207,14 +208,18 @@ function requestKubernetesJson(
 }
 
 export function createInClusterKubernetesReadApi(
-  env: NodeJS.ProcessEnv = process.env,
-  deps: InClusterKubernetesReadApiDeps = {},
+  env: NodeJS.ProcessEnv,
+  deps: InClusterKubernetesReadApiDeps,
 ): KubeReadApiPort {
+  if (!Number.isSafeInteger(deps.requestTimeoutMs) || deps.requestTimeoutMs <= 0) {
+    throw new Error('Kubernetes API read timeout must be a positive integer.');
+  }
   const hostname = requireServiceHost(env);
   const port = requireServicePort(env);
   const readToken = deps.readToken ?? (path => readFileSync(path, 'utf8'));
   const ca = (deps.readCa ?? (path => readFileSync(path)))(SERVICE_ACCOUNT_CA_PATH);
-  const requestJson = deps.requestJson ?? requestKubernetesJson;
+  const requestJson = deps.requestJson
+    ?? (options => requestKubernetesJson(options, deps.requestTimeoutMs));
 
   return createKubernetesReadApi({
     getJson: async (path): Promise<unknown> => {

@@ -18,6 +18,7 @@ export interface MemoryExtractorDrainOptions {
 
 export type ExtractionTriggerReason =
   | 'manual'
+  | 'reflection_output'
   | 'response_turn'
   | 'interval'
   | 'context_threshold'
@@ -149,7 +150,7 @@ export interface ConcernCandidateExtractionContext {
 
 export type ConcernCandidateExtractionSink = (
   context: ConcernCandidateExtractionContext,
-) => void | Promise<void>;
+) => readonly string[] | undefined | Promise<readonly string[] | undefined>;
 
 export interface AcceptedFactCandidate {
   fact: ExtractedFact;

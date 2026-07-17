@@ -489,9 +489,18 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     action: 'wiki.read', area: 'wiki', routeIds: [
       ...ids('GET', [
         '/api/admin/wiki', '/api/admin/wiki/scopes', '/api/admin/wiki/search', '/api/admin/wiki/:id',
+        '/api/admin/wishlist',
       ]),
-      ...pageIds(['/wiki']),
+      ...pageIds(['/wiki', '/wishlist']),
     ],
+  },
+  {
+    action: 'wiki.manage', area: 'wiki', routeIds: ids('POST', [
+      '/api/admin/wishlist/:wishId/acknowledge',
+      '/api/admin/wishlist/:wishId/respond',
+      '/api/admin/wishlist/:wishId/convert-to-bead',
+      '/api/admin/wishlist/:wishId/done',
+    ]), assurance: 'webauthn_uv', confirmation: 'explicit',
   },
   {
     action: 'wiki.read', area: 'wiki', scope: 'governed_shared_workspace',

@@ -21,6 +21,7 @@ import { resolveToolRequiredCapabilities } from '../../system/capabilities/requi
 import type { ChargePolicyConfig } from '../../system/config/charge-policy-config.js';
 import { makeTestFatiguePolicyConfig } from '../../test-support/charge-policy.js';
 import { CANONICAL_TOOL_SURFACE_DESCRIPTIONS } from '../../core/agent/tool-surface/descriptions.js';
+import type { ImageOperations } from './ops.js';
 
 const tempDirs: string[] = [];
 
@@ -361,6 +362,47 @@ describe('image tools', () => {
     })));
 
     expect(emitted).toHaveLength(0);
+  });
+
+  it('resolves a stable named look into generic and self-image prompts', async () => {
+    const create = vi.fn<ImageOperations['create']>(async (input) => ({
+      provider: 'comfyui',
+      mode: 'create',
+      fallbackUsed: false,
+      images: [],
+      requestId: input.sourceToolName,
+    }));
+    const ops: ImageOperations = { create, edit: vi.fn() };
+    const wardrobeLookResolver = {
+      resolveWardrobeLook: vi.fn(() => ({
+        ref: 'wardrobe:violet-rain',
+        name: 'Violet Rain',
+        promptFragment: 'violet raincoat, charcoal boots, silver umbrella',
+      })),
+    };
+    const mediaTool = createGenerateImageTool(ops, undefined, { wardrobeLookResolver });
+    const selfieTool = createSelfieTool(ops, undefined, { wardrobeLookResolver });
+
+    await mediaTool.execute('look-media', {
+      action: 'generate',
+      prompt: 'A rainy street portrait',
+      provider: 'comfyui',
+      wardrobe_look_ref: 'wardrobe:violet-rain',
+    });
+    await selfieTool.execute('look-selfie', {
+      prompt: 'A relaxed full-length selfie',
+      provider: 'comfyui',
+      use_reference_image: false,
+      wardrobe_look_ref: 'wardrobe:violet-rain',
+    });
+
+    expect(wardrobeLookResolver.resolveWardrobeLook).toHaveBeenCalledTimes(2);
+    expect(create).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      prompt: expect.stringContaining('Named look wardrobe:violet-rain'),
+    }));
+    expect(create).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      prompt: expect.stringContaining('violet raincoat, charcoal boots, silver umbrella'),
+    }));
   });
 
   it('rejects exhausted paid image quota before calling the provider or writing artifacts', async () => {

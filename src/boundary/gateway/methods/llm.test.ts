@@ -6,6 +6,7 @@ import type { ModelUsageEventInput } from '../../../shared/telemetry/model-usage
 import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import { IcpConversationCostBreakerError } from '../../../primitives/llm/icp-conversation-cost-breaker.js';
 import { GatewayErrors } from '../protocol.js';
+import type { LLMProviderPort } from '../../../core/agent/contracts.js';
 import { LLMClient } from '../../../primitives/llm/client.js';
 import { buildLLMWorkSpec } from '../../../primitives/llm/work-spec.js';
 import { toWorkSpecWireParams } from '../../../primitives/llm/work-spec-wire.js';
@@ -24,7 +25,7 @@ function createHarness(options: {
   llmProvider?: GatewayMethodRuntime['llmProvider'];
 } = {}) {
   const methods = new Map<string, (params: any) => Promise<any>>();
-  const stream = vi.fn(async () => ({
+  const stream = vi.fn<LLMProviderPort['stream']>(async () => ({
     content: 'streamed',
     reasoning: 'stream-thinking',
     providerObservability: {
@@ -50,7 +51,7 @@ function createHarness(options: {
     outputTokens: 3,
     stopReason: 'stop',
   }));
-  const complete = vi.fn(async () => ({
+  const complete = vi.fn<LLMProviderPort['complete']>(async () => ({
     content: 'completed',
     reasoning: 'complete-thinking',
     providerObservability: {
@@ -89,7 +90,7 @@ function createHarness(options: {
     llmProvider: options.llmProvider ?? ({
       stream,
       complete,
-    } as any),
+    }),
     embeddingService: options.embeddingService ?? {
       embed: vi.fn(),
       embedBatch: vi.fn(async () => []),

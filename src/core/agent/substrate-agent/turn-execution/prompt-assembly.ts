@@ -59,7 +59,7 @@ import type { TurnExecutionObservability } from './observability.js';
 
 const log = createComponentLogger('SubstrateAgent');
 type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
-type TurnSessionIdentity = import('../turn-execution-runtime.js').TurnSessionIdentity;
+type TurnSessionIdentity = import('./contracts.js').TurnSessionIdentity;
 
 interface DynamicSuffixRenderSection {
   identifier: string;
@@ -477,6 +477,12 @@ export async function assembleTurnPrompt(input: {
     }));
   }
   const fullPrompt = renderPromptPlanAssembledPrompt({ blocks: planBlocks });
+  // Preserve this exact canonical identity/policy/runtime boundary for
+  // background deliberation. Session memories, prior chat, completion notices,
+  // and the turn's provider-only datetime anchor deliberately stay out.
+  if (promptMode === 'default') {
+    runtime.captureAuthoritativeSystemPrompt?.(fullPrompt);
+  }
 
   const contextStageStart = Date.now();
   const context = await runWithRequestContext(
@@ -499,6 +505,11 @@ export async function assembleTurnPrompt(input: {
       currentSessionEntryId ?? undefined,
     ),
   );
+  const sessionContextSnapshot = turnSnapshot.sessionContext;
+  if (!sessionContextSnapshot) {
+    throw new Error('Turn prompt assembly requires a captured session-context snapshot');
+  }
+  sessionContextSnapshot.autoCompactionEligible = context.manifest.compaction.eligible === true;
   if (currentSessionEntryId !== null && context.messages.some(contextMessage => (
     contextMessage.provenance?.sourceEntryIds?.includes(currentSessionEntryId) === true
   ))) {

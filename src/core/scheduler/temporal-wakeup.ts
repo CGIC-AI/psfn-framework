@@ -59,6 +59,13 @@ import {
   type WakeWindowInsufficientReason,
 } from './wake-window-estimator.js';
 import type { TemporalWakeupMorningConfig } from '../../system/config/scheduler-config.js';
+import type {
+  IdleRefresherDecision,
+  IdleRefresherEvaluateInput,
+  IdleRefresherNoteKind,
+  MorningWakeDecision,
+  MorningWakeEvaluateInput,
+} from './temporal-wakeup-contracts.js';
 
 const log = createComponentLogger('TemporalWakeup');
 
@@ -346,48 +353,6 @@ export function partnerTimestampsFromEntries(entries: readonly SessionEntry[]): 
 
 // ── Morning wake eligibility ──
 
-export type MorningWakeSkipReason =
-  | 'no_recent_session'
-  | 'internal_session'
-  | 'privacy_boundary'
-  | 'no_partner_activity'
-  | 'partner_recently_active'
-  | 'anti_loop_note_today';
-
-export type MorningWakeDecision =
-  | {
-    allowed: true;
-    reason: 'eligible';
-    nowMs: number;
-    sessionId: string;
-    lastPartnerActivityAtMs: number;
-    lastActivityAtMs: number;
-    timeTexture: IdleGapTexture;
-    /** Whether the session is warm enough to justify a full response turn. */
-    invokeFullTurn: boolean;
-  }
-  | {
-    allowed: false;
-    reason: MorningWakeSkipReason;
-    nowMs: number;
-    sessionId?: string;
-  };
-
-export interface MorningWakeEvaluateInput {
-  session: StartupSessionMetadata | null;
-  recentEntries: readonly SessionEntry[];
-  fullTurnMaxIdleMs: number;
-  /**
-   * Partner-idle recency guard (ms). Suppresses the note when the partner spoke
-   * more recently than this — they are actively conversing, so the temporal
-   * frame is already current. 0 disables the guard.
-   */
-  minPartnerIdleMs: number;
-  nowMs?: number;
-  timeZone?: string;
-  lastWakeupNoteAtMs?: number;
-}
-
 export function evaluateMorningWakeEligibility(
   input: MorningWakeEvaluateInput,
 ): MorningWakeDecision {
@@ -450,46 +415,6 @@ export function evaluateMorningWakeEligibility(
 }
 
 // ── Idle refresher eligibility ──
-
-export type IdleRefresherSkipReason =
-  | 'no_recent_session'
-  | 'internal_session'
-  | 'privacy_boundary'
-  | 'no_conversational_activity'
-  | 'below_idle_threshold'
-  | 'anti_loop_recent_note';
-
-export type IdleRefresherNoteKind = 'time_of_day_refresh' | 'new_day';
-
-export type IdleRefresherDecision =
-  | {
-    allowed: true;
-    reason: 'eligible';
-    kind: IdleRefresherNoteKind;
-    nowMs: number;
-    sessionId: string;
-    idleGapMs: number;
-    lastActivityAtMs: number;
-    lastPartnerActivityAtMs?: number;
-    timeTexture: IdleGapTexture;
-  }
-  | {
-    allowed: false;
-    reason: IdleRefresherSkipReason;
-    nowMs: number;
-    sessionId?: string;
-    idleGapMs?: number;
-  };
-
-export interface IdleRefresherEvaluateInput {
-  session: StartupSessionMetadata | null;
-  recentEntries: readonly SessionEntry[];
-  minIdleMs: number;
-  minNoteIntervalMs: number;
-  nowMs?: number;
-  timeZone?: string;
-  lastWakeupNoteAtMs?: number;
-}
 
 export function evaluateIdleRefresherEligibility(
   input: IdleRefresherEvaluateInput,
@@ -674,10 +599,15 @@ function resolveWakeupChannelType(value: string | undefined): ChannelType {
 }
 
 /**
- * Pull partner (role 'user') message timestamps from the active session's
- * recent-entry tail — the cheapest existing query path (no new projection) —
- * and build the effective wake snapshot for the current timing mode. In
- * 'fixed' mode no history is read.
+ * Pull partner (role 'user') message timestamps for the habit estimator and
+ * build the effective wake snapshot for the current timing mode. When the
+ * session manager can enumerate recently-active channels the estimator sees a
+ * cross-channel projection — every channel with partner activity inside
+ * habit.extendedWindowDays, each scanned up to maxSamplesScanned entries — so a
+ * low-traffic or api/PWA last-active channel no longer starves the estimate to
+ * a habit_fallback (psfn-framework-7grh). Without enumeration it falls back to
+ * the single latest session, never assuming a capability the caller did not
+ * wire. In 'fixed' mode no history is read.
  *
  * Shared by daily-task registration and the Garden admin read route so both
  * see the same effective wake slot.
@@ -693,20 +623,43 @@ export function resolveMorningWakeSnapshot(input: {
   if (morning.timing !== 'habit') {
     return buildWakeWindowSnapshot({ morning, partnerTimestampsMs: [], nowMs, timeZone });
   }
-  const session = sessionManager.resolveStartupSessionMetadata('reuse_latest_session');
-  const sessionId = session?.sessionId;
   const scanLimit = Math.max(1, morning.habit.maxSamplesScanned);
-  const entries = sessionId
-    ? (sessionManager.getRecentSessionEntries
+  const partnerTimestampsMs: number[] = [];
+  for (const sessionId of resolveHabitWakeChannelIds(sessionManager, morning, nowMs)) {
+    const entries = sessionManager.getRecentSessionEntries
       ? sessionManager.getRecentSessionEntries(sessionId, scanLimit)
-      : sessionManager.getRecentMessages(sessionId, scanLimit))
-    : [];
-  return buildWakeWindowSnapshot({
-    morning,
-    partnerTimestampsMs: partnerTimestampsFromEntries(entries),
-    nowMs,
-    timeZone,
-  });
+      : sessionManager.getRecentMessages(sessionId, scanLimit);
+    for (const timestamp of partnerTimestampsFromEntries(entries)) {
+      partnerTimestampsMs.push(timestamp);
+    }
+  }
+  return buildWakeWindowSnapshot({ morning, partnerTimestampsMs, nowMs, timeZone });
+}
+
+/**
+ * Channels feeding the habit estimator: every recently-active channel with
+ * partner activity inside habit.extendedWindowDays plus the latest session
+ * (always a candidate). Bounded — listRecentlyActiveChannels is last-activity
+ * sorted and stops at the lookback edge. Falls back to the latest session alone
+ * when the enumeration surface is not wired.
+ */
+function resolveHabitWakeChannelIds(
+  sessionManager: TemporalWakeupSessionManagerPort,
+  morning: TemporalWakeupMorningConfig,
+  nowMs: number,
+): string[] {
+  const latestId = sessionManager
+    .resolveStartupSessionMetadata('reuse_latest_session')?.sessionId;
+  if (!sessionManager.listRecentlyActiveChannels) {
+    return latestId ? [latestId] : [];
+  }
+  const lookbackMs = Math.max(0, morning.habit.extendedWindowDays) * 24 * HOUR_MS;
+  const ids = new Set<string>();
+  for (const channel of sessionManager.listRecentlyActiveChannels({ lookbackMs, nowMs })) {
+    if (channel.sessionId) ids.add(channel.sessionId);
+  }
+  if (latestId) ids.add(latestId);
+  return [...ids];
 }
 
 interface ResolvedWakeupSessionContext {

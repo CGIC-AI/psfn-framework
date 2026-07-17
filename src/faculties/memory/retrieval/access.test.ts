@@ -1,12 +1,32 @@
 import { describe, expect, it } from 'vitest';
-import type { PurrMemory } from '../types.js';
+import type { PurrMemory, RetrievalAccessScope } from '../types.js';
 import { evaluateRetrievalAccessDecision } from './access.js';
 
 const PRIMARY_CONTACT_ID = 'contact-primary';
 const PRIMARY_DM_ID = 'discord:dm:primary';
+const COMPANION_SELF_ACCESS_SCOPES = [
+  'companion_self_creation',
+  'companion_self_reflection',
+] satisfies readonly RetrievalAccessScope[];
+const NON_SELF_ACCESS_CASES = [
+  { label: 'channel participant', accessScope: 'channel_participant' },
+  { label: 'ambiguous caller', accessScope: undefined },
+] satisfies readonly Array<{
+  label: string;
+  accessScope: RetrievalAccessScope | undefined;
+}>;
 
 function memory(
-  overrides: Partial<Pick<PurrMemory, 'sensitivity' | 'contactId' | 'provenance' | 'scopeRef' | 'scopeTags'>> = {},
+  overrides: Partial<Pick<
+    PurrMemory,
+    | 'sensitivity'
+    | 'contactId'
+    | 'consentFlags'
+    | 'tags'
+    | 'provenance'
+    | 'scopeRef'
+    | 'scopeTags'
+  >> = {},
 ): Pick<
   PurrMemory,
   | 'sensitivity'
@@ -159,4 +179,68 @@ describe('evaluateRetrievalAccessDecision participant-aware DM access', () => {
       withheldReason: 'room_visibility.blocked',
     });
   });
+});
+
+describe('evaluateRetrievalAccessDecision companion self access', () => {
+  const disclosureRestrictedMemories = [
+    memory({
+      sensitivity: 'confidential',
+      contactId: 'contact-other',
+      consentFlags: { allowRecall: false },
+      provenance: { channelId: 'discord:dm:other', sourceContactId: 'contact-other' },
+      scopeRef: { kind: 'conversation', id: 'discord:dm:other' },
+    }),
+    memory({
+      sensitivity: 'intimate',
+      contactId: 'contact-other',
+      tags: ['consent_required'],
+      provenance: { channelId: 'discord:dm:other', sourceContactId: 'contact-other' },
+      scopeRef: { kind: 'conversation', id: 'discord:dm:other' },
+    }),
+    memory({
+      sensitivity: 'confidential',
+      contactId: 'contact-other',
+      tags: ['do_not_disclose'],
+      provenance: { channelId: 'discord:dm:other', sourceContactId: 'contact-other' },
+      scopeRef: { kind: 'conversation', id: 'discord:dm:other' },
+    }),
+  ];
+
+  it.each(COMPANION_SELF_ACCESS_SCOPES)(
+    'bypasses every audience-disclosure gate for %s',
+    (accessScope) => {
+      for (const restrictedMemory of disclosureRestrictedMemories) {
+        expect(evaluateRetrievalAccessDecision(restrictedMemory, {
+          accessScope,
+          trustLevel: 'regular',
+          channelPrivacy: 'public',
+          broadcast: true,
+          canonicalContactId: PRIMARY_CONTACT_ID,
+          roomVisibility: {
+            currentChannelId: 'internal:self-directed',
+            currentIsDirectMessage: false,
+          },
+        })).toEqual({ allowed: true });
+      }
+    },
+  );
+
+  it.each(NON_SELF_ACCESS_CASES)(
+    'keeps the same memories denied for a $label',
+    ({ accessScope }) => {
+      for (const restrictedMemory of disclosureRestrictedMemories) {
+        expect(evaluateRetrievalAccessDecision(restrictedMemory, {
+          accessScope,
+          trustLevel: 'regular',
+          channelPrivacy: 'public',
+          broadcast: true,
+          canonicalContactId: PRIMARY_CONTACT_ID,
+          roomVisibility: {
+            currentChannelId: 'internal:self-directed',
+            currentIsDirectMessage: false,
+          },
+        }).allowed).toBe(false);
+      }
+    },
+  );
 });

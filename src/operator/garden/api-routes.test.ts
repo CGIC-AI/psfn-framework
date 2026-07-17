@@ -51,7 +51,8 @@ import { loadSkillsConfig, saveSkillsConfig } from '../../system/config/skills-c
 import { saveTrustPolicyConfig } from '../../system/config/trust-policy-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { CharacterCardV2 } from '../../core/identity/types.js';
-import type { EmbeddingProviderPort, LLMProviderPort } from '../../core/agent/contracts.js';
+import type { LLMProviderPort } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type { ScheduledTask } from '../../core/scheduler/types.js';
 import { createTurnId } from '../../core/turns/id.js';
 import { registerStreamingSttProvider } from '../../primitives/voice/connectors/stt/index.js';
@@ -3431,6 +3432,9 @@ describe('AdminServer JSON API routes', () => {
         scheduler: {
           backgroundMaintenance: {
             intervalMs: number;
+            sharedWorldWikiCaretaker: {
+              batchSize: number;
+            };
           };
         };
         capabilities: {
@@ -3454,6 +3458,8 @@ describe('AdminServer JSON API routes', () => {
     expect(settingsPayload.editors.scheduler.backgroundMaintenance.intervalMs).toBe(
       loadSchedulerConfig(tempDir).backgroundMaintenance.intervalMs,
     );
+    expect(settingsPayload.editors.scheduler.backgroundMaintenance.sharedWorldWikiCaretaker)
+      .toEqual({ batchSize: 25 });
     expect(settingsPayload.editors.capabilities.tier).toBe(testConfig.capabilityTier);
 
     const settingsPatchRes = await request(
@@ -4406,11 +4412,15 @@ describe('AdminServer JSON API routes', () => {
     }, {
       defaultContextWindow: testConfig.defaultContextWindow,
     });
+    const schedulerBaseline = loadSchedulerConfig(tempDir);
     const expectedScheduler = saveSchedulerConfig(tempDir, {
       tickIntervalMs: 1500,
       heartbeatIntervalMs: 9000,
       backgroundMaintenance: {
         intervalMs: 12000,
+        sharedWorldWikiCaretaker: {
+          batchSize: 25,
+        },
         ambientPresence: {
           minIdleMinutes: 180,
           minNoteIntervalMinutes: 360,
@@ -4419,6 +4429,7 @@ describe('AdminServer JSON API routes', () => {
           maxActiveConcerns: 7,
         },
       },
+      backgroundWork: schedulerBaseline.backgroundWork,
       artifactLifecycle: {
         scratchpadRetentionDays: 14,
         generatedMediaRetentionDays: 30,
@@ -4461,7 +4472,7 @@ describe('AdminServer JSON API routes', () => {
         maxArcsPerRun: 12,
         maxEpisodesPerRun: 60,
       },
-      icpAutonomy: loadSchedulerConfig(tempDir).icpAutonomy,
+      icpAutonomy: schedulerBaseline.icpAutonomy,
     });
     const expectedSkills = saveSkillsConfig(tempDir, {
       enabled: true,

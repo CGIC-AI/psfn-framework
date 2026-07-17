@@ -26,11 +26,6 @@ function resultText(result: { content: Array<{ type: string; text: string }> }):
   return result.content.map(c => c.text).join('');
 }
 
-async function flushDeferredLifecycle(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  await new Promise<void>((resolve) => setImmediate(resolve));
-}
-
 function createRestartCommandGateway(): {
   client: GatewayClient;
   isDestroyed: () => boolean;
@@ -315,6 +310,7 @@ describe('system action=restart', () => {
         expect(gateway.isDestroyed()).toBe(false);
         await runConfiguredLifecycleCommand(
           `${process.execPath} -e "process.exit(0)"`,
+          { timeoutMs: 1_000 },
         );
         events.push('command-settled');
       }),
@@ -1061,8 +1057,6 @@ describe('deferred lifecycle execution', () => {
         reason: 'autonomous shakedown restart',
       },
     });
-    await flushDeferredLifecycle();
-
     expect(registerPostTurnActionInferer).toHaveBeenCalledOnce();
     expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('autonomous shakedown restart');
     expect(prepareRestartCommand).toHaveBeenCalledOnce();
@@ -1096,8 +1090,6 @@ describe('deferred lifecycle execution', () => {
       id: 'action-restart-stop-fail',
       payload: { operation: 'restart', reason: 'safe restart' },
     });
-    await flushDeferredLifecycle();
-
     expect(runRestartCommand).not.toHaveBeenCalled();
     expect(mockStopFn).not.toHaveBeenCalled();
     expect(exitSpy).not.toHaveBeenCalled();
@@ -1136,8 +1128,6 @@ describe('deferred lifecycle execution', () => {
         reason: 'autonomous shakedown restart',
       },
     });
-    await flushDeferredLifecycle();
-
     expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
     expect(mockNotifier.notifyShutdown).toHaveBeenCalledWith(expect.stringContaining('restart blocked'));
     expect(mockStopFn).not.toHaveBeenCalled();
@@ -1178,8 +1168,6 @@ describe('deferred lifecycle execution', () => {
         reason: 'autonomous shakedown rebuild',
       },
     });
-    await flushDeferredLifecycle();
-
     expect(mockNotifier.notifyPreRestart).toHaveBeenCalledWith('rebuild: autonomous shakedown rebuild');
     expect(mockNotifier.notifyShutdown).toHaveBeenCalled();
     expect(mockStopFn).not.toHaveBeenCalled();
@@ -1208,8 +1196,6 @@ describe('deferred lifecycle execution', () => {
       id: 'action-rebuild-stop-fail',
       payload: { operation: 'rebuild', reason: 'safe rebuild' },
     });
-    await flushDeferredLifecycle();
-
     expect(runBuildCommand).toHaveBeenCalledOnce();
     expect(runRestartCommand).not.toHaveBeenCalled();
     expect(mockStopFn).not.toHaveBeenCalled();
@@ -1235,8 +1221,6 @@ describe('deferred lifecycle execution', () => {
       id: 'action-rebuild-order',
       payload: { operation: 'rebuild', reason: 'ordered rebuild' },
     });
-    await flushDeferredLifecycle();
-
     expect(runBuildCommand).toHaveBeenCalledOnce();
     expect(prepareRestartCommand).toHaveBeenCalledOnce();
     expect(runRestartCommand).toHaveBeenCalledOnce();
@@ -1279,8 +1263,6 @@ describe('deferred lifecycle execution', () => {
         reason: 'autonomous shakedown rebuild',
       },
     });
-    await flushDeferredLifecycle();
-
     expect(mockNotifier.notifyPreRestart).not.toHaveBeenCalled();
     expect(mockNotifier.notifyShutdown).toHaveBeenCalledWith(
       'rebuild blocked: no lifecycle rebuild command is configured',

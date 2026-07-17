@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { SubstrateConfig, WyomingShardRoutingConfig } from '../../system/config/runtime-config-contracts.js';
 import { getIgnoredJsonBackedConfigEnvKeys } from '../../system/config/legacy-env.js';
@@ -15,6 +14,11 @@ import {
 } from './policy-config.js';
 import { resolveWorkspaceRoot } from './filesystem-paths.js';
 import { resolveGitRepoRoot } from '../integrations/git/repo-root.js';
+import {
+  ALL_BEADS_ACTIONS,
+  parseBeadsActionsEnv,
+  resolveBeadsToolsEnabled,
+} from '../integrations/beads/enablement.js';
 import { resolveModuleRegistryPathFromWorkspace } from '../../system/modules/registry.js';
 import { parseBooleanEnv, parseEnvList, parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { buildShellExecPolicyConfig } from '../sandbox/execution/shell-policy-config.js';
@@ -48,13 +52,13 @@ import {
 } from './multi-companion.js';
 import { resolveGatewayCredentialPresence } from './credential-presence.js';
 import type { GatewayCredentialPresenceResult } from './protocol.js';
+import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 
 const DEFAULT_SOCKET_PATH = '/run/psfn/gateway.sock';
 const DEFAULT_NTFY_TIMEOUT_MS = 8_000;
 const DEFAULT_NTFY_DEBOUNCE_MS = 60_000;
 const DEFAULT_CONFIRMATION_EXPIRY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
-const ALL_BEADS_ACTIONS = ['ready', 'show', 'create', 'update', 'close', 'sync'] as const;
 const ALL_VAULT_ACTIONS = ['write', 'read', 'search', 'daily'] as const;
 
 export type GatewayRuntimeMode =
@@ -110,6 +114,7 @@ interface GatewayBootstrapOptions {
   config: SubstrateConfig;
   env: GatewayPolicyEnv & NodeJS.ProcessEnv;
   startupHydration: StartupConfigHydrationResult;
+  satelliteRegistryConfig: SatelliteRegistryConfig;
 }
 
 function parseBooleanEnvWithFallback(value: string | undefined, fallback = false): boolean {
@@ -209,23 +214,6 @@ function resolveDiscoveryLaneConfig(input: {
   };
 }
 
-function parseBeadsActionsEnv(value: string | undefined): Array<(typeof ALL_BEADS_ACTIONS)[number]> | undefined {
-  const parsed = parseEnvList(value, { separators: [','] });
-  if (!parsed) {
-    return value === undefined ? undefined : [];
-  }
-
-  const valid = new Set(ALL_BEADS_ACTIONS);
-  const actions: Array<(typeof ALL_BEADS_ACTIONS)[number]> = [];
-  for (const entry of parsed) {
-    const normalized = entry.toLowerCase();
-    if (valid.has(normalized as (typeof ALL_BEADS_ACTIONS)[number])) {
-      actions.push(normalized as (typeof ALL_BEADS_ACTIONS)[number]);
-    }
-  }
-  return actions;
-}
-
 function parseVaultActionsEnv(value: string | undefined): Array<(typeof ALL_VAULT_ACTIONS)[number]> | undefined {
   const parsed = parseEnvList(value, { separators: [','] });
   if (!parsed) {
@@ -306,10 +294,10 @@ function buildGatewayPolicyConfig(
     openRouterModelsApiUrl: config.openRouterModelsApiUrl,
   });
   const shellExecPolicy = buildShellExecPolicyConfig(env);
-  const beadsToolsEnabled = parseBooleanEnvWithFallback(
-    env.BEADS_TOOLS_ENABLED,
-    existsSync(resolve(workspaceRoot, '.beads')) || existsSync(resolve(codebaseRoot, '.beads')),
-  );
+  const beadsToolsEnabled = resolveBeadsToolsEnabled(env.BEADS_TOOLS_ENABLED, {
+    workspaceRoot,
+    codebaseRoot,
+  });
   const beadsAllowActions = parseBeadsActionsEnv(env.BEADS_ALLOW_ACTIONS)
     ?? (beadsToolsEnabled ? [...ALL_BEADS_ACTIONS] : undefined);
   const vaultToolsEnabled = parseBooleanEnvWithFallback(
@@ -384,7 +372,7 @@ export function buildGatewayChannelsConfigOverrides(
 export function resolveGatewayBootstrapInput(
   options: GatewayBootstrapOptions,
 ): GatewayBootstrapInput {
-  const { config, env, startupHydration } = options;
+  const { config, env, startupHydration, satelliteRegistryConfig } = options;
   const { systemDataDir, runtimePathLayout, settingsDomains } = startupHydration;
   const workspacePath = runtimePathLayout.workspacePath;
   const workspaceRoot = resolveWorkspaceRoot(workspacePath);
@@ -471,7 +459,11 @@ export function resolveGatewayBootstrapInput(
     server: {
       sessionHmacKeyring,
       wyomingShardRouting,
-      multiCompanion: resolveGatewayMultiCompanionConfig(config, channelsConfig),
+      multiCompanion: resolveGatewayMultiCompanionConfig(
+        config,
+        channelsConfig,
+        satelliteRegistryConfig,
+      ),
       credentialPresence: resolveGatewayCredentialPresence({
         config,
         channelsConfig,

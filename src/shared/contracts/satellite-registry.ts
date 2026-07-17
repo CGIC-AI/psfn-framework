@@ -1,4 +1,5 @@
 import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
+import type { CompanionId } from '../routing/companion-id.js';
 import type { HubDevicePrincipalSnapshot } from './hub-device-ingress.js';
 
 export const SATELLITE_REGISTRY_FILE_NAME = 'satellites.json';
@@ -305,6 +306,12 @@ export interface SatelliteConfig {
    * (see `assertSatellitePlaceBindings`).
    */
   placeId?: string;
+  /**
+   * Fleet companion that owns every endpoint/app surface on this satellite.
+   * A satellite has at most one owner; changing an occupied binding requires
+   * an explicit unbind first.
+   */
+  companionId?: CompanionId;
   endpoints: SatelliteEndpointConfig[];
 }
 
@@ -313,6 +320,9 @@ export interface SatelliteRegistryConfig {
   enabled: boolean;
   satellites: SatelliteConfig[];
 }
+
+/** Reads the current canonical satellite owner state at an ingress boundary. */
+export type SatelliteRegistryProvider = () => SatelliteRegistryConfig;
 
 export interface AdminSatelliteEndpointAuthView {
   mode: SatelliteAuthMode;
@@ -344,6 +354,7 @@ export interface AdminSatelliteView {
   displayName: string;
   mobility: SatelliteMobility;
   staticLocationLabel?: string;
+  companionId?: CompanionId;
   endpoints: AdminSatelliteEndpointView[];
 }
 
@@ -377,6 +388,8 @@ export interface SatelliteRoutingMetadata {
   staticLocationLabel?: string;
   /** Static place binding carried onto the turn (see `SatelliteConfig.placeId`). */
   placeId?: string;
+  /** satellites.json-owned companion route for this authenticated endpoint. */
+  companionId?: CompanionId;
   capabilities: SatelliteClaimCapabilityResolution;
   telemetryScopes: SatelliteTelemetryScope[];
   auth: {

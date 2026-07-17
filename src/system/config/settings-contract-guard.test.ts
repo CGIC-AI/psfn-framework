@@ -17,6 +17,15 @@ import {
 import { buildSettingsContractData } from './settings-contract.js';
 import { verifySettingsContractGuard } from './settings-contract-guard.js';
 import { COMPANION_SETTINGS_OVERLAY_WHITELIST } from './settings-overlay.js';
+import { isRecord } from '../../shared/utils/types.js';
+
+function readSettingsSeed(): Record<string, unknown> {
+  const parsed: unknown = JSON.parse(readFileSync('config/settings.seed.json', 'utf-8'));
+  if (!isRecord(parsed)) {
+    throw new Error('Canonical settings seed must contain a JSON object');
+  }
+  return parsed;
+}
 
 describe('settings contract guard', () => {
   it('keeps backend schema, Garden exposure metadata, and owner files aligned', () => {
@@ -266,6 +275,53 @@ describe('settings contract guard', () => {
 });
 
 describe('memory retrieval policy settings compliance', () => {
+  it('exposes committed voice segmenter tuning through the Garden voice editor', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.fields.voiceReplySegmenter).toEqual({
+      key: 'voiceReplySegmenter',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'object',
+      scope: 'global',
+    });
+    expect(SETTINGS_GARDEN_FIELD_EXPOSURE.voiceReplySegmenter).toEqual({
+      sectionId: 'voice',
+      surface: 'advanced',
+    });
+    expect(SETTINGS_GARDEN_SECTION_FIELDS.voice).toContain('voiceReplySegmenter');
+
+    const seed = readSettingsSeed();
+    expect(seed.voiceReplySegmenter).toEqual({
+      minSegmentLength: 24,
+      maxBufferLength: 240,
+    });
+  });
+
+  it('exposes strict wiki startup hydration tuning through the Garden memory editor', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.fields.wikiStartupHydration).toEqual({
+      key: 'wikiStartupHydration',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'object',
+      scope: 'global',
+    });
+    expect(SETTINGS_GARDEN_FIELD_EXPOSURE.wikiStartupHydration).toEqual({
+      sectionId: 'memory',
+      surface: 'advanced',
+    });
+    expect(SETTINGS_GARDEN_SECTION_FIELDS.memory).toContain('wikiStartupHydration');
+
+    const seed = readSettingsSeed();
+    expect(seed.wikiStartupHydration).toEqual({
+      recentSessionLimit: 4,
+      recentMessageLimit: 18,
+      maxContextChars: 6_000,
+    });
+  });
+
   it('surfaces the strict settings.json policy as a Garden memory object editor', () => {
     const contractData = buildSettingsContractData();
 
@@ -281,6 +337,33 @@ describe('memory retrieval policy settings compliance', () => {
       surface: 'advanced',
     });
     expect(SETTINGS_GARDEN_SECTION_FIELDS.memory).toContain('memoryRetrievalPolicy');
+  });
+
+  it('surfaces lifecycle Kubernetes policy as one global Garden object editor', () => {
+    const contractData = buildSettingsContractData();
+
+    expect(contractData.fields.lifecycleKubernetes).toEqual({
+      key: 'lifecycleKubernetes',
+      ownerSubsystem: 'runtime',
+      ownerFile: 'settings.json',
+      type: 'object',
+      scope: 'global',
+    });
+    expect(SETTINGS_GARDEN_FIELD_EXPOSURE.lifecycleKubernetes).toEqual({
+      sectionId: 'sessions',
+      surface: 'advanced',
+    });
+    expect(SETTINGS_GARDEN_SECTION_FIELDS.sessions).toContain('lifecycleKubernetes');
+
+    const seed = readSettingsSeed();
+    expect(seed.lifecycleKubernetes).toEqual(expect.objectContaining({
+      lifecycleCommandTimeoutMs: 30_000,
+      operatorCommandTimeoutMs: 600_000,
+      rolloutWaitTimeoutMs: 180_000,
+      rollbackWaitTimeoutMs: 180_000,
+      postRolloutValidationHistoryLimit: 20,
+      rollbackHistoryLimit: 50,
+    }));
   });
 
   it('ships every matrix knob in the canonical seed policy', () => {

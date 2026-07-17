@@ -34,6 +34,14 @@ describe('AdminImagesDataService', () => {
       sourceToolName: 'selfie_create',
       referenceImageIds: ['ref-1'],
       contentType: 'image/png',
+      sensitivityClassification: {
+        schemaVersion: 1,
+        sensitivity: 'intimate',
+        basis: 'max_input_sensitivity',
+        classifiedAt: '2026-05-24T10:00:00.000Z',
+        sources: [{ ref: 'memory:private', sensitivity: 'intimate' }],
+        contests: [],
+      },
     }));
 
     const service = new AdminImagesDataService({
@@ -50,6 +58,10 @@ describe('AdminImagesDataService', () => {
       model: 'openai/gpt-image-2/edit',
       sourceToolName: 'selfie_create',
       referenceImageIds: ['ref-1'],
+      sensitivityClassification: expect.objectContaining({
+        sensitivity: 'intimate',
+        basis: 'max_input_sensitivity',
+      }),
     });
 
     const blob = await service.getGeneratedImageBlob(list.images[0]!.id);
@@ -73,6 +85,14 @@ describe('AdminImagesDataService', () => {
       prompt: 'first portrait',
       requestId: 'req-first',
       originalUrl: 'https://images.example.test/first.png',
+      sensitivityClassification: {
+        schemaVersion: 1,
+        sensitivity: 'confidential',
+        basis: 'max_input_sensitivity',
+        classifiedAt: '2026-05-25T10:00:00.000Z',
+        sources: [{ ref: 'memory:relationship-private', sensitivity: 'confidential' }],
+        contests: [],
+      },
     }));
     writeFileSync(`${secondPath}.image-meta.json`, JSON.stringify({
       schemaVersion: 1,
@@ -102,6 +122,10 @@ describe('AdminImagesDataService', () => {
       },
       companionNoteRefs: [{ id: 'wiki:gallery-note', label: 'Gallery note', url: '/wiki/gallery-note' }],
       artifactRefs: [{ kind: 'l0_artifact', refId: 'artifact-gallery-note', label: 'Episode artifact' }],
+      sensitivityContest: {
+        sensitivity: 'personal',
+        reason: 'V reviewed the abstraction and approved the lower boundary.',
+      },
     });
 
     expect(updated.favorite).toBe(true);
@@ -122,6 +146,17 @@ describe('AdminImagesDataService', () => {
       expect.objectContaining({ kind: 'shared_image', url: 'https://images.example.test/first.png' }),
       expect.objectContaining({ kind: 'l0_artifact', refId: 'artifact-gallery-note' }),
     ]));
+    expect(updated.sensitivityClassification).toMatchObject({
+      sensitivity: 'personal',
+      basis: 'contested',
+      sources: [{ ref: 'memory:relationship-private', sensitivity: 'confidential' }],
+      contests: [{
+        actor: 'operator',
+        previousSensitivity: 'confidential',
+        sensitivity: 'personal',
+        reason: 'V reviewed the abstraction and approved the lower boundary.',
+      }],
+    });
 
     const persistedMetadata = JSON.parse(readFileSync(`${firstPath}.image-meta.json`, 'utf-8')) as {
       favorite: boolean;

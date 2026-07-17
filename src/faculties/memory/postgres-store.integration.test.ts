@@ -95,7 +95,7 @@ async function withMemoryDatabase<T>(handler: (pool: Pool) => Promise<T>): Promi
   try {
     return await handler(pool);
   } finally {
-    await pool.end().catch(() => undefined);
+    await pool.end();
   }
 }
 
@@ -752,9 +752,9 @@ describe('postgres memory store integration', () => {
       })).total).toBe(1);
     } finally {
       await Promise.all([
-        admin.end().catch(() => undefined),
-        poolA.end().catch(() => undefined),
-        poolB.end().catch(() => undefined),
+        admin.end(),
+        poolA.end(),
+        poolB.end(),
       ]);
     }
   }, INTEGRATION_TIMEOUT_MS);
@@ -1280,7 +1280,7 @@ describe('postgres memory store integration', () => {
       try {
         await expect(createPostgresMemoryStoreFromPool(pool, 4)).rejects.toThrow(/extension .*vector|could not open extension control file/i);
       } finally {
-        await pool.end().catch(() => undefined);
+        await pool.end();
       }
     } finally {
       await plainHarness.stop();

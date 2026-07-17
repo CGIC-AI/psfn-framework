@@ -13,6 +13,7 @@ import { deriveCompanionAuthToken } from '../../../boundary/gateway/companion-au
 import { createBootstrapStarterCard } from '../../../core/identity/loader.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { PER_COMPANION_OWNER_FILES } from '../../../system/config/settings-contract.js';
+import { DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG } from '../../../system/config/scheduler-config.js';
 import {
   resolveCompanionAdminTransportSocketPath,
 } from '../../../operator/garden/transport-paths.js';
@@ -182,6 +183,7 @@ function configureCompanionOwnerFiles(
     timeZone: 'UTC',
     inactivityThresholdMinutes: 60,
   };
+  scheduler.backgroundWorkWelfare = { ...DEFAULT_BACKGROUND_WORK_WELFARE_CONFIG };
   writeJson(schedulerPath, scheduler);
 
   const capabilityPath = join(companionDataDir, 'capability-tier.json');

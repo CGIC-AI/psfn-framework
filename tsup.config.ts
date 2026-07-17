@@ -15,6 +15,7 @@ export default defineConfig({
     'migrate-system-owner-fleet': 'src/app/maintenance/migrate-system-owner-fleet.ts',
     'system-owner-fleet-snapshot': 'src/app/maintenance/system-owner-fleet-snapshot.ts',
     'owner-upgrade-readiness-probe': 'src/app/maintenance/owner-upgrade-readiness-probe.ts',
+    'session-integrity-repair': 'src/app/maintenance/session-integrity-repair.ts',
     'preflight-startup-owner-files': 'scripts/preflight-startup-owner-files.ts',
   },
   format: ['esm'],

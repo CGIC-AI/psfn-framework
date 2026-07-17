@@ -118,6 +118,7 @@ describe('runMoaTurn', () => {
 
     await runMoaTurn({
       prompt: buildMoaPrompt(context, { role: 'user', content: 'current turn' }),
+      authoritativeSystemPrompt: context.systemPrompt,
       llmClient: {} as any,
       context,
       message: { channelId: 'api:test' } as SubstrateMessage,
@@ -139,11 +140,13 @@ describe('runMoaTurn', () => {
       emitTelemetry,
     });
 
-    const prompt = mockedRunDeliberation.mock.calls[0]?.[1] as string;
+    const prompt = mockedRunDeliberation.mock.calls[0]?.[1] ?? '';
+    expect(prompt).not.toContain('You are a helper.');
     expect(prompt).toContain('user:\nHello');
     expect(prompt).toContain('assistant:\nHi');
     expect(prompt).toContain('Current turn:\nuser:\ncurrent turn');
     expect(mockedRunDeliberation.mock.calls[0]?.[2]).toMatchObject({
+      authoritativeSystemPrompt: 'You are a helper.',
       correlation: {
         sessionId: 'logical-session-1',
         channelId: 'api:test',
@@ -200,6 +203,7 @@ describe('runMoaTurn', () => {
 
     await runMoaTurn({
       prompt: 'current turn',
+      authoritativeSystemPrompt: 'You are a helper.',
       llmClient: {} as any,
       context: {
         systemPrompt: 'You are a helper.',
@@ -274,6 +278,7 @@ describe('runMoaTurn', () => {
 
     const result = await runMoaTurn({
       prompt: 'current turn',
+      authoritativeSystemPrompt: 'You are a helper.',
       llmClient: {} as any,
       context: {
         systemPrompt: 'You are a helper.',
@@ -351,6 +356,7 @@ describe('runMoaTurn', () => {
 
     await runMoaTurn({
       prompt: 'current turn',
+      authoritativeSystemPrompt: 'You are a helper.',
       llmClient: {} as any,
       context: {
         systemPrompt: 'You are a helper.',

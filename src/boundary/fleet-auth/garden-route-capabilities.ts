@@ -162,6 +162,8 @@ const requiredBodyPatterns = new Set([
   'PUT /api/admin/prompts/foundation',
   'PUT /api/admin/prompts/constitution',
   'PUT /api/admin/prompts/north-star',
+  'POST /api/admin/wishlist/:wishId/respond',
+  'POST /api/admin/wishlist/:wishId/convert-to-bead',
   'POST /api/admin/settings/models',
   'PATCH /api/admin/settings',
   'POST /api/admin/shared-workspace/proposals',
@@ -185,6 +187,8 @@ const noBodyMutationPatterns = new Set([
   'POST /api/admin/prompts/:layerId/toggle',
   'POST /api/admin/session-routes/reset',
   'POST /api/admin/wiki/shared-world/:siteId/publish',
+  'POST /api/admin/wishlist/:wishId/acknowledge',
+  'POST /api/admin/wishlist/:wishId/done',
 ]);
 
 type RouteTuple = readonly [GardenForwardMethod | readonly GardenForwardMethod[], string];
@@ -234,6 +238,7 @@ const fixedRoutes: readonly RouteTuple[] = [
   ['GET', '/api/admin/values'], ['GET', '/api/admin/values/reflections/daily'],
   ['GET', '/api/admin/values/reflections/journal'], ['GET', '/api/admin/values/reflections/metacognition'],
   ['GET', '/api/admin/wiki'], ['GET', '/api/admin/wiki/scopes'], ['GET', '/api/admin/wiki/search'],
+  ['GET', '/api/admin/wishlist'],
   [['GET', 'POST'], '/api/admin/channels/context-envelope'],
   [['GET', 'PATCH', 'POST'], '/api/admin/chat/bootstrap'], ['GET', '/api/admin/chat/model-room/bootstrap'],
   ['GET', '/api/admin/intake/drift-reviews'], ['GET', '/api/admin/intake/policy'],
@@ -280,6 +285,10 @@ const dynamicRoutes: readonly RouteTuple[] = [
   ['POST', '/api/admin/shared-workspace/reviews/:reviewId/decision'], ['DELETE', '/api/admin/skills/:name'],
   ['GET', '/api/admin/wiki/:id'], ['GET', '/api/admin/wiki/shared-world/:siteId'],
   ['POST', '/api/admin/wiki/shared-world/:siteId/import'], ['POST', '/api/admin/wiki/shared-world/:siteId/publish'],
+  ['POST', '/api/admin/wishlist/:wishId/acknowledge'],
+  ['POST', '/api/admin/wishlist/:wishId/respond'],
+  ['POST', '/api/admin/wishlist/:wishId/convert-to-bead'],
+  ['POST', '/api/admin/wishlist/:wishId/done'],
   ['GET', '/api/admin/intake/drift-reviews/:id'], ['POST', '/api/admin/intake/drift-reviews/:id/resolve'],
   ['GET', '/api/admin/intake/quarantine/:id'], ['POST', '/api/admin/intake/quarantine/:id/confirm'],
   ['POST', '/api/admin/intake/quarantine/:id/decide'],
@@ -295,7 +304,7 @@ export const GARDEN_CLIENT_ROUTES = Object.freeze([
   '/images', '/memory', '/model-room', '/models', '/places', '/primer', '/prompt-monitor',
   '/prompts', '/rooms', '/satellites', '/scheduler', '/session-recovery', '/sessions',
   '/settings', '/shards', '/skills', '/subsystem-health', '/telemetry', '/theme', '/tools',
-  '/values', '/wiki',
+  '/values', '/wiki', '/wishlist',
 ] as const);
 
 function bodyPolicy(method: GardenForwardMethod, pattern: string): GardenBodyPolicy {

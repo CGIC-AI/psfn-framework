@@ -10,7 +10,10 @@ import { stripBrowserRequestCapabilityHeaders } from '../../boundary/fleet-auth/
 
 export const GARDEN_PREFIX = '/';
 
-const GARDEN_CLIENT_ROUTE_SET = new Set<string>(GARDEN_CLIENT_ROUTES);
+const GARDEN_CLIENT_ROUTE_SET = new Set<string>([
+  ...GARDEN_CLIENT_ROUTES,
+  '/wishlist',
+]);
 
 interface AdminRequestRoutingDependencies {
   token?: string;
@@ -47,7 +50,10 @@ function isGardenClientRoute(method: string | undefined, requestPath: string): b
     return false;
   }
 
-  return GARDEN_CLIENT_ROUTE_SET.has(requestPath);
+  const normalizedPath = requestPath.length > 1 && requestPath.endsWith('/')
+    ? requestPath.replace(/\/+$/, '')
+    : requestPath;
+  return GARDEN_CLIENT_ROUTE_SET.has(normalizedPath);
 }
 
 function isGardenBuildAssetPath(method: string | undefined, requestPath: string): boolean {
@@ -76,14 +82,21 @@ export function handleAdminRequest(
     }
     if (error instanceof GardenRequestTargetError && error.code === 'route_not_declared') {
       try {
-        deps.sendNotFound(parseCanonicalGardenRequestPath(req.url ?? '/').canonicalPath, res);
+        const canonicalPath = parseCanonicalGardenRequestPath(req.url ?? '/').canonicalPath;
+        if (deps.requireAuthForPublicRoutes !== true && isGardenClientRoute(req.method, canonicalPath)) {
+          requestPath = canonicalPath;
+        } else {
+          deps.sendNotFound(canonicalPath, res);
+          return;
+        }
       } catch {
         sendText(res, 400, 'Invalid request target');
+        return;
       }
+    } else {
+      sendText(res, 400, 'Invalid request target');
       return;
     }
-    sendText(res, 400, 'Invalid request target');
-    return;
   }
 
   // Skip auth for SvelteKit built assets, health probes, and login page.

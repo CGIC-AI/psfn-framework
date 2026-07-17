@@ -915,27 +915,18 @@ async function executeDeferredRestart(
     await input.notifier.notifyShutdown(`restart blocked: ${restartPlan.reason.slice(0, 160)}`);
     return;
   }
-  setImmediate(() => {
-    void (async () => {
-      try {
-        await input.notifier.notifyPreRestart(payload.reason);
-        const restartCommandReady = await completeDurableShutdownForRestart(
-          restartPlan,
-          input.stopFn,
-          input,
-          input.notifier,
-          'restart',
-        );
-        if (!restartCommandReady) {
-          return;
-        }
-      } catch (err) {
-        log.error('Error during deferred restart shutdown', { error: String(err) });
-        return;
-      }
-      process.exit(restartPlan.exitCode);
-    })();
-  });
+  await input.notifier.notifyPreRestart(payload.reason);
+  const restartCommandReady = await completeDurableShutdownForRestart(
+    restartPlan,
+    input.stopFn,
+    input,
+    input.notifier,
+    'restart',
+  );
+  if (!restartCommandReady) {
+    return;
+  }
+  process.exit(restartPlan.exitCode);
 }
 
 async function executeDeferredRebuild(
@@ -963,38 +954,28 @@ async function executeDeferredRebuild(
     await input.notifier.notifyShutdown('rebuild blocked: no lifecycle rebuild command is configured');
     return;
   }
-  const runBuildCommand = input.runBuildCommand;
-  setImmediate(() => {
-    void (async () => {
-      const fullReason = `rebuild: ${payload.reason}`;
-      await input.notifier.notifyPreRestart(fullReason);
-      try {
-        log.info('Running configured rebuild command...');
-        await runBuildCommand();
-        log.info('Build complete, shutting down...');
-      } catch (err) {
-        const errorText = err instanceof Error ? err.message : String(err);
-        log.error('Build failed; aborting restart', { error: errorText });
-        await input.notifier.notifyShutdown(`rebuild failed: ${errorText.slice(0, 160)}`);
-        return;
-      }
+  const fullReason = `rebuild: ${payload.reason}`;
+  await input.notifier.notifyPreRestart(fullReason);
+  try {
+    log.info('Running configured rebuild command...');
+    await input.runBuildCommand();
+    log.info('Build complete, shutting down...');
+  } catch (err) {
+    const errorText = err instanceof Error ? err.message : String(err);
+    log.error('Build failed; aborting restart', { error: errorText });
+    await input.notifier.notifyShutdown(`rebuild failed: ${errorText.slice(0, 160)}`);
+    return;
+  }
 
-      try {
-        const restartCommandReady = await completeDurableShutdownForRestart(
-          restartPlan,
-          input.stopFn,
-          input,
-          input.notifier,
-          'rebuild restart',
-        );
-        if (!restartCommandReady) {
-          return;
-        }
-      } catch (err) {
-        log.error('Error during deferred rebuild shutdown', { error: String(err) });
-        return;
-      }
-      process.exit(restartPlan.exitCode);
-    })();
-  });
+  const restartCommandReady = await completeDurableShutdownForRestart(
+    restartPlan,
+    input.stopFn,
+    input,
+    input.notifier,
+    'rebuild restart',
+  );
+  if (!restartCommandReady) {
+    return;
+  }
+  process.exit(restartPlan.exitCode);
 }

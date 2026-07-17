@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { EmbeddingProviderPort } from '../../core/agent/contracts.js';
+import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type { MemoryStorePort } from './memory-store-port.js';
 import { MemoryRetriever } from './retrieval.js';
 import type { PurrMemory } from './types.js';

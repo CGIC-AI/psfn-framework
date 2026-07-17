@@ -3,6 +3,7 @@ import { CHANNEL_TYPES, type ChannelType, type MessageRoutingMetadata } from '..
 import type {
   SatelliteClientCertIdentity,
   SatelliteRegistryConfig,
+  SatelliteRegistryProvider,
   SatelliteRoutingMetadata,
 } from '../../shared/contracts/satellite-registry.js';
 import type { ChannelPrivacy } from '../../system/trust/context-envelope.js';
@@ -67,6 +68,7 @@ export function resolveApiTurnIdentity(options: {
   defaultAuthorName: string;
   externalChannelProfiles?: Partial<Record<ChannelType, ExternalChannelProfileConfig>>;
   satelliteRegistry?: SatelliteRegistryConfig;
+  satelliteRegistryProvider?: SatelliteRegistryProvider;
   /**
    * Authenticated client-certificate identity derived at the HTTP ingress
    * (`deriveClientCertIdentity`); never read from raw request headers.
@@ -81,14 +83,31 @@ export function resolveApiTurnIdentity(options: {
     defaultAuthorName,
     externalChannelProfiles,
     satelliteRegistry,
+    satelliteRegistryProvider,
     clientCert,
   } = options;
 
   if (hasSatelliteClaimHeaders(headers)) {
+    if (satelliteRegistry && satelliteRegistryProvider) {
+      throw new Error('Satellite claim resolution requires exactly one registry source');
+    }
+    let currentSatelliteRegistry = satelliteRegistry;
+    if (satelliteRegistryProvider) {
+      try {
+        currentSatelliteRegistry = satelliteRegistryProvider();
+      } catch {
+        return {
+          ok: false,
+          status: 503,
+          type: 'satellite_registry_unavailable',
+          message: 'The canonical satellite registry is unavailable',
+        };
+      }
+    }
     const satelliteClaim = resolveSatelliteClaim({
       headers,
       principal,
-      registry: satelliteRegistry,
+      registry: currentSatelliteRegistry,
       ...(clientCert ? { clientCert } : {}),
     });
     if (!satelliteClaim.ok) {

@@ -63,7 +63,7 @@ const ACTIVE_CONCERN_SELECT_COLUMNS = `
   salience, sensitivity, owner, evidence_refs, resolution_evidence_refs,
   resolved_at, resolution_outcome, contact_id, formation_vad,
   last_reviewed_at, next_review_at, merged_from_ids, split_from_id,
-  origin_icp_root_initiation_id
+  origin_icp_root_initiation_id, candidate_review_snapshot
 `;
 
 function clampConcernExpiresAt(expiresAt: string, createdAt: string): string {
@@ -117,7 +117,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     const asOfMs = this.now().getTime();
     return [...this.activeConcernCache.values()]
       .filter((concern) => {
-        if (concern.resolvedAt || isConcernTerminalStatus(concern.status)) return false;
+        if (concern.resolvedAt || !isConcernAttentionStatus(concern.status)) return false;
         if (Date.parse(concern.expiresAt) <= asOfMs) return false;
         if (isConcernPastHardLifetime(concern, asOfMs)) return false;
         if (!normalizedContactId) return true;
@@ -182,17 +182,23 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     const originIcpRootInitiationId = normalizeOptionalConcernIcpRootInitiationId(
       input.originIcpRootInitiationId,
     );
+    const candidateReviewSnapshot = input.candidateReviewSnapshot === undefined
+      ? null
+      : JSON.stringify(input.candidateReviewSnapshot);
 
-    if (isConcernAttentionStatus(status)) {
-      await this.resolveStaleConcerns({
-        asOf: createdAt,
-        limit: MAX_LIST_LIMIT,
-        evidenceRefs: [{ kind: 'runtime', ref: `concern-create-stale-sweep:${createdAt}` }],
-      });
+    if (!isConcernTerminalStatus(status)) {
+      if (isConcernAttentionStatus(status)) {
+        await this.resolveStaleConcerns({
+          asOf: createdAt,
+          limit: MAX_LIST_LIMIT,
+          evidenceRefs: [{ kind: 'runtime', ref: `concern-create-stale-sweep:${createdAt}` }],
+        });
+      }
       const activeDuplicate = this.findActiveSimilarConcern({
         text,
         contactId,
         asOf: createdAt,
+        status,
       });
       if (activeDuplicate) {
         return await this.mergeConcern(activeDuplicate, {
@@ -211,39 +217,36 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
         });
       }
 
-      const recentlyResolved = await this.findRecentlyResolvedSimilarConcern({
+      if (isConcernAttentionStatus(status)) {
+        const recentlyResolved = await this.findRecentlyResolvedSimilarConcern({
         text,
         ...(contactId ? { contactId } : {}),
         asOf: createdAt,
-      });
-      if (recentlyResolved) {
-        if (input.reopenResolved === true) {
-          return await this.reopenResolvedConcernAtomically(recentlyResolved.id, {
-            priority,
-            status,
-            expiresAt: boundedExpiresAt,
-            salience,
-            sensitivity,
-            owner,
-            evidenceRefs,
-            lastReviewedAt,
-            nextReviewAt,
-            mergedFromIds,
-            splitFromId,
-            originIcpRootInitiationId,
-          });
+        });
+        if (recentlyResolved) {
+          if (input.reopenResolved === true) {
+            return await this.reopenResolvedConcernAtomically(recentlyResolved.id, {
+              priority,
+              status,
+              expiresAt: boundedExpiresAt,
+              salience,
+              sensitivity,
+              owner,
+              evidenceRefs,
+              lastReviewedAt,
+              nextReviewAt,
+              mergedFromIds,
+              splitFromId,
+              originIcpRootInitiationId,
+            });
+          }
+          return recentlyResolved;
         }
-        return recentlyResolved;
-      }
 
-      const activeCount = (await this.list({
-        includeResolved: false,
-        includeExpired: false,
-        asOf: createdAt,
-        limit: MAX_ACTIVE_CONCERNS + 1,
-      })).filter(concern => isConcernAttentionStatus(concern.status)).length;
-      if (activeCount >= MAX_ACTIVE_CONCERNS) {
-        throw new Error(`Active concern cap reached (${MAX_ACTIVE_CONCERNS})`);
+        const activeCount = (await this.getActiveConcerns()).length;
+        if (activeCount >= MAX_ACTIVE_CONCERNS) {
+          throw new Error(`Active concern cap reached (${MAX_ACTIVE_CONCERNS})`);
+        }
       }
     }
     const id = normalizeRequiredText(this.idFactory(), 'id', 128);
@@ -256,10 +259,11 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
           id, text, priority, source, status, created_at, expires_at,
           salience, sensitivity, owner, evidence_refs, resolution_evidence_refs,
           resolved_at, contact_id, formation_vad, last_reviewed_at, next_review_at,
-          merged_from_ids, split_from_id, origin_icp_root_initiation_id
+          merged_from_ids, split_from_id, origin_icp_root_initiation_id,
+          candidate_review_snapshot
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12::jsonb,
-          $13, $14, $15::jsonb, $16, $17, $18::jsonb, $19, $20
+          $13, $14, $15::jsonb, $16, $17, $18::jsonb, $19, $20, $21::jsonb
         )
         RETURNING ${ACTIVE_CONCERN_SELECT_COLUMNS}
       `,
@@ -284,6 +288,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
         serializeStringList(mergedFromIds),
         splitFromId ?? null,
         originIcpRootInitiationId ?? null,
+        candidateReviewSnapshot,
       ],
     );
 
@@ -313,12 +318,27 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
   }
 
   async getActiveConcerns(contactId?: string): Promise<ActiveConcern[]> {
-    return await this.list({
-      contactId,
-      includeResolved: false,
-      includeExpired: false,
-      asOf: this.now().toISOString(),
-    });
+    const asOf = this.now().toISOString();
+    const hardLifetimeCutoff = new Date(
+      Date.parse(asOf) - MAX_ACTIVE_CONCERN_LIFETIME_MS,
+    ).toISOString();
+    const normalizedContactId = normalizeContactId(contactId);
+    const params: unknown[] = [asOf, hardLifetimeCutoff];
+    const contactClause = normalizedContactId
+      ? `AND (contact_id IS NULL OR contact_id = $${params.push(normalizedContactId)})`
+      : '';
+    const rows = await queryRows<ActiveConcernRow>(this.pool, `
+      SELECT ${ACTIVE_CONCERN_SELECT_COLUMNS}
+      FROM active_concerns
+      WHERE resolved_at IS NULL
+        AND status IN ('active', 'watching', 'deferred', 'blocked')
+        AND expires_at > $1 AND created_at > $2
+        ${contactClause}
+      ORDER BY
+        CASE priority WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END ASC,
+        expires_at ASC, created_at ASC, id ASC
+    `, params);
+    return rows.map(mapActiveConcernRow);
   }
 
   async list(options: ActiveConcernListOptions = {}): Promise<ActiveConcern[]> {
@@ -327,6 +347,9 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     const includeExpired = options.includeExpired === true;
     const normalizedContactId = normalizeContactId(options.contactId);
     const limit = clampListLimit(options.limit, DEFAULT_CONCERN_LIST_LIMIT);
+    const offset = Number.isSafeInteger(options.offset) && (options.offset ?? 0) >= 0
+      ? Math.floor(options.offset ?? 0)
+      : 0;
     const params: unknown[] = [];
     const whereClauses: string[] = [];
 
@@ -345,6 +368,7 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
       whereClauses.push(`(contact_id IS NULL OR contact_id = $${params.length})`);
     }
     params.push(limit);
+    params.push(offset);
 
     const rows = await queryRows<ActiveConcernRow>(
       this.pool,
@@ -361,7 +385,8 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
           expires_at ASC,
           created_at ASC,
           id ASC
-        LIMIT $${params.length}
+        LIMIT $${params.length - 1}
+        OFFSET $${params.length}
       `,
       params,
     );
@@ -469,7 +494,11 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
           next_review_at = $6,
           salience = $7,
           evidence_refs = $8::jsonb,
-          resolution_evidence_refs = $9::jsonb
+          resolution_evidence_refs = $9::jsonb,
+          candidate_review_snapshot = CASE
+            WHEN $2 = 'candidate' THEN candidate_review_snapshot
+            ELSE NULL
+          END
         WHERE id = $1
         RETURNING ${ACTIVE_CONCERN_SELECT_COLUMNS}
       `,
@@ -546,12 +575,19 @@ export class PostgresActiveConcernStore implements ConcernStorePortBackend {
     text: string;
     contactId?: string;
     asOf: string;
+    status: ActiveConcernStatus;
   }): ActiveConcern | null {
     const asOfMs = Date.parse(input.asOf);
-    const activeConcerns = this.snapshotActiveConcerns(input.contactId)
+    const activeConcerns = [...this.activeConcernCache.values()]
       .filter(concern => (
-        Date.parse(concern.expiresAt) > asOfMs
+        !isConcernTerminalStatus(concern.status)
+        && (input.status === 'candidate'
+          ? concern.status === 'candidate'
+          : isConcernAttentionStatus(concern.status))
+        && !concern.resolvedAt
+        && Date.parse(concern.expiresAt) > asOfMs
         && !isConcernPastHardLifetime(concern, asOfMs)
+        && (!input.contactId || !concern.contactId || concern.contactId === input.contactId)
       ));
     let bestMatch: ActiveConcern | null = null;
     let bestScore = 0;

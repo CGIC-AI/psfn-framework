@@ -1,4 +1,4 @@
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   SharedWorldWikiStore,
@@ -18,10 +18,18 @@ import {
   type WikiImportReport,
 } from '../../../faculties/wiki/bulk-import.js';
 import {
+  createSharedWikiPgvectorProjectionStore,
   runSharedWorldWikiWrite,
   type SharedWikiProjectionContext,
   type SharedWikiProjectionOutcome,
 } from '../../../faculties/wiki/shared-pgvector-projection.js';
+import { SharedWorldWikiProposalStore } from '../../../faculties/wiki/shared-world-caretaker-store.js';
+import { SharedWorldWikiCaretakerService } from '../../../faculties/wiki/shared-world-caretaker.js';
+import type {
+  SharedWorldWikiProposalApplyResult,
+  SharedWorldWikiProposalListQuery,
+  SharedWorldWikiCleanupResult,
+} from '../../../faculties/wiki/shared-world-caretaker-types.js';
 import {
   loadPlacesRegistryConfig,
   resolveSiteById,
@@ -57,15 +65,32 @@ export interface AdminWikiDataServiceOptions {
   sharedProjection?: SharedWikiProjectionContext;
 }
 
+interface SharedWikiScopeCount {
+  siteId: string;
+  documentCount: number;
+}
+
+interface SharedWikiScopeMemo {
+  registrySiteIds: string[];
+  sitesRootModifiedMs: number | null;
+  counts: SharedWikiScopeCount[];
+}
+
 /** Resolve every scope tag explicitly so the admin surface can show/filter it. */
 function withResolvedScope(entries: WikiDocumentListEntry[]): WikiDocumentListEntry[] {
   return entries.map(entry => ({ ...entry, scope: resolveWikiScope(entry.scope) }));
+}
+
+function stringArraysEqual(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
 }
 
 export class AdminWikiDataService implements AdminWikiService {
   private readonly personalStore: WikiStore;
   private readonly systemDataDir: string;
   private readonly sharedProjectionContext: SharedWikiProjectionContext;
+  private readonly proposalStore: SharedWorldWikiProposalStore | null;
+  private sharedWikiScopeMemo: SharedWikiScopeMemo | null = null;
 
   constructor(options: AdminWikiDataServiceOptions) {
     this.personalStore = new WikiStore(options.workspacePath);
@@ -74,6 +99,64 @@ export class AdminWikiDataService implements AdminWikiService {
     // never fail closed here because multiCompanion is only knowable from the
     // injected context — compositions running multi-companion MUST inject it.
     this.sharedProjectionContext = options.sharedProjection ?? { multiCompanion: false };
+    const proposalDatabaseUrl = this.sharedProjectionContext.databaseUrl?.trim();
+    this.proposalStore = this.sharedProjectionContext.multiCompanion && proposalDatabaseUrl
+      ? new SharedWorldWikiProposalStore(proposalDatabaseUrl)
+      : null;
+  }
+
+  private requireProposalStore(): SharedWorldWikiProposalStore {
+    if (!this.proposalStore) {
+      throw new Error('shared-world wiki caretaker is unavailable');
+    }
+    return this.proposalStore;
+  }
+
+  private isKnownSite(siteId: string): boolean {
+    return loadPlacesRegistryConfig(this.systemDataDir).sites.some(site => site.siteId === siteId);
+  }
+
+  private invalidateSharedWikiScopeMemo(): void {
+    this.sharedWikiScopeMemo = null;
+  }
+
+  private listSharedWikiScopeCounts(registrySiteIds: string[]): SharedWikiScopeCount[] {
+    const sitesRoot = join(resolveSharedWorldWikiDir(this.systemDataDir), 'sites');
+    const sitesRootStats = statSync(sitesRoot, { throwIfNoEntry: false });
+    const sitesRootModifiedMs = sitesRootStats?.mtimeMs ?? null;
+    if (
+      this.sharedWikiScopeMemo
+      && this.sharedWikiScopeMemo.sitesRootModifiedMs === sitesRootModifiedMs
+      && stringArraysEqual(this.sharedWikiScopeMemo.registrySiteIds, registrySiteIds)
+    ) {
+      return this.sharedWikiScopeMemo.counts;
+    }
+
+    // Union of registry sites and any site subtree already on disk, so an
+    // imported/published site surfaces even if its registry entry was removed.
+    const siteIds = new Set<string>(registrySiteIds);
+    if (existsSync(sitesRoot)) {
+      for (const name of readdirSync(sitesRoot)) siteIds.add(name);
+    }
+    const counts: SharedWikiScopeCount[] = [];
+    for (const siteId of [...siteIds].sort((a, b) => a.localeCompare(b))) {
+      let documentCount = 0;
+      try {
+        documentCount = new SharedWorldWikiStore(this.systemDataDir, siteId).list().length;
+      } catch {
+        continue; // Invalid siteId token on disk — skip rather than fail the surface.
+      }
+      counts.push({ siteId, documentCount });
+    }
+    this.sharedWikiScopeMemo = {
+      registrySiteIds: [...registrySiteIds],
+      // Opening a registry-only site store can create its canonical directory.
+      // Capture the post-scan mtime so that creation does not force a redundant
+      // rescan on the very next unchanged request.
+      sitesRootModifiedMs: statSync(sitesRoot, { throwIfNoEntry: false })?.mtimeMs ?? null,
+      counts,
+    };
+    return counts;
   }
 
   async listWikiDocuments(): Promise<AdminWikiListData> {
@@ -99,21 +182,11 @@ export class AdminWikiDataService implements AdminWikiService {
       documentCount: this.personalStore.list().length,
     }];
     const registry = loadPlacesRegistryConfig(this.systemDataDir);
-    // Union of registry sites and any site subtree already on disk, so an
-    // imported/published site surfaces even if its registry entry was removed.
-    const siteIds = new Set<string>(registry.sites.map(site => site.siteId));
-    const sitesRoot = join(resolveSharedWorldWikiDir(this.systemDataDir), 'sites');
-    if (existsSync(sitesRoot)) {
-      for (const name of readdirSync(sitesRoot)) siteIds.add(name);
-    }
-    for (const siteId of [...siteIds].sort((a, b) => a.localeCompare(b))) {
+    const registrySiteIds = registry.sites
+      .map(site => site.siteId)
+      .sort((left, right) => left.localeCompare(right));
+    for (const { siteId, documentCount } of this.listSharedWikiScopeCounts(registrySiteIds)) {
       const site = resolveSiteById(registry, siteId);
-      let documentCount = 0;
-      try {
-        documentCount = new SharedWorldWikiStore(this.systemDataDir, siteId).list().length;
-      } catch {
-        continue; // Invalid siteId token on disk — skip rather than fail the surface.
-      }
       scopes.push({
         scope: sharedWorldScope(siteId),
         siteId,
@@ -148,13 +221,17 @@ export class AdminWikiDataService implements AdminWikiService {
     // s10f9: write + shared-schema projection run together so filesystem and
     // shared.shared_wiki_chunks cannot drift silently. Multi-companion fails
     // closed BEFORE the write when the projection is unavailable.
-    const { report, projection } = await runSharedWorldWikiWrite({
-      context: this.sharedProjectionContext,
-      store,
-      write: (): PlacesWikiPublicationReport =>
-        publishSiteWiki(store, registry, siteId, { updatedBy: 'garden-operator' }),
-    });
-    return { ...report, projection };
+    try {
+      const { report, projection } = await runSharedWorldWikiWrite({
+        context: this.sharedProjectionContext,
+        store,
+        write: (): PlacesWikiPublicationReport =>
+          publishSiteWiki(store, registry, siteId, { updatedBy: 'garden-operator' }),
+      });
+      return { ...report, projection };
+    } finally {
+      this.invalidateSharedWikiScopeMemo();
+    }
   }
 
   async importSharedWorldDirectory(
@@ -192,11 +269,85 @@ export class AdminWikiDataService implements AdminWikiService {
         } satisfies SharedWikiProjectionOutcome,
       };
     }
-    const { report, projection } = await runSharedWorldWikiWrite({
-      context: this.sharedProjectionContext,
-      store,
-      write: (): WikiImportReport => runImport(false),
+    try {
+      const { report, projection } = await runSharedWorldWikiWrite({
+        context: this.sharedProjectionContext,
+        store,
+        write: (): WikiImportReport => runImport(false),
+      });
+      return { ...report, projection };
+    } finally {
+      this.invalidateSharedWikiScopeMemo();
+    }
+  }
+
+  async listSharedWorldWikiProposals(query: SharedWorldWikiProposalListQuery = {}) {
+    return this.requireProposalStore().list(query);
+  }
+
+  async getSharedWorldWikiProposal(proposalId: string) {
+    return this.requireProposalStore().get(proposalId);
+  }
+
+  async approveSharedWorldWikiProposal(
+    proposalId: string,
+    operatorActorId: string,
+  ): Promise<SharedWorldWikiProposalApplyResult> {
+    const databaseUrl = this.sharedProjectionContext.databaseUrl?.trim();
+    const embedding = this.sharedProjectionContext.embedding;
+    if (!databaseUrl || !embedding) {
+      throw new Error('shared-world wiki caretaker projection dependencies are unavailable');
+    }
+    const projection = await createSharedWikiPgvectorProjectionStore(databaseUrl, embedding, {
+      ...(this.sharedProjectionContext.eventBus
+        ? { eventBus: this.sharedProjectionContext.eventBus }
+        : {}),
     });
-    return { ...report, projection };
+    try {
+      const caretaker = new SharedWorldWikiCaretakerService({
+        proposalStore: this.requireProposalStore(),
+        isKnownSite: siteId => this.isKnownSite(siteId),
+        openSharedStore: siteId => new SharedWorldWikiStore(this.systemDataDir, siteId),
+        projection,
+      });
+      return await caretaker.approve(proposalId, operatorActorId);
+    } finally {
+      this.invalidateSharedWikiScopeMemo();
+      await projection.close();
+    }
+  }
+
+  async rejectSharedWorldWikiProposal(proposalId: string, operatorActorId: string) {
+    return this.requireProposalStore().review({
+      proposalId,
+      decision: 'reject',
+      operatorActorId,
+      rejectionCode: 'operator_rejected',
+      nowMs: Date.now(),
+    });
+  }
+
+  async cleanupSharedWorldWikiProposals(limit: number): Promise<SharedWorldWikiCleanupResult> {
+    const databaseUrl = this.sharedProjectionContext.databaseUrl?.trim();
+    const embedding = this.sharedProjectionContext.embedding;
+    if (!databaseUrl || !embedding) {
+      throw new Error('shared-world wiki caretaker projection dependencies are unavailable');
+    }
+    const projection = await createSharedWikiPgvectorProjectionStore(databaseUrl, embedding, {
+      ...(this.sharedProjectionContext.eventBus
+        ? { eventBus: this.sharedProjectionContext.eventBus }
+        : {}),
+    });
+    try {
+      const caretaker = new SharedWorldWikiCaretakerService({
+        proposalStore: this.requireProposalStore(),
+        isKnownSite: siteId => this.isKnownSite(siteId),
+        openSharedStore: siteId => new SharedWorldWikiStore(this.systemDataDir, siteId),
+        projection,
+      });
+      return await caretaker.cleanupChangedContent(limit);
+    } finally {
+      await projection.close();
+    }
   }
 }

@@ -1,7 +1,6 @@
 import type { CostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import { countMessageTokens } from '../../../primitives/llm/tokens.js';
-import type { SessionManager } from '../../../core/session/manager.js';
 import type { SessionStore } from '../../../persistence/sessions/store.js';
 import type { SessionEntry } from '../../../core/session/types.js';
 import { isNonConversationalSessionEntry } from '../../../core/session/manager-primitives.js';
@@ -19,6 +18,7 @@ import {
   isCoveredId,
   type CoverageRanges,
 } from './coverage-ranges.js';
+import type { MemoryExtractionSessionPort } from './session-port.js';
 
 const log = createComponentLogger('Extraction');
 
@@ -114,7 +114,7 @@ function evaluateExtractionTriggerInputs(input: {
  */
 export function evaluateExtractionTrigger(
   channelId: string,
-  sessionManager: SessionManager,
+  sessionManager: Pick<MemoryExtractionSessionPort, 'getMessageCount' | 'getRecentMessages'>,
   runtimeConfig: SubstrateConfig | null,
   extractionInterval: number,
 ): ExtractionTriggerResult | null {
@@ -233,7 +233,7 @@ export function advanceExtractionWatermarkForCoverage(
 }
 
 export function resolveCoveredUpToMessageId(
-  sessionManager: SessionManager,
+  sessionManager: Pick<MemoryExtractionSessionPort, 'getRecentMessages'>,
   channelId: string,
   entries: SessionEntry[],
 ): number | null {

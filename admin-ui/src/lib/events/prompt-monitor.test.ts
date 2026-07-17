@@ -13,6 +13,7 @@ import {
   diffPromptPlanBlocks,
   formatPromptMonitorStageLabel,
   mergePromptMonitorEvent,
+  mergePromptMonitorResolvedTurn,
   resolvePromptMonitorMetrics,
   resolvePromptMonitorPlan,
   resolvePromptMonitorPromptLoom,
@@ -241,6 +242,57 @@ test('buildPromptMonitorTurns preserves newest-first order and summary metrics',
   });
 });
 
+test('buildPromptMonitorTurns clones API retrieval telemetry', () => {
+  const turn = buildTurn({
+    turnId: 'turn-retrieval-api',
+    channelId: 'api:monitor',
+    promptVersionPointer: 'prompt-retrieval-api',
+    completedAt: 3_000,
+    ttftMs: 30,
+    promptDurationMs: 150,
+  });
+  turn.retrievals = [{
+    observedAt: 2_960,
+    turnId: 'turn-retrieval-api',
+    requestId: 'turn-retrieval-api',
+    channelId: 'api:monitor',
+    count: 2,
+    retrievalSource: 'embedding',
+    data: { stageTimingsMs: { vector: 11 } },
+  }];
+
+  const turns = buildPromptMonitorTurns([turn]);
+  (turn.retrievals[0]!.data.stageTimingsMs as { vector: number }).vector = 999;
+
+  assert.equal(turns[0]?.retrievals.length, 1);
+  assert.deepEqual(turns[0]?.retrievals[0]?.data.stageTimingsMs, { vector: 11 });
+});
+
+test('mergePromptMonitorEvent attaches live retrieval telemetry to its turn', () => {
+  const turns = mergePromptMonitorEvent([], {
+    type: 'memory.retrieval',
+    timestamp: 4_000,
+    correlation: {
+      channelId: 'api:monitor',
+      turnId: 'turn-retrieval-live',
+    },
+    data: {
+      observedAt: 3_999,
+      turnId: 'turn-retrieval-live',
+      requestId: 'request-retrieval-live',
+      channelId: 'api:monitor',
+      count: 3,
+      retrievalSource: 'lexical_fallback',
+      data: { returnedCount: 3 },
+    },
+  });
+
+  assert.equal(turns.length, 1);
+  assert.equal(turns[0]?.retrievals.length, 1);
+  assert.equal(turns[0]?.retrievals[0]?.retrievalSource, 'lexical_fallback');
+  assert.deepEqual(turns[0]?.retrievals[0]?.data, { returnedCount: 3 });
+});
+
 test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dropping useful fields', () => {
   const proxiedSchema = new Proxy({
     type: 'object',
@@ -319,6 +371,14 @@ test('buildPromptMonitorTurns sanitizes uncloneable prompt loom data without dro
       output: {
         extractedMemoryIds: [],
       },
+    },
+    subsystemOutputs: {
+      projectionStatus: 'not_applicable',
+      contextManifestRef: null,
+      internalStateSnapshotRef: null,
+      memoryWrites: [],
+      concernDeltas: [],
+      contactDeltas: [],
     },
     toolActivity: {
       toolCalls: [
@@ -921,7 +981,31 @@ test('live event fallback and replay read path project slim and explicit-empty s
       turn.snapshot.toolContext.activeTools = [];
     }
 
-    const replayLoom = buildPromptLoomData(turn.record, turn.snapshot);
+    turn.record.concernDeltaRefs = ['concern-parity'];
+    const replayLoom = buildPromptLoomData(turn.record, turn.snapshot, {
+      projectionStatus: 'applied',
+      contextManifestRef: null,
+      internalStateSnapshotRef: null,
+      memoryWrites: [],
+      concernDeltas: [{
+        ref: 'concern-parity',
+        status: 'resolved',
+        value: {
+          id: 'concern-parity',
+          text: 'Representative concern output.',
+          priority: 'medium',
+          source: 'appraisal',
+          status: 'candidate',
+          createdAt: '2026-07-16T12:00:00.000Z',
+          expiresAt: '2026-07-23T12:00:00.000Z',
+          salience: 0.5,
+          sensitivity: 'personal',
+          owner: 'companion',
+        },
+      }],
+      contactDeltas: [],
+    });
+    turn.promptLoom = replayLoom;
     const liveTurns = mergePromptMonitorEvent([], {
       type: 'agent.turn.snapshot',
       timestamp: turn.snapshot.capturedAt,
@@ -938,6 +1022,18 @@ test('live event fallback and replay read path project slim and explicit-empty s
       JSON.stringify(selectSharedPromptProjection(liveLoom)),
       JSON.stringify(selectSharedPromptProjection(replayLoom)),
       `${embedded} projection diverged`,
+    );
+
+    const resolvedLiveTurns = mergePromptMonitorResolvedTurn(liveTurns, turn);
+    const apiTurns = buildPromptMonitorTurns([turn]);
+    assert.deepEqual(
+      resolvedLiveTurns,
+      apiTurns,
+      `${embedded} live selection did not converge to the API turn`,
+    );
+    assert.deepEqual(
+      resolvePromptMonitorPromptLoom(resolvedLiveTurns[0]!).subsystemOutputs,
+      replayLoom.subsystemOutputs,
     );
   }
 });

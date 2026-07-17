@@ -8,7 +8,10 @@ import {
 } from '../../system/capabilities/eligibility.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import type {
+  SubstrateConfig,
+  VoiceReplySegmenterSettings,
+} from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { createWavFromPcm16le } from '../../primitives/voice/audio.js';
 import { DeepgramSttClient } from '../../primitives/voice/deepgram.js';
@@ -80,6 +83,15 @@ export function buildVoiceWebSocketServerOptions(
     maxPendingFrames:
       config.voiceMaxPendingFrames ?? DEFAULT_VOICE_WS_MAX_PENDING_FRAMES,
   };
+}
+
+export function requireVoiceReplySegmenterSettings(
+  config: SubstrateConfig,
+): VoiceReplySegmenterSettings {
+  if (!config.voiceReplySegmenter) {
+    throw new Error('settings.json must define voiceReplySegmenter');
+  }
+  return config.voiceReplySegmenter;
 }
 
 export interface ApiVoiceAssistantTurnInput {
@@ -559,6 +571,7 @@ export function runAgentAssistantStream(params: {
   transcript: string;
   signal: AbortSignal;
   channelPrefix: string;
+  segmenter: VoiceReplySegmenterSettings;
 }): WebSocketVoiceAssistantStream {
   const {
     agentLoop,
@@ -571,6 +584,7 @@ export function runAgentAssistantStream(params: {
     transcript,
     signal,
     channelPrefix,
+    segmenter,
   } = params;
 
   const actor = deriveActor(principal);
@@ -617,6 +631,7 @@ export function runAgentAssistantStream(params: {
     // its detector is a no-op without an anchor, and the authoritative turn-level
     // datetime guard on the final content path is unaffected.
     gate: { attachmentCount: 0, datetimePromptContext: null },
+    segmenter,
   });
 
   const maybeAbortable = agentLoop as unknown as { abort?: () => void };
@@ -791,6 +806,7 @@ export function createApiVoiceWebSocketRuntime(
   }
 
   const channelPrefix = options.channelPrefix ?? DEFAULT_CHANNEL_PREFIX;
+  const replySegmenter = requireVoiceReplySegmenterSettings(options.config);
   const assistantTurnHandler = options.handleAssistantTurn ?? (async (input: ApiVoiceAssistantTurnInput) => {
     if (!options.agentLoop || !options.eventBus) {
       throw new Error('API voice websocket runtime requires agentLoop/eventBus or a handleAssistantTurn override');
@@ -882,6 +898,7 @@ export function createApiVoiceWebSocketRuntime(
             transcript,
             signal,
             channelPrefix,
+            segmenter: replySegmenter,
           });
         },
       }

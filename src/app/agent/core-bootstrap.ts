@@ -36,10 +36,9 @@ import type {
   IntentionRuntimeProviders,
   IntentionRuntimeWiring,
 } from '../../core/intention/runtime-wiring.js';
-import type {
-  BackgroundWorkStorePort,
-  BackgroundWorkWelfarePolicy,
-} from '../../core/agent/background-work/store-port.js';
+import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
+import type { BackgroundWorkRuntimeTuning } from '../../core/agent/background-work/config.js';
+import type { BackgroundWorkWelfarePolicy } from '../../core/agent/background-work/store-port.js';
 
 const log = createComponentLogger('Agent');
 
@@ -67,6 +66,7 @@ export interface BootstrapAgentCoreRuntimeOptions {
   memoryStore: MemoryStorePort;
   episodicStore: EpisodicStorePort;
   backgroundWorkStore: BackgroundWorkStorePort;
+  backgroundWorkTuning: BackgroundWorkRuntimeTuning;
   /** Anti-starvation welfare policy (mmo9.7.4), resolved from scheduler.json. */
   backgroundWorkWelfare?: Partial<BackgroundWorkWelfarePolicy>;
   contactStore?: ContactStorePort;
@@ -95,6 +95,7 @@ export async function bootstrapAgentCoreRuntime(
     memoryStore,
     episodicStore,
     backgroundWorkStore,
+    backgroundWorkTuning,
     contactStore,
     intentionRuntime,
     intentionProviders,
@@ -146,6 +147,7 @@ export async function bootstrapAgentCoreRuntime(
     memoryStore,
     episodicStore,
     backgroundWorkStore,
+    backgroundWorkTuning,
     ...(options.backgroundWorkWelfare
       ? { backgroundWorkWelfare: options.backgroundWorkWelfare }
       : {}),

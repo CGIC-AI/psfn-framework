@@ -62,7 +62,6 @@
       class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
     >
       <div class="flex items-center gap-3">
-        <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">T</span>
         <h2 class="text-sm font-serif font-semibold text-shadow-800">Trust & Capabilities</h2>
       </div>
       <div class="flex items-center gap-3">
@@ -132,7 +131,6 @@
         class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
       >
         <div class="flex items-center gap-3">
-          <span class="flex items-center justify-center w-7 h-7 rounded-full bg-bark-200 text-shadow-600 text-sm font-bold border border-bark-400">K</span>
           <h2 class="text-sm font-serif font-semibold text-shadow-800">Secrets (Read-Only)</h2>
         </div>
         <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('secrets') ? 'rotate-180' : ''}">&#9660;</span>
@@ -180,7 +178,6 @@
       class="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-bark-100 transition-colors"
     >
       <div class="flex items-center gap-3">
-        <span class="flex items-center justify-center w-7 h-7 rounded-full bg-gold-100 text-gold-700 text-sm font-bold border border-gold-300">B</span>
         <h2 class="text-sm font-serif font-semibold text-shadow-800">Backups</h2>
       </div>
       <span class="text-shadow-500 text-sm transition-transform duration-200 {openSections.has('backup') ? 'rotate-180' : ''}">&#9660;</span>

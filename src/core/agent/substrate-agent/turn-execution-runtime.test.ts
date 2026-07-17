@@ -68,6 +68,11 @@ import { resolveTaskKind as resolveChannelTaskKind } from './channel-routing-run
 import { createInteractiveTerminalMessage } from '../../../app/cli/interactive-terminal-message.js';
 import { ParentTurnContinuationBudgetExceededError } from '../turn-limits.js';
 import { parseTurnRecordBackgroundWorkHandoff } from '../background-work/types.js';
+import { getRequestContext } from '../../../primitives/llm/request-context.js';
+import { ConfirmationQueue } from '../../../system/capabilities/confirmation-queue.js';
+import { createApprovalQueuePortFromConfirmationQueue } from '../../../system/capabilities/approval-queue-port.js';
+import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
+import { makeContextManifestFixture } from '../../../test-support/context-manifest.js';
 
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
@@ -105,6 +110,13 @@ beforeEach(() => {
 function makeTempDir(): string {
   tempDir = mkdtempSync(join(tmpdir(), 'psfn-turn-runtime-'));
   return tempDir;
+}
+
+function createRuntimeSessionManager(dataDir = makeTempDir()): SessionManager {
+  return new SessionManager(
+    new SessionStore(dataDir),
+    makePersistenceConfig(dataDir),
+  );
 }
 
 function createDeferred<T>() {
@@ -369,10 +381,10 @@ async function flushAsyncWork() {
 describe('handleMessageForTurn presence canonicalization', () => {
   it('promotes authority-resolved satellite presence into the turn context before author resolution', async () => {
     const eventBus = new EventBus();
-    const buildContext = vi.fn(async () => ({
+    const buildContext = vi.fn<SessionManager['buildContext']>(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
     const awaitPendingAutoCompaction = vi.fn(async () => undefined);
@@ -447,11 +459,12 @@ describe('handleMessageForTurn presence canonicalization', () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
+      sessionPromptBlocks: [{ id: 'memory.retrieval', content: 'Session memory sentinel' }],
       messages: [
         { role: 'user', content: 'Earlier request' },
         { role: 'assistant', content: 'Earlier assistant reply' },
       ],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
     const awaitPendingAutoCompaction = vi.fn(async () => undefined);
@@ -490,7 +503,13 @@ describe('handleMessageForTurn presence canonicalization', () => {
     await handleMessageForTurn(runtime, createMessage('msg-moa-charge-config'));
 
     expect(mockedRunMoaTurn).toHaveBeenCalledTimes(1);
-    expect(mockedRunMoaTurn.mock.calls[0]?.[0]).toMatchObject({
+    const firstMoaCall = mockedRunMoaTurn.mock.calls[0];
+    const firstBuildContextCall = buildContext.mock.calls[0];
+    const [moaInput] = firstMoaCall;
+    const assembledSystemPrompt = firstBuildContextCall[1];
+    expect(moaInput.authoritativeSystemPrompt).toBe(assembledSystemPrompt);
+    expect(assembledSystemPrompt).toContain('System prompt');
+    expect(moaInput).toMatchObject({
       config: expect.objectContaining({
         chargePolicy: expect.objectContaining({
           runChargeQuotaByLane: expect.objectContaining({
@@ -499,7 +518,9 @@ describe('handleMessageForTurn presence canonicalization', () => {
         }),
       }),
     });
-    const moaPrompt = mockedRunMoaTurn.mock.calls[0]?.[0]?.prompt as string;
+    const moaPrompt = moaInput.prompt;
+    expect(moaPrompt).not.toContain('System prompt');
+    expect(moaPrompt).toContain('Session memory sentinel');
     expect(moaPrompt).toContain('assistant:\nEarlier assistant reply');
     expect(moaPrompt.match(/Hello there/g)).toHaveLength(1);
     const buildTurnRecordMock = runtime.buildTurnRecord as ReturnType<typeof vi.fn>;
@@ -834,7 +855,7 @@ function createPersistenceBackedRuntime(
   const buildContext = vi.fn(async () => ({
     systemPrompt: 'System prompt',
     messages: [],
-    manifest: undefined,
+    manifest: makeContextManifestFixture(),
   }));
   const runtime = createRuntime({
     eventBus,
@@ -876,7 +897,7 @@ describe('handleMessageForTurn intentional no-reply', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const recordAssistantMessage = vi.fn(() => 2);
     const noReply: IntentionalNoReplyMetadata = {
@@ -926,7 +947,7 @@ describe('handleMessageForTurn intentional no-reply', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const recordAssistantMessage = vi.fn(() => 2);
     const noReply: IntentionalNoReplyMetadata = {
@@ -974,7 +995,7 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const recordAssistantMessage = vi.fn(() => 2);
     const runtime = createRuntime({
@@ -1007,7 +1028,7 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const recordAssistantMessage = vi.fn(() => 2);
     const runtime = createRuntime({
@@ -1035,7 +1056,7 @@ describe('handleMessageForTurn outbound reply hygiene', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const recordAssistantMessage = vi.fn(() => 2);
     const runtime = createRuntime({
@@ -1082,7 +1103,7 @@ describe('handleMessageForTurn generated media delivery', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -1179,6 +1200,108 @@ describe('handleMessageForTurn generated media delivery', () => {
     }));
   });
 
+  it('queues high-sensitivity generated media instead of sending it to a public audience', async () => {
+    const eventBus = new EventBus();
+    const companionDataDir = makeTempDir();
+    const personalImagesDir = join(companionDataDir, 'images');
+    mkdirSync(personalImagesDir);
+    const localPath = join(personalImagesDir, 'private-art.png');
+    writeFileSync(localPath, Buffer.from('png-bytes'));
+    const queue = new ConfirmationQueue({ idFactory: () => 'artifact-public-approval' });
+    const notify = vi.fn(async () => ({ messageId: 'notice-public-art' }));
+    const shareApprovedArtifacts = vi.fn(async () => {});
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: createRuntimeSessionManager(companionDataDir),
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: makeContextManifestFixture(),
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      memoryProvider: {
+        getActiveMemoryContext: vi.fn(() => ({
+          key: 'active-memory:public-art',
+          subjectKey: 'channel:public-art',
+          channelId: 'discord:public-art',
+          trustLevel: 'regular',
+          channelVisibility: 'public',
+          visibilityScope: 'non_broadcast',
+          contextBlock: 'private relationship context',
+          contextChars: 28,
+          selectedMemoryIds: ['private-memory'],
+          artifactSensitivitySources: [{
+            ref: 'memory:private-memory',
+            sensitivity: 'confidential',
+          }],
+          generatedAt: Date.now(),
+          lastRefreshStartedAt: Date.now(),
+          refreshStatus: 'ready',
+          versionPointer: 'active-memory-public-art-v1',
+        })),
+        refreshActiveMemoryContext: vi.fn(async () => null),
+        retrieve: vi.fn(async () => ''),
+      },
+      configOverrides: {
+        companionDataDir,
+        workspacePath: companionDataDir,
+      },
+    });
+    runtime.artifactApprovalQueue = createApprovalQueuePortFromConfirmationQueue(queue);
+    runtime.artifactApprovalNotifier = { notify };
+    runtime.shareApprovedArtifacts = shareApprovedArtifacts;
+    vi.mocked(runtime.agent.prompt).mockImplementationOnce(async () => {
+      runtime.agent.state.messages.push({ role: 'user', content: 'Create something for this public room.' });
+      runtime.agent.state.messages.push({
+        role: 'toolResult',
+        toolCallId: 'call-private-art',
+        toolName: 'generate_image',
+        isError: false,
+        content: [{ type: 'text', text: 'Generated 1 image.' }],
+        details: {
+          imageResult: {
+            provider: 'fal',
+            mode: 'create',
+            requestId: 'private-art-request',
+            fallbackUsed: false,
+            images: [{
+              url: 'https://images.example.test/private-art.png',
+              contentType: 'image/png',
+              fileName: 'private-art.png',
+              localPath,
+            }],
+          },
+        },
+      });
+      runtime.agent.state.messages.push({ role: 'assistant', content: 'Here is the art.' });
+    });
+    runtime.extractResponseText = vi.fn(() => 'Here is the art.');
+
+    const response = await handleMessageForTurn(runtime, createMessage('msg-public-art', {
+      channelId: 'discord:public-art',
+      channelType: 'discord',
+      isDirectMessage: false,
+      routing: { channelPrivacy: 'public' },
+    }));
+
+    expect(response.content).toBe('');
+    expect(response.attachments).toBeUndefined();
+    expect(queue.listPending()).toEqual([
+      expect.objectContaining({ id: 'artifact-public-approval', method: 'artifact.share' }),
+    ]);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(shareApprovedArtifacts).not.toHaveBeenCalled();
+    expect(runtime.sessionManager.appendSystemNote).toHaveBeenCalledWith(
+      'discord:public-art',
+      expect.stringContaining('inherited confidential context'),
+      'artifact_egress_approval',
+      'discord:public-art',
+    );
+  });
+
   it('recovers response attachments from tracked paid deliverables when the turn transcript misses the tool result', async () => {
     const eventBus = new EventBus();
     const companionDataDir = makeTempDir();
@@ -1189,7 +1312,7 @@ describe('handleMessageForTurn generated media delivery', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -1274,7 +1397,7 @@ describe('handleMessageForTurn generated media delivery', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const noReply: IntentionalNoReplyMetadata = {
       schemaVersion: 1,
@@ -1353,7 +1476,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     const buildContext = params.buildContext ?? vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus: params.eventBus ?? new EventBus(),
@@ -1415,6 +1538,141 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       },
     });
   }
+
+  it('re-authorizes recovered private artifacts from current sidecars without duplicate delivery or approval', async () => {
+    const { fatigueBudget } = createFatigueBudgetHarness();
+    const localCompanionId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    const messageId = 'recovered-private-artifact';
+    const turnId = createTurnId();
+    const message = createInboundIcpFatigueMessage({
+      id: messageId,
+      localCompanionId,
+      peerCompanionId,
+      turnId,
+    });
+    const baseCorrelation = message.routing?.icpCorrelation;
+    if (!baseCorrelation) throw new Error('test message requires ICP correlation');
+    const recoveredCorrelation: IcpConversationCorrelation = {
+      ...baseCorrelation,
+      localCompanionId,
+      peerCompanionId,
+      peerContactId: 'contact-mi',
+      turnId,
+      messageId,
+      requestId: messageId,
+      costOriginStage: 'reply',
+      fatigueDecision: 'not_evaluated',
+    };
+    const companionDataDir = makeTempDir();
+    const localPath = join(companionDataDir, 'recovered-private-artifact.png');
+    writeFileSync(localPath, Buffer.from('png-bytes'));
+    writeFileSync(`${localPath}.image-meta.json`, JSON.stringify({
+      schemaVersion: 1,
+      sensitivityClassification: {
+        schemaVersion: 1,
+        sensitivity: 'confidential',
+        basis: 'contested',
+        classifiedAt: '2026-07-16T15:00:00.000Z',
+        sources: [{ ref: 'turn:original', sensitivity: 'public' }],
+        contests: [{
+          actor: 'operator',
+          previousSensitivity: 'public',
+          sensitivity: 'confidential',
+          reason: 'Current review found private source material.',
+          contestedAt: '2026-07-16T15:00:00.000Z',
+        }],
+      },
+    }));
+    const recoveredResponse: AgentResponse = {
+      content: 'Here is the recovered private artifact.',
+      channelId: message.channelId,
+      attachments: [{
+        url: 'https://images.example.test/recovered-private-artifact.png',
+        contentType: 'image/png',
+        name: 'recovered-private-artifact.png',
+        localPath,
+      }],
+      metadata: {
+        model: 'recovered-model',
+        inputTokens: 0,
+        outputTokens: 0,
+        durationMs: 1,
+        turnId,
+        requestId: messageId,
+        icpCorrelation: recoveredCorrelation,
+      },
+    };
+    const queue = new ConfirmationQueue({ idFactory: () => 'recovered-private-approval' });
+    const notify = vi.fn(async () => ({ messageId: 'recovered-private-notice' }));
+    const shareApprovedArtifacts = vi.fn(async () => {});
+    const finalizeDelivery = vi.fn(async () => undefined);
+    const { runtime } = createFatigueRuntime({
+      fatigueBudget,
+      configOverrides: {
+        companionId: localCompanionId,
+        companionDataDir,
+        workspacePath: companionDataDir,
+      },
+    });
+    runtime.artifactApprovalQueue = createApprovalQueuePortFromConfirmationQueue(queue);
+    runtime.artifactApprovalNotifier = { notify };
+    runtime.shareApprovedArtifacts = shareApprovedArtifacts;
+
+    const first = await handleMessageForTurn(runtime, message, {
+      recoveredResponse,
+      sourceAlreadyPersisted: true,
+      finalizeDelivery,
+    });
+    const replay = await handleMessageForTurn(runtime, message, {
+      recoveredResponse,
+      sourceAlreadyPersisted: true,
+      finalizeDelivery,
+    });
+
+    expect(first).toMatchObject({ content: '' });
+    expect(first.attachments).toBeUndefined();
+    expect(replay).toEqual(first);
+    expect(finalizeDelivery).toHaveBeenCalledTimes(2);
+    expect(finalizeDelivery).toHaveBeenNthCalledWith(1, first);
+    expect(finalizeDelivery).toHaveBeenNthCalledWith(2, first);
+    expect(queue.listPending()).toEqual([
+      expect.objectContaining({ id: 'recovered-private-approval', method: 'artifact.share' }),
+    ]);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(shareApprovedArtifacts).not.toHaveBeenCalled();
+
+    await queue.resolve(
+      { id: 'recovered-private-approval', decision: 'approve' },
+      { kind: 'operator', id: 'operator:test' },
+    );
+    const settledReplay = await handleMessageForTurn(runtime, message, {
+      recoveredResponse,
+      sourceAlreadyPersisted: true,
+      finalizeDelivery,
+    });
+    expect(settledReplay).toEqual(first);
+    expect(finalizeDelivery).toHaveBeenCalledTimes(3);
+    expect(queue.listPending()).toHaveLength(0);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(shareApprovedArtifacts).toHaveBeenCalledTimes(1);
+
+    rmSync(`${localPath}.image-meta.json`);
+    await expect(handleMessageForTurn(runtime, message, {
+      recoveredResponse,
+      sourceAlreadyPersisted: true,
+      finalizeDelivery,
+    })).rejects.toThrow('Artifact sensitivity metadata is unavailable');
+    writeFileSync(`${localPath}.image-meta.json`, JSON.stringify({ schemaVersion: 1 }));
+    await expect(handleMessageForTurn(runtime, message, {
+      recoveredResponse,
+      sourceAlreadyPersisted: true,
+      finalizeDelivery,
+    })).rejects.toThrow('Artifact sensitivity metadata is missing or invalid');
+    expect(finalizeDelivery).toHaveBeenCalledTimes(3);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(shareApprovedArtifacts).toHaveBeenCalledTimes(1);
+  });
 
   it('calls the model for a normal MI turn and records one spend after the assistant response', async () => {
     const { fatigueBudget, history } = createFatigueBudgetHarness();
@@ -1572,7 +1830,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     const buildContext = vi.fn(async (_channelId: string, fullPrompt: string) => ({
       systemPrompt: fullPrompt,
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const { runtime } = createFatigueRuntime({
       fatigueBudget,
@@ -2718,7 +2976,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     const buildContext = vi.fn(async (_channelId: string, fullPrompt: string) => ({
       systemPrompt: fullPrompt,
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const { runtime } = createFatigueRuntime({ fatigueBudget, buildContext });
     const modelAuthoredText = 'I can wrap this thought up from here.';
@@ -2760,7 +3018,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const { runtime } = createFatigueRuntime({
       fatigueBudget,
@@ -2794,7 +3052,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     const buildContext = vi.fn(async (_channelId: string, fullPrompt: string) => ({
       systemPrompt: fullPrompt,
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const { runtime } = createFatigueRuntime({
       fatigueBudget,
@@ -3058,7 +3316,7 @@ async function runObserverSidecarTurn(
   const buildContext = vi.fn(async () => ({
     systemPrompt: 'System prompt',
     messages: [],
-    manifest: undefined,
+    manifest: makeContextManifestFixture(),
   }));
   const recordAssistantMessage = vi.fn(() => 2);
   const runtime = createRuntime({
@@ -3453,7 +3711,11 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const runtime = createRuntime({
       eventBus,
       sessionManager: {} as SessionManager,
-      buildContext: vi.fn(async () => ({ systemPrompt: 'System prompt', messages: [] })),
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: makeContextManifestFixture(),
+      })),
       scheduleAutoCompactionBetweenTurns,
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
       recordUserMessage: vi.fn(() => null),
@@ -3529,6 +3791,11 @@ describe('handleMessageForTurn compaction scheduling', () => {
     expect(JSON.stringify(enqueued)).not.toContain('broadcastApprovalToken');
     expect(JSON.stringify(enqueued)).not.toContain('compactionPromptText');
     expect(JSON.stringify(enqueued)).not.toContain('templateVariables');
+    expect(runtime.sessionManager.recordTurn).toHaveBeenCalledWith(expect.objectContaining({
+      extractedMemoryIds: [expect.stringMatching(/^loom-projection:v1:memory:[a-f0-9]{64}$/u)],
+      concernDeltaRefs: [expect.stringMatching(/^loom-projection:v1:concern:[a-f0-9]{64}$/u)],
+      contactDeltaRefs: [expect.stringMatching(/^loom-projection:v1:contact:[a-f0-9]{64}$/u)],
+    }));
     const emotionPayload = enqueued.find(job => job.kind === 'emotion_appraisal')?.payload;
     expect(emotionPayload).toMatchObject({
       internalStateSnapshotRef: expect.stringMatching(/^internal-state-v1:/),
@@ -3573,7 +3840,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       })),
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -3648,7 +3915,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       })),
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -3696,7 +3963,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       })),
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -3741,7 +4008,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
     const awaitPendingAutoCompaction = vi.fn(async () => undefined);
@@ -4196,7 +4463,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
     const awaitPendingAutoCompaction = vi.fn(async () => undefined);
@@ -4287,7 +4554,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const recordUserMessage = vi.fn(() => null);
     const recordSystemMessage = vi.fn(() => 1);
@@ -4350,7 +4617,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
     const awaitPendingAutoCompaction = vi.fn(async () => undefined);
@@ -4443,7 +4710,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
         { role: 'user', content: 'Earlier user message' },
         { role: 'assistant', content: 'Earlier assistant reply' },
       ],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -4659,7 +4926,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
         { role: 'user', content: 'Earlier user message' },
         { role: 'assistant', content: 'Earlier assistant reply' },
       ],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -4703,7 +4970,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'Final system prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const recordUserMessage = vi.fn(() => 1);
     const runtime = createRuntime({
@@ -4784,7 +5051,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -4815,7 +5082,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
         { role: 'system', content: '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.' },
         { role: 'assistant', content: 'Earlier assistant reply' },
       ],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -4900,7 +5167,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
         { role: 'system', content: '[SYSTEM: Quiet Planner] Queue a private follow-up reminder.' },
         { role: 'user', content: 'Current user message' },
       ],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5023,7 +5290,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'Final system prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus: new EventBus(),
@@ -5074,7 +5341,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'Final system prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus: new EventBus(),
@@ -5129,7 +5396,7 @@ describe('handleMessageForTurn compaction scheduling', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5191,7 +5458,7 @@ describe('handleMessageForTurn failure persistence', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5311,7 +5578,7 @@ describe('handleMessageForTurn failure persistence', () => {
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       })),
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -5436,7 +5703,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5482,7 +5749,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5516,7 +5783,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5604,7 +5871,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       const buildContext = vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       }));
       const runtime = createRuntime({
         eventBus,
@@ -5711,7 +5978,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5740,12 +6007,146 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     }));
   });
 
+  it('threads typed audience=self access into free-time active-memory refreshes', async () => {
+    const eventBus = new EventBus();
+    const observedRequestContexts: Array<ReturnType<typeof getRequestContext>> = [];
+    const refreshActiveMemoryContext = vi.fn(async () => {
+      observedRequestContexts.push(getRequestContext());
+      return null;
+    });
+    const getActiveMemoryContext = vi.fn(() => null);
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: createRuntimeSessionManager(),
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      resolveAuthorContext: vi.fn(() => ({
+        trustLevel: 'primary',
+        speakerRole: 'system',
+        actorKind: 'unknown',
+        resolvedUserName: 'Free Time',
+        continuityFallbackKeys: [],
+      })),
+      memoryProvider: {
+        getActiveMemoryContext,
+        refreshActiveMemoryContext,
+        retrieve: vi.fn(async () => ''),
+      },
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-free-time-self', {
+      channelId: 'internal:free-time:idle',
+      authorId: 'scheduler',
+      authorName: 'Free Time',
+    }));
+    await vi.waitFor(() => expect(refreshActiveMemoryContext).toHaveBeenCalledTimes(1));
+
+    expect(getActiveMemoryContext).toHaveBeenCalledWith(expect.objectContaining({
+      callerContext: { accessScope: 'companion_self_creation' },
+    }));
+    expect(refreshActiveMemoryContext).toHaveBeenCalledWith(expect.objectContaining({
+      callerContext: { accessScope: 'companion_self_creation' },
+    }));
+    expect(observedRequestContexts[0]).toMatchObject({
+      channelId: 'internal:free-time:idle',
+      requesterProvenance: 'self_directed',
+      requestAudience: 'self',
+      purpose: 'free_time.creation.memory_retrieval',
+    });
+  });
+
+  it('does not grant self access to an ambiguous internal audience', async () => {
+    const eventBus = new EventBus();
+    const refreshActiveMemoryContext = vi.fn(async () => null);
+    const buildContext = vi.fn(async () => ({
+      systemPrompt: 'System prompt',
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const runtime = createRuntime({
+      eventBus,
+      sessionManager: createRuntimeSessionManager(),
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      resolveAuthorContext: vi.fn(() => ({
+        trustLevel: 'primary',
+        speakerRole: 'system',
+        actorKind: 'unknown',
+        resolvedUserName: 'System',
+        continuityFallbackKeys: [],
+      })),
+      memoryProvider: {
+        getActiveMemoryContext: vi.fn(() => null),
+        refreshActiveMemoryContext,
+        retrieve: vi.fn(async () => ''),
+      },
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-internal-ambiguous', {
+      channelId: 'internal:unclassified-work',
+      authorId: 'scheduler',
+    }));
+    await vi.waitFor(() => expect(refreshActiveMemoryContext).toHaveBeenCalledTimes(1));
+
+    expect(refreshActiveMemoryContext).toHaveBeenCalledWith(expect.not.objectContaining({
+      callerContext: expect.objectContaining({ accessScope: 'companion_self_creation' }),
+    }));
+  });
+
+  it('classifies a primary private human DM as the ungated primary-contact audience', async () => {
+    const observedAudiences: unknown[] = [];
+    const runtime = createRuntime({
+      eventBus: new EventBus(),
+      sessionManager: createRuntimeSessionManager(),
+      buildContext: vi.fn(async () => ({
+        systemPrompt: 'System prompt',
+        messages: [],
+        manifest: makeContextManifestFixture(),
+      })),
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      resolveAuthorContext: vi.fn(() => ({
+        trustLevel: 'primary',
+        speakerRole: 'user',
+        actorKind: 'human',
+        resolvedUserName: 'V',
+        canonicalContactKey: 'contact-v',
+        continuityFallbackKeys: [],
+      })),
+    });
+    vi.mocked(runtime.agent.prompt).mockImplementationOnce(async () => {
+      observedAudiences.push(getRequestContext()?.requestAudience);
+      runtime.agent.state.messages.push({ role: 'assistant', content: 'hello V' });
+    });
+
+    await handleMessageForTurn(runtime, createMessage('msg-primary-contact', {
+      channelId: 'api:primary-contact',
+      isDirectMessage: true,
+      routing: { channelPrivacy: 'private' },
+    }));
+
+    expect(observedAudiences).toEqual(['primary_contact']);
+  });
+
   it('keeps the foreground response path open when active memory refresh rejects', async () => {
     const eventBus = new EventBus();
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5789,7 +6190,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5819,7 +6220,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5859,7 +6260,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -5933,7 +6334,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       })),
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -5970,7 +6371,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -6006,7 +6407,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const scheduleAutoCompactionBetweenTurns = vi.fn(async () => undefined);
     const awaitPendingAutoCompaction = vi.fn(async () => undefined);
@@ -6068,7 +6469,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       })),
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -6102,7 +6503,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const recordUserMessage = vi.fn(() => 1);
     const analyze = vi.fn(async () => {
@@ -6155,7 +6556,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       buildContext: vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       })),
       scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
       awaitPendingAutoCompaction: vi.fn(async () => undefined),
@@ -6193,7 +6594,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -6232,7 +6633,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -6284,7 +6685,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -6327,7 +6728,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const analyze = vi.fn(async () => ({
       question: 'Describe exactly what is visible in the current image input.',
@@ -6486,7 +6887,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
     const buildContext = vi.fn(async () => ({
       systemPrompt: 'System prompt',
       messages: [],
-      manifest: undefined,
+      manifest: makeContextManifestFixture(),
     }));
     const runtime = createRuntime({
       eventBus,
@@ -6548,7 +6949,7 @@ describe('handleMessageForTurn pre-response concurrency', () => {
       const buildContext = vi.fn(async () => ({
         systemPrompt: 'System prompt',
         messages: [],
-        manifest: undefined,
+        manifest: makeContextManifestFixture(),
       }));
       const runtime = createRuntime({
         eventBus,

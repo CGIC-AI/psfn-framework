@@ -68,10 +68,13 @@
     formatSettingOptionLabel,
     humanizeSettingValue,
     listDirtyRawEditorKeys,
+    listUnifiedSaveSkippedOwnerFiles,
     normalizeStringList,
     parseBackupSettings,
     populateSimpleSettingsForm,
+    rebaselineRawJsonByKey,
     resolveRawEditorOwnerFile,
+    resolveReloadedRawJsonByKey,
     syncCuratedSettingsField,
     summarizeCompositionalPolicy,
     tryPrettyPrint,
@@ -105,7 +108,8 @@
   // The unified save commits every non-raw surface in one call: curated fields,
   // advanced canonical fields, and the provider registry all route through
   // saveSettingsContract to their owner files. Raw owner-file editors keep
-  // their own scoped saves and never block this action.
+  // their own scoped saves; dirty raw editors are preserved across this save
+  // and their owner files are skipped rather than blocked.
   let settingsSaveDirty = $derived(
     curatedDirty || advancedDirty || providerRegistryDirty(),
   );
@@ -752,10 +756,14 @@
     ownerFile: rawEditorLabel(editor.key),
   })));
 
-  function resetDirtyTracking(): void {
+  function resetDirtyTracking(preserveRawKeys: readonly RawEditorKey[] = []): void {
     initialSnapshot = computeSnapshot();
     initialAdvancedSnapshot = computeAdvancedSnapshot();
-    initialRawJsonByKey = currentRawJsonByKey();
+    initialRawJsonByKey = rebaselineRawJsonByKey({
+      currentJsonByKey: currentRawJsonByKey(),
+      initialJsonByKey: initialRawJsonByKey,
+      preservedKeys: preserveRawKeys,
+    });
   }
 
   function markRawEditorsCommitted(keys: RawEditorKey[]): void {
@@ -864,13 +872,17 @@
     settingsData?: AdminSettingsData;
     schemaData?: SettingsContractData;
   } = {}): Promise<void> {
+    // Dirty raw editors hold staged hand edits the server does not know about.
+    // Snapshot them before the reload so the refresh below cannot clobber them.
+    const preservedRawKeys = dirtyRawEditorKeys();
+    const stagedRawJsonByKey = currentRawJsonByKey();
+
     const nextSettingsData = options.settingsData ?? await getSettings();
     const nextSchemaData = options.schemaData ?? await getSettingsSchema();
     data = nextSettingsData;
     settingsSchema = nextSchemaData;
     populateSimpleFields(nextSettingsData);
     setProviderRegistryState(normalizeProvidersRuntimeConfig(nextSettingsData.editors.providers).registry);
-    settingsJson = JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2);
 
     const [provConf, chanConf, skConf, schConf, tpConf, capConf, chargeConf, bakConf] = await Promise.all([
       getSubConfig('providers').catch(() => '{}'),
@@ -882,16 +894,32 @@
       getSubConfig('charge-policy').catch(() => '{}'),
       getSubConfig('backup').catch(() => '{}'),
     ]);
-    providersJson = tryPrettyPrint(provConf);
-    channelsJson = tryPrettyPrint(chanConf);
-    skillsJson = tryPrettyPrint(skConf);
-    schedulerJson = tryPrettyPrint(schConf);
-    trustPolicyJson = tryPrettyPrint(tpConf);
-    capabilitiesJson = tryPrettyPrint(capConf);
-    chargePolicyJson = tryPrettyPrint(chargeConf);
-    backupJson = tryPrettyPrint(bakConf);
+    const serverRawJsonByKey = buildRawEditorJsonMap((key) => {
+      if (key === 'settings') {
+        return JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2);
+      }
+      switch (key) {
+        case 'providers': return tryPrettyPrint(provConf);
+        case 'channels': return tryPrettyPrint(chanConf);
+        case 'skills': return tryPrettyPrint(skConf);
+        case 'scheduler': return tryPrettyPrint(schConf);
+        case 'trust-policy': return tryPrettyPrint(tpConf);
+        case 'capabilities': return tryPrettyPrint(capConf);
+        case 'charge-policy': return tryPrettyPrint(chargeConf);
+        case 'backup': return tryPrettyPrint(bakConf);
+        default: return '';
+      }
+    });
+    const reloadedRawJsonByKey = resolveReloadedRawJsonByKey({
+      serverJsonByKey: serverRawJsonByKey,
+      stagedJsonByKey: stagedRawJsonByKey,
+      dirtyKeys: preservedRawKeys,
+    });
+    for (const key of Object.keys(reloadedRawJsonByKey) as RawEditorKey[]) {
+      setRawJson(key, reloadedRawJsonByKey[key]);
+    }
     populateBackupFields(bakConf);
-    resetDirtyTracking();
+    resetDirtyTracking(preservedRawKeys);
   }
 
   async function saveSettingsContract(
@@ -899,6 +927,12 @@
   ): Promise<{ ok: boolean; invalidFieldCount: number; message: string }> {
     const hasRuntimePayload = Object.keys(runtimePayload).length > 0;
     let invalidFieldCount = 0;
+    // An owner file with a dirty raw editor is being hand-edited on the Raw
+    // JSON tab; the unified save must not write form-derived JSON over it.
+    // Those files are skipped here (and reported to the user) until their raw
+    // edits are saved or discarded on the Raw JSON tab.
+    const skippedOwnerFiles = listUnifiedSaveSkippedOwnerFiles(dirtyRawEditorKeys());
+    const skipped = new Set<RawEditorKey>(skippedOwnerFiles);
     const ownerConfigSaves = [
       {
         key: 'providers' as const,
@@ -920,7 +954,7 @@
         nextJson: JSON.stringify(buildBackupPayload(), null, 2),
         currentJson: tryPrettyPrint(backupJson),
       },
-    ].filter(entry => entry.nextJson !== entry.currentJson);
+    ].filter(entry => !skipped.has(entry.key) && entry.nextJson !== entry.currentJson);
 
     if (hasRuntimePayload) {
       const runtimeResult = await updateSettings(runtimePayload);
@@ -951,10 +985,13 @@
     }
 
     await reloadSettingsState();
+    const skippedNote = skippedOwnerFiles.length > 0
+      ? ` Skipped ${skippedOwnerFiles.map((key) => rawEditorOwnerFile(key)).join(', ')} — staged raw edits on the Raw JSON tab are preserved; save or discard them there.`
+      : '';
     return {
       ok: true,
       invalidFieldCount,
-      message: 'Settings updated',
+      message: `Settings updated.${skippedNote}`,
     };
   }
 
@@ -963,9 +1000,10 @@
   // saveSettingsContract to the owner file each field belongs to. When the
   // advanced canonical editor is dirty the full canonical payload is sent so
   // advanced keys reach settings.json; otherwise only the curated payload goes.
-  // Raw owner-file editors are deliberately excluded: they save directly to
-  // their files via their own scoped actions and their dirty state is surfaced
-  // on the Raw JSON tab badge instead of blocking this save.
+  // Raw owner-file editors save directly to their files via their own scoped
+  // actions. A raw editor with staged (dirty) edits is preserved across this
+  // save's reload, and its owner file is skipped by the structured owner-file
+  // saves so form-derived JSON never stomps the staged hand edits.
   async function saveSettings() {
     saving = true;
     try {
@@ -1005,6 +1043,9 @@
       }
 
       flashRaw('settings', true, result.message || 'settings.json saved');
+      // Rebasing the just-saved editor before the reload keeps it clean (see
+      // saveRawConfig); the reload then refreshes it from server state.
+      markRawEditorsCommitted(['settings']);
       await reloadSettingsState();
     } catch (e) {
       flashRaw('settings', false, e instanceof Error ? e.message : 'Failed to save settings.json');
@@ -1020,10 +1061,11 @@
       JSON.parse(json);
       await saveSubConfig(key, json);
       applyValidationErrors({ ok: true, message: '' });
+      // Rebasing the just-saved editor before any reload keeps it clean: the
+      // reload refreshes it from server state instead of preserving it as dirty.
+      markRawEditorsCommitted([key as RawEditorKey]);
       if (key === 'scheduler' || key === 'capabilities' || key === 'providers') {
         await reloadSettingsState();
-      } else {
-        markRawEditorsCommitted([key as RawEditorKey]);
       }
       flashRaw(key, true, `${label} saved`);
     } catch (e) {
@@ -1222,7 +1264,7 @@
             {/if}
             {#if rawDirty}
               <span class="text-sm text-shadow-500">
-                Unsaved raw edits on the Raw JSON tab save separately there.
+                Staged raw edits are preserved; their owner files are skipped by this save until you save or discard them on the Raw JSON tab.
               </span>
             {/if}
           </div>

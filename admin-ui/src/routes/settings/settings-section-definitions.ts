@@ -1,7 +1,7 @@
 import {
   SETTINGS_GARDEN_ADVANCED_SECTION_FIELDS,
   SETTINGS_GARDEN_SECTION_FIELDS,
-} from '$lib/settings-garden-contract';
+} from '../../../../src/shared/contracts/settings-garden-contract.js';
 import type { SettingsSimpleSectionId } from '$lib/components/settings/navigation';
 
 export interface SettingsAdvancedSection {

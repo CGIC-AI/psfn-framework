@@ -3,7 +3,7 @@ import {
   SETTINGS_GARDEN_RAW_EDITOR_KEYS,
   SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY,
   type GardenSettingsRawEditorKey,
-} from '$lib/settings-garden-contract';
+} from '../../../../src/shared/contracts/settings-garden-contract.js';
 import type {
   AdminSettingsData,
   CanonicalProviderRegistry,
@@ -71,6 +71,57 @@ export function listDirtyRawEditorKeys(
   return SETTINGS_GARDEN_RAW_EDITOR_KEYS.filter(
     key => current[key] !== initial[key],
   );
+}
+
+// Owner files the unified save writes from structured form state. A dirty raw
+// editor for any of these keys excludes that file from the unified save so
+// form-derived JSON never stomps staged hand edits.
+export const UNIFIED_SAVE_OWNER_FILE_KEYS = [
+  'providers',
+  'scheduler',
+  'capabilities',
+  'backup',
+] as const satisfies readonly RawEditorKey[];
+
+export type UnifiedSaveOwnerFileKey = (typeof UNIFIED_SAVE_OWNER_FILE_KEYS)[number];
+
+export function listUnifiedSaveSkippedOwnerFiles(
+  dirtyKeys: readonly RawEditorKey[],
+): UnifiedSaveOwnerFileKey[] {
+  const dirty = new Set<RawEditorKey>(dirtyKeys);
+  return UNIFIED_SAVE_OWNER_FILE_KEYS.filter(key => dirty.has(key));
+}
+
+// Post-reload editor contents: dirty raw editors keep the user's staged text
+// across a server-state reload; clean editors refresh from the server.
+export function resolveReloadedRawJsonByKey(input: {
+  serverJsonByKey: Record<RawEditorKey, string>;
+  stagedJsonByKey: Record<RawEditorKey, string>;
+  dirtyKeys: readonly RawEditorKey[];
+}): Record<RawEditorKey, string> {
+  const dirty = new Set<RawEditorKey>(input.dirtyKeys);
+  return Object.fromEntries(
+    SETTINGS_GARDEN_RAW_EDITOR_KEYS.map((key) => [
+      key,
+      dirty.has(key) ? input.stagedJsonByKey[key] : input.serverJsonByKey[key],
+    ]),
+  ) as Record<RawEditorKey, string>;
+}
+
+// Rebasing after a save/reload must NOT mark preserved dirty editors clean:
+// their baseline stays at the pre-edit value so they keep comparing dirty.
+export function rebaselineRawJsonByKey(input: {
+  currentJsonByKey: Record<RawEditorKey, string>;
+  initialJsonByKey: Record<RawEditorKey, string>;
+  preservedKeys: readonly RawEditorKey[];
+}): Record<RawEditorKey, string> {
+  const preserved = new Set<RawEditorKey>(input.preservedKeys);
+  return Object.fromEntries(
+    SETTINGS_GARDEN_RAW_EDITOR_KEYS.map((key) => [
+      key,
+      preserved.has(key) ? input.initialJsonByKey[key] : input.currentJsonByKey[key],
+    ]),
+  ) as Record<RawEditorKey, string>;
 }
 
 export function resolveRawEditorOwnerFile(

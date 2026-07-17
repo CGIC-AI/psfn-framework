@@ -148,8 +148,9 @@
               <h2 class="text-sm font-serif font-semibold text-shadow-800">Raw Owner-File Editors</h2>
               <p class="text-sm text-shadow-600">
                 JSON owner files remain editable in place. Raw edits save directly to their
-                owner files here and are never touched by the unified settings save; unsaved
-                raw edits are flagged on the Raw JSON tab badge.
+                owner files here. Staged (unsaved) raw edits are preserved across the unified
+                settings save, which skips those owner files until you save or discard the
+                staged edits on this tab; staged edits are flagged on the Raw JSON tab badge.
               </p>
             </div>
             <RawSettingsMode

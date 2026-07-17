@@ -143,9 +143,14 @@ describe('AgentApiBackend Hub device principal boundary', () => {
     expect(handleMessage).toHaveBeenCalledOnce();
     expect(handleMessage.mock.calls[0]?.[0]).toMatchObject({
       channelId: `hub-device:${'a'.repeat(64)}`,
+      channelType: 'companion-ui',
       authorId: 'hub-device-guest:office-device',
       authorName: 'Hub device guest',
-      routing: { satellite: { hubDevicePrincipal } },
+      routing: {
+        source: 'companion-ui',
+        channelPrivacy: 'private',
+        satellite: { hubDevicePrincipal },
+      },
     });
     expect(handleMessage.mock.calls[0]?.[0].routing).not.toHaveProperty('canonicalContactId');
     await expect(backend.handleChatCompletion({
@@ -217,9 +222,12 @@ describe('AgentApiBackend Hub device principal boundary', () => {
     })).resolves.toMatchObject({ ok: true });
     expect(handleMessage.mock.calls.at(-1)?.[0]).toMatchObject({
       channelId: `hub-device:${'a'.repeat(64)}`,
+      channelType: 'companion-ui',
       authorId: humanAttachment.actor.principalId,
       authorName: 'Authenticated fleet human',
       routing: {
+        source: 'companion-ui',
+        channelPrivacy: 'private',
         canonicalContactId: humanAttachment.actor.contact.contactId,
         satellite: { hubDevicePrincipal },
       },

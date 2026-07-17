@@ -20,7 +20,7 @@ const context = Object.freeze({
   companionId,
   contact: Object.freeze({
     bindingId: '33333333-3333-4333-8333-333333333333',
-    contactId: 'contact/current-human',
+    contactId: '77777777-7777-4777-8777-777777777777',
     bindingVersion: 1,
   }),
   operator: Object.freeze({
@@ -65,7 +65,7 @@ const hubPrincipal = Object.freeze({
   jti: randomUUID(),
 });
 const attachment = Object.freeze({
-  attachmentId: '77777777-7777-4777-8777-777777777777',
+  attachmentId: '88888888-8888-4888-8888-888888888888',
   disposition: 'created' as const,
   deviceActor: Object.freeze({ kind: 'hub_device' as const, principal: hubPrincipal, connectionId: 'connection-1' }),
   actor: Object.freeze({
@@ -153,6 +153,21 @@ describe('GatewayCompanionUiActionBroker', () => {
     expect(dispatched.attachment.actor).toEqual(attachment.actor);
     expect(dispatched.attachment.deviceActor).toEqual(attachment.deviceActor);
     expect(dispatched).not.toHaveProperty('parentToken');
+    const verifiedChild = built.verifier.verifyAgent({
+      token: dispatched.childAssertion.token,
+      target: dispatched.compiled.target,
+      requestId: dispatched.childAssertion.requestId,
+      decisionId: dispatched.childAssertion.decisionId,
+      versions: dispatched.childAssertion.versions,
+      parent: dispatched.childAssertion.parent,
+    });
+    expect(verifiedChild.authContext).toMatchObject({
+      principalId,
+      companionId,
+      contactId: context.contact.contactId,
+      role: context.operator.role,
+      sessionRecordId: context.session.recordId,
+    });
     expect(() => built.verifier.verifyOperator({
       token: dispatched.childAssertion.token,
       target: dispatched.compiled.target,

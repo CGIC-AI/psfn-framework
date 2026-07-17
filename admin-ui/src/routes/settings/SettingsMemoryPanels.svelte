@@ -4,6 +4,8 @@
   import SettingAuthorityHint from '$lib/components/settings/SettingAuthorityHint.svelte';
   import SettingFieldLabel from '$lib/components/settings/SettingFieldLabel.svelte';
   import SettingsCollapsibleSection from '$lib/components/settings/SettingsCollapsibleSection.svelte';
+  import DurationInput from '$lib/components/settings/DurationInput.svelte';
+  import FractionInput from '$lib/components/settings/FractionInput.svelte';
   import { settingsSimpleSectionAnchorId } from '$lib/components/settings/navigation';
   import type { SettingAuthorityInfo } from '$lib/settings/authority';
   import {
@@ -218,7 +220,7 @@
           forId={settingControlId('backgroundMaintenanceIntervalMs')}
           class={labelClass}
         />
-        <input id={settingControlId('backgroundMaintenanceIntervalMs')} type="number" min="10000" step="1000" bind:value={backgroundMaintenanceIntervalMs} class={inputClass} />
+        <DurationInput id={settingControlId('backgroundMaintenanceIntervalMs')} min={10000} bind:value={backgroundMaintenanceIntervalMs} class={inputClass} />
         <p class="text-sm text-shadow-500 mt-1">One shared hourly tick for salience decay, ambient presence, concern grooming, social-graph proposals, sleeptime eligibility, contact trust drift, drift velocity, and second-arrow checks. The Scheduler page lists the exact operations wired in this runtime.</p>
         <SettingAuthorityHint info={getSettingAuthority('backgroundMaintenanceIntervalMs')} />
       </div>
@@ -260,17 +262,17 @@
     <div class="grid grid-cols-1 md:grid-cols-2 gap-5">
       <div>
         <SettingFieldLabel label="Min Importance" keys="memoryExtractionMinImportance" forId={settingControlId('memoryExtractionMinImportance')} class={labelClass} />
-        <input id={settingControlId('memoryExtractionMinImportance')} type="number" min="0" max="1" step="0.05" bind:value={memoryExtractionMinImportance} class={inputClass} />
+        <FractionInput id={settingControlId('memoryExtractionMinImportance')} bind:value={memoryExtractionMinImportance} class={inputClass} />
         <p class="text-sm text-shadow-500 mt-1">Minimum importance score to write a memory (0-1)</p>
       </div>
       <div>
         <SettingFieldLabel label="Min Confidence" keys="memoryExtractionMinConfidence" forId={settingControlId('memoryExtractionMinConfidence')} class={labelClass} />
-        <input id={settingControlId('memoryExtractionMinConfidence')} type="number" min="0" max="1" step="0.05" bind:value={memoryExtractionMinConfidence} class={inputClass} />
+        <FractionInput id={settingControlId('memoryExtractionMinConfidence')} bind:value={memoryExtractionMinConfidence} class={inputClass} />
         <p class="text-sm text-shadow-500 mt-1">Minimum confidence score to write a memory (0-1)</p>
       </div>
       <div>
         <SettingFieldLabel label="Min Novelty" keys="memoryExtractionMinNovelty" forId={settingControlId('memoryExtractionMinNovelty')} class={labelClass} />
-        <input id={settingControlId('memoryExtractionMinNovelty')} type="number" min="0" max="1" step="0.05" bind:value={memoryExtractionMinNovelty} class={inputClass} />
+        <FractionInput id={settingControlId('memoryExtractionMinNovelty')} bind:value={memoryExtractionMinNovelty} class={inputClass} />
         <p class="text-sm text-shadow-500 mt-1">Minimum novelty score to write a memory (0-1)</p>
       </div>
       <div>
@@ -317,13 +319,13 @@
         </label>
       </div>
       <div>
-        <SettingFieldLabel label="Refresh Interval (ms)" keys="profileSynthesisRefreshIntervalMs" forId={settingControlId('profileSynthesisRefreshIntervalMs')} class={labelClass} />
-        <input id={settingControlId('profileSynthesisRefreshIntervalMs')} type="number" min="60000" step="60000" bind:value={profileSynthesisRefreshIntervalMs} class={inputClass} />
+        <SettingFieldLabel label="Refresh Interval" keys="profileSynthesisRefreshIntervalMs" forId={settingControlId('profileSynthesisRefreshIntervalMs')} class={labelClass} />
+        <DurationInput id={settingControlId('profileSynthesisRefreshIntervalMs')} min={60000} bind:value={profileSynthesisRefreshIntervalMs} class={inputClass} />
         <p class="text-sm text-shadow-500 mt-1">How often to refresh profiles ({fmtMs(profileSynthesisRefreshIntervalMs)})</p>
       </div>
       <div>
-        <SettingFieldLabel label="Cooldown (ms)" keys="profileSynthesisCooldownMs" forId={settingControlId('profileSynthesisCooldownMs')} class={labelClass} />
-        <input id={settingControlId('profileSynthesisCooldownMs')} type="number" min="10000" step="10000" bind:value={profileSynthesisCooldownMs} class={inputClass} />
+        <SettingFieldLabel label="Cooldown" keys="profileSynthesisCooldownMs" forId={settingControlId('profileSynthesisCooldownMs')} class={labelClass} />
+        <DurationInput id={settingControlId('profileSynthesisCooldownMs')} min={10000} bind:value={profileSynthesisCooldownMs} class={inputClass} />
         <p class="text-sm text-shadow-500 mt-1">Minimum wait between profile updates ({fmtMs(profileSynthesisCooldownMs)})</p>
       </div>
       <div>
@@ -333,17 +335,17 @@
       </div>
       <div>
         <SettingFieldLabel label="Min Importance" keys="profileSynthesisMinImportance" forId={settingControlId('profileSynthesisMinImportance')} class={labelClass} />
-        <input id={settingControlId('profileSynthesisMinImportance')} type="number" min="0" max="1" step="0.05" bind:value={profileSynthesisMinImportance} class={inputClass} />
+        <FractionInput id={settingControlId('profileSynthesisMinImportance')} bind:value={profileSynthesisMinImportance} class={inputClass} />
         <p class="text-sm text-shadow-500 mt-1">Minimum importance for source memories (0-1)</p>
       </div>
       <div>
         <SettingFieldLabel label="Min Confidence" keys="profileSynthesisMinConfidence" forId={settingControlId('profileSynthesisMinConfidence')} class={labelClass} />
-        <input id={settingControlId('profileSynthesisMinConfidence')} type="number" min="0" max="1" step="0.05" bind:value={profileSynthesisMinConfidence} class={inputClass} />
+        <FractionInput id={settingControlId('profileSynthesisMinConfidence')} bind:value={profileSynthesisMinConfidence} class={inputClass} />
         <p class="text-sm text-shadow-500 mt-1">Minimum confidence for source memories (0-1)</p>
       </div>
       <div>
         <SettingFieldLabel label="Min Novelty" keys="profileSynthesisMinNovelty" forId={settingControlId('profileSynthesisMinNovelty')} class={labelClass} />
-        <input id={settingControlId('profileSynthesisMinNovelty')} type="number" min="0" max="1" step="0.05" bind:value={profileSynthesisMinNovelty} class={inputClass} />
+        <FractionInput id={settingControlId('profileSynthesisMinNovelty')} bind:value={profileSynthesisMinNovelty} class={inputClass} />
         <p class="text-sm text-shadow-500 mt-1">Minimum novelty for source memories (0-1)</p>
       </div>
       <div>
@@ -379,8 +381,8 @@
         <p class="text-sm text-shadow-500 mt-1">Max tokens for RLM sandbox (1K-1M)</p>
       </div>
       <div>
-        <SettingFieldLabel label="Max Wall Time (ms)" keys="analysisWorkbenchMaxWallTimeMs" forId={settingControlId('analysisWorkbenchMaxWallTimeMs')} class={labelClass} />
-        <input id={settingControlId('analysisWorkbenchMaxWallTimeMs')} type="number" min="5000" max="600000" step="1000" bind:value={analysisWorkbenchMaxWallTimeMs} class={inputClass} />
+        <SettingFieldLabel label="Max Wall Time" keys="analysisWorkbenchMaxWallTimeMs" forId={settingControlId('analysisWorkbenchMaxWallTimeMs')} class={labelClass} />
+        <DurationInput id={settingControlId('analysisWorkbenchMaxWallTimeMs')} min={5000} max={600000} bind:value={analysisWorkbenchMaxWallTimeMs} class={inputClass} />
         <p class="text-sm text-shadow-500 mt-1">Max wall-clock time ({fmtMs(analysisWorkbenchMaxWallTimeMs)})</p>
       </div>
       <div>

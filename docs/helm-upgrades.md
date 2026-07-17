@@ -94,7 +94,7 @@ ownerMigration:
     - companionId: <release-companion-id>
       claimName: <existing-companion-data-claim>
       mountPath: /runtime/companions/<release-companion-id>
-      expectedIdentity: <expected-character-identity>
+      expectedIdentitySha256: <sha256-of-exact-companion.json-bytes>
   verification:
     enabled: true
 ```

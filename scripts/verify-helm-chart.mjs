@@ -172,13 +172,13 @@ function ownerMigrationRenderArgs(companions = [
     companionId: 'one',
     claimName: 'owner-one',
     mountPath: '/runtime/companions/one',
-    expectedIdentity: 'companion-1',
+    expectedIdentitySha256: '1'.repeat(64),
   },
   {
     companionId: 'two',
     claimName: 'owner-two',
     mountPath: '/runtime/companions/two',
-    expectedIdentity: 'companion-2',
+    expectedIdentitySha256: '2'.repeat(64),
   },
 ], multiCompanion = true, approvals = {
   'charge-policy.json': 'a'.repeat(64),
@@ -321,7 +321,7 @@ const singleOwnerUpgradeRendered = render(ownerMigrationRenderArgs([
     companionId: 'companion',
     claimName: 'owner-one',
     mountPath: '/runtime/companions/companion',
-    expectedIdentity: 'companion-1',
+    expectedIdentitySha256: '1'.repeat(64),
   },
 ], false));
 const singleOwnerUpgradeJob = parseAllDocuments(singleOwnerUpgradeRendered)
@@ -404,13 +404,13 @@ assertRenderFails(
       companionId: 'one',
       claimName: 'owner-shared',
       mountPath: '/runtime/companions/one',
-      expectedIdentity: 'companion-1',
+      expectedIdentitySha256: '1'.repeat(64),
     },
     {
       companionId: 'two',
       claimName: 'owner-shared',
       mountPath: '/runtime/companions/two',
-      expectedIdentity: 'companion-2',
+      expectedIdentitySha256: '2'.repeat(64),
     },
   ]),
   'ownerMigration companion claimName is duplicated: owner-shared',

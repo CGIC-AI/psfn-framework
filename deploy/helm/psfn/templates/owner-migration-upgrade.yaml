@@ -119,8 +119,8 @@ spec:
             - {{ $root.Values.ownerMigration.verification.initialChargeQuota | quote }}
             - --expected-initial-skills
             - {{ $root.Values.ownerMigration.verification.initialMaxLoadedSkills | quote }}
-            - --expected-identity
-            - {{ $companion.expectedIdentity | quote }}
+            - --expected-identity-sha256
+            - {{ $companion.expectedIdentitySha256 | quote }}
             - --barrier-dir
             - /barrier
             - --timeout-seconds

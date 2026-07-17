@@ -8,6 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { basename, join } from 'node:path';
 import {
@@ -103,8 +104,8 @@ function seedLegacy(options: CliOptions): void {
       join(configDir, 'capability-tier.seed.json'),
       join(companionDataDir, 'capability-tier.json'),
     );
-    const identityPath = join(companionDataDir, 'identity.txt');
-    const identity = `companion-${index + 1}\n`;
+    const identityPath = join(companionDataDir, 'companion.json');
+    const identity = `${JSON.stringify({ fixtureIdentity: `companion-${index + 1}` })}\n`;
     if (existsSync(identityPath) && readFileSync(identityPath, 'utf8') !== identity) {
       throw new Error(`Refusing to overwrite existing companion identity: ${identityPath}`);
     }
@@ -166,13 +167,18 @@ async function companionProbe(options: CliOptions): Promise<void> {
   }
   const initialCharge = integer(options, '--expected-initial-charge');
   const initialSkills = integer(options, '--expected-initial-skills');
-  const expectedIdentity = one(options, '--expected-identity');
+  const expectedIdentitySha256 = one(options, '--expected-identity-sha256');
+  if (!/^[a-f0-9]{64}$/u.test(expectedIdentitySha256)) {
+    throw new Error('--expected-identity-sha256 must be an exact lowercase SHA-256');
+  }
   const barrierDir = one(options, '--barrier-dir');
   const timeoutMs = integer(options, '--timeout-seconds') * 1_000;
   assertOwnerValues(companionDataDir, initialCharge, initialSkills);
-  const observedIdentity = readFileSync(join(companionDataDir, 'identity.txt'), 'utf8').trim();
-  if (observedIdentity !== expectedIdentity) {
-    throw new Error(`Companion root identity mismatch for ${companionId}: ${observedIdentity}`);
+  const observedIdentitySha256 = createHash('sha256')
+    .update(readFileSync(join(companionDataDir, 'companion.json')))
+    .digest('hex');
+  if (observedIdentitySha256 !== expectedIdentitySha256) {
+    throw new Error(`Companion root identity digest mismatch for ${companionId}`);
   }
   const ownerIdentity = (ownerFile: string) => {
     const path = join(companionDataDir, ownerFile);
@@ -190,7 +196,7 @@ async function companionProbe(options: CliOptions): Promise<void> {
   const observation = {
     companionId,
     companionDataDir,
-    expectedIdentity,
+    expectedIdentitySha256,
     charge: ownerIdentity('charge-policy.json'),
     skills: ownerIdentity('skills.json'),
   };
@@ -212,7 +218,7 @@ async function companionProbe(options: CliOptions): Promise<void> {
     join(barrierDir, `${basename(participant)}.ready`),
     'utf8',
   )) as typeof observation);
-  for (const field of ['companionDataDir', 'expectedIdentity'] as const) {
+  for (const field of ['companionDataDir', 'expectedIdentitySha256'] as const) {
     if (new Set(observations.map(value => value[field])).size !== observations.length) {
       throw new Error(`Companion probes observed a shared ${field}`);
     }
@@ -229,7 +235,7 @@ async function companionProbe(options: CliOptions): Promise<void> {
     status: 'companion-ready',
     companionId,
     companionDataDir,
-    expectedIdentity,
+    expectedIdentitySha256,
   }));
 }
 

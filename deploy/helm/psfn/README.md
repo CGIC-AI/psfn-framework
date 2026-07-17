@@ -215,7 +215,8 @@ does not admit the new revision until the hook succeeds.
 render failure; missing claims, a wrong mount path, or an unavailable immutable
 image fails the old revision closed in place.
 
-Every companion needs an `expectedIdentity`, and disabling
+Every companion needs an exact `expectedIdentitySha256` for the current
+`companion.json` bytes, and disabling
 `ownerMigration.verification.enabled` fails rendering. `snapshotOutputDir` must
 be beneath `backupsDir`. When the backup claim uses a subdirectory, set the safe
 relative `backupsSubPath`; the chart mounts that PVC subdirectory exactly at

@@ -245,6 +245,7 @@ function finalValues(image, overrides = {}) {
     ownerMigration: {
       required: overrides.required ?? true,
       enabled: overrides.enabled ?? true,
+      multiCompanion: true,
       runtimeRoot: '/runtime',
       systemDataDir: '/runtime/system-data',
       systemDataClaim: claims.liveSystem,
@@ -261,13 +262,17 @@ function finalValues(image, overrides = {}) {
           companionId: 'one',
           claimName: claims.liveOne,
           mountPath: '/runtime/companions/one',
-          expectedIdentity: 'companion-1',
+          expectedIdentitySha256: sha256(Buffer.from(
+            `${JSON.stringify({ fixtureIdentity: 'companion-1' })}\n`,
+          )),
         },
         {
           companionId: 'two',
           claimName: secondClaim,
           mountPath: secondMount,
-          expectedIdentity: 'companion-2',
+          expectedIdentitySha256: sha256(Buffer.from(
+            `${JSON.stringify({ fixtureIdentity: 'companion-2' })}\n`,
+          )),
         },
       ],
       verification: {
@@ -524,7 +529,7 @@ function verifyLiveRootsUnchanged(hookImage) {
             const charge = JSON.parse(fs.readFileSync(path.join(root, 'charge-policy.json')));
             const loadedSkills = JSON.parse(fs.readFileSync(path.join(root, 'skills.json')));
             if (charge.runChargeQuotaByLane.interactive !== 27 || loadedSkills.maxLoadedSkills !== 36
-                || fs.readFileSync(path.join(root, 'identity.txt'), 'utf8').trim() !== identity) {
+                || JSON.parse(fs.readFileSync(path.join(root, 'companion.json'), 'utf8')).fixtureIdentity !== identity) {
               throw new Error('Live root was overwritten during rollback: ' + root);
             }
           }

@@ -23,6 +23,7 @@
   import SettingsIntegrationsPanels from './SettingsIntegrationsPanels.svelte';
   import SettingsMemoryPanels from './SettingsMemoryPanels.svelte';
   import SettingsPageChrome from '$lib/components/settings/SettingsPageChrome.svelte';
+  import SettingsSearch from '$lib/components/settings/SettingsSearch.svelte';
   import SettingsRuntimePanels from './SettingsRuntimePanels.svelte';
   import SettingsTrustBackupPanels from './SettingsTrustBackupPanels.svelte';
   import {
@@ -30,6 +31,7 @@
     settingsSimpleSectionAnchorId,
     type SettingsSimpleSectionId,
   } from '$lib/components/settings/navigation';
+  import { SETTINGS_SECTION_COLLAPSE_KEY } from '$lib/components/settings/settings-search';
   import {
     CURATED_SETTINGS_TAB_IDS,
     MODEL_OWNED_FIELDS,
@@ -443,6 +445,28 @@
     document
       .getElementById(settingsSimpleSectionAnchorId(sectionId))
       ?.scrollIntoView({ behavior, block: 'start' });
+  }
+
+  // Search result selection: expand the target section's collapsible (when it
+  // has one) before jumping, so the setting is visible after the scroll lands.
+  // For fields routed to the "All Fields (Advanced)" editor, also expand the
+  // owning Garden section group (its collapse key is the Garden section id) so
+  // the field is not hidden behind a collapsed advanced group.
+  function handleSearchJump(
+    sectionId: SettingsSimpleSectionId,
+    advancedGroupId?: string,
+  ): void {
+    const keysToOpen: string[] = [];
+    const collapseKey = SETTINGS_SECTION_COLLAPSE_KEY[sectionId];
+    if (collapseKey) keysToOpen.push(collapseKey);
+    if (advancedGroupId) keysToOpen.push(advancedGroupId);
+    const pending = keysToOpen.filter((key) => !openSections.has(key));
+    if (pending.length > 0) {
+      const next = new Set(openSections);
+      for (const key of pending) next.add(key);
+      openSections = next;
+    }
+    void jumpToSection(sectionId);
   }
 
   function applyLocationHash(behavior: ScrollBehavior = 'auto'): void {
@@ -1198,6 +1222,8 @@
 
   {:else}
     <div class="space-y-5">
+      <SettingsSearch onJump={handleSearchJump} />
+
       <GardenTabBar
         tabs={settingsTabs}
         activeId={activeTabId}

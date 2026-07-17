@@ -124,8 +124,19 @@ async function executeMarkerSql(
     ], { env: createSanitizedPostgresChildEnv(password) });
     return stdout.trim();
   } catch (error) {
-    const rawMessage = error instanceof Error ? error.message : String(error);
-    const message = redactPostgresCredential(rawMessage, password);
+    const details: string[] = [];
+    const baseMessage = error instanceof Error ? error.message : String(error);
+    details.push(baseMessage);
+    if (error && typeof error === 'object') {
+      const failure = error as { code?: unknown; signal?: unknown; stderr?: unknown; stdout?: unknown };
+      if (failure.code !== undefined && failure.code !== null) details.push(`exit code: ${String(failure.code)}`);
+      if (failure.signal) details.push(`signal: ${String(failure.signal)}`);
+      const stderr = typeof failure.stderr === 'string' ? failure.stderr.trim() : '';
+      if (stderr) details.push(`stderr: ${stderr}`);
+      const stdout = typeof failure.stdout === 'string' ? failure.stdout.trim() : '';
+      if (stdout) details.push(`stdout: ${stdout}`);
+    }
+    const message = redactPostgresCredential(details.join('\n'), password);
     throw new Error(`Fleet restore database marker operation failed: ${message}`);
   }
 }

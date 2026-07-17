@@ -119,6 +119,63 @@ describe('hub stream reducer', () => {
     expect(entry).not.toHaveProperty('futureField');
   });
 
+  it('does not resurrect a terminal approval when its request frame is replayed', () => {
+    let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:01.000Z',
+      event: {
+        message: {
+          type: 'approval.requested',
+          data: {
+            id: 'ap-replay',
+            title: 'Original request',
+            requestedAt: '2026-06-17T00:00:01.000Z',
+            redactedContext: 'Original context',
+            status: 'pending',
+          },
+        },
+      },
+    });
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:02.000Z',
+      event: {
+        message: {
+          type: 'approval.resolved',
+          data: {
+            id: 'ap-replay',
+            status: 'approved',
+            resolvedAt: '2026-06-17T00:00:02.000Z',
+          },
+        },
+      },
+    });
+    state = reduceHubStreamState(state, {
+      type: 'hub.inbound',
+      at: '2026-06-17T00:00:03.000Z',
+      event: {
+        message: {
+          type: 'approval.requested',
+          data: {
+            id: 'ap-replay',
+            title: 'Replayed request',
+            requestedAt: '2026-06-17T00:00:01.000Z',
+            redactedContext: 'Replayed context',
+            status: 'pending',
+          },
+        },
+      },
+    });
+
+    expect(state.approvals).toEqual([expect.objectContaining({
+      id: 'ap-replay',
+      title: 'Original request',
+      status: 'approved',
+      resolvedAt: '2026-06-17T00:00:02.000Z',
+    })]);
+  });
+
   it('accumulates assistant live deltas and clears them on final text', () => {
     let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
     state = {

@@ -1,7 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
-import { routeFleetApprovalDecision } from './fleet-approval-routing.js';
+import {
+  hasPendingApprovalExpiry,
+  mergeFleetApprovals,
+  routeFleetApprovalDecision,
+} from './fleet-approval-routing.js';
 import type { FleetApprovalEntry } from './fleet-roster.js';
-import { createInitialHubStreamState, type HubStreamState } from './stream/hub-stream.js';
+import {
+  createInitialHubStreamState,
+  reduceHubStreamState,
+  type HubStreamState,
+} from './stream/hub-stream.js';
 
 const APPROVAL: FleetApprovalEntry = {
   companionId: '22222222-2222-4222-8222-222222222222',
@@ -70,5 +78,75 @@ describe('routeFleetApprovalDecision', () => {
     })).resolves.toBe(true);
 
     expect(submitApprovalDecision).toHaveBeenCalledWith(APPROVAL.id, 'deny');
+  });
+});
+
+describe('mergeFleetApprovals', () => {
+  it('keeps fleet approvals hidden until approvals.v2 is acknowledged', () => {
+    const panel = mergeFleetApprovals(
+      createInitialHubStreamState('2026-07-17T00:00:00.000Z'),
+      [APPROVAL],
+      Date.parse('2026-07-17T00:00:01.000Z'),
+    );
+
+    expect(panel.capability).toBe('unsupported');
+    expect(panel.requests).toEqual([]);
+  });
+
+  it('carries the complete fleet approval envelope into the card view', () => {
+    const panel = mergeFleetApprovals(
+      readyState(),
+      [APPROVAL],
+      Date.parse('2026-07-17T00:00:01.000Z'),
+    );
+
+    expect(panel.requests).toEqual([expect.objectContaining({
+      id: APPROVAL.id,
+      title: APPROVAL.title,
+      sourceSystem: APPROVAL.sourceSystem,
+      attribution: APPROVAL.attribution,
+      action: APPROVAL.action,
+      scope: APPROVAL.scope,
+      reason: APPROVAL.reason,
+      grantMode: APPROVAL.grantMode,
+    })]);
+  });
+
+  it('applies a correlated server resolution to a fleet-only approval card', () => {
+    const state = reduceHubStreamState(readyState(), {
+      type: 'hub.inbound',
+      at: '2026-07-17T00:00:02.000Z',
+      event: {
+        message: {
+          type: 'approval.resolved',
+          data: {
+            id: APPROVAL.id,
+            status: 'approved',
+            resolvedAt: '2026-07-17T00:00:02.000Z',
+          },
+        },
+      },
+    });
+
+    const panel = mergeFleetApprovals(
+      state,
+      [APPROVAL],
+      Date.parse('2026-07-17T00:00:03.000Z'),
+    );
+
+    expect(panel.requests[0]).toMatchObject({
+      id: APPROVAL.id,
+      status: 'approved',
+      resolvedAt: '2026-07-17T00:00:02.000Z',
+    });
+  });
+});
+
+describe('hasPendingApprovalExpiry', () => {
+  it('starts the expiry clock for a fleet-only pending approval', () => {
+    expect(hasPendingApprovalExpiry(
+      readyState(),
+      [{ ...APPROVAL, expiresAt: '2026-07-17T00:05:00.000Z' }],
+    )).toBe(true);
   });
 });

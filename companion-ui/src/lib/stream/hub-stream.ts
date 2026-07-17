@@ -75,6 +75,12 @@ export interface ApprovalStreamEntry {
   grantMode?: ApprovalGrantMode;
 }
 
+/** Terminal approval outcome retained even when its request arrived via a fleet snapshot. */
+export interface ApprovalStreamResolution {
+  status: ApprovalResolvedStatus;
+  resolvedAt: string;
+}
+
 /** Raw accumulated artifact-shelf item from `artifact.created`. */
 export interface ArtifactStreamItem {
   id: string;
@@ -118,6 +124,7 @@ export interface HubStreamState {
   events: HubStreamEventLogEntry[];
   failure: HubStreamFailure | null;
   approvals: ApprovalStreamEntry[];
+  approvalResolutions: Record<string, ApprovalStreamResolution>;
   artifacts: ArtifactStreamItem[];
   artifactPreviews: Record<string, ArtifactPreviewStreamState>;
   toolActivity: ToolActivityStreamEntry[];
@@ -169,6 +176,7 @@ export function createInitialHubStreamState(at = new Date().toISOString()): HubS
     events: [],
     failure: null,
     approvals: [],
+    approvalResolutions: {},
     artifacts: [],
     artifactPreviews: {},
     toolActivity: [],
@@ -291,6 +299,12 @@ export class HubStreamStore {
         ...(entry.attribution ? { attribution: { ...entry.attribution } } : {}),
         ...(entry.grantMode ? { grantMode: { ...entry.grantMode } } : {}),
       })),
+      approvalResolutions: Object.fromEntries(
+        Object.entries(this.state.approvalResolutions).map(([id, resolution]) => [
+          id,
+          { ...resolution },
+        ]),
+      ),
       artifacts: this.state.artifacts.map((item) => ({ ...item })),
       artifactPreviews: cloneArtifactPreviews(this.state.artifactPreviews),
       toolActivity: this.state.toolActivity.map((entry) => ({ ...entry })),
@@ -485,6 +499,10 @@ function applyInboundMessage(
       // Lift only the known fields into app state — unknown future keys the
       // framing parser tolerated are dropped here (never enter store state).
       const { data } = message;
+      const existing = base.approvals.find(entry => entry.id === data.id);
+      if (base.approvalResolutions[data.id] || (existing && existing.status !== 'pending')) {
+        return base;
+      }
       const entry: ApprovalStreamEntry = {
         id: data.id,
         title: data.title,
@@ -502,12 +520,23 @@ function applyInboundMessage(
       return { ...base, approvals: upsertById(base.approvals, entry) };
     }
     case 'approval.resolved': {
+      const resolution: ApprovalStreamResolution = {
+        status: message.data.status,
+        resolvedAt: message.data.resolvedAt,
+      };
       const approvals = base.approvals.map((entry) =>
         entry.id === message.data.id
-          ? { ...entry, status: message.data.status, resolvedAt: message.data.resolvedAt }
+          ? { ...entry, ...resolution }
           : entry,
       );
-      return { ...base, approvals };
+      return {
+        ...base,
+        approvals,
+        approvalResolutions: {
+          ...base.approvalResolutions,
+          [message.data.id]: resolution,
+        },
+      };
     }
     case 'artifact.created': {
       const item: ArtifactStreamItem = {

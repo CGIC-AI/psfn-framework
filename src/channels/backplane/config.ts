@@ -127,7 +127,6 @@ export interface PsfnAmicaChannelConfig {
  */
 export interface CompanionUiChannelConfig {
   channelPrivacy: ChannelPrivacy;
-  canonicalContactId?: string;
 }
 
 /**
@@ -188,7 +187,7 @@ const DEFAULT_COMPANION_UI_CHANNEL_CONFIG: CompanionUiChannelConfig = {
   channelPrivacy: 'private',
 };
 
-const COMPANION_UI_ALLOWED_KEYS = ['channelPrivacy', 'canonicalContactId'] as const;
+const COMPANION_UI_ALLOWED_KEYS = ['channelPrivacy'] as const;
 
 /**
  * Fail-closed parser for the channels.json `companionUi` section (bead 8ora).
@@ -216,14 +215,8 @@ export function parseCompanionUiSection(
       'channels.json.companionUi.channelPrivacy must be one of: private, invite_only, public',
     );
   }
-  const canonicalContactId = parseConfiguredString(
-    section.canonicalContactId,
-    'channels.json.companionUi.canonicalContactId',
-  );
-
   return {
     channelPrivacy: channelPrivacy ?? DEFAULT_COMPANION_UI_CHANNEL_CONFIG.channelPrivacy,
-    ...(canonicalContactId ? { canonicalContactId } : {}),
   };
 }
 
@@ -880,7 +873,7 @@ export function buildExternalChannelProfiles(
   config: RuntimeChannelsConfig,
 ): Partial<Record<ChannelType, ExternalChannelProfileConfig>> {
   // The companion-ui profile is ALWAYS present so the runtime can source a
-  // non-null channelPrivacy (and optional canonical-contact fallback) for
+  // non-null channelPrivacy for
   // server-authored companion-ui turns. It is intentionally NOT header-claimable
   // (companion-ui is absent from EXTERNAL_API_CHANNEL_TYPE_ALLOWLIST), so this
   // profile is only consumed by the hub-device stamp path, never by a client
@@ -891,9 +884,6 @@ export function buildExternalChannelProfiles(
       : {}),
     'companion-ui': {
       channelPrivacy: config.companionUi.channelPrivacy,
-      ...(config.companionUi.canonicalContactId
-        ? { canonicalContactId: config.companionUi.canonicalContactId }
-        : {}),
     },
   };
 }

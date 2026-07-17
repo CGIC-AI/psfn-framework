@@ -526,6 +526,7 @@ export async function startOptionalGatewayApiServer(
     && options.fleetAuthRequestCapabilities
     && hubDeviceIngress
     && options.satelliteRegistry
+    && options.companionRelay
     ? new CompanionUiWebSocketAdapter({
         canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
         satelliteApiKeys,
@@ -533,6 +534,7 @@ export async function startOptionalGatewayApiServer(
         guestMode: fleetSsoCompanionUi?.guestMode ?? 'disabled',
         ...(trustedProxyClientCertToken ? { trustedProxyClientCertToken } : {}),
         hubDeviceIngress,
+        eventRelay: options.companionRelay.relay,
         actionBroker: new GatewayCompanionUiActionBroker({
           resolveAuthorizationContext: input => options.fleetAuthBroker!.resolveAuthorizationContext(input),
           signer: options.fleetAuthRequestCapabilities,

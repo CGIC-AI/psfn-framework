@@ -545,7 +545,6 @@ describe('loadRuntimeChannelsConfig', () => {
       writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
         companionUi: {
           channelPrivacy: 'invite_only',
-          canonicalContactId: 'contact-fleet-human',
         },
       }));
 
@@ -553,14 +552,27 @@ describe('loadRuntimeChannelsConfig', () => {
 
       expect(config.companionUi).toEqual({
         channelPrivacy: 'invite_only',
-        canonicalContactId: 'contact-fleet-human',
       });
       expect(buildExternalChannelProfiles(config)).toEqual({
         'companion-ui': {
           channelPrivacy: 'invite_only',
-          canonicalContactId: 'contact-fleet-human',
         },
       });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects inert companionUi canonicalContactId config (8ora)', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        companionUi: { channelPrivacy: 'private', canonicalContactId: 'contact-fleet-human' },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.companionUi has unsupported keys: canonicalContactId',
+      );
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

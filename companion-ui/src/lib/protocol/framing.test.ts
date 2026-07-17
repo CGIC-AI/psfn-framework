@@ -143,6 +143,7 @@ describe('hub websocket framing', () => {
         control: ['interrupt', 'presence', 'session_attach'],
         safety: ['confirmation_required'],
       },
+      eventCapabilities: ['approvals.v2'],
     },
     { type: 'audio', audio: 'YWJj' },
     { type: 'user.text', text: 'hello', interrupt: true },

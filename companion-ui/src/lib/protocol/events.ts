@@ -1,8 +1,7 @@
 /**
- * Legacy direct-Hub event protocol retained for the view-store adapter and
- * exact framing regressions. The shared-display runtime uses the gateway-owned
- * action protocol in api/gateway-protocol.ts and does not emit these client
- * frames.
+ * Canonical Companion UI event messages shared by the Hub and gateway-owned
+ * transports. Action submission uses the gateway protocol; both transports
+ * project inbound events into this one view-store contract.
  *
  * PROVENANCE: This file is a faithful client-side mirror of the hub's
  * authoritative wire types at:
@@ -23,6 +22,18 @@
  *
  * If this file and the hub's protocol.ts drift, the HUB WINS. Re-mirror.
  */
+import type {
+  ApprovalAttribution,
+  ApprovalGrantMode,
+  ApprovalSourceSystem,
+} from '../../../../src/shared/contracts/approval-envelope.js';
+import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../../../src/shared/contracts/companion-relay.js';
+
+export type {
+  ApprovalAttribution,
+  ApprovalGrantMode,
+  ApprovalSourceSystem,
+} from '../../../../src/shared/contracts/approval-envelope.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Client -> Hub
@@ -46,7 +57,10 @@ export type ClientToHubMessage =
 export interface HelloMessage {
   type: 'hello';
   capabilities: SatelliteCapabilities;
+  eventCapabilities: CompanionEventCapability[];
 }
+
+export type CompanionEventCapability = typeof COMPANION_APPROVALS_V2_CAPABILITY;
 
 export interface AudioMessage {
   type: 'audio';
@@ -176,6 +190,7 @@ export interface HelloAckMessage {
   satelliteId: string;
   satelliteName: string;
   capabilities: SatelliteCapabilities;
+  eventCapabilities?: CompanionEventCapability[];
   place?: RuntimePlaceIdentity;
   identity?: RuntimeIdentity;
 }
@@ -260,35 +275,6 @@ export interface PongMessage {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type ApprovalResolvedStatus = 'approved' | 'denied' | 'expired' | 'blocked';
-
-/**
- * Which subsystem raised the request (tag only, never authority). Open-ended so
- * a new server-side projector does not break the client mirror.
- */
-export type ApprovalSourceSystem =
-  | 'tool-access'
-  | 'expensive-usage'
-  | 'shard'
-  | 'cogsec'
-  // keep known-member autocomplete while leaving the union open
-  | (string & {});
-
-/** Server-resolved lineage. Ids opaque; labels presentation only. */
-export interface ApprovalAttribution {
-  parentLabel: string;
-  parentId: string;
-  shardLabel?: string;
-  shardId?: string;
-}
-
-/**
- * Offered grant mode. The server emits `{ kind: 'once' }` today; the `ttl`
- * variant is contract-only until the JSON-owned TTL policy ships and MUST NOT
- * be emitted by the server yet.
- */
-export type ApprovalGrantMode =
-  | { kind: 'once' }
-  | { kind: 'ttl'; ttlSeconds: number };
 
 /**
  * v1 fields are the original contract. The v2 fields (approvals.v2, server bead

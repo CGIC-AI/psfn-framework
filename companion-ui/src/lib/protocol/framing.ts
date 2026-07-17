@@ -1,4 +1,8 @@
-import { isObjectRecord as isRecord } from '../utils/types.js';
+import {
+  hasExactKeys,
+  isBoundedString as boundedString,
+  isObjectRecord as isRecord,
+} from '../../../../src/shared/utils/types.js';
 /**
  * Wire framing for the Companion Cockpit <-> PSFN-Satellite-Hub transport.
  *
@@ -87,13 +91,7 @@ function exactRecord(
   required: readonly string[],
   optional: readonly string[] = [],
 ): Record<string, unknown> | null {
-  if (!isRecord(value) || required.some(key => !Object.hasOwn(value, key))) return null;
-  const allowed = new Set([...required, ...optional]);
-  return Object.keys(value).every(key => allowed.has(key)) ? value : null;
-}
-
-function boundedString(value: unknown, maximum = 65_536): value is string {
-  return typeof value === 'string' && value.length >= 1 && value.length <= maximum;
+  return isRecord(value) && hasExactKeys(value, required, optional) ? value : null;
 }
 
 function optionalBoundedString(value: unknown, maximum = 65_536): boolean {
@@ -138,6 +136,13 @@ function capabilities(value: unknown): boolean {
       && new Set(entries).size === entries.length
       && entries.every(entry => oneOf(entry, CAPABILITIES[key])));
   });
+}
+
+function eventCapabilities(value: unknown): boolean {
+  return Array.isArray(value)
+    && value.length <= 1
+    && new Set(value).size === value.length
+    && value.every(entry => entry === 'approvals.v2');
 }
 
 function participant(value: unknown, user = false): boolean {
@@ -217,11 +222,13 @@ const STRICT_HUB_VALIDATORS: Record<HubToClientMessage['type'], (payload: unknow
     const record = exactRecord(payload, [
       'type', 'sessionId', 'channelId', 'deviceId', 'deviceName', 'satelliteId',
       'satelliteName', 'capabilities',
-    ], ['identity', 'place']);
+    ], ['identity', 'place', 'eventCapabilities']);
     return record !== null
       && ['sessionId', 'channelId', 'deviceId', 'deviceName', 'satelliteId', 'satelliteName']
         .every(key => boundedString(record[key], 256))
-      && capabilities(record.capabilities) && identity(record.identity) && place(record.place);
+      && capabilities(record.capabilities)
+      && (record.eventCapabilities === undefined || eventCapabilities(record.eventCapabilities))
+      && identity(record.identity) && place(record.place);
   },
   status: payload => {
     const record = exactRecord(payload, ['type', 'data']);
@@ -330,8 +337,10 @@ const STRICT_HUB_VALIDATORS: Record<HubToClientMessage['type'], (payload: unknow
 
 const STRICT_CLIENT_VALIDATORS: Record<ClientToHubMessage['type'], (payload: unknown) => boolean> = {
   hello: payload => {
-    const record = exactRecord(payload, ['type', 'capabilities']);
-    return record !== null && capabilities(record.capabilities);
+    const record = exactRecord(payload, ['type', 'capabilities', 'eventCapabilities']);
+    return record !== null
+      && capabilities(record.capabilities)
+      && eventCapabilities(record.eventCapabilities);
   },
   audio: payload => {
     const record = exactRecord(payload, ['type', 'audio']);

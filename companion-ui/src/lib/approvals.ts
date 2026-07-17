@@ -1,4 +1,5 @@
 import type { ApprovalStreamEntry, HubStreamState } from './stream/hub-stream.js';
+import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../../src/shared/contracts/companion-relay.js';
 
 export type ApprovalCapabilityState = 'available' | 'unsupported';
 
@@ -37,7 +38,8 @@ export const APPROVALS_UNSUPPORTED_REASON =
  * surface stays fail-closed regardless of any events that may have arrived.
  */
 export function approvalsCapabilityAcked(stream: HubStreamState): boolean {
-  return stream.session?.capabilities?.control?.includes('approvals') ?? false;
+  return (stream.session?.capabilities?.control?.includes('approvals') ?? false)
+    && (stream.session?.eventCapabilities?.includes(COMPANION_APPROVALS_V2_CAPABILITY) ?? false);
 }
 
 export function deriveApprovalPanelState(

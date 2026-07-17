@@ -115,6 +115,12 @@
       "value": "16 * 1024"
     },
     {
+      "file": "src/boundary/fleet-auth/webauthn-uv.ts",
+      "name": "MAX_CREDENTIAL_FIELD_BYTES",
+      "value": "1_048_576",
+      "note": "Code-owned WebAuthn credential allocation ceiling at the untrusted authentication boundary."
+    },
+    {
       "file": "src/boundary/gateway/attachment-materialization.ts",
       "name": "MAX_GATEWAY_ATTACHMENT_BYTES",
       "value": "25 * 1024 * 1024"
@@ -169,6 +175,18 @@
       "name": "OAUTH_CODE_MAX_LENGTH",
       "value": "2048",
       "note": "Code-owned OAuth callback input bound paired with control-character rejection at the authentication trust boundary."
+    },
+    {
+      "file": "src/boundary/gateway/fleet-sso-router.ts",
+      "name": "MAX_CAPABILITY_HEADER_BYTES",
+      "value": "65_536",
+      "note": "Code-owned signed capability header ceiling that bounds proxy parsing and allocation."
+    },
+    {
+      "file": "src/boundary/gateway/fleet-sso-router.ts",
+      "name": "MAX_PROXY_BODY_BYTES",
+      "value": "1_048_576",
+      "note": "Code-owned fleet proxy request-body allocation ceiling at the browser trust boundary."
     },
     {
       "file": "src/boundary/gateway/inline-image-reference-hints.ts",
@@ -818,18 +836,6 @@
       "value": "8"
     },
     {
-      "file": "src/channels/api/server/fleet-auth-child-assertion-route.ts",
-      "name": "MAX_EXCHANGE_BODY_BYTES",
-      "value": "256 * 1024",
-      "note": "Protocol-owned denial-of-service ceiling for the authenticated internal exchange envelope, not a mutable product tuning setting."
-    },
-    {
-      "file": "src/channels/api/server/fleet-auth-child-assertion-route.ts",
-      "name": "MAX_TARGET_BODY_BYTES",
-      "value": "128 * 1024",
-      "note": "Protocol-owned denial-of-service ceiling below the exchange envelope cap, not a mutable product tuning setting."
-    },
-    {
       "file": "src/channels/api/server/companion-relay-routes.ts",
       "name": "APPROVAL_DECISION_MAX_BODY_BYTES",
       "value": "16 * 1024"
@@ -843,6 +849,18 @@
       "file": "src/channels/api/server/companion-touch-stimulus-route.ts",
       "name": "TOUCH_STIMULUS_MAX_BODY_BYTES",
       "value": "16 * 1024"
+    },
+    {
+      "file": "src/channels/api/server/fleet-auth-child-assertion-route.ts",
+      "name": "MAX_EXCHANGE_BODY_BYTES",
+      "value": "256 * 1024",
+      "note": "Protocol-owned denial-of-service ceiling for the authenticated internal exchange envelope, not a mutable product tuning setting."
+    },
+    {
+      "file": "src/channels/api/server/fleet-auth-child-assertion-route.ts",
+      "name": "MAX_TARGET_BODY_BYTES",
+      "value": "128 * 1024",
+      "note": "Protocol-owned denial-of-service ceiling below the exchange envelope cap, not a mutable product tuning setting."
     },
     {
       "file": "src/channels/api/server/fleet-auth-routes.ts",
@@ -887,6 +905,18 @@
     },
     {
       "file": "src/channels/backplane/companion-relay/redaction.ts",
+      "name": "MAX_ACTION_LENGTH",
+      "value": "120",
+      "note": "Code-owned approval wire field bound used to redact untrusted presentation text."
+    },
+    {
+      "file": "src/channels/backplane/companion-relay/redaction.ts",
+      "name": "MAX_ATTR_LABEL_LENGTH",
+      "value": "120",
+      "note": "Code-owned approval attribution label bound used to redact presentation metadata."
+    },
+    {
+      "file": "src/channels/backplane/companion-relay/redaction.ts",
       "name": "MAX_CONTEXT_LENGTH",
       "value": "280"
     },
@@ -909,6 +939,18 @@
       "file": "src/channels/backplane/companion-relay/redaction.ts",
       "name": "MAX_PROVENANCE_LENGTH",
       "value": "120"
+    },
+    {
+      "file": "src/channels/backplane/companion-relay/redaction.ts",
+      "name": "MAX_SCOPE_LENGTH",
+      "value": "200",
+      "note": "Code-owned approval scope wire bound used to redact untrusted presentation text."
+    },
+    {
+      "file": "src/channels/backplane/companion-relay/redaction.ts",
+      "name": "MAX_SOURCE_SYSTEM_LENGTH",
+      "value": "64",
+      "note": "Code-owned approval source tag wire bound for a non-authoritative display field."
     },
     {
       "file": "src/channels/backplane/companion-relay/redaction.ts",
@@ -4230,6 +4272,18 @@
       "file": "src/system/config/charge-policy-config.ts",
       "name": "MAX_FATIGUE_OVERCHARGE_RESERVE_RESPONSES",
       "value": "10"
+    },
+    {
+      "file": "src/system/config/companions-config.ts",
+      "name": "AVATAR_REF_MAX_LENGTH",
+      "value": "512",
+      "note": "Code-owned companions.json schema bound for opaque roster avatar references."
+    },
+    {
+      "file": "src/system/config/companions-config.ts",
+      "name": "DISPLAY_NAME_MAX_LENGTH",
+      "value": "120",
+      "note": "Code-owned companions.json schema bound for human-facing roster labels."
     },
     {
       "file": "src/system/config/companions-config.ts",

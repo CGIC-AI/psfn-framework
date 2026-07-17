@@ -14,7 +14,13 @@ import {
 } from 'react';
 import { PSFN_SATELLITE_MOBILE_CHAT_APP_NAME } from '../lib/api/auth.js';
 import { CompanionGatewayClient } from '../lib/api/gateway-client.js';
-import { deriveApprovalPanelState, submitApprovalDecision } from '../lib/approvals.js';
+import {
+  deriveApprovalPanelState,
+} from '../lib/approvals.js';
+import {
+  mergeFleetApprovals,
+  routeFleetApprovalDecision,
+} from '../lib/fleet-approval-routing.js';
 import { deriveArtifactShelfState, readArtifactPreview } from '../lib/artifacts.js';
 import {
   FleetSessionClient,
@@ -48,6 +54,7 @@ import {
 } from './settings-drawer.js';
 import { ThreadView } from './thread-view.js';
 import type { ActivityFilter, OverlayDrawer } from './types.js';
+import { useFleetRouting } from './use-fleet-routing.js';
 import { WishlistDrawer } from './wishlist-drawer.js';
 
 type AccessState = FleetSessionStatus
@@ -81,6 +88,11 @@ export function App() {
   const reconnectAttemptRef = useRef(0);
   const authorityEpochRef = useRef(0);
   const manualDisconnectRef = useRef(false);
+  const fleet = useFleetRouting({
+    accessState: access.state,
+    connect,
+    reportError: setConfigError,
+  });
 
   useEffect(() => {
     const coalescer = new HeadpatCoalescer({
@@ -176,7 +188,14 @@ export function App() {
     () => traces.filter(trace => traceMatchesFilter(trace, activityFilter)),
     [activityFilter, traces],
   );
-  const approvals = useMemo(() => deriveApprovalPanelState(streamState, now), [streamState, now]);
+  const approvals = useMemo(
+    () => mergeFleetApprovals(
+      deriveApprovalPanelState(streamState, now),
+      access.state === 'signed_in' ? fleet.approvals : [],
+      now,
+    ),
+    [access.state, fleet.approvals, now, streamState],
+  );
   const artifacts = useMemo(() => deriveArtifactShelfState(streamState), [streamState]);
   const canSend = (access.state === 'signed_in' || access.state === 'guest')
     && streamState.connection === 'ready';
@@ -204,8 +223,13 @@ export function App() {
       setConfigError(null);
       if (status.state === 'signed_out') {
         clearHumanScopedState();
-      } else if (connectWhenAllowed) {
-        await connect(status.websocketPath, authorityEpoch);
+      } else {
+        await fleet.load(
+          status,
+          authorityEpoch,
+          () => authorityEpoch === authorityEpochRef.current,
+          connectWhenAllowed,
+        );
       }
     } catch (error) {
       if (authorityEpoch !== authorityEpochRef.current) return;
@@ -218,11 +242,11 @@ export function App() {
   async function connect(
     path = websocketPath(access),
     expectedAuthorityEpoch?: number,
-  ) {
-    if (!path) return;
+  ): Promise<boolean> {
+    if (!path) return false;
     const authorityEpoch = expectedAuthorityEpoch ?? authorityEpochRef.current + 1;
     if (expectedAuthorityEpoch === undefined) authorityEpochRef.current = authorityEpoch;
-    if (authorityEpoch !== authorityEpochRef.current) return;
+    if (authorityEpoch !== authorityEpochRef.current) return false;
     manualDisconnectRef.current = false;
     setConnecting(true);
     const oldStore = storeRef.current;
@@ -242,15 +266,16 @@ export function App() {
       if (authorityEpoch !== authorityEpochRef.current) {
         store.destroy();
         store.disconnect();
-        return;
+        return false;
       }
       reconnectAttemptRef.current = 0;
       setConfigError(null);
+      return true;
     } catch (error) {
       if (authorityEpoch !== authorityEpochRef.current) {
         store.destroy();
         store.disconnect();
-        return;
+        return false;
       }
       setStreamState(current => ({
         ...current,
@@ -263,6 +288,7 @@ export function App() {
           cause: error,
         },
       }));
+      return false;
     } finally {
       if (authorityEpoch === authorityEpochRef.current) setConnecting(false);
     }
@@ -276,6 +302,7 @@ export function App() {
     store?.disconnect();
     setConnecting(false);
     setStreamState(createInitialHubStreamState());
+    fleet.clear();
     composer.clearHumanScopedState();
     setTouchError(null);
   }
@@ -342,11 +369,20 @@ export function App() {
     if (canSend) headpatCoalescerRef.current?.tap();
   }
 
-  function decideApproval(id: string, decision: 'approve' | 'deny') {
-    const store = storeRef.current;
-    if (!store || access.state !== 'signed_in') return;
+  async function decideApproval(id: string, decision: 'approve' | 'deny') {
+    if (access.state !== 'signed_in') return;
+    const fleetApproval = fleet.approvals.find(entry => entry.id === id);
     try {
-      submitApprovalDecision(store, streamState, id, decision);
+      if (await routeFleetApprovalDecision({
+        id,
+        decision,
+        ...(fleetApproval ? { fleetApproval } : {}),
+        activeCompanionId: fleet.activeCompanionIdRef.current,
+        switchCompanion: fleet.select,
+        currentStore: () => storeRef.current,
+      })) {
+        fleet.removeApproval(id);
+      }
     } catch {
       // The transport error event owns user-visible denial state.
     }
@@ -400,7 +436,7 @@ export function App() {
         approvals={approvals}
         artifacts={artifacts}
         error={streamState.failure?.message ?? touchError ?? configError}
-        onApprovalDecision={decideApproval}
+        onApprovalDecision={(id, decision) => { void decideApproval(id, decision); }}
         onArtifactPreview={previewArtifact}
         stacked={composer.pendingAttachments.length > 0}
         updateReady={updateReady}
@@ -422,6 +458,8 @@ export function App() {
           {overlay === 'settings' ? (
             <SettingsDrawer
               access={accessPresentation}
+              activeCompanionId={fleet.activeCompanionId}
+              companions={fleet.roster}
               connecting={connecting}
               micMode={composer.micMode}
               spriteAnimations={spriteAnimations}
@@ -440,6 +478,7 @@ export function App() {
                 void logout();
               }}
               onMicModeChange={composer.selectMicMode}
+              onCompanionChange={(companionId) => { void fleet.select(companionId); }}
               onSpriteAnimationsChange={setSpriteAnimations}
               onSpriteEnabledChange={setSpriteEnabled}
               onSwitchUser={() => {

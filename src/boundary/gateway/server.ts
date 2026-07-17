@@ -243,6 +243,8 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   // an52.3: keyed on the authenticated companion so a fleet resolves each
   // companion's own capability tier. Single-companion providers ignore the arg.
   capabilityTierProvider?: (companionId?: string) => CapabilityTier;
+  /** Canonical companion display label used in human-facing approval attribution. */
+  approvalParentLabelProvider?: (companionId: string) => string | undefined;
   wyomingShardRouting: WyomingShardRoutingConfig;
   companionId?: CompanionId;
   /**
@@ -423,6 +425,7 @@ export class GatewayServer {
       confirmation: options.confirmation,
       canaryEgressGuard: this.canaryEgressGuard,
       eventBus: options.eventBus,
+      parentLabelProvider: options.approvalParentLabelProvider,
       audit: this.audit.bind(this),
       auditComplete: this.auditComplete.bind(this),
       recordMethodSuccess: (method) => this.runtimeHealthTracker.recordMethodSuccess(method),

@@ -40,8 +40,8 @@ export interface FleetPortalProjection {
 
 /**
  * Roster entry for the Companion UI switcher (sprint-10 companion roster wire).
- * Display-only: `displayName` resolves to the manifest label or the companionId
- * fallback, `avatarRef` is an opaque display ref, and `websocketPath` is the one
+ * Display-only: `displayName` is the required manifest label, `avatarRef` is
+ * an opaque display ref, and `websocketPath` is the one
  * canonical stream URL a browser may open for this companion. Carries no
  * authority, topology, or availability posture.
  */
@@ -191,9 +191,12 @@ export class GatewayFleetPortalProjection {
       if (!manifest) {
         throw new Error('Fleet portal authorization returned an unknown manifest companion');
       }
+      if (!manifest.displayName?.trim()) {
+        throw new Error('Companion UI roster requires a canonical displayName for every authorized companion');
+      }
       companions.push(Object.freeze({
         companionId: manifest.companionId,
-        displayName: manifest.displayName ?? manifest.companionId,
+        displayName: manifest.displayName,
         websocketPath: compileCompanionUiWebSocketPath(manifest.companionId),
         ...(manifest.avatarRef !== undefined ? { avatarRef: manifest.avatarRef } : {}),
       }));

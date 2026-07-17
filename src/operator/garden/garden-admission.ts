@@ -24,7 +24,7 @@ import {
 } from '../../boundary/fleet-auth/request-capability-transport.js';
 import type { FleetAuthVerifierConfig } from '../../system/config/fleet-auth-config.js';
 import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
-import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
+import { hasExactKeys, isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import { sendText, type HttpLogger } from '../../channels/backplane/http/primitives.js';
 import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
 
@@ -100,13 +100,6 @@ export type FleetGardenAdmissionResult =
       readonly status: 400 | 401 | 403 | 404 | 409 | 503;
       readonly message: string;
     };
-
-function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length
-    && actual.every((key, index) => key === expected[index]);
-}
 
 function parseVersions(value: unknown): RequestCapabilityAuthorityVersions {
   const keys = [

@@ -12,7 +12,7 @@ import {
 } from './stream/hub-stream.js';
 
 function ackedState(at = '2026-06-17T00:00:00.000Z'): HubStreamState {
-  return reduceHubStreamState(createInitialHubStreamState(at), {
+  const state = reduceHubStreamState(createInitialHubStreamState(at), {
     type: 'hub.inbound',
     at,
     event: {
@@ -33,6 +33,12 @@ function ackedState(at = '2026-06-17T00:00:00.000Z'): HubStreamState {
       },
     },
   });
+  return {
+    ...state,
+    session: state.session
+      ? { ...state.session, eventCapabilities: ['approvals.v2'] }
+      : null,
+  };
 }
 
 function withApprovalRequested(

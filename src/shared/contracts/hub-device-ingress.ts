@@ -1,4 +1,4 @@
-import { isRecord, isRfc4122Uuid } from '../utils/types.js';
+import { hasExactKeys, isRecord, isRfc4122Uuid } from '../utils/types.js';
 
 export interface HubDeviceAssertionExpectedBinding {
   deviceId: string;
@@ -85,12 +85,6 @@ export function isHubDevicePrincipalSnapshot(value: unknown): value is HubDevice
     && Number.isFinite(Date.parse(value.expiresAt))
     && Date.parse(value.expiresAt) > Date.now()
     && typeof value.jti === 'string';
-}
-
-function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  return actual.length === keys.length
-    && [...keys].sort().every((key, index) => key === actual[index]);
 }
 
 function isPositiveInteger(value: unknown): value is number {

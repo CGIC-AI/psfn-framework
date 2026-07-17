@@ -137,12 +137,11 @@ describe('redactApprovalRequested v2 (approvals.v2)', () => {
     expect(payload.sourceSystem).toBe('shard');
   });
 
-  it('falls back parentLabel to parentId when the label is blank', () => {
-    const payload = redactApprovalRequested(richConfirmationEntry(), {
+  it('fails closed instead of presenting an opaque parent id as its label', () => {
+    expect(() => redactApprovalRequested(richConfirmationEntry(), {
       ...V2_CONTEXT,
       attribution: { parentId: 'companion-parent-1', parentLabel: '   ' },
-    });
-    expect(payload.attribution?.parentLabel).toBe('companion-parent-1');
+    })).toThrow(/parentLabel/);
   });
 
   it('fails closed on a missing attribution parent id', () => {

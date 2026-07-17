@@ -30,8 +30,12 @@ import { FleetAuthAccountReapprovalHttpRoutes } from './fleet-auth-account-reapp
 import type { TrustedHostProviderRecoveryService } from '../../../boundary/fleet-auth/trusted-host-provider-recovery.js';
 import { FleetAuthProviderRecoveryHttpRoutes } from './fleet-auth-provider-recovery-routes.js';
 import type { FleetPortalRoster } from '../../../boundary/gateway/fleet-portal-projection.js';
-import type { ConfirmationQueueEntry } from '../../../system/capabilities/confirmation-queue.js';
-import { redactApprovalRequested } from '../../backplane/companion-relay/redaction.js';
+import {
+  buildFleetApprovalsView,
+  type FleetAuthApprovalsSource,
+} from './fleet-auth-approvals-view.js';
+
+export type { FleetAuthApprovalsSource } from './fleet-auth-approvals-view.js';
 
 const LOGIN_PATH = '/v1/fleet-auth/login';
 export const FLEET_AUTH_LIFECYCLE_OAUTH_PATH = '/v1/fleet-auth/lifecycle/oauth';
@@ -56,27 +60,6 @@ export type FleetAuthLifecycleCorsDisposition = 'not_applicable' | 'continue' | 
  */
 export interface FleetAuthRosterSource {
   resolveRoster(input: { sessionToken: string }): Promise<FleetPortalRoster>;
-}
-
-/**
- * Read-only pending-approval source for the fleet-wide approvals view. Backed
- * by the gateway's confirmation queue plus owner attribution; the route redacts
- * every entry and drops any confirmation with no resolvable owner.
- */
-export interface FleetAuthApprovalsSource {
-  listPending(): readonly ConfirmationQueueEntry[];
-  ownerOfConfirmation(id: string): string | undefined;
-}
-
-/** One redacted fleet-wide approval entry (no raw params ever). */
-interface FleetApprovalView {
-  readonly companionId: string;
-  readonly companionDisplayName: string;
-  readonly id: string;
-  readonly title: string;
-  readonly requestedAt: string;
-  readonly expiresAt?: string;
-  readonly status: 'pending';
 }
 
 function singleHeader(value: string | string[] | undefined): string | undefined {
@@ -294,29 +277,7 @@ export class FleetAuthHttpRoutes {
       // approval owned by a companion outside that set is dropped below
       // (non-enumeration) alongside any ownerless entry (fail closed).
       const roster = await this.rosterSource.resolveRoster({ sessionToken });
-      const displayNameByCompanionId = new Map(
-        roster.companions.map(companion => [companion.companionId, companion.displayName]),
-      );
-      const approvals: FleetApprovalView[] = [];
-      for (const entry of approvalsSource.listPending()) {
-        const owner = approvalsSource.ownerOfConfirmation(entry.id);
-        if (owner === undefined) continue;
-        const companionDisplayName = displayNameByCompanionId.get(owner);
-        if (companionDisplayName === undefined) continue;
-        const redacted = redactApprovalRequested(entry);
-        approvals.push({
-          companionId: owner,
-          companionDisplayName,
-          id: redacted.id,
-          title: redacted.title,
-          requestedAt: redacted.requestedAt,
-          ...(redacted.expiresAt !== undefined ? { expiresAt: redacted.expiresAt } : {}),
-          status: redacted.status,
-        });
-      }
-      approvals.sort((left, right) => (
-        left.requestedAt.localeCompare(right.requestedAt) || left.id.localeCompare(right.id)
-      ));
+      const approvals = buildFleetApprovalsView(roster, approvalsSource);
       sendJson(response, 200, { schemaVersion: 1, approvals }, {
         'Cache-Control': 'no-store, private',
       });

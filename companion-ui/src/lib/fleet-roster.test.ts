@@ -18,6 +18,26 @@ function json(value: unknown, status = 200, cacheControl = 'no-store, private'):
   });
 }
 
+function approval(overrides: Record<string, unknown> = {}) {
+  return {
+    companionId: COMPANION_B,
+    companionDisplayName: 'Aria',
+    id: 'confirm-1',
+    title: 'web.fetch: https://example.test',
+    requestedAt: '2026-07-17T10:00:00.000Z',
+    expiresAt: '2026-07-18T10:00:00.000Z',
+    redactedContext: 'Read documentation',
+    status: 'pending',
+    sourceSystem: 'tool-access',
+    attribution: { parentId: COMPANION_B, parentLabel: 'Aria' },
+    action: 'web.fetch',
+    scope: 'https://example.test',
+    reason: 'Read documentation',
+    grantMode: { kind: 'once' },
+    ...overrides,
+  };
+}
+
 describe('fleet roster protocol', () => {
   it('accepts a valid roster with and without avatarRef', () => {
     const roster = parseFleetRoster({
@@ -67,15 +87,7 @@ describe('fleet roster protocol', () => {
   it('accepts a valid approvals view and drops nothing it is given', () => {
     const view = parseFleetApprovalsView({
       schemaVersion: 1,
-      approvals: [{
-        companionId: COMPANION_B,
-        companionDisplayName: 'Aria',
-        id: 'confirm-1',
-        title: 'web.fetch: https://example.test',
-        requestedAt: '2026-07-17T10:00:00.000Z',
-        expiresAt: '2026-07-18T10:00:00.000Z',
-        status: 'pending',
-      }],
+      approvals: [approval()],
     });
     expect(view.approvals[0]!.companionDisplayName).toBe('Aria');
   });
@@ -83,14 +95,7 @@ describe('fleet roster protocol', () => {
   it('accepts an approval without expiresAt', () => {
     const view = parseFleetApprovalsView({
       schemaVersion: 1,
-      approvals: [{
-        companionId: COMPANION_B,
-        companionDisplayName: 'Aria',
-        id: 'confirm-1',
-        title: 'web.fetch: x',
-        requestedAt: '2026-07-17T10:00:00.000Z',
-        status: 'pending',
-      }],
+      approvals: [approval({ title: 'web.fetch: x', expiresAt: undefined })],
     });
     expect(view.approvals[0]).not.toHaveProperty('expiresAt');
   });

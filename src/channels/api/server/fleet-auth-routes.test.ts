@@ -677,7 +677,17 @@ describe('gateway-only fleet auth HTTP routes', () => {
             title: 'web.fetch: https://example.test/secret-path',
             requestedAt: '2026-07-17T10:00:00.000Z',
             expiresAt: '2026-07-18T10:00:00.000Z',
+            redactedContext: 'I need to read the docs.',
             status: 'pending',
+            sourceSystem: 'tool-access',
+            attribution: {
+              parentId: COMPANION_ID_B,
+              parentLabel: 'Aria',
+            },
+            action: 'web.fetch',
+            scope: 'https://example.test/secret-path',
+            reason: 'I need to read the docs.',
+            grantMode: { kind: 'once' },
           },
         ],
       });

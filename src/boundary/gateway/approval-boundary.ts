@@ -55,6 +55,8 @@ interface ApprovalBoundaryOptions extends ApprovalBoundaryAuditHooks {
    * typed `companion.approval.*` event.
    */
   eventBus: EventBus;
+  /** Canonical presentation label resolved from runtime identity/roster data. */
+  parentLabelProvider?: (companionId: string) => string | undefined;
 }
 
 export interface GatewayConfirmationConfig {
@@ -127,8 +129,15 @@ export function createGatewayApprovalBoundaryService(
         // enqueuer supplied its own attribution (e.g. a future shard path with
         // added provenance), its parentId MUST equal that owner — otherwise we
         // refuse to emit rather than route to a spoofed parent (fail closed).
+        const parentLabel = options.parentLabelProvider?.(enqueueOwner)?.trim();
         const attribution = entry.attribution
-          ?? { parentId: enqueueOwner, parentLabel: enqueueOwner };
+          ?? (parentLabel ? { parentId: enqueueOwner, parentLabel } : undefined);
+        if (!attribution) {
+          approvalLog.error('Refusing to emit companion.approval.requested without a canonical parent label', {
+            id: entry.id,
+          });
+          return;
+        }
         if (attribution.parentId !== enqueueOwner) {
           approvalLog.error('Refusing to emit companion.approval.requested with mismatched attribution parent', {
             id: entry.id,

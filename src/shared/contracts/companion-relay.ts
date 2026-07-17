@@ -40,6 +40,9 @@ export const COMPANION_EVENT_KINDS = [
 
 export type CompanionEventKind = typeof COMPANION_EVENT_KINDS[number];
 
+/** Explicit wire capability for the complete approval-request envelope. */
+export const COMPANION_APPROVALS_V2_CAPABILITY = 'approvals.v2' as const;
+
 export const COMPANION_APPROVAL_RESOLUTION_STATUSES = [
   'approved',
   'denied',
@@ -91,6 +94,18 @@ export interface CompanionApprovalRequestedPayload {
   /** Offered grant mode. Server emits `{ kind: 'once' }` until TTL policy ships. */
   grantMode?: ApprovalGrantMode;
 }
+
+/**
+ * A complete v2 approval request. Internal producers and v2-only browser
+ * surfaces use this shape so missing attribution cannot silently degrade to
+ * the legacy projection.
+ */
+export type CompanionApprovalRequestedV2Payload =
+  CompanionApprovalRequestedPayload
+  & Required<Pick<
+  CompanionApprovalRequestedPayload,
+  'sourceSystem' | 'attribution' | 'action' | 'scope' | 'reason' | 'grantMode'
+  >>;
 
 export interface CompanionApprovalResolvedPayload {
   id: string;

@@ -9,6 +9,7 @@ import {
   UserRoundCog,
 } from 'lucide-react';
 import type { HubStreamState } from '../lib/stream/hub-stream.js';
+import type { FleetRosterCompanion } from '../lib/fleet-roster.js';
 import { DrawerHeader } from './overlay-drawer.js';
 import type { MicMode } from './types.js';
 
@@ -21,6 +22,8 @@ export type CompanionUiAccessPresentation = Readonly<{
 
 export function SettingsDrawer({
   access,
+  activeCompanionId,
+  companions,
   connecting,
   micMode,
   spriteAnimations,
@@ -33,11 +36,14 @@ export function SettingsDrawer({
   onLogin,
   onLogout,
   onMicModeChange,
+  onCompanionChange,
   onSpriteAnimationsChange,
   onSpriteEnabledChange,
   onSwitchUser,
 }: {
   access: CompanionUiAccessPresentation;
+  activeCompanionId: string | null;
+  companions: readonly FleetRosterCompanion[];
   connecting: boolean;
   micMode: MicMode;
   spriteAnimations: boolean;
@@ -50,6 +56,7 @@ export function SettingsDrawer({
   onLogin: () => void;
   onLogout: () => void;
   onMicModeChange: (value: MicMode) => void;
+  onCompanionChange: (companionId: string) => void;
   onSpriteAnimationsChange: (value: boolean) => void;
   onSpriteEnabledChange: (value: boolean) => void;
   onSwitchUser: () => void;
@@ -125,6 +132,22 @@ export function SettingsDrawer({
 
         <section className="settings-section">
           <h2>Companion</h2>
+          {access.state === 'signed_in' && companions.length > 0 && (
+            <label className="segmented-field">
+              <span>Active companion</span>
+              <select
+                aria-label="Active companion"
+                value={activeCompanionId ?? ''}
+                onChange={(event) => onCompanionChange(event.target.value)}
+              >
+                {companions.map(companion => (
+                  <option value={companion.companionId} key={companion.companionId}>
+                    {companion.displayName}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
           <ToggleRow label="Sprite enabled" checked={spriteEnabled} onChange={onSpriteEnabledChange} />
           <ToggleRow label="Animation enabled" checked={spriteAnimations} onChange={onSpriteAnimationsChange} />
         </section>

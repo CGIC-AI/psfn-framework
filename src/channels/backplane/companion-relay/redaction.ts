@@ -4,6 +4,7 @@ import type {
 } from '../../../system/capabilities/confirmation-queue.js';
 import type {
   CompanionApprovalRequestedPayload,
+  CompanionApprovalRequestedV2Payload,
   CompanionApprovalResolvedPayload,
   CompanionApprovalResolutionStatus,
   CompanionArtifactCreatedPayload,
@@ -77,9 +78,12 @@ export interface ApprovalRequestedV2Context {
  * (fail closed on a missing parent — an ownerless request must never emit).
  */
 function redactAttribution(attribution: ApprovalAttribution): ApprovalAttribution {
+  const parentLabel = clampText(attribution.parentLabel, MAX_ATTR_LABEL_LENGTH);
+  if (!parentLabel) {
+    throw new Error('Cannot redact event: missing attribution parentLabel');
+  }
   return {
-    parentLabel: clampText(attribution.parentLabel, MAX_ATTR_LABEL_LENGTH)
-      || requireId(attribution.parentId, 'attribution parentId'),
+    parentLabel,
     parentId: requireId(attribution.parentId, 'attribution parentId'),
     ...(attribution.shardId !== undefined
       ? { shardId: requireId(attribution.shardId, 'attribution shardId') }
@@ -101,6 +105,13 @@ function redactAttribution(attribution: ApprovalAttribution): ApprovalAttributio
  * TTL grant modes are rejected: the server must never offer TTL until the
  * JSON-owned policy exists (see approval-envelope.ts / SHARD_APPROVALS.md).
  */
+export function redactApprovalRequested(
+  entry: Pick<ConfirmationQueueEntry, 'id' | 'action' | 'scope' | 'companionReason' | 'requestedAt' | 'expiresAt'>,
+  v2: ApprovalRequestedV2Context,
+): CompanionApprovalRequestedV2Payload;
+export function redactApprovalRequested(
+  entry: Pick<ConfirmationQueueEntry, 'id' | 'action' | 'scope' | 'companionReason' | 'requestedAt' | 'expiresAt'>,
+): CompanionApprovalRequestedPayload;
 export function redactApprovalRequested(
   entry: Pick<ConfirmationQueueEntry, 'id' | 'action' | 'scope' | 'companionReason' | 'requestedAt' | 'expiresAt'>,
   v2?: ApprovalRequestedV2Context,

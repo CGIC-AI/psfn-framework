@@ -10,6 +10,7 @@ import type {
   CompanionEventEnvelope,
 } from '../../../shared/contracts/companion-relay.js';
 import {
+  COMPANION_APPROVALS_V2_CAPABILITY,
   companionEventKindsForScopes,
 } from '../../../shared/contracts/companion-relay.js';
 import { projectApprovalRequestedPayload } from '../../backplane/companion-relay/redaction.js';
@@ -41,7 +42,6 @@ const SSE_HEARTBEAT_INTERVAL_MS = 25_000;
  * keep working. The Satellite Hub forwards its client's advertisement here — see
  * docs/approval-envelope.md.
  */
-const APPROVALS_V2_CAPABILITY = 'approvals.v2';
 const APPROVAL_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u;
 const ARTIFACT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u;
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/u;
@@ -140,7 +140,7 @@ function advertisesApprovalsV2(url: URL): boolean {
   return url.searchParams
     .getAll('caps')
     .flatMap((value) => value.split(','))
-    .some((token) => token.trim() === APPROVALS_V2_CAPABILITY);
+    .some((token) => token.trim() === COMPANION_APPROVALS_V2_CAPABILITY);
 }
 
 /**
@@ -193,6 +193,7 @@ export function handleCompanionEventsStream(ctx: CompanionRelayRequestContext): 
   let unsubscribe: (() => void) | null = null;
   try {
     unsubscribe = ctx.deps.relay.subscribe({
+      companionId: ctx.companionId,
       allowedKinds,
       onEvent: (envelope: CompanionEventEnvelope) => {
         const projected = projectEnvelopeForSubscriber(envelope, includeApprovalsV2);

@@ -40,15 +40,16 @@ plus the **v2** fields below, all additive and optional.
 
 ### Source-system registry
 
-`ApprovalSourceSystem` is an **open** string union — a new projector adds a tag
-without a breaking change. Known members and their projection status:
+`ApprovalSourceSystem` is an **open** string union — a new projector can add a
+tag without a breaking change. The production registry only lists projectors
+that are wired:
 
 | Tag | Projector | Status |
 | --- | --- | --- |
 | `tool-access` | gateway confirmation gate — tool / information-access escalation | **projecting now** |
-| `expensive-usage` | gateway confirmation gate — expensive-usage sign-off | planned |
-| `shard` | shard capability fold review (`SHARD_APPROVALS.md`) | planned |
-| `cogsec` | Cognitive Security intake-quarantine approvals | planned |
+
+Future expensive-usage, shard, and CogSec producers are not registered source
+systems until they have a real projection path.
 
 ### Grant modes
 
@@ -114,16 +115,16 @@ handled:
    (`hub-stream.ts`) lifts only known fields into `ApprovalStreamEntry`, so
    unknown keys never enter app state.
 
-### Hub forwarding (integration note — no hub code changed here)
+### Hub forwarding
 
-The Companion UI reaches the gateway through the Satellite Hub. For the gate to
-fire end-to-end, the Hub must (a) let its client advertise `approvals.v2` and
-(b) forward that advertisement to the gateway events stream as the `caps`
-token, then relay the enlarged `approval.requested` payload through unchanged.
-The Hub is a read-only vendored copy in this repo (`PSFN-Satellite-Hub/`) and was
-**not** modified; this forwarding is the one hub-side change required to light up
-v2 for hub-fronted clients. Until then, a hub that omits the token simply keeps
-receiving the v1 shape — fail-safe.
+The Companion UI reaches the gateway through the Satellite Hub. The Hub bridge
+advertises its v2 parser to this SSE route with `caps=approvals.v2`, validates
+the complete payload, and keeps it internally. Browser clients advertise
+`approvals.v2` in `hello.eventCapabilities`; the Hub acknowledges that list and
+forwards the complete payload only to those connections. Connections that omit
+the event capability receive the explicit six-field v1 projection. The
+gateway-owned WebSocket path uses the same explicit negotiation and requires
+complete v2 data before emitting an approval event.
 
 ## Scope of the first projection
 

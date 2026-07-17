@@ -21,28 +21,19 @@
 /**
  * Which subsystem raised the request. A tag for display/audit/routing hints —
  * NOT an authority claim. Open-ended union so a new subsystem can project into
- * the same envelope without a breaking contract change; the listed members are
- * the known projectors (present + planned).
+ * the same envelope without a breaking contract change; the listed member has
+ * a production projector today.
  *
  * - `tool-access`      gateway confirmation gate: tool / information-access escalation
- * - `expensive-usage`  gateway confirmation gate: expensive-usage sign-off
- * - `shard`            shard capability fold review (planned; see SHARD_APPROVALS.md)
- * - `cogsec`           Cognitive Security intake-quarantine approvals (planned)
  */
 export type ApprovalSourceSystem =
   | 'tool-access'
-  | 'expensive-usage'
-  | 'shard'
-  | 'cogsec'
-  // keep known-member autocomplete while leaving the union open to future projectors
+  // Keep the wire open to future projectors without claiming they are wired.
   | (string & {});
 
-/** Known, closed source-system tags — for validation / exhaustiveness helpers. */
+/** Source-system tags with a production projector. */
 export const KNOWN_APPROVAL_SOURCE_SYSTEMS = [
   'tool-access',
-  'expensive-usage',
-  'shard',
-  'cogsec',
 ] as const satisfies readonly ApprovalSourceSystem[];
 
 /**

@@ -260,6 +260,7 @@ describe('companion relay routes', () => {
     });
     relay = new CompanionEventRelay({
       eventBus,
+      defaultCompanionId: DEFAULT_COMPANION_ID,
       previewRoots: [tempDir],
       maxPreviewBytes: 1_000,
     });

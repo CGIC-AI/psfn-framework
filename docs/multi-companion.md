@@ -330,9 +330,10 @@ not generic `api` traffic.
   observer-eval sidecar privacy gate
   (`src/core/eval/observer-sidecar/privacy.ts`) instead of failing closed on
   `missing_channel_privacy_metadata`.
-- **Owner file.** `channels.json > companionUi` owns
-  `{ channelPrivacy, canonicalContactId? }` (fail-closed parse, unknown keys
-  rejected on load and save; `src/channels/backplane/config.ts`,
+- **Owner file.** `channels.json > companionUi` owns `{ channelPrivacy }`.
+  Contact identity comes only from the authenticated human attachment; the
+  owner file cannot override it. Unknown keys are rejected on load and save
+  (`src/channels/backplane/config.ts`,
   `parseCompanionUiSection`). Availability is decided by the fleet-auth/hub-device
   wiring, not an `enabled` flag. The section is exposed through the raw
   `channels.json` editor in Garden settings.

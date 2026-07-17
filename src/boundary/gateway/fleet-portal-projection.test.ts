@@ -217,7 +217,7 @@ describe('gateway fleet portal projection', () => {
         authorizer: { resolve: authorize },
         fleet: [
           { companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' },
-          { companionId: COMPANION_B, avatarRef: 'avatars/b.png' },
+          { companionId: COMPANION_B, displayName: 'Aria', avatarRef: 'avatars/b.png' },
           { companionId: COMPANION_C, gardenPort: 3213, displayName: 'private-c' },
         ],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
@@ -234,9 +234,8 @@ describe('gateway fleet portal projection', () => {
             websocketPath: `/companion-ui/companions/${COMPANION_A}/ws`,
           },
           {
-            // No manifest displayName → falls back to the companionId, no card read.
             companionId: COMPANION_B,
-            displayName: COMPANION_B,
+            displayName: 'Aria',
             websocketPath: `/companion-ui/companions/${COMPANION_B}/ws`,
             avatarRef: 'avatars/b.png',
           },
@@ -251,7 +250,7 @@ describe('gateway fleet portal projection', () => {
     it('fails closed on a malformed request', async () => {
       const projection = new GatewayFleetPortalProjection({
         authorizer: { resolve: async () => ({ companions: [] }) },
-        fleet: [{ companionId: COMPANION_A, gardenPort: 3211 }],
+        fleet: [{ companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' }],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
         now: () => GENERATED_AT,
       });
@@ -264,7 +263,7 @@ describe('gateway fleet portal projection', () => {
         authorizer: {
           resolve: async () => ({ companions: [{ companionId: COMPANION_D, gardenLinkEligible: true }] }),
         },
-        fleet: [{ companionId: COMPANION_A, gardenPort: 3211 }],
+        fleet: [{ companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' }],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
         now: () => GENERATED_AT,
       });
@@ -280,7 +279,7 @@ describe('gateway fleet portal projection', () => {
             ],
           }),
         },
-        fleet: [{ companionId: COMPANION_A, gardenPort: 3211 }],
+        fleet: [{ companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' }],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
         now: () => GENERATED_AT,
       });

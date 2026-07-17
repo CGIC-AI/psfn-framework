@@ -1,15 +1,22 @@
+import type {
+  ApprovalAttribution,
+  ApprovalGrantMode,
+  ApprovalSourceSystem,
+} from '../../../src/shared/contracts/approval-envelope.js';
 import { isObjectRecord as isRecord } from '../../../src/shared/utils/types.js';
 import { validWebsocketPath } from './fleet-session.js';
+import {
+  hasExactKeys,
+  isBoundedString,
+  isLowercaseRfc4122Uuid,
+} from './protocol/validation.js';
+import { parseHubToClientMessage } from './protocol/framing.js';
 
 const COMPANIONS_PATH = '/v1/fleet-auth/companions';
 const APPROVALS_PATH = '/v1/fleet-auth/approvals';
 
-const LOWERCASE_RFC4122_UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
 const MAX_DISPLAY_NAME_LENGTH = 120;
 const MAX_AVATAR_REF_LENGTH = 512;
-const MAX_ID_LENGTH = 160;
-const MAX_TITLE_LENGTH = 160;
 const MAX_COMPANIONS = 256;
 const MAX_APPROVALS = 1024;
 
@@ -37,6 +44,13 @@ export interface FleetApprovalEntry {
   readonly companionDisplayName: string;
   readonly id: string;
   readonly title: string;
+  readonly redactedContext: string;
+  readonly sourceSystem: ApprovalSourceSystem;
+  readonly attribution: ApprovalAttribution;
+  readonly action: string;
+  readonly scope: string;
+  readonly reason: string;
+  readonly grantMode: ApprovalGrantMode;
   readonly requestedAt: string;
   readonly expiresAt?: string;
   readonly status: 'pending';
@@ -54,37 +68,21 @@ export class FleetRosterProtocolError extends Error {
   }
 }
 
-function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value).sort();
-  const expected = [...keys].sort();
-  return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
-}
-
-function boundedString(value: unknown, maxLength: number): value is string {
-  return typeof value === 'string' && value.length >= 1 && value.length <= maxLength;
-}
-
-function isoTimestamp(value: unknown): value is string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > 40) return false;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed);
-}
-
 function parseRosterCompanion(value: unknown): FleetRosterCompanion {
   if (!isRecord(value)) throw new FleetRosterProtocolError();
   const hasAvatar = Object.hasOwn(value, 'avatarRef');
-  if (!exactKeys(value, hasAvatar
+  if (!hasExactKeys(value, hasAvatar
     ? ['companionId', 'displayName', 'websocketPath', 'avatarRef']
     : ['companionId', 'displayName', 'websocketPath'])) {
     throw new FleetRosterProtocolError();
   }
-  if (typeof value.companionId !== 'string' || !LOWERCASE_RFC4122_UUID.test(value.companionId)
-    || !boundedString(value.displayName, MAX_DISPLAY_NAME_LENGTH)
+  if (!isLowercaseRfc4122Uuid(value.companionId)
+    || !isBoundedString(value.displayName, MAX_DISPLAY_NAME_LENGTH)
     || !validWebsocketPath(value.websocketPath)
     // The stream path must belong to exactly this companion; a mismatch is a
     // server/tamper inconsistency and fails closed.
     || value.websocketPath !== `/companion-ui/companions/${value.companionId}/ws`
-    || (hasAvatar && !boundedString(value.avatarRef, MAX_AVATAR_REF_LENGTH))) {
+    || (hasAvatar && !isBoundedString(value.avatarRef, MAX_AVATAR_REF_LENGTH))) {
     throw new FleetRosterProtocolError();
   }
   return Object.freeze({
@@ -96,7 +94,7 @@ function parseRosterCompanion(value: unknown): FleetRosterCompanion {
 }
 
 export function parseFleetRoster(value: unknown): FleetRoster {
-  if (!isRecord(value) || !exactKeys(value, ['schemaVersion', 'companions'])
+  if (!isRecord(value) || !hasExactKeys(value, ['schemaVersion', 'companions'])
     || value.schemaVersion !== 1 || !Array.isArray(value.companions)
     || value.companions.length > MAX_COMPANIONS) {
     throw new FleetRosterProtocolError();
@@ -117,33 +115,73 @@ export function parseFleetRoster(value: unknown): FleetRoster {
 function parseApprovalEntry(value: unknown): FleetApprovalEntry {
   if (!isRecord(value)) throw new FleetRosterProtocolError();
   const hasExpiry = Object.hasOwn(value, 'expiresAt');
-  if (!exactKeys(value, hasExpiry
-    ? ['companionId', 'companionDisplayName', 'id', 'title', 'requestedAt', 'expiresAt', 'status']
-    : ['companionId', 'companionDisplayName', 'id', 'title', 'requestedAt', 'status'])) {
+  const wireKeys = [
+    'companionId',
+    'companionDisplayName',
+    'id',
+    'title',
+    'requestedAt',
+    'redactedContext',
+    'status',
+    'sourceSystem',
+    'attribution',
+    'action',
+    'scope',
+    'reason',
+    'grantMode',
+  ];
+  if (!hasExactKeys(value, hasExpiry ? [...wireKeys, 'expiresAt'] : wireKeys)) {
     throw new FleetRosterProtocolError();
   }
-  if (typeof value.companionId !== 'string' || !LOWERCASE_RFC4122_UUID.test(value.companionId)
-    || !boundedString(value.companionDisplayName, MAX_DISPLAY_NAME_LENGTH)
-    || !boundedString(value.id, MAX_ID_LENGTH)
-    || !boundedString(value.title, MAX_TITLE_LENGTH)
-    || !isoTimestamp(value.requestedAt)
-    || (hasExpiry && !isoTimestamp(value.expiresAt))
-    || value.status !== 'pending') {
+  if (!isLowercaseRfc4122Uuid(value.companionId)
+    || !isBoundedString(value.companionDisplayName, MAX_DISPLAY_NAME_LENGTH)) {
+    throw new FleetRosterProtocolError();
+  }
+  let message;
+  try {
+    const {
+      companionId: _companionId,
+      companionDisplayName: _companionDisplayName,
+      ...data
+    } = value;
+    message = parseHubToClientMessage(JSON.stringify({
+      type: 'approval.requested',
+      data,
+    }));
+  } catch {
+    throw new FleetRosterProtocolError();
+  }
+  if (message.type !== 'approval.requested') {
+    throw new FleetRosterProtocolError();
+  }
+  const data = message.data;
+  const { sourceSystem, attribution, action, scope, reason, grantMode } = data;
+  if (sourceSystem === undefined || attribution === undefined
+    || action === undefined || scope === undefined || reason === undefined
+    || grantMode === undefined || attribution.parentId !== value.companionId
+    || attribution.parentLabel !== value.companionDisplayName) {
     throw new FleetRosterProtocolError();
   }
   return Object.freeze({
     companionId: value.companionId,
     companionDisplayName: value.companionDisplayName,
-    id: value.id,
-    title: value.title,
-    requestedAt: value.requestedAt,
-    ...(hasExpiry ? { expiresAt: value.expiresAt as string } : {}),
-    status: 'pending' as const,
+    id: data.id,
+    title: data.title,
+    requestedAt: data.requestedAt,
+    ...(data.expiresAt ? { expiresAt: data.expiresAt } : {}),
+    redactedContext: data.redactedContext,
+    status: data.status,
+    sourceSystem,
+    attribution,
+    action,
+    scope,
+    reason,
+    grantMode,
   });
 }
 
 export function parseFleetApprovalsView(value: unknown): FleetApprovalsView {
-  if (!isRecord(value) || !exactKeys(value, ['schemaVersion', 'approvals'])
+  if (!isRecord(value) || !hasExactKeys(value, ['schemaVersion', 'approvals'])
     || value.schemaVersion !== 1 || !Array.isArray(value.approvals)
     || value.approvals.length > MAX_APPROVALS) {
     throw new FleetRosterProtocolError();

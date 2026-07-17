@@ -1,7 +1,7 @@
 import { closeSync, constants, openSync, readFileSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import type { ResolvedCompanionsFleetConfig } from '../system/config/companions-config.js';
-import { PER_COMPANION_OWNER_FILES } from '../system/config/settings-contract.js';
+import { SYSTEM_OWNER_FLEET_MIGRATION_FILES } from './system-owner-fleet-migration-files.js';
 import { writeFileDurableAtomicSync } from '../shared/utils/fs.js';
 import { isRecord } from '../shared/utils/types.js';
 import {
@@ -254,7 +254,7 @@ function isDestinationEntry(value: unknown): value is DestinationReceiptEntry {
 function isFileEntry(value: unknown): value is FileReceiptEntry {
   return isRecord(value)
     && typeof value.ownerFile === 'string'
-    && PER_COMPANION_OWNER_FILES.has(value.ownerFile)
+    && SYSTEM_OWNER_FLEET_MIGRATION_FILES.has(value.ownerFile)
     && typeof value.sourcePath === 'string'
     && typeof value.sourceSha256 === 'string'
     && SHA256_PATTERN.test(value.sourceSha256)
@@ -401,7 +401,7 @@ export function assertReceiptContents(
   if (resolve(receipt.quarantineDirectoryPath) !== expectedQuarantineDirectory) {
     throw new Error('System-owner fleet migration receipt quarantine path is invalid');
   }
-  const registeredOwnerFiles = [...PER_COMPANION_OWNER_FILES];
+  const registeredOwnerFiles = [...SYSTEM_OWNER_FLEET_MIGRATION_FILES];
   const receiptOwnerFiles = receipt.files.map(file => file.ownerFile);
   if (new Set(receiptOwnerFiles).size !== receiptOwnerFiles.length
     || receiptOwnerFiles.some((ownerFile, index) => (

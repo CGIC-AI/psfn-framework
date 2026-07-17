@@ -180,13 +180,17 @@ function ownerMigrationRenderArgs(companions = [
     mountPath: '/runtime/companions/two',
     expectedIdentity: 'companion-2',
   },
-]) {
+], multiCompanion = true, approvals = {
+  'charge-policy.json': 'a'.repeat(64),
+  'skills.json': 'b'.repeat(64),
+}) {
   return [
     '--set', 'ownerMigration.required=true',
     '--set', 'ownerMigration.enabled=true',
+    '--set', `ownerMigration.multiCompanion=${multiCompanion}`,
     '--set-string', 'ownerMigration.systemDataClaim=owner-system',
     '--set-string', 'ownerMigration.backupsClaim=owner-backups',
-    '--set-json', `ownerMigration.approvals={"charge-policy.json":"${'a'.repeat(64)}","skills.json":"${'b'.repeat(64)}"}`,
+    '--set-json', `ownerMigration.approvals=${JSON.stringify(approvals)}`,
     '--set-json', `ownerMigration.companions=${JSON.stringify(companions)}`,
     '--set', 'ownerMigration.verification.enabled=true',
     '--set', 'ownerMigration.verification.initialChargeQuota=27',
@@ -319,7 +323,7 @@ const singleOwnerUpgradeRendered = render(ownerMigrationRenderArgs([
     mountPath: '/runtime/companions/companion',
     expectedIdentity: 'companion-1',
   },
-]));
+], false));
 const singleOwnerUpgradeJob = parseAllDocuments(singleOwnerUpgradeRendered)
   .map(document => document.toJS())
   .find(document => (
@@ -343,9 +347,40 @@ if (singleOwnerUpgradeJob.spec.template.spec.containers.length !== 1) {
   throw new Error('single-companion ownerMigration must render one packaged readiness probe');
 }
 assertRenderFails(
-  ownerMigrationRenderArgs([]),
+  ownerMigrationRenderArgs([], false),
   'ownerMigration.enabled=true requires at least one explicit companion PVC',
 );
+assertRenderFails(
+  [...ownerMigrationRenderArgs(), '--set', 'ownerMigration.verification.enabled=false'],
+  'ownerMigration.enabled=true requires ownerMigration.verification.enabled=true',
+);
+assertRenderFails(
+  [...ownerMigrationRenderArgs(), '--set-string', 'ownerMigration.snapshotOutputDir=/other/snapshot'],
+  'ownerMigration.snapshotOutputDir must be beneath ownerMigration.backupsDir',
+);
+assertRenderFails(
+  [...ownerMigrationRenderArgs(), '--set-string', 'ownerMigration.backupsSubPath=../escape'],
+  'ownerMigration.backupsSubPath must be a safe relative PVC subPath',
+);
+assertRenderFails(
+  ownerMigrationRenderArgs(undefined, true, { 'scheduler.json': 'c'.repeat(64) }),
+  'ownerMigration.approvals contains an unsupported fleet-migration owner: scheduler.json',
+);
+
+const subPathOwnerUpgrade = parseAllDocuments(render([
+  ...ownerMigrationRenderArgs(),
+  '--set-string', 'ownerMigration.backupsSubPath=backups',
+]))
+  .map(document => document.toJS())
+  .find(document => (
+    document?.kind === 'Job'
+    && document?.metadata?.labels?.['app.kubernetes.io/component'] === 'owner-migration'
+  ));
+const snapshotBackupsMount = subPathOwnerUpgrade.spec.template.spec.initContainers[0]
+  .volumeMounts.find(mount => mount.name === 'backups');
+if (snapshotBackupsMount?.mountPath !== '/backups' || snapshotBackupsMount?.subPath !== 'backups') {
+  throw new Error('owner migration backups subPath did not stay mounted at backupsDir');
+}
 for (const claimName of ['psfn-system-data', 'psfn-companion-data', 'psfn-workspace', 'psfn-runtime']) {
   if (findDocumentByKindName(ownerUpgradeRendered, 'PersistentVolumeClaim', claimName)) {
     throw new Error(`existing owner claim was unexpectedly recreated: ${claimName}`);

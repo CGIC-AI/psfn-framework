@@ -26,12 +26,21 @@
 {{- if not (hasPrefix "/" .Values.ownerMigration.backupsDir) -}}
 {{- fail "ownerMigration.backupsDir must be absolute" -}}
 {{- end -}}
+{{- if not (hasPrefix (printf "%s/" (trimSuffix "/" .Values.ownerMigration.backupsDir)) .Values.ownerMigration.snapshotOutputDir) -}}
+{{- fail "ownerMigration.snapshotOutputDir must be beneath ownerMigration.backupsDir" -}}
+{{- end -}}
+{{- if and .Values.ownerMigration.backupsSubPath (or (hasPrefix "/" .Values.ownerMigration.backupsSubPath) (contains ".." .Values.ownerMigration.backupsSubPath) (not (regexMatch "^([A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+$" .Values.ownerMigration.backupsSubPath))) -}}
+{{- fail "ownerMigration.backupsSubPath must be a safe relative PVC subPath" -}}
+{{- end -}}
+{{- if not .Values.ownerMigration.verification.enabled -}}
+{{- fail "ownerMigration.enabled=true requires ownerMigration.verification.enabled=true" -}}
+{{- end -}}
 {{- if eq (len .Values.ownerMigration.approvals) 0 -}}
 {{- fail "ownerMigration.approvals must bind every legacy owner source digest" -}}
 {{- end -}}
 {{- range $ownerFile, $digest := .Values.ownerMigration.approvals -}}
-{{- if not (has $ownerFile (list "capability-tier.json" "scheduler.json" "charge-policy.json" "skills.json")) -}}
-{{- fail (printf "ownerMigration.approvals contains an unregistered per-companion owner: %s" $ownerFile) -}}
+{{- if not (has $ownerFile (list "charge-policy.json" "skills.json")) -}}
+{{- fail (printf "ownerMigration.approvals contains an unsupported fleet-migration owner: %s" $ownerFile) -}}
 {{- end -}}
 {{- if not (regexMatch "^[a-f0-9]{64}$" $digest) -}}
 {{- fail (printf "ownerMigration.approvals.%s must be an exact lowercase SHA-256" $ownerFile) -}}

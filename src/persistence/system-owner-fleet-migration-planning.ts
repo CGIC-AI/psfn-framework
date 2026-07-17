@@ -1,5 +1,5 @@
 import { join } from 'node:path';
-import { PER_COMPANION_OWNER_FILES } from '../system/config/settings-contract.js';
+import { SYSTEM_OWNER_FLEET_MIGRATION_FILES } from './system-owner-fleet-migration-files.js';
 import {
   assertExactLinkCount,
   closePinnedDirectory,
@@ -45,7 +45,7 @@ export function inspectPinnedPlanFiles(input: {
   persistenceDirectory: PinnedDirectory;
   existingDestinationDirectories: Map<string, PinnedDirectory>;
 }): PinnedPlanFile[] {
-  return [...PER_COMPANION_OWNER_FILES].map((ownerFile): PinnedPlanFile => {
+  return [...SYSTEM_OWNER_FLEET_MIGRATION_FILES].map((ownerFile): PinnedPlanFile => {
     const sourcePath = join(input.systemDataDir, ownerFile);
     if (!pinnedLeafExists(input.systemDirectory, ownerFile)) {
       return { ownerFile, sourcePath, status: 'absent', destinations: [] };

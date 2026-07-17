@@ -1,6 +1,6 @@
 import { basename, join, resolve } from 'node:path';
 import type { ResolvedCompanionsFleetConfig } from '../system/config/companions-config.js';
-import { PER_COMPANION_OWNER_FILES } from '../system/config/settings-contract.js';
+import { SYSTEM_OWNER_FLEET_MIGRATION_FILES } from './system-owner-fleet-migration-files.js';
 import {
   closePinnedDirectory,
   inspectPinnedRegularFile,
@@ -32,6 +32,8 @@ export type {
   SystemOwnerFleetMigrationResult,
 } from './system-owner-fleet-migration-receipt.js';
 
+export { SYSTEM_OWNER_FLEET_MIGRATION_FILES } from './system-owner-fleet-migration-files.js';
+
 export function buildSystemOwnerFleetMigrationPlan(input: {
   systemDataDir: string;
   fleet: ResolvedCompanionsFleetConfig;
@@ -61,7 +63,7 @@ export function buildSystemOwnerFleetMigrationPlan(input: {
       );
     }
 
-    const files = [...PER_COMPANION_OWNER_FILES].map((ownerFile): SystemOwnerFleetMigrationFilePlan => {
+    const files = [...SYSTEM_OWNER_FLEET_MIGRATION_FILES].map((ownerFile): SystemOwnerFleetMigrationFilePlan => {
       const sourcePath = join(systemDataDir, ownerFile);
       if (!pinnedLeafExists(systemDirectory, ownerFile)) {
         return { ownerFile, sourcePath, status: 'absent', destinations: [] };

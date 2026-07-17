@@ -732,9 +732,24 @@ capability-tier.json|scheduler.json|charge-policy.json|skills.json
       # The owner-root cutover and scheduler schema cutover landed separately.
       # Run the canonical validated/atomic migrator after routing the file into
       # companion-data and before any runtime process loads it.
-      node /app/dist/migrate-scheduler-owner.js \
+      if ! scheduler_migration_output="$(node /app/dist/migrate-scheduler-owner.js \
         --apply \
-        --data-dir {{ .Values.runtime.companionDataDir }}
+        --data-dir {{ .Values.runtime.companionDataDir }} 2>&1)"; then
+        printf '%s\n' "$scheduler_migration_output" >&2
+        case "$scheduler_migration_output" in
+          *"changed identity; refusing pathname-based recovery"*|*"changed while migration was prepared"*)
+            echo "Scheduler owner changed during a concurrent workload init; re-validating the published owner once" >&2
+            node /app/dist/migrate-scheduler-owner.js \
+              --apply \
+              --data-dir {{ .Values.runtime.companionDataDir }}
+            ;;
+          *)
+            exit 1
+            ;;
+        esac
+      else
+        printf '%s\n' "$scheduler_migration_output"
+      fi
       if [ ! -e {{ .Values.runtime.characterCardPath }} ] && [ -e /seed/companion.json ]; then
         cp /seed/companion.json {{ .Values.runtime.characterCardPath }}
       fi

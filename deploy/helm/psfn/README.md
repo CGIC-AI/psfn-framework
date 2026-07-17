@@ -198,14 +198,15 @@ For an orchestrated Helm cutover, set `ownerMigration.required=true` and
 `ownerMigration.approvals`, and enumerate every companion with its existing PVC
 and canonical `<runtimeRoot>/companions/...` mount path. A default
 single-companion release lists exactly one companion and the hook runs with
-`PSFN_MULTI_COMPANION=false`; it does not require or create `companions.json`.
-A multi-companion installation must enumerate every manifest companion and the
-hook runs with `PSFN_MULTI_COMPANION=true`. Also set
+`PSFN_MULTI_COMPANION=false`; set `ownerMigration.multiCompanion=false`, and do
+not create `companions.json`. A multi-companion installation must set
+`ownerMigration.multiCompanion=true` and enumerate every manifest companion,
+even when the manifest currently has one entry. Topology is never inferred from
+the number of destinations. Also set
 the chart's normal persistence claims through each `existingClaim` field. The
 pre-upgrade Hook Job captures `snapshotOutputDir`, runs the same compiled
-approval-bound fleet migrator as its next init container, and (when
-`ownerMigration.verification.enabled=true`) runs one packaged probe per
-companion. The probes begin with the exact migrated values, make distinct
+approval-bound fleet migrator as its next init container, and runs one mandatory
+packaged probe per companion. The probes begin with the exact migrated values, make distinct
 read-only owner and companion-identity observations behind a shared barrier,
 and fail if claims or owner inodes are accidentally shared across companion
 roots. Receipt-recorded recovery hard links within one root remain valid. Helm
@@ -213,6 +214,12 @@ does not admit the new revision until the hook succeeds.
 `ownerMigration.required=true` makes omission of the hook a
 render failure; missing claims, a wrong mount path, or an unavailable immutable
 image fails the old revision closed in place.
+
+Every companion needs an `expectedIdentity`, and disabling
+`ownerMigration.verification.enabled` fails rendering. `snapshotOutputDir` must
+be beneath `backupsDir`. When the backup claim uses a subdirectory, set the safe
+relative `backupsSubPath`; the chart mounts that PVC subdirectory exactly at
+`backupsDir` so the snapshot cannot land on disposable container storage.
 
 Keep `bootstrap.seedOwnerFiles=false`: seeding is not migration. After a
 successful one-time rollout, disable and remove the owner-migration values. The

@@ -62,7 +62,7 @@ spec:
             - name: COMPANION_ID
               value: {{ (index .Values.ownerMigration.companions 0).companionId | quote }}
             - name: PSFN_MULTI_COMPANION
-              value: {{ gt (len .Values.ownerMigration.companions) 1 | quote }}
+              value: {{ .Values.ownerMigration.multiCompanion | quote }}
             - name: PSFN_FLEET_AUTH
               value: "false"
             - name: DATA_DIR
@@ -74,6 +74,9 @@ spec:
               mountPath: {{ .Values.ownerMigration.systemDataDir | quote }}
             - name: backups
               mountPath: {{ .Values.ownerMigration.backupsDir | quote }}
+              {{- with .Values.ownerMigration.backupsSubPath }}
+              subPath: {{ . | quote }}
+              {{- end }}
             - name: scratch
               mountPath: /scratch
             {{- range $index, $companion := .Values.ownerMigration.companions }}

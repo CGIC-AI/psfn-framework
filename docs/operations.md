@@ -636,8 +636,8 @@ Production startup should not proceed until the cutover plan is clean.
 
 ### Owner-file migration framework
 
-Per-companion owner files (`charge-policy.json`, `skills.json`, and the other
-registered per-companion owners) were once rooted under `SYSTEM_DATA_DIR`.
+The per-companion owner files `charge-policy.json` and `skills.json` were once
+rooted under `SYSTEM_DATA_DIR`.
 Current runtime requires each under its companion root with no legacy fallback,
 so re-rooting an existing installation is a one-time, digest-approved migration
 built from three pieces. "Fleet" in command and receipt names includes the
@@ -675,8 +675,9 @@ follows.
 ### Existing split fleets with shared per-companion owners
 
 Installations created before per-companion owner-file rooting may still have
-`charge-policy.json` or `skills.json` (and potentially the other registered
-per-companion owners) under `SYSTEM_DATA_DIR`. Stop every app process. For a
+`charge-policy.json` or `skills.json` under `SYSTEM_DATA_DIR`. Scheduler and
+capability-tier use the separate retained-source Helm init cutover and are not
+inputs to this fan-out transaction. Stop every app process. For a
 single-companion release, verify its exact `COMPANION_ID` and
 `COMPANION_DATA_DIR`; do not create `companions.json`. For multi-companion,
 verify every exact `companionDataDir` from `companions.json` is already mounted.
@@ -709,14 +710,18 @@ The final Helm chart can rehearse the same transaction as one explicit
 pre-upgrade boundary. Set `ownerMigration.required=true`, keep
 `bootstrap.seedOwnerFiles=false`, bind the exact printed approvals, and list
 the system, backup, and every companion PVC. A single-companion release lists
-its one identity and root without creating `companions.json`; a multi-companion
-installation uses the same canonical paths as `companions.json` and lists every
-entry. The hook captures the whole-install snapshot before its
+its one identity and root, sets `ownerMigration.multiCompanion=false`, and does
+not create `companions.json`; a multi-companion installation sets
+`ownerMigration.multiCompanion=true`, uses the same canonical paths as
+`companions.json`, and lists every entry even when only one exists. The hook
+captures the whole-install snapshot before its
 canonical compiled migration init container runs; packaged per-companion probes
 must then prove distinct writable owners before Helm admits the new revision.
-This is not an automatic fallback: the feature is disabled by default, missing
-or duplicated claims and paths fail closed, and it must be removed from values
-after the one-time cutover. `npm run e2e:kube-owner-upgrade` exercises the real
+Verification cannot be disabled. `snapshotOutputDir` must remain beneath the
+PVC-mounted `backupsDir`; use `backupsSubPath` when the claim's backup tree is a
+subdirectory. This is not an automatic fallback: the feature is disabled by
+default, missing or duplicated claims and paths fail closed, and it must be
+removed from values after the one-time cutover. `npm run e2e:kube-owner-upgrade` exercises the real
 old-chart install, final-chart upgrade, failure matrix, and fresh-PVC old-chart
 restore.
 

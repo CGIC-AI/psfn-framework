@@ -94,19 +94,25 @@ bootstrap:
 ownerMigration:
   required: false
   enabled: false
+  # Explicit topology selector. False is the default single-companion chart;
+  # true requires companions.json and every manifest companion below.
+  multiCompanion: false
   runtimeRoot: /runtime
   systemDataDir: /runtime/system-data
   systemDataClaim: ""
   backupsDir: /backups
   backupsClaim: ""
+  # Optional existingClaim subPath, such as `backups` on the runtime PVC.
+  backupsSubPath: ""
   snapshotOutputDir: /backups/pre-owner-migration
   activeDeadlineSeconds: 300
   approvals: {}
-  # Every companion in companions.json must appear exactly once with its
-  # existing claim and exact runtime-root-relative mount path.
+  # Single topology: the one explicit companion. Multi topology: every entry
+  # in companions.json. Claims and runtime-root-relative paths must be exact.
   companions: []
   verification:
-    enabled: false
+    # Mandatory whenever the migration hook is enabled.
+    enabled: true
     initialChargeQuota: 1
     initialMaxLoadedSkills: 1
     timeoutSeconds: 60

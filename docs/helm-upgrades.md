@@ -54,10 +54,13 @@ The hook supports both chart topologies:
 
 - A single-companion release lists its one existing companion-data PVC. The
   migration runs with `PSFN_MULTI_COMPANION=false` and binds the explicit
-  `companionId`; a `companions.json` file is neither created nor expected.
+  `companionId`; a `companions.json` file is neither created nor expected. Set
+  `ownerMigration.multiCompanion=false` explicitly in the migration overlay.
 - A multi-companion installation lists every companion from `companions.json`,
   with a distinct existing claim and canonical mount path for each. Omitting a
-  companion or reusing a claim/path fails rendering or migration.
+  companion or reusing a claim/path fails rendering or migration. Set
+  `ownerMigration.multiCompanion=true` even when that manifest currently has
+  only one entry; topology is never inferred from destination count.
 
 For either topology, stop every app process that can read an old owner before
 the pre-upgrade hook runs. Dependencies such as Postgres and Redis stay up:
@@ -78,9 +81,12 @@ bootstrap:
 ownerMigration:
   required: true
   enabled: true
+  multiCompanion: false
   systemDataClaim: <existing-system-data-claim>
   backupsClaim: <existing-backups-or-runtime-claim>
-  backupsDir: <absolute-mounted-backup-directory>
+  backupsDir: /backups
+  backupsSubPath: <optional-existing-claim-subpath>
+  snapshotOutputDir: /backups/pre-owner-migration
   approvals:
     charge-policy.json: <exact-dry-run-sha256>
     skills.json: <exact-dry-run-sha256>
@@ -89,12 +95,17 @@ ownerMigration:
       claimName: <existing-companion-data-claim>
       mountPath: /runtime/companions/<release-companion-id>
       expectedIdentity: <expected-character-identity>
+  verification:
+    enabled: true
 ```
 
-The migration image must be pinned by digest. For a PVC whose normal backup
-mount uses a `backups` subdirectory, mount the claim at `/backups` and set
-`ownerMigration.backupsDir=/backups/backups`; do not silently redirect the
-snapshot outside the normal backup tree.
+The migration image must be pinned by digest. `snapshotOutputDir` must be below
+`backupsDir`, and verification cannot be disabled. For a PVC whose normal
+backup mount uses a `backups` subdirectory, keep
+`ownerMigration.backupsDir=/backups` and set
+`ownerMigration.backupsSubPath=backups`. The hook then mounts that exact PVC
+subdirectory at `/backups`; the snapshot cannot succeed on disposable container
+storage outside the backup mount.
 
 When this owner cutover and the welfare-grant boundary ship together, preserve
 the gateway-first rule without letting an old agent read the new owner layout:

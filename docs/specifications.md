@@ -57,8 +57,9 @@ Supported until beta:
 - Split-root persistence cutover through `npm run migrate:persistence-layout` and the installer `--migrate-data` path. The cutover tooling may read legacy shared roots, write manifests, and run existing intra-root cleanup, but production startup should stop until the plan is clean.
 - Explicit system-owner fleet re-rooting through
   `npm run migrate:system-owner-fleet`. This one-time operator command may read
-  only `PER_COMPANION_OWNER_FILES` entries left at `SYSTEM_DATA_DIR`, fan their
-  exact approved bytes to the explicit single-companion identity/root or to
+  only legacy `charge-policy.json` and `skills.json` left at
+  `SYSTEM_DATA_DIR`, fan their exact approved bytes to the explicit
+  single-companion identity/root or to
   every companion enumerated by `companions.json`, and retire each source only
   after all destinations verify. Validation is the
   exact source digest and filesystem identity per file, no-overwrite destination
@@ -76,7 +77,9 @@ Supported until beta:
   `required=true`, disable bootstrap seeding, bind every source digest, mount
   the exact system and backup claims plus either the one explicit
   single-companion PVC or every manifest companion PVC at its canonical path,
-  capture the whole-install snapshot first, and complete the packaged
+  select single-vs-multi topology explicitly (never from companion count), keep
+  the snapshot path beneath the PVC-mounted backup directory, capture the
+  whole-install snapshot first, and complete the mandatory packaged
   per-companion readiness probes before Helm admits the new revision. Missing
   claims, wrong paths, image-digest resolution failures, shared companion
   claims, and an omitted required hook fail the upgrade while the old revision

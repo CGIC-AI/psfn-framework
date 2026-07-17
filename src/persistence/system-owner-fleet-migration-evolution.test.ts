@@ -22,7 +22,10 @@ import { migrateLegacySchedulerOwner } from '../system/config/scheduler-owner-mi
 import { PER_COMPANION_OWNER_FILES } from '../system/config/settings-contract.js';
 import { verifyStartupOwnerFiles } from '../system/config/startup-owner-files.js';
 import { writeJsonAtomic } from '../shared/utils/fs.js';
-import { executeSystemOwnerFleetMigration } from './system-owner-fleet-migration.js';
+import {
+  executeSystemOwnerFleetMigration,
+  SYSTEM_OWNER_FLEET_MIGRATION_FILES,
+} from './system-owner-fleet-migration.js';
 
 const FLEET: CompanionsFleetConfig = {
   companions: [
@@ -151,7 +154,13 @@ describe('completed system-owner fleet migration owner evolution', () => {
         : join(seedDir, ownerFile.replace(/\.json$/u, '.seed.json'));
       const bytes = readFileSync(sourcePath);
       writeFileSync(join(systemDataDir, ownerFile), bytes);
-      approvals[ownerFile] = sha256(bytes);
+      if (SYSTEM_OWNER_FLEET_MIGRATION_FILES.has(ownerFile)) {
+        approvals[ownerFile] = sha256(bytes);
+      } else {
+        for (const companion of fleet.companions) {
+          writeFileSync(join(companion.companionDataDir, ownerFile), bytes);
+        }
+      }
     }
 
     expect(executeSystemOwnerFleetMigration({

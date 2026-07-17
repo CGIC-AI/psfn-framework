@@ -1,10 +1,10 @@
 #!/usr/bin/env tsx
 
 import '../../shared/utils/load-dotenv.js';
-import { PER_COMPANION_OWNER_FILES } from '../../system/config/settings-contract.js';
 import {
   buildSystemOwnerFleetMigrationPlan,
   executeSystemOwnerFleetMigration,
+  SYSTEM_OWNER_FLEET_MIGRATION_FILES,
 } from '../../persistence/system-owner-fleet-migration.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolveSystemOwnerFleetContext } from './system-owner-fleet-context.js';
@@ -34,8 +34,8 @@ function parseApproval(raw: string): [string, string] {
   }
   const ownerFile = raw.slice(0, separator).trim();
   const digest = raw.slice(separator + 1).trim();
-  if (!PER_COMPANION_OWNER_FILES.has(ownerFile)) {
-    throw new Error(`--approve owner file is not registered per-companion: ${ownerFile}`);
+  if (!SYSTEM_OWNER_FLEET_MIGRATION_FILES.has(ownerFile)) {
+    throw new Error(`--approve owner file is not supported by the system-owner fleet migration: ${ownerFile}`);
   }
   if (!/^[0-9a-f]{64}$/u.test(digest)) {
     throw new Error(`--approve digest for ${ownerFile} must be an exact lowercase SHA-256`);

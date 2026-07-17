@@ -25,6 +25,7 @@ import { verifyStartupOwnerFiles } from '../system/config/startup-owner-files.js
 import {
   buildSystemOwnerFleetMigrationPlan,
   executeSystemOwnerFleetMigration,
+  SYSTEM_OWNER_FLEET_MIGRATION_FILES,
 } from './system-owner-fleet-migration.js';
 
 const FIRST_ID = '11111111-1111-4111-8111-111111111111';
@@ -140,14 +141,14 @@ describe('system-owner fleet migration', () => {
 
   it('revalidates every receipt-bound root before recovery creates quarantine or staging', () => {
     const { systemDataDir, fleet } = fixture();
-    const source = readFileSync(join(process.cwd(), 'config', 'scheduler.seed.json'));
-    const sourcePath = join(systemDataDir, 'scheduler.json');
+    const source = readFileSync(join(process.cwd(), 'config', 'skills.seed.json'));
+    const sourcePath = join(systemDataDir, 'skills.json');
     writeFileSync(sourcePath, source);
 
     expect(() => executeSystemOwnerFleetMigration({
       systemDataDir,
       fleet,
-      expectedSourceDigests: { 'scheduler.json': sha256(source) },
+      expectedSourceDigests: { 'skills.json': sha256(source) },
       faultInjection: (event) => {
         if (event.stage === 'after_bootstrap_receipt') throw new Error('crash:bootstrap-receipt');
       },
@@ -164,7 +165,7 @@ describe('system-owner fleet migration', () => {
     expect(() => executeSystemOwnerFleetMigration({
       systemDataDir,
       fleet,
-      expectedSourceDigests: { 'scheduler.json': sha256(source) },
+      expectedSourceDigests: { 'skills.json': sha256(source) },
     })).toThrow(/destination directory does not exist/);
     expect(readFileSync(sourcePath)).toEqual(source);
     expect(existsSync(receipt.quarantineDirectoryPath)).toBe(false);
@@ -327,13 +328,19 @@ describe('system-owner fleet migration', () => {
     for (const ownerFile of PER_COMPANION_OWNER_FILES) {
       const bytes = readFileSync(join(seedDir, ownerFile.replace(/\.json$/u, '.seed.json')));
       writeFileSync(join(systemDataDir, ownerFile), bytes);
-      approvals[ownerFile] = sha256(bytes);
       sourceBytes.set(ownerFile, bytes);
+      if (SYSTEM_OWNER_FLEET_MIGRATION_FILES.has(ownerFile)) {
+        approvals[ownerFile] = sha256(bytes);
+      } else {
+        for (const companion of fleet.companions) {
+          writeFileSync(join(companion.companionDataDir, ownerFile), bytes);
+        }
+      }
     }
 
     const plan = buildSystemOwnerFleetMigrationPlan({ systemDataDir, fleet });
     expect(plan.canApply).toBe(true);
-    expect(plan.sourceCount).toBe(PER_COMPANION_OWNER_FILES.size);
+    expect(plan.sourceCount).toBe(SYSTEM_OWNER_FLEET_MIGRATION_FILES.size);
     const result = executeSystemOwnerFleetMigration({
       systemDataDir,
       fleet,
@@ -343,7 +350,8 @@ describe('system-owner fleet migration', () => {
 
     expect(result.status).toBe('migrated');
     for (const ownerFile of PER_COMPANION_OWNER_FILES) {
-      expect(existsSync(join(systemDataDir, ownerFile))).toBe(false);
+      expect(existsSync(join(systemDataDir, ownerFile)))
+        .toBe(!SYSTEM_OWNER_FLEET_MIGRATION_FILES.has(ownerFile));
       for (const companion of fleet.companions) {
         expect(readFileSync(join(companion.companionDataDir, ownerFile)))
           .toEqual(sourceBytes.get(ownerFile));
@@ -370,7 +378,7 @@ describe('system-owner fleet migration', () => {
       }>;
     };
     expect(receipt.status).toBe('completed');
-    expect(receipt.files).toHaveLength(PER_COMPANION_OWNER_FILES.size);
+    expect(receipt.files).toHaveLength(SYSTEM_OWNER_FLEET_MIGRATION_FILES.size);
     for (const file of receipt.files) {
       expect(file.sourceSha256).toBe(approvals[file.ownerFile]);
       expect(file.status).toBe('retired');

@@ -1,6 +1,6 @@
 import { basename, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { PER_COMPANION_OWNER_FILES } from '../system/config/settings-contract.js';
+import { SYSTEM_OWNER_FLEET_MIGRATION_FILES } from './system-owner-fleet-migration-files.js';
 import {
   assertExactLinkCount,
   assertFilesystemIdentity,
@@ -246,7 +246,7 @@ function assertNoUntrackedOwnerFiles(
   receipt: SystemOwnerFleetMigrationReceipt,
   systemDirectory: PinnedDirectory,
 ): void {
-  for (const ownerFile of PER_COMPANION_OWNER_FILES) {
+  for (const ownerFile of SYSTEM_OWNER_FLEET_MIGRATION_FILES) {
     if (!receipt.files.some(file => file.ownerFile === ownerFile)
       && pinnedLeafExists(systemDirectory, ownerFile)) {
       throw new Error(`Untracked system-root per-companion owner file appeared after receipt creation: ${ownerFile}`);

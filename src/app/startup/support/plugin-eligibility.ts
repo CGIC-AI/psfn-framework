@@ -31,11 +31,15 @@ function requireEligibility(
   eligibilityGate: EligibilityGate | undefined,
   operation: EligibilityOperation,
   requirements: EligibilityRequirements,
+  companionId?: string,
 ): void {
   if (!eligibilityGate || !hasEffectiveEligibilityRequirements(requirements)) {
     return;
   }
-  eligibilityGate.requireAllowed(operation, requirements);
+  // an52.5: companionId is server/composition-derived (the per-account voice
+  // binding). When present it resolves the account companion's own tier via the
+  // gate's per-companion access provider; absent callers keep the root tier.
+  eligibilityGate.requireAllowed(operation, requirements, companionId);
 }
 
 export function requirePluginActivationEligibility(
@@ -43,13 +47,14 @@ export function requirePluginActivationEligibility(
   pluginType: RuntimePluginKind,
   pluginId: string,
   requirements?: EligibilityRequirements,
+  companionId?: string,
 ): void {
   const resolvedRequirements = requireEligibilityRequirements(pluginType, pluginId, requirements);
   requireEligibility(eligibilityGate, {
     kind: 'plugin.activate',
     pluginType,
     pluginId,
-  }, resolvedRequirements);
+  }, resolvedRequirements, companionId);
 }
 
 function requirePluginActionEligibility(
@@ -58,6 +63,7 @@ function requirePluginActionEligibility(
   pluginId: string,
   action: string,
   requirements?: EligibilityRequirements,
+  companionId?: string,
 ): void {
   const resolvedRequirements = requireEligibilityRequirements(pluginType, pluginId, requirements);
   requireEligibility(eligibilityGate, {
@@ -65,7 +71,7 @@ function requirePluginActionEligibility(
     pluginType,
     pluginId,
     action,
-  }, resolvedRequirements);
+  }, resolvedRequirements, companionId);
 }
 
 export function wrapChannelAdapterWithEligibility(
@@ -137,6 +143,7 @@ export function wrapStreamingSttConnectorWithEligibility(
   provider: string,
   eligibilityGate: EligibilityGate | undefined,
   requirements?: EligibilityRequirements,
+  companionId?: string,
 ): StreamingSttConnector {
   const resolvedRequirements = requireEligibilityRequirements('stt', provider, requirements);
   if (!eligibilityGate || !hasEffectiveEligibilityRequirements(resolvedRequirements)) {
@@ -148,7 +155,7 @@ export function wrapStreamingSttConnectorWithEligibility(
     startStream: async (
       ...args: Parameters<StreamingSttConnector['startStream']>
     ): Promise<Awaited<ReturnType<StreamingSttConnector['startStream']>>> => {
-      requirePluginActionEligibility(eligibilityGate, 'stt', provider, 'startStream', resolvedRequirements);
+      requirePluginActionEligibility(eligibilityGate, 'stt', provider, 'startStream', resolvedRequirements, companionId);
       return connector.startStream(...args);
     },
   };
@@ -159,6 +166,7 @@ export function wrapStreamingTtsConnectorWithEligibility(
   provider: string,
   eligibilityGate: EligibilityGate | undefined,
   requirements?: EligibilityRequirements,
+  companionId?: string,
 ): StreamingTtsConnector {
   const resolvedRequirements = requireEligibilityRequirements('tts', provider, requirements);
   if (!eligibilityGate || !hasEffectiveEligibilityRequirements(resolvedRequirements)) {
@@ -170,13 +178,13 @@ export function wrapStreamingTtsConnectorWithEligibility(
     synthesizeStream: async (
       ...args: Parameters<StreamingTtsConnector['synthesizeStream']>
     ): Promise<Awaited<ReturnType<StreamingTtsConnector['synthesizeStream']>>> => {
-      requirePluginActionEligibility(eligibilityGate, 'tts', provider, 'synthesizeStream', resolvedRequirements);
+      requirePluginActionEligibility(eligibilityGate, 'tts', provider, 'synthesizeStream', resolvedRequirements, companionId);
       return connector.synthesizeStream(...args);
     },
     synthesizeBuffer: async (
       ...args: Parameters<StreamingTtsConnector['synthesizeBuffer']>
     ): Promise<Awaited<ReturnType<StreamingTtsConnector['synthesizeBuffer']>>> => {
-      requirePluginActionEligibility(eligibilityGate, 'tts', provider, 'synthesizeBuffer', resolvedRequirements);
+      requirePluginActionEligibility(eligibilityGate, 'tts', provider, 'synthesizeBuffer', resolvedRequirements, companionId);
       return connector.synthesizeBuffer(...args);
     },
   };

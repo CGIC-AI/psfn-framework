@@ -28,6 +28,7 @@ export function buildConfiguredTtsConnectors(
   config: SubstrateConfig,
   preferredProviderId: StreamingTtsProvider,
   eligibilityGate?: EligibilityGate,
+  companionId?: string,
 ): StreamingTtsConnector[] {
   const providerOrder = resolveRuntimeVoiceTtsProviderOrder(
     config,
@@ -42,6 +43,7 @@ export function buildConfiguredTtsConnectors(
         provider: providerId,
         requireElevenLabsVoiceId: true,
         eligibilityGate,
+        ...(companionId ? { companionId } : {}),
       });
       if (binding) {
         connectors.push(binding.connector);

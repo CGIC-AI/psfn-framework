@@ -780,6 +780,16 @@ export class GatewayServer {
     });
   }
 
+  /**
+   * Read-only owner attribution for a confirmation id (companion roster wire).
+   * Returns the authenticated companion that enqueued the confirmation, or
+   * `undefined` when none is recorded — the fleet-wide approvals view excludes
+   * ownerless entries so an approval is never mis-attributed.
+   */
+  ownerOfConfirmation(id: string): string | undefined {
+    return this.approvalBoundary.ownerOfConfirmation(id);
+  }
+
   findConfirmationHistoryEntry(id: string): ConfirmationQueueHistoryEntry | null {
     return this.approvalBoundary.listConfirmationHistory()
       .find((entry) => entry.id === id) ?? null;

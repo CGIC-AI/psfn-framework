@@ -60,6 +60,15 @@ carries exactly:
 | `characterCardPath` | companion's character card, relative to the same canonical persistence root | relative path, may not escape the root |
 | `postgresSchema` | Postgres schema owning this companion's tenant tables | lowercase identifier, ≤63 chars, no `pg_` prefix |
 | `gardenPort` | optional TCP port for this companion's own Garden operator surface | integer 1–65535, unique across the fleet |
+| `displayName` | optional human-facing roster label (display-only, no authority) | non-empty string, ≤120 chars, no control characters |
+| `avatarRef` | optional opaque avatar reference for the roster (display-only) | non-empty string, ≤512 chars, no control characters |
+
+`displayName` and `avatarRef` are surfaced **only** through the authenticated
+fleet portal roster (`GET /v1/fleet-auth/companions`; see
+[garden-control-plane.md](./garden-control-plane.md)). They are never routing
+keys or authorization inputs. The roster's display name resolves as
+`displayName` when present, otherwise the `companionId` — no character-card file
+is read at request time.
 
 Cross-entry validation rejects duplicate `companionId`, duplicate
 `postgresSchema`, duplicate `gardenPort`, and overlapping `companionDataDir`.

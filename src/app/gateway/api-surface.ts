@@ -101,6 +101,7 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
     | 'isIcpAutonomyConfigured'
     | 'resolveOperatorApproval'
     | 'listOperatorConfirmations'
+    | 'ownerOfConfirmation'
     | 'getFleetConnectionSnapshot'
     | 'requestCompanionAgent'
   >;
@@ -794,6 +795,17 @@ export async function startOptionalGatewayApiServer(
               companionUi: {
                 companionId: fleetSsoCompanionUi.companionId,
                 guestMode: fleetSsoCompanionUi.guestMode,
+              },
+            } : {}),
+            // Companion roster wire: the authenticated fleet portal projection
+            // is the single least-authority, non-enumerating roster source, and
+            // it also attributes/filters the fleet-wide approvals view. The raw
+            // fleet manifest is never enumerated to the browser.
+            ...(fleetPortalProjection ? {
+              rosterSource: fleetPortalProjection,
+              approvalsSource: {
+                listPending: () => options.gateway.listOperatorConfirmations().pending,
+                ownerOfConfirmation: (id: string) => options.gateway.ownerOfConfirmation(id),
               },
             } : {}),
           }),

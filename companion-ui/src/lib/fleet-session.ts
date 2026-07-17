@@ -36,7 +36,15 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
-function validWebsocketPath(value: unknown): value is string {
+/**
+ * Validates the one canonical Companion UI stream path
+ * (`/companion-ui/companions/<uuid>/ws`). Exported so the roster client
+ * (`fleet-roster.ts`) applies the SAME rule: the active companion is expressed
+ * only by which of these paths the app opens — never by a client-side identity
+ * field. The path is not tied to the signed-in companion, so the app may open
+ * any authorized companion's stream from the roster.
+ */
+export function validWebsocketPath(value: unknown): value is string {
   return typeof value === 'string' && WEBSOCKET_PATH.test(value) && !value.includes('?');
 }
 

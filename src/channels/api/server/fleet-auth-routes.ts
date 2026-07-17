@@ -29,12 +29,17 @@ import type { TrustedHostAccountReapprovalService } from '../../../boundary/flee
 import { FleetAuthAccountReapprovalHttpRoutes } from './fleet-auth-account-reapproval-routes.js';
 import type { TrustedHostProviderRecoveryService } from '../../../boundary/fleet-auth/trusted-host-provider-recovery.js';
 import { FleetAuthProviderRecoveryHttpRoutes } from './fleet-auth-provider-recovery-routes.js';
+import type { FleetPortalRoster } from '../../../boundary/gateway/fleet-portal-projection.js';
+import type { ConfirmationQueueEntry } from '../../../system/capabilities/confirmation-queue.js';
+import { redactApprovalRequested } from '../../backplane/companion-relay/redaction.js';
 
 const LOGIN_PATH = '/v1/fleet-auth/login';
 export const FLEET_AUTH_LIFECYCLE_OAUTH_PATH = '/v1/fleet-auth/lifecycle/oauth';
 const REFRESH_PATH = '/v1/fleet-auth/session/refresh';
 const CSRF_PATH = '/v1/fleet-auth/session/csrf';
 const STATUS_PATH = '/v1/fleet-auth/session/status';
+const COMPANIONS_PATH = '/v1/fleet-auth/companions';
+const APPROVALS_PATH = '/v1/fleet-auth/approvals';
 const LOGOUT_PATH = '/v1/fleet-auth/logout';
 const PROVIDER_REVOKE_PATH = '/v1/fleet-auth/provider/revoke';
 const PREAUTH_COOKIE_NAME = '__Host-psfn_preauth';
@@ -43,6 +48,36 @@ const MUTATION_BODY_LIMIT = 2048;
 const LIFECYCLE_CORS_ALLOWED_HEADERS = 'Content-Type, X-PSFN-CSRF';
 
 export type FleetAuthLifecycleCorsDisposition = 'not_applicable' | 'continue' | 'handled';
+
+/**
+ * Authenticated fleet roster source (companion roster wire). The projection
+ * enforces least-authority, non-enumerating access: only companions the session
+ * may reach appear.
+ */
+export interface FleetAuthRosterSource {
+  resolveRoster(input: { sessionToken: string }): Promise<FleetPortalRoster>;
+}
+
+/**
+ * Read-only pending-approval source for the fleet-wide approvals view. Backed
+ * by the gateway's confirmation queue plus owner attribution; the route redacts
+ * every entry and drops any confirmation with no resolvable owner.
+ */
+export interface FleetAuthApprovalsSource {
+  listPending(): readonly ConfirmationQueueEntry[];
+  ownerOfConfirmation(id: string): string | undefined;
+}
+
+/** One redacted fleet-wide approval entry (no raw params ever). */
+interface FleetApprovalView {
+  readonly companionId: string;
+  readonly companionDisplayName: string;
+  readonly id: string;
+  readonly title: string;
+  readonly requestedAt: string;
+  readonly expiresAt?: string;
+  readonly status: 'pending';
+}
 
 function singleHeader(value: string | string[] | undefined): string | undefined {
   return typeof value === 'string' ? value : undefined;
@@ -141,6 +176,8 @@ export class FleetAuthHttpRoutes {
     companionId: string;
     guestMode: 'disabled' | 'explicit';
   }>;
+  private readonly rosterSource?: FleetAuthRosterSource;
+  private readonly approvalsSource?: FleetAuthApprovalsSource;
   private readonly recoveryRoutes?: FleetAuthRecoveryHttpRoutes;
   private readonly lifecycleCeremonyRoutes?: FleetAuthLifecycleCeremonyHttpRoutes;
   private readonly accountReapprovalRoutes?: FleetAuthAccountReapprovalHttpRoutes;
@@ -160,6 +197,13 @@ export class FleetAuthHttpRoutes {
       companionId: string;
       guestMode: 'disabled' | 'explicit';
     }>;
+    /**
+     * Authenticated fleet roster projection. Backs `GET .../companions` and the
+     * companion attribution + non-enumeration filter of `GET .../approvals`.
+     */
+    rosterSource?: FleetAuthRosterSource;
+    /** Pending-approval source for the fleet-wide approvals view. */
+    approvalsSource?: FleetAuthApprovalsSource;
   }) {
     this.broker = options.broker;
     this.canonicalOrigin = options.canonicalOrigin;
@@ -178,6 +222,8 @@ export class FleetAuthHttpRoutes {
       ? new FleetAuthProviderRecoveryHttpRoutes(options.providerRecovery)
       : undefined;
     this.companionUi = options.companionUi;
+    this.rosterSource = options.rosterSource;
+    this.approvalsSource = options.approvalsSource;
     this.recoveryRoutes = options.trustedHostRecovery
       ? new FleetAuthRecoveryHttpRoutes(options.trustedHostRecovery)
       : undefined;
@@ -199,9 +245,97 @@ export class FleetAuthHttpRoutes {
       || (method === 'GET' && (
         path === LOGIN_PATH || path === CSRF_PATH || path === STATUS_PATH || path === this.callbackPath
       ))
+      || (method === 'GET' && this.rosterSource !== undefined && path === COMPANIONS_PATH)
+      || (method === 'GET' && this.rosterSource !== undefined
+        && this.approvalsSource !== undefined && path === APPROVALS_PATH)
       || (method === 'POST'
         && (path === FLEET_AUTH_LIFECYCLE_OAUTH_PATH || path === REFRESH_PATH
           || path === LOGOUT_PATH || path === PROVIDER_REVOKE_PATH));
+  }
+
+  private async handleCompanionRoster(
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+  ): Promise<void> {
+    if (url.search || !this.rosterSource) {
+      throw new FleetAuthBrokerError('fleet_auth_route_not_found', 404);
+    }
+    response.setHeader('Vary', 'Cookie');
+    const sessionToken = readSessionCookie(request);
+    if (!sessionToken) {
+      throw new FleetAuthBrokerError('invalid_session', 401, 'Session is invalid or expired');
+    }
+    try {
+      const roster = await this.rosterSource.resolveRoster({ sessionToken });
+      sendJson(response, 200, roster, { 'Cache-Control': 'no-store, private' });
+    } catch (error) {
+      throw this.normalizeSessionScopedFailure(response, error);
+    }
+  }
+
+  private async handleFleetApprovals(
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+  ): Promise<void> {
+    if (url.search || !this.rosterSource || !this.approvalsSource) {
+      throw new FleetAuthBrokerError('fleet_auth_route_not_found', 404);
+    }
+    response.setHeader('Vary', 'Cookie');
+    const sessionToken = readSessionCookie(request);
+    if (!sessionToken) {
+      throw new FleetAuthBrokerError('invalid_session', 401, 'Session is invalid or expired');
+    }
+    const approvalsSource = this.approvalsSource;
+    try {
+      // The roster is the single authorization/attribution source: only the
+      // companions the session may reach get display names here, so any
+      // approval owned by a companion outside that set is dropped below
+      // (non-enumeration) alongside any ownerless entry (fail closed).
+      const roster = await this.rosterSource.resolveRoster({ sessionToken });
+      const displayNameByCompanionId = new Map(
+        roster.companions.map(companion => [companion.companionId, companion.displayName]),
+      );
+      const approvals: FleetApprovalView[] = [];
+      for (const entry of approvalsSource.listPending()) {
+        const owner = approvalsSource.ownerOfConfirmation(entry.id);
+        if (owner === undefined) continue;
+        const companionDisplayName = displayNameByCompanionId.get(owner);
+        if (companionDisplayName === undefined) continue;
+        const redacted = redactApprovalRequested(entry);
+        approvals.push({
+          companionId: owner,
+          companionDisplayName,
+          id: redacted.id,
+          title: redacted.title,
+          requestedAt: redacted.requestedAt,
+          ...(redacted.expiresAt !== undefined ? { expiresAt: redacted.expiresAt } : {}),
+          status: redacted.status,
+        });
+      }
+      approvals.sort((left, right) => (
+        left.requestedAt.localeCompare(right.requestedAt) || left.id.localeCompare(right.id)
+      ));
+      sendJson(response, 200, { schemaVersion: 1, approvals }, {
+        'Cache-Control': 'no-store, private',
+      });
+    } catch (error) {
+      throw this.normalizeSessionScopedFailure(response, error);
+    }
+  }
+
+  /**
+   * A denied/malformed session on a cookie-authed roster surface clears the
+   * stale cookie and fails as an invalid session; anything else propagates as a
+   * genuine internal error (500) so an invariant breach never reads as auth.
+   */
+  private normalizeSessionScopedFailure(response: ServerResponse, error: unknown): unknown {
+    if (error instanceof FleetAuthorizationDeniedError) {
+      response.setHeader('Set-Cookie', clearSessionCookie());
+      return new FleetAuthBrokerError('invalid_session', 401, 'Session is invalid or expired');
+    }
+    return error;
   }
 
   applyLifecycleCorsPolicy(
@@ -362,6 +496,15 @@ export class FleetAuthHttpRoutes {
           }, { 'Cache-Control': 'no-store, private' });
           return;
         }
+      }
+      if (request.method === 'GET' && url.pathname === COMPANIONS_PATH && this.rosterSource) {
+        await this.handleCompanionRoster(request, response, url);
+        return;
+      }
+      if (request.method === 'GET' && url.pathname === APPROVALS_PATH
+        && this.rosterSource && this.approvalsSource) {
+        await this.handleFleetApprovals(request, response, url);
+        return;
       }
       const token = readSessionCookie(request);
       if (!token) {

@@ -170,6 +170,158 @@ describe('tool conformance harness', () => {
   });
 });
 
+describe('extended per-action coverage (bead 65rk.7)', () => {
+  const actionSchemaReq = {
+    type: 'object',
+    properties: { action: { type: 'string' } },
+    required: ['action'],
+  };
+
+  it('default run stays byte-compatible: no mode field and only legacy probe kinds', async () => {
+    const result = await sweep(
+      [
+        tool('reader', async () => okResult()),
+        tool('schema', async () => okResult()),
+      ],
+      {
+        reader: { kind: 'read_only', args: { action: 'list' } },
+        schema: { kind: 'schema_only' },
+      },
+    );
+    expect(result).not.toHaveProperty('mode');
+    expect(Object.keys(result).sort()).toEqual(['ranAt', 'results', 'schemaVersion', 'trigger']);
+    for (const probe of result.results) {
+      expect(['read_only', 'schema_only', 'rejection_check']).toContain(probe.probeKind);
+    }
+  });
+
+  it('extended run stamps mode and appends sandbox_helper probes', async () => {
+    const result = await sweep(
+      [tool('reader', async () => okResult())],
+      { reader: { kind: 'read_only', args: { action: 'list' } } },
+      { extended: true, resolveCanonicalActions: () => undefined },
+    );
+    expect(result.mode).toBe('extended');
+    const sandboxProbes = result.results.filter(r => r.probeKind === 'sandbox_helper');
+    expect(sandboxProbes.length).toBeGreaterThan(0);
+    expect(sandboxProbes.every(p => p.ok)).toBe(true);
+  });
+
+  it('runs one probe per classified action: safe_read invoked, schema_assert schema-only', async () => {
+    const executed: Array<Record<string, unknown> | undefined> = [];
+    const t = tool('acty', async (_id, params) => {
+      executed.push(params as Record<string, unknown>);
+      return okResult();
+    }, { type: 'object', properties: { action: { type: 'string' } } });
+    const result = await sweep(
+      [t],
+      { acty: { kind: 'read_only', args: {} } },
+      {
+        extended: true,
+        resolveCanonicalActions: () => ['list', 'delete'],
+        resolveActionProbes: () => ({
+          list: { kind: 'safe_read', args: { action: 'list' } },
+          delete: { kind: 'schema_assert' },
+        }),
+      },
+    );
+    const list = result.results.find(r => r.action === 'list');
+    const del = result.results.find(r => r.action === 'delete');
+    expect(list).toMatchObject({ probeKind: 'safe_read', ok: true });
+    expect(del).toMatchObject({ probeKind: 'schema_assert', ok: true });
+    // Only the safe_read action actually invoked the handler.
+    expect(executed).toEqual([{ action: 'list' }]);
+  });
+
+  it('scoped_mutation is skipped (never executed) without the isolated-scope flag', async () => {
+    let calls = 0;
+    const t = tool('mut', async () => { calls += 1; return okResult(); });
+    const result = await sweep(
+      [t],
+      { mut: { kind: 'schema_only' } },
+      {
+        extended: true,
+        resolveCanonicalActions: () => ['scrub'],
+        resolveActionProbes: () => ({
+          scrub: { kind: 'scoped_mutation', args: { action: 'add' }, cleanup: { args: { action: 'remove' } } },
+        }),
+      },
+    );
+    const probe = result.results.find(r => r.action === 'scrub');
+    expect(probe).toMatchObject({ probeKind: 'scoped_mutation', ok: true, skipped: true });
+    expect(calls).toBe(0);
+  });
+
+  it('scoped_mutation executes then cleans up when the isolated-scope flag is set', async () => {
+    const calls: Array<Record<string, unknown> | undefined> = [];
+    const t = tool('mut', async (_id, params) => { calls.push(params as Record<string, unknown>); return okResult(); });
+    const result = await sweep(
+      [t],
+      { mut: { kind: 'schema_only' } },
+      {
+        extended: true,
+        allowScopedMutations: true,
+        resolveCanonicalActions: () => ['scrub'],
+        resolveActionProbes: () => ({
+          scrub: {
+            kind: 'scoped_mutation',
+            args: { action: 'add', channel_id: 'internal:tool-conformance' },
+            cleanup: { args: { action: 'remove', channel_id: 'internal:tool-conformance' } },
+          },
+        }),
+      },
+    );
+    const probe = result.results.find(r => r.action === 'scrub');
+    expect(probe).toMatchObject({ probeKind: 'scoped_mutation', ok: true });
+    expect(probe?.skipped).toBeUndefined();
+    expect(calls).toEqual([
+      { action: 'add', channel_id: 'internal:tool-conformance' },
+      { action: 'remove', channel_id: 'internal:tool-conformance' },
+    ]);
+  });
+
+  it('scoped_mutation FAILS closed (cleanup_failed) when teardown returns an error', async () => {
+    const t = tool('mut', async (_id, params) =>
+      (params as { action?: unknown }).action === 'remove' ? errorResult('teardown broke') : okResult());
+    const result = await sweep(
+      [t],
+      { mut: { kind: 'schema_only' } },
+      {
+        extended: true,
+        allowScopedMutations: true,
+        resolveCanonicalActions: () => ['scrub'],
+        resolveActionProbes: () => ({
+          scrub: { kind: 'scoped_mutation', args: { action: 'add' }, cleanup: { args: { action: 'remove' } } },
+        }),
+      },
+    );
+    const probe = result.results.find(r => r.action === 'scrub');
+    expect(probe).toMatchObject({ ok: false, classification: 'cleanup_failed' });
+  });
+
+  it('fails closed when a canonical action has no per-action classification', async () => {
+    await expect(sweep(
+      [tool('acty', async () => okResult(), actionSchemaReq)],
+      { acty: { kind: 'schema_only' } },
+      {
+        extended: true,
+        resolveCanonicalActions: () => ['list', 'unclassified_verb'],
+        resolveActionProbes: () => ({ list: { kind: 'safe_read', args: { action: 'list' } } }),
+      },
+    )).rejects.toBeInstanceOf(ToolConformanceHarnessError);
+  });
+
+  it('extended mode falls back to the default per-tool probe for action-less tools', async () => {
+    const result = await sweep(
+      [tool('reader', async () => okResult())],
+      { reader: { kind: 'read_only', args: { action: 'list' } } },
+      { extended: true, resolveCanonicalActions: () => [] },
+    );
+    const probe = result.results.find(r => r.toolName === 'reader');
+    expect(probe).toMatchObject({ probeKind: 'read_only', ok: true });
+  });
+});
+
 describe('tool conformance harness never writes session entries', () => {
   it('performs zero session-store writes during a full sweep', async () => {
     // Session write surfaces per src/core/session/manager.ts + store.ts.

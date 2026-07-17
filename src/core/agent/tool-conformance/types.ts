@@ -16,7 +16,23 @@ export const TOOL_CONFORMANCE_SCHEMA_VERSION = 1 as const;
 
 export type ToolConformanceTrigger = 'manual' | 'post_rollout' | 'scheduled';
 
-export type ToolConformanceProbeKind = 'read_only' | 'schema_only' | 'rejection_check';
+/**
+ * Probe kinds.
+ *   - read_only / schema_only : the default per-tool probes (byte-stable
+ *     rollout-gate contract; never removed).
+ *   - rejection_check         : required-action empty-args regression probe.
+ *   - safe_read / scoped_mutation / schema_assert : the per-action extended
+ *     probes (only emitted when the sweep runs in extended mode).
+ *   - sandbox_helper          : REPL-only sandbox host-helper wiring/gate probe.
+ */
+export type ToolConformanceProbeKind =
+  | 'read_only'
+  | 'schema_only'
+  | 'rejection_check'
+  | 'safe_read'
+  | 'scoped_mutation'
+  | 'schema_assert'
+  | 'sandbox_helper';
 
 /**
  * Failure classification. Absent on a passing probe. Fail-closed: any throw,
@@ -30,7 +46,11 @@ export type ToolConformanceClassification =
   | 'returned_error'
   | 'accepted_empty_args'
   | 'schema_invalid'
-  | 'missing_required_fields';
+  | 'missing_required_fields'
+  // Extended-mode classifications.
+  | 'cleanup_failed'
+  | 'gate_inconsistent'
+  | 'helper_missing';
 
 export interface ToolConformanceProbeResult {
   toolName: string;
@@ -39,6 +59,13 @@ export interface ToolConformanceProbeResult {
   action?: string;
   ok: boolean;
   durationMs: number;
+  /**
+   * True when a scoped_mutation probe was recorded but deliberately NOT executed
+   * because the caller did not pass the isolated-scope flag. A skipped probe is a
+   * pass (ok:true) with no classification — it means "classified, execution
+   * withheld", never a silent failure.
+   */
+  skipped?: boolean;
   classification?: ToolConformanceClassification;
   error?: string;
 }
@@ -48,6 +75,12 @@ export interface ToolConformanceRunResult {
   ranAt: number;
   trigger: ToolConformanceTrigger;
   results: ToolConformanceProbeResult[];
+  /**
+   * Present ONLY on extended-mode runs. A default (per-tool) run omits this field
+   * entirely so its persisted JSON stays byte-compatible with the kube
+   * post-rollout gate and self_status diagnosis consumers.
+   */
+  mode?: 'extended';
 }
 
 /**

@@ -12,8 +12,22 @@ import { runToolConformanceSweep, DEFAULT_PER_PROBE_TIMEOUT_MS } from './harness
 import { readToolConformanceLatest, writeToolConformanceResult } from './store.js';
 import type { ToolConformanceRunResult, ToolConformanceTrigger } from './types.js';
 
+export interface ToolConformanceRunOptions {
+  /**
+   * Opt-in per-action coverage (bead 65rk.7). Absent/false → the legacy per-tool
+   * sweep whose persisted result is byte-compatible with the rollout-gate consumer.
+   */
+  extended?: boolean;
+  /**
+   * Isolated-scope flag: only meaningful with `extended`. Executes scoped_mutation
+   * probes against the internal:tool-conformance channel with cleanup. Default runs
+   * never execute mutations.
+   */
+  allowScopedMutations?: boolean;
+}
+
 export interface ToolConformanceRunner {
-  run(trigger: ToolConformanceTrigger): Promise<ToolConformanceRunResult>;
+  run(trigger: ToolConformanceTrigger, options?: ToolConformanceRunOptions): Promise<ToolConformanceRunResult>;
   getLatest(): ToolConformanceRunResult | null;
 }
 
@@ -29,7 +43,7 @@ export interface ToolConformanceRunnerDeps {
 export function createToolConformanceRunner(deps: ToolConformanceRunnerDeps): ToolConformanceRunner {
   const perProbeTimeoutMs = deps.perProbeTimeoutMs ?? DEFAULT_PER_PROBE_TIMEOUT_MS;
   return {
-    async run(trigger: ToolConformanceTrigger): Promise<ToolConformanceRunResult> {
+    async run(trigger: ToolConformanceTrigger, options?: ToolConformanceRunOptions): Promise<ToolConformanceRunResult> {
       const catalog = deps.getToolCatalog();
       const tools = [...catalog.core, ...catalog.extended];
       const result = await runToolConformanceSweep({
@@ -37,6 +51,8 @@ export function createToolConformanceRunner(deps: ToolConformanceRunnerDeps): To
         trigger,
         perProbeTimeoutMs,
         ...(deps.now ? { now: deps.now } : {}),
+        ...(options?.extended ? { extended: true } : {}),
+        ...(options?.allowScopedMutations ? { allowScopedMutations: true } : {}),
       });
       writeToolConformanceResult(deps.systemDataDir, result);
       return result;

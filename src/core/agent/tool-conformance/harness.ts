@@ -8,10 +8,18 @@
 import type { AgentTool, AgentToolResult } from '../../../boundary/pi-agent/index.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import { extractRequiredParameterNames } from '../tool-catalog.js';
-import { getToolProbeSpec, type ToolProbeSpec } from './probe-registry.js';
+import { getCanonicalToolSurface } from '../tool-surface/registry.js';
+import {
+  getToolProbeSpec,
+  getToolActionProbes,
+  type ToolProbeSpec,
+  type ActionProbeSpec,
+} from './probe-registry.js';
+import { runSandboxHelperProbes } from './sandbox-helper-probe.js';
 import {
   ToolConformanceHarnessError,
   TOOL_CONFORMANCE_SCHEMA_VERSION,
+  type ToolConformanceClassification,
   type ToolConformanceProbeResult,
   type ToolConformanceRunResult,
   type ToolConformanceTrigger,
@@ -34,6 +42,24 @@ export interface ToolConformanceSweepInput {
   monotonicNow?: () => number;
   /** Override registry lookup (tests). */
   resolveProbeSpec?: (toolName: string) => ToolProbeSpec | undefined;
+  /** Override the canonical action list per tool (tests). Defaults to the tool-surface registry. */
+  resolveCanonicalActions?: (toolName: string) => readonly string[] | undefined;
+  /** Override the per-action probe classification map per tool (tests). Defaults to the action registry. */
+  resolveActionProbes?: (toolName: string) => Readonly<Record<string, ActionProbeSpec>> | undefined;
+  /**
+   * Opt-in per-action coverage (bead 65rk.7). When false/absent the sweep is
+   * byte-identical to the legacy per-tool run (the rollout-gate contract). When
+   * true the sweep adds one probe per canonical action plus the REPL sandbox
+   * helper probes, and stamps `mode: 'extended'` on the result.
+   */
+  extended?: boolean;
+  /**
+   * Isolated-scope flag. Only meaningful with `extended`. When true, scoped_mutation
+   * probes EXECUTE against the internal:tool-conformance channel with cleanup;
+   * otherwise they are recorded skipped and never executed. Default runs never
+   * execute mutations regardless of this flag.
+   */
+  allowScopedMutations?: boolean;
 }
 
 type ExecuteOutcome =
@@ -115,6 +141,30 @@ function validateSchema(tool: AgentTool<any>): { ok: true } | { ok: false; error
   return { ok: true };
 }
 
+/**
+ * Classify an execute outcome into a failure descriptor, or null on success.
+ * Shared by the per-action safe_read and scoped_mutation probes so a thrown /
+ * timed-out / malformed / isError handler is always a fail-closed failure.
+ */
+function classifyExecuteOutcome(
+  outcome: ExecuteOutcome,
+  timeoutMs: number,
+): { classification: ToolConformanceClassification; error: string } | null {
+  if (outcome.kind === 'timeout') {
+    return { classification: 'timeout', error: `exceeded ${timeoutMs}ms` };
+  }
+  if (outcome.kind === 'error') {
+    return { classification: 'threw', error: toErrorText(outcome.error) };
+  }
+  if (!isWellFormedToolResult(outcome.value)) {
+    return { classification: 'malformed_output', error: 'result is not a well-formed AgentToolResult' };
+  }
+  if (resultIsError(outcome.value)) {
+    return { classification: 'returned_error', error: extractResultText(outcome.value) };
+  }
+  return null;
+}
+
 async function runReadOnlyProbe(
   tool: AgentTool<any>,
   spec: Extract<ToolProbeSpec, { kind: 'read_only' }>,
@@ -164,6 +214,113 @@ function runSchemaOnlyProbe(
     classification: 'schema_invalid',
     error: validation.error,
   };
+}
+
+// ── Per-action extended probes (bead 65rk.7) ───────────────────────────────
+
+async function runSafeReadActionProbe(
+  tool: AgentTool<any>,
+  action: string,
+  spec: Extract<ActionProbeSpec, { kind: 'safe_read' }>,
+  timeoutMs: number,
+  monotonicNow: () => number,
+): Promise<ToolConformanceProbeResult> {
+  const started = monotonicNow();
+  const outcome = await executeWithTimeout(tool, spec.args, timeoutMs);
+  const durationMs = Math.max(0, monotonicNow() - started);
+  const base = { toolName: tool.name, probeKind: 'safe_read' as const, action, durationMs };
+  const failure = classifyExecuteOutcome(outcome, timeoutMs);
+  if (failure) return { ...base, ok: false, classification: failure.classification, error: failure.error };
+  return { ...base, ok: true };
+}
+
+function runSchemaAssertActionProbe(
+  tool: AgentTool<any>,
+  action: string,
+  monotonicNow: () => number,
+): ToolConformanceProbeResult {
+  const started = monotonicNow();
+  const validation = validateSchema(tool);
+  const durationMs = Math.max(0, monotonicNow() - started);
+  const base = { toolName: tool.name, probeKind: 'schema_assert' as const, action, durationMs };
+  if (validation.ok) return { ...base, ok: true };
+  return { ...base, ok: false, classification: 'schema_invalid', error: validation.error };
+}
+
+/**
+ * A scoped_mutation probe. Fail-closed teardown discipline: the mutation runs ONLY
+ * when the isolated-scope flag is set; a run that mutates ALWAYS attempts cleanup,
+ * and a failed cleanup is a conformance failure so the sweep never leaves residue.
+ */
+async function runScopedMutationActionProbe(
+  tool: AgentTool<any>,
+  action: string,
+  spec: Extract<ActionProbeSpec, { kind: 'scoped_mutation' }>,
+  timeoutMs: number,
+  monotonicNow: () => number,
+  allowScopedMutations: boolean,
+): Promise<ToolConformanceProbeResult> {
+  const base = { toolName: tool.name, probeKind: 'scoped_mutation' as const, action };
+  if (!allowScopedMutations) {
+    // Default (unflagged) extended run: classified, execution withheld.
+    return { ...base, ok: true, skipped: true, durationMs: 0 };
+  }
+  const started = monotonicNow();
+  const mutation = await executeWithTimeout(tool, spec.args, timeoutMs);
+  // Always attempt teardown so a partial mutation cannot leave residue.
+  const cleanup = await executeWithTimeout(tool, spec.cleanup.args, timeoutMs);
+  const durationMs = Math.max(0, monotonicNow() - started);
+
+  const mutationFailure = classifyExecuteOutcome(mutation, timeoutMs);
+  if (mutationFailure) {
+    return { ...base, ok: false, durationMs, classification: mutationFailure.classification, error: mutationFailure.error };
+  }
+  const cleanupFailure = classifyExecuteOutcome(cleanup, timeoutMs);
+  if (cleanupFailure) {
+    return {
+      ...base,
+      ok: false,
+      durationMs,
+      classification: 'cleanup_failed',
+      error: `cleanup ${cleanupFailure.classification}: ${cleanupFailure.error}`,
+    };
+  }
+  return { ...base, ok: true, durationMs };
+}
+
+/**
+ * Run every classified action of one tool. Fails closed (ToolConformanceHarnessError)
+ * when a canonical action-aware tool has an action with no per-action classification —
+ * the runtime mirror of the static coverage test.
+ */
+async function runExtendedActionProbes(
+  tool: AgentTool<any>,
+  timeoutMs: number,
+  monotonicNow: () => number,
+  allowScopedMutations: boolean,
+  resolveCanonicalActions: (toolName: string) => readonly string[] | undefined,
+  resolveActionProbes: (toolName: string) => Readonly<Record<string, ActionProbeSpec>> | undefined,
+): Promise<ToolConformanceProbeResult[]> {
+  const actions = resolveCanonicalActions(tool.name) ?? [];
+  if (actions.length === 0) return [];
+  const actionProbes = resolveActionProbes(tool.name);
+  const results: ToolConformanceProbeResult[] = [];
+  for (const action of actions) {
+    const spec = actionProbes ? actionProbes[action] : undefined;
+    if (!spec) {
+      throw new ToolConformanceHarnessError(
+        `extended sweep: tool "${tool.name}" action "${action}" has no per-action probe classification`,
+      );
+    }
+    if (spec.kind === 'safe_read') {
+      results.push(await runSafeReadActionProbe(tool, action, spec, timeoutMs, monotonicNow));
+    } else if (spec.kind === 'scoped_mutation') {
+      results.push(await runScopedMutationActionProbe(tool, action, spec, timeoutMs, monotonicNow, allowScopedMutations));
+    } else {
+      results.push(runSchemaAssertActionProbe(tool, action, monotonicNow));
+    }
+  }
+  return results;
 }
 
 /**
@@ -229,17 +386,43 @@ export async function runToolConformanceSweep(
     );
   }
 
+  const extended = input.extended === true;
+  const allowScopedMutations = input.allowScopedMutations === true;
+  const resolveCanonicalActions = input.resolveCanonicalActions
+    ?? ((toolName: string) => getCanonicalToolSurface(toolName)?.actions);
+  const resolveActionProbes = input.resolveActionProbes ?? getToolActionProbes;
+
   const results: ToolConformanceProbeResult[] = [];
   for (const tool of input.tools) {
     const spec = resolveProbeSpec(tool.name);
     if (!spec) continue; // unreachable: guarded above
-    if (spec.kind === 'read_only') {
+
+    if (extended) {
+      const actionResults = await runExtendedActionProbes(
+        tool, timeoutMs, monotonicNow, allowScopedMutations, resolveCanonicalActions, resolveActionProbes,
+      );
+      if (actionResults.length > 0) {
+        // Action-aware tool: per-action probes replace the single per-tool probe.
+        results.push(...actionResults);
+      } else if (spec.kind === 'read_only') {
+        // Action-less tool: reuse the default per-tool probe.
+        results.push(await runReadOnlyProbe(tool, spec, timeoutMs, monotonicNow));
+      } else {
+        results.push(runSchemaOnlyProbe(tool, monotonicNow));
+      }
+    } else if (spec.kind === 'read_only') {
       results.push(await runReadOnlyProbe(tool, spec, timeoutMs, monotonicNow));
     } else {
       results.push(runSchemaOnlyProbe(tool, monotonicNow));
     }
+
     const rejection = await runRejectionProbe(tool, timeoutMs, monotonicNow);
     if (rejection) results.push(rejection);
+  }
+
+  if (extended) {
+    // REPL-only sandbox helper probes (execution-free, LLM-free).
+    results.push(...runSandboxHelperProbes(monotonicNow));
   }
 
   return {
@@ -247,5 +430,8 @@ export async function runToolConformanceSweep(
     ranAt: now(),
     trigger: input.trigger,
     results,
+    // `mode` is present ONLY on extended runs; a default run omits it so its
+    // persisted JSON stays byte-compatible with the rollout-gate consumer.
+    ...(extended ? { mode: 'extended' as const } : {}),
   };
 }

@@ -2,7 +2,11 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { relative, resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { listCanonicalToolSurfaces } from '../tool-surface/registry.js';
-import { TOOL_CONFORMANCE_PROBE_REGISTRY } from './probe-registry.js';
+import {
+  TOOL_CONFORMANCE_PROBE_REGISTRY,
+  TOOL_CONFORMANCE_ACTION_REGISTRY,
+  TOOL_CONFORMANCE_INTERNAL_CHANNEL,
+} from './probe-registry.js';
 
 // Actions that must NEVER be classified as read_only.
 const MUTATING_ACTION_HINTS = [
@@ -54,6 +58,88 @@ describe('tool conformance probe registry coverage', () => {
         MUTATING_ACTION_HINTS.includes(action),
         `${name} read_only probe uses mutating action "${action}"`,
       ).toBe(false);
+    }
+  });
+});
+
+describe('tool conformance per-action registry coverage (bead 65rk.7)', () => {
+  const actionAwareSurfaces = listCanonicalToolSurfaces()
+    .filter(surface => (surface.actions?.length ?? 0) > 0);
+
+  it('classifies every canonical action of every action-aware tool (fails closed on a new verb)', () => {
+    const missing: string[] = [];
+    for (const surface of actionAwareSurfaces) {
+      const classified = TOOL_CONFORMANCE_ACTION_REGISTRY[surface.name] ?? {};
+      for (const action of surface.actions ?? []) {
+        if (!Object.prototype.hasOwnProperty.call(classified, action)) {
+          missing.push(`${surface.name}.${action}`);
+        }
+      }
+    }
+    expect(missing, `unclassified canonical actions: ${missing.join(', ')}`).toEqual([]);
+  });
+
+  it('has no stale action entries pointing at non-canonical tool/action names', () => {
+    const canonicalActions = new Map(
+      listCanonicalToolSurfaces().map(surface => [surface.name, new Set(surface.actions ?? [])]),
+    );
+    const stale: string[] = [];
+    for (const [toolName, actions] of Object.entries(TOOL_CONFORMANCE_ACTION_REGISTRY)) {
+      const canonical = canonicalActions.get(toolName);
+      if (!canonical) {
+        stale.push(`${toolName} (not a canonical tool)`);
+        continue;
+      }
+      for (const action of Object.keys(actions)) {
+        if (!canonical.has(action)) stale.push(`${toolName}.${action}`);
+      }
+    }
+    expect(stale, `stale action registry entries: ${stale.join(', ')}`).toEqual([]);
+  });
+
+  it('does not register action entries for action-less tools', () => {
+    const actionLess = listCanonicalToolSurfaces()
+      .filter(surface => (surface.actions?.length ?? 0) === 0)
+      .map(surface => surface.name);
+    for (const name of actionLess) {
+      expect(TOOL_CONFORMANCE_ACTION_REGISTRY, `${name} is action-less and must not carry action probes`)
+        .not.toHaveProperty(name);
+    }
+  });
+
+  it('classifies every action as exactly one of safe_read / scoped_mutation / schema_assert', () => {
+    for (const [toolName, actions] of Object.entries(TOOL_CONFORMANCE_ACTION_REGISTRY)) {
+      for (const [action, spec] of Object.entries(actions)) {
+        expect(['safe_read', 'scoped_mutation', 'schema_assert'], `${toolName}.${action}`).toContain(spec.kind);
+      }
+    }
+  });
+
+  it('never classifies a mutating verb as safe_read', () => {
+    for (const [toolName, actions] of Object.entries(TOOL_CONFORMANCE_ACTION_REGISTRY)) {
+      for (const [action, spec] of Object.entries(actions)) {
+        if (spec.kind !== 'safe_read') continue;
+        expect(
+          MUTATING_ACTION_HINTS.includes(action),
+          `${toolName}.${action} safe_read probe uses a mutating verb`,
+        ).toBe(false);
+        // The dispatched action must match the classified action key.
+        expect((spec.args as { action?: unknown }).action, `${toolName}.${action} safe_read args.action mismatch`)
+          .toBe(action);
+      }
+    }
+  });
+
+  it('gives every scoped_mutation a cleanup teardown scoped to the internal channel', () => {
+    for (const [toolName, actions] of Object.entries(TOOL_CONFORMANCE_ACTION_REGISTRY)) {
+      for (const [action, spec] of Object.entries(actions)) {
+        if (spec.kind !== 'scoped_mutation') continue;
+        expect(spec.cleanup.args, `${toolName}.${action} scoped_mutation missing cleanup`).toBeDefined();
+        expect(
+          (spec.args as { channel_id?: unknown }).channel_id,
+          `${toolName}.${action} scoped_mutation must target the internal:tool-conformance channel`,
+        ).toBe(TOOL_CONFORMANCE_INTERNAL_CHANNEL);
+      }
     }
   });
 });

@@ -6,11 +6,13 @@
 #   local (default): edits capability-tier.json in the round system-data and
 #     restarts the split runtime between tiers, backing the owner file up before
 #     the sweep and restoring + verifying it on exit.
-#   kube: flips the tier LIVE through the Garden settings API
-#     (PATCH /api/admin/settings {capabilityTier}) — the capability runtime
-#     hot-reloads on the persisted change, so there is no redeploy and no PVC
-#     file edit. The pre-sweep tier is captured via the settings API and restored
-#     + confirmed through it on exit.
+#   kube: flips the tier LIVE through the canonical Garden owner-file editor
+#     (POST /api/admin/settings/capabilities with a form-urlencoded configJson of
+#     the full capability-tier owner object) — the capability runtime hot-reloads
+#     on the persisted change, so there is no redeploy and no PVC file edit. The
+#     pre-sweep tier is captured via the settings API, persisted to a durable
+#     record under the matrix dir before the first flip, and restored + confirmed
+#     (with bounded retry) through the settings API on exit.
 #
 # Fail-closed: every path/URL comes from the already-sourced shakedown env; there
 # are no /mnt or previous-sprint defaults and this script sources no env file of
@@ -97,6 +99,14 @@ mkdir -p "$MATRIX_DIR"
 TIER_BACKUP=""
 ORIGINAL_TIER_JSON=""
 ORIGINAL_TIER=""
+# Durable record of the pre-sweep kube tier. Written under the matrix dir BEFORE
+# the first flip so a crashed/SIGKILLed run (which cannot run the exit trap) can
+# still be recovered manually: `node lib/target.mjs set-tier "$(cat <file>)"`.
+ORIGINAL_TIER_FILE="${PSFN_ORIGINAL_TIER_FILE:-$MATRIX_DIR/original-capability-tier}"
+# Bounded retry budget for the kube revert on transient settings-API failure
+# (e.g. a port-forward blip) before it escalates to a loud FATAL.
+RESTORE_MAX_ATTEMPTS="${PSFN_TIER_RESTORE_MAX_ATTEMPTS:-5}"
+RESTORE_RETRY_DELAY_S="${PSFN_TIER_RESTORE_RETRY_DELAY_S:-2}"
 if [[ "$TARGET" == "local" ]]; then
   TIER_BACKUP="$(mktemp)"
   cp "$TIER_FILE" "$TIER_BACKUP"
@@ -112,29 +122,42 @@ else
     echo "FATAL: could not read the pre-sweep capability tier from the settings API." >&2
     exit 1
   fi
-  echo "kube target: pre-sweep capability tier is '$ORIGINAL_TIER'." >&2
+  # Persist the pre-sweep tier durably before ANY flip, so an out-of-band kill
+  # still leaves a recoverable record on disk.
+  printf '%s\n' "$ORIGINAL_TIER" > "$ORIGINAL_TIER_FILE"
+  echo "kube target: pre-sweep capability tier is '$ORIGINAL_TIER' (durable record: $ORIGINAL_TIER_FILE)." >&2
 fi
 
 TIER_RESTORED=0
 restore_tier() {
   # Restore the pre-sweep tier, then verify it. A failed restore is a hard error
   # even on the exit path — the sweep must never leave the tier mutated.
-  # Idempotent: the signal traps exit into the EXIT trap, so guard against a
-  # second invocation.
+  # TIER_RESTORED is only set to 1 AFTER an effective, confirming read-back shows
+  # the tier is actually back to the original, so an interleaved signal that
+  # arrives before confirmation re-enters and retries rather than short-circuit.
   if [ "$TIER_RESTORED" = "1" ]; then
     return 0
   fi
-  TIER_RESTORED=1
   if [[ "$TARGET" == "kube" ]]; then
-    # Re-flip via the settings API; set-tier confirms the persisted hot-reload
-    # by re-reading the tier, so a clean exit here IS the verified restore.
-    local confirmed
-    if ! confirmed="$(node "$TARGET_LIB" set-tier "$ORIGINAL_TIER")"; then
-      echo "FATAL: capability tier restore to '$ORIGINAL_TIER' via the settings API failed or was not confirmed." >&2
-      exit 1
-    fi
-    echo "kube target: capability tier restored to '$confirmed' and confirmed via the settings API." >&2
-    return 0
+    # Re-flip via the settings API. set-tier confirms the persisted hot-reload by
+    # re-reading the tier and prints the confirmed tier on stdout; we additionally
+    # assert that read-back equals the original before marking restored. Retry a
+    # bounded number of times on transient failure (e.g. a port-forward blip)
+    # before escalating to a loud FATAL that names the durable recovery record.
+    local attempt=0 confirmed=""
+    while (( attempt < RESTORE_MAX_ATTEMPTS )); do
+      attempt=$((attempt + 1))
+      if confirmed="$(node "$TARGET_LIB" set-tier "$ORIGINAL_TIER")" \
+        && [[ "$confirmed" == "$ORIGINAL_TIER" ]]; then
+        TIER_RESTORED=1
+        echo "kube target: capability tier restored to '$confirmed' and confirmed via the settings API (attempt $attempt/$RESTORE_MAX_ATTEMPTS)." >&2
+        return 0
+      fi
+      echo "WARN: capability tier restore attempt $attempt/$RESTORE_MAX_ATTEMPTS to '$ORIGINAL_TIER' failed or was unconfirmed; retrying in ${RESTORE_RETRY_DELAY_S}s..." >&2
+      sleep "$RESTORE_RETRY_DELAY_S"
+    done
+    echo "FATAL: capability tier restore to '$ORIGINAL_TIER' via the settings API failed after $RESTORE_MAX_ATTEMPTS attempts. Recover manually: node '$TARGET_LIB' set-tier \"\$(cat '$ORIGINAL_TIER_FILE')\"" >&2
+    exit 1
   fi
   local restore_file
   restore_file="$(mktemp)"
@@ -145,6 +168,8 @@ restore_tier() {
     rm -f "$TIER_BACKUP"
     exit 1
   fi
+  # Only now — after the byte-for-byte verify — is the local restore confirmed.
+  TIER_RESTORED=1
   rm -f "$TIER_BACKUP"
   echo "capability-tier.json restored and verified against pre-sweep backup." >&2
 }
@@ -187,8 +212,14 @@ run_phase() {
   local output="$MATRIX_DIR/live-system-shakedown.${label}.json"
   LAST_PHASE_OUTPUT="$output"
 
-  set_tier "$tier"
-  restart_runtime
+  # run_phase runs under `run_phase ... || status=$?` in run_phase_or_abort,
+  # which suppresses `set -e` for everything inside this function. An unconfirmed
+  # forward flip (or a failed restart) MUST still abort the phase so no case ever
+  # runs against the WRONG tier — make it explicit with `|| return $?` instead of
+  # relying on set -e. The non-zero return propagates to run_phase_or_abort, which
+  # marks the remaining tiers aborted and lets the exit-trap revert fire.
+  set_tier "$tier" || return $?
+  restart_runtime || return $?
 
   PSFN_SHAKEDOWN_PHASE="$phase" \
   PSFN_CASE_IDS="$case_ids" \

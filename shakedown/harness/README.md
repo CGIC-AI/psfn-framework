@@ -43,16 +43,29 @@ targets, so nothing hardcodes a namespace, service, port, or `/mnt` path:
 | `POSTGRES_DATABASE_URL` | round Postgres | reach the deployment DB via a port-forward; proofs run against it |
 | `PSFN_TIER_FLIP_CONFIRM_TIMEOUT_MS` | tier-flip confirm budget (default 30000) | kube only |
 | `PSFN_TIER_FLIP_POLL_MS` | tier-flip confirm poll interval (default 1500) | kube only |
+| `PSFN_ORIGINAL_TIER_FILE` | durable pre-sweep tier record (default `$PSFN_MATRIX_DIR/original-capability-tier`) | kube only |
+| `PSFN_TIER_RESTORE_MAX_ATTEMPTS` | bounded revert retries on transient failure (default 5) | kube only |
+| `PSFN_TIER_RESTORE_RETRY_DELAY_S` | delay between revert retries (default 2) | kube only |
 
 **local** bootstraps a fresh split runtime; the tier sweep edits
 `capability-tier.json` in the round `system-data` and restarts the runtime
 between tiers. **kube** targets Artie's persistent deployment: the sweep flips
-the tier **live through the settings API** (`PATCH /api/admin/settings`
-`{capabilityTier}`), the capability runtime hot-reloads on the persisted change
-(no redeploy, no PVC file edit), and each flip is **confirmed** by re-reading
-`editors.capabilities.tier` from `GET /api/admin/settings` before that tier's
-cases run — an unconfirmed flip is a hard error. Do not bootstrap or wipe the
-kube lane and never write owner files on the PVC to change the tier.
+the tier **live through the canonical owner-file editor** — `capabilityTier` is
+an owner-mapped field that `PATCH /api/admin/settings` rejects (HTTP 400
+`wrong_owner`), so the tier is only mutable via
+`POST /api/admin/settings/capabilities` (`Content-Type`
+`application/x-www-form-urlencoded`, body `configJson=<full owner JSON>`). The
+flip GETs the current owner object from `GET /api/admin/settings/capabilities`,
+swaps only `.tier` while **preserving `customTokens`**, and POSTs the whole
+object back; success is HTTP 200 `capability-tier.json saved`. The capability
+runtime hot-reloads on the persisted change (no redeploy, no PVC file edit), and
+each flip is **confirmed** by re-reading `.tier` from
+`GET /api/admin/settings/capabilities` before that tier's cases run — an
+unconfirmed flip is a hard error that aborts the phase. The pre-sweep tier is
+persisted to a durable record before the first flip and the revert retries a
+bounded number of times, confirming the read-back is back to the original before
+it is marked restored. Do not bootstrap or wipe the kube lane and never write
+owner files on the PVC to change the tier.
 
 `lib/target.mjs` doubles as a CLI the sweep drives (`get-tier`, `set-tier <tier>`,
 `check-gateway`, `check-postgres`, `resolve`); each is fail-closed and prints no

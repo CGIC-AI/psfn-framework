@@ -11,11 +11,21 @@
 // so nothing here ever names a namespace, service, or /mnt path.
 //
 // It also owns the kube tier-flip: on kube the capability tier must be changed
-// LIVE through the Garden settings API (PATCH /api/admin/settings
-// {capabilityTier}) — never by editing capability-tier.json on the PVC — and the
-// hot-reload must be confirmed by re-reading the setting before the tier's cases
-// run. The tier sweep script (run-live-shakedown-matrix.sh) drives these through
-// the CLI at the bottom of this file so its signal-safe revert can call them.
+// LIVE through the Garden settings API, never by editing capability-tier.json on
+// the PVC. `capabilityTier` is an owner-mapped field, so PATCH
+// /api/admin/settings {capabilityTier} is rejected (HTTP 400 wrong_owner) by
+// validateSettingsPayload before any mutation — that endpoint can NEVER change
+// the tier. The canonical editor is the sub-config route:
+//   read : GET  /api/admin/settings/capabilities -> {"tier","customTokens":[…]}
+//          (the raw capability-tier.json the runtime hot-reloads on mtime change)
+//   write: POST /api/admin/settings/capabilities, Content-Type
+//          application/x-www-form-urlencoded, body configJson=<full owner JSON>;
+//          success is HTTP 200 text "capability-tier.json saved". The write
+//          replaces the whole file, so the flip GETs the current owner object,
+//          swaps only .tier, PRESERVES customTokens, and POSTs the whole thing.
+// The hot-reload is confirmed by re-reading .tier before the tier's cases run.
+// The tier sweep script (run-live-shakedown-matrix.sh) drives these through the
+// CLI at the bottom of this file so its signal-safe revert can call them.
 
 import {
   requireEnv,
@@ -76,20 +86,27 @@ export function resolveTarget(env = process.env) {
   };
 }
 
-function adminAuthHeaders(adminToken) {
-  return { Authorization: `Bearer ${adminToken}`, 'Content-Type': 'application/json' };
+function adminAuthHeaders(adminToken, contentType = null) {
+  const headers = { Authorization: `Bearer ${adminToken}` };
+  if (contentType) headers['Content-Type'] = contentType;
+  return headers;
+}
+
+/** URL to the canonical capability-tier owner-file editor sub-config route. */
+function capabilitiesEditorUrl(adminBaseUrl) {
+  return `${adminBaseUrl}/api/admin/settings/capabilities`;
 }
 
 /**
- * Read the live capability tier from the Garden settings API. The tier is a
- * non-runtime settings key, so it is exposed under `editors.capabilities.tier`
- * (settings-service.getSettingsData → loadSettingsConfigEditors), which reads
- * the persisted capability-tier.json fresh — the exact file the runtime
- * hot-reloads on mtime change. Throws loudly on any transport/shape failure so
- * an unconfirmable flip never runs cases against an unknown tier.
+ * Read the live capability-tier owner object from the canonical editor route,
+ * GET /api/admin/settings/capabilities. The body is the raw capability-tier.json
+ * ({"tier","customTokens":[…]}) — the exact file the runtime hot-reloads on
+ * mtime change. Returns the full parsed object so a flip can preserve
+ * customTokens when it writes the whole file back. Throws loudly on any
+ * transport/shape failure so an unconfirmable read never drives a flip.
  */
-export async function fetchCurrentTier({ adminBaseUrl, adminToken }, timeoutMs = 15000) {
-  const url = `${adminBaseUrl}/api/admin/settings`;
+export async function fetchCapabilityConfig({ adminBaseUrl, adminToken }, timeoutMs = 15000) {
+  const url = capabilitiesEditorUrl(adminBaseUrl);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let response;
@@ -111,19 +128,36 @@ export async function fetchCurrentTier({ adminBaseUrl, adminToken }, timeoutMs =
   } catch {
     throw new Error(`GET ${url} returned non-JSON body: ${rawText.slice(0, 400)}`);
   }
-  const tier = parsed?.editors?.capabilities?.tier;
+  const tier = parsed?.tier;
   if (typeof tier !== 'string' || tier.trim().length === 0) {
-    throw new Error(`GET ${url} response is missing editors.capabilities.tier`);
+    throw new Error(`GET ${url} response is missing .tier`);
   }
-  return tier.trim();
+  return parsed;
 }
 
 /**
- * Flip the capability tier through the settings API (PATCH capabilityTier) and
- * confirm the persisted hot-reload took effect by polling the GET read-back
- * until it reports the requested tier. A PATCH that returns non-2xx, or a flip
- * the read-back never confirms within the timeout, is a hard error — the sweep
- * must never run a tier's cases against an unconfirmed flip.
+ * Read the live capability tier string from the canonical editor route. Thin
+ * wrapper over fetchCapabilityConfig — used by the confirm poll and the get-tier
+ * CLI. Throws loudly on any transport/shape failure.
+ */
+export async function fetchCurrentTier({ adminBaseUrl, adminToken }, timeoutMs = 15000) {
+  const config = await fetchCapabilityConfig({ adminBaseUrl, adminToken }, timeoutMs);
+  return config.tier.trim();
+}
+
+/**
+ * Flip the capability tier through the canonical owner-file editor and confirm
+ * the persisted hot-reload took effect.
+ *
+ * `capabilityTier` is an owner-mapped field, so the PATCH /api/admin/settings
+ * route rejects it (HTTP 400 wrong_owner) before mutating anything. The tier is
+ * only mutable through POST /api/admin/settings/capabilities, which rewrites the
+ * whole capability-tier.json. This GETs the current owner object, swaps only
+ * .tier while PRESERVING customTokens, POSTs the full object back as a
+ * form-urlencoded configJson field, then polls the read-back until it reports
+ * the requested tier. A POST that returns non-2xx, or a flip the read-back never
+ * confirms within the timeout, is a hard error — the sweep must never run a
+ * tier's cases against an unconfirmed flip.
  */
 export async function setTierAndConfirm({
   adminBaseUrl,
@@ -136,26 +170,33 @@ export async function setTierAndConfirm({
   if (requested.length === 0) {
     throw new Error('setTierAndConfirm requires a non-empty tier');
   }
-  const url = `${adminBaseUrl}/api/admin/settings`;
+
+  // Read the current owner object first so the whole-file write preserves
+  // customTokens (POST replaces capability-tier.json in its entirety).
+  const current = await fetchCapabilityConfig({ adminBaseUrl, adminToken });
+  const nextConfig = { ...current, tier: requested };
+
+  const url = capabilitiesEditorUrl(adminBaseUrl);
+  const body = new URLSearchParams({ configJson: JSON.stringify(nextConfig) }).toString();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 20000);
   let response;
   let rawText;
   try {
     response = await fetch(url, {
-      method: 'PATCH',
-      headers: adminAuthHeaders(adminToken),
-      body: JSON.stringify({ capabilityTier: requested }),
+      method: 'POST',
+      headers: adminAuthHeaders(adminToken, 'application/x-www-form-urlencoded'),
+      body,
       signal: controller.signal,
     });
     rawText = await response.text();
   } catch (error) {
-    throw new Error(`PATCH ${url} {capabilityTier:${requested}} failed: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`POST ${url} configJson{tier:${requested}} failed: ${error instanceof Error ? error.message : String(error)}`);
   } finally {
     clearTimeout(timer);
   }
   if (!response.ok) {
-    throw new Error(`PATCH ${url} {capabilityTier:${requested}} returned HTTP ${response.status}: ${rawText.slice(0, 400)}`);
+    throw new Error(`POST ${url} configJson{tier:${requested}} returned HTTP ${response.status}: ${rawText.slice(0, 400)}`);
   }
 
   const deadline = Date.now() + confirmTimeoutMs;

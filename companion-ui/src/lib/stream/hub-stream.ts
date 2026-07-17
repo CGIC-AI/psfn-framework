@@ -8,7 +8,10 @@ import type {
   SatelliteHubStateEvent,
 } from '../api/client.js';
 import type {
+  ApprovalAttribution,
+  ApprovalGrantMode,
   ApprovalResolvedStatus,
+  ApprovalSourceSystem,
   HubToClientMessage,
   ToolActivityPhase,
 } from '../protocol/events.js';
@@ -63,6 +66,13 @@ export interface ApprovalStreamEntry {
   redactedContext: string;
   status: ApprovalEntryStatus;
   resolvedAt?: string;
+  // ── v2 (approvals.v2) — additive, optional; present only for v2 frames ──
+  sourceSystem?: ApprovalSourceSystem;
+  attribution?: ApprovalAttribution;
+  action?: string;
+  scope?: string;
+  reason?: string;
+  grantMode?: ApprovalGrantMode;
 }
 
 /** Raw accumulated artifact-shelf item from `artifact.created`. */
@@ -276,7 +286,11 @@ export class HubStreamStore {
       liveAssistant: this.state.liveAssistant ? { ...this.state.liveAssistant } : null,
       events: this.state.events.map((entry) => ({ ...entry })),
       failure: this.state.failure ? { ...this.state.failure } : null,
-      approvals: this.state.approvals.map((entry) => ({ ...entry })),
+      approvals: this.state.approvals.map((entry) => ({
+        ...entry,
+        ...(entry.attribution ? { attribution: { ...entry.attribution } } : {}),
+        ...(entry.grantMode ? { grantMode: { ...entry.grantMode } } : {}),
+      })),
       artifacts: this.state.artifacts.map((item) => ({ ...item })),
       artifactPreviews: cloneArtifactPreviews(this.state.artifactPreviews),
       toolActivity: this.state.toolActivity.map((entry) => ({ ...entry })),
@@ -468,13 +482,22 @@ function applyInboundMessage(
         },
       };
     case 'approval.requested': {
+      // Lift only the known fields into app state — unknown future keys the
+      // framing parser tolerated are dropped here (never enter store state).
+      const { data } = message;
       const entry: ApprovalStreamEntry = {
-        id: message.data.id,
-        title: message.data.title,
-        requestedAt: message.data.requestedAt,
-        expiresAt: message.data.expiresAt,
-        redactedContext: message.data.redactedContext,
+        id: data.id,
+        title: data.title,
+        requestedAt: data.requestedAt,
+        expiresAt: data.expiresAt,
+        redactedContext: data.redactedContext,
         status: 'pending',
+        ...(data.sourceSystem !== undefined ? { sourceSystem: data.sourceSystem } : {}),
+        ...(data.attribution !== undefined ? { attribution: { ...data.attribution } } : {}),
+        ...(data.action !== undefined ? { action: data.action } : {}),
+        ...(data.scope !== undefined ? { scope: data.scope } : {}),
+        ...(data.reason !== undefined ? { reason: data.reason } : {}),
+        ...(data.grantMode !== undefined ? { grantMode: { ...data.grantMode } } : {}),
       };
       return { ...base, approvals: upsertById(base.approvals, entry) };
     }

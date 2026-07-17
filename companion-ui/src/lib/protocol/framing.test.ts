@@ -78,6 +78,23 @@ describe('hub websocket framing', () => {
       },
     },
     {
+      type: 'approval.requested',
+      data: {
+        id: 'ap-2',
+        title: 'Send outbound email',
+        requestedAt: '2026-06-17T00:00:01.000Z',
+        expiresAt: '2026-06-17T00:00:31.000Z',
+        redactedContext: 'Redacted action summary',
+        status: 'pending',
+        sourceSystem: 'tool-access',
+        attribution: { parentId: 'companion-1', parentLabel: 'Purrsephone', shardId: 'shard-1', shardLabel: 'Shard' },
+        action: 'send email',
+        scope: 'outbound',
+        reason: 'Redacted action summary',
+        grantMode: { kind: 'once' },
+      },
+    },
+    {
       type: 'approval.resolved',
       data: { id: 'ap-1', status: 'approved', resolvedAt: '2026-06-17T00:00:05.000Z' },
     },
@@ -170,6 +187,8 @@ describe('hub websocket framing', () => {
     ['message extra trust field', '{"type":"message","data":{"role":"assistant","content":"x","trusted":true}}'],
     ['approval.requested missing id', '{"type":"approval.requested","data":{"title":"t","requestedAt":"x","redactedContext":"y","status":"pending"}}'],
     ['approval.requested wrong status', '{"type":"approval.requested","data":{"id":"1","title":"t","requestedAt":"x","redactedContext":"y","status":"approved"}}'],
+    ['approval.requested malformed v2 grantMode', '{"type":"approval.requested","data":{"id":"1","title":"t","requestedAt":"2026-06-17T00:00:01.000Z","redactedContext":"y","status":"pending","grantMode":{"kind":"forever"}}}'],
+    ['approval.requested malformed v2 attribution', '{"type":"approval.requested","data":{"id":"1","title":"t","requestedAt":"2026-06-17T00:00:01.000Z","redactedContext":"y","status":"pending","attribution":{"parentLabel":"p"}}}'],
     ['approval.resolved bad status', '{"type":"approval.resolved","data":{"id":"1","status":"maybe","resolvedAt":"x"}}'],
     ['artifact.created non-boolean previewable', '{"type":"artifact.created","data":{"id":"1","label":"l","mediaType":"m","provenance":"p","createdAt":"c","previewable":"yes"}}'],
     ['artifact.preview.result missing data', '{"type":"artifact.preview.result","requestId":"r","artifactId":"a","mediaType":"m"}'],
@@ -180,6 +199,32 @@ describe('hub websocket framing', () => {
 
   it.each(malformedHubFrames)('fails closed on malformed hub frame: %s', (_label, frame) => {
     expect(() => parseHubToClientMessage(frame)).toThrow(HubFramingError);
+  });
+
+  it('tolerates unknown future keys on approval.requested (approvals forward-compat)', () => {
+    const frame = JSON.stringify({
+      type: 'approval.requested',
+      data: {
+        id: 'ap-9',
+        title: 'Future action',
+        requestedAt: '2026-06-17T00:00:01.000Z',
+        redactedContext: 'ctx',
+        status: 'pending',
+        sourceSystem: 'cogsec',
+        grantMode: { kind: 'once' },
+        // a key a NEWER server added that this client build does not know
+        futureField: { nested: 'value' },
+      },
+    });
+    const parsed = parseHubToClientMessage(frame);
+    expect(parsed.type).toBe('approval.requested');
+  });
+
+  it('still rejects unknown keys on other message types (exactRecord unchanged)', () => {
+    // approval.resolved is NOT tolerant — an unknown key must fail closed.
+    expect(() => parseHubToClientMessage(
+      '{"type":"approval.resolved","data":{"id":"1","status":"approved","resolvedAt":"2026-06-17T00:00:01.000Z","surprise":1}}',
+    )).toThrow(HubFramingError);
   });
 
   it('rejects browser authority fields from the initial hello', () => {

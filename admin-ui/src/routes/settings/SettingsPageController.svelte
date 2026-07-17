@@ -23,6 +23,7 @@
   import SettingsIntegrationsPanels from './SettingsIntegrationsPanels.svelte';
   import SettingsMemoryPanels from './SettingsMemoryPanels.svelte';
   import SettingsPageChrome from '$lib/components/settings/SettingsPageChrome.svelte';
+  import SettingsSearch from '$lib/components/settings/SettingsSearch.svelte';
   import SettingsRuntimePanels from './SettingsRuntimePanels.svelte';
   import SettingsTrustBackupPanels from './SettingsTrustBackupPanels.svelte';
   import {
@@ -30,6 +31,7 @@
     settingsSimpleSectionAnchorId,
     type SettingsSimpleSectionId,
   } from '$lib/components/settings/navigation';
+  import { SETTINGS_SECTION_COLLAPSE_KEY } from '$lib/components/settings/settings-search';
   import {
     CURATED_SETTINGS_TAB_IDS,
     MODEL_OWNED_FIELDS,
@@ -403,6 +405,18 @@
     document
       .getElementById(settingsSimpleSectionAnchorId(sectionId))
       ?.scrollIntoView({ behavior, block: 'start' });
+  }
+
+  // Search result selection: expand the target section's collapsible (when it
+  // has one) before jumping, so the setting is visible after the scroll lands.
+  function handleSearchJump(sectionId: SettingsSimpleSectionId): void {
+    const collapseKey = SETTINGS_SECTION_COLLAPSE_KEY[sectionId];
+    if (collapseKey && !openSections.has(collapseKey)) {
+      const next = new Set(openSections);
+      next.add(collapseKey);
+      openSections = next;
+    }
+    void jumpToSection(sectionId);
   }
 
   function applyLocationHash(behavior: ScrollBehavior = 'auto'): void {
@@ -1125,6 +1139,8 @@
 
   {:else}
     <div class="space-y-5">
+      <SettingsSearch onJump={handleSearchJump} />
+
       <GardenTabBar
         tabs={settingsTabs}
         activeId={activeTabId}

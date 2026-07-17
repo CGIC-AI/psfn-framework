@@ -13,7 +13,12 @@
   let meaningfulOnly = $state(false);
   let tagDrafts = $state<Record<string, string>>({});
   let momentDrafts = $state<Record<string, string>>({});
+  let expandedPrompts = $state<Record<string, boolean>>({});
   let savingIds = $state<Set<string>>(new Set());
+
+  function togglePromptExpanded(id: string): void {
+    expandedPrompts = { ...expandedPrompts, [id]: !expandedPrompts[id] };
+  }
 
   let images = $derived(data?.images ?? []);
 
@@ -266,7 +271,20 @@
             </div>
 
             {#if image.prompt}
-              <p class="line-clamp-3 text-sm leading-relaxed text-shadow-700">{image.prompt}</p>
+              <div>
+                <p
+                  class="text-sm leading-relaxed text-shadow-700"
+                  class:line-clamp-3={!expandedPrompts[image.id]}
+                >{image.prompt}</p>
+                <button
+                  type="button"
+                  aria-expanded={Boolean(expandedPrompts[image.id])}
+                  onclick={() => togglePromptExpanded(image.id)}
+                  class="mt-0.5 text-xs font-medium text-gold-700 hover:text-gold-800 hover:underline"
+                >
+                  {expandedPrompts[image.id] ? 'Show less' : 'Show full prompt'}
+                </button>
+              </div>
             {/if}
 
             {#if image.tags.length > 0}

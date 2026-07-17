@@ -75,6 +75,7 @@ interface ContactUpdatePayload {
   relationshipType?: RelationshipType;
   notes?: string;
   timezone?: unknown;
+  isMachineIntelligence?: boolean;
   channelPrivacy?: ChannelPrivacyUpdate[];
   addChannel?: AddChannelLink;
 }
@@ -724,6 +725,15 @@ export class AdminContactsDataService implements AdminContactsService {
 
     if (payload.notes !== undefined) {
       await contactStore.updateNotes(contactId, payload.notes, actor);
+    }
+
+    if (payload.isMachineIntelligence !== undefined) {
+      if (typeof payload.isMachineIntelligence !== 'boolean') {
+        return { ok: false, message: 'isMachineIntelligence must be a boolean' };
+      }
+      if (!await contactStore.setMachineIntelligence(contactId, payload.isMachineIntelligence, actor)) {
+        return { ok: false, message: 'Unable to update machine-intelligence marker' };
+      }
     }
 
     if (timezonePayload.present) {

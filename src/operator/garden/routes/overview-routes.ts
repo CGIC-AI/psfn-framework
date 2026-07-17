@@ -366,6 +366,24 @@ export function buildAdminOverviewRoutes(options: {
     },
     {
       method: 'GET',
+      match: exactPath('/api/admin/dashboard/analysis-workbench-traces'),
+      handle: (_req, res) => {
+        try {
+          sendJson(
+            res,
+            200,
+            { traces: dashboardService.listAnalysisWorkbenchTraces() },
+            ADMIN_DYNAMIC_JSON_HEADERS,
+          );
+        } catch (error) {
+          sendJson(res, 500, {
+            error: `Failed to load analysis workbench traces: ${toSanitizedMessage(error, 'unknown error')}`,
+          }, ADMIN_DYNAMIC_JSON_HEADERS);
+        }
+      },
+    },
+    {
+      method: 'GET',
       match: exactPath('/api/admin/audit/history'),
       handle: (req, res) => {
         if (!auditHistoryService) {

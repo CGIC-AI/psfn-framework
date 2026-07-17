@@ -387,7 +387,10 @@
     <!-- Recent Analysis Workbench Traces -->
     {#if stats.recentAnalysisWorkbenchTraces.length > 0}
       <div class="card-garden p-5">
-        <h2 class="font-serif text-lg text-shadow-900 mb-3">Recent Analysis Workbench Traces</h2>
+        <div class="flex items-center justify-between gap-3 mb-3">
+          <h2 class="font-serif text-lg text-shadow-900">Recent Analysis Workbench Traces</h2>
+          <a href="/analysis-workbench" class="text-sm font-medium text-gold-700 hover:text-gold-800">View all with steps</a>
+        </div>
         <div class="overflow-x-auto">
           <table class="w-full text-sm">
             <thead>

@@ -55,7 +55,7 @@
 <div class={`card-garden p-5 ${className}`.trim()}>
   <div class="flex items-center justify-between gap-3 mb-3">
     <h2 class="font-serif text-lg text-shadow-900">Active Concerns</h2>
-    <a href="/cognitive-security/drift" class="text-sm font-medium text-gold-700 hover:text-gold-800">Open Drift Review</a>
+    <a href="/concerns" class="text-sm font-medium text-gold-700 hover:text-gold-800">Manage Concerns</a>
   </div>
   {#if loading}
     <div class="animate-pulse space-y-2">

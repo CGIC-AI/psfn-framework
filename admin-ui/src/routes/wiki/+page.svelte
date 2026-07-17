@@ -1,10 +1,14 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import {
+    getSharedWorldWikiDocument,
     getWikiDocument,
+    listSharedWorldWikiDocuments,
     listWikiDocuments,
+    listWikiScopes,
     searchWikiDocuments,
     type WikiListResponse,
+    type WikiScopeSummary,
   } from '$lib/api/endpoints/wiki';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
   import CardGrid from '$lib/components/garden/CardGrid.svelte';
@@ -27,14 +31,29 @@
   let searchQuery = $state('');
   let projects = $state<PersonalProjectManifest[]>([]);
   let wardrobeLooks = $state<NamedWardrobeLook[]>([]);
+  let scopes = $state<WikiScopeSummary[]>([]);
+  let activeScopeKey = $state('personal');
+  let sharedDocuments = $state<WikiDocumentListEntry[]>([]);
+  let sharedSiteId = $state('');
 
-  let documents = $derived(data?.documents ?? []);
+  let documents = $derived(activeScopeKey === 'personal' ? (data?.documents ?? []) : sharedDocuments);
+  let sharedScopes = $derived(scopes.filter((scope) => scope.scope !== 'personal'));
   let selectedId = $derived(selected?.id ?? '');
+
+  function scopeTabKey(scope: WikiScopeSummary): string {
+    return scope.scope === 'personal' ? 'personal' : (scope.siteId ?? scope.scope);
+  }
 
   async function loadDocuments() {
     errorMessage = '';
     try {
       data = await listWikiDocuments();
+      try {
+        const scopesPayload = await listWikiScopes();
+        scopes = scopesPayload.scopes;
+      } catch {
+        scopes = [];
+      }
       const projectDocuments = await Promise.all(
         data.documents
           .filter((document) => document.tags.includes('psfn:personal-project'))
@@ -67,11 +86,36 @@
     loadingDocumentId = id;
     errorMessage = '';
     try {
-      selected = await getWikiDocument(id);
+      selected = activeScopeKey === 'personal'
+        ? await getWikiDocument(id)
+        : await getSharedWorldWikiDocument(activeScopeKey, id);
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : 'Failed to load wiki document.';
     } finally {
       loadingDocumentId = '';
+    }
+  }
+
+  async function selectScope(key: string) {
+    if (key === activeScopeKey) return;
+    activeScopeKey = key;
+    selected = null;
+    errorMessage = '';
+    if (key === 'personal') return;
+    loading = true;
+    try {
+      const payload = await listSharedWorldWikiDocuments(key);
+      sharedSiteId = payload.siteId;
+      sharedDocuments = payload.documents;
+      if (payload.documents[0]) {
+        await selectDocument(payload.documents[0].id);
+      }
+    } catch (error) {
+      sharedSiteId = '';
+      sharedDocuments = [];
+      errorMessage = error instanceof Error ? error.message : 'Failed to load shared-world wiki documents.';
+    } finally {
+      loading = false;
     }
   }
 
@@ -157,6 +201,32 @@
       <p class="text-sm font-medium text-wilt-700">{errorMessage}</p>
     </div>
   {/if}
+
+  <div class="flex flex-wrap gap-2" role="tablist" aria-label="Wiki scopes">
+    <button
+      type="button"
+      role="tab"
+      aria-selected={activeScopeKey === 'personal'}
+      onclick={() => void selectScope('personal')}
+      class="rounded-full border px-3 py-1.5 text-sm font-medium transition-colors {activeScopeKey === 'personal' ? 'border-gold-400 bg-gold-50 text-gold-800' : 'border-bark-300 text-shadow-700 hover:bg-bark-100'}"
+    >
+      Personal
+      <span class="ml-1 text-xs text-shadow-500">{data?.documents.length ?? 0}</span>
+    </button>
+    {#each sharedScopes as scope}
+      <button
+        type="button"
+        role="tab"
+        aria-selected={activeScopeKey === scopeTabKey(scope)}
+        onclick={() => void selectScope(scopeTabKey(scope))}
+        class="rounded-full border px-3 py-1.5 text-sm font-medium transition-colors {activeScopeKey === scopeTabKey(scope) ? 'border-gold-400 bg-gold-50 text-gold-800' : 'border-bark-300 text-shadow-700 hover:bg-bark-100'}"
+      >
+        {scope.displayName}
+        <span class="ml-1 rounded-full border border-moss-300 bg-moss-50 px-1.5 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wide text-moss-800">World</span>
+        <span class="ml-1 text-xs text-shadow-500">{scope.documentCount}</span>
+      </button>
+    {/each}
+  </div>
 
   {#if data}
     <CollapsibleSection title="Workspace" subtitle={data.boundary} count={documents.length}>
@@ -285,8 +355,13 @@
             >
               <div class="flex items-start justify-between gap-2">
                 <p class="min-w-0 truncate text-sm font-semibold text-shadow-900">{document.title}</p>
-                <span class="shrink-0 rounded-full border border-bark-200 bg-bark-50 px-2 py-0.5 text-xs font-medium text-shadow-600">
-                  v{document.version}
+                <span class="flex shrink-0 items-center gap-1.5">
+                  <span class="rounded-full border px-2 py-0.5 text-xs font-medium {activeScopeKey === 'personal' ? 'border-bark-200 bg-bark-50 text-shadow-600' : 'border-moss-300 bg-moss-50 text-moss-800'}">
+                    {activeScopeKey === 'personal' ? 'Personal' : 'World'}
+                  </span>
+                  <span class="rounded-full border border-bark-200 bg-bark-50 px-2 py-0.5 text-xs font-medium text-shadow-600">
+                    v{document.version}
+                  </span>
                 </span>
               </div>
               <p class="mt-1 line-clamp-2 text-sm text-shadow-600">{documentPreview(document)}</p>

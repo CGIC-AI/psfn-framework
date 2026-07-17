@@ -14,6 +14,7 @@ import {
   readPinnedRegularFile,
 } from '../../persistence/pinned-filesystem.js';
 import {
+  DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_BACKGROUND_MAINTENANCE_CONFIG,
   SCHEDULER_FILE_NAME,
   validateSchedulerConfig,
@@ -36,6 +37,7 @@ export interface SchedulerOwnerMigrationResult {
     socialGraphBuilderIntervalMs?: unknown;
   };
   removedPaths?: string[];
+  addedPaths?: string[];
 }
 
 /**
@@ -86,58 +88,88 @@ export function migrateLegacySchedulerOwner(
     const hasSocialGraphInterval = socialGraphBuilder?.intervalMs !== undefined;
     const hasLegacyInterval = hasSalienceInterval || hasSocialGraphInterval;
 
-    if (!hasLegacyInterval) {
-      validateSchedulerConfig(raw, filePath);
-      assertSourceStillCurrent();
-      return { mode, status: 'not_needed', filePath };
-    }
-    if (raw.backgroundMaintenance !== undefined) {
+    if (hasLegacyInterval && raw.backgroundMaintenance !== undefined) {
       throw new Error(
         `Scheduler owner migration at ${filePath} refuses a mixed shape containing both `
         + 'backgroundMaintenance and retired cadence keys; resolve the ambiguous owner state manually',
       );
     }
 
-    // The bundled cadence inherited the legacy salience-decay interval. If that
-    // key is absent, the social-graph interval is the only available owner value.
-    const selectedFrom = hasSalienceInterval
-      ? 'salienceDecayIntervalMs'
-      : 'socialGraphBuilder.intervalMs';
-    const selectedInterval = hasSalienceInterval
-      ? raw.salienceDecayIntervalMs
-      : socialGraphBuilder?.intervalMs;
-    const candidate: Record<string, unknown> = structuredClone(raw);
-    delete candidate.salienceDecayIntervalMs;
-    if (isRecord(candidate.socialGraphBuilder)) {
-      const nextSocialGraphBuilder = { ...candidate.socialGraphBuilder };
-      delete nextSocialGraphBuilder.intervalMs;
-      candidate.socialGraphBuilder = nextSocialGraphBuilder;
-    }
-    candidate.backgroundMaintenance = {
-      ...structuredClone(DEFAULT_BACKGROUND_MAINTENANCE_CONFIG),
-      intervalMs: selectedInterval,
-    };
+    let candidate: Record<string, unknown>;
+    let result: SchedulerOwnerMigrationResult;
+    if (hasLegacyInterval) {
+      // The bundled cadence inherited the legacy salience-decay interval. If that
+      // key is absent, the social-graph interval is the only available owner value.
+      const selectedFrom = hasSalienceInterval
+        ? 'salienceDecayIntervalMs'
+        : 'socialGraphBuilder.intervalMs';
+      const selectedInterval = hasSalienceInterval
+        ? raw.salienceDecayIntervalMs
+        : socialGraphBuilder?.intervalMs;
+      candidate = structuredClone(raw);
+      delete candidate.salienceDecayIntervalMs;
+      if (isRecord(candidate.socialGraphBuilder)) {
+        const nextSocialGraphBuilder = { ...candidate.socialGraphBuilder };
+        delete nextSocialGraphBuilder.intervalMs;
+        candidate.socialGraphBuilder = nextSocialGraphBuilder;
+      }
+      candidate.backgroundMaintenance = {
+        ...structuredClone(DEFAULT_BACKGROUND_MAINTENANCE_CONFIG),
+        intervalMs: selectedInterval,
+      };
 
-    const validated = validateSchedulerConfig(candidate, filePath);
-    const result: SchedulerOwnerMigrationResult = {
-      mode,
-      status: options.apply ? 'applied' : 'planned',
-      filePath,
-      selectedIntervalMs: validated.backgroundMaintenance.intervalMs,
-      selectedFrom,
-      legacyIntervals: {
-        ...(hasSalienceInterval
-          ? { salienceDecayIntervalMs: raw.salienceDecayIntervalMs }
-          : {}),
-        ...(hasSocialGraphInterval
-          ? { socialGraphBuilderIntervalMs: socialGraphBuilder.intervalMs }
-          : {}),
-      },
-      removedPaths: [
-        ...(hasSalienceInterval ? ['salienceDecayIntervalMs'] : []),
-        ...(hasSocialGraphInterval ? ['socialGraphBuilder.intervalMs'] : []),
-      ],
-    };
+      const validated = validateSchedulerConfig(candidate, filePath);
+      result = {
+        mode,
+        status: options.apply ? 'applied' : 'planned',
+        filePath,
+        selectedIntervalMs: validated.backgroundMaintenance.intervalMs,
+        selectedFrom,
+        legacyIntervals: {
+          ...(hasSalienceInterval
+            ? { salienceDecayIntervalMs: raw.salienceDecayIntervalMs }
+            : {}),
+          ...(hasSocialGraphInterval
+            ? { socialGraphBuilderIntervalMs: socialGraphBuilder.intervalMs }
+            : {}),
+        },
+        removedPaths: [
+          ...(hasSalienceInterval ? ['salienceDecayIntervalMs'] : []),
+          ...(hasSocialGraphInterval ? ['socialGraphBuilder.intervalMs'] : []),
+        ],
+      };
+    } else {
+      const backgroundMaintenance = raw.backgroundMaintenance;
+      const addedPaths: string[] = [];
+      candidate = structuredClone(raw);
+      if (isRecord(backgroundMaintenance)
+        && backgroundMaintenance.sharedWorldWikiCaretaker === undefined) {
+        candidate.backgroundMaintenance = {
+          ...backgroundMaintenance,
+          sharedWorldWikiCaretaker: structuredClone(
+            DEFAULT_BACKGROUND_MAINTENANCE_CONFIG.sharedWorldWikiCaretaker,
+          ),
+        };
+        addedPaths.push('backgroundMaintenance.sharedWorldWikiCaretaker');
+      }
+      if (raw.backgroundWork === undefined) {
+        candidate.backgroundWork = structuredClone(DEFAULT_BACKGROUND_WORK_TUNING);
+        addedPaths.push('backgroundWork');
+      }
+      if (addedPaths.length === 0) {
+        validateSchedulerConfig(raw, filePath);
+        assertSourceStillCurrent();
+        return { mode, status: 'not_needed', filePath };
+      }
+
+      validateSchedulerConfig(candidate, filePath);
+      result = {
+        mode,
+        status: options.apply ? 'applied' : 'planned',
+        filePath,
+        addedPaths,
+      };
+    }
 
     if (options.apply) {
       // Preserve every unrelated raw owner key. Validation above proves the

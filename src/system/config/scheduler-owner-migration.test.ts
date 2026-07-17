@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  DEFAULT_BACKGROUND_WORK_TUNING,
   DEFAULT_BACKGROUND_MAINTENANCE_CONFIG,
   loadSchedulerConfig,
   SCHEDULER_FILE_NAME,
@@ -40,6 +41,15 @@ function prepareOwner(mutator?: (owner: Record<string, unknown>) => void): {
   mutator?.(original);
   writeFileSync(filePath, `${JSON.stringify(original, null, 2)}\n`, 'utf8');
   return { dataDir: tempDir, filePath, original };
+}
+
+function makePreCaretakerCanonical(owner: Record<string, unknown>): void {
+  delete owner.salienceDecayIntervalMs;
+  if (typeof owner.socialGraphBuilder === 'object' && owner.socialGraphBuilder !== null) {
+    delete (owner.socialGraphBuilder as Record<string, unknown>).intervalMs;
+  }
+  owner.backgroundMaintenance = structuredClone(DEFAULT_BACKGROUND_MAINTENANCE_CONFIG);
+  delete (owner.backgroundMaintenance as Record<string, unknown>).sharedWorldWikiCaretaker;
 }
 
 afterEach(() => {
@@ -242,6 +252,83 @@ describe('migrateLegacySchedulerOwner', () => {
     });
     expect(readFileSync(filePath, 'utf8')).toBe(bytesAfterApply);
     expect(statSync(filePath).ino).toBe(inodeAfterApply);
+  });
+
+  it('explicitly plans and applies the shared-world caretaker schema addition', () => {
+    const { dataDir, filePath } = prepareOwner((owner) => {
+      makePreCaretakerCanonical(owner);
+      owner.operatorExtension = { note: 'preserve me', enabled: true };
+    });
+    const before = readFileSync(filePath, 'utf8');
+
+    expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({
+      mode: 'dry-run',
+      status: 'planned',
+      addedPaths: ['backgroundMaintenance.sharedWorldWikiCaretaker'],
+    });
+    expect(readFileSync(filePath, 'utf8')).toBe(before);
+
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      mode: 'apply',
+      status: 'applied',
+      addedPaths: ['backgroundMaintenance.sharedWorldWikiCaretaker'],
+    });
+    const migratedRaw = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
+    expect(migratedRaw.operatorExtension).toEqual({ note: 'preserve me', enabled: true });
+    expect(loadSchedulerConfig(dataDir).backgroundMaintenance.sharedWorldWikiCaretaker)
+      .toEqual({ batchSize: 25 });
+    expect(loadSchedulerConfig(dataDir).backgroundWork).toEqual(DEFAULT_BACKGROUND_WORK_TUNING);
+
+    const inodeAfterApply = statSync(filePath).ino;
+    const bytesAfterApply = readFileSync(filePath, 'utf8');
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      mode: 'apply',
+      status: 'not_needed',
+    });
+    expect(readFileSync(filePath, 'utf8')).toBe(bytesAfterApply);
+    expect(statSync(filePath).ino).toBe(inodeAfterApply);
+  });
+
+  it('explicitly adds background-work tuning to owners written before it existed', () => {
+    const { dataDir, filePath } = prepareOwner((owner) => {
+      delete owner.salienceDecayIntervalMs;
+      if (typeof owner.socialGraphBuilder === 'object' && owner.socialGraphBuilder !== null) {
+        delete (owner.socialGraphBuilder as Record<string, unknown>).intervalMs;
+      }
+      owner.backgroundMaintenance = structuredClone(DEFAULT_BACKGROUND_MAINTENANCE_CONFIG);
+      delete owner.backgroundWork;
+      owner.operatorExtension = { note: 'preserve me' };
+    });
+
+    expect(migrateLegacySchedulerOwner({ dataDir })).toMatchObject({
+      mode: 'dry-run',
+      status: 'planned',
+      addedPaths: ['backgroundWork'],
+    });
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      mode: 'apply',
+      status: 'applied',
+      addedPaths: ['backgroundWork'],
+    });
+    const migratedRaw = JSON.parse(readFileSync(filePath, 'utf8')) as Record<string, unknown>;
+    expect(migratedRaw.backgroundWork).toEqual(DEFAULT_BACKGROUND_WORK_TUNING);
+    expect(migratedRaw.operatorExtension).toEqual({ note: 'preserve me' });
+    expect(migrateLegacySchedulerOwner({ dataDir, apply: true })).toMatchObject({
+      status: 'not_needed',
+    });
+  });
+
+  it('refuses a malformed shared-world caretaker instead of replacing it', () => {
+    const { dataDir, filePath } = prepareOwner((owner) => {
+      makePreCaretakerCanonical(owner);
+      (owner.backgroundMaintenance as Record<string, unknown>).sharedWorldWikiCaretaker = null;
+    });
+    const before = readFileSync(filePath, 'utf8');
+
+    expect(() => migrateLegacySchedulerOwner({ dataDir, apply: true })).toThrow(
+      'backgroundMaintenance.sharedWorldWikiCaretaker must be an object',
+    );
+    expect(readFileSync(filePath, 'utf8')).toBe(before);
   });
 
   it.each([

@@ -71,6 +71,15 @@ kubectl -n "$NAMESPACE" scale \
   --replicas=0
 ```
 
+The gateway and agent init sequence also runs the explicit scheduler owner
+migration. In addition to the retired-cadence conversion, it upgrades a
+canonical scheduler written before shared-world wiki care existed by adding
+`backgroundMaintenance.sharedWorldWikiCaretaker.batchSize: 25`. The migrator
+also adds the canonical `backgroundWork` supervisor and post-turn tuning block
+when upgrading an owner written before that block existed. The migrator
+validates the complete candidate before an atomic write, preserves unrelated
+owner values, and refuses malformed or ambiguous existing caretaker data.
+
 Take the whole-install snapshot and use the dry-run migrator's exact SHA-256
 approvals. A single-companion values fragment has this shape (substitute live
 claim names, paths, identity, and digests; never copy the examples):

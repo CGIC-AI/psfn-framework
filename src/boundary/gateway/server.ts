@@ -240,7 +240,9 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   contactLifecycleAuthority?: import('./contact-lifecycle-authority.js').GatewayContactLifecycleAuthorityPort;
   sessionHmacKeyring: SessionHmacKeyring;
   confirmation?: Partial<GatewayConfirmationConfig>;
-  capabilityTierProvider?: () => CapabilityTier;
+  // an52.3: keyed on the authenticated companion so a fleet resolves each
+  // companion's own capability tier. Single-companion providers ignore the arg.
+  capabilityTierProvider?: (companionId?: string) => CapabilityTier;
   wyomingShardRouting: WyomingShardRoutingConfig;
   companionId?: CompanionId;
   /**
@@ -306,7 +308,7 @@ export class GatewayServer {
   private readonly options: GatewayServerOptions;
   private readonly sessionHmacKeyring: SessionHmacKeyring;
   private streamRequestCounter = 0;
-  private readonly capabilityTierProvider: () => CapabilityTier;
+  private readonly capabilityTierProvider: (companionId?: string) => CapabilityTier;
   private readonly wyomingShardRouting: WyomingShardRoutingConfig;
   private readonly ntfyNotifier: GatewayNtfyNotifier;
   private readonly approvalBoundary: ApprovalBoundaryService;
@@ -532,7 +534,10 @@ export class GatewayServer {
       get workspacePath() { return resolveWorkspacePath(); },
       personalWorkspaceIsolation: this.multiCompanion.enabled,
       sessionHmacKeyring: this.sessionHmacKeyring,
-      capabilityTierProvider: this.capabilityTierProvider,
+      // an52.3: bind the tier to THIS connection's authenticated companion so
+      // shard.backend.request (and any gated method) resolves the caller's own
+      // capability tier, not the gateway's single hydrated root.
+      capabilityTierProvider: () => this.capabilityTierProvider(this.authenticatedCompanionId(conn)),
       approvalBoundary: this.approvalBoundary,
       ...(this.options.kubeSelfManagement
         ? { kubeSelfManagement: this.options.kubeSelfManagement }

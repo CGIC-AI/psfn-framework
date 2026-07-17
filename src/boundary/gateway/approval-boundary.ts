@@ -39,7 +39,10 @@ interface ApprovalBoundaryOptions extends ApprovalBoundaryAuditHooks {
   policyConfig: PolicyConfig;
   ntfyNotifier: GatewayNtfyNotifier;
   discordAdapter: ChannelOutboundDock;
-  capabilityTierProvider: () => CapabilityTier;
+  // an52.3: resolved for the authenticated companion that owns the gated action
+  // (see the gate's authenticatedCompanionId), so a fleet's autonomous
+  // auto-clear reflects that companion's own tier — not the gateway's root.
+  capabilityTierProvider: (companionId?: string) => CapabilityTier;
   confirmation?: Partial<GatewayConfirmationConfig>;
   /**
    * htm9.18 egress tripwire. Gated egress methods (e.g. web.fetch) run their
@@ -221,8 +224,11 @@ export function createGatewayApprovalBoundaryService(
             throw new JSONRPCErrorException('Policy denied', GatewayErrors.POLICY_DENIED);
           }
 
-          if (decision === 'NEEDS_APPROVAL' && options.capabilityTierProvider() !== 'autonomous') {
-            const authenticatedCompanionId = gateOptions.authenticatedCompanionId();
+          const authenticatedCompanionId = gateOptions.authenticatedCompanionId();
+          if (
+            decision === 'NEEDS_APPROVAL'
+            && options.capabilityTierProvider(authenticatedCompanionId) !== 'autonomous'
+          ) {
             const paramsRecord = params as unknown as Record<string, unknown>;
             const queueEntry = await requestExplicitApproval({
               authenticatedCompanionId,

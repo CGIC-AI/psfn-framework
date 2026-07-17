@@ -2036,10 +2036,14 @@ export class LLMClient {
     } = {},
   ): Promise<{ result: T; candidate: RoutingCandidate; attempts: number }> {
     if (this.eligibilityGate) {
+      // an52.3: gate the purpose against the *authenticated* companion's tier.
+      // In a multi-companion gateway the correlation.companionId is the caller's
+      // frame-validated identity (mismatched claims disconnect at the RPC
+      // boundary), so it is the authoritative key for per-companion resolution.
       const decision = this.eligibilityGate.evaluate({
         kind: 'llm.purpose',
         purpose: this.toEligibilityPurpose(purpose),
-      });
+      }, undefined, options.correlation?.companionId);
       this.onEligibilityDecision?.(decision);
       if (!decision.allowed) {
         log.warn('LLM purpose denied by eligibility gate', {

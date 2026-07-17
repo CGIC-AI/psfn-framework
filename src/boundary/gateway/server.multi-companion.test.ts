@@ -16,9 +16,12 @@ import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-r
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
 import { EventBus } from '../../shared/event-bus.js';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
+import { GatewayCapabilityTierResolver } from './capability-tier-resolver.js';
+import type { ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({
@@ -1792,5 +1795,168 @@ describe('GatewayServer multi-companion crossover under concurrent load (flag on
     expect(bChunks).toHaveLength(perAgentRequests * 2);
     expect(aChunks.every(text => /^chunk2?:a-\d+$/.test(text))).toBe(true);
     expect(bChunks.every(text => /^chunk2?:b-\d+$/.test(text))).toBe(true);
+  });
+});
+
+// an52.3: the gateway must resolve each authenticated companion's OWN capability
+// tier (from that companion's capability-tier.json), not the single hydrated
+// root. Wired through the real GatewayCapabilityTierResolver so this exercises
+// the production per-companion resolution path, not a stub provider.
+describe('GatewayServer per-companion capability tier (an52.3)', () => {
+  function optionsFor(
+    routing: GatewayMultiCompanionConfig,
+    capabilityTierProvider: (companionId?: string) => 'nursery' | 'apprentice' | 'autonomous' | 'custom',
+  ): GatewayServerOptions {
+    return {
+      ...createMinimalOptions(),
+      // shard.backend.request only reaches the handler's tier gate when the
+      // policy permits the backend command; otherwise it is DENY'd earlier.
+      policyConfig: {
+        workspacePath: '/workspace',
+        shellExec: { enabled: true, allowlist: ['docker', 'kubectl'] },
+      },
+      multiCompanion: routing,
+      capabilityTierProvider,
+    };
+  }
+
+  function buildTwoCompanionTierFixture(): {
+    root: string;
+    routing: GatewayMultiCompanionConfig;
+    capabilityTierProvider: (companionId?: string) => 'nursery' | 'apprentice' | 'autonomous' | 'custom';
+  } {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-per-companion-tier-'));
+    const dataDirA = join(root, 'companions', 'a');
+    const dataDirB = join(root, 'companions', 'b');
+    const baseDir = join(root, 'companions', 'gateway-root');
+    const personalA = join(root, 'personal', 'comp-a');
+    const personalB = join(root, 'personal', 'comp-b');
+    for (const dir of [dataDirA, dataDirB, baseDir, personalA, personalB]) {
+      mkdirSync(dir, { recursive: true });
+    }
+    // A autonomous, B apprentice — distinct capability-tier.json per companion.
+    writeFileSync(join(dataDirA, 'capability-tier.json'), JSON.stringify({ tier: 'autonomous', customTokens: [] }));
+    writeFileSync(join(dataDirB, 'capability-tier.json'), JSON.stringify({ tier: 'apprentice', customTokens: [] }));
+    // The gateway-hydrated root deliberately differs from BOTH companions, so a
+    // regression to global-tier behavior would surface as the wrong decision.
+    writeFileSync(join(baseDir, 'capability-tier.json'), JSON.stringify({ tier: 'nursery', customTokens: [] }));
+
+    const companionFleet = {
+      persistenceRoot: root,
+      workspacesRoot: join(root, 'workspaces'),
+      sharedWorkspacePath: join(root, 'workspaces', 'shared'),
+      companions: [
+        {
+          companionId: 'comp-a',
+          companionDataDir: dataDirA,
+          characterCardPath: join(dataDirA, 'companion.json'),
+          postgresSchema: 'companion_a',
+          personalWorkspacePath: personalA,
+        },
+        {
+          companionId: 'comp-b',
+          companionDataDir: dataDirB,
+          characterCardPath: join(dataDirB, 'companion.json'),
+          postgresSchema: 'companion_b',
+          personalWorkspacePath: personalB,
+        },
+      ],
+    } as unknown as ResolvedCompanionsFleetConfig;
+
+    const resolver = new GatewayCapabilityTierResolver({
+      baseRuntime: new CapabilityRuntime({ dataDir: baseDir }),
+      multiCompanion: true,
+      companionFleet,
+    });
+
+    const routing = multiCompanion({});
+    routing.personalWorkspaceByCompanionId = {
+      'comp-a': personalA,
+      'comp-b': personalB,
+      'comp-c': join(root, 'personal', 'comp-c'),
+    };
+
+    return {
+      root,
+      routing,
+      capabilityTierProvider: (companionId) => resolver.resolveTier(companionId),
+    };
+  }
+
+  it('gates shard.backend.request on each companion\'s own tier (A autonomous admitted, B apprentice denied)', async () => {
+    const { root, routing, capabilityTierProvider } = buildTwoCompanionTierFixture();
+    try {
+      const { connect } = await setupServer(optionsFor(routing, capabilityTierProvider));
+      const connA = await connect();
+      const connB = await connect();
+      await identifyAgent(connA, 'comp-a', 1);
+      await identifyAgent(connB, 'comp-b', 2);
+
+      const shardParams = (name: string) => ({ backend: 'container', shardId: `shard-${name}`, name });
+
+      const aShard = await invokeRpc(connA, 3, 'shard.backend.request', shardParams('alpha'));
+      expect(aShard.error).toBeUndefined();
+      expect(aShard.result).toMatchObject({ backend: 'container', controller: 'gateway' });
+
+      const bShard = await invokeRpc(connB, 4, 'shard.backend.request', shardParams('beta'));
+      expect(bShard.result).toBeUndefined();
+      expect(bShard.error.code).toBe(GatewayErrors.POLICY_DENIED);
+      expect(bShard.error.message).toContain('autonomous');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('auto-clears autonomous approvals for A but holds apprentice B for operator approval', async () => {
+    const { root, routing, capabilityTierProvider } = buildTwoCompanionTierFixture();
+    try {
+      const { connect } = await setupServer(optionsFor(routing, capabilityTierProvider));
+      const connA = await connect();
+      const connB = await connect();
+      await identifyAgent(connA, 'comp-a', 1);
+      await identifyAgent(connB, 'comp-b', 2);
+
+      // A write outside the personal workspace is a NEEDS_APPROVAL policy path.
+      // Autonomous A auto-clears the approval gate (its error, if any, is the
+      // downstream workspace confinement — never the approval hold); apprentice
+      // B must queue for operator approval, so its call is held, not executed.
+      const outsidePathB = join(root, 'outside', 'b-apprentice.txt');
+      mkdirSync(join(root, 'outside'), { recursive: true });
+
+      const aWrite = await invokeRpc(connA, 3, 'fs.write', {
+        path: join(root, 'outside', 'a-autonomous.txt'),
+        content: 'auto-cleared',
+      });
+      expect(aWrite.error?.code).not.toBe(GatewayErrors.NEEDS_APPROVAL);
+
+      const bWrite = await invokeRpc(connB, 4, 'fs.write', { path: outsidePathB, content: 'held' });
+      expect(bWrite.result).toBeUndefined();
+      expect(bWrite.error.code).toBe(GatewayErrors.NEEDS_APPROVAL);
+      // Apprentice write was held for approval, never executed.
+      expect(existsSync(outsidePathB)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when an authenticated companion has no resolvable tier file', async () => {
+    const { root, routing, capabilityTierProvider } = buildTwoCompanionTierFixture();
+    // Remove comp-b's tier file so its CapabilityRuntime construction throws.
+    rmSync(join(root, 'companions', 'b', 'capability-tier.json'), { force: true });
+    try {
+      const { connect } = await setupServer(optionsFor(routing, capabilityTierProvider));
+      const connB = await connect();
+      await identifyAgent(connB, 'comp-b', 1);
+
+      const bShard = await invokeRpc(connB, 2, 'shard.backend.request', {
+        backend: 'container',
+        shardId: 'shard-beta',
+        name: 'beta',
+      });
+      expect(bShard.result).toBeUndefined();
+      expect(bShard.error.code).toBe(GatewayErrors.POLICY_DENIED);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

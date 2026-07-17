@@ -49,6 +49,7 @@ import {
   verifyBackupContentsManifest,
 } from './backup-contents.js';
 import type { BackupRuntimeConfig } from './config.js';
+import { DEFAULT_BACKUP_DAILY_COUNT } from './config.js';
 import { applyTieredRetention } from './retention.js';
 import { assertValidPostgresSchemaName } from '../postgres.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
@@ -489,11 +490,17 @@ export async function runBackupCycle(
     const maxRotating = options.maxRotatingBackups
       ?? options.retentionCount
       ?? 9;
+    // Symmetric with the other tiers: an omitted daily count falls back to the
+    // documented default rather than silently disabling the tier. Protection is
+    // additive, so a defaulted daily tier only ever retains more, never prunes
+    // a backup an explicit caller expected to keep.
+    const maxDaily = options.maxDailyBackups ?? DEFAULT_BACKUP_DAILY_COUNT;
     const maxWeekly = options.maxWeeklyBackups ?? 2;
     const maxMonthly = options.maxMonthlyBackups ?? 1;
 
     const tieredRetention = applyTieredRetention(options.backupRootDir, {
       maxRotatingBackups: maxRotating,
+      maxDailyBackups: maxDaily,
       maxWeeklyBackups: maxWeekly,
       maxMonthlyBackups: maxMonthly,
     });
@@ -602,6 +609,7 @@ export function registerScheduledBackupTask(
             characterCardHistoryPath: options.characterCardHistoryPath,
             backupRootDir: options.config.rootDir,
             maxRotatingBackups: options.config.maxRotatingBackups,
+            maxDailyBackups: options.config.maxDailyBackups,
             maxWeeklyBackups: options.config.maxWeeklyBackups,
             maxMonthlyBackups: options.config.maxMonthlyBackups,
             mirrorDir: options.config.mirrorDir,
@@ -646,6 +654,7 @@ export function registerScheduledBackupTask(
           postgresDumpCaptured: result.postgresDumpCaptured,
           copiedSessionFiles: result.copiedSessionFiles.length,
           prunedBackupDirs: result.prunedBackupDirs.length,
+          dailySlots: result.tieredRetention?.dailyCount,
           weeklySlots: result.tieredRetention?.weeklyCount,
           monthlySlots: result.tieredRetention?.monthlyCount,
           mirrored: Boolean(result.mirrorDir),
@@ -807,6 +816,7 @@ export async function runFleetBackupCycle(
 
   const retentionFields = {
     ...(options.maxRotatingBackups !== undefined ? { maxRotatingBackups: options.maxRotatingBackups } : {}),
+    ...(options.maxDailyBackups !== undefined ? { maxDailyBackups: options.maxDailyBackups } : {}),
     ...(options.maxWeeklyBackups !== undefined ? { maxWeeklyBackups: options.maxWeeklyBackups } : {}),
     ...(options.maxMonthlyBackups !== undefined ? { maxMonthlyBackups: options.maxMonthlyBackups } : {}),
     ...(!consistentSnapshotDumpPaths && options.mirrorDir !== undefined

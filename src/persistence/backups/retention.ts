@@ -3,6 +3,7 @@ import { join } from 'node:path';
 
 export interface TieredRetentionOptions {
   maxRotatingBackups: number;
+  maxDailyBackups: number;
   maxWeeklyBackups: number;
   maxMonthlyBackups: number;
 }
@@ -10,16 +11,24 @@ export interface TieredRetentionOptions {
 export interface TieredRetentionResult {
   prunedBackupDirs: string[];
   keptBackupDirs: string[];
+  dailyCount: number;
   weeklyCount: number;
   monthlyCount: number;
 }
 
-/** ISO timestamp directory names are YYYYMMDDTHHMMSSFFFZ format — sortable as strings. */
+/**
+ * ISO timestamp directory names are YYYYMMDDTHHMMSSFFFZ format — sortable as
+ * strings. Only timestamp-shaped names participate in retention: anything else
+ * (operator inspection copies, future structural subdirs) is invisible to the
+ * tier math AND to pruning, so a stray directory can neither hijack the
+ * newest-survives invariant via lexicographic ordering nor be deleted.
+ */
 function listBackupDirectories(rootDir: string): string[] {
   if (!existsSync(rootDir)) return [];
   return readdirSync(rootDir, { withFileTypes: true })
     .filter(entry => entry.isDirectory())
     .map(entry => entry.name)
+    .filter(name => parseDirDate(name) !== null)
     .sort((a, b) => a.localeCompare(b));
 }
 
@@ -40,6 +49,19 @@ function isoWeekKey(dirName: string): string {
     ((thursday.getTime() - jan1.getTime()) / 86400000 + 1) / 7,
   );
   return `${year}-W${String(weekNumber).padStart(2, '0')}`;
+}
+
+/**
+ * Returns a UTC calendar-day string (e.g. "2026-03-17") derived from the
+ * directory name.  Consistent with the isoWeekKey/isoMonthKey UTC conventions.
+ */
+function isoDayKey(dirName: string): string {
+  const date = parseDirDate(dirName);
+  if (!date) return dirName;
+  const y = date.getUTCFullYear();
+  const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const d = String(date.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
 }
 
 /**
@@ -65,10 +87,13 @@ function parseDirDate(dirName: string): Date | null {
  * Applies GFS (Grandfather-Father-Son) tiered retention to a backup root
  * directory.  Returns removed and retained directory paths.
  *
- * Retention tiers (applied oldest-first, so promotions protect older backups):
+ * Retention tiers (higher tiers claim shared backups first, so promotions
+ * protect older backups and never consume a lower tier's slot):
  *   Monthly  — the most recent backup from each calendar month, up to maxMonthly
  *   Weekly   — the most recent backup from each ISO week (not already monthly),
  *              up to maxWeekly
+ *   Daily    — the most recent backup from each UTC calendar day (not already
+ *              weekly/monthly), up to maxDaily
  *   Rotating — the maxRotating most recent backups not already protected above
  *
  * All unprotected backups are pruned.
@@ -77,11 +102,17 @@ export function applyTieredRetention(
   rootDir: string,
   options: TieredRetentionOptions,
 ): TieredRetentionResult {
-  const { maxRotatingBackups, maxWeeklyBackups, maxMonthlyBackups } = options;
+  const { maxRotatingBackups, maxDailyBackups, maxWeeklyBackups, maxMonthlyBackups } = options;
   const dirs = listBackupDirectories(rootDir);
 
   if (dirs.length === 0) {
-    return { prunedBackupDirs: [], keptBackupDirs: [], weeklyCount: 0, monthlyCount: 0 };
+    return {
+      prunedBackupDirs: [],
+      keptBackupDirs: [],
+      dailyCount: 0,
+      weeklyCount: 0,
+      monthlyCount: 0,
+    };
   }
 
   const protected_ = new Set<string>();
@@ -118,6 +149,24 @@ export function applyTieredRetention(
     }
   }
 
+  // Build day → last-dir mapping (newest backup per UTC calendar day wins)
+  const dayToDir = new Map<string, string>();
+  for (const dir of dirs) {
+    dayToDir.set(isoDayKey(dir), dir);
+  }
+  // Keep the latest maxDailyBackups calendar days, most recent first, excluding
+  // days already protected by a weekly/monthly slot.
+  const dayKeys = [...dayToDir.keys()].sort((a, b) => b.localeCompare(a));
+  let dailyCount = 0;
+  for (const key of dayKeys) {
+    if (dailyCount >= maxDailyBackups) break;
+    const dir = dayToDir.get(key)!;
+    if (!protected_.has(dir)) {
+      protected_.add(dir);
+      dailyCount++;
+    }
+  }
+
   // Keep the maxRotatingBackups most recent backups not already protected
   const rotating = [...dirs]
     .reverse()
@@ -125,6 +174,12 @@ export function applyTieredRetention(
   for (let i = 0; i < Math.min(maxRotatingBackups, rotating.length); i++) {
     protected_.add(rotating[i]);
   }
+
+  // Fail-closed invariant: the single newest backup always survives pruning,
+  // even if every tier count (including rotating) is zero. This guarantees at
+  // least one recent recovery point can never be rotated away. `dirs` is sorted
+  // oldest-first, so the final entry is the newest.
+  protected_.add(dirs[dirs.length - 1]);
 
   const kept: string[] = [];
   const pruned: string[] = [];
@@ -143,6 +198,7 @@ export function applyTieredRetention(
   return {
     prunedBackupDirs: pruned,
     keptBackupDirs: kept,
+    dailyCount,
     weeklyCount,
     monthlyCount,
   };

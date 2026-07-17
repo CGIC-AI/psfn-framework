@@ -884,6 +884,13 @@ authorization and redaction contracts.
 ## Backups And Integrity
 
 - Backup cadence and retention live in `backup.json` and `scheduler.json`.
+
+### Generational retention (GFS)
+
+- Retention is a four-tier Grandfather-Father-Son roll applied by `applyTieredRetention` (`src/persistence/backups/retention.ts`): **rotating** (the most-recent 6-hour-cadence snapshots), **daily** (newest backup per UTC calendar day), **weekly** (newest per ISO week), and **monthly** (newest per calendar month). Tiers are additive and protective — a higher tier claims a shared snapshot first, so a snapshot kept as a monthly or weekly generation never consumes a daily or rotating slot. `maxRotatingBackups` / `maxDailyBackups` / `maxWeeklyBackups` / `maxMonthlyBackups` in `backup.json` size each tier; `maxDailyBackups` is optional and, when a pre-existing owner file omits it, defaults from `DEFAULT_BACKUP_DAILY_COUNT` at load (the daily tier is not silently disabled). Setting any tier count to `0` disables that tier.
+- The shipped seed policy (`config/backup.seed.json`) is 4 rotating / 7 daily / 4 weekly / 12 monthly — roughly 27 retained generations. The 12 monthly generations give a full 12-month recovery depth, which is what lets a cognitive-security event that is only detected months later still be rolled back to a pre-compromise snapshot.
+- Sizing is approximately the sum of the tier counts times the per-snapshot size: ~27 generations at the measured ~600 MB/snapshot is ~16 GB of retained backup footprint.
+- Fail-closed invariant: the single newest backup directory always survives pruning regardless of tier counts (even all-zeros), so at least one recent recovery point can never be rotated away. `maxRotatingBackups` also validates to a minimum of 1 in `backup.json`, and env/JSON resolution never lowers it below that.
 - Backups are encrypted at rest. `backup.json` declares `encryption.mode: "required"` and an env key reference; the actual key material stays in `PSFN_BACKUP_ENCRYPTION_KEY` or another configured env secret. Startup fails closed when the key is missing.
 - Under the PostgreSQL runtime backend the scheduled backup stages a `pg_dump` custom-format archive (requires `pg_dump`/`pg_restore` on PATH) plus session JSONL, memory mutation ledger, and character-card files; the scheduler refuses to start without a database backup source.
 - The scheduled backup also stages the full companion-data file tree (journals, generated media/selfies, vault notes, prompt and card history, scratchpad) into `companion-tree/` with a per-file sha256 manifest; the walk is exhaustive except for sessions (captured separately), backup targets, and repair snapshots, so new companion-authored file classes can never silently fall out of scope.

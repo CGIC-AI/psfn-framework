@@ -272,6 +272,7 @@ export function registerAgentDatabaseBackupLane(
     intervalMs: options.backupConfig.intervalMs,
     postgresSource: true,
     maxRotatingBackups: options.backupConfig.maxRotatingBackups,
+    maxDailyBackups: options.backupConfig.maxDailyBackups,
     maxWeeklyBackups: options.backupConfig.maxWeeklyBackups,
     maxMonthlyBackups: options.backupConfig.maxMonthlyBackups,
     backupRootDir: options.backupConfig.rootDir,

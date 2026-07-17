@@ -229,6 +229,7 @@ export function buildFleetBackupRunOptions(
     ...(groupCompanionDataDir ? { groupCompanionDataDir } : {}),
     ...(groupMode ? { groupWorkspacesRoot: fleet.workspacesRoot } : {}),
     maxRotatingBackups: backupConfig.maxRotatingBackups,
+    maxDailyBackups: backupConfig.maxDailyBackups,
     maxWeeklyBackups: backupConfig.maxWeeklyBackups,
     maxMonthlyBackups: backupConfig.maxMonthlyBackups,
     ...(backupConfig.mirrorDir ? { mirrorDir: backupConfig.mirrorDir } : {}),
@@ -289,6 +290,7 @@ export function buildFleetAuthBackupCycleOptions(params: {
     // database slice can consume the coordinator's one exported snapshot.
     groupMode: false,
     maxRotatingBackups: params.backupConfig.maxRotatingBackups,
+    maxDailyBackups: params.backupConfig.maxDailyBackups,
     maxWeeklyBackups: params.backupConfig.maxWeeklyBackups,
     maxMonthlyBackups: params.backupConfig.maxMonthlyBackups,
     ...(params.backupConfig.mirrorDir ? { mirrorDir: params.backupConfig.mirrorDir } : {}),

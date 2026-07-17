@@ -1,8 +1,9 @@
 {
   "intervalHours": 12,
-  "maxRotatingBackups": 9,
-  "maxWeeklyBackups": 2,
-  "maxMonthlyBackups": 1,
+  "maxRotatingBackups": 4,
+  "maxDailyBackups": 7,
+  "maxWeeklyBackups": 4,
+  "maxMonthlyBackups": 12,
   "mirrorDir": "",
   "verifyRestore": true,
   "groupMode": false,

@@ -262,6 +262,7 @@ describe('runBackupCycle', () => {
       sessionsDir,
       backupRootDir,
       maxRotatingBackups: 2,
+      maxDailyBackups: 0,
       maxWeeklyBackups: 0,
       maxMonthlyBackups: 0,
       now: () => Date.UTC(2026, 1, 26, 10, 11, 12, 123),
@@ -269,6 +270,77 @@ describe('runBackupCycle', () => {
 
     const remaining = readdirSync(backupRootDir).sort((a, b) => a.localeCompare(b));
     expect(remaining).toEqual(['20260103T000000000Z', '20260226T101112123Z']);
+  });
+
+  it('honours an explicit maxDailyBackups passthrough (daily tier disabled)', async () => {
+    const root = join(tmpdir(), `psfn-backup-daily-off-${Date.now()}`);
+    roots.push(root);
+    const sessionsDir = join(root, 'sessions');
+    const backupRootDir = join(root, 'backups');
+    mkdirSync(sessionsDir, { recursive: true });
+    mkdirSync(backupRootDir, { recursive: true });
+    writeFileSync(join(sessionsDir, 'channel.jsonl'), '{}\n', 'utf-8');
+
+    for (const dir of ['20260101T000000000Z', '20260102T000000000Z', '20260103T000000000Z']) {
+      mkdirSync(join(backupRootDir, dir), { recursive: true });
+    }
+
+    // maxDailyBackups: 0 must flow through and disable the daily tier — otherwise
+    // the runBackupCycle default (7) would keep every distinct-day directory.
+    await runBackupCycle({
+      postgres: {
+        databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn',
+        pgDumpBinary: writeStubPgDump(root),
+      },
+      sessionsDir,
+      backupRootDir,
+      maxRotatingBackups: 1,
+      maxDailyBackups: 0,
+      maxWeeklyBackups: 0,
+      maxMonthlyBackups: 0,
+      now: () => Date.UTC(2026, 1, 26, 10, 11, 12, 123),
+    });
+
+    const remaining = readdirSync(backupRootDir).sort((a, b) => a.localeCompare(b));
+    expect(remaining).toEqual(['20260226T101112123Z']);
+  });
+
+  it('keeps newest-per-day directories via the daily retention tier', async () => {
+    const root = join(tmpdir(), `psfn-backup-daily-on-${Date.now()}`);
+    roots.push(root);
+    const sessionsDir = join(root, 'sessions');
+    const backupRootDir = join(root, 'backups');
+    mkdirSync(sessionsDir, { recursive: true });
+    mkdirSync(backupRootDir, { recursive: true });
+    writeFileSync(join(sessionsDir, 'channel.jsonl'), '{}\n', 'utf-8');
+
+    for (const dir of ['20260101T000000000Z', '20260102T000000000Z', '20260103T000000000Z']) {
+      mkdirSync(join(backupRootDir, dir), { recursive: true });
+    }
+
+    // rotating: 1 would prune the older day dirs, but the daily tier protects the
+    // newest backup per distinct calendar day up to maxDailyBackups.
+    await runBackupCycle({
+      postgres: {
+        databaseUrl: 'postgresql://psfn:secret@127.0.0.1:5432/psfn',
+        pgDumpBinary: writeStubPgDump(root),
+      },
+      sessionsDir,
+      backupRootDir,
+      maxRotatingBackups: 1,
+      maxDailyBackups: 5,
+      maxWeeklyBackups: 0,
+      maxMonthlyBackups: 0,
+      now: () => Date.UTC(2026, 1, 26, 10, 11, 12, 123),
+    });
+
+    const remaining = readdirSync(backupRootDir).sort((a, b) => a.localeCompare(b));
+    expect(remaining).toEqual([
+      '20260101T000000000Z',
+      '20260102T000000000Z',
+      '20260103T000000000Z',
+      '20260226T101112123Z',
+    ]);
   });
 
   it('captures a Postgres dump archive', async () => {

@@ -32,7 +32,10 @@ describe('loadRuntimeChannelsConfig', () => {
         path: '/telegram/webhook',
       });
       expect(config.psfnAmica).toEqual({ enabled: false });
-      expect(buildExternalChannelProfiles(config)).toEqual({});
+      expect(config.companionUi).toEqual({ channelPrivacy: 'private' });
+      expect(buildExternalChannelProfiles(config)).toEqual({
+        'companion-ui': { channelPrivacy: 'private' },
+      });
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
@@ -147,7 +150,9 @@ describe('loadRuntimeChannelsConfig', () => {
 
       expect(saveChannelsOwnerFile(dataDir, payload)).toEqual(payload);
       expect(loadChannelsOwnerFile(dataDir)).toEqual(payload);
-      expect(buildExternalChannelProfiles(loadRuntimeChannelsConfig(dataDir, {}))).toEqual({});
+      expect(buildExternalChannelProfiles(loadRuntimeChannelsConfig(dataDir, {}))).toEqual({
+        'companion-ui': { channelPrivacy: 'private' },
+      });
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }
@@ -501,6 +506,7 @@ describe('loadRuntimeChannelsConfig', () => {
           canonicalContactId: 'contact-primary-user',
           channelPrivacy: 'invite_only',
         },
+        'companion-ui': { channelPrivacy: 'private' },
       });
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
@@ -525,7 +531,77 @@ describe('loadRuntimeChannelsConfig', () => {
       const config = loadRuntimeChannelsConfig(dataDir, {});
 
       expect(config.psfnAmica.enabled).toBe(false);
-      expect(buildExternalChannelProfiles(config)).toEqual({});
+      expect(buildExternalChannelProfiles(config)).toEqual({
+        'companion-ui': { channelPrivacy: 'private' },
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads companionUi channel defaults and overrides from channels.json (8ora)', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        companionUi: {
+          channelPrivacy: 'invite_only',
+          canonicalContactId: 'contact-fleet-human',
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+
+      expect(config.companionUi).toEqual({
+        channelPrivacy: 'invite_only',
+        canonicalContactId: 'contact-fleet-human',
+      });
+      expect(buildExternalChannelProfiles(config)).toEqual({
+        'companion-ui': {
+          channelPrivacy: 'invite_only',
+          canonicalContactId: 'contact-fleet-human',
+        },
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an invalid companionUi.channelPrivacy value (8ora)', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        companionUi: { channelPrivacy: 'broadcast' },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.companionUi.channelPrivacy must be one of: private, invite_only, public',
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects unknown companionUi keys fail-closed (8ora)', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        companionUi: { channelPrivacy: 'private', enabled: true },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(
+        'channels.json.companionUi has unsupported keys: enabled',
+      );
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects an unknown companionUi key on save fail-closed (8ora)', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      expect(() => saveChannelsOwnerFile(dataDir, {
+        companionUi: { channelPrivacy: 'private', foo: 'bar' },
+      })).toThrow('channels.json.companionUi has unsupported keys: foo');
     } finally {
       rmSync(dataDir, { recursive: true, force: true });
     }

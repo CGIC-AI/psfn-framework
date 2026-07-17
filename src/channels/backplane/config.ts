@@ -116,6 +116,21 @@ export interface PsfnAmicaChannelConfig {
 }
 
 /**
+ * Companion UI PWA channel (bead 8ora). Unlike psfn-amica this surface is not
+ * gated by a channels.json `enabled` flag — availability is decided by the
+ * fleet-auth/hub-device wiring at the gateway. channels.json only owns the
+ * operator-tunable envelope defaults the runtime stamps onto companion-ui
+ * turns: the channel privacy level (default `private`, a 1:1 human↔companion
+ * surface) and an optional canonical-contact fallback. The per-turn canonical
+ * contact for a Discord-SSO'd human is always sourced from the authenticated
+ * hub-device attachment, not from this config.
+ */
+export interface CompanionUiChannelConfig {
+  channelPrivacy: ChannelPrivacy;
+  canonicalContactId?: string;
+}
+
+/**
  * Channel-owned Context Envelope labels (E3.1 contract,
  * docs/context-envelope.md). channels.json owns per-channel
  * { privacy, broadcast, contactTracking }; these labels are the
@@ -133,6 +148,7 @@ export interface RuntimeChannelsConfig {
   telegram: TelegramChannelConfig;
   api: ApiChannelConfig;
   psfnAmica: PsfnAmicaChannelConfig;
+  companionUi: CompanionUiChannelConfig;
   contextEnvelope: ChannelContextEnvelopeConfig;
 }
 
@@ -167,6 +183,49 @@ const DEFAULT_DISCORD_CHANNEL_CONFIG: DiscordChannelConfig = {
 const DEFAULT_PSFN_AMICA_CHANNEL_CONFIG: PsfnAmicaChannelConfig = {
   enabled: false,
 };
+
+const DEFAULT_COMPANION_UI_CHANNEL_CONFIG: CompanionUiChannelConfig = {
+  channelPrivacy: 'private',
+};
+
+const COMPANION_UI_ALLOWED_KEYS = ['channelPrivacy', 'canonicalContactId'] as const;
+
+/**
+ * Fail-closed parser for the channels.json `companionUi` section (bead 8ora).
+ * Exported so the owner-file save path validates writes against the same rules
+ * as runtime load. Unknown keys are rejected; an omitted section yields the
+ * `private` default.
+ */
+export function parseCompanionUiSection(
+  scopedRoot: Record<string, unknown>,
+): CompanionUiChannelConfig {
+  const section = parseSectionObject(scopedRoot, 'companionUi');
+  if (!section) return { ...DEFAULT_COMPANION_UI_CHANNEL_CONFIG };
+
+  const unknownKeys = Object.keys(section).filter(
+    key => !(COMPANION_UI_ALLOWED_KEYS as readonly string[]).includes(key),
+  );
+  if (unknownKeys.length > 0) {
+    throw new Error(`channels.json.companionUi has unsupported keys: ${unknownKeys.join(', ')}`);
+  }
+
+  const channelPrivacyRaw = parseConfiguredString(section.channelPrivacy, 'channels.json.companionUi.channelPrivacy');
+  const channelPrivacy = channelPrivacyRaw ? normalizeChannelPrivacy(channelPrivacyRaw) : undefined;
+  if (channelPrivacyRaw && !channelPrivacy) {
+    throw new Error(
+      'channels.json.companionUi.channelPrivacy must be one of: private, invite_only, public',
+    );
+  }
+  const canonicalContactId = parseConfiguredString(
+    section.canonicalContactId,
+    'channels.json.companionUi.canonicalContactId',
+  );
+
+  return {
+    channelPrivacy: channelPrivacy ?? DEFAULT_COMPANION_UI_CHANNEL_CONFIG.channelPrivacy,
+    ...(canonicalContactId ? { canonicalContactId } : {}),
+  };
+}
 
 export function createDefaultChannelContextEnvelopeConfig(): ChannelContextEnvelopeConfig {
   return { channels: {} };
@@ -583,6 +642,9 @@ export function saveChannelsOwnerFile(
   // runtime load validation are rejected fail-closed instead of persisted.
   const scopedRoot = parseSectionObject(nextConfig, 'channels') ?? nextConfig;
   parseContextEnvelopeSection(scopedRoot);
+  // 8ora: validate the companionUi section on save so an unknown key or an
+  // invalid privacy level is rejected fail-closed rather than persisted.
+  parseCompanionUiSection(scopedRoot);
   // W1-P2: structural validation of discord.accounts on save (secrets are env
   // resolved at load, so an empty env here only skips token presence checks).
   const discordSection = parseSectionObject(scopedRoot, 'discord');
@@ -662,6 +724,7 @@ export function loadRuntimeChannelsConfig(
     psfnAmicaConfig.defaultIdentity,
     'channels.json.psfnAmica.defaultIdentity',
   );
+  const companionUi = parseCompanionUiSection(scopedRoot);
   const telegramConfig = parseSectionObject(scopedRoot, 'telegram') ?? {};
   if (Object.keys(telegramConfig).length > 0 && !Object.hasOwn(telegramConfig, 'enabled')) {
     throw new Error('channels.json.telegram.enabled must be configured when telegram settings are present');
@@ -793,6 +856,7 @@ export function loadRuntimeChannelsConfig(
       enabled: psfnAmicaEnabled,
       ...(psfnAmicaDefaultIdentity && psfnAmicaEnabled ? { defaultIdentity: psfnAmicaDefaultIdentity } : {}),
     },
+    companionUi,
     telegram: {
       enabled,
       token,
@@ -815,7 +879,21 @@ export function loadRuntimeChannelsConfig(
 export function buildExternalChannelProfiles(
   config: RuntimeChannelsConfig,
 ): Partial<Record<ChannelType, ExternalChannelProfileConfig>> {
-  return config.psfnAmica.enabled && config.psfnAmica.defaultIdentity
-    ? { 'psfn-amica': config.psfnAmica.defaultIdentity }
-    : {};
+  // The companion-ui profile is ALWAYS present so the runtime can source a
+  // non-null channelPrivacy (and optional canonical-contact fallback) for
+  // server-authored companion-ui turns. It is intentionally NOT header-claimable
+  // (companion-ui is absent from EXTERNAL_API_CHANNEL_TYPE_ALLOWLIST), so this
+  // profile is only consumed by the hub-device stamp path, never by a client
+  // supplying an X-PSFN-Channel-Type header.
+  return {
+    ...(config.psfnAmica.enabled && config.psfnAmica.defaultIdentity
+      ? { 'psfn-amica': config.psfnAmica.defaultIdentity }
+      : {}),
+    'companion-ui': {
+      channelPrivacy: config.companionUi.channelPrivacy,
+      ...(config.companionUi.canonicalContactId
+        ? { canonicalContactId: config.companionUi.canonicalContactId }
+        : {}),
+    },
+  };
 }

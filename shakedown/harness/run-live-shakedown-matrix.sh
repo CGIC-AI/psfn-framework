@@ -1,13 +1,23 @@
 #!/usr/bin/env bash
 # Tier sweep (Layer A) — see docs/shakedown.md. Runs the case harness across the
-# three local tiers (nursery -> apprentice -> autonomous), editing
-# capability-tier.json and restarting the runtime between tiers, and emits one
-# run JSON per tier.
+# three tiers (nursery -> apprentice -> autonomous) and emits one run JSON per
+# tier. Works against two deployment targets, selected by PSFN_TARGET:
 #
-# Fail-closed: every path comes from the already-sourced shakedown env; there
+#   local (default): edits capability-tier.json in the round system-data and
+#     restarts the split runtime between tiers, backing the owner file up before
+#     the sweep and restoring + verifying it on exit.
+#   kube: flips the tier LIVE through the canonical Garden owner-file editor
+#     (POST /api/admin/settings/capabilities with a form-urlencoded configJson of
+#     the full capability-tier owner object) — the capability runtime hot-reloads
+#     on the persisted change, so there is no redeploy and no PVC file edit. The
+#     pre-sweep tier is captured via the settings API, persisted to a durable
+#     record under the matrix dir before the first flip, and restored + confirmed
+#     (with bounded retry) through the settings API on exit.
+#
+# Fail-closed: every path/URL comes from the already-sourced shakedown env; there
 # are no /mnt or previous-sprint defaults and this script sources no env file of
-# its own. The capability-tier owner file is backed up before the sweep and
-# restored on exit (trap), and the restore is verified before the script leaves.
+# its own. The pre-sweep tier is restored on exit (trap) and the restore is
+# verified before the script leaves — a failed restore is a loud hard error.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -20,27 +30,54 @@ require_env() {
   fi
 }
 
-for var in PSFN_TIER_FILE PSFN_MATRIX_DIR POSTGRES_DATABASE_URL API_KEY; do
+TARGET="${PSFN_TARGET:-local}"
+case "$TARGET" in
+  local|kube) ;;
+  *)
+    printf "Invalid environment variable: PSFN_TARGET — expected 'local' or 'kube', got %s\n" "$TARGET" >&2
+    exit 1
+    ;;
+esac
+
+# Common fail-closed requirements for both targets.
+for var in PSFN_MATRIX_DIR POSTGRES_DATABASE_URL API_KEY; do
   require_env "$var"
 done
+# Target-specific requirements. The kube tier flip goes through the settings API,
+# so it needs the Garden admin base/token (admin token is validated fail-closed
+# by lib/target.mjs); the local flip needs the owner file it edits.
+if [[ "$TARGET" == "kube" ]]; then
+  for var in PSFN_API_BASE PSFN_ADMIN_BASE; do
+    require_env "$var"
+  done
+else
+  require_env PSFN_TIER_FILE
+fi
 
-TIER_FILE="$PSFN_TIER_FILE"
 MATRIX_DIR="$PSFN_MATRIX_DIR"
 HARNESS="${PSFN_HARNESS_PATH:-$SCRIPT_DIR/live-system-shakedown.mjs}"
+TARGET_LIB="${PSFN_TARGET_LIB:-$SCRIPT_DIR/lib/target.mjs}"
 RESTART_SCRIPT="${PSFN_RESTART_SCRIPT:-$SCRIPT_DIR/restart-split-runtime.sh}"
+TIER_FILE="${PSFN_TIER_FILE:-}"
 LAST_PHASE_OUTPUT=""
 
-if [[ ! -f "$TIER_FILE" ]]; then
-  echo "Capability tier owner file not found: $TIER_FILE" >&2
-  exit 1
-fi
 if [[ ! -f "$HARNESS" ]]; then
   echo "Case harness not found: $HARNESS" >&2
   exit 1
 fi
-if [[ ! -x "$RESTART_SCRIPT" && ! -f "$RESTART_SCRIPT" ]]; then
-  echo "Restart script not found: $RESTART_SCRIPT" >&2
+if [[ ! -f "$TARGET_LIB" ]]; then
+  echo "Target library not found: $TARGET_LIB" >&2
   exit 1
+fi
+if [[ "$TARGET" == "local" ]]; then
+  if [[ ! -f "$TIER_FILE" ]]; then
+    echo "Capability tier owner file not found: $TIER_FILE" >&2
+    exit 1
+  fi
+  if [[ ! -x "$RESTART_SCRIPT" && ! -f "$RESTART_SCRIPT" ]]; then
+    echo "Restart script not found: $RESTART_SCRIPT" >&2
+    exit 1
+  fi
 fi
 
 derive_api_user_id() {
@@ -55,23 +92,73 @@ API_USER_ID="$(derive_api_user_id)"
 
 mkdir -p "$MATRIX_DIR"
 
-# Back the owner file up before any tier edit. Keep both a file copy and the
-# content so the restore can be verified byte-for-byte.
-TIER_BACKUP="$(mktemp)"
-cp "$TIER_FILE" "$TIER_BACKUP"
-ORIGINAL_TIER_JSON="$(cat "$TIER_FILE")"
+# --- Pre-sweep tier capture -------------------------------------------------
+# Both targets capture the tier that was live before the sweep so the exit trap
+# can put it back. local captures the owner-file content (verified byte-for-byte
+# on restore); kube captures the tier string via the settings API.
+TIER_BACKUP=""
+ORIGINAL_TIER_JSON=""
+ORIGINAL_TIER=""
+# Durable record of the pre-sweep kube tier. Written under the matrix dir BEFORE
+# the first flip so a crashed/SIGKILLed run (which cannot run the exit trap) can
+# still be recovered manually: `node lib/target.mjs set-tier "$(cat <file>)"`.
+ORIGINAL_TIER_FILE="${PSFN_ORIGINAL_TIER_FILE:-$MATRIX_DIR/original-capability-tier}"
+# Bounded retry budget for the kube revert on transient settings-API failure
+# (e.g. a port-forward blip) before it escalates to a loud FATAL.
+RESTORE_MAX_ATTEMPTS="${PSFN_TIER_RESTORE_MAX_ATTEMPTS:-5}"
+RESTORE_RETRY_DELAY_S="${PSFN_TIER_RESTORE_RETRY_DELAY_S:-2}"
+if [[ "$TARGET" == "local" ]]; then
+  TIER_BACKUP="$(mktemp)"
+  cp "$TIER_FILE" "$TIER_BACKUP"
+  ORIGINAL_TIER_JSON="$(cat "$TIER_FILE")"
+else
+  # Preflight the kube transport before touching the tier: gateway reachable
+  # (:10053 port-forward), Postgres reachable (proof queries), and the settings
+  # API answers. get-tier fails closed on a missing admin base/token, naming it.
+  node "$TARGET_LIB" check-gateway >/dev/null
+  node "$TARGET_LIB" check-postgres >/dev/null
+  ORIGINAL_TIER="$(node "$TARGET_LIB" get-tier)"
+  if [[ -z "$ORIGINAL_TIER" ]]; then
+    echo "FATAL: could not read the pre-sweep capability tier from the settings API." >&2
+    exit 1
+  fi
+  # Persist the pre-sweep tier durably before ANY flip, so an out-of-band kill
+  # still leaves a recoverable record on disk.
+  printf '%s\n' "$ORIGINAL_TIER" > "$ORIGINAL_TIER_FILE"
+  echo "kube target: pre-sweep capability tier is '$ORIGINAL_TIER' (durable record: $ORIGINAL_TIER_FILE)." >&2
+fi
 
 TIER_RESTORED=0
 restore_tier() {
-  # Restore the owner file from the backup, then verify the restore matches the
-  # pre-sweep content. A failed restore is a hard error even on the exit path —
-  # the sweep must never leave capability-tier.json mutated.
-  # Idempotent: the signal traps exit into the EXIT trap, so guard against a
-  # second invocation running diff against an already-removed backup.
+  # Restore the pre-sweep tier, then verify it. A failed restore is a hard error
+  # even on the exit path — the sweep must never leave the tier mutated.
+  # TIER_RESTORED is only set to 1 AFTER an effective, confirming read-back shows
+  # the tier is actually back to the original, so an interleaved signal that
+  # arrives before confirmation re-enters and retries rather than short-circuit.
   if [ "$TIER_RESTORED" = "1" ]; then
     return 0
   fi
-  TIER_RESTORED=1
+  if [[ "$TARGET" == "kube" ]]; then
+    # Re-flip via the settings API. set-tier confirms the persisted hot-reload by
+    # re-reading the tier and prints the confirmed tier on stdout; we additionally
+    # assert that read-back equals the original before marking restored. Retry a
+    # bounded number of times on transient failure (e.g. a port-forward blip)
+    # before escalating to a loud FATAL that names the durable recovery record.
+    local attempt=0 confirmed=""
+    while (( attempt < RESTORE_MAX_ATTEMPTS )); do
+      attempt=$((attempt + 1))
+      if confirmed="$(node "$TARGET_LIB" set-tier "$ORIGINAL_TIER")" \
+        && [[ "$confirmed" == "$ORIGINAL_TIER" ]]; then
+        TIER_RESTORED=1
+        echo "kube target: capability tier restored to '$confirmed' and confirmed via the settings API (attempt $attempt/$RESTORE_MAX_ATTEMPTS)." >&2
+        return 0
+      fi
+      echo "WARN: capability tier restore attempt $attempt/$RESTORE_MAX_ATTEMPTS to '$ORIGINAL_TIER' failed or was unconfirmed; retrying in ${RESTORE_RETRY_DELAY_S}s..." >&2
+      sleep "$RESTORE_RETRY_DELAY_S"
+    done
+    echo "FATAL: capability tier restore to '$ORIGINAL_TIER' via the settings API failed after $RESTORE_MAX_ATTEMPTS attempts. Recover manually: node '$TARGET_LIB' set-tier \"\$(cat '$ORIGINAL_TIER_FILE')\"" >&2
+    exit 1
+  fi
   local restore_file
   restore_file="$(mktemp)"
   printf '%s' "$ORIGINAL_TIER_JSON" > "$restore_file"
@@ -81,19 +168,27 @@ restore_tier() {
     rm -f "$TIER_BACKUP"
     exit 1
   fi
+  # Only now — after the byte-for-byte verify — is the local restore confirmed.
+  TIER_RESTORED=1
   rm -f "$TIER_BACKUP"
   echo "capability-tier.json restored and verified against pre-sweep backup." >&2
 }
 
 # Restore runs once on any exit. INT/TERM handlers exit with the conventional
 # 128+signal code, which triggers the EXIT trap — so Ctrl-C (SIGINT) and kill
-# (SIGTERM) both restore and verify the owner file before the process dies.
+# (SIGTERM) both restore and verify the tier before the process dies.
 trap restore_tier EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
 set_tier() {
   local tier="$1"
+  if [[ "$TARGET" == "kube" ]]; then
+    # PATCH the settings API and confirm the hot-reload before returning; a flip
+    # that is not confirmed exits non-zero and aborts the sweep.
+    node "$TARGET_LIB" set-tier "$tier" >/dev/null
+    return
+  fi
   local tmp
   tmp="$(mktemp)"
   jq --arg tier "$tier" '.tier = $tier' "$TIER_FILE" > "$tmp"
@@ -101,6 +196,11 @@ set_tier() {
 }
 
 restart_runtime() {
+  # kube hot-reloads the tier on the persisted settings change — no redeploy and
+  # no runtime restart. Only the local split runtime is restarted between tiers.
+  if [[ "$TARGET" == "kube" ]]; then
+    return 0
+  fi
   "$RESTART_SCRIPT" >/dev/null
 }
 
@@ -112,8 +212,14 @@ run_phase() {
   local output="$MATRIX_DIR/live-system-shakedown.${label}.json"
   LAST_PHASE_OUTPUT="$output"
 
-  set_tier "$tier"
-  restart_runtime
+  # run_phase runs under `run_phase ... || status=$?` in run_phase_or_abort,
+  # which suppresses `set -e` for everything inside this function. An unconfirmed
+  # forward flip (or a failed restart) MUST still abort the phase so no case ever
+  # runs against the WRONG tier — make it explicit with `|| return $?` instead of
+  # relying on set -e. The non-zero return propagates to run_phase_or_abort, which
+  # marks the remaining tiers aborted and lets the exit-trap revert fire.
+  set_tier "$tier" || return $?
+  restart_runtime || return $?
 
   PSFN_SHAKEDOWN_PHASE="$phase" \
   PSFN_CASE_IDS="$case_ids" \

@@ -15,7 +15,6 @@ import { join } from 'node:path';
 
 import {
   requireEnv,
-  requireEnvOneOf,
   optionalEnv,
   optionalIntEnv,
   failClosedOnEnv,
@@ -26,21 +25,28 @@ import {
   INSECURE_LOCAL_API_PRINCIPAL_ID,
   deriveApiKeyPrincipalId,
 } from './lib/probe.mjs';
+import { resolveTarget } from './lib/target.mjs';
 
 const CONFIG = (() => {
   try {
+    // Single-source the transport contract (chat base, admin base, api key,
+    // admin token, Postgres) from the target abstraction so local and kube
+    // resolve identically and fail closed on the same named variables. The kube
+    // target simply points PSFN_API_BASE/PSFN_ADMIN_BASE at the port-forward.
+    const targetContract = resolveTarget();
     return {
-      apiBase: requireEnv('PSFN_API_BASE', 'gateway API base URL'),
-      adminBase: requireEnv('PSFN_ADMIN_BASE', 'Garden admin base URL'),
-      apiKey: requireEnvOneOf(['API_KEY', 'PSFN_API_KEY'], 'gateway API key'),
-      adminToken: requireEnvOneOf(['ADMIN_TOKEN', 'PSFN_ADMIN_TOKEN'], 'Garden admin token'),
+      target: targetContract.target,
+      apiBase: targetContract.chatBaseUrl,
+      adminBase: targetContract.adminBaseUrl,
+      apiKey: targetContract.apiKey,
+      adminToken: targetContract.adminToken,
       outputPath: requireEnv('PSFN_SHAKEDOWN_OUTPUT', 'per-phase run JSON path'),
       repoRoot: requireEnv('PSFN_REPO_ROOT', 'RC repo clone under test'),
       companionDataDir: requireEnv('COMPANION_DATA_DIR', 'round companion-data root'),
       systemDataDir: requireEnv('SYSTEM_DATA_DIR', 'round system-data root'),
       // Read here so a missing URL fails closed at startup, naming the variable,
       // even though the pool itself is opened lazily on the first proof query.
-      postgresUrl: requireEnv('POSTGRES_DATABASE_URL', 'the round Postgres database'),
+      postgresUrl: targetContract.postgresUrl,
     };
   } catch (error) {
     failClosedOnEnv(error);
@@ -48,6 +54,7 @@ const CONFIG = (() => {
   }
 })();
 
+const TARGET = CONFIG.target;
 const API_BASE = CONFIG.apiBase;
 const ADMIN_BASE = CONFIG.adminBase;
 const API_URL = `${API_BASE}/v1/chat/completions`;
@@ -3075,6 +3082,7 @@ async function main() {
   };
   const outputBase = {
     startedAt,
+    target: TARGET,
     phase: PHASE,
     apiBase: API_BASE,
     adminBase: ADMIN_BASE,

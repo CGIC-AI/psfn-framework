@@ -74,6 +74,26 @@ export async function pgScalar(sql, params = []) {
   return key ? first[key] : null;
 }
 
+/**
+ * Fail-closed reachability probe for the round Postgres. On the kube target the
+ * connection runs through a port-forward, so this turns an unreachable database
+ * into a clear, named error at preflight instead of a mid-sweep query crash. A
+ * missing POSTGRES_DATABASE_URL still fails closed naming the variable (getPool).
+ */
+export async function assertPostgresReachable() {
+  try {
+    const value = await pgScalar('SELECT 1 AS ok');
+    if (Number(value) !== 1) {
+      throw new Error(`unexpected SELECT 1 result: ${JSON.stringify(value)}`);
+    }
+  } catch (error) {
+    throw new Error(
+      `Postgres not reachable via POSTGRES_DATABASE_URL: ${error instanceof Error ? error.message : String(error)}`
+      + ' (on the kube target, is the database port-forward up?)',
+    );
+  }
+}
+
 /** Close the pool. Idempotent; safe to call in a finally. */
 export async function closePool() {
   if (!pool) return;

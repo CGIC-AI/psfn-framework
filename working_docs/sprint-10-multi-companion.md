@@ -97,13 +97,18 @@ Decided in review §3–§4:
 - **Hard files remain the source of truth.** Open design point (review §3): optionally mirror some per-companion config into the DB for live read, writing back to files only on actual updates — keeps hydrating a companion on a different substrate simple (files only, no full DB needed). Not required for v1.
 - Capability tiers (review §10): per-companion charge/trust/tier supports intentionally-limited "hang-out" companions (middle tier, limited self-modification, no full tool set) up through the existing autonomy tier. A **"management" tier above autonomy** (acting on *other* companions' settings via gateway/Garden APIs — the adult-and-child guardrail case) is explicitly deferred (§7); it needs more thought and strictly higher gating.
 
-### W4 — Gardens (operability) — **decision changed in review §6**
+### W4 — Gardens (operability) — **decision updated 2026-07-17**
 
-**One Garden per companion** — override of v1's fleet-router recommendation (UID-scoped routes + reworked UI data flow judged more complex than it's worth right now). Each companion gets its own Garden surface: today's operator-process shape × N, each bound to its companion's admin socket, ports/paths assigned from `companions.json`.
+**One fleet-scoped Garden control plane** contains the fleet view and companion
+switcher, avoiding roughly one Garden deployment per companion plus a separate
+fleet view. Per-companion owner files remain canonical. Every admin call is
+authenticated and authorized server-side for the companion selected in its
+canonical route; the UI switcher is navigation, never the security boundary.
 
-**Add: a Garden fleet view** — a thin gateway-served page (confirmed) giving an overall health view of all companions in one cluster: up/down, fatigue/charge posture, plus common health data — when things last ran, tool errors, etc. — fed by the gateway's connection registry and telemetry, linking out to each companion's Garden.
-
-Auth stays single-operator shared token; the operator is admin and can see everything (review §13).
+Shards are nested under their parent companion with read-only inherited config
+and limited model/budget overrides. They never receive Garden containers. See
+[`docs/garden-control-plane.md`](../docs/garden-control-plane.md) for the
+topology, authorization, migration, and rollback contract.
 
 ### W5 — Locations, rooms & shared world wiki (experience)
 
@@ -168,7 +173,7 @@ All twelve v1 open questions are resolved except the four in §6:
 | 6 | Fatigue accounting for ICP | Approved as suggested; IPC (DM) vs room budgets are naturally separate channels (review §9/§15) |
 | 7 | Who writes the shared wiki | Caretaker layer separate from companion core; companions propose → dedup → operator approves; background cleanup (review §8) |
 | 8 | World state authority | Rooms are channels; session holds presence; system-only entry messages; public vs time-gated private rooms; location system owns mechanics (review §7/§14) |
-| 9 | Garden auth / topology | **One Garden per companion** + cluster fleet-health view (override of fleet-router); single operator token, operator sees all (review §6/§13) |
+| 9 | Garden auth / topology | **Updated 2026-07-17:** one fleet-scoped Garden with built-in fleet view and companion switcher; Fleet Auth authorizes each companion-scoped admin call server-side |
 | 10 | Companion identity format | UUID companion IDs; intra-cluster trust automatic via shared signing certs; cross-cluster trust model deferred (review §2/§9) |
 | 11 | Fleet-level charge ceiling | Not addressed — keep v1 lean: per-companion quotas first, observe, add gateway ceiling if needed |
 | 12 | Voice/satellite routing | One companion per satellite/app; one-to-one routing like text; Wyoming approach non-final (review §12) |
@@ -178,7 +183,7 @@ Also confirmed: companion privacy leaks must surface loudly; full-review style a
 ## 6. Remaining open questions — all resolved (2026-07-08 follow-up)
 
 - **Q-A (config mirror):** ✅ v1 is files only; add a DB mirror later if a concrete live-read need appears.
-- **Q-B (fleet view hosting):** ✅ gateway-served thin page, pulling common health data (last runs, tool errors, fatigue/charge posture) — see W4.
+- **Q-B (fleet view hosting):** ✅ updated 2026-07-17: rendered inside the one fleet Garden; the gateway retains authenticated roster/connection projections, not a separate fleet-view deployment — see W4.
 - **Q-C (time-gated private-room memory):** ✅ solved by **presence-windowed delivery**, not extraction filtering: a companion only receives room chat between entry and exit, so L0 only ever holds what they witnessed — no extraction-pipeline change needed. Group chats are the exception (everyone sees all). Memories additionally carry who-it-relates-to + privacy-level tags for later tweaking. See W5.
 - **Q-D (fleet charge ceiling):** ✅ per-companion quotas are enough for now; a cluster-total budget is a possible later addition.
 

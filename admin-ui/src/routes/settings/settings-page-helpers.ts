@@ -3,7 +3,7 @@ import {
   SETTINGS_GARDEN_RAW_EDITOR_KEYS,
   SETTINGS_GARDEN_RAW_EDITOR_SUBSYSTEM_BY_KEY,
   type GardenSettingsRawEditorKey,
-} from '$lib/settings-garden-contract';
+} from '../../../../src/shared/contracts/settings-garden-contract.js';
 import type {
   AdminSettingsData,
   CanonicalProviderRegistry,
@@ -71,6 +71,173 @@ export function listDirtyRawEditorKeys(
   return SETTINGS_GARDEN_RAW_EDITOR_KEYS.filter(
     key => current[key] !== initial[key],
   );
+}
+
+// Owner files the unified save writes from structured form state. A dirty raw
+// editor for any of these keys excludes that file from the unified save so
+// form-derived JSON never stomps staged hand edits.
+export const UNIFIED_SAVE_OWNER_FILE_KEYS = [
+  'providers',
+  'scheduler',
+  'capabilities',
+  'backup',
+] as const satisfies readonly RawEditorKey[];
+
+export type UnifiedSaveOwnerFileKey = (typeof UNIFIED_SAVE_OWNER_FILE_KEYS)[number];
+
+export function listUnifiedSaveSkippedOwnerFiles(
+  dirtyKeys: readonly RawEditorKey[],
+): UnifiedSaveOwnerFileKey[] {
+  const dirty = new Set<RawEditorKey>(dirtyKeys);
+  return UNIFIED_SAVE_OWNER_FILE_KEYS.filter(key => dirty.has(key));
+}
+
+// The unified save's runtime payload IS settings.json — updateSettings PATCHes
+// the whole runtime payload onto it. So a dirty settings.json raw editor cannot
+// be "skipped" the way the other owner files are: writing the runtime payload
+// would silently clobber the operator's staged hand edits (the reload then
+// re-shows the staged text, masking the loss). Fail closed instead — refuse the
+// whole unified save until the raw edits are saved or discarded on the Raw JSON
+// tab. Returns the blocking message when settings.json is dirty, else null.
+export const UNIFIED_SAVE_SETTINGS_JSON_CONFLICT_MESSAGE =
+  'settings.json has staged raw edits on the Raw JSON tab — save or discard them there before using this save.';
+
+export function resolveUnifiedSaveSettingsJsonConflict(
+  dirtyKeys: readonly RawEditorKey[],
+): string | null {
+  return dirtyKeys.includes('settings')
+    ? UNIFIED_SAVE_SETTINGS_JSON_CONFLICT_MESSAGE
+    : null;
+}
+
+export interface UnifiedOwnerConfigSaveEntry {
+  key: UnifiedSaveOwnerFileKey;
+  nextJson: string;
+  currentJson: string;
+}
+
+export interface UnifiedOwnerConfigSavePlan {
+  saves: UnifiedOwnerConfigSaveEntry[];
+  skippedOwnerFiles: UnifiedSaveOwnerFileKey[];
+  skippedWithPendingChanges: UnifiedSaveOwnerFileKey[];
+}
+
+// Single source of truth for the unified save's owner-file write surface. The
+// caller must pass exactly one entry per UNIFIED_SAVE_OWNER_FILE_KEYS key; this
+// invariant is what ties the skip set to the real write surface. If the two
+// ever drift, a skipped file could be silently written (or a written file never
+// skipped), so we fail closed here rather than let them diverge unnoticed.
+//
+// - `saves`: entries to actually write (not skipped, and JSON changed).
+// - `skippedOwnerFiles`: files excluded because their raw editor is dirty.
+// - `skippedWithPendingChanges`: skipped files that ALSO had pending
+//   form-derived JSON changes — those changes were dropped by the skip and must
+//   be reported as not saved.
+export function planUnifiedOwnerConfigSaves(input: {
+  entries: readonly UnifiedOwnerConfigSaveEntry[];
+  dirtyRawEditorKeys: readonly RawEditorKey[];
+}): UnifiedOwnerConfigSavePlan {
+  const entryKeys = input.entries.map((entry) => entry.key);
+  const entryKeySet = new Set<UnifiedSaveOwnerFileKey>(entryKeys);
+  if (entryKeys.length !== entryKeySet.size) {
+    throw new Error('Unified owner-config save entries contain duplicate keys');
+  }
+  const expected = UNIFIED_SAVE_OWNER_FILE_KEYS;
+  if (
+    entryKeySet.size !== expected.length
+    || !expected.every((key) => entryKeySet.has(key))
+  ) {
+    throw new Error(
+      `Unified owner-config save surface [${[...entryKeySet].sort().join(', ')}] `
+      + `must equal the skip set [${[...expected].sort().join(', ')}]`,
+    );
+  }
+
+  const skippedOwnerFiles = listUnifiedSaveSkippedOwnerFiles(input.dirtyRawEditorKeys);
+  const skipped = new Set<UnifiedSaveOwnerFileKey>(skippedOwnerFiles);
+  const saves: UnifiedOwnerConfigSaveEntry[] = [];
+  const skippedWithPendingChanges: UnifiedSaveOwnerFileKey[] = [];
+  for (const entry of input.entries) {
+    const hasPendingChange = entry.nextJson !== entry.currentJson;
+    if (skipped.has(entry.key)) {
+      if (hasPendingChange) {
+        skippedWithPendingChanges.push(entry.key);
+      }
+      continue;
+    }
+    if (hasPendingChange) {
+      saves.push(entry);
+    }
+  }
+  return { saves, skippedOwnerFiles, skippedWithPendingChanges };
+}
+
+// Success-banner note for a unified save that skipped one or more owner files.
+// Honesty matters: when a skipped file also had pending FORM-derived changes
+// (e.g. backgroundMaintenanceIntervalMs routes only to scheduler.json), those
+// changes were dropped by the skip, so the note must say they were NOT saved —
+// not merely that raw edits are preserved.
+export function buildUnifiedSaveSkipNote(input: {
+  skippedOwnerFiles: readonly UnifiedSaveOwnerFileKey[];
+  skippedWithPendingChanges: readonly UnifiedSaveOwnerFileKey[];
+  ownerFileLabel: (key: UnifiedSaveOwnerFileKey) => string;
+}): string {
+  if (input.skippedOwnerFiles.length === 0) {
+    return '';
+  }
+  const droppedSet = new Set<UnifiedSaveOwnerFileKey>(input.skippedWithPendingChanges);
+  const droppedLabels = input.skippedOwnerFiles
+    .filter((key) => droppedSet.has(key))
+    .map(input.ownerFileLabel);
+  const preservedLabels = input.skippedOwnerFiles
+    .filter((key) => !droppedSet.has(key))
+    .map(input.ownerFileLabel);
+  const parts: string[] = [];
+  if (droppedLabels.length > 0) {
+    parts.push(
+      ` Form changes to ${droppedLabels.join(', ')} were NOT saved — that owner file `
+      + 'has staged raw edits on the Raw JSON tab; save or discard the raw edits there, then save again.',
+    );
+  }
+  if (preservedLabels.length > 0) {
+    parts.push(
+      ` Skipped ${preservedLabels.join(', ')} — staged raw edits on the Raw JSON tab `
+      + 'are preserved; save or discard them there.',
+    );
+  }
+  return parts.join('');
+}
+
+// Post-reload editor contents: dirty raw editors keep the user's staged text
+// across a server-state reload; clean editors refresh from the server.
+export function resolveReloadedRawJsonByKey(input: {
+  serverJsonByKey: Record<RawEditorKey, string>;
+  stagedJsonByKey: Record<RawEditorKey, string>;
+  dirtyKeys: readonly RawEditorKey[];
+}): Record<RawEditorKey, string> {
+  const dirty = new Set<RawEditorKey>(input.dirtyKeys);
+  return Object.fromEntries(
+    SETTINGS_GARDEN_RAW_EDITOR_KEYS.map((key) => [
+      key,
+      dirty.has(key) ? input.stagedJsonByKey[key] : input.serverJsonByKey[key],
+    ]),
+  ) as Record<RawEditorKey, string>;
+}
+
+// Rebasing after a save/reload must NOT mark preserved dirty editors clean:
+// their baseline stays at the pre-edit value so they keep comparing dirty.
+export function rebaselineRawJsonByKey(input: {
+  currentJsonByKey: Record<RawEditorKey, string>;
+  initialJsonByKey: Record<RawEditorKey, string>;
+  preservedKeys: readonly RawEditorKey[];
+}): Record<RawEditorKey, string> {
+  const preserved = new Set<RawEditorKey>(input.preservedKeys);
+  return Object.fromEntries(
+    SETTINGS_GARDEN_RAW_EDITOR_KEYS.map((key) => [
+      key,
+      preserved.has(key) ? input.initialJsonByKey[key] : input.currentJsonByKey[key],
+    ]),
+  ) as Record<RawEditorKey, string>;
 }
 
 export function resolveRawEditorOwnerFile(

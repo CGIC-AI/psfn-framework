@@ -64,14 +64,19 @@
     buildCapabilitiesSettingsPayload,
     buildRawEditorJsonMap,
     buildSettingsSnapshot,
+    buildUnifiedSaveSkipNote,
     collectSimpleSettingsPayload,
     formatSettingOptionLabel,
     humanizeSettingValue,
     listDirtyRawEditorKeys,
+    planUnifiedOwnerConfigSaves,
+    resolveUnifiedSaveSettingsJsonConflict,
     normalizeStringList,
     parseBackupSettings,
     populateSimpleSettingsForm,
+    rebaselineRawJsonByKey,
     resolveRawEditorOwnerFile,
+    resolveReloadedRawJsonByKey,
     syncCuratedSettingsField,
     summarizeCompositionalPolicy,
     tryPrettyPrint,
@@ -102,7 +107,14 @@
   let curatedDirty = $state(false);
   let advancedDirty = $state(false);
   let rawDirty = $state(false);
-  let generalSettingsSaveDirty = $derived(curatedDirty || rawDirty);
+  // The unified save commits every non-raw surface in one call: curated fields,
+  // advanced canonical fields, and the provider registry all route through
+  // saveSettingsContract to their owner files. Raw owner-file editors keep
+  // their own scoped saves; dirty raw editors are preserved across this save
+  // and their owner files are skipped rather than blocked.
+  let settingsSaveDirty = $derived(
+    curatedDirty || advancedDirty || providerRegistryDirty(),
+  );
 
   let initialRawJsonByKey = $state<Record<RawEditorKey, string>>(
     buildRawEditorJsonMap(() => ''),
@@ -378,12 +390,40 @@
   let activeTabId = $state<SettingsTabId>(SETTINGS_TAB_DEFINITIONS[0].id);
   let hashChangeHandler: (() => void) | null = null;
 
-  const settingsTabs: GardenTabItem[] = SETTINGS_TAB_DEFINITIONS.map((tab) => ({
+  // Per-tab dirty badges: curated tabs share one dirty flag (the curated form
+  // snapshot covers every curated panel), the providers tab surfaces the
+  // provider-registry editor state, and the raw tab counts dirty owner-file
+  // editors. Badges make cross-tab unsaved state visible instead of blocking
+  // the unified save.
+  function settingsTabDirtyCount(tabId: SettingsTabId): number | undefined {
+    if (tabId === 'providers') return providerRegistryDirty() ? 1 : undefined;
+    if (tabId === 'advanced') return advancedDirty ? 1 : undefined;
+    if (tabId === 'raw') {
+      const count = dirtyRawEditorKeys().length;
+      return count > 0 ? count : undefined;
+    }
+    return curatedDirty ? 1 : undefined;
+  }
+
+  let settingsTabs = $derived<GardenTabItem[]>(SETTINGS_TAB_DEFINITIONS.map((tab) => ({
     id: tab.id,
     label: tab.label,
-  }));
+    count: settingsTabDirtyCount(tab.id),
+  })));
 
-  let activeTabIsCurated = $derived(CURATED_SETTINGS_TAB_IDS.includes(activeTabId));
+  // The unified save action is offered on every tab whose fields it commits
+  // (curated panels, providers registry, and the advanced canonical editor).
+  // The raw tab edits owner files directly and keeps its own scoped saves.
+  let activeTabHasPrimarySave = $derived(
+    CURATED_SETTINGS_TAB_IDS.includes(activeTabId) || activeTabId === 'advanced',
+  );
+
+  // settings.json is the one raw editor whose owner file IS the unified save's
+  // runtime payload target, so a dirty settings.json raw editor BLOCKS the
+  // unified save (it cannot be skipped like the other owner files). Surfaced as
+  // a distinct hint under the save button so the blocking consequence is
+  // visible from the tab where the user clicks save.
+  let settingsRawEditorDirty = $derived(dirtyRawEditorKeys().includes('settings'));
 
   function selectTab(tabId: string): void {
     if (!isSettingsTabId(tabId)) return;
@@ -725,10 +765,14 @@
     ownerFile: rawEditorLabel(editor.key),
   })));
 
-  function resetDirtyTracking(): void {
+  function resetDirtyTracking(preserveRawKeys: readonly RawEditorKey[] = []): void {
     initialSnapshot = computeSnapshot();
     initialAdvancedSnapshot = computeAdvancedSnapshot();
-    initialRawJsonByKey = currentRawJsonByKey();
+    initialRawJsonByKey = rebaselineRawJsonByKey({
+      currentJsonByKey: currentRawJsonByKey(),
+      initialJsonByKey: initialRawJsonByKey,
+      preservedKeys: preserveRawKeys,
+    });
   }
 
   function markRawEditorsCommitted(keys: RawEditorKey[]): void {
@@ -738,16 +782,6 @@
       next[key] = current[key];
     }
     initialRawJsonByKey = next;
-  }
-
-  function ensureNoDirtyRawEditorsForGeneralSave(): boolean {
-    const dirtyKeys = dirtyRawEditorKeys();
-    if (dirtyKeys.length === 0) return true;
-    flash(
-      false,
-      `Unsaved raw editor changes in ${dirtyKeys.map(rawEditorLabel).join(', ')}; save or discard them before using the general settings save.`,
-    );
-    return false;
   }
 
   function collectSimplePayload(): Record<string, unknown> {
@@ -847,13 +881,17 @@
     settingsData?: AdminSettingsData;
     schemaData?: SettingsContractData;
   } = {}): Promise<void> {
+    // Dirty raw editors hold staged hand edits the server does not know about.
+    // Snapshot them before the reload so the refresh below cannot clobber them.
+    const preservedRawKeys = dirtyRawEditorKeys();
+    const stagedRawJsonByKey = currentRawJsonByKey();
+
     const nextSettingsData = options.settingsData ?? await getSettings();
     const nextSchemaData = options.schemaData ?? await getSettingsSchema();
     data = nextSettingsData;
     settingsSchema = nextSchemaData;
     populateSimpleFields(nextSettingsData);
     setProviderRegistryState(normalizeProvidersRuntimeConfig(nextSettingsData.editors.providers).registry);
-    settingsJson = JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2);
 
     const [provConf, chanConf, skConf, schConf, tpConf, capConf, chargeConf, bakConf] = await Promise.all([
       getSubConfig('providers').catch(() => '{}'),
@@ -865,16 +903,32 @@
       getSubConfig('charge-policy').catch(() => '{}'),
       getSubConfig('backup').catch(() => '{}'),
     ]);
-    providersJson = tryPrettyPrint(provConf);
-    channelsJson = tryPrettyPrint(chanConf);
-    skillsJson = tryPrettyPrint(skConf);
-    schedulerJson = tryPrettyPrint(schConf);
-    trustPolicyJson = tryPrettyPrint(tpConf);
-    capabilitiesJson = tryPrettyPrint(capConf);
-    chargePolicyJson = tryPrettyPrint(chargeConf);
-    backupJson = tryPrettyPrint(bakConf);
+    const serverRawJsonByKey = buildRawEditorJsonMap((key) => {
+      if (key === 'settings') {
+        return JSON.stringify(nextSettingsData.config as Record<string, unknown>, null, 2);
+      }
+      switch (key) {
+        case 'providers': return tryPrettyPrint(provConf);
+        case 'channels': return tryPrettyPrint(chanConf);
+        case 'skills': return tryPrettyPrint(skConf);
+        case 'scheduler': return tryPrettyPrint(schConf);
+        case 'trust-policy': return tryPrettyPrint(tpConf);
+        case 'capabilities': return tryPrettyPrint(capConf);
+        case 'charge-policy': return tryPrettyPrint(chargeConf);
+        case 'backup': return tryPrettyPrint(bakConf);
+        default: return '';
+      }
+    });
+    const reloadedRawJsonByKey = resolveReloadedRawJsonByKey({
+      serverJsonByKey: serverRawJsonByKey,
+      stagedJsonByKey: stagedRawJsonByKey,
+      dirtyKeys: preservedRawKeys,
+    });
+    for (const key of Object.keys(reloadedRawJsonByKey) as RawEditorKey[]) {
+      setRawJson(key, reloadedRawJsonByKey[key]);
+    }
     populateBackupFields(bakConf);
-    resetDirtyTracking();
+    resetDirtyTracking(preservedRawKeys);
   }
 
   async function saveSettingsContract(
@@ -882,28 +936,47 @@
   ): Promise<{ ok: boolean; invalidFieldCount: number; message: string }> {
     const hasRuntimePayload = Object.keys(runtimePayload).length > 0;
     let invalidFieldCount = 0;
-    const ownerConfigSaves = [
-      {
-        key: 'providers' as const,
-        nextJson: JSON.stringify(providerRegistry, null, 2),
-        currentJson: providerRegistryInitialJson,
-      },
-      {
-        key: 'scheduler' as const,
-        nextJson: JSON.stringify(buildSchedulerPayload(), null, 2),
-        currentJson: tryPrettyPrint(schedulerJson),
-      },
-      {
-        key: 'capabilities' as const,
-        nextJson: JSON.stringify(buildCapabilitiesPayload(), null, 2),
-        currentJson: tryPrettyPrint(capabilitiesJson),
-      },
-      {
-        key: 'backup' as const,
-        nextJson: JSON.stringify(buildBackupPayload(), null, 2),
-        currentJson: tryPrettyPrint(backupJson),
-      },
-    ].filter(entry => entry.nextJson !== entry.currentJson);
+    const dirtyKeys = dirtyRawEditorKeys();
+
+    // Fail closed, before ANY write: the unified save's runtime payload IS
+    // settings.json, so a dirty settings.json raw editor cannot be "skipped" —
+    // running updateSettings would clobber the operator's staged hand edits.
+    // Refuse the whole save (no runtime write, no owner-file writes) until the
+    // raw edits are saved or discarded on the Raw JSON tab.
+    const settingsConflict = resolveUnifiedSaveSettingsJsonConflict(dirtyKeys);
+    if (settingsConflict) {
+      return { ok: false, invalidFieldCount: 0, message: settingsConflict };
+    }
+
+    // An owner file with a dirty raw editor is being hand-edited on the Raw
+    // JSON tab; the unified save must not write form-derived JSON over it. The
+    // plan skips those files (and flags any that ALSO had pending form changes)
+    // and enforces that the write surface exactly equals the skip-set constant.
+    const ownerConfigPlan = planUnifiedOwnerConfigSaves({
+      entries: [
+        {
+          key: 'providers',
+          nextJson: JSON.stringify(providerRegistry, null, 2),
+          currentJson: providerRegistryInitialJson,
+        },
+        {
+          key: 'scheduler',
+          nextJson: JSON.stringify(buildSchedulerPayload(), null, 2),
+          currentJson: tryPrettyPrint(schedulerJson),
+        },
+        {
+          key: 'capabilities',
+          nextJson: JSON.stringify(buildCapabilitiesPayload(), null, 2),
+          currentJson: tryPrettyPrint(capabilitiesJson),
+        },
+        {
+          key: 'backup',
+          nextJson: JSON.stringify(buildBackupPayload(), null, 2),
+          currentJson: tryPrettyPrint(backupJson),
+        },
+      ],
+      dirtyRawEditorKeys: dirtyKeys,
+    });
 
     if (hasRuntimePayload) {
       const runtimeResult = await updateSettings(runtimePayload);
@@ -920,7 +993,7 @@
     }
 
     try {
-      for (const entry of ownerConfigSaves) {
+      for (const entry of ownerConfigPlan.saves) {
         await saveSubConfig(entry.key, entry.nextJson);
       }
     } catch (error) {
@@ -934,37 +1007,33 @@
     }
 
     await reloadSettingsState();
+    const skippedNote = buildUnifiedSaveSkipNote({
+      skippedOwnerFiles: ownerConfigPlan.skippedOwnerFiles,
+      skippedWithPendingChanges: ownerConfigPlan.skippedWithPendingChanges,
+      ownerFileLabel: rawEditorOwnerFile,
+    });
     return {
       ok: true,
       invalidFieldCount,
-      message: 'Settings updated',
+      message: `Settings updated.${skippedNote}`,
     };
   }
 
-  async function saveSimple() {
+  // One save action for the whole page: whatever is dirty — curated fields,
+  // advanced canonical fields, and the provider registry — is routed through
+  // saveSettingsContract to the owner file each field belongs to. When the
+  // advanced canonical editor is dirty the full canonical payload is sent so
+  // advanced keys reach settings.json; otherwise only the curated payload goes.
+  // Raw owner-file editors save directly to their files via their own scoped
+  // actions. A raw editor with staged (dirty) edits is preserved across this
+  // save's reload, and its owner file is skipped by the structured owner-file
+  // saves so form-derived JSON never stomps the staged hand edits.
+  async function saveSettings() {
     saving = true;
     try {
-      if (!ensureNoDirtyRawEditorsForGeneralSave()) return;
       const result = await saveSettingsContract(
         advancedDirty ? collectCanonicalPayload() : collectSimplePayload(),
       );
-      flash(result.ok, result.message);
-      if (!result.ok && result.invalidFieldCount > 0) {
-        void jumpToSection('advanced-fields');
-      }
-    } catch (e) {
-      flash(false, e instanceof Error ? e.message : 'Failed to save');
-    } finally {
-      saving = false;
-    }
-  }
-
-  async function saveAdvanced() {
-    if (!data) return;
-    saving = true;
-    try {
-      if (!ensureNoDirtyRawEditorsForGeneralSave()) return;
-      const result = await saveSettingsContract(collectCanonicalPayload());
       flash(result.ok, result.message);
       if (!result.ok && result.invalidFieldCount > 0) {
         void jumpToSection('advanced-fields');
@@ -998,6 +1067,9 @@
       }
 
       flashRaw('settings', true, result.message || 'settings.json saved');
+      // Rebasing the just-saved editor before the reload keeps it clean (see
+      // saveRawConfig); the reload then refreshes it from server state.
+      markRawEditorsCommitted(['settings']);
       await reloadSettingsState();
     } catch (e) {
       flashRaw('settings', false, e instanceof Error ? e.message : 'Failed to save settings.json');
@@ -1013,10 +1085,11 @@
       JSON.parse(json);
       await saveSubConfig(key, json);
       applyValidationErrors({ ok: true, message: '' });
+      // Rebasing the just-saved editor before any reload keeps it clean: the
+      // reload refreshes it from server state instead of preserving it as dirty.
+      markRawEditorsCommitted([key as RawEditorKey]);
       if (key === 'scheduler' || key === 'capabilities' || key === 'providers') {
         await reloadSettingsState();
-      } else {
-        markRawEditorsCommitted([key as RawEditorKey]);
       }
       flashRaw(key, true, `${label} saved`);
     } catch (e) {
@@ -1194,24 +1267,33 @@
             {toggleSection} {configValue} {setConfigValue} {fieldEditorType} {fieldEnumValues} {fieldContract}
             {fieldMinimum} {fieldMaximum} {isDeprecatedField} {getSource} {hasFieldErrors} {fieldErrors}
             {formatSettingOptionLabel} {humanizeSettingValue} {getCompositionalPolicy} {setCompositionalPolicyEnabled}
-            {toggleCompositionalPolicyValue} {hasCompositionalPolicyValue} {saveAdvanced} {settingsJson}
+            {toggleCompositionalPolicyValue} {hasCompositionalPolicyValue} {settingsJson}
             {rawEditorViews} {rawSaveStatus} {validationErrorsByField} {setSettingsJson} {getRawJson} {setRawJson}
             {saveRawSettings} {saveRawConfig}
           />
         {/if}
 
-        {#if activeTabIsCurated}
+        {#if activeTabHasPrimarySave}
           <div class="flex items-center gap-3 pt-2">
-            <button onclick={saveSimple} disabled={saving || !generalSettingsSaveDirty}
+            <button onclick={saveSettings} disabled={saving || !settingsSaveDirty}
               class="px-5 py-2.5 rounded-lg text-sm font-medium transition-colors shadow-sm
-                {generalSettingsSaveDirty
+                {settingsSaveDirty
                   ? 'bg-gold-600 text-white hover:bg-gold-700'
                   : 'bg-bark-300 text-shadow-500 cursor-not-allowed'}"
             >
-              {saving ? 'Saving...' : 'Save Curated Settings'}
+              {saving ? 'Saving...' : 'Save Settings'}
             </button>
             {#if dirty}
               <span class="text-sm text-shadow-500">You have unsaved changes</span>
+            {/if}
+            {#if settingsRawEditorDirty}
+              <span class="text-sm text-wilt-600">
+                settings.json has staged raw edits on the Raw JSON tab — this save is blocked until you save or discard them there.
+              </span>
+            {:else if rawDirty}
+              <span class="text-sm text-shadow-500">
+                Staged raw edits are preserved; their owner files are skipped by this save until you save or discard them on the Raw JSON tab.
+              </span>
             {/if}
           </div>
         {/if}

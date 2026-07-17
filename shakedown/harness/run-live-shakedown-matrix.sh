@@ -61,10 +61,17 @@ TIER_BACKUP="$(mktemp)"
 cp "$TIER_FILE" "$TIER_BACKUP"
 ORIGINAL_TIER_JSON="$(cat "$TIER_FILE")"
 
+TIER_RESTORED=0
 restore_tier() {
   # Restore the owner file from the backup, then verify the restore matches the
   # pre-sweep content. A failed restore is a hard error even on the exit path —
   # the sweep must never leave capability-tier.json mutated.
+  # Idempotent: the signal traps exit into the EXIT trap, so guard against a
+  # second invocation running diff against an already-removed backup.
+  if [ "$TIER_RESTORED" = "1" ]; then
+    return 0
+  fi
+  TIER_RESTORED=1
   local restore_file
   restore_file="$(mktemp)"
   printf '%s' "$ORIGINAL_TIER_JSON" > "$restore_file"
@@ -78,7 +85,12 @@ restore_tier() {
   echo "capability-tier.json restored and verified against pre-sweep backup." >&2
 }
 
+# Restore runs once on any exit. INT/TERM handlers exit with the conventional
+# 128+signal code, which triggers the EXIT trap — so Ctrl-C (SIGINT) and kill
+# (SIGTERM) both restore and verify the owner file before the process dies.
 trap restore_tier EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 set_tier() {
   local tier="$1"

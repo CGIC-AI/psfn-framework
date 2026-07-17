@@ -1,0 +1,452 @@
+diff --git a/src/boundary/gateway/approval-boundary.ts b/src/boundary/gateway/approval-boundary.ts
+index 1e37d0aa62..9ac2997e69 100644
+--- a/src/boundary/gateway/approval-boundary.ts
++++ b/src/boundary/gateway/approval-boundary.ts
+@@ -39,7 +39,10 @@ interface ApprovalBoundaryOptions extends ApprovalBoundaryAuditHooks {
+   policyConfig: PolicyConfig;
+   ntfyNotifier: GatewayNtfyNotifier;
+   discordAdapter: ChannelOutboundDock;
+-  capabilityTierProvider: () => CapabilityTier;
++  // an52.3: resolved for the authenticated companion that owns the gated action
++  // (see the gate's authenticatedCompanionId), so a fleet's autonomous
++  // auto-clear reflects that companion's own tier — not the gateway's root.
++  capabilityTierProvider: (companionId?: string) => CapabilityTier;
+   confirmation?: Partial<GatewayConfirmationConfig>;
+   /**
+    * htm9.18 egress tripwire. Gated egress methods (e.g. web.fetch) run their
+@@ -221,8 +224,11 @@ export function createGatewayApprovalBoundaryService(
+             throw new JSONRPCErrorException('Policy denied', GatewayErrors.POLICY_DENIED);
+           }
+ 
+-          if (decision === 'NEEDS_APPROVAL' && options.capabilityTierProvider() !== 'autonomous') {
+-            const authenticatedCompanionId = gateOptions.authenticatedCompanionId();
++          const authenticatedCompanionId = gateOptions.authenticatedCompanionId();
++          if (
++            decision === 'NEEDS_APPROVAL'
++            && options.capabilityTierProvider(authenticatedCompanionId) !== 'autonomous'
++          ) {
+             const paramsRecord = params as unknown as Record<string, unknown>;
+             const queueEntry = await requestExplicitApproval({
+               authenticatedCompanionId,
+diff --git a/src/boundary/gateway/capability-tier-resolver.ts b/src/boundary/gateway/capability-tier-resolver.ts
+new file mode 100644
+index 0000000000..a0ab4e7617
+--- /dev/null
++++ b/src/boundary/gateway/capability-tier-resolver.ts
+@@ -0,0 +1,93 @@
++import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
++import type { CapabilityAccess } from '../../system/capabilities/access.js';
++import type { CapabilityTier } from '../../system/config/runtime-config-contracts.js';
++import type { ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
++
++export interface GatewayCapabilityTierResolverInput {
++  /**
++   * Gateway-rooted CapabilityRuntime (input.startupHydration.companionDataDir).
++   * Single-companion authority, and the base for gateway-global callers that
++   * carry no authenticated companion (e.g. voice/channel plugin activation).
++   */
++  baseRuntime: CapabilityRuntime;
++  /** True when the gateway serves a fleet (bootstrap.server.multiCompanion.enabled). */
++  multiCompanion: boolean;
++  /** Resolved fleet; each entry carries its own absolute companionDataDir. */
++  companionFleet?: ResolvedCompanionsFleetConfig;
++}
++
++/**
++ * an52.3: capability-tier.json is per-companion (PER_COMPANION_OWNER_FILES),
++ * but the gateway hydrates a single companionDataDir. In the one-gateway/
++ * N-companion topology the tier of every tier-gated decision (shard-backend
++ * admission, autonomous-approval auto-clear, LLM eligibility) must resolve
++ * against the *authenticated* companion's own capability-tier.json — mirroring
++ * how resolveConnectionWorkspacePath / resolveConnectionPolicyConfig key on the
++ * connection's companion id. This resolver owns one CapabilityRuntime per fleet
++ * companion, rooted at that companion's data dir, cached like the workspace map.
++ */
++export class GatewayCapabilityTierResolver {
++  private readonly baseRuntime: CapabilityRuntime;
++  private readonly multiCompanion: boolean;
++  private readonly companionDataDirById: ReadonlyMap<string, string>;
++  private readonly runtimeByCompanionId = new Map<string, CapabilityRuntime>();
++
++  constructor(input: GatewayCapabilityTierResolverInput) {
++    this.baseRuntime = input.baseRuntime;
++    this.multiCompanion = input.multiCompanion;
++    this.companionDataDirById = new Map(
++      (input.companionFleet?.companions ?? []).map(entry => [entry.companionId, entry.companionDataDir]),
++    );
++  }
++
++  /**
++   * Strict per-companion tier for security-sensitive gates (shard backends,
++   * approval auto-clear). In multi-companion mode a missing or unknown
++   * authenticated companion cannot resolve a tier, so this fails closed
++   * (throws) rather than silently using the gateway's own root tier.
++   */
++  resolveTier(companionId: string | undefined): CapabilityTier {
++    if (!this.multiCompanion) {
++      return this.baseRuntime.getTier();
++    }
++    if (!companionId) {
++      throw new Error(
++        'Multi-companion capability tier resolution requires an authenticated companion connection',
++      );
++    }
++    return this.resolveCompanionRuntime(companionId).getTier();
++  }
++
++  /**
++   * CapabilityAccess for the eligibility gate. Per-companion when the caller
++   * supplies an authenticated companion id (LLM purpose checks carry the
++   * frame-validated correlation.companionId); the gateway's base root only for
++   * gateway-global callers with no companion context (voice/channel plugin
++   * activation), whose tier is not a per-companion decision.
++   */
++  resolveAccess(companionId?: string): CapabilityAccess {
++    if (!this.multiCompanion || !companionId) {
++      return this.baseRuntime;
++    }
++    return this.resolveCompanionRuntime(companionId);
++  }
++
++  private resolveCompanionRuntime(companionId: string): CapabilityRuntime {
++    const cached = this.runtimeByCompanionId.get(companionId);
++    if (cached) {
++      return cached;
++    }
++    const companionDataDir = this.companionDataDirById.get(companionId);
++    if (!companionDataDir) {
++      throw new Error(
++        `No companion data dir is resolved for companion ${companionId}; `
++        + 'its capability tier cannot be established (fail closed).',
++      );
++    }
++    // CapabilityRuntime loads capability-tier.json eagerly; a missing/malformed
++    // owner file throws here and propagates to the caller's fail-closed handler.
++    const runtime = new CapabilityRuntime({ dataDir: companionDataDir });
++    this.runtimeByCompanionId.set(companionId, runtime);
++    return runtime;
++  }
++}
+diff --git a/src/boundary/gateway/privileged-core.ts b/src/boundary/gateway/privileged-core.ts
+index 237406502e..5c7462f5ff 100644
+--- a/src/boundary/gateway/privileged-core.ts
++++ b/src/boundary/gateway/privileged-core.ts
+@@ -5,6 +5,7 @@ import {
+   type EligibilityGate,
+ } from '../../system/capabilities/eligibility.js';
+ import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
++import { GatewayCapabilityTierResolver } from './capability-tier-resolver.js';
+ import { EventBus } from '../../shared/event-bus.js';
+ import { GitOps } from '../integrations/git/ops.js';
+ import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+@@ -88,8 +89,17 @@ export async function buildGatewayPrivilegedCore(
+     // data dir so each fleet companion holds its own maturation tier.
+     dataDir: input.startupHydration.companionDataDir,
+   });
++  // an52.3: in a one-gateway/N-companion fleet every tier-gated decision must
++  // resolve against the *authenticated* companion's own capability-tier.json,
++  // not the single gateway-hydrated root. The resolver owns a CapabilityRuntime
++  // per fleet companion; single-companion mode keeps using the base runtime.
++  const capabilityTierResolver = new GatewayCapabilityTierResolver({
++    baseRuntime: capabilityRuntime,
++    multiCompanion: input.bootstrap.server.multiCompanion.enabled,
++    ...(input.config.companionFleet ? { companionFleet: input.config.companionFleet } : {}),
++  });
+   const eligibilityGate = createEligibilityGate(
+-    () => capabilityRuntime,
++    (companionId) => capabilityTierResolver.resolveAccess(companionId),
+     input.onEligibilityDecision
+       ? (decision) => input.onEligibilityDecision?.(eventBus, decision)
+       : undefined,
+@@ -212,7 +222,7 @@ export async function buildGatewayPrivilegedCore(
+       },
+       ntfy: input.bootstrap.server.ntfy,
+       confirmation: input.bootstrap.server.confirmation,
+-      capabilityTierProvider: () => capabilityRuntime.getTier(),
++      capabilityTierProvider: (companionId) => capabilityTierResolver.resolveTier(companionId),
+       auditStore,
+       ...(kubeSelfManagement ? { kubeSelfManagement } : {}),
+       sessionHmacKeyring: input.bootstrap.server.sessionHmacKeyring,
+diff --git a/src/boundary/gateway/server.multi-companion.test.ts b/src/boundary/gateway/server.multi-companion.test.ts
+index 1e72798cf0..9fb0992ab2 100644
+--- a/src/boundary/gateway/server.multi-companion.test.ts
++++ b/src/boundary/gateway/server.multi-companion.test.ts
+@@ -16,9 +16,12 @@ import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-r
+ import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+ import { deriveCompanionAuthToken } from './companion-auth.js';
+ import { EventBus } from '../../shared/event-bus.js';
+-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
++import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'node:fs';
+ import { join } from 'node:path';
+ import { tmpdir } from 'node:os';
++import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
++import { GatewayCapabilityTierResolver } from './capability-tier-resolver.js';
++import type { ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
+ 
+ // Mock the transport module to avoid real socket operations
+ vi.mock('./transport.js', () => ({
+@@ -1794,3 +1797,166 @@ describe('GatewayServer multi-companion crossover under concurrent load (flag on
+     expect(bChunks.every(text => /^chunk2?:b-\d+$/.test(text))).toBe(true);
+   });
+ });
++
++// an52.3: the gateway must resolve each authenticated companion's OWN capability
++// tier (from that companion's capability-tier.json), not the single hydrated
++// root. Wired through the real GatewayCapabilityTierResolver so this exercises
++// the production per-companion resolution path, not a stub provider.
++describe('GatewayServer per-companion capability tier (an52.3)', () => {
++  function optionsFor(
++    routing: GatewayMultiCompanionConfig,
++    capabilityTierProvider: (companionId?: string) => 'nursery' | 'apprentice' | 'autonomous' | 'custom',
++  ): GatewayServerOptions {
++    return {
++      ...createMinimalOptions(),
++      // shard.backend.request only reaches the handler's tier gate when the
++      // policy permits the backend command; otherwise it is DENY'd earlier.
++      policyConfig: {
++        workspacePath: '/workspace',
++        shellExec: { enabled: true, allowlist: ['docker', 'kubectl'] },
++      },
++      multiCompanion: routing,
++      capabilityTierProvider,
++    };
++  }
++
++  function buildTwoCompanionTierFixture(): {
++    root: string;
++    routing: GatewayMultiCompanionConfig;
++    capabilityTierProvider: (companionId?: string) => 'nursery' | 'apprentice' | 'autonomous' | 'custom';
++  } {
++    const root = mkdtempSync(join(tmpdir(), 'psfn-per-companion-tier-'));
++    const dataDirA = join(root, 'companions', 'a');
++    const dataDirB = join(root, 'companions', 'b');
++    const baseDir = join(root, 'companions', 'gateway-root');
++    const personalA = join(root, 'personal', 'comp-a');
++    const personalB = join(root, 'personal', 'comp-b');
++    for (const dir of [dataDirA, dataDirB, baseDir, personalA, personalB]) {
++      mkdirSync(dir, { recursive: true });
++    }
++    // A autonomous, B apprentice — distinct capability-tier.json per companion.
++    writeFileSync(join(dataDirA, 'capability-tier.json'), JSON.stringify({ tier: 'autonomous', customTokens: [] }));
++    writeFileSync(join(dataDirB, 'capability-tier.json'), JSON.stringify({ tier: 'apprentice', customTokens: [] }));
++    // The gateway-hydrated root deliberately differs from BOTH companions, so a
++    // regression to global-tier behavior would surface as the wrong decision.
++    writeFileSync(join(baseDir, 'capability-tier.json'), JSON.stringify({ tier: 'nursery', customTokens: [] }));
++
++    const companionFleet = {
++      persistenceRoot: root,
++      workspacesRoot: join(root, 'workspaces'),
++      sharedWorkspacePath: join(root, 'workspaces', 'shared'),
++      companions: [
++        {
++          companionId: 'comp-a',
++          companionDataDir: dataDirA,
++          characterCardPath: join(dataDirA, 'companion.json'),
++          postgresSchema: 'companion_a',
++          personalWorkspacePath: personalA,
++        },
++        {
++          companionId: 'comp-b',
++          companionDataDir: dataDirB,
++          characterCardPath: join(dataDirB, 'companion.json'),
++          postgresSchema: 'companion_b',
++          personalWorkspacePath: personalB,
++        },
++      ],
++    } as unknown as ResolvedCompanionsFleetConfig;
++
++    const resolver = new GatewayCapabilityTierResolver({
++      baseRuntime: new CapabilityRuntime({ dataDir: baseDir }),
++      multiCompanion: true,
++      companionFleet,
++    });
++
++    const routing = multiCompanion({});
++    routing.personalWorkspaceByCompanionId = {
++      'comp-a': personalA,
++      'comp-b': personalB,
++      'comp-c': join(root, 'personal', 'comp-c'),
++    };
++
++    return {
++      root,
++      routing,
++      capabilityTierProvider: (companionId) => resolver.resolveTier(companionId),
++    };
++  }
++
++  it('gates shard.backend.request on each companion\'s own tier (A autonomous admitted, B apprentice denied)', async () => {
++    const { root, routing, capabilityTierProvider } = buildTwoCompanionTierFixture();
++    try {
++      const { connect } = await setupServer(optionsFor(routing, capabilityTierProvider));
++      const connA = await connect();
++      const connB = await connect();
++      await identifyAgent(connA, 'comp-a', 1);
++      await identifyAgent(connB, 'comp-b', 2);
++
++      const shardParams = (name: string) => ({ backend: 'container', shardId: `shard-${name}`, name });
++
++      const aShard = await invokeRpc(connA, 3, 'shard.backend.request', shardParams('alpha'));
++      expect(aShard.error).toBeUndefined();
++      expect(aShard.result).toMatchObject({ backend: 'container', controller: 'gateway' });
++
++      const bShard = await invokeRpc(connB, 4, 'shard.backend.request', shardParams('beta'));
++      expect(bShard.result).toBeUndefined();
++      expect(bShard.error.code).toBe(GatewayErrors.POLICY_DENIED);
++      expect(bShard.error.message).toContain('autonomous');
++    } finally {
++      rmSync(root, { recursive: true, force: true });
++    }
++  });
++
++  it('auto-clears autonomous approvals for A but holds apprentice B for operator approval', async () => {
++    const { root, routing, capabilityTierProvider } = buildTwoCompanionTierFixture();
++    try {
++      const { connect } = await setupServer(optionsFor(routing, capabilityTierProvider));
++      const connA = await connect();
++      const connB = await connect();
++      await identifyAgent(connA, 'comp-a', 1);
++      await identifyAgent(connB, 'comp-b', 2);
++
++      // A write outside the personal workspace is a NEEDS_APPROVAL policy path.
++      // Autonomous A auto-clears the approval gate (its error, if any, is the
++      // downstream workspace confinement — never the approval hold); apprentice
++      // B must queue for operator approval, so its call is held, not executed.
++      const outsidePathB = join(root, 'outside', 'b-apprentice.txt');
++      mkdirSync(join(root, 'outside'), { recursive: true });
++
++      const aWrite = await invokeRpc(connA, 3, 'fs.write', {
++        path: join(root, 'outside', 'a-autonomous.txt'),
++        content: 'auto-cleared',
++      });
++      expect(aWrite.error?.code).not.toBe(GatewayErrors.NEEDS_APPROVAL);
++
++      const bWrite = await invokeRpc(connB, 4, 'fs.write', { path: outsidePathB, content: 'held' });
++      expect(bWrite.result).toBeUndefined();
++      expect(bWrite.error.code).toBe(GatewayErrors.NEEDS_APPROVAL);
++      // Apprentice write was held for approval, never executed.
++      expect(existsSync(outsidePathB)).toBe(false);
++    } finally {
++      rmSync(root, { recursive: true, force: true });
++    }
++  });
++
++  it('fails closed when an authenticated companion has no resolvable tier file', async () => {
++    const { root, routing, capabilityTierProvider } = buildTwoCompanionTierFixture();
++    // Remove comp-b's tier file so its CapabilityRuntime construction throws.
++    rmSync(join(root, 'companions', 'b', 'capability-tier.json'), { force: true });
++    try {
++      const { connect } = await setupServer(optionsFor(routing, capabilityTierProvider));
++      const connB = await connect();
++      await identifyAgent(connB, 'comp-b', 1);
++
++      const bShard = await invokeRpc(connB, 2, 'shard.backend.request', {
++        backend: 'container',
++        shardId: 'shard-beta',
++        name: 'beta',
++      });
++      expect(bShard.result).toBeUndefined();
++      expect(bShard.error.code).toBe(GatewayErrors.POLICY_DENIED);
++    } finally {
++      rmSync(root, { recursive: true, force: true });
++    }
++  });
++});
+diff --git a/src/boundary/gateway/server.ts b/src/boundary/gateway/server.ts
+index 615fedcd8c..690ae29f6f 100644
+--- a/src/boundary/gateway/server.ts
++++ b/src/boundary/gateway/server.ts
+@@ -240,7 +240,9 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
+   contactLifecycleAuthority?: import('./contact-lifecycle-authority.js').GatewayContactLifecycleAuthorityPort;
+   sessionHmacKeyring: SessionHmacKeyring;
+   confirmation?: Partial<GatewayConfirmationConfig>;
+-  capabilityTierProvider?: () => CapabilityTier;
++  // an52.3: keyed on the authenticated companion so a fleet resolves each
++  // companion's own capability tier. Single-companion providers ignore the arg.
++  capabilityTierProvider?: (companionId?: string) => CapabilityTier;
+   wyomingShardRouting: WyomingShardRoutingConfig;
+   companionId?: CompanionId;
+   /**
+@@ -306,7 +308,7 @@ export class GatewayServer {
+   private readonly options: GatewayServerOptions;
+   private readonly sessionHmacKeyring: SessionHmacKeyring;
+   private streamRequestCounter = 0;
+-  private readonly capabilityTierProvider: () => CapabilityTier;
++  private readonly capabilityTierProvider: (companionId?: string) => CapabilityTier;
+   private readonly wyomingShardRouting: WyomingShardRoutingConfig;
+   private readonly ntfyNotifier: GatewayNtfyNotifier;
+   private readonly approvalBoundary: ApprovalBoundaryService;
+@@ -532,7 +534,10 @@ export class GatewayServer {
+       get workspacePath() { return resolveWorkspacePath(); },
+       personalWorkspaceIsolation: this.multiCompanion.enabled,
+       sessionHmacKeyring: this.sessionHmacKeyring,
+-      capabilityTierProvider: this.capabilityTierProvider,
++      // an52.3: bind the tier to THIS connection's authenticated companion so
++      // shard.backend.request (and any gated method) resolves the caller's own
++      // capability tier, not the gateway's single hydrated root.
++      capabilityTierProvider: () => this.capabilityTierProvider(this.authenticatedCompanionId(conn)),
+       approvalBoundary: this.approvalBoundary,
+       ...(this.options.kubeSelfManagement
+         ? { kubeSelfManagement: this.options.kubeSelfManagement }
+diff --git a/src/primitives/llm/client.ts b/src/primitives/llm/client.ts
+index 692f052bcb..ec1ddce30b 100644
+--- a/src/primitives/llm/client.ts
++++ b/src/primitives/llm/client.ts
+@@ -2036,10 +2036,14 @@ export class LLMClient {
+     } = {},
+   ): Promise<{ result: T; candidate: RoutingCandidate; attempts: number }> {
+     if (this.eligibilityGate) {
++      // an52.3: gate the purpose against the *authenticated* companion's tier.
++      // In a multi-companion gateway the correlation.companionId is the caller's
++      // frame-validated identity (mismatched claims disconnect at the RPC
++      // boundary), so it is the authoritative key for per-companion resolution.
+       const decision = this.eligibilityGate.evaluate({
+         kind: 'llm.purpose',
+         purpose: this.toEligibilityPurpose(purpose),
+-      });
++      }, undefined, options.correlation?.companionId);
+       this.onEligibilityDecision?.(decision);
+       if (!decision.allowed) {
+         log.warn('LLM purpose denied by eligibility gate', {
+diff --git a/src/system/capabilities/access.ts b/src/system/capabilities/access.ts
+index b93628fd00..35b867f4e1 100644
+--- a/src/system/capabilities/access.ts
++++ b/src/system/capabilities/access.ts
+@@ -7,4 +7,9 @@ export interface CapabilityAccess {
+   has(token: CapabilityToken): boolean;
+ }
+ 
+-export type CapabilityAccessProvider = () => CapabilityAccess;
++/**
++ * Resolves capability access, optionally for a specific authenticated companion
++ * (an52.3). A single-companion runtime ignores the argument; a multi-companion
++ * gateway resolves the connecting companion's own capability tier.
++ */
++export type CapabilityAccessProvider = (companionId?: string) => CapabilityAccess;
+diff --git a/src/system/capabilities/eligibility.ts b/src/system/capabilities/eligibility.ts
+index c75119fe17..5d7080d8d7 100644
+--- a/src/system/capabilities/eligibility.ts
++++ b/src/system/capabilities/eligibility.ts
+@@ -81,9 +81,10 @@ export class EligibilityGate {
+   evaluate(
+     operation: EligibilityOperation,
+     requirements?: EligibilityRequirements,
++    companionId?: string,
+   ): EligibilityDecision {
+     const decision = evaluateEligibilityDecision(
+-      this.getAccess(),
++      this.getAccess(companionId),
+       operation,
+       requirements,
+     );
+@@ -94,8 +95,9 @@ export class EligibilityGate {
+   requireAllowed(
+     operation: EligibilityOperation,
+     requirements?: EligibilityRequirements,
++    companionId?: string,
+   ): EligibilityDecision {
+-    const decision = this.evaluate(operation, requirements);
++    const decision = this.evaluate(operation, requirements, companionId);
+     if (!decision.allowed) {
+       throw new EligibilityDeniedError(decision);
+     }

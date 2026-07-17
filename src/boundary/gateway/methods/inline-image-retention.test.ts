@@ -45,6 +45,7 @@ function createHarness(options: {
     },
     notifyRequester: vi.fn(),
     nextStreamRequestId: () => 'gateway-request-1',
+    authenticatedCompanionId: () => undefined,
     audited: <P, R>(_method: string, handler: (params: P) => Promise<R>) => handler,
   } as unknown as GatewayMethodRuntime;
   registerIntakeImageMethods(runtime);

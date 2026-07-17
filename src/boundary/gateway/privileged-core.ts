@@ -98,17 +98,27 @@ export async function buildGatewayPrivilegedCore(
     multiCompanion: input.bootstrap.server.multiCompanion.enabled,
     ...(input.config.companionFleet ? { companionFleet: input.config.companionFleet } : {}),
   });
+  const eligibilityDecisionReporter = input.onEligibilityDecision
+    ? (decision: EligibilityDecision) => input.onEligibilityDecision?.(eventBus, decision)
+    : undefined;
   const eligibilityGate = createEligibilityGate(
     (companionId) => capabilityTierResolver.resolveAccess(companionId),
-    input.onEligibilityDecision
-      ? (decision) => input.onEligibilityDecision?.(eventBus, decision)
-      : undefined,
+    eligibilityDecisionReporter,
+  );
+  // an52.3 remediation: the gateway LLM client serves only authenticated agent
+  // RPCs (methods/llm.ts injects the connection's companion id), so its gate is
+  // strict — in multi-companion mode an absent identity throws instead of
+  // falling back to the gateway root's tier. The lenient gate above remains for
+  // gateway-global plugin activation (channels/voice), which has no companion.
+  const llmEligibilityGate = createEligibilityGate(
+    (companionId) => capabilityTierResolver.resolveAccessStrict(companionId),
+    eligibilityDecisionReporter,
   );
   const privilegedServices = createGatewayPrivilegedServiceRegistry({
     config: input.config,
     providerEnv: input.bootstrap.providerEnv,
     llmOptions: {
-      eligibilityGate,
+      eligibilityGate: llmEligibilityGate,
       onBudgetBlocked: (event) => {
         eventBus.emit('model.budget.blocked', event).catch((error) => {
           input.logger.error('Failed to emit model budget blocked telemetry', {

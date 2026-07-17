@@ -59,15 +59,34 @@ export class GatewayCapabilityTierResolver {
   }
 
   /**
-   * CapabilityAccess for the eligibility gate. Per-companion when the caller
-   * supplies an authenticated companion id (LLM purpose checks carry the
-   * frame-validated correlation.companionId); the gateway's base root only for
-   * gateway-global callers with no companion context (voice/channel plugin
-   * activation), whose tier is not a per-companion decision.
+   * Lenient CapabilityAccess for gateway-global eligibility callers with no
+   * per-companion identity — channel/STT/TTS plugin activation
+   * (plugin-eligibility.ts), whose tier is a process decision, not a
+   * per-connection one. Companion-scoped consumers must use
+   * resolveAccessStrict; this accessor must never gate a per-companion call.
    */
   resolveAccess(companionId?: string): CapabilityAccess {
     if (!this.multiCompanion || !companionId) {
       return this.baseRuntime;
+    }
+    return this.resolveCompanionRuntime(companionId);
+  }
+
+  /**
+   * Strict CapabilityAccess for companion-scoped eligibility consumers (the
+   * gateway LLM client). In multi-companion mode an absent companion identity
+   * means the caller's tier cannot be established, so this throws — never a
+   * silent fallback to the gateway root's tier. Single-companion mode keeps
+   * the base runtime (one root = correct behavior).
+   */
+  resolveAccessStrict(companionId: string | undefined): CapabilityAccess {
+    if (!this.multiCompanion) {
+      return this.baseRuntime;
+    }
+    if (!companionId) {
+      throw new Error(
+        'Multi-companion LLM eligibility requires an authenticated companion identity (fail closed)',
+      );
     }
     return this.resolveCompanionRuntime(companionId);
   }

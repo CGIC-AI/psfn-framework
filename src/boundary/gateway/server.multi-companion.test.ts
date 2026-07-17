@@ -1927,13 +1927,75 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
         path: join(root, 'outside', 'a-autonomous.txt'),
         content: 'auto-cleared',
       });
-      expect(aWrite.error?.code).not.toBe(GatewayErrors.NEEDS_APPROVAL);
+      // Autonomous auto-clear must reach the fs.write HANDLER: the error is the
+      // handler's fleet Personal-Workspace confinement (POLICY_DENIED), never
+      // the approval hold. A held call would surface NEEDS_APPROVAL instead.
+      expect(aWrite.error.code).toBe(GatewayErrors.POLICY_DENIED);
+      expect(aWrite.error.message).toContain('Personal Workspace');
 
       const bWrite = await invokeRpc(connB, 4, 'fs.write', { path: outsidePathB, content: 'held' });
       expect(bWrite.result).toBeUndefined();
       expect(bWrite.error.code).toBe(GatewayErrors.NEEDS_APPROVAL);
       // Apprentice write was held for approval, never executed.
       expect(existsSync(outsidePathB)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('injects the authenticated companion identity into LLM eligibility out-of-band from params', async () => {
+    const { root, routing, capabilityTierProvider } = buildTwoCompanionTierFixture();
+    try {
+      const llmResponse = {
+        content: 'ok',
+        toolCalls: [],
+        model: 'test-model',
+        inputTokens: 1,
+        outputTokens: 1,
+        stopReason: 'end',
+      };
+      const complete = vi.fn().mockResolvedValue(llmResponse);
+      const stream = vi.fn().mockResolvedValue(llmResponse);
+      const options = optionsFor(routing, capabilityTierProvider);
+      options.llmProvider = { complete, stream } as any;
+      const { connect } = await setupServer(options);
+      const connB = await connect();
+      await identifyAgent(connB, 'comp-b', 1);
+
+      const baseCompleteParams = {
+        model: '',
+        provider: '',
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'hello' }],
+        purpose: 'background',
+      };
+
+      // (a) companionId claim omitted entirely: the identity handed to the LLM
+      // eligibility path must still be the connection's authenticated companion.
+      const omitted = await invokeRpc(connB, 2, 'llm.complete', baseCompleteParams);
+      expect(omitted.error).toBeUndefined();
+      expect(complete).toHaveBeenCalledTimes(1);
+      expect(complete.mock.calls[0][2]).toMatchObject({ eligibilityCompanionId: 'comp-b' });
+
+      // (b) claim present but telemetryVisibility companion_private (which
+      // strips identity from correlation): the out-of-band id survives.
+      const companionPrivate = await invokeRpc(connB, 3, 'llm.complete', {
+        ...baseCompleteParams,
+        companionId: 'comp-b',
+        telemetryVisibility: 'companion_private',
+      });
+      expect(companionPrivate.error).toBeUndefined();
+      expect(complete).toHaveBeenCalledTimes(2);
+      expect(complete.mock.calls[1][2]).toMatchObject({ eligibilityCompanionId: 'comp-b' });
+
+      // Streaming path (llm.chat) carries the same server-injected identity.
+      const chat = await invokeRpc(connB, 4, 'llm.chat', {
+        systemPrompt: 'System',
+        messages: [{ role: 'user', content: 'hello' }],
+      });
+      expect(chat.error).toBeUndefined();
+      expect(stream).toHaveBeenCalledTimes(1);
+      expect(stream.mock.calls[0][2]).toMatchObject({ eligibilityCompanionId: 'comp-b' });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

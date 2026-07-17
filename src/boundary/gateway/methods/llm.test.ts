@@ -119,6 +119,7 @@ function createHarness(options: {
     })),
     sendNtfy: vi.fn(async () => ({ status: 'debounced', topic: 'noop' })),
     nextStreamRequestId: () => 'gw-1',
+    authenticatedCompanionId: () => undefined,
     ...(options.authorizeIcpConversationCorrelation
       ? { authorizeIcpConversationCorrelation: options.authorizeIcpConversationCorrelation }
       : {}),

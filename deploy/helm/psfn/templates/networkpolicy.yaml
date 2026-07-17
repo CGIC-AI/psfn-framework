@@ -244,6 +244,28 @@ spec:
       ports:
         - port: {{ .Values.ports.garden }}
           protocol: TCP
+    {{- if and .Values.ingress.enabled .Values.ingress.garden.enabled (not .Values.fleetAuth.enabled) }}
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressController.namespaceSelector | nindent 14 }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.ingressController.podSelector | nindent 14 }}
+      ports:
+        - port: {{ .Values.ports.garden }}
+          protocol: TCP
+    {{- end }}
+    {{- if and .Values.hostPorts.garden.enabled .Values.hostPorts.garden.sourceCIDRs }}
+    - from:
+        {{- range .Values.hostPorts.garden.sourceCIDRs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - port: {{ .Values.ports.garden }}
+          protocol: TCP
+    {{- end }}
   egress:
     - to:
         - namespaceSelector:

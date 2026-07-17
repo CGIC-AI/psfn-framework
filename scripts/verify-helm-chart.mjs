@@ -781,10 +781,77 @@ assertIncludes(gardenDeployment, 'name: ADMIN_TOKEN', 'fleet-off internal Garden
 assertNotIncludes(gardenDeployment, 'FLEET_SSO_GARDEN_TLS_', 'fleet-off Garden SSO TLS wiring');
 const gardenService = findDocumentByKindName(rendered, 'Service', 'psfn-garden');
 assertIncludes(gardenService, 'type: ClusterIP', 'fleet-off Garden internal-only Service');
-if (findDocumentByKindName(rendered, 'Ingress', 'psfn-garden')) {
-  throw new Error('fleet-off Garden must not render a direct privileged Ingress');
+const defaultGardenIngress = findDocumentByKindName(rendered, 'Ingress', 'psfn-garden');
+assertIncludes(defaultGardenIngress, 'host: "psfn-garden.local"', 'default Garden Ingress host');
+assertIncludes(defaultGardenIngress, 'name: http-garden', 'default Garden Ingress service port');
+assertNotIncludes(gardenDeployment, 'hostPort:', 'default fleet-off Garden hostPort');
+
+const internalOnlyGardenRendered = render([
+  '--set', 'ingress.garden.enabled=false',
+]);
+if (findDocumentByKindName(internalOnlyGardenRendered, 'Ingress', 'psfn-garden')) {
+  throw new Error('ingress.garden.enabled=false must suppress the Garden Ingress');
 }
-assertNotIncludes(rendered, 'hostPort: 3001', 'fleet-off direct Garden hostPort');
+assertNotIncludes(
+  findDocumentByKindName(internalOnlyGardenRendered, 'NetworkPolicy', 'psfn-garden'),
+  'app.kubernetes.io/name: traefik',
+  'internal-only Garden ingress controller policy',
+);
+
+const directGardenIngressRendered = render([
+  '--set', 'ingress.garden.enabled=true',
+  '--set-string', 'ingress.garden.host=garden.operator.test',
+]);
+const directGardenIngress = findDocumentByKindName(
+  directGardenIngressRendered,
+  'Ingress',
+  'psfn-garden',
+);
+assertIncludes(directGardenIngress, 'host: "garden.operator.test"', 'opt-in Garden Ingress host');
+assertIncludes(directGardenIngress, 'name: psfn-garden', 'opt-in Garden Ingress backend');
+assertIncludes(directGardenIngress, 'name: http-garden', 'opt-in Garden Ingress service port');
+const directGardenIngressPolicy = findDocumentByKindName(
+  directGardenIngressRendered,
+  'NetworkPolicy',
+  'psfn-garden',
+);
+assertIncludes(
+  directGardenIngressPolicy,
+  'app.kubernetes.io/name: traefik',
+  'opt-in Garden Ingress controller policy',
+);
+assertIncludes(
+  findDocumentByKindName(directGardenIngressRendered, 'Deployment', 'psfn-garden'),
+  'name: ADMIN_TOKEN',
+  'opt-in Garden Ingress ADMIN_TOKEN',
+);
+
+const directGardenHostPortRendered = render([
+  '--set', 'hostPorts.garden.enabled=true',
+  '--set', 'hostPorts.garden.port=11054',
+  '--set-string', 'hostPorts.garden.hostIP=127.0.0.1',
+  '--set-string', 'hostPorts.garden.sourceCIDRs[0]=192.0.2.10/32',
+]);
+const directGardenHostPortDeployment = findDocumentByKindName(
+  directGardenHostPortRendered,
+  'Deployment',
+  'psfn-garden',
+);
+assertIncludes(
+  directGardenHostPortDeployment,
+  'hostPort: 11054',
+  'opt-in Garden hostPort',
+);
+assertIncludes(
+  directGardenHostPortDeployment,
+  'hostIP: "127.0.0.1"',
+  'opt-in Garden hostIP',
+);
+assertIncludes(
+  findDocumentByKindName(directGardenHostPortRendered, 'NetworkPolicy', 'psfn-garden'),
+  'cidr: "192.0.2.10/32"',
+  'opt-in Garden hostPort source CIDR',
+);
 
 // Owner-file seeding is fail-closed by default: the seed init container creates
 // runtime dirs and the companion.json bootstrap, but must NOT copy *.seed.json
@@ -1708,6 +1775,10 @@ assertRenderFails(
 assertRenderFails(
   [...fleetAuthRequiredValues, '--set', 'hostPorts.gatewayApi.enabled=true'],
   'fleetAuth.enabled=true forbids hostPorts.gatewayApi.enabled=true',
+);
+assertRenderFails(
+  [...fleetAuthRequiredValues, '--set', 'hostPorts.garden.enabled=true'],
+  'fleetAuth.enabled=true forbids hostPorts.garden.enabled=true',
 );
 assertRenderFails(
   [...fleetAuthRequiredValues, '--set-string', 'ingress.gateway.path=/fleet'],

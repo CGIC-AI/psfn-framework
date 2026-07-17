@@ -176,14 +176,16 @@ Rollback keeps the same edge invariant. Capture the current values, certificate
 Secrets, and fleet owner backup before changing the flag. A fleet-on rollback
 may target only a revision that still has the unified router and sole-gateway
 Ingress. To disable fleet auth, first render and inspect the feature-off chart:
-Garden remains a ClusterIP/loopback internal service protected by
-`ADMIN_TOKEN`, with no Garden or Companion UI Ingress or hostPort. Never restore
-a historical direct privileged Garden edge. After either change, verify the
+Garden returns to `ADMIN_TOKEN` authentication and may use its normal direct
+Ingress (`ingress.garden.enabled`) or single-node hostPort
+(`hostPorts.garden.enabled`). SSO is the shared multi-admin identity and
+authorization topology, not a prerequisite for ordinary single-admin Garden
+access. After either change, verify the
 gateway TLS host, `/fleet` login/callback, one authorized Garden, one denied
-cross-companion route, logout while one companion is unavailable, the absence
-of direct Garden/Companion UI ingress, and a revoked session before declaring
-recovery. Run `helm lint deploy/helm/psfn` and `npm run verify:helm-chart` on
-the exact rollback values before applying them.
+cross-companion route, logout while one companion is unavailable, the rendered
+Garden exposure for the selected topology, and a revoked session before
+declaring recovery. Run `helm lint deploy/helm/psfn` and
+`npm run verify:helm-chart` on the exact rollback values before applying them.
 
 ### Fleet backups
 

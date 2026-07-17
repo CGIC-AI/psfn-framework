@@ -137,6 +137,13 @@ hostPorts:
     port: 10053
     hostIP: ""
     sourceCIDRs: []
+  # Optional direct Garden access for non-SSO deployments. ADMIN_TOKEN remains
+  # mandatory. Prefer a loopback hostIP or restrict sourceCIDRs when possible.
+  garden:
+    enabled: false
+    port: 10054
+    hostIP: ""
+    sourceCIDRs: []
   # LAN satellite devices/browsers reach the hub websocket as ws://<node>:8787.
   # This follows the same single-node exposure mechanism as the gateway API
   # hostPort (Traefik ingress stays available for name-based HTTP, but LAN
@@ -551,6 +558,14 @@ ingress:
       enabled: false
       # Existing public/browser-trusted TLS Secret for the exact gateway host.
       secretName: ""
+  # Normal single-admin Garden browser edge, authenticated by ADMIN_TOKEN.
+  # fleetAuth.enabled=true switches Garden access to the unified gateway route
+  # and suppresses this separate Ingress.
+  garden:
+    enabled: true
+    host: psfn-garden.local
+    path: /
+    pathType: Prefix
   satelliteHub:
     enabled: false
     host: psfn-hub.local

@@ -136,43 +136,58 @@ quarantined legacy sources remain as recovery evidence. The complete snapshot,
 approval, receipt, retry, and restore procedure is in
 [Existing split fleets with shared per-companion owners](./operations.md#existing-split-fleets-with-shared-per-companion-owners).
 
-### Direct Garden web exposure is removed
+### Choose the Garden administration topology
 
-The chart renders no direct Garden Ingress or Garden hostPort in either fleet
-authentication state. This is intentional and does not affect companion
-runtime behavior.
-
-With `fleetAuth.enabled=false`, Garden remains an internal ClusterIP service.
-Operator web access is a local port-forward authenticated with `ADMIN_TOKEN`:
+`fleetAuth.enabled=false` is the normal single-admin topology. Garden requires
+`ADMIN_TOKEN`, and `ingress.garden.enabled=true` exposes it through its own
+Ingress. This is the chart default:
 
 ```bash
-RELEASE=psfn
-NAMESPACE=psfn
-kubectl -n "$NAMESPACE" port-forward "svc/${RELEASE}-garden" 10054:10054
+helm upgrade --install "$RELEASE" deploy/helm/psfn \
+  --namespace "$NAMESPACE" \
+  --set fleetAuth.enabled=false \
+  --set ingress.garden.enabled=true \
+  --set-string ingress.garden.host=psfn-garden.example.internal
 ```
 
-Open `http://127.0.0.1:10054/` and authenticate with the release's
-`ADMIN_TOKEN`. Retrieve or provision that secret through the cluster's normal
-secret-management path; do not print it into logs or shell history.
+Use `hostPorts.garden.enabled=true` instead when a single-node deployment needs
+direct node-port access without an Ingress controller. Set
+`hostPorts.garden.hostIP` and, when NetworkPolicy is enabled,
+`hostPorts.garden.sourceCIDRs` to match the intended operator network. In both
+cases, authenticate with `ADMIN_TOKEN`; retrieve or provision it through the
+cluster's normal secret-management path, never logs or shell history.
 
-With `fleetAuth.enabled=true`, do not port-forward Garden as a browser
-authority. Open the configured canonical gateway HTTPS origin and use
-`/companions/<companion-uuid>/garden/`. The gateway is the sole browser edge.
-See [Unified fleet human origin](./operations.md#unified-fleet-human-origin).
-
-Before declaring the upgrade complete, prove the old exposure is gone:
+Set both exposure flags to false when this release should be reachable only by
+port-forward:
 
 ```bash
-test -z "$(kubectl -n "$NAMESPACE" get ingress \
-  -l app.kubernetes.io/component=garden -o name)"
-test -z "$(kubectl -n "$NAMESPACE" get deploy "${RELEASE}-garden" \
-  -o jsonpath='{range .spec.template.spec.containers[*].ports[*]}{.hostPort}{end}')"
+helm upgrade "$RELEASE" deploy/helm/psfn \
+  --namespace "$NAMESPACE" \
+  --set ingress.garden.enabled=false \
+  --set hostPorts.garden.enabled=false
+kubectl -n "$NAMESPACE" port-forward \
+  --address 127.0.0.1 "svc/${RELEASE}-garden" 10054:10054
+```
+
+`fleetAuth.enabled=true` is the multi-admin/multi-companion topology: one login
+and identity gates backend data across settings and companions instead of
+maintaining separate admin keys. In that mode the chart suppresses the separate
+Garden Ingress and serves authorized Gardens through the configured canonical
+gateway HTTPS origin at `/companions/<companion-uuid>/garden/`. A Garden
+hostPort is invalid in this topology.
+
+Before declaring the upgrade complete, verify the rendered topology matches the
+chosen values:
+
+```bash
+kubectl -n "$NAMESPACE" get ingress
+kubectl -n "$NAMESPACE" get deploy "${RELEASE}-garden" \
+  -o jsonpath='{range .spec.template.spec.containers[*].ports[*]}{.hostIP}:{.hostPort}{"\n"}{end}'
 test -z "$(kubectl -n "$NAMESPACE" get deploy "${RELEASE}-garden" \
   -o jsonpath='{.spec.template.spec.containers[*].volumeMounts[?(@.name=="adminui-build-overlay")].name}')"
 ```
 
-The expected result is no Garden Ingress and no Garden `hostPort`. An
-`adminui-build-overlay` mount is also stale local drift: it hides the UI bundled
+An `adminui-build-overlay` mount is stale local drift: it hides the UI bundled
 in the application image and must not be carried into another cluster.
 
 ## Preflight checklist
@@ -216,8 +231,8 @@ in the application image and must not be carried into another cluster.
    ```
 
 5. Verify Garden through the correct access path for the release's
-   `fleetAuth.enabled` state. Confirm there is no direct Garden Ingress or
-   hostPort.
+   `fleetAuth.enabled`, `ingress.garden.enabled`, and
+   `hostPorts.garden.enabled` state.
 6. Verify Postgres/pgvector, Redis, owner-file placement, migration receipts,
    and agent `ToolWiringValidator`/`Ready` logs.
 7. Remove the protected temporary values file after the release is verified.
@@ -229,8 +244,8 @@ in the application image and must not be carried into another cluster.
   hand. Follow the fail-closed migration procedure linked above.
 - A gateway-first welfare skew is an expected degradation to FIFO, not a reason
   to roll agents forward before gateway validation.
-- Loss of direct Garden web access is expected. Use the documented access path;
-  do not restore a privileged Garden Ingress or hostPort.
+- If Garden access changes, compare the saved Helm exposure values with the
+  chosen single-admin or SSO topology before changing application code.
 - Roll back only to a revision compatible with the current owner layout and
   sole-browser-origin contract. Restore owner data only from the verified
   backup family described by the migration runbook.

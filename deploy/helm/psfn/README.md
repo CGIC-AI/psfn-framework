@@ -88,9 +88,11 @@ material into ConfigMaps, annotations, labels, or NOTES.
 
 ## Unified Fleet HTTPS Origin
 
-`fleetAuth.enabled=false` keeps the legacy application behavior but does not
-restore a privileged public Garden edge: Garden is an internal ClusterIP with
-`ADMIN_TOKEN`, and the chart renders no Garden Ingress or Garden hostPort.
+`fleetAuth.enabled=false` is the normal single-admin topology. Garden uses
+`ADMIN_TOKEN`; its direct Ingress is controlled by `ingress.garden.enabled`
+(true by default), and single-node direct access can instead use
+`hostPorts.garden.enabled`. These are operator-selected access mechanisms, not
+SSO substitutes.
 
 For fleet human authentication, provision the canonical `fleet-auth.json`
 owner file and enable the repository-owned topology:
@@ -118,8 +120,8 @@ OAuth callback origin.
 
 The chart issues a Garden server identity and Gateway client identity through
 cert-manager. Gateway-to-Garden requests use TLS 1.3 mTLS with exact SPIFFE URI
-checks in both directions. NetworkPolicy admits Garden only from gateway pods;
-there is no direct Garden or Companion UI Ingress in either feature state.
+checks in both directions. In fleet-auth mode, NetworkPolicy admits Garden only
+from gateway pods and the chart suppresses the separate Garden Ingress.
 Authorized Gardens are exposed only at
 `/companions/<companion-uuid>/garden/` after live authorization and exact
 request-capability issuance. See
@@ -421,6 +423,10 @@ cluster-internal. Use it only when those node ports are reserved for PSFN; the
 old systemd app services must remain stopped to avoid port and Discord login
 conflicts. When `networkPolicy.enabled=true`, set `sourceCIDRs` to the operator
 workstation or trusted subnet that should reach the node-facing port.
+
+Garden hostPort is supported only with `fleetAuth.enabled=false`, where Garden
+authenticates operators with `ADMIN_TOKEN`. With fleet auth enabled, use the
+canonical gateway Garden route instead; Helm rejects a Garden hostPort.
 
 The Gateway and Garden Deployments use a Recreate strategy so single-node k3s
 rollouts do not deadlock when both the old and new pods need the same hostPort.

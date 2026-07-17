@@ -472,6 +472,12 @@ spec:
           ports:
             - name: {{ ternary "https-garden" "http-garden" .Values.fleetAuth.enabled }}
               containerPort: {{ .Values.ports.garden }}
+              {{- if .Values.hostPorts.garden.enabled }}
+              hostPort: {{ .Values.hostPorts.garden.port }}
+              {{- with .Values.hostPorts.garden.hostIP }}
+              hostIP: {{ . | quote }}
+              {{- end }}
+              {{- end }}
           env:
             {{- include "psfn.commonEnv" . | nindent 12 }}
             - name: ADMIN_HOST

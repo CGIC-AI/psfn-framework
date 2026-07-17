@@ -11,7 +11,10 @@
     onJump,
     entries,
   } = $props<{
-    onJump: (sectionId: SettingsSimpleSectionId) => void;
+    onJump: (
+      sectionId: SettingsSimpleSectionId,
+      advancedGroupId?: string,
+    ) => void;
     entries?: readonly SettingsSearchEntry[];
   }>();
 
@@ -51,7 +54,10 @@
 
   function selectResult(result: SettingsSearchResult | null): void {
     if (!result) return;
-    onJump(result.sectionId);
+    onJump(
+      result.sectionId,
+      result.kind === 'field' ? result.advancedGroupId : undefined,
+    );
     query = '';
     open = false;
     activeIndex = -1;

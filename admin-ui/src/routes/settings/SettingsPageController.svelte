@@ -409,11 +409,21 @@
 
   // Search result selection: expand the target section's collapsible (when it
   // has one) before jumping, so the setting is visible after the scroll lands.
-  function handleSearchJump(sectionId: SettingsSimpleSectionId): void {
+  // For fields routed to the "All Fields (Advanced)" editor, also expand the
+  // owning Garden section group (its collapse key is the Garden section id) so
+  // the field is not hidden behind a collapsed advanced group.
+  function handleSearchJump(
+    sectionId: SettingsSimpleSectionId,
+    advancedGroupId?: string,
+  ): void {
+    const keysToOpen: string[] = [];
     const collapseKey = SETTINGS_SECTION_COLLAPSE_KEY[sectionId];
-    if (collapseKey && !openSections.has(collapseKey)) {
+    if (collapseKey) keysToOpen.push(collapseKey);
+    if (advancedGroupId) keysToOpen.push(advancedGroupId);
+    const pending = keysToOpen.filter((key) => !openSections.has(key));
+    if (pending.length > 0) {
       const next = new Set(openSections);
-      next.add(collapseKey);
+      for (const key of pending) next.add(key);
       openSections = next;
     }
     void jumpToSection(sectionId);

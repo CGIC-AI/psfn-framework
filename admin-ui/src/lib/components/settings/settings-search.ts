@@ -11,10 +11,15 @@ import {
 // Field metadata is keyed by the Garden field-exposure section ids
 // (see settings-garden-contract). Those map onto the single Settings-page
 // navigation scheme (SETTINGS_SIMPLE_SECTIONS) that owns the anchors and tabs.
-// Every field-owning Garden section resolves to the simple section that hosts
-// it so field matches reuse jumpToSection with no parallel navigation scheme.
-// `compositional` has no dedicated curated section; its fields live in the
-// generic "All Fields" editor, so it resolves there.
+//
+// IMPORTANT: this map is the *curated* home of a Garden section, but a curated
+// panel renders only a hand-picked subset of the fields the contract assigns to
+// that section. The rest live exclusively in the generic "All Fields (Advanced)"
+// editor. Search must therefore route PER FIELD (see resolveSettingsFieldRoute),
+// not per section — routing every field to its section's curated home makes the
+// caption lie about where the field actually is (the field is often absent).
+// `compositional` has no curated panel at all; its fields live in the advanced
+// editor.
 export const GARDEN_SECTION_TO_SIMPLE_SECTION: Record<
   GardenSettingsSectionId,
   SettingsSimpleSectionId
@@ -57,6 +62,86 @@ export const SETTINGS_SECTION_COLLAPSE_KEY: Partial<
   'advanced-backup': 'backup',
 };
 
+// ── Curated-rendered field allowlist ──
+// The set of contract field keys that a curated panel actually renders as an
+// editable input. Curated panels expose only a subset of each Garden section's
+// fields; everything else is reachable solely through the "All Fields (Advanced)"
+// editor (or, for a few custom-surface fields, a delegated page / nowhere on the
+// Settings page). This allowlist is the single source of truth for whether a
+// field's search result may jump to a curated section.
+//
+// It is keyed off the real bindings in the five curated panels under
+// admin-ui/src/routes/settings/ (SettingsMemoryPanels, SettingsRuntimePanels,
+// SettingsIntegrationsPanels, SettingsTrustBackupPanels, SettingsDelegatedPanels)
+// — each entry has a `bind:value`/`bind:checked`/`value=…+onchange` control whose
+// adjacent SettingFieldLabel names the contract key. The drift test verifies this
+// set against the panel files by grepping, so a stale entry fails closed.
+export const CURATED_RENDERED_FIELD_KEYS: ReadonlySet<string> = new Set<string>([
+  // SettingsMemoryPanels.svelte
+  'sessionHistoryBudgetPct',
+  'memoryRetrievalBudgetPct',
+  'extractionThresholdPct',
+  'extractionInterval',
+  'compactionEmotionalSalienceThresholdPct',
+  'compactionThresholdPct',
+  'backgroundMaintenanceIntervalMs',
+  'sessionRestartBehavior',
+  'memoryExtractionMinImportance',
+  'memoryExtractionMinConfidence',
+  'memoryExtractionMinNovelty',
+  'memoryExtractionMaxWrites',
+  'memoryExtractionTelemetryEnabled',
+  'memoryRetrievalTelemetryEnabled',
+  'profileSynthesisEnabled',
+  'profileSynthesisRefreshIntervalMs',
+  'profileSynthesisCooldownMs',
+  'profileSynthesisMinWrites',
+  'profileSynthesisMinImportance',
+  'profileSynthesisMinConfidence',
+  'profileSynthesisMinNovelty',
+  'profileSynthesisSourceMemoryLimit',
+  'profileSynthesisMinSourceMemories',
+  'analysisWorkbenchMaxTokens',
+  'analysisWorkbenchMaxWallTimeMs',
+  'analysisWorkbenchMaxSubQueries',
+  // SettingsRuntimePanels.svelte
+  'retryMaxAttempts',
+  'retryBaseDelayMs',
+  'importProcessingRouteMode',
+  'importProcessingStrictPolicy',
+  'openRouterProviderOrder',
+  'importProcessingLocalEndpointUrl',
+  'importProcessingLocalModel',
+  'webFetchAllowInternalNetwork',
+  'webFetchAllowHttp',
+  'webFetchDomainAllowlist',
+  'webFetchTlsCaCertPaths',
+  // SettingsIntegrationsPanels.svelte
+  'ttsProvider',
+  'sttProvider',
+  'voiceId',
+  'deepgramModel',
+  'echoTtsUrl',
+  'echoTtsVoice',
+  'echoTtsPreset',
+  'obsidianVaultName',
+  'obsidianCliPath',
+  'obsidianAutoPublish',
+  'obsidianTimeoutMs',
+  'discordTriggerWords',
+  'discordTriggerReactions',
+  'discordTriggerListenWindowMs',
+  'telegramEnabled',
+  'telegramAuthorizedUsers',
+  // SettingsTrustBackupPanels.svelte
+  'capabilityTier',
+  'customTokens',
+]);
+
+// Caption text for fields that live only in the generic advanced editor. Matches
+// the "All Fields" tab naming; "(Advanced)" flags that it is the raw editor.
+export const ADVANCED_FIELDS_SECTION_TITLE = 'All Fields (Advanced)';
+
 export interface SettingsSearchSectionEntry {
   kind: 'section';
   sectionId: SettingsSimpleSectionId;
@@ -72,6 +157,60 @@ export interface SettingsSearchFieldEntry {
   sectionId: SettingsSimpleSectionId;
   // Human-readable title of that section, shown as match context.
   sectionTitle: string;
+  // For fields routed to the "All Fields (Advanced)" editor: the Garden section
+  // group whose collapsible the jump should expand so the field is visible.
+  advancedGroupId?: GardenSettingsSectionId;
+}
+
+// Per-field jump resolution. A field is reachable in exactly one of three ways:
+//  - 'curated': a curated panel renders it → jump to that panel's simple section.
+//  - 'advanced': surface 'advanced' but not curated-rendered → the "All Fields
+//    (Advanced)" editor renders every advanced-surface field, so jump there and
+//    expand the owning Garden section group.
+//  - 'excluded': surface 'custom' and rendered nowhere on the Settings page
+//    (model catalog is on the Models page; the episodicProcessing* slots on the
+//    Scheduler editor) → produce no search entry rather than misroute the jump.
+export type SettingsFieldRoute =
+  | { kind: 'curated'; sectionId: SettingsSimpleSectionId; sectionTitle: string }
+  | {
+      kind: 'advanced';
+      sectionId: 'advanced-fields';
+      sectionTitle: string;
+      advancedGroupId: GardenSettingsSectionId;
+    }
+  | { kind: 'excluded'; home: string };
+
+function customFieldHome(
+  exposure: (typeof SETTINGS_GARDEN_FIELD_EXPOSURE)[keyof typeof SETTINGS_GARDEN_FIELD_EXPOSURE],
+): string {
+  const editorId = 'editorId' in exposure ? exposure.editorId : undefined;
+  if (editorId === 'models') return 'Models page';
+  if (editorId === 'scheduler') return 'Scheduler editor';
+  return 'a dedicated editor';
+}
+
+export function resolveSettingsFieldRoute(
+  fieldKey: string,
+  exposure: (typeof SETTINGS_GARDEN_FIELD_EXPOSURE)[keyof typeof SETTINGS_GARDEN_FIELD_EXPOSURE],
+): SettingsFieldRoute {
+  if (CURATED_RENDERED_FIELD_KEYS.has(fieldKey)) {
+    const sectionId = GARDEN_SECTION_TO_SIMPLE_SECTION[exposure.sectionId];
+    return {
+      kind: 'curated',
+      sectionId,
+      sectionTitle: SIMPLE_SECTION_TITLE_BY_ID[sectionId],
+    };
+  }
+  if (exposure.surface === 'advanced') {
+    return {
+      kind: 'advanced',
+      sectionId: 'advanced-fields',
+      sectionTitle: ADVANCED_FIELDS_SECTION_TITLE,
+      advancedGroupId: exposure.sectionId,
+    };
+  }
+  // Custom-surface field with no on-page editor: never jump somewhere it isn't.
+  return { kind: 'excluded', home: customFieldHome(exposure) };
 }
 
 export type SettingsSearchEntry =
@@ -112,18 +251,23 @@ export function buildSettingsSearchEntries(): SettingsSearchEntry[] {
     }),
   );
 
-  const fieldEntries: SettingsSearchEntry[] = Object.entries(
-    SETTINGS_GARDEN_FIELD_EXPOSURE,
-  ).map(([fieldKey, exposure]) => {
-    const sectionId = GARDEN_SECTION_TO_SIMPLE_SECTION[exposure.sectionId];
-    return {
+  const fieldEntries: SettingsSearchEntry[] = [];
+  for (const [fieldKey, exposure] of Object.entries(SETTINGS_GARDEN_FIELD_EXPOSURE)) {
+    const route = resolveSettingsFieldRoute(fieldKey, exposure);
+    // Custom-surface fields with no on-page editor are omitted rather than
+    // pointed at a section that does not contain them.
+    if (route.kind === 'excluded') continue;
+    fieldEntries.push({
       kind: 'field',
       fieldKey,
       fieldLabel: humanizeSettingFieldKey(fieldKey),
-      sectionId,
-      sectionTitle: SIMPLE_SECTION_TITLE_BY_ID[sectionId],
-    };
-  });
+      sectionId: route.sectionId,
+      sectionTitle: route.sectionTitle,
+      ...(route.kind === 'advanced'
+        ? { advancedGroupId: route.advancedGroupId }
+        : {}),
+    });
+  }
 
   return [...sectionEntries, ...fieldEntries];
 }

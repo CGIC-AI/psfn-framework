@@ -1,6 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { isRecord } from '../../shared/utils/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import type {
+  ApprovalAttribution,
+  ApprovalSourceSystem,
+} from '../../shared/contracts/approval-envelope.js';
 
 export const DEFAULT_CONFIRMATION_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
@@ -49,6 +53,15 @@ export interface ConfirmationQueueEntry {
   resolutionAuthority?: ConfirmationResolutionAuthority;
   requestedAt: number;
   expiresAt: number;
+  /**
+   * Unified-approval-envelope provenance (bead psfn-framework-13sk / ct0v).
+   * Optional and immutable: additive metadata the enqueuer resolved server-side
+   * (e.g. the gateway confirmation gate). Ordinary entries omit both fields and
+   * behave exactly as before. `attribution.parentId`, when present, MUST equal
+   * the authenticated owner — the emission observer enforces that fail-closed.
+   */
+  sourceSystem?: ApprovalSourceSystem;
+  attribution?: ApprovalAttribution;
 }
 
 export interface ConfirmationQueueHistoryEntry extends Partial<ConfirmationQueueEntry> {
@@ -71,6 +84,9 @@ export interface ConfirmationQueueRequest {
   companionReason: string;
   resolutionAuthority?: ConfirmationResolutionAuthority;
   expiresInMs?: number;
+  /** Optional unified-envelope provenance; see {@link ConfirmationQueueEntry}. */
+  sourceSystem?: ApprovalSourceSystem;
+  attribution?: ApprovalAttribution;
 }
 
 export interface ConfirmationResolveRequest {
@@ -128,6 +144,15 @@ type ConfirmationExecutor = (
 interface PendingEntry {
   entry: ConfirmationQueueEntry;
   execute: ConfirmationExecutor;
+}
+
+function cloneAttribution(input: ApprovalAttribution): ApprovalAttribution {
+  return {
+    parentLabel: input.parentLabel,
+    parentId: input.parentId,
+    ...(input.shardLabel !== undefined ? { shardLabel: input.shardLabel } : {}),
+    ...(input.shardId !== undefined ? { shardId: input.shardId } : {}),
+  };
 }
 
 function cloneRecord(input: Record<string, unknown>): Record<string, unknown> {
@@ -188,6 +213,8 @@ export class ConfirmationQueue {
         : {}),
       requestedAt,
       expiresAt: requestedAt + expiresInMs,
+      ...(request.sourceSystem ? { sourceSystem: request.sourceSystem } : {}),
+      ...(request.attribution ? { attribution: cloneAttribution(request.attribution) } : {}),
     };
     this.pending.set(entry.id, { entry, execute });
     this.observer?.onEnqueued?.(this.snapshot(entry));
@@ -424,6 +451,7 @@ export class ConfirmationQueue {
     return {
       ...entry,
       params: cloneRecord(entry.params),
+      ...(entry.attribution ? { attribution: cloneAttribution(entry.attribution) } : {}),
     };
   }
 

@@ -14,6 +14,12 @@ interface HarnessOptions {
   capabilityTier?: CapabilityTier;
   /** When true, omit capabilityTierProvider entirely (unwired gateway). */
   omitTierProvider?: boolean;
+  /**
+   * When set, the capabilityTierProvider throws this error instead of
+   * returning a tier — models a malformed capability-tier.json whose reload
+   * makes CapabilityRuntime.getTier() throw (fail-closed refusal path).
+   */
+  tierProviderThrows?: Error;
 }
 
 function createHarness(options: HarnessOptions): {
@@ -38,7 +44,14 @@ function createHarness(options: HarnessOptions): {
     sessionHmacKeyring: keyring,
     ...(options.omitTierProvider
       ? {}
-      : { capabilityTierProvider: () => options.capabilityTier ?? 'nursery' }),
+      : {
+        capabilityTierProvider: () => {
+          if (options.tierProviderThrows) {
+            throw options.tierProviderThrows;
+          }
+          return options.capabilityTier ?? 'nursery';
+        },
+      }),
     notifyRequester: vi.fn(),
     listPendingConfirmations: () => [],
     resolveConfirmation: vi.fn(async () => ({
@@ -128,6 +141,33 @@ describe('registerShardBackendMethods', () => {
     })).rejects.toMatchObject({
       code: GatewayErrors.POLICY_DENIED,
       message: expect.stringContaining('tier provider is unavailable'),
+    });
+  });
+
+  it('fails closed to POLICY_DENIED when the tier provider throws', async () => {
+    // A malformed capability-tier.json makes CapabilityRuntime.getTier()
+    // refreshFromDisk() throw. The boundary must convert that into a
+    // POLICY_DENIED refusal (fail closed), not let the raw error escape as a
+    // generic -32603 Internal error.
+    const harness = createHarness({
+      policyConfig: POLICY,
+      tierProviderThrows: new Error('capability-tier.json is malformed'),
+    });
+
+    const rejection = harness.invoke({
+      shardId: 'shard-throws',
+      name: 'containerized-research',
+      backend: 'container',
+      capabilityTier: 'autonomous',
+    });
+
+    await expect(rejection).rejects.toMatchObject({
+      code: GatewayErrors.POLICY_DENIED,
+      message: expect.stringContaining('capability tier could not be resolved'),
+    });
+    // Guard against regressing to the generic Internal-error mapping.
+    await expect(rejection).rejects.not.toMatchObject({
+      code: -32603,
     });
   });
 });

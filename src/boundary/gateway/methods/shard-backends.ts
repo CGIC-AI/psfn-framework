@@ -7,6 +7,9 @@ import type {
 import { GatewayErrors } from '../protocol.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+
+const log = createComponentLogger('GatewayShardBackends');
 
 const AUTONOMOUS_SHARD_BACKEND_TIERS = new Set(['autonomous', 'custom']);
 
@@ -62,7 +65,30 @@ const shardBackendDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
           + `the gateway capability tier provider is unavailable (fail closed).`,
         );
       }
-      const capabilityTier = tierProvider();
+      // The provider resolves the tier from the gateway's CapabilityRuntime,
+      // which reloads capability-tier.json on version change. A malformed or
+      // otherwise unreadable file makes that refresh throw. A thrown provider
+      // means the tier cannot be established, so — exactly like the absent
+      // provider above — autonomous backends are refused (fail closed) instead
+      // of letting the raw error escape as a generic -32603 Internal error.
+      let capabilityTier: string;
+      try {
+        capabilityTier = tierProvider();
+      } catch (error) {
+        log.error(
+          'Capability tier provider threw while authorizing a shard backend; refusing (fail closed)',
+          {
+            backend,
+            name,
+            shardId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+        deny(
+          `Shard backend "${backend}" for "${name}" (${shardId}) cannot be authorized: `
+          + `the gateway capability tier could not be resolved (fail closed).`,
+        );
+      }
 
       if (!AUTONOMOUS_SHARD_BACKEND_TIERS.has(capabilityTier)) {
         deny(

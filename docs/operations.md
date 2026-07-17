@@ -4,6 +4,11 @@ This is the operator-facing runtime guide for the current repo-owned deployment 
 
 Last updated: 2026-07-16.
 
+Before touching a Helm release, read the canonical
+[Helm Fleet Upgrade Guide](./helm-upgrades.md). It is the short, mandatory
+upgrade brief; this document holds the detailed subsystem and recovery
+procedures it links to.
+
 ## Daily Runtime Commands
 
 ```bash

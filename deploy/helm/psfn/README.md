@@ -1,5 +1,10 @@
 # PSFN Helm Chart
 
+Before upgrading an existing release, read the canonical
+[Helm Fleet Upgrade Guide](../../../docs/helm-upgrades.md). It records required
+component ordering and operator-visible exposure changes; this README remains
+the chart value and topology reference.
+
 This chart renders the first PSFN Kubernetes/k3s topology for one companion:
 
 - gateway Deployment and the sole privileged browser Service/Ingress

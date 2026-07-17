@@ -451,6 +451,7 @@ If you're building a companion on this framework, check out:
 - **`companion_docs/`**: Source-controlled Companion Library material: welcome documentation, philosophy, privacy references, and an onboarding checklist. It is not a runtime personal workspace.
 - **`CLAUDE.md`**: Technical reference for AI development assistants working on the codebase
 - **`docs/setup.md`**: Bootstrap and local bring-up
+- **`docs/helm-upgrades.md`**: Required preflight, rollout ordering, exposure changes, and validation for Helm fleet upgrades
 - **`docs/PSFN_PROJECT_CHARTER.md`**: Project identity, architectural laws, boundary rules, and contributor guardrails
 - **`docs/architecture.md`**: Current runtime shape and subsystem map
 - **`docs/multi-companion.md`**: Multi-companion topology, fleet manifest, and fleet operations

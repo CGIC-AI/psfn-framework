@@ -2,6 +2,11 @@
 
 PSFN boots through the split runtime. The legacy `src/app/startup/index.ts` entrypoint is disabled and exits fail-closed; use `npm run split` for the full gateway + agent + operator stack, or launch `npm run gateway`, `npm run agent`, and `npm run operator` individually.
 
+Before upgrading any Helm cluster, read the canonical
+[Helm Fleet Upgrade Guide](./helm-upgrades.md). It carries rollout-order
+constraints and operator-visible access changes; this setup guide remains the
+authority for initial configuration and ownership.
+
 ## Prerequisites
 
 - Node.js 22+

@@ -80,6 +80,46 @@ describe('Garden route capability catalogue', () => {
     expect(resolveGardenRouteCapability('WS', '/api/admin/events')?.capability.authorization)
       .toMatchObject({ action: 'telemetry.read', baseRole: 'admin' });
     expect(resolveGardenRouteCapability(
+      'GET',
+      '/api/admin/wiki/shared-world-proposals',
+    )?.capability).toMatchObject({
+      query: {
+        state: { cardinality: 'singleton', maxValues: 1 },
+        limit: { cardinality: 'singleton', maxValues: 1 },
+      },
+      body: { mode: 'forbidden' },
+      authorization: {
+        action: 'wiki.read',
+        resource: { scope: 'governed_shared_workspace' },
+      },
+    });
+    expect(resolveGardenRouteCapability(
+      'POST',
+      '/api/admin/wiki/shared-world-proposals/proposal-a/approve',
+    )?.capability).toMatchObject({
+      body: { mode: 'optional' },
+      authorization: {
+        action: 'wiki.manage',
+        resource: { scope: 'governed_shared_workspace' },
+        requirements: {
+          assurance: 'webauthn_uv',
+          confirmation: 'explicit',
+          approvals: ['cogsec'],
+        },
+      },
+    });
+    expect(resolveGardenRouteCapability(
+      'POST',
+      '/api/admin/wiki/shared-world-proposals/cleanup',
+    )?.capability.body).toMatchObject({ mode: 'required' });
+    expect(resolveGardenRouteCapability(
+      'POST',
+      '/api/admin/prompts/count-tokens',
+    )?.capability).toMatchObject({
+      body: { mode: 'required' },
+      authorization: { action: 'prompts.read' },
+    });
+    expect(resolveGardenRouteCapability(
       'POST',
       '/api/admin/privacy-break-glass/memory/memory-a/confirm',
     )?.capability).toMatchObject({

@@ -373,6 +373,7 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
         '/api/admin/prompts/north-star', '/api/admin/prompts/:layerId',
         '/api/admin/prompts/:layerId/diff',
       ]),
+      ...ids('POST', ['/api/admin/prompts/count-tokens']),
       ...pageIds(['/prompt-monitor', '/prompts']),
     ],
   },
@@ -504,12 +505,19 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   },
   {
     action: 'wiki.read', area: 'wiki', scope: 'governed_shared_workspace',
-    routeIds: ids('GET', ['/api/admin/wiki/shared-world/:siteId']),
+    routeIds: ids('GET', [
+      '/api/admin/wiki/shared-world/:siteId',
+      '/api/admin/wiki/shared-world-proposals',
+      '/api/admin/wiki/shared-world-proposals/:proposalId',
+    ]),
   },
   {
     action: 'wiki.manage', area: 'wiki', scope: 'governed_shared_workspace',
     routeIds: ids('POST', [
       '/api/admin/wiki/shared-world/:siteId/import', '/api/admin/wiki/shared-world/:siteId/publish',
+      '/api/admin/wiki/shared-world-proposals/cleanup',
+      '/api/admin/wiki/shared-world-proposals/:proposalId/approve',
+      '/api/admin/wiki/shared-world-proposals/:proposalId/reject',
     ]), assurance: 'webauthn_uv', confirmation: 'explicit', approvals: ['cogsec'],
   },
   {

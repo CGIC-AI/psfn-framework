@@ -124,6 +124,7 @@ const queryPolicies: Readonly<Partial<Record<string, Readonly<Partial<Record<str
     '/api/admin/shared-workspace/artifact': singleton(['path']),
     '/api/admin/wiki': singleton(['scope']),
     '/api/admin/wiki/search': singleton(['query', 'limit']),
+    '/api/admin/wiki/shared-world-proposals': singleton(['state', 'limit']),
     '/api/admin/wiki/shared-world/:siteId': singleton(['id']),
   });
 
@@ -156,6 +157,7 @@ const requiredBodyPatterns = new Set([
   'POST /api/admin/privacy-break-glass/profile/:id/confirm',
   'POST /api/admin/privacy-break-glass/profile/:id/decide',
   'POST /api/admin/prompts',
+  'POST /api/admin/prompts/count-tokens',
   'PATCH /api/admin/prompts/:layerId',
   'POST /api/admin/prompts/reorder',
   'PUT /api/admin/prompts/runtime-blocks',
@@ -169,6 +171,7 @@ const requiredBodyPatterns = new Set([
   'POST /api/admin/shared-workspace/proposals',
   'POST /api/admin/shared-workspace/reviews/:reviewId/cogsec',
   'POST /api/admin/shared-workspace/reviews/:reviewId/decision',
+  'POST /api/admin/wiki/shared-world-proposals/cleanup',
 ]);
 
 const noBodyMutationPatterns = new Set([
@@ -222,6 +225,7 @@ const fixedRoutes: readonly RouteTuple[] = [
   ['GET', '/api/admin/memory/shared-background'], ['GET', '/api/admin/model-usage'],
   ['GET', '/api/admin/model-usage/export'], ['GET', '/api/admin/places'],
   ['GET', '/api/admin/places/map'], [['GET', 'POST'], '/api/admin/prompts'],
+  ['POST', '/api/admin/prompts/count-tokens'],
   [['GET', 'PUT'], '/api/admin/prompts/constitution'], [['GET', 'PUT'], '/api/admin/prompts/foundation'],
   [['GET', 'PUT'], '/api/admin/prompts/north-star'], ['POST', '/api/admin/prompts/reorder'],
   ['PUT', '/api/admin/prompts/runtime-blocks'], ['GET', '/api/admin/rooms'],
@@ -238,6 +242,8 @@ const fixedRoutes: readonly RouteTuple[] = [
   ['GET', '/api/admin/values'], ['GET', '/api/admin/values/reflections/daily'],
   ['GET', '/api/admin/values/reflections/journal'], ['GET', '/api/admin/values/reflections/metacognition'],
   ['GET', '/api/admin/wiki'], ['GET', '/api/admin/wiki/scopes'], ['GET', '/api/admin/wiki/search'],
+  ['GET', '/api/admin/wiki/shared-world-proposals'],
+  ['POST', '/api/admin/wiki/shared-world-proposals/cleanup'],
   ['GET', '/api/admin/wishlist'],
   [['GET', 'POST'], '/api/admin/channels/context-envelope'],
   [['GET', 'PATCH', 'POST'], '/api/admin/chat/bootstrap'], ['GET', '/api/admin/chat/model-room/bootstrap'],
@@ -283,6 +289,9 @@ const dynamicRoutes: readonly RouteTuple[] = [
   ['GET', '/api/admin/shards/:shardId'], ['POST', '/api/admin/shards/:shardId/review'],
   ['POST', '/api/admin/shared-workspace/reviews/:reviewId/cogsec'],
   ['POST', '/api/admin/shared-workspace/reviews/:reviewId/decision'], ['DELETE', '/api/admin/skills/:name'],
+  ['GET', '/api/admin/wiki/shared-world-proposals/:proposalId'],
+  ['POST', '/api/admin/wiki/shared-world-proposals/:proposalId/approve'],
+  ['POST', '/api/admin/wiki/shared-world-proposals/:proposalId/reject'],
   ['GET', '/api/admin/wiki/:id'], ['GET', '/api/admin/wiki/shared-world/:siteId'],
   ['POST', '/api/admin/wiki/shared-world/:siteId/import'], ['POST', '/api/admin/wiki/shared-world/:siteId/publish'],
   ['POST', '/api/admin/wishlist/:wishId/acknowledge'],
@@ -369,12 +378,20 @@ export function compileGardenRouteDeclarations<Route extends {
   readonly match: { readonly capabilityPattern: string };
 }>(routes: readonly Route[]): Array<AuthorizedGardenRoute<Route>> {
   const seen = new Set<string>();
-  return routes.map((route) => {
+  const missing: string[] = [];
+  for (const route of routes) {
     const id = `${route.method} ${route.match.capabilityPattern}`;
     if (seen.has(id)) throw new Error(`Duplicate active Garden route declaration: ${id}`);
     seen.add(id);
+    if (!GARDEN_ROUTE_CAPABILITY_BY_ID.has(id)) missing.push(id);
+  }
+  if (missing.length > 0) {
+    throw new Error(`Garden routes are absent from capability catalogue: ${missing.join(', ')}`);
+  }
+  return routes.map((route) => {
+    const id = `${route.method} ${route.match.capabilityPattern}`;
     const capability = GARDEN_ROUTE_CAPABILITY_BY_ID.get(id);
-    if (!capability) throw new Error(`Garden route is absent from capability catalogue: ${id}`);
+    if (!capability) throw new Error(`Garden route capability disappeared: ${id}`);
     return Object.freeze({ ...route, capability });
   });
 }

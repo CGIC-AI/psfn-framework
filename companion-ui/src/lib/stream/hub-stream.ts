@@ -8,6 +8,8 @@ import type {
   SatelliteHubStateEvent,
 } from '../api/client.js';
 import type {
+  ApprovalAttribution,
+  ApprovalGrantMode,
   ApprovalResolvedStatus,
   HubToClientMessage,
   ToolActivityPhase,
@@ -63,6 +65,13 @@ export interface ApprovalStreamEntry {
   redactedContext: string;
   status: ApprovalEntryStatus;
   resolvedAt?: string;
+  // Wire contract v2 (psfn-framework-13sk) optional fields.
+  attribution?: ApprovalAttribution;
+  action?: string;
+  scope?: string;
+  reason?: string;
+  grantMode?: ApprovalGrantMode;
+  sourceSystem?: string;
 }
 
 /** Raw accumulated artifact-shelf item from `artifact.created`. */
@@ -475,6 +484,12 @@ function applyInboundMessage(
         expiresAt: message.data.expiresAt,
         redactedContext: message.data.redactedContext,
         status: 'pending',
+        attribution: message.data.attribution,
+        action: message.data.action,
+        scope: message.data.scope,
+        reason: message.data.reason,
+        grantMode: message.data.grantMode,
+        sourceSystem: message.data.sourceSystem,
       };
       return { ...base, approvals: upsertById(base.approvals, entry) };
     }

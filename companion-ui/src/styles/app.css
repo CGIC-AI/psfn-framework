@@ -733,6 +733,43 @@ button:focus-visible {
   color: var(--color-gold-deep);
 }
 
+.approval-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.45rem 0 0;
+}
+
+.approval-detail {
+  display: flex;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.approval-detail dt {
+  flex: none;
+  min-width: 3.4rem;
+  font-weight: 600;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  font-size: 0.7rem;
+}
+
+.approval-detail dd {
+  margin: 0;
+  color: inherit;
+  word-break: break-word;
+}
+
+.approval-grant {
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--color-gold-deep);
+}
+
 .approval-resolution {
   margin-top: 0.4rem;
   font-size: 0.82rem;

@@ -119,6 +119,29 @@ function base64(value: unknown): value is string {
     && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value);
 }
 
+function approvalAttribution(value: unknown): boolean {
+  if (value === undefined) return true;
+  const record = exactRecord(value, ['parentLabel', 'parentId'], ['shardLabel', 'shardId']);
+  return record !== null
+    && boundedString(record.parentLabel, 256)
+    && boundedString(record.parentId, 256)
+    && optionalBoundedString(record.shardLabel, 256)
+    && optionalBoundedString(record.shardId, 256);
+}
+
+function approvalGrantMode(value: unknown): boolean {
+  if (value === undefined) return true;
+  if (!isRecord(value)) return false;
+  if (value.kind === 'once') {
+    return exactRecord(value, ['kind']) !== null;
+  }
+  if (value.kind === 'ttl') {
+    const record = exactRecord(value, ['kind', 'ttlSeconds']);
+    return record !== null && nonNegativeInteger(record.ttlSeconds, 31_536_000);
+  }
+  return false;
+}
+
 const CAPABILITIES = Object.freeze({
   input: ['text', 'microphone_pcm', 'final_transcript', 'vision_upload', 'wake_event'],
   output: [
@@ -245,11 +268,17 @@ const STRICT_HUB_VALIDATORS: Record<HubToClientMessage['type'], (payload: unknow
   'approval.requested': payload => {
     const data = dataRecord(payload, [
       'id', 'title', 'requestedAt', 'redactedContext', 'status',
-    ], ['expiresAt']);
+    ], ['expiresAt', 'attribution', 'action', 'scope', 'reason', 'grantMode', 'sourceSystem']);
     return data !== null && boundedString(data.id, 256) && boundedString(data.title, 512)
       && isoTimestamp(data.requestedAt) && optionalBoundedString(data.expiresAt, 32)
       && (data.expiresAt === undefined || isoTimestamp(data.expiresAt))
-      && boundedString(data.redactedContext, 4096) && data.status === 'pending';
+      && boundedString(data.redactedContext, 4096) && data.status === 'pending'
+      && approvalAttribution(data.attribution)
+      && optionalBoundedString(data.action, 1024)
+      && optionalBoundedString(data.scope, 1024)
+      && optionalBoundedString(data.reason, 1024)
+      && approvalGrantMode(data.grantMode)
+      && optionalBoundedString(data.sourceSystem, 128);
   },
   'approval.resolved': payload => {
     const data = dataRecord(payload, ['id', 'status', 'resolvedAt']);

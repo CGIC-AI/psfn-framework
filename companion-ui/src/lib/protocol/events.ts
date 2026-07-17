@@ -261,6 +261,27 @@ export interface PongMessage {
 
 export type ApprovalResolvedStatus = 'approved' | 'denied' | 'expired' | 'blocked';
 
+/**
+ * Grant mode exactly as offered by the server. The client renders this and
+ * submits only the offered decision; it never invents duration or mode.
+ * `ttlSeconds` is present only when kind === 'ttl'.
+ */
+export type ApprovalGrantMode =
+  | { kind: 'once' }
+  | { kind: 'ttl'; ttlSeconds: number };
+
+/**
+ * Server-resolved attribution for a shard/parent approval request. IDs are
+ * opaque; labels are display strings. Present only once the backend wire
+ * contract v2 (psfn-framework-13sk) emits them — parse is tolerant until then.
+ */
+export interface ApprovalAttribution {
+  parentLabel: string;
+  parentId: string;
+  shardLabel?: string;
+  shardId?: string;
+}
+
 export interface ApprovalRequestedMessage {
   type: 'approval.requested';
   data: {
@@ -270,6 +291,13 @@ export interface ApprovalRequestedMessage {
     expiresAt?: string;
     redactedContext: string;
     status: 'pending';
+    // Wire contract v2 (psfn-framework-13sk) optional fields below.
+    attribution?: ApprovalAttribution;
+    action?: string;
+    scope?: string;
+    reason?: string;
+    grantMode?: ApprovalGrantMode;
+    sourceSystem?: string;
   };
 }
 

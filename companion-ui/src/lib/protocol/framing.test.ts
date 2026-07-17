@@ -182,6 +182,65 @@ describe('hub websocket framing', () => {
     expect(() => parseHubToClientMessage(frame)).toThrow(HubFramingError);
   });
 
+  it('parses an approval.requested carrying the wire contract v2 fields', () => {
+    const message = parseHubToClientMessage(JSON.stringify({
+      type: 'approval.requested',
+      data: {
+        id: 'ap-9',
+        title: 'Grant web access',
+        requestedAt: '2026-07-17T00:00:01.000Z',
+        expiresAt: '2026-07-17T00:05:01.000Z',
+        redactedContext: 'Shard requests outbound fetch',
+        status: 'pending',
+        attribution: {
+          parentLabel: 'Purrsephone', parentId: 'p-1', shardLabel: 'research-shard', shardId: 's-1',
+        },
+        action: 'http.get https://example.com',
+        scope: 'network:egress',
+        reason: 'operator-approved research task',
+        grantMode: { kind: 'ttl', ttlSeconds: 300 },
+        sourceSystem: 'shard',
+      },
+    }));
+    expect(message.type).toBe('approval.requested');
+    if (message.type !== 'approval.requested') return;
+    expect(message.data.attribution?.shardLabel).toBe('research-shard');
+    expect(message.data.grantMode).toEqual({ kind: 'ttl', ttlSeconds: 300 });
+    expect(message.data.sourceSystem).toBe('shard');
+  });
+
+  it('accepts a once grant mode and a parent-only attribution', () => {
+    const message = parseHubToClientMessage(JSON.stringify({
+      type: 'approval.requested',
+      data: {
+        id: 'ap-10',
+        title: 'One-time tool use',
+        requestedAt: '2026-07-17T00:00:01.000Z',
+        redactedContext: 'ctx',
+        status: 'pending',
+        attribution: { parentLabel: 'Artie', parentId: 'p-2' },
+        grantMode: { kind: 'once' },
+      },
+    }));
+    if (message.type !== 'approval.requested') throw new Error('expected approval.requested');
+    expect(message.data.grantMode).toEqual({ kind: 'once' });
+    expect(message.data.attribution?.shardLabel).toBeUndefined();
+  });
+
+  const malformedV2Frames: Array<[string, string]> = [
+    ['grantMode unknown kind', '{"type":"approval.requested","data":{"id":"1","title":"t","requestedAt":"2026-07-17T00:00:01.000Z","redactedContext":"y","status":"pending","grantMode":{"kind":"forever"}}}'],
+    ['grantMode ttl missing ttlSeconds', '{"type":"approval.requested","data":{"id":"1","title":"t","requestedAt":"2026-07-17T00:00:01.000Z","redactedContext":"y","status":"pending","grantMode":{"kind":"ttl"}}}'],
+    ['grantMode ttl negative', '{"type":"approval.requested","data":{"id":"1","title":"t","requestedAt":"2026-07-17T00:00:01.000Z","redactedContext":"y","status":"pending","grantMode":{"kind":"ttl","ttlSeconds":-5}}}'],
+    ['grantMode extra key', '{"type":"approval.requested","data":{"id":"1","title":"t","requestedAt":"2026-07-17T00:00:01.000Z","redactedContext":"y","status":"pending","grantMode":{"kind":"once","ttlSeconds":5}}}'],
+    ['attribution missing parentLabel', '{"type":"approval.requested","data":{"id":"1","title":"t","requestedAt":"2026-07-17T00:00:01.000Z","redactedContext":"y","status":"pending","attribution":{"parentId":"p"}}}'],
+    ['attribution extra key', '{"type":"approval.requested","data":{"id":"1","title":"t","requestedAt":"2026-07-17T00:00:01.000Z","redactedContext":"y","status":"pending","attribution":{"parentLabel":"P","parentId":"p","evil":"x"}}}'],
+    ['v2 unknown top-level key', '{"type":"approval.requested","data":{"id":"1","title":"t","requestedAt":"2026-07-17T00:00:01.000Z","redactedContext":"y","status":"pending","forged":"x"}}'],
+  ];
+
+  it.each(malformedV2Frames)('fails closed on malformed v2 approval frame: %s', (_label, frame) => {
+    expect(() => parseHubToClientMessage(frame)).toThrow(HubFramingError);
+  });
+
   it('rejects browser authority fields from the initial hello', () => {
     expect(() => serializeClientToHubMessage({
       type: 'hello',

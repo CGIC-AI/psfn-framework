@@ -1,4 +1,5 @@
 import type { ApprovalStreamEntry, HubStreamState } from './stream/hub-stream.js';
+import type { ApprovalAttribution, ApprovalGrantMode } from './protocol/events.js';
 
 export type ApprovalCapabilityState = 'available' | 'unsupported';
 
@@ -14,6 +15,13 @@ export interface ApprovalRequestView {
   resolvedAt?: string;
   /** Whole seconds until expiry for pending requests; null when not applicable. */
   expiresInSeconds: number | null;
+  // Wire contract v2 (psfn-framework-13sk) optional fields.
+  attribution?: ApprovalAttribution;
+  action?: string;
+  scope?: string;
+  reason?: string;
+  grantMode?: ApprovalGrantMode;
+  sourceSystem?: string;
 }
 
 export interface ApprovalPanelState {
@@ -84,6 +92,12 @@ function toRequestView(entry: ApprovalStreamEntry, now: number): ApprovalRequest
     redactedContext: entry.redactedContext,
     resolvedAt: entry.resolvedAt,
     expiresInSeconds: null,
+    attribution: entry.attribution,
+    action: entry.action,
+    scope: entry.scope,
+    reason: entry.reason,
+    grantMode: entry.grantMode,
+    sourceSystem: entry.sourceSystem,
   };
 
   if (entry.status !== 'pending' || !entry.expiresAt) {

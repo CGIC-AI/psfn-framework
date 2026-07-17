@@ -1196,7 +1196,10 @@
       // Rebasing the just-saved editor before any reload keeps it clean: the
       // reload refreshes it from server state instead of preserving it as dirty.
       markRawEditorsCommitted([key as RawEditorKey]);
-      if (key === 'scheduler' || key === 'capabilities' || key === 'providers') {
+      // Every owner file whose unified-save builder spreads data.editors.*
+      // must reload here, or the next unified save writes the stale spread
+      // over the raw edit that was just saved to disk.
+      if (key === 'scheduler' || key === 'capabilities' || key === 'providers' || key === 'backup') {
         await reloadSettingsState();
       }
       flashRaw(key, true, `${label} saved`);

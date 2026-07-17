@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AgentTool, AgentToolResult } from '../../../boundary/pi-agent/index.js';
 import { runToolConformanceSweep } from './harness.js';
-import type { ToolProbeSpec } from './probe-registry.js';
+import type { ToolProbeSpec, ActionProbeSpec } from './probe-registry.js';
 import { ToolConformanceHarnessError } from './types.js';
 
 function okResult(text = 'ok'): AgentToolResult<Record<string, never>> {
@@ -243,7 +243,12 @@ describe('extended per-action coverage (bead 65rk.7)', () => {
         extended: true,
         resolveCanonicalActions: () => ['scrub'],
         resolveActionProbes: () => ({
-          scrub: { kind: 'scoped_mutation', args: { action: 'add' }, cleanup: { args: { action: 'remove' } } },
+          scrub: {
+            kind: 'scoped_mutation',
+            args: { action: 'add' },
+            cancellation: { kind: 'abort_signal' },
+            cleanup: { args: { action: 'remove' } },
+          },
         }),
       },
     );
@@ -266,6 +271,7 @@ describe('extended per-action coverage (bead 65rk.7)', () => {
           scrub: {
             kind: 'scoped_mutation',
             args: { action: 'add', channel_id: 'internal:tool-conformance' },
+            cancellation: { kind: 'abort_signal' },
             cleanup: { args: { action: 'remove', channel_id: 'internal:tool-conformance' } },
           },
         }),
@@ -291,7 +297,12 @@ describe('extended per-action coverage (bead 65rk.7)', () => {
         allowScopedMutations: true,
         resolveCanonicalActions: () => ['scrub'],
         resolveActionProbes: () => ({
-          scrub: { kind: 'scoped_mutation', args: { action: 'add' }, cleanup: { args: { action: 'remove' } } },
+          scrub: {
+            kind: 'scoped_mutation',
+            args: { action: 'add' },
+            cancellation: { kind: 'abort_signal' },
+            cleanup: { args: { action: 'remove' } },
+          },
         }),
       },
     );
@@ -309,6 +320,142 @@ describe('extended per-action coverage (bead 65rk.7)', () => {
         resolveActionProbes: () => ({ list: { kind: 'safe_read', args: { action: 'list' } } }),
       },
     )).rejects.toBeInstanceOf(ToolConformanceHarnessError);
+  });
+
+  // ── Finding 1: schema-authoritative per-action coverage ──
+  it('fails closed when a verb exists in the live schema but not in the classification (bead 65rk.7)', async () => {
+    // The tool-surface canonical list ('list' only) is STALE: the live schema
+    // also declares 'sneaky'. Coverage is driven by the union of the two, so the
+    // unclassified schema verb fails closed. Reverting to registry-only coverage
+    // (dropping the schema union) makes this reject NOT fire — the decisive proof.
+    const schemaWithSneaky = {
+      type: 'object',
+      properties: { action: { anyOf: [{ const: 'list' }, { const: 'sneaky' }] } },
+    };
+    await expect(sweep(
+      [tool('drifty', async () => okResult(), schemaWithSneaky)],
+      { drifty: { kind: 'schema_only' } },
+      {
+        extended: true,
+        resolveCanonicalActions: () => ['list'],
+        resolveActionProbes: () => ({ list: { kind: 'safe_read', args: { action: 'list' } } }),
+      },
+    )).rejects.toBeInstanceOf(ToolConformanceHarnessError);
+  });
+
+  it('probes a classified schema verb even when the canonical list omits it (bead 65rk.7)', async () => {
+    const schema = { type: 'object', properties: { action: { enum: ['list', 'snapshot'] } } };
+    const result = await sweep(
+      [tool('drifty', async () => okResult(), schema)],
+      { drifty: { kind: 'schema_only' } },
+      {
+        extended: true,
+        // Canonical list is stale (missing 'snapshot'); the live schema supplies it.
+        resolveCanonicalActions: () => ['list'],
+        resolveActionProbes: () => ({
+          list: { kind: 'safe_read', args: { action: 'list' } },
+          snapshot: { kind: 'schema_assert' },
+        }),
+      },
+    );
+    expect(result.results.find(r => r.action === 'snapshot')).toMatchObject({
+      probeKind: 'schema_assert',
+      ok: true,
+    });
+  });
+
+  // ── Finding 3: scoped_mutation cancellation contract + teardown discipline ──
+  it('rejects a scoped_mutation with no cancellation contract (registration integrity, bead 65rk.7)', async () => {
+    await expect(sweep(
+      [tool('mut', async () => okResult())],
+      { mut: { kind: 'schema_only' } },
+      {
+        extended: true,
+        resolveCanonicalActions: () => ['scrub'],
+        resolveActionProbes: () => ({
+          // Deliberately omit the now-required cancellation contract.
+          scrub: { kind: 'scoped_mutation', args: { action: 'add' }, cleanup: { args: { action: 'remove' } } } as unknown as ActionProbeSpec,
+        }),
+      },
+    )).rejects.toBeInstanceOf(ToolConformanceHarnessError);
+  });
+
+  it('awaits cancellation before teardown so a timed-out mutation cannot write after cleanup (bead 65rk.7)', async () => {
+    const events: string[] = [];
+    const t = tool('mut', async (_id, params, signal?: AbortSignal) => {
+      const action = (params as { action?: unknown }).action;
+      if (action === 'remove') { events.push('cleanup'); return okResult(); }
+      // A slow mutation that would "commit" late — but honors the AbortSignal.
+      return await new Promise<AgentToolResult<unknown>>((resolve, reject) => {
+        const commit = setTimeout(() => { events.push('mutation-commit-LATE'); resolve(okResult()); }, 200);
+        signal?.addEventListener('abort', () => {
+          clearTimeout(commit);
+          events.push('mutation-aborted');
+          reject(new Error('aborted'));
+        });
+      });
+    });
+    const result = await sweep(
+      [t],
+      { mut: { kind: 'schema_only' } },
+      {
+        extended: true,
+        allowScopedMutations: true,
+        perProbeTimeoutMs: 20,
+        resolveCanonicalActions: () => ['scrub'],
+        resolveActionProbes: () => ({
+          scrub: {
+            kind: 'scoped_mutation',
+            args: { action: 'add', channel_id: 'internal:tool-conformance' },
+            cancellation: { kind: 'abort_signal' },
+            cleanup: { args: { action: 'remove', channel_id: 'internal:tool-conformance' } },
+          },
+        }),
+      },
+    );
+    const probe = result.results.find(r => r.action === 'scrub');
+    expect(probe).toMatchObject({ probeKind: 'scoped_mutation', ok: false, classification: 'timeout' });
+    // The mutation was cancelled BEFORE teardown, and the late commit never fired.
+    expect(events).toEqual(['mutation-aborted', 'cleanup']);
+    // Wait past the original commit window: still no post-return residual write.
+    await new Promise(resolve => setTimeout(resolve, 260));
+    expect(events).toEqual(['mutation-aborted', 'cleanup']);
+  });
+
+  it('withholds teardown when the mutation cannot be cancelled (bead 65rk.7)', async () => {
+    const events: string[] = [];
+    const t = tool('mut', async (_id, params, _signal?: AbortSignal) => {
+      const action = (params as { action?: unknown }).action;
+      if (action === 'remove') { events.push('cleanup'); return okResult(); }
+      // Ignores the abort signal entirely — an uncancellable mutation.
+      return await new Promise<AgentToolResult<unknown>>((resolve) => {
+        setTimeout(() => { events.push('mutation-commit'); resolve(okResult()); }, 200);
+      });
+    });
+    const result = await sweep(
+      [t],
+      { mut: { kind: 'schema_only' } },
+      {
+        extended: true,
+        allowScopedMutations: true,
+        perProbeTimeoutMs: 20,
+        resolveCanonicalActions: () => ['scrub'],
+        resolveActionProbes: () => ({
+          scrub: {
+            kind: 'scoped_mutation',
+            args: { action: 'add' },
+            cancellation: { kind: 'abort_signal' },
+            cleanup: { args: { action: 'remove' } },
+          },
+        }),
+      },
+    );
+    const probe = result.results.find(r => r.action === 'scrub');
+    expect(probe).toMatchObject({ ok: false, classification: 'mutation_uncancellable' });
+    // Teardown withheld: cleanup must never race an in-flight mutation.
+    expect(events).not.toContain('cleanup');
+    // Drain the dangling mutation timer so it cannot leak into later tests.
+    await new Promise(resolve => setTimeout(resolve, 220));
   });
 
   it('extended mode falls back to the default per-tool probe for action-less tools', async () => {

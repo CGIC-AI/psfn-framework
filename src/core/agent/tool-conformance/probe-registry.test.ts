@@ -142,4 +142,18 @@ describe('tool conformance per-action registry coverage (bead 65rk.7)', () => {
       }
     }
   });
+
+  it('gives every scoped_mutation a cancellation contract (registration integrity, bead 65rk.7)', () => {
+    // The harness refuses to execute + tear down a scoped_mutation it cannot prove
+    // has terminated, so every registered entry must declare how it honors
+    // cancellation. No canonical action is scoped_mutation today; this fails closed
+    // the moment a certified verb adopts the kind without a cancellation contract.
+    for (const [toolName, actions] of Object.entries(TOOL_CONFORMANCE_ACTION_REGISTRY)) {
+      for (const [action, spec] of Object.entries(actions)) {
+        if (spec.kind !== 'scoped_mutation') continue;
+        expect(['abort_signal', 'transaction'], `${toolName}.${action} scoped_mutation missing cancellation contract`)
+          .toContain(spec.cancellation.kind);
+      }
+    }
+  });
 });

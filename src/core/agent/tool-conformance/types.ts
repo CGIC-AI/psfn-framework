@@ -49,6 +49,10 @@ export type ToolConformanceClassification =
   | 'missing_required_fields'
   // Extended-mode classifications.
   | 'cleanup_failed'
+  // A scoped_mutation handler that exceeded its timeout and did NOT honor
+  // cancellation (settle) within the grace window. Teardown is withheld so the
+  // sweep never runs cleanup against an in-flight mutation (bead 65rk.7 fix).
+  | 'mutation_uncancellable'
   | 'gate_inconsistent'
   | 'helper_missing';
 

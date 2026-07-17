@@ -151,14 +151,36 @@ export interface SchemaAssertActionProbe {
   kind: 'schema_assert';
 }
 
+/**
+ * How a scoped_mutation handler is guaranteed to STOP when the harness cancels a
+ * timed-out mutation. Registration of a scoped_mutation without a valid contract
+ * is rejected (the harness never runs teardown against a mutation it cannot prove
+ * has terminated). Bead 65rk.7 fix for the latent teardown race.
+ *   - abort_signal : the handler observes the AbortSignal threaded into
+ *     tool.execute and settles (resolve/reject) promptly once it is aborted.
+ *   - transaction  : the mutation runs inside a transaction the cleanup rolls
+ *     back atomically, so a timed-out mutation cannot durably commit.
+ */
+export type ScopedMutationCancellation =
+  | { kind: 'abort_signal' }
+  | { kind: 'transaction' };
+
 export interface ScopedMutationActionProbe {
   kind: 'scoped_mutation';
   /** Mutation arguments, scoped to the internal:tool-conformance channel. */
   args: Record<string, unknown>;
   /**
-   * Teardown that reverses the mutation. Executed after the mutation whenever the
-   * mutation itself ran (isolated-scope flag set). A failed teardown is a
-   * conformance failure (`cleanup_failed`) — fail closed, never leave residue.
+   * Cancellation contract the handler MUST honor. The harness aborts a timed-out
+   * mutation and waits for confirmed settlement before it runs teardown; a
+   * handler that neither settles on abort nor rolls back is a `mutation_uncancellable`
+   * failure and its cleanup is withheld.
+   */
+  cancellation: ScopedMutationCancellation;
+  /**
+   * Teardown that reverses the mutation. Executed after the mutation has
+   * TERMINATED (settled normally, or aborted-and-settled within grace). A failed
+   * teardown is a conformance failure (`cleanup_failed`) — fail closed, never
+   * leave residue.
    */
   cleanup: { args: Record<string, unknown> };
 }

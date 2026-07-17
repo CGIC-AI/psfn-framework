@@ -31,6 +31,48 @@ export const DEFAULT_PER_PROBE_TIMEOUT_MS = 5_000;
 const PROBE_CALL_ID = 'tool-conformance-probe';
 const MAX_ERROR_CHARS = 500;
 
+/**
+ * Extract the `action` string literals a tool actually declares in its live
+ * TypeBox parameter schema. Mirrors the canonical extractor in tool-catalog.ts
+ * (const / enum / anyOf / oneOf / allOf) but is kept local so the conformance
+ * harness carries no dependency on the catalog module. Used to make per-action
+ * coverage SCHEMA-authoritative: a verb added to a tool's schema without a
+ * conformance classification is probed anyway and fails closed (bead 65rk.7 fix
+ * for finding 1 — coverage was previously checked only against the hand-kept
+ * tool-surface action list, never the live schema).
+ */
+function extractSchemaStringLiterals(schema: unknown): string[] {
+  if (!isRecord(schema)) return [];
+  const literals: string[] = [];
+  if (typeof schema.const === 'string') literals.push(schema.const);
+  if (Array.isArray(schema.enum)) {
+    for (const value of schema.enum) {
+      if (typeof value === 'string') literals.push(value);
+    }
+  }
+  for (const key of ['anyOf', 'oneOf', 'allOf']) {
+    const entries = (schema as Record<string, unknown>)[key];
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) literals.push(...extractSchemaStringLiterals(entry));
+  }
+  return literals;
+}
+
+function extractSchemaActionLiterals(parameters: unknown): string[] {
+  if (!isRecord(parameters)) return [];
+  const literals: string[] = [];
+  const properties = parameters.properties;
+  if (isRecord(properties)) {
+    literals.push(...extractSchemaStringLiterals(properties.action));
+  }
+  for (const key of ['anyOf', 'oneOf', 'allOf']) {
+    const entries = (parameters as Record<string, unknown>)[key];
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) literals.push(...extractSchemaActionLiterals(entry));
+  }
+  return [...new Set(literals.map(value => value.trim()).filter(Boolean))];
+}
+
 export interface ToolConformanceSweepInput {
   /** All live registered direct tools (core + extended). */
   tools: readonly AgentTool<any>[];
@@ -96,6 +138,59 @@ async function executeWithTimeout(
     return { kind: 'timeout' };
   })();
   return Promise.race([invocation, timeout]);
+}
+
+/**
+ * Execute a MUTATION handler under a cancellation contract (bead 65rk.7 fix for
+ * finding 3 — the previous path raced the handler with no AbortSignal and ran
+ * teardown the instant the race returned, so a timed-out mutation could still
+ * commit AFTER cleanup and leave durable residue).
+ *
+ * An AbortSignal is threaded into the handler. If the handler settles before the
+ * timeout, its outcome is returned with `terminated: true`. If the timeout wins,
+ * the signal is aborted and the harness AWAITS confirmed settlement (bounded by a
+ * grace window). A handler that settles within grace honored cancellation
+ * (`terminated: true`); one that does not is uncancellable (`terminated: false`)
+ * and the caller MUST withhold teardown. Cleanup therefore never races an
+ * in-flight mutation.
+ */
+async function executeMutationWithCancellation(
+  tool: AgentTool<any>,
+  args: Record<string, unknown>,
+  timeoutMs: number,
+  graceMs: number,
+): Promise<{ outcome: ExecuteOutcome; terminated: boolean }> {
+  const controller = new AbortController();
+  // Never rejects — a thrown/rejected handler is captured as an 'error' outcome,
+  // so awaiting `settlement` below can only resolve, never dangle as unhandled.
+  const settlement: Promise<ExecuteOutcome> = (async (): Promise<ExecuteOutcome> => {
+    try {
+      const value = (await tool.execute(PROBE_CALL_ID, args, controller.signal)) as AgentToolResult<unknown>;
+      return { kind: 'value', value };
+    } catch (error) {
+      return { kind: 'error', error };
+    }
+  })();
+
+  const timeout = (async (): Promise<ExecuteOutcome> => {
+    await timeoutDelay(timeoutMs);
+    return { kind: 'timeout' };
+  })();
+
+  const raced = await Promise.race([settlement, timeout]);
+  if (raced.kind !== 'timeout') {
+    // Handler settled within the timeout; it has already terminated.
+    return { outcome: raced, terminated: true };
+  }
+
+  // Timed out: demand cancellation and wait for confirmed termination.
+  controller.abort();
+  const graceExpired = Symbol('grace-expired');
+  const settledMarker = await Promise.race([
+    settlement.then(() => 'settled' as const),
+    timeoutDelay(Math.max(1, graceMs)).then(() => graceExpired),
+  ]);
+  return { outcome: { kind: 'timeout' }, terminated: settledMarker === 'settled' };
 }
 
 function toErrorText(error: unknown): string {
@@ -261,13 +356,45 @@ async function runScopedMutationActionProbe(
   allowScopedMutations: boolean,
 ): Promise<ToolConformanceProbeResult> {
   const base = { toolName: tool.name, probeKind: 'scoped_mutation' as const, action };
+
+  // Registration integrity: a scoped_mutation without a valid cancellation
+  // contract is refused before anything runs. The harness cannot prove such a
+  // mutation has terminated, so it must never be allowed to execute + teardown.
+  // Read the kind loosely: the static type forbids a bad value, but a registry
+  // entry can be mis-authored at runtime and MUST still fail closed here.
+  const cancellationKind = (spec.cancellation as { kind?: unknown } | undefined)?.kind;
+  if (cancellationKind !== 'abort_signal' && cancellationKind !== 'transaction') {
+    throw new ToolConformanceHarnessError(
+      `extended sweep: tool "${tool.name}" action "${action}" is a scoped_mutation with no valid cancellation contract`,
+    );
+  }
+
   if (!allowScopedMutations) {
     // Default (unflagged) extended run: classified, execution withheld.
     return { ...base, ok: true, skipped: true, durationMs: 0 };
   }
+
   const started = monotonicNow();
-  const mutation = await executeWithTimeout(tool, spec.args, timeoutMs);
-  // Always attempt teardown so a partial mutation cannot leave residue.
+  const { outcome: mutation, terminated } = await executeMutationWithCancellation(
+    tool, spec.args, timeoutMs, timeoutMs,
+  );
+
+  if (mutation.kind === 'timeout' && !terminated) {
+    // The mutation exceeded its budget and did NOT honor cancellation within the
+    // grace window — it may still be in flight. Withhold teardown so cleanup can
+    // never race a live mutation, and fail closed.
+    const durationMs = Math.max(0, monotonicNow() - started);
+    return {
+      ...base,
+      ok: false,
+      durationMs,
+      classification: 'mutation_uncancellable',
+      error: `mutation exceeded ${timeoutMs}ms and did not honor cancellation within ${timeoutMs}ms; teardown withheld to avoid racing an in-flight mutation`,
+    };
+  }
+
+  // The mutation has TERMINATED (settled normally, or aborted-and-settled). Only
+  // now is teardown safe — it can never commit after a still-running mutation.
   const cleanup = await executeWithTimeout(tool, spec.cleanup.args, timeoutMs);
   const durationMs = Math.max(0, monotonicNow() - started);
 
@@ -301,7 +428,22 @@ async function runExtendedActionProbes(
   resolveCanonicalActions: (toolName: string) => readonly string[] | undefined,
   resolveActionProbes: (toolName: string) => Readonly<Record<string, ActionProbeSpec>> | undefined,
 ): Promise<ToolConformanceProbeResult[]> {
-  const actions = resolveCanonicalActions(tool.name) ?? [];
+  // Coverage is SCHEMA-authoritative: the action set is the union of the
+  // hand-maintained canonical list and the literals the tool ACTUALLY declares
+  // in its live parameter schema. A verb added to the schema (and handler)
+  // without a conformance classification therefore still gets probed and fails
+  // closed below, instead of silently escaping because the tool-surface list was
+  // not updated (bead 65rk.7 fix for finding 1). Union (never subset) so a schema
+  // whose action shape the extractor cannot parse never drops existing coverage.
+  const registryActions = resolveCanonicalActions(tool.name) ?? [];
+  const schemaActions = extractSchemaActionLiterals(tool.parameters);
+  const seen = new Set<string>();
+  const actions: string[] = [];
+  for (const action of [...registryActions, ...schemaActions]) {
+    if (seen.has(action)) continue;
+    seen.add(action);
+    actions.push(action);
+  }
   if (actions.length === 0) return [];
   const actionProbes = resolveActionProbes(tool.name);
   const results: ToolConformanceProbeResult[] = [];

@@ -54,6 +54,14 @@ export interface LLMProviderStreamOptions {
    * Absent for the interactive chat turn, whose purpose is 'chat'.
    */
   workSpec?: LLMWorkSpec;
+  /**
+   * an52.3: server-injected authenticated companion identity for per-companion
+   * eligibility. Set by the gateway RPC layer from the connection's
+   * authenticated companion — never from caller-supplied params or correlation
+   * (correlation.companionId is agent-controlled and stripped for
+   * companion_private telemetry). Absent for embedded/agent-process clients.
+   */
+  eligibilityCompanionId?: string;
 }
 
 export interface LLMProviderCompletionOptions {
@@ -68,6 +76,8 @@ export interface LLMProviderCompletionOptions {
    * (enforced by the entry's required param and a lint/AST test).
    */
   workSpec?: LLMWorkSpec;
+  /** an52.3: see LLMProviderStreamOptions.eligibilityCompanionId. */
+  eligibilityCompanionId?: string;
 }
 
 export function createLLMProviderPort(provider: LLMProviderPort): LLMProviderPort {

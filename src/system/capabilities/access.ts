@@ -7,4 +7,9 @@ export interface CapabilityAccess {
   has(token: CapabilityToken): boolean;
 }
 
-export type CapabilityAccessProvider = () => CapabilityAccess;
+/**
+ * Resolves capability access, optionally for a specific authenticated companion
+ * (an52.3). A single-companion runtime ignores the argument; a multi-companion
+ * gateway resolves the connecting companion's own capability tier.
+ */
+export type CapabilityAccessProvider = (companionId?: string) => CapabilityAccess;

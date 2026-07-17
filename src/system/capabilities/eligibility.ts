@@ -81,9 +81,10 @@ export class EligibilityGate {
   evaluate(
     operation: EligibilityOperation,
     requirements?: EligibilityRequirements,
+    companionId?: string,
   ): EligibilityDecision {
     const decision = evaluateEligibilityDecision(
-      this.getAccess(),
+      this.getAccess(companionId),
       operation,
       requirements,
     );
@@ -94,8 +95,9 @@ export class EligibilityGate {
   requireAllowed(
     operation: EligibilityOperation,
     requirements?: EligibilityRequirements,
+    companionId?: string,
   ): EligibilityDecision {
-    const decision = this.evaluate(operation, requirements);
+    const decision = this.evaluate(operation, requirements, companionId);
     if (!decision.allowed) {
       throw new EligibilityDeniedError(decision);
     }

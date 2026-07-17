@@ -169,6 +169,13 @@ export interface LLMCompletionOptions {
    * callers stay unchanged.
    */
   workSpec?: LLMWorkSpec;
+  /**
+   * an52.3: server-injected authenticated companion identity for per-companion
+   * eligibility (gateway RPC layer only). Never sourced from caller params or
+   * correlation — correlation.companionId is agent-controlled and stripped for
+   * companion_private telemetry.
+   */
+  eligibilityCompanionId?: string;
 }
 
 export interface LLMClientRuntimeOptions {
@@ -1575,6 +1582,9 @@ export class LLMClient {
           modelHint,
           correlation,
           estimatedInputTokens,
+          ...(options?.eligibilityCompanionId
+            ? { eligibilityCompanionId: options.eligibilityCompanionId }
+            : {}),
           ...(streamWorkSpec?.maxOutputTokens !== undefined
             ? { outputTokenCap: streamWorkSpec.maxOutputTokens }
             : {}),
@@ -1900,6 +1910,9 @@ export class LLMClient {
           correlation,
           estimatedInputTokens,
           signal: options.signal,
+          ...(options.eligibilityCompanionId
+            ? { eligibilityCompanionId: options.eligibilityCompanionId }
+            : {}),
           ...(options.workSpec?.maxOutputTokens !== undefined
             ? { outputTokenCap: options.workSpec.maxOutputTokens }
             : {}),
@@ -2033,13 +2046,20 @@ export class LLMClient {
       outputTokenCap?: number;
       preemptionProtected?: boolean;
       onCandidateSelected?: (candidate: RoutingCandidate) => void;
+      eligibilityCompanionId?: string;
     } = {},
   ): Promise<{ result: T; candidate: RoutingCandidate; attempts: number }> {
     if (this.eligibilityGate) {
+      // an52.3: gate the purpose against the *authenticated* companion's tier,
+      // keyed on the server-injected eligibilityCompanionId — never on
+      // correlation.companionId, which is agent-controlled, omittable, and
+      // stripped for companion_private telemetry. A multi-companion gateway
+      // pairs this with a strict access provider that throws when the identity
+      // is absent (fail closed); embedded clients use companion-less gates.
       const decision = this.eligibilityGate.evaluate({
         kind: 'llm.purpose',
         purpose: this.toEligibilityPurpose(purpose),
-      });
+      }, undefined, options.eligibilityCompanionId);
       this.onEligibilityDecision?.(decision);
       if (!decision.allowed) {
         log.warn('LLM purpose denied by eligibility gate', {

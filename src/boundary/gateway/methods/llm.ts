@@ -101,6 +101,22 @@ export async function exposeModelCallGateBlocks<T>(operation: () => Promise<T>):
  * `preemptionProtected` against the welfare-grant authority (the background-work
  * store) and STRIP it on any failure before the gate can honor it.
  */
+/**
+ * Provider call options for the serving LLM client: the d8vq.2 work spec plus
+ * the an52.3 server-injected eligibility identity. Returns undefined when both
+ * are absent so legacy no-options calls keep their exact provider call shape.
+ */
+function buildProviderCallOptions(
+  workSpec: LLMWorkSpecWireParams | undefined,
+  eligibilityCompanionId: string | undefined,
+): { workSpec?: LLMWorkSpecWireParams; eligibilityCompanionId?: string } | undefined {
+  if (!workSpec && !eligibilityCompanionId) return undefined;
+  return {
+    ...(workSpec ? { workSpec } : {}),
+    ...(eligibilityCompanionId ? { eligibilityCompanionId } : {}),
+  };
+}
+
 export async function resolveRpcWorkSpec(
   raw: unknown,
   runtime: GatewayMethodRuntime,
@@ -192,6 +208,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'llm.chat',
     handler: async (params: LLMChatParams, runtime) => {
+      const eligibilityCompanionId = runtime.authenticatedCompanionId();
       params = await authorizeIcpCorrelation(params, runtime);
       const workSpec = await resolveRpcWorkSpec(params.workSpec, runtime);
       const messages = resolveRetainedImageReferences(params, runtime);
@@ -236,11 +253,14 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
               } satisfies LLMFirstOutputNotification);
             },
           } : undefined,
-          // d8vq.2: forward the parsed work spec so the
-          // gateway-side LLMClient enforces the accountability guard + lane
-          // reconciliation for an autonomous streamed call. undefined when
-          // absent so the interactive chat path is unchanged.
-          workSpec ? { workSpec } : undefined,
+          // d8vq.2: forward the parsed work spec so the gateway-side LLMClient
+          // enforces the accountability guard + lane reconciliation for an
+          // autonomous streamed call. an52.3: eligibility identity comes from
+          // the connection's authenticated companion — never from
+          // agent-supplied params or correlation; absent both fields the
+          // legacy no-options call shape is preserved, and the multi-companion
+          // gateway's strict eligibility gate fails closed on the missing id.
+          buildProviderCallOptions(workSpec, eligibilityCompanionId),
         )),
       );
       const response = applyGatewayCapturedProviderCost(
@@ -283,6 +303,7 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
   {
     name: 'llm.complete',
     handler: async (params: LLMCompleteParams, runtime) => {
+      const eligibilityCompanionId = runtime.authenticatedCompanionId();
       params = await authorizeIcpCorrelation(params, runtime);
       const workSpec = await resolveRpcWorkSpec(params.workSpec, runtime);
       const messages = resolveRetainedImageReferences(params, runtime);
@@ -316,11 +337,9 @@ const llmDescriptors: Array<AuditedMethodDescriptor<any, unknown>> = [
             correlation,
           },
           params.purpose,
-          // d8vq.2: forward the parsed work spec so the
-          // gateway-side LLMClient enforces the fail-closed accountability guard
-          // + lane reconciliation for an autonomous completion. undefined when
-          // absent so legacy non-work-spec calls are unchanged.
-          workSpec ? { workSpec } : undefined,
+          // d8vq.2 work spec + an52.3 server-injected eligibility identity;
+          // see llm.chat above.
+          buildProviderCallOptions(workSpec, eligibilityCompanionId),
         )),
       );
       const response = applyGatewayCapturedProviderCost(

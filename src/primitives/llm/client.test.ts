@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { EventEmitter } from 'node:events';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -19,6 +19,9 @@ import {
 import { FallbackRunner } from './fallback.js';
 import { ModelCallPreemptedError } from './model-call-gate.js';
 import { createEligibilityGate, EligibilityDeniedError } from '../../system/capabilities/eligibility.js';
+import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
+import { GatewayCapabilityTierResolver } from '../../boundary/gateway/capability-tier-resolver.js';
+import type { ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
 
 const mocks = vi.hoisted(() => ({
   getModel: vi.fn(),
@@ -2692,6 +2695,126 @@ describe('LLMClient eligibility gate', () => {
 
     expect(mocks.completeSimple).not.toHaveBeenCalled();
   });
+
+  // an52.3 remediation: the gateway multi-companion wiring pairs the LLM
+  // client with a STRICT per-companion access provider. Identity comes only
+  // from the server-injected eligibilityCompanionId — never from
+  // agent-controlled correlation — and an absent identity fails closed.
+  function makeStrictFleetEligibilityGate(input: { companionBTierFile: boolean }) {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-llm-strict-tier-'));
+    tempDirs.push(root);
+    const baseDir = join(root, 'gateway-root');
+    const dirA = join(root, 'companion-a');
+    const dirB = join(root, 'companion-b');
+    for (const dir of [baseDir, dirA, dirB]) {
+      mkdirSync(dir, { recursive: true });
+    }
+    // The gateway-hydrated root is autonomous: any regression that falls back
+    // to the root tier would ALLOW the calls these tests expect to be denied.
+    writeFileSync(join(baseDir, 'capability-tier.json'), JSON.stringify({ tier: 'autonomous', customTokens: [] }));
+    writeFileSync(join(dirA, 'capability-tier.json'), JSON.stringify({ tier: 'autonomous', customTokens: [] }));
+    if (input.companionBTierFile) {
+      // custom tier with no tokens: lacks memory.write, so the token-gated
+      // background/memory/import purposes must be denied for companion-b.
+      writeFileSync(join(dirB, 'capability-tier.json'), JSON.stringify({ tier: 'custom', customTokens: [] }));
+    }
+    const resolver = new GatewayCapabilityTierResolver({
+      baseRuntime: new CapabilityRuntime({ dataDir: baseDir }),
+      multiCompanion: true,
+      companionFleet: {
+        persistenceRoot: root,
+        workspacesRoot: join(root, 'workspaces'),
+        sharedWorkspacePath: join(root, 'workspaces', 'shared'),
+        companions: [
+          {
+            companionId: 'companion-a',
+            companionDataDir: dirA,
+            characterCardPath: join(dirA, 'companion.json'),
+            postgresSchema: 'companion_a',
+            personalWorkspacePath: join(root, 'workspaces', 'companion-a'),
+          },
+          {
+            companionId: 'companion-b',
+            companionDataDir: dirB,
+            characterCardPath: join(dirB, 'companion.json'),
+            postgresSchema: 'companion_b',
+            personalWorkspacePath: join(root, 'workspaces', 'companion-b'),
+          },
+        ],
+      } as unknown as ResolvedCompanionsFleetConfig,
+    });
+    return createEligibilityGate((companionId) => resolver.resolveAccessStrict(companionId));
+  }
+
+  const backgroundContext = {
+    systemPrompt: 'System',
+    messages: [{ role: 'user' as const, content: 'Process memories' }],
+  };
+
+  it('fails closed when the multi-companion eligibility identity is absent', async () => {
+    const client = new LLMClient(makeConfig(), {
+      eligibilityGate: makeStrictFleetEligibilityGate({ companionBTierFile: true }),
+    });
+
+    await expect(client.complete(backgroundContext, 'background', { disableRetry: true }))
+      .rejects.toThrow(/authenticated companion identity/);
+
+    expect(mocks.completeSimple).not.toHaveBeenCalled();
+  });
+
+  it('denies a token-gated purpose on the companion\'s own tier, ignoring agent-controlled correlation', async () => {
+    const client = new LLMClient(makeConfig(), {
+      eligibilityGate: makeStrictFleetEligibilityGate({ companionBTierFile: true }),
+    });
+
+    // Correlation carries a companionId claim AND companion_private telemetry
+    // (which strips identity from correlation); neither may influence the
+    // decision — only the server-injected eligibilityCompanionId does.
+    await expect(client.complete(backgroundContext, 'background', {
+      disableRetry: true,
+      eligibilityCompanionId: 'companion-b',
+      correlation: {
+        companionId: 'companion-a',
+        telemetryVisibility: 'companion_private',
+      },
+    })).rejects.toBeInstanceOf(EligibilityDeniedError);
+
+    expect(mocks.completeSimple).not.toHaveBeenCalled();
+  });
+
+  it('fails closed (not root fallback) when the companion tier file is missing', async () => {
+    const client = new LLMClient(makeConfig(), {
+      eligibilityGate: makeStrictFleetEligibilityGate({ companionBTierFile: false }),
+    });
+
+    await expect(client.complete(backgroundContext, 'background', {
+      disableRetry: true,
+      eligibilityCompanionId: 'companion-b',
+    })).rejects.toThrow(/capability-tier/);
+
+    expect(mocks.completeSimple).not.toHaveBeenCalled();
+  });
+
+  it('allows the token-gated purpose for a companion whose own tier grants it', async () => {
+    const client = new LLMClient(makeConfig(), {
+      litellmBaseUrl: 'http://litellm.test/v1',
+      eligibilityGate: makeStrictFleetEligibilityGate({ companionBTierFile: true }),
+    });
+    mocks.completeSimple.mockResolvedValue({
+      content: [{ type: 'text', text: 'ok' }],
+      model: 'openrouter:background/model',
+      usage: { input: 3, output: 2 },
+      stopReason: 'stop',
+    });
+
+    const response = await client.complete(backgroundContext, 'background', {
+      disableRetry: true,
+      eligibilityCompanionId: 'companion-a',
+    });
+
+    expect(response.content).toBe('ok');
+    expect(mocks.completeSimple).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('LLMClient correlation metadata', () => {
@@ -3268,6 +3391,7 @@ describe('LLMClient model budget gates and usage metering', () => {
       sendNtfy: async () => ({ status: 'debounced', topic: 'test' }),
       getRuntimeHealth: () => ({ checkedAt: 0, services: [] }),
       nextStreamRequestId: () => 'gateway-stream-1',
+      authenticatedCompanionId: () => undefined,
       audited: (_method, handler) => handler,
     };
     registerLLMMethods(runtime);

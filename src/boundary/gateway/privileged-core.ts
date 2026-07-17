@@ -5,6 +5,7 @@ import {
   type EligibilityGate,
 } from '../../system/capabilities/eligibility.js';
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
+import { GatewayCapabilityTierResolver } from './capability-tier-resolver.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { GitOps } from '../integrations/git/ops.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -88,17 +89,36 @@ export async function buildGatewayPrivilegedCore(
     // data dir so each fleet companion holds its own maturation tier.
     dataDir: input.startupHydration.companionDataDir,
   });
+  // an52.3: in a one-gateway/N-companion fleet every tier-gated decision must
+  // resolve against the *authenticated* companion's own capability-tier.json,
+  // not the single gateway-hydrated root. The resolver owns a CapabilityRuntime
+  // per fleet companion; single-companion mode keeps using the base runtime.
+  const capabilityTierResolver = new GatewayCapabilityTierResolver({
+    baseRuntime: capabilityRuntime,
+    multiCompanion: input.bootstrap.server.multiCompanion.enabled,
+    ...(input.config.companionFleet ? { companionFleet: input.config.companionFleet } : {}),
+  });
+  const eligibilityDecisionReporter = input.onEligibilityDecision
+    ? (decision: EligibilityDecision) => input.onEligibilityDecision?.(eventBus, decision)
+    : undefined;
   const eligibilityGate = createEligibilityGate(
-    () => capabilityRuntime,
-    input.onEligibilityDecision
-      ? (decision) => input.onEligibilityDecision?.(eventBus, decision)
-      : undefined,
+    (companionId) => capabilityTierResolver.resolveAccess(companionId),
+    eligibilityDecisionReporter,
+  );
+  // an52.3 remediation: the gateway LLM client serves only authenticated agent
+  // RPCs (methods/llm.ts injects the connection's companion id), so its gate is
+  // strict — in multi-companion mode an absent identity throws instead of
+  // falling back to the gateway root's tier. The lenient gate above remains for
+  // gateway-global plugin activation (channels/voice), which has no companion.
+  const llmEligibilityGate = createEligibilityGate(
+    (companionId) => capabilityTierResolver.resolveAccessStrict(companionId),
+    eligibilityDecisionReporter,
   );
   const privilegedServices = createGatewayPrivilegedServiceRegistry({
     config: input.config,
     providerEnv: input.bootstrap.providerEnv,
     llmOptions: {
-      eligibilityGate,
+      eligibilityGate: llmEligibilityGate,
       onBudgetBlocked: (event) => {
         eventBus.emit('model.budget.blocked', event).catch((error) => {
           input.logger.error('Failed to emit model budget blocked telemetry', {
@@ -212,7 +232,7 @@ export async function buildGatewayPrivilegedCore(
       },
       ntfy: input.bootstrap.server.ntfy,
       confirmation: input.bootstrap.server.confirmation,
-      capabilityTierProvider: () => capabilityRuntime.getTier(),
+      capabilityTierProvider: (companionId) => capabilityTierResolver.resolveTier(companionId),
       auditStore,
       ...(kubeSelfManagement ? { kubeSelfManagement } : {}),
       sessionHmacKeyring: input.bootstrap.server.sessionHmacKeyring,

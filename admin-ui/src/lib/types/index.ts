@@ -679,6 +679,7 @@ export interface Contact {
   discordUserId?: string;
   trustLevel: string;
   relationshipType: string;
+  isMachineIntelligence?: boolean;
   channelIdentities?: ContactChannelIdentity[];
   channels?: ContactChannelLink[];
   conversationChannels?: Array<{

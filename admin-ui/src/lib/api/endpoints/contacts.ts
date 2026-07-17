@@ -11,6 +11,7 @@ export interface ContactUpdatePayload {
   trustLevel?: string;
   relationshipType?: string;
   notes?: string;
+  isMachineIntelligence?: boolean;
   channelPrivacy?: Array<{
     channel: string;
     userId?: string;

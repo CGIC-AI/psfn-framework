@@ -218,22 +218,51 @@ function extractResultText(value: AgentToolResult<unknown>): string {
   return joined.length > MAX_ERROR_CHARS ? `${joined.slice(0, MAX_ERROR_CHARS)}…` : joined;
 }
 
-/** Validate the tool exposes a well-formed TypeBox-style object parameter schema. */
-function validateSchema(tool: AgentTool<any>): { ok: true } | { ok: false; error: string } {
-  const params = tool.parameters as unknown;
-  if (!isRecord(params)) {
-    return { ok: false, error: 'parameters schema is not an object' };
+/**
+ * Recursively decide whether a schema node is a well-formed object schema OR a
+ * union of such (top-level `Type.Union([...])` emits `{anyOf:[...]}` with no
+ * top-level `type:"object"` and no top-level `properties` — the branches carry
+ * those). Mirrors the anyOf/oneOf/allOf walk already in extractSchemaActionLiterals
+ * (bead an52.4). Returns an error string on a genuinely malformed node, or null on
+ * a valid one. Fail-closed: a node that is none of object / has-properties / a
+ * non-empty union-of-valid-branches is rejected.
+ */
+function validateSchemaNode(node: unknown): string | null {
+  if (!isRecord(node)) {
+    return 'parameters schema is not an object';
   }
-  const hasObjectType = params.type === 'object';
-  const hasProperties = isRecord(params.properties);
+
+  // A top-level union (or nested union of unions) is valid when every branch is
+  // itself a valid object-or-union schema.
+  for (const key of ['anyOf', 'oneOf', 'allOf']) {
+    const branches = (node as Record<string, unknown>)[key];
+    if (branches === undefined) continue;
+    if (!Array.isArray(branches) || branches.length === 0) {
+      return `parameters schema ${key} is not a non-empty array`;
+    }
+    for (const branch of branches) {
+      const branchError = validateSchemaNode(branch);
+      if (branchError) return branchError;
+    }
+    return null;
+  }
+
+  const hasObjectType = node.type === 'object';
+  const hasProperties = isRecord(node.properties);
   if (!hasObjectType && !hasProperties) {
-    return { ok: false, error: 'parameters schema declares neither type:"object" nor properties' };
+    return 'parameters schema declares neither type:"object" nor properties nor a union (anyOf/oneOf/allOf) of such';
   }
-  const required = (params as { required?: unknown }).required;
+  const required = (node as { required?: unknown }).required;
   if (required !== undefined && !(Array.isArray(required) && required.every(v => typeof v === 'string'))) {
-    return { ok: false, error: 'parameters.required is not a string array' };
+    return 'parameters.required is not a string array';
   }
-  return { ok: true };
+  return null;
+}
+
+/** Validate the tool exposes a well-formed TypeBox object (or union-of-objects) parameter schema. */
+function validateSchema(tool: AgentTool<any>): { ok: true } | { ok: false; error: string } {
+  const error = validateSchemaNode(tool.parameters as unknown);
+  return error === null ? { ok: true } : { ok: false, error };
 }
 
 /**

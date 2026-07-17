@@ -710,8 +710,24 @@ export function parseBackupSettings(json: string): Pick<
   }
 }
 
-export function buildBackupSettingsPayload(state: SettingsSimpleFormState): Record<string, unknown> {
+export function buildBackupSettingsPayload(
+  current: Record<string, unknown>,
+  state: Pick<
+    SettingsSimpleFormState,
+    | 'backupIntervalHours'
+    | 'backupMaxRotating'
+    | 'backupMaxWeekly'
+    | 'backupMaxMonthly'
+    | 'backupMirrorDir'
+    | 'backupVerifyRestore'
+  >,
+): Record<string, unknown> {
+  // Overlay only the curated fields onto the loaded backup config. Spreading
+  // `current` preserves owner-file fields the curated form does not surface
+  // (encryption, groupMode, maxDailyBackups); dropping them makes the payload
+  // fail validateBackupConfig ("encryption must be an object") on save.
   return {
+    ...current,
     intervalHours: state.backupIntervalHours,
     maxRotatingBackups: state.backupMaxRotating,
     maxWeeklyBackups: state.backupMaxWeekly,

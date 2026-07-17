@@ -518,6 +518,10 @@
     return (data?.editors?.capabilities as CapabilitiesEditorConfig | undefined) ?? {};
   }
 
+  function getBackupEditorConfig(): Record<string, unknown> {
+    return (data?.editors?.backup as Record<string, unknown> | undefined) ?? {};
+  }
+
   function fieldErrors(field: string): string[] {
     const nestedPrefix = `${field}.`;
     const collected = new Set<string>();
@@ -887,7 +891,7 @@
   }
 
   function buildBackupPayload(): Record<string, unknown> {
-    return buildBackupSettingsPayload(currentSimpleFormState());
+    return buildBackupSettingsPayload(getBackupEditorConfig(), currentSimpleFormState());
   }
 
   function buildCapabilitiesPayload(): Record<string, unknown> {

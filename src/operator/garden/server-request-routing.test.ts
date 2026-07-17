@@ -192,4 +192,28 @@ describe('handleAdminRequest', () => {
       expect(sendNotFound).toHaveBeenCalledWith(path, res);
     }
   });
+
+  it('strips browser-authored capability assertion headers before auth and routing', () => {
+    const req = makeRequest('GET', '/api/admin/dashboard');
+    req.headers['x-psfn-request-capability'] = 'forged-parent';
+    req.headers['x-psfn-parent-capability'] = 'forged-child';
+    const checkAuth = vi.fn(() => true);
+    const route = vi.fn(() => true);
+
+    handleAdminRequest(req, makeResponse(), {
+      token: 'secret-token',
+      checkAuth,
+      isGardenUiEnabled: vi.fn(() => true),
+      serveGardenBuildAsset: vi.fn(),
+      serveGardenPage: vi.fn(),
+      route,
+      sendNotFound: vi.fn(),
+      onRequestError: vi.fn(),
+    });
+
+    expect(req.headers['x-psfn-request-capability']).toBeUndefined();
+    expect(req.headers['x-psfn-parent-capability']).toBeUndefined();
+    expect(checkAuth).toHaveBeenCalled();
+    expect(route).toHaveBeenCalled();
+  });
 });

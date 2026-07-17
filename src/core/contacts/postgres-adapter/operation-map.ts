@@ -21,11 +21,21 @@ import type {
   SocialGraphEntityRow,
   SocialRelationshipEdgeRow,
 } from './rows.js';
+import type { ContactLifecycleGatewayPort } from '../contact-lifecycle-gateway-port.js';
+import type { ContactAuthorityLifecycleRequest } from '../../../shared/contracts/contact-authority-lifecycle.js';
+import type { ContactLifecyclePrepareOutcome } from '../../../shared/contracts/contact-lifecycle-ledger.js';
+import type { ContactIdentityLinkVerificationResult } from '../types.js';
+import type { ContactLifecycleFaultStage } from './options.js';
 
 export interface PostgresContactOperationContext extends ContactStorePort {
   readonly pool: Pool;
   readonly primaryUserId?: string;
   readonly exportDir: string | null;
+  readonly contactLifecycleGateway: ContactLifecycleGatewayPort | null;
+  readonly contactLifecycleFaultInjection: ((
+    stage: ContactLifecycleFaultStage,
+    request: ContactAuthorityLifecycleRequest,
+  ) => Promise<void> | void) | null;
   tableExists(tableName: string): Promise<boolean>;
   loadContactRow(id: string): Promise<ContactRow | undefined>;
   loadContactById(id: string): Promise<Contact | undefined>;
@@ -82,6 +92,46 @@ export interface PostgresContactOperationContext extends ContactStorePort {
     failureReason?: string,
     verifiedAt?: string,
   ): Promise<ContactIdentityLinkVerification | undefined>;
+  mergeContactsDirect(
+    sourceContactId: string,
+    targetContactId: string,
+    lifecycleIntentId?: string,
+    recoveryLeaseOwner?: string,
+  ): Promise<boolean>;
+  deleteContactDirect(
+    id: string,
+    lifecycleIntentId?: string,
+    recoveryLeaseOwner?: string,
+  ): Promise<boolean>;
+  unlinkChannelIdentityDirect(
+    contactId: string,
+    channel: string,
+    channelUserId: string,
+    actor?: string,
+    lifecycleIntentId?: string,
+    recoveryLeaseOwner?: string,
+  ): Promise<boolean>;
+  commitVerifiedDiscordIdentity(
+    verificationId: string,
+    lifecycleIntentId: string,
+    recoveryLeaseOwner?: string,
+  ): Promise<number>;
+  commitReapprovedDiscordIdentity(
+    lifecycleIntentId: string,
+    recoveryLeaseOwner?: string,
+  ): Promise<number>;
+  verifyDiscordIdentityLifecycle(
+    row: ContactIdentityVerificationRow,
+    privacyLevel?: ChannelPrivacyLevel,
+  ): Promise<ContactIdentityLinkVerificationResult>;
+  suspendVerifiedDiscordIdentityConflict(
+    contactId: string,
+    providerSubjectId: string,
+    discriminator: string,
+  ): Promise<void>;
+  resumeContactLifecycleIntent(
+    request: Extract<ContactAuthorityLifecycleRequest, { phase: 'prepare' }>,
+  ): Promise<ContactLifecyclePrepareOutcome>;
 }
 
 export type PostgresContactOperationMap =

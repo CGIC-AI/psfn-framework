@@ -151,6 +151,7 @@ export type {
   AdminTurnRetrievalTelemetry,
   AdminTurnStageTelemetry,
   AdminSettingsData,
+  EffectiveFleetAuthOwnerProjection,
   ConfigUpdateResult,
   ConstitutionUpdateResult,
   FoundationUpdateResult,

@@ -11,6 +11,7 @@ import type {
 import { HubIdentityEnrollmentService } from '../../../core/enrollment/service.js';
 import { buildAdminEnrollmentRoutes } from '../api-routes-enrollment.js';
 import { createAdminEnrollmentService } from './enrollment-service.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 
 // Port-level fakes only — mirrors core/enrollment/service.test.ts. The Garden
 // wrapper is storage-agnostic and the fail-closed policy (contact must exist)
@@ -92,14 +93,23 @@ class InMemoryContactStore {
   }
 }
 
-function buildService(): ReturnType<typeof createAdminEnrollmentService> {
+function buildService(
+  contactIds: readonly string[] = ['contact-1'],
+): ReturnType<typeof createAdminEnrollmentService> {
   const contactStore = new InMemoryContactStore();
-  contactStore.add('contact-1', 'Resident');
+  for (const contactId of contactIds) contactStore.add(contactId, `Resident ${contactId}`);
   const core = new HubIdentityEnrollmentService(
     new InMemoryEnrollmentStore(),
     contactStore as unknown as ContactStorePort,
   );
   return createAdminEnrollmentService({ enrollmentService: core });
+}
+
+function fleetContext(contactId: string): GardenRequestContext {
+  return {
+    kind: 'fleet_principal',
+    actor: { principalId: `principal-${contactId}`, contactId },
+  } as unknown as GardenRequestContext;
 }
 
 class CapturingResponse {
@@ -169,6 +179,29 @@ describe('AdminEnrollmentService', () => {
   it('returns revoked=false when there is nothing to revoke', async () => {
     const service = buildService();
     expect((await service.revoke('hub-missing')).revoked).toBe(false);
+  });
+
+  it('scopes fleet enrollment reads and mutations to the signed contact subject', async () => {
+    const service = buildService(['contact-1', 'contact-2']);
+    await service.enroll({ hubIdentityId: 'hub-1', canonicalContactId: 'contact-1' });
+    await service.enroll({ hubIdentityId: 'hub-2', canonicalContactId: 'contact-2' });
+    const context = fleetContext('contact-1');
+
+    await expect(service.listEnrollments(context)).resolves.toMatchObject({
+      total: 1,
+      enrollments: [{ hubIdentityId: 'hub-1', canonicalContactId: 'contact-1' }],
+    });
+    await expect(service.enroll(context, {
+      hubIdentityId: 'hub-cross-subject',
+      canonicalContactId: 'contact-2',
+    })).rejects.toThrow(/current trusted subject/u);
+    await expect(service.revoke(context, 'hub-2')).resolves.toEqual({
+      revoked: false,
+      hubIdentityId: 'hub-2',
+    });
+    expect((await service.listEnrollments()).enrollments.find(
+      binding => binding.hubIdentityId === 'hub-2',
+    )?.status).toBe('enrolled');
   });
 });
 

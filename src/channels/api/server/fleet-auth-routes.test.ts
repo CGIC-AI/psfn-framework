@@ -8,6 +8,9 @@ import {
   type GatewayFleetAuthBroker,
 } from '../../../boundary/gateway/fleet-auth-broker.js';
 import { FleetAuthHttpRoutes } from './fleet-auth-routes.js';
+import { FleetAuthorizationDeniedError } from '../../../boundary/gateway/fleet-authorization-context.js';
+
+const COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
 interface CapturedResponse {
   statusCode: number;
@@ -59,7 +62,10 @@ function jsonRequest(body: unknown, headers: IncomingMessage['headers']): Incomi
   }) as unknown as IncomingMessage;
 }
 
-function routes(overrides: Partial<Record<keyof GatewayFleetAuthBroker, unknown>> = {}) {
+function routes(
+  overrides: Partial<Record<keyof GatewayFleetAuthBroker, unknown>> = {},
+  options: { trustProxy?: boolean } = {},
+) {
   const broker = {
     beginLogin: vi.fn(async () => ({
       authorizationUrl: 'https://discord.com/oauth2/authorize?state=opaque',
@@ -101,6 +107,12 @@ function routes(overrides: Partial<Record<keyof GatewayFleetAuthBroker, unknown>
     })),
     logout: vi.fn(async () => undefined),
     revokeProvider: vi.fn(async () => undefined),
+    resolveAuthorizationContext: vi.fn(async () => ({
+      companionId: COMPANION_ID,
+      providerSubject: { provider: 'discord', subjectId: '123456789012345678' },
+      operator: { role: 'member' },
+      authorization: { action: 'companion.read', decision: 'allow' },
+    })),
     ...overrides,
   };
   return {
@@ -109,11 +121,87 @@ function routes(overrides: Partial<Record<keyof GatewayFleetAuthBroker, unknown>
       broker: broker as unknown as GatewayFleetAuthBroker,
       canonicalOrigin: 'https://fleet.example.test',
       callbackPath: '/auth/discord/callback',
+      ...(options.trustProxy ? { trustProxy: true } : {}),
+      companionUi: { companionId: COMPANION_ID, guestMode: 'disabled' },
     }),
   };
 }
 
 describe('gateway-only fleet auth HTTP routes', () => {
+  it('returns an exact no-store signed-out status without exposing authority identifiers', async () => {
+    const { handler, broker } = routes();
+    const res = response();
+    await handler.handle(
+      request('GET'),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/session/status'),
+    );
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('no-store, private');
+    expect(res.headers.get('vary')).toBe('Cookie');
+    expect(JSON.parse(res.body)).toEqual({
+      schemaVersion: 1,
+      state: 'signed_out',
+      guestMode: 'disabled',
+    });
+    expect(broker.resolveAuthorizationContext).not.toHaveBeenCalled();
+    expect(res.body).not.toMatch(/companion|device|session|subject|token/iu);
+  });
+
+  it('projects only sanitized current human authority for the configured Companion UI', async () => {
+    const { handler, broker } = routes();
+    const res = response();
+    await handler.handle(
+      request('GET', { cookie: `__Host-psfn_session=${'a'.repeat(43)}` }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/session/status'),
+    );
+
+    expect(broker.resolveAuthorizationContext).toHaveBeenCalledWith({
+      sessionToken: 'a'.repeat(43),
+      audience: 'fleet',
+      companionId: COMPANION_ID,
+      action: 'companion.read',
+    });
+    expect(JSON.parse(res.body)).toEqual({
+      schemaVersion: 1,
+      state: 'signed_in',
+      guestMode: 'disabled',
+      websocketPath: `/companion-ui/companions/${COMPANION_ID}/ws`,
+      human: { provider: 'discord', label: 'Discord user', role: 'member' },
+    });
+    expect(res.body).not.toMatch(/123456789012345678|a{20}|record|contact/iu);
+  });
+
+  it('clears a denied stale cookie and exposes the WebSocket path only for explicit guest mode', async () => {
+    const broker = {
+      resolveAuthorizationContext: vi.fn(async () => {
+        throw new FleetAuthorizationDeniedError('session_revoked');
+      }),
+    };
+    const handler = new FleetAuthHttpRoutes({
+      broker: broker as unknown as GatewayFleetAuthBroker,
+      canonicalOrigin: 'https://fleet.example.test',
+      callbackPath: '/auth/discord/callback',
+      companionUi: { companionId: COMPANION_ID, guestMode: 'explicit' },
+    });
+    const res = response();
+    await handler.handle(
+      request('GET', { cookie: `__Host-psfn_session=${'a'.repeat(43)}` }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/session/status'),
+    );
+
+    expect(JSON.parse(res.body)).toEqual({
+      schemaVersion: 1,
+      state: 'signed_out',
+      guestMode: 'explicit',
+      websocketPath: `/companion-ui/companions/${COMPANION_ID}/ws`,
+    });
+    expect(res.headers.get('set-cookie')).toContain('Max-Age=0');
+  });
+
   it('redirects login with only an opaque initiating-browser __Host- cookie', async () => {
     const { handler, broker } = routes();
     const res = response();
@@ -175,6 +263,43 @@ describe('gateway-only fleet auth HTTP routes', () => {
     expect(res.body).toBe('');
     expect(String(res.headers.get('location'))).not.toContain('a'.repeat(43));
     tlsSocket.destroy();
+  });
+
+  it('accepts only the exact configured trusted-proxy callback provenance', async () => {
+    const { handler, broker } = routes({}, { trustProxy: true });
+    const exactProxyHeaders = {
+      host: 'fleet.example.test',
+      cookie: `__Host-psfn_preauth=${'p'.repeat(43)}`,
+      'x-forwarded-host': 'fleet.example.test',
+      'x-forwarded-proto': 'https',
+      'x-forwarded-port': '443',
+      'x-forwarded-for': '198.51.100.9',
+    };
+    const accepted = response();
+    await handler.handle(
+      request('GET', exactProxyHeaders),
+      accepted,
+      new URL('https://fleet.example.test/auth/discord/callback?state=opaque&code=code'),
+    );
+    expect(accepted.statusCode).toBe(303);
+    expect(broker.completeOAuthCallback).toHaveBeenLastCalledWith(expect.objectContaining({
+      requestOrigin: 'https://fleet.example.test',
+      initiatingBrowserToken: 'p'.repeat(43),
+    }));
+    expect(accepted.headers.get('set-cookie')).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^__Host-psfn_session=a{43};.*Secure; HttpOnly; SameSite=Lax$/u),
+    ]));
+
+    const spoofed = response();
+    await handler.handle(
+      request('GET', { ...exactProxyHeaders, 'x-forwarded-host': 'attacker.example.test' }),
+      spoofed,
+      new URL('https://fleet.example.test/auth/discord/callback?state=opaque&code=code'),
+    );
+    expect(spoofed.statusCode).toBe(400);
+    expect(spoofed.headers.get('set-cookie')).toBe(
+      '__Host-psfn_preauth=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax',
+    );
   });
 
   it('clears callback cookies and returns only the stable reauthentication response', async () => {
@@ -367,5 +492,46 @@ describe('gateway-only fleet auth HTTP routes', () => {
         message: 'Reauthentication is required',
       },
     });
+  });
+
+  it('logs out through session-bound CSRF even when companion runtimes are unavailable', async () => {
+    const logout = vi.fn(async (input: { requestOrigin: string }) => {
+      if (input.requestOrigin !== 'https://fleet.example.test') {
+        throw new FleetAuthBrokerError('origin_mismatch', 403, 'Origin is invalid');
+      }
+    });
+    const { handler } = routes({ logout });
+    const res = response();
+    await handler.handle(
+      request('POST', {
+        cookie: `__Host-psfn_session=${'a'.repeat(43)}`,
+        origin: 'https://fleet.example.test',
+        'x-psfn-csrf': 'b'.repeat(43),
+      }),
+      res,
+      new URL('https://fleet.example.test/v1/fleet-auth/logout'),
+    );
+    expect(logout).toHaveBeenCalledWith({
+      token: 'a'.repeat(43),
+      csrfToken: 'b'.repeat(43),
+      requestOrigin: 'https://fleet.example.test',
+    });
+    expect(res.statusCode).toBe(204);
+    expect(res.headers.get('set-cookie')).toBe(
+      '__Host-psfn_session=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Lax',
+    );
+
+    const confusedOrigin = response();
+    await handler.handle(
+      request('POST', {
+        cookie: `__Host-psfn_session=${'a'.repeat(43)}`,
+        origin: 'https://attacker.example.test',
+        'x-psfn-csrf': 'b'.repeat(43),
+      }),
+      confusedOrigin,
+      new URL('https://fleet.example.test/v1/fleet-auth/logout'),
+    );
+    expect(confusedOrigin.statusCode).toBe(403);
+    expect(confusedOrigin.headers.get('set-cookie')).toBeUndefined();
   });
 });

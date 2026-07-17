@@ -12,14 +12,14 @@ export function buildAdminContactRoutes(options: {
 }): AdminApiRoute[] {
   const { contactsService, withBody } = options;
 
-  const handleContactUpdate: AdminApiRoute['handle'] = (req, res, { id }) => {
+  const handleContactUpdate: AdminApiRoute['handle'] = (req, res, { id }, context) => {
     withBody(req, res, (body) => {
       const parsed = parseAdminJsonBody(body);
       if (!parsed.ok) {
         sendJson(res, 400, { error: parsed.error });
         return;
       }
-      contactsService.updateContact(id, JSON.stringify(parsed.value)).then(
+      contactsService.updateContact(id, JSON.stringify(parsed.value), context).then(
         (result) => {
           if (!result.ok) {
             sendJson(res, result.message === 'Contact not found' ? 404 : 400, { error: result.message });
@@ -38,9 +38,9 @@ export function buildAdminContactRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/contacts'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         const url = parseRequestUrl(req, '/api/admin/contacts');
-        contactsService.listContacts(url.searchParams).then(
+        contactsService.listContacts(url.searchParams, context).then(
           (data) => {
             sendJson(
               res,
@@ -64,14 +64,14 @@ export function buildAdminContactRoutes(options: {
     {
       method: 'POST',
       match: exactPath('/api/admin/contacts'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
-          contactsService.createContact(JSON.stringify(parsed.value)).then(
+          contactsService.createContact(JSON.stringify(parsed.value), context).then(
             (result) => {
               if (!result.ok) {
                 sendJson(res, 400, { error: result.message });
@@ -89,14 +89,14 @@ export function buildAdminContactRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/contacts/', 'id', '/merge'),
-      handle: (req, res, { id }) => {
+      handle: (req, res, { id }, context) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
-          contactsService.mergeContacts(id, JSON.stringify(parsed.value)).then(
+          contactsService.mergeContacts(id, JSON.stringify(parsed.value), context).then(
             (result) => {
               if (!result.ok) {
                 sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
@@ -114,14 +114,14 @@ export function buildAdminContactRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/contacts/', 'id', '/unlink'),
-      handle: (req, res, { id }) => {
+      handle: (req, res, { id }, context) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
-          contactsService.unlinkChannelIdentity(id, JSON.stringify(parsed.value)).then(
+          contactsService.unlinkChannelIdentity(id, JSON.stringify(parsed.value), context).then(
             (result) => {
               if (!result.ok) {
                 sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
@@ -139,14 +139,14 @@ export function buildAdminContactRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/contacts/', 'id', '/conversation-channel/delete'),
-      handle: (req, res, { id }) => {
+      handle: (req, res, { id }, context) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
             sendJson(res, 400, { error: parsed.error });
             return;
           }
-          contactsService.deleteConversationChannel(id, JSON.stringify(parsed.value)).then(
+          contactsService.deleteConversationChannel(id, JSON.stringify(parsed.value), context).then(
             (result) => {
               if (!result.ok) {
                 sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });
@@ -164,8 +164,8 @@ export function buildAdminContactRoutes(options: {
     {
       method: 'GET',
       match: prefixedParamPath('/api/admin/contacts/', 'id'),
-      handle: (_req, res, { id }) => {
-        contactsService.getContactDetail(id).then(
+      handle: (_req, res, { id }, context) => {
+        contactsService.getContactDetail(id, context).then(
           (detail) => {
             if (!detail) {
               sendJson(res, 404, { error: 'Contact not found' });
@@ -182,8 +182,8 @@ export function buildAdminContactRoutes(options: {
     {
       method: 'DELETE',
       match: prefixedParamPath('/api/admin/contacts/', 'id'),
-      handle: (_req, res, { id }) => {
-        contactsService.deleteContact(id).then(
+      handle: (_req, res, { id }, context) => {
+        contactsService.deleteContact(id, context).then(
           (result) => {
             if (!result.ok) {
               sendJson(res, result.message.includes('not found') ? 404 : 400, { error: result.message });

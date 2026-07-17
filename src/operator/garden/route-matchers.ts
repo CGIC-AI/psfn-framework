@@ -1,12 +1,49 @@
 export type RouteParams = Record<string, string>;
-export type RouteMatcher = (path: string) => RouteParams | null;
+export interface RouteMatcher {
+  (path: string): RouteParams | null;
+  /** Canonical catalogue pattern used by the fleet request-target boundary. */
+  readonly capabilityPattern: string;
+}
 
 interface PrefixedParamPathOptions {
   exclude?: (path: string) => boolean;
 }
 
 export function exactPath(expected: string): RouteMatcher {
-  return (path) => (path === expected ? {} : null);
+  return attachCapabilityPattern(
+    (path) => (path === expected ? {} : null),
+    expected,
+  );
+}
+
+function decodeCanonicalSegment(raw: string): string | null {
+  if (!raw || raw.includes('/') || raw.includes('\\')) return null;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+  if (
+    !decoded
+    || decoded === '.'
+    || decoded === '..'
+    || decoded.includes('/')
+    || decoded.includes('\\')
+    || /[\u0000-\u001f\u007f]/u.test(decoded)
+    || (
+      encodeURIComponent(decoded) !== raw
+      && encodeURIComponent(decoded).replaceAll('%3A', ':') !== raw
+    )
+  ) return null;
+  return decoded;
+}
+
+function attachCapabilityPattern(
+  matcher: (path: string) => RouteParams | null,
+  capabilityPattern: string,
+): RouteMatcher {
+  return Object.assign(matcher, { capabilityPattern });
 }
 
 export function prefixedParamPath(
@@ -14,22 +51,22 @@ export function prefixedParamPath(
   paramName: string,
   options?: PrefixedParamPathOptions,
 ): RouteMatcher {
-  return (path) => {
+  return attachCapabilityPattern((path) => {
     if (!path.startsWith(prefix)) return null;
     if (options?.exclude?.(path)) return null;
     const raw = path.slice(prefix.length);
-    if (!raw) return null;
-    return { [paramName]: decodeURIComponent(raw) };
-  };
+    const decoded = decodeCanonicalSegment(raw);
+    return decoded === null ? null : { [paramName]: decoded };
+  }, `${prefix}:${paramName}`);
 }
 
 export function wrappedParamPath(prefix: string, suffix: string, paramName: string): RouteMatcher {
-  return (path) => {
+  return attachCapabilityPattern((path) => {
     if (!path.startsWith(prefix) || !path.endsWith(suffix)) return null;
     const raw = path.slice(prefix.length, path.length - suffix.length);
-    if (!raw) return null;
-    return { [paramName]: decodeURIComponent(raw) };
-  };
+    const decoded = decodeCanonicalSegment(raw);
+    return decoded === null ? null : { [paramName]: decoded };
+  }, `${prefix}:${paramName}${suffix}`);
 }
 
 export function paramWithSuffix(prefix: string, paramName: string, suffix: string): RouteMatcher {
@@ -49,17 +86,19 @@ export function nestedParamPath(
   firstParamName: string,
   secondParamName: string,
 ): RouteMatcher {
-  return (path) => {
+  return attachCapabilityPattern((path) => {
     if (!path.startsWith(prefix)) return null;
     const remainder = path.slice(prefix.length);
     const separatorIndex = remainder.indexOf(separator);
     if (separatorIndex <= 0) return null;
     const rawFirst = remainder.slice(0, separatorIndex);
     const rawSecond = remainder.slice(separatorIndex + separator.length);
-    if (!rawFirst || !rawSecond) return null;
+    const first = decodeCanonicalSegment(rawFirst);
+    const second = decodeCanonicalSegment(rawSecond);
+    if (first === null || second === null) return null;
     return {
-      [firstParamName]: decodeURIComponent(rawFirst),
-      [secondParamName]: decodeURIComponent(rawSecond),
+      [firstParamName]: first,
+      [secondParamName]: second,
     };
-  };
+  }, `${prefix}:${firstParamName}${separator}:${secondParamName}`);
 }

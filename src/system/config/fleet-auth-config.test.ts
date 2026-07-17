@@ -152,7 +152,8 @@ describe('fleet-auth owner-file configuration', () => {
 
   it('projects the full config only to the gateway and public verifier material elsewhere', () => {
     const dataDir = makeRoot();
-    writeConfig(dataDir, validConfig(publicKeyPem, hubPublicKeyPem));
+    const config = validConfig(publicKeyPem, hubPublicKeyPem);
+    writeConfig(dataDir, config);
 
     const gateway = resolveFleetAuthOwnerFile({ dataDir, enabled: true, processMode: 'gateway' });
     const agent = resolveFleetAuthOwnerFile({ dataDir, enabled: true, processMode: 'agent' });
@@ -161,14 +162,20 @@ describe('fleet-auth owner-file configuration', () => {
     expect(gateway?.kind).toBe('gateway');
     expect(gateway && 'config' in gateway ? gateway.config.credentials.runtimeDatabaseUrlRef : null)
       .toEqual(credential('FLEET_AUTH_RUNTIME_DATABASE_URL'));
+    if (!gateway || gateway.kind !== 'gateway') throw new Error('gateway projection missing');
     expect(agent).toEqual({
       kind: 'verifier',
       enabled: true,
       canonicalOrigin: 'https://fleet.example.test',
-      verifierKeys: validateFleetAuthConfig(
-        validConfig(publicKeyPem, hubPublicKeyPem),
-        FLEET_AUTH_FILE_NAME,
-      ).verifierKeys,
+      gardenMetadata: projectFleetAuthGardenMetadata(gateway.config),
+      requestCapabilities: {
+        issuer: 'psfn-fleet-auth',
+        maxTtlSeconds: 30,
+        keys: validateFleetAuthConfig(
+          validConfig(publicKeyPem, hubPublicKeyPem),
+          FLEET_AUTH_FILE_NAME,
+        ).verifierKeys,
+      },
       hubDeviceAssertions: validateFleetAuthConfig(
         validConfig(publicKeyPem, hubPublicKeyPem),
         FLEET_AUTH_FILE_NAME,
@@ -177,6 +184,28 @@ describe('fleet-auth owner-file configuration', () => {
     expect(operator).toEqual(agent);
     expect(JSON.stringify(agent)).not.toContain('clientSecretRef');
     expect(JSON.stringify(agent)).not.toContain('DatabaseUrlRef');
+    expect(JSON.stringify(agent)).not.toContain('PRIVATE KEY');
+    expect(JSON.stringify(agent)).not.toContain('sessionPepper');
+  });
+
+  it('requires one request-capability issuer and whole-second assertion TTLs', () => {
+    const config = validConfig(publicKeyPem, hubPublicKeyPem);
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      verifierKeys: [
+        ...config.verifierKeys,
+        {
+          ...config.verifierKeys[0],
+          issuer: 'other-fleet',
+          kid: 'other-retiring',
+          status: 'retiring',
+        },
+      ],
+    }, FLEET_AUTH_FILE_NAME)).toThrow(/one request-capability issuer/u);
+    expect(() => validateFleetAuthConfig({
+      ...config,
+      ttls: { ...config.ttls, internalAssertionMs: 30_001 },
+    }, FLEET_AUTH_FILE_NAME)).toThrow(/whole seconds/u);
   });
 
   it('rejects unknown keys, unsafe origins, partial mappings, duplicates, and widening vocabulary', () => {
@@ -285,7 +314,7 @@ describe('fleet-auth owner-file configuration', () => {
       verifierKeys: [
         ...config.verifierKeys,
         {
-          issuer: 'retired-broker-issuer',
+          issuer: config.verifierKeys[0]!.issuer,
           kid: 'retired-broker-kid',
           publicKeyPem: sharedRotation,
           notBefore: '2025-01-01T00:00:00.000Z',
@@ -314,7 +343,7 @@ describe('fleet-auth owner-file configuration', () => {
         ...config.verifierKeys,
         {
           ...config.verifierKeys[0],
-          issuer: 'retired-broker-issuer',
+          issuer: config.verifierKeys[0]!.issuer,
           kid: 'duplicate-broker-key',
           publicKeyPem: rewrapPublicKeyPem(publicKeyPem),
           notBefore: '2025-01-01T00:00:00.000Z',
@@ -492,12 +521,29 @@ describe('fleet-auth owner-file configuration', () => {
     const metadata = projectFleetAuthGardenMetadata(config);
     expect(metadata).toMatchObject({
       enabled: true,
-      canonicalOrigin: config.canonicalOrigin,
+      featureMode: 'fleet-principal',
+      canonicalOrigin: {
+        value: config.canonicalOrigin,
+        status: 'configured_https',
+      },
       callbackPath: config.callbackPath,
-      provider: {
+      revision: {
+        schemaVersion: 1,
+        activationGeneration: 1,
+        canonicalSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      },
+      providerPolicy: {
         kind: 'discord',
         scopes: ['identify', 'guilds', 'guilds.members.read'],
         tokenCustody: 'discard',
+      },
+      disabledActionsByRole: config.rolePolicy.disabledActionsByRole,
+      discordEvidence: {
+        mappingCount: 1,
+        companionBindingCount: 1,
+        channelRestrictedMappingCount: 1,
+        roleRestrictedMappingCount: 1,
+        requiredRoleBindingCount: 1,
       },
       verifierKeys: [{ issuer: 'psfn-fleet-auth', kid: '2026-07-primary', status: 'active' }],
       hubDeviceAssertions: {
@@ -510,6 +556,13 @@ describe('fleet-auth owner-file configuration', () => {
     expect(serialized).not.toContain('envName');
     expect(serialized).not.toContain('PUBLIC KEY');
     expect(serialized).not.toContain('clientId');
+    expect(serialized).not.toContain(config.provider.clientId);
+    expect(serialized).not.toContain(config.discordEvidenceMappings[0]!.guildId);
+    expect(serialized).not.toContain(config.discordEvidenceMappings[0]!.channelId);
+    expect(serialized).not.toContain(config.discordEvidenceMappings[0]!.companionId);
+    expect(serialized).not.toContain(config.discordEvidenceMappings[0]!.requiredRoleIds[0]);
+    expect(serialized).not.toContain('fleet_auth_runtime');
+    expect(serialized).not.toContain('RECOVERY_CREDENTIAL');
   });
 
   it('keeps the distributed example schema-readable but rejects every seed key in enabled config', () => {

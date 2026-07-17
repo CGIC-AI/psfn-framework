@@ -19,6 +19,17 @@ describe('agent core runtime builder', () => {
     expect(agentMainSource).not.toContain('wireMemoryRuntime(');
   });
 
+  it('finishes contact lifecycle startup recovery before registering contact/admin surfaces', () => {
+    const agentMainSource = readSource('main.ts');
+    const persistenceIndex = agentMainSource.indexOf('createAgentPersistenceRuntime(');
+    const coreIndex = agentMainSource.indexOf('bootstrapAgentCoreRuntime(');
+    const adminIndex = agentMainSource.indexOf('startOptionalAdminTransportServer(');
+    expect(persistenceIndex).toBeGreaterThan(-1);
+    expect(coreIndex).toBeGreaterThan(persistenceIndex);
+    expect(adminIndex).toBeGreaterThan(coreIndex);
+    expect(agentMainSource).toContain('contactLifecycleRecovery?.stop()');
+  });
+
   it('core-runtime owns the prompt/session/memory wiring seam', () => {
     const coreRuntimeSource = readSource('core-runtime.ts');
     expect(coreRuntimeSource).toContain('registerWebTools(');

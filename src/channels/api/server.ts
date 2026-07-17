@@ -86,11 +86,14 @@ import {
   type ApiHttpServer,
   type ApiHttpServerTlsConfig,
 } from './server/http.js';
+import { stripBrowserRequestCapabilityHeaders } from '../../boundary/fleet-auth/request-capability-transport.js';
 import {
   resolveApiServerRequestPrincipal,
   validateApiServerAuthConfig,
 } from './server/auth.js';
 import { handleModelsEndpoint } from './server/models.js';
+import { FleetAuthChildAssertionHttpRoute } from './server/fleet-auth-child-assertion-route.js';
+import type { GatewayFleetAuthChildAssertionBroker } from '../../boundary/gateway/fleet-auth-child-assertions.js';
 import {
   handleCompanionApprovalDecision,
   handleCompanionArtifactPreview,
@@ -113,6 +116,8 @@ import {
   resolveAuthenticatedHubDeviceConnection,
   stripHubDeviceDownstreamAuthorityHeaders,
 } from './server/hub-device-ingress.js';
+import type { CompanionUiWebSocketAdapter } from './companion-ui-websocket.js';
+import type { GatewayFleetSsoRouter } from '../../boundary/gateway/fleet-sso-router.js';
 
 const log = createComponentLogger('ApiServer');
 const API_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
@@ -437,12 +442,18 @@ export interface ApiServerConfig {
   confirmationOperator?: ConfirmationOperatorPort;
   /** Gateway-only OAuth/session routes. Never constructed in operator/agent processes. */
   fleetAuthHttpRoutes?: FleetAuthHttpRoutes;
+  /** Signed-parent-authenticated operator-to-agent child assertion exchange. */
+  fleetAuthChildAssertions?: GatewayFleetAuthChildAssertionBroker;
+  /** Unified browser origin; the only fleet-mode route to Garden processes. */
+  fleetSsoRouter?: GatewayFleetSsoRouter;
   /** Fleet mode: expose browser lifecycle routes plus authenticated Hub device chat only. */
   fleetAuthBootstrapOnly?: boolean;
   /** Fleet-only authenticated Hub/device ingress. Absent fails the device route closed. */
   hubDeviceIngress?: GatewayHubDeviceIngressService;
   /** Server-owned companion binding for the gateway API surface. */
   hubDeviceCompanionId?: string;
+  /** Fleet-only exact same-origin Companion UI WebSocket broker. */
+  companionUiWebSocket?: CompanionUiWebSocketAdapter;
 }
 
 export class ApiServer implements ChannelAdapterPort {
@@ -490,9 +501,12 @@ export class ApiServer implements ChannelAdapterPort {
   private icpAutonomyOperator?: IcpAutonomyOperatorPort;
   private confirmationOperator?: ConfirmationOperatorPort;
   private fleetAuthHttpRoutes?: FleetAuthHttpRoutes;
+  private fleetAuthChildAssertionRoute?: FleetAuthChildAssertionHttpRoute;
+  private fleetSsoRouter?: GatewayFleetSsoRouter;
   private fleetAuthBootstrapOnly: boolean;
   private hubDeviceIngress?: GatewayHubDeviceIngressService;
   private hubDeviceCompanionId?: string;
+  private companionUiWebSocket?: CompanionUiWebSocketAdapter;
   private healthChecks: ApiServerHealthChecks;
   private schedulerHealthcheckStaleAfterMs: number;
   private lastSchedulerHealthcheckAtMs: number | null = null;
@@ -529,9 +543,14 @@ export class ApiServer implements ChannelAdapterPort {
     this.icpAutonomyOperator = config.icpAutonomyOperator;
     this.confirmationOperator = config.confirmationOperator;
     this.fleetAuthHttpRoutes = config.fleetAuthHttpRoutes;
+    this.fleetAuthChildAssertionRoute = config.fleetAuthChildAssertions
+      ? new FleetAuthChildAssertionHttpRoute(config.fleetAuthChildAssertions)
+      : undefined;
+    this.fleetSsoRouter = config.fleetSsoRouter;
     this.fleetAuthBootstrapOnly = config.fleetAuthBootstrapOnly === true;
     this.hubDeviceIngress = config.hubDeviceIngress;
     this.hubDeviceCompanionId = config.hubDeviceCompanionId;
+    this.companionUiWebSocket = config.companionUiWebSocket;
     this.schedulerHealthcheckStaleAfterMs = parseSchedulerHealthcheckStaleAfterMs(
       config.schedulerHealthcheckStaleAfterMs,
     );
@@ -619,10 +638,17 @@ export class ApiServer implements ChannelAdapterPort {
     this.unregisterSchedulerHealthcheck?.();
     this.unregisterSchedulerHealthcheck = null;
     await this.voiceWebSocket.stop();
+    await this.companionUiWebSocket?.stop();
     return stopApiHttpServer(this.server);
   }
 
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
+    if (this.companionUiWebSocket?.handleUpgrade(req, socket, head)) return;
+    stripBrowserRequestCapabilityHeaders(req.headers);
+    if (this.fleetSsoRouter?.matches(req.url ?? '/')) {
+      this.fleetSsoRouter.handleUpgrade(req, socket, head);
+      return;
+    }
     if (this.fleetAuthBootstrapOnly) {
       this.voiceWebSocket.rejectUnknownUpgrade(socket);
       return;
@@ -634,6 +660,11 @@ export class ApiServer implements ChannelAdapterPort {
   }
 
   private handleRequest(req: IncomingMessage, res: ServerResponse): void {
+    stripBrowserRequestCapabilityHeaders(req.headers);
+    if (this.fleetSsoRouter?.matches(req.url ?? '/')) {
+      void this.fleetSsoRouter.handle(req, res);
+      return;
+    }
     const requestTargetPath = (req.url ?? '/').split('?', 1)[0] ?? '/';
     const fleetAuthCors = this.fleetAuthHttpRoutes
       ?.applyLifecycleCorsPolicy(req, res, requestTargetPath) ?? 'not_applicable';
@@ -643,6 +674,10 @@ export class ApiServer implements ChannelAdapterPort {
 
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`);
     const path = url.pathname;
+    if (this.fleetAuthChildAssertionRoute?.matches(req.method, path)) {
+      void this.fleetAuthChildAssertionRoute.handle(req, res);
+      return;
+    }
     if (this.fleetAuthHttpRoutes?.matches(req.method, path)) {
       void this.fleetAuthHttpRoutes.handle(req, res, url);
       return;
@@ -753,8 +788,9 @@ export class ApiServer implements ChannelAdapterPort {
       isTelemetryIngest: false,
     });
     if (!principal) return;
+    let assertion: string | undefined;
     try {
-      const assertion = extractCanonicalHubDeviceAssertion(req);
+      assertion = extractCanonicalHubDeviceAssertion(req);
       const connection = resolveAuthenticatedHubDeviceConnection({
         req,
         principal,
@@ -770,6 +806,20 @@ export class ApiServer implements ChannelAdapterPort {
       });
     } catch (error) {
       if (error instanceof HubDeviceIngressRequestError) {
+        if (assertion && error.connectionId) {
+          try {
+            await this.hubDeviceIngress.fenceRejectedAssertion(assertion, error.connectionId);
+          } catch {
+            log.error('Hub device de-enrollment fence failed');
+            sendApiError(
+              res,
+              503,
+              'hub_device_ingress_unavailable',
+              'Hub device authentication is unavailable',
+            );
+            return;
+          }
+        }
         sendApiError(res, error.status, error.type, error.message);
         return;
       }

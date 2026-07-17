@@ -45,6 +45,7 @@ interface FleetAuthDurableSnapshot {
   contactAuthorityIntents: SnapshotRow[];
   contactAuthorityResources: SnapshotRow[];
   contactAuthorityReceipts: SnapshotRow[];
+  hubDeviceHumanAttachments: SnapshotRow[];
 }
 
 interface FleetAuthSnapshot {
@@ -99,6 +100,7 @@ const SNAPSHOT_COLLECTION_KEYS = [
   'contactAuthorityIntents',
   'contactAuthorityResources',
   'contactAuthorityReceipts',
+  'hubDeviceHumanAttachments',
 ] as const;
 
 const ROW_KEYS = {
@@ -166,6 +168,15 @@ const ROW_KEYS = {
     'companion_id', 'intent_id', 'phase', 'request_digest', 'result',
     'authority_generation', 'global_auth_epoch', 'audit_event_id', 'restore_state',
     'created_at',
+  ],
+  hubDeviceHumanAttachments: [
+    'attachment_id', 'assertion_digest', 'assertion_jti', 'device_id',
+    'enrollment_version', 'place_id', 'key_id', 'companion_id', 'hub_session_id',
+    'connection_id', 'channel_id', 'human_binding_digest', 'principal_id', 'session_record_id',
+    'provider_subject_id', 'binding_id', 'contact_id', 'binding_version',
+    'grant_id', 'role', 'grant_version', 'authority_generation', 'global_auth_epoch',
+    'device_state', 'human_state', 'retry_count', 'last_retry_at',
+    'human_detached_at', 'fenced_at', 'created_at', 'updated_at',
   ],
 } as const;
 
@@ -287,6 +298,11 @@ function parseSnapshot(path: string, manifest: VerifiedFleetAuthBackupManifest):
       durable.contactAuthorityReceipts,
       'contactAuthorityReceipts',
       ROW_KEYS.contactAuthorityReceipts,
+    ),
+    hubDeviceHumanAttachments: parseCollection(
+      durable.hubDeviceHumanAttachments,
+      'hubDeviceHumanAttachments',
+      ROW_KEYS.hubDeviceHumanAttachments,
     ),
   };
   if (parsed.authorityState.length !== 1) {
@@ -999,6 +1015,68 @@ async function importDurableRows(
       `,
       compatibilityValues: [...values, row.authority_floor_generation],
       description: 'passkey projection',
+    }));
+  }
+
+  // Restored attachments are historical binding evidence only. A restore must
+  // never resurrect either a device capability or a human session.
+  for (const row of durable.hubDeviceHumanAttachments) {
+    const values = [
+      row.attachment_id, row.assertion_digest, row.assertion_jti, row.device_id,
+      row.enrollment_version, row.place_id, row.key_id, row.companion_id,
+      row.hub_session_id, row.connection_id, row.channel_id, row.human_binding_digest,
+      row.principal_id, row.session_record_id, row.provider_subject_id, row.binding_id, row.contact_id,
+      row.binding_version, row.grant_id, row.role, row.grant_version,
+      row.authority_generation, row.global_auth_epoch, row.retry_count,
+      row.last_retry_at, row.created_at, restoredAt,
+    ];
+    await record(insertOrAssertCompatibleConflict({
+      client,
+      insertSql: `
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.hub_device_human_attachments
+          (attachment_id, assertion_digest, assertion_jti, device_id,
+           enrollment_version, place_id, key_id, companion_id, hub_session_id,
+           connection_id, channel_id, human_binding_digest, principal_id, session_record_id,
+           provider_subject_id, binding_id, contact_id, binding_version, grant_id,
+           role, grant_version, authority_generation, global_auth_epoch,
+           device_state, human_state, retry_count, last_retry_at,
+           human_detached_at, fenced_at, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                $14, $15, $16, $17, $18, $19, $20, $21, $22, $23,
+                'fenced', 'detached', $24, $25, $27, $27, $26, $27)
+        ON CONFLICT DO NOTHING
+      `,
+      insertValues: values,
+      compatibilitySql: `
+        SELECT EXISTS (
+          SELECT 1 FROM ${FLEET_AUTH_SCHEMA_NAME}.hub_device_human_attachments
+          WHERE attachment_id = $1::uuid AND assertion_digest = $2
+            AND assertion_jti = $3::uuid AND device_id = $4
+            AND enrollment_version = $5::bigint AND place_id IS NOT DISTINCT FROM $6::text
+            AND key_id = $7 AND companion_id = $8::uuid AND hub_session_id = $9
+            AND connection_id = $10 AND channel_id = $11
+            AND human_binding_digest IS NOT DISTINCT FROM $12::text
+            AND principal_id IS NOT DISTINCT FROM $13::uuid
+            AND session_record_id IS NOT DISTINCT FROM $14::uuid
+            AND provider_subject_id IS NOT DISTINCT FROM $15::text
+            AND binding_id IS NOT DISTINCT FROM $16::uuid
+            AND contact_id IS NOT DISTINCT FROM $17::text
+            AND binding_version IS NOT DISTINCT FROM $18::bigint
+            AND grant_id IS NOT DISTINCT FROM $19::uuid
+            AND role IS NOT DISTINCT FROM $20::text
+            AND grant_version IS NOT DISTINCT FROM $21::bigint
+            AND authority_generation IS NOT DISTINCT FROM $22::bigint
+            AND global_auth_epoch IS NOT DISTINCT FROM $23::bigint
+            AND retry_count >= $24::bigint
+            AND last_retry_at IS NOT DISTINCT FROM $25::timestamptz
+            AND device_state = 'fenced' AND human_state = 'detached'
+            AND created_at = $26::timestamptz
+            AND updated_at <= $27::timestamptz
+          FOR UPDATE
+        ) AS compatible
+      `,
+      compatibilityValues: values,
+      description: 'Hub device human attachment',
     }));
   }
 

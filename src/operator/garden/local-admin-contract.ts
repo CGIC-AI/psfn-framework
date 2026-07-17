@@ -105,6 +105,7 @@ import { AdminGroupMemoryDataService } from './services/group-memory-diagnostics
 import { AdminIdentityDataService } from './services/identity-service.js';
 import { AdminImagesDataService } from './services/images-service.js';
 import { AdminMemoryDataService } from './services/memory-service.js';
+import { AdminPrivacyBreakGlassService } from './services/privacy-break-glass-service.js';
 import { AdminModelUsageDataService } from './services/model-usage-service.js';
 import {
   AdminObserverEvalSidecarDataService,
@@ -132,10 +133,7 @@ import type { IcpInitiationCandidateStorePort } from '../../core/icp/autonomy-st
 import type { IcpAutonomyRuntimeEnablement } from '../../core/icp/runtime-enablement.js';
 import type { IcpAdminProjectionStore } from '../../persistence/postgres/icp-admin-projection-store.js';
 import { AdminIcpAutonomyDataService } from './services/icp-autonomy-service.js';
-import {
-  AdminSharedWorkspaceService,
-  type SharedWorkspaceCredentials,
-} from './services/shared-workspace-service.js';
+import { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import { requireAuditOpaqueIdKeyring } from './audit-opaque-id-keyring.js';
 import type { BackgroundWorkStorePort } from '../../core/agent/background-work/store-port.js';
 
@@ -145,6 +143,8 @@ export interface InProcessGardenAdminContractOptions {
   apiHost?: string;
   apiPort?: number;
   memoryStore: MemoryStorePort;
+  /** Fixed legacy-mode scope; fleet requests always use signed request context. */
+  legacyMemorySubjectAccessContext?: Readonly<MemorySubjectAccessContext>;
   subsystemOutputRefStore?: Pick<BackgroundWorkStorePort, 'getSubsystemOutputProjection'> | null;
   /**
    * Resolve the trusted subject scope for Garden memory access. The resolver
@@ -196,8 +196,6 @@ export interface InProcessGardenAdminContractOptions {
   icpInitiationCandidateStore?: IcpInitiationCandidateStorePort | null;
   icpAdminProjectionStore?: IcpAdminProjectionStore | null;
   icpRuntimeEnablement?: IcpAutonomyRuntimeEnablement | null;
-  /** Distinct authenticated principals for governed shared-workspace writes. */
-  sharedWorkspaceCredentials?: SharedWorkspaceCredentials;
   /** Existing gateway-backed Beads create primitive used for explicit wish conversion. */
   wishlistBeadCreator?: AdminWishlistBeadCreatePort;
 }
@@ -367,9 +365,14 @@ export function createInProcessGardenAdminContract(
   // The legacy admin session proves operator access but carries no subject
   // identity. Fleet-auth must supply that authority before Garden may expose
   // or mutate subject-classified memories.
+  const legacyMemorySubjectAccessContext = Object.freeze({
+    ...(options.legacyMemorySubjectAccessContext ?? {}),
+  });
   const gardenMemoryStore = createSubjectAuthorizedMemoryStore(
     options.memoryStore,
-    options.resolveMemorySubjectAccessContext ?? (() => ({})),
+    options.legacyMemorySubjectAccessContext !== undefined
+      ? legacyMemorySubjectAccessContext
+      : options.resolveMemorySubjectAccessContext ?? legacyMemorySubjectAccessContext,
   );
   const driftReviews = createAdminDriftReviewService({
     store: createDriftReviewCardStore(resolveDriftReviewCardsPath(companionDataDir)),
@@ -390,6 +393,7 @@ export function createInProcessGardenAdminContract(
     }),
     diagnostics: new AdminDiagnosticsDataService({
       eventBus: options.eventBus,
+      contactLifecycle: options.contactStore ?? null,
       ...(options.logsDir ? { logsDir: options.logsDir } : {}),
     }),
     images: new AdminImagesDataService({
@@ -447,6 +451,7 @@ export function createInProcessGardenAdminContract(
       ...(options.channelGroupMemory ? { channelGroupMemory: options.channelGroupMemory } : {}),
       sessionStore: options.sessionStore,
       memoryStore: gardenMemoryStore,
+      fleetMemoryStore: options.memoryStore,
       ...(options.contactStore ? { contactStore: options.contactStore } : {}),
       watermarkStore: new JsonGroupMemoryWatermarkStore(join(companionDataDir, 'group-memory-watermarks.json')),
       ...(options.memoryExtractor ? { memoryExtractor: options.memoryExtractor } : {}),
@@ -455,14 +460,14 @@ export function createInProcessGardenAdminContract(
       companionAuthorIds: options.companionAuthorIds ?? [],
     }),
     memory: new AdminMemoryDataService({
-      // The legacy admin session key authenticates an operator but carries no
-      // subject identity. Until fleet authority supplies one, Garden memory
-      // product surfaces must fail closed rather than enumerate the corpus.
       memoryStore: gardenMemoryStore,
+      // A fixed subject projection is created from the underlying store by
+      // AdminMemoryDataService for each immutable admitted request.
+      fleetMemoryStore: options.memoryStore,
       contactStore: options.contactStore,
       embeddingService: options.embeddingService,
       resolveCompanionName: () => resolveCompanionNameFromConfig(options.config),
-      appendAuditTimelineEntry: (actionType, decision, narrative, details) => {
+      appendAuditTimelineEntry: (actionType, decision, narrative, details, requestContext) => {
         const joinedDetails = details
           ?.filter((detail): detail is string => typeof detail === 'string' && detail.trim().length > 0)
           .join(' ');
@@ -472,8 +477,13 @@ export function createInProcessGardenAdminContract(
           narrative,
           ...(joinedDetails ? { details: joinedDetails } : {}),
           actor: 'operator',
+          ...(requestContext ? { requestContext } : {}),
         });
       },
+    }),
+    privacyBreakGlass: new AdminPrivacyBreakGlassService({
+      memoryStore: options.memoryStore,
+      confirmTtlMs: Math.min(options.config.fleetAuth?.ttls.jitGrantMs ?? 120_000, 120_000),
     }),
     sessions: new AdminSessionDataService({
       sessionStore: options.sessionStore,
@@ -488,6 +498,7 @@ export function createInProcessGardenAdminContract(
     contacts: new AdminContactsDataService({
       contactStore: options.contactStore,
       memoryStore: gardenMemoryStore,
+      fleetMemoryStore: options.memoryStore,
       sessionStore: options.sessionStore,
       relationshipScoreReader: options.contactStore
         ? createContactRelationshipScoreReader(options.contactStore)
@@ -529,12 +540,7 @@ export function createInProcessGardenAdminContract(
       : null,
     settings: settingsService,
     sharedWorkspace: options.config.sharedWorkspacePath
-      ? new AdminSharedWorkspaceService(
-        options.config.sharedWorkspacePath,
-        options.sharedWorkspaceCredentials ?? (() => {
-          throw new Error('Shared workspace is configured without authenticated principal credentials');
-        })(),
-      )
+      ? new AdminSharedWorkspaceService(options.config.sharedWorkspacePath)
       : null,
     intakeQuarantine,
     driftReviews,

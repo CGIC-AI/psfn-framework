@@ -16,7 +16,7 @@ not talk to PSFN core directly.
 - Do not edit `../PSFN-Satellite-Hub/`; it is a read-only protocol reference.
 - Keep this package standalone. Do not wire root auto-installs for it.
 
-The hub protocol source of truth is:
+The legacy direct-Hub protocol reference is:
 
 ```text
 ../PSFN-Satellite-Hub/src/ts/shared/protocol.ts
@@ -29,30 +29,27 @@ src/lib/protocol/events.ts
 src/lib/protocol/framing.ts
 ```
 
-If the local mirror and the hub protocol drift, the hub wins. Re-mirror the
-client types from the hub instead of inventing new message shapes.
+The shipped shared-display entrypoint does not emit that legacy protocol. Its
+realtime source of truth is the gateway-owned Companion UI action contract in
+`../src/boundary/fleet-auth/companion-ui-action.ts`; the Hub terminates the
+same-origin browser connection and authenticates the backchannel to that
+gateway adapter. The legacy mirror remains as a strictly validated view/event
+adapter and protocol regression surface.
 
 ## Runtime Configuration
 
-The app requires one Vite environment variable:
+The browser has no deployment-authority configuration. Production serves the
+app on the canonical same-origin HTTPS path `/companion-ui/`; the app reads
+fleet session state from `/v1/fleet-auth/session/status` and accepts only an
+exact server-issued `/companion-ui/companions/<uuid>/ws` path on that origin.
+There is no build-time Hub URL and no editable Hub, device, session, channel,
+or credential field.
 
-```bash
-VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL=ws://hub.local:8787/
-```
-
-Use `ws://` or `wss://`. The client rejects empty values and rejects admin API
-paths.
-
-The hub URL, session id, and optional channel id are edited in the in-app
-Settings drawer, opened from the floating gear button. They are not shown on
-the primary chat surface.
-
-The default satellite identity sent in `hello` is:
-
-```text
-deviceId: psfn-satellite-mobile-chat-app
-deviceName: PSFN Satellite Mobile Chat App
-```
+The browser emits no `hello` and no device/session/channel authority. Human
+identity comes from the fleet session, while a strict `session.ready` frame
+provides server-owned device/place presentation and the physical capability
+ceiling. Those identities are displayed separately and neither authentication
+nor reconnection claims primary embodiment.
 
 Default capabilities are text input; text, subtitle, artifact, and
 tool-activity output; interrupt, presence, session-attach, approvals, and touch
@@ -93,16 +90,23 @@ the current hashed asset list, and versions its cache with
 `COMPANION_UI_BUILD_REVISION`. Container builds set that value to the pinned
 source commit; local builds fall back to a deterministic bundle hash.
 Updates activate without navigating an open client. The current page keeps its
-draft, selected attachments, connection fields, and live session state, and
+draft, selected attachments, and live session state, and
 shows an update-ready notice so the operator can reload at a safe point.
 The client checks for a new worker at startup, once per minute, and when the app
 returns online or to the foreground, so a deployed build is ready before that
 operator-chosen reload.
 Clients still controlled by the original cache-first worker recover during the
-first operator-chosen reload: the replacement worker removes the legacy cache
-and redirects only the foreground legacy client (or the sole open client) after
-activation. Generated-worker updates remain passive and never navigate an open
-client.
+first operator navigation to `/companion-ui/`: the client retires only the
+known legacy root registration, and the replacement worker removes its legacy
+cache and redirects only a foreground client already at the canonical shell.
+Generated-worker updates remain passive and never navigate an open client.
+
+Every production URL is rooted at `/companion-ui/`. The service worker is
+registered with that exact scope and handles only the query-free shell and its
+build-generated static allowlist. Fleet, Garden, callback, authentication,
+WebSocket, query-bearing, credential-header, and no-store request traffic stays
+on the browser network. Online shell responses are never written to Cache
+Storage; offline mode serves only the build-time unauthenticated shell.
 
 ## In-Cluster Test Deployment
 
@@ -112,16 +116,16 @@ stopgap test surface, to be replaced by a packaged app; it serves the built
 `dist/` tree only and holds no server logic.
 
 - Image: `docker/companion-ui/Dockerfile` (multi-stage — builds this package,
-  serves it with a pinned `nginx-unprivileged` base on port 8080 as uid 999).
+  serves only `/companion-ui/` with a pinned `nginx-unprivileged` base on port
+  8080 as uid 999).
 - Build script: `docker/companion-ui/build-image.sh` (ARM64 by default for the
   Pi; commit-tied tag; refuses dirty tree and floating tags).
 - Chart workload: `companionUiTest.enabled` in `deploy/helm/psfn` (disabled by
   default, pinned image enforced, ClusterIP Service, optional Ingress,
   egress-denied NetworkPolicy).
 
-The full build/import/enable/reach flow, including pointing the in-app Settings
-drawer at the hub websocket URL, is documented under "Companion UI Test Surface"
-in `deploy/helm/psfn/README.md`.
+The full build/import/enable/reach flow is documented under "Companion UI Test
+Surface" in `deploy/helm/psfn/README.md`.
 
 ## Validation
 
@@ -136,10 +140,14 @@ npm run build
 npm audit --omit=dev
 ```
 
-The browser gate runs the legacy-worker-to-current-worker migration in real
-Chromium, then verifies one ordinary reload reaches the current shell and an
-offline reload still works. Install the pinned Playwright Chromium runtime once
-with `npx playwright install chromium` when preparing a fresh test machine.
+The browser gate runs the legacy-root-worker-to-scoped-worker migration and a
+deterministic fake OAuth/Hub lifecycle in real Chromium. It proves fresh
+connections across login and user switch, authority clearing on logout,
+revocation and offline transitions, fleet/Garden/callback pages remain
+uncontrolled, and cache keys, bodies, browser stores, URLs, and protocol frames
+contain no authority secrets. It also verifies install, update, rollback, and
+offline reloads. Install the pinned Playwright Chromium runtime once with
+`npx playwright install chromium` when preparing a fresh test machine.
 
 For tracked repo work, the parent repository requires `npm run lint` before
 closing the bead. Run that from the repo root:
@@ -151,34 +159,25 @@ npm run lint
 
 ## Wire Protocol
 
-Client to hub messages currently used by this UI include:
+Browser action frames have the exact top-level shape
+`{schemaVersion, requestId, action, resource, body}`. The UI currently emits:
 
-- `hello`
-- `user.text`
-- `turn.start`
-- `turn.end`
-- `interrupt`
-- `ping`
-- `approval.decision`
+- `conversation.interact`
+- `conversation.interrupt`
+- `conversation.touch`
+- `confirmations.resolve`
 - `artifact.preview`
-- `touch.interaction`
 
-Hub to client messages consumed by the UI include:
+The authenticated gateway sends only:
 
-- `session.ready`
-- `hello.ack`
-- `message`
-- `status`
-- `error-event`
-- `pong`
-- `approval.requested` / `approval.resolved`
-- `artifact.created` / `artifact.preview.result` / `artifact.preview.error`
-- `tool.activity`
+- one exact server-owned `session.ready` attachment presentation;
+- one exact correlated `result` for each action.
 
-Unknown hub message types fail closed during framing. The newer approval,
-artifact, and tool-activity families are additionally validated structurally:
-a frame with a known `type` but a malformed body is rejected rather than
-coerced.
+Unknown, replayed, uncorrelated, discriminator-only, or structurally malformed
+frames fail closed and close the socket. Action bodies reject browser-supplied
+human, companion, device, place, session, channel, credential, and primary-
+embodiment authority. The retained legacy Hub mirror also validates every
+known inbound and outbound family as an exact structure.
 
 ## Current UI Surfaces
 

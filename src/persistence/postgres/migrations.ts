@@ -1,3 +1,5 @@
+import { POSTGRES_CONTACT_LIFECYCLE_MIGRATIONS } from './contact-lifecycle-migrations.js';
+
 const POSTGRES_VECTOR_EXTENSION_MIGRATION = `
   DO $$
   DECLARE
@@ -803,6 +805,7 @@ export const POSTGRES_CONTACT_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS idx_social_relationship_edges_source ON social_relationship_edges(source_entity_id, updated_at DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_social_relationship_edges_target ON social_relationship_edges(target_entity_id, updated_at DESC);`,
   `CREATE INDEX IF NOT EXISTS idx_social_relationship_edges_type ON social_relationship_edges(relationship_type, updated_at DESC);`,
+  ...POSTGRES_CONTACT_LIFECYCLE_MIGRATIONS,
 ];
 
 // Sprint 10 D2a — hub identity ↔ contact enrollment. Biometrics stay at the

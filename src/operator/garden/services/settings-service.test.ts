@@ -133,6 +133,26 @@ describe('AdminSettingsDataService', () => {
     });
   });
 
+  it('exposes fleet-auth as an honest read-only off state and rejects raw edits', async () => {
+    const root = makeTempDir();
+    const service = buildService(buildConfig(root));
+
+    expect((await service.getSettingsData()).fleetAuth).toMatchObject({
+      ownerFile: 'fleet-auth.json',
+      access: { mode: 'read_only', editableFields: [] },
+      featureState: 'off',
+      status: 'off',
+      effective: { state: 'off' },
+      onDisk: { state: 'absent' },
+      restartRequired: false,
+    });
+    expect(service.getSubConfigJson('fleet-auth')).toBeNull();
+    expect(service.saveSubConfigJson('fleet-auth', '{}')).toEqual({
+      ok: false,
+      message: 'fleet-auth.json is read-only in Garden; edit the canonical system owner file outside Garden',
+    });
+  });
+
   it('round-trips the visible runtime-owned Garden controls through the canonical settings payload', async () => {
     const root = makeTempDir();
     const config = buildConfig(root);

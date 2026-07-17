@@ -40,7 +40,8 @@ import { buildAdminIntakeQuarantineRoutes } from './routes/intake-quarantine-rou
 import type { AdminIntakeQuarantineService } from './services/intake-quarantine-service.js';
 import { buildAdminDriftReviewRoutes } from './routes/drift-review-routes.js';
 import type { AdminDriftReviewService } from './services/drift-review-service.js';
-import type { AdminApiRoute } from './routes/types.js';
+import type { AdminApiRoute, AuthorizedAdminApiRoute } from './routes/types.js';
+import { compileGardenRouteDeclarations } from '../../boundary/fleet-auth/garden-route-capabilities.js';
 import type {
   AdminActionPipeService,
   AdminAdaptiveToolsService,
@@ -92,8 +93,11 @@ import { isRecord } from '../../shared/utils/types.js';
 import type { GroupMemoryBackfillInput } from '../../faculties/memory/extraction/group-backfill.js';
 import type { AdminSharedWorkspaceService } from './services/shared-workspace-service.js';
 import { buildAdminSharedWorkspaceRoutes } from './api-routes-shared-workspace.js';
+import type { GardenRequestContext } from './garden-request-context.js';
+import { buildAdminPrivacyBreakGlassRoutes } from './routes/privacy-break-glass-routes.js';
+import type { AdminPrivacyBreakGlassService } from './services/privacy-break-glass-service.js';
 
-export type { AdminApiRoute } from './routes/types.js';
+export type { AdminApiRoute, AuthorizedAdminApiRoute } from './routes/types.js';
 
 const ADMIN_MODELS_API_PATH = '/api/admin/models';
 const ADMIN_MODELS_REFRESH_API_PATH = '/api/admin/models/refresh';
@@ -273,6 +277,7 @@ export function buildAdminApiRoutes(options: {
   episodicMemoryService?: AdminEpisodicMemoryService | null;
   groupMemoryService?: AdminGroupMemoryService | null;
   memoryService: AdminMemoryService;
+  privacyBreakGlassService?: AdminPrivacyBreakGlassService | null;
   sessionService: AdminSessionService;
   contactsService: AdminContactsService;
   pendingContactsService?: AdminPendingContactsService | null;
@@ -307,9 +312,10 @@ export function buildAdminApiRoutes(options: {
     narrative: string,
     details?: Array<string | null | undefined>,
     actor?: AdminAuditActor,
+    context?: GardenRequestContext,
   ) => void;
   withBody: (req: IncomingMessage, res: ServerResponse, cb: (body: string) => void) => void;
-}): AdminApiRoute[] {
+}): AuthorizedAdminApiRoute[] {
   const {
     config,
     dashboardService,
@@ -328,6 +334,7 @@ export function buildAdminApiRoutes(options: {
     episodicMemoryService,
     groupMemoryService,
     memoryService,
+    privacyBreakGlassService,
     sessionService,
     contactsService,
     pendingContactsService,
@@ -423,7 +430,7 @@ export function buildAdminApiRoutes(options: {
     });
   };
 
-  return [
+  return compileGardenRouteDeclarations([
     ...buildAdminWishlistRoutes({
       wishlistService,
       withBody,
@@ -651,12 +658,12 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/group-memory'),
-      handle: (_req, res) => {
+      handle: (_req, res, _params, context) => {
         if (!groupMemoryService) {
           sendJson(res, 503, { error: GROUP_MEMORY_UNAVAILABLE_ERROR });
           return;
         }
-        groupMemoryService.listGroupMemoryDiagnostics().then(
+        groupMemoryService.listGroupMemoryDiagnostics(context).then(
           payload => sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS),
           error => sendJson(res, 500, { error: toSanitizedMessage(error, 'Failed to load group memory diagnostics') }),
         );
@@ -691,12 +698,12 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'GET',
       match: prefixedParamPath('/api/admin/group-memory/', 'channelId'),
-      handle: (_req, res, { channelId }) => {
+      handle: (_req, res, { channelId }, context) => {
         if (!groupMemoryService) {
           sendJson(res, 503, { error: GROUP_MEMORY_UNAVAILABLE_ERROR });
           return;
         }
-        groupMemoryService.getGroupMemoryChannelDiagnostics(channelId).then(
+        groupMemoryService.getGroupMemoryChannelDiagnostics(channelId, context).then(
           (diagnostics) => {
             if (!diagnostics) {
               sendJson(res, 404, { error: 'Group memory channel diagnostics not found' });
@@ -786,6 +793,11 @@ export function buildAdminApiRoutes(options: {
     },
     ...buildAdminSessionRoutes({ sessionService, withBody }),
     ...buildAdminContactRoutes({ contactsService, withBody }),
+    ...buildAdminPrivacyBreakGlassRoutes({
+      service: privacyBreakGlassService,
+      appendAuditTimelineEntry,
+      withBody,
+    }),
     ...(pendingContactsService
       ? buildAdminContactApprovalRoutes({ pendingContactsService })
       : []),
@@ -945,7 +957,7 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/confirmations'),
-      handle: (_req, res) => {
+      handle: (_req, res, _params, context) => {
         if (!confirmationQueueApi) {
           sendJson(res, 200, {
             entries: [],
@@ -954,7 +966,7 @@ export function buildAdminApiRoutes(options: {
           }, ADMIN_POLLED_QUEUE_JSON_HEADERS);
           return;
         }
-        confirmationQueueApi.listConfirmationQueue().then(
+        confirmationQueueApi.listConfirmationQueue(context).then(
           (result) => {
             sendJson(res, 200, {
               entries: result.entries,
@@ -974,7 +986,7 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'POST',
       match: exactPath('/api/admin/confirmations/resolve'),
-      handle: (req, res) => {
+      handle: (req, res, _params, context) => {
         if (!confirmationQueueApi) {
           appendAuditTimelineEntry?.(
             'confirmation',
@@ -982,6 +994,7 @@ export function buildAdminApiRoutes(options: {
             'Operator confirmation resolve failed: confirmation queue unavailable.',
             [],
             'operator',
+            context,
           );
           sendJson(res, 400, { ok: false, message: 'Confirmation queue is unavailable' });
           return;
@@ -995,6 +1008,7 @@ export function buildAdminApiRoutes(options: {
               'Operator confirmation resolve failed: invalid JSON payload.',
               [],
               'operator',
+              context,
             );
             sendJson(res, 400, { ok: false, message: parsed.error });
             return;
@@ -1010,6 +1024,7 @@ export function buildAdminApiRoutes(options: {
               'Operator confirmation resolve failed: missing confirmation ID.',
               [],
               'operator',
+              context,
             );
             sendJson(res, 400, { ok: false, message: 'Confirmation ID is required' });
             return;
@@ -1021,6 +1036,7 @@ export function buildAdminApiRoutes(options: {
               'Operator confirmation resolve failed: invalid decision.',
               [`id=${id}`, `decision=${decision || 'missing'}`],
               'operator',
+              context,
             );
             sendJson(res, 400, { ok: false, message: 'Invalid decision (must be approve, deny, or modify)' });
             return;
@@ -1035,7 +1051,7 @@ export function buildAdminApiRoutes(options: {
           // Operator-only gateway confirmations are resolved by the Garden
           // operator process on a direct operator→gateway path, so no operator
           // ADMIN_TOKEN is read from or forwarded through this agent (x5rt.10).
-          confirmationQueueApi!.resolveConfirmationQueue(resolveParams).then(
+          confirmationQueueApi!.resolveConfirmationQueue(resolveParams, context).then(
             (result) => {
               appendAuditTimelineEntry?.(
                 'confirmation',
@@ -1049,6 +1065,7 @@ export function buildAdminApiRoutes(options: {
                   result.message ? `message=${result.message}` : null,
                 ],
                 'operator',
+                context,
               );
               sendJson(res, 200, {
                 ok: result.status === 'approved' || result.status === 'modified',
@@ -1064,6 +1081,7 @@ export function buildAdminApiRoutes(options: {
                 `Operator confirmation resolve failed for ${id}.`,
                 [`decision=${decision}`, `error=${toSanitizedMessage(error, 'unknown error')}`],
                 'operator',
+                context,
               );
               sendJson(res, 500, { ok: false, message: `Confirmation resolve failed: ${String(error)}` });
             },
@@ -1138,5 +1156,5 @@ export function buildAdminApiRoutes(options: {
         });
       },
     },
-  ];
+  ] satisfies AdminApiRoute[]);
 }

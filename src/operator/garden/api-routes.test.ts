@@ -737,9 +737,9 @@ describe('AdminServer JSON API routes', () => {
     const services = createInProcessGardenAdminContract({
       env: {},
       memoryStore: memoryStorePort,
-      resolveMemorySubjectAccessContext: () => ({
+      legacyMemorySubjectAccessContext: {
         viewerContactId: GARDEN_TEST_SUBJECT_ID,
-      }),
+      },
       episodicStore,
       sessionStore,
       sessionManager,

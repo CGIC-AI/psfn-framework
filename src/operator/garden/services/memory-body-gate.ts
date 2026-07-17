@@ -1,4 +1,14 @@
 import type { PurrMemory } from '../../../faculties/memory/types.js';
+import {
+  MEMORY_SUBJECT_CLASSIFIER_VERSION,
+  type MemorySubjectClassification,
+} from '../../../shared/contracts/memory-subject.js';
+import {
+  memorySubjectClassifierEvidenceDigest,
+  memorySubjectScopeDigest,
+  type MemorySubjectJitRequest,
+} from '../../../shared/contracts/memory-subject-jit.js';
+import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
 import { isHighIntimacySensitivityLevel } from '../../../system/trust/types.js';
 import type {
   AdminMemoryBodyRedaction,
@@ -47,6 +57,25 @@ function buildBodyRedaction(memory: Pick<PurrMemory, 'sensitivity' | 'text'>): A
 interface AdminMemorySessionGrants {
   elevationExpiresAt: number | null;
   revealExpiryById: Map<string, number>;
+}
+
+export interface FleetMemoryBodyAuthorizationContext {
+  principalId: string;
+  browserSessionId: string;
+  companionId: string;
+  viewerContactId: string;
+  viewerRelation: 'self' | 'co_subject';
+  action: 'memory.jit.self';
+  resourceMemoryId: string;
+  assurance: 'webauthn_uv';
+  authorityGeneration: number;
+  globalAuthEpoch: number;
+  sessionAuthnVersion: number;
+  sessionAuthzVersion: number;
+  bindingVersion: number;
+  grantVersion: number;
+  policyVersion: number;
+  requestExpiresAtSeconds: number;
 }
 
 /**
@@ -132,6 +161,132 @@ export class AdminMemoryBodyGate {
       bodyRedacted: true,
       bodyRedaction: buildBodyRedaction(memory),
     };
+  }
+
+  /**
+   * Routine fleet view at every sensitivity. The SQL projection has already
+   * hidden non-subject rows before IDs and counts are constructed; this
+   * second check fails closed if the classification changed before response
+   * construction. Only high-intimacy rows receive a reveal binding.
+   */
+  toFleetAdminView(
+    context: Omit<FleetMemoryBodyAuthorizationContext, 'action' | 'resourceMemoryId'
+      | 'assurance' | 'requestExpiresAtSeconds'>,
+    memory: PurrMemory,
+    classification: MemorySubjectClassification,
+  ): AdminMemoryView {
+    this.assertFleetProjection(context, memory, classification);
+    const subjectSafeMemory = this.subjectSafeMemory(memory, context.viewerContactId);
+    if (!isHighIntimacyMemory(subjectSafeMemory)) return subjectSafeMemory;
+    const redacted = this.toAdminView(null, subjectSafeMemory);
+    return {
+      ...redacted,
+      subjectJitBinding: {
+        subjectScopeDigest: memorySubjectScopeDigest({
+          companionId: context.companionId,
+          memoryId: memory.id,
+          viewerContactId: context.viewerContactId,
+          viewerRelation: context.viewerRelation,
+          classification,
+        }),
+        memoryRevision: classification.memoryRevision,
+        classifierVersion: classification.classifierVersion,
+        classifierEvidenceDigest: memorySubjectClassifierEvidenceDigest(classification),
+      },
+    };
+  }
+
+  /**
+   * Exercise one already-consumed gateway JIT grant. No reusable in-process
+   * fleet grant is minted: the signed request and SQL grant binding authorize
+   * exactly this response, while legacy feature-off reveal TTLs stay intact.
+   */
+  toFleetJitView(
+    context: FleetMemoryBodyAuthorizationContext,
+    request: MemorySubjectJitRequest,
+    memory: PurrMemory,
+    classification: MemorySubjectClassification,
+  ): AdminMemoryView {
+    this.assertFleetProjection(context, memory, classification);
+    if (context.resourceMemoryId !== memory.id
+      || !Number.isSafeInteger(context.requestExpiresAtSeconds)
+      || this.now() >= context.requestExpiresAtSeconds * 1_000
+      || request.memoryRevision !== classification.memoryRevision
+      || request.classifierVersion !== classification.classifierVersion
+      || !timingSafeStringEqual(
+        request.classifierEvidenceDigest,
+        memorySubjectClassifierEvidenceDigest(classification),
+      )
+      || !timingSafeStringEqual(request.subjectScopeDigest, memorySubjectScopeDigest({
+        companionId: context.companionId,
+        memoryId: memory.id,
+        viewerContactId: context.viewerContactId,
+        viewerRelation: context.viewerRelation,
+        classification,
+      }))) {
+      throw new Error('Memory subject JIT grant does not match the current authorization projection');
+    }
+    return this.subjectSafeMemory(memory, context.viewerContactId);
+  }
+
+  private subjectSafeMemory(memory: PurrMemory, viewerContactId: string): PurrMemory {
+    const provenance = memory.provenance ? { ...memory.provenance } : undefined;
+    if (provenance) {
+      for (const field of [
+        'triggerContactId',
+        'routedContactId',
+        'sourceContactId',
+        'subjectContactId',
+      ] as const) {
+        if (provenance[field] !== undefined && provenance[field] !== viewerContactId) {
+          delete provenance[field];
+        }
+      }
+      if (provenance.subjectContactIds) {
+        provenance.subjectContactIds = provenance.subjectContactIds
+          .filter(contactId => contactId === viewerContactId);
+      }
+      delete provenance.sourceAuthorId;
+      delete provenance.sourceSpeakerName;
+    }
+    const subjectSafe = {
+      ...memory,
+      ...(provenance ? { provenance } : {}),
+    };
+    if (subjectSafe.contactId !== undefined && subjectSafe.contactId !== viewerContactId) {
+      delete subjectSafe.contactId;
+    }
+    return subjectSafe;
+  }
+
+  private assertFleetProjection(
+    context: Pick<FleetMemoryBodyAuthorizationContext,
+      'principalId' | 'browserSessionId' | 'companionId' | 'viewerContactId' | 'viewerRelation'
+      | 'authorityGeneration' | 'globalAuthEpoch' | 'sessionAuthnVersion'
+      | 'sessionAuthzVersion' | 'bindingVersion' | 'grantVersion' | 'policyVersion'>,
+    memory: PurrMemory,
+    classification: MemorySubjectClassification,
+  ): void {
+    const versions = [
+      context.authorityGeneration,
+      context.globalAuthEpoch,
+      context.sessionAuthnVersion,
+      context.sessionAuthzVersion,
+      context.bindingVersion,
+      context.grantVersion,
+      context.policyVersion,
+    ];
+    if (!context.principalId.trim() || !context.browserSessionId.trim()
+      || !context.companionId.trim() || !context.viewerContactId.trim()
+      || versions.some(version => !Number.isSafeInteger(version) || version < 1)
+      || classification.memoryId !== memory.id
+      || classification.status !== 'current'
+      || classification.classifierVersion !== MEMORY_SUBJECT_CLASSIFIER_VERSION
+      || classification.subjectClass !== 'single_contact'
+      || classification.subjectContactIds.length !== 1
+      || classification.subjectContactIds[0] !== context.viewerContactId) {
+      throw new Error('Memory body access requires a current proven single-contact subject');
+    }
   }
 
   private grantsFor(sessionKey: string): AdminMemorySessionGrants {

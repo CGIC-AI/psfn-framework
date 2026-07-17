@@ -1,7 +1,7 @@
 export const FLEET_AUTH_FIRST_OWNER_FUNCTION_NAME = 'fleet_auth.complete_first_owner_bootstrap';
 
 export const FLEET_AUTH_FIRST_OWNER_FUNCTION_ARG_TYPES =
-  'uuid, uuid, text, uuid, text, uuid, uuid, uuid, timestamptz';
+  'uuid, uuid, text, uuid, text, bigint, bigint, uuid, text, uuid, uuid, uuid, timestamptz, text, text, text, text, text';
 
 /**
  * Narrow SECURITY DEFINER boundary for the one no-existing-owner transition.
@@ -10,16 +10,32 @@ export const FLEET_AUTH_FIRST_OWNER_FUNCTION_ARG_TYPES =
  * first_owner ceremony. All authority is rechecked under one transaction.
  */
 export const FLEET_AUTH_FIRST_OWNER_DDL_SQL = `
+DROP FUNCTION IF EXISTS fleet_auth.complete_first_owner_bootstrap(
+  uuid, uuid, text, uuid, text, uuid, uuid, uuid, timestamptz
+);
+DROP FUNCTION IF EXISTS fleet_auth.complete_first_owner_bootstrap(
+  uuid, uuid, text, uuid, text, bigint, bigint, uuid, text,
+  uuid, uuid, uuid, timestamptz
+);
 CREATE OR REPLACE FUNCTION fleet_auth.complete_first_owner_bootstrap(
   p_ceremony_id uuid,
   p_principal_id uuid,
   p_provider_subject_id text,
   p_companion_id uuid,
   p_contact_id text,
+  p_contact_authority_version bigint,
+  p_identity_version bigint,
+  p_verification_id uuid,
+  p_verification_digest text,
   p_binding_id uuid,
   p_role_grant_id uuid,
   p_audit_event_id uuid,
-  p_at timestamptz
+  p_at timestamptz,
+  p_ceremony_digest text,
+  p_provider_subject_digest text,
+  p_companion_digest text,
+  p_contact_digest text,
+  p_verification_id_digest text
 ) RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -34,6 +50,7 @@ DECLARE
   v_subject fleet_auth.provider_subjects%ROWTYPE;
   v_new_authn bigint;
   v_new_authz bigint;
+  v_now timestamptz;
 BEGIN
   IF p_at IS NULL THEN
     RAISE EXCEPTION 'first-owner timestamp is required' USING ERRCODE = '42501';
@@ -54,7 +71,6 @@ BEGIN
   FOR UPDATE;
   IF NOT FOUND OR v_ceremony.kind <> 'first_owner'
      OR v_ceremony.status <> 'pending'
-     OR v_ceremony.expires_at <= p_at
      OR v_ceremony.global_auth_epoch <> v_epoch THEN
     RAISE EXCEPTION 'trusted-host first-owner ceremony is unavailable' USING ERRCODE = '42501';
   END IF;
@@ -87,6 +103,26 @@ BEGIN
     RAISE EXCEPTION 'first-owner provider subject is unavailable' USING ERRCODE = '42501';
   END IF;
 
+  -- The caller timestamp is diagnostic input only. Expiry authority is sampled
+  -- from the database after every pre-existing ceremony/principal/provider row
+  -- has been locked, so waiting on any of those locks cannot preserve a stale
+  -- ceremony past its real expiry.
+  v_now := clock_timestamp();
+  IF v_ceremony.expires_at <= v_now THEN
+    RAISE EXCEPTION 'trusted-host first-owner ceremony expired while acquiring authority locks'
+      USING ERRCODE = '42501';
+  END IF;
+  IF p_contact_authority_version < 1 OR p_identity_version < 1
+     OR p_verification_id IS NULL
+     OR p_verification_digest !~ '^[0-9a-f]{64}$'
+     OR p_ceremony_digest !~ '^[0-9a-f]{64}$'
+     OR p_provider_subject_digest !~ '^[0-9a-f]{64}$'
+     OR p_companion_digest !~ '^[0-9a-f]{64}$'
+     OR p_contact_digest !~ '^[0-9a-f]{64}$'
+     OR p_verification_id_digest !~ '^[0-9a-f]{64}$' THEN
+    RAISE EXCEPTION 'first-owner contact authority proof is invalid' USING ERRCODE = '42501';
+  END IF;
+
   IF EXISTS (
     SELECT 1
     FROM fleet_auth.principal_role_grants
@@ -108,7 +144,7 @@ BEGIN
 
   INSERT INTO fleet_auth.companion_authority_state
     (companion_id, lifecycle, authority_generation, created_at, updated_at)
-  VALUES (p_companion_id, 'active', v_generation, p_at, p_at)
+  VALUES (p_companion_id, 'active', v_generation, v_now, v_now)
   ON CONFLICT (companion_id) DO NOTHING;
   IF NOT EXISTS (
     SELECT 1 FROM fleet_auth.companion_authority_state
@@ -129,11 +165,11 @@ BEGIN
       binding_version = binding_version + 1,
       grant_version = grant_version + 1,
       policy_version = policy_version + 1,
-      updated_at = p_at
+      updated_at = v_now
   WHERE principal_id = p_principal_id;
 
   UPDATE fleet_auth.provider_subjects
-  SET state = 'active', updated_at = p_at
+  SET state = 'active', updated_at = v_now
   WHERE provider = 'discord' AND subject_id = p_provider_subject_id;
 
   INSERT INTO fleet_auth.principal_contact_bindings
@@ -145,9 +181,13 @@ BEGIN
       'kind', 'trusted_host_first_owner',
       'ceremonyId', p_ceremony_id::text,
       'provider', 'discord',
-      'providerSubjectId', p_provider_subject_id
+      'providerSubjectId', p_provider_subject_id,
+      'contactAuthorityVersion', p_contact_authority_version,
+      'identityVersion', p_identity_version,
+      'verificationId', p_verification_id::text,
+      'verificationDigest', p_verification_digest
     ),
-    v_generation, p_at, p_at
+    v_generation, v_now, v_now
   );
 
   INSERT INTO fleet_auth.principal_role_grants
@@ -155,18 +195,18 @@ BEGIN
      authority_generation, created_at, updated_at)
   VALUES (
     p_role_grant_id, p_principal_id, p_companion_id, 'owner', 'active',
-    v_generation, p_at, p_at
+    v_generation, v_now, v_now
   );
 
   UPDATE fleet_auth.authority_state
-  SET global_auth_epoch = v_new_epoch, updated_at = p_at
+  SET global_auth_epoch = v_new_epoch, updated_at = v_now
   WHERE singleton = TRUE;
 
   UPDATE fleet_auth.browser_sessions
-  SET revoked_at = COALESCE(revoked_at, p_at)
+  SET revoked_at = COALESCE(revoked_at, v_now)
   WHERE principal_id = p_principal_id;
   UPDATE fleet_auth.jit_authorization_grants
-  SET revoked_at = COALESCE(revoked_at, p_at)
+  SET revoked_at = COALESCE(revoked_at, v_now)
   WHERE principal_id = p_principal_id;
   UPDATE fleet_auth.step_up_challenges
   SET status = CASE WHEN status = 'pending' THEN 'revoked' ELSE status END
@@ -177,29 +217,47 @@ BEGIN
   WHERE principal_id = p_principal_id;
 
   UPDATE fleet_auth.trusted_host_ceremonies
-  SET status = 'consumed', consumed_at = p_at
+  SET status = 'consumed', consumed_at = v_now
   WHERE ceremony_id = p_ceremony_id;
 
   INSERT INTO fleet_auth.authorization_audit_events
     (event_id, actor_context, action, resource, decision, reason_code,
      companion_id, principal_id, authority_generation, global_auth_epoch,
-     occurred_at)
+     occurred_at, decision_id, ceremony_id, decision_context)
   VALUES (
     p_audit_event_id,
     jsonb_build_object(
       'kind', 'trusted_host',
       'id', 'first_owner',
-      'ceremony', p_ceremony_id::text
+      'ceremonyDigest', p_ceremony_digest
     ),
     'authority.first_owner',
-    format('principal:%s;contact:%s;role:owner', p_principal_id, p_contact_id),
+    'first-owner-exact-tuple',
     'allow',
     'trusted_host_oauth_webauthn',
     p_companion_id,
     p_principal_id,
     v_generation,
     v_new_epoch,
-    p_at
+    v_now,
+    p_audit_event_id,
+    p_ceremony_id,
+    jsonb_build_object(
+      'schemaVersion', 1,
+      'provider', 'discord',
+      'providerSubjectDigest', p_provider_subject_digest,
+      'companionDigest', p_companion_digest,
+      'contactDigest', p_contact_digest,
+      'role', 'owner',
+      'ceremonyDigest', p_ceremony_digest,
+      'contactAuthorityVersion', p_contact_authority_version,
+      'identityVersion', p_identity_version,
+      'verificationIdDigest', p_verification_id_digest,
+      'verificationDigest', p_verification_digest,
+      'authorityGeneration', v_generation,
+      'globalAuthEpoch', v_new_epoch,
+      'decision', 'allow'
+    )
   );
 
   RETURN jsonb_build_object(

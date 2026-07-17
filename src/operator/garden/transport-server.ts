@@ -12,7 +12,7 @@ import {
   verifyPeerCertificateSpiffeUri,
 } from '../../shared/net/mtls.js';
 import { bindRequestForResponse, readBodyWithLimit, sendJson, sendText } from '../../channels/backplane/http/primitives.js';
-import type { AdminApiRoute } from './api-routes.js';
+import type { AuthorizedAdminApiRoute } from './api-routes.js';
 import { buildAdminApiRoutes } from './api-routes.js';
 import type { GardenAdminDomainServices } from './admin-contract.js';
 import { AdminServerTelemetryTransport } from './server-telemetry-transport.js';
@@ -25,6 +25,24 @@ import type {
   AdminAuditActor,
   AdminAuditDecision,
 } from './types.js';
+import { assertGardenRouteDeclarationsCovered } from '../../boundary/fleet-auth/garden-route-capabilities.js';
+import {
+  GardenRequestTargetError,
+  parseCanonicalGardenRequestPath,
+  validateGardenRequestMetadata,
+} from '../../boundary/fleet-auth/request-capability-target.js';
+import {
+  admitFleetGardenRequest,
+  readFleetGardenBody,
+  resolveGardenAdmissionMode,
+  type GardenAdmissionMode,
+} from './garden-admission.js';
+import {
+  createFleetGardenRequestContext,
+  createLegacyGardenRequestContext,
+  gardenRequestServiceBoundaryDenial,
+  type GardenRequestContext,
+} from './garden-request-context.js';
 
 const log = createComponentLogger('GardenAdminTransport');
 const ADMIN_MAX_BODY_SIZE = 65_536;
@@ -37,18 +55,36 @@ export interface GardenAdminTransportServerConfig {
 }
 
 function dispatchAdminApiRoute(
-  routes: readonly AdminApiRoute[],
+  routes: readonly AuthorizedAdminApiRoute[],
   method: string,
   path: string,
   req: IncomingMessage,
   res: ServerResponse,
+  context: GardenRequestContext | undefined,
+  companionId: string | undefined,
 ): boolean {
   for (const route of routes) {
     if (route.method !== method) continue;
     const params = route.match(path);
     if (!params) continue;
     bindRequestForResponse(res, req);
-    route.handle(req, res, params);
+    const requestContext = context ?? createLegacyGardenRequestContext({
+      authorization: route.capability.authorization,
+      routeId: route.capability.id,
+      ...(companionId ? { companionId } : {}),
+      pathParams: params,
+      query: validateGardenRequestMetadata({
+        rawTarget: req.url ?? '/',
+        method: req.method ?? method,
+        headers: req.headers,
+      }).query,
+    });
+    const boundaryDenial = gardenRequestServiceBoundaryDenial(requestContext);
+    if (boundaryDenial) {
+      sendJson(res, 403, { error: boundaryDenial });
+      return true;
+    }
+    route.handle(req, res, params, requestContext);
     return true;
   }
   return false;
@@ -56,18 +92,29 @@ function dispatchAdminApiRoute(
 
 export class GardenAdminTransportServer implements Lifecycle {
   private readonly server: HttpServer | HttpsServer;
-  private readonly routes: AdminApiRoute[];
+  private readonly routes: AuthorizedAdminApiRoute[];
   private readonly telemetryTransport: AdminServerTelemetryTransport;
+  private readonly admission: GardenAdmissionMode;
+  private readonly bufferedFleetBodies = new WeakMap<IncomingMessage, string>();
+  private readonly companionId?: string;
 
   constructor(
     private readonly config: GardenAdminTransportServerConfig,
   ) {
+    const modeSelection = {
+      fleetAuthVerifier: config.config.fleetAuthVerifier,
+      companionId: config.config.companionId,
+      audience: 'agent' as const,
+    };
+    this.admission = resolveGardenAdmissionMode(modeSelection);
+    this.companionId = config.config.companionId;
     const appendAuditTimelineEntry = (
       actionType: AdminAuditActionType,
       decision: AdminAuditDecision,
       narrative: string,
       details?: Array<string | null | undefined>,
       actor?: AdminAuditActor,
+      context?: GardenRequestContext,
     ): void => {
       const joinedDetails = details
         ?.filter((detail): detail is string => typeof detail === 'string' && detail.trim().length > 0)
@@ -78,6 +125,7 @@ export class GardenAdminTransportServer implements Lifecycle {
         narrative,
         ...(joinedDetails ? { details: joinedDetails } : {}),
         ...(actor ? { actor } : {}),
+        ...(context ? { requestContext: context } : {}),
       });
     };
     this.routes = buildAdminApiRoutes({
@@ -96,6 +144,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       episodicMemoryService: config.services.episodicMemory,
       groupMemoryService: config.services.groupMemory,
       memoryService: config.services.memory,
+      privacyBreakGlassService: config.services.privacyBreakGlass,
       sessionService: config.services.sessions,
       contactsService: config.services.contacts,
       pendingContactsService: config.services.pendingContacts ?? null,
@@ -125,6 +174,7 @@ export class GardenAdminTransportServer implements Lifecycle {
       withBody: (req, res, cb) => this.withBody(req, res, cb),
       appendAuditTimelineEntry,
     });
+    assertGardenRouteDeclarationsCovered(this.routes);
     this.telemetryTransport = new AdminServerTelemetryTransport(
       config.eventBus,
       () => true,
@@ -306,10 +356,49 @@ export class GardenAdminTransportServer implements Lifecycle {
       return;
     }
 
-    const requestPath = new URL(req.url ?? '/', 'http://localhost').pathname;
+    let requestPath: string;
+    try {
+      requestPath = parseCanonicalGardenRequestPath(req.url ?? '/').canonicalPath;
+    } catch {
+      sendText(res, 400, 'Invalid request target');
+      return;
+    }
 
     if ((req.method ?? 'GET') === 'GET' && requestPath === HEALTH_PROBE_PATH) {
       sendJson(res, 200, { status: 'ok', mode: this.config.endpoint.mode });
+      return;
+    }
+
+    if (this.admission.kind === 'fleet-principal') {
+      void this.handleFleetRequest(req, res);
+      return;
+    }
+
+    this.dispatchRequest(req, res, requestPath);
+  }
+
+  private dispatchRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    parsedPath?: string,
+    context?: GardenRequestContext,
+  ): void {
+    let requestPath = parsedPath ?? '/';
+
+    try {
+      requestPath = validateGardenRequestMetadata({
+        rawTarget: req.url ?? '/',
+        method: req.method ?? 'GET',
+        headers: req.headers,
+      }).canonicalPath;
+    } catch (error) {
+      if (error instanceof GardenRequestTargetError && error.code === 'authority_forbidden') {
+        sendJson(res, 403, { error: 'Cross-tenant authority selector is forbidden' });
+      } else if (error instanceof GardenRequestTargetError && error.code === 'route_not_declared') {
+        sendText(res, 404, `Not found: ${requestPath}`);
+      } else {
+        sendText(res, 400, 'Invalid request target');
+      }
       return;
     }
 
@@ -320,6 +409,8 @@ export class GardenAdminTransportServer implements Lifecycle {
         requestPath,
         req,
         res,
+        context,
+        this.companionId,
       );
       if (handled) return;
     } catch (error) {
@@ -336,6 +427,40 @@ export class GardenAdminTransportServer implements Lifecycle {
     sendText(res, 404, `Not found: ${requestPath}`);
   }
 
+  private async handleFleetRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    let body: Buffer | null;
+    try {
+      body = await readFleetGardenBody(req, res, {
+        maxBytes: ADMIN_MAX_BODY_SIZE,
+        logger: log,
+      });
+    } catch (error) {
+      log.error('Fleet Garden transport body read failed', { error: toErrorMessage(error) });
+      if (!res.writableEnded && !res.destroyed) sendText(res, 500, 'Internal Server Error');
+      return;
+    }
+    if (body === null) return;
+    const admitted = await admitFleetGardenRequest({
+      admission: this.admission as Extract<GardenAdmissionMode, { kind: 'fleet-principal' }>,
+      rawTarget: req.url ?? '/',
+      method: req.method ?? 'GET',
+      headers: req.headers,
+      body,
+    });
+    if (admitted.decision === 'deny' || !admitted.verified) {
+      const status = admitted.decision === 'deny' ? admitted.status : 403;
+      const message = admitted.decision === 'deny' ? admitted.message : 'Invalid Fleet Garden capability';
+      sendText(res, status, message);
+      return;
+    }
+    this.bufferedFleetBodies.set(req, body.toString('utf8'));
+    const context = createFleetGardenRequestContext({
+      target: admitted.target,
+      verified: admitted.verified,
+    });
+    this.dispatchRequest(req, res, admitted.target.canonicalPath, context);
+  }
+
   private handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const rejectionReason = this.authorizePeer(req);
     if (rejectionReason) {
@@ -345,7 +470,33 @@ export class GardenAdminTransportServer implements Lifecycle {
       return;
     }
 
+    if (this.admission.kind === 'fleet-principal') {
+      void this.handleFleetUpgrade(req, socket, head);
+      return;
+    }
     this.telemetryTransport.handleUpgrade(req, socket, head);
+  }
+
+  private async handleFleetUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+    const admitted = await admitFleetGardenRequest({
+      admission: this.admission as Extract<GardenAdmissionMode, { kind: 'fleet-principal' }>,
+      rawTarget: req.url ?? '/',
+      method: 'WS',
+      headers: req.headers,
+      body: Buffer.alloc(0),
+    });
+    if (admitted.decision === 'deny' || !admitted.verified) {
+      const status = admitted.decision === 'deny' ? admitted.status : 403;
+      socket.write(`HTTP/1.1 ${status} Unauthorized\r\n\r\n`);
+      socket.destroy();
+      return;
+    }
+    this.telemetryTransport.handleAuthorizedUpgrade(
+      req,
+      socket,
+      head,
+      admitted.verified.expiresAt,
+    );
   }
 
   private withBody(
@@ -353,6 +504,12 @@ export class GardenAdminTransportServer implements Lifecycle {
     res: ServerResponse,
     cb: (body: string) => void,
   ): void {
+    const bufferedBody = this.bufferedFleetBodies.get(req);
+    if (bufferedBody !== undefined) {
+      this.bufferedFleetBodies.delete(req);
+      cb(bufferedBody);
+      return;
+    }
     readBodyWithLimit(req, res, {
       maxBytes: ADMIN_MAX_BODY_SIZE,
       logger: log,

@@ -3,6 +3,13 @@ import { EventBus } from '../../shared/event-bus.js';
 import { AgentApiBackend } from './agent-backend.js';
 import { parseSatelliteRegistryConfig } from '../backplane/satellite-registry.js';
 import { deriveApiKeyPrincipalId } from '../backplane/http/auth.js';
+import { generateKeyPairSync, randomUUID } from 'node:crypto';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
+import { compileCompanionUiAction } from '../../boundary/fleet-auth/companion-ui-action.js';
+import {
+  createGatewayRequestCapabilitySigner,
+  createRequestCapabilityVerifier,
+} from '../../boundary/fleet-auth/request-capability.js';
 
 function createSessionManagerStub() {
   return {
@@ -53,10 +60,26 @@ describe('AgentApiBackend Hub device principal boundary', () => {
       content: 'device reply', channelId: message.channelId,
       metadata: { inputTokens: 1, outputTokens: 1 },
     }));
+    const assertionKeys = generateKeyPairSync('ed25519');
+    const assertionSigner = createGatewayRequestCapabilitySigner({
+      issuer: 'fleet-auth', kid: 'agent-key',
+      privateKeyPem: assertionKeys.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+      ttlSeconds: 30,
+    });
+    const assertionVerifier = createRequestCapabilityVerifier({
+      issuer: 'fleet-auth', maxTtlSeconds: 30,
+      keys: [{
+        issuer: 'fleet-auth', kid: 'agent-key',
+        publicKeyPem: assertionKeys.publicKey.export({ type: 'spki', format: 'pem' }).toString(),
+        notBefore: '2025-01-01T00:00:00.000Z',
+        notAfter: '2030-01-01T00:00:00.000Z', status: 'active',
+      }],
+    });
     const backend = new AgentApiBackend({
       agentLoop: { handleMessage, abort: vi.fn() } as any,
       eventBus: new EventBus(), sessionManager,
       companionId,
+      requestCapabilityVerifier: assertionVerifier,
       satelliteRegistry: parseSatelliteRegistryConfig({
         schemaVersion: 1, enabled: true,
         satellites: [{
@@ -87,6 +110,21 @@ describe('AgentApiBackend Hub device principal boundary', () => {
       issuedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 30_000).toISOString(),
       jti: '018f0f10-79b2-4cc7-8c99-0242ac120002',
     };
+    const hubDeviceAttachment = {
+      attachmentId: '018f0f10-79b2-4cc7-8c99-0242ac120003',
+      disposition: 'guest_created' as const,
+      deviceActor: {
+        kind: 'hub_device' as const,
+        principal: hubDevicePrincipal,
+        connectionId: 'authenticated-connection',
+      },
+      actor: { kind: 'guest' as const, companionId },
+      channel: {
+        source: 'server' as const,
+        id: `hub-device:${'a'.repeat(64)}`,
+        companionId,
+      },
+    };
     const result = await backend.handleChatCompletion({
       requestId: 'hub-device-request',
       request: { model: 'companion', messages: [{ role: 'user', content: 'hello' }] },
@@ -98,14 +136,15 @@ describe('AgentApiBackend Hub device principal boundary', () => {
         'x-psfn-satellite-session-id': 'realtime:office-device:session',
       },
       hubDevicePrincipal,
+      hubDeviceAttachment,
     });
 
     expect(result).toMatchObject({ ok: true });
     expect(handleMessage).toHaveBeenCalledOnce();
     expect(handleMessage.mock.calls[0]?.[0]).toMatchObject({
-      channelId: 'hub-device:office-device:realtime:office-device:session',
-      authorId: 'hub-device:office-device',
-      authorName: 'Enrolled Hub device',
+      channelId: `hub-device:${'a'.repeat(64)}`,
+      authorId: 'hub-device-guest:office-device',
+      authorName: 'Hub device guest',
       routing: { satellite: { hubDevicePrincipal } },
     });
     expect(handleMessage.mock.calls[0]?.[0].routing).not.toHaveProperty('canonicalContactId');
@@ -120,6 +159,7 @@ describe('AgentApiBackend Hub device principal boundary', () => {
         'x-psfn-satellite-session-id': 'realtime:office-device:session',
       },
       hubDevicePrincipal: { ...hubDevicePrincipal, companionId: '22222222-2222-4222-8222-222222222222' },
+      hubDeviceAttachment,
     })).resolves.toMatchObject({ ok: false, error: { type: 'hub_device_principal_mismatch' } });
 
     await expect(backend.handleChatCompletion({
@@ -133,7 +173,136 @@ describe('AgentApiBackend Hub device principal boundary', () => {
         'x-psfn-satellite-session-id': 'realtime:office-device:session',
       },
       hubDevicePrincipal: { ...hubDevicePrincipal, humanPrincipal: { id: 'forged' } } as any,
+      hubDeviceAttachment,
     })).resolves.toMatchObject({ ok: false, error: { type: 'hub_device_principal_mismatch' } });
+
+    const humanAttachment = {
+      ...hubDeviceAttachment,
+      attachmentId: '018f0f10-79b2-4cc7-8c99-0242ac120004',
+      disposition: 'created' as const,
+      actor: {
+        kind: 'human' as const,
+        principalId: '33333333-3333-4333-8333-333333333333',
+        companionId,
+        providerSubject: { provider: 'discord' as const, subjectId: '123456789012345678' },
+        contact: {
+          bindingId: '44444444-4444-4444-8444-444444444444',
+          contactId: 'contact/current-human',
+          bindingVersion: 1,
+        },
+        operator: {
+          grantId: '55555555-5555-4555-8555-555555555555',
+          role: 'member' as const,
+          grantVersion: 1,
+        },
+        session: {
+          recordId: '66666666-6666-4666-8666-666666666666',
+          authorityGeneration: 1,
+          globalAuthEpoch: 1,
+        },
+      },
+    };
+    await expect(backend.handleChatCompletion({
+      requestId: 'hub-device-human',
+      request: { model: 'companion', messages: [{ role: 'user', content: 'hello' }] },
+      principal,
+      headers: {
+        'x-psfn-satellite-claim-type': 'hub-device',
+        'x-psfn-satellite-id': 'office',
+        'x-psfn-satellite-endpoint-id': 'office-device',
+        'x-psfn-satellite-session-id': 'realtime:office-device:session',
+      },
+      hubDevicePrincipal,
+      hubDeviceAttachment: humanAttachment,
+    })).resolves.toMatchObject({ ok: true });
+    expect(handleMessage.mock.calls.at(-1)?.[0]).toMatchObject({
+      channelId: `hub-device:${'a'.repeat(64)}`,
+      authorId: humanAttachment.actor.principalId,
+      authorName: 'Authenticated fleet human',
+      routing: {
+        canonicalContactId: humanAttachment.actor.contact.contactId,
+        satellite: { hubDevicePrincipal },
+      },
+    });
+
+    const rawUiBody = Buffer.from(JSON.stringify({
+      schemaVersion: 1,
+      requestId: 'ui-turn-1',
+      action: 'companion.interact',
+      resource: 'conversation.interact',
+      body: { content: 'browser text remains untrusted' },
+    }));
+    const compiled = compileCompanionUiAction(
+      rawUiBody,
+      createCompanionId(companionId),
+      { capabilities: ['text'], telemetryScopes: [] },
+    );
+    const versions = {
+      authorityGeneration: 1, globalAuthEpoch: 1, sessionAuthnVersion: 1,
+      sessionAuthzVersion: 1, bindingVersion: 1, grantVersion: 1, policyVersion: 1,
+    };
+    const parentInput = { target: compiled.target, requestId: randomUUID(), decisionId: randomUUID(), versions };
+    const parentToken = assertionSigner.signOperator(parentInput);
+    const verifiedParent = assertionVerifier.verifyOperator({ token: parentToken, ...parentInput });
+    const parent = {
+      audience: verifiedParent.audience as `operator:${string}`,
+      requestId: verifiedParent.requestId,
+      decisionId: verifiedParent.decisionId,
+      jti: verifiedParent.jti,
+      targetDigest: verifiedParent.targetDigest,
+    };
+    const childInput = { target: compiled.target, requestId: randomUUID(), decisionId: randomUUID(), versions, parent };
+    const childToken = assertionSigner.signAgent(childInput);
+    const capability = {
+      token: childToken,
+      requestId: childInput.requestId,
+      decisionId: childInput.decisionId,
+      versions,
+      parent,
+      rawBodyBase64Url: rawUiBody.toString('base64url'),
+    };
+    const uiHeaders = {
+      'x-psfn-satellite-claim-type': 'hub-device',
+      'x-psfn-satellite-id': 'office',
+      'x-psfn-satellite-endpoint-id': 'office-device',
+      'x-psfn-satellite-session-id': 'realtime:office-device:session',
+      'x-psfn-satellite-capabilities': 'text',
+    };
+    await expect(backend.handleChatCompletion({
+      requestId: 'companion-ui-child',
+      request: {
+        model: companionId,
+        messages: [{ role: 'user', content: 'browser text remains untrusted' }],
+        system_prompt_mode: 'default',
+      },
+      principal,
+      headers: uiHeaders,
+      hubDevicePrincipal,
+      hubDeviceAttachment: humanAttachment,
+      companionUiCapability: capability,
+    })).resolves.toMatchObject({ ok: true });
+    const uiMessage = handleMessage.mock.calls.at(-1)?.[0];
+    expect(uiMessage).toMatchObject({
+      content: 'browser text remains untrusted',
+      routing: {
+        hubDeviceAttachment: humanAttachment,
+        satellite: { hubDevicePrincipal },
+      },
+    });
+    expect(JSON.stringify(uiMessage)).not.toMatch(/"trusted"|"trustLevel"/u);
+
+    await expect(backend.handleChatCompletion({
+      requestId: 'companion-ui-mutated-body',
+      request: { model: companionId, messages: [{ role: 'user', content: 'mutated prompt' }] },
+      principal, headers: uiHeaders, hubDevicePrincipal, hubDeviceAttachment: humanAttachment,
+      companionUiCapability: capability,
+    })).resolves.toMatchObject({ ok: false, error: { type: 'companion_ui_capability_denied' } });
+    await expect(backend.handleChatCompletion({
+      requestId: 'companion-ui-operator-token',
+      request: { model: companionId, messages: [{ role: 'user', content: 'browser text remains untrusted' }] },
+      principal, headers: uiHeaders, hubDevicePrincipal, hubDeviceAttachment: humanAttachment,
+      companionUiCapability: { ...capability, token: parentToken },
+    })).resolves.toMatchObject({ ok: false, error: { type: 'companion_ui_capability_denied' } });
   });
 });
 

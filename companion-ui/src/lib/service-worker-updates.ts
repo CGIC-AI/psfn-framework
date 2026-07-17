@@ -1,4 +1,6 @@
 const updateListeners = new Set<() => void>();
+const APP_SCOPE = '/companion-ui/';
+const LEGACY_CACHE_NAME = 'psfn-satellite-mobile-chat-app-v1';
 
 declare const __PSFN_COMPANION_UI_SW_UPDATE_INTERVAL_MS__: number;
 
@@ -22,6 +24,22 @@ export function subscribeToServiceWorkerUpdates(listener: () => void): () => voi
   };
 }
 
+async function retireLegacyRootRegistration(): Promise<void> {
+  if (!await caches.has(LEGACY_CACHE_NAME)) return;
+  const legacyScriptUrl = new URL('/sw.js', window.location.origin).href;
+  const legacyScope = new URL('/', window.location.origin).href;
+  const registrations = await navigator.serviceWorker.getRegistrations();
+  const legacyRegistrations = registrations.filter((registration) => (
+    registration.active?.scriptURL === legacyScriptUrl
+    && registration.scope === legacyScope
+  ));
+  for (const registration of legacyRegistrations) {
+    if (!await registration.unregister()) {
+      throw new Error('Failed to retire the legacy root-scoped companion-ui service worker');
+    }
+  }
+}
+
 export function registerCompanionServiceWorker(): void {
   if (registrationStarted || !('serviceWorker' in navigator)) return;
   registrationStarted = true;
@@ -33,7 +51,11 @@ export function registerCompanionServiceWorker(): void {
   });
 
   window.addEventListener('load', () => {
-    void navigator.serviceWorker.register('/sw.js', { updateViaCache: 'none' })
+    void retireLegacyRootRegistration()
+      .then(() => navigator.serviceWorker.register(`${APP_SCOPE}sw.js`, {
+        scope: APP_SCOPE,
+        updateViaCache: 'none',
+      }))
       .then((registration) => {
         let updateInFlight = false;
         const checkForUpdate = (): void => {

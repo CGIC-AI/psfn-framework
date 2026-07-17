@@ -81,6 +81,7 @@ import {
 } from '../../persistence/backups/service.js';
 import { Scheduler } from '../../core/scheduler/scheduler.js';
 import { createGatewayFleetChargePolicyResolver } from './fleet-charge-policy-resolver.js';
+import { parseVerifiedDiscordContactAuthoritySnapshot } from '../../shared/contracts/contact-authority-snapshot.js';
 
 const log = createComponentLogger('Gateway');
 
@@ -117,7 +118,7 @@ async function main(): Promise<void> {
     fleetAuthEnabled: config.fleetAuth !== undefined,
     processMode: 'gateway',
     env,
-    principalAuthenticationWired: false,
+    principalAuthenticationWired: true,
     fleetAuthBootstrapRoutesWired: config.fleetAuth !== undefined,
   });
   applyGatewayTlsConfig({
@@ -500,6 +501,21 @@ async function main(): Promise<void> {
     ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
     ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),
     ...(welfareGrantVerifier ? { welfareGrantVerifier } : {}),
+    ...(fleetAuthPersistence?.contactLifecycleAuthority
+      ? { contactLifecycleAuthority: fleetAuthPersistence.contactLifecycleAuthority }
+      : {}),
+  });
+  const fleetAuthLifecycleCeremonies = fleetAuthPersistence?.createLifecycleCeremonies({
+    read: async ({ companionId, contactId, providerSubjectId }) => {
+      const result = await gateway.requestCompanionAgent<unknown>(
+        companionId,
+        'contact.authority.snapshot',
+        { contactId, providerSubjectId },
+      );
+      return result === null
+        ? undefined
+        : parseVerifiedDiscordContactAuthoritySnapshot(result);
+    },
   });
   const detachTurnPerformanceForwarder = attachGatewayTurnPerformanceForwarder({
     eventBus,
@@ -548,9 +564,10 @@ async function main(): Promise<void> {
 
   await initGatewayChannelSurfaces(channelSurfaces);
   gateway.start();
-  // Fleet-status surface (sprint-10 W4): config-gated, read-only cluster
-  // health view over the connection registry. Absent FLEET_STATUS_PORT keeps
-  // single-companion behavior byte-identical.
+  // Raw fleet-status operator listener (sprint-10 W4): config-gated,
+  // loopback-only cluster health over the connection registry. It is separate
+  // from the authenticated fleet portal composed below. Absent
+  // FLEET_STATUS_PORT keeps single-companion behavior byte-identical.
   const fleetStatusServer = await startOptionalFleetStatusServer({
     env: process.env,
     multiCompanion: config.multiCompanion === true,
@@ -600,6 +617,19 @@ async function main(): Promise<void> {
     ...(fleetAuthPersistence
       ? {
           fleetAuthBroker: fleetAuthPersistence.broker,
+          fleetAuthJitStepUp: fleetAuthPersistence.jitStepUp,
+          fleetAuthPasskeyCeremonies: fleetAuthPersistence.passkeyCeremonies,
+          fleetAuthTrustedHostRecovery: fleetAuthPersistence.trustedHostRecovery,
+          ...(fleetAuthLifecycleCeremonies ? { fleetAuthLifecycleCeremonies } : {}),
+          fleetAuthAccountReapprovalCeremonies:
+            fleetAuthPersistence.accountReapprovalCeremonies,
+          fleetAuthProviderRecovery: fleetAuthPersistence.providerRecovery,
+          fleetAuthChildAssertions: fleetAuthPersistence.childAssertions,
+          fleetAuthRequestCapabilities: fleetAuthPersistence.requestCapabilities,
+          fleetAuthRequestCapabilityVerifier: fleetAuthPersistence.requestCapabilityVerifier,
+          fleetAuthRequestCapabilityReplay: fleetAuthPersistence.requestCapabilityReplay,
+          fleetPortalAuthorization: fleetAuthPersistence.portalAuthorization,
+          primaryEmbodiments: fleetAuthPersistence.primaryEmbodiments,
           hubDeviceAssertionVerifier: fleetAuthPersistence,
         }
       : {}),

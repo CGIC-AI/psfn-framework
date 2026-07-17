@@ -1,12 +1,15 @@
 /**
- * Companion Cockpit <-> PSFN-Satellite-Hub wire protocol.
+ * Legacy direct-Hub event protocol retained for the view-store adapter and
+ * exact framing regressions. The shared-display runtime uses the gateway-owned
+ * action protocol in api/gateway-protocol.ts and does not emit these client
+ * frames.
  *
  * PROVENANCE: This file is a faithful client-side mirror of the hub's
  * authoritative wire types at:
  *   PSFN-Satellite-Hub/src/ts/shared/protocol.ts
  *
- * The hub is the source of truth. The cockpit is a client of the hub and
- * speaks THESE message types — it does not invent shapes (charter §6.10:
+ * The hub is the source of truth for this retained mirror. Legacy clients
+ * speak THESE message types — they do not invent shapes (charter §6.10:
  * the cockpit is an emanation node, not a mind; §8.3/Law 17: operational
  * state only).
  *
@@ -42,15 +45,7 @@ export type ClientToHubMessage =
 
 export interface HelloMessage {
   type: 'hello';
-  deviceId: string;
-  deviceName: string;
-  sessionId?: string;
-  channelId?: string;
-  satelliteId?: string;
-  satelliteName?: string;
-  capabilities?: SatelliteCapabilities;
-  /** Per-device enrollment secret; sent only in the initial hello frame. */
-  credential?: string;
+  capabilities: SatelliteCapabilities;
 }
 
 export interface AudioMessage {
@@ -168,6 +163,7 @@ export interface SessionReadyMessage {
   deviceName: string;
   satelliteId: string;
   audioFormat: string;
+  place?: RuntimePlaceIdentity;
   identity?: RuntimeIdentity;
 }
 
@@ -180,6 +176,7 @@ export interface HelloAckMessage {
   satelliteId: string;
   satelliteName: string;
   capabilities: SatelliteCapabilities;
+  place?: RuntimePlaceIdentity;
   identity?: RuntimeIdentity;
 }
 
@@ -388,6 +385,11 @@ export interface RuntimeParticipantIdentity {
 
 export interface RuntimeUserIdentity extends RuntimeParticipantIdentity {
   canonicalContactId?: string;
+}
+
+export interface RuntimePlaceIdentity {
+  id: string;
+  name: string;
 }
 
 export interface RuntimeIdentity {

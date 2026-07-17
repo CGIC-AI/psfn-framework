@@ -13,6 +13,9 @@ import {
   type LifecycleOAuthPurpose,
 } from '../../shared/contracts/fleet-auth-lifecycle-oauth.js';
 import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
+import type {
+  VerifiedDiscordContactAuthoritySnapshot,
+} from '../../shared/contracts/contact-authority-snapshot.js';
 import { DiscordEvidenceBrokerBoundary, type DiscordEvidenceBrokerOptions } from './discord-evidence-broker-boundary.js';
 import type { DiscordEvidenceAdmissionStore } from './discord-evidence-admission.js';
 import { FleetAuthBrokerError } from './fleet-auth-errors.js';
@@ -144,6 +147,7 @@ export interface FleetAuthBrokerStore extends DiscordEvidenceAdmissionStore {
     now: Date;
     idleTtlMs: number;
     absoluteTtlMs: number;
+    contactAuthority: VerifiedDiscordContactAuthoritySnapshot;
   }): Promise<FleetAuthSessionRecord>;
 }
 
@@ -167,6 +171,10 @@ export interface FirstOwnerAssurancePort {
   }): Promise<VerifiedFirstOwnerAssurance>;
 }
 
+export interface FirstOwnerContactAuthorityPort {
+  verify(input: VerifiedFirstOwnerAssurance): Promise<VerifiedDiscordContactAuthoritySnapshot>;
+}
+
 interface DiscordTokenResponse {
   accessToken: string;
   refreshToken?: string;
@@ -185,6 +193,7 @@ export interface GatewayFleetAuthBrokerOptions extends DiscordEvidenceBrokerOpti
   now?: () => Date;
   randomBytes?: (length: number) => Buffer;
   firstOwnerAssurance?: FirstOwnerAssurancePort;
+  firstOwnerContactAuthority?: FirstOwnerContactAuthorityPort;
   authorizationContextResolver?: GatewayFleetAuthorizationContextResolver;
 }
 
@@ -240,6 +249,7 @@ export class GatewayFleetAuthBroker {
   private readonly now: () => Date;
   private readonly randomBytes: (length: number) => Buffer;
   private readonly firstOwnerAssurance?: FirstOwnerAssurancePort;
+  private readonly firstOwnerContactAuthority?: FirstOwnerContactAuthorityPort;
   private readonly discordEvidence: DiscordEvidenceBrokerBoundary;
   private readonly authorizationContextResolver?: GatewayFleetAuthorizationContextResolver;
 
@@ -252,6 +262,7 @@ export class GatewayFleetAuthBroker {
     this.now = options.now ?? (() => new Date());
     this.randomBytes = options.randomBytes ?? cryptoRandomBytes;
     this.firstOwnerAssurance = options.firstOwnerAssurance;
+    this.firstOwnerContactAuthority = options.firstOwnerContactAuthority;
     this.authorizationContextResolver = options.authorizationContextResolver;
     this.discordEvidence = new DiscordEvidenceBrokerBoundary(options, this.fetchImpl, this.now);
   }
@@ -578,7 +589,7 @@ export class GatewayFleetAuthBroker {
     assuranceEvidence: unknown;
   }): Promise<FleetAuthSessionRecord> {
     this.assertMutationOrigin(input.requestOrigin);
-    if (!this.firstOwnerAssurance) {
+    if (!this.firstOwnerAssurance || !this.firstOwnerContactAuthority) {
       throw new FleetAuthBrokerError(
         'strong_assurance_unavailable',
         503,
@@ -589,11 +600,21 @@ export class GatewayFleetAuthBroker {
       evidence: input.assuranceEvidence,
       expectedOrigin: this.config.canonicalOrigin,
     });
+    const contactAuthority = await this.firstOwnerContactAuthority.verify(verified);
+    if (contactAuthority.contactId !== verified.contactId
+      || contactAuthority.providerSubjectId !== verified.providerSubjectId) {
+      throw new FleetAuthBrokerError(
+        'first_owner_binding_mismatch',
+        403,
+        'First-owner contact authority does not match the trusted-host tuple',
+      );
+    }
     return await this.discordEvidence.fenceFirstOwnerActivation(
       await this.store.completeFirstOwnerBootstrap({
         token: input.token,
         csrfToken: input.csrfToken,
         ...verified,
+        contactAuthority,
         nextToken: opaqueToken(this.randomBytes),
         nextCsrfToken: opaqueToken(this.randomBytes),
         now: this.now(),

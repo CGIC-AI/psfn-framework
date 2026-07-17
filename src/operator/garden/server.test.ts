@@ -21,6 +21,32 @@ import type { LLMProviderPort } from '../../core/agent/contracts.js';
 import type { DiscoveredModel } from '../../primitives/llm/discovery.js';
 import { resetRuntimeTrustPolicy } from '../../system/trust/runtime-policy.js';
 import { saveModelsConfig } from '../../system/config/models-config.js';
+import { generateKeyPairSync, randomUUID } from 'node:crypto';
+import { createGatewayRequestCapabilitySigner } from '../../boundary/fleet-auth/request-capability.js';
+import { compileGatewayGardenRequestTarget } from '../../boundary/fleet-auth/request-capability-target.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
+import { buildGardenCapabilityHeaders } from './garden-admission.js';
+
+const fleetVerifierKeyPair = generateKeyPairSync('ed25519');
+const fleetVerifierPublicKey = fleetVerifierKeyPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+const fleetSignerPrivateKey = fleetVerifierKeyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+const FLEET_COMPANION_ID = createCompanionId('11111111-1111-4111-8111-111111111111');
+const FLEET_AUTHORITY_VERSIONS = Object.freeze({
+  authorityGeneration: 2,
+  globalAuthEpoch: 3,
+  sessionAuthnVersion: 5,
+  sessionAuthzVersion: 7,
+  bindingVersion: 11,
+  grantVersion: 13,
+  policyVersion: 17,
+});
+const FLEET_AUTH_CONTEXT = Object.freeze({
+  principalId: 'principal-a', provider: 'discord' as const, providerSubjectId: '12345678901234567',
+  companionId: FLEET_COMPANION_ID, contactBindingId: 'binding-a', contactId: 'contact-a',
+  operatorGrantId: 'grant-a', role: 'admin' as const, sessionRecordId: 'session-a',
+  sessionAssurance: 'webauthn_uv' as const, authorizationEventId: 'event-a',
+  resolvedAt: '2030-01-01T00:00:00.000Z',
+});
 
 function request(
   port: number,
@@ -221,7 +247,7 @@ async function createHarness(options: {
     extractionProvider: 'test',
     discordToken: '',
     discordBotId: '123',
-    companionId: 'test-companion',
+    companionId: options.fleetAuthEnabled ? FLEET_COMPANION_ID : 'test-companion',
     gatewaySessionIntegrityAuthToken: `v1.${'b'.repeat(64)}`,
     characterCardPath,
     dataDir: tempDir,
@@ -258,7 +284,18 @@ async function createHarness(options: {
             kind: 'verifier' as const,
             enabled: true as const,
             canonicalOrigin: 'https://fleet.example.test',
-            verifierKeys: [],
+            requestCapabilities: {
+              issuer: 'psfn-fleet-auth',
+              maxTtlSeconds: 30,
+              keys: [{
+                issuer: 'psfn-fleet-auth',
+                kid: 'test-active',
+                publicKeyPem: fleetVerifierPublicKey,
+                notBefore: '2020-01-01T00:00:00.000Z',
+                notAfter: '2040-01-01T00:00:00.000Z',
+                status: 'active' as const,
+              }],
+            },
             hubDeviceAssertions: {
               issuer: 'psfn-satellite-hub', audience: 'https://fleet.example.test',
               maxTtlSeconds: 60, clockSkewSeconds: 2, keys: [],
@@ -391,12 +428,65 @@ async function destroyHarness(harness: ServerHarness): Promise<void> {
 
 describe('AdminServer Garden routing', () => {
   describe('startup auth policy', () => {
-    it('rejects legacy bearer/cookie Garden auth before listen when fleet auth is enabled', async () => {
-      await expect(createHarness({
+    it('selects fleet admission before listen and never falls back to legacy bearer/cookie/login', async () => {
+      const fleetHarness = await createHarness({
         token: 'legacy-admin-token',
         host: '127.0.0.1',
         fleetAuthEnabled: true,
-      })).rejects.toThrow(/fleet auth.*legacy.*before listen/i);
+      });
+      try {
+        const bearer = await request(fleetHarness.port, 'GET', '/api/admin/dashboard', undefined, {
+          Authorization: 'Bearer legacy-admin-token',
+        });
+        expect(bearer.status).toBe(400);
+        const cookie = await request(fleetHarness.port, 'GET', '/api/admin/dashboard', undefined, {
+          Cookie: 'psfn_token=legacy-admin-token; psfn_garden_session=browser',
+        });
+        expect(cookie.status).toBe(400);
+        const login = await request(
+          fleetHarness.port,
+          'POST',
+          '/login',
+          'token=legacy-admin-token',
+          { 'Content-Type': 'application/x-www-form-urlencoded' },
+        );
+        expect(login.status).toBe(404);
+        expect(login.headers['set-cookie']).toBeUndefined();
+
+        const target = compileGatewayGardenRequestTarget({
+          rawTarget: '/api/admin/dashboard',
+          method: 'GET',
+          companionId: FLEET_COMPANION_ID,
+          body: Buffer.alloc(0),
+        });
+        const requestId = randomUUID();
+        const decisionId = randomUUID();
+        const capability = createGatewayRequestCapabilitySigner({
+          issuer: 'psfn-fleet-auth',
+          kid: 'test-active',
+          privateKeyPem: fleetSignerPrivateKey,
+          ttlSeconds: 30,
+        }).signOperator({
+          target,
+          requestId,
+          decisionId,
+          authContext: FLEET_AUTH_CONTEXT,
+          versions: FLEET_AUTHORITY_VERSIONS,
+        });
+        const admitted = await request(
+          fleetHarness.port,
+          'GET',
+          '/api/admin/dashboard',
+          undefined,
+          { ...buildGardenCapabilityHeaders({
+            token: capability,
+            context: { requestId, decisionId, versions: FLEET_AUTHORITY_VERSIONS },
+          }) },
+        );
+        expect(admitted.status).toBe(200);
+      } finally {
+        await destroyHarness(fleetHarness);
+      }
     });
 
     it('rejects insecure local mode on non-loopback hosts', async () => {

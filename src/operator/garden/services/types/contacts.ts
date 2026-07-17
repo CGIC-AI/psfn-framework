@@ -104,12 +104,12 @@ export interface AdminContactRelationshipScoreReader {
 }
 
 export interface AdminContactsService {
-  listContacts(params?: URLSearchParams): Promise<AdminContactListData>;
-  getContactDetail(contactId: string): Promise<AdminContactDetailData | null>;
-  updateContact(contactId: string, body: string): Promise<ContactUpdateResult>;
-  createContact(body: string): Promise<ContactUpdateResult>;
-  deleteContact(contactId: string): Promise<ContactUpdateResult>;
-  mergeContacts(targetId: string, body: string): Promise<ContactUpdateResult>;
-  unlinkChannelIdentity(contactId: string, body: string): Promise<ContactUpdateResult>;
-  deleteConversationChannel(contactId: string, body: string): Promise<ContactUpdateResult>;
+  listContacts(params?: URLSearchParams, context?: import('../../garden-request-context.js').GardenRequestContext): Promise<AdminContactListData>;
+  getContactDetail(contactId: string, context?: import('../../garden-request-context.js').GardenRequestContext): Promise<AdminContactDetailData | null>;
+  updateContact(contactId: string, body: string, context?: import('../../garden-request-context.js').GardenRequestContext): Promise<ContactUpdateResult>;
+  createContact(body: string, context?: import('../../garden-request-context.js').GardenRequestContext): Promise<ContactUpdateResult>;
+  deleteContact(contactId: string, context?: import('../../garden-request-context.js').GardenRequestContext): Promise<ContactUpdateResult>;
+  mergeContacts(targetId: string, body: string, context?: import('../../garden-request-context.js').GardenRequestContext): Promise<ContactUpdateResult>;
+  unlinkChannelIdentity(contactId: string, body: string, context?: import('../../garden-request-context.js').GardenRequestContext): Promise<ContactUpdateResult>;
+  deleteConversationChannel(contactId: string, body: string, context?: import('../../garden-request-context.js').GardenRequestContext): Promise<ContactUpdateResult>;
 }

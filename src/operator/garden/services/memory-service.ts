@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { EmbeddingProviderPort } from '../../../shared/contracts/embedding-provider.js';
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import { DEFAULT_COMPANION_NAME } from '../../../core/identity/companion-naming.js';
@@ -24,7 +24,10 @@ import {
   SHARED_BACKGROUND_DEFAULT_LIMIT,
   SHARED_BACKGROUND_MAX_LIMIT,
 } from '../../../faculties/memory/retrieval/shared-background.js';
-import { AdminMemoryBodyGate } from './memory-body-gate.js';
+import {
+  AdminMemoryBodyGate,
+  type FleetMemoryBodyAuthorizationContext,
+} from './memory-body-gate.js';
 import {
   buildManagedScopeEvidence,
   buildManagedScopeRepairPreview,
@@ -51,6 +54,13 @@ import type {
   AdminMemoryScopeRepairView,
   MemoryMutationResult,
 } from './types.js';
+import { createSubjectAuthorizedMemoryStore } from '../../../faculties/memory/subject-authorized-store.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
+import type { FleetGardenRequestContext } from '../garden-request-context.js';
+import {
+  parseMemorySubjectJitRequest,
+  type MemorySubjectJitRequest,
+} from '../../../shared/contracts/memory-subject-jit.js';
 
 const log = createComponentLogger('AdminMemoryService');
 
@@ -124,8 +134,12 @@ function memoryTimestamp(memory: { extractedAt?: number; createdAt?: number }): 
   return memory.extractedAt ?? memory.createdAt ?? 0;
 }
 
+function isNullish(value: unknown): boolean {
+  return Object.is(value, null) || Object.is(value, undefined);
+}
+
 function isActiveMemoryView(memory: { supersededBy?: unknown; deletedAt?: unknown }): boolean {
-  return memory.supersededBy == null && memory.deletedAt == null;
+  return isNullish(memory.supersededBy) && isNullish(memory.deletedAt);
 }
 
 function parsePositiveInteger(
@@ -172,6 +186,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
 
   constructor(private readonly deps: {
     memoryStore: MemoryStorePort;
+    fleetMemoryStore?: MemoryStorePort;
     contactStore?: ContactStorePort | null;
     embeddingService?: EmbeddingProviderPort | null;
     resolveCompanionName?: () => string;
@@ -180,10 +195,64 @@ export class AdminMemoryDataService implements AdminMemoryService {
       decision: 'allowed' | 'denied',
       narrative: string,
       details?: Array<string | null | undefined>,
+      context?: GardenRequestContext,
     ) => void;
     now?: () => number;
-  }) {
-    this.bodyGate = new AdminMemoryBodyGate(deps.now ? { now: deps.now } : undefined);
+  }, bodyGate?: AdminMemoryBodyGate, private readonly requestContext?: GardenRequestContext) {
+    this.bodyGate = bodyGate ?? new AdminMemoryBodyGate(deps.now ? { now: deps.now } : undefined);
+  }
+
+  forRequest(
+    context: GardenRequestContext | undefined,
+    legacySessionKey: AdminMemorySessionKey = null,
+  ): AdminMemorySessionService {
+    if (!context || context.kind !== 'fleet_principal') return this.forSession(legacySessionKey);
+    if (context.resource.area !== 'memory'
+      || (context.subjectRelation !== 'self' && context.subjectRelation !== 'self_or_co_subject')) {
+      throw new Error('Garden memory access requires an exact request-local subject relation');
+    }
+    const sessionKey = [
+      'fleet',
+      context.actor.principalId,
+      context.actor.sessionRecordId,
+      context.versions.authorityGeneration,
+      context.versions.globalAuthEpoch,
+      context.versions.sessionAuthnVersion,
+      context.versions.sessionAuthzVersion,
+      context.versions.bindingVersion,
+      context.versions.grantVersion,
+      context.versions.policyVersion,
+    ].join(':');
+    const scoped = new AdminMemoryDataService({
+      ...this.deps,
+      memoryStore: createSubjectAuthorizedMemoryStore(
+        this.deps.fleetMemoryStore ?? this.deps.memoryStore,
+        Object.freeze({
+          viewerContactId: context.actor.contactId,
+        }),
+      ),
+    }, this.bodyGate, context);
+    const service = scoped.forSession(sessionKey);
+    const fleetSafeService: AdminMemorySessionService = Object.freeze({
+      ...service,
+      getBodyElevationStatus: () => ({ elevated: false, ttlMs: 0 }),
+      elevateBodyAccess: () => {
+        throw new Error('Session-wide memory JIT is unavailable for fleet principals');
+      },
+      dropBodyElevation: () => ({ elevated: false, ttlMs: 0 }),
+      revealMemory: async () => {
+        throw new Error('Memory reveal requires an exact consumed subject JIT grant');
+      },
+    });
+    if (context.action !== 'memory.jit.self') return fleetSafeService;
+    if (context.resource.routeId !== 'POST /api/admin/memory/:id/reveal'
+      || context.subjectRelation !== 'self_or_co_subject') {
+      return fleetSafeService;
+    }
+    return Object.freeze({
+      ...fleetSafeService,
+      revealMemory: (id, jitRequest) => scoped.revealFleetMemory(context, id, jitRequest),
+    });
   }
 
   forSession(sessionKey: AdminMemorySessionKey): AdminMemorySessionService {
@@ -206,18 +275,91 @@ export class AdminMemoryDataService implements AdminMemoryService {
       getBodyElevationStatus: () => this.getBodyElevationStatus(sessionKey),
       elevateBodyAccess: () => this.elevateBodyAccess(sessionKey),
       dropBodyElevation: () => this.dropBodyElevation(sessionKey),
-      revealMemory: id => this.revealMemory(sessionKey, id),
+      revealMemory: (id, jitRequest) => this.revealMemory(sessionKey, id, jitRequest),
     };
+  }
+
+  private fleetBodyContext(
+    context: FleetGardenRequestContext,
+    memoryId?: string,
+  ): Omit<FleetMemoryBodyAuthorizationContext,
+    'action' | 'resourceMemoryId' | 'assurance' | 'requestExpiresAtSeconds'>
+    & Partial<Pick<FleetMemoryBodyAuthorizationContext,
+      'action' | 'resourceMemoryId' | 'assurance' | 'requestExpiresAtSeconds'>> {
+    return {
+      principalId: context.actor.principalId,
+      browserSessionId: context.actor.sessionRecordId,
+      companionId: context.resource.companionId ?? '',
+      viewerContactId: context.actor.contactId,
+      viewerRelation: 'self',
+      authorityGeneration: context.versions.authorityGeneration,
+      globalAuthEpoch: context.versions.globalAuthEpoch,
+      sessionAuthnVersion: context.versions.sessionAuthnVersion,
+      sessionAuthzVersion: context.versions.sessionAuthzVersion,
+      bindingVersion: context.versions.bindingVersion,
+      grantVersion: context.versions.grantVersion,
+      policyVersion: context.versions.policyVersion,
+      ...(memoryId ? {
+        action: 'memory.jit.self' as const,
+        resourceMemoryId: memoryId,
+        assurance: context.actor.sessionAssurance === 'webauthn_uv'
+          ? 'webauthn_uv' as const
+          : undefined,
+        requestExpiresAtSeconds: context.expiresAt,
+      } : {}),
+    };
+  }
+
+  private async toRequestMemoryView(
+    sessionKey: AdminMemorySessionKey,
+    memory: PurrMemory,
+  ): Promise<AdminMemoryDetailData['memory']> {
+    if (this.requestContext?.kind !== 'fleet_principal') {
+      return this.bodyGate.toAdminView(sessionKey, memory);
+    }
+    const classification = await this.deps.memoryStore.getMemorySubjectClassification(memory.id);
+    if (!classification) {
+      throw new Error('Memory subject projection changed during Garden view construction');
+    }
+    return this.bodyGate.toFleetAdminView(
+      this.fleetBodyContext(this.requestContext),
+      memory,
+      classification,
+    );
   }
 
   private resolveCompanionName(): string {
     return this.deps.resolveCompanionName?.() ?? DEFAULT_COMPANION_NAME;
   }
 
+  private appendAudit(
+    actionType: 'memory_mutation' | 'memory_access',
+    decision: 'allowed' | 'denied',
+    narrative: string,
+    details?: Array<string | null | undefined>,
+  ): void {
+    const append = this.deps.appendAuditTimelineEntry;
+    if (!append) return;
+    if (this.requestContext) {
+      append(actionType, decision, narrative, details, this.requestContext);
+      return;
+    }
+    if (details !== undefined) {
+      append(actionType, decision, narrative, details);
+      return;
+    }
+    append(actionType, decision, narrative);
+  }
+
   private async buildContactSummaryMap(): Promise<Map<string, { id: string; displayName: string }>> {
     const contactStore = this.deps.contactStore;
     if (!contactStore) return new Map();
     const map = new Map<string, { id: string; displayName: string }>();
+    if (this.requestContext?.kind === 'fleet_principal') {
+      const contact = await contactStore.getById(this.requestContext.actor.contactId);
+      if (contact) map.set(contact.id, { id: contact.id, displayName: contact.displayName });
+      return map;
+    }
     for (const contact of await contactStore.listAll()) {
       map.set(contact.id, { id: contact.id, displayName: contact.displayName });
     }
@@ -299,7 +441,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const memories = result.memories;
     const total = result.total;
     return {
-      memories: memories.map(memory => this.bodyGate.toAdminView(sessionKey, memory)),
+      memories: await Promise.all(memories.map(memory => this.toRequestMemoryView(sessionKey, memory))),
       contactsById: await this.buildContactSummaryMap(),
       privacySummary: buildPrivacySummary(result.privacySummary, total, memories.length),
       pagination: {
@@ -320,7 +462,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       ? (await this.buildContactSummaryMap()).get(memory.contactId)
       : undefined;
     return {
-      memory: this.bodyGate.toAdminView(sessionKey, memory),
+      memory: await this.toRequestMemoryView(sessionKey, memory),
       linkedContact,
       scopeAssignments: this.buildScopeAssignments(memory),
       scopeRepair: this.buildScopeRepair(memory),
@@ -335,7 +477,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
   elevateBodyAccess(sessionKey: AdminMemorySessionKey): AdminMemoryElevationStatus {
     const status = this.bodyGate.elevate(sessionKey);
     const ttlMinutes = Math.round(status.ttlMs / 60_000);
-    this.deps.appendAuditTimelineEntry?.(
+    this.appendAudit(
       'memory_access',
       'allowed',
       `Operator elevated Garden memory body access for ${ttlMinutes} minutes; intimate/confidential memory bodies are visible.`,
@@ -346,7 +488,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
 
   dropBodyElevation(sessionKey: AdminMemorySessionKey): AdminMemoryElevationStatus {
     const status = this.bodyGate.dropElevation(sessionKey);
-    this.deps.appendAuditTimelineEntry?.(
+    this.appendAudit(
       'memory_access',
       'allowed',
       'Operator ended Garden memory body access elevation; intimate/confidential memory bodies are redacted again.',
@@ -354,10 +496,14 @@ export class AdminMemoryDataService implements AdminMemoryService {
     return status;
   }
 
-  async revealMemory(sessionKey: AdminMemorySessionKey, id: string): Promise<AdminMemoryDetailData | null> {
+  async revealMemory(
+    sessionKey: AdminMemorySessionKey,
+    id: string,
+    _jitRequest?: MemorySubjectJitRequest,
+  ): Promise<AdminMemoryDetailData | null> {
     const memory = await this.deps.memoryStore.getById(id);
     if (!memory) {
-      this.deps.appendAuditTimelineEntry?.(
+      this.appendAudit(
         'memory_access',
         'denied',
         `Memory reveal failed: memory "${id}" was not found.`,
@@ -368,7 +514,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const wasRedacted = !this.bodyGate.canReadBody(sessionKey, memory);
     this.bodyGate.recordReveal(sessionKey, memory.id);
     if (wasRedacted) {
-      this.deps.appendAuditTimelineEntry?.(
+      this.appendAudit(
         'memory_access',
         'allowed',
         `Operator revealed ${memory.sensitivity} memory "${memory.id}" body (${memory.text.length} chars).`,
@@ -376,6 +522,71 @@ export class AdminMemoryDataService implements AdminMemoryService {
       );
     }
     return this.getMemoryDetail(sessionKey, id);
+  }
+
+  private async revealFleetMemory(
+    context: FleetGardenRequestContext,
+    id: string,
+    rawJitRequest: MemorySubjectJitRequest | undefined,
+  ): Promise<AdminMemoryDetailData | null> {
+    const signedMemoryId = typeof context.resource.pathParams.id === 'string'
+      ? context.resource.pathParams.id.trim()
+      : undefined;
+    const normalizedId = id.trim();
+    if (!rawJitRequest || !normalizedId || signedMemoryId !== normalizedId
+      || context.actor.sessionAssurance !== 'webauthn_uv') {
+      throw new Error('Memory reveal requires exact user-verifying subject JIT authority');
+    }
+    const jitRequest = parseMemorySubjectJitRequest(rawJitRequest);
+    const classification = await this.deps.memoryStore.getMemorySubjectClassification(normalizedId);
+    if (!classification) return null;
+    const exactStore = createSubjectAuthorizedMemoryStore(
+      this.deps.fleetMemoryStore ?? this.deps.memoryStore,
+      Object.freeze({
+        viewerContactId: context.actor.contactId,
+        grantBindings: Object.freeze([{
+          memoryId: normalizedId,
+          memoryRevision: jitRequest.memoryRevision,
+          classifierVersion: jitRequest.classifierVersion,
+          evidenceDigest: classification.evidenceDigest,
+        }]),
+      }),
+    );
+    const memory = await exactStore.getById(normalizedId);
+    if (!memory) return null;
+    const bodyContext = this.fleetBodyContext(context, normalizedId);
+    if (bodyContext.action !== 'memory.jit.self'
+      || bodyContext.resourceMemoryId === undefined
+      || bodyContext.assurance !== 'webauthn_uv'
+      || bodyContext.requestExpiresAtSeconds === undefined) {
+      throw new Error('Memory reveal request authority is incomplete');
+    }
+    const view = this.bodyGate.toFleetJitView(
+      bodyContext as FleetMemoryBodyAuthorizationContext,
+      jitRequest,
+      memory,
+      classification,
+    );
+    this.appendAudit(
+      'memory_access',
+      'allowed',
+      'Fleet principal exercised a subject-scoped memory reveal grant.',
+      [
+        `purposeDigest=${createHash('sha256').update(jitRequest.purpose, 'utf8').digest('hex')}`,
+        `memoryRevision=${jitRequest.memoryRevision}`,
+        `classifierVersion=${jitRequest.classifierVersion}`,
+      ],
+    );
+    const linkedContact = memory.contactId
+      ? (await this.buildContactSummaryMap()).get(memory.contactId)
+      : undefined;
+    return {
+      memory: view,
+      linkedContact,
+      scopeAssignments: this.buildScopeAssignments(memory),
+      scopeRepair: this.buildScopeRepair(memory),
+      elevation: { elevated: false, ttlMs: 0 },
+    };
   }
 
   async listManagedScopes(params?: URLSearchParams): Promise<AdminMemoryScopeListData> {
@@ -439,16 +650,16 @@ export class AdminMemoryDataService implements AdminMemoryService {
     const scope = parseManagedScopeParams(kind, id);
     if (!scope) return null;
 
-    const memories = (await this.listManagedScopeMemories())
+    const matchedMemories = (await this.listManagedScopeMemories())
       .filter(memory => collectManagedScopeDescriptors(memory).some(descriptor => (
         descriptor.kind === scope.kind && descriptor.id === scope.id
       )))
-      .sort(compareMemoryRecency)
-      .map(memory => ({
-        memory: this.bodyGate.toAdminView(sessionKey, memory),
+      .sort(compareMemoryRecency);
+    const memories = await Promise.all(matchedMemories.map(async memory => ({
+        memory: await this.toRequestMemoryView(sessionKey, memory),
         evidence: buildManagedScopeEvidence(memory, scope),
         repair: this.buildScopeRepair(memory),
-      }));
+      })));
 
     if (memories.length === 0) return null;
 
@@ -491,7 +702,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       .filter(memory => !isInternalMemoryArtifact(memory));
     return {
       query,
-      results: results.map(memory => this.bodyGate.toAdminView(sessionKey, memory)),
+      results: await Promise.all(results.map(memory => this.toRequestMemoryView(sessionKey, memory))),
       contactsById: await this.buildContactSummaryMap(),
       privacySummary: buildPrivacySummary(privacySummary, results.length, results.length),
       elevation: this.bodyGate.status(sessionKey),
@@ -528,12 +739,12 @@ export class AdminMemoryDataService implements AdminMemoryService {
       { memoryStore: this.deps.memoryStore, contactStore },
       { contactAId, contactBId },
     );
-    const items = union.candidates.slice(0, effectiveLimit).map(candidate => ({
+    const items = await Promise.all(union.candidates.slice(0, effectiveLimit).map(async candidate => ({
       // Body redaction inherited from the E3.5 admin body gate.
-      memory: this.bodyGate.toAdminView(sessionKey, candidate.memory),
+      memory: await this.toRequestMemoryView(sessionKey, candidate.memory),
       sources: candidate.sources,
       score: candidate.score,
-    }));
+    })));
 
     return {
       contactAId: union.contactAId,
@@ -554,7 +765,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
   async supersedeMemory(id: string): Promise<MemoryMutationResult> {
     const memory = await this.deps.memoryStore.getById(id);
     if (!memory) {
-      this.deps.appendAuditTimelineEntry?.(
+      this.appendAudit(
         'memory_mutation',
         'denied',
         `Memory supersede failed: memory "${id}" was not found.`,
@@ -566,7 +777,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     }
 
     await this.deps.memoryStore.updateMemory(id, { supersededBy: `admin-${randomUUID()}` });
-    this.deps.appendAuditTimelineEntry?.(
+    this.appendAudit(
       'memory_mutation',
       'allowed',
       `${this.resolveCompanionName()} superseded memory "${memory.id}".`,
@@ -628,7 +839,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       };
     }
 
-    this.deps.appendAuditTimelineEntry?.(
+    this.appendAudit(
       'memory_mutation',
       'allowed',
       `${this.resolveCompanionName()} updated scope tags for memory "${updated.id}".`,
@@ -641,7 +852,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
 
     return {
       ok: true,
-      memory: this.bodyGate.toAdminView(sessionKey, updated),
+      memory: await this.toRequestMemoryView(sessionKey, updated),
       scopeAssignments: this.buildScopeAssignments(updated),
       scopeRepair: this.buildScopeRepair(updated),
     };
@@ -669,7 +880,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       return { ok: false, message: 'Link already exists or could not be created' };
     }
 
-    this.deps.appendAuditTimelineEntry?.(
+    this.appendAudit(
       'memory_mutation',
       'allowed',
       `Linked memories "${link.id1}" and "${link.id2}" (type: ${link.linkType}).`,
@@ -689,7 +900,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
       return { ok: false, message: 'Link not found' };
     }
 
-    this.deps.appendAuditTimelineEntry?.(
+    this.appendAudit(
       'memory_mutation',
       'allowed',
       `Unlinked memories "${normalizedId1}" and "${normalizedId2}".`,
@@ -698,6 +909,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
   }
 
   async getMemoryLinks(id: string): Promise<MemoryLink[]> {
+    if (!await this.deps.memoryStore.getById(id)) return [];
     return await this.deps.memoryStore.getLinkedMemories(id);
   }
 
@@ -710,7 +922,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     }
 
     const count = await this.deps.memoryStore.bulkDelete(ids);
-    this.deps.appendAuditTimelineEntry?.(
+    this.appendAudit(
       'memory_mutation',
       'allowed',
       `Bulk deleted ${count} memories (${ids.length} requested).`,
@@ -765,7 +977,7 @@ export class AdminMemoryDataService implements AdminMemoryService {
     }
 
     const count = await this.deps.memoryStore.bulkUpdate(ids, storeFields);
-    this.deps.appendAuditTimelineEntry?.(
+    this.appendAudit(
       'memory_mutation',
       'allowed',
       `Bulk updated ${count} memories (${ids.length} requested, fields: ${[

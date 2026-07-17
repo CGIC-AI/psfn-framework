@@ -96,6 +96,32 @@ spec:
               value: {{ include "psfn.gardenServiceName" . | quote }}
             - name: ADMIN_PORT
               value: {{ .Values.ports.garden | quote }}
+            {{- if .Values.fleetAuth.enabled }}
+            - name: FLEET_SSO_TRUST_PROXY
+              value: "true"
+            - name: FLEET_SSO_GARDEN_HOST
+              value: {{ include "psfn.gardenServiceName" . | quote }}
+            - name: FLEET_SSO_GARDEN_TLS_CA_PATH
+              value: {{ printf "%s/fleet-sso-garden/ca.crt" .Values.certificates.mountBasePath | quote }}
+            - name: FLEET_SSO_GARDEN_TLS_CERT_PATH
+              value: {{ printf "%s/fleet-sso-garden/tls.crt" .Values.certificates.mountBasePath | quote }}
+            - name: FLEET_SSO_GARDEN_TLS_KEY_PATH
+              value: {{ printf "%s/fleet-sso-garden/tls.key" .Values.certificates.mountBasePath | quote }}
+            - name: FLEET_SSO_GARDEN_TLS_EXPECTED_PEER_SPIFFE_URI
+              value: {{ include "psfn.spiffeGarden" . | quote }}
+            - name: FLEET_SSO_GARDEN_TLS_SERVER_NAME
+              value: {{ include "psfn.gardenSsoServerName" . | quote }}
+            {{- if .Values.companionUiTest.enabled }}
+            - name: FLEET_SSO_COMPANION_UI_ORIGIN
+              value: {{ printf "http://%s:%v" (include "psfn.companionUiTestServiceName" .) .Values.ports.companionUiTest | quote }}
+            - name: FLEET_SSO_COMPANION_UI_GUEST_MODE
+              value: {{ .Values.companionUiTest.guestMode | quote }}
+            {{- with .Values.fleetAuth.companionUiCompanionId }}
+            - name: FLEET_SSO_COMPANION_UI_COMPANION_ID
+              value: {{ . | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             - name: GATEWAY_SESSION_HMAC_KEY
               valueFrom:
                 secretKeyRef:
@@ -178,11 +204,21 @@ spec:
             - name: gateway-rpc-tls
               mountPath: {{ printf "%s/gateway-rpc" .Values.certificates.mountBasePath }}
               readOnly: true
+            {{- if .Values.fleetAuth.enabled }}
+            - name: fleet-sso-garden-tls
+              mountPath: {{ printf "%s/fleet-sso-garden" .Values.certificates.mountBasePath }}
+              readOnly: true
+            {{- end }}
       volumes:
         {{- include "psfn.commonVolumes" . | nindent 8 }}
         - name: gateway-rpc-tls
           secret:
             secretName: {{ include "psfn.gatewayRpcCertSecretName" . }}
+        {{- if .Values.fleetAuth.enabled }}
+        - name: fleet-sso-garden-tls
+          secret:
+            secretName: {{ include "psfn.gatewaySsoClientCertSecretName" . }}
+        {{- end }}
 ---
 apiVersion: v1
 kind: Service
@@ -391,9 +427,9 @@ metadata:
 spec:
   type: ClusterIP
   ports:
-    - name: http-garden
+    - name: {{ ternary "https-garden" "http-garden" .Values.fleetAuth.enabled }}
       port: {{ .Values.ports.garden }}
-      targetPort: http-garden
+      targetPort: {{ ternary "https-garden" "http-garden" .Values.fleetAuth.enabled }}
   selector:
     {{- include "psfn.componentLabels" (dict "root" . "component" "garden") | nindent 4 }}
 ---
@@ -434,25 +470,31 @@ spec:
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           ports:
-            - name: http-garden
+            - name: {{ ternary "https-garden" "http-garden" .Values.fleetAuth.enabled }}
               containerPort: {{ .Values.ports.garden }}
-              {{- if .Values.hostPorts.garden.enabled }}
-              hostPort: {{ .Values.hostPorts.garden.port }}
-              {{- with .Values.hostPorts.garden.hostIP }}
-              hostIP: {{ . | quote }}
-              {{- end }}
-              {{- end }}
           env:
             {{- include "psfn.commonEnv" . | nindent 12 }}
             - name: ADMIN_HOST
               value: 0.0.0.0
             - name: ADMIN_PORT
               value: {{ .Values.ports.garden | quote }}
+            {{- if not .Values.fleetAuth.enabled }}
             - name: ADMIN_TOKEN
               valueFrom:
                 secretKeyRef:
                   name: {{ include "psfn.appSecretName" . }}
                   key: {{ .Values.secrets.keys.adminToken }}
+            {{- end }}
+            {{- if .Values.fleetAuth.enabled }}
+            - name: FLEET_SSO_GARDEN_TLS_CA_PATH
+              value: {{ printf "%s/fleet-sso-gateway/ca.crt" .Values.certificates.mountBasePath | quote }}
+            - name: FLEET_SSO_GARDEN_TLS_CERT_PATH
+              value: {{ printf "%s/fleet-sso-gateway/tls.crt" .Values.certificates.mountBasePath | quote }}
+            - name: FLEET_SSO_GARDEN_TLS_KEY_PATH
+              value: {{ printf "%s/fleet-sso-gateway/tls.key" .Values.certificates.mountBasePath | quote }}
+            - name: FLEET_SSO_GARDEN_TLS_EXPECTED_PEER_SPIFFE_URI
+              value: {{ include "psfn.spiffeGateway" . | quote }}
+            {{- end }}
             {{- /* The Garden operator process owns ADMIN_TOKEN and resolves
                  operator-only gateway confirmations (e.g. kube self-management)
                  directly against the gateway API, so the credential never
@@ -472,15 +514,13 @@ spec:
             - name: ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI
               value: {{ include "psfn.spiffeAgent" . | quote }}
           readinessProbe:
-            httpGet:
-              path: /health
-              port: http-garden
+            tcpSocket:
+              port: {{ ternary "https-garden" "http-garden" .Values.fleetAuth.enabled }}
             initialDelaySeconds: 10
             periodSeconds: 10
           livenessProbe:
-            httpGet:
-              path: /health
-              port: http-garden
+            tcpSocket:
+              port: {{ ternary "https-garden" "http-garden" .Values.fleetAuth.enabled }}
             initialDelaySeconds: 30
             periodSeconds: 20
           resources:
@@ -500,11 +540,21 @@ spec:
             - name: admin-transport-client-tls
               mountPath: {{ printf "%s/admin-transport" .Values.certificates.mountBasePath }}
               readOnly: true
+            {{- if .Values.fleetAuth.enabled }}
+            - name: fleet-sso-gateway-tls
+              mountPath: {{ printf "%s/fleet-sso-gateway" .Values.certificates.mountBasePath }}
+              readOnly: true
+            {{- end }}
       volumes:
         {{- include "psfn.commonVolumes" . | nindent 8 }}
         - name: admin-transport-client-tls
           secret:
             secretName: {{ include "psfn.gardenAdminClientCertSecretName" . }}
+        {{- if .Values.fleetAuth.enabled }}
+        - name: fleet-sso-gateway-tls
+          secret:
+            secretName: {{ include "psfn.gardenSsoServerCertSecretName" . }}
+        {{- end }}
 {{- if .Values.satelliteHub.enabled }}
 ---
 apiVersion: v1
@@ -729,14 +779,11 @@ metadata:
   labels:
     {{- include "psfn.labels" . | nindent 4 }}
 spec:
-  type: {{ .Values.companionUiTest.service.type }}
+  type: ClusterIP
   ports:
     - name: http-ui
       port: {{ .Values.ports.companionUiTest }}
       targetPort: http-ui
-{{- if and (eq .Values.companionUiTest.service.type "NodePort") .Values.companionUiTest.service.nodePort }}
-      nodePort: {{ .Values.companionUiTest.service.nodePort }}
-{{- end }}
   selector:
     {{- include "psfn.componentLabels" (dict "root" . "component" "companion-ui-test") | nindent 4 }}
 ---
@@ -775,13 +822,13 @@ spec:
               containerPort: {{ .Values.ports.companionUiTest }}
           readinessProbe:
             httpGet:
-              path: /
+              path: /companion-ui/
               port: http-ui
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /
+              path: /companion-ui/
               port: http-ui
             initialDelaySeconds: 15
             periodSeconds: 20

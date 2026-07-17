@@ -163,6 +163,10 @@ async function prepareBindingActivation(
           kind: 'verified_lifecycle_binding',
           decisionId: decision.decisionId,
           proofDigest: decision.newProvider.proofDigest,
+          contactAuthorityVersion: decision.contactAuthority.contactAuthorityVersion,
+          identityVersion: decision.contactAuthority.identityVersion,
+          verificationId: decision.contactAuthority.verificationId,
+          verificationDigest: decision.contactAuthority.verificationDigest,
         }),
         authorityGeneration,
         decision.decidedAt,
@@ -547,6 +551,7 @@ export async function prepareLifecycleMutation(
     case 'provider.add':
     case 'provider.relink':
     case 'provider.replace':
+    case 'provider.recover':
     case 'provider.unlink':
       return await prepareProviderLifecycleMutation(client, decision);
     case 'role.grant':

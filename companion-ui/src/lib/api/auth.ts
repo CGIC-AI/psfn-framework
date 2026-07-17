@@ -1,17 +1,9 @@
 import type { HelloMessage, SatelliteCapabilities } from '../protocol/events.js';
 
-export const PSFN_SATELLITE_MOBILE_CHAT_APP_NAME = 'PSFN Satellite Mobile Chat App';
-export const PSFN_SATELLITE_MOBILE_CHAT_APP_DEVICE_ID = 'psfn-satellite-mobile-chat-app';
+export const PSFN_SATELLITE_MOBILE_CHAT_APP_NAME = 'PSFN Companion UI';
 
 export interface SatelliteHelloOptions {
-  deviceId?: string;
-  deviceName?: string;
-  sessionId?: string;
-  channelId?: string;
-  satelliteId?: string;
-  satelliteName?: string;
   capabilities?: SatelliteCapabilities;
-  credential?: string;
 }
 
 export const MOBILE_CHAT_APP_CAPABILITIES: Required<SatelliteCapabilities> = {
@@ -21,33 +13,16 @@ export const MOBILE_CHAT_APP_CAPABILITIES: Required<SatelliteCapabilities> = {
   safety: ['confirmation_required', 'local_only'],
 };
 
+/**
+ * The browser advertises presentation capabilities only. Device, place,
+ * enrollment, session, channel, companion, and credential authority is
+ * supplied by the authenticated Hub attachment and never appears here.
+ */
 export function buildSatelliteHello(options: SatelliteHelloOptions = {}): HelloMessage {
-  const deviceId = normalizeOptional(options.deviceId) ?? PSFN_SATELLITE_MOBILE_CHAT_APP_DEVICE_ID;
-  const deviceName = normalizeOptional(options.deviceName) ?? PSFN_SATELLITE_MOBILE_CHAT_APP_NAME;
-  const sessionId = normalizeOptional(options.sessionId) ?? PSFN_SATELLITE_MOBILE_CHAT_APP_DEVICE_ID;
-  const satelliteId = normalizeOptional(options.satelliteId) ?? deviceId;
-  const satelliteName = normalizeOptional(options.satelliteName) ?? deviceName;
-  const channelId = normalizeOptional(options.channelId);
-  const credential = normalizeOptional(options.credential);
-
-  const hello: HelloMessage = {
+  return Object.freeze({
     type: 'hello',
-    deviceId,
-    deviceName,
-    sessionId,
-    satelliteId,
-    satelliteName,
     capabilities: mergeCapabilities(MOBILE_CHAT_APP_CAPABILITIES, options.capabilities),
-  };
-
-  if (channelId) {
-    hello.channelId = channelId;
-  }
-  if (credential) {
-    hello.credential = credential;
-  }
-
-  return hello;
+  });
 }
 
 function mergeCapabilities(
@@ -64,9 +39,4 @@ function mergeCapabilities(
 
 function mergeCapabilityList<T extends string>(defaults: readonly T[], overrides?: readonly T[]): T[] {
   return [...new Set([...defaults, ...(overrides ?? [])])];
-}
-
-function normalizeOptional(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
 }

@@ -46,7 +46,7 @@ import {
   pickPreferredDisplayName,
 } from '../store/identity-utils.js';
 import { collectUpsertIdentities } from '../store/upsert.js';
-import type { ContactIdentityVerificationRow, ContactMutationAuditRow, ContactRow, SocialRelationshipEdgeRow } from './rows.js';
+import type { ContactIdentityVerificationRow, ContactMutationAuditRow, ContactRow, SocialGraphEntityRow, SocialRelationshipEdgeRow } from './rows.js';
 import {
   chooseMoreRestrictiveSensitivity,
   contactMutationAuditRowToEntry,
@@ -54,11 +54,18 @@ import {
   normalizeJsonObject,
   normalizeLimit,
   socialGraphEdgeRowToEdge,
+  socialGraphEntityRowToEntity,
 } from './mapping.js';
 import { invalidateMemorySubjectsForContact } from './memory-subject-lifecycle.js';
 import { queryOne, queryRows, withPostgresClient } from './connection.js';
 import type { PostgresContactOperationMap, PostgresContactStoreClass } from './operation-map.js';
 import { compareAndSetGenericUpsertTrust, loadContactTrustSnapshot } from './trust-concurrency.js';
+import { markVerifiedContactOwnership } from './contact-lifecycle-snapshot.js';
+import { timingSafeStringEqual } from '../../../shared/utils/secret-compare.js';
+import {
+  beginContactLifecycleMutationCommit,
+  completeContactLifecycleMutationCommit,
+} from './contact-lifecycle-mutation-commit.js';
 
 function hasOwnTimezone(partial: Partial<Contact>): boolean {
   return Object.prototype.hasOwnProperty.call(partial, 'timezone');
@@ -536,9 +543,22 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     await this.syncContactExports();
   },
 
-  async mergeContacts(sourceContactId: string, targetContactId: string): Promise<boolean> {
+  async mergeContactsDirect(
+    sourceContactId: string,
+    targetContactId: string,
+    lifecycleIntentId?: string,
+    recoveryLeaseOwner?: string,
+  ): Promise<boolean> {
     if (sourceContactId === targetContactId) return true;
-    return await withPostgresClient(this.pool, async (client) => {
+    const merged = await withPostgresClient(this.pool, async (client) => {
+      if (lifecycleIntentId) {
+        await beginContactLifecycleMutationCommit(
+          client,
+          lifecycleIntentId,
+          'contact.merge',
+          recoveryLeaseOwner,
+        );
+      }
       // SAFETY: Lock both contacts in deterministic ID order and derive the
       // merged trust from those locked rows. This prevents a stale merge from
       // overwriting an explicit trust mutation and avoids AB-BA deadlocks.
@@ -564,17 +584,24 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       await client.query('UPDATE contact_channel_ids SET contact_id = $1 WHERE contact_id = $2', [targetContactId, sourceContactId]);
       await client.query('UPDATE contact_channel_activity SET contact_id = $1 WHERE contact_id = $2', [targetContactId, sourceContactId]);
 
-      if (await this.tableExists('l2_memories')) {
+      const l2Memories = await client.query<{ exists: boolean }>(
+        'SELECT to_regclass($1) IS NOT NULL AS exists',
+        ['l2_memories'],
+      );
+      if (l2Memories.rows.at(0)?.exists === true) {
         await client.query('UPDATE l2_memories SET contact_id = $1 WHERE contact_id = $2', [targetContactId, sourceContactId]);
       }
       await invalidateMemorySubjectsForContact(client, sourceContactId);
-      if (await this.tableExists('contact_profiles')) {
-        const targetProfileExists = await queryOne<{ exists_flag: number }>(
-          this.pool,
+      const contactProfiles = await client.query<{ exists: boolean }>(
+        'SELECT to_regclass($1) IS NOT NULL AS exists',
+        ['contact_profiles'],
+      );
+      if (contactProfiles.rows.at(0)?.exists === true) {
+        const targetProfileExists = await client.query<{ exists_flag: number }>(
           'SELECT 1 AS exists_flag FROM contact_profiles WHERE contact_id = $1 LIMIT 1',
           [targetContactId],
         );
-        if (targetProfileExists) {
+        if ((targetProfileExists.rowCount ?? 0) > 0) {
           await client.query('DELETE FROM contact_profiles WHERE contact_id = $1', [sourceContactId]);
         } else {
           await client.query('UPDATE contact_profiles SET contact_id = $1 WHERE contact_id = $2', [targetContactId, sourceContactId]);
@@ -605,8 +632,21 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       const mergedNotes = targetRow.notes ?? sourceRow.notes;
       const mergedTimezone = targetRow.timezone ?? sourceRow.timezone;
 
-      const sourceEntity = await this.loadSocialGraphEntityByContactId(sourceContactId);
-      const targetEntity = await this.loadSocialGraphEntityByContactId(targetContactId);
+      const loadLockedEntity = async (contactId: string): Promise<SocialGraphEntityRow | undefined> => {
+        const result = await client.query<SocialGraphEntityRow>(`
+          SELECT id, entity_kind, display_name, contact_id, sensitivity, provenance_refs,
+                 confidence, source, created_at, updated_at
+          FROM social_graph_entities
+          WHERE contact_id = $1
+          LIMIT 1
+          FOR UPDATE
+        `, [contactId]);
+        return result.rows.at(0);
+      };
+      const sourceEntityRow = await loadLockedEntity(sourceContactId);
+      const targetEntityRow = await loadLockedEntity(targetContactId);
+      const sourceEntity = sourceEntityRow ? socialGraphEntityRowToEntity(sourceEntityRow) : undefined;
+      const targetEntity = targetEntityRow ? socialGraphEntityRowToEntity(targetEntityRow) : undefined;
       if (sourceEntity && targetEntity) {
         const mergedSensitivity = chooseMoreRestrictiveSensitivity(
           targetEntity.sensitivity,
@@ -626,8 +666,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
           [mergedSensitivity, mergedProvenanceRefs, mergedConfidence, mergedLastSeen, targetEntity.id],
         );
 
-        const sourceEdges = await queryRows<SocialRelationshipEdgeRow>(
-          this.pool,
+        const sourceEdges = await client.query<SocialRelationshipEdgeRow>(
           `
             SELECT id, source_entity_id, target_entity_id, relationship_type, directional,
                    sensitivity, provenance_refs, evidence_memory_ids, confidence, created_at, updated_at
@@ -637,7 +676,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
           `,
           [sourceEntity.id],
         );
-        for (const row of sourceEdges) {
+        for (const row of sourceEdges.rows) {
           const edge = socialGraphEdgeRowToEdge(row);
           const rewrittenSource = edge.sourceEntityId === sourceEntity.id ? targetEntity.id : edge.sourceEntityId;
           const rewrittenTarget = edge.targetEntityId === sourceEntity.id ? targetEntity.id : edge.targetEntityId;
@@ -645,8 +684,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
             await client.query('DELETE FROM social_relationship_edges WHERE id = $1', [edge.id]);
             continue;
           }
-          const duplicate = await queryOne<SocialRelationshipEdgeRow>(
-            this.pool,
+          const duplicateResult = await client.query<SocialRelationshipEdgeRow>(
             `
               SELECT id, source_entity_id, target_entity_id, relationship_type, directional,
                      sensitivity, provenance_refs, evidence_memory_ids, confidence, created_at, updated_at
@@ -660,6 +698,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
             `,
             [rewrittenSource, rewrittenTarget, edge.relationshipType, edge.directional, edge.id],
           );
+          const duplicate = duplicateResult.rows.at(0);
           if (duplicate) {
             const duplicateEdge = socialGraphEdgeRowToEdge(duplicate);
             await client.query(
@@ -735,9 +774,22 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
         ],
       );
 
-      await this.syncContactExports();
+      if (lifecycleIntentId) {
+        const version = await client.query<{ contact_authority_version: string }>(`
+          SELECT contact_authority_version FROM contacts WHERE id = $1
+        `, [targetContactId]);
+        const contactVersion = Number(version.rows.at(0)?.contact_authority_version);
+        await completeContactLifecycleMutationCommit(
+          client,
+          lifecycleIntentId,
+          contactVersion,
+          recoveryLeaseOwner,
+        );
+      }
       return true;
     });
+    if (merged) await this.syncContactExports();
+    return merged;
   },
 
   async updateNotes(id: string, notes: string, actor?: string): Promise<boolean> {
@@ -1063,7 +1115,10 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     const createdAt = now.toISOString();
     const expiresAt = new Date(now.getTime() + Math.min(Math.max(Math.floor(input.ttlMs ?? 5 * 60_000), 1), 60 * 60_000)).toISOString();
     const verification: ContactIdentityLinkVerification = {
-      id: uuidv7(),
+      // Contact lifecycle intent IDs are protocol-visible RFC-4122 UUIDs. Keep
+      // verification proof IDs in that same domain so the proof itself is the
+      // durable, replay-stable lifecycle intent key.
+      id: randomUUID(),
       contactId: contact.id,
       sourceChannel: sourceIdentity.channel,
       sourceUserId: sourceIdentity.userId,
@@ -1139,27 +1194,12 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     failureReason?: string,
     verifiedAt?: string,
   ): Promise<ContactIdentityLinkVerification | undefined> {
-    const now = new Date().toISOString();
-    await this.pool.query(
-      `
-        UPDATE contact_identity_link_verifications
-        SET status = $1,
-            updated_at = $2,
-            verified_at = COALESCE($3, verified_at),
-            failure_reason = $4
-        WHERE id = $5
-      `,
-      [status, now, verifiedAt ?? null, failureReason ?? null, verificationId],
-    );
-    const row = await queryOne<ContactIdentityVerificationRow>(
+    const row = await markVerifiedContactOwnership(
       this.pool,
-      `
-        SELECT *
-        FROM contact_identity_link_verifications
-        WHERE id = $1
-        LIMIT 1
-      `,
-      [verificationId],
+      verificationId,
+      status,
+      failureReason,
+      verifiedAt,
     );
     return row ? this.toVerification(row) : undefined;
   },
@@ -1194,6 +1234,21 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
 
     const verification = this.toVerification(row);
     if (verification.status !== 'pending') {
+      if (verification.status === 'verified'
+        && row.target_channel === 'discord'
+        && this.contactLifecycleGateway) {
+        const outcome = await this.resumeContactLifecycleIntent({
+          schemaVersion: 1,
+          intentId: row.id,
+          phase: 'prepare',
+          action: 'contact.verify',
+          contactId: row.contact_id,
+          providerSubjectId: row.target_user_id,
+        });
+        if (outcome.status !== 'completed') {
+          throw new Error(`Contact verification lifecycle remains ${outcome.status}: ${outcome.reason}`);
+        }
+      }
       return { status: 'verification_replayed', verification };
     }
     if (row.expires_at !== input.expiresAt.trim()) {
@@ -1205,7 +1260,7 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       const expired = await this.markIdentityLinkVerification(row.id, 'expired', 'expired');
       return { status: 'verification_expired', verification: expired ?? verification };
     }
-    if (row.signature !== input.signature.trim()) {
+    if (!timingSafeStringEqual(row.signature, input.signature.trim())) {
       const failed = await this.markIdentityLinkVerification(row.id, 'failed', 'invalid_signature');
       return { status: 'invalid_signature', verification: failed ?? verification };
     }
@@ -1214,6 +1269,10 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     if (!sourceOwner || sourceOwner.id !== input.contactId) {
       const failed = await this.markIdentityLinkVerification(row.id, 'failed', 'source_identity_not_linked');
       return { status: 'source_identity_not_linked', verification: failed ?? verification };
+    }
+
+    if (targetIdentity.channel === 'discord' && this.contactLifecycleGateway) {
+      return await this.verifyDiscordIdentityLifecycle(row, input.privacyLevel);
     }
 
     const linkResult = await this.linkChannelIdentity(
@@ -1258,6 +1317,29 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       options?.privacyLevel,
     );
     if (result === 'identity_conflict') {
+      if (normalizedIdentity.channel === 'discord' && this.contactLifecycleGateway) {
+        const owner = await this.pool.query<{
+          contact_id: string;
+          identity_version: string;
+          ownership_state: string;
+          restore_state: string;
+        }>(`
+          SELECT contact_id, identity_version, ownership_state, restore_state
+          FROM contact_channel_ids
+          WHERE channel = 'discord' AND channel_user_id = $1
+        `, [normalizedIdentity.userId]);
+        const current = owner.rows.at(0);
+        if (current
+          && current.contact_id !== contactId
+          && current.ownership_state === 'verified'
+          && current.restore_state === 'live') {
+          await this.suspendVerifiedDiscordIdentityConflict(
+            current.contact_id,
+            normalizedIdentity.userId,
+            `link:${contactId}:identity-version:${current.identity_version}`,
+          );
+        }
+      }
       return result;
     }
 
@@ -1475,8 +1557,20 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
     return (await this.getByChannelIdentity(channel, channelUserId))?.id;
   },
 
-  async deleteContact(id: string): Promise<boolean> {
+  async deleteContactDirect(
+    id: string,
+    lifecycleIntentId?: string,
+    recoveryLeaseOwner?: string,
+  ): Promise<boolean> {
     const deleted = await withPostgresClient(this.pool, async (client) => {
+      if (lifecycleIntentId) {
+        await beginContactLifecycleMutationCommit(
+          client,
+          lifecycleIntentId,
+          'contact.delete',
+          recoveryLeaseOwner,
+        );
+      }
       const contact = await client.query<{ trust_level: TrustLevel }>(`
         SELECT trust_level FROM contacts WHERE id = $1 FOR UPDATE
       `, [id]);
@@ -1498,14 +1592,89 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       if (profileTable.rows[0]?.table_name) {
         await client.query('DELETE FROM contact_profiles WHERE contact_id = $1', [id]);
       }
+      let contactVersion: number | undefined;
+      if (lifecycleIntentId) {
+        const version = await client.query<{ contact_authority_version: string }>(`
+          SELECT contact_authority_version FROM contacts WHERE id = $1
+        `, [id]);
+        contactVersion = Number(version.rows.at(0)?.contact_authority_version);
+      }
       const result = await client.query('DELETE FROM contacts WHERE id = $1', [id]);
+      if ((result.rowCount ?? 0) > 0 && lifecycleIntentId) {
+        if (contactVersion === undefined) {
+          throw new Error('Contact lifecycle delete version is missing');
+        }
+        await completeContactLifecycleMutationCommit(
+          client,
+          lifecycleIntentId,
+          contactVersion,
+          recoveryLeaseOwner,
+        );
+      }
       return (result.rowCount ?? 0) > 0;
     });
     if (deleted) await this.syncContactExports();
     return deleted;
   },
 
-  async unlinkChannelIdentity(contactId: string, channel: string, channelUserId: string, actor?: string): Promise<boolean> {
+  async unlinkChannelIdentityDirect(
+    contactId: string,
+    channel: string,
+    channelUserId: string,
+    actor?: string,
+    lifecycleIntentId?: string,
+    recoveryLeaseOwner?: string,
+  ): Promise<boolean> {
+    if (lifecycleIntentId) {
+      const normalizedIdentity = normalizeIdentity(channel, channelUserId);
+      const unlinked = await withPostgresClient(this.pool, async (client) => {
+        await beginContactLifecycleMutationCommit(
+          client,
+          lifecycleIntentId,
+          'contact.discord_unlink',
+          recoveryLeaseOwner,
+        );
+        const existing = await client.query<{ privacy_level: string }>(`
+          SELECT privacy_level FROM contact_channel_ids
+          WHERE contact_id = $1 AND channel = $2 AND channel_user_id = $3
+          FOR UPDATE
+        `, [contactId, normalizedIdentity.channel, normalizedIdentity.userId]);
+        const row = existing.rows.at(0);
+        if (!row) return false;
+        const result = await client.query(`
+          DELETE FROM contact_channel_ids
+          WHERE contact_id = $1 AND channel = $2 AND channel_user_id = $3
+        `, [contactId, normalizedIdentity.channel, normalizedIdentity.userId]);
+        await client.query(`
+          UPDATE contacts SET discord_user_id = NULL
+          WHERE id = $1 AND discord_user_id = $2
+        `, [contactId, normalizedIdentity.userId]);
+        await this.appendMutationAuditEntry(
+          contactId,
+          'channel_link',
+          JSON.stringify({
+            channel: normalizedIdentity.channel,
+            userId: normalizedIdentity.userId,
+            privacyLevel: row.privacy_level,
+          }),
+          null,
+          actor,
+          client,
+        );
+        const version = await client.query<{ contact_authority_version: string }>(`
+          SELECT contact_authority_version FROM contacts WHERE id = $1
+        `, [contactId]);
+        await completeContactLifecycleMutationCommit(
+          client,
+          lifecycleIntentId,
+          Number(version.rows.at(0)?.contact_authority_version),
+          recoveryLeaseOwner,
+        );
+        return (result.rowCount ?? 0) > 0;
+      });
+      if (unlinked) await this.syncContactExports();
+      return unlinked;
+    }
     const contact = await this.getById(contactId);
     if (!contact) return false;
     const normalizedIdentity = normalizeIdentity(channel, channelUserId);
@@ -1521,6 +1690,12 @@ const postgresContactCrudOperations: PostgresContactOperationMap = {
       [contactId, normalizedIdentity.channel, normalizedIdentity.userId],
     );
     if ((result.rowCount ?? 0) > 0) {
+      if (normalizedIdentity.channel === 'discord') {
+        await this.pool.query(`
+          UPDATE contacts SET discord_user_id = NULL
+          WHERE id = $1 AND discord_user_id = $2
+        `, [contactId, normalizedIdentity.userId]);
+      }
       await this.appendMutationAuditEntry(
         contactId,
         'channel_link',

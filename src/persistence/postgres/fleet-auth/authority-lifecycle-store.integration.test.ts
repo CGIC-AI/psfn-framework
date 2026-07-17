@@ -24,6 +24,7 @@ import {
   type ActorSessionAuthorityClaim,
   type PrincipalAuthorityClaim,
   type VerifiedFleetAuthLifecycleDecision,
+  type VerifiedProviderProof,
 } from './authority-lifecycle-types.js';
 import {
   createGatewayAccountAuthorityFencePort,
@@ -114,6 +115,7 @@ async function freshContext() {
   return {
     pool,
     floorRoot,
+    floors,
     runtimeUrl: roleUrl(database.databaseUrl, ROLES.runtime),
     store: new GatewayFleetAuthAuthorityLifecycleStore({
       pool,
@@ -280,6 +282,39 @@ function baseDecision(
   };
 }
 
+function providerContactScope(
+  seeded: { companionId: string; targetContactId: string },
+  newProvider: VerifiedProviderProof,
+) {
+  return {
+    companionId: seeded.companionId,
+    contactId: seeded.targetContactId,
+    contactAuthority: {
+      schemaVersion: 1 as const,
+      contactId: seeded.targetContactId,
+      channel: 'discord' as const,
+      providerSubjectId: newProvider.subjectId,
+      identityVersion: 2,
+      verificationId: randomUUID(),
+      verificationDigest: 'b'.repeat(64),
+      contactAuthorityVersion: 3,
+      ownershipState: 'verified' as const,
+      restoreState: 'live' as const,
+    },
+  };
+}
+
+async function promoteProviderLifecycleTargetToOwner(
+  pool: import('pg').Pool,
+  seeded: { targetGrantId: string },
+): Promise<void> {
+  await pool.query(`
+    UPDATE ${FLEET_AUTH_SCHEMA_NAME}.principal_role_grants
+    SET role = 'owner'
+    WHERE grant_id = $1
+  `, [seeded.targetGrantId]);
+}
+
 async function seedOwnerAndTarget(pool: import('pg').Pool) {
   if (!harness) throw new Error('Postgres harness unavailable');
   const actorId = randomUUID();
@@ -363,6 +398,149 @@ async function seedOwnerAndTarget(pool: import('pg').Pool) {
 }
 
 describe('gateway fleet-auth authority lifecycle store', () => {
+  it('atomically consumes trusted-host provider recovery and fences replay/restored authority', async () => {
+    const context = await freshContext();
+    try {
+      const seeded = await seedOwnerAndTarget(context.pool);
+      const target = claim(seeded.targetId);
+      const credentialIdHash = '9'.repeat(64);
+      context.floors.enrollPasskey({
+        credentialIdHash,
+        publicKeyVerifier: 'AQID',
+        rpId: 'fleet.example.test',
+        principalId: seeded.targetId,
+        expectedProvider: 'discord',
+        expectedProviderSubjectId: '223456789012345678',
+        signCount: 1,
+        backupEligible: false,
+        backupState: false,
+      }, new Date().toISOString());
+      const oneTimeCredential = Buffer.alloc(32, 4).toString('base64url');
+      const webAuthnReceipt = Buffer.alloc(32, 5).toString('base64url');
+      const decision = {
+        ...baseDecision('provider.recover', target, target),
+        companionId: seeded.companionId,
+        unavailableProvider: {
+          provider: 'discord' as const,
+          subjectId: '223456789012345678',
+          authorityGeneration: 1,
+        },
+        newProvider: providerProof('423456789012345678'),
+        recovery: {
+          oneTimeCredential,
+          confirmation: 'provider.recover' as const,
+          webAuthnReceipt,
+          credentialIdHash,
+          credentialGeneration: 1,
+          credentialFloorGeneration: 1,
+        },
+      } satisfies VerifiedFleetAuthLifecycleDecision;
+      const exactScope = {
+        schemaVersion: 1,
+        action: 'provider.recover',
+        principalId: seeded.targetId,
+        currentProviderSubjectId: '223456789012345678',
+        currentProviderAuthorityGeneration: 1,
+        expectedNewProviderSubjectId: '423456789012345678',
+        authorityGeneration: 1,
+        globalAuthEpoch: 1,
+        reasonDigest: DIGEST,
+        principal: target,
+        credentialIdHash,
+        credentialFloorGeneration: 1,
+      };
+      await context.pool.query(`
+        INSERT INTO ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies (
+          ceremony_id, nonce_digest, kind, expected_provider,
+          expected_provider_subject_id, expected_companion_id, exact_scope,
+          status, global_auth_epoch, created_at, expires_at, protocol_version,
+          webauthn_challenge_digest, webauthn_challenge_ciphertext,
+          exact_origin, rp_id, credential_floor_generation,
+          prior_credential_id_hash, confirmed_at, recovery_receipt_digest,
+          recovery_credential_id_hash, recovery_credential_generation
+        ) VALUES (
+          $1, $2, 'provider_recovery', 'discord', $3, $4, $5::jsonb,
+          'pending', 1, $6, $7, 2, $8, $9,
+          'https://fleet.example.test', 'fleet.example.test', 1,
+          $10, $6, $11, $10, 1
+        )
+      `, [
+        decision.ceremonyId,
+        createHash('sha256').update(oneTimeCredential).digest('hex'),
+        decision.newProvider.subjectId,
+        seeded.companionId,
+        JSON.stringify(exactScope),
+        new Date(decision.decidedAt.getTime() - 5_000),
+        new Date(decision.decidedAt.getTime() + 300_000),
+        createHash('sha256').update('challenge').digest('hex'),
+        Buffer.from('ciphertext'),
+        credentialIdHash,
+        createHash('sha256').update(webAuthnReceipt).digest('hex'),
+      ]);
+      await seedDecisionProviderProofs(context.pool, decision);
+      const outcomes = await Promise.allSettled([
+        context.store.execute(decision),
+        context.store.execute(decision),
+      ]);
+      expect(outcomes.filter(outcome => outcome.status === 'fulfilled')).toHaveLength(1);
+      expect(outcomes.filter(outcome => outcome.status === 'rejected')).toHaveLength(1);
+
+      const providers = await context.pool.query<{ subject_id: string; state: string }>(`
+        SELECT subject_id, state
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.provider_subjects
+        WHERE principal_id = $1 AND subject_id IN ($2, $3)
+        ORDER BY subject_id
+      `, [seeded.targetId, '223456789012345678', '423456789012345678']);
+      expect(providers.rows).toEqual([
+        { subject_id: '223456789012345678', state: 'revoked' },
+        { subject_id: '423456789012345678', state: 'active' },
+      ]);
+      expect(context.floors.isAccountAuthorityTombstoned(
+        'provider_subject',
+        'discord:223456789012345678',
+      )).toBe(true);
+      expect(context.floors.readPasskeys()).toMatchObject({
+        generation: 2,
+        credentials: [expect.objectContaining({
+          credentialIdHash,
+          expectedProviderSubjectId: '423456789012345678',
+          generation: 2,
+        })],
+      });
+      const durable = await context.pool.query<{
+        ceremony_status: string;
+        session_revoked: boolean;
+        decision_context: unknown;
+      }>(`
+        SELECT ceremony.status AS ceremony_status,
+               session.revoked_at IS NOT NULL AS session_revoked,
+               audit.decision_context
+        FROM ${FLEET_AUTH_SCHEMA_NAME}.trusted_host_ceremonies AS ceremony
+        JOIN ${FLEET_AUTH_SCHEMA_NAME}.browser_sessions AS session
+          ON session.record_id = $2
+        JOIN ${FLEET_AUTH_SCHEMA_NAME}.authorization_audit_events AS audit
+          ON audit.decision_id = $3
+        WHERE ceremony.ceremony_id = $1
+      `, [decision.ceremonyId, decision.actorSession.sessionId, decision.decisionId]);
+      expect(durable.rows[0]).toMatchObject({ ceremony_status: 'consumed', session_revoked: true });
+      const auditJson = JSON.stringify(durable.rows[0]?.decision_context);
+      expect(auditJson).not.toContain(oneTimeCredential);
+      expect(auditJson).not.toContain(webAuthnReceipt);
+      expect(auditJson).not.toContain('223456789012345678');
+
+      const beforeRestore = context.floors.readPasskeys();
+      context.floors.prepareRestore({
+        activationGeneration: 2,
+        restoredTombstones: [],
+        at: new Date(decision.decidedAt.getTime() + 60_000).toISOString(),
+      });
+      expect(context.floors.readPasskeys()).toEqual(beforeRestore);
+    } finally {
+      await context.pool.end();
+      rmSync(context.floorRoot, { recursive: true, force: true });
+    }
+  }, TIMEOUT_MS);
+
   it('rejects stale authority after rollback and persists exactly one redacted denial audit', async () => {
     const context = await freshContext();
     try {
@@ -443,19 +621,24 @@ describe('gateway fleet-auth authority lifecycle store', () => {
     const context = await freshContext();
     try {
       const seeded = await seedOwnerAndTarget(context.pool);
+      await promoteProviderLifecycleTargetToOwner(context.pool, seeded);
+      const callerForgedProvider = providerProof('423456789012345678');
       const callerForged = {
         ...baseDecision('provider.add', claim(seeded.targetId), claim(seeded.targetId)),
-        newProvider: providerProof('423456789012345678'),
+        ...providerContactScope(seeded, callerForgedProvider),
+        newProvider: callerForgedProvider,
       } satisfies VerifiedFleetAuthLifecycleDecision;
       await expect(context.store.execute(callerForged)).rejects.toMatchObject({
         reasonCode: 'provider_callback_proof_invalid',
       });
 
       const currentCallback = randomUUID();
+      const replacementProvider = providerProof('423456789012345678');
       const replacement = {
         ...baseDecision('provider.replace', claim(seeded.targetId), claim(seeded.targetId)),
+        ...providerContactScope(seeded, replacementProvider),
         currentProvider: providerProof('223456789012345678', currentCallback),
-        newProvider: providerProof('423456789012345678'),
+        newProvider: replacementProvider,
       } satisfies VerifiedFleetAuthLifecycleDecision;
       await seedDecisionProviderProofs(context.pool, replacement);
       const outcomes = await Promise.allSettled([
@@ -494,15 +677,18 @@ describe('gateway fleet-auth authority lifecycle store', () => {
     const context = await freshContext();
     try {
       const seeded = await seedOwnerAndTarget(context.pool);
+      const seededReplacement = providerProof('423456789012345678');
       const seededPurpose = {
         ...baseDecision('provider.replace', claim(seeded.targetId), claim(seeded.targetId)),
+        ...providerContactScope(seeded, seededReplacement),
         currentProvider: providerProof('223456789012345678'),
-        newProvider: providerProof('423456789012345678'),
+        newProvider: seededReplacement,
       } satisfies VerifiedFleetAuthLifecycleDecision;
       await seedDecisionProviderProofs(context.pool, seededPurpose);
 
       const crossAction = {
         ...baseDecision('provider.add', claim(seeded.targetId), claim(seeded.targetId)),
+        ...providerContactScope(seeded, seededPurpose.newProvider),
         ceremonyId: seededPurpose.ceremonyId,
         newProvider: seededPurpose.newProvider,
       } satisfies VerifiedFleetAuthLifecycleDecision;
@@ -519,19 +705,23 @@ describe('gateway fleet-auth authority lifecycle store', () => {
         reasonCode: 'provider_callback_proof_invalid',
       });
 
+      const wrongRoleProvider = providerProof('523456789012345678');
       const wrongRole = {
         ...seededPurpose,
+        ...providerContactScope(seeded, wrongRoleProvider),
         decisionId: randomUUID(),
         currentProvider: seededPurpose.newProvider,
-        newProvider: providerProof('523456789012345678'),
+        newProvider: wrongRoleProvider,
       } satisfies VerifiedFleetAuthLifecycleDecision;
       await expect(context.store.execute(wrongRole)).rejects.toMatchObject({
         reasonCode: 'provider_callback_proof_invalid',
       });
 
+      const wrongSessionProvider = providerProof('623456789012345678');
       const wrongSession = {
         ...baseDecision('provider.add', claim(seeded.targetId), claim(seeded.targetId)),
-        newProvider: providerProof('623456789012345678'),
+        ...providerContactScope(seeded, wrongSessionProvider),
+        newProvider: wrongSessionProvider,
       } satisfies VerifiedFleetAuthLifecycleDecision;
       await seedDecisionProviderProofs(context.pool, wrongSession);
       const otherSession = await seedActorSession(
@@ -576,6 +766,18 @@ describe('gateway fleet-auth authority lifecycle store', () => {
         contactId: 'new-contact',
         bindingId,
         newProvider: providerProof('523456789012345678'),
+        contactAuthority: {
+          schemaVersion: 1,
+          contactId: 'new-contact',
+          channel: 'discord',
+          providerSubjectId: '523456789012345678',
+          identityVersion: 2,
+          verificationId: randomUUID(),
+          verificationDigest: 'c'.repeat(64),
+          contactAuthorityVersion: 3,
+          ownershipState: 'verified',
+          restoreState: 'live',
+        },
       } satisfies VerifiedFleetAuthLifecycleDecision;
       const result = await executeDecision(context, decision);
       expect(result.target).toMatchObject({
@@ -600,9 +802,12 @@ describe('gateway fleet-auth authority lifecycle store', () => {
     const context = await freshContext();
     try {
       const seeded = await seedOwnerAndTarget(context.pool);
+      await promoteProviderLifecycleTargetToOwner(context.pool, seeded);
+      const addedProvider = providerProof('623456789012345678');
       const add = {
         ...baseDecision('provider.add', claim(seeded.targetId), claim(seeded.targetId)),
-        newProvider: providerProof('623456789012345678'),
+        ...providerContactScope(seeded, addedProvider),
+        newProvider: addedProvider,
       } satisfies VerifiedFleetAuthLifecycleDecision;
       const added = await executeDecision(context, add);
       await seedActorSession(
@@ -611,13 +816,15 @@ describe('gateway fleet-auth authority lifecycle store', () => {
         '223456789012345678',
         added.globalAuthEpoch,
       );
+      const relinkProvider = providerProof('723456789012345678');
       const relink = {
         ...baseDecision('provider.relink', added.target, added.target),
+        ...providerContactScope(seeded, relinkProvider),
         decisionId: randomUUID(),
         ceremonyId: randomUUID(),
         authorityGeneration: added.authorityGeneration,
         globalAuthEpoch: added.globalAuthEpoch,
-        newProvider: providerProof('723456789012345678'),
+        newProvider: relinkProvider,
       } satisfies VerifiedFleetAuthLifecycleDecision;
       await executeDecision(context, relink);
       const subjects = await context.pool.query<{ subject_id: string; state: string }>(`

@@ -256,17 +256,16 @@ roots fail startup.
 
 The Shared Companion Workspace is published through authenticated Garden
 routes, not through an environment variable or normal companion filesystem
-tools. Publication uses three distinct credentials
-(`SHARED_WORKSPACE_PROPOSER_TOKEN`, `SHARED_WORKSPACE_REVIEWER_TOKEN`, and
-`SHARED_WORKSPACE_COGSEC_TOKEN`); proposer/reviewer/CogSec identities are
-derived from those credentials and JSON identity assertions are rejected.
-Each secret must contain at least 24 non-whitespace characters and all three
-must differ. A write request supplies only its role's secret in
-`x-companion-shared-workspace-credential`, in addition to normal Garden
-authentication; persisted principal records do not expose credential digests.
-CogSec produces a revision-bound decision artifact before the independent
-reviewer can approve. Publication re-reads under a lock and journals artifact,
-decision, and immutable provenance updates for crash recovery.
+tools. Publication identities come only from the immutable Fleet principal
+context signed into the exact Garden request capability; JSON/header identity
+assertions and reusable shared-workspace credentials are rejected. Proposal,
+CogSec, and independent-review steps each require their exact route-bound
+authorization, and the latter two additionally require UV, explicit
+confirmation, and their conjunctive approval requirements. CogSec and the
+independent reviewer must be distinct authenticated principals. CogSec produces
+a revision-bound decision artifact before the independent reviewer can approve.
+Publication re-reads under a lock and journals artifact, decision, and immutable
+provenance updates for crash recovery.
 
 Authenticated companion connections have only `shared.workspace.list` and
 `shared.workspace.read`; there is no companion write or autoload method.
@@ -313,6 +312,14 @@ Each companion has its own Discord bot identity. Discord accounts in
   count, and a link out to that companion's Garden. Setting `FLEET_STATUS_PORT`
   while `PSFN_MULTI_COMPANION` is off fails closed; a taken port fails closed
   (never re-picks).
+
+  This is a raw operator listener with no browser-session authentication. Its
+  legacy `GET /fleet` alias is not the authenticated `/fleet` portal on the
+  canonical HTTPS origin, and `/fleet/status.json` is never mounted or consumed
+  there. Do not publish or tunnel the raw listener without an independent
+  authentication boundary and private network policy. Remove
+  `FLEET_STATUS_PORT`/`FLEET_STATUS_HOST` from repository-owned runtime wiring
+  and restart the gateway to disable only this listener.
 
   Not yet surfaced (documented follow-up in the code): fatigue/charge posture and
   tool-error counts. Do not assume the fleet page shows them today.

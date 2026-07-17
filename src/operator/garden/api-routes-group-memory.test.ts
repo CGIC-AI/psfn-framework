@@ -234,7 +234,8 @@ describe('group memory admin API routes', () => {
         memoryTextIncluded: false,
       },
     }));
-    expect(groupMemoryService.getGroupMemoryChannelDiagnostics).toHaveBeenCalledWith('discord:general');
+    expect(groupMemoryService.getGroupMemoryChannelDiagnostics)
+      .toHaveBeenCalledWith('discord:general', undefined);
   });
 
   it('runs group memory backfill through the admin route', async () => {

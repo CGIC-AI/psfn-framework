@@ -14,7 +14,6 @@ repository="${COMPANION_UI_IMAGE_REPOSITORY:-localhost/psfn-companion-ui}"
 # local same-arch verification build.
 platform="${COMPANION_UI_PLATFORM:-linux/arm64}"
 required_ref="${COMPANION_UI_SOURCE_REF:-}"
-hub_ws_url="${COMPANION_UI_HUB_WS_URL:-ws://psfn-hub.local:8787/}"
 
 if [[ ! -d "${source_dir}" ]]; then
   echo "companion-ui source directory not found: ${source_dir}" >&2
@@ -58,7 +57,6 @@ esac
 docker build \
   --platform "${platform}" \
   --build-arg "SOURCE_REVISION=${actual_ref}" \
-  --build-arg "VITE_PSFN_SATELLITE_MOBILE_CHAT_APP_WS_URL=${hub_ws_url}" \
   --label "org.opencontainers.image.revision=${actual_ref}" \
   -f "${script_dir}/Dockerfile" \
   -t "${repository}:${tag}" \

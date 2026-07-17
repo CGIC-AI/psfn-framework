@@ -7,6 +7,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { WebSocket } from 'ws';
+import { generateKeyPairSync, randomUUID } from 'node:crypto';
 import { EventBus } from '../../shared/event-bus.js';
 import { createSpiffeCheckServerIdentity } from '../../shared/net/mtls.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
@@ -22,10 +23,50 @@ import type {
   GardenAdminTransportSocketEndpoint,
   GardenAdminTransportTlsConfig,
 } from './transport-paths.js';
+import {
+  createGatewayRequestCapabilitySigner,
+  createRequestCapabilityVerifier,
+  type RequestCapabilityAuthorityVersions,
+} from '../../boundary/fleet-auth/request-capability.js';
+import { compileGatewayGardenRequestTarget } from '../../boundary/fleet-auth/request-capability-target.js';
+import { buildGardenCapabilityHeaders } from './garden-admission.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
 
 const GARDEN_SPIFFE_URI = 'spiffe://cluster.local/psfn/garden';
 const AGENT_SPIFFE_URI = 'spiffe://cluster.local/psfn/agent/test-companion';
 const OTHER_GARDEN_SPIFFE_URI = 'spiffe://cluster.local/psfn/garden-other';
+const FLEET_COMPANION_ID = createCompanionId('11111111-1111-4111-8111-111111111111');
+const fleetKeyPair = generateKeyPairSync('ed25519');
+const fleetPrivateKeyPem = fleetKeyPair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+const fleetPublicKeyPem = fleetKeyPair.publicKey.export({ type: 'spki', format: 'pem' }).toString();
+const FLEET_VERSIONS: RequestCapabilityAuthorityVersions = Object.freeze({
+  authorityGeneration: 2,
+  globalAuthEpoch: 3,
+  sessionAuthnVersion: 5,
+  sessionAuthzVersion: 7,
+  bindingVersion: 11,
+  grantVersion: 13,
+  policyVersion: 17,
+});
+const FLEET_AUTH_CONTEXT = Object.freeze({
+  principalId: 'principal-a', provider: 'discord' as const, providerSubjectId: '12345678901234567',
+  companionId: FLEET_COMPANION_ID, contactBindingId: 'binding-a', contactId: 'contact-a',
+  operatorGrantId: 'grant-a', role: 'admin' as const, sessionRecordId: 'session-a',
+  sessionAssurance: 'webauthn_uv' as const, authorizationEventId: 'event-a',
+  resolvedAt: '2030-01-01T00:00:00.000Z',
+});
+const fleetVerifierConfig = {
+  issuer: 'fleet-auth',
+  maxTtlSeconds: 30,
+  keys: [{
+    issuer: 'fleet-auth',
+    kid: 'active',
+    publicKeyPem: fleetPublicKeyPem,
+    notBefore: '2020-01-01T00:00:00.000Z',
+    notAfter: '2040-01-01T00:00:00.000Z',
+    status: 'active' as const,
+  }],
+};
 
 function requestPort(
   port: number,
@@ -462,9 +503,10 @@ interface CreateHarnessOptions {
   transportMode?: 'socket' | 'network-mtls';
   serverIdentity?: 'valid' | 'missing-spiffe';
   timeoutMs?: number;
+  fleetAuth?: boolean;
 }
 
-function createTestConfig(tempDir: string): SubstrateConfig {
+function createTestConfig(tempDir: string, fleetAuth = false): SubstrateConfig {
   const characterCardPath = join(tempDir, 'character.json');
   mkdirSync(join(tempDir, 'sessions'), { recursive: true });
   writeFileSync(characterCardPath, '{}\n', 'utf-8');
@@ -476,7 +518,7 @@ function createTestConfig(tempDir: string): SubstrateConfig {
     extractionProvider: 'test',
     discordToken: '',
     discordBotId: '123',
-    companionId: 'test-companion',
+    companionId: fleetAuth ? FLEET_COMPANION_ID : 'test-companion',
     characterCardPath,
     dataDir: tempDir,
     databasePath: '',
@@ -506,6 +548,17 @@ function createTestConfig(tempDir: string): SubstrateConfig {
     modelRoster: {
       chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
     },
+    ...(fleetAuth ? {
+      fleetAuthVerifier: {
+        kind: 'verifier' as const,
+        enabled: true as const,
+        canonicalOrigin: 'https://fleet.example.test',
+        requestCapabilities: fleetVerifierConfig,
+        hubDeviceAssertions: {
+          issuer: 'hub', audience: 'fleet', maxTtlSeconds: 60, clockSkewSeconds: 2, keys: [],
+        },
+      },
+    } : {}),
   };
 }
 
@@ -765,7 +818,7 @@ async function createOperatorOnlyHarness(
 
 async function createHarness(options: CreateHarnessOptions = {}): Promise<Harness> {
   const tempDir = mkdtempSync(join(tmpdir(), 'garden-operator-surface-test-'));
-  const config = createTestConfig(tempDir);
+  const config = createTestConfig(tempDir, options.fleetAuth);
   const eventBus = new EventBus();
   const services = createTestServices();
   const timeoutMs = options.timeoutMs ?? 15_000;
@@ -800,6 +853,50 @@ async function createHarness(options: CreateHarnessOptions = {}): Promise<Harnes
     allowInsecureWithoutToken: true,
     config,
     transportEndpoint: transportEndpoint.clientEndpoint,
+    ...(options.fleetAuth ? {
+      fleetChildAssertions: {
+        exchange: async ({ parentToken, parentContext, target }) => {
+          const verifier = createRequestCapabilityVerifier(fleetVerifierConfig);
+          const verifiedParent = verifier.verifyOperator({
+            token: parentToken,
+            target,
+            requestId: parentContext.requestId,
+            decisionId: parentContext.decisionId,
+            versions: parentContext.versions,
+          });
+          const parent = Object.freeze({
+            audience: verifiedParent.audience as `operator:${string}`,
+            requestId: verifiedParent.requestId,
+            decisionId: verifiedParent.decisionId,
+            jti: verifiedParent.jti,
+            targetDigest: verifiedParent.targetDigest,
+          });
+          const requestId = randomUUID();
+          const token = createGatewayRequestCapabilitySigner({
+            issuer: 'fleet-auth',
+            kid: 'active',
+            privateKeyPem: fleetPrivateKeyPem,
+            ttlSeconds: 30,
+          }).signAgent({
+            target,
+            requestId,
+            decisionId: parentContext.decisionId,
+            authContext: verifiedParent.authContext,
+            versions: parentContext.versions,
+            parent,
+          });
+          return {
+            token,
+            context: {
+              requestId,
+              decisionId: parentContext.decisionId,
+              versions: parentContext.versions,
+              parent,
+            },
+          };
+        },
+      },
+    } : {}),
   });
   await operatorSurface.init();
   await operatorSurface.start();
@@ -835,6 +932,40 @@ async function destroyOperatorOnlyHarness(harness: OperatorOnlyHarness): Promise
   await harness.operatorSurface.stop();
   rmSync(harness.tempDir, { recursive: true, force: true });
   resetRuntimeTrustPolicy();
+}
+
+function fleetOperatorHeaders(
+  rawTarget: string,
+  method: 'GET' | 'POST' | 'WS' = 'GET',
+  body = Buffer.alloc(0),
+  ttlSeconds = 30,
+): Record<string, string> {
+  const target = compileGatewayGardenRequestTarget({
+    rawTarget,
+    method,
+    companionId: FLEET_COMPANION_ID,
+    body,
+  });
+  const requestId = randomUUID();
+  const decisionId = randomUUID();
+  const token = createGatewayRequestCapabilitySigner({
+    issuer: 'fleet-auth',
+    kid: 'active',
+    privateKeyPem: fleetPrivateKeyPem,
+    ttlSeconds,
+  }).signOperator({
+    target,
+    requestId,
+    decisionId,
+    authContext: FLEET_AUTH_CONTEXT,
+    versions: FLEET_VERSIONS,
+  });
+  return {
+    ...buildGardenCapabilityHeaders({
+      token,
+      context: { requestId, decisionId, versions: FLEET_VERSIONS },
+    }),
+  };
 }
 
 describe('Garden operator surface startup policy', () => {
@@ -955,6 +1086,11 @@ describe('Garden operator surface', () => {
       expect(networkHarness.services.settings.saveSubConfigJson).toHaveBeenCalledWith(
         'providers',
         providersJson,
+        expect.objectContaining({
+          kind: 'legacy_token',
+          action: 'settings.write',
+          resource: expect.objectContaining({ routeId: 'POST /api/admin/settings/:key' }),
+        }),
       );
 
       const ws = await openWebSocket(networkHarness.port, '/api/admin/events');
@@ -1373,5 +1509,89 @@ describe('Garden operator surface', () => {
     const telemetry = await messagePromise;
     expect(telemetry.type).toBe('agent.turn.usage');
     ws.close();
+  });
+});
+
+describe('fleet-principal Garden split transport', () => {
+  it('requires both mTLS/SPIFFE process auth and a linked agent child before dispatch', async () => {
+    const fleetHarness = await createHarness({ fleetAuth: true, transportMode: 'network-mtls' });
+    try {
+      const operatorHeaders = fleetOperatorHeaders('/api/admin/dashboard');
+      const throughOperator = await requestPort(
+        fleetHarness.port,
+        'GET',
+        '/api/admin/dashboard',
+        undefined,
+        operatorHeaders,
+      );
+      expect(throughOperator.status).toBe(200);
+      expect(JSON.parse(throughOperator.body)).toMatchObject({ stats: { sessionCount: 1 } });
+
+      const forgedBrowserAuthority = await requestPort(
+        fleetHarness.port,
+        'GET',
+        '/api/admin/dashboard',
+        undefined,
+        {
+          ...fleetOperatorHeaders('/api/admin/dashboard'),
+          Authorization: 'Bearer legacy-admin-token',
+          Cookie: 'psfn_token=legacy; psfn_garden_session=browser',
+          'x-psfn-role': 'owner',
+        },
+      );
+      expect(forgedBrowserAuthority.status).toBe(400);
+
+      const transportPort = fleetHarness.transportPort!;
+      const tls = fleetHarness.tlsFixture!.clientTls;
+      const mtlsOnly = await requestTransportPort(
+        transportPort,
+        'GET',
+        '/api/admin/dashboard',
+        tls,
+      );
+      expect(mtlsOnly.status).toBe(401);
+
+      const parentAtAgent = await requestTransportPort(
+        transportPort,
+        'GET',
+        '/api/admin/dashboard',
+        tls,
+        undefined,
+        fleetOperatorHeaders('/api/admin/dashboard'),
+      );
+      expect(parentAtAgent.status).toBe(403);
+    } finally {
+      await destroyHarness(fleetHarness);
+    }
+  });
+
+  it('binds telemetry WebSockets to the exact route, one consume, and parent expiry', async () => {
+    const fleetHarness = await createHarness({ fleetAuth: true });
+    try {
+      expect(await openWebSocketExpectStatus(fleetHarness.port, '/api/admin/events')).toBe(401);
+      expect(await openWebSocketExpectStatus(
+        fleetHarness.port,
+        '/api/admin/events?token=legacy',
+      )).toBe(400);
+      expect(await openWebSocketExpectStatus(
+        fleetHarness.port,
+        '/api/admin/events',
+        fleetOperatorHeaders('/api/admin/dashboard'),
+      )).toBe(403);
+
+      const expiringHeaders = fleetOperatorHeaders('/api/admin/events', 'WS', Buffer.alloc(0), 2);
+      const ws = await openWebSocket(fleetHarness.port, '/api/admin/events', expiringHeaders);
+      expect(await openWebSocketExpectStatus(
+        fleetHarness.port,
+        '/api/admin/events',
+        expiringHeaders,
+      )).toBe(409);
+      const close = new Promise<{ code: number; reason: string }>((resolve) => {
+        ws.once('close', (code, reason) => resolve({ code, reason: reason.toString() }));
+      });
+      await expect(close).resolves.toEqual({ code: 1008, reason: 'fleet_capability_expired' });
+    } finally {
+      await destroyHarness(fleetHarness);
+    }
   });
 });

@@ -131,11 +131,6 @@ hostPorts:
     port: 10053
     hostIP: ""
     sourceCIDRs: []
-  garden:
-    enabled: false
-    port: 10054
-    hostIP: ""
-    sourceCIDRs: []
   # LAN satellite devices/browsers reach the hub websocket as ws://<node>:8787.
   # This follows the same single-node exposure mechanism as the gateway API
   # hostPort (Traefik ingress stays available for name-based HTTP, but LAN
@@ -505,6 +500,15 @@ certificates:
   renewBefore: 360h
   mountBasePath: /run/psfn/tls
 
+# Fleet authentication is an explicit topology switch. The canonical
+# fleet-auth.json owner file remains authoritative for OAuth/session policy;
+# this value only enables the matching process/deployment wiring.
+fleetAuth:
+  enabled: false
+  # Optional exact server-owned binding for /companion-ui/. It may be omitted
+  # only when the canonical companion fleet contains exactly one companion.
+  companionUiCompanionId: ""
+
 networkPolicy:
   enabled: true
   ingressController:
@@ -537,19 +541,13 @@ ingress:
     host: psfn-gateway.local
     path: /
     pathType: Prefix
-  garden:
-    enabled: true
-    host: psfn-garden.local
-    path: /
-    pathType: Prefix
+    tls:
+      enabled: false
+      # Existing public/browser-trusted TLS Secret for the exact gateway host.
+      secretName: ""
   satelliteHub:
     enabled: false
     host: psfn-hub.local
-    path: /
-    pathType: Prefix
-  companionUiTest:
-    enabled: false
-    host: psfn-companion.local
     path: /
     pathType: Prefix
 
@@ -616,16 +614,20 @@ companionUiTest:
   # Optional in-cluster static web surface that serves the companion-ui PWA so
   # the operator can reach it from a browser and chat through the Satellite Hub.
   # It serves pre-built static files only (no server logic) and makes no
-  # outbound calls: the browser talks to the hub directly. This is a stopgap
-  # test surface, to be replaced by a packaged app.
+  # outbound calls. The browser uses only canonical same-origin fleet and Hub
+  # routes; the Hub authenticates its backchannel and mints fresh device
+  # assertions server-side. This is a stopgap test surface, to be replaced by
+  # a packaged app.
   enabled: false
-  # Service exposure. ClusterIP (default) suits ingress-backed clusters; on a
-  # single-node cluster without an ingress controller (the Pi has no Traefik)
-  # set type: NodePort plus a nodePort (30000-32767) so LAN browsers can reach
-  # http://<node>:<nodePort> directly.
+  # Guest use is disabled unless the operator explicitly exposes the enrolled
+  # room/device without a fleet human attachment.
+  guestMode: disabled
+  # This service is always internal. With fleet authentication enabled, the
+  # gateway exposes the signed-out shell at /companion-ui/ on the canonical
+  # HTTPS origin; session status, login, and realtime authority remain
+  # same-origin. Direct ingress and NodePort exposure are forbidden.
   service:
     type: ClusterIP
-    nodePort: null
   image:
     # Build with docker/companion-ui/build-image.sh, then set repository plus a
     # pinned tag or digest. Floating tags such as latest/main are rejected when

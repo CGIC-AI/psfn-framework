@@ -3,8 +3,26 @@
 import type { ExternalTelemetryEvent } from '../../shared/event-bus.js';
 import type { IntentionalNoReplyMetadata } from '../../shared/contracts/runtime.js';
 import type { SatelliteClientCertIdentity } from '../../shared/contracts/satellite-registry.js';
-import type { HubDevicePrincipalSnapshot } from '../../shared/contracts/hub-device-ingress.js';
+import type {
+  HubDeviceAttachmentSnapshot,
+  HubDevicePrincipalSnapshot,
+} from '../../shared/contracts/hub-device-ingress.js';
 import type { ApiAuthPrincipal } from '../backplane/http/auth.js';
+import type {
+  RequestCapabilityAuthorityVersions,
+  RequestCapabilityParentBinding,
+} from '../../boundary/fleet-auth/request-capability.js';
+
+export interface CompanionUiAgentCapability {
+  /** Agent-audience token only; an operator token on this hop is invalid. */
+  token: string;
+  requestId: string;
+  decisionId: string;
+  versions: RequestCapabilityAuthorityVersions;
+  parent: RequestCapabilityParentBinding;
+  /** Canonical base64url of the exact browser frame signed by the capability. */
+  rawBodyBase64Url: string;
+}
 
 export interface OpenAITextContentPart {
   type: 'text';
@@ -198,6 +216,9 @@ export interface ApiChatCompletionRpcParams {
   clientCert?: SatelliteClientCertIdentity;
   /** Device-only principal normalized by authenticated gateway ingress. */
   hubDevicePrincipal?: HubDevicePrincipalSnapshot;
+  /** Sibling human/guest + device contexts and server-owned channel binding. */
+  hubDeviceAttachment?: HubDeviceAttachmentSnapshot;
+  companionUiCapability?: CompanionUiAgentCapability;
   timeoutMs?: number;
   /** Server-authored content-free timing anchor captured at HTTP ingress. */
   performance?: {
@@ -258,6 +279,8 @@ export interface ApiRuntimeChatRequest {
   clientCert?: SatelliteClientCertIdentity;
   /** Device-only principal normalized by authenticated gateway ingress. */
   hubDevicePrincipal?: HubDevicePrincipalSnapshot;
+  hubDeviceAttachment?: HubDeviceAttachmentSnapshot;
+  companionUiCapability?: CompanionUiAgentCapability;
   onDelta?: (text: string) => void;
   signal?: AbortSignal;
 }

@@ -19,6 +19,7 @@ import type {
   HubIdentityEnrollment,
   HubIdentityEnrollmentStatus,
 } from '../../../core/enrollment/types.js';
+import type { GardenRequestContext } from '../garden-request-context.js';
 
 /** Admin-safe view of a binding: opaque handle + contact link + audit only. */
 export interface AdminEnrollmentBindingView {
@@ -43,7 +44,6 @@ export interface AdminEnrollmentInput {
   canonicalContactId: string;
   satelliteId?: string;
   endpointId?: string;
-  actor?: string;
 }
 
 export interface AdminEnrollmentRevokeResult {
@@ -52,9 +52,17 @@ export interface AdminEnrollmentRevokeResult {
 }
 
 export interface AdminEnrollmentService {
-  listEnrollments(): Promise<AdminEnrollmentListData>;
+  listEnrollments(context?: GardenRequestContext): Promise<AdminEnrollmentListData>;
   enroll(input: AdminEnrollmentInput): Promise<AdminEnrollmentBindingView>;
-  revoke(hubIdentityId: string, actor?: string): Promise<AdminEnrollmentRevokeResult>;
+  enroll(context: GardenRequestContext | undefined, input: AdminEnrollmentInput): Promise<AdminEnrollmentBindingView>;
+  revoke(hubIdentityId: string): Promise<AdminEnrollmentRevokeResult>;
+  revoke(context: GardenRequestContext | undefined, hubIdentityId: string): Promise<AdminEnrollmentRevokeResult>;
+}
+
+function actorFromRequest(context: GardenRequestContext | undefined): string {
+  return context?.kind === 'fleet_principal'
+    ? `fleet-principal:${context.actor.principalId}`
+    : 'legacy-token:operator';
 }
 
 function toBindingView(binding: HubIdentityEnrollment): AdminEnrollmentBindingView {
@@ -77,13 +85,23 @@ export function createAdminEnrollmentService(options: {
   const { enrollmentService } = options;
 
   return {
-    async listEnrollments(): Promise<AdminEnrollmentListData> {
+    async listEnrollments(_context?: GardenRequestContext): Promise<AdminEnrollmentListData> {
       const bindings = await enrollmentService.listAll();
-      const enrollments = bindings.map(toBindingView);
+      const enrollments = bindings
+        .filter(binding => (
+          _context?.kind !== 'fleet_principal'
+          || binding.canonicalContactId === _context.actor.contactId
+        ))
+        .map(toBindingView);
       return { enrollments, total: enrollments.length };
     },
 
-    async enroll(input: AdminEnrollmentInput): Promise<AdminEnrollmentBindingView> {
+    async enroll(
+      contextOrInput: GardenRequestContext | AdminEnrollmentInput | undefined,
+      maybeInput?: AdminEnrollmentInput,
+    ): Promise<AdminEnrollmentBindingView> {
+      const context = maybeInput ? contextOrInput as GardenRequestContext | undefined : undefined;
+      const input = maybeInput ?? contextOrInput as AdminEnrollmentInput;
       const hubIdentityId = input.hubIdentityId.trim();
       if (!hubIdentityId) {
         throw new Error('hubIdentityId is required to enroll a hub identity');
@@ -92,9 +110,12 @@ export function createAdminEnrollmentService(options: {
       if (!canonicalContactId) {
         throw new Error('canonicalContactId is required to enroll a hub identity');
       }
+      if (context?.kind === 'fleet_principal'
+        && canonicalContactId !== context.actor.contactId) {
+        throw new Error('Enrollment contact must be the current trusted subject');
+      }
       const satelliteId = input.satelliteId?.trim();
       const endpointId = input.endpointId?.trim();
-      const actor = input.actor?.trim();
       // Delegates to core, which fails closed when the contact does not exist —
       // an enrollment NEVER auto-creates a contact.
       const binding = await enrollmentService.enroll({
@@ -102,18 +123,30 @@ export function createAdminEnrollmentService(options: {
         canonicalContactId,
         ...(satelliteId ? { satelliteId } : {}),
         ...(endpointId ? { endpointId } : {}),
-        ...(actor ? { actor } : {}),
+        actor: actorFromRequest(context),
       });
       return toBindingView(binding);
     },
 
-    async revoke(hubIdentityId: string, actor?: string): Promise<AdminEnrollmentRevokeResult> {
+    async revoke(
+      contextOrHubIdentityId: GardenRequestContext | string | undefined,
+      maybeHubIdentityId?: string,
+    ): Promise<AdminEnrollmentRevokeResult> {
+      const legacyCall = typeof contextOrHubIdentityId === 'string';
+      const context = legacyCall ? undefined : contextOrHubIdentityId;
+      const hubIdentityId = legacyCall ? contextOrHubIdentityId : maybeHubIdentityId ?? '';
       const handle = hubIdentityId.trim();
       if (!handle) {
         throw new Error('hubIdentityId is required to revoke a hub identity');
       }
-      const trimmedActor = actor?.trim();
-      const revoked = await enrollmentService.revoke(handle, trimmedActor || undefined);
+      if (context?.kind === 'fleet_principal') {
+        const binding = (await enrollmentService.listAll())
+          .find(candidate => candidate.hubIdentityId === handle);
+        if (!binding || binding.canonicalContactId !== context.actor.contactId) {
+          return { revoked: false, hubIdentityId: handle };
+        }
+      }
+      const revoked = await enrollmentService.revoke(handle, actorFromRequest(context));
       return { revoked, hubIdentityId: handle };
     },
   };

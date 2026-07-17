@@ -750,6 +750,24 @@ capability-tier.json|scheduler.json|charge-policy.json|skills.json
       else
         printf '%s\n' "$scheduler_migration_output"
       fi
+      if ! settings_migration_output="$(node /app/dist/migrate-required-settings-blocks.js \
+        --apply \
+        --data-dir {{ .Values.runtime.systemDataDir }} 2>&1)"; then
+        printf '%s\n' "$settings_migration_output" >&2
+        case "$settings_migration_output" in
+          *"changed identity; refusing pathname-based recovery"*|*"changed while migration was prepared"*)
+            echo "Settings owner changed during a concurrent workload init; re-validating the published owner once" >&2
+            node /app/dist/migrate-required-settings-blocks.js \
+              --apply \
+              --data-dir {{ .Values.runtime.systemDataDir }}
+            ;;
+          *)
+            exit 1
+            ;;
+        esac
+      else
+        printf '%s\n' "$settings_migration_output"
+      fi
       if [ ! -e {{ .Values.runtime.characterCardPath }} ] && [ -e /seed/companion.json ]; then
         cp /seed/companion.json {{ .Values.runtime.characterCardPath }}
       fi

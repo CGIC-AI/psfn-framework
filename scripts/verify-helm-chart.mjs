@@ -140,6 +140,14 @@ function renderedSeedCommand(rendered) {
 function renderOwnerMigrationFixture(rootDir, seedOwnerFiles) {
   const systemDataDir = join(rootDir, 'system-data');
   const companionDataDir = join(rootDir, 'companion-data');
+  if (!seedOwnerFiles) {
+    mkdirSync(systemDataDir, { recursive: true });
+    writeFileSync(
+      join(systemDataDir, 'settings.json'),
+      readFileSync(resolve(repoRoot, 'config/settings.seed.json'), 'utf8'),
+      'utf8',
+    );
+  }
   const renderedFixture = render([
     '--set-string', `runtime.systemDataDir=${systemDataDir}`,
     '--set-string', `runtime.companionDataDir=${companionDataDir}`,
@@ -153,15 +161,20 @@ function renderOwnerMigrationFixture(rootDir, seedOwnerFiles) {
     '--set', `bootstrap.seedOwnerFiles=${seedOwnerFiles}`,
   ]);
   const containerMigrationCommand = 'node /app/dist/migrate-scheduler-owner.js';
+  const containerSettingsMigrationCommand =
+    'node /app/dist/migrate-required-settings-blocks.js';
   const testMigrationCommand = [
     resolve(repoRoot, 'node_modules/.bin/tsx'),
     resolve(repoRoot, 'src/app/maintenance/migrate-scheduler-owner.ts'),
   ].join(' ');
+  const testSettingsMigrationCommand = [
+    resolve(repoRoot, 'node_modules/.bin/tsx'),
+    resolve(repoRoot, 'src/app/maintenance/migrate-required-settings-blocks.ts'),
+  ].join(' ');
   return {
-    command: renderedSeedCommand(renderedFixture).replace(
-      containerMigrationCommand,
-      testMigrationCommand,
-    ),
+    command: renderedSeedCommand(renderedFixture)
+      .replaceAll(containerMigrationCommand, testMigrationCommand)
+      .replaceAll(containerSettingsMigrationCommand, testSettingsMigrationCommand),
     systemDataDir,
     companionDataDir,
   };
@@ -778,6 +791,11 @@ assertNotIncludes(rendered, 'hostPort: 3001', 'fleet-off direct Garden hostPort'
 // owner files into system-data unless bootstrap.seedOwnerFiles is explicitly
 // opted in. Runtime config must not seed itself (psfn-framework-9bgk).
 assertIncludes(rendered, 'name: seed-runtime-files', 'seed init container present');
+assertIncludes(
+  rendered,
+  'node /app/dist/migrate-required-settings-blocks.js',
+  'required settings blocks migration command',
+);
 assertIncludes(rendered, 'mkdir -p', 'seed init container creates runtime dirs');
 assertIncludes(
   rendered,

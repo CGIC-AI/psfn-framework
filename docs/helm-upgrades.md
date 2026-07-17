@@ -79,6 +79,10 @@ also adds the canonical `backgroundWork` supervisor and post-turn tuning block
 when upgrading an owner written before that block existed. The migrator
 validates the complete candidate before an atomic write, preserves unrelated
 owner values, and refuses malformed or ambiguous existing caretaker data.
+The same init boundary explicitly adds the canonical `wikiStartupHydration`
+and `lifecycleKubernetes` blocks to `settings.json` when upgrading an owner
+written before those required blocks existed. Present blocks are never
+replaced; malformed present values fail closed.
 
 Take the whole-install snapshot and use the dry-run migrator's exact SHA-256
 approvals. A single-companion values fragment has this shape (substitute live

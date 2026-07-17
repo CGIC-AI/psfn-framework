@@ -322,6 +322,11 @@ try {
       'node /app/dist/migrate-scheduler-owner.js',
       `${label} exact-image startup command`,
     );
+    assertIncludes(
+      renderedStartup,
+      'node /app/dist/migrate-required-settings-blocks.js',
+      `${label} required settings migration command`,
+    );
   }
   for (const [companionDataDir, interactive, maxSkills] of [
     [firstCompanionDataDir, 31, 41],

@@ -142,6 +142,7 @@ function runMatrixSweep({ scriptPath, env, deadlineMs, graceMs, originalTierReco
     const child = spawn(scriptPath, [], { env, stdio: ['ignore', 'inherit', 'inherit'], detached: true });
     let settled = false;
     let terminating = null;
+    let sigkilled = false;
     let deadlineTimer = null;
     let killTimer = null;
 
@@ -168,6 +169,7 @@ function runMatrixSweep({ scriptPath, env, deadlineMs, graceMs, originalTierReco
       log(`[lite] ${reason}: SIGTERM -> matrix sweep process group so it restores the pre-sweep tier via its exit trap...`);
       signalGroup('SIGTERM');
       killTimer = setTimeout(() => {
+        sigkilled = true;
         log(`[lite] FATAL: matrix sweep did not exit ${graceMs}ms after SIGTERM; sending SIGKILL. `
           + `The tier restore trap may NOT have completed — verify and restore the tier manually from the `
           + `durable record (${originalTierRecord}); see shakedown/harness/README.md "Safety and manual restore".`);
@@ -196,12 +198,18 @@ function runMatrixSweep({ scriptPath, env, deadlineMs, graceMs, originalTierReco
       settled = true;
       cleanup();
       if (terminating) {
-        reject(new LiteDeadlineError(
-          terminating,
-          terminating === 'deadline'
-            ? `lite sub-hour deadline (${deadlineMs}ms) exceeded; matrix sweep terminated and its exit trap restored the pre-sweep tier`
-            : `received ${terminating}; matrix sweep terminated and its exit trap restored the pre-sweep tier`,
-        ));
+        const cause = terminating === 'deadline'
+          ? `lite sub-hour deadline (${deadlineMs}ms) exceeded; matrix sweep terminated`
+          : `received ${terminating}; matrix sweep terminated`;
+        // On the SIGKILL path the process group was force-killed, so bash's
+        // deferred EXIT trap may never have run — do NOT claim the tier was
+        // restored. Point at the durable pre-sweep record for a manual restore.
+        const restoreNote = sigkilled
+          ? `. It was force-killed with SIGKILL after the ${graceMs}ms grace, so tier restoration is UNVERIFIED — the exit trap may not have completed. `
+            + `Verify and restore the tier manually from the durable record (${originalTierRecord}); `
+            + `see shakedown/harness/README.md "Safety and manual restore".`
+          : ` and its exit trap restored the pre-sweep tier.`;
+        reject(new LiteDeadlineError(terminating, `${cause}${restoreNote}`));
       } else if (code === 0) {
         resolve();
       } else {
@@ -216,9 +224,20 @@ function tierRunJsonPaths(matrixDir) {
 }
 
 function runScorecard({ scorecardScript, env, inputs, jsonOut, mdOut, profile }) {
+  // Honor a caller-set PSFN_SCORECARD_INPUTS by appending its entries to the tier
+  // JSONs (tier JSONs first, then the caller's list, deduplicated). A missing
+  // caller var keeps the current behavior — tier JSONs only.
+  const callerInputs = (env.PSFN_SCORECARD_INPUTS ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const mergedInputs = [...inputs];
+  for (const entry of callerInputs) {
+    if (!mergedInputs.includes(entry)) mergedInputs.push(entry);
+  }
   const scorecardEnv = {
     ...env,
-    PSFN_SCORECARD_INPUTS: inputs.join(','),
+    PSFN_SCORECARD_INPUTS: mergedInputs.join(','),
     PSFN_SCORECARD_JSON: jsonOut,
     PSFN_SCORECARD_MD: mdOut,
   };
@@ -244,7 +263,22 @@ async function runLiteProfile(env) {
 
   log(`[lite] profile=lite target=${target} deadline=${deadlineMs}ms manifest=${manifest.path}`);
 
+  // The sub-hour deadline budgets the WHOLE lite workflow, not just the matrix
+  // sweep. Start the clock before preflight and pass the REMAINING budget to the
+  // sweep; if preflight alone consumes the budget, fail before the sweep. The
+  // scorecard must also finish within the remainder (a hard final check).
+  const startMs = Date.now();
+
   await runPreflightGates(manifest, env);
+
+  const afterPreflightMs = Date.now();
+  const remainingAfterPreflight = deadlineMs - (afterPreflightMs - startMs);
+  if (remainingAfterPreflight <= 0) {
+    throw new LiteDeadlineError(
+      'deadline',
+      `lite sub-hour deadline (${deadlineMs}ms) exhausted by preflight (${afterPreflightMs - startMs}ms); aborting before the matrix sweep`,
+    );
+  }
 
   const caseSets = composeTierCaseSets(manifest);
   log(`[lite] tier case sets: ${TIERS.map((tier) => `${tier}=[${caseSets[tier].join(',')}]`).join(' ')}`);
@@ -258,7 +292,7 @@ async function runLiteProfile(env) {
   await runMatrixSweep({
     scriptPath: resolveMatrixScript(),
     env: matrixEnv,
-    deadlineMs,
+    deadlineMs: remainingAfterPreflight,
     graceMs,
     originalTierRecord,
   });
@@ -273,7 +307,15 @@ async function runLiteProfile(env) {
     mdOut,
     profile: 'lite',
   });
-  log(`[lite] scorecard (profile:lite) green -> ${jsonOut}`);
+
+  const totalElapsedMs = Date.now() - startMs;
+  if (totalElapsedMs >= deadlineMs) {
+    throw new LiteDeadlineError(
+      'deadline',
+      `lite sub-hour deadline (${deadlineMs}ms) exceeded; total elapsed ${totalElapsedMs}ms including preflight, sweep, and scorecard`,
+    );
+  }
+  log(`[lite] scorecard (profile:lite) green -> ${jsonOut} (total ${totalElapsedMs}ms of ${deadlineMs}ms budget)`);
 }
 
 async function runFullProfile(env) {

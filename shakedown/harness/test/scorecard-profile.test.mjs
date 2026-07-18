@@ -39,8 +39,15 @@ const DOC_FIXTURE = `# Fixture shakedown doc
 
 const COVERAGE_MAP_FIXTURE = JSON.stringify({ surfaces: {} });
 
-function tierArtifact(tier, { conformance = true, matrixOk = true, coverageIds = true } = {}) {
-  return {
+function tierArtifact(tier, {
+  conformance = true,
+  matrixOk = true,
+  coverageIds = true,
+  matches = true,
+  completed,
+  harnessStatus,
+} = {}) {
+  const art = {
     generatedAt: '2026-07-18T00:00:00.000Z',
     target: 'kube',
     phase: tier === 'autonomous' ? 'autonomous' : 'coverage',
@@ -48,7 +55,7 @@ function tierArtifact(tier, { conformance = true, matrixOk = true, coverageIds =
       ? ['capability_refusal_matrix', 'tier_tool_conformance']
       : ['capability_refusal_matrix'],
     tierToolConformance: conformance
-      ? { caseId: 'tier_tool_conformance', expectedTier: tier, responseValid: true, matches: true }
+      ? { caseId: 'tier_tool_conformance', expectedTier: tier, responseValid: true, matches }
       : null,
     initialStats: {},
     results: [
@@ -56,6 +63,9 @@ function tierArtifact(tier, { conformance = true, matrixOk = true, coverageIds =
       { caseId: 'l0_baseline', caseStatus: 'ok' },
     ],
   };
+  if (completed !== undefined) art.completed = completed;
+  if (harnessStatus !== undefined) art.harnessStatus = harnessStatus;
+  return art;
 }
 
 function runScorecard(dir, { profile, artifacts }) {
@@ -160,6 +170,64 @@ function normalizeMd(md) {
     assert.notEqual(code, 0, 'lite with a non-green capability matrix fails closed');
     // Non-green matrix is BOTH a taxonomy failure AND an incomplete attestation.
     assert.equal(json.liteAttestation.complete, false, 'attestation incomplete when matrix not ok');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// --- B3: lite with tierToolConformance.matches:false -> red -------------------
+{
+  const dir = mkdtempSync(join(tmpdir(), 'sc-lite-nomatch-'));
+  try {
+    const artifacts = allThree();
+    // Conformance evidence is present and valid, but the grid did NOT match the
+    // expected tier grant — a real tier drift that must fail the attestation.
+    artifacts.autonomous = tierArtifact('autonomous', { matches: false });
+    const { code, json } = runScorecard(dir, { profile: 'lite', artifacts });
+    assert.notEqual(code, 0, 'lite with conformance matches:false fails closed');
+    assert.equal(json.liteAttestation.complete, false, 'attestation incomplete when conformance.matches !== true');
+    const autoTier = json.liteAttestation.tiers.find((t) => t.tier === 'autonomous');
+    assert.equal(autoTier.conformanceMatches, false, 'autonomous tier records conformanceMatches:false');
+    assert.ok(
+      autoTier.missing.some((m) => /matches/i.test(m)),
+      'the missing list names the matches !== true failure',
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// --- B4: an input artifact marked completed:false forces red (lite) -----------
+{
+  const dir = mkdtempSync(join(tmpdir(), 'sc-lite-incomplete-'));
+  try {
+    const artifacts = allThree();
+    artifacts.apprentice = tierArtifact('apprentice', { completed: false });
+    const { code, json } = runScorecard(dir, { profile: 'lite', artifacts });
+    assert.notEqual(code, 0, 'lite with a completed:false input fails closed');
+    assert.equal(json.green, false, 'completed:false input forces green:false');
+    assert.ok(Array.isArray(json.artifactFailures) && json.artifactFailures.length > 0,
+      'artifactFailures records the incomplete input');
+    assert.ok(json.failureReasons.some((r) => /completed=false/.test(r)),
+      'failure reasons name the completed:false artifact');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// --- B5: harnessStatus tool_conformance_failed forces red even for FULL --------
+{
+  const dir = mkdtempSync(join(tmpdir(), 'sc-full-toolfail-'));
+  try {
+    const artifacts = allThree();
+    artifacts.autonomous = tierArtifact('autonomous', { harnessStatus: 'tool_conformance_failed' });
+    const { code, json } = runScorecard(dir, { profile: undefined, artifacts });
+    assert.notEqual(code, 0, 'a directly-invoked full scorecard cannot go green on a tool_conformance_failed artifact');
+    assert.equal(json.green, false, 'tool_conformance_failed input forces green:false in the non-lite path');
+    assert.ok(Array.isArray(json.artifactFailures) && json.artifactFailures.length > 0,
+      'artifactFailures records the tool_conformance_failed input');
+    assert.ok(json.failureReasons.some((r) => /tool_conformance_failed/.test(r)),
+      'failure reasons name the tool_conformance_failed artifact');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

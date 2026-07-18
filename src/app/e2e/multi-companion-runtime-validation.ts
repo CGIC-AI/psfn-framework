@@ -376,6 +376,10 @@ async function validateCompanionRoom(
     requireInvariant(delta.amount > 0, 'companion_room_fatigue_ledger_did_not_charge');
     requireInvariant(delta.eventCount > 0, 'companion_room_fatigue_event_missing');
     requireInvariant(delta.hardState === 'exhausted', 'companion_room_ledger_not_exhausted');
+    // overchargeEventCount is deliberately NOT asserted: overcharge is an optional
+    // post-exhaustion reserve dimension gated on overcharge.enabled + continuation
+    // evidence. Exhaustion is reached via 'charged' events (normalSpent >= hardLimit),
+    // so a companion can legitimately hit 'exhausted' with a zero overcharge delta.
   }
   for (const delta of chargeDeltas) {
     requireInvariant(delta > 0, 'companion_room_run_charge_missing');

@@ -97,11 +97,14 @@ console.log('\n[composeTierCaseSets]');
 }
 
 // --- Integration harness: stub matrix + scorecard scripts --------------------
-function writeStubs(dir, { gateExit = 0 } = {}) {
+function writeStubs(dir, { gateExit = 0, gateSleepMs = 0 } = {}) {
   const record = join(dir, 'record');
   mkdirSync(record, { recursive: true });
   // Stub matrix (bash). STUB_MODE=clean emits 3 tier JSONs and exits 0;
-  // STUB_MODE=hang installs a TERM/INT trap that records a restore + exits 143.
+  // STUB_MODE=hang installs a TERM/INT trap that records a restore + exits 143;
+  // STUB_MODE=ignore-term execs a node process that IGNORES SIGTERM so the grace
+  // expires and the runner must escalate to SIGKILL (the forced-kill path, where
+  // the trap never ran and restoration is unverified).
   //
   // The hang foreground is a SINGLE long-running command (sleep 300), mirroring
   // the real matrix's `node "$HARNESS"` shape: bash cannot run its deferred TERM
@@ -118,7 +121,13 @@ printf '%s' "\${PSFN_NURSERY_CASES:-<unset>}" > "$STUB_RECORD_DIR/nursery-cases"
 printf '%s' "\${PSFN_APPRENTICE_CASES:-<unset>}" > "$STUB_RECORD_DIR/apprentice-cases"
 printf '%s' "\${PSFN_AUTONOMOUS_CASES:-<unset>}" > "$STUB_RECORD_DIR/autonomous-cases"
 restore() { printf 'restored' > "$STUB_RECORD_DIR/restored"; exit 143; }
-if [ "\${STUB_MODE:-clean}" = "hang" ]; then
+if [ "\${STUB_MODE:-clean}" = "ignore-term" ]; then
+  printf 'apprentice' > "$PSFN_MATRIX_DIR/original-capability-tier"
+  printf 'started' > "$STUB_RECORD_DIR/matrix-started"
+  # Replace bash with a node process that ignores SIGTERM/SIGINT entirely, so the
+  # runner's grace expires and it must send SIGKILL. No restore is ever recorded.
+  exec node -e 'process.on("SIGTERM",()=>{});process.on("SIGINT",()=>{});setInterval(()=>{},1000);'
+elif [ "\${STUB_MODE:-clean}" = "hang" ]; then
   trap restore TERM INT
   printf 'apprentice' > "$PSFN_MATRIX_DIR/original-capability-tier"
   printf 'started' > "$STUB_RECORD_DIR/matrix-started"
@@ -143,9 +152,10 @@ writeFileSync(process.env.STUB_RECORD_DIR + '/scorecard-env.json', JSON.stringif
 }));
 process.exit(0);
 `);
-  // Fixture manifest with harmless gate commands.
+  // Fixture manifest with harmless gate commands. gateSleepMs > 0 makes the
+  // preflight gate slow, to exercise the whole-workflow deadline budgeting.
   const gateCmd = gateExit === 0
-    ? ['node', '-e', "require('fs').appendFileSync(process.env.STUB_RECORD_DIR+'/gates','gate\\n')"]
+    ? ['node', '-e', `setTimeout(() => require('fs').appendFileSync(process.env.STUB_RECORD_DIR+'/gates','gate\\n'), ${gateSleepMs})`]
     : ['node', '-e', "require('fs').appendFileSync(process.env.STUB_RECORD_DIR+'/gates','gate\\n');process.exit(3)"];
   const base = JSON.parse(readFileSync(REAL_MANIFEST, 'utf8'));
   base.preflightGates = [{ id: 'stub-gate', command: gateCmd }];
@@ -251,6 +261,47 @@ console.log('\n[lite SIGINT restore]');
     check(code !== 'timeout' && code !== 0, `runner exits non-zero after SIGINT (got ${code})`);
     check(existsSync(join(stubs.record, 'restored')), 'matrix sweep restored the tier after forwarded SIGTERM');
     check(/SIGINT/.test(stderr()), 'stderr records the forwarded SIGINT');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// --- Part 7b: forced-kill honesty (SIGTERM ignored -> SIGKILL, unverified) ----
+console.log('\n[lite forced-kill honesty]');
+{
+  const dir = mkdtempSync(join(tmpdir(), 'runner-kill-'));
+  try {
+    const stubs = writeStubs(dir);
+    // Tiny grace so the ignored SIGTERM escalates to SIGKILL quickly.
+    const env = runnerEnv(dir, stubs, { STUB_MODE: 'ignore-term', PSFN_LITE_DEADLINE_MS: '400', PSFN_LITE_RESTORE_GRACE_MS: '300' });
+    const { exited, stderr } = spawnRunner('lite', env);
+    const { code } = await Promise.race([exited, sleep(20000).then(() => ({ code: 'timeout' }))]);
+    check(code !== 'timeout' && code !== 0, `forced-kill lite run exits non-zero (got ${code})`);
+    check(!existsSync(join(stubs.record, 'restored')), 'no restore recorded on the forced-kill path');
+    check(/SIGKILL/.test(stderr()), 'stderr names the SIGKILL escalation');
+    check(/unverified/i.test(stderr()), 'terminal message says tier restoration is UNVERIFIED (does not claim the trap restored)');
+    check(/original-capability-tier/.test(stderr()) && /manual/i.test(stderr()),
+      'terminal message repeats the durable-record manual-restore pointer');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// --- Part 7c: whole-workflow deadline — preflight over budget aborts pre-sweep -
+console.log('\n[lite whole-workflow deadline]');
+{
+  const dir = mkdtempSync(join(tmpdir(), 'runner-preflight-'));
+  try {
+    // Preflight gate sleeps 600ms against a 300ms whole-workflow budget.
+    const stubs = writeStubs(dir, { gateSleepMs: 600 });
+    const env = runnerEnv(dir, stubs, { STUB_MODE: 'clean', PSFN_LITE_DEADLINE_MS: '300', PSFN_LITE_RESTORE_GRACE_MS: '5000' });
+    const { exited, stderr } = spawnRunner('lite', env);
+    const { code } = await exited;
+    check(code !== 0, `over-budget preflight fails the run (got ${code})`);
+    check(!existsSync(join(stubs.record, 'matrix-ran')) && !existsSync(join(stubs.record, 'matrix-started')),
+      'the matrix sweep never ran once preflight exhausted the whole-workflow budget');
+    check(/deadline/i.test(stderr()) && /preflight/i.test(stderr()),
+      'stderr names the preflight budget exhaustion');
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   ConfirmationQueue,
   DEFAULT_CONFIRMATION_EXPIRY_MS,
+  readConfirmedApprovalExecution,
+  type ConfirmationExecutionContext,
 } from './confirmation-queue.js';
 
 describe('ConfirmationQueue', () => {
@@ -152,6 +154,39 @@ describe('ConfirmationQueue', () => {
         appliedParams: { path: '/etc/hosts' },
       }),
     ]);
+  });
+
+  it('exposes approval proof only during the exact queue executor call', async () => {
+    let captured: ConfirmationExecutionContext | undefined;
+    const queue = new ConfirmationQueue({
+      now: () => 150,
+      idFactory: () => 'approval-proof-1',
+    });
+    const entry = queue.enqueue({
+      method: 'fs.read',
+      action: 'read',
+      scope: '/etc/hosts',
+      params: {},
+      companionReason: 'Inspect a bounded resource',
+    }, async (_params, runEntry, context) => {
+      captured = context;
+      expect(readConfirmedApprovalExecution(context, runEntry.id)).toEqual({
+        approvalId: runEntry.id,
+        decision: 'approve',
+        resolver: { kind: 'operator', id: 'test-operator' },
+      });
+    });
+
+    await queue.resolve(
+      { id: entry.id, decision: 'approve' },
+      { kind: 'operator', id: 'test-operator' },
+    );
+    expect(captured).toBeDefined();
+    if (!captured) {
+      throw new Error('Test executor did not capture its confirmation context');
+    }
+    expect(() => readConfirmedApprovalExecution(captured, entry.id))
+      .toThrow(/not backed by the resolved approval/);
   });
 
   it('denies queued action without executing it', async () => {

@@ -21,6 +21,35 @@ export interface ConfirmationExecutionContext {
   resolver?: ConfirmationResolverIdentity;
 }
 
+export interface ConfirmedApprovalExecution {
+  readonly approvalId: string;
+  readonly decision: Extract<ConfirmationDecision, 'approve' | 'modify'>;
+  readonly resolver?: ConfirmationResolverIdentity;
+}
+
+/**
+ * Runtime proof that an executor is running inside this queue's one terminal
+ * approve/modify dispatch. A structural object or captured context is not
+ * authority: records exist only for the duration of the executor call.
+ */
+const confirmedApprovalExecutions =
+  new WeakMap<ConfirmationExecutionContext, ConfirmedApprovalExecution>();
+
+export function readConfirmedApprovalExecution(
+  context: ConfirmationExecutionContext,
+  approvalId: string,
+): ConfirmedApprovalExecution {
+  const confirmed = confirmedApprovalExecutions.get(context);
+  if (!confirmed || confirmed.approvalId !== approvalId) {
+    throw new Error('Confirmation execution is not backed by the resolved approval');
+  }
+  return {
+    approvalId: confirmed.approvalId,
+    decision: confirmed.decision,
+    ...(confirmed.resolver ? { resolver: { ...confirmed.resolver } } : {}),
+  };
+}
+
 /**
  * Immutable server-derived approval ownership. `companionId` is the parent
  * routing/authorization key; `shardId` is provenance only. Approval surfaces
@@ -389,10 +418,16 @@ export class ConfirmationQueue {
     });
     this.pending.delete(request.id);
 
+    const executionContext: ConfirmationExecutionContext = {
+      ...(resolver ? { resolver } : {}),
+    };
+    confirmedApprovalExecutions.set(executionContext, {
+      approvalId: runEntry.id,
+      decision: request.decision,
+      ...(resolver ? { resolver: { ...resolver } } : {}),
+    });
     try {
-      await pending.execute(nextParams, runEntry, {
-        ...(resolver ? { resolver } : {}),
-      });
+      await pending.execute(nextParams, runEntry, executionContext);
       const resolvedAt = this.now();
       const status = request.decision === 'modify' ? 'modified' : 'approved';
       this.history.push(this.snapshotHistory({
@@ -453,6 +488,8 @@ export class ConfirmationQueue {
         message: toErrorMessage(error),
         executed,
       };
+    } finally {
+      confirmedApprovalExecutions.delete(executionContext);
     }
   }
 

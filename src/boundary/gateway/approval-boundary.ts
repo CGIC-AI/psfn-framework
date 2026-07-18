@@ -13,6 +13,7 @@ import {
   ConfirmationQueue,
   DEFAULT_CONFIRMATION_EXPIRY_MS,
 } from '../../system/capabilities/confirmation-queue.js';
+import type { ApprovalAttribution } from '../../shared/contracts/approval-envelope.js';
 import {
   redactApprovalRequested,
   redactApprovalResolved,
@@ -97,6 +98,15 @@ export interface ApprovalBoundaryService {
   }>;
   requestExplicitApproval(input: {
     authenticatedCompanionId: string | undefined;
+    /**
+     * Authenticated shard lineage for a shard-originated request (mus2.3).
+     * Resolved SERVER-SIDE from shard workload registration — never from tool
+     * params or client fields. Absent for ordinary companion approvals. When
+     * present, `shardId` MUST be a non-empty authenticated shard-instance id;
+     * an empty/whitespace id is an orphaned lineage and is refused BEFORE
+     * enqueue. The parent owner is always `authenticatedCompanionId`.
+     */
+    shardLineage?: { shardId: string; shardLabel?: string };
     request: ConfirmationQueueRequest;
     execute: (
       params: Record<string, unknown>,
@@ -112,7 +122,12 @@ const approvalLog = createComponentLogger('ApprovalBoundary');
 export function createGatewayApprovalBoundaryService(
   options: ApprovalBoundaryOptions,
 ): ApprovalBoundaryService {
-  const confirmationOwners = new Map<string, string>();
+  // Immutable owner attribution captured at enqueue, keyed by confirmation id.
+  // `companionId` is ALWAYS the authenticated parent owner (routing key);
+  // `shardId` is optional authenticated shard provenance. The resolved event
+  // reuses this captured attribution — a leaked/guessed approval id can never
+  // re-attribute a request (SHARD_APPROVALS §Approval Event Contract).
+  const confirmationOwners = new Map<string, { companionId: string; shardId?: string }>();
   let enqueueOwner: string | undefined;
   const confirmationQueue = new ConfirmationQueue({
     defaultExpiryMs: options.confirmation?.expiryMs ?? DEFAULT_CONFIRMATION_EXPIRY_MS,
@@ -124,14 +139,11 @@ export function createGatewayApprovalBoundaryService(
           });
           return;
         }
-        // Unified-envelope attribution (psfn-framework-13sk) is server-resolved:
-        // the parent id is ALWAYS the authenticated enqueue owner. If the
-        // enqueuer supplied its own attribution (e.g. a future shard path with
-        // added provenance), its parentId MUST equal that owner — otherwise we
-        // refuse to emit rather than route to a spoofed parent (fail closed).
-        const parentLabel = options.parentLabelProvider?.(enqueueOwner)?.trim();
-        const attribution = entry.attribution
-          ?? (parentLabel ? { parentId: enqueueOwner, parentLabel } : undefined);
+        // Attribution is resolved SERVER-SIDE before enqueue (see
+        // resolveEnqueueAttribution) and stamped onto the entry. The parent id
+        // is ALWAYS the authenticated enqueue owner. We re-verify that binding
+        // here as defense-in-depth and refuse to route to a spoofed parent.
+        const attribution = entry.attribution;
         if (!attribution) {
           approvalLog.error('Refusing to emit companion.approval.requested without a canonical parent label', {
             id: entry.id,
@@ -144,9 +156,14 @@ export function createGatewayApprovalBoundaryService(
           });
           return;
         }
-        confirmationOwners.set(entry.id, enqueueOwner);
+        const shardId = attribution.shardId;
+        confirmationOwners.set(entry.id, {
+          companionId: enqueueOwner,
+          ...(shardId !== undefined ? { shardId } : {}),
+        });
         options.eventBus.emit('companion.approval.requested', {
           companionId: enqueueOwner,
+          ...(shardId !== undefined ? { shardId } : {}),
           payload: redactApprovalRequested(entry, {
             sourceSystem: entry.sourceSystem ?? 'tool-access',
             attribution,
@@ -161,8 +178,8 @@ export function createGatewayApprovalBoundaryService(
         });
       },
       onResolved: (outcome) => {
-        const companionId = confirmationOwners.get(outcome.id);
-        if (!companionId) {
+        const owner = confirmationOwners.get(outcome.id);
+        if (!owner) {
           approvalLog.error('Refusing to emit ownerless companion.approval.resolved', {
             id: outcome.id,
           });
@@ -170,12 +187,14 @@ export function createGatewayApprovalBoundaryService(
         }
         confirmationOwners.delete(outcome.id);
         options.eventBus.emit('companion.approval.resolved', {
-          companionId,
+          companionId: owner.companionId,
+          ...(owner.shardId !== undefined ? { shardId: owner.shardId } : {}),
           payload: redactApprovalResolved({
             id: outcome.id,
             status: outcome.status,
             resolvedAt: outcome.resolvedAt,
             executed: outcome.executed,
+            ...(owner.shardId !== undefined ? { shardId: owner.shardId } : {}),
           }),
           timestamp: Date.now(),
         }).catch((error) => {
@@ -193,8 +212,56 @@ export function createGatewayApprovalBoundaryService(
     ntfyTopic: options.confirmation?.ntfyTopic?.trim() || undefined,
   };
 
+  /**
+   * Resolve the immutable, server-side approval attribution BEFORE enqueue and
+   * fail closed on any orphaned or mismatched lineage. Returns `undefined` only
+   * when no canonical parent label is available for an ordinary companion
+   * request — the action still enqueues for the operator Garden surface, but no
+   * relay event can emit without a presentation label. A shard-originated
+   * request without a resolvable parent label is refused outright: shard
+   * provenance must never emit ownerless or unlabeled.
+   */
+  const resolveEnqueueAttribution = (
+    owner: string,
+    shard: { shardId: string; shardLabel?: string } | undefined,
+    supplied: ApprovalAttribution | undefined,
+    method: string,
+  ): ApprovalAttribution | undefined => {
+    // Defense-in-depth: a caller-supplied attribution is NEVER authority. It
+    // must exactly match the authenticated lineage or the request is denied.
+    if (supplied) {
+      if (supplied.parentId !== owner) {
+        throw new Error(
+          `Cannot queue ${method}: supplied attribution parent does not match the authenticated owner`,
+        );
+      }
+      const suppliedShardId = supplied.shardId?.trim() || undefined;
+      if (suppliedShardId !== shard?.shardId) {
+        throw new Error(
+          `Cannot queue ${method}: supplied attribution shard does not match the authenticated shard lineage`,
+        );
+      }
+    }
+    const parentLabel = options.parentLabelProvider?.(owner)?.trim();
+    if (!parentLabel) {
+      if (shard) {
+        throw new Error(
+          `Cannot queue ${method}: shard-originated request has no resolvable parent companion label`,
+        );
+      }
+      return undefined;
+    }
+    return {
+      parentId: owner,
+      parentLabel,
+      ...(shard ? { shardId: shard.shardId } : {}),
+      ...(shard?.shardLabel ? { shardLabel: shard.shardLabel } : {}),
+    };
+  };
+
   const requestExplicitApproval = async (input: {
     authenticatedCompanionId: string | undefined;
+    shardLineage?: { shardId: string; shardLabel?: string };
     request: ConfirmationQueueRequest;
     execute: (
       params: Record<string, unknown>,
@@ -207,10 +274,34 @@ export function createGatewayApprovalBoundaryService(
         `Cannot queue ${input.request.method}: requesting connection has no authenticated companion owner`,
       );
     }
+    // Resolve authenticated shard lineage. A shard request with an empty or
+    // whitespace instance id is an orphaned lineage — refuse BEFORE enqueue.
+    let shard: { shardId: string; shardLabel?: string } | undefined;
+    if (input.shardLineage !== undefined) {
+      const shardId = input.shardLineage.shardId.trim();
+      if (!shardId) {
+        throw new Error(
+          `Cannot queue ${input.request.method}: shard-originated request has no authenticated shard instance id`,
+        );
+      }
+      const shardLabel = input.shardLineage.shardLabel?.trim();
+      shard = { shardId, ...(shardLabel ? { shardLabel } : {}) };
+    }
+    // Resolve + validate the immutable attribution BEFORE enqueue. A mismatched
+    // parent or shard throws here, so nothing enqueues, emits, or notifies.
+    const attribution = resolveEnqueueAttribution(
+      input.authenticatedCompanionId,
+      shard,
+      input.request.attribution,
+      input.request.method,
+    );
+    const request: ConfirmationQueueRequest = attribution
+      ? { ...input.request, attribution }
+      : input.request;
     let queueEntry: ConfirmationQueueEntry;
     enqueueOwner = input.authenticatedCompanionId;
     try {
-      queueEntry = confirmationQueue.enqueue(input.request, input.execute);
+      queueEntry = confirmationQueue.enqueue(request, input.execute);
     } finally {
       enqueueOwner = undefined;
     }
@@ -227,7 +318,7 @@ export function createGatewayApprovalBoundaryService(
   return {
     listPendingConfirmations: () => confirmationQueue.listPending(),
     listConfirmationHistory: () => confirmationQueue.listHistory(),
-    ownerOfConfirmation: (id: string) => confirmationOwners.get(id),
+    ownerOfConfirmation: (id: string) => confirmationOwners.get(id)?.companionId,
     resolveConfirmation: (params, resolver) => confirmationQueue.resolve(params, resolver),
     requestExplicitApproval,
     gate<P, R>(gateOptions: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R> {

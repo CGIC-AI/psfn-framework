@@ -90,6 +90,60 @@ describe('CompanionEventRelay', () => {
     expect(toolsOnly[0].channelId).toBe('chan-1');
   });
 
+  it('retains the parent owner and shard provenance through approval fan-out, scoped to the owner', async () => {
+    const ownerReceived = collect(['approval.requested', 'approval.resolved']);
+    const otherReceived: CompanionEventEnvelope[] = [];
+    relay.subscribe({
+      companionId: 'other-companion',
+      allowedKinds: ['approval.requested', 'approval.resolved'],
+      onEvent: (e) => otherReceived.push(e),
+    });
+
+    await eventBus.emit('companion.approval.requested', {
+      companionId: 'test-companion',
+      shardId: 'shard-1',
+      payload: {
+        id: 'conf-shard',
+        title: 'write file: /workspace/todo.txt',
+        requestedAt: new Date(1).toISOString(),
+        redactedContext: 'Updating the shared todo list',
+        status: 'pending',
+        sourceSystem: 'shard',
+        attribution: {
+          parentId: 'test-companion',
+          parentLabel: 'Parent',
+          shardId: 'shard-1',
+          shardLabel: 'Research Shard',
+        },
+        action: 'write file',
+        scope: '/workspace/todo.txt',
+        reason: 'Updating the shared todo list',
+        grantMode: { kind: 'once' },
+      },
+      timestamp: Date.now(),
+    });
+    await eventBus.emit('companion.approval.resolved', {
+      companionId: 'test-companion',
+      shardId: 'shard-1',
+      payload: {
+        id: 'conf-shard',
+        status: 'approved',
+        resolvedAt: new Date(2).toISOString(),
+        shardId: 'shard-1',
+      },
+      timestamp: Date.now(),
+    });
+
+    // The owner's subscriber gets both events; provenance survives the envelope.
+    expect(ownerReceived).toHaveLength(2);
+    const requested = ownerReceived.find((e) => e.kind === 'approval.requested');
+    expect((requested?.payload as { attribution?: { shardId?: string } }).attribution?.shardId).toBe('shard-1');
+    const resolved = ownerReceived.find((e) => e.kind === 'approval.resolved');
+    expect((resolved?.payload as { shardId?: string }).shardId).toBe('shard-1');
+    // A different companion never sees another owner's approval events.
+    expect(otherReceived).toHaveLength(0);
+  });
+
   it('registers artifact previews inside the preview roots and strips the sidecar from envelopes', async () => {
     const filePath = join(tempDir, 'img.png');
     writeFileSync(filePath, Buffer.alloc(100));

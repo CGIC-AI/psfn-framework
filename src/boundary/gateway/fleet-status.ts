@@ -1,8 +1,7 @@
 // ── Gateway fleet-status surface (sprint-10 W4) ──
 // Thin, read-only cluster health view served by the gateway process: every
 // companion in companions.json, up/down from the connection registry,
-// last-seen activity, recent multi-companion violation counts, and a link out
-// to each companion's own Garden (one Garden per companion — decision log #9).
+// last-seen activity and recent multi-companion violation counts.
 //
 // Deliberately NOT a multi-tenant admin surface: no mutation endpoints, no
 // secrets in any payload, no per-companion admin data. Fatigue/charge posture
@@ -58,8 +57,6 @@ export interface FleetStatusCompanionPayload {
   lastSeenAt?: string;
   /** Multi-companion violation alarms attributed to this companion in the window. */
   recentViolationCount: number;
-  /** Port of this companion's own Garden operator surface, when configured. */
-  gardenPort?: number;
 }
 
 export interface FleetStatusPayload {
@@ -74,7 +71,7 @@ export interface FleetStatusPayload {
 export interface FleetStatusServerOptions {
   host?: string;
   port: number;
-  fleet: readonly Pick<CompanionFleetEntry, 'companionId' | 'gardenPort'>[];
+  fleet: readonly Pick<CompanionFleetEntry, 'companionId'>[];
   source: FleetConnectionSnapshotSource;
 }
 
@@ -90,7 +87,7 @@ function isLoopbackHost(host: string): boolean {
 }
 
 export function buildFleetStatusPayload(
-  fleet: readonly Pick<CompanionFleetEntry, 'companionId' | 'gardenPort'>[],
+  fleet: readonly Pick<CompanionFleetEntry, 'companionId'>[],
   snapshot: GatewayFleetConnectionSnapshot,
 ): FleetStatusPayload {
   const connectionsById = new Map(
@@ -113,7 +110,6 @@ export function buildFleetStatusPayload(
       ...(connection ? { connectedAt: new Date(connection.connectedAt).toISOString() } : {}),
       ...(lastSeen !== undefined ? { lastSeenAt: new Date(lastSeen).toISOString() } : {}),
       recentViolationCount: snapshot.recentViolationsByCompanionId[entry.companionId] ?? 0,
-      ...(entry.gardenPort !== undefined ? { gardenPort: entry.gardenPort } : {}),
     };
   });
 
@@ -229,7 +225,7 @@ export class FleetStatusServer {
 export interface StartOptionalFleetStatusServerOptions {
   env?: NodeJS.ProcessEnv;
   multiCompanion: boolean;
-  fleet?: readonly Pick<CompanionFleetEntry, 'companionId' | 'gardenPort'>[];
+  fleet?: readonly Pick<CompanionFleetEntry, 'companionId'>[];
   source: FleetConnectionSnapshotSource;
 }
 
@@ -273,8 +269,8 @@ export async function startOptionalFleetStatusServer(
   return server;
 }
 
-// Self-contained page: no external assets, no secrets, garden links are built
-// client-side from the page's own hostname + each companion's gardenPort.
+// Self-contained page: no external assets and no secrets. Garden navigation
+// stays on the authenticated canonical gateway origin, not this raw listener.
 const FLEET_STATUS_PAGE_HTML = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -306,7 +302,7 @@ const FLEET_STATUS_PAGE_HTML = `<!DOCTYPE html>
   <thead>
     <tr>
       <th>Companion</th><th>State</th><th>Health</th><th>Last seen</th>
-      <th>Connected since</th><th>Recent violations</th><th>Garden</th>
+      <th>Connected since</th><th>Recent violations</th>
     </tr>
   </thead>
   <tbody id="rows"></tbody>
@@ -331,9 +327,6 @@ const FLEET_STATUS_PAGE_HTML = `<!DOCTYPE html>
         ? ' · ' + payload.unattributedRecentViolationCount + ' unattributed violation(s) in window'
         : '');
     rows.innerHTML = payload.companions.map(function (c) {
-      var garden = c.gardenPort
-        ? '<a href="http://' + esc(location.hostname) + ':' + esc(c.gardenPort) + '/garden">:' + esc(c.gardenPort) + '</a>'
-        : '—';
       var violations = c.recentViolationCount > 0
         ? '<span class="violations-warn">' + esc(c.recentViolationCount) + '</span>'
         : '0';
@@ -344,7 +337,6 @@ const FLEET_STATUS_PAGE_HTML = `<!DOCTYPE html>
         + '<td>' + esc(fmt(c.lastSeenAt)) + '</td>'
         + '<td>' + esc(fmt(c.connectedAt)) + '</td>'
         + '<td>' + violations + '</td>'
-        + '<td>' + garden + '</td>'
         + '</tr>';
     }).join('');
   }

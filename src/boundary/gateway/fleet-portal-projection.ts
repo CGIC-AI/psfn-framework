@@ -65,7 +65,7 @@ export interface GatewayFleetPortalProjectionOptions {
   readonly authorizer: FleetPortalAuthorizationBatchPort;
   readonly fleet: readonly Pick<
   CompanionFleetEntry,
-  'companionId' | 'gardenPort' | 'displayName' | 'avatarRef'
+  'companionId' | 'displayName' | 'avatarRef'
   >[];
   readonly source: FleetPortalConnectionSnapshotSource;
   readonly now?: () => Date;
@@ -107,7 +107,7 @@ function indexConnections(
 
 type ProjectionManifestEntry = Pick<
   CompanionFleetEntry,
-  'companionId' | 'gardenPort' | 'displayName' | 'avatarRef'
+  'companionId' | 'displayName' | 'avatarRef'
 >;
 
 export class GatewayFleetPortalProjection {
@@ -128,7 +128,6 @@ export class GatewayFleetPortalProjection {
       }
       fleet.set(companion.companionId, Object.freeze({
         companionId: companion.companionId,
-        ...(companion.gardenPort !== undefined ? { gardenPort: companion.gardenPort } : {}),
         ...(companion.displayName !== undefined ? { displayName: companion.displayName } : {}),
         ...(companion.avatarRef !== undefined ? { avatarRef: companion.avatarRef } : {}),
       }));
@@ -154,13 +153,22 @@ export class GatewayFleetPortalProjection {
       if (!manifest) {
         throw new Error('Fleet portal authorization returned an unknown manifest companion');
       }
-      const gardenPath = authority.gardenLinkEligible && manifest.gardenPort !== undefined
+      const gardenPath = authority.gardenLinkEligible
         ? compileFleetSsoGardenPath(manifest.companionId)
         : undefined;
       companions.push(Object.freeze({
         companionId: manifest.companionId,
         availability: availability(connections.get(manifest.companionId)),
-        headless: manifest.gardenPort === undefined,
+        // `headless` once meant "this manifest entry has no Garden endpoint"
+        // (the retired per-companion `gardenPort` was absent). In the
+        // consolidated topology the one fleet Garden derives an admin-transport
+        // endpoint for EVERY manifest companion (docs/garden-control-plane.md),
+        // so no manifest companion can lack a Garden surface — `headless` is
+        // structurally false. "This principal gets no Garden link" is expressed
+        // through authorization instead: `gardenLinkEligible` gates `gardenPath`.
+        // The field is retained in the wire protocol so the renderer keeps its
+        // honest headless state, but the gateway projection can no longer emit true.
+        headless: false,
         ...(gardenPath ? { gardenPath } : {}),
       }));
     }

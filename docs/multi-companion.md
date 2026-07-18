@@ -59,7 +59,6 @@ carries exactly:
 | `companionDataDir` | companion's data root, relative to the canonical persistence root (`PSFN_RUNTIME_ROOT`, or the selected layout's runtime root) | relative path, may not escape the root |
 | `characterCardPath` | companion's character card, relative to the same canonical persistence root | relative path, may not escape the root |
 | `postgresSchema` | Postgres schema owning this companion's tenant tables | lowercase identifier, ≤63 chars, no `pg_` prefix |
-| `gardenPort` | optional TCP port for this companion's own Garden operator surface | integer 1–65535, unique across the fleet |
 | `displayName` | optional human-facing roster label (display-only, no authority) | non-empty string, ≤120 chars, no control characters |
 | `avatarRef` | optional opaque avatar reference for the roster (display-only) | non-empty string, ≤512 chars, no control characters |
 
@@ -71,21 +70,24 @@ keys or authorization inputs. The roster's display name resolves as
 is read at request time.
 
 Cross-entry validation rejects duplicate `companionId`, duplicate
-`postgresSchema`, duplicate `gardenPort`, and overlapping `companionDataDir`.
+`postgresSchema`, and overlapping `companionDataDir`.
 Before any process is spawned, the supervisor resolves both path fields to
 canonical absolute strict subpaths of the runtime root. Existing symlink
-ancestors are resolved and an escape outside that root is rejected. Agent and
-operator startup then bind `COMPANION_ID`, both paths, `COMPANION_PG_SCHEMA`,
-and the per-companion admin socket back to that one manifest entry; an unknown
-ID or any drift refuses startup before persistence or character-card loading.
+ancestors are resolved and an escape outside that root is rejected. Each agent
+startup then binds `COMPANION_ID`, both paths, `COMPANION_PG_SCHEMA`, and the
+per-companion admin socket back to that one manifest entry; an unknown ID or any
+drift refuses startup before persistence or character-card loading. The one
+fleet Garden receives the complete registry without inheriting any companion's
+identity, Personal Workspace, or database schema.
 
 **What is NOT in `companions.json`:** per-companion Discord tokens,
 model/settings selections, or a mutable personal workspace path. Discord identity +
 channel→companion routing live in `channels.json`; the per-companion Postgres
 schema for a single agent process is sourced from the `COMPANION_PG_SCHEMA` env
-var. The manifest owns identity, data location, tenant schema, and Garden port;
-the runtime deterministically derives `workspaces/personal/<companionId>` from
-the validated runtime root rather than accepting another path override.
+var. The manifest owns identity, data location, and tenant schema. The fleet
+Garden listener is configured once through `ADMIN_PORT`; the runtime
+deterministically derives `workspaces/personal/<companionId>` from the validated
+runtime root rather than accepting another path override.
 
 ## Per-companion settings overlay
 
@@ -194,16 +196,15 @@ fleet and spawns one agent process per companion.
   `companionId, companionDataDir, characterCardPath, postgresSchema,
   personalWorkspacePath,
   role-bound agent proof, role-bound session-integrity proof,
-  adminTransportSocket, gardenPort` (`gardenPort` is `-` when absent). A
-  single-companion topology prints nothing — the launcher reads empty stdout as
-  "stay in single-agent mode." The admin socket is derived from
+  adminTransportSocket`. A single-companion topology prints nothing — the
+  launcher reads empty stdout as "stay in single-agent mode." The admin socket is derived from
   `resolveCompanionAdminTransportSocketPath`
   (`src/operator/garden/transport-paths.ts`), never by the shell.
 - Per-agent env: each spawned agent gets a scrubbed environment
   (`env -i` from an allowlist) plus `COMPANION_ID`, `COMPANION_DATA_DIR`,
   `CHARACTER_CARD_PATH`, `COMPANION_PG_SCHEMA`, `ADMIN_TRANSPORT_SOCKET`, and
-  `ADMIN_PORT` from the plan. The gateway proofs are derived from the gateway
-  session keyring and companion ID; they are passed only to the agent and its
+  the role-bound gateway proofs from the plan. The proofs are derived from the
+  gateway session keyring and companion ID; they are passed only to the agent and its
   isolated session-integrity worker and are omitted from dry-run output.
   The default single-companion launcher derives the same role separation for
   its isolated worker even though normal agent methods retain local-socket
@@ -220,8 +221,9 @@ proof before routing any request. General agent RPC methods and the two
 session-integrity signing methods have disjoint role policies in both
 topologies; selecting the internal role always requires its proof.
 
-Network admin-transport mode is rejected fail-closed under the supervisor:
-per-companion Gardens currently support socket mode only.
+Network admin-transport mode is rejected fail-closed under the supervisor. Each
+agent must listen on its canonical local socket so the one fleet Garden can use
+the validated target registry.
 
 ## Workspace scopes: runtime contract
 
@@ -343,18 +345,19 @@ not generic `api` traffic.
   `scheduled_prompts` / follow-up tables' `channel_type` CHECK constraints omit
   it.
 
-## Gardens: one per companion + a fleet-status page
+## Garden: one fleet surface + a fleet-status page
 
-- **One Garden per companion.** Each fleet entry with a `gardenPort` gets its own
-  operator process (today's operator-process shape × N), bound to that
-  companion's admin transport socket
-  (`garden-admin-<companionId>.sock`) and listening on its `gardenPort`. The
-  supervisor spawns them; a companion with no `gardenPort` gets no operator
-  process. Auth stays single-operator token; the operator sees everything.
-  Operator processes start from a least-privilege `env -i` allowlist, do not
-  load the repo `.env`, and do not retain gateway, provider, channel, database,
-  or companion-auth credentials. Credential status in Settings is a boolean-only
-  snapshot queried from the gateway over the authenticated admin path.
+- **One Garden for the fleet.** The supervisor starts every companion agent,
+  waits for all canonical `garden-admin-<companionId>.sock` listeners, probes
+  every target, and then starts exactly one operator process on `ADMIN_PORT`.
+  The operator routes companion-scoped requests through the immutable
+  `FleetGardenTargetRegistry`. It starts from a least-privilege `env -i`
+  allowlist, does not load the repo `.env`, and does not inherit any companion's
+  identity, Personal Workspace, database schema, gateway proof, provider,
+  channel, or database credentials. Fleet Auth and
+  `GATEWAY_OPERATOR_API_BASE_URL` are required for this topology. Credential
+  status in Settings is a boolean-only snapshot queried from the gateway over
+  the authenticated admin path.
 - **Gateway fleet-status surface.** A thin, read-only, loopback-only page served
   by the gateway (`src/boundary/gateway/fleet-status.ts`,
   `startOptionalFleetStatusServer`), enabled by `FLEET_STATUS_PORT` (host
@@ -362,9 +365,9 @@ not generic `api` traffic.
   render an HTML overview; `GET /fleet/status.json` returns JSON. It is fed by
   the gateway connection registry + the fleet roster and shows, per companion:
   up/down state, health, last-seen and connected timestamps, recent violation
-  count, and a link out to that companion's Garden. Setting `FLEET_STATUS_PORT`
-  while `PSFN_MULTI_COMPANION` is off fails closed; a taken port fails closed
-  (never re-picks).
+  count. It does not expose Garden ports or direct Garden links. Setting
+  `FLEET_STATUS_PORT` while `PSFN_MULTI_COMPANION` is off fails closed; a taken
+  port fails closed (never re-picks).
 
   This is a raw operator listener with no browser-session authentication. Its
   legacy `GET /fleet` alias is not the authenticated `/fleet` portal on the

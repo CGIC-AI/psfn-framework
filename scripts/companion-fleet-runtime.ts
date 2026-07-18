@@ -5,6 +5,17 @@ import {
   resolveCompanionFleetPaths,
   type ResolvedCompanionsFleetConfig,
 } from '../src/system/config/companions-config.js';
+import {
+  deriveFleetGardenTargets,
+  FleetGardenTargetRegistry,
+} from '../src/operator/garden/fleet-garden-target-registry.js';
+import { resolveAdminTransportMode } from '../src/operator/garden/transport-paths.js';
+import { isFleetAuthEnabled } from '../src/system/config/fleet-auth-config.js';
+
+export interface ConfiguredLocalCompanionFleetRuntime {
+  readonly fleet: ResolvedCompanionsFleetConfig;
+  readonly targetRegistry: FleetGardenTargetRegistry;
+}
 
 /** Pure fleet resolution shared by the plan and post-lock provisioning steps. */
 export function resolveConfiguredCompanionFleet(
@@ -35,4 +46,32 @@ export function resolveConfiguredCompanionFleet(
     { label: 'tempDir', path: runtimePathLayout.tempDir },
     { label: 'backupsDir', path: runtimePathLayout.backupsDir },
   ]);
+}
+
+/**
+ * Build the complete local fleet topology before the shell launcher starts any
+ * process. The immutable registry is the same validation boundary used by the
+ * fleet Garden, so an empty, malformed, or endpoint-colliding plan fails before
+ * launch instead of degrading to partial connectivity.
+ */
+export function resolveConfiguredLocalCompanionFleetRuntime(
+  env: NodeJS.ProcessEnv,
+): ConfiguredLocalCompanionFleetRuntime | null {
+  const fleet = resolveConfiguredCompanionFleet(env);
+  if (!fleet) return null;
+  if (!isFleetAuthEnabled(env)) {
+    throw new Error(
+      'Multi-companion local startup requires PSFN_FLEET_AUTH=1 for the one fleet Garden',
+    );
+  }
+  if (resolveAdminTransportMode(env) !== 'socket') {
+    throw new Error(
+      'Multi-companion local startup requires ADMIN_TRANSPORT_MODE=socket: the fleet Garden '
+      + 'target registry derives one garden-admin-<companionId>.sock endpoint per agent.',
+    );
+  }
+  return {
+    fleet,
+    targetRegistry: new FleetGardenTargetRegistry(deriveFleetGardenTargets(fleet, env)),
+  };
 }

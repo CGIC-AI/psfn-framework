@@ -13,14 +13,12 @@ function makeFleet(): CompanionsFleetConfig {
         companionDataDir: 'companions/flagship',
         characterCardPath: 'companions/flagship/character-card.json',
         postgresSchema: 'companion_flagship',
-        gardenPort: 10061,
       },
       {
         companionId: '22222222-2222-4222-8222-222222222222',
         companionDataDir: 'companions/aria',
         characterCardPath: 'companions/aria/character-card.json',
         postgresSchema: 'companion_aria',
-        // no gardenPort — headless companion
       },
     ],
   };
@@ -35,11 +33,6 @@ describe('summarizeCompanionFleet', () => {
       '11111111-1111-4111-8111-111111111111',
       '22222222-2222-4222-8222-222222222222',
     ]);
-  });
-
-  it('omits companions without a declared gardenPort', () => {
-    const summary = summarizeCompanionFleet(makeFleet());
-    expect(summary.gardenPorts).toEqual([10061]);
   });
 });
 

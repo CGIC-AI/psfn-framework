@@ -140,7 +140,7 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 | World tool (perceive/list) + perception ingest | local (mock HA, synthetic telemetry to `/v1/telemetry/ingest`) | harness | `world.control` staged off by default |
 | HA world control (staged on) | kube only, autonomous | partner walk + gateway audit proof | trust-gated; real HA |
 | Hub identity ↔ contact enrollment, presence follow | local | harness + Garden | fail-closed claim→contact |
-| Multi-companion substrate (mux, tenancy, per-companion Gardens, fleet page, per-companion Discord) | kube + local supervisor, needs support companions | crossover-isolation harness: concurrent colliding requests, zero crossover alarms | flag-off/flag-on validation (`s10f8`) is the entry gate |
+| Multi-companion substrate (mux, tenancy, one fleet Garden, fleet page, per-companion Discord) | kube + local supervisor, needs support companions | crossover-isolation harness: concurrent colliding requests, zero crossover alarms | flag-off/flag-on validation (`s10f8`) is the entry gate |
 | ICP autonomy (permits, target-channel turns, fatigue lane, USD breaker) | kube, support companions | partner sessions + harness continuity checks | epic closed 2026-07-15; Discord voice under MC fails closed (`s10f1`) |
 | Shared-world wiki | multi-companion | "toaster test": companion A learns a fact, companion B reads it later | |
 | CogSec intake firewall (L1/L1.5 local; L2/L3 gateway) | local + kube | tainted-content probes per channel; quarantine → Garden queue → release flywheel | firewall notices excluded from emotion/memory — verify |

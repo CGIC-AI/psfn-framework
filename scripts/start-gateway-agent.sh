@@ -131,9 +131,15 @@ AGENT_ENV=()
 OPERATOR_ENV=()
 SUPERVISOR_MODE=0
 AGENT_PIDS=()
-OPERATOR_PIDS=()
 COMPANION_PLAN=()
 LAUNCHER_ADMIN_PORT="${ADMIN_PORT:-}"
+LAUNCHER_ADMIN_TRANSPORT_SOCKET="${ADMIN_TRANSPORT_SOCKET}"
+LAUNCHER_COMPANION_DATA_DIR_WAS_SET=0
+LAUNCHER_COMPANION_DATA_DIR=""
+if [ "${COMPANION_DATA_DIR+x}" = "x" ]; then
+  LAUNCHER_COMPANION_DATA_DIR_WAS_SET=1
+  LAUNCHER_COMPANION_DATA_DIR="${COMPANION_DATA_DIR}"
+fi
 
 append_agent_env() {
   local name="$1"
@@ -509,9 +515,8 @@ start_agent() {
 
 # Export one fleet entry's companion-scoped values into the launcher env so the
 # spawn allowlists pick them up, then env -i re-scrubs the child environment.
-# The per-companion admin transport socket comes from the plan (derived by the
-# canonical TS helper, never here); ADMIN_PORT carries the companion's Garden
-# port when configured, else the launcher-wide default.
+# The per-companion admin transport socket comes from the validated target
+# registry in the plan (derived by the canonical TS helper, never here).
 export_companion_env() {
   local companion_id="$1"
   local companion_data_dir="$2"
@@ -521,7 +526,6 @@ export_companion_env() {
   local companion_auth_token="$6"
   local session_integrity_auth_token="$7"
   local admin_transport_socket="$8"
-  local garden_port="$9"
 
   export COMPANION_ID="${companion_id}"
   export COMPANION_DATA_DIR="${companion_data_dir}"
@@ -531,11 +535,6 @@ export_companion_env() {
   export GATEWAY_COMPANION_AUTH_TOKEN="${companion_auth_token}"
   export GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN="${session_integrity_auth_token}"
   export ADMIN_TRANSPORT_SOCKET="${admin_transport_socket}"
-  if [ "${garden_port}" != "-" ]; then
-    export ADMIN_PORT="${garden_port}"
-  else
-    export ADMIN_PORT="${LAUNCHER_ADMIN_PORT}"
-  fi
 }
 
 # Spawn one agent for a single fleet entry.
@@ -545,18 +544,27 @@ start_companion_agent() {
   AGENT_PIDS+=("${LAUNCHED_PID}")
 }
 
-# Spawn one Garden operator process for a single fleet entry (sprint-10 W4:
-# one Garden per companion). Bound to the companion's own admin transport
-# socket; listens on the companion's gardenPort from companions.json.
-start_companion_operator() {
-  export_companion_env "$@"
+# Spawn the one fleet Garden only after every validated agent-admin transport is
+# listening. The fleet operator has no companion identity, personal workspace,
+# or companion database schema; request routing uses the complete immutable
+# target registry built by src/app/operator/main.ts.
+start_fleet_operator() {
+  unset COMPANION_ID CHARACTER_CARD_PATH COMPANION_PG_SCHEMA WORKSPACE_PATH
+  unset GATEWAY_COMPANION_AUTH_TOKEN GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
+  if [ "${LAUNCHER_COMPANION_DATA_DIR_WAS_SET}" -eq 1 ]; then
+    export COMPANION_DATA_DIR="${LAUNCHER_COMPANION_DATA_DIR}"
+  else
+    unset COMPANION_DATA_DIR
+  fi
+  export ADMIN_TRANSPORT_SOCKET="${LAUNCHER_ADMIN_TRANSPORT_SOCKET}"
+  export ADMIN_PORT="${LAUNCHER_ADMIN_PORT}"
   build_operator_env
   if [ -x "./node_modules/.bin/tsx" ]; then
     launch_background env -i "${OPERATOR_ENV[@]}" ./node_modules/.bin/tsx src/app/operator/main.ts
   else
     launch_background env -i "${OPERATOR_ENV[@]}" npm run operator
   fi
-  OPERATOR_PIDS+=("${LAUNCHED_PID}")
+  OPERATOR_PID="${LAUNCHED_PID}"
 }
 
 start_operator() {
@@ -656,39 +664,104 @@ resolve_single_companion_auth() {
 }
 
 print_supervisor_plan() {
-  local record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket garden_port
+  local record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket
   echo "[supervisor] dry-run spawn plan (${#COMPANION_PLAN[@]} companion(s)):"
   echo "[supervisor]   gateway: ${SOCKET_PATH}"
   for record in "${COMPANION_PLAN[@]}"; do
-    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket garden_port <<< "${record}"
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket <<< "${record}"
     echo "[supervisor]   agent: companionId=${companion_id} schema=${postgres_schema} dataDir=${companion_data_dir} workspace=${personal_workspace_path} card=${character_card_path} adminSocket=${admin_transport_socket}"
-    if [ "${garden_port}" != "-" ]; then
-      echo "[supervisor]   operator: companionId=${companion_id} gardenPort=${garden_port} adminSocket=${admin_transport_socket}"
-    else
-      echo "[supervisor]   operator: companionId=${companion_id} (none — no gardenPort in companions.json)"
+  done
+  echo "[supervisor]   Garden: one fleet operator port=${LAUNCHER_ADMIN_PORT} targets=${#COMPANION_PLAN[@]}"
+}
+
+prepare_fleet_admin_transports() {
+  local record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket
+  for record in "${COMPANION_PLAN[@]}"; do
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket <<< "${record}"
+    if [ -e "${admin_transport_socket}" ] || [ -L "${admin_transport_socket}" ]; then
+      if [ ! -S "${admin_transport_socket}" ]; then
+        echo "[supervisor] refusing to replace non-socket admin transport path for ${companion_id}: ${admin_transport_socket}" >&2
+        return 1
+      fi
+      rm -f -- "${admin_transport_socket}"
     fi
   done
 }
 
-supervise_companion_agents() {
-  local record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket garden_port
+start_companion_agents() {
+  local record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket
   for record in "${COMPANION_PLAN[@]}"; do
-    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket garden_port <<< "${record}"
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket <<< "${record}"
     echo "[supervisor] starting agent for companion ${companion_id} (schema=${postgres_schema}, dataDir=${companion_data_dir})"
-    start_companion_agent "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${personal_workspace_path}" "${companion_auth_token}" "${session_integrity_auth_token}" "${admin_transport_socket}" "${garden_port}"
-    if [ "${garden_port}" != "-" ]; then
-      echo "[supervisor] starting operator for companion ${companion_id} (gardenPort=${garden_port}, adminSocket=${admin_transport_socket})"
-      start_companion_operator "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${personal_workspace_path}" "${companion_auth_token}" "${session_integrity_auth_token}" "${admin_transport_socket}" "${garden_port}"
+    start_companion_agent "${companion_id}" "${companion_data_dir}" "${character_card_path}" "${postgres_schema}" "${personal_workspace_path}" "${companion_auth_token}" "${session_integrity_auth_token}" "${admin_transport_socket}"
+  done
+}
+
+wait_for_fleet_admin_transports() {
+  local attempt record companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket
+  local index ready_count
+  echo "[supervisor] waiting for ${#COMPANION_PLAN[@]} validated agent admin transport(s)..."
+  for attempt in $(seq 1 200); do
+    if ! kill -0 "${GATEWAY_PID}" 2>/dev/null; then
+      echo "[supervisor] gateway exited before fleet admin transports became ready" >&2
+      return 1
     fi
+    index=0
+    ready_count=0
+    for record in "${COMPANION_PLAN[@]}"; do
+      IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket <<< "${record}"
+      if ! kill -0 "${AGENT_PIDS[${index}]}" 2>/dev/null; then
+        echo "[supervisor] agent ${companion_id} exited before admin transport became ready" >&2
+        return 1
+      fi
+      if [ -S "${admin_transport_socket}" ]; then
+        ready_count=$((ready_count + 1))
+      fi
+      index=$((index + 1))
+    done
+    if [ "${ready_count}" -eq "${#COMPANION_PLAN[@]}" ]; then
+      echo "[supervisor] all validated agent admin transports are ready"
+      return 0
+    fi
+    sleep 0.1
   done
 
-  echo "[supervisor] running (gateway pid=${GATEWAY_PID}, agent pids=${AGENT_PIDS[*]}, operator pids=${OPERATOR_PIDS[*]:-none})"
+  for record in "${COMPANION_PLAN[@]}"; do
+    IFS=$'\t' read -r companion_id companion_data_dir character_card_path postgres_schema personal_workspace_path companion_auth_token session_integrity_auth_token admin_transport_socket <<< "${record}"
+    if [ ! -S "${admin_transport_socket}" ]; then
+      echo "[supervisor] agent admin transport missing for ${companion_id}: ${admin_transport_socket}" >&2
+    fi
+  done
+  return 1
+}
 
-  # Shared-fate: the first child (gateway, any agent, OR any operator) to exit
+probe_fleet_admin_transports() {
+  echo "[supervisor] probing every validated agent admin transport..."
+  if [ -x "./node_modules/.bin/tsx" ]; then
+    ./node_modules/.bin/tsx scripts/resolve-companion-fleet.ts --probe-ready
+  else
+    npm run --silent resolve:companion-fleet -- --probe-ready
+  fi
+  echo "[supervisor] every validated agent admin transport passed its health probe"
+}
+
+start_fleet_garden() {
+  if ! kill -0 "${GATEWAY_PID}" 2>/dev/null; then
+    echo "[supervisor] gateway exited before the fleet Garden could start" >&2
+    return 1
+  fi
+  echo "[supervisor] starting one fleet Garden (port=${LAUNCHER_ADMIN_PORT}, targets=${#COMPANION_PLAN[@]})"
+  start_fleet_operator
+}
+
+supervise_companion_fleet() {
+  echo "[supervisor] running (gateway pid=${GATEWAY_PID}, agent pids=${AGENT_PIDS[*]}, Garden pid=${OPERATOR_PID})"
+
+  # Shared-fate: the first child (gateway, any agent, or the fleet Garden) to exit
   # tears down the whole set. No silent auto-restart; a non-zero exit propagates
   # loudly.
   set +e
-  wait -n "${GATEWAY_PID}" "${AGENT_PIDS[@]}" ${OPERATOR_PIDS[@]+"${OPERATOR_PIDS[@]}"}
+  wait -n "${GATEWAY_PID}" "${AGENT_PIDS[@]}" "${OPERATOR_PID}"
   local exit_status=$?
   set -e
 
@@ -733,9 +806,6 @@ stop_pid() {
 cleanup_children() {
   stop_pid "${OPERATOR_PID}"
   local pid
-  for pid in "${OPERATOR_PIDS[@]:-}"; do
-    stop_pid "${pid}"
-  done
   for pid in "${AGENT_PIDS[@]:-}"; do
     stop_pid "${pid}"
   done
@@ -812,7 +882,12 @@ fi
 
 if [ "${SUPERVISOR_MODE}" -eq 1 ]; then
   echo "[supervisor] multi-companion mode: spawning ${#COMPANION_PLAN[@]} agent(s)"
-  supervise_companion_agents
+  prepare_fleet_admin_transports
+  start_companion_agents
+  wait_for_fleet_admin_transports
+  probe_fleet_admin_transports
+  start_fleet_garden
+  supervise_companion_fleet
 fi
 
 echo "[${MODE_LABEL}] starting agent..."

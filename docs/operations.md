@@ -2,7 +2,7 @@
 
 This is the operator-facing runtime guide for the current repo-owned deployment model.
 
-Last updated: 2026-07-16.
+Last updated: 2026-07-18.
 
 Before touching a Helm release, read the canonical
 [Helm Fleet Upgrade Guide](./helm-upgrades.md). It is the short, mandatory
@@ -35,7 +35,7 @@ Multi-companion is an opt-in topology: N agent processes behind one gateway. It
 is off by default and byte-identical to single-companion when off. The full
 model is in [`docs/multi-companion.md`](./multi-companion.md); this section is
 the operator quick reference. Enabling it requires `PSFN_MULTI_COMPANION=1` in
-`.env` and a system-owned `companions.json` fleet manifest (seed
+`.env`, `PSFN_FLEET_AUTH=1`, and a system-owned `companions.json` fleet manifest (seed
 `config/companions.seed.json`). Both mismatches fail closed at startup: flag on
 with no manifest refuses to start; a manifest present with the flag off refuses
 to start.
@@ -44,8 +44,10 @@ to start.
 
 `npm run split` (`scripts/start-gateway-agent.sh`) resolves the fleet and, when
 multi-companion is enabled, enters supervisor mode: it spawns one agent process
-per companion plus one Garden operator process per companion that declares a
-`gardenPort`. Preview the redacted spawn plan with:
+per companion and exactly one fleet Garden process on the normal fleet-level
+`ADMIN_PORT`. `gardenPort` is retired from `companions.json`; any remaining
+entry fails validation instead of activating a compatibility path. Preview the
+redacted spawn plan with:
 
 ```bash
 scripts/start-gateway-agent.sh --dry-run   # prints the plan; launches nothing
@@ -53,8 +55,13 @@ scripts/start-gateway-agent.sh --dry-run   # prints the plan; launches nothing
 
 Each spawned agent gets a scrubbed environment plus `COMPANION_ID`,
 `COMPANION_DATA_DIR`, `CHARACTER_CARD_PATH`, `COMPANION_PG_SCHEMA`,
-its derived personal `WORKSPACE_PATH`, `ADMIN_TRANSPORT_SOCKET`, and
-`ADMIN_PORT` from the plan. The supervisor is
+its derived personal `WORKSPACE_PATH`, and its registry-derived
+`ADMIN_TRANSPORT_SOCKET`. The plan builds the same immutable target registry as
+Garden, with exact `garden-admin-<companion-uuid>.sock` paths derived from
+canonical companion IDs. Endpoint collisions fail before process launch. After
+starting all N agents, the supervisor waits deterministically until every
+planned socket is listening; an agent exit or missing endpoint aborts without
+starting Garden. Only then does it start the one Garden. The supervisor is
 shared-fate: if any supervised process exits, the whole fleet is torn down.
 Manifest-relative data/card paths are resolved to absolute strict subpaths of
 `PSFN_RUNTIME_ROOT`; symlink escapes and tuple drift fail before startup. The
@@ -68,8 +75,16 @@ before process startup and refuses missing, overlapping, symlink-escaping, or
 tuple-mismatched roots. The shared root is Garden-governed and is never exported
 as `WORKSPACE_PATH`.
 
-Per-companion Gardens use socket admin transport only; network admin-transport
-mode is rejected fail-closed under the supervisor.
+The local fleet Garden uses socket admin transport only; network
+admin-transport mode is rejected fail-closed under the supervisor.
+
+Local topology rollback is revision-based, not a live compatibility switch.
+Stop the launcher, restore the previous pinned revision and its matching
+pre-cutover `companions.json`, then restart and verify the same canonical
+gateway browser origin. Do not add `gardenPort` back to the current schema, run
+old and new Gardens together, expose direct Garden ports, or fall back to one
+shared admin token. Owner files and companion state do not move during this
+rollback.
 
 ### Per-companion Postgres schema
 
@@ -111,8 +126,10 @@ public HTTPS origin's `/fleet` and `/v1/fleet/portal` routes are gateway-session
 authenticated and expose only the bounded authorized projection. The raw
 listener is never mounted on that public origin.
 
-The status payload intentionally contains the complete fleet roster, Garden
-ports, timestamps, state reasons, and violation counts for local operations.
+The status payload intentionally contains the complete fleet roster,
+timestamps, state reasons, and violation counts for local operations. It does
+not contain Garden ports or direct Garden links; Garden navigation stays on the
+authenticated canonical gateway origin.
 It has no browser-session authentication of its own. Do not expose it through
 a public ingress, unauthenticated reverse proxy, or remote tunnel. Any remote
 operator access requires a separate independently authenticated boundary and
@@ -140,9 +157,11 @@ companion. The old direct Garden host/port is not a browser edge in this mode.
 For every Garden request, the gateway resolves the live OPL1.5 session/contact/
 grant/policy context for the companion encoded in the path. Only then does it
 mint and durably consume a short-lived, exact request capability and connect to
-that companion's Garden. Unknown companions, authorization denial, stale or
-revoked sessions, and missing upstream registrations all return the same 404
-before an upstream connection, so the edge does not enumerate the fleet.
+the one fleet Garden, which verifies the binding before selecting that
+companion's registered agent transport. Unknown companions, authorization
+denial, stale or revoked sessions, and missing upstream registrations all
+return the same 404 before an agent connection, so the edge does not enumerate
+the fleet.
 Browser cookies, bearer credentials, forwarding metadata, and caller-supplied
 capability assertions are stripped. Garden verifies the signed method, target,
 action, authorization digest, body length, request id, decision id, audience,

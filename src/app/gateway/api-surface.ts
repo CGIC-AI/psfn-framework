@@ -499,7 +499,7 @@ export async function startOptionalGatewayApiServer(
         upstreams: resolveFleetSsoGardenUpstreams({
           ...(options.config.companionFleet ? { fleet: options.config.companionFleet } : {}),
           ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
-          ...(options.adminPort ? { gardenPort: options.adminPort } : {}),
+          ...(options.adminPort ? { fleetGardenPort: options.adminPort } : {}),
           env,
         }),
         ...(fleetSsoCompanionUi ? {

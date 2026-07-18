@@ -254,7 +254,7 @@ describe('buildFleetStatusPayload', () => {
   it('merges the expected fleet with live connections, marking absent companions down', () => {
     const payload = buildFleetStatusPayload(
       [
-        { companionId: COMPANION_A, gardenPort: 10061 },
+        { companionId: COMPANION_A },
         { companionId: COMPANION_B },
       ],
       {
@@ -288,7 +288,6 @@ describe('buildFleetStatusPayload', () => {
       connectedAt: new Date(1_749_999_000_000).toISOString(),
       lastSeenAt: new Date(1_749_999_900_000).toISOString(),
       recentViolationCount: 0,
-      gardenPort: 10061,
     });
     expect(payload.companions[1]).toEqual({
       companionId: COMPANION_B,
@@ -346,8 +345,8 @@ describe('FleetStatusServer', () => {
     await identifyAgent(connA, COMPANION_A);
 
     const fleetServer = await startFleetServer(server, [
-      { companionId: COMPANION_A, gardenPort: 10061 },
-      { companionId: COMPANION_B, gardenPort: 10062 },
+      { companionId: COMPANION_A },
+      { companionId: COMPANION_B },
     ]);
     const port = fleetServer.boundPort();
 
@@ -360,13 +359,11 @@ describe('FleetStatusServer', () => {
       companionId: COMPANION_A,
       up: true,
       state: 'ready',
-      gardenPort: 10061,
     });
     expect(upPayload.companions[1]).toMatchObject({
       companionId: COMPANION_B,
       up: false,
       state: 'down',
-      gardenPort: 10062,
     });
 
     connA._emitClose();
@@ -418,7 +415,7 @@ describe('FleetStatusServer', () => {
     const fleetServer = new FleetStatusServer({
       port: 0,
       fleet: [
-        { companionId: COMPANION_A, gardenPort: 10061 },
+        { companionId: COMPANION_A },
         { companionId: COMPANION_B },
       ],
       source: {
@@ -452,7 +449,7 @@ describe('FleetStatusServer', () => {
       + '"companions":[{"companionId":"11111111-1111-4111-8111-111111111111","up":true,'
       + '"state":"ready","health":"healthy","stateReason":"rpc_message_received",'
       + '"connectedAt":"2025-06-15T14:50:00.000Z","lastSeenAt":"2025-06-15T15:05:00.000Z",'
-      + '"recentViolationCount":0,"gardenPort":10061},{"companionId":'
+      + '"recentViolationCount":0},{"companionId":'
       + '"22222222-2222-4222-8222-222222222222","up":false,"state":"down",'
       + '"lastSeenAt":"2025-06-15T12:20:00.000Z","recentViolationCount":2}],'
       + '"unattributedRecentViolationCount":1,"recentViolationWindowMs":3600000}',
@@ -593,7 +590,7 @@ describe('startOptionalFleetStatusServer (flag gating)', () => {
     const fleetServer = await startOptionalFleetStatusServer({
       env: { FLEET_STATUS_PORT: String(probePort) },
       multiCompanion: true,
-      fleet: [{ companionId: COMPANION_A, gardenPort: 10061 }],
+      fleet: [{ companionId: COMPANION_A }],
       source,
     });
     expect(fleetServer).toBeDefined();

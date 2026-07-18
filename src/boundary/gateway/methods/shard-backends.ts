@@ -8,6 +8,11 @@ import { GatewayErrors } from '../protocol.js';
 import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
 import { createComponentLogger } from '../../../shared/logger.js';
+import {
+  canonicalizeCapabilityTokens,
+  deriveShardCapabilityGrant,
+  type DerivedShardCapabilityGrant,
+} from '../../../system/capabilities/shard-derivation.js';
 
 const log = createComponentLogger('GatewayShardBackends');
 
@@ -36,6 +41,84 @@ function normalizeBackend(value: unknown): ShardBackendRequestBackend {
   deny(`Unsupported shard backend "${normalized}"`);
 }
 
+function normalizeGrantAssertion(value: unknown, field: 'ownerVersion' | 'grantDigest'): string {
+  const normalized = normalizeRequiredText(value, field);
+  if (normalized !== value || !/^[0-9a-f]{64}$/.test(normalized)) {
+    deny(`shard.backend.request ${field} must be a lowercase SHA-256 digest`);
+  }
+  return normalized;
+}
+
+function requireAuthenticatedCompanionId(runtime: GatewayMethodRuntime): string {
+  const companionId = runtime.authenticatedCompanionId();
+  if (typeof companionId !== 'string' || !companionId.trim() || companionId !== companionId.trim()) {
+    deny(
+      'Shard backend admission requires an authenticated companion identity '
+      + '(fail closed).',
+    );
+  }
+  return companionId;
+}
+
+function equalTokens(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((token, index) => token === right[index]);
+}
+
+function resolveAuthoritativeGrant(
+  runtime: GatewayMethodRuntime,
+  companionId: string,
+  stage: 'admission' | 'pre-execution',
+  request: {
+    readonly backend: ShardBackendRequestBackend;
+    readonly name: string;
+    readonly shardId: string;
+  },
+): DerivedShardCapabilityGrant {
+  const snapshotProvider = runtime.capabilityGrantSnapshotProvider;
+  if (!snapshotProvider) {
+    deny(
+      `Shard backend "${request.backend}" for "${request.name}" (${request.shardId}) cannot be `
+      + 'authorized: the gateway capability grant snapshot provider is unavailable '
+      + '(fail closed).',
+    );
+  }
+
+  try {
+    const snapshot = snapshotProvider();
+    const grant = deriveShardCapabilityGrant({
+      companionId,
+      tier: snapshot.tier,
+      customTokens: snapshot.customTokens,
+    });
+    const effectiveTokens = canonicalizeCapabilityTokens(
+      snapshot.grantedTokens,
+      'snapshot.grantedTokens',
+    );
+    if (!equalTokens(effectiveTokens, grant.parent.tokens)) {
+      throw new Error(
+        'Atomic capability snapshot effective tokens do not match its owner tier/customTokens',
+      );
+    }
+    return grant;
+  } catch (error) {
+    log.error(
+      `Capability grant snapshot failed during shard backend ${stage}; refusing (fail closed)`,
+      {
+        backend: request.backend,
+        name: request.name,
+        shardId: request.shardId,
+        companionId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    );
+    deny(
+      `Shard backend "${request.backend}" for "${request.name}" (${request.shardId}) cannot be `
+      + `authorized: the gateway capability grant could not be resolved during ${stage} `
+      + '(fail closed).',
+    );
+  }
+}
+
 function requiredShardBackendCommand(
   backend: ShardBackendRequestBackend,
 ): 'docker' | 'kubectl' {
@@ -52,43 +135,21 @@ const shardBackendDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       const backend = normalizeBackend(params.backend);
       const shardId = normalizeRequiredText(params.shardId, 'shardId');
       const name = normalizeRequiredText(params.name, 'name');
+      const ownerVersion = normalizeGrantAssertion(params.ownerVersion, 'ownerVersion');
+      const grantDigest = normalizeGrantAssertion(params.grantDigest, 'grantDigest');
+      const companionId = requireAuthenticatedCompanionId(runtime);
+      const request = { backend, shardId, name };
 
-      // The gateway boundary must not trust the agent process: resolve the
-      // capability tier from the gateway's own authoritative provider and
-      // ignore the caller-declared params.capabilityTier entirely. If the
-      // provider is unavailable the tier cannot be established, so autonomous
-      // backends are refused (fail closed) rather than default-allowed.
-      const tierProvider = runtime.capabilityTierProvider;
-      if (!tierProvider) {
-        deny(
-          `Shard backend "${backend}" for "${name}" (${shardId}) cannot be authorized: `
-          + `the gateway capability tier provider is unavailable (fail closed).`,
-        );
-      }
-      // The provider resolves the tier from the gateway's CapabilityRuntime,
-      // which reloads capability-tier.json on version change. A malformed or
-      // otherwise unreadable file makes that refresh throw. A thrown provider
-      // means the tier cannot be established, so — exactly like the absent
-      // provider above — autonomous backends are refused (fail closed) instead
-      // of letting the raw error escape as a generic -32603 Internal error.
-      let capabilityTier: string;
-      try {
-        capabilityTier = tierProvider();
-      } catch (error) {
-        log.error(
-          'Capability tier provider threw while authorizing a shard backend; refusing (fail closed)',
-          {
-            backend,
-            name,
-            shardId,
-            error: error instanceof Error ? error.message : String(error),
-          },
-        );
-        deny(
-          `Shard backend "${backend}" for "${name}" (${shardId}) cannot be authorized: `
-          + `the gateway capability tier could not be resolved (fail closed).`,
-        );
-      }
+      // One authoritative owner read drives the tier gate, shard.spawn check,
+      // derived access, owner version, and digest. Caller tier/token fields are
+      // neither read nor represented in the protocol.
+      const admittedGrant = resolveAuthoritativeGrant(
+        runtime,
+        companionId,
+        'admission',
+        request,
+      );
+      const capabilityTier = admittedGrant.parent.tier;
 
       if (!AUTONOMOUS_SHARD_BACKEND_TIERS.has(capabilityTier)) {
         deny(
@@ -96,7 +157,52 @@ const shardBackendDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
           + `capability tier (current: "${capabilityTier}").`,
         );
       }
+      if (!admittedGrant.parent.tokens.includes('shard.spawn')) {
+        deny(
+          `Shard backend "${backend}" for "${name}" (${shardId}) requires authoritative `
+          + 'parent capability "shard.spawn".',
+        );
+      }
+      if (
+        admittedGrant.ownerVersion !== ownerVersion
+        || admittedGrant.grantDigest !== grantDigest
+      ) {
+        deny(
+          `Shard backend "${backend}" for "${name}" (${shardId}) manager-bound capability `
+          + 'grant does not match current gateway authority (fail closed).',
+        );
+      }
 
+      const authorizedContext = Object.freeze({
+        backend,
+        shardId,
+        name,
+        parentCompanionId: companionId,
+        parentTier: admittedGrant.parent.tier,
+        ownerVersion: admittedGrant.ownerVersion,
+        grantDigest: admittedGrant.grantDigest,
+        access: admittedGrant.access,
+      });
+
+      // Executor-bound TOCTOU closure: take one new atomic owner snapshot and
+      // require the same owner version immediately before any executor call.
+      // The already-admitted immutable access remains the execution authority.
+      const currentGrant = resolveAuthoritativeGrant(
+        runtime,
+        companionId,
+        'pre-execution',
+        request,
+      );
+      if (currentGrant.ownerVersion !== authorizedContext.ownerVersion) {
+        deny(
+          `Shard backend "${backend}" for "${name}" (${shardId}) capability owner changed `
+          + 'after admission; refusing before backend execution (fail closed).',
+        );
+      }
+
+      if (runtime.shardBackendExecutor) {
+        return await runtime.shardBackendExecutor(authorizedContext);
+      }
       return {
         backend,
         controller: 'gateway',
@@ -110,7 +216,8 @@ const shardBackendDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       shardId: params.shardId,
       name: params.name,
       backend: params.backend,
-      capabilityTier: params.capabilityTier,
+      ownerVersion: params.ownerVersion,
+      grantDigest: params.grantDigest,
     }),
     approvalAction: 'shard.backend.request',
     approvalScope: (params: ShardBackendRequestParams) => `${params.backend}:${params.name}`,

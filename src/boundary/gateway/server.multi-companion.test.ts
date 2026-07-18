@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os';
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
 import { GatewayCapabilityTierResolver } from './capability-tier-resolver.js';
 import type { ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
+import { deriveShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({
@@ -1806,7 +1807,7 @@ describe('GatewayServer multi-companion crossover under concurrent load (flag on
 describe('GatewayServer per-companion capability tier (an52.3)', () => {
   function optionsFor(
     routing: GatewayMultiCompanionConfig,
-    capabilityTierProvider: (companionId?: string) => 'nursery' | 'apprentice' | 'autonomous' | 'custom',
+    resolver: GatewayCapabilityTierResolver,
   ): GatewayServerOptions {
     return {
       ...createMinimalOptions(),
@@ -1817,14 +1818,16 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
         shellExec: { enabled: true, allowlist: ['docker', 'kubectl'] },
       },
       multiCompanion: routing,
-      capabilityTierProvider,
+      capabilityTierProvider: companionId => resolver.resolveTier(companionId),
+      capabilityGrantSnapshotProvider: companionId =>
+        resolver.snapshotOwnerGrantStrict(companionId),
     };
   }
 
   function buildTwoCompanionTierFixture(): {
     root: string;
-    routing: GatewayMultiCompanionConfig;
-    capabilityTierProvider: (companionId?: string) => 'nursery' | 'apprentice' | 'autonomous' | 'custom';
+    options: GatewayServerOptions;
+    shardParams(companionId: string, name: string): Record<string, unknown>;
   } {
     const root = mkdtempSync(join(tmpdir(), 'psfn-per-companion-tier-'));
     const dataDirA = join(root, 'companions', 'a');
@@ -1877,29 +1880,39 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
       'comp-c': join(root, 'personal', 'comp-c'),
     };
 
-    return {
-      root,
-      routing,
-      capabilityTierProvider: (companionId) => resolver.resolveTier(companionId),
+    const shardParams = (companionId: string, name: string) => {
+      const snapshot = resolver.snapshotOwnerGrantStrict(companionId);
+      const grant = deriveShardCapabilityGrant({
+        companionId,
+        tier: snapshot.tier,
+        customTokens: snapshot.customTokens,
+      });
+      return {
+        backend: 'container',
+        shardId: `shard-${name}`,
+        name,
+        ownerVersion: grant.ownerVersion,
+        grantDigest: grant.grantDigest,
+      };
     };
+
+    return { root, options: optionsFor(routing, resolver), shardParams };
   }
 
   it('gates shard.backend.request on each companion\'s own tier (A autonomous admitted, B apprentice denied)', async () => {
-    const { root, routing, capabilityTierProvider } = buildTwoCompanionTierFixture();
+    const { root, options, shardParams } = buildTwoCompanionTierFixture();
     try {
-      const { connect } = await setupServer(optionsFor(routing, capabilityTierProvider));
+      const { connect } = await setupServer(options);
       const connA = await connect();
       const connB = await connect();
       await identifyAgent(connA, 'comp-a', 1);
       await identifyAgent(connB, 'comp-b', 2);
 
-      const shardParams = (name: string) => ({ backend: 'container', shardId: `shard-${name}`, name });
-
-      const aShard = await invokeRpc(connA, 3, 'shard.backend.request', shardParams('alpha'));
+      const aShard = await invokeRpc(connA, 3, 'shard.backend.request', shardParams('comp-a', 'alpha'));
       expect(aShard.error).toBeUndefined();
       expect(aShard.result).toMatchObject({ backend: 'container', controller: 'gateway' });
 
-      const bShard = await invokeRpc(connB, 4, 'shard.backend.request', shardParams('beta'));
+      const bShard = await invokeRpc(connB, 4, 'shard.backend.request', shardParams('comp-b', 'beta'));
       expect(bShard.result).toBeUndefined();
       expect(bShard.error.code).toBe(GatewayErrors.POLICY_DENIED);
       expect(bShard.error.message).toContain('autonomous');
@@ -1909,9 +1922,9 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
   });
 
   it('auto-clears autonomous approvals for A but holds apprentice B for operator approval', async () => {
-    const { root, routing, capabilityTierProvider } = buildTwoCompanionTierFixture();
+    const { root, options } = buildTwoCompanionTierFixture();
     try {
-      const { connect } = await setupServer(optionsFor(routing, capabilityTierProvider));
+      const { connect } = await setupServer(options);
       const connA = await connect();
       const connB = await connect();
       await identifyAgent(connA, 'comp-a', 1);
@@ -1945,7 +1958,7 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
   });
 
   it('injects the authenticated companion identity into LLM eligibility out-of-band from params', async () => {
-    const { root, routing, capabilityTierProvider } = buildTwoCompanionTierFixture();
+    const { root, options } = buildTwoCompanionTierFixture();
     try {
       const llmResponse = {
         content: 'ok',
@@ -1957,7 +1970,6 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
       };
       const complete = vi.fn().mockResolvedValue(llmResponse);
       const stream = vi.fn().mockResolvedValue(llmResponse);
-      const options = optionsFor(routing, capabilityTierProvider);
       options.llmProvider = { complete, stream } as any;
       const { connect } = await setupServer(options);
       const connB = await connect();
@@ -2003,19 +2015,16 @@ describe('GatewayServer per-companion capability tier (an52.3)', () => {
   });
 
   it('fails closed when an authenticated companion has no resolvable tier file', async () => {
-    const { root, routing, capabilityTierProvider } = buildTwoCompanionTierFixture();
+    const { root, options, shardParams } = buildTwoCompanionTierFixture();
+    const boundParams = shardParams('comp-b', 'beta');
     // Remove comp-b's tier file so its CapabilityRuntime construction throws.
     rmSync(join(root, 'companions', 'b', 'capability-tier.json'), { force: true });
     try {
-      const { connect } = await setupServer(optionsFor(routing, capabilityTierProvider));
+      const { connect } = await setupServer(options);
       const connB = await connect();
       await identifyAgent(connB, 'comp-b', 1);
 
-      const bShard = await invokeRpc(connB, 2, 'shard.backend.request', {
-        backend: 'container',
-        shardId: 'shard-beta',
-        name: 'beta',
-      });
+      const bShard = await invokeRpc(connB, 2, 'shard.backend.request', boundParams);
       expect(bShard.result).toBeUndefined();
       expect(bShard.error.code).toBe(GatewayErrors.POLICY_DENIED);
     } finally {

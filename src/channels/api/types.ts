@@ -275,6 +275,8 @@ export interface ApiRuntimeChatRequest {
   request: ChatCompletionRequest;
   principal: ApiAuthPrincipal;
   headers: ApiRpcHeaders;
+  /** Server-derived fleet target; browsers cannot provide this field. */
+  companionId?: string;
   /** See `ApiChatCompletionRpcParams.clientCert`. */
   clientCert?: SatelliteClientCertIdentity;
   /** Device-only principal normalized by authenticated gateway ingress. */

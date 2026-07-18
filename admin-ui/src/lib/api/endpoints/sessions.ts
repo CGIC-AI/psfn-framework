@@ -24,12 +24,21 @@ import type {
   AdminSessionSearchData,
   AdminSessionTurnDetailData,
 } from '$lib/types';
+import {
+  getCompanionCacheScope,
+  onCompanionScopeChange,
+} from '$lib/fleet/companion-scope';
 
 export const SESSION_MESSAGE_PAGE_SIZE = 100;
 export const SESSION_SEARCH_LIMIT = 100;
 
-let sessionListRevalidation: Promise<AdminSessionListData> | null = null;
+const sessionListRevalidations = new Map<string, Promise<AdminSessionListData>>();
 const sessionMessageRevalidations = new Map<string, Promise<AdminSessionMessagesData>>();
+
+onCompanionScopeChange(() => {
+  sessionListRevalidations.clear();
+  sessionMessageRevalidations.clear();
+});
 
 async function fetchConditional(
   path: string,
@@ -78,17 +87,21 @@ export async function getCachedSessionList(): Promise<AdminSessionListData | nul
 
 export async function clearSessionListCache(): Promise<void> {
   await sessionListCache.remove();
-  sessionListRevalidation = null;
+  sessionListRevalidations.delete(getCompanionCacheScope());
 }
 
 export function revalidateSessionList(): Promise<AdminSessionListData> {
-  if (sessionListRevalidation) return sessionListRevalidation;
+  const companionScope = getCompanionCacheScope();
+  const active = sessionListRevalidations.get(companionScope);
+  if (active) return active;
   const current = sessionListCache.revalidate()
     .then(result => result.data)
     .finally(() => {
-      if (sessionListRevalidation === current) sessionListRevalidation = null;
+      if (sessionListRevalidations.get(companionScope) === current) {
+        sessionListRevalidations.delete(companionScope);
+      }
     });
-  sessionListRevalidation = current;
+  sessionListRevalidations.set(companionScope, current);
   return current;
 }
 
@@ -168,17 +181,18 @@ export function revalidateSessionMessages(
   request: SessionMessagesRequest,
 ): Promise<AdminSessionMessagesData> {
   const path = buildSessionMessagesPath(sessionId, request);
-  const active = sessionMessageRevalidations.get(path);
+  const key = `${getCompanionCacheScope()}:${path}`;
+  const active = sessionMessageRevalidations.get(key);
   if (active) return active;
   const current = createSessionMessagesCache(sessionId, request)
     .revalidate()
     .then(result => result.data)
     .finally(() => {
-      if (sessionMessageRevalidations.get(path) === current) {
-        sessionMessageRevalidations.delete(path);
+      if (sessionMessageRevalidations.get(key) === current) {
+        sessionMessageRevalidations.delete(key);
       }
     });
-  sessionMessageRevalidations.set(path, current);
+  sessionMessageRevalidations.set(key, current);
   return current;
 }
 

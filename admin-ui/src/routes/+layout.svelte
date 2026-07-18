@@ -23,12 +23,29 @@
     getActiveThemePack,
   } from '$lib/stores/ui-preferences.svelte';
   import { getToasts, removeToast } from '$lib/stores/toast.svelte';
+  import { clearToasts } from '$lib/stores/toast.svelte';
+  import {
+    activateCompanionScopeFromPath,
+    getCompanionCacheScope,
+    isFleetOverviewPath,
+    parseCompanionGardenScope,
+    scopeGardenPath,
+  } from '$lib/fleet/companion-scope';
+  import {
+    fetchFleetPortalProjection,
+    type FleetPortalProjection,
+  } from '$lib/fleet/portal';
 
   let { children } = $props();
 
   let sidebarOpen = $state(true);
   let isDesktop = $state(true);
   let mobileNavOpen = $state(false);
+  let fleetProjection = $state<FleetPortalProjection | null>(null);
+  let fleetProjectionController: AbortController | null = null;
+  let fleetProjectionError = $state('');
+  const companionScope = $derived(parseCompanionGardenScope($page.url.pathname));
+  const activeCompanionId = $derived(companionScope?.companionId ?? null);
   const companionName = $derived(getCompanionName());
   const activeTheme = $derived(getActiveThemePack());
   const sidebarTitle = $derived(resolveThemeTemplate(activeTheme.ui.sidebarTitleTemplate, { companionName }));
@@ -36,13 +53,16 @@
   const appTitle = $derived(resolveThemeTemplate(activeTheme.ui.appTitleTemplate, { companionName }));
 
   // ── Collapsible nav groups (persisted per browser profile) ──
-  const NAV_GROUPS_STORAGE_KEY = 'garden.nav.collapsedGroups';
   let collapsedGroups = $state<Record<string, boolean>>(loadCollapsedGroups());
+
+  function navGroupsStorageKey(): string {
+    return `garden.nav.collapsedGroups:${getCompanionCacheScope()}`;
+  }
 
   function loadCollapsedGroups(): Record<string, boolean> {
     if (typeof window === 'undefined') return {};
     try {
-      const raw = window.localStorage.getItem(NAV_GROUPS_STORAGE_KEY);
+      const raw = window.localStorage.getItem(navGroupsStorageKey());
       if (!raw) return {};
       const parsed: unknown = JSON.parse(raw);
       if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return {};
@@ -59,7 +79,7 @@
   function toggleNavGroup(groupId: string): void {
     collapsedGroups = { ...collapsedGroups, [groupId]: !collapsedGroups[groupId] };
     try {
-      window.localStorage.setItem(NAV_GROUPS_STORAGE_KEY, JSON.stringify(collapsedGroups));
+      window.localStorage.setItem(navGroupsStorageKey(), JSON.stringify(collapsedGroups));
     } catch {
       // Storage unavailable (private mode, quota) — collapse still works for the session.
     }
@@ -70,6 +90,7 @@
 
   async function refreshAttentionCounts(): Promise<void> {
     if (!isAuthenticated()) return;
+    const requestCompanionId = activeCompanionId;
     const results = await Promise.all(
       ATTENTION_SOURCES.map(async (source) => {
         try {
@@ -80,7 +101,50 @@
         }
       }),
     );
-    attentionCounts = Object.fromEntries(results);
+    if (requestCompanionId === activeCompanionId) {
+      attentionCounts = Object.fromEntries(results);
+    }
+  }
+
+  async function refreshFleetProjection(): Promise<void> {
+    if (!activeCompanionId) return;
+    fleetProjectionController?.abort();
+    const controller = new AbortController();
+    fleetProjectionController = controller;
+    try {
+      const result = await fetchFleetPortalProjection(controller.signal);
+      if (fleetProjectionController !== controller) return;
+      fleetProjection = result;
+      fleetProjectionError = '';
+      if (!result.companions.some(companion => (
+        companion.companionId === activeCompanionId && companion.gardenPath
+      ))) {
+        attentionCounts = {};
+        clearToasts();
+        await activateCompanionScopeFromPath('/fleet');
+        window.location.assign('/fleet');
+      }
+    } catch (error) {
+      if (controller.signal.aborted || fleetProjectionController !== controller) return;
+      fleetProjection = null;
+      fleetProjectionError = error instanceof Error ? error.message : 'Fleet roster unavailable';
+    }
+  }
+
+  async function switchCompanion(event: Event): Promise<void> {
+    const target = event.currentTarget as HTMLSelectElement;
+    const selected = fleetProjection?.companions.find(companion => (
+      companion.companionId === target.value
+    ));
+    if (!selected?.gardenPath || selected.companionId === activeCompanionId) return;
+    attentionCounts = {};
+    clearToasts();
+    try {
+      await activateCompanionScopeFromPath(selected.gardenPath);
+      window.location.assign(selected.gardenPath);
+    } catch {
+      fleetProjectionError = 'Unable to clear the previous companion session. Try again.';
+    }
   }
 
   const themedNavGroups = $derived(navGroups.map((group) => ({
@@ -98,21 +162,34 @@
 
   // Check if current path is the login page
   // SvelteKit strips the base path from $page.url.pathname, so we check for '/login'
-  let isLoginPage = $derived($page.url.pathname === '/login');
+  let isLoginPage = $derived(
+    $page.url.pathname === '/login' || companionScope?.innerPath === '/login',
+  );
+  let isFleetPage = $derived(isFleetOverviewPath($page.url.pathname));
 
   // Redirect to login if not authenticated (except on login page itself)
   $effect(() => {
-    if (isLoginPage) return;
+    const pathname = $page.url.pathname;
+    void activateCompanionScopeFromPath(pathname);
+    collapsedGroups = loadCollapsedGroups();
+    attentionCounts = {};
+    clearToasts();
+    if (isLoginPage || isFleetPage) return;
     if (!isAuthResolved()) {
       void ensureAuthResolved();
       return;
     }
     if (!isAuthenticated()) {
-      goto(`${base}/login`);
+      if (companionScope) {
+        window.location.assign('/fleet/login');
+      } else {
+        goto(`${base}/login`);
+      }
       return;
     }
     void ensureCompanionNameLoaded(true);
     void ensureUiPreferencesLoaded();
+    if (companionScope) void refreshFleetProjection();
   });
 
   $effect(() => {
@@ -121,6 +198,33 @@
   });
 
   async function handleLogout() {
+    if (companionScope || isFleetPage) {
+      try {
+        const csrfResponse = await fetch('/v1/fleet-auth/session/csrf', {
+          cache: 'no-store',
+          credentials: 'include',
+          headers: { Accept: 'application/json' },
+        });
+        const csrf = await csrfResponse.json() as { csrfToken?: unknown };
+        if (!csrfResponse.ok
+          || typeof csrf.csrfToken !== 'string'
+          || !/^[A-Za-z0-9_-]{43}$/u.test(csrf.csrfToken)) {
+          throw new Error('Fleet logout ceremony unavailable');
+        }
+        const logoutResponse = await fetch('/v1/fleet-auth/logout', {
+          method: 'POST',
+          credentials: 'include',
+          headers: { 'X-PSFN-CSRF': csrf.csrfToken },
+        });
+        if (!logoutResponse.ok) throw new Error('Fleet logout failed');
+        clearToken();
+        window.location.assign('/fleet/login');
+        return;
+      } catch {
+        fleetProjectionError = 'Sign out failed. Please try again.';
+        return;
+      }
+    }
     const token = getToken();
     const headers = token
       ? { Authorization: `Bearer ${token}` }
@@ -139,7 +243,7 @@
   }
 
   function isActive(navPath: string): boolean {
-    const currentPath = $page.url.pathname;
+    const currentPath = companionScope?.innerPath ?? $page.url.pathname;
     if (navPath === '/') {
       return currentPath === '/';
     }
@@ -181,7 +285,7 @@
   }
 
   onMount(() => {
-    if (!isLoginPage) {
+    if (!isLoginPage && !isFleetPage) {
       void ensureAuthResolved();
       void ensureUiPreferencesLoaded();
     }
@@ -218,17 +322,34 @@
     const attentionTimer = window.setInterval(() => {
       void refreshAttentionCounts();
     }, 30_000);
+    const fleetProjectionTimer = window.setInterval(() => {
+      if (activeCompanionId) void refreshFleetProjection();
+    }, 30_000);
 
     return () => {
       mediaQuery.removeEventListener('change', syncViewport);
       document.removeEventListener('keydown', handleGlobalKeydown);
       window.clearInterval(attentionTimer);
+      window.clearInterval(fleetProjectionTimer);
+      fleetProjectionController?.abort();
+      fleetProjectionController = null;
     };
   });
 </script>
 
 {#if isLoginPage}
   {@render children()}
+{:else if isFleetPage}
+  <div class="relative">
+    <button
+      type="button"
+      onclick={handleLogout}
+      class="fixed right-4 top-4 z-20 rounded-lg border border-bark-300 bg-bark-50/95 px-3 py-2 text-sm font-medium text-bark-700 shadow-sm backdrop-blur hover:bg-bark-100"
+    >
+      Sign out
+    </button>
+    {@render children()}
+  </div>
 {:else}
   <div class="flex h-screen bg-bark-100 relative">
     {#if !isDesktop && mobileNavOpen}
@@ -259,6 +380,38 @@
           <span class="text-gold-300 text-xl block text-center" title={appTitle}>
             &#x2727;
           </span>
+        {/if}
+        {#if (sidebarOpen || !isDesktop) && companionScope}
+          <label
+            for="companion-switcher"
+            class="mt-3 block text-[0.65rem] font-semibold uppercase tracking-[0.16em] text-shadow-400"
+          >
+            Companion
+          </label>
+          <select
+            id="companion-switcher"
+            value={activeCompanionId ?? ''}
+            onchange={(event) => void switchCompanion(event)}
+            disabled={!fleetProjection}
+            class="mt-1 w-full rounded-md border border-bark-300 bg-bark-100 px-2 py-1.5 text-xs text-shadow-800"
+          >
+            {#if fleetProjection}
+              {#each fleetProjection.companions.filter(companion => companion.gardenPath) as companion (companion.companionId)}
+                <option value={companion.companionId}>{companion.displayName}</option>
+              {/each}
+            {:else}
+              <option value={activeCompanionId ?? ''}>{companionName}</option>
+            {/if}
+          </select>
+          <a
+            href="/fleet"
+            class="mt-2 inline-flex text-xs font-medium text-gold-700 hover:text-gold-800"
+          >
+            Fleet overview
+          </a>
+          {#if fleetProjectionError}
+            <p class="mt-1 text-[0.68rem] text-wilt-600">{fleetProjectionError}</p>
+          {/if}
         {/if}
       </div>
 
@@ -306,7 +459,7 @@
             >
               {#each group.items as item}
                 <a
-                  href={item.path}
+                  href={scopeGardenPath(item.path, $page.url.pathname)}
                   onclick={() => { if (!isDesktop) mobileNavOpen = false; }}
                   class="relative flex items-start gap-3 rounded-lg px-3 py-2.5 transition-colors group"
                   class:bg-gold-50={isActive(item.path)}
@@ -393,7 +546,9 @@
             Menu
           </button>
         {/if}
-        {@render children()}
+        {#key activeCompanionId ?? $page.url.pathname}
+          {@render children()}
+        {/key}
       </div>
     </main>
 

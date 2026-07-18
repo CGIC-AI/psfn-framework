@@ -26,9 +26,10 @@ export type FleetPortalAvailability = 'online' | 'degraded' | 'offline' | 'unkno
 
 export interface FleetPortalCompanionProjection {
   readonly companionId: string;
+  readonly displayName: string;
   readonly availability: FleetPortalAvailability;
-  readonly headless: boolean;
   readonly gardenPath?: string;
+  readonly avatarRef?: string;
 }
 
 export interface FleetPortalProjection {
@@ -64,7 +65,7 @@ export interface FleetPortalConnectionSnapshotSource {
 export interface GatewayFleetPortalProjectionOptions {
   readonly authorizer: FleetPortalAuthorizationBatchPort;
   readonly fleet: readonly Pick<
-  CompanionFleetEntry,
+    CompanionFleetEntry,
   'companionId' | 'gardenPort' | 'displayName' | 'avatarRef'
   >[];
   readonly source: FleetPortalConnectionSnapshotSource;
@@ -154,14 +155,14 @@ export class GatewayFleetPortalProjection {
       if (!manifest) {
         throw new Error('Fleet portal authorization returned an unknown manifest companion');
       }
-      const gardenPath = authority.gardenLinkEligible && manifest.gardenPort !== undefined
-        ? compileFleetSsoGardenPath(manifest.companionId)
-        : undefined;
+      if (!authority.gardenLinkEligible || manifest.gardenPort === undefined) continue;
+      const gardenPath = compileFleetSsoGardenPath(manifest.companionId);
       companions.push(Object.freeze({
         companionId: manifest.companionId,
+        displayName: manifest.displayName?.trim() || manifest.companionId,
         availability: availability(connections.get(manifest.companionId)),
-        headless: manifest.gardenPort === undefined,
-        ...(gardenPath ? { gardenPath } : {}),
+        gardenPath,
+        ...(manifest.avatarRef !== undefined ? { avatarRef: manifest.avatarRef } : {}),
       }));
     }
     companions.sort((left, right) => left.companionId.localeCompare(right.companionId));

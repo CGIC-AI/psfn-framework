@@ -14,6 +14,17 @@ describe('buildAdminWebSocketUrl', () => {
     })).toBe('ws://127.0.0.1:10054/api/admin/events');
   });
 
+  it('binds the websocket to the canonical companion route', () => {
+    const companionId = '11111111-1111-4111-8111-111111111111';
+    expect(buildAdminWebSocketUrl('/api/admin/events', {
+      protocol: 'https:',
+      host: 'garden.example.test',
+      pathname: `/companions/${companionId}/garden/telemetry`,
+    })).toBe(
+      `wss://garden.example.test/companions/${companionId}/garden/api/admin/events`,
+    );
+  });
+
   it('does not append token-like query parameters', () => {
     const url = buildAdminWebSocketUrl('/api/admin/events', {
       protocol: 'https:',

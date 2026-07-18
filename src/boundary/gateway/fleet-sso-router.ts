@@ -62,12 +62,17 @@ import {
   GatewayFleetPortalHttpRoutes,
 } from './fleet-portal-http-routes.js';
 import type { GatewayFleetPortalProjection } from './fleet-portal-projection.js';
+import {
+  FleetGardenUiAssets,
+  type FleetGardenUiAssetsPort,
+} from './fleet-garden-ui-assets.js';
 
 const SESSION_COOKIE_NAME = '__Host-psfn_session';
 const MAX_PROXY_BODY_BYTES = 1_048_576;
 const MAX_CAPABILITY_HEADER_BYTES = 65_536;
 const FLEET_PATH = '/fleet';
 const FLEET_LOGIN_PATH = '/fleet/login';
+const FLEET_GARDEN_CHAT_PATH = '/v1/chat/completions';
 const COMPANION_PREFIX = FLEET_SSO_COMPANION_ROUTE_PREFIX;
 const COMPANION_UI_PREFIX = '/companion-ui';
 export const FLEET_JIT_GRANT_HEADER = 'x-psfn-jit-grant';
@@ -127,6 +132,7 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
   readonly verifier: RequestCapabilityVerifier;
   readonly replay: RequestCapabilityReplayPort;
   readonly portalProjection: Pick<GatewayFleetPortalProjection, 'resolve'>;
+  readonly portalUi?: FleetGardenUiAssetsPort;
   readonly jitStepUp?: Pick<FleetJitStepUpCoordinator, 'consumeGrant'>;
   readonly upstreams: readonly FleetSsoGardenUpstream[];
   readonly companionUi?: {
@@ -135,6 +141,18 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
   };
   readonly nowSeconds?: () => number;
 }
+
+export interface FleetGardenChatAdmission {
+  readonly request: IncomingMessage;
+  readonly response: ServerResponse;
+  readonly body: Buffer;
+  readonly companionId: CompanionId;
+  readonly authorization: FleetAuthorizationContext;
+}
+
+export type FleetGardenChatHandler = (
+  admission: FleetGardenChatAdmission,
+) => Promise<void>;
 
 interface ParsedGardenRoute {
   companionId: CompanionId;
@@ -384,6 +402,7 @@ function requestOptions(
 export class GatewayFleetSsoRouter {
   private readonly upstreams: ReadonlyMap<string, FleetSsoGardenUpstream>;
   private readonly portalRoutes: GatewayFleetPortalHttpRoutes;
+  private gardenChatHandler: FleetGardenChatHandler | null = null;
 
   constructor(private readonly options: GatewayFleetSsoRouterOptions) {
     const canonical = new URL(options.canonicalOrigin);
@@ -395,6 +414,7 @@ export class GatewayFleetSsoRouter {
     }
     this.portalRoutes = new GatewayFleetPortalHttpRoutes({
       projection: options.portalProjection,
+      ui: options.portalUi ?? new FleetGardenUiAssets(),
     });
     const entries = options.upstreams.map((upstream) => {
       if (upstream.origin.username || upstream.origin.password || upstream.origin.pathname !== '/'
@@ -431,14 +451,24 @@ export class GatewayFleetSsoRouter {
     try {
       const { rawPath } = parseOuterPath(rawTarget);
       return rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`
+        || rawPath.startsWith(`${FLEET_PATH}/_app/`)
+        || rawPath.startsWith('/_app/')
         || rawPath === FLEET_LOGIN_PATH || rawPath.startsWith(FLEET_PORTAL_API_PATH)
         || rawPath.startsWith(COMPANION_PREFIX)
         || rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`);
     } catch {
       return rawTarget.startsWith(FLEET_PATH) || rawTarget.startsWith(FLEET_PORTAL_API_PATH)
+        || rawTarget.startsWith('/_app/')
         || rawTarget.startsWith(COMPANION_PREFIX)
         || rawTarget.startsWith(COMPANION_UI_PREFIX);
     }
+  }
+
+  registerGardenChatHandler(handler: FleetGardenChatHandler): void {
+    if (this.gardenChatHandler) {
+      throw new Error('Fleet SSO Garden chat handler is already registered');
+    }
+    this.gardenChatHandler = handler;
   }
 
   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
@@ -502,6 +532,20 @@ export class GatewayFleetSsoRouter {
         headers: request.headers,
         body,
       });
+      if (route.upstreamTarget === FLEET_GARDEN_CHAT_PATH
+        && request.method === 'POST') {
+        if (!this.gardenChatHandler) {
+          throw new FleetSsoRequestError(503, 'Fleet Garden chat is unavailable');
+        }
+        await this.gardenChatHandler({
+          request,
+          response,
+          body,
+          companionId: route.companionId,
+          authorization: issued.context,
+        });
+        return;
+      }
       await this.proxyHttp(request, response, upstream, route, body, issued);
     } catch (error) {
       if (response.writableEnded || response.destroyed) return;
@@ -576,7 +620,11 @@ export class GatewayFleetSsoRouter {
     method: string;
     headers: IncomingHttpHeaders;
     body: Buffer;
-  }): Promise<{ token: string; verified: VerifiedRequestCapability }> {
+  }): Promise<{
+    token: string;
+    verified: VerifiedRequestCapability;
+    context: FleetAuthorizationContext;
+  }> {
     const targetHeaders = { ...input.headers };
     stripBrowserRequestCapabilityHeaders(targetHeaders);
     const target = compileGatewayGardenRequestTarget({
@@ -698,7 +746,7 @@ export class GatewayFleetSsoRouter {
     if (replay.outcome !== 'consumed') {
       throw new FleetSsoRequestError(404, 'Resource not found');
     }
-    return { token, verified };
+    return { token, verified, context };
   }
 
   private proxyHttp(
@@ -709,7 +757,7 @@ export class GatewayFleetSsoRouter {
     body: Buffer,
     issued: { token: string; verified: VerifiedRequestCapability },
   ): Promise<void> {
-    return new Promise((resolve, reject) => {
+    return new Promise<void>((resolve, reject) => {
       const headers = copyRequestHeaders(request.headers);
       headers['content-length'] = String(body.byteLength);
       headers['x-psfn-request-capability'] = issued.token;

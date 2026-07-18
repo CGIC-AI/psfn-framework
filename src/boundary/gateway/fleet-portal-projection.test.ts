@@ -87,8 +87,8 @@ describe('gateway fleet portal projection', () => {
       session: { state: 'authenticated' },
       companions: [{
         companionId: COMPANION_A,
+        displayName: COMPANION_A,
         availability: 'online',
-        headless: false,
         gardenPath: `/companions/${COMPANION_A}/garden`,
       }],
     });
@@ -120,7 +120,7 @@ describe('gateway fleet portal projection', () => {
     }
   });
 
-  it('maps memory-only connection posture coarsely and exposes headless only after authorization', async () => {
+  it('maps memory-only connection posture coarsely without exposing topology', async () => {
     const projection = new GatewayFleetPortalProjection({
       authorizer: {
         resolve: async () => ({
@@ -150,15 +150,16 @@ describe('gateway fleet portal projection', () => {
 
     await expect(projection.resolve({ sessionToken: SESSION_TOKEN })).resolves.toMatchObject({
       companions: [
-        { companionId: COMPANION_A, availability: 'online', headless: false },
-        { companionId: COMPANION_B, availability: 'offline', headless: true },
-        { companionId: COMPANION_C, availability: 'unknown', headless: false },
-        { companionId: COMPANION_D, availability: 'degraded', headless: false },
+        { companionId: COMPANION_A, availability: 'online' },
+        { companionId: COMPANION_D, availability: 'degraded' },
       ],
     });
     const result = await projection.resolve({ sessionToken: SESSION_TOKEN });
-    expect(result.companions[1]).not.toHaveProperty('gardenPath');
-    expect(result.companions[2]).not.toHaveProperty('gardenPath');
+    expect(result.companions).toHaveLength(2);
+    expect(result.companions.every(companion => companion.gardenPath)).toBe(true);
+    expect(JSON.stringify(result)).not.toContain(COMPANION_B);
+    expect(JSON.stringify(result)).not.toContain(COMPANION_C);
+    expect(JSON.stringify(result)).not.toContain('gardenPort');
   });
 
   it('makes unknown and unauthorized manifest data byte-indistinguishable', async () => {

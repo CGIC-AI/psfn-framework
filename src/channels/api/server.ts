@@ -4,7 +4,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { Duplex } from 'node:stream';
+import { Readable, type Duplex } from 'node:stream';
 import { Type, type Static } from '@sinclair/typebox';
 import { Value } from '@sinclair/typebox/value';
 import type { ChannelType } from '../../shared/contracts/runtime.js';
@@ -117,7 +117,10 @@ import {
   stripHubDeviceDownstreamAuthorityHeaders,
 } from './server/hub-device-ingress.js';
 import type { CompanionUiWebSocketAdapter } from './companion-ui-websocket.js';
-import type { GatewayFleetSsoRouter } from '../../boundary/gateway/fleet-sso-router.js';
+import type {
+  FleetGardenChatAdmission,
+  GatewayFleetSsoRouter,
+} from '../../boundary/gateway/fleet-sso-router.js';
 
 const log = createComponentLogger('ApiServer');
 const API_DYNAMIC_JSON_HEADERS = { 'Cache-Control': 'no-store' } as const;
@@ -132,6 +135,13 @@ const ICP_OPERATOR_CANCEL_PATH = /^\/v1\/operator\/icp-autonomy\/companions\/([^
 const CONFIRMATION_OPERATOR_RESOLVE_PATH = '/v1/operator/confirmations/resolve';
 const CONFIRMATION_OPERATOR_MAX_BODY_BYTES = 16 * 1024;
 const CONFIRMATION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u;
+const FLEET_CHAT_BROWSER_HEADERS = new Set([
+  'accept',
+  'content-type',
+  'x-channel-id',
+  'x-channel-privacy',
+  'x-session-id',
+]);
 
 export interface IcpAutonomyOperatorPort {
   cancelForCompanion(companionId: string): Promise<number>;
@@ -581,6 +591,9 @@ export class ApiServer implements ChannelAdapterPort {
       logger: log,
       documentIngest: config.documentIngest ?? null,
     });
+    this.fleetSsoRouter?.registerGardenChatHandler(
+      admission => this.handleFleetGardenChat(admission),
+    );
     this.config = {
       enabled: true,
       connectionLabel: `${this.host}:${this.port}`,
@@ -770,6 +783,60 @@ export class ApiServer implements ChannelAdapterPort {
         return;
       }
       sendApiError(res, 404, 'not_found', `No route for ${req.method} ${path}`);
+    }
+  }
+
+  private async handleFleetGardenChat(
+    admission: FleetGardenChatAdmission,
+  ): Promise<void> {
+    if (admission.authorization.companionId !== admission.companionId
+      || admission.authorization.authorization.action !== 'companion.interact') {
+      sendApiError(
+        admission.response,
+        404,
+        'not_found',
+        'Resource not found',
+      );
+      return;
+    }
+    const headers: IncomingMessage['headers'] = {};
+    for (const [name, value] of Object.entries(admission.request.headers)) {
+      if (FLEET_CHAT_BROWSER_HEADERS.has(name) && value !== undefined) {
+        headers[name] = value;
+      }
+    }
+    headers['content-length'] = String(admission.body.byteLength);
+    headers['content-type'] = 'application/json';
+    headers['x-user-id'] = admission.authorization.principalId;
+    headers['x-user-name'] = 'Fleet operator';
+    headers['x-canonical-contact-id'] = admission.authorization.contact.contactId;
+
+    const admittedRequest = Readable.from([admission.body]) as IncomingMessage;
+    admittedRequest.headers = headers;
+    admittedRequest.method = 'POST';
+    admittedRequest.url = '/v1/chat/completions';
+    Object.defineProperty(admittedRequest, 'socket', {
+      configurable: false,
+      enumerable: false,
+      value: admission.request.socket,
+    });
+    const onAborted = () => admittedRequest.emit('aborted');
+    admission.request.once('aborted', onAborted);
+    try {
+      const principal: ApiAuthPrincipal = {
+        id: admission.authorization.principalId,
+        mode: 'api_key',
+      };
+      await this.chatCompletions.handle(
+        admittedRequest,
+        admission.response,
+        principal,
+        undefined,
+        undefined,
+        { companionId: admission.companionId },
+      );
+    } finally {
+      admission.request.off('aborted', onAborted);
     }
   }
 

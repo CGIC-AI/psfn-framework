@@ -1,5 +1,6 @@
 import { isRecord } from '../../../../src/shared/utils/types.js';
-import type { GardenCacheStorage } from './indexeddb';
+import { companionCacheKey, type GardenCacheStorage } from './indexeddb';
+import { getCompanionCacheScope } from '$lib/fleet/companion-scope';
 
 export type { GardenCacheStorage } from './indexeddb';
 
@@ -57,7 +58,14 @@ export class LocalFirstResource<T> {
   }
 
   async read(): Promise<CachedResourceSnapshot<T> | null> {
-    const raw = await this.options.storage.read(this.options.key);
+    const companionScope = getCompanionCacheScope();
+    return this.readForScope(companionScope);
+  }
+
+  private async readForScope(companionScope: string): Promise<CachedResourceSnapshot<T> | null> {
+    const key = companionCacheKey(this.options.key, companionScope);
+    const raw = await this.options.storage.read(key);
+    this.assertScope(companionScope);
     if (raw === undefined) return null;
     if (!isRecord(raw)
       || raw.schemaVersion !== GARDEN_CACHE_RECORD_SCHEMA_VERSION
@@ -66,7 +74,8 @@ export class LocalFirstResource<T> {
       || !Number.isFinite(raw.savedAt)
       || !(raw.cursor === null || typeof raw.cursor === 'string')
       || !this.options.validate(raw.data)) {
-      await this.options.storage.remove(this.options.key);
+      await this.options.storage.remove(key);
+      this.assertScope(companionScope);
       return null;
     }
     return {
@@ -78,13 +87,18 @@ export class LocalFirstResource<T> {
   }
 
   async remove(): Promise<void> {
-    await this.options.storage.remove(this.options.key);
+    const companionScope = getCompanionCacheScope();
+    await this.options.storage.remove(companionCacheKey(this.options.key, companionScope));
+    this.assertScope(companionScope);
   }
 
   async load(onData: (data: T, source: LocalFirstDataSource) => void): Promise<LocalFirstResult<T>> {
-    const cached = await this.read();
+    const companionScope = getCompanionCacheScope();
+    const cached = await this.readForScope(companionScope);
+    this.assertScope(companionScope);
     if (cached) onData(cached.data, 'cache');
-    const result = await this.revalidate(cached);
+    const result = await this.revalidateForScope(companionScope, cached);
+    this.assertScope(companionScope);
     onData(result.data, result.source);
     return result;
   }
@@ -92,7 +106,18 @@ export class LocalFirstResource<T> {
   async revalidate(
     knownCached?: CachedResourceSnapshot<T> | null,
   ): Promise<LocalFirstResult<T>> {
-    const cached = knownCached === undefined ? await this.read() : knownCached;
+    const companionScope = getCompanionCacheScope();
+    return this.revalidateForScope(companionScope, knownCached);
+  }
+
+  private async revalidateForScope(
+    companionScope: string,
+    knownCached?: CachedResourceSnapshot<T> | null,
+  ): Promise<LocalFirstResult<T>> {
+    const cached = knownCached === undefined
+      ? await this.readForScope(companionScope)
+      : knownCached;
+    this.assertScope(companionScope);
     const request: ConditionalFetchRequest = cached
       ? {
           etag: cached.etag,
@@ -101,6 +126,7 @@ export class LocalFirstResource<T> {
         }
       : { forceFull: false };
     const response = await this.options.fetch(request);
+    this.assertScope(companionScope);
     if (response.kind === 'not_modified') {
       if (!cached) {
         throw new Error(`Garden cache ${this.options.key} received 304 without a cached body`);
@@ -110,7 +136,7 @@ export class LocalFirstResource<T> {
         throw new Error(`Garden cache ${this.options.key} received an invalid ETag`);
       }
       if (etag !== cached.etag) {
-        await this.write(cached.data, etag, cached.cursor);
+        await this.write(companionScope, cached.data, etag, cached.cursor);
       }
       return {
         data: cached.data,
@@ -124,7 +150,7 @@ export class LocalFirstResource<T> {
     if (cached && this.options.merge) {
       const merged = this.options.merge(cached.data, fresh.data, cached.cursor);
       if (merged.kind === 'stale_cursor') {
-        return await this.fullRefetch();
+        return await this.fullRefetch(companionScope);
       }
       if (!this.options.validate(merged.data)) {
         throw new Error(`Garden cache ${this.options.key} produced an invalid delta merge`);
@@ -132,23 +158,24 @@ export class LocalFirstResource<T> {
       const cursor = merged.cursor === undefined
         ? this.options.cursor?.(merged.data) ?? null
         : merged.cursor;
-      await this.write(merged.data, fresh.etag, cursor);
+      await this.write(companionScope, merged.data, fresh.etag, cursor);
       return { data: merged.data, source: 'network', etag: fresh.etag, cursor };
     }
 
     const cursor = this.options.cursor?.(fresh.data) ?? null;
-    await this.write(fresh.data, fresh.etag, cursor);
+    await this.write(companionScope, fresh.data, fresh.etag, cursor);
     return { data: fresh.data, source: 'network', etag: fresh.etag, cursor };
   }
 
-  private async fullRefetch(): Promise<LocalFirstResult<T>> {
+  private async fullRefetch(companionScope: string): Promise<LocalFirstResult<T>> {
     const response = await this.options.fetch({ forceFull: true });
+    this.assertScope(companionScope);
     if (response.kind !== 'data') {
       throw new Error(`Garden cache ${this.options.key} full refetch returned no body`);
     }
     const fresh = this.requireNetworkData(response);
     const cursor = this.options.cursor?.(fresh.data) ?? null;
-    await this.write(fresh.data, fresh.etag, cursor);
+    await this.write(companionScope, fresh.data, fresh.etag, cursor);
     return { data: fresh.data, source: 'full_refetch', etag: fresh.etag, cursor };
   }
 
@@ -164,13 +191,26 @@ export class LocalFirstResource<T> {
     return { data: response.data, etag: response.etag };
   }
 
-  private async write(data: T, etag: string, cursor: string | null): Promise<void> {
-    await this.options.storage.write(this.options.key, {
+  private async write(
+    companionScope: string,
+    data: T,
+    etag: string,
+    cursor: string | null,
+  ): Promise<void> {
+    this.assertScope(companionScope);
+    await this.options.storage.write(companionCacheKey(this.options.key, companionScope), {
       schemaVersion: GARDEN_CACHE_RECORD_SCHEMA_VERSION,
       savedAt: this.now(),
       etag,
       cursor,
       data,
     });
+    this.assertScope(companionScope);
+  }
+
+  private assertScope(expected: string): void {
+    if (getCompanionCacheScope() !== expected) {
+      throw new DOMException('Companion scope changed', 'AbortError');
+    }
   }
 }

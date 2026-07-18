@@ -3,6 +3,7 @@
     AdminContactSocialGraphConnectionView,
     AdminContactSocialGraphView,
   } from '$lib/types';
+  import { scopeGardenPath } from '$lib/fleet/companion-scope';
 
   type BadgeStyle = { bg: string; text: string; label: string };
 
@@ -151,7 +152,7 @@
                 <div class="mt-1 flex flex-wrap gap-1">
                   {#each connection.evidenceMemoryIds as memId}
                     <a
-                      href="/memory?id={encodeURIComponent(memId)}"
+                      href={scopeGardenPath(`/memory?id=${encodeURIComponent(memId)}`)}
                       class="text-sm bg-bark-200 px-1.5 py-0.5 rounded text-gold-700 hover:bg-gold-100 hover:text-gold-800 transition-colors font-mono break-all"
                       title="View memory {memId}"
                     >{memId}</a>

@@ -7,10 +7,12 @@ import {
   resolveThemePackId,
 } from '$lib/theme/loader';
 import type { ThemePackDefinition } from '$lib/theme/schema';
+import { onCompanionScopeChange } from '$lib/fleet/companion-scope';
 
 let selectedThemeId = $state(DEFAULT_THEME_PACK_ID);
 let resolvedFromServer = $state(false);
 let loadPromise: Promise<string> | null = null;
+let scopeGeneration = 0;
 
 function applyResolvedTheme(themeId: unknown): string {
   selectedThemeId = resolveThemePackId(themeId);
@@ -19,6 +21,13 @@ function applyResolvedTheme(themeId: unknown): string {
 }
 
 applyResolvedTheme(DEFAULT_THEME_PACK_ID);
+
+onCompanionScopeChange(() => {
+  scopeGeneration += 1;
+  resolvedFromServer = false;
+  loadPromise = null;
+  applyResolvedTheme(DEFAULT_THEME_PACK_ID);
+});
 
 export function getSelectedThemeId(): string {
   return selectedThemeId;
@@ -40,18 +49,22 @@ export async function ensureUiPreferencesLoaded(forceRefresh = false): Promise<s
   if (resolvedFromServer && !forceRefresh) return selectedThemeId;
   if (loadPromise && !forceRefresh) return loadPromise;
 
-  loadPromise = (async () => {
+  const generation = scopeGeneration;
+  const current = (async () => {
     try {
       const settings = await getSettings();
-      applyResolvedTheme(settings.config.uiThemeId);
+      if (generation === scopeGeneration) applyResolvedTheme(settings.config.uiThemeId);
     } catch {
-      applyResolvedTheme(selectedThemeId);
+      if (generation === scopeGeneration) applyResolvedTheme(selectedThemeId);
     } finally {
-      resolvedFromServer = true;
-      loadPromise = null;
+      if (generation === scopeGeneration) resolvedFromServer = true;
     }
     return selectedThemeId;
   })();
+  loadPromise = current;
+  void current.finally(() => {
+    if (loadPromise === current) loadPromise = null;
+  });
 
   return loadPromise;
 }

@@ -29,6 +29,7 @@
   import type { AdminIdentityData, CharacterCardV2 } from '$lib/types';
   import { pushToast } from '$lib/stores/toast.svelte';
   import VersionHistoryPanel from './VersionHistoryPanel.svelte';
+  import { scopeGardenDataPath } from '$lib/fleet/companion-scope';
 
   let data = $state<AdminIdentityData | null>(null);
   let loading = $state(true);
@@ -177,7 +178,9 @@
   }
 
   function referenceBlobUrl(reference: ImageReferencePhoto): string {
-    return `/api/admin/image-references/${encodeURIComponent(reference.id)}/blob`;
+    return scopeGardenDataPath(
+      `/api/admin/image-references/${encodeURIComponent(reference.id)}/blob`,
+    );
   }
 
   function onReferenceUploadChange(event: Event) {

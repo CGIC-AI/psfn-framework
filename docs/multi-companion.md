@@ -343,7 +343,7 @@ not generic `api` traffic.
   `scheduled_prompts` / follow-up tables' `channel_type` CHECK constraints omit
   it.
 
-## Gardens: one per companion + a fleet-status page
+## One fleet Garden frontend
 
 - **One Garden per companion.** Each fleet entry with a `gardenPort` gets its own
   operator process (today's operator-process shape × N), bound to that
@@ -355,27 +355,14 @@ not generic `api` traffic.
   load the repo `.env`, and do not retain gateway, provider, channel, database,
   or companion-auth credentials. Credential status in Settings is a boolean-only
   snapshot queried from the gateway over the authenticated admin path.
-- **Gateway fleet-status surface.** A thin, read-only, loopback-only page served
-  by the gateway (`src/boundary/gateway/fleet-status.ts`,
-  `startOptionalFleetStatusServer`), enabled by `FLEET_STATUS_PORT` (host
-  `FLEET_STATUS_HOST`, default `127.0.0.1`). Routes: `GET /` and `GET /fleet`
-  render an HTML overview; `GET /fleet/status.json` returns JSON. It is fed by
-  the gateway connection registry + the fleet roster and shows, per companion:
-  up/down state, health, last-seen and connected timestamps, recent violation
-  count, and a link out to that companion's Garden. Setting `FLEET_STATUS_PORT`
-  while `PSFN_MULTI_COMPANION` is off fails closed; a taken port fails closed
-  (never re-picks).
-
-  This is a raw operator listener with no browser-session authentication. Its
-  legacy `GET /fleet` alias is not the authenticated `/fleet` portal on the
-  canonical HTTPS origin, and `/fleet/status.json` is never mounted or consumed
-  there. Do not publish or tunnel the raw listener without an independent
-  authentication boundary and private network policy. Remove
-  `FLEET_STATUS_PORT`/`FLEET_STATUS_HOST` from repository-owned runtime wiring
-  and restart the gateway to disable only this listener.
-
-  Not yet surfaced (documented follow-up in the code): fatigue/charge posture and
-  tool-error counts. Do not assume the fleet page shows them today.
+- **Gateway fleet overview.** The canonical HTTPS origin serves the same
+  compiled Garden bundle at `/fleet` and at each authorized
+  `/companions/<companion-uuid>/garden/...` path. `/v1/fleet/portal` returns
+  only the signed-in principal's bounded companion projection; it does not
+  expose ports, timestamps, violation counts, raw reasons, or topology.
+  Companion selection is encoded in the immutable URL and is reauthorized on
+  every page, API, download, and WebSocket request. The former raw
+  fleet-status listener and `/fleet/status.json` route are retired.
 
 ## Fleet backups
 
@@ -487,4 +474,5 @@ notes but are not wired in this branch:
   transcript inspection, and fleet-wide autonomy controls. The shipped Garden
   surface is local, control-plane-only, and deliberately cannot become these.
 - Voice subsystem rewrite.
-- Fatigue/charge and tool-error metrics on the fleet-status page.
+- Additional bounded fleet-overview posture indicators, subject to the same
+  authorization and privacy constraints as the current projection.

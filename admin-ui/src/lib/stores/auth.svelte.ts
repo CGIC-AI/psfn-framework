@@ -2,6 +2,11 @@ import {
   clearLegacyPersistentAdminToken,
   clearLegacyScriptReadableAdminTokenCookie,
 } from './auth-storage';
+import {
+  getCompanionCacheScope,
+  onCompanionScopeChange,
+  scopeGardenDataPath,
+} from '$lib/fleet/companion-scope';
 
 clearLegacyPersistentAdminToken();
 
@@ -9,7 +14,16 @@ let token = $state<string>('');
 let serverSessionAuthenticated = $state(false);
 let authResolved = $state(typeof window === 'undefined');
 let sessionProbePromise: Promise<boolean> | null = null;
+let sessionProbeController: AbortController | null = null;
 let authenticated = $derived(!!token || serverSessionAuthenticated);
+
+onCompanionScopeChange(() => {
+  sessionProbeController?.abort();
+  sessionProbeController = null;
+  sessionProbePromise = null;
+  authResolved = token.length > 0;
+  serverSessionAuthenticated = token.length > 0;
+});
 
 export function getToken(): string {
   return token;
@@ -24,17 +38,25 @@ export function isAuthResolved(): boolean {
 }
 
 async function probeServerSession(): Promise<boolean> {
+  const companionScope = getCompanionCacheScope();
+  const controller = new AbortController();
+  sessionProbeController = controller;
   try {
-    const res = await fetch('/api/admin/dashboard', {
+    const res = await fetch(scopeGardenDataPath('/api/admin/dashboard'), {
       headers: { Accept: 'application/json' },
       credentials: 'include',
+      signal: controller.signal,
     });
+    if (companionScope !== getCompanionCacheScope()) return false;
     serverSessionAuthenticated = res.ok;
   } catch {
-    serverSessionAuthenticated = false;
+    if (companionScope === getCompanionCacheScope()) serverSessionAuthenticated = false;
   } finally {
-    authResolved = true;
-    sessionProbePromise = null;
+    if (companionScope === getCompanionCacheScope()) authResolved = true;
+    if (sessionProbeController === controller) {
+      sessionProbeController = null;
+      sessionProbePromise = null;
+    }
   }
   return authenticated;
 }
@@ -64,6 +86,8 @@ export function clearToken() {
   serverSessionAuthenticated = false;
   authResolved = true;
   sessionProbePromise = null;
+  sessionProbeController?.abort();
+  sessionProbeController = null;
   clearLegacyPersistentAdminToken();
   clearLegacyScriptReadableAdminTokenCookie();
 }

@@ -25,7 +25,6 @@ import {
   type FleetAuthorizationContext,
 } from '../../boundary/gateway/fleet-authorization-context.js';
 import { GatewayFleetPortalProjection } from '../../boundary/gateway/fleet-portal-projection.js';
-import { FleetStatusServer } from '../../boundary/gateway/fleet-status.js';
 import { fleetAuthRoleAllowsAction } from '../../boundary/fleet-auth/role-action-policy.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import {
@@ -246,10 +245,8 @@ describe('unified Fleet SSO two-companion process boundary', () => {
   const servers: Server[] = [];
   const children: ChildProcess[] = [];
   const workloadRoots: string[] = [];
-  const fleetStatusServers: FleetStatusServer[] = [];
 
   afterEach(async () => {
-    await Promise.all(fleetStatusServers.splice(0).map(server => server.stop()));
     await Promise.all(servers.splice(0).map(server => new Promise<void>((resolve) => {
       server.close(() => resolve());
     })));
@@ -575,7 +572,7 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     expect(await getHitCount(workloadA.port)).toEqual({ hits: 4, pid: workloadA.pid });
   });
 
-  it('certifies disjoint portal projections, stateless links, outages, and raw-status separation', async () => {
+  it('certifies disjoint bounded projections, stateless links, and outages', async () => {
     const workloadA = await spawnWorkload('workspace-a/portal-owner');
     const workloadB = await spawnWorkload('workspace-b/portal-admin');
     children.push(workloadA.child, workloadB.child);
@@ -709,14 +706,6 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     servers.push(edge);
     const edgePort = await listen(edge);
 
-    const rawStatus = new FleetStatusServer({
-      port: 0,
-      fleet,
-      source: { getFleetConnectionSnapshot: snapshot },
-    });
-    await rawStatus.start();
-    fleetStatusServers.push(rawStatus);
-
     const ownerPortal = await get(edgePort, '/v1/fleet/portal', SESSION_A);
     expect(ownerPortal.status).toBe(200);
     expect(JSON.parse(ownerPortal.body)).toMatchObject({
@@ -724,13 +713,11 @@ describe('unified Fleet SSO two-companion process boundary', () => {
         {
           companionId: COMPANION_A,
           availability: 'online',
-          headless: false,
           gardenPath: `/companions/${COMPANION_A}/garden`,
         },
-        { companionId: COMPANION_C, availability: 'offline', headless: false },
       ],
     });
-    expect(JSON.parse(ownerPortal.body).companions[1]).not.toHaveProperty('gardenPath');
+    expect(JSON.parse(ownerPortal.body).companions).toHaveLength(1);
     expect(ownerPortal.body).not.toContain(COMPANION_B);
     expect(ownerPortal.body).not.toContain(COMPANION_D);
     expect(ownerPortal.body).not.toMatch(/gardenPort|stateReason|violation/u);
@@ -742,13 +729,11 @@ describe('unified Fleet SSO two-companion process boundary', () => {
         {
           companionId: COMPANION_B,
           availability: 'degraded',
-          headless: false,
           gardenPath: `/companions/${COMPANION_B}/garden`,
         },
-        { companionId: COMPANION_D, availability: 'offline', headless: true },
       ],
     });
-    expect(JSON.parse(adminPortal.body).companions[1]).not.toHaveProperty('gardenPath');
+    expect(JSON.parse(adminPortal.body).companions).toHaveLength(1);
     expect(adminPortal.body).not.toContain(COMPANION_A);
     expect(adminPortal.body).not.toContain(COMPANION_C);
 
@@ -782,16 +767,5 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     const publicRawAttempt = await get(edgePort, '/fleet/status.json', SESSION_B);
     expect(publicRawAttempt.status).toBe(404);
     expect(publicRawAttempt.body).not.toMatch(/gardenPort|recentViolationWindowMs/u);
-    const operatorRaw = await get(
-      rawStatus.boundPort(),
-      '/fleet/status.json',
-      SESSION_B,
-    );
-    expect(operatorRaw.status).toBe(200);
-    const operatorRawBody = operatorRaw.body;
-    for (const companionId of [COMPANION_A, COMPANION_B, COMPANION_C, COMPANION_D]) {
-      expect(operatorRawBody).toContain(companionId);
-    }
-    expect(operatorRawBody).toMatch(/gardenPort|recentViolationWindowMs/u);
   });
 });

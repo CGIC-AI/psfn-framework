@@ -1,4 +1,8 @@
 import { isRecord } from '../../../../src/shared/utils/types.js';
+import {
+  getCompanionCacheScope,
+  onCompanionScopeChange,
+} from '$lib/fleet/companion-scope';
 
 const GARDEN_CACHE_DATABASE = 'psfn-garden-local-cache';
 const GARDEN_CACHE_DATABASE_VERSION = 1;
@@ -8,6 +12,18 @@ export interface GardenCacheStorage {
   read(key: string): Promise<unknown>;
   write(key: string, value: unknown): Promise<void>;
   remove(key: string): Promise<void>;
+  removePrefix?(prefix: string): Promise<void>;
+}
+
+export function companionCachePrefix(companionScope: string): string {
+  return `companion:${companionScope}:`;
+}
+
+export function companionCacheKey(
+  key: string,
+  companionScope = getCompanionCacheScope(),
+): string {
+  return `${companionCachePrefix(companionScope)}${key}`;
 }
 
 function requestResult(request: IDBRequest): Promise<unknown> {
@@ -68,6 +84,28 @@ export class IndexedDbGardenCacheStorage implements GardenCacheStorage {
     await transactionCompletion(transaction);
   }
 
+  async removePrefix(prefix: string): Promise<void> {
+    const database = await this.open();
+    const transaction = database.transaction(GARDEN_CACHE_OBJECT_STORE, 'readwrite');
+    const objectStore = transaction.objectStore(GARDEN_CACHE_OBJECT_STORE);
+    const cursorCompleted = new Promise<void>((resolve, reject) => {
+      const request = objectStore.openCursor();
+      request.onerror = () => reject(request.error ?? new Error('IndexedDB cursor failed'));
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) {
+          resolve();
+          return;
+        }
+        if (typeof cursor.key === 'string' && cursor.key.startsWith(prefix)) {
+          cursor.delete();
+        }
+        cursor.continue();
+      };
+    });
+    await Promise.all([cursorCompleted, transactionCompletion(transaction)]);
+  }
+
   private open(): Promise<IDBDatabase> {
     if (this.databasePromise) return this.databasePromise;
     const factory = this.resolveFactory();
@@ -103,3 +141,16 @@ export function getGardenCacheStorage(): GardenCacheStorage {
   if (!browserStorage) browserStorage = new IndexedDbGardenCacheStorage();
   return browserStorage;
 }
+
+export async function clearGardenCacheScope(companionScope: string): Promise<void> {
+  const storage = getGardenCacheStorage();
+  if (!storage.removePrefix) {
+    throw new Error('Garden cache storage cannot clear a companion scope');
+  }
+  await storage.removePrefix(companionCachePrefix(companionScope));
+}
+
+onCompanionScopeChange((previousCompanionId) => {
+  if (!previousCompanionId || !browserStorage?.removePrefix) return;
+  return browserStorage.removePrefix(companionCachePrefix(previousCompanionId));
+});

@@ -62,8 +62,8 @@ describe('gateway API fleet portal composition', () => {
       session: { state: 'authenticated' },
       companions: [{
         companionId: COMPANION_ID,
+        displayName: COMPANION_ID,
         availability: 'online',
-        headless: false,
         gardenPath: `/companions/${COMPANION_ID}/garden`,
       }],
     });

@@ -27,6 +27,7 @@ import {
   gardenRequestServiceBoundaryDenial,
   type GardenRequestContext,
 } from './garden-request-context.js';
+import { gardenRequestCompanionScopeDenial } from './garden-companion-scope.js';
 
 interface AdminRouteDeclaration {
   method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -77,6 +78,17 @@ export function dispatchAdminRoute(
     const boundaryDenial = gardenRequestServiceBoundaryDenial(requestContext);
     if (boundaryDenial) {
       sendJson(res, 403, { error: boundaryDenial });
+      return true;
+    }
+    // Invariant 11 (docs/garden-control-plane.md): the companion whose direct-DB
+    // service instances handle this route is `companionId` (the connection-bound
+    // companion whose stores were captured at construction). Refuse to run any
+    // companion-scoped route unless the authenticated request context names that
+    // same companion, so a request for companion A can never touch companion B's
+    // schema, rows, or writes. Fails closed; legacy/public contexts are exempt.
+    const companionScopeDenial = gardenRequestCompanionScopeDenial(requestContext, companionId);
+    if (companionScopeDenial) {
+      sendJson(res, 403, { error: companionScopeDenial });
       return true;
     }
     route.handle(req, res, params, requestContext);

@@ -10,6 +10,15 @@ import {
   createGatewayApprovalBoundaryService,
   type ApprovalBoundaryService,
 } from './approval-boundary.js';
+import { GatewayErrors } from './protocol.js';
+import { CAPABILITY_TOKENS } from '../../system/capabilities/tokens.js';
+import { deriveShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
+import {
+  ShardApprovalGrantAuthority,
+  type AuthenticatedShardWorkloadHandle,
+  type AuthenticatedShardWorkloadRegistration,
+  type AuthenticatedShardWorkloadRegistry,
+} from '../../system/capabilities/shard-approval-grants.js';
 
 // Sentinel raw params that MUST never survive redaction into a relay payload.
 const SECRET_PARAM = 'raw-secret-token-zzz999';
@@ -17,6 +26,26 @@ const SECRET_REASONING = 'private chain-of-thought that must not leak';
 
 const PARENT_A = 'companion-parent-a';
 const PARENT_B = 'companion-parent-b';
+const OPERATOR = { kind: 'operator' as const, id: 'test-garden-operator' };
+
+class TestWorkloadRegistry implements AuthenticatedShardWorkloadRegistry {
+  private readonly records =
+    new WeakMap<AuthenticatedShardWorkloadHandle, AuthenticatedShardWorkloadRegistration>();
+
+  register(input: AuthenticatedShardWorkloadRegistration): AuthenticatedShardWorkloadHandle {
+    const handle = Object.freeze({
+      kind: 'authenticated-shard-workload' as const,
+    }) as AuthenticatedShardWorkloadHandle;
+    this.records.set(handle, input);
+    return handle;
+  }
+
+  resolveAuthenticatedWorkload(
+    handle: AuthenticatedShardWorkloadHandle,
+  ): AuthenticatedShardWorkloadRegistration | undefined {
+    return this.records.get(handle);
+  }
+}
 
 const noopDock: ChannelOutboundDock = {
   id: 'test-dock',
@@ -32,10 +61,16 @@ interface Harness {
   resolved: Array<{ companionId: string; shardId?: string; payload: CompanionApprovalResolvedPayload }>;
 }
 
-function createHarness(labels: Record<string, string> = {
-  [PARENT_A]: 'Parent A',
-  [PARENT_B]: 'Parent B',
-}): Harness {
+function createHarness(
+  labels: Record<string, string> = {
+    [PARENT_A]: 'Parent A',
+    [PARENT_B]: 'Parent B',
+  },
+  options: {
+    capabilityTier?: 'nursery' | 'apprentice' | 'autonomous' | 'custom';
+    shardApprovalGrants?: ShardApprovalGrantAuthority;
+  } = {},
+): Harness {
   const eventBus = new EventBus();
   const requested: Harness['requested'] = [];
   const resolved: Harness['resolved'] = [];
@@ -55,12 +90,22 @@ function createHarness(labels: Record<string, string> = {
   });
 
   const service = createGatewayApprovalBoundaryService({
-    policyConfig: { workspacePath: '/workspace' },
+    policyConfig: {
+      workspacePath: '/workspace',
+      homeAssistant: {
+        enabled: true,
+        hubBaseUrl: 'http://hub.test.invalid',
+        tokenConfigured: true,
+      },
+    },
     ntfyNotifier: new GatewayNtfyNotifier(),
     discordAdapter: noopDock,
-    capabilityTierProvider: () => 'default',
+    capabilityTierProvider: () => options.capabilityTier ?? 'apprentice',
     eventBus,
     parentLabelProvider: (companionId) => labels[companionId],
+    ...(options.shardApprovalGrants
+      ? { shardApprovalGrants: options.shardApprovalGrants }
+      : {}),
     audit: async () => 1,
     auditComplete: async () => {},
     recordMethodSuccess: () => {},
@@ -119,6 +164,24 @@ describe('approval attribution — ordinary companion approvals (non-shard)', ()
     });
     expect(h.service.ownerOfConfirmation(entry.id)).toBe(PARENT_A);
   });
+
+  it('drops caller-supplied attribution when no canonical parent label resolves', async () => {
+    const h = createHarness({});
+    const entry = await h.service.requestExplicitApproval({
+      authenticatedCompanionId: PARENT_A,
+      request: baseRequest({
+        attribution: { parentId: PARENT_A, parentLabel: 'Spoofed' },
+      }),
+      execute: async () => 'ok',
+    });
+
+    expect(entry).not.toHaveProperty('attribution');
+    expect(h.service.listPendingConfirmations()).toEqual([
+      expect.not.objectContaining({ attribution: expect.anything() }),
+    ]);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(h.requested).toHaveLength(0);
+  });
 });
 
 describe('approval attribution — authenticated shard requests', () => {
@@ -172,6 +235,182 @@ describe('approval attribution — authenticated shard requests', () => {
     await vi.waitFor(() => expect(h.resolved).toHaveLength(1));
     expect(h.resolved[0].companionId).toBe(PARENT_A);
     expect(h.resolved[0].shardId).toBe('shard-a');
+  });
+});
+
+describe('approval-bound shard request grants', () => {
+  function createShardHarness(capabilityTier: 'apprentice' | 'autonomous' = 'apprentice') {
+    const registry = new TestWorkloadRegistry();
+    const grants = new ShardApprovalGrantAuthority({
+      workloadRegistry: registry,
+      now: () => Date.now(),
+      grantIdFactory: () => 'boundary-request-grant',
+    });
+    const derived = deriveShardCapabilityGrant({
+      companionId: PARENT_A,
+      tier: 'custom',
+      customTokens: [...CAPABILITY_TOKENS],
+    });
+    const workload = registry.register({
+      parentCompanionId: PARENT_A,
+      shardId: 'shard-instance-authenticated',
+      workloadGeneration: 'workload-generation-1',
+      shardLabel: 'Authenticated Shard',
+      capabilityGrant: derived,
+    });
+    return {
+      grants,
+      workload,
+      harness: createHarness({
+        [PARENT_A]: 'Parent A',
+        [PARENT_B]: 'Parent B',
+      }, { capabilityTier, shardApprovalGrants: grants }),
+    };
+  }
+
+  it('derives lineage from the authenticated workload handle and executes the queued tuple once', async () => {
+    const { harness: h, workload } = createShardHarness();
+    const execute = vi.fn(async () => 'ok');
+    const entry = await h.service.requestExplicitApproval({
+      authenticatedCompanionId: PARENT_A,
+      shardGrant: { workload },
+      request: baseRequest({
+        method: 'home_assistant.call_service',
+        action: 'home_assistant.control',
+        scope: 'site:test-zone/device:test-switch',
+        params: { command: 'toggle' },
+      }),
+      execute,
+    });
+
+    expect(entry.attribution).toEqual({
+      parentId: PARENT_A,
+      parentLabel: 'Parent A',
+      shardId: 'shard-instance-authenticated',
+      shardLabel: 'Authenticated Shard',
+    });
+    await expect(h.service.resolveConfirmation({
+      id: entry.id,
+      decision: 'approve',
+    }, { kind: 'companion', id: PARENT_A })).resolves.toMatchObject({
+      status: 'failed',
+      executed: false,
+    });
+    expect(execute).not.toHaveBeenCalled();
+    await expect(h.service.resolveConfirmation({
+      id: entry.id,
+      decision: 'approve',
+    }, OPERATOR)).resolves.toMatchObject({ status: 'approved', executed: true });
+    await expect(h.service.resolveConfirmation({
+      id: entry.id,
+      decision: 'approve',
+    })).resolves.toMatchObject({ status: 'not_found', executed: false });
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
+  it('rejects modified parameters without executing or leaving residual request authority', async () => {
+    const { harness: h, workload } = createShardHarness();
+    const execute = vi.fn(async () => 'ok');
+    const entry = await h.service.requestExplicitApproval({
+      authenticatedCompanionId: PARENT_A,
+      shardGrant: { workload },
+      request: baseRequest({
+        method: 'home_assistant.call_service',
+        action: 'home_assistant.control',
+        scope: 'site:test-zone/device:test-switch',
+        params: { command: 'toggle' },
+      }),
+      execute,
+    });
+
+    await expect(h.service.resolveConfirmation({
+      id: entry.id,
+      decision: 'modify',
+      modifiedParams: { command: 'unlock' },
+    }, OPERATOR)).resolves.toMatchObject({ status: 'failed', executed: false });
+    expect(execute).not.toHaveBeenCalled();
+    await expect(h.service.resolveConfirmation({
+      id: entry.id,
+      decision: 'approve',
+    })).resolves.toMatchObject({ status: 'not_found', executed: false });
+  });
+
+  it('does not let an autonomous parent auto-clear a shard-specific fence', async () => {
+    const { harness: h, workload } = createShardHarness('autonomous');
+    const handler = vi.fn(async () => ({ ok: true }));
+    const dispatch = h.service.gate({
+      method: 'home_assistant.call_service',
+      handler,
+      paramsSummary: () => ({}),
+      authenticatedCompanionId: () => PARENT_A,
+      approvalAction: 'home_assistant.control',
+      approvalScope: () => 'site:test-zone/device:test-switch',
+      shardApprovalGrant: () => ({ workload }),
+    });
+
+    await expect(dispatch({ command: 'toggle' })).rejects.toMatchObject({
+      code: GatewayErrors.NEEDS_APPROVAL,
+    });
+    expect(handler).not.toHaveBeenCalled();
+    const [pending] = h.service.listPendingConfirmations();
+    expect(pending.attribution?.shardId).toBe('shard-instance-authenticated');
+    await h.service.resolveConfirmation({ id: pending.id, decision: 'approve' }, OPERATOR);
+    expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('rejects parent, lineage, and handle mismatches before enqueue', async () => {
+    const { harness: h, workload } = createShardHarness();
+    const request = baseRequest({
+      method: 'home_assistant.call_service',
+      action: 'home_assistant.control',
+      scope: 'site:test-zone/device:test-switch',
+      params: { command: 'toggle' },
+    });
+
+    await expect(h.service.requestExplicitApproval({
+      authenticatedCompanionId: PARENT_B,
+      shardGrant: { workload },
+      request,
+      execute: async () => 'ok',
+    })).rejects.toThrow(/workload parent does not match/);
+
+    await expect(h.service.requestExplicitApproval({
+      authenticatedCompanionId: PARENT_A,
+      shardLineage: { shardId: 'spoofed-shard' },
+      shardGrant: { workload },
+      request,
+      execute: async () => 'ok',
+    })).rejects.toThrow(/attribution does not match the authenticated workload/);
+
+    await expect(h.service.requestExplicitApproval({
+      authenticatedCompanionId: PARENT_A,
+      shardGrant: {
+        workload: { kind: 'authenticated-shard-workload' } as typeof workload,
+      },
+      request,
+      execute: async () => 'ok',
+    })).rejects.toThrow(/missing, replaced, or revoked/);
+    expect(h.service.listPendingConfirmations()).toHaveLength(0);
+  });
+
+  it('preserves ordinary autonomous companion auto-clear behavior', async () => {
+    const h = createHarness({
+      [PARENT_A]: 'Parent A',
+      [PARENT_B]: 'Parent B',
+    }, { capabilityTier: 'autonomous' });
+    const handler = vi.fn(async () => ({ ok: true }));
+    const dispatch = h.service.gate({
+      method: 'image.create',
+      handler,
+      paramsSummary: () => ({}),
+      authenticatedCompanionId: () => PARENT_A,
+      approvalAction: 'image.create',
+      approvalScope: () => 'generated-image',
+    });
+
+    await expect(dispatch({ prompt: 'test image' })).resolves.toEqual({ ok: true });
+    expect(handler).toHaveBeenCalledOnce();
+    expect(h.service.listPendingConfirmations()).toHaveLength(0);
   });
 });
 

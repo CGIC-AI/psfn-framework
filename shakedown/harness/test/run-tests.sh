@@ -21,6 +21,8 @@ tests=(
   "tier-conformance-sweep.test.mjs" # D: 3-tier conformance sweep restores + counts ok:false
   "scorecard-coverage-artifacts.test.mjs" # external proof artifacts feed coverage
   "sprint10-catalog.test.mjs"  # S10 catalog metadata and seam inventory
+  "hardening-proofs.test.mjs"  # 65rk.9: model-lane attribution + backup encryption proofs fail closed
+  "hardening-catalog.test.mjs" # 65rk.9: July hardening catalog metadata and disposition boundary
   "sse-probe.test.mjs"         # first non-empty SSE delta precedes terminal
 )
 

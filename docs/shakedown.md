@@ -178,11 +178,11 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 
 ---
 
-## Appendix: Sprint 10 coverage plan
+## Appendix: coverage plan (Sprint 10 base + July hardening + Sprint 11 cognition)
 
-*(Replace this appendix each sprint. Basis: S10 epics `vinz`, `s10mc`, `s10mc.6` (ICP), `htm9` (CogSec), `w9hj` (PWA/hub), `2x37` (temporal), `mmo9` (perf), plus tool-stack and Garden UX overhauls.)*
+*(Replace this appendix each sprint. Basis: S10 epics `vinz`, `s10mc`, `s10mc.6` (ICP), `htm9` (CogSec), `w9hj` (PWA/hub), `2x37` (temporal), `mmo9` (perf), plus tool-stack and Garden UX overhauls; the July 15-16 hardening wave (`opl1` fleet auth/SSO/passkeys, `dut9`/`k8si`/`kk6k` DNLL owner migration, `mmo9.8`/`mmo9.6` voice streaming + barge-in, `mmo9.5` preemptable provider capacity, `mmo9.7.3` boundary spend accounting, `irzz`/`irzz.1` Garden UX wave 2, `q9ra` backup GFS retention); and the Sprint 11 cognition wave (`k4rf`, `e0ey`, `76rn`, `cy82`, `4yb3`, `jpvd`, `ihfp`, `7c05`, `m58`).)*
 
-### In scope — new S10 surfaces on top of the S8/S9 base catalog
+### In scope — S10 base catalog plus the July hardening and Sprint 11 cognition waves
 
 | Surface | Lane / tier | How exercised | Notes |
 | --- | --- | --- | --- |
@@ -191,8 +191,8 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 | World tool (perceive/list) + perception ingest | local (mock HA, synthetic telemetry to `/v1/telemetry/ingest`) | harness | `world.control` staged off by default |
 | HA world control (staged on) | kube only, autonomous | partner walk + gateway audit proof | trust-gated; real HA |
 | Hub identity ↔ contact enrollment, presence follow | local | harness + Garden | fail-closed claim→contact |
-| Multi-companion substrate (mux, tenancy, per-companion Gardens, fleet page, per-companion Discord) | kube + local supervisor, needs support companions | crossover-isolation harness: concurrent colliding requests, zero crossover alarms | flag-off/flag-on validation (`s10f8`) is the entry gate |
-| ICP autonomy (permits, target-channel turns, fatigue lane, USD breaker) | kube, support companions | partner sessions + harness continuity checks | epic closed 2026-07-15; Discord voice under MC fails closed (`s10f1`) |
+| Multi-companion substrate (mux, tenancy, per-companion Gardens, fleet page, per-companion Discord) | kube + local supervisor, needs support companions | crossover-isolation harness: concurrent colliding requests, zero crossover alarms | flag-off/flag-on validation (`psfn-framework-s10mc.8`, closed) is the entry gate |
+| ICP autonomy (permits, target-channel turns, fatigue lane, USD breaker) | kube, support companions | partner sessions + harness continuity checks | epic closed 2026-07-15; Discord voice under MC still fails closed, tracked by the open `psfn-framework-s10d6` voice rewrite |
 | Shared-world wiki | multi-companion | "toaster test": companion A learns a fact, companion B reads it later | |
 | CogSec intake firewall (L1/L1.5 local; L2/L3 gateway) | local + kube | tainted-content probes per channel; quarantine → Garden queue → release flywheel | firewall notices excluded from emotion/memory — verify |
 | Satellite hub + event relay + touch stimuli + PWA | kube | hub SSE, approvals, touch rate limits; PWA needs first-class channel (`8ora`, open P1) | PWA satellite path is hub-only |
@@ -200,6 +200,23 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 | Performance (`mmo9`) | local + kube | SSE first-chunk, background supervisor, admission controller; voice cancellation kube; compaction cliff Pi-class | epic still open — coordinate before certifying |
 | Tool-stack audit (`generate_image` rename, core/extended re-tiering) | local, all tiers | tool-conformance sweep per tier | watch `fpiu` attachment-claim bug |
 | Garden UX overhaul | both | behavioral sweep over new SPA routes | |
+| July hardening — Fleet auth, SSO, and passkey administration (opl1) | kube + local, autonomous | SSO subject-scoped admin via Garden partner walk; WebAuthn passkey register/authenticate ceremony run by hand | operator-eyes; passkey ceremony cannot run headless |
+| July hardening — DNLL owner migration upgrade path (dut9/k8si/kk6k) | own staged upgrade session | pre-upgrade owner snapshot → ship RC over an existing deployment → assert scheduler/caretaker owner migration; never a fresh-bootstrap round rider | staged session — fresh-bootstrap lanes never execute migration code |
+| July hardening — Voice reply streaming and barge-in (mmo9.8/mmo9.6) | kube, autonomous | operator voice session: committed-segment VoiceReplyStream plus preemptive interrupt/cancel | operator-eyes; voice ceremony not scriptable headless |
+| July hardening — Preemptable provider capacity admission (mmo9.5) | local + Pi-class, spot check | partner free-play load drives the admission controller to preempt under capacity pressure; observed via perf telemetry | needs real load; Pi-class blind spot |
+| July hardening — Boundary spend accounting and model-lane routing (mmo9.7.3) | local + kube, all tiers | harness: `model_usage_events` slot_key cross-checked against models.json owner slots per lane | config-resolved model ids, never hardcoded |
+| July hardening — Garden UX wave 2 (irzz) | both | Garden behavioral sweep over the reworked settings, IA, and navigation routes | operator-eyes UX; behavior, not HTTP 200s |
+| July hardening — Settings save preserves backup.json encryption block (irzz.1) | local, all tiers | harness: snapshot backup.json, drive a unified settings save, assert the required encryption block survives | irzz.1 regression shape |
+| July hardening — Backup GFS retention (q9ra) | local | `verify:backup-restore` floor plus operator check of grandfather-father-son pruning against backup.json retention counts | retention pruning verified out-of-round |
+| Sprint 11 cognition — Group-chat stabilization and scoped appraisal (k4rf) | local + kube, autonomous | partner multi-participant group session; observe stable turn pipeline and scoped appraisal | partner walk |
+| Sprint 11 cognition — PromptPlan single assembly and caching (e0ey) | local + kube | guided walk asserts one PromptPlan artifact and cache reuse in TurnRecord observability across a repeat turn | standalone probe deferred; asserted in the walk |
+| Sprint 11 cognition — Context envelope channel, relationship, and trust semantics (76rn) | local + kube | guided walk asserts the context envelope sections vary by channel, relationship, and trust in the persisted TurnRecord | partner walk |
+| Sprint 11 cognition — Social graph minimum wiring (cy82) | multi-companion | partner multi-companion sessions populate the social graph; Garden inspection | partner walk |
+| Sprint 11 cognition — Episodic gating, scheduler-owned sleeptime, and /subsystem-health (4yb3) | local + kube | free-play block observes episodic gating and scheduler-owned sleeptime; GET /subsystem-health behavioral check | operator-eyes |
+| Sprint 11 cognition — Subprocess persona voice and per-participant orientation (jpvd) | kube, autonomous | operator voice session: subprocess persona voices and per-participant orientation | operator-eyes; voice ceremony |
+| Sprint 11 cognition — Temporal continuity and proactive wake-up (ihfp) | local + kube live | live next-morning wake-up acceptance; proactive turn observed | operator-eyes; live next-morning window |
+| Sprint 11 cognition — Inner-life free-time and wiki RAG flows (7c05) | kube, autonomous | free-play autonomy block plus the toaster/wiki RAG read-back test | partner walk |
+| Sprint 11 cognition — W1 memory schema L0.1 and projection layer (m58) | local + kube | guided walk asserts L0.1 projection via Garden memory search and episodic rendering | operator-eyes |
 
 ### Explicitly out of scope for S10
 
@@ -209,7 +226,7 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 
 ### Known open items to re-check at round open
 
-`s10f8` (MC flag validation — entry gate), `s10mc.8` (live two-companion demo), `mmo9` remainder + `9syj`, `vinz.10/.14/.19/.26`, `8ora` (PWA channel), `2x37` live acceptance, live bugs `fpiu`/`fkyu`/`ervg`/`sm9l`/`eb14`.
+`psfn-framework-s10mc.8` (MC substrate validation entry gate + live two-companion demo, closed), `mmo9` remainder + `9syj`, `vinz.10/.14/.19/.26`, `8ora` (PWA channel), `2x37` live acceptance, live bugs `fpiu`/`fkyu`/`ervg`/`sm9l`/`eb14`.
 
 ---
 

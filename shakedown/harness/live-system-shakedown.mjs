@@ -38,6 +38,7 @@ import {
 import { runHostCleanupSteps } from './lib/host-cleanup.mjs';
 import { validatePersistedProof } from './lib/persisted-proofs.mjs';
 import { buildSprint10Cases } from './cases/sprint10.mjs';
+import { buildHardeningCases } from './cases/hardening.mjs';
 
 const CONFIG = (() => {
   try {
@@ -3191,6 +3192,20 @@ function buildCases(ctx) {
   const coverage = [
     ...buildCoverageCases(ctx),
     ...buildSprint10Cases(ctx, {
+      apiBase: API_BASE,
+      apiUrl: API_URL,
+      apiKey: API_KEY,
+      adminBase: ADMIN_BASE,
+      companionDataDir: COMPANION_DATA_DIR,
+      systemDataDir: SYSTEM_DATA_DIR,
+      fetchJson,
+      pgAll,
+      pgScalar,
+      readJsonIfExists,
+      readJsonl,
+      waitForTurnRecord: waitForCaseTurnRecord,
+    }),
+    ...buildHardeningCases(ctx, {
       apiBase: API_BASE,
       apiUrl: API_URL,
       apiKey: API_KEY,

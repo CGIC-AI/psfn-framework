@@ -25,6 +25,8 @@ import { SessionManager } from '../../core/session/manager.js';
 import type { ShardExecutionPort } from './port.js';
 import { chargeSurface, getRunChargeContext, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
 import type {
+  ShardConfigurationMutationResult,
+  ShardConfigurationSnapshot,
   ShardConfig,
   ShardCapabilityGrantEvidence,
   ShardHealthState,
@@ -76,6 +78,11 @@ import {
   toShardCapabilityGrantEvidence,
   type ParentCapabilityGrantSnapshotProvider,
 } from './launch-capabilities.js';
+import type { ChargePolicyConfig } from '../../shared/contracts/charge-policy.js';
+import {
+  createShardConfigurationControl,
+  ShardConfigurationRegistry,
+} from './configuration-snapshot.js';
 
 const log = createComponentLogger('ShardManager');
 const DEFAULT_MAX_CONCURRENT = 5;
@@ -195,6 +202,7 @@ export interface ActiveShard {
   capabilities: string[];
   requiredCapabilities: string[];
   capabilityGrant: ShardCapabilityGrantEvidence;
+  lineage: ShardResult['lineage'];
   failureReason?: string;
 }
 
@@ -211,6 +219,7 @@ export class ShardManager implements ShardExecutionPort {
   private heartbeatDisconnectAfterMs: number;
   private activeShards = new Map<string, ActiveShard>();
   private activeShardChannels = new Map<string, Set<string>>();
+  private configurationRegistry: ShardConfigurationRegistry;
   private foldReviewController: ShardFoldReviewController | null;
 
   constructor(deps: ShardManagerDeps) {
@@ -231,6 +240,10 @@ export class ShardManager implements ShardExecutionPort {
       this.heartbeatStaleAfterMs * DEFAULT_SHARD_HEARTBEAT_DISCONNECT_MULTIPLIER,
     );
     this.auditTrail = deps.auditTrail ?? null;
+    this.configurationRegistry = new ShardConfigurationRegistry({
+      liveParentConfig: () => this.deps.config,
+      auditTrail: this.auditTrail,
+    });
     this.artifactReturnPort = deps.artifactReturnPort ?? createArtifactReturnPort();
     this.satellitePresencePort = deps.satellitePresencePort ?? createActiveEmanationSatellitePresencePort();
     this.contextPackHelper = new ShardContextPackHelper({
@@ -269,7 +282,9 @@ export class ShardManager implements ShardExecutionPort {
 
   async spawn(shardConfig: ShardConfig): Promise<ShardResult> {
     const activeChargeContext = getRunChargeContext();
-    const chargePolicy = this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy;
+    const chargePolicy = cloneShardChargePolicy(
+      this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy,
+    );
     if (!activeChargeContext && chargePolicy) {
       return runWithChargeContext({
         chargePolicy,
@@ -332,6 +347,7 @@ export class ShardManager implements ShardExecutionPort {
         lineage,
         shardRuntimeConfig,
         capabilityGrant,
+        chargePolicy,
         shardPostgres,
       )
       : this.executeShard(
@@ -342,6 +358,7 @@ export class ShardManager implements ShardExecutionPort {
         lineage,
         shardRuntimeConfig,
         capabilityGrant,
+        chargePolicy,
       );
     if (chargePolicy) {
       return runWithChargeContext({
@@ -357,7 +374,9 @@ export class ShardManager implements ShardExecutionPort {
 
   async delegateSatelliteSession(request: SatelliteDelegationRequest): Promise<ShardResult> {
     const activeChargeContext = getRunChargeContext();
-    const chargePolicy = this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy;
+    const chargePolicy = cloneShardChargePolicy(
+      this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy,
+    );
     if (!activeChargeContext && chargePolicy) {
       return runWithChargeContext({
         chargePolicy,
@@ -434,6 +453,7 @@ export class ShardManager implements ShardExecutionPort {
         lineage,
         shardRuntimeConfig,
         capabilityGrant,
+        chargePolicy,
         shardPostgres,
       )
       : this.executeShard(
@@ -444,6 +464,7 @@ export class ShardManager implements ShardExecutionPort {
         lineage,
         shardRuntimeConfig,
         capabilityGrant,
+        chargePolicy,
       );
 
     try {
@@ -493,6 +514,7 @@ export class ShardManager implements ShardExecutionPort {
     lineage: ShardResult['lineage'],
     runtimeConfig: SubstrateConfig,
     capabilityGrant: DerivedShardCapabilityGrant,
+    shardChargePolicy: ChargePolicyConfig | null,
     shardPostgres?: PostgresShardSchemaBinding,
   ): Promise<ShardResult> {
     this.refreshShardHealth();
@@ -536,7 +558,18 @@ export class ShardManager implements ShardExecutionPort {
       heartbeatStaleAfterMs,
     );
     const capabilityGrantEvidence = toShardCapabilityGrantEvidence(capabilityGrant);
-
+    const configurationControl = createShardConfigurationControl({
+      shardId,
+      parentCompanionId: lineage.companionProvenance.parentCompanionId,
+      lifecycleState: 'registering',
+      health: 'healthy',
+      capturedAt: startTime,
+      maxTurns,
+      capabilityGrant: capabilityGrantEvidence,
+      lineage,
+      config: this.deps.config,
+      parentSystemPrompt: this.deps.parentSystemPrompt,
+    });
     chargeSurface('shardLaunch', {
       details: {
         shardId,
@@ -546,6 +579,7 @@ export class ShardManager implements ShardExecutionPort {
       },
     });
 
+    this.configurationRegistry.register(configurationControl, shardChargePolicy);
     this.activeCount++;
     this.activeShards.set(shardId, {
       id: shardId,
@@ -563,6 +597,7 @@ export class ShardManager implements ShardExecutionPort {
       capabilities,
       requiredCapabilities,
       capabilityGrant: capabilityGrantEvidence,
+      lineage,
     });
     this.registerActiveShardChannel(channelId, shardId);
     this.auditTrail?.append('shard.lifecycle.transition', {
@@ -655,14 +690,33 @@ export class ShardManager implements ShardExecutionPort {
       let turns = 0;
       let artifactReturn: ArtifactReturnBatch | null = null;
 
-      for (let turn = 0; turn < maxTurns; turn++) {
+      for (
+        let turn = 0;
+        turn < this.configurationRegistry.effectiveWorkerBudget(shardId).maxTurns;
+        turn++
+      ) {
         this.refreshShardHealth();
         this.assertShardRoutable(shardId, requiredCapabilities);
         this.touchShardHeartbeat(shardId);
-        const turnMessage = turn === 0 ? baseMessage : {
+        const effectiveConfiguration = this.configurationRegistry.effectiveValues(shardId);
+        const turnMessage: SubstrateMessage = {
           ...baseMessage,
-          id: `${shardId}-turn-${turn}`,
-          content: lastContent,
+          ...(turn > 0 ? {
+            id: `${shardId}-turn-${turn}`,
+            content: lastContent,
+          } : {}),
+          routing: {
+            ...baseMessage.routing,
+            modelOverride: {
+              provider: effectiveConfiguration.model.provider,
+              model: effectiveConfiguration.model.model,
+              maxTokens: effectiveConfiguration.workerBudget.maxOutputTokens,
+              ...(effectiveConfiguration.model.contextWindow !== undefined
+                ? { contextWindow: effectiveConfiguration.model.contextWindow }
+                : {}),
+              purpose: 'chat',
+            },
+          },
         };
 
         const response = await agentLoop.handleMessage(turnMessage);
@@ -737,7 +791,9 @@ export class ShardManager implements ShardExecutionPort {
           : null;
         const autoCompactionEligible = recordedTurn?.observability
           ?.snapshot?.sessionContext?.autoCompactionEligible === true;
-        if (turn + 1 < maxTurns && autoCompactionEligible) {
+        const effectiveMaxTurns = this.configurationRegistry
+          .effectiveWorkerBudgetIfAvailable(shardId)?.maxTurns ?? turn + 1;
+        if (turn + 1 < effectiveMaxTurns && autoCompactionEligible) {
           await sessionManager.scheduleAutoCompactionBetweenTurns({
             channelId,
             systemPrompt,
@@ -749,7 +805,7 @@ export class ShardManager implements ShardExecutionPort {
 
         // For a one-turn shard, we break after the first turn.
         // Multi-turn shards continue only if the response suggests more work.
-        if (turn === 0 && maxTurns === 1) break;
+        if (turn === 0 && effectiveMaxTurns === 1) break;
       }
 
       this.transitionShardState(shardId, 'offline', 'completed');
@@ -866,7 +922,26 @@ export class ShardManager implements ShardExecutionPort {
       capabilities: [...shard.capabilities],
       requiredCapabilities: [...shard.requiredCapabilities],
       capabilityGrant: cloneShardCapabilityGrantEvidence(shard.capabilityGrant),
+      lineage: cloneShardLineage(shard.lineage),
     }));
+  }
+
+  getShardConfigurationSnapshot(
+    parentCompanionId: string,
+    shardId: string,
+  ): ShardConfigurationSnapshot | null {
+    this.refreshShardHealth();
+    return this.configurationRegistry.getSnapshot(parentCompanionId, shardId);
+  }
+
+  updateShardConfigurationOverrides(input: {
+    parentCompanionId: string;
+    shardId: string;
+    actor: string;
+    override: unknown;
+  }): ShardConfigurationMutationResult {
+    this.refreshShardHealth();
+    return this.configurationRegistry.update(input);
   }
 
   private async emitShardBlockedHandoff(input: {
@@ -1135,6 +1210,7 @@ export class ShardManager implements ShardExecutionPort {
 
   private releaseActiveShard(shardId: string, channelId: string): void {
     const deleted = this.activeShards.delete(shardId);
+    this.configurationRegistry.release(shardId);
     this.unregisterActiveShardChannel(channelId, shardId);
     if (!deleted) {
       return;
@@ -1195,6 +1271,7 @@ export class ShardManager implements ShardExecutionPort {
       health: shard.health,
       ...(failureReason ? { failureReason } : {}),
     });
+    this.configurationRegistry.syncLifecycle(shardId, shard.state, shard.health);
   }
 
   private installAuditHooks(): void {
@@ -1368,4 +1445,24 @@ function normalizeHeartbeatDisconnectAfterMs(
     return staleAfterMs + 1;
   }
   return normalized;
+}
+
+function cloneShardChargePolicy(
+  chargePolicy: ChargePolicyConfig | undefined,
+): ChargePolicyConfig | null {
+  if (!chargePolicy) return null;
+  return {
+    ...chargePolicy,
+    runChargeQuotaByLane: { ...chargePolicy.runChargeQuotaByLane },
+  };
+}
+
+function cloneShardLineage(lineage: ShardResult['lineage']): ShardResult['lineage'] {
+  return {
+    ...lineage,
+    companionProvenance: { ...lineage.companionProvenance },
+    sourceMessage: { ...lineage.sourceMessage },
+    ...(lineage.sourceContext ? { sourceContext: { ...lineage.sourceContext } } : {}),
+    ...(lineage.satelliteRouting ? { satelliteRouting: { ...lineage.satelliteRouting } } : {}),
+  };
 }

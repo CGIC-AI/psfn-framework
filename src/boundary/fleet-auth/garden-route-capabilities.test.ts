@@ -138,6 +138,30 @@ describe('Garden route capability catalogue', () => {
       action: 'privacy.break_glass',
       requirements: { assurance: 'oauth', confirmation: 'explicit' },
     });
+    expect(resolveGardenRouteCapability(
+      'GET',
+      '/api/admin/shards/shard-a/configuration',
+    )?.capability).toMatchObject({
+      body: { mode: 'forbidden' },
+      authorization: {
+        action: 'audit.read',
+        baseRole: 'admin',
+      },
+    });
+    expect(resolveGardenRouteCapability(
+      'PATCH',
+      '/api/admin/shards/shard-a/configuration',
+    )?.capability).toMatchObject({
+      body: { mode: 'required' },
+      authorization: {
+        action: 'settings.write',
+        baseRole: 'admin',
+        requirements: {
+          assurance: 'webauthn_uv',
+          confirmation: 'explicit',
+        },
+      },
+    });
   });
 
   it('fails construction for an active route without an exact catalogue declaration', () => {

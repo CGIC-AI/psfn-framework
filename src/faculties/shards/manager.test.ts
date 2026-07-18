@@ -2580,6 +2580,7 @@ describe('ShardManager', () => {
           ownerVersion: expect.any(String),
         }),
       }),
+      null,
     );
   });
 

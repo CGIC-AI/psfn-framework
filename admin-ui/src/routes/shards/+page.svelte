@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { base } from '$app/paths';
   import {
     getEvents,
     isConnected,
@@ -7,6 +8,10 @@
     disconnectTelemetry,
   } from '$lib/stores/telemetry.svelte';
   import { getDashboard } from '$lib/api/endpoints/dashboard';
+  import { listParentShards } from '$lib/api/endpoints/shards';
+  import type {
+    AdminShardFoldReviewListData,
+  } from '../../../../src/operator/garden/services/types/shards.js';
 
   // ── Types ──
   interface ShardView {
@@ -22,6 +27,8 @@
   let dashboardShardCount = $state<number | null>(null);
   let dashboardLoading = $state(true);
   let dashboardError = $state('');
+  let parentShardData = $state<AdminShardFoldReviewListData | null>(null);
+  let parentShardError = $state('');
 
   // ── Elapsed time ticker ──
   let now = $state(Date.now());
@@ -109,12 +116,23 @@
     tickInterval = setInterval(() => { now = Date.now(); }, 1000);
 
     try {
-      const data = await getDashboard();
-      dashboardShardCount = data.stats.activeShards;
+      const [dashboard, shardData] = await Promise.all([
+        getDashboard(),
+        listParentShards(),
+      ]);
+      dashboardShardCount = dashboard.stats.activeShards;
+      parentShardData = shardData;
     } catch (e) {
       dashboardError = e instanceof Error
         ? `Dashboard unavailable: ${e.message}`
         : 'Dashboard unavailable: using telemetry-only shard counts.';
+      try {
+        parentShardData = await listParentShards();
+      } catch (shardError) {
+        parentShardError = shardError instanceof Error
+          ? shardError.message
+          : 'Parent-scoped shard list unavailable';
+      }
     } finally {
       dashboardLoading = false;
     }
@@ -231,6 +249,72 @@
       </button>
     </div>
   {/if}
+
+  <section class="card-garden p-5" aria-labelledby="parent-shard-tree-heading">
+    <div class="flex items-start justify-between gap-3 mb-4">
+      <div>
+        <p class="text-sm uppercase tracking-wide text-shadow-500">Parent companion</p>
+        <h2 id="parent-shard-tree-heading" class="text-lg font-serif font-semibold text-shadow-900">
+          Shards
+        </h2>
+        <p class="text-sm text-shadow-600 mt-1">
+          Each shard remains nested under this companion. Open an active shard for its inherited,
+          override, and effective runtime snapshot.
+        </p>
+      </div>
+      <span class="rounded-full bg-bark-100 px-3 py-1 text-sm text-shadow-700">
+        {parentShardData?.shards.length ?? 0} active
+      </span>
+    </div>
+
+    {#if parentShardError}
+      <p class="rounded-lg border border-wilt-200 bg-wilt-50 p-3 text-sm text-wilt-700">
+        {parentShardError}
+      </p>
+    {:else if parentShardData === null}
+      <p class="text-sm text-shadow-600">Loading parent-owned shards...</p>
+    {:else if parentShardData.shards.length === 0}
+      <p class="rounded-lg border border-bark-200 bg-bark-50 p-4 text-sm text-shadow-600">
+        No mutable shard subviews are active. Completed shard fold reviews remain listed below.
+      </p>
+    {:else}
+      <div class="space-y-2">
+        {#each parentShardData.shards as shard (shard.shardId)}
+          <a
+            href={`${base}/shards/${encodeURIComponent(shard.shardId)}`}
+            class="block rounded-xl border border-bark-200 p-4 transition-colors hover:border-gold-400 hover:bg-gold-50"
+          >
+            <div class="flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <p class="font-medium text-shadow-900 truncate">{shard.name}</p>
+                <p class="text-sm text-shadow-600 truncate">{shard.task}</p>
+              </div>
+              <span class="shrink-0 rounded-full bg-moss-100 px-2.5 py-1 text-sm text-moss-700">
+                {shard.state} / {shard.health}
+              </span>
+            </div>
+          </a>
+        {/each}
+      </div>
+    {/if}
+
+    {#if parentShardData && parentShardData.reviews.length > 0}
+      <div class="mt-5 border-t border-bark-200 pt-4">
+        <h3 class="text-sm font-medium uppercase tracking-wide text-shadow-600">Fold review lineage</h3>
+        <div class="mt-2 space-y-2">
+          {#each parentShardData.reviews as review (review.shardId)}
+            <a
+              href={`${base}/shards/${encodeURIComponent(review.shardId)}`}
+              class="flex items-center justify-between gap-3 rounded-lg bg-bark-50 px-3 py-2 text-sm hover:bg-bark-100"
+            >
+              <span class="truncate text-shadow-800">{review.task}</span>
+              <span class="shrink-0 text-shadow-600">{review.reviewState}</span>
+            </a>
+          {/each}
+        </div>
+      </div>
+    {/if}
+  </section>
 
   <!-- No connection notice -->
   {#if !isConnected() && shards.length === 0}

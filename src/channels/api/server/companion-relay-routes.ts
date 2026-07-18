@@ -47,8 +47,14 @@ const ARTIFACT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,199}$/u;
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$/u;
 
 export interface CompanionApprovalDecisionPort {
-  resolve(params: { id: string; decision: 'approve' | 'deny' }): Promise<ConfirmationResolveResult>;
+  resolve(params: {
+    id: string;
+    decision: 'approve' | 'deny';
+    companionId: string;
+  }): Promise<ConfirmationResolveResult>;
   findHistory(id: string): ConfirmationQueueHistoryEntry | null;
+  /** Immutable stored parent owner for pending or resolved approvals. */
+  ownerOf(id: string): string | undefined;
 }
 
 export interface CompanionRelayAuditEntry {
@@ -317,6 +323,33 @@ export async function handleCompanionApprovalDecision(
     return;
   }
 
+  const storedOwner = ctx.deps.approvals.ownerOf(approvalId);
+  if (storedOwner !== ctx.companionId) {
+    try {
+      await ctx.deps.audit({
+        method: 'companion.approval.decision',
+        decision: 'DENY',
+        params: {
+          approvalId,
+          decision: decisionRequest.decision,
+          satelliteId: actor.value.satellite.satelliteId,
+          endpointId: actor.value.endpoint.endpointId,
+          deviceId: decisionRequest.deviceId,
+          reason: 'approval_owner_mismatch',
+        },
+      });
+    } catch (error) {
+      log.error('Failed to audit owner-mismatched companion approval decision', {
+        approvalId,
+        error: toErrorMessage(error),
+      });
+      sendApiError(ctx.res, 503, 'audit_unavailable', 'Approval decision could not be audited');
+      return;
+    }
+    sendApiError(ctx.res, 404, 'approval_not_found', 'Unknown approval id');
+    return;
+  }
+
   // Fail closed: the decision executes only after the actor attribution is
   // durably audited.
   try {
@@ -343,6 +376,7 @@ export async function handleCompanionApprovalDecision(
   const result = await ctx.deps.approvals.resolve({
     id: approvalId,
     decision: decisionRequest.decision,
+    companionId: ctx.companionId,
   });
 
   switch (result.status) {

@@ -118,6 +118,10 @@ describe('approval attribution — ordinary companion approvals (non-shard)', ()
       execute: async () => 'ok',
     });
     expect(h.service.ownerOfConfirmation(entry.id)).toBe(PARENT_A);
+    expect(entry.approvalOwner).toEqual({ companionId: PARENT_A });
+
+    await h.service.resolveConfirmation({ id: entry.id, decision: 'deny' });
+    expect(h.service.ownerOfConfirmation(entry.id)).toBe(PARENT_A);
   });
 });
 
@@ -144,6 +148,10 @@ describe('approval attribution — authenticated shard requests', () => {
     // The queued record carries immutable shard provenance too.
     const pending = h.service.listPendingConfirmations().find((p) => p.id === entry.id);
     expect(pending?.attribution?.shardId).toBe('shard-instance-1');
+    expect(pending?.approvalOwner).toEqual({
+      companionId: PARENT_A,
+      shardId: 'shard-instance-1',
+    });
 
     await h.service.resolveConfirmation({ id: entry.id, decision: 'approve' });
     await vi.waitFor(() => expect(h.resolved).toHaveLength(1));
@@ -172,6 +180,46 @@ describe('approval attribution — authenticated shard requests', () => {
     await vi.waitFor(() => expect(h.resolved).toHaveLength(1));
     expect(h.resolved[0].companionId).toBe(PARENT_A);
     expect(h.resolved[0].shardId).toBe('shard-a');
+  });
+
+  it('scopes simultaneous parent queues and denies leaked-id resolution by stored owner', async () => {
+    const h = createHarness();
+    const executeA = vi.fn(async () => 'a');
+    const executeB = vi.fn(async () => 'b');
+    const a = await h.service.requestExplicitApproval({
+      authenticatedCompanionId: PARENT_A,
+      shardLineage: { shardId: 'shard-a' },
+      request: baseRequest({ scope: '/workspace/a.txt' }),
+      execute: executeA,
+    });
+    const b = await h.service.requestExplicitApproval({
+      authenticatedCompanionId: PARENT_B,
+      shardLineage: { shardId: 'shard-b' },
+      request: baseRequest({ scope: '/workspace/b.txt' }),
+      execute: executeB,
+    });
+
+    expect(h.service.listPendingConfirmationsForOwner(PARENT_A).map(entry => entry.id))
+      .toEqual([a.id]);
+    expect(h.service.listPendingConfirmationsForOwner(PARENT_B).map(entry => entry.id))
+      .toEqual([b.id]);
+
+    await expect(h.service.resolveConfirmationForOwner(
+      PARENT_B,
+      { id: a.id, decision: 'approve' },
+      { kind: 'operator', id: 'parent-b-operator' },
+    )).resolves.toMatchObject({ id: a.id, status: 'not_found', executed: false });
+    expect(executeA).not.toHaveBeenCalled();
+    expect(h.service.listPendingConfirmationsForOwner(PARENT_A).map(entry => entry.id))
+      .toEqual([a.id]);
+
+    await expect(h.service.resolveConfirmationForOwner(
+      PARENT_A,
+      { id: a.id, decision: 'approve' },
+      { kind: 'operator', id: 'parent-a-operator' },
+    )).resolves.toMatchObject({ id: a.id, status: 'approved', executed: true });
+    expect(executeA).toHaveBeenCalledOnce();
+    expect(executeB).not.toHaveBeenCalled();
   });
 });
 
@@ -226,14 +274,31 @@ describe('approval attribution — fail-closed lineage refusal BEFORE enqueue', 
     expect(h.service.listPendingConfirmations()).toHaveLength(0);
   });
 
-  it('refuses a shard request with no resolvable parent label rather than emitting unlabeled', async () => {
+  it('uses the authenticated stable id when an ordinary companion has no cosmetic label', async () => {
     const h = createHarness({}); // no labels resolvable
-    await expect(h.service.requestExplicitApproval({
+    const entry = await h.service.requestExplicitApproval({
       authenticatedCompanionId: PARENT_A,
-      shardLineage: { shardId: 'shard-a' },
       request: baseRequest(),
       execute: async () => 'ok',
-    })).rejects.toThrow(/no resolvable parent companion label/);
-    expect(h.service.listPendingConfirmations()).toHaveLength(0);
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(entry.attribution).toEqual({
+      parentId: PARENT_A,
+      parentLabel: PARENT_A,
+    });
+    expect(h.service.listPendingConfirmationsForOwner(PARENT_A)).toHaveLength(1);
+    expect(h.requested).toEqual([
+      expect.objectContaining({
+        companionId: PARENT_A,
+        payload: expect.objectContaining({
+          id: entry.id,
+          attribution: {
+            parentId: PARENT_A,
+            parentLabel: PARENT_A,
+          },
+        }),
+      }),
+    ]);
   });
 });

@@ -7,6 +7,7 @@ import type {
   ConfirmationQueueHistoryEntry,
   ConfirmationQueueRequest,
   ConfirmationExecutionContext,
+  ConfirmationApprovalOwner,
   ConfirmationResolverIdentity,
 } from '../../system/capabilities/confirmation-queue.js';
 import {
@@ -82,6 +83,8 @@ export interface ApprovalBoundaryGateOptions<P, R> {
 export interface ApprovalBoundaryService {
   listPendingConfirmations(): ConfirmationQueueEntry[];
   listConfirmationHistory(): ConfirmationQueueHistoryEntry[];
+  /** Pending entries owned by exactly one authenticated parent companion. */
+  listPendingConfirmationsForOwner(companionId: string): ConfirmationQueueEntry[];
   /**
    * Read-only owner lookup for a pending/resolved confirmation id (companion
    * roster wire). Returns the authenticated companion that enqueued the
@@ -90,6 +93,27 @@ export interface ApprovalBoundaryService {
    * the entry (fail closed, never mis-attributed).
    */
   ownerOfConfirmation(id: string): string | undefined;
+  /** Immutable parent/shard binding captured from authenticated enqueue lineage. */
+  approvalOwnerOfConfirmation(id: string): ConfirmationApprovalOwner | undefined;
+  /**
+   * Resolve only when the pending record's immutable stored owner matches.
+   * Mismatches are non-enumerating `not_found` outcomes and leave the request
+   * pending.
+   */
+  resolveConfirmationForOwner(
+    companionId: string,
+    params: {
+      id: string;
+      decision: 'approve' | 'deny' | 'modify';
+      modifiedParams?: Record<string, unknown>;
+    },
+    resolver?: ConfirmationResolverIdentity,
+  ): Promise<{
+    id: string;
+    status: 'approved' | 'denied' | 'modified' | 'expired' | 'failed' | 'not_found';
+    message: string;
+    executed: boolean;
+  }>;
   resolveConfirmation(params: { id: string; decision: 'approve' | 'deny' | 'modify'; modifiedParams?: Record<string, unknown> }, resolver?: ConfirmationResolverIdentity): Promise<{
     id: string;
     status: 'approved' | 'denied' | 'modified' | 'expired' | 'failed' | 'not_found';
@@ -122,18 +146,12 @@ const approvalLog = createComponentLogger('ApprovalBoundary');
 export function createGatewayApprovalBoundaryService(
   options: ApprovalBoundaryOptions,
 ): ApprovalBoundaryService {
-  // Immutable owner attribution captured at enqueue, keyed by confirmation id.
-  // `companionId` is ALWAYS the authenticated parent owner (routing key);
-  // `shardId` is optional authenticated shard provenance. The resolved event
-  // reuses this captured attribution — a leaked/guessed approval id can never
-  // re-attribute a request (SHARD_APPROVALS §Approval Event Contract).
-  const confirmationOwners = new Map<string, { companionId: string; shardId?: string }>();
-  let enqueueOwner: string | undefined;
   const confirmationQueue = new ConfirmationQueue({
     defaultExpiryMs: options.confirmation?.expiryMs ?? DEFAULT_CONFIRMATION_EXPIRY_MS,
     observer: {
       onEnqueued: (entry) => {
-        if (!enqueueOwner) {
+        const owner = entry.approvalOwner;
+        if (!owner) {
           approvalLog.error('Refusing to emit ownerless companion.approval.requested', {
             id: entry.id,
           });
@@ -150,20 +168,16 @@ export function createGatewayApprovalBoundaryService(
           });
           return;
         }
-        if (attribution.parentId !== enqueueOwner) {
+        if (attribution.parentId !== owner.companionId
+          || attribution.shardId !== owner.shardId) {
           approvalLog.error('Refusing to emit companion.approval.requested with mismatched attribution parent', {
             id: entry.id,
           });
           return;
         }
-        const shardId = attribution.shardId;
-        confirmationOwners.set(entry.id, {
-          companionId: enqueueOwner,
-          ...(shardId !== undefined ? { shardId } : {}),
-        });
         options.eventBus.emit('companion.approval.requested', {
-          companionId: enqueueOwner,
-          ...(shardId !== undefined ? { shardId } : {}),
+          companionId: owner.companionId,
+          ...(owner.shardId !== undefined ? { shardId: owner.shardId } : {}),
           payload: redactApprovalRequested(entry, {
             sourceSystem: entry.sourceSystem ?? 'tool-access',
             attribution,
@@ -178,14 +192,13 @@ export function createGatewayApprovalBoundaryService(
         });
       },
       onResolved: (outcome) => {
-        const owner = confirmationOwners.get(outcome.id);
+        const owner = outcome.entry.approvalOwner;
         if (!owner) {
           approvalLog.error('Refusing to emit ownerless companion.approval.resolved', {
             id: outcome.id,
           });
           return;
         }
-        confirmationOwners.delete(outcome.id);
         options.eventBus.emit('companion.approval.resolved', {
           companionId: owner.companionId,
           ...(owner.shardId !== undefined ? { shardId: owner.shardId } : {}),
@@ -213,20 +226,16 @@ export function createGatewayApprovalBoundaryService(
   };
 
   /**
-   * Resolve the immutable, server-side approval attribution BEFORE enqueue and
-   * fail closed on any orphaned or mismatched lineage. Returns `undefined` only
-   * when no canonical parent label is available for an ordinary companion
-   * request — the action still enqueues for the operator Garden surface, but no
-   * relay event can emit without a presentation label. A shard-originated
-   * request without a resolvable parent label is refused outright: shard
-   * provenance must never emit ownerless or unlabeled.
+   * Resolve immutable, server-side approval attribution before enqueue and
+   * fail closed on mismatched lineage. The authenticated stable companion id
+   * is the presentation fallback when a cosmetic roster label is absent.
    */
   const resolveEnqueueAttribution = (
     owner: string,
     shard: { shardId: string; shardLabel?: string } | undefined,
     supplied: ApprovalAttribution | undefined,
     method: string,
-  ): ApprovalAttribution | undefined => {
+  ): ApprovalAttribution => {
     // Defense-in-depth: a caller-supplied attribution is NEVER authority. It
     // must exactly match the authenticated lineage or the request is denied.
     if (supplied) {
@@ -242,15 +251,7 @@ export function createGatewayApprovalBoundaryService(
         );
       }
     }
-    const parentLabel = options.parentLabelProvider?.(owner)?.trim();
-    if (!parentLabel) {
-      if (shard) {
-        throw new Error(
-          `Cannot queue ${method}: shard-originated request has no resolvable parent companion label`,
-        );
-      }
-      return undefined;
-    }
+    const parentLabel = options.parentLabelProvider?.(owner)?.trim() || owner;
     return {
       parentId: owner,
       parentLabel,
@@ -295,16 +296,22 @@ export function createGatewayApprovalBoundaryService(
       input.request.attribution,
       input.request.method,
     );
-    const request: ConfirmationQueueRequest = attribution
-      ? { ...input.request, attribution }
-      : input.request;
-    let queueEntry: ConfirmationQueueEntry;
-    enqueueOwner = input.authenticatedCompanionId;
-    try {
-      queueEntry = confirmationQueue.enqueue(request, input.execute);
-    } finally {
-      enqueueOwner = undefined;
+    const request: ConfirmationQueueRequest = {
+      ...input.request,
+      attribution,
+      approvalOwner: {
+        companionId: input.authenticatedCompanionId,
+        ...(shard ? { shardId: shard.shardId } : {}),
+      },
+    };
+    if (input.request.approvalOwner
+      && (input.request.approvalOwner.companionId !== request.approvalOwner.companionId
+        || input.request.approvalOwner.shardId !== request.approvalOwner.shardId)) {
+      throw new Error(
+        `Cannot queue ${input.request.method}: supplied approval owner does not match authenticated lineage`,
+      );
     }
+    const queueEntry = confirmationQueue.enqueue(request, input.execute);
     await notifyOperatorForPendingAction({
       entry: queueEntry,
       discordAdapter: options.discordAdapter,
@@ -318,7 +325,23 @@ export function createGatewayApprovalBoundaryService(
   return {
     listPendingConfirmations: () => confirmationQueue.listPending(),
     listConfirmationHistory: () => confirmationQueue.listHistory(),
-    ownerOfConfirmation: (id: string) => confirmationOwners.get(id)?.companionId,
+    listPendingConfirmationsForOwner: (companionId: string) => confirmationQueue
+      .listPending()
+      .filter(entry => entry.approvalOwner?.companionId === companionId),
+    ownerOfConfirmation: (id: string) => confirmationQueue.getApprovalOwner(id)?.companionId,
+    approvalOwnerOfConfirmation: (id: string) => confirmationQueue.getApprovalOwner(id),
+    resolveConfirmationForOwner: (companionId, params, resolver) => {
+      const owner = confirmationQueue.getApprovalOwner(params.id);
+      if (owner?.companionId !== companionId) {
+        return Promise.resolve({
+          id: params.id,
+          status: 'not_found' as const,
+          message: 'Confirmation request not found.',
+          executed: false,
+        });
+      }
+      return confirmationQueue.resolve(params, resolver);
+    },
     resolveConfirmation: (params, resolver) => confirmationQueue.resolve(params, resolver),
     requestExplicitApproval,
     gate<P, R>(gateOptions: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R> {

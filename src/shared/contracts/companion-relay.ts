@@ -147,6 +147,10 @@ export type CompanionEventPayload =
 export interface CompanionEventEnvelope {
   kind: CompanionEventKind;
   payload: CompanionEventPayload;
+  /** Authenticated parent routing owner retained through relay fan-out. */
+  companionId?: string;
+  /** Optional authenticated shard provenance; never an authorization key. */
+  shardId?: string;
   sessionId?: string;
   channelId?: string;
   /** ISO timestamp. */

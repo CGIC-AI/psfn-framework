@@ -22,6 +22,17 @@ export interface ConfirmationExecutionContext {
 }
 
 /**
+ * Immutable server-derived approval ownership. `companionId` is the parent
+ * routing/authorization key; `shardId` is provenance only. Approval surfaces
+ * must scope by this record rather than by browser fields or presentation
+ * attribution.
+ */
+export interface ConfirmationApprovalOwner {
+  companionId: string;
+  shardId?: string;
+}
+
+/**
  * Signals that the queued side effect committed before a post-execution
  * durability/audit step failed. The queue must never describe this as
  * unexecuted: callers can then retry a non-idempotent mutation.
@@ -62,6 +73,7 @@ export interface ConfirmationQueueEntry {
    */
   sourceSystem?: ApprovalSourceSystem;
   attribution?: ApprovalAttribution;
+  approvalOwner?: ConfirmationApprovalOwner;
 }
 
 export interface ConfirmationQueueHistoryEntry extends Partial<ConfirmationQueueEntry> {
@@ -87,6 +99,8 @@ export interface ConfirmationQueueRequest {
   /** Optional unified-envelope provenance; see {@link ConfirmationQueueEntry}. */
   sourceSystem?: ApprovalSourceSystem;
   attribution?: ApprovalAttribution;
+  /** Optional trusted owner; approval boundaries must derive and validate it. */
+  approvalOwner?: ConfirmationApprovalOwner;
 }
 
 export interface ConfirmationResolveRequest {
@@ -155,6 +169,13 @@ function cloneAttribution(input: ApprovalAttribution): ApprovalAttribution {
   };
 }
 
+function cloneApprovalOwner(input: ConfirmationApprovalOwner): ConfirmationApprovalOwner {
+  return {
+    companionId: input.companionId,
+    ...(input.shardId !== undefined ? { shardId: input.shardId } : {}),
+  };
+}
+
 function cloneRecord(input: Record<string, unknown>): Record<string, unknown> {
   try {
     return JSON.parse(JSON.stringify(input)) as Record<string, unknown>;
@@ -215,6 +236,9 @@ export class ConfirmationQueue {
       expiresAt: requestedAt + expiresInMs,
       ...(request.sourceSystem ? { sourceSystem: request.sourceSystem } : {}),
       ...(request.attribution ? { attribution: cloneAttribution(request.attribution) } : {}),
+      ...(request.approvalOwner
+        ? { approvalOwner: cloneApprovalOwner(request.approvalOwner) }
+        : {}),
     };
     this.pending.set(entry.id, { entry, execute });
     this.observer?.onEnqueued?.(this.snapshot(entry));
@@ -243,6 +267,17 @@ export class ConfirmationQueue {
     this.expirePending();
     const found = this.pending.get(id);
     return found ? this.snapshot(found.entry) : null;
+  }
+
+  /**
+   * Reads only the immutable owner needed to authorize a resolution. Unlike
+   * `getPending`, this does not expire first: the subsequent `resolve` call
+   * remains responsible for returning the precise `expired` outcome.
+   */
+  getApprovalOwner(id: string): ConfirmationApprovalOwner | null {
+    const found = this.pending.get(id)?.entry.approvalOwner
+      ?? this.history.find(entry => entry.id === id)?.approvalOwner;
+    return found ? cloneApprovalOwner(found) : null;
   }
 
   async resolve(
@@ -452,6 +487,9 @@ export class ConfirmationQueue {
       ...entry,
       params: cloneRecord(entry.params),
       ...(entry.attribution ? { attribution: cloneAttribution(entry.attribution) } : {}),
+      ...(entry.approvalOwner
+        ? { approvalOwner: cloneApprovalOwner(entry.approvalOwner) }
+        : {}),
     };
   }
 
@@ -460,6 +498,10 @@ export class ConfirmationQueue {
       ...entry,
       ...(entry.params ? { params: cloneRecord(entry.params) } : {}),
       ...(entry.appliedParams ? { appliedParams: cloneRecord(entry.appliedParams) } : {}),
+      ...(entry.attribution ? { attribution: cloneAttribution(entry.attribution) } : {}),
+      ...(entry.approvalOwner
+        ? { approvalOwner: cloneApprovalOwner(entry.approvalOwner) }
+        : {}),
     };
   }
 }

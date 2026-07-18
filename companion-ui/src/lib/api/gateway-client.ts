@@ -137,6 +137,7 @@ export class CompanionGatewayClient {
         this.ready = false;
         this.pending.clear();
         this.activeInteractionRequestId = null;
+        this.session = {};
         this.setState('closed');
         if (!settled) settle(new Error('Companion gateway closed before attachment was ready'));
       });
@@ -149,6 +150,7 @@ export class CompanionGatewayClient {
     this.ready = false;
     this.pending.clear();
     this.activeInteractionRequestId = null;
+    this.session = {};
     if (socket && socket.readyState !== SOCKET_CLOSED && socket.readyState !== SOCKET_CLOSING) {
       this.setState('closing');
       socket.close(1000, 'Companion UI disconnect');

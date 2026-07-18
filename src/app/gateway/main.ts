@@ -581,6 +581,7 @@ async function main(): Promise<void> {
   // `companion.event.publish` and are re-published on the same bus.
   const companionRelay = new CompanionEventRelay({
     eventBus,
+    approvalBindingOf: (approvalId) => gateway.approvalOwnerOfConfirmation(approvalId),
     ...(config.companionId ? { defaultCompanionId: config.companionId } : {}),
     ...(config.companionFleet
       ? {
@@ -612,6 +613,7 @@ async function main(): Promise<void> {
       approvals: {
         resolve: (params) => gateway.resolveCompanionApproval(params),
         findHistory: (id) => gateway.findConfirmationHistoryEntry(id),
+        ownerOf: (id) => gateway.ownerOfConfirmation(id),
       },
       audit: (entry) => gateway.recordCompanionAuditSummary(entry),
     },

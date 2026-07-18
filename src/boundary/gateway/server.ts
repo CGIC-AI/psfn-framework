@@ -79,6 +79,7 @@ import type { EventBus, GardenQueueName } from '../../shared/event-bus.js';
 import type {
   ConfirmationQueueEntry,
   ConfirmationQueueHistoryEntry,
+  ConfirmationApprovalOwner,
   ConfirmationResolveResult,
 } from '../../system/capabilities/confirmation-queue.js';
 import type { AuditSummaryEntry } from './audit-port.js';
@@ -771,10 +772,11 @@ export class GatewayServer {
   resolveCompanionApproval(params: {
     id: string;
     decision: 'approve' | 'deny';
+    companionId: string;
   }): Promise<ConfirmationResolveResult> {
-    return this.approvalBoundary.resolveConfirmation(params, {
+    return this.approvalBoundary.resolveConfirmationForOwner(params.companionId, params, {
       kind: 'companion',
-      id: 'companion-relay',
+      id: `companion-relay:${params.companionId}`,
     });
   }
 
@@ -787,6 +789,23 @@ export class GatewayServer {
       kind: 'operator',
       id: 'garden-admin',
     });
+  }
+
+  resolveCompanionUiApproval(
+    companionId: string,
+    params: {
+      id: string;
+      decision: 'approve' | 'deny';
+    },
+  ): Promise<ConfirmationResolveResult> {
+    return this.approvalBoundary.resolveConfirmationForOwner(companionId, params, {
+      kind: 'operator',
+      id: `companion-ui:${companionId}`,
+    });
+  }
+
+  listCompanionUiConfirmations(companionId: string): readonly ConfirmationQueueEntry[] {
+    return this.approvalBoundary.listPendingConfirmationsForOwner(companionId);
   }
 
   listOperatorConfirmations(): Readonly<{
@@ -807,6 +826,10 @@ export class GatewayServer {
    */
   ownerOfConfirmation(id: string): string | undefined {
     return this.approvalBoundary.ownerOfConfirmation(id);
+  }
+
+  approvalOwnerOfConfirmation(id: string): ConfirmationApprovalOwner | undefined {
+    return this.approvalBoundary.approvalOwnerOfConfirmation(id);
   }
 
   findConfirmationHistoryEntry(id: string): ConfirmationQueueHistoryEntry | null {

@@ -47,10 +47,16 @@ import {
   privacyBreakGlassSubjectScopeDigest,
 } from '../../shared/contracts/privacy-break-glass.js';
 import { createSpiffeCheckServerIdentity } from '../../shared/net/mtls.js';
-import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
-import type { FleetSsoGardenUpstream } from '../fleet-auth/fleet-sso-transport.js';
+import {
+  CompanionScopedGardenRouteError,
+  FLEET_SSO_COMPANION_ROUTE_PREFIX,
+  parseCompanionScopedGardenRoute,
+  parseFleetSsoOuterTarget,
+  type FleetSsoGardenUpstream,
+} from '../fleet-auth/fleet-sso-transport.js';
 import {
   FLEET_PORTAL_API_PATH,
   GatewayFleetPortalHttpRoutes,
@@ -62,8 +68,7 @@ const MAX_PROXY_BODY_BYTES = 1_048_576;
 const MAX_CAPABILITY_HEADER_BYTES = 65_536;
 const FLEET_PATH = '/fleet';
 const FLEET_LOGIN_PATH = '/fleet/login';
-const COMPANION_PREFIX = '/companions/';
-const GARDEN_MARKER = '/garden';
+const COMPANION_PREFIX = FLEET_SSO_COMPANION_ROUTE_PREFIX;
 const COMPANION_UI_PREFIX = '/companion-ui';
 export const FLEET_JIT_GRANT_HEADER = 'x-psfn-jit-grant';
 const FORWARDED_HEADERS = Object.freeze([
@@ -232,38 +237,41 @@ function readOpaqueSessionCookie(request: IncomingMessage): string | undefined {
   return values[0];
 }
 
+/**
+ * The gateway and the fleet Garden control plane share one companion-scoped
+ * route parser (`parseCompanionScopedGardenRoute`) so both hops bind exactly
+ * the same companion selection for the same request bytes. This wrapper only
+ * translates shared parse failures into unified-origin protocol errors.
+ */
 function parseOuterPath(rawTarget: string): { rawPath: string; rawQuery: string } {
-  if (!rawTarget.startsWith('/') || rawTarget.startsWith('//') || rawTarget.includes('#')
-    || rawTarget.includes('\\') || /%2f|%5c/iu.test(rawTarget)) {
-    throw new FleetSsoRequestError(400, 'Unified-origin request target is invalid');
+  try {
+    return parseFleetSsoOuterTarget(rawTarget);
+  } catch (error) {
+    if (error instanceof CompanionScopedGardenRouteError) {
+      throw new FleetSsoRequestError(400, 'Unified-origin request target is invalid');
+    }
+    throw error;
   }
-  const question = rawTarget.indexOf('?');
-  const rawPath = question < 0 ? rawTarget : rawTarget.slice(0, question);
-  const rawQuery = question < 0 ? '' : rawTarget.slice(question + 1);
-  if (rawQuery.includes('?') || rawPath.includes('//') || /(?:^|\/)\.\.?($|\/)/u.test(rawPath)) {
-    throw new FleetSsoRequestError(400, 'Unified-origin request target is invalid');
-  }
-  return { rawPath, rawQuery };
 }
 
 function parseGardenRoute(rawTarget: string): ParsedGardenRoute | undefined {
-  const { rawPath, rawQuery } = parseOuterPath(rawTarget);
-  if (!rawPath.startsWith(COMPANION_PREFIX)) return undefined;
-  const rest = rawPath.slice(COMPANION_PREFIX.length);
-  const slash = rest.indexOf('/');
-  if (slash < 0) throw new FleetSsoRequestError(404, 'Resource not found');
-  const rawCompanionId = rest.slice(0, slash);
-  const afterCompanion = rest.slice(slash);
-  if (!isRfc4122Uuid(rawCompanionId) || !afterCompanion.startsWith(GARDEN_MARKER)
-    || (afterCompanion.length > GARDEN_MARKER.length
-      && afterCompanion[GARDEN_MARKER.length] !== '/')) {
-    throw new FleetSsoRequestError(404, 'Resource not found');
+  let route;
+  try {
+    route = parseCompanionScopedGardenRoute(rawTarget);
+  } catch (error) {
+    if (error instanceof CompanionScopedGardenRouteError) {
+      throw new FleetSsoRequestError(
+        error.code === 'not_found' ? 404 : 400,
+        error.code === 'not_found' ? 'Resource not found' : 'Unified-origin request target is invalid',
+      );
+    }
+    throw error;
   }
-  const gardenPath = afterCompanion.slice(GARDEN_MARKER.length) || '/';
+  if (!route) return undefined;
   return {
-    companionId: createCompanionId(rawCompanionId, 'unified-origin companionId'),
-    upstreamTarget: rawQuery ? `${gardenPath}?${rawQuery}` : gardenPath,
-    publicPrefix: `${COMPANION_PREFIX}${rawCompanionId}${GARDEN_MARKER}`,
+    companionId: route.companionId,
+    upstreamTarget: route.innerTarget,
+    publicPrefix: route.publicPrefix,
   };
 }
 

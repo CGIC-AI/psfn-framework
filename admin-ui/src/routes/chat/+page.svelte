@@ -18,6 +18,16 @@
   import GardenTabBar, { type GardenTabItem } from '$lib/components/garden/GardenTabBar.svelte';
   import { createVisibilityAwarePoller } from '$lib/polling/visibility-aware-poller';
   import BoundedList from '$lib/components/garden/BoundedList.svelte';
+  import { apiFetch } from '$lib/api/client';
+  import {
+    buildAdminWebSocketUrl,
+    registerCompanionWebSocket,
+  } from '$lib/api/websocket';
+  import {
+    currentCompanionGardenScope,
+    getCompanionCacheScope,
+    scopeGardenPath,
+  } from '$lib/fleet/companion-scope';
   import type {
     AdminChatBootstrapResponse,
     AdminModelRoomBootstrapResponse,
@@ -143,12 +153,30 @@
   const OPERATOR_STORAGE_KEY = 'psfn:model-room:operator-name:v1';
   const OPERATOR_SPEAKER_ID = 'operator';
 
+  function companionStorageKey(key: string): string {
+    return `${key}:${getCompanionCacheScope()}`;
+  }
+
+  function chatCompletionsEndpoint(configured: string): string {
+    if (!currentCompanionGardenScope()) return configured;
+    const parsed = new URL(configured, window.location.origin);
+    if (parsed.pathname !== '/v1/chat/completions'
+      || parsed.search
+      || parsed.hash
+      || parsed.username
+      || parsed.password) {
+      throw new Error('Fleet Garden chat endpoint is invalid');
+    }
+    return '/v1/chat/completions';
+  }
+
   // Message area refs
   let messagesContainer: HTMLDivElement | undefined = $state(undefined);
   let inputEl: HTMLTextAreaElement | undefined = $state(undefined);
 
   // Debug telemetry stream
   let debugWebSocket: WebSocket | null = null;
+  let unregisterDebugWebSocket: (() => void) | null = null;
 
   // Health check
   const healthPoller = createVisibilityAwarePoller({
@@ -390,7 +418,7 @@ ${context}`;
 
   function loadSavedPrompts(): Record<string, string> {
     try {
-      const raw = localStorage.getItem(PROMPTS_STORAGE_KEY);
+      const raw = localStorage.getItem(companionStorageKey(PROMPTS_STORAGE_KEY));
       const parsed = raw ? JSON.parse(raw) : {};
       return parsed && typeof parsed === 'object' ? parsed : {};
     } catch {
@@ -401,7 +429,7 @@ ${context}`;
   function persistOperatorName(value: string): void {
     operatorName = value.trim() || 'Operator';
     try {
-      localStorage.setItem(OPERATOR_STORAGE_KEY, operatorName);
+      localStorage.setItem(companionStorageKey(OPERATOR_STORAGE_KEY), operatorName);
     } catch {
       // localStorage unavailable — keep in-memory value
     }
@@ -426,7 +454,10 @@ ${context}`;
     };
     savedPrompts = { ...savedPrompts, [participantId]: value };
     try {
-      localStorage.setItem(PROMPTS_STORAGE_KEY, JSON.stringify(savedPrompts));
+      localStorage.setItem(
+        companionStorageKey(PROMPTS_STORAGE_KEY),
+        JSON.stringify(savedPrompts),
+      );
     } catch {
       // localStorage unavailable — edits persist for this session only
     }
@@ -435,7 +466,10 @@ ${context}`;
   function resetParticipantPrompt(participant: AdminModelRoomParticipant): void {
     delete savedPrompts[participant.id];
     try {
-      localStorage.setItem(PROMPTS_STORAGE_KEY, JSON.stringify(savedPrompts));
+      localStorage.setItem(
+        companionStorageKey(PROMPTS_STORAGE_KEY),
+        JSON.stringify(savedPrompts),
+      );
     } catch {
       // localStorage unavailable
     }
@@ -481,7 +515,9 @@ ${context}`;
         const roomData = await getModelRoomBootstrap();
         roomBootstrap = roomData;
         roomId = roomData.defaultRoomId;
-        operatorName = localStorage.getItem(OPERATOR_STORAGE_KEY) ?? 'Operator';
+        operatorName = localStorage.getItem(
+          companionStorageKey(OPERATOR_STORAGE_KEY),
+        ) ?? 'Operator';
         savedPrompts = loadSavedPrompts();
         // Roster models are opt-in on the merged page: the default send path is
         // plain companion chat, matching the old Canopy behavior.
@@ -522,7 +558,7 @@ ${context}`;
 
   async function checkConnection() {
     try {
-      const res = await fetch('/health');
+      const res = await apiFetch('/health');
       if (res.ok) {
         connectionStatus = 'connected';
         const data = await res.json() as { status?: string; uptime?: number };
@@ -554,9 +590,9 @@ ${context}`;
     )) {
       return;
     }
-    const url = new URL(DEBUG_TELEMETRY_WS_PATH, window.location.origin);
-    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-    const socket = new WebSocket(url.toString());
+    const socket = new WebSocket(buildAdminWebSocketUrl(DEBUG_TELEMETRY_WS_PATH));
+    const unregisterSocket = registerCompanionWebSocket(socket);
+    unregisterDebugWebSocket = unregisterSocket;
     socket.addEventListener('message', (event) => {
       if (typeof event.data !== 'string') return;
       let payload: Record<string, unknown>;
@@ -592,8 +628,10 @@ ${context}`;
       }
     });
     socket.addEventListener('close', () => {
+      unregisterSocket();
       if (debugWebSocket === socket) {
         debugWebSocket = null;
+        unregisterDebugWebSocket = null;
       }
     });
     socket.addEventListener('error', () => {});
@@ -605,6 +643,8 @@ ${context}`;
       debugWebSocket.close();
       debugWebSocket = null;
     }
+    unregisterDebugWebSocket?.();
+    unregisterDebugWebSocket = null;
   }
 
   // ── SSE parsing ──
@@ -629,7 +669,6 @@ ${context}`;
     abortController = new AbortController();
 
     try {
-      const endpointUrl = new URL(bootstrap.api.chatCompletionsUrl, window.location.origin);
       const apiKey = bootstrap.api.apiKey || bootstrap.runtime.apiKey || getToken();
 
       const headers: Record<string, string> = {
@@ -654,17 +693,20 @@ ${context}`;
         }))
         .filter(m => m.content);
 
-      const response = await fetch(endpointUrl, {
-        method: 'POST',
-        headers,
-        credentials: 'include',
-        signal: abortController.signal,
-        body: JSON.stringify({
-          model: bootstrap.runtime.model.id,
-          stream: true,
-          messages: apiMessages,
-        }),
-      });
+      const response = await apiFetch(
+        chatCompletionsEndpoint(bootstrap.api.chatCompletionsUrl),
+        {
+          method: 'POST',
+          headers,
+          credentials: 'include',
+          signal: abortController.signal,
+          body: JSON.stringify({
+            model: bootstrap.runtime.model.id,
+            stream: true,
+            messages: apiMessages,
+          }),
+        },
+      );
 
       if (!response.ok) {
         const body = await response.text().catch(() => '');
@@ -833,7 +875,6 @@ ${context}`;
       throw new Error(`${params.speakerName} turn has no messages to send`);
     }
 
-    const endpoint = new URL(roomBootstrap.api.chatCompletionsUrl, window.location.origin);
     const apiKey = roomBootstrap.api.apiKey || getToken();
     const normalizedRoomId = normalizeRoomId(roomId);
     const sessionId = `model-room:${normalizedRoomId}:${params.speakerId}`;
@@ -859,11 +900,14 @@ ${context}`;
       headers.Authorization = `Bearer ${apiKey}`;
     }
 
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    });
+    const response = await apiFetch(
+      chatCompletionsEndpoint(roomBootstrap.api.chatCompletionsUrl),
+      {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+      },
+    );
 
     const raw = await response.text();
     let payload: Record<string, unknown> = {};
@@ -1243,7 +1287,7 @@ ${context}`;
           </p>
           <div class="mt-3 flex flex-wrap gap-2">
             <a
-              href="/identity"
+              href={scopeGardenPath('/identity')}
               class="inline-flex items-center rounded-lg border border-bark-300 bg-bark-50 px-3 py-1.5 text-sm font-medium text-shadow-800 hover:bg-bark-100"
             >
               Import Character Card
@@ -1751,7 +1795,7 @@ ${context}`;
         </div>
         <p class="text-xs text-shadow-500 mt-2 shrink-0">
           Deeper session tooling (search, turns, compaction audits) lives in
-          <a href="/sessions" class="underline text-shadow-700 hover:text-shadow-900">Sessions</a>.
+          <a href={scopeGardenPath('/sessions')} class="underline text-shadow-700 hover:text-shadow-900">Sessions</a>.
         </p>
       </div>
 

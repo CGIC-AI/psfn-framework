@@ -60,11 +60,13 @@ describe('gateway fleet portal projection', () => {
       fleet: [
         {
           companionId: COMPANION_A,
+          gardenPort: 3211,
           label: 'private-a',
           postgresSchema: 'private_a',
         },
         {
           companionId: COMPANION_B,
+          gardenPort: 3212,
           label: 'private-b',
           characterCardPath: '/private/b.json',
         },
@@ -85,8 +87,8 @@ describe('gateway fleet portal projection', () => {
       session: { state: 'authenticated' },
       companions: [{
         companionId: COMPANION_A,
+        displayName: COMPANION_A,
         availability: 'online',
-        headless: false,
         gardenPath: `/companions/${COMPANION_A}/garden`,
       }],
     });
@@ -100,6 +102,8 @@ describe('gateway fleet portal projection', () => {
       'private-a',
       'private-b',
       'private-c',
+      '3211',
+      '3212',
       'private_a',
       '/private/b.json',
       '/private/c',
@@ -116,13 +120,13 @@ describe('gateway fleet portal projection', () => {
     }
   });
 
-  it('maps memory-only connection posture coarsely and exposes Garden only after authorization', async () => {
+  it('maps memory-only connection posture coarsely without exposing topology', async () => {
     const projection = new GatewayFleetPortalProjection({
       authorizer: {
         resolve: async () => ({
           companions: [
             { companionId: COMPANION_A, gardenLinkEligible: true },
-            { companionId: COMPANION_B, gardenLinkEligible: true },
+            { companionId: COMPANION_B, gardenLinkEligible: false },
             { companionId: COMPANION_C, gardenLinkEligible: false },
             { companionId: COMPANION_D, gardenLinkEligible: true },
           ],
@@ -146,22 +150,20 @@ describe('gateway fleet portal projection', () => {
 
     await expect(projection.resolve({ sessionToken: SESSION_TOKEN })).resolves.toMatchObject({
       companions: [
-        { companionId: COMPANION_A, availability: 'online', headless: false },
-        { companionId: COMPANION_B, availability: 'offline', headless: false },
-        { companionId: COMPANION_C, availability: 'unknown', headless: false },
-        { companionId: COMPANION_D, availability: 'degraded', headless: false },
+        { companionId: COMPANION_A, availability: 'online' },
+        { companionId: COMPANION_D, availability: 'degraded' },
       ],
     });
     const result = await projection.resolve({ sessionToken: SESSION_TOKEN });
-    expect(result.companions[1]).toHaveProperty(
-      'gardenPath',
-      `/companions/${COMPANION_B}/garden`,
-    );
-    expect(result.companions[2]).not.toHaveProperty('gardenPath');
+    expect(result.companions).toHaveLength(2);
+    expect(result.companions.every(companion => companion.gardenPath)).toBe(true);
+    expect(JSON.stringify(result)).not.toContain(COMPANION_B);
+    expect(JSON.stringify(result)).not.toContain(COMPANION_C);
+    expect(JSON.stringify(result)).not.toContain('gardenPort');
   });
 
   it('makes unknown and unauthorized manifest data byte-indistinguishable', async () => {
-    const build = (unknownId: string) => new GatewayFleetPortalProjection({
+    const build = (unknownId: string, unknownPort: number) => new GatewayFleetPortalProjection({
       authorizer: {
         resolve: async () => ({
           companions: [{ companionId: COMPANION_A, gardenLinkEligible: false }],
@@ -178,8 +180,8 @@ describe('gateway fleet portal projection', () => {
       },
       now: () => GENERATED_AT,
     });
-    const first = await build(COMPANION_B).resolve({ sessionToken: SESSION_TOKEN });
-    const second = await build(COMPANION_C).resolve({ sessionToken: SESSION_TOKEN });
+    const first = await build(COMPANION_B, 3212).resolve({ sessionToken: SESSION_TOKEN });
+    const second = await build(COMPANION_C, 65535).resolve({ sessionToken: SESSION_TOKEN });
     expect(serializeFleetPortalProjection(first)).toEqual(serializeFleetPortalProjection(second));
   });
 
@@ -215,9 +217,9 @@ describe('gateway fleet portal projection', () => {
       const projection = new GatewayFleetPortalProjection({
         authorizer: { resolve: authorize },
         fleet: [
-          { companionId: COMPANION_A, displayName: 'Flagship' },
+          { companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' },
           { companionId: COMPANION_B, displayName: 'Aria', avatarRef: 'avatars/b.png' },
-          { companionId: COMPANION_C, displayName: 'private-c' },
+          { companionId: COMPANION_C, gardenPort: 3213, displayName: 'private-c' },
         ],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
         now: () => GENERATED_AT,
@@ -249,7 +251,7 @@ describe('gateway fleet portal projection', () => {
     it('fails closed on a malformed request', async () => {
       const projection = new GatewayFleetPortalProjection({
         authorizer: { resolve: async () => ({ companions: [] }) },
-        fleet: [{ companionId: COMPANION_A, displayName: 'Flagship' }],
+        fleet: [{ companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' }],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
         now: () => GENERATED_AT,
       });
@@ -262,7 +264,7 @@ describe('gateway fleet portal projection', () => {
         authorizer: {
           resolve: async () => ({ companions: [{ companionId: COMPANION_D, gardenLinkEligible: true }] }),
         },
-        fleet: [{ companionId: COMPANION_A, displayName: 'Flagship' }],
+        fleet: [{ companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' }],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
         now: () => GENERATED_AT,
       });
@@ -278,7 +280,7 @@ describe('gateway fleet portal projection', () => {
             ],
           }),
         },
-        fleet: [{ companionId: COMPANION_A, displayName: 'Flagship' }],
+        fleet: [{ companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' }],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
         now: () => GENERATED_AT,
       });

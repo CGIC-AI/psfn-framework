@@ -1,4 +1,4 @@
-import { apiDelete, apiGet, apiPost } from '$lib/api/client';
+import { apiDelete, apiFetch, apiGet, apiPost } from '$lib/api/client';
 import type {
   AdminBulkMutationResult,
   AdminMemoryElevationStatus,
@@ -127,7 +127,7 @@ export async function unlinkMemories(
   id1: string,
   id2: string
 ): Promise<{ ok: boolean }> {
-  const res = await fetch('/api/admin/memory/link', {
+  const res = await apiFetch('/api/admin/memory/link', {
     method: 'DELETE',
     headers: {
       Accept: 'application/json',

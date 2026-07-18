@@ -26,9 +26,10 @@ export type FleetPortalAvailability = 'online' | 'degraded' | 'offline' | 'unkno
 
 export interface FleetPortalCompanionProjection {
   readonly companionId: string;
+  readonly displayName: string;
   readonly availability: FleetPortalAvailability;
-  readonly headless: boolean;
   readonly gardenPath?: string;
+  readonly avatarRef?: string;
 }
 
 export interface FleetPortalProjection {
@@ -153,23 +154,17 @@ export class GatewayFleetPortalProjection {
       if (!manifest) {
         throw new Error('Fleet portal authorization returned an unknown manifest companion');
       }
-      const gardenPath = authority.gardenLinkEligible
-        ? compileFleetSsoGardenPath(manifest.companionId)
-        : undefined;
+      // Bounded authorized projection: principals see only companions they hold
+      // a Garden link for. gardenPort is retired (one fleet Garden derives every
+      // admin endpoint), so authorization is the only gate.
+      if (!authority.gardenLinkEligible) continue;
+      const gardenPath = compileFleetSsoGardenPath(manifest.companionId);
       companions.push(Object.freeze({
         companionId: manifest.companionId,
+        displayName: manifest.displayName?.trim() || manifest.companionId,
         availability: availability(connections.get(manifest.companionId)),
-        // `headless` once meant "this manifest entry has no Garden endpoint"
-        // (the retired per-companion `gardenPort` was absent). In the
-        // consolidated topology the one fleet Garden derives an admin-transport
-        // endpoint for EVERY manifest companion (docs/garden-control-plane.md),
-        // so no manifest companion can lack a Garden surface — `headless` is
-        // structurally false. "This principal gets no Garden link" is expressed
-        // through authorization instead: `gardenLinkEligible` gates `gardenPath`.
-        // The field is retained in the wire protocol so the renderer keeps its
-        // honest headless state, but the gateway projection can no longer emit true.
-        headless: false,
-        ...(gardenPath ? { gardenPath } : {}),
+        gardenPath,
+        ...(manifest.avatarRef !== undefined ? { avatarRef: manifest.avatarRef } : {}),
       }));
     }
     companions.sort((left, right) => left.companionId.localeCompare(right.companionId));

@@ -1,4 +1,4 @@
-import { ApiError, apiGet, apiPost, apiPostForm } from '$lib/api/client';
+import { ApiError, apiFetch, apiGet, apiPost, apiPostForm } from '$lib/api/client';
 import { getToken } from '$lib/stores/auth.svelte';
 import type { DiscoveredModel } from '$lib/types';
 
@@ -7,7 +7,7 @@ export async function getModelsConfigRaw(): Promise<string> {
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const res = await fetch('/api/admin/settings/models', {
+  const res = await apiFetch('/api/admin/settings/models', {
     headers,
     credentials: 'include',
   });
@@ -26,7 +26,7 @@ export async function getProvidersConfigRaw(): Promise<string> {
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  const res = await fetch('/api/admin/settings/providers', {
+  const res = await apiFetch('/api/admin/settings/providers', {
     headers,
     credentials: 'include',
   });

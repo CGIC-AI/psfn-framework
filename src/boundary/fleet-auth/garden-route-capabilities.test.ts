@@ -53,6 +53,15 @@ describe('Garden route capability catalogue', () => {
       });
     expect(resolveGardenRouteCapability('PATCH', '/api/admin/settings')?.capability.authorization)
       .toMatchObject({ action: 'settings.write', baseRole: 'admin' });
+    expect(resolveGardenRouteCapability('POST', '/v1/chat/completions')?.capability)
+      .toMatchObject({
+        body: { mode: 'required', maxBytes: 1_048_576 },
+        authorization: {
+          action: 'companion.interact',
+          baseRole: 'guest',
+          resource: { scope: 'garden_surface', area: 'garden_ui' },
+        },
+      });
     expect(resolveGardenRouteCapability('POST', '/api/admin/contacts/contact-a/merge')?.capability.authorization)
       .toMatchObject({
         action: 'contacts.manage',

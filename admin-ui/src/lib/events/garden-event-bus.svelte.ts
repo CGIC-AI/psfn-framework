@@ -9,6 +9,10 @@ import {
   GardenTelemetryCache,
   MAX_CACHED_GARDEN_EVENTS,
 } from '$lib/cache/telemetry-cache';
+import {
+  getCompanionCacheScope,
+  onCompanionScopeChange,
+} from '$lib/fleet/companion-scope';
 
 const MAX_GARDEN_EVENTS = MAX_CACHED_GARDEN_EVENTS;
 
@@ -32,14 +36,36 @@ let telemetryCacheHydration: Promise<void> | null = null;
 let telemetryCacheWrite: Promise<void> = Promise.resolve();
 let telemetryCacheError = $state<string | null>(null);
 
+onCompanionScopeChange((previousCompanionId) => {
+  disconnectGardenEventBus();
+  events = [];
+  paused = false;
+  subscriptions.clear();
+  connectionSubscriptions.clear();
+  telemetryCacheHydrated = false;
+  telemetryCacheHydration = null;
+  telemetryCacheError = null;
+  if (!previousCompanionId) return;
+  const clearing = telemetryCacheWrite.then(() => telemetryCache.clearScope(previousCompanionId));
+  telemetryCacheWrite = clearing
+    .then(() => {
+      telemetryCacheError = null;
+    })
+    .catch((error: unknown) => {
+      telemetryCacheError = toErrorMessage(error);
+    });
+  return telemetryCacheWrite;
+});
+
 function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 function persistGardenEvents(): void {
   const snapshot = [...events];
+  const companionScope = getCompanionCacheScope();
   telemetryCacheWrite = telemetryCacheWrite
-    .then(() => telemetryCache.write(snapshot))
+    .then(() => telemetryCache.write(snapshot, companionScope))
     .then(() => {
       telemetryCacheError = null;
     })

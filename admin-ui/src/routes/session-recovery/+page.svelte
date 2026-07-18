@@ -9,6 +9,7 @@
     resetSourceChannelSession,
   } from '$lib/api/endpoints/sessions';
   import { createSessionRecoveryInitialLoader } from './initial-loader';
+  import { scopeGardenPath } from '$lib/fleet/companion-scope';
   import type {
     AdminCogSecEventListData,
     AdminSessionRouteResetData,
@@ -131,7 +132,7 @@
         Start a fresh logical session for an existing source channel without deleting old L0 history.
         Future live context uses the new route; retained sessions stay available for explicit audit/search.
         For row-level redaction and lineage remediation, use
-        <a class="underline underline-offset-2" href="/cognitive-security/remediation">Cognitive Security &rarr; Remediation</a>.
+        <a class="underline underline-offset-2" href={scopeGardenPath('/cognitive-security/remediation')}>Cognitive Security &rarr; Remediation</a>.
       </p>
     </header>
 

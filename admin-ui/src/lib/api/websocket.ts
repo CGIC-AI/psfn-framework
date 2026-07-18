@@ -1,9 +1,29 @@
+import {
+  onCompanionScopeChange,
+  scopeGardenDataPath,
+} from '$lib/fleet/companion-scope';
+
 export type WsMessageHandler = (event: MessageEvent) => void;
 export type WsConnectionHandler = (connected: boolean) => void;
 
 interface WebSocketLocation {
   protocol: string;
   host: string;
+  pathname?: string;
+}
+
+const activeSockets = new Set<ReconnectingWebSocket>();
+const activeNativeSockets = new Set<WebSocket>();
+
+onCompanionScopeChange(() => {
+  for (const socket of [...activeSockets]) socket.close();
+  for (const socket of [...activeNativeSockets]) socket.close();
+  activeNativeSockets.clear();
+});
+
+export function registerCompanionWebSocket(socket: WebSocket): () => void {
+  activeNativeSockets.add(socket);
+  return () => activeNativeSockets.delete(socket);
 }
 
 export function buildAdminWebSocketUrl(
@@ -12,7 +32,8 @@ export function buildAdminWebSocketUrl(
 ): string {
   const proto = location?.protocol === 'https:' ? 'wss:' : 'ws:';
   const host = location?.host ?? 'localhost:3001';
-  return `${proto}//${host}${path}`;
+  const scopedPath = scopeGardenDataPath(path, location?.pathname ?? '/');
+  return `${proto}//${host}${scopedPath}`;
 }
 
 export class ReconnectingWebSocket {
@@ -37,6 +58,7 @@ export class ReconnectingWebSocket {
   connect(): void {
     if (typeof window === 'undefined') return;
     this.reconnectEnabled = true;
+    activeSockets.add(this);
     if (this.ws && (
       this.ws.readyState === WebSocket.CONNECTING
       || this.ws.readyState === WebSocket.OPEN
@@ -57,6 +79,7 @@ export class ReconnectingWebSocket {
       };
 
       socket.onmessage = (evt) => {
+        if (this.ws !== socket) return;
         for (const handler of this.handlers) {
           handler(evt);
         }
@@ -90,6 +113,7 @@ export class ReconnectingWebSocket {
 
   close(): void {
     this.reconnectEnabled = false;
+    activeSockets.delete(this);
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;

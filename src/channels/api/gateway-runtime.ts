@@ -60,11 +60,35 @@ export class GatewayApiRuntime implements ApiServerRuntime {
       : () => {};
 
     let cancelled = false;
+    const requestAgent = async <T>(
+      method: string,
+      params: unknown,
+    ): Promise<T> => {
+      if (!input.companionId) {
+        return await this.gateway.requestAgent<T>(
+          method,
+          params,
+          this.chatRequestTimeoutMs,
+        );
+      }
+      if (!this.gateway.requestCompanionAgent) {
+        throw new Error('Companion-targeted API routing is unavailable');
+      }
+      return await this.gateway.requestCompanionAgent<T>(
+        input.companionId,
+        method,
+        params,
+        this.chatRequestTimeoutMs,
+      );
+    };
     const cancel = async (): Promise<ApiChatCompletionCancelRpcResult | undefined> => {
       if (cancelled) return undefined;
       cancelled = true;
       try {
-        return await this.gateway.requestAgent<ApiChatCompletionCancelRpcResult>('api.chat.cancel', { requestId });
+        return await requestAgent<ApiChatCompletionCancelRpcResult>(
+          'api.chat.cancel',
+          { requestId },
+        );
       } catch {
         return undefined;
       }
@@ -91,7 +115,7 @@ export class GatewayApiRuntime implements ApiServerRuntime {
     }
 
     try {
-      return await this.gateway.requestAgent<ApiChatCompletionRpcResult>('api.chat.completion', {
+      return await requestAgent<ApiChatCompletionRpcResult>('api.chat.completion', {
         requestId,
         request: input.request,
         principal: input.principal,
@@ -102,7 +126,7 @@ export class GatewayApiRuntime implements ApiServerRuntime {
         ...(input.companionUiCapability ? { companionUiCapability: input.companionUiCapability } : {}),
         timeoutMs: computeAgentChatTurnTimeoutMs(this.chatRequestTimeoutMs),
         performance: { receivedMonotonicAtMs, receivedTimestampMs },
-      }, this.chatRequestTimeoutMs);
+      });
     } finally {
       if (input.signal) {
         input.signal.removeEventListener('abort', onAbort);

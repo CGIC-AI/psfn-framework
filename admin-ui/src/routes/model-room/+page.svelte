@@ -5,9 +5,10 @@
   // kept only so old links and bookmarks don't 404.
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
+  import { scopeGardenPath } from '$lib/fleet/companion-scope';
 
   onMount(() => {
-    void goto('/chat', { replaceState: true });
+    void goto(scopeGardenPath('/chat'), { replaceState: true });
   });
 </script>
 
@@ -16,7 +17,7 @@
   <p class="text-shadow-600 text-sm mt-1">
     Multi-model rounds now live in the chat console. Redirecting...
   </p>
-  <a href="/chat" class="inline-block mt-3 text-sm text-shadow-700 underline hover:text-shadow-900">
+  <a href={scopeGardenPath('/chat')} class="inline-block mt-3 text-sm text-shadow-700 underline hover:text-shadow-900">
     Continue to Chat
   </a>
 </div>

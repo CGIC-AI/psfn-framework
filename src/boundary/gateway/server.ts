@@ -1888,8 +1888,8 @@ export class GatewayServer {
   /**
    * Read-only fleet health view (sprint-10 W4): identified companion
    * connections, last-seen activity (retained across disconnects), and recent
-   * multi-companion violation counts. Consumed by the gateway fleet-status
-   * page; never mutates connection state.
+   * multi-companion violation counts. Available for bounded, server-side fleet
+   * projections and internal operations; never mutates connection state.
    */
   getFleetConnectionSnapshot(now = Date.now()): GatewayFleetConnectionSnapshot {
     this.refreshConnectionHealth(now);

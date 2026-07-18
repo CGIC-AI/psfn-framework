@@ -103,6 +103,10 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     ]),
   },
   {
+    action: 'companion.interact', area: 'garden_ui',
+    routeIds: ids('POST', ['/v1/chat/completions']),
+  },
+  {
     action: 'action_pipe.read', area: 'action_pipe', routeIds: [
       ...ids('GET', [
         '/api/admin/action-pipe', '/api/admin/tool-conformance/latest', '/api/admin/tools/adaptive',

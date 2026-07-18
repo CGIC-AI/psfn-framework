@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, apiGet, apiGetConditional, apiPostForm } from './client';
+import { activateCompanionScope } from '$lib/fleet/companion-scope';
+
+const COMPANION_A = '11111111-1111-4111-8111-111111111111';
+const COMPANION_B = '22222222-2222-4222-8222-222222222222';
 
 function mockFetch(response: Response): void {
   vi.stubGlobal('fetch', vi.fn(async () => response));
@@ -15,7 +19,8 @@ async function expectApiError(promise: Promise<unknown>): Promise<ApiError> {
   throw new Error('Expected ApiError');
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await activateCompanionScope(null);
   vi.unstubAllGlobals();
 });
 
@@ -32,6 +37,48 @@ describe('admin api client errors', () => {
       cache: 'no-cache',
       credentials: 'include',
     }));
+  });
+
+  it('derives the immutable request target from the canonical companion route', async () => {
+    vi.stubGlobal('window', {
+      location: {
+        pathname: `/companions/${COMPANION_A}/garden/sessions`,
+        href: '',
+      },
+    });
+    mockFetch(new Response(JSON.stringify({ sessions: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }));
+
+    await apiGet('/api/admin/sessions');
+
+    expect(fetch).toHaveBeenCalledWith(
+      `/companions/${COMPANION_A}/garden/api/admin/sessions`,
+      expect.objectContaining({ credentials: 'include' }),
+    );
+  });
+
+  it('aborts an in-flight companion request when the active scope switches', async () => {
+    const location = {
+      pathname: `/companions/${COMPANION_A}/garden/sessions`,
+      href: '',
+    };
+    vi.stubGlobal('window', { location });
+    await activateCompanionScope(COMPANION_A);
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => new Promise<Response>(
+      (_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          reject(new DOMException('aborted', 'AbortError'));
+        });
+      },
+    )));
+
+    const request = apiGet('/api/admin/sessions');
+    location.pathname = `/companions/${COMPANION_B}/garden/sessions`;
+    await activateCompanionScope(COMPANION_B);
+
+    await expect(request).rejects.toMatchObject({ name: 'AbortError' });
   });
 
   it('sends an explicit ETag and surfaces an unchanged conditional response', async () => {
@@ -113,7 +160,7 @@ describe('admin api client errors', () => {
   });
 
   it('preserves 401 login redirect behavior', async () => {
-    const windowRef = { location: { href: '' } };
+    const windowRef = { location: { href: '', pathname: '/' } };
     vi.stubGlobal('window', windowRef);
     mockFetch(new Response(JSON.stringify({ error: 'session expired' }), {
       status: 401,

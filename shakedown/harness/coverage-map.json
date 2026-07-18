@@ -77,6 +77,106 @@
       "disposition": "manual",
       "operator": "release operator",
       "reason": "current Garden behavioral sweep predates the final Sprint 10 route inventory; retain explicit operator UX coverage"
+    },
+    "july-hardening-fleet-auth-sso-and-passkey-administration": {
+      "cases": [],
+      "disposition": "manual",
+      "operator": "release operator",
+      "reason": "operator-eyes: SSO subject-scoped admin is a Garden partner walk and the WebAuthn passkey register/authenticate ceremony cannot run headless"
+    },
+    "july-hardening-dnll-owner-migration-upgrade-path": {
+      "cases": [],
+      "disposition": "manual",
+      "operator": "release operator",
+      "reason": "staged-session: run as its own pre-upgrade -> ship-RC -> assert-owner-migration session; fresh-bootstrap lanes never execute migration code, so it is never a round rider"
+    },
+    "july-hardening-voice-reply-streaming-and-barge-in": {
+      "cases": [],
+      "disposition": "manual",
+      "operator": "release operator",
+      "reason": "operator-eyes: committed-segment VoiceReplyStream and preemptive interrupt/cancel are an operator voice session, not scriptable headless"
+    },
+    "july-hardening-preemptable-provider-capacity-admission": {
+      "cases": [],
+      "disposition": "partner",
+      "operator": "release operator",
+      "reason": "the admission controller only preempts under real capacity load; exercised in a Pi-class partner free-play block and read from perf telemetry"
+    },
+    "july-hardening-boundary-spend-accounting-and-model-lane-routing": {
+      "cases": ["model_lane_attribution"],
+      "disposition": null,
+      "reason": "model_usage_events slot_key attribution is cross-checked against the models.json owner slots per lane; the intended tier model is resolved from config, never hardcoded"
+    },
+    "july-hardening-garden-ux-wave-2": {
+      "cases": [],
+      "disposition": "manual",
+      "operator": "release operator",
+      "reason": "operator-eyes: the Garden behavioral sweep over the reworked settings/IA/navigation routes asserts behavior, not HTTP 200s"
+    },
+    "july-hardening-settings-save-preserves-backup-json-encryption-block": {
+      "cases": ["backup_encryption_roundtrip"],
+      "disposition": null,
+      "reason": "irzz.1 regression: backup.json snapshots before and after a unified settings save prove the mandatory encryption block survives"
+    },
+    "july-hardening-backup-gfs-retention": {
+      "cases": [],
+      "disposition": "manual",
+      "operator": "release operator",
+      "reason": "operator-eyes: verify:backup-restore floor plus an operator check of grandfather-father-son pruning against backup.json retention counts, verified out-of-round"
+    },
+    "sprint-11-cognition-group-chat-stabilization-and-scoped-appraisal": {
+      "cases": [],
+      "disposition": "partner",
+      "operator": "release operator",
+      "reason": "a stable group-chat turn pipeline and scoped appraisal need a real multi-participant partner session"
+    },
+    "sprint-11-cognition-promptplan-single-assembly-and-caching": {
+      "cases": [],
+      "disposition": "manual",
+      "operator": "release operator",
+      "reason": "operator-eyes: a guided walk asserts one PromptPlan artifact and cache reuse in TurnRecord observability across a repeat turn; a standalone probe is deferred"
+    },
+    "sprint-11-cognition-context-envelope-channel-relationship-and-trust-semantics": {
+      "cases": [],
+      "disposition": "partner",
+      "operator": "release operator",
+      "reason": "context envelope sections must vary by channel, relationship, and trust; exercised across a partner walk over the persisted TurnRecord"
+    },
+    "sprint-11-cognition-social-graph-minimum-wiring": {
+      "cases": [],
+      "disposition": "partner",
+      "operator": "release operator",
+      "reason": "the social graph is populated only by real multi-companion partner sessions and inspected in the Garden"
+    },
+    "sprint-11-cognition-episodic-gating-scheduler-owned-sleeptime-and-subsystem-health": {
+      "cases": [],
+      "disposition": "manual",
+      "operator": "release operator",
+      "reason": "operator-eyes: a free-play block observes episodic gating and scheduler-owned sleeptime, plus a GET /subsystem-health behavioral check"
+    },
+    "sprint-11-cognition-subprocess-persona-voice-and-per-participant-orientation": {
+      "cases": [],
+      "disposition": "manual",
+      "operator": "release operator",
+      "reason": "operator-eyes: subprocess persona voices and per-participant orientation are an operator voice session"
+    },
+    "sprint-11-cognition-temporal-continuity-and-proactive-wake-up": {
+      "cases": [],
+      "disposition": "manual",
+      "operator": "release operator",
+      "reason": "operator-eyes: live next-morning wake-up acceptance with an observed proactive turn"
+    },
+    "sprint-11-cognition-inner-life-free-time-and-wiki-rag-flows": {
+      "cases": [],
+      "disposition": "partner",
+      "operator": "release operator",
+      "reason": "the free-play autonomy block plus the toaster/wiki RAG read-back test are partner-session driven"
+    },
+    "sprint-11-cognition-w1-memory-schema-l0-1-and-projection-layer": {
+      "cases": [],
+      "disposition": "manual",
+      "operator": "release operator",
+      "reason": "operator-eyes: a guided walk asserts L0.1 projection via Garden memory search and episodic rendering"
     }
   }
 }

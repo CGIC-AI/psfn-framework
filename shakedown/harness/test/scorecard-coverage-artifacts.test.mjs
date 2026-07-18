@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { SPRINT10_CASE_IDS } from '../cases/sprint10.mjs';
+import { HARDENING_CASE_IDS } from '../cases/hardening.mjs';
 
 const SCORECARD = fileURLToPath(new URL('../shakedown-scorecard.mjs', import.meta.url));
 const REAL_DOC = fileURLToPath(new URL('../../../docs/shakedown.md', import.meta.url));
@@ -156,7 +157,7 @@ test('completed or failing external artifacts cannot credit coverage proof', () 
   }
 });
 
-test('the Sprint 10 coverage map is green with the authored and external proof IDs', () => {
+test('the full coverage map is green with the authored and external proof IDs', () => {
   const root = mkdtempSync(join(tmpdir(), 'psfn-scorecard-s10-'));
   try {
     const artifact = join(root, 'sprint10.json');
@@ -170,7 +171,7 @@ test('the Sprint 10 coverage map is green with the authored and external proof I
         'capability_refusal_matrix',
         'tier_tool_conformance',
       ],
-      results: SPRINT10_CASE_IDS.map((caseId) => ({
+      results: [...SPRINT10_CASE_IDS, ...HARDENING_CASE_IDS].map((caseId) => ({
         caseId,
         caseStatus: 'ok',
         response: { status: 200 },

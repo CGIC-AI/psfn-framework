@@ -1,0 +1,28 @@
+{
+  "companions": [
+    {
+      "companionId": "a7100000-0000-4000-8000-000000000001",
+      "companionDataDir": "companion-data",
+      "characterCardPath": "companion-data/companion.json",
+      "postgresSchema": "shakedown_artie",
+      "gardenPort": 10154,
+      "displayName": "ARTEMIS"
+    },
+    {
+      "companionId": "b7100000-0000-4000-8000-000000000002",
+      "companionDataDir": "support-companions/mica/data",
+      "characterCardPath": "support-companions/mica/data/companion.json",
+      "postgresSchema": "shakedown_support_mica",
+      "gardenPort": 10155,
+      "displayName": "Mica"
+    },
+    {
+      "companionId": "c7100000-0000-4000-8000-000000000003",
+      "companionDataDir": "support-companions/lumen/data",
+      "characterCardPath": "support-companions/lumen/data/companion.json",
+      "postgresSchema": "shakedown_support_lumen",
+      "gardenPort": 10156,
+      "displayName": "Lumen"
+    }
+  ]
+}

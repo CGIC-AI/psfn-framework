@@ -103,6 +103,11 @@ function normalizeLedgerRow(row) {
     chargeLane: pick(row, 'charge_lane', 'chargeLane'),
     chargeSurface: pick(row, 'charge_surface', 'chargeSurface'),
     purpose: pick(row, 'purpose', 'purpose'),
+    // Per-turn / per-session correlation columns (migrations.ts model_usage_events
+    // idx_model_usage_events_request / _session_time). Populated for
+    // operator_visible turns; 'unknown' for companion_private background rows.
+    turnId: pick(row, 'turn_id', 'turnId'),
+    sessionId: pick(row, 'session_id', 'sessionId'),
   };
 }
 
@@ -113,10 +118,16 @@ function normalizeLedgerRow(row) {
  * inputs:
  *   modelsConfig     — parsed models.json owner file.
  *   ledgerRows       — model_usage_events rows (snake or camel columns).
- *   laneExpectations — [{ lane, purpose }] pairs: every ledger row on `lane`
- *                      must have been charged the model the owner file assigns
- *                      to that purpose's primary slot. `purpose` resolves to a
- *                      model id via models.json — no model name is hardcoded.
+ *   laneExpectations — [{ lane|turnId, purpose }] entries: the rows they select
+ *                      must have been charged the model the owner file assigns to
+ *                      that purpose's primary slot. `purpose` resolves to a model
+ *                      id via models.json — no model name is hardcoded. Each entry
+ *                      scopes rows by EITHER `lane` (charge_lane match — used for
+ *                      the distinct 'background' lane) OR `turnId` (turn_id match —
+ *                      used to attribute a specific foreground turn without pulling
+ *                      in the whole interactive lane); `turnId` wins when both are
+ *                      present. osln scopes the query to the case's session so a
+ *                      lane match no longer sweeps in unrelated concurrent rows.
  */
 export function validateModelLaneAttributionProof({ modelsConfig, ledgerRows, laneExpectations = [] }) {
   const failures = [];
@@ -159,26 +170,34 @@ export function validateModelLaneAttributionProof({ modelsConfig, ledgerRows, la
 
   for (const expectation of asArray(laneExpectations)) {
     const lane = expectation?.lane;
+    const turnId = expectation?.turnId;
     const purpose = expectation?.purpose;
-    if (typeof lane !== 'string' || typeof purpose !== 'string') {
-      failures.push('lane expectation must name both a lane and a purpose');
+    const hasLane = typeof lane === 'string' && lane.length > 0;
+    const hasTurn = typeof turnId === 'string' && turnId.length > 0;
+    if (typeof purpose !== 'string' || (!hasLane && !hasTurn)) {
+      failures.push('lane expectation must name a purpose and either a lane or a turnId');
       continue;
     }
+    // turn_id wins so a specific foreground turn can be attributed without
+    // sweeping in every other row on its charge lane.
+    const scopeLabel = hasTurn ? `turn ${turnId}` : `${lane} lane`;
     const slotId = purposePrimary[purpose];
     if (!slotId || !slotCatalog[slotId]) {
-      failures.push(`models.json has no primary owner slot for purpose ${purpose} (lane ${lane})`);
+      failures.push(`models.json has no primary owner slot for purpose ${purpose} (${scopeLabel})`);
       continue;
     }
     const expectedModel = slotCatalog[slotId].model;
-    const laneRows = rows.filter((row) => row.chargeLane === lane);
-    if (laneRows.length === 0) {
-      failures.push(`spend ledger has no ${lane}-lane row to attribute against the ${purpose} owner slot`);
+    const scopedRows = hasTurn
+      ? rows.filter((row) => row.turnId === turnId)
+      : rows.filter((row) => row.chargeLane === lane);
+    if (scopedRows.length === 0) {
+      failures.push(`spend ledger has no ${scopeLabel} row to attribute against the ${purpose} owner slot`);
       continue;
     }
-    for (const row of laneRows) {
+    for (const row of scopedRows) {
       if (row.model !== expectedModel) {
         failures.push(
-          `${lane} lane routed to model ${String(row.model)} but the ${purpose} owner slot resolves to ${expectedModel}`,
+          `${scopeLabel} routed to model ${String(row.model)} but the ${purpose} owner slot resolves to ${expectedModel}`,
         );
       }
     }
@@ -187,42 +206,107 @@ export function validateModelLaneAttributionProof({ modelsConfig, ledgerRows, la
   return failures;
 }
 
-function hasEncryptionBlock(backup) {
+function backupEncryptionBlock(backup) {
   const encryption = backup?.encryption;
-  return Boolean(encryption)
-    && typeof encryption === 'object'
-    && typeof encryption.mode === 'string'
-    && encryption.mode.length > 0;
+  if (
+    !encryption
+    || typeof encryption !== 'object'
+    || Array.isArray(encryption)
+    || typeof encryption.mode !== 'string'
+    || encryption.mode.length === 0
+  ) {
+    return null;
+  }
+  return encryption;
 }
 
 /**
- * Prove a unified Garden settings save preserved the mandatory backup.json
- * encryption block (irzz.1 regression: the save stripped it and broke the
- * next encrypted backup). Inputs are owner-file snapshots captured before and
- * after the save plus the save-request outcome — reply text is never proof.
+ * Prove the real backup owner-file save path preserves the mandatory backup.json
+ * encryption block, and that the fail-closed guard at the regression site rejects
+ * an encryption-stripped payload (irzz.1: a unified save dropped the encryption
+ * block and broke the next encrypted backup).
+ *
+ * This drives the actual save route (POST /api/admin/settings/backup ->
+ * saveBackupConfig / validateBackupConfig), never the unrelated settings PATCH.
+ * Inputs are on-disk backup.json snapshots captured across each real write plus
+ * the save/restore/reject request outcomes — reply text is never proof.
+ *
+ * Requires, all fail-closed:
+ *   - the pre-save owner file actually carries an encryption block (precondition);
+ *   - the POSITIVE full-payload save succeeded AND the flipped benign scalar
+ *     landed on disk AND the encryption block survived byte-for-byte;
+ *   - the original payload was restored (flipped scalar back, encryption intact);
+ *   - the NEGATIVE encryption-stripped payload was REJECTED and did not touch
+ *     backup.json on disk.
  */
-export function validateBackupEncryptionRoundTripProof({ before, after, save }) {
+export function validateBackupEncryptionRoundTripProof({
+  field,
+  flipFrom,
+  flipTo,
+  before,
+  afterWrite,
+  afterRestore,
+  afterReject,
+  save,
+  restore,
+  reject,
+} = {}) {
   const failures = [];
-  if (!hasEncryptionBlock(before)) {
+
+  const beforeEncryption = backupEncryptionBlock(before);
+  if (!beforeEncryption) {
     failures.push('pre-save backup.json snapshot is missing its encryption block — precondition not met');
     return failures;
   }
-  if (save?.ok !== true || typeof save?.status !== 'number' || save.status >= 400) {
-    failures.push(`unified settings save did not succeed (status ${String(save?.status)})`);
-  }
-  if (!hasEncryptionBlock(after)) {
-    failures.push('settings save stripped the mandatory backup.json encryption block (irzz.1 regression)');
+  if (typeof field !== 'string' || field.length === 0) {
+    failures.push('backup round-trip did not record which benign scalar it flipped');
     return failures;
   }
-  if (after.encryption.mode !== before.encryption.mode) {
+  const beforeEncryptionStr = JSON.stringify(beforeEncryption);
+
+  // (a) POSITIVE round-trip through the real backup save path.
+  if (save?.ok !== true || typeof save?.status !== 'number' || save.status >= 400) {
+    failures.push(`backup save via POST /api/admin/settings/backup did not succeed (status ${String(save?.status)})`);
+  }
+  const writeEncryption = backupEncryptionBlock(afterWrite);
+  if (!writeEncryption) {
+    failures.push('backup save stripped the mandatory backup.json encryption block (irzz.1 regression)');
+  } else if (JSON.stringify(writeEncryption) !== beforeEncryptionStr) {
+    failures.push('backup save mutated the backup.json encryption block (mode/keyRef changed)');
+  }
+  if (flipTo === flipFrom) {
+    failures.push('backup round-trip flipped the scalar to its own value — the write would be a no-op');
+  }
+  if (!afterWrite || typeof afterWrite !== 'object' || afterWrite[field] !== flipTo) {
     failures.push(
-      `settings save changed backup.json encryption.mode from ${before.encryption.mode} to ${after.encryption.mode}`,
+      `backup save did not land: expected on-disk ${field}=${String(flipTo)} but read ${String(afterWrite?.[field])}`,
     );
   }
-  const beforeKeyRef = JSON.stringify(before.encryption.keyRef ?? null);
-  const afterKeyRef = JSON.stringify(after.encryption.keyRef ?? null);
-  if (beforeKeyRef !== afterKeyRef) {
-    failures.push('settings save mutated the backup.json encryption keyRef');
+
+  // Restore: the original scalar came back and the encryption block is intact.
+  if (restore?.ok !== true || typeof restore?.status !== 'number' || restore.status >= 400) {
+    failures.push(`backup restore did not succeed (status ${String(restore?.status)})`);
   }
+  const restoreEncryption = backupEncryptionBlock(afterRestore);
+  if (!restoreEncryption || JSON.stringify(restoreEncryption) !== beforeEncryptionStr) {
+    failures.push('backup restore did not return the original encryption block');
+  }
+  if (!afterRestore || typeof afterRestore !== 'object' || afterRestore[field] !== flipFrom) {
+    failures.push(
+      `backup was not restored: expected on-disk ${field}=${String(flipFrom)} but read ${String(afterRestore?.[field])}`,
+    );
+  }
+
+  // (b) NEGATIVE guard probe: the encryption-stripped payload must be REJECTED
+  //     at the regression site and must not touch backup.json on disk.
+  if (reject?.ok === true || typeof reject?.status !== 'number' || reject.status < 400) {
+    failures.push(
+      `encryption-stripped backup payload was NOT rejected (status ${String(reject?.status)}) — the fail-closed guard is missing`,
+    );
+  }
+  if (JSON.stringify(afterReject) !== JSON.stringify(afterRestore)) {
+    failures.push('rejected backup payload changed backup.json on disk — the reject was not fail-closed');
+  }
+
   return failures;
 }

@@ -105,7 +105,7 @@
     "july-hardening-boundary-spend-accounting-and-model-lane-routing": {
       "cases": ["model_lane_attribution"],
       "disposition": null,
-      "reason": "model_usage_events slot_key attribution is cross-checked against the models.json owner slots per lane; the intended tier model is resolved from config, never hardcoded"
+      "reason": "model_usage_events slot_key attribution is cross-checked against the models.json owner slots per lane; the intended tier model is resolved from config, never hardcoded. The inline-image turn is attributed at turn_id granularity against the models.json vision owner slot (the ledger stamps the correlation purpose 'agent.turn.prompt', not 'vision', so the assertion resolves the vision OWNER slot and fails closed if no row lands for the turn or it routes to a non-owner model)"
     },
     "july-hardening-garden-ux-wave-2": {
       "cases": [],
@@ -116,7 +116,7 @@
     "july-hardening-settings-save-preserves-backup-json-encryption-block": {
       "cases": ["backup_encryption_roundtrip"],
       "disposition": null,
-      "reason": "irzz.1 regression: backup.json snapshots before and after a unified settings save prove the mandatory encryption block survives"
+      "reason": "irzz.1 regression: the case drives the real backup save path (POST /api/admin/settings/backup -> saveBackupConfig/validateBackupConfig) with a full self-derived payload, snapshots backup.json across the write to prove the benign scalar flip landed AND the mandatory encryption block survived byte-for-byte, restores the original, and proves an encryption-stripped payload is rejected fail-closed without touching backup.json"
     },
     "july-hardening-backup-gfs-retention": {
       "cases": [],

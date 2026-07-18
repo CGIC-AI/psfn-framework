@@ -2,9 +2,9 @@
 //
 // A focused domain module alongside the Sprint 10 catalog (cases/sprint10/*):
 // it authors only the hardening rows whose proofs the persisted-state library
-// already supports — boundary spend accounting (model-lane routing, mmo9.7.3)
-// and the backup.json encryption-block round-trip regression (irzz.1). Voice,
-// passkey ceremonies, PWA, and the DNLL migration upgrade path stay
+// already supports — boundary spend accounting (model-lane routing, mmo9.7.3 /
+// osln) and the backup.json encryption-block round-trip regression (irzz.1).
+// Voice, passkey ceremonies, PWA, and the DNLL migration upgrade path stay
 // operator-eyes / staged-session dispositions in docs/shakedown.md, not cases.
 
 import { join } from 'node:path';
@@ -15,24 +15,73 @@ import {
   validateModelLaneAttributionProof,
 } from '../lib/hardening-proofs.mjs';
 import {
-  envText,
   normalizeCustomOutcome,
   proof,
-  requireCaseEnv,
+  sleep,
 } from './sprint10/common.mjs';
 
 const MODELS_OWNER_FILE = 'models.json';
 const BACKUP_OWNER_FILE = 'backup.json';
 
 const SPEND_MESSAGE = 'Reply with one short sentence for the boundary spend-ledger attribution proof.';
+const VISION_MESSAGE = 'Reply with one short sentence about this image for the spend-ledger vision-workload probe.';
+const BACKGROUND_WARMUP_MESSAGE = 'Reply with one short sentence to advance the background emotion-appraisal cadence for the spend-ledger proof.';
 const BACKUP_MESSAGE = 'Reply with one short sentence for the backup encryption round-trip probe.';
 
+// The canonical backup owner-file save route. This is the actual regression
+// site: POST /api/admin/settings/backup routes through saveSubConfigJson('backup')
+// -> configStore.saveBackup -> saveBackupConfig / validateBackupConfig
+// (src/operator/garden/routes/settings-routes.ts POST prefixedParamPath, and
+// src/system/config/backup-config.ts). The route/method are NOT operator-tunable
+// — only the (self-derived, benign) payload is. The body is form-urlencoded with
+// a single `configJson` field (a JSON-stringified full backup config); a valid
+// save returns 200 text `backup.json saved`, a rejected payload returns 400 JSON
+// `{error}`.
+const BACKUP_SAVE_PATH = '/api/admin/settings/backup';
+
+// Benign mutable retention scalars we may flip by +1 to prove a real backup save
+// landed on disk. Every candidate is a pure grandfather-father-son retention
+// count enforced by validateBackupConfig (backup-config.ts): it never touches
+// encryption, mode, keyRef, mirrorDir, or any security/identity field, and a
+// valid on-disk backup.json always carries at least one of them. Flipping a
+// retention count by 1 is inert for the round and fully reversible. We prefer
+// maxMonthlyBackups (a required GFS count, min 0) and fall back only if a given
+// deployment somehow lacks it.
+const BACKUP_FLIP_FIELD_CANDIDATES = Object.freeze([
+  'maxMonthlyBackups',
+  'maxWeeklyBackups',
+  'maxRotatingBackups',
+]);
+
+// 1x1 transparent PNG. An inline attachment exercises the multimodal foreground
+// path without any external egress (which the nursery tier does not grant).
+const VISION_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
+
+// Scope the spend ledger to THIS case: rows on the case session (interactive +
+// vision foreground turns are operator_visible and carry the case session id)
+// plus any background-lane rows in the case window (the emotion-appraisal
+// background job is companion_private, so its session/turn ids are 'unknown' and
+// it can only be scoped by lane + window). This replaces the previous
+// time-window-only filter that let every unrelated concurrent row into the
+// proof (osln). $1 = case start, $2 = case end, $3 = case session id.
 const MODEL_USAGE_QUERY = `
-  select slot_key, provider, model, charge_lane, charge_surface, purpose, recorded_at_ms
+  select slot_key, provider, model, charge_lane, charge_surface, purpose,
+         recorded_at_ms, turn_id, session_id
   from model_usage_events
   where recorded_at_ms >= $1
+    and recorded_at_ms <= $2
+    and (session_id = $3 or charge_lane = 'background')
   order by recorded_at_ms asc
 `;
+
+const BACKGROUND_ROW_COUNT_QUERY = `
+  select count(*)::int as count
+  from model_usage_events
+  where recorded_at_ms >= $1 and charge_lane = 'background'
+`;
+
+const TERMINAL_BACKGROUND_JOB_STATES = new Set(['succeeded', 'failed', 'stale_discarded']);
 
 export const HARDENING_CASE_IDS = Object.freeze([
   'model_lane_attribution',
@@ -57,75 +106,163 @@ async function postAndWait({ services, sessionId, apiUserId, message }) {
   return { response, turnRecord, startedAtMs };
 }
 
-function resolveSettingsValue(root, key) {
-  if (root && typeof root === 'object' && !Array.isArray(root)) {
-    if (Object.prototype.hasOwnProperty.call(root, key)) {
-      return { found: true, value: root[key] };
-    }
-    const settings = root.settings;
-    if (
-      settings && typeof settings === 'object' && !Array.isArray(settings)
-      && Object.prototype.hasOwnProperty.call(settings, key)
-    ) {
-      return { found: true, value: settings[key] };
-    }
-  }
-  return { found: false, value: undefined };
+// Vision workload. Sends a foreground turn carrying an inline base64 image and
+// recovers the persisted turn record — and its turnId — so the image turn can be
+// attributed at turn granularity in the spend ledger.
+//
+// Runtime reality (verified for osln/65rk): an inline base64 attachment is
+// detected as a vision turn (resolveTurnModelPurpose -> 'vision',
+// src/core/agent/substrate-agent/model-runtime.ts), but the dedicated vision
+// reviewer only fires for fetchable http(s) image_urls (which need image egress
+// the nursery tier does not grant). The inline image therefore rides the main
+// foreground agent.prompt call: its model_usage_events row lands on the
+// interactive lane against the models.json vision owner slot (which, in the
+// default config, is the same 'primary' slot that owns 'chat' — see
+// load-config.ts). The ledger's `purpose` COLUMN carries the correlation stage
+// string 'agent.turn.prompt', not the routing ModelPurpose 'vision'; the proof
+// therefore attributes by turn_id against the vision OWNER SLOT (resolved from
+// models.json, never hardcoded), which is the strongest honest assertion for the
+// inline case and fails closed if no row lands for the turn or it routes to a
+// non-owner model.
+//
+// The persisted userMessage.content for a multimodal turn is a STRING whose
+// prefix is the text block verbatim, then an appended image-attachment block
+// (src/core/agent/substrate-agent/vision-attachments.ts
+// appendPersistedImageAttachmentBlock). Exact-string matching therefore fails,
+// but a substring match on VISION_MESSAGE recovers the record; turnRecord.turnId
+// equals model_usage_events.turn_id (both the turn's UUIDv7) for this
+// operator_visible foreground turn, so a turn_id-scoped ledger assertion holds.
+async function postAndWaitVisionInline({ services, sessionId, apiUserId }) {
+  const startedAtMs = Date.now();
+  const response = await postChatCompletion({
+    apiUrl: services.apiUrl,
+    headers: buildChatHeaders({ apiKey: services.apiKey, sessionId, privacy: 'private' }),
+    message: VISION_MESSAGE,
+    content: [
+      { type: 'text', text: VISION_MESSAGE },
+      { type: 'image', data: VISION_PNG_BASE64, mimeType: 'image/png', name: 'shakedown-probe.png' },
+    ],
+    timeoutMs: 120_000,
+  });
+  const turnRecord = await services.waitForTurnRecord({
+    sessionId,
+    apiUserId,
+    messageIncludes: VISION_MESSAGE,
+    minStartedAtMs: startedAtMs - 2_000,
+    timeoutMs: 120_000,
+  });
+  return { response, turnRecord };
 }
 
-// Confirm the harmless settings change actually took effect by re-reading the
-// pinned settings route and deep-comparing each submitted top-level field. A
-// no-op 2xx that changes nothing fails here instead of false-passing.
-export async function verifySettingsRoundTrip({ services, savePath, saveBody, saveOk, saveStatus }) {
-  if (!saveOk) {
-    return { verified: false, mismatches: [`settings save returned status ${String(saveStatus ?? 'none')}`] };
-  }
-  let submitted;
-  try {
-    submitted = JSON.parse(saveBody);
-  } catch (error) {
-    return {
-      verified: false,
-      mismatches: [`PSFN_SHAKEDOWN_SETTINGS_SAVE_BODY is not valid JSON: ${error instanceof Error ? error.message : String(error)}`],
-    };
-  }
-  if (!submitted || typeof submitted !== 'object' || Array.isArray(submitted)) {
-    return { verified: false, mismatches: ['PSFN_SHAKEDOWN_SETTINGS_SAVE_BODY must be a JSON object of settings fields'] };
-  }
-  const changedKeys = Object.keys(submitted);
-  if (changedKeys.length === 0) {
-    return { verified: false, mismatches: ['settings save body carried no fields to round-trip'] };
-  }
-  const refetch = await services.fetchJson(`${services.adminBase}${savePath}`, { method: 'GET' });
-  if (refetch?.ok !== true || !refetch?.body || typeof refetch.body !== 'object') {
-    return { verified: false, mismatches: [`refetch of ${savePath} failed (status ${String(refetch?.status ?? 'none')})`] };
-  }
-  const mismatches = [];
-  for (const key of changedKeys) {
-    const resolved = resolveSettingsValue(refetch.body, key);
-    if (!resolved.found) {
-      mismatches.push(`refetched settings missing field '${key}'`);
-      continue;
+// Await a turn's post-turn emotion-appraisal background job to a terminal state.
+// The appraisal job is the runtime's only 'background' charge-lane producer.
+async function waitForEmotionAppraisal(services, turnId) {
+  if (typeof turnId !== 'string' || turnId.length === 0) return null;
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    const jobs = await services.pgAll(
+      `select kind, state
+       from agent_background_work_jobs
+       where source_turn_id = $1 and kind = 'emotion_appraisal';`,
+      [turnId],
+    );
+    const appraisal = Array.isArray(jobs)
+      ? jobs.find((job) => job.kind === 'emotion_appraisal')
+      : null;
+    if (appraisal && TERMINAL_BACKGROUND_JOB_STATES.has(appraisal.state)) {
+      return appraisal.state;
     }
-    if (JSON.stringify(resolved.value) !== JSON.stringify(submitted[key])) {
-      mismatches.push(
-        `field '${key}' did not round-trip (submitted ${JSON.stringify(submitted[key])}, refetched ${JSON.stringify(resolved.value)})`,
-      );
-    }
+    await sleep(250);
   }
-  return { verified: mismatches.length === 0, mismatches };
+  return null;
 }
 
-export function buildHardeningCases(ctx, services, env = process.env) {
+// Drive the background lane. The emotion-appraisal background job charges the
+// 'background' lane, but its periodic gate only opens once turnsSinceLast >= the
+// appraisal turn cadence (runtime default 5; see src/core/emotion/appraisal.ts).
+// The interactive + vision turns already advanced the counter for this session;
+// drive additional benign turns until a background-lane usage row lands (or the
+// budget is exhausted), awaiting each turn's appraisal job so the counter
+// advances deterministically between sends. Residual risk: if an operator raised
+// the cadence above the warmup budget the background row never lands and the
+// proof fails closed with a clear "no background lane row" message.
+async function driveBackgroundLane({ services, sessionId, apiUserId, baselineMs }) {
+  const maxWarmupTurns = 10;
+  let warmupTurns = 0;
+  let backgroundObserved = false;
+  for (let i = 0; i < maxWarmupTurns; i += 1) {
+    const turn = await postAndWait({
+      services,
+      sessionId,
+      apiUserId,
+      message: `${BACKGROUND_WARMUP_MESSAGE} (${i + 1})`,
+    });
+    warmupTurns += 1;
+    await waitForEmotionAppraisal(services, turn.turnRecord?.turnId);
+    const backgroundRows = Number(await services.pgScalar(BACKGROUND_ROW_COUNT_QUERY, [baselineMs]));
+    if (Number.isFinite(backgroundRows) && backgroundRows > 0) {
+      backgroundObserved = true;
+      break;
+    }
+  }
+  return { warmupTurns, backgroundObserved };
+}
+
+// ── Backup owner-file save-path helpers (irzz.1) ──
+
+function hasBackupEncryptionBlock(backup) {
+  const encryption = backup?.encryption;
+  return Boolean(encryption)
+    && typeof encryption === 'object'
+    && !Array.isArray(encryption)
+    && typeof encryption.mode === 'string'
+    && encryption.mode.length > 0;
+}
+
+function pickBackupFlipField(backup) {
+  if (!backup || typeof backup !== 'object' || Array.isArray(backup)) return null;
+  for (const field of BACKUP_FLIP_FIELD_CANDIDATES) {
+    const value = backup[field];
+    if (typeof value === 'number' && Number.isFinite(value)) return field;
+  }
+  return null;
+}
+
+// POST a full backup config to the pinned save route. The body is form-urlencoded
+// `configJson=<JSON>` per the route contract. Returns the normalized outcome —
+// never the plain-text success body as proof.
+async function postBackupConfig(services, payload) {
+  const res = await services.fetchJson(`${services.adminBase}${BACKUP_SAVE_PATH}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `configJson=${encodeURIComponent(JSON.stringify(payload))}`,
+  });
+  return {
+    ok: res?.ok === true,
+    status: typeof res?.status === 'number' ? res.status : null,
+    error: res?.body?.error ?? null,
+  };
+}
+
+export function buildHardeningCases(ctx, services) {
   const modelsPath = join(services.systemDataDir, MODELS_OWNER_FILE);
   const backupPath = join(services.systemDataDir, BACKUP_OWNER_FILE);
+
+  // Durable-side-effect ledger for the idempotent top-level backup cleanup.
+  // before() captures the original full backup.json payload; if a save/restore
+  // throws before execute() restores it, the case runner's top-level cleanup
+  // (invoked on harness error paths) restores it from here.
+  const backupCleanupState = {
+    originalPayload: null,
+    field: null,
+    restored: false,
+  };
 
   return [
     {
       id: 'model_lane_attribution',
       tier: 'nursery',
       variants: ['local', 'kube'],
-      feature: 'psfn-framework-mmo9.7.3',
+      feature: 'psfn-framework-osln',
       sessionId: `hardening-spend-${ctx.runToken}`,
       message: SPEND_MESSAGE,
       proof: proof(
@@ -134,22 +271,46 @@ export function buildHardeningCases(ctx, services, env = process.env) {
       ),
       execute: async ({ sessionId, apiUserId }) => {
         const baselineMs = Date.now() - 2_000;
-        const main = await postAndWait({ services, sessionId, apiUserId, message: SPEND_MESSAGE });
-        const ledgerRows = await services.pgAll(MODEL_USAGE_QUERY, [baselineMs]);
+        // (1) Interactive lane: a plain foreground chat turn.
+        const interactive = await postAndWait({ services, sessionId, apiUserId, message: SPEND_MESSAGE });
+        // (2) Vision workload: a foreground turn carrying an inline image, whose
+        //     turn record (and turnId) we recover so the image turn is attributed
+        //     at turn granularity against the models.json vision owner slot.
+        const vision = await postAndWaitVisionInline({ services, sessionId, apiUserId });
+        const visionTurnId = vision.turnRecord?.turnId ?? null;
+        // (3) Background lane: drive benign turns until the periodic
+        //     emotion-appraisal gate opens and its background-lane call lands.
+        const background = await driveBackgroundLane({ services, sessionId, apiUserId, baselineMs });
+        const endMs = Date.now() + 2_000;
+        const ledgerRows = await services.pgAll(MODEL_USAGE_QUERY, [baselineMs, endMs, sessionId]);
         const modelsConfig = services.readJsonIfExists(modelsPath);
         return normalizeCustomOutcome({
           sessionId,
           request: { privacy: 'private', message: SPEND_MESSAGE },
-          response: main.response,
-          turnRecord: main.turnRecord,
+          response: interactive.response,
+          turnRecord: interactive.turnRecord,
           sideChecks: {
             modelLane: {
               modelsConfig,
               ledgerRows,
-              // The interactive chat turn must route to the owner file's
-              // chat-primary slot. The concrete model id is resolved from
-              // models.json, never hardcoded here.
-              laneExpectations: [{ lane: 'interactive', purpose: 'chat' }],
+              // Each lane's owner slot is resolved from models.json purposes; the
+              // concrete model id is never hardcoded here. The interactive lane
+              // covers the plain chat turn; the inline-image turn is attributed by
+              // turn_id against the vision owner slot; the background lane covers
+              // the emotion-appraisal call against the background owner slot. The
+              // vision expectation carries the recovered turnId (or null, which
+              // fails the proof closed — the image turn must produce a row).
+              laneExpectations: [
+                { lane: 'interactive', purpose: 'chat' },
+                { turnId: visionTurnId, purpose: 'vision' },
+                { lane: 'background', purpose: 'background' },
+              ],
+              driven: {
+                visionInline: Boolean(vision.response),
+                visionTurnId,
+                backgroundWarmupTurns: background.warmupTurns,
+                backgroundObserved: background.backgroundObserved,
+              },
             },
           },
         });
@@ -160,6 +321,7 @@ export function buildHardeningCases(ctx, services, env = process.env) {
             ledgerRowCount: Array.isArray(outcome.sideChecks.modelLane.ledgerRows)
               ? outcome.sideChecks.modelLane.ledgerRows.length
               : 0,
+            driven: outcome.sideChecks.modelLane.driven ?? null,
           }
           : null,
       }),
@@ -175,87 +337,157 @@ export function buildHardeningCases(ctx, services, env = process.env) {
       sessionId: `hardening-backup-${ctx.runToken}`,
       message: BACKUP_MESSAGE,
       proof: proof(
-        'backup.json owner-file snapshots captured before and after a unified Garden settings save',
-        'the mandatory encryption block survives the save unchanged',
+        'backup.json owner-file snapshots captured across a real backup save (POST /api/admin/settings/backup)',
+        'a full-payload save lands on disk with the mandatory encryption block intact, and an encryption-stripped payload is rejected fail-closed without touching backup.json',
       ),
       before: async () => {
-        requireCaseEnv(
-          env,
-          ['PSFN_SHAKEDOWN_SETTINGS_SAVE_BODY'],
-          'backup_encryption_roundtrip',
-        );
-        return { backupBefore: services.readJsonIfExists(backupPath) };
+        const backupBefore = services.readJsonIfExists(backupPath);
+        if (!backupBefore || typeof backupBefore !== 'object' || Array.isArray(backupBefore)) {
+          throw new Error(
+            `backup_encryption_roundtrip could not read a backup.json owner file at ${backupPath}`,
+          );
+        }
+        if (!hasBackupEncryptionBlock(backupBefore)) {
+          throw new Error(
+            'backup_encryption_roundtrip precondition failed: backup.json has no encryption block to protect',
+          );
+        }
+        const field = pickBackupFlipField(backupBefore);
+        if (!field) {
+          throw new Error(
+            'backup_encryption_roundtrip found no benign numeric retention field to flip in backup.json '
+            + `(looked for ${BACKUP_FLIP_FIELD_CANDIDATES.join(', ')}); refusing to write`,
+          );
+        }
+        const flipFrom = backupBefore[field];
+        const flipTo = flipFrom + 1;
+        // Full payloads: preserve every field, flip only the benign retention
+        // scalar; strip the encryption block for the negative guard probe.
+        const flippedPayload = { ...backupBefore, [field]: flipTo };
+        const strippedPayload = { ...backupBefore };
+        delete strippedPayload.encryption;
+        // Seed the idempotent cleanup with the ORIGINAL full payload so an error
+        // path can restore backup.json.
+        backupCleanupState.originalPayload = backupBefore;
+        backupCleanupState.field = field;
+        backupCleanupState.restored = false;
+        return { backupBefore, field, flipFrom, flipTo, flippedPayload, strippedPayload };
       },
-      execute: async ({ sessionId, apiUserId }) => {
+      execute: async ({ sessionId, apiUserId, beforeChecks }) => {
         // Ride a benign turn so the case has a completed turn record; the proof
-        // itself comes only from the backup.json owner-file snapshots.
+        // itself comes only from the backup.json owner-file snapshots and the
+        // save/restore/reject request outcomes.
         const main = await postAndWait({ services, sessionId, apiUserId, message: BACKUP_MESSAGE });
-        // Pin the canonical unified settings-save route. The route/method are NOT
-        // operator-tunable — only the harmless payload is (still fail-closed
-        // required). See src/operator/garden/routes/settings-routes.ts (PATCH
-        // exactPath('/api/admin/settings')).
-        const savePath = '/api/admin/settings';
-        const saveBody = envText(env, 'PSFN_SHAKEDOWN_SETTINGS_SAVE_BODY');
-        const save = await services.fetchJson(`${services.adminBase}${savePath}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: saveBody,
-        });
-        // Round-trip verification: re-read the settings and assert the harmless
-        // change is actually reflected, so a no-op 2xx cannot false-pass. Compare
-        // each submitted top-level key against the refetched settings (checking
-        // both the root and a `.settings` envelope).
-        const roundTrip = await verifySettingsRoundTrip({
-          services,
-          savePath,
-          saveBody,
-          saveOk: save?.ok === true,
-          saveStatus: save?.status ?? null,
-        });
+
+        const { field, flipFrom, flipTo, flippedPayload, strippedPayload, backupBefore } = beforeChecks;
+
+        // (a) POSITIVE round-trip: drive the REAL backup save path with a full
+        //     payload that flips one benign scalar; snapshot backup.json across
+        //     the write to prove it landed with the encryption block intact.
+        const save = await postBackupConfig(services, flippedPayload);
+        const afterWrite = services.readJsonIfExists(backupPath);
+
+        // Restore the original full payload immediately and confirm restoration.
+        const restore = await postBackupConfig(services, backupCleanupState.originalPayload);
+        const afterRestore = services.readJsonIfExists(backupPath);
+        if (
+          restore.ok
+          && afterRestore && typeof afterRestore === 'object'
+          && afterRestore[field] === flipFrom
+          && hasBackupEncryptionBlock(afterRestore)
+        ) {
+          backupCleanupState.restored = true;
+        }
+
+        // (b) NEGATIVE guard probe: POST the irzz.1 regression shape (encryption
+        //     block stripped) and prove the API rejects it AND backup.json is
+        //     unchanged on disk.
+        const reject = await postBackupConfig(services, strippedPayload);
+        const afterReject = services.readJsonIfExists(backupPath);
+
         return normalizeCustomOutcome({
           sessionId,
-          request: { privacy: 'private', message: BACKUP_MESSAGE, settingsSavePath: savePath },
+          request: { privacy: 'private', message: BACKUP_MESSAGE, backupSavePath: BACKUP_SAVE_PATH },
           response: main.response,
           turnRecord: main.turnRecord,
           sideChecks: {
-            save: {
-              ok: save?.ok === true,
-              status: save?.status ?? null,
-              roundTripVerified: roundTrip.verified,
-              roundTripMismatches: roundTrip.mismatches,
+            backup: {
+              field,
+              flipFrom,
+              flipTo,
+              before: backupBefore,
+              afterWrite,
+              afterRestore,
+              afterReject,
+              save,
+              restore,
+              reject,
+              restored: backupCleanupState.restored,
             },
           },
         });
       },
-      after: async ({ outcome, beforeChecks }) => ({
-        backup: {
-          before: beforeChecks?.backupBefore ?? null,
-          after: services.readJsonIfExists(backupPath),
-          save: outcome?.sideChecks?.save ?? null,
-        },
+      after: async ({ outcome }) => ({
+        backup: outcome?.sideChecks?.backup
+          ? {
+            field: outcome.sideChecks.backup.field,
+            flipFrom: outcome.sideChecks.backup.flipFrom,
+            flipTo: outcome.sideChecks.backup.flipTo,
+            save: outcome.sideChecks.backup.save,
+            restore: outcome.sideChecks.backup.restore,
+            reject: outcome.sideChecks.backup.reject,
+            restored: outcome.sideChecks.backup.restored,
+          }
+          : null,
       }),
-      validateSideEffects: ({ sideChecks }) => {
-        const save = sideChecks?.backup?.save ?? null;
-        const failures = [];
-        if (!save || save.ok !== true) {
-          failures.push(
-            `settings save via PATCH /api/admin/settings did not succeed (status ${String(save?.status ?? 'none')})`,
-          );
-        }
-        if (save && save.roundTripVerified !== true) {
-          failures.push(
-            `settings save did not round-trip: ${
-              Array.isArray(save.roundTripMismatches) && save.roundTripMismatches.length > 0
-                ? save.roundTripMismatches.join('; ')
-                : 'refetched settings did not reflect the submitted change'
-            }`,
-          );
-        }
-        return failures;
-      },
-      validatePersistedProof: ({ sideChecks }) => validateBackupEncryptionRoundTripProof(
-        sideChecks?.backup ?? {},
+      validatePersistedProof: ({ outcome }) => validateBackupEncryptionRoundTripProof(
+        outcome?.sideChecks?.backup ?? {},
       ),
+      // Idempotent top-level cleanup. The case runner calls this on harness error
+      // paths (and again after a normal run). It restores the original backup.json
+      // payload if execute() did not already confirm it, and is a near no-op once
+      // the restore is confirmed. Returns the runner's { cleanup, cleanupErrors }
+      // shape.
+      cleanup: async () => {
+        const cleanupErrors = [];
+        const done = {
+          restored: backupCleanupState.restored,
+          alreadyClean: false,
+        };
+        if (!backupCleanupState.originalPayload) {
+          // before() never derived a payload — nothing durable to undo.
+          done.alreadyClean = true;
+          return { cleanup: { backup: done }, cleanupErrors };
+        }
+        if (backupCleanupState.restored) {
+          done.alreadyClean = true;
+          return { cleanup: { backup: done }, cleanupErrors };
+        }
+        try {
+          const restore = await postBackupConfig(services, backupCleanupState.originalPayload);
+          const afterRestore = services.readJsonIfExists(backupPath);
+          const field = backupCleanupState.field;
+          if (
+            restore.ok
+            && afterRestore && typeof afterRestore === 'object'
+            && (!field || afterRestore[field] === backupCleanupState.originalPayload[field])
+            && hasBackupEncryptionBlock(afterRestore)
+          ) {
+            backupCleanupState.restored = true;
+            done.restored = true;
+          } else {
+            cleanupErrors.push(
+              `backup.json restore was not confirmed (status ${String(restore.status)}`
+              + `${restore.error ? `: ${restore.error}` : ''})`,
+            );
+          }
+        } catch (error) {
+          cleanupErrors.push(
+            `backup.json restore threw: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        return { cleanup: { backup: done }, cleanupErrors };
+      },
     },
   ];
 }

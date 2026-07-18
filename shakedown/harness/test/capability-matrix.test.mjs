@@ -163,11 +163,16 @@ const SINK_OPTS = {
 // Rows that stay eligibility-only (never dispatched through the live agent):
 // persona/scratchpad writes (durable identity/memory mutation even in the ALLOW
 // case) and the operator-reserved lifecycle carve-out.
+// Note: external.email appears here only because production email delivery is
+// unimplemented (gvic exemption) — the ALLOW row proves eligibility via the
+// production gate instead of live-dispatching. Only asserted at apprentice+
+// (nursery never grants the token, so no exemption row exists there).
 const ELIGIBILITY_ONLY_TOKENS = [
   'identity.write.runtime',
   'identity.write.base',
   'identity.write.operator',
   'memory.write',
+  'external.email',
   'lifecycle.restart',
   'lifecycle.rebuild',
 ];
@@ -180,7 +185,20 @@ const apprenticePlan = buildCapabilityMatrixExecutionPlan({
 assert.deepEqual(
   apprenticePlan.eligibilityOnly.map((entry) => entry.token),
   ELIGIBILITY_ONLY_TOKENS,
-  'stateful identity, scratchpad, and lifecycle probes use the production gate without executing',
+  'stateful identity, scratchpad, email (gvic exemption), and lifecycle probes use the production gate without executing',
+);
+// The email ALLOW row carries its machine-readable exemption and is never live-dispatched.
+const apprenticeEmailEligibility = apprenticePlan.eligibilityOnly.find(
+  (entry) => entry.token === 'external.email',
+);
+assert.deepEqual(
+  apprenticeEmailEligibility.exemption,
+  { reason: 'runtime_unimplemented', ref: 'psfn-framework-gvic' },
+  'the email eligibility exemption records a machine-readable reason and the gvic ref',
+);
+assert.ok(
+  apprenticePlan.executions.every((entry) => entry.executionId !== 'external_email'),
+  'the exempted email ALLOW row is never queued for live dispatch',
 );
 assert.ok(
   apprenticePlan.executions.every((entry) => !entry.executionId.startsWith('lifecycle_')),
@@ -215,7 +233,7 @@ const autonomousPlan = buildCapabilityMatrixExecutionPlan({
 assert.deepEqual(
   autonomousPlan.eligibilityOnly.map((entry) => entry.token),
   ELIGIBILITY_ONLY_TOKENS,
-  'autonomous stateful and lifecycle probes remain eligibility-only',
+  'autonomous stateful, email (gvic exemption), and lifecycle probes remain eligibility-only',
 );
 assert.ok(
   autonomousPlan.executions.every((entry) => !entry.executionId.startsWith('lifecycle_')),
@@ -726,9 +744,10 @@ const fenceBreach = fenceBreachGrid.rows.find((row) => row.token === 'world.cont
 assert.equal(fenceBreach.actual, 'gate_breach');
 assert.equal(fenceBreach.matches, false);
 
-for (const executionId of ['external_discord', 'external_email']) {
+// Discord stays live-dispatched: a generic handler error is not accepted as ALLOW.
+{
   const execution = autonomousPlan.executions.find(
-    (entry) => entry.executionId === executionId,
+    (entry) => entry.executionId === 'external_discord',
   );
   const externalErrorGrid = evaluateCapabilityMatrix({
     expectedTier: 'autonomous',
@@ -736,7 +755,7 @@ for (const executionId of ['external_discord', 'external_email']) {
     executionPlan: autonomousPlan,
     outcomesByExecutionId: {
       ...autonomousOutcomes,
-      [executionId]: turn(
+      external_discord: turn(
         execution.toolName,
         execution.args,
         { isError: true },
@@ -746,14 +765,36 @@ for (const executionId of ['external_discord', 'external_email']) {
     },
     gateObservationsByExecutionId: autonomousGates,
   });
-  const token = executionId === 'external_discord'
-    ? 'external.discord'
-    : 'external.email';
   assert.equal(
-    externalErrorGrid.rows.find((row) => row.token === token).actual,
+    externalErrorGrid.rows.find((row) => row.token === 'external.discord').actual,
     'handler_error',
-    `${token} generic handler errors are not accepted as ALLOW`,
+    'external.discord generic handler errors are not accepted as ALLOW',
   );
+}
+
+// Email is an eligibility-only exemption (gvic): it is proven via the production
+// gate (never live-dispatched) and its grid row carries the exemption reason.
+for (const tier of ['apprentice', 'autonomous']) {
+  const plan = tier === 'apprentice' ? apprenticePlan : autonomousPlan;
+  const outcomes = tier === 'apprentice' ? apprenticeOutcomes : autonomousOutcomes;
+  const grid = evaluateCapabilityMatrix({
+    expectedTier: tier,
+    observedTier: tier,
+    executionPlan: plan,
+    outcomesByExecutionId: outcomes,
+    gateObservationsByExecutionId: productionGateObservations(tier),
+  });
+  const emailRow = grid.rows.find((row) => row.token === 'external.email');
+  assert.equal(emailRow.expected, 'allow_eligibility_only', `${tier} email is downgraded to eligibility-only`);
+  assert.equal(emailRow.actual, 'allow_eligibility_only', `${tier} email proves eligibility via the production gate`);
+  assert.equal(emailRow.matches, true, `${tier} email eligibility exemption matches`);
+  assert.equal(emailRow.evidence, 'production_gate', `${tier} email is never live-dispatched`);
+  assert.deepEqual(
+    emailRow.exemption,
+    { reason: 'runtime_unimplemented', ref: 'psfn-framework-gvic' },
+    `${tier} email row records the machine-readable exemption`,
+  );
+  assert.equal(grid.mismatchCount, 0, `${tier} grid stays green with the email exemption`);
 }
 
 const wrongScopedArgsGrid = evaluateCapabilityMatrix({

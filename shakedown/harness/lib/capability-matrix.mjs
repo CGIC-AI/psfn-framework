@@ -236,6 +236,31 @@ export const CAPABILITY_MATRIX_PROBES = Object.freeze([
   }),
 ]);
 
+// external.email ALLOW rows are exempted from live dispatch: production email
+// delivery is unimplemented (src/core/tools/ntfy.ts:306-328 throws 'email
+// delivery is not wired'), so an ALLOW live-dispatch probe can never pass on any
+// deployment. We instead prove eligibility only — the production capability gate
+// admits the send without executing the (unimplemented) dispatch — and record an
+// explicit machine-readable exemption so the artifact shows this row as a known
+// gap, not coverage. Discord ALLOW rows stay live-dispatched, and
+// requireDedicatedExternalSinks is unchanged. Flip email back to live-dispatch
+// when delivery is wired (psfn-framework-gvic).
+export const EMAIL_ALLOW_EXEMPTION = Object.freeze({
+  reason: 'runtime_unimplemented',
+  ref: 'psfn-framework-gvic',
+});
+
+// True only for the external.email probe on a tier that grants external.email
+// (apprentice/autonomous). Nursery (email not granted) is unaffected and stays a
+// normal capability refusal.
+function isEmailAllowExemption(probeEntry, tier) {
+  if (probeEntry.executionId !== 'external_email') return false;
+  const granted = CAPABILITY_MATRIX_TIER_TOKENS[tier];
+  if (!granted) return false;
+  const grantedSet = new Set(granted);
+  return probeEntry.tokens.every((token) => grantedSet.has(token));
+}
+
 function normalizeTier(tier) {
   if (tier === 'nursery' || tier === 'apprentice' || tier === 'autonomous') {
     return tier;
@@ -354,10 +379,17 @@ export function buildCapabilityMatrixExecutionPlan(options) {
   // in-process sentinel (operator P1, 65rk rf2). Each refusal probe carries a
   // fixture-scoped blast radius in its args (guaranteed-absent ids, scratch
   // branch names, dedicated test sinks) so a gate breach can only touch state the
-  // probe itself created.
-  const eligibilityOnly = CAPABILITY_MATRIX_PROBES.filter(
-    (entry) => entry.safety === 'eligibility_only',
-  );
+  // probe itself created. The email ALLOW rows also join the eligibility-only set
+  // as a machine-readable exemption (psfn-framework-gvic): production email
+  // delivery is unimplemented, so the artifact records them as a known gap rather
+  // than live coverage.
+  const eligibilityOnly = CAPABILITY_MATRIX_PROBES
+    .filter((entry) => entry.safety === 'eligibility_only' || isEmailAllowExemption(entry, tier))
+    .map((entry) => (
+      isEmailAllowExemption(entry, tier)
+        ? { ...entry, exemption: EMAIL_ALLOW_EXEMPTION }
+        : entry
+    ));
   const omitted = new Set(eligibilityOnly.map((entry) => entry.executionId));
   const executions = [];
   for (const probeEntry of CAPABILITY_MATRIX_PROBES) {
@@ -384,6 +416,12 @@ export function buildCapabilityMatrixExecutionPlan(options) {
 
 function expectedFor(probeEntry, tier) {
   const granted = new Set(CAPABILITY_MATRIX_TIER_TOKENS[tier]);
+  // external.email ALLOW rows are downgraded to eligibility-only (production
+  // email dispatch is unimplemented — psfn-framework-gvic). Refusal rows (email
+  // not granted, e.g. nursery) fall through to the normal path unchanged.
+  if (isEmailAllowExemption(probeEntry, tier)) {
+    return 'allow_eligibility_only';
+  }
   if (probeEntry.executionId === 'world_control' && tier === 'autonomous') {
     return 'refuse_runtime_fence';
   }
@@ -528,7 +566,10 @@ function classifyProductionGate(probeEntry, observation, expectedTier) {
   ) {
     return { actual: 'malformed_production_gate', evidence: 'production_gate' };
   }
-  const lifecycle = probeEntry.executionId.startsWith('lifecycle_');
+  // Email ALLOW rows are eligibility-only exemptions (gvic) — the same downgraded
+  // outcome as the lifecycle probes.
+  const eligibilityOnlyExpected = probeEntry.executionId.startsWith('lifecycle_')
+    || isEmailAllowExemption(probeEntry, expectedTier);
   if (eligibility.allowed === true) {
     if (
       observation.handlerReached !== true
@@ -540,7 +581,7 @@ function classifyProductionGate(probeEntry, observation, expectedTier) {
       return { actual: 'malformed_production_gate', evidence: 'production_gate' };
     }
     return {
-      actual: lifecycle ? 'allow_eligibility_only' : 'allow',
+      actual: eligibilityOnlyExpected ? 'allow_eligibility_only' : 'allow',
       evidence: 'production_gate',
       handlerResult: 'sentinel_success',
     };
@@ -566,7 +607,7 @@ function classifyProductionGate(probeEntry, observation, expectedTier) {
     return { actual: 'malformed_production_gate', evidence: 'production_gate' };
   }
   return {
-    actual: lifecycle ? 'refuse_eligibility_only' : 'refuse_capability',
+    actual: eligibilityOnlyExpected ? 'refuse_eligibility_only' : 'refuse_capability',
     evidence: 'production_gate',
     missingTokens: details.missingTokens,
   };
@@ -588,13 +629,16 @@ export function evaluateCapabilityMatrix({
     const expected = expectedFor(probeEntry, tier);
     let observation;
     // Eligibility-only rows (persona/scratchpad writes and lifecycle
-    // restart/rebuild) are the only rows resolved from the in-process production
-    // gate; executing them live would durably mutate identity/memory or trip the
-    // operator-reserved lifecycle carve-out. Every other row — including
-    // capability refusals — is dispatched through the deployed runtime and
-    // classified from its persisted turn record, so a miswired live gate surfaces
-    // as gate_breach rather than being masked by an in-process sentinel.
-    if (probeEntry.safety === 'eligibility_only') {
+    // restart/rebuild) are resolved from the in-process production gate; executing
+    // them live would durably mutate identity/memory or trip the operator-reserved
+    // lifecycle carve-out. The email ALLOW rows join them as an exemption
+    // (psfn-framework-gvic): production email delivery is unimplemented, so they
+    // are proven via the gate rather than live-dispatched (they are also filtered
+    // out of executions by buildCapabilityMatrixExecutionPlan). Every other row —
+    // including capability refusals — is dispatched through the deployed runtime
+    // and classified from its persisted turn record, so a miswired live gate
+    // surfaces as gate_breach rather than being masked by an in-process sentinel.
+    if (probeEntry.safety === 'eligibility_only' || isEmailAllowExemption(probeEntry, tier)) {
       observation = classifyProductionGate(
         probeEntry,
         gateObservationsByExecutionId?.[probeEntry.executionId] ?? null,
@@ -618,6 +662,9 @@ export function evaluateCapabilityMatrix({
       expected,
       ...observation,
       matches: observation.actual === expected,
+      // Record the machine-readable exemption on the email ALLOW row so the
+      // artifact shows it as a known gap (gvic), not coverage.
+      ...(isEmailAllowExemption(probeEntry, tier) ? { exemption: EMAIL_ALLOW_EXEMPTION } : {}),
     };
   });
   const tierMatches = normalizedObservedTier === tier;

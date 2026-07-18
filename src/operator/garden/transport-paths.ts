@@ -138,14 +138,14 @@ export function resolveAdminTransportSocketPath(
 }
 
 /**
- * Per-companion admin transport socket path (sprint-10 W4: one Garden per
- * companion). N agent processes cannot share one admin socket, so each
+ * Per-companion admin transport socket path. N agent processes cannot share one
+ * admin socket, so each
  * companion's admin transport binds `garden-admin-<companionId>.sock` in the
  * same directory the single-companion socket would live in (explicit
  * ADMIN_TRANSPORT_SOCKET, else the gateway socket directory). The supervisor
- * launcher exports the derived path as ADMIN_TRANSPORT_SOCKET for both the
- * companion's agent (server side) and its operator (client side), so this
- * function is the single source of the naming scheme.
+ * exports the derived path to each companion agent; the one fleet Garden uses
+ * the same derived paths through its immutable target registry. This function
+ * is the single source of the naming scheme.
  */
 export function resolveCompanionAdminTransportSocketPath(
   companionId: string,

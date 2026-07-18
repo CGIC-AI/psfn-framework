@@ -544,6 +544,23 @@ describe('loadConfig path defaults', () => {
     expect(config.gatewaySessionIntegrityAuthToken).toBeUndefined();
   });
 
+  it('projects a multi-companion operator without a companion identity or personal workspace', () => {
+    configureMultiCompanionEnv();
+    delete process.env.COMPANION_ID;
+    delete process.env.CHARACTER_CARD_PATH;
+    delete process.env.COMPANION_PG_SCHEMA;
+    delete process.env.WORKSPACE_PATH;
+
+    const config = loadOperatorConfig();
+
+    expect(config.multiCompanion).toBe(true);
+    expect(config.companionFleet).toBeDefined();
+    expect(config.companionId).toBeUndefined();
+    expect(config.companionRuntimeIdentity).toBeUndefined();
+    expect(config.workspacePath).toBeUndefined();
+    expect(config.postgresSchema).toBeUndefined();
+  });
+
   it('fails closed when DISCORD_TOKEN is set without DISCORD_BOT_ID', () => {
     clearRuntimePathEnv();
     process.env.DISCORD_TOKEN = 'discord-secret';

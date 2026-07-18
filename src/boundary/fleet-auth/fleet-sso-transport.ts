@@ -142,7 +142,7 @@ export function resolveFleetSsoGardenTls(
 export function resolveFleetSsoGardenUpstreams(input: {
   fleet?: ResolvedCompanionsFleetConfig;
   companionId?: string;
-  gardenPort?: number;
+  fleetGardenPort?: number;
   env: NodeJS.ProcessEnv;
 }): FleetSsoGardenUpstream[] {
   const host = parseOptionalStringEnv(input.env[FLEET_SSO_GARDEN_HOST_ENV]) ?? '127.0.0.1';
@@ -157,23 +157,25 @@ export function resolveFleetSsoGardenUpstreams(input: {
   if (!input.fleet && input.companionId && !isRfc4122Uuid(input.companionId)) {
     throw new Error('Fleet SSO companionId must be one lowercase RFC4122 UUID');
   }
-  const companions = input.fleet?.companions ?? (input.companionId && input.gardenPort
+  const companions = input.fleet?.companions ?? (input.companionId
     ? [{
         companionId: createCompanionId(input.companionId, 'Fleet SSO companionId'),
-        gardenPort: input.gardenPort,
       }]
     : []);
-  const upstreams = companions.flatMap((companion) => {
-    if (companion.gardenPort === undefined) return [];
-    const bracketedHost = host.includes(':') ? `[${host}]` : host;
-    return [{
+  if (!input.fleetGardenPort) {
+    throw new Error('Fleet auth requires the fleet Garden listener port');
+  }
+  const bracketedHost = host.includes(':') ? `[${host}]` : host;
+  const origin = new URL(
+    `${tls ? 'https' : 'http'}://${bracketedHost}:${input.fleetGardenPort}`,
+  );
+  const upstreams = companions.map((companion) => ({
       companionId: companion.companionId,
-      origin: new URL(`${tls ? 'https' : 'http'}://${bracketedHost}:${companion.gardenPort}`),
+      origin: new URL(origin),
       ...(tls ? { tls } : {}),
-    }];
-  });
+  }));
   if (upstreams.length === 0) {
-    throw new Error('Fleet auth requires at least one companion with a Garden port');
+    throw new Error('Fleet auth requires at least one companion target');
   }
   return upstreams;
 }

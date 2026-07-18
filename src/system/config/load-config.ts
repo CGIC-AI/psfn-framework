@@ -323,13 +323,15 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     processMode: mode,
     seedDir: parseOptionalStringEnv(env.CONFIG_DIR),
   });
-  const companionId = requireCompanionId(env);
+  const multiCompanion = isMultiCompanionEnabled(env);
+  const companionId = mode === 'operator' && multiCompanion
+    ? undefined
+    : requireCompanionId(env);
   const configuredCompanionDataDir = runtimePathLayout.companionDataDir;
   const configuredCharacterCardPath = env.CHARACTER_CARD_PATH
     ?? `${configuredCompanionDataDir}/${DEFAULT_COMPANION_CARD_FILE_NAME}`;
   const configuredPostgresSchema = parsePostgresSchemaEnv(env.COMPANION_PG_SCHEMA);
 
-  const multiCompanion = isMultiCompanionEnabled(env);
   const rawCompanionFleet = resolveCompanionFleet({
     dataDir,
     multiCompanion,
@@ -344,7 +346,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
       { label: 'backupsDir', path: runtimePathLayout.backupsDir },
     ])
     : undefined;
-  const companionRuntimeIdentity = companionFleet
+  const companionRuntimeIdentity = companionFleet && companionId
     ? resolveCompanionRuntimeIdentity({
       fleet: companionFleet,
       companionId,
@@ -352,7 +354,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
       characterCardPath: configuredCharacterCardPath,
       postgresSchema: configuredPostgresSchema,
       workspacePath: env.WORKSPACE_PATH,
-      requireWorkspaceBinding: mode !== 'gateway',
+      requireWorkspaceBinding: mode === 'agent',
     })
     : undefined;
   const companionDataDir = companionRuntimeIdentity?.companionDataDir ?? configuredCompanionDataDir;
@@ -408,12 +410,17 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
       }
       : {}),
     characterCardPath,
-    companionId,
+    ...(companionId ? { companionId } : {}),
     ...(gatewayCompanionAuthToken ? { gatewayCompanionAuthToken } : {}),
     ...(gatewaySessionIntegrityAuthToken ? { gatewaySessionIntegrityAuthToken } : {}),
     systemDataDir: runtimePathLayout.systemDataDir,
     companionDataDir,
-    workspacePath: companionRuntimeIdentity?.personalWorkspacePath ?? runtimePathLayout.workspacePath,
+    ...(mode === 'operator' && companionFleet
+      ? {}
+      : {
+          workspacePath:
+            companionRuntimeIdentity?.personalWorkspacePath ?? runtimePathLayout.workspacePath,
+        }),
     ...(companionFleet ? { sharedWorkspacePath: companionFleet.sharedWorkspacePath } : {}),
     dataDir,
     databasePath,

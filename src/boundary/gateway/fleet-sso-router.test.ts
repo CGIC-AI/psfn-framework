@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { IncomingMessage } from 'node:http';
 import { resolveFleetSsoBrowserOrigin } from './fleet-sso-router.js';
 import { resolveFleetSsoGardenUpstreams } from '../fleet-auth/fleet-sso-transport.js';
+import type { ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
 
 function request(headers: IncomingMessage['headers'], encrypted = false): Pick<IncomingMessage, 'headers' | 'socket'> {
   return {
@@ -56,7 +57,7 @@ describe('unified Fleet SSO origin provenance', () => {
   it('derives one exact loopback Garden for a single-companion deployment', () => {
     expect(resolveFleetSsoGardenUpstreams({
       companionId: '11111111-1111-4111-8111-111111111111',
-      gardenPort: 3001,
+      fleetGardenPort: 3001,
       env: {},
     })).toMatchObject([{
       companionId: '11111111-1111-4111-8111-111111111111',
@@ -64,8 +65,27 @@ describe('unified Fleet SSO origin provenance', () => {
     }]);
     expect(() => resolveFleetSsoGardenUpstreams({
       companionId: 'not-a-companion-id',
-      gardenPort: 3001,
+      fleetGardenPort: 3001,
       env: {},
     })).toThrow(/RFC4122 UUID/u);
+  });
+
+  it('maps every fleet companion to the one fleet Garden listener', () => {
+    const companionA = '11111111-1111-4111-8111-111111111111';
+    const companionB = '22222222-2222-4222-8222-222222222222';
+    const fleet = {
+      companions: [{ companionId: companionA }, { companionId: companionB }],
+    } as unknown as ResolvedCompanionsFleetConfig;
+
+    expect(resolveFleetSsoGardenUpstreams({
+      fleet,
+      fleetGardenPort: 3001,
+      env: {},
+    })).toMatchObject([
+      { companionId: companionA, origin: new URL('http://127.0.0.1:3001') },
+      { companionId: companionB, origin: new URL('http://127.0.0.1:3001') },
+    ]);
+    expect(() => resolveFleetSsoGardenUpstreams({ fleet, env: {} }))
+      .toThrow(/requires the fleet Garden listener port/u);
   });
 });

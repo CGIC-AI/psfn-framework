@@ -60,13 +60,11 @@ describe('gateway fleet portal projection', () => {
       fleet: [
         {
           companionId: COMPANION_A,
-          gardenPort: 3211,
           label: 'private-a',
           postgresSchema: 'private_a',
         },
         {
           companionId: COMPANION_B,
-          gardenPort: 3212,
           label: 'private-b',
           characterCardPath: '/private/b.json',
         },
@@ -102,8 +100,6 @@ describe('gateway fleet portal projection', () => {
       'private-a',
       'private-b',
       'private-c',
-      '3211',
-      '3212',
       'private_a',
       '/private/b.json',
       '/private/c',
@@ -120,7 +116,7 @@ describe('gateway fleet portal projection', () => {
     }
   });
 
-  it('maps memory-only connection posture coarsely and exposes headless only after authorization', async () => {
+  it('maps memory-only connection posture coarsely and exposes Garden only after authorization', async () => {
     const projection = new GatewayFleetPortalProjection({
       authorizer: {
         resolve: async () => ({
@@ -133,10 +129,10 @@ describe('gateway fleet portal projection', () => {
         }),
       },
       fleet: [
-        { companionId: COMPANION_A, gardenPort: 3211 },
+        { companionId: COMPANION_A },
         { companionId: COMPANION_B },
-        { companionId: COMPANION_C, gardenPort: 3213 },
-        { companionId: COMPANION_D, gardenPort: 3214 },
+        { companionId: COMPANION_C },
+        { companionId: COMPANION_D },
       ],
       source: {
         getFleetConnectionSnapshot: () => snapshot([
@@ -151,26 +147,29 @@ describe('gateway fleet portal projection', () => {
     await expect(projection.resolve({ sessionToken: SESSION_TOKEN })).resolves.toMatchObject({
       companions: [
         { companionId: COMPANION_A, availability: 'online', headless: false },
-        { companionId: COMPANION_B, availability: 'offline', headless: true },
+        { companionId: COMPANION_B, availability: 'offline', headless: false },
         { companionId: COMPANION_C, availability: 'unknown', headless: false },
         { companionId: COMPANION_D, availability: 'degraded', headless: false },
       ],
     });
     const result = await projection.resolve({ sessionToken: SESSION_TOKEN });
-    expect(result.companions[1]).not.toHaveProperty('gardenPath');
+    expect(result.companions[1]).toHaveProperty(
+      'gardenPath',
+      `/companions/${COMPANION_B}/garden`,
+    );
     expect(result.companions[2]).not.toHaveProperty('gardenPath');
   });
 
   it('makes unknown and unauthorized manifest data byte-indistinguishable', async () => {
-    const build = (unknownId: string, unknownPort: number) => new GatewayFleetPortalProjection({
+    const build = (unknownId: string) => new GatewayFleetPortalProjection({
       authorizer: {
         resolve: async () => ({
           companions: [{ companionId: COMPANION_A, gardenLinkEligible: false }],
         }),
       },
       fleet: [
-        { companionId: COMPANION_A, gardenPort: 3211 },
-        { companionId: unknownId, gardenPort: unknownPort },
+        { companionId: COMPANION_A },
+        { companionId: unknownId },
       ],
       source: {
         getFleetConnectionSnapshot: () => snapshot([
@@ -179,8 +178,8 @@ describe('gateway fleet portal projection', () => {
       },
       now: () => GENERATED_AT,
     });
-    const first = await build(COMPANION_B, 3212).resolve({ sessionToken: SESSION_TOKEN });
-    const second = await build(COMPANION_C, 65535).resolve({ sessionToken: SESSION_TOKEN });
+    const first = await build(COMPANION_B).resolve({ sessionToken: SESSION_TOKEN });
+    const second = await build(COMPANION_C).resolve({ sessionToken: SESSION_TOKEN });
     expect(serializeFleetPortalProjection(first)).toEqual(serializeFleetPortalProjection(second));
   });
 
@@ -194,7 +193,7 @@ describe('gateway fleet portal projection', () => {
           ],
         }),
       },
-      fleet: [{ companionId: COMPANION_A, gardenPort: 3211 }],
+      fleet: [{ companionId: COMPANION_A }],
       source: { getFleetConnectionSnapshot: () => snapshot([]) },
       now: () => GENERATED_AT,
     });
@@ -216,9 +215,9 @@ describe('gateway fleet portal projection', () => {
       const projection = new GatewayFleetPortalProjection({
         authorizer: { resolve: authorize },
         fleet: [
-          { companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' },
+          { companionId: COMPANION_A, displayName: 'Flagship' },
           { companionId: COMPANION_B, displayName: 'Aria', avatarRef: 'avatars/b.png' },
-          { companionId: COMPANION_C, gardenPort: 3213, displayName: 'private-c' },
+          { companionId: COMPANION_C, displayName: 'private-c' },
         ],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
         now: () => GENERATED_AT,
@@ -250,7 +249,7 @@ describe('gateway fleet portal projection', () => {
     it('fails closed on a malformed request', async () => {
       const projection = new GatewayFleetPortalProjection({
         authorizer: { resolve: async () => ({ companions: [] }) },
-        fleet: [{ companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' }],
+        fleet: [{ companionId: COMPANION_A, displayName: 'Flagship' }],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
         now: () => GENERATED_AT,
       });
@@ -263,7 +262,7 @@ describe('gateway fleet portal projection', () => {
         authorizer: {
           resolve: async () => ({ companions: [{ companionId: COMPANION_D, gardenLinkEligible: true }] }),
         },
-        fleet: [{ companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' }],
+        fleet: [{ companionId: COMPANION_A, displayName: 'Flagship' }],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
         now: () => GENERATED_AT,
       });
@@ -279,7 +278,7 @@ describe('gateway fleet portal projection', () => {
             ],
           }),
         },
-        fleet: [{ companionId: COMPANION_A, gardenPort: 3211, displayName: 'Flagship' }],
+        fleet: [{ companionId: COMPANION_A, displayName: 'Flagship' }],
         source: { getFleetConnectionSnapshot: () => snapshot([]) },
         now: () => GENERATED_AT,
       });

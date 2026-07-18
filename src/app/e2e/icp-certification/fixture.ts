@@ -423,14 +423,12 @@ export function createIcpCertificationFixture(input: {
         companionDataDir: 'companions/a',
         characterCardPath: 'companions/a/character-card.json',
         postgresSchema: CERTIFICATION_SCHEMA_A,
-        gardenPort: 15061,
       },
       {
         companionId: CERTIFICATION_COMPANION_B,
         companionDataDir: 'companions/b',
         characterCardPath: 'companions/b/character-card.json',
         postgresSchema: CERTIFICATION_SCHEMA_B,
-        gardenPort: 15062,
       },
     ],
   });

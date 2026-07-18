@@ -36,7 +36,7 @@ describe('gateway API fleet portal composition', () => {
   it('fails startup closed when fleet auth lacks the batch authority or manifest', () => {
     expect(() => createGatewayFleetPortalProjection({
       fleetAuthEnabled: true,
-      fleet: [{ companionId: COMPANION_ID, gardenPort: 3211 }],
+      fleet: [{ companionId: COMPANION_ID }],
       source: source(),
     })).toThrow(/complete fleet portal projection wiring/u);
     expect(() => createGatewayFleetPortalProjection({
@@ -54,7 +54,7 @@ describe('gateway API fleet portal composition', () => {
     const projection = createGatewayFleetPortalProjection({
       fleetAuthEnabled: true,
       authorization: { resolve: authorize },
-      fleet: [{ companionId: COMPANION_ID, gardenPort: 3211 }],
+      fleet: [{ companionId: COMPANION_ID }],
       source: snapshot,
     });
 

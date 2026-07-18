@@ -194,6 +194,9 @@ these process-wiring env vars come into play (documented in full in
 - `PSFN_MULTI_COMPANION` — topology opt-in. When on, a system-owned
   `companions.json` fleet manifest is required; when off, `companions.json` must
   be absent. Both mismatches fail closed at startup.
+- `PSFN_FLEET_AUTH` — required with local multi-companion startup. The one
+  fleet Garden accepts companion-bound Fleet Auth capabilities; the launcher
+  rejects a fleet topology that would fall back to shared admin-token authority.
 - `COMPANION_PG_SCHEMA` — per-companion Postgres schema for a single agent
   process. Explicit opt-in, not derived from `COMPANION_ID`; unset means the
   `public` schema (single-companion). The supervisor launcher sets this per
@@ -201,6 +204,9 @@ these process-wiring env vars come into play (documented in full in
 - `PSFN_RUNTIME_ROOT` — canonical persistence root for manifest-relative
   `companionDataDir` and `characterCardPath`. The fleet resolver emits absolute
   paths beneath this root and rejects traversal or symlink escapes.
+- `ADMIN_PORT` — the one fleet-level Garden listener port. It is process
+  wiring, not a per-companion manifest field. A `gardenPort` key remaining in
+  any `companions.json` entry is rejected as retired.
 - `FLEET_STATUS_PORT` / `FLEET_STATUS_HOST` — the gateway's read-only,
   raw loopback-only fleet-status operator listener (host defaults to
   `127.0.0.1`). It is a separate opt-in HTTP listener with no browser-session
@@ -255,9 +261,11 @@ quarantined shared owner into selected companions.
 Do not set per-companion workspace paths in `companions.json`. The fleet
 resolver derives `<runtime-root>/workspaces/personal/<companion-uuid>` and the
 single `<runtime-root>/workspaces/shared` root, validates containment and
-non-overlap, and provisions them before launch. Each agent and its Garden
-receive only the matching personal root as `WORKSPACE_PATH`. The shared root is
-available through its authenticated, reviewed Garden surface and has no
+non-overlap, and provisions them before launch. Each agent receives only its
+matching personal root as `WORKSPACE_PATH`; the one fleet Garden selects an
+agent through the immutable companion target registry instead of receiving N
+personal roots. The shared root is available through its authenticated,
+reviewed Garden surface and has no
 environment-variable escape hatch. See
 [`docs/multi-companion.md`](./multi-companion.md#workspace-scopes-current-behavior-and-target-contract).
 
@@ -326,8 +334,11 @@ ADMIN_TRANSPORT_SOCKET=./runtime/sockets/garden-admin.sock
 ```
 
 With fleet auth disabled, `admin-ui/build` is served from the internal or
-loopback admin host root, for example `http://127.0.0.1:3001/`. With fleet auth
-enabled, the same Garden is reachable only through
+loopback admin host root, for example `http://127.0.0.1:3001/`. Multi-companion
+local startup still runs exactly one Garden on this fleet-level listener: the
+launcher starts all companion agents, waits for every canonical
+`garden-admin-<companion-uuid>.sock`, and only then starts Garden. With fleet
+auth enabled, the same Garden is reachable only through
 `/companions/<companion-uuid>/garden/` on the canonical gateway HTTPS origin;
 `ADMIN_TOKEN` and `ADMIN_ALLOW_INSECURE` are rejected on that operator process.
 The repo launcher also scrubs those legacy variables from the fleet-auth

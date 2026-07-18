@@ -615,9 +615,9 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       recentViolationWindowMs: 3_600_000,
     });
     const fleet = [
-      { companionId: COMPANION_A, gardenPort: workloadA.port },
-      { companionId: COMPANION_B, gardenPort: workloadB.port },
-      { companionId: COMPANION_C, gardenPort: unavailablePort },
+      { companionId: COMPANION_A },
+      { companionId: COMPANION_B },
+      { companionId: COMPANION_C },
       { companionId: COMPANION_D },
     ];
     const grants = new Map<string, readonly { companionId: string; role: FleetAuthRole }[]>([
@@ -745,7 +745,13 @@ describe('unified Fleet SSO two-companion process boundary', () => {
           headless: false,
           gardenPath: `/companions/${COMPANION_B}/garden`,
         },
-        { companionId: COMPANION_D, availability: 'offline', headless: true },
+        // COMPANION_D is a `member`, which is not garden.read-eligible, so it
+        // carries no gardenPath. It is NOT headless: in the consolidated
+        // topology the one fleet Garden derives an admin-transport endpoint for
+        // every manifest companion, so `headless` (no manifest Garden endpoint)
+        // is structurally false. "No Garden link for this principal" is now
+        // expressed through authorization (gardenPath absence), not headlessness.
+        { companionId: COMPANION_D, availability: 'offline', headless: false },
       ],
     });
     expect(JSON.parse(adminPortal.body).companions[1]).not.toHaveProperty('gardenPath');
@@ -792,6 +798,7 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     for (const companionId of [COMPANION_A, COMPANION_B, COMPANION_C, COMPANION_D]) {
       expect(operatorRawBody).toContain(companionId);
     }
-    expect(operatorRawBody).toMatch(/gardenPort|recentViolationWindowMs/u);
+    expect(operatorRawBody).not.toContain('gardenPort');
+    expect(operatorRawBody).toContain('recentViolationWindowMs');
   });
 });

@@ -4287,16 +4287,6 @@
     },
     {
       "file": "src/system/config/companions-config.ts",
-      "name": "GARDEN_PORT_MAX",
-      "value": "65_535"
-    },
-    {
-      "file": "src/system/config/companions-config.ts",
-      "name": "GARDEN_PORT_MIN",
-      "value": "1"
-    },
-    {
-      "file": "src/system/config/companions-config.ts",
       "name": "POSTGRES_SCHEMA_MAX_LENGTH",
       "value": "63"
     },

@@ -339,6 +339,16 @@ export function buildCapabilityMatrixExecutionPlan(options) {
   if (!runToken) throw new Error('Capability matrix requires a non-empty runToken');
   requireDedicatedExternalSinks(options, tier);
 
+  // Rows whose live execution would durably mutate identity/memory even in the
+  // ALLOW case (persona/scratchpad writes) or that the operator explicitly keeps
+  // eligibility-only (lifecycle restart/rebuild) are never dispatched through the
+  // live agent; their outcome comes from the in-process production gate. Every
+  // other row — including capability REFUSALS — is dispatched through the deployed
+  // runtime so miswired gating in the live agent is observable, not masked by an
+  // in-process sentinel (operator P1, 65rk rf2). Each refusal probe carries a
+  // fixture-scoped blast radius in its args (guaranteed-absent ids, scratch
+  // branch names, dedicated test sinks) so a gate breach can only touch state the
+  // probe itself created.
   const eligibilityOnly = CAPABILITY_MATRIX_PROBES.filter(
     (entry) => entry.safety === 'eligibility_only',
   );
@@ -346,16 +356,13 @@ export function buildCapabilityMatrixExecutionPlan(options) {
   const executions = [];
   for (const probeEntry of CAPABILITY_MATRIX_PROBES) {
     if (omitted.has(probeEntry.executionId)) continue;
-    const expected = expectedFor(probeEntry, tier);
-    if (expected === 'refuse_capability' || expected === 'refuse_eligibility_only') {
-      continue;
-    }
     const args = withRunArgs(probeEntry, options);
     const execution = {
       executionId: probeEntry.executionId,
       toolName: probeEntry.toolName,
       args,
       safety: probeEntry.safety,
+      expected: expectedFor(probeEntry, tier),
     };
     executions.push({
       ...execution,
@@ -409,7 +416,8 @@ function callHasError(call) {
   return call?.isError === true || call?.details?.isError === true;
 }
 
-function classifyObserved(probeEntry, executionArgs, turnRecord, expectedTier) {
+function classifyObserved(probeEntry, executionArgs, turnRecord, expectedTier, expected) {
+  const refusalExpected = expected !== 'allow';
   const calls = Array.isArray(turnRecord?.toolCalls) ? turnRecord.toolCalls : [];
   const call = calls.find((candidate) => toolCallMatches(candidate, probeEntry, executionArgs));
   if (!call) {
@@ -459,6 +467,18 @@ function classifyObserved(probeEntry, executionArgs, turnRecord, expectedTier) {
     ) {
       return { actual: 'refuse_runtime_fence', evidence: 'persisted_tool_result' };
     }
+  }
+  // The denied action reached the deployed handler without any refusal marker:
+  // the live capability gate is miswired and the action actually executed. This
+  // is the exact catastrophic defect class the operator wants detectable, so it
+  // gets a distinct classification that fails the row loudly. The case runner's
+  // fixture cleanup still removes any side effect the breach produced.
+  if (refusalExpected) {
+    return {
+      actual: 'gate_breach',
+      evidence: 'denied_action_executed',
+      handlerResult: callHasError(call) ? 'error' : 'success',
+    };
   }
   if (
     callHasError(call)
@@ -561,11 +581,14 @@ export function evaluateCapabilityMatrix({
   const rows = CAPABILITY_MATRIX_PROBES.map((probeEntry) => {
     const expected = expectedFor(probeEntry, tier);
     let observation;
-    if (
-      expected.endsWith('_eligibility_only')
-      || expected === 'refuse_capability'
-      || probeEntry.safety === 'eligibility_only'
-    ) {
+    // Eligibility-only rows (persona/scratchpad writes and lifecycle
+    // restart/rebuild) are the only rows resolved from the in-process production
+    // gate; executing them live would durably mutate identity/memory or trip the
+    // operator-reserved lifecycle carve-out. Every other row — including
+    // capability refusals — is dispatched through the deployed runtime and
+    // classified from its persisted turn record, so a miswired live gate surfaces
+    // as gate_breach rather than being masked by an in-process sentinel.
+    if (probeEntry.safety === 'eligibility_only') {
       observation = classifyProductionGate(
         probeEntry,
         gateObservationsByExecutionId?.[probeEntry.executionId] ?? null,
@@ -579,6 +602,7 @@ export function evaluateCapabilityMatrix({
         execution?.args ?? probeEntry.args,
         turnRecord,
         tier,
+        expected,
       );
     }
     return {

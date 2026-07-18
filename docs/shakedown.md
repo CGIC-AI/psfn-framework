@@ -124,6 +124,22 @@ grants actually actuate by sending a live Discord message and a live email at th
 apprentice and autonomous tiers. Those probes are fail-closed and require three
 environment variables (nursery never sends externally, so it needs none):
 
+**Refusals are dispatched through the deployed runtime, not evaluated in-process.**
+Every capability *denial* (except the operator-reserved lifecycle carve-out) is
+attempted through the live agent and its refusal shape is asserted from the
+persisted turn record (`capabilityDenied` marker + exact `tier`/`missingTokens`),
+so a miswired gate in the actual deployment is observable rather than masked by an
+in-process sentinel. Each refusal probe carries a **fixture-scoped blast radius**
+in its args — guaranteed-absent ids, a scratch `shakedown/…` branch, a disposable
+issue, the dedicated external test sinks — so if the gate is broken and the action
+executes it can only touch state the probe itself created. That catastrophic case
+is classified distinctly as `gate_breach` (the denied action ran), fails the row
+loudly, and still triggers the scoped cleanup (branch deletion / issue closure
+proof). Durable identity/scratchpad writes (`identity.write.*`, `memory.write`) and
+lifecycle `restart`/`rebuild` stay **eligibility-only** — resolved by the
+in-process production gate in `production-capability-probe.ts` — because executing
+them live would durably mutate identity/memory or trip the lifecycle carve-out.
+
 | Variable | Value | Purpose |
 | --- | --- | --- |
 | `PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED` | the literal `dedicated-test-sinks` | Operator attestation that the targets below are disposable test sinks. Any other value is rejected. |

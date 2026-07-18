@@ -3124,9 +3124,13 @@ function buildCapabilityMatrixCase(ctx) {
       }
 
       const { cleanup, cleanupErrors } = await performCleanup();
+      // A mutating scoped action counts either as a legitimate ALLOW (granted
+      // tier) or as a gate_breach (the deployed gate wrongly let a denied action
+      // execute). Both leave fixture damage that the scoped cleanup must remove,
+      // so require the deletion/closure proof for either classification.
       const gitWriteRow = grid.rows.find((row) => row.token === 'git.write');
       if (
-        gitWriteRow?.actual === 'allow'
+        (gitWriteRow?.actual === 'allow' || gitWriteRow?.actual === 'gate_breach')
         && gitWriteRow?.handlerResult === 'success'
         && cleanup.gitBranch?.status !== 'deleted'
       ) {
@@ -3134,7 +3138,7 @@ function buildCapabilityMatrixCase(ctx) {
       }
       const issueWriteRow = grid.rows.find((row) => row.token === 'issue.write');
       if (
-        issueWriteRow?.actual === 'allow'
+        (issueWriteRow?.actual === 'allow' || issueWriteRow?.actual === 'gate_breach')
         && issueWriteRow?.handlerResult === 'success'
         && !cleanup.issues?.some((entry) => entry.status === 'closed')
       ) {

@@ -7,16 +7,23 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { importCharacterCardFromPath } from '../src/core/identity/importer.js';
-import type { PostgresTenantAccessPlan } from '../src/persistence/postgres/tenancy.js';
+import {
+  planPostgresTenantAccess,
+  type PostgresTenantAccessPlan,
+} from '../src/persistence/postgres/tenancy.js';
+import { PER_COMPANION_OWNER_FILES } from '../src/system/config/settings-contract.js';
+import { seedCompanionStartupOwnerFiles } from '../src/system/config/startup-owner-files.js';
 import {
   PRIMARY_COMPANION_ID,
   SUPPORT_COMPANION_IDS,
   type SupportFixtureDatabasePort,
   loadSupportFixtureContract,
+  resolveSupportFixtureCliEnvironment,
   resolveSupportFixturePaths,
   standUpSupportFixtures,
   tearDownSupportFixtures,
@@ -36,7 +43,10 @@ const CARD_SOURCES = new Map([
 ] as const);
 
 class FakeFixtureDatabase implements SupportFixtureDatabasePort {
-  readonly present = new Set(['shakedown_artie']);
+  readonly schemas = new Set(['shakedown_artie']);
+  readonly roles = new Set([
+    planPostgresTenantAccess({ schema: 'shakedown_artie' }).role,
+  ]);
   readonly calls: string[] = [];
   failProvisionSchema: string | null = null;
   roundStopped = true;
@@ -50,7 +60,7 @@ class FakeFixtureDatabase implements SupportFixtureDatabasePort {
 
   async assertProvisioned(plan: PostgresTenantAccessPlan): Promise<void> {
     this.calls.push(`assert:${plan.schema}`);
-    if (!this.present.has(plan.schema)) {
+    if (!this.schemas.has(plan.schema) || !this.roles.has(plan.role)) {
       throw new Error(`missing schema ${plan.schema}`);
     }
   }
@@ -60,18 +70,20 @@ class FakeFixtureDatabase implements SupportFixtureDatabasePort {
     if (plan.schema === this.failProvisionSchema) {
       throw new Error(`injected provision failure for ${plan.schema}`);
     }
-    this.present.add(plan.schema);
+    this.schemas.add(plan.schema);
+    this.roles.add(plan.role);
   }
 
   async drop(plan: PostgresTenantAccessPlan): Promise<void> {
     this.calls.push(`drop:${plan.schema}`);
-    this.present.delete(plan.schema);
+    this.schemas.delete(plan.schema);
+    this.roles.delete(plan.role);
   }
 
   async assertAbsent(plan: PostgresTenantAccessPlan): Promise<void> {
     this.calls.push(`absent:${plan.schema}`);
-    if (this.present.has(plan.schema)) {
-      throw new Error(`schema remained ${plan.schema}`);
+    if (this.schemas.has(plan.schema) || this.roles.has(plan.role)) {
+      throw new Error(`tenant remained ${plan.schema}`);
     }
   }
 }
@@ -95,6 +107,10 @@ function createRound(): {
   const primaryCardPath = join(runtimeRoot, 'companion-data', 'companion.json');
   mkdirSync(systemDataDir, { recursive: true });
   mkdirSync(dirname(primaryCardPath), { recursive: true });
+  seedCompanionStartupOwnerFiles({
+    companionDataDir: dirname(primaryCardPath),
+    seedDir: join(REPO_ROOT, 'config'),
+  });
   writeFileSync(primaryCardPath, JSON.stringify({
     spec: 'chara_card_v2',
     spec_version: '2.0',
@@ -121,6 +137,7 @@ function createRound(): {
 function lifecycleInput(round: ReturnType<typeof createRound>) {
   return {
     ...round,
+    seedDir: join(REPO_ROOT, 'config'),
     templatePath: TEMPLATE_PATH,
     supportCardSources: CARD_SOURCES,
     importCard(sourcePath: string, destinationPath: string): void {
@@ -151,6 +168,66 @@ describe('support-companion fixture artifacts', () => {
       );
     }
   });
+
+  it('resolves the documented sourced environment through the canonical round root', () => {
+    const envTemplate = readFileSync(
+      join(REPO_ROOT, 'shakedown', 'artie', 'shakedown.env.template'),
+      'utf8',
+    );
+    expect(envTemplate).toContain(`COMPANION_ID=${PRIMARY_COMPANION_ID}`);
+    expect(envTemplate).toContain('PSFN_RUNTIME_ROOT=$SHAKEDOWN_ROOT');
+    expect(envTemplate).toContain('PSFN_SHAKEDOWN_ROOT=$SHAKEDOWN_ROOT');
+
+    const resolved = resolveSupportFixtureCliEnvironment({
+      PSFN_MULTI_COMPANION: '1',
+      COMPANION_ID: PRIMARY_COMPANION_ID,
+      POSTGRES_DATABASE_URL: 'postgresql://fixture.invalid/shakedown',
+      PSFN_SHAKEDOWN_ROOT: '/round/root',
+      SYSTEM_DATA_DIR: '/round/root/system-data',
+    });
+
+    expect(resolved).toEqual({
+      databaseUrl: 'postgresql://fixture.invalid/shakedown',
+      runtimeRoot: '/round/root',
+      systemDataDir: '/round/root/system-data',
+    });
+  });
+
+  it('keeps the package CLI entrypoint executable and fail-closed on unknown commands', () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(REPO_ROOT, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+        join(REPO_ROOT, 'scripts', 'shakedown-support-fixtures.ts'),
+        'unknown-command',
+      ],
+      { encoding: 'utf8' },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain('Usage: npm run shakedown:support -- <stand-up|tear-down>');
+  });
+
+  it('rolls back canonical owner seeding without overwriting a stale owner file', () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-owner-seed-test-'));
+    roots.push(root);
+    const ownerFiles = [...PER_COMPANION_OWNER_FILES];
+    const staleOwnerFile = ownerFiles[1]!;
+    const stalePath = join(root, staleOwnerFile);
+    writeFileSync(stalePath, '{"stale":true}\n');
+
+    expect(() => seedCompanionStartupOwnerFiles({
+      companionDataDir: root,
+      seedDir: join(REPO_ROOT, 'config'),
+    })).toThrow();
+
+    expect(readFileSync(stalePath, 'utf8')).toBe('{"stale":true}\n');
+    for (const ownerFile of ownerFiles) {
+      if (ownerFile !== staleOwnerFile) {
+        expect(existsSync(join(root, ownerFile))).toBe(false);
+      }
+    }
+  });
 });
 
 describe('support-companion fixture lifecycle', () => {
@@ -173,6 +250,8 @@ describe('support-companion fixture lifecycle', () => {
     expect(readFileSync(primaryCardPath, 'utf8')).toBe(primaryBefore);
     expect(round.database.calls).toEqual([
       'round-stopped',
+      'absent:shakedown_support_mica',
+      'absent:shakedown_support_lumen',
       'assert:shakedown_artie',
       'provision:shakedown_support_mica',
       'provision:shakedown_support_lumen',
@@ -182,7 +261,30 @@ describe('support-companion fixture lifecycle', () => {
     for (const support of manifest.companions.slice(1)) {
       expect(existsSync(join(round.runtimeRoot, support.characterCardPath))).toBe(true);
     }
+    for (const support of paths.supportCompanions) {
+      expect(existsSync(support.personalWorkspacePath)).toBe(true);
+      expect(support.ownerFilePaths).toHaveLength(PER_COMPANION_OWNER_FILES.size);
+      expect(support.ownerFilePaths.every(existsSync)).toBe(true);
+    }
     expect(existsSync(paths.statePath)).toBe(true);
+  });
+
+  it('refuses to adopt a stale support role before provisioning or writing state', async () => {
+    const round = createRound();
+    const paths = resolveSupportFixturePaths(round.runtimeRoot, round.systemDataDir);
+    round.database.roles.add(
+      planPostgresTenantAccess({ schema: 'shakedown_support_mica' }).role,
+    );
+
+    await expect(standUpSupportFixtures(lifecycleInput(round)))
+      .rejects.toThrow('tenant remained shakedown_support_mica');
+
+    expect(round.database.calls).toEqual([
+      'round-stopped',
+      'absent:shakedown_support_mica',
+    ]);
+    expect(existsSync(paths.statePath)).toBe(false);
+    expect(existsSync(paths.supportRoot)).toBe(false);
   });
 
   it('rolls back every planned support schema and file when stand-up fails partway', async () => {
@@ -193,10 +295,13 @@ describe('support-companion fixture lifecycle', () => {
     await expect(standUpSupportFixtures(lifecycleInput(round)))
       .rejects.toThrow('injected provision failure');
 
-    expect(round.database.present).toEqual(new Set(['shakedown_artie']));
+    expect(round.database.schemas).toEqual(new Set(['shakedown_artie']));
     expect(existsSync(paths.manifestPath)).toBe(false);
     expect(existsSync(paths.supportRoot)).toBe(false);
     expect(existsSync(paths.statePath)).toBe(false);
+    for (const support of paths.supportCompanions) {
+      expect(existsSync(support.personalWorkspacePath)).toBe(false);
+    }
   });
 
   it('refuses teardown after manifest tampering and preserves all evidence', async () => {
@@ -233,7 +338,7 @@ describe('support-companion fixture lifecycle', () => {
       .rejects.toThrow('round database still has runtime sessions');
 
     expect(round.database.calls).toEqual([...callsBefore, 'round-stopped']);
-    expect(round.database.present).toEqual(new Set([
+    expect(round.database.schemas).toEqual(new Set([
       'shakedown_artie',
       'shakedown_support_mica',
       'shakedown_support_lumen',
@@ -251,7 +356,7 @@ describe('support-companion fixture lifecycle', () => {
     const evidence = await tearDownSupportFixtures(lifecycleInput(round));
 
     expect(evidence.status).toBe('clean');
-    expect(round.database.present).toEqual(new Set(['shakedown_artie']));
+    expect(round.database.schemas).toEqual(new Set(['shakedown_artie']));
     expect(round.database.calls.slice(-7)).toEqual([
       'round-stopped',
       'assert:shakedown_artie',
@@ -264,6 +369,10 @@ describe('support-companion fixture lifecycle', () => {
     expect(existsSync(paths.manifestPath)).toBe(false);
     expect(existsSync(paths.supportRoot)).toBe(false);
     expect(existsSync(paths.statePath)).toBe(false);
+    for (const support of paths.supportCompanions) {
+      expect(existsSync(support.personalWorkspacePath)).toBe(false);
+      expect(support.ownerFilePaths.every(path => !existsSync(path))).toBe(true);
+    }
     expect(existsSync(join(round.runtimeRoot, 'companion-data', 'companion.json'))).toBe(true);
   });
 });

@@ -1,5 +1,6 @@
 import {
   existsSync,
+  mkdirSync,
   readFileSync,
   rmSync,
 } from 'node:fs';
@@ -9,8 +10,11 @@ import { writeJsonAtomic } from '../../src/shared/utils/fs.js';
 import { isRecord } from '../../src/shared/utils/types.js';
 import { resolveCanonicalPathInsideRoot } from '../../src/system/config/companion-workspace-layout.js';
 import {
+  seedCompanionStartupOwnerFiles,
+  verifyCompanionStartupOwnerFiles,
+} from '../../src/system/config/startup-owner-files.js';
+import {
   EXPECTED_PRIMARY_CARD_PATH,
-  EXPECTED_SUPPORT_CARD_PATHS,
   EXPECTED_SUPPORT_SCHEMAS,
   PRIMARY_COMPANION_ID,
   SUPPORT_COMPANION_IDS,
@@ -35,6 +39,7 @@ export interface SupportFixtureDatabasePort {
 
 export interface SupportFixtureLifecycleInput {
   runtimeRoot: string;
+  seedDir: string;
   systemDataDir: string;
   templatePath: string;
   supportCardSources: ReadonlyMap<string, string>;
@@ -57,6 +62,10 @@ function assertCleanStart(paths: SupportFixturePaths, primaryCardPath: string): 
     paths.manifestPath,
     paths.statePath,
     paths.supportRoot,
+    ...paths.supportCompanions.flatMap(companion => [
+      companion.companionDataPath,
+      companion.personalWorkspacePath,
+    ]),
   ].filter(existsSync);
   if (collisions.length > 0) {
     throw new Error(
@@ -69,8 +78,44 @@ function removeFixtureFiles(paths: SupportFixturePaths): void {
   if (existsSync(paths.manifestPath)) {
     rmSync(paths.manifestPath);
   }
+  for (const companion of paths.supportCompanions) {
+    if (existsSync(companion.companionDataPath)) {
+      rmSync(companion.companionDataPath, { recursive: true });
+    }
+    if (existsSync(companion.personalWorkspacePath)) {
+      rmSync(companion.personalWorkspacePath, { recursive: true });
+    }
+  }
   if (existsSync(paths.supportRoot)) {
     rmSync(paths.supportRoot, { recursive: true });
+  }
+}
+
+function assertFixtureFilesAbsent(paths: SupportFixturePaths): void {
+  const residue = [
+    paths.manifestPath,
+    paths.statePath,
+    paths.supportRoot,
+    ...paths.supportCompanions.flatMap(companion => [
+      companion.companionDataPath,
+      companion.characterCardAbsolutePath,
+      companion.personalWorkspacePath,
+      ...companion.ownerFilePaths,
+    ]),
+  ].filter(existsSync);
+  if (residue.length > 0) {
+    throw new Error(`Support fixture filesystem residue remained after teardown: ${residue.join(', ')}`);
+  }
+}
+
+function assertCompanionOwnerFilesValid(input: {
+  companionDataDir: string;
+  companionLabel: string;
+  seedDir: string;
+}): void {
+  const result = verifyCompanionStartupOwnerFiles(input);
+  if (!result.ok) {
+    throw new Error(result.errors.join('\n'));
   }
 }
 
@@ -106,6 +151,7 @@ async function rollbackFailedStandUp(
     if (existsSync(paths.statePath)) {
       rmSync(paths.statePath);
     }
+    assertFixtureFilesAbsent(paths);
   } catch (cleanupError) {
     throw new AggregateError(
       [originalError, cleanupError],
@@ -141,6 +187,11 @@ export async function standUpSupportFixtures(
     'Artie character card',
   );
   assertCleanStart(paths, primaryCardPath);
+  assertCompanionOwnerFilesValid({
+    companionDataDir: join(paths.runtimeRoot, 'companion-data'),
+    companionLabel: `primary companion ${PRIMARY_COMPANION_ID}`,
+    seedDir: input.seedDir,
+  });
   for (const companionId of SUPPORT_COMPANION_IDS) {
     const sourcePath = input.supportCardSources.get(companionId);
     if (!sourcePath) {
@@ -150,6 +201,9 @@ export async function standUpSupportFixtures(
   }
 
   await input.database.assertRoundStopped();
+  for (const plan of supports) {
+    await input.database.assertAbsent(plan);
+  }
   await input.database.assertProvisioned(primary);
   writeJsonAtomic(
     paths.statePath,
@@ -159,15 +213,23 @@ export async function standUpSupportFixtures(
   try {
     for (let index = 0; index < SUPPORT_COMPANION_IDS.length; index += 1) {
       const sourcePath = input.supportCardSources.get(SUPPORT_COMPANION_IDS[index]!)!;
-      const destinationPath = resolveCanonicalPathInsideRoot(
-        join(paths.runtimeRoot, EXPECTED_SUPPORT_CARD_PATHS[index]!),
-        paths.runtimeRoot,
-        `support card ${SUPPORT_COMPANION_IDS[index]}`,
-      );
+      const companionPaths = paths.supportCompanions[index]!;
+      const destinationPath = companionPaths.characterCardAbsolutePath;
       if (!destinationPath.startsWith(`${paths.supportRoot}/`)) {
         throw new Error(`Support card destination escaped the fixture root: ${destinationPath}`);
       }
       input.importCard(sourcePath, destinationPath);
+      seedCompanionStartupOwnerFiles({
+        seedDir: input.seedDir,
+        companionDataDir: companionPaths.companionDataPath,
+        companionLabel: `support companion ${SUPPORT_COMPANION_IDS[index]}`,
+      });
+      mkdirSync(companionPaths.personalWorkspacePath, { recursive: true });
+      assertCompanionOwnerFilesValid({
+        companionDataDir: companionPaths.companionDataPath,
+        companionLabel: `support companion ${SUPPORT_COMPANION_IDS[index]}`,
+        seedDir: input.seedDir,
+      });
     }
     for (const plan of supports) {
       await input.database.provision(plan);
@@ -224,12 +286,7 @@ export async function tearDownSupportFixtures(
   await input.database.assertProvisioned(primary);
 
   removeFixtureFiles(paths);
-  if (existsSync(paths.manifestPath) || existsSync(paths.supportRoot)) {
-    throw new Error('Support fixture filesystem residue remained after teardown');
-  }
   rmSync(paths.statePath);
-  if (existsSync(paths.statePath)) {
-    throw new Error('Support fixture state record remained after teardown');
-  }
+  assertFixtureFilesAbsent(paths);
   return lifecycleEvidence('clean', paths);
 }

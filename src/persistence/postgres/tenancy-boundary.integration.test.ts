@@ -220,24 +220,35 @@ describe('PostgreSQL least-privilege companion and shard roles', () => {
         plan: support,
         runtimeLoginRole: 'postgres',
       });
+      await expect(provisionPostgresTenantAccess(admin, {
+        plan: support,
+        requireAbsent: true,
+        runtimeLoginRole: 'postgres',
+      })).rejects.toThrow(
+        `PostgreSQL tenant ${support.schema} must be absent before disposable provisioning`,
+      );
       await admin.query('CREATE TABLE shakedown_artie.primary_probe (id TEXT PRIMARY KEY)');
       await admin.query('CREATE TABLE shakedown_support_mica.support_probe (id TEXT PRIMARY KEY)');
-      await admin.query('CREATE SCHEMA cleanup_guard');
-      await admin.query('CREATE TABLE cleanup_guard.foreign_probe (id TEXT PRIMARY KEY)');
-      await admin.query(`ALTER TABLE cleanup_guard.foreign_probe OWNER TO "${support.role}"`);
+      await admin.query(`
+        CREATE COLLATION public.cleanup_guard_collation (
+          provider = libc,
+          locale = 'C'
+        )
+      `);
+      await admin.query(`ALTER COLLATION public.cleanup_guard_collation OWNER TO "${support.role}"`);
 
       await expect(dropPostgresTenantAccess({
         pool: admin,
         plan: support,
         runtimeLoginRole: 'postgres',
         dropRole: true,
-      })).rejects.toThrow(`owns objects outside ${support.schema}`);
+      })).rejects.toThrow('cannot be dropped because some objects depend on it');
       expect(await admin.query<{ relation: string | null }>(
         "SELECT to_regclass('shakedown_support_mica.support_probe')::text AS relation",
       )).toMatchObject({ rows: [{ relation: 'shakedown_support_mica.support_probe' }] });
 
-      await admin.query('ALTER TABLE cleanup_guard.foreign_probe OWNER TO postgres');
-      await admin.query('DROP SCHEMA cleanup_guard CASCADE');
+      await admin.query('ALTER COLLATION public.cleanup_guard_collation OWNER TO postgres');
+      await admin.query('DROP COLLATION public.cleanup_guard_collation');
 
       const evidence = await dropPostgresTenantAccess({
         pool: admin,

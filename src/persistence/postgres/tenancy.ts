@@ -95,6 +95,8 @@ export function planPostgresTenantAccess(input: {
 
 export interface ProvisionPostgresTenantAccessOptions {
   plan: PostgresTenantAccessPlan;
+  /** Refuse to adopt or repair any pre-existing role or schema. */
+  requireAbsent?: boolean;
   /** Existing login role that may SET ROLE to the tenant role. */
   runtimeLoginRole?: string;
   /** Extensions explicitly relocated out of public by this operator-only step. */
@@ -172,6 +174,21 @@ export async function provisionPostgresTenantAccess(
       'SELECT pg_advisory_xact_lock($1::integer, hashtext($2)::integer)',
       [TENANCY_LOCK_CLASS, `tenant:${plan.schema}`],
     );
+    if (options.requireAbsent === true) {
+      const existing = await client.query<{
+        role_exists: boolean;
+        schema_exists: boolean;
+      }>(`
+        SELECT
+          to_regnamespace($1) IS NOT NULL AS schema_exists,
+          EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $2) AS role_exists
+      `, [plan.schema, plan.role]);
+      if (existing.rows[0]?.schema_exists === true || existing.rows[0]?.role_exists === true) {
+        throw new Error(
+          `PostgreSQL tenant ${plan.schema} must be absent before disposable provisioning`,
+        );
+      }
+    }
     await client.query(`CREATE SCHEMA IF NOT EXISTS ${extensionSchema}`);
 
     for (const extension of relocateExtensions) {
@@ -296,10 +313,11 @@ export interface PostgresTenantCleanupEvidence {
  * Explicit cleanup for a disposable tenant boundary.
  *
  * The caller must provide the same validated access plan used to provision the
- * tenant. Cleanup refuses a schema whose owner drifted, a role that owns
- * objects outside the tenant schema, or unexpected role memberships. That
- * keeps a support-fixture teardown from turning a convenient schema name into
- * an arbitrary destructive target.
+ * tenant. Cleanup refuses a schema whose owner drifted or unexpected role
+ * memberships. It revokes only grants created by provisioning and relies on a
+ * restrictive DROP ROLE to reject every unknown dependency class. The whole
+ * operation is transactional, so a rejected role drop restores the schema and
+ * known grants instead of broadening cleanup with DROP OWNED.
  */
 export async function dropPostgresTenantAccess(input: {
   pool: Pool;
@@ -310,6 +328,7 @@ export async function dropPostgresTenantAccess(input: {
   const plan = planPostgresTenantAccess(input.plan);
   const schema = quotePostgresSchemaName(plan.schema);
   const role = quotePostgresRoleName(plan.role);
+  const extensionSchema = quotePostgresSchemaName(plan.extensionSchema);
   const runtimeLoginRole = input.runtimeLoginRole === undefined
     ? undefined
     : assertValidPostgresRoleName(input.runtimeLoginRole);
@@ -354,43 +373,6 @@ export async function dropPostgresTenantAccess(input: {
     droppedObjectCount = Number(objects.rows[0]?.count ?? '0');
 
     if (input.dropRole === true && state.role_exists === true) {
-      const foreignOwnership = await client.query<{ count: string }>(`
-        SELECT (
-          (SELECT COUNT(*)
-           FROM pg_namespace
-           WHERE nspowner = role.oid
-             AND nspname <> $2)
-          + (SELECT COUNT(*)
-             FROM pg_class object
-             JOIN pg_namespace namespace ON namespace.oid = object.relnamespace
-             WHERE object.relowner = role.oid
-               AND namespace.nspname <> $2
-               AND namespace.nspname NOT LIKE 'pg_toast%')
-          + (SELECT COUNT(*)
-             FROM pg_proc procedure
-             JOIN pg_namespace namespace ON namespace.oid = procedure.pronamespace
-             WHERE procedure.proowner = role.oid
-               AND namespace.nspname <> $2
-               AND namespace.nspname NOT LIKE 'pg_toast%')
-          + (SELECT COUNT(*)
-             FROM pg_type type
-             JOIN pg_namespace namespace ON namespace.oid = type.typnamespace
-             WHERE type.typowner = role.oid
-               AND namespace.nspname <> $2
-               AND namespace.nspname NOT LIKE 'pg_toast%')
-          + (SELECT COUNT(*)
-             FROM pg_database
-             WHERE datdba = role.oid)
-        )::text AS count
-        FROM pg_roles role
-        WHERE role.rolname = $1
-      `, [plan.role, plan.schema]);
-      if (Number(foreignOwnership.rows[0]?.count ?? '0') !== 0) {
-        throw new Error(
-          `Refusing to drop PostgreSQL tenant role ${plan.role}: it owns objects outside ${plan.schema}`,
-        );
-      }
-
       const memberships = await client.query<{ grantee: string }>(`
         SELECT grantee.rolname AS grantee
         FROM pg_auth_members membership
@@ -417,8 +399,18 @@ export async function dropPostgresTenantAccess(input: {
           `REVOKE ${role} FROM ${quotePostgresRoleName(runtimeLoginRole)}`,
         );
       }
-      await client.query(`DROP OWNED BY ${role}`);
-      await client.query(`DROP ROLE IF EXISTS ${role}`);
+      await client.query(`REVOKE USAGE ON SCHEMA ${extensionSchema} FROM ${role}`);
+      if (plan.approvedSharedSchema) {
+        const shared = quotePostgresSchemaName(plan.approvedSharedSchema);
+        await client.query(
+          `REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA ${shared} FROM ${role}`,
+        );
+        await client.query(
+          `REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA ${shared} FROM ${role}`,
+        );
+        await client.query(`REVOKE USAGE ON SCHEMA ${shared} FROM ${role}`);
+      }
+      await client.query(`DROP ROLE ${role}`);
     }
 
     const remaining = await client.query<{

@@ -27,8 +27,8 @@ export {
   type SupportFixtureLifecycleInput,
 } from './shakedown-support-fixtures/lifecycle.js';
 
-function requireEnv(name: string): string {
-  const value = process.env[name]?.trim();
+function requireEnv(env: NodeJS.ProcessEnv, name: string): string {
+  const value = env[name]?.trim();
   if (!value) {
     throw new Error(
       `Missing required environment variable: ${name}. Source the shakedown env before managing support fixtures.`,
@@ -37,23 +37,30 @@ function requireEnv(name: string): string {
   return value;
 }
 
-function assertCliEnvironment(): {
+export function resolveSupportFixtureCliEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+): {
   databaseUrl: string;
   runtimeRoot: string;
   systemDataDir: string;
 } {
-  const multiCompanion = parseBooleanEnv(process.env.PSFN_MULTI_COMPANION);
+  const multiCompanion = parseBooleanEnv(environment.PSFN_MULTI_COMPANION);
   if (multiCompanion !== true) {
     throw new Error('PSFN_MULTI_COMPANION must be explicitly enabled before managing support fixtures');
   }
-  const companionId = requireEnv('COMPANION_ID');
+  const companionId = requireEnv(environment, 'COMPANION_ID');
   if (companionId !== PRIMARY_COMPANION_ID) {
     throw new Error(`COMPANION_ID must be the canonical Artie fixture id ${PRIMARY_COMPANION_ID}`);
   }
+  const shakedownRoot = requireEnv(environment, 'PSFN_SHAKEDOWN_ROOT');
+  const runtimeRoot = environment.PSFN_RUNTIME_ROOT?.trim();
+  if (runtimeRoot && resolve(shakedownRoot) !== resolve(runtimeRoot)) {
+    throw new Error('PSFN_SHAKEDOWN_ROOT and PSFN_RUNTIME_ROOT must resolve to the same round root');
+  }
   return {
-    databaseUrl: requireEnv('POSTGRES_DATABASE_URL'),
-    runtimeRoot: requireEnv('PSFN_RUNTIME_ROOT'),
-    systemDataDir: requireEnv('SYSTEM_DATA_DIR'),
+    databaseUrl: requireEnv(environment, 'POSTGRES_DATABASE_URL'),
+    runtimeRoot: shakedownRoot,
+    systemDataDir: requireEnv(environment, 'SYSTEM_DATA_DIR'),
   };
 }
 
@@ -62,7 +69,7 @@ async function main(): Promise<void> {
   if (command !== 'stand-up' && command !== 'tear-down') {
     throw new Error('Usage: npm run shakedown:support -- <stand-up|tear-down>');
   }
-  const env = assertCliEnvironment();
+  const env = resolveSupportFixtureCliEnvironment();
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const templatePath = join(repoRoot, 'shakedown', 'support', 'companions.template.json');
   const supportCardSources = new Map<string, string>([
@@ -79,6 +86,7 @@ async function main(): Promise<void> {
   try {
     const input: SupportFixtureLifecycleInput = {
       runtimeRoot: env.runtimeRoot,
+      seedDir: join(repoRoot, 'config'),
       systemDataDir: env.systemDataDir,
       templatePath,
       supportCardSources,

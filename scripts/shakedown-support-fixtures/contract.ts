@@ -16,6 +16,7 @@ import {
   type CompanionsFleetConfig,
 } from '../../src/system/config/companions-config.js';
 import { resolveCanonicalPathInsideRoot } from '../../src/system/config/companion-workspace-layout.js';
+import { PER_COMPANION_OWNER_FILES } from '../../src/system/config/settings-contract.js';
 
 export const PRIMARY_COMPANION_ID = 'a7100000-0000-4000-8000-000000000001';
 export const SUPPORT_COMPANION_IDS = [
@@ -23,7 +24,7 @@ export const SUPPORT_COMPANION_IDS = [
   'c7100000-0000-4000-8000-000000000003',
 ] as const;
 
-const FIXTURE_STATE_VERSION = 1;
+const FIXTURE_STATE_VERSION = 2;
 const FIXTURE_STATE_FILENAME = 'shakedown-support-fixtures.json';
 const SUPPORT_ROOT_DIRNAME = 'support-companions';
 export const EXPECTED_PRIMARY_SCHEMA = 'shakedown_artie';
@@ -58,7 +59,18 @@ export interface SupportFixtureState {
     postgresSchema: (typeof EXPECTED_SUPPORT_SCHEMAS)[number];
     companionDataDir: (typeof EXPECTED_SUPPORT_DATA_DIRS)[number];
     characterCardPath: (typeof EXPECTED_SUPPORT_CARD_PATHS)[number];
+    companionDataPath: string;
+    characterCardAbsolutePath: string;
+    ownerFilePaths: string[];
+    personalWorkspacePath: string;
   }>;
+}
+
+export interface SupportCompanionFixturePaths {
+  companionDataPath: string;
+  characterCardAbsolutePath: string;
+  ownerFilePaths: string[];
+  personalWorkspacePath: string;
 }
 
 export interface SupportFixturePaths {
@@ -67,6 +79,7 @@ export interface SupportFixturePaths {
   manifestPath: string;
   statePath: string;
   supportRoot: string;
+  supportCompanions: SupportCompanionFixturePaths[];
 }
 
 export function sha256Text(content: string): string {
@@ -153,12 +166,38 @@ export function resolveSupportFixturePaths(
     runtimeRoot,
     'support fixture root',
   );
+  const supportCompanions = SUPPORT_COMPANION_IDS.map((companionId, index) => {
+    const companionDataPath = resolveCanonicalPathInsideRoot(
+      join(runtimeRoot, EXPECTED_SUPPORT_DATA_DIRS[index]!),
+      runtimeRoot,
+      `support data root ${companionId}`,
+    );
+    const characterCardAbsolutePath = resolveCanonicalPathInsideRoot(
+      join(runtimeRoot, EXPECTED_SUPPORT_CARD_PATHS[index]!),
+      runtimeRoot,
+      `support card ${companionId}`,
+    );
+    const personalWorkspacePath = resolveCanonicalPathInsideRoot(
+      join(runtimeRoot, 'workspaces', 'personal', companionId),
+      runtimeRoot,
+      `support Personal Workspace ${companionId}`,
+    );
+    return {
+      companionDataPath,
+      characterCardAbsolutePath,
+      ownerFilePaths: [...PER_COMPANION_OWNER_FILES].map(ownerFile => (
+        join(companionDataPath, ownerFile)
+      )),
+      personalWorkspacePath,
+    };
+  });
   return {
     runtimeRoot,
     systemDataDir,
     manifestPath: join(systemDataDir, 'companions.json'),
     statePath: join(systemDataDir, 'state', FIXTURE_STATE_FILENAME),
     supportRoot,
+    supportCompanions,
   };
 }
 
@@ -195,12 +234,19 @@ export function buildSupportFixtureState(
     manifestSha256: sha256Text(jsonPayload(contract)),
     templateSha256: sha256Text(readFileSync(templatePath, 'utf8')),
     primaryCompanionId: PRIMARY_COMPANION_ID,
-    supportCompanions: SUPPORT_COMPANION_IDS.map((companionId, index) => ({
-      companionId,
-      postgresSchema: EXPECTED_SUPPORT_SCHEMAS[index]!,
-      companionDataDir: EXPECTED_SUPPORT_DATA_DIRS[index]!,
-      characterCardPath: EXPECTED_SUPPORT_CARD_PATHS[index]!,
-    })),
+    supportCompanions: SUPPORT_COMPANION_IDS.map((companionId, index) => {
+      const companionPaths = paths.supportCompanions[index]!;
+      return {
+        companionId,
+        postgresSchema: EXPECTED_SUPPORT_SCHEMAS[index]!,
+        companionDataDir: EXPECTED_SUPPORT_DATA_DIRS[index]!,
+        characterCardPath: EXPECTED_SUPPORT_CARD_PATHS[index]!,
+        companionDataPath: companionPaths.companionDataPath,
+        characterCardAbsolutePath: companionPaths.characterCardAbsolutePath,
+        ownerFilePaths: companionPaths.ownerFilePaths,
+        personalWorkspacePath: companionPaths.personalWorkspacePath,
+      };
+    }),
   };
 }
 

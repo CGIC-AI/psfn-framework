@@ -44,6 +44,7 @@ class PostgresSupportFixtureDatabase implements SupportFixtureDatabasePort {
   async provision(plan: PostgresTenantAccessPlan): Promise<void> {
     await provisionPostgresTenantAccess(this.pool, {
       plan,
+      requireAbsent: true,
       runtimeLoginRole: this.runtimeLoginRole,
     });
   }
@@ -64,7 +65,7 @@ class PostgresSupportFixtureDatabase implements SupportFixtureDatabasePort {
         EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $2) AS role_exists
     `, [plan.schema, plan.role]);
     if (result.rows[0]?.schema_exists || result.rows[0]?.role_exists) {
-      throw new Error(`Support PostgreSQL tenant ${plan.schema} still exists after teardown`);
+      throw new Error(`Support PostgreSQL tenant ${plan.schema} already exists or remained after teardown`);
     }
   }
 }

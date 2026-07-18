@@ -15,7 +15,6 @@ import {
   validateModelLaneAttributionProof,
 } from '../lib/hardening-proofs.mjs';
 import {
-  envText,
   normalizeCustomOutcome,
   proof,
   sleep,
@@ -29,26 +28,30 @@ const VISION_MESSAGE = 'Reply with one short sentence about this image for the s
 const BACKGROUND_WARMUP_MESSAGE = 'Reply with one short sentence to advance the background emotion-appraisal cadence for the spend-ledger proof.';
 const BACKUP_MESSAGE = 'Reply with one short sentence for the backup encryption round-trip probe.';
 
-// The canonical unified settings-save route. The route/method are NOT
-// operator-tunable — only the (harmless) payload is. See
-// src/operator/garden/routes/settings-routes.ts (GET + PATCH
-// exactPath('/api/admin/settings')).
-const SETTINGS_PATH = '/api/admin/settings';
+// The canonical backup owner-file save route. This is the actual regression
+// site: POST /api/admin/settings/backup routes through saveSubConfigJson('backup')
+// -> configStore.saveBackup -> saveBackupConfig / validateBackupConfig
+// (src/operator/garden/routes/settings-routes.ts POST prefixedParamPath, and
+// src/system/config/backup-config.ts). The route/method are NOT operator-tunable
+// — only the (self-derived, benign) payload is. The body is form-urlencoded with
+// a single `configJson` field (a JSON-stringified full backup config); a valid
+// save returns 200 text `backup.json saved`, a rejected payload returns 400 JSON
+// `{error}`.
+const BACKUP_SAVE_PATH = '/api/admin/settings/backup';
 
-// Self-derived round-trip field for backup_encryption_roundtrip.
-// sessionRestartBehavior governs ONLY how a fresh inbound API request with no
-// explicit session maps to a session (reuse the latest vs open a new one). It
-// never touches identity, persona, memory, emotion, trust, or any
-// companion/partner data — it is definitively companion-neutral, a
-// session/UX-plumbing default. getSettingsData force-defaults it
-// (settings-service.ts: `runtimeConfig.sessionRestartBehavior ??=
-// 'reuse_latest_session'`), so it is always present in the settings GET, and
-// every harness turn passes an explicit X-Session-ID, so flipping the default
-// is inert for the round. We flip it to the other enum value, prove the round
-// trip, then restore it immediately (and again in the idempotent top-level
-// cleanup on error paths).
-const ROUNDTRIP_FIELD = 'sessionRestartBehavior';
-const ROUNDTRIP_FIELD_VALUES = Object.freeze(['reuse_latest_session', 'new_session']);
+// Benign mutable retention scalars we may flip by +1 to prove a real backup save
+// landed on disk. Every candidate is a pure grandfather-father-son retention
+// count enforced by validateBackupConfig (backup-config.ts): it never touches
+// encryption, mode, keyRef, mirrorDir, or any security/identity field, and a
+// valid on-disk backup.json always carries at least one of them. Flipping a
+// retention count by 1 is inert for the round and fully reversible. We prefer
+// maxMonthlyBackups (a required GFS count, min 0) and fall back only if a given
+// deployment somehow lacks it.
+const BACKUP_FLIP_FIELD_CANDIDATES = Object.freeze([
+  'maxMonthlyBackups',
+  'maxWeeklyBackups',
+  'maxRotatingBackups',
+]);
 
 // 1x1 transparent PNG. An inline attachment exercises the multimodal foreground
 // path without any external egress (which the nursery tier does not grant).
@@ -103,19 +106,34 @@ async function postAndWait({ services, sessionId, apiUserId, message }) {
   return { response, turnRecord, startedAtMs };
 }
 
-// Vision workload. Sends a foreground turn carrying an inline base64 image.
-// Runtime reality (verified for osln): there is NO dedicated 'vision' charge
-// lane, and the dedicated vision reviewer only fires for fetchable http(s)
-// image_urls (which need image egress the nursery tier does not grant). An
-// inline attachment therefore rides the main foreground chat model call, so its
-// usage row lands on the interactive lane / chat owner slot and is attributed by
-// the interactive lane expectation. stream:false means the returned response
-// already proves the turn (and its usage row) settled; the multimodal
-// userMessage is not exact-string matchable by waitForTurnRecord, so we do not
-// wait on a turn record here. Dedicated vision-slot attribution (a distinct
-// 'images.vision_review' row against the models.json vision purpose) is a
-// follow-up that needs a fetchable image_url + image egress.
-async function postAndWaitVisionInline({ services, sessionId }) {
+// Vision workload. Sends a foreground turn carrying an inline base64 image and
+// recovers the persisted turn record — and its turnId — so the image turn can be
+// attributed at turn granularity in the spend ledger.
+//
+// Runtime reality (verified for osln/65rk): an inline base64 attachment is
+// detected as a vision turn (resolveTurnModelPurpose -> 'vision',
+// src/core/agent/substrate-agent/model-runtime.ts), but the dedicated vision
+// reviewer only fires for fetchable http(s) image_urls (which need image egress
+// the nursery tier does not grant). The inline image therefore rides the main
+// foreground agent.prompt call: its model_usage_events row lands on the
+// interactive lane against the models.json vision owner slot (which, in the
+// default config, is the same 'primary' slot that owns 'chat' — see
+// load-config.ts). The ledger's `purpose` COLUMN carries the correlation stage
+// string 'agent.turn.prompt', not the routing ModelPurpose 'vision'; the proof
+// therefore attributes by turn_id against the vision OWNER SLOT (resolved from
+// models.json, never hardcoded), which is the strongest honest assertion for the
+// inline case and fails closed if no row lands for the turn or it routes to a
+// non-owner model.
+//
+// The persisted userMessage.content for a multimodal turn is a STRING whose
+// prefix is the text block verbatim, then an appended image-attachment block
+// (src/core/agent/substrate-agent/vision-attachments.ts
+// appendPersistedImageAttachmentBlock). Exact-string matching therefore fails,
+// but a substring match on VISION_MESSAGE recovers the record; turnRecord.turnId
+// equals model_usage_events.turn_id (both the turn's UUIDv7) for this
+// operator_visible foreground turn, so a turn_id-scoped ledger assertion holds.
+async function postAndWaitVisionInline({ services, sessionId, apiUserId }) {
+  const startedAtMs = Date.now();
   const response = await postChatCompletion({
     apiUrl: services.apiUrl,
     headers: buildChatHeaders({ apiKey: services.apiKey, sessionId, privacy: 'private' }),
@@ -126,7 +144,14 @@ async function postAndWaitVisionInline({ services, sessionId }) {
     ],
     timeoutMs: 120_000,
   });
-  return { response };
+  const turnRecord = await services.waitForTurnRecord({
+    sessionId,
+    apiUserId,
+    messageIncludes: VISION_MESSAGE,
+    minStartedAtMs: startedAtMs - 2_000,
+    timeoutMs: 120_000,
+  });
+  return { response, turnRecord };
 }
 
 // Await a turn's post-turn emotion-appraisal background job to a terminal state.
@@ -182,165 +207,53 @@ async function driveBackgroundLane({ services, sessionId, apiUserId, baselineMs 
   return { warmupTurns, backgroundObserved };
 }
 
-function resolveSettingsValue(root, key) {
-  if (root && typeof root === 'object' && !Array.isArray(root)) {
-    if (Object.prototype.hasOwnProperty.call(root, key)) {
-      return { found: true, value: root[key] };
-    }
-    // The unified settings GET wraps runtime settings under `.config`
-    // (settings-service.ts getSettingsData); some views also expose a
-    // `.settings` envelope. Check both alongside the root.
-    for (const envelopeKey of ['config', 'settings']) {
-      const envelope = root[envelopeKey];
-      if (
-        envelope && typeof envelope === 'object' && !Array.isArray(envelope)
-        && Object.prototype.hasOwnProperty.call(envelope, key)
-      ) {
-        return { found: true, value: envelope[key] };
-      }
-    }
-  }
-  return { found: false, value: undefined };
+// ── Backup owner-file save-path helpers (irzz.1) ──
+
+function hasBackupEncryptionBlock(backup) {
+  const encryption = backup?.encryption;
+  return Boolean(encryption)
+    && typeof encryption === 'object'
+    && !Array.isArray(encryption)
+    && typeof encryption.mode === 'string'
+    && encryption.mode.length > 0;
 }
 
-// Confirm the settings change actually took effect by re-reading the pinned
-// settings route and deep-comparing each submitted top-level field. A no-op 2xx
-// that changes nothing fails here instead of false-passing.
-export async function verifySettingsRoundTrip({ services, savePath, saveBody, saveOk, saveStatus }) {
-  if (!saveOk) {
-    return { verified: false, mismatches: [`settings save returned status ${String(saveStatus ?? 'none')}`] };
+function pickBackupFlipField(backup) {
+  if (!backup || typeof backup !== 'object' || Array.isArray(backup)) return null;
+  for (const field of BACKUP_FLIP_FIELD_CANDIDATES) {
+    const value = backup[field];
+    if (typeof value === 'number' && Number.isFinite(value)) return field;
   }
-  let submitted;
-  try {
-    submitted = JSON.parse(saveBody);
-  } catch (error) {
-    return {
-      verified: false,
-      mismatches: [`settings save body is not valid JSON: ${error instanceof Error ? error.message : String(error)}`],
-    };
-  }
-  if (!submitted || typeof submitted !== 'object' || Array.isArray(submitted)) {
-    return { verified: false, mismatches: ['settings save body must be a JSON object of settings fields'] };
-  }
-  const changedKeys = Object.keys(submitted);
-  if (changedKeys.length === 0) {
-    return { verified: false, mismatches: ['settings save body carried no fields to round-trip'] };
-  }
-  const refetch = await services.fetchJson(`${services.adminBase}${savePath}`, { method: 'GET' });
-  if (refetch?.ok !== true || !refetch?.body || typeof refetch.body !== 'object') {
-    return { verified: false, mismatches: [`refetch of ${savePath} failed (status ${String(refetch?.status ?? 'none')})`] };
-  }
-  const mismatches = [];
-  for (const key of changedKeys) {
-    const resolved = resolveSettingsValue(refetch.body, key);
-    if (!resolved.found) {
-      mismatches.push(`refetched settings missing field '${key}'`);
-      continue;
-    }
-    if (JSON.stringify(resolved.value) !== JSON.stringify(submitted[key])) {
-      mismatches.push(
-        `field '${key}' did not round-trip (submitted ${JSON.stringify(submitted[key])}, refetched ${JSON.stringify(resolved.value)})`,
-      );
-    }
-  }
-  return { verified: mismatches.length === 0, mismatches };
+  return null;
 }
 
-// Derive the harmless settings-save payload. Self-contained by default (flip
-// sessionRestartBehavior to the other enum value), with an optional operator
-// override (PSFN_SHAKEDOWN_SETTINGS_SAVE_BODY). Also captures the pre-change
-// value of every field it will change so the case and the idempotent top-level
-// cleanup can restore it. Fails closed if the settings GET fails or a field is
-// absent.
-export async function deriveRoundTripPayload(services, env) {
-  const override = envText(env, 'PSFN_SHAKEDOWN_SETTINGS_SAVE_BODY');
-  const current = await services.fetchJson(`${services.adminBase}${SETTINGS_PATH}`, { method: 'GET' });
-  if (current?.ok !== true || !current?.body || typeof current.body !== 'object' || Array.isArray(current.body)) {
-    throw new Error(
-      `backup_encryption_roundtrip could not GET ${SETTINGS_PATH} to derive a harmless settings change (status ${String(current?.status ?? 'none')})`,
-    );
-  }
-
-  let submitted;
-  if (override) {
-    try {
-      submitted = JSON.parse(override);
-    } catch (error) {
-      throw new Error(
-        `PSFN_SHAKEDOWN_SETTINGS_SAVE_BODY is not valid JSON: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-    if (!submitted || typeof submitted !== 'object' || Array.isArray(submitted)) {
-      throw new Error('PSFN_SHAKEDOWN_SETTINGS_SAVE_BODY must be a JSON object of settings fields');
-    }
-    if (Object.keys(submitted).length === 0) {
-      throw new Error('PSFN_SHAKEDOWN_SETTINGS_SAVE_BODY must carry at least one settings field');
-    }
-  } else {
-    const resolved = resolveSettingsValue(current.body, ROUNDTRIP_FIELD);
-    if (!resolved.found || typeof resolved.value !== 'string') {
-      throw new Error(
-        `backup_encryption_roundtrip requires the settings GET to expose ${ROUNDTRIP_FIELD}; it was absent`,
-      );
-    }
-    const sentinel = ROUNDTRIP_FIELD_VALUES.find((value) => value !== resolved.value);
-    if (!sentinel) {
-      throw new Error(
-        `backup_encryption_roundtrip cannot derive a sentinel for ${ROUNDTRIP_FIELD}=${String(resolved.value)} (not a known value)`,
-      );
-    }
-    submitted = { [ROUNDTRIP_FIELD]: sentinel };
-  }
-
-  const originals = {};
-  for (const key of Object.keys(submitted)) {
-    const resolved = resolveSettingsValue(current.body, key);
-    if (!resolved.found) {
-      throw new Error(
-        `backup_encryption_roundtrip settings-save field '${key}' is absent from ${SETTINGS_PATH}; refusing to change an unknown field`,
-      );
-    }
-    originals[key] = resolved.value;
-  }
-
-  return { saveBody: JSON.stringify(submitted), originals, isOverride: Boolean(override) };
-}
-
-// Idempotent restore of the captured original settings value(s). PATCHes the
-// originals back and confirms the round trip.
-async function restoreSettings(services, originals) {
-  const body = JSON.stringify(originals);
-  const save = await services.fetchJson(`${services.adminBase}${SETTINGS_PATH}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body,
-  });
-  const roundTrip = await verifySettingsRoundTrip({
-    services,
-    savePath: SETTINGS_PATH,
-    saveBody: body,
-    saveOk: save?.ok === true,
-    saveStatus: save?.status ?? null,
+// POST a full backup config to the pinned save route. The body is form-urlencoded
+// `configJson=<JSON>` per the route contract. Returns the normalized outcome —
+// never the plain-text success body as proof.
+async function postBackupConfig(services, payload) {
+  const res = await services.fetchJson(`${services.adminBase}${BACKUP_SAVE_PATH}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: `configJson=${encodeURIComponent(JSON.stringify(payload))}`,
   });
   return {
-    ok: save?.ok === true,
-    status: save?.status ?? null,
-    verified: roundTrip.verified,
-    mismatches: roundTrip.mismatches,
+    ok: res?.ok === true,
+    status: typeof res?.status === 'number' ? res.status : null,
+    error: res?.body?.error ?? null,
   };
 }
 
-export function buildHardeningCases(ctx, services, env = process.env) {
+export function buildHardeningCases(ctx, services) {
   const modelsPath = join(services.systemDataDir, MODELS_OWNER_FILE);
   const backupPath = join(services.systemDataDir, BACKUP_OWNER_FILE);
 
   // Durable-side-effect ledger for the idempotent top-level backup cleanup.
-  // before() captures the pre-change settings value(s); if the chat dispatch or
-  // PATCH throws before execute() restores them, the case runner's top-level
-  // cleanup (invoked on harness error paths) restores them from here.
+  // before() captures the original full backup.json payload; if a save/restore
+  // throws before execute() restores it, the case runner's top-level cleanup
+  // (invoked on harness error paths) restores it from here.
   const backupCleanupState = {
-    originals: null,
-    saveBody: null,
+    originalPayload: null,
+    field: null,
     restored: false,
   };
 
@@ -360,9 +273,11 @@ export function buildHardeningCases(ctx, services, env = process.env) {
         const baselineMs = Date.now() - 2_000;
         // (1) Interactive lane: a plain foreground chat turn.
         const interactive = await postAndWait({ services, sessionId, apiUserId, message: SPEND_MESSAGE });
-        // (2) Vision workload: a foreground turn carrying an inline image (rides
-        //     the interactive lane / chat owner slot — see postAndWaitVisionInline).
-        const vision = await postAndWaitVisionInline({ services, sessionId });
+        // (2) Vision workload: a foreground turn carrying an inline image, whose
+        //     turn record (and turnId) we recover so the image turn is attributed
+        //     at turn granularity against the models.json vision owner slot.
+        const vision = await postAndWaitVisionInline({ services, sessionId, apiUserId });
+        const visionTurnId = vision.turnRecord?.turnId ?? null;
         // (3) Background lane: drive benign turns until the periodic
         //     emotion-appraisal gate opens and its background-lane call lands.
         const background = await driveBackgroundLane({ services, sessionId, apiUserId, baselineMs });
@@ -380,15 +295,19 @@ export function buildHardeningCases(ctx, services, env = process.env) {
               ledgerRows,
               // Each lane's owner slot is resolved from models.json purposes; the
               // concrete model id is never hardcoded here. The interactive lane
-              // covers the plain chat turn and the (inline) vision turn, which
-              // both ride the chat owner slot; the background lane covers the
-              // emotion-appraisal call against the background owner slot.
+              // covers the plain chat turn; the inline-image turn is attributed by
+              // turn_id against the vision owner slot; the background lane covers
+              // the emotion-appraisal call against the background owner slot. The
+              // vision expectation carries the recovered turnId (or null, which
+              // fails the proof closed — the image turn must produce a row).
               laneExpectations: [
                 { lane: 'interactive', purpose: 'chat' },
+                { turnId: visionTurnId, purpose: 'vision' },
                 { lane: 'background', purpose: 'background' },
               ],
               driven: {
                 visionInline: Boolean(vision.response),
+                visionTurnId,
                 backgroundWarmupTurns: background.warmupTurns,
                 backgroundObserved: background.backgroundObserved,
               },
@@ -418,144 +337,156 @@ export function buildHardeningCases(ctx, services, env = process.env) {
       sessionId: `hardening-backup-${ctx.runToken}`,
       message: BACKUP_MESSAGE,
       proof: proof(
-        'backup.json owner-file snapshots captured before and after a unified Garden settings save',
-        'the mandatory encryption block survives the save unchanged',
+        'backup.json owner-file snapshots captured across a real backup save (POST /api/admin/settings/backup)',
+        'a full-payload save lands on disk with the mandatory encryption block intact, and an encryption-stripped payload is rejected fail-closed without touching backup.json',
       ),
       before: async () => {
         const backupBefore = services.readJsonIfExists(backupPath);
-        // Self-derive the harmless payload from the live settings (or use the
-        // optional operator override). Capture the pre-change value(s) for the
-        // idempotent restore.
-        const derived = await deriveRoundTripPayload(services, env);
-        backupCleanupState.originals = derived.originals;
-        backupCleanupState.saveBody = derived.saveBody;
+        if (!backupBefore || typeof backupBefore !== 'object' || Array.isArray(backupBefore)) {
+          throw new Error(
+            `backup_encryption_roundtrip could not read a backup.json owner file at ${backupPath}`,
+          );
+        }
+        if (!hasBackupEncryptionBlock(backupBefore)) {
+          throw new Error(
+            'backup_encryption_roundtrip precondition failed: backup.json has no encryption block to protect',
+          );
+        }
+        const field = pickBackupFlipField(backupBefore);
+        if (!field) {
+          throw new Error(
+            'backup_encryption_roundtrip found no benign numeric retention field to flip in backup.json '
+            + `(looked for ${BACKUP_FLIP_FIELD_CANDIDATES.join(', ')}); refusing to write`,
+          );
+        }
+        const flipFrom = backupBefore[field];
+        const flipTo = flipFrom + 1;
+        // Full payloads: preserve every field, flip only the benign retention
+        // scalar; strip the encryption block for the negative guard probe.
+        const flippedPayload = { ...backupBefore, [field]: flipTo };
+        const strippedPayload = { ...backupBefore };
+        delete strippedPayload.encryption;
+        // Seed the idempotent cleanup with the ORIGINAL full payload so an error
+        // path can restore backup.json.
+        backupCleanupState.originalPayload = backupBefore;
+        backupCleanupState.field = field;
         backupCleanupState.restored = false;
-        return {
-          backupBefore,
-          saveBody: derived.saveBody,
-          originals: derived.originals,
-          isOverride: derived.isOverride,
-        };
+        return { backupBefore, field, flipFrom, flipTo, flippedPayload, strippedPayload };
       },
       execute: async ({ sessionId, apiUserId, beforeChecks }) => {
         // Ride a benign turn so the case has a completed turn record; the proof
-        // itself comes only from the backup.json owner-file snapshots.
+        // itself comes only from the backup.json owner-file snapshots and the
+        // save/restore/reject request outcomes.
         const main = await postAndWait({ services, sessionId, apiUserId, message: BACKUP_MESSAGE });
-        const saveBody = beforeChecks?.saveBody ?? backupCleanupState.saveBody;
-        const save = await services.fetchJson(`${services.adminBase}${SETTINGS_PATH}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: saveBody,
-        });
-        // Round-trip verification: re-read the settings and assert the harmless
-        // change is actually reflected, so a no-op 2xx cannot false-pass.
-        const roundTrip = await verifySettingsRoundTrip({
-          services,
-          savePath: SETTINGS_PATH,
-          saveBody,
-          saveOk: save?.ok === true,
-          saveStatus: save?.status ?? null,
-        });
-        // Restore the original value(s) immediately — never leave the settings
-        // mutated. The top-level cleanup repeats this idempotently on error paths.
-        let restore = null;
-        if (backupCleanupState.originals) {
-          restore = await restoreSettings(services, backupCleanupState.originals);
-          if (restore.verified) backupCleanupState.restored = true;
+
+        const { field, flipFrom, flipTo, flippedPayload, strippedPayload, backupBefore } = beforeChecks;
+
+        // (a) POSITIVE round-trip: drive the REAL backup save path with a full
+        //     payload that flips one benign scalar; snapshot backup.json across
+        //     the write to prove it landed with the encryption block intact.
+        const save = await postBackupConfig(services, flippedPayload);
+        const afterWrite = services.readJsonIfExists(backupPath);
+
+        // Restore the original full payload immediately and confirm restoration.
+        const restore = await postBackupConfig(services, backupCleanupState.originalPayload);
+        const afterRestore = services.readJsonIfExists(backupPath);
+        if (
+          restore.ok
+          && afterRestore && typeof afterRestore === 'object'
+          && afterRestore[field] === flipFrom
+          && hasBackupEncryptionBlock(afterRestore)
+        ) {
+          backupCleanupState.restored = true;
         }
+
+        // (b) NEGATIVE guard probe: POST the irzz.1 regression shape (encryption
+        //     block stripped) and prove the API rejects it AND backup.json is
+        //     unchanged on disk.
+        const reject = await postBackupConfig(services, strippedPayload);
+        const afterReject = services.readJsonIfExists(backupPath);
+
         return normalizeCustomOutcome({
           sessionId,
-          request: { privacy: 'private', message: BACKUP_MESSAGE, settingsSavePath: SETTINGS_PATH },
+          request: { privacy: 'private', message: BACKUP_MESSAGE, backupSavePath: BACKUP_SAVE_PATH },
           response: main.response,
           turnRecord: main.turnRecord,
           sideChecks: {
-            save: {
-              ok: save?.ok === true,
-              status: save?.status ?? null,
-              roundTripVerified: roundTrip.verified,
-              roundTripMismatches: roundTrip.mismatches,
+            backup: {
+              field,
+              flipFrom,
+              flipTo,
+              before: backupBefore,
+              afterWrite,
+              afterRestore,
+              afterReject,
+              save,
+              restore,
+              reject,
               restored: backupCleanupState.restored,
-              restoreMismatches: restore?.mismatches ?? [],
             },
           },
         });
       },
-      after: async ({ outcome, beforeChecks }) => ({
-        backup: {
-          before: beforeChecks?.backupBefore ?? null,
-          after: services.readJsonIfExists(backupPath),
-          save: outcome?.sideChecks?.save ?? null,
-        },
+      after: async ({ outcome }) => ({
+        backup: outcome?.sideChecks?.backup
+          ? {
+            field: outcome.sideChecks.backup.field,
+            flipFrom: outcome.sideChecks.backup.flipFrom,
+            flipTo: outcome.sideChecks.backup.flipTo,
+            save: outcome.sideChecks.backup.save,
+            restore: outcome.sideChecks.backup.restore,
+            reject: outcome.sideChecks.backup.reject,
+            restored: outcome.sideChecks.backup.restored,
+          }
+          : null,
       }),
-      validateSideEffects: ({ sideChecks }) => {
-        const save = sideChecks?.backup?.save ?? null;
-        const failures = [];
-        if (!save || save.ok !== true) {
-          failures.push(
-            `settings save via PATCH ${SETTINGS_PATH} did not succeed (status ${String(save?.status ?? 'none')})`,
-          );
-        }
-        if (save && save.roundTripVerified !== true) {
-          failures.push(
-            `settings save did not round-trip: ${
-              Array.isArray(save.roundTripMismatches) && save.roundTripMismatches.length > 0
-                ? save.roundTripMismatches.join('; ')
-                : 'refetched settings did not reflect the submitted change'
-            }`,
-          );
-        }
-        if (save && save.restored !== true) {
-          failures.push(
-            `settings were not restored to their pre-probe value: ${
-              Array.isArray(save.restoreMismatches) && save.restoreMismatches.length > 0
-                ? save.restoreMismatches.join('; ')
-                : 'restore round-trip was not confirmed'
-            }`,
-          );
-        }
-        return failures;
-      },
-      validatePersistedProof: ({ sideChecks }) => validateBackupEncryptionRoundTripProof(
-        sideChecks?.backup ?? {},
+      validatePersistedProof: ({ outcome }) => validateBackupEncryptionRoundTripProof(
+        outcome?.sideChecks?.backup ?? {},
       ),
       // Idempotent top-level cleanup. The case runner calls this on harness error
-      // paths (and again after a normal run). It restores the pre-probe settings
-      // value(s) if execute() did not already, and is a near no-op once the
-      // restore is confirmed. Returns the runner's { cleanup, cleanupErrors }
-      // shape; recorded without changing the validator contract.
+      // paths (and again after a normal run). It restores the original backup.json
+      // payload if execute() did not already confirm it, and is a near no-op once
+      // the restore is confirmed. Returns the runner's { cleanup, cleanupErrors }
+      // shape.
       cleanup: async () => {
         const cleanupErrors = [];
         const done = {
           restored: backupCleanupState.restored,
           alreadyClean: false,
         };
-        if (!backupCleanupState.originals) {
+        if (!backupCleanupState.originalPayload) {
           // before() never derived a payload — nothing durable to undo.
           done.alreadyClean = true;
-          return { cleanup: { settings: done }, cleanupErrors };
+          return { cleanup: { backup: done }, cleanupErrors };
         }
         if (backupCleanupState.restored) {
           done.alreadyClean = true;
-          return { cleanup: { settings: done }, cleanupErrors };
+          return { cleanup: { backup: done }, cleanupErrors };
         }
         try {
-          const restore = await restoreSettings(services, backupCleanupState.originals);
-          if (restore.verified) {
+          const restore = await postBackupConfig(services, backupCleanupState.originalPayload);
+          const afterRestore = services.readJsonIfExists(backupPath);
+          const field = backupCleanupState.field;
+          if (
+            restore.ok
+            && afterRestore && typeof afterRestore === 'object'
+            && (!field || afterRestore[field] === backupCleanupState.originalPayload[field])
+            && hasBackupEncryptionBlock(afterRestore)
+          ) {
             backupCleanupState.restored = true;
             done.restored = true;
           } else {
             cleanupErrors.push(
-              `settings restore was not confirmed: ${
-                Array.isArray(restore.mismatches) && restore.mismatches.length > 0
-                  ? restore.mismatches.join('; ')
-                  : `status ${String(restore.status)}`
-              }`,
+              `backup.json restore was not confirmed (status ${String(restore.status)}`
+              + `${restore.error ? `: ${restore.error}` : ''})`,
             );
           }
         } catch (error) {
-          cleanupErrors.push(`settings restore threw: ${error instanceof Error ? error.message : String(error)}`);
+          cleanupErrors.push(
+            `backup.json restore threw: ${error instanceof Error ? error.message : String(error)}`,
+          );
         }
-        return { cleanup: { settings: done }, cleanupErrors };
+        return { cleanup: { backup: done }, cleanupErrors };
       },
     },
   ];

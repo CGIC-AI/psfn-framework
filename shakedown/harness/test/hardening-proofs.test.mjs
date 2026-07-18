@@ -151,6 +151,59 @@ test('model-lane attribution can scope an expectation to a single turn_id', () =
   );
 });
 
+test('model-lane attribution attributes the inline-vision turn against the vision owner slot', () => {
+  const rows = ledgerRows();
+  rows[0].turn_id = 'turn-chat';
+  // The inline-image foreground turn: an interactive-lane row on the primary
+  // slot. Its `purpose` COLUMN is the correlation stage string 'agent.turn.prompt'
+  // (never 'vision') — the expectation's purpose only resolves the OWNER slot.
+  const visionRow = {
+    slot_key: 'primary',
+    provider: 'openrouter',
+    model: 'z-ai/glm-5',
+    charge_lane: 'interactive',
+    charge_surface: 'moaRoundBase',
+    purpose: 'agent.turn.prompt',
+    turn_id: 'turn-vision',
+  };
+  assert.deepEqual(
+    validateModelLaneAttributionProof({
+      modelsConfig: modelsConfig(),
+      ledgerRows: [...rows, visionRow],
+      laneExpectations: [{ turnId: 'turn-vision', purpose: 'vision' }],
+    }),
+    [],
+  );
+  // No ledger row for the inline-image turn → the proof fails closed.
+  assert.match(
+    validateModelLaneAttributionProof({
+      modelsConfig: modelsConfig(),
+      ledgerRows: rows,
+      laneExpectations: [{ turnId: 'turn-vision', purpose: 'vision' }],
+    }).join('\n'),
+    /spend ledger has no turn turn-vision row to attribute against the vision owner slot/u,
+  );
+  // The vision turn routed to a non-owner model → fails closed and names the turn.
+  const drift = { ...visionRow, model: 'deepseek/deepseek-v3.2', slot_key: 'extraction' };
+  assert.match(
+    validateModelLaneAttributionProof({
+      modelsConfig: modelsConfig(),
+      ledgerRows: [...rows, drift],
+      laneExpectations: [{ turnId: 'turn-vision', purpose: 'vision' }],
+    }).join('\n'),
+    /turn turn-vision routed to model deepseek\/deepseek-v3\.2 but the vision owner slot resolves to z-ai\/glm-5/u,
+  );
+  // A null turnId (the harness never recovered the vision turn record) → fails closed.
+  assert.match(
+    validateModelLaneAttributionProof({
+      modelsConfig: modelsConfig(),
+      ledgerRows: [...rows, visionRow],
+      laneExpectations: [{ turnId: null, purpose: 'vision' }],
+    }).join('\n'),
+    /must name a purpose and either a lane or a turnId/u,
+  );
+});
+
 test('model-lane attribution rejects an expectation with neither a lane nor a turnId', () => {
   assert.match(
     validateModelLaneAttributionProof({
@@ -213,60 +266,99 @@ test('model-lane attribution fails when a lane is not routed to its config-resol
   );
 });
 
-test('backup encryption round-trip proves the mandatory block survives a settings save', () => {
-  const before = { encryption: { mode: 'required', keyRef: { kind: 'env', envName: 'PSFN_BACKUP_ENCRYPTION_KEY' } } };
-  const after = { encryption: { mode: 'required', keyRef: { kind: 'env', envName: 'PSFN_BACKUP_ENCRYPTION_KEY' } } };
-  assert.deepEqual(
-    validateBackupEncryptionRoundTripProof({ before, after, save: { ok: true, status: 200 } }),
-    [],
-  );
+// A passing backup round-trip: a full-payload save landed the benign scalar flip
+// on disk with the encryption block intact, the original was restored, and the
+// encryption-stripped payload was rejected without touching backup.json.
+function backupRoundTrip() {
+  const encryption = { mode: 'required', keyRef: { kind: 'env', envName: 'PSFN_BACKUP_ENCRYPTION_KEY' } };
+  const base = {
+    intervalHours: 6,
+    maxRotatingBackups: 5,
+    maxWeeklyBackups: 4,
+    maxMonthlyBackups: 12,
+    mirrorDir: '',
+    verifyRestore: true,
+    encryption,
+  };
+  return {
+    field: 'maxMonthlyBackups',
+    flipFrom: 12,
+    flipTo: 13,
+    before: { ...base },
+    afterWrite: { ...base, maxMonthlyBackups: 13 },
+    afterRestore: { ...base },
+    afterReject: { ...base },
+    save: { ok: true, status: 200 },
+    restore: { ok: true, status: 200 },
+    reject: { ok: false, status: 400 },
+  };
+}
+
+test('backup round-trip passes when the real save lands, encryption survives, and the stripped payload is rejected', () => {
+  assert.deepEqual(validateBackupEncryptionRoundTripProof(backupRoundTrip()), []);
 });
 
-test('backup encryption round-trip fails closed when the save strips or mutates the block', () => {
-  const before = { encryption: { mode: 'required', keyRef: { kind: 'env', envName: 'PSFN_BACKUP_ENCRYPTION_KEY' } } };
+test('backup round-trip fails closed on a missing precondition, failed save, or unlanded write', () => {
+  // Precondition: the pre-save snapshot must carry an encryption block.
+  const noBlock = backupRoundTrip();
+  delete noBlock.before.encryption;
+  assert.match(validateBackupEncryptionRoundTripProof(noBlock).join('\n'), /precondition not met/u);
 
+  // The positive save must succeed.
+  const failedSave = backupRoundTrip();
+  failedSave.save = { ok: false, status: 500 };
+  assert.match(validateBackupEncryptionRoundTripProof(failedSave).join('\n'), /did not succeed/u);
+
+  // The flipped scalar must actually change on disk (no-op 2xx fails closed).
+  const noLand = backupRoundTrip();
+  noLand.afterWrite = { ...noLand.before };
+  assert.match(validateBackupEncryptionRoundTripProof(noLand).join('\n'), /did not land/u);
+});
+
+test('backup round-trip fails closed when the real save strips or mutates the encryption block', () => {
+  const stripped = backupRoundTrip();
+  delete stripped.afterWrite.encryption;
   assert.match(
-    validateBackupEncryptionRoundTripProof({
-      before,
-      after: { intervalHours: 12 },
-      save: { ok: true, status: 200 },
-    }).join('\n'),
+    validateBackupEncryptionRoundTripProof(stripped).join('\n'),
     /stripped the mandatory backup\.json encryption block/u,
   );
 
+  const mutated = backupRoundTrip();
+  mutated.afterWrite = { ...mutated.afterWrite, encryption: { mode: 'disabled', keyRef: mutated.before.encryption.keyRef } };
   assert.match(
-    validateBackupEncryptionRoundTripProof({
-      before: { intervalHours: 12 },
-      after: before,
-      save: { ok: true, status: 200 },
-    }).join('\n'),
-    /precondition not met/u,
+    validateBackupEncryptionRoundTripProof(mutated).join('\n'),
+    /mutated the backup\.json encryption block/u,
   );
 
+  const keyRefDrift = backupRoundTrip();
+  keyRefDrift.afterWrite = { ...keyRefDrift.afterWrite, encryption: { mode: 'required', keyRef: { kind: 'env', envName: 'OTHER_KEY' } } };
   assert.match(
-    validateBackupEncryptionRoundTripProof({
-      before,
-      after: before,
-      save: { ok: false, status: 500 },
-    }).join('\n'),
-    /did not succeed/u,
+    validateBackupEncryptionRoundTripProof(keyRefDrift).join('\n'),
+    /mutated the backup\.json encryption block/u,
+  );
+});
+
+test('backup round-trip fails closed when the original is not restored', () => {
+  const notRestored = backupRoundTrip();
+  notRestored.afterRestore = { ...notRestored.afterRestore, maxMonthlyBackups: 13 };
+  notRestored.afterReject = { ...notRestored.afterRestore };
+  assert.match(validateBackupEncryptionRoundTripProof(notRestored).join('\n'), /was not restored/u);
+});
+
+test('backup round-trip fails closed when the encryption-stripped payload is NOT rejected or touches disk', () => {
+  // The guard is missing: the stripped payload was accepted.
+  const accepted = backupRoundTrip();
+  accepted.reject = { ok: true, status: 200 };
+  assert.match(
+    validateBackupEncryptionRoundTripProof(accepted).join('\n'),
+    /was NOT rejected .* the fail-closed guard is missing/u,
   );
 
+  // The reject nonetheless mutated backup.json on disk — not fail-closed.
+  const dirtyReject = backupRoundTrip();
+  dirtyReject.afterReject = { ...dirtyReject.afterReject, maxMonthlyBackups: 99 };
   assert.match(
-    validateBackupEncryptionRoundTripProof({
-      before,
-      after: { encryption: { mode: 'disabled', keyRef: before.encryption.keyRef } },
-      save: { ok: true, status: 200 },
-    }).join('\n'),
-    /changed backup\.json encryption\.mode from required to disabled/u,
-  );
-
-  assert.match(
-    validateBackupEncryptionRoundTripProof({
-      before,
-      after: { encryption: { mode: 'required', keyRef: { kind: 'env', envName: 'OTHER_KEY' } } },
-      save: { ok: true, status: 200 },
-    }).join('\n'),
-    /mutated the backup\.json encryption keyRef/u,
+    validateBackupEncryptionRoundTripProof(dirtyReject).join('\n'),
+    /changed backup\.json on disk — the reject was not fail-closed/u,
   );
 });

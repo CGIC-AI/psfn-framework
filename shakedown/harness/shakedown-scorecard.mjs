@@ -82,6 +82,14 @@ function average(values) {
   return filtered.reduce((sum, value) => sum + value, 0) / filtered.length;
 }
 
+function coverageCaseIds(data) {
+  return [...new Set(
+    (Array.isArray(data?.coverageCaseIds) ? data.coverageCaseIds : [])
+      .filter((caseId) => typeof caseId === 'string' && caseId.trim().length > 0)
+      .map((caseId) => caseId.trim()),
+  )];
+}
+
 // Fallback classifier for older/foreign artifacts that predate caseStatus.
 function deriveCaseStatus(result) {
   if (typeof result?.caseStatus === 'string' && result.caseStatus.trim()) {
@@ -132,6 +140,7 @@ function summarizeHarnessArtifact(path, data) {
     phase: data?.phase ?? null,
     harnessStatus: data?.harnessStatus ?? null,
     generatedAt: data?.generatedAt ?? null,
+    coverageCaseIds: coverageCaseIds(data),
     caseCount: results.length,
     okCount,
     failCount: failCases.length,
@@ -164,6 +173,7 @@ function summarizeUiArtifact(path, data) {
     path,
     file: basename(path),
     generatedAt: data?.generatedAt ?? null,
+    coverageCaseIds: coverageCaseIds(data),
     pageCount: pages.length,
     okCount: pages.filter((page) => page?.ok).length,
     failCount: failures.length,
@@ -182,6 +192,7 @@ function summarizeLiveSweepArtifact(path, data) {
     path,
     file: basename(path),
     generatedAt: data?.generatedAt ?? null,
+    coverageCaseIds: coverageCaseIds(data),
     caseCount: results.length,
     okCount: results.filter(isOk).length,
     failCount: results.filter((result) => !isOk(result)).length,
@@ -189,6 +200,20 @@ function summarizeLiveSweepArtifact(path, data) {
       caseId: result.id ?? 'unknown',
       status: result?.response?.status ?? null,
     })),
+  };
+}
+
+function summarizeCoverageArtifact(path, data) {
+  const status = typeof data?.status === 'string' ? data.status.trim().toLowerCase() : null;
+  const passed = data?.ok === true || ['ok', 'passed', 'success', 'completed'].includes(status);
+  return {
+    kind: 'coverage',
+    path,
+    file: basename(path),
+    generatedAt: data?.generatedAt ?? null,
+    status,
+    coverageCaseIds: coverageCaseIds(data),
+    failCount: passed ? 0 : 1,
   };
 }
 
@@ -215,6 +240,10 @@ function loadSummaries(paths) {
     }
     if (Array.isArray(data?.results)) {
       summaries.push(summarizeLiveSweepArtifact(path, data));
+      continue;
+    }
+    if (coverageCaseIds(data).length > 0) {
+      summaries.push(summarizeCoverageArtifact(path, data));
     }
   }
   return summaries;
@@ -312,14 +341,18 @@ function aggregate(summaries, taxonomy, coverage) {
   const harness = summaries.filter((entry) => entry.kind === 'harness');
   const ui = summaries.filter((entry) => entry.kind === 'ui');
   const liveSweep = summaries.filter((entry) => entry.kind === 'live-sweep');
+  const coverageArtifacts = summaries.filter((entry) => entry.kind === 'coverage');
 
   const totalHarnessCases = harness.reduce((sum, entry) => sum + entry.caseCount, 0);
   const totalHarnessOk = harness.reduce((sum, entry) => sum + entry.okCount, 0);
   const totalUiFail = ui.reduce((sum, entry) => sum + entry.failCount, 0);
+  const totalCoverageArtifactFail = coverageArtifacts
+    .reduce((sum, entry) => sum + entry.failCount, 0);
 
   const green = taxonomy.unwaivedFailureCount === 0
     && coverage.uncoveredCount === 0
-    && totalUiFail === 0;
+    && totalUiFail === 0
+    && totalCoverageArtifactFail === 0;
 
   return {
     generatedAt: new Date().toISOString(),
@@ -331,6 +364,9 @@ function aggregate(summaries, taxonomy, coverage) {
       ...(coverage.uncoveredCount > 0
         ? [`${coverage.uncoveredCount} uncovered coverage-appendix surface(s)`] : []),
       ...(totalUiFail > 0 ? [`${totalUiFail} Garden sweep page failure(s)`] : []),
+      ...(totalCoverageArtifactFail > 0
+        ? [`${totalCoverageArtifactFail} external coverage artifact failure(s)`]
+        : []),
     ],
     inputs: summaries.map((entry) => entry.path),
     harness: {
@@ -349,6 +385,10 @@ function aggregate(summaries, taxonomy, coverage) {
       artifactCount: liveSweep.length,
       totalCases: liveSweep.reduce((sum, entry) => sum + entry.caseCount, 0),
       failCount: liveSweep.reduce((sum, entry) => sum + entry.failCount, 0),
+    },
+    coverageArtifacts: {
+      artifactCount: coverageArtifacts.length,
+      failCount: totalCoverageArtifactFail,
     },
     taxonomy,
     coverage,
@@ -373,6 +413,7 @@ function toMarkdown(scorecard) {
     `- Harness cases: ${scorecard.harness.okCount}/${scorecard.harness.totalCases} ok (${scorecard.harness.passRate ?? 'n/a'}%)`,
     `- Garden sweep pages failing: ${scorecard.ui.failCount}/${scorecard.ui.totalPages}`,
     `- Live sweep cases failing: ${scorecard.liveSweep.failCount}/${scorecard.liveSweep.totalCases}`,
+    `- External coverage artifacts failing: ${scorecard.coverageArtifacts.failCount}/${scorecard.coverageArtifacts.artifactCount}`,
     '',
     '## Non-green taxonomy',
     '',
@@ -431,7 +472,12 @@ function main() {
   const summaries = loadSummaries(inputs);
   const harnessSummaries = summaries.filter((entry) => entry.kind === 'harness');
   const executedCaseIds = new Set(
-    harnessSummaries.flatMap((summary) => summary.cases.filter((item) => item.executed).map((item) => item.caseId)),
+    [
+      ...harnessSummaries.flatMap(
+        (summary) => summary.cases.filter((item) => item.executed).map((item) => item.caseId),
+      ),
+      ...summaries.flatMap((summary) => summary.coverageCaseIds),
+    ],
   );
 
   const taxonomy = buildTaxonomyReport(harnessSummaries, waivers);

@@ -235,6 +235,7 @@ export async function postChatCompletion({
   apiUrl,
   headers,
   message,
+  content,
   model = 'psfn-live',
   responseStyle = 'concise',
   timeoutMs = 120000,
@@ -245,7 +246,7 @@ export async function postChatCompletion({
     model,
     stream: false,
     ...(responseStyle ? { response_style: responseStyle } : {}),
-    messages: [{ role: 'user', content: message }],
+    messages: [{ role: 'user', content: content ?? message }],
   };
   try {
     const response = await fetch(apiUrl, {

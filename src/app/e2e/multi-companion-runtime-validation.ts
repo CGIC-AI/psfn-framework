@@ -35,6 +35,11 @@ const COLLISION_ROUNDS = 4;
 const QUIESCENCE_TIMEOUT_MS = 30_000;
 const QUIESCENCE_WINDOW_MS = 1_000;
 const PROCESS_EXIT_TIMEOUT_MS = 10_000;
+const MULTI_COMPANION_COVERAGE_CASE_IDS = [
+  'multi_companion_crossover_isolation',
+  'icp_durable_turns_restart',
+  'icp_fatigue_closeout_reserve',
+] as const;
 
 type CertificationAgent = IcpCertificationProcessHarness['agents'][number];
 
@@ -632,6 +637,7 @@ async function main(): Promise<Record<string, unknown>> {
       event: 'multi_companion_runtime_validation',
       status: 'passed',
       revision,
+      coverageCaseIds: MULTI_COMPANION_COVERAGE_CASE_IDS,
       topology: {
         fixtureContract: 'shakedown/support/companions.template.json',
         gatewayCount: 1,

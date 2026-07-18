@@ -83,6 +83,43 @@ secrets.
 | `shakedown-scorecard.mjs` | Aggregates run JSONs; enforces the non-green taxonomy and cross-checks the coverage appendix. Exits non-zero if any case is non-green (unwaived) or any appendix surface is uncovered. |
 | `coverage-map.json` | Maps each appendix surface to the case ids that exercise it (or an explicit disposition). Maintained per sprint. |
 
+## Sprint 10 coverage cases
+
+`cases/sprint10.mjs` extends the existing catalog; it does not fork the harness.
+The nine cases cover physical and placeless situated presence, virtual
+mindspace and physical precedence, synthetic world telemetry with
+`world list/perceive`, hub enrollment and presence-follow, CogSec document
+quarantine, temporal stamp stripping, and incremental SSE first-content
+timing. Each output row carries `tier`, `variants`, `feature`, and `proof`
+metadata. Its verdict comes from the exact persisted TurnRecord and side
+artifacts, never from the assistant's claim.
+
+The physical, placeless, and hub cases require named synthetic satellite
+claims. For each prefix below, set `_CLAIM_TYPE`, `_ID`, `_ENDPOINT_ID`, and
+`_SESSION_ID`; `_CAPABILITIES` and `_TELEMETRY_SCOPES` are optional:
+
+- `PSFN_SHAKEDOWN_PHYSICAL_SATELLITE`
+- `PSFN_SHAKEDOWN_PLACELESS_SATELLITE`
+- `PSFN_SHAKEDOWN_HUB_SATELLITE`
+
+Those claims must match three synthetic entries in the round's canonical
+`satellites.json`: physical (`living_room`), deliberately placeless, and hub
+face telemetry (`kitchen`). The place IDs and labels can be overridden through
+the corresponding `PSFN_SHAKEDOWN_*_PLACE_*` values in the Artie env template.
+The hub probe creates and revokes its own opaque enrollment
+(`PSFN_SHAKEDOWN_HUB_IDENTITY_ID` may override the generated handle). The CogSec
+document case requires the disposable round's `intake-policy.json` mode to be
+`enforce`; shadow mode is intentionally not accepted as quarantine proof.
+
+The scorecard unions a provided artifact's top-level `coverageCaseIds` with
+executed harness case IDs. This is how the real-process multi-companion support
+artifact and per-tier capability-conformance artifact cover their appendix
+rows without duplicating those runtimes in the chat catalog. Generic external
+artifacts must report `status: "passed"` (or `ok: true`); an unrecognized or
+failed status makes the scorecard red. The real-HA control, shared-wiki toaster
+test, hub/PWA/touch walk, and final Garden UX pass remain explicit manual or
+partner dispositions.
+
 ## Non-green taxonomy (enforced in `shakedown-scorecard.mjs`)
 
 Only `ok` is green. Every other case status is a failure and is bucketed into
@@ -132,8 +169,8 @@ PSFN_ADMIN_BASE=http://127.0.0.1:10054 \
 PSFN_MATRIX_DIR=$SHAKEDOWN_ROOT/artifacts/matrix \
   shakedown/harness/run-live-shakedown-matrix.sh
 
-# scorecard over the sweep output
-PSFN_SCORECARD_INPUTS="$PSFN_MATRIX_DIR/live-system-shakedown.nursery.json,$PSFN_MATRIX_DIR/live-system-shakedown.apprentice.json,$PSFN_MATRIX_DIR/live-system-shakedown.autonomous.json" \
+# scorecard over the sweep plus external support/conformance/UI proof artifacts
+PSFN_SCORECARD_INPUTS="$PSFN_MATRIX_DIR/live-system-shakedown.nursery.json,$PSFN_MATRIX_DIR/live-system-shakedown.apprentice.json,$PSFN_MATRIX_DIR/live-system-shakedown.autonomous.json,$PSFN_SUPPORT_ARTIFACT,$PSFN_UI_ARTIFACT" \
 PSFN_SCORECARD_JSON=$SHAKEDOWN_ROOT/artifacts/shakedown-scorecard.json \
 PSFN_SCORECARD_MD=$SHAKEDOWN_ROOT/SHAKEDOWN-SCORECARD.md \
   shakedown/harness/shakedown-scorecard.mjs

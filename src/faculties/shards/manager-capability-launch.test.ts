@@ -74,7 +74,7 @@ describe('ShardManager digest-bound capability launches', () => {
   let setCapabilityAccess: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'psfn-shard-capability-launch-'));
+    dir = mkdtempSync(join(tmpdir(), 'shard-capability-launch-'));
     eventBus = new EventBus();
     sessionStore = new SessionStore(dir);
     handleMessage = vi.spyOn(SubstrateAgent.prototype, 'handleMessage')

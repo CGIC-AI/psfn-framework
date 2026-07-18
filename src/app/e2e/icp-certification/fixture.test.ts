@@ -9,6 +9,7 @@ import {
   loadSchedulerConfig,
 } from '../../../system/config/scheduler-config.js';
 import { createGatewayFleetChargePolicyResolver } from '../../gateway/fleet-charge-policy-resolver.js';
+import { PER_COMPANION_OWNER_FILES } from '../../../system/config/settings-contract.js';
 import {
   CERTIFICATION_COMPANION_A,
   CERTIFICATION_COMPANION_B,
@@ -76,7 +77,44 @@ describe('ICP certification production-shape fixture', () => {
         'postgres://certification:certification@127.0.0.1:5432/certification',
       );
     }
-    expect(configA.companionFleet?.companions).toHaveLength(2);
+    expect(configA.companionFleet?.companions).toHaveLength(3);
+    expect(configA.companionFleet?.companions.map(companion => companion.companionId)).toEqual([
+      CERTIFICATION_COMPANION_A,
+      CERTIFICATION_COMPANION_B,
+      'c7100000-0000-4000-8000-000000000003',
+    ]);
+    expect(fixture.companions[0].companionDataDir).toBe(join(
+      fixture.runtimeRoot,
+      'companion-data',
+    ));
+    expect(fixture.companions[0].characterCardPath).toBe(join(
+      fixture.runtimeRoot,
+      'companion-data',
+      'companion.json',
+    ));
+    expect(fixture.companions[1].companionDataDir).toBe(join(
+      fixture.runtimeRoot,
+      'support-companions',
+      'mica',
+      'data',
+    ));
+    expect(fixture.companions[1].characterCardPath).toBe(join(
+      fixture.runtimeRoot,
+      'support-companions',
+      'mica',
+      'data',
+      'companion.json',
+    ));
+    const lumenDataDir = join(
+      fixture.runtimeRoot,
+      'support-companions',
+      'lumen',
+      'data',
+    );
+    expect([...PER_COMPANION_OWNER_FILES].every(ownerFile => (
+      existsSync(join(lumenDataDir, ownerFile))
+    ))).toBe(true);
+    expect(existsSync(join(lumenDataDir, 'companion.json'))).toBe(true);
     const chatModels = configA.modelRegistry?.models.filter(model => (
       model.purposes.some(purpose => purpose.purpose === 'chat')
     ));

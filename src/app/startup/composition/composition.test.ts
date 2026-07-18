@@ -20,6 +20,7 @@ import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
 import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
 import { withChildProcessSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
 import { wireShardAndThinkRuntime } from './composition.js';
+import type { CapabilityGrantSnapshot } from '../../../system/capabilities/access.js';
 
 type CapabilityTier = 'nursery' | 'apprentice' | 'autonomous';
 const EMPTY_MEMORY_STORE = {
@@ -30,6 +31,11 @@ const EMPTY_MEMORY_STORE = {
   }),
 };
 const ORIGINAL_MODULE_REGISTRY_PATH = process.env.MODULE_REGISTRY_PATH;
+const snapshotParentCapabilityGrant = (): CapabilityGrantSnapshot => Object.freeze({
+  tier: 'custom',
+  customTokens: Object.freeze(['shard.spawn']),
+  grantedTokens: Object.freeze(['shard.spawn']),
+});
 
 beforeEach(() => {
   process.env.MODULE_REGISTRY_PATH = ORIGINAL_MODULE_REGISTRY_PATH ?? 'companion/modules/repl-registry.json';
@@ -182,6 +188,7 @@ function wireSplitThinkTool(options: {
 }): FakeSubstrateAgent {
   const target = new FakeSubstrateAgent();
   wireShardAndThinkRuntime({
+    snapshotParentCapabilityGrant,
     agentLoop: target as any,
     eventBus: options.eventBus,
     llmProvider: options.llmProvider,
@@ -279,6 +286,7 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
       const onMutation = vi.fn();
 
       const shardPort = wireShardAndThinkRuntime({
+        snapshotParentCapabilityGrant,
         agentLoop: target as any,
         eventBus,
         llmProvider: llm,
@@ -323,6 +331,7 @@ describe('wireShardAndThinkRuntime split-mode module wiring', () => {
       const onMutation = vi.fn();
 
       wireShardAndThinkRuntime({
+        snapshotParentCapabilityGrant,
         agentLoop: target as any,
         eventBus,
         llmProvider: llm,

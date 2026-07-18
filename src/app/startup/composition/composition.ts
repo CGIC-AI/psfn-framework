@@ -9,6 +9,7 @@ import type { CoreSubstrateConfig, SubstrateConfig } from '../../../system/confi
 import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { AppCache } from '../../../shared/cache/types.js';
+import type { CapabilityGrantSnapshot } from '../../../system/capabilities/access.js';
 import { wireRuntimeDiagnosticsEventCapture } from '../../../shared/diagnostics/runtime-diagnostics.js';
 import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import { SessionStore, type SessionIntegrityProvider } from '../../../persistence/sessions/store.js';
@@ -518,6 +519,7 @@ export interface ToolRuntimeOptions {
   shardAuditTrail?: ShardAuditTrail | null;
   runtimeMode?: RuntimeMode;
   getCapabilityTier?: () => CapabilityTier;
+  snapshotParentCapabilityGrant: () => CapabilityGrantSnapshot;
   compositionalPolicy?: SubstrateConfig['compositionalPolicy'];
   moduleInstallConfirmationQueue?: ApprovalQueuePort | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
@@ -561,6 +563,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     foldReviewController,
     compressionGuidelineEvolution: options.compressionGuidelineEvolution ?? undefined,
     shardPostgresLifecycle,
+    snapshotParentCapabilityGrant: options.snapshotParentCapabilityGrant,
   });
   const subagentFaculty = new SubagentFaculty({
     eventBus: options.eventBus,

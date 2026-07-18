@@ -6,6 +6,8 @@ import type {
   CompanionId,
   ShardCompanionId,
 } from '../../shared/routing/companion-id.js';
+import type { CapabilityTier } from '../../system/capabilities/tier-types.js';
+import type { CapabilityToken } from '../../system/capabilities/tokens.js';
 
 // ── Shard types ──
 // Ephemeral sub-agent instances for parallel task execution.
@@ -105,6 +107,21 @@ export interface ShardRuntimeRecord {
   mergeReview: ShardMergeReview;
 }
 
+/**
+ * Immutable, audit-safe evidence for the capability authority bound to one
+ * shard launch. Routing capability arrays remain separate and cannot alter
+ * these authorization fields.
+ */
+export interface ShardCapabilityGrantEvidence {
+  readonly parentTier: CapabilityTier;
+  readonly derivedTier: 'custom';
+  readonly tokens: readonly CapabilityToken[];
+  readonly ownerVersion: string;
+  readonly grantDigest: string;
+  readonly denialMask: readonly CapabilityToken[];
+  readonly derivationVersion: string;
+}
+
 export interface ShardConfig {
   name: string;                    // Human-readable label
   task: string;                    // The prompt to send to the shard
@@ -133,6 +150,7 @@ export interface ShardResult {
   failureReason?: string;
   capabilities: string[];
   requiredCapabilities: string[];
+  capabilityGrant: ShardCapabilityGrantEvidence;
   lineage: ShardResultLineageEnvelope;
   artifactReturn?: ArtifactReturnBatch;
 }

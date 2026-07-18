@@ -4,7 +4,6 @@
 
 import type { AgentTool } from '../../../../boundary/pi-agent/index.js';
 import type { CapabilityTier } from '../../../../system/config/runtime-config-contracts.js';
-import { resolveTierCapabilityTokens } from '../../../../system/capabilities/tiers.js';
 import { resolveToolRequiredCapabilities } from '../../../../system/capabilities/requirements.js';
 import type { CapabilityToken } from '../../../../system/capabilities/tokens.js';
 
@@ -27,10 +26,16 @@ export interface ExtendedToolGuide {
 }
 
 export function buildExtendedToolGuide(input: {
-  capabilityTier: CapabilityTier;
+  /**
+   * The turn's resolved granted token set (mus2.1). Advertised availability
+   * must come from the SAME capability access that gates tool execution —
+   * never re-resolved from a tier name, which would advertise an empty grant
+   * for `custom` access and could mix owner-file versions.
+   */
+  grantedTokens: ReadonlySet<CapabilityToken>;
   extendedTools: AgentTool<any>[];
 }): ExtendedToolGuide {
-  const grantedTokens = new Set<CapabilityToken>(resolveTierCapabilityTokens(input.capabilityTier));
+  const grantedTokens = input.grantedTokens;
   const entries: ExtendedToolGuideEntry[] = input.extendedTools.map((tool) => {
     const missingTokens = resolveToolRequiredCapabilities(tool, {})
       .filter(token => !grantedTokens.has(token));

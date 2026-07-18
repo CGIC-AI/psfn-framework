@@ -75,6 +75,7 @@ secrets.
 
 | Script | Role |
 | --- | --- |
+| `bootstrap-local.mjs` | One-command local bootstrap: validates protected roots before any write, builds the RC, seeds owner files, imports Artie, launches split runtime, and prints the exact persisted first-turn record. |
 | `live-system-shakedown.mjs` | Tier-tagged case harness. One phase per run; writes a run JSON (tagged with `target`) to `PSFN_SHAKEDOWN_OUTPUT`. |
 | `run-live-shakedown-matrix.sh` | Tier sweep: nursery → apprentice → autonomous, for `local` or `kube` (`PSFN_TARGET`). Captures the pre-sweep tier, restores it on exit (trap) **and verifies the restore** — owner-file diff for local, settings-API re-read for kube — even on SIGINT/SIGTERM, and emits one run JSON per tier. |
 | `restart-split-runtime.sh` | Restarts the split gateway/agent runtime for a lane (Postgres backend, health-gated). |
@@ -103,6 +104,14 @@ Source the env first (two stages, both `set -a`; see `docs/shakedown.md` and
 `shakedown/artie/shakedown.env.template`), then:
 
 ```bash
+# Fresh local lane. PSFN_LIVE_DATA_ROOTS in the sourced round env is mandatory
+# and colon-separated. A dirty root refuses unless resume is explicit.
+npm run shakedown:bootstrap
+
+# Resume a bootstrap that has a matching .bootstrap-state.json. Immutable
+# completed stages are skipped; runtime readiness and first-turn proof rerun.
+PSFN_SHAKEDOWN_RESUME=1 npm run shakedown:bootstrap
+
 # local tier sweep (writes per-tier run JSONs under $PSFN_MATRIX_DIR)
 PSFN_TARGET=local \
 PSFN_TIER_FILE=$SYSTEM_DATA_DIR/capability-tier.json \

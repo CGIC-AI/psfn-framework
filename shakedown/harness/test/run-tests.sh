@@ -7,6 +7,9 @@ set -euo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 tests=(
+  "bootstrap-config.test.mjs"  # bootstrap rejects unsafe roots before any write
+  "bootstrap-runner.test.mjs"  # bootstrap sequences seed/readiness/proof and explicit resume
+  "bootstrap-services.test.mjs" # readiness plus exact persisted-turn proof
   "target-contract.test.mjs"   # A: tier flip uses the canonical capabilities editor
   "flip-abort.test.mjs"        # C: an unconfirmed forward flip aborts the phase
   "revert-on-signal.test.mjs"  # B: pre-sweep tier restored on SIGINT/SIGTERM

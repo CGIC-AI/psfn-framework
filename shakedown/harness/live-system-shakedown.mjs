@@ -36,6 +36,8 @@ import {
   evaluateTierToolConformanceEvidence,
 } from './lib/capability-matrix.mjs';
 import { runHostCleanupSteps } from './lib/host-cleanup.mjs';
+import { validatePersistedProof } from './lib/persisted-proofs.mjs';
+import { buildSprint10Cases } from './cases/sprint10.mjs';
 
 const CONFIG = (() => {
   try {
@@ -167,6 +169,9 @@ const waitForMatchingTurnRecord = (sessionId, message, minStartedAtMs, timeoutMs
   probe.waitForMatchingTurnRecord(TURN_RECORDS_DIR, sessionId, message, minStartedAtMs, timeoutMs, apiUserId, pollIntervalMs);
 const waitForTurnSettlement = (sessionId, minStartedAtMs, timeoutMs, apiUserId, pollIntervalMs) =>
   probe.waitForTurnSettlement(TURN_RECORDS_DIR, sessionId, minStartedAtMs, timeoutMs, apiUserId, pollIntervalMs);
+
+const waitForCaseTurnRecord = (options) =>
+  probe.waitForCaseTurnRecord(TURN_RECORDS_DIR, options);
 
 const CASE_DISPATCH_DIAGNOSTICS = new Map();
 
@@ -3078,7 +3083,7 @@ function buildCapabilityMatrixCase(ctx) {
         productionProbe: runProductionCapabilityProbe(EXPECTED_CAPABILITY_TIER),
       };
     },
-    after: async ({ outcomes, preChecks }) => {
+    after: async ({ outcomes, beforeChecks }) => {
       const activationOffset = activationTools.length > 0 ? 1 : 0;
       const outcomesByExecutionId = Object.fromEntries(
         executionPlan.executions.map((execution, index) => [
@@ -3096,7 +3101,7 @@ function buildCapabilityMatrixCase(ctx) {
         executionPlan,
         outcomesByExecutionId,
         gateObservationsByExecutionId: Object.fromEntries(
-          (preChecks?.productionProbe?.gates ?? []).map((entry) => [
+          (beforeChecks?.productionProbe?.gates ?? []).map((entry) => [
             entry.executionId,
             entry,
           ]),
@@ -3138,7 +3143,7 @@ function buildCapabilityMatrixCase(ctx) {
       return {
         capabilityMatrix: grid,
         approvalRouting,
-        shardBackendRouting: preChecks?.productionProbe?.shardBackend ?? null,
+        shardBackendRouting: beforeChecks?.productionProbe?.shardBackend ?? null,
         cleanup,
         cleanupErrors,
       };
@@ -3183,7 +3188,23 @@ function buildCapabilityMatrixCase(ctx) {
 function buildCases(ctx) {
   const baseline = buildBaselineCases(ctx);
   const apprentice = buildApprenticeCases(ctx);
-  const coverage = buildCoverageCases(ctx);
+  const coverage = [
+    ...buildCoverageCases(ctx),
+    ...buildSprint10Cases(ctx, {
+      apiBase: API_BASE,
+      apiUrl: API_URL,
+      apiKey: API_KEY,
+      adminBase: ADMIN_BASE,
+      companionDataDir: COMPANION_DATA_DIR,
+      systemDataDir: SYSTEM_DATA_DIR,
+      fetchJson,
+      pgAll,
+      pgScalar,
+      readJsonIfExists,
+      readJsonl,
+      waitForTurnRecord: waitForCaseTurnRecord,
+    }),
+  ];
   const autonomous = buildAutonomousCases(ctx);
   const capabilityMatrix = buildCapabilityMatrixCase(ctx);
   const matrixCases = capabilityMatrix ? [capabilityMatrix] : [];
@@ -3264,7 +3285,7 @@ async function runCase(testCase, ctx) {
   const auditStartId = Number(await pgScalar(
     'select coalesce(max(id), 0) as id from gateway_audit;',
   ) ?? 0);
-  const preChecks = typeof testCase.before === 'function'
+  const beforeChecks = typeof testCase.before === 'function'
     ? await testCase.before({ ctx })
     : null;
   const activationMessages = Array.isArray(testCase.activateTools) && testCase.activateTools.length > 0
@@ -3276,40 +3297,21 @@ async function runCase(testCase, ctx) {
   const caseMessages = [...activationMessages, ...baseMessages];
   const stepOutcomes = [];
   let outcome = null;
-  for (let index = 0; index < caseMessages.length; index += 1) {
-    const step = caseMessages[index];
+  if (typeof testCase.execute === 'function') {
     recordCaseDiagnostic(testCase.id, {
-      event: Array.isArray(step.activateTools) && step.activateTools.length > 0
-        ? 'activation_dispatch_start'
-        : 'chat_dispatch_start',
-      stepIndex: index,
-      sessionId: step.sessionId ?? testCase.sessionId,
-      timeoutMs: step.timeoutMs ?? testCase.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+      event: 'custom_case_dispatch_start',
+      sessionId: testCase.sessionId,
+      timeoutMs: testCase.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
     });
-    if (Array.isArray(step.activateTools) && step.activateTools.length > 0) {
-      outcome = await activateToolsTurn(
-        step.sessionId ?? testCase.sessionId,
-        step.activateTools,
-        ctx.primaryApiUserId,
-        step.timeoutMs ?? 60_000,
-      );
-    } else {
-      outcome = await chatCase({
-        ...testCase,
-        ...step,
-        sessionId: step.sessionId ?? testCase.sessionId,
-        privacy: step.privacy ?? testCase.privacy,
-        headers: {
-          ...(testCase.headers ?? {}),
-          ...(step.headers ?? {}),
-        },
-        message: step.message,
-        apiUserId: ctx.primaryApiUserId,
-      });
-    }
+    outcome = await testCase.execute({
+      ctx,
+      sessionId: testCase.sessionId,
+      apiUserId: ctx.primaryApiUserId,
+      beforeChecks,
+    });
     recordCaseDiagnostic(testCase.id, {
       event: 'dispatch_complete',
-      stepIndex: index,
+      stepIndex: 0,
       responseStatus: outcome?.response?.status ?? null,
       responseOk: outcome?.response?.ok ?? false,
       fetchError: outcome?.response?.fetchError ?? null,
@@ -3318,9 +3320,56 @@ async function runCase(testCase, ctx) {
       turnStatus: outcome?.turnRecord?.status ?? null,
     });
     stepOutcomes.push(outcome);
-    if (index + 1 < caseMessages.length) {
-      await sleep(step.postStepDelayMs ?? testCase.stepDelayMs ?? 800);
+  } else {
+    for (let index = 0; index < caseMessages.length; index += 1) {
+      const step = caseMessages[index];
+      recordCaseDiagnostic(testCase.id, {
+        event: Array.isArray(step.activateTools) && step.activateTools.length > 0
+          ? 'activation_dispatch_start'
+          : 'chat_dispatch_start',
+        stepIndex: index,
+        sessionId: step.sessionId ?? testCase.sessionId,
+        timeoutMs: step.timeoutMs ?? testCase.timeoutMs ?? DEFAULT_FETCH_TIMEOUT_MS,
+      });
+      if (Array.isArray(step.activateTools) && step.activateTools.length > 0) {
+        outcome = await activateToolsTurn(
+          step.sessionId ?? testCase.sessionId,
+          step.activateTools,
+          ctx.primaryApiUserId,
+          step.timeoutMs ?? 60_000,
+        );
+      } else {
+        outcome = await chatCase({
+          ...testCase,
+          ...step,
+          sessionId: step.sessionId ?? testCase.sessionId,
+          privacy: step.privacy ?? testCase.privacy,
+          headers: {
+            ...(testCase.headers ?? {}),
+            ...(step.headers ?? {}),
+          },
+          message: step.message,
+          apiUserId: ctx.primaryApiUserId,
+        });
+      }
+      recordCaseDiagnostic(testCase.id, {
+        event: 'dispatch_complete',
+        stepIndex: index,
+        responseStatus: outcome?.response?.status ?? null,
+        responseOk: outcome?.response?.ok ?? false,
+        fetchError: outcome?.response?.fetchError ?? null,
+        resolvedFromTurnRecord: outcome?.resolvedFromTurnRecord ?? false,
+        acceptedWhileBusy: outcome?.acceptedWhileBusy ?? false,
+        turnStatus: outcome?.turnRecord?.status ?? null,
+      });
+      stepOutcomes.push(outcome);
+      if (index + 1 < caseMessages.length) {
+        await sleep(step.postStepDelayMs ?? testCase.stepDelayMs ?? 800);
+      }
     }
+  }
+  if (!outcome) {
+    throw new Error(`case ${testCase.id} produced no dispatch outcome`);
   }
   const auditRows = await pgAll(
     `select id, timestamp, method, decision, params_json, error from gateway_audit where id > ${auditStartId} order by id asc limit 60;`,
@@ -3362,7 +3411,7 @@ async function runCase(testCase, ctx) {
       ctx,
       outcome,
       outcomes: stepOutcomes,
-      preChecks,
+      beforeChecks,
       preCaseHealth: {
         api: preCaseApiHealth,
       },
@@ -3399,10 +3448,30 @@ async function runCase(testCase, ctx) {
     seenToolNames,
     sideChecks,
   });
-  const allSemanticFailures = [...semanticFailureMatches, ...semanticValidationFailures, ...forbiddenToolFailures];
+  const persistedProofFailures = (await validatePersistedProof(testCase, {
+    ctx,
+    turnRecord: outcome.turnRecord,
+    beforeChecks,
+    sideChecks,
+    outcome,
+    outcomes: stepOutcomes,
+    parsedAssistant,
+    assistantText,
+    seenToolNames,
+  })).map((failure) => semanticFailure(failure, 'persisted_proof'));
+  const allSemanticFailures = [
+    ...semanticFailureMatches,
+    ...semanticValidationFailures,
+    ...forbiddenToolFailures,
+    ...persistedProofFailures,
+  ];
   return {
     id: testCase.id,
     caseId: testCase.id,
+    tier: testCase.tier ?? null,
+    variants: Array.isArray(testCase.variants) ? testCase.variants : [],
+    feature: testCase.feature ?? null,
+    proof: testCase.proof ?? null,
     sessionId: testCase.sessionId,
     stepCount: stepOutcomes.length,
     busyRetries: outcome.busyRetries,

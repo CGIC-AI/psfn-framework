@@ -1,19 +1,82 @@
 {
   "note": "Maps each in-scope surface row of the docs/shakedown.md coverage appendix to the harness case ids that exercise it (or an explicit non-case disposition). The scorecard cross-checks this against the executed cases: a surface with no executed mapped case and no disposition is 'uncovered' and fails the scorecard, even when every case that ran was green. Keys are the appendix surface slugs (shakedown-scorecard.mjs derives them live from docs/shakedown.md). Maintained per sprint alongside case authoring (epic 65rk: .3 authors S10 cases, .6 the capability matrix, .9 refreshes the appendix). disposition is one of null | \"manual\" | \"partner\" | \"waived\"; a non-null disposition should carry an operator and reason.",
   "surfaces": {
-    "places-affordance-registry-situated-presence-block": { "cases": [], "disposition": null, "reason": "awaiting S10 case authoring (65rk.3)" },
-    "dual-presence-latent-space-mindspace": { "cases": [], "disposition": null, "reason": "awaiting S10 case authoring (65rk.3)" },
-    "world-tool-perception-ingest": { "cases": [], "disposition": null, "reason": "awaiting S10 case authoring (65rk.3)" },
-    "ha-world-control": { "cases": [], "disposition": null, "reason": "kube-only, autonomous; partner walk + gateway audit (65rk.3/.5)" },
-    "hub-identity-contact-enrollment-presence-follow": { "cases": [], "disposition": null, "reason": "awaiting S10 case authoring (65rk.3)" },
-    "multi-companion-substrate": { "cases": [], "disposition": null, "reason": "needs support-companion fixtures (65rk.4) + crossover-isolation cases (65rk.3)" },
-    "icp-autonomy": { "cases": [], "disposition": null, "reason": "awaiting S10 case authoring + support companions (65rk.3/.4)" },
-    "shared-world-wiki": { "cases": [], "disposition": null, "reason": "awaiting multi-companion toaster-test case (65rk.3)" },
-    "cogsec-intake-firewall": { "cases": [], "disposition": null, "reason": "awaiting tainted-content probe cases (65rk.3)" },
-    "satellite-hub-event-relay-touch-stimuli-pwa": { "cases": [], "disposition": null, "reason": "kube-only; awaiting S10 case authoring (65rk.3/.5)" },
-    "temporal-coherence": { "cases": [], "disposition": null, "reason": "awaiting stamp/strip-guard cases (65rk.3)" },
-    "performance": { "cases": [], "disposition": null, "reason": "epic mmo9 open; coordinate before certifying (65rk.3)" },
-    "tool-stack-audit": { "cases": [], "disposition": null, "reason": "tool-conformance sweep per tier; awaiting mapping (65rk.3/.6)" },
-    "garden-ux-overhaul": { "cases": [], "disposition": null, "reason": "operator-ui-sweep behavioral sweep exists; map its assertions once S10 routes are enumerated (65rk.3)" }
+    "places-affordance-registry-situated-presence-block": {
+      "cases": ["s10_places_physical", "s10_places_placeless"],
+      "disposition": null,
+      "reason": "physical and placeless TurnRecord proofs fail closed in opposite directions"
+    },
+    "dual-presence-latent-space-mindspace": {
+      "cases": ["s10_mindspace_virtual", "s10_mindspace_physical_precedence"],
+      "disposition": null,
+      "reason": "plain-channel virtual twin plus classified-satellite physical precedence"
+    },
+    "world-tool-perception-ingest": {
+      "cases": ["s10_world_read_telemetry"],
+      "disposition": null,
+      "reason": "synthetic telemetry Garden audit plus persisted world list/perceive calls"
+    },
+    "ha-world-control": {
+      "cases": [],
+      "disposition": "partner",
+      "operator": "release operator",
+      "reason": "kube-only real-HA control remains a trust-gated partner walk with gateway-audit proof"
+    },
+    "hub-identity-contact-enrollment-presence-follow": {
+      "cases": ["s10_hub_identity_presence_follow"],
+      "disposition": null,
+      "reason": "temporary enrollment, audit, internal-state place, and shared-presence rows"
+    },
+    "multi-companion-substrate": {
+      "cases": ["multi_companion_crossover_isolation"],
+      "disposition": null,
+      "reason": "65rk.4 real-process support artifact proves colliding-request isolation and zero crossover alarms"
+    },
+    "icp-autonomy": {
+      "cases": ["icp_durable_turns_restart", "icp_fatigue_closeout_reserve"],
+      "disposition": null,
+      "reason": "65rk.4 real-process support artifact proves durable two-sided turns and fatigue closeout"
+    },
+    "shared-world-wiki": {
+      "cases": [],
+      "disposition": "manual",
+      "operator": "release operator",
+      "reason": "the existing support artifact has no shared-wiki write/read proof; retain the toaster test as an explicit round check"
+    },
+    "cogsec-intake-firewall": {
+      "cases": [
+        "s10_cogsec_document_quarantine",
+        "s10_cogsec_satellite_document_quarantine"
+      ],
+      "disposition": null,
+      "reason": "API and classified-satellite document channels prove Garden queue review, held session envelopes, completed post-turn jobs, and zero memory/emotion leakage"
+    },
+    "satellite-hub-event-relay-touch-stimuli-pwa": {
+      "cases": [],
+      "disposition": "partner",
+      "operator": "release operator",
+      "reason": "real hub/PWA/touch behavior is kube-only and remains a partner-session check"
+    },
+    "temporal-coherence": {
+      "cases": ["s10_temporal_stamp_strip"],
+      "disposition": null,
+      "reason": "persisted stamped PromptPlan history plus raw stamped response and clean accepted outbound reply"
+    },
+    "performance": {
+      "cases": ["s10_sse_first_chunk"],
+      "disposition": null,
+      "reason": "incremental SSE chronology bound to the exact persisted TurnRecord stream TTFT"
+    },
+    "tool-stack-audit": {
+      "cases": ["capability_refusal_matrix", "tier_tool_conformance"],
+      "disposition": null,
+      "reason": "65rk.6 emits these stable coverage IDs from the per-tier conformance artifact"
+    },
+    "garden-ux-overhaul": {
+      "cases": [],
+      "disposition": "manual",
+      "operator": "release operator",
+      "reason": "current Garden behavioral sweep predates the final Sprint 10 route inventory; retain explicit operator UX coverage"
+    }
   }
 }

@@ -70,9 +70,60 @@ Goal: one clean, repeatable path from release-candidate commit to first proven c
 3. Gate with `bash scripts/ops/validate-kube-rollout.sh --smoke` (rollout status for agent/gateway/garden, garden health, `/v1/models` companion route, two-turn chat smoke).
 4. Her `companion-data` PVC persists — no re-import, no wipe. Open the round with a session telling her the shakedown is starting and what sprint build she is now on.
 
-### Support companions (kube, multi-companion rounds)
+### Support companions
 
-For ICP, fatigue, and crossover-isolation testing, bootstrap 1–2 minimal support companions into the fleet: minimal cards (distinct name, one-paragraph persona, no channel accounts beyond what the test needs), entries in `companions.json`, per-companion Postgres schemas, per-companion Discord accounts only if the case needs a real channel. Support companions are disposable per round. They exist so Artie has real peers for companion-initiated conversation — do not simulate the peer side.
+For ICP, fatigue, and crossover-isolation testing, use the disposable Mica and
+Lumen artifacts in `shakedown/support/`. They are real agent processes with
+distinct cards, companion roots, Personal Workspaces, Postgres tenant
+boundaries, and Garden ports. They have no real channel accounts.
+
+The local round must already have:
+
+- the sourced `shakedown/artie/shakedown.env.template` values, including Artie's
+  canonical `COMPANION_ID` and `PSFN_SHAKEDOWN_ROOT`;
+- Artie's imported card at `$COMPANION_DATA_DIR/companion.json`;
+- all four canonical per-companion owner files in Artie's companion-data root;
+- the provisioned `shakedown_artie` Postgres tenant; and
+- no running gateway or agent connected to the round database.
+
+Enable the fleet only for the multi-companion portion, then stand it up:
+
+```bash
+export PSFN_MULTI_COMPANION=1
+npm run shakedown:support -- stand-up
+npm run split
+```
+
+Stand-up fails if any support data root, Personal Workspace, schema, or role
+already exists. It seeds every per-companion owner file from `config/*.seed.json`,
+validates all three companion roots, imports the synthetic cards, provisions the
+two isolated tenants, and publishes `$SYSTEM_DATA_DIR/companions.json` last.
+
+The executable acceptance harness is:
+
+```bash
+npm run e2e:multi-companion-runtime
+```
+
+It uses the canonical support fixture identities and paths to prove two real
+agents establish a two-sided ICP exchange, persist it across agent restart,
+stop through the fatigue closeout reserve, and handle concurrent colliding
+request IDs with zero crossover. A live round repeats those cases with Artie as
+the primary companion and records persisted-state evidence; reply text alone is
+not proof.
+
+After the cases, stop the split runtime before teardown:
+
+```bash
+# Stop the npm run split processes first.
+npm run shakedown:support -- tear-down
+```
+
+Teardown validates the exact state record and manifest digest, refuses active
+database sessions, drops only the recorded support tenants, and verifies that
+their cards, owner files, companion-data roots, Personal Workspaces, schemas,
+roles, manifest, and state record are absent. Artie's card, owner files,
+Personal Workspace, and `shakedown_artie` tenant remain.
 
 ## Layer A — the scripted harness
 

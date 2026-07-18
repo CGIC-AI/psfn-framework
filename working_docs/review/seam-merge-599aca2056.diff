@@ -1,0 +1,455 @@
+MERGE 599aca2056b23f11bf2ff32bb79eb64f268b1753 Merge work/mus2-7-shard-ttl-grants: exact-once shard approval grants (psfn-framework-mus2.7)
+
+diff --cc src/boundary/gateway/approval-boundary.test.ts
+index 8f624c7e4d,e523a9a06d..ca9de76604
+--- a/src/boundary/gateway/approval-boundary.test.ts
++++ b/src/boundary/gateway/approval-boundary.test.ts
+@@@ -118,11 -163,25 +163,33 @@@ describe('approval attribution — ordi
+        execute: async () => 'ok',
+      });
+      expect(h.service.ownerOfConfirmation(entry.id)).toBe(PARENT_A);
+ +    expect(entry.approvalOwner).toEqual({ companionId: PARENT_A });
+ +
+ +    await h.service.resolveConfirmation({ id: entry.id, decision: 'deny' });
+ +    expect(h.service.ownerOfConfirmation(entry.id)).toBe(PARENT_A);
+    });
++ 
+ -  it('drops caller-supplied attribution when no canonical parent label resolves', async () => {
+++  it('overwrites caller-supplied attribution with the server-derived stable-id label when no roster label resolves', async () => {
++     const h = createHarness({});
++     const entry = await h.service.requestExplicitApproval({
++       authenticatedCompanionId: PARENT_A,
++       request: baseRequest({
++         attribution: { parentId: PARENT_A, parentLabel: 'Spoofed' },
++       }),
++       execute: async () => 'ok',
++     });
++ 
+ -    expect(entry).not.toHaveProperty('attribution');
+ -    expect(h.service.listPendingConfirmations()).toEqual([
+ -      expect.not.objectContaining({ attribution: expect.anything() }),
+ -    ]);
+ -    await new Promise((resolve) => setImmediate(resolve));
+ -    expect(h.requested).toHaveLength(0);
+++    // A caller-supplied label is never authority: without a roster label the
+++    // authenticated stable companion id is the canonical presentation fallback,
+++    // and the spoofed label must not survive to the entry or the wire.
+++    expect(entry.attribution).toEqual({ parentId: PARENT_A, parentLabel: PARENT_A });
+++    await vi.waitFor(() => expect(h.requested).toHaveLength(1));
+++    expect(h.requested[0].payload.attribution).toEqual({
+++      parentId: PARENT_A,
+++      parentLabel: PARENT_A,
+++    });
+++    expect(JSON.stringify(h.requested)).not.toContain('Spoofed');
++   });
+  });
+  
+  describe('approval attribution — authenticated shard requests', () => {
+@@@ -181,48 -236,184 +248,224 @@@
+      expect(h.resolved[0].companionId).toBe(PARENT_A);
+      expect(h.resolved[0].shardId).toBe('shard-a');
+    });
+ +
+ +  it('scopes simultaneous parent queues and denies leaked-id resolution by stored owner', async () => {
+ +    const h = createHarness();
+ +    const executeA = vi.fn(async () => 'a');
+ +    const executeB = vi.fn(async () => 'b');
+ +    const a = await h.service.requestExplicitApproval({
+ +      authenticatedCompanionId: PARENT_A,
+ +      shardLineage: { shardId: 'shard-a' },
+ +      request: baseRequest({ scope: '/workspace/a.txt' }),
+ +      execute: executeA,
+ +    });
+ +    const b = await h.service.requestExplicitApproval({
+ +      authenticatedCompanionId: PARENT_B,
+ +      shardLineage: { shardId: 'shard-b' },
+ +      request: baseRequest({ scope: '/workspace/b.txt' }),
+ +      execute: executeB,
+ +    });
+ +
+ +    expect(h.service.listPendingConfirmationsForOwner(PARENT_A).map(entry => entry.id))
+ +      .toEqual([a.id]);
+ +    expect(h.service.listPendingConfirmationsForOwner(PARENT_B).map(entry => entry.id))
+ +      .toEqual([b.id]);
+ +
+ +    await expect(h.service.resolveConfirmationForOwner(
+ +      PARENT_B,
+ +      { id: a.id, decision: 'approve' },
+ +      { kind: 'operator', id: 'parent-b-operator' },
+ +    )).resolves.toMatchObject({ id: a.id, status: 'not_found', executed: false });
+ +    expect(executeA).not.toHaveBeenCalled();
+ +    expect(h.service.listPendingConfirmationsForOwner(PARENT_A).map(entry => entry.id))
+ +      .toEqual([a.id]);
+ +
+ +    await expect(h.service.resolveConfirmationForOwner(
+ +      PARENT_A,
+ +      { id: a.id, decision: 'approve' },
+ +      { kind: 'operator', id: 'parent-a-operator' },
+ +    )).resolves.toMatchObject({ id: a.id, status: 'approved', executed: true });
+ +    expect(executeA).toHaveBeenCalledOnce();
+ +    expect(executeB).not.toHaveBeenCalled();
+ +  });
+  });
+  
++ describe('approval-bound shard request grants', () => {
++   function createShardHarness(capabilityTier: 'apprentice' | 'autonomous' = 'apprentice') {
++     const registry = new TestWorkloadRegistry();
++     const grants = new ShardApprovalGrantAuthority({
++       workloadRegistry: registry,
++       now: () => Date.now(),
++       grantIdFactory: () => 'boundary-request-grant',
++     });
++     const derived = deriveShardCapabilityGrant({
++       companionId: PARENT_A,
++       tier: 'custom',
++       customTokens: [...CAPABILITY_TOKENS],
++     });
++     const workload = registry.register({
++       parentCompanionId: PARENT_A,
++       shardId: 'shard-instance-authenticated',
++       workloadGeneration: 'workload-generation-1',
++       shardLabel: 'Authenticated Shard',
++       capabilityGrant: derived,
++     });
++     return {
++       grants,
++       workload,
++       harness: createHarness({
++         [PARENT_A]: 'Parent A',
++         [PARENT_B]: 'Parent B',
++       }, { capabilityTier, shardApprovalGrants: grants }),
++     };
++   }
++ 
++   it('derives lineage from the authenticated workload handle and executes the queued tuple once', async () => {
++     const { harness: h, workload } = createShardHarness();
++     const execute = vi.fn(async () => 'ok');
++     const entry = await h.service.requestExplicitApproval({
++       authenticatedCompanionId: PARENT_A,
++       shardGrant: { workload },
++       request: baseRequest({
++         method: 'home_assistant.call_service',
++         action: 'home_assistant.control',
++         scope: 'site:test-zone/device:test-switch',
++         params: { command: 'toggle' },
++       }),
++       execute,
++     });
++ 
++     expect(entry.attribution).toEqual({
++       parentId: PARENT_A,
++       parentLabel: 'Parent A',
++       shardId: 'shard-instance-authenticated',
++       shardLabel: 'Authenticated Shard',
++     });
++     await expect(h.service.resolveConfirmation({
++       id: entry.id,
++       decision: 'approve',
++     }, { kind: 'companion', id: PARENT_A })).resolves.toMatchObject({
++       status: 'failed',
++       executed: false,
++     });
++     expect(execute).not.toHaveBeenCalled();
++     await expect(h.service.resolveConfirmation({
++       id: entry.id,
++       decision: 'approve',
++     }, OPERATOR)).resolves.toMatchObject({ status: 'approved', executed: true });
++     await expect(h.service.resolveConfirmation({
++       id: entry.id,
++       decision: 'approve',
++     })).resolves.toMatchObject({ status: 'not_found', executed: false });
++     expect(execute).toHaveBeenCalledOnce();
++   });
++ 
++   it('rejects modified parameters without executing or leaving residual request authority', async () => {
++     const { harness: h, workload } = createShardHarness();
++     const execute = vi.fn(async () => 'ok');
++     const entry = await h.service.requestExplicitApproval({
++       authenticatedCompanionId: PARENT_A,
++       shardGrant: { workload },
++       request: baseRequest({
++         method: 'home_assistant.call_service',
++         action: 'home_assistant.control',
++         scope: 'site:test-zone/device:test-switch',
++         params: { command: 'toggle' },
++       }),
++       execute,
++     });
++ 
++     await expect(h.service.resolveConfirmation({
++       id: entry.id,
++       decision: 'modify',
++       modifiedParams: { command: 'unlock' },
++     }, OPERATOR)).resolves.toMatchObject({ status: 'failed', executed: false });
++     expect(execute).not.toHaveBeenCalled();
++     await expect(h.service.resolveConfirmation({
++       id: entry.id,
++       decision: 'approve',
++     })).resolves.toMatchObject({ status: 'not_found', executed: false });
++   });
++ 
++   it('does not let an autonomous parent auto-clear a shard-specific fence', async () => {
++     const { harness: h, workload } = createShardHarness('autonomous');
++     const handler = vi.fn(async () => ({ ok: true }));
++     const dispatch = h.service.gate({
++       method: 'home_assistant.call_service',
++       handler,
++       paramsSummary: () => ({}),
++       authenticatedCompanionId: () => PARENT_A,
++       approvalAction: 'home_assistant.control',
++       approvalScope: () => 'site:test-zone/device:test-switch',
++       shardApprovalGrant: () => ({ workload }),
++     });
++ 
++     await expect(dispatch({ command: 'toggle' })).rejects.toMatchObject({
++       code: GatewayErrors.NEEDS_APPROVAL,
++     });
++     expect(handler).not.toHaveBeenCalled();
++     const [pending] = h.service.listPendingConfirmations();
++     expect(pending.attribution?.shardId).toBe('shard-instance-authenticated');
++     await h.service.resolveConfirmation({ id: pending.id, decision: 'approve' }, OPERATOR);
++     expect(handler).toHaveBeenCalledOnce();
++   });
++ 
++   it('rejects parent, lineage, and handle mismatches before enqueue', async () => {
++     const { harness: h, workload } = createShardHarness();
++     const request = baseRequest({
++       method: 'home_assistant.call_service',
++       action: 'home_assistant.control',
++       scope: 'site:test-zone/device:test-switch',
++       params: { command: 'toggle' },
++     });
++ 
++     await expect(h.service.requestExplicitApproval({
++       authenticatedCompanionId: PARENT_B,
++       shardGrant: { workload },
++       request,
++       execute: async () => 'ok',
++     })).rejects.toThrow(/workload parent does not match/);
++ 
++     await expect(h.service.requestExplicitApproval({
++       authenticatedCompanionId: PARENT_A,
++       shardLineage: { shardId: 'spoofed-shard' },
++       shardGrant: { workload },
++       request,
++       execute: async () => 'ok',
++     })).rejects.toThrow(/attribution does not match the authenticated workload/);
++ 
++     await expect(h.service.requestExplicitApproval({
++       authenticatedCompanionId: PARENT_A,
++       shardGrant: {
++         workload: { kind: 'authenticated-shard-workload' } as typeof workload,
++       },
++       request,
++       execute: async () => 'ok',
++     })).rejects.toThrow(/missing, replaced, or revoked/);
++     expect(h.service.listPendingConfirmations()).toHaveLength(0);
++   });
++ 
++   it('preserves ordinary autonomous companion auto-clear behavior', async () => {
++     const h = createHarness({
++       [PARENT_A]: 'Parent A',
++       [PARENT_B]: 'Parent B',
++     }, { capabilityTier: 'autonomous' });
++     const handler = vi.fn(async () => ({ ok: true }));
++     const dispatch = h.service.gate({
++       method: 'image.create',
++       handler,
++       paramsSummary: () => ({}),
++       authenticatedCompanionId: () => PARENT_A,
++       approvalAction: 'image.create',
++       approvalScope: () => 'generated-image',
++     });
++ 
++     await expect(dispatch({ prompt: 'test image' })).resolves.toEqual({ ok: true });
++     expect(handler).toHaveBeenCalledOnce();
++     expect(h.service.listPendingConfirmations()).toHaveLength(0);
++   });
++ });
++ 
+  describe('approval attribution — fail-closed lineage refusal BEFORE enqueue', () => {
+    it('refuses an ownerless request and never enqueues or emits', async () => {
+      const h = createHarness();
+diff --cc src/boundary/gateway/approval-boundary.ts
+index e3fe1b6694,fa33f140c5..b691bb79f4
+--- a/src/boundary/gateway/approval-boundary.ts
++++ b/src/boundary/gateway/approval-boundary.ts
+@@@ -7,10 -7,15 +7,16 @@@ import type 
+    ConfirmationQueueHistoryEntry,
+    ConfirmationQueueRequest,
+    ConfirmationExecutionContext,
+ +  ConfirmationApprovalOwner,
+    ConfirmationResolverIdentity,
+  } from '../../system/capabilities/confirmation-queue.js';
++ import type {
++   AuthenticatedShardWorkloadHandle,
++   PreparedShardRequestGrant,
++ } from '../../system/capabilities/shard-approval-grants.js';
++ import { ShardApprovalGrantAuthority } from '../../system/capabilities/shard-approval-grants.js';
+  import {
++   ConfirmationExecutionCommittedError,
+    ConfirmationQueue,
+    DEFAULT_CONFIRMATION_EXPIRY_MS,
+  } from '../../system/capabilities/confirmation-queue.js';
+@@@ -192,7 -202,21 +214,21 @@@ export function createGatewayApprovalBo
+          });
+        },
+        onResolved: (outcome) => {
++         if (outcome.status === 'denied' || outcome.status === 'expired') {
++           try {
++             options.shardApprovalGrants?.recordRequestResolution({
++               approvalId: outcome.id,
++               status: outcome.status,
++               ...(outcome.resolver ? { resolver: outcome.resolver } : {}),
++             });
++           } catch (error) {
++             approvalLog.error('Failed to audit terminal shard approval resolution', {
++               id: outcome.id,
++               error: toErrorMessage(error),
++             });
++           }
++         }
+ -        const owner = confirmationOwners.get(outcome.id);
+ +        const owner = outcome.entry.approvalOwner;
+          if (!owner) {
+            approvalLog.error('Refusing to emit ownerless companion.approval.resolved', {
+              id: outcome.id,
+@@@ -299,19 -381,74 +380,79 @@@
+      const request: ConfirmationQueueRequest = {
+        ...input.request,
+        attribution,
+ +      approvalOwner: {
+ +        companionId: input.authenticatedCompanionId,
+ +        ...(shard ? { shardId: shard.shardId } : {}),
+ +      },
++       ...(preparedShardGrant ? { resolutionAuthority: 'operator' as const } : {}),
+      };
+ +    if (input.request.approvalOwner
+ +      && (input.request.approvalOwner.companionId !== request.approvalOwner.companionId
+ +        || input.request.approvalOwner.shardId !== request.approvalOwner.shardId)) {
+ +      throw new Error(
+ +        `Cannot queue ${input.request.method}: supplied approval owner does not match authenticated lineage`,
+ +      );
+ +    }
+-     const queueEntry = confirmationQueue.enqueue(request, input.execute);
++     const execute = preparedShardGrant
++       ? async (
++           params: Record<string, unknown>,
++           entry: ConfirmationQueueEntry,
++           context: ConfirmationExecutionContext,
++         ): Promise<unknown> => {
++           const grantAuthority = options.shardApprovalGrants;
++           const shardGrant = input.shardGrant;
++           if (!grantAuthority || !shardGrant) {
++             throw new Error('Shard request grant authority became unavailable before dispatch');
++           }
++           const grant = grantAuthority.activateRequestGrant(preparedShardGrant, context);
++           grantAuthority.consumeRequestGrant({
++             workload: shardGrant.workload,
++             grantId: grant.grantId,
++             approvalId: entry.id,
++             method: entry.method,
++             action: entry.action,
++             scope: entry.scope,
++             params,
++           });
++           let result: unknown;
++           try {
++             result = await input.execute(params, entry, context);
++           } catch (error) {
++             const executionCommitted = error instanceof ConfirmationExecutionCommittedError;
++             try {
++               grantAuthority.recordRequestExecution(
++                 grant.grantId,
++                 executionCommitted ? 'executed' : 'execution_failed',
++               );
++             } catch (auditError) {
++               if (executionCommitted) {
++                 throw new ConfirmationExecutionCommittedError(
++                   'Shard operation committed but its grant execution audit failed',
++                   { cause: auditError },
++                 );
++               }
++               throw auditError;
++             }
++             throw error;
++           }
++           try {
++             grantAuthority.recordRequestExecution(grant.grantId, 'executed');
++           } catch (error) {
++             throw new ConfirmationExecutionCommittedError(
++               'Shard operation committed but its grant execution audit failed',
++               { cause: error },
++             );
++           }
++           return result;
++         }
++       : input.execute;
+ -    let queueEntry: ConfirmationQueueEntry;
+ -    enqueueOwner = input.authenticatedCompanionId;
+ -    try {
+ -      queueEntry = confirmationQueue.enqueue(request, execute);
+ -    } finally {
+ -      enqueueOwner = undefined;
+ -    }
+++    const queueEntry = confirmationQueue.enqueue(request, execute);
++     if (preparedShardGrant && shardGrantAuthority) {
++       shardGrantAuthority.bindRequestGrant(preparedShardGrant, {
++         approvalId: queueEntry.id,
++         expiresAt: queueEntry.expiresAt,
++       });
++     }
+      await notifyOperatorForPendingAction({
+        entry: queueEntry,
+        discordAdapter: options.discordAdapter,
+diff --cc src/system/capabilities/confirmation-queue.ts
+index a17909c315,daba851bfe..8f43c67b44
+--- a/src/system/capabilities/confirmation-queue.ts
++++ b/src/system/capabilities/confirmation-queue.ts
+@@@ -21,17 -21,35 +21,46 @@@ export interface ConfirmationExecutionC
+    resolver?: ConfirmationResolverIdentity;
+  }
+  
++ export interface ConfirmedApprovalExecution {
++   readonly approvalId: string;
++   readonly decision: Extract<ConfirmationDecision, 'approve' | 'modify'>;
++   readonly resolver?: ConfirmationResolverIdentity;
++ }
++ 
++ /**
++  * Runtime proof that an executor is running inside this queue's one terminal
++  * approve/modify dispatch. A structural object or captured context is not
++  * authority: records exist only for the duration of the executor call.
++  */
++ const confirmedApprovalExecutions =
++   new WeakMap<ConfirmationExecutionContext, ConfirmedApprovalExecution>();
++ 
++ export function readConfirmedApprovalExecution(
++   context: ConfirmationExecutionContext,
++   approvalId: string,
++ ): ConfirmedApprovalExecution {
++   const confirmed = confirmedApprovalExecutions.get(context);
++   if (!confirmed || confirmed.approvalId !== approvalId) {
++     throw new Error('Confirmation execution is not backed by the resolved approval');
++   }
++   return {
++     approvalId: confirmed.approvalId,
++     decision: confirmed.decision,
++     ...(confirmed.resolver ? { resolver: { ...confirmed.resolver } } : {}),
++   };
++ }
++ 
+ +/**
+ + * Immutable server-derived approval ownership. `companionId` is the parent
+ + * routing/authorization key; `shardId` is provenance only. Approval surfaces
+ + * must scope by this record rather than by browser fields or presentation
+ + * attribution.
+ + */
+ +export interface ConfirmationApprovalOwner {
+ +  companionId: string;
+ +  shardId?: string;
+ +}
+ +
+  /**
+   * Signals that the queued side effect committed before a post-execution
+   * durability/audit step failed. The queue must never describe this as

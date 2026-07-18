@@ -103,6 +103,7 @@
     "verify:supply-chain": "tsx scripts/verify-supply-chain.ts",
     "verify:backup-restore": "tsx scripts/verify-backup-restore.ts",
     "verify:agent-docker-isolation": "node scripts/verify-agent-docker-isolation.mjs",
+    "shakedown:support": "tsx scripts/shakedown-support-fixtures.ts",
     "ship:kube": "bash scripts/ops/ship-kube-update.sh"
   },
   "dependencies": {

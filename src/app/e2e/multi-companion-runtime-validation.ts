@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { join } from 'node:path';
 
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { resolveChargeLedgerPath, resolveFatigueLedgerPath } from '../../persistence/layout.js';
@@ -385,6 +386,8 @@ async function validateCompanionRoom(
   const rootTurnsB = turnsB.records.filter(record => (
     record.correlation?.rootInitiationId === rootInitiationId
   ));
+  requireInvariant(rootTurnsA.length > 0, 'companion_room_missing_companion_a_turns');
+  requireInvariant(rootTurnsB.length > 0, 'companion_room_missing_companion_b_turns');
   const suppressionCountA = rootTurnsA.filter(record => (
     record.correlation?.fatigueDecision === 'suppress'
   )).length;
@@ -418,6 +421,58 @@ async function validateCompanionRoom(
     .reduce((sum, count) => sum + count, fleet.unattributedRecentViolationCount);
   requireInvariant(crossoverAlarmCount === 0, 'companion_room_crossover_alarm_detected');
 
+  const [channelBeforeRestartA, channelBeforeRestartB] = await Promise.all([
+    readChannelSnapshot(agentA, CERTIFICATION_PRIVATE_ROOM),
+    readChannelSnapshot(agentB, CERTIFICATION_PRIVATE_ROOM),
+  ]);
+  const [restartedAgentA, restartedAgentB] = await harness.restartAgents();
+  const [
+    turnsAfterRestartA,
+    turnsAfterRestartB,
+    channelAfterRestartA,
+    channelAfterRestartB,
+  ] = await Promise.all([
+    readTurnRecords(restartedAgentA, CERTIFICATION_PRIVATE_ROOM),
+    readTurnRecords(restartedAgentB, CERTIFICATION_PRIVATE_ROOM),
+    readChannelSnapshot(restartedAgentA, CERTIFICATION_PRIVATE_ROOM),
+    readChannelSnapshot(restartedAgentB, CERTIFICATION_PRIVATE_ROOM),
+  ]);
+  const durableRootTurnsA = turnsAfterRestartA.records.filter(record => (
+    record.correlation?.rootInitiationId === rootInitiationId
+  ));
+  const durableRootTurnsB = turnsAfterRestartB.records.filter(record => (
+    record.correlation?.rootInitiationId === rootInitiationId
+  ));
+  requireInvariant(
+    durableRootTurnsA.length === rootTurnsA.length,
+    'companion_room_companion_a_turns_not_durable',
+  );
+  requireInvariant(
+    durableRootTurnsB.length === rootTurnsB.length,
+    'companion_room_companion_b_turns_not_durable',
+  );
+  requireInvariant(
+    channelAfterRestartA.entries.length >= channelBeforeRestartA.entries.length,
+    'companion_room_companion_a_channel_not_durable',
+  );
+  requireInvariant(
+    channelAfterRestartB.entries.length >= channelBeforeRestartB.entries.length,
+    'companion_room_companion_b_channel_not_durable',
+  );
+  const fatigueAfterRestart = fixture.companions.map(companion => (
+    readFatigueSnapshot(companion.companionDataDir)
+  ));
+  requireInvariant(
+    fatigueAfterRestart[0]?.amount === fatigueAfter[0]?.amount
+      && fatigueAfterRestart[0]?.eventCount === fatigueAfter[0]?.eventCount,
+    'companion_room_companion_a_fatigue_not_durable',
+  );
+  requireInvariant(
+    fatigueAfterRestart[1]?.amount === fatigueAfter[1]?.amount
+      && fatigueAfterRestart[1]?.eventCount === fatigueAfter[1]?.eventCount,
+    'companion_room_companion_b_fatigue_not_durable',
+  );
+
   return {
     channelClass: 'companion_room',
     initiationStatus: initiated.status,
@@ -440,6 +495,18 @@ async function validateCompanionRoom(
     },
     modelRequestDelta: modelRequestsAfter - modelRequestsBefore,
     stopReason: 'both_fatigue_ledgers_exhausted_and_model_suppressed',
+    restartDurability: {
+      agentRestartCount: 2,
+      durableTurnCountsByCompanion: {
+        [CERTIFICATION_COMPANION_A]: durableRootTurnsA.length,
+        [CERTIFICATION_COMPANION_B]: durableRootTurnsB.length,
+      },
+      durableChannelEntryCountsByCompanion: {
+        [CERTIFICATION_COMPANION_A]: channelAfterRestartA.entries.length,
+        [CERTIFICATION_COMPANION_B]: channelAfterRestartB.entries.length,
+      },
+      fatigueLedgerPreserved: true,
+    },
     crossoverAlarmCount,
   };
 }
@@ -530,6 +597,17 @@ async function main(): Promise<Record<string, unknown>> {
         pathIdentity(companion.companionDataDir),
       ]),
     );
+    const supportFixturePaths = [
+      fixture.companions[1].companionDataDir,
+      fixture.companions[1].workspacePath,
+      join(fixture.runtimeRoot, 'support-companions', 'lumen', 'data'),
+      join(
+        fixture.runtimeRoot,
+        'workspaces',
+        'personal',
+        'c7100000-0000-4000-8000-000000000003',
+      ),
+    ];
 
     await harness.stop();
     harness = null;
@@ -538,6 +616,11 @@ async function main(): Promise<Record<string, unknown>> {
     const multiSocketRemoved = !existsSync(fixture.gatewaySocketPath);
     requireInvariant(multiSocketRemoved, 'multi_gateway_socket_remained');
     fixture.cleanup();
+    const supportFixtureResidueCount = supportFixturePaths.filter(existsSync).length;
+    requireInvariant(
+      supportFixtureResidueCount === 0,
+      'canonical_support_fixture_residue_remained',
+    );
     fixture = null;
 
     const flagOff = await validateFlagOff(postgres);
@@ -550,6 +633,7 @@ async function main(): Promise<Record<string, unknown>> {
       status: 'passed',
       revision,
       topology: {
+        fixtureContract: 'shakedown/support/companions.template.json',
         gatewayCount: 1,
         gatewayProcessId: process.pid,
         gatewayTransport: 'unix',
@@ -579,6 +663,7 @@ async function main(): Promise<Record<string, unknown>> {
         multiGatewaySocketRemoved: multiSocketRemoved,
         singleGatewaySocketRemoved: flagOff.socketRemoved,
         postgresStopped,
+        supportFixtureResidueCount,
         result: 'clean',
       },
       durationMs: Date.now() - startedAtMs,

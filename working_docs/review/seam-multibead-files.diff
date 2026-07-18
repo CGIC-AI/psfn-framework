@@ -1,0 +1,1478 @@
+diff --git a/src/app/gateway/api-surface.ts b/src/app/gateway/api-surface.ts
+index 94e2181c22..7009a0e57b 100644
+--- a/src/app/gateway/api-surface.ts
++++ b/src/app/gateway/api-surface.ts
+@@ -58,6 +58,7 @@ import type {
+   PrimaryEmbodimentAuthorityPort,
+ } from '../../boundary/fleet-auth/primary-embodiment.js';
+ import { dispatchCompanionUiPrimaryEmbodiment } from '../../boundary/gateway/companion-ui-primary-embodiment.js';
++import { dispatchCompanionUiApproval } from '../../boundary/gateway/companion-ui-approvals.js';
+ import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
+ import type { FleetJitStepUpCoordinator } from '../../boundary/fleet-auth/jit-step-up.js';
+ import type { TrustedHostPasskeyCeremonyService } from '../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
+@@ -102,6 +103,8 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
+     | 'resolveOperatorApproval'
+     | 'listOperatorConfirmations'
+     | 'ownerOfConfirmation'
++    | 'listCompanionUiConfirmations'
++    | 'resolveCompanionUiApproval'
+     | 'getFleetConnectionSnapshot'
+     | 'requestCompanionAgent'
+   >;
+@@ -496,7 +499,7 @@ export async function startOptionalGatewayApiServer(
+         upstreams: resolveFleetSsoGardenUpstreams({
+           ...(options.config.companionFleet ? { fleet: options.config.companionFleet } : {}),
+           ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
+-          ...(options.adminPort ? { gardenPort: options.adminPort } : {}),
++          ...(options.adminPort ? { fleetGardenPort: options.adminPort } : {}),
+           env,
+         }),
+         ...(fleetSsoCompanionUi ? {
+@@ -539,28 +542,66 @@ export async function startOptionalGatewayApiServer(
+           resolveAuthorizationContext: input => options.fleetAuthBroker!.resolveAuthorizationContext(input),
+           signer: options.fleetAuthRequestCapabilities,
+           childAssertions: options.fleetAuthChildAssertions,
++          approvalOwner: {
++            ownerOf: (id) => options.gateway.ownerOfConfirmation(id),
++          },
++          shardDeployment: {
++            ownerOfLiveShard: async (shardId, parentCompanionId) => {
++              const result = await options.gateway.requestCompanionAgent<{
++                parentCompanionId?: string;
++              }>(
++                parentCompanionId,
++                'shard.directory.owner',
++                { shardId },
++              );
++              return result.parentCompanionId;
++            },
++          },
+           dispatch: {
+             dispatch: async input => {
+               const frame = input.compiled.frame;
+               const body = frame.body as Record<string, unknown>;
++              if (frame.resource === 'shards.list'
++                || frame.resource === 'shards.history'
++                || frame.resource === 'shards.interact'
++                || frame.resource === 'shards.interrupt') {
++                const result = await gatewayApiRuntime.handleCompanionUiShardAction(
++                  input.compiled.target.companionId,
++                  {
++                    principal: input.deviceTransport.principal,
++                    headers: { ...input.deviceTransport.headers },
++                    ...(input.deviceTransport.clientCert
++                      ? { clientCert: input.deviceTransport.clientCert }
++                      : {}),
++                    hubDevicePrincipal: input.attachment.deviceActor.principal,
++                    hubDeviceAttachment: input.attachment,
++                    companionUiCapability: {
++                      token: input.childAssertion.token,
++                      requestId: input.childAssertion.requestId,
++                      decisionId: input.childAssertion.decisionId,
++                      versions: input.childAssertion.versions,
++                      parent: input.childAssertion.parent,
++                      rawBodyBase64Url: Buffer.from(input.compiled.target.body).toString('base64url'),
++                    },
++                  },
++                );
++                if (!result.ok) throw new Error(result.error.type);
++                return result.response;
++              }
+               const embodiment = await dispatchCompanionUiPrimaryEmbodiment({
+                 compiled: input.compiled,
+                 attachment: input.attachment,
+                 ...(options.primaryEmbodiments ? { authority: options.primaryEmbodiments } : {}),
+               });
+               if (embodiment.handled) return embodiment.result;
++              const approval = await dispatchCompanionUiApproval({
++                compiled: input.compiled,
++                gateway: options.gateway,
++              });
++              if (approval.handled) return approval.result;
+               if (frame.resource === 'conversation.status') {
+                 return await gatewayApiRuntime.handleHealth();
+               }
+-              if (frame.resource === 'confirmations.list') {
+-                return options.gateway.listOperatorConfirmations();
+-              }
+-              if (frame.resource === 'confirmations.resolve') {
+-                return await options.gateway.resolveOperatorApproval({
+-                  id: String(body.id),
+-                  decision: body.decision as 'approve' | 'deny',
+-                });
+-              }
+               if (frame.resource === 'artifact.preview') {
+                 const preview = options.companionRelay?.relay.getPreviewSource(
+                   String(body.id),
+diff --git a/src/boundary/gateway/approval-boundary.ts b/src/boundary/gateway/approval-boundary.ts
+index 31c37e7771..b691bb79f4 100644
+--- a/src/boundary/gateway/approval-boundary.ts
++++ b/src/boundary/gateway/approval-boundary.ts
+@@ -7,12 +7,20 @@ import type {
+   ConfirmationQueueHistoryEntry,
+   ConfirmationQueueRequest,
+   ConfirmationExecutionContext,
++  ConfirmationApprovalOwner,
+   ConfirmationResolverIdentity,
+ } from '../../system/capabilities/confirmation-queue.js';
++import type {
++  AuthenticatedShardWorkloadHandle,
++  PreparedShardRequestGrant,
++} from '../../system/capabilities/shard-approval-grants.js';
++import { ShardApprovalGrantAuthority } from '../../system/capabilities/shard-approval-grants.js';
+ import {
++  ConfirmationExecutionCommittedError,
+   ConfirmationQueue,
+   DEFAULT_CONFIRMATION_EXPIRY_MS,
+ } from '../../system/capabilities/confirmation-queue.js';
++import type { ApprovalAttribution } from '../../shared/contracts/approval-envelope.js';
+ import {
+   redactApprovalRequested,
+   redactApprovalResolved,
+@@ -57,6 +65,11 @@ interface ApprovalBoundaryOptions extends ApprovalBoundaryAuditHooks {
+   eventBus: EventBus;
+   /** Canonical presentation label resolved from runtime identity/roster data. */
+   parentLabelProvider?: (companionId: string) => string | undefined;
++  /**
++   * Server-owned shard workload/grant registry. Absence keeps every shard
++   * temporary-grant path disabled.
++   */
++  shardApprovalGrants?: ShardApprovalGrantAuthority;
+ }
+ 
+ export interface GatewayConfirmationConfig {
+@@ -76,11 +89,21 @@ export interface ApprovalBoundaryGateOptions<P, R> {
+   approvalReason?: (params: P) => string;
+   /** Connection-scoped policy authority for multi-companion workspace isolation. */
+   policyConfigProvider?: () => PolicyConfig;
++  /**
++   * Authenticated server-owned shard workload bound to this dispatch. The
++   * authority derives the required token from the trusted method/action; a
++   * caller cannot select or substitute a capability token.
++   */
++  shardApprovalGrant?: () => {
++    workload: AuthenticatedShardWorkloadHandle;
++  } | undefined;
+ }
+ 
+ export interface ApprovalBoundaryService {
+   listPendingConfirmations(): ConfirmationQueueEntry[];
+   listConfirmationHistory(): ConfirmationQueueHistoryEntry[];
++  /** Pending entries owned by exactly one authenticated parent companion. */
++  listPendingConfirmationsForOwner(companionId: string): ConfirmationQueueEntry[];
+   /**
+    * Read-only owner lookup for a pending/resolved confirmation id (companion
+    * roster wire). Returns the authenticated companion that enqueued the
+@@ -89,6 +112,27 @@ export interface ApprovalBoundaryService {
+    * the entry (fail closed, never mis-attributed).
+    */
+   ownerOfConfirmation(id: string): string | undefined;
++  /** Immutable parent/shard binding captured from authenticated enqueue lineage. */
++  approvalOwnerOfConfirmation(id: string): ConfirmationApprovalOwner | undefined;
++  /**
++   * Resolve only when the pending record's immutable stored owner matches.
++   * Mismatches are non-enumerating `not_found` outcomes and leave the request
++   * pending.
++   */
++  resolveConfirmationForOwner(
++    companionId: string,
++    params: {
++      id: string;
++      decision: 'approve' | 'deny' | 'modify';
++      modifiedParams?: Record<string, unknown>;
++    },
++    resolver?: ConfirmationResolverIdentity,
++  ): Promise<{
++    id: string;
++    status: 'approved' | 'denied' | 'modified' | 'expired' | 'failed' | 'not_found';
++    message: string;
++    executed: boolean;
++  }>;
+   resolveConfirmation(params: { id: string; decision: 'approve' | 'deny' | 'modify'; modifiedParams?: Record<string, unknown> }, resolver?: ConfirmationResolverIdentity): Promise<{
+     id: string;
+     status: 'approved' | 'denied' | 'modified' | 'expired' | 'failed' | 'not_found';
+@@ -97,6 +141,18 @@ export interface ApprovalBoundaryService {
+   }>;
+   requestExplicitApproval(input: {
+     authenticatedCompanionId: string | undefined;
++    /**
++     * Attribution-only seam retained for mus2.3 callers. This boundary validates
++     * shape and owner consistency but cannot authenticate this object by itself;
++     * the current base has no production ShardManager registration adapter.
++     * Consequently it MUST NOT confer temporary capability authority. New shard
++     * grants use `shardGrant.workload`, resolved through an injected
++     * authenticated-workload registry.
++     */
++    shardLineage?: { shardId: string; shardLabel?: string };
++    shardGrant?: {
++      workload: AuthenticatedShardWorkloadHandle;
++    };
+     request: ConfirmationQueueRequest;
+     execute: (
+       params: Record<string, unknown>,
+@@ -112,41 +168,38 @@ const approvalLog = createComponentLogger('ApprovalBoundary');
+ export function createGatewayApprovalBoundaryService(
+   options: ApprovalBoundaryOptions,
+ ): ApprovalBoundaryService {
+-  const confirmationOwners = new Map<string, string>();
+-  let enqueueOwner: string | undefined;
+   const confirmationQueue = new ConfirmationQueue({
+     defaultExpiryMs: options.confirmation?.expiryMs ?? DEFAULT_CONFIRMATION_EXPIRY_MS,
+     observer: {
+       onEnqueued: (entry) => {
+-        if (!enqueueOwner) {
++        const owner = entry.approvalOwner;
++        if (!owner) {
+           approvalLog.error('Refusing to emit ownerless companion.approval.requested', {
+             id: entry.id,
+           });
+           return;
+         }
+-        // Unified-envelope attribution (psfn-framework-13sk) is server-resolved:
+-        // the parent id is ALWAYS the authenticated enqueue owner. If the
+-        // enqueuer supplied its own attribution (e.g. a future shard path with
+-        // added provenance), its parentId MUST equal that owner — otherwise we
+-        // refuse to emit rather than route to a spoofed parent (fail closed).
+-        const parentLabel = options.parentLabelProvider?.(enqueueOwner)?.trim();
+-        const attribution = entry.attribution
+-          ?? (parentLabel ? { parentId: enqueueOwner, parentLabel } : undefined);
++        // Attribution is canonicalized before enqueue (see
++        // resolveEnqueueAttribution) and stamped onto the entry. Grant-bearing
++        // shard identity comes from the opaque workload registry; the parent id
++        // is ALWAYS the authenticated enqueue owner. Re-verify that binding here.
++        const attribution = entry.attribution;
+         if (!attribution) {
+           approvalLog.error('Refusing to emit companion.approval.requested without a canonical parent label', {
+             id: entry.id,
+           });
+           return;
+         }
+-        if (attribution.parentId !== enqueueOwner) {
++        if (attribution.parentId !== owner.companionId
++          || attribution.shardId !== owner.shardId) {
+           approvalLog.error('Refusing to emit companion.approval.requested with mismatched attribution parent', {
+             id: entry.id,
+           });
+           return;
+         }
+-        confirmationOwners.set(entry.id, enqueueOwner);
+         options.eventBus.emit('companion.approval.requested', {
+-          companionId: enqueueOwner,
++          companionId: owner.companionId,
++          ...(owner.shardId !== undefined ? { shardId: owner.shardId } : {}),
+           payload: redactApprovalRequested(entry, {
+             sourceSystem: entry.sourceSystem ?? 'tool-access',
+             attribution,
+@@ -161,21 +214,36 @@ export function createGatewayApprovalBoundaryService(
+         });
+       },
+       onResolved: (outcome) => {
+-        const companionId = confirmationOwners.get(outcome.id);
+-        if (!companionId) {
++        if (outcome.status === 'denied' || outcome.status === 'expired') {
++          try {
++            options.shardApprovalGrants?.recordRequestResolution({
++              approvalId: outcome.id,
++              status: outcome.status,
++              ...(outcome.resolver ? { resolver: outcome.resolver } : {}),
++            });
++          } catch (error) {
++            approvalLog.error('Failed to audit terminal shard approval resolution', {
++              id: outcome.id,
++              error: toErrorMessage(error),
++            });
++          }
++        }
++        const owner = outcome.entry.approvalOwner;
++        if (!owner) {
+           approvalLog.error('Refusing to emit ownerless companion.approval.resolved', {
+             id: outcome.id,
+           });
+           return;
+         }
+-        confirmationOwners.delete(outcome.id);
+         options.eventBus.emit('companion.approval.resolved', {
+-          companionId,
++          companionId: owner.companionId,
++          ...(owner.shardId !== undefined ? { shardId: owner.shardId } : {}),
+           payload: redactApprovalResolved({
+             id: outcome.id,
+             status: outcome.status,
+             resolvedAt: outcome.resolvedAt,
+             executed: outcome.executed,
++            ...(owner.shardId !== undefined ? { shardId: owner.shardId } : {}),
+           }),
+           timestamp: Date.now(),
+         }).catch((error) => {
+@@ -193,8 +261,47 @@ export function createGatewayApprovalBoundaryService(
+     ntfyTopic: options.confirmation?.ntfyTopic?.trim() || undefined,
+   };
+ 
++  /**
++   * Resolve immutable, server-side approval attribution before enqueue and
++   * fail closed on mismatched lineage. The authenticated stable companion id
++   * is the presentation fallback when a cosmetic roster label is absent.
++   */
++  const resolveEnqueueAttribution = (
++    owner: string,
++    shard: { shardId: string; shardLabel?: string } | undefined,
++    supplied: ApprovalAttribution | undefined,
++    method: string,
++  ): ApprovalAttribution => {
++    // Defense-in-depth: a caller-supplied attribution is NEVER authority. It
++    // must exactly match the authenticated lineage or the request is denied.
++    if (supplied) {
++      if (supplied.parentId !== owner) {
++        throw new Error(
++          `Cannot queue ${method}: supplied attribution parent does not match the authenticated owner`,
++        );
++      }
++      const suppliedShardId = supplied.shardId?.trim() || undefined;
++      if (suppliedShardId !== shard?.shardId) {
++        throw new Error(
++          `Cannot queue ${method}: supplied attribution shard does not match the authenticated shard lineage`,
++        );
++      }
++    }
++    const parentLabel = options.parentLabelProvider?.(owner)?.trim() || owner;
++    return {
++      parentId: owner,
++      parentLabel,
++      ...(shard ? { shardId: shard.shardId } : {}),
++      ...(shard?.shardLabel ? { shardLabel: shard.shardLabel } : {}),
++    };
++  };
++
+   const requestExplicitApproval = async (input: {
+     authenticatedCompanionId: string | undefined;
++    shardLineage?: { shardId: string; shardLabel?: string };
++    shardGrant?: {
++      workload: AuthenticatedShardWorkloadHandle;
++    };
+     request: ConfirmationQueueRequest;
+     execute: (
+       params: Record<string, unknown>,
+@@ -207,12 +314,144 @@ export function createGatewayApprovalBoundaryService(
+         `Cannot queue ${input.request.method}: requesting connection has no authenticated companion owner`,
+       );
+     }
+-    let queueEntry: ConfirmationQueueEntry;
+-    enqueueOwner = input.authenticatedCompanionId;
+-    try {
+-      queueEntry = confirmationQueue.enqueue(input.request, input.execute);
+-    } finally {
+-      enqueueOwner = undefined;
++    // Resolve presentation lineage. shardLineage alone is attribution-only and
++    // never grants authority; a temporary grant replaces it with identity read
++    // from the opaque server-owned workload handle.
++    let shard: { shardId: string; shardLabel?: string } | undefined;
++    if (input.shardLineage !== undefined) {
++      const shardId = input.shardLineage.shardId.trim();
++      if (!shardId) {
++        throw new Error(
++          `Cannot queue ${input.request.method}: shard-originated request has no authenticated shard instance id`,
++        );
++      }
++      const shardLabel = input.shardLineage.shardLabel?.trim();
++      shard = { shardId, ...(shardLabel ? { shardLabel } : {}) };
++    }
++    let shardGrantAuthority: ShardApprovalGrantAuthority | undefined;
++    if (input.shardGrant) {
++      const grantAuthority = options.shardApprovalGrants;
++      if (!grantAuthority) {
++        throw new Error(
++          `Cannot queue ${input.request.method}: shard approval grant authority is unavailable`,
++        );
++      }
++      shardGrantAuthority = grantAuthority;
++      const workload = grantAuthority.resolveAuthenticatedWorkload(input.shardGrant.workload);
++      if (workload.parentCompanionId !== input.authenticatedCompanionId) {
++        throw new Error(
++          `Cannot queue ${input.request.method}: shard workload parent does not match the authenticated owner`,
++        );
++      }
++      if (
++        shard
++        && (
++          shard.shardId !== workload.shardId
++          || (shard.shardLabel !== undefined && shard.shardLabel !== workload.shardLabel)
++        )
++      ) {
++        throw new Error(
++          `Cannot queue ${input.request.method}: supplied shard attribution does not match the authenticated workload`,
++        );
++      }
++      shard = {
++        shardId: workload.shardId,
++        ...(workload.shardLabel ? { shardLabel: workload.shardLabel } : {}),
++      };
++    }
++    // Resolve + validate the immutable attribution BEFORE enqueue. A mismatched
++    // parent or shard throws here, so nothing enqueues, emits, or notifies.
++    const attribution = resolveEnqueueAttribution(
++      input.authenticatedCompanionId,
++      shard,
++      input.request.attribution,
++      input.request.method,
++    );
++    const preparedShardGrant: PreparedShardRequestGrant | undefined =
++      input.shardGrant && shardGrantAuthority
++        ? shardGrantAuthority.prepareRequestGrant({
++            workload: input.shardGrant.workload,
++            method: input.request.method,
++            action: input.request.action,
++            scope: input.request.scope,
++            params: input.request.params,
++          })
++        : undefined;
++    const request: ConfirmationQueueRequest = {
++      ...input.request,
++      attribution,
++      approvalOwner: {
++        companionId: input.authenticatedCompanionId,
++        ...(shard ? { shardId: shard.shardId } : {}),
++      },
++      ...(preparedShardGrant ? { resolutionAuthority: 'operator' as const } : {}),
++    };
++    if (input.request.approvalOwner
++      && (input.request.approvalOwner.companionId !== request.approvalOwner.companionId
++        || input.request.approvalOwner.shardId !== request.approvalOwner.shardId)) {
++      throw new Error(
++        `Cannot queue ${input.request.method}: supplied approval owner does not match authenticated lineage`,
++      );
++    }
++    const execute = preparedShardGrant
++      ? async (
++          params: Record<string, unknown>,
++          entry: ConfirmationQueueEntry,
++          context: ConfirmationExecutionContext,
++        ): Promise<unknown> => {
++          const grantAuthority = options.shardApprovalGrants;
++          const shardGrant = input.shardGrant;
++          if (!grantAuthority || !shardGrant) {
++            throw new Error('Shard request grant authority became unavailable before dispatch');
++          }
++          const grant = grantAuthority.activateRequestGrant(preparedShardGrant, context);
++          grantAuthority.consumeRequestGrant({
++            workload: shardGrant.workload,
++            grantId: grant.grantId,
++            approvalId: entry.id,
++            method: entry.method,
++            action: entry.action,
++            scope: entry.scope,
++            params,
++          });
++          let result: unknown;
++          try {
++            result = await input.execute(params, entry, context);
++          } catch (error) {
++            const executionCommitted = error instanceof ConfirmationExecutionCommittedError;
++            try {
++              grantAuthority.recordRequestExecution(
++                grant.grantId,
++                executionCommitted ? 'executed' : 'execution_failed',
++              );
++            } catch (auditError) {
++              if (executionCommitted) {
++                throw new ConfirmationExecutionCommittedError(
++                  'Shard operation committed but its grant execution audit failed',
++                  { cause: auditError },
++                );
++              }
++              throw auditError;
++            }
++            throw error;
++          }
++          try {
++            grantAuthority.recordRequestExecution(grant.grantId, 'executed');
++          } catch (error) {
++            throw new ConfirmationExecutionCommittedError(
++              'Shard operation committed but its grant execution audit failed',
++              { cause: error },
++            );
++          }
++          return result;
++        }
++      : input.execute;
++    const queueEntry = confirmationQueue.enqueue(request, execute);
++    if (preparedShardGrant && shardGrantAuthority) {
++      shardGrantAuthority.bindRequestGrant(preparedShardGrant, {
++        approvalId: queueEntry.id,
++        expiresAt: queueEntry.expiresAt,
++      });
+     }
+     await notifyOperatorForPendingAction({
+       entry: queueEntry,
+@@ -227,7 +466,23 @@ export function createGatewayApprovalBoundaryService(
+   return {
+     listPendingConfirmations: () => confirmationQueue.listPending(),
+     listConfirmationHistory: () => confirmationQueue.listHistory(),
+-    ownerOfConfirmation: (id: string) => confirmationOwners.get(id),
++    listPendingConfirmationsForOwner: (companionId: string) => confirmationQueue
++      .listPending()
++      .filter(entry => entry.approvalOwner?.companionId === companionId),
++    ownerOfConfirmation: (id: string) => confirmationQueue.getApprovalOwner(id)?.companionId,
++    approvalOwnerOfConfirmation: (id: string) => confirmationQueue.getApprovalOwner(id),
++    resolveConfirmationForOwner: (companionId, params, resolver) => {
++      const owner = confirmationQueue.getApprovalOwner(params.id);
++      if (owner?.companionId !== companionId) {
++        return Promise.resolve({
++          id: params.id,
++          status: 'not_found' as const,
++          message: 'Confirmation request not found.',
++          executed: false,
++        });
++      }
++      return confirmationQueue.resolve(params, resolver);
++    },
+     resolveConfirmation: (params, resolver) => confirmationQueue.resolve(params, resolver),
+     requestExplicitApproval,
+     gate<P, R>(gateOptions: ApprovalBoundaryGateOptions<P, R>): (params: P) => Promise<R> {
+@@ -260,13 +515,20 @@ export function createGatewayApprovalBoundaryService(
+           }
+ 
+           const authenticatedCompanionId = gateOptions.authenticatedCompanionId();
++          const shardApprovalGrant = decision === 'DENY'
++            ? undefined
++            : gateOptions.shardApprovalGrant?.();
+           if (
+-            decision === 'NEEDS_APPROVAL'
+-            && options.capabilityTierProvider(authenticatedCompanionId) !== 'autonomous'
++            shardApprovalGrant !== undefined
++            || (
++              decision === 'NEEDS_APPROVAL'
++              && options.capabilityTierProvider(authenticatedCompanionId) !== 'autonomous'
++            )
+           ) {
+             const paramsRecord = params as unknown as Record<string, unknown>;
+             const queueEntry = await requestExplicitApproval({
+               authenticatedCompanionId,
++              ...(shardApprovalGrant ? { shardGrant: shardApprovalGrant } : {}),
+               request: {
+                 method: gateOptions.method,
+                 action: gateOptions.approvalAction,
+diff --git a/src/boundary/gateway/fleet-portal-projection.ts b/src/boundary/gateway/fleet-portal-projection.ts
+index b21d404cc5..5dc5792907 100644
+--- a/src/boundary/gateway/fleet-portal-projection.ts
++++ b/src/boundary/gateway/fleet-portal-projection.ts
+@@ -26,9 +26,10 @@ export type FleetPortalAvailability = 'online' | 'degraded' | 'offline' | 'unkno
+ 
+ export interface FleetPortalCompanionProjection {
+   readonly companionId: string;
++  readonly displayName: string;
+   readonly availability: FleetPortalAvailability;
+-  readonly headless: boolean;
+   readonly gardenPath?: string;
++  readonly avatarRef?: string;
+ }
+ 
+ export interface FleetPortalProjection {
+@@ -65,7 +66,7 @@ export interface GatewayFleetPortalProjectionOptions {
+   readonly authorizer: FleetPortalAuthorizationBatchPort;
+   readonly fleet: readonly Pick<
+   CompanionFleetEntry,
+-  'companionId' | 'gardenPort' | 'displayName' | 'avatarRef'
++  'companionId' | 'displayName' | 'avatarRef'
+   >[];
+   readonly source: FleetPortalConnectionSnapshotSource;
+   readonly now?: () => Date;
+@@ -107,7 +108,7 @@ function indexConnections(
+ 
+ type ProjectionManifestEntry = Pick<
+   CompanionFleetEntry,
+-  'companionId' | 'gardenPort' | 'displayName' | 'avatarRef'
++  'companionId' | 'displayName' | 'avatarRef'
+ >;
+ 
+ export class GatewayFleetPortalProjection {
+@@ -128,7 +129,6 @@ export class GatewayFleetPortalProjection {
+       }
+       fleet.set(companion.companionId, Object.freeze({
+         companionId: companion.companionId,
+-        ...(companion.gardenPort !== undefined ? { gardenPort: companion.gardenPort } : {}),
+         ...(companion.displayName !== undefined ? { displayName: companion.displayName } : {}),
+         ...(companion.avatarRef !== undefined ? { avatarRef: companion.avatarRef } : {}),
+       }));
+@@ -154,14 +154,17 @@ export class GatewayFleetPortalProjection {
+       if (!manifest) {
+         throw new Error('Fleet portal authorization returned an unknown manifest companion');
+       }
+-      const gardenPath = authority.gardenLinkEligible && manifest.gardenPort !== undefined
+-        ? compileFleetSsoGardenPath(manifest.companionId)
+-        : undefined;
++      // Bounded authorized projection: principals see only companions they hold
++      // a Garden link for. gardenPort is retired (one fleet Garden derives every
++      // admin endpoint), so authorization is the only gate.
++      if (!authority.gardenLinkEligible) continue;
++      const gardenPath = compileFleetSsoGardenPath(manifest.companionId);
+       companions.push(Object.freeze({
+         companionId: manifest.companionId,
++        displayName: manifest.displayName?.trim() || manifest.companionId,
+         availability: availability(connections.get(manifest.companionId)),
+-        headless: manifest.gardenPort === undefined,
+-        ...(gardenPath ? { gardenPath } : {}),
++        gardenPath,
++        ...(manifest.avatarRef !== undefined ? { avatarRef: manifest.avatarRef } : {}),
+       }));
+     }
+     companions.sort((left, right) => left.companionId.localeCompare(right.companionId));
+diff --git a/src/boundary/gateway/fleet-sso-router.ts b/src/boundary/gateway/fleet-sso-router.ts
+index 7a91624bcb..c66669b0a7 100644
+--- a/src/boundary/gateway/fleet-sso-router.ts
++++ b/src/boundary/gateway/fleet-sso-router.ts
+@@ -46,24 +46,35 @@ import {
+   privacyBreakGlassResourceKindForRoute,
+   privacyBreakGlassSubjectScopeDigest,
+ } from '../../shared/contracts/privacy-break-glass.js';
++import { buildGardenCapabilityHeaders } from '../fleet-auth/garden-capability-context.js';
+ import { createSpiffeCheckServerIdentity } from '../../shared/net/mtls.js';
+-import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
++import type { CompanionId } from '../../shared/routing/companion-id.js';
+ import { isRfc4122Uuid } from '../../shared/utils/types.js';
+ import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
+-import type { FleetSsoGardenUpstream } from '../fleet-auth/fleet-sso-transport.js';
++import {
++  CompanionScopedGardenRouteError,
++  FLEET_SSO_COMPANION_ROUTE_PREFIX,
++  parseCompanionScopedGardenRoute,
++  parseFleetSsoOuterTarget,
++  type FleetSsoGardenUpstream,
++} from '../fleet-auth/fleet-sso-transport.js';
+ import {
+   FLEET_PORTAL_API_PATH,
+   GatewayFleetPortalHttpRoutes,
+ } from './fleet-portal-http-routes.js';
+ import type { GatewayFleetPortalProjection } from './fleet-portal-projection.js';
++import {
++  FleetGardenUiAssets,
++  type FleetGardenUiAssetsPort,
++} from './fleet-garden-ui-assets.js';
+ 
+ const SESSION_COOKIE_NAME = '__Host-psfn_session';
+ const MAX_PROXY_BODY_BYTES = 1_048_576;
+ const MAX_CAPABILITY_HEADER_BYTES = 65_536;
+ const FLEET_PATH = '/fleet';
+ const FLEET_LOGIN_PATH = '/fleet/login';
+-const COMPANION_PREFIX = '/companions/';
+-const GARDEN_MARKER = '/garden';
++const FLEET_GARDEN_CHAT_PATH = '/v1/chat/completions';
++const COMPANION_PREFIX = FLEET_SSO_COMPANION_ROUTE_PREFIX;
+ const COMPANION_UI_PREFIX = '/companion-ui';
+ export const FLEET_JIT_GRANT_HEADER = 'x-psfn-jit-grant';
+ const FORWARDED_HEADERS = Object.freeze([
+@@ -122,6 +133,7 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
+   readonly verifier: RequestCapabilityVerifier;
+   readonly replay: RequestCapabilityReplayPort;
+   readonly portalProjection: Pick<GatewayFleetPortalProjection, 'resolve'>;
++  readonly portalUi?: FleetGardenUiAssetsPort;
+   readonly jitStepUp?: Pick<FleetJitStepUpCoordinator, 'consumeGrant'>;
+   readonly upstreams: readonly FleetSsoGardenUpstream[];
+   readonly companionUi?: {
+@@ -131,6 +143,18 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
+   readonly nowSeconds?: () => number;
+ }
+ 
++export interface FleetGardenChatAdmission {
++  readonly request: IncomingMessage;
++  readonly response: ServerResponse;
++  readonly body: Buffer;
++  readonly companionId: CompanionId;
++  readonly authorization: FleetAuthorizationContext;
++}
++
++export type FleetGardenChatHandler = (
++  admission: FleetGardenChatAdmission,
++) => Promise<void>;
++
+ interface ParsedGardenRoute {
+   companionId: CompanionId;
+   upstreamTarget: string;
+@@ -232,41 +256,59 @@ function readOpaqueSessionCookie(request: IncomingMessage): string | undefined {
+   return values[0];
+ }
+ 
++/**
++ * The gateway and the fleet Garden control plane share one companion-scoped
++ * route parser (`parseCompanionScopedGardenRoute`) so both hops bind exactly
++ * the same companion selection for the same request bytes. This wrapper only
++ * translates shared parse failures into unified-origin protocol errors.
++ */
+ function parseOuterPath(rawTarget: string): { rawPath: string; rawQuery: string } {
+-  if (!rawTarget.startsWith('/') || rawTarget.startsWith('//') || rawTarget.includes('#')
+-    || rawTarget.includes('\\') || /%2f|%5c/iu.test(rawTarget)) {
+-    throw new FleetSsoRequestError(400, 'Unified-origin request target is invalid');
+-  }
+-  const question = rawTarget.indexOf('?');
+-  const rawPath = question < 0 ? rawTarget : rawTarget.slice(0, question);
+-  const rawQuery = question < 0 ? '' : rawTarget.slice(question + 1);
+-  if (rawQuery.includes('?') || rawPath.includes('//') || /(?:^|\/)\.\.?($|\/)/u.test(rawPath)) {
+-    throw new FleetSsoRequestError(400, 'Unified-origin request target is invalid');
++  try {
++    return parseFleetSsoOuterTarget(rawTarget);
++  } catch (error) {
++    if (error instanceof CompanionScopedGardenRouteError) {
++      throw new FleetSsoRequestError(400, 'Unified-origin request target is invalid');
++    }
++    throw error;
+   }
+-  return { rawPath, rawQuery };
+ }
+ 
+ function parseGardenRoute(rawTarget: string): ParsedGardenRoute | undefined {
+-  const { rawPath, rawQuery } = parseOuterPath(rawTarget);
+-  if (!rawPath.startsWith(COMPANION_PREFIX)) return undefined;
+-  const rest = rawPath.slice(COMPANION_PREFIX.length);
+-  const slash = rest.indexOf('/');
+-  if (slash < 0) throw new FleetSsoRequestError(404, 'Resource not found');
+-  const rawCompanionId = rest.slice(0, slash);
+-  const afterCompanion = rest.slice(slash);
+-  if (!isRfc4122Uuid(rawCompanionId) || !afterCompanion.startsWith(GARDEN_MARKER)
+-    || (afterCompanion.length > GARDEN_MARKER.length
+-      && afterCompanion[GARDEN_MARKER.length] !== '/')) {
+-    throw new FleetSsoRequestError(404, 'Resource not found');
++  let route;
++  try {
++    route = parseCompanionScopedGardenRoute(rawTarget);
++  } catch (error) {
++    if (error instanceof CompanionScopedGardenRouteError) {
++      throw new FleetSsoRequestError(
++        error.code === 'not_found' ? 404 : 400,
++        error.code === 'not_found' ? 'Resource not found' : 'Unified-origin request target is invalid',
++      );
++    }
++    throw error;
+   }
+-  const gardenPath = afterCompanion.slice(GARDEN_MARKER.length) || '/';
++  if (!route) return undefined;
+   return {
+-    companionId: createCompanionId(rawCompanionId, 'unified-origin companionId'),
+-    upstreamTarget: rawQuery ? `${gardenPath}?${rawQuery}` : gardenPath,
+-    publicPrefix: `${COMPANION_PREFIX}${rawCompanionId}${GARDEN_MARKER}`,
++    companionId: route.companionId,
++    upstreamTarget: route.innerTarget,
++    publicPrefix: route.publicPrefix,
+   };
+ }
+ 
++/**
++ * The consolidated fleet Garden derives the companion binding from the
++ * canonical companion-scoped route (garden-control-plane invariant 3), so
++ * fleet upstreams receive the full public target. A single-companion operator
++ * surface admits the inner target directly against its fixed companion.
++ */
++function upstreamRequestTarget(
++  upstream: FleetSsoGardenUpstream,
++  route: ParsedGardenRoute,
++): string {
++  return upstream.companionScopedTarget
++    ? `${route.publicPrefix}${route.upstreamTarget}`
++    : route.upstreamTarget;
++}
++
+ async function readBoundedBody(request: IncomingMessage): Promise<Buffer> {
+   if (request.headers['transfer-encoding'] !== undefined) {
+     throw new FleetSsoRequestError(400, 'Transfer-Encoding is not accepted at the unified origin');
+@@ -376,6 +418,7 @@ function requestOptions(
+ export class GatewayFleetSsoRouter {
+   private readonly upstreams: ReadonlyMap<string, FleetSsoGardenUpstream>;
+   private readonly portalRoutes: GatewayFleetPortalHttpRoutes;
++  private gardenChatHandler: FleetGardenChatHandler | null = null;
+ 
+   constructor(private readonly options: GatewayFleetSsoRouterOptions) {
+     const canonical = new URL(options.canonicalOrigin);
+@@ -387,6 +430,7 @@ export class GatewayFleetSsoRouter {
+     }
+     this.portalRoutes = new GatewayFleetPortalHttpRoutes({
+       projection: options.portalProjection,
++      ui: options.portalUi ?? new FleetGardenUiAssets(),
+     });
+     const entries = options.upstreams.map((upstream) => {
+       if (upstream.origin.username || upstream.origin.password || upstream.origin.pathname !== '/'
+@@ -423,16 +467,26 @@ export class GatewayFleetSsoRouter {
+     try {
+       const { rawPath } = parseOuterPath(rawTarget);
+       return rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`
++        || rawPath.startsWith(`${FLEET_PATH}/_app/`)
++        || rawPath.startsWith('/_app/')
+         || rawPath === FLEET_LOGIN_PATH || rawPath.startsWith(FLEET_PORTAL_API_PATH)
+         || rawPath.startsWith(COMPANION_PREFIX)
+         || rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`);
+     } catch {
+       return rawTarget.startsWith(FLEET_PATH) || rawTarget.startsWith(FLEET_PORTAL_API_PATH)
++        || rawTarget.startsWith('/_app/')
+         || rawTarget.startsWith(COMPANION_PREFIX)
+         || rawTarget.startsWith(COMPANION_UI_PREFIX);
+     }
+   }
+ 
++  registerGardenChatHandler(handler: FleetGardenChatHandler): void {
++    if (this.gardenChatHandler) {
++      throw new Error('Fleet SSO Garden chat handler is already registered');
++    }
++    this.gardenChatHandler = handler;
++  }
++
+   async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
+     try {
+       resolveFleetSsoBrowserOrigin(request, this.options);
+@@ -494,6 +548,20 @@ export class GatewayFleetSsoRouter {
+         headers: request.headers,
+         body,
+       });
++      if (route.upstreamTarget === FLEET_GARDEN_CHAT_PATH
++        && request.method === 'POST') {
++        if (!this.gardenChatHandler) {
++          throw new FleetSsoRequestError(503, 'Fleet Garden chat is unavailable');
++        }
++        await this.gardenChatHandler({
++          request,
++          response,
++          body,
++          companionId: route.companionId,
++          authorization: issued.context,
++        });
++        return;
++      }
+       await this.proxyHttp(request, response, upstream, route, body, issued);
+     } catch (error) {
+       if (response.writableEnded || response.destroyed) return;
+@@ -568,7 +636,11 @@ export class GatewayFleetSsoRouter {
+     method: string;
+     headers: IncomingHttpHeaders;
+     body: Buffer;
+-  }): Promise<{ token: string; verified: VerifiedRequestCapability }> {
++  }): Promise<{
++    token: string;
++    verified: VerifiedRequestCapability;
++    context: FleetAuthorizationContext;
++  }> {
+     const targetHeaders = { ...input.headers };
+     stripBrowserRequestCapabilityHeaders(targetHeaders);
+     const target = compileGatewayGardenRequestTarget({
+@@ -690,7 +762,7 @@ export class GatewayFleetSsoRouter {
+     if (replay.outcome !== 'consumed') {
+       throw new FleetSsoRequestError(404, 'Resource not found');
+     }
+-    return { token, verified };
++    return { token, verified, context };
+   }
+ 
+   private proxyHttp(
+@@ -701,17 +773,22 @@ export class GatewayFleetSsoRouter {
+     body: Buffer,
+     issued: { token: string; verified: VerifiedRequestCapability },
+   ): Promise<void> {
+-    return new Promise((resolve, reject) => {
++    return new Promise<void>((resolve, reject) => {
+       const headers = copyRequestHeaders(request.headers);
+       headers['content-length'] = String(body.byteLength);
+-      headers['x-psfn-request-capability'] = issued.token;
+-      headers['x-psfn-capability-audience'] = issued.verified.audience;
+-      headers['x-psfn-capability-request-id'] = issued.verified.requestId;
+-      headers['x-psfn-capability-decision'] = issued.verified.decisionId;
+-      headers['x-psfn-capability-jti'] = issued.verified.jti;
++      // Canonical Garden capability envelope: one token header plus one
++      // canonical context header, exactly what Garden admission consumes.
++      Object.assign(headers, buildGardenCapabilityHeaders({
++        token: issued.token,
++        context: {
++          requestId: issued.verified.requestId,
++          decisionId: issued.verified.decisionId,
++          versions: issued.verified.versions,
++        },
++      }));
+       const requestFn = upstream.origin.protocol === 'https:' ? httpsRequest : httpRequest;
+       const proxyRequest = requestFn(
+-        requestOptions(upstream, request.method ?? 'GET', route.upstreamTarget, headers),
++        requestOptions(upstream, request.method ?? 'GET', upstreamRequestTarget(upstream, route), headers),
+         (proxyResponse) => {
+           response.writeHead(
+             proxyResponse.statusCode ?? 502,
+@@ -753,14 +830,18 @@ export class GatewayFleetSsoRouter {
+     headers.connection = 'Upgrade';
+     headers.upgrade = 'websocket';
+     headers['content-length'] = '0';
+-    headers['x-psfn-request-capability'] = issued.token;
+-    headers['x-psfn-capability-audience'] = issued.verified.audience;
+-    headers['x-psfn-capability-request-id'] = issued.verified.requestId;
+-    headers['x-psfn-capability-decision'] = issued.verified.decisionId;
+-    headers['x-psfn-capability-jti'] = issued.verified.jti;
++    // Canonical Garden capability envelope (see proxyHttp).
++    Object.assign(headers, buildGardenCapabilityHeaders({
++      token: issued.token,
++      context: {
++        requestId: issued.verified.requestId,
++        decisionId: issued.verified.decisionId,
++        versions: issued.verified.versions,
++      },
++    }));
+     await new Promise<void>((resolve, reject) => {
+       const requestFn = upstream.origin.protocol === 'https:' ? httpsRequest : httpRequest;
+-      const proxyRequest = requestFn(requestOptions(upstream, 'GET', route.upstreamTarget, headers));
++      const proxyRequest = requestFn(requestOptions(upstream, 'GET', upstreamRequestTarget(upstream, route), headers));
+       proxyRequest.once('upgrade', (proxyResponse, proxySocket, proxyHead) => {
+         const rawHeaders: string[] = [];
+         for (let index = 0; index < proxyResponse.rawHeaders.length; index += 2) {
+diff --git a/src/faculties/shards/manager.ts b/src/faculties/shards/manager.ts
+index b996289fa1..9bca9a41b4 100644
+--- a/src/faculties/shards/manager.ts
++++ b/src/faculties/shards/manager.ts
+@@ -5,13 +5,11 @@
+ import { randomUUID } from 'node:crypto';
+ import type { AgentTool } from '../../boundary/pi-agent/index.js';
+ import type { CapabilityTier, ShardToolsetConfig, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+-import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+ import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+ import { resolvePresenceSubjectId } from '../../core/agent/presence-metadata.js';
+ import type { EventBus } from '../../shared/event-bus.js';
+ import type { LLMProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
+ import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
+-import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
+ import {
+   createActiveEmanationSatellitePresencePort,
+   type SatellitePresencePort,
+@@ -19,12 +17,16 @@ import {
+ } from '../../core/agent/satellite-adapter-port.js';
+ import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
+ import { normalizeCapabilityTier } from '../../system/capabilities/tiers.js';
++import type { DerivedShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
+ import type { SessionStore } from '../../persistence/sessions/store.js';
+-import { SessionManager } from '../../core/session/manager.js';
++import type { SessionManager } from '../../core/session/manager.js';
+ import type { ShardExecutionPort } from './port.js';
+ import { chargeSurface, getRunChargeContext, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
+ import type {
++  ShardConfigurationMutationResult,
++  ShardConfigurationSnapshot,
+   ShardConfig,
++  ShardCapabilityGrantEvidence,
+   ShardHealthState,
+   ShardLifecycleState,
+   ShardResult,
+@@ -63,11 +65,25 @@ import {
+ import { ShardToolSyncHelper } from './tool-sync.js';
+ import type { CompressionGuidelineEvolutionPort } from '../../core/session/compression-guideline-evolution.js';
+ import { createComponentLogger } from '../../shared/logger.js';
+-import type { CompanionId } from '../../shared/routing/companion-id.js';
++import { LiveShardDirectory } from './directory.js';
++import { createShardAgentRuntime } from './agent-runtime.js';
++import type { PolicyGovernedShardParentIcpDeliveryPort } from '../../shared/contracts/shard-parent-icp.js';
++import { LiveShardParentIcpRuntime } from './parent-icp-runtime.js';
+ import type {
+   PostgresShardSchemaBinding,
+   PostgresShardSchemaLifecycle,
+ } from '../../persistence/postgres/shard-schema-lifecycle.js';
++import {
++  cloneShardCapabilityGrantEvidence,
++  resolveShardLaunchCapabilityGrant,
++  toShardCapabilityGrantEvidence,
++  type ParentCapabilityGrantSnapshotProvider,
++} from './launch-capabilities.js';
++import type { ChargePolicyConfig } from '../../shared/contracts/charge-policy.js';
++import {
++  createShardConfigurationControl,
++  ShardConfigurationRegistry,
++} from './configuration-snapshot.js';
+ 
+ const log = createComponentLogger('ShardManager');
+ const DEFAULT_MAX_CONCURRENT = 5;
+@@ -157,6 +173,17 @@ export interface ShardManagerDeps {
+   foldReviewController?: ShardFoldReviewController | null;
+   compressionGuidelineEvolution?: CompressionGuidelineEvolutionPort | null;
+   shardPostgresLifecycle?: PostgresShardSchemaLifecycle | null;
++  /**
++   * Optional canonical ordinary-ICP ingress. No local or raw transport
++   * fallback is permitted when inner-addressed shard-parent delivery is used.
++   */
++  shardParentIcpDelivery?: PolicyGovernedShardParentIcpDeliveryPort | null;
++  /**
++   * One authoritative capability owner read per launch. Callers must wire
++   * CapabilityRuntime.snapshotOwnerGrant directly; sequenced tier/token
++   * getters are not an atomic snapshot.
++   */
++  snapshotParentCapabilityGrant: ParentCapabilityGrantSnapshotProvider;
+ }
+ 
+ export interface SatelliteDelegationRequest {
+@@ -180,6 +207,8 @@ export interface ActiveShard {
+   heartbeatDisconnectAfterMs: number;
+   capabilities: string[];
+   requiredCapabilities: string[];
++  capabilityGrant: ShardCapabilityGrantEvidence;
++  lineage: ShardResult['lineage'];
+   failureReason?: string;
+ }
+ 
+@@ -195,7 +224,10 @@ export class ShardManager implements ShardExecutionPort {
+   private heartbeatStaleAfterMs: number;
+   private heartbeatDisconnectAfterMs: number;
+   private activeShards = new Map<string, ActiveShard>();
++  readonly shardDirectory: LiveShardDirectory;
++  readonly shardParentIcp: LiveShardParentIcpRuntime;
+   private activeShardChannels = new Map<string, Set<string>>();
++  private configurationRegistry: ShardConfigurationRegistry;
+   private foldReviewController: ShardFoldReviewController | null;
+ 
+   constructor(deps: ShardManagerDeps) {
+@@ -216,6 +248,10 @@ export class ShardManager implements ShardExecutionPort {
+       this.heartbeatStaleAfterMs * DEFAULT_SHARD_HEARTBEAT_DISCONNECT_MULTIPLIER,
+     );
+     this.auditTrail = deps.auditTrail ?? null;
++    this.configurationRegistry = new ShardConfigurationRegistry({
++      liveParentConfig: () => this.deps.config,
++      auditTrail: this.auditTrail,
++    });
+     this.artifactReturnPort = deps.artifactReturnPort ?? createArtifactReturnPort();
+     this.satellitePresencePort = deps.satellitePresencePort ?? createActiveEmanationSatellitePresencePort();
+     this.contextPackHelper = new ShardContextPackHelper({
+@@ -234,6 +270,16 @@ export class ShardManager implements ShardExecutionPort {
+       foldReviewController: this.foldReviewController,
+       contextPackHelper: this.contextPackHelper,
+     });
++    this.shardDirectory = new LiveShardDirectory({
++      parentCompanionId: () => resolveCoreCompanionIdFromConfig(deps.config),
++      refreshDeployments: () => this.refreshShardHealth(),
++      deployments: () => [...this.activeShards.values()],
++      intakeScreening: deps.sessionManager?.intakeScreening ?? null,
++    });
++    this.shardParentIcp = new LiveShardParentIcpRuntime(
++      this.shardDirectory,
++      deps.shardParentIcpDelivery ?? null,
++    );
+     this.installAuditHooks();
+   }
+ 
+@@ -254,7 +300,9 @@ export class ShardManager implements ShardExecutionPort {
+ 
+   async spawn(shardConfig: ShardConfig): Promise<ShardResult> {
+     const activeChargeContext = getRunChargeContext();
+-    const chargePolicy = this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy;
++    const chargePolicy = cloneShardChargePolicy(
++      this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy,
++    );
+     if (!activeChargeContext && chargePolicy) {
+       return runWithChargeContext({
+         chargePolicy,
+@@ -269,6 +317,10 @@ export class ShardManager implements ShardExecutionPort {
+     const channelId = `shard:${shardId}`;
+     const coreCompanionId = resolveCoreCompanionIdFromConfig(this.deps.config);
+     const coreCompanionName = resolveCompanionNameFromConfig(this.deps.config);
++    const capabilityGrant = resolveShardLaunchCapabilityGrant(
++      coreCompanionId,
++      this.deps.snapshotParentCapabilityGrant,
++    );
+     const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
+     const shardPostgres = this.resolveShardPostgresBinding(coreCompanionId, shardId);
+     const shardRuntimeConfig: SubstrateConfig = {
+@@ -312,6 +364,8 @@ export class ShardManager implements ShardExecutionPort {
+         baseMessage,
+         lineage,
+         shardRuntimeConfig,
++        capabilityGrant,
++        chargePolicy,
+         shardPostgres,
+       )
+       : this.executeShard(
+@@ -321,6 +375,8 @@ export class ShardManager implements ShardExecutionPort {
+         baseMessage,
+         lineage,
+         shardRuntimeConfig,
++        capabilityGrant,
++        chargePolicy,
+       );
+     if (chargePolicy) {
+       return runWithChargeContext({
+@@ -336,7 +392,9 @@ export class ShardManager implements ShardExecutionPort {
+ 
+   async delegateSatelliteSession(request: SatelliteDelegationRequest): Promise<ShardResult> {
+     const activeChargeContext = getRunChargeContext();
+-    const chargePolicy = this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy;
++    const chargePolicy = cloneShardChargePolicy(
++      this.deps.config.chargePolicy ?? activeChargeContext?.chargePolicy,
++    );
+     if (!activeChargeContext && chargePolicy) {
+       return runWithChargeContext({
+         chargePolicy,
+@@ -355,6 +413,10 @@ export class ShardManager implements ShardExecutionPort {
+     const routing = request.routing ?? request.message.routing?.wyoming;
+     const shardId = `wyoming-shard-${randomUUID()}`;
+     const coreCompanionId = resolveCoreCompanionIdFromConfig(this.deps.config);
++    const capabilityGrant = resolveShardLaunchCapabilityGrant(
++      coreCompanionId,
++      this.deps.snapshotParentCapabilityGrant,
++    );
+     const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
+     const shardPostgres = this.resolveShardPostgresBinding(coreCompanionId, shardId);
+     const shardRuntimeConfig: SubstrateConfig = {
+@@ -390,6 +452,7 @@ export class ShardManager implements ShardExecutionPort {
+       siteId: routing?.siteId,
+       satelliteId: routing?.satelliteId,
+       presence: routing?.presence,
++      capabilityGrant: toShardCapabilityGrantEvidence(capabilityGrant),
+     });
+     const lineage = buildShardLineageEnvelope({
+       kind: 'wyoming',
+@@ -407,6 +470,8 @@ export class ShardManager implements ShardExecutionPort {
+         request.message,
+         lineage,
+         shardRuntimeConfig,
++        capabilityGrant,
++        chargePolicy,
+         shardPostgres,
+       )
+       : this.executeShard(
+@@ -416,6 +481,8 @@ export class ShardManager implements ShardExecutionPort {
+         request.message,
+         lineage,
+         shardRuntimeConfig,
++        capabilityGrant,
++        chargePolicy,
+       );
+ 
+     try {
+@@ -437,6 +504,7 @@ export class ShardManager implements ShardExecutionPort {
+         connectionId: routing?.connectionId,
+         sessionId: routing?.sessionId,
+         turnId: routing?.turnId,
++        capabilityGrant: toShardCapabilityGrantEvidence(capabilityGrant),
+       });
+       return result;
+     } catch (error) {
+@@ -450,6 +518,7 @@ export class ShardManager implements ShardExecutionPort {
+         connectionId: routing?.connectionId,
+         sessionId: routing?.sessionId,
+         turnId: routing?.turnId,
++        capabilityGrant: toShardCapabilityGrantEvidence(capabilityGrant),
+       });
+       throw error;
+     }
+@@ -462,6 +531,8 @@ export class ShardManager implements ShardExecutionPort {
+     baseMessage: SubstrateMessage,
+     lineage: ShardResult['lineage'],
+     runtimeConfig: SubstrateConfig,
++    capabilityGrant: DerivedShardCapabilityGrant,
++    shardChargePolicy: ChargePolicyConfig | null,
+     shardPostgres?: PostgresShardSchemaBinding,
+   ): Promise<ShardResult> {
+     this.refreshShardHealth();
+@@ -504,7 +575,19 @@ export class ShardManager implements ShardExecutionPort {
+       shardConfig.heartbeatDisconnectAfterMs,
+       heartbeatStaleAfterMs,
+     );
+-
++    const capabilityGrantEvidence = toShardCapabilityGrantEvidence(capabilityGrant);
++    const configurationControl = createShardConfigurationControl({
++      shardId,
++      parentCompanionId: lineage.companionProvenance.parentCompanionId,
++      lifecycleState: 'registering',
++      health: 'healthy',
++      capturedAt: startTime,
++      maxTurns,
++      capabilityGrant: capabilityGrantEvidence,
++      lineage,
++      config: this.deps.config,
++      parentSystemPrompt: this.deps.parentSystemPrompt,
++    });
+     chargeSurface('shardLaunch', {
+       details: {
+         shardId,
+@@ -514,6 +597,7 @@ export class ShardManager implements ShardExecutionPort {
+       },
+     });
+ 
++    this.configurationRegistry.register(configurationControl, shardChargePolicy);
+     this.activeCount++;
+     this.activeShards.set(shardId, {
+       id: shardId,
+@@ -530,6 +614,8 @@ export class ShardManager implements ShardExecutionPort {
+       heartbeatDisconnectAfterMs,
+       capabilities,
+       requiredCapabilities,
++      capabilityGrant: capabilityGrantEvidence,
++      lineage,
+     });
+     this.registerActiveShardChannel(channelId, shardId);
+     this.auditTrail?.append('shard.lifecycle.transition', {
+@@ -547,6 +633,7 @@ export class ShardManager implements ShardExecutionPort {
+       channelId,
+       capabilities,
+       requiredCapabilities,
++      capabilityGrant: capabilityGrantEvidence,
+     });
+     let shardPostgresPrepared = false;
+     let executionFailure: Error | undefined;
+@@ -569,42 +656,49 @@ export class ShardManager implements ShardExecutionPort {
+         task: shardConfig.task,
+         lineage,
+       };
+-      // Each shard gets its own SessionManager wrapping the shared store
+-      const sessionManager = new SessionManager(
+-        this.deps.sessionStore,
+-        runtimeConfig,
+-        this.deps.eventBus,
+-      );
+-
+       const systemPrompt = this.contextPackHelper.resolveSystemPrompt(shardConfig);
+-
+-      const agentLoop = new SubstrateAgent(
+-        this.deps.eventBus,
+-        this.deps.llmProvider,
+-        sessionManager,
+-        systemPrompt,
+-        sanitizeCoreSubstrateConfig(runtimeConfig),
+-        {
+-          runtimeMode: this.deps.runtimeMode,
+-          // Shards are ephemeral and intentionally own no durable post-turn lane.
+-          backgroundWorkDisabled: true,
+-        },
+-      );
+-
+-      // Shards can READ memory but don't extract or archive (ephemeral)
+-      if (this.deps.memoryProvider && !shardConfig.contextPack) {
+-        agentLoop.memoryProvider = this.deps.memoryProvider;
+-      }
+-
+       // Shards don't recurse or self-escalate: we inject a tier-limited subset only.
+       const injectedTools = this.resolveInjectedTools(shardId, shardMemoryReviewContext);
+-      for (const tool of injectedTools) {
+-        agentLoop.registerTool(tool);
+-      }
++      const { agentLoop, sessionManager } = createShardAgentRuntime({
++        eventBus: this.deps.eventBus,
++        llmProvider: this.deps.llmProvider,
++        sessionStore: this.deps.sessionStore,
++        runtimeConfig,
++        systemPrompt,
++        runtimeMode: this.deps.runtimeMode,
++        capabilityAccess: capabilityGrant.access,
++        memoryProvider: this.deps.memoryProvider,
++        exposeMemory: !shardConfig.contextPack,
++        tools: injectedTools,
++      });
++      const chatChannelId = `${channelId}:human`;
++      const chatTools = this.resolveInjectedTools(shardId, {
++        channelId: chatChannelId,
++        task: shardConfig.task,
++        lineage,
++      });
++      const { agentLoop: chatAgentLoop } = createShardAgentRuntime({
++        eventBus: this.deps.eventBus,
++        llmProvider: this.deps.llmProvider,
++        sessionStore: this.deps.sessionStore,
++        runtimeConfig,
++        systemPrompt: `${systemPrompt}\n\nYou are responding in a direct human-to-shard thread. Stay within this shard's assigned remit and do not impersonate the parent companion.`,
++        runtimeMode: this.deps.runtimeMode,
++        capabilityAccess: capabilityGrant.access,
++        memoryProvider: this.deps.memoryProvider,
++        exposeMemory: !shardConfig.contextPack,
++        tools: chatTools,
++      });
++      this.shardDirectory.register(shardId, {
++        agentLoop: chatAgentLoop,
++        channelId: chatChannelId,
++      });
+       this.auditTrail?.append('shard.tools.injected', {
+         shardId,
+-        tier: this.resolveCapabilityTier(),
++        tier: capabilityGrant.access.getTier(),
++        grantedTokens: [...capabilityGrant.tokens],
+         tools: injectedTools.map(tool => tool.name),
++        capabilityGrant: capabilityGrantEvidence,
+       });
+       this.transitionShardState(shardId, 'ready', 'agent_initialized');
+       this.touchShardHeartbeat(shardId);
+@@ -618,14 +712,33 @@ export class ShardManager implements ShardExecutionPort {
+       let turns = 0;
+       let artifactReturn: ArtifactReturnBatch | null = null;
+ 
+-      for (let turn = 0; turn < maxTurns; turn++) {
++      for (
++        let turn = 0;
++        turn < this.configurationRegistry.effectiveWorkerBudget(shardId).maxTurns;
++        turn++
++      ) {
+         this.refreshShardHealth();
+         this.assertShardRoutable(shardId, requiredCapabilities);
+         this.touchShardHeartbeat(shardId);
+-        const turnMessage = turn === 0 ? baseMessage : {
++        const effectiveConfiguration = this.configurationRegistry.effectiveValues(shardId);
++        const turnMessage: SubstrateMessage = {
+           ...baseMessage,
+-          id: `${shardId}-turn-${turn}`,
+-          content: lastContent,
++          ...(turn > 0 ? {
++            id: `${shardId}-turn-${turn}`,
++            content: lastContent,
++          } : {}),
++          routing: {
++            ...baseMessage.routing,
++            modelOverride: {
++              provider: effectiveConfiguration.model.provider,
++              model: effectiveConfiguration.model.model,
++              maxTokens: effectiveConfiguration.workerBudget.maxOutputTokens,
++              ...(effectiveConfiguration.model.contextWindow !== undefined
++                ? { contextWindow: effectiveConfiguration.model.contextWindow }
++                : {}),
++              purpose: 'chat',
++            },
++          },
+         };
+ 
+         const response = await agentLoop.handleMessage(turnMessage);
+@@ -700,7 +813,9 @@ export class ShardManager implements ShardExecutionPort {
+           : null;
+         const autoCompactionEligible = recordedTurn?.observability
+           ?.snapshot?.sessionContext?.autoCompactionEligible === true;
+-        if (turn + 1 < maxTurns && autoCompactionEligible) {
++        const effectiveMaxTurns = this.configurationRegistry
++          .effectiveWorkerBudgetIfAvailable(shardId)?.maxTurns ?? turn + 1;
++        if (turn + 1 < effectiveMaxTurns && autoCompactionEligible) {
+           await sessionManager.scheduleAutoCompactionBetweenTurns({
+             channelId,
+             systemPrompt,
+@@ -712,7 +827,7 @@ export class ShardManager implements ShardExecutionPort {
+ 
+         // For a one-turn shard, we break after the first turn.
+         // Multi-turn shards continue only if the response suggests more work.
+-        if (turn === 0 && maxTurns === 1) break;
++        if (turn === 0 && effectiveMaxTurns === 1) break;
+       }
+ 
+       this.transitionShardState(shardId, 'offline', 'completed');
+@@ -732,6 +847,7 @@ export class ShardManager implements ShardExecutionPort {
+         ...(finishedShard?.failureReason ? { failureReason: finishedShard.failureReason } : {}),
+         capabilities: [...capabilities],
+         requiredCapabilities: [...requiredCapabilities],
++        capabilityGrant: capabilityGrantEvidence,
+         lineage,
+         ...(artifactReturn ? { artifactReturn } : {}),
+       };
+@@ -742,6 +858,7 @@ export class ShardManager implements ShardExecutionPort {
+         turns: result.turns,
+         lifecycleState: result.lifecycleState,
+         health: result.health,
++        capabilityGrant: capabilityGrantEvidence,
+       });
+       await this.emitShardCompletionHandoff({
+         shardConfig,
+@@ -758,6 +875,7 @@ export class ShardManager implements ShardExecutionPort {
+         status: 'failed',
+         durationMs: Date.now() - startTime,
+         error: msg,
++        capabilityGrant: capabilityGrantEvidence,
+       });
+       await this.emitShardFailureHandoff({
+         shardId,
+@@ -825,9 +943,29 @@ export class ShardManager implements ShardExecutionPort {
+       ...shard,
+       capabilities: [...shard.capabilities],
+       requiredCapabilities: [...shard.requiredCapabilities],
++      capabilityGrant: cloneShardCapabilityGrantEvidence(shard.capabilityGrant),
++      lineage: cloneShardLineage(shard.lineage),
+     }));
+   }
+ 
++  getShardConfigurationSnapshot(
++    parentCompanionId: string,
++    shardId: string,
++  ): ShardConfigurationSnapshot | null {
++    this.refreshShardHealth();
++    return this.configurationRegistry.getSnapshot(parentCompanionId, shardId);
++  }
++
++  updateShardConfigurationOverrides(input: {
++    parentCompanionId: string;
++    shardId: string;
++    actor: string;
++    override: unknown;
++  }): ShardConfigurationMutationResult {
++    this.refreshShardHealth();
++    return this.configurationRegistry.update(input);
++  }
++
+   private async emitShardBlockedHandoff(input: {
+     shardId: string;
+     channelId: string;
+@@ -1094,6 +1232,8 @@ export class ShardManager implements ShardExecutionPort {
+ 
+   private releaseActiveShard(shardId: string, channelId: string): void {
+     const deleted = this.activeShards.delete(shardId);
++    this.shardDirectory.release(shardId);
++    this.configurationRegistry.release(shardId);
+     this.unregisterActiveShardChannel(channelId, shardId);
+     if (!deleted) {
+       return;
+@@ -1154,6 +1294,7 @@ export class ShardManager implements ShardExecutionPort {
+       health: shard.health,
+       ...(failureReason ? { failureReason } : {}),
+     });
++    this.configurationRegistry.syncLifecycle(shardId, shard.state, shard.health);
+   }
+ 
+   private installAuditHooks(): void {
+@@ -1328,3 +1469,23 @@ function normalizeHeartbeatDisconnectAfterMs(
+   }
+   return normalized;
+ }
++
++function cloneShardChargePolicy(
++  chargePolicy: ChargePolicyConfig | undefined,
++): ChargePolicyConfig | null {
++  if (!chargePolicy) return null;
++  return {
++    ...chargePolicy,
++    runChargeQuotaByLane: { ...chargePolicy.runChargeQuotaByLane },
++  };
++}
++
++function cloneShardLineage(lineage: ShardResult['lineage']): ShardResult['lineage'] {
++  return {
++    ...lineage,
++    companionProvenance: { ...lineage.companionProvenance },
++    sourceMessage: { ...lineage.sourceMessage },
++    ...(lineage.sourceContext ? { sourceContext: { ...lineage.sourceContext } } : {}),
++    ...(lineage.satelliteRouting ? { satelliteRouting: { ...lineage.satelliteRouting } } : {}),
++  };
++}
+diff --git a/src/faculties/shards/port.ts b/src/faculties/shards/port.ts
+index 37c765aa1e..99b46f87d4 100644
+--- a/src/faculties/shards/port.ts
++++ b/src/faculties/shards/port.ts
+@@ -1,10 +1,35 @@
+-import type { ShardConfig, ShardResult } from './types.js';
++import type {
++  ShardConfig,
++  ShardConfigurationMutationResult,
++  ShardConfigurationSnapshot,
++  ShardParentIcpPort,
++  ShardResult,
++} from './types.js';
+ import type { ActiveShard, SatelliteDelegationRequest } from './manager.js';
+ import type {
+   ShardFoldReviewPort,
+ } from './fold-review.js';
++import type { ShardDirectoryPort } from '../../shared/contracts/shard-directory.js';
++
++export type { ShardParentIcpPort } from './types.js';
++
++export interface ShardConfigurationPort {
++  getShardConfigurationSnapshot(
++    parentCompanionId: string,
++    shardId: string,
++  ): ShardConfigurationSnapshot | null;
++  updateShardConfigurationOverrides(input: {
++    parentCompanionId: string;
++    shardId: string;
++    actor: string;
++    override: unknown;
++  }): ShardConfigurationMutationResult;
++}
+ 
+-export interface ShardExecutionPort extends Partial<ShardFoldReviewPort> {
++export interface ShardExecutionPort
++  extends Partial<ShardFoldReviewPort>, Partial<ShardConfigurationPort> {
++  readonly shardDirectory: ShardDirectoryPort;
++  readonly shardParentIcp: ShardParentIcpPort;
+   spawn(shardConfig: ShardConfig): Promise<ShardResult>;
+   delegateSatelliteSession(request: SatelliteDelegationRequest): Promise<ShardResult>;
+   getActiveCount(): number;

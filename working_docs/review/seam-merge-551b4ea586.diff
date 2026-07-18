@@ -1,0 +1,146 @@
+MERGE 551b4ea586d306d4b1635ccd26c630b1e1b8db83 Merge work/mus2-11-shard-snapshots-overrides: parent-scoped shard snapshots + limited overrides (psfn-framework-mus2.11)
+
+diff --cc src/faculties/shards/manager.ts
+index a8ea9e1acb,5443375ac0..9bca9a41b4
+--- a/src/faculties/shards/manager.ts
++++ b/src/faculties/shards/manager.ts
+@@@ -216,9 -218,8 +224,10 @@@ export class ShardManager implements Sh
+    private heartbeatStaleAfterMs: number;
+    private heartbeatDisconnectAfterMs: number;
+    private activeShards = new Map<string, ActiveShard>();
+ +  readonly shardDirectory: LiveShardDirectory;
+ +  readonly shardParentIcp: LiveShardParentIcpRuntime;
+    private activeShardChannels = new Map<string, Set<string>>();
++   private configurationRegistry: ShardConfigurationRegistry;
+    private foldReviewController: ShardFoldReviewController | null;
+  
+    constructor(deps: ShardManagerDeps) {
+@@@ -1157,7 -1210,7 +1232,8 @@@
+  
+    private releaseActiveShard(shardId: string, channelId: string): void {
+      const deleted = this.activeShards.delete(shardId);
+ +    this.shardDirectory.release(shardId);
++     this.configurationRegistry.release(shardId);
+      this.unregisterActiveShardChannel(channelId, shardId);
+      if (!deleted) {
+        return;
+diff --cc src/faculties/shards/port.ts
+index 06383bdc85,c15983088c..f754a0dead
+--- a/src/faculties/shards/port.ts
++++ b/src/faculties/shards/port.ts
+@@@ -3,15 -8,22 +8,29 @@@ import type { ActiveShard, SatelliteDel
+  import type {
+    ShardFoldReviewPort,
+  } from './fold-review.js';
+ +import type { ShardDirectoryPort } from '../../shared/contracts/shard-directory.js';
+ +
+ +export interface ShardParentIcpPort {
+ +  sendShardParentIcp(shardId: string, content: string): Promise<void>;
+ +}
+  
+- export interface ShardExecutionPort extends Partial<ShardFoldReviewPort> {
++ export interface ShardConfigurationPort {
++   getShardConfigurationSnapshot(
++     parentCompanionId: string,
++     shardId: string,
++   ): ShardConfigurationSnapshot | null;
++   updateShardConfigurationOverrides(input: {
++     parentCompanionId: string;
++     shardId: string;
++     actor: string;
++     override: unknown;
++   }): ShardConfigurationMutationResult;
++ }
++ 
++ export interface ShardExecutionPort
++   extends Partial<ShardFoldReviewPort>, Partial<ShardConfigurationPort> {
+ +  readonly shardDirectory: ShardDirectoryPort;
+ +  readonly shardParentIcp: ShardParentIcpPort;
+    spawn(shardConfig: ShardConfig): Promise<ShardResult>;
+    delegateSatelliteSession(request: SatelliteDelegationRequest): Promise<ShardResult>;
+    getActiveCount(): number;
+diff --cc src/operator/garden/services/shard-fold-review-service.ts
+index c6df66ef0f,e147d564dd..a13e6d4f4e
+--- a/src/operator/garden/services/shard-fold-review-service.ts
++++ b/src/operator/garden/services/shard-fold-review-service.ts
+@@@ -5,9 -10,79 +10,79 @@@ import type 
+    AdminShardFoldReviewResolveResult,
+    AdminShardFoldReviewService,
+    AdminShardFoldReviewSummary,
+ -  AdminShardSummary,
+  } from './types.js';
+++import type { AdminShardSummary } from './types/shards.js';
++ import type { GardenRequestContext } from '../garden-request-context.js';
+  
+  const SHARD_FOLD_REVIEW_UNAVAILABLE = 'Shard fold review controller unavailable';
++ const SHARD_CONFIGURATION_UNAVAILABLE = 'Shard configuration controller unavailable';
++ 
++ type ParentScope =
++   | { kind: 'scoped'; parentCompanionId: string }
++   | { kind: 'unscoped' }
++   | { kind: 'denied' };
++ 
++ /**
++  * Resolve how a request should be scoped against the shared shard fold-review
++  * store.
++  *
++  * - A context that names a parent companion (every fleet principal, and any
++  *   companion-bound legacy transport whose config.companionId is set) is
++  *   `scoped`: reviews, active shards, and configuration are filtered to that
++  *   parent's lineage so one parent can never see or mutate another's shards.
++  * - A legacy single-companion Garden whose transport did not carry a companion
++  *   id is `unscoped`: that transport binds to exactly one companion's fold-review
++  *   store, so there is no cross-parent surface to filter and fold review plus
++  *   lineage stay visible exactly as the pre-fleet routes exposed them.
++  * - Any other absence of an authenticated context (undefined, public) is
++  *   `denied` and fails closed.
++  */
++ function resolveParentScope(context: GardenRequestContext | undefined): ParentScope {
++   if (!context) return { kind: 'denied' };
++   const companionId = context.resource.companionId;
++   if (typeof companionId === 'string' && companionId.length > 0) {
++     return { kind: 'scoped', parentCompanionId: companionId };
++   }
++   if (context.kind === 'legacy_token') return { kind: 'unscoped' };
++   return { kind: 'denied' };
++ }
++ 
++ function resolveActor(context: GardenRequestContext | undefined, requestedActor?: string): string {
++   if (context?.kind === 'fleet_principal') {
++     return `fleet-principal:${context.actor.principalId}`;
++   }
++   return requestedActor?.trim() || context?.actor.actorId || 'garden:unknown';
++ }
++ 
++ function belongsToParent(record: ShardFoldReviewRecord, parentCompanionId: string): boolean {
++   return record.lineage.coreCompanionId === parentCompanionId
++     && record.lineage.companionProvenance.parentCompanionId === parentCompanionId
++     && record.lineage.shardId === record.shardId;
++ }
++ 
++ function activeShardBelongsToParent(
++   shard: ReturnType<ShardExecutionPort['getActiveShards']>[number],
++   parentCompanionId: string,
++ ): boolean {
++   return shard.lineage.coreCompanionId === parentCompanionId
++     && shard.lineage.companionProvenance.parentCompanionId === parentCompanionId
++     && shard.lineage.shardId === shard.id;
++ }
++ 
++ function toActiveShardSummary(
++   shard: ReturnType<ShardExecutionPort['getActiveShards']>[number],
++ ): AdminShardSummary {
++   return {
++     shardId: shard.id,
++     name: shard.name,
++     task: shard.task,
++     startedAt: shard.startedAt,
++     state: shard.state,
++     health: shard.health,
++     stateReason: shard.stateReason,
++     parentCompanionId: shard.lineage.companionProvenance.parentCompanionId,
++   };
++ }
+  
+  function toSummary(record: ShardFoldReviewRecord): AdminShardFoldReviewSummary {
+    return {

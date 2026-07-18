@@ -1,3 +1,8 @@
+import {
+  constants as fsConstants,
+  copyFileSync,
+  unlinkSync,
+} from 'node:fs';
 import { join } from 'node:path';
 import type { EditableSettings, SettingsDomainSplit } from '../settings.js';
 import { SETTINGS_FILE_NAME } from '../settings/contracts.js';
@@ -62,6 +67,7 @@ import {
   isFleetAuthEnabled,
   resolveFleetAuthOwnerFile,
 } from './fleet-auth-config.js';
+import { PER_COMPANION_OWNER_FILES } from './settings-contract.js';
 
 export interface StartupOwnerFileLoadOptions {
   dataDir: string;
@@ -360,6 +366,67 @@ function runOwnerFileChecks(checks: readonly OwnerFileCheck[]): StartupOwnerFile
     ok: errors.length === 0,
     errors,
   };
+}
+
+/** Validate exactly the owner files rooted at one companion's data directory. */
+export function verifyCompanionStartupOwnerFiles(options: {
+  companionDataDir: string;
+  companionLabel?: string;
+  seedDir?: string;
+}): StartupOwnerFileVerificationResult {
+  const seedDir = ownerFileSeedDir(options);
+  return runOwnerFileChecks(companionOwnerFileChecks({
+    companionDataDir: options.companionDataDir,
+    companionLabel: options.companionLabel,
+    seedDir,
+    configuredSeedDir: options.seedDir,
+  }));
+}
+
+/**
+ * Seed one new companion root from the canonical per-companion owner registry.
+ *
+ * Existing destinations fail closed. If a copy or validation fails, only files
+ * created by this invocation are removed.
+ */
+export function seedCompanionStartupOwnerFiles(options: {
+  companionDataDir: string;
+  companionLabel?: string;
+  seedDir: string;
+}): string[] {
+  const copiedPaths: string[] = [];
+  try {
+    for (const ownerFile of PER_COMPANION_OWNER_FILES) {
+      const sourcePath = join(
+        options.seedDir,
+        ownerFile.replace(/\.json$/u, '.seed.json'),
+      );
+      const destinationPath = join(options.companionDataDir, ownerFile);
+      copyFileSync(sourcePath, destinationPath, fsConstants.COPYFILE_EXCL);
+      copiedPaths.push(destinationPath);
+    }
+    const verification = verifyCompanionStartupOwnerFiles(options);
+    if (!verification.ok) {
+      throw new Error(verification.errors.join('\n'));
+    }
+    return copiedPaths;
+  } catch (error) {
+    const cleanupErrors: unknown[] = [];
+    for (const copiedPath of copiedPaths.reverse()) {
+      try {
+        unlinkSync(copiedPath);
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError(
+        [error, ...cleanupErrors],
+        'Per-companion owner-file seeding failed and rollback left residue',
+      );
+    }
+    throw error;
+  }
 }
 
 export function verifyStartupOwnerFiles(

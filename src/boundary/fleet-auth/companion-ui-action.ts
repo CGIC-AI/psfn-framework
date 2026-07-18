@@ -15,6 +15,10 @@ export const COMPANION_UI_ACTION_RESOURCES = [
   'conversation.interrupt',
   'conversation.touch',
   'conversation.audio',
+  'shards.list',
+  'shards.history',
+  'shards.interact',
+  'shards.interrupt',
   'confirmations.list',
   'confirmations.resolve',
   'artifact.preview',
@@ -37,6 +41,10 @@ const RESOURCE_ACTION: Readonly<Record<CompanionUiActionResource, FleetAuthActio
   'conversation.interrupt': 'companion.interact',
   'conversation.touch': 'companion.interact',
   'conversation.audio': 'companion.interact',
+  'shards.list': 'companion.read',
+  'shards.history': 'companion.read',
+  'shards.interact': 'companion.interact',
+  'shards.interrupt': 'companion.interact',
   'confirmations.list': 'confirmations.read',
   'confirmations.resolve': 'confirmations.resolve',
   'artifact.preview': 'artifacts.read',
@@ -61,6 +69,10 @@ const RESOURCE_PHYSICAL_CEILING: Readonly<Record<CompanionUiActionResource, Read
   'conversation.interrupt': physicalCeiling(['audio_output'], []),
   'conversation.touch': physicalCeiling(['touch'], []),
   'conversation.audio': physicalCeiling(['audio_input', 'speech_to_text'], []),
+  'shards.list': physicalCeiling([], ['status']),
+  'shards.history': physicalCeiling([], ['status']),
+  'shards.interact': physicalCeiling(['text'], []),
+  'shards.interrupt': physicalCeiling(['audio_output'], []),
   'confirmations.list': physicalCeiling([], ['approvals']),
   'confirmations.resolve': physicalCeiling([], ['approvals']),
   'artifact.preview': physicalCeiling([], ['artifacts']),
@@ -85,6 +97,9 @@ export type CompanionUiActionBody =
   | Readonly<{ interactionId: string }>
   | Readonly<{ region: 'head' | 'face' | 'shoulder' | 'hand'; count: number; durationMs: number }>
   | Readonly<{ transcript: string }>
+  | Readonly<{ shardId: string }>
+  | Readonly<{ shardId: string; content: string }>
+  | Readonly<{ shardId: string; interactionId: string }>
   | Readonly<{ id: string; decision: 'approve' | 'deny' }>
   | Readonly<{ id: string }>
   | Readonly<{ subscribe: true }>
@@ -159,6 +174,7 @@ function parseBody(resource: CompanionUiActionResource, value: unknown): Compani
   if (!isRecord(value)) deny();
   switch (resource) {
     case 'conversation.status':
+    case 'shards.list':
     case 'confirmations.list':
     case 'embodiment.status':
       return parseEmptyBody(value);
@@ -166,6 +182,21 @@ function parseBody(resource: CompanionUiActionResource, value: unknown): Compani
       if (!hasExactKeys(value, ['content']) || typeof value.content !== 'string'
         || value.content.length === 0 || value.content.length > COMPANION_UI_PROTOCOL_LIMITS.maxTextCharacters) deny();
       return Object.freeze({ content: value.content });
+    case 'shards.history':
+      if (!hasExactKeys(value, ['shardId']) || typeof value.shardId !== 'string'
+        || !REQUEST_ID_PATTERN.test(value.shardId)) deny();
+      return Object.freeze({ shardId: value.shardId });
+    case 'shards.interact':
+      if (!hasExactKeys(value, ['shardId', 'content']) || typeof value.shardId !== 'string'
+        || !REQUEST_ID_PATTERN.test(value.shardId) || typeof value.content !== 'string'
+        || value.content.length === 0
+        || value.content.length > COMPANION_UI_PROTOCOL_LIMITS.maxTextCharacters) deny();
+      return Object.freeze({ shardId: value.shardId, content: value.content });
+    case 'shards.interrupt':
+      if (!hasExactKeys(value, ['shardId', 'interactionId']) || typeof value.shardId !== 'string'
+        || !REQUEST_ID_PATTERN.test(value.shardId) || typeof value.interactionId !== 'string'
+        || !REQUEST_ID_PATTERN.test(value.interactionId)) deny();
+      return Object.freeze({ shardId: value.shardId, interactionId: value.interactionId });
     case 'conversation.interrupt':
       if (!hasExactKeys(value, ['interactionId']) || typeof value.interactionId !== 'string'
         || !REQUEST_ID_PATTERN.test(value.interactionId)) deny();
@@ -307,11 +338,19 @@ export function companionUiActionPath(companionId: string, resource: CompanionUi
 export function companionUiPromptContent(frame: CompanionUiActionFrame): string | undefined {
   const body = frame.body as Record<string, unknown>;
   if (frame.resource === 'conversation.interact') return String(body.content);
+  if (frame.resource === 'shards.interact') return String(body.content);
   if (frame.resource === 'conversation.audio') return String(body.transcript);
   if (frame.resource === 'conversation.touch') {
     return `[Authenticated device touch: region=${String(body.region)}, count=${String(body.count)}, durationMs=${String(body.durationMs)}]`;
   }
   return undefined;
+}
+
+export function companionUiShardSelector(frame: CompanionUiActionFrame): string | undefined {
+  if (frame.resource !== 'shards.history'
+    && frame.resource !== 'shards.interact'
+    && frame.resource !== 'shards.interrupt') return undefined;
+  return String((frame.body as Readonly<{ shardId: string }>).shardId);
 }
 
 export function resolveCompanionUiActionClassification(

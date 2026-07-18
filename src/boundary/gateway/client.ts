@@ -63,9 +63,13 @@ import type {
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcParams,
   ApiChatCompletionRpcResult,
+  ApiCompanionUiShardActionRpcParams,
+  ApiCompanionUiShardActionRpcResult,
   ApiHealthRpcResult,
   ApiTelemetryIngestRpcParams,
   ApiTelemetryIngestRpcResult,
+  ApiShardOwnerRpcParams,
+  ApiShardOwnerRpcResult,
 } from '../../channels/api/types.js';
 import type { SessionIntegrityProvider } from '../../persistence/sessions/store.js';
 import type { VisionIntakeImageScreenResult } from './intake/vision-screener.js';
@@ -437,6 +441,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private handleMessageHandler: MessageHandler | null = null;
   private apiChatCompletionHandler: ((params: ApiChatCompletionRpcParams) => Promise<ApiChatCompletionRpcResult>) | null = null;
   private apiChatCancelHandler: ((params: ApiChatCompletionCancelRpcParams) => Promise<ApiChatCompletionCancelRpcResult>) | null = null;
+  private companionUiShardActionHandler: ((
+    params: ApiCompanionUiShardActionRpcParams,
+  ) => Promise<ApiCompanionUiShardActionRpcResult>) | null = null;
+  private shardOwnerHandler: ((params: ApiShardOwnerRpcParams) => Promise<ApiShardOwnerRpcResult>) | null = null;
   private apiTelemetryIngestHandler: ((params: ApiTelemetryIngestRpcParams) => Promise<ApiTelemetryIngestRpcResult>) | null = null;
   private apiHealthHandler: (() => Promise<ApiHealthRpcResult>) | null = null;
   private turnPerformanceHandler: ((event: TurnPerformanceEvent) => Promise<void>) | null = null;
@@ -1578,6 +1586,18 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     this.registerReverseMethods();
   }
 
+  onCompanionUiShardAction(handler: (
+    params: ApiCompanionUiShardActionRpcParams,
+  ) => Promise<ApiCompanionUiShardActionRpcResult>): void {
+    this.companionUiShardActionHandler = handler;
+    this.registerReverseMethods();
+  }
+
+  onShardOwner(handler: (params: ApiShardOwnerRpcParams) => Promise<ApiShardOwnerRpcResult>): void {
+    this.shardOwnerHandler = handler;
+    this.registerReverseMethods();
+  }
+
   onApiTelemetryIngest(handler: (params: ApiTelemetryIngestRpcParams) => Promise<ApiTelemetryIngestRpcResult>): void {
     this.apiTelemetryIngestHandler = handler;
     this.registerReverseMethods();
@@ -1635,6 +1655,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       handleVoiceStreamCancel: (params) => this.handleVoiceStreamCancel(params),
       handleApiChatCompletion: (params) => this.handleApiChatCompletion(params),
       handleApiChatCancel: (params) => this.handleApiChatCancel(params),
+      handleCompanionUiShardAction: (params) => this.handleCompanionUiShardAction(params),
+      handleShardOwner: (params) => this.handleShardOwner(params),
       handleApiTelemetryIngest: (params) => this.handleApiTelemetryIngest(params),
       handleApiHealth: () => this.handleApiHealth(),
       handleTurnPerformance: (params) => this.handleTurnPerformance(params),
@@ -1688,6 +1710,24 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       throw new Error('No api.chat.cancel handler registered');
     }
     return await this.apiChatCancelHandler(params);
+  }
+
+  private async handleCompanionUiShardAction(
+    params: ApiCompanionUiShardActionRpcParams,
+  ): Promise<ApiCompanionUiShardActionRpcResult> {
+    if (!this.companionUiShardActionHandler) {
+      throw new Error('No api.companion-ui.shard.action handler registered');
+    }
+    return await this.companionUiShardActionHandler(params);
+  }
+
+  private async handleShardOwner(
+    params: ApiShardOwnerRpcParams,
+  ): Promise<ApiShardOwnerRpcResult> {
+    if (!this.shardOwnerHandler) {
+      throw new Error('No shard.directory.owner handler registered');
+    }
+    return await this.shardOwnerHandler(params);
   }
 
   private async handleApiTelemetryIngest(

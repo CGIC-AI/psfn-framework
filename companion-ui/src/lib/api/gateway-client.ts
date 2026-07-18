@@ -23,6 +23,10 @@ import {
   parseGatewayEvent,
   parseGatewayResult,
   parseInterruptResult,
+  parseShardAgentResponse,
+  parseShardDirectory,
+  parseShardHistory,
+  parseShardInterruptResult,
   validCompanionRequestId,
   type AttachmentReady,
   type CompanionUiResource,
@@ -34,6 +38,20 @@ const SOCKET_CLOSED = 3;
 interface PendingAction {
   readonly resource: CompanionUiResource;
   readonly artifactId?: string;
+  readonly shardId?: string;
+  readonly interactionId?: string;
+}
+
+interface SendActionOptions {
+  readonly requestId?: string;
+  readonly artifactId?: string;
+  readonly shardId?: string;
+  readonly interactionId?: string;
+}
+
+interface ActiveInteraction {
+  readonly requestId: string;
+  readonly shardId?: string;
 }
 
 export interface CompanionGatewayClientOptions {
@@ -61,7 +79,8 @@ export class CompanionGatewayClient {
   private socket: SatelliteHubWebSocketLike | null = null;
   private state: SatelliteHubConnectionState = 'idle';
   private ready = false;
-  private activeInteractionRequestId: string | null = null;
+  private activeInteraction: ActiveInteraction | null = null;
+  private authorizedShardId: string | null = null;
   private session: SatelliteHubSession = {};
 
   constructor(private readonly options: CompanionGatewayClientOptions) {
@@ -136,7 +155,8 @@ export class CompanionGatewayClient {
         this.socket = null;
         this.ready = false;
         this.pending.clear();
-        this.activeInteractionRequestId = null;
+        this.activeInteraction = null;
+        this.authorizedShardId = null;
         this.session = {};
         this.setState('closed');
         if (!settled) settle(new Error('Companion gateway closed before attachment was ready'));
@@ -149,7 +169,8 @@ export class CompanionGatewayClient {
     this.socket = null;
     this.ready = false;
     this.pending.clear();
-    this.activeInteractionRequestId = null;
+    this.activeInteraction = null;
+    this.authorizedShardId = null;
     this.session = {};
     if (socket && socket.readyState !== SOCKET_CLOSED && socket.readyState !== SOCKET_CLOSING) {
       this.setState('closing');
@@ -162,22 +183,66 @@ export class CompanionGatewayClient {
   sendUserText(text: string): void {
     const content = text.trim();
     if (!content) throw this.emitLocalError('Typed message is empty', false);
-    const requestId = this.sendAction(
-      'conversation.interact',
-      'companion.interact',
-      { content },
-    );
-    this.activeInteractionRequestId = requestId;
+    const shardId = this.session.activeShardId;
+    if (shardId && shardId !== this.authorizedShardId) {
+      throw this.emitLocalError('Selected shard has not been reauthorized', true);
+    }
+    const requestId = shardId
+      ? this.sendAction(
+          'shards.interact',
+          'companion.interact',
+          { shardId, content },
+          { shardId },
+        )
+      : this.sendAction(
+          'conversation.interact',
+          'companion.interact',
+          { content },
+        );
+    this.activeInteraction = {
+      requestId,
+      ...(shardId ? { shardId } : {}),
+    };
     this.emitInbound({ type: 'message', data: { role: 'user', content, final: true } });
   }
 
   interrupt(): void {
-    const interactionId = this.activeInteractionRequestId;
-    if (!interactionId) return;
+    const interaction = this.activeInteraction;
+    if (!interaction) return;
+    const { requestId: interactionId, shardId } = interaction;
     this.sendAction(
-      'conversation.interrupt',
+      shardId ? 'shards.interrupt' : 'conversation.interrupt',
       'companion.interact',
-      { interactionId },
+      shardId ? { shardId, interactionId } : { interactionId },
+      {
+        ...(shardId ? { shardId } : {}),
+        interactionId,
+      },
+    );
+  }
+
+  refreshShards(): void {
+    this.sendAction('shards.list', 'companion.read', {});
+  }
+
+  selectShard(shardId: string | null): void {
+    if (shardId === null) {
+      delete this.session.activeShardId;
+      this.authorizedShardId = null;
+      this.emit('session', cloneGatewaySession(this.session));
+      return;
+    }
+    if (!this.session.shards?.some(entry => entry.shardId === shardId)) {
+      throw this.emitLocalError('Selected shard is not in the server directory', true);
+    }
+    this.session = { ...this.session, activeShardId: shardId };
+    this.authorizedShardId = null;
+    this.emit('session', cloneGatewaySession(this.session));
+    this.sendAction(
+      'shards.history',
+      'companion.read',
+      { shardId },
+      { shardId },
     );
   }
 
@@ -186,7 +251,12 @@ export class CompanionGatewayClient {
   }
 
   sendArtifactPreviewRequest(requestId: string, artifactId: string): void {
-    this.sendAction('artifact.preview', 'artifacts.read', { id: artifactId }, requestId, artifactId);
+    this.sendAction(
+      'artifact.preview',
+      'artifacts.read',
+      { id: artifactId },
+      { requestId, artifactId },
+    );
   }
 
   sendTouchInteraction(interaction: TouchInteraction): void {
@@ -199,21 +269,25 @@ export class CompanionGatewayClient {
 
   private sendAction(
     resource: CompanionUiResource,
-    action: 'companion.interact' | 'confirmations.resolve' | 'artifacts.read',
+    action: 'companion.read' | 'companion.interact' | 'confirmations.resolve' | 'artifacts.read',
     body: Record<string, unknown>,
-    suppliedRequestId?: string,
-    artifactId?: string,
+    options: SendActionOptions = {},
   ): string {
     const socket = this.socket;
     if (!this.ready || !socket || socket.readyState !== SOCKET_OPEN) {
       throw this.emitLocalError('Companion gateway is not ready', false);
     }
-    const requestId = suppliedRequestId ?? this.requestIdFactory();
+    const requestId = options.requestId ?? this.requestIdFactory();
     if (!validCompanionRequestId(requestId) || this.pending.has(requestId)) {
       throw this.emitLocalError('Companion request identifier is invalid', false);
     }
     const frame = { schemaVersion: 1, requestId, action, resource, body };
-    this.pending.set(requestId, { resource, ...(artifactId ? { artifactId } : {}) });
+    this.pending.set(requestId, {
+      resource,
+      ...(options.artifactId ? { artifactId: options.artifactId } : {}),
+      ...(options.shardId ? { shardId: options.shardId } : {}),
+      ...(options.interactionId ? { interactionId: options.interactionId } : {}),
+    });
     try {
       socket.send(JSON.stringify(frame));
     } catch (error) {
@@ -268,6 +342,7 @@ export class CompanionGatewayClient {
       ...(ready.place ? { place: { id: ready.place.id, name: ready.place.label } } : {}),
       capabilities,
       eventCapabilities: [...ready.eventCapabilities],
+      canListShards: ready.telemetryScopes.includes('status'),
     };
     this.ready = true;
     this.setState('ready');
@@ -283,21 +358,103 @@ export class CompanionGatewayClient {
           this.failProtocol('Companion response was malformed');
           return;
         }
-        if (pending.resource === 'conversation.interact' && this.activeInteractionRequestId === requestId) {
-          this.activeInteractionRequestId = null;
+        if (pending.resource === 'conversation.interact'
+          && this.activeInteraction?.requestId === requestId
+          && this.activeInteraction.shardId === undefined) {
+          this.activeInteraction = null;
         }
-        if (response.content) {
+        if (response.content
+          && (pending.resource !== 'conversation.interact' || !this.session.activeShardId)) {
           this.emitInbound({ type: 'message', data: { role: 'assistant', content: response.content, final: true } });
         }
         return;
       }
+      case 'shards.list': {
+        const shards = parseShardDirectory(result);
+        if (!shards) {
+          this.failProtocol('Shard directory was malformed');
+          return;
+        }
+        const activeStillListed = this.session.activeShardId
+          && shards.some(entry => entry.shardId === this.session.activeShardId);
+        this.session = {
+          ...this.session,
+          shards: [...shards],
+          ...(activeStillListed ? { activeShardId: this.session.activeShardId } : {}),
+        };
+        if (!activeStillListed) this.authorizedShardId = null;
+        this.emit('session', cloneGatewaySession(this.session));
+        return;
+      }
+      case 'shards.history': {
+        const shardId = pending.shardId;
+        if (!shardId) {
+          this.failProtocol('Shard history lost its selector');
+          return;
+        }
+        const history = parseShardHistory(result, shardId);
+        if (!history) {
+          this.failProtocol('Shard history was malformed');
+          return;
+        }
+        if (this.session.activeShardId !== shardId) return;
+        this.authorizedShardId = shardId;
+        for (const message of history) {
+          this.emitInbound({
+            type: 'message',
+            data: { role: message.role, content: message.content, final: true },
+          });
+        }
+        return;
+      }
+      case 'shards.interact': {
+        const shardId = pending.shardId;
+        if (!shardId) {
+          this.failProtocol('Shard response lost its selector');
+          return;
+        }
+        const response = parseShardAgentResponse(result, shardId);
+        if (!response) {
+          this.failProtocol('Shard response was malformed');
+          return;
+        }
+        if (this.activeInteraction?.requestId === requestId
+          && this.activeInteraction.shardId === shardId) {
+          this.activeInteraction = null;
+        }
+        if (response.content && this.session.activeShardId === shardId
+          && this.authorizedShardId === shardId) {
+          this.emitInbound({
+            type: 'message',
+            data: { role: 'assistant', content: response.content, final: true },
+          });
+        }
+        return;
+      }
       case 'conversation.interrupt':
-        if (!parseInterruptResult(result, this.activeInteractionRequestId)) {
+        if (!parseInterruptResult(result, pending.interactionId ?? null)) {
           this.failProtocol('Interrupt result was malformed');
           return;
         }
-        this.activeInteractionRequestId = null;
+        if (this.activeInteraction?.requestId === pending.interactionId) {
+          this.activeInteraction = null;
+        }
         return;
+      case 'shards.interrupt': {
+        const shardId = pending.shardId;
+        if (!shardId
+          || !parseShardInterruptResult(result, shardId, pending.interactionId ?? null)) {
+          this.failProtocol('Shard interrupt result was malformed');
+          return;
+        }
+        const activeInteraction = this.activeInteraction;
+        if (activeInteraction
+          && activeInteraction.requestId === pending.interactionId
+          && activeInteraction.shardId === shardId) {
+          this.activeInteraction = null;
+        }
+        return;
+      }
       case 'confirmations.resolve': {
         const resolved = parseConfirmationResolution(result);
         if (!resolved) {

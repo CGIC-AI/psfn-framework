@@ -99,6 +99,62 @@
   text-transform: uppercase;
 }
 
+.shard-directory {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.65rem 0 0 1rem;
+  padding-left: 0.75rem;
+  border-left: 1px solid color-mix(in srgb, var(--accent, #9b7ac6) 38%, transparent);
+}
+
+.shard-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.2rem 0.6rem;
+  width: 100%;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid transparent;
+  border-radius: 0.7rem;
+  background: color-mix(in srgb, var(--surface, #201b29) 88%, transparent);
+  color: inherit;
+  text-align: left;
+}
+
+.shard-row.active {
+  border-color: var(--accent, #9b7ac6);
+}
+
+.shard-row:disabled {
+  opacity: 0.58;
+}
+
+.shard-row-label {
+  font-weight: 650;
+}
+
+.shard-availability {
+  font-size: 0.72rem;
+  text-transform: capitalize;
+}
+
+.shard-availability.available {
+  color: #78d6a4;
+}
+
+.shard-availability.starting,
+.shard-availability.degraded {
+  color: #e2bd78;
+}
+
+.shard-purpose,
+.shard-empty {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text-muted, #aaa1b4);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
 .companion-grid .approval-toast {
   width: 100%;
   box-shadow: none;

@@ -152,6 +152,8 @@ export interface HubStreamClientLike {
   sendApprovalDecision(id: string, decision: 'approve' | 'deny'): void;
   sendArtifactPreviewRequest(requestId: string, artifactId: string): void;
   sendTouchInteraction(interaction: TouchInteraction): void;
+  refreshShards?(): void;
+  selectShard?(shardId: string | null): void;
   snapshot(): SatelliteHubSnapshot;
 }
 
@@ -192,12 +194,20 @@ export function reduceHubStreamState(
   switch (event.type) {
     case 'client.state':
       return applyConnectionState(state, event.event.current, event.at);
-    case 'client.session':
+    case 'client.session': {
+      const shardSelectionChanged =
+        state.session?.activeShardId !== event.session.activeShardId;
       return {
         ...state,
         session: cloneSession(event.session) ?? null,
+        ...(shardSelectionChanged ? {
+          messages: [],
+          liveAssistant: null,
+          phase: 'idle' as const,
+        } : {}),
         updatedAt: event.at,
       };
+    }
     case 'client.error':
       return {
         ...state,
@@ -329,6 +339,17 @@ export class HubStreamStore {
 
   sendTouchInteraction(interaction: TouchInteraction): void {
     this.client.sendTouchInteraction(interaction);
+  }
+
+  refreshShards(): void {
+    this.client.refreshShards?.();
+  }
+
+  selectShard(shardId: string | null): void {
+    if (!this.client.selectShard) {
+      throw new Error('Shard selection is unavailable on this transport');
+    }
+    this.client.selectShard(shardId);
   }
 
   /**
@@ -720,6 +741,7 @@ function cloneSession(session: SatelliteHubSession | undefined): SatelliteHubSes
         }
       : undefined,
     place: session.place ? { ...session.place } : undefined,
+    shards: session.shards?.map(entry => ({ ...entry })),
   };
 }
 

@@ -62,7 +62,11 @@ import type {
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcParams,
   ApiChatCompletionRpcResult,
+  ApiCompanionUiShardActionRpcParams,
+  ApiCompanionUiShardActionRpcResult,
   ApiHealthRpcResult,
+  ApiShardOwnerRpcParams,
+  ApiShardOwnerRpcResult,
   ApiStreamDeltaNotification,
   ApiTelemetryIngestRpcParams,
   ApiTelemetryIngestRpcResult,
@@ -1082,6 +1086,11 @@ export interface AgentMethods {
   'voice.transcript.cancel': [VoiceStreamCancelParams, VoiceStreamCancelResult];
   'api.chat.completion': [ApiChatCompletionRpcParams, ApiChatCompletionRpcResult];
   'api.chat.cancel': [ApiChatCompletionCancelRpcParams, ApiChatCompletionCancelRpcResult];
+  'api.companion-ui.shard.action': [
+    ApiCompanionUiShardActionRpcParams,
+    ApiCompanionUiShardActionRpcResult,
+  ];
+  'shard.directory.owner': [ApiShardOwnerRpcParams, ApiShardOwnerRpcResult];
   'api.telemetry.ingest': [ApiTelemetryIngestRpcParams, ApiTelemetryIngestRpcResult];
   'api.health': [Record<string, never>, ApiHealthRpcResult];
   'telemetry.turn.performance': [TurnPerformanceIngestParams, TurnPerformanceIngestResult];

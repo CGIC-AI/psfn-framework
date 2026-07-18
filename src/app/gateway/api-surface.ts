@@ -545,10 +545,49 @@ export async function startOptionalGatewayApiServer(
           approvalOwner: {
             ownerOf: (id) => options.gateway.ownerOfConfirmation(id),
           },
+          shardDeployment: {
+            ownerOfLiveShard: async (shardId, parentCompanionId) => {
+              const result = await options.gateway.requestCompanionAgent<{
+                parentCompanionId?: string;
+              }>(
+                parentCompanionId,
+                'shard.directory.owner',
+                { shardId },
+              );
+              return result.parentCompanionId;
+            },
+          },
           dispatch: {
             dispatch: async input => {
               const frame = input.compiled.frame;
               const body = frame.body as Record<string, unknown>;
+              if (frame.resource === 'shards.list'
+                || frame.resource === 'shards.history'
+                || frame.resource === 'shards.interact'
+                || frame.resource === 'shards.interrupt') {
+                const result = await gatewayApiRuntime.handleCompanionUiShardAction(
+                  input.compiled.target.companionId,
+                  {
+                    principal: input.deviceTransport.principal,
+                    headers: { ...input.deviceTransport.headers },
+                    ...(input.deviceTransport.clientCert
+                      ? { clientCert: input.deviceTransport.clientCert }
+                      : {}),
+                    hubDevicePrincipal: input.attachment.deviceActor.principal,
+                    hubDeviceAttachment: input.attachment,
+                    companionUiCapability: {
+                      token: input.childAssertion.token,
+                      requestId: input.childAssertion.requestId,
+                      decisionId: input.childAssertion.decisionId,
+                      versions: input.childAssertion.versions,
+                      parent: input.childAssertion.parent,
+                      rawBodyBase64Url: Buffer.from(input.compiled.target.body).toString('base64url'),
+                    },
+                  },
+                );
+                if (!result.ok) throw new Error(result.error.type);
+                return result.response;
+              }
               const embodiment = await dispatchCompanionUiPrimaryEmbodiment({
                 compiled: input.compiled,
                 attachment: input.attachment,

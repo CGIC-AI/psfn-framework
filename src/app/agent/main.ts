@@ -911,6 +911,14 @@ async function main(): Promise<void> {
     externalChannelProfiles: buildExternalChannelProfiles(channelsConfig),
     satelliteRegistry: satelliteRegistryConfig,
     companionId: resolveCoreCompanionIdFromConfig(config),
+    shardDirectory: shardManager.shardDirectory,
+    ...(config.fleetAuthVerifier
+      ? {
+          requestCapabilityVerifier: createRequestCapabilityVerifier(
+            config.fleetAuthVerifier.requestCapabilities,
+          ),
+        }
+      : {}),
     onStreamDelta: (requestId, text) => gateway.notifyApiStreamDelta(requestId, text),
     // htm9.9: OpenAI-compatible `file` content parts run the shared
     // file-ingest pipeline with the agent-side (L1-only) intake screening.
@@ -923,6 +931,8 @@ async function main(): Promise<void> {
   });
   gateway.onApiChatCompletion((params) => apiBackend.handleChatCompletion(params));
   gateway.onApiChatCancel((params) => apiBackend.cancelChatCompletion(params));
+  gateway.onCompanionUiShardAction((params) => apiBackend.handleCompanionUiShardAction(params));
+  gateway.onShardOwner((params) => Promise.resolve(apiBackend.handleShardOwner(params)));
   gateway.onApiTelemetryIngest((params) => apiBackend.handleTelemetryIngest(params));
   gateway.onApiHealth(() => apiBackend.handleHealth());
   gateway.onTurnPerformance(async (event) => {

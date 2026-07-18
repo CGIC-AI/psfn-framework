@@ -273,6 +273,9 @@ export function App() {
         return false;
       }
       reconnectAttemptRef.current = 0;
+      if (store.snapshot().session?.canListShards) {
+        store.refreshShards();
+      }
       setConfigError(null);
       return true;
     } catch (error) {
@@ -438,7 +441,14 @@ export function App() {
         <span aria-label="Place authority">Place: {streamState.session?.place?.name ?? 'not available'}</span>
       </section>
 
-      <ThreadView streamState={streamState} />
+      <ThreadView
+        streamState={streamState}
+        targetLabel={streamState.session?.activeShardId
+          ? streamState.session.shards?.find(
+              shard => shard.shardId === streamState.session?.activeShardId,
+            )?.label
+          : undefined}
+      />
       {spriteEnabled && (
         <CompanionSprite state={spriteState} animated={spriteAnimations} label={identityLabel} onHeadpat={giveHeadpat} petted={spritePetted} />
       )}
@@ -462,6 +472,11 @@ export function App() {
         onSendText={sendUserText}
         onStopGeneration={() => storeRef.current?.interrupt()}
         voiceStopActive={voiceStopActive}
+        targetLabel={streamState.session?.activeShardId
+          ? streamState.session.shards?.find(
+              shard => shard.shardId === streamState.session?.activeShardId,
+            )?.label
+          : undefined}
       />
       {overlay && (
         <OverlayFrame onClose={() => setOverlay(null)} side={overlay === 'activity' ? 'left' : 'right'}>
@@ -507,16 +522,26 @@ export function App() {
             />
           ) : overlay === 'companions' ? (
             <CompanionSelectorPage
+              activeShardId={streamState.session?.activeShardId ?? null}
               activeCompanionId={fleet.activeCompanionId}
               approvals={approvals}
               companions={fleet.roster}
               connecting={connecting}
+              shards={streamState.session?.shards ?? []}
               onApprovalDecision={(id, decision) => { void decideApproval(id, decision); }}
               onClose={() => setOverlay(null)}
               onSelect={(companionId) => {
                 void fleet.select(companionId).then((selected) => {
                   if (selected) setOverlay(null);
                 });
+              }}
+              onSelectShard={(shardId) => {
+                try {
+                  storeRef.current?.selectShard(shardId);
+                  setOverlay(null);
+                } catch (error) {
+                  setConfigError(error instanceof Error ? error.message : 'Shard selection failed');
+                }
               }}
             />
           ) : (

@@ -5,13 +5,11 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentTool } from '../../boundary/pi-agent/index.js';
 import type { CapabilityTier, ShardToolsetConfig, SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { resolvePresenceSubjectId } from '../../core/agent/presence-metadata.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { LLMProviderPort, MemoryProvider } from '../../core/agent/contracts.js';
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
-import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import {
   createActiveEmanationSatellitePresencePort,
   type SatellitePresencePort,
@@ -21,7 +19,7 @@ import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
 import { normalizeCapabilityTier } from '../../system/capabilities/tiers.js';
 import type { DerivedShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
-import { SessionManager } from '../../core/session/manager.js';
+import type { SessionManager } from '../../core/session/manager.js';
 import type { ShardExecutionPort } from './port.js';
 import { chargeSurface, getRunChargeContext, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
 import type {
@@ -65,7 +63,10 @@ import {
 import { ShardToolSyncHelper } from './tool-sync.js';
 import type { CompressionGuidelineEvolutionPort } from '../../core/session/compression-guideline-evolution.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import type { CompanionId } from '../../shared/routing/companion-id.js';
+import { LiveShardDirectory } from './directory.js';
+import { createShardAgentRuntime } from './agent-runtime.js';
+import type { PolicyGovernedShardParentIcpDeliveryPort } from '../../shared/contracts/shard-parent-icp.js';
+import { LiveShardParentIcpRuntime } from './parent-icp-runtime.js';
 import type {
   PostgresShardSchemaBinding,
   PostgresShardSchemaLifecycle,
@@ -166,6 +167,11 @@ export interface ShardManagerDeps {
   compressionGuidelineEvolution?: CompressionGuidelineEvolutionPort | null;
   shardPostgresLifecycle?: PostgresShardSchemaLifecycle | null;
   /**
+   * Optional canonical ordinary-ICP ingress. No local or raw transport
+   * fallback is permitted when inner-addressed shard-parent delivery is used.
+   */
+  shardParentIcpDelivery?: PolicyGovernedShardParentIcpDeliveryPort | null;
+  /**
    * One authoritative capability owner read per launch. Callers must wire
    * CapabilityRuntime.snapshotOwnerGrant directly; sequenced tier/token
    * getters are not an atomic snapshot.
@@ -210,6 +216,8 @@ export class ShardManager implements ShardExecutionPort {
   private heartbeatStaleAfterMs: number;
   private heartbeatDisconnectAfterMs: number;
   private activeShards = new Map<string, ActiveShard>();
+  readonly shardDirectory: LiveShardDirectory;
+  readonly shardParentIcp: LiveShardParentIcpRuntime;
   private activeShardChannels = new Map<string, Set<string>>();
   private foldReviewController: ShardFoldReviewController | null;
 
@@ -249,6 +257,16 @@ export class ShardManager implements ShardExecutionPort {
       foldReviewController: this.foldReviewController,
       contextPackHelper: this.contextPackHelper,
     });
+    this.shardDirectory = new LiveShardDirectory({
+      parentCompanionId: () => resolveCoreCompanionIdFromConfig(deps.config),
+      refreshDeployments: () => this.refreshShardHealth(),
+      deployments: () => [...this.activeShards.values()],
+      intakeScreening: deps.sessionManager?.intakeScreening ?? null,
+    });
+    this.shardParentIcp = new LiveShardParentIcpRuntime(
+      this.shardDirectory,
+      deps.shardParentIcpDelivery ?? null,
+    );
     this.installAuditHooks();
   }
 
@@ -603,39 +621,43 @@ export class ShardManager implements ShardExecutionPort {
         task: shardConfig.task,
         lineage,
       };
-      // Each shard gets its own SessionManager wrapping the shared store
-      const sessionManager = new SessionManager(
-        this.deps.sessionStore,
-        runtimeConfig,
-        this.deps.eventBus,
-      );
-
       const systemPrompt = this.contextPackHelper.resolveSystemPrompt(shardConfig);
-
-      const agentLoop = new SubstrateAgent(
-        this.deps.eventBus,
-        this.deps.llmProvider,
-        sessionManager,
-        systemPrompt,
-        sanitizeCoreSubstrateConfig(runtimeConfig),
-        {
-          runtimeMode: this.deps.runtimeMode,
-          // Shards are ephemeral and intentionally own no durable post-turn lane.
-          backgroundWorkDisabled: true,
-        },
-      );
-      agentLoop.setCapabilityAccess(capabilityGrant.access);
-
-      // Shards can READ memory but don't extract or archive (ephemeral)
-      if (this.deps.memoryProvider && !shardConfig.contextPack) {
-        agentLoop.memoryProvider = this.deps.memoryProvider;
-      }
-
       // Shards don't recurse or self-escalate: we inject a tier-limited subset only.
       const injectedTools = this.resolveInjectedTools(shardId, shardMemoryReviewContext);
-      for (const tool of injectedTools) {
-        agentLoop.registerTool(tool);
-      }
+      const { agentLoop, sessionManager } = createShardAgentRuntime({
+        eventBus: this.deps.eventBus,
+        llmProvider: this.deps.llmProvider,
+        sessionStore: this.deps.sessionStore,
+        runtimeConfig,
+        systemPrompt,
+        runtimeMode: this.deps.runtimeMode,
+        capabilityAccess: capabilityGrant.access,
+        memoryProvider: this.deps.memoryProvider,
+        exposeMemory: !shardConfig.contextPack,
+        tools: injectedTools,
+      });
+      const chatChannelId = `${channelId}:human`;
+      const chatTools = this.resolveInjectedTools(shardId, {
+        channelId: chatChannelId,
+        task: shardConfig.task,
+        lineage,
+      });
+      const { agentLoop: chatAgentLoop } = createShardAgentRuntime({
+        eventBus: this.deps.eventBus,
+        llmProvider: this.deps.llmProvider,
+        sessionStore: this.deps.sessionStore,
+        runtimeConfig,
+        systemPrompt: `${systemPrompt}\n\nYou are responding in a direct human-to-shard thread. Stay within this shard's assigned remit and do not impersonate the parent companion.`,
+        runtimeMode: this.deps.runtimeMode,
+        capabilityAccess: capabilityGrant.access,
+        memoryProvider: this.deps.memoryProvider,
+        exposeMemory: !shardConfig.contextPack,
+        tools: chatTools,
+      });
+      this.shardDirectory.register(shardId, {
+        agentLoop: chatAgentLoop,
+        channelId: chatChannelId,
+      });
       this.auditTrail?.append('shard.tools.injected', {
         shardId,
         tier: capabilityGrant.access.getTier(),
@@ -1135,6 +1157,7 @@ export class ShardManager implements ShardExecutionPort {
 
   private releaseActiveShard(shardId: string, channelId: string): void {
     const deleted = this.activeShards.delete(shardId);
+    this.shardDirectory.release(shardId);
     this.unregisterActiveShardChannel(channelId, shardId);
     if (!deleted) {
       return;

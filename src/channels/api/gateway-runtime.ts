@@ -4,9 +4,11 @@ import type {
   ApiHealthResponse,
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcResult,
+  ApiCompanionUiShardActionRpcResult,
   ApiHealthRpcResult,
   ApiHealthSubsystemStatus,
   ApiRuntimeChatRequest,
+  ApiCompanionUiShardActionRpcParams,
   ApiServerRuntime,
   ApiTelemetryIngestRpcResult,
 } from './types.js';
@@ -25,7 +27,10 @@ export class GatewayApiRuntime implements ApiServerRuntime {
   private readonly chatRequestTimeoutMs: number;
 
   constructor(
-    private readonly gateway: Pick<GatewayServer, 'requestAgent' | 'subscribeApiStream'>,
+    private readonly gateway: Pick<
+      GatewayServer,
+      'requestAgent' | 'requestCompanionAgent' | 'subscribeApiStream'
+    >,
     options: GatewayApiRuntimeOptions = {},
   ) {
     this.chatRequestTimeoutMs = normalizeGatewayChatRequestTimeoutMs(
@@ -104,6 +109,19 @@ export class GatewayApiRuntime implements ApiServerRuntime {
       }
       unsubscribe();
     }
+  }
+
+  async handleCompanionUiShardAction(
+    companionId: string,
+    input: Omit<ApiCompanionUiShardActionRpcParams, 'requestId'>,
+  ): Promise<ApiCompanionUiShardActionRpcResult> {
+    const requestId = `companion-ui-shard-${Date.now()}-${++this.requestCounter}`;
+    return await this.gateway.requestCompanionAgent<ApiCompanionUiShardActionRpcResult>(
+      companionId,
+      'api.companion-ui.shard.action',
+      { ...input, requestId },
+      this.chatRequestTimeoutMs,
+    );
   }
 }
 

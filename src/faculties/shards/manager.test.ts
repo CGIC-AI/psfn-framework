@@ -1091,6 +1091,136 @@ describe('ShardManager', () => {
     expect(result.capabilities).toContain('general');
   });
 
+  it('exposes only the exact parent live directory and routes direct chat through the shard ingress', async () => {
+    mockShardDelayMs = 80;
+    mockShardContent = 'bounded shard reply';
+    const parentSessionManager = new SessionManager(sessionStore, TEST_CONFIG, eventBus);
+    parentSessionManager.intakeScreening = {
+      mode: 'enforce',
+      screenSync: vi.fn((text: string) => ({
+        action: text.includes('Bearer')
+          ? 'sanitize'
+          : 'pass',
+        report: {
+          sanitizedText: text.replace(/Bearer\s+\S+/gu, '[REDACTED:credential]'),
+          scannerErrors: [],
+          riskLabels: text.includes('Bearer')
+            ? ['secrets/credential_material']
+            : [],
+        },
+      } as any)),
+    };
+    const deliverOrdinaryIcp = vi.fn(async () => {});
+    const manager = createTestShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      sessionManager: parentSessionManager,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+      shardParentIcpDelivery: { deliverOrdinaryIcp },
+    });
+    const parentCompanionId = createCompanionId('companion-test');
+    const pending = manager.spawn({
+      name: 'research shard',
+      task: 'Use Bearer eyJprivate against a private partner record',
+      maxTurns: 2,
+    });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const directory = manager.shardDirectory.listShards(parentCompanionId);
+    expect(directory).toHaveLength(1);
+    expect(directory[0]).toMatchObject({
+      label: 'research shard',
+      purpose: 'Task details withheld',
+    });
+    const shardId = directory[0]!.shardId;
+    expect(manager.shardDirectory.ownerOfLiveShard(shardId)).toBe(parentCompanionId);
+    expect(() => manager.shardDirectory.listShards(
+      createCompanionId('another-parent'),
+    )).toThrow(/parent binding denied/u);
+    await manager.shardParentIcp.sendShardParentIcp(shardId, 'I need parent guidance');
+    expect(deliverOrdinaryIcp).toHaveBeenCalledTimes(1);
+    expect(deliverOrdinaryIcp).toHaveBeenCalledWith({
+      schemaVersion: 1,
+      routingCompanionId: parentCompanionId,
+      lineage: { parentCompanionId, shardId },
+      direction: 'shard_to_parent',
+      content: 'I need parent guidance',
+    });
+    await expect(manager.shardParentIcp.sendShardParentIcp('foreign-shard', 'do not route'))
+      .rejects.toThrow(/unavailable or foreign/u);
+
+    const attachment = {
+      attachmentId: '11111111-1111-4111-8111-111111111111',
+      disposition: 'created' as const,
+      deviceActor: {
+        kind: 'hub_device' as const,
+        principal: { companionId: parentCompanionId },
+        connectionId: 'connection-1',
+      },
+      actor: {
+        kind: 'human' as const,
+        principalId: 'human-1',
+        companionId: parentCompanionId,
+        providerSubject: { provider: 'discord' as const, subjectId: '123456789012345678' },
+        contact: { bindingId: 'binding-1', contactId: 'contact-1', bindingVersion: 1 },
+        operator: { grantId: 'grant-1', role: 'member' as const, grantVersion: 1 },
+        session: { recordId: 'session-1', authorityGeneration: 1, globalAuthEpoch: 1 },
+      },
+      channel: { source: 'server' as const, id: 'hub-device:test', companionId: parentCompanionId },
+    } as any;
+    const response = await manager.shardDirectory.sendShardChat({
+      parentCompanionId,
+      shardId,
+      requestId: 'direct-1',
+      content: 'Report your bounded finding',
+      attachment,
+    });
+    expect(response).toMatchObject({
+      content: 'bounded shard reply',
+      attribution: { parentCompanionId, shardId },
+    });
+    expect(response.channelId).toBe(`shard:${shardId}:human`);
+    expect(deliverOrdinaryIcp).toHaveBeenCalledTimes(1);
+    expect(manager.shardDirectory.readShardChatHistory(parentCompanionId, shardId)).toMatchObject([
+      { role: 'user', content: 'Report your bounded finding', attribution: { shardId } },
+      { role: 'assistant', content: 'bounded shard reply', attribution: { shardId } },
+    ]);
+    expect(() => manager.shardDirectory.readShardChatHistory(
+      createCompanionId('another-parent'),
+      shardId,
+    )).toThrow(/parent binding denied/u);
+
+    await pending;
+    expect(manager.shardDirectory.ownerOfLiveShard(shardId)).toBeUndefined();
+    expect(() => manager.shardDirectory.readShardChatHistory(parentCompanionId, shardId))
+      .toThrow(/unavailable/u);
+    await expect(manager.shardParentIcp.sendShardParentIcp(shardId, 'stale delivery'))
+      .rejects.toThrow(/unavailable or foreign/u);
+  });
+
+  it('fails closed when shard-parent ICP has no policy-governed ordinary ingress', async () => {
+    mockShardDelayMs = 40;
+    const manager = createTestShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+    });
+    const pending = manager.spawn({ name: 'bounded', task: 'Bounded work' });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const [shard] = manager.getActiveShards();
+    expect(shard).toBeDefined();
+    await expect(manager.shardParentIcp.sendShardParentIcp(shard!.id, 'status'))
+      .rejects.toThrow(/no policy-governed ordinary ICP ingress/u);
+    await pending;
+  });
+
   it('fails closed when required shard capabilities are missing', async () => {
     const manager = createTestShardManager({
       eventBus,

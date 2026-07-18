@@ -22,6 +22,7 @@ import {
 } from '../../../shared/cache/redis-cache.js';
 import { SessionManager } from '../../../core/session/manager.js';
 import type { CompressionGuidelineEvolutionPort } from '../../../core/session/compression-guideline-evolution.js';
+import type { PolicyGovernedShardParentIcpDeliveryPort } from '../../../shared/contracts/shard-parent-icp.js';
 import { UserContinuityStore } from '../../../core/session/continuity.js';
 import {
   createDisabledCrossChannelContinuityPort,
@@ -525,6 +526,7 @@ export interface ToolRuntimeOptions {
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
   executionPort?: SandboxExecutionPort | null;
   compressionGuidelineEvolution?: CompressionGuidelineEvolutionPort | null;
+  shardParentIcpDelivery?: PolicyGovernedShardParentIcpDeliveryPort | null;
 }
 
 export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExecutionPort {
@@ -563,6 +565,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     foldReviewController,
     compressionGuidelineEvolution: options.compressionGuidelineEvolution ?? undefined,
     shardPostgresLifecycle,
+    shardParentIcpDelivery: options.shardParentIcpDelivery ?? null,
     snapshotParentCapabilityGrant: options.snapshotParentCapabilityGrant,
   });
   const subagentFaculty = new SubagentFaculty({

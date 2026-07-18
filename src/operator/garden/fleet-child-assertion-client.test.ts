@@ -93,7 +93,7 @@ function exchangeResponse(bodyValue: BodyInit | null | undefined, override: Reco
 }
 
 function exchange(fetchImpl: typeof fetch) {
-  return createGardenFleetChildAssertionClient('http://127.0.0.1:10000', fetchImpl).exchange({
+  return createGardenFleetChildAssertionClient('http://127.0.0.1:10000/v1', fetchImpl).exchange({
     parentToken: token,
     parentContext: { requestId, decisionId, versions: VERSIONS },
     parentVerified,
@@ -103,6 +103,17 @@ function exchange(fetchImpl: typeof fetch) {
 }
 
 describe('createGardenFleetChildAssertionClient', () => {
+  it('appends the route to a /v1 base without duplicating the version segment', async () => {
+    // GATEWAY_OPERATOR_API_BASE_URL ends in /v1 in both the Helm chart and the
+    // local launcher; the gateway serves /v1/internal/fleet-auth/child-assertions.
+    let requestedUrl: string | undefined;
+    await exchange(async (input, init) => {
+      requestedUrl = String(input);
+      return exchangeResponse(init?.body);
+    });
+    expect(requestedUrl).toBe('http://127.0.0.1:10000/v1/internal/fleet-auth/child-assertions');
+  });
+
   it('accepts only a child response bound to the selected companion, target, and parent', async () => {
     const child = await exchange(async (_input, init) => (
       exchangeResponse(init?.body)

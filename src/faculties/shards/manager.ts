@@ -19,12 +19,14 @@ import {
 } from '../../core/agent/satellite-adapter-port.js';
 import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
 import { normalizeCapabilityTier } from '../../system/capabilities/tiers.js';
+import type { DerivedShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import { SessionManager } from '../../core/session/manager.js';
 import type { ShardExecutionPort } from './port.js';
 import { chargeSurface, getRunChargeContext, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
 import type {
   ShardConfig,
+  ShardCapabilityGrantEvidence,
   ShardHealthState,
   ShardLifecycleState,
   ShardResult,
@@ -68,6 +70,12 @@ import type {
   PostgresShardSchemaBinding,
   PostgresShardSchemaLifecycle,
 } from '../../persistence/postgres/shard-schema-lifecycle.js';
+import {
+  cloneShardCapabilityGrantEvidence,
+  resolveShardLaunchCapabilityGrant,
+  toShardCapabilityGrantEvidence,
+  type ParentCapabilityGrantSnapshotProvider,
+} from './launch-capabilities.js';
 
 const log = createComponentLogger('ShardManager');
 const DEFAULT_MAX_CONCURRENT = 5;
@@ -157,6 +165,12 @@ export interface ShardManagerDeps {
   foldReviewController?: ShardFoldReviewController | null;
   compressionGuidelineEvolution?: CompressionGuidelineEvolutionPort | null;
   shardPostgresLifecycle?: PostgresShardSchemaLifecycle | null;
+  /**
+   * One authoritative capability owner read per launch. Callers must wire
+   * CapabilityRuntime.snapshotOwnerGrant directly; sequenced tier/token
+   * getters are not an atomic snapshot.
+   */
+  snapshotParentCapabilityGrant: ParentCapabilityGrantSnapshotProvider;
 }
 
 export interface SatelliteDelegationRequest {
@@ -180,6 +194,7 @@ export interface ActiveShard {
   heartbeatDisconnectAfterMs: number;
   capabilities: string[];
   requiredCapabilities: string[];
+  capabilityGrant: ShardCapabilityGrantEvidence;
   failureReason?: string;
 }
 
@@ -269,6 +284,10 @@ export class ShardManager implements ShardExecutionPort {
     const channelId = `shard:${shardId}`;
     const coreCompanionId = resolveCoreCompanionIdFromConfig(this.deps.config);
     const coreCompanionName = resolveCompanionNameFromConfig(this.deps.config);
+    const capabilityGrant = resolveShardLaunchCapabilityGrant(
+      coreCompanionId,
+      this.deps.snapshotParentCapabilityGrant,
+    );
     const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
     const shardPostgres = this.resolveShardPostgresBinding(coreCompanionId, shardId);
     const shardRuntimeConfig: SubstrateConfig = {
@@ -312,6 +331,7 @@ export class ShardManager implements ShardExecutionPort {
         baseMessage,
         lineage,
         shardRuntimeConfig,
+        capabilityGrant,
         shardPostgres,
       )
       : this.executeShard(
@@ -321,6 +341,7 @@ export class ShardManager implements ShardExecutionPort {
         baseMessage,
         lineage,
         shardRuntimeConfig,
+        capabilityGrant,
       );
     if (chargePolicy) {
       return runWithChargeContext({
@@ -355,6 +376,10 @@ export class ShardManager implements ShardExecutionPort {
     const routing = request.routing ?? request.message.routing?.wyoming;
     const shardId = `wyoming-shard-${randomUUID()}`;
     const coreCompanionId = resolveCoreCompanionIdFromConfig(this.deps.config);
+    const capabilityGrant = resolveShardLaunchCapabilityGrant(
+      coreCompanionId,
+      this.deps.snapshotParentCapabilityGrant,
+    );
     const shardCompanionId = deriveShardCompanionId(coreCompanionId, shardId);
     const shardPostgres = this.resolveShardPostgresBinding(coreCompanionId, shardId);
     const shardRuntimeConfig: SubstrateConfig = {
@@ -390,6 +415,7 @@ export class ShardManager implements ShardExecutionPort {
       siteId: routing?.siteId,
       satelliteId: routing?.satelliteId,
       presence: routing?.presence,
+      capabilityGrant: toShardCapabilityGrantEvidence(capabilityGrant),
     });
     const lineage = buildShardLineageEnvelope({
       kind: 'wyoming',
@@ -407,6 +433,7 @@ export class ShardManager implements ShardExecutionPort {
         request.message,
         lineage,
         shardRuntimeConfig,
+        capabilityGrant,
         shardPostgres,
       )
       : this.executeShard(
@@ -416,6 +443,7 @@ export class ShardManager implements ShardExecutionPort {
         request.message,
         lineage,
         shardRuntimeConfig,
+        capabilityGrant,
       );
 
     try {
@@ -437,6 +465,7 @@ export class ShardManager implements ShardExecutionPort {
         connectionId: routing?.connectionId,
         sessionId: routing?.sessionId,
         turnId: routing?.turnId,
+        capabilityGrant: toShardCapabilityGrantEvidence(capabilityGrant),
       });
       return result;
     } catch (error) {
@@ -450,6 +479,7 @@ export class ShardManager implements ShardExecutionPort {
         connectionId: routing?.connectionId,
         sessionId: routing?.sessionId,
         turnId: routing?.turnId,
+        capabilityGrant: toShardCapabilityGrantEvidence(capabilityGrant),
       });
       throw error;
     }
@@ -462,6 +492,7 @@ export class ShardManager implements ShardExecutionPort {
     baseMessage: SubstrateMessage,
     lineage: ShardResult['lineage'],
     runtimeConfig: SubstrateConfig,
+    capabilityGrant: DerivedShardCapabilityGrant,
     shardPostgres?: PostgresShardSchemaBinding,
   ): Promise<ShardResult> {
     this.refreshShardHealth();
@@ -504,6 +535,7 @@ export class ShardManager implements ShardExecutionPort {
       shardConfig.heartbeatDisconnectAfterMs,
       heartbeatStaleAfterMs,
     );
+    const capabilityGrantEvidence = toShardCapabilityGrantEvidence(capabilityGrant);
 
     chargeSurface('shardLaunch', {
       details: {
@@ -530,6 +562,7 @@ export class ShardManager implements ShardExecutionPort {
       heartbeatDisconnectAfterMs,
       capabilities,
       requiredCapabilities,
+      capabilityGrant: capabilityGrantEvidence,
     });
     this.registerActiveShardChannel(channelId, shardId);
     this.auditTrail?.append('shard.lifecycle.transition', {
@@ -547,6 +580,7 @@ export class ShardManager implements ShardExecutionPort {
       channelId,
       capabilities,
       requiredCapabilities,
+      capabilityGrant: capabilityGrantEvidence,
     });
     let shardPostgresPrepared = false;
     let executionFailure: Error | undefined;
@@ -590,6 +624,7 @@ export class ShardManager implements ShardExecutionPort {
           backgroundWorkDisabled: true,
         },
       );
+      agentLoop.setCapabilityAccess(capabilityGrant.access);
 
       // Shards can READ memory but don't extract or archive (ephemeral)
       if (this.deps.memoryProvider && !shardConfig.contextPack) {
@@ -603,8 +638,10 @@ export class ShardManager implements ShardExecutionPort {
       }
       this.auditTrail?.append('shard.tools.injected', {
         shardId,
-        tier: this.resolveCapabilityTier(),
+        tier: capabilityGrant.access.getTier(),
+        grantedTokens: [...capabilityGrant.tokens],
         tools: injectedTools.map(tool => tool.name),
+        capabilityGrant: capabilityGrantEvidence,
       });
       this.transitionShardState(shardId, 'ready', 'agent_initialized');
       this.touchShardHeartbeat(shardId);
@@ -732,6 +769,7 @@ export class ShardManager implements ShardExecutionPort {
         ...(finishedShard?.failureReason ? { failureReason: finishedShard.failureReason } : {}),
         capabilities: [...capabilities],
         requiredCapabilities: [...requiredCapabilities],
+        capabilityGrant: capabilityGrantEvidence,
         lineage,
         ...(artifactReturn ? { artifactReturn } : {}),
       };
@@ -742,6 +780,7 @@ export class ShardManager implements ShardExecutionPort {
         turns: result.turns,
         lifecycleState: result.lifecycleState,
         health: result.health,
+        capabilityGrant: capabilityGrantEvidence,
       });
       await this.emitShardCompletionHandoff({
         shardConfig,
@@ -758,6 +797,7 @@ export class ShardManager implements ShardExecutionPort {
         status: 'failed',
         durationMs: Date.now() - startTime,
         error: msg,
+        capabilityGrant: capabilityGrantEvidence,
       });
       await this.emitShardFailureHandoff({
         shardId,
@@ -825,6 +865,7 @@ export class ShardManager implements ShardExecutionPort {
       ...shard,
       capabilities: [...shard.capabilities],
       requiredCapabilities: [...shard.requiredCapabilities],
+      capabilityGrant: cloneShardCapabilityGrantEvidence(shard.capabilityGrant),
     }));
   }
 

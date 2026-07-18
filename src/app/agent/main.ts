@@ -636,6 +636,7 @@ async function main(): Promise<void> {
     replConfig,
     shardAuditTrail: safeguardAuditTrail,
     getCapabilityTier: () => capabilityRuntime.getTier(),
+    snapshotParentCapabilityGrant: () => capabilityRuntime.snapshotOwnerGrant(),
     compositionalPolicy: config.compositionalPolicy,
     moduleInstallConfirmationQueue: cardProposalQueue,
     onModuleRegistryMutation: async (mutation) => {

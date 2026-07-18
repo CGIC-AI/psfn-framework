@@ -36,6 +36,7 @@ import {
 } from '../startup/composition/composition.js';
 import { createScriptedE2ELLMProvider } from './test-llm-provider.js';
 import { createProviderRuntimeServices } from '../../system/config/provider-runtime-factory.js';
+import { composeCapabilityRuntime } from '../startup/composition/capability-runtime.js';
 
 // ── Test utilities ──
 
@@ -107,6 +108,7 @@ async function main(): Promise<void> {
     const embeddingProvider = createProviderRuntimeServices({ config }).embeddingProvider;
 
     const memoryStore = await composeMemoryStoreAsync(config, embeddingProvider.dims);
+    const capabilityRuntime = composeCapabilityRuntime(config, process.env.CONFIG_DIR);
 
     // Agent loop
     const agentLoop = composeSubstrateAgent({
@@ -136,6 +138,7 @@ async function main(): Promise<void> {
       config,
       parentSystemPrompt: systemPrompt,
       replConfig: DEFAULT_REPL_CONFIG,
+      snapshotParentCapabilityGrant: () => capabilityRuntime.snapshotOwnerGrant(),
     });
 
     await eventBus.emit('system.init', {});

@@ -635,6 +635,11 @@ describe('AdminServer JSON API routes', () => {
       new MemoryWriter(memoryStorePort, testEmbeddingService),
     );
     shardManager = new ShardManager({
+      snapshotParentCapabilityGrant: () => ({
+        tier: 'custom',
+        customTokens: ['shard.spawn'],
+        grantedTokens: ['shard.spawn'],
+      }),
       eventBus,
       llmProvider: mockLlmProvider,
       sessionStore,

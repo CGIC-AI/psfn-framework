@@ -107,6 +107,11 @@ describe('createInProcessGardenAdminContract per-companion dataDir rooting (dnll
     scheduler.registerHeartbeat(() => {});
     const mockLlmProvider = { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProviderPort;
     const shardManager = new ShardManager({
+      snapshotParentCapabilityGrant: () => ({
+        tier: 'custom',
+        customTokens: ['shard.spawn'],
+        grantedTokens: ['shard.spawn'],
+      }),
       eventBus,
       llmProvider: mockLlmProvider,
       sessionStore,

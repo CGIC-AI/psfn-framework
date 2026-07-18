@@ -34,6 +34,22 @@ describe('FleetGardenTargetRegistry', () => {
     expect(() => new FleetGardenTargetRegistry([
       socketEntry(COMPANION_A, '   '),
     ])).toThrowError(/socket path/u);
+    expect(() => new FleetGardenTargetRegistry([{
+      companionId: COMPANION_A,
+      endpoint: {
+        mode: 'network',
+        httpUrl: new URL('https://agent-a.example.test:10055'),
+        wsUrl: new URL('wss://agent-a.example.test:10055'),
+        timeoutMs: 15_000,
+        peerAuthMode: 'mtls-spiffe',
+        tls: {
+          caPath: '/run/tls/ca.crt',
+          certPath: '/run/tls/tls.crt',
+          keyPath: '/run/tls/tls.key',
+          expectedPeerSpiffeUri: `spiffe://cluster.local/psfn/agent/${COMPANION_B}`,
+        },
+      },
+    }])).toThrowError(/SPIFFE identity does not match companion/u);
   });
 
   it('keeps routing identity immutable and derives the expected agent audience', () => {
@@ -53,6 +69,35 @@ describe('FleetGardenTargetRegistry', () => {
       (target as { companionId: string }).companionId = COMPANION_B;
     }).toThrowError(TypeError);
     expect(registry.resolve(COMPANION_A)).toBe(target);
+  });
+
+  it('does not expose mutable network URL objects from registry identity', () => {
+    const registry = new FleetGardenTargetRegistry([{
+      companionId: COMPANION_A,
+      endpoint: {
+        mode: 'network',
+        httpUrl: new URL('https://agent-a.example.test:10055'),
+        wsUrl: new URL('wss://agent-a.example.test:10055'),
+        timeoutMs: 15_000,
+        peerAuthMode: 'mtls-spiffe',
+        tls: {
+          caPath: '/run/tls/ca.crt',
+          certPath: '/run/tls/tls.crt',
+          keyPath: '/run/tls/tls.key',
+          expectedPeerSpiffeUri: `spiffe://cluster.local/psfn/agent/${COMPANION_A}`,
+        },
+      },
+    }]);
+    const endpoint = registry.resolve(COMPANION_A).endpoint;
+    if (endpoint.mode !== 'network') throw new Error('Expected network endpoint');
+
+    endpoint.httpUrl.hostname = 'attacker.invalid';
+    endpoint.wsUrl.pathname = '/alternate';
+
+    expect(registry.resolve(COMPANION_A).endpoint).toMatchObject({
+      httpUrl: new URL('https://agent-a.example.test:10055'),
+      wsUrl: new URL('wss://agent-a.example.test:10055'),
+    });
   });
 
   it('fails closed on unknown targets instead of synthesizing or falling back', () => {
@@ -121,5 +166,23 @@ describe('FleetGardenTargetRegistry', () => {
       },
     ]);
     expect(() => new FleetGardenTargetRegistry(entries)).not.toThrow();
+  });
+
+  it('validates fleet socket mode env and applies its configured timeout', () => {
+    const entries = deriveFleetGardenSocketTargets(
+      { companions: [{ companionId: COMPANION_A }] },
+      {
+        ADMIN_TRANSPORT_SOCKET: '/run/psfn/garden-admin.sock',
+        ADMIN_TRANSPORT_TIMEOUT_MS: '2500',
+      } as NodeJS.ProcessEnv,
+    );
+    expect(entries[0]?.endpoint.timeoutMs).toBe(2500);
+    expect(() => deriveFleetGardenSocketTargets(
+      { companions: [{ companionId: COMPANION_A }] },
+      {
+        ADMIN_TRANSPORT_MODE: 'socket',
+        ADMIN_TRANSPORT_URL: 'https://stale-network-endpoint.example.test',
+      } as NodeJS.ProcessEnv,
+    )).toThrow(/require ADMIN_TRANSPORT_MODE=network/u);
   });
 });

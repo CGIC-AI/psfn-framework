@@ -1,13 +1,24 @@
 import { randomUUID } from 'node:crypto';
 import type { CompiledGardenRequestTarget } from '../../boundary/fleet-auth/request-capability-target.js';
+import type { VerifiedRequestCapability } from '../../boundary/fleet-auth/request-capability.js';
 import type { GardenCapabilityContext } from './garden-admission.js';
-import { isRecord } from '../../shared/utils/types.js';
+import { hasExactKeys, isRecord } from '../../shared/utils/types.js';
 
 const CHILD_ASSERTION_PATH = '/v1/internal/fleet-auth/child-assertions';
 const CHILD_ASSERTION_PROTOCOL_BOUNDS = Object.freeze({
   requestTimeoutMs: 5_000,
   responseBytes: 128 * 1024,
 });
+const VERSION_KEYS = [
+  'authorityGeneration',
+  'globalAuthEpoch',
+  'sessionAuthnVersion',
+  'sessionAuthzVersion',
+  'bindingVersion',
+  'grantVersion',
+  'policyVersion',
+] as const;
+const PARENT_KEYS = ['audience', 'requestId', 'decisionId', 'jti', 'targetDigest'] as const;
 
 export interface GardenFleetChildAssertion {
   readonly token: string;
@@ -18,7 +29,9 @@ export interface GardenFleetChildAssertionClient {
   exchange(input: {
     readonly parentToken: string;
     readonly parentContext: GardenCapabilityContext;
+    readonly parentVerified: VerifiedRequestCapability;
     readonly target: CompiledGardenRequestTarget<Buffer>;
+    readonly expectedAgentAudience: `agent:${string}`;
   }): Promise<GardenFleetChildAssertion>;
 }
 
@@ -52,16 +65,50 @@ async function readBoundedJson(response: Response): Promise<unknown> {
   }
 }
 
-function parseResponse(value: unknown): GardenFleetChildAssertion {
+function parseResponse(
+  value: unknown,
+  expected: {
+    readonly requestId: string;
+    readonly target: CompiledGardenRequestTarget<Buffer>;
+    readonly parentVerified: VerifiedRequestCapability;
+    readonly expectedAgentAudience: `agent:${string}`;
+  },
+): GardenFleetChildAssertion {
+  const expectedParent = {
+    audience: expected.parentVerified.audience,
+    requestId: expected.parentVerified.requestId,
+    decisionId: expected.parentVerified.decisionId,
+    jti: expected.parentVerified.jti,
+    targetDigest: expected.parentVerified.targetDigest,
+  };
   if (!isRecord(value)
+    || !hasExactKeys(value, [
+      'schemaVersion',
+      'token',
+      'audience',
+      'requestId',
+      'decisionId',
+      'targetDigest',
+      'versions',
+      'parent',
+    ])
     || value.schemaVersion !== 1
     || typeof value.token !== 'string'
     || value.token.length < 1
     || value.token.length > 65_536
+    || value.audience !== expected.expectedAgentAudience
+    || value.requestId !== expected.requestId
+    || value.targetDigest !== expected.target.targetDigest
     || !isRecord(value.versions)
+    || !hasExactKeys(value.versions, VERSION_KEYS)
     || !isRecord(value.parent)
+    || !hasExactKeys(value.parent, PARENT_KEYS)
     || typeof value.requestId !== 'string'
-    || typeof value.decisionId !== 'string') {
+    || typeof value.decisionId !== 'string'
+    || value.decisionId.length < 1
+    || value.decisionId.length > 256
+    || VERSION_KEYS.some(key => value.versions[key] !== expected.parentVerified.versions[key])
+    || PARENT_KEYS.some(key => value.parent[key] !== expectedParent[key])) {
     throw new Error('Fleet child assertion response was invalid');
   }
   return Object.freeze({
@@ -82,10 +129,21 @@ export function createGardenFleetChildAssertionClient(
   const endpoint = endpointFromBaseUrl(baseUrl);
   return Object.freeze({
     exchange: async (
-      { parentToken, parentContext, target }:
+      { parentToken, parentContext, parentVerified, target, expectedAgentAudience }:
       Parameters<GardenFleetChildAssertionClient['exchange']>[0],
     ) => {
       if (parentContext.parent) throw new Error('Operator parent capability must not be a child');
+      if (parentVerified.parent
+        || parentVerified.companionId !== target.companionId
+        || parentVerified.audience !== `operator:${target.companionId}`
+        || expectedAgentAudience !== `agent:${target.companionId}`
+        || parentContext.requestId !== parentVerified.requestId
+        || parentContext.decisionId !== parentVerified.decisionId
+        || VERSION_KEYS.some(
+          key => parentContext.versions[key] !== parentVerified.versions[key],
+        )) {
+        throw new Error('Fleet child assertion input was not bound to one companion');
+      }
       const requestId = randomUUID();
       const wireTarget = {
         rawTarget: target.canonicalRequestTarget,
@@ -121,7 +179,12 @@ export function createGardenFleetChildAssertionClient(
       if (!response.ok) {
         throw new Error(`Fleet child assertion exchange failed with HTTP ${response.status}`);
       }
-      return parseResponse(payload);
+      return parseResponse(payload, {
+        requestId,
+        target,
+        parentVerified,
+        expectedAgentAudience,
+      });
     },
   });
 }

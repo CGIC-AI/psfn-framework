@@ -131,6 +131,11 @@ export class FleetGardenControlPlane {
     this.replay = options.replay;
   }
 
+  /** Registry identity owned by this control plane; used to prebuild exact transports. */
+  targetRegistry(): FleetGardenTargetRegistry {
+    return this.registry;
+  }
+
   /**
    * Admit one companion-scoped Garden request. The companion binding is
    * derived exclusively from the canonical route, verified against the signed

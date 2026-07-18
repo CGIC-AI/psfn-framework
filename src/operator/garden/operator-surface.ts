@@ -19,10 +19,7 @@ import { handleAdminRequest } from './server-request-routing.js';
 import { AdminServerTransport } from './server-transport.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { sendGardenLoginPage } from './auth-pages.js';
-import {
-  GardenAdminTransportProxy,
-  type GardenAdminTransportHealth,
-} from './transport-client.js';
+import type { FleetGardenTransportProxyPort } from './fleet-transport-client.js';
 import type { GardenAdminTransportClientEndpoint } from './transport-paths.js';
 import { validateAdminAuthStartupPolicy } from './auth-policy.js';
 import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
@@ -35,15 +32,10 @@ import {
   validateGardenRequestMetadata,
 } from '../../boundary/fleet-auth/request-capability-target.js';
 import { stripBrowserRequestCapabilityHeaders } from '../../boundary/fleet-auth/request-capability-transport.js';
-import {
-  admitFleetGardenRequest,
-  buildGardenCapabilityHeaders,
-  isLegacyTokenGardenAdmission,
-  readFleetGardenBody,
-  resolveGardenAdmissionMode,
-  type GardenAdmissionMode,
-} from './garden-admission.js';
+import { readFleetGardenBody } from './garden-admission.js';
 import type { GardenFleetChildAssertionClient } from './fleet-child-assertion-client.js';
+import { FleetGardenControlPlane } from './fleet-garden-control-plane.js';
+import { GardenOperatorRouting } from './garden-operator-routing.js';
 import {
   requireMtlsPeerFileConfig,
   verifyPeerCertificateSpiffeUri,
@@ -62,7 +54,12 @@ export interface GardenOperatorSurfaceConfig {
   token?: string;
   allowInsecureWithoutToken?: boolean;
   config: SubstrateConfig;
-  transportEndpoint: GardenAdminTransportClientEndpoint;
+  /** Fixed single-companion transport. Mutually exclusive with fleetControlPlane. */
+  transportEndpoint?: GardenAdminTransportClientEndpoint;
+  /** Immutable multi-companion admission and target registry. */
+  fleetControlPlane?: FleetGardenControlPlane;
+  /** Test seam; production constructs this from fleetControlPlane.targetRegistry(). */
+  fleetTransport?: FleetGardenTransportProxyPort;
   /**
    * Direct operator → gateway confirmation resolver. Only the independently
    * authenticated Garden operator process holds this; it carries the operator
@@ -76,6 +73,8 @@ export interface GardenOperatorSurfaceConfig {
   /** Required for a non-loopback fleet-auth Garden listener. */
   fleetSsoTls?: RequiredMtlsPeerFileConfig;
 }
+
+export type { FleetGardenTransportProxyPort } from './fleet-transport-client.js';
 
 /**
  * Extracts the operator ADMIN_TOKEN material (bearer header and/or `psfn_token`
@@ -98,30 +97,23 @@ function extractOperatorConfirmationAuth(req: IncomingMessage): ConfirmationOper
   };
 }
 
-interface GardenOperatorHealthPayload {
-  status: 'ok' | 'degraded';
-  uptime: number;
-  dependencies: {
-    adminTransport: GardenAdminTransportHealth;
-  };
-}
-
 export class GardenOperatorSurface implements Lifecycle {
   private readonly server: Server | HttpsServer;
   private readonly transport: AdminServerTransport;
-  private readonly proxy: GardenAdminTransportProxy;
-  private readonly admission: GardenAdmissionMode;
+  private readonly routing: GardenOperatorRouting;
 
   constructor(private readonly config: GardenOperatorSurfaceConfig) {
-    const modeSelection = {
-      fleetAuthVerifier: config.config.fleetAuthVerifier,
-      companionId: config.config.companionId,
-      audience: 'operator' as const,
-      token: config.token,
-    };
-    this.admission = resolveGardenAdmissionMode(modeSelection);
+    this.routing = new GardenOperatorRouting({
+      config: config.config,
+      ...(config.token ? { token: config.token } : {}),
+      ...(config.transportEndpoint ? { transportEndpoint: config.transportEndpoint } : {}),
+      ...(config.fleetControlPlane ? { fleetControlPlane: config.fleetControlPlane } : {}),
+      ...(config.fleetTransport ? { fleetTransport: config.fleetTransport } : {}),
+      ...(config.fleetChildAssertions
+        ? { fleetChildAssertions: config.fleetChildAssertions }
+        : {}),
+    });
     this.transport = new AdminServerTransport(log);
-    this.proxy = new GardenAdminTransportProxy(config.transportEndpoint);
     const handler = (req: IncomingMessage, res: ServerResponse) => this.handleRequest(req, res);
     this.server = config.fleetSsoTls
       ? createHttpsServer({
@@ -142,17 +134,17 @@ export class GardenOperatorSurface implements Lifecycle {
 
   async start(): Promise<void> {
     assertFleetAuthLegacySurfacesUnavailable({
-      fleetAuthEnabled: this.admission.kind === 'fleet-principal',
+      fleetAuthEnabled: this.routing.isFleetPrincipal(),
       processMode: 'operator',
       env: {
         ADMIN_PORT: String(this.config.port),
         ...(this.config.token ? { ADMIN_TOKEN: this.config.token } : {}),
         ...(this.config.allowInsecureWithoutToken ? { ADMIN_ALLOW_INSECURE: 'true' } : {}),
       },
-      principalAuthenticationWired: this.admission.kind === 'fleet-principal',
+      principalAuthenticationWired: this.routing.isFleetPrincipal(),
     });
     const host = this.config.host ?? '127.0.0.1';
-    if (this.admission.kind === 'fleet-principal') {
+    if (this.routing.isFleetPrincipal()) {
       const loopback = host === '127.0.0.1' || host === '::1' || host === 'localhost';
       if (!loopback && !this.config.fleetSsoTls) {
         throw new Error('Non-loopback fleet-auth Garden requires HTTPS mTLS with SPIFFE authorization');
@@ -160,7 +152,7 @@ export class GardenOperatorSurface implements Lifecycle {
       if (this.config.fleetSsoTls) {
         requireMtlsPeerFileConfig(this.config.fleetSsoTls, 'Fleet SSO Garden server TLS');
       }
-    } else if (isLegacyTokenGardenAdmission(this.admission)) {
+    } else if (this.routing.isLegacyToken()) {
       validateAdminAuthStartupPolicy({
         host,
         port: this.config.port,
@@ -190,7 +182,7 @@ export class GardenOperatorSurface implements Lifecycle {
         log.info('Garden operator surface listening', {
           host,
           port: this.config.port,
-          transportMode: this.config.transportEndpoint.mode,
+          transportMode: this.routing.transportMode(),
         });
         resolve();
       });
@@ -200,7 +192,7 @@ export class GardenOperatorSurface implements Lifecycle {
   async stop(): Promise<void> {
     return await new Promise((resolve, reject) => {
       this.server.closeAllConnections();
-      this.proxy.close(() => {
+      this.routing.close(() => {
         this.server.close((error) => {
           if (error) reject(error);
           else resolve();
@@ -214,7 +206,7 @@ export class GardenOperatorSurface implements Lifecycle {
       sendText(res, 403, 'Forbidden');
       return;
     }
-    if (this.admission.kind === 'fleet-principal') {
+    if (this.routing.isFleetPrincipal()) {
       void this.handleFleetRequest(req, res);
       return;
     }
@@ -228,7 +220,7 @@ export class GardenOperatorSurface implements Lifecycle {
   ): void {
     handleAdminRequest(req, res, {
       token,
-      checkAuth: this.admission.kind === 'fleet-principal'
+      checkAuth: this.routing.isFleetPrincipal()
         ? () => true
         : (request, response) => checkAdminRequestAuth(request, response, this.config.token),
       isGardenUiEnabled: () => this.transport.isGardenUiEnabled(),
@@ -242,8 +234,8 @@ export class GardenOperatorSurface implements Lifecycle {
           error: toErrorMessage(error),
         });
       },
-      trustedRequestCapability: this.admission.kind === 'fleet-principal',
-      requireAuthForPublicRoutes: this.admission.kind === 'fleet-principal',
+      trustedRequestCapability: this.routing.isFleetPrincipal(),
+      requireAuthForPublicRoutes: this.routing.isFleetPrincipal(),
     });
   }
 
@@ -253,7 +245,7 @@ export class GardenOperatorSurface implements Lifecycle {
       socket.destroy();
       return;
     }
-    if (this.admission.kind === 'fleet-principal') {
+    if (this.routing.isFleetPrincipal()) {
       void this.handleFleetUpgrade(req, socket, head);
       return;
     }
@@ -285,7 +277,7 @@ export class GardenOperatorSurface implements Lifecycle {
       return;
     }
 
-    this.proxy.handleTelemetryUpgrade(req, socket, head);
+    this.routing.handleTelemetryUpgrade(req, socket, head);
   }
 
   private async handleFleetRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -301,82 +293,34 @@ export class GardenOperatorSurface implements Lifecycle {
       return;
     }
     if (body === null) return;
-    const admitted = await admitFleetGardenRequest({
-      admission: this.admission as Extract<GardenAdmissionMode, { kind: 'fleet-principal' }>,
-      rawTarget: req.url ?? '/',
-      method: req.method ?? 'GET',
-      headers: req.headers,
+    await this.routing.handleFleetHttp({
+      req,
+      res,
       body,
+      dispatchLocal: innerTarget => this.dispatchInnerRequest(req, res, innerTarget),
     });
-    if (admitted.decision === 'deny') {
-      sendText(res, admitted.status, admitted.message);
-      return;
-    }
-    if (!admitted.target.canonicalPath.startsWith('/api/admin/')) {
-      this.dispatchRequest(req, res, undefined);
-      return;
-    }
-    if (!admitted.authority || !this.config.fleetChildAssertions) {
-      sendText(res, 503, 'Fleet child assertion exchange unavailable');
-      return;
-    }
-    try {
-      const child = await this.config.fleetChildAssertions.exchange({
-        parentToken: admitted.authority.token,
-        parentContext: admitted.authority.context,
-        target: admitted.target,
-      });
-      this.proxy.proxyBufferedApiRequest(
-        req,
-        res,
-        admitted.target.body,
-        buildGardenCapabilityHeaders(child),
-      );
-    } catch (error) {
-      log.warn('Fleet child assertion exchange failed', { error: toErrorMessage(error) });
-      sendText(res, 403, 'Fleet child assertion exchange denied');
-    }
   }
 
   private async handleFleetUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
-    const admitted = await admitFleetGardenRequest({
-      admission: this.admission as Extract<GardenAdmissionMode, { kind: 'fleet-principal' }>,
-      rawTarget: req.url ?? '/',
-      method: 'WS',
-      headers: req.headers,
-      body: Buffer.alloc(0),
-    });
-    if (admitted.decision === 'deny'
-      || !admitted.authority
-      || !admitted.verified
-      || !this.config.fleetChildAssertions) {
-      const status = admitted.decision === 'deny' ? admitted.status : 503;
-      socket.write(`HTTP/1.1 ${status} Unauthorized\r\n\r\n`);
-      socket.destroy();
-      return;
-    }
+    await this.routing.handleFleetUpgrade(req, socket, head);
+  }
+
+  private dispatchInnerRequest(
+    req: IncomingMessage,
+    res: ServerResponse,
+    innerTarget: string,
+  ): void {
+    const outerTarget = req.url;
+    req.url = innerTarget;
     try {
-      const child = await this.config.fleetChildAssertions.exchange({
-        parentToken: admitted.authority.token,
-        parentContext: admitted.authority.context,
-        target: admitted.target,
-      });
-      this.proxy.handleTelemetryUpgrade(
-        req,
-        socket,
-        head,
-        buildGardenCapabilityHeaders(child),
-        admitted.verified.expiresAt,
-      );
-    } catch (error) {
-      log.warn('Fleet websocket child assertion exchange failed', { error: toErrorMessage(error) });
-      socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
-      socket.destroy();
+      this.dispatchRequest(req, res, undefined);
+    } finally {
+      req.url = outerTarget;
     }
   }
 
   private authorizeFleetPeer(req: IncomingMessage): boolean {
-    if (this.admission.kind !== 'fleet-principal') return true;
+    if (!this.routing.isFleetPrincipal()) return true;
     if (!this.config.fleetSsoTls) {
       const address = req.socket.remoteAddress;
       return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
@@ -452,7 +396,7 @@ export class GardenOperatorSurface implements Lifecycle {
     }
 
     if (path === '/api/admin' || path.startsWith('/api/admin/')) {
-      this.proxy.proxyApiRequest(req, res);
+      this.routing.proxyApiRequest(req, res);
       return true;
     }
 
@@ -494,7 +438,7 @@ export class GardenOperatorSurface implements Lifecycle {
         // only agent-local confirmations are resolvable. The admin credential,
         // if any, is stripped before the request reaches the agent; operator
         // -owned entries stay pending.
-        this.proxy.proxyBufferedApiRequest(req, res, bodyBuffer);
+        this.routing.proxyBufferedApiRequest(req, res, bodyBuffer);
         return;
       }
 
@@ -504,7 +448,7 @@ export class GardenOperatorSurface implements Lifecycle {
           if (result.status === 'not_found') {
             // Not an operator-owned gateway confirmation — resolve the
             // agent-local entry. The proxy strips the admin credential.
-            this.proxy.proxyBufferedApiRequest(req, res, bodyBuffer);
+            this.routing.proxyBufferedApiRequest(req, res, bodyBuffer);
             return;
           }
           sendJson(res, 200, {
@@ -549,12 +493,26 @@ export class GardenOperatorSurface implements Lifecycle {
   }
 
   private async handleHealth(res: ServerResponse): Promise<void> {
-    const adminTransport = await this.proxy.probeHealth();
+    const probe = await this.routing.probe();
+    if (probe.kind === 'fleet') {
+      const { readiness } = probe;
+      if (res.writableEnded || res.destroyed) return;
+      sendJson(res, readiness.status === 'ready' ? 200 : 503, {
+        status: readiness.status === 'ready' ? 'ok' : 'degraded',
+        uptime: process.uptime(),
+        // /health is always-public. Probe every registered target internally,
+        // but never disclose fleet membership, endpoints, or raw failure
+        // reasons through this response.
+        dependencies: { adminTransports: { status: readiness.status } },
+      });
+      return;
+    }
+    const adminTransport = probe.health;
     if (res.writableEnded || res.destroyed) {
       return;
     }
 
-    const payload: GardenOperatorHealthPayload = {
+    const payload = {
       status: adminTransport.status === 'ok' ? 'ok' : 'degraded',
       uptime: process.uptime(),
       dependencies: {

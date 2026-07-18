@@ -7,7 +7,6 @@ import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../st
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { isExplicitTrue } from '../startup/support/env-parsing.js';
 import {
-  assertCompanionAdminTransportIsolation,
   resolveAdminTransportClientEndpoint,
 } from '../../operator/garden/transport-paths.js';
 import { GardenOperatorSurface } from '../../operator/garden/operator-surface.js';
@@ -16,6 +15,13 @@ import { createGatewayOperatorConfirmationClient } from '../startup/support/gate
 import { createGardenFleetChildAssertionClient } from '../../operator/garden/fleet-child-assertion-client.js';
 import { resolveFleetSsoGardenTls } from '../../boundary/fleet-auth/fleet-sso-transport.js';
 import { requireLifecycleKubernetesSettings } from '../../system/lifecycle/lifecycle-kubernetes-settings.js';
+import {
+  deriveFleetGardenTargets,
+  FleetGardenTargetRegistry,
+} from '../../operator/garden/fleet-garden-target-registry.js';
+import { FleetGardenControlPlane } from '../../operator/garden/fleet-garden-control-plane.js';
+import { AtomicRequestCapabilityReplayPort } from '../../operator/garden/atomic-request-capability-replay.js';
+import { createRequestCapabilityVerifier } from '../../boundary/fleet-auth/request-capability.js';
 
 const log = createComponentLogger('OperatorSurface');
 const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
@@ -31,9 +37,6 @@ async function main(): Promise<void> {
     env: process.env,
     principalAuthenticationWired: config.fleetAuthVerifier !== undefined,
   });
-  if (config.multiCompanion === true) {
-    assertCompanionAdminTransportIsolation(config.companionId ?? '', process.env);
-  }
   const adminPort = parseOptionalPositiveIntEnv(process.env.ADMIN_PORT);
   if (!adminPort) {
     throw new Error('ADMIN_PORT is required for the operator Garden surface');
@@ -46,13 +49,38 @@ async function main(): Promise<void> {
   const fleetSsoTls = config.fleetAuthVerifier
     ? resolveFleetSsoGardenTls(process.env)
     : undefined;
+  let fleetControlPlane: FleetGardenControlPlane | undefined;
+  if (config.multiCompanion === true) {
+    if (!config.companionFleet || !config.fleetAuthVerifier) {
+      throw new Error(
+        'Fleet Garden startup requires the complete companions registry and Fleet Auth verifier',
+      );
+    }
+    const registry = new FleetGardenTargetRegistry(
+      deriveFleetGardenTargets(config.companionFleet, process.env),
+    );
+    fleetControlPlane = new FleetGardenControlPlane({
+      registry,
+      verifier: createRequestCapabilityVerifier(
+        config.fleetAuthVerifier.requestCapabilities,
+      ),
+      replay: new AtomicRequestCapabilityReplayPort(),
+    });
+  }
+  if (fleetControlPlane && !operatorConfirmationBaseUrl) {
+    throw new Error(
+      'Fleet Garden startup requires GATEWAY_OPERATOR_API_BASE_URL for child assertions',
+    );
+  }
   const surface = new GardenOperatorSurface({
     port: adminPort,
     host: process.env.ADMIN_HOST || undefined,
     token: process.env.ADMIN_TOKEN || undefined,
     allowInsecureWithoutToken: isExplicitTrue(process.env.ADMIN_ALLOW_INSECURE),
     config,
-    transportEndpoint: resolveAdminTransportClientEndpoint(process.env),
+    ...(fleetControlPlane
+      ? { fleetControlPlane }
+      : { transportEndpoint: resolveAdminTransportClientEndpoint(process.env) }),
     ...(fleetSsoTls ? { fleetSsoTls } : {}),
     ...(operatorConfirmationBaseUrl
       ? {

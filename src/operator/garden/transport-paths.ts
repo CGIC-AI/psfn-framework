@@ -55,6 +55,75 @@ export type GardenAdminTransportServerEndpoint =
   | GardenAdminTransportSocketEndpoint
   | GardenAdminTransportNetworkServerEndpoint;
 
+/**
+ * Fleet network targets prove the same companion selected by capability
+ * admission. The trust domain may vary by deployment, but the workload path is
+ * canonical and cannot be supplied independently of the registry companion.
+ */
+export function assertFleetGardenAdminTransportEndpointIdentity(
+  companionId: string,
+  endpoint: GardenAdminTransportClientEndpoint,
+): void {
+  if (endpoint.mode === 'socket') return;
+  const expectedPath = `/psfn/agent/${companionId}`;
+  const identity = new URL(normalizeSpiffeUri(
+    endpoint.tls.expectedPeerSpiffeUri,
+    ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI_ENV,
+  ));
+  if (identity.pathname !== expectedPath) {
+    throw new Error(
+      `Fleet Garden admin transport SPIFFE identity does not match companion ${companionId}`,
+    );
+  }
+}
+
+/**
+ * Derive one Kubernetes admin Service and peer identity from the validated
+ * companion ID. ADMIN_TRANSPORT_URL supplies only the deployment-owned base
+ * service/domain/port; it is never a delimiter-packed target registry.
+ */
+export function resolveFleetGardenNetworkClientEndpoint(
+  companionId: string,
+  env: NodeJS.ProcessEnv = process.env,
+): GardenAdminTransportNetworkClientEndpoint {
+  const endpoint = resolveAdminTransportClientEndpoint(env);
+  if (endpoint.mode !== 'network') {
+    throw new Error('Fleet Garden network target derivation requires network transport mode');
+  }
+  const httpUrl = deriveFleetNetworkUrl(endpoint.httpUrl, companionId);
+  const wsUrl = deriveFleetNetworkUrl(endpoint.wsUrl, companionId);
+  const spiffeUri = new URL(endpoint.tls.expectedPeerSpiffeUri);
+  if (!/^\/psfn\/agent\/[^/]+$/u.test(spiffeUri.pathname)) {
+    throw new Error(
+      'Fleet Garden network peer SPIFFE URI must use /psfn/agent/<identity>',
+    );
+  }
+  spiffeUri.pathname = `/psfn/agent/${companionId}`;
+  const derived = {
+    ...endpoint,
+    httpUrl,
+    wsUrl,
+    tls: {
+      ...endpoint.tls,
+      expectedPeerSpiffeUri: spiffeUri.toString(),
+    },
+  };
+  assertFleetGardenAdminTransportEndpointIdentity(companionId, derived);
+  return derived;
+}
+
+function deriveFleetNetworkUrl(baseUrl: URL, companionId: string): URL {
+  const url = new URL(baseUrl.toString());
+  const labels = url.hostname.split('.');
+  const serviceLabel = `${labels[0]}-${companionId}`;
+  if (serviceLabel.length > 63 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/u.test(serviceLabel)) {
+    throw new Error('Fleet Garden derived admin transport Service label is invalid');
+  }
+  labels[0] = serviceLabel;
+  url.hostname = labels.join('.');
+  return url;
+}
+
 export function resolveAdminTransportSocketPath(
   env: NodeJS.ProcessEnv = process.env,
 ): string {

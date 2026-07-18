@@ -120,15 +120,28 @@ Tier switching (local lane): edit `capability-tier.json` in the shakedown `syste
 ### Matrix external-sink variables (apprentice + autonomous)
 
 The capability-gate matrix (`capability_refusal_matrix`) proves the `external.*`
-grants actually actuate by sending a live Discord message and a live email at the
-apprentice and autonomous tiers. Those probes are fail-closed and require three
-environment variables (nursery never sends externally, so it needs none):
+grants actually actuate by sending a live Discord message at the apprentice and
+autonomous tiers. Those probes are fail-closed and require three environment
+variables (nursery never sends externally, so it needs none):
 
 | Variable | Value | Purpose |
 | --- | --- | --- |
 | `PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED` | the literal `dedicated-test-sinks` | Operator attestation that the targets below are disposable test sinks. Any other value is rejected. |
 | `PSFN_MATRIX_DISCORD_TARGET` | a dedicated **test** Discord channel snowflake (17–20 digits) | Where the `external.discord` allow probe delivers. |
-| `PSFN_MATRIX_EMAIL_TARGET` | a dedicated **test** inbox address | Where the `external.email` allow probe delivers. |
+| `PSFN_MATRIX_EMAIL_TARGET` | a dedicated **test** inbox address | Still required (the fail-closed sink guard is unchanged), even though the email allow row is currently an eligibility-only exemption (see below). |
+
+**Email allow rows are an eligibility-only exemption (`psfn-framework-gvic`).**
+Production email dispatch is unimplemented — `src/core/tools/ntfy.ts` throws
+`email delivery is not wired` — so an apprentice/autonomous `external.email`
+ALLOW *live-dispatch* probe can never pass on any deployment. The matrix
+therefore downgrades the email ALLOW rows to **eligibility-only**: the production
+capability gate is exercised (proving the capability is granted) without
+executing the unimplemented dispatch, and the grid row carries a machine-readable
+`exemption: { reason: 'runtime_unimplemented', ref: 'psfn-framework-gvic' }` so
+the artifact shows it as a known gap, not coverage. Discord allow probes are
+unchanged (still live-dispatched), and `requireDedicatedExternalSinks` is not
+weakened (`PSFN_MATRIX_EMAIL_TARGET` is still validated). When email delivery is
+wired under `psfn-framework-gvic`, flip these rows back to live-dispatch.
 
 Two hard rules:
 

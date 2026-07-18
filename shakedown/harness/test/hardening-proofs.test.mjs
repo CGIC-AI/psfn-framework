@@ -85,6 +85,83 @@ test('model-lane attribution passes when every charged lane resolves to its owne
   );
 });
 
+test('model-lane attribution covers the interactive and background lanes together (osln)', () => {
+  assert.deepEqual(
+    validateModelLaneAttributionProof({
+      modelsConfig: modelsConfig(),
+      ledgerRows: ledgerRows(),
+      laneExpectations: [
+        { lane: 'interactive', purpose: 'chat' },
+        { lane: 'background', purpose: 'background' },
+      ],
+    }),
+    [],
+  );
+});
+
+test('model-lane attribution fails when the background lane routes to a non-owner model', () => {
+  const rows = ledgerRows();
+  // The background appraisal row is charged the chat slot's model — a routing bug.
+  rows[1].model = 'z-ai/glm-5';
+  rows[1].slot_key = 'primary';
+  const failures = validateModelLaneAttributionProof({
+    modelsConfig: modelsConfig(),
+    ledgerRows: rows,
+    laneExpectations: [{ lane: 'background', purpose: 'background' }],
+  });
+  assert.match(
+    failures.join('\n'),
+    /background lane routed to model z-ai\/glm-5 but the background owner slot resolves to deepseek\/deepseek-v3\.2/u,
+  );
+});
+
+test('model-lane attribution can scope an expectation to a single turn_id', () => {
+  const rows = ledgerRows();
+  rows[0].turn_id = 'turn-interactive';
+  rows[1].turn_id = 'turn-background';
+  // Turn-scoped interactive attribution: only the named turn's row is checked.
+  assert.deepEqual(
+    validateModelLaneAttributionProof({
+      modelsConfig: modelsConfig(),
+      ledgerRows: rows,
+      laneExpectations: [{ turnId: 'turn-interactive', purpose: 'chat' }],
+    }),
+    [],
+  );
+  // A turn with no matching ledger row fails closed.
+  assert.match(
+    validateModelLaneAttributionProof({
+      modelsConfig: modelsConfig(),
+      ledgerRows: rows,
+      laneExpectations: [{ turnId: 'turn-missing', purpose: 'chat' }],
+    }).join('\n'),
+    /spend ledger has no turn turn-missing row/u,
+  );
+  // A turn-scoped model drift fails closed and names the turn.
+  const drift = ledgerRows();
+  drift[0].turn_id = 'turn-interactive';
+  drift[0].model = 'z-ai/glm-5.1';
+  assert.match(
+    validateModelLaneAttributionProof({
+      modelsConfig: modelsConfig(),
+      ledgerRows: drift,
+      laneExpectations: [{ turnId: 'turn-interactive', purpose: 'chat' }],
+    }).join('\n'),
+    /turn turn-interactive routed to model z-ai\/glm-5\.1 but the chat owner slot resolves to z-ai\/glm-5/u,
+  );
+});
+
+test('model-lane attribution rejects an expectation with neither a lane nor a turnId', () => {
+  assert.match(
+    validateModelLaneAttributionProof({
+      modelsConfig: modelsConfig(),
+      ledgerRows: ledgerRows(),
+      laneExpectations: [{ purpose: 'chat' }],
+    }).join('\n'),
+    /must name a purpose and either a lane or a turnId/u,
+  );
+});
+
 test('model-lane attribution fails closed on empty ledger, unknown slot, and model drift', () => {
   assert.match(
     validateModelLaneAttributionProof({ modelsConfig: modelsConfig(), ledgerRows: [] }).join('\n'),

@@ -55,16 +55,63 @@ test('hardening catalog authors only the probe-supported hardening rows', () => 
   assert.ok(!ids.has('dnll_owner_migration'), 'DNLL migration is a staged session, not a case');
 });
 
-test('the backup round-trip case fails closed without the settings-save body env', async () => {
-  const cases = buildHardeningCases(context, services, {});
-  const backup = cases.find((entry) => entry.id === 'backup_encryption_roundtrip');
+// Services whose GET /api/admin/settings returns the supplied settings body,
+// recording every request so before()/derive assertions can inspect them.
+function settingsServices(getBody) {
+  const calls = [];
+  return {
+    calls,
+    adminBase: 'http://127.0.0.1:10154',
+    systemDataDir: '/round/system-data',
+    companionDataDir: '/round/companion-data',
+    readJsonIfExists: () => null,
+    fetchJson: async (url, init = {}) => {
+      calls.push({ url, method: init.method ?? 'GET', body: init.body ?? null });
+      if ((init.method ?? 'GET') === 'GET') {
+        return { ok: true, status: 200, body: getBody };
+      }
+      return { ok: true, status: 200, body: { ok: true } };
+    },
+  };
+}
+
+test('the backup round-trip case self-derives a harmless settings flip with no env', async () => {
+  const svc = settingsServices({ config: { sessionRestartBehavior: 'reuse_latest_session' } });
+  const backup = buildHardeningCases(context, svc, {}).find(
+    (entry) => entry.id === 'backup_encryption_roundtrip',
+  );
   assert.ok(backup);
-  // The route/method are pinned (PATCH /api/admin/settings); only the harmless
-  // payload is operator-supplied, and it is still fail-closed required.
+  const beforeChecks = await backup.before({ ctx: context });
+  // The route/method are pinned; only the harmless payload is self-derived — the
+  // opposite enum value for a companion-neutral session/UX-plumbing default.
+  assert.equal(beforeChecks.isOverride, false);
+  assert.deepEqual(JSON.parse(beforeChecks.saveBody), { sessionRestartBehavior: 'new_session' });
+  assert.deepEqual(beforeChecks.originals, { sessionRestartBehavior: 'reuse_latest_session' });
+  assert.ok(svc.calls.some((c) => c.method === 'GET' && c.url.endsWith('/api/admin/settings')),
+    'before() derives from a GET of the pinned settings route');
+});
+
+test('the backup round-trip case fails closed when the settings GET lacks the round-trip field', async () => {
+  const svc = settingsServices({ config: {} });
+  const backup = buildHardeningCases(context, svc, {}).find(
+    (entry) => entry.id === 'backup_encryption_roundtrip',
+  );
   await assert.rejects(
     () => backup.before({ ctx: context }),
-    /PSFN_SHAKEDOWN_SETTINGS_SAVE_BODY/u,
+    /sessionRestartBehavior/u,
   );
+});
+
+test('the backup round-trip case honors the optional settings-save body override', async () => {
+  const svc = settingsServices({ config: { sessionRestartBehavior: 'reuse_latest_session', heartbeatIntervalSeconds: 1 } });
+  const backup = buildHardeningCases(context, svc, {
+    PSFN_SHAKEDOWN_SETTINGS_SAVE_BODY: JSON.stringify({ heartbeatIntervalSeconds: 4242 }),
+  }).find((entry) => entry.id === 'backup_encryption_roundtrip');
+  const beforeChecks = await backup.before({ ctx: context });
+  assert.equal(beforeChecks.isOverride, true);
+  assert.deepEqual(JSON.parse(beforeChecks.saveBody), { heartbeatIntervalSeconds: 4242 });
+  // The override's original value is still captured for the idempotent restore.
+  assert.deepEqual(beforeChecks.originals, { heartbeatIntervalSeconds: 1 });
 });
 
 test('round-trip verify flags a no-op 2xx that does not reflect the change', async () => {
@@ -111,19 +158,42 @@ test('the backup case validateSideEffects flags a failed save or round-trip', ()
     (entry) => entry.id === 'backup_encryption_roundtrip',
   );
   assert.equal(typeof backup.validateSideEffects, 'function');
-  // A clean save that round-trips: no failures.
+  // A clean save that round-trips and restores: no failures.
   assert.deepEqual(
-    backup.validateSideEffects({ sideChecks: { backup: { save: { ok: true, roundTripVerified: true, roundTripMismatches: [] } } } }),
+    backup.validateSideEffects({ sideChecks: { backup: { save: { ok: true, roundTripVerified: true, roundTripMismatches: [], restored: true, restoreMismatches: [] } } } }),
     [],
   );
   // A 2xx that did not round-trip: flagged.
   const noopFailures = backup.validateSideEffects({
-    sideChecks: { backup: { save: { ok: true, roundTripVerified: false, roundTripMismatches: ["field 'x' did not round-trip"] } } },
+    sideChecks: { backup: { save: { ok: true, roundTripVerified: false, roundTripMismatches: ["field 'x' did not round-trip"], restored: true } } },
   });
   assert.ok(noopFailures.some((f) => /round-trip/.test(f)), 'a no-op save is a side-effect failure');
   // A non-2xx save: flagged.
   const badSaveFailures = backup.validateSideEffects({
-    sideChecks: { backup: { save: { ok: false, status: 500, roundTripVerified: false, roundTripMismatches: [] } } },
+    sideChecks: { backup: { save: { ok: false, status: 500, roundTripVerified: false, roundTripMismatches: [], restored: false } } },
   });
   assert.ok(badSaveFailures.some((f) => /did not succeed/.test(f)), 'a failed save is a side-effect failure');
+  // A save that round-tripped but left settings mutated (restore not confirmed): flagged.
+  const notRestored = backup.validateSideEffects({
+    sideChecks: { backup: { save: { ok: true, roundTripVerified: true, roundTripMismatches: [], restored: false, restoreMismatches: ['restore round-trip was not confirmed'] } } },
+  });
+  assert.ok(notRestored.some((f) => /were not restored/.test(f)), 'an unrestored settings change is a side-effect failure');
+});
+
+test('the backup case exposes an idempotent top-level cleanup', async () => {
+  const svc = settingsServices({ config: { sessionRestartBehavior: 'reuse_latest_session' } });
+  const backup = buildHardeningCases(context, svc, {}).find(
+    (entry) => entry.id === 'backup_encryption_roundtrip',
+  );
+  assert.equal(typeof backup.cleanup, 'function');
+  // Cleanup before before(): nothing derived, so it is a no-op.
+  const clean = await backup.cleanup();
+  assert.deepEqual(clean.cleanupErrors, []);
+  assert.equal(clean.cleanup.settings.alreadyClean, true);
+  // After before() derives originals, cleanup restores them via a PATCH.
+  await backup.before({ ctx: context });
+  const restored = await backup.cleanup();
+  assert.deepEqual(restored.cleanupErrors, []);
+  assert.ok(svc.calls.some((c) => c.method === 'PATCH' && c.url.endsWith('/api/admin/settings')),
+    'cleanup PATCHes the pinned settings route to restore the original value');
 });

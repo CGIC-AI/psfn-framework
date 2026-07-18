@@ -103,6 +103,11 @@ function normalizeLedgerRow(row) {
     chargeLane: pick(row, 'charge_lane', 'chargeLane'),
     chargeSurface: pick(row, 'charge_surface', 'chargeSurface'),
     purpose: pick(row, 'purpose', 'purpose'),
+    // Per-turn / per-session correlation columns (migrations.ts model_usage_events
+    // idx_model_usage_events_request / _session_time). Populated for
+    // operator_visible turns; 'unknown' for companion_private background rows.
+    turnId: pick(row, 'turn_id', 'turnId'),
+    sessionId: pick(row, 'session_id', 'sessionId'),
   };
 }
 
@@ -113,10 +118,16 @@ function normalizeLedgerRow(row) {
  * inputs:
  *   modelsConfig     — parsed models.json owner file.
  *   ledgerRows       — model_usage_events rows (snake or camel columns).
- *   laneExpectations — [{ lane, purpose }] pairs: every ledger row on `lane`
- *                      must have been charged the model the owner file assigns
- *                      to that purpose's primary slot. `purpose` resolves to a
- *                      model id via models.json — no model name is hardcoded.
+ *   laneExpectations — [{ lane|turnId, purpose }] entries: the rows they select
+ *                      must have been charged the model the owner file assigns to
+ *                      that purpose's primary slot. `purpose` resolves to a model
+ *                      id via models.json — no model name is hardcoded. Each entry
+ *                      scopes rows by EITHER `lane` (charge_lane match — used for
+ *                      the distinct 'background' lane) OR `turnId` (turn_id match —
+ *                      used to attribute a specific foreground turn without pulling
+ *                      in the whole interactive lane); `turnId` wins when both are
+ *                      present. osln scopes the query to the case's session so a
+ *                      lane match no longer sweeps in unrelated concurrent rows.
  */
 export function validateModelLaneAttributionProof({ modelsConfig, ledgerRows, laneExpectations = [] }) {
   const failures = [];
@@ -159,26 +170,34 @@ export function validateModelLaneAttributionProof({ modelsConfig, ledgerRows, la
 
   for (const expectation of asArray(laneExpectations)) {
     const lane = expectation?.lane;
+    const turnId = expectation?.turnId;
     const purpose = expectation?.purpose;
-    if (typeof lane !== 'string' || typeof purpose !== 'string') {
-      failures.push('lane expectation must name both a lane and a purpose');
+    const hasLane = typeof lane === 'string' && lane.length > 0;
+    const hasTurn = typeof turnId === 'string' && turnId.length > 0;
+    if (typeof purpose !== 'string' || (!hasLane && !hasTurn)) {
+      failures.push('lane expectation must name a purpose and either a lane or a turnId');
       continue;
     }
+    // turn_id wins so a specific foreground turn can be attributed without
+    // sweeping in every other row on its charge lane.
+    const scopeLabel = hasTurn ? `turn ${turnId}` : `${lane} lane`;
     const slotId = purposePrimary[purpose];
     if (!slotId || !slotCatalog[slotId]) {
-      failures.push(`models.json has no primary owner slot for purpose ${purpose} (lane ${lane})`);
+      failures.push(`models.json has no primary owner slot for purpose ${purpose} (${scopeLabel})`);
       continue;
     }
     const expectedModel = slotCatalog[slotId].model;
-    const laneRows = rows.filter((row) => row.chargeLane === lane);
-    if (laneRows.length === 0) {
-      failures.push(`spend ledger has no ${lane}-lane row to attribute against the ${purpose} owner slot`);
+    const scopedRows = hasTurn
+      ? rows.filter((row) => row.turnId === turnId)
+      : rows.filter((row) => row.chargeLane === lane);
+    if (scopedRows.length === 0) {
+      failures.push(`spend ledger has no ${scopeLabel} row to attribute against the ${purpose} owner slot`);
       continue;
     }
-    for (const row of laneRows) {
+    for (const row of scopedRows) {
       if (row.model !== expectedModel) {
         failures.push(
-          `${lane} lane routed to model ${String(row.model)} but the ${purpose} owner slot resolves to ${expectedModel}`,
+          `${scopeLabel} routed to model ${String(row.model)} but the ${purpose} owner slot resolves to ${expectedModel}`,
         );
       }
     }

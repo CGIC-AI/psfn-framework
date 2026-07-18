@@ -117,6 +117,33 @@ The full cross-product is not run. The standing simplification:
 
 Tier switching (local lane): edit `capability-tier.json` in the shakedown `system-data`, restart the runtime, run that tier's case subset. Back up the owner file before the sweep and restore it after (trap-on-exit); verify the restore happened before closing the round.
 
+### Matrix external-sink variables (apprentice + autonomous)
+
+The capability-gate matrix (`capability_refusal_matrix`) proves the `external.*`
+grants actually actuate by sending a live Discord message and a live email at the
+apprentice and autonomous tiers. Those probes are fail-closed and require three
+environment variables (nursery never sends externally, so it needs none):
+
+| Variable | Value | Purpose |
+| --- | --- | --- |
+| `PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED` | the literal `dedicated-test-sinks` | Operator attestation that the targets below are disposable test sinks. Any other value is rejected. |
+| `PSFN_MATRIX_DISCORD_TARGET` | a dedicated **test** Discord channel snowflake (17–20 digits) | Where the `external.discord` allow probe delivers. |
+| `PSFN_MATRIX_EMAIL_TARGET` | a dedicated **test** inbox address | Where the `external.email` allow probe delivers. |
+
+Two hard rules:
+
+- **These MUST be dedicated test sinks — never a real partner's Discord channel
+  or inbox.** The apprentice+ allow probes send real messages; pointing them at a
+  live relationship is a partner-data harm, not a test.
+- **The channels must be live, not cleared.** The apprentice+ external-allow
+  probes can only deliver if the channel credentials are actually present; a
+  cleared channel turns an allow probe into a false negative. This is the one
+  place the round deliberately keeps a channel wired — to a throwaway test sink.
+
+The fail-closed guard lives in `shakedown/harness/lib/capability-matrix.mjs`
+(`requireDedicatedExternalSinks`) and is not to be weakened. Template values are
+in `shakedown/artie/shakedown.env.template`.
+
 ## Bootstrap: a fresh build with Artie
 
 Goal: one clean, repeatable path from release-candidate commit to first proven conversation. This doubles as the fresh-bootstrap-from-seeds certification the release epic requires (config/seed drift check).

@@ -49,6 +49,17 @@ export function buildHubIdentityCases(ctx, services, env) {
   const companionId = envText(env, 'COMPANION_ID');
   const requireSharedPresence = envText(env, 'PSFN_MULTI_COMPANION').toLowerCase() === 'true';
 
+  // Durable-side-effect ledger for the idempotent top-level cleanup. before()
+  // enrolls an opaque hub identity and mutates presence; if the chat dispatch
+  // throws, after() never runs and that durable state would otherwise leak. The
+  // case runner invokes a top-level `cleanup` on harness error paths, so we track
+  // what before()/after() already undid and finish the rest idempotently.
+  const cleanupState = {
+    hubIdentityId: null,
+    revoked: false,
+    placeRestored: false,
+  };
+
   return [{
     id: 's10_hub_identity_presence_follow',
     tier: 'nursery',
@@ -105,6 +116,9 @@ export function buildHubIdentityCases(ctx, services, env) {
       if (enrollmentResponse.status !== 201) {
         throw new Error(`hub enrollment failed with HTTP ${String(enrollmentResponse.status)}`);
       }
+      // Record the durable enrollment so the top-level cleanup can revoke it even
+      // if the dispatch throws before after() runs.
+      cleanupState.hubIdentityId = hubIdentityId;
       const telemetry = await postPresenceTelemetry(
         services,
         envText(env, `${hubPrefix}_ID`),
@@ -196,6 +210,14 @@ export function buildHubIdentityCases(ctx, services, env) {
           revoked: revoke.status === 200,
           restoredPlaceId: restored?.place_id ?? null,
         };
+        // Mark the ledger so the top-level cleanup is a no-op once after() has run
+        // (tolerate 404: an already-revoked enrollment still counts as revoked).
+        if (revoke.status === 200 || revoke.status === 404) {
+          cleanupState.revoked = true;
+        }
+        if (restored?.place_id === restorePlaceId) {
+          cleanupState.placeRestored = true;
+        }
       }
       return {
         hubIdentity: {
@@ -229,5 +251,68 @@ export function buildHubIdentityCases(ctx, services, env) {
       };
     },
     validatePersistedProof: validateHubIdentityProof,
+    // Idempotent top-level cleanup. The case runner calls this on harness error
+    // paths (and again after a normal run). It revokes any durable enrollment and
+    // restores the prior persisted place, tolerating 404/already-revoked, and is
+    // a near no-op once after() already did the work. Returns the runner's
+    // `{ cleanup, cleanupErrors }` shape; recorded under sideChecks.finalCleanup
+    // for the proof without changing the validator contract.
+    cleanup: async () => {
+      const cleanupErrors = [];
+      const done = {
+        hubIdentityId: cleanupState.hubIdentityId,
+        revoked: cleanupState.revoked,
+        restoredPlaceId: null,
+        alreadyClean: false,
+      };
+      if (!cleanupState.hubIdentityId) {
+        // before() never enrolled — nothing durable to undo.
+        done.alreadyClean = true;
+        return { cleanup: { hubIdentity: done }, cleanupErrors };
+      }
+      if (!cleanupState.revoked) {
+        try {
+          const revoke = await services.fetchJson(
+            `${services.adminBase}/api/admin/enrollments/${encodeURIComponent(cleanupState.hubIdentityId)}`,
+            { method: 'DELETE' },
+          );
+          if (revoke.status === 200 || revoke.status === 404) {
+            cleanupState.revoked = true;
+            done.revoked = true;
+          } else {
+            cleanupErrors.push(`hub enrollment revoke returned HTTP ${String(revoke.status)}`);
+          }
+        } catch (error) {
+          cleanupErrors.push(`hub enrollment revoke threw: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      } else {
+        done.revoked = true;
+      }
+      if (!cleanupState.placeRestored) {
+        try {
+          const restore = await postPresenceTelemetry(
+            services,
+            envText(env, `${physicalPrefix}_ID`),
+            'presence',
+            { present: true, confidence: 1, occupancyCount: 1 },
+            `s10-hub-cleanup-${sha256(`${ctx.runToken}:${Date.now()}`).slice(0, 24)}`,
+          );
+          if (restore.status === 202) {
+            const restored = await waitForInternalPlace(services, restorePlaceId);
+            done.restoredPlaceId = restored?.place_id ?? null;
+            if (restored?.place_id === restorePlaceId) {
+              cleanupState.placeRestored = true;
+            }
+          } else {
+            cleanupErrors.push(`hub presence restore returned HTTP ${String(restore.status)}`);
+          }
+        } catch (error) {
+          cleanupErrors.push(`hub presence restore threw: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      } else {
+        done.restoredPlaceId = restorePlaceId;
+      }
+      return { cleanup: { hubIdentity: done }, cleanupErrors };
+    },
   }];
 }

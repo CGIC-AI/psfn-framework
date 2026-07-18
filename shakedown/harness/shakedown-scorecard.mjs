@@ -512,6 +512,23 @@ function main() {
     throw new Error(`No shakedown artifacts found for scorecard generation (checked: ${candidates.join(', ') || 'none'}).`);
   }
 
+  // Hard artifact-level failures. An input run JSON that the harness stamped
+  // `harnessStatus: 'tool_conformance_failed'` or `completed: false` is a hard
+  // failure regardless of its case rows or the profile: a directly-invoked
+  // scorecard must never go green on such an artifact. Enforced for BOTH the
+  // lite and non-lite paths below.
+  const artifactFailures = [];
+  for (const path of inputs) {
+    const data = readJson(path);
+    if (data?.harnessStatus === 'tool_conformance_failed' || data?.completed === false) {
+      artifactFailures.push({
+        artifact: basename(path),
+        harnessStatus: data?.harnessStatus ?? null,
+        completed: data?.completed ?? null,
+      });
+    }
+  }
+
   const waivers = loadWaivers(waiverPath);
   const summaries = loadSummaries(inputs);
   const harnessSummaries = summaries.filter((entry) => entry.kind === 'harness');
@@ -558,6 +575,21 @@ function main() {
       ];
     }
   }
+  // Force red on any hard artifact-level failure, in both lite and non-lite
+  // paths. Only stamp the key when there is a failure so a healthy full-profile
+  // scorecard stays byte-for-byte unchanged.
+  if (artifactFailures.length > 0) {
+    scorecard.artifactFailures = artifactFailures;
+    scorecard.green = false;
+    scorecard.verdict = 'red';
+    scorecard.failureReasons = [
+      ...scorecard.failureReasons,
+      ...artifactFailures.map((entry) => `input artifact ${entry.artifact} is a hard failure (${
+        entry.harnessStatus === 'tool_conformance_failed' ? 'harnessStatus=tool_conformance_failed' : 'completed=false'
+      })`),
+    ];
+  }
+
   scorecard.docPath = docPath;
   scorecard.coverageMapPath = coverageMapPath;
   scorecard.missingInputs = missing;

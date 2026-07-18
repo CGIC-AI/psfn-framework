@@ -222,15 +222,31 @@ function attestTierArtifact(tier, data, manifest) {
   }
 
   const conformance = data?.tierToolConformance ?? null;
+  const conformanceMatches = conformance ? conformance.matches === true : false;
   const conformancePresent = Boolean(conformance)
     && conformance.expectedTier === tier
     && conformance.responseValid === true;
   if (!conformance) {
     missing.push('tier tool-conformance evidence absent');
-  } else if (conformance.expectedTier !== tier) {
-    missing.push(`tier tool-conformance evidence is for '${conformance.expectedTier}', not '${tier}'`);
-  } else if (conformance.responseValid !== true) {
-    missing.push('tier tool-conformance run was not a valid conformance response');
+  } else {
+    if (conformance.expectedTier !== tier) {
+      missing.push(`tier tool-conformance evidence is for '${conformance.expectedTier}', not '${tier}'`);
+    }
+    if (conformance.responseValid !== true) {
+      missing.push('tier tool-conformance run was not a valid conformance response');
+    }
+    // Presence is not enough: the grid must actually match the expected tier
+    // grant. A conformance run with matches !== true is a real tier drift and
+    // must fail the attestation, not pass it silently.
+    if (conformance.matches !== true) {
+      missing.push('tier tool-conformance run did not match the expected tier grant (matches !== true)');
+    }
+  }
+
+  // A run artifact that the harness itself marked incomplete (completed:false —
+  // e.g. a matrix-aborted or crashed phase) can never carry a present attestation.
+  if (data?.completed === false) {
+    missing.push('run artifact is marked completed:false (the harness did not finish this tier)');
   }
 
   return {
@@ -238,7 +254,7 @@ function attestTierArtifact(tier, data, manifest) {
     matrixExecuted,
     coverageIdsPresent,
     conformancePresent,
-    conformanceMatches: conformance ? conformance.matches === true : false,
+    conformanceMatches,
     complete: missing.length === 0,
     missing,
   };

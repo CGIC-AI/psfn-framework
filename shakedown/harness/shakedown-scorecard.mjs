@@ -26,6 +26,7 @@ import { fileURLToPath } from 'node:url';
 
 import { requireEnv, optionalEnv, failClosedOnEnv } from './lib/env.mjs';
 import { parseCoverageAppendix, slugifySurface } from './lib/coverage.mjs';
+import { resolveScorecardProfile, loadProfileManifest, computeLiteAttestation } from './lib/profile.mjs';
 
 const HARNESS_DIR = fileURLToPath(new URL('.', import.meta.url));
 const REPO_DOC_DEFAULT = join(HARNESS_DIR, '..', '..', 'docs', 'shakedown.md');
@@ -343,6 +344,20 @@ function buildCoverageCrossCheck(docPath, coverageMapPath, executedCaseIds, waiv
   };
 }
 
+// Lite profile only: neutralize the coverage-appendix completeness cross-check
+// (uncoveredCount -> 0) so an intentionally-partial lite round can pass. This is
+// applied ONLY when every lite attestation is present; the per-surface rows and
+// counts are preserved for the report, and `liteSkipped` marks why the gate was
+// bypassed. Real case failures and Garden-sweep failures are untouched.
+function applyLiteCoverageSkip(coverage) {
+  return {
+    ...coverage,
+    liteSkipped: true,
+    uncovered: [],
+    uncoveredCount: 0,
+  };
+}
+
 function aggregate(summaries, taxonomy, coverage) {
   const harness = summaries.filter((entry) => entry.kind === 'harness');
   const ui = summaries.filter((entry) => entry.kind === 'ui');
@@ -412,6 +427,7 @@ function toMarkdown(scorecard) {
     `Generated: ${scorecard.generatedAt}`,
     '',
     `**Verdict: ${scorecard.verdict.toUpperCase()}**`,
+    ...(scorecard.profile === 'lite' ? ['', '**Profile: lite**'] : []),
     ...(scorecard.failureReasons.length > 0
       ? ['', ...scorecard.failureReasons.map((reason) => `- ${reason}`)]
       : ['', '- All case statuses green and every coverage surface accounted for.']),
@@ -442,6 +458,10 @@ function toMarkdown(scorecard) {
 
   lines.push('', '## Coverage cross-check (docs/shakedown.md appendix)', '');
   lines.push(`Surfaces covered: ${scorecard.coverage.coveredCount}/${scorecard.coverage.surfaceCount}`);
+  if (scorecard.coverage.liteSkipped) {
+    lines.push('');
+    lines.push('_Lite profile: coverage-appendix completeness cross-check skipped — all lite attestations present. This is the scripted floor, not a full round._');
+  }
   lines.push('');
   lines.push('| Surface | Covered | By | Lane |');
   lines.push('| --- | --- | --- | --- |');
@@ -454,6 +474,21 @@ function toMarkdown(scorecard) {
   if (scorecard.coverage.uncoveredCount > 0) {
     lines.push('');
     lines.push(`**${scorecard.coverage.uncoveredCount} uncovered surface(s) — scorecard fails until each maps to an executed case or an explicit disposition.**`);
+  }
+
+  if (scorecard.profile === 'lite' && scorecard.liteAttestation) {
+    const attestation = scorecard.liteAttestation;
+    lines.push('', '## Lite attestation', '');
+    lines.push(`Complete: ${attestation.complete ? 'yes' : 'NO'} (required tiers: ${attestation.requiredTiers.join(', ')}; coverage ids: ${attestation.requiredCoverageIds.join(', ')})`);
+    lines.push('');
+    for (const tier of attestation.tiers) {
+      const detail = tier.missing.length > 0 ? ` — ${tier.missing.join('; ')}` : '';
+      lines.push(`- **${tier.tier}**: matrix=${tier.matrixExecuted ? 'ok' : 'MISSING'}, coverageIds=${tier.coverageIdsPresent ? 'ok' : 'MISSING'}, tierConformance=${tier.conformancePresent ? 'ok' : 'MISSING'}${detail}`);
+    }
+    if (!attestation.complete) {
+      lines.push('');
+      lines.push('**Lite attestation incomplete — scorecard fails closed; the coverage cross-check stays enforced.**');
+    }
   }
 
   return `${lines.join('\n').trim()}\n`;
@@ -492,8 +527,37 @@ function main() {
   );
 
   const taxonomy = buildTaxonomyReport(harnessSummaries, waivers);
-  const coverage = buildCoverageCrossCheck(docPath, coverageMapPath, executedCaseIds, waivers);
+  let coverage = buildCoverageCrossCheck(docPath, coverageMapPath, executedCaseIds, waivers);
+
+  // Profile gate. `null` for full/unset — the full path below is byte-for-byte
+  // unchanged (no `profile` stamp, no lite attestation, cross-check enforced).
+  const profile = resolveScorecardProfile();
+  let liteAttestation = null;
+  if (profile === 'lite') {
+    const manifest = loadProfileManifest();
+    const rawArtifacts = inputs.map((path) => ({ path, data: readJson(path) }));
+    liteAttestation = computeLiteAttestation(manifest, rawArtifacts);
+    // Skip the coverage-appendix completeness cross-check ONLY when every lite
+    // attestation is present. A missing attestation fails closed (below) and the
+    // cross-check is left enforced.
+    if (liteAttestation.complete) {
+      coverage = applyLiteCoverageSkip(coverage);
+    }
+  }
+
   const scorecard = aggregate(summaries, taxonomy, coverage);
+  if (profile === 'lite') {
+    scorecard.profile = 'lite';
+    scorecard.liteAttestation = liteAttestation;
+    if (!liteAttestation.complete) {
+      scorecard.green = false;
+      scorecard.verdict = 'red';
+      scorecard.failureReasons = [
+        ...scorecard.failureReasons,
+        `lite attestation incomplete: ${liteAttestation.missing.join(' | ')}`,
+      ];
+    }
+  }
   scorecard.docPath = docPath;
   scorecard.coverageMapPath = coverageMapPath;
   scorecard.missingInputs = missing;

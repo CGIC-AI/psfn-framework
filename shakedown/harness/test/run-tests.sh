@@ -22,6 +22,8 @@ tests=(
   "scorecard-coverage-artifacts.test.mjs" # external proof artifacts feed coverage
   "sprint10-catalog.test.mjs"  # S10 catalog metadata and seam inventory
   "sse-probe.test.mjs"         # first non-empty SSE delta precedes terminal
+  "profile-runner.test.mjs"    # 65rk.8: --profile lite|full runner, deadline + signal-safe restore
+  "scorecard-profile.test.mjs" # 65rk.8: scorecard profile:lite stamp + attestation gate; full unchanged
 )
 
 for t in "${tests[@]}"; do

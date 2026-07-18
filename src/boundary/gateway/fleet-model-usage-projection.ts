@@ -12,10 +12,7 @@ import {
   MODEL_USAGE_RANGES,
 } from '../../shared/telemetry/model-usage.js';
 import type { FleetPortalAuthorizationBatchPort } from './fleet-portal-authorization.js';
-import {
-  FleetAuthorizationDeniedError,
-  type FleetAuthorizationContext,
-} from './fleet-authorization-context.js';
+import { FleetAuthorizationDeniedError } from './fleet-authorization-context.js';
 import { isRecord } from '../../shared/utils/types.js';
 
 const TOKEN_TOTAL_FIELDS = [
@@ -55,8 +52,10 @@ function validatedTokenTotals(value: unknown): FleetModelUsageTokenTotals {
   const totals = Object.fromEntries(
     TOKEN_TOTAL_FIELDS.map(field => [field, value[field] as number]),
   ) as unknown as FleetModelUsageTokenTotals;
-  if (totals.totalTokens !== totals.inputTokens + totals.outputTokens
-    + totals.cacheReadTokens + totals.cacheWriteTokens) {
+  if (!Object.is(
+    totals.totalTokens,
+    totals.inputTokens + totals.outputTokens + totals.cacheReadTokens + totals.cacheWriteTokens,
+  )) {
     throw new Error('Fleet model-usage aggregate returned inconsistent token totals');
   }
   return totals;
@@ -138,7 +137,7 @@ function validatedSummary(
     zero,
   );
   const combined = validatedTokenTotals(value.combined);
-  if (TOKEN_TOTAL_FIELDS.some(field => combined[field] !== conserved[field])) {
+  if (TOKEN_TOTAL_FIELDS.some(field => !Object.is(combined[field], conserved[field]))) {
     throw new Error('Fleet model-usage combined totals do not conserve companion totals');
   }
   return {
@@ -167,7 +166,7 @@ export interface FleetModelUsageAuthorizationPort {
     companionId: string;
     action: 'models.read';
     correlationId: string;
-  }): Promise<Pick<FleetAuthorizationContext, 'companionId' | 'authorization'>>;
+  }): Promise<unknown>;
 }
 
 export interface GatewayFleetModelUsageProjectionOptions {
@@ -200,8 +199,11 @@ export class GatewayFleetModelUsageProjection implements FleetModelUsageProjecti
           action: 'models.read',
           correlationId: randomUUID(),
         });
-        if (context.companionId !== companionId
-          || context.authorization.action !== 'models.read') {
+        if (!isRecord(context)
+          || context.companionId !== companionId
+          || !isRecord(context.authorization)
+          || context.authorization.action !== 'models.read'
+          || context.authorization.decision !== 'allow') {
           throw new Error('Fleet model-usage authorization context changed target');
         }
         return companionId;

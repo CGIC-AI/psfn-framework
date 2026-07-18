@@ -121,6 +121,17 @@ describe('PostgresModelUsageStore fleet token summary', () => {
         cacheWriteTokens: 3,
       });
       await store.recordUsageEvent({
+        logicalCallId: 'fleet-summary-a-before-custom-range',
+        recordedAtMs: Date.parse('2026-06-15T12:00:00.000Z'),
+        status: 'success',
+        callKind: 'chat',
+        attribution: { companionId: companionA, callType: 'chat', purpose: 'chat' },
+        provider: 'litellm',
+        model: 'model-a',
+        inputTokens: 1,
+        outputTokens: 1,
+      });
+      await store.recordUsageEvent({
         logicalCallId: 'fleet-summary-unauthorized',
         recordedAtMs: Date.parse('2026-06-01T12:00:00.000Z'),
         status: 'success',
@@ -185,13 +196,27 @@ describe('PostgresModelUsageStore fleet token summary', () => {
       });
       expect(JSON.stringify(result)).not.toContain(unauthorizedCompanion);
 
+      const implicitCustomRange = await store.getFleetModelUsageSummary({
+        timezone: 'UTC',
+        sinceMs: Date.parse('2026-07-01T00:00:00.000Z'),
+        untilMs: Date.parse('2026-08-01T00:00:00.000Z'),
+      }, [companionA, companionB, zeroUseCompanion], Date.parse('2026-07-18T16:00:00.000Z'));
+      expect(implicitCustomRange.resolvedRange.range).toBe('custom');
+      expect(implicitCustomRange.combined.totalTokens).toBe(50);
+
+      const querySpy = vi.spyOn(pool, 'query');
       const allRange = await store.getFleetModelUsageSummary(
         { range: 'all', timezone: 'UTC' },
         [companionA, companionB, zeroUseCompanion],
         Date.parse('2026-07-18T16:00:00.000Z'),
       );
-      expect(allRange.resolvedRange.sinceMs).toBe(Date.parse('2026-07-10T12:00:00.000Z'));
-      expect(allRange.combined.totalTokens).toBe(50);
+      const allRangeLedgerReads = querySpy.mock.calls.filter(([statement]) => (
+        typeof statement === 'string' && statement.includes('FROM model_usage_events')
+      ));
+      querySpy.mockRestore();
+      expect(allRangeLedgerReads).toHaveLength(1);
+      expect(allRange.resolvedRange.sinceMs).toBe(Date.parse('2026-06-15T12:00:00.000Z'));
+      expect(allRange.combined.totalTokens).toBe(52);
     } finally {
       await pool.end();
     }

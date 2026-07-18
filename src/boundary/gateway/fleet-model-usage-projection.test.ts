@@ -105,6 +105,34 @@ describe('gateway fleet model-usage projection', () => {
     );
   });
 
+  it('fails closed if an authorization adapter returns an explicit deny decision', async () => {
+    const getFleetModelUsageSummary = vi.fn();
+    const projection = new GatewayFleetModelUsageProjection({
+      portalAuthorizer: {
+        resolve: async () => ({
+          companions: [{ companionId: COMPANION_A, gardenLinkEligible: true }],
+        }),
+      },
+      modelAuthorizer: {
+        resolveAuthorizationContext: async () => ({
+          companionId: COMPANION_A,
+          authorization: {
+            action: 'models.read',
+            decision: 'deny',
+          },
+        }),
+      },
+      usage: { getFleetModelUsageSummary },
+      now: () => NOW,
+    });
+
+    await expect(projection.resolve({
+      sessionToken: SESSION_TOKEN,
+      query: { range: 'today', timezone: 'UTC' },
+    })).rejects.toThrow(/authorization context changed target/u);
+    expect(getFleetModelUsageSummary).not.toHaveBeenCalled();
+  });
+
   it('fails closed if the aggregate port widens or changes the authorized companion set', async () => {
     const projection = new GatewayFleetModelUsageProjection({
       portalAuthorizer: {

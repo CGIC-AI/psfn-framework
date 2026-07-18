@@ -230,6 +230,10 @@ interface FleetTokenTotalsRow {
   total_tokens: number | string | null;
 }
 
+interface FleetAllTokenTotalsRow extends FleetTokenTotalsRow {
+  earliest_ms: number | string | null;
+}
+
 interface BreakdownRow extends TotalsRow {
   key: string | null;
 }
@@ -1926,21 +1930,70 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     }
     authorizedCompanionIds.sort((left, right) => left.localeCompare(right));
     const now = inputNonNegativeInteger(nowMs, 'nowMs');
-    const prepared = await this.prepareQuery(query, now, authorizedCompanionIds);
-    const rows = await queryRows<FleetTokenTotalsRow>(this.pool, `
-      SELECT
-        companion_id,
-        COUNT(*) AS calls,
-        COALESCE(SUM(input_tokens), 0) AS input_tokens,
-        COALESCE(SUM(output_tokens), 0) AS output_tokens,
-        COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
-        COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
-        COALESCE(SUM(total_tokens), 0) AS total_tokens
-      FROM model_usage_events
-      ${prepared.where.clause}
-      GROUP BY companion_id
-      ORDER BY companion_id ASC
-    `, prepared.where.values);
+    const normalizedQuery = normalizeQuery(query);
+    let resolvedRange: ModelUsageResolvedRange;
+    let rows: FleetTokenTotalsRow[];
+    const allRangeRequested = normalizedQuery.range === 'all'
+      || (normalizedQuery.range === undefined
+        && normalizedQuery.sinceMs === undefined
+        && normalizedQuery.untilMs === undefined);
+    if (allRangeRequested) {
+      const preliminaryRange = resolveModelUsageRange(normalizedQuery, { nowMs: now });
+      const allRows = await queryRows<FleetAllTokenTotalsRow>(this.pool, `
+        WITH authorized_companions AS (
+          SELECT UNNEST($1::text[]) AS companion_id
+        ),
+        fleet_events AS (
+          SELECT event.*
+          FROM model_usage_events AS event
+          INNER JOIN authorized_companions USING (companion_id)
+          WHERE event.recorded_at_ms < $2
+        ),
+        fleet_bounds AS (
+          SELECT MIN(recorded_at_ms) AS earliest_ms
+          FROM fleet_events
+        )
+        SELECT
+          authorized.companion_id,
+          COUNT(event.id) AS calls,
+          COALESCE(SUM(event.input_tokens), 0) AS input_tokens,
+          COALESCE(SUM(event.output_tokens), 0) AS output_tokens,
+          COALESCE(SUM(event.cache_read_tokens), 0) AS cache_read_tokens,
+          COALESCE(SUM(event.cache_write_tokens), 0) AS cache_write_tokens,
+          COALESCE(SUM(event.total_tokens), 0) AS total_tokens,
+          bounds.earliest_ms
+        FROM authorized_companions AS authorized
+        CROSS JOIN fleet_bounds AS bounds
+        LEFT JOIN fleet_events AS event USING (companion_id)
+        GROUP BY authorized.companion_id, bounds.earliest_ms
+        ORDER BY authorized.companion_id ASC
+      `, [authorizedCompanionIds, preliminaryRange.untilMs]);
+      const earliestMs = allRows.at(0)?.earliest_ms;
+      resolvedRange = resolveModelUsageRange(normalizedQuery, {
+        nowMs: now,
+        ...(earliestMs !== null && earliestMs !== undefined
+          ? { allSinceMs: nonNegativeInteger(earliestMs) }
+          : {}),
+      });
+      rows = allRows;
+    } else {
+      const prepared = await this.prepareQuery(query, now, authorizedCompanionIds);
+      resolvedRange = prepared.resolvedRange;
+      rows = await queryRows<FleetTokenTotalsRow>(this.pool, `
+        SELECT
+          companion_id,
+          COUNT(*) AS calls,
+          COALESCE(SUM(input_tokens), 0) AS input_tokens,
+          COALESCE(SUM(output_tokens), 0) AS output_tokens,
+          COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+          COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+          COALESCE(SUM(total_tokens), 0) AS total_tokens
+        FROM model_usage_events
+        ${prepared.where.clause}
+        GROUP BY companion_id
+        ORDER BY companion_id ASC
+      `, prepared.where.values);
+    }
     const byCompanionId = new Map(rows.map(row => [row.companion_id, row]));
     const companions = authorizedCompanionIds.map(companionId => ({
       companionId,
@@ -1951,7 +2004,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       mapFleetTokenTotals(),
     );
     return {
-      resolvedRange: prepared.resolvedRange,
+      resolvedRange,
       combined,
       companions,
     };

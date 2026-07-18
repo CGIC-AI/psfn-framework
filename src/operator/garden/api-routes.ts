@@ -458,8 +458,8 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'GET',
       match: exactPath('/api/admin/shards'),
-      handle: (_req, res) => {
-        shardFoldReviewService.listShardFoldReviews().then(
+      handle: (_req, res, _params, context) => {
+        shardFoldReviewService.listShardFoldReviews(context).then(
           (payload) => {
             sendJson(res, 200, payload, ADMIN_DYNAMIC_JSON_HEADERS);
           },
@@ -475,7 +475,7 @@ export function buildAdminApiRoutes(options: {
     {
       method: 'POST',
       match: paramWithSuffix('/api/admin/shards/', 'shardId', '/review'),
-      handle: (req, res, { shardId }) => {
+      handle: (req, res, { shardId }, context) => {
         withBody(req, res, (body) => {
           const parsed = parseAdminJsonBody(body);
           if (!parsed.ok) {
@@ -500,12 +500,15 @@ export function buildAdminApiRoutes(options: {
 
           const actor = typeof payload.actor === 'string' ? payload.actor.trim() : undefined;
           const note = typeof payload.note === 'string' ? payload.note.trim() : undefined;
-          shardFoldReviewService.resolveShardFoldReview({
-            shardId,
-            decision,
-            actor,
-            note,
-          }).then(
+          shardFoldReviewService.resolveShardFoldReview(
+            {
+              shardId,
+              decision,
+              actor,
+              note,
+            },
+            context,
+          ).then(
             (result) => {
               if (!result.ok) {
                 const status = result.message === 'Shard fold review not found' ? 404 : 400;
@@ -526,9 +529,64 @@ export function buildAdminApiRoutes(options: {
     },
     {
       method: 'GET',
+      match: paramWithSuffix('/api/admin/shards/', 'shardId', '/configuration'),
+      handle: (_req, res, { shardId }, context) => {
+        shardFoldReviewService.getShardConfiguration(shardId, context).then(
+          (snapshot) => {
+            if (!snapshot) {
+              sendJson(res, 404, { error: 'Shard not found' });
+              return;
+            }
+            sendJson(res, 200, snapshot, ADMIN_DYNAMIC_JSON_HEADERS);
+          },
+          (error) => {
+            const status = isShardFoldReviewUnavailableError(error) ? 503 : 500;
+            sendJson(res, status, {
+              error: toSanitizedMessage(error, 'Failed to load shard configuration'),
+            });
+          },
+        );
+      },
+    },
+    {
+      method: 'PATCH',
+      match: paramWithSuffix('/api/admin/shards/', 'shardId', '/configuration'),
+      handle: (req, res, { shardId }, context) => {
+        withBody(req, res, (body) => {
+          const parsed = parseAdminJsonBody(body);
+          if (!parsed.ok) {
+            sendJson(res, 400, { error: parsed.error });
+            return;
+          }
+          shardFoldReviewService.updateShardConfiguration(
+            shardId,
+            parsed.value,
+            context,
+          ).then(
+            (result) => {
+              if (!result.ok) {
+                sendJson(res, result.code === 'not_found' ? 404 : 400, {
+                  error: result.message,
+                });
+                return;
+              }
+              sendJson(res, 200, result.snapshot, ADMIN_DYNAMIC_JSON_HEADERS);
+            },
+            (error) => {
+              const status = isShardFoldReviewUnavailableError(error) ? 503 : 500;
+              sendJson(res, status, {
+                error: toSanitizedMessage(error, 'Failed to update shard configuration'),
+              });
+            },
+          );
+        });
+      },
+    },
+    {
+      method: 'GET',
       match: prefixedParamPath('/api/admin/shards/', 'shardId'),
-      handle: (_req, res, { shardId }) => {
-        shardFoldReviewService.getShardFoldReview(shardId).then(
+      handle: (_req, res, { shardId }, context) => {
+        shardFoldReviewService.getShardFoldReview(shardId, context).then(
           (review) => {
             if (!review) {
               sendJson(res, 404, { error: 'Shard fold review not found' });

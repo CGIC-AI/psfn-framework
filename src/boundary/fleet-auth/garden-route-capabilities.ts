@@ -161,6 +161,7 @@ const requiredBodyPatterns = new Set([
   'POST /api/admin/prompts/count-tokens',
   'PATCH /api/admin/prompts/:layerId',
   'POST /api/admin/prompts/reorder',
+  'PATCH /api/admin/shards/:shardId/configuration',
   'PUT /api/admin/prompts/runtime-blocks',
   'PUT /api/admin/prompts/foundation',
   'PUT /api/admin/prompts/constitution',
@@ -289,6 +290,7 @@ const dynamicRoutes: readonly RouteTuple[] = [
   ['GET', '/api/admin/sessions/:channelId'], ['GET', '/api/admin/sessions/:channelId/detail'],
   ['GET', '/api/admin/sessions/:channelId/search'], ['GET', '/api/admin/sessions/:channelId/turns/:turnId'],
   ['GET', '/api/admin/shards/:shardId'], ['POST', '/api/admin/shards/:shardId/review'],
+  [['GET', 'PATCH'], '/api/admin/shards/:shardId/configuration'],
   ['POST', '/api/admin/shared-workspace/reviews/:reviewId/cogsec'],
   ['POST', '/api/admin/shared-workspace/reviews/:reviewId/decision'], ['DELETE', '/api/admin/skills/:name'],
   ['GET', '/api/admin/wiki/shared-world-proposals/:proposalId'],
@@ -314,7 +316,7 @@ export const GARDEN_CLIENT_ROUTES = Object.freeze([
   '/enrollment', '/evals/emotion-sidecar', '/episodic-memory', '/graph-proposals', '/identity',
   '/images', '/memory', '/model-room', '/models', '/places', '/primer', '/prompt-monitor',
   '/prompts', '/rooms', '/satellites', '/scheduler', '/session-recovery', '/sessions',
-  '/settings', '/shards', '/skills', '/subsystem-health', '/telemetry', '/theme', '/tools',
+  '/settings', '/shards', '/shards/:shardId', '/skills', '/subsystem-health', '/telemetry', '/theme', '/tools',
   '/values', '/wiki', '/wishlist',
 ] as const);
 

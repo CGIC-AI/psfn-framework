@@ -629,9 +629,15 @@ function createTestServices(): GardenAdminDomainServices {
       })),
     },
     shards: {
-      listShardFoldReviews: vi.fn(async () => ({ reviews: [] })),
+      listShardFoldReviews: vi.fn(async () => ({ reviews: [], shards: [] })),
       getShardFoldReview: vi.fn(async () => null),
       resolveShardFoldReview: vi.fn(async () => ({ ok: false, message: 'Shard fold review not found' })),
+      getShardConfiguration: vi.fn(async () => null),
+      updateShardConfiguration: vi.fn(async () => ({
+        ok: false,
+        code: 'not_found' as const,
+        message: 'Shard not found',
+      })),
     },
     modelUsage: {
       getModelUsageData: vi.fn(async query => ({

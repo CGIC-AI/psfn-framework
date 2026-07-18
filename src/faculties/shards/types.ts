@@ -122,6 +122,94 @@ export interface ShardCapabilityGrantEvidence {
   readonly derivationVersion: string;
 }
 
+export interface ShardModelSelection {
+  provider: string;
+  model: string;
+  maxOutputTokens: number;
+  contextWindow?: number;
+}
+
+export interface ShardWorkerBudget {
+  maxTurns: number;
+  maxOutputTokens: number;
+  maxChargeUnits: number;
+}
+
+export interface ShardReadOnlyConfiguration {
+  capabilityTier: {
+    parent: CapabilityTier;
+    effective: 'custom';
+  };
+  trust: {
+    source: 'parent_runtime';
+    mutable: false;
+  };
+  identity: {
+    parentCompanionId: CompanionId;
+    shardCompanionId: ShardCompanionId;
+    mutable: false;
+  };
+  prompts: {
+    source: 'parent_launch_snapshot';
+    mutable: false;
+  };
+  capabilityGrant: ShardCapabilityGrantEvidence;
+}
+
+export interface ShardConfigurationValues {
+  model: ShardModelSelection;
+  workerBudget: ShardWorkerBudget;
+  readOnly: ShardReadOnlyConfiguration;
+}
+
+export interface ShardConfigurationOverrides {
+  model: Pick<ShardModelSelection, 'provider' | 'model'> | null;
+  workerBudget: Partial<ShardWorkerBudget>;
+  readOnly: null;
+}
+
+export interface ShardConfigurationSnapshot {
+  schemaVersion: 1;
+  shardId: string;
+  parentCompanionId: CompanionId;
+  lifecycleState: ShardLifecycleState;
+  health: ShardHealthState;
+  source: {
+    kind: 'parent_launch';
+    companionId: CompanionId;
+    revision: string;
+    capabilityOwnerVersion: string;
+    grantDigest: string;
+    capturedAt: number;
+  };
+  inherited: ShardConfigurationValues;
+  override: ShardConfigurationOverrides;
+  effective: ShardConfigurationValues;
+  allowed: {
+    models: ShardModelSelection[];
+    workerBudget: ShardWorkerBudget;
+  };
+  lineage: ShardResultLineageEnvelope;
+  updatedAt?: number;
+  updatedBy?: string;
+}
+
+export interface ShardConfigurationOverridePatch {
+  model?: Pick<ShardModelSelection, 'provider' | 'model'> | null;
+  workerBudget?: Partial<ShardWorkerBudget> | null;
+}
+
+export type ShardConfigurationMutationResult =
+  | {
+      ok: true;
+      snapshot: ShardConfigurationSnapshot;
+    }
+  | {
+      ok: false;
+      code: 'not_found' | 'invalid_override';
+      message: string;
+    };
+
 export interface ShardConfig {
   name: string;                    // Human-readable label
   task: string;                    // The prompt to send to the shard

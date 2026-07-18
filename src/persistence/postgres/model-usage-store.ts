@@ -17,6 +17,10 @@ import type {
   ModelUsageAttributionCoverage,
   ModelUsageBudgetQueryPort,
   ModelUsageBudgetSpendSnapshot,
+  FleetModelUsageQuery,
+  FleetModelUsageSummary,
+  FleetModelUsageSummaryQueryPort,
+  FleetModelUsageTokenTotals,
   ModelUsageCallKind,
   ModelUsageCostHydrationBreakdown,
   ModelUsageCostHydrationData,
@@ -77,7 +81,7 @@ import {
   roundModelUsageUsd,
 } from '../../shared/telemetry/model-usage-accounting.js';
 import { boundModelUsageMetadata } from '../../shared/telemetry/model-usage-metadata.js';
-import { isRecord } from '../../shared/utils/types.js';
+import { isRecord, isRfc4122Uuid } from '../../shared/utils/types.js';
 import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-autonomy.js';
 import {
   createModelUsageBucketBoundaries,
@@ -214,6 +218,16 @@ interface TotalsRow {
   ttft_samples: number | string;
   average_duration_ms: number | string | null;
   average_ttft_ms: number | string | null;
+}
+
+interface FleetTokenTotalsRow {
+  companion_id: string;
+  calls: number | string;
+  input_tokens: number | string | null;
+  output_tokens: number | string | null;
+  cache_read_tokens: number | string | null;
+  cache_write_tokens: number | string | null;
+  total_tokens: number | string | null;
 }
 
 interface BreakdownRow extends TotalsRow {
@@ -855,6 +869,31 @@ function mapTotals(row: TotalsRow | undefined): ModelUsageTotals {
   };
 }
 
+function mapFleetTokenTotals(row?: FleetTokenTotalsRow): FleetModelUsageTokenTotals {
+  return {
+    calls: nonNegativeInteger(row?.calls),
+    inputTokens: nonNegativeInteger(row?.input_tokens),
+    outputTokens: nonNegativeInteger(row?.output_tokens),
+    cacheReadTokens: nonNegativeInteger(row?.cache_read_tokens),
+    cacheWriteTokens: nonNegativeInteger(row?.cache_write_tokens),
+    totalTokens: nonNegativeInteger(row?.total_tokens),
+  };
+}
+
+function addFleetTokenTotals(
+  left: FleetModelUsageTokenTotals,
+  right: FleetModelUsageTokenTotals,
+): FleetModelUsageTokenTotals {
+  return {
+    calls: left.calls + right.calls,
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    cacheReadTokens: left.cacheReadTokens + right.cacheReadTokens,
+    cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
+    totalTokens: left.totalTokens + right.totalTokens,
+  };
+}
+
 function mapBreakdown(row: BreakdownRow): ModelUsageBreakdown {
   const metrics = mapTotals(row);
   return {
@@ -1126,7 +1165,7 @@ function appendEventCursor(
   };
 }
 
-export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQueryPort, ModelUsageCostHydrationQueryPort, ModelUsageBudgetQueryPort, ModelUsageExportPort, ModelUsageReconciliationQueryPort, IcpConversationCostAccountingPort {
+export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQueryPort, ModelUsageCostHydrationQueryPort, ModelUsageBudgetQueryPort, FleetModelUsageSummaryQueryPort, ModelUsageExportPort, ModelUsageReconciliationQueryPort, IcpConversationCostAccountingPort {
   private readonly ready: Promise<void>;
   private readonly companionId?: string;
 
@@ -1817,11 +1856,22 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     };
   }
 
-  private async prepareQuery(query: ModelUsageQuery): Promise<PreparedModelUsageQuery> {
+  private async prepareQuery(
+    query: ModelUsageQuery,
+    nowMs = Date.now(),
+    companionIds?: readonly string[],
+  ): Promise<PreparedModelUsageQuery> {
     const normalizedQuery = normalizeQuery(query, this.companionId);
     let allSinceMs: number | undefined;
     if ((normalizedQuery.range ?? 'all') === 'all') {
-      const unboundedWhere = buildWhere({ ...normalizedQuery, sinceMs: undefined, untilMs: undefined });
+      const baseUnboundedWhere = buildWhere({
+        ...normalizedQuery,
+        sinceMs: undefined,
+        untilMs: undefined,
+      });
+      const unboundedWhere = companionIds
+        ? appendCompanionAllowlist(baseUnboundedWhere, companionIds)
+        : baseUnboundedWhere;
       const earliest = await queryOne<{ earliest_ms: number | string | null }>(this.pool, `
         SELECT MIN(recorded_at_ms) AS earliest_ms
         FROM model_usage_events
@@ -1832,7 +1882,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       }
     }
     const resolvedRange = resolveModelUsageRange(normalizedQuery, {
-      nowMs: Date.now(),
+      nowMs,
       ...(allSinceMs !== undefined ? { allSinceMs } : {}),
     });
     const canonicalQuery: ModelUsageQuery = {
@@ -1840,12 +1890,71 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       range: resolvedRange.range,
       timezone: resolvedRange.timezone,
     };
-    const where = buildWhere({
+    const baseWhere = buildWhere({
       ...canonicalQuery,
       sinceMs: resolvedRange.sinceMs,
       untilMs: resolvedRange.untilMs,
     });
+    const where = companionIds
+      ? appendCompanionAllowlist(baseWhere, companionIds)
+      : baseWhere;
     return { query: canonicalQuery, resolvedRange, where };
+  }
+
+  async getFleetModelUsageSummary(
+    query: FleetModelUsageQuery,
+    companionIds: readonly string[],
+    nowMs = Date.now(),
+  ): Promise<FleetModelUsageSummary> {
+    await this.ready;
+    if (this.companionId !== undefined) {
+      throw new Error('Fleet model-usage summary requires the fleet-scoped model usage store');
+    }
+    const allowedQueryFields = new Set(['range', 'timezone', 'sinceMs', 'untilMs']);
+    if (Object.keys(query).some(field => !allowedQueryFields.has(field))) {
+      throw new Error('Fleet model-usage summary query contains unsupported fields');
+    }
+    if (companionIds.length === 0 || companionIds.length > 256) {
+      throw new Error('Fleet model-usage summary requires 1-256 authorized companions');
+    }
+    const authorizedCompanionIds = [...companionIds];
+    if (authorizedCompanionIds.some(companionId => !isRfc4122Uuid(companionId))) {
+      throw new Error('Fleet model-usage summary companion IDs must be RFC-4122 UUIDs');
+    }
+    if (new Set(authorizedCompanionIds).size !== authorizedCompanionIds.length) {
+      throw new Error('Fleet model-usage summary companion IDs must be unique');
+    }
+    authorizedCompanionIds.sort((left, right) => left.localeCompare(right));
+    const now = inputNonNegativeInteger(nowMs, 'nowMs');
+    const prepared = await this.prepareQuery(query, now, authorizedCompanionIds);
+    const rows = await queryRows<FleetTokenTotalsRow>(this.pool, `
+      SELECT
+        companion_id,
+        COUNT(*) AS calls,
+        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+        COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens
+      FROM model_usage_events
+      ${prepared.where.clause}
+      GROUP BY companion_id
+      ORDER BY companion_id ASC
+    `, prepared.where.values);
+    const byCompanionId = new Map(rows.map(row => [row.companion_id, row]));
+    const companions = authorizedCompanionIds.map(companionId => ({
+      companionId,
+      usage: mapFleetTokenTotals(byCompanionId.get(companionId)),
+    }));
+    const combined = companions.reduce(
+      (total, companion) => addFleetTokenTotals(total, companion.usage),
+      mapFleetTokenTotals(),
+    );
+    return {
+      resolvedRange: prepared.resolvedRange,
+      combined,
+      companions,
+    };
   }
 
   async getModelBudgetSpend(
@@ -2350,6 +2459,18 @@ function buildWhere(query: ModelUsageQuery): SqlWhere {
   }
   return {
     clause: clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '',
+    values,
+  };
+}
+
+function appendCompanionAllowlist(
+  where: SqlWhere,
+  companionIds: readonly string[],
+): SqlWhere {
+  const values = [...where.values, companionIds];
+  const clause = `companion_id = ANY($${values.length}::text[])`;
+  return {
+    clause: where.clause ? `${where.clause} AND ${clause}` : `WHERE ${clause}`,
     values,
   };
 }

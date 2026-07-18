@@ -297,6 +297,43 @@ export interface ModelUsageResolvedRange {
   calendarWeekStartsOn: 'monday';
 }
 
+export interface FleetModelUsageQuery {
+  range?: ModelUsageRange;
+  /** IANA timezone used to resolve calendar ranges. */
+  timezone?: string;
+  sinceMs?: number;
+  untilMs?: number;
+}
+
+export interface FleetModelUsageTokenTotals {
+  calls: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  totalTokens: number;
+}
+
+export interface FleetModelUsageCompanionTotals {
+  companionId: string;
+  usage: FleetModelUsageTokenTotals;
+}
+
+export interface FleetModelUsageSummary {
+  resolvedRange: ModelUsageResolvedRange;
+  combined: FleetModelUsageTokenTotals;
+  companions: FleetModelUsageCompanionTotals[];
+}
+
+/** Fleet-only aggregate read. Callers must supply a server-authorized companion allowlist. */
+export interface FleetModelUsageSummaryQueryPort {
+  getFleetModelUsageSummary(
+    query: FleetModelUsageQuery,
+    companionIds: readonly string[],
+    nowMs?: number,
+  ): Promise<FleetModelUsageSummary>;
+}
+
 export interface ModelUsageTimeBucket extends ModelUsageTotals {
   startMs: number;
   endMs: number;

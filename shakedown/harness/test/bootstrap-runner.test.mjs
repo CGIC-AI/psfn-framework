@@ -21,6 +21,7 @@ const GLOBAL_OWNER_SEEDS = [
   'trust-policy',
   'backup',
   'intake-policy',
+  'places',
 ];
 const COMPANION_OWNER_SEEDS = [
   'scheduler',
@@ -46,7 +47,11 @@ function makeEnv(fixtureRoot, repoRoot, roundRoot) {
     PSFN_LOGS_DIR: join(roundRoot, 'logs'),
     PSFN_TEMP_DIR: join(roundRoot, 'tmp'),
     BACKUP_ROOT_DIR: join(roundRoot, 'backups'),
-    POSTGRES_DATABASE_URL: 'postgresql://test.invalid/shakedown',
+    POSTGRES_DATABASE_URL: 'postgresql://round:test@127.0.0.1:5432/psfn_shakedown_round',
+    PSFN_LIVE_POSTGRES_DATABASE_URL: 'postgresql://live:test@127.0.0.1:5432/psfn_live',
+    PSFN_SHAKEDOWN_POSTGRES_DATABASE: 'psfn_shakedown_round',
+    COMPANION_PG_SCHEMA: 'shakedown_artemis',
+    PSFN_SHAKEDOWN_EXTERNAL_CHANNELS: 'false',
     PSFN_API_BASE: 'http://127.0.0.1:10153',
     PSFN_ADMIN_BASE: 'http://127.0.0.1:10154',
     API_HOST: '127.0.0.1',
@@ -168,6 +173,23 @@ try {
     /bootstrap state rcRevision.*expected/u,
   );
   assert.equal(commands.length, callsBeforeDirtyRun, 'revision mismatch must launch no command');
+
+  await assert.rejects(
+    () => runBootstrap(
+      {
+        ...resolveBootstrapConfig({
+          ...env,
+          PSFN_SHAKEDOWN_RESUME: '1',
+          POSTGRES_DATABASE_URL: 'postgresql://round:test@127.0.0.1:5432/psfn_shakedown_other',
+          PSFN_SHAKEDOWN_POSTGRES_DATABASE: 'psfn_shakedown_other',
+        }),
+        rcRevision: config.rcRevision,
+      },
+      services,
+    ),
+    /bootstrap state postgresIdentity.*expected/u,
+  );
+  assert.equal(commands.length, callsBeforeDirtyRun, 'Postgres target mismatch must launch no command');
 
   const resumeServices = {
     ...services,

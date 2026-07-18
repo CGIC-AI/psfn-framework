@@ -8,6 +8,7 @@ TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 tests=(
   "bootstrap-config.test.mjs"  # bootstrap rejects unsafe roots before any write
+  "bootstrap-postgres.test.mjs" # bootstrap proves a disposable isolated database/schema
   "bootstrap-runner.test.mjs"  # bootstrap sequences seed/readiness/proof and explicit resume
   "bootstrap-services.test.mjs" # readiness plus exact persisted-turn proof
   "target-contract.test.mjs"   # A: tier flip uses the canonical capabilities editor

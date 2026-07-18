@@ -39,7 +39,11 @@ try {
     PSFN_LOGS_DIR: join(roundRoot, 'logs'),
     PSFN_TEMP_DIR: join(roundRoot, 'tmp'),
     BACKUP_ROOT_DIR: join(roundRoot, 'backups'),
-    POSTGRES_DATABASE_URL: 'postgresql://test.invalid/shakedown',
+    POSTGRES_DATABASE_URL: 'postgresql://round:test@127.0.0.1:5432/psfn_shakedown_round',
+    PSFN_LIVE_POSTGRES_DATABASE_URL: 'postgresql://live:test@127.0.0.1:5432/psfn_live',
+    PSFN_SHAKEDOWN_POSTGRES_DATABASE: 'psfn_shakedown_round',
+    COMPANION_PG_SCHEMA: 'shakedown_artemis',
+    PSFN_SHAKEDOWN_EXTERNAL_CHANNELS: 'false',
     PSFN_API_BASE: 'http://127.0.0.1:10153',
     PSFN_ADMIN_BASE: 'http://127.0.0.1:10154',
     API_HOST: '127.0.0.1',
@@ -64,6 +68,60 @@ try {
     'configuration validation must not create the round root',
   );
 
+  const safeEnv = {
+    ...env,
+    COMPANION_DATA_DIR: join(roundRoot, 'companion-data'),
+    CHARACTER_CARD_PATH: join(roundRoot, 'companion-data', 'companion.json'),
+  };
+  const safe = resolveBootstrapConfig(safeEnv);
+  assert.equal(safe.externalChannelsEnabled, false);
+
+  for (const apiBase of [
+    'http://example.test:10153',
+    'http://localhost:10153',
+    'http://user:secret@127.0.0.1:10153',
+    'http://127.0.0.1:10153/v1',
+    'http://127.0.0.1:10153?redirect=example.test',
+    'http://127.0.0.1:10153#fragment',
+    'http://127.0.0.1:10154',
+  ]) {
+    assert.throws(
+      () => resolveBootstrapConfig({ ...safeEnv, PSFN_API_BASE: apiBase }),
+      /PSFN_API_BASE.*exact loopback origin/u,
+      `hostile or mismatched API origin must fail: ${apiBase}`,
+    );
+  }
+  assert.throws(
+    () => resolveBootstrapConfig({
+      ...safeEnv,
+      PSFN_ADMIN_BASE: 'http://127.0.0.1:10154/admin?token=leak',
+    }),
+    /PSFN_ADMIN_BASE.*exact loopback origin/u,
+  );
+  assert.throws(
+    () => resolveBootstrapConfig({
+      ...safeEnv,
+      DISCORD_TOKEN: 'live-discord-token-must-not-cross',
+    }),
+    /external-channel credential DISCORD_TOKEN.*disabled/u,
+  );
+  assert.throws(
+    () => resolveBootstrapConfig({
+      ...safeEnv,
+      PSFN_SHAKEDOWN_EXTERNAL_CHANNELS: 'true',
+      PSFN_SHAKEDOWN_EXTERNAL_CHANNEL_CONFIRM: '',
+    }),
+    /PSFN_SHAKEDOWN_EXTERNAL_CHANNEL_CONFIRM/u,
+  );
+  assert.throws(
+    () => resolveBootstrapConfig({
+      ...safeEnv,
+      PSFN_SHAKEDOWN_EXTERNAL_CHANNELS: 'true',
+      PSFN_SHAKEDOWN_EXTERNAL_CHANNEL_CONFIRM: 'dedicated-shakedown-accounts',
+    }),
+    /requires dedicated external-channel credentials/u,
+  );
+
   const shippedTemplate = readFileSync(
     join(process.cwd(), 'shakedown', 'artie', 'shakedown.env.template'),
     'utf8',
@@ -75,6 +133,24 @@ try {
   );
   assert.match(shippedTemplate, /^PSFN_LIVE_DATA_ROOTS=$/mu);
   assert.match(shippedTemplate, /^CONFIG_DIR=\$PSFN_REPO_ROOT\/config$/mu);
+  assert.match(shippedTemplate, /^PSFN_SHAKEDOWN_EXTERNAL_CHANNELS=false$/mu);
+  for (const name of [
+    'DISCORD_TOKEN',
+    'DISCORD_BOT_ID',
+    'DISCORD_HEARTBEAT_CHANNEL',
+    'TELEGRAM_BOT_TOKEN',
+    'PRIMARY_TELEGRAM_USER_ID',
+    'NTFY_BASE_URL',
+    'NTFY_TOPIC',
+    'NTFY_TOKEN',
+    'CONFIRMATION_NTFY_TOPIC',
+  ]) {
+    assert.match(
+      shippedTemplate,
+      new RegExp(`^${name}=$`, 'mu'),
+      `${name} must be cleared by default instead of inherited from live`,
+    );
+  }
 
   console.log('bootstrap config safety test passed');
 } finally {

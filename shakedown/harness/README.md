@@ -101,11 +101,15 @@ coverage rows are untouched is itself a failure.
 ## Running
 
 Source the env first (two stages, both `set -a`; see `docs/shakedown.md` and
-`shakedown/artie/shakedown.env.template`), then:
+`shakedown/artie/shakedown.env.template`). The bootstrap host must have `psql`
+available for the pre-write disposable-database proof. Then:
 
 ```bash
 # Fresh local lane. PSFN_LIVE_DATA_ROOTS in the sourced round env is mandatory
-# and colon-separated. A dirty root refuses unless resume is explicit.
+# and colon-separated. The env also captures the stage-1 live PostgreSQL URL,
+# names an exact dedicated round database + non-default schema, and disables
+# external channels unless dedicated shakedown accounts are explicitly opted in.
+# A dirty root refuses unless resume is explicit.
 npm run shakedown:bootstrap
 
 # Resume a bootstrap that has a matching .bootstrap-state.json. Immutable

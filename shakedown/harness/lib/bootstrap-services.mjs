@@ -49,10 +49,11 @@ async function probeAgentConnection({ url, token, timeoutMs }) {
     if (!gatewayLink || typeof gatewayLink !== 'object') {
       return { ok: false, detail: `HTTP ${response.status} omitted continuity.checks.gatewayLink` };
     }
-    if (gatewayLink.meta?.agentConnected === false) {
+    if (gatewayLink.status !== 'healthy' || gatewayLink.meta?.agentConnected !== true) {
       return {
         ok: false,
-        detail: gatewayLink.detail ?? `HTTP ${response.status} reports no connected agent`,
+        detail: gatewayLink.detail
+          ?? `HTTP ${response.status} did not report a healthy, explicitly connected agent`,
       };
     }
     return { ok: true, detail: `HTTP ${response.status} returned agent health` };

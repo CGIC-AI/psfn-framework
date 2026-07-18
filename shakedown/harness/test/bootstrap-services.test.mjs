@@ -64,6 +64,36 @@ const gateway = createServer(async (request, response) => {
       }));
       return;
     }
+    if (agentHealthAttempts === 2) {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({
+        status: 'healthy',
+        continuity: {
+          checks: {
+            gatewayLink: {
+              status: 'healthy',
+              meta: { sourceSubsystems: ['llm', 'embeddings'] },
+            },
+          },
+        },
+      }));
+      return;
+    }
+    if (agentHealthAttempts === 3) {
+      response.writeHead(503, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({
+        status: 'degraded',
+        continuity: {
+          checks: {
+            gatewayLink: {
+              status: 'degraded',
+              meta: { agentConnected: true },
+            },
+          },
+        },
+      }));
+      return;
+    }
     response.writeHead(200, { 'content-type': 'application/json' });
     response.end(JSON.stringify({
       status: 'healthy',
@@ -71,7 +101,10 @@ const gateway = createServer(async (request, response) => {
         checks: {
           gatewayLink: {
             status: 'healthy',
-            meta: { sourceSubsystems: ['llm', 'embeddings'] },
+            meta: {
+              agentConnected: true,
+              sourceSubsystems: ['llm', 'embeddings'],
+            },
           },
         },
       },
@@ -130,7 +163,10 @@ try {
     gardenAdmin: true,
     agentConnected: true,
   });
-  assert.ok(agentHealthAttempts >= 2, 'agent readiness must retry a not-yet-connected gateway');
+  assert.ok(
+    agentHealthAttempts >= 4,
+    'agent readiness must reject false, omitted, and degraded connection signals',
+  );
 
   const message = 'PSFN fresh-bootstrap proof exact-message';
   const sessionId = 'bootstrap-exact-session';

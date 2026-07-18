@@ -4,6 +4,7 @@ import {
   statSync,
 } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { resolvePostgresTargetContract } from './bootstrap-postgres.mjs';
 
 const REQUIRED_ENV = [
   'PSFN_REPO_ROOT',
@@ -22,6 +23,10 @@ const REQUIRED_ENV = [
   'PSFN_TEMP_DIR',
   'BACKUP_ROOT_DIR',
   'POSTGRES_DATABASE_URL',
+  'PSFN_LIVE_POSTGRES_DATABASE_URL',
+  'PSFN_SHAKEDOWN_POSTGRES_DATABASE',
+  'COMPANION_PG_SCHEMA',
+  'PSFN_SHAKEDOWN_EXTERNAL_CHANNELS',
   'PSFN_API_BASE',
   'PSFN_ADMIN_BASE',
   'API_HOST',
@@ -34,6 +39,21 @@ const REQUIRED_ENV = [
   'GATEWAY_SESSION_HMAC_KEY',
   'COMPANION_ID',
   'PSFN_LIVE_DATA_ROOTS',
+];
+
+const EXTERNAL_CHANNEL_ENV = [
+  'DISCORD_TOKEN',
+  'DISCORD_BOT_ID',
+  'DISCORD_HEARTBEAT_CHANNEL',
+  'TELEGRAM_BOT_TOKEN',
+  'PRIMARY_TELEGRAM_USER_ID',
+  'NTFY_BASE_URL',
+  'NTFY_TOPIC',
+  'NTFY_TOKEN',
+  'CONFIRMATION_NTFY_TOPIC',
+  'DEEPGRAM_API_KEY',
+  'ELEVENLABS_API_KEY',
+  'FAL_API_KEY',
 ];
 
 const MUTABLE_PATH_ENV = [
@@ -93,17 +113,39 @@ function requireFile(path, label) {
   }
 }
 
-function requireHttpBase(rawValue, label) {
+function requireLoopbackOrigin(rawValue, label, rawHost, rawPort) {
+  const host = rawHost.trim().toLowerCase();
+  if (!['127.0.0.1', '::1'].includes(host)) {
+    throw new Error(`${label} requires its matching host to be an exact loopback address`);
+  }
+  const port = Number(rawPort);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`${label} requires a matching port between 1 and 65535`);
+  }
   let parsed;
   try {
     parsed = new URL(rawValue);
   } catch {
-    throw new Error(`${label} must be an absolute HTTP(S) URL`);
+    throw new Error(`${label} must be an exact loopback origin`);
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    throw new Error(`${label} must use HTTP or HTTPS`);
+  const parsedHost = parsed.hostname.replace(/^\[|\]$/gu, '').toLowerCase();
+  const parsedPort = Number(parsed.port || (parsed.protocol === 'http:' ? '80' : '443'));
+  if (
+    parsed.protocol !== 'http:'
+    || parsed.username
+    || parsed.password
+    || parsed.pathname !== '/'
+    || parsed.search
+    || parsed.hash
+    || parsedHost !== host.replace(/^\[|\]$/gu, '')
+    || parsedPort !== port
+  ) {
+    throw new Error(
+      `${label} must be the exact loopback origin matching its validated host/port, `
+      + 'with no credentials, path, query, or fragment',
+    );
   }
-  return rawValue.replace(/\/$/u, '');
+  return parsed.origin;
 }
 
 function requireRfc4122Uuid(rawValue, label) {
@@ -161,6 +203,41 @@ export function resolveBootstrapConfig(env = process.env) {
   );
   const characterCardPath = canonicalizePath(values.CHARACTER_CARD_PATH, 'CHARACTER_CARD_PATH');
   const liveRoots = parseLiveRoots(values.PSFN_LIVE_DATA_ROOTS);
+  const externalChannelsEnabled = values.PSFN_SHAKEDOWN_EXTERNAL_CHANNELS === 'true';
+  if (
+    values.PSFN_SHAKEDOWN_EXTERNAL_CHANNELS !== 'false'
+    && values.PSFN_SHAKEDOWN_EXTERNAL_CHANNELS !== 'true'
+  ) {
+    throw new Error('PSFN_SHAKEDOWN_EXTERNAL_CHANNELS must be exactly "false" or "true"');
+  }
+  if (!externalChannelsEnabled) {
+    for (const name of EXTERNAL_CHANNEL_ENV) {
+      if (env[name]?.trim()) {
+        throw new Error(
+          `Inherited external-channel credential ${name} is set while shakedown external channels are disabled`,
+        );
+      }
+    }
+    const voiceEnabled = env.DISCORD_VOICE_ENABLED?.trim().toLowerCase();
+    if (voiceEnabled && !['0', 'false', 'no', 'off'].includes(voiceEnabled)) {
+      throw new Error('DISCORD_VOICE_ENABLED must be disabled unless shakedown external channels are enabled');
+    }
+  } else if (env.PSFN_SHAKEDOWN_EXTERNAL_CHANNEL_CONFIRM?.trim() !== 'dedicated-shakedown-accounts') {
+    throw new Error(
+      'PSFN_SHAKEDOWN_EXTERNAL_CHANNEL_CONFIRM must equal "dedicated-shakedown-accounts" '
+      + 'before external channels can be enabled',
+    );
+  } else if (!EXTERNAL_CHANNEL_ENV.some(name => Boolean(env[name]?.trim()))) {
+    throw new Error(
+      'PSFN_SHAKEDOWN_EXTERNAL_CHANNELS=true requires dedicated external-channel credentials',
+    );
+  }
+  const postgresContract = resolvePostgresTargetContract({
+    postgresUrl: values.POSTGRES_DATABASE_URL,
+    livePostgresUrl: values.PSFN_LIVE_POSTGRES_DATABASE_URL,
+    expectedDatabase: values.PSFN_SHAKEDOWN_POSTGRES_DATABASE,
+    schema: values.COMPANION_PG_SCHEMA,
+  });
 
   if (roundRoot !== psfnRoundRoot) {
     throw new Error(
@@ -265,12 +342,25 @@ export function resolveBootstrapConfig(env = process.env) {
     backupRootDir: mutablePaths.BACKUP_ROOT_DIR,
     characterCardSource,
     liveRoots,
-    apiBase: requireHttpBase(values.PSFN_API_BASE, 'PSFN_API_BASE'),
-    adminBase: requireHttpBase(values.PSFN_ADMIN_BASE, 'PSFN_ADMIN_BASE'),
+    apiBase: requireLoopbackOrigin(
+      values.PSFN_API_BASE,
+      'PSFN_API_BASE',
+      values.API_HOST,
+      values.API_PORT,
+    ),
+    adminBase: requireLoopbackOrigin(
+      values.PSFN_ADMIN_BASE,
+      'PSFN_ADMIN_BASE',
+      values.ADMIN_HOST,
+      values.ADMIN_PORT,
+    ),
     apiKey: values.API_KEY,
     adminToken: values.ADMIN_TOKEN,
     companionId: requireRfc4122Uuid(values.COMPANION_ID, 'COMPANION_ID'),
     postgresUrl: values.POSTGRES_DATABASE_URL,
+    postgresContract,
+    postgresIdentity: postgresContract.identity,
+    externalChannelsEnabled,
     resume: env.PSFN_SHAKEDOWN_RESUME?.trim() === '1',
   };
 }

@@ -21,6 +21,7 @@ const GLOBAL_OWNER_SEEDS = [
   'trust-policy',
   'backup',
   'intake-policy',
+  'places',
 ];
 
 const COMPANION_OWNER_SEEDS = [
@@ -43,6 +44,7 @@ function expectedStateIdentity(config) {
     systemDataDir: config.systemDataDir,
     companionDataDir: config.companionDataDir,
     companionId: config.companionId,
+    postgresIdentity: config.postgresIdentity,
   };
 }
 
@@ -58,7 +60,7 @@ function parseState(config) {
   }
   const expected = expectedStateIdentity(config);
   for (const [key, value] of Object.entries(expected)) {
-    if (parsed?.[key] !== value) {
+    if (JSON.stringify(parsed?.[key]) !== JSON.stringify(value)) {
       throw new Error(
         `Cannot resume: bootstrap state ${key} is ${JSON.stringify(parsed?.[key])}, `
         + `expected ${JSON.stringify(value)}. Use a new round root.`,

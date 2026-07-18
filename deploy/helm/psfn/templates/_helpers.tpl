@@ -37,6 +37,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
+{{- define "psfn.fleetAgentLabels" -}}
+{{ include "psfn.componentLabels" (dict "root" .root "component" "agent") }}
+psfn.io/companion-id: {{ .companionId }}
+psfn.io/fleet-target: registered
+{{- end -}}
+
 {{- define "psfn.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
 {{- default (include "psfn.fullname" .) .Values.serviceAccount.name -}}
@@ -222,7 +228,38 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
 {{- define "psfn.agentAdminServiceName" -}}
+{{- if .Values.fleet.enabled -}}
+{{- printf "%s-agent-admin" (include "psfn.fullname" .) | trunc 26 | trimSuffix "-" -}}
+{{- else -}}
 {{- printf "%s-agent-admin" (include "psfn.fullname" .) -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "psfn.fleetAgentDeploymentName" -}}
+{{- printf "%s-agent" (include "psfn.fullname" .root) | trunc 26 | trimSuffix "-" -}}-{{ .companionId }}
+{{- end -}}
+
+{{- define "psfn.fleetAgentAdminServiceName" -}}
+{{- include "psfn.agentAdminServiceName" .root -}}-{{ .companionId }}
+{{- end -}}
+
+{{- define "psfn.fleetCompanionPostgresSchema" -}}
+{{- $companionId := .Values.runtime.companionId -}}
+{{- $schema := "" -}}
+{{- range .Values.fleet.companions -}}
+{{- if eq .companionId $companionId -}}
+{{- $schema = .postgresSchema -}}
+{{- end -}}
+{{- end -}}
+{{- $schema -}}
+{{- end -}}
+
+{{- define "psfn.fleetCompanionIds" -}}
+{{- $ids := list -}}
+{{- range .Values.fleet.companions -}}
+{{- $ids = append $ids .companionId -}}
+{{- end -}}
+{{- join "," $ids -}}
 {{- end -}}
 
 {{- define "psfn.gardenServiceName" -}}
@@ -290,15 +327,31 @@ app.kubernetes.io/component: {{ .component }}
 {{- end -}}
 
 {{- define "psfn.spiffeGateway" -}}
+{{- if .Values.fleet.enabled -}}
+{{- printf "spiffe://%s/psfn/gateway/fleet" .Values.certificates.trustDomain -}}
+{{- else -}}
 {{- printf "spiffe://%s/psfn/gateway/%s" .Values.certificates.trustDomain .Values.runtime.companionId -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "psfn.spiffeAgent" -}}
+{{- if .Values.fleet.enabled -}}
+{{- printf "spiffe://%s/psfn/agent/fleet" .Values.certificates.trustDomain -}}
+{{- else -}}
 {{- printf "spiffe://%s/psfn/agent/%s" .Values.certificates.trustDomain .Values.runtime.companionId -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "psfn.spiffeFleetAgent" -}}
+{{- printf "spiffe://%s/psfn/agent/%s" .root.Values.certificates.trustDomain .companionId -}}
 {{- end -}}
 
 {{- define "psfn.spiffeGarden" -}}
+{{- if .Values.fleet.enabled -}}
+{{- printf "spiffe://%s/psfn/garden/fleet" .Values.certificates.trustDomain -}}
+{{- else -}}
 {{- printf "spiffe://%s/psfn/garden/%s" .Values.certificates.trustDomain .Values.runtime.companionId -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "psfn.spiffeSatelliteHub" -}}
@@ -340,6 +393,14 @@ group: cert-manager.io
 
 {{- define "psfn.agentAdminCertSecretName" -}}
 {{- printf "%s-agent-admin-tls" (include "psfn.fullname" .) -}}
+{{- end -}}
+
+{{- define "psfn.fleetAgentRpcClientCertSecretName" -}}
+{{- printf "%s-agent-rpc-client-%s-tls" (include "psfn.fullname" .root) .companionId -}}
+{{- end -}}
+
+{{- define "psfn.fleetAgentAdminCertSecretName" -}}
+{{- printf "%s-agent-admin-%s-tls" (include "psfn.fullname" .root) .companionId -}}
 {{- end -}}
 
 {{- define "psfn.gardenAdminClientCertSecretName" -}}
@@ -425,6 +486,14 @@ group: cert-manager.io
   value: {{ .Values.runtime.mode | quote }}
 - name: PSFN_RUNTIME_LAYOUT_MODE
   value: {{ .Values.runtime.layoutMode | quote }}
+{{- if .Values.fleet.enabled }}
+- name: PSFN_MULTI_COMPANION
+  value: "true"
+- name: PSFN_RUNTIME_ROOT
+  value: {{ .Values.fleet.runtimeRoot | quote }}
+- name: COMPANION_PG_SCHEMA
+  value: {{ include "psfn.fleetCompanionPostgresSchema" . | quote }}
+{{- end }}
 - name: COMPANION_ID
   value: {{ .Values.runtime.companionId | quote }}
 - name: SYSTEM_DATA_DIR
@@ -497,6 +566,45 @@ group: cert-manager.io
   value: {{ .Values.psfnAppImage.previousGitCommit | default "" | quote }}
 - name: PSFN_REPOSITORY_DIR
   value: {{ ternary .Values.repositoryCheckout.mountPath (.Values.runtime.repositoryDir | default "") .Values.repositoryCheckout.enabled | quote }}
+{{- end -}}
+
+{{- define "psfn.fleetGardenEnv" -}}
+- name: TZ
+  value: {{ required "runtime.timezone is required (IANA name, e.g. America/New_York)" .Values.runtime.timezone | quote }}
+- name: NODE_ENV
+  value: {{ .Values.runtime.nodeEnv | quote }}
+- name: PSFN_RUNTIME_MODE
+  value: {{ .Values.runtime.mode | quote }}
+- name: PSFN_RUNTIME_LAYOUT_MODE
+  value: {{ .Values.runtime.layoutMode | quote }}
+- name: PSFN_MULTI_COMPANION
+  value: "true"
+- name: PSFN_FLEET_AUTH
+  value: "true"
+- name: PSFN_RUNTIME_ROOT
+  value: {{ .Values.fleet.runtimeRoot | quote }}
+- name: COMPANION_PG_SCHEMA
+  value: {{ include "psfn.fleetCompanionPostgresSchema" . | quote }}
+- name: COMPANION_ID
+  value: {{ .Values.runtime.companionId | quote }}
+- name: SYSTEM_DATA_DIR
+  value: {{ .Values.runtime.systemDataDir | quote }}
+- name: COMPANION_DATA_DIR
+  value: {{ .Values.runtime.companionDataDir | quote }}
+- name: WORKSPACE_PATH
+  value: {{ .Values.runtime.workspacePath | quote }}
+- name: PSFN_LOGS_DIR
+  value: {{ .Values.runtime.logsDir | quote }}
+- name: PSFN_TEMP_DIR
+  value: {{ .Values.runtime.tempDir | quote }}
+- name: BACKUP_ROOT_DIR
+  value: {{ .Values.runtime.backupsDir | quote }}
+- name: CONFIG_DIR
+  value: {{ .Values.runtime.configDir | quote }}
+- name: CHARACTER_CARD_PATH
+  value: {{ .Values.runtime.characterCardPath | quote }}
+- name: PERSISTENCE_BACKEND
+  value: postgres
 {{- end -}}
 
 {{- define "psfn.postgresDatabaseUrlEnv" -}}

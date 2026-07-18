@@ -1,0 +1,209 @@
+{{- if .Values.fleet.enabled }}
+{{- $root := . -}}
+{{- range $companion := .Values.fleet.companions }}
+{{- $companionId := $companion.companionId -}}
+{{- $companionDataDir := printf "%s/companions/%s" $root.Values.fleet.runtimeRoot $companionId -}}
+{{- $workspacePath := printf "%s/workspaces/personal/%s" $root.Values.fleet.runtimeRoot $companionId -}}
+{{- $values := deepCopy $root.Values -}}
+{{- $_ := set $values.runtime "companionId" $companionId -}}
+{{- $_ = set $values.runtime "companionDataDir" $companionDataDir -}}
+{{- $_ = set $values.runtime "characterCardPath" (printf "%s/companion.json" $companionDataDir) -}}
+{{- $_ = set $values.runtime "workspacePath" $workspacePath -}}
+{{- $_ = set $values.persistence.companionData "existingClaim" $companion.companionDataClaim -}}
+{{- $_ = set $values.persistence.workspace "existingClaim" $companion.workspaceClaim -}}
+{{- $ctx := dict "Values" $values "Release" $root.Release "Chart" $root.Chart "Files" $root.Files -}}
+{{- $target := dict "root" $root "companionId" $companionId -}}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "psfn.fleetAgentAdminServiceName" $target }}
+  labels:
+    {{- include "psfn.labels" $root | nindent 4 }}
+    psfn.io/companion-id: {{ $companionId }}
+    psfn.io/fleet-target: registered
+spec:
+  type: ClusterIP
+  ports:
+    - name: admin-https
+      port: {{ $root.Values.ports.agentAdmin }}
+      targetPort: admin-https
+  selector:
+    {{- include "psfn.fleetAgentLabels" $target | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "psfn.fleetAgentDeploymentName" $target }}
+  labels:
+    {{- include "psfn.labels" $root | nindent 4 }}
+    psfn.io/companion-id: {{ $companionId }}
+    psfn.io/fleet-target: registered
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "psfn.fleetAgentLabels" $target | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "psfn.fleetAgentLabels" $target | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "psfn.serviceAccountName" $root }}
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
+      {{- with $root.Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      initContainers:
+        {{- include "psfn.seedInitContainer" $ctx | nindent 8 }}
+        {{- include "psfn.waitForPostgresInitContainer" (dict "root" $ctx "image" $values.workloads.agent.image) | nindent 8 }}
+      containers:
+        - name: agent
+          image: {{ include "psfn.image" (dict "root" $root "image" $root.Values.workloads.agent.image) | quote }}
+          imagePullPolicy: {{ default $root.Values.psfnAppImage.pullPolicy $root.Values.workloads.agent.image.pullPolicy }}
+          command:
+            {{- toYaml $root.Values.workloads.agent.command | nindent 12 }}
+          securityContext:
+            {{- toYaml $root.Values.securityContext | nindent 12 }}
+          ports:
+            - name: admin-https
+              containerPort: {{ $root.Values.ports.agentAdmin }}
+          env:
+            {{- include "psfn.commonEnv" $ctx | nindent 12 }}
+            {{- include "psfn.postgresDatabaseUrlFileEnv" $ctx | nindent 12 }}
+            {{- if $root.Values.kubeSelfManagement.enabled }}
+            - name: PSFN_KUBE_SELF_MANAGEMENT_ENABLED
+              value: "true"
+            - name: PSFN_KUBE_CURRENT_IMAGE
+              value: {{ include "psfn.image" (dict "root" $root "image" $root.Values.workloads.gateway.image) | quote }}
+            {{- end }}
+            - name: PSFN_HELM_BACKUP_AGENT_IMAGE_REPOSITORY
+              value: {{ default $root.Values.psfnAppImage.repository $root.Values.workloads.agent.image.repository | quote }}
+            - name: PSFN_HELM_BACKUP_AGENT_IMAGE_TAG
+              value: {{ default $root.Values.psfnAppImage.tag $root.Values.workloads.agent.image.tag | quote }}
+            - name: PSFN_HELM_BACKUP_AGENT_IMAGE_DIGEST
+              value: {{ default $root.Values.psfnAppImage.digest $root.Values.workloads.agent.image.digest | quote }}
+            - name: PSFN_HELM_BACKUP_GATEWAY_IMAGE_REPOSITORY
+              value: {{ default $root.Values.psfnAppImage.repository $root.Values.workloads.gateway.image.repository | quote }}
+            - name: PSFN_HELM_BACKUP_GATEWAY_IMAGE_TAG
+              value: {{ default $root.Values.psfnAppImage.tag $root.Values.workloads.gateway.image.tag | quote }}
+            - name: PSFN_HELM_BACKUP_GATEWAY_IMAGE_DIGEST
+              value: {{ default $root.Values.psfnAppImage.digest $root.Values.workloads.gateway.image.digest | quote }}
+            - name: PSFN_HELM_BACKUP_GARDEN_IMAGE_REPOSITORY
+              value: {{ default $root.Values.psfnAppImage.repository $root.Values.workloads.garden.image.repository | quote }}
+            - name: PSFN_HELM_BACKUP_GARDEN_IMAGE_TAG
+              value: {{ default $root.Values.psfnAppImage.tag $root.Values.workloads.garden.image.tag | quote }}
+            - name: PSFN_HELM_BACKUP_GARDEN_IMAGE_DIGEST
+              value: {{ default $root.Values.psfnAppImage.digest $root.Values.workloads.garden.image.digest | quote }}
+            - name: GATEWAY_RPC_ENDPOINT
+              value: {{ include "psfn.gatewayRpcUrlForClient" $root | quote }}
+            - name: GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $companion.authSecret.name }}
+                  key: {{ $companion.authSecret.sessionIntegrityKey }}
+            - name: GATEWAY_COMPANION_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $companion.authSecret.name }}
+                  key: {{ $companion.authSecret.companionAuthKey }}
+            - name: GATEWAY_RPC_TLS_CA_PATH
+              value: {{ printf "%s/gateway-rpc/ca.crt" $root.Values.certificates.mountBasePath | quote }}
+            - name: GATEWAY_RPC_TLS_CERT_PATH
+              value: {{ printf "%s/gateway-rpc/tls.crt" $root.Values.certificates.mountBasePath | quote }}
+            - name: GATEWAY_RPC_TLS_KEY_PATH
+              value: {{ printf "%s/gateway-rpc/tls.key" $root.Values.certificates.mountBasePath | quote }}
+            - name: GATEWAY_RPC_TLS_EXPECTED_PEER_SPIFFE_URI
+              value: {{ include "psfn.spiffeGateway" $root | quote }}
+            - name: GATEWAY_RPC_TLS_SERVER_NAME
+              value: {{ include "psfn.gatewayRpcServerName" $root | quote }}
+            - name: ADMIN_TRANSPORT_MODE
+              value: network
+            - name: ADMIN_TRANSPORT_LISTEN_HOST
+              value: 0.0.0.0
+            - name: ADMIN_TRANSPORT_LISTEN_PORT
+              value: {{ $root.Values.ports.agentAdmin | quote }}
+            - name: ADMIN_TRANSPORT_TLS_CA_PATH
+              value: {{ printf "%s/admin-transport/ca.crt" $root.Values.certificates.mountBasePath | quote }}
+            - name: ADMIN_TRANSPORT_TLS_CERT_PATH
+              value: {{ printf "%s/admin-transport/tls.crt" $root.Values.certificates.mountBasePath | quote }}
+            - name: ADMIN_TRANSPORT_TLS_KEY_PATH
+              value: {{ printf "%s/admin-transport/tls.key" $root.Values.certificates.mountBasePath | quote }}
+            - name: ADMIN_TRANSPORT_TLS_EXPECTED_PEER_SPIFFE_URI
+              value: {{ include "psfn.spiffeGarden" $root | quote }}
+            {{- if $root.Values.redis.enabled }}
+            - name: PSFN_APP_CACHE_MODE
+              value: redis
+            - name: PSFN_REDIS_URL
+              value: {{ ternary $root.Values.redis.external.url (printf "redis://%s:%v" (include "psfn.redisServiceName" $root) $root.Values.ports.redis) (eq $root.Values.redis.mode "external") | quote }}
+            - name: PSFN_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "psfn.redisPasswordSecretName" $root }}
+                  key: {{ include "psfn.redisPasswordSecretKey" $root }}
+            {{- if and (eq $root.Values.redis.mode "external") $root.Values.redis.external.tls.enabled }}
+            - name: PSFN_REDIS_TLS_REJECT_UNAUTHORIZED
+              value: {{ $root.Values.redis.external.tls.rejectUnauthorized | quote }}
+            {{- end }}
+            {{- else }}
+            - name: PSFN_APP_CACHE_MODE
+              value: memory
+            {{- end }}
+          readinessProbe:
+            tcpSocket:
+              port: admin-https
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: admin-https
+            initialDelaySeconds: 45
+            periodSeconds: 20
+          resources:
+            {{- toYaml $root.Values.workloads.agent.resources | nindent 12 }}
+          volumeMounts:
+            - name: postgres-database-url
+              mountPath: /var/run/secrets/psfn-postgres
+              readOnly: true
+            - name: system-data
+              mountPath: {{ $root.Values.runtime.systemDataDir }}
+              readOnly: true
+            - name: companion-data
+              mountPath: {{ $companionDataDir }}
+            - name: workspace
+              mountPath: {{ $workspacePath }}
+            - name: runtime
+              mountPath: {{ $root.Values.runtime.logsDir }}
+              subPath: logs
+            - name: runtime
+              mountPath: {{ $root.Values.runtime.tempDir }}
+              subPath: tmp
+            - name: runtime
+              mountPath: {{ $root.Values.runtime.backupsDir }}
+              subPath: backups
+            {{- if $root.Values.persistence.modelCache.enabled }}
+            - name: model-cache
+              mountPath: {{ $root.Values.runtime.modelCacheDir }}
+            {{- end }}
+            {{- include "psfn.repositoryCheckoutVolumeMount" $root | nindent 12 }}
+            - name: gateway-rpc-client-tls
+              mountPath: {{ printf "%s/gateway-rpc" $root.Values.certificates.mountBasePath }}
+              readOnly: true
+            - name: admin-transport-tls
+              mountPath: {{ printf "%s/admin-transport" $root.Values.certificates.mountBasePath }}
+              readOnly: true
+      volumes:
+        {{- include "psfn.commonVolumes" $ctx | nindent 8 }}
+        - name: gateway-rpc-client-tls
+          secret:
+            secretName: {{ include "psfn.fleetAgentRpcClientCertSecretName" $target }}
+        - name: admin-transport-tls
+          secret:
+            secretName: {{ include "psfn.fleetAgentAdminCertSecretName" $target }}
+{{ end }}
+{{- end }}

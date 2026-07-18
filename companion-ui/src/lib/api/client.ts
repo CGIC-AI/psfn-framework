@@ -18,6 +18,7 @@ import {
   serializeClientToHubMessage,
 } from '../protocol/framing.js';
 import { buildSatelliteHello, type SatelliteHelloOptions } from './auth.js';
+import type { ShardDirectoryEntry } from '../../../../src/shared/contracts/shard-directory.js';
 
 export type SatelliteHubConnectionState =
   | 'idle'
@@ -39,6 +40,9 @@ export interface SatelliteHubSession {
   audioFormat?: string;
   capabilities?: SatelliteCapabilities;
   eventCapabilities?: readonly string[];
+  shards?: readonly ShardDirectoryEntry[];
+  activeShardId?: string;
+  canListShards?: boolean;
   identity?: RuntimeIdentity;
   lastPingSentAt?: number;
   lastPongAt?: string;

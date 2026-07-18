@@ -92,6 +92,8 @@ function actionBody(resource = 'conversation.interact', action = 'companion.inte
     resource,
     body: resource === 'confirmations.resolve'
       ? { id: 'confirmation-1', decision: 'deny' }
+      : resource === 'shards.interact'
+        ? { shardId: 'shard-live-1', content: 'browser text remains untrusted' }
       : { content: 'browser text remains untrusted' },
   }));
 }
@@ -99,6 +101,8 @@ function actionBody(resource = 'conversation.interact', action = 'companion.inte
 function fixture(
   resolved = context,
   approvalOwnerOf: (id: string) => string | undefined = () => companionId,
+  shardOwnerOf: (shardId: string, parentCompanionId: string) => Promise<string | undefined>
+    = async () => companionId,
 ) {
   const keys = generateKeyPairSync('ed25519');
   const signer = createGatewayRequestCapabilitySigner({
@@ -134,6 +138,7 @@ function fixture(
     childAssertions,
     dispatch,
     approvalOwner: { ownerOf: approvalOwnerOf },
+    shardDeployment: { ownerOfLiveShard: shardOwnerOf },
   });
   return { broker, dispatch, verifier };
 }
@@ -237,6 +242,24 @@ describe('GatewayCompanionUiActionBroker', () => {
         headers: {},
       },
     })).rejects.toBeInstanceOf(CompanionUiActionDeniedError);
+    expect(built.dispatch.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('fetches the live deployment owner and denies stale or cross-parent shard selectors', async () => {
+    const ownerOfLiveShard = vi.fn(async () => '99999999-9999-4999-8999-999999999999');
+    const built = fixture(context, () => companionId, ownerOfLiveShard);
+    await expect(built.broker.execute({
+      rawBody: actionBody('shards.interact', 'companion.interact'),
+      companionId,
+      sessionToken: 's'.repeat(43),
+      attachment,
+      physicalCeiling: { capabilities: ['text'], telemetryScopes: [] },
+      deviceTransport: {
+        principal: { id: 'satellite-principal', mode: 'api_key', scope: 'satellite' },
+        headers: {},
+      },
+    })).rejects.toBeInstanceOf(CompanionUiActionDeniedError);
+    expect(ownerOfLiveShard).toHaveBeenCalledWith('shard-live-1', companionId);
     expect(built.dispatch.dispatch).not.toHaveBeenCalled();
   });
 });

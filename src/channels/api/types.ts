@@ -12,6 +12,11 @@ import type {
   RequestCapabilityAuthorityVersions,
   RequestCapabilityParentBinding,
 } from '../../boundary/fleet-auth/request-capability.js';
+import type {
+  ShardChatMessage,
+  ShardChatResponse,
+  ShardDirectoryEntry,
+} from '../../shared/contracts/shard-directory.js';
 
 export interface CompanionUiAgentCapability {
   /** Agent-audience token only; an operator token on this hop is invalid. */
@@ -244,6 +249,41 @@ export interface ApiRpcFailure {
 }
 
 export type ApiChatCompletionRpcResult = ApiChatCompletionRpcSuccess | ApiRpcFailure;
+
+export interface ApiShardOwnerRpcParams {
+  shardId: string;
+}
+
+export interface ApiShardOwnerRpcResult {
+  parentCompanionId?: string;
+}
+
+export interface ApiCompanionUiShardActionRpcParams {
+  requestId: string;
+  principal: ApiAuthPrincipal;
+  headers: ApiRpcHeaders;
+  clientCert?: SatelliteClientCertIdentity;
+  hubDevicePrincipal: HubDevicePrincipalSnapshot;
+  hubDeviceAttachment: HubDeviceAttachmentSnapshot;
+  companionUiCapability: CompanionUiAgentCapability;
+}
+
+export interface ApiCompanionUiShardActionRpcSuccess {
+  ok: true;
+  response:
+    | readonly ShardDirectoryEntry[]
+    | readonly ShardChatMessage[]
+    | ShardChatResponse
+    | Readonly<{
+      interrupted: boolean;
+      interactionId: string;
+      attribution: Readonly<{ parentCompanionId: string; shardId: string }>;
+    }>;
+}
+
+export type ApiCompanionUiShardActionRpcResult =
+  | ApiCompanionUiShardActionRpcSuccess
+  | ApiRpcFailure;
 
 export interface ApiChatCompletionCancelRpcParams {
   requestId: string;

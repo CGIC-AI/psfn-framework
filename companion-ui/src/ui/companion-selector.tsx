@@ -7,6 +7,7 @@ import {
 } from '../lib/fleet-roster.js';
 import { ApprovalCard } from './context-layers.js';
 import { DrawerHeader } from './overlay-drawer.js';
+import type { ShardDirectoryEntry } from '../../../src/shared/contracts/shard-directory.js';
 
 /**
  * Companion selector page (psfn-framework-hbxz). A visual grid of the signed-in
@@ -28,6 +29,9 @@ export function CompanionSelectorPage({
   onApprovalDecision,
   onClose,
   onSelect,
+  onSelectShard,
+  shards,
+  activeShardId,
 }: {
   activeCompanionId: string | null;
   approvals: ApprovalPanelState;
@@ -36,6 +40,9 @@ export function CompanionSelectorPage({
   onApprovalDecision: (id: string, decision: 'approve' | 'deny') => void;
   onClose: () => void;
   onSelect: (companionId: string) => void;
+  onSelectShard?: (shardId: string | null) => void;
+  shards?: readonly ShardDirectoryEntry[];
+  activeShardId?: string | null;
 }) {
   const approvalsByCompanion = groupApprovalsByCompanion(
     approvals.capability === 'available'
@@ -81,12 +88,62 @@ export function CompanionSelectorPage({
                     onDecision={onApprovalDecision}
                   />
                 ))}
+                {active && (
+                  <ShardDirectory
+                    activeShardId={activeShardId ?? null}
+                    onSelect={onSelectShard ?? (() => {})}
+                    shards={shards ?? []}
+                  />
+                )}
               </li>
             );
           })}
         </ul>
       </div>
     </aside>
+  );
+}
+
+function ShardDirectory({
+  activeShardId,
+  onSelect,
+  shards,
+}: {
+  activeShardId: string | null;
+  onSelect: (shardId: string | null) => void;
+  shards: readonly ShardDirectoryEntry[];
+}) {
+  return (
+    <div className="shard-directory" aria-label="Deployed shards">
+      <button
+        type="button"
+        className={`shard-row ${activeShardId === null ? 'active' : ''}`}
+        onClick={() => onSelect(null)}
+        aria-pressed={activeShardId === null}
+      >
+        Parent conversation
+      </button>
+      {shards.map(shard => (
+        <button
+          type="button"
+          className={`shard-row ${activeShardId === shard.shardId ? 'active' : ''}`}
+          key={shard.shardId}
+          onClick={() => onSelect(shard.shardId)}
+          disabled={shard.availability !== 'available'}
+          aria-pressed={activeShardId === shard.shardId}
+          aria-label={`Talk directly to shard ${shard.label}`}
+        >
+          <span className="shard-row-label">{shard.label}</span>
+          <span className={`shard-availability ${shard.availability}`}>
+            {shard.availability}
+          </span>
+          <span className="shard-purpose">{shard.purpose}</span>
+        </button>
+      ))}
+      {shards.length === 0 && (
+        <p className="shard-empty">No deployed shards are currently available.</p>
+      )}
+    </div>
   );
 }
 

@@ -216,30 +216,9 @@ export interface RequestCapabilityVerifyInput extends Omit<RequestCapabilitySign
 
 export interface RequestCapabilityVerifier extends TrustedHostRecoveryCapabilityVerifier {
   verifyOperator(input: RequestCapabilityVerifyInput): VerifiedRequestCapability;
-  /**
-   * Verify the signed gateway-to-operator envelope at the mTLS/loopback hop.
-   * The gateway has already hashed the exact body bytes and forwards them
-   * unchanged with an exact Content-Length; this verifies the signed route,
-   * authorization, length, and decision metadata before the operator reads
-   * the body stream.
-   */
-  verifyOperatorTransport(input: RequestCapabilityTransportVerifyInput): VerifiedRequestCapability;
   verifyAgent(input: RequestCapabilityVerifyInput & {
     readonly parent: RequestCapabilityParentBinding;
   }): VerifiedRequestCapability;
-}
-
-export interface RequestCapabilityTransportVerifyInput {
-  readonly token: string;
-  readonly companionId: string;
-  readonly method: GardenForwardMethod;
-  readonly canonicalRequestTarget: string;
-  readonly action: FleetAuthAction;
-  readonly authorizationDigest: string;
-  readonly bodyLength: number;
-  readonly requestId: string;
-  readonly decisionId: string;
-  readonly nowSeconds?: number;
 }
 
 export interface VerifiedRequestCapability {
@@ -1184,27 +1163,6 @@ export function createRequestCapabilityVerifier(
   return Object.freeze({
     verifyRecovery: recoveryVerifier.verifyRecovery,
     verifyOperator: (input: RequestCapabilityVerifyInput) => verifyExpected(input, 'operator'),
-    verifyOperatorTransport: (input: RequestCapabilityTransportVerifyInput) => {
-      requireUuid(input.companionId, 'transport companionId');
-      requireUuid(input.requestId, 'transport requestId');
-      requireUuid(input.decisionId, 'transport decisionId');
-      requireDigest(input.authorizationDigest, 'transport authorizationDigest');
-      requireInteger(input.bodyLength, 'transport bodyLength');
-      const { claims, key } = verifyToken(input.token, 'operator', input.nowSeconds);
-      if (claims.companion_id !== input.companionId
-        || claims.aud !== `operator:${input.companionId}`
-        || claims.method !== input.method
-        || claims.request_target !== input.canonicalRequestTarget
-        || claims.action !== input.action
-        || !equalDigest(claims.authorization_digest, input.authorizationDigest)
-        || claims.body_length !== input.bodyLength
-        || claims.request_id !== input.requestId
-        || claims.decision_id !== input.decisionId
-        || claims.parent) {
-        reject('operator transport binding does not match');
-      }
-      return verifiedCapability(claims, key);
-    },
     verifyAgent: (input: RequestCapabilityVerifyInput & { parent: RequestCapabilityParentBinding }) => (
       verifyExpected(input, 'agent', input.parent)
     ),

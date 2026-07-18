@@ -77,6 +77,7 @@ secrets.
 | --- | --- |
 | `live-system-shakedown.mjs` | Tier-tagged case harness. One phase per run; writes a run JSON (tagged with `target`) to `PSFN_SHAKEDOWN_OUTPUT`. |
 | `run-live-shakedown-matrix.sh` | Tier sweep: nursery → apprentice → autonomous, for `local` or `kube` (`PSFN_TARGET`). Captures the pre-sweep tier, restores it on exit (trap) **and verifies the restore** — owner-file diff for local, settings-API re-read for kube — even on SIGINT/SIGTERM, and emits one run JSON per tier. |
+| `tier-conformance-sweep.mjs` | Kube 3-tier **tool-conformance** sweep. Flips the live tier nursery → apprentice → autonomous (reusing `lib/target.mjs`), triggers `POST /api/admin/tool-conformance/run` + `GET …/latest` at each tier, writes `tool-conformance.<tier>.json` per tier, and restores + confirms the pre-sweep tier on any exit (normal / error / SIGINT / SIGTERM). **Tier-insensitive for capability gating** — see the runbook below. |
 | `restart-split-runtime.sh` | Restarts the split gateway/agent runtime for a lane (Postgres backend, health-gated). |
 | `operator-ui-sweep.mjs` | Garden behavioral sweep (Playwright) — asserts behavior, not HTTP 200s. |
 | `shakedown-scorecard.mjs` | Aggregates run JSONs; enforces the non-green taxonomy and cross-checks the coverage appendix. Exits non-zero if any case is non-green (unwaived) or any appendix surface is uncovered. |
@@ -125,3 +126,112 @@ PSFN_SCORECARD_JSON=$SHAKEDOWN_ROOT/artifacts/shakedown-scorecard.json \
 PSFN_SCORECARD_MD=$SHAKEDOWN_ROOT/SHAKEDOWN-SCORECARD.md \
   shakedown/harness/shakedown-scorecard.mjs
 ```
+
+## Running the kube tier-conformance sweep
+
+`tier-conformance-sweep.mjs` is the committed, repeatable version of the ad-hoc
+3-tier probe that was run against Artie (ARTEMIS, the test companion) on the k3d
+cluster. It flips the **live** capability tier nursery → apprentice → autonomous,
+triggers the Garden tool-conformance sweep at each tier, captures the per-tier
+result JSON, and **guarantees** the pre-sweep tier is restored on any exit.
+
+> **Tier-insensitive caveat (read first).** The default tool-conformance sweep
+> probes only **safe reads and schema shapes** (`probeKind` `read_only` /
+> `schema_only` / `rejection_check`); it does **not** attempt gated actions. So
+> its results are **expected to be identical across all three tiers** — identical
+> output is NOT evidence of a gating bug, and this probe does **not** certify
+> capability gating. What it proves is that the live tier-flip + confirmed-restore
+> contract works and the conformance surface stays healthy while the tier is
+> flipped. Real capability-gate certification (does nursery actually deny an
+> action autonomous allows?) is **bead 65rk.6**, not this probe.
+
+### Cluster access
+
+Kube context `k3d-psfn-kube-test`, namespace `psfn-test`. Fetch the tokens from
+the app secret (names only — never paste the values into any committed file):
+
+```bash
+kubectl config use-context k3d-psfn-kube-test
+ADMIN_TOKEN="$(kubectl -n psfn-test get secret psfn-app -o jsonpath='{.data.ADMIN_TOKEN}' | base64 -d)"
+API_KEY="$(kubectl -n psfn-test get secret psfn-app -o jsonpath='{.data.API_KEY}' | base64 -d)"
+```
+
+Stand up the two port-forwards (Garden admin :10054, gateway :10053):
+
+```bash
+kubectl -n psfn-test port-forward svc/psfn-garden 10054:10054 &
+kubectl -n psfn-test port-forward svc/psfn-gateway 10053:10053 &
+```
+
+### Environment
+
+Export (values elided; `POSTGRES_DATABASE_URL` is required because the shared
+`resolveTarget` resolver reads it fail-closed for both targets):
+
+```bash
+export PSFN_TARGET=kube
+export PSFN_API_BASE=http://127.0.0.1:10053     # gateway port-forward
+export PSFN_ADMIN_BASE=http://127.0.0.1:10054    # Garden admin port-forward
+export API_KEY=…                                 # from the secret above
+export ADMIN_TOKEN=…                             # from the secret above
+export POSTGRES_DATABASE_URL=…                   # round Postgres (resolver requires it)
+export PSFN_MATRIX_DIR=$SHAKEDOWN_ROOT/artifacts/matrix   # or PSFN_ROUND_DIR — output dir
+```
+
+Optional knobs (all have safe defaults): `PSFN_ROUND_DIR` (alias for the output
+dir), `PSFN_ORIGINAL_TIER_FILE` (durable pre-sweep record, default
+`$PSFN_MATRIX_DIR/original-capability-tier`), `PSFN_CONFORMANCE_RUN_TIMEOUT_MS`,
+`PSFN_CONFORMANCE_LATEST_TIMEOUT_MS`, `PSFN_CONFORMANCE_SETTLE_MS`,
+`PSFN_TIER_FLIP_CONFIRM_TIMEOUT_MS`, `PSFN_TIER_FLIP_POLL_MS`,
+`PSFN_TIER_RESTORE_MAX_ATTEMPTS`, `PSFN_TIER_RESTORE_RETRY_DELAY_MS`.
+
+### Run
+
+```bash
+node shakedown/harness/tier-conformance-sweep.mjs
+```
+
+It writes `tool-conformance.nursery.json`, `tool-conformance.apprentice.json`,
+`tool-conformance.autonomous.json` and `original-capability-tier` under the output
+dir, and prints a per-tier summary (`total`, `ok:false` count, and each failure as
+`toolName/action -> classification (error)`).
+
+### Safety and manual restore
+
+The sweep flips the **live** companion's tier. It records the pre-sweep tier to
+the durable `original-capability-tier` file **before any flip**, and restores +
+re-reads it on normal exit, on error, and on SIGINT/SIGTERM. A restore that never
+confirms after the bounded retries is a **loud FATAL** naming the tier and the
+durable record.
+
+If a run is hard-killed (SIGKILL / crash) so no restore trap fires, re-flip
+manually through the same fail-closed CLI (still via the settings API, **never**
+by editing `capability-tier.json` on the PVC):
+
+```bash
+node shakedown/harness/lib/target.mjs set-tier "$(cat "$PSFN_MATRIX_DIR/original-capability-tier")"
+```
+
+Prefer the settings-API path above. Direct PVC edits of `capability-tier.json`
+are **discouraged** (the harness rule is: change the tier through the settings
+API, never by writing the owner file on the PVC). As a genuine last resort — the
+settings API is down but the tier must be corrected — you can read, and only if
+unavoidable rewrite, the owner file via `kubectl exec` into the companion pod
+(`<agent-deploy>` = the agent/runtime deployment, `<system-data-mount>` = the
+`system-data` root, both from the live Helm values):
+
+```bash
+# inspect first
+kubectl -n psfn-test exec deploy/<agent-deploy> -- cat <system-data-mount>/capability-tier.json
+# emergency in-place fix (runtime hot-reloads on mtime change); resume the settings-API path ASAP
+```
+
+### Tier-flip contract — correct vs rejected
+
+The tier is only mutable through the canonical owner-file editor. Editing it via
+the general settings route is **rejected**:
+
+| Contract | Result |
+| --- | --- |
+| `POST /api/admin/settings/capabilities`, `Content-Type application/x-www-form-urlencoded`, body `configJson=<full owner JSON>` | ✅ 200 `capability-tier.json saved` (whole-file replace; the flip preserves `customTokens`) |
+| `PATCH /api/admin/settings {capabilityTier}` | ❌ HTTP 400 `wrong_owner` — `capabilityTier` is owner-mapped and rejected by `validateSettingsPayload` before any mutation |

@@ -102,6 +102,15 @@ function writeStubs(dir, { gateExit = 0 } = {}) {
   mkdirSync(record, { recursive: true });
   // Stub matrix (bash). STUB_MODE=clean emits 3 tier JSONs and exits 0;
   // STUB_MODE=hang installs a TERM/INT trap that records a restore + exits 143.
+  //
+  // The hang foreground is a SINGLE long-running command (sleep 300), mirroring
+  // the real matrix's `node "$HARNESS"` shape: bash cannot run its deferred TERM
+  // trap until that foreground command returns. So signalling only the bash PID
+  // (the pre-fix single-PID kill) leaves the foreground sleep running, the trap
+  // never fires within grace, and `restored` is never recorded — that is the
+  // orphaned-grandchild / stuck-tier failure mode. Signalling the whole process
+  // group (the fix) kills the foreground sleep, bash's wait returns, the deferred
+  // trap runs, and `restored` is recorded within grace.
   const matrix = join(dir, 'stub-matrix.sh');
   writeFileSync(matrix, `#!/usr/bin/env bash
 mkdir -p "$STUB_RECORD_DIR"
@@ -113,7 +122,7 @@ if [ "\${STUB_MODE:-clean}" = "hang" ]; then
   trap restore TERM INT
   printf 'apprentice' > "$PSFN_MATRIX_DIR/original-capability-tier"
   printf 'started' > "$STUB_RECORD_DIR/matrix-started"
-  while true; do sleep 0.05; done
+  sleep 300
 else
   for tier in nursery apprentice autonomous; do
     printf '{"phase":"coverage","results":[]}' > "$PSFN_MATRIX_DIR/live-system-shakedown.$tier.json"

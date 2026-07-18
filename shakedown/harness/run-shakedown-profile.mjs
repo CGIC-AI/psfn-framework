@@ -133,11 +133,27 @@ async function runPreflightGates(manifest, env) {
  */
 function runMatrixSweep({ scriptPath, env, deadlineMs, graceMs, originalTierRecord }) {
   return new Promise((resolve, reject) => {
-    const child = spawn(scriptPath, [], { env, stdio: ['ignore', 'inherit', 'inherit'] });
+    // detached: true puts the matrix script in its own process group so we can
+    // signal the WHOLE group (bash + its foreground `node "$HARNESS"` grandchild).
+    // Signalling only the bash PID leaves the foreground node running, so bash's
+    // TERM trap stays deferred until that node returns — long past the grace —
+    // and the restore/EXIT trap never fires. Group-signalling kills the
+    // foreground node, bash's wait returns, and its deferred trap restores the tier.
+    const child = spawn(scriptPath, [], { env, stdio: ['ignore', 'inherit', 'inherit'], detached: true });
     let settled = false;
     let terminating = null;
     let deadlineTimer = null;
     let killTimer = null;
+
+    // Signal the child's whole process group; tolerate ESRCH (group already gone).
+    const signalGroup = (signal) => {
+      try {
+        process.kill(-child.pid, signal);
+      } catch (error) {
+        if (error && error.code === 'ESRCH') return;
+        throw error;
+      }
+    };
 
     const cleanup = () => {
       if (deadlineTimer) clearTimeout(deadlineTimer);
@@ -149,13 +165,13 @@ function runMatrixSweep({ scriptPath, env, deadlineMs, graceMs, originalTierReco
     const beginTermination = (reason) => {
       if (terminating || settled) return;
       terminating = reason;
-      log(`[lite] ${reason}: SIGTERM -> matrix sweep so it restores the pre-sweep tier via its exit trap...`);
-      child.kill('SIGTERM');
+      log(`[lite] ${reason}: SIGTERM -> matrix sweep process group so it restores the pre-sweep tier via its exit trap...`);
+      signalGroup('SIGTERM');
       killTimer = setTimeout(() => {
         log(`[lite] FATAL: matrix sweep did not exit ${graceMs}ms after SIGTERM; sending SIGKILL. `
           + `The tier restore trap may NOT have completed — verify and restore the tier manually from the `
           + `durable record (${originalTierRecord}); see shakedown/harness/README.md "Safety and manual restore".`);
-        child.kill('SIGKILL');
+        signalGroup('SIGKILL');
       }, graceMs);
     };
 

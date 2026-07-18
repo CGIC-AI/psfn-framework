@@ -26,7 +26,16 @@ function turnRecord(overrides = {}) {
         },
       ],
       snapshot: {
+        plan: {
+          messages: [{
+            role: 'user',
+            content: '[Fri 07-17-26 11:59] earlier persisted history',
+          }],
+        },
         promptContext: {
+          response: {
+            content: '[Fri 07-17-26 12:00] hello from the room',
+          },
           runtimeContextSections: [
             {
               id: 'runtime_situated_presence',
@@ -181,6 +190,20 @@ test('CogSec proof requires quarantine plus session envelope and rejects memory/
       envelopeState: 'quarantined',
       fixedNoticePresent: true,
     },
+    gardenQueue: {
+      found: true,
+      status: 'held',
+      contentSha256Matches: true,
+    },
+    resolution: {
+      action: 'discard',
+      confirmed: true,
+      applied: true,
+    },
+    backgroundJobs: [
+      { kind: 'emotion_appraisal', state: 'succeeded', reasonCode: 'completed' },
+      { kind: 'memory_extraction', state: 'succeeded', reasonCode: 'completed' },
+    ],
     memoryLeakCount: 0,
     appraisalLeakCount: 0,
   };
@@ -204,6 +227,17 @@ test('CogSec proof requires quarantine plus session envelope and rejects memory/
     }).join('\n'),
     /appraisal/u,
   );
+  assert.match(
+    validateCogSecDocumentProof({
+      sideChecks: {
+        cogsec: {
+          ...proof,
+          backgroundJobs: [{ kind: 'memory_extraction', state: 'queued' }],
+        },
+      },
+    }).join('\n'),
+    /background proof/u,
+  );
 });
 
 test('hub proof binds the enrolled contact to accepted face telemetry and a moved place', () => {
@@ -213,6 +247,7 @@ test('hub proof binds the enrolled contact to accepted face telemetry and a move
         hubIdentityId: 'opaque-hub-1',
         contactId: 'contact-primary',
         placeId: 'kitchen',
+        restorePlaceId: 'living_room',
         priorPlaceId: 'living_room',
         requireSharedPresence: true,
       },
@@ -225,7 +260,7 @@ test('hub proof binds the enrolled contact to accepted face telemetry and a move
       telemetry: { status: 202, eventId: 'event-1', gardenAuditFound: true },
       internalState: { placeId: 'kitchen' },
       presence: { placeId: 'kitchen' },
-      cleanup: { revoked: true },
+      cleanup: { revoked: true, restoredPlaceId: 'living_room' },
     },
   };
   assert.deepEqual(validateHubIdentityProof({
@@ -246,6 +281,7 @@ test('temporal and SSE proofs require persisted clock/first-token evidence and s
     turnRecord: turnRecord(),
     sideChecks: {
       sse: {
+        parseErrors: [],
         firstContentAtMs: 10,
         terminalAtMs: 20,
         firstContent: 'hello',
@@ -263,12 +299,27 @@ test('temporal and SSE proofs require persisted clock/first-token evidence and s
   });
   assert.match(validateTemporalProof({ turnRecord: stamped }).join('\n'), /history stamp/u);
 
+  const noRenderedHistory = turnRecord();
+  noRenderedHistory.observability.snapshot.plan.messages = [];
+  assert.match(
+    validateTemporalProof({ turnRecord: noRenderedHistory }).join('\n'),
+    /rendered history stamp/u,
+  );
+
+  const noRawStampedResponse = turnRecord();
+  noRawStampedResponse.observability.snapshot.promptContext.response.content = 'unstamped draft';
+  assert.match(
+    validateTemporalProof({ turnRecord: noRawStampedResponse }).join('\n'),
+    /strip guard/u,
+  );
+
   const noFirstToken = turnRecord();
   noFirstToken.observability.stages = [];
   assert.match(validateSseTurnProof({
     turnRecord: noFirstToken,
     sideChecks: {
       sse: {
+        parseErrors: [],
         firstContentAtMs: null,
         terminalAtMs: 20,
         firstContent: '',

@@ -54,6 +54,7 @@ test('catalog covers every in-scope Sprint 10 executable seam without duplicatin
     's10_world_read_telemetry',
     's10_hub_identity_presence_follow',
     's10_cogsec_document_quarantine',
+    's10_cogsec_satellite_document_quarantine',
     's10_temporal_stamp_strip',
     's10_sse_first_chunk',
   ]) {

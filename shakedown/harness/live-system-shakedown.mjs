@@ -155,33 +155,8 @@ const waitForMatchingTurnRecord = (sessionId, message, minStartedAtMs, timeoutMs
 const waitForTurnSettlement = (sessionId, minStartedAtMs, timeoutMs, apiUserId, pollIntervalMs) =>
   probe.waitForTurnSettlement(TURN_RECORDS_DIR, sessionId, minStartedAtMs, timeoutMs, apiUserId, pollIntervalMs);
 
-async function waitForCaseTurnRecord({
-  sessionId,
-  apiUserId,
-  message,
-  messageIncludes,
-  minStartedAtMs,
-  timeoutMs,
-  pollIntervalMs = 1_500,
-}) {
-  const deadline = Date.now() + timeoutMs;
-  let latest = null;
-  while (Date.now() <= deadline) {
-    const records = turnRecordsForSession(sessionId, apiUserId);
-    latest = [...records].reverse().find((record) => {
-      if (typeof record?.startedAt === 'number' && record.startedAt < minStartedAtMs) return false;
-      const persisted = record?.userMessage?.content;
-      if (typeof message === 'string') return persisted === message;
-      if (typeof messageIncludes === 'string') {
-        return typeof persisted === 'string' && persisted.includes(messageIncludes);
-      }
-      return true;
-    }) ?? null;
-    if (latest && !isActiveTurnStatus(latest.status)) return latest;
-    await sleep(pollIntervalMs);
-  }
-  return latest;
-}
+const waitForCaseTurnRecord = (options) =>
+  probe.waitForCaseTurnRecord(TURN_RECORDS_DIR, options);
 
 const CASE_DISPATCH_DIAGNOSTICS = new Map();
 

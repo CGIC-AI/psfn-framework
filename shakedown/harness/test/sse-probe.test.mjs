@@ -50,10 +50,30 @@ test('SSE probe records the first non-empty delta before the terminal event and 
     assert.equal(result.response.status, 200);
     assert.equal(result.stream.firstContent, 'hello');
     assert.equal(result.stream.contentText, 'hello world');
+    assert.deepEqual(result.stream.parseErrors, []);
     assert.ok(Number.isFinite(result.stream.firstContentAtMs));
     assert.ok(Number.isFinite(result.stream.terminalAtMs));
     assert.ok(result.stream.firstContentAtMs <= result.stream.terminalAtMs);
     assert.equal(result.turnRecord, persisted);
+  });
+});
+
+test('SSE probe records malformed data frames so persisted proof fails closed', async () => {
+  await withServer((_request, response) => {
+    response.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    response.write('data: {definitely-not-json}\n\n');
+    response.write('data: {"choices":[{"delta":{"content":"valid"}}]}\n\n');
+    response.end('data: [DONE]\n\n');
+  }, async (apiUrl) => {
+    const result = await probeSseChatCompletion({
+      apiUrl,
+      headers: {},
+      message: 'malformed fixture',
+      waitForTurnRecord: async () => null,
+    });
+    assert.equal(result.stream.contentText, 'valid');
+    assert.equal(result.stream.parseErrors.length, 1);
+    assert.equal(result.stream.parseErrors[0].event, 1);
   });
 });
 

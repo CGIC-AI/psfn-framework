@@ -85,11 +85,12 @@ secrets.
 
 ## Sprint 10 coverage cases
 
-`cases/sprint10.mjs` extends the existing catalog; it does not fork the harness.
-The nine cases cover physical and placeless situated presence, virtual
+`cases/sprint10.mjs` composes domain-focused modules into the existing catalog;
+it does not fork the harness. The ten cases cover physical and placeless situated presence, virtual
 mindspace and physical precedence, synthetic world telemetry with
-`world list/perceive`, hub enrollment and presence-follow, CogSec document
-quarantine, temporal stamp stripping, and incremental SSE first-content
+`world list/perceive`, hub enrollment and repeatable presence-follow, API and
+classified-satellite CogSec document quarantine, temporal history rendering
+plus outbound stamp stripping, and incremental SSE first-content
 timing. Each output row carries `tier`, `variants`, `feature`, and `proof`
 metadata. Its verdict comes from the exact persisted TurnRecord and side
 artifacts, never from the assistant's claim.
@@ -106,13 +107,17 @@ Those claims must match three synthetic entries in the round's canonical
 `satellites.json`: physical (`living_room`), deliberately placeless, and hub
 face telemetry (`kitchen`). The place IDs and labels can be overridden through
 the corresponding `PSFN_SHAKEDOWN_*_PLACE_*` values in the Artie env template.
-The hub probe creates and revokes its own opaque enrollment
+The hub probe resets to the physical fixture, creates and revokes its own opaque enrollment,
+then restores the physical place so a rerun starts from the same precondition
 (`PSFN_SHAKEDOWN_HUB_IDENTITY_ID` may override the generated handle). The CogSec
-document case requires the disposable round's `intake-policy.json` mode to be
-`enforce`; shadow mode is intentionally not accepted as quarantine proof.
+document cases require the disposable round's `intake-policy.json` mode to be
+`enforce`; shadow mode is intentionally not accepted as quarantine proof. Both
+cases prove the held item through the Garden queue, await the memory and emotion
+background jobs, assert zero hostile/notice leakage, and discard the synthetic
+fixture through Garden's two-step decision path.
 
-The scorecard unions a provided artifact's top-level `coverageCaseIds` with
-executed harness case IDs. This is how the real-process multi-companion support
+The scorecard unions a successful artifact's top-level `coverageCaseIds` with
+successful harness case IDs. This is how the real-process multi-companion support
 artifact and per-tier capability-conformance artifact cover their appendix
 rows without duplicating those runtimes in the chat catalog. Generic external
 artifacts must report `status: "passed"` (or `ok: true`); an unrecognized or

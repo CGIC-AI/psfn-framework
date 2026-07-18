@@ -185,6 +185,9 @@ export function validateHubIdentityProof({ turnRecord, sideChecks }) {
   if (hub?.cleanup?.revoked !== true) {
     failures.push('temporary hub identity enrollment was not revoked during cleanup');
   }
+  if (hub?.cleanup?.restoredPlaceId !== hub?.expected?.restorePlaceId) {
+    failures.push('hub identity cleanup did not restore the physical presence precondition');
+  }
   return failures;
 }
 
@@ -197,7 +200,21 @@ export function validateCogSecDocumentProof({ sideChecks }) {
     failures.push('document token is missing from the durable held quarantine envelope');
   }
   if (!/^[a-f0-9]{64}$/u.test(proof?.quarantine?.rawSha256 ?? '')) {
-    failures.push('quarantine evidence must expose only the SHA-256 token proof');
+    failures.push('quarantine evidence must expose only a SHA-256 raw-content proof');
+  }
+  if (
+    proof?.gardenQueue?.found !== true
+    || proof?.gardenQueue?.status !== 'held'
+    || proof?.gardenQueue?.contentSha256Matches !== true
+  ) {
+    failures.push('held document is missing from the Garden quarantine queue or its content hash differs');
+  }
+  if (
+    proof?.resolution?.action !== 'discard'
+    || proof?.resolution?.confirmed !== true
+    || proof?.resolution?.applied !== true
+  ) {
+    failures.push('synthetic quarantine fixture was not resolved through the two-step Garden decision path');
   }
   if (proof?.session?.found !== true
     || proof?.session?.withheld !== true
@@ -206,6 +223,13 @@ export function validateCogSecDocumentProof({ sideChecks }) {
   }
   if (proof?.session?.fixedNoticePresent !== true) {
     failures.push('persisted user entry does not contain the fixed intake-firewall notice');
+  }
+  const jobs = asArray(proof?.backgroundJobs);
+  for (const kind of ['memory_extraction', 'emotion_appraisal']) {
+    const job = jobs.find((candidate) => candidate?.kind === kind);
+    if (job?.state !== 'succeeded') {
+      failures.push(`${kind} background proof did not reach succeeded state`);
+    }
   }
   if (proof?.memoryLeakCount !== 0) {
     failures.push(`quarantined token leaked into ${String(proof?.memoryLeakCount)} durable memory row(s)`);
@@ -223,6 +247,17 @@ export function validateTemporalProof({ turnRecord }) {
   if (!section || !content.includes('<runtime.current_datetime')) {
     failures.push('persisted finalSystemSections is missing runtime.current_datetime');
   }
+  const planMessages = asArray(snapshotOf(turnRecord)?.plan?.messages);
+  if (!planMessages.some((message) => (
+    typeof message?.content === 'string'
+    && HISTORY_STAMP_LINE_PREFIX.test(message.content)
+  ))) {
+    failures.push('persisted PromptPlan history contains no rendered history stamp');
+  }
+  const rawResponse = snapshotOf(turnRecord)?.promptContext?.response?.content;
+  if (typeof rawResponse !== 'string' || !HISTORY_STAMP_LINE_PREFIX.test(rawResponse)) {
+    failures.push('raw persisted model response did not exercise the history-stamp strip guard');
+  }
   const assistant = turnRecord?.assistantMessage?.content;
   if (typeof assistant !== 'string' || assistant.trim().length === 0) {
     failures.push('persisted assistant reply is missing');
@@ -235,6 +270,9 @@ export function validateTemporalProof({ turnRecord }) {
 export function validateSseTurnProof({ turnRecord, sideChecks }) {
   const failures = completedTurnFailures(turnRecord);
   const stream = sideChecks?.sse;
+  if (asArray(stream?.parseErrors).length > 0) {
+    failures.push(`SSE stream contained ${String(stream.parseErrors.length)} malformed data frame(s)`);
+  }
   if (!finiteNonNegative(stream?.firstContentAtMs) || !stream?.firstContent) {
     failures.push('SSE stream produced no first non-empty content delta');
   }

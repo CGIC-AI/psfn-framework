@@ -44,9 +44,12 @@
       "reason": "the existing support artifact has no shared-wiki write/read proof; retain the toaster test as an explicit round check"
     },
     "cogsec-intake-firewall": {
-      "cases": ["s10_cogsec_document_quarantine"],
+      "cases": [
+        "s10_cogsec_document_quarantine",
+        "s10_cogsec_satellite_document_quarantine"
+      ],
       "disposition": null,
-      "reason": "durable held quarantine and session-envelope proof with zero memory/appraisal leakage"
+      "reason": "API and classified-satellite document channels prove Garden queue review, held session envelopes, completed post-turn jobs, and zero memory/emotion leakage"
     },
     "satellite-hub-event-relay-touch-stimuli-pwa": {
       "cases": [],
@@ -57,7 +60,7 @@
     "temporal-coherence": {
       "cases": ["s10_temporal_stamp_strip"],
       "disposition": null,
-      "reason": "persisted current-datetime prompt section plus outbound stamp-strip guard"
+      "reason": "persisted stamped PromptPlan history plus raw stamped response and clean accepted outbound reply"
     },
     "performance": {
       "cases": ["s10_sse_first_chunk"],

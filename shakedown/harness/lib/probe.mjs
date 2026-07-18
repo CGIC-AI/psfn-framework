@@ -111,11 +111,33 @@ export function lastTurnAfter(turnRecordsDir, sessionId, minStartedAtMs, apiUser
 }
 
 export function findMatchingTurnRecord(turnRecordsDir, sessionId, message, minStartedAtMs, apiUserId) {
+  return findCaseTurnRecord(turnRecordsDir, {
+    sessionId,
+    message,
+    minStartedAtMs,
+    apiUserId,
+  });
+}
+
+export function findCaseTurnRecord(turnRecordsDir, {
+  sessionId,
+  apiUserId,
+  message,
+  messageIncludes,
+  minStartedAtMs = 0,
+}) {
   const records = turnRecordsForSession(turnRecordsDir, sessionId, apiUserId);
   for (let index = records.length - 1; index >= 0; index -= 1) {
     const record = records[index];
-    if ((record?.userMessage?.content ?? '') !== message) continue;
-    if (typeof record?.startedAt === 'number' && record.startedAt < (minStartedAtMs ?? 0)) continue;
+    const persisted = record?.userMessage?.content;
+    if (typeof message === 'string' && persisted !== message) continue;
+    if (
+      typeof messageIncludes === 'string'
+      && (typeof persisted !== 'string' || !persisted.includes(messageIncludes))
+    ) {
+      continue;
+    }
+    if (typeof record?.startedAt === 'number' && record.startedAt < minStartedAtMs) continue;
     return record;
   }
   return null;
@@ -141,15 +163,54 @@ export async function waitForMatchingTurnRecord(
   apiUserId,
   pollIntervalMs = 1500,
 ) {
+  return waitForCaseTurnRecord(turnRecordsDir, {
+    sessionId,
+    message,
+    minStartedAtMs,
+    timeoutMs,
+    apiUserId,
+    pollIntervalMs,
+    requireCompletedAssistant: true,
+  });
+}
+
+export async function waitForCaseTurnRecord(turnRecordsDir, {
+  sessionId,
+  apiUserId,
+  message,
+  messageIncludes,
+  minStartedAtMs = 0,
+  timeoutMs,
+  pollIntervalMs = 1500,
+  requireCompletedAssistant = false,
+}) {
   const deadline = Date.now() + timeoutMs;
+  let latest = null;
   while (Date.now() <= deadline) {
-    const record = findMatchingTurnRecord(turnRecordsDir, sessionId, message, minStartedAtMs, apiUserId);
-    if (record && record.status === 'completed' && record.assistantMessage?.content) {
-      return record;
+    latest = findCaseTurnRecord(turnRecordsDir, {
+      sessionId,
+      apiUserId,
+      message,
+      messageIncludes,
+      minStartedAtMs,
+    });
+    if (
+      latest
+      && !isActiveTurnStatus(latest.status)
+      && (
+        !requireCompletedAssistant
+        || (
+          latest.status === 'completed'
+          && typeof latest.assistantMessage?.content === 'string'
+          && latest.assistantMessage.content.length > 0
+        )
+      )
+    ) {
+      return latest;
     }
     await sleep(pollIntervalMs);
   }
-  return findMatchingTurnRecord(turnRecordsDir, sessionId, message, minStartedAtMs, apiUserId);
+  return latest;
 }
 
 /**

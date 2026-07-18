@@ -122,10 +122,35 @@ test('a failed generic coverage artifact cannot produce a green scorecard', () =
     const result = runScorecard(root, [support]);
     assert.equal(result.status, 1);
     assert.equal(result.scorecard.verdict, 'red');
-    assert.deepEqual(
-      result.scorecard.failureReasons,
-      ['1 external coverage artifact failure(s)'],
-    );
+    assert.ok(result.scorecard.failureReasons.includes('1 external coverage artifact failure(s)'));
+    assert.ok(result.scorecard.failureReasons.includes('3 uncovered coverage-appendix surface(s)'));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('completed or failing external artifacts cannot credit coverage proof', () => {
+  const root = createFixtureRoot();
+  try {
+    const generic = join(root, 'generic.json');
+    const live = join(root, 'live.json');
+    writeJson(generic, {
+      status: 'completed',
+      coverageCaseIds: [
+        'multi_companion_crossover_isolation',
+        'tier_tool_conformance',
+      ],
+    });
+    writeJson(live, {
+      coverageCaseIds: ['garden_behavioral_sweep'],
+      results: [{ id: 'garden_behavioral_sweep', response: { status: 500 } }],
+    });
+
+    const result = runScorecard(root, [generic, live]);
+    assert.equal(result.status, 1);
+    assert.equal(result.scorecard.coverage.uncoveredCount, 3);
+    assert.ok(result.scorecard.failureReasons.includes('1 live sweep failure(s)'));
+    assert.ok(result.scorecard.failureReasons.includes('1 external coverage artifact failure(s)'));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -46,6 +46,7 @@ export async function probeSseChatCompletion({
   let firstContentAtMs = null;
   let terminalAtMs = null;
   let eventCount = 0;
+  const parseErrors = [];
   let buffer = '';
 
   const consumeFrame = (frame) => {
@@ -58,7 +59,11 @@ export async function probeSseChatCompletion({
       let payload;
       try {
         payload = JSON.parse(data);
-      } catch {
+      } catch (error) {
+        parseErrors.push({
+          event: eventCount,
+          message: error instanceof Error ? error.message : String(error),
+        });
         continue;
       }
       const delta = contentDelta(payload);
@@ -123,6 +128,7 @@ export async function probeSseChatCompletion({
     },
     stream: {
       eventCount,
+      parseErrors,
       firstContent,
       contentText,
       firstContentAtMs,

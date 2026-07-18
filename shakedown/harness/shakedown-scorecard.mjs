@@ -141,6 +141,7 @@ function summarizeHarnessArtifact(path, data) {
     harnessStatus: data?.harnessStatus ?? null,
     generatedAt: data?.generatedAt ?? null,
     coverageCaseIds: coverageCaseIds(data),
+    coveragePassed: results.length > 0 && failCases.length === 0,
     caseCount: results.length,
     okCount,
     failCount: failCases.length,
@@ -168,15 +169,17 @@ function summarizeUiArtifact(path, data) {
   const failures = Array.isArray(data?.failures)
     ? data.failures
     : pages.filter((page) => !page?.ok).map((page) => page.name ?? 'unknown');
+  const failCount = failures.length;
   return {
     kind: 'ui',
     path,
     file: basename(path),
     generatedAt: data?.generatedAt ?? null,
     coverageCaseIds: coverageCaseIds(data),
+    coveragePassed: pages.length > 0 && failCount === 0,
     pageCount: pages.length,
     okCount: pages.filter((page) => page?.ok).length,
-    failCount: failures.length,
+    failCount,
     failPages: failures,
   };
 }
@@ -187,15 +190,17 @@ function summarizeLiveSweepArtifact(path, data) {
     const status = toNumber(result?.response?.status);
     return status !== null && status >= 200 && status < 300;
   };
+  const failCount = results.filter((result) => !isOk(result)).length;
   return {
     kind: 'live-sweep',
     path,
     file: basename(path),
     generatedAt: data?.generatedAt ?? null,
     coverageCaseIds: coverageCaseIds(data),
+    coveragePassed: results.length > 0 && failCount === 0,
     caseCount: results.length,
     okCount: results.filter(isOk).length,
-    failCount: results.filter((result) => !isOk(result)).length,
+    failCount,
     failCases: results.filter((result) => !isOk(result)).map((result) => ({
       caseId: result.id ?? 'unknown',
       status: result?.response?.status ?? null,
@@ -205,7 +210,7 @@ function summarizeLiveSweepArtifact(path, data) {
 
 function summarizeCoverageArtifact(path, data) {
   const status = typeof data?.status === 'string' ? data.status.trim().toLowerCase() : null;
-  const passed = data?.ok === true || ['ok', 'passed', 'success', 'completed'].includes(status);
+  const passed = data?.ok === true || ['ok', 'passed', 'success'].includes(status);
   return {
     kind: 'coverage',
     path,
@@ -213,6 +218,7 @@ function summarizeCoverageArtifact(path, data) {
     generatedAt: data?.generatedAt ?? null,
     status,
     coverageCaseIds: coverageCaseIds(data),
+    coveragePassed: passed,
     failCount: passed ? 0 : 1,
   };
 }
@@ -346,12 +352,14 @@ function aggregate(summaries, taxonomy, coverage) {
   const totalHarnessCases = harness.reduce((sum, entry) => sum + entry.caseCount, 0);
   const totalHarnessOk = harness.reduce((sum, entry) => sum + entry.okCount, 0);
   const totalUiFail = ui.reduce((sum, entry) => sum + entry.failCount, 0);
+  const totalLiveSweepFail = liveSweep.reduce((sum, entry) => sum + entry.failCount, 0);
   const totalCoverageArtifactFail = coverageArtifacts
     .reduce((sum, entry) => sum + entry.failCount, 0);
 
   const green = taxonomy.unwaivedFailureCount === 0
     && coverage.uncoveredCount === 0
     && totalUiFail === 0
+    && totalLiveSweepFail === 0
     && totalCoverageArtifactFail === 0;
 
   return {
@@ -364,6 +372,7 @@ function aggregate(summaries, taxonomy, coverage) {
       ...(coverage.uncoveredCount > 0
         ? [`${coverage.uncoveredCount} uncovered coverage-appendix surface(s)`] : []),
       ...(totalUiFail > 0 ? [`${totalUiFail} Garden sweep page failure(s)`] : []),
+      ...(totalLiveSweepFail > 0 ? [`${totalLiveSweepFail} live sweep failure(s)`] : []),
       ...(totalCoverageArtifactFail > 0
         ? [`${totalCoverageArtifactFail} external coverage artifact failure(s)`]
         : []),
@@ -474,9 +483,11 @@ function main() {
   const executedCaseIds = new Set(
     [
       ...harnessSummaries.flatMap(
-        (summary) => summary.cases.filter((item) => item.executed).map((item) => item.caseId),
+        (summary) => summary.cases.filter((item) => item.status === 'ok').map((item) => item.caseId),
       ),
-      ...summaries.flatMap((summary) => summary.coverageCaseIds),
+      ...summaries
+        .filter((summary) => summary.coveragePassed)
+        .flatMap((summary) => summary.coverageCaseIds),
     ],
   );
 

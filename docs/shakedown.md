@@ -117,12 +117,16 @@ The full cross-product is not run. The standing simplification:
 
 Tier switching (local lane): edit `capability-tier.json` in the shakedown `system-data`, restart the runtime, run that tier's case subset. Back up the owner file before the sweep and restore it after (trap-on-exit); verify the restore happened before closing the round.
 
-### Matrix external-sink variables (apprentice + autonomous)
+### Matrix external-sink variables (all tiers, including nursery)
 
 The capability-gate matrix (`capability_refusal_matrix`) proves the `external.*`
 grants actually actuate by sending a live Discord message and a live email at the
-apprentice and autonomous tiers. Those probes are fail-closed and require three
-environment variables (nursery never sends externally, so it needs none):
+apprentice and autonomous tiers. At nursery those two tokens are *denied*, but the
+denial is proven by dispatching the `external.discord`/`external.email` probes
+through the deployed runtime (see below) — so on a gate breach the send would reach
+the wired provider. Every tier therefore requires the same three fail-closed
+environment variables; **nursery-only runs need them too** — there is no nursery
+carve-out (65rk rf2 safety gap):
 
 **Refusals are dispatched through the deployed runtime, not evaluated in-process.**
 Every capability *denial* (except the operator-reserved lifecycle carve-out) is
@@ -143,8 +147,8 @@ them live would durably mutate identity/memory or trip the lifecycle carve-out.
 | Variable | Value | Purpose |
 | --- | --- | --- |
 | `PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED` | the literal `dedicated-test-sinks` | Operator attestation that the targets below are disposable test sinks. Any other value is rejected. |
-| `PSFN_MATRIX_DISCORD_TARGET` | a dedicated **test** Discord channel snowflake (17–20 digits) | Where the `external.discord` allow probe delivers. |
-| `PSFN_MATRIX_EMAIL_TARGET` | a dedicated **test** inbox address | Where the `external.email` allow probe delivers. |
+| `PSFN_MATRIX_DISCORD_TARGET` | a dedicated **test** Discord channel snowflake (17–20 digits) | Where the `external.discord` allow probe delivers — and, at any tier, where the live refusal probe would land on a gate breach. |
+| `PSFN_MATRIX_EMAIL_TARGET` | a dedicated **test** inbox address | Where the `external.email` allow probe delivers — and, at any tier, where the live refusal probe would land on a gate breach. |
 
 Two hard rules:
 

@@ -4,6 +4,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+
 import {
   CAPABILITY_MATRIX_PROBES,
   CAPABILITY_MATRIX_TIER_TOKENS,
@@ -11,6 +16,7 @@ import {
   evaluateCapabilityMatrix,
   evaluateApprovalRoutingProbe,
   evaluateTierToolConformanceEvidence,
+  collectCapabilityMatrixProofFailures,
 } from '../lib/capability-matrix.mjs';
 
 const ALL_TOKENS = [
@@ -234,6 +240,41 @@ assert.throws(
   /PSFN_MATRIX_DISCORD_TARGET/u,
 );
 
+// 65rk rf2 safety gap: the external.discord/external.email REFUSAL probes are
+// dispatched through the live runtime at NURSERY too (they are not eligibility-
+// only), so on a gate breach the send would reach the wired provider. The
+// dedicated-sink attestation therefore has NO nursery carve-out — a nursery-only
+// plan build must fail closed exactly like apprentice/autonomous when the sink
+// env is absent or the targets are not dedicated test sinks.
+assert.throws(
+  () => buildCapabilityMatrixExecutionPlan({
+    tier: 'nursery',
+    runToken: 'unit',
+    discordTarget: '123456789012345678',
+    emailTarget: 'matrix@example.test',
+    // no dedicatedSinkConfirmation
+  }),
+  /PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED/u,
+  'nursery now requires the dedicated-sink attestation (no carve-out)',
+);
+assert.throws(
+  () => buildCapabilityMatrixExecutionPlan({
+    tier: 'nursery',
+    runToken: 'unit',
+    discordTarget: 'internal:not-an-external-sink',
+    emailTarget: 'matrix@example.test',
+    dedicatedSinkConfirmation: 'dedicated-test-sinks',
+  }),
+  /PSFN_MATRIX_DISCORD_TARGET/u,
+  'nursery validates the Discord snowflake shape like every other tier',
+);
+// The fail-closed guard must not special-case nursery in source, either.
+assert.doesNotMatch(
+  readFileSync(fileURLToPath(new URL('../lib/capability-matrix.mjs', import.meta.url)), 'utf8'),
+  /if \(tier === 'nursery'\) return;/u,
+  'requireDedicatedExternalSinks no longer early-returns for nursery',
+);
+
 function turn(toolName, args, details = {}, resultText = 'ok', isError = false) {
   return {
     status: 'completed',
@@ -399,6 +440,135 @@ assert.match(
   /issueWriteRow\?\.actual === 'allow' \|\| issueWriteRow\?\.actual === 'gate_breach'/u,
   'the case runner demands issue closure proof on gate_breach as well as allow',
 );
+
+// --- 65rk rf2 P0: the grid verdict must promote to a FAILURE case status and a
+// RED/uncovered scorecard, independent of assistant-narration gating. The
+// grid-level assertions above only prove matches:false; the gap that shipped a
+// green scorecard over a LIVE gate breach was that the ONLY consumer of the grid
+// verdict (validateSideEffects) ran behind the assistantClaimsActionSuccess gate,
+// and a capability *denial* reply never trips that gate. These extend the proof to
+// the case + scorecard layers. ---
+
+// (1) Verdict -> case-level proof failures (the pure promotion helper the matrix
+// case now runs UNCONDITIONALLY via validateParsedAssistant). A gate_breach row
+// fails and the message names the breached capability token.
+const breachProofFailures = collectCapabilityMatrixProofFailures(gitBreachGrid);
+assert.ok(breachProofFailures.length >= 1, 'a gate_breach grid yields >=1 case-level proof failure');
+assert.ok(
+  breachProofFailures.some((msg) => /gate breach/iu.test(msg) && msg.includes('git.write')),
+  'the proof failure names the breached capability token (git.write)',
+);
+// (2) A clean all-match grid yields NO proof failures — green stays green.
+assert.equal(apprenticeGrid.mismatchCount, 0);
+assert.deepEqual(
+  collectCapabilityMatrixProofFailures(apprenticeGrid),
+  [],
+  'an all-match grid (mismatchCount 0, no gate_breach) produces no proof failures',
+);
+// (3) A missing verdict fails closed rather than passing silently.
+assert.ok(
+  collectCapabilityMatrixProofFailures(null).length >= 1,
+  'a missing capability-matrix verdict fails closed',
+);
+
+// (4) Wiring: the matrix case routes the verdict through validateParsedAssistant,
+// which collectSemanticValidationFailures runs for EVERY case with no narration
+// gate; classifyCaseStatus maps a non-empty semanticFailureMatches to the non-'ok'
+// 'semantic_failure' status. This is the promotion path that cannot be bypassed.
+assert.match(
+  liveHarnessSource,
+  /validateParsedAssistant: \(\{ sideChecks \}\) => \{\s*const failures = \[\s*\.\.\.collectCapabilityMatrixProofFailures\(sideChecks\?\.capabilityMatrix\),/u,
+  'the matrix case promotes its verdict through the unconditional validateParsedAssistant channel',
+);
+assert.match(
+  liveHarnessSource,
+  /if \(typeof testCase\.validateParsedAssistant !== 'function'\)/u,
+  'collectSemanticValidationFailures invokes validateParsedAssistant with no actionSensitive/narration gate',
+);
+assert.match(
+  liveHarnessSource,
+  /\(caseResult\.semanticFailureMatches\?\.length \?\? 0\) > 0\) \{\s*return 'semantic_failure';/u,
+  'classifyCaseStatus promotes semantic-validation failures to the non-ok semantic_failure status',
+);
+
+// (5) Scorecard layer: drive the REAL shakedown-scorecard.mjs over fixture run
+// artifacts. A failed capability_refusal_matrix case (the status the harness now
+// emits when the verdict promotes) turns the scorecard RED and leaves the
+// tool-stack-audit coverage surface UNCOVERED; a clean 'ok' matrix keeps it green.
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SCORECARD = join(HERE, '..', 'shakedown-scorecard.mjs');
+const MATRIX_DOC_FIXTURE = `# Fixture shakedown doc
+
+### In scope — fixture surfaces
+
+| Surface | Lane / tier | How exercised | Notes |
+| --- | --- | --- | --- |
+| Tool stack audit | local, all tiers | harness | capability_refusal_matrix + tier_tool_conformance |
+`;
+const MATRIX_COVERAGE_MAP_FIXTURE = JSON.stringify({
+  surfaces: {
+    'tool-stack-audit': {
+      cases: ['capability_refusal_matrix', 'tier_tool_conformance'],
+      disposition: null,
+    },
+  },
+});
+
+function runScorecardOverMatrix(matrixCaseStatus) {
+  const dir = mkdtempSync(join(tmpdir(), 'matrix-scorecard-'));
+  try {
+    const artifact = {
+      generatedAt: '2026-07-18T00:00:00.000Z',
+      target: 'kube',
+      phase: 'coverage',
+      coverageCaseIds: ['capability_refusal_matrix', 'tier_tool_conformance'],
+      results: [
+        { caseId: 'capability_refusal_matrix', caseStatus: matrixCaseStatus },
+        { caseId: 'tier_tool_conformance', caseStatus: matrixCaseStatus },
+        { caseId: 'l0_baseline', caseStatus: 'ok' },
+      ],
+    };
+    const inputPath = join(dir, 'live-system-shakedown.coverage.json');
+    const docPath = join(dir, 'doc.md');
+    const coverageMapPath = join(dir, 'coverage-map.json');
+    const jsonOut = join(dir, 'scorecard.json');
+    const mdOut = join(dir, 'scorecard.md');
+    writeFileSync(inputPath, JSON.stringify(artifact, null, 2));
+    writeFileSync(docPath, MATRIX_DOC_FIXTURE);
+    writeFileSync(coverageMapPath, MATRIX_COVERAGE_MAP_FIXTURE);
+    const env = {
+      ...process.env,
+      PSFN_SCORECARD_INPUTS: inputPath,
+      PSFN_SCORECARD_JSON: jsonOut,
+      PSFN_SCORECARD_MD: mdOut,
+      PSFN_SHAKEDOWN_DOC: docPath,
+      PSFN_COVERAGE_MAP: coverageMapPath,
+    };
+    delete env.PSFN_PROFILE;
+    const proc = spawnSync('node', [SCORECARD], { env, encoding: 'utf8' });
+    return { code: proc.status, json: JSON.parse(readFileSync(jsonOut, 'utf8')) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// (a) gate_breach -> harness emits 'semantic_failure' -> scorecard RED + uncovered.
+const breachScorecard = runScorecardOverMatrix('semantic_failure');
+assert.notEqual(breachScorecard.code, 0, 'a failed capability_refusal_matrix case exits the scorecard non-zero');
+assert.equal(breachScorecard.json.green, false, 'scorecard is red when the matrix case failed');
+const breachSurface = breachScorecard.json.coverage.rows.find((row) => row.key === 'tool-stack-audit');
+assert.ok(breachSurface && breachSurface.covered === false, 'tool-stack-audit is uncovered when the matrix case failed');
+assert.ok(
+  breachScorecard.json.coverage.uncovered.some((row) => row.key === 'tool-stack-audit'),
+  'the scorecard uncovered list names tool-stack-audit for a failed matrix',
+);
+
+// (b) clean 'ok' matrix -> scorecard GREEN + surface covered.
+const cleanScorecard = runScorecardOverMatrix('ok');
+assert.equal(cleanScorecard.code, 0, 'a clean matrix keeps the scorecard green');
+assert.equal(cleanScorecard.json.green, true, 'scorecard is green with an all-ok matrix');
+const cleanSurface = cleanScorecard.json.coverage.rows.find((row) => row.key === 'tool-stack-audit');
+assert.ok(cleanSurface && cleanSurface.covered === true, 'tool-stack-audit is covered when the matrix case is ok');
 
 // A denied external send that reached the provider is a gate_breach, not a
 // benign handler_error.

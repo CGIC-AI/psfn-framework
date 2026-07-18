@@ -11,6 +11,13 @@ export interface FleetSsoGardenUpstream {
   readonly companionId: CompanionId;
   readonly origin: URL;
   readonly tls?: RequiredMtlsPeerFileConfig;
+  /**
+   * Set when the upstream is the consolidated multi-companion fleet Garden,
+   * which admits the canonical companion-scoped public target. Absent for a
+   * single-companion operator surface, which admits the inner target against
+   * its fixed companion.
+   */
+  readonly companionScopedTarget?: true;
 }
 
 export const FLEET_SSO_COMPANION_ROUTE_PREFIX = '/companions/';
@@ -173,6 +180,7 @@ export function resolveFleetSsoGardenUpstreams(input: {
       companionId: companion.companionId,
       origin: new URL(origin),
       ...(tls ? { tls } : {}),
+      ...(input.fleet ? { companionScopedTarget: true as const } : {}),
   }));
   if (upstreams.length === 0) {
     throw new Error('Fleet auth requires at least one companion target');

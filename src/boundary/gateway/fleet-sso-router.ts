@@ -46,6 +46,7 @@ import {
   privacyBreakGlassResourceKindForRoute,
   privacyBreakGlassSubjectScopeDigest,
 } from '../../shared/contracts/privacy-break-glass.js';
+import { buildGardenCapabilityHeaders } from '../fleet-auth/garden-capability-context.js';
 import { createSpiffeCheckServerIdentity } from '../../shared/net/mtls.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
@@ -291,6 +292,21 @@ function parseGardenRoute(rawTarget: string): ParsedGardenRoute | undefined {
     upstreamTarget: route.innerTarget,
     publicPrefix: route.publicPrefix,
   };
+}
+
+/**
+ * The consolidated fleet Garden derives the companion binding from the
+ * canonical companion-scoped route (garden-control-plane invariant 3), so
+ * fleet upstreams receive the full public target. A single-companion operator
+ * surface admits the inner target directly against its fixed companion.
+ */
+function upstreamRequestTarget(
+  upstream: FleetSsoGardenUpstream,
+  route: ParsedGardenRoute,
+): string {
+  return upstream.companionScopedTarget
+    ? `${route.publicPrefix}${route.upstreamTarget}`
+    : route.upstreamTarget;
 }
 
 async function readBoundedBody(request: IncomingMessage): Promise<Buffer> {
@@ -760,14 +776,19 @@ export class GatewayFleetSsoRouter {
     return new Promise<void>((resolve, reject) => {
       const headers = copyRequestHeaders(request.headers);
       headers['content-length'] = String(body.byteLength);
-      headers['x-psfn-request-capability'] = issued.token;
-      headers['x-psfn-capability-audience'] = issued.verified.audience;
-      headers['x-psfn-capability-request-id'] = issued.verified.requestId;
-      headers['x-psfn-capability-decision'] = issued.verified.decisionId;
-      headers['x-psfn-capability-jti'] = issued.verified.jti;
+      // Canonical Garden capability envelope: one token header plus one
+      // canonical context header, exactly what Garden admission consumes.
+      Object.assign(headers, buildGardenCapabilityHeaders({
+        token: issued.token,
+        context: {
+          requestId: issued.verified.requestId,
+          decisionId: issued.verified.decisionId,
+          versions: issued.verified.versions,
+        },
+      }));
       const requestFn = upstream.origin.protocol === 'https:' ? httpsRequest : httpRequest;
       const proxyRequest = requestFn(
-        requestOptions(upstream, request.method ?? 'GET', route.upstreamTarget, headers),
+        requestOptions(upstream, request.method ?? 'GET', upstreamRequestTarget(upstream, route), headers),
         (proxyResponse) => {
           response.writeHead(
             proxyResponse.statusCode ?? 502,
@@ -809,14 +830,18 @@ export class GatewayFleetSsoRouter {
     headers.connection = 'Upgrade';
     headers.upgrade = 'websocket';
     headers['content-length'] = '0';
-    headers['x-psfn-request-capability'] = issued.token;
-    headers['x-psfn-capability-audience'] = issued.verified.audience;
-    headers['x-psfn-capability-request-id'] = issued.verified.requestId;
-    headers['x-psfn-capability-decision'] = issued.verified.decisionId;
-    headers['x-psfn-capability-jti'] = issued.verified.jti;
+    // Canonical Garden capability envelope (see proxyHttp).
+    Object.assign(headers, buildGardenCapabilityHeaders({
+      token: issued.token,
+      context: {
+        requestId: issued.verified.requestId,
+        decisionId: issued.verified.decisionId,
+        versions: issued.verified.versions,
+      },
+    }));
     await new Promise<void>((resolve, reject) => {
       const requestFn = upstream.origin.protocol === 'https:' ? httpsRequest : httpRequest;
-      const proxyRequest = requestFn(requestOptions(upstream, 'GET', route.upstreamTarget, headers));
+      const proxyRequest = requestFn(requestOptions(upstream, 'GET', upstreamRequestTarget(upstream, route), headers));
       proxyRequest.once('upgrade', (proxyResponse, proxySocket, proxyHead) => {
         const rawHeaders: string[] = [];
         for (let index = 0; index < proxyResponse.rawHeaders.length; index += 2) {

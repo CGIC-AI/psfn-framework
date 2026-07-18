@@ -3,7 +3,7 @@ import {
   type PolicyGovernedShardParentIcpDeliveryPort,
 } from '../../shared/contracts/shard-parent-icp.js';
 import type { ShardDirectoryPort } from '../../shared/contracts/shard-directory.js';
-import type { ShardParentIcpPort } from './port.js';
+import type { ShardParentIcpPort } from './types.js';
 
 /**
  * Live-deployment guard in front of the ordinary ICP adapter. It is a separate

@@ -2,6 +2,7 @@ import type {
   ShardConfig,
   ShardConfigurationMutationResult,
   ShardConfigurationSnapshot,
+  ShardParentIcpPort,
   ShardResult,
 } from './types.js';
 import type { ActiveShard, SatelliteDelegationRequest } from './manager.js';
@@ -10,9 +11,7 @@ import type {
 } from './fold-review.js';
 import type { ShardDirectoryPort } from '../../shared/contracts/shard-directory.js';
 
-export interface ShardParentIcpPort {
-  sendShardParentIcp(shardId: string, content: string): Promise<void>;
-}
+export type { ShardParentIcpPort } from './types.js';
 
 export interface ShardConfigurationPort {
   getShardConfigurationSnapshot(

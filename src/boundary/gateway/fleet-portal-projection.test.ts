@@ -163,7 +163,7 @@ describe('gateway fleet portal projection', () => {
   });
 
   it('makes unknown and unauthorized manifest data byte-indistinguishable', async () => {
-    const build = (unknownId: string, unknownPort: number) => new GatewayFleetPortalProjection({
+    const build = (unknownId: string) => new GatewayFleetPortalProjection({
       authorizer: {
         resolve: async () => ({
           companions: [{ companionId: COMPANION_A, gardenLinkEligible: false }],
@@ -180,8 +180,8 @@ describe('gateway fleet portal projection', () => {
       },
       now: () => GENERATED_AT,
     });
-    const first = await build(COMPANION_B, 3212).resolve({ sessionToken: SESSION_TOKEN });
-    const second = await build(COMPANION_C, 65535).resolve({ sessionToken: SESSION_TOKEN });
+    const first = await build(COMPANION_B).resolve({ sessionToken: SESSION_TOKEN });
+    const second = await build(COMPANION_C).resolve({ sessionToken: SESSION_TOKEN });
     expect(serializeFleetPortalProjection(first)).toEqual(serializeFleetPortalProjection(second));
   });
 

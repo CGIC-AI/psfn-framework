@@ -15,10 +15,8 @@ import {
   createGatewayRequestCapabilitySigner,
   createRequestCapabilityVerifier,
 } from '../../boundary/fleet-auth/request-capability.js';
-import {
-  digestGardenRouteAuthorization,
-  validateGardenRequestMetadata,
-} from '../../boundary/fleet-auth/request-capability-target.js';
+import { compileGatewayGardenRequestTarget } from '../../boundary/fleet-auth/request-capability-target.js';
+import { parseGardenCapabilityContext } from '../../boundary/fleet-auth/garden-capability-context.js';
 import { GatewayFleetSsoRouter } from '../../boundary/gateway/fleet-sso-router.js';
 import {
   FleetAuthorizationDeniedError,
@@ -64,8 +62,7 @@ const server = createServer((request, response) => {
       cookie: request.headers.cookie,
       authorization: request.headers.authorization,
       capability: request.headers['x-psfn-request-capability'],
-      requestId: request.headers['x-psfn-capability-request-id'],
-      decisionId: request.headers['x-psfn-capability-decision'],
+      context: request.headers['x-psfn-capability-context'],
     },
   }));
 });
@@ -398,22 +395,22 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       }),
     }));
     const revealPayload = JSON.parse(reveal.body);
-    const revealMetadata = validateGardenRequestMetadata({
-      rawTarget: revealPath,
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: Buffer.from(revealBody),
-    });
-    const revealedCapability = verifier.verifyOperatorTransport({
+    const revealContext = parseGardenCapabilityContext(
+      String(revealPayload.forwarded.context),
+      COMPANION_A,
+    );
+    const revealedCapability = verifier.verifyOperator({
       token: String(revealPayload.forwarded.capability),
-      companionId: COMPANION_A,
-      method: revealMetadata.method,
-      canonicalRequestTarget: revealMetadata.canonicalRequestTarget,
-      action: revealMetadata.action,
-      authorizationDigest: digestGardenRouteAuthorization(revealMetadata.authorization),
-      bodyLength: Buffer.byteLength(revealBody),
-      requestId: String(revealPayload.forwarded.requestId),
-      decisionId: String(revealPayload.forwarded.decisionId),
+      target: compileGatewayGardenRequestTarget({
+        rawTarget: revealPath,
+        method: 'POST',
+        companionId: COMPANION_A,
+        headers: { 'content-type': 'application/json' },
+        body: Buffer.from(revealBody),
+      }),
+      requestId: revealContext.requestId,
+      decisionId: revealContext.decisionId,
+      versions: revealContext.versions,
       nowSeconds: NOW_SECONDS,
     });
     expect(revealedCapability.authContext.sessionAssurance).toBe('webauthn_uv');
@@ -467,22 +464,22 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       }),
     }));
     const breakGlassConfirmPayload = JSON.parse(breakGlassConfirm.body);
-    const breakGlassConfirmMetadata = validateGardenRequestMetadata({
-      rawTarget: breakGlassConfirmPath,
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: Buffer.from(breakGlassConfirmBody),
-    });
-    const breakGlassCapability = verifier.verifyOperatorTransport({
+    const breakGlassContext = parseGardenCapabilityContext(
+      String(breakGlassConfirmPayload.forwarded.context),
+      COMPANION_A,
+    );
+    const breakGlassCapability = verifier.verifyOperator({
       token: String(breakGlassConfirmPayload.forwarded.capability),
-      companionId: COMPANION_A,
-      method: breakGlassConfirmMetadata.method,
-      canonicalRequestTarget: breakGlassConfirmMetadata.canonicalRequestTarget,
-      action: breakGlassConfirmMetadata.action,
-      authorizationDigest: digestGardenRouteAuthorization(breakGlassConfirmMetadata.authorization),
-      bodyLength: Buffer.byteLength(breakGlassConfirmBody),
-      requestId: String(breakGlassConfirmPayload.forwarded.requestId),
-      decisionId: String(breakGlassConfirmPayload.forwarded.decisionId),
+      target: compileGatewayGardenRequestTarget({
+        rawTarget: breakGlassConfirmPath,
+        method: 'POST',
+        companionId: COMPANION_A,
+        headers: { 'content-type': 'application/json' },
+        body: Buffer.from(breakGlassConfirmBody),
+      }),
+      requestId: breakGlassContext.requestId,
+      decisionId: breakGlassContext.decisionId,
+      versions: breakGlassContext.versions,
       nowSeconds: NOW_SECONDS,
     });
     expect(breakGlassCapability.authContext.sessionAssurance).toBe('break_glass');
@@ -510,17 +507,21 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     expect(breakGlassDecision.status).toBe(200);
     expect(consumeGrant).toHaveBeenCalledTimes(2);
 
-    const metadata = validateGardenRequestMetadata({ rawTarget: resourcePath, method: 'GET' });
-    expect(() => verifier.verifyOperatorTransport({
+    const dashboardContext = parseGardenCapabilityContext(
+      String(payloadA.forwarded.context),
+      COMPANION_A,
+    );
+    expect(() => verifier.verifyOperator({
       token: String(payloadA.forwarded.capability),
-      companionId: COMPANION_A,
-      method: metadata.method,
-      canonicalRequestTarget: metadata.canonicalRequestTarget,
-      action: metadata.action,
-      authorizationDigest: digestGardenRouteAuthorization(metadata.authorization),
-      bodyLength: 0,
-      requestId: String(payloadA.forwarded.requestId),
-      decisionId: String(payloadA.forwarded.decisionId),
+      target: compileGatewayGardenRequestTarget({
+        rawTarget: resourcePath,
+        method: 'GET',
+        companionId: COMPANION_A,
+        body: Buffer.alloc(0),
+      }),
+      requestId: dashboardContext.requestId,
+      decisionId: dashboardContext.decisionId,
+      versions: dashboardContext.versions,
       nowSeconds: NOW_SECONDS,
     })).not.toThrow();
 

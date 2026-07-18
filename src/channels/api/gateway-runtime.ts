@@ -71,9 +71,6 @@ export class GatewayApiRuntime implements ApiServerRuntime {
           this.chatRequestTimeoutMs,
         );
       }
-      if (!this.gateway.requestCompanionAgent) {
-        throw new Error('Companion-targeted API routing is unavailable');
-      }
       return await this.gateway.requestCompanionAgent<T>(
         input.companionId,
         method,

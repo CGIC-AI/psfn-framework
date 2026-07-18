@@ -91,7 +91,7 @@ describe('ShardManager configuration snapshots and overrides', () => {
   let handleMessage: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'psfn-shard-configuration-'));
+    dir = mkdtempSync(join(tmpdir(), 'shard-configuration-snapshot-'));
     sessionStore = new SessionStore(dir);
     handleMessage = vi.spyOn(SubstrateAgent.prototype, 'handleMessage');
   });

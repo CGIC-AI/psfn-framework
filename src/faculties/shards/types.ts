@@ -244,3 +244,12 @@ export interface ShardResult {
 }
 
 export type ShardStatus = 'running' | 'completed' | 'failed';
+
+/**
+ * Ordinary-priority shard->parent ICP delivery. Lives here (not in port.ts)
+ * so the parent ICP runtime can depend on the type without importing the
+ * execution-port module, which reaches back into the manager.
+ */
+export interface ShardParentIcpPort {
+  sendShardParentIcp(shardId: string, content: string): Promise<void>;
+}

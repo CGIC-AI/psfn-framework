@@ -367,24 +367,6 @@
       "pattern": "identity-legacy-slug"
     },
     {
-      "path": "src/boundary/gateway/fleet-status.ts",
-      "contains": "<h1>PSFN Fleet Status</h1>",
-      "reason": "The standalone fleet-status page retains its explicit operator-facing product heading.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "src/boundary/gateway/fleet-status.ts",
-      "contains": "<title>PSFN Fleet Status</title>",
-      "reason": "The standalone fleet-status page retains its explicit operator-facing product title.",
-      "pattern": "identity-proper-name"
-    },
-    {
-      "path": "src/boundary/gateway/fleet-status.ts",
-      "contains": "PSFN Fleet Status",
-      "reason": "Operator-only fleet diagnostics identify the project runtime, not a companion persona.",
-      "pattern": "identity-proper-name"
-    },
-    {
       "path": "src/boundary/gateway/llm-cost-capture.ts",
       "contains": "psfn.gatewayLlmCostCapture.originalFetch",
       "reason": "Gateway fetch wrapper symbol uses a stable project-scoped namespace to avoid global symbol collisions.",

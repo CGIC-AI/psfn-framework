@@ -19,6 +19,75 @@ It has two layers, run in this order per round:
 
 Layer A proves the substrate executes. Layer B proves it is *livable* — clarity, coherence, narration-vs-real-execution, fatigue, feel. Every reproducible Layer B finding is converted into a Layer A case for the next sprint, so the automated catalog grows from real companion experience.
 
+## Profiles: lite vs full
+
+A shakedown runs under one of two profiles. They share the same scripted Layer A
+machinery (the case harness, tier sweep, tool-conformance, capability-gate
+matrix, and scorecard); they differ only in scope and in when each is required.
+
+| Profile | When required | Scope | Coverage-appendix cross-check |
+| --- | --- | --- | --- |
+| **full** | **Post-sprint**, once per sprint round | The complete process below: coverage-appendix mandate, both standing lanes, Layer B partner sessions, exit interview, livability gate | **Enforced** — every in-scope appendix surface must map to an executed case or an explicit disposition |
+| **lite** | **Out-of-band feature pushes** between rounds — the repeatable scripted floor | Preflight verify gates + ~10 persisted-state smoke surfaces on **one** target + the capability-gate matrix and tier tool-conformance evidence at **all three tiers**; single target, sub-hour | **Skipped** — but only when every lite attestation is present (see below); otherwise fail-closed |
+
+**lite never substitutes for a full round.** It is a floor, not a certification:
+it proves the substrate still executes its core persisted-state surfaces and that
+capability gating still holds at every tier, so a feature can ship between sprints
+without a multi-hour round. The full post-sprint round — coverage mandate, Layer B,
+exit interview, livability gate — is unchanged and still required each sprint.
+
+### Running a profile
+
+Both profiles run through one entrypoint, `shakedown/harness/run-shakedown-profile.mjs`,
+after the env is sourced (two stages, both `set -a`; see the bootstrap section):
+
+```bash
+# lite — one explicit target, sub-hour, scripted floor
+PSFN_TARGET=kube \
+PSFN_API_BASE=http://127.0.0.1:10053 \
+PSFN_ADMIN_BASE=http://127.0.0.1:10054 \
+PSFN_MATRIX_DIR=$SHAKEDOWN_ROOT/artifacts/matrix \
+  node shakedown/harness/run-shakedown-profile.mjs --profile lite
+
+# full — the standard scripted Layer A (unchanged output; no profile stamp)
+PSFN_TARGET=local \
+PSFN_TIER_FILE=$SYSTEM_DATA_DIR/capability-tier.json \
+PSFN_MATRIX_DIR=$SHAKEDOWN_ROOT/artifacts/matrix \
+PSFN_SCORECARD_JSON=$SHAKEDOWN_ROOT/artifacts/shakedown-scorecard.json \
+PSFN_SCORECARD_MD=$SHAKEDOWN_ROOT/SHAKEDOWN-SCORECARD.md \
+  node shakedown/harness/run-shakedown-profile.mjs --profile full
+```
+
+### What lite does (and why it is safe to skip the cross-check)
+
+The lite profile is a **thin wrapper** — it never forks the matrix logic. It:
+
+1. **Runs the required preflight verify gates** from the declarative manifest
+   (`shakedown/harness/profiles/lite.manifest.json`: `verify:startup-owner-files`,
+   `verify:settings-contract`, `verify:backup-restore`). A red gate aborts the run.
+2. **Selects one target and ~10 persisted-state smoke surfaces by stable case id**
+   (never catalog position), listed in the manifest and run at the baseline tier.
+3. **Drives the standing `run-live-shakedown-matrix.sh` sweep** across all three
+   tiers with the capability-gate matrix case (`capability_refusal_matrix`) in
+   every tier's set, so the refusal grid and the tier tool-conformance evidence
+   (stable coverage ids `capability_refusal_matrix` + `tier_tool_conformance`) are
+   collected at nursery, apprentice, and autonomous.
+4. **Enforces a sub-hour deadline with signal-safe tier restoration.** On the
+   deadline — or on an operator `SIGINT`/`SIGTERM` — the runner `SIGTERM`s the
+   sweep so *its own* exit trap restores and verifies the pre-sweep tier through
+   the capabilities admin API (the same restore contract the tier-conformance
+   sweep uses). It never edits `capability-tier.json` on the PVC.
+5. **Runs the scorecard with `PSFN_PROFILE=lite`.** Only lite artifacts and lite
+   scorecards are stamped `profile: "lite"`; full-profile output is byte-for-byte
+   unchanged and gains no stamp. The scorecard **skips the coverage-appendix
+   completeness cross-check only when every lite attestation is present** — the
+   capability-gate matrix ran green, both stable coverage ids are stamped, and the
+   tier tool-conformance evidence was collected at all three tiers. A missing
+   attestation is a **hard, fail-closed failure**, not a silent skip, and the
+   cross-check stays enforced. Real case failures and Garden-sweep failures still
+   fail a lite run — lite waives only the *appendix completeness* mandate, nothing
+   about whether the executed surfaces actually passed.
+
 ## Roles
 
 - **Operator** — approves scope, waives findings, owns the release verdict.

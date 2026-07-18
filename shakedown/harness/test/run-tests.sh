@@ -18,6 +18,8 @@ tests=(
   "flip-abort.test.mjs"        # C: an unconfirmed forward flip aborts the phase
   "revert-on-signal.test.mjs"  # B: pre-sweep tier restored on SIGINT/SIGTERM
   "tier-conformance-sweep.test.mjs" # D: 3-tier conformance sweep restores + counts ok:false
+  "profile-runner.test.mjs"    # 65rk.8: --profile lite|full runner, deadline + signal-safe restore
+  "scorecard-profile.test.mjs" # 65rk.8: scorecard profile:lite stamp + attestation gate; full unchanged
 )
 
 for t in "${tests[@]}"; do

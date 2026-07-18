@@ -75,6 +75,8 @@ secrets.
 
 | Script | Role |
 | --- | --- |
+| `run-shakedown-profile.mjs` | Profile runner: `--profile lite\|full`. `full` reproduces the standard scripted Layer A (matrix sweep + scorecard) with no profile stamp. `lite` runs the manifest's preflight gates, drives the sweep with ~10 stable-id smoke cases at the baseline tier + the capability-gate matrix at all three tiers under a sub-hour deadline (SIGTERM-on-deadline/signal so the sweep's trap restores the tier), then scores with `PSFN_PROFILE=lite`. See `docs/shakedown.md` → "Profiles: lite vs full". |
+| `profiles/lite.manifest.json` | Declarative lite-profile manifest: preflight gates, the smoke case subset (by stable id), required tiers + coverage ids, and the sub-hour deadline. Consumed by both `run-shakedown-profile.mjs` and `shakedown-scorecard.mjs`. |
 | `bootstrap-local.mjs` | One-command local bootstrap: validates protected roots before any write, builds the RC, seeds owner files, imports Artie, launches split runtime, and prints the exact persisted first-turn record. |
 | `live-system-shakedown.mjs` | Tier-tagged case harness. One phase per run; writes a run JSON (tagged with `target`) to `PSFN_SHAKEDOWN_OUTPUT`. |
 | `run-live-shakedown-matrix.sh` | Tier sweep: nursery → apprentice → autonomous, for `local` or `kube` (`PSFN_TARGET`). Captures the pre-sweep tier, restores it on exit (trap) **and verifies the restore** — owner-file diff for local, settings-API re-read for kube — even on SIGINT/SIGTERM, and emits one run JSON per tier. |

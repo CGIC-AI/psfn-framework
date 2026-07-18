@@ -12,10 +12,7 @@ import {
   MODEL_USAGE_RANGES,
 } from '../../shared/telemetry/model-usage.js';
 import type { FleetPortalAuthorizationBatchPort } from './fleet-portal-authorization.js';
-import {
-  FleetAuthorizationDeniedError,
-  type FleetAuthorizationContext,
-} from './fleet-authorization-context.js';
+import { FleetAuthorizationDeniedError } from './fleet-authorization-context.js';
 import { isRecord } from '../../shared/utils/types.js';
 
 const TOKEN_TOTAL_FIELDS = [
@@ -167,7 +164,7 @@ export interface FleetModelUsageAuthorizationPort {
     companionId: string;
     action: 'models.read';
     correlationId: string;
-  }): Promise<Pick<FleetAuthorizationContext, 'companionId' | 'authorization'>>;
+  }): Promise<unknown>;
 }
 
 export interface GatewayFleetModelUsageProjectionOptions {
@@ -200,8 +197,11 @@ export class GatewayFleetModelUsageProjection implements FleetModelUsageProjecti
           action: 'models.read',
           correlationId: randomUUID(),
         });
-        if (context.companionId !== companionId
-          || context.authorization.action !== 'models.read') {
+        if (!isRecord(context)
+          || context.companionId !== companionId
+          || !isRecord(context.authorization)
+          || context.authorization.action !== 'models.read'
+          || context.authorization.decision !== 'allow') {
           throw new Error('Fleet model-usage authorization context changed target');
         }
         return companionId;

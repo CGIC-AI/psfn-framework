@@ -10,6 +10,7 @@ import {
   buildCapabilityMatrixExecutionPlan,
   evaluateCapabilityMatrix,
   evaluateApprovalRoutingProbe,
+  evaluateTierToolConformanceEvidence,
 } from '../lib/capability-matrix.mjs';
 
 const ALL_TOKENS = [
@@ -95,6 +96,38 @@ assert.deepEqual(
   'autonomous expectation catalog stays synchronized with the production tier grant list',
 );
 
+const liveHarnessSource = readFileSync(
+  fileURLToPath(new URL('../live-system-shakedown.mjs', import.meta.url)),
+  'utf8',
+);
+const matrixRunnerSource = readFileSync(
+  fileURLToPath(new URL('../run-live-shakedown-matrix.sh', import.meta.url)),
+  'utf8',
+);
+assert.doesNotMatch(
+  matrixRunnerSource,
+  /AUTONOMOUS_CASES=.*lifecycle_(?:restart|rebuild)/u,
+  'the default three-tier matrix never executes destructive lifecycle cases',
+);
+assert.match(
+  liveHarnessSource,
+  /defaultAutonomous = autonomous\.filter\([\s\S]*?lifecycle_restart[\s\S]*?lifecycle_rebuild/u,
+  'direct autonomous harness defaults also omit lifecycle execution cases',
+);
+assert.match(
+  liveHarnessSource,
+  /CAPABILITY_COVERAGE_CASE_IDS = Object\.freeze\(\[\s*'capability_refusal_matrix',\s*'tier_tool_conformance',\s*\]\)/u,
+  'the artifact publishes stable coverage ids for the grid and per-tier tool conformance',
+);
+assert.doesNotMatch(
+  readFileSync(
+    fileURLToPath(new URL('../lib/capability-matrix.mjs', import.meta.url)),
+    'utf8',
+  ),
+  /Then call identity a second time|then call scratchpad with action "remove"/u,
+  'the model is never trusted to perform cleanup inverses',
+);
+
 const identityToolSource = readFileSync(
   fileURLToPath(new URL('../../../src/core/identity/prompt-tools.ts', import.meta.url)),
   'utf8',
@@ -118,41 +151,74 @@ assert.match(
 const apprenticePlan = buildCapabilityMatrixExecutionPlan({
   tier: 'apprentice',
   runToken: 'unit',
-  promptLayerId: 'runtime-layer',
-  baseLayerId: 'base-layer',
-  operatorLayerId: 'operator-layer',
+  discordTarget: '123456789012345678',
+  emailTarget: 'matrix@example.test',
+  dedicatedSinkConfirmation: 'dedicated-test-sinks',
 });
 assert.deepEqual(
   apprenticePlan.eligibilityOnly.map((entry) => entry.token),
-  ['lifecycle.restart', 'lifecycle.rebuild'],
-  'non-autonomous lifecycle probes assert denied eligibility without dispatching a live restart',
+  [
+    'identity.write.runtime',
+    'identity.write.base',
+    'identity.write.operator',
+    'memory.write',
+    'lifecycle.restart',
+    'lifecycle.rebuild',
+  ],
+  'stateful identity, scratchpad, and lifecycle probes use the production gate without executing',
 );
 assert.ok(
   apprenticePlan.executions.every((entry) => !entry.executionId.startsWith('lifecycle_')),
 );
-assert.deepEqual(
-  apprenticePlan.executions
-    .filter((entry) => entry.executionId === 'identity_write_base'
-      || entry.executionId === 'identity_write_operator')
-    .map((entry) => entry.args.layer_id),
-  ['base-layer', 'operator-layer'],
-  'base/operator probes resolve their actual per-layer capability without mutating a real stage',
+assert.ok(
+  apprenticePlan.executions.every((entry) => (
+    CAPABILITY_MATRIX_PROBES.find(
+      (probe) => probe.executionId === entry.executionId,
+    ).tokens.every((token) => CAPABILITY_MATRIX_TIER_TOKENS.apprentice.includes(token))
+  )),
+  'denied tools are never delegated to the adaptive model surface',
 );
 
 const autonomousPlan = buildCapabilityMatrixExecutionPlan({
   tier: 'autonomous',
   runToken: 'unit',
-  promptLayerId: 'runtime-layer',
-  baseLayerId: 'base-layer',
-  operatorLayerId: 'operator-layer',
+  discordTarget: '123456789012345678',
+  emailTarget: 'matrix@example.test',
+  dedicatedSinkConfirmation: 'dedicated-test-sinks',
 });
 assert.deepEqual(
   autonomousPlan.eligibilityOnly.map((entry) => entry.token),
-  ['lifecycle.restart', 'lifecycle.rebuild'],
-  'autonomous lifecycle probes are eligibility-only and never execute live',
+  [
+    'identity.write.runtime',
+    'identity.write.base',
+    'identity.write.operator',
+    'memory.write',
+    'lifecycle.restart',
+    'lifecycle.rebuild',
+  ],
+  'autonomous stateful and lifecycle probes remain eligibility-only',
 );
 assert.ok(
   autonomousPlan.executions.every((entry) => !entry.executionId.startsWith('lifecycle_')),
+);
+assert.throws(
+  () => buildCapabilityMatrixExecutionPlan({
+    tier: 'apprentice',
+    runToken: 'unit',
+    discordTarget: '123456789012345678',
+    emailTarget: 'matrix@example.test',
+  }),
+  /PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED/u,
+);
+assert.throws(
+  () => buildCapabilityMatrixExecutionPlan({
+    tier: 'autonomous',
+    runToken: 'unit',
+    discordTarget: 'internal:not-an-external-sink',
+    emailTarget: 'matrix@example.test',
+    dedicatedSinkConfirmation: 'dedicated-test-sinks',
+  }),
+  /PSFN_MATRIX_DISCORD_TARGET/u,
 );
 
 function turn(toolName, args, details = {}, resultText = 'ok', isError = false) {
@@ -169,60 +235,40 @@ function turn(toolName, args, details = {}, resultText = 'ok', isError = false) 
   };
 }
 
-function reversibleTurn(execution) {
-  if (execution.executionId === 'identity_write_runtime') {
-    return {
-      status: 'completed',
-      toolCalls: [
-        {
-          toolName: 'identity',
-          arguments: execution.args,
-          details: {},
-          resultText: JSON.stringify({
-            action: 'toggle_layer',
-            layerId: execution.args.layer_id,
-            previousEnabled: true,
-            enabled: false,
-          }),
-          isError: false,
+function productionGateObservations(tier) {
+  const granted = new Set(CAPABILITY_MATRIX_TIER_TOKENS[tier]);
+  return Object.fromEntries(CAPABILITY_MATRIX_PROBES.map((probe) => {
+    const missingTokens = probe.tokens.filter((token) => !granted.has(token));
+    const allowed = missingTokens.length === 0;
+    return [
+      probe.executionId,
+      {
+        executionId: probe.executionId,
+        eligibility: {
+          allowed,
+          requiredTokens: [...probe.tokens],
+          missingTokens,
         },
-        {
-          toolName: 'identity',
-          arguments: execution.args,
-          details: {},
-          resultText: JSON.stringify({
-            action: 'toggle_layer',
-            layerId: execution.args.layer_id,
-            previousEnabled: false,
-            enabled: true,
-          }),
-          isError: false,
-        },
-      ],
-    };
-  }
-  if (execution.executionId === 'memory_write') {
-    return {
-      status: 'completed',
-      toolCalls: [
-        {
-          toolName: 'scratchpad',
-          arguments: execution.args,
-          details: {},
-          resultText: 'Scratchpad entry added (id: scratch-unit).',
-          isError: false,
-        },
-        {
-          toolName: 'scratchpad',
-          arguments: { action: 'remove', id: 'scratch-unit' },
-          details: {},
-          resultText: 'Scratchpad entry removed (id: scratch-unit).',
-          isError: false,
-        },
-      ],
-    };
-  }
-  return null;
+        handlerReached: allowed,
+        result: allowed
+          ? {
+              text: 'production capability gate admitted sentinel',
+              details: { gateAllowed: true },
+            }
+          : {
+              text:
+                `Capability denied: tool "${probe.toolName}" requires ${probe.tokens.join(', ')}, `
+                + `but tier "${tier}" only grants fixture tokens.`,
+              details: {
+                isError: true,
+                capabilityDenied: true,
+                tier,
+                missingTokens,
+              },
+            },
+      },
+    ];
+  }));
 }
 
 const apprenticeOutcomes = Object.fromEntries(
@@ -230,36 +276,20 @@ const apprenticeOutcomes = Object.fromEntries(
     const probe = CAPABILITY_MATRIX_PROBES.find(
       (candidate) => candidate.executionId === execution.executionId,
     );
-    const granted = probe.tokens.every((token) =>
-      CAPABILITY_MATRIX_TIER_TOKENS.apprentice.includes(token));
-    const reversible = granted ? reversibleTurn(execution) : null;
     return [
       execution.executionId,
-      reversible ?? turn(
-          probe.toolName,
-          execution.args,
-          granted
-            ? {}
-            : {
-                isError: true,
-                capabilityDenied: true,
-                tier: 'apprentice',
-                missingTokens: probe.tokens.filter(
-                  (token) => !CAPABILITY_MATRIX_TIER_TOKENS.apprentice.includes(token),
-                ),
-              },
-          granted ? 'handler reached' : 'Capability denied',
-          !granted,
-        ),
+      turn(probe.toolName, execution.args),
     ];
   }),
 );
+const apprenticeGates = productionGateObservations('apprentice');
 
 const apprenticeGrid = evaluateCapabilityMatrix({
   expectedTier: 'apprentice',
   observedTier: 'apprentice',
   executionPlan: apprenticePlan,
   outcomesByExecutionId: apprenticeOutcomes,
+  gateObservationsByExecutionId: apprenticeGates,
 });
 assert.equal(apprenticeGrid.mismatchCount, 0);
 assert.equal(apprenticeGrid.rows.length, 22);
@@ -270,55 +300,58 @@ const malformedRefusalGrid = evaluateCapabilityMatrix({
   executionPlan: apprenticePlan,
   outcomesByExecutionId: {
     ...apprenticeOutcomes,
-    world_control: turn(
-      'world',
-      apprenticePlan.executions.find(
-        (execution) => execution.executionId === 'world_control',
-      ).args,
-      {
-        isError: true,
-        capabilityDenied: true,
-        tier: 'nursery',
-        missingTokens: ['world.control'],
+  },
+  gateObservationsByExecutionId: {
+    ...apprenticeGates,
+    world_control: {
+      ...apprenticeGates.world_control,
+      result: {
+        ...apprenticeGates.world_control.result,
+        details: {
+          ...apprenticeGates.world_control.result.details,
+          tier: 'nursery',
+        },
       },
-      'Capability denied',
-      true,
-    ),
+    },
   },
 });
 const malformedRefusal = malformedRefusalGrid.rows.find(
   (row) => row.token === 'world.control',
 );
-assert.equal(malformedRefusal.actual, 'malformed_capability_refusal');
+assert.equal(malformedRefusal.actual, 'malformed_production_gate');
 assert.equal(malformedRefusal.matches, false);
 
-for (const executionId of ['identity_write_runtime', 'memory_write']) {
-  const incompleteCleanupGrid = evaluateCapabilityMatrix({
-    expectedTier: 'apprentice',
-    observedTier: 'apprentice',
-    executionPlan: apprenticePlan,
-    outcomesByExecutionId: {
-      ...apprenticeOutcomes,
-      [executionId]: turn(
-        CAPABILITY_MATRIX_PROBES.find((probe) => probe.executionId === executionId).toolName,
-        apprenticePlan.executions.find((execution) => execution.executionId === executionId).args,
-      ),
+const adaptiveAbsenceGrid = evaluateCapabilityMatrix({
+  expectedTier: 'apprentice',
+  observedTier: 'apprentice',
+  executionPlan: apprenticePlan,
+  outcomesByExecutionId: {
+    ...apprenticeOutcomes,
+    world_control: {
+      snapshot: {
+        adaptiveTools: {
+          skipped: [{ toolName: 'world', missingTokens: ['world.control'] }],
+        },
+      },
     },
-  });
-  const incompleteRow = incompleteCleanupGrid.rows.find(
-    (row) => row.token === (
-      executionId === 'identity_write_runtime' ? 'identity.write.runtime' : 'memory.write'
-    ),
-  );
-  assert.equal(incompleteRow.actual, 'cleanup_not_observed');
-  assert.equal(incompleteRow.matches, false);
-}
+  },
+  gateObservationsByExecutionId: {
+    ...apprenticeGates,
+    world_control: null,
+  },
+});
+assert.equal(
+  adaptiveAbsenceGrid.rows.find((row) => row.token === 'world.control').actual,
+  'not_observed',
+  'adaptive absence is never accepted as a capability refusal',
+);
 
 const wrongTier = evaluateCapabilityMatrix({
   expectedTier: 'apprentice',
   observedTier: 'nursery',
   executionPlan: apprenticePlan,
   outcomesByExecutionId: apprenticeOutcomes,
+  gateObservationsByExecutionId: apprenticeGates,
 });
 assert.ok(wrongTier.mismatchCount > 0, 'apprentice grid must fail against a nursery runtime');
 assert.equal(wrongTier.tierMatches, false);
@@ -330,7 +363,6 @@ const autonomousWorldPlan = autonomousPlan.executions.find(
 );
 const autonomousOutcomes = Object.fromEntries(
   autonomousPlan.executions.map((execution) => {
-    const reversible = reversibleTurn(execution);
     return [
       execution.executionId,
       execution.executionId === 'world_control'
@@ -341,7 +373,7 @@ const autonomousOutcomes = Object.fromEntries(
             'world failed for action=control: affordance "__matrix_missing_affordance__" was not found',
             true,
           )
-        : reversible ?? turn(
+        : turn(
             CAPABILITY_MATRIX_PROBES.find(
               (candidate) => candidate.executionId === execution.executionId,
             ).toolName,
@@ -350,11 +382,13 @@ const autonomousOutcomes = Object.fromEntries(
     ];
   }),
 );
+const autonomousGates = productionGateObservations('autonomous');
 const autonomousGrid = evaluateCapabilityMatrix({
   expectedTier: 'autonomous',
   observedTier: 'autonomous',
   executionPlan: autonomousPlan,
   outcomesByExecutionId: autonomousOutcomes,
+  gateObservationsByExecutionId: autonomousGates,
 });
 assert.equal(autonomousGrid.mismatchCount, 0);
 assert.equal(
@@ -362,23 +396,54 @@ assert.equal(
   'refuse_runtime_fence',
 );
 
+for (const executionId of ['external_discord', 'external_email']) {
+  const execution = autonomousPlan.executions.find(
+    (entry) => entry.executionId === executionId,
+  );
+  const externalErrorGrid = evaluateCapabilityMatrix({
+    expectedTier: 'autonomous',
+    observedTier: 'autonomous',
+    executionPlan: autonomousPlan,
+    outcomesByExecutionId: {
+      ...autonomousOutcomes,
+      [executionId]: turn(
+        execution.toolName,
+        execution.args,
+        { isError: true },
+        'provider unavailable',
+        true,
+      ),
+    },
+    gateObservationsByExecutionId: autonomousGates,
+  });
+  const token = executionId === 'external_discord'
+    ? 'external.discord'
+    : 'external.email';
+  assert.equal(
+    externalErrorGrid.rows.find((row) => row.token === token).actual,
+    'handler_error',
+    `${token} generic handler errors are not accepted as ALLOW`,
+  );
+}
+
 const wrongScopedArgsGrid = evaluateCapabilityMatrix({
   expectedTier: 'autonomous',
   observedTier: 'autonomous',
   executionPlan: autonomousPlan,
   outcomesByExecutionId: {
     ...autonomousOutcomes,
-    identity_write_base: turn(
-      'identity',
-      { action: 'cancel_stage', stage_id: 'different-stage' },
+    git_read: turn(
+      'repo',
+      { action: 'inspect', target: 'different-target' },
       {},
-      'Stage not found',
-      true,
+      'ok',
+      false,
     ),
   },
+  gateObservationsByExecutionId: autonomousGates,
 });
 const wrongScopedArgs = wrongScopedArgsGrid.rows.find(
-  (row) => row.token === 'identity.write.base',
+  (row) => row.token === 'git.read',
 );
 assert.equal(wrongScopedArgs.actual, 'not_observed');
 assert.equal(wrongScopedArgs.matches, false);
@@ -388,11 +453,18 @@ const routed = evaluateApprovalRoutingProbe({
   turnRecord: turn(
     'fs',
     { action: 'read', path: '../matrix-unit' },
-    { isError: true },
+    { isError: true, gatewayErrorCode: -32000 },
     'Your action is pending operator approval (id: approval-1).',
     true,
   ),
-  pendingEntries: [{ id: 'approval-1', method: 'fs.read', scope: '../matrix-unit' }],
+  confirmationSurface: {
+    ok: true,
+    status: 200,
+    body: {
+      available: true,
+      entries: [{ id: 'approval-1', method: 'fs.read', scope: '../matrix-unit' }],
+    },
+  },
   scope: '../matrix-unit',
 });
 assert.equal(routed.expected, 'route_approval');
@@ -401,8 +473,29 @@ assert.equal(routed.matches, true);
 assert.equal(routed.queueObserved, true);
 assert.equal(routed.refusalObserved, true);
 assert.equal(routed.expectedGatewayCode, -32000);
+assert.equal(routed.observedGatewayCode, -32000);
+assert.equal(routed.confirmationSurfaceValid, true);
 
 const missingQueue = evaluateApprovalRoutingProbe({
+  tier: 'apprentice',
+  turnRecord: turn(
+    'fs',
+    { action: 'read', path: '../matrix-unit' },
+    { isError: true, gatewayErrorCode: -32000 },
+    'Your action is pending operator approval (id: approval-1).',
+    true,
+  ),
+  confirmationSurface: {
+    ok: true,
+    status: 200,
+    body: { available: true, entries: [] },
+  },
+  scope: '../matrix-unit',
+});
+assert.equal(missingQueue.actual, 'approval_refusal_without_queue');
+assert.equal(missingQueue.matches, false);
+
+const missingCode = evaluateApprovalRoutingProbe({
   tier: 'apprentice',
   turnRecord: turn(
     'fs',
@@ -411,27 +504,86 @@ const missingQueue = evaluateApprovalRoutingProbe({
     'Your action is pending operator approval (id: approval-1).',
     true,
   ),
-  pendingEntries: [],
+  confirmationSurface: {
+    ok: true,
+    status: 200,
+    body: {
+      available: true,
+      entries: [{ id: 'approval-1', method: 'fs.read', scope: '../matrix-unit' }],
+    },
+  },
   scope: '../matrix-unit',
 });
-assert.equal(missingQueue.actual, 'approval_refusal_without_queue');
-assert.equal(missingQueue.matches, false);
+assert.equal(missingCode.actual, 'approval_route_without_gateway_code');
+assert.equal(missingCode.matches, false);
 
+const directTurn = turn(
+  'fs',
+  { action: 'read', path: '../matrix-unit' },
+  { isError: true },
+  'fs read failed: path is outside the Personal Workspace',
+  true,
+);
 const direct = evaluateApprovalRoutingProbe({
   tier: 'autonomous',
-  turnRecord: turn(
-    'fs',
-    { action: 'read', path: '../matrix-unit' },
-    { isError: true },
-    'fs read failed: path is outside the Personal Workspace',
-    true,
-  ),
-  pendingEntries: [],
+  turnRecord: directTurn,
+  confirmationSurface: {
+    ok: true,
+    status: 200,
+    body: { available: true, entries: [] },
+  },
   scope: '../matrix-unit',
 });
 assert.equal(direct.expected, 'direct_execution');
 assert.equal(direct.actual, 'direct_execution');
 assert.equal(direct.matches, true);
 assert.equal(direct.queueObserved, false);
+
+const malformedSurface = evaluateApprovalRoutingProbe({
+  tier: 'autonomous',
+  turnRecord: directTurn,
+  confirmationSurface: {
+    ok: true,
+    status: 200,
+    body: { entries: [] },
+  },
+  scope: '../matrix-unit',
+});
+assert.equal(malformedSurface.actual, 'confirmation_surface_unavailable');
+assert.equal(malformedSurface.matches, false);
+
+const conformanceRun = {
+  ok: true,
+  status: 200,
+  body: {
+    schemaVersion: 1,
+    ranAt: 123,
+    trigger: 'manual',
+    results: [{ toolName: 'identity', probeKind: 'read_only', ok: true, durationMs: 1 }],
+  },
+};
+const conformance = evaluateTierToolConformanceEvidence({
+  expectedTier: 'apprentice',
+  observedTier: 'apprentice',
+  runResponse: conformanceRun,
+  latestResponse: { ok: true, status: 200, body: conformanceRun.body },
+});
+assert.equal(conformance.caseId, 'tier_tool_conformance');
+assert.equal(conformance.matches, true);
+assert.equal(conformance.probeCount, 1);
+
+const staleConformance = evaluateTierToolConformanceEvidence({
+  expectedTier: 'apprentice',
+  observedTier: 'nursery',
+  runResponse: conformanceRun,
+  latestResponse: {
+    ok: true,
+    status: 200,
+    body: { ...conformanceRun.body, ranAt: 122 },
+  },
+});
+assert.equal(staleConformance.matches, false);
+assert.equal(staleConformance.tierMatches, false);
+assert.equal(staleConformance.latestMatches, false);
 
 console.log('capability matrix contract tests passed');

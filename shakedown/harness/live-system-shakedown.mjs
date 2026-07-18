@@ -33,7 +33,9 @@ import {
   buildCapabilityMatrixExecutionPlan,
   evaluateCapabilityMatrix,
   evaluateApprovalRoutingProbe,
+  evaluateTierToolConformanceEvidence,
 } from './lib/capability-matrix.mjs';
+import { runHostCleanupSteps } from './lib/host-cleanup.mjs';
 
 const CONFIG = (() => {
   try {
@@ -97,6 +99,10 @@ const CASE_IDS = new Set(
     .map((value) => value.trim())
     .filter(Boolean),
 );
+const CAPABILITY_COVERAGE_CASE_IDS = Object.freeze([
+  'capability_refusal_matrix',
+  'tier_tool_conformance',
+]);
 
 // Gateway principal id for the run's API key (api-key-<sha256(key)[:24]>),
 // overridable when the sweep pre-derives it. Matches the runtime derivation so
@@ -513,6 +519,60 @@ function runGit(args) {
   }).trim();
 }
 
+function runProductionCapabilityProbe(tier) {
+  const tsxPath = join(REPO_ROOT, 'node_modules', '.bin', 'tsx');
+  const probePath = join(
+    REPO_ROOT,
+    'shakedown',
+    'harness',
+    'lib',
+    'production-capability-probe.ts',
+  );
+  if (!existsSync(tsxPath) || !existsSync(probePath)) {
+    throw new Error(
+      'Capability matrix production probe requires the target checkout probe and pinned tsx binary',
+    );
+  }
+  const raw = execFileSync(tsxPath, [probePath, '--tier', tier], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+  }).trim();
+  const parsed = JSON.parse(raw);
+  if (
+    parsed?.tier !== tier
+    || !Array.isArray(parsed?.gates)
+    || parsed.gates.length !== 22
+  ) {
+    throw new Error('Capability matrix production probe returned a malformed 22-row result');
+  }
+  return parsed;
+}
+
+async function collectTierToolConformanceEvidence(tier) {
+  const observedTier = await fetchCurrentTier({
+    adminBaseUrl: ADMIN_BASE,
+    adminToken: ADMIN_TOKEN,
+  });
+  const runResponse = await fetchJson(
+    `${ADMIN_BASE}/api/admin/tool-conformance/run`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ trigger: 'manual' }),
+    },
+    DEFAULT_AFTER_TIMEOUT_MS,
+  );
+  const latestResponse = await fetchJson(
+    `${ADMIN_BASE}/api/admin/tool-conformance/latest`,
+  );
+  return evaluateTierToolConformanceEvidence({
+    expectedTier: tier,
+    observedTier,
+    runResponse,
+    latestResponse,
+  });
+}
+
 function cleanupCapabilityMatrixBranch(branchName, originalBranch, originalHead) {
   const currentBranch = runGit(['branch', '--show-current']);
   const branchExists = runGit(['branch', '--list', branchName]) !== '';
@@ -528,22 +588,6 @@ function cleanupCapabilityMatrixBranch(branchName, originalBranch, originalHead)
   }
   runGit(['branch', '-d', branchName]);
   return { branchName, status: 'deleted' };
-}
-
-function extractCreatedMatrixIssueId(turnRecord, expectedTitle) {
-  const calls = Array.isArray(turnRecord?.toolCalls) ? turnRecord.toolCalls : [];
-  const call = calls.find((entry) => (
-    entry?.toolName === 'beads'
-    && entry?.arguments?.action === 'create'
-    && entry?.arguments?.title === expectedTitle
-  ));
-  if (!call || typeof call.resultText !== 'string') return null;
-  if (call?.isError === true || call?.details?.isError === true) return null;
-  const ids = call.resultText.match(/\b(?:PSFN|psfn-framework)-[A-Za-z0-9.-]+\b/gu) ?? [];
-  if (!ids[0]) {
-    throw new Error('Successful scoped issue creation did not expose a cleanup-safe issue id.');
-  }
-  return ids[0];
 }
 
 function cleanupCapabilityMatrixIssue(issueId, expectedTitle) {
@@ -567,6 +611,63 @@ function cleanupCapabilityMatrixIssue(issueId, expectedTitle) {
     );
   }
   return { issueId, status: 'closed' };
+}
+
+function cleanupCapabilityMatrixIssuesByTitle(expectedTitle) {
+  const escapedTitle = expectedTitle.replace(/"/gu, '\\"');
+  const matches = rowsOf(doltAll(
+    `select id, title, status from issues where title = "${escapedTitle}" order by created_at desc;`,
+  ));
+  return matches.map((issue) => cleanupCapabilityMatrixIssue(issue.id, expectedTitle));
+}
+
+function confirmationEntryMatchesScope(entry, scope) {
+  return (
+    entry?.method === 'fs.read'
+    && (
+      entry?.scope === scope
+      || entry?.actionScope === scope
+      || entry?.params?.path === scope
+      || entry?.request?.params?.path === scope
+    )
+  );
+}
+
+async function cleanupCapabilityMatrixApprovals(scope) {
+  const response = await fetchJson(`${ADMIN_BASE}/api/admin/confirmations`);
+  if (
+    response.ok !== true
+    || response.status !== 200
+    || response.body?.available !== true
+    || !Array.isArray(response.body?.entries)
+    || response.body?.message !== undefined
+  ) {
+    throw new Error('confirmation surface was unavailable or malformed during cleanup');
+  }
+  const pending = response.body.entries.filter(
+    (entry) => confirmationEntryMatchesScope(entry, scope),
+  );
+  const resolutions = [];
+  for (const entry of pending) {
+    const resolution = await fetchJson(
+      `${ADMIN_BASE}/api/admin/confirmations/resolve`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: entry.id,
+          decision: 'deny',
+        }),
+      },
+    );
+    if (!resolution.ok) {
+      throw new Error(
+        `could not deny disposable approval ${entry.id}: HTTP ${resolution.status}`,
+      );
+    }
+    resolutions.push({ id: entry.id, status: 'denied' });
+  }
+  return resolutions;
 }
 
 function isSplitRuntimeReachableHealth(response, health) {
@@ -2886,11 +2987,9 @@ function buildCapabilityMatrixCase(ctx) {
   const executionPlan = buildCapabilityMatrixExecutionPlan({
     tier: EXPECTED_CAPABILITY_TIER,
     runToken: ctx.runToken,
-    promptLayerId: ctx.promptToggleLayer?.id ?? null,
-    baseLayerId: ctx.promptBaseLayer?.id ?? null,
-    operatorLayerId: ctx.promptOperatorLayer?.id ?? null,
     discordTarget: optionalEnv('PSFN_MATRIX_DISCORD_TARGET'),
     emailTarget: optionalEnv('PSFN_MATRIX_EMAIL_TARGET'),
+    dedicatedSinkConfirmation: optionalEnv('PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED'),
   });
   const activationTools = [...new Set(
     executionPlan.executions
@@ -2914,6 +3013,40 @@ function buildCapabilityMatrixCase(ctx) {
   const issueExecution = executionPlan.executions.find(
     (execution) => execution.executionId === 'issue_write',
   );
+  const cleanupState = {
+    originalBranch: '',
+    originalHead: '',
+  };
+  const performCleanup = async () => {
+    const steps = [];
+    if (approvalMessage) {
+      steps.push({
+        name: 'approvals',
+        failureLabel: 'could not clean scoped approvals',
+        run: () => cleanupCapabilityMatrixApprovals(approvalScope),
+      });
+    }
+    if (branchExecution?.args?.name) {
+      steps.push({
+        name: 'gitBranch',
+        failureLabel: `could not clean scoped git branch ${branchExecution.args.name}`,
+        run: () => cleanupCapabilityMatrixBranch(
+          branchExecution.args.name,
+          cleanupState.originalBranch,
+          cleanupState.originalHead,
+        ),
+      });
+    }
+    const issueTitle = issueExecution?.args?.title;
+    if (typeof issueTitle === 'string') {
+      steps.push({
+        name: 'issues',
+        failureLabel: 'could not close scoped capability-matrix issue',
+        run: () => cleanupCapabilityMatrixIssuesByTitle(issueTitle),
+      });
+    }
+    return runHostCleanupSteps(steps);
+  };
 
   return {
     id: 'capability_refusal_matrix',
@@ -2927,6 +3060,8 @@ function buildCapabilityMatrixCase(ctx) {
       ...(approvalMessage ? [approvalMessage] : []),
     ],
     before: async () => {
+      cleanupState.originalBranch = runGit(['branch', '--show-current']);
+      cleanupState.originalHead = runGit(['rev-parse', 'HEAD']);
       const observedTier = await fetchCurrentTier({
         adminBaseUrl: ADMIN_BASE,
         adminToken: ADMIN_TOKEN,
@@ -2938,8 +3073,9 @@ function buildCapabilityMatrixCase(ctx) {
       }
       return {
         observedTier,
-        originalBranch: runGit(['branch', '--show-current']),
-        originalHead: runGit(['rev-parse', 'HEAD']),
+        originalBranch: cleanupState.originalBranch,
+        originalHead: cleanupState.originalHead,
+        productionProbe: runProductionCapabilityProbe(EXPECTED_CAPABILITY_TIER),
       };
     },
     after: async ({ outcomes, preChecks }) => {
@@ -2959,11 +3095,15 @@ function buildCapabilityMatrixCase(ctx) {
         observedTier,
         executionPlan,
         outcomesByExecutionId,
+        gateObservationsByExecutionId: Object.fromEntries(
+          (preChecks?.productionProbe?.gates ?? []).map((entry) => [
+            entry.executionId,
+            entry,
+          ]),
+        ),
       });
 
       let approvalRouting = null;
-      let approvalCleanup = null;
-      const cleanupErrors = [];
       if (approvalMessage) {
         const approvalTurn = outcomes[
           activationOffset + executionPlan.executions.length
@@ -2972,64 +3112,12 @@ function buildCapabilityMatrixCase(ctx) {
         approvalRouting = evaluateApprovalRoutingProbe({
           tier: EXPECTED_CAPABILITY_TIER,
           turnRecord: approvalTurn,
-          pendingEntries: confirmationsResponse.body,
+          confirmationSurface: confirmationsResponse,
           scope: approvalScope,
         });
-        if (approvalRouting.pendingId) {
-          const resolution = await fetchJson(
-            `${ADMIN_BASE}/api/admin/confirmations/resolve`,
-            {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                id: approvalRouting.pendingId,
-                decision: 'deny',
-              }),
-            },
-          );
-          if (!resolution.ok) {
-            cleanupErrors.push(
-              `could not deny disposable approval ${approvalRouting.pendingId}: HTTP ${resolution.status}`,
-            );
-            approvalCleanup = {
-              id: approvalRouting.pendingId,
-              status: 'cleanup_failed',
-            };
-          } else {
-            approvalCleanup = {
-              id: approvalRouting.pendingId,
-              status: 'denied',
-            };
-          }
-        }
       }
 
-      const cleanup = {};
-      if (branchExecution?.args?.name) {
-        try {
-          cleanup.gitBranch = cleanupCapabilityMatrixBranch(
-            branchExecution.args.name,
-            preChecks?.originalBranch ?? '',
-            preChecks?.originalHead ?? '',
-          );
-        } catch (error) {
-          cleanupErrors.push(
-            `could not clean scoped git branch ${branchExecution.args.name}: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
-      const issueTurn = outcomesByExecutionId.issue_write;
-      const issueTitle = issueExecution?.args?.title;
-      if (typeof issueTitle === 'string') {
-        try {
-          const issueId = extractCreatedMatrixIssueId(issueTurn, issueTitle);
-          cleanup.issue = cleanupCapabilityMatrixIssue(issueId, issueTitle);
-        } catch (error) {
-          cleanupErrors.push(
-            `could not close scoped capability-matrix issue: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
-      }
+      const { cleanup, cleanupErrors } = await performCleanup();
       const gitWriteRow = grid.rows.find((row) => row.token === 'git.write');
       if (
         gitWriteRow?.actual === 'allow'
@@ -3042,7 +3130,7 @@ function buildCapabilityMatrixCase(ctx) {
       if (
         issueWriteRow?.actual === 'allow'
         && issueWriteRow?.handlerResult === 'success'
-        && cleanup.issue?.status !== 'closed'
+        && !cleanup.issues?.some((entry) => entry.status === 'closed')
       ) {
         cleanupErrors.push('scoped issue creation succeeded without closure proof');
       }
@@ -3050,7 +3138,7 @@ function buildCapabilityMatrixCase(ctx) {
       return {
         capabilityMatrix: grid,
         approvalRouting,
-        approvalCleanup,
+        shardBackendRouting: preChecks?.productionProbe?.shardBackend ?? null,
         cleanup,
         cleanupErrors,
       };
@@ -3067,11 +3155,28 @@ function buildCapabilityMatrixCase(ctx) {
           `approval routing expected ${sideChecks.approvalRouting.expected} but observed ${sideChecks.approvalRouting.actual}`,
         );
       }
+      const shardBackend = sideChecks?.shardBackendRouting;
+      const expectedShardBackend = EXPECTED_CAPABILITY_TIER === 'autonomous'
+        ? { actual: 'accepted_unavailable', code: null }
+        : { actual: 'policy_denied', code: -32002 };
+      if (
+        shardBackend?.method !== 'shard.backend.request'
+        || shardBackend?.callerTier !== EXPECTED_CAPABILITY_TIER
+        || shardBackend?.authoritativeTier !== EXPECTED_CAPABILITY_TIER
+        || shardBackend?.actual !== expectedShardBackend.actual
+        || shardBackend?.code !== expectedShardBackend.code
+      ) {
+        failures.push(
+          `shard.backend.request expected ${expectedShardBackend.actual}/${expectedShardBackend.code} `
+          + `but observed ${shardBackend?.actual ?? 'missing'}/${shardBackend?.code ?? 'missing'}`,
+        );
+      }
       if (Array.isArray(sideChecks?.cleanupErrors) && sideChecks.cleanupErrors.length > 0) {
         failures.push(...sideChecks.cleanupErrors.map((error) => `capability matrix cleanup failed: ${error}`));
       }
       return failures;
     },
+    cleanup: performCleanup,
   };
 }
 
@@ -3086,6 +3191,9 @@ function buildCases(ctx) {
   if (CASE_IDS.size > 0) {
     return allCases;
   }
+  const defaultAutonomous = autonomous.filter(
+    (testCase) => testCase.id !== 'lifecycle_restart' && testCase.id !== 'lifecycle_rebuild',
+  );
   switch (PHASE) {
     case 'baseline':
     case 'nursery':
@@ -3096,7 +3204,7 @@ function buildCases(ctx) {
     case 'full':
       return [...baseline, ...apprentice, ...coverage, ...matrixCases];
     case 'autonomous':
-      return allCases;
+      return [...baseline, ...apprentice, ...coverage, ...defaultAutonomous, ...matrixCases];
     default:
       return [...baseline, ...apprentice, ...coverage, ...matrixCases];
   }
@@ -3357,6 +3465,16 @@ async function main() {
     scratchpadCount: await pgScalar('select count(*) as count from scratchpad_entries;'),
     reflectionCount: await pgScalar('select count(*) as count from reflections;'),
   };
+  const tierToolConformance = (
+    (CASE_IDS.size === 0 || CASE_IDS.has('capability_refusal_matrix'))
+    && (
+      EXPECTED_CAPABILITY_TIER === 'nursery'
+      || EXPECTED_CAPABILITY_TIER === 'apprentice'
+      || EXPECTED_CAPABILITY_TIER === 'autonomous'
+    )
+  )
+    ? await collectTierToolConformanceEvidence(EXPECTED_CAPABILITY_TIER)
+    : null;
 
   const contextSummary = {
     runToken: ctx.runToken,
@@ -3379,6 +3497,8 @@ async function main() {
     adaptiveTools,
     context: contextSummary,
     initialStats,
+    coverageCaseIds: CAPABILITY_COVERAGE_CASE_IDS,
+    tierToolConformance,
     requestedCaseIds: [...CASE_IDS],
   };
   const cases = buildCases(ctx);
@@ -3422,15 +3542,67 @@ async function main() {
         + (testCase.afterTimeoutMs ?? DEFAULT_AFTER_TIMEOUT_MS)
         + DEFAULT_CASE_OVERHEAD_TIMEOUT_MS;
     let caseResult;
+    let caseRunPromise;
+    let caseTimedOut = false;
     try {
+      caseRunPromise = Promise.resolve().then(() => runCase(testCase, ctx));
       caseResult = await withTimeout(
         `case ${testCase.id}`,
         caseTimeoutMs,
-        () => runCase(testCase, ctx),
+        () => caseRunPromise,
       );
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
+      caseTimedOut = / timed out after \d+ms$/u.test(errorMessage);
       caseResult = buildHarnessErrorResult(testCase, errorMessage);
+    }
+    if (typeof testCase.cleanup === 'function') {
+      let cleanupDrainError = null;
+      if (caseTimedOut && caseRunPromise) {
+        try {
+          await withTimeout(
+            `case ${testCase.id} cleanup drain`,
+            testCase.afterTimeoutMs ?? DEFAULT_AFTER_TIMEOUT_MS,
+            () => caseRunPromise.catch(() => null),
+          );
+        } catch (error) {
+          cleanupDrainError =
+            `timed-out case did not drain before cleanup: ${error instanceof Error ? error.message : String(error)}`;
+        }
+      }
+      let finalCleanup;
+      try {
+        finalCleanup = await withTimeout(
+          `case ${testCase.id} final cleanup`,
+          testCase.afterTimeoutMs ?? DEFAULT_AFTER_TIMEOUT_MS,
+          () => testCase.cleanup(),
+        );
+      } catch (error) {
+        finalCleanup = {
+          cleanup: {},
+          cleanupErrors: [
+            `final cleanup threw: ${error instanceof Error ? error.message : String(error)}`,
+          ],
+        };
+      }
+      caseResult.sideChecks = {
+        ...(caseResult.sideChecks ?? {}),
+        finalCleanup,
+      };
+      if (cleanupDrainError) {
+        finalCleanup.cleanupErrors.push(cleanupDrainError);
+      }
+      if (finalCleanup.cleanupErrors.length > 0) {
+        caseResult.semanticFailureMatches = [
+          ...(caseResult.semanticFailureMatches ?? []),
+          ...finalCleanup.cleanupErrors.map((error) => (
+            semanticFailure(error, 'capability_matrix_cleanup')
+          )),
+        ];
+        if (!MATRIX_ABORT_STATUSES.has(caseResult.caseStatus)) {
+          caseResult.caseStatus = 'semantic_failure';
+        }
+      }
     }
     caseResult.caseArtifactPath = writeCaseArtifact(caseResult, {
       startedAt,
@@ -3560,8 +3732,12 @@ async function main() {
   const output = {
     ...outputBase,
     generatedAt: new Date().toISOString(),
-    completed: !matrixAborted,
-    harnessStatus: matrixAborted ? 'matrix_aborted' : 'complete',
+    completed: !matrixAborted && tierToolConformance?.matches !== false,
+    harnessStatus: matrixAborted
+      ? 'matrix_aborted'
+      : tierToolConformance?.matches === false
+        ? 'tool_conformance_failed'
+        : 'complete',
     selectedCaseIds,
     results,
     postStats,
@@ -3586,6 +3762,9 @@ async function main() {
 
   writeJsonArtifact(OUTPUT_PATH, output);
   writeJsonArtifact(PARTIAL_OUTPUT_PATH, output);
+  if (tierToolConformance?.matches === false) {
+    process.exitCode = 2;
+  }
   await new Promise((resolve) => {
     process.stdout.write(`${JSON.stringify({
       ok: true,

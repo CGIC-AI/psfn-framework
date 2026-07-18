@@ -265,7 +265,9 @@ export function createFsTool(ops: FilesystemOperations): SubstrateAgentTool {
           }
         }
       } catch (error) {
-        return textResultWithError(`fs failed: ${toErrorMessage(error)}`, true);
+        return textResultWithError(`fs failed: ${toErrorMessage(error)}`, true, {
+          cause: error,
+        });
       }
     },
   };

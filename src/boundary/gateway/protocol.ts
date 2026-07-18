@@ -408,7 +408,10 @@ export interface ShardBackendRequestParams {
   backend: ShardBackendRequestBackend;
   shardId: string;
   name: string;
-  capabilityTier: string;
+  /** Manager-bound assertion; gateway recomputes it from authenticated authority. */
+  ownerVersion: string;
+  /** Manager-bound assertion; gateway recomputes it from authenticated authority. */
+  grantDigest: string;
 }
 
 export type VaultWriteMode = 'create' | 'append' | 'prepend';

@@ -236,6 +236,8 @@ export async function buildGatewayPrivilegedCore(
       ntfy: input.bootstrap.server.ntfy,
       confirmation: input.bootstrap.server.confirmation,
       capabilityTierProvider: (companionId) => capabilityTierResolver.resolveTier(companionId),
+      capabilityGrantSnapshotProvider: (companionId) =>
+        capabilityTierResolver.snapshotOwnerGrantStrict(companionId),
       approvalParentLabelProvider: (companionId) => {
         const fleetEntry = input.config.companionFleet?.companions
           .find(entry => entry.companionId === companionId);

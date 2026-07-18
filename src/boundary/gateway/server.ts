@@ -47,7 +47,7 @@ import type { SessionHmacKeyring } from '../../persistence/journals/journal-util
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { registerGatewayMethods } from './methods/index.js';
-import type { GatewayMethodRuntime } from './methods/types.js';
+import type { GatewayMethodRuntime, ShardBackendExecutor } from './methods/types.js';
 import type { WelfareGrantVerifier } from './welfare-grant-verifier.js';
 import type { PolicyConfig } from './policy.js';
 import {
@@ -104,6 +104,7 @@ import { SharedCompanionWorkspaceReader } from '../../persistence/workspaces/sha
 import { materializeGatewayAttachments } from './attachment-materialization.js';
 import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
 import type { KubeSelfManagementController } from '../../system/lifecycle/kube-self-management.js';
+import type { CapabilityGrantSnapshot } from '../../system/capabilities/access.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -243,6 +244,12 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   // an52.3: keyed on the authenticated companion so a fleet resolves each
   // companion's own capability tier. Single-companion providers ignore the arg.
   capabilityTierProvider?: (companionId?: string) => CapabilityTier;
+  // mus2.5: atomic owner snapshot keyed on the authenticated companion.
+  capabilityGrantSnapshotProvider?: (
+    companionId?: string,
+  ) => CapabilityGrantSnapshot;
+  /** Optional privileged executor; receives only gateway-authorized launch context. */
+  shardBackendExecutor?: ShardBackendExecutor;
   /** Canonical companion display label used in human-facing approval attribution. */
   approvalParentLabelProvider?: (companionId: string) => string | undefined;
   wyomingShardRouting: WyomingShardRoutingConfig;
@@ -541,6 +548,15 @@ export class GatewayServer {
       // shard.backend.request (and any gated method) resolves the caller's own
       // capability tier, not the gateway's single hydrated root.
       capabilityTierProvider: () => this.capabilityTierProvider(this.authenticatedCompanionId(conn)),
+      ...(this.options.capabilityGrantSnapshotProvider
+        ? {
+            capabilityGrantSnapshotProvider: () =>
+              this.options.capabilityGrantSnapshotProvider!(this.authenticatedCompanionId(conn)),
+          }
+        : {}),
+      ...(this.options.shardBackendExecutor
+        ? { shardBackendExecutor: this.options.shardBackendExecutor }
+        : {}),
       approvalBoundary: this.approvalBoundary,
       ...(this.options.kubeSelfManagement
         ? { kubeSelfManagement: this.options.kubeSelfManagement }

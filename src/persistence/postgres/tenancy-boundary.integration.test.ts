@@ -24,6 +24,7 @@ import {
   assertPostgresTenantAccessProvisioned,
   derivePostgresShardSchema,
   dropPostgresShardSchema,
+  dropPostgresTenantAccess,
   planPostgresTenantAccess,
   provisionPostgresTenantAccess,
 } from './tenancy.js';
@@ -201,6 +202,71 @@ describe('PostgreSQL flagship adoption boundary', () => {
 });
 
 describe('PostgreSQL least-privilege companion and shard roles', () => {
+  it('removes one explicitly planned disposable tenant without touching its peer', async () => {
+    const databaseUrl = await freshDatabaseUrl();
+    const admin = createPostgresPool(databaseUrl, {
+      applicationName: 'psfn-disposable-tenant-cleanup',
+      max: 2,
+    });
+    const primary = planPostgresTenantAccess({ schema: 'shakedown_artie' });
+    const support = planPostgresTenantAccess({ schema: 'shakedown_support_mica' });
+    try {
+      await provisionPostgresTenantAccess(admin, {
+        plan: primary,
+        runtimeLoginRole: 'postgres',
+        relocateExtensions: ['vector'],
+      });
+      await provisionPostgresTenantAccess(admin, {
+        plan: support,
+        runtimeLoginRole: 'postgres',
+      });
+      await admin.query('CREATE TABLE shakedown_artie.primary_probe (id TEXT PRIMARY KEY)');
+      await admin.query('CREATE TABLE shakedown_support_mica.support_probe (id TEXT PRIMARY KEY)');
+      await admin.query('CREATE SCHEMA cleanup_guard');
+      await admin.query('CREATE TABLE cleanup_guard.foreign_probe (id TEXT PRIMARY KEY)');
+      await admin.query(`ALTER TABLE cleanup_guard.foreign_probe OWNER TO "${support.role}"`);
+
+      await expect(dropPostgresTenantAccess({
+        pool: admin,
+        plan: support,
+        runtimeLoginRole: 'postgres',
+        dropRole: true,
+      })).rejects.toThrow(`owns objects outside ${support.schema}`);
+      expect(await admin.query<{ relation: string | null }>(
+        "SELECT to_regclass('shakedown_support_mica.support_probe')::text AS relation",
+      )).toMatchObject({ rows: [{ relation: 'shakedown_support_mica.support_probe' }] });
+
+      await admin.query('ALTER TABLE cleanup_guard.foreign_probe OWNER TO postgres');
+      await admin.query('DROP SCHEMA cleanup_guard CASCADE');
+
+      const evidence = await dropPostgresTenantAccess({
+        pool: admin,
+        plan: support,
+        runtimeLoginRole: 'postgres',
+        dropRole: true,
+      });
+
+      expect(evidence).toMatchObject({
+        schema: support.schema,
+        role: support.role,
+        dropped: true,
+      });
+      expect(await admin.query<{ schema_exists: boolean; role_exists: boolean }>(`
+        SELECT
+          to_regnamespace($1) IS NOT NULL AS schema_exists,
+          EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $2) AS role_exists
+      `, [support.schema, support.role])).toMatchObject({
+        rows: [{ schema_exists: false, role_exists: false }],
+      });
+      await assertPostgresTenantAccessProvisioned(admin, primary);
+      expect(await admin.query<{ relation: string | null }>(
+        "SELECT to_regclass('shakedown_artie.primary_probe')::text AS relation",
+      )).toMatchObject({ rows: [{ relation: 'shakedown_artie.primary_probe' }] });
+    } finally {
+      await admin.end();
+    }
+  }, INTEGRATION_TIMEOUT_MS);
+
   it('isolates two companions and a derived shard while allowing only approved shared reads', async () => {
     const databaseUrl = await freshDatabaseUrl();
     const admin = createPostgresPool(databaseUrl, {

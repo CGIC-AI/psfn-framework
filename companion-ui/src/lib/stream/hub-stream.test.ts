@@ -9,6 +9,7 @@ import {
   HubStreamStore,
   reduceHubStreamState,
   type HubStreamClientLike,
+  type HubStreamState,
 } from './hub-stream.js';
 
 describe('hub stream reducer', () => {
@@ -273,7 +274,23 @@ describe('hub stream reducer', () => {
   });
 
   it('surfaces disconnects and failures honestly', () => {
-    let state = createInitialHubStreamState('2026-06-17T00:00:00.000Z');
+    let state: HubStreamState = {
+      ...createInitialHubStreamState('2026-06-17T00:00:00.000Z'),
+      session: { eventCapabilities: ['approvals.v2'] },
+      approvals: [{
+        id: 'approval-1',
+        title: 'Approval',
+        requestedAt: '2026-06-17T00:00:00.000Z',
+        redactedContext: 'Context',
+        status: 'pending' as const,
+      }],
+      approvalResolutions: {
+        'approval-old': {
+          status: 'denied' as const,
+          resolvedAt: '2026-06-17T00:00:00.000Z',
+        },
+      },
+    };
     state = reduceHubStreamState(state, {
       type: 'client.state',
       at: '2026-06-17T00:00:01.000Z',
@@ -281,6 +298,9 @@ describe('hub stream reducer', () => {
     });
 
     expect(state.connection).toBe('disconnected');
+    expect(state.session).toBeNull();
+    expect(state.approvals).toEqual([]);
+    expect(state.approvalResolutions).toEqual({});
 
     state = reduceHubStreamState(state, {
       type: 'client.error',

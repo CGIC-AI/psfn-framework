@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SatelliteHubWebSocketLike } from './client.js';
+import { HubStreamStore } from '../stream/hub-stream.js';
 import { CompanionGatewayClient } from './gateway-client.js';
 
 class FakeSocket implements SatelliteHubWebSocketLike {
@@ -34,6 +35,11 @@ class FakeSocket implements SatelliteHubWebSocketLike {
 
   message(payload: unknown): void {
     this.dispatch('message', { data: typeof payload === 'string' ? payload : JSON.stringify(payload) });
+  }
+
+  serverClose(code: number): void {
+    this.readyState = 3;
+    this.dispatch('close', { code });
   }
 
   private dispatch(type: string, event?: unknown): void {
@@ -129,6 +135,62 @@ describe('CompanionGatewayClient', () => {
       { type: 'message', data: { role: 'assistant', content: 'hello human', final: true } },
     ]);
     expect(JSON.stringify(client.snapshot())).not.toContain('server-owned-channel');
+  });
+
+  it('clears the session and authority-bound approval state immediately on an authority close', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket);
+    const store = new HubStreamStore(client);
+
+    socket.message({
+      schemaVersion: 1,
+      type: 'event',
+      event: {
+        type: 'approval.requested',
+        data: {
+          id: 'approval-revoked',
+          title: 'write file: redacted',
+          requestedAt: '2026-07-17T00:00:00.000Z',
+          redactedContext: 'Needs permission',
+          status: 'pending',
+          sourceSystem: 'tool-access',
+          attribution: {
+            parentId: '11111111-1111-4111-8111-111111111111',
+            parentLabel: 'Companion',
+          },
+          action: 'write file',
+          scope: 'redacted',
+          reason: 'Needs permission',
+          grantMode: { kind: 'once' },
+        },
+      },
+    });
+    socket.message({
+      schemaVersion: 1,
+      type: 'event',
+      event: {
+        type: 'approval.resolved',
+        data: {
+          id: 'approval-history',
+          status: 'denied',
+          resolvedAt: '2026-07-17T00:00:01.000Z',
+        },
+      },
+    });
+    await flushAsyncMessage();
+    expect(store.snapshot().approvals).toHaveLength(1);
+    expect(store.snapshot().approvalResolutions).toHaveProperty('approval-history');
+
+    socket.serverClose(4401);
+
+    expect(client.snapshot().session).toEqual({});
+    expect(store.snapshot()).toMatchObject({
+      connection: 'disconnected',
+      session: null,
+      approvals: [],
+      approvalResolutions: {},
+    });
+    store.destroy();
   });
 
   it.each([

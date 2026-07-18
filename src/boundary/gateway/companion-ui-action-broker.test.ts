@@ -96,7 +96,10 @@ function actionBody(resource = 'conversation.interact', action = 'companion.inte
   }));
 }
 
-function fixture(resolved = context) {
+function fixture(
+  resolved = context,
+  approvalOwnerOf: (id: string) => string | undefined = () => companionId,
+) {
   const keys = generateKeyPairSync('ed25519');
   const signer = createGatewayRequestCapabilitySigner({
     issuer: 'fleet-auth', kid: 'active-key',
@@ -130,6 +133,7 @@ function fixture(resolved = context) {
     signer,
     childAssertions,
     dispatch,
+    approvalOwner: { ownerOf: approvalOwnerOf },
   });
   return { broker, dispatch, verifier };
 }
@@ -208,6 +212,30 @@ describe('GatewayCompanionUiActionBroker', () => {
       attachment: guestAttachment,
       physicalCeiling: { capabilities: [], telemetryScopes: ['approvals'] },
       deviceTransport: { principal: { id: 'satellite-principal', mode: 'api_key', scope: 'satellite' }, headers: {} },
+    })).rejects.toBeInstanceOf(CompanionUiActionDeniedError);
+    expect(built.dispatch.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('denies a leaked confirmation id after fetching its stored parent owner', async () => {
+    const approvalContext = Object.freeze({
+      ...context,
+      authorization: Object.freeze({
+        action: 'confirmations.resolve' as const,
+        decision: 'allow' as const,
+      }),
+    });
+    const built = fixture(approvalContext, () => '99999999-9999-4999-8999-999999999999');
+
+    await expect(built.broker.execute({
+      rawBody: actionBody('confirmations.resolve', 'confirmations.resolve'),
+      companionId,
+      sessionToken: 's'.repeat(43),
+      attachment,
+      physicalCeiling: { capabilities: [], telemetryScopes: ['approvals'] },
+      deviceTransport: {
+        principal: { id: 'satellite-principal', mode: 'api_key', scope: 'satellite' },
+        headers: {},
+      },
     })).rejects.toBeInstanceOf(CompanionUiActionDeniedError);
     expect(built.dispatch.dispatch).not.toHaveBeenCalled();
   });

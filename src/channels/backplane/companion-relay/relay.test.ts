@@ -36,6 +36,10 @@ describe('CompanionEventRelay', () => {
     relay = new CompanionEventRelay({
       eventBus,
       defaultCompanionId: 'test-companion',
+      approvalBindingOf: (id) => ({
+        companionId: 'test-companion',
+        ...(id === 'conf-shard' || id === 'conf-mismatch' ? { shardId: 'shard-1' } : {}),
+      }),
       previewRoots: [tempDir],
       maxPreviewBytes: 1_000,
     });
@@ -137,11 +141,95 @@ describe('CompanionEventRelay', () => {
     // The owner's subscriber gets both events; provenance survives the envelope.
     expect(ownerReceived).toHaveLength(2);
     const requested = ownerReceived.find((e) => e.kind === 'approval.requested');
+    expect(requested).toMatchObject({
+      companionId: 'test-companion',
+      shardId: 'shard-1',
+    });
     expect((requested?.payload as { attribution?: { shardId?: string } }).attribution?.shardId).toBe('shard-1');
     const resolved = ownerReceived.find((e) => e.kind === 'approval.resolved');
+    expect(resolved).toMatchObject({
+      companionId: 'test-companion',
+      shardId: 'shard-1',
+    });
     expect((resolved?.payload as { shardId?: string }).shardId).toBe('shard-1');
     // A different companion never sees another owner's approval events.
     expect(otherReceived).toHaveLength(0);
+  });
+
+  it('drops approval events whose payload attribution conflicts with routing metadata', async () => {
+    const received = collect(['approval.requested', 'approval.resolved']);
+
+    await eventBus.emit('companion.approval.requested', {
+      companionId: 'test-companion',
+      shardId: 'shard-1',
+      payload: {
+        id: 'conf-mismatch',
+        title: 'write file: /workspace/todo.txt',
+        requestedAt: new Date(1).toISOString(),
+        redactedContext: 'Updating the shared todo list',
+        status: 'pending',
+        sourceSystem: 'tool-access',
+        attribution: {
+          parentId: 'other-companion',
+          parentLabel: 'Other Parent',
+          shardId: 'shard-1',
+        },
+        action: 'write file',
+        scope: '/workspace/todo.txt',
+        reason: 'Updating the shared todo list',
+        grantMode: { kind: 'once' },
+      },
+      timestamp: Date.now(),
+    });
+    await eventBus.emit('companion.approval.resolved', {
+      companionId: 'test-companion',
+      shardId: 'shard-1',
+      payload: {
+        id: 'conf-mismatch',
+        status: 'denied',
+        resolvedAt: new Date(2).toISOString(),
+        shardId: 'different-shard',
+      },
+      timestamp: Date.now(),
+    });
+
+    expect(received).toEqual([]);
+  });
+
+  it('drops a self-consistent shard event when the queued binding belongs to another parent', async () => {
+    relay.stop();
+    relay = new CompanionEventRelay({
+      eventBus,
+      defaultCompanionId: 'test-companion',
+      approvalBindingOf: () => ({ companionId: 'other-companion', shardId: 'shard-1' }),
+      previewRoots: [tempDir],
+    });
+    const received = collect(['approval.requested']);
+
+    await eventBus.emit('companion.approval.requested', {
+      companionId: 'test-companion',
+      shardId: 'shard-1',
+      payload: {
+        id: 'conf-cross-parent',
+        title: 'write file: redacted',
+        requestedAt: new Date(1).toISOString(),
+        redactedContext: 'Needs permission',
+        status: 'pending',
+        sourceSystem: 'shard',
+        attribution: {
+          parentId: 'test-companion',
+          parentLabel: 'Parent',
+          shardId: 'shard-1',
+        },
+        action: 'write file',
+        scope: 'redacted',
+        reason: 'Needs permission',
+        grantMode: { kind: 'once' },
+      },
+      timestamp: Date.now(),
+    });
+
+    expect(received).toEqual([]);
   });
 
   it('registers artifact previews inside the preview roots and strips the sidecar from envelopes', async () => {

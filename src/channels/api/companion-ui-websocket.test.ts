@@ -65,9 +65,13 @@ function request(overrides: Partial<IncomingMessage> = {}): IncomingMessage {
   } as IncomingMessage;
 }
 
-function fixture(options: { guest?: boolean } = {}) {
+  function fixture(options: { guest?: boolean } = {}) {
   const eventBus = new EventBus();
-  const eventRelay = new CompanionEventRelay({ eventBus, defaultCompanionId: companionId });
+  const eventRelay = new CompanionEventRelay({
+    eventBus,
+    defaultCompanionId: companionId,
+    approvalBindingOf: () => ({ companionId }),
+  });
   const webSocket = new FakeWebSocket();
   const handleUpgrade = vi.fn((_request, _socket, _head, callback) => callback(webSocket));
   const attachment = {
@@ -262,6 +266,78 @@ describe('CompanionUiWebSocketAdapter upgrade policy', () => {
         }),
       },
     });
+    await built.adapter.stop();
+  });
+
+  it('does not expose approval events when the Hub ceiling lacks the approvals scope', async () => {
+    const built = fixture();
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(request(), socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
+
+    await built.eventBus.emit('companion.approval.requested', {
+      companionId,
+      payload: {
+        id: 'approval-hidden',
+        title: 'web.fetch: example.test',
+        requestedAt: '2026-07-17T00:00:00.000Z',
+        redactedContext: 'Read documentation',
+        status: 'pending',
+        sourceSystem: 'tool-access',
+        attribution: { parentId: companionId, parentLabel: 'Test Companion' },
+        action: 'web.fetch',
+        scope: 'example.test',
+        reason: 'Read documentation',
+        grantMode: { kind: 'once' },
+      },
+      timestamp: Date.now(),
+    });
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(built.webSocket.sent).toHaveLength(1);
+    expect(JSON.parse(built.webSocket.sent[0]!)).toMatchObject({
+      type: 'session.ready',
+      eventCapabilities: [],
+    });
+    await built.adapter.stop();
+  });
+
+  it('reauthorizes before each approval event and closes without delivery after revocation', async () => {
+    const built = fixture();
+    const candidate = request();
+    candidate.headers['x-psfn-satellite-telemetry-scopes'] = 'approvals';
+    candidate.rawHeaders = Object.entries(candidate.headers)
+      .flatMap(([name, value]) => [name, String(value)]);
+    const socket = new FakeSocket();
+    built.adapter.handleUpgrade(candidate, socket as unknown as Duplex, Buffer.alloc(0));
+    await vi.waitFor(() => expect(built.handleUpgrade).toHaveBeenCalledOnce());
+    built.webSocket.emit('message', CONFIGURE, false);
+    await vi.waitFor(() => expect(built.webSocket.sent).toHaveLength(1));
+
+    built.admit.mockRejectedValueOnce(new Error('operator grant revoked'));
+    await built.eventBus.emit('companion.approval.requested', {
+      companionId,
+      payload: {
+        id: 'approval-revoked',
+        title: 'web.fetch: example.test',
+        requestedAt: '2026-07-17T00:00:00.000Z',
+        redactedContext: 'Read documentation',
+        status: 'pending',
+        sourceSystem: 'tool-access',
+        attribution: { parentId: companionId, parentLabel: 'Test Companion' },
+        action: 'web.fetch',
+        scope: 'example.test',
+        reason: 'Read documentation',
+        grantMode: { kind: 'once' },
+      },
+      timestamp: Date.now(),
+    });
+
+    await vi.waitFor(() => expect(built.webSocket.readyState).toBe(WebSocket.CLOSED));
+    expect(built.webSocket.closeArgs[0]).toBe(4401);
+    expect(built.webSocket.sent).toHaveLength(1);
     await built.adapter.stop();
   });
 

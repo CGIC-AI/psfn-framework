@@ -405,11 +405,19 @@ function applyConnectionState(
 ): HubStreamState {
   const connection = mapClientConnection(connectionState);
   const healthy = connection === 'connecting' || connection === 'connected' || connection === 'ready';
+  const authorityCleared = connection === 'disconnected' || connection === 'failed';
   return {
     ...state,
     connection,
     phase: connection === 'failed' ? 'failed' : state.phase,
     failure: healthy ? null : state.failure,
+    ...(authorityCleared
+      ? {
+          session: null,
+          approvals: [],
+          approvalResolutions: {},
+        }
+      : {}),
     updatedAt: at,
   };
 }

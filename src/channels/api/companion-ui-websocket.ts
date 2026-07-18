@@ -12,6 +12,7 @@ import type { CompanionId } from '../../shared/routing/companion-id.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import type { GatewayHubDeviceIngressService } from '../../boundary/fleet-auth/hub-device-ingress.js';
+import type { HubDeviceAttachmentSnapshot } from '../../shared/contracts/hub-device-ingress.js';
 import type { GatewayCompanionUiActionBroker } from '../../boundary/gateway/companion-ui-action-broker.js';
 import {
   parseCompanionUiActionFrame,
@@ -21,6 +22,7 @@ import {
   COMPANION_APPROVALS_V2_CAPABILITY,
   companionEventKindsForScopes,
   type CompanionApprovalRequestedPayload,
+  type CompanionApprovalResolvedPayload,
   type CompanionEventEnvelope,
   type CompanionEventKind,
 } from '../../shared/contracts/companion-relay.js';
@@ -146,14 +148,44 @@ function projectCompanionEventFrame(
     }
     const payload = envelope.payload as CompanionApprovalRequestedPayload;
     if (!payload.sourceSystem || !payload.attribution || !payload.action
-      || !payload.scope || !payload.reason || !payload.grantMode) {
+      || !payload.scope || !payload.reason || !payload.grantMode
+      || payload.attribution.parentId !== envelope.companionId
+      || payload.attribution.shardId !== envelope.shardId) {
       throw new Error('Companion UI approval event is missing required v2 fields');
+    }
+  } else if (envelope.kind === 'approval.resolved') {
+    const payload = envelope.payload as CompanionApprovalResolvedPayload;
+    if (!envelope.companionId || payload.shardId !== envelope.shardId) {
+      throw new Error('Companion UI approval resolution has mismatched routing metadata');
     }
   }
   return Object.freeze({
     schemaVersion: 1,
     type: 'event',
     event: Object.freeze({ type: envelope.kind, data: envelope.payload }),
+  });
+}
+
+function attachmentAuthorityKey(attachment: HubDeviceAttachmentSnapshot): string {
+  const actor = attachment.actor.kind === 'human'
+    ? {
+        kind: attachment.actor.kind,
+        principalId: attachment.actor.principalId,
+        companionId: attachment.actor.companionId,
+        providerSubject: attachment.actor.providerSubject,
+        contact: attachment.actor.contact,
+        operator: attachment.actor.operator,
+        session: attachment.actor.session,
+      }
+    : {
+        kind: attachment.actor.kind,
+        companionId: attachment.actor.companionId,
+      };
+  return JSON.stringify({
+    attachmentId: attachment.attachmentId,
+    deviceActor: attachment.deviceActor,
+    actor,
+    channel: attachment.channel,
   });
 }
 
@@ -335,7 +367,9 @@ export class CompanionUiWebSocketAdapter {
     let closed = false;
     let configured = false;
     let unsubscribeEvents: (() => void) | null = null;
+    let eventDelivery = Promise.resolve();
     const seenRequestIds = new Set<string>();
+    const initialAuthorityKey = attachmentAuthorityKey(initialAttachment);
     const close = (code: number, reason: string): void => {
       if (closed) return;
       closed = true;
@@ -357,7 +391,7 @@ export class CompanionUiWebSocketAdapter {
       });
       if ((authority.sessionToken && refreshed.attachment.actor.kind !== 'human')
         || (!authority.sessionToken && refreshed.attachment.actor.kind !== 'guest')
-        || refreshed.attachment.attachmentId !== initialAttachment.attachmentId) {
+        || attachmentAuthorityKey(refreshed.attachment) !== initialAuthorityKey) {
         throw new Error('socket authority changed');
       }
       attachment = refreshed.attachment;
@@ -386,10 +420,19 @@ export class CompanionUiWebSocketAdapter {
               allowedKinds: companionEventKindsForScopes(
                 authority.physicalCeiling.telemetryScopes,
               ),
-              onEvent: (envelope) => sendJson(
-                socket,
-                projectCompanionEventFrame(envelope, eventCapabilities),
-              ),
+              onEvent: (envelope) => {
+                eventDelivery = eventDelivery.then(async () => {
+                  await refreshAuthority();
+                  if (!closed) {
+                    sendJson(
+                      socket,
+                      projectCompanionEventFrame(envelope, eventCapabilities),
+                    );
+                  }
+                }).catch(() => {
+                  close(CLOSE.authorityChanged, 'authority changed');
+                });
+              },
             });
           }
           sendJson(socket, {

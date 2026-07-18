@@ -58,6 +58,7 @@ import type {
   PrimaryEmbodimentAuthorityPort,
 } from '../../boundary/fleet-auth/primary-embodiment.js';
 import { dispatchCompanionUiPrimaryEmbodiment } from '../../boundary/gateway/companion-ui-primary-embodiment.js';
+import { dispatchCompanionUiApproval } from '../../boundary/gateway/companion-ui-approvals.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
 import type { FleetJitStepUpCoordinator } from '../../boundary/fleet-auth/jit-step-up.js';
 import type { TrustedHostPasskeyCeremonyService } from '../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
@@ -102,6 +103,8 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
     | 'resolveOperatorApproval'
     | 'listOperatorConfirmations'
     | 'ownerOfConfirmation'
+    | 'listCompanionUiConfirmations'
+    | 'resolveCompanionUiApproval'
     | 'getFleetConnectionSnapshot'
     | 'requestCompanionAgent'
   >;
@@ -539,6 +542,9 @@ export async function startOptionalGatewayApiServer(
           resolveAuthorizationContext: input => options.fleetAuthBroker!.resolveAuthorizationContext(input),
           signer: options.fleetAuthRequestCapabilities,
           childAssertions: options.fleetAuthChildAssertions,
+          approvalOwner: {
+            ownerOf: (id) => options.gateway.ownerOfConfirmation(id),
+          },
           dispatch: {
             dispatch: async input => {
               const frame = input.compiled.frame;
@@ -549,17 +555,13 @@ export async function startOptionalGatewayApiServer(
                 ...(options.primaryEmbodiments ? { authority: options.primaryEmbodiments } : {}),
               });
               if (embodiment.handled) return embodiment.result;
+              const approval = await dispatchCompanionUiApproval({
+                compiled: input.compiled,
+                gateway: options.gateway,
+              });
+              if (approval.handled) return approval.result;
               if (frame.resource === 'conversation.status') {
                 return await gatewayApiRuntime.handleHealth();
-              }
-              if (frame.resource === 'confirmations.list') {
-                return options.gateway.listOperatorConfirmations();
-              }
-              if (frame.resource === 'confirmations.resolve') {
-                return await options.gateway.resolveOperatorApproval({
-                  id: String(body.id),
-                  decision: body.decision as 'approve' | 'deny',
-                });
               }
               if (frame.resource === 'artifact.preview') {
                 const preview = options.companionRelay?.relay.getPreviewSource(

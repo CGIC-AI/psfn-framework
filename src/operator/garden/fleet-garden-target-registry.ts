@@ -14,8 +14,11 @@ import {
 } from '../../shared/routing/companion-id.js';
 import type { ResolvedCompanionsFleetConfig } from '../../system/config/companions-config.js';
 import {
-  DEFAULT_ADMIN_TRANSPORT_TIMEOUT_MS,
+  assertFleetGardenAdminTransportEndpointIdentity,
   resolveCompanionAdminTransportSocketPath,
+  resolveAdminTransportClientEndpoint,
+  resolveAdminTransportMode,
+  resolveFleetGardenNetworkClientEndpoint,
   type GardenAdminTransportClientEndpoint,
 } from './transport-paths.js';
 
@@ -87,6 +90,7 @@ function freezeEndpoint(
       timeoutMs: endpoint.timeoutMs,
     });
   }
+  assertFleetGardenAdminTransportEndpointIdentity(companionId, endpoint);
   if (endpoint.httpUrl.protocol !== 'https:' || endpoint.wsUrl.protocol !== 'wss:') {
     throw new FleetGardenTargetRegistryError(
       `Fleet Garden target ${companionId} network endpoint must use https/wss with mTLS`,
@@ -99,10 +103,19 @@ function freezeEndpoint(
       `Fleet Garden target ${companionId} network endpoint requires complete mTLS material`,
     );
   }
+  const httpUrl = endpoint.httpUrl.toString();
+  const wsUrl = endpoint.wsUrl.toString();
   return Object.freeze({
     mode: 'network' as const,
-    httpUrl: new URL(endpoint.httpUrl.toString()),
-    wsUrl: new URL(endpoint.wsUrl.toString()),
+    // URL instances remain mutable even when Object.freeze() is applied.
+    // Return a fresh value from each getter so callers can never rewrite the
+    // canonical registry identity observed by later requests.
+    get httpUrl(): URL {
+      return new URL(httpUrl);
+    },
+    get wsUrl(): URL {
+      return new URL(wsUrl);
+    },
     timeoutMs: endpoint.timeoutMs,
     peerAuthMode: endpoint.peerAuthMode,
     tls: Object.freeze({ ...tls }),
@@ -223,12 +236,31 @@ export function deriveFleetGardenSocketTargets(
   >; },
   env: NodeJS.ProcessEnv = process.env,
 ): FleetGardenTargetRegistryEntryInput[] {
+  const baseEndpoint = resolveAdminTransportClientEndpoint(env);
+  if (baseEndpoint.mode !== 'socket') {
+    throw new FleetGardenTargetRegistryError(
+      'Fleet Garden socket target derivation requires socket transport mode',
+    );
+  }
   return fleet.companions.map(companion => ({
     companionId: companion.companionId,
     endpoint: {
       mode: 'socket' as const,
       socketPath: resolveCompanionAdminTransportSocketPath(companion.companionId, env),
-      timeoutMs: DEFAULT_ADMIN_TRANSPORT_TIMEOUT_MS,
+      timeoutMs: baseEndpoint.timeoutMs,
     },
+  }));
+}
+
+export function deriveFleetGardenTargets(
+  fleet: Parameters<typeof deriveFleetGardenSocketTargets>[0],
+  env: NodeJS.ProcessEnv = process.env,
+): FleetGardenTargetRegistryEntryInput[] {
+  if (resolveAdminTransportMode(env) === 'socket') {
+    return deriveFleetGardenSocketTargets(fleet, env);
+  }
+  return fleet.companions.map(companion => ({
+    companionId: companion.companionId,
+    endpoint: resolveFleetGardenNetworkClientEndpoint(companion.companionId, env),
   }));
 }

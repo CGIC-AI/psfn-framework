@@ -391,9 +391,10 @@ export class GardenAdminTransportProxy {
     res: ServerResponse,
     body: Buffer,
     trustedAuthorityHeaders?: Readonly<Record<string, string>>,
+    requestPath = req.url ?? '/',
+    unavailableStatus: 502 | 503 = 502,
   ): void {
     let timedOut = false;
-    const requestPath = req.url ?? '/';
     const headers = buildProxyHeaders(req.headers, trustedAuthorityHeaders);
     delete headers['transfer-encoding'];
     headers['content-length'] = String(body.byteLength);
@@ -433,10 +434,10 @@ export class GardenAdminTransportProxy {
       }
       sendText(
         res,
-        502,
+        unavailableStatus,
         timedOut
-          ? 'Bad Gateway: admin transport timed out'
-          : 'Bad Gateway: admin transport unavailable',
+          ? `${unavailableStatus === 503 ? 'Service Unavailable' : 'Bad Gateway'}: admin transport timed out`
+          : `${unavailableStatus === 503 ? 'Service Unavailable' : 'Bad Gateway'}: admin transport unavailable`,
       );
     });
 
@@ -453,9 +454,10 @@ export class GardenAdminTransportProxy {
     head: Buffer,
     trustedAuthorityHeaders?: Readonly<Record<string, string>>,
     expiresAtSeconds?: number,
+    requestPath = '/api/admin/events',
   ): void {
     const upstreamSocket = new WebSocket(
-      this.resolveTelemetryWebSocketUrl(),
+      this.resolveTelemetryWebSocketUrl(requestPath),
       this.buildTelemetryWebSocketOptions(req, trustedAuthorityHeaders),
     );
     let upgraded = false;
@@ -524,11 +526,11 @@ export class GardenAdminTransportProxy {
       : httpRequest(options, callback);
   }
 
-  private resolveTelemetryWebSocketUrl(): string {
+  private resolveTelemetryWebSocketUrl(requestPath: string): string {
     if (this.endpoint.mode === 'socket') {
-      return 'ws://localhost/api/admin/events';
+      return `ws://localhost${normalizeRequestPath(requestPath)}`;
     }
-    return buildNetworkUrl(this.endpoint.wsUrl, '/api/admin/events').toString();
+    return buildNetworkUrl(this.endpoint.wsUrl, requestPath).toString();
   }
 
   private buildTelemetryWebSocketOptions(

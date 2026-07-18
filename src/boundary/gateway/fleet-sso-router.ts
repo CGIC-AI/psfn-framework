@@ -56,6 +56,11 @@ import {
   GatewayFleetPortalHttpRoutes,
 } from './fleet-portal-http-routes.js';
 import type { GatewayFleetPortalProjection } from './fleet-portal-projection.js';
+import {
+  FLEET_MODEL_USAGE_API_PATH,
+  GatewayFleetModelUsageHttpRoutes,
+} from './fleet-model-usage-http-routes.js';
+import type { FleetModelUsageProjectionPort } from './fleet-model-usage-projection.js';
 
 const SESSION_COOKIE_NAME = '__Host-psfn_session';
 const MAX_PROXY_BODY_BYTES = 1_048_576;
@@ -122,6 +127,7 @@ export interface GatewayFleetSsoRouterOptions extends FleetSsoTrustedOriginOptio
   readonly verifier: RequestCapabilityVerifier;
   readonly replay: RequestCapabilityReplayPort;
   readonly portalProjection: Pick<GatewayFleetPortalProjection, 'resolve'>;
+  readonly modelUsageProjection: FleetModelUsageProjectionPort;
   readonly jitStepUp?: Pick<FleetJitStepUpCoordinator, 'consumeGrant'>;
   readonly upstreams: readonly FleetSsoGardenUpstream[];
   readonly companionUi?: {
@@ -376,6 +382,7 @@ function requestOptions(
 export class GatewayFleetSsoRouter {
   private readonly upstreams: ReadonlyMap<string, FleetSsoGardenUpstream>;
   private readonly portalRoutes: GatewayFleetPortalHttpRoutes;
+  private readonly modelUsageRoutes: GatewayFleetModelUsageHttpRoutes;
 
   constructor(private readonly options: GatewayFleetSsoRouterOptions) {
     const canonical = new URL(options.canonicalOrigin);
@@ -387,6 +394,9 @@ export class GatewayFleetSsoRouter {
     }
     this.portalRoutes = new GatewayFleetPortalHttpRoutes({
       projection: options.portalProjection,
+    });
+    this.modelUsageRoutes = new GatewayFleetModelUsageHttpRoutes({
+      projection: options.modelUsageProjection,
     });
     const entries = options.upstreams.map((upstream) => {
       if (upstream.origin.username || upstream.origin.password || upstream.origin.pathname !== '/'
@@ -424,10 +434,12 @@ export class GatewayFleetSsoRouter {
       const { rawPath } = parseOuterPath(rawTarget);
       return rawPath === FLEET_PATH || rawPath === `${FLEET_PATH}/`
         || rawPath === FLEET_LOGIN_PATH || rawPath.startsWith(FLEET_PORTAL_API_PATH)
+        || rawPath === FLEET_MODEL_USAGE_API_PATH
         || rawPath.startsWith(COMPANION_PREFIX)
         || rawPath === COMPANION_UI_PREFIX || rawPath.startsWith(`${COMPANION_UI_PREFIX}/`);
     } catch {
       return rawTarget.startsWith(FLEET_PATH) || rawTarget.startsWith(FLEET_PORTAL_API_PATH)
+        || rawTarget.startsWith(FLEET_MODEL_USAGE_API_PATH)
         || rawTarget.startsWith(COMPANION_PREFIX)
         || rawTarget.startsWith(COMPANION_UI_PREFIX);
     }
@@ -470,10 +482,24 @@ export class GatewayFleetSsoRouter {
           this.portalRoutes.sendUnauthenticated(response);
           return;
         }
+        if (rawPath === FLEET_MODEL_USAGE_API_PATH) {
+          this.modelUsageRoutes.sendUnauthenticated(response);
+          return;
+        }
         throw new FleetSsoRequestError(401, 'Authentication required');
       }
       if (this.portalRoutes.matches(rawPath) || rawPath.startsWith(FLEET_PORTAL_API_PATH)) {
         await this.portalRoutes.handle({
+          request,
+          response,
+          sessionToken,
+          rawPath,
+          rawQuery,
+        });
+        return;
+      }
+      if (this.modelUsageRoutes.matches(rawPath)) {
+        await this.modelUsageRoutes.handle({
           request,
           response,
           sessionToken,

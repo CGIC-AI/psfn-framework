@@ -76,6 +76,8 @@ import type {
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import type { FleetPortalAuthorizationBatchPort } from '../../boundary/gateway/fleet-portal-authorization.js';
 import { createGatewayFleetPortalProjection } from './fleet-portal-composition.js';
+import type { FleetModelUsageSummaryQueryPort } from '../../shared/telemetry/model-usage.js';
+import { createGatewayFleetModelUsageProjection } from './fleet-model-usage-composition.js';
 
 const DISABLED_VOICE_WEBSOCKET_PATH = '/v1/voice/ws-disabled';
 const GATEWAY_API_REQUEST_TIMEOUT_MS = 240_000;
@@ -127,6 +129,8 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   fleetAuthRequestCapabilityVerifier?: RequestCapabilityVerifier;
   fleetAuthRequestCapabilityReplay?: RequestCapabilityReplayPort;
   fleetPortalAuthorization?: FleetPortalAuthorizationBatchPort;
+  /** Canonical fleet-scoped model-attempt ledger used by the authenticated budget projection. */
+  fleetModelUsage?: FleetModelUsageSummaryQueryPort;
   primaryEmbodiments?: PrimaryEmbodimentAuthorityPort;
   /** Persistence-backed verifier/consumer required by authenticated Hub device ingress. */
   hubDeviceAssertionVerifier?: {
@@ -479,10 +483,20 @@ export async function startOptionalGatewayApiServer(
       : {}),
     source: options.gateway,
   });
+  const fleetModelUsageProjection = createGatewayFleetModelUsageProjection({
+    fleetAuthEnabled: fleetAuthBootstrapOnly,
+    ...(options.fleetPortalAuthorization
+      ? { portalAuthorization: options.fleetPortalAuthorization }
+      : {}),
+    ...(options.fleetAuthBroker
+      ? { modelAuthorization: options.fleetAuthBroker }
+      : {}),
+    ...(options.fleetModelUsage ? { usage: options.fleetModelUsage } : {}),
+  });
   const fleetSsoRouter = options.config.fleetAuth && options.fleetAuthBroker
     && options.fleetAuthRequestCapabilities
     && options.fleetAuthRequestCapabilityVerifier && options.fleetAuthRequestCapabilityReplay
-    && fleetPortalProjection
+    && fleetPortalProjection && fleetModelUsageProjection
     ? new GatewayFleetSsoRouter({
         canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
         trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
@@ -491,6 +505,7 @@ export async function startOptionalGatewayApiServer(
         verifier: options.fleetAuthRequestCapabilityVerifier,
         replay: options.fleetAuthRequestCapabilityReplay,
         portalProjection: fleetPortalProjection,
+        modelUsageProjection: fleetModelUsageProjection,
         ...(options.fleetAuthJitStepUp ? { jitStepUp: options.fleetAuthJitStepUp } : {}),
         upstreams: resolveFleetSsoGardenUpstreams({
           ...(options.config.companionFleet ? { fleet: options.config.companionFleet } : {}),

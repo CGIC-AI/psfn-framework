@@ -614,6 +614,9 @@ async function main(): Promise<void> {
       },
       audit: (entry) => gateway.recordCompanionAuditSummary(entry),
     },
+    ...(privilegedServices.modelUsageStore
+      ? { fleetModelUsage: privilegedServices.modelUsageStore }
+      : {}),
     ...(fleetAuthPersistence
       ? {
           fleetAuthBroker: fleetAuthPersistence.broker,

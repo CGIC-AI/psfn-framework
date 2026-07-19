@@ -20,8 +20,9 @@ import { decodeStoredChannelVisibility } from '../../../system/trust/types.js';
 import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type { ExtractedFact } from '../types.js';
-import { MemoryWritePolicyError, type WriteResult } from '../writer.js';
+import type { WriteResult } from '../writer.js';
 import { ExtractionDrainRequeueError } from './drain-signal.js';
+import { executeAcceptedFactWrites } from './write-execution.js';
 import {
   executeExtractionLlmPass,
   formatExistingFactsSection,
@@ -56,14 +57,6 @@ import { selectExtractionRecentEntries } from './recovered-entries.js';
 export { ExtractionIntegrityError, type ExtractionIntegrityErrorContext } from './integrity-error.js';
 
 const log = createComponentLogger('Extraction');
-
-function extractionRejectionReasonForWritePolicy(
-  error: MemoryWritePolicyError,
-): ExtractionRejectionReason {
-  return error.reason === 'novelty_below_threshold'
-    ? 'low_novelty'
-    : 'low_importance';
-}
 
 function requireExperientialCompanionName(value: string | undefined): string {
   const companionName = value?.trim();
@@ -394,141 +387,33 @@ export async function runExtractionOrchestration(
     const { selectedCandidates, writeCapSkips } = selection;
     rejectionBreakdown.write_cap += selection.writeCapSkippedCount;
 
-    let acceptedCount = 0;
-    let writeCount = 0;
-    let deduplicatedCount = 0;
-    let supersededCount = 0;
-    let routedFactCount = 0;
-    const acceptedWrites: AcceptedFactWrite[] = [];
-    const durableMemoryIds = new Set<string>();
-    const acceptedFactsForConcernCandidates: ExtractedFact[] = [];
-    const acceptedFactsByContact = new Map<string | undefined, ExtractedFact[]>();
-    const routedContactIds = new Set<string>();
-    const sourceSpeakerNames = new Set<string>();
-
-	    for (const candidate of selectedCandidates) {
-	      if (!options.isAcceptingExtractions()) {
-	        log.debug('Stopping fact writes after extraction route changed or extractor stopped', {
-	          channelId: options.channelId,
-	          remainingCandidateCount: selectedCandidates.length - acceptedCount,
-	          triggerReason: options.triggerReason,
-	        });
-	        break;
-	      }
-	      const { fact } = candidate;
-	      const { routing } = candidate;
-
-      const routingTelemetry: ExtractionFactRouting = {
-        ...(canonicalContactId ? { triggerContactId: canonicalContactId } : {}),
-        ...(routing.contactId ? { routedContactId: routing.contactId } : {}),
-        ...(routing.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),
-        ...(routing.sourceAuthorId ? { sourceAuthorId: routing.sourceAuthorId } : {}),
-        ...(routing.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
-        ...(routing.subjectContactId ? { subjectContactId: routing.subjectContactId } : {}),
-        ...(routing.subjectName ? { subjectName: routing.subjectName } : {}),
-        ...(routing.addressMode ? { addressMode: routing.addressMode } : {}),
-        ...(routing.scopeRef ? { scopeRef: routing.scopeRef } : {}),
-        ...(routing.scopeTags ? { scopeTags: routing.scopeTags } : {}),
-        ...(routing.sourceMessageIds ? { sourceMessageIds: routing.sourceMessageIds } : {}),
-        ...(routing.sourceSpanStartMessageId
-          ? { sourceSpanStartMessageId: routing.sourceSpanStartMessageId }
-          : {}),
-        ...(routing.sourceSpanEndMessageId
-          ? { sourceSpanEndMessageId: routing.sourceSpanEndMessageId }
-          : {}),
-        routingReason: routing.reason,
-      };
-
-      try {
-        const result = await options.processFact(fact, sourceRef, routing.contactId, routingTelemetry);
-        durableMemoryIds.add(result.memory.id);
-        for (const supersededMemoryId of result.supersededMemoryIds ?? []) {
-          durableMemoryIds.add(supersededMemoryId);
-        }
-        acceptedCount++;
-        const routedToDifferentContact = Boolean(
-          routing.contactId
-            && canonicalContactId
-            && routing.contactId !== canonicalContactId,
-        );
-        if (routedToDifferentContact) routedFactCount++;
-        if (routing.contactId) routedContactIds.add(routing.contactId);
-        if (routing.sourceSpeakerName) sourceSpeakerNames.add(routing.sourceSpeakerName);
-        appendAcceptedFactForContact(acceptedFactsByContact, routing.contactId, fact);
-        acceptedFactsForConcernCandidates.push(fact);
-
-        switch (result.action) {
-          case 'created':
-          case 'updated':
-          case 'negated':
-          case 'conflict':
-            writeCount++;
-            acceptedWrites.push({
-              memoryId: result.memory.id,
-              importance: fact.importance,
-              confidence: fact.confidence,
-              ...(routing.contactId ? { contactId: routing.contactId } : {}),
-              ...(routing.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),
-              ...(routing.subjectContactId ? { subjectContactId: routing.subjectContactId } : {}),
-              ...(canonicalContactId ? { triggerContactId: canonicalContactId } : {}),
-              ...(routing.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
-              ...(routing.scopeRef ? { scopeRef: routing.scopeRef } : {}),
-            });
-            break;
-          case 'superseded':
-            writeCount++;
-            supersededCount++;
-            acceptedWrites.push({
-              memoryId: result.memory.id,
-              importance: fact.importance,
-              confidence: fact.confidence,
-              ...(routing.contactId ? { contactId: routing.contactId } : {}),
-              ...(routing.sourceContactId ? { sourceContactId: routing.sourceContactId } : {}),
-              ...(routing.subjectContactId ? { subjectContactId: routing.subjectContactId } : {}),
-              ...(canonicalContactId ? { triggerContactId: canonicalContactId } : {}),
-              ...(routing.sourceSpeakerName ? { sourceSpeakerName: routing.sourceSpeakerName } : {}),
-              ...(routing.scopeRef ? { scopeRef: routing.scopeRef } : {}),
-            });
-            break;
-          case 'deduplicated':
-            deduplicatedCount++;
-            break;
-        }
-      } catch (error) {
-        if (error instanceof MemoryWritePolicyError) {
-          const reason = extractionRejectionReasonForWritePolicy(error);
-          rejectionBreakdown[reason]++;
-          if (options.telemetryEnabled) {
-            log.info('Skipped extracted fact rejected by memory write policy', {
-              channelId: options.channelId,
-              triggerReason: options.triggerReason,
-              factIndex: candidate.index,
-              factType: fact.type,
-              reason: error.reason,
-              sensitivity: error.sensitivity,
-              salience: error.salience,
-              minSalience: error.minSalience,
-              novelty: error.novelty,
-              minNovelty: error.minNovelty,
-            });
-          }
-          continue;
-        }
-        throw new ExtractionIntegrityError(
-          `Failed to process extracted fact at index ${candidate.index}`,
-          {
-            stage: 'fact_processing',
-            channelId: options.channelId,
-            triggerReason: options.triggerReason,
-            ...(turnId ? { turnId } : {}),
-            factIndex: candidate.index,
-            factType: fact.type,
-            sourceRef,
-          },
-          error,
-        );
-      }
+    const writeExecution = await executeAcceptedFactWrites({
+      selectedCandidates,
+      sourceRef,
+      canonicalContactId,
+      channelId: options.channelId,
+      triggerReason: options.triggerReason,
+      turnId,
+      telemetryEnabled: options.telemetryEnabled,
+      isAcceptingExtractions: options.isAcceptingExtractions,
+      processFact: options.processFact,
+    });
+    for (const [reason, count] of Object.entries(writeExecution.writePolicyRejections)) {
+      rejectionBreakdown[reason as ExtractionRejectionReason] += count;
     }
+    const {
+      acceptedCount,
+      writeCount,
+      deduplicatedCount,
+      supersededCount,
+      routedFactCount,
+      acceptedWrites,
+      durableMemoryIds,
+      acceptedFactsForConcernCandidates,
+      acceptedFactsByContact,
+      routedContactIds,
+      sourceSpeakerNames,
+    } = writeExecution;
 
     const rejectedCount = facts.length - acceptedCount + participantNameHygieneRejectedCount;
     const telemetry: ExtractionEndTelemetry = {
@@ -704,19 +589,6 @@ function createExtractionChunkCompleter(
     );
     return response.content;
   };
-}
-
-function appendAcceptedFactForContact(
-  groups: Map<string | undefined, ExtractedFact[]>,
-  contactId: string | undefined,
-  fact: ExtractedFact,
-): void {
-  const existing = groups.get(contactId);
-  if (existing) {
-    existing.push(fact);
-    return;
-  }
-  groups.set(contactId, [fact]);
 }
 
 function groupAcceptedWritesByContact(

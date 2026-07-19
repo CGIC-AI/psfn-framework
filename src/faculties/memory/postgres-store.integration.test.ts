@@ -143,6 +143,124 @@ async function seedMemoryRow(pool: Pool, memory: PurrMemory, embedding: readonly
 }
 
 describe('postgres memory store integration', () => {
+  it('keeps the forward schema insert-compatible with the pre-anchor rollback writer', async () => {
+    await withMemoryDatabase(async (pool) => {
+      await ensurePostgresSchema(pool, POSTGRES_MEMORY_MIGRATIONS);
+      const beforeInsert = Date.now();
+
+      const rollbackWriterUpsert = `
+        INSERT INTO l2_memories (
+          id, text, type, importance, confidence, emotional_valence, formation_vad, salience,
+          source_ref, source_type, provenance_json, extracted_at, last_accessed, access_count,
+          superseded_by, tags,
+          scope_ref_kind, scope_ref_id, scope_ref_label, scope_tags, provenance_refs,
+          retention_class, sensitivity, consent_flags, contact_id, deleted_at, deleted_by,
+          delete_reason, embedding
+        ) VALUES (
+          $1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16::jsonb,
+          $17,$18,$19,$20::jsonb,$21::jsonb,$22,$23,$24::jsonb,$25,$26,$27,$28,$29::vector
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          text = EXCLUDED.text,
+          type = EXCLUDED.type,
+          importance = EXCLUDED.importance,
+          confidence = EXCLUDED.confidence,
+          emotional_valence = EXCLUDED.emotional_valence,
+          formation_vad = EXCLUDED.formation_vad,
+          salience = EXCLUDED.salience,
+          source_ref = EXCLUDED.source_ref,
+          source_type = EXCLUDED.source_type,
+          provenance_json = EXCLUDED.provenance_json,
+          extracted_at = EXCLUDED.extracted_at,
+          last_accessed = EXCLUDED.last_accessed,
+          access_count = EXCLUDED.access_count,
+          superseded_by = EXCLUDED.superseded_by,
+          tags = EXCLUDED.tags,
+          scope_ref_kind = EXCLUDED.scope_ref_kind,
+          scope_ref_id = EXCLUDED.scope_ref_id,
+          scope_ref_label = EXCLUDED.scope_ref_label,
+          scope_tags = EXCLUDED.scope_tags,
+          provenance_refs = EXCLUDED.provenance_refs,
+          retention_class = EXCLUDED.retention_class,
+          sensitivity = EXCLUDED.sensitivity,
+          consent_flags = EXCLUDED.consent_flags,
+          contact_id = EXCLUDED.contact_id,
+          deleted_at = EXCLUDED.deleted_at,
+          deleted_by = EXCLUDED.deleted_by,
+          delete_reason = EXCLUDED.delete_reason,
+          embedding = EXCLUDED.embedding
+      `;
+      const rollbackWriterValues = (text: string, lastAccessed: number, accessCount: number) => [
+        'rollback-writer-memory',
+        text,
+        'semantic',
+        0.6,
+        0.9,
+        0.1,
+        '{"valence":0.1,"arousal":0.2,"dominance":0.3}',
+        0.3,
+        'api:test:rollback-writer',
+        'conversation',
+        '{}',
+        1_700_000_000_000,
+        lastAccessed,
+        accessCount,
+        null,
+        '["rollback"]',
+        null,
+        null,
+        null,
+        '[]',
+        '[]',
+        null,
+        'personal',
+        '{}',
+        null,
+        null,
+        null,
+        null,
+        '[0.1,0.2]',
+      ];
+
+      await pool.query(
+        rollbackWriterUpsert,
+        rollbackWriterValues('Legacy writer compatibility memory', 1_700_000_000_000, 0),
+      );
+
+      const result = await pool.query<{
+        salience_decay_anchor_at: string;
+        text: string;
+        access_count: number;
+      }>(`
+        SELECT salience_decay_anchor_at, text, access_count
+        FROM l2_memories
+        WHERE id = 'rollback-writer-memory'
+      `);
+      const anchor = Number(result.rows[0]?.salience_decay_anchor_at);
+      expect(anchor).toBeGreaterThanOrEqual(beforeInsert);
+      expect(anchor).toBeLessThanOrEqual(Date.now());
+
+      await pool.query(
+        rollbackWriterUpsert,
+        rollbackWriterValues('Legacy rollback writer conflict update', 1_700_000_000_500, 1),
+      );
+      const updated = await pool.query<{
+        salience_decay_anchor_at: string;
+        text: string;
+        access_count: number;
+      }>(`
+        SELECT salience_decay_anchor_at, text, access_count
+        FROM l2_memories
+        WHERE id = 'rollback-writer-memory'
+      `);
+      expect(updated.rows[0]).toEqual({
+        salience_decay_anchor_at: String(anchor),
+        text: 'Legacy rollback writer conflict update',
+        access_count: 1,
+      });
+    });
+  });
+
   it('classifies inserts atomically and keeps idempotent retries on the same revision', async () => {
     await withMemoryDatabase(async (pool) => {
       const store = await createPostgresMemoryStoreFromPool(pool, 4);

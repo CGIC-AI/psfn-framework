@@ -339,4 +339,22 @@ describe('Postgres live schema migrations', () => {
       expect(checkValues.has(laneClass)).toBe(true);
     }
   });
+
+  it('keeps the canonical model-usage schema compatible with the pre-attribution rollback writer', () => {
+    const sql = migrationSql(POSTGRES_MODEL_USAGE_MIGRATIONS);
+
+    expect(sql).toContain('CREATE OR REPLACE FUNCTION psfn_model_usage_legacy_insert_bridge()');
+    expect(sql).toContain("IF NULLIF(BTRIM(NEW.event_fingerprint), '') IS NULL THEN");
+    expect(sql).toContain(
+      "NEW.turn_id := COALESCE(NULLIF(BTRIM(NEW.turn_id), ''), 'unknown')",
+    );
+    expect(sql).toContain(
+      "NEW.tool_name := COALESCE(NULLIF(BTRIM(NEW.tool_name), ''), 'unknown')",
+    );
+    expect(sql).toContain(
+      "'legacy:rollback-writer:' || NEW.id",
+    );
+    expect(sql).toContain('CREATE TRIGGER psfn_model_usage_legacy_insert_bridge');
+    expect(sql).toContain('BEFORE INSERT ON model_usage_events');
+  });
 });

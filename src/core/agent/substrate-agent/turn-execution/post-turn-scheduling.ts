@@ -38,10 +38,9 @@ import {
   type BackgroundWorkSourceRef,
   type EnqueueBackgroundWorkInput,
 } from '../../background-work/types.js';
+import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
 
 const log = createComponentLogger('SubstrateAgent');
-type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
-type TurnSessionIdentity = import('./contracts.js').TurnSessionIdentity;
 
 export async function collectTurnResponseAttachments(input: {
   runtime: TurnExecutionRuntime;

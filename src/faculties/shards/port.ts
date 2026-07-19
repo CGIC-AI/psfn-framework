@@ -1,11 +1,12 @@
 import type {
+  ActiveShard,
+  SatelliteDelegationRequest,
   ShardConfig,
   ShardConfigurationMutationResult,
   ShardConfigurationSnapshot,
   ShardParentIcpPort,
   ShardResult,
 } from './types.js';
-import type { ActiveShard, SatelliteDelegationRequest } from './manager.js';
 import type {
   ShardFoldReviewPort,
 } from './fold-review.js';

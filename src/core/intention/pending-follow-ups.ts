@@ -3,118 +3,56 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { channelsShareActiveSessionThread } from '../session/cross-channel-continuity-port.js';
 import type { PendingFollowUpQuarantineRecord } from './pending-follow-up-store-port.js';
+import type {
+  PendingFollowUp,
+  PendingFollowUpCreateInput,
+  PendingFollowUpPriority,
+  PendingFollowUpTiming,
+  PendingFollowUpWakeCondition,
+} from './pending-follow-up-types.js';
 
-export {
-  createPendingFollowUpStorePort,
-} from './pending-follow-up-store-port.js';
 export type {
   PendingFollowUpQuarantineInput,
   PendingFollowUpQuarantineListOptions,
   PendingFollowUpQuarantineRecord,
   PendingFollowUpStorePort,
 } from './pending-follow-up-store-port.js';
+export type {
+  PendingFollowUp,
+  PendingFollowUpActivateOptions,
+  PendingFollowUpCreateInput,
+  PendingFollowUpContextProvider,
+  PendingFollowUpDampenOptions,
+  PendingFollowUpListOptions,
+  PendingFollowUpPriority,
+  PendingFollowUpStoreOptions,
+  PendingFollowUpTiming,
+  PendingFollowUpUpdateInput,
+  PendingFollowUpWakeCondition,
+} from './pending-follow-up-types.js';
 
-export const PENDING_FOLLOW_UP_PRIORITIES = ['low', 'medium', 'high'] as const;
-export type PendingFollowUpPriority = typeof PENDING_FOLLOW_UP_PRIORITIES[number];
+export const PENDING_FOLLOW_UP_PRIORITIES = [
+  'low',
+  'medium',
+  'high',
+] as const satisfies readonly PendingFollowUpPriority[];
 
-export const PENDING_FOLLOW_UP_TIMINGS = ['immediate', 'soon', 'scheduled'] as const;
-export type PendingFollowUpTiming = typeof PENDING_FOLLOW_UP_TIMINGS[number];
+export const PENDING_FOLLOW_UP_TIMINGS = [
+  'immediate',
+  'soon',
+  'scheduled',
+] as const satisfies readonly PendingFollowUpTiming[];
 
 export const PENDING_FOLLOW_UP_WAKE_CONDITIONS = [
   'next_user_turn',
   'background_recheck',
   'sustained_negative_mood',
-] as const;
-export type PendingFollowUpWakeCondition = typeof PENDING_FOLLOW_UP_WAKE_CONDITIONS[number];
+] as const satisfies readonly PendingFollowUpWakeCondition[];
 
 export const DEFAULT_PENDING_FOLLOW_UP_BACKLOG_CAP = 5;
 export const DEFAULT_PENDING_FOLLOW_UP_ACTIVATION_DELAY_MS = 5 * 60_000;
 export const PENDING_FOLLOW_UP_DEDUPE_SIMILARITY_THRESHOLD = 0.72;
 export const PENDING_FOLLOW_UP_CAP_SUPERSEDE_SIMILARITY_THRESHOLD = 0.45;
-
-export interface PendingFollowUp {
-  id: string;
-  content: string;
-  priority: PendingFollowUpPriority;
-  timing: PendingFollowUpTiming;
-  createdAt: string;
-  channelId: string;
-  channelType: ChannelType;
-  authorId: string;
-  authorName: string;
-  dueAt?: string;
-  contactId?: string;
-  sourceMessageId?: string;
-  contextSummary?: string;
-  wakeConditions?: PendingFollowUpWakeCondition[];
-  activatedAt?: string;
-  activationReason?: string;
-  dampenedAt?: string;
-  dampeningReason?: string;
-  /** Originating ICP root preserved across durable resurface/restart. */
-  originIcpRootInitiationId?: string;
-}
-
-export interface PendingFollowUpCreateInput {
-  content: string;
-  priority: PendingFollowUpPriority;
-  timing: PendingFollowUpTiming;
-  channelId: string;
-  channelType: ChannelType;
-  authorId: string;
-  authorName: string;
-  createdAt?: string;
-  dueAt?: string;
-  contactId?: string;
-  sourceMessageId?: string;
-  contextSummary?: string;
-  wakeConditions?: readonly PendingFollowUpWakeCondition[];
-  originIcpRootInitiationId?: string;
-}
-
-export interface PendingFollowUpUpdateInput {
-  content: string;
-  priority: PendingFollowUpPriority;
-  timing: PendingFollowUpTiming;
-  channelId: string;
-  channelType: ChannelType;
-  authorId: string;
-  authorName: string;
-  dueAt?: string;
-  contactId?: string;
-  sourceMessageId?: string;
-  contextSummary?: string;
-  wakeConditions?: readonly PendingFollowUpWakeCondition[];
-  originIcpRootInitiationId?: string;
-}
-
-export interface PendingFollowUpActivateOptions {
-  activatedAt?: string;
-  activationReason?: string;
-}
-
-export interface PendingFollowUpDampenOptions {
-  dampenedAt?: string;
-  dampeningReason: string;
-}
-
-export interface PendingFollowUpListOptions {
-  contactId?: string;
-  includeActivated?: boolean;
-  includeExpired?: boolean;
-  asOf?: string;
-  limit?: number;
-}
-
-export interface PendingFollowUpStoreOptions {
-  now?: () => Date;
-  idFactory?: () => string;
-  backlogCap?: number;
-}
-
-export interface PendingFollowUpContextProvider {
-  getPendingFollowUps(contactId?: string): PendingFollowUp[];
-}
 
 export function filterPendingFollowUpsForActiveChannel(
   followUps: readonly PendingFollowUp[],

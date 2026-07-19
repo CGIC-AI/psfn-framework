@@ -1,9 +1,11 @@
 export type Awaitable<T> = T | Promise<T>;
-type PendingFollowUp = import('./pending-follow-ups.js').PendingFollowUp;
-type PendingFollowUpActivateOptions = import('./pending-follow-ups.js').PendingFollowUpActivateOptions;
-type PendingFollowUpCreateInput = import('./pending-follow-ups.js').PendingFollowUpCreateInput;
-type PendingFollowUpDampenOptions = import('./pending-follow-ups.js').PendingFollowUpDampenOptions;
-type PendingFollowUpListOptions = import('./pending-follow-ups.js').PendingFollowUpListOptions;
+import type {
+  PendingFollowUp,
+  PendingFollowUpActivateOptions,
+  PendingFollowUpCreateInput,
+  PendingFollowUpDampenOptions,
+  PendingFollowUpListOptions,
+} from './pending-follow-up-types.js';
 
 export interface PendingFollowUpQuarantineInput {
   reason: string;

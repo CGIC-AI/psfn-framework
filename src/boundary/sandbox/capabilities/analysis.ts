@@ -1,4 +1,7 @@
-import type { NestedAnalysisOptions, NestedAnalysisRunner } from '../../../core/tools/analysis-workbench/types.js';
+import type {
+  NestedAnalysisOptions,
+  NestedAnalysisRunner,
+} from '../../../shared/contracts/sandbox-analysis-contracts.js';
 
 export interface AnalysisCapabilities {
   nested_analysis: (task: string, options?: NestedAnalysisOptions) => Promise<string>;

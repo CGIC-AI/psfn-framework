@@ -46,10 +46,9 @@ import {
   COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE,
 } from '../../../../faculties/memory/retrieval/access-scope.js';
 import type { ArtifactSensitivitySource } from '../../../../shared/contracts/artifact-sensitivity.js';
+import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
 
 const log = createComponentLogger('SubstrateAgent');
-type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
-type TurnSessionIdentity = import('./contracts.js').TurnSessionIdentity;
 const MEMORY_RETRIEVAL_RECENT_ENTRY_LIMIT = 6;
 const MEMORY_RETRIEVAL_RECENT_ENTRY_MAX_CHARS = 700;
 const MEMORY_RETRIEVAL_QUERY_MAX_CHARS = 6_000;

@@ -3994,16 +3994,6 @@
       "value": "128"
     },
     {
-      "file": "src/primitives/voice/transports/discord-output.ts",
-      "name": "PLAYBACK_FINISH_TIMEOUT_MS",
-      "value": "120_000"
-    },
-    {
-      "file": "src/primitives/voice/transports/discord-output.ts",
-      "name": "PLAYBACK_START_TIMEOUT_MS",
-      "value": "5_000"
-    },
-    {
       "file": "src/primitives/voice/transports/websocket/runtime.ts",
       "name": "DEFAULT_MAX_AUDIO_CHUNK_BYTES",
       "value": "256 * 1024"

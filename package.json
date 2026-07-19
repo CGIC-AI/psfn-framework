@@ -76,6 +76,7 @@
     "smoke:discord:dm-voice": "node scripts/discord-dm-voice-smoke.mjs",
     "shakedown:bootstrap": "node shakedown/harness/bootstrap-local.mjs",
     "walkthrough": "tsx src/app/e2e/e2e-walkthrough.ts",
+    "knip": "npx knip@6.23.0",
     "lint": "eslint .",
     "preflight:startup-owner-files": "tsx scripts/preflight-startup-owner-files.ts",
     "verify:startup-owner-files": "tsx scripts/verify-startup-owner-files.ts",

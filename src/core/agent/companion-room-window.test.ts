@@ -9,7 +9,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { PlacesRegistryConfig } from '../../shared/contracts/places-registry.js';
 import type { EventBus } from '../../shared/event-bus.js';
-import { CompanionPresenceRuntime } from './companion-presence-runtime.js';
+import {
+  CompanionPresenceRuntime,
+  DEFAULT_COMPANION_PRESENCE_STALE_TTL_MS,
+} from './companion-presence-runtime.js';
 import type {
   CompanionPresenceRecord,
   CompanionPresenceStorePort,
@@ -103,6 +106,8 @@ describe('createCompanionRoomContentWindowPort', () => {
 class FakePresenceStore implements CompanionPresenceStorePort {
   failNext: Error | null = null;
   sinceIso: string = SINCE;
+  /** Server-side `updated_at` stamp; overridable to simulate a resumed beat. */
+  updatedAtIso: string = NOW.toISOString();
 
   async upsertPresence(input: CompanionPresenceUpsertInput): Promise<CompanionPresenceRecord> {
     if (this.failNext) {
@@ -116,7 +121,7 @@ class FakePresenceStore implements CompanionPresenceStorePort {
       placeId: input.placeId,
       kind: input.kind,
       since: this.sinceIso,
-      updatedAt: NOW.toISOString(),
+      updatedAt: this.updatedAtIso,
     };
   }
 
@@ -197,6 +202,47 @@ describe('CompanionPresenceRuntime.getOwnPresenceWindow', () => {
     expect(runtime.getOwnPresenceWindow()).not.toBeNull();
     await runtime.shutdown();
     expect(runtime.getOwnPresenceWindow()).toBeNull();
+  });
+
+  it('fails closed once the own row goes stale (stalled heartbeat), reopens on refresh', async () => {
+    // Regression (bead jp36.9.1): a stopped heartbeat must not leave the
+    // private-room window open forever. The last successful write stamps
+    // updated_at at NOW; once the runtime clock advances past NOW + TTL, our
+    // own row is as gone to us as it is to every sibling reader.
+    const store = new FakePresenceStore();
+    let clock = NOW.getTime();
+    const runtime = new CompanionPresenceRuntime({
+      store,
+      companionId: SELF_ID,
+      eventBus: { emit: vi.fn(async () => undefined) } as unknown as EventBus,
+      placesRegistry: PLACES,
+      now: () => new Date(clock),
+    });
+    await runtime.observeTurnPlace(situatedMessage('den'));
+    const port = createCompanionRoomContentWindowPort({ placesRegistry: PLACES, presence: runtime });
+
+    // Fresh: within the TTL the window stays open (windowed to `since`).
+    clock = NOW.getTime() + DEFAULT_COMPANION_PRESENCE_STALE_TTL_MS - 1;
+    expect(runtime.getOwnPresenceWindow()).not.toBeNull();
+    expect(port.resolveWindow('companion-room:den')).toEqual({
+      kind: 'windowed',
+      floorMs: Date.parse(SINCE),
+    });
+
+    // Stale: heartbeat stopped, updated_at now older than the TTL → absent.
+    clock = NOW.getTime() + DEFAULT_COMPANION_PRESENCE_STALE_TTL_MS + 1;
+    expect(runtime.getOwnPresenceWindow()).toBeNull();
+    expect(port.resolveWindow('companion-room:den')).toEqual({ kind: 'closed' });
+
+    // A resumed heartbeat re-stamps updated_at at the current (advanced) clock,
+    // so the row is fresh again and the window reopens.
+    store.updatedAtIso = new Date(clock).toISOString();
+    await runtime.refreshOwnPresence();
+    expect(runtime.getOwnPresenceWindow()).not.toBeNull();
+    expect(port.resolveWindow('companion-room:den')).toEqual({
+      kind: 'windowed',
+      floorMs: Date.parse(SINCE),
+    });
   });
 
   it('recordDeliberateMove updates the window and clears it on a failed move', async () => {

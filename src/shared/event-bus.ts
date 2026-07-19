@@ -252,13 +252,6 @@ export interface EventMap {
     noticeBuffered?: boolean;
     timestamp: number;
   } & EventCorrelationFields;
-  'agent.tools.legacy_alias': {
-    timestamp: number;
-    toolName: string;
-    alias: string;
-    canonicalAction: string;
-    migrationSurface: string;
-  } & EventCorrelationFields;
   // Lightweight near-turn memory lane fire-rate telemetry (E5.2). The lane
   // replaced the old turn-based "sleeptime" cadence; heavy passes now run
   // only from the rest-window scheduler task.

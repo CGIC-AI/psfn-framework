@@ -2290,48 +2290,6 @@ describe('SessionStore', () => {
     expect(store.getLatestSessionByTimestamp()).toBeNull();
   });
 
-  it('backward compat: appends to legacy file (no split-brain)', () => {
-    // Simulate old-format file
-    const oldFilename = 'api-session-1.jsonl';
-    const journalLine = JSON.stringify({
-      type: 'message', id: 1, channelId: 'api:session-1',
-      role: 'user', content: 'Old msg', timestamp: 1000,
-    });
-    writeFileSync(join(dir, oldFilename), journalLine + '\n');
-
-    // Load from legacy, then append
-    const store1 = new SessionStore(dir);
-    store1.append({ channelId: 'api:session-1', role: 'assistant', content: 'New msg', timestamp: 2000 });
-    expect(store1.count('api:session-1')).toBe(2);
-
-    // Reload — must get BOTH messages (not just the new one)
-    const store2 = new SessionStore(dir);
-    const entries = store2.getRecent('api:session-1', 10);
-    expect(entries).toHaveLength(2);
-    expect(entries[0].content).toBe('Old msg');
-    expect(entries[1].content).toBe('New msg');
-  });
-
-  it('backward compat: listChannels reads old-format files', () => {
-    // Simulate an old-format file: colon was replaced with -, slash with _
-    const oldFilename = 'api-session-1.jsonl';
-    const journalLine = JSON.stringify({
-      type: 'message',
-      id: 1,
-      channelId: 'api:session-1',
-      role: 'user',
-      content: 'Old format',
-      timestamp: 1000,
-    });
-    writeFileSync(join(dir, oldFilename), journalLine + '\n');
-
-    const freshStore = new SessionStore(dir);
-    const channels = freshStore.listChannels();
-    const found = channels.find(c => c.channelId === 'api:session-1');
-    expect(found).toBeDefined();
-    expect(found!.messageCount).toBe(1);
-  });
-
   it('falls back to disk scan when channel index is malformed', () => {
     store.append({
       channelId: 'api:fallback-test',
@@ -2350,7 +2308,7 @@ describe('SessionStore', () => {
 
   it('loads valid entries around malformed lines and writes a quarantine sidecar', () => {
     const channelId = 'api:recover-test';
-    const filename = 'api-recover-test.jsonl';
+    const filename = '20240101_api-recover-test_unknown_000001.jsonl';
     const filePath = join(dir, filename);
 
     const raw = [

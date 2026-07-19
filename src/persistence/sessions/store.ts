@@ -66,7 +66,6 @@ import {
 import {
   createLightweightCache,
   ensureChannelIndexEntry,
-  migrateLegacyFilenames,
   primeChannelIndexFromDisk,
   rehydrateLastJournalEntry,
   resolveExistingSession,
@@ -352,7 +351,6 @@ export class SessionStore implements TranscriptSearchPort {
       });
     }
     loadChannelIndex(this.channelIndexPath, this.channelIndex);
-    this.migrateLegacyFilenames();
     this.primeChannelIndexFromDisk();
     this.backfillTranscriptProjectionFromDisk();
     this.channelIndexFingerprint = this.fingerprintChannelIndex();
@@ -488,21 +486,6 @@ export class SessionStore implements TranscriptSearchPort {
   }
   private rehydrateLastJournalEntry(channelId: string, indexEntry: ChannelIndexEntry): JournalEntry | null {
     return rehydrateLastJournalEntry(channelId, indexEntry);
-  }
-  private migrateLegacyFilenames(): void {
-    migrateLegacyFilenames({
-      sessionsDir: this.sessionsDir,
-      channelIndexPath: this.channelIndexPath,
-      channelIndex: this.channelIndex,
-      warnAboutQuarantinedEntries: (channelId, filePath, quarantinedCount, loadedCount) => {
-        this.journalRuntime.warnAboutQuarantinedEntries(
-          channelId,
-          this.journalRuntime.openArchive(channelId, filePath),
-          quarantinedCount,
-          loadedCount,
-        );
-      },
-    });
   }
   private primeChannelIndexFromDisk(): void {
     primeChannelIndexFromDisk({

@@ -8,6 +8,7 @@ import type {
   IcpInitiationSourceRuntime,
 } from '../icp/initiation-source-runtime.js';
 import { resolveIcpOriginRootInitiationId } from '../icp/initiation-lineage.js';
+import { FREE_TIME_CHANNEL_PREFIX } from '../session/session-id.js';
 import { textResult, textResultWithError } from './results.js';
 import {
   parseDeferredCompanionOutreachAuthorizationEvidence,
@@ -141,7 +142,7 @@ export function inferIcpInitiationCandidateActions(
 ): PostTurnActionCandidate[] {
   if (!originCatalogSource) return [];
   const channelId = context.message.channelId;
-  const source = channelId.startsWith('internal:free-time:')
+  const source = channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)
     ? 'free_time' as const
     : channelId.startsWith('internal:')
       ? null

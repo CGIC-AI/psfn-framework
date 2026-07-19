@@ -1,4 +1,5 @@
 import { getRequestContext } from '../../../primitives/llm/request-context.js';
+import { FREE_TIME_CHANNEL_PREFIX } from '../../../core/session/session-id.js';
 import type { RetrievalAccessScope } from '../types.js';
 
 export const COMPANION_SELF_REFLECTION_RETRIEVAL_PURPOSE =
@@ -7,7 +8,10 @@ export const COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE =
   'free_time.creation.memory_retrieval';
 
 const INTERNAL_REFLECTION_CHANNEL_PREFIX = 'internal:reflection:';
-const INTERNAL_FREE_TIME_CHANNEL_PREFIX = 'internal:free-time:';
+// Any workspace-resolved free-time continuity session (lane-independent) shares
+// this canonical partition prefix; the specific segment is not part of the
+// self-creation trust check.
+const INTERNAL_FREE_TIME_CHANNEL_PREFIX = FREE_TIME_CHANNEL_PREFIX;
 
 export function resolveAuthorizedRetrievalAccessScope(
   channelId: string,

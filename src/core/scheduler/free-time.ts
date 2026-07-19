@@ -58,6 +58,7 @@ import {
   type AmbientPresenceDecision,
 } from './ambient-presence.js';
 import type { StartupSessionMetadata } from '../session/manager.js';
+import { FREE_TIME_CHANNEL_PREFIX } from '../session/session-id.js';
 import type { SessionEntry } from '../session/types.js';
 import type { Scheduler } from './scheduler.js';
 import { conversationalEntryFromSessionMetadata } from './session-metadata-preflight.js';
@@ -73,9 +74,22 @@ export const FREE_TIME_GATE_LANE = 'free_time';
 export const FREE_TIME_GATE_EVENT = 'scheduler.free_time.gate';
 export const FREE_TIME_BLOCK_EVENT = 'scheduler.free_time.block';
 
-export const FREE_TIME_CHANNEL_PREFIX = 'internal:free-time:';
+// Re-exported from the canonical session-identity module so the free-time
+// partition prefix has a single source of truth across every call site (the
+// sibling workspace resolver and existing consumers import it from here).
+export { FREE_TIME_CHANNEL_PREFIX };
 export const FREE_TIME_BLOCK_NOTE_SOURCE = 'free_time_block';
 export const FREE_TIME_RETURN_NOTE_SOURCE = 'free_time_return';
+
+/**
+ * Default lane-independent continuity segment. Absent a resolved workspace, all
+ * free time runs on ONE continuous private "wandering" session shared by both
+ * trigger lanes (bible §10.4). This is a placeholder identity: the
+ * FreeTimeWorkspaceResolver, once wired via
+ * FreeTimeRuntimeOptions.resolveWorkspaceChannelId, supplies the project- or
+ * room-specific continuity session instead.
+ */
+export const FREE_TIME_DEFAULT_WORKSPACE_SEGMENT = 'wandering';
 
 const MINUTE_MS = 60_000;
 /** A finite sentinel for "no prior activity / no prior block" gate inputs. */
@@ -83,8 +97,15 @@ const NO_PRIOR_SENTINEL_MINUTES = 10 ** 9;
 
 export type FreeTimeLane = 'quiet_hours' | 'idle';
 
-function freeTimeChannelId(lane: FreeTimeLane): string {
-  return `${FREE_TIME_CHANNEL_PREFIX}${lane === 'quiet_hours' ? 'quiet-hours' : 'idle'}`;
+/**
+ * Resolve the internal channel/session id for a free-time block from a chosen
+ * WORKSPACE segment — never from the trigger lane. An empty or missing segment
+ * falls back to the single default continuity session so quiet-hours and idle
+ * always converge on the same transcript.
+ */
+export function freeTimeWorkspaceChannelId(workspaceSegment?: string | null): string {
+  const segment = (workspaceSegment ?? '').trim();
+  return `${FREE_TIME_CHANNEL_PREFIX}${segment.length > 0 ? segment : FREE_TIME_DEFAULT_WORKSPACE_SEGMENT}`;
 }
 
 function localDateKey(timestampMs: number, timeZone: string): string {
@@ -385,6 +406,16 @@ export interface FreeTimeRuntimeOptions {
     channelId: string;
     entries: readonly SessionEntry[];
   }) => Promise<string>;
+  /**
+   * Resolve the lane-independent continuity session for a free-time block.
+   * The scheduler trigger lane (quiet-hours vs idle) MUST NOT determine
+   * transcript identity — both lanes resume the SAME chosen workspace session
+   * (bible §10.4). Wire to FreeTimeWorkspaceResolver in composition (return its
+   * resolved workspace session id); absent, free time runs on the single
+   * default continuity session (`freeTimeWorkspaceChannelId()`) shared across
+   * lanes. Resolved lazily, only once a block is about to spend.
+   */
+  resolveWorkspaceChannelId?: () => string;
   /** Resume one active personal project from the existing personal-wiki tier. */
   loadProjectContext?: () => Promise<string | null>;
   /** Optional recorder for the Garden read surface (recent blocks + spend). */
@@ -534,7 +565,13 @@ function makeLaneHandler(
   state: FreeTimeLaneCadenceState,
 ): () => Promise<void> {
   const now = options.now ?? (() => Date.now());
-  const channelId = freeTimeChannelId(lane);
+  // Lane-independent continuity: identity comes from the chosen workspace, never
+  // from `lane`. The default segment resolves to one shared continuity session
+  // (bible §10.4), and the optional resolver seam substitutes a project/room
+  // workspace session — identically for both lanes.
+  const defaultChannelId = freeTimeWorkspaceChannelId();
+  const resolveWorkspaceChannelId = options.resolveWorkspaceChannelId
+    ?? (() => defaultChannelId);
   const dayKeyTimeZone = options.restWindow.timeZone === 'local'
     ? resolveActiveTimezone()
     : options.restWindow.timeZone;
@@ -600,7 +637,9 @@ function makeLaneHandler(
         reason: gate.open ? `${lane}:open` : `${lane}:${gate.reason}`,
         inputs: gate.inputs,
         timestamp: nowMs,
-        ...(sessionId ? { sessionId, channelId } : { channelId }),
+        ...(sessionId
+          ? { sessionId, channelId: defaultChannelId }
+          : { channelId: defaultChannelId }),
       });
     }
 
@@ -614,6 +653,11 @@ function makeLaneHandler(
       log.debug('Free-time block skipped: no partner session to surface to', { lane });
       return;
     }
+
+    // Resolve the continuity workspace ONLY now that a block is committed to
+    // spend, so an eventual resolver is never invoked on skipped ticks. Both
+    // lanes call the same resolver, so both converge on the same session.
+    const channelId = resolveWorkspaceChannelId();
 
     const projectContext = options.loadProjectContext
       ? await options.loadProjectContext()

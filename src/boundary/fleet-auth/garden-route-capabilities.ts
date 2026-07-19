@@ -316,9 +316,9 @@ const dynamicRoutes: readonly RouteTuple[] = [
 ];
 
 export const GARDEN_CLIENT_ROUTES = Object.freeze([
-  '/', '/action-pipe', '/autonomy', '/channels', '/charge-budget', '/chat',
+  '/', '/action-pipe', '/analysis-workbench', '/autonomy', '/channels', '/charge-budget', '/chat',
   '/cognitive-security/approvals', '/cognitive-security/drift', '/cognitive-security/firewall',
-  '/cognitive-security/remediation', '/confirmations', '/contact-approvals', '/contacts',
+  '/cognitive-security/remediation', '/concerns', '/confirmations', '/contact-approvals', '/contacts',
   '/enrollment', '/evals/emotion-sidecar', '/episodic-memory', '/graph-proposals', '/identity',
   '/fleet-costs', '/images', '/memory', '/model-room', '/models', '/places', '/primer', '/prompt-monitor',
   '/prompts', '/rooms', '/satellites', '/scheduler', '/session-recovery', '/sessions',

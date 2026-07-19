@@ -137,6 +137,14 @@ export class CompanionPresenceRuntime implements CompanionPresenceTurnPort {
    * the private-room window gate fails closed on null and serves nothing.
    */
   private ownSinceMs: number | null = null;
+  /**
+   * Epoch ms of our own row's `updated_at` (freshness beat) as returned by the
+   * last successful upsert. Null when unknown (never written, write failed, or
+   * shut down). The private-room window gate treats our row exactly as siblings
+   * do — a value older than the read-side staleness TTL means a stalled
+   * heartbeat / hung agent, so the window fails closed (stale reads as absent).
+   */
+  private ownUpdatedAtMs: number | null = null;
   /** Companion ids known co-present at `currentPlaceKey` (arrival dedupe set). */
   private knownCoPresentIds = new Set<string>();
   /** Render snapshot served synchronously to the situated context section. */
@@ -186,12 +194,14 @@ export class CompanionPresenceRuntime implements CompanionPresenceTurnPort {
       // the private-room window gate serves exactly our current window.
       this.currentPlace = place;
       this.ownSinceMs = Date.parse(record.since);
+      this.ownUpdatedAtMs = Date.parse(record.updatedAt);
       await this.refreshCoPresence(place);
     } catch (error) {
       // Fail closed for the window gate: an unknown own-row state must not
       // serve history, so the cached window is dropped until the next
       // successful write.
       this.ownSinceMs = null;
+      this.ownUpdatedAtMs = null;
       // Deliberate: presence is auxiliary world state — a shared-schema
       // failure is surfaced loudly here but never fails the turn.
       log.error('Companion presence observation failed', {
@@ -208,6 +218,7 @@ export class CompanionPresenceRuntime implements CompanionPresenceTurnPort {
     // the world tool reports a failed move instead of half-applying it. Drop
     // the cached window first so a failed write can never serve stale history.
     this.ownSinceMs = null;
+    this.ownUpdatedAtMs = null;
     const record = await this.store.upsertPresence({
       companionId: this.companionId,
       siteId: place.siteId,
@@ -218,6 +229,7 @@ export class CompanionPresenceRuntime implements CompanionPresenceTurnPort {
     // until the next situated turn or deliberate move supersedes it.
     this.currentPlace = place;
     this.ownSinceMs = Date.parse(record.since);
+    this.ownUpdatedAtMs = Date.parse(record.updatedAt);
     try {
       // Arrival semantics: everyone already present at the destination is a
       // fresh co-location from our perspective (same rule as observeTurnPlace).
@@ -251,9 +263,11 @@ export class CompanionPresenceRuntime implements CompanionPresenceTurnPort {
         kind: place.kind,
       });
       this.ownSinceMs = Date.parse(record.since);
+      this.ownUpdatedAtMs = Date.parse(record.updatedAt);
     } catch (error) {
       // Fail closed for the window gate (see observeTurnPlace).
       this.ownSinceMs = null;
+      this.ownUpdatedAtMs = null;
       // Mirror observeTurnPlace: presence is auxiliary world state — a
       // shared-schema failure is surfaced loudly here but never propagates out
       // to take down the heartbeat lane.
@@ -276,9 +290,28 @@ export class CompanionPresenceRuntime implements CompanionPresenceTurnPort {
    * ms of its `since` (join time). Null when we have no known window (never
    * situated, last write failed, or shut down) — private-room windowed
    * delivery treats null as a CLOSED window and serves nothing (fail closed).
+   *
+   * Freshness is part of the gate: our own row is subject to the SAME read-side
+   * staleness TTL siblings apply to us. If the last successful write is older
+   * than the TTL (a stalled heartbeat / hung agent), every reader already
+   * treats our row as gone — so we must too, and the window reads as absent
+   * (null). Without this, a stopped heartbeat would leave a private-room window
+   * open indefinitely on a timestamp nobody else still trusts (bead jp36.9.1).
    */
   getOwnPresenceWindow(): OwnPresenceWindow | null {
-    if (!this.currentPlace || this.ownSinceMs === null || !Number.isFinite(this.ownSinceMs)) {
+    if (
+      !this.currentPlace
+      || this.ownSinceMs === null
+      || !Number.isFinite(this.ownSinceMs)
+      || this.ownUpdatedAtMs === null
+      || !Number.isFinite(this.ownUpdatedAtMs)
+    ) {
+      return null;
+    }
+    // Stale own row = gone (mirrors the sibling read rule in refreshCoPresence:
+    // fresh iff updatedAt >= now - staleTtlMs). Fail closed on staleness.
+    const staleCutoffMs = this.now().getTime() - this.staleTtlMs;
+    if (this.ownUpdatedAtMs < staleCutoffMs) {
       return null;
     }
     return { place: this.currentPlace, sinceMs: this.ownSinceMs };
@@ -287,6 +320,7 @@ export class CompanionPresenceRuntime implements CompanionPresenceTurnPort {
   /** Delete our own row on graceful shutdown (crash cleanup is the read TTL). */
   async shutdown(): Promise<void> {
     this.ownSinceMs = null;
+    this.ownUpdatedAtMs = null;
     try {
       await this.store.deletePresence(this.companionId);
     } catch (error) {

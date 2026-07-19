@@ -239,6 +239,44 @@ describe('loadRuntimeChannelsConfig', () => {
     }
   });
 
+  it('loads per-guild custom emoji meanings from channels.json (jp36.3.1.2)', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: {
+          heartbeatChannelId: '111',
+          customEmojiMeanings: {
+            '900000000000000001': { blobwave: '  the house greeting meme  ' },
+          },
+        },
+      }));
+
+      const config = loadRuntimeChannelsConfig(dataDir, {});
+
+      expect(config.discord.customEmojiMeanings).toEqual({
+        '900000000000000001': { blobwave: 'the house greeting meme' },
+      });
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a malformed custom emoji meaning (fail closed) (jp36.3.1.2)', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
+    try {
+      writeFileSync(join(dataDir, 'channels.json'), JSON.stringify({
+        discord: {
+          heartbeatChannelId: '111',
+          customEmojiMeanings: { '900000000000000001': { blobwave: '   ' } },
+        },
+      }));
+
+      expect(() => loadRuntimeChannelsConfig(dataDir, {})).toThrow(/must not be blank/);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
   it('loads multi-companion companionId routing fields from channels.json', () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'psfn-channel-config-'));
     try {

@@ -15,6 +15,7 @@ import { createCompanionId } from '../../shared/routing/companion-id.js';
 const discordMock = vi.hoisted(() => {
   return {
     channelsById: new Map<string, unknown>(),
+    channelsCacheById: new Map<string, unknown>(),
     createdClients: [] as any[],
   };
 });
@@ -38,6 +39,9 @@ vi.mock('discord.js', () => {
         if (value instanceof Error) throw value;
         return value ?? null;
       }),
+      cache: {
+        get: (channelId: string) => discordMock.channelsCacheById.get(channelId) ?? undefined,
+      },
     };
     user = null;
     isReady = vi.fn(() => false);
@@ -102,6 +106,7 @@ vi.mock('./voice.js', () => {
 });
 
 import { DiscordAdapter } from './adapter.js';
+import { STANDARD_REACTION_SUBSET } from '../shared/reaction-surface.js';
 
 interface MockDiscordMessage {
   id: string;
@@ -2751,5 +2756,72 @@ describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => 
       }),
     );
     expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe('DiscordAdapter reaction surface (jp36.3.1.2)', () => {
+  beforeEach(() => {
+    discordMock.channelsById.clear();
+    discordMock.channelsCacheById.clear();
+    discordMock.createdClients.length = 0;
+  });
+
+  function makeGuild(guildId: string, emojis: Array<{
+    name: string | null;
+    id: string;
+    animated?: boolean;
+    available?: boolean;
+  }>) {
+    const cache = new Map(emojis.map(e => [e.id, {
+      name: e.name,
+      id: e.id,
+      animated: e.animated ?? false,
+      available: e.available ?? true,
+    }]));
+    return { id: guildId, emojis: { cache } };
+  }
+
+  function listReactions(adapter: DiscordAdapter, channelId: string) {
+    return adapter.prompt.listAvailableReactions?.(
+      { channelId } as unknown as SubstrateMessage,
+    );
+  }
+
+  it('surfaces the standard subset even with no guild resolved (DM/uncached)', () => {
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    const surface = listReactions(adapter, 'dm-channel');
+    expect(surface?.standard).toEqual(STANDARD_REACTION_SUBSET);
+    expect(surface?.custom).toEqual([]);
+  });
+
+  it('surfaces guild-custom emoji that carry a configured meaning, excluding unknown ones', () => {
+    const guildId = '900000000000000001';
+    const channelId = 'guild-text-channel';
+    const guild = makeGuild(guildId, [
+      { name: 'blobwave', id: '111' },
+      { name: 'mystery', id: '222' },
+    ]);
+    discordMock.channelsCacheById.set(channelId, { guild });
+
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus(), {
+      customEmojiMeanings: { [guildId]: { blobwave: 'the house greeting meme' } },
+    });
+
+    const surface = listReactions(adapter, channelId);
+    expect(surface?.custom).toEqual([
+      { name: 'blobwave', token: 'blobwave:111', meaning: 'the house greeting meme' },
+    ]);
+    expect(surface?.standard.length).toBeGreaterThan(0);
+  });
+
+  it('excludes all custom emoji when the guild has no configured meanings', () => {
+    const guildId = '900000000000000002';
+    const channelId = 'guild-text-channel-2';
+    const guild = makeGuild(guildId, [{ name: 'blobwave', id: '111' }]);
+    discordMock.channelsCacheById.set(channelId, { guild });
+
+    const adapter = new DiscordAdapter(makeConfig(), new EventBus());
+    const surface = listReactions(adapter, channelId);
+    expect(surface?.custom).toEqual([]);
   });
 });

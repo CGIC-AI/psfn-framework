@@ -27,6 +27,10 @@ import {
   normalizeChannelGroupMemoryConfig,
   type ChannelGroupMemoryConfig,
 } from '../../system/config/group-memory-config.js';
+import {
+  normalizeCustomEmojiMeanings,
+  type CustomEmojiMeaningsByGuild,
+} from '../shared/reaction-surface.js';
 
 const log = createComponentLogger('ChannelConfig');
 
@@ -79,12 +83,24 @@ export interface DiscordAccountConfig {
   heartbeatChannelId: string;
   allowedBotUserIds: string[];
   groupMemory: ChannelGroupMemoryConfig;
+  /**
+   * jp36.3.1.2: per-guild custom-emoji one-line meanings, keyed by guild id.
+   * Guild-custom emojis are only surfaced to the companion when they carry a
+   * meaning here; unknown custom emojis are excluded.
+   */
+  customEmojiMeanings?: CustomEmojiMeaningsByGuild;
 }
 
 export interface DiscordChannelConfig {
   heartbeatChannelId: string;
   allowedBotUserIds: string[];
   groupMemory: ChannelGroupMemoryConfig;
+  /**
+   * jp36.3.1.2: per-guild custom-emoji one-line meanings, keyed by guild id.
+   * Guild-custom emojis are only surfaced to the companion when they carry a
+   * meaning here; unknown custom emojis are excluded.
+   */
+  customEmojiMeanings?: CustomEmojiMeaningsByGuild;
   /** Multi-companion (sprint-10 W1): companion that owns this channel account. */
   companionId?: CompanionId;
   /**
@@ -432,6 +448,7 @@ const DISCORD_ACCOUNT_ALLOWED_KEYS = new Set([
   'heartbeatChannelId',
   'allowedBotUserIds',
   'groupMemory',
+  'customEmojiMeanings',
 ]);
 
 /**
@@ -524,6 +541,14 @@ function parseDiscordAccountsSection(
         ?? [],
       groupMemory: normalizeChannelGroupMemoryConfig(entry.groupMemory, `${fieldName}.groupMemory`)
         ?? createDefaultChannelGroupMemoryConfig(),
+      ...(Object.hasOwn(entry, 'customEmojiMeanings')
+        ? {
+          customEmojiMeanings: normalizeCustomEmojiMeanings(
+            entry.customEmojiMeanings,
+            `${fieldName}.customEmojiMeanings`,
+          ),
+        }
+        : {}),
     });
   });
 
@@ -839,6 +864,14 @@ export function loadRuntimeChannelsConfig(
         discordConfig.groupMemory,
         'channels.json.discord.groupMemory',
       ) ?? createDefaultChannelGroupMemoryConfig(),
+      ...(Object.hasOwn(discordConfig, 'customEmojiMeanings')
+        ? {
+          customEmojiMeanings: normalizeCustomEmojiMeanings(
+            discordConfig.customEmojiMeanings,
+            'channels.json.discord.customEmojiMeanings',
+          ),
+        }
+        : {}),
       ...(discordCompanionId ? { companionId: discordCompanionId } : {}),
       ...(discordAccounts ? { accounts: discordAccounts } : {}),
     },

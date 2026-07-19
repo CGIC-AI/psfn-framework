@@ -170,6 +170,7 @@ import {
 } from './substrate-agent/model-runtime.js';
 import {
   buildTurnBudgetCharacteristics as buildTurnBudgetCharacteristicsForRuntime,
+  resolveAvailableReactions as resolveAvailableReactionsForRuntime,
   resolveChannelType as resolveChannelTypeForRuntime,
   resolveTaskKind as resolveTaskKindForRuntime,
 } from './substrate-agent/channel-routing-runtime.js';
@@ -1977,6 +1978,10 @@ export class SubstrateAgent {
     const coPresent = situatedPlace
       ? this.companionPresence?.getCoPresent(situatedPlace)
       : undefined;
+    // Curated reaction surface (jp36.3.1.2): resolved from the turn's channel
+    // adapter (standard subset plus guild-custom emojis with a configured
+    // one-line meaning). Undefined on channels that expose no reaction surface.
+    const reactionSurface = resolveAvailableReactionsForRuntime(message, this.channelRegistry);
     return buildRuntimeContextForTurn({
       message,
       ...(conversationScope ? { conversationScope } : {}),
@@ -2011,6 +2016,7 @@ export class SubstrateAgent {
       ...(coPresent && coPresent.length > 0 ? { coPresent } : {}),
       emanationTracker: this.situatedEmanationTracker,
       ...(situatedFallbackPlaceId ? { situatedFallbackPlaceId } : {}),
+      ...(reactionSurface ? { reactionSurface } : {}),
     });
   }
 

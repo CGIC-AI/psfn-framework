@@ -5,6 +5,7 @@ import type { EligibilityGate } from '../../../system/capabilities/eligibility.j
 import { ApiServer, type ApiServerConfig } from '../../../channels/api/server.js';
 import { DiscordAdapter, type DiscordAdapterAccountBinding } from '../../../channels/discord/adapter.js';
 import type { DiscordChannelConfig, TelegramChannelConfig } from '../../../channels/backplane/config.js';
+import type { CustomEmojiMeaningsByGuild } from '../../../channels/shared/reaction-surface.js';
 import { TelegramAdapter } from '../../../channels/telegram/adapter.js';
 import type {
   ChannelAdapterFactoryPort,
@@ -36,6 +37,13 @@ export interface DiscordChannelAdapterFactoryOptions {
    */
   account?: DiscordAdapterAccountBinding;
   allowedBotUserIds?: string[];
+  /**
+   * jp36.3.1.2: per-guild custom-emoji meanings for this adapter. On the
+   * multi-account path this is supplied explicitly (per account) since
+   * `discordConfig` is not passed; on the single-account path it falls back to
+   * `discordConfig.customEmojiMeanings`.
+   */
+  customEmojiMeanings?: CustomEmojiMeaningsByGuild;
   enableDiscordEvidenceLifecycle?: boolean;
 }
 
@@ -54,10 +62,13 @@ export function createDiscordChannelAdapterFactoryEntry(
     create: async (): Promise<ChannelAdapterPort> => {
       const allowedBotUserIds = options.allowedBotUserIds
         ?? options.discordConfig?.allowedBotUserIds;
+      const customEmojiMeanings = options.customEmojiMeanings
+        ?? options.discordConfig?.customEmojiMeanings;
       const adapter = new DiscordAdapter(options.config, options.eventBus, {
         ...(options.sessionStore ? { sessionStore: options.sessionStore } : {}),
         ...(options.eligibilityGate ? { eligibilityGate: options.eligibilityGate } : {}),
         ...(allowedBotUserIds ? { allowedBotUserIds } : {}),
+        ...(customEmojiMeanings ? { customEmojiMeanings } : {}),
         ...(options.personalFilesDir ? { personalFilesDir: options.personalFilesDir } : {}),
         ...(options.intakeScreening ? { intakeScreening: options.intakeScreening } : {}),
         ...(options.account ? { account: options.account } : {}),

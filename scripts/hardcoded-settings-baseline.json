@@ -1103,6 +1103,24 @@
       "note": "Code-owned channel status cadence preserved from the existing Discord and Telegram adapter behavior."
     },
     {
+      "file": "src/channels/shared/reaction-surface.ts",
+      "name": "MAX_GUILDS",
+      "value": "512",
+      "note": "Code-owned DoS guard bounding channels.json customEmojiMeanings owner-file size (jp36.3.1.2), mirroring intake-policy source-list bounds."
+    },
+    {
+      "file": "src/channels/shared/reaction-surface.ts",
+      "name": "MAX_MEANING_CHARS",
+      "value": "200",
+      "note": "Code-owned validation guard capping a one-line custom-emoji meaning length (jp36.3.1.2); error-string-coupled owner-file bound."
+    },
+    {
+      "file": "src/channels/shared/reaction-surface.ts",
+      "name": "MAX_MEANINGS_PER_GUILD",
+      "value": "512",
+      "note": "Code-owned DoS guard bounding per-guild custom-emoji meaning entries in channels.json (jp36.3.1.2), mirroring intake-policy source-list bounds."
+    },
+    {
       "file": "src/channels/telegram/adapter.ts",
       "name": "DEFAULT_LONG_POLL_TIMEOUT_SECONDS",
       "value": "20"

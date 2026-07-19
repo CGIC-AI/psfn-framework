@@ -1,6 +1,7 @@
 import {
   Events,
   type Client,
+  type Guild,
   type Message,
   type MessageReaction,
   type PartialMessageReaction,
@@ -9,6 +10,12 @@ import {
   type User,
 } from 'discord.js';
 import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
+import {
+  buildReactionSurface,
+  type CustomEmojiMeaningsByGuild,
+  type GuildCustomEmoji,
+  type ResolvedReactionSurface,
+} from '../shared/reaction-surface.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type {
   ChannelAdapterPort,
@@ -107,6 +114,12 @@ interface DiscordAdapterOptions {
   eligibilityGate?: EligibilityGate;
   allowedBotUserIds?: string[];
   personalFilesDir?: string;
+  /**
+   * jp36.3.1.2: per-guild custom-emoji one-line meanings from channels.json.
+   * A guild-custom emoji is only surfaced to the companion when it carries a
+   * meaning here; unknown custom emojis are excluded.
+   */
+  customEmojiMeanings?: CustomEmojiMeaningsByGuild;
   account?: DiscordAdapterAccountBinding;
   enableDiscordEvidenceLifecycle?: boolean;
   /**
@@ -203,6 +216,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private statusUnsubscribers: Array<() => void> = [];
   private readonly longRunningToolStatus: LongRunningToolStatusTracker;
   private allowedBotUserIds: Set<string>;
+  private readonly customEmojiMeanings: CustomEmojiMeaningsByGuild;
   private personalFilesDir: string | null;
   private initialized = false;
   private readonly account: DiscordAdapterAccountBinding | null;
@@ -222,6 +236,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
         .map(id => id.trim())
         .filter(id => id.length > 0),
     );
+    this.customEmojiMeanings = options.customEmojiMeanings ?? {};
     this.config = {
       enabled: Boolean(this.resolveLoginToken()),
       accountId: this.account
@@ -275,6 +290,8 @@ export class DiscordAdapter implements ChannelAdapterPort {
         if (message.channelId.startsWith('discord-voice:')) return 'discord_voice';
         return 'discord_text';
       },
+      listAvailableReactions: (message: SubstrateMessage): ResolvedReactionSurface =>
+        this.resolveReactionSurface(message),
     };
     [this.client, this.discordEvidence] = createDiscordClient(
       Boolean(options.enableDiscordEvidenceLifecycle),
@@ -423,6 +440,50 @@ export class DiscordAdapter implements ChannelAdapterPort {
       files: [file],
       ...(ctx.replyToMessageId ? { reply: { messageReference: ctx.replyToMessageId } } : {}),
     });
+  }
+
+  /**
+   * jp36.3.1.2: build the curated reaction surface advertised to the companion
+   * for a turn — the standard subset (always available) plus this guild's
+   * custom emojis that carry a configured one-line meaning. Uses the in-memory
+   * guild/emoji cache (populated by the `Guilds` intent), so it is synchronous
+   * and safe on the prompt-build path. DMs and uncached channels resolve no
+   * guild, so only the standard subset is surfaced.
+   */
+  private resolveReactionSurface(message: SubstrateMessage): ResolvedReactionSurface {
+    const guild = this.resolveGuildForChannel(message.channelId);
+    const guildCustomEmojis: GuildCustomEmoji[] = guild
+      ? [...guild.emojis.cache.values()].map(emoji => ({
+        name: emoji.name,
+        id: emoji.id,
+        animated: emoji.animated === true,
+        available: emoji.available !== false,
+      }))
+      : [];
+    const customEmojiMeanings = guild ? (this.customEmojiMeanings[guild.id] ?? {}) : {};
+    return buildReactionSurface({ guildCustomEmojis, customEmojiMeanings });
+  }
+
+  /**
+   * Resolve the guild owning a substrate channel id synchronously from the
+   * client cache. Handles the `discord-voice:` prefix and the
+   * `<channelId>:<threadId>` threading composite. Returns undefined for DMs or
+   * channels not present in the cache.
+   */
+  private resolveGuildForChannel(channelId: string): Guild | undefined {
+    let baseId = channelId.startsWith('discord-voice:')
+      ? channelId.slice('discord-voice:'.length)
+      : channelId;
+    const separatorIndex = baseId.indexOf(':');
+    if (separatorIndex > 0) {
+      baseId = baseId.slice(0, separatorIndex);
+    }
+    if (!baseId) return undefined;
+    const channel = this.client.channels.cache.get(baseId);
+    if (channel && 'guild' in channel) {
+      return (channel as { guild?: Guild }).guild;
+    }
+    return undefined;
   }
 
   /**

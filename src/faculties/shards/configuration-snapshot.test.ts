@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { makeTestChargePolicyConfig } from '../../test-support/charge-policy.js';
@@ -9,6 +9,7 @@ import {
   createShardConfigurationControl,
   parseShardConfigurationOverridePatch,
   resolveParentAllowedShardModels,
+  ShardConfigurationRegistry,
   snapshotShardConfiguration,
 } from './configuration-snapshot.js';
 
@@ -190,6 +191,55 @@ describe('shard configuration snapshots', () => {
     });
     expect(snapshot.updatedBy).toBe('fleet-principal:operator-a');
     expect(snapshot.effective.readOnly.capabilityGrant).toEqual(CAPABILITY_GRANT);
+  });
+
+  it('rolls back the override and charge quota when the success audit fails', () => {
+    const state = control();
+    const chargePolicy = makeTestChargePolicyConfig();
+    const auditError = new Error('audit sink unavailable');
+    let auditShouldThrow = false;
+    const auditTrail = {
+      append: vi.fn((event: string, details?: Record<string, unknown>) => {
+        if (
+          auditShouldThrow
+          && event === 'shard.configuration.override'
+          && details?.decision === 'approved'
+        ) {
+          throw auditError;
+        }
+      }),
+    };
+    const registry = new ShardConfigurationRegistry({
+      liveParentConfig: config,
+      auditTrail,
+    });
+    registry.register(state, chargePolicy);
+    expect(registry.update({
+      parentCompanionId: PARENT,
+      shardId: SHARD_ID,
+      actor: 'fleet-principal:operator-before',
+      override: { workerBudget: { maxChargeUnits: 8 } },
+    })).toMatchObject({ ok: true });
+    const before = registry.getSnapshot(PARENT, SHARD_ID);
+    auditShouldThrow = true;
+
+    expect(() => registry.update({
+      parentCompanionId: PARENT,
+      shardId: SHARD_ID,
+      actor: 'fleet-principal:operator-a',
+      override: {
+        model: { provider: 'provider-a', model: 'bounded-model' },
+        workerBudget: {
+          maxTurns: 2,
+          maxOutputTokens: 1_024,
+          maxChargeUnits: 3.5,
+        },
+      },
+    })).toThrow(auditError);
+
+    expect(registry.getSnapshot(PARENT, SHARD_ID)).toEqual(before);
+    expect(chargePolicy.runChargeQuotaByLane.shard).toBe(8);
+    expect(auditTrail.append).toHaveBeenCalledTimes(2);
   });
 
   it.each([

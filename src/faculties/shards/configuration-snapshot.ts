@@ -268,6 +268,52 @@ function cloneValues(values: ShardConfigurationValues): ShardConfigurationValues
   };
 }
 
+function cloneOverrides(
+  overrides: ShardConfigurationOverrides,
+): ShardConfigurationOverrides {
+  return {
+    model: overrides.model ? { ...overrides.model } : null,
+    workerBudget: { ...overrides.workerBudget },
+    readOnly: null,
+  };
+}
+
+interface ShardConfigurationMutableState {
+  override: ShardConfigurationOverrides;
+  effective: ShardConfigurationValues;
+  updatedAt?: number;
+  updatedBy?: string;
+}
+
+function captureMutableState(
+  control: ShardConfigurationControl,
+): ShardConfigurationMutableState {
+  return {
+    override: cloneOverrides(control.override),
+    effective: cloneValues(control.effective),
+    ...(control.updatedAt !== undefined ? { updatedAt: control.updatedAt } : {}),
+    ...(control.updatedBy !== undefined ? { updatedBy: control.updatedBy } : {}),
+  };
+}
+
+function restoreMutableState(
+  control: ShardConfigurationControl,
+  state: ShardConfigurationMutableState,
+): void {
+  control.override = cloneOverrides(state.override);
+  control.effective = cloneValues(state.effective);
+  if (state.updatedAt === undefined) {
+    delete control.updatedAt;
+  } else {
+    control.updatedAt = state.updatedAt;
+  }
+  if (state.updatedBy === undefined) {
+    delete control.updatedBy;
+  } else {
+    control.updatedBy = state.updatedBy;
+  }
+}
+
 function configurationRevision(input: {
   parentCompanionId: CompanionId;
   capabilityGrant: ShardCapabilityGrantEvidence;
@@ -462,11 +508,7 @@ export function snapshotShardConfiguration(
     health: control.health,
     source: { ...control.source },
     inherited: cloneValues(control.inherited),
-    override: {
-      model: control.override.model ? { ...control.override.model } : null,
-      workerBudget: { ...control.override.workerBudget },
-      readOnly: null,
-    },
+    override: cloneOverrides(control.override),
     effective: cloneValues(control.effective),
     allowed: {
       models: resolveParentAllowedShardModels(liveParentConfig).map(cloneModel),
@@ -562,15 +604,30 @@ export class ShardConfigurationRegistry {
     }
 
     const parentConfig = this.deps.liveParentConfig();
+    const previousState = captureMutableState(control);
     const previous = snapshotShardConfiguration(control, parentConfig);
+    let patch: ShardConfigurationOverridePatch;
     try {
-      const patch = parseShardConfigurationOverridePatch(input.override);
+      patch = parseShardConfigurationOverridePatch(input.override);
+    } catch (error) {
+      return this.invalidOverride(input, previous, error);
+    }
+
+    const chargePolicy = this.chargePolicies.get(input.shardId);
+    const previousChargeQuota = chargePolicy?.runChargeQuotaByLane.shard;
+    let snapshot: ShardConfigurationSnapshot;
+    try {
       applyShardConfigurationOverride(control, patch, parentConfig, input.actor);
-      const chargePolicy = this.chargePolicies.get(input.shardId);
       if (chargePolicy) {
         chargePolicy.runChargeQuotaByLane.shard = control.effective.workerBudget.maxChargeUnits;
       }
-      const snapshot = snapshotShardConfiguration(control, parentConfig);
+      snapshot = snapshotShardConfiguration(control, parentConfig);
+    } catch (error) {
+      this.restore(control, previousState, chargePolicy, previousChargeQuota);
+      return this.invalidOverride(input, previous, error);
+    }
+
+    try {
       this.deps.auditTrail?.append('shard.configuration.override', {
         shardId: input.shardId,
         parentCompanionId: input.parentCompanionId,
@@ -588,26 +645,51 @@ export class ShardConfigurationRegistry {
         },
         capabilityGrant: control.inherited.readOnly.capabilityGrant,
       });
-      return { ok: true, snapshot };
     } catch (error) {
-      const message = toErrorMessage(error);
-      this.deps.auditTrail?.append('shard.configuration.override', {
-        shardId: input.shardId,
-        parentCompanionId: input.parentCompanionId,
-        actor: input.actor,
-        decision: 'denied',
-        reason: 'invalid_override',
-        message,
-        previous: {
-          override: previous.override,
-          effective: previous.effective,
-        },
-      });
-      return {
-        ok: false,
-        code: 'invalid_override',
-        message,
-      };
+      this.restore(control, previousState, chargePolicy, previousChargeQuota);
+      throw error;
+    }
+    return { ok: true, snapshot };
+  }
+
+  private invalidOverride(
+    input: {
+      parentCompanionId: string;
+      shardId: string;
+      actor: string;
+    },
+    previous: ShardConfigurationSnapshot,
+    error: unknown,
+  ): ShardConfigurationMutationResult {
+    const message = toErrorMessage(error);
+    this.deps.auditTrail?.append('shard.configuration.override', {
+      shardId: input.shardId,
+      parentCompanionId: input.parentCompanionId,
+      actor: input.actor,
+      decision: 'denied',
+      reason: 'invalid_override',
+      message,
+      previous: {
+        override: previous.override,
+        effective: previous.effective,
+      },
+    });
+    return {
+      ok: false,
+      code: 'invalid_override',
+      message,
+    };
+  }
+
+  private restore(
+    control: ShardConfigurationControl,
+    previous: ShardConfigurationMutableState,
+    chargePolicy: ChargePolicyConfig | undefined,
+    previousChargeQuota: number | undefined,
+  ): void {
+    restoreMutableState(control, previous);
+    if (chargePolicy && previousChargeQuota !== undefined) {
+      chargePolicy.runChargeQuotaByLane.shard = previousChargeQuota;
     }
   }
 

@@ -2,6 +2,8 @@ import type { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import type { HubDeviceAttachmentSnapshot } from '../../shared/contracts/hub-device-ingress.js';
 import {
   SHARD_DIRECTORY_LIMITS,
+  ShardDirectoryDeniedError,
+  ShardDirectoryOperationalError,
   type ShardChatMessage,
   type ShardChatResponse,
   type ShardDirectoryEntry,
@@ -64,47 +66,53 @@ export class LiveShardDirectory implements ShardDirectoryPort {
   }
 
   ownerOfLiveShard(shardId: string): CompanionId | undefined {
-    this.options.refreshDeployments();
-    const shard = this.findDeployment(shardId);
-    return shard && shard.state !== 'offline' && this.runtimes.has(shardId)
-      ? this.options.parentCompanionId()
-      : undefined;
+    return this.operation(() => {
+      this.options.refreshDeployments();
+      const shard = this.findDeployment(shardId);
+      return shard && shard.state !== 'offline' && this.runtimes.has(shardId)
+        ? this.options.parentCompanionId()
+        : undefined;
+    });
   }
 
   listShards(parentCompanionId: CompanionId): readonly ShardDirectoryEntry[] {
-    this.assertParent(parentCompanionId);
-    this.options.refreshDeployments();
-    return Object.freeze(
-      this.options.deployments()
-        .filter(shard => shard.state !== 'offline' && this.runtimes.has(shard.id))
-        .sort((left, right) => left.startedAt - right.startedAt || left.id.localeCompare(right.id))
-        .slice(0, SHARD_DIRECTORY_LIMITS.maxEntries)
-        .map(shard => {
-          const projection = projectDirectoryText(shard, this.options.intakeScreening);
-          return Object.freeze({
-            shardId: shard.id,
-            label: projection.label,
-            purpose: projection.purpose,
-            availability: shard.state === 'registering'
-              ? 'starting' as const
-              : shard.state === 'ready' && shard.health === 'healthy'
-                ? 'available' as const
-                : 'degraded' as const,
-            startedAt: shard.startedAt,
-          });
-        }),
-    );
+    return this.operation(() => {
+      this.assertParent(parentCompanionId);
+      this.options.refreshDeployments();
+      return Object.freeze(
+        this.options.deployments()
+          .filter(shard => shard.state !== 'offline' && this.runtimes.has(shard.id))
+          .sort((left, right) => left.startedAt - right.startedAt || left.id.localeCompare(right.id))
+          .slice(0, SHARD_DIRECTORY_LIMITS.maxEntries)
+          .map(shard => {
+            const projection = projectDirectoryText(shard, this.options.intakeScreening);
+            return Object.freeze({
+              shardId: shard.id,
+              label: projection.label,
+              purpose: projection.purpose,
+              availability: shard.state === 'registering'
+                ? 'starting' as const
+                : shard.state === 'ready' && shard.health === 'healthy'
+                  ? 'available' as const
+                  : 'degraded' as const,
+              startedAt: shard.startedAt,
+            });
+          }),
+      );
+    });
   }
 
   readShardChatHistory(
     parentCompanionId: CompanionId,
     shardId: string,
   ): readonly ShardChatMessage[] {
-    const runtime = this.requireLiveRuntime(parentCompanionId, shardId);
-    return Object.freeze(runtime.history.map(message => Object.freeze({
-      ...message,
-      attribution: Object.freeze({ ...message.attribution }),
-    })));
+    return this.operation(() => {
+      const runtime = this.requireLiveRuntime(parentCompanionId, shardId);
+      return Object.freeze(runtime.history.map(message => Object.freeze({
+        ...message,
+        attribution: Object.freeze({ ...message.attribution }),
+      })));
+    });
   }
 
   async sendShardChat(input: Readonly<{
@@ -114,73 +122,77 @@ export class LiveShardDirectory implements ShardDirectoryPort {
     content: string;
     attachment: HubDeviceAttachmentSnapshot;
   }>): Promise<ShardChatResponse> {
-    const runtime = this.requireLiveRuntime(input.parentCompanionId, input.shardId);
-    const shard = this.findDeployment(input.shardId);
-    if (!shard || shard.state !== 'ready' || shard.health !== 'healthy') {
-      throw new Error('Selected shard is unavailable');
-    }
-    const actor = input.attachment.actor;
-    if (actor.kind !== 'human' || actor.companionId !== input.parentCompanionId
-      || input.attachment.channel.companionId !== input.parentCompanionId
-      || input.attachment.deviceActor.principal.companionId !== input.parentCompanionId) {
-      throw new Error('Selected shard chat requires a current human parent attachment');
-    }
-    const content = input.content.trim();
-    if (!content || content.length > SHARD_DIRECTORY_LIMITS.maxMessageCharacters) {
-      throw new Error('Selected shard chat content is invalid');
-    }
-    runtime.interactions.add(input.requestId);
-    const timestamp = Date.now();
-    const attribution = Object.freeze({
-      parentCompanionId: input.parentCompanionId,
-      shardId: input.shardId,
+    return await this.asyncOperation(async () => {
+      const runtime = this.requireLiveRuntime(input.parentCompanionId, input.shardId);
+      const shard = this.findDeployment(input.shardId);
+      if (!shard || shard.state !== 'ready' || shard.health !== 'healthy') {
+        throw new ShardDirectoryDeniedError('Selected shard is unavailable');
+      }
+      const actor = input.attachment.actor;
+      if (actor.kind !== 'human' || actor.companionId !== input.parentCompanionId
+        || input.attachment.channel.companionId !== input.parentCompanionId
+        || input.attachment.deviceActor.principal.companionId !== input.parentCompanionId) {
+        throw new ShardDirectoryDeniedError(
+          'Selected shard chat requires a current human parent attachment',
+        );
+      }
+      const content = input.content.trim();
+      if (!content || content.length > SHARD_DIRECTORY_LIMITS.maxMessageCharacters) {
+        throw new ShardDirectoryDeniedError('Selected shard chat content is invalid');
+      }
+      runtime.interactions.add(input.requestId);
+      const timestamp = Date.now();
+      const attribution = Object.freeze({
+        parentCompanionId: input.parentCompanionId,
+        shardId: input.shardId,
+      });
+      try {
+        const response = await runtime.agentLoop.handleMessage({
+          id: input.requestId,
+          channelId: runtime.channelId,
+          channelType: 'companion-ui',
+          authorId: actor.principalId,
+          authorName: 'Authenticated fleet human',
+          content,
+          timestamp: new Date(timestamp),
+          isDirectMessage: true,
+          routing: {
+            source: 'companion-ui',
+            channelPrivacy: 'private',
+            canonicalContactId: actor.contact.contactId,
+            hubDeviceAttachment: input.attachment,
+            cancellationId: input.requestId,
+            gateway: deriveShardRoutingEnvelope({
+              companionId: input.parentCompanionId,
+              shardId: input.shardId,
+            }),
+          },
+        });
+        appendBoundedHistory(runtime.history, {
+          id: input.requestId,
+          role: 'user',
+          content,
+          createdAt: timestamp,
+          attribution,
+        });
+        appendBoundedHistory(runtime.history, {
+          id: response.metadata.turnId ?? `${input.requestId}:response`,
+          role: 'assistant',
+          content: response.content,
+          createdAt: Date.now(),
+          attribution,
+        });
+        return Object.freeze({
+          content: response.content,
+          channelId: response.channelId,
+          inputTokens: response.metadata.inputTokens,
+          outputTokens: response.metadata.outputTokens,
+          attribution,
+        });
+      } finally {
+        runtime.interactions.delete(input.requestId);
+      }
     });
-    try {
-      const response = await runtime.agentLoop.handleMessage({
-        id: input.requestId,
-        channelId: runtime.channelId,
-        channelType: 'companion-ui',
-        authorId: actor.principalId,
-        authorName: 'Authenticated fleet human',
-        content,
-        timestamp: new Date(timestamp),
-        isDirectMessage: true,
-        routing: {
-          source: 'companion-ui',
-          channelPrivacy: 'private',
-          canonicalContactId: actor.contact.contactId,
-          hubDeviceAttachment: input.attachment,
-          cancellationId: input.requestId,
-          gateway: deriveShardRoutingEnvelope({
-            companionId: input.parentCompanionId,
-            shardId: input.shardId,
-          }),
-        },
-      });
-      appendBoundedHistory(runtime.history, {
-        id: input.requestId,
-        role: 'user',
-        content,
-        createdAt: timestamp,
-        attribution,
-      });
-      appendBoundedHistory(runtime.history, {
-        id: response.metadata.turnId ?? `${input.requestId}:response`,
-        role: 'assistant',
-        content: response.content,
-        createdAt: Date.now(),
-        attribution,
-      });
-      return Object.freeze({
-        content: response.content,
-        channelId: response.channelId,
-        inputTokens: response.metadata.inputTokens,
-        outputTokens: response.metadata.outputTokens,
-        attribution,
-      });
-    } finally {
-      runtime.interactions.delete(input.requestId);
-    }
   }
 
   interruptShardChat(input: Readonly<{
@@ -192,24 +204,42 @@ export class LiveShardDirectory implements ShardDirectoryPort {
     interactionId: string;
     attribution: Readonly<{ parentCompanionId: CompanionId; shardId: string }>;
   }> {
-    const runtime = this.requireLiveRuntime(input.parentCompanionId, input.shardId);
-    const ownsInteraction = runtime.interactions.has(input.interactionId);
-    const result = ownsInteraction
-      ? runtime.agentLoop.cancelTurn(input.interactionId)
-      : { status: 'not_found' as const };
-    return Object.freeze({
-      interrupted: ownsInteraction && result.status === 'signaled',
-      interactionId: input.interactionId,
-      attribution: Object.freeze({
-        parentCompanionId: input.parentCompanionId,
-        shardId: input.shardId,
-      }),
+    return this.operation(() => {
+      const runtime = this.requireLiveRuntime(input.parentCompanionId, input.shardId);
+      const ownsInteraction = runtime.interactions.has(input.interactionId);
+      const result = ownsInteraction
+        ? runtime.agentLoop.cancelTurn(input.interactionId)
+        : { status: 'not_found' as const };
+      return Object.freeze({
+        interrupted: ownsInteraction && result.status === 'signaled',
+        interactionId: input.interactionId,
+        attribution: Object.freeze({
+          parentCompanionId: input.parentCompanionId,
+          shardId: input.shardId,
+        }),
+      });
     });
+  }
+
+  private operation<T>(run: () => T): T {
+    try {
+      return run();
+    } catch (error) {
+      return rethrowShardDirectoryFailure(error);
+    }
+  }
+
+  private async asyncOperation<T>(run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (error) {
+      return rethrowShardDirectoryFailure(error);
+    }
   }
 
   private assertParent(parentCompanionId: CompanionId): void {
     if (parentCompanionId !== this.options.parentCompanionId()) {
-      throw new Error('Shard parent binding denied');
+      throw new ShardDirectoryDeniedError('Shard parent binding denied');
     }
   }
 
@@ -226,10 +256,20 @@ export class LiveShardDirectory implements ShardDirectoryPort {
     const shard = this.findDeployment(shardId);
     const runtime = this.runtimes.get(shardId);
     if (!shard || !runtime || shard.state === 'offline') {
-      throw new Error('Selected shard is unavailable');
+      throw new ShardDirectoryDeniedError('Selected shard is unavailable');
     }
     return runtime;
   }
+}
+
+function rethrowShardDirectoryFailure(error: unknown): never {
+  if (
+    error instanceof ShardDirectoryDeniedError
+    || error instanceof ShardDirectoryOperationalError
+  ) {
+    throw error;
+  }
+  throw new ShardDirectoryOperationalError(error);
 }
 
 function appendBoundedHistory(history: ShardChatMessage[], message: ShardChatMessage): void {

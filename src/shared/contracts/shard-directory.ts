@@ -11,6 +11,23 @@ export const SHARD_DIRECTORY_LIMITS = Object.freeze({
 
 export type ShardDirectoryAvailability = 'starting' | 'available' | 'degraded';
 
+export class ShardDirectoryDeniedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ShardDirectoryDeniedError';
+  }
+}
+
+export class ShardDirectoryOperationalError extends Error {
+  readonly cause: unknown;
+
+  constructor(cause: unknown) {
+    super('Shard directory operation failed');
+    this.name = 'ShardDirectoryOperationalError';
+    this.cause = cause;
+  }
+}
+
 export interface ShardDirectoryEntry {
   readonly shardId: string;
   readonly label: string;

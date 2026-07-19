@@ -1,5 +1,6 @@
 import type {
   ModelUsageBucket,
+  ModelUsagePeriodComparison,
   ModelUsageQuery,
   ModelUsageRange,
   ModelUsageResolvedRange,
@@ -184,6 +185,17 @@ export function resolveModelUsageRange(
   };
   createModelUsageBucketBoundaries(resolved);
   return resolved;
+}
+
+export function resolvePreviousModelUsagePeriod(
+  range: ModelUsageResolvedRange,
+): Pick<ModelUsagePeriodComparison, 'sinceMs' | 'untilMs'> | undefined {
+  if (range.range === 'all') return undefined;
+  const durationMs = range.untilMs - range.sinceMs;
+  return {
+    sinceMs: range.sinceMs - durationMs,
+    untilMs: range.sinceMs,
+  };
 }
 
 function bucketStart(timestampMs: number, bucket: ResolvedModelUsageBucket, timezone: string): number {

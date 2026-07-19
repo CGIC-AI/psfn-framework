@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import test from 'node:test';
+import { test } from 'vitest';
 import {
   beginDashboardCostWindowSelection,
   commitDashboardCostWindowSelection,
@@ -21,12 +21,13 @@ test('resolveDashboardCostWindow fails closed to today for unknown values', () =
   assert.equal(resolveDashboardCostWindow('today'), 'today');
   assert.equal(resolveDashboardCostWindow('week'), 'week');
   assert.equal(resolveDashboardCostWindow('month'), 'month');
+  assert.equal(resolveDashboardCostWindow('quarter'), 'quarter');
 });
 
-test('dashboard cost window options expose Today/Week/Month selector order', () => {
+test('dashboard cost window options expose Today/Week/Month/Quarter selector order', () => {
   assert.deepEqual(
     DASHBOARD_COST_WINDOW_OPTIONS.map((option) => option.value),
-    ['today', 'week', 'month'],
+    ['today', 'week', 'month', 'quarter'],
   );
 });
 
@@ -34,16 +35,18 @@ test('buildDashboardCostWindowPath includes validated costWindow query parameter
   assert.equal(buildDashboardCostWindowPath('today'), '/api/admin/dashboard?costWindow=today');
   assert.equal(buildDashboardCostWindowPath('week'), '/api/admin/dashboard?costWindow=week');
   assert.equal(buildDashboardCostWindowPath('month'), '/api/admin/dashboard?costWindow=month');
+  assert.equal(buildDashboardCostWindowPath('quarter'), '/api/admin/dashboard?costWindow=quarter');
 });
 
-test('dashboard accounting drill-through carries the committed Today/Week/Month range', () => {
+test('dashboard accounting drill-through carries the committed Today/Week/Month/Quarter range', () => {
   assert.equal(buildDashboardAccountingPath('today'), '/charge-budget?tab=token-usage&range=today');
   assert.equal(buildDashboardAccountingPath('week'), '/charge-budget?tab=token-usage&range=week');
   assert.equal(buildDashboardAccountingPath('month'), '/charge-budget?tab=token-usage&range=month');
+  assert.equal(buildDashboardAccountingPath('quarter'), '/charge-budget?tab=token-usage&range=quarter');
 
   const source = readFileSync(new URL('../../routes/+page.svelte', import.meta.url), 'utf8');
   assert.equal(
-    source.match(/href=\{buildDashboardAccountingPath\(committedCostWindow\)\}/gu)?.length,
+    source.match(/buildDashboardAccountingPath\(committedCostWindow\)/gu)?.length,
     2,
   );
 });
@@ -91,6 +94,16 @@ test('dashboard page polls durable usage and renders unavailable/stale states wi
   assert.match(source, /modelUsageFreshness\.state/);
   assert.match(source, />Unavailable</);
   assert.doesNotMatch(source, /stats\.sessionUsage/);
+});
+
+test('dashboard cost cards render the compact aggregate token and spend sparklines', () => {
+  const source = readFileSync(new URL('../../routes/+page.svelte', import.meta.url), 'utf8');
+
+  assert.match(source, /accounting\/charts\/Sparkline\.svelte/);
+  assert.match(source, /stats\.modelUsage\.sparkline/);
+  assert.equal(source.match(/<Sparkline\b/gu)?.length, 2);
+  assert.match(source, /point\.totalTokens/);
+  assert.match(source, /point\.effectiveCostUsd/);
 });
 
 test('dashboard page exposes durable usage transitions and refresh failures to assistive technology', () => {

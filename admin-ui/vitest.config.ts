@@ -6,13 +6,15 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: [
-      'src/lib/accounting/{cockpit-contract,query-state}.test.ts',
+      'src/lib/accounting/{cache-hit-rate,cockpit-contract,derived-metrics,event-grid,query-state,usage-breakdown}.test.ts',
       'src/lib/api/client.test.ts',
-      'src/lib/api/endpoints/{accounting,audit-history,prompts,sessions}.test.ts',
+      'src/lib/api/endpoints/{accounting,audit-history,fleet-model-usage,prompts,sessions}.test.ts',
       'src/lib/api/websocket.test.ts',
       'src/lib/cache/{local-first,queue-cache,session-cache,telemetry-cache}.test.ts',
+      'src/lib/components/accounting/charts/*.test.ts',
+      'src/lib/dashboard/cost-window.test.ts',
       'src/lib/evals/observer-sidecar.test.ts',
-      'src/lib/fleet/{companion-scope,portal}.test.ts',
+      'src/lib/fleet/{companion-scope,fleet-costs,portal}.test.ts',
       'src/lib/polling/{garden-queue-refresh,page-adoption,visibility-aware-poller}.test.ts',
       'src/lib/providers/{editor,registry}.test.ts',
       'src/lib/stores/auth-storage.test.ts',

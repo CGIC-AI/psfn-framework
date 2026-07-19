@@ -1,6 +1,12 @@
 {
   "entries": [
     {
+      "path": "src/operator/garden/transport-client.ts",
+      "contains": "x-psfn-fleet-model-usage-",
+      "reason": "Fleet model-usage fan-out uses stable project-scoped internal header names that browser-facing proxy paths cannot add.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
       "path": "src/boundary/gateway/fleet-sso-router.ts",
       "contains": "x-psfn-jit-grant",
       "reason": "The unified-origin proxy consumes this opaque single-use fleet JIT grant header and never forwards it to companion workloads.",

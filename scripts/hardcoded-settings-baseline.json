@@ -3751,6 +3751,12 @@
     },
     {
       "file": "src/persistence/postgres/model-usage-store.ts",
+      "name": "MAX_DIMENSION_TIME_SERIES_ROWS",
+      "value": "5_000",
+      "note": "Code-owned fail-closed query safety boundary that caps high-cardinality dimension series before materialization; it is not operator-tunable policy."
+    },
+    {
+      "file": "src/persistence/postgres/model-usage-store.ts",
       "name": "MAX_EVENT_LIMIT",
       "value": "2_000"
     },

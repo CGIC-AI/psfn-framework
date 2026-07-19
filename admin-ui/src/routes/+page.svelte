@@ -15,6 +15,7 @@
   import { resolveSessionContextPressureView } from '$lib/dashboard/session-context-pressure';
   import ActiveConcernsCard from '$lib/components/garden/ActiveConcernsCard.svelte';
   import ContextAllocationWidget from '$lib/components/garden/ContextAllocationWidget.svelte';
+  import Sparkline from '$lib/components/accounting/charts/Sparkline.svelte';
   import type { AdminDashboardData, DashboardCostWindow } from '$lib/types';
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
 
@@ -32,6 +33,7 @@
       today: 'today',
       week: 'this week',
       month: 'this month',
+      quarter: 'this quarter',
     };
     return hints[window];
   }
@@ -176,6 +178,8 @@
     {@const stats = data.stats}
     {@const committedCostWindow = costWindowSelection.committed}
     {@const selectedCostWindowUsage = stats.modelUsage.usage}
+    {@const modelUsageTokenTrend = stats.modelUsage.sparkline.map((point) => point.totalTokens)}
+    {@const modelUsageCostTrend = stats.modelUsage.sparkline.map((point) => point.effectiveCostUsd)}
     {@const modelUsageFreshness = stats.modelUsage.freshness}
     {@const transientSessionTelemetry = stats.transientSessionTelemetry}
     {@const llmTtftPercentiles = transientSessionTelemetry.latencyPercentiles.series.find((series) => series.metric === 'llm_ttft' && Object.keys(series.dimensions).length === 0)?.percentiles}
@@ -212,6 +216,14 @@
           <p class="text-sm text-shadow-600 mt-1">
             {formatTokens(selectedCostWindowUsage.inputTokens)} in / {formatTokens(selectedCostWindowUsage.outputTokens)} out
           </p>
+          <div class="mt-3 text-petal-500">
+            <Sparkline
+              values={modelUsageTokenTrend}
+              width={220}
+              height={36}
+              ariaLabel={`Total token usage trend for ${costWindowHint(committedCostWindow)}`}
+            />
+          </div>
         {:else}
           <p class="text-2xl font-serif text-wilt-600 mt-1">Unavailable</p>
           <p class="text-sm text-wilt-600 mt-1">Durable usage storage could not be read.</p>
@@ -238,6 +250,16 @@
           </p>
         {:else if selectedCostWindowUsage}
           <p class="text-sm text-shadow-600 mt-1">No durable model usage in this window yet.</p>
+        {/if}
+        {#if selectedCostWindowUsage}
+          <div class="mt-3 text-gold-600">
+            <Sparkline
+              values={modelUsageCostTrend}
+              width={220}
+              height={36}
+              ariaLabel={`Effective model cost trend for ${costWindowHint(committedCostWindow)}`}
+            />
+          </div>
         {/if}
         <p aria-hidden="true" class="text-xs mt-2 {modelUsageFreshness.state === 'fresh' ? 'text-shadow-600' : 'text-wilt-600'}">
           {modelUsageFreshness.state === 'fresh' ? 'Durable canonical usage' : modelUsageFreshness.state}

@@ -23,6 +23,8 @@ import { FleetGardenControlPlane } from '../../operator/garden/fleet-garden-cont
 import { AtomicRequestCapabilityReplayPort } from '../../operator/garden/atomic-request-capability-replay.js';
 import { createRequestCapabilityVerifier } from '../../boundary/fleet-auth/request-capability.js';
 import { FleetGardenDirectDatabase } from '../../operator/garden/fleet-garden-direct-database.js';
+import { FleetGardenAdminTransportProxy } from '../../operator/garden/fleet-transport-client.js';
+import { FleetModelUsageService } from '../../operator/garden/services/fleet-model-usage-service.js';
 
 const log = createComponentLogger('OperatorSurface');
 const DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS = 15_000;
@@ -52,6 +54,8 @@ async function main(): Promise<void> {
     : undefined;
   let fleetControlPlane: FleetGardenControlPlane | undefined;
   let fleetDirectDatabase: FleetGardenDirectDatabase | undefined;
+  let fleetTransport: FleetGardenAdminTransportProxy | undefined;
+  let fleetModelUsage: FleetModelUsageService | undefined;
   if (config.multiCompanion === true) {
     if (!config.companionFleet || !config.fleetAuthVerifier) {
       throw new Error(
@@ -68,6 +72,8 @@ async function main(): Promise<void> {
       ),
       replay: new AtomicRequestCapabilityReplayPort(),
     });
+    fleetTransport = new FleetGardenAdminTransportProxy(registry);
+    fleetModelUsage = new FleetModelUsageService({ registry, transport: fleetTransport });
     fleetDirectDatabase = new FleetGardenDirectDatabase({
       config,
       companionIds: config.companionFleet.companions.map(companion => companion.companionId),
@@ -85,7 +91,7 @@ async function main(): Promise<void> {
     allowInsecureWithoutToken: isExplicitTrue(process.env.ADMIN_ALLOW_INSECURE),
     config,
     ...(fleetControlPlane
-      ? { fleetControlPlane, fleetDirectDatabase }
+      ? { fleetControlPlane, fleetDirectDatabase, fleetTransport, fleetModelUsage }
       : { transportEndpoint: resolveAdminTransportClientEndpoint(process.env) }),
     ...(fleetSsoTls ? { fleetSsoTls } : {}),
     ...(operatorConfirmationBaseUrl

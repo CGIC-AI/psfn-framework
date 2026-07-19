@@ -37,6 +37,9 @@ import { ADMIN_DYNAMIC_JSON_HEADERS, toSanitizedMessage } from './shared.js';
 import type { AdminApiRoute, AdminBodyReader } from './types.js';
 import { parseModelUsageQuery } from './model-usage-query.js';
 import { parseChargeCostQuery } from './charge-cost-query.js';
+import { createCompanionId } from '../../../shared/routing/companion-id.js';
+import { SingleCompanionFleetModelUsageService } from '../services/fleet-model-usage-service.js';
+import { handleFleetModelUsageRoute } from './fleet-model-usage-routes.js';
 
 const AUDIT_HISTORY_UNAVAILABLE_ERROR = 'Audit history backend unavailable';
 const CHARGE_LEDGER_UNAVAILABLE_ERROR = 'Charge ledger backend unavailable';
@@ -212,6 +215,12 @@ export function buildAdminOverviewRoutes(options: {
     actionPipeService,
     withBody,
   } = options;
+  const singleCompanionFleetModelUsage = modelUsageService && config.companionId
+    ? new SingleCompanionFleetModelUsageService({
+        companionId: createCompanionId(config.companionId),
+        modelUsage: modelUsageService,
+      })
+    : null;
 
   const handleObserverEvalError = (
     res: ServerResponse,
@@ -346,7 +355,7 @@ export function buildAdminOverviewRoutes(options: {
           sendJson(
             res,
             400,
-            { error: 'Invalid costWindow query parameter. Expected today, week, or month.' },
+            { error: 'Invalid costWindow query parameter. Expected today, week, month, or quarter.' },
             ADMIN_DYNAMIC_JSON_HEADERS,
           );
           return;
@@ -572,6 +581,17 @@ export function buildAdminOverviewRoutes(options: {
             error: toSanitizedMessage(error, 'Failed to load model usage telemetry'),
           }),
         );
+      },
+    },
+    {
+      method: 'GET',
+      match: exactPath('/api/admin/fleet-model-usage'),
+      handle: (req, res) => {
+        if (!singleCompanionFleetModelUsage) {
+          sendJson(res, 503, { error: MODEL_USAGE_UNAVAILABLE_ERROR });
+          return;
+        }
+        handleFleetModelUsageRoute(req, res, singleCompanionFleetModelUsage);
       },
     },
     {

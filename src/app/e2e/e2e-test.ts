@@ -9,13 +9,12 @@
 
 import '../../shared/utils/load-dotenv.js';
 import { join } from 'node:path';
-import { copyFileSync, existsSync, mkdirSync } from 'node:fs';
+import { copyFileSync, mkdirSync } from 'node:fs';
 import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
 import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import {
   COMPANIONS_SEED_FILE_NAME,
   companionsFilePath,
-  isMultiCompanionEnabled,
   resolveCompanionFleet,
 } from '../../system/config/companions-config.js';
 import { createPostgresPool, ensurePostgresSchemaExists } from '../../persistence/postgres.js';
@@ -457,31 +456,28 @@ async function main(): Promise<void> {
   // No-op in single-companion runs: skipped and logged, leaving existing e2e
   // behavior untouched. Runs only under PSFN_MULTI_COMPANION=1, exercising
   // fleet resolution and per-companion + shared Postgres schema provisioning.
-  section('Test 11: Multi-Companion Fleet (flag-gated)');
+  section('Test 11: Multi-Companion Fleet resolution');
 
-  if (!isMultiCompanionEnabled(process.env)) {
-    console.log('  ⊘ Skipped — PSFN_MULTI_COMPANION not enabled (single-companion run untouched)');
-  } else {
+  {
     try {
-      // The isolated harness ships no fleet manifest; seed one from the
-      // canonical seed so the section exercises real resolution. Guarded by the
-      // explicit flag, so single-companion e2e never reaches this write.
+      // The harness boots as a one-entry fleet (single-companion). Overwrite the
+      // manifest with the canonical multi-entry seed and resolve it directly to
+      // exercise multi-companion resolution (schema uniqueness, per-companion
+      // roots). This only feeds the in-process resolution check below; the
+      // running runtime keeps its already-loaded single-companion config.
       const manifestPath = companionsFilePath(runtime.systemDataDir);
-      if (!existsSync(manifestPath)) {
-        copyFileSync(join(runtime.seedDir, COMPANIONS_SEED_FILE_NAME), manifestPath);
-        console.log(`  ℹ Seeded fleet manifest from ${COMPANIONS_SEED_FILE_NAME}`);
-      }
+      copyFileSync(join(runtime.seedDir, COMPANIONS_SEED_FILE_NAME), manifestPath);
+      console.log(`  ℹ Seeded multi-entry fleet manifest from ${COMPANIONS_SEED_FILE_NAME}`);
 
       const fleet = resolveCompanionFleet({
         dataDir: runtime.systemDataDir,
-        multiCompanion: true,
         seedDir: runtime.seedDir,
       });
-      assert(fleet !== undefined && fleet.companions.length >= 1,
-        'Fleet resolves to at least one companion',
-        fleet ? `${fleet.companions.length} companion(s)` : 'resolved undefined');
+      assert(fleet.companions.length >= 2,
+        'Multi-entry fleet resolves to more than one companion',
+        `${fleet.companions.length} companion(s)`);
 
-      if (fleet) {
+      {
         const summary = summarizeCompanionFleet(fleet);
         assert(summary.schemas.length === summary.companionCount,
           `Every companion carries a Postgres schema (${summary.schemas.length})`);

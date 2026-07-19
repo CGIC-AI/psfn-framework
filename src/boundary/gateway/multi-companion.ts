@@ -7,7 +7,6 @@
 import type { ChannelType } from '../../shared/contracts/runtime.js';
 import type { RuntimeChannelsConfig } from '../../channels/backplane/config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { MULTI_COMPANION_ENV_VAR } from '../../system/config/companions-config.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import type { SatelliteRegistryConfig } from '../../shared/contracts/satellite-registry.js';
 
@@ -66,11 +65,12 @@ export function resolveGatewaySurfaceForChannelType(
 /**
  * Build the gateway's multi-companion routing config.
  *
- * The flag authority is the canonical config resolution: `loadConfig()` sets
- * `config.multiCompanion` via `isMultiCompanionEnabled` (companions-config.ts,
- * the `PSFN_MULTI_COMPANION` / companions.json owner-file surface from the
- * config-scoping workstream). This module only derives the gateway's
- * surface→companion routing table from channels.json on top of that flag.
+ * The topology authority is the canonical config resolution: `loadConfig()`
+ * derives `config.multiCompanion` from the mandatory companions.json manifest
+ * (multi-companion tenancy when the manifest enumerates more than one
+ * companion; a one-entry manifest is the single-companion shape). This module
+ * only derives the gateway's surface→companion routing table from channels.json
+ * on top of that topology.
  */
 export function resolveGatewayMultiCompanionConfig(
   config: Pick<SubstrateConfig, 'multiCompanion' | 'companionFleet'>,
@@ -104,17 +104,17 @@ export function resolveGatewayMultiCompanionConfig(
   const routedSurfaces = Object.keys(channelRouting);
   if (!enabled && routedSurfaces.length > 0) {
     throw new Error(
-      `channels.json declares companionId routing for [${routedSurfaces.join(', ')}] but `
-      + `${MULTI_COMPANION_ENV_VAR} is not enabled. Enable the flag or remove the companionId `
-      + 'fields — single-companion mode must not silently ignore routing config.',
+      `channels.json declares companionId routing for [${routedSurfaces.join(', ')}] but this is a `
+      + 'single-companion (one-entry companions.json) deployment. Add the companion to companions.json '
+      + 'or remove the companionId fields — single-companion mode must not silently ignore routing config.',
     );
   }
   const routedAccountIds = Object.keys(discordAccounts);
   if (!enabled && routedAccountIds.length > 0) {
     throw new Error(
-      `channels.json declares discord.accounts [${routedAccountIds.join(', ')}] but `
-      + `${MULTI_COMPANION_ENV_VAR} is not enabled. Enable the flag or remove the accounts `
-      + 'section — single-companion mode must not silently ignore per-companion bot identities.',
+      `channels.json declares discord.accounts [${routedAccountIds.join(', ')}] but this is a `
+      + 'single-companion (one-entry companions.json) deployment. Add the companions to companions.json '
+      + 'or remove the accounts section — single-companion mode must not silently ignore per-companion bot identities.',
     );
   }
 
@@ -125,8 +125,9 @@ export function resolveGatewayMultiCompanionConfig(
     throw new Error(
       `satellites.json declares companionId routing for [${companionBoundSatellites
         .map(satellite => satellite.satelliteId)
-        .join(', ')}] but ${MULTI_COMPANION_ENV_VAR} is not enabled. Enable the flag or remove the `
-      + 'companionId fields — single-companion mode must not silently ignore satellite ownership.',
+        .join(', ')}] but this is a single-companion (one-entry companions.json) deployment. Add the `
+      + 'companions to companions.json or remove the companionId fields — single-companion mode must '
+      + 'not silently ignore satellite ownership.',
     );
   }
 

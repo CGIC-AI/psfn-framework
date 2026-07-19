@@ -4,7 +4,6 @@ import { loadRequiredJson } from './load-or-seed.js';
 import { assertNoUnknownKeys } from './validators.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
-import { parseBooleanEnv } from '../../shared/utils/env.js';
 import { isStrictSubpath } from '../../persistence/layout.js';
 import {
   createCompanionId,
@@ -19,15 +18,6 @@ import {
 
 export const COMPANIONS_FILE_NAME = 'companions.json';
 export const COMPANIONS_SEED_FILE_NAME = 'companions.seed.json';
-
-/**
- * Env flag that opts a deployment into the multi-companion substrate topology.
- *
- * Process-wiring / topology-selection scope (like `PSFN_RUNTIME_LAYOUT_MODE`):
- * it selects the shape of the runtime, not a mutable runtime setting. The fleet
- * itself is enumerated by the {@link COMPANIONS_FILE_NAME} owner file.
- */
-export const MULTI_COMPANION_ENV_VAR = 'PSFN_MULTI_COMPANION';
 
 const COMPANIONS_ERROR_PREFIX = 'Invalid companions config';
 
@@ -119,7 +109,6 @@ export interface CompanionsConfigLoadOptions {
 
 export interface ResolveCompanionFleetOptions {
   dataDir: string;
-  multiCompanion: boolean;
   seedDir?: string;
 }
 
@@ -332,61 +321,27 @@ export function companionsFileExists(dataDir: string): boolean {
 }
 
 /**
- * Canonical accessor for the multi-companion topology flag.
+ * Resolve the companion fleet. The fleet manifest is mandatory: every PSFN
+ * deployment is a fleet of one or more companions, so there is no flag-gated
+ * single-companion topology and no silent fallback.
  *
- * Fail-closed: an unset/empty value means single-companion (default) topology;
- * an explicitly-set but unparseable value throws rather than silently defaulting
- * off, since this selects a security-sensitive tenancy boundary.
- */
-export function isMultiCompanionEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = env[MULTI_COMPANION_ENV_VAR];
-  const normalized = raw?.trim();
-  if (!normalized) {
-    return false;
-  }
-  const parsed = parseBooleanEnv(normalized);
-  if (parsed === undefined) {
-    throw new Error(
-      `Invalid ${MULTI_COMPANION_ENV_VAR}=${JSON.stringify(raw)}. `
-      + 'Expected a boolean flag (1/0, true/false, yes/no, on/off).',
-    );
-  }
-  return parsed;
-}
-
-/**
- * Resolve the companion fleet, failing closed in both directions:
- *
- * - flag on  + companions.json missing/invalid => refuse to start
- * - flag off + companions.json present         => refuse to start
- *
- * Returns the validated fleet when multi-companion is enabled, or `undefined`
- * for the default single-companion topology.
+ * Fail-closed: a missing or invalid {@link COMPANIONS_FILE_NAME} refuses to
+ * start with an actionable error. A one-entry manifest is the canonical
+ * single-companion shape ("a fleet of one").
  */
 export function resolveCompanionFleet(
   options: ResolveCompanionFleetOptions,
-): CompanionsFleetConfig | undefined {
-  const present = companionsFileExists(options.dataDir);
-  const path = companionsFilePath(options.dataDir);
-
-  if (options.multiCompanion) {
-    if (!present) {
-      throw new Error(
-        `${MULTI_COMPANION_ENV_VAR} is enabled but the fleet manifest is missing at ${path}. `
-        + 'Multi-companion mode requires a companions.json enumerating the fleet.',
-      );
-    }
-    return loadCompanionsConfig(options.dataDir, { seedDir: options.seedDir });
-  }
-
-  if (present) {
+): CompanionsFleetConfig {
+  if (!companionsFileExists(options.dataDir)) {
+    const path = companionsFilePath(options.dataDir);
     throw new Error(
-      `A fleet manifest is present at ${path} but ${MULTI_COMPANION_ENV_VAR} is not enabled. `
-      + 'Enable multi-companion mode or remove companions.json (owner-file strictness refuses to '
-      + 'ignore a fleet manifest in single-companion topology).',
+      `The fleet manifest is required but missing at ${path}. Every PSFN deployment is a fleet `
+      + `of one or more companions; create ${COMPANIONS_FILE_NAME} enumerating at least one `
+      + `companion (a single-companion deployment is a one-entry fleet). See ${COMPANIONS_SEED_FILE_NAME} `
+      + 'for the template.',
     );
   }
-  return undefined;
+  return loadCompanionsConfig(options.dataDir, { seedDir: options.seedDir });
 }
 
 function resolveFleetPath(

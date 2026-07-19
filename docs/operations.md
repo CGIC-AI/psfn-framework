@@ -31,19 +31,20 @@ npm run agent:docker:continuous # Continuous/dev profile (isolated internal netw
 
 ## Multi-Companion Fleet Operations
 
-Multi-companion is an opt-in topology: N agent processes behind one gateway. It
-is off by default and byte-identical to single-companion when off. The full
-model is in [`docs/multi-companion.md`](./multi-companion.md); this section is
-the operator quick reference. Enabling it requires `PSFN_MULTI_COMPANION=1` in
-`.env`, `PSFN_FLEET_AUTH=1`, and a system-owned `companions.json` fleet manifest (seed
-`config/companions.seed.json`). Both mismatches fail closed at startup: flag on
-with no manifest refuses to start; a manifest present with the flag off refuses
-to start.
+Multi-companion is a topology derived from the mandatory `companions.json` fleet
+manifest: N agent processes behind one gateway when the manifest has more than
+one entry. A one-entry manifest is a single-companion deployment and is
+byte-identical to the old single-companion behavior. The full model is in
+[`docs/multi-companion.md`](./multi-companion.md); this section is the operator
+quick reference. The manifest is always required (seed
+`config/companions.seed.json`) and fails closed at startup if missing or invalid;
+there is no `PSFN_MULTI_COMPANION` flag (retired). Multi-companion additionally
+requires `PSFN_FLEET_AUTH=1`.
 
 ### Supervisor launcher
 
 `npm run split` (`scripts/start-gateway-agent.sh`) resolves the fleet and, when
-multi-companion is enabled, enters supervisor mode: it spawns one agent process
+the manifest enumerates more than one companion, enters supervisor mode: it spawns one agent process
 per companion and exactly one fleet Garden process on the normal fleet-level
 `ADMIN_PORT`. `gardenPort` is retired from `companions.json`; any remaining
 entry fails validation instead of activating a compatibility path. Preview the

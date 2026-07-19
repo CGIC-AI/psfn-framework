@@ -47,6 +47,8 @@ describe('startup owner-file loaders', () => {
     'backup.json',
     'skills.json',
     'intake-policy.json',
+    // The companions.json fleet manifest is a mandatory system owner file.
+    'companions.json',
   ] as const;
 
   afterEach(() => {

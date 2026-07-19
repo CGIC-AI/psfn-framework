@@ -363,7 +363,6 @@ describe('system-owner fleet migration', () => {
         companionDataDir: companion.companionDataDir,
         seedDir,
         defaultContextWindow: 128_000,
-        multiCompanion: true,
       })).toEqual({ ok: true, errors: [] });
     }
 

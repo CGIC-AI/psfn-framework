@@ -150,8 +150,11 @@ append_agent_env() {
 
 append_operator_env() {
   local name="$1"
+  # Only the multi-companion fleet operator receives the direct database
+  # credential; a single-companion (one-entry fleet) operator does not.
+  # SUPERVISOR_MODE is resolved from companions.json before any operator starts.
   if [ "${name}" = "POSTGRES_DATABASE_URL" ] \
-    && ! psfn_is_truthy_env_value "${PSFN_MULTI_COMPANION:-}"; then
+    && [ "${SUPERVISOR_MODE}" -ne 1 ]; then
     return
   fi
   if psfn_is_truthy_env_value "${PSFN_FLEET_AUTH:-}"; then
@@ -228,7 +231,6 @@ build_agent_env() {
     PSFN_FLEET_AUTH \
     PSFN_LIFECYCLE_RESTART_EXIT_CODE \
     PSFN_LOGS_DIR \
-    PSFN_MULTI_COMPANION \
     PSFN_REDIS_PASSWORD \
     PSFN_REDIS_TLS_CA_CERT_PATH \
     PSFN_REDIS_TLS_REJECT_UNAUTHORIZED \
@@ -310,7 +312,6 @@ build_operator_env() {
     POSTGRES_DATABASE_URL \
     PSFN_FLEET_AUTH \
     PSFN_LOGS_DIR \
-    PSFN_MULTI_COMPANION \
     PSFN_RUNTIME_LAYOUT_MODE \
     PSFN_RUNTIME_MODE \
     PSFN_RUNTIME_ROOT \
@@ -583,18 +584,15 @@ start_operator() {
   OPERATOR_PID="${LAUNCHED_PID}"
 }
 
-# Resolve the multi-companion fleet via the canonical TS helper. The helper owns
-# all flag parsing, path resolution, and validation (no duplicate logic here).
-# Empty stdout => single-companion topology (SUPERVISOR_MODE stays 0). Non-empty
-# stdout => one tab-delimited companion record per line. A non-zero helper exit
-# fails the launcher closed before anything is started.
+# Resolve the fleet topology via the canonical TS helper. The companions.json
+# manifest is mandatory (every deployment is a fleet of one or more companions),
+# so the helper is always invoked and owns all path resolution and validation
+# (no duplicate logic here). A missing or invalid manifest makes the helper exit
+# non-zero, failing the launcher closed before anything is started.
+# Empty stdout => single-companion topology (a one-entry fleet; SUPERVISOR_MODE
+# stays 0). Non-empty stdout => one tab-delimited companion record per line for
+# a multi-entry fleet.
 resolve_companion_fleet() {
-  # Byte-identical single-companion path: when the topology flag is not present
-  # at all, never invoke the helper.
-  if [ -z "${PSFN_MULTI_COMPANION:-}" ]; then
-    return 0
-  fi
-
   local plan_output=""
   if [ -x "./node_modules/.bin/tsx" ]; then
     if ! plan_output="$(./node_modules/.bin/tsx scripts/resolve-companion-fleet.ts)"; then
@@ -609,7 +607,7 @@ resolve_companion_fleet() {
   fi
 
   if [ -z "${plan_output}" ]; then
-    # Flag parsed to off (e.g. PSFN_MULTI_COMPANION=0) with no fleet manifest.
+    # One-entry fleet: single-companion topology.
     return 0
   fi
 

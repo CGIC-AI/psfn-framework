@@ -27,14 +27,16 @@ import {
   formatExistingFactsSection,
 } from './llm-pass.js';
 import { normalizeAndMergeExtractedFacts } from './fact-normalization.js';
+import {
+  buildAcceptedFactCandidates,
+  type RoutedAcceptedFactCandidate,
+} from './fact-acceptance.js';
+import { createEmptyRejectionBreakdown } from './rejection-breakdown.js';
 import type { ExtractionParticipantNames } from './naming.js';
-import { normalizeExperientialSelfDirectedFact } from './self-directed.js';
 import {
   buildSpeakerRoutingContext,
-  resolveFactRouting,
   type ExtractionFactRouting,
   type ExtractionSourceSpeaker,
-  type FactRoutingDecision,
 } from './speaker-routing.js';
 import type { GroupMemoryWriteCapSettings } from '../../../system/config/group-memory-config.js';
 import {
@@ -43,18 +45,9 @@ import {
 import {
   buildExtractionSourceRef,
   compareAcceptedFactCandidates,
-  computeFactValueScore,
-  evaluateFactAcceptance,
   evaluateExtractionPreLlmGate,
 } from './signals.js';
-import { evaluateCogSecMemoryCandidacy } from '../../../core/cogsec/memory-candidacy.js';
-import {
-  INTAKE_SCREENING_METADATA_KEY,
-  parseIntakeScreeningMetadata,
-} from '../../../core/session/intake-screening-metadata.js';
-import type { IntakeEnvelopeSnapshot } from '../../../shared/contracts/intake-envelope.js';
 import type {
-  AcceptedFactCandidate,
   AcceptedFactWrite,
   ExtractionEndTelemetry,
   ExtractionGateConfig,
@@ -71,28 +64,12 @@ export { ExtractionIntegrityError, type ExtractionIntegrityErrorContext } from '
 
 const log = createComponentLogger('Extraction');
 
-type RoutedAcceptedFactCandidate = AcceptedFactCandidate & {
-  routing: Extract<FactRoutingDecision, { status: 'route' }>;
-};
-
 function extractionRejectionReasonForWritePolicy(
   error: MemoryWritePolicyError,
 ): ExtractionRejectionReason {
   return error.reason === 'novelty_below_threshold'
     ? 'low_novelty'
     : 'low_importance';
-}
-
-function createEmptyRejectionBreakdown(): Record<ExtractionRejectionReason, number> {
-  return {
-    low_importance: 0,
-    low_confidence: 0,
-    low_novelty: 0,
-    low_signal: 0,
-    cogsec_risk: 0,
-    ambiguous_speaker: 0,
-    write_cap: 0,
-  };
 }
 
 function requireExperientialCompanionName(value: string | undefined): string {
@@ -131,73 +108,6 @@ export function resolveExtractionChannelVisibility(
     }
   }
   return resolved ?? classifyChannelDisclosure(channelId).channelPrivacy;
-}
-
-// ── Intake sink-gate index (htm9.3) ──
-//
-// Maps session-entry ids to the intake-envelope snapshots persisted on their
-// `intakeScreening` metadata, so each extracted fact can be gated at the
-// memory_write sink against the envelopes covering its SOURCE entries
-// (fact.attribution.sourceMessageIds) instead of re-deriving risk. Malformed
-// metadata is unknowable screening state: it is tracked and fails closed in
-// enforce mode.
-
-interface ExtractionIntakeGateIndex {
-  envelopesByEntryId: Map<number, readonly IntakeEnvelopeSnapshot[]>;
-  malformedEntryIds: Set<number>;
-  allEnvelopes: IntakeEnvelopeSnapshot[];
-}
-
-function buildExtractionIntakeGateIndex(
-  entries: readonly SessionEntry[],
-  channelId: string,
-): ExtractionIntakeGateIndex {
-  const index: ExtractionIntakeGateIndex = {
-    envelopesByEntryId: new Map(),
-    malformedEntryIds: new Set(),
-    allEnvelopes: [],
-  };
-  const marker = `"${INTAKE_SCREENING_METADATA_KEY}"`;
-  for (const entry of entries) {
-    if (!entry.metadata || !entry.metadata.includes(marker)) continue;
-    try {
-      const screening = parseIntakeScreeningMetadata(entry.metadata);
-      if (!screening) continue;
-      index.envelopesByEntryId.set(entry.id, screening.envelopes);
-      index.allEnvelopes.push(...screening.envelopes);
-    } catch (error) {
-      log.error('Malformed intake screening metadata on extraction source entry; treated as gate-denied in enforce mode', {
-        channelId,
-        entryId: entry.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      index.malformedEntryIds.add(entry.id);
-    }
-  }
-  return index;
-}
-
-function resolveFactIntakeEnvelopes(
-  index: ExtractionIntakeGateIndex,
-  fact: ExtractedFact,
-): { envelopes: readonly IntakeEnvelopeSnapshot[]; coversMalformedEntry: boolean } {
-  const sourceIds = fact.attribution?.sourceMessageIds;
-  if (sourceIds && sourceIds.length > 0) {
-    const envelopes: IntakeEnvelopeSnapshot[] = [];
-    let coversMalformedEntry = false;
-    for (const id of sourceIds) {
-      envelopes.push(...(index.envelopesByEntryId.get(id) ?? []));
-      if (index.malformedEntryIds.has(id)) coversMalformedEntry = true;
-    }
-    return { envelopes, coversMalformedEntry };
-  }
-  // An unattributed fact may derive from any entry in the window: it inherits
-  // every envelope in the window (fail closed — derivation never launders
-  // provenance away).
-  return {
-    envelopes: index.allEnvelopes,
-    coversMalformedEntry: index.malformedEntryIds.size > 0,
-  };
 }
 
 export interface ExtractionRunOptions {
@@ -457,139 +367,28 @@ export async function runExtractionOrchestration(
       return emptyExtractionOutputs();
     }
 
-    const rejectionBreakdown: Record<ExtractionRejectionReason, number> = createEmptyRejectionBreakdown();
-    rejectionBreakdown.low_signal = participantNameHygieneRejectedCount;
-
-    let ambiguousSpeakerSkippedCount = 0;
-    const ambiguousSpeakerSkipReasons: Record<string, number> = {};
-    const acceptedCandidates: RoutedAcceptedFactCandidate[] = [];
-    // htm9.3: memory_write sink gate over the upstream intake envelopes.
-    const intakeSinkGate = options.sessionManager.intakeSinkGate;
-    const intakeGateIndex = intakeSinkGate
-      ? buildExtractionIntakeGateIndex(recentEntries, options.channelId)
-      : null;
-    for (const [index, fact] of facts.entries()) {
-      const decision = evaluateFactAcceptance(fact, noveltyCorpus, options.gateConfig);
-      if (!decision.accepted) {
-        if (decision.reason) rejectionBreakdown[decision.reason]++;
-        if (options.telemetryEnabled) {
-          log.debug('Rejected extracted fact', {
-            channelId: options.channelId,
-            reason: decision.reason,
-            novelty: decision.novelty,
-            minNovelty: options.gateConfig.minNovelty,
-            importance: fact.importance,
-            minImportance: options.gateConfig.minImportance,
-            confidence: fact.confidence,
-            minConfidence: options.gateConfig.minConfidence,
-          });
-        }
-        continue;
-      }
-
-      let intakeGateDecision;
-      if (intakeSinkGate && intakeGateIndex) {
-        const factIntake = resolveFactIntakeEnvelopes(intakeGateIndex, fact);
-        if (factIntake.coversMalformedEntry && intakeSinkGate.mode === 'enforce') {
-          // Unknowable screening state on a source entry fails closed.
-          rejectionBreakdown.cogsec_risk++;
-          log.warn('Rejected extracted fact: source entry carries malformed intake screening metadata', {
-            channelId: options.channelId,
-            triggerReason: options.triggerReason,
-            factIndex: index,
-            factType: fact.type,
-          });
-          continue;
-        }
-        intakeGateDecision = intakeSinkGate.evaluate('memory_write', factIntake.envelopes, {
-          channelId: options.channelId,
-          triggerReason: options.triggerReason,
-          factIndex: index,
-          factType: fact.type,
-        });
-      }
-
-      const cogSecCandidacy = evaluateCogSecMemoryCandidacy({
-        text: fact.text,
-        type: fact.type,
-        tags: fact.tags,
-        ...(intakeGateDecision ? { intakeGateDecision } : {}),
-      });
-      if (cogSecCandidacy.disposition !== 'allow') {
-        rejectionBreakdown.cogsec_risk++;
-        if (options.telemetryEnabled) {
-          log.info('Rejected extracted fact by CogSec memory candidacy gate', {
-            channelId: options.channelId,
-            triggerReason: options.triggerReason,
-            factIndex: index,
-            factType: fact.type,
-            riskClass: cogSecCandidacy.riskClass,
-            disposition: cogSecCandidacy.disposition,
-            reasonCodes: cogSecCandidacy.reasonCodes,
-          });
-        }
-        continue;
-      }
-
-      let routing: FactRoutingDecision;
-      if (experientialCompanionName) {
-        const selfDirected = normalizeExperientialSelfDirectedFact({
-          fact,
-          entries: recentEntries,
-          companionName: experientialCompanionName,
-        });
-        if (!selfDirected.accepted) {
-          rejectionBreakdown.low_signal++;
-          continue;
-        }
-        routing = selfDirected.routing;
-      } else {
-        if (!speakerRouting) {
-          throw new Error('Speaker routing context is required for conversational extraction');
-        }
-        routing = resolveFactRouting(
-          fact,
-          speakerRouting,
-          canonicalContactId,
-          {
-            companionNames: [
-              ...new Set([
-                participantNames.companionName,
-                options.sessionManager.characterName,
-              ].filter((name): name is string => Boolean(name))),
-            ],
-          },
-        );
-      }
-      if (routing.status === 'skip') {
-        ambiguousSpeakerSkippedCount++;
-        ambiguousSpeakerSkipReasons[routing.reason] =
-          (ambiguousSpeakerSkipReasons[routing.reason] ?? 0) + 1;
-        rejectionBreakdown.ambiguous_speaker++;
-        if (options.telemetryEnabled) {
-          log.debug('Skipped extracted fact due to ambiguous group-room speaker ownership', {
-            channelId: options.channelId,
-            triggerReason: options.triggerReason,
-            factIndex: index,
-            factType: fact.type,
-            routingReason: routing.reason,
-            triggerContactId: canonicalContactId,
-            sourceSpeakerName: routing.sourceSpeakerName,
-            speakerCount: speakerRouting?.speakers.length ?? 0,
-          });
-        }
-        continue;
-      }
-
-      acceptedCandidates.push({
-        fact,
-        routing,
-        novelty: decision.novelty,
-        valueScore: computeFactValueScore(fact, decision.novelty),
-        index,
-      });
-      noveltyCorpus.push(fact.text);
-    }
+    const acceptance = buildAcceptedFactCandidates({
+      facts,
+      recentEntries,
+      existingMemoryTexts: noveltyCorpus,
+      gateConfig: options.gateConfig,
+      intakeSinkGate: options.sessionManager.intakeSinkGate,
+      experientialCompanionName,
+      speakerRouting,
+      canonicalContactId,
+      companionNames: [
+        ...new Set([
+          participantNames.companionName,
+          options.sessionManager.characterName,
+        ].filter((name): name is string => Boolean(name))),
+      ],
+      channelId: options.channelId,
+      triggerReason: options.triggerReason,
+      telemetryEnabled: options.telemetryEnabled,
+    });
+    const { acceptedCandidates, ambiguousSpeakerSkippedCount, ambiguousSpeakerSkipReasons } = acceptance;
+    const rejectionBreakdown = acceptance.rejectionBreakdown;
+    rejectionBreakdown.low_signal += participantNameHygieneRejectedCount;
 
     let selectedCandidates: RoutedAcceptedFactCandidate[];
     let writeCapSkips: GroupMemoryWriteCapSkip[] = [];

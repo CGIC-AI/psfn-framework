@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
+import type { AssistantMessage, ToolCall, ToolResultMessage } from '@mariozechner/pi-ai';
+import type { AgentMessage } from '../../boundary/pi-agent/index.js';
+import type { AgentLoopErrorEvent, ScheduledAgentEvent } from './agent-loop-events.js';
 import { agentLoopWithScheduler, resolveStreamResult } from './scheduled-agent-loop.js';
 import {
   AGENT_LOOP_ASSISTANT_STEP_CHECK_IN_AT,
@@ -376,5 +379,29 @@ describe('scheduled-agent-loop stream result contract', () => {
       && event.message?.role === 'assistant'
       && event.message?.errorMessage === 'agent_loop_step_limit_exceeded'
     ))).toBe(false);
+  });
+});
+
+describe('scheduled agent loop event typing', () => {
+  it('pins the ScheduledAgentEvent alphabet emitted by the loop stream', () => {
+    type LoopEvent = ReturnType<typeof agentLoopWithScheduler> extends AsyncIterable<infer TEvent>
+      ? TEvent
+      : never;
+    expectTypeOf<LoopEvent>().toEqualTypeOf<ScheduledAgentEvent>();
+    expectTypeOf<{ type: 'user_facing_boundary' }>().toExtend<ScheduledAgentEvent>();
+    expectTypeOf<AgentLoopErrorEvent>().toExtend<ScheduledAgentEvent>();
+    expectTypeOf<Extract<ScheduledAgentEvent, { type: 'turn_end' }>>().toEqualTypeOf<{
+      type: 'turn_end';
+      message: AgentMessage;
+      toolResults: ToolResultMessage[];
+    }>();
+  });
+
+  it('narrows assistant content to ToolCall structurally, without assertions', () => {
+    const narrowToolCalls = (content: AssistantMessage['content']) =>
+      content.filter((entry): entry is ToolCall => entry.type === 'toolCall');
+    expectTypeOf(narrowToolCalls).returns.toEqualTypeOf<ToolCall[]>();
+    expectTypeOf(narrowToolCalls).parameter(0)
+      .toEqualTypeOf<(AssistantMessage['content'][number])[]>();
   });
 });

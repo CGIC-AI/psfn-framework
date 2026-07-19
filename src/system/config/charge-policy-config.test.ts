@@ -543,6 +543,47 @@ describe('charge policy config', () => {
           },
         },
       })).toThrow('fatigue.socialRegulation contains unknown keys: dailyMessageQuota');
+
+      const { primary: _primary, ...missingPrimaryThreshold } =
+        defaultSeed.fatigue.humanAttention.trustThresholds;
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          humanAttention: {
+            ...defaultSeed.fatigue.humanAttention,
+            trustThresholds: missingPrimaryThreshold,
+          },
+        },
+      })).toThrow('fatigue.humanAttention.trustThresholds.primary');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          humanAttention: {
+            ...defaultSeed.fatigue.humanAttention,
+            trustThresholds: {
+              ...defaultSeed.fatigue.humanAttention.trustThresholds,
+              trusted: 2,
+            },
+          },
+        },
+      })).toThrow('humanAttention trust thresholds must increase');
+
+      expect(() => saveChargePolicyConfig(dataDir, {
+        ...defaultSeed,
+        fatigue: {
+          ...defaultSeed.fatigue,
+          humanAttention: {
+            ...defaultSeed.fatigue.humanAttention,
+            channelWeights: {
+              ...defaultSeed.fatigue.humanAttention.channelWeights,
+              directMention: 0,
+            },
+          },
+        },
+      })).toThrow('fatigue.humanAttention.channelWeights.directMention must be a finite number > 0');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

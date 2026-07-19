@@ -759,11 +759,11 @@ export class SubagentFaculty implements SubagentControlPort {
       && hasUsableCheckpoint;
     const status = result.outcome === 'completed'
       ? 'completed'
-      : result.outcome === 'cancelled'
-        ? (isPartial ? 'partial' : 'cancelled')
-        : result.outcome === 'budget_limited'
-          ? (isPartial ? 'partial' : 'failed')
-          : 'failed';
+      : result.outcome === 'blocked'
+        ? 'blocked'
+        : result.outcome === 'cancelled'
+          ? (isPartial ? 'partial' : 'cancelled')
+          : (isPartial ? 'partial' : 'failed');
     await this.emitHandoff({
       source: 'subagent',
       taskId: handle.subagentId,

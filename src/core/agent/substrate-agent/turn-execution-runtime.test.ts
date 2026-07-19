@@ -48,6 +48,7 @@ import {
   type FatigueBudgetPort,
 } from '../fatigue/fatigue-budget.js';
 import type { IcpFatigueRegulationReservationPort } from '../fatigue/regulation-reservation.js';
+import type { HumanAttentionPressurePort } from '../fatigue/human-attention-pressure.js';
 import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
 import { handleMessageForTurn } from './turn-execution-runtime.js';
 import { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
@@ -590,6 +591,7 @@ function createRuntime(params: {
   emotionSelfModelRuntimeOverrides?: Partial<TurnExecutionRuntime['emotionSelfModelRuntime']>;
   observerEvalSidecar?: ObserverEvalSidecarRuntime | null;
   fatigueBudget?: FatigueBudgetPort | null;
+  humanAttentionPressure?: HumanAttentionPressurePort | null;
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort | null;
   durableChargeRecorder?: TurnExecutionRuntime['durableChargeRecorder'];
   durableChargeProbe?: TurnExecutionRuntime['durableChargeProbe'];
@@ -616,6 +618,7 @@ function createRuntime(params: {
     durableChargeRecorder: params.durableChargeRecorder ?? vi.fn(async () => undefined),
     durableChargeProbe: params.durableChargeProbe ?? vi.fn(async () => 'absent'),
     fatigueBudget: params.fatigueBudget ?? null,
+    humanAttentionPressure: params.humanAttentionPressure ?? null,
     fatigueRegulationReservations: params.fatigueRegulationReservations ?? null,
     satellitePresence: createActiveEmanationSatellitePresencePort(),
     llmClient: {
@@ -667,7 +670,7 @@ function createRuntime(params: {
       modelRoster: {
         chat: { model: 'test-model', provider: 'test', maxTokens: 1024, contextWindow: 4096 },
       },
-      ...(params.fatigueBudget
+      ...(params.fatigueBudget || params.humanAttentionPressure
         ? {
             companionId: TEST_FLEET_COMPANION_ID,
             chargePolicy: makeChargePolicy(),
@@ -1462,6 +1465,63 @@ describe('handleMessageForTurn generated media delivery', () => {
     expect(response.attachments).toBeUndefined();
     expect(response.metadata.noReply).toEqual(noReply);
     expect(recordAssistantMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleMessageForTurn human attention pressure', () => {
+  it('injects an internal boundary alert without suppressing the human turn', async () => {
+    const buildContext = vi.fn(async (_channelId: string, fullPrompt: string) => ({
+      systemPrompt: fullPrompt,
+      messages: [],
+      manifest: makeContextManifestFixture(),
+    }));
+    const evaluate = vi.fn(() => ({
+      schemaVersion: 1 as const,
+      timestampMs: 1_000,
+      localCompanionId: TEST_FLEET_COMPANION_ID,
+      contactId: 'contact-human',
+      channelId: 'ch1',
+      trustLevel: 'public' as const,
+      relationshipType: 'stranger' as const,
+      channelContext: 'direct_mention' as const,
+      weight: 2,
+      pressureInWindow: 4,
+      threshold: 3,
+      decision: 'boundary_alert' as const,
+      reason: 'threshold_reached' as const,
+      suppressTurn: false as const,
+    }));
+    const runtime = createRuntime({
+      eventBus: new EventBus(),
+      sessionManager: {} as SessionManager,
+      buildContext,
+      scheduleAutoCompactionBetweenTurns: vi.fn(async () => undefined),
+      awaitPendingAutoCompaction: vi.fn(async () => undefined),
+      recordUserMessage: vi.fn(() => 1),
+      recordAssistantMessage: vi.fn(() => 2),
+      humanAttentionPressure: { evaluate },
+      resolveAuthorContext: vi.fn(() => humanAuthorContext({
+        trustLevel: 'public',
+        relationshipType: 'stranger',
+      })),
+    });
+
+    const response = await handleMessageForTurn(runtime, createMessage('human-pressure', {
+      isDirectMessage: false,
+      routing: { responseMode: 'respond' },
+    }));
+
+    expect(evaluate).toHaveBeenCalledWith(expect.objectContaining({
+      contactId: 'contact-human',
+      channelId: 'ch1',
+      trustLevel: 'public',
+      relationshipType: 'stranger',
+      channelContext: 'direct_mention',
+    }));
+    expect(buildContext.mock.calls[0]?.[1]).toContain('<human_attention_boundary_alert');
+    expect(buildContext.mock.calls[0]?.[1]).toContain('in your own voice');
+    expect(runtime.agent.prompt).toHaveBeenCalledOnce();
+    expect(response.content).toBe('assistant reply');
   });
 });
 

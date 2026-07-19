@@ -46,6 +46,7 @@ import {
   resolveCogSecEventsPath,
   resolveDriftReviewCardsPath,
   resolveFatigueLedgerPath,
+  resolveHumanAttentionLedgerPath,
   resolveIntakeQuarantinePath,
   resolveLegacyValuesJournalPath,
   resolveNorthStarPath,
@@ -60,6 +61,7 @@ import type { EventBus } from '../../shared/event-bus.js';
 import { emitGardenQueueChanged } from '../../shared/garden-queue-change.js';
 import { RunChargeLedger } from '../../shared/telemetry/charge-ledger.js';
 import { FatigueLedger } from '../../shared/telemetry/fatigue-ledger.js';
+import { HumanAttentionPressureLedger } from '../../core/agent/fatigue/human-attention-ledger.js';
 import type { ChannelGroupMemoryConfig } from '../../system/config/group-memory-config.js';
 import { createPostgresModelUsageStoreFromConfig } from '../../persistence/postgres/model-usage-store.js';
 import { createPostgresObserverEvalSidecarStore } from '../../core/eval/observer-sidecar/persistence.js';
@@ -190,6 +192,7 @@ export interface InProcessGardenAdminContractOptions {
   hubIdentityEnrollmentStore?: HubIdentityEnrollmentStorePort | null;
   /** Shared runtime charge ledger; supplying it avoids duplicate event subscribers. */
   chargeLedger?: RunChargeLedger;
+  humanAttentionLedger?: HumanAttentionPressureLedger;
   /** Runtime log directory for bounded diagnostics reads. Defaults to /app/logs when absent. */
   logsDir?: string;
   effectiveSchedulerConfig?: import('../../system/config/scheduler-config.js').SchedulerRuntimeConfig;
@@ -250,6 +253,8 @@ export function createInProcessGardenAdminContract(
   const chargeLedger = options.chargeLedger
     ?? new RunChargeLedger(resolveChargeLedgerPath(companionDataDir), options.eventBus);
   const fatigueLedger = new FatigueLedger(resolveFatigueLedgerPath(companionDataDir), options.eventBus);
+  const humanAttentionLedger = options.humanAttentionLedger
+    ?? new HumanAttentionPressureLedger(resolveHumanAttentionLedgerPath(companionDataDir));
   const modelUsageStore = createPostgresModelUsageStoreFromConfig(options.config);
   const auditOpaqueIdKeyring = requireAuditOpaqueIdKeyring(
     options.config.gatewaySessionIntegrityAuthToken,
@@ -420,7 +425,12 @@ export function createInProcessGardenAdminContract(
       companionDataDir,
     }),
     auditHistory,
-    charges: new AdminChargeLedgerDataService(chargeLedger, fatigueLedger, options.config.chargePolicy?.fatigue ?? null),
+    charges: new AdminChargeLedgerDataService(
+      chargeLedger,
+      fatigueLedger,
+      options.config.chargePolicy?.fatigue ?? null,
+      humanAttentionLedger,
+    ),
     chargeCosts: modelUsageStore && options.config.companionId
       ? new AdminChargeCostReconciliationDataService(
           chargeLedger,

@@ -5,6 +5,49 @@ import type {
   AdminActionPipeService,
   AdminActionPipeStatus,
 } from './types.js';
+import type { OutreachOutboxRecord } from '../../../core/intention/outreach-outbox.js';
+import type { AdminTaskLifecycleNotification } from './types/action-pipe.js';
+import {
+  isCompletionHandoffSource,
+  isCompletionHandoffStatus,
+} from '../../../shared/contracts/completion-handoff.js';
+
+function projectTaskLifecycleNotifications(
+  records: readonly OutreachOutboxRecord[],
+): AdminTaskLifecycleNotification[] {
+  const projected: AdminTaskLifecycleNotification[] = [];
+  const seenDedupeKeys = new Set<string>();
+  for (const record of records) {
+    const metadata = record.metadata;
+    if (
+      metadata?.kind !== 'task_lifecycle_notification'
+      || seenDedupeKeys.has(record.dedupeKey)
+      || typeof metadata.handoffId !== 'string'
+      || !isCompletionHandoffSource(metadata.source)
+      || !isCompletionHandoffStatus(metadata.lifecycleStatus)
+      || typeof metadata.taskLabel !== 'string'
+      || typeof metadata.notificationDisposition !== 'string'
+      || !['queued', 'sent', 'skipped', 'denied', 'failed']
+        .includes(metadata.notificationDisposition)
+    ) {
+      continue;
+    }
+    seenDedupeKeys.add(record.dedupeKey);
+    projected.push({
+      actionId: record.actionId,
+      handoffId: metadata.handoffId,
+      source: metadata.source,
+      lifecycleStatus: metadata.lifecycleStatus,
+      taskLabel: metadata.taskLabel,
+      notificationStatus:
+        metadata.notificationDisposition as AdminTaskLifecycleNotification['notificationStatus'],
+      recordedAt: record.recordedAt,
+      ...(record.reason ? { reason: record.reason } : {}),
+      ...(record.error && !record.reason ? { reason: record.error } : {}),
+    });
+  }
+  return projected;
+}
 
 export class AdminActionPipeDataService implements AdminActionPipeService {
   constructor(
@@ -17,11 +60,13 @@ export class AdminActionPipeDataService implements AdminActionPipeService {
     if (!this.outreachOutbox) {
       return status;
     }
+    const recentRecords = this.outreachOutbox.listRecent(25);
     return {
       ...status,
       outreachOutbox: {
-        recentRecords: this.outreachOutbox.listRecent(25),
+        recentRecords,
       },
+      taskLifecycleNotifications: projectTaskLifecycleNotifications(recentRecords),
     };
   }
 

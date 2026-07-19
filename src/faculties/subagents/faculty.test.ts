@@ -27,6 +27,7 @@ import { resolveAutonomousModelCallLane } from '../../primitives/llm/model-call-
 import { COMPANION_PRIVATE_BACKGROUND_PURPOSE } from '../../shared/contracts/runtime.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
 import { resetCompletionHandoffDedupeForTests } from '../../core/agent/completion-handoff.js';
+import type { CompletionHandoffRecord } from '../../shared/contracts/completion-handoff.js';
 import {
   withCapabilityRequirement,
   type CapabilityRequirementInput,
@@ -905,6 +906,10 @@ describe('SubagentFaculty', () => {
   // `blocked` outcome (never masquerading as completed) with a partial record.
   it('reports a blocked outcome with a partial record when execution throws', async () => {
     mockSubagentError = new Error('worker crashed');
+    const handoffs: Array<{ handoff: CompletionHandoffRecord }> = [];
+    eventBus.on('agent.completion_handoff', event => {
+      handoffs.push(event);
+    });
     const faculty = new SubagentFaculty({
       eventBus,
       llmProvider: mockLLM(),
@@ -920,6 +925,10 @@ describe('SubagentFaculty', () => {
       task: 'do work that fails',
       maxTurns: 3,
       workSpec: buildSubagentWorkSpec(),
+      sourceContext: {
+        channelId: 'api:parent',
+        requestId: 'msg-crasher',
+      },
     });
     const result = await faculty.wait(task.subagentId);
 
@@ -934,6 +943,8 @@ describe('SubagentFaculty', () => {
     });
     // No turns ran, so the full turn budget remains.
     expect(result.partial?.remainingBudget.remainingTurns).toBe(3);
+    expect(handoffs).toHaveLength(1);
+    expect(handoffs[0]?.handoff.status).toBe('blocked');
 
     // execute() surfaces the honest non-completed outcome as a throw.
     await expect(faculty.execute({

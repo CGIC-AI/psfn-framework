@@ -1,20 +1,36 @@
 export const COMPLETION_HANDOFF_SCHEMA_VERSION = 1;
 export const COMPLETION_HANDOFF_METADATA_TYPE = 'completion_handoff';
 
-export type CompletionHandoffSource =
-  | 'subagent'
-  | 'shard'
-  | 'post_turn_action'
-  | 'background_continuation'
-  | 'scheduled_loop';
+export const COMPLETION_HANDOFF_SOURCE_VALUES = [
+  'subagent',
+  'shard',
+  'post_turn_action',
+  'background_continuation',
+  'scheduled_loop',
+] as const;
 
-export type CompletionHandoffStatus =
-  | 'completed'
-  | 'blocked'
-  | 'failed'
-  | 'cancelled'
-  | 'partial'
-  | 'interrupted';
+export type CompletionHandoffSource = typeof COMPLETION_HANDOFF_SOURCE_VALUES[number];
+
+export const COMPLETION_HANDOFF_STATUS_VALUES = [
+  'completed',
+  'blocked',
+  'failed',
+  'cancelled',
+  'partial',
+  'interrupted',
+] as const;
+
+export type CompletionHandoffStatus = typeof COMPLETION_HANDOFF_STATUS_VALUES[number];
+
+export function isCompletionHandoffSource(value: unknown): value is CompletionHandoffSource {
+  return typeof value === 'string'
+    && COMPLETION_HANDOFF_SOURCE_VALUES.some(candidate => candidate === value);
+}
+
+export function isCompletionHandoffStatus(value: unknown): value is CompletionHandoffStatus {
+  return typeof value === 'string'
+    && COMPLETION_HANDOFF_STATUS_VALUES.some(candidate => candidate === value);
+}
 
 export interface CompletionHandoffRef {
   kind: string;

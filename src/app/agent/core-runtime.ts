@@ -188,6 +188,8 @@ export interface AgentCoreRuntime {
   sessionTailCache: SessionTailCachePort | null;
   fatigueBudget: FatigueBudgetComposition['fatigueBudget'];
   fatigueLedger: FatigueBudgetComposition['fatigueLedger'];
+  humanAttentionLedger: FatigueBudgetComposition['humanAttentionLedger'];
+  humanAttentionPressure: FatigueBudgetComposition['humanAttentionPressure'];
   fatigueRegulationReservations?: IcpFatigueRegulationReservationPort;
   toolConformanceRunner: ToolConformanceRunner;
   sharedWorldWikiCaretaker: SharedWorldWikiCaretakerService | null;
@@ -307,6 +309,7 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
       }),
     },
     fatigueBudget: fatigueRuntime.fatigueBudget,
+    humanAttentionPressure: fatigueRuntime.humanAttentionPressure,
     ...(fatigueRegulationReservations ? { fatigueRegulationReservations } : {}),
     emotionRuntime,
     observerEvalSidecar,
@@ -625,6 +628,8 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     sessionTailCache: sessionComposition.sessionTailCache,
     fatigueBudget: fatigueRuntime.fatigueBudget,
     fatigueLedger: fatigueRuntime.fatigueLedger,
+    humanAttentionLedger: fatigueRuntime.humanAttentionLedger,
+    humanAttentionPressure: fatigueRuntime.humanAttentionPressure,
     ...(fatigueRegulationReservations ? { fatigueRegulationReservations } : {}),
     toolConformanceRunner,
     sharedWorldWikiCaretaker: wikiRuntime.sharedWorldCaretaker,

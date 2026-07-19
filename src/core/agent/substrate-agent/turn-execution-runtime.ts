@@ -48,6 +48,10 @@ import {
   runWithCanaryContext,
 } from '../../cogsec/canary/canary-token.js';
 import {
+  DISCLOSURE_CLASSIFIER_VERSION,
+  buildGenerationDisclosureLineage,
+} from '../../cogsec/disclosure/index.js';
+import {
   mergeChargedImageDeliverableSummaries,
   readGeneratedImageSensitivityClassifications,
   summarizeChargedImageDeliverables,
@@ -1048,6 +1052,32 @@ export async function handleMessageForTurn(
     const artifactSensitivityClassification = classifyArtifactSensitivity(
       artifactSensitivitySources,
     );
+
+    // jp36.1.1.2: fold session-history + memory-retrieval admission into the
+    // outbound disclosure lineage for this generation context (bible §9.2). The
+    // destination-eligibility gate that consumes it at egress is jp36.1.3; here
+    // the lineage is accumulated from the real admitted sources and surfaced for
+    // audit, never used to alter this turn's behavior.
+    const generationDisclosureLineage = buildGenerationDisclosureLineage({
+      context: {
+        generationContextRef: `turn:${turnId}`,
+        classifierVersion: DISCLOSURE_CLASSIFIER_VERSION,
+        classifiedAt: new Date().toISOString(),
+      },
+      conversationScope,
+      memorySources: preTurnState.disclosureMemorySources,
+    });
+    log.debug('Disclosure lineage accumulated', {
+      turnId,
+      requestId,
+      generationContextRef: generationDisclosureLineage.generationContextRef,
+      classification: generationDisclosureLineage.classification,
+      effectiveSensitivity: generationDisclosureLineage.effectiveSensitivity,
+      sourceCount: generationDisclosureLineage.sourceCount,
+      hasUnclassifiedSource: generationDisclosureLineage.hasUnclassifiedSource,
+      permittedDestinationKinds: generationDisclosureLineage.permittedDestinations.map(constraint => constraint.kind),
+      subjectContactCount: generationDisclosureLineage.subjectContactIds.length,
+    });
     let responseAttachments = honorNoReply
       ? []
       : recoveredResponse?.attachments

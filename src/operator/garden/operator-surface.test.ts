@@ -31,6 +31,15 @@ import {
 import { compileGatewayGardenRequestTarget } from '../../boundary/fleet-auth/request-capability-target.js';
 import { buildGardenCapabilityHeaders } from './garden-admission.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
+import {
+  parseFleetModelUsageResourceQuery,
+  resolveFleetModelUsageInternalRequestTarget,
+} from '../../shared/telemetry/fleet-model-usage-request.js';
+import {
+  FLEET_MODEL_USAGE_INTERNAL_HEADER,
+  FLEET_MODEL_USAGE_PARENT_COMPANION_HEADER,
+  FLEET_MODEL_USAGE_PARENT_TARGET_HEADER,
+} from './transport-client.js';
 
 const GARDEN_SPIFFE_URI = 'spiffe://cluster.local/psfn/garden';
 const AGENT_SPIFFE_URI = 'spiffe://cluster.local/psfn/agent/test-companion';
@@ -945,6 +954,7 @@ function fleetOperatorHeaders(
   method: 'GET' | 'POST' | 'WS' = 'GET',
   body = Buffer.alloc(0),
   ttlSeconds = 30,
+  fleetCompanionIds?: readonly string[],
 ): Record<string, string> {
   const target = compileGatewayGardenRequestTarget({
     rawTarget,
@@ -954,6 +964,12 @@ function fleetOperatorHeaders(
   });
   const requestId = randomUUID();
   const decisionId = randomUUID();
+  const fleetModelUsageRequestTarget = fleetCompanionIds
+    ? resolveFleetModelUsageInternalRequestTarget(
+        parseFleetModelUsageResourceQuery(target.resource.query),
+        Date.parse(FLEET_AUTH_CONTEXT.resolvedAt),
+      )
+    : undefined;
   const token = createGatewayRequestCapabilitySigner({
     issuer: 'fleet-auth',
     kid: 'active',
@@ -963,7 +979,12 @@ function fleetOperatorHeaders(
     target,
     requestId,
     decisionId,
-    authContext: FLEET_AUTH_CONTEXT,
+    authContext: {
+      ...FLEET_AUTH_CONTEXT,
+      ...(fleetCompanionIds && fleetModelUsageRequestTarget
+        ? { fleetCompanionIds, fleetModelUsageRequestTarget }
+        : {}),
+    },
     versions: FLEET_VERSIONS,
   });
   return {
@@ -1556,6 +1577,69 @@ describe('fleet-principal Garden split transport', () => {
         tls,
       );
       expect(mtlsOnly.status).toBe(401);
+
+      const unsignedFleetRead = await requestTransportPort(
+        transportPort,
+        'GET',
+        '/api/admin/model-usage?range=custom&timezone=UTC&sinceMs=0&untilMs=3600000&bucket=hour&limit=1&topN=100&groupBy=model',
+        tls,
+        undefined,
+        {
+          [FLEET_MODEL_USAGE_INTERNAL_HEADER]: '1',
+          [FLEET_MODEL_USAGE_PARENT_COMPANION_HEADER]: FLEET_COMPANION_ID,
+          [FLEET_MODEL_USAGE_PARENT_TARGET_HEADER]: '/api/admin/fleet-model-usage?range=week',
+        },
+      );
+      expect(unsignedFleetRead.status).toBe(403);
+      expect(fleetHarness.services.modelUsage?.getModelUsageData).not.toHaveBeenCalled();
+
+      const substitutedFleetRead = await requestTransportPort(
+        transportPort,
+        'GET',
+        '/api/admin/model-usage?range=custom&timezone=UTC&sinceMs=0&untilMs=3600000&bucket=hour&limit=1&topN=100&groupBy=model',
+        tls,
+        undefined,
+        {
+          [FLEET_MODEL_USAGE_INTERNAL_HEADER]: '1',
+          [FLEET_MODEL_USAGE_PARENT_COMPANION_HEADER]: FLEET_COMPANION_ID,
+          [FLEET_MODEL_USAGE_PARENT_TARGET_HEADER]: '/api/admin/fleet-model-usage?range=week',
+          ...fleetOperatorHeaders(
+            '/api/admin/fleet-model-usage?range=week',
+            'GET',
+            Buffer.alloc(0),
+            30,
+            [FLEET_COMPANION_ID],
+          ),
+        },
+      );
+      expect(substitutedFleetRead.status).toBe(403);
+      expect(fleetHarness.services.modelUsage?.getModelUsageData).not.toHaveBeenCalled();
+
+      const authorizedChildTarget = resolveFleetModelUsageInternalRequestTarget(
+        { range: 'week' },
+        Date.parse(FLEET_AUTH_CONTEXT.resolvedAt),
+      );
+      const signedFleetRead = await requestTransportPort(
+        transportPort,
+        'GET',
+        authorizedChildTarget,
+        tls,
+        undefined,
+        {
+          [FLEET_MODEL_USAGE_INTERNAL_HEADER]: '1',
+          [FLEET_MODEL_USAGE_PARENT_COMPANION_HEADER]: FLEET_COMPANION_ID,
+          [FLEET_MODEL_USAGE_PARENT_TARGET_HEADER]: '/api/admin/fleet-model-usage?range=week',
+          ...fleetOperatorHeaders(
+            '/api/admin/fleet-model-usage?range=week',
+            'GET',
+            Buffer.alloc(0),
+            30,
+            [FLEET_COMPANION_ID],
+          ),
+        },
+      );
+      expect(signedFleetRead.status).toBe(200);
+      expect(fleetHarness.services.modelUsage?.getModelUsageData).toHaveBeenCalledOnce();
 
       const parentAtAgent = await requestTransportPort(
         transportPort,

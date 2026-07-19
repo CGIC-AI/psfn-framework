@@ -52,6 +52,7 @@ export const navGroups: NavGroup[] = [
     { id: 'models', path: '/models', defaultLabel: 'Models', icon: '\u{1F9EA}' },
     { id: 'analysis-workbench', path: '/analysis-workbench', defaultLabel: 'Analysis Workbench', icon: '\u{1F52C}' },
     { id: 'charge-budget', path: '/charge-budget', defaultLabel: 'Charge / Budget', icon: '\u{1F4B0}' },
+    { id: 'fleet-costs', path: '/fleet-costs', defaultLabel: 'Fleet Costs', icon: '\u{1F4B8}' },
     { id: 'tools', path: '/tools', defaultLabel: 'Tools', icon: '\u{1F527}' },
     { id: 'shards', path: '/shards', defaultLabel: 'Shards', icon: '\u{1F338}' },
     { id: 'skills', path: '/skills', defaultLabel: 'Skills', icon: '\u{2728}' },

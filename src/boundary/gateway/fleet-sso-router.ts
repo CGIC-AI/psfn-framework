@@ -48,9 +48,13 @@ import {
 } from '../../shared/contracts/privacy-break-glass.js';
 import { buildGardenCapabilityHeaders } from '../fleet-auth/garden-capability-context.js';
 import { createSpiffeCheckServerIdentity } from '../../shared/net/mtls.js';
-import type { CompanionId } from '../../shared/routing/companion-id.js';
+import { createCompanionId, type CompanionId } from '../../shared/routing/companion-id.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { timingSafeStringEqual } from '../../shared/utils/secret-compare.js';
+import {
+  parseFleetModelUsageResourceQuery,
+  resolveFleetModelUsageInternalRequestTarget,
+} from '../../shared/telemetry/fleet-model-usage-request.js';
 import {
   CompanionScopedGardenRouteError,
   FLEET_SSO_COMPANION_ROUTE_PREFIX,
@@ -733,6 +737,26 @@ export class GatewayFleetSsoRouter {
       }
     }
     const authContext = toRequestCapabilityAuthContext(context);
+    const fleetCompanionIds = target.method === 'GET'
+      && target.canonicalPath === '/api/admin/fleet-model-usage'
+      && target.action === 'models.read'
+      ? await this.resolveFleetModelUsageRoster(
+          input.sessionToken,
+          input.route.companionId,
+          context,
+        )
+      : undefined;
+    let fleetModelUsageRequestTarget: string | undefined;
+    if (fleetCompanionIds) {
+      try {
+        fleetModelUsageRequestTarget = resolveFleetModelUsageInternalRequestTarget(
+          parseFleetModelUsageResourceQuery(target.resource.query),
+          Date.parse(authContext.resolvedAt),
+        );
+      } catch {
+        throw new FleetSsoRequestError(400, 'Invalid fleet model usage query');
+      }
+    }
     const token = this.options.signer.signOperator({
       target,
       requestId,
@@ -742,7 +766,12 @@ export class GatewayFleetSsoRouter {
           ...authContext,
           sessionAssurance: isPrivacyConfirm ? 'break_glass' as const : 'webauthn_uv' as const,
         })
-        : authContext,
+        : Object.freeze({
+            ...authContext,
+            ...(fleetCompanionIds && fleetModelUsageRequestTarget
+              ? { fleetCompanionIds, fleetModelUsageRequestTarget }
+              : {}),
+          }),
       versions,
     });
     if (Buffer.byteLength(token, 'ascii') > MAX_CAPABILITY_HEADER_BYTES) {
@@ -763,6 +792,37 @@ export class GatewayFleetSsoRouter {
       throw new FleetSsoRequestError(404, 'Resource not found');
     }
     return { token, verified, context };
+  }
+
+  private async resolveFleetModelUsageRoster(
+    sessionToken: string,
+    selectedCompanionId: CompanionId,
+    selectedContext: FleetAuthorizationContext,
+  ): Promise<readonly string[]> {
+    const resolved = await Promise.all([...this.upstreams.keys()].map(async (companionId) => {
+      const typedCompanionId = createCompanionId(companionId);
+      if (typedCompanionId === selectedCompanionId) return typedCompanionId;
+      try {
+        const context = await this.options.broker.resolveAuthorizationContext({
+          sessionToken,
+          audience: 'fleet',
+          companionId: typedCompanionId,
+          action: 'models.read',
+          correlationId: randomUUID(),
+        });
+        assertAllowedContext(context, typedCompanionId, 'models.read');
+        if (context.principalId !== selectedContext.principalId
+          || context.session.recordId !== selectedContext.session.recordId) {
+          return null;
+        }
+        return typedCompanionId;
+      } catch {
+        return null;
+      }
+    }));
+    return Object.freeze(resolved.flatMap(companionId => (
+      companionId === null ? [] : [companionId]
+    )).sort());
   }
 
   private proxyHttp(

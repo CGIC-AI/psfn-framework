@@ -18,7 +18,14 @@ import type { GardenAdminDomainServices } from './admin-contract.js';
 import { AdminServerTelemetryTransport } from './server-telemetry-transport.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { HEALTH_PROBE_PATH } from './transport-client.js';
+import {
+  FLEET_MODEL_USAGE_INTERNAL_HEADER,
+  FLEET_MODEL_USAGE_PARENT_COMPANION_HEADER,
+  FLEET_MODEL_USAGE_PARENT_TARGET_HEADER,
+  HEALTH_PROBE_PATH,
+  isFleetModelUsageInternalRequestTarget,
+} from './transport-client.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
 import type { GardenAdminTransportServerEndpoint } from './transport-paths.js';
 import type {
   AdminAuditActionType,
@@ -35,6 +42,7 @@ import {
   admitFleetGardenRequest,
   readFleetGardenBody,
   resolveGardenAdmissionMode,
+  stripFleetCallerAuthority,
   type GardenAdmissionMode,
 } from './garden-admission.js';
 import {
@@ -369,11 +377,86 @@ export class GardenAdminTransportServer implements Lifecycle {
       return;
     }
 
+    const internalFleetModelUsage = req.headers[FLEET_MODEL_USAGE_INTERNAL_HEADER];
+    if (internalFleetModelUsage !== undefined) {
+      void this.handleFleetModelUsageRead(
+        req,
+        res,
+        requestPath,
+        req.url ?? '',
+        internalFleetModelUsage,
+      );
+      return;
+    }
+
     if (this.admission.kind === 'fleet-principal') {
       void this.handleFleetRequest(req, res);
       return;
     }
 
+    this.dispatchRequest(req, res, requestPath);
+  }
+
+  private async handleFleetModelUsageRead(
+    req: IncomingMessage,
+    res: ServerResponse,
+    requestPath: string,
+    requestTarget: string,
+    marker: string | string[],
+  ): Promise<void> {
+    const parentCompanion = req.headers[FLEET_MODEL_USAGE_PARENT_COMPANION_HEADER];
+    const parentTarget = req.headers[FLEET_MODEL_USAGE_PARENT_TARGET_HEADER];
+    delete req.headers[FLEET_MODEL_USAGE_INTERNAL_HEADER];
+    delete req.headers[FLEET_MODEL_USAGE_PARENT_COMPANION_HEADER];
+    delete req.headers[FLEET_MODEL_USAGE_PARENT_TARGET_HEADER];
+    if (this.admission.kind !== 'fleet-principal'
+      || marker !== '1'
+      || typeof parentCompanion !== 'string'
+      || typeof parentTarget !== 'string'
+      || req.method !== 'GET'
+      || requestPath !== '/api/admin/model-usage'
+      || !isFleetModelUsageInternalRequestTarget(requestTarget)
+      || !this.companionId) {
+      sendText(res, 403, 'Forbidden');
+      return;
+    }
+    let admitted: Awaited<ReturnType<typeof admitFleetGardenRequest>>;
+    try {
+      admitted = await admitFleetGardenRequest({
+        admission: {
+          ...this.admission,
+          audience: 'operator',
+          companionId: createCompanionId(parentCompanion),
+        },
+        rawTarget: parentTarget,
+        method: 'GET',
+        headers: req.headers,
+        body: Buffer.alloc(0),
+      });
+    } catch {
+      sendText(res, 403, 'Forbidden');
+      return;
+    }
+    const authorizedCompanionIds = admitted.decision === 'allow'
+      ? admitted.verified?.authContext.fleetCompanionIds
+      : undefined;
+    const authorizedRequestTarget = admitted.decision === 'allow'
+      ? admitted.verified?.authContext.fleetModelUsageRequestTarget
+      : undefined;
+    if (admitted.decision !== 'allow'
+      || admitted.target.canonicalPath !== '/api/admin/fleet-model-usage'
+      || admitted.target.method !== 'GET'
+      || admitted.target.action !== 'models.read'
+      || !authorizedCompanionIds?.includes(this.companionId)
+      || authorizedRequestTarget !== requestTarget) {
+      sendText(res, 403, 'Forbidden');
+      return;
+    }
+    stripFleetCallerAuthority(req.headers);
+    // The gateway-signed roster and exact child target authorize this read for
+    // the bound companion without granting an arbitrary aggregate time slice.
+    // Dispatch still uses the canonical per-companion model-usage service,
+    // preserving its aggregate/private-detail combination.
     this.dispatchRequest(req, res, requestPath);
   }
 

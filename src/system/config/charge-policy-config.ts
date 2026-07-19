@@ -28,6 +28,7 @@ import {
   type FatiguePolicyOverchargeConfig,
   type FatiguePolicyResponseBudget,
   type FatiguePolicyStateThresholds,
+  type FatigueRoomEpisodeCircuitBreakerConfig,
   type FatigueRoomEpisodePressureConfig,
   type FatigueSocialPotConfig,
   type IcpCostBreakerConfig,
@@ -493,6 +494,33 @@ function parseFatigueRoomEpisodePressureConfig(
   };
 }
 
+function parseFatigueRoomEpisodeCircuitBreakerConfig(
+  raw: unknown,
+  fieldPath: string,
+  wrapUpThreshold: number,
+): FatigueRoomEpisodeCircuitBreakerConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid charge policy: ${fieldPath} must be an object`);
+  }
+  assertNoUnknownKeys(raw, ['tripThreshold', 'resetThreshold'], fieldPath);
+  const tripThreshold = parsePositiveNumber(raw.tripThreshold, `${fieldPath}.tripThreshold`);
+  const resetThreshold = parsePositiveNumber(raw.resetThreshold, `${fieldPath}.resetThreshold`);
+  // Law 36 / charter §8.11: the breaker sits above ordinary healthy use — it may
+  // only trip PAST the wrap-up band, so graceful wrap-up is always invited first.
+  if (tripThreshold <= wrapUpThreshold) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.tripThreshold must be > roomEpisodePressure.wrapUpThreshold (${wrapUpThreshold})`,
+    );
+  }
+  // Hysteresis: reset strictly below trip so the breaker cannot flap on jitter.
+  if (resetThreshold >= tripThreshold) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.resetThreshold must be < ${fieldPath}.tripThreshold`,
+    );
+  }
+  return { tripThreshold, resetThreshold };
+}
+
 function parseFatigueSocialRegulationConfig(
   raw: unknown,
   fieldPath: string,
@@ -511,10 +539,16 @@ function parseFatigueSocialRegulationConfig(
     'unansweredPressureUnits',
     'continuationEvidence',
     'roomEpisodePressure',
+    'roomEpisodeCircuitBreaker',
   ], fieldPath);
   const roomEpisodePressure = parseFatigueRoomEpisodePressureConfig(
     raw.roomEpisodePressure,
     `${fieldPath}.roomEpisodePressure`,
+  );
+  const roomEpisodeCircuitBreaker = parseFatigueRoomEpisodeCircuitBreakerConfig(
+    raw.roomEpisodeCircuitBreaker,
+    `${fieldPath}.roomEpisodeCircuitBreaker`,
+    roomEpisodePressure.wrapUpThreshold,
   );
   const relationshipPressureHalfLifeMs = parsePositiveInteger(
     raw.relationshipPressureHalfLifeMs,
@@ -582,6 +616,7 @@ function parseFatigueSocialRegulationConfig(
       ),
     },
     roomEpisodePressure,
+    roomEpisodeCircuitBreaker,
   };
 }
 

@@ -112,3 +112,21 @@ export function resolveShardExceptionalAction(
     action,
   };
 }
+
+/**
+ * Non-throwing eligibility probe for the approval boundary: true only when the
+ * method/action pair is the trusted exceptional-action mapping above. Used to
+ * split shard-originated gated dispatches between the exact-once grant path
+ * and a fail-closed denial (a shard fence is never auto-cleared).
+ */
+export function isShardExceptionalAction(
+  methodInput: unknown,
+  actionInput: unknown,
+): boolean {
+  try {
+    resolveShardExceptionalAction(methodInput, actionInput);
+    return true;
+  } catch {
+    return false;
+  }
+}

@@ -445,6 +445,102 @@ describe('approval-bound shard request grants', () => {
     expect(h.service.listPendingConfirmations()).toHaveLength(0);
   });
 
+  it('denies a shard-originated gated method that is not an eligible exceptional action (never auto-clears)', async () => {
+    const { harness: h, workload } = createShardHarness('autonomous');
+    const handler = vi.fn(async () => ({ ok: true }));
+    const dispatch = h.service.gate({
+      method: 'fs.write',
+      handler,
+      paramsSummary: () => ({}),
+      authenticatedCompanionId: () => PARENT_A,
+      approvalAction: 'write file',
+      approvalScope: () => '/outside/todo.txt',
+      shardApprovalGrant: () => ({ workload }),
+    });
+
+    // fs.write outside the workspace is NEEDS_APPROVAL for a parent; with
+    // authenticated shard lineage on a non-eligible method it must deny —
+    // never auto-clear, never enqueue a grantless shard approval.
+    await expect(dispatch({ path: '/outside/todo.txt' })).rejects.toMatchObject({
+      code: GatewayErrors.POLICY_DENIED,
+    });
+    expect(handler).not.toHaveBeenCalled();
+    expect(h.service.listPendingConfirmations()).toHaveLength(0);
+  });
+
+  it('denies when the shard lineage resolver itself throws, even with no grant authority configured', async () => {
+    // No shardApprovalGrants wired at all — the fence must still hold.
+    const h = createHarness({ [PARENT_A]: 'Parent A' }, { capabilityTier: 'autonomous' });
+    const handler = vi.fn(async () => ({ ok: true }));
+    const dispatch = h.service.gate({
+      method: 'home_assistant.call_service',
+      handler,
+      paramsSummary: () => ({}),
+      authenticatedCompanionId: () => PARENT_A,
+      approvalAction: 'home_assistant.control',
+      approvalScope: () => 'site:test-zone/device:test-switch',
+      shardApprovalGrant: () => {
+        throw new Error('Shard-originated request denied: no live authenticated shard workload');
+      },
+    });
+
+    await expect(dispatch({ command: 'toggle' }))
+      .rejects.toThrow(/no live authenticated shard workload/);
+    expect(handler).not.toHaveBeenCalled();
+    expect(h.service.listPendingConfirmations()).toHaveLength(0);
+  });
+
+  it('propagates a terminal denial audit failure instead of silently completing (2h6q.3)', async () => {
+    const registry = new TestWorkloadRegistry();
+    let failTerminalAudit = true;
+    const auditOutcomes: string[] = [];
+    const grants = new ShardApprovalGrantAuthority({
+      workloadRegistry: registry,
+      audit: (event) => {
+        if (failTerminalAudit && event.outcome === 'denied') {
+          throw new Error('injected boundary terminal audit failure');
+        }
+        auditOutcomes.push(event.outcome);
+      },
+    });
+    const derived = deriveShardCapabilityGrant({
+      companionId: PARENT_A,
+      tier: 'custom',
+      customTokens: [...CAPABILITY_TOKENS],
+    });
+    const workload = registry.register({
+      parentCompanionId: PARENT_A,
+      shardId: 'shard-instance-audit',
+      workloadGeneration: 'workload-generation-audit',
+      capabilityGrant: derived,
+    });
+    const h = createHarness({ [PARENT_A]: 'Parent A' }, { shardApprovalGrants: grants });
+    const execute = vi.fn(async () => 'ok');
+    const entry = await h.service.requestExplicitApproval({
+      authenticatedCompanionId: PARENT_A,
+      shardGrant: { workload },
+      request: baseRequest({
+        method: 'home_assistant.call_service',
+        action: 'home_assistant.control',
+        scope: 'site:test-zone/device:test-switch',
+        params: { command: 'toggle' },
+      }),
+      execute,
+    });
+
+    await expect(h.service.resolveConfirmation({
+      id: entry.id,
+      decision: 'deny',
+    }, OPERATOR)).rejects.toThrow(/injected boundary terminal audit failure/);
+    expect(execute).not.toHaveBeenCalled();
+
+    // Audit-then-remove: the reservation survived, so the terminal grant
+    // resolution can be retried and audited.
+    failTerminalAudit = false;
+    grants.recordRequestResolution({ approvalId: entry.id, status: 'denied' });
+    expect(auditOutcomes).toEqual(['prepared', 'denied']);
+  });
+
   it('preserves ordinary autonomous companion auto-clear behavior', async () => {
     const h = createHarness({
       [PARENT_A]: 'Parent A',

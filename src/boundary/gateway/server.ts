@@ -106,6 +106,12 @@ import { materializeGatewayAttachments } from './attachment-materialization.js';
 import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
 import type { KubeSelfManagementController } from '../../system/lifecycle/kube-self-management.js';
 import type { CapabilityGrantSnapshot } from '../../system/capabilities/access.js';
+import {
+  ShardApprovalGrantAuthority,
+  type AuthenticatedShardWorkloadHandle,
+  type ShardApprovalGrantAuditEvent,
+  type ShardApprovalWorkloadRegistryPort,
+} from '../../system/capabilities/shard-approval-grants.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -251,6 +257,22 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   ) => CapabilityGrantSnapshot;
   /** Optional privileged executor; receives only gateway-authorized launch context. */
   shardBackendExecutor?: ShardBackendExecutor;
+  /**
+   * 2h6q.3: server-owned authenticated shard-workload registry (fed from
+   * ShardManager launch registration state). Presence constructs the
+   * exact-once ShardApprovalGrantAuthority and enables the shard
+   * exceptional-action approval path. Absence keeps every shard
+   * temporary-grant path disabled AND still denies recognizably
+   * shard-originated gated dispatches (they can never inherit the parent's
+   * autonomous auto-clear).
+   */
+  shardApprovalWorkloads?: ShardApprovalWorkloadRegistryPort;
+  /**
+   * Structured audit sink for shard approval-grant lifecycle events. A
+   * throwing sink fails the transition it audits (terminal resolutions are
+   * audit-then-remove). Defaults to the gateway structured logger.
+   */
+  shardApprovalGrantAudit?: (event: ShardApprovalGrantAuditEvent) => void;
   /** Canonical companion display label used in human-facing approval attribution. */
   approvalParentLabelProvider?: (companionId: string) => string | undefined;
   wyomingShardRouting: WyomingShardRoutingConfig;
@@ -321,6 +343,7 @@ export class GatewayServer {
   private readonly capabilityTierProvider: (companionId?: string) => CapabilityTier;
   private readonly wyomingShardRouting: WyomingShardRoutingConfig;
   private readonly ntfyNotifier: GatewayNtfyNotifier;
+  private readonly shardApprovalGrants: ShardApprovalGrantAuthority | undefined;
   private readonly approvalBoundary: ApprovalBoundaryService;
   private readonly canaryEgressGuard: CanaryEgressGuard | null;
   private readonly runtimeHealthTracker: GatewayRuntimeHealthTracker;
@@ -425,6 +448,17 @@ export class GatewayServer {
           ...(options.cogSecEvents ? { cogSecEvents: options.cogSecEvents } : {}),
           log,
         });
+    // 2h6q.3: the exact-once shard approval-grant authority exists only when
+    // a server-owned authenticated workload registry is wired; the authority
+    // is constructed here so the production GatewayServer construction path
+    // (privileged-core createGatewayServer) reaches it without test-only glue.
+    this.shardApprovalGrants = options.shardApprovalWorkloads
+      ? new ShardApprovalGrantAuthority({
+          workloadRegistry: options.shardApprovalWorkloads,
+          audit: options.shardApprovalGrantAudit
+            ?? ((event) => log.info('Shard approval grant audit', { ...event })),
+        })
+      : undefined;
     this.approvalBoundary = createGatewayApprovalBoundaryService({
       policyConfig: options.policyConfig,
       ntfyNotifier: this.ntfyNotifier,
@@ -434,6 +468,9 @@ export class GatewayServer {
       canaryEgressGuard: this.canaryEgressGuard,
       eventBus: options.eventBus,
       parentLabelProvider: options.approvalParentLabelProvider,
+      ...(this.shardApprovalGrants
+        ? { shardApprovalGrants: this.shardApprovalGrants }
+        : {}),
       audit: this.audit.bind(this),
       auditComplete: this.auditComplete.bind(this),
       recordMethodSuccess: (method) => this.runtimeHealthTracker.recordMethodSuccess(method),
@@ -558,6 +595,9 @@ export class GatewayServer {
       ...(this.options.shardBackendExecutor
         ? { shardBackendExecutor: this.options.shardBackendExecutor }
         : {}),
+      // 2h6q.3: per-dispatch authenticated shard lineage for gated methods.
+      resolveShardWorkloadForChannel: (channelId) =>
+        this.resolveShardWorkloadForGatedDispatch(conn, channelId),
       approvalBoundary: this.approvalBoundary,
       ...(this.options.kubeSelfManagement
         ? { kubeSelfManagement: this.options.kubeSelfManagement }
@@ -1331,6 +1371,50 @@ export class GatewayServer {
       throw new Error('ICP autonomy RPC requires an authenticated agent companion connection');
     }
     return status.companionId;
+  }
+
+  /**
+   * 2h6q.3: bind a gated dispatch to its authenticated shard workload. The
+   * runtime-stamped correlation channel id is only a lookup key into the
+   * server-owned workload registry; every authority value (parent binding,
+   * generation, frozen derived access) comes from registration state. Fail
+   * closed: a recognizably shard-originated channel that cannot be bound to
+   * a live workload of THIS connection's authenticated companion is denied —
+   * it must never fall through to the parent's own (possibly autonomous)
+   * authority. Recognition is registry-backed, not just prefix-based:
+   * satellite/Wyoming shard workloads register arbitrary channel schemes, so
+   * the registry's ever-hosted tombstones (live, ended, or superseded
+   * generations) deny alongside the `shard:` scheme rule, which alone covers
+   * the no-registry configuration.
+   */
+  private resolveShardWorkloadForGatedDispatch(
+    conn: GatewayRpcConnection,
+    channelId: string | undefined,
+  ): { workload: AuthenticatedShardWorkloadHandle } | undefined {
+    const normalized = channelId?.trim();
+    if (!normalized) {
+      return undefined;
+    }
+    const registry = this.options.shardApprovalWorkloads;
+    const companionId = this.authenticatedCompanionId(conn);
+    if (registry && companionId) {
+      // May throw on ambiguous channel lineage — ambiguity is a denial.
+      const workload = registry.resolveWorkloadForChannel(companionId, normalized);
+      if (workload) {
+        return { workload };
+      }
+    }
+    const shardRecognizable = normalized.startsWith('shard:')
+      || (registry !== undefined
+        && companionId !== undefined
+        && registry.hasHostedWorkloadForChannel(companionId, normalized));
+    if (shardRecognizable) {
+      throw new JSONRPCErrorException(
+        'Shard-originated request denied: no live authenticated shard workload matches this dispatch',
+        GatewayErrors.POLICY_DENIED,
+      );
+    }
+    return undefined;
   }
 
   private authenticatedCompanionId(conn: GatewayRpcConnection): string | undefined {

@@ -18,6 +18,8 @@ import {
 import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
 import { normalizeCapabilityTier } from '../../system/capabilities/tiers.js';
 import type { DerivedShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
+import type { AuthenticatedShardWorkloadHandle } from '../../system/capabilities/shard-approval-grant-contracts.js';
+import type { ShardWorkloadRegistry } from './workload-registry.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { ShardExecutionPort } from './port.js';
@@ -189,6 +191,15 @@ export interface ShardManagerDeps {
    * getters are not an atomic snapshot.
    */
   snapshotParentCapabilityGrant: ParentCapabilityGrantSnapshotProvider;
+  /**
+   * 2h6q.3: authenticated shard-workload registry. Each launch registers one
+   * workload generation (frozen derived access included) before execution and
+   * ends it on release, so a gateway sharing this registry can authenticate
+   * shard-originated exceptional-action requests. Absent ⇒ shards run without
+   * workload registration and every shard temporary-grant path stays
+   * unavailable (fail closed at the gateway).
+   */
+  workloadRegistry?: ShardWorkloadRegistry;
 }
 
 export interface SatelliteDelegationRequest {
@@ -229,6 +240,7 @@ export class ShardManager implements ShardExecutionPort {
   private heartbeatStaleAfterMs: number;
   private heartbeatDisconnectAfterMs: number;
   private activeShards = new Map<string, ActiveShard>();
+  private workloadHandles = new Map<string, AuthenticatedShardWorkloadHandle>();
   readonly shardDirectory: LiveShardDirectory;
   readonly shardParentIcp: LiveShardParentIcpRuntime;
   private activeShardChannels = new Map<string, Set<string>>();
@@ -643,6 +655,21 @@ export class ShardManager implements ShardExecutionPort {
     let shardPostgresPrepared = false;
     let executionFailure: Error | undefined;
     try {
+      // 2h6q.3: register the authenticated workload generation (with its
+      // frozen derived access) before any execution, inside the try so a
+      // registration failure releases the shard instead of leaking it. The
+      // task channel and the direct human-chat lane both address this
+      // workload at the gateway.
+      if (this.deps.workloadRegistry) {
+        const workloadHandle = this.deps.workloadRegistry.registerWorkload({
+          parentCompanionId: lineage.companionProvenance.parentCompanionId,
+          shardId,
+          shardLabel: shardConfig.name,
+          channelIds: [channelId, `${channelId}:human`],
+          capabilityGrant,
+        });
+        this.workloadHandles.set(shardId, workloadHandle);
+      }
       if (shardPostgres) {
         const lifecycle = this.deps.shardPostgresLifecycle;
         if (!lifecycle) {
@@ -1236,6 +1263,13 @@ export class ShardManager implements ShardExecutionPort {
   }
 
   private releaseActiveShard(shardId: string, channelId: string): void {
+    // 2h6q.3: end the authenticated workload generation first so no grant can
+    // be prepared or consumed against a shard that is being released.
+    const workloadHandle = this.workloadHandles.get(shardId);
+    if (workloadHandle) {
+      this.workloadHandles.delete(shardId);
+      this.deps.workloadRegistry?.endWorkload(workloadHandle);
+    }
     const deleted = this.activeShards.delete(shardId);
     this.shardDirectory.release(shardId);
     this.configurationRegistry.release(shardId);

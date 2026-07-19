@@ -87,6 +87,7 @@ import {
 } from '../../boundary/fleet-auth/companion-ui-action.js';
 import { resolveSatelliteClaim } from '../backplane/satellite-registry.js';
 import type { ShardDirectoryPort } from '../../shared/contracts/shard-directory.js';
+import { classifyCompanionUiShardActionFailure } from './companion-ui-shard-action-error.js';
 
 const log = createComponentLogger('AgentApiBackend');
 
@@ -408,16 +409,13 @@ export class AgentApiBackend {
           throw new Error('non-shard Companion UI action');
       }
     } catch (error) {
-      log.warn('Companion UI shard action denied', {
+      const failure = classifyCompanionUiShardActionFailure(error);
+      log.warn(failure.logMessage, {
         requestId: params.requestId,
         resource: params.companionUiCapability.frame.resource,
-        error: toErrorMessage(error),
+        error: toErrorMessage(failure.logError),
       });
-      return this.fail(
-        403,
-        'companion_ui_shard_action_denied',
-        'Companion UI shard action was denied',
-      );
+      return this.fail(failure.status, failure.type, failure.message);
     }
   }
 

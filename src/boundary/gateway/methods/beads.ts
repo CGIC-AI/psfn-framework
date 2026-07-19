@@ -303,24 +303,12 @@ async function executeBeadsAction(
   afterSuccess?: (payload: unknown) => Promise<BeadsExternalSyncResult | undefined>,
 ): Promise<BeadsActionResult> {
   const startedAt = Date.now();
+  let payload: unknown;
+  let sync: BeadsExternalSyncResult | undefined;
   try {
     const args = buildArgs();
-    const payload = await runBdCommand(action, args, runtime);
-    const sync = afterSuccess ? await afterSuccess(payload) : undefined;
-    await recordBeadsAudit(runtime, {
-      actor,
-      action,
-      target,
-      result: 'success',
-    }, Date.now() - startedAt);
-    return {
-      actor,
-      action,
-      target,
-      result: 'success',
-      payload,
-      ...(sync ? { sync: [sync] } : {}),
-    };
+    payload = await runBdCommand(action, args, runtime);
+    sync = afterSuccess ? await afterSuccess(payload) : undefined;
   } catch (error) {
     const message = toErrorMessage(error);
     try {
@@ -339,6 +327,31 @@ async function executeBeadsAction(
     }
     throw error;
   }
+  // Success audit stays outside the action try: an audit-store fault after a
+  // completed mutation must not masquerade as an action failure or write a
+  // contradictory 'error' audit record for an action that succeeded.
+  try {
+    await recordBeadsAudit(runtime, {
+      actor,
+      action,
+      target,
+      result: 'success',
+    }, Date.now() - startedAt);
+  } catch (auditError) {
+    throw new AggregateError(
+      [auditError],
+      `Beads action "${action}" succeeded but its success audit record could not be persisted; do not retry the action`,
+      { cause: auditError },
+    );
+  }
+  return {
+    actor,
+    action,
+    target,
+    result: 'success',
+    payload,
+    ...(sync ? { sync: [sync] } : {}),
+  };
 }
 
 const DEFAULT_READY_LIMIT = 20;
@@ -548,22 +561,9 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
     handler: async (params: BeadsSyncParams, runtime) => {
       const actor = normalizeActor(params.actor);
       const startedAt = Date.now();
+      let sync: BeadsExternalSyncResult;
       try {
-        const sync = await syncAllBeadsToGitHubProject(runtime.workspacePath);
-        await recordBeadsAudit(runtime, {
-          actor,
-          action: 'sync',
-          target: 'sync',
-          result: 'success',
-        }, Date.now() - startedAt);
-        return {
-          actor,
-          action: 'sync',
-          target: 'sync',
-          result: 'success',
-          payload: sync,
-          sync: [sync],
-        };
+        sync = await syncAllBeadsToGitHubProject(runtime.workspacePath);
       } catch (error) {
         const message = toErrorMessage(error);
         try {
@@ -582,6 +582,28 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         }
         throw error;
       }
+      try {
+        await recordBeadsAudit(runtime, {
+          actor,
+          action: 'sync',
+          target: 'sync',
+          result: 'success',
+        }, Date.now() - startedAt);
+      } catch (auditError) {
+        throw new AggregateError(
+          [auditError],
+          'Beads sync succeeded but its success audit record could not be persisted; do not retry the action',
+          { cause: auditError },
+        );
+      }
+      return {
+        actor,
+        action: 'sync',
+        target: 'sync',
+        result: 'success',
+        payload: sync,
+        sync: [sync],
+      };
     },
     summary: (params: BeadsSyncParams) => ({
       actor: summaryActor(params.actor),

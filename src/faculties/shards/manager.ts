@@ -69,6 +69,10 @@ import { LiveShardDirectory } from './directory.js';
 import { createShardAgentRuntime } from './agent-runtime.js';
 import type { PolicyGovernedShardParentIcpDeliveryPort } from '../../shared/contracts/shard-parent-icp.js';
 import { LiveShardParentIcpRuntime } from './parent-icp-runtime.js';
+import {
+  createShardParentIcpTool,
+  SHARD_PARENT_ICP_TOOL_NAME,
+} from './parent-icp-tool.js';
 import type {
   PostgresShardSchemaBinding,
   PostgresShardSchemaLifecycle,
@@ -111,6 +115,7 @@ const BLOCKED_SHARD_TOOL_NAMES = new Set([
   'contact_link_identity',
   'contact_set_channel_privacy',
   'contact_set_machine_intelligence',
+  SHARD_PARENT_ICP_TOOL_NAME,
 ]);
 const APPRENTICE_SHARD_TOOL_EXTRAS = [
 ] as const;
@@ -1329,10 +1334,9 @@ export class ShardManager implements ShardExecutionPort {
     memoryReviewContext: Pick<ShardRuntimeRecord, 'channelId' | 'task' | 'lineage'>,
   ): AgentTool<any>[] {
     const catalog = this.deps.toolCatalogProvider?.();
-    if (!catalog) return [];
 
     const availableByName = new Map<string, AgentTool<any>>();
-    const available = [...catalog.core, ...catalog.extended];
+    const available = catalog ? [...catalog.core, ...catalog.extended] : [];
     for (const tool of available) {
       if (BLOCKED_SHARD_TOOL_NAMES.has(tool.name)) continue;
       if (!availableByName.has(tool.name)) {
@@ -1348,7 +1352,10 @@ export class ShardManager implements ShardExecutionPort {
         .map(name => availableByName.get(name))
         .filter((tool): tool is AgentTool<any> => tool !== undefined);
 
-    return selected.map(tool => this.toolSyncHelper.wrapShardTool(tool, shardId, memoryReviewContext));
+    return [
+      createShardParentIcpTool(shardId, this.shardParentIcp),
+      ...selected.map(tool => this.toolSyncHelper.wrapShardTool(tool, shardId, memoryReviewContext)),
+    ];
   }
 
   private resolveToolNamesForTier(tier: CapabilityTier): string[] {

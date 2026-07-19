@@ -45,6 +45,7 @@ import {
 } from '../../../system/capabilities/requirements.js';
 import { resolveTierCapabilityTokens } from '../../../system/capabilities/tiers.js';
 import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
+import { createCompanionId } from '../../../shared/routing/companion-id.js';
 
 const originalConfigDir = process.env.CONFIG_DIR;
 const tempConfigDirs: string[] = [];
@@ -1113,6 +1114,51 @@ describe('runtime subject identity', () => {
       trustLevel: 'regular', // contact-owned, not special-cased
       resolvedUserName: 'Nova',
     });
+  });
+
+  it('classifies shard-parent ICP as machine intelligence without registering the shard as a peer contact', async () => {
+    const resolveChannelIdentity = vi.fn(() => {
+      throw new Error('shard instance ids must not enter peer contact resolution');
+    });
+    const authorContext = await resolveAuthorContext({
+      message: makeMessage({
+        channelId: `companion-shard:${DEFAULT_COMPANION_ID}:shard-live-1`,
+        channelType: 'companion',
+        authorId: 'shard:shard-live-1',
+        authorName: 'Shard',
+        isDirectMessage: true,
+        routing: {
+          source: 'companion',
+          authorIsMachineIntelligence: true,
+          shardParentIcp: {
+            schemaVersion: 1,
+            routingCompanionId: createCompanionId(DEFAULT_COMPANION_ID),
+            lineage: {
+              parentCompanionId: createCompanionId(DEFAULT_COMPANION_ID),
+              shardId: 'shard-live-1',
+            },
+            direction: 'shard_to_parent',
+          },
+        },
+      }),
+      contactStore: {
+        resolveChannelIdentity,
+      } as never,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionDisplayName: 'Companion',
+    });
+
+    expect(resolveChannelIdentity).not.toHaveBeenCalled();
+    expect(authorContext).toMatchObject({
+      speakerRole: 'user',
+      actorKind: 'machine_intelligence',
+      speakingWithIsMachineIntelligence: true,
+      trustLevel: 'regular',
+      resolvedUserName: 'Shard',
+      continuitySubjectKey: 'shard:shard-live-1',
+    });
+    expect(authorContext.canonicalContactKey).toBeUndefined();
   });
 
   it.each([

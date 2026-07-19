@@ -54,6 +54,10 @@ import { wrapPromptSectionXml } from '../../identity/prompt-sections.js';
 import { getRunChargeSnapshot } from '../../../shared/telemetry/run-charge.js';
 import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import {
+  formatShardParentIcpChannelId,
+  parseShardParentIcpRoutingMetadata,
+} from '../../../shared/contracts/shard-parent-icp.js';
+import {
   buildCurrentDatetimePromptVariables,
   buildLastMessagePromptVariables,
   normalizeRuntimeTimezone,
@@ -779,6 +783,34 @@ export async function resolveAuthorContext(input: {
       resolvedUserName: resolvePromptUserName(input.message),
       canonicalContactKey: input.message.authorId,
       continuitySubjectKey: input.message.authorId,
+      continuityFallbackKeys: [],
+    };
+  }
+
+  const shardParentIcp = input.message.routing?.shardParentIcp;
+  if (shardParentIcp) {
+    const routing = parseShardParentIcpRoutingMetadata(shardParentIcp);
+    const shardId = routing.lineage.shardId;
+    const expectedAuthorId = `shard:${shardId}`;
+    const expectedChannelId = formatShardParentIcpChannelId(routing);
+    if (routing.direction !== 'shard_to_parent'
+      || routing.routingCompanionId !== input.companionIdentityKey
+      || routing.lineage.parentCompanionId !== input.companionIdentityKey
+      || input.message.channelId !== expectedChannelId
+      || input.message.channelType !== 'companion'
+      || input.message.authorId !== expectedAuthorId
+      || input.message.isDirectMessage !== true
+      || input.message.routing?.source !== 'companion'
+      || input.message.routing.authorIsMachineIntelligence !== true) {
+      throw new Error('Shard-parent ICP lineage does not match runtime identity/routing');
+    }
+    return {
+      trustLevel: 'regular',
+      speakerRole: 'user',
+      actorKind: 'machine_intelligence',
+      resolvedUserName: resolvePromptUserName(input.message),
+      speakingWithIsMachineIntelligence: true,
+      continuitySubjectKey: expectedAuthorId,
       continuityFallbackKeys: [],
     };
   }

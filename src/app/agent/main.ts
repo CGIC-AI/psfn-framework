@@ -9,6 +9,7 @@ import { GatewayClient } from '../../boundary/gateway/client.js';
 import { resolveCoreCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';
 import { attachCompanionEventForwarder } from '../../channels/backplane/companion-relay/agent-forwarder.js';
+import { createPolicyGovernedShardParentIcpDelivery } from '../../channels/backplane/shard-parent-icp-ingress.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
 import { resolveDocumentIngestLimits } from '../../faculties/file-ingest/index.js';
@@ -621,6 +622,11 @@ async function main(): Promise<void> {
     policy: buildShellExecPolicyConfig(process.env),
     brokerId: 'agent-process',
   });
+  const shardParentIcpDelivery = createPolicyGovernedShardParentIcpDelivery({
+    parentCompanionId: resolveCoreCompanionIdFromConfig(config),
+    intakeScreening,
+    agentLoop,
+  });
   const shardManager = wireShardAndThinkRuntime({
     agentLoop,
     eventBus,
@@ -644,6 +650,7 @@ async function main(): Promise<void> {
     },
     executionPort: sandboxExecutionPort,
     compressionGuidelineEvolution,
+    shardParentIcpDelivery,
   });
 
   // Memory write/import tools — intentional memory creation

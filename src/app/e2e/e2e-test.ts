@@ -137,6 +137,7 @@ async function main(): Promise<void> {
       sessionManager,
       config,
       parentSystemPrompt: systemPrompt,
+      shardParentIcpDelivery: null,
       replConfig: DEFAULT_REPL_CONFIG,
       snapshotParentCapabilityGrant: () => capabilityRuntime.snapshotOwnerGrant(),
     });

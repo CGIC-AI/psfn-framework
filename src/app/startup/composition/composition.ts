@@ -526,10 +526,23 @@ export interface ToolRuntimeOptions {
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
   executionPort?: SandboxExecutionPort | null;
   compressionGuidelineEvolution?: CompressionGuidelineEvolutionPort | null;
-  shardParentIcpDelivery?: PolicyGovernedShardParentIcpDeliveryPort | null;
+  shardParentIcpDelivery: PolicyGovernedShardParentIcpDeliveryPort | null;
+}
+
+function requireExplicitShardParentIcpDelivery(
+  options: { shardParentIcpDelivery?: PolicyGovernedShardParentIcpDeliveryPort | null },
+): PolicyGovernedShardParentIcpDeliveryPort | null {
+  if (!Object.hasOwn(options, 'shardParentIcpDelivery')
+    || options.shardParentIcpDelivery === undefined) {
+    throw new Error(
+      'Shard runtime composition requires an explicit policy-governed ordinary ICP delivery port',
+    );
+  }
+  return options.shardParentIcpDelivery;
 }
 
 export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExecutionPort {
+  const shardParentIcpDelivery = requireExplicitShardParentIcpDelivery(options);
   const companionDataDir = options.companionDataDir ?? resolveConfiguredCompanionDataDir(options.config);
   const shardPostgresLifecycle = options.config.multiCompanion === true
     ? createPostgresShardSchemaLifecycle(
@@ -565,7 +578,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     foldReviewController,
     compressionGuidelineEvolution: options.compressionGuidelineEvolution ?? undefined,
     shardPostgresLifecycle,
-    shardParentIcpDelivery: options.shardParentIcpDelivery ?? null,
+    shardParentIcpDelivery,
     snapshotParentCapabilityGrant: options.snapshotParentCapabilityGrant,
   });
   const subagentFaculty = new SubagentFaculty({

@@ -502,6 +502,12 @@ export interface MessageRoutingMetadata {
    * prompt/runtime. It is metadata, never a parallel dispatch path.
    */
   icpCorrelation?: IcpConversationCorrelation;
+  /**
+   * Inner shard lineage for an ordinary shard→parent companion turn. The
+   * parent CompanionId remains the routing identity; the shard id is
+   * provenance only and must never be treated as a relay peer.
+   */
+  shardParentIcp?: import('./shard-parent-icp.js').ShardParentIcpRoutingMetadata;
   /** Durable lineage carried by generated follow-up turns outside a live ICP channel turn. */
   originIcpRootInitiationId?: string;
   /**

@@ -1,3 +1,4 @@
+import type { DisclosureWikiSource } from '../../core/cogsec/disclosure/generation-lineage.js';
 import type { WikiScope } from './scope.js';
 
 export type WikiRetrievalContextClass = 'dm' | 'group' | 'focus';
@@ -23,6 +24,13 @@ export interface WikiContextSnapshot {
   block: string;
   tokenCount: number;
   selectedCount: number;
+  /**
+   * jp36.1.1.3: content-free outbound-disclosure facts (ref + sensitivity) for
+   * every wiki document rendered into this block, folded into the generation
+   * disclosure lineage at the turn seam (bible §9.2 item 3). Wiki world-knowledge
+   * authorizes no outward destination, so each source collapses to companion-self.
+   */
+  disclosureWikiSources?: DisclosureWikiSource[];
   generatedAt: number;
   lastRefreshStartedAt: number;
   lastRefreshCompletedAt?: number;
@@ -58,5 +66,10 @@ export function cloneWikiContextSnapshot(
   snapshot: WikiContextSnapshot | null,
 ): WikiContextSnapshot | null {
   if (!snapshot) return null;
-  return { ...snapshot };
+  return {
+    ...snapshot,
+    ...(snapshot.disclosureWikiSources
+      ? { disclosureWikiSources: snapshot.disclosureWikiSources.map(source => ({ ...source })) }
+      : {}),
+  };
 }

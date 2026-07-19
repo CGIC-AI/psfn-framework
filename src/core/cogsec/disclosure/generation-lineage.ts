@@ -4,7 +4,7 @@
 // `accumulateDisclosureSource`). This module is the RUNTIME POPULATION SEAM that
 // turns real admitted sources into `DisclosureSourceContribution`s and folds
 // them, so callers never reimplement "max sensitivity / intersect destinations"
-// (bible §13.3). This bead (jp36.1.1.2) wires two admission paths:
+// (bible §13.3). This module wires the generation-context admission paths:
 //
 //   1. Session history — contributes the current conversation's channel/contact
 //      scope, its destination-relative sensitivity ceiling, and (for a DM) its
@@ -12,9 +12,17 @@
 //   2. Memory retrieval — contributes each retrieved memory's source reference,
 //      sensitivity, subject contact, and source-channel-derived destinations
 //      (§9.2 item 2).
-//
-// Wiki/journal/project reads and tool results are the sibling bead (jp36.1.1.3)
-// and are intentionally NOT populated here.
+//   3. Wiki/project/journal reads — contribute their sensitivity and the one
+//      outward audience the source inherently authorizes, or fail closed as
+//      unclassified when no usable lineage rides the admitted item (§9.2 item 3,
+//      §9.5). Plain wiki world-knowledge authorizes no outward destination
+//      (companion-self); a personal-project artifact maps its runtime-derived
+//      `intendedAudience` to a scoped destination; a `legacy_unverified` artifact
+//      contributes `classified: false` and taints the whole context (jp36.1.1.3).
+//   4. Tool results — contribute their provenance and a taint gate: a result that
+//      did not pass the intake firewall as a released, non-untrusted source fails
+//      closed to companion-self only (§9.0 tool outputs are untrusted-derived,
+//      §9.2 item 4, §9.4 whole-output taint, jp36.1.1.3).
 //
 // Fail-closed invariants enforced here:
 //   - A permitted-destination constraint for an id-bearing kind (contact_dm,
@@ -33,10 +41,19 @@
 
 import type { ConversationScope } from '../../session/conversation-scope.js';
 import {
+  isIntakeSinkConsumableState,
+  type IntakeEnvelopeState,
+  type IntakeSourceRiskTier,
+} from '../../../shared/contracts/intake-envelope.js';
+import {
   classifyChannelDisclosure,
   getVisibilityDisclosureCeiling,
 } from '../../../system/trust/policy.js';
-import { sensitivityAtMost, type SensitivityLevel } from '../../../system/trust/types.js';
+import {
+  SENSITIVITY_LEVELS,
+  sensitivityAtMost,
+  type SensitivityLevel,
+} from '../../../system/trust/types.js';
 import {
   DISCLOSURE_KIND_ID_FIELD,
   type DisclosureDestinationConstraint,
@@ -67,6 +84,69 @@ export interface DisclosureMemorySource {
   readonly sourceChannelId?: string;
   readonly provenanceRefs?: readonly string[];
 }
+
+/**
+ * The outward audience a companion-owned artifact (a personal-project artifact)
+ * inherently authorizes. Mirror of `faculties/wiki`'s `CompanionOwnedVisibility`,
+ * redeclared here so the disclosure seam carries no dependency on the wiki
+ * faculty. Mapped to disclosure destinations in `wikiDisclosureContribution`:
+ * `self` → companion-self (no outward destination); `primary_contact` → the
+ * primary contact's DM (requires the id to stay scoped, else companion-self);
+ * `public` → the autonomous publication surface.
+ */
+export type CompanionOwnedDisclosureAudience = 'self' | 'primary_contact' | 'public';
+
+/**
+ * One admitted wiki/project/journal read's disclosure-relevant facts, collected
+ * at admission and handed to `wikiDisclosureContribution`. Content-free: refs and
+ * policy facts only, never the document text.
+ *
+ * Plain wiki world-knowledge carries no `companionOwnedAudience` (it authorizes
+ * no outward social destination — it is reference knowledge, not lived memory,
+ * and collapses to companion-self). A personal-project artifact carries the
+ * runtime-derived `intendedAudience` (`companionOwnedAudience`) and, for the
+ * `primary_contact` audience, the resolved `primaryContactId`. `classified` is
+ * false for an artifact without usable disclosure lineage (a `legacy_unverified`
+ * project artifact, or a read whose sensitivity/scope could not be resolved),
+ * which fails the whole context closed (§9.5).
+ */
+export interface DisclosureWikiSource {
+  /** Durable, content-free reference, e.g. `wiki:<docId>` or `project:<id>:<artifactRef>`. */
+  readonly ref: string;
+  readonly sensitivity: SensitivityLevel;
+  /** Present only for companion-owned artifacts (personal projects); absent for plain wiki world-knowledge. */
+  readonly companionOwnedAudience?: CompanionOwnedDisclosureAudience;
+  /** Required to scope a `primary_contact` audience to a DM; absent forces companion-self collapse. */
+  readonly primaryContactId?: string;
+  readonly provenanceRefs?: readonly string[];
+  /** False when the read carried no usable disclosure lineage — taints the context unclassified (§9.5). */
+  readonly classified: boolean;
+}
+
+/**
+ * One admitted tool result's disclosure-relevant facts, collected right after
+ * intake-firewall screening of the tool output (htm9.2) and handed to
+ * `toolResultDisclosureContribution`. Content-free: a ref plus the intake
+ * screening verdict (state + risk tier). `intakeState`/`sourceRiskTier` are
+ * absent when the firewall did not screen the result, which fails closed.
+ */
+export interface DisclosureToolResultSource {
+  /** Durable, content-free reference, e.g. `tool:<name>:<callId>`. */
+  readonly ref: string;
+  readonly intakeState?: IntakeEnvelopeState;
+  readonly sourceRiskTier?: IntakeSourceRiskTier;
+  readonly provenanceRefs?: readonly string[];
+}
+
+/**
+ * The disclosure axis carries no vetted sensitivity for a tool result: the
+ * intake firewall vets tool output for injection/exfiltration, not for how
+ * sensitive it is relative to the companion's social graph. So a tool result
+ * fails closed on the sensitivity axis to the most restrictive level — it never
+ * grants an outward destination anyway, so this only tightens the classification
+ * label and (later) the egress ceiling, never over-shares.
+ */
+const TOOL_RESULT_SENSITIVITY_FLOOR: SensitivityLevel = SENSITIVITY_LEVELS[SENSITIVITY_LEVELS.length - 1];
 
 /**
  * Fail-loud guard: no permitted-destination constraint for an id-bearing kind
@@ -194,20 +274,110 @@ export function memoryDisclosureContribution(
 }
 
 /**
+ * Wiki/project/journal contribution (§9.2 item 3). Plain wiki world-knowledge
+ * authorizes no outward social destination and collapses to companion-self
+ * (empty outward permission set). A companion-owned artifact (personal project)
+ * maps its runtime-derived `companionOwnedAudience` to the single destination it
+ * authorizes:
+ *   - `self`            → companion-self only (no outward constraint);
+ *   - `primary_contact` → that contact's DM (contact_dm), subject = that contact;
+ *   - `public`          → the autonomous publication surface (publication).
+ * A `primary_contact` audience with no resolved id fails closed to companion-self
+ * rather than emitting an unscoped contact_dm. `classified: false` (a
+ * `legacy_unverified` artifact, or an unresolvable read) taints the whole
+ * generation context unclassified so assessment fails closed (§9.5).
+ */
+export function wikiDisclosureContribution(
+  source: DisclosureWikiSource,
+): DisclosureSourceContribution {
+  const permittedDestinations: DisclosureDestinationConstraint[] = [];
+  const subjectContactIds: string[] = [];
+
+  if (source.companionOwnedAudience === 'primary_contact') {
+    const contactId = source.primaryContactId?.trim();
+    if (contactId) {
+      permittedDestinations.push({ kind: 'contact_dm', contactIds: [contactId] });
+      subjectContactIds.push(contactId);
+    }
+    // No resolvable primary contact → companion-self collapse (fail closed),
+    // never an unscoped contact_dm.
+  } else if (source.companionOwnedAudience === 'public') {
+    permittedDestinations.push({ kind: 'publication' });
+  }
+  // `self` or absent audience → companion-self only (no outward constraint).
+
+  assertScopedDisclosureConstraints(permittedDestinations, source.ref);
+
+  return {
+    ref: source.ref,
+    sensitivity: source.sensitivity,
+    permittedDestinations,
+    subjectContactIds,
+    ...(source.provenanceRefs ? { provenanceRefs: source.provenanceRefs } : {}),
+    classified: source.classified,
+  };
+}
+
+/**
+ * Tool-result contribution (§9.2 item 4). A tool result is admitted,
+ * externally-derived context: it never inherently authorizes an outward social
+ * destination, so its permission set is always empty (companion-self collapse).
+ * On top of that it is a taint gate — a result is only `classified` when the
+ * intake firewall released it (a sink-consumable state) as a non-untrusted
+ * source; anything else (unscreened, quarantined, discarded/expired, or an
+ * untrusted/hostile tier) fails the whole context closed to `non_shareable`
+ * (§9.0 tool outputs are untrusted-derived; §9.5).
+ */
+export function toolResultDisclosureContribution(
+  source: DisclosureToolResultSource,
+): DisclosureSourceContribution {
+  const classified = source.intakeState !== undefined
+    && isIntakeSinkConsumableState(source.intakeState)
+    && source.sourceRiskTier !== undefined
+    && source.sourceRiskTier !== 'untrusted'
+    && source.sourceRiskTier !== 'hostile';
+
+  // A tool result never contributes an outward destination. Guarded on every
+  // path even though the list is empty, keeping the invariant assertion uniform.
+  const permittedDestinations: DisclosureDestinationConstraint[] = [];
+  assertScopedDisclosureConstraints(permittedDestinations, source.ref);
+
+  return {
+    ref: source.ref,
+    sensitivity: TOOL_RESULT_SENSITIVITY_FLOOR,
+    permittedDestinations,
+    subjectContactIds: [],
+    ...(source.provenanceRefs ? { provenanceRefs: source.provenanceRefs } : {}),
+    classified,
+  };
+}
+
+/**
  * Build the generation-context disclosure lineage for a turn by folding the
- * session-history contribution and every retrieved-memory contribution into a
- * fresh accumulator. The single seam the turn runtime calls; a later, more
- * restrictive memory source tightens subsequent outputs (bible §9.2).
+ * session-history contribution and every admitted source (retrieved memories,
+ * wiki/project/journal reads, tool results) into a fresh accumulator. The single
+ * seam the turn runtime calls; a later, more restrictive source tightens
+ * subsequent outputs (bible §9.2). Sources are folded in admission order:
+ * session history, then memory, then wiki/project/journal, then tool results
+ * (admitted during the turn, after context assembly).
  */
 export function buildGenerationDisclosureLineage(input: {
   context: GenerationDisclosureContext;
   conversationScope: ConversationScope;
   memorySources: readonly DisclosureMemorySource[];
+  wikiSources?: readonly DisclosureWikiSource[];
+  toolResultSources?: readonly DisclosureToolResultSource[];
 }): DisclosureLineage {
   let lineage = beginDisclosureAccumulation(input.context);
   lineage = accumulateDisclosureSource(lineage, sessionHistoryDisclosureContribution(input.conversationScope));
   for (const source of input.memorySources) {
     lineage = accumulateDisclosureSource(lineage, memoryDisclosureContribution(source));
+  }
+  for (const source of input.wikiSources ?? []) {
+    lineage = accumulateDisclosureSource(lineage, wikiDisclosureContribution(source));
+  }
+  for (const source of input.toolResultSources ?? []) {
+    lineage = accumulateDisclosureSource(lineage, toolResultDisclosureContribution(source));
   }
   return lineage;
 }

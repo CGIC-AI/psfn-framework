@@ -21,6 +21,7 @@ import type { SessionActorKind } from '../../session/turn-provenance.js';
 import type { IntrospectionTurnSensitivityDecision } from '../../../faculties/introspection/turn-sensitivity.js';
 import { resolveMessagePlaceId } from './message-location.js';
 import type { TurnSessionIdentity } from './turn-execution/contracts.js';
+import type { DisclosureToolResultSource } from '../../cogsec/disclosure/generation-lineage.js';
 
 const INTERNAL_SHARD_SOURCE_PARAM = '__psfnShardSource';
 const REASONING_PLACEHOLDER_VALUES = new Set(['none', 'null', 'n/a', 'na', 'nil', 'undefined']);
@@ -252,6 +253,14 @@ export function recordAssistantMessage(input: {
   );
 }
 
+/**
+ * Records every tool-result message as a session tool observation AND returns
+ * the content-free outbound-disclosure sources for those results (jp36.1.1.3).
+ * The disclosure verdict rides the intake-firewall snapshot the same
+ * `recordToolObservation` call already computed (htm9.2) — never a second,
+ * side-effecting `screenSync`. A result without a released, non-untrusted intake
+ * snapshot fails closed at the disclosure seam (§9.0/§9.5).
+ */
 export function recordToolObservations(input: {
   sessionManager: SessionManager;
   message: SubstrateMessage;
@@ -260,10 +269,11 @@ export function recordToolObservations(input: {
   requestId: string;
   turnMessages: AgentMessage[];
   trustLevel: TrustLevel;
-}): void {
+}): DisclosureToolResultSource[] {
+  const disclosureSources: DisclosureToolResultSource[] = [];
   for (const entry of input.turnMessages) {
     if (!isToolResultAgentMessage(entry)) continue;
-    input.sessionManager.recordToolObservation(
+    const result = input.sessionManager.recordToolObservation(
       input.turnSessionIdentity.logicalSessionId,
       {
         toolName: entry.toolName,
@@ -281,7 +291,16 @@ export function recordToolObservations(input: {
         channelMeta: resolveSessionChannelMeta(input.message),
       },
     );
+    const toolName = entry.toolName.trim();
+    const toolCallId = entry.toolCallId.trim();
+    const toolCallSuffix = toolCallId ? `:${toolCallId}` : '';
+    const snapshot = result.intakeSnapshot;
+    disclosureSources.push({
+      ref: `tool:${toolName}${toolCallSuffix}`,
+      ...(snapshot ? { intakeState: snapshot.state, sourceRiskTier: snapshot.sourceRiskTier } : {}),
+    });
   }
+  return disclosureSources;
 }
 
 export function buildTurnRecord(input: {

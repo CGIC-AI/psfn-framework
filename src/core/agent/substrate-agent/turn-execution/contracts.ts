@@ -10,6 +10,7 @@ import type { ComposeContext } from '../../../identity/prompt-types.js';
 import type { ImageVisionReviewer } from '../../../../primitives/images/types.js';
 import type { VisionIntakeImageScreenerPort } from '../vision-attachments.js';
 import type { SessionManager } from '../../../session/manager.js';
+import type { DisclosureToolResultSource } from '../../../cogsec/disclosure/generation-lineage.js';
 import type { MetacognitiveFlag } from '../../../self-model/metacognition.js';
 import type { InternalState } from '../../../self-model/state.js';
 import type { SkillsRuntime } from '../../../../faculties/skills/runtime.js';
@@ -334,7 +335,7 @@ export interface TurnExecutionRuntime {
     requestId: string,
     turnMessages: AgentMessage[],
     trustLevel: TrustLevel,
-  ) => void;
+  ) => DisclosureToolResultSource[];
   recordAssistantMessage: (
     message: SubstrateMessage,
     turnSessionIdentity: TurnSessionIdentity,

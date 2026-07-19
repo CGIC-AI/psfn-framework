@@ -791,7 +791,7 @@ function createRuntime(params: {
       outputTokens: 7,
       toolCalls: 0,
     })),
-    recordToolObservations: vi.fn(),
+    recordToolObservations: vi.fn(() => []),
     recordAssistantMessage: params.recordAssistantMessage,
     buildTurnToolSummary: vi.fn(() => ({ toolCalls: [] })),
     inferPostTurnActions: vi.fn(async () => []),

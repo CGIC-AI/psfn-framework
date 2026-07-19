@@ -92,7 +92,7 @@ function makeMessage(index: number): SubstrateMessage {
 function makeMockSessionManager(): SessionManager {
   return {
     recordUserMessage: vi.fn().mockReturnValue(101),
-    recordToolObservation: vi.fn().mockReturnValue(102),
+    recordToolObservation: vi.fn().mockReturnValue({ entryId: 102, intakeSnapshot: null }),
     recordAssistantMessage: vi.fn().mockReturnValue(103),
     recordSystemMessage: vi.fn().mockReturnValue(104),
     recordTurn: vi.fn(),

@@ -23,6 +23,12 @@
     copy?: boolean;
   }
 
+  interface DetailSection {
+    key: string;
+    heading: string;
+    entries: DetailEntry[];
+  }
+
   interface CostRow {
     label: string;
     cost: ModelUsageCostBreakdown;
@@ -74,6 +80,11 @@
     { label: 'Workload ID', value: event.attribution.workloadId, copy: true },
   ]);
 
+  let detailSections: DetailSection[] = $derived([
+    { key: 'identity', heading: 'Call identity', entries: identityEntries },
+    { key: 'attribution', heading: 'Full attribution', entries: attributionEntries },
+  ]);
+
   let costRows: CostRow[] = $derived([
     { label: 'Provider', cost: event.providerCost },
     { label: 'Estimated', cost: event.estimatedCost },
@@ -114,57 +125,33 @@
 </script>
 
 <div class="space-y-5 bg-bark-50/70 px-5 py-5" role="region" aria-label={`Details for usage event ${event.id}`}>
-  <section aria-labelledby={`${detailId}-identity`}>
-    <h4 id={`${detailId}-identity`} class="text-xs font-semibold uppercase tracking-[0.14em] text-shadow-500">Call identity</h4>
-    <dl class="mt-2 grid gap-x-5 gap-y-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-      {#each identityEntries as detail (detail.label)}
-        <div class="min-w-0">
-          <dt class="text-xs text-shadow-500">{detail.label}</dt>
-          <dd class="mt-0.5 break-words text-sm text-shadow-800">
-            {#if detail.copy && detail.value !== 'unknown'}
-              <button
-                type="button"
-                class="inline-flex max-w-full items-center gap-1 rounded font-mono text-xs text-shadow-800 underline decoration-bark-300 underline-offset-2 hover:text-gold-700 focus:outline-none focus:ring-2 focus:ring-gold-400"
-                title={`Copy ${detail.label}: ${detail.value}`}
-                aria-label={`Copy ${detail.label} ${detail.value}`}
-                onclick={() => void copyValue(detail.label, detail.value)}
-              >
-                <span class="truncate">{shortId(detail.value)}</span><span aria-hidden="true">⧉</span>
-              </button>
-            {:else}
-              {detailValue(detail.value)}
-            {/if}
-          </dd>
-        </div>
-      {/each}
-    </dl>
-  </section>
-
-  <section aria-labelledby={`${detailId}-attribution`}>
-    <h4 id={`${detailId}-attribution`} class="text-xs font-semibold uppercase tracking-[0.14em] text-shadow-500">Full attribution</h4>
-    <dl class="mt-2 grid gap-x-5 gap-y-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-      {#each attributionEntries as detail (detail.label)}
-        <div class="min-w-0">
-          <dt class="text-xs text-shadow-500">{detail.label}</dt>
-          <dd class="mt-0.5 break-words text-sm text-shadow-800">
-            {#if detail.copy && detail.value !== 'unknown'}
-              <button
-                type="button"
-                class="inline-flex max-w-full items-center gap-1 rounded font-mono text-xs text-shadow-800 underline decoration-bark-300 underline-offset-2 hover:text-gold-700 focus:outline-none focus:ring-2 focus:ring-gold-400"
-                title={`Copy ${detail.label}: ${detail.value}`}
-                aria-label={`Copy ${detail.label} ${detail.value}`}
-                onclick={() => void copyValue(detail.label, detail.value)}
-              >
-                <span class="truncate">{shortId(detail.value)}</span><span aria-hidden="true">⧉</span>
-              </button>
-            {:else}
-              {detailValue(detail.value)}
-            {/if}
-          </dd>
-        </div>
-      {/each}
-    </dl>
-  </section>
+  {#each detailSections as section (section.key)}
+    <section aria-labelledby={`${detailId}-${section.key}`}>
+      <h4 id={`${detailId}-${section.key}`} class="text-xs font-semibold uppercase tracking-[0.14em] text-shadow-500">{section.heading}</h4>
+      <dl class="mt-2 grid gap-x-5 gap-y-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+        {#each section.entries as detail (detail.label)}
+          <div class="min-w-0">
+            <dt class="text-xs text-shadow-500">{detail.label}</dt>
+            <dd class="mt-0.5 break-words text-sm text-shadow-800">
+              {#if detail.copy && detail.value !== 'unknown'}
+                <button
+                  type="button"
+                  class="inline-flex max-w-full items-center gap-1 rounded font-mono text-xs text-shadow-800 underline decoration-bark-300 underline-offset-2 hover:text-gold-700 focus:outline-none focus:ring-2 focus:ring-gold-400"
+                  title={`Copy ${detail.label}: ${detail.value}`}
+                  aria-label={`Copy ${detail.label} ${detail.value}`}
+                  onclick={() => void copyValue(detail.label, detail.value)}
+                >
+                  <span class="truncate">{shortId(detail.value)}</span><span aria-hidden="true">⧉</span>
+                </button>
+              {:else}
+                {detailValue(detail.value)}
+              {/if}
+            </dd>
+          </div>
+        {/each}
+      </dl>
+    </section>
+  {/each}
 
   <div class="grid gap-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
     <section aria-labelledby={`${detailId}-outcome`}>

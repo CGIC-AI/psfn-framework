@@ -85,13 +85,14 @@ function makeOutboundAction(
 }
 
 function makePendingFollowUp() {
+  const now = Date.now();
   return {
     id: 'pending-follow-up-1',
     content: 'Check in about the doctor call.',
     priority: 'high' as const,
     timing: 'scheduled' as const,
-    createdAt: '2026-06-16T12:00:00.000Z',
-    dueAt: '2026-07-17T12:00:00.000Z',
+    createdAt: new Date(now - 60_000).toISOString(),
+    dueAt: new Date(now + 60_000).toISOString(),
     channelId: 'primary-dm',
     channelType: 'discord' as const,
     authorId: 'system:intention',

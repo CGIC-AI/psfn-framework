@@ -456,6 +456,8 @@ const testConfig: SubstrateConfig = {
   },
 };
 
+const TEST_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+
 const testCard: CharacterCardV2 = {
   spec: 'chara_card_v2',
   spec_version: '2.0',
@@ -933,14 +935,14 @@ describe('AdminServer JSON API routes', () => {
     const shardId = 'shard-admin-review-1';
     const lineage = buildShardLineageEnvelope({
       kind: 'spawn',
-      coreCompanionId: 'test-companion',
+      coreCompanionId: TEST_COMPANION_ID,
       shardId,
       shardChannelId: `shard:${shardId}`,
       sourceMessage: {
         id: shardId,
         channelId: `shard:${shardId}`,
         channelType: 'api',
-        authorId: 'test-companion',
+        authorId: TEST_COMPANION_ID,
         authorName: 'ApiTestBot',
         timestamp: new Date(1_710_000_000_000),
       },
@@ -1022,14 +1024,14 @@ describe('AdminServer JSON API routes', () => {
     const approveShardId = 'shard-admin-review-approve';
     const approveLineage = buildShardLineageEnvelope({
       kind: 'spawn',
-      coreCompanionId: 'test-companion',
+      coreCompanionId: TEST_COMPANION_ID,
       shardId: approveShardId,
       shardChannelId: `shard:${approveShardId}`,
       sourceMessage: {
         id: approveShardId,
         channelId: `shard:${approveShardId}`,
         channelType: 'api',
-        authorId: 'test-companion',
+        authorId: TEST_COMPANION_ID,
         authorName: 'ApiTestBot',
         timestamp: new Date(1_710_000_000_100),
       },
@@ -1085,14 +1087,14 @@ describe('AdminServer JSON API routes', () => {
     const denyShardId = 'shard-admin-review-deny';
     const denyLineage = buildShardLineageEnvelope({
       kind: 'spawn',
-      coreCompanionId: 'test-companion',
+      coreCompanionId: TEST_COMPANION_ID,
       shardId: denyShardId,
       shardChannelId: `shard:${denyShardId}`,
       sourceMessage: {
         id: denyShardId,
         channelId: `shard:${denyShardId}`,
         channelType: 'api',
-        authorId: 'test-companion',
+        authorId: TEST_COMPANION_ID,
         authorName: 'ApiTestBot',
         timestamp: new Date(1_710_000_000_200),
       },

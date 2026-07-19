@@ -11,6 +11,7 @@ export default defineConfig({
       'src/lib/api/endpoints/{accounting,audit-history,prompts,sessions}.test.ts',
       'src/lib/api/websocket.test.ts',
       'src/lib/cache/{local-first,queue-cache,session-cache,telemetry-cache}.test.ts',
+      'src/lib/components/accounting/charts/*.test.ts',
       'src/lib/evals/observer-sidecar.test.ts',
       'src/lib/fleet/{companion-scope,portal}.test.ts',
       'src/lib/polling/{garden-queue-refresh,page-adoption,visibility-aware-poller}.test.ts',

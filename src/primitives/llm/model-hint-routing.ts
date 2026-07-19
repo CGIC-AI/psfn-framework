@@ -14,6 +14,7 @@ import {
 import {
   applyGlobalPromptCachePolicy,
   resolveGlobalPromptCachePolicy,
+  resolveRoutingCandidateForRegistryEntry,
   resolveRoutingCandidates,
   type RoutingCandidate,
   type RoutingPurpose,
@@ -250,15 +251,20 @@ function resolveModelHintCandidate(
   config: SubstrateConfig,
   modelHint: LLMCompletionModelHint,
   fallbackCandidates: RoutingCandidate[],
+  exactSelection?: {
+    entry: ModelRegistryEntry;
+    candidate: RoutingCandidate;
+  },
 ): RoutingCandidate | null {
-  const baseCandidate = fallbackCandidates.at(0);
+  const baseCandidate = exactSelection?.candidate ?? fallbackCandidates.at(0);
   if (baseCandidate === undefined) return null;
   const hintedModel = modelHint.model?.trim();
   const qualified = hintedModel ? parseProviderQualifiedHint(hintedModel) : null;
 
   let provider = modelHint.provider ?? qualified?.provider ?? baseCandidate.provider;
   let model = qualified?.model ?? hintedModel ?? baseCandidate.model;
-  const registryEntry = findRegistryModelEntry(config, provider, model);
+  const registryEntry = exactSelection?.entry
+    ?? findRegistryModelEntry(config, provider, model);
   // The hinted model's own catalog output cap beats the base candidate's:
   // inheriting a roster default above the target model's maximum is a guaranteed
   // 400 from the provider.
@@ -293,6 +299,7 @@ function resolveModelHintCandidate(
   if (!Number.isFinite(maxTokens) || maxTokens <= 0) return null;
 
   const hinted: RoutingCandidate = {
+    ...(baseCandidate.slotKey ? { slotKey: baseCandidate.slotKey } : {}),
     provider,
     model,
     maxTokens: Math.floor(maxTokens),
@@ -395,9 +402,44 @@ export function resolveCandidates(
     : resolveModelSelectionSlotForPurpose(config.modelPurposeSelection, purpose);
   const selectionSlotKey = normalizedHint?.slotKey ?? configSelectionSlotKey;
   let effectiveHint = normalizedHint;
+  let exactSelection: {
+    entry: ModelRegistryEntry;
+    candidate: RoutingCandidate;
+  } | undefined;
   if (selectionSlotKey !== undefined) {
     const selectedEntry = resolveEnabledRegistryEntryBySlotKey(config, selectionSlotKey);
-    if (!effectiveHint?.model) {
+    const localImportRoute = purpose === 'import_processing'
+      && config.importProcessingRouteMode === 'local_endpoint';
+    if (localImportRoute) {
+      // The local import endpoint/model are global infrastructure. Validate the
+      // companion-supplied slot above, then remove only that selection hint so
+      // it cannot redirect private imports to a remote registry provider.
+      const { slotKey: _ignoredSelection, ...explicitHint } = effectiveHint ?? {};
+      effectiveHint = normalizeModelHint(explicitHint);
+    } else if (!effectiveHint?.model) {
+      let selectedCandidate = resolveRoutingCandidateForRegistryEntry(config, selectedEntry);
+      if (!selectedCandidate) {
+        throw new UnknownModelSelectionSlotError(
+          selectionSlotKey,
+          (config.modelRegistry?.models ?? [])
+            .filter((entry) => resolveRoutingCandidateForRegistryEntry(config, entry) !== null)
+            .map((entry) => entry.id),
+        );
+      }
+      if (purpose === 'import_processing') {
+        const importRouteMode = config.importProcessingRouteMode ?? 'background';
+        selectedCandidate = {
+          ...selectedCandidate,
+          importRouteMode,
+          ...(importRouteMode === 'openrouter_zdr' && selectedCandidate.provider === 'openrouter'
+            ? { openRouterZdrOnly: true }
+            : {}),
+        };
+      }
+      exactSelection = {
+        entry: selectedEntry,
+        candidate: selectedCandidate,
+      };
       effectiveHint = {
         ...(effectiveHint ?? {}),
         model: selectedEntry.identity.model,
@@ -409,7 +451,12 @@ export function resolveCandidates(
   if (!effectiveHint) return candidates;
   ensureNonLegacyModelHint(config, effectiveHint, candidates);
 
-  const hintedCandidate = resolveModelHintCandidate(config, effectiveHint, candidates);
+  const hintedCandidate = resolveModelHintCandidate(
+    config,
+    effectiveHint,
+    candidates,
+    exactSelection,
+  );
   if (!hintedCandidate) return candidates;
 
   log.debug('Applying completion model hint', {

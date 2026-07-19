@@ -249,4 +249,91 @@ describe('resolveCandidates per-companion model selection (23pp)', () => {
     expect(candidates).toHaveLength(1);
     expect(candidates[0]).toMatchObject({ model: 'vision/flash' });
   });
+
+  it('uses the exact selected slot when duplicate model identities carry distinct metadata', () => {
+    const registry = makeBaseRegistry();
+    registry.models.push({
+      id: 'chat-duplicate-custom-route',
+      rank: 99,
+      identity: {
+        provider: 'openrouter',
+        model: 'chat/model',
+        source: {
+          type: 'openrouter',
+          baseUrl: 'https://selected-slot.example.test/v1',
+        },
+      },
+      purposes: [{ purpose: 'vision', primary: false }],
+      capabilities: {
+        maxOutputTokens: 1234,
+        contextWindow: 32_000,
+        supportsVision: true,
+      },
+      tuning: {
+        maxOutputTokens: 1234,
+        contextWindow: 32_000,
+        temperature: 0.17,
+      },
+    });
+    const config = makeConfig({
+      modelRegistry: registry,
+      openRouterApiBaseUrl: 'https://global-openrouter.example.test/v1',
+    });
+
+    expect(resolveCandidates(config, 'vision', {
+      slotKey: 'chat-duplicate-custom-route',
+    })[0]).toMatchObject({
+      slotKey: 'chat-duplicate-custom-route',
+      provider: 'openrouter',
+      model: 'chat/model',
+      maxTokens: 1234,
+      contextWindow: 32_000,
+      supportsVision: true,
+      temperature: 0.17,
+      requestBaseUrl: 'https://selected-slot.example.test/v1',
+    });
+  });
+
+  it('validates but does not let a companion selection override the global local import route', () => {
+    const config = makeConfig({
+      importProcessingRouteMode: 'local_endpoint',
+      importProcessingLocalEndpointUrl: 'http://127.0.0.1:9000/v1',
+      importProcessingLocalModel: 'private-import-model',
+      modelPurposeSelection: { import_processing: 'chat-primary' },
+    });
+    const baseline = resolveCandidates({
+      ...config,
+      modelPurposeSelection: undefined,
+    }, 'import_processing', undefined);
+
+    expect(resolveCandidates(config, 'import_processing', undefined)).toEqual(baseline);
+    expect(resolveCandidates(config, 'import_processing', {
+      slotKey: 'chat-primary',
+    })).toEqual(baseline);
+    expect(baseline).toEqual([
+      expect.objectContaining({
+        provider: 'local_endpoint',
+        model: 'private-import-model',
+        requestBaseUrl: 'http://127.0.0.1:9000/v1',
+        importRouteMode: 'local_endpoint',
+      }),
+    ]);
+    expect(() => resolveCandidates(config, 'import_processing', {
+      slotKey: 'not-a-slot',
+    })).toThrow(UnknownModelSelectionSlotError);
+  });
+
+  it('still applies an import selection to the remote background route', () => {
+    const config = makeConfig({
+      importProcessingRouteMode: 'background',
+      modelPurposeSelection: { import_processing: 'chat-primary' },
+    });
+
+    expect(resolveCandidates(config, 'import_processing', undefined)[0]).toMatchObject({
+      slotKey: 'chat-primary',
+      provider: 'openrouter',
+      model: 'chat/model',
+      importRouteMode: 'background',
+    });
+  });
 });

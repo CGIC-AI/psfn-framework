@@ -401,14 +401,11 @@ function resolveOpenRouterEndpointRoute(
   };
 }
 
-function candidateFromRegistryEntry(
+export function resolveRoutingCandidateForRegistryEntry(
   config: SubstrateConfig,
   entry: ModelRegistryEntry,
-  purpose: CanonicalModelPurpose,
-): SelectorCandidate | null {
+): RoutingCandidate | null {
   if (entry.enabled === false) return null;
-  const purposeTag = resolvePurposeTag(entry, purpose);
-  if (!purposeTag) return null;
 
   const provider = entry.identity.provider.trim().toLowerCase();
   const model = entry.identity.model.trim();
@@ -426,23 +423,36 @@ function candidateFromRegistryEntry(
     : undefined;
   const tuning = resolveCandidateTuning(entry);
   const endpointRoute = resolveOpenRouterEndpointRoute(config, entry, provider);
+  return applyGlobalPromptCachePolicy(withOpenRouterPreferences({
+    slotKey: entry.id,
+    provider: endpointRoute.provider,
+    model,
+    maxTokens,
+    ...(contextWindow > 0 ? { contextWindow } : {}),
+    ...(supportsVision !== undefined ? { supportsVision } : {}),
+    ...(supportsReasoning !== undefined ? { supportsReasoning } : {}),
+    ...(endpointRoute.requestBaseUrl ? { requestBaseUrl: endpointRoute.requestBaseUrl } : {}),
+    ...(endpointRoute.requestApiKeyEnv ? { requestApiKeyEnv: endpointRoute.requestApiKeyEnv } : {}),
+    ...tuning,
+  }, config), resolveGlobalPromptCachePolicy(config));
+}
+
+function candidateFromRegistryEntry(
+  config: SubstrateConfig,
+  entry: ModelRegistryEntry,
+  purpose: CanonicalModelPurpose,
+): SelectorCandidate | null {
+  const purposeTag = resolvePurposeTag(entry, purpose);
+  if (!purposeTag) return null;
+
+  const candidate = resolveRoutingCandidateForRegistryEntry(config, entry);
+  if (!candidate) return null;
   return {
-    candidate: applyGlobalPromptCachePolicy(withOpenRouterPreferences({
-      slotKey: entry.id,
-      provider: endpointRoute.provider,
-      model,
-      maxTokens,
-      ...(contextWindow > 0 ? { contextWindow } : {}),
-      ...(supportsVision !== undefined ? { supportsVision } : {}),
-      ...(supportsReasoning !== undefined ? { supportsReasoning } : {}),
-      ...(endpointRoute.requestBaseUrl ? { requestBaseUrl: endpointRoute.requestBaseUrl } : {}),
-      ...(endpointRoute.requestApiKeyEnv ? { requestApiKeyEnv: endpointRoute.requestApiKeyEnv } : {}),
-      ...tuning,
-    }, config), resolveGlobalPromptCachePolicy(config)),
+    candidate,
     primary: purposeTag.primary === true,
     rank: Number.isFinite(entry.rank) ? Math.floor(entry.rank) : Number.MAX_SAFE_INTEGER,
-    maxTokens,
-    contextWindow,
+    maxTokens: candidate.maxTokens,
+    contextWindow: candidate.contextWindow ?? 0,
     estimatedCost: estimateCost(entry.cost),
   };
 }

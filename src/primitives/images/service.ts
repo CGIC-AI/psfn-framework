@@ -121,10 +121,7 @@ function resolveFalFallbackModelChain(
     ? DEFAULT_FAL_CREATE_MODEL_CHAIN
     : DEFAULT_FAL_EDIT_MODEL_CHAIN;
   if (configuredModel) {
-    return [
-      configuredModel,
-      ...defaultChain.filter(model => model !== configuredModel),
-    ];
+    return [configuredModel];
   }
   if (requestedProvider !== undefined && requestedProvider !== 'auto') {
     return [undefined];
@@ -255,7 +252,10 @@ export class ImageService implements ImageOperations {
       this.config.credentialVault,
       'FAL_API_KEY',
     );
-    const requestedProvider = params.provider;
+    // An explicit Fal catalog model is itself an explicit provider selection
+    // when provider is omitted. It must not be discarded by a configured
+    // ComfyUI default.
+    const requestedProvider = params.provider ?? (params.model ? 'fal' : undefined);
     const provider = requestedProvider ?? resolveSettingsProvider(params, this.config) ?? 'auto';
     const configuredModel = mode === 'create'
       ? resolveSettingsModel('create', params as ImageCreateParams, this.config)

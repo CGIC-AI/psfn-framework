@@ -29,6 +29,10 @@ import {
   SETTINGS_STRING_ARRAY_FIELDS,
 } from '../../../system/config/settings-contract.js';
 import {
+  COMPANION_MODEL_SELECTION_SETTINGS_OVERLAY_KEYS,
+  mergeCompanionSettingsOverlayPatch,
+} from '../../../system/config/settings-overlay.js';
+import {
   validateCompositionalPolicyConfig,
 } from '../../../system/capabilities/compositional-policy.js';
 import {
@@ -109,6 +113,21 @@ const log = createComponentLogger('AdminSettingsService');
 type SettingsMutationResult =
   | { ok: true; refreshedKeys: AdminSettingsDivergence['key'][]; divergences: AdminSettingsDivergence[] }
   | { ok: false; message: string };
+
+function splitCompanionModelSelectionSettings(
+  settings: EditableSettings,
+): { global: EditableSettings; companion: EditableSettings } {
+  const global = { ...settings };
+  const companion: EditableSettings = {};
+  const globalRecord = global as Record<string, unknown>;
+  const companionRecord = companion as Record<string, unknown>;
+  for (const key of COMPANION_MODEL_SELECTION_SETTINGS_OVERLAY_KEYS) {
+    if (!Object.hasOwn(globalRecord, key)) continue;
+    companionRecord[key] = globalRecord[key];
+    delete globalRecord[key];
+  }
+  return { global, companion };
+}
 
 function refreshModels(config: SubstrateConfig): AdminSettingsDivergence | null {
   try {
@@ -213,14 +232,26 @@ export function applyAdminSettingsMutation(options: {
 
   const currentRuntimeSettings = splitSettingsByDomain(configStore.loadRuntimeSettings()).runtime;
   const domainSplit = splitSettingsByDomain(settings);
+  const settingsByScope = splitCompanionModelSelectionSettings(domainSplit.runtime);
 
   const mergedRuntimeSettings = normalizeEditableSettings(
-    { ...currentRuntimeSettings, ...domainSplit.runtime },
+    { ...currentRuntimeSettings, ...settingsByScope.global },
     { defaultContextWindow: config.defaultContextWindow },
   );
 
-  configStore.saveRuntimeSettings(mergedRuntimeSettings);
-  applySettings(config, mergedRuntimeSettings);
+  if (Object.keys(settingsByScope.global).length > 0) {
+    configStore.saveRuntimeSettings(mergedRuntimeSettings);
+  }
+  if (Object.keys(settingsByScope.companion).length > 0) {
+    const currentOverlay = configStore.loadCompanionSettingsOverlay() ?? {};
+    configStore.saveCompanionSettingsOverlay(
+      mergeCompanionSettingsOverlayPatch(
+        currentOverlay,
+        settingsByScope.companion,
+      ),
+    );
+  }
+  applySettings(config, configStore.loadEffectiveRuntimeSettings());
   invalidatePromptCacheAfterOwnerMutation(config, 'owner-file:settings');
 
   if (Object.hasOwn(domainSplit.runtime, 'openRouterModelsApiUrl')) {
@@ -885,7 +916,9 @@ export class AdminSettingsDataService implements AdminSettingsService {
   }
 
   async getSettingsData(): Promise<AdminSettingsData> {
-    const runtimeConfig = splitSettingsByDomain(this.deps.configStore.loadRuntimeSettings()).runtime;
+    const runtimeConfig = splitSettingsByDomain(
+      this.deps.configStore.loadEffectiveRuntimeSettings(),
+    ).runtime;
     runtimeConfig.sessionRestartBehavior ??= 'reuse_latest_session';
     const editors = this.loadSettingsConfigEditors();
     return {
@@ -1018,7 +1051,7 @@ export class AdminSettingsDataService implements AdminSettingsService {
     }
 
     try {
-      const current = this.deps.configStore.loadRuntimeSettings();
+      const current = this.deps.configStore.loadEffectiveRuntimeSettings();
       const validationErrors = this.validateSettingsPayload(parsed, current as Partial<SubstrateConfig>);
       if (validationErrors.length > 0) {
         return this.buildValidationResult(validationErrors);

@@ -25,14 +25,22 @@ function buildRequestSettingsDefaults<TModel extends string>(
 export class GatewayImageOps implements ImageOperations {
   constructor(
     private readonly gateway: ImageGatewayClient,
-    private readonly settingsDefaults: ImageOperationSettingsDefaults = {},
+    private readonly settingsDefaultsResolver: () => ImageOperationSettingsDefaults = () => ({}),
   ) {}
 
+  resolveSettingsDefaults(): ImageOperationSettingsDefaults {
+    return this.settingsDefaultsResolver();
+  }
+
   async create(params: ImageCreateParams): Promise<ImageGenerationResult> {
-    const settingsDefaults = buildRequestSettingsDefaults(
-      this.settingsDefaults.provider,
-      this.settingsDefaults.createModel,
-    );
+    let settingsDefaults = params.settingsDefaults;
+    if (!settingsDefaults) {
+      const resolved = this.resolveSettingsDefaults();
+      settingsDefaults = buildRequestSettingsDefaults(
+        resolved.provider,
+        resolved.createModel,
+      );
+    }
     return await this.gateway.imageCreate({
       ...params,
       ...(settingsDefaults ? { settingsDefaults } : {}),
@@ -40,10 +48,14 @@ export class GatewayImageOps implements ImageOperations {
   }
 
   async edit(params: ImageEditParams): Promise<ImageGenerationResult> {
-    const settingsDefaults = buildRequestSettingsDefaults(
-      this.settingsDefaults.provider,
-      this.settingsDefaults.editModel,
-    );
+    let settingsDefaults = params.settingsDefaults;
+    if (!settingsDefaults) {
+      const resolved = this.resolveSettingsDefaults();
+      settingsDefaults = buildRequestSettingsDefaults(
+        resolved.provider,
+        resolved.editModel,
+      );
+    }
     return await this.gateway.imageEdit({
       ...params,
       ...(settingsDefaults ? { settingsDefaults } : {}),

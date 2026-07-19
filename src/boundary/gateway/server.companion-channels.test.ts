@@ -139,12 +139,12 @@ function createMinimalOptions(): GatewayServerOptions {
 function multiCompanion(): GatewayMultiCompanionConfig {
   return {
     enabled: true,
-    fleetCompanionIds: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333'],
+    fleetCompanionIds: ['11111111-1111-4111-8111-aaaaaaaaaaaa', '22222222-2222-4222-8222-bbbbbbbbbbbb', '33333333-3333-4333-8333-333333333333'],
     channelRouting: {},
     discordAccounts: {},
     personalWorkspaceByCompanionId: {
-      '11111111-1111-4111-8111-111111111111': '/workspace/11111111-1111-4111-8111-111111111111',
-      '22222222-2222-4222-8222-222222222222': '/workspace/22222222-2222-4222-8222-222222222222',
+      '11111111-1111-4111-8111-aaaaaaaaaaaa': '/workspace/11111111-1111-4111-8111-aaaaaaaaaaaa',
+      '22222222-2222-4222-8222-bbbbbbbbbbbb': '/workspace/22222222-2222-4222-8222-bbbbbbbbbbbb',
       '33333333-3333-4333-8333-333333333333': '/workspace/33333333-3333-4333-8333-333333333333',
     },
   };
@@ -262,7 +262,7 @@ describe('companion.message.send routing (W6)', () => {
       auditStore,
     });
     const agent = await connect();
-    await identifyAgent(agent, '11111111-1111-4111-8111-111111111111');
+    await identifyAgent(agent, '11111111-1111-4111-8111-aaaaaaaaaaaa');
 
     agent._emit({
       jsonrpc: '2.0',
@@ -271,7 +271,7 @@ describe('companion.message.send routing (W6)', () => {
       params: {
         channelId: 'companion-room:living_room',
         content: 'spoofed',
-        companionId: '22222222-2222-4222-8222-222222222222',
+        companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb',
       },
     });
     await vi.waitFor(() => {
@@ -287,8 +287,8 @@ describe('companion.message.send routing (W6)', () => {
     const lane = makeLane({
       presenceRows: {
         'vhome/living_room': [
-          { companionId: '11111111-1111-4111-8111-111111111111', updatedAt: FRESH }, // the sender
-          { companionId: '22222222-2222-4222-8222-222222222222', updatedAt: FRESH },
+          { companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa', updatedAt: FRESH }, // the sender
+          { companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb', updatedAt: FRESH },
           { companionId: '33333333-3333-4333-8333-333333333333', updatedAt: FRESH }, // present but offline
           { companionId: '44444444-4444-4444-8444-444444444444', updatedAt: STALE }, // stale row: gone
         ],
@@ -303,19 +303,19 @@ describe('companion.message.send routing (W6)', () => {
     });
     const agentA = await connect();
     const agentB = await connect();
-    await identifyAgent(agentA, '11111111-1111-4111-8111-111111111111');
-    await identifyAgent(agentB, '22222222-2222-4222-8222-222222222222', 901);
+    await identifyAgent(agentA, '11111111-1111-4111-8111-aaaaaaaaaaaa');
+    await identifyAgent(agentB, '22222222-2222-4222-8222-bbbbbbbbbbbb', 901);
 
     const response = await invokeRpc(agentA, 10, 'companion.message.send', {
       channelId: 'companion-room:living_room',
       content: 'good morning, room',
       authorName: 'Selene',
-      companionId: '11111111-1111-4111-8111-111111111111',
+      companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
     });
 
     expect(response.result).toMatchObject({
       channelId: 'companion-room:living_room',
-      deliveredTo: ['22222222-2222-4222-8222-222222222222'],
+      deliveredTo: ['22222222-2222-4222-8222-bbbbbbbbbbbb'],
       skippedOffline: ['33333333-3333-4333-8333-333333333333'],
     });
     expect(typeof response.result.messageId).toBe('string');
@@ -328,7 +328,7 @@ describe('companion.message.send routing (W6)', () => {
     expect(message).toMatchObject({
       channelId: 'companion-room:living_room',
       channelType: 'companion',
-      authorId: '11111111-1111-4111-8111-111111111111',
+      authorId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
       authorName: 'Selene',
       content: 'good morning, room',
       isDirectMessage: false,
@@ -347,7 +347,7 @@ describe('companion.message.send routing (W6)', () => {
       .map(([entry]: any[]) => entry)
       .find((entry: any) => entry.method === 'companion.message.send');
     expect(sendAudit?.params).toMatchObject({
-      senderCompanionId: '11111111-1111-4111-8111-111111111111',
+      senderCompanionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
       channelId: 'companion-room:living_room',
     });
   });
@@ -356,8 +356,8 @@ describe('companion.message.send routing (W6)', () => {
     const lane = makeLane({
       presenceRows: {
         'vhome/den': [
-          { companionId: '11111111-1111-4111-8111-111111111111', updatedAt: FRESH, since: new Date(NOW - 60_000).toISOString() },
-          { companionId: '22222222-2222-4222-8222-222222222222', updatedAt: FRESH, since: new Date(NOW - 60_000).toISOString() },
+          { companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa', updatedAt: FRESH, since: new Date(NOW - 60_000).toISOString() },
+          { companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb', updatedAt: FRESH, since: new Date(NOW - 60_000).toISOString() },
         ],
       },
     });
@@ -369,16 +369,16 @@ describe('companion.message.send routing (W6)', () => {
     });
     const agentA = await connect();
     const agentB = await connect();
-    await identifyAgent(agentA, '11111111-1111-4111-8111-111111111111');
-    await identifyAgent(agentB, '22222222-2222-4222-8222-222222222222', 901);
+    await identifyAgent(agentA, '11111111-1111-4111-8111-aaaaaaaaaaaa');
+    await identifyAgent(agentB, '22222222-2222-4222-8222-bbbbbbbbbbbb', 901);
 
     const response = await invokeRpc(agentA, 11, 'companion.message.send', {
       channelId: 'companion-room:den',
       content: 'private room line',
-      companionId: '11111111-1111-4111-8111-111111111111',
+      companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
     });
 
-    expect(response.result.deliveredTo).toEqual(['22222222-2222-4222-8222-222222222222']);
+    expect(response.result.deliveredTo).toEqual(['22222222-2222-4222-8222-bbbbbbbbbbbb']);
     expect(methodFrames(agentB, 'companion.message')[0]?.params.message.routing).toMatchObject({
       source: 'companion',
       channelPrivacy: 'private',
@@ -393,8 +393,8 @@ describe('companion.message.send routing (W6)', () => {
     const updatedAt = new Date(now).toISOString();
     const presenceRows: Record<string, CompanionPresenceReadRow[]> = {
       'vhome/living_room': [
-        { companionId: '11111111-1111-4111-8111-111111111111', updatedAt, since: presenceSince },
-        { companionId: '22222222-2222-4222-8222-222222222222', updatedAt, since: presenceSince },
+        { companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa', updatedAt, since: presenceSince },
+        { companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb', updatedAt, since: presenceSince },
       ],
     };
     const lane = makeLane({ presenceRows, now: () => now });
@@ -407,34 +407,34 @@ describe('companion.message.send routing (W6)', () => {
     });
     const agentA = await connect();
     const agentB = await connect();
-    await identifyAgent(agentA, '11111111-1111-4111-8111-111111111111');
-    await identifyAgent(agentB, '22222222-2222-4222-8222-222222222222', 901);
+    await identifyAgent(agentA, '11111111-1111-4111-8111-aaaaaaaaaaaa');
+    await identifyAgent(agentB, '22222222-2222-4222-8222-bbbbbbbbbbbb', 901);
 
     const opening = await invokeRpc(agentA, 13, 'companion.message.send', {
       channelId: 'companion-room:living_room',
       content: 'are you still there?',
-      companionId: '11111111-1111-4111-8111-111111111111',
+      companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
     });
-    expect(opening.result.deliveredTo).toEqual(['22222222-2222-4222-8222-222222222222']);
+    expect(opening.result.deliveredTo).toEqual(['22222222-2222-4222-8222-bbbbbbbbbbbb']);
 
     now += 5 * 60_000;
     const refreshedAt = new Date(now).toISOString();
     presenceRows['vhome/living_room'] = [
-      { companionId: '11111111-1111-4111-8111-111111111111', updatedAt: refreshedAt, since: presenceSince },
-      { companionId: '22222222-2222-4222-8222-222222222222', updatedAt: refreshedAt, since: presenceSince },
+      { companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa', updatedAt: refreshedAt, since: presenceSince },
+      { companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb', updatedAt: refreshedAt, since: presenceSince },
     ];
     now += 15 * 60_000 + 1;
     presenceRows['vhome/living_room'] = [
-      { companionId: '11111111-1111-4111-8111-111111111111', updatedAt: new Date(now).toISOString(), since: presenceSince },
-      { companionId: '22222222-2222-4222-8222-222222222222', updatedAt: refreshedAt, since: presenceSince },
+      { companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa', updatedAt: new Date(now).toISOString(), since: presenceSince },
+      { companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb', updatedAt: refreshedAt, since: presenceSince },
     ];
     const reply = await invokeRpc(agentB, 14, 'companion.message.send', {
       channelId: 'companion-room:living_room',
       content: 'finishing this exchange',
-      companionId: '22222222-2222-4222-8222-222222222222',
+      companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb',
       replyToMessageId: opening.result.messageId,
     });
-    expect(reply.result.deliveredTo).toEqual(['11111111-1111-4111-8111-111111111111']);
+    expect(reply.result.deliveredTo).toEqual(['11111111-1111-4111-8111-aaaaaaaaaaaa']);
     expect(methodFrames(agentA, 'companion.message').at(-1)?.params.message).toMatchObject({
       replyToMessageId: opening.result.messageId,
       routing: {
@@ -446,7 +446,7 @@ describe('companion.message.send routing (W6)', () => {
     const replay = await invokeRpc(agentB, 15, 'companion.message.send', {
       channelId: 'companion-room:living_room',
       content: 'trying to continue while absent',
-      companionId: '22222222-2222-4222-8222-222222222222',
+      companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb',
       replyToMessageId: opening.result.messageId,
     });
     expect(replay.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
@@ -454,31 +454,31 @@ describe('companion.message.send routing (W6)', () => {
     const absentInitiation = await invokeRpc(agentB, 16, 'companion.message.send', {
       channelId: 'companion-room:living_room',
       content: 'new topic while absent',
-      companionId: '22222222-2222-4222-8222-222222222222',
+      companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb',
     });
     expect(absentInitiation.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
 
     now += 1;
     presenceRows['vhome/living_room'] = [
-      { companionId: '11111111-1111-4111-8111-111111111111', updatedAt: new Date(now).toISOString(), since: presenceSince },
-      { companionId: '22222222-2222-4222-8222-222222222222', updatedAt: new Date(now).toISOString(), since: presenceSince },
+      { companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa', updatedAt: new Date(now).toISOString(), since: presenceSince },
+      { companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb', updatedAt: new Date(now).toISOString(), since: presenceSince },
     ];
     const secondOpening = await invokeRpc(agentA, 17, 'companion.message.send', {
       channelId: 'companion-room:living_room',
       content: 'one more question',
-      companionId: '11111111-1111-4111-8111-111111111111',
+      companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
     });
-    expect(secondOpening.result.deliveredTo).toEqual(['22222222-2222-4222-8222-222222222222']);
+    expect(secondOpening.result.deliveredTo).toEqual(['22222222-2222-4222-8222-bbbbbbbbbbbb']);
 
     now += 15 * 60_000 + 1;
     presenceRows['vhome/living_room'] = [
-      { companionId: '11111111-1111-4111-8111-111111111111', updatedAt: new Date(now).toISOString(), since: presenceSince },
+      { companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa', updatedAt: new Date(now).toISOString(), since: presenceSince },
       { companionId: '33333333-3333-4333-8333-333333333333', updatedAt: new Date(now).toISOString(), since: new Date(now).toISOString() },
     ];
     const afterLeave = await invokeRpc(agentB, 18, 'companion.message.send', {
       channelId: 'companion-room:living_room',
       content: 'must not reach the new occupant',
-      companionId: '22222222-2222-4222-8222-222222222222',
+      companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb',
       replyToMessageId: secondOpening.result.messageId,
     });
     expect(afterLeave.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
@@ -494,8 +494,8 @@ describe('companion.message.send routing (W6)', () => {
     const presenceSince = new Date(NOW - 60_000).toISOString();
     const presenceRows: Record<string, CompanionPresenceReadRow[]> = {
       'vhome/living_room': [
-        { companionId: '11111111-1111-4111-8111-111111111111', updatedAt: new Date(now).toISOString(), since: presenceSince },
-        { companionId: '22222222-2222-4222-8222-222222222222', updatedAt: new Date(now).toISOString(), since: presenceSince },
+        { companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa', updatedAt: new Date(now).toISOString(), since: presenceSince },
+        { companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb', updatedAt: new Date(now).toISOString(), since: presenceSince },
       ],
     };
     const { connect } = await setupServer({
@@ -506,31 +506,31 @@ describe('companion.message.send routing (W6)', () => {
     });
     const agentA = await connect();
     const agentB = await connect();
-    await identifyAgent(agentA, '11111111-1111-4111-8111-111111111111');
-    await identifyAgent(agentB, '22222222-2222-4222-8222-222222222222', 901);
+    await identifyAgent(agentA, '11111111-1111-4111-8111-aaaaaaaaaaaa');
+    await identifyAgent(agentB, '22222222-2222-4222-8222-bbbbbbbbbbbb', 901);
 
     const opening = await invokeRpc(agentA, 60, 'companion.message.send', {
       channelId: 'companion-room:living_room',
       content: 'opening',
-      companionId: '11111111-1111-4111-8111-111111111111',
+      companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
     });
     const firstReply = await invokeRpc(agentB, 61, 'companion.message.send', {
       channelId: 'companion-room:living_room',
       content: 'reply while present',
-      companionId: '22222222-2222-4222-8222-222222222222',
+      companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb',
       replyToMessageId: opening.result.messageId,
     });
-    expect(firstReply.result.deliveredTo).toEqual(['11111111-1111-4111-8111-111111111111']);
+    expect(firstReply.result.deliveredTo).toEqual(['11111111-1111-4111-8111-aaaaaaaaaaaa']);
 
     now += 15 * 60_000 + 1;
     presenceRows['vhome/living_room'] = [
-      { companionId: '11111111-1111-4111-8111-111111111111', updatedAt: new Date(now).toISOString(), since: presenceSince },
-      { companionId: '22222222-2222-4222-8222-222222222222', updatedAt: new Date(NOW).toISOString(), since: presenceSince },
+      { companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa', updatedAt: new Date(now).toISOString(), since: presenceSince },
+      { companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb', updatedAt: new Date(NOW).toISOString(), since: presenceSince },
     ];
     const replay = await invokeRpc(agentB, 62, 'companion.message.send', {
       channelId: 'companion-room:living_room',
       content: 'must not reuse the reply id',
-      companionId: '22222222-2222-4222-8222-222222222222',
+      companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb',
       replyToMessageId: opening.result.messageId,
     });
     expect(replay.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
@@ -543,8 +543,8 @@ describe('companion.message.send routing (W6)', () => {
     const presenceSince = new Date(NOW - 60_000).toISOString();
     const presenceRows: Record<string, CompanionPresenceReadRow[]> = {
       'vhome/living_room': [
-        { companionId: '11111111-1111-4111-8111-111111111111', updatedAt: new Date(now).toISOString(), since: presenceSince },
-        { companionId: '22222222-2222-4222-8222-222222222222', updatedAt: new Date(now).toISOString(), since: presenceSince },
+        { companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa', updatedAt: new Date(now).toISOString(), since: presenceSince },
+        { companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb', updatedAt: new Date(now).toISOString(), since: presenceSince },
       ],
     };
     const { connect } = await setupServer({
@@ -555,13 +555,13 @@ describe('companion.message.send routing (W6)', () => {
     });
     const agentA = await connect();
     const agentB = await connect();
-    await identifyAgent(agentA, '11111111-1111-4111-8111-111111111111');
-    await identifyAgent(agentB, '22222222-2222-4222-8222-222222222222', 901);
+    await identifyAgent(agentA, '11111111-1111-4111-8111-aaaaaaaaaaaa');
+    await identifyAgent(agentB, '22222222-2222-4222-8222-bbbbbbbbbbbb', 901);
 
     const arbitrary = await invokeRpc(agentB, 63, 'companion.message.send', {
       channelId: 'companion-room:living_room',
       content: 'forged lineage',
-      companionId: '22222222-2222-4222-8222-222222222222',
+      companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb',
       replyToMessageId: 'companion-never-delivered',
     });
     expect(arbitrary.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
@@ -569,17 +569,17 @@ describe('companion.message.send routing (W6)', () => {
     const opening = await invokeRpc(agentA, 64, 'companion.message.send', {
       channelId: 'companion-room:living_room',
       content: 'expires before reply',
-      companionId: '11111111-1111-4111-8111-111111111111',
+      companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
     });
     now += 60 * 60_000 + 1;
     presenceRows['vhome/living_room'] = [
-      { companionId: '11111111-1111-4111-8111-111111111111', updatedAt: new Date(now).toISOString(), since: presenceSince },
-      { companionId: '22222222-2222-4222-8222-222222222222', updatedAt: new Date(now).toISOString(), since: presenceSince },
+      { companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa', updatedAt: new Date(now).toISOString(), since: presenceSince },
+      { companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb', updatedAt: new Date(now).toISOString(), since: presenceSince },
     ];
     const expired = await invokeRpc(agentB, 65, 'companion.message.send', {
       channelId: 'companion-room:living_room',
       content: 'expired lineage',
-      companionId: '22222222-2222-4222-8222-222222222222',
+      companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb',
       replyToMessageId: opening.result.messageId,
     });
     expect(expired.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
@@ -597,12 +597,12 @@ describe('companion.message.send routing (W6)', () => {
       auditStore,
     });
     const agent = await connect();
-    await identifyAgent(agent, '11111111-1111-4111-8111-111111111111');
+    await identifyAgent(agent, '11111111-1111-4111-8111-aaaaaaaaaaaa');
 
     const response = await invokeRpc(agent, 11, 'companion.message.send', {
       channelId: 'companion-room:no_such_place',
       content: 'anyone here?',
-      companionId: '11111111-1111-4111-8111-111111111111',
+      companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
     });
     expect(response.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
     await vi.waitFor(() => {
@@ -619,12 +619,12 @@ describe('companion.message.send routing (W6)', () => {
       auditStore,
     });
     const agent = await connect();
-    await identifyAgent(agent, '11111111-1111-4111-8111-111111111111');
+    await identifyAgent(agent, '11111111-1111-4111-8111-aaaaaaaaaaaa');
 
     const response = await invokeRpc(agent, 12, 'companion.message.send', {
-      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111!:22222222-2222-4222-8222-222222222222',
+      channelId: 'companion-dm:11111111-1111-4111-8111-aaaaaaaaaaaa!:22222222-2222-4222-8222-bbbbbbbbbbbb',
       content: 'malformed companion lane',
-      companionId: '11111111-1111-4111-8111-111111111111',
+      companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
     });
     expect(response.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
     await vi.waitFor(() => {
@@ -636,45 +636,45 @@ describe('companion.message.send routing (W6)', () => {
     const { connect } = await setupServer({
       ...createMinimalOptions(),
       multiCompanion: multiCompanion(),
-      companionChannels: makeLane({ fleet: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'] }),
+      companionChannels: makeLane({ fleet: ['11111111-1111-4111-8111-aaaaaaaaaaaa', '22222222-2222-4222-8222-bbbbbbbbbbbb'] }),
     });
     const agentA = await connect();
     const agentB = await connect();
-    await identifyAgent(agentA, '11111111-1111-4111-8111-111111111111');
-    await identifyAgent(agentB, '22222222-2222-4222-8222-222222222222', 901);
+    await identifyAgent(agentA, '11111111-1111-4111-8111-aaaaaaaaaaaa');
+    await identifyAgent(agentB, '22222222-2222-4222-8222-bbbbbbbbbbbb', 901);
 
     const response = await invokeRpc(agentA, 20, 'companion.message.send', {
-      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      channelId: 'companion-dm:11111111-1111-4111-8111-aaaaaaaaaaaa:22222222-2222-4222-8222-bbbbbbbbbbbb',
       content: 'psst, over here',
-      companionId: '11111111-1111-4111-8111-111111111111',
+      companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
     });
-    expect(response.result).toMatchObject({ deliveredTo: ['22222222-2222-4222-8222-222222222222'], skippedOffline: [] });
+    expect(response.result).toMatchObject({ deliveredTo: ['22222222-2222-4222-8222-bbbbbbbbbbbb'], skippedOffline: [] });
 
     const delivered = methodFrames(agentB, 'companion.message');
     expect(delivered).toHaveLength(1);
     expect(delivered[0].params.message).toMatchObject({
-      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      channelId: 'companion-dm:11111111-1111-4111-8111-aaaaaaaaaaaa:22222222-2222-4222-8222-bbbbbbbbbbbb',
       isDirectMessage: true,
-      authorId: '11111111-1111-4111-8111-111111111111',
+      authorId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
     });
 
     // The peer replies on the SAME channelId (pair ordering is canonical).
     const reply = await invokeRpc(agentB, 21, 'companion.message.send', {
-      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      channelId: 'companion-dm:11111111-1111-4111-8111-aaaaaaaaaaaa:22222222-2222-4222-8222-bbbbbbbbbbbb',
       content: 'heard you',
-      companionId: '22222222-2222-4222-8222-222222222222',
+      companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb',
       replyToMessageId: response.result.messageId,
     });
-    expect(reply.result).toMatchObject({ deliveredTo: ['11111111-1111-4111-8111-111111111111'] });
+    expect(reply.result).toMatchObject({ deliveredTo: ['11111111-1111-4111-8111-aaaaaaaaaaaa'] });
     expect(methodFrames(agentA, 'companion.message')[0].params.message).toMatchObject({
-      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      channelId: 'companion-dm:11111111-1111-4111-8111-aaaaaaaaaaaa:22222222-2222-4222-8222-bbbbbbbbbbbb',
       replyToMessageId: response.result.messageId,
     });
 
     const forged = await invokeRpc(agentB, 22, 'companion.message.send', {
-      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      channelId: 'companion-dm:11111111-1111-4111-8111-aaaaaaaaaaaa:22222222-2222-4222-8222-bbbbbbbbbbbb',
       content: 'forged dm lineage',
-      companionId: '22222222-2222-4222-8222-222222222222',
+      companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb',
       replyToMessageId: 'companion-never-delivered',
     });
     expect(forged.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
@@ -686,32 +686,32 @@ describe('companion.message.send routing (W6)', () => {
     const { connect } = await setupServer({
       ...createMinimalOptions(),
       multiCompanion: multiCompanion(),
-      companionChannels: makeLane({ fleet: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'] }),
+      companionChannels: makeLane({ fleet: ['11111111-1111-4111-8111-aaaaaaaaaaaa', '22222222-2222-4222-8222-bbbbbbbbbbbb'] }),
     });
     const agentA = await connect();
     const agentB = await connect();
-    await identifyAgent(agentA, '11111111-1111-4111-8111-111111111111');
-    await identifyAgent(agentB, '22222222-2222-4222-8222-222222222222', 901);
+    await identifyAgent(agentA, '11111111-1111-4111-8111-aaaaaaaaaaaa');
+    await identifyAgent(agentB, '22222222-2222-4222-8222-bbbbbbbbbbbb', 901);
 
     const send = await invokeRpc(agentA, 22, 'companion.message.send', {
-      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      channelId: 'companion-dm:11111111-1111-4111-8111-aaaaaaaaaaaa:22222222-2222-4222-8222-bbbbbbbbbbbb',
       content: 'message that fails remotely',
-      companionId: '11111111-1111-4111-8111-111111111111',
+      companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
     });
     const report = await invokeRpc(agentB, 23, 'companion.message.report_failure', {
-      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      channelId: 'companion-dm:11111111-1111-4111-8111-aaaaaaaaaaaa:22222222-2222-4222-8222-bbbbbbbbbbbb',
       messageId: send.result.messageId,
       reason: 'processing_failed',
-      companionId: '22222222-2222-4222-8222-222222222222',
+      companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb',
     });
 
-    expect(report.result).toEqual({ reportedTo: '11111111-1111-4111-8111-111111111111' });
+    expect(report.result).toEqual({ reportedTo: '11111111-1111-4111-8111-aaaaaaaaaaaa' });
     const failures = methodFrames(agentA, 'companion.message.delivery_failure');
     expect(failures).toHaveLength(1);
     expect(failures[0].params).toMatchObject({
-      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      channelId: 'companion-dm:11111111-1111-4111-8111-aaaaaaaaaaaa:22222222-2222-4222-8222-bbbbbbbbbbbb',
       messageId: send.result.messageId,
-      reportingCompanionId: '22222222-2222-4222-8222-222222222222',
+      reportingCompanionId: '22222222-2222-4222-8222-bbbbbbbbbbbb',
       reason: 'processing_failed',
       reportedAt: expect.any(String),
     });
@@ -722,16 +722,16 @@ describe('companion.message.send routing (W6)', () => {
     const { connect } = await setupServer({
       ...createMinimalOptions(),
       multiCompanion: multiCompanion(),
-      companionChannels: makeLane({ fleet: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'] }),
+      companionChannels: makeLane({ fleet: ['11111111-1111-4111-8111-aaaaaaaaaaaa', '22222222-2222-4222-8222-bbbbbbbbbbbb'] }),
     });
     const agentB = await connect();
-    await identifyAgent(agentB, '22222222-2222-4222-8222-222222222222');
+    await identifyAgent(agentB, '22222222-2222-4222-8222-bbbbbbbbbbbb');
 
     const report = await invokeRpc(agentB, 24, 'companion.message.report_failure', {
-      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      channelId: 'companion-dm:11111111-1111-4111-8111-aaaaaaaaaaaa:22222222-2222-4222-8222-bbbbbbbbbbbb',
       messageId: 'companion-not-delivered-here',
       reason: 'processing_failed',
-      companionId: '22222222-2222-4222-8222-222222222222',
+      companionId: '22222222-2222-4222-8222-bbbbbbbbbbbb',
     });
 
     expect(report.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
@@ -742,16 +742,16 @@ describe('companion.message.send routing (W6)', () => {
     const { connect } = await setupServer({
       ...createMinimalOptions(),
       multiCompanion: multiCompanion(),
-      companionChannels: makeLane({ fleet: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333'] }),
+      companionChannels: makeLane({ fleet: ['11111111-1111-4111-8111-aaaaaaaaaaaa', '22222222-2222-4222-8222-bbbbbbbbbbbb', '33333333-3333-4333-8333-333333333333'] }),
       auditStore,
     });
     const agent = await connect();
-    await identifyAgent(agent, '11111111-1111-4111-8111-111111111111');
+    await identifyAgent(agent, '11111111-1111-4111-8111-aaaaaaaaaaaa');
 
     const response = await invokeRpc(agent, 30, 'companion.message.send', {
-      channelId: 'companion-dm:22222222-2222-4222-8222-222222222222:33333333-3333-4333-8333-333333333333',
+      channelId: 'companion-dm:22222222-2222-4222-8222-bbbbbbbbbbbb:33333333-3333-4333-8333-333333333333',
       content: 'let me in',
-      companionId: '11111111-1111-4111-8111-111111111111',
+      companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
     });
     expect(response.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
     await vi.waitFor(() => {
@@ -764,16 +764,16 @@ describe('companion.message.send routing (W6)', () => {
     const { connect } = await setupServer({
       ...createMinimalOptions(),
       multiCompanion: multiCompanion(),
-      companionChannels: makeLane({ fleet: ['11111111-1111-4111-8111-111111111111'] }),
+      companionChannels: makeLane({ fleet: ['11111111-1111-4111-8111-aaaaaaaaaaaa'] }),
       auditStore,
     });
     const agent = await connect();
-    await identifyAgent(agent, '11111111-1111-4111-8111-111111111111');
+    await identifyAgent(agent, '11111111-1111-4111-8111-aaaaaaaaaaaa');
 
     const response = await invokeRpc(agent, 31, 'companion.message.send', {
-      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:55555555-5555-4555-8555-555555555555',
+      channelId: 'companion-dm:11111111-1111-4111-8111-aaaaaaaaaaaa:55555555-5555-4555-8555-555555555555',
       content: 'hello stranger',
-      companionId: '11111111-1111-4111-8111-111111111111',
+      companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
     });
     expect(response.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
     await vi.waitFor(() => {
@@ -786,16 +786,16 @@ describe('companion.message.send routing (W6)', () => {
     const { connect } = await setupServer({
       ...createMinimalOptions(),
       multiCompanion: multiCompanion(),
-      companionChannels: makeLane({ fleet: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'] }),
+      companionChannels: makeLane({ fleet: ['11111111-1111-4111-8111-aaaaaaaaaaaa', '22222222-2222-4222-8222-bbbbbbbbbbbb'] }),
       auditStore,
     });
     const agent = await connect();
-    await identifyAgent(agent, '11111111-1111-4111-8111-111111111111');
+    await identifyAgent(agent, '11111111-1111-4111-8111-aaaaaaaaaaaa');
 
     const response = await invokeRpc(agent, 32, 'companion.message.send', {
-      channelId: 'companion-dm:11111111-1111-4111-8111-111111111111:22222222-2222-4222-8222-222222222222',
+      channelId: 'companion-dm:11111111-1111-4111-8111-aaaaaaaaaaaa:22222222-2222-4222-8222-bbbbbbbbbbbb',
       content: 'are you there?',
-      companionId: '11111111-1111-4111-8111-111111111111',
+      companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
     });
     expect(response.error?.code).toBe(GatewayErrors.COMPANION_ROUTING_UNAVAILABLE);
     expect(String(response.error.message)).toMatch(/not connected/i);
@@ -811,18 +811,18 @@ describe('companion.message.send routing (W6)', () => {
       companionChannels: makeLane({}),
     });
     const agent = await connect();
-    await identifyAgent(agent, '11111111-1111-4111-8111-111111111111');
+    await identifyAgent(agent, '11111111-1111-4111-8111-aaaaaaaaaaaa');
 
     const noContent = await invokeRpc(agent, 40, 'companion.message.send', {
       channelId: 'companion-room:living_room',
       content: '   ',
-      companionId: '11111111-1111-4111-8111-111111111111',
+      companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
     });
     expect(noContent.error).toBeDefined();
 
     const noChannel = await invokeRpc(agent, 41, 'companion.message.send', {
       content: 'floating message',
-      companionId: '11111111-1111-4111-8111-111111111111',
+      companionId: '11111111-1111-4111-8111-aaaaaaaaaaaa',
     });
     expect(noChannel.error).toBeDefined();
   });

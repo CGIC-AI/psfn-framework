@@ -126,7 +126,7 @@ const TEXT_REFERENCE_ALLOWLIST = [
   },
   {
     path: 'docs/specifications.md',
-    contains: 'do not open them through a SQLite reader',
+    contains: 'may preserve or move opaque files but do not open them through a SQLite',
     classification: 'legacy-artifact-contract',
     reason: 'The live alpha boundary explicitly denies an implementation exception.',
   },

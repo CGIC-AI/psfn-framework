@@ -1979,6 +1979,270 @@
       "contains": "psfn-postgres-clients-",
       "reason": "PostgreSQL test harness uses a project-scoped mkdtemp prefix for its per-run client-binary staging directory, consistent with its established project-scoped test artifact namespace.",
       "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/backplane/companion-relay/redaction.ts",
+      "contains": "psfn-framework-13sk",
+      "reason": "Approval redaction comments cite the bead that owns the v2 approval-envelope projection.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/backplane/companion-relay/redaction.ts",
+      "contains": "psfn-framework-mus2.3",
+      "reason": "Approval redaction comments cite the bead that owns shard provenance emission.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/backplane/config.ts",
+      "contains": "X-PSFN-Channel-Type",
+      "reason": "Channel-profile documentation names the stable external channel-type request header.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/core/agent/agent-loop-events.ts",
+      "contains": "psfn-framework-ay73",
+      "reason": "Agent-loop event documentation cites the bead that owns the user-facing boundary marker.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/intention/runtime-wiring.ts",
+      "contains": "psfn-framework-ktvo",
+      "reason": "Intention runtime documentation cites the bead that owns pending-follow-up length enforcement.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/scheduler/temporal-wakeup.ts",
+      "contains": "psfn-framework-7grh",
+      "reason": "Temporal-wakeup documentation cites the bead that owns cross-channel habit estimation.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/core/session/manager-primitives.ts",
+      "contains": "psfn-framework-2x37.8",
+      "reason": "Session-manager documentation cites the bead that owns rendered-history budget accounting.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/faculties/shards/configuration-snapshot.ts",
+      "contains": "psfn.shard-configuration.v1",
+      "reason": "Shard configuration revisions use a stable project-scoped protocol discriminator.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/operator/garden/fleet-child-assertion-client.ts",
+      "contains": "psfn.gatewayApiBaseUrl",
+      "reason": "Child-assertion client documentation names the established project-scoped Helm helper.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/operator/garden/garden-admission.ts",
+      "contains": "x-psfn-",
+      "reason": "Garden admission strips the stable project-scoped fleet caller authority-header family.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/operator/garden/transport-paths.ts",
+      "contains": "/psfn/agent/",
+      "reason": "Fleet Garden transport validates and derives the stable project-scoped SPIFFE workload path.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/fleet-auth/authority-lifecycle-audit.ts",
+      "contains": "psfn-framework-5wrp",
+      "reason": "Lifecycle-audit documentation cites the bead that owns keyed identifier digests.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/fleet-auth/authority-lifecycle-store.ts",
+      "contains": "psfn-framework-5wrp",
+      "reason": "Lifecycle-store documentation cites the bead that owns structural digest reconciliation.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/fleet-auth/gateway-persistence.ts",
+      "contains": "rpName: 'PSFN Fleet'",
+      "reason": "The WebAuthn relying-party name is the established fleet application label, not a companion identity default.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/persistence/postgres/fleet-auth/hub-device-assertion-replay-sql.ts",
+      "contains": "psfn-framework-5wrp",
+      "reason": "Replay-ledger SQL documentation cites the bead that owns keyed audit digests.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/postgres/fleet-auth/migrations.ts",
+      "contains": "psfn-framework-5wrp",
+      "reason": "Fleet-auth migration documentation cites the bead that owns keyed audit digest migration.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/persistence/sessions/turn-record-snapshot-view.ts",
+      "contains": "psfn-framework-aylm.5",
+      "reason": "Turn-record snapshot documentation cites the bead that owns the audited narrowing seam.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/contracts/approval-envelope.ts",
+      "contains": "psfn-framework-ct0v",
+      "reason": "Approval-envelope documentation cites the bead that owns the unified contract.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/contracts/channel-types.ts",
+      "contains": "'psfn-amica'",
+      "reason": "The channel type registry preserves the stable psfn-amica external channel identifier.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/contracts/companion-relay.ts",
+      "contains": "psfn-framework-13sk",
+      "reason": "Companion-relay contract documentation cites the bead that owns the v2 approval payload.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/contracts/companion-relay.ts",
+      "contains": "psfn-framework-mus2.3",
+      "reason": "Companion-relay contract documentation cites the bead that owns shard provenance.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/contracts/emotion-contracts.ts",
+      "contains": "psfn.acac_self_report",
+      "reason": "ACAC emotion artifacts use a stable project-scoped schema discriminator.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/contracts/runtime-base.ts",
+      "contains": "'psfn-amica'",
+      "reason": "Message-routing metadata preserves the stable psfn-amica external source identifier.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/contracts/runtime-base.ts",
+      "contains": "http://psfn-emosim:17342",
+      "reason": "Observer-sidecar configuration documents the established project-scoped cluster service URL.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/shared/utils/types.ts",
+      "contains": "psfn-framework-aylm.5",
+      "reason": "Shared type-guard documentation cites the bead that owns the audited widening seam.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/system/capabilities/confirmation-queue.ts",
+      "contains": "psfn-framework-13sk / ct0v",
+      "reason": "Confirmation-queue documentation cites the beads that own unified approval-envelope provenance.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/system/capabilities/shard-derivation.ts",
+      "contains": "psfn-framework-yijy.1",
+      "reason": "Shard derivation documentation cites the bead that owns the capability-tier design.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/system/capabilities/shard-derivation.ts",
+      "contains": "psfn.shard-grant.v1",
+      "reason": "Shard grant derivation uses a stable project-scoped protocol version.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/system/capabilities/shard-derivation.ts",
+      "contains": "psfn.capability-owner.v1",
+      "reason": "Capability owner versions use a stable project-scoped protocol label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "admin-ui/src/routes/+layout.svelte",
+      "contains": "X-PSFN-CSRF",
+      "reason": "The admin layout sends the stable project-scoped fleet CSRF request header.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "scripts/shakedown-support-fixtures/postgres.ts",
+      "contains": "psfn-shakedown-support-fixtures",
+      "reason": "Shakedown support persistence uses a project-scoped PostgreSQL application_name label.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/agent/main.ts",
+      "contains": "psfn-framework-e7s0",
+      "reason": "Agent runtime documentation cites the bead that owns fail-closed Beads tool enablement.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/e2e/contact-lifecycle-certification/process-harness.ts",
+      "contains": "PSFN Contact Lifecycle Test CA",
+      "reason": "The contact-lifecycle certification harness names its project-scoped ephemeral test CA.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/app/e2e/contact-lifecycle-certification/process-harness.ts",
+      "contains": "spiffe://cluster.local/psfn/",
+      "reason": "The contact-lifecycle certification harness exercises the stable project-scoped SPIFFE workload paths.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/app/e2e/contact-lifecycle-certification/process-harness.ts",
+      "contains": "psfn-contact-lifecycle-",
+      "reason": "The contact-lifecycle certification harness uses a project-scoped temporary-directory prefix.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/fleet-auth/garden-capability-context.ts",
+      "contains": "x-psfn-capability-context",
+      "reason": "Garden capability context uses a stable project-scoped internal request header.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/fleet-auth/hub-device-assertion.ts",
+      "contains": "psfn-framework-5wrp",
+      "reason": "Hub-device assertion documentation cites the bead that owns keyed audit digests.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/fleet-auth/request-capability-target.ts",
+      "contains": "x-psfn-",
+      "reason": "Request-capability targets bind the stable project-scoped action, companion, and resource header family.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/gateway/approval-boundary.ts",
+      "contains": "psfn-framework-13sk",
+      "reason": "Approval-boundary documentation cites the bead that owns the unified escalation surface.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/boundary/integrations/beads/enablement.ts",
+      "contains": "psfn-framework-e7s0",
+      "reason": "Beads integration documentation cites the bead that owns fail-closed tool advertisement.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/agent-backend.ts",
+      "contains": "X-PSFN-Channel-Type",
+      "reason": "Agent-backend documentation names the stable external channel-type request header.",
+      "pattern": "identity-proper-name"
+    },
+    {
+      "path": "src/channels/api/companion-ui-websocket.ts",
+      "contains": "x-psfn-",
+      "reason": "Companion UI WebSocket ingress strips the stable project-scoped untrusted authority-header family.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/channels/api/server/companion-relay-routes.ts",
+      "contains": "psfn-framework-13sk",
+      "reason": "Companion-relay route documentation cites the bead that owns approval protocol negotiation.",
+      "pattern": "identity-legacy-slug"
+    },
+    {
+      "path": "src/operator/garden/transport-paths.ts",
+      "contains": "\\/psfn\\/agent\\/",
+      "reason": "Fleet Garden transport validates the stable project-scoped SPIFFE workload path in its regular expression.",
+      "pattern": "identity-legacy-slug"
     }
   ]
 }

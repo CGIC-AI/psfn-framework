@@ -621,6 +621,32 @@ describe('PostgresModelUsageStore reconciliation', () => {
       expect(first.timeSeries).toHaveLength(23);
       expect(first.timeSeries.reduce((sum, bucket) => sum + bucket.calls, 0)).toBe(3);
       expect(first.timeSeries.filter(bucket => bucket.calls === 0)).toHaveLength(20);
+      expect(first.seriesByDimension?.model).toEqual([
+        expect.objectContaining({
+          key: 'provider-a:provider-a-model',
+          startMs: sinceMs,
+          calls: 1,
+          totalTokens: 20,
+          totalCostUsd: 0.03,
+        }),
+        expect.objectContaining({
+          key: 'provider-b:provider-b-model',
+          startMs: sinceMs + 2 * 60 * 60_000,
+          calls: 1,
+          totalCostUsd: 0.02,
+        }),
+        expect.objectContaining({
+          key: 'provider-c:provider-c-model',
+          startMs: sinceMs + 10 * 60 * 60_000,
+          calls: 1,
+          totalCostUsd: 0.01,
+        }),
+      ]);
+      expect(first.seriesByDimension?.provider?.map(bucket => bucket.key)).toEqual([
+        'provider-a',
+        'provider-b',
+        'provider-c',
+      ]);
       expect(first.groups).toHaveLength(2);
       expect(first.groups[0]).toMatchObject({
         dimensions: { provider: 'provider-a', status: 'success' },

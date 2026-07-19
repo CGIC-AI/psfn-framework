@@ -49,6 +49,13 @@ function combineAggregateTotalsWithOperatorDetails(
     ...operatorDetails,
     query: aggregateData.query,
     totals: aggregateData.totals,
+    // Aggregate buckets, like headline totals, include the complete ledger. Segmented
+    // series remain operator-visible detail, so their shortfall is exactly the
+    // companion-private share and never identifies a private model or call.
+    timeSeries: aggregateData.timeSeries,
+    ...(operatorData.seriesByDimension
+      ? { seriesByDimension: operatorData.seriesByDimension }
+      : {}),
     ...(aggregateData.previousPeriod ? { previousPeriod: aggregateData.previousPeriod } : {}),
     recentEvents: operatorData.recentEvents.filter(event => event.telemetryVisibility !== 'companion_private'),
     expensiveEvents: operatorData.expensiveEvents.filter(event => event.telemetryVisibility !== 'companion_private'),

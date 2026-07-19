@@ -2,10 +2,11 @@
   import { onMount } from 'svelte';
   import AccountingControls from './AccountingControls.svelte';
   import ChargeCostPanel from './ChargeCostPanel.svelte';
+  import TokenCompositionChart from './TokenCompositionChart.svelte';
+  import UsageByModelChart from './UsageByModelChart.svelte';
   import UsageBreakdownTable from './UsageBreakdownTable.svelte';
   import UsageEventsTable from './UsageEventsTable.svelte';
   import UsageMetricCards from './UsageMetricCards.svelte';
-  import UsageTimeSeries from './UsageTimeSeries.svelte';
   import {
     accountingStateFromSearchParams,
     accountingStateToSearchParams,
@@ -235,7 +236,15 @@
       </div>
     {/if}
 
-    <UsageTimeSeries buckets={usage.timeSeries} timezone={usage.resolvedRange.timezone} />
+    <UsageByModelChart
+      buckets={usage.timeSeries}
+      modelSeries={usage.seriesByDimension?.model ?? []}
+      timezone={usage.resolvedRange.timezone}
+    />
+    <TokenCompositionChart
+      buckets={usage.timeSeries}
+      timezone={usage.resolvedRange.timezone}
+    />
     <UsageBreakdownTable
       groups={usage.groups}
       groupedBy={usage.query.groupBy ?? appliedState.groupBy}

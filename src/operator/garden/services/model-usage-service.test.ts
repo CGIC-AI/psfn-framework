@@ -69,6 +69,9 @@ function usageFixture(): ModelUsageData {
     },
     totals,
     timeSeries: [{ startMs: 1, endMs: 2, ...totals }],
+    seriesByDimension: {
+      model: [{ key: 'litellm:deepseek/deepseek-v4-pro', startMs: 1, endMs: 2, ...totals }],
+    },
     groups: [],
     eventPage: { order: 'recent', items: [], nextCursor: null, hasMore: false },
     byModel: [{
@@ -126,6 +129,13 @@ describe('AdminModelUsageDataService', () => {
       calls: 1, inputTokens: 400, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0,
       totalTokens: 600, totalCostUsd: 0.5,
     });
+    aggregate.timeSeries = [{ startMs: 1, endMs: 2, ...aggregate.totals }];
+    aggregate.seriesByDimension?.model?.push({
+      key: 'litellm:private-model',
+      startMs: 1,
+      endMs: 2,
+      ...aggregate.totals,
+    });
     const privateEvent: ModelUsageEvent = {
       ...aggregate.recentEvents[0]!,
       id: 'usage-private',
@@ -180,6 +190,8 @@ describe('AdminModelUsageDataService', () => {
     expect(data.byPurpose).toEqual(visible.byPurpose);
     expect(data.byTool).toEqual(visible.byTool);
     expect(data.byCallKind).toEqual(visible.byCallKind);
+    expect(data.timeSeries).toEqual(aggregate.timeSeries);
+    expect(data.seriesByDimension).toEqual(visible.seriesByDimension);
     expect(data.recentEvents).toEqual(visible.recentEvents);
     expect(data.expensiveEvents).toEqual(visible.expensiveEvents);
     expect(JSON.stringify(data)).not.toContain('companion_private');

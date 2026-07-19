@@ -27,7 +27,7 @@ import type {
   TurnID,
 } from '../../../shared/contracts/runtime.js';
 import { isTemporalContextBudgetTurn } from '../../../shared/context-budget.js';
-import { backfillLegacyTurnId, createTurnId, parseTurnId } from '../../turns/id.js';
+import { createTurnId, deriveDeterministicTurnId, parseTurnId } from '../../turns/id.js';
 import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import type { TurnSnapshot } from '../../turns/snapshot.js';
 import type { IcpFatigueReservationOutcome } from '../fatigue/regulation-reservation.js';
@@ -360,7 +360,7 @@ export async function handleMessageForTurn(
     ? parseIcpConversationCorrelation(message.routing.icpCorrelation)
     : null;
   const deterministicReplyTurnId = inboundIcpCorrelation
-    ? backfillLegacyTurnId([
+    ? deriveDeterministicTurnId([
         'icp-reply',
         resolveCompanionIdFromConfig(runtime.config),
         message.channelId,

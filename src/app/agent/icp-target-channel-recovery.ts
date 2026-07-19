@@ -1,4 +1,4 @@
-import { backfillLegacyTurnId } from '../../core/turns/id.js';
+import { deriveDeterministicTurnId } from '../../core/turns/id.js';
 import {
   assertIcpRecoveryStatusBinding,
   parseIcpRecoveryResponse,
@@ -28,9 +28,9 @@ export interface IcpTargetRecoveryBinding {
 
 export function deriveStableIcpTargetTurnId(
   binding: IcpTargetRecoveryBinding,
-): ReturnType<typeof backfillLegacyTurnId> {
+): ReturnType<typeof deriveDeterministicTurnId> {
   const { permit } = binding;
-  return backfillLegacyTurnId(JSON.stringify({
+  return deriveDeterministicTurnId(JSON.stringify({
     kind: 'icp-target-initiation',
     sourceMessageId: binding.sourceMessageId,
     permitId: permit.permitId,

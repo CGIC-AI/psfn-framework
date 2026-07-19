@@ -116,4 +116,21 @@ describe('bounded subagent contract', () => {
     })).toThrow('non-empty sourceContext.embodimentContext.embodimentId');
   });
 
+  it('normalizes the per-spawn memory-write elevation and fails closed on a blank reason (c7d)', () => {
+    expect(normalizeBoundedSubagentLaunchRequest({
+      name: 'name',
+      task: 'task',
+      memoryWriteElevation: { reason: '  sleeptime maintenance  ' },
+    }).memoryWriteElevation).toEqual({ reason: 'sleeptime maintenance' });
+    expect(normalizeBoundedSubagentLaunchRequest({
+      name: 'name',
+      task: 'task',
+    })).not.toHaveProperty('memoryWriteElevation');
+    expect(() => normalizeBoundedSubagentLaunchRequest({
+      name: 'name',
+      task: 'task',
+      memoryWriteElevation: { reason: '   ' },
+    })).toThrow('non-empty memoryWriteElevation.reason');
+  });
+
 });

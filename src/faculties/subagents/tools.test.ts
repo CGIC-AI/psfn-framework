@@ -182,6 +182,30 @@ describe('createSubagentTool', () => {
     });
   });
 
+  it('maps the per-spawn memory-write elevation reason onto the spawn request (c7d)', async () => {
+    const port = createPort();
+    const tool = createSubagentTool(port);
+
+    await tool.execute('call-1', {
+      action: 'spawn',
+      name: 'sleeptime-maintenance',
+      task: 'consolidate emotional memory',
+      memory_write_elevation_reason: '  sleeptime emotional-memory maintenance  ',
+    });
+    expect(port.spawn).toHaveBeenCalledWith(expect.objectContaining({
+      memoryWriteElevation: { reason: 'sleeptime emotional-memory maintenance' },
+    }));
+
+    // Blank reason is not an elevation request.
+    await tool.execute('call-2', {
+      action: 'spawn',
+      name: 'inspect',
+      task: 'inspect runtime state',
+      memory_write_elevation_reason: '   ',
+    });
+    expect((port.spawn as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0]).not.toHaveProperty('memoryWriteElevation');
+  });
+
   it('returns detailed status for a specific bounded worker and a snapshot otherwise', async () => {
     const port = createPort();
     const tool = createSubagentTool(port);

@@ -25,12 +25,39 @@ describe('operator accounting cockpit contract', () => {
     expect(cockpit).toMatch(/downloadModelUsageExport/);
   });
 
-  it('renders explicit token/cost components plus an accessible graph and table', () => {
-    for (const component of ['Input', 'Cache read', 'Cache write', 'Output']) {
-      expect(metrics).toContain(`label: '${component}'`);
+  it('preserves token, cache, cost-source, and latency context beside accessible graphs', () => {
+    for (const field of [
+      'totals.inputTokens',
+      'totals.outputTokens',
+      'totals.cacheReadTokens',
+      'totals.cacheWriteTokens',
+      'totals.providerCost.totalUsd',
+      'totals.estimatedCost.totalUsd',
+      'totals.averageTtftMs',
+      'totals.averageDurationMs',
+    ]) {
+      expect(metrics).toContain(field);
     }
     expect(chart).toMatch(/role="img"/);
     expect(chart).toMatch(/Time-series data table/);
+  });
+
+  it('wires headline sparklines and previous-period deltas to the applied usage response', () => {
+    expect(cockpit).toMatch(/timeSeries=\{usage\.timeSeries\}/);
+    expect(cockpit).toMatch(/previousPeriod=\{usage\.previousPeriod\}/);
+    expect(metrics).toMatch(/import Sparkline/);
+    expect(metrics).toMatch(/import TrendDelta/);
+    expect(metrics).toMatch(/\{#if previousPeriod\}/);
+    for (const label of [
+      'Effective spend',
+      'Requests',
+      'Token volume',
+      'Cache hit rate',
+      'Blended $/1M',
+      'Latency',
+    ]) {
+      expect(metrics).toContain(`>${label}</p>`);
+    }
   });
 
   it('renders both event orders from canonical nested attribution with intentional unknown handling', () => {

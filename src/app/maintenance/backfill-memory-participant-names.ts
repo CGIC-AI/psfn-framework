@@ -11,10 +11,12 @@ import {
   type MemoryParticipantNameRepairReport,
 } from '../../persistence/repair/memory-participant-name-repair.js';
 import { resolveCompanionNameFromConfig } from '../../core/identity/companion-runtime.js';
-import { loadConfig } from '../../system/config/load-config.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
-import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
-import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
+import {
+  bootstrapMaintenanceRuntime,
+  isMaintenanceCliEntrypoint,
+  parseCommonMaintenanceArgs,
+  runMaintenanceCli,
+} from './cli-harness.js';
 
 type RepairBackend = 'postgres';
 
@@ -49,12 +51,6 @@ function printUsage(): void {
   console.log('  -h, --help               Show this help message.');
 }
 
-function requireNext(argv: string[], index: number, arg: string): string {
-  const value = argv[index + 1];
-  if (!value) throw new Error(`Missing value for ${arg}`);
-  return value;
-}
-
 function parseLimit(value: string): number {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -68,61 +64,41 @@ function parseBackend(value: string): RepairBackend {
   throw new Error('--backend must be postgres');
 }
 
-function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = {
-    apply: false,
-    includeArchived: false,
-    json: false,
-    showHelp: false,
-  };
-
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--help' || arg === '-h') {
-      options.showHelp = true;
-      continue;
-    }
-    if (arg === '--apply') {
-      options.apply = true;
-      continue;
-    }
-    if (arg === '--include-archived') {
-      options.includeArchived = true;
-      continue;
-    }
-    if (arg === '--json') {
-      options.json = true;
-      continue;
-    }
-    if (arg === '--backend') {
-      options.backend = parseBackend(requireNext(argv, i, arg));
-      i += 1;
-      continue;
-    }
-    if (arg === '--postgres-url') {
-      options.postgresUrl = requireNext(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === '--user-name') {
-      options.userName = requireNext(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === '--companion-name') {
-      options.companionName = requireNext(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === '--limit') {
-      options.limit = parseLimit(requireNext(argv, i, arg));
-      i += 1;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-
-  return options;
+function parseArgs(argv: readonly string[]): CliOptions {
+  return parseCommonMaintenanceArgs<CliOptions>(argv, {
+    initial: {
+      apply: false,
+      includeArchived: false,
+      json: false,
+      showHelp: false,
+    },
+    extraFlags: {
+      '--apply': ({ options }) => {
+        options.apply = true;
+      },
+      '--include-archived': ({ options }) => {
+        options.includeArchived = true;
+      },
+      '--json': ({ options }) => {
+        options.json = true;
+      },
+      '--backend': ({ options, readValue }) => {
+        options.backend = parseBackend(readValue());
+      },
+      '--postgres-url': ({ options, readValue }) => {
+        options.postgresUrl = readValue();
+      },
+      '--user-name': ({ options, readValue }) => {
+        options.userName = readValue();
+      },
+      '--companion-name': ({ options, readValue }) => {
+        options.companionName = readValue();
+      },
+      '--limit': ({ options, readValue }) => {
+        options.limit = parseLimit(readValue());
+      },
+    },
+  });
 }
 
 function resolveConfiguredCompanionName(
@@ -196,19 +172,8 @@ async function runPostgresRepair(options: CliOptions, reportOptions: {
   }
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.showHelp) {
-    printUsage();
-    return;
-  }
-
-  const config = loadConfig();
-  applyGatewayTlsConfig({
-    caPath: config.gatewayTlsCaPath,
-    rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
-  });
-  await hydrateSecretBearingConfig(config, { env: process.env });
+async function run(options: CliOptions): Promise<void> {
+  const { config } = await bootstrapMaintenanceRuntime();
 
   const companionName = options.companionName ?? resolveConfiguredCompanionName(config);
   const userName = options.userName;
@@ -226,8 +191,11 @@ async function main(): Promise<void> {
   printReport(report);
 }
 
-main().catch((error) => {
-  const message = toErrorMessage(error);
-  console.error(`Memory participant-name repair failed: ${message}`);
-  process.exit(1);
-});
+if (isMaintenanceCliEntrypoint(import.meta.url)) {
+  void runMaintenanceCli({
+    label: 'Memory participant-name repair',
+    parseArgs,
+    printUsage,
+    run,
+  });
+}

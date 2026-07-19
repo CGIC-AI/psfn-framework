@@ -13,8 +13,12 @@ import {
   backfillPostgresMemoryProvenance,
   type MemoryProvenanceBackfillReport,
 } from '../../persistence/repair/memory-provenance-backfill.js';
-import { loadConfig } from '../../system/config/load-config.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
+import {
+  bootstrapMaintenanceRuntime,
+  isMaintenanceCliEntrypoint,
+  parseCommonMaintenanceArgs,
+  runMaintenanceCli,
+} from './cli-harness.js';
 
 interface CliOptions {
   apply: boolean;
@@ -40,12 +44,6 @@ function printUsage(): void {
   console.log('  -h, --help               Show this help message.');
 }
 
-function requireNext(argv: string[], index: number, arg: string): string {
-  const value = argv[index + 1];
-  if (!value) throw new Error(`Missing value for ${arg}`);
-  return value;
-}
-
 function parsePositiveInteger(value: string, arg: string): number {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -54,40 +52,27 @@ function parsePositiveInteger(value: string, arg: string): number {
   return parsed;
 }
 
-function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { apply: false, json: false, showHelp: false };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--help' || arg === '-h') {
-      options.showHelp = true;
-      continue;
-    }
-    if (arg === '--apply') {
-      options.apply = true;
-      continue;
-    }
-    if (arg === '--json') {
-      options.json = true;
-      continue;
-    }
-    if (arg === '--journal') {
-      options.journalPath = requireNext(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === '--postgres-url') {
-      options.postgresUrl = requireNext(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === '--room-min-members') {
-      options.roomMinMembers = parsePositiveInteger(requireNext(argv, i, arg), arg);
-      i += 1;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-  return options;
+function parseArgs(argv: readonly string[]): CliOptions {
+  return parseCommonMaintenanceArgs<CliOptions>(argv, {
+    initial: { apply: false, json: false, showHelp: false },
+    extraFlags: {
+      '--apply': ({ options }) => {
+        options.apply = true;
+      },
+      '--json': ({ options }) => {
+        options.json = true;
+      },
+      '--journal': ({ options, readValue }) => {
+        options.journalPath = readValue();
+      },
+      '--postgres-url': ({ options, readValue }) => {
+        options.postgresUrl = readValue();
+      },
+      '--room-min-members': ({ arg, options, readValue }) => {
+        options.roomMinMembers = parsePositiveInteger(readValue(), arg);
+      },
+    },
+  });
 }
 
 function printReport(report: MemoryProvenanceBackfillReport): void {
@@ -119,12 +104,7 @@ function printReport(report: MemoryProvenanceBackfillReport): void {
   }
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.showHelp) {
-    printUsage();
-    return;
-  }
+async function run(options: CliOptions): Promise<void> {
   if (!options.journalPath) {
     throw new Error('--journal <path> is required (see --help)');
   }
@@ -133,7 +113,7 @@ async function main(): Promise<void> {
 
   let postgresUrl = options.postgresUrl?.trim();
   if (!postgresUrl) {
-    const config = loadConfig();
+    const { config } = await bootstrapMaintenanceRuntime({ hydrateSecrets: false });
     postgresUrl = config.postgresDatabaseUrl?.trim();
   }
   if (!postgresUrl) {
@@ -158,8 +138,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  const message = toErrorMessage(error);
-  console.error(`Memory provenance backfill failed: ${message}`);
-  process.exit(1);
-});
+if (isMaintenanceCliEntrypoint(import.meta.url)) {
+  void runMaintenanceCli({
+    label: 'Memory provenance backfill',
+    parseArgs,
+    printUsage,
+    run,
+  });
+}

@@ -20,7 +20,6 @@ import {
   loadPlacesRegistryConfig,
   resolveSiteById,
 } from '../../channels/backplane/places-registry.js';
-import { loadConfig } from '../../system/config/load-config.js';
 import { resolveConfiguredSystemDataDir } from '../../persistence/layout.js';
 import {
   SharedWorldWikiStore,
@@ -37,7 +36,12 @@ import {
 } from '../../faculties/wiki/shared-pgvector-projection.js';
 import { resolveSharedWikiProjectionContext } from './shared-wiki-projection-context.js';
 import { sharedWorldScope } from '../../faculties/wiki/scope.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
+import {
+  bootstrapMaintenanceRuntime,
+  isMaintenanceCliEntrypoint,
+  parseCommonMaintenanceArgs,
+  runMaintenanceCli,
+} from './cli-harness.js';
 
 interface CliOptions {
   apply: boolean;
@@ -68,35 +72,37 @@ function printUsage(): void {
   console.log('  -h, --help               Show this help message.');
 }
 
-function requireNext(argv: string[], index: number, arg: string): string {
-  const value = argv[index + 1];
-  if (!value) throw new Error(`Missing value for ${arg}`);
-  return value;
-}
-
-function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { apply: false, json: false, showHelp: false, scope: 'personal' };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--help' || arg === '-h') { options.showHelp = true; continue; }
-    if (arg === '--apply') { options.apply = true; continue; }
-    if (arg === '--json') { options.json = true; continue; }
-    if (arg === '--dir') { options.directory = requireNext(argv, i, arg); i += 1; continue; }
-    if (arg === '--scope') {
-      const value = requireNext(argv, i, arg);
-      if (value !== 'personal' && value !== 'shared') {
-        throw new Error('--scope must be "personal" or "shared"');
-      }
-      options.scope = value;
-      i += 1;
-      continue;
-    }
-    if (arg === '--site') { options.siteId = requireNext(argv, i, arg); i += 1; continue; }
-    if (arg === '--system-data-dir') { options.systemDataDir = requireNext(argv, i, arg); i += 1; continue; }
-    if (arg === '--workspace') { options.workspacePath = requireNext(argv, i, arg); i += 1; continue; }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-  return options;
+function parseArgs(argv: readonly string[]): CliOptions {
+  return parseCommonMaintenanceArgs<CliOptions>(argv, {
+    initial: { apply: false, json: false, showHelp: false, scope: 'personal' },
+    extraFlags: {
+      '--apply': ({ options }) => {
+        options.apply = true;
+      },
+      '--json': ({ options }) => {
+        options.json = true;
+      },
+      '--dir': ({ options, readValue }) => {
+        options.directory = readValue();
+      },
+      '--scope': ({ options, readValue }) => {
+        const value = readValue();
+        if (value !== 'personal' && value !== 'shared') {
+          throw new Error('--scope must be "personal" or "shared"');
+        }
+        options.scope = value;
+      },
+      '--site': ({ options, readValue }) => {
+        options.siteId = readValue();
+      },
+      '--system-data-dir': ({ options, readValue }) => {
+        options.systemDataDir = readValue();
+      },
+      '--workspace': ({ options, readValue }) => {
+        options.workspacePath = readValue();
+      },
+    },
+  });
 }
 
 function printReport(report: WikiImportReport, mode: string, projection?: SharedWikiProjectionOutcome): void {
@@ -122,12 +128,10 @@ function printReport(report: WikiImportReport, mode: string, projection?: Shared
   console.log(`Projection: FAILED (${projection.error ?? 'unknown'}) — re-run once Postgres is reachable to heal`);
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.showHelp) { printUsage(); return; }
+async function run(options: CliOptions): Promise<void> {
   if (!options.directory) throw new Error('--dir <path> is required (see --help)');
 
-  const config = loadConfig();
+  const { config } = await bootstrapMaintenanceRuntime({ hydrateSecrets: false });
 
   let store: WikiDocumentStore;
   let sharedStore: SharedWorldWikiStore | null = null;
@@ -193,7 +197,11 @@ async function main(): Promise<void> {
   printReport(report, options.apply ? 'apply' : 'dry-run (pass --apply to write)', projection);
 }
 
-main().catch((error) => {
-  console.error(`wiki import failed: ${toErrorMessage(error)}`);
-  process.exit(1);
-});
+if (isMaintenanceCliEntrypoint(import.meta.url)) {
+  void runMaintenanceCli({
+    label: 'wiki import',
+    parseArgs,
+    printUsage,
+    run,
+  });
+}

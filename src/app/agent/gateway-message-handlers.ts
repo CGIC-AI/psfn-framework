@@ -5,6 +5,7 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { SatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
 import type { ObservedGroupMemoryScheduleDecision } from '../../faculties/memory/extraction/group-observed-scheduler.js';
+import type { PassiveNameCandidateDecision } from '../../core/participation/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import type { OutboundReplyGuardPort } from '../../system/lifecycle/outbound-reply-dedupe.js';
@@ -227,6 +228,10 @@ export interface ObservedGroupMemorySchedulerPort {
   observeMessage(message: SubstrateMessage): Promise<ObservedGroupMemoryScheduleDecision>;
 }
 
+export interface PassiveNameCandidatePort {
+  build(message: SubstrateMessage): Promise<PassiveNameCandidateDecision>;
+}
+
 export interface GatewayMessageLogger {
   info(message: string, meta?: Record<string, unknown>): void;
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -244,6 +249,13 @@ export interface GatewayMessageHandlersDeps {
   log: GatewayMessageLogger;
   trackSessionActivity: (message: SubstrateMessage) => void;
   observedGroupMemoryScheduler?: ObservedGroupMemorySchedulerPort;
+  /**
+   * Deterministic passive-name participation candidate gate (bible §8.1). Runs
+   * on observed group-room traffic alongside group-memory scheduling; records
+   * created/suppressed candidates on the safeguard audit trail. Optional so
+   * runtimes without room participation keep working unchanged.
+   */
+  passiveNameCandidateBuilder?: PassiveNameCandidatePort;
   /**
    * Records primary replies delivered to Discord so replay-prone senders (the
    * internal continuation) can detect and suppress a duplicate of
@@ -276,6 +288,7 @@ export function registerGatewayMessageHandlers(
     log,
     trackSessionActivity,
     observedGroupMemoryScheduler,
+    passiveNameCandidateBuilder,
     outboundReplyGuard,
     companionAuthorName,
     eventBus,
@@ -764,6 +777,41 @@ export function registerGatewayMessageHandlers(
               error: errorText,
             });
             safeguardAuditTrail.append('memory.group_observed.error', {
+              channelId: message.channelId,
+              messageId: message.id,
+              error: errorText,
+            });
+          }
+        }
+        if (passiveNameCandidateBuilder) {
+          try {
+            const decision = await passiveNameCandidateBuilder.build(message);
+            if (decision.status === 'created') {
+              const { candidate } = decision;
+              safeguardAuditTrail.append('participation.candidate.created', {
+                channelId: candidate.channelId,
+                sourceMessageId: candidate.sourceMessageId,
+                trigger: candidate.trigger,
+                matchedName: candidate.matchedName,
+                matchedDirectAddress: candidate.matchedDirectAddress,
+                precedingContextCount: candidate.precedingContext.length,
+              });
+            } else {
+              safeguardAuditTrail.append('participation.candidate.suppressed', {
+                channelId: decision.channelId,
+                sourceMessageId: decision.sourceMessageId,
+                reason: decision.reason,
+                ...(decision.trigger ? { trigger: decision.trigger } : {}),
+              });
+            }
+          } catch (candidateError) {
+            const errorText = toErrorMessage(candidateError);
+            log.warn('Passive-name candidate gate failed', {
+              channelId: message.channelId,
+              messageId: message.id,
+              error: errorText,
+            });
+            safeguardAuditTrail.append('participation.candidate.error', {
               channelId: message.channelId,
               messageId: message.id,
               error: errorText,

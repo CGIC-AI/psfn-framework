@@ -7,7 +7,10 @@ import {
   type GroupMemorySettings,
 } from '../../../system/config/group-memory-config.js';
 import type { GroupMemoryRangeChunk } from './group-ranges.js';
-import { selectGroupMemorySalienceCandidates } from './group-salience.js';
+import {
+  detectCompanionNameMatch,
+  selectGroupMemorySalienceCandidates,
+} from './group-salience.js';
 
 function makeEntry(id: number, content: string, overrides: Partial<SessionEntry> = {}): SessionEntry {
   return {
@@ -190,5 +193,46 @@ describe('group salience candidate selection', () => {
 
     expect(selection.candidateSpans).toHaveLength(2);
     expect(selection.telemetry.skipReasons.candidate_cap).toBe(1);
+  });
+});
+
+describe('detectCompanionNameMatch', () => {
+  const names = ['Persephone'];
+  const authorIds = ['bot-persephone'];
+
+  it('detects a passive textual name reference without direct address', () => {
+    const match = detectCompanionNameMatch(
+      'I wonder what Persephone thinks about that',
+      { companionNames: names, companionAuthorIds: authorIds },
+    );
+    expect(match.mentioned).toBe(true);
+    expect(match.directAddress).toBe(false);
+  });
+
+  it('flags a leading alias as a direct address', () => {
+    const match = detectCompanionNameMatch('Persephone can you help?', {
+      companionNames: names,
+      companionAuthorIds: authorIds,
+    });
+    expect(match.mentioned).toBe(true);
+    expect(match.directAddress).toBe(true);
+  });
+
+  it('flags a leading platform mention as a direct address', () => {
+    const match = detectCompanionNameMatch('<@bot-persephone> hi', {
+      companionNames: names,
+      companionAuthorIds: authorIds,
+    });
+    expect(match.mentioned).toBe(true);
+    expect(match.directAddress).toBe(true);
+  });
+
+  it('reports no match for unrelated chatter', () => {
+    const match = detectCompanionNameMatch('just ordinary room chatter', {
+      companionNames: names,
+      companionAuthorIds: authorIds,
+    });
+    expect(match.mentioned).toBe(false);
+    expect(match.directAddress).toBe(false);
   });
 });

@@ -88,6 +88,7 @@ import { registerGatewayMessageHandlers } from './gateway-message-handlers.js';
 import { registerIcpTargetChannelInitiationCommand } from './icp-target-channel-command.js';
 import { OutboundReplyDeduper } from '../../system/lifecycle/outbound-reply-dedupe.js';
 import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/group-observed-scheduler.js';
+import { PassiveNameCandidateBuilder } from '../../core/participation/passive-name-candidate.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import { createNoopSatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
 import { createRequestCapabilityVerifier } from '../../boundary/fleet-auth/request-capability.js';
@@ -1307,6 +1308,18 @@ async function main(): Promise<void> {
     ...(config.groupMemory ? { groupMemory: config.groupMemory } : {}),
   });
 
+  // Deterministic passive-name participation candidate gate (bible §8.1). Reuses
+  // the group-salience name detector and the scheduler's canonical
+  // direct-vs-group classifier — no parallel detection paths. Runs on observed
+  // group-room traffic; downstream appraisal (jp36.3.3) and the speaking arbiter
+  // (jp36.5) consume the candidates it records.
+  const passiveNameCandidateBuilder = new PassiveNameCandidateBuilder({
+    scopeClassifier: observedGroupMemoryScheduler,
+    contextReader: sessionStore,
+    companionNames: [card.data.name],
+    companionAuthorIds: config.discordBotId ? [config.discordBotId] : [],
+  });
+
   // ── Slow-poisoning drift-velocity review lane (htm9.14) ──
   // Deterministic nightly aggregation (zero LLM, zero turn latency) over the
   // per-contact valence series, memory-write rows, quarantine risk labels,
@@ -1460,6 +1473,7 @@ async function main(): Promise<void> {
     log,
     trackSessionActivity,
     observedGroupMemoryScheduler,
+    passiveNameCandidateBuilder,
     outboundReplyGuard,
     companionAuthorName: card.data.name,
   });

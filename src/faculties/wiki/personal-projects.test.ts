@@ -38,7 +38,6 @@ describe('personal projects in the existing wiki tier', () => {
       projectRef: created.ref,
       artifactRef: 'generated-image:panel-1',
       label: 'First moonlit panel',
-      sensitivity: 'personal',
     });
 
     const afterRestart = new PersonalProjectLibrary(new WikiStore(root), () => new Date(nowMs));
@@ -66,7 +65,6 @@ describe('personal projects in the existing wiki tier', () => {
       projectRef: project.ref,
       artifactRef: 'generated-image:private-sketch',
       label: 'Private sketch',
-      sensitivity: 'intimate',
     });
     const updated = await library.requestArtifactShare({
       projectRef: project.ref,
@@ -78,6 +76,47 @@ describe('personal projects in the existing wiki tier', () => {
       intendedAudience: 'public',
       shareState: 'requested',
       sensitivity: 'intimate',
+    });
+  });
+
+  it('derives artifact sensitivity and audience from runtime project state, not caller input', async () => {
+    const library = new PersonalProjectLibrary(store, () => new Date(nowMs));
+
+    const selfProject = await library.createProject({
+      id: 'self-project',
+      title: 'Self Project',
+      nextStep: 'Sketch privately.',
+      visibility: 'self',
+    });
+    const selfUpdated = await library.addArtifact({
+      projectRef: selfProject.ref,
+      artifactRef: 'generated-image:self-1',
+      label: 'Private study',
+    });
+    // self visibility → intimate workspace floor; audience fails closed to self.
+    expect(selfUpdated.artifacts[0]).toMatchObject({
+      sensitivity: 'intimate',
+      intendedAudience: 'self',
+      shareState: 'private',
+    });
+
+    const publicProject = await library.createProject({
+      id: 'public-project',
+      title: 'Public Project',
+      nextStep: 'Prepare something to show.',
+      visibility: 'public',
+    });
+    const publicUpdated = await library.addArtifact({
+      projectRef: publicProject.ref,
+      artifactRef: 'generated-image:public-1',
+      label: 'Gallery piece',
+    });
+    // public visibility → public floor; audience STILL fails closed to self —
+    // broadening requires an explicit project_share through the egress gate.
+    expect(publicUpdated.artifacts[0]).toMatchObject({
+      sensitivity: 'public',
+      intendedAudience: 'self',
+      shareState: 'private',
     });
   });
 

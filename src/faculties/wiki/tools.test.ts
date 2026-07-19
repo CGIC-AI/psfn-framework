@@ -247,4 +247,59 @@ describe('wiki tool', () => {
     expect(result.boundary).toContain('no shared-world document was written');
     expect(store.list()).toEqual([]);
   });
+
+  it('rejects model-supplied sensitivity/audience for project_add_artifact and derives lineage at runtime', async () => {
+    const personalProjects = new PersonalProjectLibrary(store);
+    const tool = createWikiTool(store, { personalProjects });
+
+    await tool.execute('project-create', {
+      action: 'project_create',
+      project_id: 'moon-garden',
+      title: 'Moon Garden',
+      next_step: 'Paint the second panel.',
+      visibility: 'self',
+    });
+
+    // Regression: the model must not self-assert sensitivity (bible §6.2).
+    const rejectedSensitivity = await tool.execute('add-artifact', {
+      action: 'project_add_artifact',
+      project_ref: 'project:moon-garden',
+      artifact_ref: 'generated-image:panel-1',
+      artifact_label: 'First panel',
+      sensitivity: 'public',
+    });
+    expect(rejectedSensitivity.details?.isError).toBe(true);
+    expect(resultText(rejectedSensitivity)).toContain('sensitivity is runtime-derived');
+    // Nothing was written under the rejected call.
+    expect(personalProjects.getProject('project:moon-garden').artifacts).toHaveLength(0);
+
+    // Regression: the model must not self-assert permitted audience either.
+    const rejectedAudience = await tool.execute('add-artifact', {
+      action: 'project_add_artifact',
+      project_ref: 'project:moon-garden',
+      artifact_ref: 'generated-image:panel-1',
+      artifact_label: 'First panel',
+      audience: 'public',
+    });
+    expect(rejectedAudience.details?.isError).toBe(true);
+    expect(resultText(rejectedAudience)).toContain('audience is runtime-derived');
+    expect(personalProjects.getProject('project:moon-garden').artifacts).toHaveLength(0);
+
+    // Runtime derivation: a clean call succeeds and carries project-derived
+    // lineage (self visibility → intimate floor, audience fails closed to self).
+    const added = JSON.parse(resultText(await tool.execute('add-artifact', {
+      action: 'project_add_artifact',
+      project_ref: 'project:moon-garden',
+      artifact_ref: 'generated-image:panel-1',
+      artifact_label: 'First panel',
+    }))) as { action: string; project: { artifacts: Array<Record<string, unknown>> } };
+    expect(added.action).toBe('project_add_artifact');
+    expect(added.project.artifacts).toHaveLength(1);
+    expect(added.project.artifacts[0]).toMatchObject({
+      ref: 'generated-image:panel-1',
+      sensitivity: 'intimate',
+      intendedAudience: 'self',
+      shareState: 'private',
+    });
+  });
 });

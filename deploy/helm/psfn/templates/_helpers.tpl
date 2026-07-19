@@ -639,6 +639,31 @@ uppercase env name plus exactly one of a Secret reference or a plain value.
 {{- end }}
 {{- end -}}
 
+{{- define "psfn.shellExecEnv" -}}
+- name: SHELL_EXEC_ENABLED
+  value: {{ ternary "true" "false" .Values.shellExec.enabled | quote }}
+{{- if .Values.shellExec.enabled }}
+- name: SHELL_EXEC_ALLOWLIST
+  value: {{ join "," .Values.shellExec.allowlist | quote }}
+- name: SHELL_EXEC_ENV_ALLOWLIST
+  value: {{ join "," .Values.shellExec.envAllowlist | quote }}
+{{- if gt (len .Values.shellExec.allowedCwd) 0 }}
+- name: SHELL_EXEC_ALLOWED_CWD
+  value: {{ join "," .Values.shellExec.allowedCwd | quote }}
+{{- end }}
+- name: SHELL_EXEC_PATH
+  value: {{ .Values.shellExec.path | quote }}
+- name: SHELL_EXEC_DEFAULT_TIMEOUT_MS
+  value: {{ .Values.shellExec.defaultTimeoutMs | quote }}
+- name: SHELL_EXEC_MAX_TIMEOUT_MS
+  value: {{ .Values.shellExec.maxTimeoutMs | quote }}
+- name: SHELL_EXEC_DEFAULT_MAX_OUTPUT_CHARS
+  value: {{ .Values.shellExec.defaultMaxOutputChars | quote }}
+- name: SHELL_EXEC_MAX_OUTPUT_CHARS
+  value: {{ .Values.shellExec.maxOutputChars | quote }}
+{{- end }}
+{{- end -}}
+
 {{- define "psfn.postgresDatabaseUrlEnv" -}}
 - name: POSTGRES_DATABASE_URL
   valueFrom:

@@ -18,6 +18,10 @@ const MAX_SEARCH_MAX_FILES = 500;
 const DEFAULT_SEARCH_MAX_BYTES_PER_FILE = 40_000;
 const MAX_SEARCH_MAX_BYTES_PER_FILE = 200_000;
 const MAX_CONTEXT_LINES = 2;
+const LARGE_DOCUMENT_HANDOFF =
+  'This file exceeds the fs 20,000-byte hard read cap. Use analysis_workbench for temporary large-context analysis, '
+  + 'or use a bounded subagent instructed to return provenance-bearing excerpts with the source path and line or byte ranges. '
+  + 'Bring those excerpts or a durable artifact back before the worker is discarded; do not rely on a summary-only handoff.';
 
 type FilesystemAction = 'list' | 'read' | 'search' | 'write' | 'edit';
 
@@ -115,7 +119,9 @@ export function createFsTool(ops: FilesystemOperations): SubstrateAgentTool {
       max_bytes: Type.Optional(Type.Integer({
         minimum: 1,
         maximum: MAX_READ_CHARS,
-        description: `Used with action=read. Read at most this many bytes (default ${String(MAX_READ_CHARS)}).`,
+        description:
+          `Used with action=read. Read at most this many bytes; ${String(MAX_READ_CHARS)} is a hard cap. `
+          + 'Use analysis_workbench or a bounded subagent for larger documents.',
       })),
       query: Type.Optional(Type.String({
         description: 'Used with action=search. Literal text or regex pattern to find.',
@@ -208,6 +214,7 @@ export function createFsTool(ops: FilesystemOperations): SubstrateAgentTool {
               action: 'read',
               path,
               truncated: result.truncated,
+              ...(result.truncated ? { next_action: LARGE_DOCUMENT_HANDOFF } : {}),
               content: result.content,
             }, null, 2));
           }

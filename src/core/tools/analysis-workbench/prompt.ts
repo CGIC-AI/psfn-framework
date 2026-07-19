@@ -34,7 +34,7 @@ function buildRepositorySection(mutationPolicy?: REPLMutationPolicy): string[] {
 function buildFileAndWebSection(mutationPolicy?: REPLMutationPolicy): string[] {
   const lines = [
     '### File + Web Tools',
-    '- `await read_file(path)` — Read file content through gateway fs policy checks',
+    '- `await read_file(path)` — Read large file content through gateway fs policy checks; cite its path and relevant line or byte ranges in the bounded result',
     '- `await list_files(glob?, maxEntries?)` — List workspace-relative files via gateway glob policy; returns `{ paths, truncated, scanLimitReached }`',
     '- `await web("fetch", url, { prompt? })` — Guarded remote page fetch via gateway SSRF defenses and the default web lane',
     '- `await web("browse", url, { prompt? })` — Uses the `local_crawler` web lane; policy must explicitly allow it',
@@ -57,6 +57,7 @@ function buildBasePrompt(mutationPolicy?: REPLMutationPolicy): string {
     '## How to use',
     '',
     'Use this workbench only for multi-stage analysis of large files, codebases, logs, datasets, transcripts, or evidence sets that would be harmful to stuff directly into the main conversation context.',
+    'Use it when a local document exceeds the direct fs read cap. Keep large raw material inside this temporary workbench, then return a bounded answer with the source path and relevant line or byte ranges before the workbench context is discarded.',
     'Do not use it for ordinary reasoning, tool discovery, missing schemas, simple lookup, simple file/session inspection, routine inspection, or state changes.',
     'Routine orient actions, concern maintenance, scheduler/schedule work, and simple lookup must stay on direct active tools such as orient, schedule, session, memory, repo, or filesystem tools.',
     'Respond with at most one ```repl block per turn. Your code runs in a constrained JavaScript REPL.',

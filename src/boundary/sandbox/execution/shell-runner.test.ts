@@ -1,14 +1,14 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   executeShellCommandWithPolicy,
-  SHELL_EXEC_CONFINEMENT_UNAVAILABLE,
 } from './shell-runner.js';
 
 describe('executeShellCommandWithPolicy', () => {
   const tempPaths: string[] = [];
+  const sandboxBinaryPath = '/usr/bin/bwrap';
 
   afterEach(() => {
     for (const target of tempPaths.splice(0)) rmSync(target, { recursive: true, force: true });
@@ -25,18 +25,16 @@ describe('executeShellCommandWithPolicy', () => {
     return { workspace, outside };
   }
 
-  async function expectConfinementDenial(
-    command: string,
-    args: string[],
-    workspace: string,
-  ): Promise<void> {
-    await expect(executeShellCommandWithPolicy(
-      { command, args, cwd: workspace },
-      {
-        workspacePath: workspace,
-        policy: { enabled: true, allowlist: [command], allowedCwd: [workspace] },
-      },
-    )).rejects.toThrow(SHELL_EXEC_CONFINEMENT_UNAVAILABLE);
+  function enabledPolicy(workspace: string) {
+    return {
+      enabled: true,
+      allowlist: ['bash', 'rg'],
+      allowedCwd: [workspace],
+      defaultTimeoutMs: 2_000,
+      maxTimeoutMs: 2_000,
+      defaultMaxOutputChars: 20_000,
+      maxOutputChars: 20_000,
+    };
   }
 
   it('retains the explicit disabled-policy denial', async () => {
@@ -47,51 +45,136 @@ describe('executeShellCommandWithPolicy', () => {
     )).rejects.toThrow('shell.exec policy is disabled');
   });
 
-  it('fails closed for Python program-text file access', async () => {
-    const { workspace, outside } = workspaceFixture();
-    await expectConfinementDenial(
-      'python3',
-      ['-c', `open(${JSON.stringify(join(outside, 'secret.txt'))}).read()`],
-      workspace,
-    );
-  });
-
-  it('fails closed for an interpreter reached through a symlink alias', async () => {
+  it('rejects commands outside the explicit allowlist before execution', async () => {
     const { workspace } = workspaceFixture();
-    const alias = join(workspace, 'innocent-command');
-    symlinkSync(process.execPath, alias);
-    await expectConfinementDenial(alias, ['-e', 'process.exit(0)'], workspace);
+
+    await expect(executeShellCommandWithPolicy(
+      { command: 'node', args: ['--version'], cwd: workspace },
+      { workspacePath: workspace, policy: enabledPolicy(workspace) },
+    )).rejects.toThrow('shell.exec command not allowlisted: node');
   });
 
-  it('fails closed for non-blacklisted evaluators such as awk', async () => {
+  it('rejects working directories outside the canonical Personal Workspace', async () => {
+    const { workspace, outside } = workspaceFixture();
+
+    await expect(executeShellCommandWithPolicy(
+      { command: 'bash', args: ['-lc', 'pwd'], cwd: outside },
+      { workspacePath: workspace, policy: enabledPolicy(workspace) },
+    )).rejects.toThrow('shell.exec cwd not allowlisted');
+  });
+
+  it.runIf(!existsSync(sandboxBinaryPath))('fails closed when the namespace sandbox is unavailable', async () => {
     const { workspace } = workspaceFixture();
-    await expectConfinementDenial('awk', ['BEGIN { getline line < "/etc/hostname"; print line }'], workspace);
+
+    await expect(executeShellCommandWithPolicy(
+      { command: 'bash', args: ['-lc', 'printf ok'], cwd: workspace },
+      { workspacePath: workspace, policy: enabledPolicy(workspace) },
+    )).rejects.toThrow('shell.exec sandbox unavailable');
   });
 
-  it('never executes an allowlisted binary that is swapped after policy configuration', async () => {
-    const { workspace, outside } = workspaceFixture();
-    const executable = join(workspace, 'approved-command');
-    writeFileSync(executable, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-    // Model the check/use replacement the old canonical-path policy could not
-    // bind to exec: the same allowlisted pathname now contains a file read.
-    writeFileSync(executable, `#!/bin/sh\ncat '${join(outside, 'secret.txt')}' > '${join(workspace, 'leak.txt')}'\n`);
-    chmodSync(executable, 0o755);
+  describe.runIf(existsSync(sandboxBinaryPath))('with the OS namespace sandbox', () => {
+    it('runs Bash in the Personal Workspace and persists its writes there', async () => {
+      const { workspace } = workspaceFixture();
 
-    await expectConfinementDenial(executable, [], workspace);
-    expect(existsSync(join(workspace, 'leak.txt'))).toBe(false);
-  });
+      const result = await executeShellCommandWithPolicy(
+        {
+          command: 'bash',
+          args: ['-lc', 'printf "alpha\\nbeta\\n" > notes.txt && rg beta notes.txt'],
+          cwd: workspace,
+        },
+        { workspacePath: workspace, policy: enabledPolicy(workspace) },
+      );
 
-  it('never follows cwd or argument path swaps because no child is spawned', async () => {
-    const { workspace, outside } = workspaceFixture();
-    const cwdAlias = join(workspace, 'cwd');
-    const argumentAlias = join(workspace, 'argument.txt');
-    mkdirSync(cwdAlias);
-    writeFileSync(argumentAlias, 'safe');
-    rmSync(cwdAlias, { recursive: true });
-    rmSync(argumentAlias);
-    symlinkSync(outside, cwdAlias, 'dir');
-    symlinkSync(join(outside, 'secret.txt'), argumentAlias);
+      expect(result).toMatchObject({
+        command: 'bash',
+        args: ['-lc', 'printf "alpha\\nbeta\\n" > notes.txt && rg beta notes.txt'],
+        cwd: workspace,
+        exitCode: 0,
+        stdout: 'beta\n',
+        stderr: '',
+        timedOut: false,
+        truncated: false,
+      });
+      expect(existsSync(join(workspace, 'notes.txt'))).toBe(true);
+    });
 
-    await expectConfinementDenial('cat', [argumentAlias], workspace);
+    it('cannot read outside the Personal Workspace or inherit process secrets', async () => {
+      const previousSecret = process.env.PSFN_SHELL_TEST_SECRET;
+      process.env.PSFN_SHELL_TEST_SECRET = 'must-not-leak';
+      const { workspace, outside } = workspaceFixture();
+
+      try {
+        const result = await executeShellCommandWithPolicy(
+          {
+            command: 'bash',
+            args: [
+              '-lc',
+              'printf "secret=%s\\n" "${PSFN_SHELL_TEST_SECRET-unset}"; '
+                + 'if cat "$1" >/tmp/outside 2>/dev/null; then printf "outside=read\\n"; '
+                + 'else printf "outside=blocked\\n"; fi; '
+                + 'printf "net_devices="; cut -d: -f1 /proc/net/dev | tr -d " " | tail -n +3 | paste -sd, -',
+              '--',
+              join(outside, 'secret.txt'),
+            ],
+            cwd: workspace,
+          },
+          { workspacePath: workspace, policy: enabledPolicy(workspace) },
+        );
+
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('secret=unset');
+        expect(result.stdout).toContain('outside=blocked');
+        expect(result.stdout).toContain('net_devices=lo');
+        expect(result.stdout).not.toContain('peer-secret');
+        expect(result.stdout).not.toContain('eth0');
+      } finally {
+        if (previousSecret === undefined) delete process.env.PSFN_SHELL_TEST_SECRET;
+        else process.env.PSFN_SHELL_TEST_SECRET = previousSecret;
+      }
+    });
+
+    it('bounds output and terminates commands at the configured timeout', async () => {
+      const { workspace } = workspaceFixture();
+      const output = await executeShellCommandWithPolicy(
+        {
+          command: 'bash',
+          args: ['-lc', 'printf 1234567890'],
+          cwd: workspace,
+          maxOutputChars: 4,
+        },
+        { workspacePath: workspace, policy: enabledPolicy(workspace) },
+      );
+      const timeout = await executeShellCommandWithPolicy(
+        {
+          command: 'bash',
+          args: ['-lc', 'while :; do :; done'],
+          cwd: workspace,
+          timeoutMs: 50,
+        },
+        { workspacePath: workspace, policy: enabledPolicy(workspace) },
+      );
+
+      expect(output.stdout).toBe('1234');
+      expect(output.truncated).toBe(true);
+      expect(timeout.exitCode).toBeNull();
+      expect(timeout.timedOut).toBe(true);
+    });
+
+    it('does not expose a host path through a symlink inside the workspace', async () => {
+      const { workspace, outside } = workspaceFixture();
+      const link = join(workspace, 'outside-link');
+      symlinkSync(join(outside, 'secret.txt'), link);
+
+      const result = await executeShellCommandWithPolicy(
+        {
+          command: 'bash',
+          args: ['-lc', 'if cat outside-link >/dev/null 2>&1; then printf read; else printf blocked; fi'],
+          cwd: workspace,
+        },
+        { workspacePath: workspace, policy: enabledPolicy(workspace) },
+      );
+
+      expect(result.stdout).toBe('blocked');
+    });
   });
 });

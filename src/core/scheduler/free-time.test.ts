@@ -19,9 +19,11 @@ import {
   evaluateFreeTimeGate,
   evaluateFreeTimeLaneEligibility,
   FREE_TIME_CHANNEL_PREFIX,
+  FREE_TIME_DEFAULT_WORKSPACE_SEGMENT,
   FREE_TIME_IDLE_TASK_ID,
   FREE_TIME_QUIET_HOURS_TASK_ID,
   FREE_TIME_RETURN_NOTE_SOURCE,
+  freeTimeWorkspaceChannelId,
   registerFreeTimeTasks,
   runFreeTimeBlock,
   type FreeTimeRuntimeOptions,
@@ -778,5 +780,135 @@ describe('free-time return summary lane', () => {
     expect(block).toContain("purpose: 'free_time_return'");
     expect(block).toContain('schedulerConfig.freeTime.returnNote.summaryMaxTokens');
     expect(block).not.toContain('temporalWakeup.morningWake.catchUpSummaryMaxTokens');
+  });
+});
+
+// ── Lane-independent continuity identity (bible §10.4) ──
+// The scheduler trigger lane (quiet-hours vs idle) must NEVER appear in the
+// free-time transcript identity: both lanes resume the SAME chosen workspace
+// session. These regressions pin that the resolved channel is workspace-keyed,
+// never lane-keyed, and that the optional resolver seam overrides it uniformly.
+
+describe('free-time continuity identity is lane-independent', () => {
+  it('freeTimeWorkspaceChannelId resolves the default continuity session, never a lane', () => {
+    const expectedDefault = `${FREE_TIME_CHANNEL_PREFIX}${FREE_TIME_DEFAULT_WORKSPACE_SEGMENT}`;
+    expect(freeTimeWorkspaceChannelId()).toBe(expectedDefault);
+    expect(freeTimeWorkspaceChannelId()).toBe('internal:free-time:wandering');
+    // Missing / empty / whitespace segment falls back to the shared default.
+    expect(freeTimeWorkspaceChannelId(undefined)).toBe(expectedDefault);
+    expect(freeTimeWorkspaceChannelId(null)).toBe(expectedDefault);
+    expect(freeTimeWorkspaceChannelId('')).toBe(expectedDefault);
+    expect(freeTimeWorkspaceChannelId('   ')).toBe(expectedDefault);
+    // A chosen workspace segment is preserved verbatim under the same prefix.
+    expect(freeTimeWorkspaceChannelId('project:story-panels'))
+      .toBe('internal:free-time:project:story-panels');
+    // The trigger-lane names never leak into the resolved identity.
+    expect(freeTimeWorkspaceChannelId()).not.toContain('quiet-hours');
+    expect(freeTimeWorkspaceChannelId()).not.toContain('idle');
+  });
+
+  async function runLaneBlock(input: {
+    lane: 'quiet_hours' | 'idle';
+    nowMs: number;
+    resolveWorkspaceChannelId?: () => string;
+  }): Promise<{
+    turnChannelId: string;
+    blockNoteChannelId: string;
+    gateChannelIds: string[];
+  }> {
+    const { scheduler, sessionManager, invokeTurn, runtime, eventBus } = buildRuntime({
+      // First-turn stop = valid "loaf": one turn still runs (channel captured),
+      // then the block records its provenance note on the same channel.
+      turnScript: [HEARTBEAT_SILENT_REFLECTION_TOKEN],
+      config: freeTimeConfig({
+        quietHours: { enabled: input.lane === 'quiet_hours', checkIntervalMs: 1_000 },
+        idle: { enabled: input.lane === 'idle', checkIntervalMs: 1_000, minIdleMinutes: 180 },
+      }),
+      now: () => input.nowMs,
+    });
+    if (input.resolveWorkspaceChannelId) {
+      runtime.resolveWorkspaceChannelId = input.resolveWorkspaceChannelId;
+    }
+    const gateChannelIds: string[] = [];
+    eventBus.on('scheduler.free_time.gate', payload => {
+      if (typeof payload.channelId === 'string') gateChannelIds.push(payload.channelId);
+    });
+    registerFreeTimeTasks(runtime);
+
+    const taskId = input.lane === 'quiet_hours'
+      ? FREE_TIME_QUIET_HOURS_TASK_ID
+      : FREE_TIME_IDLE_TASK_ID;
+    const handler = scheduler.getTask(taskId)?.handler;
+    if (!handler) throw new Error(`${input.lane} free-time task was not registered`);
+    await handler();
+
+    expect(invokeTurn).toHaveBeenCalled();
+    expect(sessionManager.appendSystemNote).toHaveBeenCalled();
+    return {
+      turnChannelId: invokeTurn.mock.calls[0]?.[0].channelId as string,
+      blockNoteChannelId: sessionManager.appendSystemNote.mock.calls[0]?.[0] as string,
+      gateChannelIds,
+    };
+  }
+
+  const QUIET_NOW = Date.parse('2026-06-11T06:00:00.000Z'); // inside rest window
+  const IDLE_NOW = Date.parse('2026-06-11T15:00:00.000Z'); // outside rest window
+
+  it('quiet-hours and idle blocks converge on the same default continuity session', async () => {
+    const quiet = await runLaneBlock({ lane: 'quiet_hours', nowMs: QUIET_NOW });
+    const idle = await runLaneBlock({ lane: 'idle', nowMs: IDLE_NOW });
+
+    // Identical, workspace-keyed identity across lanes — the acceptance criterion.
+    expect(quiet.turnChannelId).toBe(idle.turnChannelId);
+    expect(quiet.turnChannelId).toBe(freeTimeWorkspaceChannelId());
+    // Provenance note lands on the same continuity channel, not a lane channel.
+    expect(quiet.blockNoteChannelId).toBe(quiet.turnChannelId);
+    expect(idle.blockNoteChannelId).toBe(idle.turnChannelId);
+    // The old lane-keyed identities are gone.
+    expect(quiet.turnChannelId).not.toBe(`${FREE_TIME_CHANNEL_PREFIX}quiet-hours`);
+    expect(idle.turnChannelId).not.toBe(`${FREE_TIME_CHANNEL_PREFIX}idle`);
+    // Gate telemetry is lane-independent too.
+    expect(quiet.gateChannelIds).toEqual([freeTimeWorkspaceChannelId()]);
+    expect(idle.gateChannelIds).toEqual([freeTimeWorkspaceChannelId()]);
+  });
+
+  it('a resolved workspace overrides the continuity channel identically for both lanes', async () => {
+    const resolveWorkspaceChannelId = () => `${FREE_TIME_CHANNEL_PREFIX}project:story-panels`;
+    const quiet = await runLaneBlock({ lane: 'quiet_hours', nowMs: QUIET_NOW, resolveWorkspaceChannelId });
+    const idle = await runLaneBlock({ lane: 'idle', nowMs: IDLE_NOW, resolveWorkspaceChannelId });
+
+    expect(quiet.turnChannelId).toBe(idle.turnChannelId);
+    expect(quiet.turnChannelId).toBe('internal:free-time:project:story-panels');
+    expect(quiet.blockNoteChannelId).toBe('internal:free-time:project:story-panels');
+    expect(idle.blockNoteChannelId).toBe('internal:free-time:project:story-panels');
+  });
+
+  it('does not invoke the workspace resolver on a gate-skipped tick', async () => {
+    const resolveWorkspaceChannelId = vi.fn(() => `${FREE_TIME_CHANNEL_PREFIX}project:story-panels`);
+    // Recent partner activity closes the gate before any spend decision.
+    const nowMs = Date.parse('2026-06-11T06:00:00.000Z');
+    const { scheduler, sessionManager, invokeTurn, runtime } = buildRuntime({
+      turnScript: ['should not run'],
+      config: freeTimeConfig({
+        quietHours: { enabled: true, checkIntervalMs: 1_000 },
+        idle: { enabled: false, checkIntervalMs: 1_000, minIdleMinutes: 180 },
+      }),
+      now: () => nowMs,
+    });
+    runtime.resolveWorkspaceChannelId = resolveWorkspaceChannelId;
+    sessionManager.resolveStartupSessionMetadata = () => ({
+      sessionId: 'api:main',
+      channelType: 'api',
+      timestamp: nowMs - 30 * 60_000,
+      lastRole: 'user',
+    });
+    registerFreeTimeTasks(runtime);
+
+    const handler = scheduler.getTask(FREE_TIME_QUIET_HOURS_TASK_ID)?.handler;
+    if (!handler) throw new Error('quiet-hours free-time task was not registered');
+    await handler();
+
+    expect(invokeTurn).not.toHaveBeenCalled();
+    expect(resolveWorkspaceChannelId).not.toHaveBeenCalled();
   });
 });

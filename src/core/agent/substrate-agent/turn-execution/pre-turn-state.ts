@@ -41,6 +41,7 @@ import type { TurnExecutionObservability } from './observability.js';
 import type { TurnRetrievalQueryEmbedding } from '../../../../shared/retrieval-query-embedding.js';
 import { resolveCompanionIdFromConfig } from '../../../identity/companion-runtime.js';
 import type { SessionActorKind } from '../../../session/turn-provenance.js';
+import { FREE_TIME_CHANNEL_PREFIX } from '../../../session/session-id.js';
 import { runWithRequestContext } from '../../../../primitives/llm/request-context.js';
 import {
   COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE,
@@ -495,8 +496,8 @@ export async function prepareTurnIdentityState(input: {
   let requestAudience: RequestAudience | undefined;
   if (
     requesterProvenance === 'self_directed'
-    && message.channelId.startsWith('internal:free-time:')
-    && message.channelId.length > 'internal:free-time:'.length
+    && message.channelId.startsWith(FREE_TIME_CHANNEL_PREFIX)
+    && message.channelId.length > FREE_TIME_CHANNEL_PREFIX.length
   ) {
     requestAudience = 'self';
   } else if (

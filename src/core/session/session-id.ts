@@ -2,8 +2,21 @@ import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.
 
 const DISCORD_CHANNEL_ID_PATTERN = /^\d{15,22}$/;
 const INTERNAL_REFLECTION_SESSION_PREFIX = 'internal:reflection:';
+
+/**
+ * Canonical partition prefix for free-time continuity sessions. The scheduler
+ * trigger lane (quiet-hours vs idle) must NOT appear in the identity: both
+ * lanes resume the SAME chosen workspace session under this one prefix
+ * (bible §10.4 — "Scheduler trigger lane must not determine transcript
+ * identity"). Every free-time call site (session identity classification,
+ * retrieval access scope, self-audience derivation, ICP candidate source,
+ * scheduler channel resolution) reads this single constant so the identity
+ * scheme cannot drift across sites.
+ */
+export const FREE_TIME_CHANNEL_PREFIX = 'internal:free-time:';
+
 const EXPERIENTIAL_SELF_DIRECTED_SESSION_PREFIXES: readonly string[] = [
-  'internal:free-time:',
+  FREE_TIME_CHANNEL_PREFIX,
   INTERNAL_REFLECTION_SESSION_PREFIX,
 ];
 export type InferredSessionChannelType = ChannelType | 'subagent';

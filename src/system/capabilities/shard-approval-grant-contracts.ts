@@ -32,6 +32,31 @@ export interface AuthenticatedShardWorkloadRegistration {
   readonly capabilityGrant: DerivedShardCapabilityGrant;
 }
 
+/** One launch generation registered by ShardManager before any shard turn runs. */
+export interface ShardWorkloadRegistrationInput {
+  readonly parentCompanionId: string;
+  readonly shardId: string;
+  readonly shardLabel?: string;
+  readonly channelIds: readonly string[];
+  /** Immutable launch snapshot derived by shard-derivation.ts. */
+  readonly capabilityGrant: DerivedShardCapabilityGrant;
+}
+
+/**
+ * Launch/release seam consumed by ShardManager. Implementations may be the
+ * in-process registry or an authenticated gateway RPC client; registration
+ * and release are awaitable so a shard never runs before the gateway records
+ * its generation and normal completion never outruns revocation.
+ */
+export interface ShardWorkloadLifecyclePort {
+  registerWorkload(
+    input: ShardWorkloadRegistrationInput,
+  ): AuthenticatedShardWorkloadHandle | Promise<AuthenticatedShardWorkloadHandle>;
+  endWorkload(
+    handle: AuthenticatedShardWorkloadHandle,
+  ): void | Promise<void>;
+}
+
 /**
  * Authentication port owned by the shard runtime. A live handle resolves to
  * one exact workload generation; ended and replaced generations return
@@ -64,6 +89,13 @@ export interface ShardApprovalWorkloadRegistryPort extends AuthenticatedShardWor
    * the parent's own dispatch.
    */
   hasHostedWorkloadForChannel(parentCompanionId: string, channelId: string): boolean;
+}
+
+/** Complete gateway-owned registry: RPC lifecycle mutations plus grant lookup. */
+export interface ShardWorkloadLifecycleRegistryPort
+  extends ShardApprovalWorkloadRegistryPort, ShardWorkloadLifecyclePort {
+  registerWorkload(input: ShardWorkloadRegistrationInput): AuthenticatedShardWorkloadHandle;
+  endWorkload(handle: AuthenticatedShardWorkloadHandle): void;
 }
 
 export interface AuthenticatedShardWorkloadIdentity {

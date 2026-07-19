@@ -129,7 +129,11 @@ export function formatShardParentIcpChannelId(
  * gates. This deliberately exposes no raw peer registration or roster API.
  */
 export interface PolicyGovernedShardParentIcpDeliveryPort {
-  deliverOrdinaryIcp(envelope: ShardParentIcpEnvelope): Promise<void>;
+  /**
+   * One bounded request/response exchange. Input must be shard→parent and the
+   * returned envelope must be the exact parent→same-shard response.
+   */
+  deliverOrdinaryIcp(envelope: ShardParentIcpEnvelope): Promise<ShardParentIcpEnvelope>;
 }
 
 export function createShardParentIcpEnvelope(input: Readonly<{
@@ -161,21 +165,19 @@ export class ShardParentIcpAdapter {
     private readonly delivery: PolicyGovernedShardParentIcpDeliveryPort,
   ) {}
 
-  async sendFromShard(shardId: string, content: string): Promise<void> {
-    await this.delivery.deliverOrdinaryIcp(createShardParentIcpEnvelope({
+  async sendFromShard(shardId: string, content: string): Promise<ShardParentIcpEnvelope> {
+    const response = await this.delivery.deliverOrdinaryIcp(createShardParentIcpEnvelope({
       parentCompanionId: this.parentCompanionId,
       shardId,
       direction: 'shard_to_parent',
       content,
     }));
-  }
-
-  async sendToShard(shardId: string, content: string): Promise<void> {
-    await this.delivery.deliverOrdinaryIcp(createShardParentIcpEnvelope({
-      parentCompanionId: this.parentCompanionId,
-      shardId,
-      direction: 'parent_to_shard',
-      content,
-    }));
+    const normalized = parseShardParentIcpEnvelope(response);
+    if (normalized.routingCompanionId !== this.parentCompanionId
+      || normalized.lineage.shardId !== shardId.trim()
+      || normalized.direction !== 'parent_to_shard') {
+      throw new Error('Shard-parent ICP response lineage or direction mismatch');
+    }
+    return normalized;
   }
 }

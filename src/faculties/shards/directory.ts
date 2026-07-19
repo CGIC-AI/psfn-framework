@@ -35,8 +35,14 @@ export interface ShardDirectoryOptions {
 }
 
 interface ActiveShardChatRuntime extends ShardDirectoryRuntime {
+  readonly generation: object;
   readonly history: ShardChatMessage[];
   readonly interactions: Set<string>;
+}
+
+export interface LiveShardGenerationSnapshot {
+  readonly parentCompanionId: CompanionId;
+  readonly generation: object;
 }
 
 /**
@@ -56,6 +62,7 @@ export class LiveShardDirectory implements ShardDirectoryPort {
     }
     this.runtimes.set(shardId, {
       ...runtime,
+      generation: Object.freeze({}),
       history: [],
       interactions: new Set<string>(),
     });
@@ -66,12 +73,19 @@ export class LiveShardDirectory implements ShardDirectoryPort {
   }
 
   ownerOfLiveShard(shardId: string): CompanionId | undefined {
+    return this.snapshotLiveShardGeneration(shardId)?.parentCompanionId;
+  }
+
+  snapshotLiveShardGeneration(shardId: string): LiveShardGenerationSnapshot | undefined {
     return this.operation(() => {
       this.options.refreshDeployments();
       const shard = this.findDeployment(shardId);
-      return shard && shard.state !== 'offline' && this.runtimes.has(shardId)
-        ? this.options.parentCompanionId()
-        : undefined;
+      const runtime = this.runtimes.get(shardId);
+      if (!shard || shard.state === 'offline' || !runtime) return undefined;
+      return Object.freeze({
+        parentCompanionId: this.options.parentCompanionId(),
+        generation: runtime.generation,
+      });
     });
   }
 

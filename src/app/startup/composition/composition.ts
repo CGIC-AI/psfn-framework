@@ -57,6 +57,7 @@ import type { ContactStorePort } from '../../../core/contacts/contact-store-port
 import type { ContactTrackingGate } from '../../../core/contacts/tracking-gate.js';
 import { ShardManager } from '../../../faculties/shards/manager.js';
 import { ShardWorkloadRegistry } from '../../../faculties/shards/workload-registry.js';
+import type { ShardWorkloadLifecyclePort } from '../../../system/capabilities/shard-approval-grant-contracts.js';
 import { ShardFoldReviewController } from '../../../faculties/shards/fold-review.js';
 import {
   createShardExecutionPort,
@@ -529,12 +530,12 @@ export interface ToolRuntimeOptions {
   compressionGuidelineEvolution?: CompressionGuidelineEvolutionPort | null;
   shardParentIcpDelivery: PolicyGovernedShardParentIcpDeliveryPort | null;
   /**
-   * 2h6q.3: authenticated shard-workload registry shared with the gateway's
-   * approval-grant authority. Absent ⇒ a private registry is still created so
-   * launch registration state is always real; a gateway that never receives
-   * it keeps every shard temporary-grant path fail closed.
+   * Lifecycle port for registering shard workloads with the gateway-owned
+   * approval-grant authority. Split production supplies its authenticated
+   * gateway RPC client. Local/test composition may omit it and use the
+   * process-local registry while retaining the same lifecycle contract.
    */
-  shardWorkloadRegistry?: ShardWorkloadRegistry;
+  shardWorkloadRegistry?: ShardWorkloadLifecyclePort;
 }
 
 function requireExplicitShardParentIcpDelivery(

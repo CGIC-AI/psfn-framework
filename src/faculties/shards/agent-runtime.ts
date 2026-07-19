@@ -8,6 +8,7 @@ import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
 import type { CapabilityAccess } from '../../system/capabilities/access.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import { sanitizeCoreSubstrateConfig } from '../../system/config/runtime-config-contracts.js';
+import { allowShardRequestScopedCapabilityTransport } from './request-scoped-capability-transport.js';
 
 export interface CreateShardAgentRuntimeOptions {
   readonly eventBus: EventBus;
@@ -39,6 +40,7 @@ export function createShardAgentRuntime(
     {
       runtimeMode: options.runtimeMode,
       backgroundWorkDisabled: true,
+      allowCapabilityDeniedTransport: allowShardRequestScopedCapabilityTransport,
     },
   );
   agentLoop.setCapabilityAccess(options.capabilityAccess);

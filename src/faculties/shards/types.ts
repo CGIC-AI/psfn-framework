@@ -251,5 +251,5 @@ export type ShardStatus = 'running' | 'completed' | 'failed';
  * execution-port module, which reaches back into the manager.
  */
 export interface ShardParentIcpPort {
-  sendShardParentIcp(shardId: string, content: string): Promise<void>;
+  sendShardParentIcp(shardId: string, content: string): Promise<string>;
 }

@@ -110,8 +110,9 @@ import {
   ShardApprovalGrantAuthority,
   type AuthenticatedShardWorkloadHandle,
   type ShardApprovalGrantAuditEvent,
-  type ShardApprovalWorkloadRegistryPort,
+  type ShardWorkloadLifecycleRegistryPort,
 } from '../../system/capabilities/shard-approval-grants.js';
+import { GatewayShardWorkloadRegistrar } from './shard-workload-registrar.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -266,7 +267,7 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
    * shard-originated gated dispatches (they can never inherit the parent's
    * autonomous auto-clear).
    */
-  shardApprovalWorkloads?: ShardApprovalWorkloadRegistryPort;
+  shardApprovalWorkloads?: ShardWorkloadLifecycleRegistryPort;
   /**
    * Structured audit sink for shard approval-grant lifecycle events. A
    * throwing sink fails the transition it audits (terminal resolutions are
@@ -344,6 +345,7 @@ export class GatewayServer {
   private readonly wyomingShardRouting: WyomingShardRoutingConfig;
   private readonly ntfyNotifier: GatewayNtfyNotifier;
   private readonly shardApprovalGrants: ShardApprovalGrantAuthority | undefined;
+  private readonly shardWorkloadRegistrar: GatewayShardWorkloadRegistrar | undefined;
   private readonly approvalBoundary: ApprovalBoundaryService;
   private readonly canaryEgressGuard: CanaryEgressGuard | null;
   private readonly runtimeHealthTracker: GatewayRuntimeHealthTracker;
@@ -458,6 +460,12 @@ export class GatewayServer {
           audit: options.shardApprovalGrantAudit
             ?? ((event) => log.info('Shard approval grant audit', { ...event })),
         })
+      : undefined;
+    this.shardWorkloadRegistrar = options.shardApprovalWorkloads
+      ? new GatewayShardWorkloadRegistrar(
+          options.shardApprovalWorkloads,
+          options.capabilityGrantSnapshotProvider,
+        )
       : undefined;
     this.approvalBoundary = createGatewayApprovalBoundaryService({
       policyConfig: options.policyConfig,
@@ -652,6 +660,38 @@ export class GatewayServer {
       audited: (method, handler, paramsSummary) => this.audited(method, handler, paramsSummary),
     });
     target.addMethod('gateway.client.identify', (params: unknown) => this.identifyConnection(conn, params));
+    target.addMethod('shard.workload.register', this.audited(
+      'shard.workload.register',
+      async (params: unknown) => {
+        const companionId = this.requireAuthenticatedAgentCompanionId(conn);
+        if (!this.shardWorkloadRegistrar) {
+          throw new JSONRPCErrorException(
+            'Shard workload registration is unavailable',
+            GatewayErrors.POLICY_DENIED,
+          );
+        }
+        return this.shardWorkloadRegistrar.register(conn, companionId, params);
+      },
+      () => ({
+        companionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
+      }),
+    ));
+    target.addMethod('shard.workload.end', this.audited(
+      'shard.workload.end',
+      async (params: unknown) => {
+        this.requireAuthenticatedAgentCompanionId(conn);
+        if (!this.shardWorkloadRegistrar) {
+          throw new JSONRPCErrorException(
+            'Shard workload registration is unavailable',
+            GatewayErrors.POLICY_DENIED,
+          );
+        }
+        return this.shardWorkloadRegistrar.end(conn, params);
+      },
+      () => ({
+        companionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
+      }),
+    ));
     target.addMethod('companion.message.send', this.audited(
       'companion.message.send',
       (params: unknown) => this.handleCompanionMessageSend(conn, params),
@@ -2020,6 +2060,8 @@ export class GatewayServer {
   }
 
   private removeConnection(conn: GatewayRpcConnection): void {
+    // A crashed/restarted agent cannot leave a grant-bearing generation live.
+    this.shardWorkloadRegistrar?.releaseConnection(conn);
     const status = this.connectionStatuses.get(conn);
     if (status?.companionId) {
       // Preserve last-seen across the disconnect so the fleet view can report
@@ -2603,6 +2645,7 @@ export class GatewayServer {
       unsubscribe();
     }
     for (const conn of this.connections) {
+      this.shardWorkloadRegistrar?.releaseConnection(conn);
       conn.destroy();
     }
     this.connections.clear();

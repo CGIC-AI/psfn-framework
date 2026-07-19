@@ -259,6 +259,11 @@ export interface SubstrateAgentOptions {
   backgroundWorkTuning?: BackgroundWorkRuntimeTuning;
   /** Explicitly omit post-turn jobs for ephemeral/test agents with no durable owner. */
   backgroundWorkDisabled?: boolean;
+  /**
+   * Transport-only policy for a denied capability whose privileged boundary
+   * performs the real grant. It never changes the advertised/granted tokens.
+   */
+  allowCapabilityDeniedTransport?: import('../../system/capabilities/gate.js').CapabilityDeniedTransportPolicy;
   /** Anti-starvation welfare policy (mmo9.7.4), owner-file backed (scheduler.json). */
   backgroundWorkWelfare?: Partial<BackgroundWorkWelfarePolicy>;
 }
@@ -315,6 +320,9 @@ export class SubstrateAgent {
    * uses so a `custom` grant governs the agent without an owner file.
    */
   private explicitCapabilityAccess: CapabilityAccess | null = null;
+  private readonly allowCapabilityDeniedTransport:
+    | import('../../system/capabilities/gate.js').CapabilityDeniedTransportPolicy
+    | undefined;
   private gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
   private readonly appCache: AppCache;
   private reflectionNudge = new ReflectionNudgeTracker();
@@ -556,6 +564,7 @@ export class SubstrateAgent {
       ?? (() => fallbackPromptVariables);
     this.config = config;
     this.runtimeMode = options.runtimeMode ?? 'gateway';
+    this.allowCapabilityDeniedTransport = options.allowCapabilityDeniedTransport;
     this.appCache = options.appCache ?? createMemoryAppCache({ name: 'substrate-agent-prompt-cache' });
     this.selfModelRuntimeRequired = options.selfModelRuntime?.requireWiring ?? false;
     this.observerEvalSidecar = options.observerEvalSidecar ?? null;
@@ -793,6 +802,7 @@ export class SubstrateAgent {
         tool,
         () => this.resolveCapabilityAccess(),
         () => this.buildEgressToolGuard(),
+        this.allowCapabilityDeniedTransport,
       );
       this.gatedToolCache.set(tool, wrapped);
       return wrapped;

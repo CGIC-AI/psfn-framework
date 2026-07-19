@@ -27,7 +27,7 @@ export function createShardParentIcpTool(
     label: SHARD_PARENT_ICP_TOOL_NAME,
     description: [
       'Send an ordinary status update or question to this shard’s parent companion.',
-      'The message is queued through governed cognition intake with shard lineage.',
+      'The exchange uses governed cognition intake with exact shard lineage and returns the parent reply.',
       'Use only when the parent should receive information before this shard finishes.',
     ].join(' '),
     parameters: Type.Object({
@@ -45,8 +45,8 @@ export function createShardParentIcpTool(
         );
       }
       try {
-        await port.sendShardParentIcp(shardId, content);
-        return textResult('Shard-parent ordinary ICP message queued.');
+        const response = await port.sendShardParentIcp(shardId, content);
+        return textResult(`Parent reply: ${response}`);
       } catch (error) {
         return textResultWithError(
           `shard_parent_icp failed: ${toErrorMessage(error)}`,

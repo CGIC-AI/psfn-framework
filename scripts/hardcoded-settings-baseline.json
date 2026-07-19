@@ -417,6 +417,24 @@
       "value": "4_096"
     },
     {
+      "file": "src/boundary/gateway/shard-workload-registrar.ts",
+      "name": "MAX_CHANNEL_IDS",
+      "value": "4",
+      "note": "Code-owned RPC shape bound that limits untrusted shard registration fan-out before policy evaluation."
+    },
+    {
+      "file": "src/boundary/gateway/shard-workload-registrar.ts",
+      "name": "MAX_ID_CHARS",
+      "value": "512",
+      "note": "Code-owned RPC parsing ceiling that bounds untrusted identifier allocation and diagnostic amplification."
+    },
+    {
+      "file": "src/boundary/gateway/shard-workload-registrar.ts",
+      "name": "MAX_LABEL_CHARS",
+      "value": "160",
+      "note": "Code-owned RPC parsing ceiling that bounds untrusted display-label allocation and diagnostic amplification."
+    },
+    {
       "file": "src/boundary/gateway/transport.ts",
       "name": "FRAME_PREVIEW_LIMIT",
       "value": "200"

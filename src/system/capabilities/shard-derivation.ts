@@ -10,7 +10,7 @@
 // change, no new tier, no fallback to tier-name defaults for custom parents.
 
 import { createHash } from 'node:crypto';
-import type { CapabilityAccess } from './access.js';
+import type { CapabilityAccess, CapabilityGrantSnapshot } from './access.js';
 import type { CapabilityTier } from './tier-types.js';
 import { CAPABILITY_TIER_DEFAULTS, isCapabilityTier } from './tiers.js';
 import { CAPABILITY_TOKENS, isCapabilityToken, type CapabilityToken } from './tokens.js';
@@ -356,4 +356,32 @@ export function deriveShardCapabilityGrant(
     grantDigest,
     access,
   });
+}
+
+/**
+ * Derive from one gateway-owned atomic snapshot and verify that its advertised
+ * effective tokens agree with its tier/custom-token owner content. This is
+ * the cross-process admission primitive for both backend launch and workload
+ * registration; inconsistent owner snapshots fail closed.
+ */
+export function deriveShardCapabilityGrantFromSnapshot(
+  companionId: string,
+  snapshot: CapabilityGrantSnapshot,
+): DerivedShardCapabilityGrant {
+  const grant = deriveShardCapabilityGrant({
+    companionId,
+    tier: snapshot.tier,
+    customTokens: snapshot.customTokens,
+  });
+  const effectiveTokens = canonicalizeCapabilityTokens(
+    snapshot.grantedTokens,
+    'snapshot.grantedTokens',
+  );
+  if (effectiveTokens.length !== grant.parent.tokens.length
+    || effectiveTokens.some((token, index) => token !== grant.parent.tokens[index])) {
+    throw new Error(
+      'Atomic capability snapshot effective tokens do not match its owner tier/customTokens',
+    );
+  }
+  return grant;
 }

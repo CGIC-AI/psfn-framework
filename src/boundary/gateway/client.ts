@@ -3,6 +3,7 @@
 // so it can be used as a drop-in replacement for direct clients.
 
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
+import { randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import type {
   LLMProviderPort,
@@ -110,6 +111,7 @@ import type {
   ShellExecResult,
   ShardBackendRequestParams,
   ShardBackendRequestResult,
+  ShardWorkloadRegisterResult,
   FsReadResult,
   FsWriteResult,
   FsListResult,
@@ -173,6 +175,11 @@ import type {
   GatewayCorrelationParams,
   ContactLifecycleExecuteResult,
 } from './protocol.js';
+import type {
+  AuthenticatedShardWorkloadHandle,
+  ShardWorkloadLifecyclePort,
+  ShardWorkloadRegistrationInput,
+} from '../../system/capabilities/shard-approval-grant-contracts.js';
 import type { ContactAuthorityLifecycleRequest } from '../../shared/contracts/contact-authority-lifecycle.js';
 import { parseContactAuthorityLifecycleResult } from '../../shared/contracts/contact-authority-lifecycle.js';
 import type {
@@ -422,7 +429,11 @@ export interface GatewayConnectionCloseEvent {
   error?: Error;
 }
 
-export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, GatewayModelDiscoveryTransport {
+export class GatewayClient implements
+  LLMProviderPort,
+  EmbeddingProviderPort,
+  GatewayModelDiscoveryTransport,
+  ShardWorkloadLifecyclePort {
   private rpcInstance: JSONRPCServerAndClient;
   private conn: GatewayRpcConnection;
   private embeddingDims: number;
@@ -468,6 +479,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private readonly sessionIntegrityAuthToken?: string;
   private readonly inlineImageReferenceHints = new GatewayInlineImageReferenceHints();
   private readonly onModelBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
+  private readonly shardWorkloadRegistrationIds =
+    new WeakMap<AuthenticatedShardWorkloadHandle, string>();
 
   constructor(conn: GatewayRpcConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
     this.conn = conn;
@@ -1176,6 +1189,87 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     params: ShardBackendRequestParams,
   ): Promise<ShardBackendRequestResult> {
     return await this.rpcInstance.request('shard.backend.request', params) as ShardBackendRequestResult;
+  }
+
+  async registerWorkload(
+    input: ShardWorkloadRegistrationInput,
+  ): Promise<AuthenticatedShardWorkloadHandle> {
+    if (this.companionId && input.parentCompanionId !== this.companionId) {
+      throw new Error(
+        'Shard workload parent does not match the GatewayClient authenticated companion',
+      );
+    }
+    const registrationId = randomUUID();
+    let result: ShardWorkloadRegisterResult;
+    try {
+      result = await this.rpcInstance.request('shard.workload.register', {
+        registrationId,
+        shardId: input.shardId,
+        ...(input.shardLabel ? { shardLabel: input.shardLabel } : {}),
+        channelIds: [...input.channelIds],
+        ownerVersion: input.capabilityGrant.ownerVersion,
+        grantDigest: input.capabilityGrant.grantDigest,
+      }) as ShardWorkloadRegisterResult;
+    } catch (registrationError) {
+      try {
+        await this.confirmShardWorkloadEnded(registrationId);
+      } catch (cleanupError) {
+        this.conn.destroy();
+        throw new AggregateError(
+          [registrationError, cleanupError],
+          'Shard workload registration failed and gateway cleanup could not be confirmed',
+        );
+      }
+      throw registrationError;
+    }
+    if (result.registrationId !== registrationId
+      || typeof result.workloadGeneration !== 'string'
+      || !result.workloadGeneration.trim()) {
+      const invalidResultError = new Error(
+        'Gateway returned an invalid shard workload registration result',
+      );
+      try {
+        await this.confirmShardWorkloadEnded(registrationId);
+      } catch (cleanupError) {
+        this.conn.destroy();
+        throw new AggregateError(
+          [invalidResultError, cleanupError],
+          'Gateway returned an invalid shard workload registration result and cleanup failed',
+        );
+      }
+      throw invalidResultError;
+    }
+    const handle = Object.freeze({
+      kind: 'authenticated-shard-workload' as const,
+    }) as AuthenticatedShardWorkloadHandle;
+    this.shardWorkloadRegistrationIds.set(handle, registrationId);
+    return handle;
+  }
+
+  async endWorkload(handle: AuthenticatedShardWorkloadHandle): Promise<void> {
+    const registrationId = this.shardWorkloadRegistrationIds.get(handle);
+    if (!registrationId) {
+      throw new Error('Cannot end an unknown gateway shard workload handle');
+    }
+    try {
+      await this.confirmShardWorkloadEnded(registrationId);
+    } catch (error) {
+      // Revocation is security-sensitive. If its acknowledgement is missing,
+      // tear down the authenticated connection so the gateway releases every
+      // connection-scoped lease rather than retaining ambiguous authority.
+      this.conn.destroy();
+      throw error;
+    }
+    this.shardWorkloadRegistrationIds.delete(handle);
+  }
+
+  private async confirmShardWorkloadEnded(registrationId: string): Promise<void> {
+    const result = await this.rpcInstance.request('shard.workload.end', {
+      registrationId,
+    }) as unknown;
+    if (!isRecord(result) || typeof result.ended !== 'boolean') {
+      throw new Error('Gateway returned an invalid shard workload revocation result');
+    }
   }
 
   async vaultWrite(

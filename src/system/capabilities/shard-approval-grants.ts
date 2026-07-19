@@ -40,6 +40,9 @@ export type {
   ShardApprovalGrantTuple,
   ShardApprovalGrantUse,
   ShardApprovalWorkloadRegistryPort,
+  ShardWorkloadLifecyclePort,
+  ShardWorkloadLifecycleRegistryPort,
+  ShardWorkloadRegistrationInput,
 } from './shard-approval-grant-contracts.js';
 export {
   assertShardTemporaryGrantDisposition,

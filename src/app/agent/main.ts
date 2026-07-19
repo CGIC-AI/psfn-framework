@@ -651,6 +651,7 @@ async function main(): Promise<void> {
     executionPort: sandboxExecutionPort,
     compressionGuidelineEvolution,
     shardParentIcpDelivery,
+    shardWorkloadRegistry: gateway,
   });
 
   // Memory write/import tools — intentional memory creation
@@ -848,6 +849,11 @@ async function main(): Promise<void> {
     // turns carry trustLevel 'primary' for scoping but no human requester, so
     // effector control must read provenance, not trust level alone.
     resolveRequesterProvenance: () => getRequestContext()?.requesterProvenance,
+    // A live ShardManager channel may transport a reasoned control request to
+    // the gateway's exact operator fence. This does not fabricate requester
+    // trust or authorize the effect; the gateway requires a live generation.
+    allowRequestScopedApprovalTransport: () =>
+      getRequestContext()?.channelId?.startsWith('shard:') === true,
   });
   registerPresenceLightAutomation({
     eventBus,

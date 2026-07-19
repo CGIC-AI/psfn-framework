@@ -15,6 +15,8 @@ import { makeTestChargePolicyConfig } from '../../test-support/charge-policy.js'
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { TurnPerformanceTracker } from '../../shared/telemetry/turn-performance.js';
+import { CAPABILITY_TOKENS } from '../../system/capabilities/tokens.js';
+import { deriveShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
 
 const TEST_COMPANION_ID = createCompanionId('companion');
 const TEST_GATEWAY_ROUTING = {
@@ -105,6 +107,109 @@ function createMockConnection(options: { heartbeatResults?: boolean[] } = {}) {
 function getRpcResponse(sent: unknown[], id: number): any {
   return sent.find((msg: any) => msg.id === id && ('result' in msg || 'error' in msg));
 }
+
+describe('GatewayClient shard workload lifecycle', () => {
+  it('registers and ends one opaque workload lease without sending parent authority', async () => {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, { companionId: TEST_COMPANION_ID });
+    const capabilityGrant = deriveShardCapabilityGrant({
+      companionId: TEST_COMPANION_ID,
+      tier: 'custom',
+      customTokens: [...CAPABILITY_TOKENS],
+    });
+
+    const registering = client.registerWorkload({
+      parentCompanionId: TEST_COMPANION_ID,
+      shardId: 'shard-client-lifecycle',
+      shardLabel: 'Client Lifecycle',
+      channelIds: ['shard:client-lifecycle', 'shard:client-lifecycle:human'],
+      capabilityGrant,
+    });
+    const registerRequest = conn.sent[0] as {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(registerRequest.method).toBe('shard.workload.register');
+    expect(registerRequest.params).toMatchObject({
+      shardId: 'shard-client-lifecycle',
+      ownerVersion: capabilityGrant.ownerVersion,
+      grantDigest: capabilityGrant.grantDigest,
+    });
+    expect(registerRequest.params).not.toHaveProperty('parentCompanionId');
+    expect(registerRequest.params).not.toHaveProperty('capabilityGrant');
+    conn._emit({
+      jsonrpc: '2.0',
+      id: registerRequest.id,
+      result: {
+        registrationId: registerRequest.params.registrationId,
+        workloadGeneration: 'shard-client-lifecycle#g1-server',
+      },
+    });
+    const handle = await registering;
+
+    const ending = client.endWorkload(handle);
+    const endRequest = conn.sent[1] as {
+      id: number;
+      method: string;
+      params: Record<string, unknown>;
+    };
+    expect(endRequest).toMatchObject({
+      method: 'shard.workload.end',
+      params: { registrationId: registerRequest.params.registrationId },
+    });
+    conn._emit({
+      jsonrpc: '2.0',
+      id: endRequest.id,
+      result: { ended: true },
+    });
+    await ending;
+    await expect(client.endWorkload(handle)).rejects.toThrow(/unknown gateway shard workload/);
+  });
+
+  it('destroys the authenticated connection when workload revocation is unconfirmed', async () => {
+    const conn = createMockConnection();
+    const client = new GatewayClient(conn.conn, 1024, { companionId: TEST_COMPANION_ID });
+    const capabilityGrant = deriveShardCapabilityGrant({
+      companionId: TEST_COMPANION_ID,
+      tier: 'custom',
+      customTokens: [...CAPABILITY_TOKENS],
+    });
+    const registering = client.registerWorkload({
+      parentCompanionId: TEST_COMPANION_ID,
+      shardId: 'shard-client-revocation',
+      channelIds: ['shard:client-revocation'],
+      capabilityGrant,
+    });
+    const registerRequest = conn.sent[0] as {
+      id: number;
+      params: Record<string, unknown>;
+    };
+    conn._emit({
+      jsonrpc: '2.0',
+      id: registerRequest.id,
+      result: {
+        registrationId: registerRequest.params.registrationId,
+        workloadGeneration: 'shard-client-revocation#g1-server',
+      },
+    });
+    const handle = await registering;
+
+    const ending = client.endWorkload(handle);
+    const endRequest = conn.sent[1] as { id: number };
+    conn._emit({
+      jsonrpc: '2.0',
+      id: endRequest.id,
+      error: {
+        code: -32_603,
+        message: 'revocation unavailable',
+      },
+    });
+
+    await expect(ending).rejects.toThrow('revocation unavailable');
+    expect(conn.destroyed).toBe(true);
+  });
+});
 
 describe('GatewayClient streaming', () => {
   let conn: ReturnType<typeof createMockConnection>;

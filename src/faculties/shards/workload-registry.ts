@@ -2,28 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type {
   AuthenticatedShardWorkloadHandle,
   AuthenticatedShardWorkloadRegistration,
-  ShardApprovalWorkloadRegistryPort,
+  ShardWorkloadLifecycleRegistryPort,
+  ShardWorkloadRegistrationInput,
 } from '../../system/capabilities/shard-approval-grant-contracts.js';
-import type { DerivedShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
-
-/**
- * Production constructor input for one authenticated shard workload
- * generation. Fed exclusively from ShardManager launch state — never from RPC
- * params, tool arguments, or browser fields.
- */
-export interface ShardWorkloadRegistrationInput {
-  readonly parentCompanionId: string;
-  readonly shardId: string;
-  readonly shardLabel?: string;
-  /**
-   * Gateway-visible channel ids that address this workload (task lane plus
-   * the direct human-chat lane). Used only as lookup keys; they carry no
-   * authority of their own.
-   */
-  readonly channelIds: readonly string[];
-  /** Immutable launch snapshot derived by shard-derivation.ts (mus2.4). */
-  readonly capabilityGrant: DerivedShardCapabilityGrant;
-}
+export type { ShardWorkloadRegistrationInput };
 
 interface WorkloadRecord {
   readonly workloadKey: string;
@@ -65,7 +47,7 @@ function channelKey(parentCompanionId: string, channelId: string): string {
  * - handles are process-local frozen objects — RPC/tool/browser values can
  *   never mint or forge one.
  */
-export class ShardWorkloadRegistry implements ShardApprovalWorkloadRegistryPort {
+export class ShardWorkloadRegistry implements ShardWorkloadLifecycleRegistryPort {
   private readonly recordsByHandle =
     new WeakMap<AuthenticatedShardWorkloadHandle, WorkloadRecord>();
 

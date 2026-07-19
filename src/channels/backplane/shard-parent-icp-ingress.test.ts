@@ -46,10 +46,15 @@ describe('createPolicyGovernedShardParentIcpDelivery', () => {
       envelopeId: 'intake-envelope-1',
       sourceClass: 'subagent_output',
     };
-    const screen = vi.fn(async () => ({
-      effectiveText: '[REDACTED:credential] should not reach cognition',
-      snapshot,
-    }));
+    const screen = vi.fn()
+      .mockResolvedValueOnce({
+        effectiveText: '[REDACTED:credential] should not reach cognition',
+        snapshot,
+      })
+      .mockResolvedValueOnce({
+        effectiveText: 'Parent received the shard update.',
+        snapshot: { ...snapshot, envelopeId: 'intake-envelope-2' },
+      });
     const handleMessage = vi.fn(async (_message: SubstrateMessage) => response());
     const waitForIdle = vi.fn(async () => {});
     const delivery = createPolicyGovernedShardParentIcpDelivery({
@@ -60,7 +65,16 @@ describe('createPolicyGovernedShardParentIcpDelivery', () => {
       now: () => DELIVERED_AT,
     });
 
-    await delivery.deliverOrdinaryIcp(envelope());
+    await expect(delivery.deliverOrdinaryIcp(envelope())).resolves.toEqual({
+      schemaVersion: 1,
+      routingCompanionId: PARENT_COMPANION_ID,
+      lineage: {
+        parentCompanionId: PARENT_COMPANION_ID,
+        shardId: SHARD_ID,
+      },
+      direction: 'parent_to_shard',
+      content: 'Parent received the shard update.',
+    });
 
     expect(screen).toHaveBeenCalledWith(
       'Bearer private-token should not reach cognition',
@@ -99,6 +113,18 @@ describe('createPolicyGovernedShardParentIcpDelivery', () => {
         },
       });
     });
+    expect(screen).toHaveBeenNthCalledWith(
+      2,
+      'Parent received the shard update.',
+      {
+        sourceClass: 'subagent_output',
+        origin: {
+          ref: `shard-parent-icp:${PARENT_COMPANION_ID}:${SHARD_ID}:parent_to_shard`,
+        },
+        scope: 'context',
+        sourceChannelId: `companion-shard:${PARENT_COMPANION_ID}:${SHARD_ID}`,
+      },
+    );
   });
 
   it('rejects foreign, inconsistent, and wrong-direction envelopes before cognition', async () => {
@@ -151,7 +177,7 @@ describe('createPolicyGovernedShardParentIcpDelivery', () => {
     expect(handleMessage).not.toHaveBeenCalled();
   });
 
-  it('queues while the parent is busy and retries after idle without blocking the shard', async () => {
+  it('queues while the parent is busy, then returns the exact parent response', async () => {
     let releaseIdle!: () => void;
     const idle = new Promise<void>((resolve) => {
       releaseIdle = resolve;
@@ -168,16 +194,18 @@ describe('createPolicyGovernedShardParentIcpDelivery', () => {
       agentLoop: { handleMessage, waitForIdle },
     });
 
-    await expect(delivery.deliverOrdinaryIcp(envelope())).resolves.toBeUndefined();
+    const pending = delivery.deliverOrdinaryIcp(envelope());
     await vi.waitFor(() => {
       expect(handleMessage).toHaveBeenCalledTimes(1);
       expect(waitForIdle).toHaveBeenCalledOnce();
     });
 
     releaseIdle();
-    await vi.waitFor(() => {
-      expect(handleMessage).toHaveBeenCalledTimes(2);
+    await expect(pending).resolves.toMatchObject({
+      direction: 'parent_to_shard',
+      content: 'Parent received the shard update.',
     });
+    expect(handleMessage).toHaveBeenCalledTimes(2);
   });
 
   it('propagates screening failure and never injects unscreened content', async () => {

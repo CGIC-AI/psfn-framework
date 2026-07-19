@@ -160,13 +160,22 @@ export interface ConfirmationQueueResolutionOutcome {
   entry: ConfirmationQueueEntry;
 }
 
+export type ConfirmationQueueTerminalOutcome =
+  ConfirmationQueueResolutionOutcome & {
+    status: 'denied' | 'expired';
+    executed: false;
+  };
+
 /**
  * Lifecycle observer for the confirmation queue — the single choke point for
  * approval enqueue/resolve/expiry (w9hj.1 companion relay emission seam).
- * Callbacks run synchronously inside queue operations and MUST NOT throw;
- * wire asynchronous work (event-bus emission) behind them.
+ * `beforeTerminalized` is a synchronous commit guard: it MAY throw, in which
+ * case the queue retains the pending entry and emits no resolution. The other
+ * callbacks MUST NOT throw; wire asynchronous work (event-bus emission)
+ * behind them.
  */
 export interface ConfirmationQueueObserver {
+  beforeTerminalized?(outcome: ConfirmationQueueTerminalOutcome): void;
   onEnqueued?(entry: ConfirmationQueueEntry): void;
   onResolved?(outcome: ConfirmationQueueResolutionOutcome): void;
 }
@@ -239,6 +248,13 @@ export class ConfirmationQueue {
 
   private notifyResolved(outcome: ConfirmationQueueResolutionOutcome): void {
     this.observer?.onResolved?.({
+      ...outcome,
+      entry: this.snapshot(outcome.entry),
+    });
+  }
+
+  private guardTerminalResolution(outcome: ConfirmationQueueTerminalOutcome): void {
+    this.observer?.beforeTerminalized?.({
       ...outcome,
       entry: this.snapshot(outcome.entry),
     });
@@ -326,6 +342,16 @@ export class ConfirmationQueue {
 
     const now = this.now();
     if (pending.entry.expiresAt <= now) {
+      const outcome: ConfirmationQueueTerminalOutcome = {
+        id: request.id,
+        status: 'expired',
+        resolvedAt: now,
+        executed: false,
+        decision: request.decision,
+        ...(resolver ? { resolver } : {}),
+        entry: pending.entry,
+      };
+      this.guardTerminalResolution(outcome);
       this.pending.delete(request.id);
       this.history.push(this.snapshotHistory({
         ...pending.entry,
@@ -336,15 +362,7 @@ export class ConfirmationQueue {
         message: 'Confirmation request expired before resolution.',
         ...(resolver ? { resolver } : {}),
       }));
-      this.notifyResolved({
-        id: request.id,
-        status: 'expired',
-        resolvedAt: now,
-        executed: false,
-        decision: request.decision,
-        ...(resolver ? { resolver } : {}),
-        entry: pending.entry,
-      });
+      this.notifyResolved(outcome);
       this.expirePending();
       return {
         id: request.id,
@@ -364,6 +382,16 @@ export class ConfirmationQueue {
     }
 
     if (request.decision === 'deny') {
+      const outcome: ConfirmationQueueTerminalOutcome = {
+        id: request.id,
+        status: 'denied',
+        resolvedAt: now,
+        executed: false,
+        decision: request.decision,
+        ...(resolver ? { resolver } : {}),
+        entry: pending.entry,
+      };
+      this.guardTerminalResolution(outcome);
       this.pending.delete(request.id);
       this.history.push(this.snapshotHistory({
         ...pending.entry,
@@ -374,15 +402,7 @@ export class ConfirmationQueue {
         message: 'Action denied by operator.',
         ...(resolver ? { resolver } : {}),
       }));
-      this.notifyResolved({
-        id: request.id,
-        status: 'denied',
-        resolvedAt: now,
-        executed: false,
-        decision: request.decision,
-        ...(resolver ? { resolver } : {}),
-        entry: pending.entry,
-      });
+      this.notifyResolved(outcome);
       return {
         id: request.id,
         status: 'denied',
@@ -498,6 +518,14 @@ export class ConfirmationQueue {
     let expired = 0;
     for (const [id, pending] of this.pending) {
       if (pending.entry.expiresAt <= now) {
+        const outcome: ConfirmationQueueTerminalOutcome = {
+          id,
+          status: 'expired',
+          resolvedAt: now,
+          executed: false,
+          entry: pending.entry,
+        };
+        this.guardTerminalResolution(outcome);
         this.pending.delete(id);
         this.history.push(this.snapshotHistory({
           ...pending.entry,
@@ -506,13 +534,7 @@ export class ConfirmationQueue {
           executed: false,
           message: 'Confirmation request expired before resolution.',
         }));
-        this.notifyResolved({
-          id,
-          status: 'expired',
-          resolvedAt: now,
-          executed: false,
-          entry: pending.entry,
-        });
+        this.notifyResolved(outcome);
         expired += 1;
       }
     }

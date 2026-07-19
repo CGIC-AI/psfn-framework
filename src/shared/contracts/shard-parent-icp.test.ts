@@ -9,10 +9,19 @@ const parentCompanionId = createCompanionId('11111111-1111-4111-8111-11111111111
 
 describe('ShardParentIcpAdapter', () => {
   it('keeps the parent CompanionId as the routing key and shardId as inner lineage', async () => {
-    const deliverOrdinaryIcp = vi.fn(async () => {});
+    const deliverOrdinaryIcp = vi.fn(async () => createShardParentIcpEnvelope({
+      parentCompanionId,
+      shardId: 'shard-live-1',
+      direction: 'parent_to_shard',
+      content: 'Parent guidance',
+    }));
     const adapter = new ShardParentIcpAdapter(parentCompanionId, { deliverOrdinaryIcp });
 
-    await adapter.sendFromShard('shard-live-1', 'I need parent guidance');
+    await expect(adapter.sendFromShard('shard-live-1', 'I need parent guidance'))
+      .resolves.toMatchObject({
+        direction: 'parent_to_shard',
+        content: 'Parent guidance',
+      });
 
     expect(deliverOrdinaryIcp).toHaveBeenCalledWith({
       schemaVersion: 1,

@@ -5,8 +5,9 @@
  *
  * Assembled from the PRODUCTION pieces with no doubles on the certified chain:
  *
- *   real ShardManager launch/release registration state
- *     -> real ShardWorkloadRegistry (production workload handles)
+ *   real ShardManager launch/release state
+ *     -> authenticated agent→gateway workload lifecycle RPC
+ *     -> gateway-owned real ShardWorkloadRegistry (production handles)
  *     -> real GatewayServer construction path (options -> approval boundary ->
  *        confirmation queue -> ShardApprovalGrantAuthority)
  *     -> real gated method registration (home_assistant.call_service)
@@ -19,6 +20,7 @@
  * allowed by the bead contract.
  */
 import { EventEmitter } from 'node:events';
+import { randomUUID } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -29,7 +31,11 @@ import { GatewayErrors } from './protocol.js';
 import type { GatewayRpcConnection } from './transport.js';
 import type { HomeAssistantCallServiceParams } from './protocol.js';
 import { GatewayWorldOps } from '../integrations/world/gateway-ops.js';
-import { runWithRequestContext } from '../../primitives/llm/request-context.js';
+import { createWorldTool } from '../integrations/world/tools.js';
+import {
+  getRequestContext,
+  runWithRequestContext,
+} from '../../primitives/llm/request-context.js';
 import { EventBus } from '../../shared/event-bus.js';
 import { SessionStore } from '../../persistence/sessions/store.js';
 import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
@@ -37,7 +43,14 @@ import { ShardManager } from '../../faculties/shards/manager.js';
 import { ShardWorkloadRegistry } from '../../faculties/shards/workload-registry.js';
 import { CAPABILITY_TOKENS } from '../../system/capabilities/tokens.js';
 import { deriveShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
+import { gateToolWithCapabilities } from '../../system/capabilities/gate.js';
+import { allowShardRequestScopedCapabilityTransport } from '../../faculties/shards/request-scoped-capability-transport.js';
 import type { ShardApprovalGrantAuditEvent } from '../../system/capabilities/shard-approval-grants.js';
+import type {
+  AuthenticatedShardWorkloadHandle,
+  ShardWorkloadLifecyclePort,
+  ShardWorkloadRegistrationInput,
+} from '../../system/capabilities/shard-approval-grant-contracts.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
 import type { ChannelOutboundDock } from '../../channels/backplane/types.js';
@@ -190,6 +203,43 @@ function homeAssistantOpsFor(conn: MockConnection) {
   };
 }
 
+/** Agent-process side of the authenticated workload lifecycle RPC. */
+function workloadLifecycleFor(conn: MockConnection): ShardWorkloadLifecyclePort {
+  const leases = new WeakMap<AuthenticatedShardWorkloadHandle, string>();
+  return {
+    registerWorkload: async (
+      input: ShardWorkloadRegistrationInput,
+    ): Promise<AuthenticatedShardWorkloadHandle> => {
+      const registrationId = randomUUID();
+      const response = await invokeRpc(conn, 'shard.workload.register', {
+        registrationId,
+        shardId: input.shardId,
+        ...(input.shardLabel ? { shardLabel: input.shardLabel } : {}),
+        channelIds: [...input.channelIds],
+        ownerVersion: input.capabilityGrant.ownerVersion,
+        grantDigest: input.capabilityGrant.grantDigest,
+      });
+      if (response.error) {
+        throw Object.assign(new Error(response.error.message), { code: response.error.code });
+      }
+      const handle = Object.freeze({
+        kind: 'authenticated-shard-workload' as const,
+      }) as AuthenticatedShardWorkloadHandle;
+      leases.set(handle, registrationId);
+      return handle;
+    },
+    endWorkload: async (handle: AuthenticatedShardWorkloadHandle): Promise<void> => {
+      const registrationId = leases.get(handle);
+      if (!registrationId) throw new Error('Unknown test workload handle');
+      const response = await invokeRpc(conn, 'shard.workload.end', { registrationId });
+      if (response.error) {
+        throw Object.assign(new Error(response.error.message), { code: response.error.code });
+      }
+      leases.delete(handle);
+    },
+  };
+}
+
 async function startServer(options: GatewayServerOptions): Promise<{
   server: GatewayServer;
   conn: MockConnection;
@@ -299,6 +349,11 @@ describe('shard approval-grant production composition (2h6q.3 / 2h6q.1)', () => 
       eventBus,
       approvalParentLabelProvider: () => 'Composite Companion',
       capabilityTierProvider: () => 'autonomous',
+      capabilityGrantSnapshotProvider: () => ({
+        tier: 'custom',
+        customTokens: [...CAPABILITY_TOKENS],
+        grantedTokens: [...CAPABILITY_TOKENS],
+      }),
       confirmation: { expiryMs: 60_000 },
       ...overrides,
     };
@@ -346,23 +401,6 @@ describe('shard approval-grant production composition (2h6q.3 / 2h6q.1)', () => 
         return { ...SHARD_TURN_RESPONSE, channelId: message.channelId } as never;
       });
 
-    const config = buildConfig(dataDir);
-    shardManager = new ShardManager({
-      eventBus: new EventBus(),
-      llmProvider: { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProviderPort,
-      sessionStore: new SessionStore(dataDir),
-      embeddingService: null,
-      memoryProvider: null,
-      config,
-      parentSystemPrompt: 'composite parent prompt',
-      snapshotParentCapabilityGrant: () => ({
-        tier: 'custom',
-        customTokens: [...CAPABILITY_TOKENS],
-        grantedTokens: [...CAPABILITY_TOKENS],
-      }),
-      workloadRegistry: registry,
-    });
-
     const mainOptions = serverOptions({
       shardApprovalWorkloads: registry,
       shardApprovalGrantAudit: (event) => auditEvents.push(event),
@@ -380,6 +418,25 @@ describe('shard approval-grant production composition (2h6q.3 / 2h6q.1)', () => 
       });
     });
     ({ server: mainServer, conn: mainConn } = await startServer(mainOptions));
+
+    const config = buildConfig(dataDir);
+    shardManager = new ShardManager({
+      eventBus: new EventBus(),
+      llmProvider: { stream: vi.fn(), complete: vi.fn() } as unknown as LLMProviderPort,
+      sessionStore: new SessionStore(dataDir),
+      embeddingService: null,
+      memoryProvider: null,
+      config,
+      parentSystemPrompt: 'composite parent prompt',
+      snapshotParentCapabilityGrant: () => ({
+        tier: 'custom',
+        customTokens: [...CAPABILITY_TOKENS],
+        grantedTokens: [...CAPABILITY_TOKENS],
+      }),
+      // Split topology: the manager owns no registry reference. It registers
+      // through the authenticated agent→gateway RPC on mainConn.
+      workloadRegistry: workloadLifecycleFor(mainConn),
+    });
 
     ({ server: expiryServer, conn: expiryConn } = await startServer(serverOptions({
       shardApprovalWorkloads: registry,
@@ -406,14 +463,46 @@ describe('shard approval-grant production composition (2h6q.3 / 2h6q.1)', () => 
   it('carries a live shard request through human approval to exactly one execution, then denies replay', async () => {
     const { shardId, channelId } = await spawnLiveShard('World Shard');
     // Production feed: ShardManager launch registered the workload.
-    expect(registry.resolveWorkloadForChannel(PARENT, channelId)).toBeDefined();
+    const workloadHandle = registry.resolveWorkloadForChannel(PARENT, channelId);
+    const workload = workloadHandle
+      ? registry.resolveAuthenticatedWorkload(workloadHandle)
+      : undefined;
+    expect(workload).toBeDefined();
 
     const worldOps = new GatewayWorldOps(homeAssistantOpsFor(mainConn));
-    // The shard turn's request context stamps the lineage channel — the same
-    // production seam a real shard tool call flows through.
-    await expect(
-      runWithRequestContext({ channelId }, async () => worldOps.callService(callServiceParams())),
-    ).rejects.toMatchObject({ code: GatewayErrors.NEEDS_APPROVAL });
+    const placesRegistry = serverOptions().policyConfig.homeAssistant?.placesRegistry;
+    if (!placesRegistry || !workload) throw new Error('Composite world registry/workload missing');
+    const worldTool = gateToolWithCapabilities(
+      createWorldTool(worldOps, {
+        placesRegistry,
+        controlEnabled: true,
+        resolveRequesterTrust: () => getRequestContext()?.viewerTrustLevel,
+        resolveRequesterProvenance: () => getRequestContext()?.requesterProvenance,
+        allowRequestScopedApprovalTransport: () =>
+          getRequestContext()?.channelId?.startsWith('shard:') === true,
+      }),
+      () => workload.capabilityGrant.access,
+      undefined,
+      allowShardRequestScopedCapabilityTransport,
+    );
+    // Exercise both real agent-side fences before the RPC: the derived shard
+    // grant lacks world.control, and the shard requester has regular trust.
+    expect(workload.capabilityGrant.access.has('world.control')).toBe(false);
+    const requestResult = await runWithRequestContext({
+      channelId,
+      viewerTrustLevel: 'regular',
+      requesterProvenance: 'system',
+    }, async () => await worldTool.execute('composite-world-control', {
+      action: 'control',
+      affordanceId: 'den-lamp',
+      command: 'on',
+      intent: 'attention',
+      reason: 'Ask the operator to approve the shard lighting request',
+    }));
+    expect(requestResult.details?.isError).toBe(true);
+    expect(requestResult.content).toEqual(expect.arrayContaining([
+      expect.objectContaining({ text: expect.stringMatching(/confirmation|approval/ui) }),
+    ]));
     expect(hubCalls).toHaveLength(0);
 
     const pending = mainServer.listOperatorConfirmations().pending;
@@ -435,6 +524,15 @@ describe('shard approval-grant production composition (2h6q.3 / 2h6q.1)', () => 
       expect(requestedEvents).toContainEqual({ companionId: PARENT, shardId });
     });
     expect(auditEvents.map((event) => event.outcome)).toEqual(['prepared']);
+
+    // A leaked approval id is resolved against its stored owner before the
+    // queue entry is exposed to a foreign companion.
+    await expect(mainServer.resolveCompanionApproval({
+      id: entry.id,
+      decision: 'approve',
+      companionId: 'companion-foreign-parent',
+    })).resolves.toMatchObject({ status: 'not_found', executed: false });
+    expect(hubCalls).toHaveLength(0);
 
     // A companion resolver cannot clear an operator-only shard approval.
     await expect(mainServer.resolveCompanionApproval({

@@ -533,12 +533,35 @@ describe('approval-bound shard request grants', () => {
       decision: 'deny',
     }, OPERATOR)).rejects.toThrow(/injected boundary terminal audit failure/);
     expect(execute).not.toHaveBeenCalled();
+    expect(h.service.listPendingConfirmations()).toEqual([
+      expect.objectContaining({ id: entry.id }),
+    ]);
+    expect(h.resolved).toHaveLength(0);
 
-    // Audit-then-remove: the reservation survived, so the terminal grant
-    // resolution can be retried and audited.
+    // The same public resolution is retryable: the audit commits first, then
+    // the queue terminalizes and emits exactly one resolution.
     failTerminalAudit = false;
-    grants.recordRequestResolution({ approvalId: entry.id, status: 'denied' });
+    await expect(h.service.resolveConfirmation({
+      id: entry.id,
+      decision: 'deny',
+    }, OPERATOR)).resolves.toMatchObject({
+      id: entry.id,
+      status: 'denied',
+      executed: false,
+    });
     expect(auditOutcomes).toEqual(['prepared', 'denied']);
+    expect(h.service.listPendingConfirmations()).toHaveLength(0);
+    await vi.waitFor(() => expect(h.resolved).toHaveLength(1));
+
+    await expect(h.service.resolveConfirmation({
+      id: entry.id,
+      decision: 'approve',
+    }, OPERATOR)).resolves.toMatchObject({
+      status: 'not_found',
+      executed: false,
+    });
+    expect(auditOutcomes).toEqual(['prepared', 'denied']);
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it('preserves ordinary autonomous companion auto-clear behavior', async () => {

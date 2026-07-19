@@ -1,10 +1,12 @@
 # Fleet-scoped Garden control plane
 
-Status: implemented, 2026-07-18 (approved architecture direction 2026-07-17;
-delivered by the `psfn-framework-mus2` epic). The fleet-scoped Garden is the
-live topology: per-companion Garden processes, `gardenPort`, and the raw
-fleet-status listener are retired. The migration section below is retained as
-the executed cutover record and the pinned rollback procedure.
+Status: implemented in the repository, 2026-07-18 (approved architecture
+direction 2026-07-17; delivered by the `psfn-framework-mus2` epic), pending an
+operator-managed live cutover. The code and Helm topology define one
+fleet-scoped Garden and retire per-companion Garden processes, `gardenPort`,
+and the raw fleet-status listener, but this implementation wave did not mutate
+the live k3s deployment. The migration section below is the required cutover
+and rollback plan, not evidence that the rollout already happened.
 
 ## Decision
 
@@ -395,9 +397,10 @@ usable.
 
 ## Migration and rollback
 
-This was a topology migration, not a data or owner-format migration. Canonical
-owner files and companion state stayed in place. The executed cutover sequence
-(retained as the record and as the template for any future topology change):
+This is a topology migration, not a data or owner-format migration. Canonical
+owner files and companion state stay in place. An operator performs the
+following cutover only after discovering the live k3s authority and preserving
+the deployed values and rollback revision:
 
 1. Land the fleet target registry, companion-bound admission, selected
    transport routing, UI URL builder, and tests while the old topology remains
@@ -415,12 +418,12 @@ owner files and companion state stayed in place. The executed cutover sequence
 6. Disable the per-companion Garden processes and remove their Services,
    certificates, per-entry ports, and the raw fleet-status listener. Remove,
    rather than preserve, the retired launcher and manifest fields.
-7. Refresh deployment and operations documentation only after the rollout
-   topology is the live authority.
+7. Record the deployed revision and verification evidence, then update this
+   status only after the rollout topology is confirmed as the live authority.
 
 There is no dual-write period and no copied owner state. During the dark stage,
-the fleet Garden is probe-only. After gateway cutover, old Gardens do not
-receive admin traffic.
+the fleet Garden is probe-only. After the future gateway cutover, old Gardens
+must not receive admin traffic.
 
 ### Pinned rollback procedure
 

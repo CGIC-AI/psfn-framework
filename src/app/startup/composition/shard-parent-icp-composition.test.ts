@@ -116,7 +116,7 @@ describe('shard-parent ICP production composition', () => {
   let llmProvider: LLMProviderPort;
 
   beforeEach(() => {
-    root = mkdtempSync(join(tmpdir(), 'psfn-shard-parent-composition-'));
+    root = mkdtempSync(join(tmpdir(), 'inner-worker-parent-composition-'));
     sessionStore = new SessionStore(root);
     eventBus = new EventBus();
     sessionManager = new SessionManager(
@@ -173,6 +173,7 @@ describe('shard-parent ICP production composition', () => {
   it('delivers a live shard message through governed intake with exact lineage', async () => {
     const releaseShard = deferred();
     const sentByLiveShard: string[] = [];
+    const parentReplies: string[] = [];
     const prompt = vi.spyOn(Agent.prototype, 'prompt').mockImplementation(async function (this: Agent) {
       const parentIcpTool = resolveInstalledAgentTurnTools(this)
         .find(tool => tool.name === SHARD_PARENT_ICP_TOOL_NAME);
@@ -180,10 +181,11 @@ describe('shard-parent ICP production composition', () => {
         throw new Error('Live shard did not receive its ordinary parent ICP tool');
       }
       sentByLiveShard.push('Status: Bearer private-token');
-      await parentIcpTool.execute(
+      const result = await parentIcpTool.execute(
         'live-shard-parent-icp-call',
         { content: 'Status: Bearer private-token' },
       );
+      parentReplies.push((result.content[0] as { text: string }).text);
       await releaseShard.promise;
       this.state.messages.push({
         role: 'assistant',
@@ -217,8 +219,10 @@ describe('shard-parent ICP production composition', () => {
       riskLabels: ['secrets/credential_material'],
       subject: { kind: 'body' },
     };
-    const screen = vi.fn(async () => ({
-      effectiveText: 'Status: [REDACTED:credential]',
+    const screen = vi.fn(async (text: string) => ({
+      effectiveText: text.includes('Bearer')
+        ? 'Status: [REDACTED:credential]'
+        : text,
       snapshot,
     }));
     const delivery = createPolicyGovernedShardParentIcpDelivery({
@@ -247,8 +251,9 @@ describe('shard-parent ICP production composition', () => {
 
       await vi.waitFor(() => {
         expect(sentByLiveShard).toEqual(['Status: Bearer private-token']);
-        expect(screen).toHaveBeenCalledOnce();
+        expect(screen).toHaveBeenCalledTimes(2);
         expect(parentAgent.received).toHaveLength(1);
+        expect(parentReplies).toEqual(['Parent reply: Parent processed shard message.']);
       });
       expect(parentAgent.received[0]).toMatchObject({
         id: 'shard-parent-production-message',

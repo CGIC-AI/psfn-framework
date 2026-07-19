@@ -148,6 +148,42 @@ function runTurn(
 }
 
 describe('two-companion fatigue loop (E7.3 end-to-end)', () => {
+  it('charges shard-parent ordinary turns through the canonical machine-intelligence fatigue engine', () => {
+    const harness = createHarness();
+    const shardId = 'shard-live-fatigue';
+    const channelId = `companion-shard:${LOCAL_COMPANION}:${shardId}`;
+    const decision = evaluateFatigueForTurn({
+      fatigueBudget: harness.fatigueBudget,
+      fatiguePolicy: makeLoopConfig(),
+      localCompanionId: LOCAL_COMPANION,
+      message: {
+        id: 'shard-parent-fatigue-turn',
+        channelId,
+        channelType: 'companion',
+        isDirectMessage: true,
+        authorId: `shard:${shardId}`,
+        authorName: 'Shard',
+        content: 'Parent, I need help with the task.',
+        timestamp: new Date(TS),
+      },
+      authorContext: {
+        trustLevel: 'regular',
+        speakerRole: 'user',
+        resolvedUserName: 'Shard',
+        speakingWithIsMachineIntelligence: true,
+      },
+      channelId,
+      channelType: 'companion',
+      channelMeta: { isDirectMessage: true },
+      timestampMs: TS,
+      correlation: CORRELATION,
+    });
+
+    expect(decision.shouldRecordSpend).toBe(true);
+    expect(decision.metadata.spendReason).toBe('machine_intelligence_response');
+    expect(decision.metadata.peer.isMachineIntelligence).toBe(true);
+  });
+
   it('turns a losing durable last-slot race into invariant-valid zero-model suppression', () => {
     const decision = runTurn(createHarness(), { config: makeLoopConfig() });
     const suppressed = suppressFatigueAfterReservationExhaustion(decision.metadata, {

@@ -20,6 +20,7 @@ import { RUNTIME_MODE } from '../../system/lifecycle/runtime-mode.js';
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';
 import { buildGatewayPrivilegedCore } from '../../boundary/gateway/privileged-core.js';
+import { ShardWorkloadRegistry } from '../../faculties/shards/workload-registry.js';
 import {
   createWelfareGrantVerifier,
   type WelfareGrantVerifier,
@@ -493,6 +494,7 @@ async function main(): Promise<void> {
     });
   }
 
+  const shardWorkloadRegistry = new ShardWorkloadRegistry();
   const gateway = createGatewayServer({
     discordAdapter: discord,
     ...(discordAccountDocks ? { discordAccountDocks } : {}),
@@ -500,6 +502,7 @@ async function main(): Promise<void> {
     ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
     ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),
     ...(welfareGrantVerifier ? { welfareGrantVerifier } : {}),
+    shardApprovalWorkloads: shardWorkloadRegistry,
     ...(fleetAuthPersistence?.contactLifecycleAuthority
       ? { contactLifecycleAuthority: fleetAuthPersistence.contactLifecycleAuthority }
       : {}),

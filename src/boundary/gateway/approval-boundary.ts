@@ -154,10 +154,9 @@ export interface ApprovalBoundaryService {
     /**
      * Attribution-only seam retained for mus2.3 callers. This boundary validates
      * shape and owner consistency but cannot authenticate this object by itself;
-     * the current base has no production ShardManager registration adapter.
-     * Consequently it MUST NOT confer temporary capability authority. New shard
-     * grants use `shardGrant.workload`, resolved through an injected
-     * authenticated-workload registry.
+     * consequently it MUST NOT confer temporary capability authority. Production
+     * shard grants use `shardGrant.workload`, resolved through the gateway-owned
+     * authenticated-workload registry populated by the agent's lifecycle RPC.
      */
     shardLineage?: { shardId: string; shardLabel?: string };
     shardGrant?: {
@@ -181,6 +180,16 @@ export function createGatewayApprovalBoundaryService(
   const confirmationQueue = new ConfirmationQueue({
     defaultExpiryMs: options.confirmation?.expiryMs ?? DEFAULT_CONFIRMATION_EXPIRY_MS,
     observer: {
+      beforeTerminalized: (outcome) => {
+        // The queue invokes this before deleting the pending entry or appending
+        // terminal history. A failed security audit therefore leaves the
+        // public resolution retryable instead of creating a partial commit.
+        options.shardApprovalGrants?.recordRequestResolution({
+          approvalId: outcome.id,
+          status: outcome.status,
+          ...(outcome.resolver ? { resolver: outcome.resolver } : {}),
+        });
+      },
       onEnqueued: (entry) => {
         const owner = entry.approvalOwner;
         if (!owner) {
@@ -224,19 +233,6 @@ export function createGatewayApprovalBoundaryService(
         });
       },
       onResolved: (outcome) => {
-        if (outcome.status === 'denied' || outcome.status === 'expired') {
-          // 2h6q.3: terminal grant resolution + its security audit are
-          // atomic. The authority emits the audit BEFORE dropping the
-          // prepared reservation; if the audit sink fails, the reservation
-          // stays bound (it can never activate after a terminal outcome) and
-          // the failure propagates to the resolving caller instead of
-          // silently completing the terminal transition.
-          options.shardApprovalGrants?.recordRequestResolution({
-            approvalId: outcome.id,
-            status: outcome.status,
-            ...(outcome.resolver ? { resolver: outcome.resolver } : {}),
-          });
-        }
         const owner = outcome.entry.approvalOwner;
         if (!owner) {
           approvalLog.error('Refusing to emit ownerless companion.approval.resolved', {

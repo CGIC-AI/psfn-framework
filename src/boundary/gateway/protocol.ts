@@ -418,6 +418,30 @@ export interface ShardBackendRequestParams {
   grantDigest: string;
 }
 
+export interface ShardWorkloadRegisterParams {
+  /** Client-generated idempotency/cleanup key; never carries authority. */
+  registrationId: string;
+  shardId: string;
+  shardLabel?: string;
+  channelIds: string[];
+  /** Agent launch assertions; the gateway independently re-derives both. */
+  ownerVersion: string;
+  grantDigest: string;
+}
+
+export interface ShardWorkloadRegisterResult {
+  registrationId: string;
+  workloadGeneration: string;
+}
+
+export interface ShardWorkloadEndParams {
+  registrationId: string;
+}
+
+export interface ShardWorkloadEndResult {
+  ended: boolean;
+}
+
 export type VaultWriteMode = 'create' | 'append' | 'prepend';
 
 export interface VaultWriteParams extends GatewayCorrelationParams {
@@ -970,6 +994,8 @@ export interface GatewayMethods {
   'approval.request': [ApprovalRequestParams, ApprovalResult];
   'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
   'shard.backend.request': [ShardBackendRequestParams, ShardBackendRequestResult];
+  'shard.workload.register': [ShardWorkloadRegisterParams, ShardWorkloadRegisterResult];
+  'shard.workload.end': [ShardWorkloadEndParams, ShardWorkloadEndResult];
   'confirmation.list': [ConfirmationListParams, ConfirmationListResult];
   'confirmation.history': [ConfirmationHistoryListParams, ConfirmationHistoryListResult];
   'confirmation.resolve': [ConfirmationResolveParams, ConfirmationResolveResult];

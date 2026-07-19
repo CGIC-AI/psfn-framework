@@ -9,8 +9,7 @@ import type { GatewayMethodRuntime, GatedMethodDescriptor } from './types.js';
 import { registerGatedDescriptors } from './register.js';
 import { createComponentLogger } from '../../../shared/logger.js';
 import {
-  canonicalizeCapabilityTokens,
-  deriveShardCapabilityGrant,
+  deriveShardCapabilityGrantFromSnapshot,
   type DerivedShardCapabilityGrant,
 } from '../../../system/capabilities/shard-derivation.js';
 
@@ -60,10 +59,6 @@ function requireAuthenticatedCompanionId(runtime: GatewayMethodRuntime): string 
   return companionId;
 }
 
-function equalTokens(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((token, index) => token === right[index]);
-}
-
 function resolveAuthoritativeGrant(
   runtime: GatewayMethodRuntime,
   companionId: string,
@@ -85,21 +80,7 @@ function resolveAuthoritativeGrant(
 
   try {
     const snapshot = snapshotProvider();
-    const grant = deriveShardCapabilityGrant({
-      companionId,
-      tier: snapshot.tier,
-      customTokens: snapshot.customTokens,
-    });
-    const effectiveTokens = canonicalizeCapabilityTokens(
-      snapshot.grantedTokens,
-      'snapshot.grantedTokens',
-    );
-    if (!equalTokens(effectiveTokens, grant.parent.tokens)) {
-      throw new Error(
-        'Atomic capability snapshot effective tokens do not match its owner tier/customTokens',
-      );
-    }
-    return grant;
+    return deriveShardCapabilityGrantFromSnapshot(companionId, snapshot);
   } catch (error) {
     log.error(
       `Capability grant snapshot failed during shard backend ${stage}; refusing (fail closed)`,

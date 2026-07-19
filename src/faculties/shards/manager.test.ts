@@ -1110,7 +1110,13 @@ describe('ShardManager', () => {
         },
       } as any)),
     };
-    const deliverOrdinaryIcp = vi.fn(async () => {});
+    const deliverOrdinaryIcp = vi.fn(async (
+      request: import('../../shared/contracts/shard-parent-icp.js').ShardParentIcpEnvelope,
+    ) => ({
+      ...request,
+      direction: 'parent_to_shard' as const,
+      content: 'Parent guidance for the live shard',
+    }));
     const manager = createTestShardManager({
       eventBus,
       llmProvider: mockLLM(),
@@ -1140,7 +1146,10 @@ describe('ShardManager', () => {
     expect(() => manager.shardDirectory.listShards(
       createCompanionId('another-parent'),
     )).toThrow(/parent binding denied/u);
-    await manager.shardParentIcp.sendShardParentIcp(shardId, 'I need parent guidance');
+    await expect(manager.shardParentIcp.sendShardParentIcp(
+      shardId,
+      'I need parent guidance',
+    )).resolves.toBe('Parent guidance for the live shard');
     expect(deliverOrdinaryIcp).toHaveBeenCalledTimes(1);
     expect(deliverOrdinaryIcp).toHaveBeenCalledWith({
       schemaVersion: 1,
@@ -1199,6 +1208,49 @@ describe('ShardManager', () => {
       .toThrow(/unavailable/u);
     await expect(manager.shardParentIcp.sendShardParentIcp(shardId, 'stale delivery'))
       .rejects.toThrow(/unavailable or foreign/u);
+  });
+
+  it('drops a parent response when the exact shard generation ends while the exchange is pending', async () => {
+    mockShardDelayMs = 300;
+    let releaseResponse!: (
+      response: import('../../shared/contracts/shard-parent-icp.js').ShardParentIcpEnvelope,
+    ) => void;
+    const responsePending = new Promise<
+      import('../../shared/contracts/shard-parent-icp.js').ShardParentIcpEnvelope
+    >((resolve) => {
+      releaseResponse = resolve;
+    });
+    let requestEnvelope:
+      | import('../../shared/contracts/shard-parent-icp.js').ShardParentIcpEnvelope
+      | undefined;
+    const manager = createTestShardManager({
+      eventBus,
+      llmProvider: mockLLM(),
+      sessionStore,
+      embeddingService: null,
+      memoryProvider: null,
+      config: TEST_CONFIG,
+      parentSystemPrompt: 'test',
+      shardParentIcpDelivery: {
+        deliverOrdinaryIcp: async (request) => {
+          requestEnvelope = request;
+          return await responsePending;
+        },
+      },
+    });
+    const shardRun = manager.spawn({ name: 'short lived', task: 'Finish shortly' });
+    await vi.waitFor(() => expect(manager.getActiveShards()).toHaveLength(1));
+    const shardId = manager.getActiveShards()[0]!.id;
+    const exchange = manager.shardParentIcp.sendShardParentIcp(shardId, 'Question');
+
+    await shardRun;
+    expect(requestEnvelope).toBeDefined();
+    releaseResponse({
+      ...requestEnvelope!,
+      direction: 'parent_to_shard',
+      content: 'Late parent response',
+    });
+    await expect(exchange).rejects.toThrow(/generation is no longer live/u);
   });
 
   it('fails closed when shard-parent ICP has no policy-governed ordinary ingress', async () => {

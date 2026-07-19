@@ -9,14 +9,13 @@ import {
   formatShardParentIcpChannelId,
   parseShardParentIcpEnvelope,
 } from '../../shared/contracts/shard-parent-icp.js';
-import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { AgentResponse, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { CompanionId } from '../../shared/routing/companion-id.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
 
 export interface OrdinaryCompanionTurnIngress {
-  handleMessage(message: SubstrateMessage): Promise<unknown>;
+  handleMessage(message: SubstrateMessage): Promise<AgentResponse>;
   waitForIdle(): Promise<void>;
 }
 
@@ -32,7 +31,7 @@ const log = createComponentLogger('ShardParentIcpIngress');
 const AGENT_BUSY_PATTERN = /already processing a prompt/i;
 
 /**
- * Narrow local adapter for ordinary shard→parent ICP.
+ * Narrow local adapter for one ordinary shard→parent→same-shard exchange.
  *
  * This is intentionally not a relay transport: it has no peer registration
  * surface and routes only to its bound parent. It enters the same
@@ -48,14 +47,12 @@ export function createPolicyGovernedShardParentIcpDelivery(
   );
   const idFactory = options.idFactory ?? (() => `shard-parent-icp-${randomUUID()}`);
   const now = options.now ?? (() => new Date());
-  const promptQueue: SubstrateMessage[] = [];
-  let pumpActive = false;
+  let deliveryTail: Promise<void> = Promise.resolve();
 
-  const promptWhenIdle = async (message: SubstrateMessage): Promise<void> => {
+  const promptWhenIdle = async (message: SubstrateMessage): Promise<AgentResponse> => {
     for (let attempt = 1; ; attempt += 1) {
       try {
-        await options.agentLoop.handleMessage(message);
-        return;
+        return await options.agentLoop.handleMessage(message);
       } catch (error) {
         if (!(error instanceof Error) || !AGENT_BUSY_PATTERN.test(error.message)) {
           throw error;
@@ -69,32 +66,10 @@ export function createPolicyGovernedShardParentIcpDelivery(
     }
   };
 
-  const pumpPromptQueue = async (): Promise<void> => {
-    if (pumpActive) return;
-    pumpActive = true;
-    try {
-      while (promptQueue.length > 0) {
-        const message = promptQueue.shift();
-        if (!message) continue;
-        try {
-          await promptWhenIdle(message);
-        } catch (error) {
-          log.error('Failed to process queued shard-parent ordinary ICP message', {
-            messageId: message.id,
-            error: toErrorMessage(error),
-          });
-        }
-      }
-    } finally {
-      pumpActive = false;
-      if (promptQueue.length > 0) {
-        void pumpPromptQueue();
-      }
-    }
-  };
-
   return {
-    async deliverOrdinaryIcp(envelope: ShardParentIcpEnvelope): Promise<void> {
+    async deliverOrdinaryIcp(
+      envelope: ShardParentIcpEnvelope,
+    ): Promise<ShardParentIcpEnvelope> {
       const normalized = validateInboundEnvelope(envelope, parentCompanionId);
       const channelId = formatShardParentIcpChannelId(normalized);
       const messageId = idFactory().trim();
@@ -150,8 +125,42 @@ export function createPolicyGovernedShardParentIcpDelivery(
           ...(intakeEnvelopes ? { intakeEnvelopes } : {}),
         },
       };
-      promptQueue.push(message);
-      void pumpPromptQueue();
+      // Do not fabricate a peer CompanionId or private-ICP correlation for a
+      // shard. This ordinary turn is classified as machine intelligence by
+      // runtime-context.ts, so the canonical fatigue engine evaluates and
+      // records it. The single awaited request/response exchange supplies the
+      // loop bound; there is no automatic response redispatch side channel.
+      // Serialize exchanges through the ordinary parent turn boundary. Each
+      // caller receives its own response or its own failure; the tail absorbs
+      // failure only to keep later independent exchanges live.
+      const exchange = deliveryTail.then(() => promptWhenIdle(message));
+      deliveryTail = exchange.then(() => undefined, () => undefined);
+      const response = await exchange;
+      if (response.channelId !== channelId) {
+        throw new Error('Shard-parent ICP parent response escaped its bound channel');
+      }
+      let responseContent = response.content;
+      if (options.intakeScreening) {
+        const screened = await options.intakeScreening.screen(responseContent, {
+          sourceClass: 'subagent_output',
+          origin: {
+            ref: [
+              'shard-parent-icp',
+              normalized.routingCompanionId,
+              normalized.lineage.shardId,
+              'parent_to_shard',
+            ].join(':'),
+          },
+          scope: 'context',
+          sourceChannelId: channelId,
+        });
+        responseContent = screened.effectiveText;
+      }
+      return {
+        ...routing,
+        direction: 'parent_to_shard',
+        content: responseContent,
+      };
     },
   };
 }

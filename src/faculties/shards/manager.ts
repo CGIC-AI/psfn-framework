@@ -18,8 +18,10 @@ import {
 import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
 import { normalizeCapabilityTier } from '../../system/capabilities/tiers.js';
 import type { DerivedShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
-import type { AuthenticatedShardWorkloadHandle } from '../../system/capabilities/shard-approval-grant-contracts.js';
-import type { ShardWorkloadRegistry } from './workload-registry.js';
+import type {
+  AuthenticatedShardWorkloadHandle,
+  ShardWorkloadLifecyclePort,
+} from '../../system/capabilities/shard-approval-grant-contracts.js';
 import type { SessionStore } from '../../persistence/sessions/store.js';
 import type { SessionManager } from '../../core/session/manager.js';
 import type { ShardExecutionPort } from './port.js';
@@ -67,6 +69,7 @@ import {
 import { ShardToolSyncHelper } from './tool-sync.js';
 import type { CompressionGuidelineEvolutionPort } from '../../core/session/compression-guideline-evolution.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
 import { LiveShardDirectory } from './directory.js';
 import { createShardAgentRuntime } from './agent-runtime.js';
 import type { PolicyGovernedShardParentIcpDeliveryPort } from '../../shared/contracts/shard-parent-icp.js';
@@ -199,7 +202,7 @@ export interface ShardManagerDeps {
    * workload registration and every shard temporary-grant path stays
    * unavailable (fail closed at the gateway).
    */
-  workloadRegistry?: ShardWorkloadRegistry;
+  workloadRegistry?: ShardWorkloadLifecyclePort;
 }
 
 export interface SatelliteDelegationRequest {
@@ -661,7 +664,7 @@ export class ShardManager implements ShardExecutionPort {
       // task channel and the direct human-chat lane both address this
       // workload at the gateway.
       if (this.deps.workloadRegistry) {
-        const workloadHandle = this.deps.workloadRegistry.registerWorkload({
+        const workloadHandle = await this.deps.workloadRegistry.registerWorkload({
           parentCompanionId: lineage.companionProvenance.parentCompanionId,
           shardId,
           shardLabel: shardConfig.name,
@@ -922,28 +925,39 @@ export class ShardManager implements ShardExecutionPort {
       );
       throw executionFailure;
     } finally {
-      this.releaseActiveShard(shardId, channelId);
+      const cleanupErrors: unknown[] = [];
+      try {
+        await this.releaseActiveShard(shardId, channelId);
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
       if (shardPostgres && shardPostgresPrepared) {
         const lifecycle = this.deps.shardPostgresLifecycle;
         if (!lifecycle) {
-          throw new Error('Multi-companion shard cleanup lost its Postgres schema lifecycle');
-        }
-        try {
-          const evidence = await lifecycle.cleanup(shardPostgres);
-          this.auditTrail?.append('shard.postgres.cleaned', {
-            shardId,
-            postgresSchema: shardPostgres.schema,
-            droppedObjectCount: evidence.droppedObjectCount,
-          });
-        } catch (cleanupError) {
-          if (executionFailure) {
-            throw new AggregateError(
-              [executionFailure, cleanupError],
-              `Shard "${shardConfig.name}" failed and its Postgres cleanup remains pending`,
-            );
+          cleanupErrors.push(
+            new Error('Multi-companion shard cleanup lost its Postgres schema lifecycle'),
+          );
+        } else {
+          try {
+            const evidence = await lifecycle.cleanup(shardPostgres);
+            this.auditTrail?.append('shard.postgres.cleaned', {
+              shardId,
+              postgresSchema: shardPostgres.schema,
+              droppedObjectCount: evidence.droppedObjectCount,
+            });
+          } catch (cleanupError) {
+            cleanupErrors.push(cleanupError);
           }
-          throw cleanupError;
         }
+      }
+      if (cleanupErrors.length === 1 && !executionFailure) {
+        throw cleanupErrors[0];
+      }
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [...(executionFailure ? [executionFailure] : []), ...cleanupErrors],
+          `Shard "${shardConfig.name}" cleanup failed`,
+        );
       }
     }
   }
@@ -1227,7 +1241,12 @@ export class ShardManager implements ShardExecutionPort {
         `Heartbeat stale for ${staleForMs}ms exceeded recovery window `
         + `(${shard.heartbeatDisconnectAfterMs}ms).`;
       this.transitionShardState(shard.id, 'offline', 'heartbeat_timeout', timeoutReason);
-      this.releaseActiveShard(shard.id, shard.channelId);
+      void this.releaseActiveShard(shard.id, shard.channelId).catch((error: unknown) => {
+        log.error('Failed to release heartbeat-evicted shard workload', {
+          shardId: shard.id,
+          error: toErrorMessage(error),
+        });
+      });
       this.auditTrail?.append('shard.health.evict', {
         shardId: shard.id,
         state: 'offline',
@@ -1262,22 +1281,29 @@ export class ShardManager implements ShardExecutionPort {
     }
   }
 
-  private releaseActiveShard(shardId: string, channelId: string): void {
+  private async releaseActiveShard(shardId: string, channelId: string): Promise<void> {
     // 2h6q.3: end the authenticated workload generation first so no grant can
     // be prepared or consumed against a shard that is being released.
     const workloadHandle = this.workloadHandles.get(shardId);
+    let workloadReleaseError: unknown;
     if (workloadHandle) {
-      this.workloadHandles.delete(shardId);
-      this.deps.workloadRegistry?.endWorkload(workloadHandle);
+      try {
+        await this.deps.workloadRegistry?.endWorkload(workloadHandle);
+        this.workloadHandles.delete(shardId);
+      } catch (error) {
+        workloadReleaseError = error;
+      }
     }
     const deleted = this.activeShards.delete(shardId);
     this.shardDirectory.release(shardId);
     this.configurationRegistry.release(shardId);
     this.unregisterActiveShardChannel(channelId, shardId);
     if (!deleted) {
+      if (workloadReleaseError) throw workloadReleaseError;
       return;
     }
     this.activeCount = Math.max(0, this.activeCount - 1);
+    if (workloadReleaseError) throw workloadReleaseError;
   }
 
   private transitionShardState(

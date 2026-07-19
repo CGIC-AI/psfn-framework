@@ -34,7 +34,7 @@ import {
 import { resolveKubeSelfManagementController } from './kube-self-management-runtime.js';
 import type { IcpConversationChargePolicyResolver } from '../../primitives/llm/icp-conversation-cost-breaker.js';
 import type { GatewayContactLifecycleAuthorityPort } from './contact-lifecycle-authority.js';
-import type { ShardApprovalWorkloadRegistryPort } from '../../system/capabilities/shard-approval-grant-contracts.js';
+import type { ShardWorkloadLifecycleRegistryPort } from '../../system/capabilities/shard-approval-grant-contracts.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
@@ -82,7 +82,7 @@ export interface GatewayPrivilegedCore {
      * ShardManager registration state. Presence enables the exact-once shard
      * approval-grant authority inside the gateway server.
      */
-    shardApprovalWorkloads?: ShardApprovalWorkloadRegistryPort;
+    shardApprovalWorkloads?: ShardWorkloadLifecycleRegistryPort;
   }): GatewayServer;
 }
 

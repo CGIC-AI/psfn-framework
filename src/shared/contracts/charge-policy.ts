@@ -190,6 +190,36 @@ export interface FatigueRoomEpisodePressureConfig {
   maxLeaseThresholdBias: number;
 }
 
+/**
+ * Law 36 hard-suppression circuit breaker (charter §8.11 "Soft Guidance Before
+ * Behavioral Circuit Breakers"; design bible §12.2/§20.2 "hard suppression
+ * remains the final safety mechanism"). This is the operational fallback that
+ * sits ABOVE the room-episode pressure ladder: soft pressure raises the lease
+ * bar and invites graceful wrap-up first, and only a runaway room that keeps
+ * flooding *past* the wrap-up band trips the breaker and suppresses the next
+ * autonomous speaking lease. It is proportionate (the narrowest interruption:
+ * one autonomous lease, never human turns, never room history) and its state is
+ * derived from the same decaying pressure, so recovery is automatic.
+ */
+export interface FatigueRoomEpisodeCircuitBreakerConfig {
+  /**
+   * Aggregate room-episode pressure at which the breaker trips and suppresses
+   * the next autonomous lease. Must sit strictly ABOVE
+   * `roomEpisodePressure.wrapUpThreshold` (charter §8.11: a circuit breaker is
+   * set above ordinary healthy use), so graceful wrap-up is always invited
+   * before hard suppression — no abrupt tap-out.
+   */
+  tripThreshold: number;
+  /**
+   * Pressure at or below which a tripped breaker releases into its half-open
+   * probe window, then closes. Must satisfy `0 < resetThreshold < tripThreshold`
+   * so the hysteresis band prevents the breaker from flapping open/closed on
+   * pressure jitter. Recovery follows the continuous pressure decay; no calendar
+   * reset is involved.
+   */
+  resetThreshold: number;
+}
+
 export interface FatigueSocialRegulationConfig {
   /** Recent relationship activity decays continuously instead of resetting at UTC midnight. */
   relationshipPressureHalfLifeMs: number;
@@ -215,6 +245,8 @@ export interface FatigueSocialRegulationConfig {
   };
   /** Per-channel aggregate machine-pressure pacing (non-monetary; §12.2). */
   roomEpisodePressure: FatigueRoomEpisodePressureConfig;
+  /** Law 36 hard-suppression breaker layered above the pressure ladder (§8.11). */
+  roomEpisodeCircuitBreaker: FatigueRoomEpisodeCircuitBreakerConfig;
 }
 
 export interface FatigueSocialPotConfig {

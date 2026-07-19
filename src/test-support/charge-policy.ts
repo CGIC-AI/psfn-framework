@@ -126,6 +126,10 @@ export function makeTestFatiguePolicyConfig(): FatiguePolicyConfig {
         wrapUpThreshold: 8,
         maxLeaseThresholdBias: 0.3,
       },
+      roomEpisodeCircuitBreaker: {
+        tripThreshold: 12,
+        resetThreshold: 8,
+      },
     },
     socialPot: {
       capUnits: 24,

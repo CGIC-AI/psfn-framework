@@ -1042,16 +1042,6 @@
     },
     {
       "file": "src/channels/discord/adapter.ts",
-      "name": "LONG_RUNNING_STATUS_INITIAL_DELAY_MS",
-      "value": "12_000"
-    },
-    {
-      "file": "src/channels/discord/adapter.ts",
-      "name": "LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS",
-      "value": "20_000"
-    },
-    {
-      "file": "src/channels/discord/adapter.ts",
       "name": "MAX_DISCORD_LENGTH",
       "value": "2000"
     },
@@ -1101,6 +1091,18 @@
       "value": "10"
     },
     {
+      "file": "src/channels/shared/long-running-tool-status.ts",
+      "name": "INITIAL_DELAY_MS",
+      "value": "12_000",
+      "note": "Code-owned channel status cadence preserved from the existing Discord and Telegram adapter behavior."
+    },
+    {
+      "file": "src/channels/shared/long-running-tool-status.ts",
+      "name": "UPDATE_MIN_INTERVAL_MS",
+      "value": "20_000",
+      "note": "Code-owned channel status cadence preserved from the existing Discord and Telegram adapter behavior."
+    },
+    {
       "file": "src/channels/telegram/adapter.ts",
       "name": "DEFAULT_LONG_POLL_TIMEOUT_SECONDS",
       "value": "20"
@@ -1109,16 +1111,6 @@
       "file": "src/channels/telegram/adapter.ts",
       "name": "DEFAULT_TYPING_INTERVAL_MS",
       "value": "4_000"
-    },
-    {
-      "file": "src/channels/telegram/adapter.ts",
-      "name": "LONG_RUNNING_STATUS_INITIAL_DELAY_MS",
-      "value": "12_000"
-    },
-    {
-      "file": "src/channels/telegram/adapter.ts",
-      "name": "LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS",
-      "value": "20_000"
     },
     {
       "file": "src/channels/telegram/adapter.ts",

@@ -56,6 +56,7 @@ import {
   extractDiscordInlineImageLinks,
 } from './attachments.js';
 import { createDiscordClient, type DiscordEvidenceAdapterSurface } from './evidence-adapter-surface.js';
+import { LongRunningToolStatusTracker } from '../shared/long-running-tool-status.js';
 
 const log = createComponentLogger('Discord');
 const rateLimitedDebugLog = createRateLimitedLogEmitter({ windowMs: 60_000 });
@@ -72,9 +73,6 @@ const DISCORD_LISTEN_WINDOW_MAX_MS = 600_000;
 const DISCORD_TRIGGER_OPT_OUT_PREFIX = '!i';
 /** Cap for outbound media re-uploads (Discord bot upload ceiling). */
 const DISCORD_OUTBOUND_MEDIA_MAX_BYTES = 25 * 1024 * 1024;
-const LONG_RUNNING_STATUS_INITIAL_DELAY_MS = 12_000;
-const LONG_RUNNING_STATUS_POLL_MS = 5_000;
-const LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS = 20_000;
 type StatusKind = 'compaction' | 'retry' | 'long-running';
 
 function createSuppressedDiscordResponse(channelId: string): AgentResponse {
@@ -117,16 +115,6 @@ interface DiscordAdapterOptions {
    * mode is 'off' — ingest behavior is then unchanged.
    */
   intakeScreening?: IntakeScreeningService;
-}
-
-interface LongRunningToolState {
-  channelId: string;
-  toolName: string;
-  startedAt: number;
-  timer: ReturnType<typeof setInterval>;
-  lastStatusAt: number;
-  statusSent: boolean;
-  inFlight: boolean;
 }
 
 interface PendingDiscordTurn {
@@ -213,7 +201,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
   private voice: DiscordVoiceRuntime;
   private statusMessages = new Map<string, Message>();
   private statusUnsubscribers: Array<() => void> = [];
-  private longRunningTools = new Map<string, LongRunningToolState>();
+  private readonly longRunningToolStatus: LongRunningToolStatusTracker;
   private allowedBotUserIds: Set<string>;
   private personalFilesDir: string | null;
   private initialized = false;
@@ -261,6 +249,16 @@ export class DiscordAdapter implements ChannelAdapterPort {
         await this.sendTypingToChannel(channelId);
       },
     };
+    this.longRunningToolStatus = new LongRunningToolStatusTracker({
+      isProcessing: channelId => this.processing.has(channelId),
+      sendStatus: async (channelId, text) => {
+        await this.sendTypingToChannel(channelId);
+        await this.setStatus(channelId, 'long-running', text);
+      },
+      clearStatus: async channelId => {
+        await this.clearStatus(channelId, 'long-running');
+      },
+    });
     this.threading = {
       toThreadChannelId: (channelId: string, threadId: string): string => `${channelId}:${threadId}`,
       fromThreadChannelId: (channelId: string): string | null => {
@@ -370,7 +368,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
     this.discordEvidence.close();
     for (const unsub of this.statusUnsubscribers) unsub();
     this.statusUnsubscribers = [];
-    this.clearAllLongRunningTools();
+    this.longRunningToolStatus.dispose();
     await this.clearAllStatusMessages();
     this.listeningWindows.clear();
     await this.voice.stop();
@@ -714,7 +712,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
       this.lockStartedAt.delete(channelId);
       this.lockContention.delete(channelId);
       this.lockPolicy.delete(channelId);
-      this.clearLongRunningToolsForChannel(channelId);
+      this.longRunningToolStatus.clearChannel(channelId);
       await this.clearStatus(channelId, 'compaction');
       await this.clearStatus(channelId, 'long-running');
       const pendingQueue = this.pendingByChannel.get(channelId);
@@ -1143,9 +1141,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
       toolCallId,
       toolName,
     }) => {
-      if (!this.processing.has(channelId)) return;
-      if (!this.isLongRunningTool(toolName)) return;
-      this.startLongRunningToolStatus(toolCallId, channelId, toolName);
+      this.longRunningToolStatus.start(toolCallId, channelId, toolName);
     }));
 
     this.statusUnsubscribers.push(this.eventBus.on('agent.tool.end', async ({
@@ -1153,99 +1149,8 @@ export class DiscordAdapter implements ChannelAdapterPort {
       toolCallId,
       toolName,
     }) => {
-      if (!this.isLongRunningTool(toolName)) return;
-      await this.stopLongRunningToolStatus(toolCallId, channelId);
+      await this.longRunningToolStatus.stop(toolCallId, channelId, toolName);
     }));
-  }
-
-  private isLongRunningTool(toolName: string): boolean {
-    return toolName === 'analysis_workbench';
-  }
-
-  private buildLongRunningStatusText(toolName: string, elapsedMs: number): string {
-    const elapsedSeconds = Math.max(1, Math.floor(elapsedMs / 1000));
-    if (toolName === 'analysis_workbench') {
-      return `Still analyzing large-context material (${elapsedSeconds}s elapsed)...`;
-    }
-    return `Still running ${toolName} (${elapsedSeconds}s elapsed)...`;
-  }
-
-  private startLongRunningToolStatus(toolCallId: string, channelId: string, toolName: string): void {
-    if (this.longRunningTools.has(toolCallId)) return;
-    const state: LongRunningToolState = {
-      channelId,
-      toolName,
-      startedAt: Date.now(),
-      timer: setInterval(() => {
-        this.tickLongRunningToolStatus(toolCallId).catch(() => undefined);
-      }, LONG_RUNNING_STATUS_POLL_MS),
-      lastStatusAt: 0,
-      statusSent: false,
-      inFlight: false,
-    };
-    this.longRunningTools.set(toolCallId, state);
-  }
-
-  private async tickLongRunningToolStatus(toolCallId: string): Promise<void> {
-    const state = this.longRunningTools.get(toolCallId);
-    if (!state) return;
-    if (state.inFlight) return;
-    if (!this.processing.has(state.channelId)) return;
-
-    const now = Date.now();
-    const elapsedMs = now - state.startedAt;
-    if (!state.statusSent && elapsedMs < LONG_RUNNING_STATUS_INITIAL_DELAY_MS) {
-      return;
-    }
-    if (state.statusSent && (now - state.lastStatusAt) < LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS) {
-      return;
-    }
-
-    state.inFlight = true;
-    try {
-      await this.sendTypingToChannel(state.channelId);
-      await this.setStatus(
-        state.channelId,
-        'long-running',
-        this.buildLongRunningStatusText(state.toolName, elapsedMs),
-      );
-      state.statusSent = true;
-      state.lastStatusAt = now;
-    } finally {
-      state.inFlight = false;
-    }
-  }
-
-  private async stopLongRunningToolStatus(toolCallId: string, channelId: string): Promise<void> {
-    const state = this.longRunningTools.get(toolCallId);
-    if (state) {
-      clearInterval(state.timer);
-      this.longRunningTools.delete(toolCallId);
-    }
-    if (this.hasActiveLongRunningToolForChannel(channelId)) return;
-    await this.clearStatus(channelId, 'long-running');
-  }
-
-  private hasActiveLongRunningToolForChannel(channelId: string): boolean {
-    for (const state of this.longRunningTools.values()) {
-      if (state.channelId === channelId) return true;
-    }
-    return false;
-  }
-
-  private clearLongRunningToolsForChannel(channelId: string): void {
-    for (const [toolCallId, state] of this.longRunningTools.entries()) {
-      if (state.channelId !== channelId) continue;
-      clearInterval(state.timer);
-      this.longRunningTools.delete(toolCallId);
-    }
-  }
-
-  private clearAllLongRunningTools(): void {
-    for (const state of this.longRunningTools.values()) {
-      clearInterval(state.timer);
-    }
-    this.longRunningTools.clear();
   }
 
   private async sendTypingToChannel(channelId: string): Promise<void> {

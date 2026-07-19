@@ -42,9 +42,21 @@ export interface SocialPotReadInput {
 export interface SocialPotDrawInput extends SocialPotReadInput {
   /** Requested draw amount (positive). Callers own the per-channel cap policy. */
   amount: number;
+  /**
+   * Optional per-channel draw cap, expressed as a fraction (0 < x <= 1) of the
+   * pot balance *at draw time* (after regeneration, before the draw). When set,
+   * a request whose `amount` exceeds `maxDrawFraction * balance` is refused with
+   * outcome `capped` — no partial draw — so one busy channel cannot consume more
+   * than its bounded share of the remaining pot (design bible §12.6). Omit for
+   * priority lanes (ICP continuation) that draw against the full remaining pot
+   * bounded only by the balance. The cap is evaluated inside the same
+   * advisory-locked transaction as the draw, so concurrent sibling-channel draws
+   * cannot each cap against a stale balance.
+   */
+  maxDrawFraction?: number;
 }
 
-export type SocialPotDrawOutcome = 'drawn' | 'insufficient';
+export type SocialPotDrawOutcome = 'drawn' | 'insufficient' | 'capped';
 
 export interface SocialPotDrawResult {
   outcome: SocialPotDrawOutcome;
@@ -66,7 +78,9 @@ export interface SocialPotPort {
   /**
    * Atomically regenerate then draw `amount`. When the regenerated balance is
    * below `amount` the pot is left funded (only regeneration persists) and the
-   * outcome is `insufficient` — no partial draw.
+   * outcome is `insufficient` — no partial draw. When `maxDrawFraction` is set
+   * and `amount` exceeds that fraction of the regenerated balance, the outcome
+   * is `capped` — again no draw, only regeneration persists.
    */
   draw(input: SocialPotDrawInput): Promise<SocialPotDrawResult>;
   close(): Promise<void>;

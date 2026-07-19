@@ -96,6 +96,34 @@ describe('AdminSettingsDataService channel envelope surface', () => {
     expect(data.broadcastPrefixes).toContain('twitter:');
   });
 
+  it('surfaces the operator_confirmed source in the Garden channel view (jp36.6)', () => {
+    const root = makeTempDir();
+    const service = buildService(root);
+
+    // The Garden demotion flow (jp36.6.2) writes an operator-confirmed label;
+    // this bead only requires the source to round-trip through the owner file
+    // and appear on the channel row for audit.
+    const saved = service.saveChannelEnvelopeLabel('room:confirmed', {
+      privacy: 'public',
+      classificationSource: 'operator_confirmed',
+    });
+    expect(saved.ok).toBe(true);
+
+    const written = JSON.parse(readFileSync(join(root, 'channels.json'), 'utf8'));
+    expect(written.contextEnvelope.channels['room:confirmed']).toEqual({
+      privacy: 'public',
+      classificationSource: 'operator_confirmed',
+    });
+
+    const row = service.getChannelEnvelopeData().channels[0];
+    expect(row).toMatchObject({
+      channelId: 'room:confirmed',
+      privacy: 'public',
+      source: 'operator_confirmed',
+      hasLabel: true,
+    });
+  });
+
   it('upserts and removes channel labels through the validated owner-file path', () => {
     const root = makeTempDir();
     const service = buildService(root);

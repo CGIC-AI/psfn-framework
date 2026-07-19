@@ -162,8 +162,15 @@ The surface stays intentionally narrow:
 - commands run without a shell parser; callers must pass explicit `command` and `args`
 - gateway policy remains authoritative for enablement, executable allowlists, cwd bounds, timeouts, and output caps
 - confirmation, auditing, and fail-closed denial stay on the underlying `shell.exec` gateway path
+- enabled Linux/k3s commands run inside a Bubblewrap user/mount/PID/network namespace: image binaries are read-only, the
+  environment is cleared, networking is absent, and only the companion's Personal Workspace is mounted writable
 - `shell` remains distinct from `fs` and `repo`; use those primitives for structured workspace and git operations instead of shelling out by default
 - `shell_exec` inside `analysis_workbench` remains a bounded helper, not the primary model-facing surface
+
+`fs action="read"` remains intentionally capped at 20,000 bytes. For larger documents, use `analysis_workbench` so the
+raw material stays in temporary context, or use a bounded `subagent` instructed to return provenance-bearing excerpts
+with source paths and line or byte ranges. Bring those excerpts or a durable artifact back before discarding the worker;
+a summary by itself is not a provenance-preserving handoff.
 
 ## Canonical Session Surface
 

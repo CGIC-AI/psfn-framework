@@ -16,7 +16,9 @@ import {
   type CompanionOwnedVisibility,
   type PersonalProjectStatus,
   PersonalProjectLibrary,
+  isReservedManagedWikiWrite,
 } from './personal-projects.js';
+import { normalizeWikiDocumentId } from './store.js';
 import {
   MAX_WISH_CONTEXT_CHARS,
   MAX_WISH_TEXT_CHARS,
@@ -382,6 +384,38 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
           }
           case 'write':
           case 'import': {
+            // Bible §6.2/§9.5 (psfn-framework-jp36.1.2.3): the generic wiki
+            // write/import action is fully model-controlled (id, tags, and body).
+            // It must never create or mutate a runtime-managed personal-project
+            // or named-look manifest — otherwise the model could author a
+            // `project.<id>` document whose artifacts assert
+            // `metadataLineage: runtime_derived` (plus model-chosen
+            // sensitivity/intendedAudience/shareState) and forge egress
+            // eligibility, defeating the runtime-metadata-authority derivation and
+            // the legacy egress quarantine. Reject fail-closed; these manifests
+            // are only ever written through the dedicated project_*/wardrobe_*
+            // actions, which derive disclosure metadata from runtime state.
+            let resolvedDocId = '';
+            try {
+              resolvedDocId = normalizeWikiDocumentId(params.id, params.title);
+            } catch {
+              // An unresolvable id cannot address the reserved namespace by id;
+              // fall back to the raw id for the tag/prefix check and let the
+              // store's own upsert surface the canonical invalid-id error.
+              resolvedDocId = typeof params.id === 'string' ? params.id : '';
+            }
+            if (isReservedManagedWikiWrite({ documentId: resolvedDocId, tags: params.tags })) {
+              return textResultWithError(
+                'wiki '
+                + action
+                + ' cannot create or modify personal-project or named-look manifests '
+                + '(reserved id/tag namespace). Their sensitivity, audience, share state, and '
+                + 'metadata lineage are runtime-derived and fail closed (bible §6.2, §9.5). Use the '
+                + 'dedicated project_* actions (project_create, project_update, project_add_artifact, '
+                + 'project_share) or wardrobe_* actions instead.',
+                true,
+              );
+            }
             const intakeSinkGate = deps.getIntakeSinkGate?.() ?? null;
             if (intakeSinkGate) {
               const gateDecision = intakeSinkGate.evaluate('wiki_write', [], {

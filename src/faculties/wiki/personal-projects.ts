@@ -87,6 +87,52 @@ function wardrobeDocId(id: string): string {
   return `wardrobe.look.${id}`;
 }
 
+/**
+ * Wiki document id namespaces owned exclusively by the runtime-authoritative
+ * personal-project / named-look paths. Derived from {@link projectDocId} /
+ * {@link wardrobeDocId} so they never drift.
+ */
+export const RESERVED_MANAGED_WIKI_DOC_ID_PREFIXES = [
+  projectDocId(''),
+  wardrobeDocId(''),
+] as const;
+
+/** Tags reserved for runtime-managed companion-owned manifests. */
+export const RESERVED_MANAGED_WIKI_TAGS = [PROJECT_TAGS[0], WARDROBE_TAGS[0]] as const;
+
+/**
+ * True when a generic `wiki` write/import would land in the reserved
+ * personal-project / named-look namespace (by resolved document id prefix OR by
+ * a reserved tag). The generic write action is model-controlled — body, id, and
+ * tags all originate from the model — so a write into this namespace could forge
+ * a project manifest whose artifacts assert `metadataLineage: runtime_derived`
+ * (and model-chosen sensitivity/intendedAudience/shareState), which
+ * `parsePersonalProjectDocument` would then read back verbatim and treat as
+ * egress-eligible. That defeats the runtime-metadata-authority derivation
+ * (bible §6.2) and the legacy egress quarantine (§9.5;
+ * psfn-framework-jp36.1.2.3). These manifests are only ever written through the
+ * dedicated project_* / wardrobe_* actions, which derive disclosure metadata
+ * from runtime state and fail closed. Comparison is done on trimmed/lowercased
+ * values to match the store's id/tag normalization.
+ */
+export function isReservedManagedWikiWrite(input: {
+  documentId: string;
+  tags?: readonly string[] | string | undefined;
+}): boolean {
+  const documentId = input.documentId.trim().toLowerCase();
+  if (documentId && RESERVED_MANAGED_WIKI_DOC_ID_PREFIXES.some(prefix => documentId.startsWith(prefix))) {
+    return true;
+  }
+  const rawTags = input.tags === undefined
+    ? []
+    : typeof input.tags === 'string'
+      ? input.tags.split(',')
+      : input.tags;
+  return rawTags
+    .map(tag => tag.trim().toLowerCase())
+    .some(tag => (RESERVED_MANAGED_WIKI_TAGS as readonly string[]).some(reserved => reserved === tag));
+}
+
 function visibilitySensitivity(visibility: CompanionOwnedVisibility): SensitivityLevel {
   if (visibility === 'public') return 'public';
   if (visibility === 'primary_contact') return 'personal';

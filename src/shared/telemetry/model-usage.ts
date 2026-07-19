@@ -3,7 +3,7 @@ import {
   type CorrelationMetadata,
   type ObservabilityCallType,
   type TelemetryVisibility,
-} from '../contracts/runtime.js';
+} from '../contracts/runtime-base.js';
 import type { IcpConversationCorrelation } from '../contracts/icp-autonomy.js';
 import type { IcpCostBreakerConfig } from '../contracts/charge-policy.js';
 import type {

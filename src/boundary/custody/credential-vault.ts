@@ -23,12 +23,15 @@ const HUGGING_FACE_TOKEN_ENV_NAMES = Object.freeze([
   'TRANSFORMERS_HF_TOKEN',
 ]);
 
-export interface EnvCredentialReference {
-  kind: 'env';
-  envName: string;
-}
+import type {
+  CredentialReference,
+  EnvCredentialReference,
+} from '../../shared/contracts/credential-contracts.js';
 
-export type CredentialReference = EnvCredentialReference;
+export type {
+  CredentialReference,
+  EnvCredentialReference,
+} from '../../shared/contracts/credential-contracts.js';
 export type CredentialVaultBackend = 'env' | 'openbao';
 
 export interface OpenBaoCredentialVaultConfig {

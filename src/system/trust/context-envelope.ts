@@ -23,6 +23,8 @@
 // (decodeStoredChannelVisibility in ./types.ts) still understands the retired
 // stored vocabulary.
 
+import type { ChannelPrivacy } from '../../shared/contracts/trust-contracts.js';
+
 // ── channelPrivacy ──
 
 /**
@@ -30,7 +32,7 @@
  * 'semi_private' was renamed to 'invite_only' (no alias) and 'broadcast'
  * stops being a privacy level — it becomes the boolean flag below.
  */
-export type ChannelPrivacy = 'private' | 'invite_only' | 'public';
+export type { ChannelPrivacy } from '../../shared/contracts/trust-contracts.js';
 
 export const CHANNEL_PRIVACY_VALUES: readonly ChannelPrivacy[] = ['private', 'invite_only', 'public'];
 

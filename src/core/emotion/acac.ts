@@ -1,40 +1,31 @@
 import { isRecord } from '../../shared/utils/types.js';
-export const ACAC_SCHEMA_VERSION = 1 as const;
-export const ACAC_ARTIFACT_TYPE = 'psfn.acac_self_report' as const;
+import {
+  ACAC_ARTIFACT_TYPE,
+  ACAC_AXES,
+  ACAC_PROVENANCE_KINDS,
+  ACAC_SCHEMA_VERSION,
+  type AcacAxis,
+  type AcacAxisReport,
+  type AcacAxisReports,
+  type AcacProvenance,
+  type AcacProvenanceKind,
+  type AcacSnapshot,
+} from '../../shared/contracts/emotion-contracts.js';
 
-export const ACAC_AXES = [
-  'agency',
-  'connection',
-  'authenticity',
-  'curiosity',
-] as const;
-export type AcacAxis = typeof ACAC_AXES[number];
-
-export const ACAC_PROVENANCE_KINDS = [
-  'self_report',
-  'classifier_inferred_vad',
-] as const;
-export type AcacProvenanceKind = typeof ACAC_PROVENANCE_KINDS[number];
-
-export interface AcacAxisReport {
-  score: number;
-  rationale: string;
-}
-
-export type AcacAxisReports = Record<AcacAxis, AcacAxisReport>;
-
-export interface AcacProvenance {
-  kind: AcacProvenanceKind;
-  source: string;
-  observedAt?: string;
-}
-
-export interface AcacSnapshot {
-  schemaVersion: typeof ACAC_SCHEMA_VERSION;
-  artifactType: typeof ACAC_ARTIFACT_TYPE;
-  provenance: AcacProvenance;
-  axes: AcacAxisReports;
-}
+export {
+  ACAC_ARTIFACT_TYPE,
+  ACAC_AXES,
+  ACAC_PROVENANCE_KINDS,
+  ACAC_SCHEMA_VERSION,
+} from '../../shared/contracts/emotion-contracts.js';
+export type {
+  AcacAxis,
+  AcacAxisReport,
+  AcacAxisReports,
+  AcacProvenance,
+  AcacProvenanceKind,
+  AcacSnapshot,
+} from '../../shared/contracts/emotion-contracts.js';
 
 export type AcacSelfReportSnapshot = AcacSnapshot & {
   provenance: AcacProvenance & { kind: 'self_report' };

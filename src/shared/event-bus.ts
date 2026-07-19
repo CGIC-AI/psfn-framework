@@ -11,7 +11,7 @@ import type {
   LLMStreamFirstOutputObservation,
   RunChargeEvent,
   FatigueBudgetEvent,
-} from './contracts/runtime.js';
+} from './contracts/runtime-base.js';
 import type { TurnSnapshot } from '../core/turns/snapshot.js';
 import type { SessionRouteResetMode } from '../core/session/session-routes.js';
 import type {

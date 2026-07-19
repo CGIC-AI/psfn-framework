@@ -3,7 +3,7 @@ import type {
   EmbodimentPresenceMetadata,
   EmanationPresenceMetadata,
   SatellitePresenceMetadata,
-} from './presence-metadata.js';
+} from '../../shared/contracts/presence-contracts.js';
 import { isRecord } from '../../shared/utils/types.js';
 import { normalizeChannelPrivacy, type ChannelPrivacy } from '../../system/trust/context-envelope.js';
 

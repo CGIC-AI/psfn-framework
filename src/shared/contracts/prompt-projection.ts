@@ -4,7 +4,7 @@ import type {
   LLMProviderWireMessage,
   LLMSystemPromptTransport,
   ToolSchema,
-} from './runtime.js';
+} from './runtime-base.js';
 import { isObjectRecord } from '../utils/types.js';
 
 export const PROMPT_PROJECTION_DATETIME_ANCHOR_BLOCK_ID = 'runtime.current_datetime';

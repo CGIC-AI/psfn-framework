@@ -10,6 +10,7 @@
 //   5. Visibility gate (channel-level restriction)
 //   6. Default: allow
 
+import type { PolicyReasonTag } from '../../shared/contracts/trust-contracts.js';
 import type {
   TrustLevel,
   LowTierTrustLevel,
@@ -21,7 +22,7 @@ import {
   isHighTierTrustLevel,
   sensitivityOrd,
 } from './types.js';
-import type { ResponseStyle, ResponseStyleOverrides } from '../../shared/contracts/runtime.js';
+import type { ResponseStyle, ResponseStyleOverrides } from '../../shared/contracts/runtime-base.js';
 import { getRuntimeTrustPolicy } from './runtime-policy.js';
 import type { ChannelClassificationOverride, TrustPolicyConfig } from '../config/trust-policy-config.js';
 import {
@@ -117,15 +118,7 @@ export type PolicyDecision = 'allow' | 'deny' | 'sanitize';
 //   denial (retired 'broadcast' ChannelVisibility row) now cites the
 //   broadcast envelope dimension explicitly.
 // - All other tags are unchanged.
-export type PolicyReasonTag =
-  | 'operator.approval_override'
-  | 'boundary.withhold'
-  | 'boundary.consent_required'
-  | 'consent.allow_recall_denied'
-  | 'trust.ceiling_exceeded'
-  | 'visibility.channel_restricted'
-  | 'visibility.broadcast_restricted'
-  | 'default.within_bounds';
+export type { PolicyReasonTag } from '../../shared/contracts/trust-contracts.js';
 
 export interface DisclosureBoundaryDirective {
   /** Explicit companion-owned withhold gate for this memory. */

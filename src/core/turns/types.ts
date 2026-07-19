@@ -1,3 +1,1 @@
-declare const turnIdBrand: unique symbol;
-
-export type TurnID = string & { readonly [turnIdBrand]: true };
+export type { TurnID } from '../../shared/contracts/turn-contracts.js';

@@ -2,90 +2,47 @@ import { formatActiveDateTimeLabel } from '../../shared/time/active-timezone.js'
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { getConcernSofteningConfig } from './concern-softening.js';
 
-export const ACTIVE_CONCERN_PRIORITIES = ['high', 'medium', 'low'] as const;
-export type ActiveConcernPriority = typeof ACTIVE_CONCERN_PRIORITIES[number];
+import {
+  ACTIVE_CONCERN_EVIDENCE_KINDS,
+  ACTIVE_CONCERN_OWNERS,
+  ACTIVE_CONCERN_PRIORITIES,
+  ACTIVE_CONCERN_SENSITIVITIES,
+  ACTIVE_CONCERN_SOURCES,
+  ACTIVE_CONCERN_STATUSES,
+  ACTIVE_CONCERN_TERMINAL_STATUSES,
+  type ActiveConcern,
+  type ActiveConcernEvidenceKind,
+  type ActiveConcernEvidenceRef,
+  type ActiveConcernOwner,
+  type ActiveConcernPriority,
+  type ActiveConcernSensitivity,
+  type ActiveConcernSource,
+  type ActiveConcernStatus,
+  type ActiveConcernTerminalStatus,
+  type ActiveConcernVAD,
+} from '../../shared/contracts/intention-contracts.js';
 
-export const ACTIVE_CONCERN_SOURCES = ['appraisal', 'agent', 'heartbeat'] as const;
-export type ActiveConcernSource = typeof ACTIVE_CONCERN_SOURCES[number];
-
-export const ACTIVE_CONCERN_STATUSES = [
-  'candidate',
-  'active',
-  'watching',
-  'deferred',
-  'blocked',
-  'resolved',
-  'dismissed',
-  'suppressed',
-] as const;
-export type ActiveConcernStatus = typeof ACTIVE_CONCERN_STATUSES[number];
-
-export const ACTIVE_CONCERN_TERMINAL_STATUSES = ['resolved', 'dismissed', 'suppressed'] as const;
-export type ActiveConcernTerminalStatus = typeof ACTIVE_CONCERN_TERMINAL_STATUSES[number];
-
-export const ACTIVE_CONCERN_SENSITIVITIES = [
-  'public',
-  'personal',
-  'intimate',
-  'confidential',
-  'redacted',
-] as const;
-export type ActiveConcernSensitivity = typeof ACTIVE_CONCERN_SENSITIVITIES[number];
-
-export const ACTIVE_CONCERN_OWNERS = ['companion', 'operator', 'system'] as const;
-export type ActiveConcernOwner = typeof ACTIVE_CONCERN_OWNERS[number];
-
-export const ACTIVE_CONCERN_EVIDENCE_KINDS = [
-  'message',
-  'turn',
-  'appraisal',
-  'audit_landmark',
-  'operator',
-  'runtime',
-  'redacted',
-] as const;
-export type ActiveConcernEvidenceKind = typeof ACTIVE_CONCERN_EVIDENCE_KINDS[number];
-
-export interface ActiveConcernEvidenceRef {
-  kind: ActiveConcernEvidenceKind;
-  ref: string;
-  sensitivity?: ActiveConcernSensitivity;
-  redacted?: boolean;
-  hash?: string;
-}
-
-export interface ActiveConcernVAD {
-  valence: number;
-  arousal: number;
-  dominance: number;
-}
-
-export interface ActiveConcern {
-  id: string;
-  text: string;
-  priority: ActiveConcernPriority;
-  source: ActiveConcernSource;
-  status: ActiveConcernStatus;
-  createdAt: string;
-  expiresAt: string;
-  salience: number;
-  sensitivity: ActiveConcernSensitivity;
-  owner: ActiveConcernOwner;
-  evidenceRefs: ActiveConcernEvidenceRef[];
-  resolutionEvidenceRefs: ActiveConcernEvidenceRef[];
-  resolvedAt?: string;
-  resolutionOutcome?: string;
-  contactId?: string;
-  formationVAD?: ActiveConcernVAD;
-  lastReviewedAt?: string;
-  nextReviewAt?: string;
-  mergedFromIds?: string[];
-  splitFromId?: string;
-  /** Originating ICP root preserved across durable concern review/restart. */
-  originIcpRootInitiationId?: string;
-  /** Bounded, validated review input retained only while status=candidate. */
-  candidateReviewSnapshot?: unknown;
-}
+export {
+  ACTIVE_CONCERN_EVIDENCE_KINDS,
+  ACTIVE_CONCERN_OWNERS,
+  ACTIVE_CONCERN_PRIORITIES,
+  ACTIVE_CONCERN_SENSITIVITIES,
+  ACTIVE_CONCERN_SOURCES,
+  ACTIVE_CONCERN_STATUSES,
+  ACTIVE_CONCERN_TERMINAL_STATUSES,
+} from '../../shared/contracts/intention-contracts.js';
+export type {
+  ActiveConcern,
+  ActiveConcernEvidenceKind,
+  ActiveConcernEvidenceRef,
+  ActiveConcernOwner,
+  ActiveConcernPriority,
+  ActiveConcernSensitivity,
+  ActiveConcernSource,
+  ActiveConcernStatus,
+  ActiveConcernTerminalStatus,
+  ActiveConcernVAD,
+} from '../../shared/contracts/intention-contracts.js';
 
 export interface ActiveConcernCreateInput {
   text: string;

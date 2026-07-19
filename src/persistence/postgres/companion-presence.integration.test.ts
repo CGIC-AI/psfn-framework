@@ -77,6 +77,7 @@ describe('companion_presence shared-schema integration', () => {
           { version: 6, name: 'icp-fatigue-turn-reservations' },
           { version: 7, name: 'icp-fatigue-delivery-fence' },
           { version: 9, name: 'companion-social-pot' },
+          { version: 10, name: 'speaking-arbiter' },
         ]);
       } finally {
         await pool.end();
@@ -107,7 +108,7 @@ describe('companion_presence shared-schema integration', () => {
         const ledger = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(ledger.rows[0]?.count).toBe('7');
+        expect(ledger.rows[0]?.count).toBe('8');
         // Nothing leaked into public.
         const publicTables = await pool.query<{ table_name: string }>(
           `SELECT table_name FROM information_schema.tables

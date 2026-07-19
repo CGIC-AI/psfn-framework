@@ -44,6 +44,8 @@ import type { IcpInitiationCandidateStorePort } from '../core/icp/autonomy-store
 import type { CompanionPresenceStorePort } from '../core/agent/companion-presence-store-port.js';
 import { PostgresSocialPotStore } from './postgres/social-pot-store.js';
 import type { SocialPotPort } from '../core/agent/fatigue/social-pot.js';
+import { PostgresSpeakingArbiterStore } from './postgres/speaking-arbiter-store.js';
+import type { SpeakingArbiterStorePort } from '../core/agent/arbiter/speaking-arbiter-store-port.js';
 import { createPostgresPool, ensurePostgresSchemaExists } from './postgres.js';
 import {
   assertPostgresTenantAccessProvisioned,
@@ -93,6 +95,14 @@ export interface AgentPersistenceRuntime {
    * touches the shared schema.
    */
   socialPotStore?: SocialPotPort;
+  /**
+   * Gateway-owned speaking-arbiter store (shared schema): the durable substrate
+   * for the two-phase reservation → egress-lease protocol and per-channel
+   * room-episode pressure (design bible §8.5, §12.2). Consumed by the arbiter
+   * service and egress-lease grant path. Present ONLY in multi-companion mode;
+   * flag-off never touches the shared schema.
+   */
+  speakingArbiterStore?: SpeakingArbiterStorePort;
   /** Leased contact-authority recovery, started before the factory returns. */
   contactLifecycleRecovery?: ContactLifecycleRecoveryRuntime;
 }
@@ -183,6 +193,11 @@ export async function createAgentPersistenceRuntime(
   const socialPotStore = options.config.multiCompanion === true
     ? await PostgresSocialPotStore.connect(databaseUrl)
     : undefined;
+  // Speaking arbiter state (reservations, egress leases, room-episode pressure)
+  // is gateway-owned in the shared schema, exactly like the social pot above.
+  const speakingArbiterStore = options.config.multiCompanion === true
+    ? await PostgresSpeakingArbiterStore.connect(databaseUrl)
+    : undefined;
 
   const intentionRuntime = await createPostgresIntentionPorts(databaseUrl, {
     schema,
@@ -231,6 +246,7 @@ export async function createAgentPersistenceRuntime(
     ...(companionPresenceStore ? { companionPresenceStore } : {}),
     ...(icpInitiationCandidateStore ? { icpInitiationCandidateStore } : {}),
     ...(socialPotStore ? { socialPotStore } : {}),
+    ...(speakingArbiterStore ? { speakingArbiterStore } : {}),
   };
   if (!options.contactLifecycleGateway) return runtime;
   const contactLifecycleRecovery = new ContactLifecycleRecoveryRuntime({

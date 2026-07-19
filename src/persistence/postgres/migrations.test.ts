@@ -204,6 +204,42 @@ describe('Postgres live schema migrations', () => {
     expect(localSql).toContain('peer_contact_id TEXT NOT NULL');
   });
 
+  it('adds the gateway speaking-arbiter state as shared migration 10 (jp36.5.1.1)', () => {
+    const sharedSql = migrationSql(POSTGRES_SHARED_MIGRATIONS);
+
+    for (const table of [
+      'speaking_room_episodes',
+      'speaking_episode_participation',
+      'speaking_reservations',
+      'speaking_egress_leases',
+    ]) {
+      expect(sharedSql).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);
+    }
+    // At most one OPEN room episode per channel: the arbitration context.
+    expect(sharedSql).toContain(
+      'idx_speaking_room_episodes_open_channel',
+    );
+    // The exclusivity fence: at most one HELD egress lease per triggering event —
+    // two companions never both send for one trigger (bible §20.1).
+    expect(sharedSql).toContain('idx_speaking_egress_leases_one_held');
+    expect(sharedSql).toContain("ON speaking_egress_leases (channel_id, trigger_event_id) WHERE status = 'held'");
+    // Dedup: one reservation per (channel, source event, companion) (bible §8.1).
+    expect(sharedSql).toContain('UNIQUE (channel_id, trigger_event_id, companion_id)');
+    // The monotonic fencing token that stops a revived crashed holder double-sending.
+    expect(sharedSql).toContain('UNIQUE (channel_id, trigger_event_id, fencing_token)');
+    expect(sharedSql).toContain('fencing_token BIGINT NOT NULL CHECK (fencing_token >= 1)');
+    // Content-free: no message text ever lands in the shared arbiter state.
+    expect(sharedSql).not.toContain('message_text');
+    // Ledger discipline: tables before the version registration, then version 10.
+    expect(sharedSql.indexOf('CREATE TABLE IF NOT EXISTS speaking_room_episodes')).toBeLessThan(
+      sharedSql.indexOf("VALUES (10, 'speaking-arbiter')"),
+    );
+    expect(sharedSql).toContain("VALUES (10, 'speaking-arbiter')");
+
+    // The base shared chain stays pgvector-free (the arbiter needs no vectors).
+    expect(sharedSql).not.toMatch(/vector/i);
+  });
+
   it('extends the shared ledger with shared_wiki_chunks as versioned migration 3 (s10f9)', () => {
     const sql = migrationSql(POSTGRES_SHARED_WIKI_MIGRATIONS);
 

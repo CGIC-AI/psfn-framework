@@ -1,63 +1,28 @@
 import { isRecord } from '../../../../src/shared/utils/types.js';
+import {
+  CANONICAL_MODEL_PURPOSES,
+  type CanonicalModelPurpose as RuntimeCanonicalModelPurpose,
+  type CanonicalModelRegistry as RuntimeCanonicalModelRegistry,
+  type ModelRegistryBudgetPolicy as RuntimeModelRegistryBudgetPolicy,
+  type ModelRegistryCapabilityMetadata as RuntimeModelRegistryCapabilityMetadata,
+  type ModelRegistryCostMetadata as RuntimeModelRegistryCostMetadata,
+  type ModelRegistryEntry as RuntimeModelRegistryEntry,
+  type ModelRegistryIdentityMetadata as RuntimeModelRegistryIdentityMetadata,
+  type ModelRegistryPurposeTag as RuntimeModelRegistryPurposeTag,
+  type ModelRegistrySourceMetadata as RuntimeModelRegistrySourceMetadata,
+  type ModelRegistryTuningMetadata as RuntimeModelRegistryTuningMetadata,
+} from '../../../../src/shared/contracts/runtime.js';
 export { isRecord };
-export type CanonicalModelPurpose =
-  | 'chat'
-  | 'background'
-  | 'memory'
-  | 'extraction'
-  | 'summary'
-  | 'reasoning'
-  | 'import_processing'
-  | 'longContext'
-  | 'vision'
-  | 'moa';
-
-export interface ModelRegistryPurposeTag {
-  purpose: CanonicalModelPurpose;
-  primary: boolean;
-}
-
-export interface ModelRegistrySourceMetadata extends Record<string, unknown> {
-  type: string;
-  label?: string;
-  baseUrl?: string;
-  metadata?: Record<string, unknown>;
-}
-
-export interface ModelRegistryIdentityMetadata extends Record<string, unknown> {
-  provider: string;
-  model: string;
-  source: ModelRegistrySourceMetadata;
-  family?: string;
-}
-
-export interface ModelRegistryEntry extends Record<string, unknown> {
-  id: string;
-  enabled?: boolean;
-  rank: number;
-  identity: ModelRegistryIdentityMetadata;
-  purposes: ModelRegistryPurposeTag[];
-  routing?: {
-    providerOrder?: string[];
-  };
-  capabilities?: Record<string, unknown>;
-  tuning?: Record<string, unknown>;
-  cost?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
-}
-
-export interface ModelRegistryBudgetPolicy {
-  enabled: boolean;
-  dailyUsdLimit: number;
-  monthlyUsdLimit: number;
-  currency: 'USD';
-}
-
-export interface CanonicalModelRegistry {
-  schemaVersion: 1;
-  models: ModelRegistryEntry[];
-  budgetPolicy?: ModelRegistryBudgetPolicy;
-}
+export type CanonicalModelPurpose = RuntimeCanonicalModelPurpose;
+export type ModelRegistryPurposeTag = RuntimeModelRegistryPurposeTag;
+export type ModelRegistrySourceMetadata = RuntimeModelRegistrySourceMetadata;
+export type ModelRegistryIdentityMetadata = RuntimeModelRegistryIdentityMetadata;
+export type ModelRegistryCapabilityMetadata = RuntimeModelRegistryCapabilityMetadata;
+export type ModelRegistryTuningMetadata = RuntimeModelRegistryTuningMetadata;
+export type ModelRegistryCostMetadata = RuntimeModelRegistryCostMetadata;
+export type ModelRegistryEntry = RuntimeModelRegistryEntry;
+export type ModelRegistryBudgetPolicy = RuntimeModelRegistryBudgetPolicy;
+export type CanonicalModelRegistry = RuntimeCanonicalModelRegistry;
 
 export const DEFAULT_BUDGET_POLICY: ModelRegistryBudgetPolicy = {
   enabled: false,
@@ -66,18 +31,7 @@ export const DEFAULT_BUDGET_POLICY: ModelRegistryBudgetPolicy = {
   currency: 'USD',
 };
 
-export const CANONICAL_PURPOSES = [
-  'chat',
-  'background',
-  'memory',
-  'extraction',
-  'summary',
-  'reasoning',
-  'import_processing',
-  'longContext',
-  'vision',
-  'moa',
-] as const satisfies readonly CanonicalModelPurpose[];
+export const CANONICAL_PURPOSES = CANONICAL_MODEL_PURPOSES;
 
 export const PURPOSE_LABELS: Record<CanonicalModelPurpose, string> = {
   chat: 'chat',
@@ -101,15 +55,6 @@ export function toNonEmptyString(value: unknown): string | undefined {
 export function toFiniteNumber(value: unknown): number | undefined {
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   return undefined;
-}
-
-export function normalizeRouting(value: unknown): { providerOrder?: string[] } | undefined {
-  if (!isRecord(value) || !Array.isArray(value.providerOrder)) return undefined;
-  const providerOrder = value.providerOrder
-    .filter((entry): entry is string => typeof entry === 'string')
-    .map(entry => entry.trim().toLowerCase())
-    .filter((entry, index, array) => entry.length > 0 && array.indexOf(entry) === index);
-  return providerOrder.length > 0 ? { providerOrder } : undefined;
 }
 
 export function normalizeBudgetPolicy(value: unknown): ModelRegistryBudgetPolicy {
@@ -159,6 +104,11 @@ export function normalizeModelEntry(value: unknown, index: number): ModelRegistr
   const raw = isRecord(value) ? value : {};
   const restRaw = { ...raw };
   delete restRaw.enabled;
+  // Legacy admin builds persisted a non-canonical `routing` field into
+  // models.json. The backend canonical parser silently drops it, so tolerate it
+  // here too: strip it from the copy we spread so it neither throws nor
+  // round-trips back into saves.
+  delete restRaw.routing;
   const identityRaw = isRecord(raw.identity) ? raw.identity : {};
   const sourceRaw = isRecord(identityRaw.source) ? identityRaw.source : {};
   const baseId = toNonEmptyString(raw.id) ?? `model-${index + 1}`;
@@ -186,7 +136,6 @@ export function normalizeModelEntry(value: unknown, index: number): ModelRegistr
       ...(toNonEmptyString(identityRaw.family) ? { family: toNonEmptyString(identityRaw.family) } : {}),
     },
     purposes,
-    ...(normalizeRouting(raw.routing) ? { routing: normalizeRouting(raw.routing) } : {}),
     ...(isRecord(raw.capabilities) ? { capabilities: { ...raw.capabilities } } : {}),
     ...(isRecord(raw.tuning) ? { tuning: { ...raw.tuning } } : {}),
     ...(isRecord(raw.cost) ? { cost: { ...raw.cost } } : {}),

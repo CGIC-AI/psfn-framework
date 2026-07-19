@@ -35,6 +35,19 @@ import type { ReflectionJournalEntry } from '../../../../src/persistence/journal
 import type { ReflectionMetacognitionJournalEntry } from '../../../../src/persistence/journals/reflection-metacognition-journal.js';
 import type { ReflectionDailyJournalEntry } from '../../../../src/persistence/journals/reflection-substrate.js';
 import type { ReflectionTemplate } from '../../../../src/core/scheduler/heartbeat-policy.js';
+import {
+  VALID_RELATIONSHIP_TYPES as CANONICAL_RELATIONSHIP_TYPES,
+  type ChannelPrivacyLevel as CanonicalChannelPrivacyLevel,
+  type Contact as CanonicalContact,
+  type RelationshipType as CanonicalRelationshipType,
+  type SocialGraphEntitySource as CanonicalSocialGraphEntitySource,
+  type SocialRelationshipKind as CanonicalSocialRelationshipKind,
+} from '../../../../src/core/contacts/types.js';
+import { CHANNEL_PRIVACY_VALUES } from '../../../../src/system/trust/context-envelope.js';
+import {
+  TRUST_LEVELS as CANONICAL_TRUST_LEVELS,
+  type TrustLevel as CanonicalTrustLevel,
+} from '../../../../src/system/trust/types.js';
 import type {
   AdminSessionListData as CanonicalAdminSessionListData,
   AdminSessionMessagesData as CanonicalAdminSessionMessagesData,
@@ -671,30 +684,9 @@ export interface ContactChannelLink extends ContactChannelIdentity {
   lastSeen?: string;
 }
 
-export type ChannelPrivacyLevel = 'private' | 'invite_only' | 'public' | 'broadcast';
+export type ChannelPrivacyLevel = CanonicalChannelPrivacyLevel;
 
-export interface Contact {
-  id: string;
-  displayName: string;
-  nickname?: string;
-  discordUserId?: string;
-  trustLevel: string;
-  relationshipType: string;
-  isMachineIntelligence?: boolean;
-  channelIdentities?: ContactChannelIdentity[];
-  channels?: ContactChannelLink[];
-  conversationChannels?: Array<{
-    channel: string;
-    channelId: string;
-    privacyLevel?: ChannelPrivacyLevel;
-    firstSeen: string;
-    lastSeen: string;
-  }>;
-  emotionalBaseline?: Record<string, number>;
-  firstSeen: string;
-  lastSeen: string;
-  notes?: string;
-}
+export type Contact = CanonicalContact;
 
 export interface ContactProfileArtifact {
   memoryCount: number;
@@ -712,21 +704,8 @@ export interface ContactConversationChannelView {
   lastSeen?: string;
 }
 
-export type SocialGraphEntitySource = 'contact' | 'memory' | 'manual' | 'system';
-export type SocialRelationshipKind =
-  | 'partner'
-  | 'family'
-  | 'friend'
-  | 'acquaintance'
-  | 'colleague'
-  | 'parent'
-  | 'child'
-  | 'sibling'
-  | 'caregiver'
-  | 'household'
-  | 'manager'
-  | 'direct_report'
-  | 'other';
+export type SocialGraphEntitySource = CanonicalSocialGraphEntitySource;
+export type SocialRelationshipKind = CanonicalSocialRelationshipKind;
 
 export interface AdminContactSocialGraphEntityView {
   id: string;
@@ -807,17 +786,15 @@ export interface ContactUpdateResult {
   relatedChannels?: ContactConversationChannelView[];
 }
 
-export type TrustLevel = 'primary' | 'trusted' | 'regular' | 'public';
+export type TrustLevel = CanonicalTrustLevel;
 
-export type RelationshipType = 'partner' | 'family' | 'friend' | 'acquaintance' | 'stranger' | 'ai_companion';
+export type RelationshipType = CanonicalRelationshipType;
 
-export const RELATIONSHIP_TYPES: RelationshipType[] = [
-  'partner', 'family', 'friend', 'acquaintance', 'stranger', 'ai_companion',
-];
+export const TRUST_LEVELS = CANONICAL_TRUST_LEVELS;
 
-export const CHANNEL_PRIVACY_LEVELS: ChannelPrivacyLevel[] = [
-  'private', 'invite_only', 'public', 'broadcast',
-];
+export const RELATIONSHIP_TYPES = CANONICAL_RELATIONSHIP_TYPES;
+
+export const CHANNEL_PRIVACY_LEVELS = CHANNEL_PRIVACY_VALUES;
 
 export interface ContactIdentityLinkVerification {
   id: string;

@@ -14,7 +14,6 @@ import {
   EXTRACTION_PROMPT_KEY,
   getDefaultPromptText,
 } from '../../../core/identity/prompt-registry.js';
-import { injectPromptRuntimeTokens } from '../../../core/identity/prompt-runtime.js';
 import type { PersonaPreamblePort } from '../../../core/identity/persona-preamble.js';
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
 import { decodeStoredChannelVisibility } from '../../../system/trust/types.js';
@@ -24,23 +23,17 @@ import { extractExplicitPreferenceFactsFromEntries } from './preference.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type { ExtractedFact } from '../types.js';
 import { MemoryWritePolicyError, type WriteResult } from '../writer.js';
-import { parseFactsXml } from './parser.js';
 import { ExtractionDrainRequeueError } from './drain-signal.js';
+import { mergeExtractedFactGroups } from './chunk-compose.js';
 import {
-  buildExtractionEntryChunks,
-  formatExtractionTranscript,
-  isExtractionTranscriptEntry,
-  mergeExtractedFactGroups,
-} from './chunk-compose.js';
+  executeExtractionLlmPass,
+  formatExistingFactsSection,
+} from './llm-pass.js';
 import {
-  buildExtractionNamingGuidance,
   normalizeExtractedFactParticipantNames,
   type ExtractionParticipantNames,
 } from './naming.js';
-import {
-  buildExperientialSelfDirectedExtractionGuidance,
-  normalizeExperientialSelfDirectedFact,
-} from './self-directed.js';
+import { normalizeExperientialSelfDirectedFact } from './self-directed.js';
 import {
   buildSpeakerRoutingContext,
   resolveFactRouting,
@@ -83,7 +76,6 @@ import { selectExtractionRecentEntries } from './recovered-entries.js';
 export { ExtractionIntegrityError, type ExtractionIntegrityErrorContext } from './integrity-error.js';
 
 const log = createComponentLogger('Extraction');
-const EXTRACTION_CHUNK_LLM_CONCURRENCY = 2;
 
 type RoutedAcceptedFactCandidate = AcceptedFactCandidate & {
   routing: Extract<FactRoutingDecision, { status: 'route' }>;
@@ -398,89 +390,25 @@ export async function runExtractionOrchestration(
 
     const existing = await options.memoryStore.getMemoriesByChannel(options.channelId, 30);
     const noveltyCorpus = existing.map(m => m.text);
-    const existingFacts = existing
-      .map(m => `- [${m.type}] ${m.text}`)
-      .join('\n') || '(none yet)';
 
     const extractionPrompt = options.promptRegistry?.getPrompt(EXTRACTION_PROMPT_KEY)
       ?? getDefaultPromptText(EXTRACTION_PROMPT_KEY);
-    const transcriptEntries = recentEntries.filter(isExtractionTranscriptEntry);
-    const entryChunks = options.useCompositionalExtraction
-      ? buildExtractionEntryChunks(transcriptEntries)
-      : [transcriptEntries];
     const compositionalMode = options.useCompositionalExtraction ? 'chunk_compose' : 'single_pass';
-    const parsedFactGroups = await mapWithConcurrency(
-      entryChunks,
-      EXTRACTION_CHUNK_LLM_CONCURRENCY,
-      async (chunkEntries, index): Promise<ExtractedFact[]> => {
-        const renderedPrompt = injectPromptRuntimeTokens(extractionPrompt)
-          .replace('{existing_facts}', existingFacts)
-          .replace('{recent_messages}', formatExtractionTranscript(chunkEntries, {
-            charName: participantNames.companionName ?? options.sessionManager.characterName,
-            userName: participantNames.userName,
-          }));
-        const namingGuidance = buildExtractionNamingGuidance(participantNames);
-        const selfDirectedGuidance = experientialCompanionName
-          ? buildExperientialSelfDirectedExtractionGuidance(experientialCompanionName)
-          : undefined;
-        const taskPrompt = [renderedPrompt, namingGuidance, selfDirectedGuidance]
-          .filter((section): section is string => Boolean(section))
-          .join('\n\n');
-        // E6.1: soft persona framing precedes the strict task instructions and
-        // JSON schema; the schema/format sections stay byte-identical.
-        const prompt = options.personaPreamble
-          ? options.personaPreamble.prepend('memory_extraction', taskPrompt)
-          : taskPrompt;
-        const chunkRequestId = entryChunks.length > 1
-          ? `${requestId}:chunk:${index + 1}`
-          : requestId;
-
-        const response = await completeWithWorkSpec(
-          options.llmClient,
-          {
-            systemPrompt: prompt,
-            messages: [{ role: 'user', content: 'Extract facts from the conversation above.' }],
-          },
-          buildLLMWorkSpec({
-            purpose: 'extraction',
-            durable: true,
-            ...(options.preemptionProtected
-              ? {
-                  preemptionProtected: true,
-                  ...(options.welfareGrantJobId
-                    ? { welfareGrantJobId: options.welfareGrantJobId }
-                    : {}),
-                }
-              : {}),
-            correlation: {
-              requestId: chunkRequestId,
-              ...(turnId ? { turnId } : {}),
-              channelId: options.channelId,
-              callType: 'memory',
-              purpose: 'memory.extraction',
-              ...(options.icpCorrelation
-                ? {
-                    icpCorrelation: deriveChildIcpConversationCostCorrelation(
-                      options.icpCorrelation,
-                      {
-                        requestId: chunkRequestId,
-                        costPurpose: 'extraction',
-                        costOriginStage: 'post_turn',
-                      },
-                    ),
-                  }
-                : {}),
-            },
-          }),
-        );
-
-        return parseFactsXml(response.content);
+    const llmPass = await executeExtractionLlmPass({
+      recentEntries,
+      useCompositionalExtraction: options.useCompositionalExtraction,
+      promptContext: {
+        extractionPrompt,
+        existingFacts: formatExistingFactsSection(existing),
+        participantNames,
+        characterName: options.sessionManager.characterName,
+        experientialCompanionName,
+        personaPreamble: options.personaPreamble,
       },
-    );
-    const rawParsedFactCount = parsedFactGroups
-      .reduce((total, group) => total + group.length, 0);
-    const mergedParsedFacts = mergeExtractedFactGroups(parsedFactGroups);
-    const crossChunkDeduplicatedCount = Math.max(0, rawParsedFactCount - mergedParsedFacts.length);
+      requestId,
+      completeChunk: createExtractionChunkCompleter(options, turnId),
+    });
+    const { mergedParsedFacts, crossChunkDeduplicatedCount } = llmPass;
     const parsedFacts: ExtractedFact[] = [];
     let participantNameHygieneRejectedCount = 0;
     for (const [index, fact] of mergedParsedFacts.entries()) {
@@ -582,7 +510,7 @@ export async function runExtractionOrchestration(
           low_signal: participantNameHygieneRejectedCount,
         },
         compositionalMode,
-        chunkCount: entryChunks.length,
+        chunkCount: llmPass.chunkCount,
         mergedFactCount: mergedParsedFacts.length,
         crossChunkDeduplicatedCount,
         boundaryFactCount: inferredBoundaryFacts.length,
@@ -932,7 +860,7 @@ export async function runExtractionOrchestration(
         : {}),
       ...(writeCapSkips.length > 0 ? { writeCapSkips } : {}),
       compositionalMode,
-      chunkCount: entryChunks.length,
+      chunkCount: llmPass.chunkCount,
       mergedFactCount: mergedParsedFacts.length,
       crossChunkDeduplicatedCount,
       boundaryFactCount: inferredBoundaryFacts.length,
@@ -1031,31 +959,57 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-async function mapWithConcurrency<T, U>(
-  items: readonly T[],
-  concurrency: number,
-  mapper: (item: T, index: number) => Promise<U>,
-): Promise<U[]> {
-  const results = new Array<U>(items.length);
-  let nextIndex = 0;
-  let firstError: unknown;
-  const workerCount = Math.min(Math.max(1, Math.floor(concurrency)), items.length);
-
-  async function worker(): Promise<void> {
-    while (nextIndex < items.length && firstError === undefined) {
-      const index = nextIndex;
-      nextIndex += 1;
-      try {
-        results[index] = await mapper(items[index], index);
-      } catch (error) {
-        firstError ??= error;
-      }
-    }
-  }
-
-  await Promise.all(Array.from({ length: workerCount }, () => worker()));
-  if (firstError !== undefined) throw firstError;
-  return results;
+/**
+ * Builds the per-chunk model-call port handed to the LLM pass stage. Kept in
+ * this module so the durable work-spec construction (including the sanctioned
+ * preemptionProtected / welfareGrantJobId welfare forwarding) stays on the
+ * enforcement-scanned path.
+ */
+function createExtractionChunkCompleter(
+  options: ExtractionRunOptions,
+  turnId: TurnID | undefined,
+): (prompt: string, chunkRequestId: string) => Promise<string> {
+  return async (prompt, chunkRequestId) => {
+    const response = await completeWithWorkSpec(
+      options.llmClient,
+      {
+        systemPrompt: prompt,
+        messages: [{ role: 'user', content: 'Extract facts from the conversation above.' }],
+      },
+      buildLLMWorkSpec({
+        purpose: 'extraction',
+        durable: true,
+        ...(options.preemptionProtected
+          ? {
+              preemptionProtected: true,
+              ...(options.welfareGrantJobId
+                ? { welfareGrantJobId: options.welfareGrantJobId }
+                : {}),
+            }
+          : {}),
+        correlation: {
+          requestId: chunkRequestId,
+          ...(turnId ? { turnId } : {}),
+          channelId: options.channelId,
+          callType: 'memory',
+          purpose: 'memory.extraction',
+          ...(options.icpCorrelation
+            ? {
+                icpCorrelation: deriveChildIcpConversationCostCorrelation(
+                  options.icpCorrelation,
+                  {
+                    requestId: chunkRequestId,
+                    costPurpose: 'extraction',
+                    costOriginStage: 'post_turn',
+                  },
+                ),
+              }
+            : {}),
+        },
+      }),
+    );
+    return response.content;
+  };
 }
 
 function appendAcceptedFactForContact(

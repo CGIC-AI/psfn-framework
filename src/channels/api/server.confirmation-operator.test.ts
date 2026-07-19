@@ -9,6 +9,7 @@ import { ApiServer } from './server.js';
 
 const API_TOKEN = 'api-token';
 const ADMIN_TOKEN = 'admin-token';
+const TEST_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
 async function allocatePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -78,7 +79,7 @@ describe('ApiServer operator confirmation route', () => {
     server = new ApiServer({
       port,
       host: '127.0.0.1',
-      companionId: 'test-companion',
+      companionId: TEST_COMPANION_ID,
       agentLoop: { handleMessage: vi.fn() } as unknown as SubstrateAgent,
       eventBus: new EventBus(),
       sessionManager: { recordAssistantMessage: vi.fn() } as unknown as SessionManager,
@@ -118,7 +119,7 @@ describe('ApiServer operator confirmation route', () => {
     server = new ApiServer({
       port,
       host: '127.0.0.1',
-      companionId: 'test-companion',
+      companionId: TEST_COMPANION_ID,
       agentLoop: { handleMessage: vi.fn() } as unknown as SubstrateAgent,
       eventBus: new EventBus(),
       sessionManager: { recordAssistantMessage: vi.fn() } as unknown as SessionManager,

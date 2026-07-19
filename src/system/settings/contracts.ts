@@ -3,7 +3,12 @@ import type { GroupMemorySettings } from '../config/group-memory-config.js';
 import type { EmotionScopingSettings } from '../config/emotion-scoping-config.js';
 import type { MemoryRetrievalPolicy } from '../config/memory-retrieval-policy.js';
 import type { CapabilityTier, CompositionalPolicyConfig, LifecycleKubernetesSettings, SessionRestartBehavior, SessionTailCacheSettings, SubstrateConfig, VoiceReplySegmenterSettings, WikiStartupHydrationSettings } from '../config/runtime-config-contracts.js';
-import type { ImageWorkflowSettings } from '../../primitives/images/types.js';
+import type {
+  FalCreateModel,
+  FalEditModel,
+  ImageProvider,
+  ImageWorkflowSettings,
+} from '../../primitives/images/types.js';
 
 export const SETTINGS_FILE_NAME = 'settings.json';
 export const PRIMARY_MODEL_SLOT_KEY = 'primary';
@@ -234,6 +239,10 @@ export interface EditableSettings {
    *  API server is behind a reverse proxy or on a non-standard URL. */
   chatApiBaseUrl?: string;
   comfyUiBaseUrl?: string;
+  imageProvider?: ImageProvider;
+  imageFalCreateModel?: FalCreateModel;
+  imageFalEditModel?: FalEditModel;
+  imageSelfieEditModel?: FalEditModel;
   imageWorkflows?: ImageWorkflowSettings;
   /** Active IANA timezone. Precedence: settings.json > env TZ (bootstrap) > default. */
   activeTimezone?: string;
@@ -369,6 +378,10 @@ export const RUNTIME_SETTINGS_KEYS = [
   'promotedExtendedTools',
   'chatApiBaseUrl',
   'comfyUiBaseUrl',
+  'imageProvider',
+  'imageFalCreateModel',
+  'imageFalEditModel',
+  'imageSelfieEditModel',
   'imageWorkflows',
   'activeTimezone',
   'uiThemeId',

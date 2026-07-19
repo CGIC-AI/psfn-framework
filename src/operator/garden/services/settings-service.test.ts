@@ -260,6 +260,10 @@ describe('AdminSettingsDataService', () => {
       telegramAuthorizedUsers: '123456,654321',
       promotedExtendedTools: ['obsidian_append_note', 'analysis_workbench'],
       chatApiBaseUrl: 'http://127.0.0.1:3000/api',
+      imageProvider: 'fal',
+      imageFalCreateModel: 'fal-ai/nano-banana-2',
+      imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+      imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
       moaEnabled: true,
       moaReferenceModels: ['openai/gpt-4.1-mini', 'anthropic/claude-3.7-sonnet'],
       moaAggregatorModel: 'openai/gpt-4.1',
@@ -291,6 +295,31 @@ describe('AdminSettingsDataService', () => {
 
     const persistedSettings = loadSettings(root);
     expect(persistedSettings).toEqual(expect.objectContaining(payload));
+  });
+
+  it('rejects unsupported image provider and model settings without persisting them', () => {
+    const root = makeTempDir();
+    const service = buildService(buildConfig(root));
+
+    const result = service.updateSettings(JSON.stringify({
+      imageProvider: 'unknown-provider',
+      imageFalCreateModel: 'not-in-the-catalog',
+      imageFalEditModel: 'also-not-in-the-catalog',
+      imageSelfieEditModel: 'still-not-in-the-catalog',
+    }));
+
+    expect(result.ok).toBe(false);
+    expect(result.validationErrors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ field: 'imageProvider', code: 'invalid_enum' }),
+      expect.objectContaining({ field: 'imageFalCreateModel', code: 'invalid_enum' }),
+      expect.objectContaining({ field: 'imageFalEditModel', code: 'invalid_enum' }),
+      expect.objectContaining({ field: 'imageSelfieEditModel', code: 'invalid_enum' }),
+    ]));
+    const persisted = loadSettings(root);
+    expect(persisted.imageProvider).toBeUndefined();
+    expect(persisted.imageFalCreateModel).toBeUndefined();
+    expect(persisted.imageFalEditModel).toBeUndefined();
+    expect(persisted.imageSelfieEditModel).toBeUndefined();
   });
 
   it('reports local API and admin auth status from runtime config instead of direct env reads', async () => {

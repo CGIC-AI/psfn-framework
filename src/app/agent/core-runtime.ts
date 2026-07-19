@@ -433,11 +433,16 @@ export async function buildAgentCoreRuntime(options: AgentCoreRuntimeOptions): P
     binaryFetcher: gateway.webFetchBinary.bind(gateway),
     llmProvider,
   });
-  registerImageTools(agentLoop, new GatewayImageOps(gateway), {
+  registerImageTools(agentLoop, new GatewayImageOps(gateway, {
+    provider: config.imageProvider,
+    createModel: config.imageFalCreateModel,
+    editModel: config.imageFalEditModel,
+  }), {
     gatewayMode: true,
     reviewer: imageVisionReviewer,
     referenceResolver: new ImageReferenceStore(pathSnapshot.companionDataDir),
     wardrobeLookResolver: wikiRuntime.personalProjects,
+    defaultSelfieEditModel: config.imageSelfieEditModel,
   });
   agentLoop.imageVisionReviewer = imageVisionReviewer;
   // htm9.8: vision intake screening — every inbound image attachment is

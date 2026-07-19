@@ -1379,6 +1379,10 @@ describe('hydrateCanonicalStartupConfig', () => {
     saveSettings(systemDataDir, {
       activeTimezone: 'UTC',
       uiThemeId: 'default',
+      imageProvider: 'fal',
+      imageFalCreateModel: 'xai/grok-imagine-image',
+      imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+      imageSelfieEditModel: 'fal-ai/nano-banana-2/edit',
       observerEvalSidecar: globalSidecar,
     });
 
@@ -1389,6 +1393,8 @@ describe('hydrateCanonicalStartupConfig', () => {
       JSON.stringify({
         activeTimezone: 'Europe/Berlin',
         uiThemeId: 'dusk',
+        imageProvider: 'comfyui',
+        imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
         observerEvalSidecar: { adapter: { sessionLabel: 'psfn-purrsephone' } },
       }),
       'utf-8',
@@ -1406,6 +1412,10 @@ describe('hydrateCanonicalStartupConfig', () => {
 
     expect(config.activeTimezone).toBe('Europe/Berlin');
     expect(config.uiThemeId).toBe('dusk');
+    expect(config.imageProvider).toBe('comfyui');
+    expect(config.imageFalCreateModel).toBe('xai/grok-imagine-image');
+    expect(config.imageFalEditModel).toBe('xai/grok-imagine-image/quality/edit');
+    expect(config.imageSelfieEditModel).toBe('xai/grok-imagine-image/quality/edit');
     // Nested deep-merge: only sessionLabel changes; global sidecar fields survive.
     expect(config.observerEvalSidecar?.enabled).toBe(true);
     expect(config.observerEvalSidecar?.adapter.serverUrl).toBe('http://emosim.test:17342');

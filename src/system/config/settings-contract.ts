@@ -15,6 +15,11 @@ import { SCHEDULER_FILE_NAME } from './scheduler-config.js';
 import { SKILLS_FILE_NAME } from './skills-config.js';
 import { TRUST_POLICY_FILE_NAME } from './trust-policy-config.js';
 import { isCompanionSettingsOverlayKey } from './settings-overlay.js';
+import {
+  FAL_CREATE_MODELS,
+  FAL_EDIT_MODELS,
+  IMAGE_PROVIDER_VALUES,
+} from '../../primitives/images/types.js';
 
 export const IMPORT_PROCESSING_ROUTE_MODE_VALUES = [
   'background',
@@ -366,6 +371,10 @@ const BASE_ENUM_VALUES_BY_FIELD = new Map<string, readonly string[]>([
   ['capabilityTier', CAPABILITY_TIER_VALUES],
   ['embeddingProvider', ['ollama', 'transformers', 'api']],
   ['textEmotionDtype', ['auto', 'fp32', 'fp16', 'q8', 'int8', 'uint8', 'q4', 'bnb4', 'q4f16']],
+  ['imageProvider', IMAGE_PROVIDER_VALUES],
+  ['imageFalCreateModel', FAL_CREATE_MODELS],
+  ['imageFalEditModel', FAL_EDIT_MODELS],
+  ['imageSelfieEditModel', FAL_EDIT_MODELS],
 ]);
 
 const EXTRA_NUMERIC_RANGES = new Map<string, { min?: number; max?: number }>([

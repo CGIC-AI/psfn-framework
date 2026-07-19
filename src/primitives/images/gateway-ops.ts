@@ -4,16 +4,49 @@ import type {
   ImageCreateParams,
   ImageEditParams,
   ImageGenerationResult,
+  ImageOperationSettingsDefaults,
 } from './types.js';
 
+type ImageGatewayClient = Pick<GatewayClient, 'imageCreate' | 'imageEdit'>;
+
+function buildRequestSettingsDefaults<TModel extends string>(
+  provider: ImageOperationSettingsDefaults['provider'],
+  model: TModel | undefined,
+): { provider?: ImageOperationSettingsDefaults['provider']; model?: TModel } | undefined {
+  if (provider === undefined && model === undefined) {
+    return undefined;
+  }
+  return {
+    ...(provider !== undefined ? { provider } : {}),
+    ...(model !== undefined ? { model } : {}),
+  };
+}
+
 export class GatewayImageOps implements ImageOperations {
-  constructor(private readonly gateway: GatewayClient) {}
+  constructor(
+    private readonly gateway: ImageGatewayClient,
+    private readonly settingsDefaults: ImageOperationSettingsDefaults = {},
+  ) {}
 
   async create(params: ImageCreateParams): Promise<ImageGenerationResult> {
-    return await this.gateway.imageCreate(params);
+    const settingsDefaults = buildRequestSettingsDefaults(
+      this.settingsDefaults.provider,
+      this.settingsDefaults.createModel,
+    );
+    return await this.gateway.imageCreate({
+      ...params,
+      ...(settingsDefaults ? { settingsDefaults } : {}),
+    });
   }
 
   async edit(params: ImageEditParams): Promise<ImageGenerationResult> {
-    return await this.gateway.imageEdit(params);
+    const settingsDefaults = buildRequestSettingsDefaults(
+      this.settingsDefaults.provider,
+      this.settingsDefaults.editModel,
+    );
+    return await this.gateway.imageEdit({
+      ...params,
+      ...(settingsDefaults ? { settingsDefaults } : {}),
+    });
   }
 }

@@ -2018,6 +2018,10 @@ describe('settings', () => {
       expect(snapshot.webFetchLocalCrawlerAllowHttp).toBe(false);
       expect(snapshot.webFetchLocalCrawlerHostAllowlist).toEqual([]);
       expect(snapshot.webFetchLocalCrawlerDomainAllowlist).toEqual([]);
+      expect(snapshot.imageProvider).toBeNull();
+      expect(snapshot.imageFalCreateModel).toBeNull();
+      expect(snapshot.imageFalEditModel).toBeNull();
+      expect(snapshot.imageSelfieEditModel).toBeNull();
       expect(snapshot.webFetchTlsCaCertPaths).toEqual([]);
       expect(snapshot.promotedExtendedTools).toEqual([]);
       expect(snapshot.deepgramModel).toBeNull();
@@ -2199,6 +2203,24 @@ describe('settings', () => {
       expect(snapshot.moaMaxRounds).toBeNull();
       expect(snapshot.moaMaxTokensPerRound).toBeNull();
       expect(snapshot.moaTimeoutMs).toBeNull();
+    });
+
+    it('applies and snapshots catalog-validated image defaults', () => {
+      const config = makeConfig();
+
+      applySettings(config, {
+        imageProvider: 'fal',
+        imageFalCreateModel: 'fal-ai/nano-banana-2',
+        imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+        imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
+      });
+
+      expect(getRuntimeSettingsSnapshot(config)).toMatchObject({
+        imageProvider: 'fal',
+        imageFalCreateModel: 'fal-ai/nano-banana-2',
+        imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+        imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
+      });
     });
 
     it('reflects configured MoA values in snapshot', () => {

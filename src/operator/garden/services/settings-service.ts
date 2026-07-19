@@ -31,7 +31,12 @@ import {
 import {
   validateCompositionalPolicyConfig,
 } from '../../../system/capabilities/compositional-policy.js';
-import { normalizeImageWorkflowSettings } from '../../../primitives/images/types.js';
+import {
+  FAL_CREATE_MODELS,
+  FAL_EDIT_MODELS,
+  IMAGE_PROVIDER_VALUES,
+  normalizeImageWorkflowSettings,
+} from '../../../primitives/images/types.js';
 import {
   normalizeMemoryRetrievalPolicy,
   resolveMemoryRetrievalPolicy,
@@ -78,6 +83,9 @@ import { buildEffectiveFleetAuthOwnerProjection } from './fleet-auth-owner-proje
 
 const IMPORT_ROUTE_MODE_VALUES = new Set(IMPORT_PROCESSING_ROUTE_MODE_VALUES);
 const SESSION_RESTART_BEHAVIOR_VALUES_SET = new Set(SESSION_RESTART_BEHAVIOR_VALUES);
+const IMAGE_PROVIDER_VALUES_SET = new Set<string>(IMAGE_PROVIDER_VALUES);
+const FAL_CREATE_MODEL_VALUES_SET = new Set<string>(FAL_CREATE_MODELS);
+const FAL_EDIT_MODEL_VALUES_SET = new Set<string>(FAL_EDIT_MODELS);
 const REMOVED_RUNTIME_SETTINGS_MESSAGES: Partial<Record<string, string>> = {
   memoryBudgetPct:
     'memoryBudgetPct has been removed; use sessionHistoryBudgetPct, memoryRetrievalBudgetPct, and extractionThresholdPct instead',
@@ -755,6 +763,10 @@ export class AdminSettingsDataService implements AdminSettingsService {
 
     this.validateEnumField(payload, 'importProcessingRouteMode', IMPORT_ROUTE_MODE_VALUES, errors);
     this.validateEnumField(payload, 'sessionRestartBehavior', SESSION_RESTART_BEHAVIOR_VALUES_SET, errors);
+    this.validateEnumField(payload, 'imageProvider', IMAGE_PROVIDER_VALUES_SET, errors);
+    this.validateEnumField(payload, 'imageFalCreateModel', FAL_CREATE_MODEL_VALUES_SET, errors);
+    this.validateEnumField(payload, 'imageFalEditModel', FAL_EDIT_MODEL_VALUES_SET, errors);
+    this.validateEnumField(payload, 'imageSelfieEditModel', FAL_EDIT_MODEL_VALUES_SET, errors);
     this.validateTtsProviderField(payload, errors);
     this.validateSttProviderField(payload, errors);
 

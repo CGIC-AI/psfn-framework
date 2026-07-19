@@ -927,6 +927,115 @@ describe('image tools', () => {
     expect(resultText(result)).toContain('timeout or provider error');
   });
 
+  it('uses the configured selfie edit model when edit_model is omitted', async () => {
+    const ops: ImageOperations = {
+      create: vi.fn(),
+      edit: vi.fn(async (params) => ({
+        provider: 'fal',
+        mode: 'edit',
+        model: params.model,
+        fallbackUsed: false,
+        requestId: 'configured-selfie-edit',
+        images: [{ url: 'https://images.example.test/configured-selfie.png' }],
+      })),
+    };
+    const referenceResolver = {
+      resolveForTool: vi.fn(async () => ({
+        id: 'ref-default',
+        dataUrl: 'data:image/png;base64,cmVm',
+        description: 'default portrait',
+        tags: ['default'],
+      })),
+    };
+    const tool = createSelfieTool(ops, undefined, {
+      referenceResolver,
+      defaultEditModel: 'fal-ai/nano-banana-2/edit',
+    });
+
+    await tool.execute('configured-selfie', {
+      prompt: 'a cozy reading portrait',
+    });
+
+    expect(ops.edit).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'fal-ai/nano-banana-2/edit',
+    }));
+  });
+
+  it('prepends the configured selfie model to the existing fallback chain', async () => {
+    const edit = vi.fn(async (params) => {
+      if (edit.mock.calls.length === 1) {
+        throw new TypeError('fetch failed');
+      }
+      return {
+        provider: 'fal' as const,
+        mode: 'edit' as const,
+        model: params.model,
+        fallbackUsed: false,
+        requestId: 'configured-selfie-fallback',
+        images: [{ url: 'https://images.example.test/configured-selfie-fallback.png' }],
+      };
+    });
+    const ops: ImageOperations = { create: vi.fn(), edit };
+    const referenceResolver = {
+      resolveForTool: vi.fn(async () => ({
+        id: 'ref-default',
+        dataUrl: 'data:image/png;base64,cmVm',
+        description: 'default portrait',
+        tags: ['default'],
+      })),
+    };
+    const tool = createSelfieTool(ops, undefined, {
+      referenceResolver,
+      defaultEditModel: 'fal-ai/nano-banana-2/edit',
+    });
+
+    await tool.execute('configured-selfie-fallback', {
+      prompt: 'a cozy reading portrait',
+    });
+
+    expect(edit).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      model: 'fal-ai/nano-banana-2/edit',
+    }));
+    expect(edit).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      model: 'xai/grok-imagine-image/quality/edit',
+    }));
+  });
+
+  it('lets explicit edit_model override the configured selfie edit model', async () => {
+    const ops: ImageOperations = {
+      create: vi.fn(),
+      edit: vi.fn(async (params) => ({
+        provider: 'fal',
+        mode: 'edit',
+        model: params.model,
+        fallbackUsed: false,
+        requestId: 'explicit-selfie-edit',
+        images: [{ url: 'https://images.example.test/explicit-selfie.png' }],
+      })),
+    };
+    const referenceResolver = {
+      resolveForTool: vi.fn(async () => ({
+        id: 'ref-default',
+        dataUrl: 'data:image/png;base64,cmVm',
+        description: 'default portrait',
+        tags: ['default'],
+      })),
+    };
+    const tool = createSelfieTool(ops, undefined, {
+      referenceResolver,
+      defaultEditModel: 'fal-ai/nano-banana-2/edit',
+    });
+
+    await tool.execute('explicit-selfie', {
+      prompt: 'a cozy reading portrait',
+      edit_model: 'xai/grok-imagine-image/quality/edit',
+    });
+
+    expect(ops.edit).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'xai/grok-imagine-image/quality/edit',
+    }));
+  });
+
   it('retries the last configured tier with a sanitized prompt when every tier blocks the original', async () => {
     const providerBlock = new Error(
       'FAL edit result fetch failed (422): {"detail":[{"type":"content_policy_violation","msg":"flagged by a content checker"}]}',

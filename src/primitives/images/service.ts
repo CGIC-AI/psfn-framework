@@ -5,6 +5,9 @@ import { FalImageClient, isFalContentPolicyError, isTransientFalError } from './
 import {
   DEFAULT_FAL_CREATE_MODEL_CHAIN,
   DEFAULT_FAL_EDIT_MODEL_CHAIN,
+  normalizeFalCreateModelSetting,
+  normalizeFalEditModelSetting,
+  normalizeImageProviderSetting,
   type FalCreateModel,
   type FalEditModel,
 } from './types.js';
@@ -96,24 +99,37 @@ function resolveConfiguredCompanionDataDirOrNull(config: ImageRuntimeConfig): st
 function resolveFalFallbackModelChain(
   mode: 'create',
   params: ImageCreateParams,
-  provider: ImageCreateParams['provider'],
+  requestedProvider: ImageCreateParams['provider'],
+  configuredModel: FalCreateModel | undefined,
 ): readonly (FalCreateModel | undefined)[];
 function resolveFalFallbackModelChain(
   mode: 'edit',
   params: ImageEditParams,
-  provider: ImageEditParams['provider'],
+  requestedProvider: ImageEditParams['provider'],
+  configuredModel: FalEditModel | undefined,
 ): readonly (FalEditModel | undefined)[];
 function resolveFalFallbackModelChain(
   mode: ImageMode,
   params: ImageCreateParams | ImageEditParams,
-  provider: ImageCreateParams['provider'] | ImageEditParams['provider'],
+  requestedProvider: ImageCreateParams['provider'] | ImageEditParams['provider'],
+  configuredModel: FalCreateModel | FalEditModel | undefined,
 ): readonly (FalCreateModel | FalEditModel | undefined)[] {
-  if (params.model || provider !== 'auto') {
+  if (params.model) {
     return [params.model];
   }
-  return mode === 'create'
+  const defaultChain = mode === 'create'
     ? DEFAULT_FAL_CREATE_MODEL_CHAIN
     : DEFAULT_FAL_EDIT_MODEL_CHAIN;
+  if (configuredModel) {
+    return [
+      configuredModel,
+      ...defaultChain.filter(model => model !== configuredModel),
+    ];
+  }
+  if (requestedProvider !== undefined && requestedProvider !== 'auto') {
+    return [undefined];
+  }
+  return defaultChain;
 }
 
 function applyFalModel(
@@ -136,6 +152,41 @@ function applyFalModel(
     return { ...(params as ImageCreateParams), model: model as FalCreateModel };
   }
   return { ...(params as ImageEditParams), model: model as FalEditModel };
+}
+
+function resolveSettingsProvider(
+  params: ImageCreateParams | ImageEditParams,
+  config: ImageRuntimeConfig,
+): ImageRuntimeConfig['imageProvider'] {
+  const value = params.settingsDefaults?.provider ?? config.imageProvider;
+  return value === undefined
+    ? undefined
+    : normalizeImageProviderSetting(value, 'settingsDefaults.provider');
+}
+
+function resolveSettingsModel(
+  mode: 'create',
+  params: ImageCreateParams,
+  config: ImageRuntimeConfig,
+): FalCreateModel | undefined;
+function resolveSettingsModel(
+  mode: 'edit',
+  params: ImageEditParams,
+  config: ImageRuntimeConfig,
+): FalEditModel | undefined;
+function resolveSettingsModel(
+  mode: ImageMode,
+  params: ImageCreateParams | ImageEditParams,
+  config: ImageRuntimeConfig,
+): FalCreateModel | FalEditModel | undefined {
+  const value = params.settingsDefaults?.model
+    ?? (mode === 'create' ? config.imageFalCreateModel : config.imageFalEditModel);
+  if (value === undefined) {
+    return undefined;
+  }
+  return mode === 'create'
+    ? normalizeFalCreateModelSetting(value, 'settingsDefaults.model')
+    : normalizeFalEditModelSetting(value, 'settingsDefaults.model');
 }
 
 function buildGeneratedImageMetadata(
@@ -204,7 +255,11 @@ export class ImageService implements ImageOperations {
       this.config.credentialVault,
       'FAL_API_KEY',
     );
-    const provider = params.provider ?? 'auto';
+    const requestedProvider = params.provider;
+    const provider = requestedProvider ?? resolveSettingsProvider(params, this.config) ?? 'auto';
+    const configuredModel = mode === 'create'
+      ? resolveSettingsModel('create', params as ImageCreateParams, this.config)
+      : resolveSettingsModel('edit', params as ImageEditParams, this.config);
     if (provider === 'comfyui') {
       const result = mode === 'create'
         ? await this.runComfy('create', params as ImageCreateParams, context)
@@ -226,8 +281,8 @@ export class ImageService implements ImageOperations {
       // Owner-file backed polling limits ride the runtime config (zet.7).
       const falClient = new FalImageClient(falApiKey, this.fetchImpl, this.config);
       const result = mode === 'create'
-        ? await this.runFal('create', params as ImageCreateParams, provider, falClient, context)
-        : await this.runFal('edit', params as ImageEditParams, provider, falClient, context);
+        ? await this.runFal('create', params as ImageCreateParams, requestedProvider, configuredModel as FalCreateModel | undefined, falClient, context)
+        : await this.runFal('edit', params as ImageEditParams, requestedProvider, configuredModel as FalEditModel | undefined, falClient, context);
       return await this.persistGeneratedImages(result, params);
     } catch (error) {
       if (
@@ -248,27 +303,40 @@ export class ImageService implements ImageOperations {
   private async runFal(
     mode: 'create',
     params: ImageCreateParams,
-    provider: ImageCreateParams['provider'],
+    requestedProvider: ImageCreateParams['provider'],
+    configuredModel: FalCreateModel | undefined,
     falClient: FalImageClient,
     context: ImageRunContext,
   ): Promise<ImageGenerationResult>;
   private async runFal(
     mode: 'edit',
     params: ImageEditParams,
-    provider: ImageEditParams['provider'],
+    requestedProvider: ImageEditParams['provider'],
+    configuredModel: FalEditModel | undefined,
     falClient: FalImageClient,
     context: ImageRunContext,
   ): Promise<ImageGenerationResult>;
   private async runFal(
     mode: ImageMode,
     params: ImageCreateParams | ImageEditParams,
-    provider: ImageCreateParams['provider'] | ImageEditParams['provider'],
+    requestedProvider: ImageCreateParams['provider'] | ImageEditParams['provider'],
+    configuredModel: FalCreateModel | FalEditModel | undefined,
     falClient: FalImageClient,
     context: ImageRunContext,
   ): Promise<ImageGenerationResult> {
     const modelChain = mode === 'create'
-      ? resolveFalFallbackModelChain('create', params as ImageCreateParams, provider)
-      : resolveFalFallbackModelChain('edit', params as ImageEditParams, provider);
+      ? resolveFalFallbackModelChain(
+          'create',
+          params as ImageCreateParams,
+          requestedProvider,
+          configuredModel as FalCreateModel | undefined,
+        )
+      : resolveFalFallbackModelChain(
+          'edit',
+          params as ImageEditParams,
+          requestedProvider,
+          configuredModel as FalEditModel | undefined,
+        );
     let lastError: unknown;
     for (let modelIndex = 0; modelIndex < modelChain.length; modelIndex += 1) {
       const model = modelChain[modelIndex];

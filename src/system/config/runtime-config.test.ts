@@ -85,6 +85,10 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
       analysisWorkbenchMaxTokens: 180000,
       analysisWorkbenchMaxWallTimeMs: 180000,
       analysisWorkbenchMaxSubQueries: 24,
+      imageProvider: 'fal',
+      imageFalCreateModel: 'fal-ai/nano-banana-2',
+      imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+      imageSelfieEditModel: 'fal-ai/nano-banana-2/edit',
     }), 'utf8');
     writeFileSync(join(dataDir, 'models.json'), JSON.stringify({
       schemaVersion: 1,
@@ -213,6 +217,10 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     expect(config.analysisWorkbenchMaxTokens).toBe(180000);
     expect(config.analysisWorkbenchMaxWallTimeMs).toBe(180000);
     expect(config.analysisWorkbenchMaxSubQueries).toBe(24);
+    expect(config.imageProvider).toBe('fal');
+    expect(config.imageFalCreateModel).toBe('fal-ai/nano-banana-2');
+    expect(config.imageFalEditModel).toBe('xai/grok-imagine-image/quality/edit');
+    expect(config.imageSelfieEditModel).toBe('fal-ai/nano-banana-2/edit');
     expect(config.chargePolicy?.surfaceCosts.shardLaunch).toBe(7);
   });
 });

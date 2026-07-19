@@ -1,4 +1,9 @@
-import type { ImageWorkflowSettings } from '../../primitives/images/types.js';
+import type {
+  FalCreateModel,
+  FalEditModel,
+  ImageProvider,
+  ImageWorkflowSettings,
+} from '../../primitives/images/types.js';
 import type { CredentialReference, CredentialVaultPort } from '../../boundary/custody/credential-vault.js';
 import type { StreamingSttProvider } from '../../primitives/voice/connectors/stt/index.js';
 import type { StreamingTtsProvider } from '../../primitives/voice/connectors/tts/index.js';
@@ -333,6 +338,10 @@ export interface SubstrateConfig {
   elevenLabsEndpointBase?: string;
   falApiKey?: string;
   comfyUiBaseUrl?: string;
+  imageProvider?: ImageProvider;
+  imageFalCreateModel?: FalCreateModel;
+  imageFalEditModel?: FalEditModel;
+  imageSelfieEditModel?: FalEditModel;
   imageWorkflows?: ImageWorkflowSettings;
   echoTtsUrl?: string;
   echoTtsVoice?: string;

@@ -127,6 +127,43 @@ describe('mergeCompanionSettingsOverlay', () => {
     mergedSidecar.adapter.sessionLabel = 'mutated';
     expect(overlaySidecar.adapter.sessionLabel).toBe('a');
   });
+
+  it('overrides per-companion image defaults and falls back to global values', () => {
+    const base: EditableSettings = {
+      imageProvider: 'fal',
+      imageFalCreateModel: 'xai/grok-imagine-image',
+      imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+      imageSelfieEditModel: 'fal-ai/nano-banana-2/edit',
+    };
+
+    const merged = mergeCompanionSettingsOverlay(base, {
+      imageProvider: 'comfyui',
+      imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
+    });
+
+    expect(merged).toMatchObject({
+      imageProvider: 'comfyui',
+      imageFalCreateModel: 'xai/grok-imagine-image',
+      imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+      imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
+    });
+    expect(base.imageProvider).toBe('fal');
+    expect(base.imageSelfieEditModel).toBe('fal-ai/nano-banana-2/edit');
+  });
+
+  it('rejects invalid image provider and model overrides fail-closed', () => {
+    const providerDir = makeCompanionDir({ imageProvider: 'unknown-provider' });
+    expect(() => resolveEffectiveRuntimeSettings({}, providerDir)).toThrow(
+      /imageProvider.*fal.*comfyui/,
+    );
+
+    const modelDir = makeCompanionDir({
+      imageFalEditModel: 'not-in-the-image-catalog',
+    });
+    expect(() => resolveEffectiveRuntimeSettings({}, modelDir)).toThrow(
+      /imageFalEditModel.*image model catalog/,
+    );
+  });
 });
 
 describe('resolveEffectiveRuntimeSettings', () => {
@@ -163,6 +200,10 @@ describe('COMPANION_SETTINGS_OVERLAY_WHITELIST', () => {
     expect(isCompanionSettingsOverlayKey('uiThemeId')).toBe(true);
     expect(isCompanionSettingsOverlayKey('voiceTargetGuildId')).toBe(true);
     expect(isCompanionSettingsOverlayKey('discordTriggerReactions')).toBe(true);
+    expect(isCompanionSettingsOverlayKey('imageProvider')).toBe(true);
+    expect(isCompanionSettingsOverlayKey('imageFalCreateModel')).toBe(true);
+    expect(isCompanionSettingsOverlayKey('imageFalEditModel')).toBe(true);
+    expect(isCompanionSettingsOverlayKey('imageSelfieEditModel')).toBe(true);
     // Cluster-global keys are not overlay-eligible.
     expect(isCompanionSettingsOverlayKey('capabilityTier')).toBe(false);
     expect(isCompanionSettingsOverlayKey('sessionHistoryBudgetPct')).toBe(false);

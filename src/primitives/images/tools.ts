@@ -51,11 +51,19 @@ const SELFIE_EDIT_MODEL_DESCRIPTION = [
 ].join(' ');
 
 function resolveSelfieEditModelChain(
-  startModel: typeof FAL_EDIT_MODELS[number] | undefined,
+  explicitModel: typeof FAL_EDIT_MODELS[number] | undefined,
+  configuredModel: typeof FAL_EDIT_MODELS[number] | undefined,
 ): readonly typeof FAL_EDIT_MODELS[number][] {
-  if (!startModel) {
+  if (!explicitModel) {
+    if (configuredModel) {
+      return [
+        configuredModel,
+        ...SELFIE_EDIT_MODEL_CHAIN.filter(model => model !== configuredModel),
+      ];
+    }
     return SELFIE_EDIT_MODEL_CHAIN;
   }
+  const startModel = explicitModel;
   const startIndex = (SELFIE_EDIT_MODEL_CHAIN as readonly string[]).indexOf(startModel);
   if (startIndex >= 0) {
     return SELFIE_EDIT_MODEL_CHAIN.slice(startIndex);
@@ -875,6 +883,7 @@ function createImageGenerationTool(
     toolName?: string;
     referenceResolver?: ImageReferenceResolver;
     wardrobeLookResolver?: WardrobeLookResolver;
+    defaultEditModel?: typeof FAL_EDIT_MODELS[number];
   },
 ): SubstrateAgentTool {
   const selfImage = options?.selfImage ?? false;
@@ -998,7 +1007,10 @@ function createImageGenerationTool(
             referenceImageIds: [reference.id],
           });
 
-          const editChain = resolveSelfieEditModelChain(params.edit_model);
+          const editChain = resolveSelfieEditModelChain(
+            params.edit_model,
+            options?.defaultEditModel,
+          );
           const chainFailures: { model: string; error: unknown }[] = [];
           let chainResult: ImageGenerationResult | null = null;
           for (const editModel of editChain) {
@@ -1131,6 +1143,7 @@ export function createSelfieTool(
   options?: {
     referenceResolver?: ImageReferenceResolver;
     wardrobeLookResolver?: WardrobeLookResolver;
+    defaultEditModel?: typeof FAL_EDIT_MODELS[number];
   },
 ): SubstrateAgentTool {
   return createImageGenerationTool(ops, reviewer, {
@@ -1138,5 +1151,6 @@ export function createSelfieTool(
     toolName: 'selfie_create',
     referenceResolver: options?.referenceResolver,
     wardrobeLookResolver: options?.wardrobeLookResolver,
+    defaultEditModel: options?.defaultEditModel,
   });
 }

@@ -63,6 +63,11 @@ export const COMPANION_SETTINGS_OVERLAY_WHITELIST = [
   'deepgramListenEndpoint',
   'elevenLabsModelId',
   'elevenLabsEndpointBase',
+  // image provider/model selection (catalog and credentials remain gateway-global)
+  'imageProvider',
+  'imageFalCreateModel',
+  'imageFalEditModel',
+  'imageSelfieEditModel',
   // discordTrigger*
   'discordTriggerWords',
   'discordTriggerReactions',

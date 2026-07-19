@@ -8,7 +8,7 @@ import {
   type ImageReferenceResolver,
   type WardrobeLookResolver,
 } from './tools.js';
-import type { ImageVisionReviewer } from './types.js';
+import type { FalEditModel, ImageVisionReviewer } from './types.js';
 
 export interface ImagesRuntimeTarget {
   registerTool: ToolRegistrar;
@@ -41,6 +41,7 @@ export interface RegisterImagesToolsOptions {
   reviewer?: ImageVisionReviewer;
   referenceResolver?: ImageReferenceResolver;
   wardrobeLookResolver?: WardrobeLookResolver;
+  defaultSelfieEditModel?: FalEditModel;
 }
 
 export function registerImageTools(
@@ -55,6 +56,7 @@ export function registerImageTools(
     createSelfieTool(ops, options?.reviewer, {
       referenceResolver: options?.referenceResolver,
       wardrobeLookResolver: options?.wardrobeLookResolver,
+      defaultEditModel: options?.defaultSelfieEditModel,
     }),
     createGenerateImageTool(ops, options?.reviewer, {
       referenceResolver: options?.referenceResolver,

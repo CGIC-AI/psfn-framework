@@ -132,6 +132,117 @@ describe('ImageService', () => {
     });
   });
 
+  it('uses the configured create model when the call omits provider and model', async () => {
+    const fetchMock = createCompletedFalGenerationFetchMock(
+      'fal-ai/nano-banana-2',
+      'configured-create-model',
+      (body) => {
+        expect(body.prompt).toBe('a configured model');
+      },
+    );
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.create({
+      prompt: 'a configured model',
+      settingsDefaults: {
+        provider: 'fal',
+        model: 'fal-ai/nano-banana-2',
+      },
+    });
+
+    expect(result.model).toBe('fal-ai/nano-banana-2');
+  });
+
+  it('prepends the configured model to the existing transient fallback chain', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === 'https://queue.fal.run/fal-ai/gpt-image-1.5') {
+        throw new TypeError('fetch failed');
+      }
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image') {
+        return jsonResponse({
+          status: 'COMPLETED',
+          request_id: 'configured-fallback',
+          response_url: 'https://queue.fal.run/xai/grok-imagine-image/requests/configured-fallback',
+        });
+      }
+      if (url === 'https://queue.fal.run/xai/grok-imagine-image/requests/configured-fallback') {
+        return jsonResponse({
+          images: [{ url: 'https://cdn.example.test/configured-fallback.png' }],
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.create({
+      prompt: 'configured fallback',
+      settingsDefaults: { model: 'fal-ai/gpt-image-1.5' },
+    });
+
+    expect(result.model).toBe('xai/grok-imagine-image');
+    expect(result.fallbackReason).toBe('fal_transient_model_fallback');
+    expect(fetchMock.mock.calls.filter(
+      ([url]) => String(url) === 'https://queue.fal.run/fal-ai/gpt-image-1.5',
+    )).toHaveLength(2);
+  });
+
+  it('lets explicit call parameters override configured provider and model defaults', async () => {
+    const fetchMock = createCompletedFalGenerationFetchMock(
+      'xai/grok-imagine-image',
+      'explicit-create-model',
+      (body) => {
+        expect(body.prompt).toBe('an explicit model');
+      },
+    );
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.create({
+      prompt: 'an explicit model',
+      provider: 'fal',
+      model: 'xai/grok-imagine-image',
+      settingsDefaults: {
+        provider: 'comfyui',
+        model: 'fal-ai/nano-banana-2',
+      },
+    });
+
+    expect(result.model).toBe('xai/grok-imagine-image');
+  });
+
+  it('rejects invalid RPC-carried settings defaults before provider execution', async () => {
+    const fetchMock = vi.fn();
+    const service = new ImageService(
+      { falApiKey: 'fal-key' },
+      fetchMock as typeof fetch,
+    );
+
+    await expect(service.create(JSON.parse(JSON.stringify({
+      prompt: 'invalid provider',
+      settingsDefaults: { provider: 'unknown-provider' },
+    })))).rejects.toThrow(/settingsDefaults\.provider.*fal.*comfyui/);
+    await expect(service.create(JSON.parse(JSON.stringify({
+      prompt: 'invalid model',
+      settingsDefaults: { model: 'not-in-the-catalog' },
+    })))).rejects.toThrow(/settingsDefaults\.model.*image model catalog/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('retries transient FAL fetch failures once before surfacing an image failure', async () => {
     const settledAttempts: ImageProviderAttempt[] = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {

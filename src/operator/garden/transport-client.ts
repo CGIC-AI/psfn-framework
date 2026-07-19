@@ -17,6 +17,7 @@ import type { ConnectionOptions } from 'node:tls';
 import { WebSocket, WebSocketServer, type ClientOptions } from 'ws';
 import { createComponentLogger } from '../../shared/logger.js';
 import { sendText } from '../../channels/backplane/http/primitives.js';
+import { parseFleetModelUsageInternalRequestTarget } from '../../shared/telemetry/fleet-model-usage-request.js';
 import {
   createSpiffeCheckServerIdentity,
   requireMtlsPeerFileConfig,
@@ -31,7 +32,14 @@ const log = createComponentLogger('GardenAdminTransportProxy');
 const HEALTH_PROBE_TIMEOUT_MS = 1_500;
 export const HEALTH_PROBE_PATH = '/api/admin/__transport_probe__';
 export const FLEET_MODEL_USAGE_INTERNAL_HEADER = 'x-psfn-fleet-model-usage-query';
-const MAX_INTERNAL_JSON_RESPONSE_BYTES = 2 * 1_024 * 1_024;
+export const FLEET_MODEL_USAGE_PARENT_COMPANION_HEADER =
+  'x-psfn-fleet-model-usage-parent-companion';
+export const FLEET_MODEL_USAGE_PARENT_TARGET_HEADER = 'x-psfn-fleet-model-usage-parent-target';
+const INTERNAL_RESPONSE_BOUNDS = Object.freeze({ jsonBytes: 16 * 1_024 * 1_024 });
+
+export function isFleetModelUsageInternalRequestTarget(requestTarget: string): boolean {
+  return parseFleetModelUsageInternalRequestTarget(requestTarget) !== null;
+}
 
 export interface GardenAdminTransportHealth {
   mode: GardenAdminTransportClientEndpoint['mode'];
@@ -350,7 +358,7 @@ export class GardenAdminTransportProxy {
         response.on('data', (chunk: Buffer | string) => {
           const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
           bytes += buffer.byteLength;
-          if (bytes > MAX_INTERNAL_JSON_RESPONSE_BYTES) {
+          if (bytes > INTERNAL_RESPONSE_BOUNDS.jsonBytes) {
             response.destroy(new Error('Fleet model-usage response exceeded the size limit'));
             return;
           }

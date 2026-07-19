@@ -7,7 +7,10 @@ import {
   type ModelUsageTotals,
 } from '../../../shared/telemetry/model-usage.js';
 import { FleetGardenTargetRegistry } from '../fleet-garden-target-registry.js';
-import type { FleetGardenModelUsageTransportPort } from '../fleet-transport-client.js';
+import type {
+  FleetGardenModelUsageAuthority,
+  FleetGardenModelUsageTransportPort,
+} from '../fleet-transport-client.js';
 import {
   FleetModelUsageService,
   SingleCompanionFleetModelUsageService,
@@ -117,6 +120,32 @@ function registry(): FleetGardenTargetRegistry {
   ]);
 }
 
+function authority(
+  authorizedCompanionIds: readonly (typeof COMPANION_A)[] = [COMPANION_A, COMPANION_B],
+): FleetGardenModelUsageAuthority {
+  return {
+    authorizedCompanionIds,
+    modelUsageRequestTarget:
+      '/api/admin/model-usage?range=custom&timezone=UTC&sinceMs=0&untilMs=3600000&bucket=hour&limit=1&topN=100&groupBy=model',
+    token: 'signed-fleet-authority',
+    context: {
+      requestId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      decisionId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
+      versions: {
+        authorityGeneration: 1,
+        globalAuthEpoch: 1,
+        sessionAuthnVersion: 1,
+        sessionAuthzVersion: 1,
+        bindingVersion: 1,
+        grantVersion: 1,
+        policyVersion: 1,
+      },
+    },
+    parentCompanionId: COMPANION_A,
+    parentRequestTarget: '/api/admin/fleet-model-usage?range=custom',
+  };
+}
+
 describe('FleetModelUsageService', () => {
   it('sums two companion responses and recomputes weighted duration averages', async () => {
     const a = totals({
@@ -154,7 +183,7 @@ describe('FleetModelUsageService', () => {
       sinceMs: 0,
       untilMs: 3_600_000,
       bucket: 'hour',
-    });
+    }, authority());
 
     expect(result.coverage).toEqual({ available: 2, unavailable: 0, complete: true });
     expect(result.totals).toMatchObject({
@@ -188,7 +217,45 @@ describe('FleetModelUsageService', () => {
     expect(transport.requestModelUsage).toHaveBeenCalledWith(
       expect.anything(),
       expect.stringContaining('/api/admin/model-usage?'),
+      expect.objectContaining({ authorizedCompanionIds: [COMPANION_A, COMPANION_B] }),
     );
+  });
+
+  it('never calls or identifies a registry target outside the signed roster', async () => {
+    const companionTotals = totals({
+      calls: 1,
+      inputTokens: 50,
+      outputTokens: 25,
+      costUsd: 0.1,
+      totalDurationMs: 80,
+      durationSamples: 1,
+      totalTtftMs: 10,
+      ttftSamples: 1,
+    });
+    const transport: FleetGardenModelUsageTransportPort = {
+      requestModelUsage: vi.fn(async () => usageResponse(
+        companionTotals,
+        'provider-a:model-a',
+      )),
+    };
+    const service = new FleetModelUsageService({ registry: registry(), transport });
+
+    const result = await service.getFleetModelUsage({
+      range: 'custom',
+      timezone: 'UTC',
+      sinceMs: 0,
+      untilMs: 3_600_000,
+      bucket: 'hour',
+    }, authority([COMPANION_A]));
+
+    expect(transport.requestModelUsage).toHaveBeenCalledTimes(1);
+    expect(transport.requestModelUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ companionId: COMPANION_A }),
+      expect.any(String),
+      expect.objectContaining({ authorizedCompanionIds: [COMPANION_A] }),
+    );
+    expect(result.perCompanion).toHaveLength(1);
+    expect(JSON.stringify(result)).not.toContain(COMPANION_B);
   });
 
   it('keeps private spend only in fleet totals and marks failed targets unavailable', async () => {
@@ -240,7 +307,7 @@ describe('FleetModelUsageService', () => {
       sinceMs: 0,
       untilMs: 3_600_000,
       bucket: 'hour',
-    });
+    }, authority());
 
     expect(result.totals?.calls).toBe(2);
     expect(result.perCompanion).toEqual([

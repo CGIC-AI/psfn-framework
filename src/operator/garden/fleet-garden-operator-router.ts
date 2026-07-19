@@ -3,6 +3,7 @@ import type { Duplex } from 'node:stream';
 import { sendText } from '../../channels/backplane/http/primitives.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { buildGardenCapabilityHeaders } from './garden-admission.js';
 import type {
   GardenFleetChildAssertion,
@@ -87,10 +88,28 @@ export class FleetGardenOperatorRouter {
         sendText(input.res, 503, 'Fleet model usage unavailable');
         return;
       }
+      const authorizedCompanionIds = admitted.verified.authContext.fleetCompanionIds;
+      const modelUsageRequestTarget =
+        admitted.verified.authContext.fleetModelUsageRequestTarget;
+      if (!authorizedCompanionIds
+        || !modelUsageRequestTarget
+        || !authorizedCompanionIds.includes(admitted.companionId)) {
+        sendText(input.res, 403, 'Fleet model usage authority unavailable');
+        return;
+      }
       const originalTarget = input.req.url;
       input.req.url = admitted.target.canonicalRequestTarget;
       try {
-        handleFleetModelUsageRoute(input.req, input.res, this.options.fleetModelUsage);
+        handleFleetModelUsageRoute(input.req, input.res, this.options.fleetModelUsage, {
+          authorizedCompanionIds: authorizedCompanionIds.map(companionId => (
+            createCompanionId(companionId)
+          )),
+          modelUsageRequestTarget,
+          token: admitted.authority.token,
+          context: admitted.authority.context,
+          parentCompanionId: admitted.companionId,
+          parentRequestTarget: admitted.target.canonicalRequestTarget,
+        });
       } finally {
         input.req.url = originalTarget;
       }

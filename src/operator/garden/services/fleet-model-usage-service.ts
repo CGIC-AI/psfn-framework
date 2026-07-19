@@ -8,9 +8,16 @@ import {
 } from '../../../shared/telemetry/model-usage.js';
 import { roundModelUsageUsd } from '../../../shared/telemetry/model-usage-accounting.js';
 import { resolveModelUsageRange } from '../../../shared/telemetry/model-usage-range.js';
+import {
+  buildFleetModelUsageInternalRequestTarget,
+  resolveAuthorizedFleetModelUsageRange,
+} from '../../../shared/telemetry/fleet-model-usage-request.js';
 import { isRecord } from '../../../shared/utils/types.js';
 import type { FleetGardenTargetRegistry } from '../fleet-garden-target-registry.js';
-import type { FleetGardenModelUsageTransportPort } from '../fleet-transport-client.js';
+import type {
+  FleetGardenModelUsageAuthority,
+  FleetGardenModelUsageTransportPort,
+} from '../fleet-transport-client.js';
 import type { AdminModelUsageService } from './types.js';
 
 export interface FleetModelUsageTopModel {
@@ -367,21 +374,6 @@ function buildUpstreamQuery(range: ModelUsageResolvedRange): ModelUsageQuery {
   };
 }
 
-function buildUpstreamPath(range: ModelUsageResolvedRange): string {
-  const query = buildUpstreamQuery(range);
-  const params = new URLSearchParams({
-    range: String(query.range),
-    timezone: String(query.timezone),
-    sinceMs: String(query.sinceMs),
-    untilMs: String(query.untilMs),
-    bucket: String(query.bucket),
-    limit: String(query.limit),
-    topN: String(query.topN),
-    groupBy: query.groupBy?.join(',') ?? 'model',
-  });
-  return `/api/admin/model-usage?${params.toString()}`;
-}
-
 /** Single-companion compatibility projection over that Garden's canonical service. */
 export class SingleCompanionFleetModelUsageService {
   constructor(private readonly options: {
@@ -431,20 +423,27 @@ export class FleetModelUsageService {
   constructor(private readonly options: {
     readonly registry: FleetGardenTargetRegistry;
     readonly transport: FleetGardenModelUsageTransportPort;
-    readonly nowMs?: () => number;
   }) {}
 
-  async getFleetModelUsage(query: ModelUsageQuery = {}): Promise<FleetModelUsageData> {
-    const resolvedRange = resolveModelUsageRange(query, {
-      nowMs: this.options.nowMs?.() ?? Date.now(),
-    });
-    const requestPath = buildUpstreamPath(resolvedRange);
-    const results = await Promise.all(this.options.registry.companionIds().map(async companionId => {
+  async getFleetModelUsage(
+    query: ModelUsageQuery = {},
+    authority?: FleetGardenModelUsageAuthority,
+  ): Promise<FleetModelUsageData> {
+    if (!authority || authority.authorizedCompanionIds.length === 0) {
+      throw new Error('Fleet model usage requires a signed authorized companion roster');
+    }
+    const resolvedRange = resolveAuthorizedFleetModelUsageRange(
+      query,
+      authority.modelUsageRequestTarget,
+    );
+    const requestPath = buildFleetModelUsageInternalRequestTarget(resolvedRange);
+    const results = await Promise.all(authority.authorizedCompanionIds.map(async companionId => {
       try {
         const response = parseModelUsageResponse(
           await this.options.transport.requestModelUsage(
             this.options.registry.resolve(companionId),
             requestPath,
+            authority,
           ),
           resolvedRange,
         );

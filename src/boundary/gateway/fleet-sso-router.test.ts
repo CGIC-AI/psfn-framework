@@ -12,6 +12,7 @@ import {
   createRequestCapabilityVerifier,
 } from '../fleet-auth/request-capability.js';
 import type { FleetAuthorizationContext } from './fleet-authorization-context.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
 
 function request(headers: IncomingMessage['headers'], encrypted = false): Pick<IncomingMessage, 'headers' | 'socket'> {
   return {
@@ -141,6 +142,97 @@ describe('unified Fleet SSO origin provenance', () => {
 
     expect(response.writeHead).not.toHaveBeenCalled();
     expect(handler).toHaveBeenCalledOnce();
+  });
+
+  it('builds the fleet-cost roster only from per-companion models.read decisions', async () => {
+    const companionA = createCompanionId('11111111-1111-4111-8111-111111111111');
+    const companionB = createCompanionId('22222222-2222-4222-8222-222222222222');
+    const companionC = createCompanionId('33333333-3333-4333-8333-333333333333');
+    const nowSeconds = 1_783_000_000;
+    const { privateKey, publicKey } = generateKeyPairSync('ed25519');
+    const contextFor = (companionId: string): FleetAuthorizationContext => ({
+      principalId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      providerSubject: { provider: 'discord', subjectId: 'subject-a' },
+      companionId,
+      contact: { bindingId: `binding-${companionId}`, contactId: `contact-${companionId}`, bindingVersion: 1 },
+      operator: { grantId: `grant-${companionId}`, role: 'admin', grantVersion: 1 },
+      session: {
+        recordId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+        audience: 'fleet',
+        assurance: 'oauth',
+        authnVersion: 1,
+        authzVersion: 1,
+        bindingVersion: 1,
+        grantVersion: 1,
+        policyVersion: 1,
+        provider: 'discord',
+        providerSubjectId: 'subject-a',
+      },
+      authorization: { action: 'models.read', decision: 'allow' },
+      authority: { authorityGeneration: 1, globalAuthEpoch: 1 },
+      provenance: {
+        source: 'gateway_fleet_authorization_snapshot',
+        authorizationEventId: `event-${companionId}`,
+        resolvedAt: new Date(nowSeconds * 1_000).toISOString(),
+      },
+    });
+    const resolveAuthorizationContext = vi.fn(async (input: unknown) => {
+      const companionId = (input as { companionId?: string }).companionId;
+      if (companionId !== companionB) throw new Error('not authorized');
+      return contextFor(companionB);
+    });
+    const router = new GatewayFleetSsoRouter({
+      canonicalOrigin,
+      trustProxy: true,
+      broker: { resolveAuthorizationContext },
+      signer: createGatewayRequestCapabilitySigner({
+        issuer: 'fleet-cost-test',
+        kid: 'fleet-cost-key',
+        privateKeyPem: privateKey.export({ format: 'pem', type: 'pkcs8' }).toString(),
+        ttlSeconds: 30,
+        nowSeconds: () => nowSeconds,
+      }),
+      verifier: createRequestCapabilityVerifier({
+        issuer: 'fleet-cost-test',
+        maxTtlSeconds: 30,
+        keys: [{
+          issuer: 'fleet-cost-test',
+          kid: 'fleet-cost-key',
+          publicKeyPem: publicKey.export({ format: 'pem', type: 'spki' }).toString(),
+          notBefore: '2026-07-01T00:00:00.000Z',
+          notAfter: '2026-07-03T00:00:00.000Z',
+          status: 'active',
+        }],
+      }),
+      replay: { consume: async input => ({ outcome: 'consumed', result: input.consumeResult }) },
+      portalProjection: { resolve: vi.fn(async () => { throw new Error('not used'); }) },
+      upstreams: [companionA, companionB, companionC].map((companionId, index) => ({
+        companionId,
+        origin: new URL(`http://127.0.0.1:${3211 + index}`),
+      })),
+      nowSeconds: () => nowSeconds,
+    });
+    const resolveRoster = (
+      router as unknown as {
+        resolveFleetModelUsageRoster(
+          sessionToken: string,
+          selectedCompanionId: typeof companionA,
+          selectedContext: FleetAuthorizationContext,
+        ): Promise<readonly string[]>;
+      }
+    ).resolveFleetModelUsageRoster.bind(router);
+
+    await expect(resolveRoster('s'.repeat(43), companionA, contextFor(companionA)))
+      .resolves.toEqual([companionA, companionB]);
+    expect(resolveAuthorizationContext).toHaveBeenCalledTimes(2);
+    expect(resolveAuthorizationContext).toHaveBeenCalledWith(expect.objectContaining({
+      companionId: companionB,
+      action: 'models.read',
+    }));
+    expect(resolveAuthorizationContext).toHaveBeenCalledWith(expect.objectContaining({
+      companionId: companionC,
+      action: 'models.read',
+    }));
   });
 
   it('accepts one explicit HTTPS proxy shape and rejects spoofed/mixed variants', () => {

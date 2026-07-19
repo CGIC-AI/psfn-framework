@@ -16,6 +16,11 @@ import {
   isRfc4122Uuid,
 } from '../../shared/utils/types.js';
 import {
+  parseFleetModelUsageInternalRequestTarget,
+  parseFleetModelUsageResourceQuery,
+  resolveFleetModelUsageInternalRequestTarget,
+} from '../../shared/telemetry/fleet-model-usage-request.js';
+import {
   GARDEN_FORWARD_METHODS,
   GARDEN_RESOURCE_AREAS,
   GARDEN_WORKSPACE_SCOPES,
@@ -176,6 +181,10 @@ export interface RequestCapabilityAuthContext {
   readonly sessionAssurance: 'oauth' | 'webauthn_uv' | 'break_glass';
   readonly authorizationEventId: string;
   readonly resolvedAt: string;
+  /** Gateway-authorized roster, present only on fleet model-usage reads. */
+  readonly fleetCompanionIds?: readonly string[];
+  /** Exact per-companion aggregate read derived from the signed fleet route. */
+  readonly fleetModelUsageRequestTarget?: string;
 }
 
 export interface RequestCapabilityVerifierKey {
@@ -287,6 +296,8 @@ interface RequestCapabilityAuthClaims {
   session_assurance: RequestCapabilityAuthContext['sessionAssurance'];
   authorization_event_id: string;
   resolved_at: string;
+  fleet_companion_ids?: readonly string[];
+  fleet_model_usage_request_target?: string;
 }
 
 interface RequestCapabilityParentClaims {
@@ -492,6 +503,12 @@ function toAuthClaims(context: RequestCapabilityAuthContext): RequestCapabilityA
     session_assurance: context.sessionAssurance,
     authorization_event_id: context.authorizationEventId,
     resolved_at: context.resolvedAt,
+    ...(context.fleetCompanionIds
+      ? { fleet_companion_ids: Object.freeze([...context.fleetCompanionIds]) }
+      : {}),
+    ...(context.fleetModelUsageRequestTarget
+      ? { fleet_model_usage_request_target: context.fleetModelUsageRequestTarget }
+      : {}),
   };
 }
 
@@ -509,6 +526,12 @@ function fromAuthClaims(context: RequestCapabilityAuthClaims): RequestCapability
     sessionAssurance: context.session_assurance,
     authorizationEventId: context.authorization_event_id,
     resolvedAt: context.resolved_at,
+    ...(context.fleet_companion_ids
+      ? { fleetCompanionIds: Object.freeze([...context.fleet_companion_ids]) }
+      : {}),
+    ...(context.fleet_model_usage_request_target
+      ? { fleetModelUsageRequestTarget: context.fleet_model_usage_request_target }
+      : {}),
   });
 }
 
@@ -542,15 +565,49 @@ function assertVersions(versions: RequestCapabilityAuthorityVersions): void {
   requireInteger(versions.policyVersion, 'versions.policyVersion', 1);
 }
 
-function assertAuthContext(value: unknown, companionId: string): void {
+function requireFleetCompanionIds(value: unknown, field: string): readonly string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 256) {
+    return reject(`${field} is invalid`);
+  }
+  const ids = value.map((entry, index) => (
+    typeof entry === 'string' && isRfc4122Uuid(entry)
+      ? entry
+      : reject(`${field}[${index}] is invalid`)
+  ));
+  const sorted = [...ids].sort();
+  if (sorted.some((entry, index) => entry !== ids[index])
+    || sorted.some((entry, index) => index > 0 && entry === sorted[index - 1])) {
+    return reject(`${field} is not canonical`);
+  }
+  return Object.freeze(ids);
+}
+
+function requireFleetModelUsageRequestTarget(value: unknown, field: string): string {
+  const requestTarget = requireString(value, field);
+  if (requestTarget.length > 2_048
+    || parseFleetModelUsageInternalRequestTarget(requestTarget) === null) {
+    return reject(`${field} is invalid`);
+  }
+  return requestTarget;
+}
+
+function assertAuthContext(value: unknown, target: CompiledGardenRequestTarget): void {
   const context = requireRecord(value, 'authContext');
-  requireExactKeys(context, AUTH_CONTEXT_INPUT_KEYS, 'authContext');
+  const hasFleetRoster = Object.hasOwn(context, 'fleetCompanionIds');
+  const hasFleetRequestTarget = Object.hasOwn(context, 'fleetModelUsageRequestTarget');
+  requireExactKeys(
+    context,
+    hasFleetRoster || hasFleetRequestTarget
+      ? [...AUTH_CONTEXT_INPUT_KEYS, 'fleetCompanionIds', 'fleetModelUsageRequestTarget']
+      : AUTH_CONTEXT_INPUT_KEYS,
+    'authContext',
+  );
   requireStableId(context.principalId, 'authContext.principalId');
   if (requireString(context.provider, 'authContext.provider') !== 'discord') {
     reject('authContext.provider is invalid');
   }
   requireStableId(context.providerSubjectId, 'authContext.providerSubjectId');
-  if (requireString(context.companionId, 'authContext.companionId') !== companionId) {
+  if (requireString(context.companionId, 'authContext.companionId') !== target.companionId) {
     reject('authContext.companionId does not match target');
   }
   requireStableId(context.contactBindingId, 'authContext.contactBindingId');
@@ -570,6 +627,35 @@ function assertAuthContext(value: unknown, companionId: string): void {
   requireStableId(context.authorizationEventId, 'authContext.authorizationEventId');
   if (!isCanonicalIsoTimestamp(requireString(context.resolvedAt, 'authContext.resolvedAt'))) {
     reject('authContext.resolvedAt is invalid');
+  }
+  if (hasFleetRoster || hasFleetRequestTarget) {
+    const fleetCompanionIds = requireFleetCompanionIds(
+      context.fleetCompanionIds,
+      'authContext.fleetCompanionIds',
+    );
+    const fleetModelUsageRequestTarget = requireFleetModelUsageRequestTarget(
+      context.fleetModelUsageRequestTarget,
+      'authContext.fleetModelUsageRequestTarget',
+    );
+    if (target.method !== 'GET'
+      || target.canonicalPath !== '/api/admin/fleet-model-usage'
+      || target.action !== 'models.read'
+      || !fleetCompanionIds.includes(target.companionId)) {
+      reject('authContext fleet roster is outside the fleet model-usage route');
+    }
+    const resolvedAtMs = Date.parse(context.resolvedAt as string);
+    let expectedRequestTarget: string;
+    try {
+      expectedRequestTarget = resolveFleetModelUsageInternalRequestTarget(
+        parseFleetModelUsageResourceQuery(target.resource.query),
+        resolvedAtMs,
+      );
+    } catch {
+      return reject('authContext fleet model-usage request target cannot be derived');
+    }
+    if (!equalEncodedValue(fleetModelUsageRequestTarget, expectedRequestTarget)) {
+      reject('authContext fleet model-usage request target does not match the fleet route');
+    }
   }
 }
 
@@ -704,7 +790,7 @@ function validateSignInput(input: RequestCapabilitySignInput): void {
   assertTarget(input.target);
   requireUuid(input.requestId, 'requestId');
   requireUuid(input.decisionId, 'decisionId');
-  assertAuthContext(input.authContext, input.target.companionId);
+  assertAuthContext(input.authContext, input.target);
   assertVersions(input.versions);
 }
 
@@ -897,9 +983,21 @@ function parseVersions(value: unknown): RequestCapabilityVersionClaims {
   };
 }
 
-function parseAuthContext(value: unknown, companionId: string): RequestCapabilityAuthClaims {
+function parseAuthContext(
+  value: unknown,
+  companionId: string,
+  fleetRosterAllowed: boolean,
+): RequestCapabilityAuthClaims {
   const record = requireRecord(value, 'claims.auth_context');
-  requireExactKeys(record, AUTH_CONTEXT_KEYS, 'claims.auth_context');
+  const hasFleetRoster = Object.hasOwn(record, 'fleet_companion_ids');
+  const hasFleetRequestTarget = Object.hasOwn(record, 'fleet_model_usage_request_target');
+  requireExactKeys(
+    record,
+    hasFleetRoster || hasFleetRequestTarget
+      ? [...AUTH_CONTEXT_KEYS, 'fleet_companion_ids', 'fleet_model_usage_request_target']
+      : AUTH_CONTEXT_KEYS,
+    'claims.auth_context',
+  );
   const provider = requireString(record.provider, 'claims.auth_context.provider');
   const role = requireString(record.role, 'claims.auth_context.role');
   const assurance = requireString(record.session_assurance, 'claims.auth_context.session_assurance');
@@ -935,9 +1033,32 @@ function parseAuthContext(value: unknown, companionId: string): RequestCapabilit
       'claims.auth_context.authorization_event_id',
     ),
     resolved_at: requireString(record.resolved_at, 'claims.auth_context.resolved_at'),
+    ...(hasFleetRoster
+      ? {
+          fleet_companion_ids: requireFleetCompanionIds(
+            record.fleet_companion_ids,
+            'claims.auth_context.fleet_companion_ids',
+          ),
+        }
+      : {}),
+    ...(hasFleetRequestTarget
+      ? {
+          fleet_model_usage_request_target: requireFleetModelUsageRequestTarget(
+            record.fleet_model_usage_request_target,
+            'claims.auth_context.fleet_model_usage_request_target',
+          ),
+        }
+      : {}),
   };
   if (context.companion_id !== companionId) reject('claims.auth_context companion does not match');
   if (!isCanonicalIsoTimestamp(context.resolved_at)) reject('claims.auth_context.resolved_at is invalid');
+  if ((context.fleet_companion_ids || context.fleet_model_usage_request_target)
+    && (!context.fleet_companion_ids
+      || !context.fleet_model_usage_request_target
+      || !fleetRosterAllowed
+      || !context.fleet_companion_ids.includes(companionId))) {
+    reject('claims.auth_context fleet roster is outside the fleet model-usage route');
+  }
   return context;
 }
 
@@ -1005,12 +1126,16 @@ function parseClaims(encoded: string, audienceKind: 'operator' | 'agent'): Reque
   const method = requireString(record.method, 'claims.method');
   const action = requireString(record.action, 'claims.action');
   if (!METHODS.has(method) || !ACTIONS.has(action)) reject('claims target vocabulary is invalid');
+  const path = requireString(record.path, 'claims.path');
+  const fleetRosterAllowed = method === 'GET'
+    && path === '/api/admin/fleet-model-usage'
+    && action === 'models.read';
   const claims: RequestCapabilityClaims = {
     iss: requireStableId(record.iss, 'claims.iss'),
     aud: audience as RequestCapabilityAudience,
     companion_id: companionId,
     method: method as GardenForwardMethod,
-    path: requireString(record.path, 'claims.path'),
+    path,
     query: typeof record.query === 'string' ? record.query : reject('claims.query is invalid'),
     request_target: requireString(record.request_target, 'claims.request_target'),
     action: action as FleetAuthAction,
@@ -1021,7 +1146,7 @@ function parseClaims(encoded: string, audienceKind: 'operator' | 'agent'): Reque
     resource_digest: requireDigest(record.resource_digest, 'claims.resource_digest'),
     request_id: requireUuid(record.request_id, 'claims.request_id'),
     decision_id: requireUuid(record.decision_id, 'claims.decision_id'),
-    auth_context: parseAuthContext(record.auth_context, companionId),
+    auth_context: parseAuthContext(record.auth_context, companionId, fleetRosterAllowed),
     ...(audienceKind === 'agent' ? { parent: parseParent(record.parent, companionId) } : {}),
     versions: parseVersions(record.versions),
     jti: requireTokenId(record.jti, 'claims.jti'),
@@ -1030,6 +1155,24 @@ function parseClaims(encoded: string, audienceKind: 'operator' | 'agent'): Reque
     exp: requireInteger(record.exp, 'claims.exp', 1),
     target_digest: requireDigest(record.target_digest, 'claims.target_digest'),
   };
+  if (fleetRosterAllowed) {
+    let expectedRequestTarget: string;
+    try {
+      expectedRequestTarget = resolveFleetModelUsageInternalRequestTarget(
+        parseFleetModelUsageResourceQuery(claims.resource.query),
+        Date.parse(claims.auth_context.resolved_at),
+      );
+    } catch {
+      return reject('claims fleet model-usage request target cannot be derived');
+    }
+    if (!claims.auth_context.fleet_model_usage_request_target
+      || !equalEncodedValue(
+        claims.auth_context.fleet_model_usage_request_target,
+        expectedRequestTarget,
+      )) {
+      reject('claims fleet model-usage request target does not match the fleet route');
+    }
+  }
   if (Buffer.from(JSON.stringify(canonicalClaims(claims)), 'utf8').toString('base64url') !== encoded) {
     reject('claims are not canonical');
   }

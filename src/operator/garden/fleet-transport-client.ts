@@ -1,13 +1,19 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
+import type { GardenCapabilityContext } from '../../boundary/fleet-auth/garden-capability-context.js';
+import type { CompanionId } from '../../shared/routing/companion-id.js';
 import {
   FleetGardenTargetRegistry,
   type FleetGardenTargetIdentity,
 } from './fleet-garden-target-registry.js';
 import {
   FLEET_MODEL_USAGE_INTERNAL_HEADER,
+  FLEET_MODEL_USAGE_PARENT_COMPANION_HEADER,
+  FLEET_MODEL_USAGE_PARENT_TARGET_HEADER,
   GardenAdminTransportProxy,
+  isFleetModelUsageInternalRequestTarget,
 } from './transport-client.js';
+import { buildGardenCapabilityHeaders } from './garden-admission.js';
 
 export interface FleetGardenTransportProxyPort {
   close(callback: () => void): void;
@@ -36,7 +42,18 @@ export interface FleetGardenModelUsageTransportPort {
   requestModelUsage(
     target: FleetGardenTargetIdentity,
     requestPath: string,
+    authority: FleetGardenModelUsageAuthority,
   ): Promise<unknown>;
+}
+
+export interface FleetGardenModelUsageAuthority {
+  readonly authorizedCompanionIds: readonly CompanionId[];
+  /** Exact child request target signed into the parent fleet capability. */
+  readonly modelUsageRequestTarget: string;
+  readonly token: string;
+  readonly context: GardenCapabilityContext;
+  readonly parentCompanionId: CompanionId;
+  readonly parentRequestTarget: string;
 }
 
 interface FleetTargetProxy {
@@ -117,17 +134,21 @@ export class FleetGardenAdminTransportProxy implements
   requestModelUsage(
     target: FleetGardenTargetIdentity,
     requestPath: string,
+    authority: FleetGardenModelUsageAuthority,
   ): Promise<unknown> {
-    const parsed = new URL(requestPath, 'http://localhost');
-    if (!requestPath.startsWith('/')
-      || parsed.origin !== 'http://localhost'
-      || parsed.pathname !== '/api/admin/model-usage'
-      || parsed.hash) {
+    if (!isFleetModelUsageInternalRequestTarget(requestPath)
+      || requestPath !== authority.modelUsageRequestTarget) {
       throw new Error('Fleet model-usage transport requires the canonical model-usage route');
+    }
+    if (!authority.authorizedCompanionIds.includes(target.companionId)) {
+      throw new Error('Fleet model-usage target is outside the signed authorization roster');
     }
     return this.requireExactProxy(target).requestJson(requestPath, {
       accept: 'application/json',
       [FLEET_MODEL_USAGE_INTERNAL_HEADER]: '1',
+      [FLEET_MODEL_USAGE_PARENT_COMPANION_HEADER]: authority.parentCompanionId,
+      [FLEET_MODEL_USAGE_PARENT_TARGET_HEADER]: authority.parentRequestTarget,
+      ...buildGardenCapabilityHeaders({ token: authority.token, context: authority.context }),
     });
   }
 

@@ -61,7 +61,6 @@ import {
   evaluateExtractionPreLlmGate,
 } from './signals.js';
 import { evaluateCogSecMemoryCandidacy } from '../../../core/cogsec/memory-candidacy.js';
-import { isNonConversationalSessionEntry } from '../../../core/session/manager-primitives.js';
 import {
   INTAKE_SCREENING_METADATA_KEY,
   parseIntakeScreeningMetadata,
@@ -77,38 +76,18 @@ import type {
   GroupMemoryWriteCapSkip,
   ConcernCandidateExtractionSink,
 } from './types.js';
-import { RECOVERY_CONTEXT_MESSAGE_LIMIT } from './types.js';
 import type { ExtractionSessionReader } from './session-port.js';
+import { ExtractionIntegrityError } from './integrity-error.js';
+import { selectExtractionRecentEntries } from './recovered-entries.js';
+
+export { ExtractionIntegrityError, type ExtractionIntegrityErrorContext } from './integrity-error.js';
 
 const log = createComponentLogger('Extraction');
 const EXTRACTION_CHUNK_LLM_CONCURRENCY = 2;
 
-type ExtractionIntegrityErrorStage = 'orchestration' | 'fact_processing';
 type RoutedAcceptedFactCandidate = AcceptedFactCandidate & {
   routing: Extract<FactRoutingDecision, { status: 'route' }>;
 };
-
-export interface ExtractionIntegrityErrorContext {
-  stage: ExtractionIntegrityErrorStage;
-  channelId: string;
-  triggerReason: ExtractionTriggerReason;
-  turnId?: TurnID;
-  factIndex?: number;
-  factType?: ExtractedFact['type'];
-  sourceRef?: string;
-}
-
-export class ExtractionIntegrityError extends Error {
-  readonly context: ExtractionIntegrityErrorContext;
-  readonly cause: unknown;
-
-  constructor(message: string, context: ExtractionIntegrityErrorContext, cause: unknown) {
-    super(message);
-    this.name = 'ExtractionIntegrityError';
-    this.context = context;
-    this.cause = cause;
-  }
-}
 
 function extractionRejectionReasonForWritePolicy(
   error: MemoryWritePolicyError,
@@ -326,14 +305,11 @@ export async function runExtractionOrchestration(
 ): Promise<MemoryExtractionOutputs> {
   let resolvedTurnId: TurnID | undefined = options.turnId;
   try {
-    const recoveredEntries = (options.recoveredEntries !== undefined
-      ? options.recoveredEntries
-      : options.sessionManager.getRecentMessages(options.channelId, 10)
-    )
-      .filter(entry => !isNonConversationalSessionEntry(entry));
-    const recentEntries = options.groupWriteCaps
-      ? recoveredEntries
-      : recoveredEntries.slice(-RECOVERY_CONTEXT_MESSAGE_LIMIT);
+    const recentEntries = selectExtractionRecentEntries({
+      recoveredEntries: options.recoveredEntries,
+      fetchLiveHistory: () => options.sessionManager.getRecentMessages(options.channelId, 10),
+      groupRecoveredRange: Boolean(options.groupWriteCaps),
+    });
     const experientialSelfDirected = isExperientialSelfDirectedSessionId(options.channelId);
     // A reflection may have a grounding contact, but its first-person
     // experiential output is companion-owned. Never let that grounding contact

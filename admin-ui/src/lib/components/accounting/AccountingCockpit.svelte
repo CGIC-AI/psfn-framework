@@ -226,7 +226,11 @@
       {#if refreshing}<span>Refreshing…</span>{/if}
     </div>
 
-    <UsageMetricCards totals={usage.totals} />
+    <UsageMetricCards
+      totals={usage.totals}
+      timeSeries={usage.timeSeries}
+      previousPeriod={usage.previousPeriod}
+    />
 
     {#if usage.totals.calls === 0}
       <div class="card-garden px-5 py-8 text-center">

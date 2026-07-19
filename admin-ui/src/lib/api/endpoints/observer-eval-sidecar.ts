@@ -1,12 +1,43 @@
 import { apiGet } from '$lib/api/client';
-import type { EmotionStateSnapshot } from '../../../../../src/core/emotion/state.js';
+import type {
+  ObserverEvalAgreementBand as CanonicalObserverEvalAgreementBand,
+  ObserverEvalComparisonSummary as CanonicalObserverEvalComparisonSummary,
+  ObserverEvalMetricsStatus as CanonicalObserverEvalMetricsStatus,
+} from '../../../../../src/core/eval/observer-sidecar/metrics.js';
+import type {
+  ObserverEvalPsfnEmotionReference as CanonicalObserverEvalPsfnEmotionReference,
+  ObserverEvalSidecarErrorState as CanonicalObserverEvalSidecarErrorState,
+  ObserverEvalSidecarObservationStatus as CanonicalObserverEvalSidecarObservationStatus,
+  ObserverEvalSidecarRetentionMetadata as CanonicalObserverEvalSidecarRetentionMetadata,
+  ObserverEvalSidecarRunStatus as CanonicalObserverEvalSidecarRunStatus,
+} from '../../../../../src/core/eval/observer-sidecar/persistence.js';
+import type {
+  ObserverEvalPrivacyClass as CanonicalObserverEvalPrivacyClass,
+  ObserverEvalPrivacyDecision as CanonicalObserverEvalPrivacyDecision,
+  ObserverEvalSanitizedEmotionSnapshot as CanonicalObserverEvalSanitizedEmotionSnapshot,
+  ObserverEvalSanitizedProvenance as CanonicalObserverEvalSanitizedProvenance,
+  ObserverEvalSanitizedSourceMetadata as CanonicalObserverEvalSanitizedSourceMetadata,
+  ObserverEvalSanitizedTurnIdentity as CanonicalObserverEvalSanitizedTurnIdentity,
+  ObserverEvalSanitizedTurnMetadata as CanonicalObserverEvalSanitizedTurnMetadata,
+} from '../../../../../src/core/eval/observer-sidecar/privacy.js';
 
 export type ObserverEvalSidecarHealthStatus = 'disabled' | 'enabled' | 'degraded' | 'unavailable';
-export type ObserverEvalSidecarObservationStatus = 'ok' | 'degraded' | 'error';
-export type ObserverEvalSidecarRunStatus = 'running' | 'completed' | 'degraded' | 'failed';
-export type ObserverEvalPrivacyClass = 'public' | 'private' | 'restricted' | 'closed' | 'fail_closed';
-export type ObserverEvalAgreementBand = 'aligned' | 'watch' | 'divergent' | 'unavailable';
-export type ObserverEvalMetricsStatus = 'available' | 'partial' | 'unavailable';
+export type ObserverEvalSidecarObservationStatus = CanonicalObserverEvalSidecarObservationStatus;
+export type ObserverEvalSidecarRunStatus = CanonicalObserverEvalSidecarRunStatus;
+export type ObserverEvalPrivacyClass = CanonicalObserverEvalPrivacyClass;
+export type ObserverEvalAgreementBand = CanonicalObserverEvalAgreementBand;
+export type ObserverEvalMetricsStatus = CanonicalObserverEvalMetricsStatus;
+export type ObserverEvalPrivacyDecision = CanonicalObserverEvalPrivacyDecision;
+export type ObserverEvalSanitizedTurnIdentity = CanonicalObserverEvalSanitizedTurnIdentity;
+export type ObserverEvalSanitizedSourceMetadata = CanonicalObserverEvalSanitizedSourceMetadata;
+export type ObserverEvalSanitizedEmotionSnapshot = CanonicalObserverEvalSanitizedEmotionSnapshot;
+export type ObserverEvalSanitizedTurnMetadata = CanonicalObserverEvalSanitizedTurnMetadata;
+export type ObserverEvalSanitizedProvenance = CanonicalObserverEvalSanitizedProvenance;
+export type ObserverEvalPsfnEmotionReference = CanonicalObserverEvalPsfnEmotionReference;
+export type ObserverEvalComparisonSummary = CanonicalObserverEvalComparisonSummary;
+export type ObserverEvalSidecarErrorState = CanonicalObserverEvalSidecarErrorState;
+export type ObserverEvalSidecarRetentionMetadata =
+  CanonicalObserverEvalSidecarRetentionMetadata;
 
 export interface AdminObserverEvalSidecarObservationFilters {
   runId?: string;
@@ -195,64 +226,6 @@ export interface AdminObserverEvalSidecarObservationView {
   nonAuthoritativeNotice: string;
 }
 
-export interface ObserverEvalPrivacyDecision {
-  privacyClass: ObserverEvalPrivacyClass;
-  sensitivity: string | null;
-  channelVisibility: string | null;
-  rawContentRedacted: true;
-  sensitiveIdentifiersRedacted: true;
-  derivedTelemetryPermitted: boolean;
-  redactionReason: string;
-}
-
-export interface ObserverEvalSanitizedTurnIdentity {
-  turnId: string;
-  channelType: string;
-  messageTimestampMs: number;
-  taskKind?: string;
-  redactedIdentifiers: readonly ['requestId', 'sourceMessageId', 'channelId'];
-}
-
-export interface ObserverEvalSanitizedSourceMetadata {
-  routingSource: string;
-  isDirectMessage: boolean;
-  channelPrivacy: string | null;
-}
-
-export interface ObserverEvalSanitizedEmotionSnapshot {
-  snapshot: EmotionStateSnapshot | null;
-  appraisalEntryCount: number;
-  snapshotRedacted: boolean;
-}
-
-export interface ObserverEvalSanitizedTurnMetadata {
-  trustLevel: string;
-  speakerRole: 'user' | 'system';
-  contactResolved: boolean;
-  contentLength: number;
-  attachmentCount: number;
-  hasVisionInput: boolean;
-  sensitivity: string | null;
-}
-
-export interface ObserverEvalSanitizedProvenance {
-  seam: string;
-  capturedAt: number;
-  emotionSnapshotSource: string;
-  correlation: {
-    callType: string;
-    purposeRedacted: true;
-  };
-  redactedIdentifiers: readonly ['emotionSessionId'];
-}
-
-export interface ObserverEvalPsfnEmotionReference {
-  snapshot: EmotionStateSnapshot | null;
-  snapshotRef?: string;
-  appraisalEntryCount: number;
-  snapshotSource: string;
-}
-
 export interface AdminObserverEvalProjectionView {
   ok: boolean;
   projectionVersion: string;
@@ -304,90 +277,6 @@ export interface AdminObserverEvalEmoSimView {
     message: string;
     recoverable: boolean;
   };
-}
-
-export interface ObserverEvalComparisonSummary {
-  schemaVersion: 1;
-  metricsVersion: string;
-  status: ObserverEvalMetricsStatus;
-  agreementBand: ObserverEvalAgreementBand;
-  score: {
-    rawDivergenceScore: number | null;
-    confidenceWeightedDivergenceScore: number | null;
-    confidenceWeight: number | null;
-    components: readonly unknown[];
-  };
-  deltas: {
-    valence: number | null;
-    arousal: number | null;
-    vadDistance: number | null;
-    dominance: number | null;
-    intensity: number | null;
-  };
-  familyConfusion: {
-    psfnPrimaryFamily: string | null;
-    emosimPrimaryFamily: string | null;
-    familyMismatch: boolean | null;
-    familyOverlap: number | null;
-    psfnPrimaryLabel: string | null;
-    emosimDominantEmotion: string | null;
-    unmappedSignal: number | null;
-  };
-  direction: {
-    psfnDirection: string | null;
-    emosimDirection: string | null;
-    directionMismatch: boolean | null;
-    suppressionOrDecayMismatch: boolean | null;
-  };
-  projection: {
-    projectionConfidence: number | null;
-    lowConfidence: boolean;
-    projectionAvailable: boolean;
-    projectionFailed: boolean;
-    confidenceWeight: number | null;
-  };
-  privacy: {
-    privacyClass: ObserverEvalPrivacyClass | null;
-    sensitivity: string | null;
-    redactionReason: string | null;
-    derivedTelemetryPermitted: boolean | null;
-    redactedObservation: boolean;
-  };
-  reasons: Array<{
-    code: string;
-    severity: 'info' | 'warning' | 'blocking';
-    detail: string;
-  }>;
-  persistence: {
-    schemaVersion: 1;
-    metricsVersion: string;
-    divergenceScore: number | null;
-    vadDistance: number | null;
-    familyMismatch: boolean | null;
-    directionMismatch: boolean | null;
-    unmappedSignal: number | null;
-    details?: Record<string, unknown>;
-  };
-}
-
-export interface ObserverEvalSidecarErrorState {
-  message: string;
-  code?: string;
-  recoverable: boolean;
-  redacted: true;
-  redactionReason: string;
-  details?: Record<string, boolean | number | string | null>;
-}
-
-export interface ObserverEvalSidecarRetentionMetadata {
-  retentionClass: string;
-  policyId: string;
-  capturedAtMs: number;
-  retainUntilMs: number;
-  reason: string;
-  deleteAfterMs?: number;
-  tags?: readonly string[];
-  metadata?: Record<string, unknown>;
 }
 
 const OBSERVER_EVAL_SIDECAR_BASE_PATH = '/api/admin/evals/observer-sidecar';

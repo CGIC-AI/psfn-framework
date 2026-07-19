@@ -7,6 +7,27 @@ import type {
   SocialRelationshipKind as CanonicalSocialRelationshipKind,
 } from '../../../../src/core/contacts/types.js';
 import type {
+  ObserverEvalAgreementBand as CanonicalObserverEvalAgreementBand,
+  ObserverEvalComparisonSummary as CanonicalObserverEvalComparisonSummary,
+  ObserverEvalMetricsStatus as CanonicalObserverEvalMetricsStatus,
+} from '../../../../src/core/eval/observer-sidecar/metrics.js';
+import type {
+  ObserverEvalPsfnEmotionReference as CanonicalObserverEvalPsfnEmotionReference,
+  ObserverEvalSidecarErrorState as CanonicalObserverEvalSidecarErrorState,
+  ObserverEvalSidecarObservationStatus as CanonicalObserverEvalSidecarObservationStatus,
+  ObserverEvalSidecarRetentionMetadata as CanonicalObserverEvalSidecarRetentionMetadata,
+  ObserverEvalSidecarRunStatus as CanonicalObserverEvalSidecarRunStatus,
+} from '../../../../src/core/eval/observer-sidecar/persistence.js';
+import type {
+  ObserverEvalPrivacyClass as CanonicalObserverEvalPrivacyClass,
+  ObserverEvalPrivacyDecision as CanonicalObserverEvalPrivacyDecision,
+  ObserverEvalSanitizedEmotionSnapshot as CanonicalObserverEvalSanitizedEmotionSnapshot,
+  ObserverEvalSanitizedProvenance as CanonicalObserverEvalSanitizedProvenance,
+  ObserverEvalSanitizedSourceMetadata as CanonicalObserverEvalSanitizedSourceMetadata,
+  ObserverEvalSanitizedTurnIdentity as CanonicalObserverEvalSanitizedTurnIdentity,
+  ObserverEvalSanitizedTurnMetadata as CanonicalObserverEvalSanitizedTurnMetadata,
+} from '../../../../src/core/eval/observer-sidecar/privacy.js';
+import type {
   CanonicalModelRegistry as RuntimeCanonicalModelRegistry,
   ModelRegistryBudgetPolicy as RuntimeModelRegistryBudgetPolicy,
   ModelRegistryCapabilityMetadata as RuntimeModelRegistryCapabilityMetadata,
@@ -29,6 +50,23 @@ import type {
   ModelRegistrySourceMetadata,
   ModelRegistryTuningMetadata,
 } from '../models/registry.js';
+import type {
+  ObserverEvalAgreementBand,
+  ObserverEvalComparisonSummary,
+  ObserverEvalMetricsStatus,
+  ObserverEvalPrivacyClass,
+  ObserverEvalPrivacyDecision,
+  ObserverEvalPsfnEmotionReference,
+  ObserverEvalSanitizedEmotionSnapshot,
+  ObserverEvalSanitizedProvenance,
+  ObserverEvalSanitizedSourceMetadata,
+  ObserverEvalSanitizedTurnIdentity,
+  ObserverEvalSanitizedTurnMetadata,
+  ObserverEvalSidecarErrorState,
+  ObserverEvalSidecarObservationStatus,
+  ObserverEvalSidecarRetentionMetadata,
+  ObserverEvalSidecarRunStatus,
+} from '../api/endpoints/observer-eval-sidecar.js';
 import type {
   ChannelPrivacyLevel,
   Contact,
@@ -60,6 +98,43 @@ describe('admin canonical type aliases', () => {
     expectTypeOf<ModelRegistryPurposeTag>().toEqualTypeOf<RuntimeModelRegistryPurposeTag>();
     expectTypeOf<ModelRegistrySourceMetadata>().toEqualTypeOf<RuntimeModelRegistrySourceMetadata>();
     expectTypeOf<ModelRegistryTuningMetadata>().toEqualTypeOf<RuntimeModelRegistryTuningMetadata>();
+
+    expect(true).toBe(true);
+  });
+
+  it('keeps observer-eval sidecar payload types identical to their backend contracts', () => {
+    expectTypeOf<ObserverEvalSidecarObservationStatus>()
+      .toEqualTypeOf<CanonicalObserverEvalSidecarObservationStatus>();
+    expectTypeOf<ObserverEvalSidecarRunStatus>()
+      .toEqualTypeOf<CanonicalObserverEvalSidecarRunStatus>();
+    expectTypeOf<ObserverEvalPrivacyClass>().toEqualTypeOf<CanonicalObserverEvalPrivacyClass>();
+    expectTypeOf<ObserverEvalAgreementBand>().toEqualTypeOf<CanonicalObserverEvalAgreementBand>();
+    expectTypeOf<ObserverEvalMetricsStatus>().toEqualTypeOf<CanonicalObserverEvalMetricsStatus>();
+    expectTypeOf<ObserverEvalPrivacyDecision>()
+      .toEqualTypeOf<CanonicalObserverEvalPrivacyDecision>();
+    expectTypeOf<ObserverEvalPsfnEmotionReference>()
+      .toEqualTypeOf<CanonicalObserverEvalPsfnEmotionReference>();
+    expectTypeOf<ObserverEvalSidecarErrorState>()
+      .toEqualTypeOf<CanonicalObserverEvalSidecarErrorState>();
+    expectTypeOf<ObserverEvalSidecarRetentionMetadata>()
+      .toEqualTypeOf<CanonicalObserverEvalSidecarRetentionMetadata>();
+    expectTypeOf<ObserverEvalComparisonSummary>()
+      .toEqualTypeOf<CanonicalObserverEvalComparisonSummary>();
+
+    expect(true).toBe(true);
+  });
+
+  it('keeps observer-eval sanitized payload types identical to their backend contracts', () => {
+    expectTypeOf<ObserverEvalSanitizedTurnIdentity>()
+      .toEqualTypeOf<CanonicalObserverEvalSanitizedTurnIdentity>();
+    expectTypeOf<ObserverEvalSanitizedSourceMetadata>()
+      .toEqualTypeOf<CanonicalObserverEvalSanitizedSourceMetadata>();
+    expectTypeOf<ObserverEvalSanitizedEmotionSnapshot>()
+      .toEqualTypeOf<CanonicalObserverEvalSanitizedEmotionSnapshot>();
+    expectTypeOf<ObserverEvalSanitizedTurnMetadata>()
+      .toEqualTypeOf<CanonicalObserverEvalSanitizedTurnMetadata>();
+    expectTypeOf<ObserverEvalSanitizedProvenance>()
+      .toEqualTypeOf<CanonicalObserverEvalSanitizedProvenance>();
 
     expect(true).toBe(true);
   });

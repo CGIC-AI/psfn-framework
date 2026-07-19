@@ -8,7 +8,24 @@ import type { EventBus } from '../../../shared/event-bus.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
-import type { NestedAnalysisRunner } from '../../../core/tools/analysis-workbench/types.js';
+import type {
+  NestedAnalysisRunner,
+  SandboxExecutionPort,
+} from '../../../shared/contracts/sandbox-analysis-contracts.js';
+
+export type {
+  ChildProcessCodeExecutionBoundary,
+  GatewayProcessExecutionBoundary,
+  SandboxBrokerExecutionBoundary,
+  SandboxCodeExecutionBoundary,
+  SandboxCodeExecutionRequest,
+  SandboxCodeExecutionResponse,
+  SandboxDeniedCapability,
+  SandboxExecutionBoundary,
+  SandboxExecutionPort,
+  SandboxHostHelper,
+  ShellExecView,
+} from '../../../shared/contracts/sandbox-analysis-contracts.js';
 
 export interface GitStatusView {
   branch: string;
@@ -30,18 +47,6 @@ export interface GitCommitView {
   filesChanged: number;
 }
 
-export interface ShellExecView {
-  command: string;
-  args: string[];
-  cwd: string;
-  exitCode: number | null;
-  stdout: string;
-  stderr: string;
-  timedOut: boolean;
-  truncated: boolean;
-  durationMs: number;
-}
-
 export interface FsListView {
   paths: string[];
   scannedEntries: number;
@@ -50,73 +55,6 @@ export interface FsListView {
   truncated: boolean;
   scanLimitReached: boolean;
   entryLimitReached: boolean;
-}
-
-export interface SandboxBrokerExecutionBoundary {
-  kind: 'sandbox_broker';
-  isolatedFromGatewaySecrets: true;
-  brokerId?: string;
-}
-
-export interface GatewayProcessExecutionBoundary {
-  kind: 'gateway_process';
-  isolatedFromGatewaySecrets: false;
-  reason: string;
-}
-
-export type SandboxExecutionBoundary =
-  | SandboxBrokerExecutionBoundary
-  | GatewayProcessExecutionBoundary;
-
-export type SandboxDeniedCapability =
-  | 'filesystem'
-  | 'network'
-  | 'process'
-  | 'module_import'
-  | 'global_escape'
-  | 'child_process'
-  | 'environment';
-
-export interface ChildProcessCodeExecutionBoundary {
-  kind: 'child_process';
-  isolatedFromGatewaySecrets: true;
-  securityPosture: 'out_of_process_default_deny';
-  protocol: 'analysis-workbench-child-v1';
-  deniedCapabilities: readonly SandboxDeniedCapability[];
-  reason: string;
-}
-
-export type SandboxCodeExecutionBoundary = ChildProcessCodeExecutionBoundary;
-
-export type SandboxHostHelper = (...args: any[]) => unknown | Promise<unknown>;
-
-export interface SandboxCodeExecutionRequest {
-  code: string;
-  timeoutMs: number;
-  memoryCeilingBytes?: number;
-  initialLocals: Record<string, unknown>;
-  helperNames: readonly string[];
-  hostHelpers: Readonly<Record<string, SandboxHostHelper>>;
-}
-
-export interface SandboxCodeExecutionResponse {
-  output: string[];
-  error: string | null;
-  finalAnswer: string | null;
-  locals: Record<string, unknown>;
-}
-
-export interface SandboxExecutionPort {
-  readonly boundary: SandboxExecutionBoundary;
-  readonly codeExecutionBoundary: SandboxCodeExecutionBoundary;
-  shellExec: (
-    command: string,
-    args?: string[],
-    options?: { cwd?: string; timeoutMs?: number; maxOutputChars?: number },
-  ) => Promise<ShellExecView>;
-  executeCode: (
-    request: SandboxCodeExecutionRequest,
-  ) => Promise<SandboxCodeExecutionResponse>;
 }
 
 export type { ModuleRecord } from '../../../system/modules/types.js';

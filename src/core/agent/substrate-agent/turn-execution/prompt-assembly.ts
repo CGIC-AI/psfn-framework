@@ -56,10 +56,9 @@ import type { ResolvedAuthorContext, UserRuntimeProfile } from '../runtime-conte
 import { renderBackgroundCompletionsBlock } from '../../completion-notices.js';
 import { renderCanaryPromptMarker } from '../../../cogsec/canary/canary-token.js';
 import type { TurnExecutionObservability } from './observability.js';
+import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
 
 const log = createComponentLogger('SubstrateAgent');
-type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
-type TurnSessionIdentity = import('./contracts.js').TurnSessionIdentity;
 
 interface DynamicSuffixRenderSection {
   identifier: string;

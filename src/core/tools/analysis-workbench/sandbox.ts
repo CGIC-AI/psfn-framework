@@ -5,12 +5,14 @@ import type { AnalysisWorkbenchEvidence } from './types.js';
 import type {
   ExecuteResult,
   GatewayREPLCapabilities,
-  SandboxCodeExecutionBoundary,
   SandboxBudgetRef,
   SandboxDeps,
+} from '../../../boundary/sandbox/capabilities/contracts.js';
+import type {
+  SandboxCodeExecutionBoundary,
   SandboxExecutionPort,
   SandboxHostHelper,
-} from '../../../boundary/sandbox/capabilities/contracts.js';
+} from '../../../shared/contracts/sandbox-analysis-contracts.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { withChildProcessSandboxExecutionPort } from '../../../boundary/sandbox/sandbox-execution-port.js';
 import {

@@ -11,7 +11,12 @@ import type { CapabilityTier, CompositionalPolicyConfig } from '../../../system/
 import type { ChargePolicyConfig } from '../../../system/config/charge-policy-config.js';
 import type { ApprovalQueuePort } from '../../../system/capabilities/approval-queue-port.js';
 import type { ModuleRegistryMutation } from '../../../system/modules/types.js';
-import type { SandboxExecutionPort } from '../../../boundary/sandbox/capabilities/contracts.js';
+import type { SandboxExecutionPort } from '../../../shared/contracts/sandbox-analysis-contracts.js';
+
+export type {
+  NestedAnalysisOptions,
+  NestedAnalysisRunner,
+} from '../../../shared/contracts/sandbox-analysis-contracts.js';
 
 export interface AnalysisWorkbenchBudget {
   maxIterations: number;      // default 15
@@ -66,17 +71,6 @@ export interface REPLMutationPolicy {
   allowRepoMutation?: boolean;
   allowWorkspaceWrite?: boolean;
 }
-
-export interface NestedAnalysisOptions {
-  maxIterations?: number;
-  maxTokens?: number;
-  maxWallTimeMs?: number;
-}
-
-export type NestedAnalysisRunner = (
-  task: string,
-  options?: NestedAnalysisOptions,
-) => Promise<string>;
 
 export const DEFAULT_REPL_TIER_BUDGETS: REPLConfig['tierBudgets'] = {
   nursery: {

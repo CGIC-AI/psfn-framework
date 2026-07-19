@@ -23,9 +23,9 @@ import {
   type TurnPerformanceEventInput,
   type TurnPerformanceStage,
 } from '../../../../shared/telemetry/turn-performance.js';
+import type { TurnExecutionRuntime } from './contracts.js';
 
 const log = createComponentLogger('SubstrateAgent');
-type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
 
 export type TurnExecutionStageName =
   | 'trust'

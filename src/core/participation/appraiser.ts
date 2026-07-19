@@ -230,13 +230,37 @@ function buildAppraiserSystemPrompt(companionName: string): string {
   ].join('\n');
 }
 
+/**
+ * Strip control, zero-width, and bidi-format characters that would otherwise
+ * survive whitespace collapse and let quoted content (a) forge a visual line
+ * break in the model-visible region — the JS `\s` class does NOT cover NEL
+ * (U+0085), and display-name sanitization historically only stripped CR/LF, so
+ * a Unicode line/paragraph separator (U+2028/U+2029) could inject a second line
+ * into the content-free eligibility block that renders OUTSIDE the datamark
+ * wrapper; (b) hide an injected token inside a word via a zero-width space
+ * ("ig<ZWSP>nore"); or (c) reorder rendering via a bidi override (U+202E).
+ *
+ * Runs BEFORE wrapper-collision neutralization so a wrapper tag split by a
+ * zero-width character first normalizes back to the tag we then neutralize,
+ * rather than slipping past the `untrusted_context` word-boundary match.
+ */
+function stripUnsafeControlChars(text: string): string {
+  return text
+    // Zero-width, bidi-format, isolates, and byte-order marks -> removed (reveals hidden tokens).
+    .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/gu, '')
+    // C0/C1 controls, DEL, NEL, and line/paragraph separators -> a plain space.
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/gu, ' ');
+}
+
 /** Neutralize wrapper-tag collisions so quoted content cannot forge the datamark boundary. */
 function neutralizeWrapperCollisions(text: string): string {
   return text.replace(/<\s*\/?\s*untrusted_context\b[^<>]*>?/giu, '[wrapper-collision-removed]');
 }
 
 function sanitizeMessageBody(content: string, charCap: number): string {
-  const collapsed = neutralizeWrapperCollisions(content).replace(/\s+/gu, ' ').trim();
+  const collapsed = neutralizeWrapperCollisions(stripUnsafeControlChars(content))
+    .replace(/\s+/gu, ' ')
+    .trim();
   if (collapsed.length === 0) {
     return '[empty]';
   }
@@ -245,7 +269,12 @@ function sanitizeMessageBody(content: string, charCap: number): string {
 
 function sanitizeDisplayName(name: string): string {
   const displayNameCap = 80;
-  const cleaned = neutralizeWrapperCollisions(name).replace(/[\r\n]+/gu, ' ').trim();
+  // Collapse ALL whitespace (matching the body), not just CR/LF, so a Unicode
+  // line/paragraph separator in an author name cannot inject a second visual
+  // line into the eligibility block, which renders outside the datamark wrapper.
+  const cleaned = neutralizeWrapperCollisions(stripUnsafeControlChars(name))
+    .replace(/\s+/gu, ' ')
+    .trim();
   if (cleaned.length === 0) {
     return 'unknown';
   }

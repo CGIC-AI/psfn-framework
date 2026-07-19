@@ -1,9 +1,9 @@
 // Capability refusal matrix for the live shakedown harness (65rk.6).
 //
 // This is an executable expectation catalog, not a replacement capability
-// implementation. Safe allowed-handler outcomes come from persisted turn
-// records; refusal and eligibility-only outcomes come from a host invocation
-// of the production gate/resolver. The literals below intentionally mirror the
+// implementation. Live allow/refusal outcomes come from persisted turn records;
+// only explicit eligibility-only outcomes come from a host invocation of the
+// production gate/resolver. The literals below intentionally mirror the
 // operator-reviewed contract so source-level drift tests can compare them with
 // tiers.ts while actual decisions remain production-derived.
 
@@ -100,14 +100,14 @@ export const CAPABILITY_MATRIX_PROBES = Object.freeze([
     executionId: 'identity_write_base',
     toolName: 'identity',
     args: { action: 'cancel_stage', stage_id: '__matrix_missing_stage__' },
-    safety: 'eligibility_only',
+    safety: 'no_op_mutation',
   }),
   probe({
     token: 'identity.write.operator',
     executionId: 'identity_write_operator',
     toolName: 'identity',
     args: { action: 'cancel_stage', stage_id: '__matrix_missing_stage__' },
-    safety: 'eligibility_only',
+    safety: 'no_op_mutation',
   }),
   probe({
     token: 'memory.write',
@@ -303,6 +303,18 @@ function requireDedicatedExternalSinks(options) {
 function withRunArgs(probeEntry, options) {
   const { runToken } = options;
   switch (probeEntry.executionId) {
+    case 'identity_write_base':
+      return {
+        ...probeEntry.args,
+        stage_id: `matrix-missing-base-stage-${runToken}`,
+        layer_id: options.baseLayerId,
+      };
+    case 'identity_write_operator':
+      return {
+        ...probeEntry.args,
+        stage_id: `matrix-missing-operator-stage-${runToken}`,
+        layer_id: options.operatorLayerId,
+      };
     case 'memory_write':
       return { ...probeEntry.args, content: `capability-matrix-scratch-${runToken}` };
     case 'external_discord':
@@ -369,20 +381,28 @@ export function buildCapabilityMatrixExecutionPlan(options) {
   const runToken = String(options.runToken ?? '').trim();
   if (!runToken) throw new Error('Capability matrix requires a non-empty runToken');
   requireDedicatedExternalSinks(options);
+  if (typeof options.baseLayerId !== 'string' || options.baseLayerId.trim().length === 0) {
+    throw new Error('Capability matrix requires a deployed base prompt-layer id');
+  }
+  if (typeof options.operatorLayerId !== 'string' || options.operatorLayerId.trim().length === 0) {
+    throw new Error('Capability matrix requires a deployed operator prompt-layer id');
+  }
 
   // Rows whose live execution would durably mutate identity/memory even in the
   // ALLOW case (persona/scratchpad writes) or that the operator explicitly keeps
   // eligibility-only (lifecycle restart/rebuild) are never dispatched through the
-  // live agent; their outcome comes from the in-process production gate. Every
-  // other row — including capability REFUSALS — is dispatched through the deployed
-  // runtime so miswired gating in the live agent is observable, not masked by an
-  // in-process sentinel (operator P1, 65rk rf2). Each refusal probe carries a
-  // fixture-scoped blast radius in its args (guaranteed-absent ids, scratch
-  // branch names, dedicated test sinks) so a gate breach can only touch state the
-  // probe itself created. The email ALLOW rows also join the eligibility-only set
-  // as a machine-readable exemption (psfn-framework-gvic): production email
-  // delivery is unimplemented, so the artifact records them as a known gap rather
-  // than live coverage.
+  // live agent; their outcome comes from the in-process production gate. The
+  // base/operator identity rows use cancel_stage against guaranteed-missing stage
+  // ids plus real typed layer ids, so they are safe live no-ops and exercise the
+  // deployed tool's dynamic capability resolver. Every other row — including
+  // capability REFUSALS — is dispatched through the deployed runtime so miswired
+  // gating in the live agent is observable, not masked by an in-process sentinel.
+  // Each refusal probe carries a fixture-scoped blast radius in its args
+  // (guaranteed-absent ids, scratch branch names, dedicated test sinks) so a gate
+  // breach can only touch state the probe itself created. The email ALLOW rows
+  // also join the eligibility-only set as a machine-readable exemption
+  // (psfn-framework-gvic): production email delivery is unimplemented, so the
+  // artifact records them as a known gap and the verdict remains incomplete.
   const eligibilityOnly = CAPABILITY_MATRIX_PROBES
     .filter((entry) => entry.safety === 'eligibility_only' || isEmailAllowExemption(entry, tier))
     .map((entry) => (
@@ -669,13 +689,17 @@ export function evaluateCapabilityMatrix({
   });
   const tierMatches = normalizedObservedTier === tier;
   const rowMismatchCount = rows.filter((row) => !row.matches).length;
+  const incompleteCount = rows.filter((row) => row.exemption !== undefined).length;
+  const mismatchCount = rowMismatchCount + (tierMatches ? 0 : 1);
   return {
     expectedTier: tier,
     observedTier: normalizedObservedTier,
     tierMatches,
     rows,
     rowMismatchCount,
-    mismatchCount: rowMismatchCount + (tierMatches ? 0 : 1),
+    mismatchCount,
+    incompleteCount,
+    certificationComplete: mismatchCount === 0 && incompleteCount === 0,
   };
 }
 
@@ -706,6 +730,17 @@ export function collectCapabilityMatrixProofFailures(grid) {
   if (grid.mismatchCount !== 0) {
     failures.push(
       `capability matrix has ${grid.mismatchCount ?? 'unknown'} expected-vs-actual mismatch(es)`,
+    );
+  }
+  const exemptedRows = rows.filter((row) => row?.exemption !== undefined);
+  if (exemptedRows.length > 0) {
+    const labels = exemptedRows.map((row) => {
+      const ref = typeof row.exemption?.ref === 'string' ? row.exemption.ref : 'untracked';
+      return `${String(row.token)} (${ref})`;
+    });
+    failures.push(
+      'capability matrix certification is incomplete: unimplemented exemption(s) '
+      + `${labels.join(', ')}`,
     );
   }
   return failures;

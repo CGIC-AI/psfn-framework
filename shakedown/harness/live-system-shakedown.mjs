@@ -2997,6 +2997,8 @@ function buildCapabilityMatrixCase(ctx) {
     discordTarget: optionalEnv('PSFN_MATRIX_DISCORD_TARGET'),
     emailTarget: optionalEnv('PSFN_MATRIX_EMAIL_TARGET'),
     dedicatedSinkConfirmation: optionalEnv('PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED'),
+    baseLayerId: ctx.promptBaseLayer?.id,
+    operatorLayerId: ctx.promptOperatorLayer?.id,
   });
   const activationTools = [...new Set(
     executionPlan.executions

@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import { buildChatHeaders, postChatCompletion } from '../lib/probe.mjs';
 import {
   validateBackupEncryptionRoundTripProof,
+  validateBackgroundModelDriveProof,
   validateModelLaneAttributionProof,
 } from '../lib/hardening-proofs.mjs';
 import {
@@ -58,27 +59,23 @@ const BACKUP_FLIP_FIELD_CANDIDATES = Object.freeze([
 const VISION_PNG_BASE64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==';
 
-// Scope the spend ledger to THIS case: rows on the case session (interactive +
-// vision foreground turns are operator_visible and carry the case session id)
-// plus any background-lane rows in the case window (the emotion-appraisal
-// background job is companion_private, so its session/turn ids are 'unknown' and
-// it can only be scoped by lane + window). This replaces the previous
-// time-window-only filter that let every unrelated concurrent row into the
-// proof (osln). $1 = case start, $2 = case end, $3 = case session id.
+// Scope the spend ledger to THIS case: foreground rows carry the case session
+// id, while the emotion-appraisal call carries the source turn id. The
+// lane+turn predicate excludes unrelated concurrent background work. $1 = case
+// session id; $2 = the source turn whose successful appraisal landed usage.
 const MODEL_USAGE_QUERY = `
   select slot_key, provider, model, charge_lane, charge_surface, purpose,
          recorded_at_ms, turn_id, session_id
   from model_usage_events
-  where recorded_at_ms >= $1
-    and recorded_at_ms <= $2
-    and (session_id = $3 or charge_lane = 'background')
+  where session_id = $1
+    or (charge_lane = 'background' and turn_id = $2)
   order by recorded_at_ms asc
 `;
 
 const BACKGROUND_ROW_COUNT_QUERY = `
   select count(*)::int as count
   from model_usage_events
-  where recorded_at_ms >= $1 and charge_lane = 'background'
+  where turn_id = $1 and charge_lane = 'background'
 `;
 
 const TERMINAL_BACKGROUND_JOB_STATES = new Set(['succeeded', 'failed', 'stale_discarded']);
@@ -160,7 +157,7 @@ async function waitForEmotionAppraisal(services, turnId) {
   if (typeof turnId !== 'string' || turnId.length === 0) return null;
   for (let attempt = 0; attempt < 80; attempt += 1) {
     const jobs = await services.pgAll(
-      `select kind, state
+      `select job_id, kind, source_turn_id, state
        from agent_background_work_jobs
        where source_turn_id = $1 and kind = 'emotion_appraisal';`,
       [turnId],
@@ -169,7 +166,11 @@ async function waitForEmotionAppraisal(services, turnId) {
       ? jobs.find((job) => job.kind === 'emotion_appraisal')
       : null;
     if (appraisal && TERMINAL_BACKGROUND_JOB_STATES.has(appraisal.state)) {
-      return appraisal.state;
+      return {
+        jobId: appraisal.job_id ?? appraisal.jobId ?? null,
+        sourceTurnId: appraisal.source_turn_id ?? appraisal.sourceTurnId ?? turnId,
+        state: appraisal.state,
+      };
     }
     await sleep(250);
   }
@@ -180,15 +181,17 @@ async function waitForEmotionAppraisal(services, turnId) {
 // 'background' lane, but its periodic gate only opens once turnsSinceLast >= the
 // appraisal turn cadence (runtime default 5; see src/core/emotion/appraisal.ts).
 // The interactive + vision turns already advanced the counter for this session;
-// drive additional benign turns until a background-lane usage row lands (or the
-// budget is exhausted), awaiting each turn's appraisal job so the counter
-// advances deterministically between sends. Residual risk: if an operator raised
-// the cadence above the warmup budget the background row never lands and the
-// proof fails closed with a clear "no background lane row" message.
-async function driveBackgroundLane({ services, sessionId, apiUserId, baselineMs }) {
+// drive additional benign turns until a SUCCEEDED appraisal for one exact source
+// turn lands a background-lane usage row. Unrelated background work cannot
+// satisfy the exact turn predicate. Residual risk: if an operator raised the
+// cadence above the warmup budget the proof fails closed with a clear message.
+async function driveBackgroundLane({ services, sessionId, apiUserId }) {
   const maxWarmupTurns = 10;
   let warmupTurns = 0;
   let backgroundObserved = false;
+  let backgroundJobState = null;
+  let backgroundTurnId = null;
+  let backgroundJobId = null;
   for (let i = 0; i < maxWarmupTurns; i += 1) {
     const turn = await postAndWait({
       services,
@@ -197,14 +200,39 @@ async function driveBackgroundLane({ services, sessionId, apiUserId, baselineMs 
       message: `${BACKGROUND_WARMUP_MESSAGE} (${i + 1})`,
     });
     warmupTurns += 1;
-    await waitForEmotionAppraisal(services, turn.turnRecord?.turnId);
-    const backgroundRows = Number(await services.pgScalar(BACKGROUND_ROW_COUNT_QUERY, [baselineMs]));
+    const appraisal = await waitForEmotionAppraisal(services, turn.turnRecord?.turnId);
+    backgroundJobState = appraisal?.state ?? null;
+    if (appraisal?.state !== 'succeeded') continue;
+    const sourceTurnId = appraisal.sourceTurnId;
+    const backgroundRows = Number(
+      await services.pgScalar(BACKGROUND_ROW_COUNT_QUERY, [sourceTurnId]),
+    );
     if (Number.isFinite(backgroundRows) && backgroundRows > 0) {
       backgroundObserved = true;
+      backgroundTurnId = sourceTurnId;
+      backgroundJobId = appraisal.jobId;
       break;
     }
   }
-  return { warmupTurns, backgroundObserved };
+  return {
+    warmupTurns,
+    backgroundObserved,
+    backgroundJobState,
+    backgroundTurnId,
+    backgroundJobId,
+  };
+}
+
+export function buildModelLaneExpectations({
+  interactiveTurnId,
+  visionTurnId,
+  backgroundTurnId,
+}) {
+  return [
+    { turnId: interactiveTurnId, purpose: 'chat' },
+    { turnId: visionTurnId, purpose: 'vision' },
+    { lane: 'background', turnId: backgroundTurnId, purpose: 'background' },
+  ];
 }
 
 // ── Backup owner-file save-path helpers (irzz.1) ──
@@ -270,9 +298,9 @@ export function buildHardeningCases(ctx, services) {
         'each charged lane resolves, via the owner file, to exactly the model that owner slot assigns',
       ),
       execute: async ({ sessionId, apiUserId }) => {
-        const baselineMs = Date.now() - 2_000;
         // (1) Interactive lane: a plain foreground chat turn.
         const interactive = await postAndWait({ services, sessionId, apiUserId, message: SPEND_MESSAGE });
+        const interactiveTurnId = interactive.turnRecord?.turnId ?? null;
         // (2) Vision workload: a foreground turn carrying an inline image, whose
         //     turn record (and turnId) we recover so the image turn is attributed
         //     at turn granularity against the models.json vision owner slot.
@@ -280,9 +308,11 @@ export function buildHardeningCases(ctx, services) {
         const visionTurnId = vision.turnRecord?.turnId ?? null;
         // (3) Background lane: drive benign turns until the periodic
         //     emotion-appraisal gate opens and its background-lane call lands.
-        const background = await driveBackgroundLane({ services, sessionId, apiUserId, baselineMs });
-        const endMs = Date.now() + 2_000;
-        const ledgerRows = await services.pgAll(MODEL_USAGE_QUERY, [baselineMs, endMs, sessionId]);
+        const background = await driveBackgroundLane({ services, sessionId, apiUserId });
+        const ledgerRows = await services.pgAll(
+          MODEL_USAGE_QUERY,
+          [sessionId, background.backgroundTurnId],
+        );
         const modelsConfig = services.readJsonIfExists(modelsPath);
         return normalizeCustomOutcome({
           sessionId,
@@ -293,23 +323,24 @@ export function buildHardeningCases(ctx, services) {
             modelLane: {
               modelsConfig,
               ledgerRows,
-              // Each lane's owner slot is resolved from models.json purposes; the
-              // concrete model id is never hardcoded here. The interactive lane
-              // covers the plain chat turn; the inline-image turn is attributed by
-              // turn_id against the vision owner slot; the background lane covers
-              // the emotion-appraisal call against the background owner slot. The
-              // vision expectation carries the recovered turnId (or null, which
-              // fails the proof closed — the image turn must produce a row).
-              laneExpectations: [
-                { lane: 'interactive', purpose: 'chat' },
-                { turnId: visionTurnId, purpose: 'vision' },
-                { lane: 'background', purpose: 'background' },
-              ],
+              // Each purpose is bound to the exact turn this case drove. Chat and
+              // vision remain distinguishable despite sharing the interactive
+              // charge lane; background additionally intersects the exact source
+              // turn with charge_lane=background.
+              laneExpectations: buildModelLaneExpectations({
+                interactiveTurnId,
+                visionTurnId,
+                backgroundTurnId: background.backgroundTurnId,
+              }),
               driven: {
+                interactiveTurnId,
                 visionInline: Boolean(vision.response),
                 visionTurnId,
                 backgroundWarmupTurns: background.warmupTurns,
                 backgroundObserved: background.backgroundObserved,
+                backgroundJobState: background.backgroundJobState,
+                backgroundTurnId: background.backgroundTurnId,
+                backgroundJobId: background.backgroundJobId,
               },
             },
           },
@@ -325,9 +356,13 @@ export function buildHardeningCases(ctx, services) {
           }
           : null,
       }),
-      validatePersistedProof: ({ outcome }) => validateModelLaneAttributionProof(
-        outcome?.sideChecks?.modelLane ?? {},
-      ),
+      validatePersistedProof: ({ outcome }) => {
+        const modelLane = outcome?.sideChecks?.modelLane ?? {};
+        return [
+          ...validateBackgroundModelDriveProof(modelLane.driven),
+          ...validateModelLaneAttributionProof(modelLane),
+        ];
+      },
     },
     {
       id: 'backup_encryption_roundtrip',

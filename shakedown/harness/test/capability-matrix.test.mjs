@@ -158,19 +158,20 @@ const SINK_OPTS = {
   discordTarget: '123456789012345678',
   emailTarget: 'matrix@example.test',
   dedicatedSinkConfirmation: 'dedicated-test-sinks',
+  baseLayerId: 'prompt-base-fixture',
+  operatorLayerId: 'prompt-operator-fixture',
 };
 
 // Rows that stay eligibility-only (never dispatched through the live agent):
 // persona/scratchpad writes (durable identity/memory mutation even in the ALLOW
-// case) and the operator-reserved lifecycle carve-out.
+// case) and the operator-reserved lifecycle carve-out. Base/operator identity
+// refusals use safe missing-stage no-ops with typed layer ids and run live.
 // Note: external.email appears here only because production email delivery is
 // unimplemented (gvic exemption) — the ALLOW row proves eligibility via the
 // production gate instead of live-dispatching. Only asserted at apprentice+
 // (nursery never grants the token, so no exemption row exists there).
 const ELIGIBILITY_ONLY_TOKENS = [
   'identity.write.runtime',
-  'identity.write.base',
-  'identity.write.operator',
   'memory.write',
   'external.email',
   'lifecycle.restart',
@@ -185,7 +186,7 @@ const apprenticePlan = buildCapabilityMatrixExecutionPlan({
 assert.deepEqual(
   apprenticePlan.eligibilityOnly.map((entry) => entry.token),
   ELIGIBILITY_ONLY_TOKENS,
-  'stateful identity, scratchpad, email (gvic exemption), and lifecycle probes use the production gate without executing',
+  'durable persona/scratchpad writes, email (gvic exemption), and lifecycle probes use the production gate without executing',
 );
 // The email ALLOW row carries its machine-readable exemption and is never live-dispatched.
 const apprenticeEmailEligibility = apprenticePlan.eligibilityOnly.find(
@@ -213,6 +214,8 @@ assert.ok(
 // by an in-process sentinel. Confirm the previously-omitted denied rows appear in
 // the live execution plan at a tier that denies them.
 for (const executionId of [
+  'identity_write_base',
+  'identity_write_operator',
   'memory_delete',
   'external_companion',
   'git_write',
@@ -233,7 +236,7 @@ const autonomousPlan = buildCapabilityMatrixExecutionPlan({
 assert.deepEqual(
   autonomousPlan.eligibilityOnly.map((entry) => entry.token),
   ELIGIBILITY_ONLY_TOKENS,
-  'autonomous stateful, email (gvic exemption), and lifecycle probes remain eligibility-only',
+  'autonomous durable persona/scratchpad writes, email (gvic exemption), and lifecycle probes remain eligibility-only',
 );
 assert.ok(
   autonomousPlan.executions.every((entry) => !entry.executionId.startsWith('lifecycle_')),
@@ -404,10 +407,11 @@ assert.equal(worldControlApprentice.actual, 'refuse_capability');
 assert.equal(worldControlApprentice.evidence, 'persisted_tool_result');
 assert.equal(worldControlApprentice.matches, true);
 
-// Eligibility-only rows still resolve through the in-process production gate.
+// The safe missing-stage identity probe traverses the deployed runtime, so a
+// nursery/apprentice gate-wiring regression cannot be hidden by the host gate.
 const baseRow = apprenticeGrid.rows.find((row) => row.token === 'identity.write.base');
 assert.equal(baseRow.actual, 'refuse_capability');
-assert.equal(baseRow.evidence, 'production_gate');
+assert.equal(baseRow.evidence, 'persisted_tool_result');
 assert.equal(baseRow.matches, true);
 // (c) lifecycle rows remain eligibility-only.
 const restartRow = apprenticeGrid.rows.find((row) => row.token === 'lifecycle.restart');
@@ -476,12 +480,17 @@ assert.ok(
   breachProofFailures.some((msg) => /gate breach/iu.test(msg) && msg.includes('git.write')),
   'the proof failure names the breached capability token (git.write)',
 );
-// (2) A clean all-match grid yields NO proof failures — green stays green.
+// (2) A fully covered all-match grid yields NO proof failures — green stays green.
 assert.equal(apprenticeGrid.mismatchCount, 0);
 assert.deepEqual(
-  collectCapabilityMatrixProofFailures(apprenticeGrid),
+  collectCapabilityMatrixProofFailures({
+    mismatchCount: 0,
+    incompleteCount: 0,
+    certificationComplete: true,
+    rows: [],
+  }),
   [],
-  'an all-match grid (mismatchCount 0, no gate_breach) produces no proof failures',
+  'an all-match, non-exempt grid produces no proof failures',
 );
 // (3) A missing verdict fails closed rather than passing silently.
 assert.ok(
@@ -633,7 +642,7 @@ const malformedLive = malformedLiveGrid.rows.find((row) => row.token === 'world.
 assert.equal(malformedLive.actual, 'malformed_capability_refusal');
 assert.equal(malformedLive.matches, false);
 
-// A malformed PRODUCTION-GATE observation on an eligibility-only row is rejected.
+// A malformed PRODUCTION-GATE observation on an eligibility-only lifecycle row is rejected.
 const malformedGateGrid = evaluateCapabilityMatrix({
   expectedTier: 'apprentice',
   observedTier: 'apprentice',
@@ -641,19 +650,19 @@ const malformedGateGrid = evaluateCapabilityMatrix({
   outcomesByExecutionId: apprenticeOutcomes,
   gateObservationsByExecutionId: {
     ...apprenticeGates,
-    identity_write_base: {
-      ...apprenticeGates.identity_write_base,
+    lifecycle_restart: {
+      ...apprenticeGates.lifecycle_restart,
       result: {
-        ...apprenticeGates.identity_write_base.result,
+        ...apprenticeGates.lifecycle_restart.result,
         details: {
-          ...apprenticeGates.identity_write_base.result.details,
+          ...apprenticeGates.lifecycle_restart.result.details,
           tier: 'nursery',
         },
       },
     },
   },
 });
-const malformedGate = malformedGateGrid.rows.find((row) => row.token === 'identity.write.base');
+const malformedGate = malformedGateGrid.rows.find((row) => row.token === 'lifecycle.restart');
 assert.equal(malformedGate.actual, 'malformed_production_gate');
 assert.equal(malformedGate.matches, false);
 
@@ -772,8 +781,9 @@ assert.equal(fenceBreach.matches, false);
   );
 }
 
-// Email is an eligibility-only exemption (gvic): it is proven via the production
-// gate (never live-dispatched) and its grid row carries the exemption reason.
+// Email is an eligibility-only exemption (gvic): its gate expectation can match,
+// but the known-unimplemented handler keeps release certification incomplete and
+// produces a case-level proof failure so coverage cannot be awarded.
 for (const tier of ['apprentice', 'autonomous']) {
   const plan = tier === 'apprentice' ? apprenticePlan : autonomousPlan;
   const outcomes = tier === 'apprentice' ? apprenticeOutcomes : autonomousOutcomes;
@@ -794,7 +804,14 @@ for (const tier of ['apprentice', 'autonomous']) {
     { reason: 'runtime_unimplemented', ref: 'psfn-framework-gvic' },
     `${tier} email row records the machine-readable exemption`,
   );
-  assert.equal(grid.mismatchCount, 0, `${tier} grid stays green with the email exemption`);
+  assert.equal(grid.mismatchCount, 0, `${tier} eligibility expectations still match`);
+  assert.equal(grid.incompleteCount, 1, `${tier} grid records one unimplemented exemption`);
+  assert.equal(grid.certificationComplete, false, `${tier} exemption prevents certification`);
+  assert.match(
+    collectCapabilityMatrixProofFailures(grid).join('\n'),
+    /incomplete.*external\.email.*psfn-framework-gvic/iu,
+    `${tier} exemption becomes an unconditional case-level failure`,
+  );
 }
 
 const wrongScopedArgsGrid = evaluateCapabilityMatrix({

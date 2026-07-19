@@ -140,10 +140,14 @@ issue, the dedicated external test sinks — so if the gate is broken and the ac
 executes it can only touch state the probe itself created. That catastrophic case
 is classified distinctly as `gate_breach` (the denied action ran), fails the row
 loudly, and still triggers the scoped cleanup (branch deletion / issue closure
-proof). Durable identity/scratchpad writes (`identity.write.*`, `memory.write`) and
-lifecycle `restart`/`rebuild` stay **eligibility-only** — resolved by the
-in-process production gate in `production-capability-probe.ts` — because executing
-them live would durably mutate identity/memory or trip the lifecycle carve-out.
+proof). Durable runtime-persona/scratchpad writes (`identity.write.runtime`,
+`memory.write`) and lifecycle `restart`/`rebuild` stay **eligibility-only** —
+resolved by the in-process production gate in `production-capability-probe.ts` —
+because executing the runtime-persona/scratchpad writes live would mutate state,
+and lifecycle uses the explicit operator carve-out. `identity.write.base` and
+`identity.write.operator` are the exception: they run live with real typed layer
+ids and guaranteed-missing `cancel_stage` ids, reaching the deployed dynamic
+resolver without changing a layer.
 
 | Variable | Value | Purpose |
 | --- | --- | --- |
@@ -159,7 +163,9 @@ therefore downgrades the email ALLOW rows to **eligibility-only**: the productio
 capability gate is exercised (proving the capability is granted) without
 executing the unimplemented dispatch, and the grid row carries a machine-readable
 `exemption: { reason: 'runtime_unimplemented', ref: 'psfn-framework-gvic' }` so
-the artifact shows it as a known gap, not coverage. Discord allow probes are
+the artifact shows it as a known gap, not coverage. Any such exemption makes the
+matrix certification incomplete and fails the case, leaving the tool-stack
+coverage row red until the handler is implemented. Discord allow probes are
 unchanged (still live-dispatched), and `requireDedicatedExternalSinks` is not
 weakened (`PSFN_MATRIX_EMAIL_TARGET` is still validated). When email delivery is
 wired under `psfn-framework-gvic`, flip these rows back to live-dispatch.
@@ -334,7 +340,7 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 | July hardening — DNLL owner migration upgrade path (dut9/k8si/kk6k) | own staged upgrade session | pre-upgrade owner snapshot → ship RC over an existing deployment → assert scheduler/caretaker owner migration; never a fresh-bootstrap round rider | staged session — fresh-bootstrap lanes never execute migration code |
 | July hardening — Voice reply streaming and barge-in (mmo9.8/mmo9.6) | kube, autonomous | operator voice session: committed-segment VoiceReplyStream plus preemptive interrupt/cancel | operator-eyes; voice ceremony not scriptable headless |
 | July hardening — Preemptable provider capacity admission (mmo9.5) | local + Pi-class, spot check | partner free-play load drives the admission controller to preempt under capacity pressure; observed via perf telemetry | needs real load; Pi-class blind spot |
-| July hardening — Boundary spend accounting and model-lane routing (mmo9.7.3) | local + kube, all tiers | harness: `model_usage_events` slot_key cross-checked against models.json owner slots per lane | config-resolved model ids, never hardcoded |
+| July hardening — Boundary spend accounting and model-lane routing (mmo9.7.3) | local + kube, all tiers | harness: case-owned chat and vision turn IDs plus the successful emotion-appraisal source turn are cross-checked in `model_usage_events` against models.json owner slots | config-resolved model ids, never hardcoded; unrelated concurrent background rows cannot satisfy the proof |
 | July hardening — Garden UX wave 2 (irzz) | both | Garden behavioral sweep over the reworked settings, IA, and navigation routes | operator-eyes UX; behavior, not HTTP 200s |
 | July hardening — Settings save preserves backup.json encryption block (irzz.1) | local, all tiers | harness: snapshot backup.json, drive a unified settings save, assert the required encryption block survives | irzz.1 regression shape |
 | July hardening — Backup GFS retention (q9ra) | local | `verify:backup-restore` floor plus operator check of grandfather-father-son pruning against backup.json retention counts | retention pruning verified out-of-round |

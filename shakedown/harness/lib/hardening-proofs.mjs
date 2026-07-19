@@ -104,8 +104,9 @@ function normalizeLedgerRow(row) {
     chargeSurface: pick(row, 'charge_surface', 'chargeSurface'),
     purpose: pick(row, 'purpose', 'purpose'),
     // Per-turn / per-session correlation columns (migrations.ts model_usage_events
-    // idx_model_usage_events_request / _session_time). Populated for
-    // operator_visible turns; 'unknown' for companion_private background rows.
+    // idx_model_usage_events_request / _session_time). Companion-private work
+    // deliberately collapses these to 'unknown'; the case-driven emotion
+    // appraisal used here is operator-visible and retains its source turn id.
     turnId: pick(row, 'turn_id', 'turnId'),
     sessionId: pick(row, 'session_id', 'sessionId'),
   };
@@ -118,16 +119,15 @@ function normalizeLedgerRow(row) {
  * inputs:
  *   modelsConfig     — parsed models.json owner file.
  *   ledgerRows       — model_usage_events rows (snake or camel columns).
- *   laneExpectations — [{ lane|turnId, purpose }] entries: the rows they select
+ *   laneExpectations — [{ lane?, turnId?, purpose }] entries: the rows they select
  *                      must have been charged the model the owner file assigns to
  *                      that purpose's primary slot. `purpose` resolves to a model
  *                      id via models.json — no model name is hardcoded. Each entry
- *                      scopes rows by EITHER `lane` (charge_lane match — used for
- *                      the distinct 'background' lane) OR `turnId` (turn_id match —
- *                      used to attribute a specific foreground turn without pulling
- *                      in the whole interactive lane); `turnId` wins when both are
- *                      present. osln scopes the query to the case's session so a
- *                      lane match no longer sweeps in unrelated concurrent rows.
+ *                      may scope by `lane`, `turnId`, or their intersection. Exact
+ *                      turn scoping keeps chat and vision independent even though
+ *                      both charge the interactive lane; lane+turn scoping binds
+ *                      the background assertion to the appraisal driven by this
+ *                      case rather than unrelated concurrent work.
  */
 export function validateModelLaneAttributionProof({ modelsConfig, ledgerRows, laneExpectations = [] }) {
   const failures = [];
@@ -178,18 +178,19 @@ export function validateModelLaneAttributionProof({ modelsConfig, ledgerRows, la
       failures.push('lane expectation must name a purpose and either a lane or a turnId');
       continue;
     }
-    // turn_id wins so a specific foreground turn can be attributed without
-    // sweeping in every other row on its charge lane.
-    const scopeLabel = hasTurn ? `turn ${turnId}` : `${lane} lane`;
+    const scopeLabel = hasTurn && hasLane
+      ? `turn ${turnId} on ${lane} lane`
+      : (hasTurn ? `turn ${turnId}` : `${lane} lane`);
     const slotId = purposePrimary[purpose];
     if (!slotId || !slotCatalog[slotId]) {
       failures.push(`models.json has no primary owner slot for purpose ${purpose} (${scopeLabel})`);
       continue;
     }
     const expectedModel = slotCatalog[slotId].model;
-    const scopedRows = hasTurn
-      ? rows.filter((row) => row.turnId === turnId)
-      : rows.filter((row) => row.chargeLane === lane);
+    const scopedRows = rows.filter((row) => (
+      (!hasTurn || row.turnId === turnId)
+      && (!hasLane || row.chargeLane === lane)
+    ));
     if (scopedRows.length === 0) {
       failures.push(`spend ledger has no ${scopeLabel} row to attribute against the ${purpose} owner slot`);
       continue;
@@ -203,6 +204,25 @@ export function validateModelLaneAttributionProof({ modelsConfig, ledgerRows, la
     }
   }
 
+  return failures;
+}
+
+export function validateBackgroundModelDriveProof(driven) {
+  if (!driven || typeof driven !== 'object' || Array.isArray(driven)) {
+    return ['case-owned background appraisal evidence is missing'];
+  }
+  const failures = [];
+  if (driven.backgroundJobState !== 'succeeded') {
+    failures.push(
+      `case-owned background appraisal did not succeed (state=${String(driven.backgroundJobState)})`,
+    );
+  }
+  if (typeof driven.backgroundTurnId !== 'string' || driven.backgroundTurnId.length === 0) {
+    failures.push('case-owned background appraisal source turn is missing');
+  }
+  if (driven.backgroundObserved !== true) {
+    failures.push('case-owned background appraisal produced no model-usage row');
+  }
   return failures;
 }
 

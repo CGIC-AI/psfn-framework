@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   resolveOwnerSlots,
   validateBackupEncryptionRoundTripProof,
+  validateBackgroundModelDriveProof,
   validateModelLaneAttributionProof,
 } from '../lib/hardening-proofs.mjs';
 
@@ -16,6 +17,12 @@ function modelsConfig() {
         identity: { provider: 'openrouter', model: 'z-ai/glm-5' },
         purposes: [
           { purpose: 'chat', primary: true },
+        ],
+      },
+      {
+        id: 'vision',
+        identity: { provider: 'google', model: 'google/gemini-flash-lite' },
+        purposes: [
           { purpose: 'vision', primary: true },
         ],
       },
@@ -56,7 +63,12 @@ test('owner-slot resolution mirrors models.json id -> identity model/provider an
   const { slotCatalog, purposePrimary, failures } = resolveOwnerSlots(modelsConfig());
   assert.deepEqual(failures, []);
   assert.deepEqual(slotCatalog.primary, { model: 'z-ai/glm-5', provider: 'openrouter' });
+  assert.deepEqual(slotCatalog.vision, {
+    model: 'google/gemini-flash-lite',
+    provider: 'google',
+  });
   assert.equal(purposePrimary.chat, 'primary');
+  assert.equal(purposePrimary.vision, 'vision');
   assert.equal(purposePrimary.background, 'extraction');
 
   assert.match(
@@ -151,6 +163,58 @@ test('model-lane attribution can scope an expectation to a single turn_id', () =
   );
 });
 
+test('model-lane attribution intersects lane and turn scopes for background proof', () => {
+  const rows = ledgerRows();
+  rows[0].turn_id = 'turn-appraisal';
+  rows[1].turn_id = 'turn-appraisal';
+  assert.deepEqual(
+    validateModelLaneAttributionProof({
+      modelsConfig: modelsConfig(),
+      ledgerRows: rows,
+      laneExpectations: [
+        { lane: 'background', turnId: 'turn-appraisal', purpose: 'background' },
+      ],
+    }),
+    [],
+    'the foreground row for the same source turn is excluded from the background expectation',
+  );
+});
+
+test('background model drive proof requires the case-owned appraisal to succeed and land usage', () => {
+  assert.deepEqual(
+    validateBackgroundModelDriveProof({
+      backgroundJobState: 'succeeded',
+      backgroundTurnId: 'turn-appraisal',
+      backgroundObserved: true,
+    }),
+    [],
+  );
+  assert.match(
+    validateBackgroundModelDriveProof({
+      backgroundJobState: 'failed',
+      backgroundTurnId: 'turn-appraisal',
+      backgroundObserved: true,
+    }).join('\n'),
+    /did not succeed/u,
+  );
+  assert.match(
+    validateBackgroundModelDriveProof({
+      backgroundJobState: 'succeeded',
+      backgroundTurnId: null,
+      backgroundObserved: true,
+    }).join('\n'),
+    /source turn is missing/u,
+  );
+  assert.match(
+    validateBackgroundModelDriveProof({
+      backgroundJobState: 'succeeded',
+      backgroundTurnId: 'turn-appraisal',
+      backgroundObserved: false,
+    }).join('\n'),
+    /no model-usage row/u,
+  );
+});
+
 test('model-lane attribution attributes the inline-vision turn against the vision owner slot', () => {
   const rows = ledgerRows();
   rows[0].turn_id = 'turn-chat';
@@ -158,9 +222,9 @@ test('model-lane attribution attributes the inline-vision turn against the visio
   // slot. Its `purpose` COLUMN is the correlation stage string 'agent.turn.prompt'
   // (never 'vision') — the expectation's purpose only resolves the OWNER slot.
   const visionRow = {
-    slot_key: 'primary',
-    provider: 'openrouter',
-    model: 'z-ai/glm-5',
+    slot_key: 'vision',
+    provider: 'google',
+    model: 'google/gemini-flash-lite',
     charge_lane: 'interactive',
     charge_surface: 'moaRoundBase',
     purpose: 'agent.turn.prompt',
@@ -191,7 +255,7 @@ test('model-lane attribution attributes the inline-vision turn against the visio
       ledgerRows: [...rows, drift],
       laneExpectations: [{ turnId: 'turn-vision', purpose: 'vision' }],
     }).join('\n'),
-    /turn turn-vision routed to model deepseek\/deepseek-v3\.2 but the vision owner slot resolves to z-ai\/glm-5/u,
+    /turn turn-vision routed to model deepseek\/deepseek-v3\.2 but the vision owner slot resolves to google\/gemini-flash-lite/u,
   );
   // A null turnId (the harness never recovered the vision turn record) → fails closed.
   assert.match(

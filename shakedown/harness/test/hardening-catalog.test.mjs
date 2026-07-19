@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   HARDENING_CASE_IDS,
+  buildModelLaneExpectations,
   buildHardeningCases,
 } from '../cases/hardening.mjs';
 
@@ -106,6 +107,21 @@ test('hardening catalog authors only the probe-supported hardening rows', () => 
   assert.ok(!ids.has('voice_reply_streaming'), 'voice stays operator-eyes');
   assert.ok(!ids.has('fleet_passkey_ceremony'), 'passkey ceremony stays operator-eyes');
   assert.ok(!ids.has('dnll_owner_migration'), 'DNLL migration is a staged session, not a case');
+});
+
+test('model attribution scopes chat, vision, and background to case-owned turns', () => {
+  assert.deepEqual(
+    buildModelLaneExpectations({
+      interactiveTurnId: 'turn-chat',
+      visionTurnId: 'turn-vision',
+      backgroundTurnId: 'turn-background',
+    }),
+    [
+      { turnId: 'turn-chat', purpose: 'chat' },
+      { turnId: 'turn-vision', purpose: 'vision' },
+      { lane: 'background', turnId: 'turn-background', purpose: 'background' },
+    ],
+  );
 });
 
 test('the backup round-trip case self-derives a benign scalar flip and full payloads from backup.json', async () => {

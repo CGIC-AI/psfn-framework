@@ -146,7 +146,16 @@
       errorMessage = '';
       if (mode !== 'poll') draftState = cloneState(requestedState);
       updateUrl(requestedState);
-      void loadChannelBreakdown(requestedState, mode);
+      const groupedChannels = nextUsage.groupedBy.channelId;
+      if (groupedChannels !== undefined) {
+        latestChannelRequestId += 1;
+        channelBreakdown = groupedChannels;
+        channelBreakdownStateKey = accountingStateToSearchParams(requestedState).toString();
+        channelBreakdownLoading = false;
+        channelBreakdownError = '';
+      } else {
+        void loadChannelBreakdown(requestedState, mode);
+      }
     } catch (error) {
       if (requestId !== latestRequestId) return;
       errorMessage = error instanceof Error ? error.message : 'Failed to load persisted accounting data.';
@@ -293,6 +302,7 @@
       byPurpose={usage.byPurpose}
       byTool={usage.byTool}
       byChannel={channelBreakdown}
+      detailByCallKind={usage.byCallKind}
       channelLoading={channelBreakdownLoading}
       channelError={channelBreakdownError}
       onDrilldown={drilldown}

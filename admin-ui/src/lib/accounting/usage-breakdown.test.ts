@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { ModelUsageBreakdown } from '../../../../src/shared/telemetry/model-usage.js';
-import { buildUsageBreakdownRows } from './usage-breakdown';
+import { buildUsageBreakdownRows, sumUsageBreakdownMetrics } from './usage-breakdown';
 
 function breakdown(key: string, cost: number): ModelUsageBreakdown {
   return {
@@ -19,7 +19,10 @@ describe('buildUsageBreakdownRows', () => {
   it('keeps the eight highest-cost rows and rolls the remainder into Other', () => {
     const rows = buildUsageBreakdownRows(
       Array.from({ length: 10 }, (_, index) => breakdown(`purpose-${index + 1}`, index + 1)),
-      { dimension: 'purpose' },
+      {
+        dimension: 'purpose',
+        detailTotals: { totalTokens: 900, effectiveCostUsd: 60 },
+      },
     );
 
     expect(rows.map(row => row.key)).toEqual([
@@ -34,25 +37,23 @@ describe('buildUsageBreakdownRows', () => {
       'Other',
     ]);
     expect(rows.at(-1)).toMatchObject({
-      calls: 3,
-      totalTokens: 45,
-      effectiveCostUsd: 3,
+      totalTokens: 120,
+      effectiveCostUsd: 8,
       drillValue: null,
     });
   });
 
-  it('sorts the visible top rows by the requested metric and direction', () => {
+  it('sorts the visible highest-cost rows in the requested direction', () => {
     const rows = buildUsageBreakdownRows([
-      { ...breakdown('brief', 3), totalTokens: 20 },
-      { ...breakdown('long', 2), totalTokens: 300 },
-      { ...breakdown('medium', 1), totalTokens: 100 },
+      breakdown('high', 3),
+      breakdown('middle', 2),
+      breakdown('low', 1),
     ], {
       dimension: 'purpose',
-      sortBy: 'totalTokens',
       sortDirection: 'asc',
     });
 
-    expect(rows.map(row => row.key)).toEqual(['brief', 'medium', 'long']);
+    expect(rows.map(row => row.key)).toEqual(['low', 'middle', 'high']);
   });
 
   it('maps model drill values and disables drilling for the unknown tool row', () => {
@@ -70,5 +71,15 @@ describe('buildUsageBreakdownRows', () => {
       drillValue: 'anthropic/claude-sonnet',
     });
     expect(tool).toMatchObject({ label: 'No tool', drillValue: null });
+  });
+
+  it('sums a complete detail partition for privacy-safe Other subtraction', () => {
+    expect(sumUsageBreakdownMetrics([
+      breakdown('chat', 3),
+      breakdown('embedding', 2),
+    ])).toEqual({
+      totalTokens: 75,
+      effectiveCostUsd: 5,
+    });
   });
 });

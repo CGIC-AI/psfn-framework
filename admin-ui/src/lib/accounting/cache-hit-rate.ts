@@ -7,14 +7,8 @@ interface CacheRateBucket extends CacheTokenCounts {
   startMs: number;
 }
 
-export interface CacheHitRatePoint {
-  startMs: number;
-  ratePercent: number;
-}
-
 export interface CacheHitRateTrend {
-  points: CacheHitRatePoint[];
-  values: number[];
+  ratePercents: number[];
   aggregateRatePercent: number;
 }
 
@@ -27,13 +21,8 @@ export function deriveCacheHitRateTrend(
   buckets: readonly CacheRateBucket[],
   totals: CacheTokenCounts,
 ): CacheHitRateTrend {
-  const points = buckets.map(bucket => ({
-    startMs: bucket.startMs,
-    ratePercent: cacheHitRatePercent(bucket),
-  }));
   return {
-    points,
-    values: points.map(point => point.ratePercent),
+    ratePercents: buckets.map(cacheHitRatePercent),
     aggregateRatePercent: cacheHitRatePercent(totals),
   };
 }

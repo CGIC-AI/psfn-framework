@@ -18,7 +18,7 @@
 
   const trend = $derived(deriveCacheHitRateTrend(buckets, totals));
   const chartLabel = $derived(
-    `Cache hit rate by time bucket: ${trend.values.map(formatPercent).join(', ') || 'no buckets'}`,
+    `Cache hit rate by time bucket: ${trend.ratePercents.map(formatPercent).join(', ') || 'no buckets'}`,
   );
 </script>
 
@@ -41,7 +41,7 @@
     {:else}
       <div class="flex min-h-44 items-center justify-center" style={`color: ${seriesColor(1)}`}>
         <Sparkline
-          values={trend.values}
+          values={trend.ratePercents}
           width={640}
           height={160}
           padding={6}

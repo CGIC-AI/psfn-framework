@@ -1,15 +1,16 @@
 <script lang="ts">
   import {
     buildUsageBreakdownRows,
+    sumUsageBreakdownMetrics,
     type UsageBreakdownDimension,
-    type UsageBreakdownSort,
-    type UsageBreakdownSortDirection,
+    type UsageBreakdownRow,
   } from '$lib/accounting/usage-breakdown';
   import { formatInteger, formatUsd, labelDimension } from '$lib/accounting/format';
   import { seriesColor } from './charts/chart-colors';
   import type {
     ModelUsageBreakdown,
     ModelUsageGroupDimension,
+    ModelUsageSortDirection,
   } from '../../../../../src/shared/telemetry/model-usage.js';
 
   interface Props {
@@ -17,6 +18,7 @@
     byPurpose: ModelUsageBreakdown[];
     byTool: ModelUsageBreakdown[];
     byChannel: ModelUsageBreakdown[];
+    detailByCallKind: ModelUsageBreakdown[];
     channelLoading: boolean;
     channelError: string;
     onDrilldown: (dimension: ModelUsageGroupDimension, value: string) => void;
@@ -29,27 +31,30 @@
     items: ModelUsageBreakdown[];
   }
 
-  type PanelSortState = Record<UsageBreakdownDimension, {
-    sortBy: UsageBreakdownSort;
-    sortDirection: UsageBreakdownSortDirection;
-  }>;
+  type PanelSortState = Record<UsageBreakdownDimension, ModelUsageSortDirection>;
 
   let {
     byModel,
     byPurpose,
     byTool,
     byChannel,
+    detailByCallKind,
     channelLoading,
     channelError,
     onDrilldown,
   }: Props = $props();
 
   let panelSort = $state<PanelSortState>({
-    model: { sortBy: 'effectiveCostUsd', sortDirection: 'desc' },
-    purpose: { sortBy: 'effectiveCostUsd', sortDirection: 'desc' },
-    toolName: { sortBy: 'effectiveCostUsd', sortDirection: 'desc' },
-    channelId: { sortBy: 'effectiveCostUsd', sortDirection: 'desc' },
+    model: 'desc',
+    purpose: 'desc',
+    toolName: 'desc',
+    channelId: 'desc',
   });
+
+  // Call kind has five canonical values, so this operator-visible partition is complete even though
+  // the higher-cardinality breakdowns are server-capped. It keeps Other accurate without mixing in
+  // companion-private totals.
+  const detailTotals = $derived(sumUsageBreakdownMetrics(detailByCallKind));
 
   const panels = $derived<PanelDefinition[]>([
     {
@@ -78,15 +83,20 @@
     },
   ]);
 
-  function setSort(dimension: UsageBreakdownDimension, sortBy: UsageBreakdownSort): void {
-    panelSort[dimension].sortBy = sortBy;
-  }
-
   function toggleDirection(dimension: UsageBreakdownDimension): void {
-    const state = panelSort[dimension];
-    state.sortDirection = state.sortDirection === 'desc' ? 'asc' : 'desc';
+    panelSort[dimension] = panelSort[dimension] === 'desc' ? 'asc' : 'desc';
   }
 </script>
+
+{#snippet rowContent(row: UsageBreakdownRow)}
+  <span class="min-w-0">
+    <span class="block truncate text-sm font-medium text-shadow-900" title={row.label}>{row.label}</span>
+    <span class="mt-0.5 block text-xs text-shadow-500">{formatInteger(row.totalTokens)} tokens</span>
+  </span>
+  <span class="text-right">
+    <span class="block text-sm font-semibold text-shadow-900">{formatUsd(row.effectiveCostUsd)}</span>
+  </span>
+{/snippet}
 
 <section class="space-y-3" aria-labelledby="usage-attribution-heading">
   <div>
@@ -99,8 +109,8 @@
       {@const sort = panelSort[panel.dimension]}
       {@const rows = buildUsageBreakdownRows(panel.items, {
         dimension: panel.dimension,
-        sortBy: sort.sortBy,
-        sortDirection: sort.sortDirection,
+        sortDirection: sort,
+        detailTotals: panel.items.length > 0 ? detailTotals : undefined,
       })}
       {@const maximumCost = Math.max(0, ...rows.map(row => row.effectiveCostUsd))}
       <article class="card-garden overflow-hidden" aria-labelledby={`usage-${panel.dimension}-heading`}>
@@ -111,28 +121,14 @@
               <p class="mt-1 text-xs text-shadow-600">{panel.description}</p>
             </div>
             <div class="flex items-center gap-1.5">
-              <label class="sr-only" for={`usage-${panel.dimension}-sort`}>Sort {panel.title.toLowerCase()}</label>
-              <select
-                id={`usage-${panel.dimension}-sort`}
-                value={sort.sortBy}
-                onchange={(event) => setSort(
-                  panel.dimension,
-                  (event.currentTarget as HTMLSelectElement).value as UsageBreakdownSort,
-                )}
-                class="rounded-lg border border-bark-300 bg-bark-50 px-2 py-1.5 text-xs text-shadow-700 focus:border-gold-400 focus:outline-none"
-              >
-                <option value="effectiveCostUsd">Cost</option>
-                <option value="totalTokens">Tokens</option>
-                <option value="calls">Calls</option>
-              </select>
               <button
                 type="button"
                 onclick={() => toggleDirection(panel.dimension)}
                 class="rounded-lg border border-bark-300 bg-bark-50 px-2.5 py-1.5 text-xs text-shadow-700 hover:border-gold-400 hover:bg-gold-50"
-                aria-label={`${sort.sortDirection === 'desc' ? 'Sort ascending' : 'Sort descending'} for ${panel.title.toLowerCase()}`}
-                title={sort.sortDirection === 'desc' ? 'Descending' : 'Ascending'}
+                aria-label={`${sort === 'desc' ? 'Sort cost ascending' : 'Sort cost descending'} for ${panel.title.toLowerCase()}`}
+                title={`Effective cost, ${sort === 'desc' ? 'descending' : 'ascending'}`}
               >
-                {sort.sortDirection === 'desc' ? '↓' : '↑'}
+                Cost {sort === 'desc' ? '↓' : '↑'}
               </button>
             </div>
           </div>
@@ -161,25 +157,11 @@
                   class="relative z-10 grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2 text-left hover:bg-gold-50/60 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-gold-400"
                   title={`Filter ${labelDimension(panel.dimension)} to ${row.drillValue}`}
                 >
-                  <span class="min-w-0">
-                    <span class="block truncate text-sm font-medium text-shadow-900" title={row.label}>{row.label}</span>
-                    <span class="mt-0.5 block text-xs text-shadow-500">{formatInteger(row.calls)} calls</span>
-                  </span>
-                  <span class="text-right">
-                    <span class="block text-sm font-semibold text-shadow-900">{formatUsd(row.effectiveCostUsd)}</span>
-                    <span class="mt-0.5 block text-xs text-shadow-500">{formatInteger(row.totalTokens)} tokens</span>
-                  </span>
+                  {@render rowContent(row)}
                 </button>
               {:else}
                 <div class="relative z-10 grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-3 py-2">
-                  <span class="min-w-0">
-                    <span class="block truncate text-sm font-medium text-shadow-900" title={row.label}>{row.label}</span>
-                    <span class="mt-0.5 block text-xs text-shadow-500">{formatInteger(row.calls)} calls</span>
-                  </span>
-                  <span class="text-right">
-                    <span class="block text-sm font-semibold text-shadow-900">{formatUsd(row.effectiveCostUsd)}</span>
-                    <span class="mt-0.5 block text-xs text-shadow-500">{formatInteger(row.totalTokens)} tokens</span>
-                  </span>
+                  {@render rowContent(row)}
                 </div>
               {/if}
             </div>

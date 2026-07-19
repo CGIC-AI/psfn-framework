@@ -11,11 +11,7 @@ describe('deriveCacheHitRateTrend', () => {
       cacheReadTokens: 50,
     });
 
-    expect(trend.points).toEqual([
-      { startMs: 1_000, ratePercent: 20 },
-      { startMs: 2_000, ratePercent: 50 },
-    ]);
-    expect(trend.values).toEqual([20, 50]);
+    expect(trend.ratePercents).toEqual([20, 50]);
     expect(trend.aggregateRatePercent).toBe(25);
   });
 
@@ -27,7 +23,7 @@ describe('deriveCacheHitRateTrend', () => {
       cacheReadTokens: 0,
     });
 
-    expect(trend.values).toEqual([0]);
+    expect(trend.ratePercents).toEqual([0]);
     expect(trend.aggregateRatePercent).toBe(0);
   });
 });

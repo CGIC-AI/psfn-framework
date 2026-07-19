@@ -2,29 +2,31 @@ import {
   MODEL_USAGE_UNKNOWN_DIMENSION,
   type ModelUsageBreakdown,
   type ModelUsageGroupDimension,
+  type ModelUsageSortDirection,
 } from '../../../../src/shared/telemetry/model-usage.js';
 
 export type UsageBreakdownDimension = Extract<
   ModelUsageGroupDimension,
   'model' | 'purpose' | 'toolName' | 'channelId'
 >;
-export type UsageBreakdownSort = 'effectiveCostUsd' | 'totalTokens' | 'calls';
-export type UsageBreakdownSortDirection = 'asc' | 'desc';
+
+export interface UsageBreakdownTotals {
+  totalTokens: number;
+  effectiveCostUsd: number;
+}
 
 export interface UsageBreakdownRow {
   key: string;
   label: string;
   drillValue: string | null;
-  calls: number;
   totalTokens: number;
   effectiveCostUsd: number;
-  isOther: boolean;
 }
 
 interface BuildUsageBreakdownRowsOptions {
   dimension: UsageBreakdownDimension;
-  sortBy?: UsageBreakdownSort;
-  sortDirection?: UsageBreakdownSortDirection;
+  sortDirection?: ModelUsageSortDirection;
+  detailTotals?: UsageBreakdownTotals;
 }
 
 function modelDrillValue(key: string): string {
@@ -41,21 +43,27 @@ function toRow(
     key: item.key,
     label: unknownTool ? 'No tool' : item.key,
     drillValue: unknownTool ? null : dimension === 'model' ? modelDrillValue(item.key) : item.key,
-    calls: item.calls,
     totalTokens: item.totalTokens,
     effectiveCostUsd: item.totalCostUsd,
-    isOther: false,
   };
+}
+
+export function sumUsageBreakdownMetrics(
+  items: readonly ModelUsageBreakdown[],
+): UsageBreakdownTotals {
+  return items.reduce<UsageBreakdownTotals>((total, item) => ({
+    totalTokens: total.totalTokens + item.totalTokens,
+    effectiveCostUsd: total.effectiveCostUsd + item.totalCostUsd,
+  }), { totalTokens: 0, effectiveCostUsd: 0 });
 }
 
 export function buildUsageBreakdownRows(
   items: readonly ModelUsageBreakdown[],
   options: BuildUsageBreakdownRowsOptions,
 ): UsageBreakdownRow[] {
-  const sortBy = options.sortBy ?? 'effectiveCostUsd';
   const direction = options.sortDirection ?? 'desc';
   const compareMetric = (left: UsageBreakdownRow, right: UsageBreakdownRow): number => (
-    left[sortBy] - right[sortBy]
+    left.effectiveCostUsd - right.effectiveCostUsd
   );
   const ranked = items
     .map(item => toRow(item, options.dimension))
@@ -66,20 +74,20 @@ export function buildUsageBreakdownRows(
     (direction === 'asc' ? compareMetric(left, right) : -compareMetric(left, right))
     || left.key.localeCompare(right.key)
   ));
-  if (remainder.length === 0) return visible;
-
-  return [...visible, remainder.reduce<UsageBreakdownRow>((other, row) => ({
-    ...other,
-    calls: other.calls + row.calls,
-    totalTokens: other.totalTokens + row.totalTokens,
-    effectiveCostUsd: other.effectiveCostUsd + row.effectiveCostUsd,
-  }), {
+  const visibleTotals = visible.reduce<UsageBreakdownTotals>((total, row) => ({
+    totalTokens: total.totalTokens + row.totalTokens,
+    effectiveCostUsd: total.effectiveCostUsd + row.effectiveCostUsd,
+  }), { totalTokens: 0, effectiveCostUsd: 0 });
+  const servedTotals = options.detailTotals ?? sumUsageBreakdownMetrics(items);
+  const other: UsageBreakdownRow = {
     key: 'Other',
     label: 'Other',
     drillValue: null,
-    calls: 0,
-    totalTokens: 0,
-    effectiveCostUsd: 0,
-    isOther: true,
-  })];
+    totalTokens: Math.max(0, servedTotals.totalTokens - visibleTotals.totalTokens),
+    effectiveCostUsd: Math.max(0, servedTotals.effectiveCostUsd - visibleTotals.effectiveCostUsd),
+  };
+  const hasOther = remainder.length > 0
+    || other.totalTokens > 0
+    || other.effectiveCostUsd > 0;
+  return hasOther ? [...visible, other] : visible;
 }

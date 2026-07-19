@@ -144,6 +144,27 @@ describe('AdminModelUsageDataService', () => {
     aggregate.expensiveEvents.push(privateEvent);
 
     const visible = usageFixture();
+    aggregate.previousPeriod = {
+      sinceMs: 0,
+      untilMs: 1,
+      totals: {
+        ...aggregate.totals,
+        calls: 3,
+        successfulCalls: 3,
+        totalTokens: 2700,
+        providerCostUsd: 0.8,
+        totalCostUsd: 0.8,
+      },
+    };
+    visible.previousPeriod = {
+      sinceMs: 0,
+      untilMs: 1,
+      totals: {
+        ...visible.totals,
+        providerCostUsd: 0.1,
+        totalCostUsd: 0.1,
+      },
+    };
     const store: ModelUsageQueryPort = {
       getUsageData: vi.fn(async query => (
         query?.telemetryVisibility === 'operator_visible' ? visible : aggregate
@@ -154,6 +175,7 @@ describe('AdminModelUsageDataService', () => {
     const data = await service.getModelUsageData({ limit: 10 });
 
     expect(data.totals).toEqual(aggregate.totals);
+    expect(data.previousPeriod).toEqual(aggregate.previousPeriod);
     expect(data.byModel).toEqual(visible.byModel);
     expect(data.byPurpose).toEqual(visible.byPurpose);
     expect(data.byTool).toEqual(visible.byTool);

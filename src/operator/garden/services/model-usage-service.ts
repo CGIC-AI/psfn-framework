@@ -44,10 +44,12 @@ function combineAggregateTotalsWithOperatorDetails(
   aggregateData: ModelUsageData,
   operatorData: ModelUsageData,
 ): ModelUsageData {
+  const { previousPeriod: _operatorPreviousPeriod, ...operatorDetails } = operatorData;
   return {
-    ...operatorData,
+    ...operatorDetails,
     query: aggregateData.query,
     totals: aggregateData.totals,
+    ...(aggregateData.previousPeriod ? { previousPeriod: aggregateData.previousPeriod } : {}),
     recentEvents: operatorData.recentEvents.filter(event => event.telemetryVisibility !== 'companion_private'),
     expensiveEvents: operatorData.expensiveEvents.filter(event => event.telemetryVisibility !== 'companion_private'),
   };

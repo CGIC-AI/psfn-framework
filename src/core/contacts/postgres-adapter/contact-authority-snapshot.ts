@@ -1,4 +1,7 @@
-import type { PostgresContactStore } from './store.js';
+import type {
+  PostgresContactOperationContext,
+  PostgresContactStoreClass,
+} from './operation-map.js';
 import {
   parseVerifiedDiscordContactAuthoritySnapshot,
   type VerifiedDiscordContactAuthoritySnapshot,
@@ -31,7 +34,7 @@ function positiveVersion(value: string, field: string): number {
 }
 
 async function readVerifiedDiscordContactAuthority(
-  this: PostgresContactStore,
+  this: PostgresContactOperationContext,
   contactId: string,
   providerSubjectId: string,
 ): Promise<VerifiedDiscordContactAuthoritySnapshot | undefined> {
@@ -100,7 +103,7 @@ async function readVerifiedDiscordContactAuthority(
 }
 
 export function installPostgresContactAuthoritySnapshotOperations(
-  Store: typeof PostgresContactStore,
+  Store: PostgresContactStoreClass,
 ): void {
   Store.prototype.readVerifiedDiscordContactAuthority = readVerifiedDiscordContactAuthority;
 }

@@ -81,6 +81,7 @@ import { parseIcpConversationCorrelation } from '../../shared/contracts/icp-auto
 import {
   createModelUsageBucketBoundaries,
   resolveModelUsageRange,
+  resolvePreviousModelUsagePeriod,
 } from '../../shared/telemetry/model-usage-range.js';
 
 const DEFAULT_EVENT_LIMIT = 200;
@@ -1690,6 +1691,14 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
     const prepared = await this.prepareQuery(query);
     const { query: normalizedQuery, resolvedRange, where } = prepared;
     const groupedByDimensions = normalizedQuery.groupBy ?? [];
+    const previousPeriod = resolvePreviousModelUsagePeriod(resolvedRange);
+    const previousWhere = previousPeriod
+      ? buildWhere({
+          ...normalizedQuery,
+          sinceMs: previousPeriod.sinceMs,
+          untilMs: previousPeriod.untilMs,
+        })
+      : undefined;
     const [
       totals,
       timeSeries,
@@ -1703,6 +1712,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       expensiveEvents,
       attributionCoverage,
       groupedByEntries,
+      previousTotals,
     ] = await Promise.all([
       this.queryTotals(where),
       this.queryTimeSeries(where, resolvedRange),
@@ -1719,11 +1729,17 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
         dimension,
         await this.queryBreakdown(where, MODEL_USAGE_DIMENSION_SQL[dimension]),
       ] as const)),
+      previousWhere
+        ? this.queryTotals(previousWhere)
+        : Promise.resolve<ModelUsageTotals | undefined>(undefined),
     ]);
     return {
       query: normalizedQuery,
       resolvedRange,
       totals,
+      ...(previousPeriod && previousTotals
+        ? { previousPeriod: { ...previousPeriod, totals: previousTotals } }
+        : {}),
       timeSeries,
       groups,
       eventPage,

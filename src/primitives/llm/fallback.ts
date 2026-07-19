@@ -1,5 +1,6 @@
 import { createComponentLogger } from '../../shared/logger.js';
 import type { CorrelationMetadata } from '../../shared/contracts/runtime.js';
+import { toError } from '../../shared/utils/errors.js';
 import { classifyLLMError } from './error-classify.js';
 import type { RoutingCandidate, RoutingPurpose } from './routing.js';
 import { toCorrelationLogFields } from './correlation.js';
@@ -34,10 +35,6 @@ export class NonRecoverableFallbackError extends Error {
 interface CooldownCandidate {
   candidate: RoutingCandidate;
   cooldownUntil: number;
-}
-
-function toError(error: unknown): Error {
-  return error instanceof Error ? error : new Error(String(error));
 }
 
 function unwrapFallbackError(error: unknown): Error {

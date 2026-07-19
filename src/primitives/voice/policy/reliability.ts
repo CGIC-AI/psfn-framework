@@ -1,5 +1,6 @@
 import type { RetryOptions } from '../../llm/retry.js';
 import { withRetry } from '../../llm/retry.js';
+import { abortError, toError } from '../../../shared/utils/errors.js';
 
 // `tts_first_byte` budgets the synth-request -> first audible chunk window only.
 // It is short and retry-safe so a stalled first byte fails fast and re-synths
@@ -79,14 +80,8 @@ export function resolveVoiceReliabilityBudgets(
   return resolved;
 }
 
-function toError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
-}
-
 function createStageAbortError(stage: VoiceRuntimeStage): Error {
-  const error = new Error(`${stage} stage aborted`);
-  error.name = 'AbortError';
-  return error;
+  return abortError(`${stage} stage aborted`);
 }
 
 function mirrorAbortSignal(signal: AbortSignal | undefined, controller: AbortController): () => void {

@@ -4,6 +4,7 @@ import type {
   BehavioralPatternRow,
   BehavioralPatternSummaryRow,
 } from './postgres-adapters/shared.js';
+import { clampListLimit } from './list-limit.js';
 
 export type {
   BehavioralPatternRow,
@@ -110,7 +111,7 @@ export const MAX_MESSAGE_ID_CHARS = 200;
 export const MAX_RESPONSE_EXCERPT_CHARS = 240;
 export const MAX_PROMOTION_MEMORY_ID_CHARS = 128;
 export const DEFAULT_LIST_LIMIT = 50;
-const MAX_LIST_LIMIT = 500;
+const MAX_BEHAVIORAL_LIST_LIMIT = 500;
 export const DEFAULT_SUMMARY_LIMIT = 4;
 const MAX_SUMMARY_LIMIT = 12;
 const DEFAULT_MINIMUM_SAMPLES_FOR_PROMOTION = 3;
@@ -177,10 +178,7 @@ export function normalizeOutcomeScore(value: number): number {
 }
 
 export function clampLimit(value: number | undefined, fallback: number): number {
-  if (value === undefined || !Number.isFinite(value)) return fallback;
-  const floored = Math.floor(value);
-  if (floored < 1) return 1;
-  return Math.min(floored, MAX_LIST_LIMIT);
+  return clampListLimit(value, fallback, MAX_BEHAVIORAL_LIST_LIMIT);
 }
 
 export function clampSummaryLimit(value: number | undefined): number {

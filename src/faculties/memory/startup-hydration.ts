@@ -1,8 +1,9 @@
 import type { MemoryProvider } from '../../core/agent/contracts.js';
-import type { StartupSessionMetadata } from '../../core/session/manager.js';
-import type { SourceChannelSessionRoute } from '../../core/session/session-routes.js';
 import type { SessionEntry } from '../../core/session/types.js';
-import type { SessionActivitySummary } from '../../persistence/sessions/store.js';
+import {
+  collectHydrationChannelIds,
+  type StartupHydrationChannelSessionManager,
+} from '../../core/session/startup-hydration-channels.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 
@@ -11,12 +12,8 @@ const DEFAULT_RECENT_SESSION_LIMIT = 4;
 const DEFAULT_RECENT_MESSAGE_LIMIT = 18;
 const MAX_HYDRATION_CONTEXT_CHARS = 6_000;
 
-export interface StartupMemoryHydrationSessionManager {
-  resolveStartupSessionMetadata(behavior?: 'reuse_latest_session'): StartupSessionMetadata | null;
-  listRecentSessions(limit?: number): SessionActivitySummary[];
+export interface StartupMemoryHydrationSessionManager extends StartupHydrationChannelSessionManager {
   getRecentMessages(channelId: string, limit?: number): SessionEntry[];
-  listSessionRoutes?(): SourceChannelSessionRoute[];
-  isSessionRetiredOrQuarantined?(logicalSessionId: string): boolean;
 }
 
 export interface StartupMemoryHydrationResult {
@@ -42,29 +39,6 @@ function buildHydrationContextText(entries: readonly SessionEntry[]): string {
     return context;
   }
   return context.slice(context.length - MAX_HYDRATION_CONTEXT_CHARS);
-}
-
-function collectHydrationChannelIds(
-  sessionManager: StartupMemoryHydrationSessionManager,
-  recentSessionLimit: number,
-): string[] {
-  const ids: string[] = [];
-  const seen = new Set<string>();
-  const add = (channelId: string | undefined): void => {
-    const normalized = channelId?.trim();
-    if (!normalized || seen.has(normalized)) return;
-    if (sessionManager.isSessionRetiredOrQuarantined?.(normalized)) return;
-    seen.add(normalized);
-    ids.push(normalized);
-  };
-  for (const route of sessionManager.listSessionRoutes?.() ?? []) {
-    add(route.activeLogicalSessionId);
-  }
-  add(sessionManager.resolveStartupSessionMetadata('reuse_latest_session')?.sessionId);
-  for (const session of sessionManager.listRecentSessions(recentSessionLimit)) {
-    add(session.channelId);
-  }
-  return ids.slice(0, Math.max(1, recentSessionLimit));
 }
 
 export async function hydrateStartupActiveMemoryContexts(options: {

@@ -1,10 +1,16 @@
 import type {
-  TtsAudioChunk,
   TtsAudioEncoding,
   TtsSynthesisRequest,
   TtsSynthesisSession,
   StreamingTtsConnector,
 } from './types.js';
+import { combineAbortSignal } from '../../../../shared/utils/abort-signal.js';
+import { abortError, toError } from '../../../../shared/utils/errors.js';
+import {
+  responseBodyToAudioChunks,
+  responseError,
+  singleChunkSession,
+} from './stream-helpers.js';
 
 export interface ElevenLabsStreamingTtsConfig {
   apiKey: string;
@@ -12,40 +18,6 @@ export interface ElevenLabsStreamingTtsConfig {
   modelId: string;
   endpointBase: string;
   fetchImpl?: typeof fetch;
-}
-
-function abortError(message: string): Error {
-  const error = new Error(message);
-  error.name = 'AbortError';
-  return error;
-}
-
-function toError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
-}
-
-async function responseError(prefix: string, response: Response): Promise<Error> {
-  const body = await response.text().catch(() => '');
-  return new Error(`${prefix}: ${response.status} ${response.statusText} ${body.slice(0, 300)}`);
-}
-
-function combineAbortSignal(primary?: AbortSignal, secondary?: AbortSignal): AbortSignal | undefined {
-  if (!primary) return secondary;
-  if (!secondary) return primary;
-
-  const abortSignalAny = (AbortSignal as unknown as {
-    any?: (signals: AbortSignal[]) => AbortSignal;
-  }).any;
-
-  if (abortSignalAny) {
-    return abortSignalAny([primary, secondary]);
-  }
-
-  const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  primary.addEventListener('abort', onAbort, { once: true });
-  secondary.addEventListener('abort', onAbort, { once: true });
-  return controller.signal;
 }
 
 function resolveOutputFormat(request: TtsSynthesisRequest): string {
@@ -61,74 +33,6 @@ function resolveOutputFormat(request: TtsSynthesisRequest): string {
 
 function resolveEncoding(request: TtsSynthesisRequest): TtsAudioEncoding {
   return request.encoding ?? 'mp3';
-}
-
-function singleChunkSession(
-  audio: Uint8Array,
-  encoding: TtsAudioEncoding,
-  source: TtsAudioChunk['source'],
-): TtsSynthesisSession {
-  return {
-    audio: (async function* streamOneChunk(): AsyncGenerator<TtsAudioChunk> {
-      yield {
-        audio,
-        sequence: 0,
-        isFinal: true,
-        encoding,
-        source,
-      };
-    })(),
-    cancel: async (): Promise<void> => {},
-  };
-}
-
-async function* responseBodyToAudioChunks(
-  body: ReadableStream<Uint8Array>,
-  encoding: TtsAudioEncoding,
-  source: TtsAudioChunk['source'],
-  signal?: AbortSignal,
-): AsyncGenerator<TtsAudioChunk> {
-  const reader = body.getReader();
-  let sequence = 0;
-  let pending: Uint8Array | null = null;
-
-  try {
-    for (;;) {
-      if (signal?.aborted) {
-        throw abortError('TTS streaming aborted');
-      }
-
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value.byteLength === 0) continue;
-
-      if (pending) {
-        yield {
-          audio: pending,
-          sequence,
-          isFinal: false,
-          encoding,
-          source,
-        };
-        sequence += 1;
-      }
-
-      pending = value;
-    }
-
-    if (pending) {
-      yield {
-        audio: pending,
-        sequence,
-        isFinal: true,
-        encoding,
-        source,
-      };
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
-  }
 }
 
 export class ElevenLabsStreamingTtsConnector implements StreamingTtsConnector {
@@ -190,10 +94,16 @@ export class ElevenLabsStreamingTtsConnector implements StreamingTtsConnector {
       }
 
       return {
-        audio: responseBodyToAudioChunks(response.body, encoding, 'stream', combinedSignal),
+        audio: responseBodyToAudioChunks(
+          response.body,
+          encoding,
+          'stream',
+          combinedSignal,
+          'TTS streaming aborted',
+        ),
         cancel: async (reason?: string): Promise<void> => {
           if (!controller.signal.aborted) {
-            controller.abort(abortError(reason ?? 'cancelled'));
+            controller.abort(abortError(reason ?? 'cancelled', 'Request aborted', true));
           }
         },
       };

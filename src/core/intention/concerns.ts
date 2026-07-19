@@ -1,6 +1,7 @@
 import { formatActiveDateTimeLabel } from '../../shared/time/active-timezone.js';
 import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { getConcernSofteningConfig } from './concern-softening.js';
+import { clampListLimit as clampIntentionListLimit } from './list-limit.js';
 
 import {
   ACTIVE_CONCERN_EVIDENCE_KINDS,
@@ -147,7 +148,7 @@ export interface ActiveConcernRow {
 export const MAX_CONCERN_TEXT_CHARS = 500;
 export const MAX_CONCERN_RESOLUTION_CHARS = 400;
 const DEFAULT_LIST_LIMIT = 32;
-export const MAX_LIST_LIMIT = 200;
+export { MAX_LIST_LIMIT } from './list-limit.js';
 const DEFAULT_RUNTIME_CONTEXT_LIMIT = 3;
 const MAX_CONCERN_REF_CHARS = 240;
 const DEFAULT_RECENT_RESOLUTION_WINDOW_MS = 6 * 60 * 60 * 1000;
@@ -528,12 +529,7 @@ export function normalizeFormationVAD(
 }
 
 export function clampListLimit(limit: number | undefined): number {
-  if (limit === undefined || !Number.isFinite(limit)) {
-    return DEFAULT_LIST_LIMIT;
-  }
-  const floored = Math.floor(limit);
-  if (floored < 1) return 1;
-  return Math.min(floored, MAX_LIST_LIMIT);
+  return clampIntentionListLimit(limit, DEFAULT_LIST_LIMIT);
 }
 
 export function normalizeRecentResolutionWindowMs(value: number | undefined): number {

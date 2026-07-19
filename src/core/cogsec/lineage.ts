@@ -5,6 +5,7 @@ import type {
 } from './events.js';
 import type { MemoryProvenance, PurrMemory } from '../../faculties/memory/types.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
+import { uniqueStrings } from '../../shared/utils/strings.js';
 
 export type CogSecLineageAction =
   | 'seal'
@@ -146,10 +147,6 @@ interface ParsedRef {
 interface MatchResult {
   classification: CogSecLineageClassification;
   reason: string;
-}
-
-function uniqueStrings(values: readonly string[]): string[] {
-  return [...new Set(values.map(value => value.trim()).filter(Boolean))];
 }
 
 function normalizePositiveInteger(value: number | undefined): number | undefined {

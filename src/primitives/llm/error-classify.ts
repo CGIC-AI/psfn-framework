@@ -1,3 +1,5 @@
+import { toError } from '../../shared/utils/errors.js';
+
 export type LLMErrorCategory =
   | 'abort'
   | 'context_overflow'
@@ -120,10 +122,6 @@ function readErrorCode(error: ErrorLike): string | undefined {
     return readErrorCode(error.cause as ErrorLike);
   }
   return undefined;
-}
-
-function toError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
 }
 
 export function classifyLLMError(error: unknown): LLMErrorClassification {

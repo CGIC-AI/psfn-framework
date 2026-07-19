@@ -2,6 +2,7 @@ import type { CapabilityAccess } from '../../system/capabilities/gate.js';
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';
 import type { RuntimeToolCatalogEntry } from './tool-catalog.js';
 import type { AdaptiveToolRuntimeState } from './adaptive-tools-telemetry.js';
+import { uniqueStrings } from '../../shared/utils/strings.js';
 
 export type ToolSuggestionAvailabilityStatus =
   | 'active'
@@ -246,10 +247,6 @@ function tokenize(value: string): string[] {
       .map(token => token.trim())
       .filter(token => token.length > 1 && !STOP_WORDS.has(token)),
   )];
-}
-
-function uniqueStrings(values: Iterable<string>): string[] {
-  return [...new Set([...values].map(value => value.trim()).filter(Boolean))];
 }
 
 function scoreTerms(

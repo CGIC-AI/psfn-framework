@@ -1,3 +1,5 @@
+import { toError } from '../../../shared/utils/errors.js';
+
 export type PipelineTaskState =
   | 'idle'
   | 'running'
@@ -167,12 +169,4 @@ export class PipelineTask {
   private isTerminal(state: PipelineTaskState): boolean {
     return state === 'completed' || state === 'stopped' || state === 'cancelled' || state === 'failed';
   }
-}
-
-function toError(error: unknown): Error {
-  if (error instanceof Error) {
-    return error;
-  }
-
-  return new Error(String(error));
 }

@@ -336,10 +336,17 @@ export interface ModelUsageAttributionCoverage {
   byDimension: Record<ModelUsageGroupDimension, ModelUsageDimensionCoverage>;
 }
 
+export interface ModelUsagePeriodComparison {
+  sinceMs: number;
+  untilMs: number;
+  totals: ModelUsageTotals;
+}
+
 export interface ModelUsageData {
   query: ModelUsageQuery;
   resolvedRange: ModelUsageResolvedRange;
   totals: ModelUsageTotals;
+  previousPeriod?: ModelUsagePeriodComparison;
   timeSeries: ModelUsageTimeBucket[];
   groups: ModelUsageGroup[];
   eventPage: ModelUsageEventPage;

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { resolveModelUsageRange } from './model-usage-range.js';
+import {
+  resolveModelUsageRange,
+  resolvePreviousModelUsagePeriod,
+} from './model-usage-range.js';
 
 describe('resolveModelUsageRange', () => {
   it('resolves calendar ranges in the operator timezone with Monday weeks', () => {
@@ -64,5 +67,50 @@ describe('resolveModelUsageRange', () => {
     expect(() => resolveModelUsageRange(query, {
       nowMs: Date.parse('2026-07-14T12:00:00.000Z'),
     })).toThrow(message);
+  });
+});
+
+describe('resolvePreviousModelUsagePeriod', () => {
+  it.each([
+    ['today', '2026-07-14T23:59:59.999Z', '2026-07-13T00:00:00.000Z', '2026-07-14T00:00:00.000Z'],
+    ['week', '2026-07-19T23:59:59.999Z', '2026-07-06T00:00:00.000Z', '2026-07-13T00:00:00.000Z'],
+    ['month', '2026-07-31T23:59:59.999Z', '2026-05-31T00:00:00.000Z', '2026-07-01T00:00:00.000Z'],
+    ['quarter', '2026-09-30T23:59:59.999Z', '2026-03-31T00:00:00.000Z', '2026-07-01T00:00:00.000Z'],
+    ['year', '2026-12-31T23:59:59.999Z', '2025-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z'],
+  ] as const)(
+    'uses the immediately preceding equal-length window for %s',
+    (range, now, previousSince, previousUntil) => {
+      const resolved = resolveModelUsageRange({ range, timezone: 'UTC' }, {
+        nowMs: Date.parse(now),
+      });
+
+      expect(resolvePreviousModelUsagePeriod(resolved)).toEqual({
+        sinceMs: Date.parse(previousSince),
+        untilMs: Date.parse(previousUntil),
+      });
+    },
+  );
+
+  it('shifts a custom half-open window without re-deriving calendar dates', () => {
+    const resolved = resolveModelUsageRange({
+      range: 'custom',
+      timezone: 'America/New_York',
+      sinceMs: Date.parse('2026-07-01T00:00:00.000Z'),
+      untilMs: Date.parse('2026-07-15T00:00:00.000Z'),
+    }, { nowMs: Date.parse('2026-07-20T00:00:00.000Z') });
+
+    expect(resolvePreviousModelUsagePeriod(resolved)).toEqual({
+      sinceMs: Date.parse('2026-06-17T00:00:00.000Z'),
+      untilMs: Date.parse('2026-07-01T00:00:00.000Z'),
+    });
+  });
+
+  it('omits comparison data for the all-time range', () => {
+    const resolved = resolveModelUsageRange({ range: 'all' }, {
+      nowMs: Date.parse('2026-07-20T00:00:00.000Z'),
+      allSinceMs: Date.parse('2025-01-01T00:00:00.000Z'),
+    });
+
+    expect(resolvePreviousModelUsagePeriod(resolved)).toBeUndefined();
   });
 });

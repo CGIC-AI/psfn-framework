@@ -23,6 +23,7 @@ import type { ExtractedFact } from '../types.js';
 import type { WriteResult } from '../writer.js';
 import { ExtractionDrainRequeueError } from './drain-signal.js';
 import { executeAcceptedFactWrites } from './write-execution.js';
+import { runExtractionSideEffects } from './side-effects.js';
 import {
   executeExtractionLlmPass,
   formatExistingFactsSection,
@@ -451,62 +452,26 @@ export async function runExtractionOrchestration(
     await options.assertEffectAllowed?.();
     options.recordExtractionMarker(options.channelId, coveredUpToMessageId);
     await options.emitExtractionEnd(telemetry);
-    const concernIds: string[] = [];
-    if (options.emitConcernCandidates) {
-      await options.assertEffectAllowed?.();
-      const emittedConcernIds = await options.emitConcernCandidates({
-        channelId: options.channelId,
-        triggerReason: options.triggerReason,
-        ...(canonicalContactId ? { canonicalContactId } : {}),
-        ...(turnId ? { turnId } : {}),
-        sourceRef,
-        recentEntries,
-        acceptedFacts: acceptedFactsForConcernCandidates,
-        acceptedWrites,
-        relatedMemories: existing.map(memory => ({
-          id: memory.id,
-          type: memory.type,
-          text: memory.text,
-          importance: memory.importance,
-          confidence: memory.confidence,
-          salience: memory.salience,
-          sourceRef: memory.sourceRef,
-        })),
-      });
-      concernIds.push(...(emittedConcernIds ?? []));
-    }
-    const contactIds: string[] = [];
-    const emotionalFactGroups = acceptedFactsByContact.size > 0
-      ? acceptedFactsByContact
-      : new Map<string | undefined, ExtractedFact[]>([[canonicalContactId, []]]);
-    for (const [sourceContactId, acceptedFacts] of emotionalFactGroups.entries()) {
-      await options.assertEffectAllowed?.();
-      // Awaited (not fire-and-forget) so this durable child settles before the
-      // parent effect receipt is applied and its fence releases (u5bv.6 AC3).
-      const mutatedContactId = await options.maybePersistEmotionalState(
-        sourceContactId,
-        acceptedFacts,
-        recentEntries,
-      );
-      if (mutatedContactId) contactIds.push(mutatedContactId);
-    }
-
-    const refreshGroups = groupAcceptedWritesByContact(acceptedWrites, canonicalContactId);
-    for (const [contactId, writes] of refreshGroups.entries()) {
-      await options.assertEffectAllowed?.();
-      // Awaited for the same reason: no detached durable child may outlive the
-      // parent receipt. The profile write is an idempotent upsert by contact id.
-      await options.maybeRefreshContactProfile(
-        options.channelId,
-        options.triggerReason,
-        contactId,
-        writes,
-      );
-    }
+    const sideEffects = await runExtractionSideEffects({
+      channelId: options.channelId,
+      triggerReason: options.triggerReason,
+      canonicalContactId,
+      turnId,
+      sourceRef,
+      recentEntries,
+      existingMemories: existing,
+      acceptedFactsForConcernCandidates,
+      acceptedWrites,
+      acceptedFactsByContact,
+      emitConcernCandidates: options.emitConcernCandidates,
+      maybePersistEmotionalState: options.maybePersistEmotionalState,
+      maybeRefreshContactProfile: options.maybeRefreshContactProfile,
+      assertEffectAllowed: options.assertEffectAllowed,
+    });
     return {
       memoryIds: [...durableMemoryIds],
-      concernIds: [...new Set(concernIds)],
-      contactIds: [...new Set(contactIds)],
+      concernIds: [...new Set(sideEffects.concernIds)],
+      contactIds: [...new Set(sideEffects.contactIds)],
     };
   } catch (error) {
     // A durable drain requeue is an intentional retryable control signal, not an
@@ -591,42 +556,3 @@ function createExtractionChunkCompleter(
   };
 }
 
-function groupAcceptedWritesByContact(
-  writes: readonly AcceptedFactWrite[],
-  fallbackContactId: string | undefined,
-): Map<string | undefined, AcceptedFactWrite[]> {
-  const groups = new Map<string | undefined, AcceptedFactWrite[]>();
-  if (writes.length === 0) {
-    groups.set(fallbackContactId, []);
-    return groups;
-  }
-
-  for (const write of writes) {
-    const contactIds = resolveProfileRefreshContactIds(write, fallbackContactId);
-    for (const contactId of contactIds) {
-      const profileWrite = write.contactId === contactId
-        ? write
-        : { ...write, contactId };
-      const existing = groups.get(contactId);
-      if (existing) {
-        existing.push(profileWrite);
-        continue;
-      }
-      groups.set(contactId, [profileWrite]);
-    }
-  }
-  return groups;
-}
-
-function resolveProfileRefreshContactIds(
-  write: AcceptedFactWrite,
-  fallbackContactId: string | undefined,
-): string[] {
-  const contactIds = new Set<string>();
-  if (write.contactId) contactIds.add(write.contactId);
-  if (write.subjectContactId) contactIds.add(write.subjectContactId);
-  if (contactIds.size === 0 && !write.scopeRef && fallbackContactId) {
-    contactIds.add(fallbackContactId);
-  }
-  return [...contactIds];
-}

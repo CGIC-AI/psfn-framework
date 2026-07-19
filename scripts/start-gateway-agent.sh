@@ -150,6 +150,10 @@ append_agent_env() {
 
 append_operator_env() {
   local name="$1"
+  if [ "${name}" = "POSTGRES_DATABASE_URL" ] \
+    && ! psfn_is_truthy_env_value "${PSFN_MULTI_COMPANION:-}"; then
+    return
+  fi
   if psfn_is_truthy_env_value "${PSFN_FLEET_AUTH:-}"; then
     case "${name}" in
       ADMIN_ALLOW_INSECURE|ADMIN_TOKEN)
@@ -257,9 +261,10 @@ build_agent_env() {
   done
 }
 
-# Operator processes receive only Garden auth, runtime layout, owner-file, and
-# admin-transport wiring. They never inherit provider, channel, database,
-# companion-auth, shell, or gateway signing credentials.
+# Operator processes receive only Garden auth, the approved direct database
+# credential, runtime layout, owner-file, and admin-transport wiring. They do
+# not inherit provider, channel, companion-auth, shell, or gateway signing
+# credentials.
 build_operator_env() {
   OPERATOR_ENV=()
   local name
@@ -302,6 +307,7 @@ build_operator_env() {
     NODE_ENV \
     NODE_OPTIONS \
     PATH \
+    POSTGRES_DATABASE_URL \
     PSFN_FLEET_AUTH \
     PSFN_LOGS_DIR \
     PSFN_MULTI_COMPANION \

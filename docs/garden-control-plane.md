@@ -90,21 +90,21 @@ is too shallow.
 10. Fleet Auth remains the browser authentication and authorization authority.
     Consolidation must not recreate the retired shared-admin-token topology for
     a fleet-enabled deployment.
-11. Direct database access is per-companion and request-scoped. In the
-    consolidated topology it lives in each companion agent's admin services:
-    the schema, rows, and writes a service touches are derived from the
-    immutable request context of the authenticated companion target — never
-    from a process-global selection, a cached prior companion, or an unscoped
-    query — and the companion-scope guard
+11. Garden services that already read or write the database directly keep that
+    access (operator decision 2026-07-17: rerouting existing reads through
+    agent transports is not worth the rework). In exchange, every database
+    access in multi-companion mode is scoped to the request's authenticated
+    companion target: the schema, rows, and writes a Garden service touches are
+    derived from the immutable request context of the companion who generated
+    the request — never from a process-global selection, a cached prior
+    companion, or an unscoped query. The companion-scope guard
     (`src/operator/garden/garden-companion-scope.ts`, wired at the admin route
     dispatch chokepoint) refuses any dispatch whose request companion does not
-    match the service's companion binding. The fleet Garden process itself is
-    credential-free — it receives no `POSTGRES_DATABASE_URL` and the Helm
-    chart grants it no postgres egress — and reaches those services only
-    through the per-companion admin transports. Deployment-global
-    observer-eval sidecar telemetry is unavailable in the fleet Garden by
-    design. A request for companion A can neither read nor write companion B's
-    data.
+    match the service's companion binding. A request for companion A can neither
+    read nor write companion B's data. Observer-eval sidecar persistence remains
+    the existing deployment-global, non-authoritative eval store (the explicit
+    mus2.16 exception); its Garden routes still require an authenticated,
+    companion-bound dispatch, but its rows are not companion-owned data.
 
 ## Public route and switcher contract
 
@@ -381,14 +381,12 @@ fleet Garden listener and allows the Garden to reach only registered agent
 admin endpoints and the narrow gateway child-assertion/confirmation interface.
 
 The Garden pod mounts its image, required fleet/system configuration,
-certificates, logs/tmp as needed, and no provider/channel/database secrets.
-It carries no `POSTGRES_DATABASE_URL` and has no postgres egress; per-companion
-data access — including every direct database read and write — happens in the
-selected companion agent's admin services, reached over the registered agent
-admin transports and scoped per request to the selected companion
-(invariant 11). It does not require direct writable mounts for every
-companion-data or Personal Workspace PVC; selected agents remain the adapters
-to those domains.
+certificates, logs/tmp as needed, and no provider/channel secrets. It retains
+the database credential its existing services already use for direct reads and
+writes (invariant 11), with every direct route dispatched through a
+companion-bound service table selected from the authenticated request. It does
+not require direct writable mounts for every companion-data or Personal
+Workspace PVC; selected agents remain the adapters to those domains.
 
 Helm health and post-rollout checks probe the one Garden deployment and then
 exercise at least one authorized request per registered companion. One healthy
@@ -484,8 +482,8 @@ implementation sequence is integrated.
 - Adding a fleet-wide mutation interface or a cross-companion management tier.
 - Allowing one companion selection to authorize another.
 - Mounting a general shared filesystem or adding manifest path overrides.
-- Giving the Garden provider, channel, database, shell, or companion-agent
-  credentials.
+- Giving the Garden provider, channel, shell, or companion-agent credentials
+  beyond its approved request-scoped database access.
 - Giving shards full Garden pages, full settings editors, independent Fleet
   Auth identities, or durable owner files.
 - Expanding shard overrides beyond the approved model and budget controls.

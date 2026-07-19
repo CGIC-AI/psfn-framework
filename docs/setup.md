@@ -207,6 +207,10 @@ these process-wiring env vars come into play (documented in full in
 - `ADMIN_PORT` — the one fleet-level Garden listener port. It is process
   wiring, not a per-companion manifest field. A `gardenPort` key remaining in
   any `companions.json` entry is rejected as retired.
+- `POSTGRES_DATABASE_URL` — the deployment database credential retained by the
+  fleet Garden for approved direct model-usage and observer-eval telemetry.
+  The immutable authenticated request target selects a companion-bound service
+  instance before those routes query the database.
 - `/fleet` — the authenticated fleet overview inside the same Garden frontend.
   It uses `/v1/fleet/portal` for the current principal's bounded authorized
   projection. There is no separate raw fleet-status listener or

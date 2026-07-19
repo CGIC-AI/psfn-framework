@@ -354,7 +354,9 @@ not generic `api` traffic.
   `FleetGardenTargetRegistry`. It starts from a least-privilege `env -i`
   allowlist, does not load the repo `.env`, and does not inherit any companion's
   identity, Personal Workspace, database schema, gateway proof, provider,
-  channel, or database credentials. Fleet Auth and
+  or channel credentials. It receives the deployment database URL solely for
+  the approved direct Garden services; authenticated request dispatch selects a
+  companion-bound service instance before any database access. Fleet Auth and
   `GATEWAY_OPERATOR_API_BASE_URL` are required for this topology. Credential
   status in Settings is a boolean-only snapshot queried from the gateway over
   the authenticated admin path.

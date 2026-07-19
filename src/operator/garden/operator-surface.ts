@@ -36,6 +36,7 @@ import { readFleetGardenBody } from './garden-admission.js';
 import type { GardenFleetChildAssertionClient } from './fleet-child-assertion-client.js';
 import { FleetGardenControlPlane } from './fleet-garden-control-plane.js';
 import { GardenOperatorRouting } from './garden-operator-routing.js';
+import type { FleetGardenDirectDatabasePort } from './fleet-garden-operator-router.js';
 import {
   requireMtlsPeerFileConfig,
   verifyPeerCertificateSpiffeUri,
@@ -60,6 +61,8 @@ export interface GardenOperatorSurfaceConfig {
   fleetControlPlane?: FleetGardenControlPlane;
   /** Test seam; production constructs this from fleetControlPlane.targetRegistry(). */
   fleetTransport?: FleetGardenTransportProxyPort;
+  /** Approved invariant-11 routes served from companion-bound Garden DB services. */
+  fleetDirectDatabase?: FleetGardenDirectDatabasePort;
   /**
    * Direct operator → gateway confirmation resolver. Only the independently
    * authenticated Garden operator process holds this; it carries the operator
@@ -109,6 +112,9 @@ export class GardenOperatorSurface implements Lifecycle {
       ...(config.transportEndpoint ? { transportEndpoint: config.transportEndpoint } : {}),
       ...(config.fleetControlPlane ? { fleetControlPlane: config.fleetControlPlane } : {}),
       ...(config.fleetTransport ? { fleetTransport: config.fleetTransport } : {}),
+      ...(config.fleetDirectDatabase
+        ? { fleetDirectDatabase: config.fleetDirectDatabase }
+        : {}),
       ...(config.fleetChildAssertions
         ? { fleetChildAssertions: config.fleetChildAssertions }
         : {}),

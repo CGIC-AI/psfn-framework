@@ -905,13 +905,17 @@ describe('start-gateway-agent multi-companion supervisor', () => {
     );
     expect(operatorAllowlist).toContain('ADMIN_TOKEN \\');
     expect(operatorAllowlist).toContain('PSFN_FLEET_AUTH \\');
+    expect(operatorAllowlist).toContain('POSTGRES_DATABASE_URL \\');
+    expect(launcher).toContain(
+      'if [ "${name}" = "POSTGRES_DATABASE_URL" ] \\\n'
+      + '    && ! psfn_is_truthy_env_value "${PSFN_MULTI_COMPANION:-}"; then',
+    );
     for (const secret of [
       'OPENROUTER_API_KEY',
       'LITELLM_API_KEY',
       'FAL_API_KEY',
       'DISCORD_TOKEN',
       'TELEGRAM_BOT_TOKEN',
-      'POSTGRES_DATABASE_URL',
       'GATEWAY_COMPANION_AUTH_TOKEN',
       'GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN',
       'GATEWAY_SESSION_HMAC_KEY',

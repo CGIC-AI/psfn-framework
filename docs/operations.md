@@ -22,7 +22,7 @@ npm run agent:docker:continuous # Continuous/dev profile (isolated internal netw
 ```
 
 - `split` is the standard gateway + agent + operator launcher.
-- `split` loads `.env` in the launcher/gateway boundary, then starts agents and operators from separate explicit allowlists. Operators do not reload `.env`; provider and channel credential status reaches Garden only as redacted booleans over the admin transport.
+- `split` loads `.env` in the launcher/gateway boundary, then starts agents and operators from separate explicit allowlists. Operators do not reload `.env`; the fleet Garden receives only its approved database URL plus Garden/runtime wiring, while provider and channel credential status reaches it only as redacted booleans over the admin transport.
 - `yolo` keeps the split runtime but broadens gateway `fs.read` scope across the codebase.
 - `operator` runs only the Garden operator surface when you want it separate from the launcher.
 - `agent:docker` is the production profile (`network_mode: "none"`).
@@ -63,6 +63,10 @@ starting all N agents, the supervisor waits deterministically until every
 planned socket is listening; an agent exit or missing endpoint aborts without
 starting Garden. Only then does it start the one Garden. The supervisor is
 shared-fate: if any supervised process exits, the whole fleet is torn down.
+The fleet Garden receives `POSTGRES_DATABASE_URL` for its approved direct
+database services. Those services are instantiated per registered companion,
+and the authenticated request target must match the selected service binding
+before a query can run.
 Manifest-relative data/card paths are resolved to absolute strict subpaths of
 `PSFN_RUNTIME_ROOT`; symlink escapes and tuple drift fail before startup. The
 launcher also derives separate role-bound gateway proofs for the agent and its

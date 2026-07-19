@@ -171,15 +171,20 @@ export class PersonalProjectLibrary {
     projectRef: string;
     artifactRef: string;
     label: string;
-    sensitivity: SensitivityLevel;
-    intendedAudience?: CompanionOwnedVisibility;
   }): Promise<PersonalProjectManifest> {
     const current = this.getProject(input.projectRef);
     const ref = requiredProjectText(input.artifactRef, 'artifact ref');
     if (current.artifacts.some(artifact => artifact.ref === ref)) {
       throw new Error(`artifact is already linked to ${current.ref}: ${ref}`);
     }
-    const intendedAudience = input.intendedAudience ?? 'self';
+    // Bible §6.2: the runtime, not the model, is authoritative for artifact
+    // sensitivity and permitted audience. Derive both from the project's
+    // runtime-stored visibility (the workspace disclosure floor) rather than
+    // from model-supplied tool arguments (§9.2 item 6). Intended audience fails
+    // closed to `self`; broadening happens only through an explicit
+    // project_share request that still passes the artifact egress gate.
+    const sensitivity = visibilitySensitivity(current.visibility);
+    const intendedAudience: CompanionOwnedVisibility = 'self';
     const updated: PersonalProjectManifest = {
       ...current,
       artifacts: [
@@ -187,7 +192,7 @@ export class PersonalProjectLibrary {
         {
           ref,
           label: requiredProjectText(input.label, 'artifact label'),
-          sensitivity: input.sensitivity,
+          sensitivity,
           intendedAudience,
           shareState: 'private',
           addedAt: this.now().toISOString(),

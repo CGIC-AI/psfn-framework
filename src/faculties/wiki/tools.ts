@@ -281,7 +281,7 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
       })),
       sensitivity: Type.Optional(Type.Union(
         VALID_SENSITIVITY_LEVELS.map(level => Type.Literal(level)),
-        { description: 'Privacy sensitivity for the document. Defaults to personal.' },
+        { description: 'Privacy sensitivity for a write/import document. Defaults to personal. Not accepted for project_add_artifact, whose sensitivity is runtime-derived.' },
       )),
       summary: Type.Optional(Type.String({
         minLength: 1,
@@ -322,7 +322,7 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
       artifact_label: Type.Optional(Type.String({ minLength: 1 })),
       audience: Type.Optional(Type.Union([
         Type.Literal('self'), Type.Literal('primary_contact'), Type.Literal('public'),
-      ], { description: 'Intended artifact audience; actual release remains subject to the artifact egress gate.' })),
+      ], { description: 'Requested share audience for project_share; actual release remains subject to the artifact egress gate. Not accepted for project_add_artifact, whose audience is runtime-derived (fails closed to self).' })),
       look_id: Type.Optional(Type.String({ minLength: 1, description: 'Stable id for wardrobe_save.' })),
       look_ref: Type.Optional(Type.String({ minLength: 1, description: 'Stable wardrobe:<id> reference.' })),
       look_name: Type.Optional(Type.String({ minLength: 1 })),
@@ -486,13 +486,24 @@ export function createWikiTool(store: WikiStorePort, deps: WikiToolDeps = {}): S
             return textResult(JSON.stringify({ action, project }, null, 2));
           }
           case 'project_add_artifact': {
-            if (!params.sensitivity) throw new Error('sensitivity is required for project_add_artifact');
+            // Bible §6.2: sensitivity and permitted audience are runtime-derived
+            // metadata, never model self-asserted. Reject the old model-supplied
+            // arguments fail-closed instead of silently ignoring them; the write
+            // path derives lineage from the project's runtime state.
+            if (params.sensitivity !== undefined) {
+              throw new Error(
+                'sensitivity is runtime-derived for project_add_artifact and must not be supplied',
+              );
+            }
+            if (params.audience !== undefined) {
+              throw new Error(
+                'audience is runtime-derived for project_add_artifact and must not be supplied',
+              );
+            }
             const project = await requirePersonalProjects(deps).addArtifact({
               projectRef: requireString(params.project_ref, 'project_ref'),
               artifactRef: requireString(params.artifact_ref, 'artifact_ref'),
               label: requireString(params.artifact_label, 'artifact_label'),
-              sensitivity: params.sensitivity,
-              ...(params.audience ? { intendedAudience: params.audience } : {}),
             });
             return textResult(JSON.stringify({ action, project }, null, 2));
           }

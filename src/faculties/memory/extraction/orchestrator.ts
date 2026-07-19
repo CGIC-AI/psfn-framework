@@ -257,14 +257,14 @@ export async function runExtractionOrchestration(
       return emptyExtractionOutputs();
     }
 
-	    const sourceRef = buildExtractionSourceRef(
-	      options.channelId,
-	      recentEntries,
-	      channelVisibility,
-	      options.triggerReason,
-	      turnId,
-	      options.sourceSessionId,
-	    );
+    const sourceRef = buildExtractionSourceRef(
+      options.channelId,
+      recentEntries,
+      channelVisibility,
+      options.triggerReason,
+      turnId,
+      options.sourceSessionId,
+    );
     const coveredUpToMessageId = options.resolveCoveredUpToMessageId(options.channelId, recentEntries);
     const participantNames = options.resolveParticipantNames?.(recentEntries, canonicalContactId) ?? {};
     const experientialCompanionName = experientialSelfDirected

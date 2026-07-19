@@ -114,7 +114,7 @@ describe('renderExtractionChunkPrompt', () => {
   });
 
   it('prepends the persona preamble around the assembled task prompt', () => {
-    const prepend = vi.fn((purpose: string, prompt: string) => `PERSONA\n\n${prompt}`);
+    const prepend = vi.fn((_purpose: string, prompt: string) => `PERSONA\n\n${prompt}`);
     const rendered = renderExtractionChunkPrompt(
       [entry(1)],
       promptContext({ personaPreamble: { prepend } }),

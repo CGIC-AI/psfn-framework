@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { test } from 'vitest';
 import { resolveVoiceProviderSelection } from './voice-provider-selection';
 
 test('uses only explicit provider ids from settings payload', () => {

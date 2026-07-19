@@ -34,7 +34,7 @@
 {{- end -}}
 {{- $fleetIds := dict -}}
 {{- $schemas := dict -}}
-{{- $companionClaims := dict -}}
+{{- $gatewayCompanionClaims := dict -}}
 {{- $workspaceClaims := dict -}}
 {{- $authSecrets := dict -}}
 {{- range $index, $companion := .Values.fleet.companions -}}
@@ -66,10 +66,10 @@
 {{- if not $companionClaim -}}
 {{- fail (printf "fleet.companions[%d].companionDataClaim is required" $index) -}}
 {{- end -}}
-{{- if hasKey $companionClaims $companionClaim -}}
+{{- if hasKey $gatewayCompanionClaims $companionClaim -}}
 {{- fail (printf "fleet companionDataClaim is duplicated: %s" $companionClaim) -}}
 {{- end -}}
-{{- $_ := set $companionClaims $companionClaim true -}}
+{{- $_ := set $gatewayCompanionClaims $companionClaim true -}}
 {{- $workspaceClaim := $companion.workspaceClaim | default "" -}}
 {{- if not $workspaceClaim -}}
 {{- fail (printf "fleet.companions[%d].workspaceClaim is required" $index) -}}

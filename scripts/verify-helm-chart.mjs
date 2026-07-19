@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseAllDocuments } from 'yaml';
+import { verifyFleetGatewayCompanionMountContract } from './verify-helm-fleet-gateway-mounts.mjs';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const chartDir = resolve(repoRoot, 'deploy/helm/psfn');
@@ -913,6 +914,12 @@ const fleetGardenDeployment = renderedGardens[0];
 const fleetGardenYaml = findDocumentByKindName(fleetGardenRendered, 'Deployment', 'psfn-garden');
 const fleetGatewayDeployment = fleetGardenDeployments
   .find(document => document.metadata?.name === 'psfn-gateway');
+verifyFleetGatewayCompanionMountContract({
+  deployment: fleetGatewayDeployment,
+  companions: fleetGardenCompanions,
+  assertRenderFails,
+  renderArgs: fleetGardenRenderArgs,
+});
 for (const [deployment, name] of [
   [fleetGatewayDeployment, 'gateway'],
   [fleetGardenDeployment, 'Garden'],

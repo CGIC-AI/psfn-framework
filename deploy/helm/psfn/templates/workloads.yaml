@@ -180,9 +180,7 @@ spec:
           volumeMounts:
             - name: system-data
               mountPath: {{ .Values.runtime.systemDataDir }}
-            - name: companion-data
-              mountPath: {{ .Values.runtime.companionDataDir }}
-              readOnly: true
+            {{- include "psfn.gatewayCompanionDataVolumeMounts" . | nindent 12 }}
             # Gateway owns CogSec quarantine/event writes under state while
             # the rest of companion-data remains read-only.
             - name: companion-data
@@ -211,6 +209,7 @@ spec:
             {{- end }}
       volumes:
         {{- include "psfn.commonVolumes" . | nindent 8 }}
+        {{- include "psfn.gatewayAdditionalCompanionDataVolumes" . | nindent 8 }}
         - name: gateway-rpc-tls
           secret:
             secretName: {{ include "psfn.gatewayRpcCertSecretName" . }}

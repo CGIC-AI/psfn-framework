@@ -639,6 +639,7 @@ describe('ApiServer', () => {
       expect(body.subsystems.scheduler.status).toBe('healthy');
       expect(body.continuity.checks.database.status).toBe('healthy');
       expect(body.continuity.checks.gatewayLink.status).toBe('healthy');
+      expect(body.continuity.checks.gatewayLink.meta.agentConnected).toBe(true);
       expect(body.continuity.checks.schedulerHealthcheck.status).toBe('healthy');
       expect(typeof body.subsystems.llm.meta.checkLatencyMs).toBe('number');
       expect(typeof body.subsystems.embeddings.meta.checkLatencyMs).toBe('number');

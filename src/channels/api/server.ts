@@ -1233,6 +1233,7 @@ export class ApiServer implements ChannelAdapterPort {
       return {
         status: 'healthy',
         meta: {
+          agentConnected: true,
           sourceSubsystems: ['llm', 'embeddings'],
           llmStatus: subsystems.llm.status,
           embeddingsStatus: subsystems.embeddings.status,
@@ -1247,6 +1248,7 @@ export class ApiServer implements ChannelAdapterPort {
       status: 'degraded',
       detail: detailParts.join(' | ') || 'Gateway-linked LLM and embeddings checks are degraded',
       meta: {
+        agentConnected: true,
         sourceSubsystems: ['llm', 'embeddings'],
         llmStatus: subsystems.llm.status,
         embeddingsStatus: subsystems.embeddings.status,

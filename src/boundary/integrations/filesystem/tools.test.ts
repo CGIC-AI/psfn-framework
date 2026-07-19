@@ -235,6 +235,25 @@ describe('fs tool', () => {
     expect(resultText(result)).toContain('fs failed: fs list path must be a workspace-relative directory path');
   });
 
+  it('preserves gateway approval codes in structured fs errors', async () => {
+    const approvalOps = Object.create(ops) as WorkspaceFilesystemOps;
+    approvalOps.read = async () => {
+      throw Object.assign(new Error('approval required'), { code: -32000 });
+    };
+    const tool = createFsTool(approvalOps);
+
+    const result = await tool.execute('read-needs-approval', {
+      action: 'read',
+      path: '../approval-scope',
+    });
+
+    expect(result.details).toMatchObject({
+      isError: true,
+      errorClass: 'permission_denied',
+      gatewayErrorCode: -32000,
+    });
+  });
+
   it('writes new files and edits existing files through the unified fs surface', async () => {
     const tool = createFsTool(ops);
 

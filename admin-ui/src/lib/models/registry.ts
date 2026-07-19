@@ -102,13 +102,13 @@ export function normalizePurposes(value: unknown): ModelRegistryPurposeTag[] {
 
 export function normalizeModelEntry(value: unknown, index: number): ModelRegistryEntry {
   const raw = isRecord(value) ? value : {};
-  if ('routing' in raw) {
-    throw new Error(
-      `models.json.models[${index}].routing is not a canonical model registry field`,
-    );
-  }
   const restRaw = { ...raw };
   delete restRaw.enabled;
+  // Legacy admin builds persisted a non-canonical `routing` field into
+  // models.json. The backend canonical parser silently drops it, so tolerate it
+  // here too: strip it from the copy we spread so it neither throws nor
+  // round-trips back into saves.
+  delete restRaw.routing;
   const identityRaw = isRecord(raw.identity) ? raw.identity : {};
   const sourceRaw = isRecord(identityRaw.source) ? identityRaw.source : {};
   const baseId = toNonEmptyString(raw.id) ?? `model-${index + 1}`;

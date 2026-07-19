@@ -22,7 +22,6 @@ function main(): void {
     : verifyStartupOwnerFiles({
       ...commonOptions,
       companionDataDir: config.companionDataDir ?? config.dataDir,
-      multiCompanion: false,
     });
 
   if (!result.ok) {

@@ -159,9 +159,13 @@ export interface SubstrateConfig {
   discordBotId?: string;
   characterCardPath: string;
   companionId?: RuntimeCompanionId;
-  /** True when the multi-companion topology flag (PSFN_MULTI_COMPANION) is enabled. */
+  /**
+   * True when the mandatory companions.json manifest enumerates more than one
+   * companion (multi-companion tenancy). A one-entry manifest is the canonical
+   * single-companion deployment and leaves this false.
+   */
   multiCompanion?: boolean;
-  /** Validated fleet manifest; present only when multi-companion mode is enabled. */
+  /** Resolved fleet manifest; present only in multi-companion mode. */
   companionFleet?: ResolvedCompanionsFleetConfig;
   /** Fleet-bound process identity; present only in multi-companion mode. */
   companionRuntimeIdentity?: CompanionRuntimeIdentity;

@@ -1,7 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { loadAgentConfig, loadConfig, loadOperatorConfig } from './load-config.js';
 import {
   createDefaultObserverEvalSidecarSettings,
@@ -53,19 +53,70 @@ function clearRuntimePathEnv(): void {
   delete process.env.GATEWAY_TLS_CA_PATH;
   delete process.env.GATEWAY_TLS_REJECT_UNAUTHORIZED;
   delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-  delete process.env.PSFN_MULTI_COMPANION;
   delete process.env.GATEWAY_COMPANION_AUTH_TOKEN;
   delete process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN;
   process.env.COMPANION_ID = '11111111-1111-4111-8111-111111111111';
   process.env.POSTGRES_DATABASE_URL = 'postgres://postgres:secret@localhost:5432/psfn_test';
 }
 
+const DEFAULT_TEST_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+const seededManifestCleanups: Array<() => void> = [];
+
+/**
+ * The companions.json fleet manifest is mandatory for every deployment, so
+ * loadConfig now requires one at the resolved systemDataDir. Seed a one-entry
+ * (single-companion) manifest so a test exercises the single-companion topology
+ * (multiCompanion=false), matching the old flag-off behavior. Cleanup removes
+ * only files/dirs this helper created.
+ */
+function seedManifestAt(systemDataDir: string, companionId = DEFAULT_TEST_COMPANION_ID): void {
+  const abs = resolve(systemDataDir);
+  const firstCreatedDir = mkdirSync(abs, { recursive: true });
+  const manifestPath = join(abs, 'companions.json');
+  const manifestPreexisted = existsSync(manifestPath);
+  writeFileSync(manifestPath, `${JSON.stringify({
+    companions: [{
+      companionId,
+      companionDataDir: 'companion',
+      characterCardPath: 'companion/companion.json',
+      postgresSchema: 'public',
+    }],
+  })}\n`);
+  seededManifestCleanups.push(() => {
+    if (!manifestPreexisted) rmSync(manifestPath, { force: true });
+    if (firstCreatedDir) rmSync(firstCreatedDir, { recursive: true, force: true });
+  });
+}
+
+function cleanupSeededManifests(): void {
+  for (const cleanup of seededManifestCleanups.splice(0).reverse()) {
+    cleanup();
+  }
+}
+
 afterEach(() => {
+  cleanupSeededManifests();
   restoreEnv();
 });
 
 describe('loadConfig path defaults', () => {
   const tempDirs: string[] = [];
+
+  // The companions.json manifest is mandatory. Seed a one-entry (single-
+  // companion) manifest at each relative data root these tests resolve to, so
+  // single-companion loadConfig paths boot as a fleet of one (multiCompanion=
+  // false). Multi-companion tests write their own two-entry manifest in a temp
+  // root. Cleanup removes only directories/files these seeds created.
+  beforeEach(() => {
+    for (const dir of [
+      './data',
+      './sandbox-data',
+      './system-data',
+      './runtime/production/system-data',
+    ]) {
+      seedManifestAt(dir);
+    }
+  });
 
   function configureMultiCompanionEnv(): {
     root: string;
@@ -83,13 +134,24 @@ describe('loadConfig path defaults', () => {
     const dataDir = join(root, 'companions/flagship');
     const cardPath = join(dataDir, 'character-card.json');
     const postgresSchema = 'companion_flagship';
+    // A two-entry manifest makes this a multi-companion deployment
+    // (multiCompanion derives from companions.length > 1). The process binds to
+    // the first (flagship) entry via the environment below.
     writeFileSync(join(systemDataDir, 'companions.json'), `${JSON.stringify({
-      companions: [{
-        companionId,
-        companionDataDir: 'companions/flagship',
-        characterCardPath: 'companions/flagship/character-card.json',
-        postgresSchema,
-      }],
+      companions: [
+        {
+          companionId,
+          companionDataDir: 'companions/flagship',
+          characterCardPath: 'companions/flagship/character-card.json',
+          postgresSchema,
+        },
+        {
+          companionId: '22222222-2222-4222-8222-222222222222',
+          companionDataDir: 'companions/aria',
+          characterCardPath: 'companions/aria/character-card.json',
+          postgresSchema: 'companion_aria',
+        },
+      ],
     })}\n`);
     process.env.PSFN_RUNTIME_ROOT = root;
     process.env.SYSTEM_DATA_DIR = systemDataDir;
@@ -98,7 +160,6 @@ describe('loadConfig path defaults', () => {
     process.env.COMPANION_ID = companionId;
     process.env.CHARACTER_CARD_PATH = cardPath;
     process.env.COMPANION_PG_SCHEMA = postgresSchema;
-    process.env.PSFN_MULTI_COMPANION = '1';
     process.env.GATEWAY_COMPANION_AUTH_TOKEN = 'v1.agent-token';
     process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN = 'v1.worker-token';
     const postgresCredentialPath = join(root, 'postgres-database-url');

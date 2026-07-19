@@ -222,10 +222,11 @@ The local round must already have:
 - the provisioned `shakedown_artie` Postgres tenant; and
 - no running gateway or agent connected to the round database.
 
-Enable the fleet only for the multi-companion portion, then stand it up:
+Stand up the multi-companion fleet (topology is derived from the multi-entry
+`companions.json` the stand-up publishes — there is no `PSFN_MULTI_COMPANION`
+flag):
 
 ```bash
-export PSFN_MULTI_COMPANION=1
 npm run shakedown:support -- stand-up
 npm run split
 ```
@@ -233,7 +234,8 @@ npm run split
 Stand-up fails if any support data root, Personal Workspace, schema, or role
 already exists. It seeds every per-companion owner file from `config/*.seed.json`,
 validates all three companion roots, imports the synthetic cards, provisions the
-two isolated tenants, and publishes `$SYSTEM_DATA_DIR/companions.json` last.
+two isolated tenants, and publishes `$SYSTEM_DATA_DIR/companions.json` last (the
+multi-entry manifest is what selects the multi-companion topology).
 
 The executable acceptance harness is:
 

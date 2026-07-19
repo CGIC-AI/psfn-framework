@@ -1,6 +1,6 @@
 import {
-  isMultiCompanionEnabled,
-  resolveCompanionFleet,
+  companionsFileExists,
+  loadCompanionsConfig,
   resolveCompanionFleetPaths,
   type CompanionsFleetConfig,
 } from '../../system/config/companions-config.js';
@@ -49,17 +49,19 @@ export function resolveSystemOwnerFleetContext(env: NodeJS.ProcessEnv) {
   if (layout.systemDataDir === layout.companionDataDir) {
     throw new Error('System-owner fleet operation requires production split roots');
   }
-  const multiCompanion = isMultiCompanionEnabled(env);
-  const configuredFleet = resolveCompanionFleet({
-    dataDir: layout.systemDataDir,
-    multiCompanion,
-    seedDir: env.CONFIG_DIR?.trim() || undefined,
-  });
-  const rawFleet = configuredFleet ?? resolveSingleCompanionConfig({
-    companionId: env.COMPANION_ID,
-    runtimeRootDir: layout.runtimeRootDir,
-    companionDataDir: layout.companionDataDir,
-  });
+  // Owner-migration tooling can run against an existing pre-manifest single
+  // install (companions.json not yet created). When the manifest is present it
+  // is authoritative; when absent this synthesizes the one-entry migration
+  // fleet from the environment so the install can be migrated into the fleet
+  // owner-file world. Runtime startup (load-config) still requires the manifest.
+  const seedDir = env.CONFIG_DIR?.trim() || undefined;
+  const rawFleet = companionsFileExists(layout.systemDataDir)
+    ? loadCompanionsConfig(layout.systemDataDir, seedDir ? { seedDir } : undefined)
+    : resolveSingleCompanionConfig({
+      companionId: env.COMPANION_ID,
+      runtimeRootDir: layout.runtimeRootDir,
+      companionDataDir: layout.companionDataDir,
+    });
   const fleet = resolveCompanionFleetPaths(rawFleet, layout.runtimeRootDir, [
     { label: 'systemDataDir', path: layout.systemDataDir },
     { label: 'companionDataDir', path: layout.companionDataDir },

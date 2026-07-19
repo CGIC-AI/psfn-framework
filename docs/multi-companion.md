@@ -3,12 +3,14 @@
 Last updated: 2026-07-14.
 
 This is the canonical page for running more than one companion on a single PSFN
-cluster: the topology, the opt-in flag, the fleet manifest, and the fleet
-operations that ride on top of it. It documents only what is wired in the
-branch; forward-looking items are marked as future.
+cluster: the topology, the mandatory fleet manifest, and the fleet operations
+that ride on top of it. It documents only what is wired in the branch;
+forward-looking items are marked as future.
 
-Single-companion remains the default topology. Everything here is behind an
-explicit opt-in and is inert — byte-identically so — when the flag is off.
+Every deployment is a fleet enumerated by a mandatory `companions.json`
+manifest. A single-companion deployment is a one-entry manifest and is inert —
+byte-identically so — with respect to the multi-companion machinery here (which
+activates only when the manifest has more than one entry).
 
 ## Topology
 
@@ -29,26 +31,24 @@ explicit opt-in and is inert — byte-identically so — when the flag is off.
   a bounded derived runtime of one origin companion and does not become a fleet
   entry or peer identity.
 
-## The flag and the fleet manifest
+## The fleet manifest
 
-Multi-companion is selected by the `PSFN_MULTI_COMPANION` env flag (process
-wiring / topology selection, same scope as `PSFN_RUNTIME_LAYOUT_MODE`). The
-flag alone does nothing; it requires a system-owned `companions.json` owner file
-enumerating the fleet.
+Every PSFN deployment is a fleet of one or more companions: the system-owned
+`companions.json` owner file is **mandatory**, and the topology is derived from
+its contents rather than a flag. A single-companion deployment is simply a
+one-entry manifest ("a fleet of one"); multi-companion tenancy is a manifest
+with more than one entry. The `PSFN_MULTI_COMPANION` env flag has been retired.
 
-- Flag reader: `isMultiCompanionEnabled(env)`
-  (`src/system/config/companions-config.ts`). Unset/empty means
-  single-companion; an explicitly-set-but-unparseable value **throws** rather
-  than silently defaulting off — the flag selects a tenancy boundary, so it
-  fails closed.
 - Owner file: `companions.json` (registered in
   `src/system/config/startup-owner-files.ts`, seed `config/companions.seed.json`).
-- Resolution + fail-closed contract: `resolveCompanionFleet({ dataDir,
-  multiCompanion, seedDir })`:
-  - flag **on** + `companions.json` missing/invalid → refuse to start
-  - flag **off** + `companions.json` present → refuse to start (owner-file
-    strictness will not ignore a fleet manifest)
-  - flag off + no manifest → `undefined` (default single-companion topology)
+- Resolution + fail-closed contract: `resolveCompanionFleet({ dataDir, seedDir })`
+  (`src/system/config/companions-config.ts`):
+  - `companions.json` missing or invalid → refuse to start with an actionable error
+  - one-entry manifest → single-companion topology (`config.multiCompanion` is
+    `false`, byte-identical to the old single-companion behavior: no tenant
+    schema/role binding, no fleet supervisor, no fleet-auth requirement)
+  - multi-entry manifest → multi-companion tenancy (`config.multiCompanion` is
+    `true`)
 
 Each companion entry (`CompanionFleetEntry`, strict — unknown keys rejected)
 carries exactly:
@@ -180,8 +180,8 @@ extra `shared` schema for cross-companion world data.
   (`src/persistence/postgres/migrations.ts`) holds cross-companion world data —
   `companion_presence` (co-presence) and the shared-world wiki chunks. It is
   provisioned advisory-lock-serialized (`src/persistence/postgres/shared-schema.ts`)
-  so N concurrently-starting agents are safe. With the flag off the shared schema
-  is never created or touched.
+  so N concurrently-starting agents are safe. In single-companion topology (a
+  one-entry fleet) the shared schema is never created or touched.
 - Migrations run per schema: `runPostgresMigrations(pool, statements, { schema })`.
   Omitting `schema` is byte-identical to single-companion behavior.
 
@@ -206,9 +206,9 @@ fleet and spawns one agent process per companion.
   the role-bound gateway proofs from the plan. The proofs are derived from the
   gateway session keyring and companion ID; they are passed only to the agent and its
   isolated session-integrity worker and are omitted from dry-run output.
-  The default single-companion launcher derives the same role separation for
-  its isolated worker even though normal agent methods retain local-socket
-  trust for flag-off compatibility.
+  The single-companion (one-entry fleet) launcher derives the same role
+  separation for its isolated worker even though normal agent methods retain
+  local-socket trust in single-companion topology.
 - `--dry-run` (or `PSFN_SUPERVISOR_DRY_RUN=1`) resolves and prints the spawn
   plan without creating workspace directories. The real launcher acquires its
   socket-scoped lock before migration or provisioning, so a rejected concurrent
@@ -414,7 +414,7 @@ Multi-companion layers on top of the single-companion locations/world surface
   `CompanionPresenceRuntime` / `CompanionPresenceTurnPort`) as emanation or a
   deliberate `move` changes. It is the durable authority behind "who else is
   here," and entering a place where another companion is present emits a
-  co-location event. Wired only under the multi-companion flag.
+  co-location event. Wired only under multi-companion topology (a multi-entry fleet).
 - **Companion channels.** Same-cluster companion↔companion conversation runs
   through the normal turn pipeline as ordinary channels
   (`src/shared/contracts/companion-channels.ts`): a many-to-many room

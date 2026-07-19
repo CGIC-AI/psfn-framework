@@ -31,7 +31,6 @@ function singleCompanionEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEn
     BACKUP_ROOT_DIR: join(root, 'backups'),
     DATA_DIR: '',
     COMPANION_ID: '11111111-1111-4111-8111-111111111111',
-    PSFN_MULTI_COMPANION: 'false',
     ...overrides,
   };
 }
@@ -61,15 +60,21 @@ describe('resolveSystemOwnerFleetContext', () => {
     );
   });
 
-  it('keeps multi-companion mode bound to companions.json', () => {
+  it('synthesizes the single-companion migration fleet when no manifest is present', () => {
+    // The retired PSFN_MULTI_COMPANION flag no longer forces a manifest here:
+    // the migration tool synthesizes a one-entry fleet from the environment so a
+    // pre-manifest install can be migrated. A stray flag value is ignored.
     const env = singleCompanionEnv({ PSFN_MULTI_COMPANION: 'true' });
-    expect(() => resolveSystemOwnerFleetContext(env)).toThrow(
-      'Multi-companion mode requires a companions.json enumerating the fleet',
-    );
+    const { fleet } = resolveSystemOwnerFleetContext(env);
+    expect(fleet.companions).toHaveLength(1);
+    expect(fleet.companions[0]).toMatchObject({
+      companionId: '11111111-1111-4111-8111-111111111111',
+      postgresSchema: 'public',
+    });
   });
 
-  it('accepts an explicit one-entry manifest without treating it as single topology', () => {
-    const env = singleCompanionEnv({ PSFN_MULTI_COMPANION: 'true' });
+  it('uses an explicit manifest when one is present', () => {
+    const env = singleCompanionEnv();
     const companionId = '123e4567-e89b-42d3-a456-426614174000';
     writeFileSync(
       join(env.SYSTEM_DATA_DIR!, 'companions.json'),

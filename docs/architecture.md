@@ -160,8 +160,8 @@ model, layer-by-layer contract, quarantine lifecycle, and operator runbook.
   a many-to-many room (`companion-room:<placeId>`) and a 1:1 DM
   (`companion-dm:<a>:<b>`), routed by the gateway companion lane
   (`src/boundary/gateway/companion-channels.ts`) and governed by the existing
-  fatigue budgets. Active only under the multi-companion flag; see
-  [`docs/multi-companion.md`](./multi-companion.md).
+  fatigue budgets. Active only under multi-companion topology (a `companions.json`
+  with more than one entry); see [`docs/multi-companion.md`](./multi-companion.md).
 
 ### Locations, presence, and world
 
@@ -209,14 +209,16 @@ The path contract is defined in `src/persistence/layout.ts` and summarized in [`
 
 ## Multi-Companion Topology
 
-The default topology is one gateway, one agent process, one Companion Core, and
-one companion. An opt-in multi-companion topology runs N agent processes behind
-the one gateway, each running a peer Companion Core. Each companion has its own
-companion ID, data dir, character card, and Postgres schema, all connecting to
-the single gateway over the existing socket protocol. It is selected by the
-`PSFN_MULTI_COMPANION` env flag plus a system-owned `companions.json` fleet
-manifest, and is inert (byte-identical to single-companion) when the flag is
-off.
+Every deployment is a fleet of one or more companions, enumerated by a mandatory
+system-owned `companions.json` manifest. The default topology is one gateway,
+one agent process, one Companion Core, and one companion — a one-entry manifest.
+A multi-companion topology (a manifest with more than one entry) runs N agent
+processes behind the one gateway, each running a peer Companion Core. Each
+companion has its own companion ID, data dir, character card, and Postgres
+schema, all connecting to the single gateway over the existing socket protocol.
+Topology is derived from the manifest entry count (there is no
+`PSFN_MULTI_COMPANION` flag); a one-entry fleet is byte-identical to the old
+single-companion behavior.
 
 Tenancy is schema-per-companion (`config.postgresSchema` pins each agent's
 Postgres `search_path`) plus one `shared` schema for cross-companion world data.

@@ -12,13 +12,14 @@
  * validation logic here or in the launcher shell script.
  *
  * Fail-closed contract (inherited verbatim from `resolveCompanionFleet`):
- *   - PSFN_MULTI_COMPANION on  + companions.json missing/invalid => throw (exit != 0)
- *   - PSFN_MULTI_COMPANION off + companions.json present         => throw (exit != 0)
+ *   - companions.json missing or invalid => throw (exit != 0). The manifest is
+ *     mandatory for every deployment (a single-companion install is a one-entry
+ *     fleet); there is no flag-gated single mode.
  *
  * Output contract (stdout):
- *   - Single-companion topology (fleet resolves to undefined): print NOTHING.
+ *   - Single-companion topology (a one-entry fleet): print NOTHING.
  *     The launcher reads empty stdout as "stay in single-agent mode".
- *   - Multi-companion topology: one line per companion, fields tab-separated in
+ *   - Multi-companion topology (a multi-entry fleet): one line per companion, fields tab-separated in
  *     the order companionId, companionDataDir, characterCardPath, postgresSchema,
  *     personalWorkspacePath, companionAuthToken, sessionIntegrityAuthToken,
  *     adminTransportSocket.

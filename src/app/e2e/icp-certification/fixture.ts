@@ -271,7 +271,6 @@ function makeCompanion(input: {
     CONFIG_DIR: input.configDir,
     PERSISTENCE_BACKEND: 'postgres',
     POSTGRES_DATABASE_URL_FILE: postgresCredentialPath,
-    PSFN_MULTI_COMPANION: '1',
     COMPANION_ID: input.companionId,
     COMPANION_PG_SCHEMA: input.postgresSchema,
     CHARACTER_CARD_PATH: characterCardPath,
@@ -506,9 +505,13 @@ export function createIcpCertificationFixture(input: {
   ] as const;
   const topology = input.topology ?? 'multi_companion';
   if (topology === 'single_companion') {
-    companions[0].env.PSFN_MULTI_COMPANION = '0';
     delete companions[0].env.COMPANION_PG_SCHEMA;
-    rmSync(join(systemDataDir, 'companions.json'));
+    // Single-companion topology is a one-entry fleet: the manifest is still
+    // mandatory, but a lone entry makes multiCompanion derive false (behavior
+    // identical to the old single-companion topology).
+    writeJson(join(systemDataDir, 'companions.json'), {
+      companions: [supportContract.companions[0]],
+    });
   }
 
   const artifactsPath = join(rootDir, 'artifacts', 'certification.jsonl');

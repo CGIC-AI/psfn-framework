@@ -34,7 +34,6 @@ import { createDefaultGroupMemorySettings } from './group-memory-config.js';
 import { createDefaultEmotionScopingSettings } from './emotion-scoping-config.js';
 import { createDefaultMemoryRetrievalPolicy } from './memory-retrieval-policy.js';
 import {
-  isMultiCompanionEnabled,
   resolveCompanionFleet,
   resolveCompanionFleetPaths,
   resolveCompanionRuntimeIdentity,
@@ -347,7 +346,16 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     processMode: mode,
     seedDir: parseOptionalStringEnv(env.CONFIG_DIR),
   });
-  const multiCompanion = isMultiCompanionEnabled(env);
+  // The fleet manifest is mandatory (every deployment is a fleet of one or
+  // more companions). Topology is derived from the manifest, not a flag: a
+  // manifest with more than one entry is the multi-companion tenancy shape; a
+  // one-entry manifest is the canonical single-companion deployment ("a fleet
+  // of one") and boots identically to the old single-companion topology.
+  const rawCompanionFleet = resolveCompanionFleet({
+    dataDir,
+    seedDir: parseOptionalStringEnv(env.CONFIG_DIR),
+  });
+  const multiCompanion = rawCompanionFleet.companions.length > 1;
   const companionId = mode === 'operator' && multiCompanion
     ? undefined
     : requireCompanionId(env);
@@ -356,12 +364,7 @@ function loadConfigForMode(mode: LoadConfigMode, env: NodeJS.ProcessEnv = proces
     ?? `${configuredCompanionDataDir}/${DEFAULT_COMPANION_CARD_FILE_NAME}`;
   const configuredPostgresSchema = parsePostgresSchemaEnv(env.COMPANION_PG_SCHEMA);
 
-  const rawCompanionFleet = resolveCompanionFleet({
-    dataDir,
-    multiCompanion,
-    seedDir: parseOptionalStringEnv(env.CONFIG_DIR),
-  });
-  const companionFleet = rawCompanionFleet
+  const companionFleet = multiCompanion
     ? resolveCompanionFleetPaths(rawCompanionFleet, runtimePathLayout.runtimeRootDir, [
       { label: 'systemDataDir', path: runtimePathLayout.systemDataDir },
       { label: 'companionDataDir', path: runtimePathLayout.companionDataDir },

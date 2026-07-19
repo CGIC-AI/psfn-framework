@@ -56,6 +56,16 @@ describe('prepareAgentStartupContext', () => {
     for (const ownerFile of REQUIRED_OWNER_EXAMPLES) {
       copyOwnerExample(systemDataDir, ownerFile);
     }
+    // The companions.json fleet manifest is mandatory. A one-entry manifest is
+    // the single-companion topology (multiCompanion=false).
+    writeFileSync(join(systemDataDir, 'companions.json'), `${JSON.stringify({
+      companions: [{
+        companionId: '11111111-1111-4111-8111-111111111111',
+        companionDataDir: 'companion',
+        characterCardPath: 'companion/companion.json',
+        postgresSchema: 'public',
+      }],
+    })}\n`, 'utf8');
 
     saveModelsConfig(systemDataDir, {
       schemaVersion: 1,

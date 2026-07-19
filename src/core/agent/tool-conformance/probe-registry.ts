@@ -77,7 +77,6 @@ export const TOOL_CONFORMANCE_PROBE_REGISTRY: Readonly<Record<string, ToolProbeS
   // ── Knowledge / scheduling / orientation-extended ──
   skill: { kind: 'read_only', action: 'list', args: { action: 'list' } },
   wiki: { kind: 'read_only', action: 'list', args: { action: 'list' } },
-  library: { kind: 'read_only', action: 'list', args: { action: 'list' } },
   schedule: { kind: 'read_only', action: 'list', args: { action: 'list' } },
   north_star: { kind: 'read_only', action: 'list', args: { action: 'list' } },
 
@@ -358,13 +357,6 @@ export const TOOL_CONFORMANCE_ACTION_REGISTRY:
     wardrobe_read: SCHEMA_ASSERT,
     wardrobe_save: SCHEMA_ASSERT,
     wardrobe_revise: SCHEMA_ASSERT,
-  },
-  library: {
-    list: safeRead({ action: 'list' }),
-    read: SCHEMA_ASSERT,
-    import_text: SCHEMA_ASSERT,
-    import_file: SCHEMA_ASSERT,
-    promote_scratchpad: SCHEMA_ASSERT,
   },
   schedule: {
     list: safeRead({ action: 'list' }),

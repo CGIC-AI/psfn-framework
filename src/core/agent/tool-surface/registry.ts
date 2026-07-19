@@ -390,20 +390,6 @@ export const CANONICAL_FIRST_PARTY_TOOL_SURFACES: readonly CanonicalToolSurfaceE
     retiredAliases: [],
   },
   {
-    name: 'library',
-    domain: 'knowledge',
-    exposure: 'extended',
-    // Preserve its already-shipped tail position while canonicalizing only its description contract.
-    presentationRankOverride: TOOL_PRESENTATION_RANK_UNKNOWN,
-    description: CANONICAL_TOOL_SURFACE_DESCRIPTIONS.library,
-    actions: ['list', 'read', 'import_text', 'import_file', 'promote_scratchpad'],
-    capabilityMetadata: {
-      kind: 'action_aware',
-      source: 'src/faculties/memory/research-library/tools.ts',
-    },
-    retiredAliases: [],
-  },
-  {
     name: 'schedule',
     domain: 'scheduler',
     exposure: 'core',

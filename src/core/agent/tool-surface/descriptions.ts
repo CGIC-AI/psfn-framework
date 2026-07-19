@@ -11,7 +11,6 @@ import type {
   CanonicalToolActionContract,
   CanonicalToolSurfaceContract,
 } from './descriptions/contracts.js';
-import { KNOWLEDGE_TOOL_CONTRACTS } from './descriptions/knowledge-contracts.js';
 import { OPERATIONS_TOOL_CONTRACTS } from './descriptions/operations-contracts.js';
 
 export type {
@@ -22,7 +21,6 @@ export type {
 export const CANONICAL_TOOL_SURFACE_CONTRACTS = {
   ...CATALOG_BOUNDARY_TOOL_CONTRACTS,
   ...CONTINUITY_TOOL_CONTRACTS,
-  ...KNOWLEDGE_TOOL_CONTRACTS,
   ...OPERATIONS_TOOL_CONTRACTS,
   ...AGENCY_TOOL_CONTRACTS,
 } as const satisfies Record<string, CanonicalToolSurfaceContract>;

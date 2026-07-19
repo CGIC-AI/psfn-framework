@@ -25,38 +25,15 @@ import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state
 import { FLEET_AUTH_LOCK_COMPANION_AUTHORITY_FUNCTION_NAME } from './companion-authority-lock-sql.js';
 import { FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME } from './authority-floor-read-sql.js';
 import type { ProviderRevocationAuthorityPort } from './provider-revocation-authority.js';
+import {
+  createPositiveIntegerCoercer,
+  mapFleetAuthSessionRow,
+  type FleetAuthSessionRow,
+} from './row-utils.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 
 const AUTHORIZATION_CORRELATION_DIGEST_DOMAIN = 'fleet-authorization:correlation:v1\0';
-
-interface SessionRow {
-  record_id: string;
-  principal_id: string;
-  provider: 'discord' | null;
-  provider_subject_id: string | null;
-  audience: string;
-  assurance: 'oauth' | 'webauthn_uv' | 'break_glass';
-  session_authn_version: string;
-  session_authz_version: string;
-  binding_version: string;
-  grant_version: string;
-  policy_version: string;
-  session_global_auth_epoch: string;
-  idle_expires_at: Date;
-  absolute_expires_at: Date;
-  replaced_by: string | null;
-  revoked_at: Date | null;
-  principal_status: FleetAuthorizationSnapshot['sessions'][number]['principal']['status'];
-  principal_authn_version: string;
-  principal_authz_version: string;
-  principal_binding_version: string;
-  principal_grant_version: string;
-  principal_policy_version: string;
-  principal_authority_generation: string;
-  principal_restore_state: 'live' | 'quarantined';
-  merged_into_principal_id: string | null;
-  principal_tombstoned: boolean;
-}
+const positiveInteger = createPositiveIntegerCoercer('authorization-context');
 
 interface ProviderSubjectRow {
   provider: 'discord';
@@ -133,12 +110,10 @@ export interface PostgresFleetAuthorizationContextStoreOptions {
   now?: () => Date;
 }
 
-function positiveInteger(value: string, field: string): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    throw new Error(`Invalid fleet_auth authorization context ${field}`);
-  }
-  return parsed;
+export function mapAuthorizationContextSessionRow(
+  row: FleetAuthSessionRow,
+): FleetAuthorizationSnapshot['sessions'][number] {
+  return mapFleetAuthSessionRow(row, 'authorization-context');
 }
 
 function auditActor(evidenceRequested: boolean): string {
@@ -293,7 +268,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
     request: FleetAuthorizationRequest,
   ): Promise<FleetAuthorizationSnapshot> {
     const authority = await this.lockAuthority(client);
-    const sessions = await client.query<SessionRow>(`
+    const sessions = await client.query<FleetAuthSessionRow>(`
       SELECT session.record_id, session.principal_id, session.provider,
              session.provider_subject_id, session.audience, session.assurance,
              session.authn_version AS session_authn_version,
@@ -322,42 +297,7 @@ export class PostgresFleetAuthorizationContextStore implements FleetAuthorizatio
       WHERE session.token_digest = $1
       FOR UPDATE OF session, principal
     `, [this.digest(request.sessionToken)]);
-    const sessionRows = sessions.rows.map(row => ({
-      recordId: row.record_id,
-      principalId: row.principal_id,
-      provider: row.provider,
-      providerSubjectId: row.provider_subject_id,
-      audience: row.audience,
-      assurance: row.assurance,
-      authnVersion: positiveInteger(row.session_authn_version, 'session.authn_version'),
-      authzVersion: positiveInteger(row.session_authz_version, 'session.authz_version'),
-      bindingVersion: positiveInteger(row.binding_version, 'session.binding_version'),
-      grantVersion: positiveInteger(row.grant_version, 'session.grant_version'),
-      policyVersion: positiveInteger(row.policy_version, 'session.policy_version'),
-      globalAuthEpoch: positiveInteger(row.session_global_auth_epoch, 'session.global_auth_epoch'),
-      idleExpiresAt: row.idle_expires_at,
-      absoluteExpiresAt: row.absolute_expires_at,
-      replacedBy: row.replaced_by,
-      revokedAt: row.revoked_at,
-      principal: {
-        status: row.principal_status,
-        authnVersion: positiveInteger(row.principal_authn_version, 'principal.authn_version'),
-        authzVersion: positiveInteger(row.principal_authz_version, 'principal.authz_version'),
-        bindingVersion: positiveInteger(
-          row.principal_binding_version,
-          'principal.binding_version',
-        ),
-        grantVersion: positiveInteger(row.principal_grant_version, 'principal.grant_version'),
-        policyVersion: positiveInteger(row.principal_policy_version, 'principal.policy_version'),
-        authorityGeneration: positiveInteger(
-          row.principal_authority_generation,
-          'principal.authority_generation',
-        ),
-        restoreState: row.principal_restore_state,
-        mergedIntoPrincipalId: row.merged_into_principal_id,
-        tombstoned: row.principal_tombstoned,
-      },
-    }));
+    const sessionRows = sessions.rows.map(mapAuthorizationContextSessionRow);
     const principalId = sessionRows.at(0)?.principalId;
     if (!principalId) {
       return {

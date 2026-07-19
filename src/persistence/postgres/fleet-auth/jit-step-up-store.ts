@@ -12,6 +12,7 @@ import { FLEET_AUTH_ACTIONS, type FleetAuthAction } from '../../../system/config
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
 import { FleetAuthSecretCodec } from './oauth-secret-codec.js';
 import type { ProviderRevocationAuthorityPort } from './provider-revocation-authority.js';
+import { createPositiveIntegerCoercer } from './row-utils.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 
 const ACTIONS = new Set<string>(FLEET_AUTH_ACTIONS);
@@ -87,16 +88,10 @@ export interface PostgresFleetJitStepUpStoreOptions {
   passkeyAuthority: PasskeyAuthorityPort;
 }
 
+const positiveInteger = createPositiveIntegerCoercer('jit-step-up');
+
 function digest(value: string): string {
   return createHash('sha256').update(value, 'utf8').digest('hex');
-}
-
-function positiveInteger(value: string, field: string, allowZero = false): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < (allowZero ? 0 : 1)) {
-    throw new Error(`Invalid fleet_auth ${field}`);
-  }
-  return parsed;
 }
 
 function grant(row: GrantRow): FleetJitGrantBinding {

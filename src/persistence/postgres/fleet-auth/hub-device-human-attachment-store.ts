@@ -17,11 +17,13 @@ import {
   FLEET_AUTH_ATTACH_HUB_DEVICE_HUMAN_FUNCTION_NAME,
   FLEET_AUTH_FENCE_HUB_DEVICE_ATTACHMENT_FUNCTION_NAME,
 } from './hub-device-human-attachment-sql.js';
+import { createPositiveIntegerCoercer } from './row-utils.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 
 const CHANNEL_DIGEST_DOMAIN = 'fleet-auth:hub-device-channel:v1\0';
 const AUDIT_DIGEST_DOMAIN = 'fleet-auth:hub-device-attachment-audit:v1\0';
 const HUMAN_BINDING_DIGEST_DOMAIN = 'fleet-auth:hub-device-human-binding:v1\0';
+const positiveInteger = createPositiveIntegerCoercer('hub-device-attachment');
 
 interface AttachmentFunctionRow {
   decision: 'allow' | 'deny';
@@ -42,14 +44,6 @@ export interface PostgresHubDeviceHumanAttachmentStoreOptions {
   resolveAuthorizationContext(input: unknown): Promise<FleetAuthorizationContext>;
   now?: () => Date;
   randomId?: () => string;
-}
-
-function positiveInteger(value: string, field: string): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    throw new Error(`Invalid hub device attachment ${field}`);
-  }
-  return parsed;
 }
 
 function digest(...parts: string[]): string {

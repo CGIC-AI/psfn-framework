@@ -1144,7 +1144,7 @@ describe('AdminServer JSON API routes', () => {
   });
 
   it('returns no-store dashboard responses and visibly unavailable durable usage without Postgres', async () => {
-    const res = await request(port, 'GET', '/api/admin/dashboard?costWindow=week', undefined, authHeaders);
+    const res = await request(port, 'GET', '/api/admin/dashboard?costWindow=quarter', undefined, authHeaders);
 
     expect(res.status).toBe(200);
     expect(res.headers['cache-control']).toBe('no-store');
@@ -1162,7 +1162,7 @@ describe('AdminServer JSON API routes', () => {
       };
     };
     expect(payload.stats.modelUsage).toMatchObject({
-      selected: 'week',
+      selected: 'quarter',
       usage: null,
       freshness: {
         state: 'unavailable',
@@ -1241,7 +1241,9 @@ describe('AdminServer JSON API routes', () => {
     expect(res.status).toBe(400);
     expect(res.headers['cache-control']).toBe('no-store');
     const payload = JSON.parse(res.body) as { error: string };
-    expect(payload.error).toContain('Invalid costWindow query parameter');
+    expect(payload.error).toBe(
+      'Invalid costWindow query parameter. Expected today, week, month, or quarter.',
+    );
   });
 
   it('includes cadence fields for recurring tasks in /api/admin/scheduler', async () => {

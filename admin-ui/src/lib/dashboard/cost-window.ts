@@ -2,7 +2,7 @@ import type {
   DashboardCostWindow,
 } from '$lib/types';
 
-export const DASHBOARD_COST_WINDOWS: readonly DashboardCostWindow[] = ['today', 'week', 'month'];
+export const DASHBOARD_COST_WINDOWS: readonly DashboardCostWindow[] = ['today', 'week', 'month', 'quarter'];
 export const DASHBOARD_MODEL_USAGE_POLL_INTERVAL_MS = 15_000;
 
 export interface DashboardCostWindowOption {
@@ -21,6 +21,7 @@ export const DASHBOARD_COST_WINDOW_OPTIONS: readonly DashboardCostWindowOption[]
   { value: 'today', label: 'Today' },
   { value: 'week', label: 'Week' },
   { value: 'month', label: 'Month' },
+  { value: 'quarter', label: 'Quarter' },
 ];
 
 export function isDashboardCostWindow(value: string): value is DashboardCostWindow {

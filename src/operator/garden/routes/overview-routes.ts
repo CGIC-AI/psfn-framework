@@ -346,7 +346,7 @@ export function buildAdminOverviewRoutes(options: {
           sendJson(
             res,
             400,
-            { error: 'Invalid costWindow query parameter. Expected today, week, or month.' },
+            { error: 'Invalid costWindow query parameter. Expected today, week, month, or quarter.' },
             ADMIN_DYNAMIC_JSON_HEADERS,
           );
           return;

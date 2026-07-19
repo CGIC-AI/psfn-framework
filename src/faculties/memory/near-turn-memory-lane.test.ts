@@ -79,6 +79,28 @@ describe('NearTurnMemoryLane', () => {
     expect(await lane.inferPostTurnAction({ id: 'm4', channelId: 'internal:reflection:whisper' })).toBeNull();
   });
 
+  it('never infers or executes maintenance artifacts for testing-marked sessions', async () => {
+    const memoryMaintenanceStore = {
+      listActiveMemories: vi.fn().mockResolvedValue([]),
+      upsertMemoryMaintenanceReview: vi.fn(),
+    };
+    const lane = makeLane({
+      cadence: cadence({ directCadenceTurns: 1 }),
+      memoryMaintenanceStore,
+    });
+    const sessionId = 'terminal:testing:near-turn-harness';
+
+    expect(await lane.inferPostTurnAction({ id: 'test-turn', channelId: sessionId })).toBeNull();
+    await lane.execute({
+      id: 'forged-testing-action',
+      channelId: sessionId,
+      payload: { sessionId },
+    });
+
+    expect(memoryMaintenanceStore.listActiveMemories).not.toHaveBeenCalled();
+    expect(memoryMaintenanceStore.upsertMemoryMaintenanceReview).not.toHaveBeenCalled();
+  });
+
   it('batches group rooms by interval + watermark instead of per-N-turns', async () => {
     const lane = makeLane({
       cadence: cadence({ groupMinIntervalMinutes: 30, groupMinNewEntries: 8 }),

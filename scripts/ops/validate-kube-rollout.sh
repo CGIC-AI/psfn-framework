@@ -888,7 +888,7 @@ check_gateway_smoke() {
   script=$(cat <<EOF
 const port = ${GATEWAY_PORT};
 const timeoutMs = ${SMOKE_TIMEOUT_SECONDS} * 1000;
-const runId = \`kube-rollout-validation-\${Date.now().toString(36)}\`;
+const runId = \`testing:kube-rollout-validation-\${Date.now().toString(36)}\`;
 const marker = \`rollout-\${Math.random().toString(36).slice(2, 10)}\`;
 const baseUrl = \`http://127.0.0.1:\${port}\`;
 const authHeaders = { authorization: \`Bearer \${process.env.API_KEY ?? ""}\` };

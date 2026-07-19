@@ -1160,8 +1160,9 @@ describe('temporal wake fan-out across channels (2x37.3)', () => {
   const IDLE = 'discord:dm-quiet';
   const PUBLIC = 'twitter:timeline';
   const INTERNAL = 'internal:reflection:daily';
+  const TESTING = 'api:rollout-validator:testing:kube-rollout-validation-20260719';
 
-  it('morning lane injects the new-day frame into every active channel and skips idle/public/internal', async () => {
+  it('morning lane injects the new-day frame into every active channel and skips idle/public/internal/testing', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(DAY2_MORNING));
     const { port, appended } = makeFanoutPort([
@@ -1173,6 +1174,8 @@ describe('temporal wake fan-out across channels (2x37.3)', () => {
       { sessionId: PUBLIC, channelType: 'api', entries: [entry({ channelId: PUBLIC, role: 'user', timestamp: DAY1_EVENING })] },
       // Internal reflection channel: never a wake target.
       { sessionId: INTERNAL, channelType: 'terminal', entries: [entry({ channelId: INTERNAL, role: 'user', timestamp: DAY1_EVENING })] },
+      // Harness traffic is ephemeral and never receives autonomous notes.
+      { sessionId: TESTING, channelType: 'api', entries: [entry({ channelId: TESTING, role: 'user', timestamp: DAY1_EVENING })] },
     ]);
     const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
     registerTemporalWakeupTasks({
@@ -1265,7 +1268,7 @@ describe('temporal wake fan-out across channels (2x37.3)', () => {
     expect(appended.filter(a => a.channelId === SATELLITE)).toHaveLength(1);
   });
 
-  it('idle refresher fans the refresh out to every active channel, skipping public/internal', async () => {
+  it('idle refresher fans the refresh out to every active channel, skipping public/internal/testing', async () => {
     vi.useFakeTimers();
     // Same-day long gap: last activity was this morning, now late afternoon.
     const morningAt = Date.parse('2026-06-11T09:00:00.000Z');
@@ -1276,6 +1279,7 @@ describe('temporal wake fan-out across channels (2x37.3)', () => {
       { sessionId: SATELLITE, channelType: 'wyoming', entries: [entry({ channelId: SATELLITE, role: 'user', timestamp: morningAt })] },
       { sessionId: PUBLIC, channelType: 'api', entries: [entry({ channelId: PUBLIC, role: 'user', timestamp: morningAt })] },
       { sessionId: INTERNAL, channelType: 'terminal', entries: [entry({ channelId: INTERNAL, role: 'user', timestamp: morningAt })] },
+      { sessionId: TESTING, channelType: 'api', entries: [entry({ channelId: TESTING, role: 'user', timestamp: morningAt })] },
     ]);
     const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
     registerTemporalWakeupTasks({
@@ -1293,6 +1297,25 @@ describe('temporal wake fan-out across channels (2x37.3)', () => {
 
     expect(appended.map(a => a.channelId).sort()).toEqual([DISCORD, SATELLITE].sort());
     expect(appended.every(a => a.source === TEMPORAL_WAKEUP_REFRESHER_NOTE_SOURCE)).toBe(true);
+  });
+
+  it('does not fall back to a testing-marked latest session without enumeration', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(DAY2_MORNING));
+    const { port, appended } = makeFanoutPort([
+      { sessionId: TESTING, channelType: 'api', entries: [entry({ channelId: TESTING, role: 'user', timestamp: DAY1_EVENING })] },
+    ]);
+    delete port.listRecentlyActiveChannels;
+    const scheduler = new Scheduler(new EventBus(), { tickIntervalMs: 60_000, heartbeatIntervalMs: 1_800_000 });
+    registerTemporalWakeupTasks({
+      scheduler,
+      sessionManager: port,
+      config: makeWakeConfig({ refresher: { enabled: false } }),
+    });
+
+    await runMorningHandler(scheduler);
+
+    expect(appended).toEqual([]);
   });
 });
 

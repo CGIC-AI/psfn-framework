@@ -473,6 +473,28 @@ class PostgresTranscriptProjection implements KeywordSearchableTranscriptProject
     await this.writeChain;
   }
 
+  async purgeChannel(channelId: string): Promise<void> {
+    await this.flushPendingWrites();
+    await withPostgresClient(this.pool, async (client) => {
+      await client.query(
+        `
+          DELETE FROM session_messages_projection
+          WHERE channel_id = $1
+        `,
+        [channelId],
+      );
+      await client.query(
+        `
+          DELETE FROM session_projection_drift
+          WHERE channel_id = $1
+        `,
+        [channelId],
+      );
+    });
+    this.messageMetadataByChannel.delete(channelId);
+    this.driftByChannel.delete(channelId);
+  }
+
   async searchByKeywords(
     query: string,
     limit = DEFAULT_SEARCH_LIMIT,

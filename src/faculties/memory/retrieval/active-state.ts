@@ -81,6 +81,9 @@ export function cloneActiveMemorySnapshot(
     ...(snapshot.artifactSensitivitySources
       ? { artifactSensitivitySources: snapshot.artifactSensitivitySources.map(source => ({ ...source })) }
       : {}),
+    ...(snapshot.disclosureMemorySources
+      ? { disclosureMemorySources: snapshot.disclosureMemorySources.map(source => ({ ...source })) }
+      : {}),
     ...(snapshot.manifestSeed
       ? {
         manifestSeed: cloneManifestSeed(snapshot.manifestSeed),

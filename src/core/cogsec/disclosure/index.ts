@@ -13,3 +13,11 @@ export {
   intersectDestinationConstraints,
   maxSensitivity,
 } from './decision.js';
+export {
+  DISCLOSURE_CLASSIFIER_VERSION,
+  assertScopedDisclosureConstraints,
+  buildGenerationDisclosureLineage,
+  memoryDisclosureContribution,
+  sessionHistoryDisclosureContribution,
+  type DisclosureMemorySource,
+} from './generation-lineage.js';

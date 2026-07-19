@@ -13,6 +13,7 @@ import { normalizeMemoryScopeQuery } from './types.js';
 import type { ConversationScope } from '../../core/session/conversation-scope.js';
 import type { TurnRetrievalQueryEmbedding } from '../../shared/retrieval-query-embedding.js';
 import type { ArtifactSensitivitySource } from '../../shared/contracts/artifact-sensitivity.js';
+import type { DisclosureMemorySource } from '../../core/cogsec/disclosure/generation-lineage.js';
 
 export type ActiveMemoryRefreshStatus = 'ready' | 'refreshing' | 'degraded';
 
@@ -51,6 +52,12 @@ export interface ActiveMemoryContextSnapshot {
   selectedMemoryIds: string[];
   /** Content-free sensitivity provenance for every memory rendered into this context block. */
   artifactSensitivitySources?: ArtifactSensitivitySource[];
+  /**
+   * Content-free outbound-disclosure facts (sensitivity, subject contact, source
+   * channel) for every memory rendered into this context block, folded into the
+   * generation disclosure lineage at the turn seam (bible §9.2, jp36.1.1.2).
+   */
+  disclosureMemorySources?: DisclosureMemorySource[];
   generatedAt: number;
   lastRefreshStartedAt: number;
   lastRefreshCompletedAt?: number;

@@ -46,6 +46,7 @@ import {
   COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE,
 } from '../../../../faculties/memory/retrieval/access-scope.js';
 import type { ArtifactSensitivitySource } from '../../../../shared/contracts/artifact-sensitivity.js';
+import type { DisclosureMemorySource } from '../../../cogsec/disclosure/generation-lineage.js';
 import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
 
 const log = createComponentLogger('SubstrateAgent');
@@ -102,6 +103,8 @@ export interface PreTurnComputationResult {
   memoryContextBlock: string;
   memoryContextChars: number;
   artifactSensitivitySources: ArtifactSensitivitySource[];
+  /** Content-free outbound-disclosure facts for admitted memories (bible §9.2, jp36.1.1.2). */
+  disclosureMemorySources: DisclosureMemorySource[];
   memoryManifestSeed?: ContextManifestMemorySeed;
   /**
    * E8.3: supplemental wiki RAG block. Empty unless wiki retrieval is wired,
@@ -999,6 +1002,7 @@ export async function computePreTurnState(input: {
     memoryContextBlock,
     memoryContextChars,
     artifactSensitivitySources: activeMemoryContext?.artifactSensitivitySources?.map(source => ({ ...source })) ?? [],
+    disclosureMemorySources: activeMemoryContext?.disclosureMemorySources?.map(source => ({ ...source })) ?? [],
     ...(activeMemoryContext?.manifestSeed ? { memoryManifestSeed: activeMemoryContext.manifestSeed } : {}),
     wikiContextBlock,
     scratchpadBlock,

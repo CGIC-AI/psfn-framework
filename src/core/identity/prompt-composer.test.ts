@@ -208,7 +208,7 @@ describe('PromptComposer', () => {
 
     it('preserves the stored order when composing enabled layers', () => {
       const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
-      const base = store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      const base = store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
       const operator = store.create({ type: 'operator', name: 'Operator', content: 'OPERATOR' });
 
       store.reorderByLayerIds([operator.id, runtime.id, base.id], 'admin');
@@ -251,7 +251,7 @@ describe('PromptComposer', () => {
 
   describe('disabled layers', () => {
     it('excludes disabled layers', () => {
-      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
       const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
       store.toggle(runtime.id); // disable it
 
@@ -264,7 +264,7 @@ describe('PromptComposer', () => {
 
   describe('channel filtering', () => {
     it('includes matching channelType layers', () => {
-      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
       store.create({ type: 'channel', name: 'Discord', content: 'DISCORD', channelType: 'discord_text' });
       store.create({ type: 'channel', name: 'API', content: 'API', channelType: 'api' });
 
@@ -277,7 +277,7 @@ describe('PromptComposer', () => {
     });
 
     it('excludes channel layers when no channelType in context', () => {
-      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
       store.create({ type: 'channel', name: 'Discord', content: 'DISCORD', channelType: 'discord_text' });
 
       const result = composer.composeSplit();
@@ -287,7 +287,7 @@ describe('PromptComposer', () => {
     });
 
     it('excludes channel layers when channelType does not match', () => {
-      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
       store.create({ type: 'channel', name: 'Discord', content: 'DISCORD', channelType: 'discord_text' });
 
       const result = composer.composeSplit({ channelType: 'api' });
@@ -299,7 +299,7 @@ describe('PromptComposer', () => {
 
   describe('task filtering', () => {
     it('includes matching taskKind layers', () => {
-      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
       store.create({ type: 'task', name: 'Heartbeat', content: 'HEARTBEAT', taskKind: 'heartbeat' });
       store.create({ type: 'task', name: 'Reflection', content: 'REFLECTION', taskKind: 'reflection' });
 
@@ -312,7 +312,7 @@ describe('PromptComposer', () => {
     });
 
     it('excludes task layers when no taskKind in context', () => {
-      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
       store.create({ type: 'task', name: 'Heartbeat', content: 'HEARTBEAT', taskKind: 'heartbeat' });
 
       const result = composer.composeSplit();
@@ -324,7 +324,7 @@ describe('PromptComposer', () => {
 
   describe('compose result', () => {
     it('returns correct layerCount and layerIds', () => {
-      const base = store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      const base = store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
       const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
 
       const result = composer.composeSplit();
@@ -334,7 +334,7 @@ describe('PromptComposer', () => {
     });
 
     it('produces deterministic hash for same layers', () => {
-      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
       store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
 
       const result1 = composer.composeSplit();
@@ -345,7 +345,12 @@ describe('PromptComposer', () => {
     });
 
     it('produces different hash for different content', () => {
-      const layer = store.create({ type: 'base', name: 'Base', content: 'content-A' });
+      const layer = store.create({
+        type: 'base',
+        name: 'Base',
+        content: 'content-A',
+        identifier: 'main',
+      });
       const hash1 = composer.composeSplit().hash;
 
       store.update(layer.id, 'content-B', 'test');
@@ -355,7 +360,7 @@ describe('PromptComposer', () => {
     });
 
     it('returns split output with static prefix first and compose parity', () => {
-      const base = store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      const base = store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
       const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
       const channel = store.create({
         type: 'channel',
@@ -381,7 +386,7 @@ describe('PromptComposer', () => {
     });
 
     it('keeps static hash stable when only dynamic layers change', () => {
-      const base = store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      const base = store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
       const runtime = store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME-A' });
       const channel = store.create({
         type: 'channel',
@@ -402,7 +407,7 @@ describe('PromptComposer', () => {
     });
 
     it('invalidates static hash when a static layer changes', () => {
-      const base = store.create({ type: 'base', name: 'Base', content: 'BASE-A' });
+      const base = store.create({ type: 'base', name: 'Base', content: 'BASE-A', identifier: 'main' });
       store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
 
       const before = composer.composeSplit();
@@ -470,7 +475,7 @@ describe('PromptComposer', () => {
 
   describe('combined channel and task context', () => {
     it('includes both channel and task layers when context matches', () => {
-      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
       store.create({ type: 'channel', name: 'Discord', content: 'DISCORD', channelType: 'discord_text' });
       store.create({ type: 'task', name: 'Heartbeat', content: 'HEARTBEAT', taskKind: 'heartbeat' });
 
@@ -528,7 +533,7 @@ describe('PromptComposer', () => {
           northStarLayerProvider: () => northStarStore.buildPromptLayer(),
         },
       );
-      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
       store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
 
       const result = constitutionComposer.composeSplit();
@@ -575,7 +580,12 @@ describe('PromptComposer', () => {
         updatedBy: 'admin',
       });
 
-      const base = store.create({ type: 'base', name: 'Base Identity', content: 'BASE' });
+      const base = store.create({
+        type: 'base',
+        name: 'Base Identity',
+        content: 'BASE',
+        identifier: 'main',
+      });
       const operator = store.create({ type: 'operator', name: 'Operator Policy', content: 'OPERATOR' });
       const runtime = store.create({ type: 'runtime', name: 'Runtime Overlay', content: 'RUNTIME' });
       const channel = store.create({
@@ -748,7 +758,7 @@ describe('PromptComposer', () => {
           companionValuesLayerProvider: () => valuesStore.buildCompanionDerivedLayer(),
         },
       );
-      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
       store.create({ type: 'runtime', name: 'Runtime', content: 'RUNTIME' });
 
       const before = constitutionComposer.composeSplit();
@@ -789,7 +799,7 @@ describe('PromptComposer', () => {
           },
         },
       );
-      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
 
       const result = constitutionComposer.composeSplit();
       expect(result.text).toContain('<immutable_human_safety_amendments>');
@@ -812,7 +822,7 @@ describe('PromptComposer', () => {
         undefined,
         { enableConstitution: true },
       );
-      store.create({ type: 'base', name: 'Base', content: 'BASE' });
+      store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
 
       const vega = constitutionComposer.composeSplit({ user: 'Vega' });
       const iku = constitutionComposer.composeSplit({ user: 'Iku' });
@@ -842,7 +852,7 @@ describe('values feedback loop across store instances', () => {
         join(loopDir, 'layers.json'),
         join(loopDir, 'history.jsonl'),
       );
-      layerStore.create({ type: 'base', name: 'Base', content: 'BASE' });
+      layerStore.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
       const composer = new PromptComposer(layerStore, undefined, undefined, {
         enableConstitution: true,
         companionValuesLayerProvider: () => composerStore.buildCompanionDerivedLayer(),
@@ -926,6 +936,7 @@ describe('static prompt layer volatility enforcement', () => {
     const layer = store.create({
       type: 'base',
       name: 'Base Identity',
+      identifier: 'main',
       content: 'You are {{char}}.',
     });
     // Simulate a pre-existing persisted layer that bypassed edit-time validation.

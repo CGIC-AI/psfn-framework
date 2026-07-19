@@ -66,7 +66,7 @@ function makeFakeStore(layer: Pick<PromptLayer, 'id' | 'type' | 'identifier' | '
 describe('system language templates', () => {
   it('seeds a system_language owner layer but excludes it from composed prompts', () => withStore((store) => {
     const languageLayer = ensureSystemLanguagePromptLayer(store);
-    const base = store.create({ type: 'base', name: 'Base', content: 'BASE' });
+    const base = store.create({ type: 'base', name: 'Base', content: 'BASE', identifier: 'main' });
 
     expect(languageLayer).toMatchObject({
       type: 'system_language',

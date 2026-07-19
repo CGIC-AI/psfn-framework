@@ -52,6 +52,16 @@ export interface ChannelOutboundAdapter {
   textChunkLimit: number;
   sendText(ctx: OutboundContext, text: string): Promise<void>;
   sendMedia?(ctx: OutboundContext, media: MediaAttachment): Promise<void>;
+  /**
+   * jp36.3.1: outbound emoji reaction as a first-class social action
+   * (design bible §8.3 / §13.5). Optional and gated by
+   * {@link ChannelCapabilities.reactions}; a channel that advertises
+   * `reactions: true` must implement this. A failed reaction
+   * (unsupported emoji, missing permission, unresolved target) rejects so
+   * the caller surfaces a visible delivery failure — it is never silently
+   * converted into a text reply.
+   */
+  sendReaction?(ctx: OutboundContext, messageId: string, emoji: string): Promise<void>;
 }
 
 export interface ChannelGatewayAdapter extends Lifecycle {
@@ -117,7 +127,7 @@ export type ChannelAdapterFactoryEntry = ChannelAdapterFactoryPort;
 // Lightweight docks for shared call sites that only need a focused channel facet.
 export interface ChannelOutboundDock {
   id: string;
-  outbound: Pick<ChannelOutboundAdapter, 'textChunkLimit' | 'sendText' | 'sendMedia'>;
+  outbound: Pick<ChannelOutboundAdapter, 'textChunkLimit' | 'sendText' | 'sendMedia' | 'sendReaction'>;
 }
 
 export interface ChannelPromptDock {

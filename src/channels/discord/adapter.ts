@@ -237,6 +237,9 @@ export class DiscordAdapter implements ChannelAdapterPort {
       sendMedia: async (ctx: OutboundContext, media: MediaAttachment): Promise<void> => {
         await this.sendMediaInternal(ctx, media);
       },
+      sendReaction: async (ctx: OutboundContext, messageId: string, emoji: string): Promise<void> => {
+        await this.sendReactionInternal(ctx, messageId, emoji);
+      },
     };
     this.gateway = this;
     this.security = {
@@ -420,6 +423,36 @@ export class DiscordAdapter implements ChannelAdapterPort {
       files: [file],
       ...(ctx.replyToMessageId ? { reply: { messageReference: ctx.replyToMessageId } } : {}),
     });
+  }
+
+  /**
+   * jp36.3.1.1: outbound emoji reaction on the existing channel adapter seam
+   * (design bible §8.3 / §13.5). Fail-closed: an unresolved channel/message,
+   * empty inputs, or a Discord API rejection (unsupported emoji, missing
+   * permission) surfaces as a thrown delivery failure. The reaction is never
+   * silently swallowed or converted into a text reply.
+   */
+  private async sendReactionInternal(
+    ctx: OutboundContext,
+    messageId: string,
+    emoji: string,
+  ): Promise<void> {
+    const normalizedMessageId = messageId.trim();
+    if (!normalizedMessageId) {
+      throw new Error('Discord reaction requires a target message id');
+    }
+    const normalizedEmoji = emoji.trim();
+    if (!normalizedEmoji) {
+      throw new Error('Discord reaction requires a non-empty emoji');
+    }
+
+    const channel = await this.client.channels.fetch(ctx.channelId);
+    if (!channel?.isTextBased()) {
+      throw new Error(`Discord reaction target channel is not text-based: ${ctx.channelId}`);
+    }
+
+    const message = await (channel as TextChannel).messages.fetch(normalizedMessageId);
+    await message.react(normalizedEmoji);
   }
 
   private async fetchRemoteMediaAttachment(

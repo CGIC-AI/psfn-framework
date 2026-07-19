@@ -181,6 +181,7 @@ describe('Postgres live schema migrations', () => {
       'icp_conversation_episodes',
       'icp_initiation_permits',
       'icp_fatigue_turn_reservations',
+      'companion_social_pot',
     ]) {
       expect(sharedSql).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);
     }
@@ -188,6 +189,7 @@ describe('Postgres live schema migrations', () => {
     expect(sharedSql).toContain("VALUES (5, 'icp-autonomy-invalidation-fences')");
     expect(sharedSql).toContain("VALUES (6, 'icp-fatigue-turn-reservations')");
     expect(sharedSql).toContain("VALUES (7, 'icp-fatigue-delivery-fence')");
+    expect(sharedSql).toContain("VALUES (9, 'companion-social-pot')");
     expect(sharedSql).toContain("'delivering'");
     expect(sharedSql).toContain('participant_companion_ids UUID[] NOT NULL');
     expect(sharedSql).toContain('UNIQUE (candidate_id)');

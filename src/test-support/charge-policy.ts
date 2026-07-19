@@ -118,6 +118,12 @@ export function makeTestFatiguePolicyConfig(): FatiguePolicyConfig {
         explicitPeerInvitation: true,
       },
     },
+    socialPot: {
+      capUnits: 24,
+      perChannelDrawFraction: 0.34,
+      regenerationTickMs: 60 * 60_000,
+      regenerationUnitsPerTick: 1,
+    },
   };
 }
 

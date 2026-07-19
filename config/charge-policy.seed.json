@@ -167,6 +167,12 @@
         "activeWorkOrResearch": true,
         "explicitPeerInvitation": true
       }
+    },
+    "socialPot": {
+      "capUnits": 24,
+      "perChannelDrawFraction": 0.34,
+      "regenerationTickMs": 3600000,
+      "regenerationUnitsPerTick": 1
     }
   }
 }

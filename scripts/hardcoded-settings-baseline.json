@@ -3316,6 +3316,12 @@
       "value": "200"
     },
     {
+      "file": "src/faculties/wiki/personal-projects.ts",
+      "name": "QUARANTINE_REPORT_SAMPLE_LIMIT",
+      "value": "50",
+      "note": "Code-owned bound on the maintenance CLI quarantine report sample size; output-size guard, not runtime behavior policy."
+    },
+    {
       "file": "src/faculties/wiki/personal-wishlist-contracts.ts",
       "name": "MAX_OPERATOR_RESPONSE_CHARS",
       "value": "4_000",

@@ -4,7 +4,10 @@ import {
   FleetGardenTargetRegistry,
   type FleetGardenTargetIdentity,
 } from './fleet-garden-target-registry.js';
-import { GardenAdminTransportProxy } from './transport-client.js';
+import {
+  FLEET_MODEL_USAGE_INTERNAL_HEADER,
+  GardenAdminTransportProxy,
+} from './transport-client.js';
 
 export interface FleetGardenTransportProxyPort {
   close(callback: () => void): void;
@@ -28,6 +31,14 @@ export interface FleetGardenTransportProxyPort {
   ): void;
 }
 
+/** Narrow read client used by fleet-wide accounting fan-out. */
+export interface FleetGardenModelUsageTransportPort {
+  requestModelUsage(
+    target: FleetGardenTargetIdentity,
+    requestPath: string,
+  ): Promise<unknown>;
+}
+
 interface FleetTargetProxy {
   readonly target: FleetGardenTargetIdentity;
   readonly proxy: GardenAdminTransportProxy;
@@ -38,7 +49,9 @@ interface FleetTargetProxy {
  * must supply the exact identity returned by admission; a companion ID copied
  * or reconstructed later is insufficient to select an endpoint.
  */
-export class FleetGardenAdminTransportProxy implements FleetGardenTransportProxyPort {
+export class FleetGardenAdminTransportProxy implements
+  FleetGardenTransportProxyPort,
+  FleetGardenModelUsageTransportPort {
   private readonly proxies: ReadonlyMap<string, FleetTargetProxy>;
 
   constructor(private readonly registry: FleetGardenTargetRegistry) {
@@ -99,6 +112,23 @@ export class FleetGardenAdminTransportProxy implements FleetGardenTransportProxy
       requestPath,
       503,
     );
+  }
+
+  requestModelUsage(
+    target: FleetGardenTargetIdentity,
+    requestPath: string,
+  ): Promise<unknown> {
+    const parsed = new URL(requestPath, 'http://localhost');
+    if (!requestPath.startsWith('/')
+      || parsed.origin !== 'http://localhost'
+      || parsed.pathname !== '/api/admin/model-usage'
+      || parsed.hash) {
+      throw new Error('Fleet model-usage transport requires the canonical model-usage route');
+    }
+    return this.requireExactProxy(target).requestJson(requestPath, {
+      accept: 'application/json',
+      [FLEET_MODEL_USAGE_INTERNAL_HEADER]: '1',
+    });
   }
 
   handleTelemetryUpgrade(

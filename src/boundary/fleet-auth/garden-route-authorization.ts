@@ -349,10 +349,10 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   {
     action: 'models.read', area: 'models', routeIds: [
       ...ids('GET', [
-        '/api/admin/model-usage', '/api/admin/model-usage/export',
+        '/api/admin/fleet-model-usage', '/api/admin/model-usage', '/api/admin/model-usage/export',
         '/api/admin/chat/model-room/bootstrap', '/api/admin/models',
       ]),
-      ...pageIds(['/model-room', '/models']),
+      ...pageIds(['/fleet-costs', '/model-room', '/models']),
     ],
   },
   {

@@ -18,7 +18,10 @@ import type { GardenAdminDomainServices } from './admin-contract.js';
 import { AdminServerTelemetryTransport } from './server-telemetry-transport.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { HEALTH_PROBE_PATH } from './transport-client.js';
+import {
+  FLEET_MODEL_USAGE_INTERNAL_HEADER,
+  HEALTH_PROBE_PATH,
+} from './transport-client.js';
 import type { GardenAdminTransportServerEndpoint } from './transport-paths.js';
 import type {
   AdminAuditActionType,
@@ -366,6 +369,24 @@ export class GardenAdminTransportServer implements Lifecycle {
 
     if ((req.method ?? 'GET') === 'GET' && requestPath === HEALTH_PROBE_PATH) {
       sendJson(res, 200, { status: 'ok', mode: this.config.endpoint.mode });
+      return;
+    }
+
+    const internalFleetModelUsage = req.headers[FLEET_MODEL_USAGE_INTERNAL_HEADER];
+    if (internalFleetModelUsage !== undefined) {
+      delete req.headers[FLEET_MODEL_USAGE_INTERNAL_HEADER];
+      if (this.admission.kind !== 'fleet-principal'
+        || req.method !== 'GET'
+        || requestPath !== '/api/admin/model-usage'
+        || internalFleetModelUsage !== '1') {
+        sendText(res, 403, 'Forbidden');
+        return;
+      }
+      // The Unix-socket owner or verified operator mTLS peer is the authority
+      // for this one read. The ordinary browser proxy cannot forward the marker.
+      // Dispatching the companion-bound service preserves the canonical
+      // aggregate/private-detail combination in AdminModelUsageDataService.
+      this.dispatchRequest(req, res, requestPath);
       return;
     }
 

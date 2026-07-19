@@ -1,9 +1,13 @@
-import type { IncomingMessage, ServerResponse } from 'node:http';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { FleetGardenTargetRegistry } from './fleet-garden-target-registry.js';
 import { FleetGardenAdminTransportProxy } from './fleet-transport-client.js';
+import { FLEET_MODEL_USAGE_INTERNAL_HEADER } from './transport-client.js';
 
 const COMPANION_A = createCompanionId('11111111-1111-4111-8111-111111111111');
 const COMPANION_B = createCompanionId('22222222-2222-4222-8222-222222222222');
@@ -44,6 +48,36 @@ function response(): {
 }
 
 describe('FleetGardenAdminTransportProxy', () => {
+  it('reads model usage from the exact target over the bounded internal transport seam', async () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'psfn-fleet-model-usage-'));
+    const socketPath = join(scratch, 'admin.sock');
+    const server = createServer((req, res) => {
+      expect(req.url).toBe('/api/admin/model-usage?range=week');
+      expect(req.headers[FLEET_MODEL_USAGE_INTERNAL_HEADER]).toBe('1');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(socketPath, resolve);
+    });
+    const registry = new FleetGardenTargetRegistry([{
+      companionId: COMPANION_A,
+      endpoint: { mode: 'socket', socketPath, timeoutMs: 1_000 },
+    }]);
+    const transport = new FleetGardenAdminTransportProxy(registry);
+
+    try {
+      await expect(transport.requestModelUsage(
+        registry.resolve(COMPANION_A),
+        '/api/admin/model-usage?range=week',
+      )).resolves.toEqual({ ok: true });
+    } finally {
+      await new Promise<void>(resolve => server.close(() => resolve()));
+      rmSync(scratch, { recursive: true, force: true });
+    }
+  });
+
   it('returns an authenticated 503 for the selected outage without trying another target', async () => {
     const registry = new FleetGardenTargetRegistry([
       {

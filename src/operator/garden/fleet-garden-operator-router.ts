@@ -14,6 +14,10 @@ import {
   type FleetGardenReadiness,
 } from './fleet-garden-control-plane.js';
 import type { FleetGardenTransportProxyPort } from './fleet-transport-client.js';
+import {
+  handleFleetModelUsageRoute,
+  type FleetModelUsageRouteService,
+} from './routes/fleet-model-usage-routes.js';
 
 const log = createComponentLogger('FleetGardenOperatorRouter');
 
@@ -22,6 +26,7 @@ export interface FleetGardenOperatorRouterOptions {
   readonly transport: FleetGardenTransportProxyPort;
   readonly childAssertions?: GardenFleetChildAssertionClient;
   readonly directDatabase?: FleetGardenDirectDatabasePort;
+  readonly fleetModelUsage?: FleetModelUsageRouteService;
 }
 
 export interface FleetGardenDirectDatabasePort {
@@ -75,6 +80,20 @@ export class FleetGardenOperatorRouter {
       req: input.req,
       res: input.res,
     })) {
+      return;
+    }
+    if (admitted.target.canonicalPath === '/api/admin/fleet-model-usage') {
+      if (!this.options.fleetModelUsage) {
+        sendText(input.res, 503, 'Fleet model usage unavailable');
+        return;
+      }
+      const originalTarget = input.req.url;
+      input.req.url = admitted.target.canonicalRequestTarget;
+      try {
+        handleFleetModelUsageRoute(input.req, input.res, this.options.fleetModelUsage);
+      } finally {
+        input.req.url = originalTarget;
+      }
       return;
     }
     if (!this.options.childAssertions) {

@@ -28,6 +28,7 @@ import {
   type GardenAdminTransportHealth,
 } from './transport-client.js';
 import type { GardenAdminTransportClientEndpoint } from './transport-paths.js';
+import type { FleetModelUsageRouteService } from './routes/fleet-model-usage-routes.js';
 
 const log = createComponentLogger('GardenOperatorRouting');
 
@@ -39,6 +40,7 @@ export interface GardenOperatorRoutingOptions {
   readonly fleetTransport?: FleetGardenTransportProxyPort;
   readonly fleetChildAssertions?: GardenFleetChildAssertionClient;
   readonly fleetDirectDatabase?: FleetGardenDirectDatabasePort;
+  readonly fleetModelUsage?: FleetModelUsageRouteService;
 }
 
 export type GardenOperatorTransportProbe =
@@ -75,6 +77,9 @@ export class GardenOperatorRouting {
           : {}),
         ...(options.fleetDirectDatabase
           ? { directDatabase: options.fleetDirectDatabase }
+          : {}),
+        ...(options.fleetModelUsage
+          ? { fleetModelUsage: options.fleetModelUsage }
           : {}),
       });
       this.fixedProxy = undefined;

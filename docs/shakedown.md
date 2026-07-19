@@ -19,6 +19,75 @@ It has two layers, run in this order per round:
 
 Layer A proves the substrate executes. Layer B proves it is *livable* — clarity, coherence, narration-vs-real-execution, fatigue, feel. Every reproducible Layer B finding is converted into a Layer A case for the next sprint, so the automated catalog grows from real companion experience.
 
+## Profiles: lite vs full
+
+A shakedown runs under one of two profiles. They share the same scripted Layer A
+machinery (the case harness, tier sweep, tool-conformance, capability-gate
+matrix, and scorecard); they differ only in scope and in when each is required.
+
+| Profile | When required | Scope | Coverage-appendix cross-check |
+| --- | --- | --- | --- |
+| **full** | **Post-sprint**, once per sprint round | The complete process below: coverage-appendix mandate, both standing lanes, Layer B partner sessions, exit interview, livability gate | **Enforced** — every in-scope appendix surface must map to an executed case or an explicit disposition |
+| **lite** | **Out-of-band feature pushes** between rounds — the repeatable scripted floor | Preflight verify gates + ~10 persisted-state smoke surfaces on **one** target + the capability-gate matrix and tier tool-conformance evidence at **all three tiers**; single target, sub-hour | **Skipped** — but only when every lite attestation is present (see below); otherwise fail-closed |
+
+**lite never substitutes for a full round.** It is a floor, not a certification:
+it proves the substrate still executes its core persisted-state surfaces and that
+capability gating still holds at every tier, so a feature can ship between sprints
+without a multi-hour round. The full post-sprint round — coverage mandate, Layer B,
+exit interview, livability gate — is unchanged and still required each sprint.
+
+### Running a profile
+
+Both profiles run through one entrypoint, `shakedown/harness/run-shakedown-profile.mjs`,
+after the env is sourced (two stages, both `set -a`; see the bootstrap section):
+
+```bash
+# lite — one explicit target, sub-hour, scripted floor
+PSFN_TARGET=kube \
+PSFN_API_BASE=http://127.0.0.1:10053 \
+PSFN_ADMIN_BASE=http://127.0.0.1:10054 \
+PSFN_MATRIX_DIR=$SHAKEDOWN_ROOT/artifacts/matrix \
+  node shakedown/harness/run-shakedown-profile.mjs --profile lite
+
+# full — the standard scripted Layer A (unchanged output; no profile stamp)
+PSFN_TARGET=local \
+PSFN_TIER_FILE=$SYSTEM_DATA_DIR/capability-tier.json \
+PSFN_MATRIX_DIR=$SHAKEDOWN_ROOT/artifacts/matrix \
+PSFN_SCORECARD_JSON=$SHAKEDOWN_ROOT/artifacts/shakedown-scorecard.json \
+PSFN_SCORECARD_MD=$SHAKEDOWN_ROOT/SHAKEDOWN-SCORECARD.md \
+  node shakedown/harness/run-shakedown-profile.mjs --profile full
+```
+
+### What lite does (and why it is safe to skip the cross-check)
+
+The lite profile is a **thin wrapper** — it never forks the matrix logic. It:
+
+1. **Runs the required preflight verify gates** from the declarative manifest
+   (`shakedown/harness/profiles/lite.manifest.json`: `verify:startup-owner-files`,
+   `verify:settings-contract`, `verify:backup-restore`). A red gate aborts the run.
+2. **Selects one target and ~10 persisted-state smoke surfaces by stable case id**
+   (never catalog position), listed in the manifest and run at the baseline tier.
+3. **Drives the standing `run-live-shakedown-matrix.sh` sweep** across all three
+   tiers with the capability-gate matrix case (`capability_refusal_matrix`) in
+   every tier's set, so the refusal grid and the tier tool-conformance evidence
+   (stable coverage ids `capability_refusal_matrix` + `tier_tool_conformance`) are
+   collected at nursery, apprentice, and autonomous.
+4. **Enforces a sub-hour deadline with signal-safe tier restoration.** On the
+   deadline — or on an operator `SIGINT`/`SIGTERM` — the runner `SIGTERM`s the
+   sweep so *its own* exit trap restores and verifies the pre-sweep tier through
+   the capabilities admin API (the same restore contract the tier-conformance
+   sweep uses). It never edits `capability-tier.json` on the PVC.
+5. **Runs the scorecard with `PSFN_PROFILE=lite`.** Only lite artifacts and lite
+   scorecards are stamped `profile: "lite"`; full-profile output is byte-for-byte
+   unchanged and gains no stamp. The scorecard **skips the coverage-appendix
+   completeness cross-check only when every lite attestation is present** — the
+   capability-gate matrix ran green, both stable coverage ids are stamped, and the
+   tier tool-conformance evidence was collected at all three tiers. A missing
+   attestation is a **hard, fail-closed failure**, not a silent skip, and the
+   cross-check stays enforced. Real case failures and Garden-sweep failures still
+   fail a lite run — lite waives only the *appendix completeness* mandate, nothing
+   about whether the executed surfaces actually passed.
+
 ## Roles
 
 - **Operator** — approves scope, waives findings, owns the release verdict.
@@ -47,6 +116,73 @@ The full cross-product is not run. The standing simplification:
 | **Pi-class / low-context profile** | spot check, kube | Forced-compaction latency cliff (`mmo9.4`) — explicitly a blind spot on dev-class hardware |
 
 Tier switching (local lane): edit `capability-tier.json` in the shakedown `system-data`, restart the runtime, run that tier's case subset. Back up the owner file before the sweep and restore it after (trap-on-exit); verify the restore happened before closing the round.
+
+### Matrix external-sink variables (all tiers, including nursery)
+
+The capability-gate matrix (`capability_refusal_matrix`) proves the `external.*`
+grants actually actuate by sending a live Discord message at the apprentice and
+autonomous tiers (email is exemption-gated; see below). At nursery the external
+tokens are *denied*, but the
+denial is proven by dispatching the `external.discord`/`external.email` probes
+through the deployed runtime (see below) — so on a gate breach the send would reach
+the wired provider. Every tier therefore requires the same three fail-closed
+environment variables; **nursery-only runs need them too** — there is no nursery
+carve-out (65rk rf2 safety gap):
+
+**Refusals are dispatched through the deployed runtime, not evaluated in-process.**
+Every capability *denial* (except the operator-reserved lifecycle carve-out) is
+attempted through the live agent and its refusal shape is asserted from the
+persisted turn record (`capabilityDenied` marker + exact `tier`/`missingTokens`),
+so a miswired gate in the actual deployment is observable rather than masked by an
+in-process sentinel. Each refusal probe carries a **fixture-scoped blast radius**
+in its args — guaranteed-absent ids, a scratch `shakedown/…` branch, a disposable
+issue, the dedicated external test sinks — so if the gate is broken and the action
+executes it can only touch state the probe itself created. That catastrophic case
+is classified distinctly as `gate_breach` (the denied action ran), fails the row
+loudly, and still triggers the scoped cleanup (branch deletion / issue closure
+proof). Durable runtime-persona/scratchpad writes (`identity.write.runtime`,
+`memory.write`) and lifecycle `restart`/`rebuild` stay **eligibility-only** —
+resolved by the in-process production gate in `production-capability-probe.ts` —
+because executing the runtime-persona/scratchpad writes live would mutate state,
+and lifecycle uses the explicit operator carve-out. `identity.write.base` and
+`identity.write.operator` are the exception: they run live with real typed layer
+ids and guaranteed-missing `cancel_stage` ids, reaching the deployed dynamic
+resolver without changing a layer.
+
+| Variable | Value | Purpose |
+| --- | --- | --- |
+| `PSFN_MATRIX_EXTERNAL_SINKS_CONFIRMED` | the literal `dedicated-test-sinks` | Operator attestation that the targets below are disposable test sinks. Any other value is rejected. |
+| `PSFN_MATRIX_DISCORD_TARGET` | a dedicated **test** Discord channel snowflake (17–20 digits) | Where the `external.discord` allow probe delivers — and, at any tier, where the live refusal probe would land on a gate breach. |
+| `PSFN_MATRIX_EMAIL_TARGET` | a dedicated **test** inbox address | Still required (the fail-closed sink guard is unchanged) even though the email allow row is currently an eligibility-only exemption (see below) — at any tier it is where a live email refusal probe would land on a gate breach. |
+
+**Email allow rows are an eligibility-only exemption (`psfn-framework-gvic`).**
+Production email dispatch is unimplemented — `src/core/tools/ntfy.ts` throws
+`email delivery is not wired` — so an apprentice/autonomous `external.email`
+ALLOW *live-dispatch* probe can never pass on any deployment. The matrix
+therefore downgrades the email ALLOW rows to **eligibility-only**: the production
+capability gate is exercised (proving the capability is granted) without
+executing the unimplemented dispatch, and the grid row carries a machine-readable
+`exemption: { reason: 'runtime_unimplemented', ref: 'psfn-framework-gvic' }` so
+the artifact shows it as a known gap, not coverage. Any such exemption makes the
+matrix certification incomplete and fails the case, leaving the tool-stack
+coverage row red until the handler is implemented. Discord allow probes are
+unchanged (still live-dispatched), and `requireDedicatedExternalSinks` is not
+weakened (`PSFN_MATRIX_EMAIL_TARGET` is still validated). When email delivery is
+wired under `psfn-framework-gvic`, flip these rows back to live-dispatch.
+
+Two hard rules:
+
+- **These MUST be dedicated test sinks — never a real partner's Discord channel
+  or inbox.** The apprentice+ allow probes send real messages; pointing them at a
+  live relationship is a partner-data harm, not a test.
+- **The channels must be live, not cleared.** The apprentice+ external-allow
+  probes can only deliver if the channel credentials are actually present; a
+  cleared channel turns an allow probe into a false negative. This is the one
+  place the round deliberately keeps a channel wired — to a throwaway test sink.
+
+The fail-closed guard lives in `shakedown/harness/lib/capability-matrix.mjs`
+(`requireDedicatedExternalSinks`) and is not to be weakened. Template values are
+in `shakedown/artie/shakedown.env.template`.
 
 ## Bootstrap: a fresh build with Artie
 
@@ -178,11 +314,11 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 
 ---
 
-## Appendix: Sprint 10 coverage plan
+## Appendix: coverage plan (Sprint 10 base + July hardening + Sprint 11 cognition)
 
-*(Replace this appendix each sprint. Basis: S10 epics `vinz`, `s10mc`, `s10mc.6` (ICP), `htm9` (CogSec), `w9hj` (PWA/hub), `2x37` (temporal), `mmo9` (perf), plus tool-stack and Garden UX overhauls.)*
+*(Replace this appendix each sprint. Basis: S10 epics `vinz`, `s10mc`, `s10mc.6` (ICP), `htm9` (CogSec), `w9hj` (PWA/hub), `2x37` (temporal), `mmo9` (perf), plus tool-stack and Garden UX overhauls; the July 15-16 hardening wave (`opl1` fleet auth/SSO/passkeys, `dut9`/`k8si`/`kk6k` DNLL owner migration, `mmo9.8`/`mmo9.6` voice streaming + barge-in, `mmo9.5` preemptable provider capacity, `mmo9.7.3` boundary spend accounting, `irzz`/`irzz.1` Garden UX wave 2, `q9ra` backup GFS retention); and the Sprint 11 cognition wave (`k4rf`, `e0ey`, `76rn`, `cy82`, `4yb3`, `jpvd`, `ihfp`, `7c05`, `m58`).)*
 
-### In scope — new S10 surfaces on top of the S8/S9 base catalog
+### In scope — S10 base catalog plus the July hardening and Sprint 11 cognition waves
 
 | Surface | Lane / tier | How exercised | Notes |
 | --- | --- | --- | --- |
@@ -191,8 +327,8 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 | World tool (perceive/list) + perception ingest | local (mock HA, synthetic telemetry to `/v1/telemetry/ingest`) | harness | `world.control` staged off by default |
 | HA world control (staged on) | kube only, autonomous | partner walk + gateway audit proof | trust-gated; real HA |
 | Hub identity ↔ contact enrollment, presence follow | local | harness + Garden | fail-closed claim→contact |
-| Multi-companion substrate (mux, tenancy, per-companion Gardens, fleet page, per-companion Discord) | kube + local supervisor, needs support companions | crossover-isolation harness: concurrent colliding requests, zero crossover alarms | flag-off/flag-on validation (`s10f8`) is the entry gate |
-| ICP autonomy (permits, target-channel turns, fatigue lane, USD breaker) | kube, support companions | partner sessions + harness continuity checks | epic closed 2026-07-15; Discord voice under MC fails closed (`s10f1`) |
+| Multi-companion substrate (mux, tenancy, per-companion Gardens, fleet page, per-companion Discord) | kube + local supervisor, needs support companions | crossover-isolation harness: concurrent colliding requests, zero crossover alarms | flag-off/flag-on validation (`psfn-framework-s10mc.8`, closed) is the entry gate |
+| ICP autonomy (permits, target-channel turns, fatigue lane, USD breaker) | kube, support companions | partner sessions + harness continuity checks | epic closed 2026-07-15; Discord voice under MC still fails closed, tracked by the open `psfn-framework-s10d6` voice rewrite |
 | Shared-world wiki | multi-companion | "toaster test": companion A learns a fact, companion B reads it later | |
 | CogSec intake firewall (L1/L1.5 local; L2/L3 gateway) | local + kube | tainted-content probes per channel; quarantine → Garden queue → release flywheel | firewall notices excluded from emotion/memory — verify |
 | Satellite hub + event relay + touch stimuli + PWA | kube | hub SSE, approvals, touch rate limits; PWA needs first-class channel (`8ora`, open P1) | PWA satellite path is hub-only |
@@ -200,6 +336,23 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 | Performance (`mmo9`) | local + kube | SSE first-chunk, background supervisor, admission controller; voice cancellation kube; compaction cliff Pi-class | epic still open — coordinate before certifying |
 | Tool-stack audit (`generate_image` rename, core/extended re-tiering) | local, all tiers | tool-conformance sweep per tier | watch `fpiu` attachment-claim bug |
 | Garden UX overhaul | both | behavioral sweep over new SPA routes | |
+| July hardening — Fleet auth, SSO, and passkey administration (opl1) | kube + local, autonomous | SSO subject-scoped admin via Garden partner walk; WebAuthn passkey register/authenticate ceremony run by hand | operator-eyes; passkey ceremony cannot run headless |
+| July hardening — DNLL owner migration upgrade path (dut9/k8si/kk6k) | own staged upgrade session | pre-upgrade owner snapshot → ship RC over an existing deployment → assert scheduler/caretaker owner migration; never a fresh-bootstrap round rider | staged session — fresh-bootstrap lanes never execute migration code |
+| July hardening — Voice reply streaming and barge-in (mmo9.8/mmo9.6) | kube, autonomous | operator voice session: committed-segment VoiceReplyStream plus preemptive interrupt/cancel | operator-eyes; voice ceremony not scriptable headless |
+| July hardening — Preemptable provider capacity admission (mmo9.5) | local + Pi-class, spot check | partner free-play load drives the admission controller to preempt under capacity pressure; observed via perf telemetry | needs real load; Pi-class blind spot |
+| July hardening — Boundary spend accounting and model-lane routing (mmo9.7.3) | local + kube, all tiers | harness: case-owned chat and vision turn IDs plus the successful emotion-appraisal source turn are cross-checked in `model_usage_events` against models.json owner slots | config-resolved model ids, never hardcoded; unrelated concurrent background rows cannot satisfy the proof |
+| July hardening — Garden UX wave 2 (irzz) | both | Garden behavioral sweep over the reworked settings, IA, and navigation routes | operator-eyes UX; behavior, not HTTP 200s |
+| July hardening — Settings save preserves backup.json encryption block (irzz.1) | local, all tiers | harness: snapshot backup.json, drive a unified settings save, assert the required encryption block survives | irzz.1 regression shape |
+| July hardening — Backup GFS retention (q9ra) | local | `verify:backup-restore` floor plus operator check of grandfather-father-son pruning against backup.json retention counts | retention pruning verified out-of-round |
+| Sprint 11 cognition — Group-chat stabilization and scoped appraisal (k4rf) | local + kube, autonomous | partner multi-participant group session; observe stable turn pipeline and scoped appraisal | partner walk |
+| Sprint 11 cognition — PromptPlan single assembly and caching (e0ey) | local + kube | guided walk asserts one PromptPlan artifact and cache reuse in TurnRecord observability across a repeat turn | standalone probe deferred; asserted in the walk |
+| Sprint 11 cognition — Context envelope channel, relationship, and trust semantics (76rn) | local + kube | guided walk asserts the context envelope sections vary by channel, relationship, and trust in the persisted TurnRecord | partner walk |
+| Sprint 11 cognition — Social graph minimum wiring (cy82) | multi-companion | partner multi-companion sessions populate the social graph; Garden inspection | partner walk |
+| Sprint 11 cognition — Episodic gating, scheduler-owned sleeptime, and /subsystem-health (4yb3) | local + kube | free-play block observes episodic gating and scheduler-owned sleeptime; GET /subsystem-health behavioral check | operator-eyes |
+| Sprint 11 cognition — Subprocess persona voice and per-participant orientation (jpvd) | kube, autonomous | operator voice session: subprocess persona voices and per-participant orientation | operator-eyes; voice ceremony |
+| Sprint 11 cognition — Temporal continuity and proactive wake-up (ihfp) | local + kube live | live next-morning wake-up acceptance; proactive turn observed | operator-eyes; live next-morning window |
+| Sprint 11 cognition — Inner-life free-time and wiki RAG flows (7c05) | kube, autonomous | free-play autonomy block plus the toaster/wiki RAG read-back test | partner walk |
+| Sprint 11 cognition — W1 memory schema L0.1 and projection layer (m58) | local + kube | guided walk asserts L0.1 projection via Garden memory search and episodic rendering | operator-eyes |
 
 ### Explicitly out of scope for S10
 
@@ -209,7 +362,7 @@ Every finding — hers or the harness's — becomes a structured record: **Sever
 
 ### Known open items to re-check at round open
 
-`s10f8` (MC flag validation — entry gate), `s10mc.8` (live two-companion demo), `mmo9` remainder + `9syj`, `vinz.10/.14/.19/.26`, `8ora` (PWA channel), `2x37` live acceptance, live bugs `fpiu`/`fkyu`/`ervg`/`sm9l`/`eb14`.
+`psfn-framework-s10mc.8` (MC substrate validation entry gate + live two-companion demo, closed), `mmo9` remainder + `9syj`, `vinz.10/.14/.19/.26`, `8ora` (PWA channel), `2x37` live acceptance, live bugs `fpiu`/`fkyu`/`ervg`/`sm9l`/`eb14`.
 
 ---
 

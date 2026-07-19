@@ -33,6 +33,7 @@ function evaluateGatewayLinkHealth(
     return {
       status: 'healthy',
       meta: {
+        agentConnected: true,
         sourceSubsystems: ['llm', 'embeddings'],
         llmStatus: subsystems.llm.status,
         embeddingsStatus: subsystems.embeddings.status,
@@ -47,6 +48,7 @@ function evaluateGatewayLinkHealth(
     status: 'degraded',
     detail: detailParts.join(' | ') || 'Gateway-linked LLM and embeddings checks are degraded',
     meta: {
+      agentConnected: true,
       sourceSubsystems: ['llm', 'embeddings'],
       llmStatus: subsystems.llm.status,
       embeddingsStatus: subsystems.embeddings.status,

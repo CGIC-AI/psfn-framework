@@ -28,6 +28,7 @@ export interface StructuredToolErrorDetails {
   retryHint: ToolRetryHint;
   retryable: boolean;
   companionMessage: string;
+  gatewayErrorCode?: number | string;
   rawDiagnostic?: string;
 }
 
@@ -163,6 +164,7 @@ export function textResultFromError(
 export function buildStructuredToolErrorDetails(
   input: ToolErrorMetadataInput,
 ): StructuredToolErrorDetails {
+  const gatewayErrorCode = readErrorCode(input.cause);
   const rawDiagnostic = sanitizeToolErrorDiagnostic(
     input.rawDiagnostic ?? input.cause ?? input.companionMessage,
   );
@@ -178,6 +180,7 @@ export function buildStructuredToolErrorDetails(
     retryHint,
     retryable: isRetryableHint(retryHint),
     companionMessage,
+    ...(gatewayErrorCode !== undefined ? { gatewayErrorCode } : {}),
     ...(rawDiagnostic ? { rawDiagnostic } : {}),
   };
 }

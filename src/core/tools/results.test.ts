@@ -31,6 +31,18 @@ describe('structured tool error results', () => {
     });
   });
 
+  it('preserves a gateway JSON-RPC code as structured non-secret evidence', () => {
+    const details = buildStructuredToolErrorDetails({
+      cause: { code: -32000, message: 'approval required' },
+    });
+
+    expect(details).toMatchObject({
+      isError: true,
+      errorClass: 'permission_denied',
+      gatewayErrorCode: -32000,
+    });
+  });
+
   it.each([
     ['permission_denied', 'operator_escalation', false],
     ['policy_blocked', 'try_alternative_input', false],

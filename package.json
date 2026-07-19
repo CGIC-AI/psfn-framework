@@ -73,6 +73,7 @@
     "smoke:wiki-caretaker": "vitest run src/faculties/wiki/shared-world-caretaker.integration.test.ts",
     "smoke:garden:postgres-memory": "node scripts/garden-postgres-memory-cutover-smoke.mjs",
     "smoke:discord:dm-voice": "node scripts/discord-dm-voice-smoke.mjs",
+    "shakedown:bootstrap": "node shakedown/harness/bootstrap-local.mjs",
     "walkthrough": "tsx src/app/e2e/e2e-walkthrough.ts",
     "lint": "eslint .",
     "preflight:startup-owner-files": "tsx scripts/preflight-startup-owner-files.ts",

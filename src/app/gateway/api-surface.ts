@@ -58,6 +58,7 @@ import type {
   PrimaryEmbodimentAuthorityPort,
 } from '../../boundary/fleet-auth/primary-embodiment.js';
 import { dispatchCompanionUiPrimaryEmbodiment } from '../../boundary/gateway/companion-ui-primary-embodiment.js';
+import { dispatchCompanionUiApproval } from '../../boundary/gateway/companion-ui-approvals.js';
 import { FleetAuthHttpRoutes } from '../../channels/api/server/fleet-auth-routes.js';
 import type { FleetJitStepUpCoordinator } from '../../boundary/fleet-auth/jit-step-up.js';
 import type { TrustedHostPasskeyCeremonyService } from '../../boundary/fleet-auth/trusted-host-passkey-ceremony.js';
@@ -102,6 +103,8 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
     | 'resolveOperatorApproval'
     | 'listOperatorConfirmations'
     | 'ownerOfConfirmation'
+    | 'listCompanionUiConfirmations'
+    | 'resolveCompanionUiApproval'
     | 'getFleetConnectionSnapshot'
     | 'requestCompanionAgent'
   >;
@@ -496,7 +499,7 @@ export async function startOptionalGatewayApiServer(
         upstreams: resolveFleetSsoGardenUpstreams({
           ...(options.config.companionFleet ? { fleet: options.config.companionFleet } : {}),
           ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
-          ...(options.adminPort ? { gardenPort: options.adminPort } : {}),
+          ...(options.adminPort ? { fleetGardenPort: options.adminPort } : {}),
           env,
         }),
         ...(fleetSsoCompanionUi ? {
@@ -539,27 +542,65 @@ export async function startOptionalGatewayApiServer(
           resolveAuthorizationContext: input => options.fleetAuthBroker!.resolveAuthorizationContext(input),
           signer: options.fleetAuthRequestCapabilities,
           childAssertions: options.fleetAuthChildAssertions,
+          approvalOwner: {
+            ownerOf: (id) => options.gateway.ownerOfConfirmation(id),
+          },
+          shardDeployment: {
+            ownerOfLiveShard: async (shardId, parentCompanionId) => {
+              const result = await options.gateway.requestCompanionAgent<{
+                parentCompanionId?: string;
+              }>(
+                parentCompanionId,
+                'shard.directory.owner',
+                { shardId },
+              );
+              return result.parentCompanionId;
+            },
+          },
           dispatch: {
             dispatch: async input => {
               const frame = input.compiled.frame;
               const body = frame.body as Record<string, unknown>;
+              if (frame.resource === 'shards.list'
+                || frame.resource === 'shards.history'
+                || frame.resource === 'shards.interact'
+                || frame.resource === 'shards.interrupt') {
+                const result = await gatewayApiRuntime.handleCompanionUiShardAction(
+                  input.compiled.target.companionId,
+                  {
+                    principal: input.deviceTransport.principal,
+                    headers: { ...input.deviceTransport.headers },
+                    ...(input.deviceTransport.clientCert
+                      ? { clientCert: input.deviceTransport.clientCert }
+                      : {}),
+                    hubDevicePrincipal: input.attachment.deviceActor.principal,
+                    hubDeviceAttachment: input.attachment,
+                    companionUiCapability: {
+                      token: input.childAssertion.token,
+                      requestId: input.childAssertion.requestId,
+                      decisionId: input.childAssertion.decisionId,
+                      versions: input.childAssertion.versions,
+                      parent: input.childAssertion.parent,
+                      rawBodyBase64Url: Buffer.from(input.compiled.target.body).toString('base64url'),
+                    },
+                  },
+                );
+                if (!result.ok) throw new Error(result.error.type);
+                return result.response;
+              }
               const embodiment = await dispatchCompanionUiPrimaryEmbodiment({
                 compiled: input.compiled,
                 attachment: input.attachment,
                 ...(options.primaryEmbodiments ? { authority: options.primaryEmbodiments } : {}),
               });
               if (embodiment.handled) return embodiment.result;
+              const approval = await dispatchCompanionUiApproval({
+                compiled: input.compiled,
+                gateway: options.gateway,
+              });
+              if (approval.handled) return approval.result;
               if (frame.resource === 'conversation.status') {
                 return await gatewayApiRuntime.handleHealth();
-              }
-              if (frame.resource === 'confirmations.list') {
-                return options.gateway.listOperatorConfirmations();
-              }
-              if (frame.resource === 'confirmations.resolve') {
-                return await options.gateway.resolveOperatorApproval({
-                  id: String(body.id),
-                  decision: body.decision as 'approve' | 'deny',
-                });
               }
               if (frame.resource === 'artifact.preview') {
                 const preview = options.companionRelay?.relay.getPreviewSource(

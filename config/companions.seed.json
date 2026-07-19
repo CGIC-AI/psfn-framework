@@ -5,7 +5,6 @@
       "companionDataDir": "companions/flagship",
       "characterCardPath": "companions/flagship/character-card.json",
       "postgresSchema": "companion_flagship",
-      "gardenPort": 10061,
       "displayName": "Flagship"
     },
     {
@@ -13,7 +12,6 @@
       "companionDataDir": "companions/aria",
       "characterCardPath": "companions/aria/character-card.json",
       "postgresSchema": "companion_aria",
-      "gardenPort": 10062,
       "displayName": "Aria",
       "avatarRef": "avatars/aria.png"
     }

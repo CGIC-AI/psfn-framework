@@ -5,7 +5,6 @@
       "companionDataDir": "companion-data",
       "characterCardPath": "companion-data/companion.json",
       "postgresSchema": "shakedown_artie",
-      "gardenPort": 10154,
       "displayName": "ARTEMIS"
     },
     {
@@ -13,7 +12,6 @@
       "companionDataDir": "support-companions/mica/data",
       "characterCardPath": "support-companions/mica/data/companion.json",
       "postgresSchema": "shakedown_support_mica",
-      "gardenPort": 10155,
       "displayName": "Mica"
     },
     {
@@ -21,7 +19,6 @@
       "companionDataDir": "support-companions/lumen/data",
       "characterCardPath": "support-companions/lumen/data/companion.json",
       "postgresSchema": "shakedown_support_lumen",
-      "gardenPort": 10156,
       "displayName": "Lumen"
     }
   ]

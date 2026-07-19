@@ -36,6 +36,8 @@ import { Scheduler } from '../scheduler/scheduler.js';
 import { wirePostTurnActionRuntime } from '../../app/startup/composition/post-turn-actions.js';
 import { createAgentFacingIcpAutonomyRuntime } from '../icp/agent-facing-autonomy.js';
 import { CapabilityRuntime } from '../../system/capabilities/runtime.js';
+import type { CapabilityAccess } from '../../system/capabilities/access.js';
+import { deriveShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
 import { saveCapabilityTierConfig } from '../../system/config/capability-tier-config.js';
 import {
   ExternalCommunicationRateLimiter,
@@ -6791,5 +6793,108 @@ describe('SubstrateAgent turn cancellation identity (mmo9.6.1)', () => {
 
     gate.release();
     await turn;
+  });
+});
+
+describe('explicit capability access injection (mus2.1)', () => {
+  it('injected immutable custom access governs the capability seam over the disk runtime and tier defaults', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-explicit-access-'));
+    try {
+      saveCapabilityTierConfig(dataDir, { tier: 'autonomous', customTokens: [] });
+      const capabilityRuntime = new CapabilityRuntime({ dataDir });
+      const config = makeConfig({
+        dataDir,
+        databasePath: join(dataDir, 'test.db'),
+        capabilityTier: 'autonomous',
+      });
+      const agent = new SubstrateAgent(
+        new EventBus(),
+        makeMockLLMProvider(),
+        makeMockSessionManager(),
+        'System prompt',
+        config,
+      );
+      agent.setCapabilityRuntime(capabilityRuntime);
+
+      const resolveAccess = () => (agent as unknown as {
+        resolveCapabilityAccess(): CapabilityAccess;
+      }).resolveCapabilityAccess();
+      expect(resolveAccess()).toBe(capabilityRuntime);
+
+      const derived = deriveShardCapabilityGrant({
+        companionId: 'companion-parent-1',
+        tier: 'autonomous',
+        customTokens: [],
+      });
+      agent.setCapabilityAccess(derived.access);
+
+      // The same resolution seam feeds tool gates (withCapabilityGates) and
+      // prompt tool availability (buildDynamicPromptTemplateVariables), so an
+      // identical object here means both surfaces see identical tokens.
+      expect(resolveAccess()).toBe(derived.access);
+      expect(config.capabilityTier).toBe('custom');
+      expect([...resolveAccess().getGrantedTokens()]).toEqual([...derived.tokens]);
+      expect(resolveAccess().has('shard.spawn')).toBe(true);
+      // Masked though the autonomous parent holds it: the derived access is
+      // the final authorization boundary, not the parent tier.
+      expect(resolveAccess().has('world.control')).toBe(false);
+      expect(resolveAccess().has('memory.delete')).toBe(false);
+
+      // Owner-file churn plus the refresh hook must not widen, narrow, or
+      // replace an injected launch snapshot (running-shard invariant).
+      saveCapabilityTierConfig(dataDir, { tier: 'nursery', customTokens: [] });
+      config.runtimeHooks?.refreshCapabilities?.();
+      expect(resolveAccess()).toBe(derived.access);
+      expect(config.capabilityTier).toBe('custom');
+      expect(resolveAccess().has('shard.spawn')).toBe(true);
+
+      // Clearing the explicit access restores runtime-backed resolution.
+      agent.setCapabilityAccess(null);
+      expect(resolveAccess()).toBe(capabilityRuntime);
+      expect(config.capabilityTier).toBe('nursery');
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  it('explicit custom access works without any disk-backed CapabilityRuntime', () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'psfn-explicit-access-nodisk-'));
+    try {
+      const config = makeConfig({
+        dataDir,
+        databasePath: join(dataDir, 'test.db'),
+        capabilityTier: 'custom',
+      });
+      const agent = new SubstrateAgent(
+        new EventBus(),
+        makeMockLLMProvider(),
+        makeMockSessionManager(),
+        'System prompt',
+        config,
+      );
+      const resolveAccess = () => (agent as unknown as {
+        resolveCapabilityAccess(): CapabilityAccess;
+      }).resolveCapabilityAccess();
+
+      // Without an injected access, the no-runtime `custom` path fails closed
+      // to an empty grant — copying config.capabilityTier is insufficient.
+      expect(resolveAccess().getGrantedTokens().size).toBe(0);
+
+      const derived = deriveShardCapabilityGrant({
+        companionId: 'companion-parent-1',
+        tier: 'custom',
+        customTokens: ['identity.read', 'world.read', 'shard.spawn'],
+      });
+      agent.setCapabilityAccess(derived.access);
+
+      expect(resolveAccess()).toBe(derived.access);
+      expect([...resolveAccess().getGrantedTokens()]).toEqual([
+        'identity.read',
+        'shard.spawn',
+        'world.read',
+      ]);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
+    }
   });
 });

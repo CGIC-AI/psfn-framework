@@ -9,6 +9,7 @@ import { GatewayClient } from '../../boundary/gateway/client.js';
 import { resolveCoreCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';
 import { attachCompanionEventForwarder } from '../../channels/backplane/companion-relay/agent-forwarder.js';
+import { createPolicyGovernedShardParentIcpDelivery } from '../../channels/backplane/shard-parent-icp-ingress.js';
 import { parsePositiveIntEnv } from '../../shared/utils/env.js';
 import { MemoryWriter } from '../../faculties/memory/writer.js';
 import { resolveDocumentIngestLimits } from '../../faculties/file-ingest/index.js';
@@ -621,6 +622,11 @@ async function main(): Promise<void> {
     policy: buildShellExecPolicyConfig(process.env),
     brokerId: 'agent-process',
   });
+  const shardParentIcpDelivery = createPolicyGovernedShardParentIcpDelivery({
+    parentCompanionId: resolveCoreCompanionIdFromConfig(config),
+    intakeScreening,
+    agentLoop,
+  });
   const shardManager = wireShardAndThinkRuntime({
     agentLoop,
     eventBus,
@@ -636,6 +642,7 @@ async function main(): Promise<void> {
     replConfig,
     shardAuditTrail: safeguardAuditTrail,
     getCapabilityTier: () => capabilityRuntime.getTier(),
+    snapshotParentCapabilityGrant: () => capabilityRuntime.snapshotOwnerGrant(),
     compositionalPolicy: config.compositionalPolicy,
     moduleInstallConfirmationQueue: cardProposalQueue,
     onModuleRegistryMutation: async (mutation) => {
@@ -643,6 +650,8 @@ async function main(): Promise<void> {
     },
     executionPort: sandboxExecutionPort,
     compressionGuidelineEvolution,
+    shardParentIcpDelivery,
+    shardWorkloadRegistry: gateway,
   });
 
   // Memory write/import tools — intentional memory creation
@@ -840,6 +849,11 @@ async function main(): Promise<void> {
     // turns carry trustLevel 'primary' for scoping but no human requester, so
     // effector control must read provenance, not trust level alone.
     resolveRequesterProvenance: () => getRequestContext()?.requesterProvenance,
+    // A live ShardManager channel may transport a reasoned control request to
+    // the gateway's exact operator fence. This does not fabricate requester
+    // trust or authorize the effect; the gateway requires a live generation.
+    allowRequestScopedApprovalTransport: () =>
+      getRequestContext()?.channelId?.startsWith('shard:') === true,
   });
   registerPresenceLightAutomation({
     eventBus,
@@ -910,6 +924,14 @@ async function main(): Promise<void> {
     externalChannelProfiles: buildExternalChannelProfiles(channelsConfig),
     satelliteRegistry: satelliteRegistryConfig,
     companionId: resolveCoreCompanionIdFromConfig(config),
+    shardDirectory: shardManager.shardDirectory,
+    ...(config.fleetAuthVerifier
+      ? {
+          requestCapabilityVerifier: createRequestCapabilityVerifier(
+            config.fleetAuthVerifier.requestCapabilities,
+          ),
+        }
+      : {}),
     onStreamDelta: (requestId, text) => gateway.notifyApiStreamDelta(requestId, text),
     // htm9.9: OpenAI-compatible `file` content parts run the shared
     // file-ingest pipeline with the agent-side (L1-only) intake screening.
@@ -922,6 +944,8 @@ async function main(): Promise<void> {
   });
   gateway.onApiChatCompletion((params) => apiBackend.handleChatCompletion(params));
   gateway.onApiChatCancel((params) => apiBackend.cancelChatCompletion(params));
+  gateway.onCompanionUiShardAction((params) => apiBackend.handleCompanionUiShardAction(params));
+  gateway.onShardOwner((params) => Promise.resolve(apiBackend.handleShardOwner(params)));
   gateway.onApiTelemetryIngest((params) => apiBackend.handleTelemetryIngest(params));
   gateway.onApiHealth(() => apiBackend.handleHealth());
   gateway.onTurnPerformance(async (event) => {

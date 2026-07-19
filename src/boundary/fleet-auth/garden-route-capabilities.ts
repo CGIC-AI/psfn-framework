@@ -48,6 +48,7 @@ const NO_BODY = Object.freeze({ mode: 'forbidden', maxBytes: 0 }) as GardenBodyP
 const OPTIONAL_BODY = Object.freeze({ mode: 'optional', maxBytes: 65_536 }) as GardenBodyPolicy;
 const REQUIRED_BODY = Object.freeze({ mode: 'required', maxBytes: 65_536 }) as GardenBodyPolicy;
 const UPLOAD_BODY = Object.freeze({ mode: 'required', maxBytes: 12 * 1_024 * 1_024 }) as GardenBodyPolicy;
+const CHAT_BODY = Object.freeze({ mode: 'required', maxBytes: 1_048_576 }) as GardenBodyPolicy;
 
 const singleton = (fields: readonly string[]): Readonly<Partial<Record<string, GardenQueryFieldPolicy>>> =>
   Object.freeze(Object.fromEntries(fields.map((field) => [field, Object.freeze({
@@ -161,6 +162,7 @@ const requiredBodyPatterns = new Set([
   'POST /api/admin/prompts/count-tokens',
   'PATCH /api/admin/prompts/:layerId',
   'POST /api/admin/prompts/reorder',
+  'PATCH /api/admin/shards/:shardId/configuration',
   'PUT /api/admin/prompts/runtime-blocks',
   'PUT /api/admin/prompts/foundation',
   'PUT /api/admin/prompts/constitution',
@@ -201,6 +203,7 @@ const fixedRoutes: readonly RouteTuple[] = [
   ['POST', '/v1/fleet-auth/lifecycle/binding/complete'],
   ['POST', '/v1/fleet-auth/lifecycle/provider/complete'],
   ['POST', '/v1/fleet-auth/lifecycle/role/complete'],
+  ['POST', '/v1/chat/completions'],
   [['GET', 'POST'], '/login'], ['GET', '/health'], ['POST', '/api/admin/logout'],
   ['GET', '/api/admin/action-pipe'], ['GET', '/api/admin/audit/history'],
   ['GET', '/api/admin/charge-costs'], ['GET', '/api/admin/charges'],
@@ -289,6 +292,7 @@ const dynamicRoutes: readonly RouteTuple[] = [
   ['GET', '/api/admin/sessions/:channelId'], ['GET', '/api/admin/sessions/:channelId/detail'],
   ['GET', '/api/admin/sessions/:channelId/search'], ['GET', '/api/admin/sessions/:channelId/turns/:turnId'],
   ['GET', '/api/admin/shards/:shardId'], ['POST', '/api/admin/shards/:shardId/review'],
+  [['GET', 'PATCH'], '/api/admin/shards/:shardId/configuration'],
   ['POST', '/api/admin/shared-workspace/reviews/:reviewId/cogsec'],
   ['POST', '/api/admin/shared-workspace/reviews/:reviewId/decision'], ['DELETE', '/api/admin/skills/:name'],
   ['GET', '/api/admin/wiki/shared-world-proposals/:proposalId'],
@@ -314,13 +318,14 @@ export const GARDEN_CLIENT_ROUTES = Object.freeze([
   '/enrollment', '/evals/emotion-sidecar', '/episodic-memory', '/graph-proposals', '/identity',
   '/images', '/memory', '/model-room', '/models', '/places', '/primer', '/prompt-monitor',
   '/prompts', '/rooms', '/satellites', '/scheduler', '/session-recovery', '/sessions',
-  '/settings', '/shards', '/skills', '/subsystem-health', '/telemetry', '/theme', '/tools',
+  '/settings', '/shards', '/shards/:shardId', '/skills', '/subsystem-health', '/telemetry', '/theme', '/tools',
   '/values', '/wiki', '/wishlist',
 ] as const);
 
 function bodyPolicy(method: GardenForwardMethod, pattern: string): GardenBodyPolicy {
   const key = `${method} ${pattern}`;
   if (method === 'POST' && pattern === '/api/admin/image-references/upload') return UPLOAD_BODY;
+  if (method === 'POST' && pattern === '/v1/chat/completions') return CHAT_BODY;
   if (requiredBodyPatterns.has(key)) return REQUIRED_BODY;
   if (method === 'GET' || method === 'HEAD' || method === 'WS' || noBodyMutationPatterns.has(key)) {
     return NO_BODY;

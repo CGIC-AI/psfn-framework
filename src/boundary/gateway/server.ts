@@ -47,7 +47,7 @@ import type { SessionHmacKeyring } from '../../persistence/journals/journal-util
 import { createComponentLogger } from '../../shared/logger.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { registerGatewayMethods } from './methods/index.js';
-import type { GatewayMethodRuntime } from './methods/types.js';
+import type { GatewayMethodRuntime, ShardBackendExecutor } from './methods/types.js';
 import type { WelfareGrantVerifier } from './welfare-grant-verifier.js';
 import type { PolicyConfig } from './policy.js';
 import {
@@ -79,6 +79,7 @@ import type { EventBus, GardenQueueName } from '../../shared/event-bus.js';
 import type {
   ConfirmationQueueEntry,
   ConfirmationQueueHistoryEntry,
+  ConfirmationApprovalOwner,
   ConfirmationResolveResult,
 } from '../../system/capabilities/confirmation-queue.js';
 import type { AuditSummaryEntry } from './audit-port.js';
@@ -104,6 +105,14 @@ import { SharedCompanionWorkspaceReader } from '../../persistence/workspaces/sha
 import { materializeGatewayAttachments } from './attachment-materialization.js';
 import type { TurnPerformanceEvent } from '../../shared/telemetry/turn-performance.js';
 import type { KubeSelfManagementController } from '../../system/lifecycle/kube-self-management.js';
+import type { CapabilityGrantSnapshot } from '../../system/capabilities/access.js';
+import {
+  ShardApprovalGrantAuthority,
+  type AuthenticatedShardWorkloadHandle,
+  type ShardApprovalGrantAuditEvent,
+  type ShardWorkloadLifecycleRegistryPort,
+} from '../../system/capabilities/shard-approval-grants.js';
+import { GatewayShardWorkloadRegistrar } from './shard-workload-registrar.js';
 
 const log = createComponentLogger('Gateway');
 const DEFAULT_CONNECTION_HEALTHCHECK_STALE_AFTER_MS = 90_000;
@@ -243,6 +252,28 @@ export interface GatewayServerOptions extends OptionalCompanionRoutingBinding {
   // an52.3: keyed on the authenticated companion so a fleet resolves each
   // companion's own capability tier. Single-companion providers ignore the arg.
   capabilityTierProvider?: (companionId?: string) => CapabilityTier;
+  // mus2.5: atomic owner snapshot keyed on the authenticated companion.
+  capabilityGrantSnapshotProvider?: (
+    companionId?: string,
+  ) => CapabilityGrantSnapshot;
+  /** Optional privileged executor; receives only gateway-authorized launch context. */
+  shardBackendExecutor?: ShardBackendExecutor;
+  /**
+   * 2h6q.3: server-owned authenticated shard-workload registry (fed from
+   * ShardManager launch registration state). Presence constructs the
+   * exact-once ShardApprovalGrantAuthority and enables the shard
+   * exceptional-action approval path. Absence keeps every shard
+   * temporary-grant path disabled AND still denies recognizably
+   * shard-originated gated dispatches (they can never inherit the parent's
+   * autonomous auto-clear).
+   */
+  shardApprovalWorkloads?: ShardWorkloadLifecycleRegistryPort;
+  /**
+   * Structured audit sink for shard approval-grant lifecycle events. A
+   * throwing sink fails the transition it audits (terminal resolutions are
+   * audit-then-remove). Defaults to the gateway structured logger.
+   */
+  shardApprovalGrantAudit?: (event: ShardApprovalGrantAuditEvent) => void;
   /** Canonical companion display label used in human-facing approval attribution. */
   approvalParentLabelProvider?: (companionId: string) => string | undefined;
   wyomingShardRouting: WyomingShardRoutingConfig;
@@ -313,6 +344,8 @@ export class GatewayServer {
   private readonly capabilityTierProvider: (companionId?: string) => CapabilityTier;
   private readonly wyomingShardRouting: WyomingShardRoutingConfig;
   private readonly ntfyNotifier: GatewayNtfyNotifier;
+  private readonly shardApprovalGrants: ShardApprovalGrantAuthority | undefined;
+  private readonly shardWorkloadRegistrar: GatewayShardWorkloadRegistrar | undefined;
   private readonly approvalBoundary: ApprovalBoundaryService;
   private readonly canaryEgressGuard: CanaryEgressGuard | null;
   private readonly runtimeHealthTracker: GatewayRuntimeHealthTracker;
@@ -417,6 +450,23 @@ export class GatewayServer {
           ...(options.cogSecEvents ? { cogSecEvents: options.cogSecEvents } : {}),
           log,
         });
+    // 2h6q.3: the exact-once shard approval-grant authority exists only when
+    // a server-owned authenticated workload registry is wired; the authority
+    // is constructed here so the production GatewayServer construction path
+    // (privileged-core createGatewayServer) reaches it without test-only glue.
+    this.shardApprovalGrants = options.shardApprovalWorkloads
+      ? new ShardApprovalGrantAuthority({
+          workloadRegistry: options.shardApprovalWorkloads,
+          audit: options.shardApprovalGrantAudit
+            ?? ((event) => log.info('Shard approval grant audit', { ...event })),
+        })
+      : undefined;
+    this.shardWorkloadRegistrar = options.shardApprovalWorkloads
+      ? new GatewayShardWorkloadRegistrar(
+          options.shardApprovalWorkloads,
+          options.capabilityGrantSnapshotProvider,
+        )
+      : undefined;
     this.approvalBoundary = createGatewayApprovalBoundaryService({
       policyConfig: options.policyConfig,
       ntfyNotifier: this.ntfyNotifier,
@@ -426,6 +476,9 @@ export class GatewayServer {
       canaryEgressGuard: this.canaryEgressGuard,
       eventBus: options.eventBus,
       parentLabelProvider: options.approvalParentLabelProvider,
+      ...(this.shardApprovalGrants
+        ? { shardApprovalGrants: this.shardApprovalGrants }
+        : {}),
       audit: this.audit.bind(this),
       auditComplete: this.auditComplete.bind(this),
       recordMethodSuccess: (method) => this.runtimeHealthTracker.recordMethodSuccess(method),
@@ -541,6 +594,18 @@ export class GatewayServer {
       // shard.backend.request (and any gated method) resolves the caller's own
       // capability tier, not the gateway's single hydrated root.
       capabilityTierProvider: () => this.capabilityTierProvider(this.authenticatedCompanionId(conn)),
+      ...(this.options.capabilityGrantSnapshotProvider
+        ? {
+            capabilityGrantSnapshotProvider: () =>
+              this.options.capabilityGrantSnapshotProvider!(this.authenticatedCompanionId(conn)),
+          }
+        : {}),
+      ...(this.options.shardBackendExecutor
+        ? { shardBackendExecutor: this.options.shardBackendExecutor }
+        : {}),
+      // 2h6q.3: per-dispatch authenticated shard lineage for gated methods.
+      resolveShardWorkloadForChannel: (channelId) =>
+        this.resolveShardWorkloadForGatedDispatch(conn, channelId),
       approvalBoundary: this.approvalBoundary,
       ...(this.options.kubeSelfManagement
         ? { kubeSelfManagement: this.options.kubeSelfManagement }
@@ -595,6 +660,38 @@ export class GatewayServer {
       audited: (method, handler, paramsSummary) => this.audited(method, handler, paramsSummary),
     });
     target.addMethod('gateway.client.identify', (params: unknown) => this.identifyConnection(conn, params));
+    target.addMethod('shard.workload.register', this.audited(
+      'shard.workload.register',
+      async (params: unknown) => {
+        const companionId = this.requireAuthenticatedAgentCompanionId(conn);
+        if (!this.shardWorkloadRegistrar) {
+          throw new JSONRPCErrorException(
+            'Shard workload registration is unavailable',
+            GatewayErrors.POLICY_DENIED,
+          );
+        }
+        return this.shardWorkloadRegistrar.register(conn, companionId, params);
+      },
+      () => ({
+        companionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
+      }),
+    ));
+    target.addMethod('shard.workload.end', this.audited(
+      'shard.workload.end',
+      async (params: unknown) => {
+        this.requireAuthenticatedAgentCompanionId(conn);
+        if (!this.shardWorkloadRegistrar) {
+          throw new JSONRPCErrorException(
+            'Shard workload registration is unavailable',
+            GatewayErrors.POLICY_DENIED,
+          );
+        }
+        return this.shardWorkloadRegistrar.end(conn, params);
+      },
+      () => ({
+        companionId: this.connectionStatuses.get(conn)?.companionId ?? '(unidentified)',
+      }),
+    ));
     target.addMethod('companion.message.send', this.audited(
       'companion.message.send',
       (params: unknown) => this.handleCompanionMessageSend(conn, params),
@@ -755,10 +852,11 @@ export class GatewayServer {
   resolveCompanionApproval(params: {
     id: string;
     decision: 'approve' | 'deny';
+    companionId: string;
   }): Promise<ConfirmationResolveResult> {
-    return this.approvalBoundary.resolveConfirmation(params, {
+    return this.approvalBoundary.resolveConfirmationForOwner(params.companionId, params, {
       kind: 'companion',
-      id: 'companion-relay',
+      id: `companion-relay:${params.companionId}`,
     });
   }
 
@@ -771,6 +869,23 @@ export class GatewayServer {
       kind: 'operator',
       id: 'garden-admin',
     });
+  }
+
+  resolveCompanionUiApproval(
+    companionId: string,
+    params: {
+      id: string;
+      decision: 'approve' | 'deny';
+    },
+  ): Promise<ConfirmationResolveResult> {
+    return this.approvalBoundary.resolveConfirmationForOwner(companionId, params, {
+      kind: 'operator',
+      id: `companion-ui:${companionId}`,
+    });
+  }
+
+  listCompanionUiConfirmations(companionId: string): readonly ConfirmationQueueEntry[] {
+    return this.approvalBoundary.listPendingConfirmationsForOwner(companionId);
   }
 
   listOperatorConfirmations(): Readonly<{
@@ -791,6 +906,10 @@ export class GatewayServer {
    */
   ownerOfConfirmation(id: string): string | undefined {
     return this.approvalBoundary.ownerOfConfirmation(id);
+  }
+
+  approvalOwnerOfConfirmation(id: string): ConfirmationApprovalOwner | undefined {
+    return this.approvalBoundary.approvalOwnerOfConfirmation(id);
   }
 
   findConfirmationHistoryEntry(id: string): ConfirmationQueueHistoryEntry | null {
@@ -1292,6 +1411,50 @@ export class GatewayServer {
       throw new Error('ICP autonomy RPC requires an authenticated agent companion connection');
     }
     return status.companionId;
+  }
+
+  /**
+   * 2h6q.3: bind a gated dispatch to its authenticated shard workload. The
+   * runtime-stamped correlation channel id is only a lookup key into the
+   * server-owned workload registry; every authority value (parent binding,
+   * generation, frozen derived access) comes from registration state. Fail
+   * closed: a recognizably shard-originated channel that cannot be bound to
+   * a live workload of THIS connection's authenticated companion is denied —
+   * it must never fall through to the parent's own (possibly autonomous)
+   * authority. Recognition is registry-backed, not just prefix-based:
+   * satellite/Wyoming shard workloads register arbitrary channel schemes, so
+   * the registry's ever-hosted tombstones (live, ended, or superseded
+   * generations) deny alongside the `shard:` scheme rule, which alone covers
+   * the no-registry configuration.
+   */
+  private resolveShardWorkloadForGatedDispatch(
+    conn: GatewayRpcConnection,
+    channelId: string | undefined,
+  ): { workload: AuthenticatedShardWorkloadHandle } | undefined {
+    const normalized = channelId?.trim();
+    if (!normalized) {
+      return undefined;
+    }
+    const registry = this.options.shardApprovalWorkloads;
+    const companionId = this.authenticatedCompanionId(conn);
+    if (registry && companionId) {
+      // May throw on ambiguous channel lineage — ambiguity is a denial.
+      const workload = registry.resolveWorkloadForChannel(companionId, normalized);
+      if (workload) {
+        return { workload };
+      }
+    }
+    const shardRecognizable = normalized.startsWith('shard:')
+      || (registry !== undefined
+        && companionId !== undefined
+        && registry.hasHostedWorkloadForChannel(companionId, normalized));
+    if (shardRecognizable) {
+      throw new JSONRPCErrorException(
+        'Shard-originated request denied: no live authenticated shard workload matches this dispatch',
+        GatewayErrors.POLICY_DENIED,
+      );
+    }
+    return undefined;
   }
 
   private authenticatedCompanionId(conn: GatewayRpcConnection): string | undefined {
@@ -1849,8 +2012,8 @@ export class GatewayServer {
   /**
    * Read-only fleet health view (sprint-10 W4): identified companion
    * connections, last-seen activity (retained across disconnects), and recent
-   * multi-companion violation counts. Consumed by the gateway fleet-status
-   * page; never mutates connection state.
+   * multi-companion violation counts. Available for bounded, server-side fleet
+   * projections and internal operations; never mutates connection state.
    */
   getFleetConnectionSnapshot(now = Date.now()): GatewayFleetConnectionSnapshot {
     this.refreshConnectionHealth(now);
@@ -1897,6 +2060,8 @@ export class GatewayServer {
   }
 
   private removeConnection(conn: GatewayRpcConnection): void {
+    // A crashed/restarted agent cannot leave a grant-bearing generation live.
+    this.shardWorkloadRegistrar?.releaseConnection(conn);
     const status = this.connectionStatuses.get(conn);
     if (status?.companionId) {
       // Preserve last-seen across the disconnect so the fleet view can report
@@ -2480,6 +2645,7 @@ export class GatewayServer {
       unsubscribe();
     }
     for (const conn of this.connections) {
+      this.shardWorkloadRegistrar?.releaseConnection(conn);
       conn.destroy();
     }
     this.connections.clear();

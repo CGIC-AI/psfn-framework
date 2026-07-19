@@ -111,6 +111,14 @@ export interface CompanionApprovalResolvedPayload {
   id: string;
   status: CompanionApprovalResolutionStatus;
   resolvedAt: string;
+  /**
+   * Optional server-resolved shard provenance (bead psfn-framework-mus2.3).
+   * Present iff the resolved request was a shard-originated approval; it is the
+   * exact `shardId` captured at enqueue, never client-supplied. Opaque routing
+   * key, not an owner. An ordinary companion resolution omits it, so old clients
+   * keep parsing the unchanged v1 subset.
+   */
+  shardId?: string;
 }
 
 export interface CompanionArtifactCreatedPayload {
@@ -139,6 +147,10 @@ export type CompanionEventPayload =
 export interface CompanionEventEnvelope {
   kind: CompanionEventKind;
   payload: CompanionEventPayload;
+  /** Authenticated parent routing owner retained through relay fan-out. */
+  companionId?: string;
+  /** Optional authenticated shard provenance; never an authorization key. */
+  shardId?: string;
   sessionId?: string;
   channelId?: string;
   /** ISO timestamp. */

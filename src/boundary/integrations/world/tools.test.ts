@@ -346,6 +346,31 @@ describe('world tool', () => {
     expect(ops.callService).not.toHaveBeenCalled();
   });
 
+  it('transports a reasoned shard control request for exact operator approval without fabricating trust', async () => {
+    const ops = createMockOps();
+    const tool = createWorldTool(ops, {
+      placesRegistry: REGISTRY,
+      controlEnabled: true,
+      resolveRequesterTrust: () => 'regular',
+      resolveRequesterProvenance: () => 'system',
+      allowRequestScopedApprovalTransport: () => true,
+    });
+    const result = await tool.execute('call-shard-control', {
+      action: 'control',
+      affordanceId: 'lr_lights',
+      command: 'on',
+      intent: 'attention',
+      reason: 'Ask the operator to approve the shard lighting request',
+    });
+
+    expect(result.details?.isError).toBeFalsy();
+    expect(ops.callService).toHaveBeenCalledWith(expect.objectContaining({
+      domain: 'light',
+      intent: 'attention',
+      reason: 'Ask the operator to approve the shard lighting request',
+    }));
+  });
+
   it('with control enabled and no trust resolver wired, refuses control fail-closed', async () => {
     const ops = createMockOps();
     // Present a live human so Gate 2a passes; the absent trust resolver must then

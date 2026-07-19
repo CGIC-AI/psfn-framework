@@ -10,6 +10,7 @@
   } from '$lib/api/endpoints/icp-autonomy';
   import type { AdminIcpCandidateView } from '../../../../src/operator/garden/services/types.js';
   import { canCancelIcpCandidate, costState, formatUsd } from './autonomy-view';
+  import { scopeGardenPath } from '$lib/fleet/companion-scope';
 
   type PendingAction =
     | { kind: 'cancel'; candidate: AdminIcpCandidateView }
@@ -198,9 +199,9 @@
           <p class="text-sm text-shadow-600">Effective process state is shown beside on-disk owner state. Divergence requires restart.</p>
         </div>
         <div class="flex gap-3 text-sm">
-          <a href="/settings" class="font-medium text-gold-700 hover:text-gold-800">Open settings</a>
-          <a href="/channels" class="font-medium text-gold-700 hover:text-gold-800">Channel authorization</a>
-          <a href="/contacts" class="font-medium text-gold-700 hover:text-gold-800">Trust / contacts</a>
+          <a href={scopeGardenPath('/settings')} class="font-medium text-gold-700 hover:text-gold-800">Open settings</a>
+          <a href={scopeGardenPath('/channels')} class="font-medium text-gold-700 hover:text-gold-800">Channel authorization</a>
+          <a href={scopeGardenPath('/contacts')} class="font-medium text-gold-700 hover:text-gold-800">Trust / contacts</a>
         </div>
       </div>
       <div class="grid grid-cols-1 gap-4 lg:grid-cols-2">

@@ -1,8 +1,8 @@
 # Helm Fleet Upgrade Guide
 
-Read this document before changing any PSFN Helm release, including Carlini,
-Pi, and local validation clusters. It is the canonical upgrade brief: it calls
-out ordering constraints and operator-visible changes that are easy to miss.
+Read this document before changing any PSFN Helm release, including production
+and local validation clusters. It is the canonical upgrade brief: it calls out
+ordering constraints and operator-visible changes that are easy to miss.
 Detailed subsystem procedures remain in the linked runbooks.
 
 ## Current upgrade notes

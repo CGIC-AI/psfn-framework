@@ -7,6 +7,7 @@ import type {
 } from '../../../shared/contracts/runtime.js';
 import type { ApiHealthResponse } from '../../../channels/api/types.js';
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
+import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
 import type { TrustLevel } from '../../../system/trust/types.js';
 import { normalizeChannelPrivacy } from '../../../system/trust/context-envelope.js';
 import { decodeStoredChannelVisibility } from '../../../system/trust/types.js';
@@ -52,6 +53,10 @@ import { resolveActiveTimezone } from '../../../shared/time/active-timezone.js';
 import { wrapPromptSectionXml } from '../../identity/prompt-sections.js';
 import { getRunChargeSnapshot } from '../../../shared/telemetry/run-charge.js';
 import { parseIcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
+import {
+  formatShardParentIcpChannelId,
+  parseShardParentIcpRoutingMetadata,
+} from '../../../shared/contracts/shard-parent-icp.js';
 import {
   buildCurrentDatetimePromptVariables,
   buildLastMessagePromptVariables,
@@ -271,6 +276,14 @@ export interface DynamicPromptTemplateVariablesInput {
   emotionAppraisalChain?: readonly EmotionAppraisalEntry[];
   modelId: string;
   capabilityTier: CapabilityTier;
+  /**
+   * The granted token set from the SAME capability access resolution as
+   * `capabilityTier` (mus2.1). The extended-tool guide advertises from this
+   * set so prompt availability and tool gating agree exactly — including for
+   * an injected immutable `custom` shard access, which a tier-name lookup
+   * would misreport as an empty grant.
+   */
+  capabilityGrantedTokens: ReadonlySet<CapabilityToken>;
   activeToolCounts: RuntimeContextActiveToolCounts;
   extendedTools: AgentTool<any>[];
   coreToolNames: ReadonlySet<string>;
@@ -310,7 +323,7 @@ export function buildDynamicPromptTemplateVariables(
     ? parseIcpConversationCorrelation(input.message.routing.icpCorrelation).chargeLane
     : undefined;
   const extendedToolGuide = buildExtendedToolGuide({
-    capabilityTier: input.capabilityTier,
+    grantedTokens: input.capabilityGrantedTokens,
     extendedTools: input.extendedTools,
   });
 
@@ -770,6 +783,34 @@ export async function resolveAuthorContext(input: {
       resolvedUserName: resolvePromptUserName(input.message),
       canonicalContactKey: input.message.authorId,
       continuitySubjectKey: input.message.authorId,
+      continuityFallbackKeys: [],
+    };
+  }
+
+  const shardParentIcp = input.message.routing?.shardParentIcp;
+  if (shardParentIcp) {
+    const routing = parseShardParentIcpRoutingMetadata(shardParentIcp);
+    const shardId = routing.lineage.shardId;
+    const expectedAuthorId = `shard:${shardId}`;
+    const expectedChannelId = formatShardParentIcpChannelId(routing);
+    if (routing.direction !== 'shard_to_parent'
+      || routing.routingCompanionId !== input.companionIdentityKey
+      || routing.lineage.parentCompanionId !== input.companionIdentityKey
+      || input.message.channelId !== expectedChannelId
+      || input.message.channelType !== 'companion'
+      || input.message.authorId !== expectedAuthorId
+      || input.message.isDirectMessage !== true
+      || input.message.routing?.source !== 'companion'
+      || input.message.routing.authorIsMachineIntelligence !== true) {
+      throw new Error('Shard-parent ICP lineage does not match runtime identity/routing');
+    }
+    return {
+      trustLevel: 'regular',
+      speakerRole: 'user',
+      actorKind: 'machine_intelligence',
+      resolvedUserName: resolvePromptUserName(input.message),
+      speakingWithIsMachineIntelligence: true,
+      continuitySubjectKey: expectedAuthorId,
       continuityFallbackKeys: [],
     };
   }

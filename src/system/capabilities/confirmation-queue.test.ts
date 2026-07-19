@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   ConfirmationQueue,
   DEFAULT_CONFIRMATION_EXPIRY_MS,
+  readConfirmedApprovalExecution,
+  type ConfirmationExecutionContext,
 } from './confirmation-queue.js';
 
 describe('ConfirmationQueue', () => {
@@ -52,6 +54,7 @@ describe('ConfirmationQueue', () => {
     expect(plain).not.toHaveProperty('attribution');
 
     const attribution = { parentId: 'parent-1', parentLabel: 'Parent', shardId: 'shard-1' };
+    const approvalOwner = { companionId: 'parent-1', shardId: 'shard-1' };
     const rich = queue.enqueue(
       {
         method: 'world.control',
@@ -61,16 +64,49 @@ describe('ConfirmationQueue', () => {
         companionReason: 'shard entry',
         sourceSystem: 'shard',
         attribution,
+        approvalOwner,
       },
       async () => undefined,
     );
     expect(rich.sourceSystem).toBe('shard');
     expect(rich.attribution).toEqual(attribution);
+    expect(rich.approvalOwner).toEqual(approvalOwner);
     // Snapshot must be a defensive copy — mutating the returned entry or the
     // source attribution must not bleed into queue state.
     expect(rich.attribution).not.toBe(attribution);
     attribution.parentId = 'tampered';
+    approvalOwner.companionId = 'tampered';
     expect(queue.getPending('prov-1')?.attribution?.parentId).toBe('parent-1');
+    expect(queue.getApprovalOwner('prov-1')).toEqual({
+      companionId: 'parent-1',
+      shardId: 'shard-1',
+    });
+  });
+
+  it('reads the stored owner without consuming the queue expiry outcome', async () => {
+    let now = 1;
+    const queue = new ConfirmationQueue({
+      now: () => now,
+      idFactory: () => 'owner-expiry',
+      defaultExpiryMs: 10,
+    });
+    queue.enqueue({
+      method: 'fs.write',
+      action: 'write',
+      scope: '/tmp/a.txt',
+      params: {},
+      companionReason: 'write',
+      approvalOwner: { companionId: 'parent-1' },
+    }, async () => undefined);
+    now = 20;
+
+    expect(queue.getApprovalOwner('owner-expiry')).toEqual({
+      companionId: 'parent-1',
+    });
+    await expect(queue.resolve({
+      id: 'owner-expiry',
+      decision: 'approve',
+    })).resolves.toMatchObject({ status: 'expired', executed: false });
   });
 
   it('approves and executes queued action', async () => {
@@ -118,6 +154,39 @@ describe('ConfirmationQueue', () => {
         appliedParams: { path: '/etc/hosts' },
       }),
     ]);
+  });
+
+  it('exposes approval proof only during the exact queue executor call', async () => {
+    let captured: ConfirmationExecutionContext | undefined;
+    const queue = new ConfirmationQueue({
+      now: () => 150,
+      idFactory: () => 'approval-proof-1',
+    });
+    const entry = queue.enqueue({
+      method: 'fs.read',
+      action: 'read',
+      scope: '/etc/hosts',
+      params: {},
+      companionReason: 'Inspect a bounded resource',
+    }, async (_params, runEntry, context) => {
+      captured = context;
+      expect(readConfirmedApprovalExecution(context, runEntry.id)).toEqual({
+        approvalId: runEntry.id,
+        decision: 'approve',
+        resolver: { kind: 'operator', id: 'test-operator' },
+      });
+    });
+
+    await queue.resolve(
+      { id: entry.id, decision: 'approve' },
+      { kind: 'operator', id: 'test-operator' },
+    );
+    expect(captured).toBeDefined();
+    if (!captured) {
+      throw new Error('Test executor did not capture its confirmation context');
+    }
+    expect(() => readConfirmedApprovalExecution(captured, entry.id))
+      .toThrow(/not backed by the resolved approval/);
   });
 
   it('denies queued action without executing it', async () => {

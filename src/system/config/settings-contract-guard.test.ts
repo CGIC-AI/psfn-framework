@@ -16,6 +16,7 @@ import {
 } from '../../shared/contracts/settings-garden-contract.js';
 import { buildSettingsContractData } from './settings-contract.js';
 import { verifySettingsContractGuard } from './settings-contract-guard.js';
+import { validateCompanionsConfig } from './companions-config.js';
 import { COMPANION_SETTINGS_OVERLAY_WHITELIST } from './settings-overlay.js';
 import { isRecord } from '../../shared/utils/types.js';
 
@@ -34,6 +35,20 @@ describe('settings contract guard', () => {
       ok: true,
       errors: [],
     });
+  });
+
+  it('keeps the fleet Garden listener process-owned and out of companions settings authority', () => {
+    const contractData = buildSettingsContractData();
+    const companionsSeed: unknown = JSON.parse(
+      readFileSync('config/companions.seed.json', 'utf-8'),
+    );
+    const fleet = validateCompanionsConfig(companionsSeed, 'config/companions.seed.json');
+
+    expect(contractData.fields).not.toHaveProperty('gardenPort');
+    expect(contractData.fields).not.toHaveProperty('ADMIN_PORT');
+    for (const companion of fleet.companions) {
+      expect(companion).not.toHaveProperty('gardenPort');
+    }
   });
 
   it('keeps the admin-ui Garden contract shim pinned to the shared canonical module', () => {

@@ -9,6 +9,7 @@ import type { CoreSubstrateConfig, SubstrateConfig } from '../../../system/confi
 import type { PlacesRegistryConfig } from '../../../shared/contracts/places-registry.js';
 import type { EventBus } from '../../../shared/event-bus.js';
 import type { AppCache } from '../../../shared/cache/types.js';
+import type { CapabilityGrantSnapshot } from '../../../system/capabilities/access.js';
 import { wireRuntimeDiagnosticsEventCapture } from '../../../shared/diagnostics/runtime-diagnostics.js';
 import { createEventBusCostTelemetryPort } from '../../../shared/telemetry/cost-telemetry-port.js';
 import { SessionStore, type SessionIntegrityProvider } from '../../../persistence/sessions/store.js';
@@ -21,6 +22,7 @@ import {
 } from '../../../shared/cache/redis-cache.js';
 import { SessionManager } from '../../../core/session/manager.js';
 import type { CompressionGuidelineEvolutionPort } from '../../../core/session/compression-guideline-evolution.js';
+import type { PolicyGovernedShardParentIcpDeliveryPort } from '../../../shared/contracts/shard-parent-icp.js';
 import { UserContinuityStore } from '../../../core/session/continuity.js';
 import {
   createDisabledCrossChannelContinuityPort,
@@ -54,6 +56,8 @@ import { createCoreMemoryStorePort } from '../../../faculties/memory/memory-stor
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { ContactTrackingGate } from '../../../core/contacts/tracking-gate.js';
 import { ShardManager } from '../../../faculties/shards/manager.js';
+import { ShardWorkloadRegistry } from '../../../faculties/shards/workload-registry.js';
+import type { ShardWorkloadLifecyclePort } from '../../../system/capabilities/shard-approval-grant-contracts.js';
 import { ShardFoldReviewController } from '../../../faculties/shards/fold-review.js';
 import {
   createShardExecutionPort,
@@ -518,14 +522,36 @@ export interface ToolRuntimeOptions {
   shardAuditTrail?: ShardAuditTrail | null;
   runtimeMode?: RuntimeMode;
   getCapabilityTier?: () => CapabilityTier;
+  snapshotParentCapabilityGrant: () => CapabilityGrantSnapshot;
   compositionalPolicy?: SubstrateConfig['compositionalPolicy'];
   moduleInstallConfirmationQueue?: ApprovalQueuePort | null;
   onModuleRegistryMutation?: (mutation: ModuleRegistryMutation) => Promise<void> | void;
   executionPort?: SandboxExecutionPort | null;
   compressionGuidelineEvolution?: CompressionGuidelineEvolutionPort | null;
+  shardParentIcpDelivery: PolicyGovernedShardParentIcpDeliveryPort | null;
+  /**
+   * Lifecycle port for registering shard workloads with the gateway-owned
+   * approval-grant authority. Split production supplies its authenticated
+   * gateway RPC client. Local/test composition may omit it and use the
+   * process-local registry while retaining the same lifecycle contract.
+   */
+  shardWorkloadRegistry?: ShardWorkloadLifecyclePort;
+}
+
+function requireExplicitShardParentIcpDelivery(
+  options: { shardParentIcpDelivery?: PolicyGovernedShardParentIcpDeliveryPort | null },
+): PolicyGovernedShardParentIcpDeliveryPort | null {
+  if (!Object.hasOwn(options, 'shardParentIcpDelivery')
+    || options.shardParentIcpDelivery === undefined) {
+    throw new Error(
+      'Shard runtime composition requires an explicit policy-governed ordinary ICP delivery port',
+    );
+  }
+  return options.shardParentIcpDelivery;
 }
 
 export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExecutionPort {
+  const shardParentIcpDelivery = requireExplicitShardParentIcpDelivery(options);
   const companionDataDir = options.companionDataDir ?? resolveConfiguredCompanionDataDir(options.config);
   const shardPostgresLifecycle = options.config.multiCompanion === true
     ? createPostgresShardSchemaLifecycle(
@@ -561,6 +587,9 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     foldReviewController,
     compressionGuidelineEvolution: options.compressionGuidelineEvolution ?? undefined,
     shardPostgresLifecycle,
+    shardParentIcpDelivery,
+    snapshotParentCapabilityGrant: options.snapshotParentCapabilityGrant,
+    workloadRegistry: options.shardWorkloadRegistry ?? new ShardWorkloadRegistry(),
   });
   const subagentFaculty = new SubagentFaculty({
     eventBus: options.eventBus,

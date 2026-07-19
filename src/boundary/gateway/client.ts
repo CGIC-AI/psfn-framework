@@ -3,6 +3,7 @@
 // so it can be used as a drop-in replacement for direct clients.
 
 import { JSONRPCServer, JSONRPCClient, JSONRPCServerAndClient, JSONRPCErrorException } from 'json-rpc-2.0';
+import { randomUUID } from 'node:crypto';
 import { Worker } from 'node:worker_threads';
 import type {
   LLMProviderPort,
@@ -63,9 +64,13 @@ import type {
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcParams,
   ApiChatCompletionRpcResult,
+  ApiCompanionUiShardActionRpcParams,
+  ApiCompanionUiShardActionRpcResult,
   ApiHealthRpcResult,
   ApiTelemetryIngestRpcParams,
   ApiTelemetryIngestRpcResult,
+  ApiShardOwnerRpcParams,
+  ApiShardOwnerRpcResult,
 } from '../../channels/api/types.js';
 import type { SessionIntegrityProvider } from '../../persistence/sessions/store.js';
 import type { VisionIntakeImageScreenResult } from './intake/vision-screener.js';
@@ -106,6 +111,7 @@ import type {
   ShellExecResult,
   ShardBackendRequestParams,
   ShardBackendRequestResult,
+  ShardWorkloadRegisterResult,
   FsReadResult,
   FsWriteResult,
   FsListResult,
@@ -169,6 +175,11 @@ import type {
   GatewayCorrelationParams,
   ContactLifecycleExecuteResult,
 } from './protocol.js';
+import type {
+  AuthenticatedShardWorkloadHandle,
+  ShardWorkloadLifecyclePort,
+  ShardWorkloadRegistrationInput,
+} from '../../system/capabilities/shard-approval-grant-contracts.js';
 import type { ContactAuthorityLifecycleRequest } from '../../shared/contracts/contact-authority-lifecycle.js';
 import { parseContactAuthorityLifecycleResult } from '../../shared/contracts/contact-authority-lifecycle.js';
 import type {
@@ -418,7 +429,11 @@ export interface GatewayConnectionCloseEvent {
   error?: Error;
 }
 
-export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, GatewayModelDiscoveryTransport {
+export class GatewayClient implements
+  LLMProviderPort,
+  EmbeddingProviderPort,
+  GatewayModelDiscoveryTransport,
+  ShardWorkloadLifecyclePort {
   private rpcInstance: JSONRPCServerAndClient;
   private conn: GatewayRpcConnection;
   private embeddingDims: number;
@@ -437,6 +452,10 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private handleMessageHandler: MessageHandler | null = null;
   private apiChatCompletionHandler: ((params: ApiChatCompletionRpcParams) => Promise<ApiChatCompletionRpcResult>) | null = null;
   private apiChatCancelHandler: ((params: ApiChatCompletionCancelRpcParams) => Promise<ApiChatCompletionCancelRpcResult>) | null = null;
+  private companionUiShardActionHandler: ((
+    params: ApiCompanionUiShardActionRpcParams,
+  ) => Promise<ApiCompanionUiShardActionRpcResult>) | null = null;
+  private shardOwnerHandler: ((params: ApiShardOwnerRpcParams) => Promise<ApiShardOwnerRpcResult>) | null = null;
   private apiTelemetryIngestHandler: ((params: ApiTelemetryIngestRpcParams) => Promise<ApiTelemetryIngestRpcResult>) | null = null;
   private apiHealthHandler: (() => Promise<ApiHealthRpcResult>) | null = null;
   private turnPerformanceHandler: ((event: TurnPerformanceEvent) => Promise<void>) | null = null;
@@ -460,6 +479,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
   private readonly sessionIntegrityAuthToken?: string;
   private readonly inlineImageReferenceHints = new GatewayInlineImageReferenceHints();
   private readonly onModelBudgetBlocked?: (event: ModelBudgetBlockedEvent) => void;
+  private readonly shardWorkloadRegistrationIds =
+    new WeakMap<AuthenticatedShardWorkloadHandle, string>();
 
   constructor(conn: GatewayRpcConnection, embeddingDims: number, options: GatewayClientOptions = {}) {
     this.conn = conn;
@@ -1170,6 +1191,87 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     return await this.rpcInstance.request('shard.backend.request', params) as ShardBackendRequestResult;
   }
 
+  async registerWorkload(
+    input: ShardWorkloadRegistrationInput,
+  ): Promise<AuthenticatedShardWorkloadHandle> {
+    if (this.companionId && input.parentCompanionId !== this.companionId) {
+      throw new Error(
+        'Shard workload parent does not match the GatewayClient authenticated companion',
+      );
+    }
+    const registrationId = randomUUID();
+    let result: ShardWorkloadRegisterResult;
+    try {
+      result = await this.rpcInstance.request('shard.workload.register', {
+        registrationId,
+        shardId: input.shardId,
+        ...(input.shardLabel ? { shardLabel: input.shardLabel } : {}),
+        channelIds: [...input.channelIds],
+        ownerVersion: input.capabilityGrant.ownerVersion,
+        grantDigest: input.capabilityGrant.grantDigest,
+      }) as ShardWorkloadRegisterResult;
+    } catch (registrationError) {
+      try {
+        await this.confirmShardWorkloadEnded(registrationId);
+      } catch (cleanupError) {
+        this.conn.destroy();
+        throw new AggregateError(
+          [registrationError, cleanupError],
+          'Shard workload registration failed and gateway cleanup could not be confirmed',
+        );
+      }
+      throw registrationError;
+    }
+    if (result.registrationId !== registrationId
+      || typeof result.workloadGeneration !== 'string'
+      || !result.workloadGeneration.trim()) {
+      const invalidResultError = new Error(
+        'Gateway returned an invalid shard workload registration result',
+      );
+      try {
+        await this.confirmShardWorkloadEnded(registrationId);
+      } catch (cleanupError) {
+        this.conn.destroy();
+        throw new AggregateError(
+          [invalidResultError, cleanupError],
+          'Gateway returned an invalid shard workload registration result and cleanup failed',
+        );
+      }
+      throw invalidResultError;
+    }
+    const handle = Object.freeze({
+      kind: 'authenticated-shard-workload' as const,
+    }) as AuthenticatedShardWorkloadHandle;
+    this.shardWorkloadRegistrationIds.set(handle, registrationId);
+    return handle;
+  }
+
+  async endWorkload(handle: AuthenticatedShardWorkloadHandle): Promise<void> {
+    const registrationId = this.shardWorkloadRegistrationIds.get(handle);
+    if (!registrationId) {
+      throw new Error('Cannot end an unknown gateway shard workload handle');
+    }
+    try {
+      await this.confirmShardWorkloadEnded(registrationId);
+    } catch (error) {
+      // Revocation is security-sensitive. If its acknowledgement is missing,
+      // tear down the authenticated connection so the gateway releases every
+      // connection-scoped lease rather than retaining ambiguous authority.
+      this.conn.destroy();
+      throw error;
+    }
+    this.shardWorkloadRegistrationIds.delete(handle);
+  }
+
+  private async confirmShardWorkloadEnded(registrationId: string): Promise<void> {
+    const result = await this.rpcInstance.request('shard.workload.end', {
+      registrationId,
+    }) as unknown;
+    if (!isRecord(result) || typeof result.ended !== 'boolean') {
+      throw new Error('Gateway returned an invalid shard workload revocation result');
+    }
+  }
+
   async vaultWrite(
     name: string,
     content: string,
@@ -1578,6 +1680,18 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
     this.registerReverseMethods();
   }
 
+  onCompanionUiShardAction(handler: (
+    params: ApiCompanionUiShardActionRpcParams,
+  ) => Promise<ApiCompanionUiShardActionRpcResult>): void {
+    this.companionUiShardActionHandler = handler;
+    this.registerReverseMethods();
+  }
+
+  onShardOwner(handler: (params: ApiShardOwnerRpcParams) => Promise<ApiShardOwnerRpcResult>): void {
+    this.shardOwnerHandler = handler;
+    this.registerReverseMethods();
+  }
+
   onApiTelemetryIngest(handler: (params: ApiTelemetryIngestRpcParams) => Promise<ApiTelemetryIngestRpcResult>): void {
     this.apiTelemetryIngestHandler = handler;
     this.registerReverseMethods();
@@ -1635,6 +1749,8 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       handleVoiceStreamCancel: (params) => this.handleVoiceStreamCancel(params),
       handleApiChatCompletion: (params) => this.handleApiChatCompletion(params),
       handleApiChatCancel: (params) => this.handleApiChatCancel(params),
+      handleCompanionUiShardAction: (params) => this.handleCompanionUiShardAction(params),
+      handleShardOwner: (params) => this.handleShardOwner(params),
       handleApiTelemetryIngest: (params) => this.handleApiTelemetryIngest(params),
       handleApiHealth: () => this.handleApiHealth(),
       handleTurnPerformance: (params) => this.handleTurnPerformance(params),
@@ -1688,6 +1804,24 @@ export class GatewayClient implements LLMProviderPort, EmbeddingProviderPort, Ga
       throw new Error('No api.chat.cancel handler registered');
     }
     return await this.apiChatCancelHandler(params);
+  }
+
+  private async handleCompanionUiShardAction(
+    params: ApiCompanionUiShardActionRpcParams,
+  ): Promise<ApiCompanionUiShardActionRpcResult> {
+    if (!this.companionUiShardActionHandler) {
+      throw new Error('No api.companion-ui.shard.action handler registered');
+    }
+    return await this.companionUiShardActionHandler(params);
+  }
+
+  private async handleShardOwner(
+    params: ApiShardOwnerRpcParams,
+  ): Promise<ApiShardOwnerRpcResult> {
+    if (!this.shardOwnerHandler) {
+      throw new Error('No shard.directory.owner handler registered');
+    }
+    return await this.shardOwnerHandler(params);
   }
 
   private async handleApiTelemetryIngest(

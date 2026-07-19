@@ -200,6 +200,25 @@ export interface InProcessGardenAdminContractOptions {
   wishlistBeadCreator?: AdminWishlistBeadCreatePort;
 }
 
+export interface FleetGardenDirectDatabaseServices {
+  readonly modelUsage: AdminModelUsageDataService;
+  readonly observerEvalSidecar: AdminObserverEvalSidecarService;
+}
+
+export function createFleetGardenDirectDatabaseServices(
+  config: SubstrateConfig,
+): FleetGardenDirectDatabaseServices {
+  const modelUsageStore = createPostgresModelUsageStoreFromConfig(config);
+  if (!modelUsageStore) {
+    throw new Error('Fleet Garden model usage access requires PostgreSQL persistence');
+  }
+  const observerEvalSidecar = createObserverEvalSidecarAdminService({ config });
+  return {
+    modelUsage: new AdminModelUsageDataService(modelUsageStore),
+    observerEvalSidecar,
+  };
+}
+
 export function createInProcessGardenAdminContract(
   options: InProcessGardenAdminContractOptions,
 ): GardenAdminDomainServices {
@@ -595,10 +614,10 @@ export function createInProcessGardenAdminContract(
   };
 }
 
-function createObserverEvalSidecarAdminService(input: {
+export function createObserverEvalSidecarAdminService(input: {
   config: SubstrateConfig;
   runtime?: ObserverEvalSidecarRuntime | null;
-}): AdminObserverEvalSidecarService | null {
+}): AdminObserverEvalSidecarService {
   const settings = input.config.observerEvalSidecar ?? createDefaultObserverEvalSidecarSettings();
 
   const postgresDatabaseUrl = input.config.postgresDatabaseUrl?.trim();

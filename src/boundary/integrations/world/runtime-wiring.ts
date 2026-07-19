@@ -48,6 +48,11 @@ export interface RegisterWorldToolsOptions {
    * Resolves requester provenance for direct versus reasoned autonomous control.
    */
   resolveRequesterProvenance?: () => RequesterProvenance | undefined;
+  /**
+   * Narrow transport-only seam for shard requests that remain subject to the
+   * gateway's exact operator-approval boundary.
+   */
+  allowRequestScopedApprovalTransport?: () => boolean;
   /** In gateway mode, attach requiredGatewayMethods so the wiring validator can check them. */
   gatewayMode?: boolean;
 }
@@ -66,6 +71,9 @@ export function registerWorldTools(
     ...(options.controlEnabled !== undefined ? { controlEnabled: options.controlEnabled } : {}),
     ...(options.resolveRequesterTrust ? { resolveRequesterTrust: options.resolveRequesterTrust } : {}),
     ...(options.resolveRequesterProvenance ? { resolveRequesterProvenance: options.resolveRequesterProvenance } : {}),
+    ...(options.allowRequestScopedApprovalTransport
+      ? { allowRequestScopedApprovalTransport: options.allowRequestScopedApprovalTransport }
+      : {}),
   });
   if (options.gatewayMode) {
     attachWiringMeta(tool, { requiredGatewayMethods: [...WORLD_TOOL_GATEWAY_METHODS] });

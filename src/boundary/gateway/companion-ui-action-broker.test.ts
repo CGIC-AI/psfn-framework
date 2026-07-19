@@ -92,11 +92,18 @@ function actionBody(resource = 'conversation.interact', action = 'companion.inte
     resource,
     body: resource === 'confirmations.resolve'
       ? { id: 'confirmation-1', decision: 'deny' }
+      : resource === 'shards.interact'
+        ? { shardId: 'shard-live-1', content: 'browser text remains untrusted' }
       : { content: 'browser text remains untrusted' },
   }));
 }
 
-function fixture(resolved = context) {
+function fixture(
+  resolved = context,
+  approvalOwnerOf: (id: string) => string | undefined = () => companionId,
+  shardOwnerOf: (shardId: string, parentCompanionId: string) => Promise<string | undefined>
+    = async () => companionId,
+) {
   const keys = generateKeyPairSync('ed25519');
   const signer = createGatewayRequestCapabilitySigner({
     issuer: 'fleet-auth', kid: 'active-key',
@@ -130,6 +137,8 @@ function fixture(resolved = context) {
     signer,
     childAssertions,
     dispatch,
+    approvalOwner: { ownerOf: approvalOwnerOf },
+    shardDeployment: { ownerOfLiveShard: shardOwnerOf },
   });
   return { broker, dispatch, verifier };
 }
@@ -209,6 +218,48 @@ describe('GatewayCompanionUiActionBroker', () => {
       physicalCeiling: { capabilities: [], telemetryScopes: ['approvals'] },
       deviceTransport: { principal: { id: 'satellite-principal', mode: 'api_key', scope: 'satellite' }, headers: {} },
     })).rejects.toBeInstanceOf(CompanionUiActionDeniedError);
+    expect(built.dispatch.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('denies a leaked confirmation id after fetching its stored parent owner', async () => {
+    const approvalContext = Object.freeze({
+      ...context,
+      authorization: Object.freeze({
+        action: 'confirmations.resolve' as const,
+        decision: 'allow' as const,
+      }),
+    });
+    const built = fixture(approvalContext, () => '99999999-9999-4999-8999-999999999999');
+
+    await expect(built.broker.execute({
+      rawBody: actionBody('confirmations.resolve', 'confirmations.resolve'),
+      companionId,
+      sessionToken: 's'.repeat(43),
+      attachment,
+      physicalCeiling: { capabilities: [], telemetryScopes: ['approvals'] },
+      deviceTransport: {
+        principal: { id: 'satellite-principal', mode: 'api_key', scope: 'satellite' },
+        headers: {},
+      },
+    })).rejects.toBeInstanceOf(CompanionUiActionDeniedError);
+    expect(built.dispatch.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('fetches the live deployment owner and denies stale or cross-parent shard selectors', async () => {
+    const ownerOfLiveShard = vi.fn(async () => '99999999-9999-4999-8999-999999999999');
+    const built = fixture(context, () => companionId, ownerOfLiveShard);
+    await expect(built.broker.execute({
+      rawBody: actionBody('shards.interact', 'companion.interact'),
+      companionId,
+      sessionToken: 's'.repeat(43),
+      attachment,
+      physicalCeiling: { capabilities: ['text'], telemetryScopes: [] },
+      deviceTransport: {
+        principal: { id: 'satellite-principal', mode: 'api_key', scope: 'satellite' },
+        headers: {},
+      },
+    })).rejects.toBeInstanceOf(CompanionUiActionDeniedError);
+    expect(ownerOfLiveShard).toHaveBeenCalledWith('shard-live-1', companionId);
     expect(built.dispatch.dispatch).not.toHaveBeenCalled();
   });
 });

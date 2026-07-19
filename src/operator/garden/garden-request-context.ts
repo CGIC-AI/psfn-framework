@@ -200,6 +200,24 @@ export function requireFleetGardenRequestContext(
 }
 
 /**
+ * Require a fleet principal context whose admitted resource is bound to one
+ * exact companion target. Fleet control-plane callers use this after
+ * admission so a context created for companion A can never be applied to a
+ * request routed at companion B — the route selection, the signed capability,
+ * and the authenticated context must all name the same companion.
+ */
+export function requireCompanionBoundFleetGardenContext(
+  context: GardenRequestContext,
+  companionId: string,
+): FleetGardenRequestContext {
+  const fleet = requireFleetGardenRequestContext(context);
+  if (!companionId || fleet.resource.companionId !== companionId) {
+    throw new Error('Fleet Garden request context is bound to a different companion target');
+  }
+  return fleet;
+}
+
+/**
  * Legacy services that still expose unpartitioned session or alternate-memory
  * stores are not safe to call for a fleet principal. They remain fail closed
  * until their own subject selectors are explicit.

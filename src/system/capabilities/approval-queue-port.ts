@@ -4,6 +4,7 @@ import type {
   ConfirmationQueueHistoryEntry,
   ConfirmationQueueRequest,
   ConfirmationExecutionContext,
+  ConfirmationApprovalOwner,
   ConfirmationResolverIdentity,
   ConfirmationResolveRequest,
   ConfirmationResolveResult,
@@ -14,6 +15,7 @@ export type {
   ConfirmationQueueHistoryEntry,
   ConfirmationQueueRequest,
   ConfirmationExecutionContext,
+  ConfirmationApprovalOwner,
   ConfirmationResolverIdentity,
   ConfirmationResolveRequest,
   ConfirmationResolveResult,
@@ -28,6 +30,7 @@ export interface ApprovalQueuePort {
   listPending(): ConfirmationQueueEntry[];
   listHistory(): ConfirmationQueueHistoryEntry[];
   getPending(id: string): ConfirmationQueueEntry | null;
+  getApprovalOwner(id: string): ConfirmationApprovalOwner | null;
   resolve(
     request: ConfirmationResolveRequest,
     resolver?: ConfirmationResolverIdentity,
@@ -40,6 +43,7 @@ export function createApprovalQueuePort(queue: ApprovalQueuePort): ApprovalQueue
     listPending: () => queue.listPending(),
     listHistory: () => queue.listHistory(),
     getPending: (id) => queue.getPending(id),
+    getApprovalOwner: (id) => queue.getApprovalOwner(id),
     resolve: (request, resolver) => queue.resolve(request, resolver),
   };
 }

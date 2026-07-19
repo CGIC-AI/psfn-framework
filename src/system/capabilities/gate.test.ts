@@ -17,6 +17,8 @@ import {
   withCapabilityRequirement,
 } from './requirements.js';
 import { MODEL_FACING_DRIFT_GUARD_RETIRED_TOOL_ALIASES } from '../../core/agent/tool-surface/registry.js';
+import { allowShardRequestScopedCapabilityTransport } from '../../faculties/shards/request-scoped-capability-transport.js';
+import { isRecord } from '../../shared/utils/types.js';
 
 function accessForTier(
   tier: CapabilityTier,
@@ -980,6 +982,32 @@ describe('world capability gating', () => {
     );
     await gated.execute('world-control-granted', { action: 'control', affordanceId: 'lr_lights', command: 'on' });
     expect(world.executeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets a shard transport only world control without widening its standing grant', async () => {
+    const world = createTool('world');
+    const access = accessForTier('custom', ['world.read']);
+    const gated = gateToolWithCapabilities(
+      world.tool,
+      () => access,
+      undefined,
+      allowShardRequestScopedCapabilityTransport,
+    );
+
+    await gated.execute('world-control-shard-transport', {
+      action: 'control',
+      affordanceId: 'lr_lights',
+      command: 'on',
+    });
+    expect(world.executeSpy).toHaveBeenCalledOnce();
+    expect(access.has('world.control')).toBe(false);
+    expect([...access.getGrantedTokens()]).toEqual(['world.read']);
+
+    const unknownAction = await gated.execute('world-unknown-action', {
+      action: 'teleport',
+    });
+    expect(world.executeSpy).toHaveBeenCalledOnce();
+    expect(isRecord(unknownAction.details) && unknownAction.details.capabilityDenied).toBe(true);
   });
 });
 

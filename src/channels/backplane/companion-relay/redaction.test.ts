@@ -196,7 +196,7 @@ describe('redactApprovalResolved / toCompanionApprovalStatus', () => {
     expect(() => toCompanionApprovalStatus('not_found')).toThrow(/not_found/);
   });
 
-  it('emits only id, status, resolvedAt', () => {
+  it('emits only id, status, resolvedAt for an ordinary (non-shard) resolution', () => {
     const payload = redactApprovalResolved({
       id: 'conf-9',
       status: 'denied',
@@ -209,6 +209,28 @@ describe('redactApprovalResolved / toCompanionApprovalStatus', () => {
       status: 'denied',
       resolvedAt: new Date(1_700_000_001_000).toISOString(),
     });
+  });
+
+  it('carries optional shard provenance when a shard resolution is redacted', () => {
+    const payload = redactApprovalResolved({
+      id: 'conf-9',
+      status: 'approved',
+      resolvedAt: 1_700_000_001_000,
+      executed: true,
+      shardId: 'shard-xyz',
+    });
+    expect(Object.keys(payload).sort()).toEqual(['id', 'resolvedAt', 'shardId', 'status']);
+    expect(payload.shardId).toBe('shard-xyz');
+  });
+
+  it('fails closed on a blank shard id', () => {
+    expect(() => redactApprovalResolved({
+      id: 'conf-9',
+      status: 'approved',
+      resolvedAt: 1_700_000_001_000,
+      executed: true,
+      shardId: '   ',
+    })).toThrow(/shardId/);
   });
 });
 

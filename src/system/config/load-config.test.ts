@@ -521,7 +521,7 @@ describe('loadConfig path defaults', () => {
     expect(() => loadAgentConfig()).toThrow(/GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN/);
   });
 
-  it('projects operator config without provider, channel, gateway, or database secrets', () => {
+  it('projects operator config with only the direct Garden database credential', () => {
     const config = loadOperatorConfig({
       COMPANION_ID: 'operator-test',
       DISCORD_TOKEN: 'sentinel-discord',
@@ -539,9 +539,47 @@ describe('loadConfig path defaults', () => {
     expect(config.deepgramApiKey).toBeUndefined();
     expect(config.elevenLabsApiKey).toBeUndefined();
     expect(config.falApiKey).toBeUndefined();
-    expect(config.postgresDatabaseUrl).toBeUndefined();
+    expect(config.postgresDatabaseUrl).toBe('postgres://sentinel-secret@localhost/db');
     expect(config.gatewayCompanionAuthToken).toBeUndefined();
     expect(config.gatewaySessionIntegrityAuthToken).toBeUndefined();
+  });
+
+  it('projects the operator direct Garden database credential from a mounted secret file', () => {
+    const root = mkdtempSync(join(tmpdir(), 'psfn-load-operator-postgres-'));
+    tempDirs.push(root);
+    const credentialPath = join(root, 'database-url');
+    writeFileSync(credentialPath, 'postgres://file-secret@localhost/db\n', 'utf8');
+    const config = loadOperatorConfig({
+      COMPANION_ID: 'operator-test',
+      POSTGRES_DATABASE_URL_FILE: credentialPath,
+    }) as Record<string, unknown>;
+
+    expect(config.postgresDatabaseUrl).toBe('postgres://file-secret@localhost/db');
+  });
+
+  it('projects an operator config without a database credential when none is provided', () => {
+    const config = loadOperatorConfig({
+      COMPANION_ID: 'operator-test',
+    }) as Record<string, unknown>;
+
+    expect(config.postgresDatabaseUrl).toBeUndefined();
+  });
+
+  it('projects a multi-companion operator without a companion identity or personal workspace', () => {
+    configureMultiCompanionEnv();
+    delete process.env.COMPANION_ID;
+    delete process.env.CHARACTER_CARD_PATH;
+    delete process.env.COMPANION_PG_SCHEMA;
+    delete process.env.WORKSPACE_PATH;
+
+    const config = loadOperatorConfig();
+
+    expect(config.multiCompanion).toBe(true);
+    expect(config.companionFleet).toBeDefined();
+    expect(config.companionId).toBeUndefined();
+    expect(config.companionRuntimeIdentity).toBeUndefined();
+    expect(config.workspacePath).toBeUndefined();
+    expect(config.postgresSchema).toBeUndefined();
   });
 
   it('fails closed when DISCORD_TOKEN is set without DISCORD_BOT_ID', () => {

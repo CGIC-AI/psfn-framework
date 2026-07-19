@@ -26,9 +26,10 @@ export type FleetPortalAvailability = 'online' | 'degraded' | 'offline' | 'unkno
 
 export interface FleetPortalCompanionProjection {
   readonly companionId: string;
+  readonly displayName: string;
   readonly availability: FleetPortalAvailability;
-  readonly headless: boolean;
   readonly gardenPath?: string;
+  readonly avatarRef?: string;
 }
 
 export interface FleetPortalProjection {
@@ -65,7 +66,7 @@ export interface GatewayFleetPortalProjectionOptions {
   readonly authorizer: FleetPortalAuthorizationBatchPort;
   readonly fleet: readonly Pick<
   CompanionFleetEntry,
-  'companionId' | 'gardenPort' | 'displayName' | 'avatarRef'
+  'companionId' | 'displayName' | 'avatarRef'
   >[];
   readonly source: FleetPortalConnectionSnapshotSource;
   readonly now?: () => Date;
@@ -107,7 +108,7 @@ function indexConnections(
 
 type ProjectionManifestEntry = Pick<
   CompanionFleetEntry,
-  'companionId' | 'gardenPort' | 'displayName' | 'avatarRef'
+  'companionId' | 'displayName' | 'avatarRef'
 >;
 
 export class GatewayFleetPortalProjection {
@@ -128,7 +129,6 @@ export class GatewayFleetPortalProjection {
       }
       fleet.set(companion.companionId, Object.freeze({
         companionId: companion.companionId,
-        ...(companion.gardenPort !== undefined ? { gardenPort: companion.gardenPort } : {}),
         ...(companion.displayName !== undefined ? { displayName: companion.displayName } : {}),
         ...(companion.avatarRef !== undefined ? { avatarRef: companion.avatarRef } : {}),
       }));
@@ -154,14 +154,17 @@ export class GatewayFleetPortalProjection {
       if (!manifest) {
         throw new Error('Fleet portal authorization returned an unknown manifest companion');
       }
-      const gardenPath = authority.gardenLinkEligible && manifest.gardenPort !== undefined
-        ? compileFleetSsoGardenPath(manifest.companionId)
-        : undefined;
+      // Bounded authorized projection: principals see only companions they hold
+      // a Garden link for. gardenPort is retired (one fleet Garden derives every
+      // admin endpoint), so authorization is the only gate.
+      if (!authority.gardenLinkEligible) continue;
+      const gardenPath = compileFleetSsoGardenPath(manifest.companionId);
       companions.push(Object.freeze({
         companionId: manifest.companionId,
+        displayName: manifest.displayName?.trim() || manifest.companionId,
         availability: availability(connections.get(manifest.companionId)),
-        headless: manifest.gardenPort === undefined,
-        ...(gardenPath ? { gardenPath } : {}),
+        gardenPath,
+        ...(manifest.avatarRef !== undefined ? { avatarRef: manifest.avatarRef } : {}),
       }));
     }
     companions.sort((left, right) => left.companionId.localeCompare(right.companionId));

@@ -1,4 +1,4 @@
-import { ApiError, apiGet, apiPost, apiPostForm } from '$lib/api/client';
+import { ApiError, apiFetch, apiGet, apiPost, apiPostForm } from '$lib/api/client';
 import { getToken } from '$lib/stores/auth.svelte';
 import type {
   AdminSettingsData,
@@ -25,7 +25,7 @@ export function updateSettings(
   };
   if (token) headers['Authorization'] = `Bearer ${token}`;
 
-  return fetch('/api/admin/settings', {
+  return apiFetch('/api/admin/settings', {
     method: 'PATCH',
     headers,
     credentials: 'include',
@@ -89,7 +89,7 @@ export async function getSubConfig(key: string): Promise<string> {
   const token = getToken();
   const headers: Record<string, string> = {};
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(`/api/admin/settings/${encodeURIComponent(key)}`, {
+  const res = await apiFetch(`/api/admin/settings/${encodeURIComponent(key)}`, {
     headers,
     credentials: 'include',
   });

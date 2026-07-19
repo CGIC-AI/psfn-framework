@@ -46,7 +46,7 @@ spec:
                   name: http-api
 ---
 {{- end }}
-{{- if and .Values.ingress.garden.enabled (not .Values.fleetAuth.enabled) }}
+{{- if and .Values.ingress.garden.enabled (not .Values.fleetAuth.enabled) (not .Values.fleet.enabled) }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

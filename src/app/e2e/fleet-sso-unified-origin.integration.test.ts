@@ -15,17 +15,14 @@ import {
   createGatewayRequestCapabilitySigner,
   createRequestCapabilityVerifier,
 } from '../../boundary/fleet-auth/request-capability.js';
-import {
-  digestGardenRouteAuthorization,
-  validateGardenRequestMetadata,
-} from '../../boundary/fleet-auth/request-capability-target.js';
+import { compileGatewayGardenRequestTarget } from '../../boundary/fleet-auth/request-capability-target.js';
+import { parseGardenCapabilityContext } from '../../boundary/fleet-auth/garden-capability-context.js';
 import { GatewayFleetSsoRouter } from '../../boundary/gateway/fleet-sso-router.js';
 import {
   FleetAuthorizationDeniedError,
   type FleetAuthorizationContext,
 } from '../../boundary/gateway/fleet-authorization-context.js';
 import { GatewayFleetPortalProjection } from '../../boundary/gateway/fleet-portal-projection.js';
-import { FleetStatusServer } from '../../boundary/gateway/fleet-status.js';
 import { fleetAuthRoleAllowsAction } from '../../boundary/fleet-auth/role-action-policy.js';
 import { createCompanionId } from '../../shared/routing/companion-id.js';
 import {
@@ -65,8 +62,7 @@ const server = createServer((request, response) => {
       cookie: request.headers.cookie,
       authorization: request.headers.authorization,
       capability: request.headers['x-psfn-request-capability'],
-      requestId: request.headers['x-psfn-capability-request-id'],
-      decisionId: request.headers['x-psfn-capability-decision'],
+      context: request.headers['x-psfn-capability-context'],
     },
   }));
 });
@@ -246,10 +242,8 @@ describe('unified Fleet SSO two-companion process boundary', () => {
   const servers: Server[] = [];
   const children: ChildProcess[] = [];
   const workloadRoots: string[] = [];
-  const fleetStatusServers: FleetStatusServer[] = [];
 
   afterEach(async () => {
-    await Promise.all(fleetStatusServers.splice(0).map(server => server.stop()));
     await Promise.all(servers.splice(0).map(server => new Promise<void>((resolve) => {
       server.close(() => resolve());
     })));
@@ -401,22 +395,22 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       }),
     }));
     const revealPayload = JSON.parse(reveal.body);
-    const revealMetadata = validateGardenRequestMetadata({
-      rawTarget: revealPath,
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: Buffer.from(revealBody),
-    });
-    const revealedCapability = verifier.verifyOperatorTransport({
+    const revealContext = parseGardenCapabilityContext(
+      String(revealPayload.forwarded.context),
+      COMPANION_A,
+    );
+    const revealedCapability = verifier.verifyOperator({
       token: String(revealPayload.forwarded.capability),
-      companionId: COMPANION_A,
-      method: revealMetadata.method,
-      canonicalRequestTarget: revealMetadata.canonicalRequestTarget,
-      action: revealMetadata.action,
-      authorizationDigest: digestGardenRouteAuthorization(revealMetadata.authorization),
-      bodyLength: Buffer.byteLength(revealBody),
-      requestId: String(revealPayload.forwarded.requestId),
-      decisionId: String(revealPayload.forwarded.decisionId),
+      target: compileGatewayGardenRequestTarget({
+        rawTarget: revealPath,
+        method: 'POST',
+        companionId: COMPANION_A,
+        headers: { 'content-type': 'application/json' },
+        body: Buffer.from(revealBody),
+      }),
+      requestId: revealContext.requestId,
+      decisionId: revealContext.decisionId,
+      versions: revealContext.versions,
       nowSeconds: NOW_SECONDS,
     });
     expect(revealedCapability.authContext.sessionAssurance).toBe('webauthn_uv');
@@ -470,22 +464,22 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       }),
     }));
     const breakGlassConfirmPayload = JSON.parse(breakGlassConfirm.body);
-    const breakGlassConfirmMetadata = validateGardenRequestMetadata({
-      rawTarget: breakGlassConfirmPath,
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: Buffer.from(breakGlassConfirmBody),
-    });
-    const breakGlassCapability = verifier.verifyOperatorTransport({
+    const breakGlassContext = parseGardenCapabilityContext(
+      String(breakGlassConfirmPayload.forwarded.context),
+      COMPANION_A,
+    );
+    const breakGlassCapability = verifier.verifyOperator({
       token: String(breakGlassConfirmPayload.forwarded.capability),
-      companionId: COMPANION_A,
-      method: breakGlassConfirmMetadata.method,
-      canonicalRequestTarget: breakGlassConfirmMetadata.canonicalRequestTarget,
-      action: breakGlassConfirmMetadata.action,
-      authorizationDigest: digestGardenRouteAuthorization(breakGlassConfirmMetadata.authorization),
-      bodyLength: Buffer.byteLength(breakGlassConfirmBody),
-      requestId: String(breakGlassConfirmPayload.forwarded.requestId),
-      decisionId: String(breakGlassConfirmPayload.forwarded.decisionId),
+      target: compileGatewayGardenRequestTarget({
+        rawTarget: breakGlassConfirmPath,
+        method: 'POST',
+        companionId: COMPANION_A,
+        headers: { 'content-type': 'application/json' },
+        body: Buffer.from(breakGlassConfirmBody),
+      }),
+      requestId: breakGlassContext.requestId,
+      decisionId: breakGlassContext.decisionId,
+      versions: breakGlassContext.versions,
       nowSeconds: NOW_SECONDS,
     });
     expect(breakGlassCapability.authContext.sessionAssurance).toBe('break_glass');
@@ -513,17 +507,21 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     expect(breakGlassDecision.status).toBe(200);
     expect(consumeGrant).toHaveBeenCalledTimes(2);
 
-    const metadata = validateGardenRequestMetadata({ rawTarget: resourcePath, method: 'GET' });
-    expect(() => verifier.verifyOperatorTransport({
+    const dashboardContext = parseGardenCapabilityContext(
+      String(payloadA.forwarded.context),
+      COMPANION_A,
+    );
+    expect(() => verifier.verifyOperator({
       token: String(payloadA.forwarded.capability),
-      companionId: COMPANION_A,
-      method: metadata.method,
-      canonicalRequestTarget: metadata.canonicalRequestTarget,
-      action: metadata.action,
-      authorizationDigest: digestGardenRouteAuthorization(metadata.authorization),
-      bodyLength: 0,
-      requestId: String(payloadA.forwarded.requestId),
-      decisionId: String(payloadA.forwarded.decisionId),
+      target: compileGatewayGardenRequestTarget({
+        rawTarget: resourcePath,
+        method: 'GET',
+        companionId: COMPANION_A,
+        body: Buffer.alloc(0),
+      }),
+      requestId: dashboardContext.requestId,
+      decisionId: dashboardContext.decisionId,
+      versions: dashboardContext.versions,
       nowSeconds: NOW_SECONDS,
     })).not.toThrow();
 
@@ -575,7 +573,7 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     expect(await getHitCount(workloadA.port)).toEqual({ hits: 4, pid: workloadA.pid });
   });
 
-  it('certifies disjoint portal projections, stateless links, outages, and raw-status separation', async () => {
+  it('certifies disjoint bounded projections, stateless links, and outages', async () => {
     const workloadA = await spawnWorkload('workspace-a/portal-owner');
     const workloadB = await spawnWorkload('workspace-b/portal-admin');
     children.push(workloadA.child, workloadB.child);
@@ -615,9 +613,9 @@ describe('unified Fleet SSO two-companion process boundary', () => {
       recentViolationWindowMs: 3_600_000,
     });
     const fleet = [
-      { companionId: COMPANION_A, gardenPort: workloadA.port },
-      { companionId: COMPANION_B, gardenPort: workloadB.port },
-      { companionId: COMPANION_C, gardenPort: unavailablePort },
+      { companionId: COMPANION_A },
+      { companionId: COMPANION_B },
+      { companionId: COMPANION_C },
       { companionId: COMPANION_D },
     ];
     const grants = new Map<string, readonly { companionId: string; role: FleetAuthRole }[]>([
@@ -709,14 +707,6 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     servers.push(edge);
     const edgePort = await listen(edge);
 
-    const rawStatus = new FleetStatusServer({
-      port: 0,
-      fleet,
-      source: { getFleetConnectionSnapshot: snapshot },
-    });
-    await rawStatus.start();
-    fleetStatusServers.push(rawStatus);
-
     const ownerPortal = await get(edgePort, '/v1/fleet/portal', SESSION_A);
     expect(ownerPortal.status).toBe(200);
     expect(JSON.parse(ownerPortal.body)).toMatchObject({
@@ -724,13 +714,11 @@ describe('unified Fleet SSO two-companion process boundary', () => {
         {
           companionId: COMPANION_A,
           availability: 'online',
-          headless: false,
           gardenPath: `/companions/${COMPANION_A}/garden`,
         },
-        { companionId: COMPANION_C, availability: 'offline', headless: false },
       ],
     });
-    expect(JSON.parse(ownerPortal.body).companions[1]).not.toHaveProperty('gardenPath');
+    expect(JSON.parse(ownerPortal.body).companions).toHaveLength(1);
     expect(ownerPortal.body).not.toContain(COMPANION_B);
     expect(ownerPortal.body).not.toContain(COMPANION_D);
     expect(ownerPortal.body).not.toMatch(/gardenPort|stateReason|violation/u);
@@ -742,13 +730,11 @@ describe('unified Fleet SSO two-companion process boundary', () => {
         {
           companionId: COMPANION_B,
           availability: 'degraded',
-          headless: false,
           gardenPath: `/companions/${COMPANION_B}/garden`,
         },
-        { companionId: COMPANION_D, availability: 'offline', headless: true },
       ],
     });
-    expect(JSON.parse(adminPortal.body).companions[1]).not.toHaveProperty('gardenPath');
+    expect(JSON.parse(adminPortal.body).companions).toHaveLength(1);
     expect(adminPortal.body).not.toContain(COMPANION_A);
     expect(adminPortal.body).not.toContain(COMPANION_C);
 
@@ -782,16 +768,5 @@ describe('unified Fleet SSO two-companion process boundary', () => {
     const publicRawAttempt = await get(edgePort, '/fleet/status.json', SESSION_B);
     expect(publicRawAttempt.status).toBe(404);
     expect(publicRawAttempt.body).not.toMatch(/gardenPort|recentViolationWindowMs/u);
-    const operatorRaw = await get(
-      rawStatus.boundPort(),
-      '/fleet/status.json',
-      SESSION_B,
-    );
-    expect(operatorRaw.status).toBe(200);
-    const operatorRawBody = operatorRaw.body;
-    for (const companionId of [COMPANION_A, COMPANION_B, COMPANION_C, COMPANION_D]) {
-      expect(operatorRawBody).toContain(companionId);
-    }
-    expect(operatorRawBody).toMatch(/gardenPort|recentViolationWindowMs/u);
   });
 });

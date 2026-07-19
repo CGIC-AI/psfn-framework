@@ -34,6 +34,7 @@ import {
 import { resolveKubeSelfManagementController } from './kube-self-management-runtime.js';
 import type { IcpConversationChargePolicyResolver } from '../../primitives/llm/icp-conversation-cost-breaker.js';
 import type { GatewayContactLifecycleAuthorityPort } from './contact-lifecycle-authority.js';
+import type { ShardWorkloadLifecycleRegistryPort } from '../../system/capabilities/shard-approval-grant-contracts.js';
 
 export interface GatewayPrivilegedCoreBuildInput {
   config: SubstrateConfig;
@@ -76,6 +77,12 @@ export interface GatewayPrivilegedCore {
      */
     welfareGrantVerifier?: WelfareGrantVerifier;
     contactLifecycleAuthority?: GatewayContactLifecycleAuthorityPort;
+    /**
+     * 2h6q.3: server-owned authenticated shard-workload registry fed from
+     * ShardManager registration state. Presence enables the exact-once shard
+     * approval-grant authority inside the gateway server.
+     */
+    shardApprovalWorkloads?: ShardWorkloadLifecycleRegistryPort;
   }): GatewayServer;
 }
 
@@ -201,6 +208,7 @@ export async function buildGatewayPrivilegedCore(
       icpInitiationPolicyAuthority,
       welfareGrantVerifier,
       contactLifecycleAuthority,
+      shardApprovalWorkloads,
     }) => new GatewayServer({
       ...(discordAccountDocks ? { discordAccountDocks } : {}),
       ...(companionChannels ? { companionChannels } : {}),
@@ -208,6 +216,7 @@ export async function buildGatewayPrivilegedCore(
       ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),
       ...(welfareGrantVerifier ? { welfareGrantVerifier } : {}),
       ...(contactLifecycleAuthority ? { contactLifecycleAuthority } : {}),
+      ...(shardApprovalWorkloads ? { shardApprovalWorkloads } : {}),
       socketPath: input.bootstrap.socketPath,
       companionId: resolveCoreCompanionIdFromConfig(input.config),
       gatewayRpcEndpoint: input.bootstrap.gatewayRpcEndpoint,
@@ -236,6 +245,8 @@ export async function buildGatewayPrivilegedCore(
       ntfy: input.bootstrap.server.ntfy,
       confirmation: input.bootstrap.server.confirmation,
       capabilityTierProvider: (companionId) => capabilityTierResolver.resolveTier(companionId),
+      capabilityGrantSnapshotProvider: (companionId) =>
+        capabilityTierResolver.snapshotOwnerGrantStrict(companionId),
       approvalParentLabelProvider: (companionId) => {
         const fleetEntry = input.config.companionFleet?.companions
           .find(entry => entry.companionId === companionId);

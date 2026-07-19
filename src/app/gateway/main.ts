@@ -20,6 +20,7 @@ import { RUNTIME_MODE } from '../../system/lifecycle/runtime-mode.js';
 import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 import { formatGatewayRpcEndpoint } from '../../boundary/gateway/transport.js';
 import { buildGatewayPrivilegedCore } from '../../boundary/gateway/privileged-core.js';
+import { ShardWorkloadRegistry } from '../../faculties/shards/workload-registry.js';
 import {
   createWelfareGrantVerifier,
   type WelfareGrantVerifier,
@@ -36,7 +37,6 @@ import { resolveStartupPreflightBundle } from '../startup/support/startup-prefli
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../startup/support/signal-shutdown.js';
 import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
-import { startOptionalFleetStatusServer } from '../../boundary/gateway/fleet-status.js';
 import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-registry.js';
 import { assertSatellitePlaceBindings, loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
 import { GatewayCompanionChannelLane } from '../../boundary/gateway/companion-channels.js';
@@ -494,6 +494,7 @@ async function main(): Promise<void> {
     });
   }
 
+  const shardWorkloadRegistry = new ShardWorkloadRegistry();
   const gateway = createGatewayServer({
     discordAdapter: discord,
     ...(discordAccountDocks ? { discordAccountDocks } : {}),
@@ -501,6 +502,7 @@ async function main(): Promise<void> {
     ...(icpAutonomyStore ? { icpAutonomyStore } : {}),
     ...(icpInitiationPolicyAuthority ? { icpInitiationPolicyAuthority } : {}),
     ...(welfareGrantVerifier ? { welfareGrantVerifier } : {}),
+    shardApprovalWorkloads: shardWorkloadRegistry,
     ...(fleetAuthPersistence?.contactLifecycleAuthority
       ? { contactLifecycleAuthority: fleetAuthPersistence.contactLifecycleAuthority }
       : {}),
@@ -564,23 +566,13 @@ async function main(): Promise<void> {
 
   await initGatewayChannelSurfaces(channelSurfaces);
   gateway.start();
-  // Raw fleet-status operator listener (sprint-10 W4): config-gated,
-  // loopback-only cluster health over the connection registry. It is separate
-  // from the authenticated fleet portal composed below. Absent
-  // FLEET_STATUS_PORT keeps single-companion behavior byte-identical.
-  const fleetStatusServer = await startOptionalFleetStatusServer({
-    env: process.env,
-    multiCompanion: config.multiCompanion === true,
-    ...(config.companionFleet ? { fleet: config.companionFleet.companions } : {}),
-    source: gateway,
-  });
-
   // Companion event relay (w9hj.1): fan-out hub for redacted operational
   // events. Approval events arrive on the gateway bus from the confirmation
   // queue; tool/artifact events arrive from the agent over
   // `companion.event.publish` and are re-published on the same bus.
   const companionRelay = new CompanionEventRelay({
     eventBus,
+    approvalBindingOf: (approvalId) => gateway.approvalOwnerOfConfirmation(approvalId),
     ...(config.companionId ? { defaultCompanionId: config.companionId } : {}),
     ...(config.companionFleet
       ? {
@@ -612,6 +604,7 @@ async function main(): Promise<void> {
       approvals: {
         resolve: (params) => gateway.resolveCompanionApproval(params),
         findHistory: (id) => gateway.findConfirmationHistoryEntry(id),
+        ownerOf: (id) => gateway.ownerOfConfirmation(id),
       },
       audit: (entry) => gateway.recordCompanionAuditSummary(entry),
     },
@@ -660,7 +653,6 @@ async function main(): Promise<void> {
           }]
           : []),
         { step: 'stop turn performance forwarder', action: () => detachTurnPerformanceForwarder() },
-        { step: 'stop fleet status server', action: () => fleetStatusServer?.stop() },
         { step: 'stop companion event relay', action: () => companionRelay.stop() },
         { step: 'stop public api server', action: () => apiServer?.stop() },
         { step: 'stop voice surfaces', action: () => voiceSurfaces.stop() },

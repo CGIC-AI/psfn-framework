@@ -39,13 +39,36 @@ describe('GardenTelemetryCache', () => {
 
   it('fails closed and removes a malformed persisted telemetry snapshot', async () => {
     const storage = new MemoryGardenCacheStorage();
-    await storage.write('telemetry:events', {
+    await storage.write('companion:single-companion:telemetry:events', {
       schemaVersion: 1,
       savedAt: 1_700_000_000_000,
       events: [{ type: '', timestamp: 'bad' }],
     });
 
     await expect(new GardenTelemetryCache(storage).read()).resolves.toEqual([]);
-    await expect(storage.read('telemetry:events')).resolves.toBeUndefined();
+    await expect(storage.read('companion:single-companion:telemetry:events'))
+      .resolves.toBeUndefined();
+  });
+
+  it('keeps a queued pre-switch write bound to its captured companion key', async () => {
+    const storage = new MemoryGardenCacheStorage();
+    const event = normalizeGardenWebSocketMessage(JSON.stringify({
+      type: 'garden.queue.changed',
+      timestamp: 1_700_000_000_000,
+      data: { queue: 'confirmations' },
+    }));
+    if (!event) throw new Error('Synthetic websocket event was rejected');
+    const previousCompanionId = '11111111-1111-4111-8111-111111111111';
+
+    await expect(new GardenTelemetryCache(storage).write(
+      [event],
+      previousCompanionId,
+    )).rejects.toThrow(/Companion scope changed/u);
+    await expect(storage.read(
+      `companion:${previousCompanionId}:telemetry:events`,
+    )).resolves.toBeDefined();
+    await expect(storage.read(
+      'companion:22222222-2222-4222-8222-222222222222:telemetry:events',
+    )).resolves.toBeUndefined();
   });
 });

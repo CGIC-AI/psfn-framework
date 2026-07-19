@@ -135,6 +135,13 @@ export interface WorldToolDeps {
    * Fail closed: absent ⇒ treated as non-human ⇒ control is refused.
    */
   resolveRequesterProvenance?: () => RequesterProvenance | undefined;
+  /**
+   * Allows a reasoned, non-human shard request to cross this agent-side trust
+   * gate only as transport to the gateway's exact operator-approval fence.
+   * It does not authorize the effect and must be scoped from trusted runtime
+   * context, never tool parameters.
+   */
+  allowRequestScopedApprovalTransport?: () => boolean;
 }
 
 interface ResolvedAffordance {
@@ -305,7 +312,10 @@ async function runControl(
 
   // Gate 2b — requester trust. Only primary/trusted (owner/partner) drive effectors.
   const requesterTrust = deps.resolveRequesterTrust?.();
-  if (!requesterTrust || !isHighTierTrustLevel(requesterTrust)) {
+  const requestScopedApprovalTransport = requesterProvenance !== 'human'
+    && deps.allowRequestScopedApprovalTransport?.() === true;
+  if ((!requesterTrust || !isHighTierTrustLevel(requesterTrust))
+    && !requestScopedApprovalTransport) {
     const observed = requesterTrust ?? 'unknown';
     throw new Error(
       `world control requires a primary or trusted requester; the current requester is "${observed}". `

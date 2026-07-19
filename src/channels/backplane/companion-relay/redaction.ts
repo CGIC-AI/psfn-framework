@@ -200,11 +200,20 @@ export function redactApprovalResolved(input: {
   status: ConfirmationResolutionStatus;
   resolvedAt: number;
   executed: boolean;
+  /**
+   * Optional server-resolved shard provenance captured at enqueue
+   * (bead psfn-framework-mus2.3). When present it is clamped as an opaque id and
+   * emitted; ordinary companion resolutions omit it and keep the exact v1 shape.
+   */
+  shardId?: string;
 }): CompanionApprovalResolvedPayload {
   return {
     id: requireId(input.id, 'approval id'),
     status: toCompanionApprovalStatus(input.status, input.executed),
     resolvedAt: toIsoTimestamp(input.resolvedAt),
+    ...(input.shardId !== undefined
+      ? { shardId: requireId(input.shardId, 'approval shardId') }
+      : {}),
   };
 }
 

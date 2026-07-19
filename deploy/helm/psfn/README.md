@@ -127,8 +127,8 @@ Authorized Gardens are exposed only at
 request-capability issuance. See
 [`../../../docs/operations.md`](../../../docs/operations.md#unified-fleet-human-origin)
 for validation and rollback requirements.
-The chart does not set `FLEET_STATUS_PORT`: raw fleet status remains a distinct
-loopback-only operator listener and is never a portal backend or Ingress route.
+The retired raw fleet-status listener is not present in the chart or exposed by
+Ingress.
 
 ## Runtime Layout
 

@@ -21,29 +21,26 @@
  *   - Multi-companion topology: one line per companion, fields tab-separated in
  *     the order companionId, companionDataDir, characterCardPath, postgresSchema,
  *     personalWorkspacePath, companionAuthToken, sessionIntegrityAuthToken,
- *     adminTransportSocket, gardenPort. gardenPort is "-" when the companion has
- *     no Garden operator surface configured (companions.json gardenPort absent).
+ *     adminTransportSocket.
  *     Tabs/newlines inside any field are rejected (fail closed) so the launcher
  *     can parse the plan with a plain `IFS=$'\t' read`.
  *
- * Per-companion Garden support (sprint-10 W4): each companion's admin transport
- * socket is derived here via `resolveCompanionAdminTransportSocketPath` — the
- * launcher never derives socket names itself. Network admin transport mode is
- * rejected fail-closed: per-companion Gardens currently support socket mode only.
+ * The local fleet Garden target registry derives and validates every companion's
+ * admin transport socket before the launcher starts. The launcher never derives
+ * socket names itself and local network admin transport mode is rejected.
  */
 import {
   type ResolvedCompanionFleetEntry,
 } from '../src/system/config/companions-config.js';
 import {
-  resolveAdminTransportMode,
-  resolveCompanionAdminTransportSocketPath,
-} from '../src/operator/garden/transport-paths.js';
+  type FleetGardenTargetIdentity,
+} from '../src/operator/garden/fleet-garden-target-registry.js';
+import { FleetGardenAdminTransportProxy } from '../src/operator/garden/fleet-transport-client.js';
 import { requireGatewaySessionHmacKeyring } from '../src/boundary/gateway/session-hmac-env.js';
 import { deriveCompanionAuthToken } from '../src/boundary/gateway/companion-auth.js';
-import { resolveConfiguredCompanionFleet } from './companion-fleet-runtime.js';
+import { resolveConfiguredLocalCompanionFleetRuntime } from './companion-fleet-runtime.js';
 
 const FIELD_SEPARATOR = '\t';
-const NO_GARDEN_PORT_SENTINEL = '-';
 
 function assertPlanSafe(value: string, field: string, companionId: string): void {
   if (value.includes(FIELD_SEPARATOR) || value.includes('\n') || value.includes('\r')) {
@@ -56,11 +53,15 @@ function assertPlanSafe(value: string, field: string, companionId: string): void
 
 function formatPlanLine(
   entry: ResolvedCompanionFleetEntry,
+  target: FleetGardenTargetIdentity,
   companionAuthToken: string,
   sessionIntegrityAuthToken: string,
-  env: NodeJS.ProcessEnv,
 ): string {
-  const adminTransportSocket = resolveCompanionAdminTransportSocketPath(entry.companionId, env);
+  if (target.companionId !== entry.companionId || target.endpoint.mode !== 'socket') {
+    throw new Error(
+      `Companion ${entry.companionId}: validated fleet Garden target identity is incomplete`,
+    );
+  }
   const fields: Array<[string, string]> = [
     ['companionId', entry.companionId],
     ['companionDataDir', entry.companionDataDir],
@@ -69,11 +70,7 @@ function formatPlanLine(
     ['personalWorkspacePath', entry.personalWorkspacePath],
     ['companionAuthToken', companionAuthToken],
     ['sessionIntegrityAuthToken', sessionIntegrityAuthToken],
-    ['adminTransportSocket', adminTransportSocket],
-    [
-      'gardenPort',
-      entry.gardenPort !== undefined ? String(entry.gardenPort) : NO_GARDEN_PORT_SENTINEL,
-    ],
+    ['adminTransportSocket', target.endpoint.socketPath],
   ];
   for (const [field, value] of fields) {
     assertPlanSafe(value, field, entry.companionId);
@@ -81,39 +78,55 @@ function formatPlanLine(
   return fields.map(([, value]) => value).join(FIELD_SEPARATOR);
 }
 
-function main(): void {
+async function probeFleetAdminTransports(
+  runtime: NonNullable<ReturnType<typeof resolveConfiguredLocalCompanionFleetRuntime>>,
+): Promise<void> {
+  const transport = new FleetGardenAdminTransportProxy(runtime.targetRegistry);
+  try {
+    await transport.probeAll();
+    const unavailable = runtime.targetRegistry.readiness()
+      .filter(target => target.health.status !== 'ready');
+    if (unavailable.length > 0) {
+      throw new Error(
+        `Fleet Garden agent admin transports are not ready: ${unavailable
+          .map(target => `${target.companionId}(${target.health.status})`)
+          .join(', ')}`,
+      );
+    }
+  } finally {
+    await new Promise<void>((resolve) => transport.close(resolve));
+  }
+}
+
+async function main(): Promise<void> {
   const env = process.env;
 
-  const fleet = resolveConfiguredCompanionFleet(env);
-  if (!fleet) {
+  const runtime = resolveConfiguredLocalCompanionFleetRuntime(env);
+  if (!runtime) {
     // Single-companion topology: emit nothing; the launcher keeps its existing
     // single-agent behavior byte-identically.
     return;
   }
-  // Per-companion Gardens bind one admin transport socket per agent process;
-  // a single shared network admin transport cannot serve N agents. Fail closed
-  // rather than letting every agent race to bind the same listener.
-  if (resolveAdminTransportMode(env) !== 'socket') {
-    throw new Error(
-      'Multi-companion mode requires ADMIN_TRANSPORT_MODE=socket: per-companion Garden '
-      + 'admin transports are socket-scoped (one garden-admin-<companionId>.sock per agent).',
-    );
+  const mode = process.argv[2];
+  if (mode === '--probe-ready') {
+    await probeFleetAdminTransports(runtime);
+    return;
   }
-
+  if (mode !== undefined) {
+    throw new Error(`Unknown argument ${JSON.stringify(mode)}`);
+  }
   const keyring = requireGatewaySessionHmacKeyring(env);
-  const plan = fleet.companions.map((entry) => formatPlanLine(
+  const plan = runtime.fleet.companions.map((entry) => formatPlanLine(
     entry,
+    runtime.targetRegistry.resolve(entry.companionId),
     deriveCompanionAuthToken(entry.companionId, 'agent', keyring),
     deriveCompanionAuthToken(entry.companionId, 'internal_session_integrity', keyring),
-    env,
   )).join('\n');
   process.stdout.write(`${plan}\n`);
 }
 
-try {
-  main();
-} catch (error) {
+main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
   process.stderr.write(`[resolve-companion-fleet] ${message}\n`);
   process.exit(1);
-}
+});

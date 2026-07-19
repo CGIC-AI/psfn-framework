@@ -28,24 +28,17 @@ Last updated: 2026-07-14.
 
 ### Fleet human and operator surfaces
 
-- The canonical HTTPS origin's `/fleet` shell and `/v1/fleet/portal` JSON route
-  require a live gateway fleet session. They expose only the current
-  principal's bounded authorized projection and compile same-origin stateless
-  Garden links.
-- `FLEET_STATUS_PORT` enables a different, optional raw HTTP operator listener.
-  It retains legacy `GET /`, `GET /fleet`, and `GET /fleet/status.json`
-  behavior, exposes complete operational fleet metadata, and has no
-  browser-session authentication. `FLEET_STATUS_HOST` defaults to
-  `127.0.0.1`; wildcard, public, ambiguous, or non-loopback resolved binds fail
-  startup.
-- The raw listener is not mounted on the public authenticated origin and is not
-  a portal data source. It must not be exposed by a public ingress,
-  unauthenticated proxy, or remote tunnel. Remote operator use requires an
-  independent authentication boundary plus private network policy.
-- Live host/port wiring remains repository-owned. Rollback of only the raw
-  status listener removes `FLEET_STATUS_PORT` and `FLEET_STATUS_HOST` from that
-  wiring and restarts the gateway; it does not roll back or disable the
-  authenticated portal.
+- The canonical HTTPS origin's `/fleet` route is the fleet overview inside the
+  same compiled Garden frontend used for companion administration.
+- `/fleet` and `/v1/fleet/portal` require a live gateway fleet session and
+  expose only the current principal's bounded authorized projection.
+- Authorized companion navigation always uses
+  `/companions/<companion-uuid>/garden/...`; the immutable URL target is the
+  sole browser authority for page, API, download, and WebSocket traffic.
+- The former unauthenticated raw fleet-status listener and its
+  `FLEET_STATUS_PORT` / `FLEET_STATUS_HOST` wiring are retired. The public
+  origin does not expose `/fleet/status.json` or complete fleet-operational
+  metadata.
 
 ## Live Alpha Migration Boundary
 

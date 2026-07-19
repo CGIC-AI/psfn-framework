@@ -157,7 +157,8 @@ describe('support-companion fixture artifacts', () => {
     ]);
     expect(new Set(contract.companions.map(companion => companion.postgresSchema)).size).toBe(3);
     expect(new Set(contract.companions.map(companion => companion.companionDataDir)).size).toBe(3);
-    expect(new Set(contract.companions.map(companion => companion.gardenPort)).size).toBe(3);
+    // gardenPort is retired (one fleet Garden, psfn-framework-mus2.14): the manifest must not carry it.
+    expect(contract.companions.some(companion => 'gardenPort' in companion)).toBe(false);
 
     for (const [companionId, sourcePath] of CARD_SOURCES) {
       const imported = importCharacterCardFromPath(sourcePath);

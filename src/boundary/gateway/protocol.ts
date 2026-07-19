@@ -62,7 +62,11 @@ import type {
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcParams,
   ApiChatCompletionRpcResult,
+  ApiCompanionUiShardActionRpcParams,
+  ApiCompanionUiShardActionRpcResult,
   ApiHealthRpcResult,
+  ApiShardOwnerRpcParams,
+  ApiShardOwnerRpcResult,
   ApiStreamDeltaNotification,
   ApiTelemetryIngestRpcParams,
   ApiTelemetryIngestRpcResult,
@@ -408,7 +412,34 @@ export interface ShardBackendRequestParams {
   backend: ShardBackendRequestBackend;
   shardId: string;
   name: string;
-  capabilityTier: string;
+  /** Manager-bound assertion; gateway recomputes it from authenticated authority. */
+  ownerVersion: string;
+  /** Manager-bound assertion; gateway recomputes it from authenticated authority. */
+  grantDigest: string;
+}
+
+export interface ShardWorkloadRegisterParams {
+  /** Client-generated idempotency/cleanup key; never carries authority. */
+  registrationId: string;
+  shardId: string;
+  shardLabel?: string;
+  channelIds: string[];
+  /** Agent launch assertions; the gateway independently re-derives both. */
+  ownerVersion: string;
+  grantDigest: string;
+}
+
+export interface ShardWorkloadRegisterResult {
+  registrationId: string;
+  workloadGeneration: string;
+}
+
+export interface ShardWorkloadEndParams {
+  registrationId: string;
+}
+
+export interface ShardWorkloadEndResult {
+  ended: boolean;
 }
 
 export type VaultWriteMode = 'create' | 'append' | 'prepend';
@@ -963,6 +994,8 @@ export interface GatewayMethods {
   'approval.request': [ApprovalRequestParams, ApprovalResult];
   'notify.ntfy': [NotifyNtfyParams, NotifyNtfyResult];
   'shard.backend.request': [ShardBackendRequestParams, ShardBackendRequestResult];
+  'shard.workload.register': [ShardWorkloadRegisterParams, ShardWorkloadRegisterResult];
+  'shard.workload.end': [ShardWorkloadEndParams, ShardWorkloadEndResult];
   'confirmation.list': [ConfirmationListParams, ConfirmationListResult];
   'confirmation.history': [ConfirmationHistoryListParams, ConfirmationHistoryListResult];
   'confirmation.resolve': [ConfirmationResolveParams, ConfirmationResolveResult];
@@ -1079,6 +1112,11 @@ export interface AgentMethods {
   'voice.transcript.cancel': [VoiceStreamCancelParams, VoiceStreamCancelResult];
   'api.chat.completion': [ApiChatCompletionRpcParams, ApiChatCompletionRpcResult];
   'api.chat.cancel': [ApiChatCompletionCancelRpcParams, ApiChatCompletionCancelRpcResult];
+  'api.companion-ui.shard.action': [
+    ApiCompanionUiShardActionRpcParams,
+    ApiCompanionUiShardActionRpcResult,
+  ];
+  'shard.directory.owner': [ApiShardOwnerRpcParams, ApiShardOwnerRpcResult];
   'api.telemetry.ingest': [ApiTelemetryIngestRpcParams, ApiTelemetryIngestRpcResult];
   'api.health': [Record<string, never>, ApiHealthRpcResult];
   'telemetry.turn.performance': [TurnPerformanceIngestParams, TurnPerformanceIngestResult];

@@ -4,9 +4,13 @@ import type {
   ApiChatCompletionCancelRpcResult,
   ApiChatCompletionRpcParams,
   ApiChatCompletionRpcResult,
+  ApiCompanionUiShardActionRpcParams,
+  ApiCompanionUiShardActionRpcResult,
   ApiHealthRpcResult,
   ApiTelemetryIngestRpcParams,
   ApiTelemetryIngestRpcResult,
+  ApiShardOwnerRpcParams,
+  ApiShardOwnerRpcResult,
 } from '../../channels/api/types.js';
 import type {
   VoiceHandleMessageResult,
@@ -32,6 +36,10 @@ export interface ReverseGatewayMethodRuntime {
   handleVoiceStreamCancel(params: VoiceStreamCancelParams): Promise<VoiceStreamCancelResult>;
   handleApiChatCompletion(params: ApiChatCompletionRpcParams): Promise<ApiChatCompletionRpcResult>;
   handleApiChatCancel(params: ApiChatCompletionCancelRpcParams): Promise<ApiChatCompletionCancelRpcResult>;
+  handleCompanionUiShardAction(
+    params: ApiCompanionUiShardActionRpcParams,
+  ): Promise<ApiCompanionUiShardActionRpcResult>;
+  handleShardOwner(params: ApiShardOwnerRpcParams): Promise<ApiShardOwnerRpcResult>;
   handleApiTelemetryIngest(params: ApiTelemetryIngestRpcParams): Promise<ApiTelemetryIngestRpcResult>;
   handleApiHealth(): Promise<ApiHealthRpcResult>;
   handleTurnPerformance(params: unknown): Promise<unknown>;
@@ -89,6 +97,16 @@ const reverseDescriptors: Array<ReverseGatewayMethodDescriptor<any, unknown>> = 
   {
     names: ['api.chat.cancel'],
     handler: (params: ApiChatCompletionCancelRpcParams, runtime) => runtime.handleApiChatCancel(params),
+  },
+  {
+    names: ['api.companion-ui.shard.action'],
+    handler: (params: ApiCompanionUiShardActionRpcParams, runtime) => (
+      runtime.handleCompanionUiShardAction(params)
+    ),
+  },
+  {
+    names: ['shard.directory.owner'],
+    handler: (params: ApiShardOwnerRpcParams, runtime) => runtime.handleShardOwner(params),
   },
   {
     names: ['api.telemetry.ingest'],

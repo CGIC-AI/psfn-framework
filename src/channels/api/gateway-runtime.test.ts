@@ -15,6 +15,44 @@ function createChatRequest(): ApiRuntimeChatRequest {
 }
 
 describe('GatewayApiRuntime', () => {
+  it('routes an admitted fleet chat request to the exact companion', async () => {
+    const requestAgent = vi.fn();
+    const requestCompanionAgent = vi.fn(async () => ({
+      ok: true,
+      response: {
+        content: 'scoped response',
+        channelId: 'api:principal-1:session-1',
+        inputTokens: 3,
+        outputTokens: 2,
+      },
+    }));
+    const runtime = new GatewayApiRuntime({
+      requestAgent,
+      requestCompanionAgent,
+      subscribeApiStream: vi.fn(() => () => {}),
+    });
+
+    const result = await runtime.handleChatCompletion({
+      ...createChatRequest(),
+      companionId: '11111111-1111-4111-8111-111111111111',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      response: { content: 'scoped response' },
+    });
+    expect(requestAgent).not.toHaveBeenCalled();
+    expect(requestCompanionAgent).toHaveBeenCalledWith(
+      '11111111-1111-4111-8111-111111111111',
+      'api.chat.completion',
+      expect.objectContaining({
+        requestId: expect.stringMatching(/^api-/),
+        request: expect.objectContaining({ model: 'test-model' }),
+      }),
+      95_000,
+    );
+  });
+
   it('brokers chat completions and forwards stream deltas', async () => {
     const onDelta = vi.fn();
     let streamListener: ((text: string) => void) | undefined;
@@ -103,7 +141,11 @@ describe('GatewayApiRuntime', () => {
 
     await completionPromise;
 
-    expect(requestAgent).toHaveBeenCalledWith('api.chat.cancel', expect.objectContaining({ requestId: expect.any(String) }));
+    expect(requestAgent).toHaveBeenCalledWith(
+      'api.chat.cancel',
+      expect.objectContaining({ requestId: expect.any(String) }),
+      95_000,
+    );
   });
 
   it('degrades health instead of throwing when no agent is connected yet', async () => {

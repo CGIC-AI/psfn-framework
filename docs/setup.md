@@ -194,6 +194,9 @@ these process-wiring env vars come into play (documented in full in
 - `PSFN_MULTI_COMPANION` — topology opt-in. When on, a system-owned
   `companions.json` fleet manifest is required; when off, `companions.json` must
   be absent. Both mismatches fail closed at startup.
+- `PSFN_FLEET_AUTH` — required with local multi-companion startup. The one
+  fleet Garden accepts companion-bound Fleet Auth capabilities; the launcher
+  rejects a fleet topology that would fall back to shared admin-token authority.
 - `COMPANION_PG_SCHEMA` — per-companion Postgres schema for a single agent
   process. Explicit opt-in, not derived from `COMPANION_ID`; unset means the
   `public` schema (single-companion). The supervisor launcher sets this per
@@ -201,15 +204,17 @@ these process-wiring env vars come into play (documented in full in
 - `PSFN_RUNTIME_ROOT` — canonical persistence root for manifest-relative
   `companionDataDir` and `characterCardPath`. The fleet resolver emits absolute
   paths beneath this root and rejects traversal or symlink escapes.
-- `FLEET_STATUS_PORT` / `FLEET_STATUS_HOST` — the gateway's read-only,
-  raw loopback-only fleet-status operator listener (host defaults to
-  `127.0.0.1`). It is a separate opt-in HTTP listener with no browser-session
-  authentication, not the authenticated HTTPS `/fleet` portal. Setting the
-  port while `PSFN_MULTI_COMPANION` is off or selecting a wildcard, public, or
-  ambiguous host fails closed. Never publish or tunnel it without an
-  independent authentication boundary and private network policy. Rollback is
-  to remove both variables from repository-owned runtime wiring and restart the
-  gateway; the authenticated portal remains available.
+- `ADMIN_PORT` — the one fleet-level Garden listener port. It is process
+  wiring, not a per-companion manifest field. A `gardenPort` key remaining in
+  any `companions.json` entry is rejected as retired.
+- `POSTGRES_DATABASE_URL` — the deployment database credential retained by the
+  fleet Garden for approved direct model-usage and observer-eval telemetry.
+  The immutable authenticated request target selects a companion-bound service
+  instance before those routes query the database.
+- `/fleet` — the authenticated fleet overview inside the same Garden frontend.
+  It uses `/v1/fleet/portal` for the current principal's bounded authorized
+  projection. There is no separate raw fleet-status listener or
+  `FLEET_STATUS_*` wiring.
 - Per-companion Discord tokens are referenced by env-var name from
   `channels.json` (`tokenRef.envName`), not inline. Add each companion's bot
   token to `.env` under the env var name its account references (for example
@@ -255,9 +260,11 @@ quarantined shared owner into selected companions.
 Do not set per-companion workspace paths in `companions.json`. The fleet
 resolver derives `<runtime-root>/workspaces/personal/<companion-uuid>` and the
 single `<runtime-root>/workspaces/shared` root, validates containment and
-non-overlap, and provisions them before launch. Each agent and its Garden
-receive only the matching personal root as `WORKSPACE_PATH`. The shared root is
-available through its authenticated, reviewed Garden surface and has no
+non-overlap, and provisions them before launch. Each agent receives only its
+matching personal root as `WORKSPACE_PATH`; the one fleet Garden selects an
+agent through the immutable companion target registry instead of receiving N
+personal roots. The shared root is available through its authenticated,
+reviewed Garden surface and has no
 environment-variable escape hatch. See
 [`docs/multi-companion.md`](./multi-companion.md#workspace-scopes-current-behavior-and-target-contract).
 
@@ -290,10 +297,9 @@ npm run agent:docker:continuous # Continuous/dev profile (isolated internal netw
 When the system-owned `fleet-auth.json` is present and `PSFN_FLEET_AUTH=1`, do
 not publish `ADMIN_HOST`/`ADMIN_PORT` as a browser endpoint. Terminate HTTPS at
 the exact `canonicalOrigin`, route the full origin to the gateway API listener,
-and open `/fleet`. This is the authenticated bounded portal and is unrelated to
-the raw `FLEET_STATUS_PORT` listener even though that loopback-only listener
-retains its legacy `GET /fleet` alias. A direct TLS listener must receive no
-forwarding headers. A single reverse proxy requires
+and open `/fleet`. This is the authenticated bounded overview in the Garden
+bundle. A direct TLS listener must receive no forwarding headers. A single
+reverse proxy requires
 `FLEET_SSO_TRUST_PROXY=true`, exact forwarded
 host/proto metadata, and an independent network restriction that admits only
 that proxy. Non-loopback gateway-to-Garden traffic must configure the complete
@@ -301,8 +307,7 @@ that proxy. Non-loopback gateway-to-Garden traffic must configure the complete
 For Helm fleet mode, keep `networkPolicy.enabled=true`,
 `hostPorts.gatewayApi.enabled=false`, `ingress.gateway.path=/`, and
 `ingress.gateway.pathType=Prefix`; the chart rejects fleet auth if any of these
-sole-origin requirements is weakened. The chart never wires the raw
-`FLEET_STATUS_PORT` listener into the public workload.
+sole-origin requirements is weakened.
 
 The optional static Companion UI may be registered with
 `FLEET_SSO_COMPANION_UI_ORIGIN`. If the fleet has more than one companion, also
@@ -326,13 +331,16 @@ ADMIN_TRANSPORT_SOCKET=./runtime/sockets/garden-admin.sock
 ```
 
 With fleet auth disabled, `admin-ui/build` is served from the internal or
-loopback admin host root, for example `http://127.0.0.1:3001/`. With fleet auth
-enabled, the same Garden is reachable only through
+loopback admin host root, for example `http://127.0.0.1:3001/`. Multi-companion
+local startup still runs exactly one Garden on this fleet-level listener: the
+launcher starts all companion agents, waits for every canonical
+`garden-admin-<companion-uuid>.sock`, and only then starts Garden. With fleet
+auth enabled, the same Garden is reachable only through
 `/companions/<companion-uuid>/garden/` on the canonical gateway HTTPS origin;
 `ADMIN_TOKEN` and `ADMIN_ALLOW_INSECURE` are rejected on that operator process.
 The repo launcher also scrubs those legacy variables from the fleet-auth
-gateway and keeps proxy trust and raw fleet-status wiring gateway-owned; child
-agent/operator allowlists do not inherit them.
+gateway and keeps proxy trust gateway-owned; child agent/operator allowlists do
+not inherit them.
 
 ### Discord voice
 

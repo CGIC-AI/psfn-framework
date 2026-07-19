@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SatelliteHubWebSocketLike } from './client.js';
+import { HubStreamStore } from '../stream/hub-stream.js';
 import { CompanionGatewayClient } from './gateway-client.js';
 
 class FakeSocket implements SatelliteHubWebSocketLike {
@@ -34,6 +35,11 @@ class FakeSocket implements SatelliteHubWebSocketLike {
 
   message(payload: unknown): void {
     this.dispatch('message', { data: typeof payload === 'string' ? payload : JSON.stringify(payload) });
+  }
+
+  serverClose(code: number): void {
+    this.readyState = 3;
+    this.dispatch('close', { code });
   }
 
   private dispatch(type: string, event?: unknown): void {
@@ -129,6 +135,218 @@ describe('CompanionGatewayClient', () => {
       { type: 'message', data: { role: 'assistant', content: 'hello human', final: true } },
     ]);
     expect(JSON.stringify(client.snapshot())).not.toContain('server-owned-channel');
+  });
+
+  it('uses only server-listed shards and keeps direct chat provenance on the exact selector', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, [
+      'list-1',
+      'history-1',
+      'interaction-1',
+      'interrupt-1',
+    ]);
+    const inbound: unknown[] = [];
+    client.on('inbound', event => inbound.push(event.message));
+
+    expect(() => client.selectShard('shard-forged')).toThrow(/not in the server directory/u);
+    client.refreshShards();
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+      requestId: 'list-1',
+      action: 'companion.read',
+      resource: 'shards.list',
+      body: {},
+    });
+    socket.message({
+      schemaVersion: 1,
+      type: 'result',
+      requestId: 'list-1',
+      ok: true,
+      result: [{
+        shardId: 'shard-live-1',
+        label: 'Research',
+        purpose: 'Compare bounded sources',
+        availability: 'available',
+        startedAt: 1,
+      }],
+    });
+    await flushAsyncMessage();
+
+    client.selectShard('shard-live-1');
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+      requestId: 'history-1',
+      action: 'companion.read',
+      resource: 'shards.history',
+      body: { shardId: 'shard-live-1' },
+    });
+    socket.message({
+      schemaVersion: 1,
+      type: 'result',
+      requestId: 'history-1',
+      ok: true,
+      result: [{
+        id: 'prior-1',
+        role: 'assistant',
+        content: 'Prior bounded response',
+        createdAt: 2,
+        attribution: {
+          parentCompanionId: '11111111-1111-4111-8111-111111111111',
+          shardId: 'shard-live-1',
+        },
+      }],
+    });
+    await flushAsyncMessage();
+    expect(client.snapshot().session.activeShardId).toBe('shard-live-1');
+
+    client.sendUserText('ask exact shard');
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+      requestId: 'interaction-1',
+      action: 'companion.interact',
+      resource: 'shards.interact',
+      body: { shardId: 'shard-live-1', content: 'ask exact shard' },
+    });
+    client.interrupt();
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+      requestId: 'interrupt-1',
+      resource: 'shards.interrupt',
+      body: { shardId: 'shard-live-1', interactionId: 'interaction-1' },
+    });
+    expect(inbound).toContainEqual({
+      type: 'message',
+      data: { role: 'assistant', content: 'Prior bounded response', final: true },
+    });
+  });
+
+  it('binds an in-flight response and interrupt to its originating shard across selection changes', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket, [
+      'list-1',
+      'history-a',
+      'interaction-a',
+      'history-b',
+      'interrupt-a',
+    ]);
+    const inbound: unknown[] = [];
+    client.on('inbound', event => inbound.push(event.message));
+    client.refreshShards();
+    socket.message({
+      schemaVersion: 1,
+      type: 'result',
+      requestId: 'list-1',
+      ok: true,
+      result: ['a', 'b'].map(shardId => ({
+        shardId,
+        label: `Shard ${shardId}`,
+        purpose: 'Bounded task',
+        availability: 'available',
+        startedAt: 1,
+      })),
+    });
+    await flushAsyncMessage();
+
+    client.selectShard('a');
+    socket.message({
+      schemaVersion: 1,
+      type: 'result',
+      requestId: 'history-a',
+      ok: true,
+      result: [],
+    });
+    await flushAsyncMessage();
+    client.sendUserText('question for A');
+
+    client.selectShard('b');
+    socket.message({
+      schemaVersion: 1,
+      type: 'result',
+      requestId: 'history-b',
+      ok: true,
+      result: [],
+    });
+    await flushAsyncMessage();
+    client.interrupt();
+    expect(JSON.parse(socket.sent.at(-1)!)).toMatchObject({
+      requestId: 'interrupt-a',
+      resource: 'shards.interrupt',
+      body: { shardId: 'a', interactionId: 'interaction-a' },
+    });
+    socket.message({
+      schemaVersion: 1,
+      type: 'result',
+      requestId: 'interaction-a',
+      ok: true,
+      result: {
+        content: 'answer from A',
+        channelId: 'shard:a:human',
+        inputTokens: 1,
+        outputTokens: 1,
+        attribution: {
+          parentCompanionId: '11111111-1111-4111-8111-111111111111',
+          shardId: 'a',
+        },
+      },
+    });
+    await flushAsyncMessage();
+
+    expect(inbound).not.toContainEqual({
+      type: 'message',
+      data: { role: 'assistant', content: 'answer from A', final: true },
+    });
+  });
+
+  it('clears the session and authority-bound approval state immediately on an authority close', async () => {
+    const socket = new FakeSocket();
+    const client = await connectClient(socket);
+    const store = new HubStreamStore(client);
+
+    socket.message({
+      schemaVersion: 1,
+      type: 'event',
+      event: {
+        type: 'approval.requested',
+        data: {
+          id: 'approval-revoked',
+          title: 'write file: redacted',
+          requestedAt: '2026-07-17T00:00:00.000Z',
+          redactedContext: 'Needs permission',
+          status: 'pending',
+          sourceSystem: 'tool-access',
+          attribution: {
+            parentId: '11111111-1111-4111-8111-111111111111',
+            parentLabel: 'Companion',
+          },
+          action: 'write file',
+          scope: 'redacted',
+          reason: 'Needs permission',
+          grantMode: { kind: 'once' },
+        },
+      },
+    });
+    socket.message({
+      schemaVersion: 1,
+      type: 'event',
+      event: {
+        type: 'approval.resolved',
+        data: {
+          id: 'approval-history',
+          status: 'denied',
+          resolvedAt: '2026-07-17T00:00:01.000Z',
+        },
+      },
+    });
+    await flushAsyncMessage();
+    expect(store.snapshot().approvals).toHaveLength(1);
+    expect(store.snapshot().approvalResolutions).toHaveProperty('approval-history');
+
+    socket.serverClose(4401);
+
+    expect(client.snapshot().session).toEqual({});
+    expect(store.snapshot()).toMatchObject({
+      connection: 'disconnected',
+      session: null,
+      approvals: [],
+      approvalResolutions: {},
+    });
+    store.destroy();
   });
 
   it.each([

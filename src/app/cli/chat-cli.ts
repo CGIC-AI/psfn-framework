@@ -29,6 +29,7 @@ import {
   wireShardAndThinkRuntime,
 } from '../startup/composition/composition.js';
 import { createProviderRuntimeServices } from '../../system/config/provider-runtime-factory.js';
+import { composeCapabilityRuntime } from '../startup/composition/capability-runtime.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -53,6 +54,7 @@ async function main(): Promise<void> {
   const { sessionStore, sessionManager } = sessionComposition;
 
   const memoryStore = await composeMemoryStoreAsync(config, embeddingProvider.dims);
+  const capabilityRuntime = composeCapabilityRuntime(config, process.env.CONFIG_DIR);
 
   // Agent loop
   const agentLoop = composeSubstrateAgent({
@@ -94,7 +96,9 @@ async function main(): Promise<void> {
     sessionManager,
     config,
     parentSystemPrompt: systemPrompt,
+    shardParentIcpDelivery: null,
     replConfig: DEFAULT_REPL_CONFIG,
+    snapshotParentCapabilityGrant: () => capabilityRuntime.snapshotOwnerGrant(),
   });
 
   // Event logging for debugging

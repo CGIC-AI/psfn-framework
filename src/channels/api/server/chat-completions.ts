@@ -139,6 +139,10 @@ export interface PendingHubDeviceAdmission {
   ingress: GatewayHubDeviceIngressService;
 }
 
+export interface FleetGardenChatRouting {
+  companionId: string;
+}
+
 export class ApiChatCompletionsHandler {
   private readonly agentLoop: SubstrateAgent;
   private readonly eventBus: EventBus;
@@ -180,6 +184,7 @@ export class ApiChatCompletionsHandler {
     principal: ApiAuthPrincipal,
     clientCert?: SatelliteClientCertIdentity,
     pendingHubDevice?: PendingHubDeviceAdmission,
+    fleetRouting?: FleetGardenChatRouting,
   ): Promise<void> {
     let parsed = await readChatCompletionRequest(req, res, this.logger);
     if (!parsed) return;
@@ -217,6 +222,7 @@ export class ApiChatCompletionsHandler {
         clientCert,
         hubDevicePrincipal,
         hubDeviceAttachment,
+        fleetRouting,
       );
     } else {
       await this.handleNonStreaming(
@@ -227,6 +233,7 @@ export class ApiChatCompletionsHandler {
         clientCert,
         hubDevicePrincipal,
         hubDeviceAttachment,
+        fleetRouting,
       );
     }
   }
@@ -945,6 +952,7 @@ export class ApiChatCompletionsHandler {
     clientCert: SatelliteClientCertIdentity | undefined,
     hubDevicePrincipal: HubDevicePrincipalSnapshot | undefined,
     hubDeviceAttachment: HubDeviceAttachmentSnapshot | undefined,
+    fleetRouting: FleetGardenChatRouting | undefined,
   ): Promise<void> {
     const runtime = this.runtime;
     if (runtime) {
@@ -956,6 +964,7 @@ export class ApiChatCompletionsHandler {
             request,
             principal,
             headers: extractRpcHeaders(req),
+            ...(fleetRouting ? { companionId: fleetRouting.companionId } : {}),
             ...(clientCert ? { clientCert } : {}),
             ...(hubDevicePrincipal ? { hubDevicePrincipal } : {}),
             ...(hubDeviceAttachment ? { hubDeviceAttachment } : {}),
@@ -1043,6 +1052,7 @@ export class ApiChatCompletionsHandler {
     clientCert: SatelliteClientCertIdentity | undefined,
     hubDevicePrincipal: HubDevicePrincipalSnapshot | undefined,
     hubDeviceAttachment: HubDeviceAttachmentSnapshot | undefined,
+    fleetRouting: FleetGardenChatRouting | undefined,
   ): Promise<void> {
     const completionId = `chatcmpl-${randomUUID()}`;
     const created = Math.floor(Date.now() / 1000);
@@ -1065,6 +1075,7 @@ export class ApiChatCompletionsHandler {
             request,
             principal,
             headers: extractRpcHeaders(req),
+            ...(fleetRouting ? { companionId: fleetRouting.companionId } : {}),
             ...(clientCert ? { clientCert } : {}),
             ...(hubDevicePrincipal ? { hubDevicePrincipal } : {}),
             ...(hubDeviceAttachment ? { hubDeviceAttachment } : {}),

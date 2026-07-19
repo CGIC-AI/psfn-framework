@@ -31,6 +31,7 @@
     type ObserverEvalSidecarTimeRange,
   } from '$lib/evals/observer-sidecar';
   import type { EmotionStateSnapshot } from '../../../../../src/core/emotion/state.js';
+  import { scopeGardenDataPath } from '$lib/fleet/companion-scope';
 
   type TabId = 'overview' | 'observations' | 'runs' | 'levers';
   type DeploymentFilter = '' | 'live' | 'eval' | 'test_persona';
@@ -111,7 +112,9 @@
   let latestPsfnSnapshot = $derived(latestObservation?.psfnEmotion.snapshot ?? latestObservation?.emotion.snapshot ?? null);
   let latestPsfnTop = $derived.by(() => topDiscreteEmotions(latestPsfnSnapshot, 5));
   let latestProjectionDimensions = $derived.by(() => topProjectionDimensions(latestObservation));
-  let currentExportPath = $derived(buildObserverEvalSidecarExportPath(buildObservationFilters(Date.now())));
+  let currentExportPath = $derived(
+    scopeGardenDataPath(buildObserverEvalSidecarExportPath(buildObservationFilters(Date.now()))),
+  );
   let tabs = $derived.by<GardenTabItem[]>(() => [
     { id: 'overview', label: 'Overview' },
     { id: 'observations', label: 'Observations', count: filteredObservations.length },

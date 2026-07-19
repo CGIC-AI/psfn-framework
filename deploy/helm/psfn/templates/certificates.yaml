@@ -62,6 +62,7 @@ spec:
     - {{ include "psfn.spiffeGateway" . | quote }}
   issuerRef:
     {{- include "psfn.certIssuerRef" . | nindent 4 }}
+{{- if not .Values.fleet.enabled }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -103,6 +104,58 @@ spec:
     - {{ include "psfn.spiffeAgent" . | quote }}
   issuerRef:
     {{- include "psfn.certIssuerRef" . | nindent 4 }}
+{{- else }}
+{{- $root := . -}}
+{{- range $companion := .Values.fleet.companions }}
+{{- $target := dict "root" $root "companionId" $companion.companionId -}}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" $root }}-agent-rpc-client-{{ $companion.companionId }}
+  labels:
+    {{- include "psfn.labels" $root | nindent 4 }}
+    psfn.io/companion-id: {{ $companion.companionId }}
+spec:
+  secretName: {{ include "psfn.fleetAgentRpcClientCertSecretName" $target }}
+  duration: {{ $root.Values.certificates.duration | quote }}
+  renewBefore: {{ $root.Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  uris:
+    - {{ include "psfn.spiffeFleetAgent" $target | quote }}
+    # The gateway listener authenticates the fleet agent role at mTLS and
+    # binds the exact companion with its role proof during RPC registration.
+    - {{ include "psfn.spiffeAgent" $root | quote }}
+  issuerRef:
+    {{- include "psfn.certIssuerRef" $root | nindent 4 }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "psfn.fullname" $root }}-agent-admin-{{ $companion.companionId }}
+  labels:
+    {{- include "psfn.labels" $root | nindent 4 }}
+    psfn.io/companion-id: {{ $companion.companionId }}
+spec:
+  secretName: {{ include "psfn.fleetAgentAdminCertSecretName" $target }}
+  duration: {{ $root.Values.certificates.duration | quote }}
+  renewBefore: {{ $root.Values.certificates.renewBefore | quote }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  dnsNames:
+    - {{ include "psfn.fleetAgentAdminServiceName" $target | quote }}
+    - {{ printf "%s.%s" (include "psfn.fleetAgentAdminServiceName" $target) $root.Release.Namespace | quote }}
+    - {{ printf "%s.%s.svc" (include "psfn.fleetAgentAdminServiceName" $target) $root.Release.Namespace | quote }}
+    - {{ printf "%s.%s.svc.cluster.local" (include "psfn.fleetAgentAdminServiceName" $target) $root.Release.Namespace | quote }}
+  uris:
+    - {{ include "psfn.spiffeFleetAgent" $target | quote }}
+  issuerRef:
+    {{- include "psfn.certIssuerRef" $root | nindent 4 }}
+{{ end }}
+{{- end }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Certificate

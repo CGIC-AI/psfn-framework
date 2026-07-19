@@ -14,6 +14,13 @@ import { COMPANION_APPROVALS_V2_CAPABILITY } from '../../../../src/shared/contra
 import { parseHubToClientMessage } from '../protocol/framing.js';
 import type { HubToClientMessage } from '../protocol/events.js';
 import { hasExactKeys } from '../protocol/validation.js';
+import type {
+  ShardChatAttribution,
+  ShardChatMessage,
+  ShardChatResponse,
+  ShardDirectoryEntry,
+} from '../../../../src/shared/contracts/shard-directory.js';
+import { parseCompanionId } from '../../../../src/shared/routing/companion-id.js';
 
 const REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
@@ -24,6 +31,10 @@ export type CompanionUiResource =
   | 'conversation.interact'
   | 'conversation.interrupt'
   | 'conversation.touch'
+  | 'shards.list'
+  | 'shards.history'
+  | 'shards.interact'
+  | 'shards.interrupt'
   | 'confirmations.resolve'
   | 'artifact.preview';
 
@@ -134,6 +145,104 @@ export function parseAgentResponse(value: unknown): { content: string } | undefi
   return { content: value.content };
 }
 
+export function parseShardDirectory(value: unknown): readonly ShardDirectoryEntry[] | undefined {
+  if (!Array.isArray(value) || value.length > 64) return undefined;
+  const entries: ShardDirectoryEntry[] = [];
+  for (const item of value) {
+    if (!isRecord(item)
+      || !hasExactKeys(item, ['shardId', 'label', 'purpose', 'availability', 'startedAt'])
+      || typeof item.shardId !== 'string' || !REQUEST_ID.test(item.shardId)
+      || !boundedLabel(item.label) || typeof item.purpose !== 'string' || item.purpose.length > 240
+      || !['starting', 'available', 'degraded'].includes(String(item.availability))
+      || !Number.isSafeInteger(item.startedAt) || Number(item.startedAt) < 0) return undefined;
+    entries.push(Object.freeze({
+      shardId: item.shardId,
+      label: item.label,
+      purpose: item.purpose,
+      availability: item.availability as ShardDirectoryEntry['availability'],
+      startedAt: Number(item.startedAt),
+    }));
+  }
+  if (new Set(entries.map(entry => entry.shardId)).size !== entries.length) return undefined;
+  return Object.freeze(entries);
+}
+
+function parseShardAttribution(
+  value: unknown,
+  expectedShardId: string,
+): ShardChatAttribution | undefined {
+  if (!isRecord(value) || !hasExactKeys(value, ['parentCompanionId', 'shardId'])
+    || value.shardId !== expectedShardId) return undefined;
+  const parentCompanionId = parseCompanionId(value.parentCompanionId);
+  if (!parentCompanionId) return undefined;
+  return Object.freeze({
+    parentCompanionId,
+    shardId: value.shardId,
+  });
+}
+
+export function parseShardHistory(
+  value: unknown,
+  expectedShardId: string,
+): readonly ShardChatMessage[] | undefined {
+  if (!Array.isArray(value) || value.length > 100) return undefined;
+  const messages: ShardChatMessage[] = [];
+  for (const item of value) {
+    if (!isRecord(item)
+      || !hasExactKeys(item, ['id', 'role', 'content', 'createdAt', 'attribution'])
+      || typeof item.id !== 'string' || item.id.length === 0 || item.id.length > 256
+      || (item.role !== 'user' && item.role !== 'assistant')
+      || typeof item.content !== 'string' || item.content.length > 65_536
+      || !Number.isSafeInteger(item.createdAt) || Number(item.createdAt) < 0) return undefined;
+    const attribution = parseShardAttribution(item.attribution, expectedShardId);
+    if (!attribution) return undefined;
+    messages.push(Object.freeze({
+      id: item.id,
+      role: item.role,
+      content: item.content,
+      createdAt: Number(item.createdAt),
+      attribution,
+    }));
+  }
+  return Object.freeze(messages);
+}
+
+export function parseShardAgentResponse(
+  value: unknown,
+  expectedShardId: string,
+): ShardChatResponse | undefined {
+  if (!isRecord(value)
+    || !hasExactKeys(value, ['content', 'channelId', 'inputTokens', 'outputTokens', 'attribution'])
+    || typeof value.content !== 'string' || value.content.length > 65_536
+    || typeof value.channelId !== 'string' || value.channelId.length === 0 || value.channelId.length > 256
+    || !Number.isSafeInteger(value.inputTokens) || Number(value.inputTokens) < 0
+    || !Number.isSafeInteger(value.outputTokens) || Number(value.outputTokens) < 0) return undefined;
+  const attribution = parseShardAttribution(value.attribution, expectedShardId);
+  if (!attribution) return undefined;
+  return Object.freeze({
+    content: value.content,
+    channelId: value.channelId,
+    inputTokens: Number(value.inputTokens),
+    outputTokens: Number(value.outputTokens),
+    attribution,
+  });
+}
+
+export function parseShardInterruptResult(
+  value: unknown,
+  expectedShardId: string,
+  expectedInteractionId: string | null,
+): { interrupted: boolean; interactionId: string } | undefined {
+  if (!isRecord(value)
+    || !hasExactKeys(value, ['interrupted', 'interactionId', 'attribution'])
+    || typeof value.interrupted !== 'boolean'
+    || typeof value.interactionId !== 'string'
+    || value.interactionId !== expectedInteractionId) return undefined;
+  return parseShardAttribution(value.attribution, expectedShardId)
+    ? { interrupted: value.interrupted, interactionId: value.interactionId }
+    : undefined;
+}
+
 function validNoReply(value: unknown): boolean {
   if (!isRecord(value)
     || !hasExactKeys(
@@ -223,6 +332,7 @@ export function cloneGatewaySession(session: SatelliteHubSession): SatelliteHubS
       ? { eventCapabilities: [...session.eventCapabilities] }
       : {}),
     ...(session.place ? { place: { ...session.place } } : {}),
+    ...(session.shards ? { shards: session.shards.map(entry => ({ ...entry })) } : {}),
     ...(session.capabilities ? {
       capabilities: {
         input: [...(session.capabilities.input ?? [])],

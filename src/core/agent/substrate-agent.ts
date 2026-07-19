@@ -259,6 +259,11 @@ export interface SubstrateAgentOptions {
   backgroundWorkTuning?: BackgroundWorkRuntimeTuning;
   /** Explicitly omit post-turn jobs for ephemeral/test agents with no durable owner. */
   backgroundWorkDisabled?: boolean;
+  /**
+   * Transport-only policy for a denied capability whose privileged boundary
+   * performs the real grant. It never changes the advertised/granted tokens.
+   */
+  allowCapabilityDeniedTransport?: import('../../system/capabilities/gate.js').CapabilityDeniedTransportPolicy;
   /** Anti-starvation welfare policy (mmo9.7.4), owner-file backed (scheduler.json). */
   backgroundWorkWelfare?: Partial<BackgroundWorkWelfarePolicy>;
 }
@@ -307,6 +312,17 @@ export class SubstrateAgent {
   private bridge: EventBridge;
   private channelRegistry: ChannelPromptRegistryPort = new Map();
   private capabilityRuntime: CapabilityRuntime | null = null;
+  /**
+   * Explicit injected capability access (mus2.1). When set, it is the single
+   * authority for tool gates, prompt tool availability, and audit fields —
+   * taking precedence over any disk-backed CapabilityRuntime and over the
+   * tier-name default path. This is the seam a derived immutable shard access
+   * uses so a `custom` grant governs the agent without an owner file.
+   */
+  private explicitCapabilityAccess: CapabilityAccess | null = null;
+  private readonly allowCapabilityDeniedTransport:
+    | import('../../system/capabilities/gate.js').CapabilityDeniedTransportPolicy
+    | undefined;
   private gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
   private readonly appCache: AppCache;
   private reflectionNudge = new ReflectionNudgeTracker();
@@ -548,6 +564,7 @@ export class SubstrateAgent {
       ?? (() => fallbackPromptVariables);
     this.config = config;
     this.runtimeMode = options.runtimeMode ?? 'gateway';
+    this.allowCapabilityDeniedTransport = options.allowCapabilityDeniedTransport;
     this.appCache = options.appCache ?? createMemoryAppCache({ name: 'substrate-agent-prompt-cache' });
     this.selfModelRuntimeRequired = options.selfModelRuntime?.requireWiring ?? false;
     this.observerEvalSidecar = options.observerEvalSidecar ?? null;
@@ -737,6 +754,13 @@ export class SubstrateAgent {
   }
 
   private refreshCapabilityRuntime(): void {
+    if (this.explicitCapabilityAccess) {
+      // Explicit access is an immutable launch artifact: it never re-reads
+      // disk, and owner-file churn must not widen or narrow it (mus2.1).
+      this.config.capabilityTier = this.explicitCapabilityAccess.getTier();
+      return;
+    }
+
     if (this.capabilityRuntime) {
       const refreshed = this.capabilityRuntime.refreshFromDisk();
       this.config.capabilityTier = refreshed.tier;
@@ -751,6 +775,7 @@ export class SubstrateAgent {
   }
 
   private resolveCapabilityAccess(): CapabilityAccess {
+    if (this.explicitCapabilityAccess) return this.explicitCapabilityAccess;
     if (this.capabilityRuntime) return this.capabilityRuntime;
 
     const tier = this.resolveCapabilityTier();
@@ -777,6 +802,7 @@ export class SubstrateAgent {
         tool,
         () => this.resolveCapabilityAccess(),
         () => this.buildEgressToolGuard(),
+        this.allowCapabilityDeniedTransport,
       );
       this.gatedToolCache.set(tool, wrapped);
       return wrapped;
@@ -946,6 +972,20 @@ export class SubstrateAgent {
 
   setCapabilityRuntime(runtime: CapabilityRuntime | null): void {
     this.capabilityRuntime = runtime;
+    this.gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
+    this.refreshCapabilityRuntime();
+  }
+
+  /**
+   * Inject an explicit capability access (mus2.1), e.g. an immutable derived
+   * shard access from `deriveShardCapabilityGrant`. While set, it governs tool
+   * gates, prompt tool availability, and audit tier fields, and it takes
+   * precedence over any disk-backed CapabilityRuntime — a shard agent must not
+   * re-resolve authority from an owner file or a tier name. Pass `null` to
+   * remove it and fall back to the runtime/tier resolution order.
+   */
+  setCapabilityAccess(access: CapabilityAccess | null): void {
+    this.explicitCapabilityAccess = access;
     this.gatedToolCache = new WeakMap<AgentTool<any>, AgentTool<any>>();
     this.refreshCapabilityRuntime();
   }
@@ -1848,6 +1888,11 @@ export class SubstrateAgent {
       this.internalStateContinuityGapRenderCount += 1;
     }
 
+    // One access resolution feeds BOTH the advertised tier and the advertised
+    // token set (mus2.1): the prompt tool guide and the capability tool gates
+    // must agree on the same grant, including an injected custom shard access.
+    const capabilityAccess = this.resolveCapabilityAccess();
+
     return buildDynamicPromptTemplateVariablesForTurn({
       message,
       conversationScope,
@@ -1865,7 +1910,8 @@ export class SubstrateAgent {
       metacognitiveFlags,
       emotionAppraisalChain,
       modelId: this.agent.state.model.id,
-      capabilityTier: this.resolveCapabilityAccess().getTier(),
+      capabilityTier: capabilityAccess.getTier(),
+      capabilityGrantedTokens: capabilityAccess.getGrantedTokens(),
       activeToolCounts,
       extendedTools,
       coreToolNames,

@@ -1046,12 +1046,20 @@ export interface EventMap {
   // events fire when generated media is persisted post-turn (agent process);
   // tool activity re-emits on the gateway bus after crossing the RPC boundary.
   'companion.approval.requested': {
+    // Parent owner is ALWAYS the authenticated enqueue owner (routing key).
     companionId: string;
+    // Optional shard provenance: present iff a shard-originated request was
+    // enqueued with authenticated shard lineage. Never an owner, never a peer
+    // companion id. The parent binding above stays the routing/ownership key.
+    shardId?: string;
     payload: CompanionApprovalRequestedPayload;
     timestamp: number;
   };
   'companion.approval.resolved': {
+    // Same authenticated parent owner captured at enqueue for this id.
     companionId: string;
+    // Same immutable shard provenance captured at enqueue for this id.
+    shardId?: string;
     payload: CompanionApprovalResolvedPayload;
     timestamp: number;
   };

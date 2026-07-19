@@ -14,6 +14,7 @@
     ManagedSkill,
   } from '$lib/types';
   import { pushToast } from '$lib/stores/toast.svelte';
+  import { scopeGardenPath } from '$lib/fleet/companion-scope';
 
   // ── State ──
   let snapshot = $state<SkillSnapshot | null>(null);
@@ -375,7 +376,7 @@
           </p>
           <p class="text-sm text-shadow-600 mt-2">
             The skills runtime snapshot is available when the agent is running with an active gateway.
-            Skills config can be edited on the <a href="/settings" class="text-gold-600 hover:text-gold-700 underline">Settings</a> page via the skills config editor.
+            Skills config can be edited on the <a href={scopeGardenPath('/settings')} class="text-gold-600 hover:text-gold-700 underline">Settings</a> page via the skills config editor.
           </p>
         </div>
       </div>

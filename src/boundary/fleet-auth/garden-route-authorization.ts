@@ -103,6 +103,10 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
     ]),
   },
   {
+    action: 'companion.interact', area: 'garden_ui',
+    routeIds: ids('POST', ['/v1/chat/completions']),
+  },
+  {
     action: 'action_pipe.read', area: 'action_pipe', routeIds: [
       ...ids('GET', [
         '/api/admin/action-pipe', '/api/admin/tool-conformance/latest', '/api/admin/tools/adaptive',
@@ -468,9 +472,18 @@ const routeAuthorizationGroups: readonly RouteAuthorizationGroup[] = [
   },
   {
     action: 'audit.read', area: 'audit', routeIds: [
-      ...ids('GET', ['/api/admin/shards', '/api/admin/shards/:shardId']),
-      ...pageIds(['/shards']),
+      ...ids('GET', [
+        '/api/admin/shards',
+        '/api/admin/shards/:shardId',
+        '/api/admin/shards/:shardId/configuration',
+      ]),
+      ...pageIds(['/shards', '/shards/:shardId']),
     ],
+  },
+  {
+    action: 'settings.write', area: 'personal_settings',
+    routeIds: ids('PATCH', ['/api/admin/shards/:shardId/configuration']),
+    assurance: 'webauthn_uv', confirmation: 'explicit',
   },
   {
     action: 'memory.manage', area: 'memory',

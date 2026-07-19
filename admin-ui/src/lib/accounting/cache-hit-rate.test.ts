@@ -15,7 +15,7 @@ describe('deriveCacheHitRateTrend', () => {
     expect(trend.aggregateRatePercent).toBe(25);
   });
 
-  it('returns zero instead of NaN when a bucket or range has no eligible tokens', () => {
+  it('returns unavailable when a bucket or range has no eligible tokens', () => {
     const trend = deriveCacheHitRateTrend([
       { startMs: 1_000, inputTokens: 0, cacheReadTokens: 0 },
     ], {
@@ -23,7 +23,7 @@ describe('deriveCacheHitRateTrend', () => {
       cacheReadTokens: 0,
     });
 
-    expect(trend.ratePercents).toEqual([0]);
-    expect(trend.aggregateRatePercent).toBe(0);
+    expect(trend.ratePercents).toEqual([null]);
+    expect(trend.aggregateRatePercent).toBeNull();
   });
 });

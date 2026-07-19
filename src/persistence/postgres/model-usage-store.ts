@@ -91,6 +91,7 @@ const DEFAULT_BREAKDOWN_LIMIT = 20;
 const DEFAULT_TOP_N = 20;
 const MAX_TOP_N = 100;
 const MAX_EXPORT_ROWS = 50_000;
+const MAX_DIMENSION_TIME_SERIES_ROWS = 5_000;
 
 interface ModelUsageEventRow {
   id: string;
@@ -1948,6 +1949,9 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       ? `,\n        ${dimensionExpression} AS series_key`
       : '';
     const seriesGrouping = dimensionExpression ? ', series_key' : '';
+    const seriesLimit = dimensionExpression
+      ? `\n      LIMIT ${MAX_DIMENSION_TIME_SERIES_ROWS + 1}`
+      : '';
     const values = range.bucket === 'hour' ? where.values : [...where.values, range.timezone];
     const rows = await queryRows<DimensionTimeBucketRow>(this.pool, `
       SELECT
@@ -1956,10 +1960,16 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       FROM model_usage_events
       ${where.clause}
       GROUP BY bucket_start_ms${seriesGrouping}
-      ORDER BY bucket_start_ms ASC${seriesGrouping}
+      ORDER BY bucket_start_ms ASC${seriesGrouping}${seriesLimit}
     `, values);
     const boundaries = createModelUsageBucketBoundaries(range);
     if (dimension !== undefined) {
+      if (rows.length > MAX_DIMENSION_TIME_SERIES_ROWS) {
+        throw new Error(
+          `Model usage dimension time series exceeds the `
+          + `${MAX_DIMENSION_TIME_SERIES_ROWS}-row safety limit`,
+        );
+      }
       const endByStart = new Map(boundaries.map(boundary => (
         [boundary.startMs, boundary.endMs] as const
       )));

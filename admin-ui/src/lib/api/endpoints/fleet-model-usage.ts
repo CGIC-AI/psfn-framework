@@ -6,7 +6,7 @@ import type {
 import type { FleetModelUsageData } from '../../../../../src/operator/garden/services/fleet-model-usage-service.js';
 
 export interface FleetModelUsageQuery {
-  range?: ModelUsageRange;
+  range?: Exclude<ModelUsageRange, 'all'>;
   timezone?: string;
   sinceMs?: number;
   untilMs?: number;

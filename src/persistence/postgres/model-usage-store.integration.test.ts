@@ -574,6 +574,13 @@ describe('PostgresModelUsageStore reconciliation', () => {
     });
 
     try {
+      await store.recordUsageEvent(event(
+        'analytics-previous',
+        sinceMs - 30 * 60_000,
+        'provider-previous',
+        'success',
+        0.04,
+      ));
       await store.recordUsageEvent(event('analytics-a', sinceMs + 30 * 60_000, 'provider-a', 'success', 0.03));
       await store.recordUsageEvent(event('analytics-b', sinceMs + 2.5 * 60 * 60_000, 'provider-b', 'failure', 0.02));
       await store.recordUsageEvent(event('analytics-c', sinceMs + 10 * 60 * 60_000, 'provider-c', 'success', 0.01));
@@ -617,6 +624,17 @@ describe('PostgresModelUsageStore reconciliation', () => {
         cacheWriteUsd: 0.015,
         outputUsd: 0.015,
         totalKnownCalls: 3,
+      });
+      expect(first.previousPeriod).toMatchObject({
+        sinceMs: sinceMs - (untilMs - sinceMs),
+        untilMs: sinceMs,
+        totals: {
+          calls: 1,
+          successfulCalls: 1,
+          failedCalls: 0,
+          totalTokens: 20,
+          totalCostUsd: 0.04,
+        },
       });
       expect(first.timeSeries).toHaveLength(23);
       expect(first.timeSeries.reduce((sum, bucket) => sum + bucket.calls, 0)).toBe(3);

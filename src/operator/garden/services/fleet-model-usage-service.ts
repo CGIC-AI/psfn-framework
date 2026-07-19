@@ -7,9 +7,13 @@ import {
   type ModelUsageTotals,
 } from '../../../shared/telemetry/model-usage.js';
 import { roundModelUsageUsd } from '../../../shared/telemetry/model-usage-accounting.js';
-import { resolveModelUsageRange } from '../../../shared/telemetry/model-usage-range.js';
+import {
+  createModelUsageBucketBoundaries,
+  resolveModelUsageRange,
+} from '../../../shared/telemetry/model-usage-range.js';
 import {
   buildFleetModelUsageInternalRequestTarget,
+  requireBoundedFleetModelUsageQuery,
   resolveAuthorizedFleetModelUsageRange,
 } from '../../../shared/telemetry/fleet-model-usage-request.js';
 import { isRecord } from '../../../shared/utils/types.js';
@@ -45,6 +49,7 @@ export type FleetModelUsageCompanion =
   | UnavailableFleetModelUsageCompanion;
 
 export interface FleetModelUsageData {
+  readonly deployment: 'single' | 'fleet';
   readonly resolvedRange: ModelUsageResolvedRange;
   /** Aggregate totals include companion-private usage from every available companion. */
   readonly totals: ModelUsageTotals | null;
@@ -110,9 +115,78 @@ function parseAggregateCost(value: unknown, field: string): ModelUsageAggregateC
   };
 }
 
+function equalWithinAccountingPrecision(left: number, right: number): boolean {
+  return Math.abs(left - right) <= 1e-9 * Math.max(1, Math.abs(left), Math.abs(right));
+}
+
+function assertAverageConsistency(
+  average: number | null,
+  total: number,
+  samples: number,
+  field: string,
+): void {
+  if (samples === 0) {
+    if (total !== 0 || average !== null) {
+      throw new Error(`Fleet model-usage response has inconsistent ${field}`);
+    }
+    return;
+  }
+  if (average === null || !equalWithinAccountingPrecision(average, total / samples)) {
+    throw new Error(`Fleet model-usage response has inconsistent ${field}`);
+  }
+}
+
+function assertAggregateCostConsistency(
+  cost: ModelUsageAggregateCost,
+  calls: number,
+  field: string,
+): void {
+  for (const knownCalls of [
+    cost.inputKnownCalls,
+    cost.outputKnownCalls,
+    cost.cacheReadKnownCalls,
+    cost.cacheWriteKnownCalls,
+    cost.totalKnownCalls,
+  ]) {
+    if (knownCalls > calls) {
+      throw new Error(`Fleet model-usage response has inconsistent ${field}`);
+    }
+  }
+}
+
+function assertTotalsConsistency(totals: ModelUsageTotals, field: string): void {
+  if (totals.successfulCalls + totals.failedCalls !== totals.calls
+    || totals.inputTokens
+      + totals.outputTokens
+      + totals.cacheReadTokens
+      + totals.cacheWriteTokens !== totals.totalTokens
+    || totals.durationSamples > totals.calls
+    || totals.ttftSamples > totals.calls
+    || !equalWithinAccountingPrecision(totals.providerCostUsd, totals.providerCost.totalUsd)
+    || !equalWithinAccountingPrecision(totals.estimatedCostUsd, totals.estimatedCost.totalUsd)
+    || !equalWithinAccountingPrecision(totals.totalCostUsd, totals.effectiveCost.totalUsd)) {
+    throw new Error(`Fleet model-usage response has inconsistent ${field}`);
+  }
+  assertAverageConsistency(
+    totals.averageDurationMs,
+    totals.totalDurationMs,
+    totals.durationSamples,
+    `${field}.averageDurationMs`,
+  );
+  assertAverageConsistency(
+    totals.averageTtftMs,
+    totals.totalTtftMs,
+    totals.ttftSamples,
+    `${field}.averageTtftMs`,
+  );
+  assertAggregateCostConsistency(totals.providerCost, totals.calls, `${field}.providerCost`);
+  assertAggregateCostConsistency(totals.estimatedCost, totals.calls, `${field}.estimatedCost`);
+  assertAggregateCostConsistency(totals.effectiveCost, totals.calls, `${field}.effectiveCost`);
+}
+
 function parseTotals(value: unknown, field: string): ModelUsageTotals {
   if (!isRecord(value)) throw new Error(`Fleet model-usage response has invalid ${field}`);
-  return {
+  const totals = {
     calls: nonNegativeInteger(value.calls, `${field}.calls`),
     successfulCalls: nonNegativeInteger(value.successfulCalls, `${field}.successfulCalls`),
     failedCalls: nonNegativeInteger(value.failedCalls, `${field}.failedCalls`),
@@ -134,6 +208,8 @@ function parseTotals(value: unknown, field: string): ModelUsageTotals {
     averageDurationMs: nullableAverage(value.averageDurationMs, `${field}.averageDurationMs`),
     averageTtftMs: nullableAverage(value.averageTtftMs, `${field}.averageTtftMs`),
   };
+  assertTotalsConsistency(totals, field);
+  return totals;
 }
 
 function parseResolvedRange(value: unknown): ModelUsageResolvedRange {
@@ -320,6 +396,14 @@ function parseModelUsageResponse(
       ...parseTotals(bucket, `timeSeries[${index}]`),
     };
   });
+  const expectedBoundaries = createModelUsageBucketBoundaries(expectedRange);
+  if (timeSeries.length !== expectedBoundaries.length
+    || timeSeries.some((bucket, index) => (
+      bucket.startMs !== expectedBoundaries[index]?.startMs
+      || bucket.endMs !== expectedBoundaries[index]?.endMs
+    ))) {
+    throw new Error('Fleet model-usage response timeSeries does not match the fleet buckets');
+  }
   let visibleTotals = emptyTotals();
   for (const [index, group] of value.groups.entries()) {
     if (!isRecord(group) || !isRecord(group.dimensions)) {
@@ -383,7 +467,7 @@ export class SingleCompanionFleetModelUsageService {
   }) {}
 
   async getFleetModelUsage(query: ModelUsageQuery = {}): Promise<FleetModelUsageData> {
-    const resolvedRange = resolveModelUsageRange(query, {
+    const resolvedRange = resolveModelUsageRange(requireBoundedFleetModelUsageQuery(query), {
       nowMs: this.options.nowMs?.() ?? Date.now(),
     });
     const response = parseModelUsageResponse(
@@ -391,6 +475,7 @@ export class SingleCompanionFleetModelUsageService {
       resolvedRange,
     );
     return {
+      deployment: 'single',
       resolvedRange,
       totals: response.totals,
       perCompanion: [{
@@ -472,6 +557,7 @@ export class FleetModelUsageService {
         : { companionId: result.companionId, status: 'unavailable' }
     ));
     return {
+      deployment: 'fleet',
       resolvedRange,
       totals,
       perCompanion,

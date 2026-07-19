@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { FleetModelUsageCompanion } from '../../../../src/operator/garden/services/fleet-model-usage-service.js';
 import {
   buildFleetCompanionCostPath,
+  FLEET_COST_RANGE_OPTIONS,
+  normalizeFleetCostRange,
   sortFleetCompanions,
 } from './fleet-costs.js';
 
@@ -79,8 +81,29 @@ describe('fleet costs helpers', () => {
       bucket: 'day',
       customSinceDate: '2026-07-01',
       customUntilDate: '2026-07-18',
-    })).toBe(
+    }, 'fleet')).toBe(
       `/companions/${COMPANION_A}/garden/charge-budget?tab=token-usage&range=custom&timezone=America%2FNew_York&bucket=day&since=2026-07-01&until=2026-07-18`,
     );
+  });
+
+  it.each(['test-companion', COMPANION_A])(
+    'builds an unscoped accounting link for single-companion identifier %s',
+    (companionId) => {
+      expect(buildFleetCompanionCostPath(companionId, {
+        range: 'month',
+        timezone: 'UTC',
+        bucket: 'auto',
+        customSinceDate: '',
+        customUntilDate: '',
+      }, 'single')).toBe(
+        '/charge-budget?tab=token-usage&range=month&timezone=UTC&bucket=auto',
+      );
+    },
+  );
+
+  it('keeps the unsupported all-time range out of fleet controls and URL state', () => {
+    expect(FLEET_COST_RANGE_OPTIONS.map(option => option.value)).not.toContain('all');
+    expect(normalizeFleetCostRange('all')).toBe('year');
+    expect(normalizeFleetCostRange('month')).toBe('month');
   });
 });

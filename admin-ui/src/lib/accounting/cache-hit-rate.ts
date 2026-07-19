@@ -1,3 +1,5 @@
+import { cacheHitRatePercent } from './derived-metrics.js';
+
 interface CacheTokenCounts {
   inputTokens: number;
   cacheReadTokens: number;
@@ -8,13 +10,8 @@ interface CacheRateBucket extends CacheTokenCounts {
 }
 
 export interface CacheHitRateTrend {
-  ratePercents: number[];
-  aggregateRatePercent: number;
-}
-
-function cacheHitRatePercent(tokens: CacheTokenCounts): number {
-  const denominator = tokens.inputTokens + tokens.cacheReadTokens;
-  return denominator === 0 ? 0 : tokens.cacheReadTokens / denominator * 100;
+  ratePercents: Array<number | null>;
+  aggregateRatePercent: number | null;
 }
 
 export function deriveCacheHitRateTrend(

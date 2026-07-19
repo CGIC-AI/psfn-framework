@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const postgresMocks = vi.hoisted(() => ({
+  seriesOverflow: false,
   ensurePostgresSchemaWithAdvisoryLock: vi.fn(async () => undefined),
   queryOne: vi.fn(async (_pool: unknown, sql: string, values: unknown[] = []) => {
     if (!sql.includes('COUNT(*) AS calls,')) return undefined;
@@ -9,18 +10,23 @@ const postgresMocks = vi.hoisted(() => ({
       ? { calls: 4, successful_calls: 4, total_tokens: 400, total_cost_usd: 0.4 }
       : { calls: 2, successful_calls: 2, total_tokens: 150, total_cost_usd: 0.15 };
   }),
-  queryRows: vi.fn(async (_pool: unknown, sql: string) => (
-    sql.includes('AS series_key')
-      ? [{
+  queryRows: vi.fn(async (_pool: unknown, sql: string) => {
+    if (!sql.includes('AS series_key')) return [];
+    if (postgresMocks.seriesOverflow) {
+      return Array.from({ length: 5_001 }, (_, index) => ({
+        series_key: `provider:model-${index}`,
+        bucket_start_ms: 0,
+      }));
+    }
+    return [{
           series_key: 'provider-a:model-a',
           bucket_start_ms: 0,
           calls: 2,
           successful_calls: 2,
           total_tokens: 150,
           total_cost_usd: 0.15,
-        }]
-      : []
-  )),
+    }];
+  }),
 }));
 
 vi.mock('../postgres.js', () => ({
@@ -38,6 +44,7 @@ describe('PostgresModelUsageStore previous-period totals', () => {
     postgresMocks.ensurePostgresSchemaWithAdvisoryLock.mockClear();
     postgresMocks.queryOne.mockClear();
     postgresMocks.queryRows.mockClear();
+    postgresMocks.seriesOverflow = false;
   });
 
   it('queries only totals for the shifted window with every ledger filter preserved', async () => {
@@ -121,6 +128,19 @@ describe('PostgresModelUsageStore previous-period totals', () => {
       sql.includes('AS series_key')
     ));
     expect(seriesQuery?.[1]).toContain("provider || ':' || model AS series_key");
+    expect(seriesQuery?.[1]).toContain('LIMIT 5001');
     expect(seriesQuery?.[2]).toEqual([200, 300, 'provider-a', 'companion-a']);
+  });
+
+  it('rejects dimension time-series results above the server-side safety bound', async () => {
+    postgresMocks.seriesOverflow = true;
+    const store = new PostgresModelUsageStore({} as Pool, { companionId: 'companion-a' });
+
+    await expect(store.getUsageData({
+      range: 'custom',
+      sinceMs: 200,
+      untilMs: 300,
+      groupBy: ['sessionId'],
+    })).rejects.toThrow('dimension time series exceeds the 5000-row safety limit');
   });
 });

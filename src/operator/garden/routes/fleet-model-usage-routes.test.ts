@@ -21,6 +21,7 @@ class CapturingResponse {
 describe('fleet model-usage route', () => {
   it('parses the bounded fleet range query and returns the service payload', async () => {
     const payload = {
+      deployment: 'fleet',
       resolvedRange: {
         range: 'custom', timezone: 'UTC', sinceMs: 10, untilMs: 20, bucket: 'hour',
         boundary: '[sinceMs, untilMs)', calendarWeekStartsOn: 'monday',
@@ -68,6 +69,26 @@ describe('fleet model-usage route', () => {
     expect(response.status).toBe(400);
     expect(JSON.parse(response.body)).toEqual({
       error: 'Fleet model usage supports only range, timezone, sinceMs, untilMs, and bucket query parameters.',
+    });
+    expect(getFleetModelUsage).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    '/api/admin/fleet-model-usage?range=all&timezone=UTC',
+    '/api/admin/fleet-model-usage',
+  ])('rejects an unbounded fleet range before calling the service: %s', (url) => {
+    const response = new CapturingResponse();
+    const getFleetModelUsage = vi.fn();
+
+    handleFleetModelUsageRoute(
+      { url, headers: {} } as IncomingMessage,
+      response as unknown as ServerResponse,
+      { getFleetModelUsage },
+    );
+
+    expect(response.status).toBe(400);
+    expect(JSON.parse(response.body)).toEqual({
+      error: 'Fleet model usage does not support all-time queries',
     });
     expect(getFleetModelUsage).not.toHaveBeenCalled();
   });

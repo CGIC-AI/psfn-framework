@@ -1,6 +1,6 @@
 <script lang="ts">
   interface Props {
-    values: number[];
+    values: Array<number | null>;
     width?: number;
     height?: number;
     strokeClass?: string;
@@ -33,7 +33,9 @@
     const plotRight = safeWidth - safePadding;
     const plotTop = safePadding;
     const plotBottom = safeHeight - safePadding;
-    const safeValues = values.map(value => Number.isFinite(value) ? value : 0);
+    const safeValues = values.map(value => (
+      value !== null && Number.isFinite(value) ? value : 0
+    ));
     const lowerPadding = Number.isFinite(minPadding) ? Math.max(0, minPadding) : 0;
     const upperPadding = Number.isFinite(maxPadding) ? Math.max(0, maxPadding) : 0;
     const domainMin = (safeValues.length === 0 ? 0 : Math.min(0, ...safeValues)) - lowerPadding;
@@ -131,7 +133,7 @@
     {:else}
       <ol>
         {#each values as value, index}
-          <li>Value {index + 1}: {Number.isFinite(value) ? value : 'unavailable'}</li>
+          <li>Value {index + 1}: {value !== null && Number.isFinite(value) ? value : 'unavailable'}</li>
         {/each}
       </ol>
     {/if}

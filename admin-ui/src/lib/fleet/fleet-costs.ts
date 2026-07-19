@@ -5,6 +5,7 @@ import type {
   ModelUsageBucket,
   ModelUsageRange,
 } from '../../../../src/shared/telemetry/model-usage.js';
+import { ACCOUNTING_RANGE_OPTIONS } from '../accounting/query-state.js';
 import { companionGardenRoot } from './companion-scope.js';
 
 export type FleetCostSortKey =
@@ -56,9 +57,22 @@ export interface FleetCompanionCostPathState {
   readonly customUntilDate: string;
 }
 
+export const FLEET_COST_RANGE_OPTIONS = ACCOUNTING_RANGE_OPTIONS.filter(
+  (option): option is typeof option & { value: Exclude<ModelUsageRange, 'all'> } => (
+    option.value !== 'all'
+  ),
+);
+
+export function normalizeFleetCostRange(
+  range: ModelUsageRange,
+): Exclude<ModelUsageRange, 'all'> {
+  return range === 'all' ? 'year' : range;
+}
+
 export function buildFleetCompanionCostPath(
   companionId: string,
   state: FleetCompanionCostPathState,
+  deployment: 'single' | 'fleet',
 ): string {
   const params = new URLSearchParams({
     tab: 'token-usage',
@@ -70,5 +84,6 @@ export function buildFleetCompanionCostPath(
     params.set('since', state.customSinceDate);
     params.set('until', state.customUntilDate);
   }
-  return `${companionGardenRoot(companionId)}/charge-budget?${params.toString()}`;
+  const gardenRoot = deployment === 'fleet' ? companionGardenRoot(companionId) : '';
+  return `${gardenRoot}/charge-budget?${params.toString()}`;
 }

@@ -186,6 +186,7 @@ describe('FleetModelUsageService', () => {
     }, authority());
 
     expect(result.coverage).toEqual({ available: 2, unavailable: 0, complete: true });
+    expect(result.deployment).toBe('fleet');
     expect(result.totals).toMatchObject({
       calls: 5,
       inputTokens: 300,
@@ -323,6 +324,57 @@ describe('FleetModelUsageService', () => {
     expect(JSON.stringify(result)).not.toContain('private-model-must-not-escape');
   });
 
+  it.each([
+    {
+      name: 'non-canonical time buckets',
+      mutate(response: ModelUsageData): void {
+        response.timeSeries = [
+          ...response.timeSeries,
+          { ...response.timeSeries[0]!, startMs: 1, endMs: 3_600_000 },
+        ];
+      },
+    },
+    {
+      name: 'inconsistent aggregate totals',
+      mutate(response: ModelUsageData): void {
+        response.totals = { ...response.totals, successfulCalls: 0 };
+      },
+    },
+  ])('marks a child unavailable for $name', async ({ mutate }) => {
+    const companionTotals = totals({
+      calls: 1,
+      inputTokens: 50,
+      outputTokens: 25,
+      costUsd: 0.1,
+      totalDurationMs: 80,
+      durationSamples: 1,
+      totalTtftMs: 10,
+      ttftSamples: 1,
+    });
+    const transport: FleetGardenModelUsageTransportPort = {
+      requestModelUsage: vi.fn(async target => {
+        const response = usageResponse(companionTotals, 'provider:model');
+        if (target.companionId === COMPANION_A) mutate(response);
+        return response;
+      }),
+    };
+    const service = new FleetModelUsageService({ registry: registry(), transport });
+
+    const result = await service.getFleetModelUsage({
+      range: 'custom',
+      timezone: 'UTC',
+      sinceMs: 0,
+      untilMs: 3_600_000,
+      bucket: 'hour',
+    }, authority());
+
+    expect(result.perCompanion).toEqual([
+      { companionId: COMPANION_A, status: 'unavailable' },
+      expect.objectContaining({ companionId: COMPANION_B, status: 'available' }),
+    ]);
+    expect(result.coverage).toEqual({ available: 1, unavailable: 1, complete: false });
+  });
+
   it('projects one canonical Garden service as a one-row fleet', async () => {
     const companionTotals = totals({
       calls: 1,
@@ -351,6 +403,7 @@ describe('FleetModelUsageService', () => {
     });
 
     expect(result.coverage).toEqual({ available: 1, unavailable: 0, complete: true });
+    expect(result.deployment).toBe('single');
     expect(result.perCompanion).toEqual([
       expect.objectContaining({ companionId: COMPANION_A, status: 'available' }),
     ]);
@@ -360,5 +413,15 @@ describe('FleetModelUsageService', () => {
       topN: 100,
       limit: 1,
     }));
+  });
+
+  it('rejects all-time single-companion fleet projections', async () => {
+    const service = new SingleCompanionFleetModelUsageService({
+      companionId: COMPANION_A,
+      modelUsage: { getModelUsageData: vi.fn() },
+    });
+
+    await expect(service.getFleetModelUsage({ range: 'all' }))
+      .rejects.toThrow('does not support all-time');
   });
 });

@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import {
-    ACCOUNTING_RANGE_OPTIONS,
     accountingStateFromSearchParams,
     buildModelUsageQuery,
     createDefaultAccountingState,
@@ -25,6 +24,8 @@
   import TokenCompositionChart from '$lib/components/accounting/TokenCompositionChart.svelte';
   import {
     buildFleetCompanionCostPath,
+    FLEET_COST_RANGE_OPTIONS,
+    normalizeFleetCostRange,
     sortFleetCompanions,
     type FleetCostSortDirection,
     type FleetCostSortKey,
@@ -61,7 +62,7 @@
   function fleetQuery(state: AccountingQueryState): FleetModelUsageQuery {
     const query = buildModelUsageQuery(state);
     return {
-      range: query.range,
+      range: normalizeFleetCostRange(query.range ?? 'all'),
       timezone: query.timezone,
       bucket: query.bucket,
       ...(query.sinceMs !== undefined ? { sinceMs: query.sinceMs } : {}),
@@ -158,11 +159,18 @@
   }
 
   function companionCostPath(companionId: string): string {
-    return buildFleetCompanionCostPath(companionId, appliedState);
+    if (!data) throw new Error('Fleet cost links require loaded deployment scope');
+    return buildFleetCompanionCostPath(companionId, appliedState, data.deployment);
   }
 
   onMount(() => {
-    queryState = accountingStateFromSearchParams(new URLSearchParams(window.location.search));
+    const initialState = accountingStateFromSearchParams(
+      new URLSearchParams(window.location.search),
+    );
+    queryState = {
+      ...initialState,
+      range: normalizeFleetCostRange(initialState.range),
+    };
     appliedState = cloneState(queryState);
     void Promise.all([
       loadUsage(cloneState(queryState), false),
@@ -206,7 +214,7 @@
     </div>
     <div class="space-y-4 p-5">
       <div class="flex flex-wrap gap-2" aria-label="Fleet cost range">
-        {#each ACCOUNTING_RANGE_OPTIONS as option (option.value)}
+        {#each FLEET_COST_RANGE_OPTIONS as option (option.value)}
           <button
             type="button"
             aria-pressed={queryState.range === option.value}

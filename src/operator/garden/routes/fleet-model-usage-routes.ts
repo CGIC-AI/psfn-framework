@@ -1,6 +1,10 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { sendJson } from '../../../channels/backplane/http/primitives.js';
 import type { ModelUsageQuery } from '../../../shared/telemetry/model-usage.js';
+import {
+  FLEET_MODEL_USAGE_ALL_TIME_ERROR,
+  requireBoundedFleetModelUsageQuery,
+} from '../../../shared/telemetry/fleet-model-usage-request.js';
 import { parseRequestUrl } from '../request-url.js';
 import type { FleetGardenModelUsageAuthority } from '../fleet-transport-client.js';
 import type { FleetModelUsageData } from '../services/fleet-model-usage-service.js';
@@ -39,6 +43,12 @@ export function handleFleetModelUsageRoute(
   const query = parseModelUsageQuery(url.searchParams);
   if (!query.ok) {
     sendJson(res, 400, { error: query.error });
+    return;
+  }
+  try {
+    requireBoundedFleetModelUsageQuery(query.value);
+  } catch {
+    sendJson(res, 400, { error: FLEET_MODEL_USAGE_ALL_TIME_ERROR });
     return;
   }
   const pending = authority

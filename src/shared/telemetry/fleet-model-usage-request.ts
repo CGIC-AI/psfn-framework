@@ -10,6 +10,21 @@ const FLEET_QUERY_FIELDS = new Set(['range', 'timezone', 'sinceMs', 'untilMs', '
 const MODEL_USAGE_RANGE_VALUES = new Set<string>(MODEL_USAGE_RANGES);
 const MODEL_USAGE_BUCKET_VALUES = new Set<string>(MODEL_USAGE_BUCKETS);
 
+export const FLEET_MODEL_USAGE_ALL_TIME_ERROR =
+  'Fleet model usage does not support all-time queries';
+
+export function requireBoundedFleetModelUsageQuery(
+  query: ModelUsageQuery,
+): ModelUsageQuery {
+  const isImplicitAllTime = query.range === undefined
+    && query.sinceMs === undefined
+    && query.untilMs === undefined;
+  if (query.range === 'all' || isImplicitAllTime) {
+    throw new Error(FLEET_MODEL_USAGE_ALL_TIME_ERROR);
+  }
+  return query;
+}
+
 function optionalSingle(
   query: Readonly<Partial<Record<string, readonly string[]>>>,
   field: string,
@@ -53,13 +68,13 @@ export function parseFleetModelUsageResourceQuery(
   if (bucket !== undefined && !MODEL_USAGE_BUCKET_VALUES.has(bucket)) {
     throw new Error('Fleet model usage bucket is invalid');
   }
-  return {
+  return requireBoundedFleetModelUsageQuery({
     ...(range === undefined ? {} : { range: range as ModelUsageQuery['range'] }),
     ...(timezone === undefined ? {} : { timezone }),
     ...(sinceMs === undefined ? {} : { sinceMs }),
     ...(untilMs === undefined ? {} : { untilMs }),
     ...(bucket === undefined ? {} : { bucket: bucket as ModelUsageQuery['bucket'] }),
-  };
+  });
 }
 
 export function buildFleetModelUsageInternalRequestTarget(
@@ -83,7 +98,10 @@ export function resolveFleetModelUsageInternalRequestTarget(
   query: ModelUsageQuery,
   nowMs: number,
 ): string {
-  return buildFleetModelUsageInternalRequestTarget(resolveModelUsageRange(query, { nowMs }));
+  return buildFleetModelUsageInternalRequestTarget(resolveModelUsageRange(
+    requireBoundedFleetModelUsageQuery(query),
+    { nowMs },
+  ));
 }
 
 export function parseFleetModelUsageInternalRequestTarget(
@@ -145,7 +163,10 @@ export function resolveAuthorizedFleetModelUsageRange(
 ): ModelUsageResolvedRange {
   const internal = parseFleetModelUsageInternalRequestTarget(requestTarget);
   if (!internal) throw new Error('Signed fleet model-usage child target is invalid');
-  const resolved = resolveModelUsageRange(query, { nowMs: internal.untilMs - 1 });
+  const resolved = resolveModelUsageRange(
+    requireBoundedFleetModelUsageQuery(query),
+    { nowMs: internal.untilMs - 1 },
+  );
   if (buildFleetModelUsageInternalRequestTarget(resolved) !== requestTarget) {
     throw new Error('Signed fleet model-usage child target does not match the fleet query');
   }

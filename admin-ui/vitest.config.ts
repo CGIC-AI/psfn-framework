@@ -6,7 +6,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: [
-      'src/lib/accounting/{cockpit-contract,derived-metrics,event-grid,query-state}.test.ts',
+      'src/lib/accounting/{cache-hit-rate,cockpit-contract,derived-metrics,event-grid,query-state,usage-breakdown}.test.ts',
       'src/lib/api/client.test.ts',
       'src/lib/api/endpoints/{accounting,audit-history,prompts,sessions}.test.ts',
       'src/lib/api/websocket.test.ts',

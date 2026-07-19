@@ -1,8 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import AccountingControls from './AccountingControls.svelte';
+  import CacheHitRatePanel from './CacheHitRatePanel.svelte';
   import ChargeCostPanel from './ChargeCostPanel.svelte';
   import TokenCompositionChart from './TokenCompositionChart.svelte';
+  import UsageBreakdownPanels from './UsageBreakdownPanels.svelte';
   import UsageByModelChart from './UsageByModelChart.svelte';
   import UsageBreakdownTable from './UsageBreakdownTable.svelte';
   import UsageEventsTable from './UsageEventsTable.svelte';
@@ -33,6 +35,10 @@
   let draftState = $state<AccountingQueryState>(createDefaultAccountingState());
   let appliedState = $state<AccountingQueryState>(createDefaultAccountingState());
   let usage = $state<AdminModelUsageData | null>(null);
+  let channelBreakdown = $state<AdminModelUsageData['byModel']>([]);
+  let channelBreakdownLoading = $state(false);
+  let channelBreakdownError = $state('');
+  let channelBreakdownStateKey = '';
   let chargeCosts = $state<AdminChargeCostData | null>(null);
   let loading = $state(true);
   let refreshing = $state(false);
@@ -43,6 +49,7 @@
   let exporting = $state(false);
   let lastSuccessfulAt = $state<number | null>(null);
   let latestRequestId = 0;
+  let latestChannelRequestId = 0;
 
   const dirty = $derived(
     accountingStateToSearchParams(draftState).toString()
@@ -59,6 +66,43 @@
     const next = accountingStateToSearchParams(source);
     url.search = next.toString();
     window.history.replaceState(window.history.state, '', url);
+  }
+
+  async function loadChannelBreakdown(
+    nextState: AccountingQueryState,
+    mode: 'initial' | 'apply' | 'poll',
+  ): Promise<void> {
+    const requestedState = cloneState(nextState);
+    const stateKey = accountingStateToSearchParams(requestedState).toString();
+    const requestId = ++latestChannelRequestId;
+    if (stateKey !== channelBreakdownStateKey) {
+      channelBreakdown = [];
+      channelBreakdownStateKey = stateKey;
+    }
+    channelBreakdownLoading = true;
+    if (mode !== 'poll') channelBreakdownError = '';
+
+    try {
+      const modelQuery = buildModelUsageQuery(requestedState);
+      const channelUsage = await getModelUsage({
+        ...modelQuery,
+        groupBy: ['channelId'],
+        sortBy: 'effectiveCostUsd',
+        sortDirection: 'desc',
+        topN: 9,
+        limit: 1,
+      });
+      if (requestId !== latestChannelRequestId) return;
+      channelBreakdown = channelUsage.groupedBy.channelId ?? [];
+      channelBreakdownError = '';
+    } catch (error) {
+      if (requestId !== latestChannelRequestId) return;
+      channelBreakdownError = error instanceof Error
+        ? error.message
+        : 'Channel attribution is unavailable.';
+    } finally {
+      if (requestId === latestChannelRequestId) channelBreakdownLoading = false;
+    }
   }
 
   async function load(nextState: AccountingQueryState, mode: 'initial' | 'apply' | 'poll'): Promise<void> {
@@ -103,6 +147,16 @@
       errorMessage = '';
       if (mode !== 'poll') draftState = cloneState(requestedState);
       updateUrl(requestedState);
+      const groupedChannels = nextUsage.groupedBy.channelId;
+      if (groupedChannels !== undefined) {
+        latestChannelRequestId += 1;
+        channelBreakdown = groupedChannels;
+        channelBreakdownStateKey = accountingStateToSearchParams(requestedState).toString();
+        channelBreakdownLoading = false;
+        channelBreakdownError = '';
+      } else {
+        void loadChannelBreakdown(requestedState, mode);
+      }
     } catch (error) {
       if (requestId !== latestRequestId) return;
       errorMessage = error instanceof Error ? error.message : 'Failed to load persisted accounting data.';
@@ -245,9 +299,26 @@
       modelSeries={usage.seriesByDimension?.model ?? []}
       timezone={usage.resolvedRange.timezone}
     />
-    <TokenCompositionChart
-      buckets={usage.timeSeries}
-      timezone={usage.resolvedRange.timezone}
+    <div class="grid gap-4 xl:grid-cols-2">
+      <TokenCompositionChart
+        buckets={usage.timeSeries}
+        timezone={usage.resolvedRange.timezone}
+      />
+      <CacheHitRatePanel
+        buckets={usage.timeSeries}
+        totals={usage.totals}
+        timezone={usage.resolvedRange.timezone}
+      />
+    </div>
+    <UsageBreakdownPanels
+      byModel={usage.byModel}
+      byPurpose={usage.byPurpose}
+      byTool={usage.byTool}
+      byChannel={channelBreakdown}
+      detailByCallKind={usage.byCallKind}
+      channelLoading={channelBreakdownLoading}
+      channelError={channelBreakdownError}
+      onDrilldown={drilldown}
     />
     <UsageBreakdownTable
       groups={usage.groups}

@@ -28,6 +28,7 @@ import {
   type FatiguePolicyOverchargeConfig,
   type FatiguePolicyResponseBudget,
   type FatiguePolicyStateThresholds,
+  type FatigueRoomEpisodePressureConfig,
   type FatigueSocialPotConfig,
   type IcpCostBreakerConfig,
 } from '../../shared/contracts/charge-policy.js';
@@ -430,6 +431,68 @@ function parseFatigueOverchargeConfig(
   };
 }
 
+function parseFatigueRoomEpisodePressureConfig(
+  raw: unknown,
+  fieldPath: string,
+): FatigueRoomEpisodePressureConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid charge policy: ${fieldPath} must be an object`);
+  }
+  assertNoUnknownKeys(raw, [
+    'halfLifeMs',
+    'windowMs',
+    'replyPressureUnits',
+    'reactionPressureUnits',
+    'elevatedThreshold',
+    'wrapUpThreshold',
+    'maxLeaseThresholdBias',
+  ], fieldPath);
+  const halfLifeMs = parsePositiveInteger(raw.halfLifeMs, `${fieldPath}.halfLifeMs`);
+  const windowMs = parsePositiveInteger(raw.windowMs, `${fieldPath}.windowMs`);
+  if (windowMs < halfLifeMs) {
+    throw new Error(`Invalid charge policy: ${fieldPath}.windowMs must be >= ${fieldPath}.halfLifeMs`);
+  }
+  const replyPressureUnits = parsePositiveNumber(
+    raw.replyPressureUnits,
+    `${fieldPath}.replyPressureUnits`,
+  );
+  const reactionPressureUnits = parseNonNegativeNumber(
+    raw.reactionPressureUnits,
+    `${fieldPath}.reactionPressureUnits`,
+  );
+  if (reactionPressureUnits > replyPressureUnits) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.reactionPressureUnits must be <= ${fieldPath}.replyPressureUnits`,
+    );
+  }
+  const elevatedThreshold = parsePositiveNumber(
+    raw.elevatedThreshold,
+    `${fieldPath}.elevatedThreshold`,
+  );
+  const wrapUpThreshold = parsePositiveNumber(
+    raw.wrapUpThreshold,
+    `${fieldPath}.wrapUpThreshold`,
+  );
+  if (wrapUpThreshold <= elevatedThreshold) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.wrapUpThreshold must be > ${fieldPath}.elevatedThreshold`,
+    );
+  }
+  const maxLeaseThresholdBias = parsePositiveNumber(
+    raw.maxLeaseThresholdBias,
+    `${fieldPath}.maxLeaseThresholdBias`,
+  );
+  return {
+    halfLifeMs,
+    windowMs,
+    replyPressureUnits,
+    reactionPressureUnits,
+    elevatedThreshold,
+    wrapUpThreshold,
+    maxLeaseThresholdBias,
+  };
+}
+
 function parseFatigueSocialRegulationConfig(
   raw: unknown,
   fieldPath: string,
@@ -447,7 +510,12 @@ function parseFatigueSocialRegulationConfig(
     'deferredPressureUnits',
     'unansweredPressureUnits',
     'continuationEvidence',
+    'roomEpisodePressure',
   ], fieldPath);
+  const roomEpisodePressure = parseFatigueRoomEpisodePressureConfig(
+    raw.roomEpisodePressure,
+    `${fieldPath}.roomEpisodePressure`,
+  );
   const relationshipPressureHalfLifeMs = parsePositiveInteger(
     raw.relationshipPressureHalfLifeMs,
     `${fieldPath}.relationshipPressureHalfLifeMs`,
@@ -513,6 +581,7 @@ function parseFatigueSocialRegulationConfig(
         `${fieldPath}.continuationEvidence.explicitPeerInvitation`,
       ),
     },
+    roomEpisodePressure,
   };
 }
 

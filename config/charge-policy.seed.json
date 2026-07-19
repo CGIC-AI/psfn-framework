@@ -166,6 +166,15 @@
         "recentHumanParticipation": true,
         "activeWorkOrResearch": true,
         "explicitPeerInvitation": true
+      },
+      "roomEpisodePressure": {
+        "halfLifeMs": 1800000,
+        "windowMs": 7200000,
+        "replyPressureUnits": 1,
+        "reactionPressureUnits": 0.1,
+        "elevatedThreshold": 4,
+        "wrapUpThreshold": 8,
+        "maxLeaseThresholdBias": 0.3
       }
     },
     "socialPot": {

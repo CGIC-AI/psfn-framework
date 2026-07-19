@@ -9,12 +9,26 @@ export type PersonalProjectStatus = 'active' | 'paused' | 'completed' | 'archive
 export type CompanionOwnedVisibility = 'self' | 'primary_contact' | 'public';
 export type ProjectArtifactShareState = 'private' | 'requested' | 'shared';
 
+/**
+ * Provenance authority for an artifact's disclosure metadata (bible §6.2, §9.5).
+ *
+ * - `runtime_derived`: sensitivity/audience were resolved by the runtime at
+ *   write time from the project's workspace disclosure floor (the only
+ *   trustworthy source; see `addArtifact`). Eligible for the egress gate.
+ * - `legacy_unverified`: the metadata predates runtime derivation (it was once
+ *   model-asserted, or the artifact was written before this field existed).
+ *   §9.5 forbids treating such artifacts as automatically shareable; they fail
+ *   closed at egress until re-grounded in a fresh eligible context.
+ */
+export type ArtifactMetadataLineage = 'runtime_derived' | 'legacy_unverified';
+
 export interface PersonalProjectArtifact {
   ref: string;
   label: string;
   sensitivity: SensitivityLevel;
   intendedAudience: CompanionOwnedVisibility;
   shareState: ProjectArtifactShareState;
+  metadataLineage: ArtifactMetadataLineage;
   addedAt: string;
 }
 
@@ -88,6 +102,18 @@ function isSensitivityLevel(value: unknown): value is SensitivityLevel {
   return typeof value === 'string' && SENSITIVITY_LEVELS.some(level => level === value);
 }
 
+/**
+ * Resolves the disclosure-metadata provenance for a stored artifact, failing
+ * closed (bible §9.5). Only the exact `runtime_derived` marker — written by the
+ * runtime derivation path — grants egress eligibility. Anything else (absent on
+ * pre-migration documents, or any unexpected value) resolves to
+ * `legacy_unverified`, so an unclassified artifact is never automatically
+ * shareable even before the one-time quarantine migration has run.
+ */
+function parseMetadataLineage(value: unknown): ArtifactMetadataLineage {
+  return value === 'runtime_derived' ? 'runtime_derived' : 'legacy_unverified';
+}
+
 function isIsoTimestamp(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0 && !Number.isNaN(Date.parse(value));
 }
@@ -113,6 +139,7 @@ function parseArtifact(value: unknown): PersonalProjectArtifact | null {
     sensitivity: value.sensitivity,
     intendedAudience: value.intendedAudience,
     shareState: value.shareState,
+    metadataLineage: parseMetadataLineage(value.metadataLineage),
     addedAt: value.addedAt,
   };
 }

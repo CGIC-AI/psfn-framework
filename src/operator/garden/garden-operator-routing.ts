@@ -15,7 +15,10 @@ import type {
   FleetGardenControlPlane,
   FleetGardenReadiness,
 } from './fleet-garden-control-plane.js';
-import { FleetGardenOperatorRouter } from './fleet-garden-operator-router.js';
+import {
+  FleetGardenOperatorRouter,
+  type FleetGardenDirectDatabasePort,
+} from './fleet-garden-operator-router.js';
 import {
   FleetGardenAdminTransportProxy,
   type FleetGardenTransportProxyPort,
@@ -35,6 +38,7 @@ export interface GardenOperatorRoutingOptions {
   readonly fleetControlPlane?: FleetGardenControlPlane;
   readonly fleetTransport?: FleetGardenTransportProxyPort;
   readonly fleetChildAssertions?: GardenFleetChildAssertionClient;
+  readonly fleetDirectDatabase?: FleetGardenDirectDatabasePort;
 }
 
 export type GardenOperatorTransportProbe =
@@ -68,6 +72,9 @@ export class GardenOperatorRouting {
         transport: fleetTransport,
         ...(options.fleetChildAssertions
           ? { childAssertions: options.fleetChildAssertions }
+          : {}),
+        ...(options.fleetDirectDatabase
+          ? { directDatabase: options.fleetDirectDatabase }
           : {}),
       });
       this.fixedProxy = undefined;

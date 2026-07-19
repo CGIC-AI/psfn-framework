@@ -17,7 +17,9 @@ import {
 } from './garden-admission.js';
 import { AtomicRequestCapabilityReplayPort } from './atomic-request-capability-replay.js';
 import { FleetGardenControlPlane } from './fleet-garden-control-plane.js';
+import { FleetGardenDirectDatabase } from './fleet-garden-direct-database.js';
 import { FleetGardenTargetRegistry } from './fleet-garden-target-registry.js';
+import type { FleetGardenDirectDatabaseServices } from './local-admin-contract.js';
 import {
   GardenOperatorSurface,
   type FleetGardenTransportProxyPort,
@@ -51,7 +53,14 @@ const verifierConfig = {
 };
 
 function signedRequest(companionId: typeof COMPANION_A, jti: string): IncomingMessage {
-  const innerTarget = '/api/admin/dashboard';
+  return signedRequestForTarget(companionId, jti, '/api/admin/dashboard');
+}
+
+function signedRequestForTarget(
+  companionId: typeof COMPANION_A,
+  jti: string,
+  innerTarget: string,
+): IncomingMessage {
   const target = compileGatewayGardenRequestTarget({
     rawTarget: innerTarget,
     method: 'GET',
@@ -112,7 +121,119 @@ async function waitFor(condition: () => boolean): Promise<void> {
   throw new Error('condition never became true');
 }
 
+class CapturingResponse {
+  status = 0;
+  body = '';
+
+  writeHead(status: number): this {
+    this.status = status;
+    return this;
+  }
+
+  end(body?: string): this {
+    this.body = body ?? '';
+    return this;
+  }
+}
+
 describe('GardenOperatorSurface fleet transport routing', () => {
+  it('serves approved direct-database routes in Garden with the admitted companion binding', async () => {
+    const registry = new FleetGardenTargetRegistry([
+      {
+        companionId: COMPANION_A,
+        endpoint: { mode: 'socket', socketPath: '/run/admin-a.sock', timeoutMs: 1_000 },
+      },
+      {
+        companionId: COMPANION_B,
+        endpoint: { mode: 'socket', socketPath: '/run/admin-b.sock', timeoutMs: 1_000 },
+      },
+    ]);
+    const controlPlane = new FleetGardenControlPlane({
+      registry,
+      verifier: createRequestCapabilityVerifier(verifierConfig),
+      replay: new AtomicRequestCapabilityReplayPort(),
+    });
+    const directBindings: string[] = [];
+    const directDatabase = new FleetGardenDirectDatabase({
+      config: {
+        ...config(),
+        persistenceBackend: 'postgres',
+        postgresDatabaseUrl: 'postgres://fleet-garden-test.invalid/psfn',
+      },
+      companionIds: [COMPANION_A, COMPANION_B],
+      createServices: (_config, companionId) => ({
+        modelUsage: {
+          getModelUsageData: async () => {
+            directBindings.push(companionId);
+            return {};
+          },
+        },
+        observerEvalSidecar: {
+          queryObservations: async () => {
+            directBindings.push(companionId);
+            return {};
+          },
+        },
+      }) as unknown as FleetGardenDirectDatabaseServices,
+    });
+    const surface = new GardenOperatorSurface({
+      port: 1,
+      host: '127.0.0.1',
+      config: config(),
+      fleetControlPlane: controlPlane,
+      fleetTransport: {
+        close: callback => callback(),
+        probeAll: async () => undefined,
+        proxyBufferedApiRequest: () => {
+          throw new Error('direct database route must not proxy to an agent');
+        },
+        handleTelemetryUpgrade: () => {
+          throw new Error('not used');
+        },
+      },
+      fleetDirectDatabase: directDatabase,
+      fleetChildAssertions: {
+        exchange: async () => {
+          throw new Error('direct database route must not exchange an agent child assertion');
+        },
+      },
+    });
+
+    const handleFleetRequest = (
+      surface as unknown as {
+        handleFleetRequest(req: IncomingMessage, res: ServerResponse): Promise<void>;
+      }
+    ).handleFleetRequest.bind(surface);
+    const observerResponse = new CapturingResponse();
+    const modelUsageResponse = new CapturingResponse();
+    await Promise.all([
+      handleFleetRequest(
+        signedRequestForTarget(
+          COMPANION_A,
+          'c',
+          '/api/admin/evals/observer-sidecar/observations',
+        ),
+        observerResponse as unknown as ServerResponse,
+      ),
+      handleFleetRequest(
+        signedRequestForTarget(COMPANION_B, 'd', '/api/admin/model-usage'),
+        modelUsageResponse as unknown as ServerResponse,
+      ),
+    ]);
+    await waitFor(() => observerResponse.body.length > 0 && modelUsageResponse.body.length > 0);
+
+    expect(directBindings.sort()).toEqual([COMPANION_A, COMPANION_B].sort());
+    expect(observerResponse.status).toBe(200);
+    expect(modelUsageResponse.status).toBe(200);
+    expect(directDatabase.handleHttp({
+      admission: {
+        target: { canonicalPath: '/api/admin/evals/observer-sidecar/health' },
+      } as never,
+      req: {} as IncomingMessage,
+      res: {} as ServerResponse,
+    })).toBe(false);
+  });
+
   it('keeps concurrent child exchanges and proxy dispatch bound to their admitted targets', async () => {
     const registry = new FleetGardenTargetRegistry([
       {

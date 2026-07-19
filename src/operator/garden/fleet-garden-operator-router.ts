@@ -21,6 +21,15 @@ export interface FleetGardenOperatorRouterOptions {
   readonly controlPlane: FleetGardenControlPlane;
   readonly transport: FleetGardenTransportProxyPort;
   readonly childAssertions?: GardenFleetChildAssertionClient;
+  readonly directDatabase?: FleetGardenDirectDatabasePort;
+}
+
+export interface FleetGardenDirectDatabasePort {
+  handleHttp(input: {
+    readonly admission: FleetGardenAdmittedPrincipalRequest;
+    readonly req: IncomingMessage;
+    readonly res: ServerResponse;
+  }): boolean;
 }
 
 /**
@@ -59,6 +68,13 @@ export class FleetGardenOperatorRouter {
     if (admitted.kind === 'public'
       || !admitted.target.canonicalPath.startsWith('/api/admin/')) {
       input.dispatchLocal(admitted.target.canonicalRequestTarget);
+      return;
+    }
+    if (this.options.directDatabase?.handleHttp({
+      admission: admitted,
+      req: input.req,
+      res: input.res,
+    })) {
       return;
     }
     if (!this.options.childAssertions) {

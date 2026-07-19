@@ -349,6 +349,8 @@ secrets:
     ntfyToken: NTFY_TOKEN
 
 postgres:
+  # The database URL credential is shared by the gateway, companion agents,
+  # and the fleet Garden's approved request-scoped direct database services.
   enabled: true
   image:
     repository: docker.io/pgvector/pgvector

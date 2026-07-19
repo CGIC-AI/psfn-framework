@@ -956,18 +956,44 @@ const fleetGardenVolumeNames = new Set(
 for (const forbiddenVolume of [
   'companion-data',
   'workspace',
-  'postgres-database-url',
 ]) {
   if (fleetGardenVolumeNames.has(forbiddenVolume)) {
     throw new Error(`fleet Garden must not receive ${forbiddenVolume} volume`);
   }
 }
+if (!fleetGardenVolumeNames.has('postgres-database-url')) {
+  throw new Error('fleet Garden must mount the postgres-database-url Secret volume');
+}
 const fleetGardenSecretEnv = (fleetGardenContainer?.env ?? [])
   .filter(entry => entry.valueFrom?.secretKeyRef)
   .map(entry => entry.name);
 if (fleetGardenSecretEnv.length !== 0) {
-  throw new Error(`fleet Garden must not receive secret env, got ${fleetGardenSecretEnv.join(', ')}`);
+  throw new Error(
+    `fleet Garden database credential must use the mounted Secret file, got secret env ${fleetGardenSecretEnv.join(', ')}`,
+  );
 }
+assertIncludes(
+  fleetGardenYaml,
+  'name: POSTGRES_DATABASE_URL_FILE',
+  'fleet Garden Postgres credential file env',
+);
+assertIncludes(
+  fleetGardenYaml,
+  'value: "/var/run/secrets/psfn-postgres/database-url"',
+  'fleet Garden Postgres credential file path',
+);
+assertIncludes(
+  fleetGardenYaml,
+  'secretName: psfn-postgres',
+  'fleet Garden Postgres credential Secret',
+);
+assertIncludes(fleetGardenYaml, 'key: postgres-database-url', 'fleet Garden Postgres credential key');
+assertIncludes(fleetGardenYaml, 'name: wait-for-postgres', 'fleet Garden Postgres startup wait');
+assertIncludes(
+  fleetGardenYaml,
+  'pg_isready -d "$(cat "$POSTGRES_DATABASE_URL_FILE")"',
+  'fleet Garden Postgres startup readiness command',
+);
 const fleetGardenPolicy = findDocumentByKindName(
   fleetGardenRendered,
   'NetworkPolicy',
@@ -993,6 +1019,13 @@ for (const companion of fleetGardenCompanions) {
     `fleet Garden policy registered target ${companion.companionId}`,
   );
 }
+assertIncludes(fleetGardenPolicy, 'component: postgres', 'fleet Garden Postgres egress');
+const fleetPostgresPolicy = findDocumentByKindName(
+  fleetGardenRendered,
+  'NetworkPolicy',
+  'psfn-postgres',
+);
+assertIncludes(fleetPostgresPolicy, 'component: garden', 'Postgres ingress from fleet Garden');
 assertRenderFails(
   fleetGardenRenderArgs([]),
   'fleet.enabled=true requires at least two registered companions',

@@ -235,6 +235,12 @@ never back a ClusterIssuer. */ -}}
 {{- if and (not .Values.postgres.enabled) (not .Values.postgres.external.enabled) -}}
 {{- fail "postgres.enabled=false requires postgres.external.enabled=true with an existing database URL Secret" -}}
 {{- end -}}
+{{- if and .Values.postgres.enabled (not .Values.postgres.external.enabled) (not .Values.postgres.auth.keys.databaseUrl) -}}
+{{- fail "postgres.auth.keys.databaseUrl is required for runtime database access" -}}
+{{- end -}}
+{{- if and .Values.postgres.external.enabled (not .Values.postgres.external.databaseUrlSecret.key) -}}
+{{- fail "postgres.external.databaseUrlSecret.key is required for runtime database access" -}}
+{{- end -}}
 {{- if and .Values.redis.enabled (not (or (eq .Values.redis.mode "internal") (eq .Values.redis.mode "external"))) -}}
 {{- fail "redis.mode must be internal or external when redis.enabled=true" -}}
 {{- end -}}

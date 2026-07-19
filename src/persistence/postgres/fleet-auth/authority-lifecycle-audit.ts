@@ -9,6 +9,7 @@ import type {
 } from './authority-lifecycle-types.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 import { fleetAuthLifecycleDecisionFingerprint } from './authority-lifecycle-fingerprint.js';
+import { toRecordView } from '../../../shared/utils/types.js';
 
 /**
  * Versioned domain separator for lifecycle audit identifier digests. The keyed
@@ -96,7 +97,7 @@ function redactedContext(
     ['sourceContactDigest', 'sourceContactId', false],
     ['canonicalContactDigest', 'canonicalContactId', false],
   ] as const;
-  const decisionFields = decision as unknown as Record<string, unknown>;
+  const decisionFields = toRecordView(decision);
   for (const [output, input, structural] of resourceIds) {
     if (input in decisionFields) {
       const raw = String(decisionFields[input]);

@@ -4,7 +4,15 @@
 // the core runtime boundary.
 
 import { randomUUID } from 'node:crypto';
-import type { AssistantMessage, AssistantMessageEvent, Model, StopReason, ThinkingLevel } from '@mariozechner/pi-ai';
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  AssistantMessageEventStream,
+  Model,
+  SimpleStreamOptions,
+  StopReason,
+  ThinkingLevel,
+} from '@mariozechner/pi-ai';
 import type { StreamFn } from '../../boundary/pi-agent/index.js';
 import type {
   CorrelationMetadata,
@@ -158,7 +166,7 @@ export function createSubstrateStreamFn(
           litellmBaseUrl,
           model,
           context,
-          options: options ? { ...(options as object) } as Record<string, unknown> : undefined,
+          options: options ? { ...options } : undefined,
           purpose,
           service,
           processName,
@@ -176,7 +184,7 @@ export function createSubstrateStreamFn(
       requestContext,
     );
 
-    return (async function* streamWithTerminalFailureHook() {
+    const streamWithHook: AsyncGenerator<AssistantMessageEvent, void, unknown> = (async function* streamWithTerminalFailureHook() {
       try {
         yield* fallbackStream;
       } catch (error) {
@@ -204,7 +212,17 @@ export function createSubstrateStreamFn(
         }
         throw err;
       }
-    })() as any;
+    })();
+    // The generator above yields the full AssistantMessageEvent protocol and
+    // is consumed by the repo's scheduled loop as an AsyncIterable with
+    // terminal-event resolution (resolveStreamResult tolerates a stream with
+    // no `result()` method). pi-agent-core, however, declares StreamFn's
+    // result as the AssistantMessageEventStream CLASS, whose private fields
+    // no generator can structurally satisfy — so this single documented
+    // conversion bridges the declared type at the boundary without erasing
+    // the event type. Do not hand this streamFn to a consumer that calls the
+    // class-only surface (push/end/result) on it.
+    return streamWithHook as unknown as AssistantMessageEventStream;
   };
   return wrappedStreamFn;
 }
@@ -217,7 +235,7 @@ interface ExecuteStreamCandidateParams {
   litellmBaseUrl: string | null;
   model: Model<any>;
   context: unknown;
-  options: Record<string, unknown> | undefined;
+  options: SimpleStreamOptions | undefined;
   purpose: RoutingPurpose;
   service: string;
   processName: string;
@@ -468,7 +486,7 @@ function createTransportEventStream(
  * pi-agent-core scheduled loop passes the run's AbortController signal as
  * `options.signal`; everything else in the bag is model-hint/config data.
  */
-function extractAbortSignal(options: Record<string, unknown> | undefined): AbortSignal | undefined {
+function extractAbortSignal(options: SimpleStreamOptions | undefined): AbortSignal | undefined {
   const candidate = options?.signal;
   return candidate instanceof AbortSignal ? candidate : undefined;
 }
@@ -903,7 +921,7 @@ function supportsFullKnobPassthrough(candidate: RoutingCandidate, litellmBaseUrl
 
 function buildStreamRequestOptions(
   candidate: RoutingCandidate,
-  options: Record<string, unknown> | undefined,
+  options: SimpleStreamOptions | undefined,
   apiKey: string | undefined,
   litellmBaseUrl: string | null,
 ): Record<string, unknown> {

@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { isRecord } from '../../shared/utils/types.js';
+import { isRecord, toRecordView } from '../../shared/utils/types.js';
 import type { ToolSchema, TurnRecord } from '../../shared/contracts/runtime.js';
+import { restoreSnapshotSection } from './turn-record-snapshot-view.js';
 
 /**
  * Content-addressed sidecar store for cross-turn static turn-record payloads
@@ -199,7 +200,7 @@ export function createTurnRecordSharedStore(turnRecordsDir: string): TurnRecordS
 function readSnapshotPlan(record: TurnRecord): Record<string, unknown> | undefined {
   const snapshot = record.observability?.snapshot;
   if (!snapshot || !isRecord(snapshot.plan)) return undefined;
-  return snapshot.plan as unknown as Record<string, unknown>;
+  return snapshot.plan;
 }
 
 function withSnapshotPlan(record: TurnRecord, plan: Record<string, unknown>): TurnRecord {
@@ -211,7 +212,7 @@ function withSnapshotPlan(record: TurnRecord, plan: Record<string, unknown>): Tu
       ...observability,
       snapshot: {
         ...snapshot,
-        plan: plan as unknown as NonNullable<typeof snapshot.plan>,
+        plan: restoreSnapshotSection(plan),
       },
     },
   };
@@ -287,7 +288,7 @@ function readCapturedWirePayload(record: TurnRecord): Record<string, unknown> | 
 function withCapturedWirePayload(record: TurnRecord, captured: Record<string, unknown>): TurnRecord {
   const observability = record.observability!;
   const snapshot = observability.snapshot!;
-  const promptContext = snapshot.promptContext as Record<string, unknown>;
+  const promptContext = toRecordView(snapshot.promptContext!);
   const providerObservability = promptContext.providerObservability as Record<string, unknown>;
   return {
     ...record,
@@ -295,13 +296,13 @@ function withCapturedWirePayload(record: TurnRecord, captured: Record<string, un
       ...observability,
       snapshot: {
         ...snapshot,
-        promptContext: {
+        promptContext: restoreSnapshotSection({
           ...promptContext,
           providerObservability: {
             ...providerObservability,
             capturedWirePayload: captured,
           },
-        } as unknown as NonNullable<typeof snapshot.promptContext>,
+        }),
       },
     },
   };
@@ -364,7 +365,7 @@ export function resolveTurnRecordWirePayload(
 function readSnapshotPrompt(record: TurnRecord): Record<string, unknown> | undefined {
   const snapshot = record.observability?.snapshot;
   if (!snapshot || !isRecord(snapshot.prompt)) return undefined;
-  return snapshot.prompt as unknown as Record<string, unknown>;
+  return snapshot.prompt;
 }
 
 function withSnapshotPrompt(record: TurnRecord, prompt: Record<string, unknown>): TurnRecord {
@@ -376,7 +377,7 @@ function withSnapshotPrompt(record: TurnRecord, prompt: Record<string, unknown>)
       ...observability,
       snapshot: {
         ...snapshot,
-        prompt: prompt as unknown as NonNullable<typeof snapshot.prompt>,
+        prompt: restoreSnapshotSection(prompt),
       },
     },
   };

@@ -62,6 +62,18 @@ export interface PassiveNameCandidateSettings {
    * source message" across redeliveries without unbounded memory growth.
    */
   dedupeHistoryPerChannel: number;
+  /**
+   * Name-spam debounce window in milliseconds (bible §8.1, adjudication S7.3).
+   * Once a name-triggered candidate is emitted in a channel, further
+   * name-triggers in that same channel are suppressed (`debounced`) until this
+   * window expires: "repeated name-triggering (one user or several
+   * coordinating) yields at most one optional response, then a ~10-minute
+   * ignore window." Deterministic and pre-model; the window is per-channel so
+   * coordinating spammers across accounts collapse to a single appraisal chain,
+   * and spam in one room never silences another. A non-positive value disables
+   * debounce entirely (every non-duplicate name-trigger creates a candidate).
+   */
+  debounceWindowMs: number;
 }
 
 export function createDefaultPassiveNameCandidateSettings(): PassiveNameCandidateSettings {
@@ -72,6 +84,7 @@ export function createDefaultPassiveNameCandidateSettings(): PassiveNameCandidat
     precedingContextMessages: 6,
     stalenessMs: 5 * 60 * 1000,
     dedupeHistoryPerChannel: 256,
+    debounceWindowMs: 10 * 60 * 1000,
   };
 }
 

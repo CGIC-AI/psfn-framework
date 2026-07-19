@@ -28,9 +28,16 @@ import type {
  * `ObservedGroupMemoryScheduler.classifyChannelMemoryScope` classifier via the
  * `NearTurnMemoryScopeClassifierPort` seam.
  *
- * Out of scope here (see sibling beads): the ~10-minute name-spam debounce
- * window (jp36.3.2.2), the cheap appraiser (jp36.3.3), and the speaking arbiter
- * (jp36.5). This gate only decides whether a candidate exists.
+ * Name-spam debounce (jp36.3.2.2, bible §8.1 / adjudication S7.3): once a
+ * name-triggered candidate is emitted in a channel, further name-triggers in
+ * that same channel are suppressed with reason `debounced` until the per-channel
+ * window (`debounceWindowMs`, default ~10 minutes) expires. Repeated
+ * name-triggering — one sender or several coordinating — therefore collapses to
+ * at most one appraisal chain per room per window, deterministically and
+ * pre-model. The window is per-channel: spam in one room never silences another.
+ *
+ * Out of scope here (see sibling beads): the cheap appraiser (jp36.3.3) and the
+ * speaking arbiter (jp36.5). This gate only decides whether a candidate exists.
  */
 
 /** Preceding-context source: reuses the session store's `getRecent`. */
@@ -56,6 +63,12 @@ const ICP_CHANNEL_TYPE = 'companion';
 interface ChannelDedupeState {
   order: string[];
   seen: Set<string>;
+  /**
+   * Exclusive expiry (`nowMs`-scale) of the active name-spam debounce window;
+   * `0` when no window is open. A name-trigger observed while `nowMs() <
+   * debounceUntilMs` is suppressed as `debounced`.
+   */
+  debounceUntilMs: number;
 }
 
 export class PassiveNameCandidateBuilder {
@@ -139,7 +152,19 @@ export class PassiveNameCandidateBuilder {
     if (this.hasSeen(message.channelId, message.id)) {
       return this.suppress(message, 'duplicate', trigger);
     }
+
+    // 9. Name-spam debounce window (§8.1 / adjudication S7.3). A candidate
+    // emitted earlier in this channel opens a per-channel ignore window; every
+    // distinct name-trigger landing inside it collapses to `debounced`, so
+    // repeated summoning — one sender or several coordinating — yields at most
+    // one appraisal chain per room per window. Deterministic and pre-model.
+    const now = this.nowMs();
+    if (this.isDebounced(message.channelId, now)) {
+      return this.suppress(message, 'debounced', trigger);
+    }
+
     this.markSeen(message.channelId, message.id);
+    this.openDebounceWindow(message.channelId, now);
 
     const precedingContext = await this.loadPrecedingContext(message, triggerTimestampMs);
     const candidate: ParticipationCandidate = {
@@ -155,7 +180,7 @@ export class PassiveNameCandidateBuilder {
       matchedName: match.mentioned,
       matchedDirectAddress: match.directAddress,
       precedingContext,
-      createdAtMs: this.nowMs(),
+      createdAtMs: now,
     };
     return { status: 'created', candidate };
   }
@@ -179,16 +204,45 @@ export class PassiveNameCandidateBuilder {
       ?? this.settings.defaultAutonomyLevel;
   }
 
+  private getOrCreateState(channelId: string): ChannelDedupeState {
+    let state = this.dedupeByChannel.get(channelId);
+    if (!state) {
+      state = { order: [], seen: new Set(), debounceUntilMs: 0 };
+      this.dedupeByChannel.set(channelId, state);
+    }
+    return state;
+  }
+
   private hasSeen(channelId: string, sourceMessageId: string): boolean {
     return this.dedupeByChannel.get(channelId)?.seen.has(sourceMessageId) ?? false;
   }
 
-  private markSeen(channelId: string, sourceMessageId: string): void {
-    let state = this.dedupeByChannel.get(channelId);
-    if (!state) {
-      state = { order: [], seen: new Set() };
-      this.dedupeByChannel.set(channelId, state);
+  /**
+   * Whether an open name-spam debounce window is currently suppressing this
+   * channel. Per-channel (isolated across rooms); `nowMs` is passed in so a
+   * single build pass evaluates the window and stamps the candidate against one
+   * clock reading.
+   */
+  private isDebounced(channelId: string, nowMs: number): boolean {
+    const until = this.dedupeByChannel.get(channelId)?.debounceUntilMs ?? 0;
+    return until > 0 && nowMs < until;
+  }
+
+  /**
+   * Open (or refresh) the per-channel debounce window on candidate emission. A
+   * non-positive `debounceWindowMs` disables debounce: no window is opened, so
+   * every non-duplicate name-trigger keeps creating candidates.
+   */
+  private openDebounceWindow(channelId: string, nowMs: number): void {
+    const windowMs = this.settings.debounceWindowMs;
+    if (windowMs <= 0) {
+      return;
     }
+    this.getOrCreateState(channelId).debounceUntilMs = nowMs + windowMs;
+  }
+
+  private markSeen(channelId: string, sourceMessageId: string): void {
+    const state = this.getOrCreateState(channelId);
     if (state.seen.has(sourceMessageId)) {
       return;
     }

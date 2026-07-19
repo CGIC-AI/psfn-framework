@@ -59,6 +59,7 @@ export const PARTICIPATION_SUPPRESSION_REASONS = [
   'autonomy_disabled',
   'stale',
   'duplicate',
+  'debounced',
 ] as const;
 
 export type ParticipationSuppressionReason =
@@ -71,6 +72,6 @@ export type PassiveNameCandidateDecision =
     reason: ParticipationSuppressionReason;
     channelId: string;
     sourceMessageId: string;
-    /** Present once a name match has been classified (autonomy/stale/duplicate). */
+    /** Present once a name match has been classified (autonomy/stale/duplicate/debounced). */
     trigger?: ParticipationCandidateTrigger;
   };

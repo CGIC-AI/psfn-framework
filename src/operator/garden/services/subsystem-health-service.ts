@@ -191,7 +191,8 @@ const GATE_EVENT_LANES: ReadonlyArray<{
     | 'memory.sleep_consolidation.refinement_gate'
     | 'memory.sleeptime_wiki.gate'
     | 'emotion.appraisal.gate'
-    | 'intention.concern_candidate.gate';
+    | 'intention.concern_candidate.gate'
+    | 'scheduler.free_time.gate';
   readonly lane: string;
 }> = [
   { event: 'memory.orientation_rewrite.gate', lane: 'orientation_rewrite' },

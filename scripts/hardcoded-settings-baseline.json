@@ -1852,11 +1852,6 @@
     },
     {
       "file": "src/core/intention/care-reminders.ts",
-      "name": "MAX_LIST_LIMIT",
-      "value": "200"
-    },
-    {
-      "file": "src/core/intention/care-reminders.ts",
       "name": "MAX_TEXT_CHARS",
       "value": "500"
     },
@@ -1951,7 +1946,7 @@
       "value": "500"
     },
     {
-      "file": "src/core/intention/concerns.ts",
+      "file": "src/core/intention/list-limit.ts",
       "name": "MAX_LIST_LIMIT",
       "value": "200"
     },
@@ -1967,13 +1962,13 @@
     },
     {
       "file": "src/core/intention/patterns.ts",
-      "name": "MAX_CONTACT_ID_CHARS",
-      "value": "160"
+      "name": "MAX_BEHAVIORAL_LIST_LIMIT",
+      "value": "500"
     },
     {
       "file": "src/core/intention/patterns.ts",
-      "name": "MAX_LIST_LIMIT",
-      "value": "500"
+      "name": "MAX_CONTACT_ID_CHARS",
+      "value": "160"
     },
     {
       "file": "src/core/intention/patterns.ts",
@@ -2014,11 +2009,6 @@
       "file": "src/core/intention/pending-follow-ups.ts",
       "name": "MAX_ID_CHARS",
       "value": "128"
-    },
-    {
-      "file": "src/core/intention/pending-follow-ups.ts",
-      "name": "MAX_LIST_LIMIT",
-      "value": "200"
     },
     {
       "file": "src/core/intention/pending-follow-ups.ts",
@@ -2119,11 +2109,6 @@
       "file": "src/core/intention/postgres-adapters/shared.ts",
       "name": "MAX_CONTACT_ID_CHARS",
       "value": "160"
-    },
-    {
-      "file": "src/core/intention/postgres-adapters/shared.ts",
-      "name": "MAX_LIST_LIMIT",
-      "value": "200"
     },
     {
       "file": "src/core/intention/postgres-adapters/shared.ts",
@@ -4177,7 +4162,7 @@
     },
     {
       "file": "src/shared/routing/companion-id.ts",
-      "name": "COMPANION_ID_MAX_LENGTH",
+      "name": "SHARD_ID_MAX_LENGTH",
       "value": "128"
     },
     {

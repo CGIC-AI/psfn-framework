@@ -242,36 +242,36 @@ describe('registerLLMMethods', () => {
     const harness = createHarness();
 
     await harness.invoke('llm.chat', {
-      model: 'openrouter:z-ai/glm-5',
-      provider: 'openrouter',
-      pin: true,
+      model: '  z-ai/glm-5  ',
+      provider: '  OpenRouter  ',
+      pin: false,
       messages: [{ role: 'user', content: 'hello' }],
       systemPrompt: 'system',
-      maxTokens: 321,
-      contextWindow: 99999,
-      thinkingEnabled: true,
-      thinkingEffort: 'high',
+      maxTokens: 321.9,
+      contextWindow: 120_000.8,
+      thinkingEnabled: false,
+      thinkingEffort: 'xhigh',
       temperature: 0.33,
       topP: 0.77,
-      topK: 42,
-      frequencyPenalty: 0.12,
+      topK: 42.7,
+      frequencyPenalty: -0.12,
       repetitionPenalty: 1.03,
     });
 
     expect(harness.stream).toHaveBeenCalledTimes(1);
     const firstCall = harness.stream.mock.calls[0][0];
     expect(firstCall.modelHint).toEqual({
-      model: 'openrouter:z-ai/glm-5',
+      model: 'z-ai/glm-5',
       provider: 'openrouter',
-      pin: true,
+      pin: false,
       maxTokens: 321,
-      contextWindow: 99999,
-      thinkingEnabled: true,
-      thinkingEffort: 'high',
+      contextWindow: 120_000,
+      thinkingEnabled: false,
+      thinkingEffort: 'xhigh',
       temperature: 0.33,
       topP: 0.77,
       topK: 42,
-      frequencyPenalty: 0.12,
+      frequencyPenalty: -0.12,
       repetitionPenalty: 1.03,
     });
   });

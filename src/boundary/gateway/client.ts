@@ -203,6 +203,10 @@ import {
 } from './session-integrity-worker-source.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { GatewayInlineImageReferenceHints } from './inline-image-reference-hints.js';
+import {
+  normalizeModelHint,
+  OPTIONAL_MODEL_HINT_NORMALIZATION,
+} from '../../primitives/llm/model-hint-routing.js';
 import { parseModelBudgetBlockedEvent } from '../../shared/contracts/model-budget.js';
 import { parseIcpConversationCostBreakerEvent } from '../../shared/contracts/icp-conversation-cost.js';
 import { IcpConversationCostBreakerError } from '../../primitives/llm/icp-conversation-cost-breaker.js';
@@ -630,7 +634,7 @@ export class GatewayClient implements
       callType,
       purpose,
     });
-    const modelHint = normalizeGatewayModelHint(context.modelHint);
+    const modelHint = normalizeModelHint(context.modelHint, OPTIONAL_MODEL_HINT_NORMALIZATION);
     const hintedModel = normalizeCorrelationText(modelHint?.model);
     const hintedProvider = normalizeCorrelationText(modelHint?.provider);
     const qualifiedHint = hintedModel ? parseProviderQualifiedModel(hintedModel) : null;
@@ -2301,95 +2305,17 @@ function parseProviderQualifiedModel(value: string): { provider: string; model: 
   return { provider, model };
 }
 
-function normalizeGatewayModelHint(modelHint: LLMModelHint | undefined): LLMModelHint | undefined {
-  if (!modelHint) return undefined;
-  const model = normalizeCorrelationText(modelHint.model);
-  const provider = normalizeCorrelationText(modelHint.provider)?.toLowerCase();
-  const pin = typeof modelHint.pin === 'boolean' ? modelHint.pin : undefined;
-  const maxTokens = toPositiveInteger(modelHint.maxTokens);
-  const contextWindow = toPositiveInteger(modelHint.contextWindow);
-  const thinkingEnabled = typeof modelHint.thinkingEnabled === 'boolean'
-    ? modelHint.thinkingEnabled
-    : undefined;
-  const thinkingEffort = toThinkingEffort(modelHint.thinkingEffort);
-  const temperature = toFiniteNumber(modelHint.temperature);
-  const topP = toUnitInterval(modelHint.topP);
-  const topK = toPositiveInteger(modelHint.topK);
-  const frequencyPenalty = toFiniteNumber(modelHint.frequencyPenalty);
-  const repetitionPenalty = toFiniteNumber(modelHint.repetitionPenalty);
-  if (
-    !model
-    && !provider
-    && pin === undefined
-    && maxTokens === undefined
-    && contextWindow === undefined
-    && thinkingEnabled === undefined
-    && thinkingEffort === undefined
-    && temperature === undefined
-    && topP === undefined
-    && topK === undefined
-    && frequencyPenalty === undefined
-    && repetitionPenalty === undefined
-  ) {
-    return undefined;
-  }
-  return {
-    ...(model ? { model } : {}),
-    ...(provider ? { provider } : {}),
-    ...(pin !== undefined ? { pin } : {}),
-    ...(maxTokens !== undefined ? { maxTokens } : {}),
-    ...(contextWindow !== undefined ? { contextWindow } : {}),
-    ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
-    ...(thinkingEffort !== undefined ? { thinkingEffort } : {}),
-    ...(temperature !== undefined ? { temperature } : {}),
-    ...(topP !== undefined ? { topP } : {}),
-    ...(topK !== undefined ? { topK } : {}),
-    ...(frequencyPenalty !== undefined ? { frequencyPenalty } : {}),
-    ...(repetitionPenalty !== undefined ? { repetitionPenalty } : {}),
-  };
-}
-
 function mergeGatewayModelHints(
   contextHint: LLMModelHint | undefined,
   optionHint: LLMModelHint | undefined,
 ): LLMModelHint | undefined {
-  const normalizedContext = normalizeGatewayModelHint(contextHint);
-  const normalizedOption = normalizeGatewayModelHint(optionHint);
+  const normalizedContext = normalizeModelHint(contextHint, OPTIONAL_MODEL_HINT_NORMALIZATION);
+  const normalizedOption = normalizeModelHint(optionHint, OPTIONAL_MODEL_HINT_NORMALIZATION);
   if (!normalizedContext && !normalizedOption) return undefined;
   return {
     ...(normalizedContext ?? {}),
     ...(normalizedOption ?? {}),
   };
-}
-
-function toFiniteNumber(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
-  return value;
-}
-
-function toPositiveInteger(value: unknown): number | undefined {
-  const numeric = toFiniteNumber(value);
-  if (numeric === undefined || numeric <= 0) return undefined;
-  return Math.floor(numeric);
-}
-
-function toUnitInterval(value: unknown): number | undefined {
-  const numeric = toFiniteNumber(value);
-  if (numeric === undefined || numeric < 0 || numeric > 1) return undefined;
-  return numeric;
-}
-
-function toThinkingEffort(value: unknown): LLMModelHint['thinkingEffort'] | undefined {
-  switch (value) {
-    case 'minimal':
-    case 'low':
-    case 'medium':
-    case 'high':
-    case 'xhigh':
-      return value;
-    default:
-      return undefined;
-  }
 }
 
 function createAbortError(reason?: unknown): Error {

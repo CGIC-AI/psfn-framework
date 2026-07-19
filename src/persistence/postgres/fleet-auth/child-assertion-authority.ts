@@ -9,6 +9,7 @@ import type { FleetAuthConfig, FleetAuthRole } from '../../../system/config/flee
 import { FLEET_AUTH_LOCK_AUTHORITY_STATE_FUNCTION_NAME } from './authority-state-lock-sql.js';
 import { FLEET_AUTH_LOCK_COMPANION_AUTHORITY_FUNCTION_NAME } from './companion-authority-lock-sql.js';
 import { FLEET_AUTH_FLOOR_RESOURCE_TOMBSTONED_FUNCTION_NAME } from './authority-floor-read-sql.js';
+import { positiveInteger } from './row-utils.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 import type { ProviderRevocationAuthorityPort } from './provider-revocation-authority.js';
 
@@ -30,11 +31,6 @@ interface CurrentGrantRow {
   provider_count: string;
   binding_count: string;
   grant_count: string;
-}
-
-function positiveInteger(value: string): number | undefined {
-  const parsed = Number(value);
-  return Number.isSafeInteger(parsed) && parsed >= 1 ? parsed : undefined;
 }
 
 function digest(value: string): string {

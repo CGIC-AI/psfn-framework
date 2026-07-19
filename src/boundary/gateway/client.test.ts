@@ -685,16 +685,24 @@ describe('GatewayClient streaming', () => {
     });
   });
 
-  it('preserves pin hints on llm.chat RPC requests', async () => {
+  it('normalizes all 12 model-hint fields on llm.chat RPC requests', async () => {
     void client.stream(
       {
         systemPrompt: 'test',
         messages: [{ role: 'user', content: 'hi' }],
         modelHint: {
-          model: 'openrouter/deepseek/deepseek-v3.2',
-          provider: 'openrouter',
-          pin: true,
-          maxTokens: 128,
+          model: '  z-ai/glm-5  ',
+          provider: '  OpenRouter  ',
+          pin: false,
+          maxTokens: 321.9,
+          contextWindow: 120_000.8,
+          thinkingEnabled: false,
+          thinkingEffort: 'xhigh',
+          temperature: 0.33,
+          topP: 0.77,
+          topK: 42.7,
+          frequencyPenalty: -0.12,
+          repetitionPenalty: 1.03,
         },
       },
       { onText: () => {} },
@@ -702,10 +710,18 @@ describe('GatewayClient streaming', () => {
 
     const req = conn.sent[0] as { params: Record<string, unknown> };
     expect(req.params).toMatchObject({
-      model: 'openrouter/deepseek/deepseek-v3.2',
+      model: 'z-ai/glm-5',
       provider: 'openrouter',
-      pin: true,
-      maxTokens: 128,
+      pin: false,
+      maxTokens: 321,
+      contextWindow: 120_000,
+      thinkingEnabled: false,
+      thinkingEffort: 'xhigh',
+      temperature: 0.33,
+      topP: 0.77,
+      topK: 42,
+      frequencyPenalty: -0.12,
+      repetitionPenalty: 1.03,
     });
   });
 

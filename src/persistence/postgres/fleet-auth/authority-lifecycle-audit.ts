@@ -9,6 +9,7 @@ import type {
 } from './authority-lifecycle-types.js';
 import { FLEET_AUTH_SCHEMA_NAME } from './schema.js';
 import { fleetAuthLifecycleDecisionFingerprint } from './authority-lifecycle-fingerprint.js';
+import { createPositiveIntegerCoercer } from './row-utils.js';
 import { toRecordView } from '../../../shared/utils/types.js';
 
 /**
@@ -25,6 +26,7 @@ export const FLEET_AUTH_LIFECYCLE_AUDIT_DIGEST_DOMAIN =
   'fleet-authorization:lifecycle-audit-digest:v1\0';
 
 export type FleetAuthLifecycleAuditDigest = (value: string) => string;
+const positiveInteger = createPositiveIntegerCoercer('lifecycle-audit');
 
 /** Build the keyed lifecycle-audit digester; fail closed on a missing pepper. */
 export function createFleetAuthLifecycleAuditDigest(
@@ -57,14 +59,6 @@ export function createFleetAuthLifecycleAuditDigest(
  */
 function structuralDigest(value: string): string {
   return createHash('sha256').update(value).digest('hex');
-}
-
-function positiveInteger(value: string, field: string): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
-    throw new Error(`Invalid fleet_auth lifecycle audit ${field}`);
-  }
-  return parsed;
 }
 
 function redactedClaim(claim: PrincipalAuthorityClaim): Record<string, unknown> {

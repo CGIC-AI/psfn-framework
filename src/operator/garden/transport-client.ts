@@ -54,6 +54,10 @@ interface TransportProbePayload {
   error?: unknown;
 }
 
+interface ProxyTimeoutRef {
+  value: boolean;
+}
+
 interface TlsRequestOptions {
   ca: Buffer;
   cert: Buffer;
@@ -387,7 +391,6 @@ export class GardenAdminTransportProxy {
   }
 
   proxyApiRequest(req: IncomingMessage, res: ServerResponse): void {
-    let timedOut = false;
     const requestPath = req.url ?? '/';
     const proxyRequest = this.createRequest(
       requestPath,
@@ -407,34 +410,7 @@ export class GardenAdminTransportProxy {
         });
       },
     );
-
-    proxyRequest.setTimeout(this.endpoint.timeoutMs, () => {
-      timedOut = true;
-      proxyRequest.destroy(new Error(`Timed out after ${this.endpoint.timeoutMs}ms`));
-    });
-
-    proxyRequest.on('error', (error) => {
-      log.warn('Garden admin proxy request failed', {
-        path: requestPath,
-        error: String(error),
-      });
-      if (res.writableEnded || res.destroyed) return;
-      if (res.headersSent) {
-        res.destroy(error);
-        return;
-      }
-      sendText(
-        res,
-        502,
-        timedOut
-          ? 'Bad Gateway: admin transport timed out'
-          : 'Bad Gateway: admin transport unavailable',
-      );
-    });
-
-    req.on('aborted', () => {
-      proxyRequest.destroy(new Error('Client request aborted'));
-    });
+    this.attachProxyStreamHandlers(proxyRequest, req, res, requestPath);
 
     req.pipe(proxyRequest);
   }
@@ -454,7 +430,6 @@ export class GardenAdminTransportProxy {
     requestPath = req.url ?? '/',
     unavailableStatus: 502 | 503 = 502,
   ): void {
-    let timedOut = false;
     const headers = buildProxyHeaders(req.headers, trustedAuthorityHeaders);
     delete headers['transfer-encoding'];
     headers['content-length'] = String(body.byteLength);
@@ -476,34 +451,7 @@ export class GardenAdminTransportProxy {
         });
       },
     );
-
-    proxyRequest.setTimeout(this.endpoint.timeoutMs, () => {
-      timedOut = true;
-      proxyRequest.destroy(new Error(`Timed out after ${this.endpoint.timeoutMs}ms`));
-    });
-
-    proxyRequest.on('error', (error) => {
-      log.warn('Garden admin proxy request failed', {
-        path: requestPath,
-        error: String(error),
-      });
-      if (res.writableEnded || res.destroyed) return;
-      if (res.headersSent) {
-        res.destroy(error);
-        return;
-      }
-      sendText(
-        res,
-        unavailableStatus,
-        timedOut
-          ? `${unavailableStatus === 503 ? 'Service Unavailable' : 'Bad Gateway'}: admin transport timed out`
-          : `${unavailableStatus === 503 ? 'Service Unavailable' : 'Bad Gateway'}: admin transport unavailable`,
-      );
-    });
-
-    req.on('aborted', () => {
-      proxyRequest.destroy(new Error('Client request aborted'));
-    });
+    this.attachProxyStreamHandlers(proxyRequest, req, res, requestPath, unavailableStatus);
 
     proxyRequest.end(body);
   }
@@ -557,6 +505,43 @@ export class GardenAdminTransportProxy {
     upstreamSocket.once('close', (code, reason) => {
       failBeforeUpgrade(`Upstream websocket closed before upgrade: ${code} ${reason.toString()}`);
     });
+  }
+
+  private attachProxyStreamHandlers(
+    proxyRequest: ClientRequest,
+    req: IncomingMessage,
+    res: ServerResponse,
+    requestPath: string,
+    unavailableStatus: 502 | 503 = 502,
+  ): ProxyTimeoutRef {
+    const timedOut: ProxyTimeoutRef = { value: false };
+    proxyRequest.setTimeout(this.endpoint.timeoutMs, () => {
+      timedOut.value = true;
+      proxyRequest.destroy(new Error(`Timed out after ${this.endpoint.timeoutMs}ms`));
+    });
+    proxyRequest.on('error', (error) => {
+      log.warn('Garden admin proxy request failed', {
+        path: requestPath,
+        error: String(error),
+      });
+      if (res.writableEnded || res.destroyed) return;
+      if (res.headersSent) {
+        res.destroy(error);
+        return;
+      }
+      const statusLabel = unavailableStatus === 503 ? 'Service Unavailable' : 'Bad Gateway';
+      sendText(
+        res,
+        unavailableStatus,
+        timedOut.value
+          ? `${statusLabel}: admin transport timed out`
+          : `${statusLabel}: admin transport unavailable`,
+      );
+    });
+    req.on('aborted', () => {
+      proxyRequest.destroy(new Error('Client request aborted'));
+    });
+    return timedOut;
   }
 
   private createRequest(

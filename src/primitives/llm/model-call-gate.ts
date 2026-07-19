@@ -7,6 +7,7 @@ import {
   RUNTIME_LANE_CLASSES,
   type RuntimeLaneClass,
 } from '../../shared/contracts/runtime-lanes.js';
+import { abortError } from '../../shared/utils/errors.js';
 
 /**
  * Per-resource admission capacity. `capacity` is the total number of concurrent
@@ -219,7 +220,7 @@ export class ModelCallGate {
     signal?: AbortSignal;
   }): Promise<AcquiredSlot> {
     if (request.signal?.aborted) {
-      throw createAbortError();
+      throw abortError(undefined, 'LLM call aborted while waiting for a constrained model resource');
     }
 
     const resourceKey = request.resourceKey;
@@ -268,7 +269,7 @@ export class ModelCallGate {
               this.deleteQueueIfIdle(resourceKey, nextQueue);
             }
           }
-          reject(createAbortError());
+          reject(abortError(undefined, 'LLM call aborted while waiting for a constrained model resource'));
         };
         request.signal.addEventListener('abort', onAbort, { once: true });
         pending.cleanup = () => request.signal?.removeEventListener('abort', onAbort);
@@ -456,10 +457,4 @@ function clampReservation(reserved: number, capacity: number): number {
   }
   // Never reserve the whole endpoint away from non-foreground work.
   return Math.min(reserved, Math.max(0, capacity - 1));
-}
-
-function createAbortError(): Error {
-  const error = new Error('LLM call aborted while waiting for a constrained model resource');
-  error.name = 'AbortError';
-  return error;
 }

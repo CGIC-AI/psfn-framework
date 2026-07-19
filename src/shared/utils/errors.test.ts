@@ -1,0 +1,40 @@
+import { describe, expect, it } from 'vitest';
+import { abortError, toError, toErrorMessage } from './errors.js';
+
+describe('error helpers', () => {
+  it('preserves Error instances and normalizes non-Error values', () => {
+    const existing = new TypeError('typed failure');
+
+    expect(toError(existing)).toBe(existing);
+    expect(toError('plain failure')).toEqual(new Error('plain failure'));
+    expect(toErrorMessage(existing)).toBe('typed failure');
+    expect(toErrorMessage(42)).toBe('42');
+  });
+
+  it('creates AbortError instances from messages and preserves Error reasons', () => {
+    const created = abortError('request cancelled');
+    expect(created).toMatchObject({
+      name: 'AbortError',
+      message: 'request cancelled',
+    });
+
+    const reason = new Error('upstream cancelled');
+    reason.name = '';
+    expect(abortError(reason)).toBe(reason);
+    expect(reason.name).toBe('AbortError');
+  });
+
+  it('uses the caller fallback for empty abort reasons', () => {
+    expect(abortError(undefined, 'model call cancelled')).toMatchObject({
+      name: 'AbortError',
+      message: 'model call cancelled',
+    });
+  });
+
+  it('can preserve an explicitly empty provider cancellation message', () => {
+    expect(abortError('', 'Request aborted', true)).toMatchObject({
+      name: 'AbortError',
+      message: '',
+    });
+  });
+});

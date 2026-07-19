@@ -24,6 +24,7 @@ import {
   createWebSocketRpcClient,
 } from './transport.js';
 import { createComponentLogger } from '../../shared/logger.js';
+import { abortError } from '../../shared/utils/errors.js';
 import { getActiveCanaryToken, CANARY_CARRIER_PARAM_KEY } from '../../core/cogsec/canary/canary-token.js';
 import { isEgressCanaryMethod } from '../../core/cogsec/canary/egress-scan.js';
 import { BoundedQueue, QueueOverflowError, type QueueOverflowPolicy } from './backpressure.js';
@@ -1597,7 +1598,7 @@ export class GatewayClient implements
     }
 
     if (signal.aborted) {
-      throw createAbortError(signal.reason);
+      throw abortError(signal.reason);
     }
 
     return await new Promise<T>((resolve, reject) => {
@@ -1615,7 +1616,7 @@ export class GatewayClient implements
       };
 
       const onAbort = () => {
-        finalize('reject', createAbortError(signal.reason));
+        finalize('reject', abortError(signal.reason));
       };
 
       signal.addEventListener('abort', onAbort, { once: true });
@@ -2316,17 +2317,4 @@ function mergeGatewayModelHints(
     ...(normalizedContext ?? {}),
     ...(normalizedOption ?? {}),
   };
-}
-
-function createAbortError(reason?: unknown): Error {
-  if (reason instanceof Error) {
-    reason.name = reason.name || 'AbortError';
-    return reason;
-  }
-  const message = typeof reason === 'string' && reason.trim().length > 0
-    ? reason
-    : 'Request aborted';
-  const error = new Error(message);
-  error.name = 'AbortError';
-  return error;
 }

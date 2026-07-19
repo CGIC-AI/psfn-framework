@@ -2,6 +2,7 @@ import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.
 import { createComponentLogger } from '../../shared/logger.js';
 import { channelsShareActiveSessionThread } from '../session/cross-channel-continuity-port.js';
 import { normalizeOptionalIcpRootInitiationId } from './pending-follow-up-normalization.js';
+import { clampListLimit as clampIntentionListLimit } from './list-limit.js';
 import type { PendingFollowUpQuarantineRecord } from './pending-follow-up-store-port.js';
 import type {
   PendingFollowUp,
@@ -122,7 +123,7 @@ export const MAX_REASON_CHARS = 240;
 const MAX_QUARANTINE_REASON_CHARS = 1000;
 export const MAX_QUARANTINE_SOURCE_CHARS = 128;
 const DEFAULT_LIST_LIMIT = 32;
-export const MAX_LIST_LIMIT = 200;
+export { MAX_LIST_LIMIT } from './list-limit.js';
 const NEGATIVE_MOOD_WAKE_THRESHOLD = -0.2;
 export const PENDING_FOLLOW_UPS_TABLE = 'intention_pending_follow_ups';
 export const PENDING_FOLLOW_UP_QUARANTINE_TABLE = 'intention_pending_follow_up_quarantine';
@@ -254,12 +255,7 @@ export function encodeWakeConditions(
 }
 
 export function clampListLimit(limit: number | undefined): number {
-  if (limit === undefined || !Number.isFinite(limit)) {
-    return DEFAULT_LIST_LIMIT;
-  }
-  const floored = Math.floor(limit);
-  if (floored < 1) return 1;
-  return Math.min(floored, MAX_LIST_LIMIT);
+  return clampIntentionListLimit(limit, DEFAULT_LIST_LIMIT);
 }
 
 export function normalizeBacklogCap(value: number | undefined): number {

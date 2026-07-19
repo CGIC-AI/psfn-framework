@@ -11,6 +11,7 @@ import {
 } from '../concerns.js';
 import { normalizeOptionalIcpRootInitiationId } from '../pending-follow-up-normalization.js';
 import { CHANNEL_TYPES as RUNTIME_CHANNEL_TYPES, type ChannelType } from '../../../shared/contracts/runtime.js';
+export { clampListLimit, MAX_LIST_LIMIT } from '../list-limit.js';
 
 export interface ActiveConcernRow {
   id: string;
@@ -118,7 +119,6 @@ export const MAX_RESPONSE_EXCERPT_CHARS = 240;
 export const MAX_PROMOTION_MEMORY_ID_CHARS = 128;
 export const DEFAULT_CONCERN_LIST_LIMIT = 32;
 export const DEFAULT_PENDING_LIST_LIMIT = 32;
-export const MAX_LIST_LIMIT = 200;
 export const DEFAULT_RECENT_RESOLUTION_WINDOW_MS = 6 * 60 * 60 * 1000;
 export const DEFAULT_RECENT_RESOLUTION_LIMIT = 8;
 export const DEFAULT_BEHAVIORAL_LIST_LIMIT = 50;
@@ -291,13 +291,6 @@ export function normalizeOutcomeScore(value: number): number {
     throw new Error(`Behavioral pattern outcome must be finite, received ${String(value)}`);
   }
   return Math.max(-1, Math.min(1, value));
-}
-
-export function clampListLimit(limit: number | undefined, fallback: number): number {
-  if (limit === undefined || !Number.isFinite(limit)) return fallback;
-  const floored = Math.floor(limit);
-  if (floored < 1) return 1;
-  return Math.min(floored, MAX_LIST_LIMIT);
 }
 
 export function clampSummaryLimit(limit: number | undefined): number {

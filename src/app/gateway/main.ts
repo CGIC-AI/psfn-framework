@@ -35,7 +35,11 @@ import {
 import { createGatewayVoiceSurfaces } from '../../boundary/gateway/voice-surfaces.js';
 import { resolveStartupPreflightBundle } from '../startup/support/startup-preflight.js';
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
-import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../startup/support/signal-shutdown.js';
+import {
+  createSignalShutdownHandler,
+  installSignalHandlers,
+  registerProcessErrorHandlers,
+} from '../startup/support/signal-shutdown.js';
 import { resolveGatewayApiSurfaceBindings, startOptionalGatewayApiServer } from './api-surface.js';
 import { loadSatelliteRegistryConfig } from '../../channels/backplane/satellite-registry.js';
 import { assertSatellitePlaceBindings, loadPlacesRegistryConfig } from '../../channels/backplane/places-registry.js';
@@ -679,18 +683,7 @@ async function main(): Promise<void> {
     forceExitTimeoutMs: bootstrap.shutdownForceExitTimeoutMs,
   });
 
-  process.on('SIGINT', () => {
-    void shutdown('SIGINT').catch((error) => {
-      log.error('Unhandled SIGINT shutdown error', { error: String(error) });
-      process.exit(1);
-    });
-  });
-  process.on('SIGTERM', () => {
-    void shutdown('SIGTERM').catch((error) => {
-      log.error('Unhandled SIGTERM shutdown error', { error: String(error) });
-      process.exit(1);
-    });
-  });
+  installSignalHandlers(shutdown, log);
 
   registerProcessErrorHandlers({
     logger: log,

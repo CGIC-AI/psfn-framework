@@ -11,6 +11,8 @@ import type {
   CogSecLineagePreview,
 } from './lineage.js';
 import type { MemoryStorePort } from '../../faculties/memory/memory-store-port.js';
+import { uniqueStrings } from '../../shared/utils/strings.js';
+import { mergeArtifactImpact } from './affected-artifacts.js';
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -102,27 +104,6 @@ export interface ApplyCogSecRevocationInput {
   externalArtifactInvalidator?: CogSecExternalArtifactInvalidator;
   actor?: string;
   now?: () => number;
-}
-
-function uniqueStrings(values: readonly string[]): string[] {
-  return [...new Set(values.map(value => value.trim()).filter(Boolean))];
-}
-
-function mergeArtifactImpact(
-  artifacts: CogSecAffectedArtifacts,
-  artifactClass: CogSecArtifactClass,
-  ids: readonly string[],
-  count: number,
-): void {
-  const existing = artifacts[artifactClass];
-  const mergedIds = uniqueStrings([
-    ...(existing?.ids ?? []),
-    ...ids,
-  ]);
-  artifacts[artifactClass] = {
-    ids: mergedIds,
-    count: Math.max(existing?.count ?? 0, mergedIds.length, count),
-  };
 }
 
 function failure(

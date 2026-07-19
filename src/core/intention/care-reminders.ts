@@ -1,4 +1,5 @@
 import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
+import { clampListLimit as clampIntentionListLimit } from './list-limit.js';
 
 import {
   CARE_REMINDER_CLASSIFICATIONS,
@@ -102,7 +103,6 @@ export const MAX_TEXT_CHARS = 500;
 export const MAX_TITLE_CHARS = 160;
 export const MAX_ID_CHARS = 128;
 const DEFAULT_LIST_LIMIT = 64;
-const MAX_LIST_LIMIT = 200;
 
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
@@ -177,12 +177,7 @@ export function normalizeProvenanceSource(value: string): CareReminderProvenance
 }
 
 export function clampListLimit(limit: number | undefined): number {
-  if (limit === undefined || !Number.isFinite(limit)) {
-    return DEFAULT_LIST_LIMIT;
-  }
-  const floored = Math.floor(limit);
-  if (floored < 1) return 1;
-  return Math.min(floored, MAX_LIST_LIMIT);
+  return clampIntentionListLimit(limit, DEFAULT_LIST_LIMIT);
 }
 
 export function compareCareReminders(left: CareReminder, right: CareReminder): number {
@@ -236,4 +231,3 @@ export function advanceYear(isoTimestamp: string, nowIso: string): string {
   }
   return next.toISOString();
 }
-

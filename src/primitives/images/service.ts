@@ -1,6 +1,5 @@
-import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { basename, extname, join } from 'node:path';
+import { join } from 'node:path';
 import { ComfyUiImageClient } from './comfyui.js';
 import { FalImageClient, isFalContentPolicyError, isTransientFalError } from './fal.js';
 import {
@@ -26,6 +25,7 @@ import type {
   ImageResultAsset,
   ImageRuntimeConfig,
 } from './types.js';
+import { buildImageFileName } from './file-naming.js';
 
 const log = createComponentLogger('ImageService');
 const FAL_TRANSIENT_ATTEMPTS = 2;
@@ -77,43 +77,6 @@ function hasWorkflowForMode(
   mode: ImageMode,
 ): boolean {
   return Boolean(config.imageWorkflows?.comfyUi?.[mode]?.workflow);
-}
-
-function inferExtension(url: string, contentType: string | undefined): string {
-  const normalizedType = (contentType ?? '').trim().toLowerCase();
-  if (normalizedType.startsWith('image/png')) return '.png';
-  if (normalizedType.startsWith('image/jpeg')) return '.jpg';
-  if (normalizedType.startsWith('image/webp')) return '.webp';
-  if (normalizedType.startsWith('image/gif')) return '.gif';
-  if (normalizedType.startsWith('image/bmp')) return '.bmp';
-  if (normalizedType.startsWith('image/tiff')) return '.tiff';
-
-  try {
-    const candidate = extname(new URL(url).pathname).trim().toLowerCase();
-    if (candidate) {
-      return candidate;
-    }
-  } catch {
-    // Fall through to default extension.
-  }
-
-  return '.png';
-}
-
-function sanitizeFileStem(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || 'image';
-}
-
-function deriveFileStem(asset: ImageResultAsset, requestId: string | undefined, index: number): string {
-  const fromAsset = asset.fileName?.trim();
-  if (fromAsset) {
-    const name = basename(fromAsset, extname(fromAsset));
-    return sanitizeFileStem(name);
-  }
-  if (requestId) {
-    return sanitizeFileStem(`${requestId}-${index + 1}`);
-  }
-  return `image-${index + 1}`;
 }
 
 function resolveConfiguredCompanionDataDirOrNull(config: ImageRuntimeConfig): string | null {
@@ -522,9 +485,7 @@ export class ImageService implements ImageOperations {
         return asset;
       }
 
-      const extension = inferExtension(asset.url, asset.contentType);
-      const fileStem = deriveFileStem(asset, result.requestId, index);
-      const fileName = `${fileStem}-${randomUUID().slice(0, 8)}${extension}`;
+      const fileName = buildImageFileName(asset, result.requestId, index);
       const localPath = join(storageDir, fileName);
 
       try {

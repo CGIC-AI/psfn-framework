@@ -19,7 +19,9 @@ import type {
 } from './types.js';
 import {
   DASHBOARD_MODEL_USAGE_REFRESH_INTERVAL_MS,
+  mapModelUsageTimeSeriesToDashboardSparkline,
   mapModelUsageTotalsToDashboardUsage,
+  resolveDashboardCostWindowBucket,
   resolveDashboardCostWindowRange,
 } from './dashboard-cost-windows.js';
 import { createComponentLogger } from '../../../shared/logger.js';
@@ -27,6 +29,7 @@ import { TurnPerformanceTracker } from '../../../shared/telemetry/turn-performan
 
 interface CachedDashboardModelUsage {
   usage: NonNullable<DashboardModelUsageProjection['usage']>;
+  sparkline: DashboardModelUsageProjection['sparkline'];
   sinceMs: number;
   refreshedAtMs: number;
   dataThroughMs: number;
@@ -210,6 +213,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
     return {
       selected,
       usage: null,
+      sparkline: [],
       freshness: {
         state: 'unavailable',
         source: 'postgres_model_usage',
@@ -229,6 +233,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
     return {
       selected,
       usage: cached.usage,
+      sparkline: cached.sparkline,
       freshness: {
         state: 'stale',
         source: 'postgres_model_usage',
@@ -254,10 +259,12 @@ export class AdminDashboardDataService implements AdminDashboardService {
     try {
       const data = await this.deps.modelUsageService.getModelUsageData({
         ...range,
+        bucket: resolveDashboardCostWindowBucket(selected),
         limit: 1,
       });
       const snapshot: CachedDashboardModelUsage = {
         usage: mapModelUsageTotalsToDashboardUsage(data.totals),
+        sparkline: mapModelUsageTimeSeriesToDashboardSparkline(data.timeSeries),
         sinceMs: range.sinceMs,
         refreshedAtMs: this.now(),
         dataThroughMs,
@@ -269,6 +276,7 @@ export class AdminDashboardDataService implements AdminDashboardService {
       return {
         selected,
         usage: snapshot.usage,
+        sparkline: snapshot.sparkline,
         freshness: {
           state: 'fresh',
           source: 'postgres_model_usage',

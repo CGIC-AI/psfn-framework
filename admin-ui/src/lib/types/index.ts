@@ -57,6 +57,7 @@ export type {
   DashboardCostWindowUsage,
   DashboardModelUsageFreshness,
   DashboardModelUsageProjection,
+  DashboardModelUsageSparklinePoint,
   DashboardModelUsageState,
   DashboardSessionContextPressure,
   DashboardStats,

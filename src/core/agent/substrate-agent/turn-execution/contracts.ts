@@ -11,6 +11,7 @@ import type { ImageVisionReviewer } from '../../../../primitives/images/types.js
 import type { VisionIntakeImageScreenerPort } from '../vision-attachments.js';
 import type { SessionManager } from '../../../session/manager.js';
 import type { DisclosureToolResultSource } from '../../../cogsec/disclosure/generation-lineage.js';
+import type { DisclosureLineage } from '../../../cogsec/disclosure/contracts.js';
 import type { MetacognitiveFlag } from '../../../self-model/metacognition.js';
 import type { InternalState } from '../../../self-model/state.js';
 import type { SkillsRuntime } from '../../../../faculties/skills/runtime.js';
@@ -261,6 +262,11 @@ export interface TurnExecutionRuntime {
     snapshotRef: string,
     metacognitiveFlags: readonly MetacognitiveFlag[],
   ) => void;
+  /**
+   * Publish the per-turn outbound disclosure lineage (jp36.1.3) so the egress
+   * tool guard composes the destination check over it for the rest of the turn.
+   */
+  setCurrentTurnDisclosureLineage: (lineage: DisclosureLineage) => void;
   buildRuntimeContext: (
     message: SubstrateMessage,
     resolvedUserName: string,

@@ -26,3 +26,11 @@ export {
   type DisclosureToolResultSource,
   type DisclosureWikiSource,
 } from './generation-lineage.js';
+export {
+  DISCLOSURE_SOCIAL_EGRESS_METHODS,
+  composeEgressDisclosureDecision,
+  deriveDisclosureDestination,
+  isDisclosureSocialEgressMethod,
+  type ChannelDisclosureResolver,
+  type ComposedEgressDisclosureDecision,
+} from './egress-composition.js';

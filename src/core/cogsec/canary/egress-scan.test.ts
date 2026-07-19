@@ -19,6 +19,31 @@ describe('egress method set', () => {
     expect(isEgressCanaryMethod('fs.read')).toBe(false);
     expect(EGRESS_CANARY_METHODS.has('discord.sendMedia')).toBe(true);
   });
+
+  it('covers outbound reactions as a disclosure-bearing egress surface (jp36.1.3)', () => {
+    expect(isEgressCanaryMethod('discord.sendReaction')).toBe(true);
+    expect(EGRESS_CANARY_METHODS.has('discord.sendReaction')).toBe(true);
+  });
+});
+
+describe('scanEgressParamsForCanary — reactions', () => {
+  it('holds a reaction whose emoji/params echo the session canary', () => {
+    const token = generateCanaryToken();
+    const result = scanEgressParamsForCanary(
+      { channelId: 'c1', messageId: 'm1', emoji: `:leak_${token}:` },
+      token,
+    );
+    expect(result).toEqual({ leaked: true, reason: 'token_present' });
+  });
+
+  it('does not flag a benign emoji reaction', () => {
+    const token = generateCanaryToken();
+    const result = scanEgressParamsForCanary(
+      { channelId: 'c1', messageId: 'm1', emoji: '👍' },
+      token,
+    );
+    expect(result).toEqual({ leaked: false });
+  });
 });
 
 describe('scanEgressParamsForCanary', () => {

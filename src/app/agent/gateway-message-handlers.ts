@@ -5,7 +5,11 @@ import type { SubstrateConfig } from '../../system/config/runtime-config-contrac
 import type { ShardExecutionPort } from '../../faculties/shards/port.js';
 import type { SatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
 import type { ObservedGroupMemoryScheduleDecision } from '../../faculties/memory/extraction/group-observed-scheduler.js';
-import type { PassiveNameCandidateDecision } from '../../core/participation/types.js';
+import type {
+  ParticipationAppraisalResult,
+  ParticipationCandidate,
+  PassiveNameCandidateDecision,
+} from '../../core/participation/types.js';
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolveCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import type { OutboundReplyGuardPort } from '../../system/lifecycle/outbound-reply-dedupe.js';
@@ -232,6 +236,10 @@ export interface PassiveNameCandidatePort {
   build(message: SubstrateMessage): Promise<PassiveNameCandidateDecision>;
 }
 
+export interface ParticipationAppraiserPort {
+  appraise(candidate: ParticipationCandidate): Promise<ParticipationAppraisalResult>;
+}
+
 export interface GatewayMessageLogger {
   info(message: string, meta?: Record<string, unknown>): void;
   warn(message: string, meta?: Record<string, unknown>): void;
@@ -256,6 +264,16 @@ export interface GatewayMessageHandlersDeps {
    * runtimes without room participation keep working unchanged.
    */
   passiveNameCandidateBuilder?: PassiveNameCandidatePort;
+  /**
+   * Cheap tool-less participation appraiser (bible §8.2). When present, each
+   * candidate the passive-name gate creates is appraised on this real observe
+   * path into a ternary (ignore/react/reply); the outcome is recorded on the
+   * safeguard audit trail and the typed event bus. Fails closed to `ignore` on
+   * any error/timeout/malformed output — it never speaks itself, and a `reply`
+   * decision is only routed through the full response path downstream (jp36.5).
+   * Optional so runtimes without room participation keep working unchanged.
+   */
+  participationAppraiser?: ParticipationAppraiserPort;
   /**
    * Records primary replies delivered to Discord so replay-prone senders (the
    * internal continuation) can detect and suppress a duplicate of
@@ -289,6 +307,7 @@ export function registerGatewayMessageHandlers(
     trackSessionActivity,
     observedGroupMemoryScheduler,
     passiveNameCandidateBuilder,
+    participationAppraiser,
     outboundReplyGuard,
     companionAuthorName,
     eventBus,
@@ -303,6 +322,62 @@ export function registerGatewayMessageHandlers(
   const failedDiscordDeliveries = new DiscordFailedDeliveryCache();
   const inFlightCompanionMessages = new Set<string>();
   const recentCompanionMessages = new Map<string, number>();
+
+  /**
+   * Appraise one created participation candidate into a ternary (bible §8.2) and
+   * record it. Fully fail-closed: it never throws into the observe path and the
+   * appraiser itself fails closed to `ignore` on any error/timeout/malformed
+   * output, so a failure can only ever suppress participation, never invent it.
+   * The decision is recorded on the audit trail and the typed event bus; a
+   * `reply` here is only a request that the downstream arbiter (jp36.5) may
+   * route through the full response path — nothing is sent from here.
+   */
+  const appraiseParticipationCandidate = async (
+    candidate: ParticipationCandidate,
+  ): Promise<void> => {
+    if (!participationAppraiser) {
+      return;
+    }
+    try {
+      const result = await participationAppraiser.appraise(candidate);
+      const { appraisal } = result;
+      safeguardAuditTrail.append('participation.appraisal.completed', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        action: appraisal.action,
+        reasonCode: appraisal.reasonCode,
+        confidence: appraisal.confidence,
+        failClosed: result.failClosed,
+        ...(result.failClosedReason ? { failClosedReason: result.failClosedReason } : {}),
+      });
+      await eventBus.emit('participation.appraisal', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        action: appraisal.action,
+        reasonCode: appraisal.reasonCode,
+        confidence: appraisal.confidence,
+        failClosed: result.failClosed,
+        timestamp: nowMonotonicMs(),
+      });
+    } catch (appraiserError) {
+      // The appraiser is designed to fail closed internally; this is a
+      // belt-and-braces guard so nothing here can break message observation.
+      const errorText = toErrorMessage(appraiserError);
+      log.warn('Participation appraiser failed', {
+        channelId: candidate.channelId,
+        messageId: candidate.sourceMessageId,
+        error: errorText,
+      });
+      safeguardAuditTrail.append('participation.appraisal.error', {
+        channelId: candidate.channelId,
+        sourceMessageId: candidate.sourceMessageId,
+        trigger: candidate.trigger,
+        error: errorText,
+      });
+    }
+  };
 
   const pruneDuplicateCaches = (now: number): void => {
     const minTimestamp = now - DUPLICATE_MESSAGE_WINDOW_MS;
@@ -796,6 +871,9 @@ export function registerGatewayMessageHandlers(
                 matchedDirectAddress: candidate.matchedDirectAddress,
                 precedingContextCount: candidate.precedingContext.length,
               });
+              if (participationAppraiser) {
+                await appraiseParticipationCandidate(candidate);
+              }
             } else {
               safeguardAuditTrail.append('participation.candidate.suppressed', {
                 channelId: decision.channelId,

@@ -94,3 +94,46 @@ export function autonomyLevelPermitsDirected(
 ): boolean {
   return level !== 'off';
 }
+
+/**
+ * Tunables for the cheap, tool-less participation appraiser (bible §8.2). The
+ * appraiser runs a single background-model call per created candidate and
+ * returns a strict ternary (ignore/react/reply). Everything here bounds that
+ * one call so it can never grow into a heavy or unbounded prompt; the appraiser
+ * fails closed to `ignore` on any error, timeout, or malformed output.
+ */
+export interface ParticipationAppraiserSettings {
+  /** Master switch. When false the appraiser fails closed to `ignore`. */
+  enabled: boolean;
+  /**
+   * Hard wall-clock ceiling for the background-model call. On expiry the call
+   * is aborted and the appraiser fails closed to `ignore` — never a
+   * default-respond (bible §18 "Passive-name appraiser unavailable").
+   */
+  appraisalDeadlineMs: number;
+  /** Output-token ceiling for the ternary; the contract needs only a few. */
+  appraisalMaxOutputTokens: number;
+  /**
+   * Bounded count of preceding room messages rendered into the datamarked
+   * transcript, so a long backlog cannot inflate the prompt. The candidate
+   * already carries a bounded window; this is a second belt-and-braces cap.
+   */
+  transcriptMessageCap: number;
+  /** Per-message character cap inside the transcript. */
+  transcriptMessageChars: number;
+}
+
+/**
+ * Defaults factory (owner-file / settings pattern). All numeric tunables live
+ * inside the function body — never as module-level tuning constants — so the
+ * hardcoded-settings gate stays satisfied and Garden/config can own overrides.
+ */
+export function createDefaultParticipationAppraiserSettings(): ParticipationAppraiserSettings {
+  return {
+    enabled: true,
+    appraisalDeadlineMs: 8_000,
+    appraisalMaxOutputTokens: 200,
+    transcriptMessageCap: 8,
+    transcriptMessageChars: 500,
+  };
+}

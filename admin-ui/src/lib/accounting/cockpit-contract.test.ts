@@ -6,6 +6,7 @@ const controls = readFileSync(new URL('../components/accounting/AccountingContro
 const metrics = readFileSync(new URL('../components/accounting/UsageMetricCards.svelte', import.meta.url), 'utf8');
 const chart = readFileSync(new URL('../components/accounting/UsageTimeSeries.svelte', import.meta.url), 'utf8');
 const events = readFileSync(new URL('../components/accounting/UsageEventsTable.svelte', import.meta.url), 'utf8');
+const eventDetails = readFileSync(new URL('../components/accounting/UsageEventDetails.svelte', import.meta.url), 'utf8');
 
 describe('operator accounting cockpit contract', () => {
   it('uses canonical APIs and preserves a stale last-known-good view', () => {
@@ -39,7 +40,10 @@ describe('operator accounting cockpit contract', () => {
     expect(events).toMatch(/event\.attribution\.callType/);
     expect(events).toMatch(/event\.attribution\.purpose/);
     expect(events).toMatch(/event\.attribution\.toolName !== 'unknown'/);
-    expect(events).toMatch(/event\.attribution\.chargeRunId !== 'unknown'/);
+    expect(events).toMatch(/UsageEventDetails/);
+    expect(eventDetails).toMatch(/event\.attribution\.chargeRunId/);
+    expect(eventDetails).toMatch(/detail\.value !== 'unknown'/);
     expect(events).not.toMatch(/event\.(purpose|callType|toolName|chargeRunId)/);
+    expect(eventDetails).not.toMatch(/event\.(purpose|callType|toolName|chargeRunId)/);
   });
 });

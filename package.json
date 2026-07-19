@@ -29,7 +29,7 @@
     "proxy:logs": "docker compose --env-file .env -f proxy/docker-compose.yml logs -f",
     "test": "vitest run",
     "test:garden:accounting": "vitest run --config vitest.garden-accounting.config.ts",
-    "test:garden-ui": "cd admin-ui && ../node_modules/.bin/vitest run --config vitest.config.ts",
+    "test:garden-ui": "npm --prefix admin-ui test",
     "test:ops:kube-port-forward": "node --test scripts/ops/keep-kube-port-forward.test.mjs",
     "test:privacy": "vitest run src/system/trust/privacy-regression.test.ts",
     "test:leak-audit": "vitest run src/core/session/context-leak-audit.test.ts",

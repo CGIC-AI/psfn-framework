@@ -52,6 +52,7 @@
     "prefetch:hf-models": "tsx scripts/prefetch-hf-models.ts",
     "provision:injection-model": "tsx scripts/provision-injection-model.ts",
     "migrate:persistence-layout": "tsx src/app/maintenance/migrate-persistence-layout.ts",
+    "migrate:session-filenames": "tsx src/app/maintenance/migrate-session-filenames.ts",
     "migrate:system-owner-fleet": "tsx src/app/maintenance/migrate-system-owner-fleet.ts",
     "snapshot:system-owner-fleet": "tsx src/app/maintenance/system-owner-fleet-snapshot.ts capture",
     "restore:system-owner-fleet-snapshot": "tsx src/app/maintenance/system-owner-fleet-snapshot.ts restore",

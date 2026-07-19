@@ -103,7 +103,20 @@ Supported until beta:
   marker compatibility before beta after every supported cluster has a
   verified companion-owned target and the old-chart rollback window has been
   retired.
-- Existing companion persistence migrations for legacy continuity files, session channel filenames, opaque pre-cutover SQLite database placement, contact `discord_user_id` identity rows, and the `core_memory.json` orientation filename. These flows may preserve or move opaque files but do not open them through a SQLite reader; they are not permission to add new parallel artifact names.
+- Explicit session journal filename migration through
+  `npm run migrate:session-filenames -- --data-dir <exact-companion-data-dir> --apply`.
+  This operator-only command may rename retired L0 session filenames beneath
+  exactly one companion data root and rebuild that root's derived channel
+  index. Runtime startup never invokes the migration; an affected lookup fails
+  closed with the command to run. Validate the boundary with the command E2E,
+  SessionStore filename-boundary tests, and the persistence/sessions suites.
+  Remove the command, legacy filename engine, and lazy runtime detector before
+  beta after every supported companion session root uses readable filenames.
+- Existing companion persistence migrations for legacy continuity files,
+  opaque pre-cutover SQLite database placement, contact `discord_user_id`
+  identity rows, and the `core_memory.json` orientation filename. These flows
+  may preserve or move opaque files but do not open them through a SQLite
+  reader; they are not permission to add new parallel artifact names.
 - Tool-surface migration aliases documented in `docs/tool-surface.md`. They preserve model-facing continuity while unified tools roll out, and should be removed after canonical actions have stable adoption.
 - One-time legacy Personal Workspace assignment during the multi-companion alpha
   cutover. If legacy `WORKSPACE_PATH` contains data, startup stops and prints its

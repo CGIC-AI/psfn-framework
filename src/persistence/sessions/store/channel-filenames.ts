@@ -26,6 +26,10 @@ export function isReadableSessionJournalFilename(filename: string): boolean {
   return READABLE_SESSION_FILENAME.test(filename) || ROLLED_SESSION_FILENAME.test(filename);
 }
 
+export function isLegacySessionJournalFilename(filename: string): boolean {
+  return isSessionJournalFilename(filename) && !isReadableSessionJournalFilename(filename);
+}
+
 export interface SessionSegmentFilename {
   rootFilename: string;
   segmentNumber: number;

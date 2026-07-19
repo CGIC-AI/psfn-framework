@@ -1,6 +1,7 @@
 import { readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  isReadableSessionJournalFilename,
   isSessionJournalFilename,
   parseSessionSegmentFilename,
   readChannelIdFromFile,
@@ -22,12 +23,16 @@ export interface IncompleteSessionFileChain {
 export function discoverSessionFileChains(
   sessionsDir: string,
   indexedChannelByFilename: ReadonlyMap<string, string> = new Map(),
+  options: { includeLegacyFilenames?: boolean } = {},
 ): {
   chains: SessionFileChain[];
   incompleteChains: IncompleteSessionFileChain[];
 } {
   const scanned = readdirSync(sessionsDir)
-    .filter(isSessionJournalFilename)
+    .filter(filename => (
+      isSessionJournalFilename(filename)
+      && (options.includeLegacyFilenames !== false || isReadableSessionJournalFilename(filename))
+    ))
     .map((filename) => {
       const filePath = join(sessionsDir, filename);
       const channelId = readChannelIdFromFile(filePath) ?? indexedChannelByFilename.get(filename);

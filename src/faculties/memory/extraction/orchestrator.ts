@@ -18,21 +18,16 @@ import type { PersonaPreamblePort } from '../../../core/identity/persona-preambl
 import { classifyChannelDisclosure } from '../../../system/trust/policy.js';
 import { decodeStoredChannelVisibility } from '../../../system/trust/types.js';
 import type { ChannelPrivacy } from '../../../system/trust/context-envelope.js';
-import { extractBoundaryFactsFromEntries } from '../boundary-log.js';
-import { extractExplicitPreferenceFactsFromEntries } from './preference.js';
 import type { MemoryStorePort } from '../memory-store-port.js';
 import type { ExtractedFact } from '../types.js';
 import { MemoryWritePolicyError, type WriteResult } from '../writer.js';
 import { ExtractionDrainRequeueError } from './drain-signal.js';
-import { mergeExtractedFactGroups } from './chunk-compose.js';
 import {
   executeExtractionLlmPass,
   formatExistingFactsSection,
 } from './llm-pass.js';
-import {
-  normalizeExtractedFactParticipantNames,
-  type ExtractionParticipantNames,
-} from './naming.js';
+import { normalizeAndMergeExtractedFacts } from './fact-normalization.js';
+import type { ExtractionParticipantNames } from './naming.js';
 import { normalizeExperientialSelfDirectedFact } from './self-directed.js';
 import {
   buildSpeakerRoutingContext,
@@ -46,7 +41,6 @@ import {
   selectGroupMemoryWriteCandidates,
 } from './group-write-caps.js';
 import {
-  applyChannelImportanceCaps,
   buildExtractionSourceRef,
   compareAcceptedFactCandidates,
   computeFactValueScore,
@@ -409,73 +403,18 @@ export async function runExtractionOrchestration(
       completeChunk: createExtractionChunkCompleter(options, turnId),
     });
     const { mergedParsedFacts, crossChunkDeduplicatedCount } = llmPass;
-    const parsedFacts: ExtractedFact[] = [];
-    let participantNameHygieneRejectedCount = 0;
-    for (const [index, fact] of mergedParsedFacts.entries()) {
-      const normalized = normalizeExtractedFactParticipantNames(fact, participantNames);
-      if (!normalized.accepted) {
-        participantNameHygieneRejectedCount++;
-        if (options.telemetryEnabled) {
-          log.debug('Rejected extracted fact due to participant name hygiene', {
-            channelId: options.channelId,
-            triggerReason: options.triggerReason,
-            factIndex: index,
-            factType: fact.type,
-            reason: normalized.reason,
-          });
-        }
-        continue;
-      }
-      if (experientialCompanionName) {
-        const selfDirected = normalizeExperientialSelfDirectedFact({
-          fact: normalized.fact,
-          entries: recentEntries,
-          companionName: experientialCompanionName,
-        });
-        if (!selfDirected.accepted) {
-          participantNameHygieneRejectedCount++;
-          if (options.telemetryEnabled) {
-            log.debug('Rejected ungrounded experiential self-memory fact', {
-              channelId: options.channelId,
-              triggerReason: options.triggerReason,
-              factIndex: index,
-              factType: fact.type,
-              reason: selfDirected.reason,
-            });
-          }
-          continue;
-        }
-        parsedFacts.push(selfDirected.fact);
-      } else {
-        parsedFacts.push(normalized.fact);
-      }
-    }
-    const inferredBoundaryFacts = experientialSelfDirected
-      ? []
-      : extractBoundaryFactsFromEntries(recentEntries, parsedFacts);
-    const inferredPreferenceFacts = experientialSelfDirected
-      ? []
-      : extractExplicitPreferenceFactsFromEntries(recentEntries, {
-        fallbackSubjectName: participantNames.userName,
-      });
-    const adjustFactForWrite = options.adjustFactForWrite ?? ((fact: ExtractedFact) => fact);
-    const facts = mergeExtractedFactGroups([parsedFacts, inferredBoundaryFacts, inferredPreferenceFacts])
-      .map(fact => applyChannelImportanceCaps(adjustFactForWrite(fact), channelVisibility));
-
-    if (inferredBoundaryFacts.length > 0 && options.telemetryEnabled) {
-      log.info('Detected refusal-boundary facts from conversation transcript', {
-        channelId: options.channelId,
-        triggerReason: options.triggerReason,
-        inferredCount: inferredBoundaryFacts.length,
-      });
-    }
-    if (inferredPreferenceFacts.length > 0 && options.telemetryEnabled) {
-      log.info('Detected explicit preference facts from conversation transcript', {
-        channelId: options.channelId,
-        triggerReason: options.triggerReason,
-        inferredCount: inferredPreferenceFacts.length,
-      });
-    }
+    const normalization = normalizeAndMergeExtractedFacts({
+      mergedParsedFacts,
+      recentEntries,
+      participantNames,
+      experientialCompanionName,
+      channelVisibility,
+      adjustFactForWrite: options.adjustFactForWrite ?? ((fact: ExtractedFact) => fact),
+      channelId: options.channelId,
+      triggerReason: options.triggerReason,
+      telemetryEnabled: options.telemetryEnabled,
+    });
+    const { facts, participantNameHygieneRejectedCount } = normalization;
 
     if (!options.isAcceptingExtractions()) {
       // u5bv.11: a durable, receipt-bound run (assertEffectAllowed present) that
@@ -513,7 +452,7 @@ export async function runExtractionOrchestration(
         chunkCount: llmPass.chunkCount,
         mergedFactCount: mergedParsedFacts.length,
         crossChunkDeduplicatedCount,
-        boundaryFactCount: inferredBoundaryFacts.length,
+        boundaryFactCount: normalization.boundaryFactCount,
       });
       return emptyExtractionOutputs();
     }
@@ -863,7 +802,7 @@ export async function runExtractionOrchestration(
       chunkCount: llmPass.chunkCount,
       mergedFactCount: mergedParsedFacts.length,
       crossChunkDeduplicatedCount,
-      boundaryFactCount: inferredBoundaryFacts.length,
+      boundaryFactCount: normalization.boundaryFactCount,
     };
 
     if (options.telemetryEnabled) {

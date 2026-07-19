@@ -1039,6 +1039,7 @@ async function main(): Promise<void> {
       await persistenceRuntime.contactLifecycleRecovery?.stop();
       await coreRuntime.closeWikiRuntime();
       await persistenceRuntime.icpInitiationCandidateStore?.close();
+      await persistenceRuntime.socialPotStore?.close();
       await persistenceRuntime.backgroundWorkStore.close();
       await persistenceRuntime.introspectionLandmarkStore.close();
     },

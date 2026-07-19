@@ -48,6 +48,13 @@ function requirePositiveFinite(value: number, field: string): number {
   return value;
 }
 
+function requireDrawFraction(value: number, field: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0 || value > 1) {
+    throw new Error(`${field} must be a finite number in (0, 1]`);
+  }
+  return value;
+}
+
 function finiteNumber(value: string | number, field: string): number {
   const parsed = typeof value === 'number' ? value : Number(value);
   if (!Number.isFinite(parsed)) {
@@ -126,6 +133,9 @@ export class PostgresSocialPotStore implements SocialPotPort {
     const nowMs = requireTimestamp(input.nowMs, 'socialPot.nowMs');
     const amount = requirePositiveFinite(input.amount, 'socialPot.amount');
     const config = assertSocialPotConfig(input.config);
+    const maxDrawFraction = input.maxDrawFraction === undefined
+      ? undefined
+      : requireDrawFraction(input.maxDrawFraction, 'socialPot.maxDrawFraction');
     if (this.closed) {
       throw new Error('social pot store is closed');
     }
@@ -138,7 +148,12 @@ export class PostgresSocialPotStore implements SocialPotPort {
         nowMs,
         config,
       });
-      const sufficient = regenerated.balance >= amount;
+      // The per-channel cap is evaluated against the regenerated balance inside
+      // this advisory-locked transaction, so it is the balance "at draw time"
+      // and concurrent sibling-channel draws cannot each cap a stale snapshot.
+      const capped = maxDrawFraction !== undefined
+        && amount > maxDrawFraction * regenerated.balance;
+      const sufficient = !capped && regenerated.balance >= amount;
       const nextBalance = sufficient ? regenerated.balance - amount : regenerated.balance;
       const persisted = await this.persistIfChanged(
         client,
@@ -153,8 +168,13 @@ export class PostgresSocialPotStore implements SocialPotPort {
         config.capUnits,
       );
       const after = this.toSnapshot(companionId, persisted, config.capUnits);
+      const outcome: SocialPotDrawResult['outcome'] = sufficient
+        ? 'drawn'
+        : capped
+          ? 'capped'
+          : 'insufficient';
       return {
-        outcome: sufficient ? 'drawn' : 'insufficient',
+        outcome,
         drawn: sufficient ? amount : 0,
         before,
         after,

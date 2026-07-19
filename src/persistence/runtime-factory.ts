@@ -42,6 +42,8 @@ import { PostgresCompanionPresenceStore } from './postgres/companion-presence-st
 import { PostgresIcpInitiationCandidateStore } from './postgres/icp-initiation-candidate-store.js';
 import type { IcpInitiationCandidateStorePort } from '../core/icp/autonomy-store-ports.js';
 import type { CompanionPresenceStorePort } from '../core/agent/companion-presence-store-port.js';
+import { PostgresSocialPotStore } from './postgres/social-pot-store.js';
+import type { SocialPotPort } from '../core/agent/fatigue/social-pot.js';
 import { createPostgresPool, ensurePostgresSchemaExists } from './postgres.js';
 import {
   assertPostgresTenantAccessProvisioned,
@@ -83,6 +85,14 @@ export interface AgentPersistenceRuntime {
   companionPresenceStore?: CompanionPresenceStorePort;
   /** Companion-private durable ICP motivation; multi-companion only. */
   icpInitiationCandidateStore?: IcpInitiationCandidateStorePort;
+  /**
+   * Gateway-owned per-companion social pot (shared schema). The durable
+   * authority for the fatigue-economy budget that funds group participation and
+   * ICP continuation; draw-cap/ICP-priority policy is applied via
+   * `enforceSocialPotDraw`. Present ONLY in multi-companion mode; flag-off never
+   * touches the shared schema.
+   */
+  socialPotStore?: SocialPotPort;
   /** Leased contact-authority recovery, started before the factory returns. */
   contactLifecycleRecovery?: ContactLifecycleRecoveryRuntime;
 }
@@ -168,6 +178,11 @@ export async function createAgentPersistenceRuntime(
         role: tenantRole,
       })
     : undefined;
+  // Per-companion social pot lives in the shared schema (gateway-owned budget,
+  // never a companion-local store). Multi-companion only, like presence above.
+  const socialPotStore = options.config.multiCompanion === true
+    ? await PostgresSocialPotStore.connect(databaseUrl)
+    : undefined;
 
   const intentionRuntime = await createPostgresIntentionPorts(databaseUrl, {
     schema,
@@ -215,6 +230,7 @@ export async function createAgentPersistenceRuntime(
     backgroundWorkStore: await PostgresBackgroundWorkStore.connect(databaseUrl, { schema, role: tenantRole }),
     ...(companionPresenceStore ? { companionPresenceStore } : {}),
     ...(icpInitiationCandidateStore ? { icpInitiationCandidateStore } : {}),
+    ...(socialPotStore ? { socialPotStore } : {}),
   };
   if (!options.contactLifecycleGateway) return runtime;
   const contactLifecycleRecovery = new ContactLifecycleRecoveryRuntime({

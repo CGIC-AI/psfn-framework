@@ -264,7 +264,7 @@ describe('AdminGroupMemoryDataService', () => {
         configuredLimit: 1,
         affectedContactIds: ['contact-alice'],
       }],
-      compositionalMode: 'legacy',
+      compositionalMode: 'single_pass',
       chunkCount: 1,
       mergedFactCount: 3,
       crossChunkDeduplicatedCount: 0,

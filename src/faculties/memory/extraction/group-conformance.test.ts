@@ -671,7 +671,7 @@ describe('group-room memory conformance', () => {
     expect(responseHandler).not.toHaveBeenCalled();
   });
 
-  it('leaves direct extraction on the legacy 10-message read and two-write default', async () => {
+  it('leaves direct extraction on the single-pass 10-message read and two-write default', async () => {
     const directEntries = [
       makeEntry(1, 'I prefer jasmine tea.', 0),
       {

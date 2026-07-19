@@ -385,7 +385,7 @@ export async function runExtractionOrchestration(
         deduplicatedCount: 0,
         supersededCount: 0,
         rejectionBreakdown: createEmptyRejectionBreakdown(),
-        compositionalMode: options.useCompositionalExtraction ? 'chunk_compose' : 'legacy',
+        compositionalMode: options.useCompositionalExtraction ? 'chunk_compose' : 'single_pass',
         chunkCount: 0,
         mergedFactCount: 0,
         crossChunkDeduplicatedCount: 0,
@@ -432,7 +432,7 @@ export async function runExtractionOrchestration(
     const entryChunks = options.useCompositionalExtraction
       ? buildExtractionEntryChunks(transcriptEntries)
       : [transcriptEntries];
-    const compositionalMode = options.useCompositionalExtraction ? 'chunk_compose' : 'legacy';
+    const compositionalMode = options.useCompositionalExtraction ? 'chunk_compose' : 'single_pass';
     const parsedFactGroups = await mapWithConcurrency(
       entryChunks,
       EXTRACTION_CHUNK_LLM_CONCURRENCY,

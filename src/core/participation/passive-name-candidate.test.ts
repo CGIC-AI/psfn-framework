@@ -205,7 +205,12 @@ describe('PassiveNameCandidateBuilder', () => {
     });
 
     it('creates independent candidates for distinct source messages', async () => {
-      const builder = makeBuilder();
+      // Isolate the dedup ring from the name-spam debounce window (exercised in
+      // its own describe block): with debounce off, distinct source messages
+      // each key their own dedup slot and create a candidate.
+      const settings = createDefaultPassiveNameCandidateSettings();
+      settings.debounceWindowMs = 0;
+      const builder = makeBuilder({ settings });
       const first = await builder.build(makeMessage({ id: 'msg-a' }));
       const second = await builder.build(makeMessage({ id: 'msg-b' }));
       expect(first.status).toBe('created');
@@ -224,6 +229,7 @@ describe('PassiveNameCandidateBuilder', () => {
     it('evicts old source ids once the per-channel dedup ring is full', async () => {
       const settings = createDefaultPassiveNameCandidateSettings();
       settings.dedupeHistoryPerChannel = 2;
+      settings.debounceWindowMs = 0; // isolate the dedup ring from debounce
       const builder = makeBuilder({ settings });
       await builder.build(makeMessage({ id: 'm1' }));
       await builder.build(makeMessage({ id: 'm2' }));
@@ -232,6 +238,135 @@ describe('PassiveNameCandidateBuilder', () => {
       expect(reprocessedEvicted.status).toBe('created');
       const reprocessedRetained = await builder.build(makeMessage({ id: 'm3' }));
       expectSuppressed(reprocessedRetained, 'duplicate');
+    });
+  });
+
+  describe('name-spam debounce window', () => {
+    const WINDOW_MS = createDefaultPassiveNameCandidateSettings().debounceWindowMs;
+
+    it('suppresses a distinct later name-trigger inside the window as debounced', async () => {
+      const builder = makeBuilder();
+      const first = await builder.build(makeMessage({ id: 'm1' }));
+      expect(first.status).toBe('created');
+      const second = await builder.build(makeMessage({ id: 'm2' }));
+      expectSuppressed(second, 'debounced');
+      if (second.status === 'suppressed') {
+        expect(second.trigger).toBe('passive_name');
+      }
+    });
+
+    it('collapses N mentions in the window to exactly one candidate then silence', async () => {
+      const builder = makeBuilder();
+      const decisions: PassiveNameCandidateDecision[] = [];
+      for (let i = 0; i < 5; i += 1) {
+        decisions.push(await builder.build(makeMessage({ id: `m${i}` })));
+      }
+      const created = decisions.filter((d) => d.status === 'created');
+      expect(created).toHaveLength(1);
+      expect(decisions[0].status).toBe('created');
+      for (const later of decisions.slice(1)) {
+        expectSuppressed(later, 'debounced');
+      }
+    });
+
+    it('debounces coordinating spammers across distinct senders', async () => {
+      const builder = makeBuilder();
+      const first = await builder.build(
+        makeMessage({ id: 'm1', authorId: 'human-alice', authorName: 'Alice' }),
+      );
+      const second = await builder.build(
+        makeMessage({ id: 'm2', authorId: 'human-bob', authorName: 'Bob' }),
+      );
+      expect(first.status).toBe('created');
+      expectSuppressed(second, 'debounced');
+    });
+
+    it('isolates the debounce window per channel', async () => {
+      const builder = makeBuilder();
+      const roomA = await builder.build(makeMessage({ id: 'm1', channelId: 'room-a' }));
+      const roomASpam = await builder.build(makeMessage({ id: 'm2', channelId: 'room-a' }));
+      const roomB = await builder.build(makeMessage({ id: 'm3', channelId: 'room-b' }));
+      expect(roomA.status).toBe('created');
+      expectSuppressed(roomASpam, 'debounced');
+      expect(roomB.status).toBe('created');
+    });
+
+    it('debounces direct-mention triggers too', async () => {
+      const builder = makeBuilder();
+      const first = await builder.build(
+        makeMessage({ id: 'm1', content: 'Persephone are you there?' }),
+      );
+      expect(first.status).toBe('created');
+      if (first.status === 'created') {
+        expect(first.candidate.trigger).toBe('direct_mention');
+      }
+      const second = await builder.build(
+        makeMessage({ id: 'm2', content: 'Persephone hello again' }),
+      );
+      expectSuppressed(second, 'debounced');
+      if (second.status === 'suppressed') {
+        expect(second.trigger).toBe('direct_mention');
+      }
+    });
+
+    it('classifies a redelivered source message as duplicate, not debounced', async () => {
+      // Duplicate is a more specific, earlier gate: a redelivery of the exact
+      // source message that opened the window must resolve as `duplicate`.
+      const builder = makeBuilder();
+      const first = await builder.build(makeMessage({ id: 'm1' }));
+      expect(first.status).toBe('created');
+      const redelivered = await builder.build(makeMessage({ id: 'm1' }));
+      expectSuppressed(redelivered, 'duplicate');
+    });
+
+    it('treats the window expiry as exclusive and reopens afterward', async () => {
+      let clock = NOW;
+      const builder = makeBuilder({ nowMs: () => clock });
+      const first = await builder.build(
+        makeMessage({ id: 'm1', timestamp: new Date(clock) }),
+      );
+      expect(first.status).toBe('created');
+
+      // One tick before expiry: still inside the window.
+      clock = NOW + WINDOW_MS - 1;
+      const during = await builder.build(
+        makeMessage({ id: 'm2', timestamp: new Date(clock) }),
+      );
+      expectSuppressed(during, 'debounced');
+
+      // At exactly the expiry instant (exclusive): the window has elapsed.
+      clock = NOW + WINDOW_MS;
+      const atBoundary = await builder.build(
+        makeMessage({ id: 'm3', timestamp: new Date(clock) }),
+      );
+      expect(atBoundary.status).toBe('created');
+
+      // The fresh candidate re-anchors the window: the next trigger debounces.
+      clock = NOW + WINDOW_MS + 1;
+      const afterReopen = await builder.build(
+        makeMessage({ id: 'm4', timestamp: new Date(clock) }),
+      );
+      expectSuppressed(afterReopen, 'debounced');
+    });
+
+    it('does not open a window for a message suppressed before candidate creation', async () => {
+      const builder = makeBuilder();
+      const noMatch = await builder.build(
+        makeMessage({ id: 'm1', content: 'just some ordinary chatter here' }),
+      );
+      expectSuppressed(noMatch, 'no_name_match');
+      const created = await builder.build(makeMessage({ id: 'm2' }));
+      expect(created.status).toBe('created');
+    });
+
+    it('disables debounce entirely when the window is non-positive', async () => {
+      const settings = createDefaultPassiveNameCandidateSettings();
+      settings.debounceWindowMs = 0;
+      const builder = makeBuilder({ settings });
+      const first = await builder.build(makeMessage({ id: 'm1' }));
+      const second = await builder.build(makeMessage({ id: 'm2' }));
+      expect(first.status).toBe('created');
+      expect(second.status).toBe('created');
     });
   });
 

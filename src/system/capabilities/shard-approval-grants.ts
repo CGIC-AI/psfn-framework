@@ -39,8 +39,12 @@ export type {
   ShardApprovalGrantStatus,
   ShardApprovalGrantTuple,
   ShardApprovalGrantUse,
+  ShardApprovalWorkloadRegistryPort,
 } from './shard-approval-grant-contracts.js';
-export { assertShardTemporaryGrantDisposition } from './shard-approval-grant-policy.js';
+export {
+  assertShardTemporaryGrantDisposition,
+  isShardExceptionalAction,
+} from './shard-approval-grant-policy.js';
 
 interface WorkloadRecord extends AuthenticatedShardWorkloadIdentity {
   readonly access: ShardCapabilityAccess;
@@ -182,7 +186,10 @@ export class ShardApprovalGrantAuthority {
     }
     const issuedAt = this.readNow();
     if (reservation.expiresAt <= issuedAt) {
-      this.removePrepared(prepared, reservation);
+      // Terminal transition + security audit are atomic (2h6q.3): the audit is
+      // emitted BEFORE the reservation is removed, so an audit failure leaves
+      // the reservation intact (retryable) instead of silently completing an
+      // unaudited terminal transition.
       this.emitAudit(reservation.tuple, {
         outcome: 'expired',
         approvalId: reservation.approvalId,
@@ -192,6 +199,7 @@ export class ShardApprovalGrantAuthority {
         resolver: confirmed.resolver,
         reasonCode: 'expired_before_activation',
       });
+      this.removePrepared(prepared, reservation);
       throw new Error('Shard request grant is expired');
     }
     this.requireStoredWorkloadLive(reservation.tuple);
@@ -297,8 +305,11 @@ export class ShardApprovalGrantAuthority {
       return;
     }
     const timestamp = this.readNow();
-    this.removePrepared(prepared, reservation);
-    this.allocatedApprovalIds.add(approvalId);
+    // Terminal denial/expiry resolution + security audit are atomic (2h6q.3):
+    // audit-then-remove. If the audit sink throws, the prepared reservation
+    // stays bound — it can never activate after a terminal queue outcome, and
+    // a retried resolution re-emits the audit — and the failure propagates
+    // instead of silently completing the terminal transition.
     this.emitAudit(reservation.tuple, {
       outcome: input.status,
       approvalId,
@@ -307,6 +318,8 @@ export class ShardApprovalGrantAuthority {
       ...(input.resolver ? { resolver: input.resolver } : {}),
       reasonCode: input.status === 'denied' ? 'operator_denied' : 'approval_expired',
     });
+    this.removePrepared(prepared, reservation);
+    this.allocatedApprovalIds.add(approvalId);
   }
 
   revokeGrant(grantIdInput: string): ShardApprovalGrantSnapshot {

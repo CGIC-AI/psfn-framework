@@ -4,6 +4,21 @@ import type {
   GatedMethodDescriptor,
 } from './types.js';
 
+/**
+ * 2h6q.3: read the runtime-stamped correlation channel id off gated dispatch
+ * params. It is only a lookup key into the server-owned shard workload
+ * registry — never authority — and absent/malformed values simply resolve as
+ * "not shard-recognizable" (the registry resolver still fails closed for
+ * recognizable shard channels).
+ */
+function readCorrelationChannelId(params: unknown): string | undefined {
+  if (typeof params !== 'object' || params === null) {
+    return undefined;
+  }
+  const value = (params as { channelId?: unknown }).channelId;
+  return typeof value === 'string' ? value : undefined;
+}
+
 export function registerAuditedDescriptors(
   runtime: GatewayMethodRuntime,
   descriptors: ReadonlyArray<AuditedMethodDescriptor<any, unknown>>,
@@ -44,6 +59,7 @@ export function registerGatedDescriptors(
     }) => (params: unknown) => Promise<unknown>)
     | undefined;
   if (runtimeWithCompatibility.approvalBoundary) {
+    const resolveShardWorkloadForChannel = runtime.resolveShardWorkloadForChannel;
     gateMethod = (input) => runtimeWithCompatibility.approvalBoundary!.gate({
       method: input.method,
       handler: input.handler,
@@ -53,6 +69,15 @@ export function registerGatedDescriptors(
       approvalScope: input.approvalScope ?? (() => input.method),
       ...(input.approvalReason ? { approvalReason: input.approvalReason } : {}),
       ...(input.policyConfigProvider ? { policyConfigProvider: input.policyConfigProvider } : {}),
+      // 2h6q.3: bind authenticated shard lineage per dispatch from the
+      // server-owned workload registry (never from tool params/client fields;
+      // the correlation channel id is only a lookup key).
+      ...(resolveShardWorkloadForChannel
+        ? {
+            shardApprovalGrant: (params: unknown) =>
+              resolveShardWorkloadForChannel(readCorrelationChannelId(params)),
+          }
+        : {}),
     });
   } else if (runtimeWithCompatibility.gated) {
     gateMethod = ({ method, handler }) => runtimeWithCompatibility.gated!(method, handler);

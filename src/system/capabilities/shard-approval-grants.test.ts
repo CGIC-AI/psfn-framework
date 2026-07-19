@@ -503,4 +503,104 @@ describe('ShardApprovalGrantAuthority', () => {
     });
     expect(outcomes).toEqual(['prepared', 'denied', 'prepared', 'expired']);
   });
+
+  it('keeps terminal resolution and its audit atomic: a failing audit sink retains the reservation (2h6q.3)', () => {
+    const outcomes: string[] = [];
+    let failTerminalAudit = true;
+    const registry = new TestWorkloadRegistry();
+    const authority = new ShardApprovalGrantAuthority({
+      workloadRegistry: registry,
+      now: () => 50_000,
+      audit: (event) => {
+        if (failTerminalAudit && (event.outcome === 'denied' || event.outcome === 'expired')) {
+          throw new Error('injected terminal audit sink failure');
+        }
+        outcomes.push(event.outcome);
+      },
+    });
+    const { workload } = registerWorkload(registry);
+
+    const prepared = authority.prepareRequestGrant(requestTuple(workload));
+    authority.bindRequestGrant(prepared, {
+      approvalId: 'approval-atomic',
+      expiresAt: 51_000,
+    });
+
+    // Audit failure must NOT silently complete the terminal transition.
+    expect(() => authority.recordRequestResolution({
+      approvalId: 'approval-atomic',
+      status: 'denied',
+      resolver: { kind: 'operator', id: 'test-operator' },
+    })).toThrow(/injected terminal audit sink failure/);
+    expect(outcomes).toEqual(['prepared']);
+
+    // Audit-then-remove: the reservation survives the failed audit, so a
+    // retried terminal resolution emits the audit and then removes it.
+    failTerminalAudit = false;
+    authority.recordRequestResolution({
+      approvalId: 'approval-atomic',
+      status: 'denied',
+      resolver: { kind: 'operator', id: 'test-operator' },
+    });
+    expect(outcomes).toEqual(['prepared', 'denied']);
+
+    // Now fully resolved: a further terminal resolution is a no-op and the
+    // reservation can never activate.
+    authority.recordRequestResolution({ approvalId: 'approval-atomic', status: 'denied' });
+    expect(outcomes).toEqual(['prepared', 'denied']);
+    expect(() => authority.activateRequestGrant(prepared, {}))
+      .toThrow(/missing, unbound, or already activated/);
+  });
+
+  it('emits the expiry audit before dropping the reservation on expired activation (2h6q.3)', async () => {
+    let now = 60_000;
+    const outcomes: string[] = [];
+    let failExpiredAudit = true;
+    const registry = new TestWorkloadRegistry();
+    const authority = new ShardApprovalGrantAuthority({
+      workloadRegistry: registry,
+      now: () => now,
+      audit: (event) => {
+        if (failExpiredAudit && event.outcome === 'expired') {
+          throw new Error('injected expiry audit sink failure');
+        }
+        outcomes.push(event.outcome);
+      },
+    });
+    const { workload } = registerWorkload(registry);
+    const prepared = authority.prepareRequestGrant(requestTuple(workload));
+
+    let activationError: unknown;
+    const queue = new ConfirmationQueue({ now: () => now, idFactory: () => 'approval-expiry-audit' });
+    const entry = queue.enqueue({
+      method: METHOD,
+      action: ACTION,
+      scope: SCOPE,
+      params: { command: 'toggle' },
+      companionReason: 'Test exceptional action',
+      resolutionAuthority: 'operator',
+      expiresInMs: 500,
+    }, async (_params, _entry, context) => {
+      now = 61_000; // grant window elapsed between resolution and activation
+      try {
+        authority.activateRequestGrant(prepared, context);
+      } catch (error) {
+        activationError = error;
+        throw error;
+      }
+    });
+    authority.bindRequestGrant(prepared, { approvalId: entry.id, expiresAt: entry.expiresAt });
+
+    const result = await queue.resolve(
+      { id: entry.id, decision: 'approve' },
+      { kind: 'operator', id: 'test-operator' },
+    );
+    // The injected audit failure surfaces instead of the silent 'expired'
+    // path, and the reservation is retained (audit-then-remove).
+    expect(result).toMatchObject({ status: 'failed', executed: false });
+    expect(String(activationError)).toMatch(/injected expiry audit sink failure/);
+    failExpiredAudit = false;
+    authority.recordRequestResolution({ approvalId: entry.id, status: 'expired' });
+    expect(outcomes).toEqual(['prepared', 'expired']);
+  });
 });

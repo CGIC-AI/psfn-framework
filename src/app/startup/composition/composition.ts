@@ -56,6 +56,7 @@ import { createCoreMemoryStorePort } from '../../../faculties/memory/memory-stor
 import type { ContactStorePort } from '../../../core/contacts/contact-store-port.js';
 import type { ContactTrackingGate } from '../../../core/contacts/tracking-gate.js';
 import { ShardManager } from '../../../faculties/shards/manager.js';
+import { ShardWorkloadRegistry } from '../../../faculties/shards/workload-registry.js';
 import { ShardFoldReviewController } from '../../../faculties/shards/fold-review.js';
 import {
   createShardExecutionPort,
@@ -527,6 +528,13 @@ export interface ToolRuntimeOptions {
   executionPort?: SandboxExecutionPort | null;
   compressionGuidelineEvolution?: CompressionGuidelineEvolutionPort | null;
   shardParentIcpDelivery?: PolicyGovernedShardParentIcpDeliveryPort | null;
+  /**
+   * 2h6q.3: authenticated shard-workload registry shared with the gateway's
+   * approval-grant authority. Absent ⇒ a private registry is still created so
+   * launch registration state is always real; a gateway that never receives
+   * it keeps every shard temporary-grant path fail closed.
+   */
+  shardWorkloadRegistry?: ShardWorkloadRegistry;
 }
 
 export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExecutionPort {
@@ -567,6 +575,7 @@ export function wireShardAndThinkRuntime(options: ToolRuntimeOptions): ShardExec
     shardPostgresLifecycle,
     shardParentIcpDelivery: options.shardParentIcpDelivery ?? null,
     snapshotParentCapabilityGrant: options.snapshotParentCapabilityGrant,
+    workloadRegistry: options.shardWorkloadRegistry ?? new ShardWorkloadRegistry(),
   });
   const subagentFaculty = new SubagentFaculty({
     eventBus: options.eventBus,

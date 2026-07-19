@@ -14,7 +14,10 @@ import type {
   AuthenticatedShardWorkloadHandle,
   PreparedShardRequestGrant,
 } from '../../system/capabilities/shard-approval-grants.js';
-import { ShardApprovalGrantAuthority } from '../../system/capabilities/shard-approval-grants.js';
+import {
+  isShardExceptionalAction,
+  ShardApprovalGrantAuthority,
+} from '../../system/capabilities/shard-approval-grants.js';
 import {
   ConfirmationExecutionCommittedError,
   ConfirmationQueue,
@@ -90,11 +93,18 @@ export interface ApprovalBoundaryGateOptions<P, R> {
   /** Connection-scoped policy authority for multi-companion workspace isolation. */
   policyConfigProvider?: () => PolicyConfig;
   /**
-   * Authenticated server-owned shard workload bound to this dispatch. The
-   * authority derives the required token from the trusted method/action; a
-   * caller cannot select or substitute a capability token.
+   * Authenticated server-owned shard workload bound to this dispatch,
+   * resolved per-request from the shard-workload registry (2h6q.3). The
+   * resolver receives the dispatch params only so it can read the
+   * runtime-stamped correlation channel id as a lookup key into server-owned
+   * registration state — params never carry authority, and the resolver MUST
+   * throw (deny) for a recognizably shard-originated dispatch it cannot bind
+   * to a live authenticated workload. A present binding disables autonomous
+   * auto-clear unconditionally. The authority derives the required token from
+   * the trusted method/action; a caller cannot select or substitute a
+   * capability token.
    */
-  shardApprovalGrant?: () => {
+  shardApprovalGrant?: (params: P) => {
     workload: AuthenticatedShardWorkloadHandle;
   } | undefined;
 }
@@ -215,18 +225,17 @@ export function createGatewayApprovalBoundaryService(
       },
       onResolved: (outcome) => {
         if (outcome.status === 'denied' || outcome.status === 'expired') {
-          try {
-            options.shardApprovalGrants?.recordRequestResolution({
-              approvalId: outcome.id,
-              status: outcome.status,
-              ...(outcome.resolver ? { resolver: outcome.resolver } : {}),
-            });
-          } catch (error) {
-            approvalLog.error('Failed to audit terminal shard approval resolution', {
-              id: outcome.id,
-              error: toErrorMessage(error),
-            });
-          }
+          // 2h6q.3: terminal grant resolution + its security audit are
+          // atomic. The authority emits the audit BEFORE dropping the
+          // prepared reservation; if the audit sink fails, the reservation
+          // stays bound (it can never activate after a terminal outcome) and
+          // the failure propagates to the resolving caller instead of
+          // silently completing the terminal transition.
+          options.shardApprovalGrants?.recordRequestResolution({
+            approvalId: outcome.id,
+            status: outcome.status,
+            ...(outcome.resolver ? { resolver: outcome.resolver } : {}),
+          });
         }
         const owner = outcome.entry.approvalOwner;
         if (!owner) {
@@ -515,13 +524,34 @@ export function createGatewayApprovalBoundaryService(
           }
 
           const authenticatedCompanionId = gateOptions.authenticatedCompanionId();
+          // 2h6q.3: resolve authenticated shard lineage BEFORE any auto-clear
+          // decision. The resolver throws (deny) when a recognizably
+          // shard-originated dispatch cannot be bound to a live authenticated
+          // workload — including when no grant authority/registry is
+          // configured — so shard lineage can never fall through to the
+          // parent's autonomous authority.
           const shardApprovalGrant = decision === 'DENY'
             ? undefined
-            : gateOptions.shardApprovalGrant?.();
+            : gateOptions.shardApprovalGrant?.(params);
+          const shardExceptionalAction = shardApprovalGrant !== undefined
+            && isShardExceptionalAction(gateOptions.method, gateOptions.approvalAction);
           if (
             shardApprovalGrant !== undefined
+            && !shardExceptionalAction
+            && decision === 'NEEDS_APPROVAL'
+          ) {
+            // A shard fence is never auto-cleared, and a shard approval
+            // without an exact-once grant binding is not offered: deny.
+            throw new JSONRPCErrorException(
+              `Shard-originated ${gateOptions.method} is not an eligible shard exceptional action`,
+              GatewayErrors.POLICY_DENIED,
+            );
+          }
+          if (
+            shardExceptionalAction
             || (
               decision === 'NEEDS_APPROVAL'
+              && shardApprovalGrant === undefined
               && options.capabilityTierProvider(authenticatedCompanionId) !== 'autonomous'
             )
           ) {

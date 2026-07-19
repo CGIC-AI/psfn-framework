@@ -6,8 +6,11 @@ declare const authenticatedShardWorkloadBrand: unique symbol;
 declare const preparedShardRequestGrantBrand: unique symbol;
 
 /**
- * Opaque identity issued by an authenticated shard-workload registry. There is
- * deliberately no production constructor until ShardManager owns an adapter.
+ * Opaque identity issued by an authenticated shard-workload registry. The
+ * production constructor is `ShardWorkloadRegistry.registerWorkload`
+ * (src/faculties/shards/workload-registry.ts), fed exclusively from
+ * ShardManager launch registration state. Browser/RPC/tool values can never
+ * mint one of these; the brand is process-local and unforgeable.
  */
 export interface AuthenticatedShardWorkloadHandle {
   readonly kind: 'authenticated-shard-workload';
@@ -38,6 +41,20 @@ export interface AuthenticatedShardWorkloadRegistry {
   resolveAuthenticatedWorkload(
     handle: AuthenticatedShardWorkloadHandle,
   ): AuthenticatedShardWorkloadRegistration | undefined;
+}
+
+/**
+ * Server-owned registry seam the gateway consumes (2h6q.3). In addition to
+ * handle resolution it maps a dispatch's registered shard channel to the
+ * current live workload handle. The channel id is only a lookup key into
+ * server-owned registration state — every authority value (parent binding,
+ * generation, frozen derived access) comes from the registration itself.
+ */
+export interface ShardApprovalWorkloadRegistryPort extends AuthenticatedShardWorkloadRegistry {
+  resolveWorkloadForChannel(
+    parentCompanionId: string,
+    channelId: string,
+  ): AuthenticatedShardWorkloadHandle | undefined;
 }
 
 export interface AuthenticatedShardWorkloadIdentity {

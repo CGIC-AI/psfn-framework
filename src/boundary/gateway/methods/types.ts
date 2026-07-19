@@ -32,6 +32,7 @@ import type { GatewayContactLifecycleAuthorityPort } from '../contact-lifecycle-
 import type { CapabilityTier } from '../../../system/config/runtime-config-contracts.js';
 import type { CapabilityGrantSnapshot } from '../../../system/capabilities/access.js';
 import type { ShardCapabilityAccess } from '../../../system/capabilities/shard-derivation.js';
+import type { AuthenticatedShardWorkloadHandle } from '../../../system/capabilities/shard-approval-grant-contracts.js';
 import type {
   ShardBackendRequestBackend,
   ShardBackendRequestResult,
@@ -110,6 +111,18 @@ export interface GatewayMethodRuntime {
    * context, never caller-declared capability authority.
    */
   shardBackendExecutor?: ShardBackendExecutor;
+  /**
+   * 2h6q.3: server-owned per-dispatch shard lineage resolution for gated
+   * methods. Maps a runtime-stamped correlation channel id to the current
+   * authenticated shard workload registered by the shard runtime. The channel
+   * id is only a lookup key into server-owned registration state — every
+   * authority value comes from the registration. A recognizably
+   * shard-originated channel that cannot be resolved to a live workload of
+   * the connection's authenticated companion MUST throw (fail closed).
+   */
+  resolveShardWorkloadForChannel?: (
+    channelId: string | undefined,
+  ) => { workload: AuthenticatedShardWorkloadHandle } | undefined;
   /** Authenticated companion bound to the connection serving this RPC. */
   authenticatedCompanionId(): string | undefined;
   /**

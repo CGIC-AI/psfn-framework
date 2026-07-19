@@ -5,6 +5,7 @@ import type {
   ModelUsageQuery,
   ModelUsageTotals,
   ModelUsageBreakdown,
+  ModelUsageDimensionTimeBucket,
 } from '../../../../../src/shared/telemetry/model-usage.js';
 
 export type AdminModelUsageData = ModelUsageData;
@@ -13,6 +14,7 @@ export type {
   ModelUsageEvent,
   ModelUsageTotals,
   ModelUsageBreakdown,
+  ModelUsageDimensionTimeBucket,
 };
 
 const MODEL_USAGE_QUERY_FIELDS = [

@@ -9,7 +9,18 @@ const postgresMocks = vi.hoisted(() => ({
       ? { calls: 4, successful_calls: 4, total_tokens: 400, total_cost_usd: 0.4 }
       : { calls: 2, successful_calls: 2, total_tokens: 150, total_cost_usd: 0.15 };
   }),
-  queryRows: vi.fn(async () => []),
+  queryRows: vi.fn(async (_pool: unknown, sql: string) => (
+    sql.includes('AS series_key')
+      ? [{
+          series_key: 'provider-a:model-a',
+          bucket_start_ms: 0,
+          calls: 2,
+          successful_calls: 2,
+          total_tokens: 150,
+          total_cost_usd: 0.15,
+        }]
+      : []
+  )),
 }));
 
 vi.mock('../postgres.js', () => ({
@@ -81,5 +92,35 @@ describe('PostgresModelUsageStore previous-period totals', () => {
       'success',
       'provider',
     ]);
+  });
+
+  it('returns sparse provider:model totals for each model time bucket', async () => {
+    const store = new PostgresModelUsageStore({} as Pool, { companionId: 'companion-a' });
+
+    const data = await store.getUsageData({
+      range: 'custom',
+      sinceMs: 200,
+      untilMs: 300,
+      timezone: 'UTC',
+      bucket: 'hour',
+      groupBy: ['model'],
+      provider: 'provider-a',
+    });
+
+    expect(data.seriesByDimension?.model).toEqual([
+      expect.objectContaining({
+        key: 'provider-a:model-a',
+        startMs: 0,
+        endMs: 300,
+        calls: 2,
+        totalTokens: 150,
+        totalCostUsd: 0.15,
+      }),
+    ]);
+    const seriesQuery = postgresMocks.queryRows.mock.calls.find(([, sql]) => (
+      sql.includes('AS series_key')
+    ));
+    expect(seriesQuery?.[1]).toContain("provider || ':' || model AS series_key");
+    expect(seriesQuery?.[2]).toEqual([200, 300, 'provider-a', 'companion-a']);
   });
 });

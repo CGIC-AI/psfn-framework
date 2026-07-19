@@ -27,10 +27,7 @@ import {
   formatExistingFactsSection,
 } from './llm-pass.js';
 import { normalizeAndMergeExtractedFacts } from './fact-normalization.js';
-import {
-  buildAcceptedFactCandidates,
-  type RoutedAcceptedFactCandidate,
-} from './fact-acceptance.js';
+import { buildAcceptedFactCandidates } from './fact-acceptance.js';
 import { createEmptyRejectionBreakdown } from './rejection-breakdown.js';
 import type { ExtractionParticipantNames } from './naming.js';
 import {
@@ -39,12 +36,9 @@ import {
   type ExtractionSourceSpeaker,
 } from './speaker-routing.js';
 import type { GroupMemoryWriteCapSettings } from '../../../system/config/group-memory-config.js';
-import {
-  selectGroupMemoryWriteCandidates,
-} from './group-write-caps.js';
+import { selectExtractionWriteCandidates } from './write-selection.js';
 import {
   buildExtractionSourceRef,
-  compareAcceptedFactCandidates,
   evaluateExtractionPreLlmGate,
 } from './signals.js';
 import type {
@@ -53,7 +47,6 @@ import type {
   ExtractionGateConfig,
   ExtractionRejectionReason,
   ExtractionTriggerReason,
-  GroupMemoryWriteCapSkip,
   ConcernCandidateExtractionSink,
 } from './types.js';
 import type { ExtractionSessionReader } from './session-port.js';
@@ -390,53 +383,16 @@ export async function runExtractionOrchestration(
     const rejectionBreakdown = acceptance.rejectionBreakdown;
     rejectionBreakdown.low_signal += participantNameHygieneRejectedCount;
 
-    let selectedCandidates: RoutedAcceptedFactCandidate[];
-    let writeCapSkips: GroupMemoryWriteCapSkip[] = [];
-    if (options.groupWriteCaps) {
-      const selection = selectGroupMemoryWriteCandidates({
-        candidates: acceptedCandidates,
-        settings: options.groupWriteCaps,
-        ...(options.groupWriteCapContext?.backfill !== undefined
-          ? { backfill: options.groupWriteCapContext.backfill }
-          : {}),
-        ...(options.groupWriteCapContext?.recentTimeWindowWriteCount !== undefined
-          ? {
-            recentTimeWindowWriteCount:
-              options.groupWriteCapContext.recentTimeWindowWriteCount,
-          }
-          : {}),
-      });
-      selectedCandidates = selection.selectedCandidates;
-      writeCapSkips = selection.telemetry.skips;
-      rejectionBreakdown.write_cap += selection.telemetry.skippedCount;
-      if (selection.telemetry.skippedCount > 0 && options.telemetryEnabled) {
-        log.debug('Skipped extracted facts due to group write caps', {
-          channelId: options.channelId,
-          skippedByCap: selection.telemetry.skippedCount,
-          acceptedBeforeCap: selection.telemetry.candidateCount,
-          selectedAfterCap: selection.telemetry.selectedCount,
-          effectiveMaxWrites: selection.telemetry.effectiveMaxWrites,
-          writeCapSkips,
-        });
-      }
-    } else {
-      const rankedCandidates = acceptedCandidates
-        .slice()
-        .sort(compareAcceptedFactCandidates);
-      selectedCandidates = rankedCandidates.slice(0, options.maxWrites);
-      const skippedByCap = rankedCandidates.length - selectedCandidates.length;
-      if (skippedByCap > 0) {
-        rejectionBreakdown.write_cap += skippedByCap;
-        if (options.telemetryEnabled) {
-          log.debug('Skipped extracted facts due to write cap', {
-            channelId: options.channelId,
-            maxWrites: options.maxWrites,
-            skippedByCap,
-            acceptedBeforeCap: rankedCandidates.length,
-          });
-        }
-      }
-    }
+    const selection = selectExtractionWriteCandidates({
+      acceptedCandidates,
+      maxWrites: options.maxWrites,
+      groupWriteCaps: options.groupWriteCaps,
+      groupWriteCapContext: options.groupWriteCapContext,
+      channelId: options.channelId,
+      telemetryEnabled: options.telemetryEnabled,
+    });
+    const { selectedCandidates, writeCapSkips } = selection;
+    rejectionBreakdown.write_cap += selection.writeCapSkippedCount;
 
     let acceptedCount = 0;
     let writeCount = 0;

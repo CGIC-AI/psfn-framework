@@ -167,16 +167,46 @@ test('model-lane attribution intersects lane and turn scopes for background proo
   const rows = ledgerRows();
   rows[0].turn_id = 'turn-appraisal';
   rows[1].turn_id = 'turn-appraisal';
+  rows[1].origin_stage = 'emotion.appraisal';
   assert.deepEqual(
     validateModelLaneAttributionProof({
       modelsConfig: modelsConfig(),
       ledgerRows: rows,
       laneExpectations: [
-        { lane: 'background', turnId: 'turn-appraisal', purpose: 'background' },
+        {
+          lane: 'background',
+          turnId: 'turn-appraisal',
+          originStage: 'emotion.appraisal',
+          purpose: 'background',
+        },
       ],
     }),
     [],
     'the foreground row for the same source turn is excluded from the background expectation',
+  );
+
+  const intentionOnly = [
+    rows[0],
+    {
+      ...rows[1],
+      origin_stage: 'intention.appraisal.periodic',
+    },
+  ];
+  assert.match(
+    validateModelLaneAttributionProof({
+      modelsConfig: modelsConfig(),
+      ledgerRows: intentionOnly,
+      laneExpectations: [
+        {
+          lane: 'background',
+          turnId: 'turn-appraisal',
+          originStage: 'emotion.appraisal',
+          purpose: 'background',
+        },
+      ],
+    }).join('\n'),
+    /origin stage emotion\.appraisal/u,
+    'another background subsystem on the same turn cannot satisfy the emotion-appraisal proof',
   );
 });
 
@@ -186,6 +216,7 @@ test('background model drive proof requires the case-owned appraisal to succeed 
       backgroundJobState: 'succeeded',
       backgroundTurnId: 'turn-appraisal',
       backgroundObserved: true,
+      backgroundOriginStage: 'emotion.appraisal',
     }),
     [],
   );
@@ -194,6 +225,7 @@ test('background model drive proof requires the case-owned appraisal to succeed 
       backgroundJobState: 'failed',
       backgroundTurnId: 'turn-appraisal',
       backgroundObserved: true,
+      backgroundOriginStage: 'emotion.appraisal',
     }).join('\n'),
     /did not succeed/u,
   );
@@ -202,6 +234,7 @@ test('background model drive proof requires the case-owned appraisal to succeed 
       backgroundJobState: 'succeeded',
       backgroundTurnId: null,
       backgroundObserved: true,
+      backgroundOriginStage: 'emotion.appraisal',
     }).join('\n'),
     /source turn is missing/u,
   );
@@ -210,8 +243,18 @@ test('background model drive proof requires the case-owned appraisal to succeed 
       backgroundJobState: 'succeeded',
       backgroundTurnId: 'turn-appraisal',
       backgroundObserved: false,
+      backgroundOriginStage: null,
     }).join('\n'),
     /no model-usage row/u,
+  );
+  assert.match(
+    validateBackgroundModelDriveProof({
+      backgroundJobState: 'succeeded',
+      backgroundTurnId: 'turn-appraisal',
+      backgroundObserved: true,
+      backgroundOriginStage: 'intention.appraisal.periodic',
+    }).join('\n'),
+    /not proven by an emotion\.appraisal model call/u,
   );
 });
 

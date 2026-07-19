@@ -119,7 +119,12 @@ test('model attribution scopes chat, vision, and background to case-owned turns'
     [
       { turnId: 'turn-chat', purpose: 'chat' },
       { turnId: 'turn-vision', purpose: 'vision' },
-      { lane: 'background', turnId: 'turn-background', purpose: 'background' },
+      {
+        lane: 'background',
+        turnId: 'turn-background',
+        originStage: 'emotion.appraisal',
+        purpose: 'background',
+      },
     ],
   );
 });

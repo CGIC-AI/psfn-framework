@@ -103,6 +103,7 @@ function normalizeLedgerRow(row) {
     chargeLane: pick(row, 'charge_lane', 'chargeLane'),
     chargeSurface: pick(row, 'charge_surface', 'chargeSurface'),
     purpose: pick(row, 'purpose', 'purpose'),
+    originStage: pick(row, 'origin_stage', 'originStage'),
     // Per-turn / per-session correlation columns (migrations.ts model_usage_events
     // idx_model_usage_events_request / _session_time). Companion-private work
     // deliberately collapses these to 'unknown'; the case-driven emotion
@@ -119,15 +120,16 @@ function normalizeLedgerRow(row) {
  * inputs:
  *   modelsConfig     — parsed models.json owner file.
  *   ledgerRows       — model_usage_events rows (snake or camel columns).
- *   laneExpectations — [{ lane?, turnId?, purpose }] entries: the rows they select
+ *   laneExpectations — [{ lane?, turnId?, originStage?, purpose }] entries: the rows they select
  *                      must have been charged the model the owner file assigns to
  *                      that purpose's primary slot. `purpose` resolves to a model
  *                      id via models.json — no model name is hardcoded. Each entry
- *                      may scope by `lane`, `turnId`, or their intersection. Exact
- *                      turn scoping keeps chat and vision independent even though
- *                      both charge the interactive lane; lane+turn scoping binds
- *                      the background assertion to the appraisal driven by this
- *                      case rather than unrelated concurrent work.
+ *                      may scope by `lane`, `turnId`, `originStage`, or their
+ *                      intersection. Exact turn scoping keeps chat and vision
+ *                      independent even though both charge the interactive lane;
+ *                      lane+turn+origin scoping binds the background assertion to
+ *                      the emotion appraisal driven by this case rather than
+ *                      unrelated concurrent background work.
  */
 export function validateModelLaneAttributionProof({ modelsConfig, ledgerRows, laneExpectations = [] }) {
   const failures = [];
@@ -171,16 +173,21 @@ export function validateModelLaneAttributionProof({ modelsConfig, ledgerRows, la
   for (const expectation of asArray(laneExpectations)) {
     const lane = expectation?.lane;
     const turnId = expectation?.turnId;
+    const originStage = expectation?.originStage;
     const purpose = expectation?.purpose;
     const hasLane = typeof lane === 'string' && lane.length > 0;
     const hasTurn = typeof turnId === 'string' && turnId.length > 0;
+    const hasOriginStage = typeof originStage === 'string' && originStage.length > 0;
     if (typeof purpose !== 'string' || (!hasLane && !hasTurn)) {
       failures.push('lane expectation must name a purpose and either a lane or a turnId');
       continue;
     }
-    const scopeLabel = hasTurn && hasLane
+    const laneTurnLabel = hasTurn && hasLane
       ? `turn ${turnId} on ${lane} lane`
       : (hasTurn ? `turn ${turnId}` : `${lane} lane`);
+    const scopeLabel = hasOriginStage
+      ? `${laneTurnLabel} at origin stage ${originStage}`
+      : laneTurnLabel;
     const slotId = purposePrimary[purpose];
     if (!slotId || !slotCatalog[slotId]) {
       failures.push(`models.json has no primary owner slot for purpose ${purpose} (${scopeLabel})`);
@@ -190,6 +197,7 @@ export function validateModelLaneAttributionProof({ modelsConfig, ledgerRows, la
     const scopedRows = rows.filter((row) => (
       (!hasTurn || row.turnId === turnId)
       && (!hasLane || row.chargeLane === lane)
+      && (!hasOriginStage || row.originStage === originStage)
     ));
     if (scopedRows.length === 0) {
       failures.push(`spend ledger has no ${scopeLabel} row to attribute against the ${purpose} owner slot`);
@@ -222,6 +230,11 @@ export function validateBackgroundModelDriveProof(driven) {
   }
   if (driven.backgroundObserved !== true) {
     failures.push('case-owned background appraisal produced no model-usage row');
+  }
+  if (driven.backgroundOriginStage !== 'emotion.appraisal') {
+    failures.push(
+      'case-owned background appraisal is not proven by an emotion.appraisal model call',
+    );
   }
   return failures;
 }

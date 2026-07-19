@@ -65,17 +65,25 @@ const VISION_PNG_BASE64 =
 // session id; $2 = the source turn whose successful appraisal landed usage.
 const MODEL_USAGE_QUERY = `
   select slot_key, provider, model, charge_lane, charge_surface, purpose,
-         recorded_at_ms, turn_id, session_id
+         origin_stage, recorded_at_ms, turn_id, session_id
   from model_usage_events
-  where session_id = $1
-    or (charge_lane = 'background' and turn_id = $2)
+  where (session_id = $1 and charge_lane = 'interactive')
+    or (
+      charge_lane = 'background'
+      and turn_id = $2
+      and origin_stage = 'emotion.appraisal'
+    )
   order by recorded_at_ms asc
 `;
 
-const BACKGROUND_ROW_COUNT_QUERY = `
-  select count(*)::int as count
+const BACKGROUND_APPRAISAL_ORIGIN_QUERY = `
+  select origin_stage
   from model_usage_events
-  where turn_id = $1 and charge_lane = 'background'
+  where turn_id = $1
+    and charge_lane = 'background'
+    and origin_stage = 'emotion.appraisal'
+  order by recorded_at_ms asc
+  limit 1
 `;
 
 const TERMINAL_BACKGROUND_JOB_STATES = new Set(['succeeded', 'failed', 'stale_discarded']);
@@ -152,7 +160,6 @@ async function postAndWaitVisionInline({ services, sessionId, apiUserId }) {
 }
 
 // Await a turn's post-turn emotion-appraisal background job to a terminal state.
-// The appraisal job is the runtime's only 'background' charge-lane producer.
 async function waitForEmotionAppraisal(services, turnId) {
   if (typeof turnId !== 'string' || turnId.length === 0) return null;
   for (let attempt = 0; attempt < 80; attempt += 1) {
@@ -182,13 +189,16 @@ async function waitForEmotionAppraisal(services, turnId) {
 // appraisal turn cadence (runtime default 5; see src/core/emotion/appraisal.ts).
 // The interactive + vision turns already advanced the counter for this session;
 // drive additional benign turns until a SUCCEEDED appraisal for one exact source
-// turn lands a background-lane usage row. Unrelated background work cannot
-// satisfy the exact turn predicate. Residual risk: if an operator raised the
-// cadence above the warmup budget the proof fails closed with a clear message.
+// turn lands a background-lane usage row whose origin_stage is emotion.appraisal.
+// That provenance condition distinguishes a real emotion-model call from a
+// successfully skipped gate and from intention appraisal on the same source turn.
+// Residual risk: if an operator raised the cadence above the warmup budget the
+// proof fails closed with a clear message.
 async function driveBackgroundLane({ services, sessionId, apiUserId }) {
   const maxWarmupTurns = 10;
   let warmupTurns = 0;
   let backgroundObserved = false;
+  let backgroundOriginStage = null;
   let backgroundJobState = null;
   let backgroundTurnId = null;
   let backgroundJobId = null;
@@ -204,11 +214,13 @@ async function driveBackgroundLane({ services, sessionId, apiUserId }) {
     backgroundJobState = appraisal?.state ?? null;
     if (appraisal?.state !== 'succeeded') continue;
     const sourceTurnId = appraisal.sourceTurnId;
-    const backgroundRows = Number(
-      await services.pgScalar(BACKGROUND_ROW_COUNT_QUERY, [sourceTurnId]),
+    const originStage = await services.pgScalar(
+      BACKGROUND_APPRAISAL_ORIGIN_QUERY,
+      [sourceTurnId],
     );
-    if (Number.isFinite(backgroundRows) && backgroundRows > 0) {
+    if (originStage === 'emotion.appraisal') {
       backgroundObserved = true;
+      backgroundOriginStage = originStage;
       backgroundTurnId = sourceTurnId;
       backgroundJobId = appraisal.jobId;
       break;
@@ -217,6 +229,7 @@ async function driveBackgroundLane({ services, sessionId, apiUserId }) {
   return {
     warmupTurns,
     backgroundObserved,
+    backgroundOriginStage,
     backgroundJobState,
     backgroundTurnId,
     backgroundJobId,
@@ -231,7 +244,12 @@ export function buildModelLaneExpectations({
   return [
     { turnId: interactiveTurnId, purpose: 'chat' },
     { turnId: visionTurnId, purpose: 'vision' },
-    { lane: 'background', turnId: backgroundTurnId, purpose: 'background' },
+    {
+      lane: 'background',
+      turnId: backgroundTurnId,
+      originStage: 'emotion.appraisal',
+      purpose: 'background',
+    },
   ];
 }
 
@@ -338,6 +356,7 @@ export function buildHardeningCases(ctx, services) {
                 visionTurnId,
                 backgroundWarmupTurns: background.warmupTurns,
                 backgroundObserved: background.backgroundObserved,
+                backgroundOriginStage: background.backgroundOriginStage,
                 backgroundJobState: background.backgroundJobState,
                 backgroundTurnId: background.backgroundTurnId,
                 backgroundJobId: background.backgroundJobId,

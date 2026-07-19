@@ -274,7 +274,7 @@ async function runBdCommand(
   });
 }
 
-function recordBeadsAudit(
+async function recordBeadsAudit(
   runtime: GatewayMethodRuntime,
   event: {
     actor: string;
@@ -284,8 +284,8 @@ function recordBeadsAudit(
   },
   durationMs: number,
   error?: string,
-): void {
-  runtime.recordAuditEvent?.({
+): Promise<void> {
+  await runtime.recordAuditEvent?.({
     method: 'beads.action',
     decision: event.result === 'success' ? 'ALLOW' : 'DENY',
     params: event,
@@ -307,7 +307,7 @@ async function executeBeadsAction(
     const args = buildArgs();
     const payload = await runBdCommand(action, args, runtime);
     const sync = afterSuccess ? await afterSuccess(payload) : undefined;
-    recordBeadsAudit(runtime, {
+    await recordBeadsAudit(runtime, {
       actor,
       action,
       target,
@@ -323,12 +323,20 @@ async function executeBeadsAction(
     };
   } catch (error) {
     const message = toErrorMessage(error);
-    recordBeadsAudit(runtime, {
-      actor,
-      action,
-      target,
-      result: 'error',
-    }, Date.now() - startedAt, message);
+    try {
+      await recordBeadsAudit(runtime, {
+        actor,
+        action,
+        target,
+        result: 'error',
+      }, Date.now() - startedAt, message);
+    } catch (auditError) {
+      throw new AggregateError(
+        [error, auditError],
+        `Beads action "${action}" failed and its audit record could not be persisted`,
+        { cause: error },
+      );
+    }
     throw error;
   }
 }
@@ -542,7 +550,7 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
       const startedAt = Date.now();
       try {
         const sync = await syncAllBeadsToGitHubProject(runtime.workspacePath);
-        recordBeadsAudit(runtime, {
+        await recordBeadsAudit(runtime, {
           actor,
           action: 'sync',
           target: 'sync',
@@ -558,12 +566,20 @@ const beadsDescriptors: Array<GatedMethodDescriptor<any, unknown>> = [
         };
       } catch (error) {
         const message = toErrorMessage(error);
-        recordBeadsAudit(runtime, {
-          actor,
-          action: 'sync',
-          target: 'sync',
-          result: 'error',
-        }, Date.now() - startedAt, message);
+        try {
+          await recordBeadsAudit(runtime, {
+            actor,
+            action: 'sync',
+            target: 'sync',
+            result: 'error',
+          }, Date.now() - startedAt, message);
+        } catch (auditError) {
+          throw new AggregateError(
+            [error, auditError],
+            'Beads sync failed and its audit record could not be persisted',
+            { cause: error },
+          );
+        }
         throw error;
       }
     },

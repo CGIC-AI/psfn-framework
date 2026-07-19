@@ -920,7 +920,7 @@ describe('REPLSandbox', () => {
     expect(locals.num).toBe(42);
   });
 
-  it('getLocals excludes builtins', async () => {
+  it('getLocals excludes builtins', () => {
     const sandbox = new REPLSandbox(nullDeps());
     const locals = sandbox.getLocals();
     expect(locals.print).toBeUndefined();
@@ -1042,7 +1042,7 @@ describe('REPLSandbox', () => {
     }
   });
 
-  it('getLocals excludes new builtins', async () => {
+  it('getLocals excludes new builtins', () => {
     const sandbox = new REPLSandbox(nullDeps());
     const locals = sandbox.getLocals();
     expect(locals.memory_upsert).toBeUndefined();

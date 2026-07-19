@@ -372,7 +372,7 @@ export class DiscordAdapter implements ChannelAdapterPort {
     await this.clearAllStatusMessages();
     this.listeningWindows.clear();
     await this.voice.stop();
-    this.client.destroy();
+    await this.client.destroy();
   }
 
   isConnected(): boolean {

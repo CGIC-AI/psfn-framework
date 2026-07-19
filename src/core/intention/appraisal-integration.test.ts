@@ -134,7 +134,7 @@ function registerOutboundHandlerHarness(options: {
     listQuarantined: vi.fn(),
   };
 
-  wireHeartbeatRuntime(
+  void wireHeartbeatRuntime(
     { registerTool: vi.fn() },
     scheduler,
     {
@@ -424,7 +424,7 @@ describe('intention appraisal runtime integration', () => {
         intervalMs: 1,
       });
 
-      wireHeartbeatRuntime(
+      void wireHeartbeatRuntime(
         { registerTool: vi.fn() },
         scheduler,
         agentLoop,
@@ -549,7 +549,7 @@ describe('intention appraisal runtime integration', () => {
         intervalMs: 1,
       });
 
-      wireHeartbeatRuntime(
+      void wireHeartbeatRuntime(
         { registerTool: vi.fn() },
         scheduler,
         agentLoop,
@@ -666,7 +666,7 @@ describe('intention appraisal runtime integration', () => {
         intervalMs: 1,
       });
 
-      wireHeartbeatRuntime(
+      void wireHeartbeatRuntime(
         { registerTool: vi.fn() },
         scheduler,
         agentLoop,
@@ -801,7 +801,7 @@ describe('intention appraisal runtime integration', () => {
         intervalMs: 1,
       });
 
-      wireHeartbeatRuntime(
+      void wireHeartbeatRuntime(
         { registerTool: vi.fn() },
         scheduler,
         agentLoop,

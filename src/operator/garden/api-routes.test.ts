@@ -2715,7 +2715,7 @@ describe('AdminServer JSON API routes', () => {
       timestamp: Date.now() + 1,
       channelVisibility: 'direct',
     });
-    sessionManager.recordTurn({
+    void sessionManager.recordTurn({
       schemaVersion: 1,
       turnId,
       requestId: 'api-session-turn-1',

@@ -70,7 +70,7 @@ describe('wireHeartbeatRuntime reflection metacognition journal', () => {
       send: vi.fn().mockResolvedValue(undefined),
     };
 
-    wireHeartbeatRuntime(target as any, scheduler, agentLoop as any, sender, tempDir);
+    void wireHeartbeatRuntime(target as any, scheduler, agentLoop as any, sender, tempDir);
 
     const runTool = target.registerTool.mock.calls
       .map(call => call[0])

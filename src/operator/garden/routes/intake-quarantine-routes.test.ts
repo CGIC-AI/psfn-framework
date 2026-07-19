@@ -248,7 +248,7 @@ describe('admin intake quarantine routes (htm9.11)', () => {
     expect(beginDecision).not.toHaveBeenCalled();
   });
 
-  it('the detail matcher does not swallow the confirm/decide POST paths', async () => {
+  it('the detail matcher does not swallow the confirm/decide POST paths', () => {
     const routes = buildAdminIntakeQuarantineRoutes({
       quarantineService: {} as AdminIntakeQuarantineService,
       settingsService: {} as AdminSettingsService,

@@ -559,7 +559,11 @@ export class GatewayClient implements
       // Everything else: responses to our requests + incoming RPC requests from gateway
       // json-rpc-2.0 receiveAndSend() payload param is typed as `any`
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      this.rpcInstance.receiveAndSend(msg as any);
+      void this.rpcInstance.receiveAndSend(msg as any).catch((error: unknown) => {
+        const normalized = error instanceof Error ? error : new Error(String(error));
+        log.error('Gateway RPC dispatch failed', { error: normalized.message });
+        this.emitConnectionClose({ source: 'error', error: normalized });
+      });
     });
 
     this.conn.on('close', () => {

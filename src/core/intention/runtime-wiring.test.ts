@@ -239,6 +239,7 @@ describe('wireIntentionRuntimeStores', () => {
     const target = new FakeTarget();
     const { runtime, providers, behavioralPatternTracker } = createRuntime();
     const crossBoundary = vi.fn(async () => undefined);
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally receives this Promise-returning lifecycle handler.
     behavioralPatternTracker.recordResponseStrategy.mockImplementationOnce(async (input, options) => {
       expect(crossBoundary).not.toHaveBeenCalled();
       await options?.crossEffectBoundary?.();

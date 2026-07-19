@@ -124,6 +124,7 @@ describe('WebSocketVoiceRuntime', () => {
   it('treats duplicate session.start as idempotent while start is in progress', async () => {
     const harness = createHarness();
     const startGate = createDeferred<void>();
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally receives this Promise-returning lifecycle handler.
     harness.startStream.mockImplementation(async () => {
       await startGate.promise;
       return {
@@ -292,6 +293,7 @@ describe('WebSocketVoiceRuntime', () => {
     // the MODEL turn, upstream of any local TTS/playback.
     let modelSignal: AbortSignal | undefined;
     const modelAborted = createDeferred<string>();
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally receives this Promise-returning lifecycle handler.
     harness.onAssistantTurn.mockImplementation(async (request) => {
       modelSignal = request.signal;
       return await new Promise<string>((_resolve, reject) => {

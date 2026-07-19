@@ -3537,7 +3537,7 @@ describe('ApiServer satellite auth hardening (Sprint-10 C1/H4/04-M1)', () => {
     expect(sharedModels.status).toBe(200);
   });
 
-  it('refuses to start with satellite keys colliding with the shared API key (H4, fail closed)', async () => {
+  it('refuses to start with satellite keys colliding with the shared API key (H4, fail closed)', () => {
     expect(() => createApiServer({
       port,
       agentLoop: createMockAgentLoop(eventBus),

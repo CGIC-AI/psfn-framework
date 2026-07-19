@@ -1543,6 +1543,7 @@ export class GatewayServer {
       this.transitionConnectionState(conn, 'ready', 'rpc_registered');
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally receives this Promise-returning lifecycle handler.
     conn.on('frameError', async (error: unknown) => {
       const frameError = normalizeNdjsonFrameError(error);
       await this.handleMalformedFrame(conn, 'ndjson', frameError.reason, frameError.preview);
@@ -1552,6 +1553,7 @@ export class GatewayServer {
       this.touchConnectionHealthcheck(conn);
     });
 
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally receives this Promise-returning lifecycle handler.
     conn.onMessage(async (message) => {
       if (!this.connections.has(conn)) {
         return;

@@ -158,6 +158,7 @@ function sendStreamingResponse(
 export async function startIcpCertificationModelServer(): Promise<IcpCertificationModelServer> {
   const requests: IcpCertificationModelRequest[] = [];
   const consentDecisions: IcpCertificationConsentDecision[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally receives this Promise-returning lifecycle handler.
   const server = createServer(async (request, response) => {
     try {
       if (request.method !== 'POST' || request.url !== '/v1/chat/completions') {

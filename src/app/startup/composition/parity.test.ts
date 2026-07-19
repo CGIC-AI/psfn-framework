@@ -252,7 +252,7 @@ describe('wireHeartbeatRuntime', () => {
       send: vi.fn().mockResolvedValue(undefined),
     };
 
-    wireHeartbeatRuntime(
+    void wireHeartbeatRuntime(
       target,
       scheduler,
       agentLoop,
@@ -281,7 +281,7 @@ describe('wireHeartbeatRuntime', () => {
       send: vi.fn().mockResolvedValue(undefined),
     };
 
-    wireHeartbeatRuntime(
+    void wireHeartbeatRuntime(
       target,
       scheduler,
       agentLoop,
@@ -324,7 +324,7 @@ describe('wireHeartbeatRuntime', () => {
       send: vi.fn().mockResolvedValue(undefined),
     };
 
-    wireHeartbeatRuntime(
+    void wireHeartbeatRuntime(
       target,
       scheduler,
       agentLoop,
@@ -370,7 +370,7 @@ describe('wireHeartbeatRuntime', () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
       nowSpy.mockReturnValue(1_700_000_000_000);
-      wireHeartbeatRuntime(
+      void wireHeartbeatRuntime(
         target,
         scheduler,
         agentLoop,
@@ -521,7 +521,7 @@ describe('wireHeartbeatRuntime', () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
       nowSpy.mockReturnValue(1_700_000_000_000);
-      wireHeartbeatRuntime(
+      void wireHeartbeatRuntime(
         target,
         scheduler,
         agentLoop,
@@ -711,7 +711,7 @@ describe('wireHeartbeatRuntime', () => {
       send: vi.fn().mockResolvedValue(undefined),
     };
 
-    wireHeartbeatRuntime(
+    void wireHeartbeatRuntime(
       target,
       scheduler,
       agentLoop,
@@ -773,7 +773,7 @@ describe('wireHeartbeatRuntime', () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
       nowSpy.mockReturnValue(1_700_000_000_000);
-      wireHeartbeatRuntime(
+      void wireHeartbeatRuntime(
         target,
         scheduler,
         agentLoop,
@@ -838,7 +838,7 @@ describe('wireHeartbeatRuntime', () => {
       getStatus: vi.fn(),
     };
 
-    wireHeartbeatRuntime(
+    void wireHeartbeatRuntime(
       target,
       scheduler,
       agentLoop,
@@ -990,7 +990,7 @@ describe('wireHeartbeatRuntime', () => {
         getStatus: vi.fn(),
       };
 
-      wireHeartbeatRuntime(
+      void wireHeartbeatRuntime(
         target,
         scheduler,
         agentLoop,
@@ -1067,7 +1067,7 @@ describe('wireHeartbeatRuntime', () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
       nowSpy.mockReturnValue(1_700_000_100_000);
-      wireHeartbeatRuntime(
+      void wireHeartbeatRuntime(
         target,
         scheduler,
         agentLoop,
@@ -1152,7 +1152,7 @@ describe('wireHeartbeatRuntime', () => {
     const nowSpy = vi.spyOn(Date, 'now');
     try {
       nowSpy.mockReturnValue(1_700_000_000_000);
-      wireHeartbeatRuntime(
+      void wireHeartbeatRuntime(
         target,
         scheduler,
         agentLoop,

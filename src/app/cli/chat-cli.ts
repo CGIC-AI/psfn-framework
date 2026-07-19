@@ -127,6 +127,7 @@ async function main(): Promise<void> {
 
   rl.prompt();
 
+  // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally receives this Promise-returning lifecycle handler.
   rl.on('line', async (line: string) => {
     const input = line.trim();
     if (!input) { rl.prompt(); return; }

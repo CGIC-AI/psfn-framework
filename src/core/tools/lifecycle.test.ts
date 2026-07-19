@@ -536,6 +536,7 @@ describe('system action=rebuild', () => {
   });
 
   it('notifies shutdown and aborts restart when build fails', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally preserves its Promise-returning lifecycle contract.
     runBuildCommand.mockImplementation(async () => {
       throw new Error('build blew up');
     });
@@ -1138,6 +1139,7 @@ describe('deferred lifecycle execution', () => {
   });
 
   it('notifies shutdown and aborts deferred rebuild restart when build fails', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Callback API intentionally preserves its Promise-returning lifecycle contract.
     runBuildCommand.mockImplementation(async () => {
       throw new Error('build blew up');
     });

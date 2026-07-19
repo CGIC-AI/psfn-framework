@@ -163,6 +163,33 @@ export interface FatiguePolicyOverchargeConfig {
   minRecentHumanParticipants: number;
 }
 
+/**
+ * Per-channel aggregate machine-pressure pacing (design bible §12.2, adjudication
+ * decision 8). This is **non-monetary**: it shapes conversation (raises the
+ * autonomous-lease bar, invites wrap-up) but is never spent — the social pot is
+ * money, room-episode pressure is pacing. It is per-channel, so two rooms are
+ * independent, and it is derived from the same durable fatigue ledger rather
+ * than an arbiter-local store. Human-triggered turns contribute zero (they are
+ * never recorded as charged machine turns), preserving the human-uncharged
+ * invariant.
+ */
+export interface FatigueRoomEpisodePressureConfig {
+  /** Continuous decay half-life for aggregate per-channel machine pressure. */
+  halfLifeMs: number;
+  /** Bounded history horizon used to keep per-channel ledger reads finite (>= halfLifeMs). */
+  windowMs: number;
+  /** Pressure contributed by one machine reply before elapsed-time decay. */
+  replyPressureUnits: number;
+  /** Pressure contributed by one machine reaction before decay (near-zero, <= replyPressureUnits). */
+  reactionPressureUnits: number;
+  /** Pressure at which the autonomous-lease confidence bar begins to rise. */
+  elevatedThreshold: number;
+  /** Pressure at which graceful wrap-up is invited (> elevatedThreshold). */
+  wrapUpThreshold: number;
+  /** Maximum additive lease-confidence bias applied at/above the wrap-up threshold. */
+  maxLeaseThresholdBias: number;
+}
+
 export interface FatigueSocialRegulationConfig {
   /** Recent relationship activity decays continuously instead of resetting at UTC midnight. */
   relationshipPressureHalfLifeMs: number;
@@ -186,6 +213,8 @@ export interface FatigueSocialRegulationConfig {
     activeWorkOrResearch: boolean;
     explicitPeerInvitation: boolean;
   };
+  /** Per-channel aggregate machine-pressure pacing (non-monetary; §12.2). */
+  roomEpisodePressure: FatigueRoomEpisodePressureConfig;
 }
 
 export interface FatigueSocialPotConfig {

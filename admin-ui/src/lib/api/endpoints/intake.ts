@@ -16,8 +16,11 @@ import type {
   IntakePolicyConfig,
   IntakeSourceListsConfig,
 } from '$lib/types';
+import type {
+  IntakeQuarantineDecisionAction as CanonicalIntakeQuarantineDecisionAction,
+} from '../../../../../src/core/cogsec/intake/quarantine-store.js';
 
-export type IntakeQuarantineDecisionAction = 'release_raw' | 'release_sanitized' | 'discard';
+export type IntakeQuarantineDecisionAction = CanonicalIntakeQuarantineDecisionAction;
 
 export interface IntakePolicyOverviewData {
   policy: IntakePolicyConfig;

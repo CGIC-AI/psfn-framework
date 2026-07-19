@@ -1,7 +1,7 @@
 import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { channelsShareActiveSessionThread } from '../session/cross-channel-continuity-port.js';
+import { normalizeOptionalIcpRootInitiationId } from './pending-follow-up-normalization.js';
 import type { PendingFollowUpQuarantineRecord } from './pending-follow-up-store-port.js';
 import type {
   PendingFollowUp,
@@ -10,6 +10,7 @@ import type {
   PendingFollowUpTiming,
   PendingFollowUpWakeCondition,
 } from './pending-follow-up-types.js';
+import type { PendingFollowUpRow } from './postgres-adapters/shared.js';
 
 export type {
   PendingFollowUpQuarantineInput,
@@ -30,6 +31,8 @@ export type {
   PendingFollowUpUpdateInput,
   PendingFollowUpWakeCondition,
 } from './pending-follow-up-types.js';
+export { normalizeOptionalIcpRootInitiationId } from './pending-follow-up-normalization.js';
+export type { PendingFollowUpRow } from './postgres-adapters/shared.js';
 
 export const PENDING_FOLLOW_UP_PRIORITIES = [
   'low',
@@ -103,28 +106,6 @@ export type PendingFollowUpEnqueueResolution =
     reason: 'backlog_cap';
   };
 
-export interface PendingFollowUpRow {
-  id: string;
-  content: string;
-  priority: string;
-  timing: string;
-  created_at: string;
-  channel_id: string;
-  channel_type: string;
-  author_id: string;
-  author_name: string;
-  due_at: string | null;
-  contact_id: string | null;
-  source_message_id: string | null;
-  context_summary: string | null;
-  wake_conditions: string | null;
-  activated_at: string | null;
-  activation_reason: string | null;
-  dampened_at: string | null | undefined;
-  dampening_reason: string | null | undefined;
-  origin_icp_root_initiation_id: string | null | undefined;
-}
-
 export interface PendingFollowUpQuarantineRow {
   id: string;
   follow_up_id: string | null;
@@ -194,16 +175,6 @@ export function normalizeOptionalId(value: string | undefined): string | undefin
   if (value === undefined) return undefined;
   const normalized = compactWhitespace(value);
   return normalized.length > 0 ? normalized : undefined;
-}
-
-export function normalizeOptionalIcpRootInitiationId(
-  value: string | null | undefined,
-): string | undefined {
-  if (value === null || value === undefined) return undefined;
-  if (!isRfc4122Uuid(value)) {
-    throw new Error('Pending follow-up originIcpRootInitiationId must be a lowercase RFC-4122 UUID');
-  }
-  return value;
 }
 
 function normalizeOptionalIdOrNull(value: string | null | undefined): string | undefined {

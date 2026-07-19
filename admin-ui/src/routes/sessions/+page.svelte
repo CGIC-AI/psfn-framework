@@ -40,7 +40,6 @@
   let oldestLoadedMessageId = $state<number | null>(null);
   let messageScrollContainer = $state<HTMLDivElement | null>(null);
 
-  let expandedToolCall = $state<number | null>(null);
   let expandedTurnId = $state<string | null>(null);
   let turnDetail = $state<AdminSessionTurnDetailData | null>(null);
   let turnDetailLoading = $state(false);
@@ -179,7 +178,6 @@
     messages = [];
     messageOntologyViews = [];
     compactionAudits = [];
-    expandedToolCall = null;
     resetTurnDetail();
     const initialRequest = {
       limit: SESSION_MESSAGE_PAGE_SIZE,
@@ -653,20 +651,6 @@
                 <p class="text-sm text-shadow-800 whitespace-pre-wrap leading-relaxed">
                   {msg.content}
                 </p>
-
-                {#if msg.toolCalls && msg.toolCalls.length > 0}
-                  <div class="mt-2">
-                    <button
-                      onclick={() => expandedToolCall = expandedToolCall === i ? null : i}
-                      class="text-sm text-gold-700 hover:text-gold-600"
-                    >
-                      {expandedToolCall === i ? 'Hide' : 'Show'} {msg.toolCalls.length} tool call(s)
-                    </button>
-                    {#if expandedToolCall === i}
-                      <pre class="mt-1 text-sm bg-bark-100 p-2 rounded overflow-x-auto text-shadow-700 border border-bark-300">{JSON.stringify(msg.toolCalls, null, 2)}</pre>
-                    {/if}
-                  </div>
-                {/if}
 
                 {#if extractTurnId(msg)}
                   {@const turnId = extractTurnId(msg)}

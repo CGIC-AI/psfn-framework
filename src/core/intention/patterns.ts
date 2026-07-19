@@ -1,5 +1,14 @@
 import type { EmotionStateSnapshot } from '../emotion/state.js';
 import type { MemoryWriter } from '../../faculties/memory/writer.js';
+import type {
+  BehavioralPatternRow,
+  BehavioralPatternSummaryRow,
+} from './postgres-adapters/shared.js';
+
+export type {
+  BehavioralPatternRow,
+  BehavioralPatternSummaryRow,
+} from './postgres-adapters/shared.js';
 
 export const BEHAVIORAL_RESPONSE_STRATEGIES = [
   'empathy',
@@ -94,31 +103,6 @@ export interface BehavioralPatternTrackerOptions {
 
 export interface BehavioralPatternContextProvider {
   getBehavioralNotes(contactId?: string, limit?: number): string;
-}
-
-export interface BehavioralPatternRow {
-  id: string;
-  contact_id: string;
-  source_message_id: string;
-  strategy: string;
-  response_excerpt: string;
-  created_at: string;
-  outcome_score: number | null;
-  outcome_observed_at: string | null;
-  outcome_source_message_id: string | null;
-  promoted_at: string | null;
-  promoted_memory_id: string | null;
-}
-
-export interface BehavioralPatternSummaryRow {
-  strategy: string;
-  sample_count: number;
-  resolved_count: number;
-  pending_count: number;
-  average_outcome: number | null;
-  positive_count: number;
-  negative_count: number;
-  last_outcome_at: string | null;
 }
 
 export const MAX_CONTACT_ID_CHARS = 160;

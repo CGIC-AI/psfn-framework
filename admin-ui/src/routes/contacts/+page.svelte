@@ -122,8 +122,6 @@
   }
 
   function contactDisplayName(contact: Contact): string {
-    const profile = data?.profileMap[contact.id];
-    if (profile?.displayName && profile.displayName.trim().length > 0) return profile.displayName;
     return contact.displayName;
   }
 
@@ -1023,7 +1021,7 @@
               <div class="flex items-center gap-3 text-sm text-shadow-600">
                 <span class="inline-flex items-center gap-1">
                   <span class="inline-block w-1.5 h-1.5 rounded-full bg-gold-400"></span>
-                  {profile.memoryCount} memories
+                  {profile.sourceMemoryIds.length} memories
                 </span>
                 {#if profile.updatedAt}
                   <span>Updated {formatTimestamp(profile.updatedAt)}</span>

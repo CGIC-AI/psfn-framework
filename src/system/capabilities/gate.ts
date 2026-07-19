@@ -105,6 +105,13 @@ export interface EgressToolGuard {
   evaluate(input: {
     toolName: string;
     requiredTokens: readonly CapabilityToken[];
+    /**
+     * The invocation params, so a destination-aware guard (the CogSec outbound
+     * disclosure gate, jp36.1.3) can derive the outward social destination from
+     * a message/reaction send's channel/contact ids. Undefined for callers that
+     * do not surface params.
+     */
+    params?: unknown;
   }): { allowed: boolean; noticeText: string } | null;
 }
 
@@ -168,6 +175,7 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
         const egressDecision = egressGuard.evaluate({
           toolName: tool.name,
           requiredTokens: eligibility.requiredTokens,
+          params,
         });
         if (egressDecision && !egressDecision.allowed) {
           return toTextResult(egressDecision.noticeText, {

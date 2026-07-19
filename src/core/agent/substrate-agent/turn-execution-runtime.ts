@@ -1085,6 +1085,10 @@ export async function handleMessageForTurn(
       permittedDestinationKinds: generationDisclosureLineage.permittedDestinations.map(constraint => constraint.kind),
       subjectContactCount: generationDisclosureLineage.subjectContactIds.length,
     });
+    // jp36.1.3: publish the folded lineage so the egress tool guard composes the
+    // destination check over it for outbound social sends this turn. Until this
+    // point the guard sees no lineage and fails closed for outward destinations.
+    runtime.setCurrentTurnDisclosureLineage(generationDisclosureLineage);
     let responseAttachments = honorNoReply
       ? []
       : recoveredResponse?.attachments

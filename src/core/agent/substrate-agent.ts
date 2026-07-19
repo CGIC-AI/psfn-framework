@@ -40,9 +40,15 @@ import type { VisionIntakeImageScreenerPort } from './substrate-agent/vision-att
 import type { LLMProviderPort, MemoryProvider, MemoryExtractor, ScratchpadProvider, WikiRetrievalPort } from './contracts.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import {
+  classifyChannelDisclosure,
   resolveChannelResponseStyle,
   type ChannelMeta,
 } from '../../system/trust/policy.js';
+import {
+  composeEgressDisclosureDecision,
+  deriveDisclosureDestination,
+  type DisclosureLineage,
+} from '../cogsec/disclosure/index.js';
 import type { ChannelPromptRegistryPort } from '../../channels/backplane/registry-port.js';
 import type { MessageHandlerOptions } from '../../channels/backplane/types.js';
 import type { PromptComposer } from '../identity/prompt-composer.js';
@@ -403,6 +409,13 @@ export class SubstrateAgent {
    * at tool-invocation time; empty outside a turn.
    */
   private currentTurnIntakeEnvelopes: readonly IntakeEnvelopeSnapshot[] = [];
+  /**
+   * Per-turn outbound disclosure lineage (bible §9.2), set once the generation
+   * context is folded and cleared at turn end. The egress tool guard composes
+   * `assessDisclosure` over this against a derived social destination (jp36.1.3).
+   * Undefined until built — an outward social send with no lineage fails closed.
+   */
+  private currentTurnDisclosureLineage: DisclosureLineage | undefined;
   /**
    * mmo9.6.1: transport-agnostic cancellation identity of the CURRENT active
    * turn (from `message.routing.cancellationId` or the dispatch options).
@@ -832,19 +845,51 @@ export class SubstrateAgent {
     const gate = this.intakeSinkGate;
     if (!gate) return null;
     return {
-      evaluate: ({ toolName, requiredTokens }) => {
+      evaluate: ({ toolName, requiredTokens, params }) => {
         if (!requiredTokens.some(isEgressCapabilityToken)) return null;
         const envelopes = this.currentTurnIntakeEnvelopes;
         const access = gate.evaluate('tool_egress', envelopes, { toolName });
-        if (!access.allowed) {
-          return { allowed: false, noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld };
+        let sinkAllowed = access.allowed;
+        let sinkReason = access.reason;
+        if (sinkAllowed) {
+          const trifecta = gate.assessEgressTrifecta({
+            envelopes,
+            privateDataInPath: true,
+            egressDescription: `tool:${toolName}`,
+          });
+          if (!trifecta.allowed) {
+            sinkAllowed = false;
+            sinkReason = trifecta.reason;
+          }
         }
-        const trifecta = gate.assessEgressTrifecta({
-          envelopes,
-          privateDataInPath: true,
-          egressDescription: `tool:${toolName}`,
+
+        // jp36.1.3: compose the outbound disclosure destination check WITH the
+        // existing sink gate — never a parallel path. The disclosure check only
+        // engages for a positively identified outbound social destination and can
+        // only narrow, never widen, the sink gate's verdict. Fail closed: an
+        // outward destination with no per-turn lineage is denied; companion-self
+        // stays eligible via the decision layer.
+        const destination = deriveDisclosureDestination({
+          method: toolName,
+          params,
+          resolveChannel: (channelId) => classifyChannelDisclosure(channelId),
         });
-        if (!trifecta.allowed) {
+        const composed = composeEgressDisclosureDecision({
+          sinkAllowed,
+          sinkReason,
+          lineage: this.currentTurnDisclosureLineage,
+          destination,
+        });
+        if (composed.disclosureEvaluated) {
+          log.debug('Egress disclosure destination check', {
+            toolName,
+            destinationKind: composed.destination?.kind,
+            allowed: composed.allowed,
+            outcome: composed.outcome,
+            reason: composed.reason,
+          });
+        }
+        if (!composed.allowed) {
           return { allowed: false, noticeText: INTAKE_FIREWALL_NOTICE_TEMPLATES.sinkHeld };
         }
         return { allowed: true, noticeText: '' };
@@ -1641,6 +1686,9 @@ export class SubstrateAgent {
           }
           this.persistCurrentInternalState();
         },
+        setCurrentTurnDisclosureLineage: (lineage) => {
+          this.currentTurnDisclosureLineage = lineage;
+        },
         buildRuntimeContext: (
           turnMessage,
           resolvedUserName,
@@ -1721,6 +1769,9 @@ export class SubstrateAgent {
       // for the duration of this turn (cleared in finally — never leaks into
       // the next turn).
       this.currentTurnIntakeEnvelopes = message.routing?.intakeEnvelopes ?? [];
+      // Fail closed: no lineage is published until the generation context is
+      // folded this turn, so a social send before then is denied outward.
+      this.currentTurnDisclosureLineage = undefined;
       try {
         if (!this.config.chargePolicy || getRunChargeContext()) {
           return await run();
@@ -1738,6 +1789,7 @@ export class SubstrateAgent {
         }, run);
       } finally {
         this.currentTurnIntakeEnvelopes = [];
+        this.currentTurnDisclosureLineage = undefined;
       }
     });
   }

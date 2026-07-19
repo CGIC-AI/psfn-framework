@@ -761,6 +761,7 @@ function createRuntime(params: {
     buildPromptTemplateVariables: vi.fn(() => ({})),
     buildDynamicPromptTemplateVariables: vi.fn(() => ({ ...BASE_TURN_PROMPT_VARIABLES })),
     setCurrentSelfModelState: vi.fn(),
+    setCurrentTurnDisclosureLineage: vi.fn(),
     buildRuntimeContext: vi.fn(() => ''),
     buildPromptPrefixCacheKey: vi.fn(() => 'prompt-prefix'),
     buildStaticPromptSettingsHash: vi.fn(() => 'settings-hash'),

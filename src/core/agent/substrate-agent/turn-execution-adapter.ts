@@ -40,6 +40,7 @@ import type { ApprovalQueuePort } from '../../../system/capabilities/approval-qu
 import type { NotificationPort } from '../../../boundary/gateway/notification-port.js';
 import type { Attachment } from '../../../shared/contracts/runtime.js';
 import type { ArtifactEgressDestination } from '../../artifacts/sensitivity-egress.js';
+import type { DisclosureLineage } from '../../cogsec/disclosure/contracts.js';
 
 interface TurnExecutionAdapterCallbacks {
   resolveTaskKind: (message: SubstrateMessage) => string | undefined;
@@ -101,6 +102,7 @@ interface TurnExecutionAdapterCallbacks {
     snapshotRef: string,
     metacognitiveFlags: readonly MetacognitiveFlag[],
   ) => void;
+  setCurrentTurnDisclosureLineage: (lineage: DisclosureLineage) => void;
   buildRuntimeContext: (
     message: SubstrateMessage,
     resolvedUserName: string,
@@ -377,6 +379,8 @@ export function createTurnExecutionRuntimeAdapter(
       snapshotRef,
       metacognitiveFlags,
     ) => options.callbacks.setCurrentSelfModelState(state, snapshotRef, metacognitiveFlags),
+    setCurrentTurnDisclosureLineage: (lineage) =>
+      options.callbacks.setCurrentTurnDisclosureLineage(lineage),
     buildRuntimeContext: (
       message,
       resolvedUserName,

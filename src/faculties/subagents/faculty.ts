@@ -39,6 +39,15 @@ import {
 } from '../../core/agent/completion-handoff.js';
 import type { CompletionNoticeBuffer } from '../../core/agent/completion-notices.js';
 import { assertWorkSpecLaneParity } from '../../primitives/llm/work-spec.js';
+import { buildShardLineageEnvelope } from '../shards/result-lineage.js';
+import type { ShardResultLineageEnvelope } from '../shards/result-lineage.js';
+import {
+  createGovernedSubagentMemoryTool,
+  createSubagentMemoryProviderFacade,
+  resolveSubagentMemoryWritePolicy,
+  type SubagentFoldReviewPort,
+  type SubagentMemoryWritePolicy,
+} from './memory-governance.js';
 import type { SubagentControlPort } from './port.js';
 import { SubagentTaskRegistry } from './task-registry.js';
 import { buildSubagentWorkSpec, createSubagentWorkSpecProvider } from './work-spec.js';
@@ -82,6 +91,15 @@ const BLOCKED_SUBAGENT_TOOL_NAMES = new Set([
   'contact_link_identity',
   'contact_set_channel_privacy',
   'contact_set_machine_intelligence',
+  // c7d: legacy split memory mutation surfaces and the delete class never
+  // reach a subagent loop; the canonical `memory` surface is injected only
+  // through the memory-governance wrapper (see resolveInjectedTools).
+  'memory_write',
+  'memory_import_batch',
+  'memory_patch',
+  'memory_redact',
+  'memory_delete',
+  'undo_memory_delete',
 ]);
 const SUBAGENT_TASK_AUTHOR_ID = 'system:subagent-task';
 const SUBAGENT_TASK_AUTHOR_NAME = 'SubagentTask';
@@ -121,6 +139,12 @@ export interface SubagentFacultyDeps {
   toolCatalogProvider?: () => SubagentToolCatalog;
   auditTrail?: SubagentAuditTrail;
   runtimeMode?: RuntimeMode;
+  /**
+   * c7d: shared shard fold-review queue used to stage restricted-class
+   * (emotional/relational/boundary) subagent memory candidates. Absent →
+   * restricted writes are denied outright (fail closed), never written.
+   */
+  foldReviewController?: SubagentFoldReviewPort | null;
 }
 
 export interface WyomingSubagentDelegationResult {
@@ -143,6 +167,7 @@ interface ActiveSubagentHandle {
   maxTurns: number;
   capabilities: string[];
   requiredCapabilities: string[];
+  memoryWritePolicy: SubagentMemoryWritePolicy;
   agentLoop: SubstrateAgent | null;
   pendingMessages: SubstrateMessage[];
   cancelReason?: string;
@@ -231,6 +256,13 @@ export class SubagentFaculty implements SubagentControlPort {
       );
     }
 
+    // c7d: resolve the memory write-tier ceiling before any registration so a
+    // malformed elevation (blank reason) fails the spawn closed.
+    const memoryWritePolicy = resolveSubagentMemoryWritePolicy({
+      capabilities,
+      ...(request.memoryWriteElevation ? { memoryWriteElevation: request.memoryWriteElevation } : {}),
+    });
+
     const executionChannelId = normalizeExecutionChannelId(request.executionChannelId)
       ?? `subagent:${subagentId}`;
     const workerExecution = createWorkerExecutionPolicy(SUBAGENT_WORKER_LANE);
@@ -262,10 +294,20 @@ export class SubagentFaculty implements SubagentControlPort {
       maxTurns,
       capabilities,
       requiredCapabilities,
+      memoryWritePolicy: memoryWritePolicy.mode,
       workerLane: SUBAGENT_WORKER_LANE,
       workerProfileClass: workerExecution.profileClass,
       modelPurpose: workerExecution.modelPurpose,
     });
+    if (memoryWritePolicy.mode === 'elevated') {
+      // c7d: per-spawn elevation is explicit and audit-trailed, never blanket.
+      this.auditTrail?.append('subagent.memory.elevation.granted', {
+        subagentId,
+        name: request.name,
+        channelId: executionChannelId,
+        reason: memoryWritePolicy.reason,
+      });
+    }
     const completion = createDeferred<SubagentResult>();
     const handle: ActiveSubagentHandle = {
       subagentId,
@@ -276,6 +318,7 @@ export class SubagentFaculty implements SubagentControlPort {
       maxTurns,
       capabilities,
       requiredCapabilities,
+      memoryWritePolicy,
       agentLoop: null,
       pendingMessages: [],
       completion: completion.promise,
@@ -395,10 +438,15 @@ export class SubagentFaculty implements SubagentControlPort {
       handle.agentLoop = agentLoop;
 
       if (this.deps.memoryProvider) {
-        agentLoop.memoryProvider = this.deps.memoryProvider;
+        // c7d: never hand the raw provider instance to a subagent loop — the
+        // facade forwards only the read methods of the MemoryProvider contract.
+        agentLoop.memoryProvider = createSubagentMemoryProviderFacade(this.deps.memoryProvider);
+        this.auditTrail?.append('subagent.memory.provider.facade', {
+          subagentId: handle.subagentId,
+        });
       }
 
-      const injectedTools = this.resolveInjectedTools();
+      const injectedTools = this.resolveInjectedTools(handle);
       for (const tool of injectedTools) {
         agentLoop.registerTool(tool);
       }
@@ -1173,7 +1221,7 @@ export class SubagentFaculty implements SubagentControlPort {
     };
   }
 
-  private resolveInjectedTools(): AgentTool<any>[] {
+  private resolveInjectedTools(handle: ActiveSubagentHandle): AgentTool<any>[] {
     const catalog = this.deps.toolCatalogProvider?.();
     if (!catalog) return [];
 
@@ -1181,11 +1229,54 @@ export class SubagentFaculty implements SubagentControlPort {
     for (const tool of [...catalog.core, ...catalog.extended]) {
       if (BLOCKED_SUBAGENT_TOOL_NAMES.has(tool.name)) continue;
       if (!availableByName.has(tool.name)) {
-        availableByName.set(tool.name, tool);
+        availableByName.set(
+          tool.name,
+          // c7d: the canonical memory surface only reaches a subagent loop
+          // behind the write-governance wrapper.
+          tool.name === 'memory' ? this.governMemoryTool(tool, handle) : tool,
+        );
       }
     }
 
     return [...availableByName.values()];
+  }
+
+  private governMemoryTool(tool: AgentTool<any>, handle: ActiveSubagentHandle): AgentTool<any> {
+    return createGovernedSubagentMemoryTool(tool, {
+      subagentId: handle.subagentId,
+      subagentName: handle.request.name,
+      channelId: handle.channelId,
+      task: handle.request.task,
+      policy: handle.memoryWritePolicy,
+      resolveLineage: () => this.buildSubagentLineage(handle),
+      foldReview: this.deps.foldReviewController ?? null,
+      auditTrail: this.auditTrail,
+    });
+  }
+
+  /**
+   * c7d: staged subagent candidates ride the shard fold-review queue, so they
+   * carry a full lineage envelope keyed by the subagent id (charter 6.13
+   * provenance rules apply to the derived claim regardless of worker kind).
+   */
+  private buildSubagentLineage(handle: ActiveSubagentHandle): ShardResultLineageEnvelope {
+    const sourceContext = handle.request.sourceContext;
+    return buildShardLineageEnvelope({
+      kind: 'spawn',
+      coreCompanionId: resolveCoreCompanionIdFromConfig(this.deps.config),
+      shardId: handle.subagentId,
+      shardChannelId: handle.channelId,
+      sourceMessage: handle.baseMessage,
+      ...(sourceContext
+        ? {
+            sourceContext: {
+              channelId: sourceContext.channelId,
+              ...(sourceContext.requestId ? { requestId: sourceContext.requestId } : {}),
+              ...(sourceContext.turnId ? { turnId: sourceContext.turnId } : {}),
+            },
+          }
+        : {}),
+    });
   }
 
   private resolveCapabilityTier(): CapabilityTier {

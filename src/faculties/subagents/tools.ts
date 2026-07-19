@@ -23,6 +23,7 @@ interface SubagentToolParams {
   max_turns?: number;
   capabilities?: string[];
   required_capabilities?: string[];
+  memory_write_elevation_reason?: string;
   task_limit?: number;
   transcript_limit?: number;
 }
@@ -56,6 +57,13 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
       })),
       required_capabilities: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
         description: 'Optional required capability tokens that must be present before execution.',
+      })),
+      memory_write_elevation_reason: Type.Optional(Type.String({
+        minLength: 1,
+        description: 'Grants this spawn direct emotional/relational/boundary memory writes '
+          + '(introspection or memory-maintenance work only). Audit-trailed; never grants delete. '
+          + 'Without it, add the "memory.write" capability for governed writes: procedural writes '
+          + 'land directly, restricted classes stage for fold review.',
       })),
       task_limit: Type.Optional(Type.Integer({
         minimum: 1,
@@ -92,6 +100,9 @@ export function createSubagentTool(port: SubagentControlPort): SubstrateAgentToo
               ...(params.capabilities?.length ? { capabilities: params.capabilities } : {}),
               ...(params.required_capabilities?.length
                 ? { requiredCapabilities: params.required_capabilities }
+                : {}),
+              ...(params.memory_write_elevation_reason?.trim()
+                ? { memoryWriteElevation: { reason: params.memory_write_elevation_reason.trim() } }
                 : {}),
               ...(requestContext?.channelId
                 ? {

@@ -152,6 +152,7 @@ These are project law. They are not suggestions.
 34. CogSec must preserve provenance and taint at consequential cognitive sinks; scanners are triage, not the trust boundary.
 35. Personal companion state and workspace are never implicitly shared because an installation hosts a fleet; shared workspace and world data require explicit scope and governance.
 36. Autonomy and resource pacing must prefer weighted, contextual, reversible guidance over arbitrary behavioral limits; non-negotiable safety boundaries remain fail-closed, and operational circuit breakers are exceptional, high-threshold, auditable recovery controls.
+37. Subagent memory writes are procedural and task-scoped by default; emotional, relational, and boundary writes from a subagent context require fold-review staging or an explicit per-spawn, audit-trailed elevation, and memory deletion is never available from a subagent context.
 
 If a proposed change violates one of those, the proposal is wrong even if it appears operationally convenient.
 
@@ -509,6 +510,26 @@ Examples:
 Subagents are lower-tier than shards and may become a faculty of their own. The
 distinction is conceptual, not merely a timeout: a subagent completes a bounded
 job, while a shard is a scoped continuation of an origin companion.
+
+Subagent memory-write governance mirrors shard fold-back (6.13). Bounded-ness
+and write-trust are different axes: the toolset a subagent resolves from the
+deployment tier never implies canonical write trust.
+
+- subagent memory writes are procedural and task-scoped by default, opt-in per
+  spawn, and every subagent-originated write carries subagent provenance
+- emotional, relational, and boundary L2 writes from a subagent context must
+  either stage as provenance-tagged fold-review candidates for origin-side
+  review, or ride an explicit, per-spawn, audit-trailed elevation reserved for
+  lanes that operate on emotional memory by design (introspection and memory
+  maintenance); blanket write trust is forbidden
+- a write whose memory type cannot be determined is treated as the restricted
+  class and fails closed
+- memory deletion is never available from a subagent context, at any tier or
+  elevation
+
+Core remains authoritative for emotional, relational, identity, values, and
+trust truth; a subagent-staged candidate that survives review remains a
+provenance-bearing derived claim, exactly as in 6.13.
 
 ### 6.12 Shard
 

@@ -1,7 +1,8 @@
-import { isRecord } from '../../shared/utils/types.js';
+import { isRecord, toRecordView } from '../../shared/utils/types.js';
 import type { SessionEntry } from '../../core/session/types.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
 import { isCogSecTombstoneContent, isCogSecInvalidatedSummaryContent } from '../../core/cogsec/tombstones.js';
+import { restoreSnapshotSection } from './turn-record-snapshot-view.js';
 
 /**
  * Turn-record session-entry diet (bead psfn-framework-9ree).
@@ -186,7 +187,7 @@ function isValidL0Id(value: unknown): value is number {
 function readSessionContext(record: TurnRecord): Record<string, unknown> | undefined {
   const snapshot = record.observability?.snapshot;
   if (!snapshot || !isRecord(snapshot.sessionContext)) return undefined;
-  return snapshot.sessionContext as unknown as Record<string, unknown>;
+  return snapshot.sessionContext;
 }
 
 function withSessionContext(record: TurnRecord, sessionContext: Record<string, unknown>): TurnRecord {
@@ -198,7 +199,7 @@ function withSessionContext(record: TurnRecord, sessionContext: Record<string, u
       ...observability,
       snapshot: {
         ...snapshot,
-        sessionContext: sessionContext as unknown as NonNullable<typeof snapshot.sessionContext>,
+        sessionContext: restoreSnapshotSection(sessionContext),
       },
     },
   };
@@ -390,7 +391,7 @@ function readPlanMessages(record: TurnRecord): Record<string, unknown>[] | undef
   const snapshot = record.observability?.snapshot;
   const plan = snapshot?.plan;
   if (!isRecord(plan) || !Array.isArray(plan.messages)) return undefined;
-  return plan.messages as unknown as Record<string, unknown>[];
+  return plan.messages.map(toRecordView);
 }
 
 function messageSourceEntryIds(message: Record<string, unknown>): number[] {
@@ -432,7 +433,7 @@ function readCapturedWirePayload(record: TurnRecord): Record<string, unknown> | 
 function withCapturedWirePayload(record: TurnRecord, captured: Record<string, unknown>): TurnRecord {
   const observability = record.observability!;
   const snapshot = observability.snapshot!;
-  const promptContext = snapshot.promptContext as unknown as Record<string, unknown>;
+  const promptContext = toRecordView(snapshot.promptContext!);
   const providerObservability = promptContext.providerObservability as Record<string, unknown>;
   return {
     ...record,
@@ -440,13 +441,13 @@ function withCapturedWirePayload(record: TurnRecord, captured: Record<string, un
       ...observability,
       snapshot: {
         ...snapshot,
-        promptContext: {
+        promptContext: restoreSnapshotSection({
           ...promptContext,
           providerObservability: {
             ...providerObservability,
             capturedWirePayload: captured,
           },
-        } as unknown as NonNullable<typeof snapshot.promptContext>,
+        }),
       },
     },
   };
@@ -593,14 +594,14 @@ function gateRenderedViews(
   if (anyPlanSuppressed && messages) {
     const observability = record.observability!;
     const snapshot = observability.snapshot!;
-    const plan = snapshot.plan as unknown as Record<string, unknown>;
+    const plan = toRecordView(snapshot.plan!);
     next = {
       ...next,
       observability: {
         ...observability,
         snapshot: {
           ...snapshot,
-          plan: { ...plan, messages: gated } as unknown as NonNullable<typeof snapshot.plan>,
+          plan: restoreSnapshotSection({ ...plan, messages: gated }),
         },
       },
     };

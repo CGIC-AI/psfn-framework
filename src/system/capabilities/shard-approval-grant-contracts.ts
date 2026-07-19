@@ -55,6 +55,15 @@ export interface ShardApprovalWorkloadRegistryPort extends AuthenticatedShardWor
     parentCompanionId: string,
     channelId: string,
   ): AuthenticatedShardWorkloadHandle | undefined;
+  /**
+   * True when this channel has EVER hosted a shard workload for this parent
+   * in this process (live, ended, or superseded). Satellite/Wyoming shard
+   * channels carry arbitrary schemes, so shard recognition must be
+   * registry-backed, not prefix-based: a recognizably shard-hosting channel
+   * that no longer resolves to a live workload is denied, never treated as
+   * the parent's own dispatch.
+   */
+  hasHostedWorkloadForChannel(parentCompanionId: string, channelId: string): boolean;
 }
 
 export interface AuthenticatedShardWorkloadIdentity {

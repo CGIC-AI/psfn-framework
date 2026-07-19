@@ -36,6 +36,7 @@ import { SubstrateAgent } from '../../core/agent/substrate-agent.js';
 import { ShardManager } from '../../faculties/shards/manager.js';
 import { ShardWorkloadRegistry } from '../../faculties/shards/workload-registry.js';
 import { CAPABILITY_TOKENS } from '../../system/capabilities/tokens.js';
+import { deriveShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
 import type { ShardApprovalGrantAuditEvent } from '../../system/capabilities/shard-approval-grants.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
 import type { SessionHmacKeyring } from '../../persistence/journals/journal-utils.js';
@@ -574,6 +575,51 @@ describe('shard approval-grant production composition (2h6q.3 / 2h6q.1)', () => 
       decision: 'approve',
     })).resolves.toMatchObject({ status: 'expired', executed: false });
     expect(hubCalls).toHaveLength(hubCallsBefore);
+  }, 20_000);
+
+  it('denies an ended satellite-scheme shard channel instead of auto-clearing (registry-backed recognition)', async () => {
+    // Satellite/Wyoming delegations register arbitrary channel schemes (no
+    // `shard:` prefix). Recognition must come from registry state, so an
+    // ended workload's channel can never fall through to the autonomous
+    // parent's auto-clear.
+    const wyomingChannel = 'api:wyoming:home:voice-sat-1';
+    const handle = registry.registerWorkload({
+      parentCompanionId: PARENT,
+      shardId: 'wyoming-shard-composite-1',
+      shardLabel: 'Satellite Shard',
+      channelIds: [wyomingChannel],
+      capabilityGrant: deriveShardCapabilityGrant({
+        companionId: PARENT,
+        tier: 'custom',
+        customTokens: [...CAPABILITY_TOKENS],
+      }),
+    });
+    const worldOps = new GatewayWorldOps(homeAssistantOpsFor(mainConn));
+
+    // While live, the satellite channel resolves its workload: the dispatch
+    // takes the exact-once grant path (never the parent's autonomy).
+    await expect(
+      runWithRequestContext({ channelId: wyomingChannel }, async () =>
+        worldOps.callService(callServiceParams())),
+    ).rejects.toMatchObject({ code: GatewayErrors.NEEDS_APPROVAL });
+
+    // Ended workload: the same channel is still recognizably shard-originated
+    // and must deny fail-closed under the autonomous parent tier.
+    registry.endWorkload(handle);
+    const hubCallsBefore = hubCalls.length;
+    await expect(
+      runWithRequestContext({ channelId: wyomingChannel }, async () =>
+        worldOps.callService(callServiceParams())),
+    ).rejects.toMatchObject({ code: GatewayErrors.POLICY_DENIED });
+    expect(hubCalls).toHaveLength(hubCallsBefore);
+
+    // A channel that never hosted a shard keeps the ordinary parent path.
+    const parentResult = await runWithRequestContext(
+      { channelId: 'discord:general-777' },
+      async () => worldOps.callService(callServiceParams()),
+    );
+    expect(parentResult).toMatchObject({ domain: 'light', service: 'turn_on' });
+    expect(hubCalls).toHaveLength(hubCallsBefore + 1);
   }, 20_000);
 
   it('fails closed for shard-recognizable dispatches when no workload registry is configured', async () => {

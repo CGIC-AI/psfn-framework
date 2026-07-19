@@ -77,6 +77,16 @@ export class ShardWorkloadRegistry implements ShardApprovalWorkloadRegistryPort 
    * lookup on it denies (fail closed) until exactly one claimant remains.
    */
   private readonly currentByChannelKey = new Map<string, Set<AuthenticatedShardWorkloadHandle>>();
+  /**
+   * Tombstones: every channel key that has EVER hosted a workload in this
+   * process, retained after end/supersede. Satellite/Wyoming shard channels
+   * carry arbitrary schemes, so the gateway's shard recognition must be
+   * registry-backed — an ended or superseded shard channel is still
+   * recognizably shard-originated and must deny, never fall through to the
+   * parent's own authority. Bounded: shards are short-lived and the set is
+   * process-scoped (one small string per launched channel).
+   */
+  private readonly everRegisteredChannelKeys = new Set<string>();
   private generationCounter = 0;
 
   registerWorkload(input: ShardWorkloadRegistrationInput): AuthenticatedShardWorkloadHandle {
@@ -121,6 +131,7 @@ export class ShardWorkloadRegistry implements ShardApprovalWorkloadRegistryPort 
       const claimants = this.currentByChannelKey.get(candidate) ?? new Set();
       claimants.add(handle);
       this.currentByChannelKey.set(candidate, claimants);
+      this.everRegisteredChannelKeys.add(candidate);
     }
     return handle;
   }
@@ -180,5 +191,14 @@ export class ShardWorkloadRegistry implements ShardApprovalWorkloadRegistryPort 
     }
     const [handle] = claimants;
     return handle;
+  }
+
+  hasHostedWorkloadForChannel(parentCompanionId: string, channelId: string): boolean {
+    const parent = parentCompanionId.trim();
+    const channel = channelId.trim();
+    if (!parent || !channel) {
+      return false;
+    }
+    return this.everRegisteredChannelKeys.has(channelKey(parent, channel));
   }
 }

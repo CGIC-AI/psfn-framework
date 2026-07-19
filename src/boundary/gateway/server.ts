@@ -1378,10 +1378,14 @@ export class GatewayServer {
    * runtime-stamped correlation channel id is only a lookup key into the
    * server-owned workload registry; every authority value (parent binding,
    * generation, frozen derived access) comes from registration state. Fail
-   * closed: a recognizably shard-originated channel (`shard:` scheme) that
-   * cannot be bound to a live workload of THIS connection's authenticated
-   * companion is denied — it must never fall through to the parent's own
-   * (possibly autonomous) authority, even when no registry is configured.
+   * closed: a recognizably shard-originated channel that cannot be bound to
+   * a live workload of THIS connection's authenticated companion is denied —
+   * it must never fall through to the parent's own (possibly autonomous)
+   * authority. Recognition is registry-backed, not just prefix-based:
+   * satellite/Wyoming shard workloads register arbitrary channel schemes, so
+   * the registry's ever-hosted tombstones (live, ended, or superseded
+   * generations) deny alongside the `shard:` scheme rule, which alone covers
+   * the no-registry configuration.
    */
   private resolveShardWorkloadForGatedDispatch(
     conn: GatewayRpcConnection,
@@ -1400,7 +1404,11 @@ export class GatewayServer {
         return { workload };
       }
     }
-    if (normalized.startsWith('shard:')) {
+    const shardRecognizable = normalized.startsWith('shard:')
+      || (registry !== undefined
+        && companionId !== undefined
+        && registry.hasHostedWorkloadForChannel(companionId, normalized));
+    if (shardRecognizable) {
       throw new JSONRPCErrorException(
         'Shard-originated request denied: no live authenticated shard workload matches this dispatch',
         GatewayErrors.POLICY_DENIED,

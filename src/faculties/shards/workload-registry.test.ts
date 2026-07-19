@@ -100,6 +100,33 @@ describe('ShardWorkloadRegistry (production workload handles, 2h6q.3)', () => {
     expect(registry.resolveWorkloadForChannel(PARENT, 'api:wyoming:site:sat')).toBe(second);
   });
 
+  it('tracks ever-hosted channels (tombstones) across end and supersede, scoped per parent', () => {
+    const registry = new ShardWorkloadRegistry();
+    const wyomingChannel = 'api:wyoming:site:sat-1';
+    expect(registry.hasHostedWorkloadForChannel(PARENT, wyomingChannel)).toBe(false);
+
+    const handle = register(registry, { shardId: 'wy-a', channelIds: [wyomingChannel] });
+    expect(registry.hasHostedWorkloadForChannel(PARENT, wyomingChannel)).toBe(true);
+    // Scoped to the registering parent; never leaks recognition cross-parent.
+    expect(registry.hasHostedWorkloadForChannel(OTHER_PARENT, wyomingChannel)).toBe(false);
+    // A channel that never hosted a workload is not shard-recognizable.
+    expect(registry.hasHostedWorkloadForChannel(PARENT, 'discord:general-777')).toBe(false);
+
+    // Ended workload: the channel stays recognizably shard-originated even
+    // though it no longer resolves — satellite channels have no `shard:`
+    // scheme, so this tombstone is the fail-closed recognition signal.
+    registry.endWorkload(handle);
+    expect(registry.resolveWorkloadForChannel(PARENT, wyomingChannel)).toBeUndefined();
+    expect(registry.hasHostedWorkloadForChannel(PARENT, wyomingChannel)).toBe(true);
+
+    // Superseded generation: same guarantee.
+    const first = register(registry, { shardId: 'wy-b', channelIds: ['api:wyoming:site:sat-2'] });
+    register(registry, { shardId: 'wy-b', channelIds: ['api:wyoming:site:sat-3'] });
+    expect(registry.resolveAuthenticatedWorkload(first)).toBeUndefined();
+    expect(registry.hasHostedWorkloadForChannel(PARENT, 'api:wyoming:site:sat-2')).toBe(true);
+    expect(registry.hasHostedWorkloadForChannel(PARENT, 'api:wyoming:site:sat-3')).toBe(true);
+  });
+
   it('fails closed on malformed registrations', () => {
     const registry = new ShardWorkloadRegistry();
     expect(() => register(registry, { parentCompanionId: '  ' })).toThrow(/parentCompanionId/);

@@ -52,9 +52,9 @@ export class ShardToolSyncHelper {
         }
         this.enforceShardToolSyncPolicy(tool.name, params, shardId, toolCallId);
         const scopedParams = this.applyShardSourceParams(tool.name, params, shardId);
-        // scopedParams has extra shard-source fields; tool.execute expects Static<TSchema>
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        return tool.execute(toolCallId, scopedParams as any, signal);
+        // scopedParams carries extra shard-source fields; narrow to the wrapped
+        // tool's own declared param type (Static<TParameters>) rather than erasing it.
+        return tool.execute(toolCallId, scopedParams as Parameters<typeof tool.execute>[1], signal);
       },
     };
   }
@@ -65,7 +65,7 @@ export class ShardToolSyncHelper {
     toolCallId: string,
     params: unknown,
     memoryReviewContext: Pick<ShardRuntimeRecord, 'channelId' | 'task' | 'lineage'>,
-  ): Promise<AgentToolResult<any>> {
+  ): Promise<AgentToolResult<unknown>> {
     if (typeof params !== 'object' || params === null || Array.isArray(params)) {
       const message = operation === 'memory_import_batch'
         ? 'Error: records must be a non-empty array'

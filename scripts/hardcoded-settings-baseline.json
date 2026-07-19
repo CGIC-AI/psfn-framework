@@ -1042,16 +1042,6 @@
     },
     {
       "file": "src/channels/discord/adapter.ts",
-      "name": "LONG_RUNNING_STATUS_INITIAL_DELAY_MS",
-      "value": "12_000"
-    },
-    {
-      "file": "src/channels/discord/adapter.ts",
-      "name": "LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS",
-      "value": "20_000"
-    },
-    {
-      "file": "src/channels/discord/adapter.ts",
       "name": "MAX_DISCORD_LENGTH",
       "value": "2000"
     },
@@ -1101,6 +1091,18 @@
       "value": "10"
     },
     {
+      "file": "src/channels/shared/long-running-tool-status.ts",
+      "name": "INITIAL_DELAY_MS",
+      "value": "12_000",
+      "note": "Code-owned channel status cadence preserved from the existing Discord and Telegram adapter behavior."
+    },
+    {
+      "file": "src/channels/shared/long-running-tool-status.ts",
+      "name": "UPDATE_MIN_INTERVAL_MS",
+      "value": "20_000",
+      "note": "Code-owned channel status cadence preserved from the existing Discord and Telegram adapter behavior."
+    },
+    {
       "file": "src/channels/telegram/adapter.ts",
       "name": "DEFAULT_LONG_POLL_TIMEOUT_SECONDS",
       "value": "20"
@@ -1109,16 +1111,6 @@
       "file": "src/channels/telegram/adapter.ts",
       "name": "DEFAULT_TYPING_INTERVAL_MS",
       "value": "4_000"
-    },
-    {
-      "file": "src/channels/telegram/adapter.ts",
-      "name": "LONG_RUNNING_STATUS_INITIAL_DELAY_MS",
-      "value": "12_000"
-    },
-    {
-      "file": "src/channels/telegram/adapter.ts",
-      "name": "LONG_RUNNING_STATUS_UPDATE_MIN_INTERVAL_MS",
-      "value": "20_000"
     },
     {
       "file": "src/channels/telegram/adapter.ts",
@@ -1860,11 +1852,6 @@
     },
     {
       "file": "src/core/intention/care-reminders.ts",
-      "name": "MAX_LIST_LIMIT",
-      "value": "200"
-    },
-    {
-      "file": "src/core/intention/care-reminders.ts",
       "name": "MAX_TEXT_CHARS",
       "value": "500"
     },
@@ -1959,7 +1946,7 @@
       "value": "500"
     },
     {
-      "file": "src/core/intention/concerns.ts",
+      "file": "src/core/intention/list-limit.ts",
       "name": "MAX_LIST_LIMIT",
       "value": "200"
     },
@@ -1975,13 +1962,13 @@
     },
     {
       "file": "src/core/intention/patterns.ts",
-      "name": "MAX_CONTACT_ID_CHARS",
-      "value": "160"
+      "name": "MAX_BEHAVIORAL_LIST_LIMIT",
+      "value": "500"
     },
     {
       "file": "src/core/intention/patterns.ts",
-      "name": "MAX_LIST_LIMIT",
-      "value": "500"
+      "name": "MAX_CONTACT_ID_CHARS",
+      "value": "160"
     },
     {
       "file": "src/core/intention/patterns.ts",
@@ -2022,11 +2009,6 @@
       "file": "src/core/intention/pending-follow-ups.ts",
       "name": "MAX_ID_CHARS",
       "value": "128"
-    },
-    {
-      "file": "src/core/intention/pending-follow-ups.ts",
-      "name": "MAX_LIST_LIMIT",
-      "value": "200"
     },
     {
       "file": "src/core/intention/pending-follow-ups.ts",
@@ -2127,11 +2109,6 @@
       "file": "src/core/intention/postgres-adapters/shared.ts",
       "name": "MAX_CONTACT_ID_CHARS",
       "value": "160"
-    },
-    {
-      "file": "src/core/intention/postgres-adapters/shared.ts",
-      "name": "MAX_LIST_LIMIT",
-      "value": "200"
     },
     {
       "file": "src/core/intention/postgres-adapters/shared.ts",
@@ -3994,16 +3971,6 @@
       "value": "128"
     },
     {
-      "file": "src/primitives/voice/transports/discord-output.ts",
-      "name": "PLAYBACK_FINISH_TIMEOUT_MS",
-      "value": "120_000"
-    },
-    {
-      "file": "src/primitives/voice/transports/discord-output.ts",
-      "name": "PLAYBACK_START_TIMEOUT_MS",
-      "value": "5_000"
-    },
-    {
       "file": "src/primitives/voice/transports/websocket/runtime.ts",
       "name": "DEFAULT_MAX_AUDIO_CHUNK_BYTES",
       "value": "256 * 1024"
@@ -4195,7 +4162,7 @@
     },
     {
       "file": "src/shared/routing/companion-id.ts",
-      "name": "COMPANION_ID_MAX_LENGTH",
+      "name": "SHARD_ID_MAX_LENGTH",
       "value": "128"
     },
     {

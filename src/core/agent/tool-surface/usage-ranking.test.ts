@@ -93,7 +93,7 @@ describe('computeToolPinSuggestions', () => {
     const suggestions = computeToolPinSuggestions({
       ranking,
       extendedToolNames: ['repo', 'shell'],
-      alreadyPinned: ['vault', 'library'],
+      alreadyPinned: ['vault', 'beads'],
       slotLimit: 2,
       minInvocations: 1,
     });

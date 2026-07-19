@@ -17,7 +17,7 @@ import type {
   LLMProviderWireMessage,
   LLMSystemPromptTransport,
   ToolSchema,
-} from '../../../../shared/contracts/runtime.js';
+} from '../../../../shared/contracts/runtime-base.js';
 import type { ConversationScope } from '../../../session/conversation-scope.js';
 import { countTokens } from '../../../../primitives/llm/tokens.js';
 import {

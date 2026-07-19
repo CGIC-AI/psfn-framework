@@ -18,7 +18,6 @@ import { createSessionTool } from '../../tools/session.js';
 import { createOrientTool } from '../../../faculties/core-memory/tools.js';
 import { createMemoryTool } from '../../../faculties/memory/tools.js';
 import { createScratchpadTool } from '../../../faculties/memory/tools/scratchpad.js';
-import { createResearchLibraryTool } from '../../../faculties/memory/research-library/tools.js';
 import { createNorthStarTool } from '../../../faculties/north-star/tools.js';
 import { createSkillTool } from '../../../faculties/skills/tools.js';
 import { createSubagentTool } from '../../../faculties/subagents/tools.js';
@@ -40,6 +39,5 @@ export function createProviderFactoryToolCatalog(): AgentTool<any>[] {
     createNorthStarTool(inert), createBeadsTool(inert), createNotifyTool(inert),
     createGenerateImageTool(inert), createSelfieTool(inert), createSubagentTool(inert),
     createVaultTool(inert), createJournalTool(inert),
-    createResearchLibraryTool(inert, inert),
   ];
 }

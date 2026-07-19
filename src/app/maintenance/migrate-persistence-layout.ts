@@ -1,13 +1,17 @@
 #!/usr/bin/env tsx
 
 import '../../shared/utils/load-dotenv.js';
-import { loadConfig } from '../../system/config/load-config.js';
 import {
   buildPersistenceCutoverOptionsFromConfig,
   buildPersistenceCutoverPlan,
   executePersistenceCutover,
 } from '../../persistence/cutover.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
+import {
+  bootstrapMaintenanceRuntime,
+  isMaintenanceCliEntrypoint,
+  parseCommonMaintenanceArgs,
+  runMaintenanceCli,
+} from './cli-harness.js';
 
 interface CliOptions {
   apply: boolean;
@@ -28,54 +32,25 @@ function printUsage(): void {
   console.log('  -h, --help               Show this help message');
 }
 
-function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = {
-    apply: false,
-    showHelp: false,
-  };
-
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === '--help' || arg === '-h') {
-      options.showHelp = true;
-      continue;
-    }
-    if (arg === '--apply') {
-      options.apply = true;
-      continue;
-    }
-    if (arg === '--legacy-data-dir') {
-      const value = argv[index + 1];
-      if (!value) {
-        throw new Error('Missing value for --legacy-data-dir');
-      }
-      options.legacyDataDir = value;
-      index += 1;
-      continue;
-    }
-    if (arg === '--legacy-companion-dir') {
-      const value = argv[index + 1];
-      if (!value) {
-        throw new Error('Missing value for --legacy-companion-dir');
-      }
-      options.legacyCompanionDir = value;
-      index += 1;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-
-  return options;
+function parseArgs(argv: readonly string[]): CliOptions {
+  return parseCommonMaintenanceArgs<CliOptions>(argv, {
+    initial: { apply: false, showHelp: false },
+    extraFlags: {
+      '--apply': ({ options }) => {
+        options.apply = true;
+      },
+      '--legacy-data-dir': ({ options, readValue }) => {
+        options.legacyDataDir = readValue();
+      },
+      '--legacy-companion-dir': ({ options, readValue }) => {
+        options.legacyCompanionDir = readValue();
+      },
+    },
+  });
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.showHelp) {
-    printUsage();
-    return;
-  }
-
-  const config = loadConfig();
+async function run(options: CliOptions): Promise<void> {
+  const { config } = await bootstrapMaintenanceRuntime({ hydrateSecrets: false });
   const migrationOptions = buildPersistenceCutoverOptionsFromConfig(config);
   if (options.legacyDataDir) {
     migrationOptions.legacySharedDataDir = options.legacyDataDir;
@@ -94,7 +69,11 @@ async function main(): Promise<void> {
   }, null, 2));
 }
 
-main().catch((error) => {
-  console.error(`Persistence migration failed: ${toErrorMessage(error)}`);
-  process.exit(1);
-});
+if (isMaintenanceCliEntrypoint(import.meta.url)) {
+  void runMaintenanceCli({
+    label: 'Persistence migration',
+    parseArgs,
+    printUsage,
+    run,
+  });
+}

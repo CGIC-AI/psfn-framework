@@ -4,7 +4,7 @@ import { createArtifactReturnPort } from './artifact-return-port.js';
 import { buildShardReturnedArtifacts } from './artifact-policy.js';
 
 describe('buildShardReturnedArtifacts', () => {
-  const TEST_COMPANION_ID = 'companion-test';
+  const TEST_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
   const lineage = buildShardLineageEnvelope({
     kind: 'spawn',
     coreCompanionId: TEST_COMPANION_ID,

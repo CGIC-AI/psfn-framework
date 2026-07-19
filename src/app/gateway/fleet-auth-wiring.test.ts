@@ -1,12 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { startOptionalGatewayApiServer } from './api-surface.js';
+import { FLEET_SSO_FLEET_MANIFEST_REQUIRED_ERROR } from '../../boundary/fleet-auth/fleet-sso-transport.js';
 
 describe('gateway fleet authorization context wiring', () => {
   it('passes exact manifest companion IDs and enables only the complete principal composition', () => {
     const mainSource = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
     const apiSurfaceSource = readFileSync(new URL('./api-surface.ts', import.meta.url), 'utf8');
-    const manifestGuard = mainSource.indexOf('if (config.fleetAuth && !config.companionFleet)');
+    const manifestGuard = mainSource.indexOf(
+      'requireFleetSsoFleetManifest(config.companionFleet)',
+    );
     const persistenceInitialization = mainSource.indexOf(
       'const fleetAuthPersistence = await initializeGatewayFleetAuthPersistence({',
     );
@@ -57,11 +60,40 @@ describe('gateway fleet authorization context wiring', () => {
   it('fails before listen when fleet auth is enabled with partial principal composition', async () => {
     await expect(startOptionalGatewayApiServer({
       apiPort: 8443,
-      config: { fleetAuth: {} },
+      config: {
+        fleetAuth: {},
+        companionFleet: {
+          persistenceRoot: '/runtime',
+          workspacesRoot: '/runtime/workspaces',
+          sharedWorkspacePath: '/runtime/shared',
+          companions: [{
+            companionId: '11111111-1111-4111-8111-111111111111',
+            companionDataDir: '/runtime/companions/one',
+            characterCardPath: '/runtime/companions/one/character-card.json',
+            personalWorkspacePath: '/runtime/workspaces/one',
+            postgresSchema: 'companion_one',
+          }],
+        },
+      },
       env: {},
       fleetAuthBroker: {},
     } as unknown as Parameters<typeof startOptionalGatewayApiServer>[0])).rejects.toThrow(
       'Fleet-auth principal composition is incomplete; refusing to expose the gateway API',
     );
+  });
+
+  it('fails before listen with the one-entry manifest requirement when companions.json is absent', async () => {
+    let thrown: unknown;
+    try {
+      await startOptionalGatewayApiServer({
+        apiPort: 8443,
+        config: { fleetAuth: {} },
+        env: {},
+      } as unknown as Parameters<typeof startOptionalGatewayApiServer>[0]);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe(FLEET_SSO_FLEET_MANIFEST_REQUIRED_ERROR);
   });
 });

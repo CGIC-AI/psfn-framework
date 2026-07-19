@@ -51,6 +51,7 @@ describe('PromptLayerStore', () => {
       const layer = store.create({
         type: 'base',
         name: 'Test Base',
+        identifier: 'main',
         content: 'You are a helpful assistant.',
       });
 
@@ -67,7 +68,7 @@ describe('PromptLayerStore', () => {
     });
 
     it('persists to JSON file via atomic write', () => {
-      store.create({ type: 'base', name: 'Test', content: 'content' });
+      store.create({ type: 'base', name: 'Test', content: 'content', identifier: 'main' });
 
       expect(existsSync(filePath)).toBe(true);
       const raw = readFileSync(filePath, 'utf-8');
@@ -100,6 +101,14 @@ describe('PromptLayerStore', () => {
       });
 
       expect(layer.taskKind).toBe('heartbeat');
+    });
+
+    it('requires identifiers for new base layers', () => {
+      expect(() => store.create({
+        type: 'base',
+        name: 'Invalid Base',
+        content: 'base',
+      })).toThrow('identifier must be a non-empty string for base prompt layers');
     });
   });
 
@@ -188,14 +197,14 @@ describe('PromptLayerStore', () => {
     });
 
     it('returns all layers', () => {
-      store.create({ type: 'base', name: 'A', content: 'a' });
+      store.create({ type: 'base', name: 'A', content: 'a', identifier: 'main' });
       store.create({ type: 'operator', name: 'B', content: 'b' });
 
       expect(store.getAll()).toHaveLength(2);
     });
 
     it('returns a copy (not the internal array)', () => {
-      store.create({ type: 'base', name: 'A', content: 'a' });
+      store.create({ type: 'base', name: 'A', content: 'a', identifier: 'main' });
       const all = store.getAll();
       all.push(null as any);
       expect(store.getAll()).toHaveLength(1);
@@ -204,7 +213,7 @@ describe('PromptLayerStore', () => {
 
   describe('getById()', () => {
     it('returns the correct layer', () => {
-      const layer = store.create({ type: 'base', name: 'Test', content: 'test' });
+      const layer = store.create({ type: 'base', name: 'Test', content: 'test', identifier: 'main' });
       const found = store.getById(layer.id);
       expect(found?.name).toBe('Test');
     });
@@ -216,9 +225,9 @@ describe('PromptLayerStore', () => {
 
   describe('getByType()', () => {
     it('filters layers by type', () => {
-      store.create({ type: 'base', name: 'A', content: 'a' });
+      store.create({ type: 'base', name: 'A', content: 'a', identifier: 'main' });
       store.create({ type: 'operator', name: 'B', content: 'b' });
-      store.create({ type: 'base', name: 'C', content: 'c' });
+      store.create({ type: 'base', name: 'C', content: 'c', identifier: 'alternate-base' });
 
       const bases = store.getByType('base');
       expect(bases).toHaveLength(2);
@@ -227,6 +236,21 @@ describe('PromptLayerStore', () => {
   });
 
   describe('update()', () => {
+    it('prevents clearing the identifier from a base layer', () => {
+      const layer = store.create({
+        type: 'base',
+        name: 'Base',
+        content: 'base',
+        identifier: 'main',
+      });
+
+      expect(() => store.update(layer.id, {
+        metadata: { identifier: undefined },
+      }, 'admin')).toThrow('identifier must be a non-empty string for base prompt layers');
+      expect(store.getById(layer.id)?.identifier).toBe('main');
+      expect(store.getLayerHistory(layer.id)).toEqual([]);
+    });
+
     it('increments version and updates checksum', () => {
       const layer = store.create({ type: 'runtime', name: 'Test', content: 'v1' });
       const oldChecksum = layer.checksum;
@@ -410,14 +434,29 @@ describe('PromptLayerStore', () => {
     });
 
     it('prevents disabling the only base layer', () => {
-      const layer = store.create({ type: 'base', name: 'Only Base', content: 'base' });
+      const layer = store.create({
+        type: 'base',
+        name: 'Only Base',
+        content: 'base',
+        identifier: 'main',
+      });
 
       expect(() => store.toggle(layer.id)).toThrow('Cannot disable the only enabled base layer');
     });
 
     it('allows disabling a base layer if another enabled base exists', () => {
-      const layer1 = store.create({ type: 'base', name: 'Base 1', content: 'base1' });
-      store.create({ type: 'base', name: 'Base 2', content: 'base2' });
+      const layer1 = store.create({
+        type: 'base',
+        name: 'Base 1',
+        content: 'base1',
+        identifier: 'main',
+      });
+      store.create({
+        type: 'base',
+        name: 'Base 2',
+        content: 'base2',
+        identifier: 'alternate-base',
+      });
 
       const toggled = store.toggle(layer1.id);
       expect(toggled.enabled).toBe(false);
@@ -438,14 +477,29 @@ describe('PromptLayerStore', () => {
     });
 
     it('prevents deleting the only base layer', () => {
-      const layer = store.create({ type: 'base', name: 'Only Base', content: 'base' });
+      const layer = store.create({
+        type: 'base',
+        name: 'Only Base',
+        content: 'base',
+        identifier: 'main',
+      });
 
       expect(() => store.delete(layer.id)).toThrow('Cannot delete the only base layer');
     });
 
     it('allows deleting a base layer if another base exists', () => {
-      const layer1 = store.create({ type: 'base', name: 'Base 1', content: 'base1' });
-      store.create({ type: 'base', name: 'Base 2', content: 'base2' });
+      const layer1 = store.create({
+        type: 'base',
+        name: 'Base 1',
+        content: 'base1',
+        identifier: 'main',
+      });
+      store.create({
+        type: 'base',
+        name: 'Base 2',
+        content: 'base2',
+        identifier: 'alternate-base',
+      });
 
       store.delete(layer1.id);
       expect(store.getAll()).toHaveLength(1);
@@ -472,7 +526,12 @@ describe('PromptLayerStore', () => {
 
     it('skips seeding when layers already exist', () => {
       const foundationTemplate = composeSystemPromptTemplate();
-      store.create({ type: 'base', name: 'Existing', content: 'existing' });
+      store.create({
+        type: 'base',
+        name: 'Existing',
+        content: 'existing',
+        identifier: 'existing-base',
+      });
       store.seedFromCharacterCard(foundationTemplate);
 
       expect(store.getAll()).toHaveLength(1);
@@ -481,12 +540,21 @@ describe('PromptLayerStore', () => {
 
     it('refreshes untouched system Character Foundation when current card prompt differs', () => {
       const foundationTemplate = composeSystemPromptTemplate();
-      const base = store.create({
+      const legacyContent = 'You are PSFN.';
+      writeFileSync(filePath, JSON.stringify([{
+        id: 'legacy-foundation',
         type: 'base',
         name: 'Character Foundation',
-        content: 'You are PSFN.',
+        content: legacyContent,
+        enabled: true,
+        priority: 0,
+        updatedAt: '2026-07-19T12:00:00.000Z',
         updatedBy: 'system',
-      });
+        checksum: checksum(legacyContent),
+        version: 1,
+      }]));
+      store = new PromptLayerStore(filePath, historyPath);
+      const base = store.getById('legacy-foundation')!;
 
       store.seedFromCharacterCard(foundationTemplate);
 
@@ -503,12 +571,20 @@ describe('PromptLayerStore', () => {
     });
 
     it('upgrades untouched legacy system seed with frozen User token', () => {
-      store.create({
+      const legacyContent = 'You are PSFN.\nHello User.';
+      writeFileSync(filePath, JSON.stringify([{
+        id: 'legacy-foundation',
         type: 'base',
         name: 'Character Foundation',
-        content: 'You are PSFN.\nHello User.',
+        content: legacyContent,
+        enabled: true,
+        priority: 0,
+        updatedAt: '2026-07-19T12:00:00.000Z',
         updatedBy: 'system',
-      });
+        checksum: checksum(legacyContent),
+        version: 1,
+      }]));
+      store = new PromptLayerStore(filePath, historyPath);
 
       store.seedFromCharacterCard('You are PSFN.\nHello {{user}}.');
 
@@ -621,7 +697,7 @@ describe('PromptLayerStore', () => {
   describe('count', () => {
     it('returns the number of layers', () => {
       expect(store.count).toBe(0);
-      store.create({ type: 'base', name: 'A', content: 'a' });
+      store.create({ type: 'base', name: 'A', content: 'a', identifier: 'main' });
       expect(store.count).toBe(1);
       store.create({ type: 'operator', name: 'B', content: 'b' });
       expect(store.count).toBe(2);
@@ -630,7 +706,12 @@ describe('PromptLayerStore', () => {
 
   describe('persistence', () => {
     it('loads layers from existing file on construction', () => {
-      store.create({ type: 'base', name: 'Persisted', content: 'persisted content' });
+      store.create({
+        type: 'base',
+        name: 'Persisted',
+        content: 'persisted content',
+        identifier: 'main',
+      });
 
       // Create a new store instance pointing to same file
       const store2 = new PromptLayerStore(filePath, historyPath);
@@ -639,7 +720,7 @@ describe('PromptLayerStore', () => {
     });
 
     it('uses atomic write (tmp + rename)', () => {
-      store.create({ type: 'base', name: 'Test', content: 'test' });
+      store.create({ type: 'base', name: 'Test', content: 'test', identifier: 'main' });
 
       // The .tmp file should not exist after save completes
       expect(existsSync(filePath + '.tmp')).toBe(false);

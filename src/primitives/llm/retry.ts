@@ -1,4 +1,5 @@
 import { sleep as defaultSleep } from '../../shared/utils/timing.js';
+import { toError } from '../../shared/utils/errors.js';
 import type {
   CircuitBreakerTransition,
   SlidingWindowCircuitBreaker,
@@ -71,10 +72,6 @@ interface ResolvedRetryConfig {
   maxRetries: number;
   baseDelayMs: number;
   retryableErrors: string[];
-}
-
-function toError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
 }
 
 function parseStatusCode(error: Error): number | null {

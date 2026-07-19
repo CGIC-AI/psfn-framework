@@ -260,19 +260,26 @@ describe('unified Fleet SSO origin provenance', () => {
     }
   });
 
-  it('derives one exact loopback Garden for a single-companion deployment', () => {
+  it('derives one exact loopback Garden from a one-entry fleet manifest', () => {
     expect(resolveFleetSsoGardenUpstreams({
-      companionId: '11111111-1111-4111-8111-111111111111',
+      fleet: {
+        persistenceRoot: '/runtime',
+        workspacesRoot: '/runtime/workspaces',
+        sharedWorkspacePath: '/runtime/shared',
+        companions: [{
+          companionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
+          companionDataDir: '/runtime/companions/one',
+          characterCardPath: '/runtime/companions/one/character-card.json',
+          personalWorkspacePath: '/runtime/workspaces/one',
+          postgresSchema: 'companion_one',
+        }],
+      },
       fleetGardenPort: 3001,
       env: {},
     })).toMatchObject([{
       companionId: '11111111-1111-4111-8111-111111111111',
       origin: new URL('http://127.0.0.1:3001'),
+      companionScopedTarget: true,
     }]);
-    expect(() => resolveFleetSsoGardenUpstreams({
-      companionId: 'not-a-companion-id',
-      fleetGardenPort: 3001,
-      env: {},
-    })).toThrow(/RFC4122 UUID/u);
   });
 });

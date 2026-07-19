@@ -3,7 +3,11 @@ import { createComponentLogger } from '../../shared/logger.js';
 import { loadOperatorConfig } from '../../system/config/load-config.js';
 import { hydrateJsonBackedRuntimeConfig } from '../../system/config/runtime-config.js';
 import { parseOptionalPositiveIntEnv } from '../../shared/utils/env.js';
-import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../startup/support/signal-shutdown.js';
+import {
+  createSignalShutdownHandler,
+  installSignalHandlers,
+  registerProcessErrorHandlers,
+} from '../startup/support/signal-shutdown.js';
 import { runShutdownSequence } from '../startup/support/shutdown-helpers.js';
 import { isExplicitTrue } from '../startup/support/env-parsing.js';
 import {
@@ -123,18 +127,7 @@ async function main(): Promise<void> {
     forceExitTimeoutMs: DEFAULT_SHUTDOWN_FORCE_EXIT_TIMEOUT_MS,
   });
 
-  process.on('SIGINT', () => {
-    void shutdown('SIGINT').catch((error) => {
-      log.error('Unhandled SIGINT shutdown error', { error: String(error) });
-      process.exit(1);
-    });
-  });
-  process.on('SIGTERM', () => {
-    void shutdown('SIGTERM').catch((error) => {
-      log.error('Unhandled SIGTERM shutdown error', { error: String(error) });
-      process.exit(1);
-    });
-  });
+  installSignalHandlers(shutdown, log);
 
   registerProcessErrorHandlers({
     logger: log,

@@ -3,7 +3,11 @@
 import '../../shared/utils/load-dotenv.js';
 import { resolve } from 'node:path';
 import { migrateLegacySchedulerOwner } from '../../system/config/scheduler-owner-migration.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
+import {
+  isMaintenanceCliEntrypoint,
+  parseCommonMaintenanceArgs,
+  runMaintenanceCli,
+} from './cli-harness.js';
 
 interface CliOptions {
   apply: boolean;
@@ -24,53 +28,45 @@ function printUsage(): void {
   console.log('  -h, --help          Show this help message');
 }
 
-function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { apply: false, showHelp: false };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === '--apply') {
-      options.apply = true;
-      continue;
-    }
-    if (arg === '--dry-run') {
-      options.apply = false;
-      continue;
-    }
-    if (arg === '--help' || arg === '-h') {
-      options.showHelp = true;
-      continue;
-    }
-    if (arg === '--data-dir') {
-      const value = argv[index + 1];
-      if (!value) throw new Error('Missing value for --data-dir');
-      options.dataDir = resolve(value);
-      index += 1;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-  return options;
-}
-
-function main(): void {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.showHelp) {
-    printUsage();
-    return;
-  }
-  if (!options.dataDir) {
-    throw new Error('--data-dir is required; pass the exact companion owner-file directory');
-  }
-  const result = migrateLegacySchedulerOwner({
-    dataDir: options.dataDir,
-    apply: options.apply,
+function parseArgs(argv: readonly string[]): CliOptions {
+  return parseCommonMaintenanceArgs<CliOptions>(argv, {
+    initial: { apply: false, showHelp: false },
+    commonFlags: {
+      dataDir: { transform: resolve },
+    },
+    extraFlags: {
+      '--apply': ({ options }) => {
+        options.apply = true;
+      },
+      '--dry-run': ({ options }) => {
+        options.apply = false;
+      },
+    },
   });
-  console.log(JSON.stringify(result, null, 2));
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`Scheduler owner migration failed: ${toErrorMessage(error)}`);
-  process.exit(1);
+export function runSchedulerOwnerMigrationCli(
+  argv: readonly string[] = process.argv.slice(2),
+): Promise<unknown> {
+  return runMaintenanceCli({
+    argv,
+    label: 'Scheduler owner migration',
+    parseArgs,
+    printUsage,
+    run: options => {
+      if (!options.dataDir) {
+        throw new Error('--data-dir is required; pass the exact companion owner-file directory');
+      }
+      const result = migrateLegacySchedulerOwner({
+        dataDir: options.dataDir,
+        apply: options.apply,
+      });
+      console.log(JSON.stringify(result, null, 2));
+      return result;
+    },
+  });
+}
+
+if (isMaintenanceCliEntrypoint(import.meta.url)) {
+  void runSchedulerOwnerMigrationCli();
 }

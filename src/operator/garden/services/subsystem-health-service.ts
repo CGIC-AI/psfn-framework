@@ -14,6 +14,8 @@
 //     `stale`. Unknown stays unknown.
 
 import type { EventBus, EventMap } from '../../../shared/event-bus.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 
 /** Outcome of a single lane observation. */
 export type SubsystemLaneOutcome = 'ran' | 'skipped' | 'degraded' | 'failed';
@@ -98,6 +100,7 @@ export interface SubsystemSchedulerStateProvider {
 const DEFAULT_RING_LIMIT = 50;
 /** A scheduler lane is stale once it is this many intervals past its last run. */
 const DEFAULT_STALE_INTERVAL_FACTOR = 2;
+const log = createComponentLogger('SubsystemHealthService');
 
 interface EventLaneDefinition {
   id: string;
@@ -188,7 +191,8 @@ const GATE_EVENT_LANES: ReadonlyArray<{
     | 'memory.sleep_consolidation.refinement_gate'
     | 'memory.sleeptime_wiki.gate'
     | 'emotion.appraisal.gate'
-    | 'intention.concern_candidate.gate';
+    | 'intention.concern_candidate.gate'
+    | 'scheduler.free_time.gate';
   readonly lane: string;
 }> = [
   { event: 'memory.orientation_rewrite.gate', lane: 'orientation_rewrite' },
@@ -507,8 +511,24 @@ export class AdminSubsystemHealthDataService implements AdminSubsystemHealthServ
     let tasks: SubsystemSchedulerTaskView[];
     try {
       tasks = this.scheduler.getFullData().tasks;
-    } catch {
-      return [];
+    } catch (error) {
+      const message = toErrorMessage(error);
+      log.warn('Failed to read scheduler state for subsystem health', { error: message });
+      return [{
+        id: 'scheduler:health-read',
+        label: 'Scheduler health',
+        description: 'Scheduler task state inspection.',
+        source: 'scheduler',
+        sinceProcessStart: false,
+        status: 'failed',
+        lastEventAt: generatedAt,
+        lastOutcome: 'failed',
+        lastReason: null,
+        lastError: message,
+        counts: {},
+        observedEventCount: 0,
+        recent: [],
+      }];
     }
 
     return tasks.map((task) => {

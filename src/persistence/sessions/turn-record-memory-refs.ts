@@ -1,6 +1,7 @@
 import { isRecord } from '../../shared/utils/types.js';
 import type { ObservedMemory, ObservedScoredMemory } from '../../core/turns/observability.js';
 import type { TurnRecord } from '../../shared/contracts/runtime.js';
+import { restoreSnapshotSection } from './turn-record-snapshot-view.js';
 
 /**
  * Turn-record retrieved-memory diet (bead psfn-framework-jsi9).
@@ -99,7 +100,7 @@ function isNonEmptyString(value: unknown): value is string {
 function readMemorySnapshot(record: TurnRecord): Record<string, unknown> | undefined {
   const snapshot = record.observability?.snapshot;
   if (!snapshot || !isRecord(snapshot.memory)) return undefined;
-  return snapshot.memory as unknown as Record<string, unknown>;
+  return snapshot.memory;
 }
 
 function withMemorySnapshot(record: TurnRecord, memory: Record<string, unknown>): TurnRecord {
@@ -111,7 +112,7 @@ function withMemorySnapshot(record: TurnRecord, memory: Record<string, unknown>)
       ...observability,
       snapshot: {
         ...snapshot,
-        memory: memory as unknown as NonNullable<typeof snapshot.memory>,
+        memory: restoreSnapshotSection(memory),
       },
     },
   };

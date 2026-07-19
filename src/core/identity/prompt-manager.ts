@@ -1,4 +1,5 @@
 import type { PromptLayer } from './prompt-types.js';
+import { PROMPT_LAYER_IDENTIFIER_BACKFILL_COMMAND } from './prompt-layer-identifier-contract.js';
 
 export interface ManagedPromptEntry {
   identifier: string;
@@ -91,8 +92,6 @@ export class PromptManager {
 
     const working: WorkingEntry[] = [];
     let hasExplicitIdentifier = false;
-    let hasBaseLayer = false;
-    let usedLegacyMain = false;
 
     for (let index = 0; index < layers.length; index++) {
       const layer = layers[index];
@@ -116,16 +115,12 @@ export class PromptManager {
         continue;
       }
 
-      if (layer.type === 'base' && !usedLegacyMain) {
-        hasBaseLayer = true;
-        usedLegacyMain = true;
-        working.push({
-          identifier: 'main',
-          content,
-          sourceLayerId: layer.id,
-          order: explicitOrder ?? this.resolveOrder('main', fallbackOrder),
-        });
-        continue;
+      if (layer.type === 'base') {
+        throw new Error(
+          `Prompt layer "${layer.name}" (record id "${layer.id}", type "base") is missing required identifier. `
+          + `Run \`${PROMPT_LAYER_IDENTIFIER_BACKFILL_COMMAND}\` against `
+          + 'companion-data/state/prompt-layers.json before starting the runtime.',
+        );
       }
 
       working.push({
@@ -140,7 +135,7 @@ export class PromptManager {
       return { text: '', prompts: [], autoHealedIdentifiers: [] };
     }
 
-    const shouldAutoHeal = hasExplicitIdentifier || hasBaseLayer;
+    const shouldAutoHeal = hasExplicitIdentifier;
     const byIdentifier = new Map<string, WorkingEntry>();
     const passthrough: WorkingEntry[] = [];
 

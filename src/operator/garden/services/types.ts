@@ -271,13 +271,6 @@ export type {
   AdminContactsService,
 } from './types/contacts.js';
 
-export type { AdminArtifactLifecycleService } from './types/artifacts.js';
-
-export type {
-  AdminResearchLibraryData,
-  AdminResearchLibraryService,
-} from './types/research-library.js';
-
 export type {
   AdminPromptListData,
   AdminPromptRuntimeBlock,

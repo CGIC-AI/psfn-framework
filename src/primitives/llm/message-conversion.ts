@@ -8,7 +8,7 @@ import type {
   ToolResultMessage,
   UserMessage,
 } from '@mariozechner/pi-ai';
-import type { ContextMessage } from '../../shared/contracts/runtime.js';
+import type { ContextMessage } from '../../shared/contracts/runtime-base.js';
 
 export type PiChatMessage = UserMessage | AssistantMessage | ToolResultMessage;
 const SYSTEM_CONTEXT_OPEN_TAG = '<session_context>';

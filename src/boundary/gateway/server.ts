@@ -2270,8 +2270,7 @@ export class GatewayServer {
   ): Promise<VoiceHandleMessageResult> {
     let client: JSONRPCServerAndClient;
     let conn: GatewayRpcConnection;
-    let companionId = this.options.companionId
-      ?? createCompanionId(DEFAULT_COMPANION_ID, 'Default companionId');
+    let companionId = this.options.companionId;
     if (this.multiCompanion.enabled) {
       const satellite = message.routing?.satellite;
       const satelliteSource = message.routing?.source === 'satellite';
@@ -2315,6 +2314,12 @@ export class GatewayServer {
       const route = this.resolveReadyAgentConnection();
       client = route.client;
       conn = route.conn;
+      companionId ??= this.connectionStatuses.get(conn)?.companionId;
+    }
+    if (!companionId) {
+      throw new Error(
+        'Gateway voice routing requires a lowercase RFC-4122 companion UUID binding',
+      );
     }
 
     const result = await requestAgentVoiceStream({

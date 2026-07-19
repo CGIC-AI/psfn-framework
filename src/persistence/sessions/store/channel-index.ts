@@ -27,8 +27,7 @@ import {
 } from '../store-primitives.js';
 import {
   encodedFilePath,
-  isReadableSessionJournalFilename,
-  isSessionJournalFilename,
+  isLegacySessionJournalFilename,
   legacyFilePath,
   makeReadableFilePath,
 } from './channel-filenames.js';
@@ -369,6 +368,21 @@ export interface ResolvedIndexedSession {
   filePath: string;
 }
 
+function quoteShellArgument(value: string): string {
+  return `'${value.replace(/'/gu, `'\\''`)}'`;
+}
+
+function throwLegacySessionFilenameError(
+  sessionsDir: string,
+  filename: string,
+): never {
+  throw new Error(
+    `Legacy L0 session filename "${filename}" cannot be read by the runtime. `
+    + 'Migrate session filenames before retrying: '
+    + `npm run migrate:session-filenames -- --sessions-dir ${quoteShellArgument(sessionsDir)} --apply`,
+  );
+}
+
 export function resolveExistingSession(
   sessionsDir: string,
   lookupKey: string,
@@ -378,6 +392,12 @@ export function resolveExistingSession(
   const indexed = channelIndex.get(primarySessionId);
   if (indexed) {
     const indexedPaths = indexed.filenames.map(filename => join(sessionsDir, filename));
+    const legacyFilename = indexed.filenames.find((filename, index) => (
+      isLegacySessionJournalFilename(filename) && existsSync(indexedPaths[index]!)
+    ));
+    if (legacyFilename) {
+      throwLegacySessionFilenameError(sessionsDir, legacyFilename);
+    }
     const indexedPath = indexedPaths.at(-1)!;
     if (indexedPaths.every(filePath => existsSync(filePath))) {
       return {
@@ -391,6 +411,10 @@ export function resolveExistingSession(
 
   const encodedPath = encodedFilePath(sessionsDir, lookupKey);
   if (existsSync(encodedPath)) {
+    const filename = basename(encodedPath);
+    if (isLegacySessionJournalFilename(filename)) {
+      throwLegacySessionFilenameError(sessionsDir, filename);
+    }
     return {
       sessionId: lookupKey,
       channelId: lookupKey,
@@ -401,12 +425,25 @@ export function resolveExistingSession(
 
   const legacyPath = legacyFilePath(sessionsDir, lookupKey);
   if (existsSync(legacyPath)) {
+    const filename = basename(legacyPath);
+    if (isLegacySessionJournalFilename(filename)) {
+      throwLegacySessionFilenameError(sessionsDir, filename);
+    }
     return {
       sessionId: lookupKey,
       channelId: lookupKey,
       filePaths: [legacyPath],
       filePath: legacyPath,
     };
+  }
+
+  const discoveredLegacyFilename = readdirSync(sessionsDir)
+    .filter(isLegacySessionJournalFilename)
+    .find((filename) => (
+      readJournalFirstEntry(join(sessionsDir, filename))?.channelId === lookupKey
+    ));
+  if (discoveredLegacyFilename) {
+    throwLegacySessionFilenameError(sessionsDir, discoveredLegacyFilename);
   }
 
   return null;
@@ -518,11 +555,9 @@ export function migrateLegacyFilenames(params: {
   ) => void;
 }): void {
   const files = readdirSync(params.sessionsDir)
-    .filter(isSessionJournalFilename);
+    .filter(isLegacySessionJournalFilename);
 
   for (const filename of files) {
-    if (isReadableSessionJournalFilename(filename)) continue;
-
     const oldPath = join(params.sessionsDir, filename);
     const firstEntry = readJournalFirstEntry(oldPath);
     if (!firstEntry || !firstEntry.channelId) continue;
@@ -589,7 +624,11 @@ export function primeChannelIndexFromDisk(params: {
       indexedChannelByFilename.set(filename, channelId);
     }
   }
-  const discovered = discoverSessionFileChains(params.sessionsDir, indexedChannelByFilename);
+  const discovered = discoverSessionFileChains(
+    params.sessionsDir,
+    indexedChannelByFilename,
+    { includeLegacyFilenames: false },
+  );
   for (const incomplete of discovered.incompleteChains) {
     log.warn('Ignoring incomplete L0 session segment chain during index rebuild', incomplete);
   }

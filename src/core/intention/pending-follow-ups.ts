@@ -1,120 +1,62 @@
 import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
 import { createComponentLogger } from '../../shared/logger.js';
-import { isRfc4122Uuid } from '../../shared/utils/types.js';
 import { channelsShareActiveSessionThread } from '../session/cross-channel-continuity-port.js';
+import { normalizeOptionalIcpRootInitiationId } from './pending-follow-up-normalization.js';
+import { clampListLimit as clampIntentionListLimit } from './list-limit.js';
 import type { PendingFollowUpQuarantineRecord } from './pending-follow-up-store-port.js';
+import type {
+  PendingFollowUp,
+  PendingFollowUpCreateInput,
+  PendingFollowUpPriority,
+  PendingFollowUpTiming,
+  PendingFollowUpWakeCondition,
+} from './pending-follow-up-types.js';
+import type { PendingFollowUpRow } from './postgres-adapters/shared.js';
 
-export {
-  createPendingFollowUpStorePort,
-} from './pending-follow-up-store-port.js';
 export type {
   PendingFollowUpQuarantineInput,
   PendingFollowUpQuarantineListOptions,
   PendingFollowUpQuarantineRecord,
   PendingFollowUpStorePort,
 } from './pending-follow-up-store-port.js';
+export type {
+  PendingFollowUp,
+  PendingFollowUpActivateOptions,
+  PendingFollowUpCreateInput,
+  PendingFollowUpContextProvider,
+  PendingFollowUpDampenOptions,
+  PendingFollowUpListOptions,
+  PendingFollowUpPriority,
+  PendingFollowUpStoreOptions,
+  PendingFollowUpTiming,
+  PendingFollowUpUpdateInput,
+  PendingFollowUpWakeCondition,
+} from './pending-follow-up-types.js';
+export { normalizeOptionalIcpRootInitiationId } from './pending-follow-up-normalization.js';
+export type { PendingFollowUpRow } from './postgres-adapters/shared.js';
 
-export const PENDING_FOLLOW_UP_PRIORITIES = ['low', 'medium', 'high'] as const;
-export type PendingFollowUpPriority = typeof PENDING_FOLLOW_UP_PRIORITIES[number];
+export const PENDING_FOLLOW_UP_PRIORITIES = [
+  'low',
+  'medium',
+  'high',
+] as const satisfies readonly PendingFollowUpPriority[];
 
-export const PENDING_FOLLOW_UP_TIMINGS = ['immediate', 'soon', 'scheduled'] as const;
-export type PendingFollowUpTiming = typeof PENDING_FOLLOW_UP_TIMINGS[number];
+export const PENDING_FOLLOW_UP_TIMINGS = [
+  'immediate',
+  'soon',
+  'scheduled',
+] as const satisfies readonly PendingFollowUpTiming[];
 
 export const PENDING_FOLLOW_UP_WAKE_CONDITIONS = [
   'next_user_turn',
   'background_recheck',
   'sustained_negative_mood',
-] as const;
-export type PendingFollowUpWakeCondition = typeof PENDING_FOLLOW_UP_WAKE_CONDITIONS[number];
+] as const satisfies readonly PendingFollowUpWakeCondition[];
 
 export const DEFAULT_PENDING_FOLLOW_UP_BACKLOG_CAP = 5;
 export const DEFAULT_PENDING_FOLLOW_UP_ACTIVATION_DELAY_MS = 5 * 60_000;
 export const PENDING_FOLLOW_UP_DEDUPE_SIMILARITY_THRESHOLD = 0.72;
 export const PENDING_FOLLOW_UP_CAP_SUPERSEDE_SIMILARITY_THRESHOLD = 0.45;
-
-export interface PendingFollowUp {
-  id: string;
-  content: string;
-  priority: PendingFollowUpPriority;
-  timing: PendingFollowUpTiming;
-  createdAt: string;
-  channelId: string;
-  channelType: ChannelType;
-  authorId: string;
-  authorName: string;
-  dueAt?: string;
-  contactId?: string;
-  sourceMessageId?: string;
-  contextSummary?: string;
-  wakeConditions?: PendingFollowUpWakeCondition[];
-  activatedAt?: string;
-  activationReason?: string;
-  dampenedAt?: string;
-  dampeningReason?: string;
-  /** Originating ICP root preserved across durable resurface/restart. */
-  originIcpRootInitiationId?: string;
-}
-
-export interface PendingFollowUpCreateInput {
-  content: string;
-  priority: PendingFollowUpPriority;
-  timing: PendingFollowUpTiming;
-  channelId: string;
-  channelType: ChannelType;
-  authorId: string;
-  authorName: string;
-  createdAt?: string;
-  dueAt?: string;
-  contactId?: string;
-  sourceMessageId?: string;
-  contextSummary?: string;
-  wakeConditions?: readonly PendingFollowUpWakeCondition[];
-  originIcpRootInitiationId?: string;
-}
-
-export interface PendingFollowUpUpdateInput {
-  content: string;
-  priority: PendingFollowUpPriority;
-  timing: PendingFollowUpTiming;
-  channelId: string;
-  channelType: ChannelType;
-  authorId: string;
-  authorName: string;
-  dueAt?: string;
-  contactId?: string;
-  sourceMessageId?: string;
-  contextSummary?: string;
-  wakeConditions?: readonly PendingFollowUpWakeCondition[];
-  originIcpRootInitiationId?: string;
-}
-
-export interface PendingFollowUpActivateOptions {
-  activatedAt?: string;
-  activationReason?: string;
-}
-
-export interface PendingFollowUpDampenOptions {
-  dampenedAt?: string;
-  dampeningReason: string;
-}
-
-export interface PendingFollowUpListOptions {
-  contactId?: string;
-  includeActivated?: boolean;
-  includeExpired?: boolean;
-  asOf?: string;
-  limit?: number;
-}
-
-export interface PendingFollowUpStoreOptions {
-  now?: () => Date;
-  idFactory?: () => string;
-  backlogCap?: number;
-}
-
-export interface PendingFollowUpContextProvider {
-  getPendingFollowUps(contactId?: string): PendingFollowUp[];
-}
 
 export function filterPendingFollowUpsForActiveChannel(
   followUps: readonly PendingFollowUp[],
@@ -165,28 +107,6 @@ export type PendingFollowUpEnqueueResolution =
     reason: 'backlog_cap';
   };
 
-export interface PendingFollowUpRow {
-  id: string;
-  content: string;
-  priority: string;
-  timing: string;
-  created_at: string;
-  channel_id: string;
-  channel_type: string;
-  author_id: string;
-  author_name: string;
-  due_at: string | null;
-  contact_id: string | null;
-  source_message_id: string | null;
-  context_summary: string | null;
-  wake_conditions: string | null;
-  activated_at: string | null;
-  activation_reason: string | null;
-  dampened_at: string | null | undefined;
-  dampening_reason: string | null | undefined;
-  origin_icp_root_initiation_id: string | null | undefined;
-}
-
 export interface PendingFollowUpQuarantineRow {
   id: string;
   follow_up_id: string | null;
@@ -203,7 +123,7 @@ export const MAX_REASON_CHARS = 240;
 const MAX_QUARANTINE_REASON_CHARS = 1000;
 export const MAX_QUARANTINE_SOURCE_CHARS = 128;
 const DEFAULT_LIST_LIMIT = 32;
-export const MAX_LIST_LIMIT = 200;
+export { MAX_LIST_LIMIT } from './list-limit.js';
 const NEGATIVE_MOOD_WAKE_THRESHOLD = -0.2;
 export const PENDING_FOLLOW_UPS_TABLE = 'intention_pending_follow_ups';
 export const PENDING_FOLLOW_UP_QUARANTINE_TABLE = 'intention_pending_follow_up_quarantine';
@@ -256,16 +176,6 @@ export function normalizeOptionalId(value: string | undefined): string | undefin
   if (value === undefined) return undefined;
   const normalized = compactWhitespace(value);
   return normalized.length > 0 ? normalized : undefined;
-}
-
-export function normalizeOptionalIcpRootInitiationId(
-  value: string | null | undefined,
-): string | undefined {
-  if (value === null || value === undefined) return undefined;
-  if (!isRfc4122Uuid(value)) {
-    throw new Error('Pending follow-up originIcpRootInitiationId must be a lowercase RFC-4122 UUID');
-  }
-  return value;
 }
 
 function normalizeOptionalIdOrNull(value: string | null | undefined): string | undefined {
@@ -345,12 +255,7 @@ export function encodeWakeConditions(
 }
 
 export function clampListLimit(limit: number | undefined): number {
-  if (limit === undefined || !Number.isFinite(limit)) {
-    return DEFAULT_LIST_LIMIT;
-  }
-  const floored = Math.floor(limit);
-  if (floored < 1) return 1;
-  return Math.min(floored, MAX_LIST_LIMIT);
+  return clampIntentionListLimit(limit, DEFAULT_LIST_LIMIT);
 }
 
 export function normalizeBacklogCap(value: number | undefined): number {

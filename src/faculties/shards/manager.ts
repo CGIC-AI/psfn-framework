@@ -27,15 +27,16 @@ import type { SessionManager } from '../../core/session/manager.js';
 import type { ShardExecutionPort } from './port.js';
 import { chargeSurface, getRunChargeContext, runWithChargeContext } from '../../shared/telemetry/run-charge.js';
 import type {
+  ActiveShard,
+  SatelliteDelegationRequest,
   ShardConfigurationMutationResult,
   ShardConfigurationSnapshot,
   ShardConfig,
-  ShardCapabilityGrantEvidence,
-  ShardHealthState,
   ShardLifecycleState,
   ShardResult,
   ShardRuntimeRecord,
 } from './types.js';
+export type { ActiveShard, SatelliteDelegationRequest } from './types.js';
 import { buildShardLineageEnvelope, deriveShardCompanionId } from './result-lineage.js';
 import { getRequestContext } from '../../primitives/llm/request-context.js';
 import { AGENT_LOOP_MAX_ASSISTANT_STEPS_PER_RUN } from '../../core/agent/turn-limits.js';
@@ -203,32 +204,6 @@ export interface ShardManagerDeps {
    * unavailable (fail closed at the gateway).
    */
   workloadRegistry?: ShardWorkloadLifecyclePort;
-}
-
-export interface SatelliteDelegationRequest {
-  message: SubstrateMessage;
-  routing?: SatelliteRoutingMetadata;
-  shardName?: string;
-}
-
-export interface ActiveShard {
-  id: string;
-  name: string;
-  task: string;
-  startedAt: number;
-  channelId: string;
-  state: ShardLifecycleState;
-  stateReason: string;
-  health: ShardHealthState;
-  lastTransitionAt: number;
-  lastHeartbeatAt: number;
-  heartbeatStaleAfterMs: number;
-  heartbeatDisconnectAfterMs: number;
-  capabilities: string[];
-  requiredCapabilities: string[];
-  capabilityGrant: ShardCapabilityGrantEvidence;
-  lineage: ShardResult['lineage'];
-  failureReason?: string;
 }
 
 export class ShardManager implements ShardExecutionPort {

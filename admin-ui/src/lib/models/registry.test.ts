@@ -44,7 +44,6 @@ describe('model registry helpers', () => {
             { purpose: 'vision', primary: true },
             { purpose: 'moa', primary: true },
           ],
-          routing: { providerOrder: ['OpenRouter', 'openrouter', ''] },
           capabilities: { maxOutputTokens: 16384, contextWindow: 128000 },
           tuning: { maxOutputTokens: 16384 },
         },
@@ -58,7 +57,6 @@ describe('model registry helpers', () => {
       provider: 'openrouter',
       model: 'z-ai/glm-5',
     }));
-    expect(registry.models[0]?.routing?.providerOrder).toEqual(['openrouter']);
     expect(
       registry.models.flatMap(model => model.purposes)
         .filter(tag => tag.primary)
@@ -92,6 +90,42 @@ describe('model registry helpers', () => {
 
     expect(registry.models).toHaveLength(1);
     expect(registry.models[0]?.id).toBe('primary');
+  });
+
+  it('tolerantly drops legacy per-model routing metadata written by old admin builds', () => {
+    const registry = parseModelRegistryJson(JSON.stringify({
+      schemaVersion: 1,
+      models: [
+        {
+          id: 'primary',
+          rank: 10,
+          identity: {
+            provider: 'openrouter',
+            model: 'z-ai/glm-5',
+            source: { type: 'openrouter' },
+          },
+          purposes: [{ purpose: 'chat', primary: true }],
+          capabilities: { maxOutputTokens: 16384 },
+          routing: { providerOrder: ['a', 'b'] },
+        },
+      ],
+    }));
+
+    const entry = registry.models[0];
+    // The legacy field is stripped entirely rather than throwing or surviving.
+    expect(entry).toBeDefined();
+    expect(entry && 'routing' in entry).toBe(false);
+    // Sibling canonical fields still survive the normalization.
+    expect(entry?.id).toBe('primary');
+    expect(entry?.rank).toBe(10);
+    expect(entry?.identity).toEqual(expect.objectContaining({
+      provider: 'openrouter',
+      model: 'z-ai/glm-5',
+    }));
+    expect(entry?.purposes).toEqual([{ purpose: 'chat', primary: true }]);
+    expect(entry?.capabilities).toEqual({ maxOutputTokens: 16384 });
+    // A round-trip through the save shape must not reintroduce `routing`.
+    expect(JSON.stringify(registry)).not.toContain('routing');
   });
 
   it('labels the dedicated memory purpose for operator-facing model assignment', () => {

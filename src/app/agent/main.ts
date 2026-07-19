@@ -91,7 +91,11 @@ import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import { createNoopSatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
 import { createRequestCapabilityVerifier } from '../../boundary/fleet-auth/request-capability.js';
-import { createSignalShutdownHandler, registerProcessErrorHandlers } from '../startup/support/signal-shutdown.js';
+import {
+  createSignalShutdownHandler,
+  installSignalHandlers,
+  registerProcessErrorHandlers,
+} from '../startup/support/signal-shutdown.js';
 import { buildAgentControlPlane } from './control-plane.js';
 import type { AgentControlPlaneShutdownTargets } from './control-plane.js';
 import { createSandboxBrokerExecutionPort } from '../../boundary/sandbox/sandbox-execution-broker.js';
@@ -1494,18 +1498,7 @@ async function main(): Promise<void> {
     ),
   });
 
-  process.on('SIGINT', () => {
-    void shutdown('SIGINT').catch((error) => {
-      log.error('Unhandled SIGINT shutdown error', { error: String(error) });
-      process.exit(1);
-    });
-  });
-  process.on('SIGTERM', () => {
-    void shutdown('SIGTERM').catch((error) => {
-      log.error('Unhandled SIGTERM shutdown error', { error: String(error) });
-      process.exit(1);
-    });
-  });
+  installSignalHandlers(shutdown, log);
 
   registerProcessErrorHandlers({
     logger: log,

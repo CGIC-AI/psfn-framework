@@ -8,6 +8,8 @@ import type {
 } from '../../shared/routing/companion-id.js';
 import type { CapabilityTier } from '../../system/capabilities/tier-types.js';
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';
+import type { SubstrateMessage } from '../../shared/contracts/runtime.js';
+import type { SatelliteRoutingMetadata } from '../../core/agent/satellite-adapter-port.js';
 
 // ── Shard types ──
 // Ephemeral sub-agent instances for parallel task execution.
@@ -244,6 +246,32 @@ export interface ShardResult {
 }
 
 export type ShardStatus = 'running' | 'completed' | 'failed';
+
+export interface SatelliteDelegationRequest {
+  message: SubstrateMessage;
+  routing?: SatelliteRoutingMetadata;
+  shardName?: string;
+}
+
+export interface ActiveShard {
+  id: string;
+  name: string;
+  task: string;
+  startedAt: number;
+  channelId: string;
+  state: ShardLifecycleState;
+  stateReason: string;
+  health: ShardHealthState;
+  lastTransitionAt: number;
+  lastHeartbeatAt: number;
+  heartbeatStaleAfterMs: number;
+  heartbeatDisconnectAfterMs: number;
+  capabilities: string[];
+  requiredCapabilities: string[];
+  capabilityGrant: ShardCapabilityGrantEvidence;
+  lineage: ShardResult['lineage'];
+  failureReason?: string;
+}
 
 /**
  * Ordinary-priority shard->parent ICP delivery. Lives here (not in port.ts)

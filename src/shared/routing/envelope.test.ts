@@ -7,7 +7,9 @@ import {
   parseGatewayRoutingEnvelope,
 } from './envelope.js';
 
-const COMPANION_ALPHA = createCompanionId('companion-alpha');
+const COMPANION_ALPHA_ID = '11111111-1111-4111-8111-111111111111';
+const COMPANION_BETA_ID = '22222222-2222-4222-8222-222222222222';
+const COMPANION_ALPHA = createCompanionId(COMPANION_ALPHA_ID);
 
 describe('routing envelope', () => {
   it('derives shard companion ids from the tenancy companion id and shard id', () => {
@@ -17,8 +19,8 @@ describe('routing envelope', () => {
     });
 
     expect(lineage).toEqual({
-      coreCompanionId: 'companion-alpha',
-      shardCompanionId: 'companion-alpha/shards/shard-42',
+      coreCompanionId: COMPANION_ALPHA_ID,
+      shardCompanionId: `${COMPANION_ALPHA_ID}/shards/shard-42`,
       shardId: 'shard-42',
       creationMode: 'fresh',
     });
@@ -41,10 +43,10 @@ describe('routing envelope', () => {
 
     expect(envelope).toEqual({
       schemaVersion: 1,
-      companionId: 'companion-alpha',
+      companionId: COMPANION_ALPHA_ID,
       shard: {
-        coreCompanionId: 'companion-alpha',
-        shardCompanionId: 'companion-alpha/shards/shard-99',
+        coreCompanionId: COMPANION_ALPHA_ID,
+        shardCompanionId: `${COMPANION_ALPHA_ID}/shards/shard-99`,
         shardId: 'shard-99',
         creationMode: 'fresh',
         parentShardId: 'shard-root',
@@ -64,10 +66,10 @@ describe('routing envelope', () => {
       parentShardId: 'shard-parent',
     });
 
-    expect(envelope.companionId).toBe('companion-alpha');
+    expect(envelope.companionId).toBe(COMPANION_ALPHA_ID);
     expect(envelope.shard).toEqual({
-      coreCompanionId: 'companion-alpha',
-      shardCompanionId: 'companion-alpha/shards/shard-child',
+      coreCompanionId: COMPANION_ALPHA_ID,
+      shardCompanionId: `${COMPANION_ALPHA_ID}/shards/shard-child`,
       shardId: 'shard-child',
       creationMode: 'fresh',
       parentShardId: 'shard-parent',
@@ -88,8 +90,8 @@ describe('routing envelope', () => {
     });
 
     expect(envelope.shard).toEqual({
-      coreCompanionId: 'companion-alpha',
-      shardCompanionId: 'companion-alpha/shards/shard-forked',
+      coreCompanionId: COMPANION_ALPHA_ID,
+      shardCompanionId: `${COMPANION_ALPHA_ID}/shards/shard-forked`,
       shardId: 'shard-forked',
       creationMode: 'forked',
       parentShardId: 'shard-parent',
@@ -104,10 +106,10 @@ describe('routing envelope', () => {
   it('rebrands a valid envelope decoded from an untyped transport payload', () => {
     const parsed = parseGatewayRoutingEnvelope({
       schemaVersion: 1,
-      companionId: 'companion-alpha',
+      companionId: COMPANION_ALPHA_ID,
       shard: {
-        coreCompanionId: 'companion-alpha',
-        shardCompanionId: 'companion-alpha/shards/shard-42',
+        coreCompanionId: COMPANION_ALPHA_ID,
+        shardCompanionId: `${COMPANION_ALPHA_ID}/shards/shard-42`,
         shardId: 'shard-42',
         creationMode: 'fresh',
       },
@@ -115,10 +117,10 @@ describe('routing envelope', () => {
 
     expect(parsed).toEqual({
       schemaVersion: 1,
-      companionId: 'companion-alpha',
+      companionId: COMPANION_ALPHA_ID,
       shard: {
-        coreCompanionId: 'companion-alpha',
-        shardCompanionId: 'companion-alpha/shards/shard-42',
+        coreCompanionId: COMPANION_ALPHA_ID,
+        shardCompanionId: `${COMPANION_ALPHA_ID}/shards/shard-42`,
         shardId: 'shard-42',
         creationMode: 'fresh',
       },
@@ -133,10 +135,10 @@ describe('routing envelope', () => {
 
     expect(() => parseGatewayRoutingEnvelope({
       schemaVersion: 1,
-      companionId: 'companion-alpha',
+      companionId: COMPANION_ALPHA_ID,
       shard: {
-        coreCompanionId: 'companion-alpha',
-        shardCompanionId: 'companion-beta/shards/shard-42',
+        coreCompanionId: COMPANION_ALPHA_ID,
+        shardCompanionId: `${COMPANION_BETA_ID}/shards/shard-42`,
         shardId: 'shard-42',
         creationMode: 'fresh',
       },

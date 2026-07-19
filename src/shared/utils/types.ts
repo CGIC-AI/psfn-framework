@@ -85,3 +85,21 @@ export function normalizeStringArray(
 
   return [...unique];
 }
+
+/**
+ * Audited widening seam (bead psfn-framework-aylm.5): view an already-typed
+ * plain-data object as a `Record<string, unknown>` for structural walking —
+ * e.g. redaction digests over a validated decision union, strict re-parsing
+ * of a caller-typed candidate, or persisted-snapshot surgery.
+ *
+ * This is the type-erasing direction only: property names and types are
+ * forgotten and every read comes back as `unknown`, so the view cannot
+ * manufacture trust. A caller that needs a typed value back must go through
+ * its own validated (or explicitly documented) narrowing seam. It replaces
+ * scattered `x as unknown as Record<string, unknown>` casts; keep call sites
+ * to plain JSON-ish data (no class instances whose behavior the record view
+ * would hide).
+ */
+export function toRecordView(value: object): Record<string, unknown> {
+  return value as Record<string, unknown>;
+}

@@ -20,7 +20,7 @@ import type { TurnToolSummary } from '../../../faculties/skills/reflection-nudge
 import type { TrustLevel } from '../../../system/trust/types.js';
 import type { EmotionSelfModelRuntime } from './emotion-self-model-runtime.js';
 import type { ParticipantRelationshipEdgeInput, ResolvedAuthorContext, UserRuntimeProfile } from './runtime-context.js';
-import type { TurnExecutionRuntime } from './turn-execution-runtime.js';
+import type { TurnExecutionRuntime } from './turn-execution/contracts.js';
 import type { PromptCacheTurnRuntime } from './turn-execution/prompt-cache-runtime.js';
 import { CompletionNoticeBuffer } from '../completion-notices.js';
 import type { TurnSupportRuntime } from './turn-support-runtime.js';

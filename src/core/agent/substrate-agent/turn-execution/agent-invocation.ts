@@ -56,6 +56,7 @@ import type { TurnExecutionObservability } from './observability.js';
 import {
   rebuildProviderWireMessagesForPrompt,
 } from './prompt-invocation-history.js';
+import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
 
 const log = createComponentLogger('SubstrateAgent');
 // Covers attachment fetch (with gateway DNS retries) plus the vision model call;
@@ -67,8 +68,6 @@ const observedProviderModels = new Set<string>();
 const VISION_CONTENT_BUILD_FAILURE_DIAGNOSTIC = 'Vision content build failed.';
 const VISION_PROMPT_FAILURE_DIAGNOSTIC = 'Vision prompt failed.';
 const VISION_RECOVERY_FAILURE_DIAGNOSTIC = 'Vision recovery replay failed.';
-type TurnExecutionRuntime = import('../turn-execution-runtime.js').TurnExecutionRuntime;
-type TurnSessionIdentity = import('./contracts.js').TurnSessionIdentity;
 type RuntimeContradictionDiagnostic = NonNullable<
 NonNullable<AgentResponse['metadata']['diagnostics']>['runtimeContradiction']
 >;

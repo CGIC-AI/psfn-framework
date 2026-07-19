@@ -22,6 +22,16 @@ const log = createComponentLogger('LLMClient');
 
 export type LLMCompletionModelHint = LLMModelHint;
 
+export interface ModelHintNormalizationOptions {
+  emptyResult?: 'null' | 'undefined';
+  preserveFalsePin?: boolean;
+}
+
+export const OPTIONAL_MODEL_HINT_NORMALIZATION = {
+  emptyResult: 'undefined',
+  preserveFalsePin: true,
+} as const satisfies ModelHintNormalizationOptions;
+
 export class LegacyModelHintError extends Error {
   readonly code = 'legacy_model_hint_unsupported';
   readonly modelHint: string;
@@ -38,8 +48,17 @@ export class LegacyModelHintError extends Error {
 
 export function normalizeModelHint(
   modelHint: LLMCompletionModelHint | undefined,
-): LLMCompletionModelHint | null {
-  if (!modelHint) return null;
+): LLMCompletionModelHint | null;
+export function normalizeModelHint(
+  modelHint: LLMCompletionModelHint | undefined,
+  options: ModelHintNormalizationOptions & { emptyResult: 'undefined' },
+): LLMCompletionModelHint | undefined;
+export function normalizeModelHint(
+  modelHint: LLMCompletionModelHint | undefined,
+  options: ModelHintNormalizationOptions = {},
+): LLMCompletionModelHint | null | undefined {
+  const emptyResult = options.emptyResult === 'undefined' ? undefined : null;
+  if (!modelHint) return emptyResult;
   const rawModel = modelHint.model?.trim();
   const provider = modelHint.provider?.trim().toLowerCase();
   const maxTokens = toPositiveInteger(modelHint.maxTokens);
@@ -53,7 +72,9 @@ export function normalizeModelHint(
   const topK = toPositiveInteger(modelHint.topK);
   const frequencyPenalty = toFiniteNumber(modelHint.frequencyPenalty);
   const repetitionPenalty = toFiniteNumber(modelHint.repetitionPenalty);
-  const pin = modelHint.pin === true ? true : undefined;
+  const pin = modelHint.pin === true || (options.preserveFalsePin && modelHint.pin === false)
+    ? modelHint.pin
+    : undefined;
   if (
     !rawModel
     && !provider
@@ -68,12 +89,12 @@ export function normalizeModelHint(
     && frequencyPenalty === undefined
     && repetitionPenalty === undefined
   ) {
-    return null;
+    return emptyResult;
   }
   return {
     ...(rawModel ? { model: rawModel } : {}),
     ...(provider ? { provider } : {}),
-    ...(pin ? { pin } : {}),
+    ...(pin !== undefined ? { pin } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),

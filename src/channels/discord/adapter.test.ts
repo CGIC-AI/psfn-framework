@@ -2460,7 +2460,7 @@ describe('DiscordAdapter multi-account bindings (multi-companion W1-P2)', () => 
       ...(overrides?.allowedBotUserIds ? { allowedBotUserIds: overrides.allowedBotUserIds } : {}),
       account: {
         accountId: 'acct-a',
-        companionId: createCompanionId('companion-a'),
+        companionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
         token: overrides?.token ?? 'token-acct-a',
         ...(overrides?.siblings ? { siblingBotUserIds: overrides.siblings } : {}),
       },

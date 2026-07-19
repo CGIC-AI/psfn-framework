@@ -1,4 +1,7 @@
 import { apiDelete, apiGet, apiPatch, apiPost, apiPostMultipart } from '$lib/api/client';
+import type {
+  ImageReferencePhoto as CanonicalImageReferencePhoto,
+} from '../../../../../src/primitives/images/reference-store.js';
 
 export interface GeneratedImageRootView {
   kind: 'personal' | 'companion';
@@ -66,17 +69,7 @@ export interface GeneratedImagesResponse {
   images: GeneratedImageView[];
 }
 
-export interface ImageReferencePhoto {
-  id: string;
-  fileName: string;
-  contentType: string;
-  description: string;
-  tags: string[];
-  sizeBytes: number;
-  createdAt: string;
-  updatedAt: string;
-  isDefault: boolean;
-}
+export type ImageReferencePhoto = CanonicalImageReferencePhoto;
 
 export interface ImageReferenceListResponse {
   defaultReferenceId?: string;

@@ -382,9 +382,9 @@ for (const probe of ownerUpgradeJob.spec.template.spec.containers) {
 
 const singleOwnerUpgradeRendered = render(ownerMigrationRenderArgs([
   {
-    companionId: 'companion',
+    companionId: '11111111-1111-4111-8111-111111111111',
     claimName: 'owner-one',
-    mountPath: '/runtime/companions/companion',
+    mountPath: '/runtime/companions/11111111-1111-4111-8111-111111111111',
     expectedIdentitySha256: '1'.repeat(64),
   },
 ], false));
@@ -404,7 +404,7 @@ const singleOwnerEnv = new Map(
 if (singleOwnerEnv.get('PSFN_MULTI_COMPANION') !== 'false') {
   throw new Error('single-companion ownerMigration must not impersonate multi-companion topology');
 }
-if (singleOwnerEnv.get('COMPANION_ID') !== 'companion') {
+if (singleOwnerEnv.get('COMPANION_ID') !== '11111111-1111-4111-8111-111111111111') {
   throw new Error('single-companion ownerMigration did not bind its explicit companion identity');
 }
 if (singleOwnerUpgradeJob.spec.template.spec.containers.length !== 1) {
@@ -481,9 +481,9 @@ assertRenderFails(
 );
 
 for (const spiffe of [
-  'spiffe://cluster.local/psfn/gateway/companion',
-  'spiffe://cluster.local/psfn/agent/companion',
-  'spiffe://cluster.local/psfn/garden/companion',
+  'spiffe://cluster.local/psfn/gateway/11111111-1111-4111-8111-111111111111',
+  'spiffe://cluster.local/psfn/agent/11111111-1111-4111-8111-111111111111',
+  'spiffe://cluster.local/psfn/garden/11111111-1111-4111-8111-111111111111',
 ]) {
   assertIncludes(rendered, spiffe, 'SPIFFE URI SAN contract');
 }
@@ -1711,7 +1711,11 @@ assertIncludes(hubDeployment, 'secretName: psfn-satellite-hub-client-tls', 'sate
 
 const hubClientCert = findDocumentByKindName(hubRendered, 'Certificate', 'psfn-satellite-hub-client');
 assertIncludes(hubClientCert, 'secretName: psfn-satellite-hub-client-tls', 'satellite hub client Certificate secret');
-assertIncludes(hubClientCert, 'spiffe://cluster.local/psfn/satellite-hub/companion', 'satellite hub client Certificate SPIFFE URI');
+assertIncludes(
+  hubClientCert,
+  'spiffe://cluster.local/psfn/satellite-hub/11111111-1111-4111-8111-111111111111',
+  'satellite hub client Certificate SPIFFE URI',
+);
 assertIncludes(hubClientCert, 'renewBefore:', 'satellite hub client Certificate renewal');
 
 const piHubOverlayRendered = render([
@@ -2020,7 +2024,10 @@ assertIncludes(
   'Gateway SSO SPIFFE SAN',
 );
 assertRenderFails(
-  ['--set', 'fleetAuth.enabled=true'],
+  [
+    '--set', 'fleetAuth.enabled=true',
+    '--set-string', 'runtime.companionId=companion',
+  ],
   'fleetAuth.enabled=true requires runtime.companionId to be one lowercase RFC4122 UUID',
 );
 assertRenderFails(

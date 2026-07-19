@@ -126,10 +126,7 @@
     saving = true;
     saveError = '';
     saveMessage = '';
-    const label: ChannelEnvelopeLabel = {
-      ...(row.label ?? { privacy: row.privacy }),
-    };
-    delete label.needsReview;
+    const { needsReview: _needsReview, ...label } = row.label ?? { privacy: row.privacy };
     try {
       const result = await saveChannelEnvelopeLabel(row.channelId, label);
       data = result.data;

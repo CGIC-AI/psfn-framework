@@ -545,8 +545,17 @@
   );
 
   // Character card fields config
+  type CardTextField =
+    | 'description'
+    | 'personality'
+    | 'system_prompt'
+    | 'post_history_instructions'
+    | 'scenario'
+    | 'mes_example'
+    | 'first_mes';
+
   interface CardFieldConfig {
-    key: string;
+    key: CardTextField;
     label: string;
     rows: number;
     mono?: boolean;
@@ -1060,7 +1069,7 @@
 
         <!-- Card fields -- each is click-to-edit -->
         {#each CARD_FIELDS as field}
-          {@const rawValue = cardData[field.key] as string | undefined}
+          {@const rawValue = cardData[field.key]}
           {@const value = displayValue(rawValue)}
           <div class="card-garden p-5">
             <div class="flex items-center justify-between mb-3">

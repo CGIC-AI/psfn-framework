@@ -131,7 +131,7 @@ function makeRealPreflightLauncher(): {
           XDG_RUNTIME_DIR: join(workDir, 'run'),
           GATEWAY_SOCKET: join(workDir, 'run', 'gateway.sock'),
           CONFIG_DIR: join(repoRoot, 'config'),
-          COMPANION_ID: 'verification-companion',
+          COMPANION_ID: '11111111-1111-4111-8111-111111111111',
           POSTGRES_DATABASE_URL: 'postgres://verification:verification@127.0.0.1/verification',
           ...env,
         },
@@ -741,7 +741,7 @@ describe('start-gateway-agent launcher supervision', () => {
         env: {
           PATH: process.env.PATH,
           HOME: process.env.HOME,
-          COMPANION_ID: 'operator-probe',
+          COMPANION_ID: '22222222-2222-4222-8222-222222222222',
         },
       });
 

@@ -1,4 +1,5 @@
 import { sleep as defaultSleep } from '../../shared/utils/timing.js';
+import { toError } from '../../shared/utils/errors.js';
 
 export const DEFAULT_DISCORD_START_RETRY_BASE_DELAY_MS = 2_000;
 export const DEFAULT_DISCORD_START_RETRY_MAX_DELAY_MS = 30_000;
@@ -41,10 +42,6 @@ export interface DiscordStartRetryOptions {
   isRetryable?: (error: Error) => boolean;
   onRetry?: (attempt: DiscordStartRetryAttempt) => void | Promise<void>;
   sleep?: (delayMs: number) => Promise<void>;
-}
-
-function toError(value: unknown): Error {
-  return value instanceof Error ? value : new Error(String(value));
 }
 
 function parseStatusCode(error: Error): number | null {

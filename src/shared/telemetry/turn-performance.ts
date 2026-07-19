@@ -1,4 +1,4 @@
-import type { LLMStreamOutputKind } from '../contracts/runtime.js';
+import type { LLMStreamOutputKind } from '../contracts/runtime-base.js';
 import { isRecord } from '../utils/types.js';
 
 export const TURN_PERFORMANCE_STAGES = [

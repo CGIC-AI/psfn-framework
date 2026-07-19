@@ -20,7 +20,6 @@
     DEFAULT_BUDGET_POLICY,
     PURPOSE_LABELS,
     isRecord,
-    normalizeRouting,
     parseModelRegistryJson,
     toNonEmptyString,
     type CanonicalModelPurpose,
@@ -437,40 +436,6 @@
     return entry;
   }
 
-  function setRoutingProviderOrder(index: number, rawValue: string): void {
-    updateModelAt(index, (entry) => {
-      const providerOrder = rawValue
-        .split(',')
-        .map((value) => value.trim().toLowerCase())
-        .filter((value, orderIndex, array) => value.length > 0 && array.indexOf(value) === orderIndex);
-      if (providerOrder.length === 0) {
-        delete entry.routing;
-      } else {
-        entry.routing = { providerOrder };
-      }
-      return entry;
-    });
-  }
-
-  function toggleRoutingProvider(index: number, providerId: string): void {
-    updateModelAt(index, (entry) => {
-      const currentOrder = entry.routing?.providerOrder ?? [];
-      const nextOrder = currentOrder.includes(providerId)
-        ? currentOrder.filter((value) => value !== providerId)
-        : [...currentOrder, providerId];
-      if (nextOrder.length === 0) {
-        delete entry.routing;
-      } else {
-        entry.routing = { providerOrder: nextOrder };
-      }
-      return entry;
-    });
-  }
-
-  function routingProviderOrderValue(entry: ModelRegistryEntry): string {
-    return entry.routing?.providerOrder?.join(', ') ?? '';
-  }
-
   function setContainerValue(
     index: number,
     containerKey: 'capabilities' | 'tuning' | 'cost',
@@ -752,12 +717,6 @@
       if (!entry.identity.source.type.trim()) {
         errors.push(`Model "${id || index + 1}" is missing source type.`);
       }
-      const routingProviderOrder = entry.routing?.providerOrder ?? [];
-      for (const routedProviderId of routingProviderOrder) {
-        if (!providerEntriesById.has(routedProviderId)) {
-          errors.push(`Model "${id || index + 1}" routes through unknown provider "${routedProviderId}".`);
-        }
-      }
       if (!Array.isArray(entry.purposes) || entry.purposes.length === 0) {
         errors.push(`Model "${id || index + 1}" must include at least one purpose tag.`);
       }
@@ -840,13 +799,6 @@
         } else {
           delete nextEntry.enabled;
         }
-        const normalizedRouting = normalizeRouting(entry.routing);
-        if (normalizedRouting) {
-          nextEntry.routing = normalizedRouting;
-        } else {
-          delete nextEntry.routing;
-        }
-
         if (isRecord(nextEntry.capabilities) && Object.keys(nextEntry.capabilities).length === 0) {
           delete nextEntry.capabilities;
         }
@@ -1332,29 +1284,6 @@
                       onchange={(event) => setSourceField(index, 'baseUrl', (event.target as HTMLInputElement).value)}
                       class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
                     />
-                  </div>
-                  <div class="md:col-span-2 xl:col-span-3">
-                    <p class="block text-xs font-semibold uppercase tracking-[0.12em] text-shadow-500 mb-1">Routing Provider Order</p>
-                    <input
-                      type="text"
-                      value={routingProviderOrderValue(entry)}
-                      onchange={(event) => setRoutingProviderOrder(index, (event.target as HTMLInputElement).value)}
-                      class="w-full px-3 py-2 rounded border border-bark-300 bg-bark-50 text-sm text-shadow-800 font-mono"
-                      placeholder="comma-separated provider ids for fallback routing"
-                    />
-                    <div class="mt-2 flex flex-wrap gap-2">
-                      {#each enabledProviders as provider}
-                        {@const selected = entry.routing?.providerOrder?.includes(provider.id) ?? false}
-                        <button
-                          type="button"
-                          onclick={() => toggleRoutingProvider(index, provider.id)}
-                          class="rounded-full border px-2.5 py-1 text-xs font-medium transition-colors {selected ? 'border-gold-400 bg-gold-100 text-gold-800' : 'border-bark-300 bg-bark-50 text-shadow-600 hover:bg-bark-100'}"
-                        >
-                          {provider.id}
-                        </button>
-                      {/each}
-                    </div>
-                    <p class="mt-1 text-xs text-shadow-500">Optional per-slot provider fallback order written to <span class="font-mono">routing.providerOrder</span>.</p>
                   </div>
                   <div>
                     <p class="block text-xs font-semibold uppercase tracking-[0.12em] text-shadow-500 mb-1">Capabilities: Context Window</p>

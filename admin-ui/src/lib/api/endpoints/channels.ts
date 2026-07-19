@@ -1,17 +1,20 @@
 // E3.2 — Garden channel Context Envelope endpoints.
 
 import { apiGet, apiPost } from '../client';
+import type {
+  ChannelEnvelopeLabel as CanonicalChannelEnvelopeLabel,
+  ChannelPrivacy as CanonicalChannelPrivacy,
+  ContactTrackingMode as CanonicalContactTrackingMode,
+} from '../../../../../src/system/trust/context-envelope.js';
+import type {
+  ChannelClassificationSource as CanonicalChannelClassificationSource,
+} from '../../../../../src/system/trust/policy.js';
 
-export type ChannelPrivacy = 'private' | 'invite_only' | 'public';
-export type ContactTrackingMode = 'auto' | 'approval' | 'role_gated';
-export type ChannelClassificationSource = 'channel_label' | 'operator_override' | 'derived_default';
+export type ChannelPrivacy = CanonicalChannelPrivacy;
+export type ContactTrackingMode = CanonicalContactTrackingMode;
+export type ChannelClassificationSource = CanonicalChannelClassificationSource;
 
-export interface ChannelEnvelopeLabel {
-  privacy?: ChannelPrivacy;
-  broadcast?: boolean;
-  contactTracking?: ContactTrackingMode;
-  needsReview?: boolean;
-}
+export type ChannelEnvelopeLabel = CanonicalChannelEnvelopeLabel;
 
 export interface ChannelEnvelopeRow {
   channelId: string;

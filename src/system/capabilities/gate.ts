@@ -134,7 +134,7 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
       toolCallId: string,
       params: unknown,
       signal?: AbortSignal,
-    ): Promise<AgentToolResult<any>> => {
+    ): Promise<AgentToolResult<unknown>> => {
       const access = getAccess();
       const eligibility = evaluateToolCapabilityEligibility(tool, params, access);
       const transportAllowed = !eligibility.allowed
@@ -177,9 +177,9 @@ export function gateToolWithCapabilities<T extends AgentTool<any>>(
         }
       }
 
-      // params is unknown from the gated wrapper; tool.execute expects Static<TSchema>
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return tool.execute(toolCallId, params as any, signal);
+      // params is unknown from the gated wrapper; narrow to the wrapped tool's
+      // own declared param type (Static<TParameters>) rather than erasing it.
+      return tool.execute(toolCallId, params as Parameters<typeof tool.execute>[1], signal);
     },
   } as T;
 

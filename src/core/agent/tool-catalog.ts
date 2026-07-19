@@ -3,6 +3,7 @@ import { resolveToolRequiredCapabilities } from '../../system/capabilities/requi
 import { getToolReversibility, type ToolReversibility } from '../../system/capabilities/safeguards.js';
 import type { CapabilityToken } from '../../system/capabilities/tokens.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { uniqueStrings } from '../../shared/utils/strings.js';
 import {
   getCanonicalToolSurface,
   type CanonicalToolExposure,
@@ -51,10 +52,6 @@ export interface RuntimeToolCatalogSnapshot {
 }
 
 type SchemaLike = Record<string, unknown>;
-
-function uniqueStrings(values: Iterable<string>): string[] {
-  return [...new Set([...values].map(value => value.trim()).filter(Boolean))];
-}
 
 function extractStringLiterals(schema: unknown): string[] {
   if (!isRecord(schema)) return [];

@@ -31,7 +31,7 @@ function fakeSource(stats: ToolUsageStat[]): ToolUsageAggregateSource {
   };
 }
 
-const EXTENDED = ['repo', 'shell', 'world', 'library', 'north_star', 'beads', 'notify', 'vault'];
+const EXTENDED = ['repo', 'shell', 'world', 'north_star', 'beads', 'notify', 'vault'];
 const CATALOG_SIZE = EXTENDED.length + 4;
 
 describe('createToolUsageEvaluator', () => {

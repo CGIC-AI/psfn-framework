@@ -14,10 +14,13 @@ import type {
   AdminPrivacyBreakGlassService,
   PrivacyBreakGlassAuditEvidence,
 } from '../services/privacy-break-glass-service.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type { FleetGardenRequestContext, GardenRequestContext } from '../garden-request-context.js';
 import type { AdminApiRoute, AdminAuditTimelineAppender, AdminBodyReader } from './types.js';
 
 const NO_STORE = { 'Cache-Control': 'no-store' } as const;
+const log = createComponentLogger('PrivacyBreakGlassRoutes');
 
 function fleetContext(context: GardenRequestContext | undefined): FleetGardenRequestContext | null {
   return context?.kind === 'fleet_principal' ? context : null;
@@ -53,7 +56,12 @@ function routePair(input: {
     try {
       input.appendAudit('memory_access', decision, narrative, auditDetails, 'operator', context);
       return true;
-    } catch {
+    } catch (error) {
+      log.error('Failed to append privacy break-glass audit decision', {
+        decision,
+        resourceKind: input.resourceKind,
+        error: toErrorMessage(error),
+      });
       return false;
     }
   };

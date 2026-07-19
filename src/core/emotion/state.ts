@@ -1,22 +1,12 @@
 import { clampSigned, clampUnit } from '../../shared/utils/numeric.js';
+import type { EmotionStateSnapshot, VADVector } from '../../shared/contracts/emotion-contracts.js';
 
-export interface VADVector {
-  valence: number;
-  arousal: number;
-  dominance: number;
-}
+export type { EmotionStateSnapshot, VADVector } from '../../shared/contracts/emotion-contracts.js';
 
 export interface EmotionObservation {
   vad?: Partial<VADVector>;
   discrete?: Record<string, number>;
   confidence?: number;
-}
-
-export interface EmotionStateSnapshot {
-  vad: VADVector;
-  mood: VADVector;
-  discrete: Record<string, number>;
-  confidence: number;
 }
 
 export interface EmotionStateConfig {

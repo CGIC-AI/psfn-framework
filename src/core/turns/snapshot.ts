@@ -20,7 +20,7 @@ import type {
   PromptSectionTelemetry,
   ToolSchema,
   TurnID,
-} from '../../shared/contracts/runtime.js';
+} from '../../shared/contracts/runtime-base.js';
 import { cloneAuthenticityProvenance } from '../../shared/authenticity-provenance.js';
 import type { TrustLevel } from '../../system/trust/types.js';
 import type { PromptPlan } from '../agent/substrate-agent/turn-execution/prompt-plan.js';

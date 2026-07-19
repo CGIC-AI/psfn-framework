@@ -8,11 +8,13 @@
 import '../../shared/utils/load-dotenv.js';
 import { migratePostgresMemoryEmbeddings } from '../../faculties/memory/migration.js';
 import type { ReembedMigrationProgress } from '../../faculties/memory/migration.js';
-import { loadConfig } from '../../system/config/load-config.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
-import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
-import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
 import { createProviderRuntimeServices } from '../../system/config/provider-runtime-factory.js';
+import {
+  bootstrapMaintenanceRuntime,
+  isMaintenanceCliEntrypoint,
+  parseCommonMaintenanceArgs,
+  runMaintenanceCli,
+} from './cli-harness.js';
 
 interface CliOptions {
   batchSize?: number;
@@ -33,43 +35,29 @@ function printUsage(): void {
   console.log('  -h, --help           Show this help message');
 }
 
-function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { includeDeleted: false, showHelp: false };
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === '--help' || arg === '-h') {
-      options.showHelp = true;
-      continue;
-    }
-    if (arg === '--batch-size') {
-      const value = argv[i + 1];
-      if (!value) throw new Error('Missing value for --batch-size');
-      options.batchSize = Number.parseInt(value, 10);
-      if (!Number.isFinite(options.batchSize) || options.batchSize <= 0) {
-        throw new Error('--batch-size must be a positive integer');
-      }
-      i++;
-      continue;
-    }
-    if (arg === '--parallelism') {
-      const value = argv[i + 1];
-      if (!value) throw new Error('Missing value for --parallelism');
-      options.parallelism = Number.parseInt(value, 10);
-      if (!Number.isFinite(options.parallelism) || options.parallelism <= 0) {
-        throw new Error('--parallelism must be a positive integer');
-      }
-      i++;
-      continue;
-    }
-    if (arg === '--include-deleted') {
-      options.includeDeleted = true;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
+function parsePositiveInteger(value: string, arg: string): number {
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`${arg} must be a positive integer`);
   }
+  return parsed;
+}
 
-  return options;
+function parseArgs(argv: readonly string[]): CliOptions {
+  return parseCommonMaintenanceArgs<CliOptions>(argv, {
+    initial: { includeDeleted: false, showHelp: false },
+    extraFlags: {
+      '--batch-size': ({ arg, options, readValue }) => {
+        options.batchSize = parsePositiveInteger(readValue(), arg);
+      },
+      '--parallelism': ({ arg, options, readValue }) => {
+        options.parallelism = parsePositiveInteger(readValue(), arg);
+      },
+      '--include-deleted': ({ options }) => {
+        options.includeDeleted = true;
+      },
+    },
+  });
 }
 
 function formatProgress(progress: ReembedMigrationProgress): string {
@@ -79,67 +67,62 @@ function formatProgress(progress: ReembedMigrationProgress): string {
   return `  [${pct}%] batch ${progress.batchIndex}/${progress.batchCount} — ${progress.processed}/${progress.total} processed, ${progress.updated} updated, ${progress.failed} failed`;
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.showHelp) {
-    printUsage();
-    return;
-  }
+function runCli(): Promise<unknown> {
+  return runMaintenanceCli({
+    label: 'Embedding migration',
+    parseArgs,
+    printUsage,
+    run: async options => {
+      const { config } = await bootstrapMaintenanceRuntime();
+      if (config.persistenceBackend !== 'postgres') {
+        throw new Error('Embedding migration requires config.persistenceBackend=postgres');
+      }
+      const databaseUrl = config.postgresDatabaseUrl?.trim();
+      if (!databaseUrl) {
+        throw new Error('Embedding migration requires config.postgresDatabaseUrl');
+      }
 
-  const config = loadConfig();
-  applyGatewayTlsConfig({
-    caPath: config.gatewayTlsCaPath,
-    rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
-  });
-  await hydrateSecretBearingConfig(config, { env: process.env });
-  if (config.persistenceBackend !== 'postgres') {
-    throw new Error('Embedding migration requires config.persistenceBackend=postgres');
-  }
-  const databaseUrl = config.postgresDatabaseUrl?.trim();
-  if (!databaseUrl) {
-    throw new Error('Embedding migration requires config.postgresDatabaseUrl');
-  }
+      console.log(`Persistence backend: ${config.persistenceBackend}`);
 
-  console.log(`Persistence backend: ${config.persistenceBackend}`);
+      const { embeddingProvider } = createProviderRuntimeServices({ config });
+      console.log(`Embedding provider: ${embeddingProvider.kind} (dims=${embeddingProvider.dims})`);
+      console.log('');
 
-  const { embeddingProvider } = createProviderRuntimeServices({ config });
-  console.log(`Embedding provider: ${embeddingProvider.kind} (dims=${embeddingProvider.dims})`);
-  console.log('');
+      const result = await migratePostgresMemoryEmbeddings(databaseUrl, embeddingProvider, {
+        batchSize: options.batchSize,
+        parallelism: options.parallelism,
+        includeDeleted: options.includeDeleted,
+        onProgress: (progress) => {
+          process.stdout.write(`\r${formatProgress(progress)}`);
+        },
+      });
 
-  const result = await migratePostgresMemoryEmbeddings(databaseUrl, embeddingProvider, {
-    batchSize: options.batchSize,
-    parallelism: options.parallelism,
-    includeDeleted: options.includeDeleted,
-    onProgress: (progress) => {
-      process.stdout.write(`\r${formatProgress(progress)}`);
+      if (result.total > 0) {
+        process.stdout.write('\n');
+      }
+
+      console.log('');
+      console.log(`Migration complete in ${result.durationMs}ms`);
+      console.log(`  Total:     ${result.total}`);
+      console.log(`  Updated:   ${result.updated}`);
+      console.log(`  Failed:    ${result.failed}`);
+
+      if (result.failures.length > 0) {
+        console.log('');
+        console.log('Failures:');
+        for (const failure of result.failures.slice(0, 20)) {
+          console.log(`  ${failure.memoryId}: ${failure.error}`);
+        }
+        if (result.failures.length > 20) {
+          console.log(`  ... and ${result.failures.length - 20} more`);
+        }
+        process.exitCode = 1;
+      }
+      return result;
     },
   });
-
-  if (result.total > 0) {
-    process.stdout.write('\n');
-  }
-
-  console.log('');
-  console.log(`Migration complete in ${result.durationMs}ms`);
-  console.log(`  Total:     ${result.total}`);
-  console.log(`  Updated:   ${result.updated}`);
-  console.log(`  Failed:    ${result.failed}`);
-
-  if (result.failures.length > 0) {
-    console.log('');
-    console.log('Failures:');
-    for (const failure of result.failures.slice(0, 20)) {
-      console.log(`  ${failure.memoryId}: ${failure.error}`);
-    }
-    if (result.failures.length > 20) {
-      console.log(`  ... and ${result.failures.length - 20} more`);
-    }
-    process.exitCode = 1;
-  }
 }
 
-main().catch((error) => {
-  const message = toErrorMessage(error);
-  console.error(`Embedding migration failed: ${message}`);
-  process.exit(1);
-});
+if (isMaintenanceCliEntrypoint(import.meta.url)) {
+  void runCli();
+}

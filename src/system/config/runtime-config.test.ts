@@ -60,7 +60,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     };
     writeFileSync(schedulerPath, `${JSON.stringify(scheduler, null, 2)}\n`, 'utf8');
     process.env.DATA_DIR = dataDir;
-    process.env.COMPANION_ID = 'test-companion';
+    process.env.COMPANION_ID = '11111111-1111-4111-8111-111111111111';
     process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
     process.env.CONFIG_DIR = 'config';
 
@@ -197,7 +197,7 @@ describe('hydrateJsonBackedRuntimeConfig', () => {
     }), 'utf8');
 
     process.env.DATA_DIR = dataDir;
-    process.env.COMPANION_ID = 'test-companion';
+    process.env.COMPANION_ID = '11111111-1111-4111-8111-111111111111';
     process.env.POSTGRES_DATABASE_URL = 'postgresql://test:test@127.0.0.1:5432/test';
     process.env.CONFIG_DIR = 'config';
     process.env.PRIMARY_MODEL = 'env-primary-should-be-ignored';

@@ -36,7 +36,7 @@ interface TransportTurnProbe {
 
 function makeConfig(): SubstrateConfig {
   return {
-    companionId: 'test-companion',
+    companionId: '11111111-1111-4111-8111-111111111111',
     companionName: 'Companion',
     primaryProvider: 'openrouter',
     primaryMaxTokens: 1024,

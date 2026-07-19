@@ -25,7 +25,7 @@
     TrustLevel,
     ChannelPrivacyLevel,
   } from '$lib/types';
-  import { RELATIONSHIP_TYPES, CHANNEL_PRIVACY_LEVELS } from '$lib/types';
+  import { RELATIONSHIP_TYPES, CHANNEL_PRIVACY_LEVELS, TRUST_LEVELS } from '$lib/types';
   import { scopeGardenPath } from '$lib/fleet/companion-scope';
 
   let data = $state<AdminContactListData | null>(null);
@@ -67,8 +67,6 @@
   // Merge contact
   let mergeSourceId = $state('');
 
-  const TRUST_LEVELS: TrustLevel[] = ['primary', 'trusted', 'regular', 'public'];
-
   const KNOWN_CHANNEL_TYPES = [
     'discord',
     'telegram',
@@ -90,7 +88,6 @@
     private:      { bg: 'background-color: #4A7C59', text: 'color: white', label: 'Private' },
     invite_only: { bg: 'background-color: #8B7355', text: 'color: white', label: 'Invite-Only' },
     public:       { bg: 'background-color: #4A5C8B', text: 'color: white', label: 'Public' },
-    broadcast:    { bg: 'background-color: #C44569', text: 'color: white', label: 'Broadcast' },
   };
 
   const VERIFICATION_STATUS: Record<string, { cls: string; label: string }> = {
@@ -125,8 +122,6 @@
   }
 
   function contactDisplayName(contact: Contact): string {
-    const profile = data?.profileMap[contact.id];
-    if (profile?.displayName && profile.displayName.trim().length > 0) return profile.displayName;
     return contact.displayName;
   }
 
@@ -1026,7 +1021,7 @@
               <div class="flex items-center gap-3 text-sm text-shadow-600">
                 <span class="inline-flex items-center gap-1">
                   <span class="inline-block w-1.5 h-1.5 rounded-full bg-gold-400"></span>
-                  {profile.memoryCount} memories
+                  {profile.sourceMemoryIds.length} memories
                 </span>
                 {#if profile.updatedAt}
                   <span>Updated {formatTimestamp(profile.updatedAt)}</span>

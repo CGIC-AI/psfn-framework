@@ -20,7 +20,6 @@ import { agentLoopWithScheduler } from './scheduled-agent-loop.js';
 import { isTurnId } from '../turns/id.js';
 import { EmotionState } from '../emotion/state.js';
 import { parseSessionEmotionState } from '../emotion/session-metadata.js';
-import { DEFAULT_COMPANION_ID } from '../identity/companion-naming.js';
 import { MESSAGE_CLASSES } from './message-classes.js';
 import {
   notePendingPaidDeliverable,
@@ -66,6 +65,7 @@ class SubstrateAgent extends RuntimeSubstrateAgent {
 }
 
 const TEST_COMPANION_NAME = 'Companion';
+const TEST_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 const TEST_SYSTEM_PROMPT = `You are ${TEST_COMPANION_NAME}.`;
 const TEST_USER_GREETING = `Hello, ${TEST_COMPANION_NAME}!`;
 const TEST_ASSISTANT_RESPONSE = `Mock response from ${TEST_COMPANION_NAME}`;
@@ -255,7 +255,7 @@ function makeConfig(overrides?: Partial<SubstrateConfig>): SubstrateConfig {
     discordToken: '',
     discordBotId: '',
     characterCardPath: '',
-    companionId: DEFAULT_COMPANION_ID,
+    companionId: TEST_COMPANION_ID,
     characterName: TEST_COMPANION_NAME,
     dataDir: './data',
     databasePath: './data/test.db',
@@ -673,6 +673,31 @@ describe('SubstrateAgent construction', () => {
     const refreshedModel = setModelSpy.mock.calls.at(-1)?.[0] as { id: string };
     expect(refreshedModel.id).toBe('openrouter/moonshotai/kimi-k2.5');
     setModelSpy.mockRestore();
+  });
+
+  it('fails startup when the configured chat model cannot resolve in production layout', () => {
+    const originalLayoutMode = process.env.PSFN_RUNTIME_LAYOUT_MODE;
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.PSFN_RUNTIME_LAYOUT_MODE = 'production';
+    process.env.NODE_ENV = 'production';
+    const config = makeConfig({
+      modelRegistry: { schemaVersion: 1, models: [] },
+    });
+
+    try {
+      expect(() => new SubstrateAgent(
+        new EventBus(),
+        makeMockLLMProvider(),
+        makeMockSessionManager(),
+        'System prompt',
+        config,
+      )).toThrow("No eligible model configured for purpose 'chat'");
+    } finally {
+      if (originalLayoutMode === undefined) delete process.env.PSFN_RUNTIME_LAYOUT_MODE;
+      else process.env.PSFN_RUNTIME_LAYOUT_MODE = originalLayoutMode;
+      if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = originalNodeEnv;
+    }
   });
 
   it('uses llmProvider stream transport in gateway runtime mode', async () => {
@@ -2642,9 +2667,9 @@ describe('SubstrateAgent.handleMessage', () => {
     }));
 
     expect(sessionManager.recordUserMessage).not.toHaveBeenCalled();
-    expect((sessionManager.recordSystemMessage as any).mock.calls[0][5]).toBe(DEFAULT_COMPANION_ID);
-    expect((sessionManager.buildContext as any).mock.calls[0][4]).toBe(DEFAULT_COMPANION_ID);
-    expect((sessionManager.recordAssistantMessage as any).mock.calls[0][4]).toBe(DEFAULT_COMPANION_ID);
+    expect((sessionManager.recordSystemMessage as any).mock.calls[0][5]).toBe(TEST_COMPANION_ID);
+    expect((sessionManager.buildContext as any).mock.calls[0][4]).toBe(TEST_COMPANION_ID);
+    expect((sessionManager.recordAssistantMessage as any).mock.calls[0][4]).toBe(TEST_COMPANION_ID);
     expect(sessionManager.scheduleAutoCompactionBetweenTurns).not.toHaveBeenCalled();
 
     const prompt = (sessionManager.buildContext as any).mock.calls[0][1] as string;

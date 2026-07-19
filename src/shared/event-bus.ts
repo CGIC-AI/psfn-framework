@@ -11,7 +11,7 @@ import type {
   LLMStreamFirstOutputObservation,
   RunChargeEvent,
   FatigueBudgetEvent,
-} from './contracts/runtime.js';
+} from './contracts/runtime-base.js';
 import type { TurnSnapshot } from '../core/turns/snapshot.js';
 import type { SessionRouteResetMode } from '../core/session/session-routes.js';
 import type {
@@ -251,13 +251,6 @@ export interface EventMap {
     targetChannelId?: string;
     noticeBuffered?: boolean;
     timestamp: number;
-  } & EventCorrelationFields;
-  'agent.tools.legacy_alias': {
-    timestamp: number;
-    toolName: string;
-    alias: string;
-    canonicalAction: string;
-    migrationSurface: string;
   } & EventCorrelationFields;
   // Lightweight near-turn memory lane fire-rate telemetry (E5.2). The lane
   // replaced the old turn-based "sleeptime" cadence; heavy passes now run

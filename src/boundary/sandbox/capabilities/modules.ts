@@ -78,7 +78,7 @@ export function createModuleCapabilities(options: CreateModuleCapabilitiesOption
       const raw = await options.gatewayCaps.fsRead(moduleRegistryPath);
       const parsed = JSON.parse(raw);
       if (!Array.isArray(parsed)) {
-        return [];
+        throw new Error(`module registry at ${moduleRegistryPath} must be a JSON array`);
       }
       return parsed.filter((entry): entry is ModuleRecord => isModuleRecord(entry));
     } catch (err) {

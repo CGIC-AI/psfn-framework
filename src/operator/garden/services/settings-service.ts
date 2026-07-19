@@ -1128,7 +1128,10 @@ export class AdminSettingsDataService implements AdminSettingsService {
       }
     } catch (error) {
       log.warn('Failed to load sub-config JSON', { key, error: toErrorMessage(error) });
-      return null;
+      return JSON.stringify({
+        error: `Unable to load ${key} config; owner file is missing or malformed`,
+        key,
+      }, null, 2);
     }
   }
 

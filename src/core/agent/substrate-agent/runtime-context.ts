@@ -603,7 +603,7 @@ export function buildScratchpadContextBlock(input: {
 
     return lines.join('\n');
   } catch (error) {
-    input.logger.debug('Scratchpad context injection skipped due to provider error', {
+    input.logger.warn('Scratchpad context injection skipped due to provider error', {
       error: toErrorMessage(error),
     });
     return '';

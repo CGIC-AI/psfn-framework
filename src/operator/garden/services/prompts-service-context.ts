@@ -46,6 +46,8 @@ import {
   FOUNDATION_SECTION_DEFINITIONS,
   type FoundationSectionId,
 } from '../../../core/identity/foundation-sections.js';
+import { createComponentLogger } from '../../../shared/logger.js';
+import { toErrorMessage } from '../../../shared/utils/errors.js';
 import type {
   AdminConstitutionCompanionLayer,
   AdminConstitutionImmutableBlock,
@@ -55,6 +57,7 @@ import type {
 
 export const CONSTITUTION_IMMUTABLE_LAYER_ID_PREFIX = 'constitution:immutable:';
 export const CONSTITUTION_COMPANION_LAYER_ID = 'constitution:companion-derived-values';
+const log = createComponentLogger('AdminPromptsService');
 type FoundationSectionIdentifier = (typeof FOUNDATION_SECTION_DEFINITIONS)[number]['identifier'];
 const FOUNDATION_SECTION_IDENTIFIER_SET = new Set<string>(
   FOUNDATION_SECTION_DEFINITIONS.map(section => section.identifier),
@@ -387,7 +390,10 @@ export class AdminPromptsServiceContext {
           .filter(entry => entry.length > 0),
         editable: false as const,
       };
-    } catch {
+    } catch (error) {
+      log.warn('Failed to resolve companion-derived values prompt layer', {
+        error: toErrorMessage(error),
+      });
       return null;
     }
   }

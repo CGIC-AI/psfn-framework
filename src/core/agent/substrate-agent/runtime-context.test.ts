@@ -1750,6 +1750,25 @@ describe('runtime subject identity', () => {
     expect(block.length).toBeLessThan(2_000);
   });
 
+  it('warns when scratchpad context injection degrades after a provider failure', () => {
+    const logger = { warn: vi.fn(), debug: vi.fn() };
+
+    expect(buildScratchpadContextBlock({
+      scratchpadProvider: {
+        listScratchpadEntries: () => {
+          throw new Error('scratchpad store unavailable');
+        },
+      },
+      logger,
+    })).toBe('');
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Scratchpad context injection skipped due to provider error',
+      { error: 'scratchpad store unavailable' },
+    );
+    expect(logger.debug).not.toHaveBeenCalled();
+  });
+
   it('exposes granular runtime prompt variables for editable prompt-owned phrasing', () => {
     const variables = buildDynamicPromptTemplateVariables(withConversationScope({
       message: makeMessage({

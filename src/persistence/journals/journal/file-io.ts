@@ -14,6 +14,7 @@ import {
 import { dirname } from 'node:path';
 import type { JournalEntry } from '../../../core/session/types.js';
 import { appendJsonLine } from '../../jsonl.js';
+import { createComponentLogger } from '../../../shared/logger.js';
 import { toErrorMessage } from '../../../shared/utils/errors.js';
 import { backfillLegacyTurnId, parseTurnId } from '../../../core/turns/id.js';
 import type {
@@ -37,6 +38,7 @@ import {
 
 const DEFAULT_JOURNAL_SCAN_CHUNK_BYTES = 64 * 1024;
 const JOURNAL_SEGMENT_READ_RETRIES = 3;
+const log = createComponentLogger('Journal');
 
 function resolveJournalMessageTurnId(entry: JournalEntry): string {
   if (entry.type !== 'message') {
@@ -318,23 +320,30 @@ export function readJournalFile(
         persistQuarantinedEntries(path, parsed.quarantined);
       } catch (err) {
         // Quarantine sidecar write failure should never block journal loading.
-        if (typeof process !== 'undefined' && process.env.LOG_LEVEL === 'debug') {
-          console.debug('[Journal] Quarantine sidecar write failed', String(err));
-        }
+        log.warn('Quarantine sidecar write failed', {
+          path: quarantineSidecarPath(path),
+          error: toErrorMessage(err),
+        });
       }
     }
   }
   return result;
 }
 
-export function readJournalFirstEntry(filePath: string): JournalEntry | null {
+export function readJournalFirstEntry(
+  filePath: string,
+  options: { malformedRow?: 'return-null' | 'throw' } = {},
+): JournalEntry | null {
   for (const path of listJournalArchivePaths(filePath)) {
     let first: JournalEntry | null = null;
     const foundEntry = scanJournalLinesForward(path, (line) => {
       if (line.trim().length === 0) return false;
       try {
         first = parseJournalLine(line);
-      } catch {
+      } catch (error) {
+        if (options.malformedRow === 'throw') {
+          throw error;
+        }
         first = null;
       }
       // The first nonblank physical row is boundary authority. A malformed

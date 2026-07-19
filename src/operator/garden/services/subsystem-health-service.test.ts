@@ -182,6 +182,31 @@ describe('AdminSubsystemHealthDataService', () => {
     expect(denied.lastReason).toBe('tier_denied');
   });
 
+  it('surfaces scheduler inspection failures as an explicit failed lane', () => {
+    const bus = new EventBus();
+    const service = new AdminSubsystemHealthDataService({
+      eventBus: bus,
+      scheduler: {
+        getFullData: () => {
+          throw new Error('scheduler store unavailable');
+        },
+      },
+      now: () => 1_000_000,
+    });
+
+    const lane = laneById(service.getSnapshot().lanes, 'scheduler:health-read');
+    expect(lane).toMatchObject({
+      source: 'scheduler',
+      sinceProcessStart: false,
+      status: 'failed',
+      lastEventAt: 1_000_000,
+      lastOutcome: 'failed',
+      lastError: 'scheduler store unavailable',
+      observedEventCount: 0,
+      recent: [],
+    });
+  });
+
   it('stops recording after dispose', async () => {
     const bus = new EventBus();
     const service = new AdminSubsystemHealthDataService({ eventBus: bus });

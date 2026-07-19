@@ -4,6 +4,12 @@ import type {
   CompanionPresenceRuntime,
   CompanionPresenceTurnPort,
 } from '../../core/agent/companion-presence-runtime.js';
+import { composeRoomContentWindowPorts } from '../../core/session/room-content-window.js';
+import type { RoomContentWindowPort } from '../../core/session/room-content-window.js';
+import {
+  createVoicePresenceWindowPort,
+  registerVoicePresenceWindow,
+} from '../../core/session/voice-presence-window.js';
 import { createComponentLogger } from '../../shared/logger.js';
 
 const log = createComponentLogger('CompanionPresenceWiring');
@@ -30,17 +36,32 @@ export interface CompanionPresenceWiringInput {
 export function wireCompanionPresenceContext(input: CompanionPresenceWiringInput): void {
   input.agentLoop.companionPresence = input.presenceRuntime;
   const presence = input.presenceRuntime;
-  if (!presence) return;
 
-  registerCompanionRoomEntryNotes({
-    eventBus: input.eventBus,
-    sink: input.sessionManager,
-    placesRegistry: input.placesRegistry,
-    coPresence: (place) => presence.getCoPresent(place),
+  // Discord voice channels are Location-scoped (bible §17/§20.5, adjudication
+  // 2026-07-19): presence-windowed regardless of multi-companion mode, so this
+  // is wired unconditionally — before the `presence`-only companion-room path.
+  const voiceWindowPort = createVoicePresenceWindowPort();
+  registerVoicePresenceWindow({ eventBus: input.eventBus, port: voiceWindowPort });
+  const windowPorts: RoomContentWindowPort[] = [voiceWindowPort];
+
+  if (presence) {
+    registerCompanionRoomEntryNotes({
+      eventBus: input.eventBus,
+      sink: input.sessionManager,
+      placesRegistry: input.placesRegistry,
+      coPresence: (place) => presence.getCoPresent(place),
+    });
+    windowPorts.push(createCompanionRoomContentWindowPort({
+      placesRegistry: input.placesRegistry,
+      presence,
+    }));
+  }
+
+  input.sessionManager.setRoomContentWindowPort(
+    composeRoomContentWindowPorts(windowPorts),
+  );
+  log.info('Room content window wired', {
+    voice: true,
+    companionRoom: presence != null,
   });
-  input.sessionManager.setRoomContentWindowPort(createCompanionRoomContentWindowPort({
-    placesRegistry: input.placesRegistry,
-    presence,
-  }));
-  log.info('Companion room-entry notes and content window wired to presence');
 }

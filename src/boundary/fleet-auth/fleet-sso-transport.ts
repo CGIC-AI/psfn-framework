@@ -114,6 +114,18 @@ export const FLEET_SSO_GARDEN_TLS_KEY_PATH_ENV = 'FLEET_SSO_GARDEN_TLS_KEY_PATH'
 export const FLEET_SSO_GARDEN_TLS_EXPECTED_PEER_SPIFFE_URI_ENV =
   'FLEET_SSO_GARDEN_TLS_EXPECTED_PEER_SPIFFE_URI';
 export const FLEET_SSO_GARDEN_TLS_SERVER_NAME_ENV = 'FLEET_SSO_GARDEN_TLS_SERVER_NAME';
+export const FLEET_SSO_FLEET_MANIFEST_REQUIRED_ERROR =
+  'Fleet authentication requires companions.json; '
+  + 'single-companion deployments must provide a one-entry fleet manifest';
+
+export function requireFleetSsoFleetManifest(
+  fleet: ResolvedCompanionsFleetConfig | undefined,
+): ResolvedCompanionsFleetConfig {
+  if (!fleet) {
+    throw new Error(FLEET_SSO_FLEET_MANIFEST_REQUIRED_ERROR);
+  }
+  return fleet;
+}
 
 export function resolveFleetSsoGardenTls(
   env: NodeJS.ProcessEnv,
@@ -148,10 +160,10 @@ export function resolveFleetSsoGardenTls(
 
 export function resolveFleetSsoGardenUpstreams(input: {
   fleet?: ResolvedCompanionsFleetConfig;
-  companionId?: string;
   fleetGardenPort?: number;
   env: NodeJS.ProcessEnv;
 }): FleetSsoGardenUpstream[] {
+  const fleet = requireFleetSsoFleetManifest(input.fleet);
   const host = parseOptionalStringEnv(input.env[FLEET_SSO_GARDEN_HOST_ENV]) ?? '127.0.0.1';
   if (host.includes('/') || host.includes('@') || host.includes('?') || host.includes('#')) {
     throw new Error(`${FLEET_SSO_GARDEN_HOST_ENV} must be a bare host name or address`);
@@ -161,14 +173,6 @@ export function resolveFleetSsoGardenUpstreams(input: {
   if (!loopback && !tls) {
     throw new Error('Non-loopback Fleet SSO Garden upstream requires configured mTLS');
   }
-  if (!input.fleet && input.companionId && !isRfc4122Uuid(input.companionId)) {
-    throw new Error('Fleet SSO companionId must be one lowercase RFC4122 UUID');
-  }
-  const companions = input.fleet?.companions ?? (input.companionId
-    ? [{
-        companionId: createCompanionId(input.companionId, 'Fleet SSO companionId'),
-      }]
-    : []);
   if (!input.fleetGardenPort) {
     throw new Error('Fleet auth requires the fleet Garden listener port');
   }
@@ -176,11 +180,11 @@ export function resolveFleetSsoGardenUpstreams(input: {
   const origin = new URL(
     `${tls ? 'https' : 'http'}://${bracketedHost}:${input.fleetGardenPort}`,
   );
-  const upstreams = companions.map((companion) => ({
+  const upstreams = fleet.companions.map((companion) => ({
       companionId: companion.companionId,
       origin: new URL(origin),
       ...(tls ? { tls } : {}),
-      ...(input.fleet ? { companionScopedTarget: true as const } : {}),
+      companionScopedTarget: true as const,
   }));
   if (upstreams.length === 0) {
     throw new Error('Fleet auth requires at least one companion target');

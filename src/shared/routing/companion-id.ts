@@ -1,8 +1,8 @@
 declare const companionIdBrand: unique symbol;
 declare const shardCompanionIdBrand: unique symbol;
 
-const COMPANION_ID_MAX_LENGTH = 128;
-const COMPANION_ID_TOKEN_PATTERN = /^[A-Za-z0-9._-]+$/u;
+const SHARD_ID_MAX_LENGTH = 128;
+const SHARD_ID_TOKEN_PATTERN = /^[A-Za-z0-9._-]+$/u;
 
 export const LOWERCASE_RFC4122_COMPANION_ID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -11,11 +11,8 @@ export const LOWERCASE_RFC4122_COMPANION_ID_PATTERN =
  * A validated companion routing identity.
  *
  * The brand is compile-time only: JSON and RPC wire values remain strings.
- * Existing deployments support both fleet UUIDs and legacy single-companion
- * identifiers. Their shared wire grammar is a 1-128 character ASCII token
- * containing letters, digits, `.`, `_`, or `-`, with at least one
- * alphanumeric character. Fleet config applies its stricter lowercase
- * RFC-4122 UUID rule before calling this constructor.
+ * Every deployment is fleet-shaped, including a one-entry fleet for a single
+ * companion, so the only accepted wire shape is a lowercase RFC-4122 UUID.
  */
 export type CompanionId = string & { readonly [companionIdBrand]: true };
 
@@ -34,9 +31,9 @@ export interface OptionalCompanionRoutingBinding {
   companionId?: CompanionId;
 }
 
-function isCompanionIdToken(value: string): boolean {
-  return value.length <= COMPANION_ID_MAX_LENGTH
-    && COMPANION_ID_TOKEN_PATTERN.test(value)
+function isShardIdToken(value: string): boolean {
+  return value.length <= SHARD_ID_MAX_LENGTH
+    && SHARD_ID_TOKEN_PATTERN.test(value)
     && /[A-Za-z0-9]/u.test(value);
 }
 
@@ -44,7 +41,7 @@ function isCompanionIdToken(value: string): boolean {
 export function parseCompanionId(value: unknown): CompanionId | null {
   if (typeof value !== 'string') return null;
   const normalized = value.trim();
-  if (!normalized || !isCompanionIdToken(normalized)) return null;
+  if (!LOWERCASE_RFC4122_COMPANION_ID_PATTERN.test(normalized)) return null;
   return normalized as CompanionId;
 }
 
@@ -52,18 +49,10 @@ export function createCompanionId(
   value: unknown,
   fieldName = 'companionId',
 ): CompanionId {
-  if (typeof value !== 'string') {
-    throw new Error(`${fieldName} must be a string, got ${JSON.stringify(value)}`);
-  }
-  const normalized = value.trim();
-  if (!normalized) {
-    throw new Error(`${fieldName} must be a non-empty string`);
-  }
-  const parsed = parseCompanionId(normalized);
+  const parsed = parseCompanionId(value);
   if (!parsed) {
     throw new Error(
-      `${fieldName} must be a 1-${COMPANION_ID_MAX_LENGTH} character companion-id token `
-      + 'containing only letters, digits, ".", "_", or "-"',
+      `${fieldName} must be a lowercase RFC-4122 UUID, got ${JSON.stringify(value)}`,
     );
   }
   return parsed;
@@ -74,7 +63,10 @@ export function createShardCompanionId(
   fieldName = 'shardCompanionId',
 ): ShardCompanionId {
   if (typeof value !== 'string') {
-    throw new Error(`${fieldName} must be a string, got ${JSON.stringify(value)}`);
+    throw new Error(
+      `${fieldName} must use the existing "<companionId>/shards/<shardId>" `
+      + `or "<companionId>::<shardId>" wire format, got ${JSON.stringify(value)}`,
+    );
   }
   const normalized = value.trim();
   const separator = normalized.includes('/shards/') ? '/shards/' : '::';
@@ -86,7 +78,13 @@ export function createShardCompanionId(
     );
   }
   const coreCompanionId = createCompanionId(parts[0], `${fieldName} core companionId`);
-  const shardId = createCompanionId(parts[1], `${fieldName} shardId`);
+  const shardId = parts[1].trim();
+  if (!isShardIdToken(shardId)) {
+    throw new Error(
+      `${fieldName} shardId must be a 1-${SHARD_ID_MAX_LENGTH} character token `
+      + 'containing only letters, digits, ".", "_", or "-"',
+    );
+  }
   return `${coreCompanionId}${separator}${shardId}` as ShardCompanionId;
 }
 

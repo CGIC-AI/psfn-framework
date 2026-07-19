@@ -121,7 +121,7 @@ OPENROUTER_API_KEY=sk-or-...
 # Runtime state and personal files are distinct roots
 DATA_DIR=./data
 WORKSPACE_PATH=./purrsephone
-COMPANION_ID=companion
+COMPANION_ID=11111111-1111-4111-8111-111111111111
 CHARACTER_CARD_PATH=./data/companion.json
 POSTGRES_DATABASE_URL=postgresql://psfn:password@127.0.0.1:5432/psfn
 PSFN_BACKUP_ENCRYPTION_KEY=<long random secret>

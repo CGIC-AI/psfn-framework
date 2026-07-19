@@ -47,6 +47,8 @@ import { resolveTierCapabilityTokens } from '../../../system/capabilities/tiers.
 import type { CapabilityToken } from '../../../system/capabilities/tokens.js';
 import { createCompanionId } from '../../../shared/routing/companion-id.js';
 
+const FLEET_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+
 const originalConfigDir = process.env.CONFIG_DIR;
 const tempConfigDirs: string[] = [];
 
@@ -1122,7 +1124,7 @@ describe('runtime subject identity', () => {
     });
     const authorContext = await resolveAuthorContext({
       message: makeMessage({
-        channelId: `companion-shard:${DEFAULT_COMPANION_ID}:shard-live-1`,
+        channelId: `companion-shard:${FLEET_COMPANION_ID}:shard-live-1`,
         channelType: 'companion',
         authorId: 'shard:shard-live-1',
         authorName: 'Shard',
@@ -1132,9 +1134,9 @@ describe('runtime subject identity', () => {
           authorIsMachineIntelligence: true,
           shardParentIcp: {
             schemaVersion: 1,
-            routingCompanionId: createCompanionId(DEFAULT_COMPANION_ID),
+            routingCompanionId: createCompanionId(FLEET_COMPANION_ID),
             lineage: {
-              parentCompanionId: createCompanionId(DEFAULT_COMPANION_ID),
+              parentCompanionId: createCompanionId(FLEET_COMPANION_ID),
               shardId: 'shard-live-1',
             },
             direction: 'shard_to_parent',
@@ -1145,7 +1147,7 @@ describe('runtime subject identity', () => {
         resolveChannelIdentity,
       } as never,
       logger: { warn: vi.fn(), debug: vi.fn() },
-      companionIdentityKey: DEFAULT_COMPANION_ID,
+      companionIdentityKey: FLEET_COMPANION_ID,
       companionDisplayName: 'Companion',
     });
 

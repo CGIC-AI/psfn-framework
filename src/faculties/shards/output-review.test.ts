@@ -7,14 +7,14 @@ import {
 
 const lineage = buildShardLineageEnvelope({
   kind: 'spawn',
-  coreCompanionId: 'companion-test',
+  coreCompanionId: '11111111-1111-4111-8111-111111111111',
   shardId: 'shard-abc',
   shardChannelId: 'shard:shard-abc',
   sourceMessage: {
     id: 'shard-abc',
     channelId: 'shard:shard-abc',
     channelType: 'api',
-    authorId: 'companion-test',
+    authorId: '11111111-1111-4111-8111-111111111111',
     authorName: 'Companion',
     timestamp: new Date('2026-04-23T12:00:00.000Z'),
   },

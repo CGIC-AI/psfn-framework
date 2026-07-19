@@ -89,11 +89,11 @@ describe('resolveCompanionIdFromConfig', () => {
   });
 
   it('preserves a derived shard id for shard runtimes while the core resolver rejects it', () => {
-    const shardCompanionId = 'companion-alpha::shard-42';
+    const shardCompanionId = '11111111-1111-4111-8111-111111111111::shard-42';
 
     expect(resolveCompanionIdFromConfig({ companionId: shardCompanionId })).toBe(shardCompanionId);
     expect(() => resolveCoreCompanionIdFromConfig({ companionId: shardCompanionId })).toThrow(
-      'Configured core companionId must be a 1-128 character companion-id token',
+      'Configured core companionId must be a lowercase RFC-4122 UUID',
     );
   });
 });

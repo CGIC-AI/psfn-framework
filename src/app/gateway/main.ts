@@ -65,6 +65,7 @@ import { createCompanionId } from '../../shared/routing/companion-id.js';
 import { attachGatewayTurnPerformanceForwarder } from '../../boundary/gateway/turn-performance-forwarder.js';
 import { initializeGatewayFleetAuthPersistence } from '../../persistence/postgres/fleet-auth/gateway-persistence.js';
 import { DiscordEvidenceObserverRegistry } from '../../boundary/fleet-auth/discord-evidence-observer-registry.js';
+import { requireFleetSsoFleetManifest } from '../../boundary/fleet-auth/fleet-sso-transport.js';
 import { assertFleetAuthLegacySurfacesUnavailable } from '../../system/config/fleet-auth-legacy-surface-guard.js';
 import { resolveGatewayFleetAuthSecrets } from '../../system/config/fleet-auth-config.js';
 import { resolveBackupRuntimeConfig } from '../../persistence/backups/config.js';
@@ -139,10 +140,8 @@ async function main(): Promise<void> {
     startupHydration.pathSnapshot.workspacePath,
     startupHydration.pathSnapshot.runtimePathLayout.backupsDir,
   ];
-  if (config.fleetAuth && !config.companionFleet) {
-    throw new Error(
-      'Fleet auth is enabled but the resolved config carries no companion fleet — refusing to start without a complete gateway-owned backup family',
-    );
+  if (config.fleetAuth) {
+    requireFleetSsoFleetManifest(config.companionFleet);
   }
   const fleetAuthKnownCompanionIds = config.companionFleet?.companions
     .map(companion => companion.companionId) ?? [];

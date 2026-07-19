@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { buildShardLineageEnvelope } from './result-lineage.js';
 
-const TEST_COMPANION_ID = 'companion-test';
+const TEST_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
 
 describe('buildShardLineageEnvelope', () => {
   it('builds a fold-back lineage envelope from a shard spawn', () => {

@@ -19,8 +19,9 @@ declare function requiresWyomingCompanionId(
   value: Parameters<typeof applyWyomingRoutingPolicy>[3],
 ): void;
 
-const companionId = createCompanionId('companion-alpha');
-const shardCompanionId = createShardCompanionId('companion-alpha::shard-42');
+const rawCompanionId = '11111111-1111-4111-8111-111111111111';
+const companionId = createCompanionId(rawCompanionId);
+const shardCompanionId = createShardCompanionId(`${rawCompanionId}::shard-42`);
 
 requiresCompanionId(companionId);
 requiresShardCompanionId(shardCompanionId);
@@ -30,16 +31,16 @@ requiresVoiceCompanionId(companionId);
 requiresWyomingCompanionId(companionId);
 
 // @ts-expect-error Raw strings must cross the validating constructor first.
-requiresCompanionId('companion-alpha');
+requiresCompanionId(rawCompanionId);
 // @ts-expect-error Shard identities are not core companion identities.
 requiresCompanionId(shardCompanionId);
 // @ts-expect-error Core identities are not shard identities.
 requiresShardCompanionId(companionId);
 // @ts-expect-error Routing envelopes reject unvalidated raw string identities.
-createGatewayRoutingEnvelope({ companionId: 'companion-alpha' });
+createGatewayRoutingEnvelope({ companionId: rawCompanionId });
 // @ts-expect-error Gateway client/server bindings require a validated identity.
-requiresBoundCompanionId('companion-alpha');
+requiresBoundCompanionId(rawCompanionId);
 // @ts-expect-error Reverse voice propagation requires a validated routing identity.
-requiresVoiceCompanionId('companion-alpha');
+requiresVoiceCompanionId(rawCompanionId);
 // @ts-expect-error Wyoming propagation requires a validated routing identity.
-requiresWyomingCompanionId('companion-alpha');
+requiresWyomingCompanionId(rawCompanionId);

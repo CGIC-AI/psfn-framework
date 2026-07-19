@@ -173,7 +173,7 @@ const TEST_CONFIG: SubstrateConfig = {
   defaultContextWindow: 128_000,
   extractionThresholdPct: 30,
   compactionThresholdPct: 70,
-  companionId: 'companion',
+  companionId: '11111111-1111-4111-8111-111111111111',
   characterName: 'Companion',
   modelRoster: {
     chat: CHAT_SLOT,
@@ -779,7 +779,7 @@ describe('SubagentFaculty', () => {
     expect(handoffEntries).toHaveLength(0);
     expect(result.gatewayRouting).toEqual({
       schemaVersion: 1,
-      companionId: 'companion',
+      companionId: '11111111-1111-4111-8111-111111111111',
       subagentAddress: {
         executionPort: 'subagent',
         workerId: result.subagentId,
@@ -800,7 +800,7 @@ describe('SubagentFaculty', () => {
       expect.objectContaining({
         subagentId: result.subagentId,
         status: 'completed',
-        companionId: 'companion',
+        companionId: '11111111-1111-4111-8111-111111111111',
         connectionId: 'conn-kitchen',
         sessionId: 'session-kitchen',
       }),
@@ -832,10 +832,10 @@ describe('SubagentFaculty', () => {
         routing: {
           gateway: {
             schemaVersion: 1,
-            companionId: 'companion-alpha',
+            companionId: '11111111-1111-4111-8111-111111111111',
             shard: {
-              coreCompanionId: 'companion-alpha',
-              shardCompanionId: 'companion-alpha/shards/shard-parent',
+              coreCompanionId: '11111111-1111-4111-8111-111111111111',
+              shardCompanionId: '11111111-1111-4111-8111-111111111111/shards/shard-parent',
               shardId: 'shard-parent',
               parentShardId: 'shard-grandparent',
             },
@@ -856,10 +856,10 @@ describe('SubagentFaculty', () => {
       },
     });
 
-    expect(result.gatewayRouting.companionId).toBe('companion-alpha');
+    expect(result.gatewayRouting.companionId).toBe('11111111-1111-4111-8111-111111111111');
     expect(result.lineage).toEqual({
-      coreCompanionId: 'companion-alpha',
-      shardCompanionId: 'companion-alpha/shards/shard-parent',
+      coreCompanionId: '11111111-1111-4111-8111-111111111111',
+      shardCompanionId: '11111111-1111-4111-8111-111111111111/shards/shard-parent',
       shardId: 'shard-parent',
       creationMode: 'fresh',
       parentShardId: 'shard-grandparent',

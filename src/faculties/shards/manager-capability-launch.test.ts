@@ -35,7 +35,7 @@ const TEST_CONFIG: SubstrateConfig = {
   defaultContextWindow: 128_000,
   extractionThresholdPct: 30,
   compactionThresholdPct: 70,
-  companionId: 'companion-test',
+  companionId: '11111111-1111-4111-8111-111111111111',
   characterName: 'Companion',
   modelRoster: {
     chat: {
@@ -131,7 +131,7 @@ describe('ShardManager digest-bound capability launches', () => {
     });
     const snapshotParentCapabilityGrant = vi.fn(() => snapshot);
     const expected = deriveShardCapabilityGrant({
-      companionId: 'companion-test',
+      companionId: '11111111-1111-4111-8111-111111111111',
       tier: snapshot.tier,
       customTokens: snapshot.customTokens,
     });
@@ -208,7 +208,7 @@ describe('ShardManager digest-bound capability launches', () => {
     });
     const snapshotParentCapabilityGrant = vi.fn(() => snapshot);
     const expected = deriveShardCapabilityGrant({
-      companionId: 'companion-test',
+      companionId: '11111111-1111-4111-8111-111111111111',
       tier,
       customTokens: [],
     });
@@ -323,7 +323,7 @@ describe('ShardManager digest-bound capability launches', () => {
     });
     const snapshotParentCapabilityGrant = vi.fn(() => snapshot);
     const expected = deriveShardCapabilityGrant({
-      companionId: 'companion-test',
+      companionId: '11111111-1111-4111-8111-111111111111',
       tier: 'custom',
       customTokens: snapshot.customTokens,
     });

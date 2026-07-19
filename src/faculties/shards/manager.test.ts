@@ -260,7 +260,7 @@ const TEST_CONFIG: SubstrateConfig = {
   defaultContextWindow: 128_000,
   extractionThresholdPct: 30,
   compactionThresholdPct: 70,
-  companionId: 'companion-test',
+  companionId: '11111111-1111-4111-8111-111111111111',
   characterName: 'Companion',
   modelRoster: {
     chat: { model: 'test-model', provider: 'test', maxTokens: 16384, contextWindow: 128_000 },
@@ -466,19 +466,19 @@ describe('ShardManager', () => {
     expect(result.lineage).toEqual(expect.objectContaining({
       schemaVersion: 2,
       kind: 'spawn',
-      coreCompanionId: 'companion-test',
-      shardCompanionId: `companion-test::${result.shardId}`,
+      coreCompanionId: '11111111-1111-4111-8111-111111111111',
+      shardCompanionId: `11111111-1111-4111-8111-111111111111::${result.shardId}`,
       shardId: result.shardId,
       shardChannelId: `shard:${result.shardId}`,
       companionProvenance: {
-        parentCompanionId: 'companion-test',
-        shardCompanionId: `companion-test::${result.shardId}`,
+        parentCompanionId: '11111111-1111-4111-8111-111111111111',
+        shardCompanionId: `11111111-1111-4111-8111-111111111111::${result.shardId}`,
       },
       sourceMessage: expect.objectContaining({
         id: result.shardId,
         channelId: `shard:${result.shardId}`,
         channelType: 'api',
-        authorId: 'companion-test',
+        authorId: '11111111-1111-4111-8111-111111111111',
         authorName: 'Companion',
         isDirectMessage: false,
       }),
@@ -488,7 +488,7 @@ describe('ShardManager', () => {
 
   it('prepares and cleans one lineage-bound Postgres schema for a multi-companion shard', async () => {
     const binding: PostgresShardSchemaBinding = {
-      parentCompanionId: createCompanionId('companion-test'),
+      parentCompanionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
       parentSchema: 'companion_alpha',
       shardId: 'derived-by-test',
       schema: 'companion_alpha_shard_0123456789012345678901234567890123456789',
@@ -540,7 +540,7 @@ describe('ShardManager', () => {
     const result = await manager.spawn({ name: 'postgres-bound', task: 'Use isolated state' });
 
     expect(derive).toHaveBeenCalledWith(
-      'companion-test',
+      '11111111-1111-4111-8111-111111111111',
       'companion_alpha',
       result.shardId,
     );
@@ -1128,7 +1128,7 @@ describe('ShardManager', () => {
       parentSystemPrompt: 'test',
       shardParentIcpDelivery: { deliverOrdinaryIcp },
     });
-    const parentCompanionId = createCompanionId('companion-test');
+    const parentCompanionId = createCompanionId('11111111-1111-4111-8111-111111111111');
     const pending = manager.spawn({
       name: 'research shard',
       task: 'Use Bearer eyJprivate against a private partner record',
@@ -1144,7 +1144,7 @@ describe('ShardManager', () => {
     const shardId = directory[0]!.shardId;
     expect(manager.shardDirectory.ownerOfLiveShard(shardId)).toBe(parentCompanionId);
     expect(() => manager.shardDirectory.listShards(
-      createCompanionId('another-parent'),
+      createCompanionId('22222222-2222-4222-8222-222222222222'),
     )).toThrow(/parent binding denied/u);
     await expect(manager.shardParentIcp.sendShardParentIcp(
       shardId,
@@ -1198,7 +1198,7 @@ describe('ShardManager', () => {
       { role: 'assistant', content: 'bounded shard reply', attribution: { shardId } },
     ]);
     expect(() => manager.shardDirectory.readShardChatHistory(
-      createCompanionId('another-parent'),
+      createCompanionId('22222222-2222-4222-8222-222222222222'),
       shardId,
     )).toThrow(/parent binding denied/u);
 
@@ -1955,8 +1955,8 @@ describe('ShardManager', () => {
             expect.objectContaining({
               source: 'memory_write',
               provenance: expect.objectContaining({
-                coreCompanionId: 'companion-test',
-                shardCompanionId: `companion-test::${result.shardId}`,
+                coreCompanionId: '11111111-1111-4111-8111-111111111111',
+                shardCompanionId: `11111111-1111-4111-8111-111111111111::${result.shardId}`,
                 shardId: result.shardId,
                 source: 'memory_write',
                 sourceToolName: 'memory',
@@ -1971,16 +1971,16 @@ describe('ShardManager', () => {
     const review = await manager.getFoldReview(result.shardId);
     expect(review).toMatchObject({
       lineage: {
-        coreCompanionId: 'companion-test',
-        shardCompanionId: `companion-test::${result.shardId}`,
+        coreCompanionId: '11111111-1111-4111-8111-111111111111',
+        shardCompanionId: `11111111-1111-4111-8111-111111111111::${result.shardId}`,
       },
       memoryItems: [
         expect.objectContaining({
           output: expect.objectContaining({
             source: 'memory_write',
             provenance: expect.objectContaining({
-              coreCompanionId: 'companion-test',
-              shardCompanionId: `companion-test::${result.shardId}`,
+              coreCompanionId: '11111111-1111-4111-8111-111111111111',
+              shardCompanionId: `11111111-1111-4111-8111-111111111111::${result.shardId}`,
             }),
           }),
         }),
@@ -2218,13 +2218,13 @@ describe('ShardManager', () => {
     expect(result.lineage).toEqual(expect.objectContaining({
       schemaVersion: 2,
       kind: 'spawn',
-      coreCompanionId: 'companion-test',
-      shardCompanionId: expect.stringMatching(/^companion-test::shard-/),
+      coreCompanionId: '11111111-1111-4111-8111-111111111111',
+      shardCompanionId: expect.stringMatching(/^11111111-1111-4111-8111-111111111111::shard-/),
       shardId: result.shardId,
       shardChannelId: `shard:${result.shardId}`,
       companionProvenance: {
-        parentCompanionId: 'companion-test',
-        shardCompanionId: expect.stringMatching(/^companion-test::shard-/),
+        parentCompanionId: '11111111-1111-4111-8111-111111111111',
+        shardCompanionId: expect.stringMatching(/^11111111-1111-4111-8111-111111111111::shard-/),
       },
       sourceContext: {
         channelId: 'api:source-channel',
@@ -2235,7 +2235,7 @@ describe('ShardManager', () => {
         id: result.shardId,
         channelId: `shard:${result.shardId}`,
         channelType: 'api',
-        authorId: 'companion-test',
+        authorId: '11111111-1111-4111-8111-111111111111',
         authorName: 'Companion',
         isDirectMessage: false,
       }),
@@ -2523,7 +2523,7 @@ describe('ShardManager', () => {
           kind: 'satellite',
           siteId: 'ha-main',
           satelliteId: 'voice-pe-kitchen',
-          companionId: 'companion-test',
+          companionId: '11111111-1111-4111-8111-111111111111',
         },
       },
     });
@@ -2543,13 +2543,13 @@ describe('ShardManager', () => {
     expect(result.lineage).toEqual(expect.objectContaining({
       schemaVersion: 2,
       kind: 'wyoming',
-      coreCompanionId: 'companion-test',
-      shardCompanionId: expect.stringMatching(/^companion-test::wyoming-shard-/),
+      coreCompanionId: '11111111-1111-4111-8111-111111111111',
+      shardCompanionId: expect.stringMatching(/^11111111-1111-4111-8111-111111111111::wyoming-shard-/),
       shardId: result.shardId,
       shardChannelId: 'api:wyoming:ha-main:voice-pe-kitchen',
       companionProvenance: {
-        parentCompanionId: 'companion-test',
-        shardCompanionId: expect.stringMatching(/^companion-test::wyoming-shard-/),
+        parentCompanionId: '11111111-1111-4111-8111-111111111111',
+        shardCompanionId: expect.stringMatching(/^11111111-1111-4111-8111-111111111111::wyoming-shard-/),
       },
       sourceMessage: expect.objectContaining({
         id: 'wyoming-msg-conn-kitchen-7',
@@ -2570,7 +2570,7 @@ describe('ShardManager', () => {
           kind: 'satellite',
           siteId: 'ha-main',
           satelliteId: 'voice-pe-kitchen',
-          companionId: 'companion-test',
+          companionId: '11111111-1111-4111-8111-111111111111',
         },
       },
     }));
@@ -2704,7 +2704,7 @@ describe('ShardManager', () => {
           embodimentId: 'display',
           siteId: 'ha-main',
           satelliteId: 'voice-pe-launch',
-          companionId: 'companion-test',
+          companionId: '11111111-1111-4111-8111-111111111111',
         },
       },
     });
@@ -2718,7 +2718,7 @@ describe('ShardManager', () => {
           requestId: 'wyoming-msg-conn-launch-1',
           turnId: 'wyoming-turn-conn-launch-session-launch-1',
           embodimentContext: {
-            companionId: 'companion-test',
+            companionId: '11111111-1111-4111-8111-111111111111',
             kind: 'embodiment',
             embodimentId: 'display',
             siteId: 'ha-main',
@@ -2739,8 +2739,8 @@ describe('ShardManager', () => {
       expect.objectContaining({
         schemaVersion: 2,
         kind: 'wyoming',
-        coreCompanionId: 'companion-test',
-        shardCompanionId: expect.stringMatching(/^companion-test::wyoming-shard-/),
+        coreCompanionId: '11111111-1111-4111-8111-111111111111',
+        shardCompanionId: expect.stringMatching(/^11111111-1111-4111-8111-111111111111::wyoming-shard-/),
         sourceMessage: expect.objectContaining({
           id: 'wyoming-msg-conn-launch-1',
           channelId: 'api:wyoming:ha-main:voice-pe-launch',
@@ -2750,11 +2750,11 @@ describe('ShardManager', () => {
         }),
       }),
       expect.objectContaining({
-        companionId: expect.stringMatching(/^companion-test::wyoming-shard-/),
+        companionId: expect.stringMatching(/^11111111-1111-4111-8111-111111111111::wyoming-shard-/),
       }),
       expect.objectContaining({
         parent: expect.objectContaining({
-          companionId: 'companion-test',
+          companionId: '11111111-1111-4111-8111-111111111111',
           tier: 'autonomous',
         }),
         access: expect.objectContaining({

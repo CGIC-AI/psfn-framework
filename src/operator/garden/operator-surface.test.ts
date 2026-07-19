@@ -527,7 +527,9 @@ function createTestConfig(tempDir: string, fleetAuth = false): SubstrateConfig {
     extractionProvider: 'test',
     discordToken: '',
     discordBotId: '123',
-    companionId: fleetAuth ? FLEET_COMPANION_ID : 'test-companion',
+    companionId: fleetAuth
+      ? FLEET_COMPANION_ID
+      : createCompanionId('11111111-1111-4111-8111-111111111111'),
     characterCardPath,
     dataDir: tempDir,
     databasePath: '',

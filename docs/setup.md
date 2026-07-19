@@ -85,7 +85,7 @@ Startup verifies the seed-backed owner files before the split runtime comes up. 
 
    ```dotenv
    OPENROUTER_API_KEY=...
-   COMPANION_ID=companion
+   COMPANION_ID=11111111-1111-4111-8111-111111111111
    DATA_DIR=./data
    WORKSPACE_PATH=./purrsephone
    CHARACTER_CARD_PATH=./data/companion.json
@@ -197,6 +197,17 @@ these process-wiring env vars come into play (documented in full in
 - `PSFN_FLEET_AUTH` — required with local multi-companion startup. The one
   fleet Garden accepts companion-bound Fleet Auth capabilities; the launcher
   rejects a fleet topology that would fall back to shared admin-token authority.
+  Fleet Auth is fleet-shaped even when the fleet contains one companion: a
+  legacy single-companion deployment must enable the fleet topology and add a
+  system-owned `companions.json` with exactly one entry. That entry supplies a
+  lowercase RFC-4122 UUID `companionId`, manifest-relative `companionDataDir`
+  and `characterCardPath`, and a lowercase Postgres schema. Startup does not
+  reconstruct this entry from `COMPANION_ID`. If the manifest is absent, it
+  fails with the exact error:
+
+  ```text
+  Fleet authentication requires companions.json; single-companion deployments must provide a one-entry fleet manifest
+  ```
 - `COMPANION_PG_SCHEMA` — per-companion Postgres schema for a single agent
   process. Explicit opt-in, not derived from `COMPANION_ID`; unset means the
   `public` schema (single-companion). The supervisor launcher sets this per

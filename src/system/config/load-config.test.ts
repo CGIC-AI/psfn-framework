@@ -56,7 +56,7 @@ function clearRuntimePathEnv(): void {
   delete process.env.PSFN_MULTI_COMPANION;
   delete process.env.GATEWAY_COMPANION_AUTH_TOKEN;
   delete process.env.GATEWAY_SESSION_INTEGRITY_AUTH_TOKEN;
-  process.env.COMPANION_ID = 'test-companion';
+  process.env.COMPANION_ID = '11111111-1111-4111-8111-111111111111';
   process.env.POSTGRES_DATABASE_URL = 'postgres://postgres:secret@localhost:5432/psfn_test';
 }
 
@@ -126,7 +126,7 @@ describe('loadConfig path defaults', () => {
     expect(config.companionDataDir).toBe('./companion');
     expect(config.workspacePath).toBe('./workspace');
     expect(config.dataDir).toBe('./data');
-    expect(config.companionId).toBe('test-companion');
+    expect(config.companionId).toBe('11111111-1111-4111-8111-111111111111');
     expect(config.characterCardPath).toBe('./companion/companion.json');
     expect(config.databasePath).toBe('companion/state/companion.db');
     expect(config.memoryRetrievalPolicy).toEqual(createDefaultMemoryRetrievalPolicy());
@@ -523,7 +523,7 @@ describe('loadConfig path defaults', () => {
 
   it('projects operator config with only the direct Garden database credential', () => {
     const config = loadOperatorConfig({
-      COMPANION_ID: 'operator-test',
+      COMPANION_ID: '22222222-2222-4222-8222-222222222222',
       DISCORD_TOKEN: 'sentinel-discord',
       DISCORD_BOT_ID: 'sentinel-bot',
       DEEPGRAM_API_KEY: 'sentinel-deepgram',
@@ -550,7 +550,7 @@ describe('loadConfig path defaults', () => {
     const credentialPath = join(root, 'database-url');
     writeFileSync(credentialPath, 'postgres://file-secret@localhost/db\n', 'utf8');
     const config = loadOperatorConfig({
-      COMPANION_ID: 'operator-test',
+      COMPANION_ID: '22222222-2222-4222-8222-222222222222',
       POSTGRES_DATABASE_URL_FILE: credentialPath,
     }) as Record<string, unknown>;
 
@@ -559,7 +559,7 @@ describe('loadConfig path defaults', () => {
 
   it('projects an operator config without a database credential when none is provided', () => {
     const config = loadOperatorConfig({
-      COMPANION_ID: 'operator-test',
+      COMPANION_ID: '22222222-2222-4222-8222-222222222222',
     }) as Record<string, unknown>;
 
     expect(config.postgresDatabaseUrl).toBeUndefined();

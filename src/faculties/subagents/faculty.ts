@@ -18,9 +18,8 @@ import {
 } from '../../core/agent/worker-lanes.js';
 import type { RuntimeMode } from '../../core/agent/tool-wiring-validator.js';
 import { normalizeCapabilityTier } from '../../system/capabilities/tiers.js';
-import { DEFAULT_COMPANION_ID } from '../../core/identity/companion-naming.js';
+import { resolveCoreCompanionIdFromConfig } from '../../core/identity/companion-runtime.js';
 import {
-  createCompanionId,
   createGatewayRoutingEnvelope,
   type GatewayRoutingEnvelope,
   type ShardLineage,
@@ -544,7 +543,7 @@ export class SubagentFaculty implements SubagentControlPort {
       const gatewayRouting = createGatewayRoutingEnvelope({
         companionId: request.gatewayRouting?.companionId
           ?? request.message.routing?.gateway?.companionId
-          ?? createCompanionId(DEFAULT_COMPANION_ID, 'Default companionId'),
+          ?? resolveCoreCompanionIdFromConfig(this.deps.config),
         ...(request.gatewayRouting?.shard || request.message.routing?.gateway?.shard
           ? { shard: request.gatewayRouting?.shard ?? request.message.routing?.gateway?.shard }
           : {}),

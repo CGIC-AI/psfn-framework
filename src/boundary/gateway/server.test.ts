@@ -16,6 +16,7 @@ import { EventBus } from '../../shared/event-bus.js';
 import type { GatewayAuditStorePort } from './audit-port.js';
 import { deriveCompanionAuthToken } from './companion-auth.js';
 import { KubeSelfManagementController } from '../../system/lifecycle/kube-self-management.js';
+import { createCompanionId } from '../../shared/routing/companion-id.js';
 
 // Mock the transport module to avoid real socket operations
 vi.mock('./transport.js', () => ({
@@ -108,6 +109,7 @@ async function setupServerConnection(
 function createMinimalOptions(): GatewayServerOptions {
   return {
     socketPath: '/tmp/test.sock',
+    companionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
     llmProvider: {
       stream: vi.fn().mockResolvedValue({
         content: 'test',
@@ -215,7 +217,7 @@ async function identifySessionIntegrityConnection(
   id: number,
   keyring: SessionHmacKeyring = TEST_SESSION_HMAC_KEYRING,
 ): Promise<void> {
-  const companionId = 'single-companion';
+  const companionId = '11111111-1111-4111-8111-111111111111';
   const response = await invokeRpc(conn, id, 'gateway.client.identify', {
     role: 'internal_session_integrity',
     companionId,
@@ -1231,7 +1233,7 @@ describe('GatewayServer', () => {
       const routing = (routedMessage?.routing as Record<string, unknown> | undefined)?.wyoming as Record<string, unknown>;
       expect(gateway).toEqual({
         schemaVersion: 1,
-        companionId: 'companion',
+        companionId: '11111111-1111-4111-8111-111111111111',
       });
       expect(routing).toMatchObject({
         connectionId: 'conn-hallway',
@@ -1312,7 +1314,7 @@ describe('GatewayServer', () => {
       const routing = (routedMessage?.routing as Record<string, unknown> | undefined)?.wyoming as Record<string, unknown>;
       expect(gateway).toEqual({
         schemaVersion: 1,
-        companionId: 'companion',
+        companionId: '11111111-1111-4111-8111-111111111111',
       });
       expect(routing.shardDelegation).toEqual({
         eligible: true,
@@ -1580,7 +1582,7 @@ describe('GatewayServer', () => {
       onConnectionCb!(internalConn.conn);
       const missingProofResponse = await invokeRpc(internalConn, 300, 'gateway.client.identify', {
         role: 'internal_session_integrity',
-        companionId: 'single-companion',
+        companionId: '11111111-1111-4111-8111-111111111111',
       });
       expect(missingProofResponse.error).toMatchObject({
         code: GatewayErrors.COMPANION_AUTH_FAILED,
@@ -1588,9 +1590,9 @@ describe('GatewayServer', () => {
 
       const identifyResponse = await invokeRpc(internalConn, 301, 'gateway.client.identify', {
         role: 'internal_session_integrity',
-        companionId: 'single-companion',
+        companionId: '11111111-1111-4111-8111-111111111111',
         authToken: deriveCompanionAuthToken(
-          'single-companion',
+          '11111111-1111-4111-8111-111111111111',
           'internal_session_integrity',
           TEST_SESSION_HMAC_KEYRING,
         ),
@@ -1598,7 +1600,7 @@ describe('GatewayServer', () => {
       expect(identifyResponse.result).toEqual({
         success: true,
         role: 'internal_session_integrity',
-        companionId: 'single-companion',
+        companionId: '11111111-1111-4111-8111-111111111111',
       });
 
       const agentConn = createMockConnection();

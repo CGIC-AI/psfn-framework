@@ -18,7 +18,7 @@ import { TurnPerformanceTracker } from '../../shared/telemetry/turn-performance.
 import { CAPABILITY_TOKENS } from '../../system/capabilities/tokens.js';
 import { deriveShardCapabilityGrant } from '../../system/capabilities/shard-derivation.js';
 
-const TEST_COMPANION_ID = createCompanionId('companion');
+const TEST_COMPANION_ID = createCompanionId('11111111-1111-4111-8111-111111111111');
 const TEST_GATEWAY_ROUTING = {
   gateway: { schemaVersion: 1 as const, companionId: TEST_COMPANION_ID },
 };
@@ -1188,7 +1188,9 @@ describe('GatewayClient streaming', () => {
   });
 
   it('self-stamps tenant and request attribution on gateway embedding calls', async () => {
-    const attributedClient = new GatewayClient(conn.conn, 1024, { companionId: 'companion-a' });
+    const attributedClient = new GatewayClient(conn.conn, 1024, {
+      companionId: '11111111-1111-4111-8111-111111111111',
+    });
     const batchPromise = runWithRequestContext({
       sessionId: 'session-1',
       requestId: 'request-1',
@@ -1213,7 +1215,7 @@ describe('GatewayClient streaming', () => {
     expect(request).toMatchObject({
       method: 'llm.embed',
       params: {
-        companionId: 'companion-a',
+        companionId: '11111111-1111-4111-8111-111111111111',
         sessionId: 'session-1',
         requestId: 'request-1',
         channelId: 'shard:shard-1',
@@ -1242,7 +1244,7 @@ describe('GatewayClient authenticated identification', () => {
   it('sends the companion-bound agent proof and keeps the worker proof off the agent frame', async () => {
     const conn = createMockConnection();
     const client = new GatewayClient(conn.conn, 1024, {
-      companionId: 'comp-a',
+      companionId: '11111111-1111-4111-8111-111111111111',
       companionAuthToken: 'v1.agent-proof',
       sessionIntegrityAuthToken: 'v1.worker-proof',
     });
@@ -1257,7 +1259,7 @@ describe('GatewayClient authenticated identification', () => {
       method: 'gateway.client.identify',
       params: {
         role: 'agent',
-        companionId: 'comp-a',
+        companionId: '11111111-1111-4111-8111-111111111111',
         authToken: 'v1.agent-proof',
       },
     });
@@ -1464,7 +1466,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
   it('fails closed when reverse-message routing targets another companion', async () => {
     const boundConn = createMockConnection();
     const boundClient = new GatewayClient(boundConn.conn, 1024, {
-      companionId: createCompanionId('companion-alpha'),
+      companionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
     });
     const handler = vi.fn();
     boundClient.onHandleMessage(handler);
@@ -1483,7 +1485,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
           content: 'hello voice',
           timestamp: '2025-01-01T00:00:00.000Z',
           routing: {
-            gateway: { schemaVersion: 1, companionId: 'companion-beta' },
+            gateway: { schemaVersion: 1, companionId: '22222222-2222-4222-8222-222222222222' },
           },
         },
       },
@@ -1552,7 +1554,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
   it('rejects a cross-companion voice.stream.start before ACK or stream-state creation', async () => {
     const boundConn = createMockConnection();
     const boundClient = new GatewayClient(boundConn.conn, 1024, {
-      companionId: createCompanionId('companion-alpha'),
+      companionId: createCompanionId('11111111-1111-4111-8111-111111111111'),
     });
     boundClient.onHandleMessage(vi.fn());
     const message = {
@@ -1575,7 +1577,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
         sequence: 0,
         message: {
           ...message,
-          routing: { gateway: { schemaVersion: 1, companionId: 'companion-beta' } },
+          routing: { gateway: { schemaVersion: 1, companionId: '22222222-2222-4222-8222-222222222222' } },
         },
       },
     });
@@ -1596,7 +1598,7 @@ describe('GatewayClient reverse RPC (onHandleMessage)', () => {
         message: {
           ...message,
           routing: {
-            gateway: { schemaVersion: 1, companionId: 'companion-alpha' },
+            gateway: { schemaVersion: 1, companionId: '11111111-1111-4111-8111-111111111111' },
           },
         },
       },

@@ -208,6 +208,136 @@ describe('model usage migration certification', () => {
       });
       expect(rerun.evidence).toEqual(beforeRerun);
       expect(await inspectModelUsageMigrationEvidence(pool)).toEqual(beforeRerun);
+
+      const rollbackWriterInsert = `
+        INSERT INTO model_usage_events (
+          id, logical_call_id, attempt, recorded_at_ms, started_at_ms,
+          completed_at_ms, duration_ms, ttft_ms, day_key, month_key,
+          status, call_kind, call_type, purpose, origin_type, origin_stage,
+          service, process, turn_id, request_id, channel_id, tool_name,
+          tool_call_id, charge_lane, charge_surface, charge_run_id,
+          charge_root_run_id, charge_parent_run_id, provider, model,
+          slot_key, requested_provider, requested_model, input_tokens,
+          output_tokens, cache_read_tokens, cache_write_tokens, total_tokens,
+          provider_cost_usd, estimated_cost_usd, cost_source, currency,
+          stop_reason, error_code, error_message, metadata_json
+        ) VALUES (
+          $1, $2, 0, 1752300600000, 1752300599900,
+          1752300600000, 100, NULL, '2025-07-12', '2025-07',
+          'success', $3, $4, $5, NULL, '',
+          NULL, '', NULL, '', NULL, '',
+          NULL, '', NULL, '',
+          NULL, '', $6, $7,
+          NULL, '', NULL, $8,
+          $9, 0, 0, $10,
+          NULL, 0, 'none', NULL,
+          NULL, NULL, NULL, '{}'::jsonb
+        )
+      `;
+      await pool.query(rollbackWriterInsert, [
+        'rollback-writer-embedding',
+        'rollback-writer-embedding-call',
+        'embedding',
+        'memory',
+        'memory',
+        'transformers',
+        'legacy-embedding-model',
+        4,
+        0,
+        4,
+      ]);
+      await pool.query(rollbackWriterInsert, [
+        'rollback-writer-chat',
+        'rollback-writer-chat-call',
+        'chat',
+        'chat',
+        'conversation',
+        'openrouter',
+        'legacy-chat-model',
+        6,
+        3,
+        9,
+      ]);
+
+      const rollbackWriter = await pool.query<Record<string, string | number>>(`
+        SELECT origin_type, origin_stage, service, process, turn_id, request_id,
+               channel_id, tool_name, tool_call_id, charge_lane, charge_surface,
+               charge_run_id, charge_root_run_id, charge_parent_run_id, slot_key,
+               requested_provider, requested_model, event_fingerprint,
+               accounting_schema_version, attribution_schema_version
+        FROM model_usage_events
+        WHERE id IN ('rollback-writer-embedding', 'rollback-writer-chat')
+        ORDER BY id
+      `);
+      const normalizedAttribution = {
+        origin_type: 'unknown',
+        origin_stage: 'unknown',
+        service: 'unknown',
+        process: 'unknown',
+        turn_id: 'unknown',
+        request_id: 'unknown',
+        channel_id: 'unknown',
+        tool_name: 'unknown',
+        tool_call_id: 'unknown',
+        charge_lane: 'unknown',
+        charge_surface: 'unknown',
+        charge_run_id: 'unknown',
+        charge_root_run_id: 'unknown',
+        charge_parent_run_id: 'unknown',
+        slot_key: 'unknown',
+        requested_provider: 'unknown',
+        requested_model: 'unknown',
+        accounting_schema_version: 2,
+        attribution_schema_version: 1,
+      };
+      expect(rollbackWriter.rows).toEqual([
+        {
+          ...normalizedAttribution,
+          event_fingerprint: 'legacy:rollback-writer:rollback-writer-chat',
+        },
+        {
+          ...normalizedAttribution,
+          event_fingerprint: 'legacy:rollback-writer:rollback-writer-embedding',
+        },
+      ]);
+
+      await pool.query(`
+        INSERT INTO model_usage_events (
+          id, logical_call_id, recorded_at_ms, started_at_ms, day_key, month_key,
+          status, call_kind, call_type, purpose, origin_type, provider, model,
+          total_tokens, event_fingerprint
+        ) VALUES (
+          'modern-writer-valid', 'modern-writer-valid-call', 1752300601000,
+          1752300601000, '2025-07-12', '2025-07', 'success', 'chat', 'chat',
+          'conversation', 'gateway', 'openrouter', 'modern-chat-model', 0,
+          'modern:fingerprint:valid'
+        )
+      `);
+      const modernWriter = await pool.query<{
+        origin_type: string;
+        event_fingerprint: string;
+      }>(`
+        SELECT origin_type, event_fingerprint
+        FROM model_usage_events
+        WHERE id = 'modern-writer-valid'
+      `);
+      expect(modernWriter.rows[0]).toEqual({
+        origin_type: 'gateway',
+        event_fingerprint: 'modern:fingerprint:valid',
+      });
+
+      await expect(pool.query(`
+        INSERT INTO model_usage_events (
+          id, logical_call_id, recorded_at_ms, started_at_ms, day_key, month_key,
+          status, call_kind, call_type, purpose, origin_type, provider, model,
+          total_tokens, event_fingerprint
+        ) VALUES (
+          'modern-writer-invalid', 'modern-writer-invalid-call', 1752300602000,
+          1752300602000, '2025-07-12', '2025-07', 'success', 'chat', 'chat',
+          'conversation', NULL, 'openrouter', 'modern-chat-model', 0,
+          'modern:fingerprint:invalid'
+        )
+      `)).rejects.toThrow(/origin_type|null value/i);
     } finally {
       await pool.end();
     }

@@ -800,9 +800,9 @@ describe('postgres memory store unit coverage', () => {
 
   it('keeps the supported postgres migration on l2_memories.embedding and omits the dead embeddings table', () => {
     const migrationSql = postgresMemoryMigrationSql();
-    expect(migrationSql).toContain("current_schema() = 'public'");
+    expect(migrationSql).toContain("current_schema() <> 'public'");
     expect(migrationSql).toContain("CREATE EXTENSION vector WITH SCHEMA %I");
-    expect(migrationSql).toContain('expected %');
+    expect(migrationSql).toContain('expected public or extensions');
     expect(migrationSql).toContain('embedding VECTOR');
     expect(migrationSql).toContain("source_type TEXT NOT NULL DEFAULT 'unknown'");
     expect(migrationSql).toContain("provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb");
@@ -813,9 +813,10 @@ describe('postgres memory store unit coverage', () => {
       "ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS provenance_json JSONB NOT NULL DEFAULT '{}'::jsonb;",
     );
     expectMemoryMigrationSqlToContain([
-      'salience_decay_anchor_at BIGINT NOT NULL',
+      'salience_decay_anchor_at BIGINT NOT NULL DEFAULT ((EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint)',
       'ALTER TABLE l2_memories ADD COLUMN IF NOT EXISTS salience_decay_anchor_at BIGINT;',
       'UPDATE l2_memories SET salience_decay_anchor_at = last_accessed WHERE salience_decay_anchor_at IS NULL;',
+      'ALTER TABLE l2_memories ALTER COLUMN salience_decay_anchor_at SET DEFAULT ((EXTRACT(EPOCH FROM clock_timestamp()) * 1000)::bigint);',
       'ALTER TABLE l2_memories ALTER COLUMN salience_decay_anchor_at SET NOT NULL;',
     ]);
     expect(migrationSql).not.toContain('CREATE TABLE IF NOT EXISTS l2_memory_embeddings');

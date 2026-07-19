@@ -1,5 +1,6 @@
 import type { ChannelPromptRegistryPort } from '../../../channels/backplane/registry-port.js';
 import type { ChannelPromptDock } from '../../../channels/backplane/types.js';
+import type { ResolvedReactionSurface } from '../../../channels/shared/reaction-surface.js';
 import {
   isIcpContinuationTaskKind,
   type SubstrateMessage,
@@ -29,6 +30,19 @@ export function resolveChannelPromptDock(
     return channelRegistry.get('discord');
   }
   return undefined;
+}
+
+/**
+ * Resolve the curated reaction surface (jp36.3.1.2) advertised by the turn's
+ * channel adapter, if any. Channels that expose no reaction surface return
+ * undefined and the runtime-context block renders nothing.
+ */
+export function resolveAvailableReactions(
+  message: SubstrateMessage,
+  channelRegistry: ChannelPromptRegistryPort,
+): ResolvedReactionSurface | undefined {
+  const channelDock = resolveChannelPromptDock(message, channelRegistry);
+  return channelDock?.prompt?.listAvailableReactions?.(message);
 }
 
 export function resolveChannelType(

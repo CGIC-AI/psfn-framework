@@ -1,5 +1,6 @@
 import type { AgentResponse, Attachment, Lifecycle, SubstrateMessage } from '../../shared/contracts/runtime.js';
 import type { EligibilityRequirements } from '../../system/capabilities/eligibility.js';
+import type { ResolvedReactionSurface } from '../shared/reaction-surface.js';
 
 /**
  * mmo9.6.1: in-process turn-control options threaded alongside a dispatched
@@ -87,6 +88,14 @@ export interface ChannelThreadingAdapter {
 export interface ChannelPromptAdapter {
   resolveChannelType(message: SubstrateMessage): string | undefined;
   resolveTaskKind?(message: SubstrateMessage): string | undefined;
+  /**
+   * jp36.3.1.2: curated emoji reaction surface advertised to the companion for
+   * this turn — the standard subset plus any guild-custom emojis carrying a
+   * configured one-line meaning (unknown custom emojis excluded). Optional and
+   * gated by {@link ChannelCapabilities.reactions}; a channel that cannot
+   * resolve a surface returns undefined and the prompt block renders nothing.
+   */
+  listAvailableReactions?(message: SubstrateMessage): ResolvedReactionSurface | undefined;
 }
 
 export interface ChannelAdapterPort extends Lifecycle {
@@ -133,7 +142,7 @@ export interface ChannelOutboundDock {
 export interface ChannelPromptDock {
   id: string;
   capabilities: Pick<ChannelCapabilities, 'promptChannelType'>;
-  prompt?: Pick<ChannelPromptAdapter, 'resolveChannelType' | 'resolveTaskKind'>;
+  prompt?: Pick<ChannelPromptAdapter, 'resolveChannelType' | 'resolveTaskKind' | 'listAvailableReactions'>;
 }
 
 export function asOutboundDock(adapter: ChannelAdapterPort): ChannelOutboundDock {

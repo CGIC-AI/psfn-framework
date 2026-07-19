@@ -53,7 +53,10 @@ import {
 } from '../../boundary/fleet-auth/companion-ui-action.js';
 import type { RequestCapabilityReplayPort } from '../../boundary/fleet-auth/request-capability-replay.js';
 import { GatewayFleetSsoRouter } from '../../boundary/gateway/fleet-sso-router.js';
-import { resolveFleetSsoGardenUpstreams } from '../../boundary/fleet-auth/fleet-sso-transport.js';
+import {
+  requireFleetSsoFleetManifest,
+  resolveFleetSsoGardenUpstreams,
+} from '../../boundary/fleet-auth/fleet-sso-transport.js';
 import type {
   PrimaryEmbodimentAuthorityPort,
 } from '../../boundary/fleet-auth/primary-embodiment.js';
@@ -147,17 +150,18 @@ export interface StartOptionalGatewayApiServerOptions extends GatewayApiSurfaceB
   };
 }
 
-function resolveGatewayHubDeviceCompanionId(options: StartOptionalGatewayApiServerOptions): string | undefined {
+function resolveGatewayHubDeviceCompanionId(
+  options: StartOptionalGatewayApiServerOptions,
+  fleet: NonNullable<SubstrateConfig['companionFleet']>,
+): string | undefined {
   const channelCompanionId = options.channelsConfig?.api.companionId;
   if (channelCompanionId) return channelCompanionId;
-  const fleet = options.config.companionFleet?.companions ?? [];
-  if (fleet.length === 1) return fleet[0]!.companionId;
-  if (!options.config.companionFleet && options.config.companionId) return options.config.companionId;
+  if (fleet.companions.length === 1) return fleet.companions[0]!.companionId;
   return undefined;
 }
 
 function resolveFleetSsoCompanionUi(
-  config: SubstrateConfig,
+  fleet: NonNullable<SubstrateConfig['companionFleet']>,
   env: NodeJS.ProcessEnv,
 ): {
   companionId: ReturnType<typeof createCompanionId>;
@@ -166,11 +170,10 @@ function resolveFleetSsoCompanionUi(
 } | undefined {
   const rawOrigin = env.FLEET_SSO_COMPANION_UI_ORIGIN?.trim();
   if (!rawOrigin) return undefined;
-  const fleet = config.companionFleet?.companions
-    ?? (config.companionId ? [{ companionId: config.companionId }] : []);
   const rawCompanionId = env.FLEET_SSO_COMPANION_UI_COMPANION_ID?.trim()
-    || (fleet.length === 1 ? fleet[0]!.companionId : undefined);
-  if (!rawCompanionId || !fleet.some(entry => entry.companionId === rawCompanionId)) {
+    || (fleet.companions.length === 1 ? fleet.companions[0]!.companionId : undefined);
+  if (!rawCompanionId
+    || !fleet.companions.some(entry => entry.companionId === rawCompanionId)) {
     throw new Error(
       'Fleet SSO Companion UI requires one exact registered FLEET_SSO_COMPANION_UI_COMPANION_ID',
     );
@@ -412,6 +415,9 @@ export async function startOptionalGatewayApiServer(
 
   const env = options.env ?? process.env;
   const fleetAuthBootstrapOnly = options.config.fleetAuth !== undefined;
+  const fleetAuthFleet = fleetAuthBootstrapOnly
+    ? requireFleetSsoFleetManifest(options.config.companionFleet)
+    : undefined;
   const principalAuthenticationWired = options.fleetAuthBroker !== undefined
     && options.fleetAuthJitStepUp !== undefined
     && options.fleetAuthPasskeyCeremonies !== undefined
@@ -448,8 +454,8 @@ export async function startOptionalGatewayApiServer(
   const satelliteApiKeys = parseSatelliteApiKeys(env.API_SATELLITE_KEYS, {
     reservedTokens: [env.API_KEY, env.ADMIN_TOKEN],
   });
-  const hubDeviceCompanionId = fleetAuthBootstrapOnly
-    ? resolveGatewayHubDeviceCompanionId(options)
+  const hubDeviceCompanionId = fleetAuthBootstrapOnly && fleetAuthFleet
+    ? resolveGatewayHubDeviceCompanionId(options, fleetAuthFleet)
     : undefined;
   const hubDeviceIngress = fleetAuthBootstrapOnly && options.hubDeviceAssertionVerifier
     ? new GatewayHubDeviceIngressService({
@@ -470,23 +476,23 @@ export async function startOptionalGatewayApiServer(
       })
     : undefined;
   const apiTlsConfig = resolveApiHttpServerTlsConfig(env);
-  const fleetSsoCompanionUi = options.config.fleetAuth
-    ? resolveFleetSsoCompanionUi(options.config, env)
+  const fleetSsoCompanionUi = options.config.fleetAuth && fleetAuthFleet
+    ? resolveFleetSsoCompanionUi(fleetAuthFleet, env)
     : undefined;
   const fleetPortalProjection = createGatewayFleetPortalProjection({
     fleetAuthEnabled: fleetAuthBootstrapOnly,
     ...(options.fleetPortalAuthorization
       ? { authorization: options.fleetPortalAuthorization }
       : {}),
-    ...(options.config.companionFleet
-      ? { fleet: options.config.companionFleet.companions }
+    ...(fleetAuthFleet
+      ? { fleet: fleetAuthFleet.companions }
       : {}),
     source: options.gateway,
   });
   const fleetSsoRouter = options.config.fleetAuth && options.fleetAuthBroker
     && options.fleetAuthRequestCapabilities
     && options.fleetAuthRequestCapabilityVerifier && options.fleetAuthRequestCapabilityReplay
-    && fleetPortalProjection
+    && fleetPortalProjection && fleetAuthFleet
     ? new GatewayFleetSsoRouter({
         canonicalOrigin: options.config.fleetAuth.canonicalOrigin,
         trustProxy: isExplicitTrue(env.FLEET_SSO_TRUST_PROXY),
@@ -497,8 +503,7 @@ export async function startOptionalGatewayApiServer(
         portalProjection: fleetPortalProjection,
         ...(options.fleetAuthJitStepUp ? { jitStepUp: options.fleetAuthJitStepUp } : {}),
         upstreams: resolveFleetSsoGardenUpstreams({
-          ...(options.config.companionFleet ? { fleet: options.config.companionFleet } : {}),
-          ...(options.config.companionId ? { companionId: options.config.companionId } : {}),
+          fleet: fleetAuthFleet,
           ...(options.adminPort ? { fleetGardenPort: options.adminPort } : {}),
           env,
         }),

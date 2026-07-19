@@ -23,18 +23,33 @@ describe('companion channel identifiers (W6)', () => {
   });
 
   it('normalizes DM pair ordering so both sides share one channelId', () => {
-    const ab = composeCompanionDmChannelId('bbbb-companion', 'aaaa-companion');
-    const ba = composeCompanionDmChannelId('aaaa-companion', 'bbbb-companion');
+    const ab = composeCompanionDmChannelId(
+      '22222222-2222-4222-8222-222222222222',
+      '11111111-1111-4111-8111-111111111111',
+    );
+    const ba = composeCompanionDmChannelId(
+      '11111111-1111-4111-8111-111111111111',
+      '22222222-2222-4222-8222-222222222222',
+    );
     expect(ab).toBe(ba);
-    expect(ab).toBe('companion-dm:aaaa-companion:bbbb-companion');
+    expect(ab).toBe(
+      'companion-dm:11111111-1111-4111-8111-111111111111:'
+      + '22222222-2222-4222-8222-222222222222',
+    );
     expect(parseCompanionChannelId(ab)).toEqual({
       kind: 'dm',
-      participants: ['aaaa-companion', 'bbbb-companion'],
+      participants: [
+        '11111111-1111-4111-8111-111111111111',
+        '22222222-2222-4222-8222-222222222222',
+      ],
     });
   });
 
   it('rejects self-DMs and malformed DM channelIds', () => {
-    expect(() => composeCompanionDmChannelId('same', 'same')).toThrow();
+    expect(() => composeCompanionDmChannelId(
+      '11111111-1111-4111-8111-111111111111',
+      '11111111-1111-4111-8111-111111111111',
+    )).toThrow();
     expect(() => composeCompanionDmChannelId('', 'other')).toThrow();
     // Non-canonical (unsorted) spelling is rejected, never silently normalized:
     // two spellings of one conversation must not split into two fatigue budgets.

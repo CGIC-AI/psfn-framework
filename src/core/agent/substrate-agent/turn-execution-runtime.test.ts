@@ -77,6 +77,8 @@ import { createApprovalQueuePortFromConfirmationQueue } from '../../../system/ca
 import type { IcpConversationCorrelation } from '../../../shared/contracts/icp-autonomy.js';
 import { makeContextManifestFixture } from '../../../test-support/context-manifest.js';
 
+const TEST_FLEET_COMPANION_ID = '11111111-1111-4111-8111-111111111111';
+
 vi.mock('./moa-turn.js', async () => {
   const actual = await vi.importActual<typeof import('./moa-turn.js')>('./moa-turn.js');
   return {
@@ -281,7 +283,7 @@ function seedMachineIntelligenceFatigueSpend(input: {
 }): void {
   for (let index = 0; index < input.count; index += 1) {
     const evaluation = input.fatigueBudget.evaluate({
-      localCompanionId: DEFAULT_COMPANION_ID,
+      localCompanionId: TEST_FLEET_COMPANION_ID,
       channelId: input.channelId ?? 'ch1',
       peer: {
         contactId: input.peerContactId ?? 'contact-mi',
@@ -315,7 +317,7 @@ function seedMachineIntelligenceOverchargeSpend(input: {
 }): void {
   for (let index = 0; index < input.count; index += 1) {
     const evaluation = input.fatigueBudget.evaluate({
-      localCompanionId: DEFAULT_COMPANION_ID,
+      localCompanionId: TEST_FLEET_COMPANION_ID,
       channelId: input.channelId ?? 'ch1',
       peer: {
         contactId: input.peerContactId ?? 'contact-mi',
@@ -667,7 +669,7 @@ function createRuntime(params: {
       },
       ...(params.fatigueBudget
         ? {
-            companionId: DEFAULT_COMPANION_ID,
+            companionId: TEST_FLEET_COMPANION_ID,
             chargePolicy: makeChargePolicy(),
           }
         : {}),

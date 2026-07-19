@@ -7,8 +7,8 @@ import { buildShardLineageEnvelope } from '../../../faculties/shards/result-line
 import type { GardenRequestContext } from '../garden-request-context.js';
 import { AdminShardFoldReviewDataService } from './shard-fold-review-service.js';
 
-const PARENT_A = createCompanionId('companion-a');
-const PARENT_B = createCompanionId('companion-b');
+const PARENT_A = createCompanionId('11111111-1111-4111-8111-111111111111');
+const PARENT_B = createCompanionId('22222222-2222-4222-8222-222222222222');
 
 function lineage(parent: typeof PARENT_A, shardId: string) {
   return buildShardLineageEnvelope({

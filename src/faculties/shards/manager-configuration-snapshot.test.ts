@@ -30,7 +30,7 @@ const CONFIG: SubstrateConfig = {
   defaultContextWindow: 128_000,
   extractionThresholdPct: 30,
   compactionThresholdPct: 70,
-  companionId: 'companion-test',
+  companionId: '11111111-1111-4111-8111-111111111111',
   characterName: 'Test Companion',
   modelRoster: {
     chat: {
@@ -152,14 +152,14 @@ describe('ShardManager configuration snapshots and overrides', () => {
       override: { workerBudget: { maxTurns: 1 } },
     })).toMatchObject({ ok: false, code: 'not_found' });
     expect(manager.updateShardConfigurationOverrides({
-      parentCompanionId: 'companion-test',
+      parentCompanionId: '11111111-1111-4111-8111-111111111111',
       shardId,
       actor: 'fleet-principal:operator-a',
       override: { capabilityTier: 'autonomous' },
     })).toMatchObject({ ok: false, code: 'invalid_override' });
 
     const updated = manager.updateShardConfigurationOverrides({
-      parentCompanionId: 'companion-test',
+      parentCompanionId: '11111111-1111-4111-8111-111111111111',
       shardId,
       actor: 'fleet-principal:operator-a',
       override: {
@@ -203,9 +203,9 @@ describe('ShardManager configuration snapshots and overrides', () => {
       model: 'bounded-model',
       maxTokens: 1_024,
     });
-    expect(manager.getShardConfigurationSnapshot('companion-test', shardId)).toBeNull();
+    expect(manager.getShardConfigurationSnapshot('11111111-1111-4111-8111-111111111111', shardId)).toBeNull();
     expect(manager.updateShardConfigurationOverrides({
-      parentCompanionId: 'companion-test',
+      parentCompanionId: '11111111-1111-4111-8111-111111111111',
       shardId,
       actor: 'fleet-principal:operator-a',
       override: { workerBudget: { maxTurns: 1 } },
@@ -270,7 +270,7 @@ describe('ShardManager configuration snapshots and overrides', () => {
     const shardId = manager.getActiveShards()[0]!.id;
 
     expect(manager.updateShardConfigurationOverrides({
-      parentCompanionId: 'companion-test',
+      parentCompanionId: '11111111-1111-4111-8111-111111111111',
       shardId,
       actor: 'fleet-principal:operator-a',
       override: { workerBudget: { maxChargeUnits: 9 } },
@@ -280,6 +280,6 @@ describe('ShardManager configuration snapshots and overrides', () => {
     releaseFirstTurn?.();
     await expect(pending).rejects.toThrow('Charge quota exceeded for lane "shard"');
     expect(calls).toBe(2);
-    expect(manager.getShardConfigurationSnapshot('companion-test', shardId)).toBeNull();
+    expect(manager.getShardConfigurationSnapshot('11111111-1111-4111-8111-111111111111', shardId)).toBeNull();
   });
 });

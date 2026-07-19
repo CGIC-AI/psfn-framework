@@ -1,11 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import {
   CompanionScopedGardenRouteError,
+  FLEET_SSO_FLEET_MANIFEST_REQUIRED_ERROR,
   parseCompanionScopedGardenRoute,
   parseFleetSsoOuterTarget,
+  resolveFleetSsoGardenUpstreams,
 } from './fleet-sso-transport.js';
 
 const COMPANION_A = '11111111-1111-4111-8111-111111111111';
+const ONE_COMPANION_FLEET = {
+  persistenceRoot: '/runtime',
+  workspacesRoot: '/runtime/workspaces',
+  sharedWorkspacePath: '/runtime/shared',
+  companions: [{
+    companionId: COMPANION_A,
+    companionDataDir: '/runtime/companions/one',
+    characterCardPath: '/runtime/companions/one/character-card.json',
+    personalWorkspacePath: '/runtime/workspaces/one',
+    postgresSchema: 'companion_one',
+  }],
+} as const;
 
 describe('companion-scoped Garden route parsing', () => {
   it('binds one immutable server-derived companion from the canonical route', () => {
@@ -58,5 +72,33 @@ describe('companion-scoped Garden route parsing', () => {
       expect(() => parseFleetSsoOuterTarget(rawTarget))
         .toThrowError(CompanionScopedGardenRouteError);
     }
+  });
+});
+
+describe('Fleet SSO Garden upstream resolution', () => {
+  it('boots the fleet SSO transport from a one-entry companions.json manifest', () => {
+    expect(resolveFleetSsoGardenUpstreams({
+      fleet: ONE_COMPANION_FLEET,
+      fleetGardenPort: 3001,
+      env: {},
+    })).toMatchObject([{
+      companionId: COMPANION_A,
+      origin: new URL('http://127.0.0.1:3001'),
+      companionScopedTarget: true,
+    }]);
+  });
+
+  it('fails closed with an actionable error when companions.json is absent', () => {
+    let thrown: unknown;
+    try {
+      resolveFleetSsoGardenUpstreams({
+        fleetGardenPort: 3001,
+        env: {},
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe(FLEET_SSO_FLEET_MANIFEST_REQUIRED_ERROR);
   });
 });

@@ -13,7 +13,7 @@ import {
   snapshotShardConfiguration,
 } from './configuration-snapshot.js';
 
-const PARENT = createCompanionId('companion-alpha');
+const PARENT = createCompanionId('11111111-1111-4111-8111-111111111111');
 const SHARD_ID = 'shard-config-test';
 const CAPABILITY_GRANT: ShardCapabilityGrantEvidence = Object.freeze({
   parentTier: 'autonomous',

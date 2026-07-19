@@ -95,7 +95,7 @@ describe('SessionManager tool observation intake screening (htm9.2)', () => {
     const mgr = new SessionManager(store, makeConfig(dir));
     mgr.intakeScreening = makeScreening('enforce');
 
-    const entryId = mgr.recordToolObservation('ch1', {
+    const { entryId } = mgr.recordToolObservation('ch1', {
       toolName: 'web_fetch',
       content: HOSTILE_TOOL_OUTPUT,
       toolCallId: 'call-1',

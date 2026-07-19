@@ -46,7 +46,10 @@ import {
   COMPANION_SELF_CREATION_RETRIEVAL_PURPOSE,
 } from '../../../../faculties/memory/retrieval/access-scope.js';
 import type { ArtifactSensitivitySource } from '../../../../shared/contracts/artifact-sensitivity.js';
-import type { DisclosureMemorySource } from '../../../cogsec/disclosure/generation-lineage.js';
+import type {
+  DisclosureMemorySource,
+  DisclosureWikiSource,
+} from '../../../cogsec/disclosure/generation-lineage.js';
 import type { TurnExecutionRuntime, TurnSessionIdentity } from './contracts.js';
 
 const log = createComponentLogger('SubstrateAgent');
@@ -112,6 +115,12 @@ export interface PreTurnComputationResult {
    * and assembled into the prompt AFTER memory context, never displacing it.
    */
   wikiContextBlock: string;
+  /**
+   * jp36.1.1.3: content-free outbound-disclosure facts for every wiki document
+   * rendered into `wikiContextBlock`, folded into the generation disclosure
+   * lineage at the turn seam (bible §9.2 item 3).
+   */
+  disclosureWikiSources: DisclosureWikiSource[];
   scratchpadBlock: string;
 }
 
@@ -1005,6 +1014,7 @@ export async function computePreTurnState(input: {
     disclosureMemorySources: activeMemoryContext?.disclosureMemorySources?.map(source => ({ ...source })) ?? [],
     ...(activeMemoryContext?.manifestSeed ? { memoryManifestSeed: activeMemoryContext.manifestSeed } : {}),
     wikiContextBlock,
+    disclosureWikiSources: wikiContext?.disclosureWikiSources?.map(source => ({ ...source })) ?? [],
     scratchpadBlock,
   };
 }

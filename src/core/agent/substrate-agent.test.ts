@@ -388,7 +388,7 @@ function makeMockSessionManager(): SessionManager {
   const getActiveContextSession = vi.fn(() => activeContextSessionId);
   return {
     recordUserMessage: vi.fn().mockReturnValue(101),
-    recordToolObservation: vi.fn().mockReturnValue(102),
+    recordToolObservation: vi.fn().mockReturnValue({ entryId: 102, intakeSnapshot: null }),
     recordAssistantMessage: vi.fn().mockReturnValue(102),
     recordSystemMessage: vi.fn().mockReturnValue(103),
     recordTurn: vi.fn(),

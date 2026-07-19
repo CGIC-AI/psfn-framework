@@ -19,5 +19,10 @@ export {
   buildGenerationDisclosureLineage,
   memoryDisclosureContribution,
   sessionHistoryDisclosureContribution,
+  toolResultDisclosureContribution,
+  wikiDisclosureContribution,
+  type CompanionOwnedDisclosureAudience,
   type DisclosureMemorySource,
+  type DisclosureToolResultSource,
+  type DisclosureWikiSource,
 } from './generation-lineage.js';

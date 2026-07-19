@@ -1034,7 +1034,7 @@ export async function handleMessageForTurn(
       metacognitiveFlags,
     );
 
-    runtime.recordToolObservations(
+    const toolResultDisclosureSources = runtime.recordToolObservations(
       message,
       turnSessionIdentity,
       turnId,
@@ -1053,11 +1053,14 @@ export async function handleMessageForTurn(
       artifactSensitivitySources,
     );
 
-    // jp36.1.1.2: fold session-history + memory-retrieval admission into the
-    // outbound disclosure lineage for this generation context (bible §9.2). The
+    // jp36.1.1.2/jp36.1.1.3: fold every admitted source (session history, memory
+    // retrieval, wiki/project/journal reads, tool results) into the outbound
+    // disclosure lineage for this generation context (bible §9.2). The
     // destination-eligibility gate that consumes it at egress is jp36.1.3; here
     // the lineage is accumulated from the real admitted sources and surfaced for
-    // audit, never used to alter this turn's behavior.
+    // audit, never used to alter this turn's behavior. Tool-result taint rides
+    // the intake-firewall verdict recordToolObservations just computed, so a
+    // tainted/unscreened tool result fails the whole context closed (§9.0/§9.5).
     const generationDisclosureLineage = buildGenerationDisclosureLineage({
       context: {
         generationContextRef: `turn:${turnId}`,
@@ -1066,6 +1069,8 @@ export async function handleMessageForTurn(
       },
       conversationScope,
       memorySources: preTurnState.disclosureMemorySources,
+      wikiSources: preTurnState.disclosureWikiSources,
+      toolResultSources: toolResultDisclosureSources,
     });
     log.debug('Disclosure lineage accumulated', {
       turnId,
@@ -1074,6 +1079,8 @@ export async function handleMessageForTurn(
       classification: generationDisclosureLineage.classification,
       effectiveSensitivity: generationDisclosureLineage.effectiveSensitivity,
       sourceCount: generationDisclosureLineage.sourceCount,
+      wikiSourceCount: preTurnState.disclosureWikiSources.length,
+      toolResultSourceCount: toolResultDisclosureSources.length,
       hasUnclassifiedSource: generationDisclosureLineage.hasUnclassifiedSource,
       permittedDestinationKinds: generationDisclosureLineage.permittedDestinations.map(constraint => constraint.kind),
       subjectContactCount: generationDisclosureLineage.subjectContactIds.length,

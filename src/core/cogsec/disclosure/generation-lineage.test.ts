@@ -12,7 +12,11 @@ import {
   buildGenerationDisclosureLineage,
   memoryDisclosureContribution,
   sessionHistoryDisclosureContribution,
+  toolResultDisclosureContribution,
+  wikiDisclosureContribution,
+  type DisclosureToolResultSource,
   type DisclosureMemorySource,
+  type DisclosureWikiSource,
 } from './generation-lineage.js';
 
 const CONTEXT: GenerationDisclosureContext = {
@@ -148,6 +152,124 @@ describe('memoryDisclosureContribution', () => {
   });
 });
 
+// ── Population seam: wiki/project/journal reads (§9.2 item 3) ──────────────────
+
+describe('wikiDisclosureContribution', () => {
+  it('collapses plain wiki world-knowledge to companion-self (no outward destination)', () => {
+    const contribution = wikiDisclosureContribution({
+      ref: 'wiki:doc-1',
+      sensitivity: 'public',
+      classified: true,
+    });
+    expect(contribution.permittedDestinations).toEqual([]);
+    expect(contribution.subjectContactIds).toEqual([]);
+    expect(contribution.classified).toBe(true);
+    expectAllScoped(contribution.permittedDestinations);
+  });
+
+  it('collapses a restricted (self-audience) project artifact to companion-self while staying classified', () => {
+    const contribution = wikiDisclosureContribution({
+      ref: 'project:novel:draft-3',
+      sensitivity: 'intimate',
+      companionOwnedAudience: 'self',
+      classified: true,
+    });
+    expect(contribution.sensitivity).toBe('intimate');
+    expect(contribution.permittedDestinations).toEqual([]);
+    expect(contribution.classified).toBe(true);
+    expectAllScoped(contribution.permittedDestinations);
+  });
+
+  it('maps a primary_contact project artifact to that scoped contact DM', () => {
+    const contribution = wikiDisclosureContribution({
+      ref: 'project:gift:card-1',
+      sensitivity: 'personal',
+      companionOwnedAudience: 'primary_contact',
+      primaryContactId: 'c1',
+      classified: true,
+    });
+    expect(contribution.permittedDestinations).toEqual([{ kind: 'contact_dm', contactIds: ['c1'] }]);
+    expect(contribution.subjectContactIds).toEqual(['c1']);
+    expectAllScoped(contribution.permittedDestinations);
+  });
+
+  it('fails closed to companion-self for a primary_contact artifact with no resolved contact id', () => {
+    const contribution = wikiDisclosureContribution({
+      ref: 'project:gift:card-2',
+      sensitivity: 'personal',
+      companionOwnedAudience: 'primary_contact',
+      classified: true,
+    });
+    expect(contribution.permittedDestinations).toEqual([]);
+    expect(contribution.subjectContactIds).toEqual([]);
+    expectAllScoped(contribution.permittedDestinations);
+  });
+
+  it('maps a public project artifact to the publication surface', () => {
+    const contribution = wikiDisclosureContribution({
+      ref: 'project:zine:issue-1',
+      sensitivity: 'public',
+      companionOwnedAudience: 'public',
+      classified: true,
+    });
+    expect(contribution.permittedDestinations).toEqual([{ kind: 'publication' }]);
+    expectAllScoped(contribution.permittedDestinations);
+  });
+
+  it('marks an unclassified (legacy_unverified) read as classified:false and outward-empty', () => {
+    const contribution = wikiDisclosureContribution({
+      ref: 'project:legacy:artifact-1',
+      sensitivity: 'personal',
+      companionOwnedAudience: 'self',
+      classified: false,
+    });
+    expect(contribution.classified).toBe(false);
+    expect(contribution.permittedDestinations).toEqual([]);
+  });
+});
+
+// ── Population seam: tool results (§9.2 item 4) ────────────────────────────────
+
+describe('toolResultDisclosureContribution', () => {
+  it('classifies a released, standard-tier tool result but authorizes no outward destination', () => {
+    const contribution = toolResultDisclosureContribution({
+      ref: 'tool:read_wiki:call-1',
+      intakeState: 'released',
+      sourceRiskTier: 'standard',
+    });
+    expect(contribution.classified).toBe(true);
+    expect(contribution.sensitivity).toBe('confidential'); // most-restrictive floor
+    expect(contribution.permittedDestinations).toEqual([]);
+    expect(contribution.subjectContactIds).toEqual([]);
+    expectAllScoped(contribution.permittedDestinations);
+  });
+
+  it('fails closed for an untrusted-tier tool result even in a consumable state', () => {
+    const contribution = toolResultDisclosureContribution({
+      ref: 'tool:web_fetch:call-2',
+      intakeState: 'released',
+      sourceRiskTier: 'untrusted',
+    });
+    expect(contribution.classified).toBe(false);
+    expect(contribution.permittedDestinations).toEqual([]);
+  });
+
+  it('fails closed for a quarantined tool result', () => {
+    const contribution = toolResultDisclosureContribution({
+      ref: 'tool:web_fetch:call-3',
+      intakeState: 'quarantined',
+      sourceRiskTier: 'hostile',
+    });
+    expect(contribution.classified).toBe(false);
+  });
+
+  it('fails closed when the firewall did not screen the tool result (no envelope)', () => {
+    const contribution = toolResultDisclosureContribution({ ref: 'tool:get_time:call-4' });
+    expect(contribution.classified).toBe(false);
+    expect(contribution.permittedDestinations).toEqual([]);
+  });
+});
+
 // ── Unscoped-id-bearing guard (jp36.1.1.1 review handoff) ──────────────────────
 
 describe('assertScopedDisclosureConstraints', () => {
@@ -220,5 +342,85 @@ describe('buildGenerationDisclosureLineage', () => {
     expect(assessDisclosure(lineage, { kind: 'contact_dm', contactId: 'c1' }).allowed).toBe(true);
     // A different contact's DM is not permitted.
     expect(assessDisclosure(lineage, { kind: 'contact_dm', contactId: 'c2' }).allowed).toBe(false);
+  });
+
+  it('forces fail-closed classification when an unclassified wiki read is admitted (acceptance)', () => {
+    const scope = createGroupConversationScope({ channelId: 'discord:town-square', envelope: PUBLIC_ENVELOPE });
+    const unclassifiedWiki: DisclosureWikiSource = {
+      ref: 'project:legacy:artifact-1',
+      sensitivity: 'personal',
+      companionOwnedAudience: 'self',
+      classified: false,
+    };
+    const lineage = buildGenerationDisclosureLineage({
+      context: CONTEXT,
+      conversationScope: scope,
+      memorySources: [],
+      wikiSources: [unclassifiedWiki],
+    });
+    expect(lineage.hasUnclassifiedSource).toBe(true);
+    expect(lineage.classification).toBe('non_shareable');
+    // Even the originating public room is no longer auto-shareable (§9.5).
+    expect(assessDisclosure(lineage, { kind: 'public_room', channelId: 'discord:town-square' })).toMatchObject({
+      allowed: false,
+      outcome: 'non_shareable',
+    });
+    // companion-self remains the always-eligible private sink.
+    expect(assessDisclosure(lineage, { kind: 'companion_self' }).allowed).toBe(true);
+    expectAllScoped(lineage.permittedDestinations);
+  });
+
+  it('tightens subsequent outputs when a later restrictive tool result is admitted (acceptance)', () => {
+    const scope = createGroupConversationScope({ channelId: 'discord:town-square', envelope: PUBLIC_ENVELOPE });
+
+    // Baseline: public-room session alone is auto-shareable to that room.
+    const baseline = buildGenerationDisclosureLineage({ context: CONTEXT, conversationScope: scope, memorySources: [] });
+    expect(assessDisclosure(baseline, { kind: 'public_room', channelId: 'discord:town-square' }).allowed).toBe(true);
+
+    // A later tainted (untrusted) tool result collapses the whole context: the
+    // originating public room can no longer be auto-shared, but companion-self
+    // stays eligible.
+    const tainted: DisclosureToolResultSource = {
+      ref: 'tool:web_fetch:call-9',
+      intakeState: 'released',
+      sourceRiskTier: 'untrusted',
+    };
+    const tightened = buildGenerationDisclosureLineage({
+      context: CONTEXT,
+      conversationScope: scope,
+      memorySources: [],
+      toolResultSources: [tainted],
+    });
+    expect(tightened.sourceCount).toBe(2);
+    expect(tightened.hasUnclassifiedSource).toBe(true);
+    expect(tightened.permittedDestinations).toEqual([]);
+    expect(assessDisclosure(tightened, { kind: 'public_room', channelId: 'discord:town-square' })).toMatchObject({
+      allowed: false,
+      outcome: 'non_shareable',
+    });
+    expect(assessDisclosure(tightened, { kind: 'companion_self' }).allowed).toBe(true);
+    expectAllScoped(tightened.permittedDestinations);
+  });
+
+  it('keeps a released, non-untrusted tool result classified while still collapsing outward auto-share', () => {
+    const scope = createGroupConversationScope({ channelId: 'discord:town-square', envelope: PUBLIC_ENVELOPE });
+    const clean: DisclosureToolResultSource = {
+      ref: 'tool:read_wiki:call-10',
+      intakeState: 'released',
+      sourceRiskTier: 'standard',
+    };
+    const lineage = buildGenerationDisclosureLineage({
+      context: CONTEXT,
+      conversationScope: scope,
+      memorySources: [],
+      toolResultSources: [clean],
+    });
+    // A clean tool result never poisons the classification unclassified...
+    expect(lineage.hasUnclassifiedSource).toBe(false);
+    // ...but a tool result inherently authorizes no outward destination, so the
+    // public room intersects away (companion-self only).
+    expect(lineage.permittedDestinations).toEqual([]);
+    expect(assessDisclosure(lineage, { kind: 'public_room', channelId: 'discord:town-square' }).allowed).toBe(false);
+    expect(assessDisclosure(lineage, { kind: 'companion_self' }).allowed).toBe(true);
   });
 });

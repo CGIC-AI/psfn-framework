@@ -464,6 +464,7 @@ export function createTurnExecutionRuntimeAdapter(
       turnMessages,
       trustLevel,
     ),
+    // (returns DisclosureToolResultSource[] — arrow body already returns it)
     recordAssistantMessage: (
       message,
       turnSessionIdentity,

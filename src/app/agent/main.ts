@@ -89,6 +89,7 @@ import { registerIcpTargetChannelInitiationCommand } from './icp-target-channel-
 import { OutboundReplyDeduper } from '../../system/lifecycle/outbound-reply-dedupe.js';
 import { ObservedGroupMemoryScheduler } from '../../faculties/memory/extraction/group-observed-scheduler.js';
 import { PassiveNameCandidateBuilder } from '../../core/participation/passive-name-candidate.js';
+import { ParticipationAppraiser } from '../../core/participation/appraiser.js';
 import { JsonGroupMemoryWatermarkStore } from '../../faculties/memory/extraction/group-ranges.js';
 import { createNoopSatelliteRoutingPort } from '../../core/agent/satellite-adapter-port.js';
 import { createRequestCapabilityVerifier } from '../../boundary/fleet-auth/request-capability.js';
@@ -1321,6 +1322,17 @@ async function main(): Promise<void> {
     companionAuthorIds: config.discordBotId ? [config.discordBotId] : [],
   });
 
+  // Cheap, tool-less participation appraiser (bible §8.2, jp36.3.3). Consumes the
+  // candidates above on the same observe path and produces the ignore/react/reply
+  // ternary over datamarked room text using the shared background-model port —
+  // no parallel LLM plumbing. Fails closed to `ignore`; billing (background lane)
+  // is attributed to the owning companion via the call correlation.
+  const participationAppraiser = new ParticipationAppraiser({
+    llmProvider,
+    companionName: card.data.name,
+    ...(config.companionId ? { companionId: config.companionId } : {}),
+  });
+
   // ── Slow-poisoning drift-velocity review lane (htm9.14) ──
   // Deterministic nightly aggregation (zero LLM, zero turn latency) over the
   // per-contact valence series, memory-write rows, quarantine risk labels,
@@ -1475,6 +1487,7 @@ async function main(): Promise<void> {
     trackSessionActivity,
     observedGroupMemoryScheduler,
     passiveNameCandidateBuilder,
+    participationAppraiser,
     outboundReplyGuard,
     companionAuthorName: card.data.name,
   });

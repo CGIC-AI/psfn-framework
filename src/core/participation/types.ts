@@ -75,3 +75,35 @@ export type PassiveNameCandidateDecision =
     /** Present once a name match has been classified (autonomy/stale/duplicate/debounced). */
     trigger?: ParticipationCandidateTrigger;
   };
+
+/** The ternary participation action the appraiser may choose (bible §8.2). */
+export const PARTICIPATION_ACTIONS = ['ignore', 'react', 'reply'] as const;
+export type ParticipationAction = typeof PARTICIPATION_ACTIONS[number];
+
+/**
+ * Strict ternary output contract of the participation appraiser (bible §8.2).
+ * The appraiser is a cheap, tool-less background-model call run from the
+ * companion's own perspective ("they mentioned me; do I want to reply?"); its
+ * ONLY authority is to pick one of these three actions. A `reply` here does not
+ * itself speak — it still routes through the full normal response path and its
+ * egress gates downstream (the gateway speaking arbiter, jp36.5). Room text
+ * that reaches the model is datamarked/quoted, so an injected line can at worst
+ * flip one cheap ternary, never exceed it.
+ */
+export type ParticipationAppraisal =
+  | { action: 'ignore'; reasonCode: string; confidence: number }
+  | { action: 'react'; reasonCode: string; confidence: number; reactionClass: string }
+  | { action: 'reply'; reasonCode: string; confidence: number };
+
+/**
+ * The appraiser always yields a ternary. When the model call is disabled,
+ * times out, errors, or returns output that does not satisfy the strict
+ * contract, the appraiser fails closed to `ignore` (never a default-respond;
+ * bible §18 "Passive-name appraiser unavailable"): `failClosed` is then true
+ * and `failClosedReason` records why for content-free telemetry.
+ */
+export interface ParticipationAppraisalResult {
+  appraisal: ParticipationAppraisal;
+  failClosed: boolean;
+  failClosedReason?: string;
+}

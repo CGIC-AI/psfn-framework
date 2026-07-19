@@ -96,6 +96,24 @@ export interface DeterministicGateEvent {
   channelId?: string;
 }
 
+/**
+ * Outcome of one participation-appraiser run (bible §8.2). Content-free faculty
+ * telemetry: the ternary decision, its advisory reason/confidence, and whether
+ * the decision was a fail-closed `ignore` (disabled/timeout/error/malformed)
+ * rather than a real model choice. Cost/billing is attributed separately via the
+ * call's correlation metadata; this event is the decision-level record.
+ */
+export interface ParticipationAppraisalEvent {
+  channelId: string;
+  sourceMessageId: string;
+  trigger: 'direct_mention' | 'passive_name';
+  action: 'ignore' | 'react' | 'reply';
+  reasonCode: string;
+  confidence: number;
+  failClosed: boolean;
+  timestamp: number;
+}
+
 export const GARDEN_QUEUE_NAMES = [
   'confirmations',
   'contact-approvals',
@@ -334,6 +352,9 @@ export interface EventMap {
   'memory.sleeptime_wiki.gate': DeterministicGateEvent;
   'emotion.appraisal.gate': DeterministicGateEvent;
   'intention.concern_candidate.gate': DeterministicGateEvent;
+  // Participation appraiser outcome (bible §8.2): the tool-less ternary decision
+  // over a datamarked summons, emitted per created candidate on the observe path.
+  'participation.appraisal': ParticipationAppraisalEvent;
   //   - reflection template novelty: cadence-fired heartbeat reflection
   //     templates, gated on new scope entries since the template's last
   //     reflection run. Manual run_template invocations bypass the gate.

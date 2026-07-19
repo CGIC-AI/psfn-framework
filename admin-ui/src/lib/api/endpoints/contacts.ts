@@ -1,5 +1,11 @@
 import { apiGet, apiPut, apiPatch, apiPost, apiDelete } from '$lib/api/client';
-import type { AdminContactListData, ContactUpdateResult, ChannelPrivacyLevel } from '$lib/types';
+import type {
+  AdminContactListData,
+  ChannelPrivacyLevel,
+  ContactUpdateResult,
+  RelationshipType,
+  TrustLevel,
+} from '$lib/types';
 
 export function listContacts(): Promise<AdminContactListData> {
   return apiGet<AdminContactListData>('/api/admin/contacts');
@@ -8,8 +14,8 @@ export function listContacts(): Promise<AdminContactListData> {
 export interface ContactUpdatePayload {
   displayName?: string;
   nickname?: string;
-  trustLevel?: string;
-  relationshipType?: string;
+  trustLevel?: TrustLevel;
+  relationshipType?: RelationshipType;
   notes?: string;
   isMachineIntelligence?: boolean;
   channelPrivacy?: Array<{

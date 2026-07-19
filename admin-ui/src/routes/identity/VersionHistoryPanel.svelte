@@ -10,6 +10,21 @@
     changed: boolean;
   };
 
+  type LegacyCharacterCardHistoryEntry = Partial<AdminIdentityData['history'][number]> & {
+    changedBy?: string;
+    checksum?: string;
+  };
+
+  function historyUpdatedBy(entry: AdminIdentityData['history'][number]): string {
+    const legacyEntry: LegacyCharacterCardHistoryEntry = entry;
+    return legacyEntry.updatedBy ?? legacyEntry.changedBy ?? 'unknown';
+  }
+
+  function historyPreviousChecksum(entry: AdminIdentityData['history'][number]): string {
+    const legacyEntry: LegacyCharacterCardHistoryEntry = entry;
+    return legacyEntry.previousChecksum ?? legacyEntry.checksum ?? 'n/a';
+  }
+
   interface Props {
     data: AdminIdentityData;
     showVersionHistory: boolean;
@@ -85,10 +100,10 @@
                 <td class="px-3 py-2 font-mono text-shadow-800 font-medium">
                   v{entry.version} &rarr; v{entry.version + 1}
                 </td>
-                <td class="px-3 py-2 text-shadow-700">{entry.updatedBy ?? entry.changedBy ?? 'unknown'}</td>
+                <td class="px-3 py-2 text-shadow-700">{historyUpdatedBy(entry)}</td>
                 <td class="px-3 py-2 text-shadow-700">{entry.timestamp ? new Date(entry.timestamp).toLocaleString() : 'unknown'}</td>
                 <td class="px-3 py-2">
-                  <code class="font-mono text-shadow-600 text-sm">{(entry.previousChecksum ?? entry.checksum ?? 'n/a').slice(0, 12)}</code>
+                  <code class="font-mono text-shadow-600 text-sm">{historyPreviousChecksum(entry).slice(0, 12)}</code>
                 </td>
                 <td class="px-3 py-2">
                   <div class="flex gap-1.5">

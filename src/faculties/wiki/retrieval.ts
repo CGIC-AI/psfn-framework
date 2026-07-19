@@ -1,6 +1,7 @@
 import type { EmbeddingProviderPort } from '../../shared/contracts/embedding-provider.js';
 import type { EventBus } from '../../shared/event-bus.js';
 import type { CorrelationMetadata } from '../../shared/contracts/runtime.js';
+import type { WikiRetrievalRequest } from '../../core/agent/contracts.js';
 import { createComponentLogger } from '../../shared/logger.js';
 import { countTokens } from '../../primitives/llm/tokens.js';
 import type { WikiRetrievalSettings } from '../../shared/context-budget.js';
@@ -15,8 +16,9 @@ import {
 } from './active-context.js';
 import type {
   RetrievalQueryEmbeddingProvenance,
-  TurnRetrievalQueryEmbedding,
 } from '../../shared/retrieval-query-embedding.js';
+
+export type { WikiRetrievalRequest } from '../../core/agent/contracts.js';
 
 const log = createComponentLogger('WikiRetrieval');
 
@@ -237,25 +239,6 @@ export interface WikiRetrievalServiceDeps {
    */
   getMultiCompanion?: () => boolean;
   searchLimit?: number;
-}
-
-export interface WikiRetrievalRequest {
-  channelId: string;
-  queryText: string;
-  isDirectMessage: boolean | undefined;
-  focusActive: boolean;
-  turnId?: string;
-  requestId?: string;
-  companionId?: string;
-  canonicalContactId?: string;
-  retrievalQueryEmbedding?: TurnRetrievalQueryEmbedding;
-  /**
-   * W5b: the companion's current site resolved from the situated place seam
-   * (satellite `placeId` → place → `siteId`). Absent when not situated; only
-   * consulted under multi-companion mode.
-   */
-  currentSiteId?: string | undefined;
-  correlation?: Partial<CorrelationMetadata>;
 }
 
 /**

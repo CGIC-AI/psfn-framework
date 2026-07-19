@@ -1,12 +1,10 @@
 import { apiGet } from '$lib/api/client';
+import type {
+  RoomRosterMember as CanonicalRoomRosterMember,
+  RoomSummary as CanonicalRoomSummary,
+} from '../../../../../src/core/contacts/types.js';
 
-export interface RoomSummary {
-  channel: string;
-  channelId: string;
-  memberCount: number;
-  firstActivity: string;
-  lastActivity: string;
-}
+export type RoomSummary = CanonicalRoomSummary;
 
 export interface RoomListData {
   rooms: RoomSummary[];
@@ -15,17 +13,7 @@ export interface RoomListData {
   offset: number;
 }
 
-export interface RoomRosterMember {
-  contactId: string;
-  displayName: string;
-  trustLevel: string;
-  relationshipType: string;
-  channel: string;
-  channelId: string;
-  privacyLevel: string | null;
-  firstSeen: string;
-  lastSeen: string;
-}
+export type RoomRosterMember = CanonicalRoomRosterMember;
 
 export interface RoomRosterData {
   channelId: string;

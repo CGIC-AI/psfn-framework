@@ -925,6 +925,7 @@ describe('Postgres schema tenancy plumbing', () => {
           { version: 5, name: 'icp-autonomy-invalidation-fences' },
           { version: 6, name: 'icp-fatigue-turn-reservations' },
           { version: 7, name: 'icp-fatigue-delivery-fence' },
+          { version: 9, name: 'companion-social-pot' },
         ]);
 
         const sharedTables = await pool.query<{ table_name: string }>(
@@ -932,6 +933,7 @@ describe('Postgres schema tenancy plumbing', () => {
         );
         expect(sharedTables.rows.map(r => r.table_name)).toEqual([
           'companion_presence',
+          'companion_social_pot',
           'icp_autonomy_invalidation_fences',
           'icp_availability_leases',
           'icp_conversation_episodes',
@@ -945,7 +947,7 @@ describe('Postgres schema tenancy plumbing', () => {
         const versionAgain = await pool.query<{ count: string }>(
           `SELECT COUNT(*)::text AS count FROM shared.shared_schema_migrations`,
         );
-        expect(versionAgain.rows[0]?.count).toBe('6');
+        expect(versionAgain.rows[0]?.count).toBe('7');
       } finally {
         await pool.end();
       }

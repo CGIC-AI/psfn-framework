@@ -2666,6 +2666,32 @@ export const POSTGRES_SHARED_MIGRATIONS: readonly string[] = [
   VALUES (7, 'icp-fatigue-delivery-fence')
   ON CONFLICT (version) DO NOTHING;
   `,
+  // Version 9 (sprint 11, jp36.4.1.1): per-companion social pot. The durable,
+  // gateway-owned fatigue-economy budget that funds group participation and ICP
+  // continuation (design bible §12.6). Content-free: one row per companion
+  // carrying only a numeric balance and the regeneration tick boundary the
+  // balance reflects. `balance` is DOUBLE PRECISION because continuous
+  // regeneration credits `cap/24` per hourly tick, which need not be integral.
+  // Draw-cap enforcement and ICP-priority ordering are applied by consumers on
+  // top of this state; the store only persists it across restarts.
+  //
+  // Version 8 is reserved by the shared-wiki chain
+  // (`shared-wiki-caretaker-proposals`); both chains register into the one
+  // `shared_schema_migrations` ledger, so this base-chain migration takes the
+  // next free version (9), not 8.
+  `
+  CREATE TABLE IF NOT EXISTS companion_social_pot (
+    companion_id UUID PRIMARY KEY,
+    balance DOUBLE PRECISION NOT NULL CHECK (balance >= 0),
+    last_regen_at_ms BIGINT NOT NULL CHECK (last_regen_at_ms >= 0),
+    revision BIGINT NOT NULL CHECK (revision >= 1)
+  );
+  `,
+  `
+  INSERT INTO shared_schema_migrations (version, name)
+  VALUES (9, 'companion-social-pot')
+  ON CONFLICT (version) DO NOTHING;
+  `,
 ];
 
 // Version 3 (sprint 10, s10f9): shared-world wiki chunk projection. A

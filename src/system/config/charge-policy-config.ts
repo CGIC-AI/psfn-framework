@@ -28,6 +28,7 @@ import {
   type FatiguePolicyOverchargeConfig,
   type FatiguePolicyResponseBudget,
   type FatiguePolicyStateThresholds,
+  type FatigueSocialPotConfig,
   type IcpCostBreakerConfig,
 } from '../../shared/contracts/charge-policy.js';
 
@@ -515,6 +516,54 @@ function parseFatigueSocialRegulationConfig(
   };
 }
 
+function parseFatigueSocialPotConfig(
+  raw: unknown,
+  fieldPath: string,
+): FatigueSocialPotConfig {
+  if (!isRecord(raw)) {
+    throw new Error(`Invalid charge policy: ${fieldPath} must be an object`);
+  }
+  assertNoUnknownKeys(
+    raw,
+    [
+      'capUnits',
+      'perChannelDrawFraction',
+      'regenerationTickMs',
+      'regenerationUnitsPerTick',
+    ],
+    fieldPath,
+  );
+  const capUnits = parsePositiveNumber(raw.capUnits, `${fieldPath}.capUnits`);
+  const perChannelDrawFraction = parsePositiveNumber(
+    raw.perChannelDrawFraction,
+    `${fieldPath}.perChannelDrawFraction`,
+  );
+  if (perChannelDrawFraction > 1) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.perChannelDrawFraction must be <= 1`,
+    );
+  }
+  const regenerationTickMs = parsePositiveInteger(
+    raw.regenerationTickMs,
+    `${fieldPath}.regenerationTickMs`,
+  );
+  const regenerationUnitsPerTick = parsePositiveNumber(
+    raw.regenerationUnitsPerTick,
+    `${fieldPath}.regenerationUnitsPerTick`,
+  );
+  if (regenerationUnitsPerTick > capUnits) {
+    throw new Error(
+      `Invalid charge policy: ${fieldPath}.regenerationUnitsPerTick must be <= ${fieldPath}.capUnits`,
+    );
+  }
+  return {
+    capUnits,
+    perChannelDrawFraction,
+    regenerationTickMs,
+    regenerationUnitsPerTick,
+  };
+}
+
 function parseFatiguePolicyConfig(
   raw: unknown,
   fieldPath: string,
@@ -532,6 +581,7 @@ function parseFatiguePolicyConfig(
       'stateThresholds',
       'overcharge',
       'socialRegulation',
+      'socialPot',
     ],
     fieldPath,
   );
@@ -570,6 +620,10 @@ function parseFatiguePolicyConfig(
     socialRegulation: parseFatigueSocialRegulationConfig(
       raw.socialRegulation,
       `${fieldPath}.socialRegulation`,
+    ),
+    socialPot: parseFatigueSocialPotConfig(
+      raw.socialPot,
+      `${fieldPath}.socialPot`,
     ),
   };
 }

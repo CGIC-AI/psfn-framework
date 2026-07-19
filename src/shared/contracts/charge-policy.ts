@@ -188,6 +188,26 @@ export interface FatigueSocialRegulationConfig {
   };
 }
 
+export interface FatigueSocialPotConfig {
+  /** Full per-companion social pot ceiling, in charge-policy units. */
+  capUnits: number;
+  /**
+   * Bounded fraction (0 < x <= 1) of the pot remaining at draw time that any
+   * one channel may draw (~1/3), so one busy room cannot starve the others.
+   */
+  perChannelDrawFraction: number;
+  /**
+   * Interval between continuous regeneration ticks that replace the daily
+   * reset cliff (hourly).
+   */
+  regenerationTickMs: number;
+  /**
+   * Units credited to the pot per regeneration tick (cap/24), clamped so the
+   * pot never exceeds capUnits.
+   */
+  regenerationUnitsPerTick: number;
+}
+
 export interface FatiguePolicyConfig {
   relationshipBudgets: Record<FatiguePolicyRelationshipClass, FatiguePolicyResponseBudget>;
   channelSettingLimits: Record<FatiguePolicyChannelSetting, FatiguePolicyChannelSettingLimit>;
@@ -196,6 +216,7 @@ export interface FatiguePolicyConfig {
   stateThresholds: FatiguePolicyStateThresholds;
   overcharge: FatiguePolicyOverchargeConfig;
   socialRegulation: FatigueSocialRegulationConfig;
+  socialPot: FatigueSocialPotConfig;
 }
 
 export interface ChargePolicyConfig {

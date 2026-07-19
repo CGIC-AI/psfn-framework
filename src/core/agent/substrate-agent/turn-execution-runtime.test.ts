@@ -57,7 +57,10 @@ import type { ResolvedAuthorContext } from './runtime-context.js';
 import { runMoaTurn } from './moa-turn.js';
 import { buildTurnUserContent } from './vision-attachments.js';
 import { makeTestFatiguePolicyConfig } from '../../../test-support/charge-policy.js';
-import { backfillLegacyTurnId, createTurnId } from '../../turns/id.js';
+import {
+  createTurnId,
+  deriveDeterministicTurnId,
+} from '../../turns/id.js';
 import { parseIcpRecoveryResponse } from '../../session/icp-delivery-recovery.js';
 import {
   buildSessionMetadataWithTurn,
@@ -2414,7 +2417,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const messageId = `icp-no-reply-${crashPoint}`;
     const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
-    const turnId = backfillLegacyTurnId([
+    const turnId = deriveDeterministicTurnId([
       'icp-reply',
       localCompanionId,
       channelId,
@@ -2514,7 +2517,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
     const peerCompanionId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
     const messageId = `icp-terminal-replay-${terminalOutcome}`;
     const channelId = `companion-dm:${localCompanionId}:${peerCompanionId}`;
-    const turnId = backfillLegacyTurnId([
+    const turnId = deriveDeterministicTurnId([
       'icp-reply',
       localCompanionId,
       channelId,
@@ -2889,7 +2892,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
       peerCompanionId,
       peerContactId: 'contact-mi',
       channelId,
-      turnId: backfillLegacyTurnId('post-turn-completion-marker-test'),
+      turnId: deriveDeterministicTurnId('post-turn-completion-marker-test'),
       messageId: sourceMessageId,
       requestId: sourceMessageId,
       chargeLane: 'companion_social' as const,
@@ -3068,7 +3071,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
             authorName: 'Human',
             timestamp: Date.now() - 60_000,
             metadata: buildSessionMetadataWithTurn(undefined, {
-              turnId: backfillLegacyTurnId('human-fatigue-history'),
+              turnId: deriveDeterministicTurnId('human-fatigue-history'),
               requestId: 'human-fatigue-history',
               role: 'user',
               actorKind: 'human',
@@ -3126,7 +3129,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
             authorName: 'Third companion',
             timestamp: Date.now() - 60_000,
             metadata: buildSessionMetadataWithTurn(undefined, {
-              turnId: backfillLegacyTurnId('third-companion-fatigue-history'),
+              turnId: deriveDeterministicTurnId('third-companion-fatigue-history'),
               requestId: 'third-companion-fatigue-history',
               role: 'user',
               actorKind: 'machine_intelligence',
@@ -3167,7 +3170,7 @@ describe('handleMessageForTurn fatigue enforcement', () => {
             authorName: 'Human',
             timestamp: Date.now() - 60_000,
             metadata: buildSessionMetadataWithTurn(undefined, {
-              turnId: backfillLegacyTurnId('depleted-human-fatigue-history'),
+              turnId: deriveDeterministicTurnId('depleted-human-fatigue-history'),
               requestId: 'depleted-human-fatigue-history',
               role: 'user',
               actorKind: 'human',

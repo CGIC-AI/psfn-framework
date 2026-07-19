@@ -675,6 +675,31 @@ describe('SubstrateAgent construction', () => {
     setModelSpy.mockRestore();
   });
 
+  it('fails startup when the configured chat model cannot resolve in production layout', () => {
+    const originalLayoutMode = process.env.PSFN_RUNTIME_LAYOUT_MODE;
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.PSFN_RUNTIME_LAYOUT_MODE = 'production';
+    process.env.NODE_ENV = 'production';
+    const config = makeConfig({
+      modelRegistry: { schemaVersion: 1, models: [] },
+    });
+
+    try {
+      expect(() => new SubstrateAgent(
+        new EventBus(),
+        makeMockLLMProvider(),
+        makeMockSessionManager(),
+        'System prompt',
+        config,
+      )).toThrow("No eligible model configured for purpose 'chat'");
+    } finally {
+      if (originalLayoutMode === undefined) delete process.env.PSFN_RUNTIME_LAYOUT_MODE;
+      else process.env.PSFN_RUNTIME_LAYOUT_MODE = originalLayoutMode;
+      if (originalNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
   it('uses llmProvider stream transport in gateway runtime mode', async () => {
     const config = makeConfig();
     const eventBus = new EventBus();

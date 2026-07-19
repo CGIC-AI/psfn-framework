@@ -153,6 +153,19 @@ describe('AdminSettingsDataService', () => {
     });
   });
 
+  it('returns a structured malformed-owner error for the raw sub-config viewer', () => {
+    const root = makeTempDir();
+    const service = buildService(buildConfig(root));
+    writeFileSync(join(root, 'settings.json'), '{"invalid"');
+
+    const raw = service.getSubConfigJson('settings');
+    expect(raw).not.toBeNull();
+    expect(JSON.parse(raw!)).toEqual({
+      error: 'Unable to load settings config; owner file is missing or malformed',
+      key: 'settings',
+    });
+  });
+
   it('round-trips the visible runtime-owned Garden controls through the canonical settings payload', async () => {
     const root = makeTempDir();
     const config = buildConfig(root);

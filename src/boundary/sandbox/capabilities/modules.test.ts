@@ -30,6 +30,19 @@ function registryHarness(initial = '[]', writeDelayMs = 0) {
 }
 
 describe('createModuleCapabilities', () => {
+  it('rejects a parseable module registry whose root is not an array', async () => {
+    process.env.MODULE_REGISTRY_PATH = 'companion/modules/repl-registry.json';
+    const harness = registryHarness('{"modules":[]}');
+    const modules = createModuleCapabilities({
+      gatewayCaps: harness.caps,
+      pushEvidence: vi.fn(),
+    });
+
+    await expect(modules.module_list()).rejects.toThrow(
+      'module registry at companion/modules/repl-registry.json must be a JSON array',
+    );
+  });
+
   it('denies module_install in nursery tier', async () => {
     process.env.MODULE_REGISTRY_PATH = 'companion/modules/repl-registry.json';
     const harness = registryHarness();

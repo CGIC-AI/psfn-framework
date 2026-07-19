@@ -21,6 +21,7 @@ import {
 } from '../../shared/telemetry/run-charge.js';
 import { createMemoryAppCache } from '../../shared/cache/memory-cache.js';
 import type { AppCache } from '../../shared/cache/types.js';
+import { RUNTIME_LAYOUT_MODE, resolveRuntimeLayoutMode } from '../../persistence/layout.js';
 import type { SessionManager } from '../session/manager.js';
 import type { ConversationScope } from '../session/conversation-scope.js';
 import { formatAttributedSystemContent } from '../session/entry-attribution.js';
@@ -706,13 +707,19 @@ export class SubstrateAgent {
     this.registerTool(this.toolRuntimeFacade.createToolSearchTool(), 'core');
     this.registerTool(this.toolRuntimeFacade.createToolsetTool(), 'core');
 
-    // Eagerly try to resolve the model, but don't throw if it fails
-    // (e.g. in tests with fake model names). Deferred to handleMessage if needed.
+    // Eagerly resolve the model. Continuous/test runtimes may defer a failed
+    // resolution until the first turn, while production startup fails closed.
     try {
-      this.refreshModelFromConfig('startup');
-    } catch (err) {
-      // Model will be resolved lazily on first handleMessage
-      log.debug('Deferred model resolution at startup', { error: String(err) });
+      this.refreshModelFromConfig('startup', undefined, 'propagate');
+    } catch (error) {
+      log.warn('Model resolution failed at startup', { error: toErrorMessage(error) });
+      const layoutMode = resolveRuntimeLayoutMode({
+        mode: process.env.PSFN_RUNTIME_LAYOUT_MODE,
+        nodeEnv: process.env.NODE_ENV,
+      });
+      if (layoutMode === RUNTIME_LAYOUT_MODE.PRODUCTION) {
+        throw error;
+      }
     }
   }
 
@@ -884,6 +891,7 @@ export class SubstrateAgent {
   private refreshModelFromConfig(
     reason: 'startup' | 'turn-start' | 'settings-update',
     message?: SubstrateMessage,
+    resolutionFailurePolicy: 'retain-current' | 'propagate' = 'retain-current',
   ): void {
     const nextState = refreshModelFromConfigForRuntime({
       reason,
@@ -893,6 +901,7 @@ export class SubstrateAgent {
         modelSignature: this.modelSignature,
       },
       message,
+      resolutionFailurePolicy,
       setAgentModel: model => { this.agent.state.model = model; },
       getCurrentModelId: () => this.agent.state.model.id,
       logger: log,

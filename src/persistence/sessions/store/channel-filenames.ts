@@ -84,13 +84,13 @@ export function makeReadableFilePath(
 
 export function readChannelIdFromFile(filePath: string): string | null {
   try {
-    const entry = readJournalFirstEntry(filePath);
+    const entry = readJournalFirstEntry(filePath, { malformedRow: 'throw' });
     if (!entry || !entry.channelId || typeof entry.channelId !== 'string') {
       return null;
     }
     return entry.channelId;
   } catch (err) {
-    log.debug('Failed to read first journal entry', {
+    log.warn('Failed to read first journal entry', {
       path: filePath,
       error: toErrorMessage(err),
     });

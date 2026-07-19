@@ -38,7 +38,7 @@ import {
   MAX_LIST_LIMIT,
   MAX_CONCERN_RESOLUTION_CHARS,
   MAX_CONCERN_TEXT_CHARS,
-  ActiveConcernRow,
+  type ActiveConcernRow,
   clampListLimit,
   mapActiveConcernRow,
   normalizeContactId,

@@ -392,7 +392,7 @@ describe('orientation context surface wiring', () => {
 
   it('threads orientation telemetry into a dedicated runtime prompt section', () => {
     const builderSource = readFileSync(resolve('src/core/session/manager/context-builder.ts'), 'utf-8');
-    const manifestSource = readFileSync(resolve('src/core/session/context-manifest.ts'), 'utf-8');
+    const manifestSource = readFileSync(resolve('src/shared/contracts/context-manifest-contracts.ts'), 'utf-8');
 
     expect(builderSource).toContain('buildOrientationNoteTelemetry');
     expect(builderSource).toContain('!isInternalReflectionChannel(params.channelId)');

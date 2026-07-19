@@ -1,34 +1,17 @@
 import type { ChannelType } from '../../shared/contracts/runtime.js';
+import type {
+  PendingFollowUp,
+  PendingFollowUpPriority,
+  PendingFollowUpTiming,
+  PendingFollowUpWakeCondition,
+} from '../../shared/contracts/intention-contracts.js';
 
-export type PendingFollowUpPriority = 'low' | 'medium' | 'high';
-export type PendingFollowUpTiming = 'immediate' | 'soon' | 'scheduled';
-export type PendingFollowUpWakeCondition =
-  | 'next_user_turn'
-  | 'background_recheck'
-  | 'sustained_negative_mood';
-
-export interface PendingFollowUp {
-  id: string;
-  content: string;
-  priority: PendingFollowUpPriority;
-  timing: PendingFollowUpTiming;
-  createdAt: string;
-  channelId: string;
-  channelType: ChannelType;
-  authorId: string;
-  authorName: string;
-  dueAt?: string;
-  contactId?: string;
-  sourceMessageId?: string;
-  contextSummary?: string;
-  wakeConditions?: PendingFollowUpWakeCondition[];
-  activatedAt?: string;
-  activationReason?: string;
-  dampenedAt?: string;
-  dampeningReason?: string;
-  /** Originating ICP root preserved across durable resurface/restart. */
-  originIcpRootInitiationId?: string;
-}
+export type {
+  PendingFollowUp,
+  PendingFollowUpPriority,
+  PendingFollowUpTiming,
+  PendingFollowUpWakeCondition,
+} from '../../shared/contracts/intention-contracts.js';
 
 export interface PendingFollowUpCreateInput {
   content: string;

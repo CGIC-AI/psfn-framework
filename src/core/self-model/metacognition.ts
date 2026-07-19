@@ -3,22 +3,17 @@ import { clampUnit } from '../../shared/utils/numeric.js';
 import { escapeXmlText } from '../../shared/utils/escaping.js';
 import { cloneInternalState, type InternalState } from './state.js';
 import { wrapPromptSectionXml } from '../identity/prompt-sections.js';
+import {
+  METACOGNITIVE_FLAG_NAMES,
+  type MetacognitiveFlag,
+  type MetacognitiveFlagName,
+} from '../../shared/contracts/self-model-contracts.js';
 
-export const METACOGNITIVE_FLAG_NAMES = [
-  'uncertainty',
-  'avoidance',
-  'high_engagement',
-  'repetition',
-  'confabulation_risk',
-] as const;
-
-export type MetacognitiveFlagName = typeof METACOGNITIVE_FLAG_NAMES[number];
-
-export interface MetacognitiveFlag {
-  flag: MetacognitiveFlagName;
-  confidence: number;
-  evidence: string;
-}
+export { METACOGNITIVE_FLAG_NAMES } from '../../shared/contracts/self-model-contracts.js';
+export type {
+  MetacognitiveFlag,
+  MetacognitiveFlagName,
+} from '../../shared/contracts/self-model-contracts.js';
 
 export interface MetacognitiveMonitorInput {
   internalState: InternalState;

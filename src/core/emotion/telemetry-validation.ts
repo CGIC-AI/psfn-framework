@@ -1,59 +1,30 @@
 import { isRecord } from '../../shared/utils/types.js';
 import type { EmotionStateSnapshot, VADVector } from './state.js';
+import {
+  EMOTION_TELEMETRY_REASONS,
+  EMOTION_TELEMETRY_SOURCES,
+  EMOTION_TELEMETRY_STATUSES,
+  type EmotionTelemetryProvenance,
+  type EmotionTelemetryReason,
+  type EmotionTelemetrySignalSummary,
+  type EmotionTelemetrySource,
+  type EmotionTelemetryStatus,
+  type EmotionTelemetryValidation,
+} from '../../shared/contracts/emotion-contracts.js';
 
-export const EMOTION_TELEMETRY_SOURCES = [
-  'classifier_inferred',
-  'self_report',
-  'activation_or_logprob_calibrated',
-  'partner_context_evidence',
-  'memory_derived',
-  'runtime_state',
-  'missing',
-  'unknown',
-] as const;
-
-export type EmotionTelemetrySource = typeof EMOTION_TELEMETRY_SOURCES[number];
-
-export const EMOTION_TELEMETRY_STATUSES = ['trusted', 'uncertain', 'suppressed'] as const;
-export type EmotionTelemetryStatus = typeof EMOTION_TELEMETRY_STATUSES[number];
-
-export const EMOTION_TELEMETRY_REASONS = [
-  'missing_signal',
-  'missing_provenance',
-  'low_confidence',
-  'conflicting_signal',
-  'stale_signal',
-] as const;
-
-export type EmotionTelemetryReason = typeof EMOTION_TELEMETRY_REASONS[number];
-
-export interface EmotionTelemetryProvenance {
-  source: EmotionTelemetrySource;
-  observedAtMs?: number;
-  modality?: 'text' | 'audio' | 'fusion' | 'runtime' | 'self_report' | 'unknown';
-  classifier?: string;
-  model?: string;
-  provenanceRef?: string;
-}
-
-export interface EmotionTelemetrySignalSummary {
-  confidence: number;
-  topDiscreteLabels: string[];
-  strongestLabelScore: number;
-}
-
-export interface EmotionTelemetryValidation {
-  status: EmotionTelemetryStatus;
-  source: EmotionTelemetrySource;
-  reasons: EmotionTelemetryReason[];
-  confidence: number;
-  weight: number;
-  observedAtMs: number | null;
-  validatedAtMs: number;
-  staleAfterMs: number;
-  provenance: EmotionTelemetryProvenance[];
-  rawSignal: EmotionTelemetrySignalSummary;
-}
+export {
+  EMOTION_TELEMETRY_REASONS,
+  EMOTION_TELEMETRY_SOURCES,
+  EMOTION_TELEMETRY_STATUSES,
+} from '../../shared/contracts/emotion-contracts.js';
+export type {
+  EmotionTelemetryProvenance,
+  EmotionTelemetryReason,
+  EmotionTelemetrySignalSummary,
+  EmotionTelemetrySource,
+  EmotionTelemetryStatus,
+  EmotionTelemetryValidation,
+} from '../../shared/contracts/emotion-contracts.js';
 
 export interface EmotionTelemetryValidationInput {
   source?: EmotionTelemetrySource;

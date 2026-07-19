@@ -1,48 +1,34 @@
 import { CHANNEL_TYPES, type ChannelType } from '../../shared/contracts/runtime.js';
 
-export const CARE_REMINDER_KINDS = ['important_date', 'self_reminder'] as const;
-export type CareReminderKind = typeof CARE_REMINDER_KINDS[number];
+import {
+  CARE_REMINDER_CLASSIFICATIONS,
+  CARE_REMINDER_KINDS,
+  CARE_REMINDER_PROVENANCE_SOURCES,
+  CARE_REMINDER_SCHEDULES,
+  CARE_REMINDER_STATUSES,
+  type CareReminder,
+  type CareReminderClassification,
+  type CareReminderKind,
+  type CareReminderProvenanceSource,
+  type CareReminderSchedule,
+  type CareReminderStatus,
+} from '../../shared/contracts/intention-contracts.js';
 
-export const CARE_REMINDER_CLASSIFICATIONS = [
-  'birthday',
-  'anniversary',
-  'important_date',
-  'check_in',
-  'self_note',
-] as const;
-export type CareReminderClassification = typeof CARE_REMINDER_CLASSIFICATIONS[number];
-
-export const CARE_REMINDER_SCHEDULES = ['one_time', 'annual'] as const;
-export type CareReminderSchedule = typeof CARE_REMINDER_SCHEDULES[number];
-
-export const CARE_REMINDER_STATUSES = ['active', 'completed', 'dismissed'] as const;
-export type CareReminderStatus = typeof CARE_REMINDER_STATUSES[number];
-
-export const CARE_REMINDER_PROVENANCE_SOURCES = ['companion_appraisal', 'operator'] as const;
-export type CareReminderProvenanceSource = typeof CARE_REMINDER_PROVENANCE_SOURCES[number];
-
-export interface CareReminder {
-  id: string;
-  kind: CareReminderKind;
-  classification: CareReminderClassification;
-  title: string;
-  content: string;
-  schedule: CareReminderSchedule;
-  status: CareReminderStatus;
-  dueAt: string;
-  createdAt: string;
-  channelId: string;
-  channelType: ChannelType;
-  authorId: string;
-  authorName: string;
-  provenanceSource: CareReminderProvenanceSource;
-  provenanceReason: string;
-  contactId?: string;
-  sourceMessageId?: string;
-  lastActivatedAt?: string;
-  activationCount: number;
-  completedAt?: string;
-}
+export {
+  CARE_REMINDER_CLASSIFICATIONS,
+  CARE_REMINDER_KINDS,
+  CARE_REMINDER_PROVENANCE_SOURCES,
+  CARE_REMINDER_SCHEDULES,
+  CARE_REMINDER_STATUSES,
+} from '../../shared/contracts/intention-contracts.js';
+export type {
+  CareReminder,
+  CareReminderClassification,
+  CareReminderKind,
+  CareReminderProvenanceSource,
+  CareReminderSchedule,
+  CareReminderStatus,
+} from '../../shared/contracts/intention-contracts.js';
 
 export interface CareReminderCreateInput {
   kind: CareReminderKind;

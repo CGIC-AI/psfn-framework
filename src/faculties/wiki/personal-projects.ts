@@ -3,6 +3,8 @@ import {
   sensitivityOrd,
   type SensitivityLevel,
 } from '../../system/trust/types.js';
+import { isRecord } from '../../shared/utils/types.js';
+import { toErrorMessage } from '../../shared/utils/errors.js';
 import type { WikiDocumentListEntry, WikiStorePort } from './types.js';
 import {
   normalizeProjectEntityId,
@@ -33,6 +35,33 @@ export type {
 export interface PersonalProjectActivitySink {
   recordProjectActivity(project: PersonalProjectManifest): Promise<void>;
 }
+
+export interface LegacyArtifactQuarantineEntry {
+  projectRef: string;
+  artifactRef: string;
+}
+
+/**
+ * Result of the one-time legacy-artifact quarantine migration
+ * (psfn-framework-jp36.1.2.2). Counts are stable across re-runs — once every
+ * artifact carries a `metadataLineage`, a subsequent run quarantines nothing.
+ */
+export interface LegacyArtifactQuarantineReport {
+  dryRun: boolean;
+  scannedProjects: number;
+  scannedArtifacts: number;
+  /** Artifacts already carrying a lineage marker (runtime_derived or legacy_unverified). */
+  alreadyClassifiedArtifacts: number;
+  /** Artifacts newly marked legacy_unverified and contained to private/self. */
+  quarantinedArtifacts: number;
+  /** Projects that had at least one artifact quarantined. */
+  quarantinedProjects: number;
+  malformedProjects: Array<{ id: string; error: string }>;
+  /** Bounded sample of the quarantined artifacts (first N). */
+  entries: LegacyArtifactQuarantineEntry[];
+}
+
+const QUARANTINE_REPORT_SAMPLE_LIMIT = 50;
 
 const PROJECT_TAGS = ['psfn:personal-project'] satisfies readonly string[];
 const WARDROBE_TAGS = ['psfn:named-look'] satisfies readonly string[];
@@ -195,6 +224,10 @@ export class PersonalProjectLibrary {
           sensitivity,
           intendedAudience,
           shareState: 'private',
+          // Runtime-derived lineage: sensitivity/audience above came from
+          // runtime state, not model assertion, so this artifact is eligible
+          // for the egress gate (bible §6.2, §9.5).
+          metadataLineage: 'runtime_derived',
           addedAt: this.now().toISOString(),
         },
       ],
@@ -214,6 +247,17 @@ export class PersonalProjectLibrary {
     const artifactRef = requiredProjectText(input.artifactRef, 'artifact ref');
     const artifactIndex = current.artifacts.findIndex(artifact => artifact.ref === artifactRef);
     if (artifactIndex < 0) throw new Error(`artifact is not linked to ${current.ref}: ${artifactRef}`);
+    // Bible §9.5: an artifact with unverified legacy disclosure metadata is not
+    // automatically shareable. Fail closed at this egress point — a request to
+    // broaden its audience beyond `self` is rejected until the artifact is
+    // re-grounded (its metadata re-derived by the runtime).
+    const target = current.artifacts[artifactIndex];
+    if (target.metadataLineage === 'legacy_unverified' && input.audience !== 'self') {
+      throw new Error(
+        `${artifactRef} has unverified legacy disclosure metadata (bible §9.5) and must be `
+        + 're-grounded before it can be shared beyond self',
+      );
+    }
     const artifacts = current.artifacts.map((artifact) => {
       if (artifact.ref !== artifactRef) return artifact;
       return {
@@ -229,6 +273,103 @@ export class PersonalProjectLibrary {
     };
     this.persistProject(updated);
     return updated;
+  }
+
+  /**
+   * One-time, idempotent quarantine of pre-existing model-asserted artifact
+   * metadata (psfn-framework-jp36.1.2.2, bible §9.5). Before runtime metadata
+   * authority (§6.2) landed, `project_add_artifact` accepted model-supplied
+   * sensitivity/audience; those persisted values carry no `metadataLineage`
+   * marker. This scan marks every such artifact `legacy_unverified` and
+   * contains it to `private`/`self` so it fails closed at the egress gate until
+   * re-grounded. Artifacts that already carry a lineage marker (runtime-derived
+   * writes, or a prior quarantine run) are left untouched, so re-running is a
+   * no-op with stable counts. Malformed project documents are reported, never
+   * silently skipped, and never rewritten.
+   */
+  quarantineLegacyArtifacts(options: { dryRun: boolean }): LegacyArtifactQuarantineReport {
+    const entries: LegacyArtifactQuarantineEntry[] = [];
+    const malformedProjects: Array<{ id: string; error: string }> = [];
+    let scannedProjects = 0;
+    let scannedArtifacts = 0;
+    let alreadyClassifiedArtifacts = 0;
+    let quarantinedArtifacts = 0;
+    let quarantinedProjects = 0;
+
+    for (const entry of this.store.list().filter(candidate => hasTag(candidate, PROJECT_TAGS[0]))) {
+      const document = this.store.get(entry.id);
+      if (!document) throw new Error(`project manifest disappeared during quarantine scan: ${entry.id}`);
+
+      // Validate the document up front; a genuinely malformed manifest is
+      // reported and skipped rather than rewritten or silently dropped.
+      let manifest: PersonalProjectManifest;
+      let rawArtifacts: unknown[];
+      try {
+        manifest = parsePersonalProjectDocument(document);
+        const rawBody: unknown = JSON.parse(document.body);
+        if (!isRecord(rawBody) || !Array.isArray(rawBody.artifacts)) {
+          throw new Error('project body is not a manifest with an artifacts array');
+        }
+        rawArtifacts = rawBody.artifacts;
+      } catch (error) {
+        malformedProjects.push({ id: document.id, error: toErrorMessage(error) });
+        continue;
+      }
+
+      scannedProjects += 1;
+      // parsePersonalProjectDocument preserves artifact order and never drops
+      // entries on success, so the validated manifest and the raw array align
+      // by index; the raw entry is the source of truth for whether the stored
+      // document carried a lineage marker before this run.
+      const quarantinedIndexes = new Set<number>();
+      manifest.artifacts.forEach((_artifact, index) => {
+        scannedArtifacts += 1;
+        const rawEntry = rawArtifacts[index];
+        const rawLineage = isRecord(rawEntry) ? rawEntry.metadataLineage : undefined;
+        if (rawLineage === 'runtime_derived' || rawLineage === 'legacy_unverified') {
+          alreadyClassifiedArtifacts += 1;
+          return;
+        }
+        quarantinedArtifacts += 1;
+        quarantinedIndexes.add(index);
+        if (entries.length < QUARANTINE_REPORT_SAMPLE_LIMIT) {
+          entries.push({ projectRef: manifest.ref, artifactRef: manifest.artifacts[index].ref });
+        }
+      });
+
+      if (quarantinedIndexes.size === 0) continue;
+      quarantinedProjects += 1;
+      if (options.dryRun) continue;
+
+      const quarantined: PersonalProjectManifest = {
+        ...manifest,
+        artifacts: manifest.artifacts.map((artifact, index) => (
+          quarantinedIndexes.has(index)
+            ? {
+              ...artifact,
+              // Contain to the most private posture and mark the metadata
+              // unverified (§9.5). The asserted sensitivity field is retained
+              // per the parent bug's non-goal (do not remove metadata fields).
+              metadataLineage: 'legacy_unverified',
+              intendedAudience: 'self',
+              shareState: 'private',
+            } satisfies PersonalProjectArtifact
+            : artifact
+        )),
+      };
+      this.persistProject(quarantined);
+    }
+
+    return {
+      dryRun: options.dryRun,
+      scannedProjects,
+      scannedArtifacts,
+      alreadyClassifiedArtifacts,
+      quarantinedArtifacts,
+      quarantinedProjects,
+      malformedProjects,
+      entries,
+    };
   }
 
   async resumeNextActiveProject(): Promise<{ project: PersonalProjectManifest; context: string } | null> {

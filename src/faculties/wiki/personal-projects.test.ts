@@ -6,6 +6,7 @@ import { WikiStore } from './store.js';
 import {
   PersonalProjectLibrary,
   projectArtifactReference,
+  type CompanionOwnedVisibility,
 } from './personal-projects.js';
 
 describe('personal projects in the existing wiki tier', () => {
@@ -189,5 +190,151 @@ describe('personal projects in the existing wiki tier', () => {
 
     expect(() => library.resolveWardrobeLook('wardrobe:untrusted'))
       .toThrow('not companion-owned wardrobe data');
+  });
+
+  // ── psfn-framework-jp36.1.2.2: legacy artifact metadata quarantine (§9.5) ──
+
+  const writeLegacyProject = (
+    id: string,
+    visibility: CompanionOwnedVisibility,
+    artifacts: Array<Record<string, unknown>>,
+  ): void => {
+    // Simulate a document written before runtime metadata authority landed:
+    // artifacts carry model-asserted sensitivity/audience and NO metadataLineage.
+    store.upsert({
+      id: `project.${id}`,
+      title: `Project: Legacy ${id}`,
+      body: JSON.stringify({
+        schemaVersion: 1,
+        kind: 'personal_project',
+        id,
+        ref: `project:${id}`,
+        title: `Legacy ${id}`,
+        status: 'active',
+        visibility,
+        nextStep: 'keep going',
+        artifacts,
+        resumeCount: 0,
+        createdAt: '2026-07-01T00:00:00.000Z',
+        updatedAt: '2026-07-01T00:00:00.000Z',
+      }),
+      tags: ['psfn:personal-project', `project:${id}`, 'project-status:active'],
+      sourceClass: 'companion_authored_note',
+      sensitivity: 'intimate',
+      updatedBy: 'test',
+    });
+  };
+
+  const legacyArtifact = (ref: string, overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+    ref,
+    label: `Label ${ref}`,
+    sensitivity: 'public',
+    intendedAudience: 'public',
+    shareState: 'shared',
+    addedAt: '2026-07-01T00:00:00.000Z',
+    ...overrides,
+  });
+
+  it('fails closed reading an artifact with no lineage marker and blocks broadening it at egress', async () => {
+    writeLegacyProject('legacy-read', 'self', [legacyArtifact('generated-image:legacy-1')]);
+    const library = new PersonalProjectLibrary(store, () => new Date(nowMs));
+
+    // §9.5: an unmarked (pre-migration) artifact reads back as legacy_unverified.
+    const parsed = library.getProject('project:legacy-read');
+    expect(parsed.artifacts[0].metadataLineage).toBe('legacy_unverified');
+
+    // Egress fails closed: it cannot be shared beyond self until re-grounded.
+    await expect(library.requestArtifactShare({
+      projectRef: 'project:legacy-read',
+      artifactRef: 'generated-image:legacy-1',
+      audience: 'public',
+    })).rejects.toThrow('re-grounded');
+
+    // A self-scoped request (no broadening) is still permitted.
+    const contained = await library.requestArtifactShare({
+      projectRef: 'project:legacy-read',
+      artifactRef: 'generated-image:legacy-1',
+      audience: 'self',
+    });
+    expect(contained.artifacts[0].shareState).toBe('private');
+  });
+
+  it('quarantines pre-existing model-asserted artifacts idempotently with stable counts', async () => {
+    const library = new PersonalProjectLibrary(store, () => new Date(nowMs));
+
+    // A runtime-derived project (written post-fix) must be left untouched.
+    const clean = await library.createProject({
+      id: 'clean', title: 'Clean', nextStep: 'go', visibility: 'public',
+    });
+    await library.addArtifact({
+      projectRef: clean.ref, artifactRef: 'generated-image:clean-1', label: 'Clean',
+    });
+
+    // A legacy project with two model-asserted artifacts (no lineage marker).
+    writeLegacyProject('legacy', 'self', [
+      legacyArtifact('generated-image:legacy-1'),
+      legacyArtifact('generated-image:legacy-2', {
+        sensitivity: 'personal', intendedAudience: 'self', shareState: 'private',
+      }),
+    ]);
+
+    // Dry run reports the plan and writes nothing.
+    const dry = library.quarantineLegacyArtifacts({ dryRun: true });
+    expect(dry).toMatchObject({
+      dryRun: true,
+      scannedProjects: 2,
+      scannedArtifacts: 3,
+      alreadyClassifiedArtifacts: 1,
+      quarantinedArtifacts: 2,
+      quarantinedProjects: 1,
+    });
+    expect(dry.entries).toHaveLength(2);
+
+    // Apply.
+    const applied = library.quarantineLegacyArtifacts({ dryRun: false });
+    expect(applied.quarantinedArtifacts).toBe(2);
+    expect(applied.quarantinedProjects).toBe(1);
+
+    const legacyAfter = library.getProject('project:legacy');
+    // Contained to private/self and marked unverified; the asserted sensitivity
+    // field is retained (parent bug non-goal: do not remove metadata fields).
+    expect(legacyAfter.artifacts.find(a => a.ref === 'generated-image:legacy-1')).toMatchObject({
+      metadataLineage: 'legacy_unverified',
+      intendedAudience: 'self',
+      shareState: 'private',
+      sensitivity: 'public',
+    });
+
+    // The runtime-derived artifact is untouched and remains egress-eligible.
+    const cleanAfter = library.getProject('project:clean');
+    expect(cleanAfter.artifacts[0].metadataLineage).toBe('runtime_derived');
+    const shared = await library.requestArtifactShare({
+      projectRef: 'project:clean', artifactRef: 'generated-image:clean-1', audience: 'public',
+    });
+    expect(shared.artifacts[0].shareState).toBe('requested');
+
+    // Idempotent: a second apply quarantines nothing.
+    const again = library.quarantineLegacyArtifacts({ dryRun: false });
+    expect(again.quarantinedArtifacts).toBe(0);
+    expect(again.quarantinedProjects).toBe(0);
+    expect(again.alreadyClassifiedArtifacts).toBe(3);
+  });
+
+  it('reports a malformed project document instead of rewriting or silently skipping it', () => {
+    store.upsert({
+      id: 'project.broken',
+      title: 'Project: Broken',
+      body: JSON.stringify({ schemaVersion: 1, kind: 'not_a_project' }),
+      tags: ['psfn:personal-project', 'project:broken', 'project-status:active'],
+      sourceClass: 'companion_authored_note',
+      sensitivity: 'intimate',
+      updatedBy: 'test',
+    });
+    const library = new PersonalProjectLibrary(store);
+
+    const report = library.quarantineLegacyArtifacts({ dryRun: true });
+    expect(report.malformedProjects.some(entry => entry.id === 'project.broken')).toBe(true);
+    expect(report.scannedProjects).toBe(0);
+    expect(report.quarantinedArtifacts).toBe(0);
   });
 });

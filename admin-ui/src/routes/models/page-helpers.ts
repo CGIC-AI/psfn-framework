@@ -136,7 +136,6 @@ export function cloneModelEntry(entry: ModelRegistryEntry): ModelRegistryEntry {
       },
     },
     purposes: entry.purposes.map((purpose) => ({ ...purpose })),
-    ...(entry.routing ? { routing: { providerOrder: [...(entry.routing.providerOrder ?? [])] } } : {}),
     ...(isRecord(entry.capabilities) ? { capabilities: { ...entry.capabilities } } : {}),
     ...(isRecord(entry.tuning) ? { tuning: { ...entry.tuning } } : {}),
     ...(isRecord(entry.cost) ? { cost: { ...entry.cost } } : {}),

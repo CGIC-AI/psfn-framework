@@ -1741,7 +1741,7 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
       ] as const)),
       Promise.all(seriesDimensions.map(async dimension => [
         dimension,
-        await this.queryTimeSeriesByDimension(where, resolvedRange, dimension),
+        await this.queryTimeSeries(where, resolvedRange, dimension),
       ] as const)),
       previousWhere
         ? this.queryTotals(previousWhere)
@@ -1924,69 +1924,66 @@ export class PostgresModelUsageStore implements ModelUsageRecorder, ModelUsageQu
   private async queryTimeSeries(
     where: SqlWhere,
     range: ModelUsageResolvedRange,
-  ): Promise<ModelUsageTimeBucket[]> {
+  ): Promise<ModelUsageTimeBucket[]>;
+  private async queryTimeSeries(
+    where: SqlWhere,
+    range: ModelUsageResolvedRange,
+    dimension: ModelUsageGroupDimension,
+  ): Promise<ModelUsageDimensionTimeBucket[]>;
+  private async queryTimeSeries(
+    where: SqlWhere,
+    range: ModelUsageResolvedRange,
+    dimension?: ModelUsageGroupDimension,
+  ): Promise<ModelUsageTimeBucket[] | ModelUsageDimensionTimeBucket[]> {
     const timezoneParameter = where.values.length + 1;
-    const expression = range.bucket === 'hour'
+    const bucketExpression = range.bucket === 'hour'
       ? 'FLOOR(recorded_at_ms / 3600000.0) * 3600000'
       : `EXTRACT(EPOCH FROM (date_trunc('${range.bucket}', to_timestamp(recorded_at_ms / 1000.0) AT TIME ZONE $${timezoneParameter}) AT TIME ZONE $${timezoneParameter})) * 1000`;
+    const dimensionExpression = dimension === undefined
+      ? undefined
+      : dimension === 'model'
+        ? "provider || ':' || model"
+        : MODEL_USAGE_DIMENSION_SQL[dimension];
+    const seriesSelection = dimensionExpression
+      ? `,\n        ${dimensionExpression} AS series_key`
+      : '';
+    const seriesGrouping = dimensionExpression ? ', series_key' : '';
     const values = range.bucket === 'hour' ? where.values : [...where.values, range.timezone];
-    const rows = await queryRows<TimeBucketRow>(this.pool, `
+    const rows = await queryRows<DimensionTimeBucketRow>(this.pool, `
       SELECT
-        ${expression} AS bucket_start_ms,
+        ${bucketExpression} AS bucket_start_ms${seriesSelection},
         ${MODEL_USAGE_AGGREGATE_SQL}
       FROM model_usage_events
       ${where.clause}
-      GROUP BY bucket_start_ms
-      ORDER BY bucket_start_ms ASC
+      GROUP BY bucket_start_ms${seriesGrouping}
+      ORDER BY bucket_start_ms ASC${seriesGrouping}
     `, values);
+    const boundaries = createModelUsageBucketBoundaries(range);
+    if (dimension !== undefined) {
+      const endByStart = new Map(boundaries.map(boundary => (
+        [boundary.startMs, boundary.endMs] as const
+      )));
+      return rows.map((row) => {
+        const startMs = nonNegativeInteger(row.bucket_start_ms);
+        const endMs = endByStart.get(startMs);
+        if (endMs === undefined) {
+          throw new Error(`Model usage series returned an out-of-range ${dimension} bucket`);
+        }
+        return {
+          key: row.series_key?.trim() || MODEL_USAGE_UNKNOWN_DIMENSION,
+          startMs,
+          endMs,
+          ...mapTotals(row),
+        };
+      });
+    }
     const byStart = new Map(rows.map(row => [nonNegativeInteger(row.bucket_start_ms), mapTotals(row)]));
-    return createModelUsageBucketBoundaries(range).map(boundary => ({
+    return boundaries.map(boundary => ({
       startMs: boundary.startMs,
       endMs: boundary.endMs,
       ...emptyModelUsageTotals(),
       ...(byStart.get(boundary.startMs) ?? {}),
     }));
-  }
-
-  private async queryTimeSeriesByDimension(
-    where: SqlWhere,
-    range: ModelUsageResolvedRange,
-    dimension: ModelUsageGroupDimension,
-  ): Promise<ModelUsageDimensionTimeBucket[]> {
-    const timezoneParameter = where.values.length + 1;
-    const bucketExpression = range.bucket === 'hour'
-      ? 'FLOOR(recorded_at_ms / 3600000.0) * 3600000'
-      : `EXTRACT(EPOCH FROM (date_trunc('${range.bucket}', to_timestamp(recorded_at_ms / 1000.0) AT TIME ZONE $${timezoneParameter}) AT TIME ZONE $${timezoneParameter})) * 1000`;
-    const dimensionExpression = dimension === 'model'
-      ? "provider || ':' || model"
-      : MODEL_USAGE_DIMENSION_SQL[dimension];
-    const values = range.bucket === 'hour' ? where.values : [...where.values, range.timezone];
-    const rows = await queryRows<DimensionTimeBucketRow>(this.pool, `
-      SELECT
-        ${bucketExpression} AS bucket_start_ms,
-        ${dimensionExpression} AS series_key,
-        ${MODEL_USAGE_AGGREGATE_SQL}
-      FROM model_usage_events
-      ${where.clause}
-      GROUP BY bucket_start_ms, series_key
-      ORDER BY bucket_start_ms ASC, series_key ASC
-    `, values);
-    const boundaries = new Map(createModelUsageBucketBoundaries(range).map(boundary => (
-      [boundary.startMs, boundary.endMs] as const
-    )));
-    return rows.map((row) => {
-      const startMs = nonNegativeInteger(row.bucket_start_ms);
-      const endMs = boundaries.get(startMs);
-      if (endMs === undefined) {
-        throw new Error(`Model usage series returned an out-of-range ${dimension} bucket`);
-      }
-      return {
-        key: row.series_key?.trim() || MODEL_USAGE_UNKNOWN_DIMENSION,
-        startMs,
-        endMs,
-        ...mapTotals(row),
-      };
-    });
   }
 
   private async queryGroups(where: SqlWhere, query: ModelUsageQuery): Promise<ModelUsageGroup[]> {

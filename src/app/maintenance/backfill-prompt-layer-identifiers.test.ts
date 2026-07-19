@@ -7,10 +7,12 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { PromptManager } from '../../core/identity/prompt-manager.js';
+import { PromptLayerStore } from '../../core/identity/prompt-store.js';
 import {
   backfillPromptLayerIdentifiers,
   formatPromptLayerIdentifierBackfillReport,
-} from './backfill-prompt-layer-identifiers.js';
+} from './prompt-layer-identifier-backfill.js';
 
 const FIXTURE = `[
   {
@@ -18,6 +20,12 @@ const FIXTURE = `[
     "type": "base",
     "name": "Legacy Base",
     "content": "BASE",
+    "enabled": true,
+    "priority": 0,
+    "updatedAt": "2026-07-19T12:00:00.000Z",
+    "updatedBy": "fixture",
+    "checksum": "cbf36a964ba8c089",
+    "version": 1,
     "unknown": { "preserve": ["exact", 2] }
   },
   {
@@ -25,13 +33,25 @@ const FIXTURE = `[
     "type": "base",
     "identifier": "scenario",
     "name": "Identified Base",
-    "content": "SCENARIO"
+    "content": "SCENARIO",
+    "enabled": true,
+    "priority": 1,
+    "updatedAt": "2026-07-19T12:00:00.000Z",
+    "updatedBy": "fixture",
+    "checksum": "545f1631a99fe78e",
+    "version": 1
   },
   {
     "id": "legacy-runtime",
     "type": "runtime",
     "name": "Legacy Runtime",
-    "content": "RUNTIME"
+    "content": "RUNTIME",
+    "enabled": true,
+    "priority": 2,
+    "updatedAt": "2026-07-19T12:00:00.000Z",
+    "updatedBy": "fixture",
+    "checksum": "645e4fc5442ea826",
+    "version": 1
   }
 ]`;
 
@@ -109,6 +129,62 @@ describe('prompt layer identifier backfill', () => {
     expect(() => backfillPromptLayerIdentifiers({ layersPath, apply: true }))
       .toThrow('has an identifier field that is not a non-empty string');
     expect(readFileSync(layersPath, 'utf8')).toBe(invalidFixture);
+  });
+
+  it('fails without rewriting when the target file is missing or stored records are malformed', () => {
+    const layersPath = createFixture();
+    const missingPath = join(layersPath, 'missing');
+
+    expect(() => backfillPromptLayerIdentifiers({ layersPath: missingPath }))
+      .toThrow(`Prompt layers file does not exist: ${missingPath}`);
+
+    const malformedFixture = '[{"type":"base"}]';
+    writeFileSync(layersPath, malformedFixture, 'utf8');
+    expect(() => backfillPromptLayerIdentifiers({ layersPath, apply: true }))
+      .toThrow('layers[0].id must be a non-empty string');
+    expect(readFileSync(layersPath, 'utf8')).toBe(malformedFixture);
+  });
+
+  it('refuses ambiguous multiple legacy bases instead of collapsing their composition', () => {
+    const layersPath = createFixture();
+    const ambiguousFixture = FIXTURE.replace('    "identifier": "scenario",\n', '');
+    writeFileSync(layersPath, ambiguousFixture, 'utf8');
+
+    expect(() => backfillPromptLayerIdentifiers({ layersPath, apply: true }))
+      .toThrow('the legacy composer assigned "main" only to the first');
+    expect(readFileSync(layersPath, 'utf8')).toBe(ambiguousFixture);
+  });
+
+  it('reproduces the captured legacy-main composition after running the backfill', () => {
+    const layersPath = createFixture();
+    backfillPromptLayerIdentifiers({ layersPath, apply: true });
+    const store = new PromptLayerStore(layersPath, join(layersPath, '..', 'prompt-history.jsonl'));
+
+    const result = new PromptManager().compose(store.getAll());
+
+    // Captured from the old usedLegacyMain coercion over this fixture.
+    expect({
+      text: result.text,
+      prompts: result.prompts.map(prompt => ({
+        content: prompt.content,
+        identifier: prompt.identifier,
+        sourceLayerId: prompt.sourceLayerId,
+      })),
+      autoHealedIdentifiers: result.autoHealedIdentifiers,
+    }).toEqual({
+      text: 'BASE\n\nSCENARIO\n\nRUNTIME',
+      prompts: [
+        { content: 'BASE', identifier: 'main', sourceLayerId: 'legacy-base' },
+        { content: 'SCENARIO', identifier: 'scenario', sourceLayerId: 'identified-base' },
+        { content: 'RUNTIME', identifier: 'layer:legacy-runtime', sourceLayerId: 'legacy-runtime' },
+      ],
+      autoHealedIdentifiers: [
+        'charDescription',
+        'charPersonality',
+        'dialogueExamples',
+        'postHistoryInstructions',
+      ],
+    });
   });
 
   it('is exposed through the exact package script named by the failure message', () => {

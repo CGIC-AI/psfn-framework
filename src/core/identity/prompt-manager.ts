@@ -1,4 +1,5 @@
 import type { PromptLayer } from './prompt-types.js';
+import { PROMPT_LAYER_IDENTIFIER_BACKFILL_COMMAND } from './prompt-layer-identifier-contract.js';
 
 export interface ManagedPromptEntry {
   identifier: string;
@@ -47,9 +48,6 @@ const IDENTIFIER_ALIASES: Record<string, string> = {
   post_history_instructions: 'postHistoryInstructions',
   post_history: 'postHistoryInstructions',
 };
-
-export const PROMPT_LAYER_IDENTIFIER_BACKFILL_COMMAND =
-  'npm run migrate:prompt-layer-identifiers -- --apply';
 
 function normalizeIdentifier(raw?: string): string | null {
   if (!raw) return null;

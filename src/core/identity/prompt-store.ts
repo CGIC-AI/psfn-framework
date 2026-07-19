@@ -43,6 +43,7 @@ import {
 } from './prompt-runtime.js';
 import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
+import { assertBasePromptLayerIdentifier } from './prompt-layer-identifier-contract.js';
 
 const log = createComponentLogger('PromptStore');
 
@@ -166,7 +167,7 @@ function migrateStoredPromptLayerBeforeValidation(
   };
 }
 
-function validateStoredPromptLayer(layer: unknown, index: number): PromptLayer {
+export function validateStoredPromptLayer(layer: unknown, index: number): PromptLayer {
   if (!layer || typeof layer !== 'object' || Array.isArray(layer)) {
     throw new Error(`layers[${String(index)}] must be an object`);
   }
@@ -556,6 +557,7 @@ export class PromptLayerStore {
     }
 
     const identifier = normalizePromptIdentifier(params.identifier);
+    assertBasePromptLayerIdentifier(params.type, identifier);
     const role = validatePromptRole(params.role);
     const promptOrder = validatePromptOrder(params.promptOrder);
 
@@ -654,6 +656,9 @@ export class PromptLayerStore {
     const hasPromptOrder = Object.prototype.hasOwnProperty.call(metadata, 'promptOrder');
 
     const identifier = hasIdentifier ? normalizePromptIdentifier(metadata.identifier) : undefined;
+    if (hasIdentifier) {
+      assertBasePromptLayerIdentifier(layer.type, identifier);
+    }
     const role = hasRole ? validatePromptRole(metadata.role) : undefined;
     const promptOrder = hasPromptOrder ? validatePromptOrder(metadata.promptOrder) : undefined;
     const normalizedReason = normalizeReason(reason);

@@ -232,4 +232,93 @@ describe('registerImageMethods model usage accounting', () => {
     ]);
   });
 
+  it('records settings-default intent while preserving explicit model precedence', async () => {
+    const workspacePath = await mkdtemp(join(tmpdir(), 'psfn-image-accounting-defaults-'));
+    tempDirs.push(workspacePath);
+    const usageEvents: ModelUsageEventInput[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const queueMatch = /^https:\/\/queue\.fal\.run\/(.+)$/u.exec(url);
+      if (queueMatch && !url.includes('/requests/')) {
+        const model = queueMatch[1]!;
+        const requestId = model.replaceAll('/', '-');
+        return jsonResponse({
+          status: 'COMPLETED',
+          request_id: requestId,
+          response_url: `https://queue.fal.run/${model}/requests/${requestId}`,
+        });
+      }
+      const resultMatch = /^https:\/\/queue\.fal\.run\/(.+)\/requests\/([^/]+)$/u.exec(url);
+      if (resultMatch) {
+        const requestId = resultMatch[2]!;
+        return jsonResponse({
+          images: [{
+            url: `https://cdn.example.test/${requestId}.png`,
+            content_type: 'image/png',
+            file_name: `${requestId}.png`,
+          }],
+        });
+      }
+      if (url.startsWith('https://cdn.example.test/')) {
+        return new Response(new Uint8Array([137, 80, 78, 71]), {
+          status: 200,
+          headers: { 'content-type': 'image/png' },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const methods = new Map<string, (params: unknown) => Promise<unknown>>();
+    const runtime = {
+      target: {
+        addMethod(name: string, handler: (params: unknown) => Promise<unknown>) {
+          methods.set(name, handler);
+        },
+      },
+      audited: (_method: string, handler: (params: unknown) => Promise<unknown>) => handler,
+      imageConfig: { falApiKey: 'fal-key' },
+      workspacePath,
+      modelUsageRecorder: {
+        async recordUsageEvent(event: ModelUsageEventInput) {
+          usageEvents.push(event);
+        },
+      },
+    } as unknown as GatewayMethodRuntime;
+    registerImageMethods(runtime);
+
+    const handler = methods.get('image.create');
+    if (!handler) throw new Error('image.create was not registered');
+    await handler({
+      prompt: 'settings-selected image',
+      settingsDefaults: {
+        provider: 'fal',
+        model: 'fal-ai/nano-banana-2',
+      },
+    });
+    await handler({
+      prompt: 'explicit model-selected image',
+      model: 'xai/grok-imagine-image',
+      settingsDefaults: {
+        provider: 'comfyui',
+        model: 'fal-ai/nano-banana-2',
+      },
+    });
+
+    expect(usageEvents).toMatchObject([
+      {
+        provider: 'fal',
+        model: 'fal-ai/nano-banana-2',
+        requestedProvider: 'fal',
+        requestedModel: 'fal-ai/nano-banana-2',
+      },
+      {
+        provider: 'fal',
+        model: 'xai/grok-imagine-image',
+        requestedProvider: 'fal',
+        requestedModel: 'xai/grok-imagine-image',
+      },
+    ]);
+  });
+
 });

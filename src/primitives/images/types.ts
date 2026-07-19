@@ -119,6 +119,7 @@ export interface ImageOperationSettingsDefaults {
   provider?: ImageProvider;
   createModel?: FalCreateModel;
   editModel?: FalEditModel;
+  selfieEditModel?: FalEditModel;
 }
 
 export interface ImageCreateSettingsDefaults {

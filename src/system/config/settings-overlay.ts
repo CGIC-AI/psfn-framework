@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { writeJsonAtomic } from '../../shared/utils/fs.js';
 import { isRecord } from '../../shared/utils/types.js';
 import {
   normalizeEditableSettings,
@@ -31,6 +32,13 @@ import {
  */
 
 export const COMPANION_SETTINGS_OVERLAY_FILE_NAME = 'settings.overlay.json';
+
+export const COMPANION_IMAGE_SETTINGS_OVERLAY_KEYS = [
+  'imageProvider',
+  'imageFalCreateModel',
+  'imageFalEditModel',
+  'imageSelfieEditModel',
+] as const satisfies readonly RuntimeSettingKey[];
 
 /**
  * The only settings.json keys a per-companion overlay may set. Sourced from the
@@ -64,10 +72,7 @@ export const COMPANION_SETTINGS_OVERLAY_WHITELIST = [
   'elevenLabsModelId',
   'elevenLabsEndpointBase',
   // image provider/model selection (catalog and credentials remain gateway-global)
-  'imageProvider',
-  'imageFalCreateModel',
-  'imageFalEditModel',
-  'imageSelfieEditModel',
+  ...COMPANION_IMAGE_SETTINGS_OVERLAY_KEYS,
   // discordTrigger*
   'discordTriggerWords',
   'discordTriggerReactions',
@@ -87,6 +92,30 @@ export function isCompanionSettingsOverlayKey(key: string): key is CompanionSett
 
 function isEnoent(error: unknown): boolean {
   return isRecord(error) && error.code === 'ENOENT';
+}
+
+function validateCompanionSettingsOverlay(
+  overlay: unknown,
+  path: string,
+): EditableSettings {
+  if (!isRecord(overlay)) {
+    throw new Error(
+      `Companion settings overlay at ${path} must be a JSON object of whitelisted settings keys.`,
+    );
+  }
+
+  const offendingKeys = Object.keys(overlay).filter(
+    (key) => !COMPANION_SETTINGS_OVERLAY_KEY_SET.has(key),
+  );
+  if (offendingKeys.length > 0) {
+    throw new Error(
+      `Companion settings overlay at ${path} contains non-whitelisted keys: `
+      + `${offendingKeys.join(', ')}. Per-companion overlays may only set `
+      + `${COMPANION_SETTINGS_OVERLAY_WHITELIST.join(', ')}.`,
+    );
+  }
+
+  return overlay as EditableSettings;
 }
 
 /**
@@ -137,24 +166,28 @@ export function loadCompanionSettingsOverlay(
     );
   }
 
-  if (!isRecord(parsed)) {
-    throw new Error(
-      `Companion settings overlay at ${path} must be a JSON object of whitelisted settings keys.`,
-    );
-  }
+  return validateCompanionSettingsOverlay(parsed, path);
+}
 
-  const offendingKeys = Object.keys(parsed).filter(
-    (key) => !COMPANION_SETTINGS_OVERLAY_KEY_SET.has(key),
-  );
-  if (offendingKeys.length > 0) {
-    throw new Error(
-      `Companion settings overlay at ${path} contains non-whitelisted keys: `
-      + `${offendingKeys.join(', ')}. Per-companion overlays may only set `
-      + `${COMPANION_SETTINGS_OVERLAY_WHITELIST.join(', ')}.`,
-    );
-  }
-
-  return parsed as EditableSettings;
+/**
+ * Validate and atomically persist one companion's settings overlay.
+ *
+ * Garden mutations use this writer instead of writing per-companion fields
+ * into the fleet-global settings.json owner.
+ */
+export function saveCompanionSettingsOverlay(
+  companionDataDir: string,
+  overlay: EditableSettings,
+  baseRuntimeSettings: EditableSettings,
+): EditableSettings {
+  const path = join(companionDataDir, COMPANION_SETTINGS_OVERLAY_FILE_NAME);
+  const validated = validateCompanionSettingsOverlay(overlay, path);
+  // Overlay objects may intentionally contain partial nested settings. Their
+  // semantic validation therefore happens after merging with the global base,
+  // matching startup hydration.
+  mergeCompanionSettingsOverlay(baseRuntimeSettings, validated);
+  writeJsonAtomic(path, validated);
+  return validated;
 }
 
 /**

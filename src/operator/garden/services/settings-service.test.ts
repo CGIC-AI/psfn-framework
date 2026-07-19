@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { loadBackupConfig } from '../../../system/config/backup-config.js';
@@ -9,6 +9,7 @@ import { loadModelsConfig } from '../../../system/config/models-config.js';
 import { loadProvidersConfig } from '../../../system/config/providers-config.js';
 import { loadSchedulerConfig } from '../../../system/config/scheduler-config.js';
 import { createOwnerFileConfigStore } from '../../../system/config/config-store.js';
+import { loadCompanionSettingsOverlay } from '../../../system/config/settings-overlay.js';
 import { createDefaultGroupMemorySettings } from '../../../system/config/group-memory-config.js';
 import { createDefaultMemoryRetrievalPolicy } from '../../../system/config/memory-retrieval-policy.js';
 import { loadSettings } from '../../../system/settings.js';
@@ -294,7 +295,24 @@ describe('AdminSettingsDataService', () => {
     expect(settingsData.config).toEqual(expect.objectContaining(payload));
 
     const persistedSettings = loadSettings(root);
-    expect(persistedSettings).toEqual(expect.objectContaining(payload));
+    const {
+      imageProvider,
+      imageFalCreateModel,
+      imageFalEditModel,
+      imageSelfieEditModel,
+      ...globalPayload
+    } = payload;
+    expect(persistedSettings).toEqual(expect.objectContaining(globalPayload));
+    expect(persistedSettings.imageProvider).toBeUndefined();
+    expect(persistedSettings.imageFalCreateModel).toBeUndefined();
+    expect(persistedSettings.imageFalEditModel).toBeUndefined();
+    expect(persistedSettings.imageSelfieEditModel).toBeUndefined();
+    expect(loadCompanionSettingsOverlay(root)).toEqual(expect.objectContaining({
+      imageProvider,
+      imageFalCreateModel,
+      imageFalEditModel,
+      imageSelfieEditModel,
+    }));
   });
 
   it('rejects unsupported image provider and model settings without persisting them', () => {
@@ -320,6 +338,55 @@ describe('AdminSettingsDataService', () => {
     expect(persisted.imageFalCreateModel).toBeUndefined();
     expect(persisted.imageFalEditModel).toBeUndefined();
     expect(persisted.imageSelfieEditModel).toBeUndefined();
+  });
+
+  it('writes per-companion image selections to the selected overlay without mutating the fleet-global owner', () => {
+    const root = makeTempDir();
+    const companionA = join(root, 'companions', 'a');
+    const companionB = join(root, 'companions', 'b');
+    mkdirSync(companionA, { recursive: true });
+    mkdirSync(companionB, { recursive: true });
+    const config = {
+      ...buildConfig(root),
+      companionDataDir: companionA,
+    } satisfies SubstrateConfig;
+    const service = new AdminSettingsDataService({
+      config,
+      configStore: createOwnerFileConfigStore({
+        dataDir: root,
+        companionDataDir: companionA,
+        defaultContextWindow: config.defaultContextWindow,
+      }),
+    });
+    const globalSettingsBefore = readFileSync(join(root, 'settings.json'), 'utf8');
+
+    expect(service.updateSettings(JSON.stringify({
+      imageProvider: 'comfyui',
+      imageFalCreateModel: 'xai/grok-imagine-image',
+      imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+      imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
+    })).ok).toBe(true);
+
+    expect(readFileSync(join(root, 'settings.json'), 'utf8')).toBe(globalSettingsBefore);
+    expect(loadSettings(root)).not.toEqual(expect.objectContaining({
+      imageProvider: expect.anything(),
+      imageFalCreateModel: expect.anything(),
+      imageFalEditModel: expect.anything(),
+      imageSelfieEditModel: expect.anything(),
+    }));
+    expect(loadCompanionSettingsOverlay(companionA)).toEqual({
+      imageProvider: 'comfyui',
+      imageFalCreateModel: 'xai/grok-imagine-image',
+      imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+      imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
+    });
+    expect(loadCompanionSettingsOverlay(companionB)).toBeUndefined();
+    expect(config).toMatchObject({
+      imageProvider: 'comfyui',
+      imageFalCreateModel: 'xai/grok-imagine-image',
+      imageFalEditModel: 'xai/grok-imagine-image/quality/edit',
+      imageSelfieEditModel: 'xai/grok-imagine-image/quality/edit',
+    });
   });
 
   it('reports local API and admin auth status from runtime config instead of direct env reads', async () => {

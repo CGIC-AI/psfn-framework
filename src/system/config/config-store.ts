@@ -10,6 +10,11 @@ import {
 } from '../../channels/backplane/config.js';
 import type { EditableSettings } from '../settings/contracts.js';
 import { loadSettings, saveSettings } from '../settings/io.js';
+import {
+  loadCompanionSettingsOverlay,
+  resolveEffectiveRuntimeSettings,
+  saveCompanionSettingsOverlay,
+} from './settings-overlay.js';
 import type { BackupJsonConfig } from './backup-config.js';
 import { loadBackupConfig, saveBackupConfig } from './backup-config.js';
 import type { CapabilityTierConfig } from './capability-tier-config.js';
@@ -72,6 +77,9 @@ import {
 export interface ConfigStorePort {
   loadRuntimeSettings(): EditableSettings;
   saveRuntimeSettings(settings: EditableSettings): void;
+  loadEffectiveRuntimeSettings(): EditableSettings;
+  loadCompanionSettingsOverlay(): EditableSettings | undefined;
+  saveCompanionSettingsOverlay(settings: EditableSettings): EditableSettings;
   loadModels(): ModelsRuntimeConfig;
   saveModels(nextConfig: unknown): ModelsRuntimeConfig;
   loadProviders(): ProvidersRuntimeConfig;
@@ -137,6 +145,16 @@ export function createOwnerFileConfigStore(
   return {
     loadRuntimeSettings: () => loadSettings(options.dataDir, loadOptions),
     saveRuntimeSettings: (settings) => saveSettings(options.dataDir, settings),
+    loadEffectiveRuntimeSettings: () => resolveEffectiveRuntimeSettings(
+      loadSettings(options.dataDir, loadOptions),
+      companionDataDir,
+    ),
+    loadCompanionSettingsOverlay: () => loadCompanionSettingsOverlay(companionDataDir),
+    saveCompanionSettingsOverlay: (settings) => saveCompanionSettingsOverlay(
+      companionDataDir,
+      settings,
+      loadSettings(options.dataDir, loadOptions),
+    ),
     loadModels: () => loadModelsConfig(options.dataDir, modelLoadOptions),
     saveModels: (nextConfig) => saveModelsConfig(options.dataDir, nextConfig, modelLoadOptions),
     loadProviders: () => loadProvidersConfig(options.dataDir, loadOptions),

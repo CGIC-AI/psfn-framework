@@ -327,7 +327,7 @@ describe('image tools', () => {
     expect(result.details.visionReview?.summary).toContain('cozy desk setup');
   });
 
-  it('keeps local image generation on the zero-charge path', async () => {
+  it('records local image generation on its zero-cost charge surface', async () => {
     const ops = {
       create: vi.fn(async () => ({
         provider: 'comfyui' as const,
@@ -361,7 +361,9 @@ describe('image tools', () => {
       prompt: 'a sketch rendered locally',
     })));
 
-    expect(emitted).toHaveLength(0);
+    expect(emitted.map(([, payload]) => payload.surface)).toEqual([
+      'localImageGeneration',
+    ]);
   });
 
   it('resolves a stable named look into generic and self-image prompts', async () => {
@@ -456,6 +458,48 @@ describe('image tools', () => {
     expect(resultText(result)).toContain('rolling 24-hour budget');
     expect(existsSync(artifactPath)).toBe(false);
     expect(existsSync(sidecarPath)).toBe(false);
+  });
+
+  it('uses the configured ComfyUI default under exhausted paid quota and records only local image charge', async () => {
+    const chargePolicy = makeInteractiveQuotaPolicy(6);
+    await runWithChargeContext({
+      chargePolicy,
+      lane: 'interactive',
+      runId: 'prior-paid-image',
+    }, async () => {
+      chargeSurface('paidImageGeneration');
+    });
+    const ops: ImageOperations = {
+      resolveSettingsDefaults: () => ({ provider: 'comfyui' }),
+      create: vi.fn(async () => ({
+        provider: 'comfyui',
+        mode: 'create',
+        fallbackUsed: false,
+        images: [],
+      })),
+      edit: vi.fn(),
+    };
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    const eventBus = {
+      emit: vi.fn(async (eventName: string, payload: Record<string, unknown>) => {
+        emitted.push([eventName, payload]);
+      }),
+    } as any;
+
+    const tool = createGenerateImageTool(ops);
+    const result = await runWithChargeContext({
+      chargePolicy,
+      eventBus,
+      lane: 'interactive',
+      runId: 'configured-local-image',
+    }, async () => tool.execute('tool-call-configured-local', {
+      action: 'generate',
+      prompt: 'a local sketch',
+    }) as Promise<AgentToolResult<MediaToolResultDetails>>);
+
+    expect(result.details.isError).not.toBe(true);
+    expect(ops.create).toHaveBeenCalledOnce();
+    expect(emitted.map(([, payload]) => payload.surface)).toEqual(['localImageGeneration']);
   });
 
   it('constrains aspect_ratio to the supported preset list for media and selfie tools', () => {
@@ -927,8 +971,11 @@ describe('image tools', () => {
     expect(resultText(result)).toContain('timeout or provider error');
   });
 
-  it('uses the configured selfie edit model when edit_model is omitted', async () => {
+  it('resolves the configured selfie edit model live when edit_model is omitted', async () => {
+    let configuredModel: 'fal-ai/nano-banana-2/edit' | 'xai/grok-imagine-image/quality/edit'
+      = 'fal-ai/nano-banana-2/edit';
     const ops: ImageOperations = {
+      resolveSettingsDefaults: () => ({ selfieEditModel: configuredModel }),
       create: vi.fn(),
       edit: vi.fn(async (params) => ({
         provider: 'fal',
@@ -949,33 +996,35 @@ describe('image tools', () => {
     };
     const tool = createSelfieTool(ops, undefined, {
       referenceResolver,
-      defaultEditModel: 'fal-ai/nano-banana-2/edit',
     });
 
     await tool.execute('configured-selfie', {
       prompt: 'a cozy reading portrait',
     });
+    configuredModel = 'xai/grok-imagine-image/quality/edit';
+    await tool.execute('updated-configured-selfie', {
+      prompt: 'a garden portrait',
+    });
 
-    expect(ops.edit).toHaveBeenCalledWith(expect.objectContaining({
+    expect(ops.edit).toHaveBeenNthCalledWith(1, expect.objectContaining({
       model: 'fal-ai/nano-banana-2/edit',
+    }));
+    expect(ops.edit).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      model: 'xai/grok-imagine-image/quality/edit',
     }));
   });
 
-  it('prepends the configured selfie model to the existing fallback chain', async () => {
-    const edit = vi.fn(async (params) => {
-      if (edit.mock.calls.length === 1) {
-        throw new TypeError('fetch failed');
-      }
-      return {
-        provider: 'fal' as const,
-        mode: 'edit' as const,
-        model: params.model,
-        fallbackUsed: false,
-        requestId: 'configured-selfie-fallback',
-        images: [{ url: 'https://images.example.test/configured-selfie-fallback.png' }],
-      };
+  it('does not fall through from an enforceable configured selfie model', async () => {
+    const edit = vi.fn(async () => {
+      throw new TypeError('fetch failed');
     });
-    const ops: ImageOperations = { create: vi.fn(), edit };
+    const ops: ImageOperations = {
+      resolveSettingsDefaults: () => ({
+        selfieEditModel: 'fal-ai/nano-banana-2/edit',
+      }),
+      create: vi.fn(),
+      edit,
+    };
     const referenceResolver = {
       resolveForTool: vi.fn(async () => ({
         id: 'ref-default',
@@ -986,19 +1035,18 @@ describe('image tools', () => {
     };
     const tool = createSelfieTool(ops, undefined, {
       referenceResolver,
-      defaultEditModel: 'fal-ai/nano-banana-2/edit',
     });
 
-    await tool.execute('configured-selfie-fallback', {
+    const result = await tool.execute('configured-selfie-fallback', {
       prompt: 'a cozy reading portrait',
-    });
+    }) as AgentToolResult<ImageToolResultDetails>;
 
     expect(edit).toHaveBeenNthCalledWith(1, expect.objectContaining({
       model: 'fal-ai/nano-banana-2/edit',
     }));
-    expect(edit).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      model: 'xai/grok-imagine-image/quality/edit',
-    }));
+    expect(edit).toHaveBeenCalledTimes(1);
+    expect(result.details.isError).toBe(true);
+    expect(resultText(result)).toContain('fal-ai/nano-banana-2/edit: fetch failed');
   });
 
   it('lets explicit edit_model override the configured selfie edit model', async () => {

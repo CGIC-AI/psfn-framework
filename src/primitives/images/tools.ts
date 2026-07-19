@@ -20,7 +20,6 @@ import { notePendingPaidDeliverable } from '../../shared/paid-deliverable-tracki
 import { toErrorMessage } from '../../shared/utils/errors.js';
 import { tagToolWithReversibility } from '../../system/capabilities/safeguards.js';
 import {
-  DEFAULT_SELFIE_EDIT_MODEL_CHAIN,
   FAL_CREATE_MODELS,
   FAL_EDIT_MODELS,
   IMAGE_ASPECT_RATIO_VALUES,
@@ -32,6 +31,10 @@ import {
   type ImageVisionReview,
   type ImageVisionReviewer,
 } from './types.js';
+import {
+  resolveImageToolProvider,
+  resolveSelfieEditModelChain,
+} from './tool-routing.js';
 
 const IMAGE_ASPECT_RATIO_DESCRIPTION = [
   'Optional preset aspect ratio.',
@@ -41,37 +44,10 @@ const IMAGE_ASPECT_RATIO_DESCRIPTION = [
 const GENERATE_IMAGE_TOOL_NAME = 'generate_image';
 const MEDIA_ACTION_VALUES = ['generate', 'edit', 'analyze'] as const;
 
-// Reference-selfie edit tiers come from the image model catalog. Every tier is
-// an edit endpoint so the saved reference photo always anchors the result.
-const SELFIE_EDIT_MODEL_CHAIN = DEFAULT_SELFIE_EDIT_MODEL_CHAIN;
-
 const SELFIE_EDIT_MODEL_DESCRIPTION = [
   'Optional reference-edit model override for selfie_create.',
   'Usually omit this; the tool chooses a reference-preserving edit path and keeps the saved reference image anchored.',
 ].join(' ');
-
-function resolveSelfieEditModelChain(
-  explicitModel: typeof FAL_EDIT_MODELS[number] | undefined,
-  configuredModel: typeof FAL_EDIT_MODELS[number] | undefined,
-): readonly typeof FAL_EDIT_MODELS[number][] {
-  if (!explicitModel) {
-    if (configuredModel) {
-      return [
-        configuredModel,
-        ...SELFIE_EDIT_MODEL_CHAIN.filter(model => model !== configuredModel),
-      ];
-    }
-    return SELFIE_EDIT_MODEL_CHAIN;
-  }
-  const startModel = explicitModel;
-  const startIndex = (SELFIE_EDIT_MODEL_CHAIN as readonly string[]).indexOf(startModel);
-  if (startIndex >= 0) {
-    return SELFIE_EDIT_MODEL_CHAIN.slice(startIndex);
-  }
-  // Off-chain start (e.g. grok speed mode or gpt-image-1.5): try it, then fall
-  // through later configured tiers rather than jumping back to the first tier.
-  return [startModel, ...SELFIE_EDIT_MODEL_CHAIN.slice(1).filter((model) => model !== startModel)];
-}
 
 function shouldFallThroughSelfieEditChain(error: unknown): boolean {
   return isProviderContentPolicyError(error) || isTransientFalError(error);
@@ -423,12 +399,21 @@ function preflightPaidImageGeneration(input: {
   });
 }
 
-function chargePaidImageGeneration(
+function chargeImageGeneration(
   result: ImageGenerationResult,
   action: 'generate' | 'edit',
   source: { toolName: string; toolCallId?: string },
 ): void {
-  if (result.provider !== 'fal') {
+  if (result.provider === 'comfyui') {
+    chargeSurface('localImageGeneration', {
+      recordZeroCost: true,
+      details: {
+        action,
+        provider: result.provider,
+        ...(result.model ? { model: result.model } : {}),
+        imageCount: result.images.length,
+      },
+    });
     return;
   }
   chargeSurface('paidImageGeneration', {
@@ -587,9 +572,15 @@ async function executeMediaGenerate(
   if (invalidModelError) return invalidModelError;
 
   try {
+    const settingsDefaults = ops.resolveSettingsDefaults?.() ?? {};
     preflightPaidImageGeneration({
       action: 'generate',
-      provider: params.provider,
+      provider: resolveImageToolProvider(
+        settingsDefaults,
+        params.provider,
+        params.model,
+        settingsDefaults.createModel,
+      ),
       model: params.model,
       imageCount: params.num_images,
     });
@@ -614,8 +605,16 @@ async function executeMediaGenerate(
       negativePrompt: params.negative_prompt,
       useTurbo: params.use_turbo,
       sourceToolName: GENERATE_IMAGE_TOOL_NAME,
+      settingsDefaults: {
+        ...(settingsDefaults.provider !== undefined
+          ? { provider: settingsDefaults.provider }
+          : {}),
+        ...(settingsDefaults.createModel !== undefined
+          ? { model: settingsDefaults.createModel }
+          : {}),
+      },
     });
-    chargePaidImageGeneration(result, 'generate', { toolName: GENERATE_IMAGE_TOOL_NAME, toolCallId });
+    chargeImageGeneration(result, 'generate', { toolName: GENERATE_IMAGE_TOOL_NAME, toolCallId });
     const review = await reviewGeneratedImages(reviewer, {
       imageUrls: result.images.map((image) => image.url),
       imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
@@ -673,9 +672,15 @@ async function executeMediaEdit(
       defaultToSavedReference: false,
     });
     const imageUrls = appendReferenceImageUrl(inputUrls, reference);
+    const settingsDefaults = ops.resolveSettingsDefaults?.() ?? {};
     preflightPaidImageGeneration({
       action: 'edit',
-      provider: params.provider,
+      provider: resolveImageToolProvider(
+        settingsDefaults,
+        params.provider,
+        params.model,
+        settingsDefaults.editModel,
+      ),
       model: params.model,
       imageCount: params.num_images,
       inputImageCount: imageUrls.length,
@@ -698,8 +703,16 @@ async function executeMediaEdit(
       seed: params.seed,
       sourceToolName: GENERATE_IMAGE_TOOL_NAME,
       ...(reference ? { referenceImageIds: [reference.id] } : {}),
+      settingsDefaults: {
+        ...(settingsDefaults.provider !== undefined
+          ? { provider: settingsDefaults.provider }
+          : {}),
+        ...(settingsDefaults.editModel !== undefined
+          ? { model: settingsDefaults.editModel }
+          : {}),
+      },
     });
-    chargePaidImageGeneration(result, 'edit', { toolName: GENERATE_IMAGE_TOOL_NAME, toolCallId });
+    chargeImageGeneration(result, 'edit', { toolName: GENERATE_IMAGE_TOOL_NAME, toolCallId });
     const review = await reviewGeneratedImages(reviewer, {
       imageUrls: result.images.map((image) => image.url),
       imageLocalPaths: result.images.map((image) => image.localPath?.trim() ?? ''),
@@ -969,6 +982,7 @@ function createImageGenerationTool(
           params.wardrobe_look_ref,
           options?.wardrobeLookResolver,
         );
+        const settingsDefaults = ops.resolveSettingsDefaults?.() ?? {};
         const reference = selfImage
           ? await resolveReferenceImage(options?.referenceResolver, params, {
               defaultToSavedReference: true,
@@ -979,15 +993,23 @@ function createImageGenerationTool(
         let notice: string | undefined;
         let result: ImageGenerationResult;
         if (reference) {
+          const configuredSelfieEditModel = settingsDefaults.selfieEditModel
+            ?? options?.defaultEditModel;
+          const effectiveProvider = resolveImageToolProvider(
+            settingsDefaults,
+            params.provider,
+            params.edit_model,
+            configuredSelfieEditModel,
+          );
           preflightPaidImageGeneration({
             action: 'edit',
-            provider: params.provider,
+            provider: effectiveProvider,
             model: params.edit_model,
             imageCount: params.num_images,
             inputImageCount: 1,
           });
           const runReferenceEdit = async (
-            editModel: typeof FAL_EDIT_MODELS[number],
+            editModel: typeof FAL_EDIT_MODELS[number] | undefined,
             editPrompt: string,
           ): Promise<ImageGenerationResult> => await ops.edit({
             prompt: editPrompt,
@@ -1005,84 +1027,101 @@ function createImageGenerationTool(
             seed: params.seed,
             sourceToolName: toolName,
             referenceImageIds: [reference.id],
+            settingsDefaults: {
+              ...(settingsDefaults.provider !== undefined
+                ? { provider: settingsDefaults.provider }
+                : {}),
+              ...(settingsDefaults.editModel !== undefined
+                ? { model: settingsDefaults.editModel }
+                : {}),
+            },
           });
 
-          const editChain = resolveSelfieEditModelChain(
-            params.edit_model,
-            options?.defaultEditModel,
-          );
-          const chainFailures: { model: string; error: unknown }[] = [];
-          let chainResult: ImageGenerationResult | null = null;
-          for (const editModel of editChain) {
-            try {
-              chainResult = await runReferenceEdit(editModel, prompt);
-              break;
-            } catch (error) {
-              if (!shouldFallThroughSelfieEditChain(error)) {
-                throw error;
-              }
-              chainFailures.push({ model: editModel, error });
-            }
-          }
-
-          if (!chainResult) {
-            const lastFailure = chainFailures[chainFailures.length - 1]!;
-            const allBlockedByContentPolicy = chainFailures.every(
-              (failure) => isProviderContentPolicyError(failure.error),
+          if (effectiveProvider === 'comfyui') {
+            result = await runReferenceEdit(params.edit_model, prompt);
+          } else {
+            const editChain = resolveSelfieEditModelChain(
+              params.edit_model,
+              configuredSelfieEditModel,
             );
-            if (!allBlockedByContentPolicy) {
-              const failureSummary = chainFailures
-                .map((failure) => `${failure.model}: ${toErrorMessage(failure.error)}`)
-                .join('; ');
-              return textResultWithError(
-                `${toolName} failed across all reference edit models (${failureSummary})`,
-                true,
-              );
+            const chainFailures: { model: string; error: unknown }[] = [];
+            let chainResult: ImageGenerationResult | null = null;
+            for (const editModel of editChain) {
+              try {
+                chainResult = await runReferenceEdit(editModel, prompt);
+                break;
+              } catch (error) {
+                if (!shouldFallThroughSelfieEditChain(error)) {
+                  throw error;
+                }
+                chainFailures.push({ model: editModel, error });
+              }
             }
-            // Every tier blocked the original prompt; last resort is a sanitized
-            // prompt on the last configured tier, still anchored to the reference.
-            const fallbackPrompt = buildSelfImageContentPolicyFallbackPrompt(prompt);
-            const finalModel = editChain[editChain.length - 1]!;
-            try {
-              chainResult = await runReferenceEdit(finalModel, fallbackPrompt);
-              reviewPrompt = fallbackPrompt;
+
+            if (!chainResult) {
+              const lastFailure = chainFailures[chainFailures.length - 1]!;
+              const allBlockedByContentPolicy = chainFailures.every(
+                (failure) => isProviderContentPolicyError(failure.error),
+              );
+              if (!allBlockedByContentPolicy) {
+                const failureSummary = chainFailures
+                  .map((failure) => `${failure.model}: ${toErrorMessage(failure.error)}`)
+                  .join('; ');
+                return textResultWithError(
+                  `${toolName} failed across all reference edit models (${failureSummary})`,
+                  true,
+                );
+              }
+              // Every tier blocked the original prompt; last resort is a sanitized
+              // prompt on the last configured tier, still anchored to the reference.
+              const fallbackPrompt = buildSelfImageContentPolicyFallbackPrompt(prompt);
+              const finalModel = editChain[editChain.length - 1]!;
+              try {
+                chainResult = await runReferenceEdit(finalModel, fallbackPrompt);
+                reviewPrompt = fallbackPrompt;
+                result = {
+                  ...chainResult,
+                  fallbackUsed: true,
+                  fallbackReason: chainResult.fallbackReason
+                    ?? 'selfie_edit_chain_sanitized_prompt',
+                };
+                notice = [
+                  'Every selfie edit model blocked the original prompt for content policy.',
+                  `Retried the reference edit on ${finalModel} with a safer prompt instead.`,
+                ].join(' ');
+              } catch (fallbackError) {
+                if (isProviderContentPolicyError(fallbackError)) {
+                  return contentPolicyBlockedResult<ImageToolResultDetails>(toolName, lastFailure.error, {
+                    fallbackError,
+                  });
+                }
+                throw fallbackError;
+              }
+            } else if (chainFailures.length > 0) {
               result = {
                 ...chainResult,
                 fallbackUsed: true,
-                fallbackReason: chainResult.fallbackReason
-                  ?? 'selfie_edit_chain_sanitized_prompt',
+                fallbackReason: chainResult.fallbackReason ?? 'selfie_edit_chain_fallback',
               };
               notice = [
-                'Every selfie edit model blocked the original prompt for content policy.',
-                `Retried the reference edit on ${finalModel} with a safer prompt instead.`,
+                ...chainFailures.map((failure) => (
+                  `Selfie edit on ${failure.model} failed (${isProviderContentPolicyError(failure.error) ? 'content policy block' : 'timeout or provider error'}).`
+                )),
+                `Fell back to ${chainResult.model ?? 'the next edit tier'} with the reference image intact.`,
               ].join(' ');
-            } catch (fallbackError) {
-              if (isProviderContentPolicyError(fallbackError)) {
-                return contentPolicyBlockedResult<ImageToolResultDetails>(toolName, lastFailure.error, {
-                  fallbackError,
-                });
-              }
-              throw fallbackError;
+            } else {
+              result = chainResult;
             }
-          } else if (chainFailures.length > 0) {
-            result = {
-              ...chainResult,
-              fallbackUsed: true,
-              fallbackReason: chainResult.fallbackReason ?? 'selfie_edit_chain_fallback',
-            };
-            notice = [
-              ...chainFailures.map((failure) => (
-                `Selfie edit on ${failure.model} failed (${isProviderContentPolicyError(failure.error) ? 'content policy block' : 'timeout or provider error'}).`
-              )),
-              `Fell back to ${chainResult.model ?? 'the next edit tier'} with the reference image intact.`,
-            ].join(' ');
-          } else {
-            result = chainResult;
           }
         } else {
           preflightPaidImageGeneration({
             action: 'generate',
-            provider: params.provider,
+            provider: resolveImageToolProvider(
+              settingsDefaults,
+              params.provider,
+              params.model,
+              settingsDefaults.createModel,
+            ),
             model: params.model,
             imageCount: params.num_images,
           });
@@ -1107,9 +1146,17 @@ function createImageGenerationTool(
               negativePrompt: params.negative_prompt,
               useTurbo: params.use_turbo,
               sourceToolName: toolName,
+              settingsDefaults: {
+                ...(settingsDefaults.provider !== undefined
+                  ? { provider: settingsDefaults.provider }
+                  : {}),
+                ...(settingsDefaults.createModel !== undefined
+                  ? { model: settingsDefaults.createModel }
+                  : {}),
+              },
             });
         }
-        chargePaidImageGeneration(result, mode === 'edit' ? 'edit' : 'generate', {
+        chargeImageGeneration(result, mode === 'edit' ? 'edit' : 'generate', {
           toolName,
           toolCallId,
         });

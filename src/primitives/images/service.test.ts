@@ -158,7 +158,7 @@ describe('ImageService', () => {
     expect(result.model).toBe('fal-ai/nano-banana-2');
   });
 
-  it('prepends the configured model to the existing transient fallback chain', async () => {
+  it('does not silently fall back from an enforceable configured model', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === 'https://queue.fal.run/fal-ai/gpt-image-1.5') {
@@ -185,16 +185,15 @@ describe('ImageService', () => {
       fetchMock as typeof fetch,
     );
 
-    const result = await service.create({
+    await expect(service.create({
       prompt: 'configured fallback',
       settingsDefaults: { model: 'fal-ai/gpt-image-1.5' },
-    });
+    })).rejects.toThrow('fetch failed');
 
-    expect(result.model).toBe('xai/grok-imagine-image');
-    expect(result.fallbackReason).toBe('fal_transient_model_fallback');
     expect(fetchMock.mock.calls.filter(
       ([url]) => String(url) === 'https://queue.fal.run/fal-ai/gpt-image-1.5',
     )).toHaveLength(2);
+    expect(fetchMock).not.toHaveBeenCalledWith('https://queue.fal.run/xai/grok-imagine-image', expect.anything());
   });
 
   it('lets explicit call parameters override configured provider and model defaults', async () => {
@@ -222,6 +221,35 @@ describe('ImageService', () => {
       },
     });
 
+    expect(result.model).toBe('xai/grok-imagine-image');
+  });
+
+  it('lets an explicit Fal model override a configured ComfyUI provider when provider is omitted', async () => {
+    const fetchMock = createCompletedFalGenerationFetchMock(
+      'xai/grok-imagine-image',
+      'explicit-model-only',
+      (body) => {
+        expect(body.prompt).toBe('model-only override');
+      },
+    );
+    const service = new ImageService(
+      {
+        falApiKey: 'fal-key',
+        comfyUiBaseUrl: 'https://comfy.example.test',
+      },
+      fetchMock as typeof fetch,
+    );
+
+    const result = await service.create({
+      prompt: 'model-only override',
+      model: 'xai/grok-imagine-image',
+      settingsDefaults: {
+        provider: 'comfyui',
+        model: 'fal-ai/nano-banana-2',
+      },
+    });
+
+    expect(result.provider).toBe('fal');
     expect(result.model).toBe('xai/grok-imagine-image');
   });
 

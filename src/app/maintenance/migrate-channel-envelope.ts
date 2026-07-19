@@ -11,7 +11,6 @@
 import '../../shared/utils/load-dotenv.js';
 import { resolve } from 'node:path';
 import { createPostgresPool } from '../../persistence/postgres.js';
-import { loadConfig } from '../../system/config/load-config.js';
 import { resolveConfiguredSystemDataDir, resolveSessionsDir } from '../../persistence/layout.js';
 import { loadTrustPolicyConfig } from '../../system/config/trust-policy-config.js';
 import { planChannelEnvelopeMigration } from '../../system/trust/channel-envelope-migration.js';
@@ -23,9 +22,12 @@ import {
   observationsFromContactActivityRows,
   type ContactActivityRow,
 } from './channel-envelope-migration-support.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
-import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
-import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
+import {
+  bootstrapMaintenanceRuntime,
+  isMaintenanceCliEntrypoint,
+  parseCommonMaintenanceArgs,
+  runMaintenanceCli,
+} from './cli-harness.js';
 
 type ContactsBackend = 'postgres';
 
@@ -60,59 +62,38 @@ function printUsage(): void {
   console.log('  -h, --help               Show this help message.');
 }
 
-function requireNext(argv: string[], index: number, arg: string): string {
-  const value = argv[index + 1];
-  if (!value) throw new Error(`Missing value for ${arg}`);
-  return value;
-}
-
 function parseBackend(value: string): ContactsBackend {
   if (value === 'postgres') return value;
   throw new Error('--backend must be postgres');
 }
 
-function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { apply: false, json: false, showHelp: false, skipContacts: false };
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    if (arg === '--help' || arg === '-h') {
-      options.showHelp = true;
-      continue;
-    }
-    if (arg === '--apply') {
-      options.apply = true;
-      continue;
-    }
-    if (arg === '--dry-run') {
-      options.apply = false;
-      continue;
-    }
-    if (arg === '--json') {
-      options.json = true;
-      continue;
-    }
-    if (arg === '--skip-contacts') {
-      options.skipContacts = true;
-      continue;
-    }
-    if (arg === '--sessions-dir') {
-      options.sessionsDir = requireNext(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    if (arg === '--backend') {
-      options.backend = parseBackend(requireNext(argv, i, arg));
-      i += 1;
-      continue;
-    }
-    if (arg === '--postgres-url') {
-      options.postgresUrl = requireNext(argv, i, arg);
-      i += 1;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-  return options;
+function parseArgs(argv: readonly string[]): CliOptions {
+  return parseCommonMaintenanceArgs<CliOptions>(argv, {
+    initial: { apply: false, json: false, showHelp: false, skipContacts: false },
+    extraFlags: {
+      '--apply': ({ options }) => {
+        options.apply = true;
+      },
+      '--dry-run': ({ options }) => {
+        options.apply = false;
+      },
+      '--json': ({ options }) => {
+        options.json = true;
+      },
+      '--skip-contacts': ({ options }) => {
+        options.skipContacts = true;
+      },
+      '--sessions-dir': ({ options, readValue }) => {
+        options.sessionsDir = readValue();
+      },
+      '--backend': ({ options, readValue }) => {
+        options.backend = parseBackend(readValue());
+      },
+      '--postgres-url': ({ options, readValue }) => {
+        options.postgresUrl = readValue();
+      },
+    },
+  });
 }
 
 async function fetchPostgresContactActivityRows(postgresUrl: string): Promise<ContactActivityRow[]> {
@@ -135,19 +116,8 @@ async function fetchPostgresContactActivityRows(postgresUrl: string): Promise<Co
   }
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.showHelp) {
-    printUsage();
-    return;
-  }
-
-  const config = loadConfig();
-  applyGatewayTlsConfig({
-    caPath: config.gatewayTlsCaPath,
-    rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
-  });
-  await hydrateSecretBearingConfig(config, { env: process.env });
+async function run(options: CliOptions): Promise<void> {
+  const { config } = await bootstrapMaintenanceRuntime();
 
   const systemDataDir = resolveConfiguredSystemDataDir(config);
   const sessionsDir = resolve(options.sessionsDir ?? resolveSessionsDir(config.dataDir));
@@ -202,7 +172,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  console.error(`Channel envelope migration failed: ${toErrorMessage(error)}`);
-  process.exit(1);
-});
+if (isMaintenanceCliEntrypoint(import.meta.url)) {
+  void runMaintenanceCli({
+    label: 'Channel envelope migration',
+    parseArgs,
+    printUsage,
+    run,
+  });
+}

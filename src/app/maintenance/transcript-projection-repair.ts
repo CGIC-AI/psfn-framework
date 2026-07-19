@@ -1,6 +1,5 @@
 import '../../shared/utils/load-dotenv.js';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { createSessionHmacBoundaryService } from '../../persistence/journals/hmac-boundary.js';
 import { resolveSessionsDir } from '../../persistence/layout.js';
 import { runTranscriptProjectionRepair, type TranscriptProjectionRepairReport } from '../../persistence/repair/transcript-projection-repair.js';
@@ -10,11 +9,13 @@ import {
 } from '../../persistence/sessions/postgres-adapters.js';
 import type { SessionIntegrityProvider } from '../../persistence/sessions/store-primitives.js';
 import type { TranscriptProjectionPort } from '../../persistence/sessions/transcript-projection-port.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
-import { loadConfig } from '../../system/config/load-config.js';
 import type { SubstrateConfig } from '../../system/config/runtime-config-contracts.js';
-import { hydrateSecretBearingConfig } from '../startup/support/bootstrap-helpers.js';
-import { applyGatewayTlsConfig } from '../../boundary/gateway/tls.js';
+import {
+  bootstrapMaintenanceRuntime,
+  isMaintenanceCliEntrypoint,
+  parseCommonMaintenanceArgs,
+  runMaintenanceCli,
+} from './cli-harness.js';
 
 interface CliOptions {
   dataDir?: string;
@@ -55,37 +56,16 @@ function printUsage(): void {
   console.log('Usage: npm run session:repair:transcript-projection [-- --data-dir <path> --sessions-dir <path>]');
 }
 
-function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { showHelp: false };
-
-  for (let index = 0; index < argv.length; index++) {
-    const arg = argv[index];
-    if (arg === '--help' || arg === '-h') {
-      options.showHelp = true;
-      continue;
-    }
-    if (arg === '--data-dir') {
-      const value = argv[index + 1];
-      if (!value) {
-        throw new Error(`Missing value for ${arg}`);
-      }
-      options.dataDir = value;
-      index += 1;
-      continue;
-    }
-    if (arg === '--sessions-dir') {
-      const value = argv[index + 1];
-      if (!value) {
-        throw new Error(`Missing value for ${arg}`);
-      }
-      options.sessionsDir = value;
-      index += 1;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-
-  return options;
+function parseArgs(argv: readonly string[]): CliOptions {
+  return parseCommonMaintenanceArgs<CliOptions>(argv, {
+    initial: { showHelp: false },
+    commonFlags: { dataDir: {} },
+    extraFlags: {
+      '--sessions-dir': ({ options, readValue }) => {
+        options.sessionsDir = readValue();
+      },
+    },
+  });
 }
 
 function resolveIntegrityProvider(config: SubstrateConfig, dependencies?: TranscriptProjectionRepairCommandDependencies): SessionIntegrityProvider | null {
@@ -142,48 +122,41 @@ export async function runTranscriptProjectionRepairCommand(
   };
 }
 
-async function main(): Promise<void> {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.showHelp) {
-    printUsage();
-    return;
-  }
+function runCli(): Promise<unknown> {
+  return runMaintenanceCli({
+    label: 'Transcript projection repair',
+    parseArgs,
+    printUsage,
+    run: async options => {
+      const runtime = await bootstrapMaintenanceRuntime({ dataDir: options.dataDir });
+      const report = await runTranscriptProjectionRepairCommand({
+        config: runtime.config,
+        dataDir: options.dataDir,
+        sessionsDir: options.sessionsDir,
+      });
 
-  const config = loadConfig();
-  applyGatewayTlsConfig({
-    caPath: config.gatewayTlsCaPath,
-    rejectUnauthorized: config.gatewayTlsRejectUnauthorized,
+      console.log(`Transcript projection repair complete for ${report.dataDir}`);
+      console.log(`Backend: ${report.persistenceBackend}`);
+      console.log(`Sessions dir: ${report.sessionsDir}`);
+      console.log(
+        `Scanned ${report.scannedFiles} JSONL files; rebuilt=${report.rebuiltChannels} clearedMissing=${report.clearedMissingChannels}`,
+      );
+      console.log(`Projection drift: before=${report.driftBefore} after=${report.driftAfter}`);
+
+      if (report.failures.length > 0) {
+        console.log('');
+        for (const failure of report.failures) {
+          console.log(`- ${failure.filePath}`);
+          console.log(`  channel=${failure.channelId}`);
+          console.log(`  error=${failure.error}`);
+        }
+        process.exitCode = 1;
+      }
+      return report;
+    },
   });
-  await hydrateSecretBearingConfig(config, { env: process.env });
-  const report = await runTranscriptProjectionRepairCommand({
-    config,
-    dataDir: options.dataDir,
-    sessionsDir: options.sessionsDir,
-  });
-
-  console.log(`Transcript projection repair complete for ${report.dataDir}`);
-  console.log(`Backend: ${report.persistenceBackend}`);
-  console.log(`Sessions dir: ${report.sessionsDir}`);
-  console.log(
-    `Scanned ${report.scannedFiles} JSONL files; rebuilt=${report.rebuiltChannels} clearedMissing=${report.clearedMissingChannels}`,
-  );
-  console.log(`Projection drift: before=${report.driftBefore} after=${report.driftAfter}`);
-
-  if (report.failures.length > 0) {
-    console.log('');
-    for (const failure of report.failures) {
-      console.log(`- ${failure.filePath}`);
-      console.log(`  channel=${failure.channelId}`);
-      console.log(`  error=${failure.error}`);
-    }
-    process.exitCode = 1;
-  }
 }
 
-const entrypoint = process.argv[1] ? pathToFileURL(resolve(process.argv[1])).href : null;
-if (entrypoint === import.meta.url) {
-  main().catch((error) => {
-    console.error(`Transcript projection repair failed: ${toErrorMessage(error)}`);
-    process.exit(1);
-  });
+if (isMaintenanceCliEntrypoint(import.meta.url)) {
+  void runCli();
 }

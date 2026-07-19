@@ -6,8 +6,12 @@ import {
   executeSystemOwnerFleetMigration,
   SYSTEM_OWNER_FLEET_MIGRATION_FILES,
 } from '../../persistence/system-owner-fleet-migration.js';
-import { toErrorMessage } from '../../shared/utils/errors.js';
 import { resolveSystemOwnerFleetContext } from './system-owner-fleet-context.js';
+import {
+  isMaintenanceCliEntrypoint,
+  parseCommonMaintenanceArgs,
+  runMaintenanceCli,
+} from './cli-harness.js';
 
 interface CliOptions {
   apply: boolean;
@@ -43,40 +47,25 @@ function parseApproval(raw: string): [string, string] {
   return [ownerFile, digest];
 }
 
-function parseArgs(argv: string[]): CliOptions {
-  const options: CliOptions = { apply: false, approvals: {}, showHelp: false };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === '--help' || arg === '-h') {
-      options.showHelp = true;
-      continue;
-    }
-    if (arg === '--apply') {
-      options.apply = true;
-      continue;
-    }
-    if (arg === '--approve') {
-      const value = argv[index + 1];
-      if (!value) throw new Error('Missing value for --approve');
-      const [ownerFile, digest] = parseApproval(value);
-      if (options.approvals[ownerFile]) {
-        throw new Error(`Duplicate --approve for ${ownerFile}`);
-      }
-      options.approvals[ownerFile] = digest;
-      index += 1;
-      continue;
-    }
-    throw new Error(`Unknown argument: ${arg}`);
-  }
-  return options;
+function parseArgs(argv: readonly string[]): CliOptions {
+  return parseCommonMaintenanceArgs<CliOptions>(argv, {
+    initial: { apply: false, approvals: {}, showHelp: false },
+    extraFlags: {
+      '--apply': ({ options }) => {
+        options.apply = true;
+      },
+      '--approve': ({ options, readValue }) => {
+        const [ownerFile, digest] = parseApproval(readValue());
+        if (options.approvals[ownerFile]) {
+          throw new Error(`Duplicate --approve for ${ownerFile}`);
+        }
+        options.approvals[ownerFile] = digest;
+      },
+    },
+  });
 }
 
-function main(): void {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.showHelp) {
-    printUsage();
-    return;
-  }
+function run(options: CliOptions): void {
   const { layout, fleet } = resolveSystemOwnerFleetContext(process.env);
   if (options.apply) {
     const result = executeSystemOwnerFleetMigration({
@@ -103,9 +92,11 @@ function main(): void {
   }, null, 2));
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`System-owner fleet migration failed: ${toErrorMessage(error)}`);
-  process.exit(1);
+if (isMaintenanceCliEntrypoint(import.meta.url)) {
+  void runMaintenanceCli({
+    label: 'System-owner fleet migration',
+    parseArgs,
+    printUsage,
+    run,
+  });
 }

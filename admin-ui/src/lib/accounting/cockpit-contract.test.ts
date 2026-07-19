@@ -47,16 +47,75 @@ describe('operator accounting cockpit contract', () => {
     expect(cockpit).toMatch(/previousPeriod=\{usage\.previousPeriod\}/);
     expect(metrics).toMatch(/import Sparkline/);
     expect(metrics).toMatch(/import TrendDelta/);
-    expect(metrics).toMatch(/\{#if previousPeriod\}/);
-    for (const label of [
-      'Effective spend',
-      'Requests',
-      'Token volume',
-      'Cache hit rate',
-      'Blended $/1M',
-      'Latency',
+
+    for (const bucketMapping of [
+      'bucket.effectiveCost.totalUsd',
+      'bucket.calls',
+      'bucket.totalTokens',
+      'cacheHitRatePercent(bucket) ?? 0',
+      'blendedCostPerMillionTokens(bucket) ?? 0',
+      'bucket.averageDurationMs ?? 0',
     ]) {
-      expect(metrics).toContain(`>${label}</p>`);
+      expect(metrics).toContain(bucketMapping);
+    }
+
+    const cards = [
+      {
+        headingId: 'effective-spend-heading',
+        sparkline: 'spendTrend',
+        current: 'totals.effectiveCost.totalUsd',
+        previous: 'previousPeriod.totals.effectiveCost.totalUsd',
+        inverted: true,
+      },
+      {
+        headingId: 'requests-heading',
+        sparkline: 'requestTrend',
+        current: 'totals.calls',
+        previous: 'previousPeriod.totals.calls',
+        inverted: false,
+      },
+      {
+        headingId: 'token-volume-heading',
+        sparkline: 'tokenTrend',
+        current: 'totals.totalTokens',
+        previous: 'previousPeriod.totals.totalTokens',
+        inverted: false,
+      },
+      {
+        headingId: 'cache-hit-heading',
+        sparkline: 'cacheHitTrend',
+        current: 'cacheHitRate ?? Number.NaN',
+        previous: 'previousCacheHitRate',
+        inverted: false,
+      },
+      {
+        headingId: 'blended-cost-heading',
+        sparkline: 'blendedCostTrend',
+        current: 'blendedCost ?? Number.NaN',
+        previous: 'previousBlendedCost',
+        inverted: true,
+      },
+      {
+        headingId: 'latency-heading',
+        sparkline: 'latencyTrend',
+        current: 'totals.averageDurationMs ?? Number.NaN',
+        previous: 'previousPeriod.totals.averageDurationMs',
+        inverted: true,
+      },
+    ];
+
+    for (const card of cards) {
+      const start = metrics.indexOf(`aria-labelledby="${card.headingId}"`);
+      const end = metrics.indexOf('</article>', start);
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThan(start);
+      const source = metrics.slice(start, end);
+      expect(source).toContain(`<Sparkline values={${card.sparkline}}`);
+      expect(source).toContain(`current={${card.current}}`);
+      expect(source).toContain(`previous={${card.previous}}`);
+      expect(source).toMatch(/\{#if previousPeriod\}[\s\S]*<TrendDelta[\s\S]*\/>[\s\S]*\{\/if\}/);
+      if (card.inverted) expect(source).toContain('invertPolarity');
+      else expect(source).not.toContain('invertPolarity');
     }
   });
 

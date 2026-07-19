@@ -33,6 +33,17 @@ function stableNumber(value: number): number {
   return value === 0 ? 0 : Number(value.toPrecision(12));
 }
 
+function aggregateSegmentValues(segments: readonly ChartSegment[]): Map<string, number> {
+  const values = new Map<string, number>();
+  for (const segment of segments) {
+    values.set(
+      segment.key,
+      (values.get(segment.key) ?? 0) + finiteNonNegative(segment.value),
+    );
+  }
+  return values;
+}
+
 /** Round a positive chart maximum up to a human-readable scale boundary. */
 export function niceMax(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return 0;
@@ -67,14 +78,7 @@ export function stackSegments(
   const orderedKeys = [...new Set(seriesKeys)];
 
   return buckets.map((bucket) => {
-    const values = new Map<string, number>();
-    for (const segment of bucket.segments) {
-      values.set(
-        segment.key,
-        (values.get(segment.key) ?? 0) + finiteNonNegative(segment.value),
-      );
-    }
-
+    const values = aggregateSegmentValues(bucket.segments);
     const total = orderedKeys.reduce((sum, key) => sum + (values.get(key) ?? 0), 0);
     let cursor = 0;
     const segments = orderedKeys.map((key): StackedChartSegment => {
@@ -128,14 +132,7 @@ export function mergeTopNSeries(
     || buckets.some(bucket => bucket.segments.some(segment => !selectedKeys.has(segment.key)));
 
   return buckets.map((bucket) => {
-    const values = new Map<string, number>();
-    for (const segment of bucket.segments) {
-      values.set(
-        segment.key,
-        (values.get(segment.key) ?? 0) + finiteNonNegative(segment.value),
-      );
-    }
-
+    const values = aggregateSegmentValues(bucket.segments);
     const segments: ChartSegment[] = selected.map(({ key }) => ({
       key,
       value: values.get(key) ?? 0,

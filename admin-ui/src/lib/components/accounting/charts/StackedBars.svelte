@@ -30,6 +30,7 @@
   } as const;
   const plotWidth = frame.width - frame.left - frame.right;
   const plotHeight = frame.height - frame.top - frame.bottom;
+  const dayMs = 24 * 60 * 60 * 1_000;
 
   let {
     buckets,
@@ -48,12 +49,41 @@
   const ticks = $derived(buildLinearTicks(axisMaximum, 5));
   const slotWidth = $derived(plotWidth / Math.max(1, buckets.length));
   const barWidth = $derived(Math.max(1, slotWidth * 0.68));
-  const labelEvery = $derived(Math.max(1, Math.ceil(buckets.length / Math.max(1, Math.floor(plotWidth / 72)))));
-  const dateFormatter = $derived(new Intl.DateTimeFormat('en-US', {
+  const bucketStepMs = $derived.by(() => {
+    let smallestStep = Number.POSITIVE_INFINITY;
+    for (let index = 1; index < buckets.length; index += 1) {
+      const step = (buckets[index]?.startMs ?? 0) - (buckets[index - 1]?.startMs ?? 0);
+      if (step > 0 && step < smallestStep) smallestStep = step;
+    }
+    return Number.isFinite(smallestStep) ? smallestStep : 0;
+  });
+  const includesTime = $derived(bucketStepMs > 0 && bucketStepMs < dayMs);
+  const yearFormatter = $derived(new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+  }));
+  const spansYears = $derived(buckets.length > 1
+    && yearFormatter.format(buckets[0]?.startMs ?? 0)
+      !== yearFormatter.format(buckets.at(-1)?.startMs ?? 0));
+  const axisDateFormatter = $derived(new Intl.DateTimeFormat('en-US', {
     timeZone: timezone,
     month: 'short',
     day: 'numeric',
+    ...(includesTime ? { hour: 'numeric', minute: '2-digit' } : {}),
+    ...(spansYears ? { year: '2-digit' } : {}),
   }));
+  const accessibleDateFormatter = $derived(new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    ...(includesTime ? { hour: 'numeric', minute: '2-digit' } : {}),
+  }));
+  const estimatedLabelWidth = $derived(includesTime || spansYears ? 96 : 72);
+  const labelEvery = $derived(Math.max(
+    1,
+    Math.ceil(buckets.length / Math.max(1, Math.floor(plotWidth / estimatedLabelWidth))),
+  ));
 
   function toggleSeries(key: string): void {
     hiddenKeys = hiddenKeys.includes(key)
@@ -84,7 +114,9 @@
   }
 
   function shouldShowDateLabel(index: number): boolean {
-    return index === 0 || index === buckets.length - 1 || index % labelEvery === 0;
+    const lastIndex = buckets.length - 1;
+    if (index === 0 || index === lastIndex) return true;
+    return index % labelEvery === 0 && lastIndex - index >= labelEvery;
   }
 
   function bucketAriaLabel(index: number): string {
@@ -97,7 +129,7 @@
         return `${label}: ${valueFormatter(segment.value)}`;
       });
     return [
-      dateFormatter.format(bucket.startMs),
+      accessibleDateFormatter.format(bucket.startMs),
       `total ${valueFormatter(bucket.total)}`,
       ...details,
     ].join('; ');
@@ -181,7 +213,7 @@
                 class={paintClass(descriptor?.colorClass ?? '')}
                 style:fill={paintStyle(descriptor?.colorClass ?? '')}
               >
-                <title>{dateFormatter.format(bucket.startMs)} · {descriptor?.label ?? segment.key}: {valueFormatter(segment.value)}</title>
+                <title>{accessibleDateFormatter.format(bucket.startMs)} · {descriptor?.label ?? segment.key}: {valueFormatter(segment.value)}</title>
               </rect>
             {/if}
           {/each}
@@ -203,7 +235,7 @@
             text-anchor="middle"
             class="fill-shadow-500 text-[10px]"
             aria-hidden="true"
-          >{dateFormatter.format(bucket.startMs)}</text>
+          >{axisDateFormatter.format(bucket.startMs)}</text>
         {/if}
       {/each}
     {/if}

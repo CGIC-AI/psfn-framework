@@ -129,12 +129,25 @@ export function assertSocialPotConfig(config: SocialPotConfig): SocialPotConfig 
 /**
  * Apply continuous regeneration deterministically.
  *
- * The pot accrues `regenerationUnitsPerTick` for every whole tick elapsed since
- * `lastRegenAtMs`, clamped at `capUnits`. Only whole ticks advance the
- * timestamp, so the sub-tick remainder carries forward and the schedule stays
- * stable across process restarts. A non-advancing clock never credits and never
- * moves the timestamp; a balance above the current cap (a lowered config) is
- * clamped down on the next read — the pot fails closed toward less spend.
+ * This is the settled recovery model that replaces the 24h reset cliff
+ * (design bible §12.6, adjudication decision 8, jp36.4.2): the pot accrues
+ * `regenerationUnitsPerTick` (`cap/24`) for every whole tick (hourly) elapsed
+ * since `lastRegenAtMs`, so a companion tapers back toward full continuously
+ * over ~24h instead of being "dead until midnight." There is no daily
+ * floor-reset — the balance never jumps to cap at a calendar boundary; this
+ * function is calendar-agnostic and depends only on elapsed milliseconds.
+ *
+ * Only whole ticks advance the timestamp, so the sub-tick remainder carries
+ * forward and the schedule stays stable across process restarts (no
+ * double-credit). A non-advancing or backward clock never credits and never
+ * moves the timestamp.
+ *
+ * The `Math.min(cap, …)` clamp is the settled "daily backstop ceiling" the
+ * design retains (§12.6: "a daily reset may remain only as a backstop
+ * ceiling"): it is applied on every read regardless of elapsed ticks, so a
+ * balance above the current cap — e.g. a lowered `capUnits` config, or any
+ * over-cap persisted row — is clamped down on the next read. The pot always
+ * fails closed toward less spend; the ceiling is never a floor.
  */
 export function regenerateSocialPot(input: {
   balance: number;

@@ -1711,6 +1711,42 @@ describe('SessionManager', () => {
     },
   );
 
+  it.each(['api', 'terminal'] as const)(
+    'keeps a physical %s ingress on its admitted owner when context capture pauses across an active-context switch',
+    async (channelKind) => {
+    const mgr = new SessionManager(store, makeConfig());
+    const admittedOwner = `${channelKind}:admitted-owner`;
+    const futureOwner = `${channelKind}:future-owner`;
+    mgr.recordUserMessage(admittedOwner, 'admitted owner history', 'user-a', 'User');
+    mgr.recordUserMessage(futureOwner, 'future owner history', 'user-b', 'User');
+    mgr.setActiveContextSession(admittedOwner);
+
+    let markCaptureStarted!: () => void;
+    const captureStarted = new Promise<void>((resolve) => { markCaptureStarted = resolve; });
+    let releaseCapture!: () => void;
+    const captureRelease = new Promise<void>((resolve) => { releaseCapture = resolve; });
+    const captureTurnSessionContext = mgr.captureTurnSessionContext.bind(mgr);
+    vi.spyOn(mgr, 'captureTurnSessionContext').mockImplementationOnce(async (input) => {
+      markCaptureStarted();
+      await captureRelease;
+      return await captureTurnSessionContext(input);
+    });
+
+    const contextPromise = mgr.buildContext(
+      `${channelKind}:physical-ingress`,
+      'System',
+      '',
+    );
+    await captureStarted;
+    mgr.setActiveContextSession(futureOwner);
+    releaseCapture();
+    const context = await contextPromise;
+
+    expect(context.messages.some(message => message.content.includes('admitted owner history'))).toBe(true);
+    expect(context.messages.some(message => message.content.includes('future owner history'))).toBe(false);
+    },
+  );
+
   it('routes a Discord source channel to a fresh logical session without pulling pre-reset chat context', async () => {
     const config = makeConfig({ dataDir: dir, sessionMessageLimit: 20 });
     const mgr = new SessionManager(store, config);
